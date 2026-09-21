@@ -1,0 +1,41 @@
+.cc-review-tray-jump {
+  display: block;
+  text-align: left;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.cc-review-tray-jump:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--sol-cyan) 8%, transparent);
+}
+.cc-review-tray-jump:hover:not(:disabled) .cc-review-tray-quote {
+  color: var(--sol-cyan);
+}
+.cc-review-tray-jump:focus-visible,
+.cc-review-edge:focus-visible {
+  outline: 2px solid var(--sol-cyan);
+  outline-offset: 3px;
+}
+.cc-review-edge {
+  position: absolute;
+  left: 12px;
+  z-index: 25;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 9px;
+  border: 1px solid color-mix(in srgb, var(--sol-cyan) 40%, var(--sol-border));
+  border-radius: 20px;
+  background: var(--sol-card);
+  color: var(--sol-cyan);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--sol-text) 8%, transparent);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 16px;
+  cursor: pointer;
+}
+.cc-review-edge:hover {
+  background: color-mix(in srgb, var(--sol-cyan) 12%, var(--sol-card));
+  border-color: var(--sol-cyan);
+}
+.cc-review-edge[data-direction="above"] { top: 8px; }
+.cc-review-edge[data-direction="below"] { bottom: 8px; }

@@ -30,7 +30,7 @@ import { RoleAvatar } from "./avatars";
 import { RolePausedNote } from "./RolePausedNote";
 import { StatusPill } from "./StaffingPane";
 import { changeLine } from "./staffingModel";
-import { letterIntro, letterParts, type AskView } from "./staffingAsks";
+import { introducesItself, letterIntro, letterParts, type AskView } from "./staffingAsks";
 import type { OrgProposalChange, OrgProposalRow } from "./orgStaffingTypes";
 import type { ProposalThreadRef } from "./staffingRevise";
 
@@ -160,7 +160,7 @@ export function ProposalLetter({ proposal, thread, firstTime, now, onOpenSession
         </button>
       </div>
       <div className="pl-8 text-[13.5px] leading-relaxed" style={{ color: "var(--sol-text)" }}>
-        {firstTime && <p className="mb-2.5" style={{ color: "var(--sol-text-secondary)" }} data-letter-intro>{letterIntro(thread.name, thread.named)}</p>}
+        {firstTime && !introducesItself(lead) && <p className="mb-2.5" style={{ color: "var(--sol-text-secondary)" }} data-letter-intro>{letterIntro(thread.name, thread.named)}</p>}
         <div data-letter-lead><MarkdownRenderer content={lead} /></div>
         {restOpen && rest && <div className="mt-2.5" data-letter-rest><MarkdownRenderer content={rest} /></div>}
         {(rest || evidenceHref) && (

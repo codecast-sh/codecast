@@ -10,12 +10,14 @@ import { shellQuote, spawnHarness, waitFor } from "./test-helpers/messagingHarne
 
 afterAll(killIsolatedTmuxServer);
 
-test.skipIf(!Bun.which("tmux")).each(["fresh", "retry"] as const)("%s single-line collapsed paste submits once and frees the next message", async mode => {
+test.skipIf(!Bun.which("tmux")).each([
+  ["fresh", "claude"], ["retry", "claude"], ["fresh", "codex"], ["retry", "codex"],
+] as const)("%s %s collapsed paste submits once and frees the next message", async (mode, agent) => {
   const cwd = mkdtempSync(join(tmpdir(), "codecast-collapsed-paste-"));
   const statePath = join(cwd, "state.json");
   const fixture = fileURLToPath(new URL("./test-helpers/codexQueuedTui.ts", import.meta.url));
   const pane = spawnHarness({ cwd, jsonlPath: statePath,
-    command: `exec bun ${[fixture, statePath, join(cwd, "finish"), "claude-collapsed"].map(shellQuote).join(" ")}` });
+    command: `exec bun ${[fixture, statePath, join(cwd, "finish"), `${agent}-collapsed`].map(shellQuote).join(" ")}` });
   const target = `${pane.tmuxSession}:0.0`;
   const path = join(cwd, "delivery.sqlite");
   const journal = new TmuxDeliveryJournal(path);
@@ -23,7 +25,7 @@ test.skipIf(!Bun.which("tmux")).each(["fresh", "retry"] as const)("%s single-lin
   const payload = `<session-message from="worker">${"Verified the release and its regression tests. ".repeat(25)}</session-message>`;
   const state = () => JSON.parse(readFileSync(statePath, "utf8"));
   try {
-    await waitFor(() => pane.capturePane().includes("shift+tab"));
+    await waitFor(() => pane.capturePane().includes(agent === "claude" ? "shift+tab" : "Ask Codex"));
     if (mode === "retry") {
       const crashFixture = fileURLToPath(new URL("./test-helpers/crashAfterTmuxPaste.ts", import.meta.url));
       const crashed = Bun.spawn([process.execPath, crashFixture, target, path, delivery.messageId, delivery.conversationId, payload], {
@@ -31,14 +33,14 @@ test.skipIf(!Bun.which("tmux")).each(["fresh", "retry"] as const)("%s single-lin
       });
       const error = await new Response(crashed.stderr).text();
       expect({ code: await crashed.exited, error }).toEqual({ code: 86, error: "" });
-      await waitFor(() => pane.capturePane().includes("[Pasted text #98]"));
+      await waitFor(() => pane.capturePane().includes(agent === "claude" ? "[Pasted text #98]" : "[Pasted Content"));
       expect(journal.get(delivery.messageId)?.phase).toBe("paste");
     }
-    await injectViaTmux(target, payload, "claude", { delivery, journal, gateBudgetMs: 1_500 });
+    await injectViaTmux(target, payload, agent, { delivery, journal, gateBudgetMs: 1_500 });
     expect(state().queued).toEqual(["Existing worker report.", payload]);
     expect(journal.get(delivery.messageId)?.phase).toBe("verified");
-    await injectViaTmux(target, payload, "claude", { delivery, journal });
-    await injectViaTmux(target, "Next message", "claude", { delivery: { ...delivery, messageId: "next" }, journal });
+    await injectViaTmux(target, payload, agent, { delivery, journal });
+    await injectViaTmux(target, "Next message", agent, { delivery: { ...delivery, messageId: "next" }, journal });
     expect(state().queued).toEqual(["Existing worker report.", payload, "Next message"]);
     expect(state().interrupts).toBe(0);
   } finally {

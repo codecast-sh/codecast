@@ -20,10 +20,10 @@ afterEach(harness.teardown);
 /** Any window with a live invite asks for the ring window; the shell cannot
  *  see invites itself. Idempotent, so calling it twice is the second ring. */
 function openRingWindow(rig) {
-  rig.handlers.get("open-call-ring-window")(null);
+  rig.handlers.get("open-call-ring-window")(rig.event());
   const win = findWindow(rig, "--call-ring-window");
   assert.ok(win, "the ring window was never created");
-  return { win, sender: { sender: win.webContents } };
+  return { win, sender: rig.event(win.webContents) };
 }
 
 function findWindow(rig, arg) {
@@ -48,7 +48,7 @@ test("a second ring finds the window already up", () => {
   // It stays alive after the first one, so no later ring pays for a page load.
   const rig = loadShell();
   const { win } = openRingWindow(rig);
-  rig.handlers.get("open-call-ring-window")(null);
+  rig.handlers.get("open-call-ring-window")(rig.event());
   const all = rig.windows.filter((w) =>
     (w.options.webPreferences?.additionalArguments ?? []).includes("--call-ring-window"),
   );

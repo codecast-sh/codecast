@@ -1,5 +1,6 @@
 import createDOMPurify from "dompurify";
 import { isTrustedAbsoluteImageSrc } from "./trustedImageOrigins";
+import { sanitizeCanvasCss } from "../../shared/render/canvasCss";
 
 // Sanitization policy for cast-canvas content (and all-HTML message bodies).
 // Conversations sync across a team, so canvases are untrusted. Two invariants:
@@ -22,7 +23,7 @@ const PURIFY_CONFIG = {
   // DOMPurify keeps these by default; we don't want embeds, forms, external
   // stylesheets, or <base>/<meta> rewrites in untrusted content.
   FORBID_TAGS: ["script", "iframe", "object", "embed", "base", "form", "meta", "link"],
-  FORBID_ATTR: ["ping", "formaction", "srcset"],
+  FORBID_ATTR: ["ping", "formaction", "srcset", "srcdoc"],
   // <use> is off DOMPurify's default allowlist because it can pull content from
   // external URLs. Same-document references (href="#id") are how SVG deduplicates
   // repeated geometry — the hook below rejects everything else.
@@ -32,16 +33,15 @@ const PURIFY_CONFIG = {
 
 // Neutralize CSS fetches: url(...) that isn't data: or #fragment, and @import
 // (which also accepts a bare string, no url() needed).
-const CSS_URL = /url\(\s*(['"]?)(?!\s*['"]?\s*(?:data:|#))[^)]*\)/gi;
-const CSS_IMPORT = /@import\b[^;}]*[;}]?/gi;
-function stripCssEgress(css: string): string {
-  return css.replace(CSS_IMPORT, "").replace(CSS_URL, "none");
+export function isSafeCanvasLink(href: unknown): href is string {
+  const base = "https://codecast.invalid/";
+  return typeof href === "string" && URL.canParse(href, base) && /^(https?:|mailto:|tel:)$/.test(new URL(href, base).protocol);
 }
 
 // Presentation attributes that take url(#id) syntax (mask, filter, clip-path,
 // fill/stroke with paint servers) go through the same CSS scrubber as style —
 // local fragments survive, remote fetches become "none".
-const URL_ATTRS = ["mask", "filter", "clip-path", "fill", "stroke"];
+const URL_ATTRS = ["mask", "filter", "clip-path", "fill", "stroke", "cursor", "marker", "marker-start", "marker-mid", "marker-end"];
 
 // Bound lazily at first sanitize, not at module import: the default dompurify
 // export binds to the global window at import time, which yields a dead stub if
@@ -55,9 +55,17 @@ function getPurify() {
     const tag = el.tagName?.toLowerCase();
     // Force links to open in a new tab without an opener, rather than hijacking
     // the codecast SPA.
-    if (tag === "a" && el.getAttribute("href")) {
-      el.setAttribute("target", "_blank");
-      el.setAttribute("rel", "noopener noreferrer");
+    if (tag === "a") {
+      const href = el.getAttribute("href") ?? el.getAttribute("xlink:href");
+      el.removeAttribute("xlink:href");
+      if (href && isSafeCanvasLink(href)) {
+        el.setAttribute("href", href);
+        el.setAttribute("target", "_blank");
+        el.setAttribute("rel", "noopener noreferrer");
+      } else {
+        el.removeAttribute("href");
+        el.removeAttribute("target");
+      }
     }
     // Embedded (data:) images or our own trusted origins — an arbitrary
     // remote src is a tracking pixel.
@@ -75,19 +83,23 @@ function getPurify() {
       const href = el.getAttribute("href") ?? el.getAttribute("xlink:href") ?? "";
       if (!isTrustedAbsoluteImageSrc(href)) el.remove();
     }
+    for (const attr of ["src", "poster", "background"]) {
+      const value = el.getAttribute(attr);
+      if (value && !isTrustedAbsoluteImageSrc(value)) el.removeAttribute(attr);
+    }
     for (const attr of URL_ATTRS) {
       const v = el.getAttribute(attr);
-      if (v && /url\s*\(/i.test(v)) el.setAttribute(attr, stripCssEgress(v));
+      if (v) el.setAttribute(attr, sanitizeCanvasCss(v, "value"));
     }
     const style = el.getAttribute("style");
-    if (style && /url\s*\(|@import/i.test(style)) {
-      el.setAttribute("style", stripCssEgress(style));
+    if (style) {
+      el.setAttribute("style", sanitizeCanvasCss(style, "declarationList"));
     }
   });
   purify.addHook("afterSanitizeElements", (node) => {
     const el = node as Element;
     if (el.tagName?.toLowerCase() === "style" && el.textContent) {
-      const clean = stripCssEgress(el.textContent);
+      const clean = sanitizeCanvasCss(el.textContent);
       if (clean !== el.textContent) el.textContent = clean;
     }
   });
@@ -96,4 +108,8 @@ function getPurify() {
 
 export function sanitizeCanvasHtml(code: string): string {
   return getPurify().sanitize(code, PURIFY_CONFIG);
+}
+
+export function sanitizeCanvasElement(element: Element): void {
+  getPurify().sanitize(element, { ...PURIFY_CONFIG, IN_PLACE: true });
 }

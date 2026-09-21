@@ -219,7 +219,8 @@ export function FrameBackend({ source, reloadToken, onTitle, onUrl, onState }: B
       }}
       title={url}
       referrerPolicy="no-referrer"
-      allow="clipboard-read; clipboard-write"
+      allow="clipboard-read 'none'; clipboard-write 'none'; camera 'none'; microphone 'none'; display-capture 'none'"
+      sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads"
       className="w-full h-full border-0 bg-white"
     />
   );

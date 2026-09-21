@@ -199,7 +199,14 @@ export async function snapshotTree(cwd: string, exclude: string[] = []): Promise
   try {
     const env = { ...process.env, GIT_INDEX_FILE: path.join(indexDir, "index") };
     await git(cwd, ["read-tree", "HEAD"], env);
-    await git(cwd, ["add", "-A", "--", ".", ...exclude.map((p) => `:(exclude)${p}`)], env);
+    const pathspecs = [".", ...exclude.map((p) => `:(exclude)${p}`)];
+    await git(cwd, ["add", "-u", "--", ...pathspecs], env);
+    const { stdout: paths } = await execFileAsync("git", ["-C", cwd, "ls-files", "--others", "--exclude-standard", "-z", "--", ...pathspecs], { env, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+    if (paths) {
+      const pathspec = path.join(indexDir, "paths");
+      fs.writeFileSync(pathspec, paths, { mode: 0o600 });
+      await git(cwd, ["--literal-pathspecs", "add", "-A", `--pathspec-from-file=${pathspec}`, "--pathspec-file-nul"], env);
+    }
     return await git(cwd, ["write-tree"], env);
   } finally {
     try {
@@ -474,4 +481,3 @@ export async function applySnapshotFastForward(
     };
   }
 }
-

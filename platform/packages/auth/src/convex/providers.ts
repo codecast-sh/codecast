@@ -1,5 +1,5 @@
 // The two custom credentials providers and the OTP email provider factory.
-import { createAccount, retrieveAccount } from "@convex-dev/auth/server";
+import { createAccount } from "@convex-dev/auth/server";
 import { ConvexCredentials } from "@convex-dev/auth/providers/ConvexCredentials";
 import { Email } from "@convex-dev/auth/providers/Email";
 import { alphabet, generateRandomString } from "oslo/crypto";
@@ -36,32 +36,15 @@ export function appleNativeProvider(params: AppleNativeParams) {
       });
       const appleSub = payload.sub;
       if (!appleSub) throw new Error("Apple identity token missing subject");
-      // Apple only returns name/email on the FIRST authorization; fall back to the
-      // token's email (present when the user shares it) on later sign-ins.
       const tokenEmail = typeof payload.email === "string" ? payload.email : undefined;
-      const email = ((args.email as string | undefined) ?? tokenEmail)?.toLowerCase().trim();
+      const email = tokenEmail?.toLowerCase().trim();
+      const emailVerified = !!email && (payload.email_verified === true || payload.email_verified === "true");
       const name = (args.fullName as string | undefined)?.trim() || email?.split("@")[0];
-
-      // Returning user: the (provider, appleSub) account already exists.
-      try {
-        const existing = await retrieveAccount(ctx, {
-          provider: id,
-          account: { id: appleSub },
-        });
-        return { userId: existing.user._id };
-      } catch {
-        // No account yet; fall through to create one.
-      }
-
-      // New account. shouldLinkViaEmail folds this into an existing user with the
-      // same (Apple verified) email, so signing in via Apple after GitHub/password
-      // doesn't mint a duplicate user. The createOrUpdateUser callback is the
-      // second layer of the same dedup.
       const created = await createAccount(ctx, {
         provider: id,
         account: { id: appleSub },
-        profile: { email, name } as any,
-        shouldLinkViaEmail: true,
+        profile: { email, name, emailVerified } as any,
+        shouldLinkViaEmail: emailVerified,
       });
       return { userId: created.user._id };
     },

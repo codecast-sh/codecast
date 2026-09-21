@@ -33,6 +33,7 @@
     "productName": "Codecast",
     "files": [
       "main.js",
+      "shellAuthority.js",
       "appWindows.mjs",
       "callWindowPolicy.js",
       "meetingDetector.js",

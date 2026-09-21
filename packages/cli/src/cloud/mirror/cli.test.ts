@@ -45,6 +45,20 @@ function bundle(home: string, entries: BundleInput[], opts: { userId?: string; d
 }
 
 describe("cast cloud mirror-apply --stdin", () => {
+  test("large apply and verification replies drain completely through a pipe", async () => {
+    const home = scratchHome();
+    fs.writeFileSync(path.join(home, ".codecast/config.json"), JSON.stringify({ user_id: "u1" }));
+    const entries: BundleInput[] = Array.from({ length: 650 }, (_, i) => ({ path: `.claude/skills/${"x".repeat(100)}-${i}/SKILL.md`, kind: "verbatim", mode: "0600", bytes: Buffer.from("fixture\n") }));
+    const applied = await runCli(home, ["cloud", "mirror-apply", "--stdin"], bundle(home, entries), "pipe");
+    expect(applied.code, applied.stderr).toBe(0);
+    expect(applied.stdout.length).toBeGreaterThan(65536);
+    expect(JSON.parse(applied.stdout).applied).toHaveLength(entries.length);
+    const verified = await runCli(home, ["cloud", "mirror-apply", "--verify"]);
+    expect(verified.code, verified.stderr).toBe(0);
+    expect(Object.keys(JSON.parse(verified.stdout).files)).toHaveLength(entries.length);
+    expect(JSON.parse(verified.stdout).complete).toBe(true);
+  }, 120_000);
+
   test("applies a bundle under HOME, prints the JSON result, stamps, and the enabled memory section is present exactly once after refresh", async () => {
     const home = scratchHome();
     fs.writeFileSync(path.join(home, ".codecast", "config.json"), JSON.stringify({ user_id: "u1", memory_enabled: true, memory_version: "14" }));

@@ -3681,6 +3681,11 @@ http.route({
         project_path: body.project_path,
         max_runtime_ms: body.max_runtime_ms,
         precheck: body.precheck,
+        originating_conversation_id: body.originating_conversation_id,
+        target_conversation_id: body.target_conversation_id,
+        wake_creator: body.wake_creator,
+        originating_session_ref: body.originating_session_ref,
+        target_session_ref: body.target_session_ref,
       });
       return new Response(JSON.stringify({ success: result.ok, changed: result.changed }), {
         status: 200,

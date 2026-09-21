@@ -29,6 +29,7 @@ export type ShortcutAction =
   | 'session.snooze'
   | 'session.create'
   | 'session.compose'
+  | 'session.composeDock'
   | 'session.rename'
   | 'session.mruSwitch'
   | 'tab.new'
@@ -180,7 +181,10 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'alt+shift+backspace', action: 'session.dormantAdvance', skipInputCheck: 'whenEmpty', description: 'Dormant and advance (a machine wakes it)' },
   { key: 'ctrl+n', action: 'session.compose', skipInputCheck: true, description: 'New session' },
   { key: 'ctrl+alt+n', action: 'session.create', skipInputCheck: true, description: 'New session (full page)' },
-  { key: 'ctrl+shift+n', action: 'session.compose', skipInputCheck: true, description: 'Quick compose (palette)' },
+  // The docked composer: small, non-modal, any number at once. worksInModal
+  // because the same chord minimizes the center modal, whose aria-modal would
+  // otherwise make the dispatcher stand down.
+  { key: 'ctrl+shift+n', action: 'session.composeDock', skipInputCheck: true, worksInModal: true, description: 'New session in a docked composer (minimizes the open one)' },
   { key: 'ctrl+shift+e', action: 'session.rename', skipInputCheck: true, description: 'Rename session' },
   { key: 'ctrl+tab', action: 'session.mruSwitch', skipInputCheck: true, description: 'Switch recently viewed (MRU)' },
 

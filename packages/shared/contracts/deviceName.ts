@@ -22,6 +22,7 @@ const OS_PREFIX = /^(macOS|Linux|Windows)\s*-\s*/i;
 
 /** AWS derives "ip-A-B-C-D" from the private IPv4; nobody picked that name. */
 const AWS_AUTO_HOSTNAME = /^ip-\d{1,3}(?:-\d{1,3}){3}(?:\.|$)/i;
+const MAC_UUID_HOSTNAME = /^[0-9a-f]{8}-[0-9a-f]{4}(?:-[0-9a-f]{4}){0,2}(?:-[0-9a-f]{12})?$/i;
 
 /** Grok cloud workers stamp the instance id into the hostname. Same class: not a name a person chose. */
 const GROK_BOT_VM_HOSTNAME = /^grok-bot-vm[-_]/i;
@@ -67,9 +68,9 @@ export function deviceDisplayName(d: DeviceNameSource | undefined | null): strin
   if (!d) return "Unknown device";
   // The same predicate that decides "this machine boots when work arrives",
   // so the name and the placement rule cannot diverge.
-  if (deviceWakesOnUse(d)) return "Cloud Linux";
-  if (d.is_remote) return "Remote Mac";
+  if (deviceWakesOnUse(d) && /linux/i.test(d.platform)) return "Cloud Linux";
   const host = hostnameFromLabel(d.label);
+  if (d.is_remote && (!host.trim() || isCloudAssignedHostname(d.label) || MAC_UUID_HOSTNAME.test(host.replace(/\.local$/i, "")))) return deviceWakesOnUse(d) ? "Cloud Mac" : "Remote Mac";
   if (AWS_AUTO_HOSTNAME.test(host)) return `AWS ${deviceKindLabel(d)}`;
   // "MacBook-Pro-4.local" → "MacBook-Pro-4"
   const stripped = host.replace(/\.local$/i, "").replace(/\.([a-z0-9-]+\.)*(compute\.)?internal$/i, "");

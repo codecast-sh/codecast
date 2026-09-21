@@ -13,11 +13,11 @@ test("repeated window reports share one cleanup listener and destruction clears 
   contents.once = events.once.bind(events);
   const report = rig.handlers.get("report-window-state");
   for (let i = 0; i < 1_000; i++) {
-    report({ sender: contents }, { active: `session-${i}`, open: [], inCall: i === 999 });
+    report(rig.event(contents), { active: `session-${i}`, open: [], inCall: i === 999 });
   }
   assert.equal(events.listenerCount("destroyed"), 1);
-  assert.equal(rig.handlers.get("show-call-panel")(), true);
+  assert.equal(rig.handlers.get("show-call-panel")(rig.event()), true);
   events.emit("destroyed");
   assert.equal(events.listenerCount("destroyed"), 0);
-  assert.equal(rig.handlers.get("show-call-panel")(), false);
+  assert.equal(rig.handlers.get("show-call-panel")(rig.event()), false);
 });

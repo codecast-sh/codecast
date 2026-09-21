@@ -75,6 +75,7 @@ const {
 } = require("./meetingDetector");
 const { createOsPermissions } = require("./osPermissions");
 const { createComputerPermissions } = require("./computerPermissions");
+const { createShellAuthority, originOf, installShellCapabilities } = require("./shellAuthority");
 const { createBrowserPanes, defaultRegistryPath: defaultPaneRegistryPath } = require("./browserPanes");
 
 let notificationRefs = [];
@@ -124,6 +125,15 @@ let paletteSummonedOverSelf = false;
 let tray = null;
 let deepLinkUrl = null;
 let currentBaseUrl = BASE_URL;
+const shellAuthority = createShellAuthority({
+  ipcMain,
+  origins: () => [PROD_URL, LOCAL_URL, originOf(BASE_URL)].filter(Boolean),
+  openExternal: (url) => shell.openExternal(url),
+});
+const shellIpc = shellAuthority.ipc;
+function createShellWindow(options) {
+  return shellAuthority.register(new BrowserWindow(options));
+}
 
 function getSettingsPath() {
   return path.join(app.getPath("userData"), "settings.json");
@@ -267,7 +277,7 @@ function preloadPrefs() {
 
 function createWindow() {
   const zoom = getAutoZoomFactor();
-  mainWindow = new BrowserWindow({
+  mainWindow = createShellWindow({
     width: 1200,
     height: 800,
     minWidth: 800,
@@ -414,7 +424,7 @@ function sanitizeTabPath(navPath) {
 // spare build one of these; only what gets loaded into it differs.
 function buildTabWindow(extraArgs = []) {
   const zoom = getAutoZoomFactor();
-  const win = new BrowserWindow({
+  const win = createShellWindow({
     width: 1100,
     height: 760,
     minWidth: 700,
@@ -563,7 +573,7 @@ function createTabWindow(navPath) {
   });
 }
 
-ipcMain.handle("detach-tab", (_e, navPath) => {
+shellIpc.handle("detach-tab", (_e, navPath) => {
   const clean = sanitizeTabPath(navPath);
   if (!clean) return;
   // A chat or work path broken out is that app's window, not a plain window:
@@ -573,7 +583,7 @@ ipcMain.handle("detach-tab", (_e, navPath) => {
   else createTabWindow(clean);
 });
 
-ipcMain.handle("attach-tab", (e, navPath) => {
+shellIpc.handle("attach-tab", (e, navPath) => {
   const clean = sanitizeTabPath(navPath);
   if (!clean) return;
   const sender = BrowserWindow.fromWebContents(e.sender);
@@ -694,6 +704,13 @@ function createAppWindow(app, navPath = null) {
 // Chat window asking for a session hands it to the main window.
 function routeToWindow(navPath, from = null) {
   const here = from ? appOf(from) : null;
+  // A plain breakout never shows an app's routes (the web asks the same
+  // way): the app's window opens, or comes forward, with the path.
+  const app = appForRoute(navPath);
+  if (app && from && from !== mainWindow && !here) {
+    createAppWindow(app, navPath);
+    return true;
+  }
   const place = placeRoute(navPath, here, openAppWindows());
   let win = null;
   if (place === "here" && from && !from.isDestroyed()) win = from;
@@ -712,19 +729,19 @@ function routeToWindow(navPath, from = null) {
   return true;
 }
 
-ipcMain.handle("open-app-window", (_e, app, navPath) => {
+shellIpc.handle("open-app-window", (_e, app, navPath) => {
   if (!isDesktopApp(app)) return false;
   const clean = navPath == null ? null : sanitizeTabPath(navPath);
   createAppWindow(app, clean);
   return true;
 });
 
-ipcMain.handle("close-app-window", (_e, app) => {
+shellIpc.handle("close-app-window", (_e, app) => {
   const win = isDesktopApp(app) ? appWindowFor.get(app) : null;
   if (win && !win.isDestroyed()) win.close();
 });
 
-ipcMain.handle("route-navigate", (e, navPath) => {
+shellIpc.handle("route-navigate", (e, navPath) => {
   const clean = sanitizeTabPath(navPath);
   if (!clean) return false;
   return routeToWindow(clean, BrowserWindow.fromWebContents(e.sender));
@@ -803,7 +820,7 @@ function createPeopleWindow() {
   const state = loadPeopleState();
   const bounds = clampToVisibleDisplay(state.bounds);
   const zoom = getAutoZoomFactor();
-  const win = new BrowserWindow({
+  const win = createShellWindow({
     width: PEOPLE_SIZE.width,
     height: PEOPLE_SIZE.height,
     ...(bounds || {}),
@@ -860,7 +877,7 @@ function createPeopleWindow() {
 // asking for it is a standing arrangement the host takes up. On a shell whose
 // host has not declared itself — an older web build, or the first second
 // after boot — the people window is still a window of its own.
-ipcMain.handle("open-people-window", () => {
+shellIpc.handle("open-people-window", () => {
   if (hasVoiceHost()) {
     wallFocusPending = true;
     setWallWanted(true);
@@ -870,7 +887,7 @@ ipcMain.handle("open-people-window", () => {
   createPeopleWindow();
 });
 
-ipcMain.handle("close-people-window", () => {
+shellIpc.handle("close-people-window", () => {
   setWallWanted(false);
   if (peopleWindow && !peopleWindow.isDestroyed()) peopleWindow.close();
 });
@@ -878,7 +895,7 @@ ipcMain.handle("close-people-window", () => {
 // The pin. Only the buddy list may float above other apps — the people window
 // of its own, or the voice window while the wall is its shape. Any other
 // renderer asking is answered with what it actually is (false), never granted.
-ipcMain.handle("set-always-on-top", (e, on) => {
+shellIpc.handle("set-always-on-top", (e, on) => {
   const win = BrowserWindow.fromWebContents(e.sender);
   if (!win || win.isDestroyed()) return false;
   const pinned = on === true;
@@ -899,7 +916,7 @@ ipcMain.handle("set-always-on-top", (e, on) => {
   return false;
 });
 
-ipcMain.handle("get-always-on-top", (e) => {
+shellIpc.handle("get-always-on-top", (e) => {
   const win = BrowserWindow.fromWebContents(e.sender);
   if (!win || win.isDestroyed()) return false;
   // The voice window floats in most of its shapes for reasons of their own;
@@ -1317,7 +1334,7 @@ function ensureCallWindow(roomKey, opts) {
   if (roomKey) rememberCallSize(callWindowSize);
   const bounds = clampToVisibleDisplay(loadCallPanelState().bounds, CALL_PANEL_SIZE);
   const zoom = getAutoZoomFactor();
-  const win = new BrowserWindow({
+  const win = createShellWindow({
     width: CALL_PANEL_SIZE.width,
     height: CALL_PANEL_SIZE.height,
     ...(bounds || {}),
@@ -1524,7 +1541,7 @@ function registerSeeThroughIpc(prefix, resolveSender, opts = {}) {
   // circle. Only the click-through states have anything to lift: the call
   // stage takes every click by construction, and letting a renderer turn that
   // off would make the panel unclickable with no way back.
-  ipcMain.on(`set-${prefix}-interactive`, (e, on) => {
+  shellIpc.on(`set-${prefix}-interactive`, (e, on) => {
     const win = resolveSender(e);
     if (!win || !mayInteract()) return;
     win.setIgnoreMouseEvents(on !== true, { forward: true });
@@ -1532,7 +1549,7 @@ function registerSeeThroughIpc(prefix, resolveSender, opts = {}) {
 
   // The circles are sized to their contents: the renderer measures them and
   // says how big the window has to be.
-  ipcMain.on(`set-${prefix}-content-size`, (e, size) => {
+  shellIpc.on(`set-${prefix}-content-size`, (e, size) => {
     const win = resolveSender(e);
     if (!win || !mayResize()) return;
     if (!size || typeof size !== "object") return;
@@ -1584,7 +1601,7 @@ function registerSeeThroughIpc(prefix, resolveSender, opts = {}) {
   // takes the mouse events, so the renderer would never learn the pointer had
   // left and the window would stay stuck taking clicks that belong to the
   // application underneath.
-  ipcMain.on(`set-${prefix}-dragging`, (e, on) => {
+  shellIpc.on(`set-${prefix}-dragging`, (e, on) => {
     const win = resolveSender(e);
     if (!win) return;
     stopDrag();
@@ -1627,13 +1644,13 @@ const { stopDrag: stopCallWindowDrag } = registerSeeThroughIpc("call-window", se
   getWindow: () => callWindow,
 });
 
-ipcMain.handle("open-call-panel", (_e, roomKey, opts) => {
+shellIpc.handle("open-call-panel", (_e, roomKey, opts) => {
   openCallWindow(roomKey, opts && typeof opts === "object" ? opts : {});
 });
 
 // Only the panel may close the panel, and only it can say whether the call
 // ended — verified by sender identity, never by the renderer's claim.
-ipcMain.handle("close-call-panel", (e, opts) => {
+shellIpc.handle("close-call-panel", (e, opts) => {
   const win = senderIsCallWindow(e);
   if (!win) return false;
   callWindowEnded = !!(opts && opts.ended);
@@ -1643,7 +1660,7 @@ ipcMain.handle("close-call-panel", (e, opts) => {
 
 // Any window may raise the huddle: the elsewhere pill, a second huddle
 // click. The call already lives here; this only makes the window visible.
-ipcMain.handle("show-call-panel", () => {
+shellIpc.handle("show-call-panel", () => {
   if (!callWindowHostsRoom()) {
     const owner = routedWindows().find((win) => windowStates.get(win.webContents.id)?.inCall);
     if (!owner) return false;
@@ -1666,7 +1683,7 @@ ipcMain.handle("show-call-panel", () => {
   return true;
 });
 
-ipcMain.on("report-call-panel-state", (e, state) => {
+shellIpc.on("report-call-panel-state", (e, state) => {
   if (!senderIsCallWindow(e)) return;
   if (!state || typeof state !== "object") return;
   const before = callWindowHostsRoom();
@@ -1685,7 +1702,7 @@ ipcMain.on("report-call-panel-state", (e, state) => {
 // rooms as commands, and treats a hang-up as going idle rather than as the
 // window going away. Every other window learns through the role broadcast
 // that a host exists, and starts sending its gestures here.
-ipcMain.on("voice-host-ready", (e) => {
+shellIpc.on("voice-host-ready", (e) => {
   if (!senderIsCallWindow(e)) return;
   if (callWindowHost) return;
   callWindowHost = true;
@@ -1694,17 +1711,17 @@ ipcMain.on("voice-host-ready", (e) => {
 
 // The shape change. The window keeps its media across it — that is the whole
 // point of one window with many shapes — so this only moves and reshapes it.
-ipcMain.handle("set-call-window-size", (e, size) => {
+shellIpc.handle("set-call-window-size", (e, size) => {
   const win = senderIsCallWindow(e);
   if (!win) return null;
   return setCallWindowShape(win, size, { reveal: true });
 });
 
-ipcMain.handle("get-call-window-size", (e) => (senderIsCallWindow(e) ? callWindowSize : null));
+shellIpc.handle("get-call-window-size", (e) => (senderIsCallWindow(e) ? callWindowSize : null));
 
 // The two facts a host needs to decide its own shape: what it is in now, and
 // which call shape the person last chose — the one a call should open in.
-ipcMain.handle("get-voice-window-state", (e) =>
+shellIpc.handle("get-voice-window-state", (e) =>
   senderIsCallWindow(e) ? { size: callWindowSize, callSize: savedCallWindowSize() } : null,
 );
 
@@ -1715,7 +1732,7 @@ ipcMain.handle("get-voice-window-state", (e) =>
 // host, which holds the only microphone. The answer says whether a host took
 // it, so a renderer on a shell (or a moment) without one can act locally
 // instead of doing nothing.
-ipcMain.handle("voice-command", (_e, cmd, args) => {
+shellIpc.handle("voice-command", (_e, cmd, args) => {
   if (!hasVoiceHost()) return false;
   if (typeof cmd !== "string" || !cmd) return false;
   callWindow.webContents.send("voice-command", { cmd, args: Array.isArray(args) ? args : [] });
@@ -1726,7 +1743,7 @@ ipcMain.handle("voice-command", (_e, cmd, args) => {
 // key in the main window lights for a burst the host is speaking. Relayed
 // through here because the host cannot address the other windows itself; the
 // latest one is replayed to a window that opens later.
-ipcMain.on("voice-mirror", (e, payload) => {
+shellIpc.on("voice-mirror", (e, payload) => {
   if (!senderIsCallWindow(e)) return;
   if (!payload || typeof payload !== "object") return;
   lastVoiceMirror = payload;
@@ -1803,16 +1820,16 @@ function defaultWallBounds() {
   };
 }
 
-ipcMain.handle("open-faces-window", () => {
+shellIpc.handle("open-faces-window", () => {
   setFacesOverlayWanted(true);
   createVoiceWindow();
 });
 
-ipcMain.handle("close-faces-window", () => {
+shellIpc.handle("close-faces-window", () => {
   setFacesOverlayWanted(false);
 });
 
-ipcMain.handle("get-faces-window-open", () => facesOverlayWanted());
+shellIpc.handle("get-faces-window-open", () => facesOverlayWanted());
 // ---------------------------------------------------------------------------
 // Multi-window notification routing. Every window runs the same web app and
 // would otherwise fire its own banner and sound for the same event. Main is
@@ -1952,7 +1969,7 @@ app.on("browser-window-focus", (_e, win) => {
 });
 app.on("browser-window-blur", () => broadcastWindowRole());
 
-ipcMain.on("report-window-state", (e, state) => {
+shellIpc.on("report-window-state", (e, state) => {
   if (!state || typeof state !== "object") return;
   // A window reporting for the first time has not seen the host's mirror yet;
   // without this its talk keys would start blank until the host next moved.
@@ -2009,7 +2026,7 @@ function createPaletteWindow() {
   const winWidth = 1000;
   const winHeight = 680;
 
-  paletteWindow = new BrowserWindow({
+  paletteWindow = createShellWindow({
     width: winWidth,
     height: winHeight,
     x: Math.round((screenWidth - winWidth) / 2),
@@ -2183,7 +2200,7 @@ const MEETING_OFFER_MARGIN = 16;
 
 function createMeetingOfferWindow() {
   const zoom = getAutoZoomFactor();
-  const win = new BrowserWindow({
+  const win = createShellWindow({
     width: 360,
     height: 64,
     frame: false,
@@ -2246,7 +2263,7 @@ function placeMeetingOfferWindow(width, height) {
   });
 }
 
-ipcMain.on("meeting-offer-size", (e, size) => {
+shellIpc.on("meeting-offer-size", (e, size) => {
   const win = meetingOfferWindow;
   if (!win || win.isDestroyed() || e.sender !== win.webContents) return;
   const width = Math.max(60, Math.min(560, Math.round(Number(size?.width) || 360)));
@@ -2255,7 +2272,7 @@ ipcMain.on("meeting-offer-size", (e, size) => {
   if (!win.isVisible()) win.showInactive();
 });
 
-ipcMain.on("meeting-offer-hide", (e) => {
+shellIpc.on("meeting-offer-hide", (e) => {
   const win = meetingOfferWindow;
   if (!win || win.isDestroyed() || e.sender !== win.webContents) return;
   win.hide();
@@ -2285,7 +2302,7 @@ const CALL_RING_MARGIN = 16;
 
 function createCallRingWindow() {
   const zoom = getAutoZoomFactor();
-  const win = new BrowserWindow({
+  const win = createShellWindow({
     width: 340,
     height: 96,
     frame: false,
@@ -2365,18 +2382,18 @@ function ensureCallRingWindow() {
   return callRingWindow;
 }
 
-ipcMain.handle("open-call-ring-window", () => {
+shellIpc.handle("open-call-ring-window", () => {
   const win = ensureCallRingWindow();
   return !!win && !win.isDestroyed();
 });
 
 // The host holds the ring shape up; the shell only bounces the dock beside it.
-ipcMain.on("ring-attention", (e, on) => {
+shellIpc.on("ring-attention", (e, on) => {
   if (!senderIsCallWindow(e)) return;
   setRingAttention(on === true);
 });
 
-ipcMain.on("call-ring-size", (e, size) => {
+shellIpc.on("call-ring-size", (e, size) => {
   const win = callRingWindow;
   if (!win || win.isDestroyed() || e.sender !== win.webContents) return;
   // Wide enough for the card and the glow it is measured with (ringCard.css
@@ -2390,7 +2407,7 @@ ipcMain.on("call-ring-size", (e, size) => {
   if (!win.isVisible()) win.showInactive();
 });
 
-ipcMain.on("call-ring-hide", (e) => {
+shellIpc.on("call-ring-hide", (e) => {
   const win = callRingWindow;
   if (!win || win.isDestroyed() || e.sender !== win.webContents) return;
   win.hide();
@@ -2399,7 +2416,7 @@ ipcMain.on("call-ring-hide", (e) => {
 // Answer: the huddle goes to the CALL window, never to this card. The invite
 // is accepted by the window that will actually hold the media, so there is no
 // moment where a seat exists in a renderer with no stage behind it.
-ipcMain.on("call-ring-answer", (e, inviteId, roomKey) => {
+shellIpc.on("call-ring-answer", (e, inviteId, roomKey) => {
   const win = callRingWindow;
   if (!win || win.isDestroyed() || e.sender !== win.webContents) return;
   if (typeof roomKey !== "string" || !roomKey) return;
@@ -2427,7 +2444,7 @@ ipcMain.on("call-ring-answer", (e, inviteId, roomKey) => {
 
 // "Open the transcript" from the recording face: the card is not a place to
 // read, so the transcript lands in the main window.
-ipcMain.on("meeting-offer-open-call", (e, id) => {
+shellIpc.on("meeting-offer-open-call", (e, id) => {
   const win = meetingOfferWindow;
   if (!win || win.isDestroyed() || e.sender !== win.webContents) return;
   const clean = String(id ?? "").replace(/[^A-Za-z0-9_-]/g, "");
@@ -2912,23 +2929,23 @@ function applyStagedUpdateOnQuit() {
 }
 
 // IPC handlers
-ipcMain.handle("get-app-version", () => app.getVersion());
-ipcMain.handle("set-badge-count", (_e, count) => app.setBadgeCount(count));
-ipcMain.handle("get-env", () => (currentBaseUrl === PROD_URL ? "prod" : "local"));
+shellIpc.handle("get-app-version", () => app.getVersion());
+shellIpc.handle("set-badge-count", (_e, count) => app.setBadgeCount(count));
+shellIpc.handle("get-env", () => (currentBaseUrl === PROD_URL ? "prod" : "local"));
 // OS-wide seconds since last user input — feeds the web layer's presence
 // heartbeat so the server knows a human is at this machine even while
 // Codecast itself is unfocused. powerMonitor is only usable after app ready,
 // which holds whenever this handler runs: renderers exist only post-ready.
-ipcMain.handle("get-system-idle-seconds", () => powerMonitor.getSystemIdleTime());
-ipcMain.handle("restart-for-update", () => installUpdateAndRestart());
+shellIpc.handle("get-system-idle-seconds", () => powerMonitor.getSystemIdleTime());
+shellIpc.handle("restart-for-update", () => installUpdateAndRestart());
 // Any renderer-invoked check is user-initiated ("Try again" / "Update now"),
 // which lets it supersede a wedged in-flight download (see checkForDesktopUpdate).
-ipcMain.handle("check-for-update", (_e, opts) => checkForDesktopUpdate({ manual: opts?.manual === true, userInitiated: true }));
+shellIpc.handle("check-for-update", (_e, opts) => checkForDesktopUpdate({ manual: opts?.manual === true, userInitiated: true }));
 // Returns { shown } so the renderer knows whether IT announced the event.
 // Every window reports the same server row; the first report wins the banner,
 // duplicates inside the TTL are dropped, and nothing banners while an app
 // window is focused (the user already sees the bell / toast there).
-ipcMain.handle("show-notification", (_e, payload) => {
+shellIpc.handle("show-notification", (_e, payload) => {
   const { title, body, data } = payload || {};
   // A ring is for a person who is not looking: it goes up whatever is
   // focused. Everything else stays quiet while the app is in front, where
@@ -2949,16 +2966,16 @@ const osPermissions = createOsPermissions({
   bundleId: app.isPackaged ? "sh.codecast.desktop" : "com.github.Electron",
 });
 modernNotify = osPermissions.notify;
-ipcMain.handle("get-os-permissions", () => osPermissions.getAll());
-ipcMain.handle("request-os-permission", (_e, kind) => osPermissions.request(String(kind)));
+shellIpc.handle("get-os-permissions", () => osPermissions.getAll());
+shellIpc.handle("request-os-permission", (_e, kind) => osPermissions.request(String(kind)));
 
 // The two grants that belong to the codecast computer helper, not to this app
 // — see computerPermissions.js. They travel through the cast CLI, so nothing
 // here touches an accessibility or a screen API, and the one gesture that may
 // take the screen is the helper's own settings window behind a human's click.
 const computerPermissions = createComputerPermissions({});
-ipcMain.handle("get-computer-permissions", () => computerPermissions.getAll());
-ipcMain.handle("open-os-permission-settings", (_e, kind) => {
+shellIpc.handle("get-computer-permissions", () => computerPermissions.getAll());
+shellIpc.handle("open-os-permission-settings", (_e, kind) => {
   const k = String(kind);
   return computerPermissions.owns(k) ? computerPermissions.openSettings(k) : osPermissions.openSettings(k);
 });
@@ -2967,30 +2984,30 @@ ipcMain.handle("open-os-permission-settings", (_e, kind) => {
 // embedded window has no Google/GitHub sessions. https-only — the renderer
 // only ever passes app-origin auth URLs, and anything else has no business
 // being launched from here.
-ipcMain.handle("open-external", (_e, url) => {
+shellIpc.handle("open-external", (_e, url) => {
   if (typeof url === "string" && /^https:\/\//i.test(url)) shell.openExternal(url);
 });
 
 // Palette IPC
 // The palette renderer has painted a face (compose/search) — reveal the window
 // if it's the one we asked for.
-ipcMain.on("palette-ready", (_e, mode) => {
+shellIpc.on("palette-ready", (_e, mode) => {
   finishReveal(mode);
 });
 
 // The palette picked a place: a task lands in the Work window when there is
 // one, a channel in the Chat window, everything else in the main window.
-ipcMain.on("palette-navigate", (_e, navPath) => {
+shellIpc.on("palette-navigate", (_e, navPath) => {
   hidePalette();
   const clean = sanitizeTabPath(navPath);
   if (clean) routeToWindow(clean);
 });
 
-ipcMain.on("palette-hide", () => {
+shellIpc.on("palette-hide", () => {
   hidePalette();
 });
 
-ipcMain.on("palette-new-session", () => {
+shellIpc.on("palette-new-session", () => {
   openFullSessionInMain();
 });
 
@@ -2999,7 +3016,7 @@ ipcMain.on("palette-new-session", () => {
 // we do here is manage focus:
 //   navigate → bring Codecast forward on the new conversation (Cmd+Enter)
 //   else     → fire-and-forget: hide the popup and step out of the app (Enter)
-ipcMain.on("compose-submit", (_e, data) => {
+shellIpc.on("compose-submit", (_e, data) => {
   hidePalette();
   if (data?.navigate && data?.conversationId && mainWindow) {
     mainWindow.show();
@@ -3020,16 +3037,16 @@ ipcMain.on("compose-submit", (_e, data) => {
 });
 
 // Settings IPC
-ipcMain.handle("get-shortcuts", () => loadSettings());
+shellIpc.handle("get-shortcuts", () => loadSettings());
 // Richer readout for the settings UI: current bindings, the defaults (so the
 // web can offer "reset to default" without hardcoding them), and which
 // bindings failed to register (owned by another app / malformed).
-ipcMain.handle("get-shortcut-config", () => ({
+shellIpc.handle("get-shortcut-config", () => ({
   shortcuts: loadSettings(),
   defaults: DEFAULT_SHORTCUTS,
   issues: shortcutIssues,
 }));
-ipcMain.handle("set-shortcut", (_e, key, accelerator) => {
+shellIpc.handle("set-shortcut", (_e, key, accelerator) => {
   const shortcuts = loadSettings();
   shortcuts[key] = accelerator;
   saveSettings(shortcuts);
@@ -3135,12 +3152,12 @@ function syncMeetingWatch() {
   meetingTick();
 }
 
-ipcMain.handle("get-meeting-detect", () => ({
+shellIpc.handle("get-meeting-detect", () => ({
   ...loadMeetingDetect(),
   apps: meetingAppList(),
   supported: canDetectMeetings(),
 }));
-ipcMain.handle("set-meeting-detect", (_e, patch) => saveMeetingDetect(patch || {}));
+shellIpc.handle("set-meeting-detect", (_e, patch) => saveMeetingDetect(patch || {}));
 
 const SHORTCUT_HANDLERS = {
   toggleWindow: () => {
@@ -3199,20 +3216,7 @@ app.whenReady().then(() => {
   // features. Adding a media feature, a picker, or a permission-gated API on
   // the web side must never require a shell release — that is the whole
   // reason this list is a policy table and not per-feature branches.
-  const isTrustedOrigin = (webContents) => {
-    let host = "";
-    try {
-      host = new URL(webContents.getURL()).hostname;
-    } catch {}
-    return (
-      host === "codecast.sh" ||
-      host === LOCAL_DEV_HOST ||
-      // Loopback: a Vite port, a worktree's dev server — all this app's code.
-      host === "localhost" ||
-      host === "127.0.0.1" ||
-      host === "[::1]"
-    );
-  };
+  const isTrustedOrigin = shellAuthority.isShell;
   // Capabilities a trusted first-party page may hold. Anything not listed is
   // denied for everyone (a navigated-to third-party frame gets nothing).
   // The BASELINE ships with the shell; the web layer may EXTEND it at runtime
@@ -3230,21 +3234,7 @@ app.whenReady().then(() => {
   ];
   const trustedPermissions = () =>
     new Set([...BASELINE_PERMISSIONS, ...(loadFullSettings().hostPolicy?.permissions ?? [])]);
-  const extraTrustedHosts = () => new Set(loadFullSettings().hostPolicy?.hosts ?? []);
-  const isTrustedOriginOrExtended = (webContents) => {
-    if (isTrustedOrigin(webContents)) return true;
-    try {
-      return extraTrustedHosts().has(new URL(webContents.getURL()).hostname);
-    } catch {
-      return false;
-    }
-  };
-  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
-    callback(trustedPermissions().has(permission) && isTrustedOriginOrExtended(webContents));
-  });
-  session.defaultSession.setPermissionCheckHandler((webContents, permission) => {
-    return trustedPermissions().has(permission) && (!webContents || isTrustedOriginOrExtended(webContents));
-  });
+  installShellCapabilities({ authority: shellAuthority, session: session.defaultSession, desktopCapturer, permissions: trustedPermissions });
   // Browser panes: the native half of the web app's /browser route
   // (browserPanes.js). It manages its own views, its own session and its own
   // lifecycle — the shell hands it the pieces of Electron it needs and the
@@ -3253,22 +3243,22 @@ app.whenReady().then(() => {
   // registry (browserPanes.js, desktop-panes.json) tells it which target is
   // which pane. No port, no registry.
   createBrowserPanes({
-    WebContentsView, session, ipcMain, BrowserWindow, isTrusted: isTrustedOrigin,
+    WebContentsView, session, ipcMain: shellIpc, BrowserWindow, isTrusted: isTrustedOrigin,
     cdpPort: CDP_PORT, registryPath: defaultPaneRegistryPath(),
   }).install();
 
   // The web layer extends host policy: {permissions?: string[], hosts?: string[]}.
   // Reads back the effective policy so the web can gate on what the shell
   // will actually grant.
-  ipcMain.handle("host-policy", (e, patch) => {
+  shellIpc.handle("host-policy", (e, patch) => {
     if (!isTrustedOrigin(e.sender)) return null;
     if (patch && typeof patch === "object") {
       const cur = loadFullSettings().hostPolicy ?? {};
-      const permissions = new Set([...(cur.permissions ?? []), ...((patch.permissions ?? []).filter((x) => typeof x === "string"))]);
-      const hosts = new Set([...(cur.hosts ?? []), ...((patch.hosts ?? []).filter((x) => typeof x === "string"))]);
+      const permissions = new Set([...(cur.permissions ?? []), ...(Array.isArray(patch.permissions) ? patch.permissions.filter((x) => typeof x === "string") : [])]);
+      const hosts = new Set();
       updateSettings({ hostPolicy: { permissions: [...permissions], hosts: [...hosts] } });
     }
-    return { permissions: [...trustedPermissions()], hosts: [...extraTrustedHosts()], version: app.getVersion() };
+    return { permissions: [...trustedPermissions()], hosts: [], version: app.getVersion() };
   });
 
   // Screen share. Chromium routes the renderer's getDisplayMedia here for a
@@ -3277,39 +3267,6 @@ app.whenReady().then(() => {
   // selection the primary screen is used, so the plain "share my screen"
   // gesture works with zero UI. The selection is single-use — one call, one
   // consent — never a standing grant.
-  let pendingDisplaySource = null;
-  ipcMain.handle("desktop-sources", async (e, opts) => {
-    if (!isTrustedOrigin(e.sender)) return [];
-    const types = Array.isArray(opts?.types) ? opts.types.filter((t) => t === "screen" || t === "window") : ["screen", "window"];
-    const sources = await desktopCapturer.getSources({
-      types,
-      thumbnailSize: { width: 320, height: 200 },
-      fetchWindowIcons: false,
-    });
-    return sources.map((src) => ({
-      id: src.id,
-      name: src.name,
-      kind: src.id.startsWith("screen:") ? "screen" : "window",
-      thumbnail: src.thumbnail.toDataURL(),
-    }));
-  });
-  ipcMain.handle("select-display-source", (e, id) => {
-    if (!isTrustedOrigin(e.sender)) return false;
-    pendingDisplaySource = typeof id === "string" ? id : null;
-    return true;
-  });
-  session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
-    const wanted = pendingDisplaySource;
-    pendingDisplaySource = null;
-    desktopCapturer
-      .getSources({ types: ["screen", "window"] })
-      .then((sources) => {
-        const pick = (wanted && sources.find((s) => s.id === wanted)) || sources.find((s) => s.id.startsWith("screen:")) || sources[0];
-        if (pick) callback({ video: pick, audio: request.audioRequested ? "loopback" : undefined });
-        else callback({});
-      })
-      .catch(() => callback({}));
-  });
 
   app.setAboutPanelOptions({
     applicationName: "Codecast",

@@ -17,12 +17,11 @@
 
 import { useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { api } from "@codecast/convex/convex/_generated/api";
 import { KeyRound, Zap, ZapOff } from "lucide-react";
 import { ClaudeIcon, OpenAIIcon } from "./BrandIcons";
 import { Switch } from "./ui/switch";
 import { useCoarseNow } from "../hooks/useCoarseNow";
-import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
+import { useSettingsData } from "../hooks/useSyncSettings";
 import { useAccountRecoveryToggles } from "../hooks/useAccountRecoveryToggles";
 import { RecoveryModeSelect, RecoveryDecisionNote } from "./RecoveryModeSelect";
 import { useMachineAccountSwitch } from "../hooks/useMachineAccountSwitch";
@@ -52,6 +51,7 @@ function ClaudeSwitchControl({
   loginExpired,
   online,
   isRemote,
+  switching,
   onSwitch,
 }: {
   profile: string;
@@ -59,6 +59,7 @@ function ClaudeSwitchControl({
   loginExpired: boolean;
   online?: boolean;
   isRemote?: boolean;
+  switching: boolean;
   onSwitch: (profile: string, email?: string) => void;
 }) {
   const blocked = machineSwitchBlock({
@@ -86,9 +87,10 @@ function ClaudeSwitchControl({
     <button
       type="button"
       onPointerDown={(ev) => ev.stopPropagation()}
+      disabled={switching}
       onClick={() => onSwitch(profile, email)}
       title={`Switch this machine to "${profile}". Running sessions keep the account they started on.`}
-      className="shrink-0 text-[10px] font-medium text-sol-cyan/70 hover:text-sol-cyan hover:underline"
+      className="shrink-0 text-[10px] font-medium text-sol-cyan/70 hover:text-sol-cyan hover:underline disabled:opacity-40 disabled:pointer-events-none"
     >
       switch →
     </button>
@@ -148,10 +150,7 @@ function AccountChipEmpty({ onManage }: { onManage: () => void }) {
 }
 
 export function AccountUsageChip() {
-  // No-throw: the chip lives in always-mounted chrome, so a backend that can't
-  // serve this must cost the chip, not the surface hosting it. Undefined reads
-  // as "no accounts yet", which the render below already handles.
-  const { data } = useQueryNoThrow(api.accountSwitch.listAccountProfiles, {});
+  const { data } = useSettingsData("accountProfiles");
   const router = useRouter();
   const now = useCoarseNow(30_000);
   // Hovering the chip expands the full usage panel DOWN from it. The panel is
@@ -243,8 +242,6 @@ export function AccountUsageChip() {
   lastShownProvider.current = shown;
   // The chip border speaks for the shown provider.
   const tone = shown === "codex" ? codexTone : claudeTone;
-  const shownClaudeName =
-    sw.outcome?.kind === "success" ? sw.outcome.profile : active?.name;
   // Panel list: the ACTIVE accounts (the Claude and Codex login actually in
   // use) break out into their own section on top — that's the "what is on"
   // answer. Everything else groups by email below: the same login usually
@@ -349,6 +346,7 @@ export function AccountUsageChip() {
                   loginExpired={!!e.p.login_expired_at}
                   online={device.online}
                   isRemote={device.is_remote}
+                  switching={sw.switching !== null}
                   onSwitch={handleSwitch}
                 />
               ) : null}
@@ -396,7 +394,7 @@ export function AccountUsageChip() {
         {shown === "claude" ? (
           <ProviderSegment
             icon={<ClaudeIcon className="h-3 w-3 shrink-0 text-sol-orange" />}
-            label={shownClaudeName ?? resolved.claudeLabel}
+            label={resolved.claudeLabel}
             percent={worst}
             tone={claudeTone}
             title={
@@ -491,14 +489,6 @@ export function AccountUsageChip() {
                 <span className="min-w-0 flex-1">
                   {machineSwitchPendingCopy(sw.phase, sw.switching, device.label)}
                 </span>
-                <button
-                  type="button"
-                  onPointerDown={(ev) => ev.stopPropagation()}
-                  onClick={sw.cancel}
-                  className="shrink-0 font-medium text-current/80 underline-offset-2 hover:underline"
-                >
-                  cancel
-                </button>
               </span>
             ) : sw.outcome?.kind === "error" ? (
               sw.outcome.message

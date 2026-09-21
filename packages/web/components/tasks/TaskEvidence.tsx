@@ -7,6 +7,7 @@ import { useTeamTaskStatusList } from "../../lib/taskStatuses";
 import { openBrowserPane } from "../../lib/stage";
 import { pageFrameSrc, pageShareUrl } from "../../lib/publishedPageUrls";
 import { TaskStatusBadge } from "../TaskStatusBadge";
+import { ImageGalleryProvider, useImageGallery } from "../ImageGallery";
 import { useSyncTaskEvidence, useTaskEvidence, type TaskEvidencePage, type TaskEvidenceRow } from "../../hooks/useSyncTaskEvidence";
 import { stationLabel, stationOf, type LineTask } from "../../lib/taskLine";
 import { ReviewVerdictChip } from "./StationStrip";
@@ -82,8 +83,17 @@ function FilesChanged({ files }: { files: string[] }) {
 }
 
 export function TaskEvidence({ task }: { task: EvidenceTask }) {
+  return (
+    <ImageGalleryProvider key={task._id}>
+      <TaskEvidenceContent task={task} />
+    </ImageGalleryProvider>
+  );
+}
+
+function TaskEvidenceContent({ task }: { task: EvidenceTask }) {
   useSyncTaskEvidence(task._id);
   const row = useTaskEvidence(task._id);
+  const gallery = useImageGallery();
   const statuses = useTeamTaskStatusList(task.team_id);
   // The task row already carries the handoff fields; the evidence row adds
   // pages, docs, images and the PR. Either paints alone.
@@ -128,10 +138,17 @@ export function TaskEvidence({ task }: { task: EvidenceTask }) {
             <div>
               <div className="flex items-center gap-1.5 text-xs font-medium text-sol-text-dim mb-2"><ImageIcon className="w-3.5 h-3.5" />Images ({images.length})</div>
               <div className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:thin]">
-                {images.map((img) => (
-                  <a key={img.message_id} href={img.url} target="_blank" rel="noopener noreferrer" className="block w-[104px] h-[72px] shrink-0 rounded-md border border-sol-border/40 overflow-hidden bg-sol-bg-highlight/60 hover:border-sol-border" title="Open the image">
+                {images.map((img, index) => (
+                  <button
+                    key={`${img.message_id}:${img.url}`}
+                    type="button"
+                    onClick={() => gallery?.openList(images.map(({ url }) => ({ src: url, href: url })), index)}
+                    className="block w-[104px] h-[72px] shrink-0 rounded-md border border-sol-border/40 overflow-hidden bg-sol-bg-highlight/60 hover:border-sol-border"
+                    title="Open the image"
+                    aria-label={`Open evidence image ${index + 1} of ${images.length}`}
+                  >
                     <img src={img.url} alt="" className="w-full h-full object-cover" loading="lazy" />
-                  </a>
+                  </button>
                 ))}
               </div>
             </div>

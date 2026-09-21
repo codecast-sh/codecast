@@ -779,7 +779,10 @@ export function OrgPageInner() {
   // The pane is the page only while it is open (S19): closed, the chart's
   // own header comes back, with its guide and its counters.
   const threadLeads = panelOpen && effectivePanelMode === "staffing" && !!threadNode;
-  const sheetFraction = panelOpen && phone ? (composerFocused || threadLeads ? 0.9 : 0.62) : 0;
+  // A proposal on the phone is the page (S19): the sheet takes the whole
+  // height, because a strip of chart above it cost five lines of the letter
+  // and pushed the first ask under the fold (org eval, round 2).
+  const sheetFraction = panelOpen && phone ? (threadLeads ? 1 : composerFocused ? 0.9 : 0.62) : 0;
   const leadW = roomyForThread ? STAFFING_LEAD_W.roomy : STAFFING_LEAD_W.tight;
   const panelW = threadLeads && !phone ? PANEL_W + leadW : PANEL_W;
   const panelWidth = panelOpen && !phone ? panelW : 0;

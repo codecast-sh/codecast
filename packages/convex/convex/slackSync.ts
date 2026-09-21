@@ -243,25 +243,23 @@ async function slackUserRow(ctx: ReadCtx, workspace: string, user: string): Prom
     .first();
 }
 
-// The codecast teammate a Slack email belongs to, if they are in this team.
-// Primary email by index, then each teammate's alternate_emails (the same rule
-// tasks.ts uses for assignee resolution).
 async function teammateByEmail(ctx: ReadCtx, teamId: Id<"teams">, email: string | undefined): Promise<Id<"users"> | null> {
   if (!email) return null;
-  const lower = email.toLowerCase();
+  const lower = email.trim().toLowerCase();
   const candidates = await ctx.db
     .query("users")
     .withIndex("email", (q: any) => q.eq("email", lower))
     .collect();
-  for (const u of candidates) {
-    if (u.is_bot) continue;
-    if (await isTeamMember(ctx as any, u._id, teamId)) return u._id;
+  const verified = [];
+  for (const user of candidates) {
+    if (user.is_bot) continue;
+    const accounts = typeof user.emailVerificationTime === "number" ? [] : await ctx.db.query("authAccounts")
+      .withIndex("userIdAndProvider", (q) => q.eq("userId", user._id)).collect();
+    if (typeof user.emailVerificationTime === "number" || accounts.some((account) =>
+      account.emailVerified?.trim().toLowerCase() === lower)) verified.push(user);
   }
-  for (const u of await teamRoster(ctx, teamId)) {
-    if (u.is_bot) continue;
-    if ((u.alternate_emails ?? []).some((e: string) => e.toLowerCase() === lower)) return u._id;
-  }
-  return null;
+  if (verified.length !== 1) return null;
+  return await isTeamMember(ctx as any, verified[0]._id, teamId) ? verified[0]._id : null;
 }
 
 // The bridge identity a workspace speaks through. Minted once per installation
@@ -1599,6 +1597,16 @@ export const mapSlackPerson = mutation({
     const claimsSelf = args.codecast_user_id?.toString() === self;
     const releasesSelf = args.codecast_user_id === null && row.codecast_user_id?.toString() === self;
     if (!admin && !claimsSelf && !releasesSelf) chatFail("FORBIDDEN", "Only a team admin can map a Slack person to someone else");
+    if (!admin && claimsSelf) {
+      const emailOwner = await teammateByEmail(ctx, args.team_id, row.email);
+      const token = await ctx.db.query("slack_user_tokens")
+        .withIndex("by_installation_user", (q: any) => q.eq("installation_id", install._id).eq("user_id", userId))
+        .first();
+      if (emailOwner?.toString() !== self &&
+        !(token?.workspace_id === install.workspace_id && token.slack_user_id === row.slack_user_id)) {
+        chatFail("FORBIDDEN", "Sign in with Slack or verify the matching email before claiming this person");
+      }
+    }
     if (args.codecast_user_id) {
       const target = await ctx.db.get(args.codecast_user_id);
       if (!target || target.is_bot || !(await isTeamMember(ctx, args.codecast_user_id, args.team_id))) {
@@ -1633,11 +1641,6 @@ async function assignSlackPerson(
   });
 }
 
-// A person added another address to their account (users.addAlternateEmail):
-// every Slack person seen under it, in a team they belong to, becomes them —
-// unless a teammate had already mapped that person by hand, which outranks any
-// address. assignSlackPerson carries the rest: past lines are re-authored and
-// DM rooms follow the identity.
 export const claimSlackPeopleByEmail = internalMutation({
   args: { user_id: v.id("users"), email: v.string() },
   handler: async (ctx, args): Promise<{ claimed: number }> => {
@@ -1648,6 +1651,7 @@ export const claimSlackPeopleByEmail = internalMutation({
       .collect();
     let claimed = 0;
     for (const m of memberships) {
+      if ((await teammateByEmail(ctx, m.team_id, email))?.toString() !== args.user_id.toString()) continue;
       const install = await installationForTeam(ctx, m.team_id);
       if (!install) continue;
       const rows = await ctx.db

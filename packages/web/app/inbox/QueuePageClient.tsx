@@ -5,6 +5,7 @@ import { useEventListener } from "../../hooks/useEventListener";
 import { useShortcutContext } from "../../shortcuts";
 import { useMutation } from "convex/react";
 import { useMissingSessionRow } from "../../hooks/useMissingSessionRow";
+import { SessionPrewarm } from "../../components/SessionPrewarm";
 import { useSearchParams } from "next/navigation";
 import { useTabActive } from "../../hooks/usePagePresence";
 import { urlSessionId } from "../../lib/pathLabel";
@@ -445,8 +446,8 @@ export function QueuePageClient() {
       }
     }
     setUnavailableId(null);
+    if (store.showMySessions) setShowMySessions(false);
     if (store.sessions[paramSessionId]) {
-      if (store.showMySessions) setShowMySessions(false);
       navigateToSession(paramSessionId);
       setPendingInjectId(null);
       paramProcessedRef.current = true;
@@ -622,7 +623,7 @@ export function QueuePageClient() {
   // must leave the view empty, never teleport to another session).
   useWatchEffect(() => {
     if (!isActiveTab) return;
-    if (currentSessionId || currentSession || showMySessions || viewingDismissedId || pendingInjectId) return;
+    if (paramSessionId || currentSessionId || currentSession || showMySessions || viewingDismissedId || pendingInjectId) return;
     // Board home: an empty view means "show the fleet", never "adopt a
     // conversation" — the board is the landing surface, drilling in is a
     // gesture. Feed home keeps the old top-of-inbox adoption.
@@ -631,7 +632,7 @@ export function QueuePageClient() {
       return;
     }
     if (sortedSessions.length > 0) setCurrentSession(sortedSessions[0]._id, "adopt");
-  }, [currentSessionId, currentSession, showMySessions, viewingDismissedId, pendingInjectId, sortedSessions, setCurrentSession, isActiveTab, inboxHome, setShowMySessions]);
+  }, [paramSessionId, currentSessionId, currentSession, showMySessions, viewingDismissedId, pendingInjectId, sortedSessions, setCurrentSession, isActiveTab, inboxHome, setShowMySessions]);
 
   // Sync URL when current session changes (but not before initial param is
   // resolved). Only the active tab owns the address bar — a background pane must
@@ -715,6 +716,7 @@ export function QueuePageClient() {
 
   const inboxContent = (
     <>
+      {pendingInjectId && isConvexId(pendingInjectId) && <SessionPrewarm sessionId={pendingInjectId} />}
       {renderShowMine ? (
         inboxHome === "board" ? (
           <ErrorBoundary name="FleetBoard" level="inline">

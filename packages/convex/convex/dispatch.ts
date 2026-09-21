@@ -44,66 +44,43 @@ import { canAccessConversation, requireTeamMembership, patchConversationVisibili
 import { patchConversationThroughFavoriteView } from "./favoriteViewWrites";
 import { pinCapExceeded, PIN_CAP_ERROR } from "./inboxProjection";
 import { addConversationToWorkItem } from "./conversationLinks";
+import { DISPATCHABLE_CONVERSATION_FIELDS } from "@codecast/shared/contracts";
 
 type TableConfig =
   | {
       kind: "collection";
       ownerField: string;
-      immutable: Set<string>;
+      editable: Set<string>;
       beforePatch?: (doc: any, safe: Record<string, any>) => Record<string, any>;
     }
   | {
       kind: "singleton";
       ownerField: string;
       lookupIndex: string;
-      immutable: Set<string>;
+      editable: Set<string>;
     };
 
 const TABLE_CONFIG: Record<string, TableConfig> = {
   conversations: {
     kind: "collection",
     ownerField: "user_id",
-    immutable: new Set([
-      "_id", "_creationTime", "user_id", "session_id", "team_id",
-      "started_at", "message_count", "short_id", "share_token",
-      "is_private", "team_visibility", "auto_shared", "status", "agent_type",
-      // Anchor invariants are server-owned (set by provisionAnchor / cleared by
-      // decommissionAnchor) — a client must not flip these via a generic patch.
-      "persistent", "acting_user_id", "anchor_id",
-      // Second-party ownership is server-assigned only: setSessionOwner, plus
-      // performSessionSend's auto-own on a bot-run session with no owners.
-      "owner_user_id",
-      // Org tree pointers are server-owned (docs/architecture/org-roles.md S1,
-      // org-roles-standing.md T1): reparentSession / retire write org_role_id,
-      // the provisioning wave writes standing_role_id. A client patch of either
-      // would bypass performReparentSession's rules and let the role's brief
-      // and actor resolution treat the row as acting for the role.
-      "org_role_id", "standing_role_id",
-      // A role's escalation has one writer (sessionOwnership
-      // .performEscalateSession), which checks who may put a role's session in
-      // front of a person. It rides escalateSession.
-      "escalated_by_role",
-      // An agent's pane offer is written by the agent and retired by the
-      // reader's click, and the retiring write must pass a VISIBILITY check
-      // rather than the ownership one this gate applies — a teammate reading a
-      // shared session acts on the chip too. It rides dismissBrowserPaneOffer.
-      "browser_pane_offer",
+    editable: new Set([
+      ...DISPATCHABLE_CONVERSATION_FIELDS,
+      "title_is_custom", "project_path", "git_root", "draft_message", "inbox_killed_at",
+      "model", "effort", "agent_definition",
+      "thread_state", "thread_state_at", "thread_state_msg_count", "thread_state_status",
     ]),
-    // No beforePatch hook: dismiss is an absolute flag, so the server has no
-    // reason to rewrite the client's `inbox_dismissed_at`. A previous hook
-    // stamped `Date.now()` here (vestige of the `inbox_dismissed_at >=
-    // updated_at` era) and the resulting client/server value drift kept the
-    // local pending-field override alive forever — a cross-tab unstash could
-    // never converge.
-    // Character fields (session-characters.md S1): an unknown face key or
-    // an empty name clears the field; a name is trimmed and capped.
     beforePatch: (_doc: any, safe: Record<string, any>) => normalizeCharacterFields(safe),
   },
   client_state: {
     kind: "singleton",
     ownerField: "user_id",
     lookupIndex: "by_user_id",
-    immutable: new Set(["_id", "_creationTime", "user_id"]),
+    editable: new Set([
+      "current_conversation_id", "show_dismissed", "dismissed_ids", "ui", "layouts",
+      "dismissed", "tips", "drafts", "tabs", "activeTabId", "sidebar_collapsed",
+      "zen_mode", "layout", "updated_at",
+    ]),
   },
   // Bucket field edits (rename / color / sort_order / archived_at) ride the
   // generic patch path. Creation and assignment need inserts/upserts, so they
@@ -111,7 +88,7 @@ const TABLE_CONFIG: Record<string, TableConfig> = {
   inbox_buckets: {
     kind: "collection",
     ownerField: "user_id",
-    immutable: new Set(["_id", "_creationTime", "user_id", "created_at"]),
+    editable: new Set(["name", "color", "sort_order", "archived_at", "updated_at"]),
   },
   // Decision-queue resolutions (answer / dismiss) ride the generic patch
   // path. Creation comes only from the CLI (/cli/decide → sessionDecisions.ask),
@@ -119,16 +96,7 @@ const TABLE_CONFIG: Record<string, TableConfig> = {
   session_decisions: {
     kind: "collection",
     ownerField: "user_id",
-    immutable: new Set([
-      "_id", "_creationTime", "user_id", "conversation_id", "session_id",
-      "question", "context_md", "options", "report_slug", "blocking",
-      "default_option", "created_at",
-      // W2 routing fields: server assigned, changed only by the named
-      // mutations (recommend / answer / grant / stacks).
-      "short_id", "kind", "category", "category_proposed", "doc_id", "form",
-      "task_id", "station", "stack_id", "holder", "holder_key", "asked_user_ids",
-      "hops", "answered_by", "grant_id", "reopened_from", "scope_keys", "stack_joined_at",
-    ]),
+    editable: new Set(["status", "answer_index", "answer_text", "answer_json", "resolved_at"]),
     // First writer wins on this rail too: a resolution patch on a row a role
     // or a stack policy already resolved is dropped whole.
     beforePatch: (doc: any, safe: Record<string, any>) => guardClientResolution(doc, safe),
@@ -139,13 +107,33 @@ const TABLE_CONFIG: Record<string, TableConfig> = {
   comments: {
     kind: "collection",
     ownerField: "user_id",
-    immutable: new Set([
-      "_id", "_creationTime", "user_id", "conversation_id", "message_id", "created_at",
-      "parent_comment_id", "author_kind", "agent_status", "fork_conversation_id", "client_id",
-      "github_comment_id", "pr_id", "file_path", "line_number",
-    ]),
+    editable: new Set(["content", "resolved_at"]),
   },
 };
+
+const PATCH_ONLY_ACTIONS = new Set([
+  "answerDecision", "applyWorkbench", "clearCurrentConversation", "clearSelection",
+  "clearSidePanelSession", "closeSidePanel", "closeTab", "deferSession",
+  "initPagination", "injectSession", "killSession", "killSessions",
+  "markKilling", "navigateToSession", "openSidePanel", "openTab",
+  "patchConversation", "pinSession", "renameSession", "requestNavigate",
+  "restoreSession", "saveCurrentTabState", "selectPanelSession", "setActiveBucketFilter",
+  "setActiveProjectFilter", "setCloudSessionMode", "setCloudSharedCheckout", "setConversationAgent",
+  "setConversationAgentDefinition", "setConversationModel", "setCurrentConversation", "setCurrentSession",
+  "setIsolatedWorktreeMode", "setNavCollapsed", "setPagination", "setRecentProjects",
+  "setSessionCharacter", "setSessionCharacters", "setSessionRest", "setViewingDismissedId",
+  "snoozeSession", "stageCloseLeaf", "stageExpandLeaf", "stageFocusLeaf",
+  "stageInsertLeaf", "stageMoveLeaf", "stageSetLeafPath", "stageSetSizes",
+  "stashSession", "switchTab", "toggleBucketFilterTerm", "toggleCollapsedSection",
+  "toggleFavorite", "toggleProjectFilterTerm", "toggleSidePanel", "touchMru",
+  "updateClientDismissed", "updateSessionProject", "updateTab", "wakeSnoozedSession",
+  "wsHide", "wsSetPresentation", "wsSetSize", "wsShow",
+  "wsToggle",
+]);
+
+export function isDispatchAction(action: string): boolean {
+  return Object.prototype.hasOwnProperty.call(SIDE_EFFECTS, action) || PATCH_ONLY_ACTIONS.has(action);
+}
 
 export const dispatch = mutation({
   args: {
@@ -162,6 +150,8 @@ export const dispatch = mutation({
   handler: async (ctx, { action, args: actionArgs, patches, result, ack_positions }) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
+    const sideEffect = Object.prototype.hasOwnProperty.call(SIDE_EFFECTS, action) ? SIDE_EFFECTS[action] : undefined;
+    if (!isDispatchAction(action)) throw new Error("Unknown dispatch action");
 
     // In final mode the receipt envelope is the one durable-write rail. Do not
     // also apply its compatibility patches as an independent server writer;
@@ -174,7 +164,6 @@ export const dispatch = mutation({
       await applyPatches(ctx, userId, patches, { forceKill: EXPLICIT_KILL_ACTIONS.has(action) });
     }
 
-    const sideEffect = SIDE_EFFECTS[action];
     const out = sideEffect ? await sideEffect(ctx, userId, actionArgs, result) : undefined;
     if (ack_positions) {
       return { __syncAckV1: syncAckPositions(ctx), result: out };
@@ -367,18 +356,20 @@ export async function applyPatches(
 ) {
   let bucketViewChanged = false;
   for (const [table, docs] of Object.entries(patches)) {
-    const config = TABLE_CONFIG[table];
+    const config = Object.prototype.hasOwnProperty.call(TABLE_CONFIG, table) ? TABLE_CONFIG[table] : undefined;
     if (!config) continue;
 
     for (const [docKey, fields] of Object.entries(docs)) {
       const safe: Record<string, any> = {};
       for (const [k, val] of Object.entries(fields)) {
-        if (!config.immutable.has(k)) safe[k] = val === null ? undefined : val;
+        if (config.editable.has(k)) safe[k] = val === null ? undefined : val;
       }
       if (Object.keys(safe).length === 0) continue;
 
       if (config.kind === "collection") {
-        const doc = await ctx.db.get(docKey as Id<any>);
+        const documentId = ctx.db.normalizeId(table, docKey);
+        if (!documentId) continue;
+        const doc = await ctx.db.get(documentId);
         // Conversations: the second-party owner triages (dismiss/pin/stash)
         // an assigned session from their inbox exactly like the runner would.
         // owner_user_id itself is immutable here — assignment goes through the
@@ -398,6 +389,7 @@ export async function applyPatches(
           permitted = await isSessionOwner(ctx, doc._id as Id<"conversations">, userId);
         }
         if (!permitted) continue;
+        if (table === "session_decisions" && safe.status !== "answered" && safe.status !== "dismissed") continue;
         const finalSafe = config.beforePatch ? config.beforePatch(doc, { ...safe }) : safe;
         // Favorite membership belongs to the conversation's runner principal,
         // not to second-party inbox owners. Those owners may triage the row but
@@ -449,11 +441,12 @@ export async function applyPatches(
         if (table === "comments") {
           const conversation = await ctx.db.get(doc.conversation_id as Id<"conversations">);
           if (!conversation || !(await canAccessConversation(ctx, userId, conversation))) continue;
+          if ("resolved_at" in finalSafe) finalSafe.resolved_by = finalSafe.resolved_at ? userId : undefined;
           await patchCommentWithRevision(ctx as any, doc as any, finalSafe as any, conversation as any);
         } else if (table === "conversations" && "is_favorite" in finalSafe) {
           await patchConversationThroughFavoriteView(ctx as any, doc as any, finalSafe as any, "advance");
         } else {
-          await ctx.db.patch(docKey as Id<any>, finalSafe);
+          await ctx.db.patch(documentId, finalSafe);
         }
         if (table === "inbox_buckets") bucketViewChanged = true;
         // A decision resolved from the web: the same side effects a server

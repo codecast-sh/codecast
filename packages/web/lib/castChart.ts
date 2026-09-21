@@ -6,6 +6,55 @@
 // shadow DOM resolves live).
 
 import type * as PlotNS from "@observablehq/plot";
+import { isSafeCanvasLink, sanitizeCanvasElement } from "./canvasSanitize";
+import { isTrustedAbsoluteImageSrc } from "./trustedImageOrigins";
+import { sanitizeCanvasCss } from "../../shared/render/canvasCss";
+
+const safeRender: PlotNS.RenderFunction = (index, scales, values, dimensions, context, next) => {
+  const node = next?.(index, scales, values, dimensions, context) ?? null;
+  if (node) sanitizeCanvasElement(node);
+  return node;
+};
+
+function secureMark(mark: PlotNS.Markish): void {
+  if (Array.isArray(mark)) { mark.forEach(secureMark); return; }
+  if (!mark || typeof mark === "function") return;
+  const m = mark as PlotNS.RenderableMark & { channels: Record<string, unknown>; [key: string]: unknown };
+  if (typeof m.ariaLabel === "string" && m.ariaLabel.startsWith("crosshair ")) {
+    delete m.channels.href;
+    delete m.channels.src;
+  }
+  for (const key of ["fill", "stroke", "filter", "pathFilter"]) {
+    if (typeof m[key] === "string") m[key] = sanitizeCanvasCss(m[key], "value");
+  }
+  m.target = "_blank";
+  if (typeof m.src === "string" && !isTrustedAbsoluteImageSrc(m.src)) m.src = undefined;
+  const render = m.render;
+  m.render = function (index, scales, values, dimensions, context, next) {
+    for (const name of ["href", "src", "fill", "stroke"]) {
+      if (!values[name]) continue;
+      values[name] = Array.from(values[name], (value: unknown) => {
+        if (name === "href") return isSafeCanvasLink(value) ? value : null;
+        if (name === "src") return typeof value === "string" && isTrustedAbsoluteImageSrc(value) ? value : null;
+        return typeof value === "string" ? sanitizeCanvasCss(value, "value") : value;
+      });
+    }
+    const node = render.call(this, index, scales, values, dimensions, context, next);
+    if (node) sanitizeCanvasElement(node);
+    return node;
+  };
+  if (m.tip) m.tip = { ...(typeof m.tip === "object" ? m.tip : typeof m.tip === "string" ? { pointer: m.tip } : {}), render: safeRender };
+}
+
+const MARK_TYPES = new Set([
+  "area", "areaX", "areaY", "arrow", "barX", "barY", "bollinger", "bollingerX", "bollingerY",
+  "boxX", "boxY", "cell", "cellX", "cellY", "contour", "crosshair", "crosshairX", "crosshairY",
+  "delaunayLink", "delaunayMesh", "hull", "voronoi", "voronoiMesh", "density", "differenceX", "differenceY",
+  "dot", "dotX", "dotY", "circle", "hexagon", "geo", "image", "line", "lineX", "lineY",
+  "linearRegressionX", "linearRegressionY", "link", "raster", "rect", "rectX", "rectY", "ruleX", "ruleY",
+  "text", "textX", "textY", "tickX", "tickY", "tip", "tree", "cluster", "vector", "vectorX", "vectorY",
+  "spike", "waffleX", "waffleY",
+]);
 
 // Categorical default palette — solarized accents, as live CSS vars.
 const SOL_RANGE = [
@@ -110,7 +159,7 @@ async function renderChartInto(el: HTMLElement, fallbackWidth: number): Promise<
   try {
     const marks = (spec.marks ?? []).map((m) => {
       const { type, data, transform, ...opts } = m;
-      const fn = (Plot as unknown as Record<string, unknown>)[type];
+      const fn = MARK_TYPES.has(type) ? (Plot as unknown as Record<string, unknown>)[type] : undefined;
       if (typeof fn !== "function") throw new Error(`unknown mark "${type}"`);
       if ("stroke" in opts) opts.stroke = resolveColor(opts.stroke);
       if ("fill" in opts) opts.fill = resolveColor(opts.fill);
@@ -122,11 +171,15 @@ async function renderChartInto(el: HTMLElement, fallbackWidth: number): Promise<
         opts.fill = "var(--sol-blue)";
       }
       // A transform (binX, hexbin, groupX, dodgeX, …) wraps the resolved channels.
+      opts.render = safeRender;
       const finalOpts = transform ? applyTransform(Plot, transform, opts) : opts;
-      return (fn as (d: unknown, o: unknown) => unknown)(data ?? spec.data ?? [], finalOpts);
+      const mark = (fn as (d: unknown, o: unknown) => PlotNS.Markish)(data ?? spec.data ?? [], finalOpts);
+      secureMark(mark);
+      return mark;
     });
 
     const fig = Plot.plot({
+      document: el.ownerDocument.implementation.createHTMLDocument(""),
       width: Math.max(200, width),
       height: spec.height ?? 210,
       marginTop: spec.marginTop ?? 26,
@@ -145,6 +198,7 @@ async function renderChartInto(el: HTMLElement, fallbackWidth: number): Promise<
       marks: marks as never,
     });
     (fig as HTMLElement).style.maxWidth = "100%";
+    sanitizeCanvasElement(fig);
     el.replaceChildren(fig);
   } catch (e) {
     fail(el, e instanceof Error ? e.message : "chart render error");

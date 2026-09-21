@@ -410,6 +410,21 @@ export async function enqueuePendingMessage(
     if (existing) return existing._id;
   }
 
+  if (fields.origin === "scheduler" && !fields.client_id && !fields.role_wake
+    && !conversation.execution_protocol_state && !fields.image_storage_id && !fields.image_storage_ids?.length) {
+    for (const status of ["pending", "injected", "failed", "undeliverable", "held"]) {
+      const queued = await ctx.db.query("pending_messages")
+        .withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", conversation._id).eq("status", status))
+        .collect();
+      const existing = queued.find((row: any) => row.origin === "scheduler"
+        && row.from_user_id === fromUserId && row.content === fields.content
+        && !row.image_storage_id && !row.image_storage_ids?.length
+        && !isFencedPendingMessage(row)
+        && (row.kill_generation ?? 0) === (conversation.pending_kill_generation ?? 0));
+      if (existing) return existing._id;
+    }
+  }
+
   if (fields.defer && !conversation.standing_role_id) {
     return await insertEnqueuedPendingMessage(ctx, {
       conversationId: conversation._id,
@@ -1545,7 +1560,12 @@ async function liveAndReadyConversationIds(
   for (const s of sessions) {
     if (!s.conversation_id) continue;
     live.add(s.conversation_id.toString());
-    if (s.agent_status === "idle" || SETTLE_VERDICT_STATUSES.has(s.agent_status)) ready.add(s.conversation_id.toString());
+    const transitionAt = s.agent_status_updated_at ?? s.agent_started_at ?? s._creationTime;
+    const stalledTransition = ["starting", "resuming", "connected"].includes(s.agent_status)
+      && typeof transitionAt === "number" && now - transitionAt >= 5 * 60_000;
+    if (s.agent_status === "idle" || SETTLE_VERDICT_STATUSES.has(s.agent_status) || stalledTransition) {
+      ready.add(s.conversation_id.toString());
+    }
   }
   return { ready, live };
 }

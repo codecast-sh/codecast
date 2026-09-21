@@ -48,6 +48,7 @@ import { quoteSelectionIntoReply } from "../lib/quoteSelection";
 import { enterReviewNearCenter } from "../lib/reviewNav";
 import { SelectionQuoteToolbar } from "./SelectionQuoteToolbar";
 import { ReviewComposerContext } from "./reviewContext";
+import { jumpToReviewComment, ReviewScrollIndicators } from "./ReviewNavigation";
 import { useConversationCommentsSync } from "../hooks/useConversationComments";
 import { useSyncConversationExternalEvents, useExternalEvents, externalEventsOldestFirst } from "../hooks/useSyncExternalEvents";
 import { ExternalEventRow } from "./feed/ExternalEventRow";
@@ -101,7 +102,7 @@ import { useInboxStore, isConvexId, computeNewDividerIndex, convBucketMap, type 
 import { DispatchNotWiredError, isParkedDispatchError } from "../store/mutativeMiddleware";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { useForkNavigationStore } from "../store/forkNavigationStore";
-import { buildCompositeTimeline } from "../lib/compositeTimeline";
+import { buildCompositeTimeline, mergeTimelineMessages } from "../lib/compositeTimeline";
 import { useMessageSelection } from "../hooks/useMessageSelection";
 import { ForkMapBox, ForkMapFallback } from "./ForkTreePanel";
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
@@ -985,7 +986,12 @@ const ConversationViewInner = (
 
       const url = `${shareOrigin()}/share/message/${token}`;
       if (destination === "chat") {
-        openForwardToChat({ url, label: selectedMessageIds.size > 1 ? "messages" : "message" });
+        openForwardToChat({
+          url,
+          label: selectedMessageIds.size > 1 ? "messages" : "message",
+          previewTitle: conversation?.title,
+          previewText: sortedIds.map((id) => messages.find((m) => m._id === id)?.content).filter(Boolean).join("\n\n"),
+        });
       } else {
         await copyToClipboard(url);
         toast.success(shareIncludeConversation ? "Share link copied! The full conversation is now public via its link." : "Share link copied!");
@@ -998,7 +1004,7 @@ const ConversationViewInner = (
     } finally {
       setIsCreatingShareLink(false);
     }
-  }, [selectedMessageIds, messages, generateShareLink, shareIncludeConversation]);
+  }, [selectedMessageIds, messages, generateShareLink, shareIncludeConversation, conversation?.title]);
 
   const toolCallChangeSelectionMap = useMemo(() => {
     const fileChanges = extractFileChanges(messages as any);
@@ -1408,8 +1414,7 @@ const ConversationViewInner = (
         });
       }
     }
-    if (toAdd.length === 0) return base;
-    return [...base, ...toAdd.map((m: any) => ({ type: 'message' as const, data: m, timestamp: m.timestamp }))];
+    return mergeTimelineMessages(base, toAdd) as TimelineItem[];
   }, [messages, allCommits, allPullRequests, conversationExternalEvents, pendingMsgs, serverPending, pendingConvId]);
   timelineRef.current = timeline;
   scrollCtxRef.current = { messageCount: conversation?.message_count || messages.length, messagesLen: messages.length, timelineLen: timeline.length, loadedStartIndex: conversation?.loaded_start_index ?? 0 };
@@ -1464,13 +1469,6 @@ const ConversationViewInner = (
   const populateInputRef = useRef<((text: string, opts?: { append?: boolean }) => void) | null>(null);
   // Bridge for the quote/comment review UI: lets MessageReview, the selection
   // toolbar, and the review bar push text into the composer without prop-drilling.
-  const reviewComposer = useMemo(() => {
-    const populate = (t: string, o?: { append?: boolean }) => populateInputRef.current?.(t, o);
-    return {
-      quote: (text: string) => quoteToComposer(text, populate),
-      submit: () => submitReview(conversation?._id ?? "", populate),
-    };
-  }, [conversation?._id]);
   const dropFilesRef = useRef<((files: File[]) => void) | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const dragCounterRef = useRef(0);
@@ -2242,16 +2240,9 @@ const ConversationViewInner = (
     return `${base}:${expanded ? "e" : "c"}`;
   }, [feedDensity, foldWorkingTurns, foldTurns, timeline, turnAggregates, expandedGroups]);
 
-  const estimateSize = useCallback((index: number) => {
+  const estimateUncachedSize = useCallback((index: number) => {
     const item = timeline[index];
     if (!item) return 100;
-
-    // A real measured height from this or a prior mount beats every heuristic
-    // below — accurate estimates are what stop the measure-driven reflow cascade
-    // on a switch. measureElement keeps this fresh; streaming/visible rows are
-    // measured live so a stale entry only ever affects an off-screen row briefly.
-    const cachedHeight = VIRT_HEIGHT_CACHE.get(virtHeightKey(getItemKey(index), rowDensityKey(index)));
-    if (cachedHeight !== undefined) return cachedHeight;
 
     if (item.type === 'commit') return 80;
     // A git event is one line plus its pill row. Everything below this point
@@ -2326,7 +2317,13 @@ const ConversationViewInner = (
       return 200;
     }
     return 40;
-  }, [timeline, feedDensity, condensedFeed, foldTurns, foldWorkingTurns, openAsk, userMsgKindMap, commandExpansionMap, nudgeRuns, getItemKey, rowDensityKey, turnAggregates, expandedGroups]);
+  }, [timeline, feedDensity, foldTurns, foldWorkingTurns, openAsk, userMsgKindMap, commandExpansionMap, nudgeRuns, turnAggregates, expandedGroups]);
+
+  const estimateSize = useCallback((index: number) => {
+    const estimate = estimateUncachedSize(index);
+    if (estimate === 0) return 0;
+    return VIRT_HEIGHT_CACHE.get(virtHeightKey(getItemKey(index), rowDensityKey(index))) ?? estimate;
+  }, [estimateUncachedSize, getItemKey, rowDensityKey]);
 
   // Mirror @tanstack/virtual-core's default measureElement, but persist every
   // measured height into VIRT_HEIGHT_CACHE keyed by the stable item key so a
@@ -2419,6 +2416,26 @@ const ConversationViewInner = (
     followOnAppend: shouldFollowStreaming(userScrolled, guestStayAtTop) ? "auto" : false,
     scrollEndThreshold: 8,
   });
+
+  const rowLayoutsRef = useRef(new Map<string | number, string>());
+  useLayoutEffect(() => {
+    const previous = rowLayoutsRef.current;
+    const layouts = new Map<string | number, string>();
+    const corrections: { index: number; size: number }[] = [];
+    const canMeasure = containerRef.current?.offsetParent != null;
+    for (let index = 0; index < timeline.length; index++) {
+      const key = getItemKey(index);
+      const estimate = estimateUncachedSize(index);
+      const layout = `${rowDensityKey(index)}:${estimate}`;
+      layouts.set(key, layout);
+      if (!previous.has(key) || previous.get(key) === layout) continue;
+      const element = virtualizer.elementsCache.get(key) as HTMLElement | undefined;
+      const mounted = canMeasure && element?.isConnected && element.dataset.index === String(index) && element.dataset.vkey === String(key);
+      corrections.push({ index, size: estimate === 0 ? 0 : mounted ? element.offsetHeight : estimateSize(index) });
+    }
+    rowLayoutsRef.current = layouts;
+    for (const { index, size } of corrections) virtualizer.resizeItem(index, size);
+  }, [timeline.length, getItemKey, rowDensityKey, estimateUncachedSize, estimateSize, virtualizer]);
 
   scrollToBottomFnRef.current = () => {
     virtualizer.scrollToEnd({ behavior: "auto" });
@@ -2931,6 +2948,18 @@ const ConversationViewInner = (
   useImperativeHandle(ref, () => ({
     scrollToMessage: scrollToMessageById,
   }), [scrollToMessageById]);
+
+  const reviewComposer = useMemo(() => {
+    const populate = (t: string, o?: { append?: boolean }) => populateInputRef.current?.(t, o);
+    return {
+      quote: (text: string) => quoteToComposer(text, populate),
+      submit: () => submitReview(conversation?._id ?? "", populate),
+      jumpToComment: (comment: import("../lib/quoteFormat").PendingComment) => {
+        setUserScrolled(true);
+        jumpToReviewComment(comment, containerRef.current, scrollToMessageById);
+      },
+    };
+  }, [conversation?._id, scrollToMessageById]);
 
   useMountEffect(() => {
     const scrollContainer = containerRef.current;
@@ -5287,6 +5316,15 @@ const ConversationViewInner = (
             Jumping to message...
           </div>
         </div>
+      )}
+      {conversation && density !== "story" && density !== "summary" && (
+        <ReviewScrollIndicators
+          conversationId={conversation._id}
+          scrollRef={containerRef}
+          messageIds={timelineMessageIds}
+          virtualizer={virtualizer}
+          topInset={stickyMsgVisible && activeStickyMsg ? stickyElRef.current?.offsetHeight ?? 0 : 0}
+        />
       )}
       <div ref={containerRef} data-sv-feed data-cc-density={feedDensity} className="flex-1 min-h-0 overflow-y-auto" style={{ overflowAnchor: "none" }}>
         <div className="flex flex-col min-h-full">

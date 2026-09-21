@@ -27,17 +27,17 @@ test("asking for the faces builds the voice window: see-through, hidden, on /cal
   // Idle: the window waits, invisible, until the renderer takes a shape.
   win.emit("ready-to-show");
   assert.equal(win.isVisible(), false);
-  assert.equal(rig.handlers.get("get-call-window-size")({ sender: win.webContents }), "idle");
+  assert.equal(rig.handlers.get("get-call-window-size")(rig.event(win.webContents)), "idle");
 });
 
 test("opening is a standing arrangement: the open flag persists, closing withdraws it — and the window stays", () => {
   const rig = loadShell();
   const { win } = openFacesWindow(rig);
   assert.equal(readSettings().facesWindow.open, true);
-  assert.equal(rig.handlers.get("get-faces-window-open")(), true);
-  rig.handlers.get("close-faces-window")(null);
+  assert.equal(rig.handlers.get("get-faces-window-open")(rig.event()), true);
+  rig.handlers.get("close-faces-window")(rig.event());
   assert.equal(readSettings().facesWindow.open, false);
-  assert.equal(rig.handlers.get("get-faces-window-open")(), false);
+  assert.equal(rig.handlers.get("get-faces-window-open")(rig.event()), false);
   // The window is the voice host; the faces were only a shape of it.
   assert.equal(win.destroyed, false);
 });
@@ -127,7 +127,7 @@ test("a second open focuses nothing and duplicates nothing — the voice window 
   const rig = loadShell();
   const { win } = openFacesWindow(rig);
   const count = rig.windows.length;
-  rig.handlers.get("open-faces-window")(null);
+  rig.handlers.get("open-faces-window")(rig.event());
   assert.equal(rig.windows.length, count);
   assert.equal(win.destroyed, false);
   // And a call opening finds the same window rather than building a second.
@@ -144,7 +144,7 @@ test("every window is told whether the faces are wanted, so the toggle reads the
   openFacesWindow(rig);
   await new Promise((r) => setTimeout(r, 60));
   assert.equal(roles[roles.length - 1].facesOverlay, true);
-  rig.handlers.get("close-faces-window")(null);
+  rig.handlers.get("close-faces-window")(rig.event());
   await new Promise((r) => setTimeout(r, 60));
   assert.equal(roles[roles.length - 1].facesOverlay, false);
 });

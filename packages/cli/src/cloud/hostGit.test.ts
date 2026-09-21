@@ -91,6 +91,8 @@ beforeEach(() => {
   process.env.XDG_CONFIG_HOME = path.join(hostHome, ".config");
   process.env.GIT_CONFIG_GLOBAL = laptopGitconfig;
   process.env.PATH = `${bin}:${process.env.PATH}`;
+  fakeBin("cast", "exit 1");
+  fakeBin("ssh", "exit 1");
   delete process.env.GIT_SSH_COMMAND;
 });
 
@@ -246,13 +248,16 @@ describe("hostGitScript on a redirected HOME", () => {
     const hostRepo = makeRepo("host-repo");
     git(hostRepo, "config", "user.name", "codecast");
     git(hostRepo, "config", "user.email", "codecast@local");
+    const mirrored = "# >>> codecast mirror\n[core]\n\teditor = vim\n[push]\n\tdefault = current\n# <<< codecast mirror";
+    fs.writeFileSync(hostFile(".gitconfig"), `${mirrored}\n`);
     const state = ready({ localGitRoot: laptop, repoPath: hostRepo });
     expect(state.identity).toBe("mirrored");
     expect(state.access.origin).toBe("git@github.com:o/r.git");
     const gc = hostFile(".gitconfig");
     expect(git(hostHome, "config", "--file", gc, "user.name")).toBe("Local");
     expect(git(hostHome, "config", "--file", gc, "user.email")).toBe("local@example.com");
-    expect(git(hostHome, "config", "--file", gc, "push.autoSetupRemote")).toBe("true");
+    expect(git(hostHome, "config", "--file", gc, "--includes", "push.autoSetupRemote")).toBe("true");
+    expect(fs.readFileSync(gc, "utf8")).toContain(mirrored);
     expect(mode(".gitconfig")).toBe(0o600);
     expect(spawnSync("git", ["-C", hostRepo, "config", "--local", "--get", "user.email"], { env: process.env }).status).not.toBe(0);
     expect(spawnSync("git", ["-C", hostRepo, "config", "--local", "--get", "user.name"], { env: process.env }).status).not.toBe(0);
@@ -460,7 +465,7 @@ exec ${realGit} "$@"`);
     expect(helpers()).toEqual([`!${bin}/cast git-credential`]);
     expect(git(hostHome, "config", "--file", gc, "credential.https://github.com.useHttpPath")).toBe("true");
     // No prompt can block an agent's pane when the helper has nothing.
-    expect(git(hostHome, "config", "--file", gc, "core.askPass")).toBe("/bin/true");
+    expect(git(hostHome, "config", "--file", gc, "--includes", "core.askPass")).toBe("/bin/true");
     // A helper the human configured is not ours to remove, and a second run
     // leaves exactly one of ours.
     // The helpers git itself ships carry "git-credential" in their own names,

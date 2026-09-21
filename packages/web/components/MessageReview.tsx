@@ -410,6 +410,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
   return (
     <div
       ref={containerRef}
+      data-review-message={messageId}
       className={
         "cc-msg-review" +
         (engaged ? (railInMargin ? " cc-rail-margin" : " cc-rail-inline") : "") +
@@ -510,6 +511,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
                 else cardRefs.current.delete(c.id);
               }}
               className="cc-rail-item"
+              data-review-comment={c.id}
               style={{ top: stackTops[c.id] ?? rects[c.blockIndex]?.top ?? 0 }}
             >
               {c.id === editingId ? (
