@@ -7,13 +7,13 @@
 // mark on every row read as four switches for one window.
 import { AppWindowMac, PictureInPicture2 } from "lucide-react";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
-import { useDesktopAppWindow, useDesktopWindowRole } from "../../hooks/useDesktopWindowRole";
+import { useDesktopAppWindow, useHasAppWindow } from "../../hooks/useHasAppWindow";
 import { DESKTOP_APPS, type DesktopApp } from "../../lib/desktopApps";
 import { cn } from "../../lib/utils";
 import { popOutApp } from "../../lib/popOutApp";
 
 export function AppPopOutButton({ app, className }: { app: DesktopApp; className?: string }) {
-  const popped = useDesktopWindowRole().apps[app] === true;
+  const popped = useHasAppWindow(app);
   // Inside the app's own window there is no gesture to make.
   if (useDesktopAppWindow() === app) return null;
   const title = DESKTOP_APPS[app].title;
