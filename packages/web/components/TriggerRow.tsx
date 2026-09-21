@@ -25,6 +25,7 @@
 //     Finished one-times wear "done" / "failed" in the same slot.
 
 import { memo, useState } from "react";
+import { schedAccent, type SchedAccent } from "../lib/triggerAccent";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -45,13 +46,6 @@ import { fmtClock, fmtDuration, describeTaskCadence, isTaskOverdue, taskStateLab
 import { taskDisplayTitle, taskGist, lastRunHeadline, type TriggerRow, type TriggerHomeGroup, type TaskRow } from "./triggerTasks";
 import { TriggerRunList, useTriggerRuns } from "./TriggerRunHistory";
 
-export type SchedAccent = "running" | "attention" | "paused" | "normal";
-export function schedAccent(task: { status: string; last_run_failed?: boolean; last_run_needs_attention?: boolean }): SchedAccent {
-  if (task.status === "running") return "running";
-  if (task.status === "failed" || task.last_run_failed || task.last_run_needs_attention) return "attention";
-  if (task.status === "paused" || task.status === "completed") return "paused";
-  return "normal";
-}
 const SCHED_ACCENT: Record<SchedAccent, string> = {
   running: "border-l-sol-green",
   attention: "border-l-sol-red",
