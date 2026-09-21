@@ -407,23 +407,24 @@ export async function setSpeaker(on: boolean): Promise<void> {
 // Ring people into a room, joining it yourself first. The caller's mic goes
 // LIVE — tapping "huddle at someone" is the intent to talk (joining an
 // existing room stays muted, the shoulder-tap contract).
-export async function startHuddle(opts: { roomKey: string; toUserIds: string[]; anchorTitle?: string }) {
+export async function startHuddle(opts: { roomKey: string; toUserIds: string[]; anchorTitle?: string; ringChannel?: boolean }) {
   await joinCall(opts.roomKey, { muted: false });
   if (getCallSnapshot().phase !== "connected") return;
-  await ringInto(opts.roomKey, opts.toUserIds, opts.anchorTitle);
+  await ringInto(opts.roomKey, opts.toUserIds, opts.anchorTitle, { ringChannel: opts.ringChannel });
 }
 
 // Ring people into a room you are already in ("add people"); the ring is
 // their grant to a room they are not otherwise a member of. A refused ring
 // must not leave the caller sitting in silence believing phones are ringing:
 // the error lands in the call snapshot, which the call screen shows.
-export async function ringInto(roomKey: string, toUserIds: string[], anchorTitle?: string) {
-  if (toUserIds.length === 0) return;
+export async function ringInto(roomKey: string, toUserIds: string[], anchorTitle?: string, opts?: { ringChannel?: boolean }) {
+  if (toUserIds.length === 0 && !opts?.ringChannel) return;
   try {
     await convex.mutation(api.calls.invite, {
       room_key: roomKey,
       to_users: toUserIds as any,
       anchor_title: anchorTitle,
+      ring_channel: opts?.ringChannel,
     });
   } catch (err: any) {
     if (getCallSnapshot().roomKey === roomKey) {

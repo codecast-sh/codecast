@@ -1,11 +1,13 @@
 import { useCallsAvailable } from "../../lib/teamFeatures";
+import { useState } from "react";
 import { useWalkieStatus } from "../../hooks/useWalkie";
 import { walkieHoldsRoom } from "../../lib/calls/walkie";
 import { Headphones } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { joinCall, startHuddle } from "../../lib/calls/actions";
-import { sessionRoomKey } from "@codecast/shared/contracts";
+import { CHANNEL_HUDDLE_WARNING_SIZE, parseRoomKey, sessionRoomKey } from "@codecast/shared/contracts";
 import { AvatarImg } from "../../lib/avatarCache";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogTitle, DialogTrigger } from "../ui/dialog";
 
 // The faces in a room, in one idiom: every live-room surface (this chip, the
 // sidebar's Live now cluster, /calls' Happening now) shows the same overlapped
@@ -119,9 +121,7 @@ export function OccupancyChip({
 // The "start a huddle here" button for anything with a room: shows the chip
 // when the room is live, a quiet start affordance otherwise. Hidden entirely
 // when calling isn't configured. `ring` names people to ring the moment the
-// room opens (a DM or group thread rings its members; a channel or session
-// is an open door and rings nobody); `anchorTitle` is the ring toast's
-// "about:" line.
+// room opens; `anchorTitle` is the ring toast's "about:" line.
 //
 // The empty room is an affordance, not information, so at header scale it is
 // the headphones alone — the same shape mobile's button has always had, and
@@ -131,6 +131,7 @@ export function HuddleButton({
   roomKey,
   ring,
   anchorTitle,
+  channelMemberCount,
   hint,
   className = "",
   compact = false,
@@ -138,6 +139,7 @@ export function HuddleButton({
   roomKey: string;
   ring?: string[];
   anchorTitle?: string;
+  channelMemberCount?: number;
   /** What this room's huddle is for, when it is more than "talk here" — the
    *  session room says the agent listens. */
   hint?: string;
@@ -148,31 +150,56 @@ export function HuddleButton({
 }) {
   const enabled = useCallsAvailable();
   const occupied = useInboxStore((st) => (st.callOccupancy[roomKey]?.length ?? 0) > 0);
+  const [warningRoom, setWarningRoom] = useState<string | null>(null);
+  const isChannel = parseRoomKey(roomKey)?.kind === "channel";
   if (!enabled) return null;
   if (occupied) return <OccupancyChip roomKey={roomKey} className={className} compact={compact} />;
   const label =
     hint ??
-    (ring?.length
-      ? `Start a huddle and ring ${ring.length === 1 ? "them" : "everyone here"}`
-      : "Start a huddle here — teammates see it and can join");
+    (isChannel
+      ? "Start a huddle and buzz everyone in the channel"
+      : ring?.length
+        ? `Start a huddle and ring ${ring.length === 1 ? "them" : "everyone here"}`
+        : "Start a huddle here — teammates see it and can join");
   const start = () =>
-    ring?.length
-      ? void startHuddle({ roomKey, toUserIds: ring, anchorTitle })
+    isChannel || ring?.length
+      ? void startHuddle({ roomKey, toUserIds: ring ?? [], anchorTitle, ringChannel: isChannel })
       : void joinCall(roomKey, { intent: "deliberate" });
   return (
-    <button
-      data-huddle-idle
-      onClick={(e) => {
-        e.stopPropagation();
-        start();
-      }}
-      className={`flex items-center gap-1 rounded-full border text-sol-text-dim transition-colors hover:border-sol-violet/40 hover:text-sol-violet ${compact ? "border-sol-border/40 px-1.5 py-1 text-[10px] font-medium" : "border-sol-border px-2 py-0.5 text-xs"} ${className}`}
-      title={label}
-      aria-label={label}
-    >
-      <Headphones className="h-3 w-3" />
-      {!compact && <span>{ring?.length ? "Ring" : "Huddle"}</span>}
-    </button>
+    <Dialog open={warningRoom === roomKey} onOpenChange={(open) => setWarningRoom(open ? roomKey : null)}>
+      <DialogTrigger asChild>
+        <button
+          type="button"
+          data-huddle-idle
+          disabled={isChannel && channelMemberCount === undefined}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (!isChannel || (channelMemberCount ?? 0) <= CHANNEL_HUDDLE_WARNING_SIZE) {
+              e.preventDefault();
+              start();
+            }
+          }}
+          className={`flex items-center gap-1 rounded-full border text-sol-text-dim transition-colors hover:border-sol-violet/40 hover:text-sol-violet disabled:opacity-50 ${compact ? "border-sol-border/40 px-1.5 py-1 text-[10px] font-medium" : "border-sol-border px-2 py-0.5 text-xs"} ${className}`}
+          title={label}
+          aria-label={label}
+        >
+          <Headphones className="h-3 w-3" />
+          {!compact && <span>{ring?.length ? "Ring" : "Huddle"}</span>}
+        </button>
+      </DialogTrigger>
+      <DialogContent className="w-[calc(100%-2rem)] max-w-sm rounded-lg border-sol-border bg-sol-bg text-sol-text" onClick={(e) => e.stopPropagation()}>
+        <DialogTitle className="pr-6 text-base">Buzz everyone in {anchorTitle || "this channel"}?</DialogTitle>
+        <DialogDescription className="text-sm text-sol-text-muted">
+          This channel has {channelMemberCount} members. Starting a huddle will buzz all {Math.max(0, (channelMemberCount ?? 1) - 1)} other members.
+        </DialogDescription>
+        <DialogFooter className="gap-2 sm:space-x-0">
+          <DialogClose asChild>
+            <button type="button" className="rounded-md border border-sol-border px-3 py-2 text-sm hover:bg-sol-bg-highlight">Cancel</button>
+          </DialogClose>
+          <button type="button" className="rounded-md bg-sol-violet px-3 py-2 text-sm text-sol-base3 hover:opacity-90" onClick={() => { setWarningRoom(null); start(); }}>Start and buzz everyone</button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
