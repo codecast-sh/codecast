@@ -60,6 +60,17 @@ afterEach(() => {
 });
 
 describe("acquire --start-point", () => {
+  test("switching a seeded workspace to no ports preserves its branch and recovery metadata", async () => {
+    const first = await acquireWorkspace(repoRoot, "w1", { ...opts, branch: "feat/x", startPoint: SEED_REF });
+    const worker = await acquireWorkspace(repoRoot, "w1", { ...opts, noPorts: true });
+    expect(worker.workspace).toMatchObject({ noPorts: true, ports: {}, branch: "feat/x", startPoint: SEED_REF, seedBase: base });
+    expect(readState(repoRoot, "w1")).toMatchObject({ branch: "feat/x", startPoint: SEED_REF, seedBase: base });
+    expect(fs.readFileSync(path.join(first.workspace.path, "wip.txt"), "utf8")).toBe("laptop work in progress\n");
+    await releaseWorkspace(repoRoot, "w1");
+    expect(hasRef(SEED_REF)).toBe(false);
+    expect(branches()).not.toContain("feat/x");
+  });
+
   test("creates the branch at the snapshot's parent with the snapshot as uncommitted work; state.json carries startPoint and seedBase", async () => {
     const r = await acquireWorkspace(repoRoot, "w1", { ...opts, branch: "feat/x", startPoint: SEED_REF });
     expect(r.created).toBe(true);

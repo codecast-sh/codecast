@@ -3,13 +3,51 @@ import * as path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { atomicWriteFile } from "../atomicWrite.js";
+import { spawnSync } from "../proc.js";
 import { listStates, type PersistedWorkspaceState } from "./contract.js";
 import { codecastPath } from "../codecastDir.js";
 import { defaultConfigDir } from "../config/configDir.js";
 
-interface PortReservation {
+export interface PortReservation {
   repoRoot: string;
   workspace: PersistedWorkspaceState;
+}
+
+export function partitionReservations(reservations: PortReservation[]): {
+  live: PortReservation[];
+  stale: Array<{ reservation: PortReservation; reason: string }>;
+} {
+  const live: PortReservation[] = [];
+  const stale: Array<{ reservation: PortReservation; reason: string }> = [];
+  const branches = new Map<string, Set<string> | null>();
+  for (const reservation of reservations) {
+    const { repoRoot, workspace } = reservation;
+    if (workspace.state === "creating" || workspace.state === "destroying" ||
+      fs.existsSync(workspaceOperationFile(repoRoot, workspace.name)) ||
+      (fs.existsSync(workspace.path) && fs.realpathSync(workspace.path) === fs.realpathSync(repoRoot))) {
+      live.push(reservation);
+      continue;
+    }
+    let reason: string | undefined;
+    if (!fs.existsSync(workspace.path)) reason = "worktree missing";
+    else {
+      if (!branches.has(repoRoot)) {
+        const result = spawnSync("git", ["for-each-ref", "--format=%(refname:short)", "refs/heads"], {
+          cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+        });
+        branches.set(repoRoot, result.status === 0 ? new Set(result.stdout.trim().split("\n")) : null);
+      }
+      if (workspace.branch && branches.get(repoRoot) && !branches.get(repoRoot)!.has(workspace.branch)) reason = "branch gone";
+    }
+    if (reason) stale.push({ reservation, reason });
+    else live.push(reservation);
+  }
+  return { live, stale };
+}
+
+function workspaceOperationFile(root: string, name: string): string {
+  const key = createHash("sha256").update(JSON.stringify([root, name])).digest("hex");
+  return path.join(defaultConfigDir(), "workspace-ports", "operations", `${key}.json`);
 }
 
 interface ReservationLockOwner {
@@ -47,9 +85,8 @@ function tryReservationLock(file: string, owner: ReservationLockOwner): boolean 
 
 export async function withWorkspaceOperation<T>(repoRoot: string, name: string, fn: () => Promise<T>): Promise<T> {
   const root = fs.realpathSync(repoRoot);
-  const key = createHash("sha256").update(JSON.stringify([root, name])).digest("hex");
-  const directory = path.join(defaultConfigDir(), "workspace-ports", "operations");
-  const file = path.join(directory, `${key}.json`);
+  const file = workspaceOperationFile(root, name);
+  const directory = path.dirname(file);
   const token = randomUUID();
   await withPortReservations(root, async () => {
     if (fs.existsSync(file)) {

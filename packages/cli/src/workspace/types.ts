@@ -175,13 +175,14 @@ export interface ChromeBinding {
 }
 
 export interface Workspace {
+  noPorts?: boolean;
   /** Workspace name (e.g., "fix-auth-bug"). Unique within a repo. */
   name: string;
   /** Absolute path to the worktree root. */
   path: string;
   /** Git branch checked out in the worktree. */
   branch: string;
-  /** Index used for port allocation (0..9). */
+  /** Index used for port allocation. */
   resourceIndex: number;
   /** Resolved manifest snapshot used during creation. */
   manifest: WorkspaceManifest;
@@ -203,6 +204,7 @@ export interface Workspace {
 
 /** Options accepted by acquire(). */
 export interface AcquireOptions {
+  noPorts?: boolean;
   inputRoot?: string;
   /** Override branch name (default: `codecast/<name>`). */
   branch?: string;

@@ -89,6 +89,7 @@ export function registerWorkspaceCommand(program: Command): void {
     .option("--backend <name>", "Sandbox backend to use (default: local)")
     .option("--skip-setup", "Skip install/generate/migrate commands")
     .option("--skip-hooks", "Skip before-create/after-create hooks")
+    .option("--no-ports", "Allocate no ports for a worker that runs no dev server")
     .option("--skip-pool", "Bypass warm pool — force fresh setup")
     .option("--trust", "Approve this repo's hook scripts and setup commands as they are now")
     .option("--json", "Print the workspace as one JSON line (what `cast spawn --cloud` reads over SSH)")
@@ -104,6 +105,7 @@ export function registerWorkspaceCommand(program: Command): void {
           skipSetup?: boolean;
           skipHooks?: boolean;
           skipPool?: boolean;
+          ports?: boolean;
           trust?: boolean;
           json?: boolean;
         },
@@ -133,6 +135,7 @@ export function registerWorkspaceCommand(program: Command): void {
             skipSetup: opts.skipSetup,
             skipHooks: opts.skipHooks,
             skipPool: opts.skipPool,
+            noPorts: opts.ports === false,
             trust: opts.trust,
           });
           const ws = r.workspace;
@@ -147,12 +150,8 @@ export function registerWorkspaceCommand(program: Command): void {
           console.log(`  path:    ${ws.path}`);
           console.log(`  branch:  ${ws.branch}`);
           console.log(`  state:   ${ws.state}`);
-          if (Object.keys(ws.ports).length > 0) {
-            const ports = Object.entries(ws.ports)
-              .map(([n, p]) => `${n}=${p}`)
-              .join(" ");
-            console.log(`  ports:   ${ports}`);
-          }
+          console.log(`  ports:   ${describePorts(ws)}`);
+          for (const notice of r.notices ?? []) console.error(`  ${notice}`);
           if (ws.contract && !ws.contract.ok) {
             console.error("\nContract failures:");
             for (const c of ws.contract.checks) {
@@ -192,6 +191,7 @@ export function registerWorkspaceCommand(program: Command): void {
         if (Object.keys(ws.ports).length > 0) {
           console.log(`  ports:   ${Object.entries(ws.ports).map(([n, p]) => `${n}=${p}`).join(" ")}`);
         }
+        for (const notice of r.notices ?? []) console.error(`  ${notice}`);
         if (ws.contract && !ws.contract.ok) {
           console.error("\nContract failures:");
           for (const c of ws.contract.checks) if (!c.ok) console.error(`  ✗ ${c.name}: ${c.reason}`);
@@ -222,6 +222,7 @@ export function registerWorkspaceCommand(program: Command): void {
       console.log(`  state:   ${state.state}`);
       console.log(`  path:    ${state.path}`);
       console.log(`  branch:  ${state.branch}`);
+      console.log(`  ports:   ${describePorts(state)}`);
       console.log(`  updated: ${state.updatedAt}`);
       console.log(`  contract: ${r.ok ? "ok" : "FAIL"}`);
       for (const c of r.checks) {
@@ -370,6 +371,8 @@ function printAcquireJson(r: AcquireResult): void {
   console.log(JSON.stringify({
     name: ws.name, path: ws.path, branch: ws.branch, state: ws.state,
     ports: ws.ports, created: r.created,
+    ...(ws.noPorts ? { noPorts: true } : {}),
+    ...(r.notices?.length ? { notices: r.notices } : {}),
     contract: ws.contract ? {
       ok: ws.contract.ok,
       failures: ws.contract.checks.filter((c) => !c.ok && !c.name.startsWith("port-free:")),
@@ -511,4 +514,9 @@ function renderManifestToml(m: WorkspaceManifest): string {
   }
 
   return lines.join("\n");
+}
+
+function describePorts(ws: { ports: Record<string, number>; noPorts?: boolean }): string {
+  const ports = Object.entries(ws.ports).map(([name, port]) => `${name}=${port}`).join(" ");
+  return ports || (ws.noPorts ? "none (--no-ports)" : "none");
 }
