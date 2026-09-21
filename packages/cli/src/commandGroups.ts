@@ -67,6 +67,11 @@ export interface CommandGroup {
 
 export const COMMAND_GROUPS: readonly CommandGroup[] = [
   {
+    token: "review",
+    description: "Collect review notes on files and lines, then hand the batch to a session",
+    load: () => import("./reviewCommand.js").then((m) => m.registerReviewCommand),
+  },
+  {
     token: "workspace",
     aliases: ["ws"],
     description: `Manage isolated git worktrees for parallel agent work`,
