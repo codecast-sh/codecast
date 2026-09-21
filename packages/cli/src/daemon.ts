@@ -276,6 +276,8 @@ import {
   loadOrCreateIdentity,
   type LoopbackIdentity,
 } from "./loopbackIdentity.js";
+import { loadOrCreateHookToken } from "./hookIdentity.js";
+import { admitHookRequest, createLegacyHookGrace, type HookAdmission } from "./hookAdmission.js";
 import { INTERRUPT_SETTLE_MS, classifyInputBytes, createKeystrokeInference, parseAskInputSidecar, readAskInputSidecar, singleSelectOptionCount, type InputIntent } from "./keystrokeInference.js";
 import { HookStatusGate } from "./hookStatusGate.js";
 import {
@@ -1415,7 +1417,7 @@ export async function stepPermissionMode(io: PermissionModeIo, target?: Permissi
   }
   return { error: `${PERMISSION_MODE_LABEL[target!]} not reached after ${maxPresses} presses` };
 }
-type HookStatusData = {
+export type HookStatusData = {
   status: AgentStatus;
   ts: number;
   permission_mode?: PermissionMode;
@@ -1997,6 +1999,39 @@ let loopbackIdentity: LoopbackIdentity | null = null;
 function terminalToken(): string {
   return loopbackIdentity?.token ?? "";
 }
+
+// The hook routes carry their own secret, separate from the loopback bearer
+// above: a hook needs to report status, never to spawn a shell or write the
+// vault, and its token sits in a script every agent on the machine executes.
+// Loaded at the top of startHookServer. See hookIdentity.ts for the file and
+// hookAdmission.ts for how a script installed before this shipped is upgraded.
+let hookToken = "";
+let legacyHookGrace: { allowed(): boolean } | null = null;
+const hookRefusalsLogged = new Map<string, number>();
+const HOOK_REFUSAL_LOG_EVERY_MS = 10 * 60 * 1000;
+
+/** Admission for one request on a hook route. The routes call this before they
+ *  read a single parameter, so a refused request cannot reach any effect. */
+function admitHookIngress(req: http.IncomingMessage): HookAdmission {
+  return admitHookRequest(req.headers, {
+    token: hookToken,
+    legacyAllowed: () => legacyHookGrace?.allowed() ?? false,
+  });
+}
+
+/** Refuse a hook request: 401, no body worth parsing, nothing written. Logged
+ *  at most once per reason per ten minutes, because a process posting without
+ *  the token will keep posting. */
+function refuseHookIngress(route: string, reason: string, res: http.ServerResponse): void {
+  const key = `${route}:${reason}`;
+  const now = Date.now();
+  if (now - (hookRefusalsLogged.get(key) ?? 0) >= HOOK_REFUSAL_LOG_EVERY_MS) {
+    hookRefusalsLogged.set(key, now);
+    log(`[HOOK] refused ${route} (${reason})`);
+  }
+  res.writeHead(401, { "Content-Type": "text/plain" });
+  res.end("unauthorized");
+}
 // Resolves with the real port the moment the server is listening. Anything
 // that would otherwise answer port 0 waits on this instead. Never rejected,
 // so an unresolved promise in a test that imports daemon.ts stays inert.
@@ -2094,70 +2129,128 @@ export function handleStatusLinePost(req: http.IncomingMessage, res: http.Server
   });
 }
 
+/**
+ * The two hook ingress routes, as one testable unit.
+ *
+ * Both are written to by a script on the user's disk rather than by the web,
+ * and both used to take anything that reached loopback. They are extracted
+ * here so a regression can drive the REAL route with inert delivery: a test
+ * that re-implements the admission rules would prove nothing about them.
+ *
+ * Returns true when the request was handled — the same contract as
+ * handleTerminalHttp beside it.
+ */
+export interface HookIngressDeps {
+  admit: (req: http.IncomingMessage) => HookAdmission;
+  refuse: (route: string, reason: string, res: http.ServerResponse) => void;
+  deliver: (sessionId: string, data: HookStatusData) => "delivered" | "deferred";
+  statusLine: (req: http.IncomingMessage, res: http.ServerResponse) => void;
+}
+
+export function handleHookIngressHttp(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  deps: HookIngressDeps,
+): boolean {
+  // Live account usage forwarded by a session's statusLine command
+  // (statuslineHook.ts). Ahead of /hook/status because their paths share a
+  // prefix; the method keeps them apart, and this makes that explicit.
+  if (req.method === "POST" && req.url?.startsWith(STATUSLINE_HOOK_PATH)) {
+    const admitted = deps.admit(req);
+    if (!admitted.ok) {
+      // Drain rather than read: a refused post must not have its body parsed,
+      // and an unread request would hold the socket open.
+      req.resume();
+      deps.refuse(STATUSLINE_HOOK_PATH, admitted.reason, res);
+      return true;
+    }
+    deps.statusLine(req, res);
+    return true;
+  }
+
+  if (req.method === "GET" && req.url?.startsWith("/hook/status")) {
+    // Before anything is parsed: an unauthenticated caller must not be able to
+    // name a session, a status or a transcript path at all.
+    const admitted = deps.admit(req);
+    if (!admitted.ok) {
+      deps.refuse("/hook/status", admitted.reason, res);
+      return true;
+    }
+
+    const url = new URL(req.url, `http://localhost`);
+    const sessionId = url.searchParams.get("session_id");
+    const status = url.searchParams.get("status") as AgentStatus | null;
+    const ts = url.searchParams.get("ts");
+    const permissionMode = url.searchParams.get("permission_mode") as PermissionMode | undefined;
+    const message = url.searchParams.get("message") || undefined;
+    const transcriptPath = url.searchParams.get("transcript_path") || undefined;
+    const launchToken = url.searchParams.get("launch_token") || undefined;
+    const sessionBoundary = url.searchParams.get("session_boundary") || undefined;
+    const turnCompletedAt = url.searchParams.get("turn_completed_at") || undefined;
+
+    if (!sessionId || !status || !ts) {
+      res.writeHead(400);
+      res.end("missing params");
+      return true;
+    }
+
+    // Both status paths below build a file path out of this id.
+    // `session_id=../config` would write over ~/.codecast/config.json. Session
+    // ids are uuids, so anything that is not a plain id is a caller trying
+    // something. Checking here covers the gate's deferred write and
+    // persistHookStatus alike.
+    if (!isSafeStatusSessionId(sessionId)) {
+      res.writeHead(400);
+      res.end("bad session_id");
+      return true;
+    }
+
+    const data: HookStatusData = normalizeHookStatus({
+      status,
+      ts: parseInt(ts, 10),
+      ...(permissionMode && { permission_mode: permissionMode }),
+      ...(message && { message }),
+      ...(transcriptPath && { transcript_path: transcriptPath }),
+      ...(launchToken && { launch_token: launchToken }),
+      ...(sessionBoundary && { session_boundary: sessionBoundary }),
+      ...(turnCompletedAt && { turn_completed_at: turnCompletedAt }),
+    });
+
+    if (deps.deliver(sessionId, data) === "delivered") {
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.end("ok");
+    } else {
+      res.writeHead(503, { "Content-Type": "application/json" });
+      res.end('{"status":"warming"}');
+    }
+    return true;
+  }
+
+  return false;
+}
+
+/** The deps the daemon itself runs those routes with. */
+export function daemonHookIngressDeps(): HookIngressDeps {
+  return {
+    admit: admitHookIngress,
+    refuse: refuseHookIngress,
+    deliver: (sessionId, data) => hookStatusGate.deliver(sessionId, data),
+    statusLine: handleStatusLinePost,
+  };
+}
+
 function startHookServer(): http.Server {
   // Reading the saved port and token is the first thing boot does with the
   // config dir. It is one small file read in another module, which is what
   // keeps it off the loop budget guard's list of forbidden calls here.
   loopbackIdentity = loadOrCreateIdentity(CONFIG_DIR);
+  // Same one small file read: the hook routes' secret, and the reading of the
+  // installed scripts that decides whether a tokenless hook is still believed.
+  hookToken = loadOrCreateHookToken(CONFIG_DIR);
+  legacyHookGrace = createLegacyHookGrace({ home: process.env.HOME || "", log });
 
   const server = http.createServer((req, res) => {
-    // Live account usage forwarded by a session's statusLine command
-    // (statuslineHook.ts). Ahead of /hook/status because their paths share a
-    // prefix; the method keeps them apart, and this makes that explicit.
-    if (req.method === "POST" && req.url?.startsWith(STATUSLINE_HOOK_PATH)) {
-      handleStatusLinePost(req, res);
-      return;
-    }
-
-    if (req.method === "GET" && req.url?.startsWith("/hook/status")) {
-      const url = new URL(req.url, `http://localhost`);
-      const sessionId = url.searchParams.get("session_id");
-      const status = url.searchParams.get("status") as AgentStatus | null;
-      const ts = url.searchParams.get("ts");
-      const permissionMode = url.searchParams.get("permission_mode") as PermissionMode | undefined;
-      const message = url.searchParams.get("message") || undefined;
-      const transcriptPath = url.searchParams.get("transcript_path") || undefined;
-      const launchToken = url.searchParams.get("launch_token") || undefined;
-      const sessionBoundary = url.searchParams.get("session_boundary") || undefined;
-      const turnCompletedAt = url.searchParams.get("turn_completed_at") || undefined;
-
-      if (!sessionId || !status || !ts) {
-        res.writeHead(400);
-        res.end("missing params");
-        return;
-      }
-
-      // Both status paths below build a file path out of this id, and the
-      // route is unauthenticated: `session_id=../config` would write over
-      // ~/.codecast/config.json. Session ids are uuids, so anything that is
-      // not a plain id is a caller trying something. Checking here covers the
-      // gate's deferred write and persistHookStatus alike.
-      if (!isSafeStatusSessionId(sessionId)) {
-        res.writeHead(400);
-        res.end("bad session_id");
-        return;
-      }
-
-      const data: HookStatusData = normalizeHookStatus({
-        status,
-        ts: parseInt(ts, 10),
-        ...(permissionMode && { permission_mode: permissionMode }),
-        ...(message && { message }),
-        ...(transcriptPath && { transcript_path: transcriptPath }),
-        ...(launchToken && { launch_token: launchToken }),
-        ...(sessionBoundary && { session_boundary: sessionBoundary }),
-        ...(turnCompletedAt && { turn_completed_at: turnCompletedAt }),
-      });
-
-      if (hookStatusGate.deliver(sessionId, data) === "delivered") {
-        res.writeHead(200, { "Content-Type": "text/plain" });
-        res.end("ok");
-      } else {
-        res.writeHead(503, { "Content-Type": "application/json" });
-        res.end('{"status":"warming"}');
-      }
-      return;
-    }
+    if (handleHookIngressHttp(req, res, daemonHookIngressDeps())) return;
 
     if (req.method === "GET" && req.url === "/health") {
       res.writeHead(200, { "Content-Type": "text/plain" });
@@ -28164,13 +28257,35 @@ async function main(): Promise<void> {
   // The instant push path is now live (the file watcher above is the
   // fallback). The server has been listening since early boot; this is the
   // handler it was warming for.
+  // Which transcript a hook event may schedule. The post carries the path it
+  // was handed, and that path decides which file gets read and attributed to
+  // this session — so it is believed only when it names this session's own
+  // transcript. Claude Code writes <sessionId>.jsonl, which is also how the
+  // daemon recovers a session id from a transcript, so no real hook is turned
+  // away. Anything else falls back to what the session file index knows.
+  function hookTranscriptFor(sessionId: string, data: HookStatusData): string | undefined {
+    const supplied = data.transcript_path;
+    if (supplied) {
+      if (path.basename(supplied) === `${sessionId}.jsonl`) return supplied;
+      log(`[HOOK] ignored transcript_path for ${shortId(sessionId)}: it does not name that session's transcript`);
+    }
+    return claudeTranscriptFor(sessionId);
+  }
+
   setHookStatusSink((sessionId, data) => {
+    // One gate for every effect below. handleStatusData applies the same launch
+    // fence internally, but it used to be the ONLY thing that saw a rejection:
+    // a dropped post still wrote a durable status record and still scheduled a
+    // transcript ingestion. Re-admitting here is a ledger lookup, and a drop
+    // returns before handleStatusData, so the verdict is still logged once.
+    if (!admitHookPost(sessionId, data)) return;
+
     const deferred = handleStatusData(sessionId, data);
     if (!deferred) persistHookStatus(sessionId, data);
 
     // Piggyback message sync onto hook events — fs.watch can miss events on macOS,
     // so use the reliable hook path to also trigger a transcript re-read.
-    const transcriptPath = data.transcript_path || claudeTranscriptFor(sessionId);
+    const transcriptPath = hookTranscriptFor(sessionId, data);
     if (transcriptPath) {
       const existingSync = fileSyncs.get(transcriptPath);
       if (existingSync) {

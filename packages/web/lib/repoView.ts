@@ -94,15 +94,24 @@ export function startsBlameRange(range: RepoBlameRange | undefined, line: number
 
 export type BlameVia = "commit" | "hash" | "subject" | "edit" | "nearby";
 
-export type BlameSession = {
+/**
+ * A session as the reader may see it. Signed in, every session named here is
+ * one the viewer may open. On the public page `public` says whether a stranger
+ * may: a public session carries its share token, and a private one carries an
+ * anonymous title ("Ashot's session on Sep 20") and opens nowhere.
+ */
+export type BlameSessionRef = {
   conversation_id: string;
   short_id?: string;
   title: string;
   author_name?: string;
   author_image?: string;
   message_id?: string;
-  via: BlameVia;
+  public?: boolean;
+  share_token?: string;
 };
+
+export type BlameSession = BlameSessionRef & { via: BlameVia };
 
 export type BlameSessionResolution = {
   by_sha: Record<string, BlameSession>;
@@ -277,11 +286,19 @@ export function sessionBlameColors(summary: SessionBlameSummary): Map<string, st
   return colors;
 }
 
-/** Where a blamed line's session opens: the exact message when known. */
-export function sessionBlameHref(session: BlameSession): string {
-  const base = `/conversation/${session.conversation_id}`;
+/**
+ * Where a session opens for this reader, or null when it opens nowhere: the
+ * exact message when known, on the share page for a session a stranger may
+ * read, and in the app for one the viewer may open.
+ */
+export function sessionHref(session: BlameSessionRef): string | null {
+  if (session.public === false) return null;
+  const base = session.public && session.share_token ? `/share/${session.share_token}` : `/conversation/${session.conversation_id}`;
   return session.message_id ? `${base}#msg-${session.message_id}` : base;
 }
+
+/** Where a blamed line's session opens; see sessionHref. */
+export const sessionBlameHref = sessionHref;
 
 /** How the line reached its session, in words a reader can trust. */
 export function blameViaLabel(via: BlameVia): string {
@@ -493,6 +510,11 @@ export function repoTagsHref(repository: string, family: RepoRouteFamily = "app"
 
 export function repoPullsHref(repository: string, family: RepoRouteFamily = "app"): string {
   return `${repoBase(repository, family)}/pulls`;
+}
+
+/** The sessions that touched a repository. Both families: the public form lists the public ones. */
+export function repoSessionsHref(repository: string, family: RepoRouteFamily = "app"): string {
+  return `${repoBase(repository, family)}/sessions`;
 }
 
 export function repoSearchHref(

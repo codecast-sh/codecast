@@ -2879,9 +2879,10 @@ export const listConversations = query({
 export const generateShareLink = mutation({
   args: {
     conversation_id: v.id("conversations"),
+    api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const authUserId = await getAuthUserId(ctx);
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!authUserId) {
       throw new Error("Unauthorized: must be logged in");
     }
@@ -2910,9 +2911,9 @@ export const generateShareLink = mutation({
 // session that was private/team-only does NOT change is_private; it grants
 // anonymous read of *this one session* via its share link, nothing more.
 export const pinToProfile = mutation({
-  args: { conversation_id: v.id("conversations") },
+  args: { conversation_id: v.id("conversations"), api_token: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    const authUserId = await getAuthUserId(ctx);
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!authUserId) throw new Error("Unauthorized: must be logged in");
     const conversation = await ctx.db.get(args.conversation_id);
     if (!conversation) throw new Error("Conversation not found");
@@ -2932,9 +2933,9 @@ export const pinToProfile = mutation({
 // owner may have circulated that link elsewhere; un-pinning only delists it from
 // the profile (profilePublicSessionVisible then drops it).
 export const unpinFromProfile = mutation({
-  args: { conversation_id: v.id("conversations") },
+  args: { conversation_id: v.id("conversations"), api_token: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    const authUserId = await getAuthUserId(ctx);
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!authUserId) throw new Error("Unauthorized: must be logged in");
     const conversation = await ctx.db.get(args.conversation_id);
     if (!conversation) throw new Error("Conversation not found");

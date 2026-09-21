@@ -20,6 +20,7 @@ import type { OrgUpdateRoleInput } from "../../../store/orgSlice";
 import { ScopeFeed } from "./ScopeFeed";
 import { Empty, HandGroups, ScopeBriefTab, ScopeCharterTab, ScopeDecisionsTab, ScopeDocsTab, ScopePlansTab, ScopeSessionsTab } from "./ScopeTabs";
 import { RoleScopeView } from "../../identity/RoleScopeView";
+import { TemplateSections } from "../TemplateSections";
 import { ProjectLeadChip } from "../../charter/ProjectLeadChip";
 import { ProjectInitiatives } from "../../initiatives/ProjectInitiatives";
 import { useRoleScope } from "../../../hooks/useRoleScope";
@@ -190,6 +191,7 @@ function ScopeOverviewTab({ role, now, canEdit, waiting, onTab, me }: { role: Or
       sessions={rest.length > 0 ? <HandGroups rows={rest} now={now} onOpen={open} /> : null}
       goals={me ? <PersonGoals person={me} roleHandle={role.handle} now={now} own /> : null}
       history={<OrgHistory roleId={role._id} limit={allHistory ? undefined : SCOPE_HISTORY_ENTRIES} onMore={() => setAllHistory(true)} />}
+      template={<TemplateSections roleId={role._id} canEdit={canEdit} />}
       onTab={onTab}
       onOpenSession={open}
     />
