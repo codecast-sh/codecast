@@ -663,9 +663,9 @@ const INSTALLATION_REPOS_CAP = 300;
  * both the install record (a "selected" install stores its list) and the
  * backfill (an "all" install stores none, so it asks live).
  */
-async function fetchInstallationRepositories(token: string): Promise<InstallationRepository[]> {
+async function fetchInstallationRepositories(token: string, findRepository?: string): Promise<InstallationRepository[]> {
   const repositories: InstallationRepository[] = [];
-  for (let page = 1; repositories.length < INSTALLATION_REPOS_CAP; page++) {
+  for (let page = 1; findRepository || repositories.length < INSTALLATION_REPOS_CAP; page++) {
     const response = await fetch(
       `${GITHUB_API_BASE}/installation/repositories?per_page=100&page=${page}`,
       {
@@ -680,15 +680,16 @@ async function fetchInstallationRepositories(token: string): Promise<Installatio
       throw new Error(`Failed to list installation repositories: ${response.status} ${await response.text()}`);
     }
     const data = await response.json();
-    const batch: InstallationRepository[] = (data.repositories ?? []).map((r: any) => ({
+    if (!Array.isArray(data.repositories)) throw new Error("GitHub returned an invalid installation repository list");
+    const batch: InstallationRepository[] = data.repositories.map((r: any) => ({
       id: r.id,
       name: r.name,
       full_name: r.full_name,
     }));
     repositories.push(...batch);
-    if (batch.length < 100) break;
+    if (batch.length < 100 || (findRepository && batch.some((r) => normalizeRepository(r.full_name) === findRepository))) break;
   }
-  return repositories.slice(0, INSTALLATION_REPOS_CAP);
+  return findRepository ? repositories : repositories.slice(0, INSTALLATION_REPOS_CAP);
 }
 
 export const fetchInstallationDetails = internalAction({
@@ -824,13 +825,13 @@ export const getInstallation = internalQuery({
 });
 
 export const stampInstallationSync = internalMutation({
-  args: { installation_id: v.number(), error: v.optional(v.string()) },
+  args: { installation_id: v.number(), expected_updated_at: v.number(), error: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const installation = await ctx.db
       .query("github_app_installations")
       .withIndex("by_installation_id", (q) => q.eq("installation_id", args.installation_id))
       .first();
-    if (!installation) return;
+    if (!installation || installation.updated_at !== args.expected_updated_at) return;
     await ctx.db.patch(installation._id, { last_sync_at: Date.now(), last_error: args.error });
   },
 });
@@ -972,8 +973,10 @@ export const backfillInstallationPulls = internalAction({
     // a personal credential brings nothing into a team's workspace.
     if (!installation?.team_id || installation.suspended_at) return { repositories: 0, pulls: 0 };
     const teamId = installation.team_id;
+    const syncStamp = { installation_id: args.installation_id, expected_updated_at: installation.updated_at };
 
     let pulls = 0;
+    let syncedRepositories = 0;
     let repositories: string[] = [];
     try {
       const { token } = await ctx.runAction(internal.githubApp.getInstallationToken, {
@@ -986,18 +989,35 @@ export const backfillInstallationPulls = internalAction({
       repositories = repositories.slice(0, INSTALLATION_REPOS_CAP).map(normalizeRepository);
 
       let filesLeft = BACKFILL_FILES_CAP;
-      for (const repository of repositories) {
+      repositoryLoop: for (const repository of repositories) {
         // One page of recently updated closed pull requests, then every open
         // page up to the cap; a short page ends the open scan.
         for (let i = 0; i <= BACKFILL_OPEN_PAGES; i++) {
           const state = i === 0 ? "closed" : "open";
           const page = i === 0 ? 1 : i;
-          const { pulls: batch } = await ctx.runAction(internal.githubApi.listPulls, {
-            repository,
-            state,
-            page,
-            github_access_token: token,
+          const current = await ctx.runQuery(internal.githubApp.getInstallation, {
+            installation_id: args.installation_id,
           });
+          if (!current || current.team_id !== teamId || current.suspended_at) {
+            return { repositories: syncedRepositories, pulls };
+          }
+          if (current.repository_selection === "selected" && current.repositories && !installationCoversRepo(current, repository)) {
+            continue repositoryLoop;
+          }
+          let batch: MappedPull[];
+          try {
+            ({ pulls: batch } = await ctx.runAction(internal.githubApi.listPulls, {
+              repository,
+              state,
+              page,
+              github_access_token: token,
+            }));
+          } catch (error) {
+            if (!(error instanceof Error) || !/GitHub returned 404/.test(error.message)) throw error;
+            const visible = await fetchInstallationRepositories(token, repository);
+            if (visible.some((r) => normalizeRepository(r.full_name) === repository)) throw error;
+            continue repositoryLoop;
+          }
           for (const pull of batch) {
             pulls++;
             const withFiles = filesLeft > 0;
@@ -1011,16 +1031,17 @@ export const backfillInstallationPulls = internalAction({
           }
           if (state === "open" && batch.length < 50) break;
         }
+        syncedRepositories++;
       }
-      await ctx.runMutation(internal.githubApp.stampInstallationSync, { installation_id: args.installation_id });
+      await ctx.runMutation(internal.githubApp.stampInstallationSync, syncStamp);
     } catch (error: any) {
       await ctx.runMutation(internal.githubApp.stampInstallationSync, {
-        installation_id: args.installation_id,
+        ...syncStamp,
         error: `Backfill failed: ${error?.message ?? String(error)}`,
       });
       throw error;
     }
-    return { repositories: repositories.length, pulls };
+    return { repositories: syncedRepositories, pulls };
   },
 });
 
