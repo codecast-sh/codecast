@@ -126,6 +126,21 @@ export function registerOrgInitCommands(program: Command, deps: OrgInitDeps): vo
   const run = async () => await import("./orgInitRun.js");
 
   org
+    .command("log")
+    .description("The record of org changes, newest first, with who made each change")
+    .option("--role <handle>", "Only changes to this role (@handle, or-N, or id)")
+    .option("--since <duration>", "Changes in the last duration, e.g. 7d, 12h, 30m, 2w")
+    .option(...TEAM_OPT)
+    .option("--json", "Machine-readable output")
+    .action(async (options: any) => (await import("./orgHistoryRun.js")).showOrgLog(deps, options));
+
+  org
+    .command("undo")
+    .description("Undo requires a person to review the change in History on the org page")
+    .argument("[batch]", "The change to take back")
+    .action(async () => (await import("./orgHistoryRun.js")).refuseOrgUndo(deps));
+
+  org
     .command("inputs")
     .description("The evidence the org analyzer reads: projects, plans, members, sessions, git roots, insights, channels, roles, open decisions (30 days, capped)")
     .option(...TEAM_OPT)
