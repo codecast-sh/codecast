@@ -15,15 +15,19 @@
 /** @typedef {"chat" | "work"} DesktopApp */
 
 /**
- * Each app: its name as the header shows it, the sections its window offers
- * as tabs (each a route prefix, in the order they appear; `also` lists other
- * prefixes that light the same tab), and the route it opens on when asked
- * for with no path.
+ * Each app: its name as the header shows it, how its window reaches its
+ * sections (`nav`: tabs in the bar, or a sidebar of its own), the sections
+ * themselves (each a route prefix, in the order they appear; `also` lists
+ * other prefixes that light the same tab; the chords walk them either way),
+ * and the route it opens on when asked for with no path.
  */
 export const DESKTOP_APPS = /** @type {const} */ ({
   chat: {
     title: "Chat",
     home: "/chat",
+    // The window's sections as tabs in its bar; chat's page carries its own
+    // channel rail beneath.
+    nav: "tabs",
     // "Messages", not "Chat": the tab sits beside the app's own name, and a
     // header reading "Chat · Chat" names nothing.
     sections: [
@@ -38,6 +42,9 @@ export const DESKTOP_APPS = /** @type {const} */ ({
   work: {
     title: "Work",
     home: "/tasks",
+    // A rail of its own: the pinned rail and the Work group, with their
+    // nested projects and saved views, which tabs cannot carry.
+    nav: "sidebar",
     // The sidebar's order, which reads top down as goal, project, task, doc.
     sections: [
       { path: "/initiatives", label: "Initiatives" },
