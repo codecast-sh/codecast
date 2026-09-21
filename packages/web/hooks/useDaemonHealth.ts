@@ -1,6 +1,5 @@
 import { useMemo, useSyncExternalStore } from "react";
 import { PRESENCE_BUCKET_MS } from "@codecast/convex/convex/presenceState";
-import { isRemoteHost } from "@codecast/shared/contracts";
 import { useInboxStore } from "../store/inboxStore";
 
 const ONE_MIN_MS = 60 * 1000;
@@ -163,30 +162,6 @@ export const isDegradedDaemonHealth = (h: DaemonHealth): boolean =>
 export const blocksDelivery = (h: DaemonHealth): boolean =>
   isDegradedDaemonHealth(h) && !(h.kind === "overloaded" && h.freezeMs < OVERLOADED_FREEZE_MS);
 
-// Severity order for picking the machine worth talking about when several
-// daemons report: an unreachable daemon outranks a busy one, which outranks
-// one that is merely fresh from a restart or behind on sync. A backlog that is
-// draining sits under a stuck one and above the hour record: it is live, but
-// it is resolving itself.
-//
-// "overloaded" splits by liveness, the same rule computeDaemonHealth applies
-// within one machine. A loop blocked in the last minute is the loudest thing
-// short of a silent daemon. An hour total on its own is a record: it lasts a
-// full hour where the minute tier lasts about a minute, so ranking it above a
-// live sync backlog would hide a real stuck queue on another machine for the
-// rest of that hour. It sorts below sync_stalled and above ok.
-export function daemonHealthSeverity(h: DaemonHealth): number {
-  switch (h.kind) {
-    case "offline": return h.tier === "severe" ? 7 : h.tier === "alert" ? 6 : 5;
-    case "quiet": return 4;
-    case "overloaded": return h.freezeMs >= OVERLOADED_FREEZE_MS ? 3 : 0.5;
-    case "restarting": return 2;
-    case "sync_stalled": return 1;
-    case "syncing": return 0.75;
-    default: return 0;
-  }
-}
-
 // One machine's row from the device roster (devices.listDevices), as the
 // heartbeat writes it: last_seen plus the per-device health fields.
 export interface DaemonDeviceRow {
@@ -240,59 +215,7 @@ export function deviceHealthInput(d: DaemonDeviceRow): DaemonHealthInput {
   };
 }
 
-// A machine silent for longer than this is retired, not in trouble: it must
-// not keep the header chip red forever after a laptop is decommissioned.
-export const ROSTER_CONSIDER_MS = ONE_DAY_MS;
-
-// The health worth showing for a fleet: the worst machine among those seen
-// recently. `device` names the machine when the roster has more than one, so
-// "daemon under load" reads as "MacBook: daemon under load".
-//
-// Remote hosts stay out of the verdict. A cloud box sleeps when idle and wakes
-// on demand, so its daemon going silent for hours is its parked state, not an
-// outage — and the user is never sitting at it, so "restart with cast restart"
-// is advice they cannot act on from where they are. `isRemoteHost` also catches
-// a Linux VM that heartbeats without CODECAST_REMOTE_DEVICE=1 (grok-bot-vm,
-// AWS ip-*): those used to win the global chip because is_remote was false.
-// A session that lives on a remote host still reports that host's health
-// through useDaemonHealth(owner device id) on its own pending messages, and
-// SessionDaemonChip on the session header.
-export type FleetDaemonHealth = DaemonHealth & { device?: string };
-
-export function worstDaemonHealth(
-  rows: DaemonDeviceRow[],
-  now: number,
-  opts?: { recentlyWoke?: boolean },
-): FleetDaemonHealth | null {
-  const recent = rows.filter((d) => !isRemoteHost(d) && (d.last_seen ?? 0) > now - ROSTER_CONSIDER_MS);
-  if (recent.length === 0) return null;
-  let worst: FleetDaemonHealth | null = null;
-  for (const d of recent) {
-    const h = computeDaemonHealth(deviceHealthInput(d), now, opts);
-    if (!worst || daemonHealthSeverity(h) > daemonHealthSeverity(worst)) {
-      worst = recent.length > 1 && d.label ? { ...h, device: d.label } : h;
-    }
-  }
-  return worst;
-}
-
-// Fleet chip input: the worst local machine, or ok once the roster is known
-// and none of those machines are in trouble. The user-doc fields are last-writer
-// across every daemon, including remotes, so they must not fill in when the
-// roster is only cloud boxes (that was "daemon stale" in the global header
-// for a grok-bot-vm that never set is_remote). Empty roster still falls back
-// for daemons that predate device rows.
-export function fleetDaemonHealth(
-  rows: DaemonDeviceRow[],
-  user: DaemonHealthInput | null | undefined,
-  now: number,
-  opts?: { recentlyWoke?: boolean },
-): FleetDaemonHealth {
-  const fleet = worstDaemonHealth(rows, now, opts);
-  if (fleet) return fleet;
-  if (rows.length > 0) return { kind: "ok" };
-  return computeDaemonHealth(user, now, opts);
-}
+export type DeviceDaemonHealth = DaemonHealth & { device?: string };
 
 export function computeDaemonHealth(
   user: DaemonHealthInput | null | undefined,
@@ -461,72 +384,31 @@ const ROSTER_SIG_FIELDS: Array<keyof DaemonDeviceRow> = [
 export const sigCell = (v: unknown): string =>
   v === null || v === undefined || v === false ? "" : String(v).replace(/[|\n\r]+/g, " ");
 
-// Health of the daemon on `deviceId` (a session's owner_device_id), or — with
-// no device named — the worst machine in the roster. Falls back to the
-// user-doc fields when the roster is empty or does not know the device (a
-// daemon that predates device rows).
-export function useDaemonHealth(deviceId?: string | null): FleetDaemonHealth {
-  // Roster subscription keyed on the health fields only: the roster rows carry
-  // project roots, capability settings and model inventories that change for
-  // reasons this hook does not care about.
+export function useDaemonHealth(deviceId: string | null | undefined): DeviceDaemonHealth {
   const rosterSig = useInboxStore((s) => {
-    const rows = (s.machineRoster ?? []) as DaemonDeviceRow[];
-    // The separators are stripped from every field on the way in. The decode
-    // below reads by position, so one row carrying a "|" or a newline in a
-    // string field (a machine label, a top cause) would misread every OTHER
-    // device in the roster, not only its own.
-    return rows
-      .map((d) => ROSTER_SIG_FIELDS.map((f) => (d[f] === true ? "1" : sigCell(d[f]))).join("|"))
-      .join("\n");
+    const row = deviceId
+      ? (s.machineRoster as DaemonDeviceRow[]).find((d) => d.device_id === deviceId)
+      : undefined;
+    return row ? ROSTER_SIG_FIELDS.map((f) => (row[f] === true ? "1" : sigCell(row[f]))).join("|") : "";
   });
-  const roster = useMemo<DaemonDeviceRow[]>(() => {
-    if (!rosterSig) return [];
-    return rosterSig.split("\n").map((line) => {
-      const v = line.split("|");
-      const num = (i: number) => (v[i] === "" ? null : Number(v[i]));
-      return {
-        device_id: v[0], label: v[1] || undefined, last_seen: num(2), daemon_started_at: num(3),
-        loop_freeze_ms: num(4), pending_sync_count: num(5), oldest_pending_ms: num(6),
-        pending_sync_messages: num(7), pending_sync_conversations: num(8),
-        is_remote: v[9] === "1",
-        loop_freeze_1h_ms: num(10), loop_freeze_max_ms: num(11),
-        loop_freeze_top: v[12] || undefined,
-        sync_no_progress_ms: num(13),
-      };
-    });
-  }, [rosterSig]);
-  // Depend on the fields health actually reads, not the whole user doc:
-  // currentUser's identity churns on unrelated field changes (device rows
-  // flapping autostart_enabled/daemon_pid), and this hook backs several
-  // always-mounted components. The joined-string dep keeps them quiet unless a
-  // health input really moved.
-  const healthSig = useInboxStore((s) => {
-    const u = s.currentUser as DaemonHealthInput | null | undefined;
-    if (!u) return "";
-    return [
-      u.daemon_last_seen, u.last_heartbeat, u.daemon_pending_sync_count, u.daemon_oldest_pending_ms,
-      u.daemon_pending_sync_messages, u.daemon_pending_sync_conversations,
-      u.daemon_started_at, u.daemon_loop_freeze_ms, u.daemon_sync_no_progress_ms,
-    ].map((v) => v ?? "").join("|");
-  });
-  const user = useMemo<DaemonHealthInput | null>(() => {
-    if (!healthSig) return null;
-    const [a, b, c, d, e, f, g, h, i] = healthSig.split("|").map((v) => (v === "" ? null : Number(v)));
+  const row = useMemo<DaemonDeviceRow | null>(() => {
+    if (!rosterSig) return null;
+    const v = rosterSig.split("|");
+    const num = (i: number) => (v[i] === "" ? null : Number(v[i]));
     return {
-      daemon_last_seen: a, last_heartbeat: b, daemon_pending_sync_count: c,
-      daemon_oldest_pending_ms: d, daemon_pending_sync_messages: e,
-      daemon_pending_sync_conversations: f, daemon_started_at: g, daemon_loop_freeze_ms: h,
-      daemon_sync_no_progress_ms: i,
+      device_id: v[0], label: v[1] || undefined, last_seen: num(2), daemon_started_at: num(3),
+      loop_freeze_ms: num(4), pending_sync_count: num(5), oldest_pending_ms: num(6),
+      pending_sync_messages: num(7), pending_sync_conversations: num(8),
+      is_remote: v[9] === "1",
+      loop_freeze_1h_ms: num(10), loop_freeze_max_ms: num(11),
+      loop_freeze_top: v[12] || undefined,
+      sync_no_progress_ms: num(13),
     };
-  }, [healthSig]);
+  }, [rosterSig]);
   const { now, wokeAt } = useSyncExternalStore(subscribeClock, getClock, getServerClock);
   const recentlyWoke = now - wokeAt < OBSERVE_GRACE_MS;
   return useMemo(() => {
-    const opts = { recentlyWoke };
-    if (deviceId) {
-      const row = roster.find((d) => d.device_id === deviceId);
-      if (row) return computeDaemonHealth(deviceHealthInput(row), now, opts);
-    }
-    return fleetDaemonHealth(roster, user, now, opts);
-  }, [deviceId, roster, user, now, recentlyWoke]);
+    if (!row) return { kind: "unknown" };
+    return { ...computeDaemonHealth(deviceHealthInput(row), now, { recentlyWoke }), device: row.label };
+  }, [row, now, recentlyWoke]);
 }

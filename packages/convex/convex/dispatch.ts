@@ -6,7 +6,7 @@ import type { ThreadKind } from "./threadReads";
 import { v } from "convex/values";
 import { resolveSpawnDefinition } from "./spawn";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { enqueueStartSession } from "./devices";
+import { enqueueStartSession, performRemoveDevices } from "./devices";
 import { upsertBinding } from "./capabilityBindings";
 import { Id } from "./_generated/dataModel";
 import { checkRateLimit } from "./rateLimit";
@@ -1234,6 +1234,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     });
     return { command_id: commandId, source, dest: dest.device_id };
   },
+
+  // Settings > Machines. The web drops the rows from `machineRoster` on the
+  // draft; that list is not a dispatch table, so this is the only server write.
+  removeMachines: async (ctx, userId, [deviceIds]: [string[]]) => performRemoveDevices(ctx as any, userId, deviceIds),
 
   linkConversation: async (ctx, userId, [objectType, objectId, conversationId]: [string, string, string]) => {
     await linkConversationToObject(

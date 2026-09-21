@@ -209,7 +209,7 @@ export function ProfileSignInButton({
   className,
   force = false,
 }: {
-  device: { device_id: string; online?: boolean; is_remote?: boolean; login_flow?: ProfileLoginFlow | null };
+  device: { device_id: string; label?: string; online?: boolean; is_remote?: boolean; login_flow?: ProfileLoginFlow | null };
   profile: { name: string; email?: string; login_expired_at?: number | null };
   className?: string;
   // A failed machine switch that found a dead snapshot should still offer
@@ -223,12 +223,15 @@ export function ProfileSignInButton({
   const flow = device.login_flow?.profile === profile.name ? device.login_flow : null;
   const pending = launching || (flow?.status === "pending" && now - flow.started_at < PROFILE_LOGIN_STALE_MS);
   const rejected = flow?.status === "rejected" && !!flow.finished_at && now - flow.finished_at < 10 * 60 * 1000;
+  const machine = device.label || "the selected machine";
 
   const start = async (force = false) => {
     setLaunching(true);
     try {
       await requestLogin({ device_id: device.device_id, profile: profile.name, ...(force ? { force: true } : {}) });
-      toast.success(`Finish signing in as ${profile.email ?? profile.name} in the browser`);
+      toast.message(`Sign-in requested on ${machine}`, {
+        description: `Waiting for ${machine} to open the browser for ${profile.email ?? profile.name}.`,
+      });
       setTimeout(() => setLaunching(false), 5_000);
     } catch (err) {
       setLaunching(false);
@@ -238,17 +241,19 @@ export function ProfileSignInButton({
 
   if (pending) {
     return (
-      <span className={`inline-flex shrink-0 items-center gap-1 text-[10px] text-amber-500 ${className ?? ""}`}>
-        <span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-amber-500/30 border-t-amber-500" aria-hidden />
-        finish in browser
-        <button
-          type="button"
-          onClick={() => start(true)}
-          className="underline decoration-dotted underline-offset-2 hover:text-amber-400"
-          title="Kill the running sign-in and open a fresh browser page"
-        >
-          relaunch
-        </button>
+      <span className={`inline-flex max-w-full items-start gap-1 text-[10px] text-amber-500 ${className ?? ""}`}>
+        <span className="mt-0.5 h-2.5 w-2.5 shrink-0 animate-spin rounded-full border-2 border-amber-500/30 border-t-amber-500" aria-hidden />
+        <span className="min-w-0 break-words">
+          sign-in pending on {machine}{" "}
+          <button
+            type="button"
+            onClick={() => start(true)}
+            className="underline decoration-dotted underline-offset-2 hover:text-amber-400"
+            title={`Restart the sign-in on ${machine}`}
+          >
+            relaunch
+          </button>
+        </span>
       </span>
     );
   }
@@ -258,8 +263,8 @@ export function ProfileSignInButton({
       onClick={() => start(false)}
       title={
         rejected
-          ? `The last sign-in didn't complete${flow?.reason ? `: ${flow.reason}` : ""}. Opens the browser on the sign-in page for ${profile.email ?? profile.name}; the machine's current login stays as it is.`
-          : `Opens the browser on the sign-in page for ${profile.email ?? profile.name}; the machine's current login stays as it is`
+          ? `The last sign-in didn't complete${flow?.reason ? `: ${flow.reason}` : ""}. Opens the browser on ${machine} for ${profile.email ?? profile.name}; the machine's current login stays as it is.`
+          : `Opens the browser on ${machine} for ${profile.email ?? profile.name}; the machine's current login stays as it is`
       }
       className={`shrink-0 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-500 hover:bg-amber-500/20 ${className ?? ""}`}
     >

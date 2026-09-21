@@ -5400,6 +5400,9 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // a freshly cloned path.
   machineRosterLive: boolean;
   setMachineRoster: (devices: MachineCandidate[]) => void;
+  /** Drop machines from the roster (Settings > Machines). The server refuses
+   *  an online machine, whose next heartbeat would list it again. */
+  removeMachines: (deviceIds: string[]) => void;
 
   // -- Tier-2 store-fed surfaces (see clientSyncRegistry) --
   // Crosstalk graph snapshot (sessionThreads.listSessionThreads).
@@ -8005,6 +8008,10 @@ const inboxStoreConfig = (set: any, get: any) => ({
   setMachineRoster: sync(function (this: Draft, devices: MachineCandidate[]) {
     this.machineRoster = devices;
     this.machineRosterLive = true;
+  }),
+  removeMachines: action(function (this: Draft, deviceIds: string[]) {
+    const gone = new Set(deviceIds);
+    this.machineRoster = this.machineRoster.filter((d) => !gone.has(d.device_id));
   }),
   sessionThreads: null,
   sessionMetricsAggregate: null,
