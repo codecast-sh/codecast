@@ -30,6 +30,26 @@ export function runOwnerOf<Id extends string>(task: {
   return onceSpawn ? task.created_by_conversation_id : undefined;
 }
 
+// Which conversation a fresh run NESTS UNDER, as a conversation id: the
+// session that armed the trigger, for every spawn schedule including a
+// repeating one. Nesting is not posting. A subagent row is hidden from the
+// inbox and read under its parent, so a repeating trigger can stop littering
+// the inbox with a card per firing without posting a line per firing into the
+// parent's thread — runResultThreadOf stays narrow for exactly that reason.
+//
+// Deliberately wider than runOwnerOf, which answers "whose thread does this
+// result belong in". A recurring run has a parent to sit under and no thread
+// to post to, and conflating the two is what left recurring runs as loose
+// cards that the auto-fold then dismissed, findings and all.
+export function runParentOf<Id extends string>(task: {
+  originating_conversation_id?: Id;
+  created_by_conversation_id?: Id;
+}): Id | undefined {
+  // An inject trigger has no run of its own to nest — it IS the session.
+  if (task.originating_conversation_id) return undefined;
+  return task.created_by_conversation_id;
+}
+
 // How a fresh run ended, as the owner sees it. "reported": the agent ran
 // `cast trigger complete` and nobody needs to act. "attention": it completed
 // with --needs-attention. "unreported_exit": the process ended without
@@ -53,9 +73,17 @@ export function runOwnerWakeOf<Id extends string>(
   outcome: RunOutcome,
 ): Id | undefined {
   const owner = runOwnerOf(task);
-  if (!owner) return undefined;
-  if (outcome === "reported") return task.wake_creator ? owner : undefined;
-  return owner;
+  if (owner) {
+    if (outcome === "reported") return task.wake_creator ? owner : undefined;
+    return owner;
+  }
+  // A repeating spawn schedule has no owner, because its clean reports belong
+  // in no thread. Its failures still belong to someone: the run nests under
+  // its parent (runParentOf) and is therefore hidden from the inbox, so a
+  // death or an ask that woke nobody would be buried rather than merely quiet.
+  // A clean report stays silent — that is what --spawn is chosen for.
+  if (outcome === "reported") return undefined;
+  return runParentOf(task);
 }
 
 // Where a finished run's result is read, as a conversation id. `--thread` names

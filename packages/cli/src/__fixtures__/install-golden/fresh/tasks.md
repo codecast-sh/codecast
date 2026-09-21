@@ -5,7 +5,7 @@ You operate within a structured work tracking system. A human monitors your prog
 
 ### When to create structure
 
-**Create a task** when your work will change code, fix a bug, or produce a deliverable AND will run long enough that someone could check on it in flight. Run `cast task create "Title" -p <priority>` before you start implementing. Skip it for questions, explanations and quick lookups, and for a small change you will finish within a few minutes: a task that opens and closes before anyone reads it is noise on the board, not progress. File one late rather than early — when the work turns out bigger than it looked, create the task then and carry on.
+**Create tasks selectively.** Simple, self-contained work you can and intend to finish in this session does not need a task, even when it changes code, fixes a bug, or produces a deliverable. Create a task when the work is substantial enough to benefit from progress tracking, needs coordination or a handoff, is likely to continue beyond this session, or the user asks for tracking. Run `cast task create "Title" -p <priority>` once that need is clear. If a small request grows into larger work, file it then; don't create a task preemptively for every request.
 
 **Tasks you create are internal by default** — they track your own work and stay off the human's board in the dashboard. Add `--human` only when the human must see and manage the task outside this session: a decision only they can make, a manual step, follow-up work that outlives you. Use it rarely; when in doubt, leave it off.
 
@@ -15,7 +15,7 @@ You operate within a structured work tracking system. A human monitors your prog
 
 **`--from-meeting` is for tasks people decided, not tasks you decided.** Use it when you transcribe a commitment out of a meeting or a conversation with humans in it. Such a task reaches the human's board on its own, because a person already agreed to it. Never use it for your own work.
 
-**Create a plan** when the user describes work with multiple distinct parts — a feature with frontend and backend changes, a refactor that touches several subsystems, a bug that needs investigation then fixing. Run `cast plan create "Title" -g "goal"` and add tasks with `cast task create "Title" --plan <plan_id>`. Don't create plans for single-task work.
+**Create a plan** when substantial work needs coordination across multiple tasks or sessions. Several implementation steps, touching both frontend and backend, or investigating before fixing do not by themselves warrant a plan. Run `cast plan create "Title" -g "goal"` and add tasks with `cast task create "Title" --plan <plan_id>`. Keep simple work in the session and single-task work in one task.
 
 **Bind before you build.** Whenever the work warrants a task or plan, your session should be bound to it — `cast task start <id>` claims a task, `cast plan bind <plan_id>` attaches to a plan. Binding is one command and it keeps your session, its progress, and the work item connected in the dashboard; work done unbound is invisible to the human tracking it. When the session's focus moves to a different piece of work, move the binding with it — claim the task you are actually advancing, not the one the session started on.
 

@@ -662,7 +662,8 @@ export function parseEntityUrl(
 export function parsePublishedPageUrl(href: string | undefined | null): { slug: string } | null {
   const loc = appLocationOf(href);
   if (!loc) return null;
-  const m = /^\/(?:cli\/)?a\/([A-Za-z0-9]{8,24})$/.exec(loc.path);
+  const m = /^\/(?:cli\/)?a\/([A-Za-z0-9]{8,24})$/.exec(loc.path)
+    ?? (loc.host === "a.codecast.sh" ? /^\/([A-Za-z0-9]{8,24})\/?$/.exec(loc.path) : null);
   return m ? { slug: m[1] } : null;
 }
 
@@ -673,7 +674,7 @@ export function parsePublishedPageUrl(href: string | undefined | null): { slug: 
  * Query strings are dropped; the fragment survives because message deep links
  * live in it (`/conversation/<id>#msg-<id>`).
  */
-function appLocationOf(href: string | undefined | null): { path: string; hash: string } | null {
+function appLocationOf(href: string | undefined | null): { path: string; hash: string; host?: string } | null {
   if (!href || typeof href !== "string") return null;
   const raw = href.trim();
   if (/^https?:\/\//i.test(raw)) {
@@ -684,7 +685,7 @@ function appLocationOf(href: string | undefined | null): { path: string; hash: s
       return null;
     }
     if (!isAppHost(u.host)) return null;
-    return { path: u.pathname, hash: u.hash };
+    return { path: u.pathname, hash: u.hash, host: u.hostname };
   }
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) return null;
   const hashIdx = raw.indexOf("#");

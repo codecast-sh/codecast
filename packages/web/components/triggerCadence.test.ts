@@ -108,6 +108,9 @@ describe("taskStateLabel", () => {
 
   test("elapsed fire is due", () => {
     expect(taskStateLabel({ status: "scheduled", run_at: now - 1 }, now)).toBe("due");
+    // Finished one-times wear their outcome in the same slot.
+    expect(taskStateLabel({ status: "completed" }, now)).toBe("done");
+    expect(taskStateLabel({ status: "failed", run_at: now - 3 * 86_400_000 }, now)).toBe("failed");
   });
 
   test("stuck past the overdue threshold says how stuck", () => {
