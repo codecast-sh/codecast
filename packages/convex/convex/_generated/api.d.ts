@@ -171,6 +171,7 @@ import type * as oauthConnectors from "../oauthConnectors.js";
 import type * as oauthConnectorsSchema from "../oauthConnectorsSchema.js";
 import type * as orchestrationEvents from "../orchestrationEvents.js";
 import type * as org from "../org.js";
+import type * as orgChanges from "../orgChanges.js";
 import type * as orgChannels from "../orgChannels.js";
 import type * as orgEvents from "../orgEvents.js";
 import type * as orgGoals from "../orgGoals.js";
@@ -429,6 +430,7 @@ declare const fullApi: ApiFromModules<{
   oauthConnectorsSchema: typeof oauthConnectorsSchema;
   orchestrationEvents: typeof orchestrationEvents;
   org: typeof org;
+  orgChanges: typeof orgChanges;
   orgChannels: typeof orgChannels;
   orgEvents: typeof orgEvents;
   orgGoals: typeof orgGoals;

@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { convexTest } from "convex-test";
 import { anyApi } from "convex/server";
 import schema from "./schema";
+import { orgLogEntryLine } from "@codecast/shared/contracts/orgChange";
 
 const modules = {
   "./_generated/server.ts": () => import("./_generated/server"),
@@ -45,10 +46,17 @@ test("authenticated history API applies, previews, undoes, redoes, and enforces 
   await expect(owner.mutation(anyApi.orgChanges.undo, { batch, from_session: "test-session" })).rejects.toThrow("human only");
   await expect(outsider.query(anyApi.orgChanges.get, { batch })).rejects.toThrow("not found");
   expect(await outsider.query(anyApi.orgChanges.list, { team_id: seed.team })).toBeNull();
-  await owner.mutation(anyApi.orgChanges.undo, { batch });
+  const undo = await owner.mutation(anyApi.orgChanges.undo, { batch });
+  const undoDetail = await owner.query(anyApi.orgChanges.get, { batch: undo.batch });
+  expect(undoDetail.entry.undoes_lead).toMatchObject(detail.entry.lead);
+  expect(undoDetail.entry.undoes_lead).not.toHaveProperty("writes");
+  expect(orgLogEntryLine(undoDetail.entry)).toBe(`Undid "${orgLogEntryLine(detail.entry)}"`);
   expect((await t.run((ctx) => ctx.db.get(roleId)))?.caps).toEqual(before?.caps);
   expect((await owner.mutation(anyApi.orgChanges.undo, { batch })).already_applied).toBe(true);
-  await owner.mutation(anyApi.orgChanges.redo, { batch });
+  const redo = await owner.mutation(anyApi.orgChanges.redo, { batch });
+  const redoLog = await owner.query(anyApi.orgChanges.list, { team_id: seed.team });
+  expect(redoLog.entries.find((e: any) => e._id === redo.batch)).toMatchObject({ gesture: "redo", undoes: undo.batch });
+  expect(redoLog.entries.find((e: any) => e._id === batch).undone_by).toBeUndefined();
   expect((await t.run((ctx) => ctx.db.get(roleId)))?.caps.hands_per_day).toBe(8);
   await owner.mutation(anyApi.orgChanges.undo, { batch });
   expect((await t.run((ctx) => ctx.db.get(roleId)))?.caps).toEqual(before?.caps);
