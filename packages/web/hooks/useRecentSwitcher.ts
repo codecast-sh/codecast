@@ -40,18 +40,24 @@ export function useRecentSwitcher() {
     [],
   );
 
-  const commit = useCallback((items: ResolvedVisit[], idx: number) => {
+  // Drop the walk without navigating: the overlay closes and the next Control
+  // release commits nothing.
+  const cancel = useCallback(() => {
     if (peekTimer.current) { clearTimeout(peekTimer.current); peekTimer.current = null; }
-    const target = items[idx];
-    if (target) openVisit(target);
     overlayOpen.current = false;
     selectedIdx.current = 0;
     snap.current = [];
     tabCount.current = 0;
     pending.current = false;
-    ctrlHeld.current = false;
     setRenderState(CLOSED);
-  }, [openVisit]);
+  }, []);
+
+  const commit = useCallback((items: ResolvedVisit[], idx: number) => {
+    const target = items[idx];
+    cancel();
+    ctrlHeld.current = false;
+    if (target) openVisit(target);
+  }, [cancel, openVisit]);
 
   const updateRender = useCallback(() => {
     setRenderState({
@@ -63,6 +69,14 @@ export function useRecentSwitcher() {
 
   useEventListener("keydown", (e: KeyboardEvent) => {
     if (e.key === "Control") { ctrlHeld.current = true; return; }
+
+    // Any other key mid-walk hands the chord to whoever owns it — Ctrl+R with
+    // Ctrl still down opens the searchable recents list (recents.open) — and
+    // releasing Control afterwards must not also navigate.
+    if (e.key !== "Tab" && e.key !== "Shift" && (overlayOpen.current || pending.current)) {
+      cancel();
+      return;
+    }
 
     if (e.key === "Tab" && (ctrlHeld.current || e.ctrlKey)) {
       e.preventDefault();

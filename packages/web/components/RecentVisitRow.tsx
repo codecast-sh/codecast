@@ -103,7 +103,9 @@ export function RecentVisitGlyph({ item, className }: { item: ResolvedVisit; cla
 // The detail line under a title: what kind of object this is, then the facts
 // that tell it apart from its neighbours — a task's id / status / priority, a
 // plan's progress, a session's project and agent, a label's session count.
-function detailParts(item: ResolvedVisit, teams: any[]): string[] {
+// Exported so the searchable recents menu matches a query against the same
+// words the row shows (a project name, an agent, a task id).
+export function visitDetailParts(item: ResolvedVisit, teams: any[]): string[] {
   const kind = VISIT_OBJECT_LABEL[item.objectType];
   const e = item.entity;
   switch (item.objectType) {
@@ -163,7 +165,7 @@ function sessionsWord(n: number): string {
 // the switcher's selected frame) so this stays purely presentational.
 export function RecentVisitRow({ item, selected = false, trailing }: { item: ResolvedVisit; selected?: boolean; trailing?: ReactNode }) {
   const teams = useInboxStore((s) => s.teams);
-  const parts = detailParts(item, teams);
+  const parts = visitDetailParts(item, teams);
   const liveness = item.objectType === "session" && item.entity ? sessionLivenessState(item.entity) : null;
   return (
     <>
