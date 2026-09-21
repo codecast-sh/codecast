@@ -68,6 +68,52 @@ describe("undo on the org record", () => {
     expect(run(stamped, "revertOrgIntent", stamped.orgIntents[0].id).orgLog["b-budget"].undone_by?.batch).toBe("b-real");
   });
 
+  it("an unrelated push cannot acknowledge a redo before its server batch arrives", () => {
+    const was = data().orgLog["b-hire"].undone_by!;
+    const pressed = run(data(), "redoOrgChange", "b-hire");
+    const pending = mutate(pressed, (d) => { pruneOrgIntents(d); });
+    expect(pending.orgIntents).toHaveLength(1);
+    expect(run(pending, "revertOrgIntent", pending.orgIntents[0].id).orgLog["b-hire"].undone_by).toEqual(was);
+    const stale = log();
+    applyOrgUndoIntent(stale, pending.orgIntents[0] as Undo);
+    const replayed = mutate(pending, (d) => { d.orgLog = stale; pruneOrgIntents(d); });
+    expect(replayed.orgIntents).toHaveLength(1);
+    const echoed = mutate(replayed, (d) => {
+      d.orgLog["b-redo-hire"] = { ...d.orgLog["b-hire"], _id: "b-redo-hire", batch: "b-redo-hire", gesture: "redo", undoes: was.batch };
+      pruneOrgIntents(d);
+    });
+    expect(echoed.orgIntents).toEqual([]);
+    expect(echoed.orgLog["b-hire"].undone_by).toBeUndefined();
+  });
+
+  it("a delayed redo echo wins over expiry, while an unconfirmed redo rolls back", () => {
+    const was = data().orgLog["b-hire"].undone_by!;
+    const pressed = run(data(), "redoOrgChange", "b-hire");
+    const expiredAt = Date.now() + ORG_INTENT_TTL_MS + 1;
+    const expired = mutate(pressed, (d) => { pruneOrgIntents(d, expiredAt); });
+    expect(expired.orgLog["b-hire"].undone_by).toEqual(was);
+    const echoed = mutate(pressed, (d) => {
+      d.orgLog["b-redo-hire"] = { ...d.orgLog["b-hire"], _id: "b-redo-hire", batch: "b-redo-hire", gesture: "redo", undoes: was.batch };
+      pruneOrgIntents(d, expiredAt);
+    });
+    expect(echoed.orgIntents).toEqual([]);
+    expect(echoed.orgLog["b-hire"].undone_by).toBeUndefined();
+    expect(echoed.orgIntentNotice).toBeNull();
+  });
+
+  it("a previous redo or a missing entry cannot acknowledge the current gesture", () => {
+    const pressed = run(data(), "redoOrgChange", "b-hire");
+    const unrelated = mutate(pressed, (d) => {
+      d.orgLog["b-old-redo"] = { ...d.orgLog["b-hire"], _id: "b-old-redo", batch: "b-old-redo", gesture: "redo", undoes: "b-older-undo" };
+      pruneOrgIntents(d);
+    });
+    expect(unrelated.orgIntents).toHaveLength(1);
+    for (const gesture of [pressed, run(data(), "undoOrgChange", "b-budget")]) {
+      const missing = mutate(gesture, (d) => { d.orgLog = {}; pruneOrgIntents(d); });
+      expect(missing.orgIntents).toHaveLength(1);
+    }
+  });
+
   it("redo takes the strike off at once, and a refusal puts the same strike back", () => {
     const was = data().orgLog["b-hire"].undone_by!;
     let st = run(data(), "redoOrgChange", "b-hire", { line: "Add @platform" });
