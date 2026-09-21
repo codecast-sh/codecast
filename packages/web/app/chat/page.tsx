@@ -50,6 +50,7 @@ import { useChannelSlackLink } from "../../hooks/useChannelSlackLink";
 import { WalkiePttButton } from "../../components/calls/WalkiePtt";
 import { HuddleButton, OccupancyChip } from "../../components/calls/OccupancyChip";
 import { chatViewRoomKey } from "../../lib/chatViews";
+import { channelHuddleMemberIds } from "@codecast/shared/contracts";
 import { NewMessageModal } from "../../components/chat/NewMessageModal";
 import { ChatSearch } from "../../components/chat/ChatSearch";
 import { useShortcutAction } from "../../shortcuts";
@@ -667,6 +668,7 @@ export default function ChatPage({ scope = "team" }: { scope?: ChatRailScope } =
                 <HuddleButton
                   roomKey={chatViewRoomKey(activeChannel, viewerId, teamMembers)}
                   anchorTitle={`#${activeChannel.name}`}
+                  channelMemberCount={channelHuddleMemberIds(activeChannel.kind, activeChannel.memberIds, teamMembers)?.length}
                   className="shrink-0"
                   // A phone header has no room for the word beside the icon.
                   compact={narrowViewport}

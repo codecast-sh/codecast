@@ -32,6 +32,7 @@ import {
   parseRoomKey,
 } from "./callRooms";
 import { isTeamMember } from "./privacy";
+import { channelMemberIds, isRestricted } from "./chatAccess";
 import { bucketTs } from "./presenceState";
 import { teamFeatureOffMessage, teamHasFeature } from "./teamFeatures";
 import { endLiveTranscriptsForRoom } from "./transcripts";
@@ -41,6 +42,7 @@ import {
   CALL_PUSH_TYPE_MISSED,
   CALL_PUSH_TYPE_RING,
   normalizeTranscribeLanguages,
+  channelHuddleMemberIds,
 } from "@codecast/shared/contracts";
 
 /** Seat languages the transcriber unions. Undefined means "this client did not say". */
@@ -504,18 +506,19 @@ export const invite = mutation({
     to_user: v.optional(v.id("users")),
     to_users: v.optional(v.array(v.id("users"))),
     anchor_title: v.optional(v.string()),
+    ring_channel: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await requireUser(ctx);
-    const recipients = [...new Set([
+    let recipients = [...new Set([
       ...(args.to_user ? [args.to_user] : []),
       ...(args.to_users ?? []),
     ].map(String))] as Id<"users">[];
-    if (recipients.length === 0) throw new Error("Nobody to ring");
+    if (!args.ring_channel && recipients.length === 0) throw new Error("Nobody to ring");
     if (recipients.some((id) => String(id) === String(userId))) {
       throw new Error("Cannot ring yourself");
     }
-    if (recipients.length > MAX_ROOM_MEMBERS) {
+    if (!args.ring_channel && recipients.length > MAX_ROOM_MEMBERS) {
       throw new Error(`A huddle rings at most ${MAX_ROOM_MEMBERS} people at once`);
     }
     // The authority to ADD people is being IN the room, or being one of its
@@ -533,6 +536,22 @@ export const invite = mutation({
     // (callRooms.acceptedInviteGrant) — but the team wall holds for them too.
     const callerAuth = await authorizeRoomInviter(ctx, userId, args.room_key);
     if (!callerAuth.ok) throw new Error(`Cannot invite: ${callerAuth.reason}`);
+
+    let channelTitle: string | undefined;
+    if (args.ring_channel) {
+      const room = parseRoomKey(args.room_key);
+      if (room?.kind !== "channel") throw new Error("Only channel huddles can ring a channel");
+      const channel = await ctx.db.get(room.channelId as Id<"chat_channels">);
+      if (!channel || channel.archived_at || channel.kind === "community") throw new Error("Cannot ring this channel");
+      const memberships = await ctx.db.query("team_memberships")
+        .withIndex("by_team_id", (q) => q.eq("team_id", callerAuth.teamId)).collect();
+      const teammates = (await Promise.all(memberships.map((m) => ctx.db.get(m.user_id))))
+        .filter((m): m is Doc<"users"> => m !== null);
+      const memberIds = isRestricted(channel) ? await channelMemberIds(ctx, channel._id) : undefined;
+      recipients = (channelHuddleMemberIds(channel.kind, memberIds, teammates) ?? [])
+        .filter((id) => id !== String(userId)) as Id<"users">[];
+      channelTitle = `#${channel.name}`;
+    }
 
     const now = Date.now();
     const from = await ctx.db.get(userId);
@@ -566,7 +585,7 @@ export const invite = mutation({
       }
     }
     const lineFor = (toUser: Id<"users">): string | undefined => {
-      if (parsed?.kind !== "dm") return cap(args.anchor_title);
+      if (parsed?.kind !== "dm") return cap(channelTitle ?? args.anchor_title);
       const others = parsed.users.filter(
         (id) => id !== String(toUser) && id !== String(userId),
       );

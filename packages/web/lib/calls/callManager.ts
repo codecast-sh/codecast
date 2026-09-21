@@ -1098,6 +1098,7 @@ export async function startHuddle(opts: {
   roomKey: string;
   toUserIds: string[];
   anchorTitle?: string;
+  ringChannel?: boolean;
 }): Promise<void> {
   if (voiceHostElsewhere() && (await sendVoiceCommand("startHuddle", [opts]))) return;
   return startHuddleHere(opts);
@@ -1107,6 +1108,7 @@ async function startHuddleHere(opts: {
   roomKey: string;
   toUserIds: string[];
   anchorTitle?: string;
+  ringChannel?: boolean;
 }): Promise<void> {
   if (huddleInOtherWindow() && await focusExistingHuddle()) return;
   if (!convex) return;
@@ -1114,7 +1116,7 @@ async function startHuddleHere(opts: {
   try {
     await joinCall(opts.roomKey, { intent: "deliberate" });
     if (useInboxStore.getState().call.phase !== "connected") return;
-    await ringInto(opts.roomKey, opts.toUserIds, opts.anchorTitle);
+    await ringInto(opts.roomKey, opts.toUserIds, opts.anchorTitle, { ringChannel: opts.ringChannel });
   } catch (err: any) {
     setCall({ phase: "error", error: humanizeConvexError(err, "Could not start the huddle") });
   }
@@ -1138,14 +1140,15 @@ export async function ringInto(
   roomKey: string,
   toUserIds: string[],
   anchorTitle?: string,
-  opts?: { failMessage?: string },
+  opts?: { failMessage?: string; ringChannel?: boolean },
 ): Promise<RingOutcome[]> {
-  if (!convex || toUserIds.length === 0) return [];
+  if (!convex || (toUserIds.length === 0 && !opts?.ringChannel)) return [];
   try {
     const res = await convex.mutation(api.calls.invite, {
       room_key: roomKey,
       to_users: toUserIds,
       anchor_title: anchorTitle,
+      ring_channel: opts?.ringChannel,
     });
     const results: RingOutcome[] = res?.results ?? [];
     reportRingOutcomes(results);

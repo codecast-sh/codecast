@@ -21,6 +21,19 @@ export const CALL_KNOCK_TTL_MS = 45_000;
 // the key length cap below.
 import { MAX_DM_MEMBERS } from "../chat/dm";
 export const MAX_ROOM_MEMBERS = MAX_DM_MEMBERS;
+export const CHANNEL_HUDDLE_WARNING_SIZE = 7;
+
+export function channelHuddleMemberIds(
+  kind: string | undefined,
+  memberIds: readonly string[] | undefined,
+  teammates: readonly ({ _id: string; is_bot?: boolean } | null)[] | undefined,
+): string[] | undefined {
+  if (kind === "community") return [];
+  if (!teammates?.length || ((kind === "private" || kind === "dm") && !memberIds)) return undefined;
+  const allowed = kind === "private" || kind === "dm" ? new Set(memberIds) : null;
+  return [...new Set(teammates.flatMap((m) => m && !m.is_bot && (!allowed || allowed.has(String(m._id))) ? [String(m._id)] : []))];
+}
+
 const MAX_ROOM_KEY_LENGTH = 400;
 
 export type ParsedRoomKey =
