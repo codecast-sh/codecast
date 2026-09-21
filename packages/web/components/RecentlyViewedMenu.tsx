@@ -11,7 +11,8 @@ import { useShortcutAction } from "../shortcuts";
 import { useTipActions } from "../tips";
 import { copyToClipboard, shareOrigin } from "../lib/utils";
 import { ContextMenu, useContextMenu, CtxItem, CtxHeader } from "./ui/context-menu";
-import { RecentVisitRow, visitDetailParts } from "./RecentVisitRow";
+import { RecentVisitRow } from "./RecentVisitRow";
+import { visitDetailParts } from "../lib/recentVisitDetails";
 import { ShortcutTooltip, KeyCap, MenuKeyCaps } from "./KeyboardShortcutsHelp";
 
 // The standalone URL a visit maps to, when one exists. Label/project visits
