@@ -14149,7 +14149,7 @@ export function classifyGlyphlessClientPaneState(
   // CAUTION: keep these markers literal — grok's IDLE states contain the words
   // "send a message to interrupt", so a generic /interrupt/ heuristic would read
   // an idle grok pane as busy forever.
-  if (/⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|esc to interrupt|Esc:cancel|Waiting for response|\[stop\]/i.test(paneContent)) return "busy";
+  if (/⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|⬝⬝|esc (?:to )?interrupt|Esc:cancel|Waiting for response|\[stop\]/i.test(paneContent)) return "busy";
   if (readyPattern.test(paneContent)) return "idle";
   return "unknown";
 }
