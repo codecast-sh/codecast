@@ -1,8 +1,6 @@
 "use client";
 
-import { copyToClipboard } from "../../lib/utils";
 import { useCallback, useMemo, useRef, useState } from "react";
-import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -10,13 +8,7 @@ import { toast } from "sonner";
 import { AuthGuard } from "../../components/AuthGuard";
 import { AppLoader } from "../../components/AppLoader";
 import { DashboardLayout } from "../../components/DashboardLayout";
-import {
-  fmtDuration,
-  fmtClock,
-  describeTaskCadence,
-  taskStateLabel,
-  isTaskOverdue,
-} from "../../components/triggerCadence";
+import { fmtDuration, fmtClock } from "../../components/triggerCadence";
 // The `--on <event>` vocabulary is shared with the CLI so the two cannot drift.
 import {
   TRIGGER_EVENT_SHORTHANDS,
@@ -25,49 +17,28 @@ import {
   triggerEventShorthand,
 } from "@codecast/shared/contracts";
 import { ShortcutTooltip } from "../../components/KeyboardShortcutsHelp";
-import { isTriggerFailing, taskDisplayTitle } from "../../components/triggerTasks";
+import { isTriggerFailing, taskDisplayTitle, groupTriggerRowsByHome, type TaskRow, type TriggerRow, type TriggerHomeGroup } from "../../components/triggerTasks";
+import { TriggerRowItem, TriggerHomeHeader } from "../../components/TriggerRow";
 import { useTriggers, fetchTriggerRuns } from "../../hooks/useSyncTriggers";
-import { TriggerRunList, useTriggerRuns, openRunInStore } from "../../components/TriggerRunHistory";
-import { TriggerPromptView } from "../../components/TriggerPromptView";
+import { openRunInStore } from "../../components/TriggerRunHistory";
 import { SelectBox } from "../../components/ui/select-box";
 import { SegmentedToggle } from "../../components/SegmentedToggle";
-import {
-  ContextMenu,
-  useContextMenu,
-  CtxItem,
-  CtxHeader,
-  CtxSeparator,
-  type ContextMenuState,
-} from "../../components/ui/context-menu";
 import { useInboxStore, filterInboxScopeFromState } from "../../store/inboxStore";
 import {
   Clock,
-  Play,
-  Pause,
-  X,
-  Trash2,
   Plus,
   Zap,
   Repeat,
-  ExternalLink,
-  Bot,
-  Folder,
   ChevronDown,
   ChevronRight,
-  RotateCcw,
   AlertTriangle,
   CheckCircle2,
-  XCircle,
   Search,
-  LayoutGrid,
   ListFilter,
   Pencil,
-  Copy,
-  MessageSquare,
-  ArrowUpRight,
+  X,
 } from "lucide-react";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
-
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 const api = _api as any;
@@ -262,604 +233,6 @@ function HorizonRail({ tasks, now }: { tasks: any[]; now: number }) {
       <div className="flex justify-between text-[10px] text-sol-text-dim font-mono mt-1">
         <span>-24h</span><span>-12h</span><span>now</span><span>+12h</span><span>+24h</span>
       </div>
-    </div>
-  );
-}
-
-// ── Schedule descriptor chip: "every 4h" / "on PR comment" / "one-time" ──
-
-const chipCls =
-  "inline-flex items-center gap-1 text-[11px] leading-none font-medium whitespace-nowrap flex-shrink-0 rounded-full px-2 py-[3px]";
-
-// The chip names the cadence as a tinted pill — "every 1d" IS recurring — so
-// type reads by color before words: violet loops, cyan one-shots, yellow event
-// hooks. Live timing (countdown, running) lives on the meta line, not here.
-function TriggerChip({ task }: { task: any }) {
-  if (task.schedule_type === "recurring" && task.interval_ms) {
-    return (
-      <span className={`${chipCls} bg-sol-violet/10 text-sol-violet`}>
-        <Repeat className="w-3 h-3" />{describeTaskCadence(task)}
-      </span>
-    );
-  }
-  if (task.schedule_type === "event") {
-    const ev = triggerEventShorthand(task.event_filter) ?? "event";
-    return (
-      <span className={`${chipCls} bg-sol-yellow/10 text-sol-yellow`}>
-        <Zap className="w-3 h-3" />on {TRIGGER_EVENT_LABELS[ev] ?? ev}
-      </span>
-    );
-  }
-  return (
-    <span className={`${chipCls} bg-sol-cyan/10 text-sol-cyan`}>
-      <Clock className="w-3 h-3" />one-time
-    </span>
-  );
-}
-
-// ── Last result card ──
-
-// The last run summary is an agent-written paragraph — a wall of text at a
-// glance. Split it at the first clause boundary (";", sentence end, or an
-// em-dash) into a bright headline and dim detail, so the verdict reads first
-// and the evidence reads second.
-function splitResultSummary(text: string): { headline: string; detail: string | null } {
-  const m = text.match(/^([\s\S]{12,180}?[^;.\s])(?:;\s+|\.\s+|\s+—\s+)([\s\S]+)$/);
-  return m ? { headline: m[1], detail: m[2] } : { headline: text, detail: null };
-}
-
-// Outcome-first: a status band (icon + label + time + open-run link) over the
-// summary body. Pass/fail reads by color before any words do — the same
-// emerald/red the row indicator and rail use.
-function LastResultCard({ task, failed, runSession }: { task: any; failed: boolean; runSession?: string }) {
-  const text = failed ? task.last_run_summary.replace(/^Failed:?\s*/, "") : task.last_run_summary;
-  const { headline, detail } = splitResultSummary(text);
-  const Icon = failed ? XCircle : CheckCircle2;
-  return (
-    // Bleeds to the row's edges between hairlines, the way the prompt view
-    // below it does — a labeled block, not a box within the row.
-    <div className={`mt-3 -mx-4 border-y ${failed ? "bg-sol-red/[0.06] border-sol-red/20" : "bg-sol-bg-alt/40 border-sol-border/30"}`}>
-      <div className={`flex items-center gap-2 px-4 py-1.5 border-b ${
-        failed ? "border-sol-red/20" : "border-sol-border/30"
-      }`}>
-        <Icon className={`w-3.5 h-3.5 flex-shrink-0 ${failed ? "text-sol-red" : "text-emerald-400"}`} />
-        <span className={`text-[10px] uppercase tracking-widest ${failed ? "text-sol-red" : "text-sol-text-dim"}`}>
-          {failed ? "Last run failed" : "Last result"}
-        </span>
-        {task.last_run_at && (
-          <span className="text-[10px] text-sol-text-dim">{fmtClock(task.last_run_at)} · {timeAgo(task.last_run_at)}</span>
-        )}
-        <span className="flex-1" />
-        {runSession && (
-          <Link
-            href={`/conversation/${runSession}`}
-            className="inline-flex items-center gap-0.5 text-[11px] text-sol-cyan hover:underline underline-offset-2 flex-shrink-0"
-          >
-            open run <ArrowUpRight className="w-3 h-3" />
-          </Link>
-        )}
-      </div>
-      <div className="px-4 py-2.5">
-        <div className={`text-xs leading-relaxed font-medium ${failed ? "text-sol-red" : "text-sol-text"}`}>
-          {headline}
-        </div>
-        {detail && (
-          <div className="text-xs leading-relaxed text-sol-text-dim whitespace-pre-wrap mt-1">{detail}</div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ── Task row ──
-
-// A glanceable per-row indicator: running pulse, history ✓/✗, or a status-colored
-// dot for scheduled/paused (red when a scheduled task is mid-retry after a failure).
-function RowIndicator({ task }: { task: any }) {
-  if (task.status === "running")
-    return (
-      <ShortcutTooltip label="Running now">
-        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse flex-shrink-0" />
-      </ShortcutTooltip>
-    );
-  if (task.status === "failed")
-    return <XCircle className="w-4 h-4 text-sol-red flex-shrink-0" />;
-  if (task.status === "completed")
-    return <CheckCircle2 className="w-4 h-4 text-sol-text-dim flex-shrink-0" />;
-  // Red means the LAST run failed — the same signal the rail and the banner use,
-  // so a trigger reads the same everywhere. (Not retry_count: that's the streak
-  // counter, and a trigger that has since recovered still carries its history.)
-  const color = task.status === "paused" ? "bg-sol-yellow" : isTriggerFailing(task) ? "bg-sol-red" : "bg-sol-cyan";
-  return (
-    <ShortcutTooltip label={isTriggerFailing(task) ? `${task.status} — last run failed, retrying` : task.status}>
-      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${color}`} />
-    </ShortcutTooltip>
-  );
-}
-
-// One page-level context menu serves every row. A right-click hands the menu
-// the task plus closures over the row's own verbs, so the menu calls the exact
-// handlers (and optimistic updates) the inline buttons call — including the
-// edit form, which is row-local state.
-interface TriggerMenuPayload {
-  task: any;
-  edit: () => void;
-  duplicate: () => void;
-  copyPrompt: () => void;
-  runNow: () => void;
-  runAgain: () => void;
-  pause: () => void;
-  resume: () => void;
-  cancel: () => void;
-  del: () => void;
-}
-
-type TriggerCtxMenu = ContextMenuState<TriggerMenuPayload>;
-
-function TaskRow({ task, now, isNext, ctxMenu }: { task: any; now: number; isNext?: boolean; ctxMenu: TriggerCtxMenu }) {
-  // ?task=<id> deep-links here from an inbox trigger row, a schedule row's
-  // gear verb, and an inline trigger pill: that row arrives expanded and
-  // scrolled into view. Either handle addresses the row — the pill links by
-  // short id ("tr-42") whenever its own lookup hasn't resolved to a Convex id
-  // yet. Read REACTIVELY (tab-context searchParams): the tab shell keeps this
-  // page mounted, so a later click on another trigger changes only the query —
-  // a mount-time read would leave that click landing on the page with nothing
-  // expanded.
-  const searchParams = useSearchParams();
-  const deepLinkRef = searchParams.get("task");
-  // &edit=1 (the detail page's Edit verb) lands with the edit form already open
-  // instead of a read-only expanded row.
-  const deepLinkEdit = searchParams.get("edit") === "1";
-  const deepLinkDuplicate = searchParams.get("duplicate") === "1";
-  const isDeepLinked =
-    !!deepLinkRef && (deepLinkRef === task._id || deepLinkRef.toLowerCase() === task.short_id);
-  const [expanded, setExpanded] = useState(isDeepLinked);
-  const [formMode, setFormMode] = useState<null | "edit" | "duplicate">(
-    isDeepLinked && deepLinkEdit ? "edit" : isDeepLinked && deepLinkDuplicate ? "duplicate" : null,
-  );
-  const rowRef = useRef<HTMLDivElement>(null);
-  useWatchEffect(() => {
-    if (isDeepLinked) {
-      setExpanded(true);
-      if (deepLinkEdit) setFormMode("edit");
-      else if (deepLinkDuplicate) setFormMode("duplicate");
-      rowRef.current?.scrollIntoView({ block: "center" });
-    }
-    // Keyed on the param VALUE so each new ?task= target re-fires; a row that
-    // stops being the target keeps whatever state the user left it in.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deepLinkRef, deepLinkEdit, deepLinkDuplicate]);
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  // Verbs are store actions (local-first): the agent_tasks row flips on the
-  // draft synchronously and the dispatch side effect runs the real mutation.
-  // Same actions the inbox schedule rows and the conversation strip use.
-  const triggerAction = useInboxStore((st) => st.triggerAction);
-  const deleteTrigger = useInboxStore((st) => st.deleteTrigger);
-  const pause = () => triggerAction(task._id, "pause");
-  const resume = () => triggerAction(task._id, "resume");
-  const runNow = () => triggerAction(task._id, "runNow");
-  const cancel = () => triggerAction(task._id, "cancel");
-  const del = () => deleteTrigger(task._id);
-  const regenSummary = useMutation(api.agentTasks.webRegenerateSummary);
-
-  const isActive = task.status === "scheduled" || task.status === "running";
-  const isHistory = task.status === "completed" || task.status === "failed";
-  const isEditable = task.status === "scheduled" || task.status === "paused";
-  const failedSummary = task.status === "failed" || task.last_run_summary?.startsWith("Failed");
-
-  // Run history loads only while the detail is open — collapsed rows cost no
-  // query. Each entry deep-links to the message that triggered that run.
-  const runs = useTriggerRuns(expanded && !formMode ? task._id : null);
-
-  // The session to open from this row: the run's own conversation when the daemon
-  // recorded it, otherwise the session this schedule was created from — its
-  // inject binding first, then the creator (a spawn trigger's only session
-  // before it has run). Every row that has run or came from a session becomes
-  // one click from a real conversation.
-  const runSession = task.last_run_conversation_id;
-  const sessionId = runSession ?? task.originating_conversation_id ?? task.created_by_conversation_id;
-  const sessionTitle = runSession
-    ? task.last_run_conversation_title
-    : task.originating_conversation_id
-      ? task.originating_conversation_title
-      : task.created_by_conversation_title;
-  const sessionVerb = runSession ? "Open run session" : "Open source session";
-
-  const openForm = (which: "edit" | "duplicate") => (e?: React.MouseEvent) => {
-    e?.stopPropagation();
-    setFormMode(which);
-    setExpanded(true);
-  };
-  const copyPrompt = async (e?: React.MouseEvent) => {
-    e?.stopPropagation();
-    try {
-      await copyToClipboard(task.prompt ?? "");
-      toast.success("Prompt copied");
-    } catch {
-      toast.error("Couldn't copy");
-    }
-  };
-
-  // Local-first: the verb lands on the draft synchronously; a failed dispatch
-  // surfaces through the store's outbox failure channel, not here.
-  const act = (fn: () => void, msg: string) => (e?: React.MouseEvent) => {
-    e?.stopPropagation();
-    fn();
-    toast.success(msg);
-  };
-
-  const iconBtn =
-    "p-1.5 rounded-md text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-highlight transition-colors";
-  const detailBtn =
-    "inline-flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-text rounded-md bg-sol-bg-alt/70 hover:bg-sol-bg-highlight px-2 py-1 transition-colors";
-
-  // A divided list, not a stack of cards: rows share hairlines, hover is a
-  // flat wash, and a 2px bar on the column edge carries state — green
-  // running, red failed, cyan up next, yellow paused — the same colors the
-  // rail and the indicator use.
-  const edge =
-    task.status === "running"
-      ? "border-l-emerald-400"
-      : task.status === "failed" || isTriggerFailing(task)
-        ? "border-l-sol-red"
-        : task.status === "paused"
-          ? "border-l-sol-yellow"
-          : isNext
-            ? "border-l-sol-cyan"
-            : "border-l-transparent";
-
-  return (
-    <div
-      ref={rowRef}
-      className={`group border-b border-sol-border/40 border-l-2 ${edge} ${
-        expanded ? "bg-sol-bg-alt/25" : "hover:bg-sol-card-hover"
-      } transition-colors duration-150 cursor-pointer`}
-      onClick={() => setExpanded((v) => !v)}
-      onContextMenu={(e) =>
-        ctxMenu.open(e, {
-          task,
-          edit: () => openForm("edit")(),
-          duplicate: () => openForm("duplicate")(),
-          copyPrompt: () => copyPrompt(),
-          runNow: () => act(runNow, "Queued — runs within ~30s")(),
-          runAgain: () => act(runNow, "Re-armed — runs within ~30s")(),
-          pause: () => act(pause, "Paused")(),
-          resume: () => act(resume, "Resumed")(),
-          cancel: () => act(cancel, "Cancelled")(),
-          del: () => act(del, "Deleted")(),
-        })
-      }
-    >
-      <div className="relative flex items-start gap-3 px-4 py-3">
-        {/* fixed 20px-tall slot so dot and icon indicators both center on the title's first line */}
-        <div className="flex-shrink-0 w-4 h-5 flex items-center justify-center">
-          <RowIndicator task={task} />
-        </div>
-        <div className="flex-1 min-w-0">
-          {/* Title wraps in full — a trigger you can't read is a trigger you
-              can't trust. The cadence pill lives on the meta line below, so
-              nothing competes with the title for width. */}
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-            <span className={`text-sm font-medium leading-5 ${isHistory ? "text-sol-text-muted" : "text-sol-text"}`}>
-              {taskDisplayTitle(task)}
-            </span>
-            {isNext && (
-              <span className="text-[10px] font-medium uppercase tracking-wide text-sol-cyan flex-shrink-0">
-                next up
-              </span>
-            )}
-          </div>
-          {/* The expanded detail has no "What it does" section — this line IS
-              the summary, un-clamped while the detail is open. */}
-          {task.display_summary && (
-            <div className={`text-xs text-sol-text-muted leading-relaxed mt-0.5 ${expanded && !formMode ? "" : "line-clamp-2"}`}>
-              {task.display_summary}
-            </div>
-          )}
-          {/* cadence + live state + health, wrapping instead of truncating */}
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 mt-2 text-[11px] text-sol-text-dim">
-            <TriggerChip task={task} />
-            {task.status === "running" ? (
-              <span className="text-emerald-400 font-medium flex-shrink-0">running now</span>
-            ) : task.status === "scheduled" && task.run_at ? (
-              // Every armed row answers "when does it fire" — countdown plus
-              // wall clock. Recurring rows used to show neither.
-              <span
-                className={`inline-flex items-center gap-1 flex-shrink-0 ${
-                  isTaskOverdue(task, now) ? "text-sol-orange" : "text-sol-cyan"
-                }`}
-              >
-                <Clock className="w-3 h-3" />
-                {taskStateLabel(task, now)}
-                <span className="text-sol-text-dim">· {fmtClock(task.run_at)}</span>
-              </span>
-            ) : null}
-            {task.run_count > 0 && (
-              <span className="flex-shrink-0">
-                {task.run_count} run{task.run_count === 1 ? "" : "s"}
-              </span>
-            )}
-            {task.retry_count > 0 && (
-              <span className="text-sol-orange flex-shrink-0">
-                {task.retry_count} {task.retry_count === 1 ? "retry" : "retries"}
-              </span>
-            )}
-            {task.agent_type === "codex" && (
-              <span className="inline-flex items-center gap-1 flex-shrink-0">
-                <Bot className="w-3 h-3" />codex
-              </span>
-            )}
-            {task.project_path && (
-              <ShortcutTooltip label={task.project_path}>
-                <span className="inline-flex items-center gap-1 flex-shrink-0">
-                  <Folder className="w-3 h-3" />{projectName(task.project_path)}
-                </span>
-              </ShortcutTooltip>
-            )}
-            {!sessionId && !task.last_run_summary && task.last_run_at && (
-              <span className="flex-shrink-0">last run {timeAgo(task.last_run_at)}</span>
-            )}
-          </div>
-
-          {/* The last run gets its own full-width line — it's the row's main
-              jump target and the old inline placement truncated it to nothing.
-              Links to the run's own conversation when the daemon recorded it,
-              else the originating session. Hidden while the detail is open:
-              the "Last result" section shows the same summary in full there. */}
-          {expanded && !formMode && task.last_run_summary ? null : sessionId ? (
-            <div className="mt-1.5">
-              <ShortcutTooltip label={sessionVerb} hint={sessionTitle || undefined}>
-                <Link
-                  href={`/conversation/${sessionId}`}
-                  onClick={(e) => e.stopPropagation()}
-                  className={`group/sess inline-flex items-center gap-1.5 max-w-full min-w-0 rounded px-1.5 py-0.5 -mx-1.5 text-[11px] transition-colors hover:bg-sol-cyan/10 ${
-                    failedSummary ? "text-sol-red hover:bg-sol-red/10" : "text-sol-cyan"
-                  }`}
-                >
-                  <MessageSquare className="w-3 h-3 flex-shrink-0" />
-                  <span className="truncate">
-                    {task.last_run_summary || sessionTitle || sessionVerb}
-                  </span>
-                  {task.last_run_at && <span className="text-sol-text-dim/80 flex-shrink-0">· {timeAgo(task.last_run_at)}</span>}
-                  <ArrowUpRight className="w-3 h-3 flex-shrink-0 opacity-50 group-hover/sess:opacity-100 transition-opacity" />
-                </Link>
-              </ShortcutTooltip>
-            </div>
-          ) : task.last_run_summary ? (
-            <div className="flex items-center gap-1.5 mt-1.5 min-w-0 text-[11px] text-sol-text-dim">
-              <span className={`truncate ${failedSummary ? "text-sol-red" : ""}`}>{task.last_run_summary}</span>
-              {task.last_run_at && <span className="flex-shrink-0">· {timeAgo(task.last_run_at)}</span>}
-            </div>
-          ) : null}
-        </div>
-
-        {/* Hover toolbar floats over the top-right corner instead of living
-            in-flow — invisible buttons were reserving ~130px of every row. */}
-        <div className="absolute right-2 top-2 z-10 flex items-center gap-0.5 rounded-md bg-sol-bg-highlight px-1 py-0.5 shadow-sm shadow-black/20 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-opacity">
-          <ShortcutTooltip label="Open trigger page" hint="full detail + run history">
-            <Link
-              href={`/triggers/${task.short_id ?? task._id}`}
-              aria-label="Open trigger page"
-              onClick={(e) => e.stopPropagation()}
-              className={iconBtn}
-            >
-              <ArrowUpRight className="w-3.5 h-3.5" />
-            </Link>
-          </ShortcutTooltip>
-          {isEditable && (
-            <ShortcutTooltip label="Edit">
-              <button className={iconBtn} aria-label="Edit" onClick={openForm("edit")}>
-                <Pencil className="w-3.5 h-3.5" />
-              </button>
-            </ShortcutTooltip>
-          )}
-          {isActive && (
-            <>
-              <ShortcutTooltip label="Run now" hint="daemon picks it up within ~30s">
-                <button className={iconBtn} aria-label="Run now" onClick={act(runNow, "Queued — runs within ~30s")}>
-                  <Play className="w-3.5 h-3.5" />
-                </button>
-              </ShortcutTooltip>
-              <ShortcutTooltip label="Pause">
-                <button className={iconBtn} aria-label="Pause" onClick={act(pause, "Paused")}>
-                  <Pause className="w-3.5 h-3.5" />
-                </button>
-              </ShortcutTooltip>
-              <ShortcutTooltip label="Cancel">
-                <button className={iconBtn} aria-label="Cancel" onClick={act(cancel, "Cancelled")}>
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </ShortcutTooltip>
-            </>
-          )}
-          {task.status === "paused" && (
-            <>
-              <ShortcutTooltip label="Resume">
-                <button className={iconBtn} aria-label="Resume" onClick={act(resume, "Resumed")}>
-                  <Play className="w-3.5 h-3.5" />
-                </button>
-              </ShortcutTooltip>
-              <ShortcutTooltip label="Cancel">
-                <button className={iconBtn} aria-label="Cancel" onClick={act(cancel, "Cancelled")}>
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </ShortcutTooltip>
-            </>
-          )}
-          {isHistory && (
-            <>
-              <ShortcutTooltip label="Run again" hint="re-arms, runs within ~30s">
-                <button className={iconBtn} aria-label="Run again" onClick={act(runNow, "Re-armed — runs within ~30s")}>
-                  <RotateCcw className="w-3.5 h-3.5" />
-                </button>
-              </ShortcutTooltip>
-              <ShortcutTooltip label={confirmDelete ? "Click again to delete" : "Delete"}>
-              <button
-                className={`${iconBtn} ${confirmDelete ? "text-sol-red hover:text-sol-red" : ""}`}
-                aria-label="Delete"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (!confirmDelete) {
-                    setConfirmDelete(true);
-                    setTimeout(() => setConfirmDelete(false), 3000);
-                    return;
-                  }
-                  act(del, "Deleted")(e);
-                }}
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-              </ShortcutTooltip>
-            </>
-          )}
-        </div>
-      </div>
-
-      {expanded && formMode && (
-        <div className="px-4 pb-3 border-t border-sol-border/50 cursor-auto animate-fadeSlideIn" onClick={(e) => e.stopPropagation()}>
-          <TriggerForm
-            embedded
-            editTask={formMode === "edit" ? task : undefined}
-            seedTask={formMode === "duplicate" ? task : undefined}
-            onClose={() => setFormMode(null)}
-          />
-        </div>
-      )}
-
-      {expanded && !formMode && (
-        <div className="px-4 pb-3 pt-1 border-t border-sol-border/40 cursor-auto animate-fadeSlideIn" onClick={(e) => e.stopPropagation()}>
-          {/* The run list below is the richer path (every run, trigger-linked);
-              this button only covers a schedule whose runs can't be enumerated
-              (e.g. an encrypted home conversation) but whose last run is known.
-              With a last-run summary, the "Last result" header's open-run link
-              already points there. */}
-          {task.last_run_conversation_id && (runs?.length ?? 0) === 0 && !task.last_run_summary && (
-            <Link
-              href={`/conversation/${task.last_run_conversation_id}`}
-              onClick={(e) => e.stopPropagation()}
-              className="inline-flex items-center gap-1.5 mt-2.5 px-3 py-1.5 rounded-lg bg-sol-cyan/10 text-sol-cyan text-xs font-medium hover:bg-sol-cyan/20 transition-colors"
-            >
-              <MessageSquare className="w-3.5 h-3.5" />
-              Open latest run session
-              {task.last_run_conversation_title ? (
-                <span className="text-sol-cyan/70 font-normal truncate max-w-[220px]">· {task.last_run_conversation_title}</span>
-              ) : null}
-              <ArrowUpRight className="w-3.5 h-3.5" />
-            </Link>
-          )}
-          {/* Results first — the reason someone opens a trigger is "what did it
-              do", so the last result and run history sit above the (large,
-              collapsible) prompt definition. The header summary stays visible
-              above, so no "What it does" repeat down here. */}
-          {task.last_run_summary && (
-            <LastResultCard task={task} failed={failedSummary} runSession={runSession} />
-          )}
-
-          {/* Every past run, newest first — each links to the message that
-              triggered it (the injected turn or the spawned run's prompt). */}
-          {runs && runs.length > 0 && (
-            <>
-              <div className="text-[10px] uppercase tracking-widest text-sol-text-dim mt-4 mb-1.5">
-                Past runs <span className="font-mono normal-case text-sol-text-dim">{runs.length}</span>
-              </div>
-              <TriggerRunList runs={runs} now={now} ensureInboxRoute />
-            </>
-          )}
-
-          <div className="text-[10px] uppercase tracking-widest text-sol-text-dim mt-4 mb-1">Prompt</div>
-          <TriggerPromptView prompt={task.prompt} className="-mx-4" />
-
-          {task.context_summary && (
-            <>
-              <div className="text-[10px] uppercase tracking-widest text-sol-text-dim mt-4 mb-1">Context</div>
-              <div className="text-xs text-sol-text-muted whitespace-pre-wrap bg-sol-bg-alt/40 border-y border-sol-border/30 -mx-4 px-4 py-3">
-                {task.context_summary}
-              </div>
-            </>
-          )}
-
-          {/* Config footer: labeled pairs, and only what the header doesn't
-              already say (next run, run count and retries live on the meta
-              line above). Label dim, value brighter — scannable as key/value. */}
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 mt-4 text-[11px] text-sol-text-dim">
-            <ShortcutTooltip
-              label={
-                task.mode === "apply"
-                  ? "Runs with full tools — it can edit files and make changes"
-                  : "Read-only run — investigates and reports, changes nothing"
-              }
-            >
-              <span className={task.mode === "apply" ? "text-sol-orange" : "text-sol-text-muted"}>
-                {task.mode === "apply" ? "makes changes" : "read-only"}
-              </span>
-            </ShortcutTooltip>
-            <span>
-              agent <span className="text-sol-text-muted">{task.agent_type || "claude"}</span>
-            </span>
-            {task.max_runtime_ms && (
-              <span>
-                max runtime <span className="text-sol-text-muted">{fmtDuration(task.max_runtime_ms)}</span>
-              </span>
-            )}
-            <span>
-              created <span className="text-sol-text-muted">{timeAgo(task.created_at)}</span>
-            </span>
-            {task.project_path && (
-              <span className="font-mono text-sol-text-muted basis-full sm:basis-auto truncate">{task.project_path}</span>
-            )}
-            {(task.originating_conversation_id || task.created_by_conversation_id) && (
-              <Link
-                href={`/conversation/${task.originating_conversation_id ?? task.created_by_conversation_id}`}
-                className="inline-flex items-center gap-0.5 max-w-full text-sol-cyan hover:underline underline-offset-2"
-              >
-                <span className="truncate">
-                  from session
-                  {(() => {
-                    const t = task.originating_conversation_id
-                      ? task.originating_conversation_title
-                      : task.created_by_conversation_title;
-                    return t ? `: ${t}` : "";
-                  })()}
-                </span>
-                <ExternalLink className="w-3 h-3 flex-shrink-0" />
-              </Link>
-            )}
-          </div>
-
-          <div className="flex items-center gap-1.5 mt-3 pt-2.5 border-t border-sol-border/40">
-            <Link
-              href={`/triggers/${task.short_id ?? task._id}`}
-              onClick={(e) => e.stopPropagation()}
-              className={`${detailBtn} no-underline`}
-            >
-              <ArrowUpRight className="w-3 h-3" /> Full page
-            </Link>
-            {isEditable && (
-              <button onClick={openForm("edit")} className={detailBtn}>
-                <Pencil className="w-3 h-3" /> Edit
-              </button>
-            )}
-            <button onClick={openForm("duplicate")} className={detailBtn}>
-              <Copy className="w-3 h-3" /> Duplicate
-            </button>
-            <button onClick={copyPrompt} className={detailBtn}>
-              <Copy className="w-3 h-3" /> Copy prompt
-            </button>
-            <ShortcutTooltip label="Re-run the Haiku distillation of this prompt into title + summary">
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  regenSummary({ task_id: task._id }).catch(() => {});
-                  toast.success("Summary refreshing — lands in a few seconds");
-                }}
-                className={detailBtn}
-              >
-                <RotateCcw className="w-3 h-3" /> Refresh summary
-              </button>
-            </ShortcutTooltip>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -1353,7 +726,9 @@ const TYPE_TOGGLES: { key: string; label: string; Icon: any; on: string }[] = [
 // focus, and every filter beneath it is text — toggles that take color when
 // on, selects as value plus chevron, a ghost icon for grouping. No control
 // draws its own box; the bar's rules are the only lines.
-function FilterBar({ filters, update, projects, hasCodex, hasEvent, shown, total, grouped, setGrouped }: {
+type Grouping = "session" | "project" | "none";
+
+function FilterBar({ filters, update, projects, hasCodex, hasEvent, shown, total, grouping, setGrouping }: {
   filters: Filters;
   update: (patch: Partial<Filters>) => void;
   projects: string[];
@@ -1361,8 +736,8 @@ function FilterBar({ filters, update, projects, hasCodex, hasEvent, shown, total
   hasEvent: boolean;
   shown: number;
   total: number;
-  grouped: boolean;
-  setGrouped: (v: boolean) => void;
+  grouping: Grouping;
+  setGrouping: (v: Grouping) => void;
 }) {
   const active = filtersActive(filters);
   return (
@@ -1428,16 +803,22 @@ function FilterBar({ filters, update, projects, hasCodex, hasEvent, shown, total
             <option value="codex">codex</option>
           </SelectBox>
         )}
-        <ShortcutTooltip label="Group by project">
-          <button
-            onClick={() => setGrouped(!grouped)}
-            aria-label="Group by project"
-            aria-pressed={grouped}
-            className={`py-1 transition-colors ${grouped ? "text-sol-cyan" : "text-sol-text-dim hover:text-sol-text"}`}
-          >
-            <LayoutGrid className="w-3.5 h-3.5" />
-          </button>
-        </ShortcutTooltip>
+        {/* The same grouping the inbox roster uses — by the session each
+            trigger fires into — is the default; project and flat are a
+            click away. */}
+        <span className="inline-flex items-center gap-1.5 text-sol-text-dim">
+          <span>by</span>
+          <SegmentedToggle
+            variant="bare"
+            value={grouping}
+            onChange={(g) => setGrouping(g as Grouping)}
+            items={[
+              { key: "session", label: "session" },
+              { key: "project", label: "project" },
+              { key: "none", label: "none" },
+            ]}
+          />
+        </span>
         {active && (
           <span className="ml-auto inline-flex items-center gap-2 text-sol-text-dim">
             <span className="tabular-nums">{shown} of {total}</span>
@@ -1451,9 +832,67 @@ function FilterBar({ filters, update, projects, hasCodex, hasEvent, shown, total
   );
 }
 
-// Render a list of rows, optionally grouped under project subheaders.
-function groupByProjectPath(tasks: any[]): [string, any[]][] {
-  const groups = new Map<string, any[]>();
+// ── Rows ──
+
+// The inline editor (edit / duplicate) is the ONE thing a row unfolds on this
+// page; reading — last result, run history, prompt — is the trigger page's
+// job, one click on the row away. Row-local form state lives here, keyed by
+// task id, so a deep link (?task=X&edit=1 from the trigger page's Edit verb,
+// or &duplicate=1 from the palette) can open it from above.
+type RowForm = { id: string; mode: "edit" | "duplicate" } | null;
+
+function PageRow({ task, isNext, form, setForm, deepLinked }: {
+  task: TaskRow;
+  isNext?: boolean;
+  form: RowForm;
+  setForm: (f: RowForm) => void;
+  deepLinked: boolean;
+}) {
+  const router = useRouter();
+  const deleteTrigger = useInboxStore((st) => st.deleteTrigger);
+  const rowRef = useRef<HTMLDivElement>(null);
+  // Scroll the deep-linked row into view when it BECOMES the target — a later
+  // click on another trigger changes only the query on this mounted page.
+  useWatchEffect(() => {
+    if (deepLinked) rowRef.current?.scrollIntoView({ block: "center" });
+  }, [deepLinked]);
+  const row = useMemo<TriggerRow>(
+    () => ({ task, openId: task.originating_conversation_id ?? task.last_run_conversation_id, unread: false }),
+    [task],
+  );
+  const terminal = task.status === "completed" || task.status === "failed";
+  const mode = form?.id === task._id ? form.mode : null;
+  return (
+    <div ref={rowRef}>
+      <TriggerRowItem
+        row={row}
+        variant="page"
+        isNext={isNext}
+        highlighted={deepLinked && !mode}
+        onOpen={() => router.push(`/triggers/${task.short_id ?? task._id}`)}
+        onEdit={() => setForm({ id: task._id, mode: "edit" })}
+        onDuplicate={() => setForm({ id: task._id, mode: "duplicate" })}
+        onDelete={terminal ? () => { deleteTrigger(task._id); toast.success("Deleted"); } : undefined}
+      />
+      {mode && (
+        <div className="px-4 pb-3 border-b border-sol-border/40 bg-sol-bg-alt/25 animate-fadeSlideIn">
+          <TriggerForm
+            embedded
+            editTask={mode === "edit" ? task : undefined}
+            seedTask={mode === "duplicate" ? task : undefined}
+            onClose={() => setForm(null)}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// The band above a group of rows — a project, a day, a home session.
+const bandCls = "flex items-center gap-1.5 text-[11px] text-sol-text-dim py-1.5 px-4 bg-sol-bg-alt/30 border-b border-sol-border/40";
+
+function groupByProjectPath(tasks: TaskRow[]): [string, TaskRow[]][] {
+  const groups = new Map<string, TaskRow[]>();
   for (const t of tasks) {
     const key = t.project_path || "— no project";
     if (!groups.has(key)) groups.set(key, []);
@@ -1462,18 +901,58 @@ function groupByProjectPath(tasks: any[]): [string, any[]][] {
   return [...groups.entries()].sort((a, b) => b[1].length - a[1].length);
 }
 
-function RowList({ tasks, now, grouped, nextId, ctxMenu }: { tasks: any[]; now: number; grouped: boolean; nextId?: string; ctxMenu: TriggerCtxMenu }) {
-  if (!grouped) return <>{tasks.map((t) => <TaskRow key={t._id} task={t} now={now} isNext={t._id === nextId} ctxMenu={ctxMenu} />)}</>;
+// A home-session header for the page: the roster's header, fed from the
+// store's session row so the state word and dot are live.
+function PageHomeHeader({ group, now, showProject }: { group: TriggerHomeGroup; now: number; showProject: boolean }) {
+  const router = useRouter();
+  const home = useInboxStore((st) => (group.homeId ? st.sessions[group.homeId] : undefined));
+  const first = group.rows[0].task;
+  const open = () => {
+    const id = group.homeId ?? first.last_run_conversation_id ?? first.created_by_conversation_id;
+    if (id) router.push(`/conversation/${id}`);
+  };
+  return <TriggerHomeHeader group={group} home={home} now={now} isActive={false} showProject={showProject} onOpen={open} size="md" />;
+}
+
+type RowListProps = {
+  tasks: TaskRow[];
+  now: number;
+  grouping: Grouping;
+  nextId?: string;
+  form: RowForm;
+  setForm: (f: RowForm) => void;
+  deepLinkId?: string;
+  showProject: boolean;
+};
+
+function RowList({ tasks, now, grouping, nextId, form, setForm, deepLinkId, showProject }: RowListProps) {
+  const isTarget = (t: TaskRow) => !!deepLinkId && (deepLinkId === t._id || deepLinkId.toLowerCase() === t.short_id);
+  const rowOf = (t: TaskRow) => (
+    <PageRow key={t._id} task={t} isNext={t._id === nextId} form={form} setForm={setForm} deepLinked={isTarget(t)} />
+  );
+  if (grouping === "none") return <>{tasks.map(rowOf)}</>;
+  if (grouping === "project") {
+    return (
+      <>
+        {groupByProjectPath(tasks).map(([proj, rows]) => (
+          <div key={proj} className="flex flex-col">
+            <div className={bandCls}>
+              {proj.startsWith("—") ? proj : projectName(proj)}
+              <span className="font-mono text-sol-text-dim/60">{rows.length}</span>
+            </div>
+            {rows.map(rowOf)}
+          </div>
+        ))}
+      </>
+    );
+  }
+  const groups = groupTriggerRowsByHome(tasks.map((task) => ({ task, unread: false })));
   return (
     <>
-      {groupByProjectPath(tasks).map(([proj, rows]) => (
-        <div key={proj} className="flex flex-col">
-          <div className="flex items-center gap-1.5 text-[11px] text-sol-text-dim py-1.5 px-3 bg-sol-bg-alt/30 border-b border-sol-border/40">
-            <Folder className="w-3 h-3" />
-            {proj.startsWith("—") ? proj : projectName(proj)}
-            <span className="font-mono text-sol-text-dim/60">{rows.length}</span>
-          </div>
-          {rows.map((t) => <TaskRow key={t._id} task={t} now={now} isNext={t._id === nextId} ctxMenu={ctxMenu} />)}
+      {groups.map((g) => (
+        <div key={g.key} className="flex flex-col">
+          <PageHomeHeader group={g} now={now} showProject={showProject} />
+          {g.rows.map((r) => rowOf(r.task))}
         </div>
       ))}
     </>
@@ -1497,8 +976,8 @@ function dayBucket(ts: number, now: number): string {
 
 const DAY_ORDER = ["Today", "Yesterday", "Earlier this week", "Earlier this month", "Older"];
 
-function groupByDay(tasks: any[], now: number): [string, any[]][] {
-  const groups = new Map<string, any[]>();
+function groupByDay(tasks: TaskRow[], now: number): [string, TaskRow[]][] {
+  const groups = new Map<string, TaskRow[]>();
   for (const t of tasks) {
     const key = dayBucket(t.last_run_at ?? t.created_at, now);
     if (!groups.has(key)) groups.set(key, []);
@@ -1509,7 +988,14 @@ function groupByDay(tasks: any[], now: number): [string, any[]][] {
 
 const HISTORY_PAGE = 25;
 
-function HistoryBody({ tasks, now, grouped, ctxMenu }: { tasks: any[]; now: number; grouped: boolean; ctxMenu: TriggerCtxMenu }) {
+function HistoryBody({ tasks, now, grouping, form, setForm, deepLinkId }: {
+  tasks: TaskRow[];
+  now: number;
+  grouping: Grouping;
+  form: RowForm;
+  setForm: (f: RowForm) => void;
+  deepLinkId?: string;
+}) {
   const [failuresOnly, setFailuresOnly] = useState(false);
   const [limit, setLimit] = useState(HISTORY_PAGE);
 
@@ -1519,13 +1005,20 @@ function HistoryBody({ tasks, now, grouped, ctxMenu }: { tasks: any[]; now: numb
 
   const shown = failuresOnly ? tasks.filter((t) => t.status === "failed") : tasks;
   const visible = shown.slice(0, limit);
-  // Group bands match the project subheaders: a tinted strip on a hairline.
-  const subheaderCls = "flex items-center gap-1.5 text-[11px] text-sol-text-dim py-1.5 px-3 bg-sol-bg-alt/30 border-b border-sol-border/40";
+  const rowOf = (t: TaskRow) => (
+    <PageRow
+      key={t._id}
+      task={t}
+      form={form}
+      setForm={setForm}
+      deepLinked={!!deepLinkId && (deepLinkId === t._id || deepLinkId.toLowerCase() === t.short_id)}
+    />
+  );
 
   return (
     <div className="flex flex-col">
       {/* success / failure proportion — a text line and a thin bar, no box */}
-      <div className="px-3 py-2.5 border-b border-sol-border/40">
+      <div className="px-4 py-2.5 border-b border-sol-border/40">
         <div className="flex items-center justify-between text-[11px] mb-1.5">
           <span className="text-sol-text-dim">
             <span className="text-emerald-400">{succeeded} succeeded</span>
@@ -1540,7 +1033,7 @@ function HistoryBody({ tasks, now, grouped, ctxMenu }: { tasks: any[]; now: numb
       </div>
 
       {failed > 0 && (
-        <div className="flex items-center gap-2 px-3 py-2 border-b border-sol-border/40">
+        <div className="flex items-center gap-2 px-4 py-2 border-b border-sol-border/40">
           <button
             onClick={() => setFailuresOnly((v) => !v)}
             className={`inline-flex items-center gap-1 text-[11px] rounded-md px-2 py-1 transition-colors ${
@@ -1555,23 +1048,24 @@ function HistoryBody({ tasks, now, grouped, ctxMenu }: { tasks: any[]; now: numb
       )}
 
       {shown.length === 0 ? (
-        <p className="text-[11px] text-sol-text-dim py-3 px-3">No failures — every finished run succeeded.</p>
-      ) : grouped ? (
+        <p className="text-[11px] text-sol-text-dim py-3 px-4">No failures — every finished run succeeded.</p>
+      ) : grouping === "project" ? (
         groupByProjectPath(visible).map(([proj, rows]) => (
           <div key={proj} className="flex flex-col">
-            <div className={subheaderCls}>
-              <Folder className="w-3 h-3" />
+            <div className={bandCls}>
               {proj.startsWith("—") ? proj : projectName(proj)}
               <span className="font-mono text-sol-text-dim/60">{rows.length}</span>
             </div>
-            {rows.map((t) => <TaskRow key={t._id} task={t} now={now} ctxMenu={ctxMenu} />)}
+            {rows.map(rowOf)}
           </div>
         ))
       ) : (
+        // Finished runs read by day, whichever grouping the live list uses —
+        // a finished one-time's home session is history too.
         groupByDay(visible, now).map(([label, rows]) => (
           <div key={label} className="flex flex-col">
-            <div className={subheaderCls}>{label}<span className="font-mono text-sol-text-dim/60">{rows.length}</span></div>
-            {rows.map((t) => <TaskRow key={t._id} task={t} now={now} ctxMenu={ctxMenu} />)}
+            <div className={bandCls}>{label}<span className="font-mono text-sol-text-dim/60">{rows.length}</span></div>
+            {rows.map(rowOf)}
           </div>
         ))
       )}
@@ -1579,7 +1073,7 @@ function HistoryBody({ tasks, now, grouped, ctxMenu }: { tasks: any[]; now: numb
       {shown.length > limit && (
         <button
           onClick={() => setLimit((l) => l + HISTORY_PAGE)}
-          className="self-start text-[11px] text-sol-cyan hover:underline underline-offset-2 mt-2 px-3"
+          className="self-start text-[11px] text-sol-cyan hover:underline underline-offset-2 mt-2 px-4"
         >
           show {Math.min(HISTORY_PAGE, shown.length - limit)} more · {shown.length - limit} hidden
         </button>
@@ -1609,12 +1103,26 @@ function TriggersContent() {
   // is empty AND the first answer is in flight.
   const { tasks: taskRows, ready: tasksReady } = useTriggers();
   const titlebarRef = useTitlebarHead<HTMLDivElement>();
-  const tasks = tasksReady || taskRows.length > 0 ? taskRows : undefined;
-  // ?new=1 arrives from the inbox dock's "+ New" — land with the create form
-  // already open instead of making the user find the button again.
-  const [showForm, setShowForm] = useState(
-    () => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("new") === "1",
-  );
+  const tasks: TaskRow[] | undefined = tasksReady || taskRows.length > 0 ? taskRows : undefined;
+  // Deep links, read REACTIVELY (tab-context searchParams): the tab shell
+  // keeps this page mounted, so a later click on another trigger changes only
+  // the query. ?new=1 (the dock's "+ New") lands with the create form open;
+  // ?task=<id|tr-N> scrolls to that row; &edit=1 / &duplicate=1 open its form.
+  const searchParams = useSearchParams();
+  const deepLinkId = searchParams.get("task") ?? undefined;
+  const deepLinkMode = searchParams.get("edit") === "1" ? "edit" : searchParams.get("duplicate") === "1" ? "duplicate" : null;
+  const [showForm, setShowForm] = useState(() => searchParams.get("new") === "1");
+  const [form, setForm] = useState<RowForm>(null);
+  useWatchEffect(() => {
+    if (searchParams.get("new") === "1") setShowForm(true);
+  }, [searchParams]);
+  // The deep-linked row's form opens once its row can be found — by Convex id
+  // or by short id (the palette links by whichever it has).
+  useWatchEffect(() => {
+    if (!deepLinkId || !deepLinkMode || !tasks) return;
+    const target = tasks.find((t) => t._id === deepLinkId || t.short_id === deepLinkId.toLowerCase());
+    if (target) setForm({ id: target._id, mode: deepLinkMode });
+  }, [deepLinkId, deepLinkMode, tasks === undefined]);
   const [now, setNow] = useState(() => Date.now());
 
   // Tick so countdowns ("in 23m", "due now") stay live without resubscribing.
@@ -1625,72 +1133,76 @@ function TriggersContent() {
 
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   const update = (patch: Partial<Filters>) => setFilters((f) => ({ ...f, ...patch }));
-  const [grouped, setGrouped] = useState(false);
-  const ctxMenu = useContextMenu<TriggerMenuPayload>();
+  const [grouping, setGrouping] = useState<Grouping>("session");
 
   // Filters drive the list AND the rail so what's shown stays consistent. Stats
   // and the failure banner stay global — they're a health overview of everything.
   const filtered = useMemo(
-    () => (tasks ?? []).filter((t: any) => matchesFilters(t, filters)),
+    () => (tasks ?? []).filter((t) => matchesFilters(t, filters)),
     [tasks, filters]
   );
 
   const { active, paused, history } = useMemo(() => {
     return {
+      // Live runs first, then soonest fire — the roster's order.
       active: filtered
-        .filter((t: any) => t.status === "scheduled" || t.status === "running")
-        .sort((a: any, b: any) => (a.run_at ?? Infinity) - (b.run_at ?? Infinity)),
-      paused: filtered.filter((t: any) => t.status === "paused"),
+        .filter((t) => t.status === "scheduled" || t.status === "running")
+        .sort((a, b) => {
+          const ra = a.status === "running" ? 0 : 1, rb = b.status === "running" ? 0 : 1;
+          return ra !== rb ? ra - rb : (a.run_at ?? Infinity) - (b.run_at ?? Infinity);
+        }),
+      paused: filtered.filter((t) => t.status === "paused"),
       history: filtered
-        .filter((t: any) => t.status === "completed" || t.status === "failed")
-        .sort((a: any, b: any) => (b.last_run_at ?? b.created_at) - (a.last_run_at ?? a.created_at)),
+        .filter((t) => t.status === "completed" || t.status === "failed")
+        .sort((a, b) => (b.last_run_at ?? b.created_at) - (a.last_run_at ?? a.created_at)),
     };
   }, [filtered]);
 
   const stats = useMemo(() => computeStats(tasks ?? [], now), [tasks, now]);
   const failingActive = useMemo(
-    () => (tasks ?? []).filter((t: any) => (t.status === "scheduled" || t.status === "running") && isTriggerFailing(t)),
+    () => (tasks ?? []).filter((t) => (t.status === "scheduled" || t.status === "running") && isTriggerFailing(t)),
     [tasks]
   );
   const projects = useMemo(
-    () => ([...new Set((tasks ?? []).map((t: any) => t.project_path).filter(Boolean))] as string[]).sort(),
+    () => ([...new Set((tasks ?? []).map((t) => t.project_path).filter(Boolean))] as string[]).sort(),
     [tasks]
   );
-  const hasCodex = useMemo(() => (tasks ?? []).some((t: any) => t.agent_type === "codex"), [tasks]);
-  const hasEvent = useMemo(() => (tasks ?? []).some((t: any) => t.schedule_type === "event"), [tasks]);
+  const hasCodex = useMemo(() => (tasks ?? []).some((t) => t.agent_type === "codex"), [tasks]);
+  const hasEvent = useMemo(() => (tasks ?? []).some((t) => t.schedule_type === "event"), [tasks]);
 
   const activeSubtitle = useMemo(() => {
-    const recurring = active.filter((t: any) => t.schedule_type === "recurring").length;
-    const oneTime = active.filter((t: any) => t.schedule_type === "once").length;
-    const events = active.filter((t: any) => t.schedule_type === "event").length;
+    const recurring = active.filter((t) => t.schedule_type === "recurring").length;
+    const oneTime = active.filter((t) => t.schedule_type === "once").length;
+    const events = active.filter((t) => t.schedule_type === "event").length;
     const parts: string[] = [];
     if (recurring > 0) parts.push(`${recurring} recurring`);
     if (oneTime > 0) parts.push(`${oneTime} one-time`);
     if (events > 0) parts.push(`${events} on event`);
     return parts.join(" · ") || undefined;
   }, [active]);
-  const historyFailed = useMemo(() => history.filter((t: any) => t.status === "failed").length, [history]);
+  const historyFailed = useMemo(() => history.filter((t) => t.status === "failed").length, [history]);
 
   // The soonest upcoming run gets an "up next" accent. active is sorted by run_at
   // ascending, so the first scheduled row with a future run_at is the winner.
   const nextId = useMemo(() => {
-    const next = active.find((t: any) => t.status === "scheduled" && t.run_at && t.run_at > now);
+    const next = active.find((t) => t.status === "scheduled" && t.run_at && t.run_at > now);
     return next?._id as string | undefined;
   }, [active, now]);
 
   const hasTasks = tasks !== undefined && tasks.length > 0;
   const anyShown = active.length + paused.length + history.length > 0;
+  const listProps = { now, grouping, form, setForm, deepLinkId, showProject: projects.length > 1 };
 
   return (
-    <div className="h-full overflow-y-auto bg-sol-bg">
+    <div className="h-full overflow-y-auto bg-sol-bg" data-main-scroll>
       <div className="max-w-3xl mx-auto px-6 py-8">
         <div ref={titlebarRef} className="flex items-center gap-2 mb-5">
-          <Zap className="w-4 h-4 text-sol-cyan" />
+          <Zap className="w-4 h-4 text-sol-amber" />
           <h1 className="text-lg font-semibold text-sol-text">Triggers</h1>
-          <span className="text-xs text-sol-text-dim">async agent runs</span>
+          <span className="text-xs text-sol-text-dim">agents that run on their own, later</span>
           <button
             onClick={() => setShowForm((v) => !v)}
-            className="ml-auto inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg bg-sol-cyan text-sol-bg hover:bg-sol-cyan/90 active:scale-[0.97] transition-all"
+            className="ml-auto inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg bg-sol-amber text-sol-bg hover:bg-sol-amber/90 active:scale-[0.97] transition-all"
           >
             <Plus className="w-3.5 h-3.5" /> New trigger
           </button>
@@ -1712,7 +1224,7 @@ function TriggersContent() {
             </code>
             <button
               onClick={() => setShowForm(true)}
-              className="mt-2 inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg bg-sol-cyan text-sol-bg hover:bg-sol-cyan/90 transition-colors"
+              className="mt-2 inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg bg-sol-amber text-sol-bg hover:bg-sol-amber/90 transition-colors"
             >
               <Plus className="w-3.5 h-3.5" /> New trigger
             </button>
@@ -1740,8 +1252,8 @@ function TriggersContent() {
               hasEvent={hasEvent}
               shown={filtered.length}
               total={tasks.length}
-              grouped={grouped}
-              setGrouped={setGrouped}
+              grouping={grouping}
+              setGrouping={setGrouping}
             />
             {!anyShown ? (
               <FilteredEmpty onClear={() => update(EMPTY_FILTERS)} />
@@ -1750,10 +1262,10 @@ function TriggersContent() {
                 {/* The overview line already says the split; repeat it here
                     only when a filter makes the section's split differ. */}
                 <Section title="Active" count={active.length} subtitle={filtersActive(filters) ? activeSubtitle : undefined}>
-                  <RowList tasks={active} now={now} grouped={grouped} nextId={nextId} ctxMenu={ctxMenu} />
+                  <RowList tasks={active} nextId={nextId} {...listProps} />
                 </Section>
                 <Section title="Paused" count={paused.length}>
-                  <RowList tasks={paused} now={now} grouped={grouped} ctxMenu={ctxMenu} />
+                  <RowList tasks={paused} {...listProps} />
                 </Section>
                 <Section
                   title="History"
@@ -1761,52 +1273,13 @@ function TriggersContent() {
                   subtitle={historyFailed > 0 ? `${historyFailed} failed` : "all succeeded"}
                   defaultOpen={active.length === 0}
                 >
-                  <HistoryBody tasks={history} now={now} grouped={grouped} ctxMenu={ctxMenu} />
+                  <HistoryBody tasks={history} now={now} grouping={grouping} form={form} setForm={setForm} deepLinkId={deepLinkId} />
                 </Section>
               </div>
             )}
           </>
         )}
       </div>
-
-      {/* Right-click menu — same verbs and status gates as the inline buttons,
-          calling the row's own handlers via the payload closures. */}
-      <ContextMenu state={ctxMenu}>
-        {({ task, ...verbs }) => {
-          const isActive = task.status === "scheduled" || task.status === "running";
-          const isHistory = task.status === "completed" || task.status === "failed";
-          const isEditable = task.status === "scheduled" || task.status === "paused";
-          return (
-            <>
-              <CtxHeader title={taskDisplayTitle(task)} id={task.short_id} />
-              {task.status === "scheduled" && (
-                <CtxItem icon={Play} onSelect={verbs.runNow}>Run now</CtxItem>
-              )}
-              {isHistory && (
-                <CtxItem icon={RotateCcw} onSelect={verbs.runAgain}>Run again</CtxItem>
-              )}
-              {isActive && (
-                <CtxItem icon={Pause} onSelect={verbs.pause}>Pause</CtxItem>
-              )}
-              {task.status === "paused" && (
-                <CtxItem icon={Play} onSelect={verbs.resume}>Resume</CtxItem>
-              )}
-              {isEditable && (
-                <CtxItem icon={Pencil} onSelect={verbs.edit}>Edit</CtxItem>
-              )}
-              <CtxItem icon={Copy} onSelect={verbs.duplicate}>Duplicate</CtxItem>
-              <CtxItem icon={Copy} onSelect={verbs.copyPrompt}>Copy prompt</CtxItem>
-              <CtxSeparator />
-              {(isActive || task.status === "paused") && (
-                <CtxItem danger icon={X} onSelect={verbs.cancel}>Cancel</CtxItem>
-              )}
-              {isHistory && (
-                <CtxItem danger icon={Trash2} onSelect={verbs.del}>Delete</CtxItem>
-              )}
-            </>
-          );
-        }}
-      </ContextMenu>
     </div>
   );
 }

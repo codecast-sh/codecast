@@ -8,8 +8,8 @@
 import { AppWindowMac, PictureInPicture2 } from "lucide-react";
 import { toast } from "sonner";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
-import { useDesktopAppWindow, useDesktopWindowRole } from "../../hooks/useDesktopWindowRole";
-import { DESKTOP_APPS, openDesktopApp, type DesktopApp } from "../../lib/desktopApps";
+import { useDesktopAppWindow, useHasAppWindow } from "../../hooks/useDesktopWindowRole";
+import { DESKTOP_APPS, hasAppWindow, openDesktopApp, raiseDesktopApp, type DesktopApp } from "../../lib/desktopApps";
 import { bridge } from "../../lib/desktop";
 import { explainPopOut, popOutWindow } from "../../lib/popOut";
 import { cn } from "../../lib/utils";
@@ -18,6 +18,10 @@ import { cn } from "../../lib/utils";
  *  popout climbs: the shell's app window, a plain breakout on an older
  *  shell, a named popup in a browser — and a sentence when a rung is missing. */
 export async function popOutApp(app: DesktopApp, path?: string): Promise<void> {
+  // One window per app. When it exists, the gesture raises it; a second
+  // breakout on an older shell would be the duplicate this whole feature
+  // exists to make impossible.
+  if (hasAppWindow(app) && raiseDesktopApp(app)) return;
   const route = path ?? DESKTOP_APPS[app].home;
   const popup = { name: `codecast-${app}`, width: 1100, height: 760 };
   const shellOpen = bridge("openAppWindow") ? async () => { await openDesktopApp(app, route); } : undefined;
@@ -26,7 +30,7 @@ export async function popOutApp(app: DesktopApp, path?: string): Promise<void> {
 }
 
 export function AppPopOutButton({ app, className }: { app: DesktopApp; className?: string }) {
-  const popped = useDesktopWindowRole().apps[app] === true;
+  const popped = useHasAppWindow(app);
   // Inside the app's own window there is no gesture to make.
   if (useDesktopAppWindow() === app) return null;
   const title = DESKTOP_APPS[app].title;
