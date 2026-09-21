@@ -927,6 +927,22 @@ test("project directory aliases are verified without writing or pruning their ta
   expect(verifyMirrorStamp(home)?.complete).toBe(true);
 });
 
+test("project aliases verify after their mirrored targets even when the alias sorts first", async () => {
+  const root = "work/app";
+  const target = `${root}/packages/convex/README.md`;
+  const alias = `${root}/convex/README.md`;
+  write(target, "old", 0o600);
+  fs.symlinkSync("packages/convex", path.join(home, root, "convex"));
+  const make = (text: string) => parseMirrorBundle(buildMirrorBundle([alias, target].map((path) => ({ path, kind: "verbatim" as const, mode: "0600" as const, bytes: Buffer.from(text) })), { source: source(), target_home: home, managed_roots: [root], project_roots: [root] }).bytes);
+  expect((await apply(await make("old"))).errors).toEqual([]);
+  const changed = await apply(await make("new"));
+  expect(changed.errors).toEqual([]);
+  expect(changed.applied).toEqual([target]);
+  expect(read(target)).toBe("new");
+  expect(fs.readlinkSync(path.join(home, root, "convex"))).toBe("packages/convex");
+  expect(verifyMirrorStamp(home)?.complete).toBe(true);
+});
+
 test.each(["outside project", "outside home", "ancestor symlink", "chained symlink", "missing", "different bytes", "different mode", "non-verbatim"])("project alias satisfaction refuses %s without writing through it", async (scenario) => {
   const root = "work/app";
   const alias = `${root}/README.md`;

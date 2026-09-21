@@ -793,8 +793,10 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
   const stampFiles: Record<string, StampFile> = {};
   const manifest = new Set(bundle.files.map((f) => f.path));
   const gitTrees = new Map<string, Map<string, { hash: string; mode: string }>>();
+  const files = [...bundle.files];
+  const deferred = new Set<string>();
 
-  for (const file of bundle.files) {
+  for (const file of files) {
     if (isCodecastOwnedHomePath(file.path)) { result.errors.push({ path: file.path, error: "codecast-owned path" }); continue; }
     try {
       assertMirrorFileContent(file);
@@ -802,6 +804,11 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
       const project = projectRoots.find((root) => file.path.startsWith(`${root}/`));
       if (file.kind === "verbatim" && project && (before?.satisfied_alias || (fs.existsSync(path.join(home, file.path)) && fs.realpathSync(path.join(home, file.path)) !== path.join(home, file.path)))) {
         const target = projectAliasDestination(home, file.path, project, before?.satisfied_alias?.target);
+        if (manifest.has(target) && !stampFiles[target] && !deferred.has(file.path)) {
+          deferred.add(file.path);
+          files.push(file);
+          continue;
+        }
         const abs = path.join(home, target);
         if (hashIfRegular(abs) !== file.sha256 || (fs.statSync(abs).mode & 0o777) !== Number.parseInt(file.mode, 8)) throw new Error("project alias target bytes or mode differ from mirror");
         stampFiles[file.path] = { sha: file.sha256, written: file.sha256, kind: file.kind, mode: file.mode, satisfied_alias: { project, target } };
