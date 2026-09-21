@@ -7,7 +7,7 @@ import { isBackgroundBashToolCall, parseTaskNotificationBlock } from "../monitor
 import { stripPastedContent } from "@codecast/shared/contracts";
 import { parseInboundSessionMessage, isSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUnwrappedSessionReport, parseUserMessage, parseProposalMessage, isTeammateFramingOnly, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, parseChatWakePrompt, parseHuddleSummaryTag, isToolResultCarrier } from "../sessionMessage";
 import { parseCastCommandString, stripCdPrefix, isDecideCastCommand, type ParsedCastCommand, type DecideArgs } from "../castCommand";
-import { hasRichMarkdown } from "./markdown";
+import { hasRichMarkdown } from "../../lib/conversationMarkdown";
 import { parseSessionHandoff } from "../../lib/sessionHandoff";
 import type { Message, ParsedApiError, ParsedContextBlock, TeammateMessagePart, ToolCall, UserMessageKind } from "./types";
 

@@ -34,7 +34,8 @@ import { sessionsWakeSig, resolveShowOld, showsBlockedBadge, sectionHeaderCount,
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
 import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
-import { LivePulseDot, SessionActivityLine, useLinger } from "./SessionActivityLine";
+import { LivePulseDot, SessionActivityLine } from "./SessionActivityLine";
+import { useLinger } from "../hooks/useLinger";
 import { activitySig, liveActivityOf } from "../lib/sessionActivity";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
 import { AUTO_CONTINUE_WINDOW_MS, actedBlockedConversations, skippedBlockedWorkers, blockedHeadlineCause, isBlockedConversation, isSubagentConversation, nestParentIdOf, usageStanding, standingLabel, LOGIN_FLOW_STALE_MS, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
@@ -96,7 +97,6 @@ import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { useAckAssignment } from "../hooks/useAckAssignment";
 import { sessionPanePath, startPaneDrag } from "../lib/stage";
 import { PaneControls } from "./stage/PaneControls";
-
 import { useMountEffect } from "../hooks/useMountEffect";
 const ConversationDiffLayout = React.lazy(() =>
   import("./ConversationDiffLayout").then((module) => ({ default: module.ConversationDiffLayout })),

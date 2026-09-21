@@ -4,7 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import { AVATAR_KEYS } from "@codecast/shared/contracts/orgAvatars";
 import { CHARACTER_NAMES } from "@codecast/shared/contracts/sessionCharacter";
-import { spreadCharacters } from "./CharacterPicker";
+import { spreadCharacters } from "../../lib/spreadCharacters";
 
 const ids = (n: number) => Array.from({ length: n }, (_, i) => `k97${i.toString(36)}session${(i * 7919).toString(36)}`);
 

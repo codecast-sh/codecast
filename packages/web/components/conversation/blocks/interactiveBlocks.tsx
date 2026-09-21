@@ -1,7 +1,6 @@
-import { useRef, useState, useMemo, Fragment } from "react";
+import { useState, useMemo, Fragment } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
-import { useStorageImageUrl, hasDecodedSrc, markSrcDecoded } from "../../../hooks/useStorageImageUrl";
-import { imageBytes } from "../../../lib/imageByteCache";
+import { hasDecodedSrc, markSrcDecoded } from "../../../hooks/useStorageImageUrl";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import { ShortcutTooltip } from "../../KeyboardShortcutsHelp";
 import { LivePulseDot } from "../../SessionActivityLine";
@@ -15,9 +14,10 @@ import { buildPollPayload, pollKeyForOption, SYNTHETIC_POLL_OPTION } from "../..
 import { useImageGallery, useGalleryMessageId } from "../../ImageGallery";
 import { useInboxStore } from "../../../store/inboxStore";
 import { Radar, Terminal } from "lucide-react";
-import { formatFullTimestamp, formatRelativeTime } from "../format";
-import { renderAssistantBody } from "../markdown";
+import { formatFullTimestamp, formatRelativeTime } from "../../../lib/conversationFormat";
+import { renderAssistantBody } from "../../../lib/renderAssistantBody";
 import type { ImageData, ToolCall, ToolResult } from "../types";
+import { useImageSrc } from "../../../hooks/useImageSrc";
 
 // Live status badge + latest event for a Monitor or background-Bash block,
 // derived from the conversation's message window (monitorRowsFor — one
@@ -584,70 +584,6 @@ export function ThinkingBlock({ content }: { content: string }) {
 }
 
 const IMAGE_COLLAPSED_HEIGHT = 100;
-
-export function useSwipeToDismiss(onDismiss: () => void) {
-  const [swipeY, setSwipeY] = useState(0);
-  const [swiping, setSwiping] = useState(false);
-  const startY = useRef(0);
-
-  const handlers = useMemo(() => ({
-    onTouchStart: (e: React.TouchEvent) => {
-      startY.current = e.touches[0].clientY;
-      setSwiping(true);
-      setSwipeY(0);
-    },
-    onTouchMove: (e: React.TouchEvent) => {
-      if (!swiping) return;
-      const dy = e.touches[0].clientY - startY.current;
-      setSwipeY(Math.max(0, dy));
-    },
-    onTouchEnd: () => {
-      if (swipeY > 120) {
-        onDismiss();
-      }
-      setSwipeY(0);
-      setSwiping(false);
-    },
-  }), [swiping, swipeY, onDismiss]);
-
-  const style = useMemo(() => swipeY > 0 ? {
-    transform: `translateY(${swipeY}px)`,
-    transition: swiping ? 'none' : 'transform 0.2s ease-out',
-  } : undefined, [swipeY, swiping]);
-
-  const backdropOpacity = swipeY > 0 ? Math.max(0.2, 1 - swipeY / 300) : 1;
-
-  return { handlers, style, backdropOpacity, swipeY };
-}
-
-// Batched + cross-mount-cached URL resolution: one query for all visible
-// images, and a remount (virtualized scroll) reuses the cached URL instead of
-// re-subscribing and re-flashing "Loading…". Bytes are cache-first too
-// (useStorageImageSrc): a seen image paints from the local byte cache, and the
-// history prefetch warms it before the block ever mounts.
-export function useImageSrc(image: ImageData): { src: string | undefined; href: string | undefined; storageResolved: boolean; storageMissing: boolean } {
-  // storageUrl: undefined = still resolving, null = not found, string = the
-  // serving URL (the image's shareable address). storageSrc is the cache-first
-  // paint src for it — an object URL once the bytes are local.
-  const storageUrl = useStorageImageUrl(image.storage_id);
-  const cachedSrc = imageBytes.useSrc(typeof storageUrl === "string" ? storageUrl : undefined);
-  const storageSrc = typeof storageUrl === "string" ? cachedSrc : storageUrl;
-  const storageResolved = image.storage_id ? storageSrc !== undefined : true;
-  const storageMissing = Boolean(image.storage_id) && storageSrc === null;
-  const href = typeof storageUrl === "string" ? storageUrl : undefined;
-
-  // While uploading we only have the local blob: preview. After the upload
-  // resolves we prefer the real storage src but fall back to the preview until
-  // it resolves, so the thumbnail never flickers to "Loading…".
-  const src = image.uploading && image.preview_url
-    ? image.preview_url
-    : image.storage_id
-      ? (typeof storageSrc === "string" ? storageSrc : image.preview_url || undefined)
-      : image.data
-        ? `data:${image.media_type};base64,${image.data}`
-        : image.preview_url || undefined;
-  return { src, href, storageResolved, storageMissing };
-}
 
 export function ImageBlock({ image }: { image: ImageData }) {
   const { src, href, storageResolved, storageMissing } = useImageSrc(image);

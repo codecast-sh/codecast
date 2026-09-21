@@ -5,7 +5,8 @@
 import { test, expect } from "bun:test";
 import { createElement as h } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ConversationWithPanel, PANEL_W, type PanelLayout } from "../ConversationWithPanel";
+import { ConversationWithPanel } from "../ConversationWithPanel";
+import { PANEL_W, type PanelLayout } from "../../../../hooks/usePanelLayout";
 
 const render = (layout: PanelLayout, open: boolean) =>
   renderToStaticMarkup(h(ConversationWithPanel, { layout, open, conversation: h("div", { "data-conv": true }, "talk"), panel: h("div", { "data-panel": true }, "board") }));

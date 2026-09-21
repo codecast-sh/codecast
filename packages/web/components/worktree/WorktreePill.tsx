@@ -6,7 +6,7 @@ import { FolderGit2, GitBranch } from "lucide-react";
 import { HoverCard } from "../ui/HoverCard";
 import { EntityIdPill } from "../EntityIdPill";
 import { useRepoWorktrees } from "../../hooks/useRepoBrowse";
-import { useKnownWorktrees } from "./WorktreesContext";
+import { useKnownWorktrees } from "../../hooks/useKnownWorktrees";
 import { repoWorktreesHref } from "../../lib/repoView";
 import { relTimeShort } from "../../lib/utils";
 import { findWorktree, worktreeCondition, worktreesOfSession, type FoundWorktree, type WorktreeCondition, type WorktreeRef } from "./worktreeModel";

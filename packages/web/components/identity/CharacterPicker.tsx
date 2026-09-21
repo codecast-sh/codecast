@@ -6,7 +6,7 @@
 // face or take a different face each.
 "use client";
 import { useMountEffect } from "../../hooks/useMountEffect";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { Shuffle, RotateCcw } from "lucide-react";
 import {
   AVATAR_KEYS,
@@ -17,22 +17,14 @@ import {
   characterNameFor,
   cleanCharacterName,
 } from "@codecast/shared/contracts/sessionCharacter";
-import { AVATAR_LABELS, RoleAvatar } from "../org/avatars";
+import { AVATAR_LABELS } from "../../lib/orgAvatars";
+import { RoleAvatar } from "../org/avatars";
 import { useInboxStore } from "../../store/inboxStore";
 import { characterFor, type IdentityRow } from "../../lib/sessionIdentity";
 import { moveRadioIndex } from "../team/radioNav";
+import { spreadCharacters } from "../../lib/spreadCharacters";
 
 const COLUMNS = 6;
-
-/** A distinct face each: walk the key list from the picked face so a squad of
- *  N gets N different animals, and give each row that face's own name. */
-export function spreadCharacters(ids: string[], from: AvatarKey): Array<{ id: string; avatar: AvatarKey; name: string }> {
-  const start = AVATAR_KEYS.indexOf(from);
-  return ids.map((id, i) => {
-    const avatar = AVATAR_KEYS[(start + i) % AVATAR_KEYS.length];
-    return { id, avatar, name: characterNameFor(id, avatar) };
-  });
-}
 
 export function CharacterPicker({ rows, onDone }: { rows: Array<IdentityRow & Record<string, unknown>>; onDone?: () => void }) {
   const store = useInboxStore;

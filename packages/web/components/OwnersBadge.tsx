@@ -18,7 +18,7 @@ import { useStoreOwnersEnv, useSessionRoleFacts } from "../hooks/useOwnersStoreE
 import { useSyncOrgTreeFeeder } from "../hooks/useSyncOrgTree";
 import { RoleFace } from "./org/RoleFace";
 import { RoleHoverCard } from "./identity/RoleHoverCard";
-import { sessionFitsARole } from "./org/MakeRoleDialog";
+import { sessionFitsARole } from "../lib/makeRole";
 import { AvatarImg } from "../lib/avatarCache";
 import { formatRelative, formatDateFull } from "../lib/utils";
 import {

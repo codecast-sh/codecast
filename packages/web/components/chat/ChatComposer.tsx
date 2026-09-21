@@ -11,7 +11,7 @@ import { settleComposerAttachments } from "../../lib/draftImages";
 import { slackComposerDelivery } from "../../lib/slackDelivery";
 import { useSlackConnect } from "../../hooks/useSlackConnect";
 import { useTrackedStore } from "../../store/inboxStore";
-import { useChannelSlackLink } from "./SlackSyncDialog";
+import { useChannelSlackLink } from "../../hooks/useChannelSlackLink";
 import { SlackConnectPrompt } from "./SlackConnectPrompt";
 import type { ChatAttachment } from "../../store/chatSlice";
 import "./chat.css";

@@ -40,16 +40,23 @@ import { pendingBannerState, pendingRetryClientId, pendingCancelRef, pendingMess
 import { PendingDeliveryNote } from "../../PendingDeliveryNote";
 import { ghostRestartContextFor, deriveRestartStage, type RestartProgressRow } from "../../../hooks/useSessionRestart";
 import { CastCommandBlock } from "./castBlocks";
-import { AskUserQuestionBlock, ImageBlock, MonitorBlock, PlanModeBlock, ThinkingBlock, useImageSrc } from "./interactiveBlocks";
-import { AssistantIcon, CastBrowserRowContext, UserIcon, assistantLabel } from "./shared";
+import { AskUserQuestionBlock, ImageBlock, MonitorBlock, PlanModeBlock, ThinkingBlock } from "./interactiveBlocks";
+import { useImageSrc } from "../../../hooks/useImageSrc";
+import { AssistantIcon, UserIcon } from "./shared";
+import { CastBrowserRowContext } from "../../../lib/conversationBlockContexts";
+import { assistantLabel } from "../../../lib/conversationBlockStyles";
 import { ScheduleWakeupBlock, TeammateMessageCard } from "./systemBlocks";
 import { BrowserWatchButton, SendMessageBlock, SkillBlock, TaskCreateUpdateBlock, TaskListBlock, TaskToolBlock, TeamCreateBlock, TodoWriteBlock, ToolBlock, WorkflowToolBlock } from "./toolBlocks";
 import { isAlwaysVisibleToolCall, parseApiErrorContent, parseCastCommand, parseContextBlocks, parseSkillBlocks, parseTeammateMessages, stripSystemTags } from "../classify";
-import { copyMessageLink, formatFullTimestamp, formatMessagePartsForCopy, formatRelativeTime, forwardMessageToChat, safeString } from "../format";
-import { MessageMarkdown, ReactMarkdown, linkifyMentions, renderAssistantBody } from "../markdown";
+import { copyMessageLink, formatFullTimestamp, formatMessagePartsForCopy, formatRelativeTime, forwardMessageToChat, safeString } from "../../../lib/conversationFormat";
+import { MessageMarkdown, ReactMarkdown } from "../markdown";
+import { linkifyMentions } from "../../../lib/conversationMarkdown";
+import { renderAssistantBody } from "../../../lib/renderAssistantBody";
 import { PENDING_BOOT_GRACE_MS, PENDING_IDLE_GRACE_MS, PENDING_RESUME_GRACE_MS, PENDING_RETRY_AFTER_MS } from "../pendingSend";
-import { ApiErrorCard, followRestoredConversation } from "../sessionChrome";
+import { ApiErrorCard } from "../sessionChrome";
+import { followRestoredConversation } from "../../../lib/followRestoredConversation";
 import type { CondensedReceipt, ImageData, MessageFeedDensity, ParsedContextBlock, ReceiptEntry, StoryBeat, TaskRecordMaps, ToolCall, ToolCallChangeSelection, ToolResult } from "../types";
+import { COMPACT_TAIL_HEIGHT } from "../../../lib/conversationTurnDefaults";
 
 const api = _typedApi as any;
 
@@ -985,12 +992,6 @@ export const CompactTurnCard = memo(function CompactTurnCard({ preview, messageC
     </button>
   );
 });
-
-// Compact feed: a collapsed assistant turn shows the BOTTOM ~500px of its final
-// reply (the conclusion) with the top faded out behind a "Show full turn"
-// control. The clipped column is anchored to its bottom so the end stays in
-// view; expanding renders the whole turn at full density.
-export const COMPACT_TAIL_HEIGHT = 500;
 export const CompactCollapsedTurn = memo(function CompactCollapsedTurn({ content, onExpand }: { content: string; onExpand: () => void }) {
   const body = stripSystemTags(content || "").trim();
   return (
@@ -1014,9 +1015,6 @@ export const CompactCollapsedTurn = memo(function CompactCollapsedTurn({ content
     </div>
   );
 });
-
-export const EMPTY_RECEIPT_ENTRIES: ReceiptEntry[] = [];
-export const EMPTY_CHILD_CONVERSATIONS: any[] = [];
 
 function AssistantBlockImpl({
   content,

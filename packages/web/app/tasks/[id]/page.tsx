@@ -22,7 +22,8 @@ import { useMentionQuery, useActiveMentionScope } from "../../../hooks/useMentio
 import { useImageUpload } from "../../../hooks/useImageUpload";
 // TaskCommandPalette replaced by unified CommandPalette
 import { WorkflowContextPanel } from "../../../components/WorkflowContextPanel";
-import { TaskDecisions, useTaskIsBlocked } from "../../../components/decisions/TaskDecisions";
+import { TaskDecisions } from "../../../components/decisions/TaskDecisions";
+import { useTaskIsBlocked } from "../../../hooks/useTaskDecisions";
 import { CollapsibleBody } from "../../../components/CollapsibleBody";
 import { StationStrip } from "../../../components/tasks/StationStrip";
 import { TaskEvidence } from "../../../components/tasks/TaskEvidence";

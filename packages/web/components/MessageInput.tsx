@@ -43,8 +43,9 @@ import { expandEntityMentions } from "../lib/mentionExpansion";
 import { identityLine } from "../lib/sessionIdentity";
 import { personifyAllNow } from "../hooks/usePersonifyAll";
 import { ghostRestartContextFor, deriveRestartStage } from "../hooks/useSessionRestart";
-import { useSwipeToDismiss } from "./conversation/blocks/interactiveBlocks";
-import { WorkingStatusLine, followRestoredConversation } from "./conversation/sessionChrome";
+import { useSwipeToDismiss } from "../hooks/useSwipeToDismiss";
+import { WorkingStatusLine } from "./conversation/sessionChrome";
+import { followRestoredConversation } from "../lib/followRestoredConversation";
 
 const api = _typedApi as any;
 const ComposeEditor = lazy(() => import("./editor/ComposeEditor").then((m) => ({ default: m.ComposeEditor })));

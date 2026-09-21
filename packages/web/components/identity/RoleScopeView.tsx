@@ -21,7 +21,7 @@ import { cn } from "../../lib/utils";
 import { groupsLine, planStateLine, projectStateLine, sessionsLine, type RoleScopeModel, type RoleScopeParty, type ScopePlan, type ScopeProject } from "../../lib/roleScope";
 import { INITIATIVE_HEALTH_LABEL } from "@codecast/shared/contracts/initiative";
 import type { RoleInitiative } from "../../lib/roleInitiatives";
-import { HEALTH_COLOR } from "../initiatives/InitiativeAtoms";
+import { HEALTH_COLOR } from "../../lib/initiativeColors";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import type { EscalatedSession } from "../../hooks/useRoleScope";
 import type { OrgSession } from "../org/orgTypes";

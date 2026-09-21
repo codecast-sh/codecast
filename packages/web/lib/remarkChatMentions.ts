@@ -1,6 +1,6 @@
 import { findAndReplace } from "mdast-util-find-and-replace";
 import type { ChatRoleMention, ChatSlackMention } from "@codecast/shared/chat";
-import { SLACK_MARK_PATHS, SLACK_MARK_VIEWBOX } from "../components/SlackLogo";
+import { SLACK_MARK_PATHS, SLACK_MARK_VIEWBOX } from "./slackLogo";
 
 // Highlight @mentions inside chat message bodies.
 //

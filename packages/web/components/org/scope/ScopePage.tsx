@@ -38,10 +38,12 @@ import { parentName } from "../orgMeta";
 import type { OrgParentRef, OrgRole, OrgTree } from "../orgTypes";
 import type { WorkState } from "@codecast/shared/contracts";
 import { useScopeIds } from "../../../hooks/useScopeIds";
-import { ScopePanel, scopeDefaultTab, scopeTabFromParam, type ScopeTabKey } from "./ScopePanel";
-import { ConversationWithPanel, usePanelLayout } from "./ConversationWithPanel";
+import { ScopePanel } from "./ScopePanel";
+import { scopeDefaultTab, scopeTabFromParam, type ScopeTabKey } from "../../../lib/scopeTabs";
+import { ConversationWithPanel } from "./ConversationWithPanel";
+import { usePanelLayout } from "../../../hooks/usePanelLayout";
 import { briefFirstLine } from "./scopeTypes";
-import { retireToastText } from "../RetireRoleConfirm";
+import { retireToastText } from "../../../lib/retireRole";
 
 const api = _api as any;
 
