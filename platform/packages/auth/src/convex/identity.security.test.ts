@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { convexAuth } from "@convex-dev/auth/server";
+import { Password } from "@convex-dev/auth/providers/Password";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { createAuthConfig } from "./createAuthConfig";
 import { makeRedirectCallback } from "./callbacks";
@@ -156,9 +157,9 @@ describe("installed auth library identity persistence", () => {
     expect(f.db._tables.authAccounts).toHaveLength(1);
   });
 
-  test("enabled verification sends a code, blocks the session, then verifies through the library", async () => {
+  test.each(["new@example.test", "MixedCase@example.test", " Padded@example.test "])("verification binds the original password identifier %s", async (email) => {
     const f = fixture(true, { users: [] });
-    const params = { email: "new@example.test", password, redirectTo: "/" };
+    const params = { email, password, redirectTo: "/" };
     expect(await f.provider("password").authorize({ ...params, flow: "signUp" }, f.ctx)).toBeNull();
     expect(f.sent).toHaveLength(1);
     expect(f.sent[0].kind).toBe("verify-email");
@@ -170,15 +171,33 @@ describe("installed auth library identity persistence", () => {
     expect(f.db._tables.users[0].emailVerified).toBeUndefined();
   });
 
-  test("password recovery requires the delivered code and preserves the account", async () => {
+  test.each(["new@example.test", "MixedCase@example.test", " Padded@example.test "])("password recovery preserves the original account %s", async (email) => {
     const f = fixture(false, { users: [] });
-    const params = { email: "new@example.test", password, redirectTo: "/" };
+    const params = { email, password, redirectTo: "/" };
     const initial = await f.provider("password").authorize({ ...params, flow: "signUp" }, f.ctx);
     await f.provider("password").authorize({ flow: "reset", email: params.email, redirectTo: "/" }, f.ctx);
     await expect(f.provider("password").authorize({ flow: "reset-verification", email: params.email, code: "WRONG1", newPassword: "new-fixture-password" }, f.ctx)).rejects.toThrow();
     const reset = await f.provider("password").authorize({ flow: "reset-verification", email: params.email, code: f.sent[0].code, newPassword: "new-fixture-password" }, f.ctx);
     expect(reset.userId).toBe(initial.userId);
     expect(await f.provider("password").authorize({ flow: "signIn", email: params.email, password: "new-fixture-password" }, f.ctx)).toEqual(initial);
+  });
+
+  test("legacy mixed-case accounts retain login and recovery without merging case variants", async () => {
+    const f = fixture(false, { users: [] });
+    const prior: any = Password({ reset: f.provider("password").reset });
+    const legacy = { ...prior, ...prior.options };
+    const email = "LegacyCase@example.test";
+    const initial = await legacy.authorize({ flow: "signUp", email, password }, f.ctx);
+    const current = f.provider("password");
+    expect(await current.authorize({ flow: "signIn", email, password }, f.ctx)).toEqual(initial);
+    await expect(current.authorize({ flow: "signUp", email: email.toLowerCase(), password: "other-password" }, f.ctx)).rejects.toThrow();
+    await expect(current.authorize({ flow: "signIn", email: email.toLowerCase(), password }, f.ctx)).rejects.toThrow();
+    await current.authorize({ flow: "reset", email }, f.ctx);
+    const recovered = await current.authorize({ flow: "reset-verification", email, code: f.sent[0].code, newPassword: "new-fixture-password" }, f.ctx);
+    expect(recovered.userId).toBe(initial.userId);
+    expect(await current.authorize({ flow: "signIn", email, password: "new-fixture-password" }, f.ctx)).toEqual(initial);
+    expect(f.db._tables.authAccounts).toHaveLength(1);
+    expect(f.db._tables.authAccounts[0].providerAccountId).toBe(email);
   });
 });
 

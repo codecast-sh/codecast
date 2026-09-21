@@ -170,7 +170,7 @@ export function createAuthConfig(params: AuthConfigParams): ConvexAuthConfig {
       Password({
         profile(params) {
           if (typeof params.email !== "string" || !params.email.trim()) throw new Error("Missing email");
-          return { email: params.email.trim().toLowerCase() };
+          return { email: params.email };
         },
         reset,
         ...(emailVerificationEnabled ? { verify } : {}),
