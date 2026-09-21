@@ -2,11 +2,6 @@
 // A page in an iframe. The default backend, and the only one that works in
 // every environment.
 //
-// No `sandbox` attribute: a foreign origin is already isolated by the browser,
-// and sandboxing it would break sites that expect a normal origin (storage,
-// popups, their own frames). `referrerpolicy="no-referrer"` keeps the pane's
-// URL out of the site's logs, and `allow` grants clipboard only.
-//
 // ── What the pane can and cannot know about what it shows ──────────────────
 //
 // Measured in Chrome 2026-09-13, framing four addresses from
@@ -219,7 +214,8 @@ export function FrameBackend({ source, reloadToken, onTitle, onUrl, onState }: B
       }}
       title={url}
       referrerPolicy="no-referrer"
-      allow="clipboard-read; clipboard-write"
+      allow="clipboard-read 'none'; clipboard-write 'none'; camera 'none'; microphone 'none'; display-capture 'none'"
+      sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads"
       className="w-full h-full border-0 bg-white"
     />
   );

@@ -142,4 +142,25 @@ describe("sanitizeCanvasHtml", () => {
     );
     expect(out).not.toContain("<img");
   });
+
+  test("removes media, poster, legacy background, escaped CSS and SVG egress", async () => {
+    const out = await sanitize(String.raw`<video src="https://evil.example/video" poster="https://evil.example/poster"><source src="https://evil.example/source"></video><audio src="https://evil.example/audio"></audio><table background="https://evil.example/background"></table><div style="--x:u\72l(https://evil.example/css);background:var(--x);color:red"></div><svg><feImage href="https://evil.example/filter" /></svg>`);
+    expect(out).not.toContain("evil.example");
+    expect(out).toContain("color:red");
+  });
+});
+
+test("normalizes DOM-created SVG namespace hrefs before links are mounted", async () => {
+  const { sanitizeCanvasElement } = await import("../canvasSanitize");
+  const doc = window.document.implementation.createHTMLDocument("");
+  const svg = doc.createElementNS("http://www.w3.org/2000/svg", "svg");
+  for (const href of ["https://example.com/chart", "javascript:window.__executed=1"]) {
+    const anchor = doc.createElementNS("http://www.w3.org/2000/svg", "a");
+    anchor.setAttributeNS("http://www.w3.org/1999/xlink", "href", href);
+    svg.append(anchor);
+  }
+  sanitizeCanvasElement(svg);
+  expect(svg.children[0].getAttribute("href")).toBe("https://example.com/chart");
+  expect(svg.children[0].getAttributeNS("http://www.w3.org/1999/xlink", "href")).toBeNull();
+  expect(svg.children[1].hasAttribute("href")).toBe(false);
 });
