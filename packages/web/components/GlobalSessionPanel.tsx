@@ -4884,9 +4884,7 @@ function SessionListPanelImpl({
             >
               <History className="w-3 h-3" />
               {!showAllSessions && (
-                <span aria-hidden="true" className="absolute -right-1 -top-1 flex h-3 min-w-3 items-center justify-center rounded-full bg-sol-cyan px-0.5 text-[8px] font-semibold leading-none tabular-nums text-sol-bg ring-2 ring-sol-bg">
-                  {oldCount > 99 ? "99+" : oldCount}
-                </span>
+                <span aria-hidden="true" className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-sol-cyan ring-1 ring-sol-bg" />
               )}
             </button>
           )}
