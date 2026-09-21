@@ -171,7 +171,7 @@ function fixture(transport = "tmux", cached = true) {
     pendingInteractivePrompts, lastEmittedSyntheticPrompt,
     closeSyntheticPrompt: async (...args: unknown[]) => { closed.push(args); lastEmittedSyntheticPrompt.delete("sid"); },
     touchHostActivity: () => {}, pendingAgentSwitches: new Set(), planHandoffChildren: new Map(),
-    ownedByAnotherLiveDevice: () => false, isRemoteDevice: () => false, codexAppServerInstance: undefined,
+    ownedByAnotherLiveDevice: () => false, isRemoteDevice: () => false, codexAppServerInstance: undefined, readyCodexAppServer: async () => null,
     buildReverseConversationCache: () => cached ? { conv: "sid" } : {}, findSessionFile: () => ({ agentType: "claude" }),
     startedSessionTmux: new Map([["conv", { tmuxSession: "target", agentType: "claude", startedAt: clock.now }]]),
     deleteStartedSession: fail("delete started session"), readConversationCache: fail("recreation fallback"),
