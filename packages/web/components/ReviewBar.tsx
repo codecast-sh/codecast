@@ -12,6 +12,7 @@ import { useInboxStore } from "../store/inboxStore";
 import { useReviewComposer } from "./reviewContext";
 import { cancelReview } from "../lib/reviewActions";
 import { sortPendingComments } from "../lib/quoteFormat";
+import "./ReviewNavigation.css";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
 export function ReviewBar({ conversationId }: { conversationId: string }) {
@@ -63,13 +64,19 @@ export function ReviewBar({ conversationId }: { conversationId: string }) {
         <div className="cc-review-tray-list">
           {items.map((c) => (
             <div key={c.id} className="cc-review-tray-item">
-              <div className="cc-review-tray-item-main">
-                <div className="cc-review-tray-quote">
+              <button
+                type="button"
+                className="cc-review-tray-item-main cc-review-tray-jump"
+                title="Jump to quoted passage"
+                disabled={!composer?.jumpToComment}
+                onClick={() => composer?.jumpToComment?.(c)}
+              >
+                <span className="cc-review-tray-quote">
                   <span className="cc-comment-quote-mark">❝</span>
                   {(c.quote || "").replace(/\s+/g, " ").trim().slice(0, 140)}
-                </div>
-                {c.body ? <div className="cc-review-tray-note">{c.body}</div> : null}
-              </div>
+                </span>
+                {c.body ? <span className="cc-review-tray-note block">{c.body}</span> : null}
+              </button>
               <button
                 type="button"
                 className="cc-review-tray-x"

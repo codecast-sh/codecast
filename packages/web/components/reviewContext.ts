@@ -1,4 +1,5 @@
 import React from "react";
+import type { PendingComment } from "../lib/quoteFormat";
 
 // Bridges the far-apart composer (MessageInput) and the per-message review UI
 // (MessageReview, rendered deep inside the virtualized message list) without
@@ -8,6 +9,8 @@ import React from "react";
 export type ReviewComposer = {
   quote: (text: string) => void; // append a blockquote of `text` to the composer now
   submit: () => void; // compile the pending-comment batch into the composer
+  jumpToComment?: (comment: PendingComment) => void;
+  scrollToBlock?: (block: HTMLElement, align: "center" | "nearest") => void;
 };
 
 export const ReviewComposerContext = React.createContext<ReviewComposer | null>(null);

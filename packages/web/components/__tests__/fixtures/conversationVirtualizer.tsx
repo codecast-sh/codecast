@@ -11,11 +11,16 @@ const sizes = new WeakMap<Element, number>();
 let onHeightRead: ((el: HTMLElement) => void) | undefined;
 const offsets = new WeakMap<Element, number>();
 const observers = new Set<TestResizeObserver>();
-const height = (el: Element) => sizes.get(el) ?? (el.hasAttribute("data-sv-feed") ? 500 : 50);
+const height = (el: Element) => (el as HTMLElement).style.height === "0px" ? 0 : sizes.get(el) ?? (el.hasAttribute("data-sv-feed") ? 500 : 50);
 class TestResizeObserver {
   targets = new Set<Element>();
   constructor(public callback: ResizeObserverCallback) { observers.add(this); }
-  observe(el: Element) { this.targets.add(el); }
+  observe(el: Element) {
+    this.targets.add(el);
+    queueMicrotask(() => {
+      if (this.targets.has(el) && el.isConnected) this.callback([{ target: el, borderBoxSize: [{ blockSize: height(el), inlineSize: 700 }] } as unknown as ResizeObserverEntry], this as unknown as ResizeObserver);
+    });
+  }
   unobserve(el: Element) { this.targets.delete(el); }
   disconnect() { this.targets.clear(); observers.delete(this); }
 }
@@ -45,6 +50,7 @@ dom.window.HTMLCanvasElement.prototype.getContext = (() => null) as any;
 const restore = replaceGlobals({ window: dom.window, Event: dom.window.Event, CustomEvent: dom.window.CustomEvent, document: dom.window.document, navigator: dom.window.navigator, HTMLElement: dom.window.HTMLElement, Element: dom.window.Element, Node: dom.window.Node, DOMRect: dom.window.DOMRect, getComputedStyle: dom.window.getComputedStyle.bind(dom.window), ResizeObserver: TestResizeObserver, requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window), cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window), localStorage: dom.window.localStorage, IS_REACT_ACT_ENVIRONMENT: true });
 afterAll(() => { dom.window.close(); restore(); });
 const { ConversationView } = await import("../../ConversationView");
+const useAuth = () => ({ isLoading: false, isAuthenticated: false, fetchAccessToken: async () => null });
 const client = { clearAuth() {}, setAuth() {}, watchQuery() { return { onUpdate() { return () => {}; }, localQueryResult() { return undefined; }, journal() { return undefined; } }; }, connectionState() { return { isWebSocketConnected: true }; }, subscribeToConnectionState() { return () => {}; }, mutation() { throw Error("Unexpected mutation"); }, query() { return Promise.resolve(undefined); } } as any;
 const empty: never[] = [];
 const conversation: ConversationData = { _id: "perf-fixture" as any, title: "Resize fixture", messages: Array.from({ length: 80 }, (_, i) => ({ _id: `perf-row-${i}`, role: "assistant", timestamp: 1_000_000 + i * 1000, content: `Message ${i}` })), message_count: 800, agent_type: "codex", status: "completed" };
@@ -55,7 +61,7 @@ for (const messageCount of [80, 800]) test(`a measured row resize keeps geometry
   const errors = spyOn(console, "error");
   let commits = 0;
   try {
-    await act(async () => { root.render(<ConvexProviderWithAuth client={client} useAuth={() => ({ isLoading: false, isAuthenticated: false, fetchAccessToken: async () => null })}><MemoryRouter><Profiler id="transcript" onRender={() => commits++}><ConversationView conversation={{ ...conversation, _id: `fixture-${messageCount}` as any, messages: conversation.messages.map(m => ({ ...m, _id: `${messageCount}-${m._id}` })), message_count: messageCount }} commits={empty} pullRequests={empty} backHref="/" hideHeader showMessageInput={false} isOwner={false} /></Profiler></MemoryRouter></ConvexProviderWithAuth>); });
+    await act(async () => { root.render(<ConvexProviderWithAuth client={client} useAuth={useAuth}><MemoryRouter><Profiler id="transcript" onRender={() => commits++}><ConversationView conversation={{ ...conversation, _id: `fixture-${messageCount}` as any, messages: conversation.messages.map(m => ({ ...m, _id: `${messageCount}-${m._id}` })), message_count: messageCount }} commits={empty} pullRequests={empty} backHref="/" hideHeader showMessageInput={false} isOwner={false} /></Profiler></MemoryRouter></ConvexProviderWithAuth>); });
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 250)); });
     expect(errors.mock.calls.filter((args) => args.some((arg) => String(arg).includes("flushSync was called")))).toEqual([]);
     const feed = host.querySelector<HTMLElement>("[data-sv-feed]")!;
@@ -85,7 +91,7 @@ for (const messageCount of [80, 800]) test(`a measured row resize keeps geometry
       expect(Number.parseFloat(progress!.style.height)).toBeCloseTo(feed.scrollTop / (feed.scrollHeight - feed.clientHeight) * 100, 2);
     }
   } finally { await act(() => root.unmount()); host.remove(); errors.mockRestore(); }
-});
+}, 30_000);
 
 test("size repair reads all row heights before changing geometry", async () => {
   const interval = globalThis.setInterval;
@@ -97,7 +103,7 @@ test("size repair reads all row heights before changing geometry", async () => {
   const host = document.createElement("div"); document.body.append(host);
   const root = createRoot(host);
   try {
-    await act(async () => { root.render(<ConvexProviderWithAuth client={client} useAuth={() => ({ isLoading: false, isAuthenticated: false, fetchAccessToken: async () => null })}><MemoryRouter><ConversationView conversation={{ ...conversation, _id: "repair-fixture" as any }} commits={empty} pullRequests={empty} backHref="/" hideHeader showMessageInput={false} isOwner={false} /></MemoryRouter></ConvexProviderWithAuth>); });
+    await act(async () => { root.render(<ConvexProviderWithAuth client={client} useAuth={useAuth}><MemoryRouter><ConversationView conversation={{ ...conversation, _id: "repair-fixture" as any }} commits={empty} pullRequests={empty} backHref="/" hideHeader showMessageInput={false} isOwner={false} /></MemoryRouter></ConvexProviderWithAuth>); });
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 250)); });
     const feed = host.querySelector<HTMLElement>("[data-sv-feed]")!;
     await act(async () => {
@@ -123,4 +129,32 @@ test("size repair reads all row heights before changing geometry", async () => {
     onHeightRead = undefined;
     await act(() => root.unmount()); host.remove(); timer.mockRestore();
   }
+}, 30_000);
+
+test("folding a turn clears the space held by off-screen replies immediately", async () => {
+  const host = document.createElement("div"); document.body.append(host);
+  const root = createRoot(host);
+  let data = { ...conversation, _id: "fold-spacing" as any };
+  const render = (foldWorkingTurns: boolean) => root.render(
+    <ConvexProviderWithAuth client={client} useAuth={useAuth}><MemoryRouter><ConversationView conversation={data} commits={empty} pullRequests={empty} backHref="/" hideHeader showMessageInput={false} isOwner={false} initialDensity="full" foldWorkingTurns={foldWorkingTurns} openAtTop /></MemoryRouter></ConvexProviderWithAuth>,
+  );
+  try {
+    await act(async () => { render(false); });
+    const feed = host.querySelector<HTMLElement>("[data-sv-feed]")!;
+    const firstRow = host.querySelector<HTMLElement>('[data-index="0"]')!;
+    expect(firstRow).not.toBeNull();
+    await act(async () => { feed.scrollTop = feed.scrollHeight; });
+    expect(firstRow.isConnected).toBe(false);
+    await act(async () => { render(true); });
+    const container = host.querySelector<HTMLElement>("[data-vkey]")!.parentElement!;
+    expect(Number.parseFloat(container.style.height)).toBeLessThan(400);
+    expect(host.textContent).toContain("Message 79");
+    data = { ...data, messages: [...data.messages, { _id: "fold-spacing-next", role: "assistant", timestamp: 2_000_000, content: "The next reply" }] };
+    await act(async () => { render(true); });
+    expect(Number.parseFloat(container.style.height)).toBeLessThan(400);
+    expect(host.textContent).toContain("The next reply");
+    expect(host.textContent).not.toContain("Message 79");
+    await act(async () => { render(false); });
+    expect(Number.parseFloat(container.style.height)).toBeGreaterThan(1000);
+  } finally { await act(() => root.unmount()); host.remove(); }
 }, 30_000);
