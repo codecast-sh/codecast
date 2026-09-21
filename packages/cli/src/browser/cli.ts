@@ -35,7 +35,7 @@ import { BrowserNotLive, explainConnectionLoss, isReachable, isTabUnresponsive }
 import {
   browserHome, clonePath, cloneProfile, formatBytes, keepsOwnLogin, listRealProfiles, type ChromeChannel,
 } from "./profile.js";
-import { matchRefs, nearMatches, pickOrdinal, refLabel, snapshotPage, splitOrdinalQuery } from "./snapshot.js";
+import { matchRefs, nearMatches, pickOrdinal, refLabel, snapshotJson, snapshotPage, splitOrdinalQuery } from "./snapshot.js";
 import {
   clearViewport, click, clickAt, DEVICES, evaluate, focus, hover, locate, pressKey,
   screenshot, scroll, selectOption, setViewport, type, uploadFiles,
@@ -43,7 +43,7 @@ import {
 import { armRecorder, clearRecording, readRecording } from "./observe.js";
 import { emitFailureContext } from "./capture.js";
 import { pageViewportCapture, parseViewport, runViewportRow, ViewportArgError, viewportChoices } from "./viewports.js";
-import { defaultShotPath, writeShotFile } from "./shotFile.js";
+import { defaultShotPath, imageSize, shotJson, writeShotFile } from "./shotFile.js";
 import { autoShotsEnabled, cdpAutoShotSource, clearAutoShots, maybeAutoShot, pruneHashes, setAutoShots } from "./autoShot.js";
 import { ownerKey } from "./owner.js";
 import { DesktopPaneUnavailable, withDesktopPanePage } from "./desktopPane.js";
@@ -800,14 +800,16 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
     .option("--interactive", "Only clickable/typable elements — much cheaper")
     .option("--max-chars <n>", "Truncate beyond this many characters", "40000")
     .option("--no-frames", "Skip child frames")
+    .option("--json", "Print {url, refs, text} instead of the human layout")
     .option("--tab <id>", "Act on a specific tab")
-    .action(async (o: { interactive?: boolean; maxChars: string; frames: boolean; tab?: string }) => {
+    .action(async (o: { interactive?: boolean; maxChars: string; frames: boolean; json?: boolean; tab?: string }) => {
       await act(o, async (page) => {
         const snap = await snapshotPage(page, {
           interactiveOnly: o.interactive,
           maxChars: parseInt(o.maxChars, 10),
           frames: o.frames,
         });
+        if (o.json) return console.log(JSON.stringify(snapshotJson(snap)));
         console.log(pageLine(snap.url, snap.title));
         console.log("");
         console.log(snap.text || fmt.muted("(nothing in the accessibility tree — the page may still be loading)"));
@@ -867,13 +869,15 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
     .option("--alt <text>", "Caption for the shared image — say what it shows")
     .option("--no-inline", "Do not show the image in the conversation")
     .option("--jpeg", "JPEG instead of PNG — much smaller for photos")
+    .option("--json", "Print file metadata as JSON, without image bytes")
     .option("--tab <id>", "Act on a specific tab")
-    .action(async (o: { full?: boolean; ref?: string; out?: string; viewports?: string; share?: boolean; alt?: string; jpeg?: boolean; inline?: boolean; tab?: string; real?: boolean; clone?: boolean }) => {
+    .action(async (o: { full?: boolean; ref?: string; out?: string; viewports?: string; share?: boolean; alt?: string; jpeg?: boolean; inline?: boolean; json?: boolean; tab?: string; real?: boolean; clone?: boolean }) => {
       await act(o, async (page, state) => {
         if (o.viewports) {
           // One shot per named viewport, emitted together so the thread renders
           // them as a single side-by-side comparison row. Restores what the tab
           // had before: its pinned emulation, or the real window.
+          if (o.json) die("--json does not combine with --viewports", "--json describes one file; a viewport row is several");
           if (o.ref) die("--ref does not combine with --viewports", "an element ref is only meaningful at the viewport it was snapshotted in");
           return runViewportRow(pageViewportCapture(page), o.viewports, state.viewportByTab?.[page.targetId], o, deps)
             .catch((err) => die(err.message, err instanceof ViewportArgError ? err.hint : undefined));
@@ -886,7 +890,19 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
         const out = o.out ?? defaultShotPath(o.jpeg ? "jpg" : "png");
         // Puts the picture in the conversation under this command's output,
         // the way an extension screenshot appears. `--no-inline` opts out.
-        const abs = writeShotFile(buf, out, o);
+        const abs = writeShotFile(buf, out, { ...o, quiet: o.json });
+        if (o.json) {
+          const written = fs.readFileSync(out);
+          const scale = await evaluate(page, "devicePixelRatio");
+          console.log(JSON.stringify(shotJson({
+            file: out,
+            bytes: written.length,
+            size: imageSize(written),
+            scale: typeof scale === "number" ? scale : null,
+            url: o.share ? (await uploadOne(deps, out, o.alt || "screenshot")).url : undefined,
+          })));
+          return;
+        }
         if (abs) console.log(inlineImageMarker(abs));
         if (o.share) {
           // Same upload path as `cast image`, so the URL renders inline for the

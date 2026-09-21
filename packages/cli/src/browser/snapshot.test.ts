@@ -8,7 +8,7 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-  matchRefs, nearMatches, ordinal, ordinalsFor, pickOrdinal, refLabel, snapshotPage, splitOrdinalQuery,
+  matchRefs, nearMatches, ordinal, ordinalsFor, pickOrdinal, refLabel, snapshotJson, engineSnapshotJson, snapshotPage, splitOrdinalQuery,
   type Snapshot,
 } from "./snapshot.js";
 import type { PageSession } from "./instance.js";
@@ -515,5 +515,63 @@ describe("ordinals", () => {
       ["Delete", 1], ["Delete", 2], ["Delete", 3], ["Save", undefined],
     ]);
     expect(matchRefs(s.refs, "Delete")).toHaveLength(3);
+  });
+});
+
+describe("snapshot --json", () => {
+  test("the built-in driver's snapshot, with refs in the form an agent types", () => {
+    const snap: Snapshot = {
+      text: '- link "Learn more" [ref=e2]',
+      refs: [{ ref: 2, role: "link", name: "Learn more" }],
+      url: "https://example.com/",
+      title: "Example Domain",
+      nodes: 12,
+      truncated: false,
+      ms: 4,
+    };
+    expect(snapshotJson(snap)).toEqual({
+      url: "https://example.com/",
+      title: "Example Domain",
+      refs: [{ ref: "e2", role: "link", name: "Learn more" }],
+      text: '- link "Learn more" [ref=e2]',
+      truncated: false,
+    });
+  });
+
+  test("the engine's payload in the same shape, without its launch envelope", () => {
+    const engine = {
+      lifecycle: { launched: false, reused: true },
+      origin: "https://example.com/",
+      refs: {
+        e1: { name: "Example Domain", role: "heading" },
+        e2: { name: "Learn more", role: "link" },
+      },
+      snapshot: '- heading "Example Domain" [level=1, ref=e1]',
+    };
+    expect(engineSnapshotJson(engine)).toEqual({
+      url: "https://example.com/",
+      refs: [
+        { ref: "e1", role: "heading", name: "Example Domain" },
+        { ref: "e2", role: "link", name: "Learn more" },
+      ],
+      text: '- heading "Example Domain" [level=1, ref=e1]',
+      truncated: false,
+    });
+  });
+
+  test("an empty page is refs-none plus the engine's own words, not a crash", () => {
+    expect(engineSnapshotJson({ origin: "about:blank", refs: {}, snapshot: "(empty page)" })).toEqual({
+      url: "about:blank",
+      refs: [],
+      text: "(empty page)",
+      truncated: false,
+    });
+    expect(engineSnapshotJson({})).toEqual({ url: "", refs: [], text: "", truncated: false });
+  });
+
+  test("no field can carry image bytes", () => {
+    const json = JSON.stringify(engineSnapshotJson({ origin: "https://x/", refs: { e1: { role: "link", name: "a" } }, snapshot: "- link" }));
+    expect(json).not.toContain("base64");
+    expect(json).not.toContain("data:image");
   });
 });

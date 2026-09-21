@@ -31,7 +31,7 @@ import * as path from "node:path";
 import type { Command } from "commander";
 import {
   ENGINE_PACKAGE, engineHelpText, engineHome, engineSession, engineTabs, engineVersion, ensureEngine, findEngine, isPaneSession, isRealSession,
-  realSessionKey, runEngine, runEngineJson,
+  parseEngineJson, realSessionKey, runEngine, runEngineJson,
 } from "./engine.js";
 import { engineBrowserFor, isPaneMode, isRealMode, realModeHint, requireRealBridge, splitTargetFlags, walledOffFromExtension } from "./bridge/real.js";
 import { desktopPaneCtx, DesktopPaneUnavailable, PANE_TAB_NOTE } from "./desktopPane.js";
@@ -39,7 +39,7 @@ import { grantTab } from "./bridge/host.js";
 import { readCdpJson, listTargets } from "./cdp.js";
 import { BROWSER_START_HELP, prepareRealBrowserStart, registerBridgeCommands, targetFlags } from "./bridge/commands.js";
 import { closeSessionTab, describeReap, listEngineSessions, reapEngineOrphans } from "./engineReap.js";
-import { matchRefs, nearMatches, ordinal, ordinalsFor, pickOrdinal, refLabel, splitOrdinalQuery } from "./snapshot.js";
+import { engineSnapshotJson, type EngineSnapshotPayload, matchRefs, nearMatches, ordinal, ordinalsFor, pickOrdinal, refLabel, splitOrdinalQuery } from "./snapshot.js";
 import { isStaleRefFailure, recallSnapshotRef, recoverRefPlan, rememberSnapshotRefs } from "./refMemory.js";
 import { ensurePinnedTab, pinnedTabBrowser, recoverGoneTab, touchBoundTarget } from "./pinnedTab.js";
 import { retryOnStall, shouldRetryAfterStall, STALL_NOTE, STALL_RETRY_DELAY_MS } from "./stall.js";
@@ -62,7 +62,7 @@ import { runBrowserSync, DEFAULT_SYNC_WAIT_S } from "./sync.js";
 import { cloudHostSignInHint } from "../cloud/browserSync.js";
 import { isRemoteDevice } from "../remote/device.js";
 import { inlineImageMarker } from "../inlineImage.js";
-import { defaultShotPath, SHOT_TEMP_KIND } from "./shotFile.js";
+import { defaultShotPath, imageSize, shotJson, SHOT_TEMP_KIND } from "./shotFile.js";
 import { agentTempPath, secureTempFile } from "../tempFiles.js";
 import { uploadOne } from "../imageCommand.js";
 import { MAX_IMAGE_SIZE } from "../syncService.js";
@@ -225,7 +225,7 @@ function engineAutoShotSource(o: Ctx): AutoShotSource {
  */
 const PASSTHROUGH: Array<{ verb: string; engine?: string; args: string; desc: string }> = [
   { verb: "open", args: "[args...]", desc: "Navigate to a URL (--new-tab for a second page)" },
-  { verb: "snapshot", args: "[args...]", desc: "The page as an accessibility tree with refs (-i interactive only, -s <sel> scope, -c compact, -d <n> depth, -u link urls)" },
+  { verb: "snapshot", args: "[args...]", desc: "The page as an accessibility tree with refs (-i interactive only, -s <sel> scope, -c compact, -d <n> depth, -u link urls, --json for {url, refs, text})" },
   { verb: "read", args: "[args...]", desc: 'The page, or a URL, as clean readable text (--outline, --filter <text>) — best for "what does this page say"' },
   { verb: "click", args: "[args...]", desc: "Click an element (#e42 ref or CSS selector)" },
   { verb: "type", args: "[args...]", desc: "Type into an element (--submit presses Enter after)" },
@@ -672,10 +672,18 @@ export async function runVerb(verb: string, args: string[], o: Ctx, run: RunOpti
     // A snapshot is the one output we rewrite: names that repeat get their
     // ordinal so the agent can say which one it means, and the ref table is
     // remembered so a stale ref can be recovered by it (refMemory.ts).
-    if (res.status === 0 && res.stdout && call.args[0] === "snapshot" && !call.args.includes("--json")) {
-      const items = parseEngineRefs(res.stdout);
-      if (items.length) rememberSnapshotRefs(session, items);
-      res = { ...res, stdout: withOrdinals(res.stdout, items) };
+    if (res.status === 0 && res.stdout && call.args[0] === "snapshot") {
+      if (call.args.includes("--json")) {
+        const snapshot = engineSnapshotJson(parseEngineJson<EngineSnapshotPayload>(res));
+        const items = parseEngineRefs(snapshot.text);
+        rememberSnapshotRefs(session, items);
+        snapshot.text = withOrdinals(snapshot.text, items);
+        res = { ...res, stdout: JSON.stringify(snapshot) + "\n" };
+      } else {
+        const items = parseEngineRefs(res.stdout);
+        if (items.length) rememberSnapshotRefs(session, items);
+        res = { ...res, stdout: withOrdinals(res.stdout, items) };
+      }
     }
     if (res.stdout) process.stdout.write(res.stdout);
     if (res.stderr) process.stderr.write(res.stderr);
@@ -1037,7 +1045,7 @@ function findLine(h: EngineRef): string {
 /** `shot`: screenshot to a file, inline in the conversation, optionally shared. */
 async function takeShot(
   pathArg: string | undefined,
-  o: { full?: boolean; annotate?: boolean; share?: boolean; alt?: string; inline?: boolean; selector?: string; extra?: string[] },
+  o: { full?: boolean; annotate?: boolean; share?: boolean; alt?: string; inline?: boolean; selector?: string; json?: boolean; extra?: string[] },
   c: Ctx,
   deps: PublishDeps,
 ): Promise<string> {
@@ -1046,16 +1054,32 @@ async function takeShot(
   const extra = [...(o.extra ?? [])];
   if (o.full) extra.push("--full-page");
   if (o.annotate) extra.push("--annotate");
+  if (o.json) extra.push("--json");
   // The engine's screenshot takes `[selector] [path]`: a selector (or ref)
   // clips the capture to that element — one region readable at full size,
   // no post-hoc cropping.
   const target = o.selector ? [engineRef(quoteAttrValues(o.selector))] : [];
-  const res = runEngine(["screenshot", ...target, out, ...extra], c);
+  const res = await runEngine(["screenshot", ...target, out, ...extra], { ...c, narrate: "taking a screenshot" });
   if (res.status !== 0) {
     die((res.stderr || res.stdout).trim().split("\n")[0] || "the screenshot failed");
   }
   if (!fs.existsSync(out)) die(`the engine reported success but wrote no file at ${out}`);
   if (!pathArg) secureTempFile(out);
+  if (o.json) {
+    const payload = parseEngineJson<{ annotations?: unknown }>(res);
+    const ratio = await runEngine(["eval", "devicePixelRatio", "--json"], { ...c, narrate: "reading screenshot scale" });
+    const scale = ratio.status === 0 ? parseEngineJson<{ result?: unknown }>(ratio).result : null;
+    const written = fs.readFileSync(out);
+    console.log(JSON.stringify(shotJson({
+      file: out,
+      bytes: written.length,
+      size: imageSize(written),
+      scale: typeof scale === "number" ? scale : null,
+      annotations: payload.annotations,
+      url: o.share ? (await uploadOne(deps, out, o.alt || "screenshot")).url : undefined,
+    })));
+    return out;
+  }
 
   // The legend mapping each [N] label to a snapshot ref is the point of an
   // annotated shot; it arrives on the engine's stdout.
@@ -1156,7 +1180,7 @@ async function runFlow(
         const si = args.findIndex((a) => a === "-s" || a === "--selector");
         const selector = si >= 0 ? args[si + 1] : undefined;
         const rest = si >= 0 ? args.filter((_, j) => j !== si && j !== si + 1) : args;
-        await takeShot(rest.find((a) => !a.startsWith("--")), { full: args.includes("--full"), selector }, c, deps);
+        await takeShot(rest.find((a) => !a.startsWith("--")), { full: args.includes("--full"), annotate: args.includes("--annotate"), json: args.includes("--json"), selector }, c, deps);
       } else if (verb === "eval") {
         const script = readEvalScript(rest, null);
         const out = await evalInPage(script, c);
@@ -1309,6 +1333,7 @@ The human's Chrome is always the default, including before pairing and after res
     .option("--share", "Also upload it and print a link you can paste elsewhere")
     .option("--alt <text>", "Caption for the shared image — say what it shows")
     .option("--no-inline", "Do not show the image in the conversation")
+    .option("--json", "Print file metadata as JSON, without image bytes")
     .allowUnknownOption(true)
     .action(async (pathArg: string | undefined, o: any, cmd: any) => {
       // Anything we do not recognise belongs to the engine, not to us. Only
