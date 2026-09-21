@@ -3932,24 +3932,34 @@ async function maintainActiveCcToken(reason: string): Promise<void> {
   }
 }
 
-// The tmux session name, the agent type stamp, and the per-session Claude
-// account stamp — everything the gate needs to rebuild itself from tmux alone,
-// including for panes a previous daemon started. Built on call because
-// REAP_FIELD_SEP is declared further down the module.
+// The pane's foreground command, the tmux session name, the agent type stamp,
+// and the per-session Claude account stamp — everything the gate needs to
+// rebuild itself from tmux alone, including for panes a previous daemon
+// started. The command comes first and the stamps last so a session name that
+// contains the separator still parses. Built on call because REAP_FIELD_SEP is
+// declared further down the module.
 function ccGateListFormat(): string {
-  return `#{session_name}${REAP_FIELD_SEP}#{@codecast_agent_type}${REAP_FIELD_SEP}#{@codecast_cc_account}`;
+  return `#{pane_current_command}${REAP_FIELD_SEP}#{session_name}${REAP_FIELD_SEP}#{@codecast_agent_type}${REAP_FIELD_SEP}#{@codecast_cc_account}`;
 }
 
 /** Parse `tmux list-sessions -F ccGateListFormat()` into the claude panes.
- *  A tmux too old to expand `#{@opt}` hands the placeholder back verbatim and
- *  an unset option expands to nothing; both read as "not stamped", so such a
- *  row is skipped rather than misattributed to the keychain login. */
+ *  A pane sitting at a login shell holds no credential: the agent exited, or
+ *  never started (a launch line mangled by an interactive shell prompt left
+ *  ~100 such panes on one host, each counted as a live claude, and the gate
+ *  deferred the token refresh for a week). The reaper judges the same shape
+ *  with paneAgentExited, but it never kills a pane it cannot name, so the gate
+ *  must judge liveness itself. A tmux too old to expand `#{@opt}` hands the
+ *  placeholder back verbatim and an unset option expands to nothing; both read
+ *  as "not stamped", so such a row is skipped rather than misattributed to the
+ *  keychain login. */
 export function parseLiveClaudeSessions(stdout: string): LiveClaudeSession[] {
   const out: LiveClaudeSession[] = [];
   for (const row of stdout.split("\n")) {
     const parts = row.split(REAP_FIELD_SEP);
-    if (parts.length < 3) continue;
+    if (parts.length < 4) continue;
     const expanded = (v: string) => (v.includes("#{") ? "" : v.trim());
+    const command = expanded(parts.shift()!).replace(/^-/, "");
+    if (EXITED_AGENT_SHELLS.has(command)) continue;
     const account = expanded(parts.pop()!);
     const agentType = expanded(parts.pop()!);
     const name = parts.join(REAP_FIELD_SEP).trim();
