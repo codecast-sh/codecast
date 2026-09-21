@@ -35,7 +35,7 @@ async function fixture() {
   write(script, `#!/bin/bash\nexec 3<> '${fifo}'\nprintf '%s' "$$" > '${pidFile}'\nwhile [ ! -e '${marker}' ]; do read -r -t .02 -u 3 line; done\nexec '${process.execPath}' '${base}.ts' --session-id ${replacement}\n`);
   for (const sid of [id, replacement]) write(path.join(root, ".claude/projects/p", sid + ".jsonl"), "{}\n");
   await run(process.execPath, ["-e", `const p=Bun.spawn(['/bin/bash',${JSON.stringify(script)},'--session-id',${JSON.stringify(id)}],{stdin:'ignore',stdout:'ignore',stderr:'ignore'});p.unref();`]);
-  await waitUntil(async () => fs.existsSync(pidFile));
+  await waitUntil(async () => fs.existsSync(pidFile) && Number(fs.readFileSync(pidFile, "utf8")) > 1);
   const pid = Number(fs.readFileSync(pidFile, "utf8"));
   assert.ok(Number.isSafeInteger(pid) && pid > 1);
   owned.push({ pid, ids: [id, replacement] }); write(path.join(root, "owned.json"), JSON.stringify(owned));
