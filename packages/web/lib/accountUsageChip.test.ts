@@ -8,6 +8,7 @@ import {
 } from "./accountUsageChip";
 
 const claude = (over: Partial<AccountChipDevice> = {}): AccountChipDevice => ({
+  device_id: "local",
   is_remote: false,
   online: true,
   active_email: "ashot@x.com",
@@ -16,26 +17,37 @@ const claude = (over: Partial<AccountChipDevice> = {}): AccountChipDevice => ({
 });
 
 describe("pickAccountChipDevice", () => {
-  test("prefers an online primary over an offline one", () => {
-    const offline = claude({ active_email: "old@x.com", online: false, profiles: [{ name: "old", email: "old@x.com" }] });
-    const live = claude();
-    expect(pickAccountChipDevice([offline, live])).toBe(live);
+  test("selects the verified local Mac regardless of row order", () => {
+    const elsewhere = claude({ device_id: "elsewhere" });
+    const local = claude();
+    expect(pickAccountChipDevice([elsewhere, local], "local")).toBe(local);
+    expect(pickAccountChipDevice([local, elsewhere], "local")).toBe(local);
   });
 
-  test("keeps the last-known primary when every daemon is quiet", () => {
-    const primary = claude({ online: false });
-    const remote = claude({ is_remote: true, online: true, active_email: "box@x.com" });
-    expect(pickAccountChipDevice([remote, primary])).toBe(primary);
+  test("retains the local Mac when it is offline and another is online", () => {
+    const local = claude({ online: false });
+    const elsewhere = claude({ device_id: "elsewhere" });
+    expect(pickAccountChipDevice([elsewhere, local], "local")).toBe(local);
   });
 
-  test("never picks a remote, even if it is the only online row", () => {
-    expect(pickAccountChipDevice([claude({ is_remote: true, online: true })])).toBeUndefined();
+  test("never guesses while local discovery is unresolved, even with one Mac", () => {
+    expect(pickAccountChipDevice([claude()], null)).toBeUndefined();
+  });
+
+  test("never falls back when the local Mac has no account inventory", () => {
+    expect(pickAccountChipDevice([claude({ device_id: "elsewhere" })], "local")).toBeUndefined();
+    expect(pickAccountChipDevice(undefined, "local")).toBeUndefined();
+  });
+
+  test("never picks a cloud device", () => {
+    expect(pickAccountChipDevice([claude({ is_remote: true })], "local")).toBeUndefined();
   });
 });
 
 describe("resolveAccountChip", () => {
-  test("stays visible for an offline primary with saved accounts", () => {
+  test("stays visible for an offline local machine with saved accounts", () => {
     const resolved = resolveAccountChip({
+      localDeviceId: "local",
       devices: [claude({ online: false })],
       currentAgentType: "claude_code",
       lastShown: null,
@@ -47,6 +59,7 @@ describe("resolveAccountChip", () => {
 
   test("stays visible when the current login is not a saved profile", () => {
     const resolved = resolveAccountChip({
+      localDeviceId: "local",
       devices: [
         claude({
           active_email: "other@x.com",
@@ -64,6 +77,7 @@ describe("resolveAccountChip", () => {
   test("an email-less snapshot whose name is the current login is the active account", () => {
     const profile = { name: "joannagerkin" };
     const resolved = resolveAccountChip({
+      localDeviceId: "local",
       devices: [
         claude({
           active_email: "joannagerkin@gmail.com",
@@ -79,6 +93,7 @@ describe("resolveAccountChip", () => {
 
   test("follows a Claude session even without an email match", () => {
     const resolved = resolveAccountChip({
+      localDeviceId: "local",
       devices: [
         claude({
           active_email: undefined,
@@ -93,9 +108,10 @@ describe("resolveAccountChip", () => {
     expect(resolved?.claudeLabel).toBe("ashot");
   });
 
-  test("hides only when there is no primary with any account", () => {
+  test("has no account to show for a cloud device or empty local inventory", () => {
     expect(
       resolveAccountChip({
+        localDeviceId: "local",
         devices: [claude({ is_remote: true, profiles: [{ name: "box" }] })],
         currentAgentType: null,
         lastShown: null,
@@ -103,6 +119,7 @@ describe("resolveAccountChip", () => {
     ).toBeNull();
     expect(
       resolveAccountChip({
+        localDeviceId: "local",
         devices: [claude({ profiles: [], active_email: undefined, codex_accounts: undefined })],
         currentAgentType: null,
         lastShown: null,

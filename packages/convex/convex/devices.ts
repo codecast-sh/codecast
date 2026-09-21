@@ -4,6 +4,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import type { AgentClientId, AgentDefinitionSpec } from "@codecast/shared/contracts";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
+import { internal } from "./_generated/api";
 import { canAccessConversation } from "./lib/access";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import {
@@ -1106,6 +1107,76 @@ export const listDevices = query({
         online: now - d.last_seen < DEVICE_ONLINE_MS,
       }))
       .sort((a: any, b: any) => b.last_seen - a.last_seen);
+  },
+});
+
+/** Most machines one removal may name. A cleanup of a whole stale roster fits;
+ *  a caller looping the table does not. */
+const MAX_REMOVE_DEVICES = 100;
+
+export type RemoveDevicesResult = {
+  removed: string[];
+  skipped: Array<{ device_id: string; reason: "online" | "unknown" }>;
+};
+
+/**
+ * Drop machines from the user's roster. One core, so the web's dispatch side
+ * effect and the token-authenticated mutation cannot drift.
+ *
+ * An ONLINE machine is refused rather than deleted: users.daemonHeartbeat
+ * upserts the row on every beat, so the delete would undo itself within 30s
+ * and the caller would read that as a removal that did not stick. The same
+ * upsert is why removal needs no undo: a machine whose daemon runs again lists
+ * itself, and the row holds nothing the machine does not report except the
+ * label and SSH host a person typed.
+ *
+ * Nothing that points at the device is rewritten. Every reader of
+ * conversations.owner_device_id resolves the row through by_user_device and
+ * already treats a missing row as "no machine", which is the truth here.
+ * capability_state is the exception: its stale sweep finds rows by walking
+ * THIS table, so a row that vanished would orphan them for good.
+ */
+export async function performRemoveDevices(
+  ctx: { db: any; scheduler: any },
+  userId: Id<"users">,
+  deviceIds: string[],
+): Promise<RemoveDevicesResult> {
+  if (deviceIds.length > MAX_REMOVE_DEVICES) {
+    throw new Error(`Remove at most ${MAX_REMOVE_DEVICES} machines at a time`);
+  }
+  const now = Date.now();
+  const result: RemoveDevicesResult = { removed: [], skipped: [] };
+  for (const deviceId of new Set(deviceIds)) {
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", deviceId))
+      .first();
+    if (!device) {
+      result.skipped.push({ device_id: deviceId, reason: "unknown" });
+      continue;
+    }
+    if (now - device.last_seen < DEVICE_ONLINE_MS) {
+      result.skipped.push({ device_id: deviceId, reason: "online" });
+      continue;
+    }
+    await ctx.db.delete(device._id);
+    await ctx.scheduler.runAfter(0, internal.capabilityState.deleteDeviceState, {
+      user_id: userId,
+      device_id: deviceId,
+    });
+    result.removed.push(deviceId);
+  }
+  return result;
+}
+
+/** Remove machines from the caller's own roster. Takes an api_token like every
+ *  other device mutation, so a CLI verb needs no new server surface. */
+export const removeDevices = mutation({
+  args: { api_token: v.optional(v.string()), device_ids: v.array(v.string()) },
+  handler: async (ctx, args): Promise<RemoveDevicesResult> => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication required");
+    return performRemoveDevices(ctx, userId, args.device_ids);
   },
 });
 

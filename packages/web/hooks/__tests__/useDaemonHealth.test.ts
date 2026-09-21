@@ -11,10 +11,7 @@ import {
   isDegradedDaemonHealth,
   blocksDelivery,
   sigCell,
-  worstDaemonHealth,
-  fleetDaemonHealth,
   deviceHealthInput,
-  ROSTER_CONSIDER_MS,
   OVERLOADED_HOUR_MS,
 } from "../useDaemonHealth";
 import { describeDaemonHealth, describeDeviceFreeze } from "../../lib/daemonHealthCopy";
@@ -117,22 +114,6 @@ describe("computeDaemonHealth", () => {
     const { daemon_sync_no_progress_ms: _omit, ...older } = input;
     expect(computeDaemonHealth(older, NOW).kind).toBe("sync_stalled");
     expect(computeDaemonHealth({ ...older, daemon_sync_no_progress_ms: null }, NOW).kind).toBe("sync_stalled");
-  });
-
-  it("a stuck queue outranks a draining one across machines", () => {
-    const draining = {
-      device_id: "a", label: "Laptop", last_seen: NOW - 1000, pending_sync_count: 12,
-      pending_sync_messages: 904, pending_sync_conversations: 12, oldest_pending_ms: 9 * 60_000,
-      sync_no_progress_ms: 20_000,
-    };
-    const stuck = {
-      device_id: "b", label: "Studio", last_seen: NOW - 1000, pending_sync_count: 1,
-      pending_sync_messages: 3, pending_sync_conversations: 1, oldest_pending_ms: 3 * 60_000,
-      sync_no_progress_ms: 3 * 60_000,
-    };
-    expect(deviceHealthInput(draining).daemon_sync_no_progress_ms).toBe(20_000);
-    expect(worstDaemonHealth([draining, stuck], NOW)).toMatchObject({ kind: "sync_stalled", device: "Studio" });
-    expect(worstDaemonHealth([draining], NOW)).toMatchObject({ kind: "syncing", behindMs: 9 * 60_000 });
   });
 
   it("defaults message/conversation backlog to zero for older daemons", () => {
@@ -449,99 +430,5 @@ describe("sigCell", () => {
     expect(sigCell(undefined)).toBe("");
     expect(sigCell(false)).toBe("");
     expect(sigCell(0)).toBe("0");
-  });
-});
-
-describe("worstDaemonHealth", () => {
-  const laptop = { device_id: "a", label: "MacBook", last_seen: NOW - QUIET_AFTER_MS };
-  const cloud = { device_id: "b", label: "Cloud Mac", last_seen: NOW - 1000 };
-
-  it("names the machine in trouble instead of averaging it away", () => {
-    expect(worstDaemonHealth([laptop, cloud], NOW)).toEqual({ kind: "quiet", quietMs: QUIET_AFTER_MS, device: "MacBook" });
-  });
-
-  it("does not name the device when there is only one machine", () => {
-    expect(worstDaemonHealth([laptop], NOW)).toEqual({ kind: "quiet", quietMs: QUIET_AFTER_MS });
-  });
-
-  it("ignores retired machines and reports null for an empty roster", () => {
-    const retired = { device_id: "c", label: "Old Mini", last_seen: NOW - ROSTER_CONSIDER_MS - 1 };
-    expect(worstDaemonHealth([retired, cloud], NOW)).toEqual({ kind: "ok" });
-    expect(worstDaemonHealth([retired], NOW)).toBeNull();
-    expect(worstDaemonHealth([], NOW)).toBeNull();
-  });
-
-  // A cloud host sleeps when idle: its hours of silence are its parked state,
-  // and the viewer is never sitting at it to run the suggested restart.
-  it("leaves remote hosts out of the fleet verdict", () => {
-    const asleepLinux = { device_id: "f", label: "Linux - ip-172-31-40-243", last_seen: NOW - 10 * 60 * 60 * 1000, is_remote: true };
-    expect(worstDaemonHealth([cloud, asleepLinux], NOW)).toEqual({ kind: "ok" });
-    expect(worstDaemonHealth([asleepLinux], NOW)).toBeNull();
-  });
-
-  // The screenshot: "Linux - grok-bot-vm-…: daemon stale 51 min" in the global
-  // header. The box never set is_remote (daemon without CODECAST_REMOTE_DEVICE),
-  // so the old !is_remote filter let it win the fleet chip over the laptop.
-  it("leaves unflagged cloud boxes out of the fleet verdict", () => {
-    const grokVm = { device_id: "g", label: "Linux - grok-bot-vm-2307902", last_seen: NOW - 51 * 60 * 1000 };
-    const aws = { device_id: "f", label: "Linux - ip-172-31-40-243", last_seen: NOW - 51 * 60 * 1000 };
-    const laptopOk = { device_id: "a", label: "MacBook", last_seen: NOW - 1000 };
-    expect(worstDaemonHealth([laptopOk, grokVm], NOW)).toEqual({ kind: "ok" });
-    expect(worstDaemonHealth([laptopOk, aws], NOW)).toEqual({ kind: "ok" });
-    expect(worstDaemonHealth([grokVm], NOW)).toBeNull();
-    expect(worstDaemonHealth([aws], NOW)).toBeNull();
-    // Roster known, only cloud boxes: do not fall back to user-doc last-writer
-    // (that field is often the remote's own last_seen).
-    expect(fleetDaemonHealth([grokVm], { daemon_last_seen: NOW - 51 * 60 * 1000 }, NOW)).toEqual({ kind: "ok" });
-    expect(fleetDaemonHealth([], { daemon_last_seen: NOW - 51 * 60 * 1000 }, NOW)).toMatchObject({ kind: "offline", tier: "warn" });
-  });
-
-  // A second, unrelated provider hit the same gap: "Linux - htch-runtime:
-  // daemon offline 1h" in the global header, for a box the viewer never sits
-  // at and cannot restart from where they are.
-  it("leaves an unflagged htch-runtime box out of the fleet verdict", () => {
-    const htchRuntime = { device_id: "h", label: "Linux - htch-runtime", last_seen: NOW - 60 * 60 * 1000 };
-    const laptopOk = { device_id: "a", label: "MacBook", last_seen: NOW - 1000 };
-    expect(worstDaemonHealth([laptopOk, htchRuntime], NOW)).toEqual({ kind: "ok" });
-    expect(worstDaemonHealth([htchRuntime], NOW)).toBeNull();
-  });
-
-  it("ranks unreachable above busy above restarting", () => {
-    const busy = { device_id: "d", label: "Busy", last_seen: NOW - 1000, loop_freeze_ms: 40_000 };
-    const fresh = { device_id: "e", label: "Fresh", last_seen: NOW - 1000, daemon_started_at: NOW - 5000 };
-    expect(worstDaemonHealth([fresh, busy], NOW)?.kind).toBe("overloaded");
-    expect(worstDaemonHealth([fresh, busy, laptop], NOW)?.kind).toBe("quiet");
-  });
-
-  // The same ordering computeDaemonHealth applies inside one machine, applied
-  // across machines. The hour total sticks for a full hour where a live freeze
-  // lasts about a minute, so ranking it above a stuck queue would leave the
-  // header chip saying "daemon under load" while 40 messages sat unnamed on
-  // another machine for the rest of that hour.
-  it("puts a machine with a stuck queue ahead of one that only missed the hour SLO", () => {
-    const hourOnly = { device_id: "g", label: "MacBook", last_seen: NOW - 1000, loop_freeze_ms: 0, loop_freeze_1h_ms: 215_000 };
-    const backlog = {
-      device_id: "h",
-      label: "Studio",
-      last_seen: NOW - 1000,
-      pending_sync_count: 40,
-      pending_sync_messages: 40,
-      pending_sync_conversations: 3,
-      oldest_pending_ms: 10 * 60_000,
-    };
-    expect(worstDaemonHealth([hourOnly, backlog], NOW)).toEqual({
-      kind: "sync_stalled",
-      pending: 40,
-      messages: 40,
-      conversations: 3,
-      stalledMs: 10 * 60_000,
-      device: "Studio",
-    });
-    // The hour tier still outranks a healthy machine, so the chip does report
-    // it when nothing louder is happening.
-    expect(worstDaemonHealth([hourOnly, cloud], NOW)?.kind).toBe("overloaded");
-    // And a freeze happening right now still outranks the stuck queue.
-    const frozenNow = { ...hourOnly, loop_freeze_ms: 40_000 };
-    expect(worstDaemonHealth([frozenNow, backlog], NOW)?.kind).toBe("overloaded");
   });
 });

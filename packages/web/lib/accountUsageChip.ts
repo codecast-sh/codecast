@@ -13,6 +13,7 @@ export type AccountChipProfile = {
 };
 
 export type AccountChipDevice = {
+  device_id: string;
   is_remote: boolean;
   online?: boolean;
   active_email?: string;
@@ -25,10 +26,11 @@ export type AccountChipDevice = {
 
 export function pickAccountChipDevice<T extends AccountChipDevice>(
   devices: T[] | undefined,
+  localDeviceId: string | null,
 ): T | undefined {
-  if (!devices?.length) return undefined;
-  const primaries = devices.filter((d) => !d.is_remote);
-  return primaries.find((d) => d.online !== false) ?? primaries[0];
+  return localDeviceId
+    ? devices?.find((d) => d.device_id === localDeviceId && !d.is_remote)
+    : undefined;
 }
 
 export function matchProfile<T extends AccountChipProfile>(
@@ -74,6 +76,7 @@ export function accountChipProvider(opts: {
 
 export function resolveAccountChip<T extends AccountChipDevice>(opts: {
   devices: T[] | undefined;
+  localDeviceId: string | null;
   currentAgentType: string | null;
   lastShown: "claude" | "codex" | null;
 }): {
@@ -83,7 +86,7 @@ export function resolveAccountChip<T extends AccountChipDevice>(opts: {
   shown: "claude" | "codex";
   claudeLabel: string;
 } | null {
-  const device = pickAccountChipDevice(opts.devices);
+  const device = pickAccountChipDevice(opts.devices, opts.localDeviceId);
   if (!device) return null;
   const profiles = device.profiles ?? [];
   const active = matchProfile(profiles, device.active_email);

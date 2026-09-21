@@ -35,9 +35,9 @@ describe("usage chip never leaves the bar", () => {
     expect(css).not.toContain("tb-squeeze");
   });
 
-  test("a quiet query keeps the last resolve on screen", () => {
-    expect(chip).toContain("if (liveResolved) lastResolved.current = liveResolved;");
-    expect(chip).toContain("const resolved = liveResolved ?? lastResolved.current;");
+  test("cached accounts come from the viewer-scoped store", () => {
+    expect(chip).toContain('useSettingsData("accountProfiles")');
+    expect(chip).not.toContain("lastResolved");
   });
 
   test("an unresolved chip holds its slot instead of returning null", () => {

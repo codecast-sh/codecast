@@ -5,14 +5,16 @@ import { useMemo, useState } from "react";
 import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
-import { ArrowRightLeft, Cloud, MonitorSmartphone, Terminal } from "lucide-react";
+import { Archive, ArrowRightLeft, ChevronRight, Cloud, MonitorSmartphone, Terminal } from "lucide-react";
 import { RemoteMachineSetup } from "../../../components/settings/RemoteMachineSetup";
 import { useInboxStore } from "../../../store/inboxStore";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
 import { SettingsLinkRow, SettingsPanel, SettingsSection } from "../../../components/settings/ui";
 import { DevicePanelHeader } from "../../../components/settings/DevicePanelHeader";
-import { useDevices, deviceDisplayName, DeviceDot, type Device } from "../../../components/DeviceBadge";
+import { useDevices, deviceDisplayName, deviceKindLabel, deviceWakesOnUse, relativeSeen, DeviceDot, type Device } from "../../../components/DeviceBadge";
+import { ConfirmButton } from "../../../components/integrations/parts";
+import { canRemoveMachine, splitStaleMachines } from "../../../lib/staleMachines";
 import { describeDeviceFreeze } from "../../../lib/daemonHealthCopy";
 import { useSettingsData } from "../../../hooks/useSyncSettings";
 import { Bot } from "lucide-react";
@@ -243,6 +245,114 @@ function DeviceFreezeLine({ d }: { d: Device }) {
   );
 }
 
+/** One removal path for a row and for the whole cleanup group: the store drops
+ *  the machines at once, and the named dispatch effect deletes them. */
+function removeMachines(gone: Device[]) {
+  useInboxStore.getState().removeMachines(gone.map((d) => d.device_id));
+  toast.success(gone.length === 1 ? `Removed ${deviceDisplayName(gone[0])}` : `Removed ${gone.length} machines`);
+}
+
+/**
+ * Offered only once a machine is offline. The question says what removal costs:
+ * nothing for a machine that is gone, and a cloud box keeps its instance, which
+ * codecast never created and so never deletes.
+ */
+function RemoveMachineButton({ d }: { d: Device }) {
+  if (!canRemoveMachine(d)) return null;
+  return (
+    <ConfirmButton
+      label="Remove"
+      // Quiet until reached for: a column of these in red reads as an alarm.
+      className="text-sol-text-dim hover:text-sol-red hover:no-underline"
+      question={
+        deviceWakesOnUse(d)
+          ? "Leaves your list. Its cloud instance stays in your AWS account."
+          : "Leaves your list. It returns if its daemon runs again."
+      }
+      onConfirm={() => removeMachines([d])}
+    />
+  );
+}
+
+/**
+ * A machine that has gone quiet: one line, since the usual thing to do with it
+ * is remove it. The name opens the same details an active machine shows, so its
+ * SSH host and checkouts stay reachable.
+ */
+function InactiveDeviceRow({ d }: { d: Device }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="px-4 py-2.5 sm:px-5">
+      <div className="flex items-center gap-4">
+        <div className="text-sol-text-dim">
+          <PlatformGlyph d={d} />
+        </div>
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          className="group min-w-0 flex-1 text-left"
+        >
+          <div className="flex items-center gap-1.5 text-sm text-sol-text-muted group-hover:text-sol-text">
+            <span className="truncate">{deviceDisplayName(d)}</span>
+            <ChevronRight className={`h-3 w-3 shrink-0 text-sol-text-dim transition-transform ${open ? "rotate-90" : ""}`} />
+          </div>
+          <div className="truncate font-mono text-[11px] text-sol-text-dim">
+            {deviceKindLabel(d)} · last seen {relativeSeen(d.last_seen)} · {d.device_id.slice(0, 8)}
+          </div>
+        </button>
+        <RemoveMachineButton d={d} />
+      </div>
+      {open && (
+        <div className="pb-1.5 pl-9">
+          <DeviceDetails d={d} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Everything a machine reports plus what a person set on it. Shared by the
+ *  full card and by an inactive row once it is opened. */
+function DeviceDetails({ d }: { d: Device }) {
+  return (
+    <>
+      <div className="mt-1 text-[11px] text-sol-text-dim font-mono truncate">{d.label}</div>
+      <div className="mt-2 flex items-center gap-4 text-[11px] text-sol-text-dim">
+        <span>{d.platform}</span>
+        <span>
+          {d.local_project_roots.length} project root{d.local_project_roots.length === 1 ? "" : "s"}
+        </span>
+        <span className="font-mono opacity-60">{d.device_id.slice(0, 12)}</span>
+      </div>
+      <DeviceFreezeLine d={d} />
+      {(d.git_plane?.length ?? 0) > 0 && (
+        <ul className="mt-2 space-y-1">
+          {d.git_plane!.map((r) => (
+            <RepoPlaneRow key={r.root} r={r} />
+          ))}
+        </ul>
+      )}
+      <GrantAccessCard d={d} blocked={(d.git_plane ?? []).filter((r) => r.needs_access)} />
+      {d.local_project_roots.length > 0 && (
+        <details className="mt-2 group">
+          <summary className="cursor-pointer text-[11px] text-sol-text-muted hover:text-sol-text select-none">
+            Show checkouts
+          </summary>
+          <ul className="mt-1 space-y-0.5">
+            {d.local_project_roots.slice(0, 30).map((r) => (
+              <li key={r} className="text-[11px] text-sol-text-muted font-mono truncate">
+                {r}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      <SshHostField d={d} />
+    </>
+  );
+}
+
 function DeviceRow({ d }: { d: Device }) {
   const accent = d.is_remote ? "text-sol-violet" : /linux/i.test(d.platform) ? "text-sol-orange" : "text-sol-blue";
   return (
@@ -253,38 +363,10 @@ function DeviceRow({ d }: { d: Device }) {
         </div>
         <div className="min-w-0 flex-1">
           <DevicePanelHeader selected={d} note="seen" />
-          <div className="mt-1 text-[11px] text-sol-text-dim font-mono truncate">{d.label}</div>
-          <div className="mt-2 flex items-center gap-4 text-[11px] text-sol-text-dim">
-            <span>{d.platform}</span>
-            <span>
-              {d.local_project_roots.length} project root{d.local_project_roots.length === 1 ? "" : "s"}
-            </span>
-            <span className="font-mono opacity-60">{d.device_id.slice(0, 12)}</span>
+          <DeviceDetails d={d} />
+          <div className="mt-3 flex justify-end empty:hidden">
+            <RemoveMachineButton d={d} />
           </div>
-          <DeviceFreezeLine d={d} />
-          {(d.git_plane?.length ?? 0) > 0 && (
-            <ul className="mt-2 space-y-1">
-              {d.git_plane!.map((r) => (
-                <RepoPlaneRow key={r.root} r={r} />
-              ))}
-            </ul>
-          )}
-          <GrantAccessCard d={d} blocked={(d.git_plane ?? []).filter((r) => r.needs_access)} />
-          {d.local_project_roots.length > 0 && (
-            <details className="mt-2 group">
-              <summary className="cursor-pointer text-[11px] text-sol-text-muted hover:text-sol-text select-none">
-                Show checkouts
-              </summary>
-              <ul className="mt-1 space-y-0.5">
-                {d.local_project_roots.slice(0, 30).map((r) => (
-                  <li key={r} className="text-[11px] text-sol-text-muted font-mono truncate">
-                    {r}
-                  </li>
-                ))}
-              </ul>
-            </details>
-          )}
-          <SshHostField d={d} />
         </div>
       </div>
     </div>
@@ -369,6 +451,7 @@ export default function DevicesSettingsPage() {
     [devices],
   );
   const onlineCount = sorted.filter((d) => d.online).length;
+  const { current, stale } = useMemo(() => splitStaleMachines(sorted, Date.now()), [sorted]);
 
   return (
     <SettingsPanel>
@@ -380,7 +463,8 @@ export default function DevicesSettingsPage() {
             Machines running the codecast daemon. A session runs on exactly one device. New sessions and
             messages from your phone route to your most-recently-active laptop or desktop — a{" "}
             <span className="text-sol-violet">cloud box</span> only runs a session you explicitly move there,
-            and wakes from sleep when you do.
+            and wakes from sleep when you do. A machine can be removed once it is offline; stop its daemon with{" "}
+            <code className="font-mono text-sol-text">cast stop</code> first, or it lists itself again.
           </>
         }
         actions={
@@ -400,7 +484,7 @@ export default function DevicesSettingsPage() {
             . Already installed? Start it with <code className="font-mono text-sol-text">cast start</code>.
           </div>
         ) : (
-          sorted.map((d) => <DeviceRow key={d.device_id} d={d} />)
+          current.map((d) => <DeviceRow key={d.device_id} d={d} />)
         )}
         <SettingsLinkRow
           icon={Terminal}
@@ -421,6 +505,27 @@ export default function DevicesSettingsPage() {
           onClick={() => useInboxStore.getState().openSettingsModal("migrate")}
         />
       </SettingsSection>
+      {stale.length > 0 && (
+        <SettingsSection
+          title="Inactive"
+          icon={Archive}
+          description="Not seen in the last day. Removing a machine only clears it from your lists: its sessions and transcripts stay, and it lists itself again if its daemon ever runs."
+          actions={
+            stale.length > 1 ? (
+              <ConfirmButton
+                label={`Remove all ${stale.length}`}
+                question={`Remove ${stale.length} machines?`}
+                confirmLabel="Remove all"
+                onConfirm={() => removeMachines(stale)}
+              />
+            ) : undefined
+          }
+        >
+          {stale.map((d) => (
+            <InactiveDeviceRow key={d.device_id} d={d} />
+          ))}
+        </SettingsSection>
+      )}
       <AgentBoxesSection />
       <RemoteMachineSetup open={remoteSetupOpen} onOpenChange={setRemoteSetupOpen} />
     </SettingsPanel>
