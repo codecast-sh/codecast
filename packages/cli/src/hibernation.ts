@@ -44,6 +44,16 @@ export const HIBERNATE_RESUME_GRACE_MS = 10 * 60 * 1000;
 
 export const HIBERNATE_SUBAGENT_QUIET_MS = 10 * 60 * 1000;
 
+// How long a session the daemon's gates refused stays out of the picks. The
+// picks are the longest idle first and the order is deterministic, so without
+// this the same refused sessions head every pass: on 2026-09-21 the five
+// longest idle were refused by durable gates (a transcript that once started
+// background work, subagent history, a borrowed process) and ten passes in a
+// row parked nothing while 24 to 36 parkable sessions waited behind them. An
+// hour lets a transient refusal (a message in flight) be retried soon enough,
+// and costs a durable one five gate checks a day instead of one every pass.
+export const HIBERNATE_REFUSAL_BACKOFF_MS = 60 * 60 * 1000;
+
 export type HibernationCandidate = {
   sessionId: string;
   /** The tmux session holding the pane. */
@@ -139,12 +149,17 @@ export function hibernationBlockReason(c: HibernationCandidate): string | null {
 export function selectHibernationCandidates(
   candidates: HibernationCandidate[],
   policy: HibernationPolicy,
+  refusedRecently: ReadonlySet<string> = new Set(),
 ): { picked: HibernationCandidate[]; skips: string[] } {
   const skips: string[] = [];
   const eligible: HibernationCandidate[] = [];
   for (const c of candidates) {
     const reason = hibernationBlockReason(c);
     if (reason) skips.push(reason);
+    // Refused by the daemon's gates within HIBERNATE_REFUSAL_BACKOFF_MS: it
+    // still counts toward the fleet size, but it yields its pick to the next
+    // longest idle session so one stubborn head cannot starve the pass.
+    else if (refusedRecently.has(c.sessionId)) skips.push("refused-recently");
     else eligible.push(c);
   }
 

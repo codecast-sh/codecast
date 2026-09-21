@@ -14579,7 +14579,7 @@ trigger
   .option("--max-runtime <duration>", "Max runtime (default: 10m)")
   .option("--precheck <command>", "Shell gate: run this in the project directory before each scheduled or recurring run. Exit 0 runs the trigger; anything else (or 60s without answering) records a skipped run and spends no session. Event triggers and manual runs ignore it.")
   .option("--for <session>", "Bind the trigger to a session (short id, conversation id, or Claude session uuid): runs inject into it instead of spawning fresh agents. Defaults to the calling session when run from inside one.")
-  .option("--spawn", "Each run starts a FRESH session (no history) instead of injecting into the session that created the trigger. A run that completes cleanly stays out of the inbox and is read under its trigger. A trigger that fires once runs as this session's worker: nested under it, its result posted back here, and this session woken if the run fails, dies, or asks for attention.")
+  .option("--spawn", "Each run starts a FRESH session (no history) instead of injecting into the session that created the trigger. Every run nests under this session and is read there rather than as an inbox card, and this session is woken if a run fails, dies, or asks for attention. A trigger that fires once also posts its clean result back here; a repeating one does not, since a line per firing would bury the thread.")
   .option("--thread", "Post each run's result into the current conversation as a message, without waking it. Works with --spawn; a --spawn trigger that fires once does this on its own.")
   .option("--wake", "With --spawn on a trigger that fires once: wake this session with the run's report even when it completes cleanly, so this session acts on it. Costs a turn over this session's whole context; without it a clean report is posted here without a wake.")
   .action(async (prompt, options) => {
@@ -14986,6 +14986,11 @@ trigger
   .option("--model <model>", "Model for spawned runs (claude: fable, opus, sonnet, haiku; codex: a model id); 'default' clears the pin")
   .option("--max-runtime <duration>", "Max runtime (e.g., 10m)")
   .option("--precheck <command>", "Shell gate run before each scheduled or recurring run; exit 0 runs the trigger. Pass \"\" to remove the gate.")
+  .option("--for <session>", "Rebind: runs inject into this session (short id, conversation id, or Claude session uuid) instead of spawning fresh agents.")
+  .option("--spawn", "Unbind: each run starts a fresh session again instead of injecting into a bound one.")
+  .option("--thread <session>", "Post each run's result into this conversation. Pass \"\" to stop posting.")
+  .option("--wake", "With --spawn on a trigger that fires once: wake the creating session even on a clean report.")
+  .option("--no-wake", "Clear --wake: a clean report is posted without a wake.")
   .action(async (id, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -14993,6 +14998,13 @@ trigger
       process.exit(1);
     }
     const siteUrl = config.convex_url.replace(".cloud", ".site");
+
+    // Same rule as `cast trigger add`: a binding is what makes runs inject,
+    // so asking for both at once has no coherent answer.
+    if (options.spawn && options.for) {
+      console.error("--spawn conflicts with --for: spawn runs don't bind to a session");
+      process.exit(1);
+    }
 
     const scheduleFlags = ["in", "every", "on"].filter((f) => options[f]);
     if (scheduleFlags.length > 1) {
@@ -15051,9 +15063,20 @@ trigger
       body.max_runtime_ms = ms;
     }
     if (options.precheck !== undefined) body.precheck = options.precheck;
+    // Routing. --spawn clears the binding (null, not absent — absent means
+    // "keep"); --for names the new one and the server resolves it.
+    if (options.spawn) body.originating_conversation_id = null;
+    if (options.for) body.originating_session_ref = options.for;
+    if (options.thread !== undefined) {
+      if (options.thread) body.target_session_ref = options.thread;
+      else body.target_conversation_id = null;
+    }
+    // commander gives options.wake === false for --no-wake, so an explicit
+    // clear is distinguishable from the flag never being passed.
+    if (options.wake !== undefined) body.wake_creator = options.wake;
 
     if (Object.keys(body).length === 1) {
-      console.error("Nothing to update. Pass at least one of --prompt/--title/--in/--every/--on/--safe/--mode/--project/--agent/--model/--max-runtime/--precheck.");
+      console.error("Nothing to update. Pass at least one of --prompt/--title/--in/--every/--on/--safe/--mode/--project/--agent/--model/--max-runtime/--precheck/--for/--spawn/--thread/--wake.");
       process.exit(1);
     }
 
@@ -15127,9 +15150,19 @@ trigger
 
       // One editable field, rendered for reading: durations as "4h", run_at
       // as a date, the prompt as its first line.
+      const convShortIds: Record<string, string> = history.conversation_short_ids ?? {};
       const showField = (field: string, snap: any): string => {
         const val = snap?.[field];
+        // A cleared binding is not "nothing": it is what makes runs spawn
+        // fresh, so the line has to say that rather than read as a blank.
+        if (field === "originating_conversation_id" && (val === undefined || val === null)) {
+          return fmt.muted("(spawn: fresh session per run)");
+        }
         if (val === undefined || val === null) return fmt.muted("(none)");
+        if (field === "originating_conversation_id" || field === "target_conversation_id") {
+          return convShortIds[String(val)] ?? String(val).slice(0, 7);
+        }
+        if (field === "wake_creator") return val ? "on" : "off";
         if (field === "interval_ms" || field === "max_runtime_ms") return formatMs(val);
         if (field === "run_at") return new Date(val).toLocaleString();
         if (field === "event_filter") return val.event_type + (val.action ? `/${val.action}` : "");

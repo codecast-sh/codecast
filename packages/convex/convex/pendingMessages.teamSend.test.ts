@@ -408,6 +408,23 @@ describe("delivery routing — backfill independence", () => {
 });
 
 describe("settled recipient recovery end to end", () => {
+  test.each(["starting", "resuming", "connected"])("recovers an exhausted send after %s stops progressing", async agentStatus => {
+    const now = Date.now();
+    const { ctx, db, tables } = world({ now });
+    await performSessionSend(ctx as any, "uBob" as any, { to: "jxbob01", body: "The release is ready" });
+    const msg = tables.pending_messages[0];
+    await db.patch(msg._id, { status: "undeliverable", retry_count: 10, created_at: now - 600000 });
+    await db.patch("msBob", { agent_status: agentStatus, agent_status_updated_at: now - 60000 });
+    expect(await healAndNotifyStuckMessages(ctx as any, now)).toMatchObject({ revived: 0, waiting: 1 });
+    await db.patch("msBob", { agent_status_updated_at: now - 300000 });
+    expect(await healAndNotifyStuckMessages(ctx as any, now)).toMatchObject({ revived: 1, waiting: 0 });
+    expect(await claimPendingMessageForDaemon(ctx as any, msg._id, "uBob" as any, "devBob", now))
+      .toMatchObject({ content: msg.content, status: "pending", retry_count: 0 });
+    await markPendingDelivered(ctx as any, msg);
+    expect(await healAndNotifyStuckMessages(ctx as any, now)).toMatchObject({ revived: 0 });
+    expect((await db.get("convBob"))?.has_pending_messages).toBe(false);
+  });
+
   test.each(["idle", "waiting", "dormant", "done"])("recovers an unacknowledged send to a %s recipient", async agentStatus => {
     const now = Date.now();
     const { ctx, db, tables } = world({ now });

@@ -764,6 +764,11 @@ export function parseCodexSessionFile(content: string, state: { model?: string }
     isError?: boolean;
     images?: ImageBlock[];
   }) => {
+    const output = extractInlineImages(message.content);
+    const images = [
+      ...(message.images ?? []),
+      ...output.paths.map(localPath => ({ mediaType: "image/png", localPath, toolUseId: message.toolUseId })),
+    ];
     messages.push({
       uuid: message.uuid,
       role: "assistant",
@@ -772,10 +777,10 @@ export function parseCodexSessionFile(content: string, state: { model?: string }
       model: currentModel,
       toolResults: [{
         toolUseId: message.toolUseId,
-        content: message.content,
+        content: output.text,
         isError: message.isError,
       }],
-      images: message.images && message.images.length > 0 ? message.images : undefined,
+      images: images.length > 0 ? images : undefined,
     });
   };
 

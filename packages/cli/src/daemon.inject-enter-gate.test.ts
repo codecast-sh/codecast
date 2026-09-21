@@ -40,6 +40,25 @@ describe("tmuxWatchablePrefix", () => {
 });
 
 describe("awaitTmuxComposerPayload", () => {
+  test.each([false, true])("Codex collapsed paste excludes its footer before faint text is removed (styled=%s)", async styled => {
+    const footer = styled
+      ? "  \x1b[38;2;246;226;183mgpt-6-astra xhigh\x1b[2m · \x1b[0m\x1b[38;2;171;223;167m~/src/codecast\x1b[2m · \x1b[0mFix Jordan switch state"
+      : "  gpt-6-astra xhigh · ~/src/codecast · Fix Jordan switch state";
+    expect(await awaitTmuxComposerPayload("t:0.0", PAYLOAD.repeat(25), {
+      bracketedPaste: true, allowRePaste: false,
+      rePaste: async () => { throw new Error("must not repeat the paste"); },
+      exec: async () => ({ stdout: `› [Pasted Content ${PAYLOAD.repeat(25).length} chars]\n \n${footer}\n` }) as any,
+    })).toBe("matched");
+  });
+
+  test.each(["foreign", "\nforeign", "[Pasted Content 100 chars]"])("Codex footer recognition does not hide extra draft text: %s", async residue => {
+    await expect(awaitTmuxComposerPayload("t:0.0", PAYLOAD.repeat(25), {
+      bracketedPaste: true, allowRePaste: false, budgetMs: 1000,
+      rePaste: async () => { throw new Error("must not repeat the paste"); },
+      exec: async () => ({ stdout: `› [Pasted Content ${PAYLOAD.repeat(25).length} chars]\n${residue}\n\n  gpt-6-astra xhigh · ~/src/codecast\n` }) as any,
+    })).rejects.toThrow("INJECT_UNVERIFIED");
+  });
+
   test("a long single-line bracketed paste can collapse into a chip", async () => {
     expect(await awaitTmuxComposerPayload("t:0.0", PAYLOAD.repeat(25), {
       bracketedPaste: true,

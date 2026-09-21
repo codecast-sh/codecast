@@ -202,7 +202,7 @@ function fixture(transport = "tmux", cached = true) {
       "classifyTmuxLiveState", "livenessFromTmuxState", "isResumeCwdPicker", "turnStartedAtFor", "paneTextAfterLastMatch",
       "assertPromptAbsent", "inputGuard", "captureTmuxLiveState", "ensureTmuxReady", "withTmuxLock", "drainTmuxComposer", "tmuxComposerText", "tmuxComposerDraft",
       "tmuxWatchablePrefix", "tmuxComposerPayloadMatcher", "tmuxComposerHoldsPayload", "awaitTmuxComposerPayload", "normalizePromptText",
-      "captureTmuxComposerPane", "stripTmuxFaintText", "tmuxComposerRegion", "tmuxPromptStillHasInput", "tmuxPromptShowsPastePlaceholder", "pasteChipLines", "pasteChipContradicts",
+      "captureTmuxComposerPane", "stripAnsi", "stripTmuxFaintText", "tmuxComposerRegion", "tmuxPromptStillHasInput", "tmuxPromptShowsPastePlaceholder", "pasteChipLines", "pasteChipContradicts",
       "tmuxPaneShowsBlockingPrompt", "takeTmuxSubmitVerdict", "recordTmuxSubmitVerdict", "verifyTmuxSubmitAfterPaste", "runTmuxSubmitVerify",
       "deliverIntoPane", "paneInteractiveQuestion", "paneInteractivePrompt", "injectViaTmux", "injectViaTmuxInner",
       "planHighlightStep", "selectRowHasLabel", "selectHighlightedOption",
@@ -214,6 +214,7 @@ function fixture(transport = "tmux", cached = true) {
     const constants = [
       "RESUME_CWD_PICKER_RE", "DRAIN_MAX_CYCLES", "stripComposerChrome", "TMUX_ONLY_TERMINALS", "DELIVERY_TIMEOUT_MS", "TRUST_PROMPT_RE",
       "PANE_TITLE_WORKING", "SUBMIT_VERDICT_TTL_MS", "submitVerdicts",
+      "ANSI_ESCAPE_RE",
     ].map(name => {
       const line = source.split("\n").find(l => new RegExp(`^(?:export )?\\s*const ${name} =`).test(l));
       if (!line) throw new Error(`Missing constant ${name}`);
@@ -301,6 +302,50 @@ describe("machine prompt delivery safety", () => {
     expect(f.timers[0].ms).toBe(5000);
     await f.timers[0].fn();
     expect(calls).toEqual([["update", { holdReason: "waiting for terminal input confirmation" }]]);
+  });
+
+  test.each([10, 12, 100])("retry %s keeps the original message eligible for delivery", async retryCount => {
+    const f = fixture();
+    f.state.menu = null;
+    f.scheduleMessageRetry("update", retryCount, "conv", "continue");
+    expect(f.statuses).toEqual([]);
+    expect(f.timers[0].ms).toBe(300000);
+    await f.scan([{ _id: "update", content: "continue", retry_count: retryCount } as any]);
+    expect(f.bodies).toEqual([]);
+    await f.timers[0].fn();
+    expect(f.events).toEqual(["retry:update"]);
+    await f.scan([{ _id: "update", content: "continue", retry_count: retryCount + 1 } as any]);
+    expect(f.bodies).toEqual(["continue"]);
+    expect(f.statuses.some((row: any) => row.status === "undeliverable")).toBe(false);
+  });
+
+  test("a failed retry write schedules another attempt", async () => {
+    const f = fixture();
+    f.deps.syncService.retryMessage = async () => { throw new Error("connection lost"); };
+    f.scheduleMessageRetry("update", 10, "conv", "continue");
+    await f.timers[0].fn();
+    expect(f.timers).toHaveLength(2);
+    expect(f.timers[1].ms).toBe(300000);
+    expect(f.deps.messageRetryTimers.has("update")).toBe(true);
+    expect(f.statuses).toEqual([]);
+  });
+
+  test("a deleted message retires its retry timer", async () => {
+    const f = fixture();
+    f.deps.syncService.retryMessage = async () => { throw new Error("Message not found"); };
+    f.scheduleMessageRetry("update", 10, "conv", "continue");
+    await f.timers[0].fn();
+    expect(f.timers).toHaveLength(1);
+    expect(f.deps.messageRetryTimers.has("update")).toBe(false);
+  });
+
+  test.each([true, false])("a held delivery preserves observed agent status (cached=%s)", async cached => {
+    const f = fixture("tmux", cached);
+    const statuses: string[] = [];
+    f.deps.syncService.updateSessionAgentStatus = async (_id: string, status: string) => { statuses.push(status); };
+    await f.scan([{ _id: "update", content: session("continue") }]);
+    expect(statuses).toEqual([]);
+    expect(f.bodies).toEqual([]);
   });
 
   test("fixture resolves a one-second delivery sleep while retry timers stay controlled", async () => {

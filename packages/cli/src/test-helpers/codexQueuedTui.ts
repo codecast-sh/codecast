@@ -12,8 +12,8 @@ let swallowEnter = layout === "claude-collapsed";
 function render() {
   writeFileSync(`${statePath}.tmp`, JSON.stringify(state));
   renameSync(`${statePath}.tmp`, statePath);
-  const prompt = layout === "claude-collapsed" && composer.length > 1000
-    ? "[Pasted text #98]"
+  const prompt = layout?.endsWith("collapsed") && composer.length > 1000
+    ? layout === "claude-collapsed" ? "[Pasted text #98]" : `[Pasted Content ${composer.length} chars]`
     : composer || (layout?.startsWith("claude") ? "" : "Ask Codex to do anything");
   const pane = layout?.startsWith("claude")
     ? `${"─".repeat(80)}\n❯ ${prompt}\n${"─".repeat(80)}\n  bypass permissions on (shift+tab to cycle)${inputReleasePath ? ` · ${footerTick}` : ""}`

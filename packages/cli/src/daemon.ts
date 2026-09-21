@@ -32,6 +32,7 @@ import {
   DEFAULT_HIBERNATE_IDLE_MS,
   DEFAULT_MAX_LIVE_SESSIONS,
   HIBERNATE_MAX_PER_PASS,
+  HIBERNATE_REFUSAL_BACKOFF_MS,
   HIBERNATE_RESUME_GRACE_MS,
   hibernationBlockReason,
   selectHibernationCandidates,
@@ -13719,7 +13720,13 @@ export function stripTmuxFaintText(pane: string): string {
 
 export async function captureTmuxComposerPane(exec: typeof tmuxExec, target: string, lines: number): Promise<string> {
   const { stdout } = await exec(["capture-pane", "-p", "-e", "-J", "-t", target, "-S", `-${lines}`]);
-  return stripTmuxFaintText(stdout);
+  const rows = stdout.split("\n");
+  const plain = rows.map(stripAnsi);
+  const footer = plain.findIndex((line, index) => index > 0 && !plain[index - 1].trim()
+    && /^ {2}\S.*\s·\s(?:~\/|\/|[A-Za-z]:[\\/])/.test(line)
+    && plain.slice(index + 1).every(rest => !rest.trim()));
+  const body = footer === -1 ? stdout : rows.slice(0, footer).join("\n");
+  return stripTmuxFaintText(body);
 }
 
 function tmuxComposerRegion(pane: string): string | null {
@@ -21086,6 +21093,11 @@ export async function hibernateSessionNow(
   return refusal ? { result: `skipped_${refusal}`, error: `not parked: ${refusal}` } : { result: "hibernated" };
 }
 
+// When the gates last refused each session, so the next passes offer their
+// picks to someone else (HIBERNATE_REFUSAL_BACKOFF_MS). Memory only: a restart
+// costs one pass of repeated refusals, which is what every pass cost before.
+const hibernationRefusedAt = new Map<string, number>();
+
 // `io` overrides only the parts a test needs; everything else stays real, so
 // the end-to-end test runs the actual tmux listing and the actual teardown.
 export async function runHibernationPass(overrides: Partial<HibernationPassIo> = {}): Promise<number> {
@@ -21099,12 +21111,16 @@ export async function runHibernationPass(overrides: Partial<HibernationPassIo> =
   if (candidates === null) return 0; // tmux unreachable: no facts, so no kills
   if (candidates.length === 0) return 0;
 
-  const { picked, skips } = selectHibernationCandidates(candidates, policy);
+  const passAt = Date.now();
+  for (const [sessionId, at] of hibernationRefusedAt) {
+    if (passAt - at >= HIBERNATE_REFUSAL_BACKOFF_MS) hibernationRefusedAt.delete(sessionId);
+  }
+  const { picked, skips } = selectHibernationCandidates(candidates, policy, new Set(hibernationRefusedAt.keys()));
   if (policy.dryRun) {
     const would: string[] = [];
     for (const cand of picked) {
       const refusal = await previewHibernation(cand, io);
-      if (refusal) skips.push(refusal);
+      if (refusal) { skips.push(refusal); hibernationRefusedAt.set(cand.sessionId, passAt); }
       else would.push(`${cand.sessionId.slice(0, 8)}@${Math.round(cand.awakeIdleMs / 3600000)}h`);
     }
     reaperLog(`hibernation DRY RUN: ${candidates.length} live, cap=${policy.maxLive}, would park ${would.length}${would.length ? ` (${would.join(", ")})` : ""}, skipped: ${summarizeReapSkips(skips)}`, false);
@@ -21113,7 +21129,7 @@ export async function runHibernationPass(overrides: Partial<HibernationPassIo> =
   let hibernated = 0;
   for (const cand of picked) {
     const refusal = await attemptHibernation(cand, io);
-    if (refusal) skips.push(refusal);
+    if (refusal) { skips.push(refusal); hibernationRefusedAt.set(cand.sessionId, passAt); }
     else hibernated++;
   }
   // File-only, like the reaper's pass line: this fires every ~5 min.
@@ -24203,7 +24219,6 @@ async function deliverMessage(
     const cacheKeys = Object.keys(conversationCache);
     const reverseKeys = Object.keys(reverseCache);
     logDelivery(`No session in cache for conv=${conversationId.slice(0, 12)}, cache has ${cacheKeys.length} sessions/${reverseKeys.length} convs, startedTmux has ${startedSessionTmux.size} entries`);
-    syncService.updateSessionAgentStatus(conversationId, "starting").catch(logConvexFailure);
     // Try delivering via a recently started tmux session (from start_session command)
     const tryStartedTmux = async (entry: StartedSessionInfo): Promise<boolean> => {
       try {
@@ -29185,14 +29200,9 @@ async function main(): Promise<void> {
     holdReason?: string,
   ) {
     if (messageRetryTimers.has(messageId)) return;
-    if (!holdReason && retryCount >= 10) {
-      logDelivery(`msg=${messageId.slice(0, 8)} exceeded max retries (10), marking undeliverable`);
-      syncService.updateMessageStatus({ messageId, status: "undeliverable" }).catch(logConvexFailure);
-      return;
-    }
-    const delays = [1000, 5000, 15000, 30000, 60000];
+    const delays = [1000, 5000, 15000, 30000, 60000, 120000, 300000];
     const delay = holdReason ? 5000 : delays[Math.min(retryCount, delays.length - 1)];
-    logDelivery(`Scheduling retry ${retryCount + 1}/10 for msg=${messageId.slice(0, 8)} in ${delay / 1000}s`);
+    logDelivery(`Scheduling retry ${retryCount + 1} for msg=${messageId.slice(0, 8)} in ${delay / 1000}s`);
     messageRetryTimers.add(messageId);
     setTimeout(async () => {
       messageRetryTimers.delete(messageId);
@@ -29200,7 +29210,11 @@ async function main(): Promise<void> {
         await syncService.retryMessage(messageId, holdReason ? { holdReason } : undefined);
         logDelivery(`Retry ${retryCount + 1} triggered for msg=${messageId.slice(0, 8)}`);
       } catch (err) {
-        logDelivery(`Retry trigger failed for msg=${messageId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
+        const error = err instanceof Error ? err.message : String(err);
+        logDelivery(`Retry trigger failed for msg=${messageId.slice(0, 8)}: ${error}`);
+        if (!error.includes("Message not found")) {
+          scheduleMessageRetry(messageId, retryCount + 1, conversationId, messageContent, holdReason);
+        }
       }
     }, delay);
   }
@@ -29227,6 +29241,7 @@ async function main(): Promise<void> {
         logDelivery(`Delivery scan: ${messages.length} pending message(s) received`);
       }
       for (const pendingMsg of messages) {
+        if (messageRetryTimers.has(pendingMsg._id)) continue;
         try {
           assertLegacyDeliveryEnvelope(pendingMsg);
         } catch {
@@ -29241,11 +29256,6 @@ async function main(): Promise<void> {
           continue;
         }
         const msg = { ...pendingMsg, ...claimed };
-        if ((msg.retry_count ?? 0) >= 12) {
-          logDelivery(`msg=${msg._id.slice(0, 8)} retry_count=${msg.retry_count} exceeds cap, marking undeliverable`);
-          syncService.updateMessageStatus({ messageId: msg._id, status: "undeliverable" }).catch(logConvexFailure);
-          continue;
-        }
         // The terminal is waiting for a human answer: a paste would answer it,
         // so the conversation is skipped until the prompt closes or the hold
         // window lapses (see pendingPromptHold). Not a retry, not an attempt.
@@ -29300,8 +29310,6 @@ async function main(): Promise<void> {
             messageContent = realText ? `${realText} ${imageTags}` : imageTags;
           }
         }
-
-        syncService.updateSessionAgentStatus(msg.conversation_id, "connected").catch(logConvexFailure);
 
         // If recently injected to tmux, skip re-delivery (prevents retry race causing duplicates).
         // Confirmed entries expire on the short TTL so a genuinely lost injection is redelivered;
