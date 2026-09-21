@@ -48,7 +48,9 @@ import {
   scanVault,
   vaultContentHash,
   vaultContentType,
+  vaultResponseSecurityHeaders,
 } from "./vaultScope.js";
+import { mintVaultCapability, redactVaultUrl, vaultCapabilityAllows } from "./vaultCapability.js";
 import { VaultWatchHub, type VaultWatchHubOptions } from "./vaultWatcher.js";
 
 const VAULT_WS_PATH = "/vault/ws";
@@ -160,6 +162,7 @@ async function handleGetFile(
   const data = await fsp.readFile(target.abs);
   res.writeHead(200, {
     ...headers,
+    ...vaultResponseSecurityHeaders(target.rel),
     "Content-Type": vaultContentType(target.rel),
     "Content-Length": String(data.length),
     "Cache-Control": "no-cache",
@@ -204,6 +207,7 @@ async function handlePutFile(
     if (mismatch) {
       res.writeHead(409, {
         ...headers,
+        ...vaultResponseSecurityHeaders(target.rel),
         "Content-Type": current ? vaultContentType(target.rel) : "application/json",
         ETag: currentEtag ?? "",
         "X-Vault-Mtime": String(currentMtime ?? 0),

@@ -10,7 +10,11 @@ import {
   deliverPendingComments,
   historyBySlug,
   ownerPanel,
+  MAX_COMMENTS_PER_MINUTE,
+  MAX_VIEWS_PER_MINUTE,
+  recordView,
 } from "./artifacts";
+import { kTokenFor, eTokenFor } from "./lib/artifactGates";
 import { brandArtifactHtml } from "./artifactPages";
 import { normalizeAssetPath } from "./artifactsHttp";
 
@@ -20,6 +24,9 @@ function makeCtx(rows: Array<Record<string, any>>, opts: { tokenUser?: string } 
   const byId = new Map(rows.map((r) => [r._id as string, r]));
   const patches: Array<{ id: string; patch: Record<string, any> }> = [];
   const inserts: Array<Record<string, any>> = [];
+  // Comment rows only. submitComments also writes its rate-limit window, so an
+  // index into every insert no longer means "the comment this test posted".
+  const commentInserts: Array<Record<string, any>> = [];
   const deletes: string[] = [];
   const storageDeletes: string[] = [];
   // Sub-mutations (notificationRouter.emit) recorded by args only.
@@ -59,6 +66,7 @@ function makeCtx(rows: Array<Record<string, any>>, opts: { tokenUser?: string } 
         insert: async (_table: string, doc: Record<string, any>) => {
           const _id = `art_${inserts.length}`;
           inserts.push({ _id, table: _table, ...doc });
+          if (_table === "artifact_comments") commentInserts.push({ _id, table: _table, ...doc });
           rows.push({ _id, _table, ...doc });
           return _id;
         },
@@ -79,6 +87,7 @@ function makeCtx(rows: Array<Record<string, any>>, opts: { tokenUser?: string } 
     },
     patches,
     inserts,
+    commentInserts,
     deletes,
     storageDeletes,
     mutations,
@@ -378,14 +387,14 @@ describe("comment discussion gating", () => {
   const batch = { author_name: "Viewer", version: 3, comments: [{ text: "nice page" }] };
 
   test("a viewer's comment is stored as discussion, never delivered", async () => {
-    const { ctx, inserts } = makeCtx([{ ...artRow }]);
+    const { ctx, inserts, commentInserts } = makeCtx([{ ...artRow }]);
     const result = await (submitComments as any)._handler(ctx, { slug: artRow.slug, ...batch });
     expect(result).toMatchObject({ delivered: false, count: 1, as: null });
-    expect(inserts[0]).toMatchObject({ table: "artifact_comments", text: "nice page", delivered: false });
+    expect(commentInserts[0]).toMatchObject({ table: "artifact_comments", text: "nice page", delivered: false });
   });
 
   test("an anonymous comment notifies the owner, with the viewer name and a deep link", async () => {
-    const { ctx, inserts, mutations } = makeCtx([{ ...artRow }]);
+    const { ctx, inserts, mutations, commentInserts } = makeCtx([{ ...artRow }]);
     await (submitComments as any)._handler(ctx, { slug: artRow.slug, ...batch });
     expect(mutations).toHaveLength(1);
     expect(mutations[0]).toMatchObject({
@@ -396,14 +405,14 @@ describe("comment discussion gating", () => {
       direct_recipient_id: "u1",
     });
     expect(mutations[0].actor_user_id).toBeUndefined();
-    expect(mutations[0].link).toContain(`/a/${artRow.slug}?c=${inserts[0]._id}`);
+    expect(mutations[0].link).toContain(`/a/${artRow.slug}?c=${commentInserts[0]._id}`);
   });
 
   test("a forged deliver request without the owner key still lands as discussion", async () => {
-    const { ctx, inserts } = makeCtx([{ ...artRow }]);
+    const { ctx, inserts, commentInserts } = makeCtx([{ ...artRow }]);
     const result = await (submitComments as any)._handler(ctx, { slug: artRow.slug, deliver: true, owner_key: "wrong", ...batch });
     expect(result.delivered).toBe(false);
-    expect(inserts[0]).toMatchObject({ delivered: false });
+    expect(commentInserts[0]).toMatchObject({ delivered: false });
   });
 
   test("comments off rejects new posts", async () => {
@@ -437,7 +446,7 @@ describe("comment identity, threads, and notifications", () => {
   ];
 
   test("a valid identity token stamps the account's name/avatar/user onto the comment", async () => {
-    const { ctx, inserts } = makeCtx(teamRows());
+    const { ctx, inserts, commentInserts } = makeCtx(teamRows());
     const result = await (submitComments as any)._handler(ctx, {
       slug: artRow.slug,
       author_name: "Spoofed Name",
@@ -446,7 +455,7 @@ describe("comment identity, threads, and notifications", () => {
       comments: [{ text: "love this" }],
     });
     expect(result.as).toEqual({ name: "Sam", avatar: "https://av/sam.png" });
-    expect(inserts[0]).toMatchObject({
+    expect(commentInserts[0]).toMatchObject({
       table: "artifact_comments",
       author_name: "Sam",
       author_user_id: "u2",
@@ -456,7 +465,7 @@ describe("comment identity, threads, and notifications", () => {
   });
 
   test("a bad identity token degrades to the viewer-typed name", async () => {
-    const { ctx, inserts } = makeCtx(teamRows());
+    const { ctx, inserts, commentInserts } = makeCtx(teamRows());
     const result = await (submitComments as any)._handler(ctx, {
       slug: artRow.slug,
       author_name: "Drive-by",
@@ -465,8 +474,8 @@ describe("comment identity, threads, and notifications", () => {
       comments: [{ text: "hello" }],
     });
     expect(result.as).toBeNull();
-    expect(inserts[0]).toMatchObject({ author_name: "Drive-by" });
-    expect(inserts[0].author_user_id).toBeUndefined();
+    expect(commentInserts[0]).toMatchObject({ author_name: "Drive-by" });
+    expect(commentInserts[0].author_user_id).toBeUndefined();
   });
 
   test("a teammate's comment notifies the owner as that account", async () => {
@@ -524,7 +533,7 @@ describe("comment identity, threads, and notifications", () => {
         status: "open", delivered: false, created_at: 10,
       },
     ];
-    const { ctx, inserts, mutations } = makeCtx(rows);
+    const { ctx, inserts, mutations, commentInserts } = makeCtx(rows);
     const result = await (submitComments as any)._handler(ctx, {
       slug: artRow.slug,
       author_name: "Guest",
@@ -533,7 +542,7 @@ describe("comment identity, threads, and notifications", () => {
       comments: [{ text: "agreed!" }],
     });
     expect(result.count).toBe(1);
-    expect(inserts[0]).toMatchObject({ parent_comment_id: "c1", text: "agreed!" });
+    expect(commentInserts[0]).toMatchObject({ parent_comment_id: "c1", text: "agreed!" });
     const reply = mutations.filter((m) => m.event_type === "comment_reply");
     expect(reply).toHaveLength(1);
     expect(reply[0]).toMatchObject({ direct_recipient_id: "u2", actor_name: "Guest" });
@@ -549,11 +558,11 @@ describe("comment identity, threads, and notifications", () => {
       { _table: "artifact_comments", _id: "c1", artifact_id: "a1", batch_id: "b1", author_name: "A", text: "top", version: 3, status: "open", delivered: false, created_at: 10 },
       { _table: "artifact_comments", _id: "c2", artifact_id: "a1", batch_id: "b2", author_name: "B", text: "mid", version: 3, status: "open", delivered: false, created_at: 11, parent_comment_id: "c1" },
     ];
-    const { ctx, inserts } = makeCtx(rows);
+    const { ctx, inserts, commentInserts } = makeCtx(rows);
     await (submitComments as any)._handler(ctx, {
       slug: artRow.slug, author_name: "C", version: 3, parent_id: "c2", comments: [{ text: "deep" }],
     });
-    expect(inserts[0]).toMatchObject({ parent_comment_id: "c1" });
+    expect(commentInserts[0]).toMatchObject({ parent_comment_id: "c1" });
   });
 
   test("a reply to a missing comment is rejected", async () => {
@@ -572,6 +581,119 @@ describe("comment identity, threads, and notifications", () => {
       comments: [{ text: "note to self" }],
     });
     expect(mutations).toHaveLength(0);
+  });
+});
+
+describe("comment gates on the public mutation", () => {
+  // PARENT-04: submitComments is internet-callable in its own right, so the
+  // page's own gates have to hold here and not only on the HTTP serve route.
+  const gatedRow = { ...existingRow, owner_key: "sekrit", session_conversation_id: "conv1" };
+  const batch = { author_name: "Viewer", version: 3, comments: [{ text: "nice page" }] };
+
+  test("an expired page takes no anonymous comment", async () => {
+    const { ctx, commentInserts, mutations } = makeCtx([{ ...gatedRow, expires_at: 500 }]);
+    const result = await (submitComments as any)._handler(ctx, { slug: gatedRow.slug, ...batch });
+    expect(result.error).toContain("expired");
+    expect(commentInserts).toEqual([]);
+    expect(mutations).toEqual([]);
+  });
+
+  test("a password-protected page takes no comment without the unlock token", async () => {
+    const { ctx, commentInserts } = makeCtx([{ ...gatedRow, password_hash: "ph" }]);
+    const result = await (submitComments as any)._handler(ctx, { slug: gatedRow.slug, ...batch });
+    expect(result.error).toContain("password");
+    expect(commentInserts).toEqual([]);
+  });
+
+  test("a wrong unlock token is no better than none", async () => {
+    const { ctx, commentInserts } = makeCtx([{ ...gatedRow, password_hash: "ph" }]);
+    const result = await (submitComments as any)._handler(ctx, { slug: gatedRow.slug, k: "nope", ...batch });
+    expect(result.error).toContain("password");
+    expect(commentInserts).toEqual([]);
+  });
+
+  test("the real unlock token gets the comment through", async () => {
+    const { ctx, commentInserts } = makeCtx([{ ...gatedRow, password_hash: "ph" }]);
+    const k = await kTokenFor("ph", gatedRow.slug);
+    const result = await (submitComments as any)._handler(ctx, { slug: gatedRow.slug, k, ...batch });
+    expect(result).toMatchObject({ count: 1 });
+    expect(commentInserts).toHaveLength(1);
+  });
+
+  test("the owner key clears the gate — the owner is not a locked-out viewer", async () => {
+    const { ctx, commentInserts } = makeCtx([{ ...gatedRow, password_hash: "ph" }]);
+    const result = await (submitComments as any)._handler(ctx, {
+      slug: gatedRow.slug, owner_key: "sekrit", deliver: false, ...batch,
+    });
+    expect(result).toMatchObject({ count: 1 });
+    expect(commentInserts).toHaveLength(1);
+  });
+
+  test("an email-walled page needs the email token", async () => {
+    const { ctx, commentInserts } = makeCtx([{ ...gatedRow, email_gate: true }]);
+    const blocked = await (submitComments as any)._handler(ctx, { slug: gatedRow.slug, ...batch });
+    expect(blocked.error).toContain("email");
+    expect(commentInserts).toEqual([]);
+    const e = await eTokenFor("sekrit", gatedRow.slug);
+    const ok = await (submitComments as any)._handler(ctx, { slug: gatedRow.slug, e, ...batch });
+    expect(ok).toMatchObject({ count: 1 });
+  });
+
+  test("an ungated page still takes anonymous comments", async () => {
+    const { ctx, commentInserts } = makeCtx([{ ...gatedRow }]);
+    const result = await (submitComments as any)._handler(ctx, { slug: gatedRow.slug, ...batch });
+    expect(result).toMatchObject({ count: 1 });
+    expect(commentInserts).toHaveLength(1);
+  });
+
+  test("the flood limit is enforced by the mutation, in the same transaction as the insert", async () => {
+    const { ctx, commentInserts } = makeCtx([{ ...gatedRow }]);
+    let last: any;
+    for (let i = 0; i < MAX_COMMENTS_PER_MINUTE + 3; i++) {
+      last = await (submitComments as any)._handler(ctx, { slug: gatedRow.slug, ...batch });
+    }
+    expect(last.error).toContain("Too many");
+    expect(commentInserts).toHaveLength(MAX_COMMENTS_PER_MINUTE);
+  });
+
+  test("an idempotent retry does not spend flood budget", async () => {
+    const { ctx, commentInserts } = makeCtx([{ ...gatedRow }]);
+    for (let i = 0; i < MAX_COMMENTS_PER_MINUTE + 5; i++) {
+      await (submitComments as any)._handler(ctx, { slug: gatedRow.slug, client_id: "same", ...batch });
+    }
+    expect(commentInserts).toHaveLength(1);
+  });
+});
+
+describe("view beacon gates", () => {
+  const row = { ...existingRow, owner_key: "sekrit" };
+
+  test("a password-walled page does not count a view without the token", async () => {
+    const { ctx, inserts } = makeCtx([{ ...row, password_hash: "ph" }]);
+    expect(await (recordView as any)._handler(ctx, { slug: row.slug })).toEqual({ ok: false });
+    expect(inserts).toEqual([]);
+  });
+
+  test("the unlock token counts the view", async () => {
+    const { ctx, inserts } = makeCtx([{ ...row, password_hash: "ph" }]);
+    const k = await kTokenFor("ph", row.slug);
+    expect(await (recordView as any)._handler(ctx, { slug: row.slug, k })).toEqual({ ok: true });
+    expect(inserts.filter((i) => i.table === "artifact_stats")).toHaveLength(1);
+  });
+
+  test("an expired page counts nothing", async () => {
+    const { ctx, inserts } = makeCtx([{ ...row, expires_at: 500 }]);
+    expect(await (recordView as any)._handler(ctx, { slug: row.slug })).toEqual({ ok: false });
+    expect(inserts).toEqual([]);
+  });
+
+  test("the counter is bounded per minute", async () => {
+    const { ctx, patches } = makeCtx([{ ...row }]);
+    for (let i = 0; i < MAX_VIEWS_PER_MINUTE + 10; i++) {
+      await (recordView as any)._handler(ctx, { slug: row.slug });
+    }
+    const stats = patches.filter((p) => p.patch.view_count !== undefined);
+    expect(stats.at(-1)!.patch.view_count).toBe(MAX_VIEWS_PER_MINUTE);
   });
 });
 

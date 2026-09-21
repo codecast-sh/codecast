@@ -1,5 +1,4 @@
 import { httpRouter } from "convex/server";
-import { parseGithubAppInstallState } from "@codecast/shared/contracts";
 import { ConvexError } from "convex/values";
 import { unsubscribeResponse } from "@platform/email";
 import { httpAction } from "./_generated/server";
@@ -8,6 +7,7 @@ import { auth } from "./auth";
 import { internal, api } from "./_generated/api";
 import { callback as googleOAuthCallback, GOOGLE_CALLBACK_PATH } from "./googleOAuth";
 import { callback as connectorCallback, CONNECTOR_CALLBACK_PATH } from "./oauthConnectors";
+import { installCallbackHandler } from "./githubApp";
 import { verifyLinearSignature, linearDeliveryId } from "./linearWebhooks";
 import { readConversationRange } from "./conversations";
 import { ipRateLimited } from "./lib/httpRateLimit";
@@ -170,77 +170,12 @@ http.route({
   }),
 });
 
+// The install callback lives in githubApp.ts beside the intents it spends, so
+// a test can drive the real handler.
 http.route({
   path: "/api/github-app/callback",
   method: "GET",
-  handler: httpAction(async (ctx, request) => {
-    const url = new URL(request.url);
-    const installationId = url.searchParams.get("installation_id");
-    const setupAction = url.searchParams.get("setup_action");
-    const state = url.searchParams.get("state");
-
-    if (!installationId) {
-      return new Response("Missing installation_id", { status: 400 });
-    }
-
-    if (setupAction === "install" || setupAction === "update") {
-      // The state names the workspace the install binds to: a team, or the
-      // installer themself for a personal install. storeInstallation verifies
-      // the binding (membership, or identity) — the state carries no authority.
-      const bound = parseGithubAppInstallState(state);
-
-      if (!bound) {
-        const redirectUrl = `${process.env.SITE_URL || "https://codecast.sh"}/settings/integrations/github-app?error=missing_team`;
-        return new Response(null, {
-          status: 302,
-          headers: { Location: redirectUrl },
-        });
-      }
-
-      try {
-        const installationDetails = await ctx.runAction(internal.githubApp.fetchInstallationDetails, {
-          installation_id: parseInt(installationId),
-        });
-
-        await ctx.runMutation(internal.githubApp.storeInstallation, {
-          team_id: bound.scope === "team" ? (bound.team_id as any) : undefined,
-          scope_user_id: bound.scope === "personal" ? (bound.user_id as any) : undefined,
-          installation_id: installationDetails.installation_id,
-          account_login: installationDetails.account_login,
-          account_type: installationDetails.account_type,
-          account_id: installationDetails.account_id,
-          repository_selection: installationDetails.repository_selection,
-          repositories: installationDetails.repositories,
-          installed_by_user_id: bound.user_id as any,
-        });
-
-        // The pull requests that already exist on the account arrive now, not
-        // one webhook at a time as people happen to touch them.
-        await ctx.scheduler.runAfter(0, internal.githubApp.backfillInstallationPulls, {
-          installation_id: installationDetails.installation_id,
-        });
-
-        const redirectUrl = `${process.env.SITE_URL || "https://codecast.sh"}/settings/integrations/github-app?success=true`;
-        return new Response(null, {
-          status: 302,
-          headers: { Location: redirectUrl },
-        });
-      } catch (error) {
-        console.error("Failed to process GitHub App installation:", error);
-        const redirectUrl = `${process.env.SITE_URL || "https://codecast.sh"}/settings/integrations/github-app?error=installation_failed`;
-        return new Response(null, {
-          status: 302,
-          headers: { Location: redirectUrl },
-        });
-      }
-    }
-
-    const redirectUrl = `${process.env.SITE_URL || "https://codecast.sh"}/settings/integrations/github-app`;
-    return new Response(null, {
-      status: 302,
-      headers: { Location: redirectUrl },
-    });
-  }),
+  handler: httpAction(installCallbackHandler),
 });
 
 // Constant-time hex-string compare so webhook signature verification can't be

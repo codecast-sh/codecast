@@ -28,6 +28,7 @@ import {
   verifyStateWith,
 } from "./googleOAuth";
 import { claimRefreshOn, writeRefreshOutcomeOn, singleFlightRefresh } from "./lib/tokenRefresh";
+import { sha256Hex } from "./lib/hash";
 
 /* ==========================================================================
  * The provider table
@@ -318,11 +319,6 @@ export const callbackHandler = async (ctx: any, request: Request): Promise<Respo
 
 export const callback = httpAction(callbackHandler);
 
-async function sha256Hex(s: string): Promise<string> {
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
-  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
 /** The one connection row a scope holds for a provider, pending or not. */
 async function connectionRowFor(
   ctx: { db: any },
@@ -365,8 +361,34 @@ export const storeConnection = internalMutation({
     const now = Date.now();
     const existing = await connectionRowFor(ctx, args.provider, teamId ? { team_id: teamId } : { user_id: userId });
     if (existing) {
-      const stillPending = !!existing.pending_confirm_hash;
+      // A RECONNECT onto a confirmed row does not touch the live credentials.
+      // Overwriting them activated a grant nobody confirmed — the redirect
+      // lands in whichever browser followed it, and finishConfirm had nothing
+      // left to check — so a reconnect bypassed the confirmation first connect
+      // requires. The new grant waits in `pending_replacement` until the
+      // authenticated session that started it promotes it, and the old one
+      // keeps working meanwhile.
+      if (!existing.pending_confirm_hash) {
+        await (ctx.db as any).patch(existing._id, {
+          pending_replacement: {
+            confirm_hash: args.pending_confirm_hash,
+            expires_at: now + CONFIRM_TTL_MS,
+            initiated_by: userId,
+            access_token_enc: args.access_token_enc,
+            refresh_token_enc: args.refresh_token_enc,
+            access_expires_at: args.access_expires_at,
+            granted_scopes: args.granted_scopes,
+            account_label: args.account_label,
+            account_id: args.account_id,
+          },
+          updated_at: now,
+        });
+        return { ok: true, id: existing._id.toString() };
+      }
+      // Still pending: there is no live grant to protect, so the newest
+      // attempt replaces the older one whole.
       await (ctx.db as any).patch(existing._id, {
+        connected_by: userId,
         access_token_enc: args.access_token_enc,
         refresh_token_enc: args.refresh_token_enc ?? existing.refresh_token_enc,
         access_expires_at: args.access_expires_at,
@@ -377,9 +399,8 @@ export const storeConnection = internalMutation({
         account_label: args.account_label ?? existing.account_label,
         account_id: args.account_id ?? existing.account_id,
         updated_at: now,
-        ...(stillPending
-          ? { pending_confirm_hash: args.pending_confirm_hash, pending_expires_at: now + CONFIRM_TTL_MS }
-          : {}),
+        pending_confirm_hash: args.pending_confirm_hash,
+        pending_expires_at: now + CONFIRM_TTL_MS,
       });
       return { ok: true, id: existing._id.toString() };
     }
