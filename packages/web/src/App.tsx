@@ -193,6 +193,7 @@ export function App() {
             <Route path="forgot-password" element={<E name="ForgotPassword"><ForgotPassword /></E>} />
             <Route path="reset-password" element={<E name="ResetPassword"><ResetPassword /></E>} />
             <Route path="auth/cli" element={<E name="AuthCli"><AuthCli /></E>} />
+            <Route path="slack/connect" element={<E name="SlackConnect"><SlackConnect /></E>} />
             {/* Identity relay for published-page comments (artifact bar → sign in). */}
             <Route path="pages/auth" element={<E name="ArtifactAuth"><ArtifactAuth /></E>} />
             <Route path="join/:code" element={<E name="JoinTeam"><JoinTeam /></E>} />
@@ -259,7 +260,6 @@ export function App() {
               <Route path="schedules/:id" element={<E name="TriggerDetail"><TriggerDetail /></E>} />
               <Route path="sessions" element={<E name="Sessions"><Sessions /></E>} />
               <Route path="anchor" element={<E name="Anchor"><Anchor /></E>} />
-              <Route path="slack/connect" element={<E name="SlackConnect"><SlackConnect /></E>} />
               <Route path="team" element={<E name="Team"><Team /></E>} />
               <Route path="team/activity" element={<E name="TeamActivity"><TeamActivity /></E>} />
               <Route path="team/charts" element={<E name="TeamCharts"><TeamCharts /></E>} />
