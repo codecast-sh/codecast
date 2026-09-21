@@ -94,6 +94,7 @@ describe("createAuthConfig with codecast's parameters", () => {
       github_username: "octo",
       github_avatar_url: "https://a/v.png",
       github_access_token: "gho_x",
+      emailVerified: false,
     });
   });
 
@@ -123,13 +124,13 @@ describe("createAuthConfig with codecast's parameters", () => {
     const h = hooks();
     const cb = codecastConfig(h).callbacks!.createOrUpdateUser!;
     const db = makeFakeDb({
-      users: [{ _id: "users_1", email: "jane@x.io", name: "Jane", created_at: 1 }],
+      users: [{ _id: "users_1", email: "jane@x.io", name: "Jane", created_at: 1, emailVerificationTime: 1 }],
     });
     const ctx = { db, scheduler: { runAfter: async () => {} } } as any;
 
     const id = await cb(ctx, {
       existingUserId: null,
-      profile: { email: "Jane@X.io ", name: "Jane", github_username: "jane", image: null },
+      profile: { email: "Jane@X.io ", name: "Jane", github_username: "jane", image: null, emailVerified: true },
       type: "oauth",
       provider: {} as any,
     } as any);
@@ -157,7 +158,7 @@ describe("createAuthConfig with codecast's parameters", () => {
 
   test("an existing user id short circuits", async () => {
     const cb = codecastConfig(hooks()).callbacks!.createOrUpdateUser!;
-    const db = makeFakeDb({ users: [] });
+    const db = makeFakeDb({ users: [{ _id: "users_9", email: "a@b.c" }] });
     expect(await cb({ db } as any, { existingUserId: "users_9", profile: { email: "a@b.c" } } as any)).toBe("users_9" as any);
     expect(db._inserted).toEqual([]);
   });

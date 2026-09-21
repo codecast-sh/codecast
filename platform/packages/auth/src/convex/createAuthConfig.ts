@@ -100,13 +100,13 @@ export function createAuthConfig(params: AuthConfigParams): ConvexAuthConfig {
     providers.push(
       Google({
         ...(scope ? { authorization: { params: { scope } } } : {}),
-        ...(profile
-          ? {
-              profile(raw: any) {
-                return profile(raw) as any;
-              },
-            }
-          : {}),
+        profile(raw: any) {
+          return {
+            ...(profile ? profile(raw) : { id: raw.sub, name: raw.name, image: raw.picture }),
+            email: raw.email,
+            emailVerified: raw.email_verified === true,
+          } as any;
+        },
       }),
     );
   }
@@ -115,8 +115,23 @@ export function createAuthConfig(params: AuthConfigParams): ConvexAuthConfig {
     providers.push(
       GitHub({
         authorization: { params: { scope: params.github.scope } },
+        userinfo: {
+          url: "https://api.github.com/user",
+          async request({ tokens }: any) {
+            const headers = { Authorization: `Bearer ${tokens.access_token}`, "User-Agent": "authjs" };
+            const response = await fetch("https://api.github.com/user", { headers });
+            if (!response.ok) throw new Error("Could not load GitHub identity");
+            const raw = await response.json();
+            const emailsResponse = await fetch("https://api.github.com/user/emails", { headers });
+            if (!emailsResponse.ok) return { ...raw, email: undefined, email_verified: false };
+            const emails = await emailsResponse.json() as Array<{ email: string; verified: boolean; primary: boolean }>;
+            const verified = emails.filter((entry) => entry.verified === true);
+            const email = (verified.find((entry) => entry.primary) ?? verified[0])?.email;
+            return { ...raw, email, email_verified: !!email };
+          },
+        },
         profile(profile: any, tokens: any) {
-          return mapProfile(profile, tokens) as any;
+          return { ...mapProfile(profile, tokens), email: profile.email, emailVerified: profile.email_verified === true } as any;
         },
       }),
     );
@@ -126,7 +141,11 @@ export function createAuthConfig(params: AuthConfigParams): ConvexAuthConfig {
     providers.push(
       Apple({
         profile(profile: any) {
-          return mapProfile(profile) as any;
+          return {
+            ...mapProfile(profile),
+            email: profile.email,
+            emailVerified: profile.email_verified === true || profile.email_verified === "true",
+          } as any;
         },
       }),
     );
@@ -149,6 +168,10 @@ export function createAuthConfig(params: AuthConfigParams): ConvexAuthConfig {
     );
     providers.push(
       Password({
+        profile(params) {
+          if (typeof params.email !== "string" || !params.email.trim()) throw new Error("Missing email");
+          return { email: params.email.trim().toLowerCase() };
+        },
         reset,
         ...(emailVerificationEnabled ? { verify } : {}),
       }),
@@ -167,6 +190,7 @@ export function createAuthConfig(params: AuthConfigParams): ConvexAuthConfig {
       redirect: makeRedirectCallback(params.redirect),
       createOrUpdateUser: makeCreateOrUpdateUser({
         tables: params.tables,
+        verifiedCredentialProviders: params.appleNative ? [params.appleNative.id ?? "apple-native"] : [],
         onUserCreated: params.onUserCreated,
         onUserUpdated: params.onUserUpdated,
       }) as any,

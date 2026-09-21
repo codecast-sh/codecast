@@ -224,9 +224,6 @@ export const addAlternateEmail = mutation({
       throw new Error("Another account already signs in with that address");
     }
     await ctx.db.patch(userId, { alternate_emails: [...mine, email] });
-    // Anyone already seen under this address becomes you, wherever we match
-    // people by email.
-    await ctx.scheduler.runAfter(0, internal.slackSync.claimSlackPeopleByEmail, { user_id: userId, email });
     return { ok: true as const, email, added: true };
   },
 });

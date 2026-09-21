@@ -43,8 +43,8 @@ const SLACK_CH = "C0GENERAL";
 function seed(over: Record<string, any[]> = {}) {
   return {
     users: [
-      { _id: ALICE, name: "Alice", email: "alice@example.test", github_username: "alice" },
-      { _id: BOB, name: "Bob", email: "bob@example.test", github_username: "bob" },
+      { _id: ALICE, name: "Alice", email: "alice@example.test", emailVerificationTime: 1, github_username: "alice" },
+      { _id: BOB, name: "Bob", email: "bob@example.test", emailVerificationTime: 1, github_username: "bob" },
     ],
     teams: [{ _id: TEAM, name: "Union", invite_code: "U", created_at: 1, features: { chat: true } }],
     team_memberships: [
@@ -380,9 +380,9 @@ describe("people mapping", () => {
     expect(released.external_author?.name).toBe("Carol");
     expect(released.user_id).not.toBe(BOB);
   });
-  test("a member may only claim or release themselves", async () => {
+  test("a member may only claim their verified identity or release themselves", async () => {
     const bob = context(BOB);
-    await call(upsertSlackUser, bob, { workspace_id: WS, slack_user_id: "UDAVE", team_id: TEAM, profile: { id: "UDAVE", name: "dave" } });
+    await call(upsertSlackUser, bob, { workspace_id: WS, slack_user_id: "UDAVE", team_id: TEAM, profile: { id: "UDAVE", name: "dave", profile: { email: "bob@example.test" } } });
     await expect(call(mapSlackPerson, bob, { team_id: TEAM, slack_user_id: "UDAVE", codecast_user_id: ALICE })).rejects.toThrow(/admin/);
     await call(mapSlackPerson, bob, { team_id: TEAM, slack_user_id: "UDAVE", codecast_user_id: BOB });
     await call(mapSlackPerson, bob, { team_id: TEAM, slack_user_id: "UDAVE", codecast_user_id: null });
