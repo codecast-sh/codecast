@@ -56,6 +56,30 @@ const render = () =>
   );
 
 describe("TmuxAttachPill under a backend that lacks the query", () => {
+  test("Codex without a pane has a focusable gray explanation and no attach action", () => {
+    lookup = () => ({ data: undefined, error: undefined });
+    const html = renderToStaticMarkup(<TmuxAttachPill agentType="codex" isLive conversationKey="cx-server" />);
+    expect(html).toContain('aria-label="No tmux terminal attached"');
+    expect(html).toContain('aria-disabled="true"');
+    expect(html).toContain("text-gray-400");
+    expect(html).not.toContain("text-sol-green");
+    expect(html).not.toContain(' disabled=""');
+    expect(html).not.toContain('aria-label="Copy tmux attach command"');
+  });
+
+  test("other agents without a pane still omit the pill", () => {
+    lookup = () => ({ data: undefined, error: undefined });
+    expect(renderToStaticMarkup(<TmuxAttachPill agentType="claude" isLive />)).toBe("");
+  });
+
+  test("Codex with a pane retains the terminal and copy actions", () => {
+    lookup = () => ({ data: undefined, error: undefined });
+    const html = renderToStaticMarkup(<TmuxAttachPill agentType="codex" tmuxSession="cx-resume" isLive conversationKey="cx-tmux" />);
+    expect(html).toContain("text-sol-green");
+    expect(html).toContain('aria-label="Copy tmux attach command"');
+    expect(html).not.toContain('aria-label="No tmux terminal attached"');
+  });
+
   // Rendering at all IS the assertion — this threw before the fix.
   test("still renders the pane pill", () => {
     lookup = () => ({ data: undefined, error: missingFunction });
