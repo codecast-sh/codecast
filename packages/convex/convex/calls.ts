@@ -36,6 +36,7 @@ import { channelMemberIds, isRestricted } from "./chatAccess";
 import { bucketTs } from "./presenceState";
 import { teamFeatureOffMessage, teamHasFeature } from "./teamFeatures";
 import { endLiveTranscriptsForRoom } from "./transcripts";
+import { postEvent } from "./callChat";
 import {
   CALL_PUSH_CATEGORY,
   CALL_PUSH_SOUND,
@@ -903,6 +904,7 @@ export const setRoomTranscribeOff = mutation({
     const userId = await requireUser(ctx);
     const now = Date.now();
     const seat = await requireSeated(ctx, userId, args.room_key, now);
+    const wasOff = !!(await readRoomState(ctx, args.room_key))?.transcribe_off;
     await upsertRoomState(
       ctx,
       args.room_key,
@@ -910,6 +912,13 @@ export const setRoomTranscribeOff = mutation({
       args.off ? { transcribe_off: true, transcribe_off_at: now } : { transcribe_off: false },
       now,
     );
+    // The room's thread records who pressed it, once per press: the presser
+    // is the only client that knows, since the scribe's own stop that follows
+    // runs on whichever client held the pipes. Switching it back on is told
+    // by the fresh run transcripts.start writes (a manual start).
+    if (args.off && !wasOff) {
+      await postEvent(ctx, { room_key: args.room_key, team_id: seat.team_id, user_id: userId, event: "transcribe_off" });
+    }
     return { transcribe_off: args.off };
   },
 });

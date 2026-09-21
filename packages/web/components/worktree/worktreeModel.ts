@@ -26,18 +26,26 @@ export function findWorktree(checkouts: RepoCheckout[] | undefined, ref: Worktre
 }
 
 /**
- * The worktrees a session has to do with: the one it runs in, then any whose
- * record names it. The second kind is a session that started in the main
- * checkout and made a worktree halfway through, which nothing on its own row says.
+ * The worktrees a session has to do with: the one it runs in, then the ones
+ * it edited files in, then any whose record names it. The later kinds are a
+ * session that started in the main checkout and made a worktree halfway
+ * through, which nothing on its own row says; the files it touched there do.
  */
 export function worktreesOfSession(
   checkouts: RepoCheckout[] | undefined,
-  session: { _id?: string | null; worktree_name?: string | null; worktree_path?: string | null; project_path?: string | null },
+  session: { _id?: string | null; worktree_name?: string | null; worktree_path?: string | null; project_path?: string | null; recent_files?: string[] | null },
 ): WorktreeRef[] {
   const own = session.worktree_name ?? worktreeOfPath(session.worktree_path ?? session.project_path)?.name;
-  const named = (checkouts ?? []).flatMap((c) => c.worktrees)
-    .filter((w) => !w.main && w.name !== own && !!session._id && w.sessions?.includes(session._id));
-  return [...(own ? [{ name: own, path: session.worktree_path }] : []), ...named.map((w) => ({ name: w.name, path: w.path }))];
+  const refs = new Map<string, WorktreeRef>();
+  if (own) refs.set(own, { name: own, path: session.worktree_path });
+  for (const file of session.recent_files ?? []) {
+    const hit = worktreeOfPath(file);
+    if (hit && !refs.has(hit.name)) refs.set(hit.name, { name: hit.name, path: hit.path });
+  }
+  for (const w of (checkouts ?? []).flatMap((c) => c.worktrees)) {
+    if (!w.main && !refs.has(w.name) && !!session._id && w.sessions?.includes(session._id)) refs.set(w.name, { name: w.name, path: w.path });
+  }
+  return [...refs.values()];
 }
 
 /** What inline code names, if it names a worktree at all: a path inside one, or a branch a worktree has checked out. */

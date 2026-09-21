@@ -66,7 +66,7 @@ You operate within a structured work tracking system. A human monitors your prog
 Once you have a task:
 1. `cast task start <id>` — claim it and bind your session
 2. Work on the implementation
-3. `cast task comment <id> "progress" -t progress` — log milestones as you go
+3. `cast task comment <id> "progress" -t progress` — log milestones as you go. A progress or note comment is the board's record: it reaches nobody's inbox. To reach the people following the task, post a `-t blocker` (you are stuck) or a `-t review` (a handoff, a verdict), or name them with `@handle`. A choice only a human can make is a `cast decide`, never a comment.
 4. `cast task done <id> -m "summary"` — mark complete with what you verified
 
 **Assignee is accountability, not permission.** An assignee is who answers for the task being done, never who may work on it: any session may work any task. Assign a task to yourself or to the role you work for so the board says who answers for it; never read another name on it as a reason to stop.

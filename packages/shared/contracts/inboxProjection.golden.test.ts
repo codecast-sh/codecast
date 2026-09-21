@@ -65,6 +65,13 @@ const GOLDEN_HASH_BY_VERSION: Record<number, string> = {
   // session stands alone in needs input (the new `roles` fixture). No older
   // fixture moved.
   11: "7d991164c1cd119a",
+  // v12: an escalation reaches the person through the role (R1, revised). In
+  // `roles`, the two escalated sessions now ride the role and the role's
+  // standing session files in needs input with everything under it; the new
+  // `growth_direct` row is the child's own card, and the new
+  // `stashed_role_escalated` row stays stashed with its role. No older fixture
+  // moved.
+  12: "cc7dfd659f0c1501",
 };
 
 type Expected = {

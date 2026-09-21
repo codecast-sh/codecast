@@ -35,6 +35,7 @@ import { OrgIntroAnywhere } from "./org/OrgIntroAnywhere";
 import { DesktopAppBanner } from "./DesktopAppBanner";
 import { CliOfflineBanner } from "./CliOfflineBanner";
 import { NotificationNudgeBanner } from "./NotificationNudgeBanner";
+import { TeamSharingNudgeBanner } from "./TeamSharingNudgeBanner";
 import { DeviceSetupDialog } from "./permissions/DeviceSetupDialog";
 import { ConnectionBanner } from "./ConnectionBanner";
 import { StorageHealthBanner } from "./StorageHealthBanner";
@@ -1297,6 +1298,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         <CliOfflineBanner />
         <TmuxMissingBanner />
         <NotificationNudgeBanner />
+        <TeamSharingNudgeBanner />
         <DeviceSetupDialog />
       </ErrorBoundary>
 
@@ -1491,6 +1493,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         <RecentSwitcher
           items={switcherState.items}
           selectedIndex={switcherState.selectedIndex}
+          mode={switcherState.mode}
+          onSelectedIndexChange={switcherState.setSelectedIndex}
+          onSelect={switcherState.select}
         />
       )}
     </div>

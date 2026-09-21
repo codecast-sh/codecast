@@ -23,7 +23,7 @@ app/share/plan/[token]/SharedPlanClient.tsx 1
 app/team/[username]/page.tsx 8
 app/team/activity/page.tsx 1
 app/team/charts/page.tsx 3
-app/team/page.tsx 2
+app/team/page.tsx 1
 app/u/[username]/page.tsx 4
 components/ActivityFeed.tsx 1
 components/CollabComposer.tsx 2
@@ -46,7 +46,6 @@ components/PlanDetailPanel.tsx 1
 components/PlanTaskHoverCard.tsx 1
 components/SetupPromptBanner.tsx 1
 components/Sidebar.tsx 1
-components/TeamAvatarBar.tsx 1
 components/WatchButton.tsx 1
 components/conversation/blocks/castBlocks.tsx 4
 components/conversation/blocks/toolBlocks.tsx 1

@@ -401,6 +401,45 @@ describe("published page links", () => {
   });
 });
 
+describe("Claude artifact links", () => {
+  const ID = "2c5e5d6e-0a70-4e04-9c7a-1c4f1f5b8b6d";
+  const URL = `https://claude.ai/public/artifacts/${ID}`;
+
+  // claude.ai refuses to be framed by other sites, so the card body is a tile
+  // that opens the artifact — never an iframe that would paint a refusal.
+  test("an artifact URL alone on its line renders a card, not a frame", () => {
+    const html = render(`Here is the mockup:\n\n${URL}\n\nTell me what to change.`);
+    expect(html).not.toContain("<iframe");
+    expect(html).toContain("Claude artifact");
+    expect(html).toContain("Copy link to Claude artifact");
+    expect(html).toContain(`href="${URL}"`);
+    expect(html).toContain("Tell me what to change.");
+  });
+
+  test("[caption](url) on its own line titles the card with the caption", () => {
+    const html = render(`[Pricing page mockup](https://claude.site/artifacts/${ID})`);
+    expect(html).not.toContain("<iframe");
+    expect(html).toContain("Pricing page mockup");
+    // The card opens the canonical claude.ai address, whichever host was pasted.
+    expect(html).toContain(`href="${URL}"`);
+  });
+
+  test("an artifact URL inside a sentence renders a pill", () => {
+    const html = render(`The mockup is at ${URL} if you want detail.`);
+    expect(html).not.toContain("Copy link to Claude artifact");
+    expect(html).toContain("rounded-full");
+    expect(html).toContain(">Claude artifact<");
+    expect(html).toContain(`href="${URL}"`);
+  });
+
+  // Only the desktop's native view can show a site that refuses to be framed,
+  // and this render has none, so no pane verb is offered.
+  test("no pane verb without the desktop's native view", () => {
+    expect(render(URL)).not.toContain('aria-label="Open in a pane"');
+    expect(render(`See ${URL} here.`)).not.toContain('aria-label="Open in a pane"');
+  });
+});
+
 describe("local dev server links", () => {
   // An agent printing where its dev server runs: the link becomes a pill that
   // opens a browser pane, reading as the address rather than the raw URL.

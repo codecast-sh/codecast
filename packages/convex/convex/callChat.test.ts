@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { getFunctionName } from "convex/server";
-import { agentLineText, mirrorAgentTurn, post, scheduleAgentTurnMirror } from "./callChat";
+import { agentLineText, list, mirrorAgentTurn, post, postEvent, scheduleAgentTurnMirror } from "./callChat";
+import { setRoomTranscribeOff } from "./calls";
 import { syncAgentFeeds } from "./transcripts";
 import { makeFakeDb } from "./testDb";
 
@@ -94,7 +95,15 @@ describe("syncAgentFeeds", () => {
     });
     await syncAgentFeeds(ctx, transcript() as any);
     expect(ctx.db._deleted).toEqual(["f2"]);
-    expect(ctx.db._inserted).toHaveLength(0);
+    // The only write besides the delete is the room's line about it.
+    expect(ctx.db._inserted.map((i: any) => i.table)).toEqual(["call_chat_messages"]);
+    expect(ctx.db._inserted[0].doc).toMatchObject({
+      room_key: "session:conv1",
+      user_id: "ua",
+      event: "agent_left",
+      agent_conversation_id: "conv2",
+      text: "",
+    });
   });
 
   test("an ended transcript wipes every feed it had", async () => {
@@ -108,6 +117,59 @@ describe("syncAgentFeeds", () => {
     });
     await syncAgentFeeds(ctx, transcript({ status: "ended" }) as any);
     expect(ctx.db._deleted).toEqual(["f1"]);
+    // The call ended; nobody left. The thread gets no line for the wipe.
+    expect(ctx.db._tables.call_chat_messages ?? []).toHaveLength(0);
+  });
+
+  test("a feed row inserted is an agent joining, credited to whoever added the route", async () => {
+    const ctx = ctxWith({
+      transcripts: [transcript()],
+      conversations: [conversation],
+      call_agent_feeds: [],
+      messages: [],
+      call_chat_messages: [],
+    });
+    await syncAgentFeeds(ctx, transcript({ routes: [{ kind: "session", target: "conv1", mode: "live", sent_seq: 0, added_by: "ub" }] }) as any);
+    const events = ctx.db._tables.call_chat_messages;
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      room_key: "session:conv1",
+      team_id: "team1",
+      user_id: "ub",
+      event: "agent_joined",
+      agent_conversation_id: "conv1",
+      text: "",
+    });
+    // Idempotent: the same routes again change nothing and say nothing.
+    await syncAgentFeeds(ctx, transcript({ routes: [{ kind: "session", target: "conv1", mode: "live", sent_seq: 0, added_by: "ub" }] }) as any);
+    expect(ctx.db._tables.call_chat_messages).toHaveLength(1);
+  });
+});
+
+describe("postEvent", () => {
+  test("a recording has no room thread, so nothing is written for one", async () => {
+    const ctx = ctxWith({ call_chat_messages: [] });
+    const id = await postEvent(ctx, {
+      room_key: "rec:9f8e7d6c-1234-4abc-9def-0123456789ab",
+      user_id: "ua" as any,
+      event: "transcribe_on",
+    });
+    expect(id).toBeNull();
+    expect(ctx.db._tables.call_chat_messages).toHaveLength(0);
+  });
+
+  test("a huddle event is a row with empty text and the actor as its owner", async () => {
+    const ctx = ctxWith({ call_chat_messages: [] });
+    const id = await postEvent(ctx, { room_key: "channel:chan1", team_id: "team1" as any, user_id: "ua" as any, event: "transcribe_off" });
+    expect(id).not.toBeNull();
+    expect(ctx.db._tables.call_chat_messages[0]).toMatchObject({
+      room_key: "channel:chan1",
+      team_id: "team1",
+      user_id: "ua",
+      text: "",
+      event: "transcribe_off",
+    });
+    expect(ctx.db._tables.call_chat_messages[0].agent_conversation_id).toBeUndefined();
   });
 });
 
@@ -305,5 +367,78 @@ describe("post relays a typed line to the agents in the room", () => {
     await call(post, ctx, { room_key: "session:conv1", text: "  " });
     expect(ctx.db._tables.call_chat_messages).toHaveLength(0);
     expect(ctx._scheduled).toHaveLength(0);
+  });
+});
+
+describe("list tells an event row from a line", () => {
+  const seated = {
+    call_members: [{ _id: "cm1", room_key: "session:conv1", user_id: "ua", team_id: "team1", last_seen: Date.now(), expires_at: Date.now() + 60_000 }],
+    call_rooms: [],
+    call_room_state: [],
+    call_invites: [],
+    users: [
+      { _id: "ua", name: "Ada Lovelace", email: "ada@x.org", image: "https://x/ada.png" },
+      { _id: "ub", name: "Bob", email: "bob@x.org" },
+    ],
+    team_members: [{ team_id: "team1", user_id: "ua" }],
+    teams: [{ _id: "team1", features: { calls: true } }],
+    conversations: [{ ...conversation, team_id: "team1" }],
+  };
+
+  test("an event row names its actor, carries the agent beside it, and is never mine", async () => {
+    const ctx = ctxWith(
+      {
+        ...seated,
+        call_chat_messages: [
+          { _id: "c1", _creationTime: 10, room_key: "session:conv1", team_id: "team1", user_id: "ua", text: "hello", },
+          { _id: "c2", _creationTime: 20, room_key: "session:conv1", team_id: "team1", user_id: "ua", text: "", event: "agent_joined", agent_conversation_id: "conv1" },
+          { _id: "c3", _creationTime: 30, room_key: "session:conv1", team_id: "team1", user_id: "ua", text: "On it.", agent_conversation_id: "conv1", source_message_id: "m9" },
+          { _id: "c4", _creationTime: 40, room_key: "session:conv1", team_id: "team1", user_id: "ub", text: "", event: "transcribe_off" },
+        ],
+      },
+      { userId: "ua" },
+    );
+    const rows = await call(list, ctx, { room_key: "session:conv1" });
+    expect(rows.map((r: any) => r._id)).toEqual(["c1", "c2", "c3", "c4"]);
+    // A typed line: mine, my name, no event.
+    expect(rows[0]).toMatchObject({ user_name: "Ada Lovelace", user_image: "https://x/ada.png", mine: true, event: null, agent: null });
+    // The agent joining: the ACTOR's name, the agent separately, not mine.
+    expect(rows[1]).toMatchObject({ user_name: "Ada Lovelace", mine: false, event: "agent_joined", text: "" });
+    expect(rows[1].agent).toMatchObject({ conversation_id: "conv1", short_id: "conv1", title: "Fix the auth race", agent_type: "claude_code" });
+    // The agent's own line keeps its identity: the session's title, not mine.
+    expect(rows[2]).toMatchObject({ user_name: "Fix the auth race", user_image: undefined, mine: false, event: null });
+    expect(rows[2].agent).toMatchObject({ conversation_id: "conv1" });
+    // Somebody else pressed the switch: their name, no agent.
+    expect(rows[3]).toMatchObject({ user_name: "Bob", mine: false, event: "transcribe_off", agent: null });
+  });
+});
+
+describe("the room's transcription switch", () => {
+  const room = () => ({
+    call_members: [
+      { _id: "cm1", room_key: "channel:chan1", user_id: "ua", team_id: "team1", last_seen: Date.now(), expires_at: Date.now() + 60_000 },
+    ],
+    call_room_state: [],
+    call_chat_messages: [],
+  });
+
+  test("switching it off writes one line naming the presser; a repeat press and switching on write nothing", async () => {
+    const ctx = ctxWith(room(), { userId: "ua" });
+    await call(setRoomTranscribeOff, ctx, { room_key: "channel:chan1", off: true });
+    expect(ctx.db._tables.call_chat_messages).toHaveLength(1);
+    expect(ctx.db._tables.call_chat_messages[0]).toMatchObject({
+      room_key: "channel:chan1",
+      team_id: "team1",
+      user_id: "ua",
+      event: "transcribe_off",
+      text: "",
+    });
+    // The flag is already set: another press is not another event.
+    await call(setRoomTranscribeOff, ctx, { room_key: "channel:chan1", off: true });
+    expect(ctx.db._tables.call_chat_messages).toHaveLength(1);
+    // Switching on is told by the fresh run transcripts.start writes, not here.
+    await call(setRoomTranscribeOff, ctx, { room_key: "channel:chan1", off: false });
+    expect(ctx.db._tables.call_chat_messages).toHaveLength(1);
+    expect(ctx.db._tables.call_room_state[0]).toMatchObject({ transcribe_off: false });
   });
 });

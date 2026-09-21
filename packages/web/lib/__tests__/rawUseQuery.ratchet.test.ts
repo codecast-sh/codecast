@@ -27,8 +27,11 @@ const RAW_USE_QUERY = /(?<![A-Za-z0-9_$])useQuery\s*\(/;
  * How many files subscribe with a plain useQuery today. May only fall.
  * It rose by 4 once, with no new call: ConversationView.tsx was split and its
  * 11 calls now sit in five files (the allowlist rows sum to the same 11).
+ * Down to 46 on 2026-09-22: TeamAvatarBar's roster pump moved onto
+ * useSyncCollection after a plain useQuery there latched the avatar bar's
+ * ErrorBoundary for hours behind a one-minute prod outage.
  */
-const PIN = 47;
+const PIN = 46;
 
 const result = checkRatchet({
   name: "raw useQuery outside hooks",

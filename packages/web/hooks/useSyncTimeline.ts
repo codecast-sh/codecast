@@ -1,7 +1,7 @@
 // Timeline lanes (commits, pull requests) — store-fed delta overlays.
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { normalizeRepository } from "@codecast/shared/contracts";
-import { useSyncCollection } from "./useSyncCollection";
+import { useSyncCollection, entityIdArgs } from "./useSyncCollection";
 import { useCollectionRows } from "./useCollectionRows";
 
 const api = _api as any;
@@ -94,11 +94,11 @@ export function useCommit(sha: string | undefined): any | undefined {
 // narrow to this conversation.
 
 export function useSyncConversationCommits(conversationId: string | undefined) {
-  return useSyncCollection("commits", api.commits.getCommitsForConversation, conversationId ? { conversation_id: conversationId } : "skip");
+  return useSyncCollection("commits", api.commits.getCommitsForConversation, entityIdArgs("conversation_id", conversationId));
 }
 
 export function useSyncConversationPullRequests(conversationId: string | undefined) {
-  return useSyncCollection("pullRequests", api.pull_requests.getPRsForConversation, conversationId ? { conversation_id: conversationId } : "skip");
+  return useSyncCollection("pullRequests", api.pull_requests.getPRsForConversation, entityIdArgs("conversation_id", conversationId));
 }
 
 export function useConversationCommits(conversationId: string | undefined): any[] {

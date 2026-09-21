@@ -124,8 +124,8 @@ describe("proposal progress and grouping", () => {
     // read the same line); the pane only sentence cases them.
     expect(changeLine(P.changes[0].change)).toBe("Add a standing agent, Head of Platform (@platform), reporting to you, looking after Platform");
     expect(changeLine(P.changes[1].change)).toBe("Add a standing agent, Content Lead (@content), reporting to @growth, looking after pl-88");
-    expect(changeLine(P.changes[6].change)).toBe("Mark plan pl-61 done");
-    expect(changeLine(P.changes[7].change)).toBe("Mark task ct-4102 done");
+    expect(changeLine(P.changes[6].change)).toBe("Mark done: Onboarding emails (pl-61)");
+    expect(changeLine(P.changes[7].change)).toBe("Mark done: Fix the auth race on sign-in (ct-4102)");
     expect(changeLine(P.changes[2].change)).toBe("Create the project Platform");
     expect(changeLine(P.changes[3].change)).toBe("@growth may use up to 800,000 tokens a day");
     expect(changeLine(P.changes[4].change)).toBe('@growth runs "Weekly growth review" every week');

@@ -75,6 +75,14 @@ describe("areas and people (S9)", () => {
     expect(web.authors).toEqual([{ name: "Me", commits: 1 }, { name: "Mate", commits: 1 }]);
     const convex = a.areas.find((x) => x.path_prefix === "packages/convex")!;
     expect(convex).toMatchObject({ commits_30d: 1, sessions_30d: 0 });
+    // A path two projects share names neither: the area says how many share it, and no project inherits its commits.
+    const shared = computeOrgActivity(inputs({ projects: [...inputs().projects, { id: "p_web2", title: "Web too", status: "active", project_path: "/repo/acme/packages/web", updated_at: NOW - D }] }));
+    const webShared = shared.areas.find((x) => x.path_prefix === "packages/web")!;
+    expect(webShared.project_id).toBeUndefined();
+    expect(webShared.project_shared_by).toBe(2);
+    // The same directory on another machine is the same path: one project there and one here share it.
+    const twoMachines = computeOrgActivity(inputs({ projects: [...inputs().projects, { id: "p_web_samvit", title: "Web on Samvit's machine", status: "active", project_path: "/Users/samvit/dev/acme/packages/web", updated_at: NOW - D }] }));
+    expect(twoMachines.areas.find((x) => x.path_prefix === "packages/web")!.project_shared_by).toBe(2);
     // People by area: commits matched to a member by name, sessions by owner.
     const me = a.people.find((p) => p.user_id === ME)!;
     expect(me.areas.find((r) => r.path_prefix === "packages/web")).toEqual({ path_prefix: "packages/web", commits: 1, sessions: 1 });
@@ -177,6 +185,8 @@ describe("stale tasks and projects (S9)", () => {
         { id: "task_bulk_new", short_id: "ct-6", title: "Filed last week", status: "in_progress", updated_at: NOW - 5 * D },
         // Open, not in progress, untouched a month: backlog, not stale.
         { id: "task_backlog", short_id: "ct-7", title: "Someday", status: "open", updated_at: NOW - 40 * D },
+        // Open, untouched 50 days, never a session: stale, the weakest reason (three Union tasks landed in July sat open unflagged).
+        { id: "task_forgotten", short_id: "ct-10", title: "Forgotten", status: "open", updated_at: NOW - 50 * D },
         // In progress 20 days quiet with a live hand still bound: not stale.
         { id: "task_held", short_id: "ct-8", title: "Held", status: "in_progress", updated_at: NOW - 20 * D },
         // Worked once (a session was bound, since released) then untouched 20 days: sessions done, not never picked up.
@@ -189,7 +199,7 @@ describe("stale tasks and projects (S9)", () => {
       ],
     }));
     const byId = Object.fromEntries(a.tasks.map((t) => [t.short_id, t.reason]));
-    expect(byId).toEqual({ "ct-1": "in progress, sessions done 14d", "ct-2": "commits landed, still open", "ct-5": "in progress, no session 14d", "ct-9": "in progress, sessions done 14d" });
+    expect(byId).toEqual({ "ct-1": "in progress, sessions done 14d", "ct-2": "commits landed, still open", "ct-5": "in progress, no session 14d", "ct-9": "in progress, sessions done 14d", "ct-10": "open, untouched 45d" });
     expect(a.tasks.find((t) => t.short_id === "ct-1")!.last_session_activity_at).toBe(NOW - 15 * D);
     expect(a.tasks.find((t) => t.short_id === "ct-5")!.last_session_activity_at).toBeNull();
   });

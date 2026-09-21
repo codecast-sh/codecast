@@ -40,7 +40,8 @@ import { pickInheritedGitMeta, type GitMetaSource } from "./projectPaths";
 import { bucketTs } from "./presenceState";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { addConversationToWorkItem, linkConversationToEntityBestEffort, linkedEntityIdsForConversation } from "./conversationLinks";
-import { dropThreadRead, taskThreadParticipants, touchThread } from "./threadReads";
+import { agentCommentLevelOf, dropThreadRead, taskCommentIsNews, taskThreadParticipants, touchThread, type TaskCommentAuthorKind } from "./threadReads";
+import { extractMentionHandles } from "@codecast/shared/chat";
 import { resolveTeamForPath, teamVisibleConvTeam } from "./privacy";
 import { webBaseUrl } from "./slack";
 // Owner-or-team access check for a task. Moved to lib/access.ts (Wave-1
@@ -2264,17 +2265,58 @@ export async function insertTaskComment(
   await ctx.db.patch(taskId, { updated_at: now, last_comment_at: now });
   const task = await ctx.db.get(taskId);
   if (task) {
+    // An @mention is attention AT a person, whoever typed it: the named
+    // people follow the thread from here on (membership's "mentioned" leg),
+    // so they must be subscribed before the participants are resolved.
+    const mentioned = await mentionedInTaskComment(ctx, task, fields.text);
+    for (const userId of mentioned) await subscribeUser(ctx, userId, taskId, "mentioned", actorId ? "human" : "agent");
+    const mentionedSet = new Set(mentioned.map(String));
+    // The row moves only for the participants this comment is news for
+    // (threadReads.taskCommentIsNews): a person's comment for everyone else,
+    // an agent's only when it needs a person, or per the reader's own level.
+    // The named people are participants of this comment outright, whether
+    // or not the subscription write above has landed in this transaction.
+    const recipients: Id<"users">[] = [];
+    const participants = await taskThreadParticipants(ctx, task);
+    for (const id of mentioned) if (!participants.some((p) => String(p) === String(id))) participants.push(id);
+    for (const userId of participants) {
+      const author: TaskCommentAuthorKind = !actorId ? "agent" : String(actorId) === String(userId) ? "self" : "person";
+      const level = agentCommentLevelOf(await ctx.db.get(userId));
+      if (taskCommentIsNews(fields, author, level, mentionedSet.has(String(userId)))) recipients.push(userId);
+    }
     await touchThread(ctx, {
       kind: "task",
       rootKey: String(taskId),
       teamId: task.team_id,
       refs: { task_id: taskId },
-      participants: await taskThreadParticipants(ctx, task),
+      participants: recipients,
       actorId,
       activityAt: now,
     });
   }
   return id;
+}
+
+/** The team members a task comment names with @handle (the chat grammar,
+ *  resolved against the task's team roster, so a display name can never
+ *  intercept a mention). A personal task has no roster and no mentions. */
+async function mentionedInTaskComment(
+  ctx: any,
+  task: { team_id?: Id<"teams"> },
+  text: string,
+): Promise<Id<"users">[]> {
+  const handles = extractMentionHandles(text);
+  if (handles.length === 0 || !task.team_id) return [];
+  const roster = await teamRoster(ctx, task.team_id);
+  const out: Id<"users">[] = [];
+  const seen = new Set<string>();
+  for (const handle of handles) {
+    const user = matchHandle(roster, handle);
+    if (!user || user.is_bot || seen.has(String(user._id))) continue;
+    seen.add(String(user._id));
+    out.push(user._id);
+  }
+  return out;
 }
 
 export const addComment = mutation({

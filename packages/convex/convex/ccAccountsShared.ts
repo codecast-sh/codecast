@@ -19,6 +19,7 @@ import {
   type UsageStanding,
   type RecoveryMode,
   type CcUsage,
+  UNREVIVABLE_BANNER_KINDS,
 } from "@codecast/shared/contracts";
 
 // The usage snapshot type and its predicates live in @codecast/shared/contracts
@@ -890,7 +891,7 @@ export function actedBlockedConversations<T extends {
   is_subagent?: boolean;
   parent_conversation_id?: string | null;
 }>(blocked: T[], includeSubagents: boolean): T[] {
-  const recoverable = blocked.filter((c) => c.pending_api_error_kind !== "safety");
+  const recoverable = blocked.filter((c) => !UNREVIVABLE_BANNER_KINDS.has(c.pending_api_error_kind ?? ""));
   const topLevel = recoverable.filter((c) => !isSubagentConversation(c));
   return includeSubagents ? [...topLevel, ...recoverable.filter(isSubagentConversation)] : topLevel;
 }
@@ -899,7 +900,8 @@ export function actedBlockedConversations<T extends {
 // caller did not opt them in. Leaving a worker out is a DECISION, not a
 // deferral — nobody comes back for it — so the revive dismisses these from
 // the blocked set in the same gesture and the count drops to what was acted
-// on. Safety stops never appear here: they wait for a review, not a revive.
+// on. Safety stops and full context windows never appear here: they wait for
+// a review or a /compact, not a revive.
 // Shared by the server (which clears the flag) and the web banner (which
 // paints the clear and names the count on the button), so both agree on
 // exactly which rows go.
@@ -909,7 +911,7 @@ export function skippedBlockedWorkers<T extends {
   parent_conversation_id?: string | null;
 }>(blocked: T[], includeSubagents: boolean): T[] {
   if (includeSubagents) return [];
-  return blocked.filter((c) => c.pending_api_error_kind !== "safety" && isSubagentConversation(c));
+  return blocked.filter((c) => !UNREVIVABLE_BANNER_KINDS.has(c.pending_api_error_kind ?? "") && isSubagentConversation(c));
 }
 
 // The one-line cause a blocked FLEET is reported on — the banner headline and
@@ -930,14 +932,16 @@ export function blockedHeadlineCause<T extends { pending_api_error_kind?: string
   const fatal = of("fatal");
   const throttle = of("throttle");
   const safety = of("safety");
+  const context = of("context");
   // A park with no kind recorded is a usage limit — the original park shape.
-  const limit = blocked.length - auth - conn - fatal - throttle - safety;
+  const limit = blocked.length - auth - conn - fatal - throttle - safety - context;
   return ([
     [limit, "usage limits"],
     [auth, "login"],
     [throttle, "rate-limit bursts"],
     [conn, "dropped connections"],
     [fatal, "api errors"],
+    [context, "full context windows"],
     [safety, "safety review"],
   ] as const).reduce((best, cur) => (cur[0] > best[0] ? cur : best))[1];
 }

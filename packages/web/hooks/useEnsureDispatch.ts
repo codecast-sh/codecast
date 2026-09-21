@@ -1,13 +1,14 @@
 import { useRef } from "react";
 import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useInboxStore } from "../store/inboxStore";
+import { isChatRoomRefusal, useInboxStore } from "../store/inboxStore";
 import { isPermanentDispatchError } from "../store/mutativeMiddleware";
 import { useWatchEffect } from "./useWatchEffect";
 import { dropRejectedOrgIntent } from "../store/orgSlice";
 import { installBrowserDispatchSelfHeal } from "./dispatchRecovery";
 import { recordHibernationDispatchError } from "../lib/hibernation";
 import { toast } from "sonner";
+import { humanizeConvexError } from "@codecast/shared/contracts";
 
 // Sync-log ack opt-in latch: flips false (for the session) the first time the
 // server rejects the ack_positions arg — see the fallback in bindDispatch.
@@ -63,6 +64,15 @@ export function useEnsureDispatch() {
       if (action === "sendMessage" && /COMMAND_ID_REUSED/.test(String((error as Error)?.message ?? error))) {
         return;
       }
+      // A read mark is bookkeeping nobody asked for, so its refusal is news
+      // about the cache, not about an action: the room it names is one the
+      // server no longer shows this viewer (left, removed, the team's chat
+      // off). Retire the room locally and say nothing — "Mark channel read
+      // didn't go through" names no action the user took.
+      if (action === "markChannelRead" && Array.isArray(args) && typeof args[0] === "string" && isChatRoomRefusal(error)) {
+        useInboxStore.getState().retireChatChannel(args[0]);
+        return;
+      }
       useInboxStore.setState(s => ({ dispatchErrors: s.dispatchErrors + 1 }));
       // A permanent rejection is dropped from the outbox (no re-drive will
       // land it), so it's the user's only chance to hear their action didn't
@@ -102,14 +112,13 @@ export function useEnsureDispatch() {
       // optimistic row is the only copy of what was typed, so mark it failed —
       // the message then renders with its retry affordance instead of sitting
       // there looking sent. A retry re-dispatches the SAME client id, which
-      // chat.sendMessage dedupes, so this can never double-post.
+      // chat.sendMessage dedupes, so this can never double-post. The reason
+      // is the server's own line ("Channel not found", "This channel is
+      // archived"), not the client wrapper, so the row can say WHY.
       if (action === "dispatchChatSend" && Array.isArray(args)) {
         const clientId = args[2];
         if (typeof clientId === "string") {
-          useInboxStore.getState().markChatSendFailed(
-            clientId,
-            String((error as Error)?.message ?? error),
-          );
+          useInboxStore.getState().markChatSendFailed(clientId, humanizeConvexError(error, ""));
         }
       }
     });

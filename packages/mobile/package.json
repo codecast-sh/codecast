@@ -72,6 +72,7 @@
     "zustand": "^5.0.9"
   },
   "devDependencies": {
+    "@livekit/react-native-expo-plugin": "1.0.2",
     "@types/react": "~19.1.10",
     "react-test-renderer": "19.1.0",
     "typescript": "~5.9.2"

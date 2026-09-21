@@ -1727,6 +1727,12 @@ pre[class*="language-"] {
   border-radius: 8px;
   background: var(--sv-card-bg) !important;
 }
+/* Outside simple view the rail keeps full width rows, so the fill runs edge to
+   edge like the section headers above it. */
+:root .inbox-compact:not(.simple-view) [data-sv-rail] [data-session-id] {
+  margin: 0;
+  border-radius: 0;
+}
 :root .inbox-compact [data-sv-rail] [data-session-id]:hover {
   --sv-card-bg: var(--sv-row-hover-bg);
 }
@@ -1752,10 +1758,13 @@ pre[class*="language-"] {
   border-color: transparent;
   background: none;
 }
+/* The title keeps at least half the line (up to 9rem). The columns after it
+   may shrink to nothing, so on a narrow rail the chips truncate instead of
+   starving the title, whose name never truncates and would paint over them. */
 .inbox-compact [data-sv-rail] [data-sv-body] {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  grid-auto-columns: auto;
+  grid-template-columns: minmax(min(50%, 9rem), 1fr);
+  grid-auto-columns: minmax(0, auto);
   grid-auto-flow: column;
   align-items: center;
   column-gap: 8px;
@@ -1782,6 +1791,10 @@ pre[class*="language-"] {
   display: inline-block;
   grid-row: 1;
   margin: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .inbox-compact [data-sv-rail] [data-sv-startup] > * {
   grid-row: 1;
@@ -1792,6 +1805,32 @@ pre[class*="language-"] {
   display: flex;
   grid-row: 1;
   margin: 0;
+  min-width: 0;
+}
+/* When the cluster is squeezed only the plan and task chips give way; the
+   dots are empty spans with no content width and would collapse first. */
+.inbox-compact [data-sv-rail] [data-sv-status] > :not(.truncate) {
+  flex-shrink: 0;
+}
+/* The fork, plan and task chips (the ones simple view drops) need about 300px
+   on their own, so on a rail row narrower than 480px they leave the line. */
+.inbox-compact [data-sv-rail] [data-session-id] {
+  container: sv-row / inline-size;
+}
+@container sv-row (max-width: 480px) {
+  .inbox-compact [data-sv-rail] [data-sv-status] > [data-simple-hide] {
+    display: none;
+  }
+}
+/* A name longer than the whole title column ellipsizes rather than paint over
+   the next one. It never shrinks (any shrink, even a subpixel, shows the
+   ellipsis), so the title text gives way first; the cap leaves the colon room. */
+.inbox-compact [data-sv-rail] [data-sv-title] > .flex-shrink-0:first-child,
+.inbox-compact [data-sv-rail] [data-sv-title] span.font-medium {
+  max-width: calc(100% - 1.5rem);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 /* The branch chip is the one wide thing in the status cluster. */
 .inbox-compact [data-sv-rail] [data-sv-status] > .font-mono {
@@ -3402,6 +3441,12 @@ pre[class*="language-"] {
 .ch-msg-body:has(.entity-card-row) {
   max-width: none;
 }
+/* Chat cards keep the message measure: uncapped, a single card stretches the
+   whole list width on a wide display and the snippet reads as one long line.
+   78ch is the same measure as .ch-msg-body prose, so cards align with text. */
+.ch-msg .entity-card-row {
+  max-width: 78ch;
+}
 .ch-msg-body > p {
   max-width: 78ch;
 }
@@ -4838,6 +4883,286 @@ pre[class*="language-"] {
 .minimal-style :is([data-sv-nav], [data-sv-rail], [data-cc-topbar], [data-cc-tabbar], [data-cc-conversation]) :is(.text-\[9px\], .text-\[10px\], .text-\[11px\], .text-\[10\.5px\]) { font-size: var(--t-mark); }
 .minimal-style :is([data-sv-nav], [data-sv-rail], [data-cc-topbar], [data-cc-tabbar], [data-cc-conversation]) :is(.font-bold, .font-extrabold, .font-semibold) { font-weight: 600; }
 .minimal-style :is([data-sv-nav], [data-sv-rail], [data-cc-topbar], [data-cc-tabbar], [data-cc-conversation]) :is(.tracking-wide, .tracking-wider, .tracking-widest) { letter-spacing: 0; }
+
+/* ==== Minimal: one ink =====================================================
+   Colour marks a live state and nothing else: the dot beside a running
+   session, the red of a mention or an overdue trigger. Every kind mark (a
+   state word, a count, a decision label, a reference to a task or a pull
+   request, a project name) reads in the page's ink at one of the four sizes.
+   Lists carry two weights: 400 for a row, 500 for a name, an unread row or a
+   state word. 600 belongs to a title. */
+
+/* Left navigation: a list of places. Every row in the page's ink at 400; the
+   open row is the fill alone; an unread row is 500; a count is a dim number
+   on the right edge, not a badge. Group labels sit on the row scale in dim
+   ink, the way a file browser labels its folders. */
+.minimal-style [data-sv-nav] :is(.uppercase, [data-rail-heading]) {
+  margin: 18px 8px 4px;
+  font-size: var(--t-ui);
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--sol-text-dim);
+}
+.minimal-style [data-sv-nav] :is(button.w-full, a.w-full, [data-nav-row], [class*="group/nav"]) {
+  color: var(--sol-text);
+  font-weight: 400;
+}
+.minimal-style [data-sv-nav] :is(button.w-full, a.w-full, [data-nav-row]):is([aria-current="page"], .bg-sol-bg-highlight, [data-active="true"]) {
+  font-weight: 400;
+}
+.minimal-style [data-sv-nav] :is(button.w-full, a.w-full, [data-nav-row], [class*="group/nav"]) :is(.font-semibold, .font-bold, .font-medium) {
+  font-weight: 500;
+}
+.minimal-style [data-sv-nav] [data-sv-count] {
+  min-width: 0;
+  height: auto;
+  margin-left: auto;
+  padding: 0 2px;
+  background: transparent !important;
+  color: var(--sol-text-dim) !important;
+  font-size: var(--t-sub);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+.minimal-style [data-sv-nav] [data-sv-count="mention"] {
+  background: transparent !important;
+  color: var(--sol-red) !important;
+  font-weight: 500;
+}
+.minimal-style [data-sv-nav] button[aria-expanded] {
+  color: var(--sol-text-dim);
+}
+.minimal-style [data-sv-nav] button[aria-expanded] svg {
+  width: 10px;
+  height: 10px;
+}
+
+/* Session list: the name at 500, the title after it at 400 in the same ink.
+   A state or a reason (dormant, done, login, limit, a draft, a branch) is a
+   word in quiet ink; the dot beside the row already carries its colour. The
+   group label matches the navigation's. */
+.minimal-style [data-sv-rail] [data-sv-title] > span.flex-shrink-0.font-medium {
+  font-weight: 500;
+}
+.minimal-style [data-sv-rail] [data-sv-sec],
+.minimal-style [data-sv-rail] [data-sv-sec] > span,
+.minimal-style [data-sv-rail] [data-sv-sec] svg {
+  color: var(--sol-text-dim) !important;
+}
+.minimal-style [data-sv-rail] [data-sv-sec] {
+  padding-top: 18px;
+  font-size: var(--t-ui);
+  font-weight: 400;
+}
+.minimal-style [data-sv-rail] [data-sv-sec] > span {
+  font-size: var(--t-ui);
+}
+.minimal-style [data-sv-rail] [data-session-id] :is(
+  [data-sv-status-chip],
+  [data-role-escalated-count],
+  [data-sv-draft] > span:first-child,
+  [data-sv-status] :is(span, a)[class*="border"],
+  [data-sv-titlerow] span[class*="border-"],
+  span[class*="amber-500"]
+) {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent !important;
+  color: var(--sol-text-muted) !important;
+  font-family: var(--font-ui);
+  font-size: var(--t-mark);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.minimal-style [data-sv-rail] [data-session-id] [data-sv-status] span[class*="border-"] a {
+  padding: 0;
+}
+.minimal-style [data-sv-rail] [data-session-id] [data-sv-status] a[class*="border"]:hover,
+.minimal-style [data-sv-rail] [data-session-id] [data-sv-status] span[class*="border-"] a:hover {
+  background: transparent;
+  text-decoration: underline;
+}
+.minimal-style [data-sv-rail] [data-sv-meta] :is(span, a) {
+  color: var(--sol-text-dim);
+  font-weight: 400;
+}
+.minimal-style [data-sv-rail] [data-sv-head-tools] > button[data-cc-keep] {
+  border-color: var(--cc-panel-rule);
+  background: transparent;
+  color: var(--sol-text-muted);
+  font-size: var(--t-mark);
+  font-weight: 500;
+}
+.minimal-style [data-sv-rail] [data-sv-head-tools] > button[data-cc-keep]:hover {
+  background: var(--sol-bg-highlight);
+}
+.minimal-style [data-sv-rail] [data-sv-head-tools] button[aria-pressed="true"],
+.minimal-style [data-sv-rail] [data-sv-head-tools] button[data-state="open"] {
+  background: var(--sol-bg-highlight);
+  color: var(--sol-text);
+}
+/* The triggers line under the list: one dim sentence, the overdue count the
+   only red word in it. */
+.minimal-style [data-sv-rail] [data-sv-triggers-foot] > button {
+  gap: 6px;
+  padding-inline: var(--cc-inset);
+}
+.minimal-style [data-sv-rail] [data-sv-triggers-foot] > button > svg {
+  color: var(--sol-text-dim);
+}
+.minimal-style [data-sv-rail] [data-sv-triggers-foot] > button > span,
+.minimal-style [data-sv-rail] [data-sv-triggers-foot] > button > span > span {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--sol-text-dim);
+  font-size: var(--t-mark);
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.minimal-style [data-sv-rail] [data-sv-triggers-foot] > button > span:first-of-type {
+  color: var(--sol-text-muted);
+  font-weight: 500;
+}
+.minimal-style [data-sv-rail] [data-sv-triggers-foot] > button > span[class*="rounded-full"] + span[class*="rounded-full"]::before {
+  content: "· ";
+}
+.minimal-style [data-sv-rail] [data-sv-triggers-foot] > button > span[class*="text-sol-red"] {
+  color: var(--sol-red);
+  font-weight: 500;
+}
+
+/* A reference to a task, a page, a pull request or a person is a link in the
+   page's ink with a faint underline, wherever it appears. */
+.minimal-style :is([data-cc-conversation], [data-sv-rail], [data-cc-thread-state]) .entity-ref {
+  background: transparent;
+  color: var(--sol-text);
+  font-weight: 500;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--sol-text) 25%, transparent);
+  text-underline-offset: 2px;
+}
+.minimal-style :is([data-cc-conversation], [data-sv-rail], [data-cc-thread-state]) .entity-ref:hover,
+.minimal-style :is([data-cc-conversation], [data-sv-rail], [data-cc-thread-state]) .entity-ref[aria-pressed="true"] {
+  background: var(--sol-bg-highlight);
+  box-shadow: none;
+  text-decoration-color: currentColor;
+}
+
+/* The pinned state above the composer: the status is a word. */
+.minimal-style [data-cc-thread-state] span[class*="rounded-full"][class*="border"] {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--sol-text-muted);
+  font-size: var(--t-mark);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* A decision in the transcript: the label and the status are words in quiet
+   ink, the question in the page's, the options a numbered list. */
+.minimal-style [data-cc-conversation] [data-cc-decide] > div:first-child {
+  font-size: var(--t-sub);
+  color: var(--sol-text-muted);
+}
+.minimal-style [data-cc-conversation] [data-cc-decide] > div:first-child > span:first-child {
+  font-family: var(--font-ui);
+  color: var(--sol-text-muted);
+}
+.minimal-style [data-cc-conversation] [data-cc-decide] > div:first-child span[class*="rounded-full"] {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--sol-text-muted);
+  font-size: var(--t-mark);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.minimal-style [data-cc-conversation] [data-cc-decide] > div:first-child span[class*="rounded-full"] > span {
+  display: none;
+}
+.minimal-style [data-cc-conversation] [data-cc-decide] > div[class*="border-l-2"] {
+  border-left-color: var(--cc-panel-rule);
+}
+.minimal-style [data-cc-conversation] [data-cc-decide] :is([class*="text-sol-green"], [class*="text-sol-blue"], [class*="text-sol-cyan"], [class*="text-sol-yellow"]) {
+  color: var(--sol-text-muted);
+}
+.minimal-style [data-cc-conversation] [data-cc-decide] .text-\[13px\] {
+  font-size: var(--t-ui);
+}
+.minimal-style [data-cc-conversation] [data-cc-decide] span.font-mono[class*="border"] {
+  border: 0;
+  width: auto;
+  height: auto;
+  font-family: var(--font-ui);
+  font-size: var(--t-sub);
+  color: var(--sol-text-dim);
+}
+.minimal-style [data-cc-conversation] [data-cc-decide] span.font-mono[class*="border-sol-green"] {
+  color: var(--sol-text);
+}
+
+/* The decision card and page: the question in the page's type at reading
+   size, chips as words, options as plain cards, the chosen one framed in ink. */
+.minimal-style :is(.decision-card, .decision-doc) {
+  font-family: var(--font-ui);
+  border-top-color: var(--cc-panel-rule);
+  box-shadow: 0 -8px 24px color-mix(in srgb, var(--sol-text) 6%, transparent);
+}
+.minimal-style .decision-card .decision-question {
+  font-family: var(--font-ui);
+  font-size: var(--t-read);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.minimal-style :is(.decision-card, .decision-doc) :is([class*="text-sol-blue"], [class*="text-sol-cyan"], [class*="text-sol-green"], [class*="text-sol-yellow"], [class*="text-sol-orange"], [class*="text-sol-violet"]) {
+  color: var(--sol-text-muted);
+}
+.minimal-style :is(.decision-card, .decision-doc) span[class*="rounded"][class*="border-"] {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--sol-text-dim);
+  font-family: var(--font-ui);
+  font-size: var(--t-mark);
+  font-weight: 500;
+}
+.minimal-style :is(.decision-card, .decision-doc) span[class*="rounded-full"][class*="bg-sol-"],
+.minimal-style :is(.decision-card, .decision-doc) div[class*="bg-sol-yellow"] {
+  background: var(--sol-text-dim);
+}
+.minimal-style :is(.decision-card, .decision-doc) .decision-option {
+  border-color: var(--cc-panel-rule);
+  border-radius: 10px;
+  background: var(--sol-card);
+}
+.minimal-style :is(.decision-card, .decision-doc) .decision-option:hover,
+.minimal-style :is(.decision-card, .decision-doc) .decision-option[class*="border-sol-yellow"],
+.minimal-style :is(.decision-card, .decision-doc) .decision-option[class*="border-sol-green"] {
+  border-color: color-mix(in srgb, var(--sol-text) 35%, transparent);
+  background: var(--sol-bg-alt);
+}
+.minimal-style :is(.decision-card, .decision-doc) .decision-option .text-sm {
+  font-size: var(--t-ui);
+}
+.minimal-style :is(.decision-card, .decision-doc) input:focus {
+  border-color: color-mix(in srgb, var(--sol-text) 40%, transparent);
+}
+.minimal-style :is(.decision-card, .decision-doc) button[class*="border-sol-green"] {
+  border-color: color-mix(in srgb, var(--sol-text) 30%, transparent);
+  border-radius: 8px;
+}
+.minimal-style :is(.decision-card, .decision-doc) button[class*="border-sol-green"]:hover {
+  background: var(--sol-text);
+  color: var(--sol-bg);
+}
 
 .minimal-style [role="dialog"] {
   font-family: var(--font-ui);

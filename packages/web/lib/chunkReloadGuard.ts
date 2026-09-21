@@ -42,7 +42,7 @@ export function armChunkReloadGuardReset(delayMs = 15_000): void {
 // is Vite serving a file mid-edit (2026-09-13, EntityIdPill.tsx lost
 // EntityAwareCode for a moment). React.lazy memoizes the rejected import, so
 // no re-render can heal it; only a reload refetches the module graph.
-const CHUNK_LOAD_ERROR_PATTERNS = [
+export const CHUNK_LOAD_ERROR_PATTERNS = [
   "Failed to fetch dynamically imported module",
   "Importing a module script failed",
   "error loading dynamically imported module",

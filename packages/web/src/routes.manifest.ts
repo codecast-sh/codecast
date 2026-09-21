@@ -194,6 +194,7 @@ const RepoBranches = lazy(() => import("@/app/repo/[owner]/[name]/branches/page"
 const RepoWorktrees = lazy(() => import("@/app/repo/[owner]/[name]/worktrees/page"));
 const RepoTags = lazy(() => import("@/app/repo/[owner]/[name]/tags/page"));
 const RepoPulls = lazy(() => import("@/app/repo/[owner]/[name]/pulls/page"));
+const RepoSessions = lazy(() => import("@/app/repo/[owner]/[name]/sessions/page"));
 const RepoSearch = lazy(() => import("@/app/repo/[owner]/[name]/search/page"));
 
 // Code review
@@ -365,6 +366,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "repo/:owner/:name/worktrees", component: cast(RepoWorktrees), layout: "codeReview", tab: "/repo/:owner/:name/worktrees", fullWidth: true },
   { path: "repo/:owner/:name/tags", component: cast(RepoTags), layout: "codeReview", tab: "/repo/:owner/:name/tags", fullWidth: true },
   { path: "repo/:owner/:name/pulls", component: cast(RepoPulls), layout: "codeReview", tab: "/repo/:owner/:name/pulls", fullWidth: true },
+  { path: "repo/:owner/:name/sessions", component: cast(RepoSessions), layout: "codeReview", tab: "/repo/:owner/:name/sessions", fullWidth: true },
   { path: "repo/:owner/:name/search", component: cast(RepoSearch), layout: "codeReview", tab: "/repo/:owner/:name/search", fullWidth: true },
 
   // -- The standalone family: the same page components with no shell around
@@ -382,6 +384,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "r/:owner/:name/branches", component: cast(RepoBranches), layout: "standalone", guestOk: true, guestKind: "public" },
   { path: "r/:owner/:name/tags", component: cast(RepoTags), layout: "standalone", guestOk: true, guestKind: "public" },
   { path: "r/:owner/:name/pulls", component: cast(RepoPulls), layout: "standalone", guestOk: true, guestKind: "public" },
+  { path: "r/:owner/:name/sessions", component: cast(RepoSessions), layout: "standalone", guestOk: true, guestKind: "public" },
   { path: "r/:owner/:name/search", component: cast(RepoSearch), layout: "standalone", guestOk: true, guestKind: "public" },
   { path: "r/:owner/:repo/commit/:sha", component: cast(CommitView), layout: "standalone", guestOk: true, guestKind: "public" },
   { path: "r/:owner/:repo/pull/:number", component: cast(PrView), layout: "standalone", guestOk: true, guestKind: "public" },

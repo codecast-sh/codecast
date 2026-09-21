@@ -25,6 +25,9 @@ const appSrc = read("src/App.tsx");
 const tabContentSrc = read("components/RoutePane.tsx");
 const dashLayoutSrc = read("components/DashboardLayout.tsx");
 const tabRoutingSrc = read("lib/tabRoutes.ts");
+// The in-shell single-segment set lives with the desktop hand-off gate (which
+// may import nothing) and is shared by tabRoutes.
+const handoffSrc = read("lib/desktopHandoff.ts");
 
 const manifestByHref = new Map(ROUTES.map((r) => [routeHref(r.path), r] as const));
 
@@ -200,7 +203,7 @@ function parseInShellRootSegments(src: string): Set<string> {
   const segs = block ? Array.from(block[1].matchAll(/"([^"]+)"/g)).map((m) => m[1]) : [];
   return new Set(segs);
 }
-const inShellSegments = parseInShellRootSegments(tabRoutingSrc);
+const inShellSegments = parseInShellRootSegments(handoffSrc);
 
 // A route href is "non-tab" (rendered outside the dashboard shell) if it falls under
 // a static NON_TAB rule OR it is a bare single segment (static "/x" or dynamic "/:x")

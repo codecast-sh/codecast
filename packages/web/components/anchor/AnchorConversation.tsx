@@ -1,19 +1,21 @@
 "use client";
 
-// The anchor's live conversation, embedded. Used by the /anchor page and the
-// global slide-over alike — the same store-fed conversation, the same composer,
-// so talking to the anchor feels identical wherever you open it.
+// A standing agent's live conversation, embedded. Used by the slide-over and
+// the proposal thread alike — the same store-fed conversation, the same
+// composer, so talking to the agent feels identical wherever you open it.
 
-import { useMutation } from "convex/react";
-import { api } from "@codecast/convex/convex/_generated/api";
 import { ConversationDiffLayout, type ConversationDiffLayoutProps } from "../ConversationDiffLayout";
 import type { ConversationData } from "../conversation/types";
 import { ProjectPathPicker } from "../ProjectPathPicker";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
 import { useMemo, useState } from "react";
+import { toast } from "sonner";
 import { AnchorGlyph } from "./AnchorIdentity";
 import { bootstrapCut, windowConversationSince, type WindowedConversation } from "../../lib/anchorWindow";
 import { useSeedOwnership } from "../../hooks/useSeedOwnership";
+import { useSyncOrgTree } from "../../hooks/useSyncOrgTree";
+import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
+import { CHIEF_OF_STAFF_NAME } from "../org/orgStaffingTypes";
 
 export function AnchorConversation({ conversationId, hideHeader, seedOwnership = true, onSendOverride, composerNode, autoFocusInput, since, foldBootstrap, foldWorkingTurns, openAtTop, composerPlaceholder, leadNode, leadPinned, stickyPrompt, initialDensity, hideDiff }: {
   conversationId: string;
@@ -42,10 +44,10 @@ export function AnchorConversation({ conversationId, hideHeader, seedOwnership =
   stickyPrompt?: ConversationDiffLayoutProps["stickyPrompt"];
   initialDensity?: ConversationDiffLayoutProps["initialDensity"];
   hideDiff?: boolean;
-  /** The anchor page owns its anchor by construction, so it seeds `is_own`
-   *  before the row lands and the owner UI paints at once. A thread embedded
-   *  elsewhere (the staffing pane's chief of staff, hosted by whoever hired
-   *  it) passes false and takes ownership from the row itself. */
+  /** The slide-over owns the workspace's agent by construction, so it seeds
+   *  `is_own` before the row lands and the owner UI paints at once. A thread
+   *  embedded elsewhere (the staffing pane's chief of staff, hosted by whoever
+   *  hired it) passes false and takes ownership from the row itself. */
   seedOwnership?: boolean;
 }) {
   useSeedOwnership(conversationId, seedOwnership);
@@ -108,34 +110,38 @@ export function CenteredNote({ children }: { children: React.ReactNode }) {
   return <div className="h-full flex items-center justify-center text-sol-text-dim text-sm px-6 text-center">{children}</div>;
 }
 
-/** No anchor for this scope yet: name it, pick where it lives, bring it
- *  online. `compact` fits the slide-over; the page uses the full form. */
-export function AnchorOnboarding({
-  scope, teamId, teamName, compact,
-}: { scope: "team" | "user"; teamId?: string | null; teamName?: string | null; compact?: boolean }) {
-  const provision = useMutation(api.anchors.provisionAnchor);
+/** The workspace has no standing agent yet: pick where it lives and bring it
+ *  online. Creating one is seating the workspace's root role (org-staffing.md
+ *  S22), the same hire the org page makes, so the agent is born with a name,
+ *  a face, a charter and its place on the chart. `compact` fits the
+ *  slide-over; the page uses the full form. */
+export function AnchorOnboarding({ compact }: { compact?: boolean }) {
+  const { tree } = useSyncOrgTree();
+  const meId = useTrackedStore([(st) => st.currentUser?._id]).currentUser?._id;
   const [project, setProject] = useState("");
-  const [name, setName] = useState("Anchor");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const team = tree?.workspace.kind === "team" ? tree.workspace : null;
 
   const create = async () => {
+    if (!tree || !meId) return;
     setBusy(true);
     setErr(null);
     try {
-      await provision({
-        scope_type: scope,
-        team_id: scope === "team" && teamId ? teamId : undefined,
-        name: name.trim() || "Anchor",
-        project_path: project.trim() || undefined,
-      } as any);
+      const r = await useInboxStore.getState().staffChiefOfStaff({
+        ...(team ? { team_id: team.id } : {}),
+        ...(project.trim() ? { project_path: project.trim() } : {}),
+        host_user_id: String(meId),
+        client_id: `orgrolestub-chief-${Math.random().toString(36).slice(2)}`,
+      });
+      if (r?.role) toast.success(`${r.role.name} is coming online`);
     } catch (e: any) {
-      setErr(e?.message ?? "Failed to create anchor");
+      setErr(e?.message ?? "Could not bring the agent online");
       setBusy(false);
     }
   };
 
-  const who = scope === "team" ? `${teamName ?? "your team"}'s Anchor` : "your Anchor";
+  const who = team ? `${team.name}'s agent` : "your agent";
   return (
     <div className={`h-full flex items-center justify-center ${compact ? "px-5" : "px-6"}`}>
       <div className="max-w-md w-full text-center">
@@ -144,19 +150,11 @@ export function AnchorOnboarding({
         </div>
         <h1 className={`${compact ? "text-base" : "text-xl"} font-semibold tracking-tight mb-2`}>Meet {who}</h1>
         <p className="text-sm text-sol-text-muted mb-5 leading-relaxed">
-          {scope === "team"
-            ? "A standing agent every member of the team can talk to: it keeps the team's context, runs routines, answers in chat and Slack, and reaches people when something needs them."
-            : "A standing agent that is yours alone: it keeps your context, runs the routines you give it, and speaks up when something needs you."}
+          {team
+            ? `One standing agent every member of ${team.name} can talk to. It sits at the top of the org as ${CHIEF_OF_STAFF_NAME}: it keeps the team's context, runs routines, answers in chat and Slack, reads how work flows and proposes who should own what.`
+            : `One standing agent that is yours alone. It sits at the top of your org as ${CHIEF_OF_STAFF_NAME}: it keeps your context, tracks your sessions against your goals, runs the routines you give it, and speaks up when something needs you.`}
         </p>
         <div className="text-left space-y-3">
-          <label className="block">
-            <span className="text-xs text-sol-text-dim">Name</span>
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="mt-1 w-full bg-sol-bg-alt border border-sol-border rounded-lg px-3 py-2 text-sm outline-none focus:border-sol-cyan"
-            />
-          </label>
           <div>
             <span className="text-xs text-sol-text-dim">Project it lives and works in</span>
             <ProjectPathPicker value={project} onChange={setProject} className="mt-1" />
@@ -168,11 +166,12 @@ export function AnchorOnboarding({
         {err && <div className="text-sol-red text-xs mt-3">{err}</div>}
         <button
           onClick={create}
-          disabled={busy}
+          disabled={busy || !tree || !meId}
           className="mt-5 w-full bg-sol-cyan text-sol-bg font-medium rounded-lg px-4 py-2.5 text-sm disabled:opacity-60 hover:bg-sol-cyan/90 transition-colors"
         >
-          {busy ? "Bringing it online…" : `Create ${scope === "team" ? "team " : ""}Anchor`}
+          {busy ? "Bringing it online…" : `Hire ${CHIEF_OF_STAFF_NAME}`}
         </button>
+        <p className="text-[11px] text-sol-text-dim mt-3">You can rename it and give it a face on its page.</p>
       </div>
     </div>
   );

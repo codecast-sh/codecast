@@ -27,6 +27,12 @@ const CACHED_ENRICHMENT_QUERIES = [
   "conversations.sessionsLiveness",
   "client_state.get",
   "bookmarks.listBookmarks",
+  // The roster feeds the teamMembers collection; the shell's avatar bar, the
+  // people wall and the call panel all paint from that cache. On 2026-09-21 a
+  // half-saved edit of this query reached prod for about a minute and every
+  // avatar bar open at the time latched its ErrorBoundary ("Failed to load
+  // TeamAvatarBar") until a manual retry, hours after prod had recovered.
+  "teams.getTeamMembers",
   // users.getCurrentUser is fed the same way but still has plain subscribers
   // on auth/team pages (pinned by the raw useQuery ratchet), so it is not
   // listed here yet.

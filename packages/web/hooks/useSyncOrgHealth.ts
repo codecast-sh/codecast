@@ -27,6 +27,28 @@ const api = _api as any;
  *  current without a query's cost on every scope event. */
 export const ORG_HEALTH_REFRESH_MS = 60_000;
 
+/** Convex's verdict when the websocket drops while an action is running; the
+ *  client reconnects on its own but does not resend the action. */
+export const ACTION_CONNECTION_LOST = "Connection lost while action was in flight";
+export const RECONNECT_RETRY_DELAY_MS = 2_000;
+
+/**
+ * A read-only action asked again, once, after the socket dropped under it.
+ * The report is idempotent, so a second ask costs one more computation and
+ * nothing else; without it every reconnect (a laptop lid, an idle server
+ * closing the socket) surfaced as a feeder error for a read the next cadence
+ * tick would have repeated anyway.
+ */
+export async function callWithReconnectRetry<T>(call: () => Promise<T>, delayMs = RECONNECT_RETRY_DELAY_MS): Promise<T> {
+  try {
+    return await call();
+  } catch (e: unknown) {
+    if (!(e instanceof Error) || !e.message.includes(ACTION_CONNECTION_LOST)) throw e;
+    await new Promise((r) => setTimeout(r, delayMs));
+    return call();
+  }
+}
+
 export function useSyncOrgHealth(enabled = true): { health: OrgHealth | null; ready: boolean; error?: Error; missing: boolean; refresh: () => Promise<void> } {
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
   const teamArg = !enabled ? "skip" : !activeTeamId ? {} : isConvexId(activeTeamId) ? { team_id: activeTeamId } : "skip";
@@ -42,7 +64,7 @@ export function useSyncOrgHealth(enabled = true): { health: OrgHealth | null; re
   const refresh = useCallback(async (): Promise<void> => {
     if (!key) return;
     try {
-      const result = await reportRef.current(teamArg as Record<string, unknown>);
+      const result = await callWithReconnectRetry(() => reportRef.current(teamArg as Record<string, unknown>));
       if (result) syncTable("orgHealth", result);
       setState({ key, ready: true });
     } catch (e: unknown) {

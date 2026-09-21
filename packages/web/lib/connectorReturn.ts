@@ -13,7 +13,7 @@
 //       fragment's `provider`, so the search key carries it there.
 //   ?<provider>=error&reason=<text>
 //       The connector refused before it ever stored anything.
-//   ?success=true | ?error=missing_team|installation_failed
+//   ?success=true | ?error=<reason>
 //       The GitHub App install return, which predates the connector protocol
 //       and names no provider.
 //
@@ -89,8 +89,20 @@ export function parseConnectorReturn(hash: string, search: string): ConnectorRet
 /** Plain words for the reasons our own connectors write; anything else is the
  *  connector's own text, which is already a sentence. */
 const KNOWN_REASONS: Record<string, string> = {
-  missing_team: "You must be on a team to install the GitHub App — create or join one first.",
   installation_failed: "GitHub could not complete the install. Try again.",
+  missing_intent: "That install link did not come from Codecast. Start the install from the GitHub card.",
+  unknown_intent: "That install link is no longer valid. Start the install again.",
+  intent_expired: "The install link expired before it came back. Start it again.",
+  intent_already_used: "That install link was already used. Start the install again.",
+  not_a_team_member: "You are no longer a member of that team, so the install has nowhere to bind.",
+  install_not_authorized: "GitHub did not confirm who you are. Start the install again and approve the authorization step.",
+  installer_does_not_control_installation:
+    "That installation belongs to an account you do not administer on GitHub.",
+  install_verification_unconfigured:
+    "This deployment cannot verify GitHub installs yet (GITHUB_APP_CLIENT_ID / GITHUB_APP_CLIENT_SECRET).",
+  install_verification_failed: "GitHub could not be reached to verify the install. Try again.",
+  not_authorized: "You no longer have access to that workspace, so the connection was not activated.",
+  wrong_user: "Only the person who started this connection can finish it.",
   denied: "You declined the authorization.",
   bad_state: "The sign-in link expired before it came back. Start the connection again.",
   expired: "The confirmation link expired. Start the connection again.",

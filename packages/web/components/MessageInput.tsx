@@ -45,6 +45,7 @@ import { personifyAllNow } from "../hooks/usePersonifyAll";
 import { ghostRestartContextFor, deriveRestartStage } from "../hooks/useSessionRestart";
 import { useSwipeToDismiss } from "../hooks/useSwipeToDismiss";
 import { WorkingStatusLine } from "./conversation/sessionChrome";
+import { LiveCompactionCard } from "./conversation/CompactionProgressCard";
 import { followRestoredConversation } from "../lib/followRestoredConversation";
 
 const api = _typedApi as any;
@@ -2132,6 +2133,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                 </button>
               </div>
             </div>
+          )}
+          {!bareComposer && lightboxImageIndex === null && agentStatus === "compacting" && (
+            <LiveCompactionCard conversationId={conversationId} expanded={isExpanded} />
           )}
           {/* The composer's status line: always one row tall, so focusing the
               box or the agent changing state never shifts the composer. The

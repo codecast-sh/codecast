@@ -98,6 +98,7 @@ export function projectPrincipalTeam(team: Record<string, any>, membership: Reco
     role: membership.role,
     joined_at: membership.joined_at,
     visibility: membership.visibility || "summary",
+    ...(membership.visibility_history !== undefined ? { visibility_history: membership.visibility_history } : {}),
   };
 }
 
@@ -110,6 +111,7 @@ export function projectTeamMembership(membership: Record<string, any>) {
     role: membership.role,
     joined_at: membership.joined_at,
     visibility: membership.visibility || "summary",
+    ...(membership.visibility_history !== undefined ? { visibility_history: membership.visibility_history } : {}),
   };
 }
 

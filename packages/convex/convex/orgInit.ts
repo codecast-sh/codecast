@@ -76,6 +76,7 @@ export const ANALYSIS_CAPS = {
   projects: 100,
   initiatives: 100,
   plans: 200,
+  open_plans: 600,
   tasks: 2000,
   docs: 300,
   insights: 300,
@@ -146,12 +147,18 @@ function shapeWork(projects: any[], plans: any[], tasks: any[], docs: any[], tas
   });
   const planRows = plans.map((pl) => {
     const mine = (tasksByPlan.get(String(pl._id)) ?? []).filter((t) => !t.parent_id && t.status !== "dropped");
-    const progress = { total: mine.length, done: 0, in_progress: 0, open: 0 };
+    // The plan's own stored progress counts every task under it; the window's
+    // tasks hold only the open ones and the ones written lately, so a plan
+    // whose work landed months ago read as "0 of 75" here against 88 of 164 on
+    // its page (Codecast pl-313, 2026-09-21), and a run abandoned it as never
+    // started. The window count stands in only where the row carries none.
+    const counted = { total: mine.length, done: 0, in_progress: 0, open: 0 };
     for (const t of mine) {
-      if (t.status === "done") progress.done++;
-      else if (t.status === "in_progress" || t.status === "in_review") progress.in_progress++;
-      else progress.open++;
+      if (t.status === "done") counted.done++;
+      else if (t.status === "in_progress" || t.status === "in_review") counted.in_progress++;
+      else counted.open++;
     }
+    const progress = pl.progress && pl.progress.total > 0 ? { ...pl.progress, source: "plan" as const } : { ...counted, source: "window" as const };
     return {
       id: String(pl._id),
       short_id: pl.short_id,
@@ -284,12 +291,18 @@ export async function computeAnalysisOrg(ctx: Ctx, userId: Id<"users">, teamId: 
     const parent = role.reports_to?.kind === "role"
       ? `@${roleRows.find((r: any) => String(r._id) === String(role.reports_to.role_id))?.handle ?? "?"}`
       : (await ctx.db.get(role.reports_to.user_id))?.name ?? "a person";
+    // The session that is this role (a seat named from a running session, or
+    // a standing agent's own conversation), so a review reads it as already
+    // named: an update run re-proposed three seated sessions under new handles
+    // because nothing on the role row said which session it was (2026-09-22).
+    const seatRow: any = await ctx.db.query("conversations").withIndex("by_standing_role", (q: any) => q.eq("standing_role_id", role._id)).first();
     roles.push({
       id: String(role._id),
       short_id: role.short_id,
       name: role.name,
       handle: role.handle,
       status: role.status,
+      seat: seatRow ? { session: seatRow.short_id ?? String(seatRow._id), title: seatRow.title ?? "" } : undefined,
       trust: trustOf(role),
       caps,
       counters: countersFor(role, now),
@@ -311,7 +324,7 @@ export async function computeAnalysisOrg(ctx: Ctx, userId: Id<"users">, teamId: 
   const projectsWithoutRole = wholeWorkspaceRoles > 0 ? [] : work.projects.filter((p) => !coveredProjects.has(p.id)).map((p) => ({ id: p.id, short_id: p.short_id, title: p.title, open_tasks: p.open_tasks }));
   let sessionsUnfiled = 0;
   for (const [key, list] of scan.byParent) if (key.startsWith("user:")) sessionsUnfiled += list.length;
-  const longRunning = await longRunningSessions(ctx, scan, now, work);
+  const longRunning = await longRunningSessions(ctx, scan, now, work, userId, teamId);
 
   return {
     members,
@@ -381,7 +394,7 @@ export function withSessionUse(rows: any[], uses: Array<SessionUse | null | unde
 
 type OrgScanResult = Awaited<ReturnType<typeof collectOrgSessions>>;
 const LONG_RUNNING_RECENT_MS = 7 * 24 * 60 * 60 * 1000;
-async function longRunningSessions(ctx: Ctx, scan: OrgScanResult, now: number, work: AnalysisHandoff) {
+async function longRunningSessions(ctx: Ctx, scan: OrgScanResult, now: number, work: AnalysisHandoff, userId: Id<"users">, teamId: Id<"teams"> | undefined) {
   // The live recurring routines, by the session each wakes, read once ahead
   // of the ranking so every old session is judged by the same facts.
   const routinesBySession = new Map<string, any[]>();
@@ -393,14 +406,31 @@ async function longRunningSessions(ctx: Ctx, scan: OrgScanResult, now: number, w
       routinesBySession.set(k, [...(routinesBySession.get(k) ?? []), routine]);
     }
   }
+  // A session a live routine wakes is a standing job whatever its process is
+  // doing between wakes, and the scan reads only rows whose status is active
+  // and that nobody dismissed from the inbox: a weekly job is parked six days
+  // in seven, and a loop a person has reviewed is often tidied away. Two of
+  // Codecast's four routine driven growth sessions were missing for that
+  // reason (2026-09-21). Such a session is read from its own row here, with
+  // its helpers uncounted (null, not zero), when it belongs to this workspace.
+  type Candidate = { session: OrgScanResult["sessions"] extends Map<string, infer V> ? (V extends { session: infer S } ? S & { routine_only?: boolean } : never) : never; raw: any };
+  const candidates = new Map<string, Candidate>(scan.sessions);
+  for (const key of routinesBySession.keys()) {
+    if (candidates.has(key)) continue;
+    const raw: any = await ctx.db.get(key as Id<"conversations">);
+    if (!raw || raw.parent_conversation_id || raw.is_subagent || raw.inbox_killed_at) continue;
+    const ours = teamId ? String(raw.team_id ?? "") === String(teamId) : !raw.team_id && String(raw.user_id) === String(userId);
+    if (!ours) continue;
+    candidates.set(key, { raw, session: { short_id: raw.short_id ?? null, title: raw.title ?? "", updated_at: raw.updated_at, owner_user_id: raw.owner_user_id ?? raw.user_id ?? null, subagent_count: null, project_path: raw.project_path ?? null, routine_only: true } as any });
+  }
   const evidence = ({ session, raw }: { session: any; raw: any }) => ({
     routine: routinesBySession.has(String(raw._id)) ? 1 : 0,
     recent: now - (session.updated_at ?? 0) < LONG_RUNNING_RECENT_MS ? 1 : 0,
     pinned: raw.thread_state ? 1 : 0,
-    helpers: session.subagent_count as number,
+    helpers: (session.subagent_count ?? 0) as number,
     messages: (raw.message_count ?? 0) as number,
   });
-  const old = Array.from(scan.sessions.values())
+  const old = Array.from(candidates.values())
     .filter(({ raw }) => !raw.anchor_id && !raw.standing_role_id && now - (raw.started_at ?? raw._creationTime ?? now) >= LONG_RUNNING_MIN_AGE_MS)
     .sort((a, b) => {
       const x = evidence(a), y = evidence(b);
@@ -437,7 +467,9 @@ async function longRunningSessions(ctx: Ctx, scan: OrgScanResult, now: number, w
       age_days: Math.floor((now - startedAt) / (24 * 60 * 60 * 1000)),
       last_active_at: session.updated_at,
       messages: raw.message_count ?? 0,
+      // null when the scan did not read it (a routine woke it in), so a reader knows the count is unknown rather than none.
       helpers: session.subagent_count,
+      scanned: session.routine_only ? false : undefined,
       routines: routines.map((t: any) => ({ short_id: t.short_id ?? undefined, title: t.title ?? undefined, schedule: t.schedule_type, every_ms: t.interval_ms ?? undefined })),
       state_line: state || undefined,
       state_status: raw.thread_state_status ?? undefined,
@@ -459,11 +491,29 @@ async function longRunningSessions(ctx: Ctx, scan: OrgScanResult, now: number, w
 // own execution budget on a large workspace. Reads the work rows raw (the org
 // slice never reads tasks), the scan, and the commit history of the scanned
 // repos, then hands them to the one pure reading of activity (lib/orgActivity).
+/** The plans the activity reading judges: every open one (active, draft) up
+ *  to the cap, and the newest of any status for the done plans a live task
+ *  may still work under. The newest 200 alone hid every plan older than the
+ *  200th: on Union six landed plans from June and July never reached the
+ *  stale list, so no run could close them (2026-09-21). Bodies are stripped:
+ *  the reading needs the title, status, project, timestamps and entries. */
+export const ACTIVITY_PLAN_STRIP = ["body"];
+export async function readActivityPlans(ctx: Ctx, fetchOpts: { userId: Id<"users">; workspace: "team" | "personal"; teamId?: Id<"teams"> }): Promise<any[]> {
+  const byId = new Map<string, any>();
+  for (const status of ["active", "draft"] as const) {
+    const { records } = await scopedFetch(ctx, "plans", { ...fetchOpts, status, limit: ANALYSIS_CAPS.open_plans, stripFields: ACTIVITY_PLAN_STRIP });
+    for (const p of records) byId.set(String(p._id), p);
+  }
+  const { records: newest } = await scopedFetch(ctx, "plans", { ...fetchOpts, limit: ANALYSIS_CAPS.plans, stripFields: ACTIVITY_PLAN_STRIP });
+  for (const p of newest) if (!byId.has(String(p._id))) byId.set(String(p._id), p);
+  return Array.from(byId.values());
+}
+
 export async function computeAnalysisActivity(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"> | undefined, now: number) {
   const fetchOpts = teamId ? { userId, workspace: "team" as const, teamId } : { userId, workspace: "personal" as const };
   const [projects, plans, work, scan, initiatives] = await Promise.all([
     scopedFetch(ctx, "projects", { ...fetchOpts, limit: ANALYSIS_CAPS.projects }).then((r) => r.records),
-    scopedFetch(ctx, "plans", { ...fetchOpts, limit: ANALYSIS_CAPS.plans }).then((r) => r.records),
+    readActivityPlans(ctx, fetchOpts),
     readWorkTasks(ctx, userId, teamId, { perStatus: ANALYSIS_CAPS.tasks, updatedSince: now - ANALYSIS_WINDOW_MS, recentCap: ANALYSIS_CAPS.tasks }),
     collectOrgSessions(ctx, userId, teamId, now),
     scopedFetch(ctx, "initiatives", { ...fetchOpts, limit: ANALYSIS_CAPS.initiatives }).then((r) => r.records),
@@ -944,11 +994,17 @@ export async function applyHire(ctx: Ctx, userId: Id<"users">, boundary: Boundar
     instance_key: `pending:${String(project._id)}:${p.instance}`, instance: p.instance, template_id: p.template, version: p.version, digest: p.digest,
     project_id: project._id, role_id: role._id, phase: "awaiting_host", update_policy: p.update_policy ?? "manual", config: p.config ?? {},
   });
+  // The hire is recorded on the role (org-staffing.md S21); its way back is the host step, so the row carries the instance and no snapshot of it.
+  await noteOrgChange(ctx, userId, whereOfRole(role), { kind: "hire", subject: roleSubject(role), before: { instance: null }, after: { instance: { instance: p.instance, template_id: p.template, version: p.version, project_id: String(project._id) } }, labels: await labelsOf(ctx, [String(role._id), String(project._id)]) });
   const lead = project.owner_role_id ? null : await performSetProjectLead(ctx, userId, { project_id: project._id, role_id: String(role._id) });
   return { status: "applied", note: `hired @${role.handle} from ${p.template}@${p.version} as ${p.instance}${lead ? `; it leads ${project.title}` : ""}; run cast org template bind ${p.instance} in the checkout (row ${row._id})`, role: roleRef(role) };
 }
 export async function applyUpgrade(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgUpgradeChange): Promise<ApplyResult> {
   const row = await performAcceptUpgrade(ctx, userId, { access: boundary.team_id ? `team:${boundary.team_id}` : `user:${boundary.scope_user_id}`, instance: p.instance, template_id: p.template, to: p.to, digest: p.digest });
+  // Recorded on the instance's role, or its project when the row names none; the acceptance is withdrawn by undo until the host step runs it.
+  const role = row.role_id ? await ctx.db.get(row.role_id) : null;
+  const project = role ? null : await ctx.db.get(row.project_id);
+  await noteOrgChange(ctx, userId, role ? whereOfRole(role) : whereOfRecord(project), { kind: "upgrade", subject: role ? roleSubject(role) : recordSubject("project", project), before: { upgrade: null }, after: { upgrade: { instance: p.instance, template_id: p.template, to: p.to } } });
   return { status: "applied", note: `instance ${p.instance} moves to ${p.template}@${p.to} on its next host step (cast org template bind ${p.instance} --to ${p.to}; row ${row._id})` };
 }
 
