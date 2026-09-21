@@ -20,8 +20,8 @@ afterAll(() => { mock.module("../../store/inboxStore", () => realInboxStore); })
 let React: typeof import("react");
 let act: typeof import("react").act;
 let createRoot: typeof import("react-dom/client").createRoot;
-let intro: typeof import("./OrgIntro");
-let card: typeof import("./OrgIntroCard");
+let intro: typeof import("./OrgIntro") & typeof import("../../lib/orgIntro");
+let card: typeof import("./OrgIntroCard") & typeof import("./OrgIntroAnywhere") & typeof import("../../lib/orgIntroCard");
 
 // The fakes the card's mount reads through: the store, the router, the toast.
 type Ui = { org_intro_seen?: boolean; org_upsell_seen?: boolean };
@@ -52,8 +52,8 @@ beforeAll(async () => {
   // module that a dynamic import is still resolving deadlocks that import,
   // and the substitution mutates the live module object, so modules already
   // linked still read the stub.
-  intro = await import("./OrgIntro");
-  card = await import("./OrgIntroCard");
+  intro = { ...await import("./OrgIntro"), ...await import("../../lib/orgIntro") };
+  card = { ...await import("./OrgIntroCard"), ...await import("./OrgIntroAnywhere"), ...await import("../../lib/orgIntroCard") };
   mock.module("../../store/inboxStore", () => ({
     ...realInboxStore,
     // Keep the hook's own methods (subscribe, setState, getInitialState): a

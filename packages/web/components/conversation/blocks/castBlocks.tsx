@@ -22,11 +22,13 @@ import { useInboxStore, useTrackedStore, type SessionDecisionItem } from "../../
 import { DocDates } from "../../DocDates";
 import { FileText, CornerUpRight, BookOpen, Check, Split, Pin } from "lucide-react";
 import { ImageBlock } from "./interactiveBlocks";
-import { CastBrowserRowContext, ChatWakeContext, NestedStepList } from "./shared";
-import { ChatChannelPill, chatHref } from "./systemBlocks";
+import { CastBrowserRowContext, ChatWakeContext } from "../../../lib/conversationBlockContexts";
+import { NestedStepList } from "./shared";
+import { ChatChannelPill } from "./systemBlocks";
+import { chatHref } from "../../../lib/chatHref";
 import { BrowserWatchButton } from "./toolBlocks";
 import { decideOutputId, parseCastCommand } from "../classify";
-import { renderAnsi } from "../format";
+import { renderAnsi } from "../../../lib/conversationFormat";
 import { MessageMarkdown, ReactMarkdown } from "../markdown";
 import type { ImageData, ToolCall, ToolResult } from "../types";
 

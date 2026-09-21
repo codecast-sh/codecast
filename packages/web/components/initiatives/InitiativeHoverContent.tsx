@@ -7,7 +7,8 @@ import { INITIATIVE_STATUS_LABEL, type InitiativeRow } from "@codecast/shared/co
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useBoardTasks, useTasksBackfilled } from "../../hooks/useInitiatives";
 import { initiativeProgress } from "../../lib/initiatives";
-import { HealthChip, INITIATIVE_ACCENT, OwnerChip, ProgressBar, TargetDate } from "./InitiativeAtoms";
+import { HealthChip, OwnerChip, ProgressBar, TargetDate } from "./InitiativeAtoms";
+import { INITIATIVE_ACCENT } from "../../lib/initiativeColors";
 
 export function InitiativeHoverContent({ initiative }: { initiative: InitiativeRow }) {
   const now = useCoarseNow(60_000);

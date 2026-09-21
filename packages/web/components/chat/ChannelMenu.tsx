@@ -2,7 +2,8 @@ import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Archive, Bell, Pencil, Text } from "lucide-react";
 import { SlackLogo } from "../SlackLogo";
-import { SlackSyncDialog, slackLinkForChannel } from "./SlackSyncDialog";
+import { SlackSyncDialog } from "./SlackSyncDialog";
+import { slackLinkForChannel } from "../../lib/slackChannelLink";
 import {
   ContextMenu,
   CtxCheckItem,
@@ -18,7 +19,6 @@ import type { ChatNotifyLevel } from "../../store/chatSlice";
 import { channelDisplayName } from "../../lib/chatViews";
 import { dmOtherIds } from "@codecast/shared/chat";
 import "./chat.css";
-
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 // The one channel-management surface, on the app's one menu system.
 //

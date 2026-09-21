@@ -10,13 +10,12 @@
 // header needs nothing else. It mounts no feeder: the page that shows it
 // mounts `useSyncOrgTreeFeeder()` once. Who leads is `projectLeadOf`, the one
 // rule the server and the analyzer also read.
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
 import { UserPlus } from "lucide-react";
-import { projectLeadOf, watchersLabel, type ProjectLead } from "@codecast/shared/contracts/orgLead";
-import { useInboxStore, type ProjectItem } from "../../store/inboxStore";
+import { watchersLabel } from "@codecast/shared/contracts/orgLead";
+import { useInboxStore } from "../../store/inboxStore";
 import { projectLeadScopeOutcome } from "../../store/orgSlice";
-import { useOrgRoles } from "../../hooks/useOrgRoles";
 import { cn } from "../../lib/utils";
 import { HireRoleDialog } from "../org/HireRoleDialog";
 import { TakeoverGate } from "../org/TakeoverEdit";
@@ -24,6 +23,7 @@ import { Popover, PopoverAnchor, PopoverContent } from "../ui/popover";
 import type { OrgRole } from "../org/orgTypes";
 import { RoleHoverCard } from "../identity";
 import { ChipFace, OwnerRoleChip } from "./CharterChips";
+import { useProjectLead } from "../../hooks/useProjectLead";
 
 /** The hire form reads the whole org tree (reports-to choices, caps), so it
  *  subscribes to it only while open: the surface around it reads the roles. */
@@ -31,26 +31,6 @@ export function HireLeadDialog(props: Omit<React.ComponentProps<typeof HireRoleD
   const tree = useInboxStore((s) => s.orgTree);
   if (!tree) return null;
   return <HireRoleDialog tree={tree} {...props} />;
-}
-
-/** What the chip branches on, as one string: a heartbeat on any other project
- *  field, or on any other project, re-renders nothing. */
-function projectLeadSig(p: ProjectItem | undefined): string {
-  return p ? `${p._id}|${p.owner_role_id ?? ""}|${p.team_id ?? ""}|${p.title}|${p.project_path ?? ""}` : "";
-}
-
-/** The project's lead, from the store. `roles` is null until the org tree on
- *  screen is the project's own workspace: a role lives in one workspace, so
- *  another workspace's roles can neither lead this project nor be offered. */
-export function useProjectLead(projectId: string): { project: ProjectItem | undefined; roles: OrgRole[] | null; lead: ProjectLead<OrgRole>; otherWorkspace: boolean } {
-  const sig = useInboxStore((s) => projectLeadSig(s.projects[projectId]));
-  const { roles, workspace } = useOrgRoles();
-  return useMemo(() => {
-    const project = useInboxStore.getState().projects[projectId];
-    const mine = !!workspace && !!project && (workspace.kind === "team" ? project.team_id === workspace.id : !project.team_id);
-    const scoped = mine ? roles : null;
-    return { project, roles: scoped, lead: projectLeadOf(project, scoped), otherWorkspace: !!workspace && !!project && !mine };
-  }, [sig, roles, workspace, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 }
 
 /** One sentence that says both things the gesture did. */

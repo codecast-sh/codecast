@@ -58,7 +58,7 @@ import { DocEmbed } from "./DocEmbed";
 import { DatePill } from "./DatePill";
 import { FilePathLink } from "./FilePathLink";
 import { FilePathContext, filePathMention, parseFilePathHref } from "../lib/filePathLinks";
-import { useKnownWorktrees } from "./worktree/WorktreesContext";
+import { useKnownWorktrees } from "../hooks/useKnownWorktrees";
 import { worktreeRefOfCode } from "./worktree/worktreeModel";
 import { WorktreePill } from "./worktree/WorktreePill";
 import { PublishedPageEmbed, PublishedPagePill } from "./PublishedPageEmbed";

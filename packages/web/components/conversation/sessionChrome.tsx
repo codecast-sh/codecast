@@ -1,16 +1,14 @@
-import Link from "next/link";
 import { AppLoader } from "../AppLoader";
 import { useState, useMemo, memo, Fragment, type ReactNode } from "react";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { withSafetyBlock, SAFETY_BLOCK_HINT, PROVIDER_KEYS, getProviderKeySpec, computeConversationTaskStats } from "@codecast/shared/contracts";
+import { withSafetyBlock, SAFETY_BLOCK_HINT, PROVIDER_KEYS, getProviderKeySpec, computeConversationTaskStats, isSessionActivityFresh } from "@codecast/shared/contracts";
 import { LimitParkCard } from "../LimitParkCard";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { toast } from "sonner";
 import { formatElapsedClock, shouldShowElapsed } from "../workingStatus";
 import { activitySig } from "../../lib/sessionActivity";
 import { LivePulseDot } from "../SessionActivityLine";
-import { isSessionActivityFresh } from "@codecast/shared/contracts";
 import { AgentTypeIcon, formatAgentType } from "../AgentTypeIcon";
 import { HeaderModelControl } from "../SessionControlMenu";
 import { useLiveSessionMeta } from "../../hooks/useLiveSessionMeta";
@@ -18,48 +16,17 @@ import { DropdownMenuItem, DropdownMenuSeparator } from "../ui/dropdown-menu";
 import { OwnerAvatar, type HandoffInfo } from "../OwnersBadge";
 import { copyToClipboard } from "../../lib/utils";
 import { useImageGallery, type GalleryImage } from "../ImageGallery";
-import { useInboxStore, useTrackedStore, resolveSimpleView } from "../../store/inboxStore";
-import { Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, Check, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, KeyRound, ExternalLink, Loader2, ArrowRightLeft } from "lucide-react";
+import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
+import { Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, Check, KeyRound, ExternalLink, Loader2, ArrowRightLeft } from "lucide-react";
 import { useDevices, useDeviceMoveStatus } from "../DeviceBadge";
 import { useProviderKeyCommand, deviceManagedKeys } from "../../lib/useProviderKeyCommand";
 import type { RestartPhase, RestartStage } from "../../hooks/useSessionRestart";
 import { CopyCommand } from "./blocks/shared";
 import { authRemedy, detectProviderFromError } from "./classify";
-import { formatDuration, formatFullTimestamp, formatRelativeTime } from "./format";
+import { formatDuration, formatFullTimestamp, formatRelativeTime } from "../../lib/conversationFormat";
 import { MessageMarkdown } from "./markdown";
-import type { ConversationDensity, MessageFeedDensity, ParsedApiError } from "./types";
-
-
-// restartSession can answer with a DIFFERENT conversation: the ghost's live
-// twin, or a freshly recreated row. Follow it there, and clear the ghost from
-// the cache once we've left it (pruneGhostSessions skips the open session, so
-// the delayed call runs after navigation lands; both calls are no-op safe).
-// Returns true when it redirected.
-export function followRestoredConversation(res: any, ghostId: string): boolean {
-  const targetId = res?.conversation_id;
-  if (!res?.restored || !targetId || targetId === ghostId) return false;
-  toast.success("Restored the live session", { description: "This conversation was deleted on the server." });
-  // Same logical conversation reborn under a new id — rekey-class, not a jump.
-  useInboxStore.getState().requestNavigate(targetId, { source: "rekey" });
-  useInboxStore.getState().pruneGhostSessions([ghostId]);
-  setTimeout(() => useInboxStore.getState().pruneGhostSessions([ghostId]), 3000);
-  return true;
-}
-export const FEED_DENSITY_CYCLE: MessageFeedDensity[] = ["full", "condensed", "compact"];
-// Last-chosen density per conversation, app-session scoped.
-export const DENSITY_BY_CONVERSATION = new Map<string, ConversationDensity>();
-// Simple view reads calmer by default: tool activity as one-line receipts.
-// An explicit per-conversation choice (the map above) still wins.
-export function defaultDensity(): ConversationDensity {
-  return resolveSimpleView(useInboxStore.getState().clientState.ui) ? "condensed" : "full";
-}
-export const DENSITY_OPTIONS: Array<{ value: ConversationDensity; label: string; description: string; icon: React.ComponentType<{ className?: string }>; ai?: boolean }> = [
-  { value: "full", label: "Full", description: "Everything as it happened", icon: AlignJustify },
-  { value: "condensed", label: "Condensed", description: "Tool activity as one-line receipts", icon: ListCollapse },
-  { value: "compact", label: "Compact", description: "Condensed, plus long replies clipped to their ending", icon: GalleryVerticalEnd },
-  { value: "story", label: "Story", description: "A timeline retelling, each reply condensed in its own voice", icon: GitCommitVertical, ai: true },
-  { value: "summary", label: "Summary", description: "One short narrative of the whole session", icon: BookOpenText, ai: true },
-];
+import type { ConversationDensity, ParsedApiError } from "./types";
+import { DENSITY_OPTIONS } from "../../lib/conversationDensity";
 
 // The density dropdown's option list. Guests (unauthenticated share-link
 // viewers) get the local render densities only — the AI retellings need an

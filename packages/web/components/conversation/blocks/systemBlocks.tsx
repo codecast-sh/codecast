@@ -26,12 +26,15 @@ import { DecisionCompactCard } from "../../decisions/DecisionCompactCard";
 import { MessageSquare, Users, Hash, ChevronDown, ChevronRight, Clock, CornerDownRight, Workflow, Zap, Radar, Bot, PhoneCall, ArrowUpRight } from "lucide-react";
 import { sessionMessageQueueLabel } from "../../../lib/pendingBanner";
 import { PlanBlock } from "./planBlock";
-import { UserIcon, agentBorderMap, agentColorMap, agentTextMap } from "./shared";
+import { UserIcon } from "./shared";
+import { agentBorderMap, agentColorMap, agentTextMap } from "../../../lib/conversationBlockStyles";
 import { cleanCommandExpansion, cleanStickyContent, parseCommandInvocation, parseTaskNotification, parseTeammateMessages } from "../classify";
-import { formatFullTimestamp, formatRelativeTime, stripAnsiCodes } from "../format";
-import { CMD_MD_COMPONENTS, MD_COMPONENTS_NO_IMG, MD_COMPONENTS_NO_PRE, ReactMarkdown, hasRichMarkdown } from "../markdown";
+import { formatFullTimestamp, formatRelativeTime, stripAnsiCodes } from "../../../lib/conversationFormat";
+import { CMD_MD_COMPONENTS, MD_COMPONENTS_NO_IMG, MD_COMPONENTS_NO_PRE, hasRichMarkdown } from "../../../lib/conversationMarkdown";
+import { ReactMarkdown } from "../markdown";
 import { TimelineRule } from "../sessionChrome";
 import type { ToolCall, ToolResult } from "../types";
+import { chatHref } from "../../../lib/chatHref";
 
 function CommandStatusLine({ content: rawContent, timestamp }: { content: string; timestamp: number }) {
   const content = rawContent.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').replace(/<task-reminder>[\s\S]*?<\/task-reminder>/g, '').trim();
@@ -805,13 +808,6 @@ export function SessionMessageBlock({ from, name, body, timestamp, pendingStatus
 // and the `cast chat reply` it should run. The transcript shows the exchange
 // the way chat does — a channel pill, the thread's lines by speaker — and hides
 // the framing that exists only to brief the agent.
-
-// Where a chat card clicks through: the channel, positioned on a message when
-// one is known. Mirrors convex/chatText.ts chatPermalink.
-export function chatHref(channelId?: string, messageId?: string): string | null {
-  if (!channelId) return null;
-  return messageId ? `/chat/${channelId}?m=${messageId}` : `/chat/${channelId}`;
-}
 
 export function ChatChannelPill({ name, href }: { name: string; href: string | null }) {
   const cls = "inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded border border-sol-magenta/30 bg-sol-magenta/10 text-sol-magenta text-[11px] font-mono shrink-0";

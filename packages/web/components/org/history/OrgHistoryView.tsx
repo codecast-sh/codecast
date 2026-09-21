@@ -18,6 +18,7 @@ import { leftAloneLine, orgLogEffectLines, orgLogEntryLine, orgLogLine, type Org
 import { groupOrgLogByDay, orgLogClock, orgLogDoorWords, orgUndoCannotLine } from "@codecast/shared/contracts/orgLog";
 import { cn } from "../../../lib/utils";
 import { OrgButton } from "../OrgButton";
+import { ORG_LOG_FOLD_ROWS } from "../../../lib/orgHistoryView";
 
 const DOOR_ICON: Record<OrgLogDoor, typeof FileText> = {
   proposal: FileText,
@@ -28,9 +29,6 @@ const DOOR_ICON: Record<OrgLogDoor, typeof FileText> = {
   cli: Terminal,
   history: History,
 };
-
-/** How many rows a fold shows before it offers the rest. */
-export const ORG_LOG_FOLD_ROWS = 12;
 
 const hairline = "color-mix(in srgb, var(--sol-border) 28%, transparent)";
 

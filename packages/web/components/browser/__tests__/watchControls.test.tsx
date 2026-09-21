@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { DrivingHint, WatchAddress, WheelButton, WHEEL_BACK_LABEL, WHEEL_TAKE_LABEL } from "../watchControls";
+import { DrivingHint, WatchAddress, WheelButton } from "../watchControls";
+import { WHEEL_BACK_LABEL, WHEEL_TAKE_LABEL } from "../../../lib/watchLabels";
 
 // The dock and the stage pane both draw these; the copy and the states are
 // pinned here once so neither host can drift.

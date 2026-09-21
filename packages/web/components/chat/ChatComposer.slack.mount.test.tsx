@@ -24,7 +24,7 @@ async function verifySlackComposer() {
   mock.module("@sentry/react", () => ({ captureException: (error: unknown) => captured.push(error) }));
   mock.module("../../lib/desktop", () => ({ openExternalUrl: (url: string) => opened.push(url) }));
   mock.module("../../store/inboxStore", () => ({ ...realInboxStore, useTrackedStore: () => ({ currentUser: { _id: "samvit" } }) }));
-  mock.module("./SlackSyncDialog", () => ({ useChannelSlackLink: () => link }));
+  mock.module("../../hooks/useChannelSlackLink", () => ({ useChannelSlackLink: () => link }));
   mock.module("../../hooks/useChatTyping", () => ({ useTypingReporter: () => ({ stop() {}, onTyping() {} }), useTypingMembers: () => [] }));
   mock.module("./TypingIndicator", () => ({ TypingIndicator: () => null }));
   mock.module("../calls/WalkiePtt", () => ({ WalkiePttButton: () => null }));

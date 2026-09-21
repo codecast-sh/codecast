@@ -7,7 +7,7 @@ import { isRoleAssignee, type AssigneeInfo } from "@codecast/shared/contracts/or
 import { AvatarImg } from "../../lib/avatarCache";
 import { RoleAvatar } from "../org/avatars";
 import { RoleHoverCard } from "./RoleHoverCard";
-import { roleRingStyle } from "./SessionFace";
+import { roleRingStyle } from "../../lib/roleRingStyle";
 
 const initialsOf = (name: string) => name.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase();
 

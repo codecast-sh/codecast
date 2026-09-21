@@ -9,7 +9,7 @@ import { formatAgentType } from "../AgentTypeIcon";
 import type { SessionHandoffPrompt } from "../../lib/sessionHandoff";
 import type { HandoffLinkDetails } from "./types";
 import { MessageMarkdown } from "./markdown";
-import { formatFullTimestamp, formatRelativeTime } from "./format";
+import { formatFullTimestamp, formatRelativeTime } from "../../lib/conversationFormat";
 
 type HandoffNavigation = {
   convLink: (id: string) => string;

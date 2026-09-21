@@ -18,18 +18,19 @@ import { cn } from "../../lib/utils";
 import { GhostChips, StateBar, StateTally, StandingLine } from "./OrgNodeCards";
 import { ORG_STATE_META, parentName, staffingPaneWord } from "./orgMeta";
 import { OrgButton } from "./OrgButton";
-import { RetireRoleConfirm, type UnseatChoice } from "./RetireRoleConfirm";
+import { RetireRoleConfirm } from "./RetireRoleConfirm";
+import { type UnseatChoice } from "../../lib/retireRole";
 import type { OrgGhostChip, OrgLayoutNode } from "./orgLayout";
 import { ghostChipOf, parentNodeId, refMatches } from "./orgLayout";
 import type { OrgParentRef, OrgRole, OrgScope, OrgSession, OrgTree } from "./orgTypes";
 import { TakeoverGate } from "./TakeoverEdit";
 import type { OrgProposalChange } from "./orgStaffingTypes";
 import type { OrgUpdateRoleInput } from "../../store/orgSlice";
-import { useOrgRoles } from "../../hooks/useOrgRoles";
 import { PriorityPill } from "../charter/CharterChips";
 import { ProjectLeadChip } from "../charter/ProjectLeadChip";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { isMac } from "../../shortcuts";
+import { STAFFING_ASKS_W, STAFFING_LEAD_W } from "../../lib/orgPanelLayout";
 
 export type OrgSessionsSource = {
   sessionsUnder: (parentId: string) => OrgSession[];
@@ -650,12 +651,3 @@ export function OrgScopePanel(props: OrgScopePanelProps) {
     </div>
   );
 }
-
-/** The asks column (S19): the panel's own 380px. */
-export const STAFFING_ASKS_W = 380;
-/** The conversation's column to its left: wider, as the eye should land
- *  there; `roomy` when the window leaves a strip of chart beside both,
- *  `tight` when it does not. */
-export const STAFFING_LEAD_W = { roomy: 600, tight: 420 } as const;
-
-

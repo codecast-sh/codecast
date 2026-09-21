@@ -13,7 +13,7 @@
 // probe Slack first.
 
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
-import { useAction, useQuery } from "convex/react";
+import { useAction } from "convex/react";
 import { useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
@@ -41,11 +41,12 @@ import { SlackPeopleDialog } from "./SlackPeopleDialog";
 import { Switch } from "../ui/switch";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import type { ChatSlackLinkRow } from "../../store/chatSlice";
-import { slackLinksSig } from "../../hooks/useChatSync";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { compactAge } from "../../lib/threadState";
 import "./chat.css";
+import { slackDeepLink } from "../../lib/slackChannelLink";
+import { useChannelSlackLink } from "../../hooks/useChannelSlackLink";
 
 type Direction = ChatSlackLinkRow["direction"];
 type Options = ChatSlackLinkRow["options"];
@@ -71,31 +72,6 @@ const ADVANCED_ROWS: OptionRow[] = [
   { key: "system_messages", label: "Join and topic notices", hint: "Who joined or left the Slack channel, topic changes, pins.", scope: "in" },
   { key: "match_people_by_email", label: "Match people by email", hint: "A Slack person with a teammate's email appears here as that teammate. Off: everyone from Slack shows under their Slack name.", scope: "in" },
 ];
-
-
-export function slackDeepLink(workspaceId: string, channelId: string, ts?: string): string {
-  return `slack://channel?team=${encodeURIComponent(workspaceId)}&id=${encodeURIComponent(channelId)}${ts ? `&message=${encodeURIComponent(ts)}` : ""}`;
-}
-
-/** The mirror row for one channel, out of the store's whole link map. At most
- *  one link per channel (the server enforces it), so the first match is THE
- *  answer. Takes the map rather than reading the store, so a snapshot caller
- *  (the channel menu) and a subscribed one both use this one lookup. */
-export function slackLinkForChannel(
-  links: Record<string, ChatSlackLinkRow> | undefined,
-  channelId: string | null | undefined,
-): ChatSlackLinkRow | null {
-  if (!channelId || !links) return null;
-  for (const id in links) {
-    if (links[id].chat_channel_id === channelId) return links[id];
-  }
-  return null;
-}
-
-export function useChannelSlackLink(channelId: string | null | undefined): ChatSlackLinkRow | null {
-  const s = useTrackedStore([(st) => slackLinksSig(st.chatSlackLinks as any)]);
-  return slackLinkForChannel(s.chatSlackLinks as any, channelId);
-}
 
 export function SlackSyncDialog({ channelId, onClose }: { channelId: string; onClose: () => void }) {
   const link = useChannelSlackLink(channelId);

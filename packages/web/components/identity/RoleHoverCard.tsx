@@ -15,7 +15,7 @@ import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useRoleScope } from "../../hooks/useRoleScope";
 import { RoleAvatar } from "../org/avatars";
 import { HoverCard } from "../ui/HoverCard";
-import { roleRingStyle } from "./SessionFace";
+import { roleRingStyle } from "../../lib/roleRingStyle";
 import { RoleScopeView } from "./RoleScopeView";
 import { isAvatarKey, defaultAvatarFor } from "@codecast/shared/contracts/orgAvatars";
 import { relativeTime } from "../../lib/entityDisplay";
