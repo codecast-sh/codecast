@@ -422,7 +422,7 @@ export async function ensureUp(
       timeout: 5_000, stdio: "ignore",
     });
   } catch { /* no master to evict */ }
-  const sshDeadline = Date.now() + 150_000;
+  const sshDeadline = Date.now() + (host.platform === "darwin" ? 25 * 60_000 : 150_000);
   for (;;) {
     try {
       execFileSync(
