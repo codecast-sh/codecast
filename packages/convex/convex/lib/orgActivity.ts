@@ -370,7 +370,10 @@ export function computeStale(input: ActivityInputs): StaleWork {
       // A leftover open task under a finished plan is a follow up, not the plan still running: only a task in progress counts.
       // One week, not the two of the quiet clock: three Union samples reopened five done plans on a two week reading, and four of them were finished with one forgotten row.
       const workedOpen = open.some((t) => t.status === "in_progress" && now - (t.updated_at ?? 0) < DONE_STILL_WORKED_DAYS * D);
-      if (workedOpen || liveSessions.length > 0) plans.push({ short_id: pl.short_id, title: pl.title, status: pl.status, last_task_activity_at: lastOpenTaskAt || null, sessions_live: liveSessions.length, reason: "marked done, still worked" });
+      // A session parked on the plan after it closed (waiting on a person, or on a wake) is not working it; only a session working now is.
+      // Five finished Union plans were flagged on parked sessions alone (2026-09-21).
+      const workedLive = bound.some((s) => s.state === "working");
+      if (workedOpen || workedLive) plans.push({ short_id: pl.short_id, title: pl.title, status: pl.status, last_task_activity_at: lastOpenTaskAt || null, sessions_live: liveSessions.length, reason: "marked done, still worked" });
       continue;
     }
     if (pl.status !== "active" && pl.status !== "draft") continue;

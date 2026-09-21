@@ -310,7 +310,7 @@ async function ensureRoutines(deps: OrgInitDeps, receipt: TemplateReceipt): Prom
       if (state.attempted) throw new Error(`Routine ${routine.id} creation outcome unknown; refusing a duplicate request`);
       state.attempted = true;
       save(receipt);
-      const created = await request(deps, "/cli/tasks/create", { title: substitute(routine.title, values(receipt, artifact.manifest), inputTokens(artifact.manifest)), prompt: loaderPrompt(receipt, routine.id), context_summary: marker(receipt, routine.id), originating_conversation_id: receipt.role!.sessionId, project_path: receipt.project.dir, schedule_type: "recurring", interval_ms: intervalMs(routine.every), run_at: Date.now() + 365 * 86400000, precheck: "exit 1", mode: "propose" });
+      const created = await request(deps, "/cli/tasks/create", { title: substitute(routine.title, values(receipt, artifact.manifest), inputTokens(artifact.manifest)), prompt: loaderPrompt(receipt, routine.id), context_summary: marker(receipt, routine.id), originating_conversation_id: receipt.role!.sessionId, project_path: receipt.project.dir, schedule_type: "recurring", interval_ms: intervalMs(routine.every), status: "paused", mode: "propose" });
       state.triggerId = created.task_id;
       if (!state.triggerId) throw new Error("Trigger creation returned no id");
       save(receipt);
@@ -321,10 +321,14 @@ async function ensureRoutines(deps: OrgInitDeps, receipt: TemplateReceipt): Prom
     managedTrigger(row, receipt, routine.id);
     state.triggerId = row._id;
     if (state.attempted) {
-      if (row.precheck !== "exit 1" || row.run_count !== 0 || row.status === "running" || row.schedule_type !== "recurring" || row.interval_ms !== intervalMs(routine.every) || !(row.run_at > Date.now())) throw new Error(`Routine ${routine.id} was not safely gated; manual review required`);
+      // Created paused (org-hire.md H8): no run_at, so nothing fires until a
+      // person activates it. A row from an older install carries the year
+      // ahead date and the exit 1 gate instead; both forms are inert.
+      // A backend that ignores the status is paused at once instead.
+      if (row.run_count !== 0 || row.status === "running" || row.schedule_type !== "recurring" || row.interval_ms !== intervalMs(routine.every)) throw new Error(`Routine ${routine.id} was not safely gated; manual review required`);
       if (row.status !== "paused") await request(deps, "/cli/tasks/pause", { task_id: row._id });
       row = triggerFor(await triggerRows(deps), row._id);
-      if (row.status !== "paused" || row.precheck !== "exit 1" || row.run_count !== 0) throw new Error(`Pause verification failed for ${routine.id}`);
+      if (row.status !== "paused" || row.run_count !== 0) throw new Error(`Pause verification failed for ${routine.id}`);
       state.attempted = false;
     }
     state.paused = row.status === "paused";
@@ -516,8 +520,10 @@ export async function templateStatus(deps: OrgInitDeps, instance: string, option
   if (receipt.role) { verifyRole(tree, receipt); if (receipt.role.sessionId) await verifyStanding(deps, tree, receipt); }
   const rows = await triggerRows(deps);
   const artifact = verifiedArtifact(receipt);
-  const trust = (receipt.role ? verifyRole(tree, receipt).trust : undefined) ?? "understand";
-  return { ...receipt, setup: setupRows(artifact.manifest, receipt), ask: nextHumanAsk(artifact.manifest, receipt), readiness: readiness(artifact.manifest, receipt, trust), warnings: tree.templateWarnings, routines: Object.fromEntries(Object.entries(receipt.routines).map(([id, r]) => {
+  const roleRow = receipt.role ? verifyRole(tree, receipt) : undefined;
+  const trust = roleRow?.trust ?? "understand";
+  const held = { ...receipt, authority: (roleRow?.authority ?? []).map((g: any) => ({ id: g.id, expires_at: g.expires_at })) };
+  return { ...receipt, setup: setupRows(artifact.manifest, receipt), ask: nextHumanAsk(artifact.manifest, receipt), readiness: readiness(artifact.manifest, held, trust), warnings: tree.templateWarnings, routines: Object.fromEntries(Object.entries(receipt.routines).map(([id, r]) => {
     const row = r.triggerId ? triggerFor(rows, r.triggerId) : null;
     if (row && !r.external) managedTrigger(row, receipt, id);
     if (row && r.external && row.project_path !== receipt.project.dir) throw new Error(`External routine ${id} changed project`);
@@ -542,7 +548,8 @@ export async function templateInstructions(deps: OrgInitDeps, instance: string, 
     managedTrigger(row, receipt, routine);
     if (!["scheduled", "running"].includes(row.status) || row.precheck === "exit 1") throw new Error("Routine remains paused or gated for review");
     file = entry.prompt;
-    header = readinessHeader(routine, readiness(artifact.manifest, receipt, verifyRole(tree, receipt).trust ?? "understand")[routine]);
+    const roleRow = verifyRole(tree, receipt);
+    header = readinessHeader(routine, readiness(artifact.manifest, { ...receipt, authority: (roleRow.authority ?? []).map((g: any) => ({ id: g.id, expires_at: g.expires_at })) }, roleRow.trust ?? "understand")[routine]);
   }
   return `Template ${receipt.template.id}@${receipt.template.version}\nSHA-256 ${receipt.template.hash}\nInstance ${instance}; project ${receipt.project.ref}\nHuman charter, trust and grants remain authoritative.${header ? `\n${header}` : ""}\n\n${substitute(artifact.files.get(file)!.toString("utf8"), values(receipt, artifact.manifest), inputTokens(artifact.manifest))}`;
 }
@@ -551,14 +558,22 @@ export function activationInstructions(receipt: TemplateReceipt, row: { short_id
   const seconds = row.interval_ms / 1000;
   if (!Number.isSafeInteger(seconds) || seconds <= 0) return { note: "The live cadence cannot be represented exactly by cast trigger update; keep paused and review it manually.", commands: [] };
   const ref = quoteTemplateArg(row.short_id || row._id);
+  const gate = row.precheck === "exit 1" ? " --precheck ''" : "";
   return {
-    note: "Only after human review: keep this trigger paused, reset its first-run date and clear the temporary gate with --every, then verify paused state, no gate and the new runAt before explicitly resuming. Resume alone preserves the year-ahead date. This procedure grants no new authority.",
+    note: "A person activates this routine, from the role page (one control) or with these commands after review: keep it paused, set its first run one cadence out with --every (resume alone would run it at once, or a year out on an older install), verify paused state, no gate and the new runAt, then resume.",
     commands: [
-      `cast trigger update ${ref} --every ${quoteTemplateArg(`${seconds}s`)} --precheck ''`,
+      `cast trigger update ${ref} --every ${quoteTemplateArg(`${seconds}s`)}${gate}`,
       `cast org template status ${quoteTemplateArg(receipt.instance)} --dir ${quoteTemplateArg(receipt.project.dir)}`,
       `cast trigger resume ${ref}`,
     ],
   };
+}
+/** The role page's control, from the shell: refused for an agent session by the server, with the reason. */
+export async function activateTemplateRoutine(deps: OrgInitDeps, instance: string, routine: string, options: TemplateOptions): Promise<unknown> {
+  const receipt = readReceipt(options.dir, instance);
+  const state = receipt.routines[routine];
+  if (!state?.triggerId || state.external || state.retired) throw new Error("Routine is unverified, external or retired");
+  return request(deps, "/cli/org/template/activate", { task_id: state.triggerId, from_session: options.session || sessionIdFromEnv() || undefined });
 }
 function verifyRelease(receipt: TemplateReceipt, release: TemplateReceipt["template"]): TemplateArtifact {
   if (release.root !== releaseRoot(receipt.project.dir, release)) throw new Error("Upgrade release points outside its pinned directory");

@@ -83,6 +83,9 @@ export const CHANGE_KIND_META: Record<OrgChange["kind"], { label: string; descri
   project_meta: { label: "Project charters", describe: "Writes down what a project is for, who owns it, and how urgent it is." },
   adopt: { label: "Sessions adopted as standing agents", describe: "Makes an existing session the standing session of an agent." },
   retire: { label: "Agents retired", describe: "Closes a seat; its sessions fall back to their owners." },
+  authority: { label: "Authority outside codecast", describe: "Lets an agent spend, publish, write or connect outside codecast, inside limits you set." },
+  hire: { label: "Hires from a template", describe: "Hires an agent from a template: its answers, its release and the project it will lead." },
+  upgrade: { label: "Template updates", describe: "Moves a hired agent to a newer release of its template." },
 };
 
 /** The kind's label, total: a kind this build does not know still reads as a
@@ -130,6 +133,9 @@ export function chipLine(change: OrgChange): string {
     case "project_meta": return [change.project, change.priority, change.owner ? `owner ${at(change.owner)}` : ""].filter(Boolean).join(" \u00b7 ");
     case "adopt": return `adopt ${change.conversation}`;
     case "file": return `${change.plan} under ${change.project}`;
+    case "authority": return change.authority.map((g) => g.kind).join(" \u00b7 ");
+    case "hire": return `${change.template} ${change.version}`;
+    case "upgrade": return `to ${change.to}`;
     default: return changeLine(change);
   }
 }
@@ -151,6 +157,9 @@ export const CHANGE_KIND_WORD: Record<OrgChange["kind"], string> = {
   plan_status: "plan",
   task_status: "task",
   project_status: "project",
+  authority: "authority",
+  hire: "hire",
+  upgrade: "update",
 };
 
 /** A ghost's colour (org-staffing.md S5): the page's violet, dashed, at 55%. */

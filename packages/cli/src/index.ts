@@ -13331,6 +13331,8 @@ roleGroup
     printRoleLine(brief.role);
     const u = brief.facts.usage;
     console.log(`  ${c.dim}trust ${brief.role.trust}: ${TRUST_HINT[brief.role.trust] ?? ""}${c.reset}`);
+    const held = (brief.role.authority ?? []).filter((g: any) => !g.expires_at || g.expires_at > Date.now());
+    console.log(`  ${c.dim}authority outside codecast: ${held.length ? held.map((g: any) => `${g.kind} (${g.label}${g.expires_at ? `, until ${formatDateSmart(g.expires_at)}` : ""})`).join("; ") : "none granted"}${c.reset}`);
     console.log(`  ${c.dim}today: ${u.wakes}/${u.caps.wakes_per_day} wakes · ${u.hands}/${u.caps.hands_per_day} hands · ${u.tokens}/${u.caps.tokens_per_day} tokens${u.uncounted_sessions ? ` · tokens not counted for ${u.uncounted_sessions} session${u.uncounted_sessions === 1 ? "" : "s"}` : ""}${c.reset}`);
     console.log(`  ${c.dim}standing session: ${brief.role.standing_short_id ?? "none"}${brief.role.last_wake_at ? ` · last wake ${formatDateSmart(brief.role.last_wake_at)}` : ""}${c.reset}`);
     const { briefHandLine } = await import("./briefLines.js");
@@ -13385,6 +13387,25 @@ roleGroup
     const result = await cliPost("/cli/role/trust", { role_id, trust: stage, from_session: callingSession() });
     if (options.json) { console.log(JSON.stringify(result, null, 2)); return; }
     console.log(`${c.green}✓${c.reset} @${result.handle} trust ${result.previous_trust} → ${c.bold}${result.trust}${c.reset} ${c.dim}(${TRUST_HINT[result.trust] ?? ""})${c.reset}`);
+  });
+
+roleGroup
+  .command("authority")
+  .description("Grant or revoke what a role may do outside codecast (a person's act): spend, publish, write, connect, each with a limit and an expiry")
+  .argument("<handle>", "@handle, or-N, or id")
+  .option("--grant <json>", "A JSON list of grants [{ id, kind, label, scope?, limit?, expires? }]; '-' reads stdin")
+  .option("--revoke <id>", "Revoke a grant by id (repeatable)", (value: string, all: string[]) => [...all, value], [])
+  .option("--team <name|id>", "Team workspace")
+  .option("--json", "Machine-readable output")
+  .action(async (handle: string, options: any) => {
+    const role_id = await resolveRoleId(handle, options.team);
+    const raw = options.grant === "-" ? await new Response(process.stdin).text() : options.grant;
+    const authority = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(authority)) { console.error("--grant is a JSON list"); process.exit(1); }
+    const result = await cliPost("/cli/role/authority", { role_id, authority, revoke: options.revoke, from_session: callingSession() });
+    if (options.json) { console.log(JSON.stringify(result, null, 2)); return; }
+    const held = (result.authority ?? []) as any[];
+    console.log(`${c.green}✓${c.reset} @${result.handle} may ${held.length ? held.map((g) => `${g.kind} (${g.label})`).join("; ") : "do nothing outside codecast"}`);
   });
 
 roleGroup

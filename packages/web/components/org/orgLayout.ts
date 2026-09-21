@@ -679,7 +679,7 @@ export function ghostsFor(tree: OrgTree, changes: readonly OrgProposalChange[], 
         plan.stubs[sessionNodeId(c._id)] = { ...meta(c), kind: "adopt", solid: decided(c), this_session: mine, role_handle: role.handle };
         break;
       }
-      case "scope": case "budget": case "trust": case "routine": {
+      case "scope": case "budget": case "trust": case "routine": case "authority": case "hire": {
         if (c.status === "applied") break;
         const role = roleByHandle(ch.handle);
         if (!role) { orphan(c); break; }

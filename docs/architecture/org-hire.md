@@ -513,6 +513,38 @@ files the project under one.
   `packages/shared/contracts/orgTemplateManifest.ts` and `orgTemplateState.ts`;
   the CLI files re-export them. `bind` registers the row; the record verbs post
   to it once it exists; new verbs `lesson`, `publish` and `catalog`.
-- **Tests**: `convex/orgTemplates.test.ts`, `orgTemplate.test.ts`, `orgTemplateArtifact.v2.test.ts`,
+- **The half that changes existing behaviour** (2026-09-21, the org program's
+  wave having left the files):
+  - `authority`, `hire` and `upgrade` change kinds in
+    `shared/contracts/orgProposal.ts` with their validator, apply rank
+    (authority after trust; hire after routine; upgrade before retire), keys,
+    dependency notes, chip and sentence words; the web's kind records and the
+    undo inverse map carry them; `orgInit.applyOrgChange` applies them.
+    A hire writes the instance row `awaiting_host` under a placeholder key and
+    makes the role the project's lead when it has none; the host's bind takes
+    the row over by the instance's name and gives it the receipt's key. An
+    accepted upgrade waits on the row as `pending_upgrade` for `bind --to`.
+    Routines are not separate changes of a hire: bind creates them paused with
+    the loader prompt, which a proposal routine could not carry.
+  - `org_roles.authority` with `orgRoles.performSetAuthority` (human only,
+    `refuseUnlessHuman`; replaces the list; revoke by id; expiry from the
+    grant's cadence; a note on the charter doc; a change log row; an
+    immediate wake naming what the role may now do). The wake frame's `You`
+    section carries "Authority outside codecast: …"; `cast role show` prints
+    it; `cast role authority <handle> --grant <json> | --revoke <id>` writes
+    it. Readiness reads the role's authority on the server and in the CLI.
+  - `agentTasks.insertTask` accepts `status: "paused"` (no `run_at`, never for
+    an event trigger) and `applyActivate` sets the first run one interval out
+    and clears an install's `exit 1` gate, keeping a person's own precheck.
+    `orgTemplates.activateRoutine` is the human only mutation; the CLI's
+    `activate` verb calls it and is refused for an agent session with the
+    reason. `ensureRoutines` creates routines paused and pauses at once on a
+    backend that ignores the status; the activation guidance drops the gate
+    flag when there is no gate.
+  - `performEscalateSession` accepts a role's own standing session, so the
+    open setup item can reach the person's inbox with the role's line.
+- **Tests**: `convex/orgTemplates.test.ts` (including the hire and upgrade
+  applies), `convex/orgRoles.authority.test.ts`, `convex/agentTasks.paused.test.ts`,
+  `convex/sessionOwnership.escalate.test.ts`, `orgTemplate.test.ts`, `orgTemplateArtifact.v2.test.ts`,
   `orgTemplateInstance.test.ts`, `orgTemplateState.test.ts`,
   `orgTemplateActivation.test.ts`, and `orgTemplateReadiness.test.ts` in shared.

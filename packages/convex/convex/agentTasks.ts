@@ -71,7 +71,7 @@ async function getOwnedTask(
 // same rule as reads: anyone who can view the anchor conversation can manage
 // the trigger (founder decision 2026-08-30). Deleting the row stays owner-only
 // — cancel is the teammate's off switch; delete erases history.
-async function getManageableTask(
+export async function getManageableTask(
   ctx: TaskCtx,
   taskId: Id<"agent_tasks">,
   userId: Id<"users">
@@ -92,6 +92,24 @@ async function applyResume(ctx: TaskCtx, task: Doc<"agent_tasks">) {
   await patchTask(ctx, task, {
     status: "scheduled",
     run_at: task.run_at || Date.now(),
+  });
+  return true;
+}
+
+/**
+ * Activate a paused routine (org-hire.md H8): the first run lands one interval
+ * out and the temporary gate a template install may have left clears, in one
+ * write. A custom precheck a person set stays. Human only at the mutation
+ * (orgTemplates.activateRoutine); the CLI's documented two step procedure
+ * (update --every, then resume) performs the same writes.
+ */
+export async function applyActivate(ctx: TaskCtx, task: Doc<"agent_tasks">) {
+  if (task.status !== "paused") return false;
+  const interval = task.interval_ms;
+  await patchTask(ctx, task, {
+    status: "scheduled",
+    run_at: Date.now() + (task.schedule_type === "recurring" && interval ? interval : 0),
+    ...(task.precheck === "exit 1" ? { precheck: undefined } : {}),
   });
   return true;
 }
@@ -392,6 +410,8 @@ interface NewTaskArgs {
   max_retries?: number;
   precheck?: string;
   wake_creator?: boolean;
+  /** Created paused (org-hire.md H8): a routine a person activates later. Never for event triggers. */
+  status?: "scheduled" | "paused";
 }
 
 export async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTaskArgs) {
@@ -402,8 +422,15 @@ export async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTas
     throw new Error("event_filter required for event tasks");
   }
 
+  if (args.status === "paused" && args.schedule_type === "event") {
+    throw new Error("An event trigger cannot be created paused");
+  }
+
   const now = Date.now();
-  const run_at = args.schedule_type === "event" ? undefined : (args.run_at || now);
+  // A row created paused carries no run_at: activation (applyActivate) sets
+  // the first run one interval out, so nothing fires until a person acts.
+  const paused = args.status === "paused";
+  const run_at = args.schedule_type === "event" || paused ? undefined : (args.run_at || now);
 
   const short_id = await nextShortId(ctx.db, "tr");
 
@@ -439,7 +466,7 @@ export async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTas
     max_runtime_ms: args.max_runtime_ms || DEFAULT_MAX_RUNTIME_MS,
     precheck: args.precheck?.trim() || undefined,
     wake_creator: args.wake_creator || undefined,
-    status: "scheduled" as const,
+    status: paused ? ("paused" as const) : ("scheduled" as const),
     retry_count: 0,
     max_retries: args.max_retries ?? DEFAULT_MAX_RETRIES,
     run_count: 0,
@@ -509,6 +536,7 @@ export const createTask = mutation({
     // `--spawn --wake`: a clean report wakes the session that armed the
     // trigger (runOwnerWakeOf). Meaningful for once spawn triggers only.
     wake_creator: v.optional(v.boolean()),
+    status: v.optional(v.union(v.literal("scheduled"), v.literal("paused"))),
     // Any session ref (short id, conversation _id, or Claude session uuid) the
     // schedule should inject into — `cast trigger add --for <session>`.
     // Resolved own-only: you can bind a schedule only to your own session.

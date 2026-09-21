@@ -87,6 +87,12 @@ export function registerOrgTemplateCommands(program: Command, deps: OrgInitDeps)
       const { catalogTemplates } = await import("./orgTemplateRun.js");
       console.log(JSON.stringify(await catalogTemplates(deps, options), null, 2));
     });
+  context(template.command("activate <instance> <routine>").description("Activate a paused routine: human only; from an agent session the server refuses and says so"))
+    .option("--session <id>", "Calling session (default: current)")
+    .action(async (instance: string, routine: string, options: any) => {
+      const { activateTemplateRoutine } = await import("./orgTemplateRun.js");
+      console.log(JSON.stringify(await activateTemplateRoutine(deps, instance, routine, options), null, 2));
+    });
   context(template.command("upgrade <instance> <folder>").description("Preview a release change; --apply advances this instance only"))
     .option("--apply", "Apply the reviewed release change, preserving role and external trigger state")
     .action(async (instance: string, folder: string, options: any) => output(await (await import("./orgTemplateRun.js")).upgradeTemplate(deps, instance, folder, options)));

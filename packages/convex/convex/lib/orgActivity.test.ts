@@ -259,5 +259,8 @@ describe("stale reasons read the row's newest word", () => {
     // A follow up left open under a finished plan is not the plan still running.
     expect(computeStale({ ...base, plans: [plan], tasks: [task({ plan_id: "p1", status: "open", updated_at: NOW - 3 * 3_600_000 })] }).plans).toEqual([]);
     expect(computeStale({ ...base, plans: [plan], sessions: [{ _id: "s1", state: "working", updated_at: NOW, active_plan_id: "p1" }] }).plans.map((p) => p.reason)).toEqual(["marked done, still worked"]);
+    // A session parked on the finished plan (waiting on a person, or on a wake) is not working it.
+    expect(computeStale({ ...base, plans: [plan], sessions: [{ _id: "s1", state: "needs_input", updated_at: NOW, active_plan_id: "p1" }] }).plans).toEqual([]);
+    expect(computeStale({ ...base, plans: [plan], sessions: [{ _id: "s1", state: "dormant", updated_at: NOW, active_plan_id: "p1" }] }).plans).toEqual([]);
   });
 });
