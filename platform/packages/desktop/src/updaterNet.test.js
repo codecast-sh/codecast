@@ -7,7 +7,7 @@ const path = require("path");
 
 test("updaterNet: resume, hash, truncation, abort, inactivity (node --test)", () => {
   const file = path.join(__dirname, "updaterNetSuite.node.js");
-  const r = spawnSync("node", ["--test", file], { encoding: "utf8", timeout: 120_000 });
+  const r = spawnSync("node", ["--test", "--test-reporter=tap", file], { encoding: "utf8", timeout: 120_000 });
   if (r.status !== 0) console.error(r.stdout + r.stderr);
   expect(r.status).toBe(0);
   expect(r.stdout).toMatch(/# pass 6/);
