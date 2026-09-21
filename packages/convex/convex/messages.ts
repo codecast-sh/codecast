@@ -865,9 +865,8 @@ function isTrustedMarkdownImageSrc(src: string): boolean {
 }
 
 /**
- * Materialize a freshly-inserted message's images into conversation_images.
- * Called only on genuine inserts (never the uuid/content dedup branches), and
- * pre-filtered so an ordinary text message costs nothing. Idempotent by
+ * Materialize a message's images into conversation_images, pre-filtered so an
+ * ordinary text message costs nothing. Idempotent by
  * (conversation_id, image_key), so a re-synced message can't duplicate a row.
  */
 async function materializeConversationImages(
@@ -1416,8 +1415,10 @@ export const addMessage = mutation({
             });
           }
         }
+        const current = { ...existing, ...patch };
+        await materializeConversationImages(ctx, args.conversation_id, existing._id, existing.timestamp,
+          current.content, current.images);
         if (safeToolCalls !== undefined || safeToolResults !== undefined) {
-          const current = { ...existing, ...patch };
           await materializeFileChanges(ctx, args.conversation_id, existing._id, existing.timestamp,
             current.tool_calls, current.tool_results, extractFileChanges([existing]));
         }
@@ -1948,8 +1949,10 @@ export const addMessages = mutation({
               oldRowEdits++;
             }
           }
+          const current = { ...existing, ...patch };
+          await materializeConversationImages(ctx, args.conversation_id, existing._id, existing.timestamp,
+            current.content, current.images);
           if (safeToolCalls !== undefined || safeToolResults !== undefined) {
-            const current = { ...existing, ...patch };
             await materializeFileChanges(ctx, args.conversation_id, existing._id, existing.timestamp,
               current.tool_calls, current.tool_results, extractFileChanges([existing]));
           }
@@ -2584,13 +2587,14 @@ export const findMessageByContentPublic = query({
   args: {
     conversation_id: v.id("conversations"),
     search_term: v.string(),
+    share_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const conversation = await ctx.db.get(args.conversation_id);
     if (!conversation) {
       return null;
     }
-    if (!conversation.share_token) {
+    if (await checkConversationAccess(ctx, null, conversation, args.share_token) !== "shared") {
       return null;
     }
 

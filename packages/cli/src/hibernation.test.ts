@@ -156,6 +156,30 @@ describe("selectHibernationCandidates: cap math", () => {
   });
 });
 
+describe("selectHibernationCandidates: a refused head does not starve the pass", () => {
+  // The regression (2026-09-21): the five longest idle sessions were refused by
+  // the daemon's durable gates, the order is deterministic, and ten passes in a
+  // row offered the same five while 24 to 36 parkable sessions waited.
+  const bar = 8 * 3600_000;
+  const fleetPastBar = Array.from({ length: 12 }, (_, i) =>
+    candidate({ sessionId: `s${String(i).padStart(2, "0")}`, tmux: `t${i}`, awakeIdleMs: bar + (12 - i) * 60_000 }));
+
+  test("the first pass picks the longest idle, and the next pass moves past the ones it refused", () => {
+    const first = selectHibernationCandidates(fleetPastBar, policy({ idleMs: bar }));
+    expect(first.picked.map((c) => c.sessionId)).toEqual(["s00", "s01", "s02", "s03", "s04"]);
+    const refused = new Set(first.picked.map((c) => c.sessionId));
+    const second = selectHibernationCandidates(fleetPastBar, policy({ idleMs: bar }), refused);
+    expect(second.picked.map((c) => c.sessionId)).toEqual(["s05", "s06", "s07", "s08", "s09"]);
+    expect(second.skips.filter((r) => r === "refused-recently")).toHaveLength(5);
+  });
+
+  test("a refused session still counts toward the fleet size for the cap", () => {
+    const refused = new Set(["s00"]);
+    const { picked } = selectHibernationCandidates(fleetPastBar, policy({ maxLive: 10 }), refused);
+    expect(picked.map((c) => c.sessionId)).toEqual(["s01", "s02"]);
+  });
+});
+
 describe("selectHibernationCandidates: ordering", () => {
   test("longest awake idle first", () => {
     const all = [

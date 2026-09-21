@@ -7,6 +7,7 @@ import * as readline from "readline";
 import { STABLE_ENV_MODE, type CodexTurnError } from "@codecast/shared/contracts";
 import { codexTurnErrorMessage } from "./codexTurnError.js";
 import { agentSpawnPath } from "./agentSpawnPath.js";
+import { extractInlineImages } from "./inlineImage.js";
 import { withWorktreeConfig } from "./worktreeEnv.js";
 import type { ParsedMessage, ToolCall, ToolResult, ImageBlock } from "./parser.js";
 
@@ -1077,6 +1078,7 @@ export function threadItemToMessage(item: ThreadItem, timestamp = Date.now()): P
     }
 
     case "commandExecution": {
+      const output = extractInlineImages(item.aggregatedOutput || "");
       const toolCalls: ToolCall[] = [{
         id: item.id,
         name: "commandExecution",
@@ -1084,7 +1086,7 @@ export function threadItemToMessage(item: ThreadItem, timestamp = Date.now()): P
       }];
       const toolResults: ToolResult[] = [{
         toolUseId: item.id,
-        content: item.aggregatedOutput || "",
+        content: output.text,
         isError: item.status === "failed",
       }];
       return {
@@ -1094,6 +1096,9 @@ export function threadItemToMessage(item: ThreadItem, timestamp = Date.now()): P
         timestamp,
         toolCalls,
         toolResults,
+        images: output.paths.length > 0
+          ? output.paths.map(localPath => ({ mediaType: imageMediaTypeForPath(localPath), localPath, toolUseId: item.id }))
+          : undefined,
       };
     }
 
