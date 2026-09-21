@@ -2,6 +2,8 @@ import { Id } from "./_generated/dataModel";
 import { resolveTeamForPath, DirectoryMapping, isTeamMember, teamVisibleConvTeam } from "./privacy";
 import { invalidScope, forbidden } from "./lib/auth";
 import {
+  accessStampFromDoc,
+  authorizedFor,
   linkedConversationId,
   requireTeamMembership,
   workspaceKey,
@@ -101,6 +103,7 @@ export async function scopedFetch(
 
   let userRecords: any[] = [];
   let teamRecords: any[] = [];
+  const heldKeys = new Set<string>([`user:${String(userId)}`]);
 
   // When stripFields is set, iterate with `for await` so only one full record
   // is in the V8 heap at a time — heavy fields are dropped before accumulating.
@@ -141,6 +144,7 @@ export async function scopedFetch(
       .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
       .collect();
     for (const m of memberships) {
+      heldKeys.add(`team:${String(m.team_id)}`);
       const teamRecs = await runQuery(byOwner("team_id", m.team_id));
       teamRecords.push(...teamRecs);
     }
@@ -162,7 +166,10 @@ export async function scopedFetch(
   const all: any[] = [];
   for (const r of userRecords) { seen.add(String(r._id)); all.push(r); }
   for (const r of teamRecords) {
-    if (!seen.has(String(r._id))) all.push(r);
+    if (!seen.has(String(r._id))) {
+      seen.add(String(r._id));
+      all.push(r);
+    }
   }
 
   // Batch-resolve linked conversations — keep only the fields used by
@@ -199,9 +206,11 @@ export async function scopedFetch(
   // team space, and one team's rows never appear in another's.
   let records: any[];
   if (workspace === "all") {
-    // No team filter — caller wants every record the user can see across
-    // their memberships plus their own untagged items.
-    records = all;
+    records = all.filter(r => authorizedFor(
+      accessStampFromDoc(table, { ...r, workspace: resolveWorkspaceKeyBatch(r, convMap) }),
+      String(userId),
+      heldKeys,
+    ));
   } else if ((workspace === "team" || !workspace) && teamId) {
     const key = workspaceKey({ type: "team", teamId });
     records = all.filter(r => resolveWorkspaceKeyBatch(r, convMap) === key);
