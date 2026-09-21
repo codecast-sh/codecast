@@ -48,7 +48,6 @@ const ALLOWED = new Set<string>([
   "components/CreateChannelModal.tsx",
   "components/DeviceBadge.tsx",
   "components/DiffView.tsx",
-  "components/DynamicRunView.tsx",
   "components/EdgePeek.tsx",
   "components/FormattedSummary.tsx",
   "components/GlobalSearch.tsx",

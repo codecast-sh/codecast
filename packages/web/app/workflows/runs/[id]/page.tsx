@@ -4,6 +4,8 @@ import { useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { RunGate } from "../../../../components/WorkflowContextPanel";
+import { WorkflowRunNodes } from "../../../../components/WorkflowRunNodes";
+import { formatRunDuration, runNodeCounts, runNodeRows } from "../../../../lib/workflowRun";
 import { useMutation } from "convex/react";
 import { useWorkflow, useWorkflowRun } from "../../../../hooks/useSyncWorkflows";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -11,29 +13,20 @@ import { AuthGuard } from "../../../../components/AuthGuard";
 import { AppLoader } from "../../../../components/AppLoader";
 import { DashboardLayout } from "../../../../components/DashboardLayout";
 import {
-  Bot, Terminal, User, Zap, GitFork, Merge, GitBranch,
   Clock, CheckCircle, XCircle, Loader2, Pause, ExternalLink,
-  Timer, AlertCircle, ChevronLeft,
+  Timer, AlertCircle, ChevronLeft, User,
 } from "lucide-react";
 import { useTitlebarHead } from "../../../../hooks/useTitlebarHead";
 
 const api = _api as any;
 
-interface NodeStatus {
-  node_id: string;
-  status: "pending" | "running" | "completed" | "failed";
-  outcome?: string;
-  session_id?: string;
-  started_at?: number;
-  completed_at?: number;
-}
-
 interface WorkflowRun {
   _id: string;
-  workflow_id: string;
+  workflow_id?: string;
+  workflow_name?: string;
   status: "pending" | "running" | "paused" | "completed" | "failed";
   current_node_id?: string;
-  node_statuses: NodeStatus[];
+  node_statuses: any[];
   primary_session_id?: string;
   goal_override?: string;
   gate_prompt?: string;
@@ -46,33 +39,13 @@ interface WorkflowRun {
   updated_at: number;
 }
 
-interface WFNode {
-  id: string;
-  label: string;
-  type: string;
-  prompt?: string;
-  script?: string;
-}
-
 interface Workflow {
   _id: string;
   name: string;
   slug: string;
   goal?: string;
-  nodes: WFNode[];
+  nodes: any[];
 }
-
-const TYPE_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
-  agent: Bot,
-  prompt: Zap,
-  command: Terminal,
-  human: User,
-  conditional: GitFork,
-  parallel_fanout: GitFork,
-  parallel_fanin: Merge,
-  start: GitBranch,
-  exit: GitBranch,
-};
 
 const STATUS_STYLES: Record<string, { icon: React.ComponentType<{ className?: string }>; color: string; bg: string }> = {
   pending:   { icon: Clock,        color: "text-sol-text-dim",   bg: "bg-sol-text-dim/10" },
@@ -81,15 +54,6 @@ const STATUS_STYLES: Record<string, { icon: React.ComponentType<{ className?: st
   completed: { icon: CheckCircle,  color: "text-sol-green",      bg: "bg-sol-green/10" },
   failed:    { icon: XCircle,      color: "text-sol-red",        bg: "bg-sol-red/10" },
 };
-
-function formatDuration(startMs: number, endMs?: number): string {
-  const ms = (endMs ?? Date.now()) - startMs;
-  const secs = Math.floor(ms / 1000);
-  if (secs < 60) return `${secs}s`;
-  const mins = Math.floor(secs / 60);
-  if (mins < 60) return `${mins}m ${secs % 60}s`;
-  return `${Math.floor(mins / 60)}h ${mins % 60}m`;
-}
 
 function RunDetailContent({ runId }: { runId: string }) {
   // Store-fed (hooks/useSyncWorkflows): the run and its workflow paint from
@@ -110,7 +74,9 @@ function RunDetailContent({ runId }: { runId: string }) {
     setGateText("");
   };
 
-  if (run === undefined || workflow === undefined) {
+  // A run started from a shipped template stores no workflow row (the-line.md
+  // L9): only wait for the graph when the run names one.
+  if (run === undefined || (run?.workflow_id && workflow === undefined)) {
     return <AppLoader className="min-h-[16rem] h-full" />;
   }
 
@@ -126,9 +92,8 @@ function RunDetailContent({ runId }: { runId: string }) {
   const st = STATUS_STYLES[run.status] || STATUS_STYLES.pending;
   const StatusIcon = st.icon;
   const isActive = run.status === "running" || run.status === "paused";
-  const duration = formatDuration(run.created_at, isActive ? undefined : run.updated_at);
-
-  const displayNodes = workflow?.nodes.filter(n => n.type !== "start" && n.type !== "exit") ?? [];
+  const duration = formatRunDuration(run.created_at, isActive ? undefined : run.updated_at);
+  const counts = runNodeCounts(runNodeRows(run, workflow));
 
   return (
     <div className="flex flex-col h-full overflow-hidden bg-sol-bg">
@@ -139,7 +104,7 @@ function RunDetailContent({ runId }: { runId: string }) {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-sm font-semibold text-sol-text">
-              {workflow?.name ?? "..."}
+              {workflow?.name ?? run.workflow_name ?? "run"}
             </span>
             <span className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${st.color} ${st.bg}`}>
               <StatusIcon className={`w-3 h-3 ${run.status === "running" ? "animate-spin" : ""}`} />
@@ -229,76 +194,14 @@ function RunDetailContent({ runId }: { runId: string }) {
         )}
 
         <div className="border border-sol-border/20 bg-sol-bg-alt rounded-xl overflow-hidden">
-          <div className="px-4 py-2.5 border-b border-sol-border/15 flex items-center justify-between">
-            <span className="text-[10px] text-sol-text-dim uppercase tracking-widest font-semibold">Stage Timeline</span>
-            <span className="text-[10px] text-sol-text-dim">{displayNodes.length} stages</span>
+          <div className="px-4 py-2.5 border-b border-sol-border/15 flex items-center gap-3">
+            <span className="text-[10px] text-sol-text-dim uppercase tracking-widest font-semibold">Steps</span>
+            <span className="ml-auto text-[10px] text-sol-text-dim tabular-nums">{counts.done}/{counts.total} done</span>
+            {counts.running > 0 && <span className="text-[10px] text-sol-green tabular-nums">{counts.running} live</span>}
+            {counts.failed > 0 && <span className="text-[10px] text-sol-red tabular-nums">{counts.failed} failed</span>}
+            {counts.sessions > 0 && <span className="text-[10px] text-sol-text-dim tabular-nums">{counts.sessions} session{counts.sessions === 1 ? "" : "s"}</span>}
           </div>
-          <div className="divide-y divide-sol-border/10">
-            {displayNodes.map((node) => {
-              const ns = run.node_statuses.find(s => s.node_id === node.id);
-              const isCurrentNode = run.current_node_id === node.id && run.status === "running";
-              const NodeIcon = TYPE_ICONS[node.type] || Bot;
-
-              let statusIcon = null;
-              let statusColor = "text-sol-text-dim/40";
-
-              if (ns?.status === "completed") {
-                statusIcon = <CheckCircle className="w-4 h-4 text-sol-green/80" />;
-                statusColor = "text-sol-green/80";
-              } else if (ns?.status === "failed") {
-                statusIcon = <XCircle className="w-4 h-4 text-sol-red/80" />;
-                statusColor = "text-sol-red/80";
-              } else if (ns?.status === "running" || isCurrentNode) {
-                statusIcon = <Loader2 className="w-4 h-4 text-sol-cyan animate-spin" />;
-                statusColor = "text-sol-cyan";
-              } else {
-                statusIcon = <div className="w-2.5 h-2.5 rounded-full bg-sol-border/30 mx-[3px]" />;
-              }
-
-              const nodeDuration = ns?.started_at ? formatDuration(ns.started_at, ns.completed_at) : null;
-
-              return (
-                <div
-                  key={node.id}
-                  className={`flex items-center gap-3 px-4 py-3 transition-colors ${
-                    isCurrentNode ? "bg-sol-cyan/5 border-l-2 border-l-sol-cyan" :
-                    ns?.status === "failed" ? "bg-sol-red/4 border-l-2 border-l-sol-red/30" :
-                    ns?.status === "completed" ? "border-l-2 border-l-sol-green/20" :
-                    "border-l-2 border-l-transparent"
-                  }`}
-                >
-                  <div className="flex-shrink-0 w-5 flex items-center justify-center">
-                    {statusIcon}
-                  </div>
-                  <NodeIcon className={`w-3.5 h-3.5 flex-shrink-0 ${statusColor}`} />
-                  <div className="flex-1 min-w-0">
-                    <div className={`text-sm ${ns ? "text-sol-text" : "text-sol-text-dim/60"} ${isCurrentNode ? "font-medium" : ""}`}>
-                      {node.label}
-                    </div>
-                    {nodeDuration && (
-                      <div className="flex items-center gap-1 mt-0.5">
-                        <Timer className="w-2.5 h-2.5 text-sol-text-dim/50" />
-                        <span className="text-[10px] text-sol-text-dim tabular-nums">{nodeDuration}</span>
-                      </div>
-                    )}
-                  </div>
-                  {ns?.session_id && (
-                    <Link
-                      href={`/conversation/${ns.session_id}`}
-                      className="flex-shrink-0 flex items-center gap-1 text-[10px] text-sol-text-dim hover:text-sol-cyan transition-colors"
-                      title="View session"
-                    >
-                      <ExternalLink className="w-3 h-3" />
-                      session
-                    </Link>
-                  )}
-                </div>
-              );
-            })}
-            {displayNodes.length === 0 && (
-              <div className="px-4 py-4 text-xs text-sol-text-dim text-center">No stages</div>
-            )}
-          </div>
+          <WorkflowRunNodes run={run} workflow={workflow} className="p-2 space-y-2" />
         </div>
 
         <div className="flex items-center justify-between text-[10px] text-sol-text-dim font-mono pb-2">

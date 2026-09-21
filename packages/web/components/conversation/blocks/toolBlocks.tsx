@@ -18,7 +18,8 @@ import { parseWorkflowScriptMeta, parseWorkflowLaunch } from "../../../lib/workf
 import { DiffView } from "../../DiffView";
 import { useQuery } from "convex/react";
 import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
-import { DynamicRunView, wfStatusMeta, wfFmtTokens } from "../../DynamicRunView";
+import { WorkflowRunNodes } from "../../WorkflowRunNodes";
+import { wfStatusMeta, wfFmtTokens } from "../../../lib/workflowRun";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { toggleBrowserWatch, useBrowserWatchOpen } from "../../browser/BrowserWatchSplit";
 import { MarkdownRenderer } from "../../tools/MarkdownRenderer";
@@ -335,7 +336,7 @@ export function WorkflowToolBlock({ tool, result }: { tool: ToolCall; result?: T
           already carries it inline, so the default state stays a compact receipt. */}
       {run && expanded && (
         <div className={`border-t ${frame.divider} px-3 py-2`}>
-          <DynamicRunView run={run} compact />
+          <WorkflowRunNodes run={run} />
         </div>
       )}
 

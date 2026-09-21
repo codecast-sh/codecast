@@ -76,16 +76,38 @@ function overlayLive(snapshot: TaskLinkedSession, live: any | undefined): TaskLi
   };
 }
 
-function TaskSessionRow({
+export type TaskSessionRowTone = "failed" | "current";
+
+/**
+ * One linked session, the way every list of sessions outside the inbox draws
+ * it: face, title, live mark, pinned state or last line, project and age.
+ * A workflow run's node rows (WorkflowRunNodes) ride the same row with a
+ * step gutter in `leading`, the node label as `badge`, the runtime's
+ * activity as `fallbackLine` and its duration and tokens in `meta`.
+ */
+export function TaskSessionRow({
   snapshot,
-  origin,
+  origin = false,
   onOpen,
   now,
+  leading,
+  badge,
+  fallbackLine,
+  meta,
+  tone,
+  prominent = false,
 }: {
   snapshot: TaskLinkedSession;
-  origin: boolean;
+  origin?: boolean;
   onOpen: (conv: TaskLinkedSession) => void;
   now: number;
+  leading?: React.ReactNode;
+  badge?: React.ReactNode;
+  fallbackLine?: string;
+  meta?: React.ReactNode;
+  tone?: TaskSessionRowTone;
+  /** The one session a page is about (a plan's origin), not a row in a list. */
+  prominent?: boolean;
 }) {
   const liveSig = useInboxStore((s) => liveRowSig(s.sessions[snapshot._id]));
   const conv = useMemo(
@@ -106,7 +128,7 @@ function TaskSessionRow({
   const age = conv.updated_at ? compactAge(now - conv.updated_at) : null;
   const line = stateView?.cardLine && stateView.cardLine !== title
     ? stateView.cardLine
-    : (!stateView ? (cleanUserMessage(conv.last_user_message) || "") : "");
+    : (!stateView ? (fallbackLine || cleanUserMessage(conv.last_user_message) || "") : (fallbackLine || ""));
   const branch = conv.git_branch && conv.git_branch !== "main" && conv.git_branch !== "master" ? conv.git_branch : null;
 
   return (
@@ -117,9 +139,13 @@ function TaskSessionRow({
       className={`group relative rounded-md transition-colors hover:bg-sol-bg-alt/70 ${
         live
           ? "border-l-2 border-l-sol-green/50 bg-sol-green/[0.03]"
-          : origin
-            ? "border-l-2 border-l-sol-violet/40"
-            : "border-l-2 border-l-transparent"
+          : tone === "failed"
+            ? "border-l-2 border-l-sol-red/40 bg-sol-red/[0.03]"
+            : tone === "current"
+              ? "border-l-2 border-l-sol-cyan/50 bg-sol-cyan/[0.04]"
+              : origin
+                ? "border-l-2 border-l-sol-violet/40"
+                : "border-l-2 border-l-transparent"
       }`}
     >
       <Link
@@ -129,8 +155,9 @@ function TaskSessionRow({
           e.preventDefault();
           onOpen(conv);
         }}
-        className="flex items-start gap-2 px-2 py-1.5 pr-7"
+        className={`flex items-start gap-2 pr-7 ${prominent ? "px-3 py-2.5" : "px-2 py-1.5"}`}
       >
+        {leading}
         {/* Who the session is (session-characters.md S3), with the agent
             brand riding the face; a plain row keeps the brand alone. */}
         <SessionGlyph
@@ -145,7 +172,7 @@ function TaskSessionRow({
         />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5 min-w-0">
-            <span className={`truncate text-xs leading-tight ${live ? "text-sol-text font-medium" : "text-sol-text"}`}>
+            <span className={`truncate leading-tight ${prominent ? "text-sm font-medium" : "text-xs"} ${live ? "text-sol-text font-medium" : "text-sol-text"}`}>
               {title}
             </span>
             {origin && (
@@ -153,6 +180,7 @@ function TaskSessionRow({
                 from
               </span>
             )}
+            {badge}
             {live && (
               <span className="flex items-center gap-1 flex-shrink-0">
                 <LivenessDot state="active" size="xs" />
@@ -185,6 +213,7 @@ function TaskSessionRow({
             )}
             {msgs > 0 && <span className="tabular-nums flex-shrink-0">{msgs} msg{msgs === 1 ? "" : "s"}</span>}
             {branch && <span className="font-mono truncate max-w-[7rem]">{branch}</span>}
+            {meta}
             {age && <span className="tabular-nums flex-shrink-0 ml-auto">{age}</span>}
           </div>
         </div>

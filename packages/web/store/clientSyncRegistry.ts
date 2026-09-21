@@ -570,10 +570,11 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { isDelta: true },
     feeds: ["workflows.webList", "workflows.webGet"],
   },
-  // Workflow runs, fed by three windows (listDynamicRuns, listForWorkflow,
-  // get) that overlay into one collection. The per-node `session` enrichment
-  // rides only the enriched channels and may be absent on a row from
-  // listForWorkflow; readers treat it as optional.
+  // Workflow runs, fed by four windows (listDynamicRuns, listForWorkflow,
+  // get, listRuns) that overlay into one collection, last push wins. Every
+  // feed attaches each node's `session` under a shared read budget, so a
+  // list push over the detail row keeps the session rows; a run past the
+  // budget carries none and its rows fall back to the daemon handle.
   workflowRuns: {
     persistence: { kind: "collection", key: "workflowRuns" },
     hydration: { phase: "deferred" },

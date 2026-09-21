@@ -19,6 +19,8 @@ import { useTrackedStore } from "../../store/inboxStore";
 import { DecisionCompactCard } from "../../components/decisions/DecisionCompactCard";
 import { useSyncDecisionDetail } from "../../hooks/useSyncDecisionDetail";
 import { RunGate } from "../../components/WorkflowContextPanel";
+import { WorkflowRunNodes } from "../../components/WorkflowRunNodes";
+import { runNodeCounts, runNodeRows } from "../../lib/workflowRun";
 import { compactAge } from "../../lib/threadState";
 import { cn } from "../../lib/utils";
 import { WorkflowsDashboardContent } from "./dashboard";
@@ -343,68 +345,9 @@ function ActiveRunPanel({ run, workflow, onClose }: { run: WorkflowRun; workflow
 
       <div className="flex-1 overflow-y-auto py-2">
         <div className="px-3 pb-1">
-          <span className="text-[9px] text-sol-text-dim uppercase tracking-widest">Node Progress</span>
+          <span className="text-[9px] text-sol-text-dim uppercase tracking-widest">Steps</span>
         </div>
-        <div className="space-y-px">
-          {workflow.nodes.map(node => {
-            const ns = run.node_statuses.find(s => s.node_id === node.id);
-            const isActive = run.current_node_id === node.id && run.status === "running";
-            const isPending = !ns && !isActive;
-            const duration = ns?.started_at ? formatDuration(ns.started_at, ns.completed_at) : null;
-            const Icon = TYPE_ICONS[node.type] || Bot;
-
-            let statusColor = "text-sol-text-dim/40";
-            let statusIcon = null;
-            if (ns?.status === "completed") statusColor = "text-sol-green/70";
-            if (ns?.status === "failed") statusColor = "text-sol-red/70";
-            if (ns?.status === "running" || isActive) statusColor = "text-sol-cyan";
-
-            return (
-              <div
-                key={node.id}
-                className={`flex items-center gap-2 px-3 py-1.5 transition-colors ${
-                  isActive ? "bg-sol-cyan/8 border-l-2 border-l-sol-cyan" :
-                  ns?.status === "failed" ? "bg-sol-red/4 border-l-2 border-l-sol-red/40" :
-                  ns?.status === "completed" ? "border-l-2 border-l-transparent" :
-                  "border-l-2 border-l-transparent"
-                }`}
-              >
-                <div className="flex-shrink-0 w-4 flex items-center justify-center">
-                  {ns?.status === "completed" ? (
-                    <CheckCircle className="w-3 h-3 text-sol-green/70" />
-                  ) : ns?.status === "failed" ? (
-                    <XCircle className="w-3 h-3 text-sol-red/70" />
-                  ) : (ns?.status === "running" || isActive) ? (
-                    <Loader2 className="w-3 h-3 text-sol-cyan animate-spin" />
-                  ) : (
-                    <div className="w-2 h-2 rounded-full bg-sol-border/30" />
-                  )}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className={`text-xs truncate ${isPending ? "text-sol-text-dim/50" : "text-sol-text-muted"} ${isActive ? "font-medium text-sol-text" : ""}`}>
-                    {node.label}
-                  </div>
-                  {duration && (
-                    <div className="flex items-center gap-1">
-                      <Timer className="w-2 h-2 text-sol-text-dim/50" />
-                      <span className="text-[9px] text-sol-text-dim tabular-nums">{duration}</span>
-                    </div>
-                  )}
-                </div>
-                {ns?.session_id && (
-                  <Link
-                    href={`/conversation/${ns.session_id}`}
-                    className="flex-shrink-0 p-0.5 text-sol-text-dim/50 hover:text-sol-cyan transition-colors rounded"
-                    title="View session"
-                    onClick={e => e.stopPropagation()}
-                  >
-                    <ExternalLink className="w-2.5 h-2.5" />
-                  </Link>
-                )}
-              </div>
-            );
-          })}
-        </div>
+        <WorkflowRunNodes run={run} workflow={workflow} className="px-1 space-y-2" />
       </div>
 
       <div className="px-3 py-2 border-t border-sol-border/15">
@@ -656,6 +599,7 @@ function RunRow({ run, now, onOpen }: { run: LineRun; now: number; onOpen: () =>
   const tone = RUN_TONE[run.status] ?? RUN_TONE.pending;
   const node = run.status === "completed" || run.status === "failed" ? null : (run.current_node_label || run.current_node_id || null);
   const gateOpen = !!run.gate_decision_short_id && run.status === "paused";
+  const counts = runNodeCounts(runNodeRows(run));
   return (
     <li>
       <div
@@ -673,6 +617,13 @@ function RunRow({ run, now, onOpen }: { run: LineRun; now: number; onOpen: () =>
             <span className="truncate text-[13px] font-medium" style={{ color: "var(--sol-text)" }}>{run.workflow_name || run.workflow_slug || "workflow"}</span>
             <span className="shrink-0 text-[10px] px-1.5 h-[17px] inline-flex items-center rounded-md border capitalize" style={{ borderColor: `color-mix(in srgb, ${tone} 45%, transparent)`, color: tone }}>{run.status}</span>
             {node && <span className="truncate text-[11px]" style={{ color: "var(--sol-text-muted)" }}>· {node}</span>}
+            {counts.total > 0 && (
+              <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--sol-text-dim)" }} title={`${counts.done} of ${counts.total} steps done`}>
+                {counts.done}/{counts.total}
+              </span>
+            )}
+            {counts.running > 0 && <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--sol-green)" }}>{counts.running} live</span>}
+            {counts.failed > 0 && <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--sol-red)" }}>{counts.failed} failed</span>}
           </span>
           <span className="mt-[2px] flex items-center gap-1.5 text-[10.5px] min-w-0" style={{ color: "var(--sol-text-dim)" }}>
             {run.task_short_id ? (
