@@ -128,6 +128,13 @@ export const LETTER_LEAD_CHARS = 900;
  * the rest is one tap away inside the same bubble. The evidence line leaves
  * the prose and becomes a link at the bubble's foot (staffingModel.splitAsk).
  */
+/** A paragraph that opens an ask: "First, ...", "One: ...", "1. ...". */
+const opensAnAsk = (p: string): boolean => /^(\*\*)?(first|one|1)\b[,.:)]?/i.test(p);
+
+/** The letter opens by introducing its author ("I am the reviewer..."), so
+ *  the page's own line of introduction would say it twice. */
+export const introducesItself = (lead: string): boolean => /^\s*(\*\*)?I(?:'m| am)\b/.test(lead);
+
 export function letterParts(summaryMd: string | null | undefined): { lead: string; rest: string; evidenceHref: string | null } {
   const { ask, tail, evidenceHref } = splitAsk(summaryMd);
   const paragraphs = [ask, ...tail.split(/\n[ \t]*\n+/)].map((p) => p.trim()).filter(Boolean);
@@ -147,9 +154,17 @@ export function letterParts(summaryMd: string | null | undefined): { lead: strin
   const headingAt = paragraphs.findIndex((p) => /^\*\*[^*\n]+\*\*\s*$/.test(p.split("\n")[0]));
   const shaped = headingAt > 0 && paragraphs.slice(0, headingAt).reduce((n, p) => n + p.length, 0) <= 2 * LETTER_LEAD_CHARS;
   let taken = shaped ? headingAt : 0, size = 0;
-  if (!shaped) for (const p of paragraphs) {
-    if (taken > 0 && size + p.length > LETTER_LEAD_CHARS) break;
-    taken += 1; size += p.length;
+  if (!shaped) {
+    for (const p of paragraphs) {
+      if (taken > 0 && size + p.length > LETTER_LEAD_CHARS) break;
+      taken += 1; size += p.length;
+    }
+    // The limit never cuts before the first ask: a lead that is only the
+    // author's introduction shows a reader nothing to decide. When the cut
+    // fell before the first paragraph that opens an ask, the lead runs
+    // through that paragraph, whatever its length.
+    const firstAsk = paragraphs.findIndex(opensAnAsk);
+    if (firstAsk >= taken) taken = firstAsk + 1;
   }
   return { lead: paragraphs.slice(0, taken).join("\n\n"), rest: paragraphs.slice(taken).join("\n\n"), evidenceHref };
 }

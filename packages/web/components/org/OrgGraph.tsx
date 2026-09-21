@@ -255,7 +255,10 @@ function OrgGraphInner(props: OrgGraphProps) {
     const vp = computeOrgViewport(layout.nodes, el.clientWidth, el.clientHeight, panelWidth, focusId, null, el.clientHeight * panelHeightFraction);
     if (!vp) return false;
     // Animated viewport moves ride frame timers, which a hidden tab never gets.
-    rf.setViewport({ x: vp.x, y: vp.y, zoom: vp.zoom }, { duration: animate && !document.hidden ? 280 : 0 });
+    const current = rf.getViewport();
+    if (current.x !== vp.x || current.y !== vp.y || current.zoom !== vp.zoom) {
+      rf.setViewport({ x: vp.x, y: vp.y, zoom: vp.zoom }, { duration: animate && !document.hidden ? 280 : 0 });
+    }
     recomputeCue({ x: vp.x, y: vp.y, zoom: vp.zoom });
     return true;
   }, [layout, panelWidth, panelHeightFraction, focusId, rf, recomputeCue]);

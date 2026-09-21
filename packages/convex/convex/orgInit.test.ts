@@ -176,6 +176,33 @@ describe("org.analysisInputs", () => {
     })]);
   });
 
+  // Union, 2026-09-20: ranked by helpers alone, the list held the largest finished
+  // jobs and left out the session a routine wakes every day.
+  test("long running sessions rank by evidence of a standing purpose: a live routine, then this week's activity, a pinned state, helpers", async () => {
+    const D = 24 * H;
+    const base = { user_id: ME, team_id: TEAM, status: "active", agent_type: "claude", is_private: false, created_at: 1, message_count: 10, started_at: NOW - 30 * D };
+    const helper = (parent: string, n: number) => ({ ...base, _id: `conversations_h_${parent}_${n}`, short_id: `jxh${parent}${n}`, title: "helper", started_at: NOW - D, updated_at: NOW - D, parent_conversation_id: `conversations_${parent}`, is_subagent: true });
+    const db = fixtures({
+      conversations: [
+        // A finished job: many helpers, quiet for three weeks, no routine.
+        { ...base, _id: "conversations_big", short_id: "jxbig", title: "Networks", updated_at: NOW - 20 * D, message_count: 1800 },
+        ...[1, 2, 3].map((n) => helper("big", n)),
+        // Active this week with a pinned state and no routine.
+        { ...base, _id: "conversations_recent", short_id: "jxrecent", title: "Eval suite overhaul", updated_at: NOW - D, thread_state: "Making the suite green" },
+        // A routine wakes it every day; no helpers at all.
+        { ...base, _id: "conversations_routine", short_id: "jxroutine", title: "Cold email optimizer", updated_at: NOW - H, thread_state: "Monday tells us what it cost" },
+      ],
+      agent_tasks: [
+        { _id: "agent_tasks_r", user_id: ME, short_id: "tr-1", title: "Daily reply rate monitor", originating_conversation_id: "conversations_routine", schedule_type: "recurring", interval_ms: D, status: "scheduled", run_at: NOW + H },
+        { _id: "agent_tasks_p", user_id: ME, short_id: "tr-2", title: "Paused", originating_conversation_id: "conversations_big", schedule_type: "recurring", interval_ms: D, status: "paused", run_at: NOW + H },
+      ],
+    });
+    const r = await computeAnalysisInputs(ctxOf(db), ME as any, TEAM, NOW);
+    expect(r.sessions.long_running.rows.map((s: any) => s.short_id)).toEqual(["jxroutine", "jxrecent", "jxbig"]);
+    expect(r.sessions.long_running.rows[0].routines).toEqual([{ short_id: "tr-1", title: "Daily reply rate monitor", schedule: "recurring", every_ms: D }]);
+    expect(r.sessions.long_running.rows[2]).toMatchObject({ helpers: 3, routines: [] });
+  });
+
   test("the three slices merge to the one process read, and the org slice never reads tasks", async () => {
     const db = fixtures();
     const ctx = ctxOf(db);
