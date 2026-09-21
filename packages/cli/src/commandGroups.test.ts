@@ -125,3 +125,11 @@ describe("typo recovery inside a lazy group", () => {
     expect(unknownCommandNextStep(commandTree(program), ["browsr"])).toContain("'cast browser'");
   });
 });
+
+test("review activates its real actions without activating other groups", async () => {
+  const program = freshProgram();
+  expect(await activateGroup(program, "review", deps)).toBe(true);
+  const review = program.commands.find(c => c.name() === "review")!;
+  expect(review.commands.map(c => c.name())).toEqual(["add", "ls", "send", "edit", "rm"]);
+  expect(program.commands.find(c => c.name() === "browser")!.commands).toHaveLength(0);
+});
