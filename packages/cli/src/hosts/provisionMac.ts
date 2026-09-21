@@ -7,7 +7,6 @@ import { remoteHome, sshBase, type RemoteHost } from "../remote/session-move.js"
 import { cwdGitRoot } from "../cloud/hostGit.js";
 import { readHostDeviceId, readyHostHome, remoteRepoPath, waitForDeviceOnline } from "../cloud/prepare.js";
 import { convexClient } from "../remote/convexClient.js";
-import { hostReleaseScript } from "./installRelease.js";
 
 export const MAC_HOST_PATH = 'export PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"';
 
@@ -27,9 +26,6 @@ for tool in tmux jq node python3; do
 done
 command -v git >/dev/null
 command -v bun >/dev/null || curl -fsSL https://bun.sh/install | bash
-command -v cast >/dev/null || (
-${hostReleaseScript("darwin")}
-)
 mkdir -p "$HOME/work" "$HOME/.codecast"
 for agent in .codex .claude .gemini .grok; do
   if [ -L "$HOME/$agent" ]; then
@@ -37,7 +33,6 @@ for agent in .codex .claude .gemini .grok; do
     exit 1
   fi
 done
-cast --version
 echo MAC-BASE-OK`;
 }
 
@@ -97,6 +92,8 @@ export async function provisionMacHost(host: RemoteHost, opts: { skipDaemon?: bo
   log("checking Mac and installing missing runtimes…");
   const base = run(host, macBaseScript(), 15 * 60_000);
   if (!base.includes("MAC-BASE-OK")) throw new Error(`Mac setup did not complete: ${base.slice(-600)}`);
+  const { installMacCast } = await import("./updateMac.js");
+  installMacCast(host, log);
   log("installing missing agent CLIs…");
   const agents = run(host, agentCliInstallScript(readInstalledClientVersions()), 15 * 60_000);
   if (!agents.includes("AGENT-CLIS-OK")) throw new Error(`Agent setup did not complete: ${agents.slice(-600)}`);
