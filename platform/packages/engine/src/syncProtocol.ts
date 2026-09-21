@@ -64,16 +64,15 @@ function fieldEchoesPending(
 // field the server derives independently of updated_at — pinning a row in the
 // wrong place until an unrelated edit bumped updated_at.
 function scalarFieldsEqual(a: any, b: any, ignoreFields?: Set<string>, deepFields?: Set<string>): boolean {
-  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
-  for (const k of keys) {
-    if (ignoreFields?.has(k)) continue;
+  if (a === b) return true;
+  const equalField = (k: string): boolean => {
+    if (ignoreFields?.has(k)) return true;
     const av = a[k];
     const bv = b[k];
     if (deepFields?.has(k)) {
       // A joined/derived object the server recomputes without touching any
       // scalar on the row: compare by content, or the change is swallowed.
-      if (av !== bv && JSON.stringify(av) !== JSON.stringify(bv)) return false;
-      continue;
+      return av === bv || JSON.stringify(av) === JSON.stringify(bv);
     }
     // null is a scalar for our purposes; only non-null objects/arrays are skipped.
     const aScalar = av === null || typeof av !== "object";
@@ -81,9 +80,20 @@ function scalarFieldsEqual(a: any, b: any, ignoreFields?: Set<string>, deepField
     // A field crossing between scalar and object (null → {…}, {…} → undefined)
     // is a real change, not nested churn: the anchor space's `anchor` going
     // from null to a row is exactly what flips onboarding to the real page.
-    if (aScalar !== bScalar) return false;
-    if (!aScalar) continue;
-    if (av !== bv) return false;
+    return aScalar === bScalar && (!aScalar || av === bv);
+  };
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  let sameKeys = aKeys.length === bKeys.length;
+  for (let i = 0; i < aKeys.length; i++) {
+    const k = aKeys[i];
+    if (k !== bKeys[i]) sameKeys = false;
+    if (!equalField(k)) return false;
+  }
+  if (sameKeys) return true;
+  const aKeySet = new Set(aKeys);
+  for (const k of bKeys) {
+    if (!aKeySet.has(k) && !equalField(k)) return false;
   }
   return true;
 }
@@ -186,6 +196,82 @@ export function applySyncTable<T extends { _id: string }>(
     return merged;
   };
 
+  const reconcileRecord = (incomingRecord: T, prevRecord: T | undefined): T => {
+    let merged = applyFieldOverrides(incomingRecord);
+    if (merged === prevRecord) return merged;
+    if (preserveFields && prevRecord) {
+      // Overlay-owned fields (e.g. heartbeat liveness) arrive on a separate
+      // channel; the base payload carries null for them. Fill the gap from
+      // prev's (overlay-set) value so the base sync doesn't clobber the
+      // overlay between its ticks. A REAL incoming value still applies, so
+      // this only fills nulls. Then reuse prev's identity if only overlay
+      // fields would have differed.
+      //
+      // A preserved field CAN be non-scalar (e.g. a carried comment list),
+      // which scalarFieldsEqual skips — so a row whose only change is a
+      // carried fresh array must not reuse prev, or the update is silently
+      // dropped. Content-compare carried preserved values to decide; when
+      // equal, the fresh-but-identical array also must not break identity
+      // reuse.
+      let preservedEqual = true;
+      for (const f of preserveFields) {
+        const mv = (merged as any)[f];
+        const pv = (prevRecord as any)[f];
+        if (mv == null && pv != null) {
+          if (merged === incomingRecord) merged = { ...incomingRecord };
+          (merged as any)[f] = pv;
+        } else if (mv !== pv && JSON.stringify(mv) !== JSON.stringify(pv)) {
+          preservedEqual = false;
+        }
+      }
+      return (
+        preservedEqual && scalarFieldsEqual(prevRecord, merged, ignoreFields, deepFields)
+          ? prevRecord
+          : merged
+      );
+    } else {
+      // Preserve the previous object identity when nothing the UI renders has
+      // changed. Live queries resend the ENTIRE result set as fresh objects
+      // on any change, so without this one updated row churns the identity of
+      // every other row and defeats React.memo for all of them (e.g. every
+      // list card re-rendering on every row's heartbeat).
+      // scalarFieldsEqual is the version key — it covers every scalar field,
+      // so a change the server derives independently of updated_at can't be
+      // swallowed. Skip the reuse when a pending field override produced a
+      // fresh object (merged !== incomingRecord) so local-first values stick.
+      return (
+        merged === incomingRecord &&
+        prevRecord &&
+        scalarFieldsEqual(prevRecord, incomingRecord, ignoreFields, deepFields)
+          ? prevRecord
+          : merged
+      );
+    }
+  };
+
+  if (isDelta && prev && !pruneAbsentScope) {
+    let deltaTable = prev;
+    const writable = () => {
+      if (deltaTable === prev) deltaTable = { ...prev };
+      return deltaTable;
+    };
+    for (const id of excludeIds) {
+      if (Object.hasOwn(prev, id)) delete writable()[id];
+    }
+    const visited = new Set<string>();
+    for (const record of incoming) {
+      const id = record._id;
+      if (excludeIds.has(id) || visited.has(id)) continue;
+      visited.add(id);
+      const previous = prev[id];
+      const next = previous
+        ? reconcileRecord(incomingMap.get(id)!, previous)
+        : applyFieldOverrides(record);
+      if (next !== previous) writable()[id] = next;
+    }
+    return { table: deltaTable, pending: newPending };
+  }
+
   // Snapshot mode: walk prev first to preserve ordering, then copy any
   // incoming-only records at the tail. Records absent from incoming are
   // dropped (server is authoritative).
@@ -196,54 +282,7 @@ export function applySyncTable<T extends { _id: string }>(
       if (excludeIds.has(id)) continue;
       const incomingRecord = incomingMap.get(id);
       if (incomingRecord) {
-        let merged = applyFieldOverrides(incomingRecord);
-        const prevRecord = prev[id];
-        if (preserveFields && prevRecord) {
-          // Overlay-owned fields (e.g. heartbeat liveness) arrive on a separate
-          // channel; the base payload carries null for them. Fill the gap from
-          // prev's (overlay-set) value so the base sync doesn't clobber the
-          // overlay between its ticks. A REAL incoming value still applies, so
-          // this only fills nulls. Then reuse prev's identity if only overlay
-          // fields would have differed.
-          //
-          // A preserved field CAN be non-scalar (e.g. a carried comment list),
-          // which scalarFieldsEqual skips — so a row whose only change is a
-          // carried fresh array must not reuse prev, or the update is silently
-          // dropped. Content-compare carried preserved values to decide; when
-          // equal, the fresh-but-identical array also must not break identity
-          // reuse.
-          let preservedEqual = true;
-          for (const f of preserveFields) {
-            const mv = (merged as any)[f];
-            const pv = (prevRecord as any)[f];
-            if (mv == null && pv != null) {
-              if (merged === incomingRecord) merged = { ...incomingRecord };
-              (merged as any)[f] = pv;
-            } else if (mv !== pv && JSON.stringify(mv) !== JSON.stringify(pv)) {
-              preservedEqual = false;
-            }
-          }
-          table[id] =
-            preservedEqual && scalarFieldsEqual(prevRecord, merged, ignoreFields, deepFields)
-              ? prevRecord
-              : merged;
-        } else {
-          // Preserve the previous object identity when nothing the UI renders has
-          // changed. Live queries resend the ENTIRE result set as fresh objects
-          // on any change, so without this one updated row churns the identity of
-          // every other row and defeats React.memo for all of them (e.g. every
-          // list card re-rendering on every row's heartbeat).
-          // scalarFieldsEqual is the version key — it covers every scalar field,
-          // so a change the server derives independently of updated_at can't be
-          // swallowed. Skip the reuse when a pending field override produced a
-          // fresh object (merged !== incomingRecord) so local-first values stick.
-          table[id] =
-            merged === incomingRecord &&
-            prevRecord &&
-            scalarFieldsEqual(prevRecord, incomingRecord, ignoreFields, deepFields)
-              ? prevRecord
-              : merged;
-        }
+        table[id] = reconcileRecord(incomingRecord, prev[id]);
       } else if (isDelta) {
         // Scoped authoritative prune: when the caller certifies `incoming` is the
         // COMPLETE server set for a scope, an in-scope record absent from it is a

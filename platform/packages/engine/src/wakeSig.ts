@@ -66,11 +66,11 @@ export function rowSigExcluding(
 export function makeCollectionSig<T>(
   project: (row: T) => string,
 ): (collection: Record<string, T>) => string {
-  let lastRef: unknown;
-  let lastSig = "";
+  const signatures = new WeakMap<Record<string, T>, string>();
   const projectedByRow = new WeakMap<object, string>();
   return (collection: Record<string, T>): string => {
-    if (collection === lastRef) return lastSig;
+    const cached = signatures.get(collection);
+    if (cached !== undefined) return cached;
     const parts: string[] = [];
     for (const id in collection) {
       const row = collection[id];
@@ -85,10 +85,10 @@ export function makeCollectionSig<T>(
         parts.push(project(row));
       }
     }
-    lastRef = collection;
     // Newline-joined so two distinct collections can't concatenate into one
     // string; project() outputs never contain a newline.
-    lastSig = parts.join("\n");
-    return lastSig;
+    const signature = parts.join("\n");
+    signatures.set(collection, signature);
+    return signature;
   };
 }

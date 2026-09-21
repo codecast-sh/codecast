@@ -87,3 +87,32 @@ describe("stableRefId", () => {
     expect(stableRefId({})).not.toBe(stableRefId(o));
   });
 });
+
+describe("collection snapshot reuse", () => {
+  it("does not enumerate a prior snapshot when React revisits it", () => {
+    let enumerations = 0;
+    const before = new Proxy({ a: { label: "Before" } }, {
+      ownKeys(target) { enumerations++; return Reflect.ownKeys(target); },
+    });
+    const after = { a: { label: "After" } };
+    const sig = makeCollectionSig((row: { label: string }) => row.label);
+    expect(sig(before)).toBe("Before");
+    expect(sig(after)).toBe("After");
+    enumerations = 0;
+    expect(sig(before)).toBe("Before");
+    expect(sig(after)).toBe("After");
+    expect(enumerations).toBe(0);
+  });
+
+  it("reuses an empty signature and notices added and removed rows", () => {
+    const sig = makeCollectionSig((row: { label: string }) => row.label);
+    const empty = {};
+    const one = { a: { label: "A" } };
+    const two = { ...one, b: { label: "B" } };
+    expect(sig(empty)).toBe("");
+    expect(sig(one)).toBe("A");
+    expect(sig(two)).toBe("A\nB");
+    expect(sig(one)).toBe("A");
+    expect(sig(empty)).toBe("");
+  });
+});
