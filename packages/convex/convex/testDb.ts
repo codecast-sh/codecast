@@ -200,6 +200,14 @@ export function makeFakeDb(tables: Record<string, any[]>) {
       return null;
     },
     normalizeId(table: string, id: string) {
+      if (!idTables.has(id)) {
+        for (const [name, rows] of Object.entries(tables)) {
+          if (rows.some((row) => String(row._id) === id)) {
+            idTables.set(id, name);
+            break;
+          }
+        }
+      }
       return idTables.get(id) === table ? id : null;
     },
     async insert(table: string, doc: any) {

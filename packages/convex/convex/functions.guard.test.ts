@@ -174,18 +174,10 @@ describe("comments complete-view write choke", () => {
     const dispatch = readFileSync(join(DIR, "dispatch.ts"), "utf8");
     expect(dispatch).toContain('if (table === "comments")');
     expect(dispatch).toContain("patchCommentWithRevision");
-    for (const structuralField of [
-      "conversation_id",
-      "message_id",
-      "user_id",
-      "github_comment_id",
-      "pr_id",
-      "file_path",
-      "line_number",
-      "client_id",
-    ]) {
-      expect(dispatch).toContain(`"${structuralField}"`);
-    }
+    const commentConfig = dispatch.match(/comments:\s*\{([\s\S]*?)\n  \}/)?.[1];
+    expect(commentConfig).toBeDefined();
+    expect(commentConfig).toContain('editable: new Set(["content", "resolved_at"])');
+    expect(dispatch).toContain("if (config.editable.has(k)) safe[k]");
 
     const users = readFileSync(join(DIR, "users.ts"), "utf8");
     expect(users).not.toContain("ctx.db.delete(comment._id)");

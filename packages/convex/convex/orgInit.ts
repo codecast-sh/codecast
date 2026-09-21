@@ -344,11 +344,11 @@ async function longRunningSessions(ctx: Ctx, scan: OrgScanResult, now: number, w
   // of the ranking so every old session is judged by the same facts.
   const routinesBySession = new Map<string, any[]>();
   for (const status of ["scheduled", "running"] as const) {
-    const rows: any[] = await ctx.db.query("agent_tasks").withIndex("by_status_run_at", (q: any) => q.eq("status", status)).collect();
-    for (const t of rows) {
-      if (t.schedule_type === "once" || !t.originating_conversation_id) continue;
-      const k = String(t.originating_conversation_id);
-      routinesBySession.set(k, [...(routinesBySession.get(k) ?? []), t]);
+    const routineRows: any[] = await ctx.db.query("agent_tasks").withIndex("by_status_run_at", (q: any) => q.eq("status", status)).collect();
+    for (const routine of routineRows) {
+      if (routine.schedule_type === "once" || !routine.originating_conversation_id) continue;
+      const k = String(routine.originating_conversation_id);
+      routinesBySession.set(k, [...(routinesBySession.get(k) ?? []), routine]);
     }
   }
   const evidence = ({ session, raw }: { session: any; raw: any }) => ({
