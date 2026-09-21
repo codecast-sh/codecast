@@ -7,7 +7,10 @@
 // tells the person which account the browser must be signed into, starts the
 // daemon's flow, and follows it live through the device's cc_mint_flow.
 
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { captureException } from "@sentry/react";
+import { encryptProviderKey } from "../lib/providerKeyCrypto";
+import { Input } from "./ui/input";
 import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
@@ -18,7 +21,7 @@ import { Button } from "./ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog";
 
 export type MintFlow = {
-  status: "pending" | "confirmed" | "rejected";
+  status: "pending" | "confirmed" | "rejected" | "cancelled";
   profile?: string;
   email?: string;
   reason?: string;
@@ -33,6 +36,8 @@ type MintDevice = {
   online?: boolean;
   is_remote?: boolean;
   mint_flow?: MintFlow | null;
+  provider_key_pubkey?: string;
+  profiles?: MintProfile[];
 };
 
 type MintProfile = {
@@ -130,10 +135,17 @@ function Step({ n, state, children }: { n: number; state: "todo" | "active" | "d
   );
 }
 
-export function MintTokenDialog({ device, profile, onClose }: { device: MintDevice; profile: MintProfile; onClose: () => void }) {
+export function MintTokenDialog({ device, profile: initialProfile, onClose }: { device: MintDevice; profile: MintProfile; onClose: () => void }) {
+  const [selectedProfile, setSelectedProfile] = useState(initialProfile.name);
+  const profile = device.profiles?.find(p => p.name === selectedProfile) ?? initialProfile;
   const requestMint = useMutation(api.accountSwitch.requestMintToken);
+  const startRequest = useRef<ReturnType<typeof requestMint> | null>(null);
+  const cancelMint = useMutation(api.accountSwitch.cancelMintToken);
+  const submitCode = useMutation(api.accountSwitch.submitMintCode);
+  const [code, setCode] = useState("");
+  const [choosingAccount, setChoosingAccount] = useState(false);
   const removeToken = useMutation(api.accountSwitch.removeSetupToken);
-  const [busy, setBusy] = useState<"start" | "remove" | null>(null);
+  const [busy, setBusy] = useState<"start" | "remove" | "cancel" | "code" | null>(null);
   // Set the moment Start is pressed in THIS dialog: the server's pending
   // stamp arrives a moment later, and an earlier confirmed/rejected outcome
   // for the same profile must not show as this attempt's result meanwhile.
@@ -142,21 +154,28 @@ export function MintTokenDialog({ device, profile, onClose }: { device: MintDevi
   const who = profile.email ?? profile.name;
 
   const flow = device.mint_flow?.profile === profile.name ? device.mint_flow : null;
-  const fresh = !!flow && (startedAt === null || flow.started_at >= startedAt - 15_000);
+  const fresh = !!flow && (startedAt === null || flow.started_at === startedAt);
   const pending = busy === "start" || (fresh && flow?.status === "pending" && now - flow.started_at < MINT_FLOW_STALE_MS);
   const rejected = fresh && flow?.status === "rejected" && !!flow.finished_at && now - flow.finished_at < 30 * 60 * 1000;
   const confirmed = fresh && flow?.status === "confirmed" && !!flow.finished_at && now - flow.finished_at < 30 * 60 * 1000;
-  const url = pending ? flow?.url : undefined;
+  const url = pending && busy !== "start" ? flow?.url : undefined;
   const has = profileHasSetupToken(profile, now);
   const expired = !!profile.setup_token && !has;
 
   const start = async (force: boolean) => {
+    setCode("");
+    setChoosingAccount(false);
+    setStartedAt(Date.now());
     setBusy("start");
     try {
-      const res = await requestMint({ device_id: device.device_id, profile: profile.name, ...(force ? { force: true } : {}) });
-      setStartedAt(Date.now());
+      const request = requestMint({ device_id: device.device_id, profile: profile.name, ...(force ? { force: true } : {}) });
+      startRequest.current = request;
+      const res = await request;
+      setStartedAt(res.started_at);
       if (res?.already_pending) toast.message("A mint is already waiting for the browser sign-in");
+      startRequest.current = null;
     } catch (err) {
+      captureException(err);
       toast.error(err instanceof Error ? err.message : "Couldn't start the mint");
     } finally {
       setBusy(null);
@@ -170,7 +189,41 @@ export function MintTokenDialog({ device, profile, onClose }: { device: MintDevi
       toast.success(`Token removed for ${who}`, { description: "Sessions fall back to the saved login." });
       onClose();
     } catch (err) {
+      captureException(err);
       toast.error(err instanceof Error ? err.message : "Couldn't remove the token");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const cancel = async (choose = false) => {
+    setBusy("cancel");
+    if (!choose) onClose();
+    try {
+      const requested = await startRequest.current;
+      const attempt = requested?.started_at ?? (flow?.status === "pending" ? flow.started_at : undefined);
+      if (attempt !== undefined) await cancelMint({ device_id: device.device_id, started_at: attempt });
+      setCode("");
+      if (choose) { setChoosingAccount(true); setStartedAt(null); }
+    } catch (err) {
+      captureException(err);
+      toast.error(err instanceof Error ? err.message : "Couldn't cancel the mint");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const approve = async () => {
+    if (!flow || !device.provider_key_pubkey) return;
+    setBusy("code");
+    try {
+      const payload = await encryptProviderKey(device.provider_key_pubkey, "claude-mint-code", code.trim());
+      await submitCode({ device_id: device.device_id, started_at: flow.started_at, payload });
+      setCode("");
+      toast.message("Approval code sent. Waiting for the machine to finish.");
+    } catch (err) {
+      captureException(err);
+      toast.error(err instanceof Error ? err.message : "Couldn't send the approval code");
     } finally {
       setBusy(null);
     }
@@ -181,8 +234,8 @@ export function MintTokenDialog({ device, profile, onClose }: { device: MintDevi
   const step3: "todo" | "active" | "done" = confirmed ? "done" : "todo";
 
   return (
-    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="max-w-lg bg-sol-card border-sol-border">
+    <Dialog open onOpenChange={(o) => { if (!o) void (pending ? cancel() : onClose()); }}>
+      <DialogContent className="max-h-[90dvh] max-w-lg overflow-y-auto bg-sol-card border-sol-border">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-sol-text">
             <KeyRound className="h-4 w-4 text-sol-violet" />
@@ -193,6 +246,15 @@ export function MintTokenDialog({ device, profile, onClose }: { device: MintDevi
           </DialogDescription>
         </DialogHeader>
 
+        {choosingAccount && device.profiles && (
+          <label className="space-y-1 text-xs text-sol-text">
+            <span>Account</span>
+            <select aria-label="Account" className="w-full rounded border border-sol-border bg-sol-bg p-2" value={selectedProfile}
+              disabled={pending || busy !== null} onChange={event => { setSelectedProfile(event.target.value); setStartedAt(null); }}>
+              {device.profiles.map(p => <option key={p.name} value={p.name}>{p.email ?? p.name}</option>)}
+            </select>
+          </label>
+        )}
         <div className="space-y-3 text-xs leading-relaxed text-sol-text-muted">
           <div>
             <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-sol-text-dim">Why a token</div>
@@ -252,11 +314,22 @@ export function MintTokenDialog({ device, profile, onClose }: { device: MintDevi
               )}
             </Step>
             <Step n={3} state={step3}>
-              Codecast checks the token belongs to {who} and stores it here. The check compares the account&apos;s rate
-              limit windows; a token for a different account is refused.
+              Codecast checks the token belongs to {who} and stores it here. If the browser approved another saved account, the token is stored with that account and the result names it.
             </Step>
           </ol>
 
+          {pending && url && (
+            <div className="space-y-2 rounded-md border border-sol-border p-3">
+              <p>Approving on another machine? Paste the code Claude shows after you authorize.</p>
+              {device.provider_key_pubkey ? (
+                <form className="flex gap-2" onSubmit={event => { event.preventDefault(); void approve(); }}>
+                  <Input aria-label="Approval code" type="password" autoComplete="off" maxLength={4096} pattern={"[A-Za-z0-9_\\-]+(#[A-Za-z0-9_\\-]+)?"} value={code}
+                    onChange={event => setCode(event.target.value.trim())} placeholder="Approval code" className="h-8" />
+                  <Button type="submit" size="sm" disabled={busy !== null || !code.trim()}>{busy === "code" ? "Sending…" : "Submit code"}</Button>
+                </form>
+              ) : <p>Update Codecast on {device.label ?? "this machine"} to send the code here.</p>}
+            </div>
+          )}
           {rejected && (
             <p className="rounded-md border border-sol-red/30 bg-sol-red/10 p-2.5 text-sol-red">
               The mint did not complete: {flow?.reason ?? "unknown reason"}.
@@ -288,8 +361,13 @@ export function MintTokenDialog({ device, profile, onClose }: { device: MintDevi
             )}
           </div>
           <div className="flex items-center gap-2">
-            <Button size="sm" variant="ghost" onClick={onClose} className="h-7 px-2 text-[11px]">
-              {confirmed ? "Done" : "Close"}
+            {pending && (device.profiles?.length ?? 0) > 1 && (
+              <Button size="sm" variant="ghost" disabled={busy !== null} onClick={() => cancel(true)} className="h-7 px-2 text-[11px]">
+                Use a different account
+              </Button>
+            )}
+            <Button size="sm" variant="ghost" onClick={() => pending ? cancel() : onClose()} className="h-7 px-2 text-[11px]">
+              {busy === "cancel" ? "Cancelling…" : pending ? "Cancel mint" : confirmed ? "Done" : "Close"}
             </Button>
             {!pending && !confirmed && (
               <Button size="sm" disabled={busy !== null} onClick={() => start(false)} className="h-7 px-3 text-[11px]">
