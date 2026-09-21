@@ -1,0 +1,326 @@
+[
+  {
+    "id": "BACKEND-01",
+    "priority_severity": "P0 / Critical",
+    "finding": "New native Apple identity can select an existing account using caller-supplied email; needs a valid Apple token for the configured app",
+    "status": "independent_review",
+    "workstream": "001",
+    "verification": [
+      "Canonical auth: 97 tests pass; Slack:55 pass; cast check auth and convex pass. /tmp/ct-53052. Integrated/vendor/runtime verification pending."
+    ],
+    "review": {
+      "reviewer": "jx7c0ed",
+      "status": "pending"
+    },
+    "release": null
+  },
+  {
+    "id": "BACKEND-02",
+    "priority_severity": "P0 / Critical conditional",
+    "finding": "Password signup deduplicates into existing OAuth-only user without verified email when verification is disabled; source default and current production flag are disabled; delivery key present",
+    "status": "independent_review",
+    "workstream": "001",
+    "verification": [
+      "Canonical auth: 97 tests pass; Slack:55 pass; cast check auth and convex pass. /tmp/ct-53052. Integrated/vendor/runtime verification pending."
+    ],
+    "review": {
+      "reviewer": "jx7c0ed",
+      "status": "pending"
+    },
+    "release": null
+  },
+  {
+    "id": "BACKEND-03",
+    "priority_severity": "P0 / Critical",
+    "finding": "Signed-in member applies a conversation/bucket field policy to their membership ID, allowing admin promotion and potentially foreign-team retargeting",
+    "status": "implementing",
+    "workstream": "002",
+    "verification": [
+      "Isolated actual Convex public-handler baseline reproduces exploit with real database IDs; /tmp/codecast-security-pl734/runtime/before-fix.json. No production data.",
+      "Root actual Convex retest passes: denied unauthorized change with original state preserved, own rename and current-runner ack pass. /tmp/codecast-security-pl734/runtime/after-fix.json. Independent broad code review and release pending."
+    ],
+    "review": null,
+    "release": null
+  },
+  {
+    "id": "BACKEND-04",
+    "priority_severity": "P0 / High",
+    "finding": "User knowing another conversation ID registers a fresh session against it, removes its runner registration and reads queued private prompts",
+    "status": "implementing",
+    "workstream": "002",
+    "verification": [
+      "Isolated actual Convex public-handler baseline reproduces exploit with real database IDs; /tmp/codecast-security-pl734/runtime/before-fix.json. No production data.",
+      "Root actual Convex retest passes: denied unauthorized change with original state preserved, own rename and current-runner ack pass. /tmp/codecast-security-pl734/runtime/after-fix.json. Independent broad code review and release pending."
+    ],
+    "review": null,
+    "release": null
+  },
+  {
+    "id": "CLIENT-01",
+    "priority_severity": "P0 / High",
+    "finding": "Chart generation reintroduces a script-bearing link after sanitization; victim must click the chart",
+    "status": "implementing",
+    "workstream": "003",
+    "verification": [],
+    "review": null,
+    "release": null
+  },
+  {
+    "id": "BACKEND-05",
+    "priority_severity": "P1 / High",
+    "finding": "Any signed-in caller knowing a pending-message ID can mark another user's prompt delivered",
+    "status": "implementing",
+    "workstream": "002",
+    "verification": [
+      "Isolated actual Convex public-handler baseline reproduces exploit with real database IDs; /tmp/codecast-security-pl734/runtime/before-fix.json. No production data.",
+      "Root actual Convex retest passes: denied unauthorized change with original state preserved, own rename and current-runner ack pass. /tmp/codecast-security-pl734/runtime/after-fix.json. Independent broad code review and release pending."
+    ],
+    "review": null,
+    "release": null
+  },
+  {
+    "id": "BACKEND-06",
+    "priority_severity": "P1 / High",
+    "finding": "All-workspaces enumeration includes team-routed rows that are private to a different owner",
+    "status": "implementing",
+    "workstream": "002",
+    "verification": [],
+    "review": null,
+    "release": null
+  },
+  {
+    "id": "BACKEND-07",
+    "priority_severity": "P1 / High",
+    "finding": "Unverified alternate email claims unmapped Slack identity and can retarget its mirrored DMs; requires team membership and unclaimed identity",
+    "status": "independent_review",
+    "workstream": "001",
+    "verification": [
+      "Canonical auth: 97 tests pass; Slack:55 pass; cast check auth and convex pass. /tmp/ct-53052. Integrated/vendor/runtime verification pending."
+    ],
+    "review": {
+      "reviewer": "jx7c0ed",
+      "status": "pending"
+    },
+    "release": null
+  },
+  {
+    "id": "LOCAL-01",
+    "priority_severity": "P1 / High",
+    "finding": "Directly opened vault SVG can execute at the daemon origin and read the URL's full control bearer; normal inline image rendering is inert",
+    "status": "implementation_pending",
+    "workstream": "004",
+    "verification": [],
+    "review": null,
+    "release": null
+  },
+  {
+    "id": "PARENT-01",
+    "priority_severity": "P1 / High",
+    "finding": "Anonymous GitHub installation callback trusts unsigned caller identities; unbound installation can be linked without proving installer access",
+    "status": "implementation_pending",
+    "workstream": "005",
+    "verification": [],
+    "review": null,
+    "release": null
+  },
+  {
+    "id": "PARENT-02",
+    "priority_severity": "P1 / High",
+    "finding": "Generic OAuth reconnect replaces an already-confirmed grant before confirmation; needs initiated connect flow and another provider authorization",
+    "status": "implementation_pending",
+    "workstream": "005",
+    "verification": [],
+    "review": null,
+    "release": null
+  },
+  {
+    "id": "PARENT-03",
+    "priority_severity": "P1 / High",
+    "finding": "Arbitrary published-page scripts share a document with owner/edit/comment tokens; owner opening their management URL exposes its authority to that content",
+    "status": "implementation_pending",
+    "workstream": "006",
+    "verification": [],
+    "review": null,
+    "release": null
+  },
+  {
+    "id": "CLIENT-02",
+    "priority_severity": "P1 / High conditional",
+    "finding": "Foreign top-level page can inherit Electron preload; several IPC handlers lack sender checks. Chart HTTPS links offer a navigation path",
+    "status": "implementing",
+    "workstream": "003",
+    "verification": [],
+    "review": null,
+    "release": null
+  },
+  {
+    "id": "CLIENT-03",
+    "priority_severity": "P1 / High potential",
+    "finding": "Electron capability checks authorize containing window instead of requesting frame, including null webContents",
+    "status": "implementing",
+    "workstream": "003",
+    "verification": [],
+    "review": null,
+    "release": null
+  },
+  {
+    "id": "CLIENT-04",
+    "priority_severity": "P1 / High privacy risk",
+    "finding": "Auth storage wrapper prevents sibling-window logout events; global cache/replication can retain or mix old-principal state",
+    "status": "implementation_pending",
+    "workstream": "007",
+    "verification": [],
+    "review": null,
+    "release": null
+  },
+  {
+    "id": "PARENT-07",
+    "priority_severity": "P1 / High conditional",
+    "finding": "Updater interpolates unsigned-manifest URL into a shell; installer/updater lack independent manifest authenticity",
+    "status": "implementation_pending",
+    "workstream": "008",
+    "verification": [],
+    "review": null,
+    "release": null
+  },
+  {
+    "id": "PARENT-08",
+    "priority_severity": "P1 / High availability potential",
+    "finding": "Vulnerable ws parser accepts unauthenticated extension first messages up to 256 MiB; opaque Origin is admitted",
+    "status": "implementation_pending",
+    "workstream": "004/008",
+    "verification": [],
+    "review": null,
+    "release": null
+  },
+  {
+    "id": "BACKEND-08",
+    "priority_severity": "P2 / Medium",
+    "finding": "Anonymous content predicate query checks that a share token exists, never requires possession",
+    "status": "implementing",
+    "workstream": "002",
+    "verification": [],
+    "review": null,
+    "release": null
+  },
+  {
+    "id": "BACKEND-09",
+    "priority_severity": "P2 / Medium",
+    "finding": "Device-bound bearer restriction exists at HTTP wrapper but direct public Convex calls bypass it; attacker already holds valid token",
+    "status": "implementing",
+    "workstream": "002",
+    "verification": [],
+    "review": null,
+    "release": null
+  },
+  {
+    "id": "LOCAL-02",
+    "priority_severity": "P2 / Medium",
+    "finding": "Unauthenticated hook GET changes state; rejected status events still persist/schedule caller-selected transcript ingestion",
+    "status": "implementation_pending",
+    "workstream": "004",
+    "verification": [],
+    "review": null,
+    "release": null
+  },
+  {
+    "id": "LOCAL-03",
+    "priority_severity": "P2 / Medium",
+    "finding": "Repository setup-copy entries escape both worktrees in legacy remote move; requires user invoking that transfer to an authorized host",
+    "status": "implementation_pending",
+    "workstream": "004",
+    "verification": [],
+    "review": null,
+    "release": null
+  },
+  {
+    "id": "CLIENT-05",
+    "priority_severity": "P2 / Medium",
+    "finding": "Canvas media and escaped CSS bypass promised network isolation",
+    "status": "implementing",
+    "workstream": "003",
+    "verification": [],
+    "review": null,
+    "release": null
+  },
+  {
+    "id": "CLIENT-06",
+    "priority_severity": "P2 / Medium",
+    "finding": "Untrusted canvas host CSS can escape its layout and cover trusted controls",
+    "status": "implementing",
+    "workstream": "003",
+    "verification": [],
+    "review": null,
+    "release": null
+  },
+  {
+    "id": "PARENT-04",
+    "priority_severity": "P2 / Medium",
+    "finding": "Direct public comment mutation bypasses HTTP access/rate gate; expired/password page accepts anonymous stored comment",
+    "status": "implementation_pending",
+    "workstream": "006",
+    "verification": [],
+    "review": null,
+    "release": null
+  },
+  {
+    "id": "PARENT-05",
+    "priority_severity": "P2 / Medium",
+    "finding": "Public caching of previously authorized artifact versions/assets weakens password/delete/expiry revocation",
+    "status": "implementation_pending",
+    "workstream": "006",
+    "verification": [],
+    "review": null,
+    "release": null
+  },
+  {
+    "id": "PARENT-06",
+    "priority_severity": "P2 / Medium",
+    "finding": "Auth redirect uses string prefix, allowing a different hostname with the trusted URL prefix",
+    "status": "independent_review",
+    "workstream": "001",
+    "verification": [
+      "Canonical auth: 97 tests pass; Slack:55 pass; cast check auth and convex pass. /tmp/ct-53052. Integrated/vendor/runtime verification pending."
+    ],
+    "review": {
+      "reviewer": "jx7c0ed",
+      "status": "pending"
+    },
+    "release": null
+  },
+  {
+    "id": "PARENT-09",
+    "priority_severity": "P2 / mixed, triage",
+    "finding": "Dependency audit has 96 high/critical advisory/version match rows across 25 package names; these are not 96 exploitable app bugs",
+    "status": "implementation_pending",
+    "workstream": "008",
+    "verification": [],
+    "review": null,
+    "release": null
+  },
+  {
+    "id": "PARENT-10",
+    "priority_severity": "P2 / hardening",
+    "finding": "Main web responses lack CSP/frame-ancestors and several browser isolation headers",
+    "status": "implementation_pending",
+    "workstream": "003/008",
+    "verification": [],
+    "review": null,
+    "release": null
+  },
+  {
+    "id": "BACKEND-10",
+    "priority_severity": "P1 / High",
+    "finding": "Ordinary member can map a Slack person to self and receive mirrored DM rooms without identity proof",
+    "status": "independent_review",
+    "workstream": "001",
+    "verification": [
+      "Canonical auth: 97 tests pass; Slack:55 pass; cast check auth and convex pass. /tmp/ct-53052. Integrated/vendor/runtime verification pending."
+    ],
+    "review": {
+      "reviewer": "jx7c0ed",
+      "status": "pending"
+    },
+    "release": null
+  }
+]

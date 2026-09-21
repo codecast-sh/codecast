@@ -1,0 +1,880 @@
+[
+  {
+    "name": "@auth/core",
+    "versions": [
+      "0.37.4"
+    ],
+    "severity": "critical",
+    "title": "Auth.js: Email normalizer validates the address before Unicode normalization, allowing a homoglyph @ bypass",
+    "url": "https://github.com/advisories/GHSA-7rqj-j65f-68wh"
+  },
+  {
+    "name": "@auth/core",
+    "versions": [
+      "0.37.4"
+    ],
+    "severity": "high",
+    "title": "Auth.js: getToken() throws an uncaught exception on malformed Bearer authorization headers",
+    "url": "https://github.com/advisories/GHSA-xmf8-cvqr-rfgj"
+  },
+  {
+    "name": "@tiptap/core",
+    "versions": [
+      "3.22.5"
+    ],
+    "severity": "high",
+    "title": "Tiptap: Quadratic ReDoS in block and inline Markdown attribute parsing",
+    "url": "https://github.com/advisories/GHSA-j95f-988m-3j2f"
+  },
+  {
+    "name": "@xmldom/xmldom",
+    "versions": [
+      "0.7.13"
+    ],
+    "severity": "high",
+    "title": "xmldom: XML injection via unsafe CDATA serialization allows attacker-controlled markup insertion",
+    "url": "https://github.com/advisories/GHSA-wh4c-j3r5-mjhp"
+  },
+  {
+    "name": "@xmldom/xmldom",
+    "versions": [
+      "0.7.13"
+    ],
+    "severity": "high",
+    "title": "xmldom: Uncontrolled recursion in XML serialization leads to DoS",
+    "url": "https://github.com/advisories/GHSA-2v35-w6hq-6mfw"
+  },
+  {
+    "name": "@xmldom/xmldom",
+    "versions": [
+      "0.7.13"
+    ],
+    "severity": "high",
+    "title": "xmldom has XML injection through unvalidated DocumentType serialization",
+    "url": "https://github.com/advisories/GHSA-f6ww-3ggp-fr8h"
+  },
+  {
+    "name": "@xmldom/xmldom",
+    "versions": [
+      "0.7.13"
+    ],
+    "severity": "high",
+    "title": "xmldom has XML node injection through unvalidated processing instruction serialization",
+    "url": "https://github.com/advisories/GHSA-x6wf-f3px-wcqx"
+  },
+  {
+    "name": "@xmldom/xmldom",
+    "versions": [
+      "0.7.13"
+    ],
+    "severity": "high",
+    "title": "xmldom has XML node injection through unvalidated comment serialization",
+    "url": "https://github.com/advisories/GHSA-j759-j44w-7fr8"
+  },
+  {
+    "name": "@xmldom/xmldom",
+    "versions": [
+      "0.9.10"
+    ],
+    "severity": "high",
+    "title": "xmldom: HTML raw-text closing-tag case mismatch causes output amplification",
+    "url": "https://github.com/advisories/GHSA-6mj3-qw4j-hgrw"
+  },
+  {
+    "name": "@xmldom/xmldom",
+    "versions": [
+      "0.9.10"
+    ],
+    "severity": "high",
+    "title": "xmldom PI grammar regex ReDoS: quadratic backtracking on unterminated processing instructions",
+    "url": "https://github.com/advisories/GHSA-g53g-w8rj-fmg7"
+  },
+  {
+    "name": "@xmldom/xmldom",
+    "versions": [
+      "0.8.13",
+      "0.7.13"
+    ],
+    "severity": "high",
+    "title": "xmldom: Element name injection via createElement() bypasses requireWellFormed",
+    "url": "https://github.com/advisories/GHSA-w2rr-34g9-rvrj"
+  },
+  {
+    "name": "@xmldom/xmldom",
+    "versions": [
+      "0.9.10"
+    ],
+    "severity": "high",
+    "title": "xmldom: Element name injection via createElement() bypasses requireWellFormed",
+    "url": "https://github.com/advisories/GHSA-w2rr-34g9-rvrj"
+  },
+  {
+    "name": "@xmldom/xmldom",
+    "versions": [
+      "0.8.13",
+      "0.7.13"
+    ],
+    "severity": "high",
+    "title": "xmldom: Attribute name injection via setAttribute() bypasses requireWellFormed",
+    "url": "https://github.com/advisories/GHSA-4w3w-2rp5-g8jm"
+  },
+  {
+    "name": "@xmldom/xmldom",
+    "versions": [
+      "0.9.10"
+    ],
+    "severity": "high",
+    "title": "xmldom: Attribute name injection via setAttribute() bypasses requireWellFormed",
+    "url": "https://github.com/advisories/GHSA-4w3w-2rp5-g8jm"
+  },
+  {
+    "name": "@xmldom/xmldom",
+    "versions": [
+      "0.9.10"
+    ],
+    "severity": "high",
+    "title": "xmldom: Processing Instruction Target Injection Bypasses requireWellFormed",
+    "url": "https://github.com/advisories/GHSA-c7q8-3ch8-vqpv"
+  },
+  {
+    "name": "@xmldom/xmldom",
+    "versions": [
+      "0.8.13",
+      "0.7.13"
+    ],
+    "severity": "high",
+    "title": "xmldom: Processing Instruction Target Injection Bypasses requireWellFormed",
+    "url": "https://github.com/advisories/GHSA-c7q8-3ch8-vqpv"
+  },
+  {
+    "name": "@xmldom/xmldom",
+    "versions": [
+      "0.9.10"
+    ],
+    "severity": "high",
+    "title": "xmldom: DocType `name` Injection Bypasses requireWellFormed",
+    "url": "https://github.com/advisories/GHSA-27p8-2357-5qqv"
+  },
+  {
+    "name": "@xmldom/xmldom",
+    "versions": [
+      "0.8.13",
+      "0.7.13"
+    ],
+    "severity": "high",
+    "title": "xmldom: DocType `name` Injection Bypasses requireWellFormed",
+    "url": "https://github.com/advisories/GHSA-27p8-2357-5qqv"
+  },
+  {
+    "name": "@xmldom/xmldom",
+    "versions": [
+      "0.9.10"
+    ],
+    "severity": "high",
+    "title": "xmldom: Creation-time XML Name/QName validation is bypassable via an embedded line terminator, allowing injection on the default serialization path",
+    "url": "https://github.com/advisories/GHSA-3px3-54cx-rmw9"
+  },
+  {
+    "name": "@xmldom/xmldom",
+    "versions": [
+      "0.9.10"
+    ],
+    "severity": "high",
+    "title": "xmldom: requireWellFormed DocType publicId/systemId validation is bypassable via an embedded line terminator",
+    "url": "https://github.com/advisories/GHSA-vr34-hp96-76pp"
+  },
+  {
+    "name": "@xmldom/xmldom",
+    "versions": [
+      "0.9.10"
+    ],
+    "severity": "high",
+    "title": "xmldom: Quadratic-time attribute deduplication",
+    "url": "https://github.com/advisories/GHSA-8344-3jmq-59r6"
+  },
+  {
+    "name": "@xmldom/xmldom",
+    "versions": [
+      "0.8.13",
+      "0.7.13"
+    ],
+    "severity": "high",
+    "title": "xmldom: Quadratic-time attribute deduplication",
+    "url": "https://github.com/advisories/GHSA-8344-3jmq-59r6"
+  },
+  {
+    "name": "@xmldom/xmldom",
+    "versions": [
+      "0.8.13",
+      "0.7.13"
+    ],
+    "severity": "high",
+    "title": "xmldom: End-tag Whitespace-Trim Regex ReDoS — quadratic backtracking in the 0.8.x end-tag parser",
+    "url": "https://github.com/advisories/GHSA-x4fp-j954-r2f4"
+  },
+  {
+    "name": "@xmldom/xmldom",
+    "versions": [
+      "0.9.10"
+    ],
+    "severity": "high",
+    "title": "xmldom: Quadratic-memory consumption",
+    "url": "https://github.com/advisories/GHSA-965w-775f-mr7g"
+  },
+  {
+    "name": "@xmldom/xmldom",
+    "versions": [
+      "0.8.13",
+      "0.7.13"
+    ],
+    "severity": "high",
+    "title": "xmldom: Quadratic-memory consumption",
+    "url": "https://github.com/advisories/GHSA-965w-775f-mr7g"
+  },
+  {
+    "name": "@xmldom/xmldom",
+    "versions": [
+      "0.9.10"
+    ],
+    "severity": "high",
+    "title": "xmldom: Quadratic-time parsing via the malformed-input recovery path — `parseElementStartPart` re-scan and `normalize()` adjacent-text merge",
+    "url": "https://github.com/advisories/GHSA-93r5-fhx6-vmg9"
+  },
+  {
+    "name": "@xmldom/xmldom",
+    "versions": [
+      "0.8.13",
+      "0.7.13"
+    ],
+    "severity": "high",
+    "title": "xmldom: Quadratic-time parsing via the malformed-input recovery path — `parseElementStartPart` re-scan and `normalize()` adjacent-text merge",
+    "url": "https://github.com/advisories/GHSA-93r5-fhx6-vmg9"
+  },
+  {
+    "name": "app-builder-lib",
+    "versions": [
+      "25.1.8"
+    ],
+    "severity": "high",
+    "title": "electron-updater: Uncontrolled search path elements within `AppImage` built by `app-builder-lib`",
+    "url": "https://github.com/advisories/GHSA-7g7r-gx96-252g"
+  },
+  {
+    "name": "brace-expansion",
+    "versions": [
+      "1.1.14"
+    ],
+    "severity": "high",
+    "title": "brace-expansion: DoS via unbounded expansion length causing an out-of-memory process crash",
+    "url": "https://github.com/advisories/GHSA-mh99-v99m-4gvg"
+  },
+  {
+    "name": "brace-expansion",
+    "versions": [
+      "2.1.0"
+    ],
+    "severity": "high",
+    "title": "brace-expansion: DoS via unbounded expansion length causing an out-of-memory process crash",
+    "url": "https://github.com/advisories/GHSA-mh99-v99m-4gvg"
+  },
+  {
+    "name": "brace-expansion",
+    "versions": [
+      "5.0.5"
+    ],
+    "severity": "high",
+    "title": "brace-expansion: DoS via unbounded expansion length causing an out-of-memory process crash",
+    "url": "https://github.com/advisories/GHSA-mh99-v99m-4gvg"
+  },
+  {
+    "name": "brace-expansion",
+    "versions": [
+      "5.0.5"
+    ],
+    "severity": "high",
+    "title": "brace-expansion: DoS via unbounded intermediate arrays, bypassing the CVE-2026-14257 mitigation",
+    "url": "https://github.com/advisories/GHSA-rgw5-rvv9-x895"
+  },
+  {
+    "name": "brace-expansion",
+    "versions": [
+      "2.1.0"
+    ],
+    "severity": "high",
+    "title": "brace-expansion: DoS via unbounded intermediate arrays, bypassing the CVE-2026-14257 mitigation",
+    "url": "https://github.com/advisories/GHSA-rgw5-rvv9-x895"
+  },
+  {
+    "name": "brace-expansion",
+    "versions": [
+      "1.1.14"
+    ],
+    "severity": "high",
+    "title": "brace-expansion: DoS via unbounded intermediate arrays, bypassing the CVE-2026-14257 mitigation",
+    "url": "https://github.com/advisories/GHSA-rgw5-rvv9-x895"
+  },
+  {
+    "name": "brace-expansion",
+    "versions": [
+      "2.1.0"
+    ],
+    "severity": "high",
+    "title": "brace-expansion: DoS via exponential-time expansion of consecutive non-expanding {} groups",
+    "url": "https://github.com/advisories/GHSA-3jxr-9vmj-r5cp"
+  },
+  {
+    "name": "brace-expansion",
+    "versions": [
+      "1.1.14"
+    ],
+    "severity": "high",
+    "title": "brace-expansion: DoS via exponential-time expansion of consecutive non-expanding {} groups",
+    "url": "https://github.com/advisories/GHSA-3jxr-9vmj-r5cp"
+  },
+  {
+    "name": "brace-expansion",
+    "versions": [
+      "5.0.5"
+    ],
+    "severity": "high",
+    "title": "brace-expansion: DoS via exponential-time expansion of consecutive non-expanding {} groups",
+    "url": "https://github.com/advisories/GHSA-3jxr-9vmj-r5cp"
+  },
+  {
+    "name": "browserslist",
+    "versions": [
+      "4.28.2"
+    ],
+    "severity": "high",
+    "title": "Browserslist: Unbounded memory growth (no cache eviction) via distinct query results, leading to eventual OOM",
+    "url": "https://github.com/advisories/GHSA-c83g-rgw3-j3cx"
+  },
+  {
+    "name": "browserslist",
+    "versions": [
+      "4.28.2"
+    ],
+    "severity": "high",
+    "title": "Browserslist: Uncaught crash / prototype write via untrusted browserslist-stats.json custom stats (normalizeStats)",
+    "url": "https://github.com/advisories/GHSA-73wf-gq98-2v4g"
+  },
+  {
+    "name": "builder-util-runtime",
+    "versions": [
+      "9.2.10",
+      "9.5.1"
+    ],
+    "severity": "high",
+    "title": "electron-updater: Cross-origin redirect leaks `PRIVATE-TOKEN` and mixed-case `Authorization` credentials in `builder-util-runtime`",
+    "url": "https://github.com/advisories/GHSA-p2f4-r6v6-j797"
+  },
+  {
+    "name": "fast-uri",
+    "versions": [
+      "3.1.0"
+    ],
+    "severity": "high",
+    "title": "fast-uri vulnerable to server-side request forgery via malformed IPv6 normalization",
+    "url": "https://github.com/advisories/GHSA-f65p-4m7j-42xc"
+  },
+  {
+    "name": "fast-uri",
+    "versions": [
+      "3.1.0"
+    ],
+    "severity": "high",
+    "title": "fast-uri vulnerable to host confusion via percent-encoded scheme normalization",
+    "url": "https://github.com/advisories/GHSA-jqff-g426-hqxp"
+  },
+  {
+    "name": "fast-uri",
+    "versions": [
+      "3.1.0"
+    ],
+    "severity": "high",
+    "title": "fast-uri vulnerable to host confusion via backslash authority introducer",
+    "url": "https://github.com/advisories/GHSA-7p8r-x3mc-p8w7"
+  },
+  {
+    "name": "fast-uri",
+    "versions": [
+      "3.1.0"
+    ],
+    "severity": "high",
+    "title": "fast-uri vulnerable to host confusion via literal backslash authority delimiter",
+    "url": "https://github.com/advisories/GHSA-v2hh-gcrm-f6hx"
+  },
+  {
+    "name": "fast-uri",
+    "versions": [
+      "3.1.0"
+    ],
+    "severity": "high",
+    "title": "fast-uri vulnerable to host confusion via failed IDN canonicalization",
+    "url": "https://github.com/advisories/GHSA-4c8g-83qw-93j6"
+  },
+  {
+    "name": "fast-uri",
+    "versions": [
+      "3.1.0"
+    ],
+    "severity": "high",
+    "title": "fast-uri vulnerable to path traversal via percent-encoded dot segments",
+    "url": "https://github.com/advisories/GHSA-q3j6-qgpj-74h6"
+  },
+  {
+    "name": "fast-uri",
+    "versions": [
+      "3.1.0"
+    ],
+    "severity": "high",
+    "title": "fast-uri vulnerable to host confusion via percent-encoded authority delimiters",
+    "url": "https://github.com/advisories/GHSA-v39h-62p7-jpjc"
+  },
+  {
+    "name": "form-data",
+    "versions": [
+      "4.0.5"
+    ],
+    "severity": "high",
+    "title": "form-data: CRLF injection in form-data via unescaped multipart field names and filenames",
+    "url": "https://github.com/advisories/GHSA-hmw2-7cc7-3qxx"
+  },
+  {
+    "name": "hono",
+    "versions": [
+      "4.12.15"
+    ],
+    "severity": "high",
+    "title": "hono: CORS Middleware reflects any Origin with credentials when `origin` defaults to the wildcard",
+    "url": "https://github.com/advisories/GHSA-88fw-hqm2-52qc"
+  },
+  {
+    "name": "image-size",
+    "versions": [
+      "1.2.1"
+    ],
+    "severity": "high",
+    "title": "image-size: ICNS parser allows denial of service through an infinite loop",
+    "url": "https://github.com/advisories/GHSA-w3rx-r6r6-pgpr"
+  },
+  {
+    "name": "image-size",
+    "versions": [
+      "1.2.1"
+    ],
+    "severity": "high",
+    "title": "image-size: JXL and HEIF parsers allow denial of service through infinite loops",
+    "url": "https://github.com/advisories/GHSA-5p2g-fcmc-qvqq"
+  },
+  {
+    "name": "ip-address",
+    "versions": [
+      "10.1.1"
+    ],
+    "severity": "high",
+    "title": "ip-address: Address4 decodes leading-zero octets as decimal while resolvers decode them as octal, allowing SSRF and trust-boundary bypass",
+    "url": "https://github.com/advisories/GHSA-mwp4-54f8-5fhr"
+  },
+  {
+    "name": "js-yaml",
+    "versions": [
+      "4.1.1"
+    ],
+    "severity": "high",
+    "title": "js-yaml: YAML merge-key chains can force quadratic CPU consumption",
+    "url": "https://github.com/advisories/GHSA-52cp-r559-cp3m"
+  },
+  {
+    "name": "js-yaml",
+    "versions": [
+      "3.14.2"
+    ],
+    "severity": "high",
+    "title": "js-yaml: YAML merge-key chains can force quadratic CPU consumption",
+    "url": "https://github.com/advisories/GHSA-52cp-r559-cp3m"
+  },
+  {
+    "name": "js-yaml",
+    "versions": [
+      "3.14.2"
+    ],
+    "severity": "high",
+    "title": "JS-YAML: Quadratic CPU consumption in !!omap resolution (3.x and 4.x) — CVE-2026-59870 fix not backported",
+    "url": "https://github.com/advisories/GHSA-5p4m-2wfm-xmqj"
+  },
+  {
+    "name": "js-yaml",
+    "versions": [
+      "4.1.1"
+    ],
+    "severity": "high",
+    "title": "JS-YAML: Quadratic CPU consumption in !!omap resolution (3.x and 4.x) — CVE-2026-59870 fix not backported",
+    "url": "https://github.com/advisories/GHSA-5p4m-2wfm-xmqj"
+  },
+  {
+    "name": "js-yaml",
+    "versions": [
+      "3.14.2"
+    ],
+    "severity": "high",
+    "title": "js-yaml: maxTotalMergeKeys does not limit CPU use for empty merge sources",
+    "url": "https://github.com/advisories/GHSA-2883-xcg3-v3hh"
+  },
+  {
+    "name": "js-yaml",
+    "versions": [
+      "4.1.1"
+    ],
+    "severity": "high",
+    "title": "js-yaml: maxTotalMergeKeys does not limit CPU use for empty merge sources",
+    "url": "https://github.com/advisories/GHSA-2883-xcg3-v3hh"
+  },
+  {
+    "name": "linkify-it",
+    "versions": [
+      "5.0.0"
+    ],
+    "severity": "high",
+    "title": "LinkifyIt#match scan loop has quadratic algorithmic complexity",
+    "url": "https://github.com/advisories/GHSA-22p9-wv53-3rq4"
+  },
+  {
+    "name": "linkify-it",
+    "versions": [
+      "5.0.0"
+    ],
+    "severity": "high",
+    "title": "linkify-it: Quadratic-complexity DoS via the `mailto:` validator scan-loop on attacker text",
+    "url": "https://github.com/advisories/GHSA-v245-v573-v5vm"
+  },
+  {
+    "name": "nanoid",
+    "versions": [
+      "5.1.9"
+    ],
+    "severity": "high",
+    "title": "nanoid: non-secure generators can loop indefinitely with negative size",
+    "url": "https://github.com/advisories/GHSA-28wg-ghj8-5hjv"
+  },
+  {
+    "name": "nanoid",
+    "versions": [
+      "3.3.11"
+    ],
+    "severity": "high",
+    "title": "nanoid: non-secure generators can loop indefinitely with negative size",
+    "url": "https://github.com/advisories/GHSA-28wg-ghj8-5hjv"
+  },
+  {
+    "name": "nanoid",
+    "versions": [
+      "3.3.11"
+    ],
+    "severity": "high",
+    "title": "nanoid: custom generators can loop indefinitely when size is zero",
+    "url": "https://github.com/advisories/GHSA-2v37-7h3g-55p8"
+  },
+  {
+    "name": "nanoid",
+    "versions": [
+      "5.1.9"
+    ],
+    "severity": "high",
+    "title": "nanoid: Integer Overflow or Wraparound",
+    "url": "https://github.com/advisories/GHSA-xwg4-73v4-xw9w"
+  },
+  {
+    "name": "nanoid",
+    "versions": [
+      "3.3.11"
+    ],
+    "severity": "high",
+    "title": "nanoid: Integer Overflow or Wraparound",
+    "url": "https://github.com/advisories/GHSA-xwg4-73v4-xw9w"
+  },
+  {
+    "name": "postcss",
+    "versions": [
+      "8.4.49"
+    ],
+    "severity": "high",
+    "title": "PostCSS: Arbitrary file read and information disclosure via attacker-controlled sourceMappingURL in CSS comments",
+    "url": "https://github.com/advisories/GHSA-6g55-p6wh-862q"
+  },
+  {
+    "name": "postcss",
+    "versions": [
+      "8.5.12",
+      "8.4.49"
+    ],
+    "severity": "high",
+    "title": "PostCSS: Path Traversal in Previous Source Map Auto-Loading (sourceMappingURL) leads to Arbitrary .map File Disclosure",
+    "url": "https://github.com/advisories/GHSA-r28c-9q8g-f849"
+  },
+  {
+    "name": "prismjs",
+    "versions": [
+      "1.17.1"
+    ],
+    "severity": "high",
+    "title": "Cross-Site Scripting in Prism",
+    "url": "https://github.com/advisories/GHSA-wvhm-4hhf-97x9"
+  },
+  {
+    "name": "prismjs",
+    "versions": [
+      "1.17.1"
+    ],
+    "severity": "high",
+    "title": "Regular Expression Denial of Service (ReDoS) in Prism",
+    "url": "https://github.com/advisories/GHSA-gj77-59wh-66hg"
+  },
+  {
+    "name": "prismjs",
+    "versions": [
+      "1.17.1"
+    ],
+    "severity": "high",
+    "title": "Denial of service in prismjs",
+    "url": "https://github.com/advisories/GHSA-h4hr-7fg3-h35w"
+  },
+  {
+    "name": "prismjs",
+    "versions": [
+      "1.17.1"
+    ],
+    "severity": "high",
+    "title": "Cross-site Scripting in Prism",
+    "url": "https://github.com/advisories/GHSA-3949-f494-cm99"
+  },
+  {
+    "name": "protobufjs",
+    "versions": [
+      "7.5.6"
+    ],
+    "severity": "high",
+    "title": "protobufjs: Denial of service through unbounded Any expansion during JSON conversion",
+    "url": "https://github.com/advisories/GHSA-wcpc-wj8m-hjx6"
+  },
+  {
+    "name": "react-router",
+    "versions": [
+      "7.14.2"
+    ],
+    "severity": "high",
+    "title": "React Router vulnerable to DoS via unbounded path expansion in __manifest endpoint",
+    "url": "https://github.com/advisories/GHSA-8x6r-g9mw-2r78"
+  },
+  {
+    "name": "react-router",
+    "versions": [
+      "7.14.2"
+    ],
+    "severity": "high",
+    "title": "React Router: Unauthenticated Denial of Service via Inefficient Route Matching",
+    "url": "https://github.com/advisories/GHSA-chx6-hx7r-mcp5"
+  },
+  {
+    "name": "react-router",
+    "versions": [
+      "7.14.2"
+    ],
+    "severity": "high",
+    "title": "React Router: RSC Mode CSRF Bypass Allows Action Execution Before 400 Response",
+    "url": "https://github.com/advisories/GHSA-qwww-vcr4-c8h2"
+  },
+  {
+    "name": "shell-quote",
+    "versions": [
+      "1.8.3"
+    ],
+    "severity": "critical",
+    "title": "shell-quote quote() does not escape newlines in object .op values",
+    "url": "https://github.com/advisories/GHSA-w7jw-789q-3m8p"
+  },
+  {
+    "name": "shell-quote",
+    "versions": [
+      "1.8.3"
+    ],
+    "severity": "high",
+    "title": "shell-quote: Quadratic-complexity Denial of Service in `parse()` (CWE-407)",
+    "url": "https://github.com/advisories/GHSA-395f-4hp3-45gv"
+  },
+  {
+    "name": "tar",
+    "versions": [
+      "6.2.1"
+    ],
+    "severity": "high",
+    "title": "node-tar Vulnerable to Arbitrary File Creation/Overwrite via Hardlink Path Traversal",
+    "url": "https://github.com/advisories/GHSA-34x7-hfp2-rc4v"
+  },
+  {
+    "name": "tar",
+    "versions": [
+      "6.2.1"
+    ],
+    "severity": "high",
+    "title": "node-tar is Vulnerable to Arbitrary File Overwrite and Symlink Poisoning via Insufficient Path Sanitization",
+    "url": "https://github.com/advisories/GHSA-8qq5-rm4j-mr97"
+  },
+  {
+    "name": "tar",
+    "versions": [
+      "6.2.1"
+    ],
+    "severity": "high",
+    "title": "Arbitrary File Read/Write via Hardlink Target Escape Through Symlink Chain in node-tar Extraction",
+    "url": "https://github.com/advisories/GHSA-83g3-92jg-28cx"
+  },
+  {
+    "name": "tar",
+    "versions": [
+      "6.2.1"
+    ],
+    "severity": "high",
+    "title": "tar has Hardlink Path Traversal via Drive-Relative Linkpath",
+    "url": "https://github.com/advisories/GHSA-qffp-2rhf-9h96"
+  },
+  {
+    "name": "tar",
+    "versions": [
+      "6.2.1"
+    ],
+    "severity": "high",
+    "title": "node-tar Symlink Path Traversal via Drive-Relative Linkpath",
+    "url": "https://github.com/advisories/GHSA-9ppj-qmqm-q256"
+  },
+  {
+    "name": "tar",
+    "versions": [
+      "6.2.1"
+    ],
+    "severity": "high",
+    "title": "Race Condition in node-tar Path Reservations via Unicode Ligature Collisions on macOS APFS",
+    "url": "https://github.com/advisories/GHSA-r6q2-hw4h-h46w"
+  },
+  {
+    "name": "tar",
+    "versions": [
+      "7.5.13",
+      "6.2.1"
+    ],
+    "severity": "critical",
+    "title": "node-tar: Decompression/parse DoS via unlimited input",
+    "url": "https://github.com/advisories/GHSA-23hp-3jrh-7fpw"
+  },
+  {
+    "name": "tar",
+    "versions": [
+      "7.5.13",
+      "6.2.1"
+    ],
+    "severity": "high",
+    "title": "node-tar: Negative tar entry size causes infinite loop in archive replace",
+    "url": "https://github.com/advisories/GHSA-8x88-c5mf-7j5w"
+  },
+  {
+    "name": "tar",
+    "versions": [
+      "7.5.13",
+      "6.2.1"
+    ],
+    "severity": "high",
+    "title": "node-tar: Uncontrolled recursion in mapHas/filesFilter allows uncatchable stack-overflow DoS via crafted long-path tar with member selection",
+    "url": "https://github.com/advisories/GHSA-r292-9mhp-454m"
+  },
+  {
+    "name": "tmp",
+    "versions": [
+      "0.2.5"
+    ],
+    "severity": "high",
+    "title": "tmp has Path Traversal via unsanitized prefix/postfix that enables directory escape",
+    "url": "https://github.com/advisories/GHSA-ph9p-34f9-6g65"
+  },
+  {
+    "name": "undici",
+    "versions": [
+      "7.26.0"
+    ],
+    "severity": "high",
+    "title": "undici vulnerable to cross-user information disclosure and parse-time crash via degenerate private cache directives",
+    "url": "https://github.com/advisories/GHSA-4cwx-7wf7-3272"
+  },
+  {
+    "name": "undici",
+    "versions": [
+      "7.26.0"
+    ],
+    "severity": "high",
+    "title": "undici vulnerable to TLS certificate validation bypass via dropped requestTls in SOCKS5 ProxyAgent",
+    "url": "https://github.com/advisories/GHSA-vmh5-mc38-953g"
+  },
+  {
+    "name": "undici",
+    "versions": [
+      "7.26.0"
+    ],
+    "severity": "high",
+    "title": "undici WebSocket client vulnerable to denial of service via fragment count bypass",
+    "url": "https://github.com/advisories/GHSA-vxpw-j846-p89q"
+  },
+  {
+    "name": "undici",
+    "versions": [
+      "6.25.0"
+    ],
+    "severity": "high",
+    "title": "undici WebSocket client vulnerable to denial of service via fragment count bypass",
+    "url": "https://github.com/advisories/GHSA-vxpw-j846-p89q"
+  },
+  {
+    "name": "undici",
+    "versions": [
+      "7.26.0"
+    ],
+    "severity": "high",
+    "title": "undici vulnerable to cross-origin request routing via SOCKS5 proxy pool reuse",
+    "url": "https://github.com/advisories/GHSA-hm92-r4w5-c3mj"
+  },
+  {
+    "name": "vite",
+    "versions": [
+      "6.4.2"
+    ],
+    "severity": "high",
+    "title": "vite: `server.fs.deny` bypass on Windows alternate paths",
+    "url": "https://github.com/advisories/GHSA-fx2h-pf6j-xcff"
+  },
+  {
+    "name": "ws",
+    "versions": [
+      "8.18.0",
+      "8.20.0"
+    ],
+    "severity": "high",
+    "title": "ws: Memory exhaustion DoS from tiny fragments and data chunks",
+    "url": "https://github.com/advisories/GHSA-96hv-2xvq-fx4p"
+  },
+  {
+    "name": "ws",
+    "versions": [
+      "7.5.10"
+    ],
+    "severity": "high",
+    "title": "ws: Memory exhaustion DoS from tiny fragments and data chunks",
+    "url": "https://github.com/advisories/GHSA-96hv-2xvq-fx4p"
+  },
+  {
+    "name": "ws",
+    "versions": [
+      "6.2.3"
+    ],
+    "severity": "high",
+    "title": "ws: Memory exhaustion DoS from tiny fragments and data chunks",
+    "url": "https://github.com/advisories/GHSA-96hv-2xvq-fx4p"
+  }
+]

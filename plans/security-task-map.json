@@ -1,0 +1,42 @@
+[
+  {
+    "file": "001-security-identity.md",
+    "title": "Require verified proof before account and Slack identity linking",
+    "output": "ok Created ct-53052: Require verified proof before account and Slack identity linking"
+  },
+  {
+    "file": "002-security-backend-authority.md",
+    "title": "Close backend resource and generic patch authorization gaps",
+    "output": "ok Created ct-53053: Close backend resource and generic patch authorization gaps"
+  },
+  {
+    "file": "003-security-content-desktop.md",
+    "title": "Contain rich content and enforce Electron authority boundaries",
+    "output": "ok Created ct-53054: Contain rich content and enforce Electron authority boundaries"
+  },
+  {
+    "file": "004-security-local-machine.md",
+    "title": "Separate local content access from machine-control authority",
+    "output": "ok Created ct-53055: Separate local content access from machine-control authority"
+  },
+  {
+    "file": "005-security-integrations.md",
+    "title": "Bind integration installation and reconnects to verified authority",
+    "output": "ok Created ct-53056: Bind integration installation and reconnects to verified authority"
+  },
+  {
+    "file": "006-security-publishing.md",
+    "title": "Isolate published content controls and enforce access gates",
+    "output": "ok Created ct-53057: Isolate published content controls and enforce access gates"
+  },
+  {
+    "file": "007-security-principal-cache.md",
+    "title": "Purge and isolate account state across every window",
+    "output": "ok Created ct-53058: Purge and isolate account state across every window"
+  },
+  {
+    "file": "008-security-release-assurance.md",
+    "title": "Authenticate releases and complete security coverage",
+    "output": "ok Created ct-53059: Authenticate releases and complete security coverage"
+  }
+]
