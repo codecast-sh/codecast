@@ -122,13 +122,16 @@ function ProfileSection({ user }: { user: any }) {
 // ── interface preferences ──────────────────────────────────────────────────
 
 function AppearanceSection() {
-  const { visualStyle, setVisualStyle } = useTheme();
+  const { theme, toggleTheme, visualStyle, setVisualStyle } = useTheme();
   const options = ([
     { value: "classic", label: "Classic", description: <StyleOptionPreview variant="classic" caption="Solarized, compact, information-dense" /> },
     { value: "minimal", label: "Minimal", description: <StyleOptionPreview variant="minimal" caption="Neutral, spacious, reading-first" /> },
   ] satisfies Array<{ value: VisualStyle; label: string; description: ReactNode }>);
   return (
     <SettingsSection title="Appearance" icon={Palette} description="Choose the visual language for every Codecast surface.">
+      <SettingsRow label={<label htmlFor="dark-mode">Dark mode</label>} description="Applies to all your windows and popups, on every device.">
+        <Switch id="dark-mode" checked={theme === "dark"} onCheckedChange={toggleTheme} aria-label="Dark mode" />
+      </SettingsRow>
       <SettingsField
         label="Interface style"
         hint="Minimal is quieter and more spacious, with neutral surfaces and a focused reading column."

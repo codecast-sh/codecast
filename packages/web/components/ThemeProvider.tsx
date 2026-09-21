@@ -18,8 +18,7 @@ const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
 function getInitialTheme(): Theme {
   if (typeof window === "undefined") return "light";
-  const stored = localStorage.getItem("codecast-theme") as Theme | null;
-  return stored || "light";
+  return localStorage.getItem("codecast-theme") === "dark" ? "dark" : "light";
 }
 
 function normalizeVisualStyle(value: string | null | undefined): VisualStyle {
@@ -32,10 +31,11 @@ function getInitialVisualStyle(): VisualStyle {
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setTheme] = useState<Theme>(getInitialTheme);
+  const [initialTheme] = useState<Theme>(getInitialTheme);
   const [visualStyle, setVisualStyleState] = useState<VisualStyle>(getInitialVisualStyle);
   const [mounted, setMounted] = useState(false);
-  const serverTheme = useInboxStore((s) => s.clientState.ui?.theme);
+  const storedTheme = useInboxStore((s) => s.clientState.ui?.theme);
+  const theme = storedTheme ?? initialTheme;
   const serverVisualStyle = useInboxStore((s) => s.clientState.ui?.visual_style);
   const updateClientUI = useInboxStore((s) => s.updateClientUI);
   const bubbleHue = useInboxStore((s) => resolveBubbleHue(s.clientState.ui?.user_bubble_color));
@@ -46,16 +46,6 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [bubbleHue]);
 
   useMountEffect(() => { setMounted(true); });
-
-  useWatchEffect(() => {
-    if (!mounted || !serverTheme || serverTheme === theme) return;
-    const stored = localStorage.getItem("codecast-theme");
-    if (!stored) {
-      setTheme(serverTheme);
-    } else if (stored !== serverTheme) {
-      updateClientUI({ theme: stored as Theme });
-    }
-  }, [serverTheme, mounted]);
 
   useWatchEffect(() => {
     if (mounted) {
@@ -88,12 +78,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [visualStyle, mounted]);
 
   const toggleTheme = useCallback(() => {
-    setTheme(prev => {
-      const next = prev === "dark" ? "light" : "dark";
-      updateClientUI({ theme: next });
-      return next;
-    });
-  }, [updateClientUI]);
+    const current = useInboxStore.getState().clientState.ui?.theme ?? initialTheme;
+    updateClientUI({ theme: current === "dark" ? "light" : "dark" });
+  }, [initialTheme, updateClientUI]);
 
   const setVisualStyle = useCallback((style: VisualStyle) => {
     setVisualStyleState(style);
