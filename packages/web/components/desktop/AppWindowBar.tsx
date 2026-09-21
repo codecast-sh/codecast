@@ -109,7 +109,8 @@ export function AppWindowBar({ app }: { app: DesktopApp }) {
         <Icon className="h-3.5 w-3.5 text-sol-cyan" strokeWidth={2} aria-hidden />
         {spec.title}
       </span>
-      <span aria-hidden className="mx-1.5 h-4 w-px shrink-0 bg-sol-border" />
+      {spec.nav === "tabs" && <span aria-hidden className="mx-1.5 h-4 w-px shrink-0 bg-sol-border" />}
+      {spec.nav === "tabs" && (
       <nav aria-label={`${spec.title} sections`} className="flex items-center gap-0.5">
         {spec.sections.map((s, i) => (
           <SectionTab
@@ -122,6 +123,7 @@ export function AppWindowBar({ app }: { app: DesktopApp }) {
           />
         ))}
       </nav>
+      )}
       {/* The trailing edge: the one way back. The page returns to the main
           window as a tab and this window closes; the same control a plain
           breakout carries, so the two kinds of window agree on the gesture. */}

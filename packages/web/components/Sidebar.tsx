@@ -41,7 +41,7 @@ import { toast } from "sonner";
 import { FolderGit2, Globe, Workflow, Zap, MessageSquare, MessagesSquare, FolderKanban, Flag, Layers, Users, UserMinus, Hash, MoreHorizontal, Pin, PinOff, BellOff, Lock, SquarePen, Phone, PhoneCall } from "lucide-react";
 import { useSyncTeams } from "../hooks/useSyncTeams";
 import { AppPopOutButton } from "./desktop/AppPopOutButton";
-import { useHasAppWindow } from "../hooks/useDesktopWindowRole";
+import { useDesktopAppWindow, useHasAppWindow } from "../hooks/useDesktopWindowRole";
 import { DESKTOP_APPS, type DesktopApp } from "../lib/desktopApps";
 import { WorkbenchSection } from "./WorkbenchSection";
 import { inActiveWorkspace } from "../lib/workspaceScope";
@@ -77,6 +77,9 @@ interface SidebarProps {
   isMobileOpen?: boolean;
   onMobileClose?: () => void;
   isNarrow?: boolean;
+  /** Which groups to draw. The Work window's own rail is the pinned rail
+   *  and the Work group (lib/desktopApps); the main window draws them all. */
+  scope?: "work";
 }
 
 /** A group label in the rail. Hidden when the rail is narrow, where the icons
@@ -88,7 +91,8 @@ const NO_SECTION_PINS: Record<string, boolean> = Object.freeze({});
  *  not that window: the rail's rows for it become doors. */
 function usePoppedOut(app: DesktopApp | undefined): boolean {
   const has = useHasAppWindow(app ?? "chat");
-  return !!app && has;
+  const here = useDesktopAppWindow();
+  return !!app && has && here !== app;
 }
 
 function RailHeading({ label, isNarrow, action }: { label: string; isNarrow: boolean; action?: React.ReactNode }) {
@@ -895,7 +899,7 @@ function PinnedRail({
 const sidebarSessionSig = (r: any) => `${r.git_root ?? ""}|${r.project_path ?? ""}|${Math.floor((r.updated_at ?? 0) / 60_000)}`;
 const byUpdatedDesc = (a: any, b: any) => (b.updated_at ?? 0) - (a.updated_at ?? 0);
 
-export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, isNarrow = false }: SidebarProps) {
+export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, isNarrow = false, scope }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
   const isInbox = pathname === "/conversation" || pathname?.startsWith("/conversation/") || pathname === "/inbox" || pathname?.startsWith("/inbox/");
@@ -1256,6 +1260,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             activeViewIds={[activeTaskViewId, activeDocViewId]}
           />
         )}
+        {scope === "work" ? null : (<>
         <RailHeading label="Conversations" isNarrow={isNarrow} />
         <div className="text-sm">
           <button
@@ -1339,6 +1344,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
           )}
         </div>
 
+        </>)}
         {/* What you are working on. Projects leads: it is the container the rest
             of this group files into, so the rail reads top-down as project →
             its tasks → the docs and files around them. */}
@@ -1430,6 +1436,10 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
           />
         </div>
 
+        {/* The Work window keeps the pinned rail and the Work group, the
+            two things its pages are reached through; the rest is the main
+            window's. */}
+        {scope === "work" ? null : (<>
         {/* The machinery that does the work: what is running right now, and the
             standing things that set it running. */}
         <RailHeading label="Agents" isNarrow={isNarrow} />
@@ -1644,6 +1654,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
           </div>
         )}
 
+        </>)}
       </div>
     </>
   );

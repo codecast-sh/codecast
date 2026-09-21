@@ -907,7 +907,10 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // "Loading conversation..." state). Visibility is driven imperatively.
   const sidebarPanelRef = usePanelRef();
   const sessionListPanelRef = usePanelRef();
-  const sidebarHidden = !!hideSidebar || isZenMode || sidebarCollapsed || isMobile || !!appWindow;
+  // The Work window carries a rail of its own (the pinned rail and the Work
+  // group, lib/desktopApps `nav`); the Chat window's page carries its rail.
+  const appRail = appWindow ? DESKTOP_APPS[appWindow].nav === "sidebar" : false;
+  const sidebarHidden = appRail ? isMobile : !!hideSidebar || isZenMode || sidebarCollapsed || isMobile || !!appWindow;
 
   // Animated collapse/expand: panels are flex-grow sized with no built-in
   // transition, so we enable one (globals.css `.sidebar-animating`) only for
@@ -1358,6 +1361,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
                       directoryFilter={directoryFilter}
                       isMobileOpen={isMobileSidebarOpen}
                       onMobileClose={closeMobileSidebar}
+                      scope={appRail && appWindow === "work" ? "work" : undefined}
                     />
                   </ErrorBoundary>
                 </div>
