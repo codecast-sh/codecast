@@ -1446,7 +1446,7 @@ export function GenericListView<T>({
       {customContent ? customContent({ openPaletteForItems, openContextMenuForItems }) : (
         <div className="flex-1 flex overflow-hidden">
           <div ref={scrollRef} className="flex-1 overflow-y-auto">
-            {visibleItems.length === 0 ? (
+            {rowModel.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-48 text-sol-text-dim">
                 {emptyIcon}
                 <p className="text-sm mt-2">{searchQuery ? "No results" : (emptyMessage || "No items found")}</p>
