@@ -21,8 +21,11 @@ describe("deviceDisplayName", () => {
   });
 
   it("names remote boxes by class", () => {
+    expect(deviceDisplayName({ label: "macOS - InterGalactic", platform: "darwin", is_remote: true })).toBe("InterGalactic");
     expect(deviceDisplayName({ label: "Linux - ip-172-31-40-243", platform: "linux", is_remote: true })).toBe("Cloud Linux");
-    expect(deviceDisplayName({ label: "macOS - 36563bd2-ab96", platform: "darwin", is_remote: true })).toBe("Remote Mac");
+    expect(deviceDisplayName({ label: "macOS - 36563bd2-ab96", platform: "darwin", is_remote: true })).toBe("Cloud Mac");
+    expect(deviceDisplayName({ label: "macOS - 36563bd2-ab96-4045-8aec-894b84a2f66c.local", platform: "darwin", is_remote: true })).toBe("Cloud Mac");
+    expect(deviceDisplayName({ label: "macOS - ip-172-31-29-242.us-east-2.compute.internal", platform: "darwin", is_remote: true })).toBe("Cloud Mac");
   });
 
   it("falls back to the raw label and handles a missing device", () => {

@@ -1,4 +1,5 @@
 import { useCallback, useRef, useSyncExternalStore } from "react";
+import { desktopAppWindow, hasAppWindow } from "../lib/desktopApps";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import {
@@ -187,6 +188,10 @@ export function useChatToasts(): void {
         recentToastsFromChannel: recent.length,
       });
       if (tier === "silent") continue;
+      // While a Chat window exists it is where chat happens, toasts
+      // included: every other window stays quiet so a message never lands
+      // twice, and the card's click opens the channel where it lives.
+      if (hasAppWindow("chat") && desktopAppWindow() !== "chat") continue;
 
       recent.push(Date.now());
       burstRef.current.set(channelId, recent);

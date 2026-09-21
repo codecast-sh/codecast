@@ -554,6 +554,29 @@ describe("sessions sharing a checkout share one snapshot", () => {
 });
 
 describe("createWipSnapshotStrict (the cloud seed, ct-49433)", () => {
+  test("ignored workspace parents do not break a snapshot or include secrets", async () => {
+    const { cwd } = repo();
+    fs.appendFileSync(path.join(cwd, ".gitignore"), ".codecast/\n");
+    fs.mkdirSync(path.join(cwd, ".codecast"));
+    fs.writeFileSync(path.join(cwd, ".codecast/tracked.txt"), "old");
+    git(cwd, ["add", "-f", ".codecast/tracked.txt"]);
+    git(cwd, ["commit", "-qm", "tracked ignored fixture"]);
+    fs.writeFileSync(path.join(cwd, ".codecast/tracked.txt"), "new");
+    fs.mkdirSync(path.join(cwd, ".codecast/workspaces/private"), { recursive: true });
+    fs.writeFileSync(path.join(cwd, ".codecast/workspaces/private/Cookies"), "private cookie");
+    fs.writeFileSync(path.join(cwd, " literal[1].txt"), "literal path\n");
+    fs.unlinkSync(path.join(cwd, "tracked.txt"));
+    const index = fs.readFileSync(path.join(cwd, ".git/index"));
+    const snap = (await createWipSnapshotStrict(cwd, { exclude: CLOUD_SEED_EXCLUDES }))!;
+    expect(git(cwd, ["show", `${snap.sha}: literal[1].txt`])).toBe("literal path");
+    const files = git(cwd, ["ls-tree", "-r", "--name-only", snap.sha]);
+    expect(files).not.toContain(".env");
+    expect(files).not.toContain("Cookies");
+    expect(files.split("\n")).not.toContain("tracked.txt");
+    expect(git(cwd, ["show", `${snap.sha}:.codecast/tracked.txt`])).toBe("new");
+    expect(fs.readFileSync(path.join(cwd, ".git/index")).equals(index)).toBe(true);
+  });
+
   test("excludes the workspace state dirs even when .gitignore does not, and keeps a tracked .codecast file as HEAD has it", async () => {
     const { cwd } = repo();
     // A tracked file under .codecast stays as committed; the excluded dirs never enter.

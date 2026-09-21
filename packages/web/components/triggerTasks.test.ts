@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { cleanPromptSliceTitle, foreignTriggerConvIds, groupSessionsByTrigger, groupTriggerRowsByHome, isTriggerFailing, latestLoadedTriggerMessage, mergeTriggerRosters, partitionTriggerInbox, taskDisplayTitle, type TaskRow } from "./triggerTasks";
+import { cleanPromptSliceTitle, foreignTriggerConvIds, groupSessionsByTrigger, groupTriggerRowsByHome, isTriggerFailing, lastRunHeadline, latestLoadedTriggerMessage, mergeTriggerRosters, partitionTriggerInbox, splitResultSummary, taskDisplayTitle, taskGist, type TaskRow } from "./triggerTasks";
 import { isSessionHardBlocked, type InboxSession } from "../store/inboxStore";
 import { orderSections } from "../store/__tests__/placeTestHarness";
 
@@ -61,6 +61,45 @@ const task = (id: string, extra: Partial<TaskRow> = {}): TaskRow => ({
   run_count: 1,
   created_at: Date.now() - 86_400_000,
   ...extra,
+});
+
+describe("taskGist — the row's standing description, one line", () => {
+  it("prefers the Haiku summary and cuts it at a word", () => {
+    const long = "Scans every card marked needs-input, " + "fixes misclassified ones, ".repeat(12) + "and escalates.";
+    const gist = taskGist({ display_summary: long, prompt: "ignored" });
+    expect(gist.length).toBeLessThanOrEqual(201);
+    expect(gist.endsWith("…")).toBe(true);
+    expect(gist).not.toMatch(/\s…$/);
+  });
+  it("falls back to the prompt's first real paragraph as prose, markdown stripped", () => {
+    const prompt = "# Check CI\n\n- Look at `main`\n- Report **failures**\n\nSecond paragraph never shows.";
+    expect(taskGist({ prompt })).toBe("Look at main Report failures");
+    // A heading with nothing under it is all there is.
+    expect(taskGist({ prompt: "# Just a heading" })).toBe("Just a heading");
+  });
+  it("never returns markdown furniture or an empty string for a blank summary", () => {
+    expect(taskGist({ display_summary: "  ", prompt: "> quoted line" })).toBe("quoted line");
+    expect(taskGist({ prompt: "" })).toBe("");
+  });
+});
+
+describe("lastRunHeadline — the row's outcome, one line", () => {
+  it("drops the daemon's Failed: prefix and keeps the first clause", () => {
+    expect(lastRunHeadline({ last_run_summary: "Failed: the build broke on main; three tests red. Details follow." })).toBe("the build broke on main");
+  });
+  it("is undefined with no run summary", () => {
+    expect(lastRunHeadline({})).toBeUndefined();
+    expect(lastRunHeadline({ last_run_summary: "  " })).toBeUndefined();
+  });
+  it("cuts a clause-less paragraph at a word with an ellipsis", () => {
+    const h = lastRunHeadline({ last_run_summary: "word ".repeat(80) })!;
+    expect(h.length).toBeLessThanOrEqual(201);
+    expect(h.endsWith("…")).toBe(true);
+  });
+  it("splitResultSummary separates headline from detail at the first boundary", () => {
+    expect(splitResultSummary("All measures hold; nothing needs Ashot.")).toEqual({ headline: "All measures hold", detail: "nothing needs Ashot." });
+    expect(splitResultSummary("Short")).toEqual({ headline: "Short", detail: null });
+  });
 });
 
 describe("isTriggerFailing", () => {

@@ -99,7 +99,7 @@ let command = args.at(-1);
 fs.appendFileSync(process.env.CLOUD_TEST_LOG, JSON.stringify(command) + "\\n");
 if (process.env.CLOUD_TEST_UNCONFIRMED && command.includes("bun -e")) process.exit(0);
 // The host's daemon answering "cast remote hosts" (learnHostDeviceId).
-if (command.startsWith("cast remote hosts")) { process.stdout.write("test host (0123456789abcdef)\\n"); process.exit(0); }
+if (command.includes("cast remote hosts")) { process.stdout.write("test host (0123456789abcdef)\\n"); process.exit(0); }
 // The host git setup (cloud/hostGit.ts): a transport failure when asked for, else the
 // script runs for real against the redirected HOME below.
 if (command === 'bash -c "$(cat)"' && process.env.CLOUD_TEST_FAIL_HOSTGIT) { fs.readFileSync(0); process.stderr.write("ssh: connect to host: Connection refused\\n"); process.exit(255); }
@@ -692,6 +692,20 @@ describe("agent config staging", () => {
     git(repo, "init", "-q", "-b", "main");
   }
 
+  test.each([1, 10])("explicit workspace secrets travel byte for byte with %i files", (count) => {
+    gitInit(laptop);
+    fs.mkdirSync(remote);
+    write(laptop, ".codecast/workspace.toml", '[setup]\ncopy = ["secrets"]\n');
+    const secret = "OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz1234567890\n";
+    for (let n = 0; n < count; n++) write(laptop, `secrets/.env.${n}`, secret);
+    copyCloudFiles(host, laptop, remote);
+    for (let n = 0; n < count; n++) {
+      expect(fs.readFileSync(path.join(remote, `secrets/.env.${n}`), "utf8")).toBe(secret);
+      expect(fs.statSync(path.join(remote, `secrets/.env.${n}`)).mode & 0o777).toBe(0o600);
+    }
+    expect(fs.readFileSync(process.env.CLOUD_TEST_LOG!, "utf8")).not.toContain(secret.trim());
+  }, 60_000);
+
   test("stages .claude/settings.local.json scrubbed + remapped and CLAUDE.local.md remapped, 0600, under the inputs dir", () => {
     gitInit(laptop);
     gitInit(remote);
@@ -700,6 +714,8 @@ describe("agent config staging", () => {
     write(laptop, "CLAUDE.local.md", `# mine at ${home}/x\n`);
     const inputRoot = stageCloudInputs(host, laptop, remote, "cloud-1");
     expect(inputRoot).toBe(path.join(remote, ".codecast/workspaces/cloud-1/inputs"));
+    const commands = fs.readFileSync(process.env.CLOUD_TEST_LOG!, "utf8").trim().split("\n").map((line) => JSON.parse(line) as string);
+    for (const command of commands.filter((entry) => entry.includes("bun -e"))) expect(command).toContain(":/opt/homebrew/bin:");
     const settings = JSON.parse(fs.readFileSync(path.join(inputRoot, ".claude/settings.local.json"), "utf8"));
     expect(settings).toEqual({ env: { NOTES: "/Users/ubuntu/notes" }, permissions: { allow: ["Bash(ls)"] } });
     expect(fs.readFileSync(path.join(inputRoot, "CLAUDE.local.md"), "utf8")).toBe("# mine at /Users/ubuntu/x\n");

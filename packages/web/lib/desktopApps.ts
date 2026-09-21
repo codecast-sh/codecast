@@ -17,6 +17,8 @@ import {
   sectionForRoute,
 } from "../../electron/appWindows.mjs";
 import { bridge, getDesktopWindowRole, isDetachedTabWindow, isElectron } from "./desktop";
+import { appForRoute as appOfRoute } from "../../electron/appWindows.mjs";
+import { appWindowPresence, requestAppWindowOpen } from "./appWindowRegistry";
 import { isNonTabRoute } from "./tabRoutes";
 
 export { DESKTOP_APPS, appForRoute, isDesktopApp, sectionForRoute };
@@ -49,9 +51,45 @@ export function desktopAppWindow(path?: string): DesktopApp | null {
   return isDesktopApp(app) ? (app as DesktopApp) : null;
 }
 
+/** Which app windows exist: the shell's word where it has one (it made the
+ *  windows, and it says so on every change), else the windows' own word
+ *  (lib/appWindowRegistry), so a breakout on an older shell counts the
+ *  moment it shows chat. Never both: a goodbye that died with its window
+ *  would otherwise outlive the shell's fresh "none". */
+export function openAppWindows(): Partial<Record<DesktopApp, boolean>> {
+  const shell = getDesktopWindowRole().apps;
+  return (shell ?? appWindowPresence()) as Partial<Record<DesktopApp, boolean>>;
+}
+
 /** An app window exists somewhere — this one or another. */
 export function hasAppWindow(app: DesktopApp): boolean {
-  return desktopAppWindow() === app || getDesktopWindowRole().apps[app] === true;
+  return desktopAppWindow() === app || openAppWindows()[app] === true;
+}
+
+/** Where `path` belongs, asked without acting: this window, the main window,
+ *  or an app window that exists (lib/appWindowRegistry, the role). */
+export function routeOwner(path: string): "here" | "main" | DesktopApp {
+  if (!isElectron() || isNonTabRoute(path)) return "here";
+  const here = desktopAppWindow();
+  // On a shell with app windows, a plain breakout never shows an app's
+  // routes: a Cmd+N window that wandered into chat would be a second chat
+  // window the moment the real one opened. The shell opens or raises the
+  // app's window for it instead (routeToWindow does the same from its side).
+  if (here === null && isDetachedTabWindow() && canOpenDesktopApp()) {
+    const app = appOfRoute(path);
+    if (app) return app as DesktopApp;
+  }
+  return placeRoute(path, here, openAppWindows());
+}
+
+/** Bring an app's window to the front, wherever the verb for that lives. */
+export function raiseDesktopApp(app: DesktopApp): boolean {
+  const open = bridge("openAppWindow");
+  if (open) {
+    void open(app, null);
+    return true;
+  }
+  return requestAppWindowOpen(app, null);
 }
 
 /** Whether this shell can open app windows at all (an older build cannot;
@@ -93,19 +131,20 @@ export function runPlaced<T>(fn: () => T): T {
  * place one window owns.
  */
 export function routeElsewhere(path: string): boolean {
-  if (placedByShell || !isElectron()) return false;
-  if (isNonTabRoute(path)) return false;
-  const place = placeRoute(path, desktopAppWindow(), getDesktopWindowRole().apps);
+  if (placedByShell) return false;
+  const place = routeOwner(path);
   if (place === "here") return false;
   const route = bridge("routeNavigate");
   if (route) {
     void route(path);
     return true;
   }
-  // A shell from before app windows cannot land a path in one, but it can
-  // still hand one to the main window: the same verb the people and voice
-  // windows use for that (navigateFromHere). Chat stays chat there too.
-  const toMain = place === "main" ? bridge("paletteNavigate") : undefined;
+  // A shell from before app windows cannot land a path in one. The windows
+  // can still do it among themselves: an app window takes the path over the
+  // registry's channel, and the main window takes it through the verb the
+  // people and voice windows already use for that (navigateFromHere).
+  if (place !== "main") return requestAppWindowOpen(place, path);
+  const toMain = bridge("paletteNavigate");
   if (!toMain) return false;
   toMain(path);
   return true;

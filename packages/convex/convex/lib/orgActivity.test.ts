@@ -167,7 +167,8 @@ describe("stale tasks and projects (S9)", () => {
     const a = computeStale(inputs({
       tasks: [
         { id: "task_inprog", short_id: "ct-1", title: "Wire it", status: "in_progress", updated_at: NOW - 16 * D },
-        { id: "task_open_landed", short_id: "ct-2", title: "Ship it", status: "open", updated_at: NOW - 2 * D },
+        // Landed by a commit and quiet since: a landed commit on a row written this week is not a finished task (the newest word tests below).
+        { id: "task_open_landed", short_id: "ct-2", title: "Ship it", status: "open", updated_at: NOW - 16 * D },
         { id: "task_fresh", short_id: "ct-3", title: "Fresh", status: "in_progress", updated_at: NOW - 2 * D },
         { id: "task_done", short_id: "ct-4", title: "Done", status: "done", updated_at: NOW - 30 * D },
         // Bulk filed as in progress on a day nobody worked it, never bound: the 44 rows of op-6.
@@ -204,5 +205,57 @@ describe("stale tasks and projects (S9)", () => {
       sessions: [{ _id: "s1", state: "working", project_path: "/repo/acme/packages/web", repo: "acme/app" }],
     }));
     expect(a.projects.map((p) => [p.title, p.reason])).toEqual([["Legacy", "no activity 30d"]]);
+  });
+});
+
+// Union, 2026-09-20 (docs/architecture/org-eval.md ground truth): 8 of 20
+// flagged records carried a reason that was false, and every one of them was a
+// row still being worked. The clock now reads the row's newest word.
+describe("stale reasons read the row's newest word", () => {
+  const base: ActivityInputs = { now: NOW, commits: [], sessions: [], projects: [], plans: [], tasks: [], members: [] };
+  const task = (over: Partial<ActivityInputs["tasks"][number]>) => ({ id: "t1", short_id: "ct-1", title: "T", status: "in_progress", updated_at: NOW - 20 * D, ...over });
+
+  test("a commit on a feature branch or a pull request is not a landing; one on main is", () => {
+    const withBranch = (branch: string | null) => computeStale({ ...base, tasks: [task({ status: "open" })], commits: [{ timestamp: NOW - D, task_ids: ["t1"], branch }] }).tasks.map((t) => t.reason);
+    expect(withBranch("ct-1-peer-land")).toEqual([]);
+    expect(withBranch("main")).toEqual(["commits landed, still open"]);
+    expect(withBranch(null)).toEqual(["commits landed, still open"]);
+  });
+
+  test("a task written this week is alive whatever its commits or sessions say", () => {
+    const r = computeStale({ ...base,
+      tasks: [task({ updated_at: NOW - 2 * 3_600_000 }), task({ id: "t2", short_id: "ct-2", updated_at: NOW - 20 * D })],
+      commits: [{ timestamp: NOW - D, task_ids: ["t1", "t2"], branch: "main" }],
+    });
+    expect(r.tasks.map((t) => t.short_id)).toEqual(["ct-2"]);
+  });
+
+  test("a session that touched the task this week keeps it alive even when its state is done", () => {
+    const r = computeStale({ ...base,
+      tasks: [task({})],
+      sessions: [{ _id: "s1", state: "done", updated_at: NOW - 6 * D, active_task_id: "t1" }],
+    });
+    expect(r.tasks).toEqual([]);
+    const quiet = computeStale({ ...base, tasks: [task({})], sessions: [{ _id: "s1", state: "done", updated_at: NOW - 16 * D, active_task_id: "t1" }] });
+    expect(quiet.tasks.map((t) => t.reason)).toEqual(["in progress, sessions done 14d"]);
+  });
+
+  test("a comment on the plan or a session bound to it is activity for the 21 day clock", () => {
+    const plan = { id: "p1", short_id: "pl-1", title: "P", status: "draft", updated_at: NOW - 40 * D };
+    const openTask = task({ status: "open", plan_id: "p1", updated_at: NOW - 40 * D });
+    expect(computeStale({ ...base, plans: [plan], tasks: [openTask] }).plans.map((p) => p.reason)).toEqual(["no activity 21d"]);
+    expect(computeStale({ ...base, plans: [{ ...plan, last_entry_at: NOW - 9 * D }], tasks: [openTask] }).plans).toEqual([]);
+    // A bulk write to the row is not a word: only an entry on the plan's timeline moves the clock.
+    expect(computeStale({ ...base, plans: [{ ...plan, updated_at: NOW - 2 * D }], tasks: [openTask] }).plans.map((p) => p.reason)).toEqual(["no activity 21d"]);
+    expect(computeStale({ ...base, plans: [plan], tasks: [openTask], sessions: [{ _id: "s1", state: "done", updated_at: NOW - 9 * D, active_plan_id: "p1" }] }).plans).toEqual([]);
+  });
+
+  test("a plan marked done whose open tasks are still written, or that a live session works, is flagged the other way", () => {
+    const plan = { id: "p1", short_id: "pl-1", title: "P", status: "done", updated_at: NOW - 5 * D };
+    expect(computeStale({ ...base, plans: [plan], tasks: [task({ plan_id: "p1", updated_at: NOW - 3 * 3_600_000 })] }).plans).toEqual([expect.objectContaining({ short_id: "pl-1", reason: "marked done, still worked" })]);
+    expect(computeStale({ ...base, plans: [plan], tasks: [task({ plan_id: "p1", status: "done", updated_at: NOW - 3 * 3_600_000 })] }).plans).toEqual([]);
+    // A follow up left open under a finished plan is not the plan still running.
+    expect(computeStale({ ...base, plans: [plan], tasks: [task({ plan_id: "p1", status: "open", updated_at: NOW - 3 * 3_600_000 })] }).plans).toEqual([]);
+    expect(computeStale({ ...base, plans: [plan], sessions: [{ _id: "s1", state: "working", updated_at: NOW, active_plan_id: "p1" }] }).plans.map((p) => p.reason)).toEqual(["marked done, still worked"]);
   });
 });

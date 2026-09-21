@@ -5,7 +5,8 @@
 // and holds "switching" until the swap lands or fails. Shared by the header
 // chip and Settings so neither surface can toast success on queue.
 
-import { useRef, useState } from "react";
+import { create } from "zustand";
+import { captureException } from "@sentry/react";
 import { useMutation } from "convex/react";
 import { toast } from "sonner";
 import { persistentToast } from "../lib/persistentToast";
@@ -25,6 +26,7 @@ import { useWatchEffect } from "./useWatchEffect";
 export type MachineSwitchOutcome = {
   kind: "success" | "error";
   profile: string;
+  email?: string;
   message: string;
 };
 
@@ -34,19 +36,28 @@ type PendingSwitch = {
   commandId: Id<"daemon_commands"> | null;
   startedAt: number;
   toastId: string;
+  requestId: string;
+  announcedPhase?: MachineSwitchPhase;
 };
+
+type SwitchState = { pending: PendingSwitch | null; outcome: MachineSwitchOutcome | null };
+const idle: SwitchState = { pending: null, outcome: null };
+const useSwitchState = create<Record<string, SwitchState>>(() => ({}));
 
 export function useMachineAccountSwitch(opts: { deviceId?: string; activeEmail?: string }): {
   switchTo: (profile: string, email?: string) => Promise<void>;
-  cancel: () => void;
   switching: string | null;
   phase: MachineSwitchPhase;
   outcome: MachineSwitchOutcome | null;
   clearOutcome: () => void;
 } {
   const requestSwitch = useMutation(api.accountSwitch.requestAccountSwitch);
-  const [pending, setPending] = useState<PendingSwitch | null>(null);
-  const [outcome, setOutcome] = useState<MachineSwitchOutcome | null>(null);
+  const deviceId = opts.deviceId ?? "";
+  const state = useSwitchState((s) => s[deviceId] ?? idle);
+  const { pending } = state;
+  const outcome = state.outcome?.kind === "success" &&
+    !profileIsCurrentLogin({ name: state.outcome.profile, email: state.outcome.email }, opts.activeEmail)
+    ? null : state.outcome;
   const { data: cmd } = useQueryNoThrow(
     api.users.getCommandResult,
     pending?.commandId ? { command_id: pending.commandId } : "skip",
@@ -58,88 +69,80 @@ export function useMachineAccountSwitch(opts: { deviceId?: string; activeEmail?:
     command: cmd ?? undefined,
     now,
   });
-  const announced = useRef<string | null>(null);
 
   useWatchEffect(() => {
-    if (!pending) return;
-    if (resolved.phase === "slow") {
-      const key = `${pending.profile}:slow`;
-      if (announced.current === key) return;
-      announced.current = key;
-      toast.message(machineSwitchPendingCopy("slow", pending.profile), { id: pending.toastId, ...persistentToast });
+    if (!pending || useSwitchState.getState()[deviceId]?.pending !== pending) return;
+    if (resolved.phase === "slow" || resolved.phase === "confirming") {
+      if (pending.announcedPhase === resolved.phase) return;
+      useSwitchState.setState({ [deviceId]: { ...state, pending: { ...pending, announcedPhase: resolved.phase } } });
+      toast.message(machineSwitchPendingCopy(resolved.phase, pending.profile), { id: pending.toastId, ...persistentToast });
       return;
     }
     if (resolved.phase === "succeeded") {
-      const key = `${pending.profile}:ok`;
-      if (announced.current === key) return;
-      announced.current = key;
+      useSwitchState.setState({ [deviceId]: {
+        pending: null,
+        outcome: { kind: "success", profile: pending.profile, email: pending.email, message: `Now using ${pending.profile}` },
+      } });
       const copy = machineSwitchSuccessCopy(pending.profile);
       toast.success(copy.title, { id: pending.toastId, description: copy.description });
-      setOutcome({ kind: "success", profile: pending.profile, message: `Now using ${pending.profile}` });
-      setPending(null);
       return;
     }
     if (resolved.phase === "failed") {
-      const key = `${pending.profile}:err`;
-      if (announced.current === key) return;
-      announced.current = key;
       const message = resolved.error ?? "Switch failed";
+      useSwitchState.setState({ [deviceId]: {
+        pending: null,
+        outcome: { kind: "error", profile: pending.profile, message },
+      } });
       toast.error(message, { id: pending.toastId, duration: 12_000 });
-      setOutcome({ kind: "error", profile: pending.profile, message });
-      setPending(null);
     }
-  }, [pending, resolved.phase, resolved.error]);
-
-  const cancel = () => {
-    if (!pending) return;
-    toast.dismiss(pending.toastId);
-    announced.current = `${pending.profile}:cancel`;
-    setPending(null);
-    setOutcome(null);
-  };
+  }, [deviceId, state, pending, resolved.phase, resolved.error]);
 
   const switchTo = async (profile: string, email?: string) => {
-    if (!opts.deviceId) {
+    if (!deviceId) {
       toast.error("No online daemon to switch accounts");
       return;
     }
+    if (useSwitchState.getState()[deviceId]?.pending) return;
     if (profileIsCurrentLogin({ name: profile, email }, opts.activeEmail)) {
       toast.success(`Already on "${profile}"`);
-      setOutcome({ kind: "success", profile, message: `Already using ${profile}` });
-      if (pending) {
-        toast.dismiss(pending.toastId);
-        setPending(null);
-      }
+      useSwitchState.setState({ [deviceId]: { pending: null, outcome: { kind: "success", profile, email, message: `Already using ${profile}` } } });
       return;
     }
-    if (pending?.profile === profile) return;
-    const toastId = `acct-switch-${opts.deviceId}`;
-    announced.current = null;
-    setOutcome(null);
-    setPending({ profile, email, commandId: null, startedAt: Date.now(), toastId });
+    const toastId = `acct-switch-${deviceId}`;
+    const requestId = crypto.randomUUID();
+    useSwitchState.setState({ [deviceId]: {
+      pending: { profile, email, commandId: null, startedAt: Date.now(), toastId, requestId },
+      outcome: null,
+    } });
     toast.message(machineSwitchPendingCopy("waiting", profile), { id: toastId, ...persistentToast });
     try {
       const res = await requestSwitch({
         profile,
-        device_id: opts.deviceId,
+        device_id: deviceId,
         continue_blocked: false,
       });
       const commandId = (res.command_ids?.[0] ?? null) as Id<"daemon_commands"> | null;
-      setPending((cur) => (cur && cur.profile === profile ? { ...cur, commandId } : cur));
+      const current = useSwitchState.getState()[deviceId];
+      if (current?.pending?.requestId !== requestId) return;
+      if (!commandId) throw new Error("No daemon accepted the account switch");
+      useSwitchState.setState({ [deviceId]: { ...current, pending: { ...current.pending, commandId } } });
     } catch (err) {
+      captureException(err);
+      if (useSwitchState.getState()[deviceId]?.pending?.requestId !== requestId) return;
       const message = err instanceof Error ? err.message : "Switch failed";
       toast.error(message, { id: toastId, duration: 12_000 });
-      setOutcome({ kind: "error", profile, message });
-      setPending((cur) => (cur && cur.profile === profile ? null : cur));
+      useSwitchState.setState({ [deviceId]: { pending: null, outcome: { kind: "error", profile, message } } });
     }
   };
 
   return {
     switchTo,
-    cancel,
     switching: pending?.profile ?? null,
     phase: pending ? resolved.phase : outcome?.kind === "error" ? "failed" : outcome?.kind === "success" ? "succeeded" : "idle",
     outcome,
-    clearOutcome: () => setOutcome(null),
+    clearOutcome: () => {
+      const current = useSwitchState.getState()[deviceId];
+      if (current?.outcome) useSwitchState.setState({ [deviceId]: { ...current, outcome: null } });
+    },
   };
 }

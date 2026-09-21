@@ -13,12 +13,11 @@ const ROOT = join(import.meta.dir, "..", "..");
 const CAP = 1500;
 const ALLOWANCE: Record<string, number> = {
   "store/inboxStore.ts": 13400,
-  "components/GlobalSessionPanel.tsx": 5900,
+  "components/GlobalSessionPanel.tsx": 5300,
   "components/ConversationView.tsx": 5900,
   "components/CommandPalette.tsx": 3650,
   "components/MessageInput.tsx": 2800,
   "app/tasks/page.tsx": 1900,
-  "app/triggers/page.tsx": 1900,
   "lib/calls/walkie.ts": 1850,
   "components/Sidebar.tsx": 1750,
   "lib/desktop.ts": 1700,

@@ -20,12 +20,13 @@ import {
   type DropZone,
   type SplitEdge,
   type StageNode,
+  setLeafPath,
 } from "../store/stageSplit";
 import { tabNavigate } from "../src/compat/tabRouting";
-import { isNonTabRoute } from "./tabRoutes";
+import { DEFAULT_TAB_PATH, isNonTabRoute } from "./tabRoutes";
 import { inboxTabSessionId, pathLabel, tabNeedsUrlRestore } from "./pathLabel";
 import { borrowsTabShell } from "./desktop";
-import { routeElsewhere } from "./desktopApps";
+import { routeElsewhere, routeOwner } from "./desktopApps";
 import { browserRoutePath, hasPaneHost, postToPaneHost, type BrowserSource } from "./browserPane";
 import { registerSplitOpener } from "./openIntent";
 import { rememberBrowserPaneUrl } from "./browserPaneRecents";
@@ -160,6 +161,45 @@ function syncUrl() {
   if (isNonTabRoute(window.location.pathname)) return;
   if (!tabNeedsUrlRestore(window.location.pathname, tab.path)) return;
   window.history.replaceState({ tabNav: true, tabId: tab.id }, "", tab.path);
+}
+
+/**
+ * Hand every tab and pane of this window that shows a route another window
+ * owns to that window, so two windows never show the same thing. Run when an
+ * app window appears (lib/appWindowRegistry, the role): the tabs that were
+ * on chat before the Chat window opened are the case. What the person was
+ * looking at goes to the window that owns it; the rest simply stop showing
+ * it. A tab that would be left with nothing goes to the inbox; a pane keeps
+ * its place and shows the inbox instead, since a split is the person's
+ * arrangement and not this rule's to take apart.
+ */
+export function yieldOwnedRoutes(): void {
+  if (borrowsTabShell()) return;
+  const st = useInboxStore.getState();
+  const owned = (p: string) => routeOwner(p) !== "here";
+  for (const tab of [...st.tabs]) {
+    const active = tab.id === st.activeTabId;
+    if (tab.layout) {
+      let layout = tab.layout;
+      let touched = false;
+      for (const leaf of leavesOf(layout)) {
+        if (!owned(leaf.path)) continue;
+        if (active && leaf.id === tab.focusedLeafId) routeElsewhere(leaf.path);
+        layout = setLeafPath(layout, leaf.id, DEFAULT_TAB_PATH);
+        touched = true;
+      }
+      if (!touched) continue;
+      const focused = tab.focusedLeafId ? findLeaf(layout, tab.focusedLeafId) : null;
+      const path = owned(tab.path) ? (focused?.path ?? DEFAULT_TAB_PATH) : tab.path;
+      st.updateTab(tab.id, { layout, path, title: pathLabel(path) });
+      continue;
+    }
+    if (!owned(tab.path)) continue;
+    if (active) routeElsewhere(tab.path);
+    if (useInboxStore.getState().tabs.length > 1) st.closeTab(tab.id);
+    else st.updateTab(tab.id, { path: DEFAULT_TAB_PATH, title: pathLabel(DEFAULT_TAB_PATH) });
+  }
+  syncUrl();
 }
 
 export function stageFocus(leafId: string) {

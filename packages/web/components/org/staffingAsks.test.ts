@@ -110,3 +110,24 @@ describe("the letter", () => {
     expect(letterIntro("the agent that wrote this", false)).toMatch(/^I am an agent that looked at how the work here is organized/);
   });
 });
+
+// Round 1 of the org eval (docs/architecture/org-eval.md): a letter longer
+// than the shaped fold allows fell back to its introduction alone, so the
+// reader saw no ask; and the page introduced an author who had already
+// introduced itself.
+import { introducesItself } from "./staffingAsks";
+const long = (n: number) => Array.from({ length: n }, (_, i) => `Sentence number ${i + 1} of a long paragraph.`).join(" ");
+
+describe("letterParts keeps the first ask on the first screen", () => {
+  test("an unshaped letter whose second paragraph opens the first ask keeps it in the lead", () => {
+    const md = `${long(30)}\n\nFirst, correct the records. ${long(25)}\n\nSecond, add three roles. ${long(20)}`;
+    const { lead, rest } = letterParts(md);
+    expect(lead).toContain("First, correct the records.");
+    expect(rest).toContain("Second, add three roles.");
+  });
+  test("the page's own introduction is skipped when the letter opens with one", () => {
+    expect(introducesItself("I am the reviewer for the agents at Union. I read 30 days.")).toBe(true);
+    expect(introducesItself("**I am the reviewer** for Union.")).toBe(true);
+    expect(introducesItself("Union has no goal written down.")).toBe(false);
+  });
+});

@@ -11,7 +11,7 @@ import { collectOrgSessions, requireWorkspaceCaller, resolveScope, sessionsInSco
 import { performRehomeSessions, type RehomeResult } from "./sessionOwnership";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { activitySessionsFromScan, latestEventAnywhere, readActivityCommits, readWorkTasks, reposFromScan, roleActivity } from "./orgHealth";
-import { computeOrgActivity } from "./lib/orgActivity";
+import { activityPlanOf, computeOrgActivity } from "./lib/orgActivity";
 import { computeCoverage } from "./lib/orgCoverage";
 import { isActiveTask } from "@codecast/shared/tasks";
 import { capacity } from "@codecast/shared/contracts/orgCapacity";
@@ -328,22 +328,47 @@ export async function computeAnalysisOrg(ctx: Ctx, userId: Id<"users">, teamId: 
 // a standing purpose is the analyzer's reading. A session that already is a
 // role's standing session (or the workspace's standing agent) is left out; a
 // session that reports to a role stays in, with the role named, because a
-// manager under a manager is still a manager. The list is the busiest few,
-// and `old_enough` says how many sessions the age rule let through, so the
-// analyzer can say what it did not see.
+// manager under a manager is still a manager. The list is the sessions
+// with the most evidence of a standing purpose, and `old_enough` says how
+// many sessions the age rule let through, so the analyzer can say what it
+// did not see. The evidence, strongest first: a routine that still wakes it,
+// activity this week, a pinned state, then helpers and messages. Ranking by
+// helpers alone listed the largest finished jobs and left out a session a
+// routine wakes every day (the Union cold email optimizer, 2026-09-20).
 type OrgScanResult = Awaited<ReturnType<typeof collectOrgSessions>>;
+const LONG_RUNNING_RECENT_MS = 7 * 24 * 60 * 60 * 1000;
 async function longRunningSessions(ctx: Ctx, scan: OrgScanResult, now: number, work: AnalysisHandoff) {
+  // The live recurring routines, by the session each wakes, read once ahead
+  // of the ranking so every old session is judged by the same facts.
+  const routinesBySession = new Map<string, any[]>();
+  for (const status of ["scheduled", "running"] as const) {
+    const rows: any[] = await ctx.db.query("agent_tasks").withIndex("by_status_run_at", (q: any) => q.eq("status", status)).collect();
+    for (const t of rows) {
+      if (t.schedule_type === "once" || !t.originating_conversation_id) continue;
+      const k = String(t.originating_conversation_id);
+      routinesBySession.set(k, [...(routinesBySession.get(k) ?? []), t]);
+    }
+  }
+  const evidence = ({ session, raw }: { session: any; raw: any }) => ({
+    routine: routinesBySession.has(String(raw._id)) ? 1 : 0,
+    recent: now - (session.updated_at ?? 0) < LONG_RUNNING_RECENT_MS ? 1 : 0,
+    pinned: raw.thread_state ? 1 : 0,
+    helpers: session.subagent_count as number,
+    messages: (raw.message_count ?? 0) as number,
+  });
   const old = Array.from(scan.sessions.values())
     .filter(({ raw }) => !raw.anchor_id && !raw.standing_role_id && now - (raw.started_at ?? raw._creationTime ?? now) >= LONG_RUNNING_MIN_AGE_MS)
-    .sort((a, b) => b.session.subagent_count - a.session.subagent_count || (b.raw.message_count ?? 0) - (a.raw.message_count ?? 0));
+    .sort((a, b) => {
+      const x = evidence(a), y = evidence(b);
+      return y.routine - x.routine || y.recent - x.recent || y.pinned - x.pinned || y.helpers - x.helpers || y.messages - x.messages;
+    });
   const projectByPath = new Map(work.projects.filter((p) => p.project_path).map((p) => [p.project_path!, p]));
   const projectById = new Map(work.projects.map((p) => [p.id, p]));
   const roleHandle = new Map(scan.roles.map((r: any) => [String(r._id), r.handle]));
   const rows = [];
   for (const { session, raw } of old.slice(0, ANALYSIS_CAPS.long_running)) {
     const startedAt = raw.started_at ?? raw._creationTime;
-    const routines: any[] = (await ctx.db.query("agent_tasks").withIndex("by_originating_conversation", (q: any) => q.eq("originating_conversation_id", raw._id)).collect())
-      .filter((t: any) => (t.status === "scheduled" || t.status === "running") && t.schedule_type !== "once");
+    const routines: any[] = routinesBySession.get(String(raw._id)) ?? [];
     const opening: any[] = await ctx.db.query("messages").withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", raw._id)).order("asc").take(8);
     const first = opening.find((m) => m.role === "user" && typeof m.content === "string" && m.content.trim());
     // The projects it touched, strongest evidence first: the tasks it filed,
@@ -410,7 +435,7 @@ export async function computeAnalysisActivity(ctx: Ctx, userId: Id<"users">, tea
     commits,
     sessions: activitySessionsFromScan(scan),
     projects: projects.map((p: any) => ({ id: String(p._id), title: p.title, status: p.status, project_path: p.project_path ?? null, updated_at: p.updated_at ?? p._creationTime })),
-    plans: plans.map((p: any) => ({ id: String(p._id), short_id: p.short_id, title: p.title, status: p.status, project_id: p.project_id ? String(p.project_id) : null, updated_at: p.updated_at ?? p._creationTime })),
+    plans: plans.map(activityPlanOf),
     tasks: tasks.map((t: any) => ({ id: String(t._id), short_id: t.short_id, title: t.title, status: t.status, plan_id: t.plan_id ? String(t.plan_id) : null, project_id: t.project_id ? String(t.project_id) : null, updated_at: t.updated_at ?? t._creationTime, conversation_ids: (t.conversation_ids ?? []).map((id: any) => String(id)) })),
     members,
     maxAreas: 40,

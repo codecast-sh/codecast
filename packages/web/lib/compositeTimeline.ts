@@ -53,6 +53,14 @@ export type TimelineItem =
   | { type: 'pull_request'; data: PullRequest; timestamp: number }
   | { type: 'external_event'; data: ExternalEventRecord; timestamp: number };
 
+export function mergeTimelineMessages(base: TimelineItem[], messages: Message[]): TimelineItem[] {
+  if (messages.length === 0) return base;
+  return [
+    ...base,
+    ...messages.map((data) => ({ type: 'message' as const, data, timestamp: data.timestamp })),
+  ].sort((a, b) => a.timestamp - b.timestamp);
+}
+
 // Cache keyed by the messages array reference. Lets re-visits to a previously-built
 // timeline (e.g. switching back to a conversation whose messages haven't mutated)
 // skip the O(n log n) sort + O(n) dedupe entirely.
