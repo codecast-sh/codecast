@@ -293,15 +293,21 @@ export class RecursiveWatcher extends EventEmitter {
   // fire the callback for any file that is new or whose mtime advanced since it
   // was last seen; emit=false only records state (priming).
   private async walkTree(gen: number, emit: boolean, collect?: (f: WalkFile) => void): Promise<void> {
+    const unseen = emit ? new Set(this.knownMtime.keys()) : new Set<string>();
     await walkFiles(
       this.watchPath,
       { maxDepth: this.maxDepth, dirFilter: this.dirFilter, fileFilter: this.filter, policy: this.scanPolicy, signal: this.scanController.signal },
       (f) => {
         if (gen !== this.generation) return;
+        unseen.delete(f.path);
         collect?.(f);
         this.noteMtime(f.path, f.stat.mtimeMs, emit || this.mode === "native" && f.stat.mtimeMs >= this.primingStartedAt + 1);
       },
     );
+    for (const file of unseen) {
+      if (gen !== this.generation) return;
+      await this.probe(gen, file);
+    }
   }
 
   private startChokidar(): void {

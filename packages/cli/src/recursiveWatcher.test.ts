@@ -37,6 +37,7 @@ describe("RecursiveWatcher", () => {
       filter: (rel) => rel.endsWith(".jsonl"),
       callback: (filePath, eventType) => events.push({ path: filePath, type: eventType }),
       debounceMs: 50,
+      rescanIntervalMs: 50,
     });
     cleanups.push(() => { watcher.stop(); fs.rmSync(root, { recursive: true, force: true }); });
     watcher.start();
