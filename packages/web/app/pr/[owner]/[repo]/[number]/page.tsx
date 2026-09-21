@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState, type RefCallback } from "react";
-import { useAction, useMutation } from "convex/react";
+import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { codeThreadRootKey } from "@codecast/shared/comments";
 import { repoObjectGitHubUrl } from "@codecast/shared/entities";
@@ -27,6 +27,7 @@ import { useSyncPRExternalEvents, useExternalEvents } from "../../../../../hooks
 import { useCodeComments, useSyncPRCodeComments } from "../../../../../hooks/useSyncCodeComments";
 import { useSyncPullRequest, usePullRequest } from "../../../../../hooks/useSyncTimeline";
 import { usePRDetails } from "../../../../../hooks/usePRDetails";
+import { usePRLookup } from "../../../../../hooks/usePRLookup";
 import { useTitlebarHead } from "../../../../../hooks/useTitlebarHead";
 import { useInboxStore } from "../../../../../store/inboxStore";
 import {
@@ -65,23 +66,33 @@ const TABS: { key: Tab; label: string; icon: typeof GitPullRequest; digit: strin
 ];
 
 
-function PRNotFound({ repository, number }: { repository: string; number: number }) {
+function PRUnavailable({ repository, number, reason, error, retry }: {
+  repository: string;
+  number: number;
+  reason?: string;
+  error?: string;
+  retry: () => void;
+}) {
+  const needsInstallation = !error && reason === "no_team_installation";
+  const notFound = !error && reason === "not_on_github";
   return (
     <div className="h-full flex flex-col items-center justify-center text-sol-text-muted">
       <GitPullRequest className="w-10 h-10 mb-3 opacity-30" />
-      <h2 className="text-base font-medium mb-1">Pull request not found</h2>
+      <h2 className="text-base font-medium mb-1">{needsInstallation ? "Repository is not connected" : notFound ? "Pull request not found" : "Couldn’t load pull request"}</h2>
       <p className="text-[13px] mb-2">
-        #{number} in <code className="font-mono text-sol-violet">{repository}</code> is not in this
-        workspace.
+        #{number} in <code className="font-mono text-sol-violet">{repository}</code>
       </p>
-      <p className="text-[12px] mb-4 max-w-md text-center leading-relaxed">
+      {needsInstallation ? <p className="text-[12px] mb-4 max-w-md text-center leading-relaxed">
         A repository is here once the GitHub App is installed on{" "}
         <code className="font-mono">{repository.split("/")[0]}</code> for one of your teams.{" "}
         <Link href="/settings/integrations" className="text-sol-cyan hover:underline">
           Open integrations
         </Link>{" "}
         to install it there, or to add this repository to an install that exists.
-      </p>
+      </p> : <p role={error ? "alert" : undefined} className="text-[12px] mb-4 max-w-md text-center leading-relaxed">
+        {error || (notFound ? "GitHub could not find this pull request with the connected account." : "This pull request is not available locally yet. Try loading it again.")}
+      </p>}
+      <Button variant="outline" className="mb-2" onClick={retry}>Try again</Button>
       <a
         href={repoObjectGitHubUrl({ type: "pr", repository, number })}
         target="_blank"
@@ -93,7 +104,7 @@ function PRNotFound({ repository, number }: { repository: string; number: number
   );
 }
 
-function PRContent({
+export function PRContent({
   repository,
   number,
   headRef,
@@ -115,13 +126,7 @@ function PRContent({
   // one) is asked from GitHub once, through the team's install; the store row
   // then arrives on the feed above. Only after that ask has answered does the
   // page say "not found".
-  const fetchPull = useAction(api.githubApp.fetchPull);
-  const [lookup, setLookup] = useState<"idle" | "pending" | "done">("idle");
-  useWatchEffect(() => {
-    if (pr || lookup !== "idle" || !prFeed.ready || !isAuthenticated) return;
-    setLookup("pending");
-    void fetchPull({ repository, number }).catch(() => null).finally(() => setLookup("done"));
-  }, [pr, lookup, prFeed.ready, isAuthenticated, repository, number]);
+  const lookup = usePRLookup(repository, number, !pr && prFeed.ready && isAuthenticated);
 
   useSyncPRExternalEvents(prId);
   useSyncPRCodeComments(prId);
@@ -357,8 +362,9 @@ function PRContent({
   });
 
   if (!pr) {
-    if ((!prFeed.ready && !prFeed.error) || lookup !== "done") return <LoadingSkeleton />;
-    return <PRNotFound repository={repository} number={number} />;
+    const error = prFeed.error?.message || lookup.error;
+    if (!error && !lookup.reason) return <LoadingSkeleton />;
+    return <PRUnavailable repository={repository} number={number} reason={lookup.reason} error={error} retry={() => { prFeed.retry(); lookup.retry(); }} />;
   }
 
   const files: DiffFile[] = (pr.files ?? []).map((f: any) => ({
