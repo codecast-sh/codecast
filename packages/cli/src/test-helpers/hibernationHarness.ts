@@ -37,6 +37,7 @@ export function createHibernationHarness() {
   const deps = {
     ...policy, path, ACTIVE_AGENT_STATUSES, DECLARED_VERDICT_STATUSES, SETTLE_VERDICT_STATUSES,
     isSupersededAppServerSession: () => false,
+    keystrokeInference: { cancel: () => {} },
     serializeSessionStatus: (_id: string, fn: () => Promise<unknown>) => fn(),
     hasTmux: () => true,
     log: record("log"), reaperLog: record("log"),
