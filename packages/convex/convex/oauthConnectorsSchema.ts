@@ -43,6 +43,24 @@ export const oauthConnectorTables = {
      *  authenticated browser session confirms it owns the redirect. */
     pending_confirm_hash: v.optional(v.string()),
     pending_expires_at: v.optional(v.number()),
+    /** A RECONNECT's credentials, held apart from the live ones until the
+     *  authenticated session that started it confirms. Writing them straight
+     *  onto the row would have activated a grant nobody confirmed, which is
+     *  the confirmation first connect requires. Dropped whole on expiry, a
+     *  wrong confirmer or a replacement of its own; promoted whole on confirm. */
+    pending_replacement: v.optional(v.object({
+      confirm_hash: v.string(),
+      expires_at: v.number(),
+      /** Who started the reconnect — the confirmer must be this person, who is
+       *  not necessarily the original `connected_by`. */
+      initiated_by: v.id("users"),
+      access_token_enc: v.string(),
+      refresh_token_enc: v.optional(v.string()),
+      access_expires_at: v.optional(v.number()),
+      granted_scopes: v.array(v.string()),
+      account_label: v.optional(v.string()),
+      account_id: v.optional(v.string()),
+    })),
     /** Health stamps read by the integrations page. issue-sync.md S1.5 —
      *  the same three fields github_app_installations carries, so one card
      *  renderer serves both. */

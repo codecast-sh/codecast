@@ -61,6 +61,29 @@ describe("parsePublicRepoPath", () => {
   });
 });
 
+describe("session kinds", () => {
+  test("blame sessions read the same ref and path a blame does", () => {
+    const params = paramsForKind("blamesessions", new URLSearchParams({ ref: "main", path: "src/a.ts" }));
+    expect(params).toEqual({ ref: "main", path: "src/a.ts" });
+    expect(paramsComplete("blamesessions", params)).toBe(true);
+    expect(paramsComplete("blamesessions", { ref: "main" })).toBe(false);
+  });
+
+  test("commit sessions take a comma list of full shas, lowercased, and refuse anything else", () => {
+    const upper = SHA.toUpperCase();
+    const params = paramsForKind("commitsessions", new URLSearchParams({ shas: ` ${upper},${SHA}, ` }));
+    expect(params).toEqual({ shas: [SHA, SHA] });
+    expect(paramsComplete("commitsessions", params)).toBe(true);
+    expect(paramsComplete("commitsessions", { shas: [] })).toBe(false);
+    expect(paramsComplete("commitsessions", { shas: ["abc1234"] })).toBe(false);
+    expect(paramsComplete("commitsessions", { shas: Array.from({ length: 101 }, () => SHA) })).toBe(false);
+  });
+
+  test("the sessions list needs nothing", () => {
+    expect(paramsComplete("sessions", paramsForKind("sessions", new URLSearchParams()))).toBe(true);
+  });
+});
+
 describe("publicGate", () => {
   test("private and never-heard-of are the same answer, byte for byte", async () => {
     const unknown = await describeResponse(publicGate({ installed: false, private: false })!);

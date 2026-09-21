@@ -72,6 +72,48 @@ describe("pickOwnerDevice — sticky ownership preserves an explicit move", () =
     const r = pickOwnerDevice(devices, { projectPath: "/x", ownerDeviceId: "r1" }, NOW);
     expect(r).toBe("L1");
   });
+
+  test("an offline owner that has this home keeps it over an awake machine with a different home", () => {
+    // The Mac mini signed into another account, so its device row on this
+    // account went quiet. The session folder is a worktree under that mini's
+    // home, not a project root it advertises. The laptop must not take it.
+    const devices = [
+      local("mini", {
+        last_seen: stale,
+        local_project_roots: ["/Users/ec2-user/src/union-mobile"],
+      }),
+      local("laptop", {
+        last_seen: fresh,
+        local_project_roots: ["/Users/ashot/src/union-mobile"],
+      }),
+    ];
+    const r = pickOwnerDevice(
+      devices,
+      {
+        projectPath: "/Users/ec2-user/.intern-data/worktrees/cs-1/outreach",
+        ownerDeviceId: "mini",
+      },
+      NOW,
+    );
+    expect(r).toBe("mini");
+  });
+
+  test("an online machine with this home wins over a more recent machine with a different home", () => {
+    const devices = [
+      local("mini", { local_project_roots: ["/Users/ec2-user/src/union-mobile"] }),
+      local("laptop", {
+        last_seen: NOW - 1_000,
+        local_project_roots: ["/Users/ashot/src/codecast"],
+      }),
+    ];
+    expect(
+      pickOwnerDevice(
+        devices,
+        { projectPath: "/Users/ec2-user/.intern-data/worktrees/cs-1/outreach" },
+        NOW,
+      ),
+    ).toBe("mini");
+  });
 });
 
 describe("pickOwnerDevice — checkout match beats recency among locals", () => {

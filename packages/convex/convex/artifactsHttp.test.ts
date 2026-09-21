@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { applyEditVersion } from "./artifactsHttp";
+import { applyEditVersion, cachePolicy, REVOCATION_BOUND_MS } from "./artifactsHttp";
 import { MAX_ARTIFACT_BYTES } from "./artifacts";
 
 async function sha256Hex(s: string): Promise<string> {
@@ -225,5 +225,54 @@ describe("publish route evidence binding", () => {
     expect(mutations[0].args.task_id).toBeUndefined();
     expect(mutations[0].args.station).toBeUndefined();
     expect(await res.json()).not.toHaveProperty("evidence");
+  });
+});
+
+// PARENT-05: a cached body outlives the gate change that was meant to revoke
+// it. These pin the promise the origin makes about its NEXT response — bytes
+// a viewer already downloaded are nobody's to recall.
+describe("cachePolicy", () => {
+  const now = 1_700_000_000_000;
+
+  test("public content is cacheable, bounded by the revocation window", () => {
+    const policy = cachePolicy({}, now);
+    expect(policy).toBe("public, max-age=60, stale-while-revalidate=300");
+    const maxAge = Number(policy.match(/max-age=(\d+)/)![1]);
+    const stale = Number(policy.match(/stale-while-revalidate=(\d+)/)![1]);
+    expect((maxAge + stale) * 1000).toBeLessThanOrEqual(REVOCATION_BOUND_MS);
+  });
+
+  test("a password wall makes every representation private and unstored", () => {
+    expect(cachePolicy({ password_hash: "ph" }, now)).toBe("private, no-store");
+  });
+
+  test("an email wall does too", () => {
+    expect(cachePolicy({ email_gate: true }, now)).toBe("private, no-store");
+  });
+
+  test("a far expiry does not shorten the window", () => {
+    expect(cachePolicy({ expires_at: now + 7 * 24 * 3600_000 }, now)).toBe(
+      "public, max-age=60, stale-while-revalidate=300",
+    );
+  });
+
+  test("a near expiry caps the window at the moment the page stops existing", () => {
+    expect(cachePolicy({ expires_at: now + 90_000 }, now)).toBe("public, max-age=90");
+    expect(cachePolicy({ expires_at: now + 5_000 }, now)).toBe("public, max-age=5");
+  });
+
+  test("an already-expired page is never cached", () => {
+    expect(cachePolicy({ expires_at: now - 1 }, now)).toBe("private, no-store");
+  });
+
+  // Historical versions and versioned assets used to carry max-age=3600 with a
+  // day of stale-while-revalidate. A numbered version's content is immutable;
+  // its availability after a delete is not.
+  test("no representation may outlive the revocation bound", () => {
+    for (const a of [{}, { expires_at: now + 10 * 3600_000 }]) {
+      const policy = cachePolicy(a, now);
+      const total = [...policy.matchAll(/=(\d+)/g)].reduce((n, m) => n + Number(m[1]), 0);
+      expect(total * 1000).toBeLessThanOrEqual(REVOCATION_BOUND_MS);
+    }
   });
 });

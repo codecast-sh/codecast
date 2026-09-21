@@ -600,7 +600,8 @@ describe("a hand's briefing and the anchor's roles section (review: coherence, d
     const text = bootstrapMessage({ name: "Growth", scopeType: "team", scopeLabel: "Acme", teamName: "Acme", role: { handle: "growth", parentName: "Me", scopeNames: ["project Growth"], trust: "decide" } as any });
     expect(text).toContain("Your sessions are yours to triage");
     expect(text).toContain("a wait nobody can see");
-    expect(text).toContain('cast escalate <session> "<one line>"');
+    expect(text).toContain('cast escalate <session> "<line>"');
+    expect(text).toContain("--direct");
     expect(text).toContain("cast escalate --clear <session>");
     expect(text).toContain("says what they will decide");
     // The frame section the rule points at is named as the frame names it.

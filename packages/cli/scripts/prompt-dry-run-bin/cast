@@ -4,8 +4,8 @@
 # pass through to the real CLI with the real state directory restored; anything
 # that writes, posts, sends, pins or could start a session is refused with a
 # line that says so, so a run can never reach a person's inbox. With
-# DRY_RUN_SERVE_DIR set, `cast org inputs` and `cast org health` answer from
-# org-inputs.json and org-health.json in it, so the run grades the prompt
+# DRY_RUN_SERVE_DIR set, `cast org inputs`, `cast org health` and `cast org ls`
+# answer from org-inputs.json, org-health.json and org-ls.json in it, so the run grades the prompt
 # against a saved record. A harness that needs other fixtures puts its own
 # `cast` in a directory and passes --guard.
 set -u
@@ -14,6 +14,7 @@ SERVE="${DRY_RUN_SERVE_DIR:-}"
 case "${1:-} ${2:-}" in
   "org inputs"*) [ -n "$SERVE" ] && [ -f "$SERVE/org-inputs.json" ] && { cat "$SERVE/org-inputs.json"; exit 0; } ;;
   "org health"*) [ -n "$SERVE" ] && [ -f "$SERVE/org-health.json" ] && { cat "$SERVE/org-health.json"; exit 0; } ;;
+  "org ls"*|"org list"*) [ -n "$SERVE" ] && [ -f "$SERVE/org-ls.json" ] && { cat "$SERVE/org-ls.json"; exit 0; } ;;
   "org proposals"*) echo "No open proposals."; exit 0 ;;
 esac
 # The real CLI: the first `cast` on PATH that is not this guard, run with the

@@ -110,8 +110,8 @@ export function bootstrapMessage(opts: {
   const who = role
     ? `the standing agent for the **${name}** role (@${role.handle}) in ${scopeType === "team" ? `the ${opts.teamName ?? "team"} workspace` : `${opts.ownerName ?? "one person"}'s personal workspace`}. You report to ${role.parentName}. Your scope: ${role.scopeNames.length ? role.scopeNames.join(", ") : "the whole workspace"}. Your trust stage is **${role.trust}**`
     : scopeType === "team"
-      ? `the **team** anchor for ${opts.teamName ?? "this team"} — every member of that team can reach you, and you speak for the team's shared context`
-      : `the **personal** anchor for ${opts.ownerName ?? "one person"} — private to them, and you speak only in their voice and interest`;
+      ? `the **team** workspace's standing agent for ${opts.teamName ?? "this team"} — every member of that team can reach you, and you speak for the team's shared context`
+      : `the **personal** workspace's standing agent for ${opts.ownerName ?? "one person"} — private to them, and you speak only in their voice and interest`;
   const memoryBullet = role
     ? [
       `- **Your brief is your memory.** Your transcript gets compacted; the brief (\`cast brief\`) is`,
@@ -132,7 +132,7 @@ export function bootstrapMessage(opts: {
     : [
       `- **Keep durable memory.** Your transcript gets compacted, so persist anything worth`,
       `  remembering to this project's memory dir and CLAUDE.md — starting now with a short note`,
-      `  that you are ${name}, ${scopeType === "team" ? "the team anchor" : "the personal anchor"} for ${scopeLabel}, and how you operate.`,
+      `  that you are ${name}, the standing agent for ${scopeLabel}, and how you operate.`,
       `- **Delegate real work.** For code changes or anything long, start background subagents`,
       `  (the Agent tool) and stay responsive yourself; call them subagents. Reserve \`cast spawn\``,
       `  for when a person explicitly wants a session they will steer themselves.`,
@@ -169,8 +169,13 @@ export function bootstrapMessage(opts: {
       `  person's inbox, so a person sees only what you put in front of them, and a wait you neither`,
       `  answered nor escalated is a wait nobody can see. At every wake, read which of your sessions`,
       `  are waiting on a person. Answer what your trust stage and your grants let you answer. Put`,
-      `  the rest in front of the person with \`cast escalate <session> "<one line>"\`, where the line`,
-      `  says what they will decide, and take a session back with \`cast escalate --clear <session>\``,
+      `  the rest in front of the person with \`cast escalate <session> "<line>"\`: that puts YOUR card`,
+      `  in their inbox with the line and the session, the session stays under you, and the person`,
+      `  answers you, so hold the context and relay their answer. The line says what they will decide`,
+      `  and why; it is written whole into both threads, so make it as long as the reason needs.`,
+      `  \`--direct\` puts the session itself in their inbox, and only for what they must do inside it:`,
+      `  an open permission prompt, an interactive question, a review of that session's own`,
+      `  transcript; the line says which. Take a session back with \`cast escalate --clear <session>\``,
       `  once it no longer needs them. Never escalate without a reason the person can read.`,
       `- **The people who report to you have goals, and you keep them.** A person who reports to`,
       `  you is not asking your permission for anything: they asked you to keep them on their three`,
@@ -202,7 +207,7 @@ export function bootstrapMessage(opts: {
     role
       ? `Your charter (the humans' statement of your job) and your brief (your own running account) are`
       + ` documents; \`cast brief\` prints the brief with live facts about your scope.`
-      : `A person may have several anchors (a personal one, and one per team). When there is any`,
+      : `A person may have several workspace agents (a personal one, and one per team). When there is any`,
     role ? `` : `chance of confusion, say which one you are.`,
     ``,
     `## How you work`,
@@ -250,7 +255,7 @@ export function bootstrapMessage(opts: {
     role
       ? `Read \`cast brief\` now, post a one-line hello confirming you are online as @${role.handle}, then stand by.`
       : `Save your role to memory now, post a one-line hello confirming you are online and which`,
-    role ? `` : `anchor you are, then stand by.`,
+    role ? `` : `workspace you serve, then stand by.`,
   ].filter((line) => line !== ``).join("\n");
 }
 
@@ -348,7 +353,7 @@ export async function provisionStandingAgent(
   already_existed: boolean;
 }> {
   const now = Date.now();
-  const name = (args.name ?? "Anchor").trim() || "Anchor";
+  const name = (args.name ?? "Workspace agent").trim() || "Workspace agent";
 
   // Resolve + authorize scope.
   let teamId: Id<"teams"> | undefined;
@@ -558,25 +563,10 @@ export async function provisionStandingAgent(
   };
 }
 
-// provisionAnchor — the workspace anchor. Backs `cast anchor create`.
-export const provisionAnchor = mutation({
-  args: {
-    api_token: v.optional(v.string()),
-    scope_type: v.union(v.literal("team"), v.literal("user")),
-    team_id: v.optional(v.id("teams")),
-    name: v.optional(v.string()),
-    avatar_url: v.optional(v.string()),
-    persona: v.optional(v.string()),
-    project_path: v.optional(v.string()),
-    model: v.optional(v.string()),
-    bootstrap: v.optional(v.boolean()),
-  },
-  handler: async (ctx, args) => {
-    const hostUserId = await getAuthenticatedUserId(ctx, args.api_token);
-    if (!hostUserId) throw new Error("Authentication failed: invalid token or session");
-    return await provisionStandingAgent(ctx, hostUserId, args);
-  },
-});
+// There is no door that provisions a bare workspace anchor (org-staffing.md
+// S22): a workspace's standing agent is its root role, and `orgRoles.staff`
+// is the one way to seat it. `cast anchor create` and the web onboarding go
+// through that mutation.
 
 // Deliver a message into an anchor's standing session, auto-resuming it if
 // dormant (the normal pending-message rail does the resume). This is the
@@ -594,11 +584,11 @@ export async function deliverToAnchor(
   clientId?: string,
 ) {
   const anchor = await ctx.db.get(anchorId);
-  if (!anchor) throw new Error("Anchor not found");
-  if (anchor.status === "decommissioned") throw new Error("Anchor is decommissioned");
-  if (!anchor.conversation_id) throw new Error("Anchor has no session yet");
+  if (!anchor) throw new Error("No workspace agent found");
+  if (anchor.status === "decommissioned") throw new Error("The workspace's agent is retired");
+  if (!anchor.conversation_id) throw new Error("The workspace's agent has no session yet");
   const conversation = await ctx.db.get(anchor.conversation_id);
-  if (!conversation) throw new Error("Anchor session missing");
+  if (!conversation) throw new Error("The workspace agent's session is missing");
   await enqueuePendingMessage(ctx, conversation, conversation.user_id, {
     content: message,
     client_id: clientId,
@@ -617,9 +607,9 @@ export const wakeAnchor = mutation({
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) throw new Error("Authentication failed: invalid token or session");
     const anchor = await ctx.db.get(args.anchor_id);
-    if (!anchor) throw new Error("Anchor not found");
+    if (!anchor) throw new Error("No workspace agent found");
     if (!(await userCanAccessAnchor(ctx, userId, anchor))) {
-      throw new Error("Not authorized for this anchor");
+      throw new Error("Not authorized for this workspace's agent");
     }
     return await deliverToAnchor(ctx, args.anchor_id, args.message);
   },
@@ -652,9 +642,9 @@ export const rebriefAnchor = mutation({
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) throw new Error("Authentication failed: invalid token or session");
     const anchor = await ctx.db.get(args.anchor_id);
-    if (!anchor) throw new Error("Anchor not found");
+    if (!anchor) throw new Error("No workspace agent found");
     if (!(await userCanAdminAnchor(ctx, userId, anchor))) {
-      throw new Error("Only an admin (or the host) can re-brief this anchor");
+      throw new Error("Only an admin (or the host) can re-brief the workspace's agent");
     }
     const briefing = await briefingFor(ctx, anchor);
     return await deliverToAnchor(ctx, args.anchor_id, briefing, `anchor-brief:${Date.now()}`);
@@ -720,11 +710,18 @@ export const listAnchors = query({
       const bot = await ctx.db.get(a.bot_user_id as Id<"users">);
       const team = a.team_id ? await ctx.db.get(a.team_id as Id<"teams">) : null;
       const conv = a.conversation_id ? await ctx.db.get(a.conversation_id as Id<"conversations">) : null;
+      // The role this row is the seat of (org-staffing.md S22): the shell
+      // draws the root role's face and name from this row alone, without
+      // feeding the whole org tree.
+      const role = a.org_role_id ? await ctx.db.get(a.org_role_id as Id<"org_roles">) : null;
       out.push({
         ...a,
         bot_name: bot?.name ?? a.name,
         // Set once the anchor is a role's seat (the chief of staff, S12).
         org_role_id: a.org_role_id ?? null,
+        role: role && role.status !== "retired"
+          ? { _id: role._id, short_id: role.short_id, name: role.name, handle: role.handle, avatar: role.avatar ?? null, status: role.status }
+          : null,
         bot_avatar: bot?.image ?? null,
         team_name: (team as any)?.name ?? null,
         in_my_team: a.team_id ? teamIds.has(a.team_id.toString()) : false,
@@ -751,9 +748,9 @@ export const decommissionAnchor = mutation({
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) throw new Error("Authentication failed: invalid token or session");
     const anchor = await ctx.db.get(args.anchor_id);
-    if (!anchor) throw new Error("Anchor not found");
+    if (!anchor) throw new Error("No workspace agent found");
     if (!(await userCanAdminAnchor(ctx, userId, anchor))) {
-      throw new Error("Only an admin (or the host) can retire this anchor");
+      throw new Error("Only an admin (or the host) can retire the workspace's agent");
     }
     await decommissionAnchorRow(ctx, anchor);
     return { decommissioned: true };
@@ -918,9 +915,9 @@ export const updateAnchor = mutation({
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) throw new Error("Authentication failed: invalid token or session");
     const anchor = await ctx.db.get(args.anchor_id);
-    if (!anchor) throw new Error("Anchor not found");
+    if (!anchor) throw new Error("No workspace agent found");
     if (!(await userCanAdminAnchor(ctx, userId, anchor))) {
-      throw new Error("Only an admin (or the host) can edit this anchor");
+      throw new Error("Only an admin (or the host) can edit the workspace's agent");
     }
     const patch: Record<string, any> = { updated_at: Date.now() };
     if (args.name !== undefined) patch.name = args.name;

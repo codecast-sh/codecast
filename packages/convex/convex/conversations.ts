@@ -32,6 +32,7 @@ import {
   isBelowFoldAt,
   rollupParentIdOf,
   rideLeadPlacements,
+  roleEscalationsOf,
   selectWorkingSet,
   WORKING_SET_RECENCY_MS,
   BLOCKED_BANNER_KINDS,
@@ -1385,7 +1386,7 @@ async function resolveActingAuthor(
   const bot = await getDoc(conv.acting_user_id);
   if (!bot) return null;
   return {
-    name: (bot as any).name || "Anchor",
+    name: (bot as any).name || "Workspace agent",
     avatar: (bot as any).image || (bot as any).github_avatar_url || null,
   };
 }
@@ -2879,9 +2880,10 @@ export const listConversations = query({
 export const generateShareLink = mutation({
   args: {
     conversation_id: v.id("conversations"),
+    api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const authUserId = await getAuthUserId(ctx);
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!authUserId) {
       throw new Error("Unauthorized: must be logged in");
     }
@@ -2910,9 +2912,9 @@ export const generateShareLink = mutation({
 // session that was private/team-only does NOT change is_private; it grants
 // anonymous read of *this one session* via its share link, nothing more.
 export const pinToProfile = mutation({
-  args: { conversation_id: v.id("conversations") },
+  args: { conversation_id: v.id("conversations"), api_token: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    const authUserId = await getAuthUserId(ctx);
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!authUserId) throw new Error("Unauthorized: must be logged in");
     const conversation = await ctx.db.get(args.conversation_id);
     if (!conversation) throw new Error("Conversation not found");
@@ -2932,9 +2934,9 @@ export const pinToProfile = mutation({
 // owner may have circulated that link elsewhere; un-pinning only delists it from
 // the profile (profilePublicSessionVisible then drops it).
 export const unpinFromProfile = mutation({
-  args: { conversation_id: v.id("conversations") },
+  args: { conversation_id: v.id("conversations"), api_token: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    const authUserId = await getAuthUserId(ctx);
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!authUserId) throw new Error("Unauthorized: must be logged in");
     const conversation = await ctx.db.get(args.conversation_id);
     if (!conversation) throw new Error("Conversation not found");
@@ -8679,7 +8681,7 @@ export async function identityFieldsOf(conv: any, getDoc: (id: any) => Promise<a
     // order is the store draft's, so a web gesture's field lock retires on
     // this echo; null when absent, the spelling a hand back writes.
     escalated_by_role: conv.escalated_by_role
-      ? { role_id: conv.escalated_by_role.role_id.toString(), line: conv.escalated_by_role.line, at: conv.escalated_by_role.at }
+      ? { role_id: conv.escalated_by_role.role_id.toString(), line: conv.escalated_by_role.line, at: conv.escalated_by_role.at, ...(conv.escalated_by_role.direct ? { direct: true } : {}) }
       : null,
     role: role
       ? { _id: role._id.toString(), short_id: role.short_id, name: role.name, handle: role.handle, avatar: avatarOf(role), status: role.status, tenure_kind: role.tenure?.kind ?? "standing" }
@@ -9253,6 +9255,17 @@ export async function computeInboxSessions(
       // fold on its own account.
       row.below_fold = false;
     };
+  }
+  // The role's card carries the escalations that reach the person through it
+  // (org-roles-run-work.md R1, revised), derived from the sessions under it on
+  // this list by the same helper the web and the phone read, so no channel
+  // stores the line twice.
+  {
+    const rowsById = new Map(enrichedRows.map((r) => [r.conv._id.toString(), r]));
+    for (const [leadId, list] of roleEscalationsOf(rowsById.keys(), (id) => rowsById.get(id)?.conv)) {
+      const lead = rowsById.get(leadId);
+      if (lead) (lead.row as { escalations?: typeof list }).escalations = list;
+    }
   }
   for (const r of enrichedRows) {
     if (r.hidden) {
@@ -10167,6 +10180,9 @@ export function tallyInboxRows(
     // Second-party ownership: run_by = the member whose account runs the
     // session when that isn't the caller; owner = the assigned owner if any.
     run_by: string | null;
+    escalations: Array<{ conversation_id: string; line: string; at: number }> | null;
+    escalated_by_role: { role_id: string; line: string; at: number; direct?: boolean } | null;
+    role: { handle: string; name: string } | null;
     owner: { name: string | null; email: string | null } | null;
     owned_by_me: boolean;
     // What the agent is doing now, only while the row is working and the
@@ -10265,6 +10281,12 @@ export function tallyInboxRows(
       active_plan: s.active_plan ? { short_id: s.active_plan.short_id, title: s.active_plan.title } : null,
       active_task: s.active_task ? { short_id: s.active_task.short_id, title: s.active_task.title } : null,
       run_by: s.author_name ?? null,
+      // A role's triage on the row (org-roles-run-work.md R1, revised): the
+      // lines the role's card carries, or the stamp on a child put in front
+      // of the person directly, with the role that did it.
+      escalations: s.escalations ?? null,
+      escalated_by_role: s.escalated_by_role ?? null,
+      role: s.role ? { handle: s.role.handle, name: s.role.name } : null,
       owner: s.owner_user_id ? { name: s.owner_name ?? null, email: s.owner_email ?? null } : null,
       owned_by_me: !!s.owned_by_me,
       activity: isSessionActivityFresh(s.activity, work_state, now) ? s.activity : null,

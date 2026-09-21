@@ -39,11 +39,20 @@ services:
       # The base backup reads the whole primary once; take it in the quiet
       # window after the 09:00Z dump, never during US working hours.
       BOOTSTRAP_AFTER: "2026-09-14T06:30:00Z"
-      # Sizing for 123 GB of RAM shared with the Convex backend (~64 GB).
+      # Sizing for the host in infra/convex-host/README.md: 247 GB of RAM
+      # shared with the Convex backend (~64 GB). Written for the 123 GB box
+      # this ran on until the 2026-09-22 resize and left unchanged there,
+      # because the resize was forced by CPU and these two values buy read
+      # cache: this workload waits on no disk (iowait sits at 0). Raise them
+      # only against a measured read problem.
       REPLICA_SHARED_BUFFERS: 32GB
       REPLICA_EFFECTIVE_CACHE_SIZE: 80GB
       PG_EXTRA_CONF: |
-        # host tuning (pl-592 / ct-50394): NVMe gp3 at 6000 IOPS, 16 vCPU
+        # host tuning (pl-592 / ct-50394): NVMe gp3 at 6000 IOPS. The worker
+        # counts below were set for 16 vCPU and the host now has 32; they stay
+        # low on purpose, because the Convex backend is the bigger CPU consumer
+        # on this shared box (about 3.7x Postgres) and parallel query would
+        # compete with it for the same cores.
         max_wal_size = '16GB'
         min_wal_size = '2GB'
         checkpoint_completion_target = 0.9

@@ -69,7 +69,6 @@ EOF
 ```bash
 cat > packages/web/.env.local << 'EOF'
 VITE_CONVEX_URL=https://convex.codecast.sh
-VITE_GITHUB_APP_SLUG=codecast-sh
 VITE_SENTRY_DSN=<get-from-team-lead>
 VITE_POSTHOG_KEY=<get-from-team-lead>
 VITE_POSTHOG_HOST=https://us.i.posthog.com
@@ -154,6 +153,9 @@ npx convex env set AUTH_APPLE_SECRET "<get-from-team-lead>"
 npx convex env set GITHUB_APP_ID "<get-from-team-lead>"
 npx convex env set GITHUB_APP_PRIVATE_KEY "<get-from-team-lead>"
 npx convex env set GITHUB_APP_WEBHOOK_SECRET "<get-from-team-lead>"
+npx convex env set GITHUB_APP_SLUG "codecast-sh"
+npx convex env set GITHUB_APP_CLIENT_ID "<get-from-team-lead>"
+npx convex env set GITHUB_APP_CLIENT_SECRET "<get-from-team-lead>"
 npx convex env set GITHUB_WEBHOOK_SECRET "<get-from-team-lead>"
 ```
 

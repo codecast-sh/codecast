@@ -130,6 +130,29 @@ export function getInstance(id: string): { term: Terminal; state: TermTabState }
   return inst ? { term: inst.term, state: inst.state } : null;
 }
 
+/** The live screen of an attached pane for `target` (tmux session name).
+ *  Reads the bottom of the buffer, not the scrolled viewport, so a person
+ *  looking through history still reports what the agent is drawing now. */
+export function readLiveScreenText(target: string): string | null {
+  if (!target) return null;
+  for (const inst of instances.values()) {
+    if (inst.state.target !== target && inst.state.sessionName !== target) continue;
+    try {
+      const buf = inst.term.buffer.active;
+      const rows = inst.term.rows || 0;
+      if (rows <= 0) continue;
+      const start = buf.baseY;
+      const lines: string[] = [];
+      for (let i = 0; i < rows; i++) lines.push(buf.getLine(start + i)?.translateToString(true) ?? "");
+      const text = lines.join("\n").trim();
+      if (text) return text;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
 export function applyTerminalTheme(theme: ITheme, fontFamily?: string): void {
   currentTheme = theme;
   for (const inst of instances.values()) {

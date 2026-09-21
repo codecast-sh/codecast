@@ -330,8 +330,10 @@ export function orgLogRowChange(row: OrgLogRow): OrgChange | null {
     case "routine": return { kind: "routine", handle, title: row.after.routine?.title ?? "", prompt: "", every: row.after.routine?.every ?? "" };
     case "adopt": return { kind: "adopt", handle, conversation: row.after.standing_session?.short_id ?? row.effects.seat?.short_id ?? "" };
     case "file": return { kind: "file", plan: row.subject.short_id ?? row.subject.label, project: nameOf(row, row.after.project_id, "no project") };
-    case "plan_status": return { kind: "plan_status", plan: row.subject.short_id ?? row.subject.label, status: row.after.status as any, reason: "" };
-    case "task_status": return { kind: "task_status", task: row.subject.short_id ?? row.subject.label, status: row.after.status as any, reason: "" };
+    // The subject's label is the record's title (recordSubject), so the log
+    // reads the row the way the proposal did: "Mark done: Launch (pl-7)".
+    case "plan_status": return { kind: "plan_status", plan: row.subject.short_id ?? row.subject.label, status: row.after.status as any, reason: "", title: row.subject.label };
+    case "task_status": return { kind: "task_status", task: row.subject.short_id ?? row.subject.label, status: row.after.status as any, reason: "", title: row.subject.label };
     case "project_status": return { kind: "project_status", project: row.subject.label, status: row.after.status as any, reason: "" };
     case "project_meta": return {
       kind: "project_meta", project: row.subject.label,

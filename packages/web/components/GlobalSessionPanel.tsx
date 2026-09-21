@@ -70,6 +70,8 @@ import { IdentityFace, RoleHoverCard, SessionIdentityLine } from "./identity";
 import { RoleFace } from "./org/RoleFace";
 import { CharacterPicker } from "./identity/CharacterPicker";
 import { escalationOf, roleLookingAfter, sessionIdentity, standingRoleIdOf } from "../lib/sessionIdentity";
+import { escalationFirstLine, type RoleEscalation } from "@codecast/shared/contracts";
+import { EntityIdPill } from "./EntityIdPill";
 import { anchorIdentitySig, anchorIdentityFromSig } from "../hooks/useSyncAnchors";
 import { SharePopover } from "./SharePopover";
 import { PrStatusChip } from "./PrStatusChip";
@@ -350,7 +352,20 @@ function ForkCorner({ colorKey }: { colorKey: string }) {
 function AuthErrorBadge({ kind, agentType }: { kind?: string | null; agentType?: string | null }) {
   // Only the parked-and-won't-heal kinds get a badge. kind "error" (a marked
   // opencode/pi client error) is informational and has no recovery behind it.
-  if (kind !== "limit" && kind !== "auth" && kind !== "connection" && kind !== "fatal" && kind !== "throttle" && kind !== "safety") return null;
+  if (kind !== "limit" && kind !== "auth" && kind !== "connection" && kind !== "fatal" && kind !== "throttle" && kind !== "safety" && kind !== "context") return null;
+  if (kind === "context") {
+    return (
+      <span
+        className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-semibold bg-amber-500/10 text-amber-500 border border-amber-500/30"
+        title="The conversation no longer fits the model's context window — send /compact (or /clear) in the session to continue; a plain continue re-fails"
+      >
+        <svg className="w-2 h-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+          <path d="M4 6h16M4 12h16M4 18h10" strokeLinecap="round" />
+        </svg>
+        context full
+      </span>
+    );
+  }
   if (kind === "safety") {
     return <span className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-semibold bg-amber-500/10 text-amber-700 dark:text-amber-500 border border-amber-500/30" title="OpenAI stopped this conversation for safety review. Automatic retries and account switching cannot resolve it.">safety</span>;
   }
@@ -658,6 +673,12 @@ function BlockedSessionsBanner({
   const skippedWorkers = skippedBlockedWorkers(blocked, includeSubs);
   const safetyBlocked = blocked.filter((sess) => sess.pending_api_error_kind === "safety");
   const safetyCount = safetyBlocked.length;
+  // Full context windows: parked until /compact or /clear reaches the session,
+  // so they sit beside the safety stops outside the continue set. The fleet
+  // action for them sends /compact to each — the same send the card's own
+  // button makes, once per session.
+  const contextBlocked = blocked.filter((sess) => sess.pending_api_error_kind === "context" && !isSubagentConversation(sess));
+  const contextCount = contextBlocked.length;
   // Workers join the acted set only through the checkbox — never because they
   // are all that is blocked. Continuing an in-process worker cannot reach it;
   // it resumes a standalone copy that reruns its brief for nobody (the
@@ -973,6 +994,7 @@ function BlockedSessionsBanner({
               fatalCount > 0 ? `${fatalCount} failed on an api error` : null,
               authCount > 0 ? `${authCount} signed out` : null,
               safetyCount > 0 ? `${safetyCount} need${safetyCount === 1 ? "s" : ""} safety review (excluded from automatic recovery)` : null,
+              contextCount > 0 ? `${contextCount} ran out of context (compact or clear, never continue)` : null,
               // The suffix names a consequence of the continue button, so it
               // only appears while that button does (a fleet of nothing but
               // workers offers no continue, only "Dismiss all").
@@ -1170,6 +1192,19 @@ function BlockedSessionsBanner({
         {safetyCount > 0 && (
           <button onClick={() => safetyCount === 1 ? onOpen?.(safetyBlocked[0]) : setExpanded(true)} className="rounded border border-amber-500/40 px-3 py-1 text-[11px] font-semibold text-amber-700 dark:text-amber-500 hover:bg-amber-500/10">
             Review {safetyCount === 1 ? "safety stop" : `${safetyCount} safety stops`}
+          </button>
+        )}
+        {contextCount > 0 && (
+          <button
+            onClick={() => {
+              const store = useInboxStore.getState();
+              for (const sess of contextBlocked) store.sendMessage(sess._id, "/compact");
+              store.markBlockedReviveRequested(contextBlocked.map((sess) => sess._id));
+            }}
+            title="Send /compact to each session whose context window is full — it keeps a summary and continues"
+            className="rounded border border-amber-500/40 px-3 py-1 text-[11px] font-semibold text-amber-700 dark:text-amber-500 hover:bg-amber-500/10"
+          >
+            Compact {contextCount === 1 ? "the full session" : `${contextCount} full sessions`}
           </button>
         )}
         {acted.length > 0 && <>
@@ -1971,6 +2006,51 @@ function selectionTargets(session: InboxSession): InboxSession[] {
     .filter((row): row is InboxSession => !!row);
 }
 
+// The lines a role's card carries (org-roles-run-work.md R1, revised): one
+// per session the role put in front of the person through its own card,
+// newest first. The strip shows the first line of the reason; hover shows all
+// of it and a click unfolds it. Hand back per line takes that session back
+// under the role, in the same tick, through the one gesture the row has.
+function RoleEscalationLines({ escalations, coarseNow, canHandBack, onOpen }: { escalations: RoleEscalation[]; coarseNow: number; canHandBack: boolean; onOpen?: (id: string) => void }) {
+  const [open, setOpen] = useState<Set<string>>(() => new Set());
+  const toggle = (id: string) => setOpen((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+  return (
+    <div data-role-escalations className="flex flex-col gap-1 mt-1 mr-5">
+      {escalations.map((e) => {
+        const unfolded = open.has(e.conversation_id);
+        const firstLine = escalationFirstLine(e.line);
+        return (
+          <div key={e.conversation_id} data-role-escalation={e.conversation_id} className="flex items-start gap-1.5 px-1.5 py-1 rounded-md bg-sol-violet/10 border border-sol-violet/30">
+            <span className="flex-shrink-0 mt-px" onClick={(ev) => { ev.stopPropagation(); onOpen?.(e.conversation_id); }}>
+              <EntityIdPill id={e.conversation_id} type="session" compact />
+            </span>
+            <button
+              type="button"
+              onClick={(ev) => { ev.stopPropagation(); toggle(e.conversation_id); }}
+              title={e.line}
+              className={`min-w-0 flex-1 text-left text-[11px] leading-snug text-sol-text ${unfolded ? "whitespace-pre-wrap break-words" : "truncate"}`}
+            >
+              {unfolded ? e.line : firstLine}
+              <span className="text-sol-text-dim whitespace-nowrap" title={formatDateFull(e.at)}>{" · "}{formatRelative(e.at, coarseNow)}</span>
+            </button>
+            {canHandBack && (
+              <button
+                type="button"
+                data-role-gesture="hand-back"
+                onClick={(ev) => { ev.stopPropagation(); useInboxStore.getState().handSessionBackToRole(e.conversation_id); }}
+                title="Take it out of your needs input. The role looks after it again and decides if it comes back."
+                className="flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium bg-sol-violet/20 text-sol-violet border border-sol-violet/40 hover:bg-sol-violet/30 transition-colors whitespace-nowrap"
+              >
+                Hand back
+              </button>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export const SessionCard = memo(function SessionCard({
   session,
   isActive,
@@ -1993,6 +2073,7 @@ export const SessionCard = memo(function SessionCard({
   isUnread,
   subRow,
   escalatedCount = 0,
+  escalations,
   isSelected = false,
 }: {
   session: InboxSession;
@@ -2024,8 +2105,10 @@ export const SessionCard = memo(function SessionCard({
   // .md R1). The role looks after it, so it is a small row with one gesture of
   // its own: Put in my inbox.
   subRow?: "trigger" | "role";
-  /** On a role's own card: how many of its sessions it has put in front of the person. */
+  /** On a role's own card: how many of its sessions it has put in front of the person directly. */
   escalatedCount?: number;
+  /** On a role's own card: the escalations that reach the person through it, newest first (R1, revised). */
+  escalations?: RoleEscalation[];
   // Label + favorite state are derived ONCE in the parent (SessionListPanel) and
   // passed as scalar props, so a card does O(1) work per render instead of the two
   // selectors scanning the whole bucketAssignments / favorites collection on every
@@ -2435,6 +2518,14 @@ export const SessionCard = memo(function SessionCard({
             }`}>
               {isSlashCommand ? <span className="font-mono text-violet-400/80">{displayTitle}</span> : displayTitle}
             </span>
+            {roleAbove && escalation && (
+              /* The role put this one in front of the person through its own
+                 card (R1, revised): the line is on the card above; the row
+                 only says so. */
+              <span data-role-handed className="flex-shrink-0 px-1 rounded text-[9px] font-medium text-sol-violet bg-sol-violet/10 border border-sol-violet/30 whitespace-nowrap" title={escalation.line}>
+                with you
+              </span>
+            )}
             <div className="flex items-center gap-1 flex-shrink-0">
               {showBlockedBadge && <AuthErrorBadge kind={session.pending_api_error_kind} agentType={session.agent_type} />}
             <HibernatedMarker status={session.agent_status} compact />
@@ -2621,7 +2712,7 @@ export const SessionCard = memo(function SessionCard({
               badge={showAgentIcon ? <AgentTypeIcon agentType={session.agent_type || "claude_code"} className="w-full h-full p-[1px]" /> : undefined}
             />
           ) : session.is_anchor ? (
-            <span className="flex-shrink-0 flex items-center text-sol-cyan" title="Anchor — a standing agent member">
+            <span className="flex-shrink-0 flex items-center text-sol-cyan" title="The workspace's agent">
               <AnchorGlyph className="w-3.5 h-3.5" />
             </span>
           ) : showAgentIcon ? (
@@ -2674,7 +2765,14 @@ export const SessionCard = memo(function SessionCard({
             </span>
           )}
         </div>
-        {escalation && (
+        {escalations && escalations.length > 0 && (
+          /* The role's card carries the escalations that reach the person
+             through it (R1, revised): one line each, newest first, the
+             session as a pill, the whole text on hover or expand, and Hand
+             back per line. */
+          <RoleEscalationLines escalations={escalations} coarseNow={coarseNow} canHandBack={!isForeignSession} onOpen={onNavigateToSession} />
+        )}
+        {escalation && !roleAbove && (
           /* The role's face and its one line: why this card is in front of the
              person (R1). Same strip anatomy as the assignment below, and the
              same mr-5 that keeps its button clear of the hover toolbar. */
@@ -2686,7 +2784,7 @@ export const SessionCard = memo(function SessionCard({
             )}
             <div className="min-w-0 flex-1 text-[11px] leading-snug">
               {escalation.role && <span className="font-semibold text-sol-violet">@{escalation.role.handle}: </span>}
-              <span className="text-sol-text break-words">{escalation.line}</span>
+              <span className="text-sol-text break-words" title={escalation.line}>{escalationFirstLine(escalation.line)}</span>
               <span className="text-sol-text-dim whitespace-nowrap" title={formatDateFull(escalation.at)}>
                 {" · "}{formatRelative(escalation.at, coarseNow)}
               </span>
@@ -3557,7 +3655,7 @@ function SessionListPanelImpl({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [sessionsWakeSig(s.sessions), inboxScope, meId, s.teamInboxIds, showAllSessions, focusedId, s.sessionsWithQueuedMessages, pendingSendIds, blankOpts, placementDecisionsSig(s.sessionDecisions), s.questionResolutions, s.killedShelf.ids, coarseNow],
   );
-  const { visibleSessions, oldCount, sorted: sortedSessions, pinned, newSessions, needsInput, done, dormant, working, snoozed: snoozedList, stashed: stashedList, dismissed: dismissedList, subsByParent: globalSubByParent, forksByParent: globalForksByParent, questions: placedQuestions, isQuestion, escalatedByRole } = placed;
+  const { visibleSessions, oldCount, sorted: sortedSessions, pinned, newSessions, needsInput, done, dormant, working, snoozed: snoozedList, stashed: stashedList, dismissed: dismissedList, subsByParent: globalSubByParent, forksByParent: globalForksByParent, questions: placedQuestions, isQuestion, escalatedByRole, escalationsByLead } = placed;
 
   // -- Schedules in the inbox (status view) --
   // The same per-user webList the badges/strip/schedules page subscribe to
@@ -4672,6 +4770,7 @@ function SessionListPanelImpl({
                   variant={sectionVariant || "default"}
                   forkColorKey={forkColorKeyOf(session)}
                   escalatedCount={escalatedByRole.get(standingRoleIdOf(session) ?? "") ?? 0}
+                  escalations={escalationsByLead.get(session._id)}
                   subRow={flatNestParentOf && roleLookingAfter(session) && flatNestParentOf(session) ? "role" : undefined}
                   sessionLabel={labelByConv[session._id] ?? null}
                   isUnread={!!unreadByConv[session._id]}
@@ -4792,7 +4891,7 @@ function SessionListPanelImpl({
               key={blockedIncidentTs}
               data-cc-keep
               onClick={openBlockedBanner}
-              title={`${blockedSessions.length} session${blockedSessions.length === 1 ? "" : "s"} blocked on usage, login, connection, API errors, or safety review — view blockers`}
+              title={`${blockedSessions.length} session${blockedSessions.length === 1 ? "" : "s"} blocked on usage, login, connection, API errors, a full context window, or safety review — view blockers`}
               className={`flex items-center gap-1 px-1.5 py-[3px] rounded-[5px] text-[10px] font-semibold bg-amber-500/10 text-amber-500 border border-amber-500/30 hover:bg-amber-500/20 transition-colors ${blockedIncidentTs > 0 ? "cc-blocked-pill-pulse" : ""}`}
             >
               <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>

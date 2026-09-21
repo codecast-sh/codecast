@@ -3,7 +3,7 @@ import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { api, internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { createTeamFeedFilter, isTeamAdmin } from "./privacy";
+import { isTeamAdmin } from "./privacy";
 import { canAccessConversation } from "./lib/access";
 import {
   PRESENCE_FRESH_MS,
@@ -365,17 +365,6 @@ export const getTeamByInviteCode = query({
   },
 });
 
-// Message counters in the roster's session preview move on every streamed turn.
-// They are shown only as a coarse hover figure, so step them before they leave
-// the server — the same trick bucketTs plays on the presence timestamps. The web
-// store already steps this field by 16 (COUNTER_QUANTUM, inboxStore.ts), so the
-// value a client renders is unchanged.
-const MEMBER_COUNTER_STEP = 16;
-function stepCount(n: number | undefined): number | undefined {
-  if (n === undefined) return undefined;
-  return Math.floor(n / MEMBER_COUNTER_STEP) * MEMBER_COUNTER_STEP;
-}
-
 export const getTeamMembers = query({
   args: {
     team_id: v.id("teams"),
@@ -398,11 +387,19 @@ export const getTeamMembers = query({
       .query("team_memberships")
       .withIndex("by_team_id", (q) => q.eq("team_id", args.team_id))
       .collect();
-    // Visibility gate for the avatar-bar session preview: the most recent
-    // conversation may be private (team_id is routing, not visibility), so we
-    // must not expose its title/last-message. Pick the most recent *team-visible*
-    // session in this team instead.
-    const feedFilter = await createTeamFeedFilter(ctx, args.team_id);
+    // THIS QUERY READS NO CONVERSATION, AND MUST NOT START AGAIN. It is the
+    // most subscribed query in the app (the avatar bar, the team page, the
+    // settings sync and several mobile screens all mount it), and a Convex
+    // query re-runs whenever anything it read changes. A running agent bumps
+    // its conversation's updated_at several times a second, so reading even one
+    // conversation here re-runs the whole roster for every open tab and phone
+    // at agent-streaming rate. It used to read each member's ten most recent
+    // sessions for four preview fields (title, last message, message count,
+    // updated_at), and on 2026-09-22 that made this query 33% of all backend
+    // CPU while nothing rendered those fields any more — the March tooltip
+    // they were added for had stopped reading them. A surface that wants a
+    // member's recent session derives it from the sessions the store already
+    // syncs. What remains here changes at heartbeat rate, which is survivable.
     const now = Date.now();
     const members = await Promise.all(
       memberships.map(async (m) => {
@@ -463,14 +460,6 @@ export const getTeamMembers = query({
           const auth = await authorizeRoom(ctx, authUserId, liveCall.room_key);
           if (auth.ok) visibleRoomKey = liveCall.room_key;
         }
-        const recentConvos = await ctx.db
-          .query("conversations")
-          .withIndex("by_team_user_updated", (q) =>
-            q.eq("team_id", args.team_id).eq("user_id", user._id)
-          )
-          .order("desc")
-          .take(10);
-        const recentConvo = recentConvos.find((c) => feedFilter.isVisible(c));
         return {
           _id: user._id,
           name: user.name,
@@ -510,16 +499,6 @@ export const getTeamMembers = query({
           // byte-identical row every heartbeat.
           viewing_conversation_id: viewingConversationId,
           viewing_since: viewingConversationId ? bucketTs(presenceRow?.viewing_since) : undefined,
-          recent_session_title: recentConvo?.title,
-          // Coarse for the same reason as the presence fields above: this
-          // roster is always mounted, and a teammate's streaming agent bumps
-          // updated_at and message_count several times a second. Bucketed, most
-          // of those turns yield a byte-identical result and Convex skips the
-          // push; invalidation is unchanged. Both feed a hover figure and a
-          // relative age only.
-          recent_session_messages: stepCount(recentConvo?.message_count),
-          recent_session_updated: bucketTs(recentConvo?.updated_at),
-          recent_session_last_message: recentConvo?.last_message_preview,
         };
       })
     );

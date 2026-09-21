@@ -81,6 +81,8 @@ import {
   rideLeadPlacements,
   roleLeadIdsOf,
   isUnderRole,
+  roleEscalationsOf,
+  type RoleEscalation,
   isHardBlocked,
   DEAD_AGENT_STATUSES,
   fnv1a32Update,
@@ -230,6 +232,8 @@ export {
   selectThreadReplies,
   selectChatReactions,
   chatReactionSyncOpts,
+  teamChannelPushOpts,
+  isChatRoomRefusal,
   chatSendState,
   chatReactionStubId,
   newChatMessageClientId,
@@ -765,9 +769,15 @@ export type InboxSession = {
   standing_role_id?: string | null;
   role?: SessionRoleSnapshot | null;
   // The role put this session in front of the person (org-roles-run-work.md
-  // R1): it is a card of its own in needs input, wearing the role's line.
-  // Absent, a session under a role nests under the role's card instead.
-  escalated_by_role?: { role_id: string; line: string; at: number } | null;
+  // R1, revised). By default it reaches them through the ROLE's card, which
+  // files in needs input carrying this line, and this row stays nested under
+  // it; `direct` makes this row a card of its own in needs input, wearing the
+  // line. Absent, a session under a role nests quietly under the role's card.
+  escalated_by_role?: { role_id: string; line: string; at: number; direct?: boolean } | null;
+  // On a role's standing session: the escalations that reach the person
+  // through its card, derived from its sessions by the projection (the server
+  // row carries it; the store derives its own from the rows it holds).
+  escalations?: RoleEscalation[] | null;
   // Kept-for-later flag. Drives the Favorites top-level view (a long-term set,
   // grouped by project) — the same session cache, filtered. Set optimistically
   // by toggleFavorite and carried on both the inbox and favorites server rows.
@@ -2827,7 +2837,7 @@ export function sessionStructuralSig(s: InboxSession): string {
     // alone, never by a heartbeat.
     s.org_role_id || "",
     s.standing_role_id || "",
-    s.escalated_by_role ? `${s.escalated_by_role.at}:${s.escalated_by_role.line}` : "",
+    s.escalated_by_role ? `${s.escalated_by_role.at}:${s.escalated_by_role.direct ? "d" : ""}:${s.escalated_by_role.line}` : "",
     // Harness loop state decides trigger-set membership and absorption
     // (partitionTriggerInbox reads it off this same subscription). Distilled to
     // the fields that change rows; stamps once per turn end/wakeup, never on
@@ -2983,8 +2993,10 @@ export interface PlacedInbox {
   isQuestion: (s: InboxSession) => boolean;
   /** Rows placed in each section: flat cards plus members nested under a same-bucket lead — the header number. A role's nested sessions add to none. */
   counts: Record<InboxSectionKey, number>;
-  /** role id → how many of its sessions it has put in front of the person (escalated cards on the list): the number on the role's card. */
+  /** role id → how many of its sessions it has put in front of the person DIRECTLY (escalated cards on the list): the number on the role's card. */
   escalatedByRole: Map<string, number>;
+  /** The role's standing session id → the escalations that reach the person through its card, newest first (the lines on the role's card). */
+  escalationsByLead: Map<string, RoleEscalation[]>;
 }
 
 // The number a section header claims, for every surface that renders those
@@ -3316,6 +3328,17 @@ function samePlacements(a: Map<string, InboxRowPlacement>, b: Map<string, InboxR
   }
   return true;
 }
+function sameEscalations(a: Map<string, RoleEscalation[]>, b: Map<string, RoleEscalation[]>): boolean {
+  if (a.size !== b.size) return false;
+  for (const [k, list] of b) {
+    const prev = a.get(k);
+    if (!prev || prev.length !== list.length) return false;
+    for (let i = 0; i < list.length; i++) {
+      if (prev[i].conversation_id !== list[i].conversation_id || prev[i].at !== list[i].at || prev[i].line !== list[i].line) return false;
+    }
+  }
+  return true;
+}
 function sameCounts(a: Map<string, number>, b: Map<string, number>): boolean {
   if (a.size !== b.size) return false;
   for (const [k, n] of b) if (a.get(k) !== n) return false;
@@ -3644,12 +3667,16 @@ export function placeInboxRows(
     if (k) counts[k]++;
   }
   // The one number a role's card carries: how many of its sessions it has put
-  // in front of the person, over the cards actually on the list.
+  // in front of the person DIRECTLY, over the cards actually on the list. The
+  // rest reach the person through the role's card as lines (escalationsByLead,
+  // the shared derivation off the sessions under the role).
   const escalatedByRole = new Map<string, number>();
   for (const s of sorted) {
     const role = s.escalated_by_role?.role_id;
     if (role && isFlat(s)) escalatedByRole.set(role, (escalatedByRole.get(role) ?? 0) + 1);
   }
+  const sortedById = new Map(sorted.map((s) => [s._id, s]));
+  const escalationsByLead = roleEscalationsOf(sortedById.keys(), (id) => sortedById.get(id));
   // Pinning is manual curation: stable order by pin time, oldest first, so
   // existing pins keep their place when a new one lands.
   pinned.sort((a, b) => {
@@ -3708,6 +3735,7 @@ export function placeInboxRows(
     isQuestion,
     counts,
     escalatedByRole: prev && sameCounts(prev.escalatedByRole, escalatedByRole) ? prev.escalatedByRole : escalatedByRole,
+    escalationsByLead: prev && sameEscalations(prev.escalationsByLead, escalationsByLead) ? prev.escalationsByLead : escalationsByLead,
   };
 
   // 8. Dev-only convergence check (C5): the full shared computation over the
@@ -9081,10 +9109,12 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // and this patches local state; the placement reads the row, so the card
   // moves in the same tick. The draft's object is key for key what the server
   // stores, which is what lets the field lock retire on the echo.
+  // The person's own gesture is always direct (R1, revised): the session
+  // becomes their own card, not a line on the role's.
   putSessionInMyInbox: action(function (this: Draft, id: string, line: string, at: number) {
     const apply = (c: any) => {
       if (!c?.org_role_id) return;
-      c.escalated_by_role = { role_id: c.org_role_id, line, at };
+      c.escalated_by_role = { role_id: c.org_role_id, line, at, direct: true };
     };
     apply(this.sessions[id]);
     apply(this.conversations[id]);

@@ -452,6 +452,7 @@ export function toMessageView(row: ChatMessageRow, ctx: ViewContext): ChatMessag
     threadAgentStatus: useSummary ? summary!.agent_status : undefined,
     pending: state === "pending",
     failed: state === "failed",
+    failReason: state === "failed" && row._failReason ? row._failReason : undefined,
   };
 }
 

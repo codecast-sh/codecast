@@ -182,7 +182,7 @@ export function BranchSelector({
         {onFork && (
           <button
             onClick={onFork}
-            className="text-xs px-2.5 py-1 rounded border border-dashed border-sol-border/60 text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/50 hover:bg-sol-cyan/10 transition-all flex items-center gap-1.5"
+            className="text-xs px-2.5 py-1 rounded border border-dashed border-sol-border/60 text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/50 hover:bg-sol-cyan/10 transition-all flex select-none items-center gap-1.5"
             title="Fork the conversation from this message"
           >
             <BranchIcon className="w-3 h-3" />
