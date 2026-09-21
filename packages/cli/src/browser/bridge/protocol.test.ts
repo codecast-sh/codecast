@@ -9,11 +9,18 @@
 import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { BRIDGE_EXTENSION_ID, bridgePairingPage, bridgePairingUrl, extensionIdOfKey } from "./protocol.js";
+import { BRIDGE_EXTENSION_ID, BRIDGE_STORE_URL, bridgePairingPage, bridgePairingUrl, bridgeWakeUrl, extensionIdOfKey } from "./protocol.js";
 
 const manifestPath = path.join(import.meta.dir, "../../../../browser-extension/manifest.json");
 
 describe("BRIDGE_EXTENSION_ID", () => {
+  test("pairing, wake and installation use the published store item", () => {
+    expect(BRIDGE_EXTENSION_ID).toBe("odfpgkdaibmjhhnbndgbjlhdbciciifd");
+    expect(new URL(BRIDGE_STORE_URL).pathname.split("/").at(-1)).toBe(BRIDGE_EXTENSION_ID);
+    expect(new URL(bridgeWakeUrl()).host).toBe(BRIDGE_EXTENSION_ID);
+    expect(new URL(bridgeWakeUrl()).hash).toBe("#wake");
+  });
+
   test("is what Chrome derives from the manifest key", () => {
     const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as { key?: string };
     expect(manifest.key).toBeTruthy();
@@ -52,6 +59,7 @@ describe("bridgePairingPage", () => {
     const url = bridgePairingUrl({ token: "cd".repeat(32), port: 41729 });
     const page = bridgePairingPage(url);
     expect(page).toContain(`location.replace(${JSON.stringify(url)})`);
+    expect(page).toContain(`href="${BRIDGE_STORE_URL}"`);
     expect(page.match(/<script>/g)).toHaveLength(1);
   });
 

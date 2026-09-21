@@ -18,7 +18,7 @@ import { FakeExtension, TEST_TOKEN, testBridgeHost } from "./host.testutil.js";
 import { freePort } from "../instance.js";
 import { isRealSession, realSessionKey } from "../engine.js";
 import { withAdvancedClone } from "../advanced.js";
-import { tabIdOfTarget, targetIdOfTab } from "./protocol.js";
+import { BRIDGE_STORE_URL, tabIdOfTarget, targetIdOfTab } from "./protocol.js";
 
 let dir: string;
 let prevEnv: string | undefined;
@@ -109,11 +109,13 @@ describe("sticky target", () => {
     expect(realModeHint("session:a")).toBeNull();
     setStickyTarget("session:a", "clone");
     expect(withAdvancedClone(() => realModeHint("session:a"))).toContain("cast browser extension setup");
+    expect(withAdvancedClone(() => realModeHint("session:a"))).toContain(BRIDGE_STORE_URL);
     setStickyTarget("session:a", "real");
     writeBridgeState({ port: 41999, token: "t".repeat(64), hostPid: 2 ** 22 + 12345, extensionConnected: false, extensionSeenAt: Date.now() });
     expect(realModeHint("session:a")).toBeNull();
     setStickyTarget("session:a", "clone");
     expect(withAdvancedClone(() => realModeHint("session:a"))).toContain("not connected right now");
+    expect(withAdvancedClone(() => realModeHint("session:a"))).toContain(BRIDGE_STORE_URL);
     // A session that settled on the clone before the extension came is told the way over.
     setStickyTarget("session:a", "clone");
     writeBridgeState({ port: 41999, token: "t".repeat(64), hostPid: process.pid, extensionConnected: true, extensionSeenAt: Date.now() });
@@ -438,6 +440,9 @@ describe("bringing Chrome and its extension back for a verb", () => {
       expect(status.extensionConnected).toBe(false);
       expect(calls).toEqual([]);
       await expect(requireRealBridge(undefined, { waits, note: () => {}, chromeRunning: () => false, launchChrome: () => true, wakeExtension: () => true })).rejects.toThrow(/has not been paired/);
+      await expect(requireRealBridge(undefined, { waits, repair: false })).rejects.toThrow(BRIDGE_STORE_URL);
+      writeBridgeState({ port: host.port, token: TEST_TOKEN, hostPid: process.pid, extensionSeenAt: 1 });
+      await expect(requireRealBridge(undefined, { waits, repair: false })).rejects.toThrow(BRIDGE_STORE_URL);
     } finally {
       await host.close();
     }

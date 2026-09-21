@@ -25,6 +25,7 @@ export function MarketingFooter() {
               <li><Link href="/security" className="hover:text-[#073642]">Security</Link></li>
               <li><Link href="/download" className="hover:text-[#073642]">Desktop App</Link></li>
               <li><a href={SITE_LINKS.appStore} target="_blank" rel="noopener noreferrer" className="hover:text-[#073642]">iOS App</a></li>
+              <li><a href={SITE_LINKS.chromeExtension} target="_blank" rel="noopener noreferrer" className="hover:text-[#073642]">Chrome Extension</a></li>
             </ul>
           </div>
           <div>

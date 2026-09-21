@@ -76,7 +76,7 @@ const GROUPS: { label: string; sections: SectionDef[] }[] = [
     sections: [
       { id: "team", label: "Team", icon: Users, desc: "Members, identity and the features your team runs", keywords: "members invite roles icon org statuses" },
       { id: "sync", label: "Sync & Privacy", icon: RefreshCw, desc: "Which projects sync, and who can see them", keywords: "projects sharing visibility private workspace directories" },
-      { id: "integrations", label: "Integrations", icon: Plug, desc: "Slack, GitHub, Linear, Google and Notion, and the issues they sync", keywords: "slack github linear google gmail notion connect oauth install repositories issues sync apps" },
+      { id: "integrations", label: "Integrations", icon: Plug, desc: "Chrome extension, Slack, GitHub, Linear, Google and Notion", keywords: "chrome browser extension web store pair slack github linear google gmail notion connect oauth install repositories issues sync apps" },
     ],
   },
   {
@@ -84,7 +84,7 @@ const GROUPS: { label: string; sections: SectionDef[] }[] = [
     sections: [
       { id: "agent-features", label: "Agent Features", icon: Blocks, desc: "Capabilities your agents pick up per device", keywords: "snippets skills capabilities device" },
       { id: "provider-keys", label: "Provider Keys", icon: KeyRound, desc: "Model provider credentials per device", keywords: "api key anthropic openai secret" },
-      { id: "cli", label: "CLI", icon: Terminal, desc: "Install the cast CLI and sign a machine in", keywords: "install token terminal shell" },
+      { id: "cli", label: "CLI", icon: Terminal, desc: "Install the cast CLI, sign a machine in and pair Chrome", keywords: "install token terminal shell chrome browser extension web store pair" },
       { id: "agents", label: "Agents", icon: Bot, desc: "Permission modes and default parameters", keywords: "permissions yolo model parameters defaults" },
       { id: "agent-library", label: "Agent Library", icon: Bot, desc: "Named agent definitions and chains: client, model, effort, tools, prompt", keywords: "definitions roles reviewer scout chain pipeline subagent model effort prompt as" },
       { id: "claude-accounts", label: "Claude Accounts", icon: UserCog, desc: "Saved Claude sign-ins and auto-switching", keywords: "usage limits switch profiles anthropic" },

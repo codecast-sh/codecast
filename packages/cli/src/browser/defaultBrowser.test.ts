@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { FakeExtension, testBridgeHost } from "./bridge/host.testutil.js";
-import { BROWSER_SNIPPET, renderSectionBody, snippetBySlug } from "@codecast/shared/contracts";
+import { BROWSER_EXTENSION_STORE_URL, BROWSER_SNIPPET, renderSectionBody, snippetBySlug } from "@codecast/shared/contracts";
 
 const dirs: string[] = [];
 const test = (name: string, fn: () => void | Promise<unknown>) => bunTest(name, fn, 30_000);
@@ -79,11 +79,12 @@ async function run(driver: "engine" | "builtin", args: string[], codecastDir?: s
 
 for (const driver of ["engine", "builtin"] as const) {
   describe(`${driver} browser routing`, () => {
-    for (const args of [["start"], ["open", "https://example.com"], ["status"], ["eval", "1 + 1"]]) {
+    for (const args of [["start"], ["open", "https://example.com"], ["status"], ["snapshot"], ["eval", "1 + 1"]]) {
       test(`${args[0]} without pairing refuses instead of launching a clone`, async () => {
         const result = await run(driver, args);
         expect(result.code).toBe(1);
         expect(result.text).toContain("extension setup");
+        expect(result.text).toContain(BROWSER_EXTENSION_STORE_URL);
         expect(result.text).not.toContain("CLONE_LAUNCH");
       });
     }
@@ -225,6 +226,7 @@ test("full and short agent instructions make separate Chrome a last resort", () 
     expect(text).toContain("last resort");
     expect(text).toContain("explicit permission");
     expect(text).toContain("extension");
+    expect(text).toContain(BROWSER_EXTENSION_STORE_URL);
     expect(text).not.toContain("your own Chrome is never touched");
     expect(text).not.toContain("start --fresh");
     expect(text).not.toContain("start --remote");

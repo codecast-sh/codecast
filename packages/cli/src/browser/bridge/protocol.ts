@@ -30,6 +30,7 @@
  */
 
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { BROWSER_EXTENSION_ID, BROWSER_EXTENSION_STORE_URL } from "@codecast/shared/contracts";
 
 /**
  * Bumped when a message shape changes incompatibly. Both ends report theirs.
@@ -47,21 +48,13 @@ export const BRIDGE_DEFAULT_PORT = 41729;
  * derives the ID from that key: SHA-256 of the DER-encoded public key, the
  * first 32 hex characters, each digit mapped from 0-9a-f onto a-p (an ID is
  * letters only so it can never look like a number). `extensionIdOfKey` is that
- * rule; the test checks the constant against the manifest with it, and a
- * scratch Chrome for Testing reported the same value from chrome.runtime.id.
+ * rule; the test checks the constant against the manifest with it.
  * Without a key an unpacked extension is named after its install path, which
  * is why the key is committed: `cast browser extension setup` opens the
  * options page by this ID to hand the token over without a paste.
  */
-export const BRIDGE_EXTENSION_ID = "dfimhlggoaabdefnfhlpboehapdaakol";
-
-/**
- * Where the extension installs from once it is on the Chrome Web Store, or
- * null while it is loaded unpacked. `setup` prints this instead of the
- * developer-mode steps when set. The store is the only distribution Chrome
- * updates by itself; see packages/browser-extension/store/listing.md.
- */
-export const BRIDGE_STORE_URL: string | null = null;
+export const BRIDGE_EXTENSION_ID = BROWSER_EXTENSION_ID;
+export const BRIDGE_STORE_URL = BROWSER_EXTENSION_STORE_URL;
 
 /** Chrome's rule for the ID of an extension whose manifest carries `key` (base64 DER). */
 export function extensionIdOfKey(keyBase64: string): string {
@@ -100,7 +93,7 @@ export function bridgePairingPage(pairingUrl: string): string {
   const js = JSON.stringify(pairingUrl).replace(/</g, "\\u003c");
   return `<!doctype html><meta charset="utf-8"><title>Pairing with cast</title>` +
     `<script>location.replace(${js})</script>` +
-    `<p>Opening the Codecast extension. If this page stays, the extension is not installed or needs a reload at chrome://extensions.</p>\n`;
+    `<p>Opening the Codecast extension. If this page stays, <a href="${BRIDGE_STORE_URL}" target="_blank" rel="noopener noreferrer">install Codecast from the Chrome Web Store</a>, then run <code>cast browser extension setup</code> again.</p>\n`;
 }
 
 /** WS close code the host uses for a bad or missing token. */

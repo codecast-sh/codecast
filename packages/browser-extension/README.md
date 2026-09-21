@@ -2,8 +2,8 @@
 
 Drive tabs in your **real** Chrome from `cast browser`: your logins, your
 session, no profile clone. Once the extension is paired, your Chrome is the
-default. The agent browser is used before pairing or when explicitly chosen
-with `--clone` or `cast browser target clone`.
+default. A missing or disconnected extension reports a setup or recovery
+step; a separate browser is used only when the human explicitly requests it.
 
 ```
 cast CLI ──ws──▶ bridge host (127.0.0.1, token proven both ways) ◀──ws── this extension ──chrome.debugger──▶ your tabs
@@ -15,9 +15,9 @@ work the same way against the real Chrome. Only the transport differs.
 
 ## Install (about 3 minutes, nothing to paste)
 
-1. In Chrome, open `chrome://extensions`, turn on **Developer mode** (top
-   right), click **Load unpacked**, and select this directory
-   (`packages/browser-extension`).
+1. Install [Codecast from the Chrome Web Store](https://chromewebstore.google.com/detail/codecast/odfpgkdaibmjhhnbndgbjlhdbciciifd)
+   in the desktop Chrome profile you want agents to use. Chrome keeps this
+   installation up to date.
 2. In a terminal: `cast browser extension setup`. It starts the bridge host
    on this machine and opens the extension's options page in your Chrome with
    the token and port already filled in. The first time, the page shows the
@@ -75,8 +75,7 @@ default.
 The store is the only distribution Chrome updates on its own; an unpacked load
 never updates itself, and self-hosted packages are refused on macOS and
 Windows outside enterprise policy. So every install that should follow fixes
-comes from the store, unlisted at first (installable by link, updated like any
-store item, absent from search).
+comes from the [published store listing](https://chromewebstore.google.com/detail/codecast/odfpgkdaibmjhhnbndgbjlhdbciciifd).
 
 - `bun packages/browser-extension/release.mjs --dry-run` builds the package:
   the shipped files with the version bumped and the development `key` removed.
@@ -91,24 +90,25 @@ store item, absent from search).
   `status` says so when they differ, and a host change must keep accepting
   the previous extension protocol for one release.
 
-## The extension ID is stable, and the private key is gone
+## Store identity and development loads
 
-The pairing URL works because the extension has the same ID on every
-machine: `dfimhlggoaabdefnfhlpboehapdaakol`. Chrome names an unpacked
-extension after its install path unless the manifest carries a `key`, so
-`manifest.json` holds a committed public key and Chrome derives the ID from
-it (SHA-256 of the DER key, first 32 hex characters, each digit mapped from
-0 to f onto the letters a to p). `extensionIdOfKey` in
-`packages/cli/src/browser/bridge/protocol.ts` is that rule, and the constant
-`BRIDGE_EXTENSION_ID` next to it is what the CLI uses. `protocol.test.ts`
-checks that the constant agrees with the manifest.
+The published extension ID is `odfpgkdaibmjhhnbndgbjlhdbciciifd`. Its public
+key is committed in `manifest.json` so an unpacked development load uses the
+same ID. The ID and install URL live in
+`packages/shared/contracts/browserExtension.ts`; the CLI reuses them in
+`bridge/protocol.ts`. The protocol test checks that the manifest key derives
+this exact ID. The private signing key belongs to the Chrome Web Store.
 
-The matching private key was deleted after generation. An unpacked load reads
-only the public half, and nothing in this workflow signs a `.crx`. A private
-key we kept would be a secret with no use and one more thing to leak. To
-change the key, generate a new pair with `openssl genrsa 2048` and
-`openssl rsa -pubout -outform DER`, base64 the DER, update `key` in the
-manifest and `BRIDGE_EXTENSION_ID`, and delete the private key again.
+For extension development only, open `chrome://extensions`, enable Developer
+mode, choose **Load unpacked**, and select `packages/browser-extension`.
+Do not run the unpacked and store copies together. The old development ID was
+`dfimhlggoaabdefnfhlpboehapdaakol`: disable that copy before installing the
+store extension, update the CLI, then run `cast browser extension setup` again.
+An already paired development copy keeps working until you make the switch.
+
+When changing the store identity, retrieve the public key from the existing
+listing's Package tab; do not generate a replacement key. The store package
+omits `key`, and the store signs it with its own key on upload.
 
 ## Use
 
@@ -117,7 +117,7 @@ cast browser open https://example.com          # opens the session's own tab in 
 cast browser snapshot -i                       # every verb works as it does against the clone
 cast browser tabs                              # this session's tabs; the rest are yours
 cast browser open --real https://example.com   # or ask for the real Chrome on one verb
-cast browser snapshot --clone                  # --clone overrides a sticky real for one verb
+cast browser extension status                 # verify the extension connection
 cast browser target                            # prints the current choice
 ```
 
@@ -337,8 +337,8 @@ playwright caches, or install one with
   forbids it).
 - One extension connection per bridge host: install the extension in one
   Chrome profile. A second connection replaces the first.
-- A paired extension that is disconnected remains the default target;
-  choose `--clone` or `cast browser target clone` to use the agent browser.
+- A paired extension that is disconnected remains the default target.
+  Repair the connection; a failure never starts a separate browser.
 - `setup` opens the pairing page by starting the Chrome binary on the page's
   file path. Chrome's process singleton hands that to the Chrome that owns the
   default profile, or starts it. This is the only way to pick your Chrome over

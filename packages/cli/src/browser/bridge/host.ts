@@ -61,7 +61,7 @@ import { isPidAlive } from "../../workspace/chrome.js";
 import { browserHome } from "../profile.js";
 import { withSession, type CdpEndpoint } from "../cdp.js";
 import {
-  BRIDGE_DEFAULT_PORT, BRIDGE_PROTOCOL, bridgeProof, CLOSE_BAD_TOKEN, CLOSE_HANDSHAKE_TIMEOUT, CLOSE_SESSIONS_DROPPED, isNonce, randomNonce, secretMatches, tabIdOfTarget,
+  BRIDGE_DEFAULT_PORT, BRIDGE_PROTOCOL, BRIDGE_STORE_URL, bridgeProof, CLOSE_BAD_TOKEN, CLOSE_HANDSHAKE_TIMEOUT, CLOSE_SESSIONS_DROPPED, isNonce, randomNonce, secretMatches, tabIdOfTarget,
   targetIdOfTab, type BridgeGroup, type BridgeReply, type BridgeTab,
 } from "./protocol.js";
 
@@ -577,8 +577,8 @@ export function startBridgeHost(opts: {
     if (!ext || ext.readyState !== WebSocket.OPEN) {
       return Promise.reject(
         new Error(
-          "the cast bridge extension is not connected — open the extension's options in Chrome " +
-            "and check the token and port (`cast browser extension setup` prints them)",
+          `the cast bridge extension is not connected — if it is not installed, get Codecast from ${BRIDGE_STORE_URL}; ` +
+            "then run `cast browser extension setup` in a terminal on the same computer to pair it with Chrome",
         ),
       );
     }

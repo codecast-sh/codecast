@@ -108,20 +108,17 @@ unrelated to the single purpose; not used for creditworthiness or lending.
   PNG. They are rendered from the HTML beside them (`render.ts`, comment at the
   top has the two commands); edit the HTML, not the PNG.
 
-## Visibility
+## Published listing
 
-Start **Unlisted**: installable by anyone with the link, updated by Chrome
-like any store item, not shown in search. Move to Public once the listing
-has screenshots and the review has passed at least once.
+[Codecast on the Chrome Web Store](https://chromewebstore.google.com/detail/codecast/odfpgkdaibmjhhnbndgbjlhdbciciifd)
 
-## First submission (by hand, once)
+Upload updates to this existing item; creating a new
+item would change the ID and break CLI pairing. The manifest holds this
+listing's public key for development loads, and
+`packages/shared/contracts/browserExtension.ts` holds the ID and store URL.
 
-1. Developer dashboard → New item → upload the zip from
-   `bun packages/browser-extension/release.mjs --dry-run`.
-2. Fill the listing and privacy tabs from this file; set visibility Unlisted.
-3. Submit for review.
-4. Package tab → **View public key**. Copy the key body into `manifest.json`
-   `key` and set `BRIDGE_EXTENSION_ID` in
-   `packages/cli/src/browser/bridge/protocol.ts` to the store's ID; the
-   protocol test checks they agree. Set `BRIDGE_STORE_URL` there as well.
-5. Every later release is the "Cut Chrome extension release" workflow.
+Later releases use the "Cut Chrome extension release" workflow. For a manual
+upload, build with `bun packages/browser-extension/release.mjs --dry-run`,
+then upload that ZIP to this item's Package tab and submit for review. After
+a manual release, update the source manifest version to the accepted version
+so the next release increments it instead of uploading the same version again.

@@ -10,6 +10,7 @@ import { AppLoader } from "../../../components/AppLoader";
 import { Button } from "../../../components/ui/button";
 import { SegmentedToggle } from "../../../components/SegmentedToggle";
 import { SettingsPanel, SettingsSection } from "../../../components/settings/ui";
+import { BrowserExtensionSetup } from "../../../components/settings/BrowserExtensionSetup";
 
 type InstallOs = "unix" | "windows";
 
@@ -135,6 +136,8 @@ export default function CliSettingsPage() {
           </div>
         )}
       </SettingsSection>
+
+      <BrowserExtensionSetup />
 
       <SettingsSection title="CLI commands" icon={Terminal} padded>
         <div className="space-y-1 rounded-lg bg-sol-bg p-3 font-mono text-sm">
