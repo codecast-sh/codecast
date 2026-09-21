@@ -677,6 +677,7 @@ export class SyncService {
     email?: string,
     reason?: string,
     url?: string,
+    startedAt?: number,
   ): Promise<void> {
     await this.throttle();
     await this.mutate("accountSwitch:reportMintFlow" as any, {
@@ -687,6 +688,7 @@ export class SyncService {
       ...(email ? { email } : {}),
       ...(reason ? { reason } : {}),
       ...(url ? { url } : {}),
+      ...(startedAt !== undefined ? { started_at: startedAt } : {}),
     });
   }
 

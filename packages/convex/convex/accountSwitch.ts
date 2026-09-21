@@ -1227,24 +1227,25 @@ async function enqueueMintFlow(
   target: Doc<"devices">,
   profile: string,
   opts: { force?: boolean; now: number },
-): Promise<{ device_id: string; profile: string; email?: string; already_pending?: boolean; command_id?: Id<"daemon_commands"> }> {
+): Promise<{ device_id: string; profile: string; email?: string; started_at: number; already_pending?: boolean; command_id?: Id<"daemon_commands"> }> {
   const row = target.cc_accounts?.profiles.find((p) => p.name === profile);
   if (!row) throw new Error(`No saved profile "${profile}" on that machine`);
   const existing = target.cc_mint_flow;
-  if (!opts.force && existing?.status === "pending" && opts.now - existing.started_at < MINT_FLOW_STALE_MS) {
-    return { device_id: target.device_id, profile: existing.profile ?? profile, email: existing.email, already_pending: true };
+  if (!opts.force && existing?.profile === profile && existing?.status === "pending" && opts.now - existing.started_at < MINT_FLOW_STALE_MS) {
+    return { device_id: target.device_id, profile: existing.profile ?? profile, email: existing.email, started_at: existing.started_at, already_pending: true };
   }
+  const startedAt = Math.max(opts.now, (existing?.started_at ?? 0) + 1);
   await ctx.db.patch(target._id, {
-    cc_mint_flow: { status: "pending" as const, profile, email: row.email, started_at: opts.now },
+    cc_mint_flow: { status: "pending" as const, profile, email: row.email, started_at: startedAt },
   });
   const commandId = await ctx.db.insert("daemon_commands", {
     user_id: userId,
     command: "switch_account" as const,
-    args: JSON.stringify({ mint: profile, ...(opts.force ? { force: true } : {}) }),
+    args: JSON.stringify({ mint: profile, mint_started_at: startedAt, force: true }),
     created_at: opts.now,
     target_device_id: target.device_id,
   });
-  return { command_id: commandId, device_id: target.device_id, profile, email: row.email };
+  return { command_id: commandId, device_id: target.device_id, profile, email: row.email, started_at: startedAt };
 }
 
 async function onlineMintTarget(ctx: { db: any }, userId: Id<"users">, deviceIdArg: string | undefined, now: number): Promise<Doc<"devices">> {
@@ -1273,6 +1274,42 @@ export const requestMintToken = mutation({
     const now = Date.now();
     const target = await onlineMintTarget(ctx, userId, args.device_id, now);
     return await enqueueMintFlow(ctx, userId, target, args.profile, { force: args.force === true, now });
+  },
+});
+
+export const cancelMintToken = mutation({
+  args: { device_id: v.string(), started_at: v.number() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx);
+    if (!userId) throw new Error("Authentication required");
+    const device = await ctx.db.query("devices")
+      .withIndex("by_user_device", q => q.eq("user_id", userId).eq("device_id", args.device_id)).first();
+    if (!device) throw new Error("Unknown device");
+    if (device.cc_mint_flow?.status !== "pending" || device.cc_mint_flow.started_at !== args.started_at) return;
+    await ctx.db.patch(device._id, { cc_mint_flow: { ...device.cc_mint_flow, status: "cancelled", url: undefined, finished_at: Date.now() } });
+    await ctx.db.insert("daemon_commands", {
+      user_id: userId, command: "switch_account", target_device_id: device.device_id,
+      created_at: Date.now(), args: JSON.stringify({ cancel_mint: true, mint_started_at: args.started_at }),
+    });
+  },
+});
+
+export const submitMintCode = mutation({
+  args: {
+    device_id: v.string(), started_at: v.number(),
+    payload: v.object({ provider: v.string(), epk: v.string(), iv: v.string(), ct: v.string() }),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx);
+    if (!userId) throw new Error("Authentication required");
+    const device = await onlineMintTarget(ctx, userId, args.device_id, Date.now());
+    if (device.cc_mint_flow?.status !== "pending" || device.cc_mint_flow.started_at !== args.started_at
+      || Date.now() - args.started_at >= MINT_FLOW_STALE_MS) throw new Error("This mint has ended. Start again.");
+    if (args.payload.provider !== "claude-mint-code" || args.payload.ct.length > 8192) throw new Error("Invalid approval code");
+    return await ctx.db.insert("daemon_commands", {
+      user_id: userId, command: "switch_account", target_device_id: device.device_id,
+      created_at: Date.now(), args: JSON.stringify({ mint_code: args.payload, mint_started_at: args.started_at }),
+    });
   },
 });
 
@@ -1314,6 +1351,7 @@ export const reportMintFlow = mutation({
     email: v.optional(v.string()),
     reason: v.optional(v.string()),
     url: v.optional(v.string()),
+    started_at: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -1325,17 +1363,18 @@ export const reportMintFlow = mutation({
     if (!device) return;
     const now = Date.now();
     const prior = device.cc_mint_flow;
+    if (prior?.status !== "pending" || (args.started_at !== undefined && args.started_at !== prior.started_at)) return;
     // A pending report carrying the URL refines the pending stamp the request
     // wrote; it must not restart the clock or drop the email.
-    const samePending = prior?.status === "pending" && prior.profile === args.profile;
+    if (args.status === "pending" && prior.profile !== args.profile) return;
     await ctx.db.patch(device._id, {
       cc_mint_flow: {
         status: args.status,
-        profile: args.profile,
+        profile: prior.profile,
         email: args.email ?? prior?.email,
         ...(args.reason ? { reason: args.reason } : {}),
-        ...(args.url ? { url: args.url } : args.status === "pending" && samePending && prior?.url ? { url: prior.url } : {}),
-        started_at: args.status === "pending" && !samePending ? now : (prior?.started_at ?? now),
+        ...(args.url ? { url: args.url } : args.status === "pending" && prior.url ? { url: prior.url } : {}),
+        started_at: prior.started_at,
         ...(args.status !== "pending" ? { finished_at: now } : {}),
       },
     });
@@ -2302,6 +2341,7 @@ export const listAccountProfiles = query({
           login_flow: d.cc_login_flow,
           session_tokens: true,
           mint_flow: d.cc_mint_flow,
+          provider_key_pubkey: d.provider_key_pubkey,
           profiles: d.cc_accounts?.profiles ?? [],
           codex_accounts: d.codex_accounts ?? legacyCodexAccounts(d.codex_usage),
           auto_switch: d.cc_auto_switch === true,

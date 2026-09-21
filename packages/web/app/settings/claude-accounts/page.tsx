@@ -69,6 +69,7 @@ type DeviceAccounts = {
   };
   login_flow?: ProfileLoginFlow | null;
   mint_flow?: MintFlow | null;
+  provider_key_pubkey?: string;
 };
 
 function sessionsBadge(

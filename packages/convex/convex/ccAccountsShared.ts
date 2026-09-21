@@ -119,7 +119,7 @@ export const ccAccountsValidator = v.object({
 // belongs to the profile, stores it → outcome). Same state-channel contract as
 // cc_login_flow: the web watches this field reactively.
 export const ccMintFlowValidator = v.object({
-  status: v.union(v.literal("pending"), v.literal("confirmed"), v.literal("rejected")),
+  status: v.union(v.literal("pending"), v.literal("confirmed"), v.literal("rejected"), v.literal("cancelled")),
   profile: v.optional(v.string()), // the profile the token is for
   // pending: the sign-in page the daemon opened, so the web can offer it
   // again when the browser tab was closed or never appeared.
