@@ -16,7 +16,7 @@ import { armedTriggerKindFor } from "./dormancy";
 import { configuredCloudWakeHosts, getCloudWakeHostForConversation } from "./cloudWake";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { enqueueRoleEvent } from "./orgEvents";
-import { normalizeThreadState, runOwnerOf, runOwnerWakeOf, runResultThreadOf, triggerLifecycleInstructions, type RunOutcome } from "@codecast/shared/contracts";
+import { triggerFiringSource, normalizeThreadState, runOwnerOf, runOwnerWakeOf, runResultThreadOf, triggerLifecycleInstructions, type RunOutcome } from "@codecast/shared/contracts";
 import { earliestUsageResetAt, listOnlineDevices } from "./ccAccountsShared";
 import { performSetThreadState } from "./conversations";
 
@@ -95,9 +95,16 @@ async function applyResume(ctx: TaskCtx, task: Doc<"agent_tasks">) {
   return true;
 }
 
-async function applyRunNow(ctx: TaskCtx, task: Doc<"agent_tasks">) {
-  await patchTask(ctx, task, { status: "scheduled", run_at: Date.now() });
+export async function applyRunNow(ctx: TaskCtx, task: Doc<"agent_tasks">) {
+  await patchTask(ctx, task, { status: "scheduled", run_at: Date.now(), requested_run_source: "manual" });
   return true;
+}
+
+export function claimRunSourceFields(task: { schedule_type?: string; requested_run_source?: string }) {
+  return {
+    requested_run_source: undefined,
+    last_run_source: triggerFiringSource(task.schedule_type, task.requested_run_source),
+  };
 }
 
 async function applyCancel(ctx: TaskCtx, task: Doc<"agent_tasks">) {
@@ -116,6 +123,7 @@ async function applyReactivate(ctx: TaskCtx, task: Doc<"agent_tasks">) {
   await patchTask(ctx, task, {
     status: "scheduled",
     canceled_on_kill_at: undefined,
+    requested_run_source: undefined,
     run_at:
       task.schedule_type === "event"
         ? undefined
@@ -231,6 +239,7 @@ async function parkRunAtLimit(
     last_run_session_uuid: runConv.session_id,
     last_run_conversation_id: runConv._id,
     parked_run_session_uuid: runConv.session_id,
+    requested_run_source: task.last_run_source === "manual" ? "manual" : undefined,
   });
 }
 
@@ -724,7 +733,7 @@ export const dispatchCloudTriggers = internalMutation({
         : "";
       const clientId = `cloud-trigger:${task._id}:${task.run_count}`;
       const prompt = `${task.prompt}\n\n${triggerLifecycleInstructions(task)}`;
-      const updates = completedTaskRunFields(task, now, { conversation_id: conversation._id });
+      const updates: Record<string, any> = { ...completedTaskRunFields(task, now, { conversation_id: conversation._id }), ...claimRunSourceFields(task) };
       // A routine on a role's standing session rides the wake rail: an
       // immediate outbox row with the prompt as cause, so the frame carries
       // it alongside everything else the role owes a look (T3).
@@ -800,6 +809,7 @@ export const claimTask = mutation({
     if (await cloudTriggerConversation(ctx, task)) return null;
 
     const now = Date.now();
+    const sourceFields = claimRunSourceFields(task);
     // Through patchTask (scheduled → running are both armed statuses, so the
     // home's armed_trigger_kind is unchanged — but every lifecycle writer
     // routes through the one restamping chokepoint; see the exhaustive test).
@@ -810,9 +820,10 @@ export const claimTask = mutation({
       lease_holder: args.daemon_id,
       lease_expires_at: now + LEASE_DURATION_MS,
       parked_run_session_uuid: undefined,
+      ...sourceFields,
     });
 
-    return { ...task, status: "running" as const };
+    return { ...task, status: "running" as const, ...sourceFields };
   },
 });
 
@@ -1132,6 +1143,7 @@ export const failTaskRun = mutation({
         status: "scheduled",
         retry_count: newRetryCount,
         run_at: Date.now() + 60_000 * newRetryCount, // backoff
+        requested_run_source: task.last_run_source === "manual" ? "manual" : undefined,
         lease_holder: undefined,
         lease_expires_at: undefined,
         last_run_summary: args.error ? `Failed: ${args.error}` : "Failed",
@@ -1208,6 +1220,7 @@ export const skipTaskRun = mutation({
     duration_ms: v.number(),
     output: v.optional(v.string()),
     reason: v.string(),
+    source: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -1227,6 +1240,7 @@ export const skipTaskRun = mutation({
       duration_ms: args.duration_ms,
       output: args.output,
       reason: args.reason,
+      source: task.last_run_source ?? args.source ?? triggerFiringSource(task.schedule_type),
       created_at: now,
     });
 
@@ -1643,6 +1657,7 @@ async function precheckSkipRuns(ctx: { db: any }, taskId: Id<"agent_tasks">) {
     trigger_message_timestamp: undefined,
     precheck_command: skip.command,
     precheck_output: skip.output,
+    source: skip.source,
   }));
 }
 
@@ -2146,6 +2161,7 @@ export const reclaimStaleTasks = internalMutation({
             status: "scheduled",
             run_at: now,
             retry_count: task.retry_count + 1,
+            requested_run_source: task.last_run_source === "manual" ? "manual" : undefined,
             lease_holder: undefined,
             lease_expires_at: undefined,
           });

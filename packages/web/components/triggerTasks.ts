@@ -59,6 +59,7 @@ export type TaskRow = {
   precheck?: string;
   last_precheck_skip_at?: number;
   last_precheck_skip_reason?: string;
+  last_run_source?: string;
   // Haiku-distilled presentation fields (agentTasks.generateDisplaySummary).
   // display_title only exists when the stored title was a prompt slice; an
   // explicit human title is left alone, so preferring display_title is safe.
