@@ -42,14 +42,14 @@ describe("org history commands", () => {
     output();
     const now = 1_790_000_000_000;
     spyOn(Date, "now").mockReturnValue(now);
-    const query = mock(async () => ({ entries: [], has_more: false }));
+    const query = mock(async (_args: Parameters<NonNullable<Parameters<typeof showOrgLog>[2]>>[0]) => ({ entries: [], has_more: false }));
     await showOrgLog(deps, { team: "Acme", role: "@growth", since: "7d" }, query);
     expect(query.mock.calls).toEqual([[{ team_id: "team-a", role: "@growth", since: now - 7 * 86_400_000, limit: 100 }]]);
   });
 
   test("personal has no team and no implicit time filter", async () => {
     const lines = output();
-    const query = mock(async () => ({ entries: [], has_more: false }));
+    const query = mock(async (_args: Parameters<NonNullable<Parameters<typeof showOrgLog>[2]>>[0]) => ({ entries: [], has_more: false }));
     await showOrgLog(deps, { team: "personal" }, query);
     expect(query.mock.calls).toEqual([[{ limit: 100 }]]);
     expect(lines.join("\n")).toContain("No org changes match");
