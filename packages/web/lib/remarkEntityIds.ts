@@ -33,6 +33,14 @@ function mdastText(node: any): string {
   return "";
 }
 
+function isUrlLabel(text: string, href: string): boolean {
+  const label = text.trim().replace(/^https?:\/\//i, "");
+  const url = href.trim().replace(/^https?:\/\//i, "");
+  if (label === url) return true;
+  const prefix = label.replace(/(?:…|\.{3})$/, "");
+  return prefix !== label && prefix.includes("/") && url.startsWith(prefix);
+}
+
 /**
  * A publish URL (codecast.sh/a/<slug>) standing alone on its own line becomes
  * a block-level page embed — the page renders inline in the conversation, the
@@ -45,7 +53,7 @@ function toPageEmbedLink(link: any): any | null {
   const page = parsePublishedPageUrl(link?.type === "link" ? link.url : null);
   if (!page) return null;
   const text = mdastText(link).trim();
-  const caption = text && text !== link.url ? text : "";
+  const caption = text && !isUrlLabel(text, link.url) ? text : "";
   const payload = `artifact:${page.slug}${caption ? `|${caption}` : ""}`;
   return {
     type: "link",
@@ -103,7 +111,7 @@ function promoteMessageLinks(node: any) {
   node.children = node.children.map((child: any) => {
     if (child.type === "link") {
       const ref = parseMessageRefUrl(child.url);
-      if (ref && mdastText(child).trim() === String(child.url).trim()) {
+      if (ref && isUrlLabel(mdastText(child), child.url)) {
         const payload = messageRefPayload(ref);
         return { type: "link", url: `entity://${payload}`, children: [{ type: "text", value: payload }] };
       }

@@ -290,3 +290,49 @@ describe("session unread", () => {
     expect(REPLICATION_CLASSIFICATION.sessionReads).toBe("shared");
   });
 });
+
+describe("unread snapshot reuse", () => {
+  it("reuses old and current results when React revisits both snapshots", () => {
+    let enumerations = 0;
+    const sessions = new Proxy({ [CONV]: session(CONV, 5_000) }, {
+      ownKeys(target) { enumerations++; return Reflect.ownKeys(target); },
+    });
+    const before = { sessions, sessionReads: {}, _lastViewedAt: {} };
+    const after = { ...before, _lastViewedAt: { [CONV]: 5_000 } };
+    const unread = sessionUnreadMap(before);
+    const read = sessionUnreadMap(after);
+    enumerations = 0;
+
+    expect(sessionUnreadWakeSig(before)).toBe(CONV);
+    expect(sessionUnreadWakeSig(after)).toBe("");
+    expect(sessionUnreadMap(before)).toBe(unread);
+    expect(sessionUnreadMap(after)).toBe(read);
+    expect(enumerations).toBe(0);
+  });
+
+  it("invalidates independently for activity, server marks, and local viewing", () => {
+    const before = { sessions: { [CONV]: session(CONV, 5_000) }, sessionReads: {}, _lastViewedAt: {} };
+    const viewed = { ...before, _lastViewedAt: { [CONV]: 5_000 } };
+    const activity = { ...viewed, sessions: { [CONV]: session(CONV, 6_000) } };
+    const marked = { ...activity, sessionReads: { read: { _id: serverId("read"), conversation_id: CONV, acknowledged_at: 6_000 } } };
+    const manual = { ...marked, sessionReads: { read: { ...marked.sessionReads.read, manual_unread: true } } };
+
+    expect(sessionUnreadWakeSig(before)).toBe(CONV);
+    expect(sessionUnreadWakeSig(viewed)).toBe("");
+    expect(sessionUnreadWakeSig(activity)).toBe(CONV);
+    expect(sessionUnreadWakeSig(marked as any)).toBe("");
+    expect(sessionUnreadWakeSig(manual as any)).toBe(CONV);
+    expect(sessionUnreadWakeSig(viewed)).toBe("");
+  });
+
+  it("reuses the read lookup without retaining an obsolete winner", () => {
+    const row = { _id: serverId("read"), conversation_id: CONV, acknowledged_at: 5_000, updated_at: 5_000 };
+    const before = { read: row };
+    const after = { read: { ...row, acknowledged_at: 6_000, updated_at: 6_000 } };
+    const first = sessionReadMap(before as any);
+
+    expect(sessionReadMap(before as any)).toBe(first);
+    expect(sessionReadMap(after as any)[CONV].acknowledged_at).toBe(6_000);
+    expect(sessionReadMap(before as any)[CONV].acknowledged_at).toBe(5_000);
+  });
+});

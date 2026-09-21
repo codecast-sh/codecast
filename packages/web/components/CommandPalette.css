@@ -1,0 +1,16 @@
+.palette-pick-composer.ch-composer {
+  min-width: 0;
+  background: var(--sol-bg-alt);
+  border-color: color-mix(in srgb, var(--sol-border) 60%, transparent);
+}
+
+.palette-pick-composer.ch-composer:focus-within {
+  border-color: color-mix(in srgb, var(--sol-cyan) 70%, var(--sol-border));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--sol-cyan) 10%, transparent);
+}
+
+.palette-pick-composer [data-chat-input] {
+  min-height: 64px;
+  max-height: min(240px, 30vh);
+  overflow-y: auto;
+}

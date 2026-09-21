@@ -4,7 +4,7 @@ import { useInboxStore, useTrackedStore, type AppTab } from "../store/inboxStore
 import { isPrewarmTab, clearPrewarmTab } from "../lib/openIntent";
 import { tabSessionId } from "../lib/tabTitle";
 import { conversationTabPath, tabNeedsUrlRestore } from "../lib/pathLabel";
-import { useConversationMessages } from "../hooks/useConversationMessages";
+import { SessionPrewarm } from "./SessionPrewarm";
 import { stageRenderLayout } from "../lib/stage";
 import { useNarrowStage } from "../hooks/useNarrowStage";
 import { useStageShortcuts } from "../hooks/useStageShortcuts";
@@ -44,20 +44,6 @@ const navBoot: { url: string | null } = ((globalThis as any).__codecastTabNavBoo
 // TabContent itself remounts, a surviving set means every previously visited
 // tab remounts warm (hidden) instead of silently losing its pane.
 const mountedTabs: Set<string> = ((globalThis as any).__codecastMountedTabs ??= new Set());
-
-// -- SessionPrewarm: warms a background session tab's messages --
-//
-// A background inbox pane cannot show its own `?s=` session — it paints the
-// GLOBAL current conversation and only re-asserts its param once active (a
-// background tab must never reach into global state). So mounting the pane
-// alone leaves the target session cold. This subscribes the same message hook
-// the conversation view uses, so the store already holds the session's window
-// when the tab is switched to; the view's own subscription then takes over
-// (Convex dedupes identical subscriptions across hooks — no refetch).
-function SessionPrewarm({ sessionId }: { sessionId: string }) {
-  useConversationMessages(sessionId);
-  return null;
-}
 
 // -- TabPane: renders one tab's content with context --
 

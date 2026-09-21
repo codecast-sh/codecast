@@ -8,24 +8,16 @@ import { NewSessionView } from "./conversation/sessionControls";
 import { MessageInput } from "./MessageInput";
 import type { ConversationData } from "./conversation/types";
 import { KeyCap } from "./KeyboardShortcutsHelp";
-import { formatShortcutParts } from "../shortcuts";
+import { formatShortcutParts, getShortcutsForAction } from "../shortcuts";
 import { isElectron, bridge } from "../lib/desktop";
 import { resolveSessionSkills } from "../lib/sessionSkills";
 import { broadcastComposeOptimistic } from "../lib/composeBridge";
 import { AGENT_LAUNCH_OPTIONS } from "@codecast/shared/contracts";
-import type { DraftImageRow } from "../lib/draftImages";
+import { composeDraftContent, type ComposeInstance } from "../store/composeSlice";
+import { Minus, Maximize2, ChevronUp, X } from "lucide-react";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
-// The draft content held for a compose stub, or null when there is none worth
-// keeping. Read straight from the store — MessageInput persists text and pasted
-// images (blob previews included) into drafts[id] synchronously as they change.
-function draftContentFor(id: string | null): { text: string; images: DraftImageRow[] } | null {
-  if (!id) return null;
-  const d = useInboxStore.getState().drafts[id];
-  const text = typeof d?.draft_message === "string" ? d.draft_message.trim() : "";
-  const images = Array.isArray(d?.draft_image_storage_ids) ? (d.draft_image_storage_ids as DraftImageRow[]) : [];
-  return text || images.length > 0 ? { text, images } : null;
-}
+const draftContentFor = (id: string | null) => composeDraftContent(useInboxStore.getState(), id);
 
 /**
  * The floating new-session popup, shown in the palette window when summoned by
@@ -43,9 +35,18 @@ function draftContentFor(id: string | null): { text: string; images: DraftImageR
  * dismissal ABANDONS it (abandonStub prunes the un-sent stub). The two hosts —
  * the in-app overlay (onClose set) and the standalone palette window (Electron) —
  * differ only in how they dismiss, never in this commit/abandon contract.
+ *
+ * In the app, ComposeHost passes the `instance` (store/composeSlice.ts), and
+ * the same mounted view is either the center modal or a docked composer: small,
+ * non-modal, one of several along the bottom edge, collapsible to its title
+ * bar. A docked composer owns the keyboard only while focus is inside it.
  */
-export function ComposeView({ initialQuery, context, onClose, closeGuardRef }: { initialQuery?: string; context?: { projectPath?: string; gitRoot?: string }; onClose?: () => void; closeGuardRef?: React.MutableRefObject<(() => void) | null> }) {
+export function ComposeView({ initialQuery, context, onClose, closeGuardRef, instance }: { initialQuery?: string; context?: { projectPath?: string; gitRoot?: string }; onClose?: () => void; closeGuardRef?: React.MutableRefObject<(() => void) | null>; instance?: ComposeInstance }) {
   const router = useRouter();
+  const docked = instance?.mode === "dock";
+  const collapsed = docked && !!instance?.collapsed;
+  const instanceRef = useRef(instance);
+  useWatchEffect(() => { instanceRef.current = instance; }, [instance]);
   const { user: currentUser } = useCurrentUser();
   const [sessionId, setSessionId] = useState<string | null>(null);
   // Project + agent captured when the blank session is created, so the popup's
@@ -122,6 +123,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef }: {
     });
     materializeRef.current = materialize;
     stubIdRef.current = sid;
+    if (instance) store.bindComposeStub(instance.id, sid);
 
     if (initialQuery) store.setDraft(sid, { draft_message: initialQuery });
     setSessionId(sid);
@@ -149,9 +151,13 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef }: {
   // its input on show. Skips when the user already focused something inside the
   // popup (e.g. the project picker), so it never fights a deliberate focus.
   const rootRef = useRef<HTMLDivElement>(null);
+  const focusedOnceRef = useRef(false);
   useMountEffect(() => {
     const focusInput = () => {
       const root = rootRef.current;
+      // A docked composer never pulls focus back: the app behind it is live.
+      if (instanceRef.current?.mode === "dock" && focusedOnceRef.current) return;
+      focusedOnceRef.current = true;
       if (!root || root.contains(document.activeElement)) return;
       const ta = root.querySelector<HTMLTextAreaElement>("textarea");
       if (!ta) return;
@@ -232,8 +238,15 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef }: {
     rootRef.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus();
   }, []);
 
+  // Expanding a dock, restoring a collapsed one, or minimizing the modal all
+  // leave the composer as the thing being used: put the caret back in it.
+  useWatchEffect(() => { if (!collapsed) refocusComposer(); }, [docked, collapsed, refocusComposer]);
+
   const requestClose = useCallback(() => {
     if (!sentRef.current && draftContentFor(stubIdRef.current)) {
+      // The confirm paints inside the body a collapsed dock hides.
+      const inst = instanceRef.current;
+      if (inst?.collapsed) useInboxStore.getState().setComposeCollapsed(inst.id, false);
       setConfirmClose(true);
       return;
     }
@@ -282,6 +295,20 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef }: {
   useMountEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
+      // Docked: Escape is ours only while focus is inside, and it minimizes to
+      // the title bar and hands the keyboard back to the app. Closing a dock is
+      // its X button (through the same draft guard).
+      const inst = instanceRef.current;
+      if (inst?.mode === "dock") {
+        if (!rootRef.current?.contains(document.activeElement)) return;
+        if (!confirmCloseRef.current && !escapeOwnedRef.current && (document.activeElement as HTMLElement | null)?.tagName !== "INPUT") {
+          e.preventDefault();
+          e.stopPropagation();
+          useInboxStore.getState().setComposeCollapsed(inst.id, true);
+          (document.activeElement as HTMLElement | null)?.blur();
+          return;
+        }
+      }
       if (confirmCloseRef.current) {
         e.preventDefault();
         e.stopPropagation();
@@ -377,17 +404,26 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef }: {
       // aria-modal is what makes the global shortcut dispatcher stand down
       // (hasOpenModal) — without it, any keystroke after focus slips out of the
       // composer acts on the app BEHIND this dialog.
+      // A docked composer is not modal: the app behind it keeps its shortcuts.
       role="dialog"
-      aria-modal="true"
+      aria-modal={docked ? undefined : "true"}
+      aria-label="New session"
       // Clicking dead space inside the dialog must not blur the composer (a
       // blurred dialog leaks keyboard focus to the app). preventDefault on
       // mousedown keeps focus where it is; interactive targets keep native
       // focus behavior.
       onMouseDownCapture={(e) => {
         const t = e.target as HTMLElement;
-        if (!t.closest("button, a, input, textarea, select, [contenteditable=true], [role=option]")) e.preventDefault();
+        if (t.closest("button, a, input, textarea, select, [contenteditable=true], [role=option]")) return;
+        e.preventDefault();
+        // The same click on a dock the user had left brings the caret back.
+        if (docked && !collapsed && !rootRef.current?.contains(document.activeElement)) refocusComposer();
       }}
-      className="relative w-[94vw] h-[88vh] max-w-[960px] max-h-[680px] rounded-xl border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col animate-in fade-in-0 zoom-in-95 slide-in-from-top-2 duration-150"
+      className={`relative border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col animate-in fade-in-0 duration-150 ${
+        !docked ? "w-[94vw] h-[88vh] max-w-[960px] max-h-[680px] rounded-xl zoom-in-95 slide-in-from-top-2"
+          : collapsed ? "w-[280px] max-w-full rounded-t-lg border-b-0 slide-in-from-bottom-4"
+          : "w-[460px] max-w-full h-[min(520px,calc(100vh-5rem))] rounded-t-xl border-b-0 slide-in-from-bottom-4"
+      }`}
       onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
       {isDragging && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-sol-bg/80 backdrop-blur-sm" style={{ animation: "fadeIn 150ms ease-out" }}>
@@ -397,7 +433,11 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef }: {
           </div>
         </div>
       )}
-      <div className="flex-1 min-h-0 flex flex-col px-4 pt-6">
+      {instance && <ComposeChrome instance={instance} stubId={sessionId} onRequestClose={requestClose} />}
+      {/* Collapsed keeps everything mounted (draft, pickers, uploads) and only
+          stops painting it. */}
+      <div className={collapsed ? "hidden" : "contents"}>
+      <div className={`flex-1 min-h-0 flex flex-col px-4 ${docked ? "pt-3" : "pt-6"}`}>
         {conversation && <NewSessionView conversation={conversation} />}
       </div>
       {conversation && (
@@ -427,7 +467,58 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef }: {
           <span className="flex items-center gap-1.5"><FooterKeys combo="enter" /> send</span>
           <span className="flex items-center gap-1.5"><FooterKeys combo="meta+enter" /> send &amp; open</span>
         </span>
-        <span className="flex items-center gap-1.5"><FooterKeys combo="escape" /> close</span>
+        <span className="flex items-center gap-3">
+          {instance && !docked && <span className="flex items-center gap-1.5"><FooterKeys combo={DOCK_COMBO} /> minimize</span>}
+          <span className="flex items-center gap-1.5"><FooterKeys combo="escape" /> {docked ? "minimize" : "close"}</span>
+        </span>
+      </div>
+      </div>
+    </div>
+  );
+}
+
+const DOCK_COMBO = getShortcutsForAction("session.composeDock")[0]?.key ?? "";
+const chromeButton = "p-1 rounded text-sol-text-dim/70 hover:text-sol-text hover:bg-sol-text-dim/15 transition-colors";
+
+// The window controls. On the modal: one floating minimize button. On a dock: a
+// title bar naming the target project and, once collapsed, the draft it holds;
+// clicking the bar collapses or restores it. Subscribes to the two strings it
+// shows, so typing re-renders this bar and not the composer around it.
+function ComposeChrome({ instance, stubId, onRequestClose }: { instance: ComposeInstance; stubId: string | null; onRequestClose: () => void }) {
+  const projectName = useInboxStore((s) => {
+    const row = stubId ? s.sessions[stubId] : undefined;
+    return (row?.project_path || row?.git_root)?.split("/").filter(Boolean).pop();
+  });
+  const snippet = useInboxStore((s) => (instance.collapsed ? composeDraftContent(s, stubId)?.text.slice(0, 80) : undefined));
+  const { dockCompose, expandCompose, setComposeCollapsed } = useInboxStore.getState();
+
+  if (instance.mode === "modal") {
+    return (
+      <button onClick={() => dockCompose(instance.id)} className={`absolute top-2 right-2 z-10 ${chromeButton}`} aria-label="Minimize to a docked composer">
+        <Minus className="w-3.5 h-3.5" />
+      </button>
+    );
+  }
+  return (
+    <div
+      className="flex items-center gap-2 pl-3 pr-1.5 py-1.5 shrink-0 select-none cursor-pointer bg-sol-bg-alt/70 border-b border-sol-border/60"
+      onClick={() => setComposeCollapsed(instance.id, !instance.collapsed)}
+    >
+      <span className="h-1.5 w-1.5 rounded-full bg-sol-cyan shrink-0" />
+      <span className="flex-1 min-w-0 truncate text-xs text-sol-text-muted">
+        <span className="font-medium text-sol-text">{projectName || "New session"}</span>
+        {snippet && <span className="text-sol-text-dim"> · {snippet}</span>}
+      </span>
+      <div className="flex items-center gap-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+        <button onClick={() => setComposeCollapsed(instance.id, !instance.collapsed)} className={chromeButton} aria-label={instance.collapsed ? "Restore" : "Minimize"}>
+          {instance.collapsed ? <ChevronUp className="w-3.5 h-3.5" /> : <Minus className="w-3.5 h-3.5" />}
+        </button>
+        <button onClick={() => expandCompose(instance.id)} className={chromeButton} aria-label="Expand to the center">
+          <Maximize2 className="w-3 h-3" />
+        </button>
+        <button onClick={onRequestClose} className={`${chromeButton} hover:!text-sol-red hover:!bg-sol-red/10`} aria-label="Close">
+          <X className="w-3.5 h-3.5" />
+        </button>
       </div>
     </div>
   );

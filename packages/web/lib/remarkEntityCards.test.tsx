@@ -307,9 +307,47 @@ describe("card previews per type", () => {
   });
 });
 
+describe("published pages shared from Slack", () => {
+  const slug = "FFbZwRRWhePH";
+  const url = `https://a.codecast.sh/${slug}`;
+
+  test("the imported page link renders one live embed beside its Slack unfurl", () => {
+    const html = render(`[a.codecast.sh/${slug}](${url})\n\n> *codecast* · **[Union — The Needs-Finding Machine (North Star demo)](${url})**\n>\n> A page published by Aivery with codecast`);
+    expect(html.match(/<iframe\b/g)).toHaveLength(1);
+    expect(html).toContain(`/cli/a/${slug}?theme=`);
+    expect(html).toContain('sandbox="allow-scripts allow-popups"');
+    expect(html).not.toContain(`>a.codecast.sh/${slug}<`);
+  });
+
+  test("an authored caption survives and a page in prose stays a pill", () => {
+    expect(render(`[North Star demo](${url})`)).toContain("North Star demo");
+    expect(render(`See [North Star demo](${url}) today.`)).not.toContain("<iframe");
+  });
+});
+
 describe("shared conversation messages", () => {
   const shareUrl = `https://codecast.sh/share/message/${SHARE_TOKEN}`;
   const inPlaceUrl = `https://codecast.sh/conversation/${SESSION_CONVEX_ID}#msg-${MSG_CONVEX_ID}`;
+
+  test("Slack URL labels render the same rich message card", () => {
+    for (const label of [
+      `codecast.sh/share/message/${SHARE_TOKEN}`,
+      "codecast.sh/share/message/…",
+      "codecast.sh/share/message/...",
+      "https://codecast.sh/share/message/…",
+    ]) {
+      const html = render(`[${label}](${shareUrl})`);
+      expect(html).toContain("entity-card-row");
+      expect(html).toContain("card plugin</strong>");
+      expect(html).not.toContain(`>${label}<`);
+    }
+  });
+
+  test("a different URL label is not mistaken for the destination", () => {
+    const html = render(`[codecast.sh/share/message/other…](${shareUrl})`);
+    expect(html).not.toContain("entity-card-row");
+    expect(html).toContain("codecast.sh/share/message/other…");
+  });
 
   test("a share link alone on its line is a card that renders the message rich", () => {
     const html = render(shareUrl);

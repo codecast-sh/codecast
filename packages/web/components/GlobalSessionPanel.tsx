@@ -60,6 +60,7 @@ import { useTriggers, fetchTriggerRuns } from "../hooks/useSyncTriggers";
 import { DeviceIcon, rosterDeviceOf, deviceWakesOnUse, deviceDisplayName } from "./DeviceBadge";
 import { SessionWorktreeChip } from "./SessionWorktreeChip";
 import { TriggerRunList, useTriggerRuns, openRunInStore, type TriggerRun } from "./TriggerRunHistory";
+import { TriggerRowItem, TriggerHomeHeader, SchedChildArrow, SchedHealthDot, SchedFireBadge, schedAccent, type SchedAccent } from "./TriggerRow";
 import { cleanUserMessage } from "./sessionMessage";
 import { AgentTypeIcon, formatAgentType } from "./AgentTypeIcon";
 import { AnchorGlyph, AnchorScopePill } from "./anchor/AnchorIdentity";
@@ -86,7 +87,7 @@ const USER_REST_CARD_LINE: Record<UserRest, string> = {
 };
 import { soundKill } from "../lib/sounds";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
-import { X, ChevronsRight, ChevronRight, ChevronDown, Clock, Tag, GitFork, History, Star, Workflow, Play, Pause, Settings2, Users, UserCheck, Zap, ZapOff, Pin, Copy, ArrowUp, ArrowDown, EyeOff, CheckSquare } from "lucide-react";
+import { X, ChevronsRight, ChevronRight, ChevronDown, Clock, Tag, GitFork, History, Star, Workflow, Play, Pause, Settings2, Users, ArrowUpRight, UserCheck, Zap, ZapOff, Pin, Copy, ArrowUp, ArrowDown, EyeOff, CheckSquare } from "lucide-react";
 import { InboxViewMenu } from "./InboxViewMenu";
 import { LabelChipsRow } from "./LabelChipsRow";
 import { TaskStatusBadge } from "./TaskStatusBadge";
@@ -1223,437 +1224,6 @@ function BlockedSessionsBanner({
   );
 }
 
-// -- The TRIGGERS section (every armed schedule, schedule-first) --
-
-// One row per armed schedule — recurring, once, or event; inject or spawn; no
-// distinction the user must learn. The row IS the schedule's identity in the
-// inbox: name, cadence, live countdown, last outcome, lightweight verbs.
-// Clicking opens the conversation behind it (home session or latest run — the
-// dismissed-peek path handles folded runs). Everything a schedule does stays
-// behind its row; escalations and human-driven turns are ordinary cards.
-// Two INDEPENDENT facts a schedule row carries, kept separate so their colors
-// can't blur into each other:
-//   • the LEFT ACCENT = health/liveness — red ONLY when a run failed or the
-//     agent flagged it (red always means "look at this"); green while running;
-//     dim when paused; else the calm schedule-amber.
-//   • the BADGE = the NEXT fire — a soft orange tint at rest (orange is the
-//     trigger accent, but a resting countdown is furniture, so tint not solid),
-//     brighter when imminent (<10m), and never red: "about to fire" is not
-//     "went wrong".
-type SchedAccent = "running" | "attention" | "paused" | "normal";
-function schedAccent(task: { status: string; last_run_failed?: boolean; last_run_needs_attention?: boolean }): SchedAccent {
-  if (task.status === "running") return "running";
-  if (task.last_run_failed || task.last_run_needs_attention) return "attention";
-  if (task.status === "paused") return "paused";
-  return "normal";
-}
-const SCHED_ACCENT: Record<SchedAccent, string> = {
-  running: "border-l-sol-green",
-  attention: "border-l-sol-red",
-  paused: "border-l-sol-border",
-  normal: "border-l-sol-amber/50",
-};
-function schedBadgeTone(task: { status: string; run_at?: number }, now: number): string {
-  if (task.status === "paused") return "bg-sol-bg-alt text-sol-text-dim border-sol-border/50";
-  if (task.status === "running") return "bg-sol-green/10 text-sol-green border-sol-green/30";
-  // Stuck-due is the one badge state that earns red: the daemon should claim
-  // due work within seconds, so minutes overdue means nothing is listening.
-  if (isTaskOverdue(task, now)) return "bg-sol-red/10 text-sol-red border-sol-red/40 font-bold";
-  const ms = task.run_at !== undefined ? task.run_at - now : undefined;
-  if (ms !== undefined && ms <= 10 * 60_000) return "bg-sol-amber/20 text-sol-amber border-sol-amber/50 font-bold";
-  return "bg-sol-amber/[0.08] text-sol-amber/90 border-sol-amber/25";
-}
-
-// The ↳ corner arrow an attached schedule row/strip wears — the SAME glyph the
-// subagent rows carry (in schedule-amber, not subagent violet), so the child
-// connectors line up under a card and the amber alone says "schedule".
-function SchedChildArrow({ label, className }: { label: string; className?: string }) {
-  return (
-    <span className={`flex items-center mt-[2px] shrink-0 ${className ?? "text-sol-amber/70"}`} role="img" aria-label={label}>
-      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-        <title>{label}</title>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M14 12l4 4-4 4" />
-      </svg>
-    </span>
-  );
-}
-
-// The health dot beside a schedule's name: green pulse while a run is live,
-// red when the last run failed or flagged itself; nothing at rest. Shared by
-// the full row and the folded strip so the two never disagree on "look here".
-function SchedHealthDot({ accent, task }: { accent: SchedAccent; task: { last_run_failed?: boolean } }) {
-  if (accent === "running") {
-    return (
-      <ShortcutTooltip label="Running now">
-        <span className="relative flex h-2 w-2 shrink-0 items-center justify-center">
-          <span className="absolute inline-flex h-2 w-2 rounded-full bg-sol-green/40 animate-ping motion-reduce:animate-none" />
-          <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-sol-green" />
-        </span>
-      </ShortcutTooltip>
-    );
-  }
-  if (accent === "attention") {
-    return (
-      <ShortcutTooltip label={task.last_run_failed ? "Last run failed" : "Flagged for attention"}>
-        <span className="w-1.5 h-1.5 rounded-full bg-sol-red shrink-0" />
-      </ShortcutTooltip>
-    );
-  }
-  return null;
-}
-
-// The next-fire badge — one tone function, one label function, so the strip and
-// the row show the same countdown for the same schedule.
-// Memoized with its own label-keyed clock: ~80 badges used to re-render on
-// every parent pass and every 30s tick, each paying toLocale* formatting and a
-// tooltip. Now a badge re-renders only when its text would change.
-const SchedFireBadge = memo(function SchedFireBadge({ task, className = "" }: { task: TaskRow; className?: string }) {
-  const now = useNowWhen((t) => taskStateLabel(task, t), 30_000);
-  const badge = (
-    <span className={`${className} shrink-0 inline-flex items-center justify-center min-w-[46px] px-1 py-0 rounded text-[9px] font-semibold tabular-nums border transition-colors ${schedBadgeTone(task, now)}`}>
-      {taskStateLabel(task, now)}
-    </span>
-  );
-  if (task.status !== "scheduled") return badge;
-  // Cadence lives here, not on the row: "in 5h 57m" already says the schedule
-  // is armed; how often it repeats is detail you hover for.
-  const cadence = describeTaskCadence(task);
-  return (
-    <ShortcutTooltip label={task.run_at !== undefined ? `Fires at ${fmtClock(task.run_at)}` : `Fires ${cadence}`} hint={task.run_at !== undefined ? cadence : undefined}>
-      {badge}
-    </ShortcutTooltip>
-  );
-});
-
-// One schedule row, used EVERYWHERE a schedule renders as a row: the dock
-// roster and the bars stacked under a session card (attached). One anatomy so
-// the surfaces can't drift: readable name, one-sentence gist of what each run
-// does (Haiku-distilled display fields), cadence + live countdown, last
-// outcome, and hover verbs (history / open / run now / pause) on every
-// surface. Cancel is destructive and rare, so it lives in the right-click menu
-// and on /triggers, not one slip away on the hover rail.
-const TriggerRowItem = memo(function TriggerRowItem({ row, activeSessionId, onOpen, attached, grouped, highlighted, onNavigated }: {
-  row: TriggerRow;
-  activeSessionId?: string | null;
-  onOpen: (row: TriggerRow) => void;
-  // Rendered under its owning session card — tinted like the subagent stack
-  // and top-joined to the card instead of list-bordered below.
-  attached?: boolean;
-  // Rendered under a session header in the dock roster: wears the ↳ child
-  // arrow like an attached row (the header names the home, so the row need
-  // not) but keeps the roster's full-tone title, cadence and run count.
-  grouped?: boolean;
-  // Keyboard cursor (roster arrow-nav) — visual only; Enter acts on it.
-  highlighted?: boolean;
-  // Called after a run-history click navigated away — the dock roster passes
-  // its close() so the overlay doesn't linger over the new conversation.
-  onNavigated?: () => void;
-}) {
-  const { task, unread } = row;
-  const router = useRouter();
-  // Pseudo rows (harness loops) wear the same anatomy but carry no server
-  // verbs — there's no agent_tasks row to pause or cancel, and no run history
-  // to query. See triggerTasks.ts.
-  const isPseudo = !!row.kind;
-  const now = useCoarseNow(30_000);
-  // Every verb is a store action (local-first): the agent_tasks row flips on
-  // the draft the instant it's clicked and the dispatch side effect runs the
-  // real mutation. Same actions the triggers page and the strip use.
-  const triggerAction = useInboxStore((st) => st.triggerAction);
-  const taskId = task._id as Id<"agent_tasks">;
-  const runNow = () => triggerAction(taskId, "runNow");
-  const pause = () => triggerAction(taskId, "pause");
-  const resume = () => triggerAction(taskId, "resume");
-  const cancel = () => triggerAction(taskId, "cancel");
-  const reactivate = () => triggerAction(taskId, "reactivate");
-  const paused = task.status === "paused";
-  const isActive = !!row.openId && row.openId === activeSessionId;
-  const accent = schedAccent(task);
-  const gist = task.display_summary?.trim() || task.prompt;
-  // Click feedback: an orange wash that fades (keyed so re-clicks re-trigger).
-  // Selection alone can't confirm the click — the row's session is often
-  // already active, and the resting selected tint is the shared cyan — so the
-  // schedule-amber pulse is what says "this schedule heard you".
-  const [clickFlash, setClickFlash] = useState(0);
-  // Inline run history (the hover rail's History verb). Query only while
-  // open, so a resting roster costs nothing; each entry navigates to the
-  // message that triggered that run.
-  const [runsOpen, setRunsOpen] = useState(false);
-  const runs = useTriggerRuns(runsOpen && !isPseudo ? task._id : null);
-  // Right-click mirrors the hover rail verb-for-verb; pseudo rows (harness
-  // loops) have no server verbs, so they get no menu.
-  const ctxMenu = useContextMenu<void>();
-  return (
-    <div
-      data-schedrow={task._id}
-      data-attached={attached || undefined}
-      data-row-active={isActive || undefined}
-      onContextMenu={!isPseudo ? (e) => ctxMenu.open(e, undefined) : undefined}
-      className={`group/schedrow relative transition-colors ${
-        // Attached rows sit flush under their card — no separator line above and
-        // no left accent bar. The ↳ arrow carries the parent/child connection,
-        // and health/liveness stays readable via the title dots + "retrying"
-        // text, so a colored (esp. red) left rail would only add noise here.
-        attached ? "" : "border-b border-sol-border/30"
-      } ${
-        isActive
-          ? attached
-            ? "bg-sol-cyan/[0.10]"
-            : "border-l border-l-sol-cyan/40 bg-sol-cyan/[0.10]"
-          : attached
-            ? ""
-            : `border-l-2 ${SCHED_ACCENT[accent]}`
-      } ${
-        highlighted ? "bg-[color-mix(in_srgb,var(--sol-bg-alt)_70%,transparent)] ring-1 ring-inset ring-sol-amber/40" : ""
-      }`}
-    >
-      {/* Inner relative wrapper: the click-flash and the hover verb rail size
-          to the ROW line only, so an expanded run history below never sits
-          under the rail's gradient or its hover targets. */}
-      <div className="relative">
-      <button
-        className={`w-full text-left cursor-pointer pr-3 ${attached ? "pl-2 py-1" : "pl-2.5 py-1.5"} hover:bg-sol-amber/[0.05] transition-[background-color,opacity] ${paused ? "opacity-55 hover:opacity-90" : ""}`}
-        onClick={() => {
-          setClickFlash((n) => n + 1);
-          onOpen(row);
-        }}
-      >
-        {/* Attached rows wear the subagent child idiom: the SAME ↳ corner arrow
-            the subagent rows below carry (in schedule-amber, not subagent
-            violet), so the connectors line up and the row reads as this card's
-            child instead of a glyph floating in indented space. The orange
-            alone marks it as a schedule — no extra identity icon. */}
-        <div className="flex gap-1.5 min-w-0">
-        {(attached || grouped) && <SchedChildArrow label={row.kind === "loop" ? "Loop — the agent wakes itself in this session" : "Trigger — fires into this session"} />}
-        <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5 min-w-0">
-          <SchedHealthDot accent={accent} task={task} />
-          {/* Attached rows recede to the SAME muted title treatment the subagent
-              child rows below use (text-gray-400, normal weight) so the parent
-              card stays the primary read and the two child idioms match in both
-              themes; the roster version keeps full prominence. */}
-          <span className={`text-xs truncate min-w-0 ${attached ? "text-gray-400 font-normal" : "text-sol-text font-medium"}`}>{taskDisplayTitle(task)}</span>
-          {/* Same pill as the dock bar's "N new" count, so opening the roster
-              shows exactly which rows that number pointed at. Roster only: a
-              bar under a card is always in view, so "since you last opened the
-              roster" means nothing there. */}
-          {unread && !attached && (
-            <ShortcutTooltip label="Outcome landed since you last opened this list">
-              <span className="shrink-0 px-1 rounded-full bg-sol-amber/15 text-sol-amber text-[9px] font-medium">new</span>
-            </ShortcutTooltip>
-          )}
-          {/* Cadence text stays on roster rows (the roster is the place to scan
-              "what runs how often"); attached rows keep only the countdown and
-              tuck the cadence into its tooltip. */}
-          {(row.kind === "loop" || !attached) && (
-            <span className="ml-auto shrink-0 text-[10px] font-medium text-sol-text-muted">
-              {row.kind === "loop" ? "loop" : describeTaskCadence(task)}
-            </span>
-          )}
-          <SchedFireBadge task={task} className={attached && row.kind !== "loop" ? "ml-auto" : ""} />
-        </div>
-        {/* Attached rows are TWO lines, always: the gist shares its line with
-            the last-outcome meta (retrying, recency) so a bar under a card
-            never grows a third line. The roster has room to let the sentence
-            breathe across two, with the outcome report on its own line below.
-            A fresh schedule whose Haiku gist hasn't landed yet shows the raw
-            prompt with a pulse. */}
-        {(() => {
-          const sparkle = !isPseudo && !task.display_summary && now - task.created_at < 5 * 60_000 && (
-            <ShortcutTooltip label="Haiku is distilling a summary of this prompt">
-              <span className="text-sol-amber/70 animate-pulse motion-reduce:animate-none">✦ </span>
-            </ShortcutTooltip>
-          );
-          const ago = task.last_run_at !== undefined ? `${fmtDuration(Math.max(0, now - task.last_run_at))} ago` : undefined;
-          const retrying = (task.retry_count ?? 0) > 0 && (
-            <ShortcutTooltip label="The last run errored; the daemon is retrying">
-              <span className="shrink-0 text-[10px] text-sol-red/80 font-medium">retrying ×{task.retry_count}</span>
-            </ShortcutTooltip>
-          );
-          // Two lines, ALWAYS — a row never grows a third. When the last run
-          // left a report, the report IS the second line: the robot speaking
-          // (same voice idiom as the card's blue "> message" line) outranks the
-          // static gist, which retreats into the report's tooltip. A schedule
-          // that hasn't reported yet shows the gist. Where a fire lands is not
-          // the row's to say: the dock groups rows under their home session
-          // and the trigger lens stacks the sessions beneath the row.
-          const runsLabel = !attached && task.run_count > 0 ? `${task.run_count} run${task.run_count === 1 ? "" : "s"}` : undefined;
-          const meta = [runsLabel, ago].filter(Boolean).join(" · ");
-          // Under a card the bar is two lines, always, so the text truncates.
-          // In the roster the description IS what you came to read: it wraps
-          // (three lines at most) and the run meta drops to its own line.
-          const textClass = attached ? "truncate" : "line-clamp-3 whitespace-normal break-words";
-          const text = task.last_run_summary ? (
-            <ShortcutTooltip label={gist} hint="the trigger's standing prompt">
-              <span className={`block min-w-0 ${textClass} text-[11px] leading-snug font-semibold ${task.last_run_failed ? "text-sol-red/90" : "text-sol-green"}`}>
-                <span className={`mr-0.5 ${task.last_run_failed ? "text-sol-red/50" : "text-sol-green/50"}`}>&gt;</span>
-                {task.last_run_summary}
-              </span>
-            </ShortcutTooltip>
-          ) : (
-            <span className={`block min-w-0 ${textClass} text-[11px] leading-snug text-sol-text-dim`}>
-              {sparkle}
-              {gist}
-            </span>
-          );
-          const metaEl = meta ? (
-            <span className={`shrink-0 text-[10px] tabular-nums ${task.last_run_failed ? "text-sol-red/80" : "text-sol-text-dim"}`}>{meta}</span>
-          ) : null;
-          if (attached) {
-            return (
-              <div className="flex items-baseline gap-1.5 mt-0.5 min-w-0">
-                <span className="flex-1 min-w-0">{text}</span>
-                {retrying}
-                {metaEl}
-              </div>
-            );
-          }
-          return (
-            <div className="mt-0.5 min-w-0">
-              {text}
-              {(retrying || metaEl) && (
-                <div className="flex items-baseline justify-end gap-1.5 mt-0.5 min-w-0">
-                  {retrying}
-                  {metaEl}
-                </div>
-              )}
-            </div>
-          );
-        })()}
-        </div>
-        </div>
-      </button>
-      {/* Keyed remount replays the animation on every click; it ends fully
-          transparent (fill-mode forwards), so the spent span can just stay —
-          no animationend cleanup, which never fires in occluded windows. */}
-      {clickFlash > 0 && (
-        <span key={clickFlash} aria-hidden className="sched-click-flash absolute inset-0 pointer-events-none" />
-      )}
-      {/* Hover action rail — same idiom as the inbox session cards: a right-hand
-          strip that fades in over a gradient (so it reads as "revealed", not a
-          box dropped on top), holding compact icon verbs. Absolute + full-height
-          so revealing it never changes the row's height. Pseudo rows (loops)
-          have no rail: their verbs live inside the session itself. */}
-      {!isPseudo && (
-      <div className="absolute top-0 bottom-0 right-0 flex items-center gap-0.5 pl-12 pr-2 opacity-0 group-hover/schedrow:opacity-100 transition-opacity duration-150 [transition-timing-function:cubic-bezier(0.23,1,0.32,1)] bg-gradient-to-r from-transparent via-[color-mix(in_srgb,var(--sol-bg-alt)_80%,transparent)] to-sol-bg-alt">
-        <ShortcutTooltip label={runsOpen ? "Hide run history" : "Run history"} hint="every run links to its trigger message" side="top">
-          <button
-            aria-label={runsOpen ? "Hide run history" : "Show run history"}
-            aria-expanded={runsOpen}
-            onClick={(e) => { e.stopPropagation(); setRunsOpen((v) => !v); }}
-            className={`p-1 rounded transition-[color,background-color,transform] duration-100 active:scale-90 ${
-              runsOpen ? "text-sol-amber bg-sol-amber/10" : "text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt"
-            }`}
-          >
-            <History className="w-3.5 h-3.5" />
-          </button>
-        </ShortcutTooltip>
-        <ShortcutTooltip label="Open trigger page" hint="full detail, history, edit" side="top">
-          <Link
-            href={`/triggers/${task._id}`}
-            aria-label="Open in Triggers"
-            onClick={(e) => e.stopPropagation()}
-            className="p-1 rounded text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-[color,background-color,transform] duration-100 active:scale-90"
-          >
-            <Settings2 className="w-3.5 h-3.5" />
-          </Link>
-        </ShortcutTooltip>
-        {task.status !== "running" && (
-          <ShortcutTooltip label="Run now" side="top">
-            <button
-              aria-label="Run now"
-              onClick={(e) => { e.stopPropagation(); runNow(); toast.success("Run queued"); }}
-              className="p-1 rounded text-sol-text-dim hover:text-sol-amber hover:bg-sol-amber/10 transition-[color,background-color,transform] duration-100 active:scale-90"
-            >
-              <Play className="w-3.5 h-3.5" fill="currentColor" strokeWidth={0} />
-            </button>
-          </ShortcutTooltip>
-        )}
-        <ShortcutTooltip label={paused ? "Resume trigger" : "Pause trigger"} side="top">
-          <button
-            aria-label={paused ? "Resume trigger" : "Pause trigger"}
-            onClick={(e) => {
-              e.stopPropagation();
-              if (paused) resume(); else pause();
-            }}
-            className="p-1 rounded text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-[color,background-color,transform] duration-100 active:scale-90"
-          >
-            {paused ? <Play className="w-3.5 h-3.5" fill="currentColor" strokeWidth={0} /> : <Pause className="w-3.5 h-3.5" fill="currentColor" strokeWidth={0} />}
-          </button>
-        </ShortcutTooltip>
-      </div>
-      )}
-      </div>
-      {/* Past runs, inline: every run of this schedule, newest first, each
-          entry landing on the message that triggered it. */}
-      {runsOpen && !isPseudo && (
-        <div className={`${attached ? "pl-6" : "pl-2.5"} pr-2 pb-1.5`} onClick={(e) => e.stopPropagation()}>
-          {runs === undefined ? (
-            <div className="text-[10px] text-sol-text-dim py-1 pl-1.5">Loading runs…</div>
-          ) : runs.length === 0 ? (
-            <div className="text-[10px] text-sol-text-dim py-1 pl-1.5">No runs recorded yet</div>
-          ) : (
-            <TriggerRunList
-              runs={runs}
-              now={now}
-              currentConversationId={activeSessionId}
-              onOpened={onNavigated}
-            />
-          )}
-        </div>
-      )}
-      {!isPseudo && (
-        <ContextMenu state={ctxMenu}>
-          {() => (
-            <>
-              <CtxHeader title={taskDisplayTitle(task)} id={(task as any).short_id} />
-              {task.status !== "running" && (
-                <CtxItem
-                  icon={Play}
-                  onSelect={() => { runNow(); toast.success("Run queued"); }}
-                >
-                  Run now
-                </CtxItem>
-              )}
-              <CtxItem
-                icon={paused ? Play : Pause}
-                onSelect={() => { if (paused) resume(); else pause(); }}
-              >
-                {paused ? "Resume trigger" : "Pause trigger"}
-              </CtxItem>
-              <CtxItem icon={History} onSelect={() => setRunsOpen((v) => !v)}>
-                {runsOpen ? "Hide run history" : "Run history"}
-              </CtxItem>
-              <CtxItem icon={Settings2} onSelect={() => router.push(`/triggers/${task._id}`)}>
-                Open trigger page
-              </CtxItem>
-              <CtxSeparator />
-              <CtxItem
-                icon={Copy}
-                onSelect={() => { copyToClipboard(task.prompt || ""); toast.success("Prompt copied"); }}
-              >
-                Copy prompt
-              </CtxItem>
-              <CtxSeparator />
-              <CtxItem
-                danger
-                icon={X}
-                onSelect={() => {
-                  cancel();
-                  toast("Trigger canceled", { description: taskDisplayTitle(task), action: { label: "Undo", onClick: () => { reactivate(); } } });
-                }}
-              >
-                Cancel trigger
-              </CtxItem>
-            </>
-          )}
-        </ContextMenu>
-      )}
-    </div>
-  );
-})
-
 // The folded form of the bars under a card — the resting state (card_bars
 // "strip", the default). ONE line for every bar family the card carries:
 // triggers, a workflow run in flight, live monitors / background commands. The
@@ -2117,7 +1687,7 @@ function CardBars({ session, mode, scheduleRows, activeSessionId, wake, onOpen, 
   return (
     <>
       {bound.map((r) => (
-        <TriggerRowItem key={r.task._id} row={r} activeSessionId={activeSessionId} onOpen={onOpenSchedule} attached />
+        <TriggerRowItem key={r.task._id} row={r} variant="attached" activeSessionId={activeSessionId} onOpen={onOpenSchedule} />
       ))}
       <WorkflowBar session={session} isActive={isActive} />
       <MonitorBars session={session} isActive={isActive} />
@@ -2138,75 +1708,6 @@ function CardBars({ session, mode, scheduleRows, activeSessionId, wake, onOpen, 
 // overlay of full schedule rows (same anatomy as /schedules); CLOSING it marks
 // the briefing read (schedules_seen_at) — while open, the per-row "new" pills
 // stay visible so the count on the bar points at something.
-// The session a group of roster rows fires into, as the group's header: state
-// dot, title, work-state word, project, and how many triggers it carries. The
-// roster then reads as "which sessions carry machinery, and what", and no row
-// has to name its home in a truncated footnote. A spawn group (no home —
-// every run is a fresh session) says so and names the project instead. The
-// home's pinned thread state rides the tooltip: it is what the session says
-// it is doing, and one line per group is the budget here.
-function TriggerHomeHeader({ group, home, now, isActive, showProject, onOpen }: {
-  group: TriggerHomeGroup;
-  home?: InboxSession;
-  now: number;
-  isActive: boolean;
-  showProject: boolean;
-  onOpen: () => void;
-}) {
-  const count = group.rows.length;
-  const projectPath = home?.project_path ?? home?.git_root ?? group.projectPath ?? group.rows[0].task.project_path;
-  const project = showProject && projectPath ? getProjectName(undefined, projectPath) : undefined;
-  const projectChip = project ? (
-    <ShortcutTooltip label={projectPath!}>
-      <span className={`shrink-0 px-1 rounded text-[9px] font-medium border ${getLabelColor(project).bg} ${getLabelColor(project).text} ${getLabelColor(project).border}`}>
-        {project}
-      </span>
-    </ShortcutTooltip>
-  ) : null;
-  // A count only when there is something to count: "1 trigger" on every
-  // header would be the roster's most repeated words.
-  const countEl = (
-    <span className="ml-auto shrink-0 text-[10px] tabular-nums text-sol-text-dim">
-      {count > 1 ? `${count} ${group.rows.every((r) => r.kind === "loop") ? "loops" : "triggers"}` : ""}
-    </span>
-  );
-  const shell = `w-full flex items-center gap-1.5 px-3 py-1 text-left border-b border-sol-border/30 transition-colors ${
-    isActive ? "bg-sol-cyan/[0.10]" : "bg-sol-bg-alt/40 hover:bg-sol-bg-alt/70"
-  }`;
-  if (!group.homeId) {
-    return (
-      <button onClick={onOpen} className={shell}>
-        <ShortcutTooltip label="Every run starts a fresh session (--spawn)" hint="opens the newest run">
-          <span aria-hidden className="w-2 h-2 shrink-0 rounded-full border border-dashed border-sol-amber/70" />
-        </ShortcutTooltip>
-        <span className="text-[11px] font-medium text-sol-text-muted truncate min-w-0">Fresh session per run</span>
-        {projectChip}
-        {countEl}
-      </button>
-    );
-  }
-  const verdict = home ? classifySession(home) : null;
-  const ws: WorkState = !verdict ? "idle" : verdict.waiting ? verdict.rest : verdict.idle ? "idle" : "working";
-  const meta = ORG_STATE_META[ws];
-  const hidden = !!home && isSessionHidden(home);
-  const title = home
-    ? cleanTitle(home.title || "New Session")
-    : group.rows[0].task.originating_conversation_title || "Session";
-  const stateLine = home ? threadStateView(home, home.message_count, now)?.cardLine : undefined;
-  const stateWord = home ? `${meta.label}${hidden ? " · stashed" : ""}` : "not loaded";
-  return (
-    <ShortcutTooltip label={stateLine ?? title} hint={stateLine ? `${meta.label} · open session` : "open session"} side="top">
-      <button onClick={onOpen} className={shell} data-trigger-home={group.homeId}>
-        <StatusDot color={meta.color} ping={ws === "working"} />
-        <span className={`text-[11px] font-medium truncate min-w-0 ${hidden ? "text-sol-text-muted" : "text-sol-text"}`}>{title}</span>
-        <span className="shrink-0 text-[10px]" style={{ color: meta.color }}>{stateWord}</span>
-        {projectChip}
-        {countEl}
-      </button>
-    </ShortcutTooltip>
-  );
-}
-
 function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen, onOpenSession }: {
   rows: TriggerRow[];
   unreadCount: number;
@@ -2314,9 +1815,11 @@ function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen, on
                 {oneTimeCount > 0 ? ` · ${oneTimeCount} one-time` : ""}
                 {loopCount > 0 ? ` · ${loopCount} loop${loopCount === 1 ? "" : "s"}` : ""}
               </span>
-              <span className="ml-auto flex items-center gap-2.5">
-                <Link href="/triggers?new=1" onClick={close} className="text-sol-cyan hover:underline">+ New</Link>
-                <Link href="/triggers" onClick={close} className="text-sol-cyan hover:underline">Manage</Link>
+              <span className="ml-auto flex items-center gap-3">
+                <Link href="/triggers?new=1" onClick={close} className="text-sol-text-muted hover:text-sol-text no-underline">+ New</Link>
+                <Link href="/triggers" onClick={close} className="inline-flex items-center gap-0.5 font-medium text-sol-amber no-underline hover:underline underline-offset-2">
+                  All triggers <ArrowUpRight className="w-3 h-3" />
+                </Link>
               </span>
             </div>
             {(() => {
@@ -2347,7 +1850,7 @@ function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen, on
                           onOpen={(r) => { close(); onOpen(r); }}
                           onNavigated={close}
                           highlighted={idx === cursor}
-                          grouped
+                          variant="grouped"
                         />
                       );
                     })}
@@ -5370,13 +4873,20 @@ function SessionListPanelImpl({
             <button
               onClick={() => s.setShowOldSessions(!showAllSessions)}
               title={showAllSessions ? `Hide ${oldCount} old session${oldCount === 1 ? "" : "s"}` : `Show ${oldCount} old session${oldCount === 1 ? "" : "s"}`}
-              className={`cc-panel__btn ${
+              aria-label={showAllSessions ? `Hide ${oldCount} old session${oldCount === 1 ? "" : "s"}` : `Show ${oldCount} hidden old session${oldCount === 1 ? "" : "s"}`}
+              aria-pressed={showAllSessions}
+              className={`cc-panel__btn relative ${
                 showAllSessions
                   ? "bg-sol-cyan/15 text-sol-cyan"
                   : "text-sol-text-dim/70 hover:text-sol-text"
               }`}
             >
               <History className="w-3 h-3" />
+              {!showAllSessions && (
+                <span aria-hidden="true" className="absolute -right-1 -top-1 flex h-3 min-w-3 items-center justify-center rounded-full bg-sol-cyan px-0.5 text-[8px] font-semibold leading-none tabular-nums text-sol-bg ring-2 ring-sol-bg">
+                  {oldCount > 99 ? "99+" : oldCount}
+                </span>
+              )}
             </button>
           )}
           </>}

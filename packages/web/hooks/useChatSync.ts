@@ -317,6 +317,10 @@ export type ChannelFeed = {
    *  query never resolves, so a caller that only watches `loading` waits for a
    *  page that is never coming and renders a blank rectangle forever. */
   error?: Error;
+  /** The server answered, and will not show this viewer the room: it is gone, or
+   *  it was never theirs. Not an error (nothing failed) and not an empty room,
+   *  so the surface must neither offer a retry nor invite a post. */
+  unavailable: boolean;
   hasMoreAbove: boolean;
   isLoadingOlder: boolean;
   loadOlder: () => void;
@@ -469,6 +473,7 @@ export function useChannelMessagesSync(channelId: string | undefined): ChannelFe
   return {
     loading: !!live && result === undefined && !error,
     error,
+    unavailable: !!result?.unavailable,
     floor,
     hasMoreAbove: !!olderCursor && !olderExhausted,
     isLoadingOlder,

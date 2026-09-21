@@ -50,6 +50,7 @@ export type PalettePickResult = {
 
 export type PalettePick = {
   title: string;
+  preview?: { title: string; text?: string; url: string };
   kinds: PalettePickKind[];
   extras?: PalettePickExtra[];
   // Collect an optional note. With this set, picking becomes two steps:

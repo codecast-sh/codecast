@@ -13,6 +13,7 @@ import {
   truncateEntityLabel,
   entityReferenceLabel,
   parseMessageRefUrl,
+  parsePublishedPageUrl,
   messageRefPayload,
   parseMessageRefPayload,
   parseRepoObjectId,
@@ -27,6 +28,33 @@ import {
 const MSG_CONVEX_ID = "kx82qtvpbmmrmwcjqmhzawejsx8bq9gm";
 const CONV_CONVEX_ID = "jx84qtvpbmmrmwcjqmhzawejsx8bq9gm";
 const SHARE_TOKEN = "3f0c1b2a-7d4e-4c9a-9b1e-2a6f8c0d1e2f";
+
+describe("parsePublishedPageUrl", () => {
+  const slug = "FFbZwRRWhePH";
+
+  test("recognizes the published page edge URL and existing share URLs", () => {
+    for (const url of [
+      `https://a.codecast.sh/${slug}`,
+      `https://a.codecast.sh/${slug}/?v=2#section`,
+      `https://a.codecast.sh/a/${slug}`,
+      `https://codecast.sh/a/${slug}`,
+      `https://convex.codecast.sh/cli/a/${slug}`,
+      `http://localhost:3200/a/${slug}`,
+      `/a/${slug}`,
+    ]) expect(parsePublishedPageUrl(url)).toEqual({ slug });
+  });
+
+  test("rejects bundle assets, unrelated routes and foreign hosts", () => {
+    for (const url of [
+      `https://a.codecast.sh/${slug}/image.png`,
+      `https://codecast.sh/${slug}`,
+      `https://example.com/${slug}`,
+      `https://a.codecast.sh.example.com/${slug}`,
+      "https://a.codecast.sh/short",
+      `/${slug}`,
+    ]) expect(parsePublishedPageUrl(url)).toBeNull();
+  });
+});
 
 describe("parseMessageRefUrl", () => {
   test("a /share/message link is a share reference", () => {

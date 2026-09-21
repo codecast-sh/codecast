@@ -676,6 +676,7 @@ export const ChatMessage = memo(function ChatMessage({
                     openForwardToChat({
                       url: typeof window === "undefined" ? permalink : new URL(permalink, window.location.origin).toString(),
                       label: "message",
+                      previewText: message.content,
                     });
                   }}
                 >
