@@ -1123,6 +1123,10 @@ export function NewSessionView({ conversation, agentControls }: { conversation: 
       // a modal that CONTAINS us doesn't block the chords, only one stacked
       // above (draft confirm, settings) does.
       if (hasOpenModal(rootRef.current)) return;
+      // Docked composers are non-modal and several mount at once, each with
+      // this listener: only the one holding focus answers.
+      const dock = rootRef.current?.closest('[role="dialog"]:not([aria-modal="true"])');
+      if (dock && !dock.contains(document.activeElement)) return;
       e.preventDefault();
       e.stopPropagation();
       if (dir === "left" || dir === "right") {

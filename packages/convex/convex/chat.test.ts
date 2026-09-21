@@ -319,6 +319,17 @@ describe("channel authorization", () => {
     expect(view.messages).toEqual([]);
   });
 
+  // The reader paints an empty room with a composer from an empty page, so a
+  // refused room has to say it is refused, or the page invites a post that
+  // sendMessage can only answer with "Channel not found".
+  test("a refused room reads as unavailable, an empty one does not", async () => {
+    const ctx = context(ALICE);
+    expect((await call(listMessages, ctx, { channel_id: CHANNEL })).unavailable).toBe(false);
+    expect((await call(listMessages, as(ctx, OUTSIDER), { channel_id: CHANNEL })).unavailable).toBe(true);
+    expect((await call(listMessages, context(ALICE, { chat_channels: [] }), { channel_id: CHANNEL })).unavailable)
+      .toBe(true);
+  });
+
   test("a non-member reads no thread, no rail and no search", async () => {
     const ctx = context(ALICE);
     const root = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "internal" });
