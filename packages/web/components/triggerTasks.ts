@@ -127,6 +127,52 @@ export function taskDisplayTitle(t: Pick<TaskRow, "display_title" | "title">): s
   return t.display_title?.trim() || cleanPromptSliceTitle(t.title);
 }
 
+// Cut a sentence for a one-line slot: whole words, an ellipsis only when
+// something was dropped.
+function cutLine(text: string, max: number): string {
+  const t = text.replace(/\s+/g, " ").trim();
+  if (t.length <= max) return t;
+  const cut = t.slice(0, max).replace(/\s+\S*$/, "");
+  return `${cut.replace(/[\s,;:.—-]+$/, "")}…`;
+}
+
+// A prompt's opening line as prose: markdown furniture stripped, the first
+// paragraph only. The fallback gist for a schedule whose Haiku summary has
+// not landed (or a loop, which has none).
+function promptOpening(prompt: string): string {
+  const para = prompt
+    .split(/\n\s*\n/)[0]
+    .replace(/^#+\s*/gm, "")
+    .replace(/^[-*>]\s+/gm, "")
+    .replace(/[`*_]/g, "");
+  return cutLine(para, 160);
+}
+
+// What each run does, in one sentence — the SECOND line of every trigger
+// row, on every surface. Always the standing description, never an outcome:
+// the outcome has its own line (lastRunHeadline).
+export function taskGist(t: Pick<TaskRow, "display_summary" | "prompt">): string {
+  const s = t.display_summary?.trim();
+  return s ? cutLine(s, 200) : promptOpening(t.prompt || "");
+}
+
+// An agent's run summary is a paragraph; split it at the first clause
+// boundary (";", sentence end, or an em-dash) into a headline and the rest,
+// so the verdict reads first and the evidence second.
+export function splitResultSummary(text: string): { headline: string; detail: string | null } {
+  const m = text.match(/^([\s\S]{12,180}?[^;.\s])(?:;\s+|\.\s+|\s+—\s+)([\s\S]+)$/);
+  return m ? { headline: m[1], detail: m[2] } : { headline: text, detail: null };
+}
+
+// The last run's verdict in one line — the THIRD line of a trigger row. The
+// "Failed:" prefix the daemon stamps is dropped: the row's glyph and color
+// already say it.
+export function lastRunHeadline(t: Pick<TaskRow, "last_run_summary">): string | undefined {
+  const raw = t.last_run_summary?.trim();
+  if (!raw) return undefined;
+  return cutLine(splitResultSummary(raw.replace(/^Failed:?\s*/i, "")).headline, 200);
+}
+
 // Optimistic webList patch for schedule verbs (run now / pause / resume /
 // cancel): flip the row's fields in Convex's local query cache so the UI
 // renders the result of the click synchronously — local-first — and the server

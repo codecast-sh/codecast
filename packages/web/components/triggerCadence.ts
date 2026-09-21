@@ -81,6 +81,8 @@ export function taskStateLabel(
 ): string {
   if (task.status === "paused") return "paused";
   if (task.status === "running") return "running";
+  if (task.status === "completed") return "done";
+  if (task.status === "failed") return "failed";
   if (task.run_at === undefined) return "event";
   const ms = task.run_at - now;
   if (ms > 0) return `in ${fmtDuration(ms)}`;
