@@ -3,7 +3,8 @@ import { internalQuery } from "./_generated/server";
 import { applyTaskUpdate, cancelTasksOriginatingFrom, insertTask } from "./agentTasks";
 import { renderCapacityModel } from "@codecast/shared/contracts/orgCapacity";
 import { defaultAvatarFor, isAvatarKey } from "@codecast/shared/contracts/orgAvatars";
-import { orgTenureError } from "@codecast/shared/contracts/orgProposal";
+import { ORG_AUTHORITY_KINDS, authorityWords, orgTenureError, type OrgAuthorityGrant } from "@codecast/shared/contracts/orgProposal";
+import { intervalMs } from "@codecast/shared/contracts/orgTemplateManifest";
 import { leadScopeChange } from "@codecast/shared/contracts/orgLead";
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
@@ -1577,6 +1578,53 @@ async function performSetCapsCore(ctx: any, userId: Id<"users">, args: { role_id
   return { ...capped, caps: next };
 }
 
+// authority — what the role may do OUTSIDE codecast (org-hire.md H4). The
+// list is replaced whole: a grant is given by a person and revoked by a person,
+// and the role reads the result in its frame. Same gate as trust and caps.
+export type StoredAuthority = { id: string; kind: OrgAuthorityGrant["kind"]; label: string; scope?: string; limit?: OrgAuthorityGrant["limit"]; granted_by: Id<"users">; granted_at: number; expires_at?: number; template_instance_id?: Id<"org_template_instances">; decision_id?: string };
+export async function performSetAuthority(ctx: any, userId: Id<"users">, args: { role_id: string; authority: OrgAuthorityGrant[]; revoke?: string[]; from_session?: string; api_token?: string; human_decision?: string; decision_id?: string; template_instance_id?: string }): Promise<any> {
+  return withOrgChange(ctx, userId, { kind: "authority" }, () => performSetAuthorityCore(ctx, userId, args));
+}
+async function performSetAuthorityCore(ctx: any, userId: Id<"users">, args: { role_id: string; authority: OrgAuthorityGrant[]; revoke?: string[]; from_session?: string; api_token?: string; human_decision?: string; decision_id?: string; template_instance_id?: string }): Promise<any> {
+  await refuseUnlessHuman(ctx, args, "Authority");
+  const role = await requireRole(ctx, userId, args.role_id, "admin");
+  const now = Date.now();
+  const revoke = new Set((args.revoke ?? []).map((id) => id.trim()));
+  const kept: StoredAuthority[] = ((role.authority ?? []) as StoredAuthority[]).filter((g) => !revoke.has(g.id));
+  const byId = new Map(kept.map((g) => [g.id, g]));
+  for (const g of args.authority ?? []) {
+    if (!/^[a-z][a-z0-9-]{0,47}$/.test(g.id)) throw new Error(`Authority id ${JSON.stringify(g.id)} is not a slug`);
+    if (!(ORG_AUTHORITY_KINDS as readonly string[]).includes(g.kind)) throw new Error(`Authority kind is one of ${ORG_AUTHORITY_KINDS.join(", ")}`);
+    if (!g.label?.trim()) throw new Error(`Authority ${g.id} needs a label`);
+    for (const [k, n] of Object.entries(g.limit ?? {})) if (typeof n !== "number" || !(n >= 0)) throw new Error(`Authority ${g.id} limit ${k} must be a non negative number`);
+    const expires_at = g.expires ? now + intervalMs(g.expires) : undefined;
+    const prior = byId.get(g.id);
+    byId.set(g.id, {
+      id: g.id, kind: g.kind, label: g.label.trim(), ...(g.scope ? { scope: g.scope } : {}), ...(g.limit ? { limit: g.limit } : {}),
+      granted_by: userId, granted_at: prior?.granted_at ?? now, ...(expires_at ? { expires_at } : {}),
+      ...(args.template_instance_id ? { template_instance_id: args.template_instance_id as Id<"org_template_instances"> } : prior?.template_instance_id ? { template_instance_id: prior.template_instance_id } : {}),
+      ...(args.decision_id ? { decision_id: args.decision_id } : prior?.decision_id ? { decision_id: prior.decision_id } : {}),
+    });
+  }
+  const authority = [...byId.values()];
+  if (authority.length > 50) throw new Error("A role holds at most fifty grants of authority");
+  await ctx.db.patch(role._id, { authority, updated_at: now });
+  if (role.charter_doc_id) {
+    const charter = await ctx.db.get(role.charter_doc_id);
+    if (charter) {
+      const user = await ctx.db.get(userId);
+      const content = authority.length ? `Authority outside codecast: may ${authorityWords(authority as any)}` : "Authority outside codecast: none";
+      await ctx.db.patch(charter._id, { entries: [...(charter.entries ?? []), { type: "note", timestamp: now, content, author: user?.name ?? "a person" }], updated_at: now });
+    }
+  }
+  const after = await ctx.db.get(role._id);
+  await noteRoleChange(ctx, userId, "authority", role, after);
+  // The role learns at once what it may now do (an immediate wake, like a charter change).
+  await enqueueRoleEvent(ctx, role._id, { kind: "immediate", cause: authority.length ? `authority changed: may ${authorityWords(authority as any)}` : "authority changed: none granted", ref: undefined });
+  await scheduleFlush(ctx, role._id, 0);
+  return { ...after, authority };
+}
+
 // wake — a person (or their session) pokes the role. The message rides the
 // standing session's rail; enqueuePendingMessage turns it into an immediate
 // outbox row, so the frame carries it.
@@ -1738,6 +1786,15 @@ export const restart = mutation({
 export const setTrust = mutation({
   args: { api_token: v.optional(v.string()), role_id: v.string(), trust: v.string(), from_session: v.optional(v.string()) },
   handler: async (ctx, { api_token, ...args }) => performSetTrust(ctx, await requireCaller(ctx, api_token), { ...args, api_token }),
+});
+export const setAuthority = mutation({
+  args: {
+    api_token: v.optional(v.string()), role_id: v.string(), from_session: v.optional(v.string()),
+    authority: v.array(v.object({ id: v.string(), kind: v.union(v.literal("spend"), v.literal("publish"), v.literal("write"), v.literal("connect")), label: v.string(), scope: v.optional(v.string()), limit: v.optional(v.object({ usd_per_month: v.optional(v.number()), usd_per_day: v.optional(v.number()), per_day: v.optional(v.number()) })), expires: v.optional(v.string()) })),
+    revoke: v.optional(v.array(v.string())),
+    template_instance_id: v.optional(v.string()),
+  },
+  handler: async (ctx, { api_token, ...args }) => performSetAuthority(ctx, await requireCaller(ctx, api_token), { ...args, api_token }),
 });
 export const setCaps = mutation({
   args: { api_token: v.optional(v.string()), role_id: v.string(), hands: v.optional(v.number()), wakes: v.optional(v.number()), tokens: v.optional(v.number()), from_session: v.optional(v.string()) },

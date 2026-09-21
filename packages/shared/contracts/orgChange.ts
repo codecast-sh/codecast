@@ -60,6 +60,8 @@ export type OrgLogFields = {
   scope?: OrgScopeIds;
   caps?: OrgProposalCaps;
   trust?: string;
+  /** What the role may do outside codecast (org-hire.md H4); the list as stored. */
+  authority?: unknown;
   standing_session?: { conversation_id: string; short_id: string } | null;
   routine?: { agent_task_id: string; title: string; every?: string } | null;
   // A project, a plan, a task.
@@ -324,6 +326,7 @@ export function orgLogRowChange(row: OrgLogRow): OrgChange | null {
     case "scope": return { kind: "scope", handle, ...(gained.length ? { add: gained } : {}), ...(lost.length ? { remove: lost } : {}) };
     case "budget": return { kind: "budget", handle, caps: row.after.caps ?? {} };
     case "trust": return { kind: "trust", handle, trust: (row.after.trust ?? "understand") as any };
+    case "authority": return { kind: "authority", handle, authority: ((row.after.authority as any[]) ?? []).map((g) => ({ id: g.id, kind: g.kind, label: g.label, ...(g.scope ? { scope: g.scope } : {}), ...(g.limit ? { limit: g.limit } : {}) })) };
     case "routine": return { kind: "routine", handle, title: row.after.routine?.title ?? "", prompt: "", every: row.after.routine?.every ?? "" };
     case "adopt": return { kind: "adopt", handle, conversation: row.after.standing_session?.short_id ?? row.effects.seat?.short_id ?? "" };
     case "file": return { kind: "file", plan: row.subject.short_id ?? row.subject.label, project: nameOf(row, row.after.project_id, "no project") };
@@ -407,6 +410,9 @@ export const ORG_INVERSE_KIND: Record<OrgLogKind, OrgLogKind> = {
   move: "move", scope: "scope", budget: "budget", trust: "trust", role_edit: "role_edit",
   lead: "lead", initiative_owner: "initiative_owner", session: "session",
   file: "file", project_meta: "project_meta", plan_status: "plan_status", task_status: "task_status", project_status: "project_status",
+  // Hiring from a template (org-hire.md): authority restores its list; a hire
+  // and an upgrade are recorded, and their way back is the host step.
+  authority: "authority", hire: "hire", upgrade: "upgrade",
 };
 
 /**

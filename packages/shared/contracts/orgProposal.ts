@@ -120,10 +120,28 @@ export type OrgPlanStatusChange = { kind: "plan_status"; plan: string; status: "
 export type OrgTaskStatusChange = { kind: "task_status"; task: string; status: "done" | "dropped" | "open" | "backlog"; reason: string };
 export type OrgProjectStatusChange = { kind: "project_status"; project: string; status: "paused" | "done" | "active"; reason: string };
 
-export type OrgChange = OrgProposal | OrgScopeChange | OrgBudgetChange | OrgTrustChange | OrgRoutineChange | OrgProjectMetaChange | OrgAdoptChange | OrgFileChange
-  | OrgPlanStatusChange | OrgTaskStatusChange | OrgProjectStatusChange;
+// Hiring from a template (org-hire.md W8). Trust is authority inside codecast;
+// `authority` is what a person lets a role do outside it: spend on an account,
+// publish to destinations, write into a project, connect a service, each with
+// a limit and a review boundary. A hire is the instance of a template on one
+// project; the role change of the same handle in the same proposal is its seat.
+export type OrgAuthorityKind = "spend" | "publish" | "write" | "connect";
+export type OrgAuthorityLimit = { usd_per_month?: number; usd_per_day?: number; per_day?: number };
+export type OrgAuthorityGrant = { id: string; kind: OrgAuthorityKind; label: string; scope?: string; limit?: OrgAuthorityLimit; expires?: string };
+export type OrgAuthorityChange = { kind: "authority"; handle: string; authority: OrgAuthorityGrant[] };
+export type OrgHireChange = {
+  kind: "hire"; handle: string; template: string; version: string; digest: string; instance: string; project: string;
+  /** Answers to the template's inputs; never a secret's value (those bind on the host). */
+  config?: Record<string, string>;
+  update_policy?: "manual" | "canary" | "stable";
+};
+/** Move an instance to another release of its template (H9); the host step performs it. */
+export type OrgUpgradeChange = { kind: "upgrade"; instance: string; template: string; to: string; digest: string };
 
-export const ORG_CHANGE_KINDS = [...ORG_PROPOSAL_KINDS, "file", "scope", "budget", "trust", "routine", "project_meta", "adopt", "plan_status", "task_status", "project_status"] as const;
+export type OrgChange = OrgProposal | OrgScopeChange | OrgBudgetChange | OrgTrustChange | OrgRoutineChange | OrgProjectMetaChange | OrgAdoptChange | OrgFileChange
+  | OrgPlanStatusChange | OrgTaskStatusChange | OrgProjectStatusChange | OrgAuthorityChange | OrgHireChange | OrgUpgradeChange;
+
+export const ORG_CHANGE_KINDS = [...ORG_PROPOSAL_KINDS, "file", "scope", "budget", "trust", "routine", "project_meta", "adopt", "plan_status", "task_status", "project_status", "authority", "hire", "upgrade"] as const;
 /** The kinds the pane groups under "Bring records in line" (S9). */
 export const ORG_SYNC_KINDS: readonly OrgChangeKind[] = ["plan_status", "task_status", "project_status"];
 export type OrgChangeKind = OrgChange["kind"];
@@ -139,10 +157,12 @@ export type OrgChangeKind = OrgChange["kind"];
  *  it), and a routine needs that session to run on. A task's own status lands before its plan's, because closing
  *  a plan cascades to the plan's still-open tasks (dropped): a task the
  *  proposal marks done on its own evidence must be done before the cascade
- *  reads it. */
+ *  reads it. Authority lands after trust on a role that exists; a hire lands
+ *  after the role, its authority and any routine, since the instance row it
+ *  writes names them; an upgrade stands alone. */
 export const ORG_CHANGE_APPLY_RANK: Record<OrgChangeKind, number> = {
   task_status: 0, plan_status: 1, project_status: 2,
-  projects: 3, file: 4, role: 5, project_meta: 6, move: 7, scope: 8, budget: 9, trust: 10, adopt: 11, routine: 12, retire: 13,
+  projects: 3, file: 4, role: 5, project_meta: 6, move: 7, scope: 8, budget: 9, trust: 10, authority: 11, adopt: 12, routine: 13, hire: 14, upgrade: 15, retire: 16,
 };
 const UNRANKED = Math.max(...Object.values(ORG_CHANGE_APPLY_RANK)) + 1;
 
@@ -153,6 +173,10 @@ export function orderOrgChanges<T>(rows: T[], changeOf: (row: T) => OrgChange | 
 }
 
 const ORG_TRUST_STAGES: readonly string[] = ["understand", "decide", "direct"];
+export const ORG_AUTHORITY_KINDS: readonly OrgAuthorityKind[] = ["spend", "publish", "write", "connect"];
+const SLUG_RE = /^[a-z][a-z0-9-]{0,47}$/;
+const VERSION_RE = /^\d+\.\d+\.\d+$/;
+const DIGEST_RE = /^[a-f0-9]{64}$/;
 const ORG_PRIORITIES: readonly string[] = ["p0", "p1", "p2", "p3"];
 export const ORG_PROJECT_HORIZONS: readonly OrgProjectHorizon[] = ["ongoing", "bounded"];
 export const ORG_TENURE_THEN: readonly ("retire" | "review")[] = ["retire", "review"];
@@ -270,6 +294,39 @@ export function orgChangeError(raw: any): string | null {
     case "adopt": {
       const h = handle(); if (h) return h;
       return nonEmpty(raw.conversation) ? null : "adopt needs the conversation (a session short id) that becomes the role's standing session";
+    }
+    case "authority": {
+      const h = handle(); if (h) return h;
+      if (!Array.isArray(raw.authority) || !raw.authority.length || raw.authority.length > 50) return "authority is a list of one to fifty grants";
+      const ids = new Set<string>();
+      for (const g of raw.authority) {
+        if (!g || typeof g !== "object") return "each authority grant is an object";
+        if (!nonEmpty(g.id) || !SLUG_RE.test(g.id) || ids.has(g.id)) return "each authority grant has a unique slug id";
+        ids.add(g.id);
+        if (!(ORG_AUTHORITY_KINDS as readonly string[]).includes(g.kind)) return `authority kind is one of ${ORG_AUTHORITY_KINDS.join(", ")}`;
+        if (!nonEmpty(g.label) || !optString(g.scope)) return "each authority grant has a label; scope is text";
+        if (g.limit !== undefined) {
+          if (!g.limit || typeof g.limit !== "object" || Array.isArray(g.limit)) return "authority limit is an object";
+          const keys = Object.keys(g.limit);
+          if (!keys.length || keys.some((k) => !["usd_per_month", "usd_per_day", "per_day"].includes(k) || typeof g.limit[k] !== "number" || !(g.limit[k] >= 0))) return "authority limit names usd_per_month, usd_per_day or per_day as non-negative numbers";
+        }
+        if (g.expires !== undefined && !(nonEmpty(g.expires) && EVERY_RE.test(g.expires))) return "authority expires is a duration like 90d";
+      }
+      return null;
+    }
+    case "hire": {
+      const h = handle(); if (h) return h;
+      if (!nonEmpty(raw.template) || !SLUG_RE.test(raw.template)) return "hire names the template by its slug";
+      if (!nonEmpty(raw.version) || !VERSION_RE.test(raw.version) || !nonEmpty(raw.digest) || !DIGEST_RE.test(raw.digest)) return "hire pins a release: version like 2.0.0 and its sha256 digest";
+      if (!nonEmpty(raw.instance) || !SLUG_RE.test(raw.instance)) return "hire names the instance by a slug";
+      if (!nonEmpty(raw.project)) return "hire needs the project ref the role will lead";
+      if (raw.config !== undefined && (!raw.config || typeof raw.config !== "object" || Array.isArray(raw.config) || Object.values(raw.config).some((x) => typeof x !== "string"))) return "hire config is the answers, key to text";
+      if (raw.update_policy !== undefined && !["manual", "canary", "stable"].includes(raw.update_policy)) return "update_policy is manual, canary or stable";
+      return null;
+    }
+    case "upgrade": {
+      if (!nonEmpty(raw.instance) || !SLUG_RE.test(raw.instance) || !nonEmpty(raw.template) || !SLUG_RE.test(raw.template)) return "upgrade names the instance and its template by slug";
+      return nonEmpty(raw.to) && VERSION_RE.test(raw.to) && nonEmpty(raw.digest) && DIGEST_RE.test(raw.digest) ? null : "upgrade pins the release it moves to: version and sha256 digest";
     }
     case "file":
       return nonEmpty(raw.plan) && nonEmpty(raw.project) ? null : "file needs a plan ref and a project ref";
@@ -559,6 +616,8 @@ function askWords(names?: OrgAskNames) {
       case "routine": return ` It runs ${c.title} ${everyWords(c.every)}.`;
       case "trust": return c.trust === "understand" ? " It reads and reports, and does not act on its own." : c.trust === "decide" ? " It may decide on its own." : " It may direct work on its own.";
       case "adopt": return ` The session ${c.conversation} becomes it.`;
+      case "authority": return ` Outside codecast it may ${authorityWords(c.authority)}, inside the limits you set.`;
+      case "hire": return ` It is hired from the template ${c.template} ${c.version}, and leads ${c.project}.`;
       case "move": return c.reports_to ? ` A separate change puts it under ${parent(c.reports_to)}; skip that and it keeps reporting to whoever runs it today.` : "";
       default: return "";
     }
@@ -712,6 +771,9 @@ export function orgChangeKey(c: OrgChange): string | null {
     case "retire": return `retire:${h(c.handle)}`;
     case "budget": return `budget:${h(c.handle)}`;
     case "trust": return `trust:${h(c.handle)}`;
+    case "authority": return `authority:${h(c.handle)}`;
+    case "hire": return `hire:${c.instance.trim().toLowerCase()}`;
+    case "upgrade": return `upgrade:${c.instance.trim().toLowerCase()}`;
     default: return null;
   }
 }
@@ -738,6 +800,8 @@ export function orgChangeDependencies(rows: ReadonlyArray<{ seq: number; change:
     if (c.kind === "role") { const a = adopts.get(h(c.handle)); if (a !== undefined) out[r.seq] = `created without a standing session; #${a} seats it`; }
     else if (c.kind === "adopt") { const ro = roles.get(h(c.handle)); if (ro !== undefined) out[r.seq] = `seats the role #${ro} creates; skip it and that role is provisioned a fresh session instead`; }
     else if (c.kind === "routine") { const a = adopts.get(h(c.handle)) ?? seated.get(h(c.handle)); if (a !== undefined) out[r.seq] = `runs on the session #${a} seats`; }
+    else if (c.kind === "authority") { const ro = roles.get(h(c.handle)); if (ro !== undefined) out[r.seq] = `authority for the role #${ro} creates; skip that role and this is refused`; }
+    else if (c.kind === "hire") { const ro = roles.get(h(c.handle)); if (ro !== undefined) out[r.seq] = `hires the role #${ro} creates from a template; skip that role and this is refused`; }
   }
   return out;
 }
@@ -927,6 +991,13 @@ export function takeoverPhrase(handle: string, r: { sessions: unknown[]; kept_in
   return parts.join("; ");
 }
 
+/** "spend on Google Ads and post to social", from the grants' kinds and labels. */
+export function authorityWords(grants: ReadonlyArray<OrgAuthorityGrant>): string {
+  const verbs: Record<OrgAuthorityKind, string> = { spend: "spend", publish: "publish", write: "write", connect: "connect" };
+  const parts = grants.map((g) => `${verbs[g.kind]} (${g.label}${g.limit?.usd_per_month !== undefined ? `, up to $${g.limit.usd_per_month} a month` : g.limit?.usd_per_day !== undefined ? `, up to $${g.limit.usd_per_day} a day` : g.limit?.per_day !== undefined ? `, up to ${g.limit.per_day} a day` : ""})`);
+  return parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}` : parts[0] ?? "nothing more";
+}
+
 /** One line per change, the words the CLI walk and the ghost chips use. */
 export function describeOrgChange(c: OrgChange): string {
   switch (c.kind) {
@@ -940,6 +1011,9 @@ export function describeOrgChange(c: OrgChange): string {
     case "routine": return `routine on ${at(c.handle)}: ${c.title} every ${c.every}`;
     case "project_meta": return `charter ${c.project}${c.owner ? ` owner ${at(c.owner)}` : ""}${c.priority ? ` ${c.priority}` : ""}${c.goal ? `: ${c.goal}` : ""}`;
     case "adopt": return `adopt session ${c.conversation} as ${at(c.handle)}'s standing session`;
+    case "authority": return `authority ${at(c.handle)}: ${c.authority.map((g) => `${g.kind} (${g.label})`).join(", ")}`;
+    case "hire": return `hire ${at(c.handle)} from template ${c.template}@${c.version} on ${c.project} as ${c.instance}`;
+    case "upgrade": return `upgrade instance ${c.instance} to ${c.template}@${c.to}`;
     case "file": return `file plan ${c.plan} under project ${c.project}`;
     case "plan_status": return `mark plan ${c.plan} ${c.status}`;
     case "task_status": return `mark task ${c.task} ${c.status}`;
@@ -991,6 +1065,9 @@ function changeSentence(c: OrgChange): string {
     case "routine": return `${at(c.handle)} runs "${c.title}" ${everyWords(c.every)}`;
     case "project_meta": return `write the charter of ${c.project}${c.owner ? `, owned by ${at(c.owner)}` : ""}${c.priority ? `, priority ${c.priority}` : ""}${c.goal ? `: ${c.goal}` : ""}`;
     case "adopt": return `make session ${c.conversation} the standing session of ${at(c.handle)}`;
+    case "authority": return `${at(c.handle)} may ${authorityWords(c.authority)}, inside the limits you set`;
+    case "hire": return `hire ${at(c.handle)} from the template ${c.template} (${c.version}) to lead ${c.project}`;
+    case "upgrade": return `move the instance ${c.instance} to ${c.template} ${c.to}`;
     case "file": return `put plan ${c.plan} under the project ${c.project}`;
     case "plan_status": case "task_status": case "project_status": return describeOrgChange(c);
     default: {

@@ -1235,6 +1235,22 @@ export default defineSchema({
       wakes_per_day: v.number(),
       tokens_per_day: v.number(),
     })),
+    // What a person lets the role do OUTSIDE codecast (org-hire.md H4): spend
+    // on an account, publish to destinations, write into a project, connect a
+    // service, each with a limit and an expiry. Independent of trust, which is
+    // authority inside codecast. Human only, like trust and caps.
+    authority: v.optional(v.array(v.object({
+      id: v.string(),
+      kind: v.union(v.literal("spend"), v.literal("publish"), v.literal("write"), v.literal("connect")),
+      label: v.string(),
+      scope: v.optional(v.string()),
+      limit: v.optional(v.object({ usd_per_month: v.optional(v.number()), usd_per_day: v.optional(v.number()), per_day: v.optional(v.number()) })),
+      granted_by: v.id("users"),
+      granted_at: v.number(),
+      expires_at: v.optional(v.number()),
+      template_instance_id: v.optional(v.id("org_template_instances")),
+      decision_id: v.optional(v.string()),
+    }))),
     // Today's spend against the caps; `day` is the UTC date the counts belong
     // to, so a stale row resets itself on the first write of a new day.
     counters: v.optional(v.object({
@@ -1518,6 +1534,8 @@ export default defineSchema({
     host: v.optional(v.object({ machine: v.string(), dir: v.string() })),
     phase: v.union(v.literal("awaiting_host"), v.literal("ready"), v.literal("upgrading"), v.literal("retired")),
     update_policy: v.union(v.literal("manual"), v.literal("canary"), v.literal("stable")),
+    // An accepted upgrade change (H9) waits here for the host step (bind --to).
+    pending_upgrade: v.optional(v.object({ to: v.string(), digest: v.string(), accepted_at: v.number(), accepted_by: v.id("users") })),
     config: v.optional(v.record(v.string(), v.string())), // hire answers; never a secret
     // Secret inputs bound on a host: which machine, and the hash of the path.
     bindings: v.optional(v.record(v.string(), v.object({ host: v.string(), path_hash: v.string(), bound_at: v.number() }))),

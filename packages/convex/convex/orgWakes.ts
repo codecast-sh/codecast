@@ -153,6 +153,12 @@ function budgeted(lines: string[], budget: { left: number }): string[] {
   return out;
 }
 
+/** "spend (Paid search, up to $300 a month, until 2026-12-18); write (Ship pages)" or "none granted". */
+export function authorityLine(authority: any[] | undefined, now: number): string {
+  const rows = (authority ?? []).filter((g) => !g.expires_at || g.expires_at > now);
+  if (!rows.length) return "none granted";
+  return rows.map((g) => `${g.kind} (${g.label}${g.limit?.usd_per_month !== undefined ? `, up to $${g.limit.usd_per_month} a month` : g.limit?.usd_per_day !== undefined ? `, up to $${g.limit.usd_per_day} a day` : g.limit?.per_day !== undefined ? `, up to ${g.limit.per_day} a day` : ""}${g.expires_at ? `, until ${new Date(g.expires_at).toISOString().slice(0, 10)}` : ""})`).join("; ");
+}
 export function buildFrame(input: FrameInput): Frame {
   const { role, rows, facts, now } = input;
   const since = role.last_frame_seq ?? 0;
@@ -169,6 +175,9 @@ export function buildFrame(input: FrameInput): Frame {
     `${role.name} (@${role.handle}, ${role.short_id}) · trust ${trustOf(role)} · reports to ${input.parentName}`,
     `Scope: ${scopeNames.length ? scopeNames.join(", ") : "the whole workspace"}`,
     `Today: ${u.wakes + 1}/${u.caps.wakes_per_day} wakes · ${u.hands}/${u.caps.hands_per_day} hands · ${u.tokens}/${u.caps.tokens_per_day} tokens`,
+    // Three things a person decides, in one place (org-hire.md H4): trust is
+    // above; authority is what the role may do outside codecast.
+    `Authority outside codecast: ${authorityLine(role.authority, Date.now())}`,
   ].join("\n"));
 
   // A group an earlier flush held (a cap, a pause) is marked so the backlog

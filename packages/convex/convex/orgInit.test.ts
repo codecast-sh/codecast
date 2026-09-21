@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { ANALYSIS_CAPS, computeAnalysisActivity, computeAnalysisInputs, computeAnalysisOrg, computeAnalysisSignals, computeAnalysisWork, mergeAnalysisInputs, performApplyDecision } from "./orgInit";
+import { ANALYSIS_CAPS, computeAnalysisActivity, computeAnalysisInputs, computeAnalysisOrg, computeAnalysisSignals, computeAnalysisWork, mergeAnalysisInputs, performApplyDecision, sessionUseOf } from "./orgInit";
 import { orgProposalBlock } from "@codecast/shared/contracts/orgProposal";
 
 // Org init (docs/architecture/org-init.md O1, O2): the analyzer's inputs are
@@ -177,6 +177,49 @@ describe("org.analysisInputs", () => {
   });
 
   // Union, 2026-09-20: ranked by helpers alone, the list held the largest finished
+  // A seated session's limit is sized on what it spends, so its row carries
+  // the last week's use in the unit the caps count, and says what it covers.
+  test("a long running row carries its measured use for the week: input plus output tokens and model calls a day, the days covered, and not counted when no message carries usage", async () => {
+    const D = 24 * H;
+    const base = { user_id: ME, team_id: TEAM, status: "active", agent_type: "claude", is_private: false, updated_at: NOW - H, created_at: 1, message_count: 10 };
+    const usage = (n: number) => ({ input_tokens: 100 * n, output_tokens: 10 * n, cache_read_input_tokens: 5000 });
+    const db = fixtures({
+      conversations: [
+        { ...base, _id: "conversations_old", short_id: "jxold", title: "Market growth mandate", started_at: NOW - 34 * D },
+        // Started three days ago and a week old by age? No: two weeks old, so listed; its messages carry no usage block (another backend).
+        { ...base, _id: "conversations_codex", short_id: "jxcodex", title: "Codex worker", agent_type: "codex", started_at: NOW - 14 * D, message_count: 5 },
+      ],
+      messages: [
+        { _id: "messages_1", conversation_id: "conversations_old", role: "user", content: "Steer the funnel.", timestamp: NOW - 6 * D },
+        { _id: "messages_2", conversation_id: "conversations_old", role: "assistant", content: "Pass one.", timestamp: NOW - 6 * D + H, usage: usage(1) },
+        { _id: "messages_3", conversation_id: "conversations_old", role: "assistant", content: "Pass two.", timestamp: NOW - 2 * D, usage: usage(2) },
+        { _id: "messages_4", conversation_id: "conversations_old", role: "assistant", content: "Pass three.", timestamp: NOW - H, usage: usage(3) },
+        // Outside the week: never counted.
+        { _id: "messages_5", conversation_id: "conversations_old", role: "assistant", content: "Old.", timestamp: NOW - 9 * D, usage: usage(9) },
+        { _id: "messages_6", conversation_id: "conversations_codex", role: "user", content: "Fix the build.", timestamp: NOW - D },
+        { _id: "messages_7", conversation_id: "conversations_codex", role: "assistant", content: "Done.", timestamp: NOW - D + H },
+      ],
+    });
+    const r = await computeAnalysisInputs(ctxOf(db), ME as any, TEAM, NOW);
+    const rows = r.sessions.long_running.rows;
+    expect(rows.map((s: any) => s.short_id).sort()).toEqual(["jxcodex", "jxold"]);
+    // The internal id served only the read; a seat is named by its short id.
+    expect(rows.every((s: any) => s.id === undefined)).toBe(true);
+    const old = rows.find((s: any) => s.short_id === "jxold");
+    expect(old.use_7d).toEqual({ days: 7, tokens: 660, calls: 3, per_day: { tokens: 94, calls: 0.4 }, counted: true, messages_read: 4, truncated: false });
+    const codex = rows.find((s: any) => s.short_id === "jxcodex");
+    expect(codex.use_7d).toEqual({ days: 7, tokens: 0, calls: 0, per_day: { tokens: 0, calls: 0 }, counted: false, messages_read: 2, truncated: false });
+  });
+
+  test("measured use covers the days it can: a session younger than the week, and a session read at the cap", () => {
+    const D = 24 * H;
+    // Three days old: the figure is over three days, not seven.
+    expect(sessionUseOf([{ timestamp: NOW - 2 * D, usage: { input_tokens: 300, output_tokens: 0 } }], NOW - 3 * D, NOW)).toMatchObject({ days: 3, tokens: 300, per_day: { tokens: 100 } });
+    // At the cap, the newest rows span two days: the figure covers those two, and says it was cut.
+    const rows = Array.from({ length: 4 }, (_, i) => ({ timestamp: NOW - i * 12 * H, usage: { input_tokens: 50, output_tokens: 0 } }));
+    expect(sessionUseOf(rows, NOW - 30 * D, NOW, 4)).toMatchObject({ days: 2, tokens: 200, per_day: { tokens: 100 }, truncated: true, messages_read: 4 });
+  });
+
   // jobs and left out the session a routine wakes every day.
   test("long running sessions rank by evidence of a standing purpose: a live routine, then this week's activity, a pinned state, helpers", async () => {
     const D = 24 * H;

@@ -341,6 +341,7 @@ export function roleLogFields(role: any): OrgLogFields {
     scope: scopeRef(role.scope),
     caps: capsFor(role),
     trust: trustOf(role),
+    authority: role.authority ?? null,
   };
 }
 

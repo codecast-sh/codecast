@@ -43,6 +43,8 @@ class Server {
   failAfter?: string;
   failBefore?: string;
   pauseWorks = true;
+  /** An older backend ignores `status: "paused"` on create and returns a live row. */
+  honorsPausedCreate = true;
   standingPath?: string;
   constructor(readonly dir: string) { this.project = { _id: "project-1", short_id: "pr-1", title: "Product", project_path: dir, workspace: "team:team-1" }; }
   deps: OrgInitDeps = {
@@ -92,7 +94,7 @@ class Server {
       case "/cli/sessions": return { conversations: this.anchors.map((a) => ({ conversation_id: a.conversation_id, project_path: this.standingPath || this.dir })) };
       case "/cli/tasks/list": return this.triggers;
       case "/cli/tasks/create": {
-        const row = { ...body, _id: `trigger-${this.triggers.length + 1}`, short_id: `tr-${this.triggers.length + 1}`, status: "scheduled", run_count: 0 };
+        const row = { ...body, _id: `trigger-${this.triggers.length + 1}`, short_id: `tr-${this.triggers.length + 1}`, status: body.status === "paused" && this.honorsPausedCreate ? "paused" : "scheduled", run_at: body.status === "paused" && this.honorsPausedCreate ? undefined : body.run_at ?? Date.now(), run_count: 0 };
         this.triggers.push(row); return { task_id: row._id, short_id: row.short_id };
       }
       case "/cli/tasks/pause": { if (this.pauseWorks) this.triggers.find((t) => t._id === body.task_id).status = "paused"; return { success: this.pauseWorks }; }
@@ -203,7 +205,8 @@ describe("proposal and lifecycle fake API", () => {
     expect(f.server.roles).toHaveLength(1); expect(f.server.triggers).toHaveLength(2);
     expect(f.server.calls.find((c) => c.endpoint === "/cli/org/apply-decision")?.body.provision).toBe(false);
     expect(f.server.calls.find((c) => c.endpoint === "/cli/role/provision")?.body.project_path).toBe(f.dir);
-    for (const t of f.server.triggers) { expect(t.status).toBe("paused"); expect(t.precheck).toBe("exit 1"); expect(t.run_at).toBeGreaterThan(Date.now() + 300 * 86400000); expect(t.originating_conversation_id).toBe("standing-1"); expect(t.run_count).toBe(0); }
+    for (const t of f.server.triggers) { expect(t.status).toBe("paused"); expect(t.precheck).toBeUndefined(); expect(t.run_at).toBeUndefined(); expect(t.originating_conversation_id).toBe("standing-1"); expect(t.run_count).toBe(0); }
+    expect(f.server.calls.filter((c) => c.endpoint === "/cli/tasks/pause")).toHaveLength(0);
   });
   test("unanswered, rejected, advisory and delegated answers cannot create roles", async () => {
     const f = fixture(); await f.install(); await f.reconcile(); expect(f.server.roles).toHaveLength(0);
@@ -222,7 +225,7 @@ describe("proposal and lifecycle fake API", () => {
     test(`recovers server success before receipt update: ${endpoint}`, async () => {
       const f = fixture();
       if (["/cli/stack/create", "/cli/decide"].includes(endpoint)) { f.server.failAfter = endpoint; await expect(f.install()).rejects.toThrow("after server success"); await f.install(); }
-      else { await f.install(); f.server.approve(); f.server.failAfter = endpoint; await expect(f.reconcile()).rejects.toThrow("after server success"); await f.reconcile(); }
+      else { await f.install(); f.server.approve(); if (endpoint === "/cli/tasks/pause") f.server.honorsPausedCreate = false; f.server.failAfter = endpoint; await expect(f.reconcile()).rejects.toThrow("after server success"); await f.reconcile(); }
       expect(f.server.stacks).toHaveLength(1); expect(f.server.decisions).toHaveLength(1); expect(f.server.roles.length).toBeLessThanOrEqual(1); expect(f.server.triggers.length).toBeLessThanOrEqual(2);
       expect(f.server.calls.filter((c) => c.endpoint === endpoint).length).toBe(endpoint === "/cli/org/apply-decision" ? 2 : endpoint === "/cli/tasks/create" || endpoint === "/cli/tasks/pause" ? 2 : 1);
     });
@@ -268,9 +271,9 @@ describe("proposal and lifecycle fake API", () => {
   test("wrong standing path, scope drift and failed pause prevent ready", async () => {
     const f = fixture(); await f.install(); f.server.approve(); f.server.standingPath = tmp();
     await expect(f.reconcile()).rejects.toThrow("pinned project directory"); expect(f.server.triggers).toHaveLength(0);
-    f.server.standingPath = f.dir; f.server.pauseWorks = false;
-    await expect(f.reconcile()).rejects.toThrow("Pause verification failed"); expect(readReceipt(f.dir, "product").phase).toBe("provisioning"); expect(f.server.triggers[0].precheck).toBe("exit 1");
-    f.server.pauseWorks = true; await f.reconcile(); f.server.roles[0].scope.project_ids = [];
+    f.server.standingPath = f.dir; f.server.pauseWorks = false; f.server.honorsPausedCreate = false;
+    await expect(f.reconcile()).rejects.toThrow("Pause verification failed"); expect(readReceipt(f.dir, "product").phase).toBe("provisioning"); expect(f.server.calls.filter((c) => c.endpoint === "/cli/tasks/pause")).toHaveLength(1);
+    f.server.pauseWorks = true; f.server.honorsPausedCreate = true; await f.reconcile(); f.server.roles[0].scope.project_ids = [];
     await expect(f.reconcile()).rejects.toThrow("exactly the instance project");
   });
   test("human charter changes are applied once and never overwritten", async () => {
@@ -348,7 +351,7 @@ describe("upgrades and adoption", () => {
     f.server.failAfter = "/cli/tasks/create"; await expect(upgradeTemplate(f.server.deps, "product", next, { ...f.options, apply: true })).rejects.toThrow();
     const result = await upgradeTemplate(f.server.deps, "product", f.root, { ...f.options, apply: true });
     expect(result.receipt.template.version).toBe("1.2.0"); expect(result.receipt.routines.social.retired).toBe(true); expect(result.receipt.routines.social.triggerId).toBe(f.server.triggers[2]._id); expect(f.server.triggers[2].status).toBe("paused");
-    expect(f.server.triggers[2].precheck).toBe("exit 1"); expect(result.receipt.routines.social.attempted).toBe(false);
+    expect(f.server.triggers[2].status).toBe("paused"); expect(f.server.triggers[2].run_at).toBeUndefined(); expect(result.receipt.routines.social.attempted).toBe(false);
     const forward = await upgradeTemplate(f.server.deps, "product", next, { ...f.options, apply: true });
     expect(forward.receipt.routines.social.triggerId).toBe(result.receipt.routines.social.triggerId); expect(forward.receipt.routines.social.retired).toBe(false); expect(f.server.triggers).toHaveLength(3);
   });
@@ -556,7 +559,7 @@ describe("instance record, readiness and the loader", () => {
 test("registers lazy org template commands and UI install flags", () => {
   const program = new Command(); program.command("org"); registerOrgTemplateCommands(program, new Server(tmp()).deps);
   const template = program.commands[0].commands[0]; expect(template.name()).toBe("template");
-  expect(template.commands.map((c) => c.name())).toEqual(["inspect", "install", "status", "reconcile", "bind", "evidence", "report", "setup", "lesson", "publish", "catalog", "upgrade", "instructions"]);
+  expect(template.commands.map((c) => c.name())).toEqual(["inspect", "install", "status", "reconcile", "bind", "evidence", "report", "setup", "lesson", "publish", "catalog", "activate", "upgrade", "instructions"]);
   expect(template.commands.find((c) => c.name() === "install")!.options.map((o) => o.long)).toEqual(expect.arrayContaining(["--instance", "--project", "--dir", "--team", "--personal", "--adopt"]));
 });
 

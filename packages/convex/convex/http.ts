@@ -4144,6 +4144,7 @@ cliRoute("/cli/role/retire", async (ctx, body) => ctx.runMutation(api.orgRoles.r
 cliRoute("/cli/role/restart", async (ctx, body) => ctx.runMutation(api.orgRoles.restart, body));
 cliRoute("/cli/role/trust", async (ctx, body) => ctx.runMutation(api.orgRoles.setTrust, body));
 cliRoute("/cli/role/caps", async (ctx, body) => ctx.runMutation(api.orgRoles.setCaps, body));
+cliRoute("/cli/role/authority", async (ctx, body) => ctx.runMutation((api as any).orgRoles.setAuthority, body));
 cliRoute("/cli/role/reports", async (ctx, body) => ctx.runMutation(api.orgRoles.setReports, body));
 cliRoute("/cli/role/wakes", async (ctx, body) => ctx.runQuery(api.orgRoles.wakes, body));
 cliRoute("/cli/role/self", async (ctx, body) => ctx.runQuery(api.orgRoles.selfForSession, body));
@@ -4201,6 +4202,8 @@ cliRoute("/cli/org/template/setup", async (ctx, body) => ctx.runMutation((api as
 cliRoute("/cli/org/template/lesson", async (ctx, body) => ctx.runMutation((api as any).orgTemplates.fileLesson, body));
 cliRoute("/cli/org/template/lessons", async (ctx, body) => ctx.runQuery((api as any).orgTemplates.listLessons, body));
 cliRoute("/cli/org/template/lesson-status", async (ctx, body) => ctx.runMutation((api as any).orgTemplates.setLessonStatus, body));
+// Human only (refuseUnlessHuman): the CLI call is refused with the reason; the role page calls the mutation directly.
+cliRoute("/cli/org/template/activate", async (ctx, body) => ctx.runMutation((api as any).orgTemplates.activateRoutine, body));
 
 // Session read marks: `cast read <id> --ack` and `cast unread <id>`. Both
 // resolve the ref (id or short id) and check conversation access inside the

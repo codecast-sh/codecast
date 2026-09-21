@@ -76,6 +76,15 @@ async function roleWithTwoSessions() {
 }
 
 describe("cast escalate (R1)", () => {
+  test("a role may escalate its own standing session (org-hire.md H5); a hand still may not", async () => {
+    const { db, ctx, role } = await roleWithTwoSessions();
+    const res = await performEscalateSession(ctx, ME as any, { session_id: "jx7ssss", line: "verify the domain in Search Console (unlocks SEO weekly)", from_session: id("s") });
+    expect(res.role?.handle).toBe("growth");
+    expect(row(db, "s").escalated_by_role).toMatchObject({ role_id: role._id, line: "verify the domain in Search Console (unlocks SEO weekly)" });
+    await performEscalateSession(ctx, ME as any, { session_id: "jx7ssss", clear: true, from_session: id("s") });
+    expect(row(db, "s").escalated_by_role).toBeUndefined();
+    await expect(performEscalateSession(ctx, ME as any, { session_id: "jx7ssss", line: "me", from_session: id("a") })).rejects.toThrow(/Your role decides/);
+  });
   test("the role puts one of its sessions in front of the person with its line; clear takes it back", async () => {
     const { db, ctx, role } = await roleWithTwoSessions();
     const res = await performEscalateSession(ctx, ME as any, { session_id: "jx7aaaa", line: "  the pricing copy is ready\nand needs your eye ", from_session: id("s") });

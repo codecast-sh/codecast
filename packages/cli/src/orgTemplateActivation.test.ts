@@ -5,7 +5,7 @@ import { activationInstructions, type TemplateReceipt } from "./orgTemplateRun";
 
 const repo = path.dirname(fs.realpathSync(path.resolve(import.meta.dir, "../../../node_modules")));
 const backend = path.join(repo, "packages/convex/convex");
-const { applyTaskUpdate, resumeTask } = await import(path.join(backend, "agentTasks.ts"));
+const { applyActivate, applyTaskUpdate, resumeTask } = await import(path.join(backend, "agentTasks.ts"));
 const { makeFakeDb } = await import(path.join(backend, "testDb.ts"));
 const { hashToken } = await import(path.join(backend, "apiTokens.ts"));
 
@@ -35,4 +35,25 @@ test("activation procedure resets year-ahead run_at while paused, then actual ba
   expect(task.run_at).toBe(correctedRunAt);
   expect(task.interval_ms).toBe(interval);
   expect(instructions.commands.at(-1)).toBe("cast trigger resume 'tr-1'");
+});
+
+test("a routine created paused (H8): the procedure carries no gate flag, --every sets the first run, and one activation does the same", async () => {
+  const interval = 86400000;
+  const task: any = { _id: "agent_tasks_two", user_id: "users_one", short_id: "tr-2", schedule_type: "recurring", interval_ms: interval, status: "paused", run_count: 0 };
+  const token = "template-activation-fixture-2";
+  const ctx = { db: makeFakeDb({ agent_tasks: [task], agent_task_revisions: [], api_tokens: [{ _id: "api_tokens_two", user_id: "users_one", token_hash: await hashToken(token) }] }) };
+  const instructions = activationInstructions({ instance: "growth", project: { dir: repo } } as TemplateReceipt, task);
+  expect(instructions.commands[0]).toBe("cast trigger update 'tr-2' --every '86400s'");
+  const before = Date.now();
+  await applyTaskUpdate(ctx, task, { schedule_type: "recurring", interval_ms: interval }, { userId: "users_one", source: "cli" });
+  expect(task.status).toBe("paused");
+  expect(task.run_at).toBeGreaterThanOrEqual(before + interval);
+  await resumeTask._handler(ctx, { api_token: token, task_id: task._id });
+  expect(task.status).toBe("scheduled");
+  const fresh: any = { _id: "agent_tasks_three", user_id: "users_one", short_id: "tr-3", schedule_type: "recurring", interval_ms: interval, status: "paused", run_count: 0 };
+  const ctx2 = { db: makeFakeDb({ agent_tasks: [fresh], agent_task_revisions: [] }) };
+  expect(await applyActivate(ctx2, fresh)).toBe(true);
+  const row = await ctx2.db.get(fresh._id);
+  expect(row.status).toBe("scheduled");
+  expect(row.run_at).toBeGreaterThanOrEqual(before + interval);
 });

@@ -17,6 +17,8 @@ import { getAuthenticatedUserId } from "./pendingMessages";
 import { canAccessProject, requireTeamAdmin, requireTeamMembership, resolveWorkspaceKey, workspaceGrantsAccess, workspaceKey, type WorkspaceKey } from "./lib/access";
 import { validateTemplate, type OrgTemplate } from "@codecast/shared/contracts/orgTemplateManifest";
 import { markSetup, nextHumanAsk, readiness, recordEvidence, recordScores, setupRows, type InstanceState } from "@codecast/shared/contracts/orgTemplateState";
+import { applyActivate, getManageableTask } from "./agentTasks";
+import { refuseUnlessHuman } from "./orgRoles";
 
 /** The one value beside a workspace key that grants visibility: a template every workspace may hire. */
 export const CODECAST_TEMPLATE_ACCESS = "codecast";
@@ -158,7 +160,15 @@ export async function performUpsertInstance(ctx: Ctx, userId: Id<"users">, args:
     if (!role || role.status === "retired" || !(role.scope?.project_ids ?? []).some((id: any) => String(id) === String(args.project_id))) throw new Error("Role not found or does not lead this project");
   }
   const now = Date.now();
-  const existing = await ctx.db.query("org_template_instances").withIndex("by_instance_key", (q: any) => q.eq("instance_key", args.instance_key)).first();
+  // The row is found by the host's key, or, for a hire accepted on the web
+  // before any host step, by the instance's name on the project: that row was
+  // written awaiting the host, and takes the host's key when bind arrives.
+  let existing = await ctx.db.query("org_template_instances").withIndex("by_instance_key", (q: any) => q.eq("instance_key", args.instance_key)).first();
+  if (!existing) {
+    const rows: any[] = await ctx.db.query("org_template_instances").withIndex("by_workspace", (q: any) => q.eq("workspace", access)).collect();
+    existing = rows.find((r) => String(r.project_id) === String(args.project_id) && r.instance === args.instance) ?? null;
+    if (existing && existing.phase !== "awaiting_host" && existing.instance_key !== args.instance_key) throw new Error(`Instance ${args.instance} already exists on this project under another host; choose another name or rebind from that host`);
+  }
   const fields = {
     instance: args.instance, template_id: args.template_id, version: args.version, digest: args.digest, project_id: args.project_id,
     ...(args.role_id ? { role_id: args.role_id } : {}), ...(args.host ? { host: args.host } : {}),
@@ -167,7 +177,7 @@ export async function performUpsertInstance(ctx: Ctx, userId: Id<"users">, args:
   };
   if (existing) {
     if (existing.workspace !== access || String(existing.project_id) !== String(args.project_id)) throw new Error("Instance belongs to another project or workspace");
-    await ctx.db.patch(existing._id, { ...fields, phase: args.phase ?? existing.phase, update_policy: args.update_policy ?? existing.update_policy });
+    await ctx.db.patch(existing._id, { ...fields, instance_key: args.instance_key, phase: args.phase ?? existing.phase, update_policy: args.update_policy ?? existing.update_policy });
     return await ctx.db.get(existing._id);
   }
   const id = await ctx.db.insert("org_template_instances", { instance_key: args.instance_key, workspace: access, phase: args.phase ?? "ready", update_policy: args.update_policy ?? "manual", ...fields, created_by: userId, created_at: now });
@@ -184,7 +194,8 @@ async function instanceFor(ctx: Ctx, userId: Id<"users">, instanceKey: string): 
   if (!release) throw new Error("The instance's pinned release is no longer published");
   return { row, manifest: release.manifest as OrgTemplate };
 }
-const stateOf = (row: any): InstanceState => ({ evidence: row.evidence, scoreboard: row.scoreboard, setup: row.setup, authority: row.authority });
+/** The instance record plus the authority its role holds (org_roles.authority), for readiness. */
+const stateOf = (row: any, role?: any): InstanceState => ({ evidence: row.evidence, scoreboard: row.scoreboard, setup: row.setup, authority: (role?.authority ?? []).map((g: any) => ({ id: g.id, expires_at: g.expires_at })) });
 
 // ── The instance record (H5 to H7) ──────────────────────────────────────────
 
@@ -215,13 +226,24 @@ export async function performMarkSetup(ctx: Ctx, userId: Id<"users">, args: { in
 export async function performInstanceStatus(ctx: Ctx, userId: Id<"users">, args: { instance_key: string }) {
   const { row, manifest } = await instanceFor(ctx, userId, args.instance_key);
   const role = row.role_id ? await ctx.db.get(row.role_id) : null;
-  const state = stateOf(row);
+  const state = stateOf(row, role);
   return { ...row, trust: role?.trust ?? "understand", setup: setupRows(manifest, state), ask: nextHumanAsk(manifest, state), readiness: readiness(manifest, state, role?.trust ?? "understand") };
 }
 export async function performListInstances(ctx: Ctx, userId: Id<"users">, args: { team_id?: Id<"teams">; template_id?: string }) {
   const access = await callerWorkspace(ctx, userId, args.team_id);
   const rows: any[] = await ctx.db.query("org_template_instances").withIndex("by_workspace", (q: any) => q.eq("workspace", access)).collect();
   return rows.filter((r) => !args.template_id || r.template_id === args.template_id);
+}
+/** The role page's read (H11): the instance a role was hired as, with its status, or null for an ordinary role. */
+export async function performInstanceForRole(ctx: Ctx, userId: Id<"users">, args: { role_id: Id<"org_roles"> }) {
+  const rows: any[] = await ctx.db.query("org_template_instances").withIndex("by_role", (q: any) => q.eq("role_id", args.role_id)).collect();
+  const row = rows.find((r) => r.phase !== "retired") ?? rows[0];
+  if (!row || !(await workspaceGrantsAccess(ctx as any, userId, row.workspace))) return null;
+  const status = await performInstanceStatus(ctx, userId, { instance_key: row.instance_key });
+  const template = await visibleTemplate(ctx, row.template_id, row.workspace);
+  const latest = template?.releases.filter((r: any) => r.status === "stable").map((r: any) => r.version).sort(compareVersions).at(-1);
+  const routines = ((template?.releases.find((r: any) => r.version === row.version && r.digest === row.digest)?.manifest as OrgTemplate | undefined)?.routines ?? []).map((r) => ({ id: r.id, title: r.title, every: r.every, mode: r.mode ?? "propose" }));
+  return { ...status, routines, template: template ? { name: template.name, avatar: template.avatar, latest_stable: latest, changelog: template.releases.find((r: any) => r.version === latest)?.changelog } : null, update_available: latest && row.update_policy === "stable" && compareVersions(latest, row.version) > 0 ? latest : null };
 }
 
 // ── Lessons (H9) ────────────────────────────────────────────────────────────
@@ -265,6 +287,37 @@ export async function performSetLessonStatus(ctx: Ctx, userId: Id<"users">, args
   return await ctx.db.get(lesson._id);
 }
 
+// ── An accepted upgrade waits for the host (H9) ─────────────────────────────
+
+export async function performAcceptUpgrade(ctx: Ctx, userId: Id<"users">, args: { access: WorkspaceKey; instance: string; template_id: string; to: string; digest: string }) {
+  const rows: any[] = await ctx.db.query("org_template_instances").withIndex("by_workspace", (q: any) => q.eq("workspace", args.access)).collect();
+  const row = rows.find((r) => r.instance === args.instance && r.template_id === args.template_id);
+  if (!row) throw new Error(`No instance ${args.instance} of ${args.template_id} in this workspace`);
+  const template = await visibleTemplate(ctx, args.template_id, args.access);
+  if (!template?.releases.some((r: any) => r.version === args.to && r.digest === args.digest)) throw new Error(`Release ${args.template_id}@${args.to} with this digest is not published`);
+  await ctx.db.patch(row._id, { pending_upgrade: { to: args.to, digest: args.digest, accepted_at: Date.now(), accepted_by: userId }, updated_at: Date.now() });
+  return await ctx.db.get(row._id);
+}
+
+// ── Activation (H8) ─────────────────────────────────────────────────────────
+
+/**
+ * A person activates a routine created paused: one mutation sets the first
+ * run one interval out, clears the install's temporary gate and resumes.
+ * Human only, like trust and caps (orgRoles.refuseUnlessHuman): a call that
+ * carries an api token or a session is refused.
+ */
+export const activateRoutine = mutation({
+  args: {api_token: v.optional(v.string()), from_session: v.optional(v.string()), task_id: v.id("agent_tasks") },
+  handler: async (ctx, { api_token, from_session, task_id }) => {
+    await refuseUnlessHuman(ctx, { api_token, from_session }, "Activating a routine");
+    const userId = await requireCaller(ctx, api_token);
+    const task = await getManageableTask(ctx as any, task_id, userId);
+    if (!task) throw new Error("Routine not found");
+    return applyActivate(ctx as any, task);
+  },
+});
+
 // ── Wrappers ────────────────────────────────────────────────────────────────
 
 const releaseStatus = v.union(v.literal("draft"), v.literal("canary"), v.literal("stable"));
@@ -307,6 +360,10 @@ export const setup = mutation({
 export const instanceStatus = query({
   args: { api_token: v.optional(v.string()), instance_key: v.string() },
   handler: async (ctx, { api_token, ...args }) => performInstanceStatus(ctx, await requireCaller(ctx, api_token), args),
+});
+export const instanceForRole = query({
+  args: { api_token: v.optional(v.string()), role_id: v.id("org_roles") },
+  handler: async (ctx, { api_token, ...args }) => performInstanceForRole(ctx, await requireCaller(ctx, api_token), args),
 });
 export const listInstances = query({
   args: { api_token: v.optional(v.string()), team_id: v.optional(v.id("teams")), template_id: v.optional(v.string()) },

@@ -26,7 +26,7 @@ describe("org proposal block", () => {
 
 // Staffing changes (org-staffing.md S4): one validator per kind, the spec
 // envelope, the accept order and the one-line describer.
-import { ORG_CHANGE_APPLY_RANK, ORG_CHANGE_KINDS, ORG_VERDICT_REVISED, describeOrgChange, describeTenure, isOrgChange, latestOrgRevisionAt, orderOrgChanges, orgChangeError, orgTenureError, orgVerdictSeenFault, parseOrgProposalSpec, type OrgChange } from "./orgProposal";
+import { ORG_CHANGE_APPLY_RANK, ORG_CHANGE_KINDS, ORG_VERDICT_REVISED, describeOrgChange, describeTenure, isOrgChange, latestOrgRevisionAt, orderOrgChanges, orgChangeDependencies, orgChangeError, orgTenureError, orgVerdictSeenFault, parseOrgProposalSpec, type OrgChange } from "./orgProposal";
 
 const GOOD: Record<OrgChange["kind"], OrgChange> = {
   role: { kind: "role", name: "Head of Growth", handle: "growth", scope: { projects: ["pr-1"] }, reports_to: "me" },
@@ -43,6 +43,9 @@ const GOOD: Record<OrgChange["kind"], OrgChange> = {
   plan_status: { kind: "plan_status", plan: "pl-7", status: "done", reason: "every task closed" },
   task_status: { kind: "task_status", task: "ct-42", status: "done", reason: "commits landed, still open" },
   project_status: { kind: "project_status", project: "Legacy", status: "paused", reason: "no activity 30d" },
+  authority: { kind: "authority", handle: "growth", authority: [{ id: "ads-spend", kind: "spend", label: "Paid search on the configured campaign", limit: { usd_per_month: 300 }, expires: "90d" }, { id: "site-write", kind: "write", label: "Ship pages into the working tree" }] },
+  hire: { kind: "hire", handle: "growth", template: "growth", version: "2.0.0", digest: "a".repeat(64), instance: "acme-growth", project: "pr-1", config: { "product.domain": "acme.io" }, update_policy: "stable" },
+  upgrade: { kind: "upgrade", instance: "acme-growth", template: "growth", to: "2.1.0", digest: "b".repeat(64) },
 };
 
 describe("org change validation", () => {
@@ -140,6 +143,33 @@ describe("status changes, tenure and horizon", () => {
   test("each status kind names its faults; the reason is required", () => {
     expect(orgChangeError({ kind: "plan_status", plan: "pl-1", status: "paused", reason: "x" })).toContain("done, abandoned, active");
     expect(orgChangeError({ kind: "plan_status", plan: "pl-1", status: "done" })).toContain("reason");
+  });
+  test("authority, hire and upgrade (org-hire.md W8) are checked field by field", () => {
+    const a = GOOD.authority as any;
+    expect(orgChangeError({ ...a, authority: [] })).toContain("one to fifty");
+    expect(orgChangeError({ ...a, authority: [{ ...a.authority[0], kind: "delete" }] })).toContain("spend, publish, write, connect");
+    expect(orgChangeError({ ...a, authority: [a.authority[0], a.authority[0]] })).toContain("unique slug id");
+    expect(orgChangeError({ ...a, authority: [{ ...a.authority[0], limit: { usd_per_month: -1 } }] })).toContain("non-negative");
+    expect(orgChangeError({ ...a, authority: [{ ...a.authority[0], limit: {} }] })).toContain("non-negative");
+    expect(orgChangeError({ ...a, authority: [{ ...a.authority[0], expires: "never" }] })).toContain("duration like 90d");
+    const h = GOOD.hire as any;
+    expect(orgChangeError({ ...h, template: "Growth Pack" })).toContain("slug");
+    expect(orgChangeError({ ...h, version: "2" })).toContain("version like 2.0.0");
+    expect(orgChangeError({ ...h, digest: "abc" })).toContain("sha256");
+    expect(orgChangeError({ ...h, project: "" })).toContain("project ref");
+    expect(orgChangeError({ ...h, config: { a: 1 } })).toContain("answers");
+    expect(orgChangeError({ ...h, update_policy: "weekly" })).toContain("manual, canary or stable");
+    const u = GOOD.upgrade as any;
+    expect(orgChangeError({ ...u, to: "next" })).toContain("version and sha256");
+    expect(describeOrgChange(GOOD.authority)).toBe("authority @growth: spend (Paid search on the configured campaign), write (Ship pages into the working tree)");
+    expect(describeOrgChange(GOOD.hire)).toBe("hire @growth from template growth@2.0.0 on pr-1 as acme-growth");
+    expect(describeOrgChange(GOOD.upgrade)).toBe("upgrade instance acme-growth to growth@2.1.0");
+    // Order: authority after trust on a role that exists; hire after role, authority and routine; upgrade alone; retire last.
+    const kinds = orderOrgChanges(["retire", "hire", "routine", "authority", "role", "upgrade", "trust"] as const, (k) => ({ kind: k } as any));
+    expect(kinds).toEqual(["role", "trust", "authority", "routine", "hire", "upgrade", "retire"]);
+    const deps = orgChangeDependencies([{ seq: 1, change: GOOD.role }, { seq: 2, change: GOOD.authority }, { seq: 3, change: GOOD.hire }]);
+    expect(deps[2]).toContain("authority for the role #1 creates");
+    expect(deps[3]).toContain("hires the role #1 creates");
     expect(orgChangeError({ kind: "task_status", status: "done", reason: "x" })).toContain("task ref");
     expect(orgChangeError({ kind: "task_status", task: "ct-1", status: "in_progress", reason: "x" })).toContain("done, dropped, open, backlog");
     expect(orgChangeError({ kind: "task_status", task: "ct-1", status: "open", reason: "filed in bulk, never picked up" })).toBeNull();

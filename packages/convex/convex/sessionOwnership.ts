@@ -594,8 +594,11 @@ export async function performEscalateSession(
   }
   // Who may: the role the session reports to, or a person who could have
   // filed it there (an owner, or a team viewer who may reshape the role).
+  // A template role may also put ITSELF in front of the person, with the one
+  // open setup item only it can clear (org-hire.md H5): its standing session
+  // (standing_role_id) is the role, not a session that reports to it.
   const conversation = await findConversationByAnyRefWhere(ctx, args.session_id, async (c: any) => {
-    if (actor.kind === "role") return !!c.org_role_id && String(c.org_role_id) === String(actor.role?._id);
+    if (actor.kind === "role") return (!!c.org_role_id && String(c.org_role_id) === String(actor.role?._id)) || (!!c.standing_role_id && String(c.standing_role_id) === String(actor.role?._id));
     const access = await checkConversationAccess(ctx, authUserId, c);
     if (access === "owner") return true;
     if (access !== "team" || !c.org_role_id) return false;
@@ -603,7 +606,7 @@ export async function performEscalateSession(
     return !!role && await userCanAdminRole(ctx, authUserId, role);
   });
   if (!conversation) throw new Error(actor.kind === "role" ? "Session not found among the sessions that report to you" : "Session not found, or you are not one of its owners");
-  const role = conversation.org_role_id ? await ctx.db.get(conversation.org_role_id) : null;
+  const role = conversation.org_role_id ? await ctx.db.get(conversation.org_role_id) : conversation.standing_role_id ? await ctx.db.get(conversation.standing_role_id) : null;
   // A stamp can outlive its role (an old row, a pointer dropped by hand): a
   // clear always succeeds, or the card would sit in needs input for good.
   if (!role && args.clear) {

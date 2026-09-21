@@ -27,8 +27,8 @@ import {
   performSetRoleScope,
   planProjectsOf,
   resolveScopeRef,
-  rolesInBoundary,
-} from "./orgRoles";
+  rolesInBoundary, performSetAuthority, performSetProjectLead } from "./orgRoles";
+import { performAcceptUpgrade, performUpsertInstance } from "./orgTemplates";
 import { capsFor, countersFor, trustOf } from "./orgEvents";
 import { findDecision } from "./sessionDecisions";
 import { extractRepoFromRemoteUrl, threadStateHeadline } from "@codecast/shared/contracts";
@@ -51,8 +51,7 @@ import {
   type OrgRoutineChange,
   type OrgScopeChange,
   type OrgTaskStatusChange,
-  type OrgTrustChange,
-} from "@codecast/shared/contracts/orgProposal";
+  type OrgTrustChange, authorityWords, type OrgAuthorityChange, type OrgHireChange, type OrgUpgradeChange } from "@codecast/shared/contracts/orgProposal";
 import { performSetTrust, standingConversationOf } from "./orgRoles";
 import { insertTask } from "./agentTasks";
 import { charterPatch } from "./lib/orgCharter";
@@ -90,6 +89,7 @@ export const ANALYSIS_CAPS = {
   members: 50,
   long_running: 12,
   tasks_filed_per_session: 300,
+  use_messages_per_session: 400,
   first_message_chars: 600,
 } as const;
 /** A session this old that still runs may be a role nobody has named (org-roles-run-work.md R2). */
@@ -337,6 +337,48 @@ export async function computeAnalysisOrg(ctx: Ctx, userId: Id<"users">, teamId: 
 // activity this week, a pinned state, then helpers and messages. Ranking by
 // helpers alone listed the largest finished jobs and left out a session a
 // routine wakes every day (the Union cold email optimizer, 2026-09-20).
+// ── Measured use: what a long running session spends in a week ─────────────
+// A seated session's daily limit must never stop work that runs today, so the
+// analyzer needs what the session spends now, not a guess: three Union samples
+// set the same session's limit at 300,000 to 1,000,000 tokens a day and the
+// letter's cost line moved with it (2026-09-21). The unit is the one the role
+// caps count, input plus output tokens (messages.rollUpUsage), over the
+// session's messages of the last week. The row says how many days the figure
+// covers: usage on messages exists only from 2026-09-13, a session younger
+// than the week covers fewer days, and a session read at the cap covers the
+// days its newest rows span. A session whose messages carry no usage block
+// (another backend, older rows) is not counted, and the analyzer keeps the
+// default limit as provisional rather than sizing on nothing.
+export const SESSION_USE_DAYS = 7;
+export const USAGE_RECORDED_SINCE = Date.UTC(2026, 8, 13);
+export type SessionUse = { days: number; tokens: number; calls: number; per_day: { tokens: number; calls: number }; counted: boolean; messages_read: number; truncated: boolean };
+type UsageMessage = { timestamp?: number; usage?: { input_tokens?: number; output_tokens?: number } | null };
+export function sessionUseOf(rows: UsageMessage[], startedAt: number, now: number, cap: number = ANALYSIS_CAPS.use_messages_per_session): SessionUse {
+  const D = 24 * 60 * 60 * 1000;
+  let tokens = 0, calls = 0, oldest = now;
+  for (const m of rows) {
+    if (m.timestamp !== undefined && m.timestamp < oldest) oldest = m.timestamp;
+    if (!m.usage) continue;
+    calls++;
+    tokens += (m.usage.input_tokens || 0) + (m.usage.output_tokens || 0);
+  }
+  const truncated = rows.length >= cap;
+  const covered = truncated ? now - oldest : now - Math.max(startedAt, USAGE_RECORDED_SINCE, now - SESSION_USE_DAYS * D);
+  const days = Math.max(1, Math.min(SESSION_USE_DAYS, Math.ceil(covered / D)));
+  return { days, tokens, calls, per_day: { tokens: Math.round(tokens / days), calls: Math.round((calls / days) * 10) / 10 }, counted: calls > 0, messages_read: rows.length, truncated };
+}
+export async function readSessionUse(ctx: Ctx, conversationId: Id<"conversations">, startedAt: number, now: number): Promise<SessionUse> {
+  const since = now - SESSION_USE_DAYS * 24 * 60 * 60 * 1000;
+  const rows: any[] = await ctx.db.query("messages").withIndex("by_conversation_timestamp", (q: any) => q.eq("conversation_id", conversationId).gte("timestamp", since)).order("desc").take(ANALYSIS_CAPS.use_messages_per_session);
+  return sessionUseOf(rows, startedAt, now);
+}
+/** The long running rows with each session's measured use on them and the
+ *  internal id off them: the id exists only so the use can be read in its own
+ *  query, and the analyzer names a seat by its short id. */
+export function withSessionUse(rows: any[], uses: Array<SessionUse | null | undefined>) {
+  return rows.map(({ id: _id, ...row }, i) => ({ ...row, ...(uses[i] ? { use_7d: uses[i] } : {}) }));
+}
+
 type OrgScanResult = Awaited<ReturnType<typeof collectOrgSessions>>;
 const LONG_RUNNING_RECENT_MS = 7 * 24 * 60 * 60 * 1000;
 async function longRunningSessions(ctx: Ctx, scan: OrgScanResult, now: number, work: AnalysisHandoff) {
@@ -387,6 +429,7 @@ async function longRunningSessions(ctx: Ctx, scan: OrgScanResult, now: number, w
     if (raw.project_path && projectByPath.has(raw.project_path)) touch(projectByPath.get(raw.project_path)!.id).by_path = true;
     const state = raw.thread_state ? threadStateHeadline(String(raw.thread_state)) : "";
     rows.push({
+      id: String(raw._id),
       short_id: session.short_id ?? undefined,
       title: session.title,
       owner: (await ctx.db.get(session.owner_user_id ?? raw.user_id))?.name ?? undefined,
@@ -543,6 +586,8 @@ export async function computeAnalysisInputs(ctx: Ctx, userId: Id<"users">, teamI
     workspaceLabelOf(ctx, userId, teamId),
     computeAnalysisActivity(ctx, userId, teamId, now),
   ]);
+  const uses = await Promise.all(org.sessions.long_running.rows.map((r: any) => readSessionUse(ctx, r.id, r.started_at, now)));
+  org.sessions.long_running.rows = withSessionUse(org.sessions.long_running.rows, uses);
   return mergeAnalysisInputs(userId, teamId, label, work, org, signals, now, activity.activity, activity.coverage);
 }
 
@@ -552,14 +597,26 @@ export const analysisPart = query({
   args: {
     api_token: v.optional(v.string()),
     team_id: v.optional(v.id("teams")),
-    part: v.union(v.literal("work"), v.literal("org"), v.literal("signals"), v.literal("activity")),
+    part: v.union(v.literal("work"), v.literal("org"), v.literal("signals"), v.literal("activity"), v.literal("use")),
     work: v.optional(v.any()),
     now: v.optional(v.number()),
+    session: v.optional(v.id("conversations")),
+    started_at: v.optional(v.number()),
   },
   handler: async (ctx, args): Promise<any> => {
     const userId = await requireWorkspaceCaller(ctx, args.api_token, args.team_id);
     if (!userId) return null;
     const now = args.now ?? Date.now();
+    if (args.part === "use") {
+      // One session's measured use, read in its own query so twelve sessions'
+      // messages never share one execution budget. Only a session of this
+      // workspace answers: the id came from the org slice, and a caller who
+      // names another workspace's session learns nothing.
+      if (!args.session) return null;
+      const conv: any = await ctx.db.get(args.session);
+      const ours = !!conv && (args.team_id ? String(conv.team_id ?? "") === String(args.team_id) : !conv.team_id && String(conv.user_id) === String(userId));
+      return ours ? readSessionUse(ctx, args.session, args.started_at ?? conv.started_at ?? conv._creationTime, now) : null;
+    }
     if (args.part === "work") return computeAnalysisWork(ctx, userId, args.team_id);
     if (args.part === "signals") return { ...(await computeAnalysisSignals(ctx, userId, args.team_id, now)), label: await workspaceLabelOf(ctx, userId, args.team_id), user_id: userId };
     if (args.part === "activity") return computeAnalysisActivity(ctx, userId, args.team_id, now);
@@ -581,6 +638,8 @@ export const analysisInputs = action({
     if (!work || !signals) return null;
     const org = await ctx.runQuery(part, { ...args, part: "org", now, work: work.handoff });
     if (!org) return null;
+    const uses = await Promise.all(org.sessions.long_running.rows.map((r: any) => ctx.runQuery(part, { ...args, part: "use", now, session: r.id, started_at: r.started_at })));
+    org.sessions.long_running.rows = withSessionUse(org.sessions.long_running.rows, uses);
     const { label, user_id, ...rest } = signals;
     return mergeAnalysisInputs(user_id, args.team_id, label, work, org, rest, now, activity?.activity, activity?.coverage);
   },
@@ -866,6 +925,33 @@ export async function applyTrust(ctx: Ctx, userId: Id<"users">, boundary: Bounda
   return { status: "applied", note: `@${role.handle}: trust ${r.previous_trust} → ${p.trust}`, role: roleRef(role) };
 }
 
+// Hiring from a template (docs/architecture/org-hire.md). Authority is the
+// role's, written through the same human only writer as trust; a hire writes
+// the instance row awaiting its host step and makes the role the project's
+// lead when it has none (H3); an accepted upgrade waits on the row for the host.
+export async function applyAuthority(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgAuthorityChange, opts: ApplyOpts): Promise<ApplyResult> {
+  const role = await liveRole(ctx, boundary, p.handle);
+  const r = await performSetAuthority(ctx, userId, { role_id: String(role._id), authority: p.authority, human_decision: opts.human_decision });
+  return { status: "applied", note: `@${role.handle} may ${authorityWords(r.authority)}`, role: roleRef(role) };
+}
+export async function applyHire(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgHireChange, _opts: ApplyOpts): Promise<ApplyResult> {
+  const role = await liveRole(ctx, boundary, p.handle);
+  const ref = await resolveScopeRef(ctx, boundary, `project:${p.project}`);
+  const project = ref.kind === "project" ? await ctx.db.get(ref.id) : null;
+  if (!project) throw new Error(`No project "${p.project}" in this workspace`);
+  if (!(role.scope?.project_ids ?? []).some((id: any) => String(id) === String(project._id))) throw new Error(`@${role.handle} does not look after ${project.title}; the role change of this hire names the project`);
+  const row = await performUpsertInstance(ctx, userId, {
+    instance_key: `pending:${String(project._id)}:${p.instance}`, instance: p.instance, template_id: p.template, version: p.version, digest: p.digest,
+    project_id: project._id, role_id: role._id, phase: "awaiting_host", update_policy: p.update_policy ?? "manual", config: p.config ?? {},
+  });
+  const lead = project.owner_role_id ? null : await performSetProjectLead(ctx, userId, { project_id: project._id, role_id: String(role._id) });
+  return { status: "applied", note: `hired @${role.handle} from ${p.template}@${p.version} as ${p.instance}${lead ? `; it leads ${project.title}` : ""}; run cast org template bind ${p.instance} in the checkout (row ${row._id})`, role: roleRef(role) };
+}
+export async function applyUpgrade(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgUpgradeChange): Promise<ApplyResult> {
+  const row = await performAcceptUpgrade(ctx, userId, { access: boundary.team_id ? `team:${boundary.team_id}` : `user:${boundary.scope_user_id}`, instance: p.instance, template_id: p.template, to: p.to, digest: p.digest });
+  return { status: "applied", note: `instance ${p.instance} moves to ${p.template}@${p.to} on its next host step (cast org template bind ${p.instance} --to ${p.to}; row ${row._id})` };
+}
+
 // A routine is a recurring trigger on the role's standing session, through
 // the same insert every `cast trigger add --every` uses. The first run is one
 // cadence out: the person accepted a rhythm, not an immediate wake.
@@ -1082,6 +1168,9 @@ async function applyOrgChangeCore(ctx: Ctx, userId: Id<"users">, boundary: Bound
     case "scope": return applyScope(ctx, userId, boundary, change, opts);
     case "budget": return applyBudget(ctx, userId, boundary, change, opts);
     case "trust": return applyTrust(ctx, userId, boundary, change, opts);
+    case "authority": return applyAuthority(ctx, userId, boundary, change, opts);
+    case "hire": return applyHire(ctx, userId, boundary, change, opts);
+    case "upgrade": return applyUpgrade(ctx, userId, boundary, change);
     case "routine": return applyRoutine(ctx, userId, boundary, change, opts);
     case "project_meta": return applyProjectMeta(ctx, userId, boundary, change, opts);
     case "adopt": return applyAdopt(ctx, userId, boundary, change, opts);

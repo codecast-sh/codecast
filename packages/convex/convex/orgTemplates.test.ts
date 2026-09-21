@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { performCatalog, performFileLesson, performInstanceStatus, performListLessons, performMarkSetup, performPublish, performRecordEvidence, performRecordScores, performSetLessonStatus, performUpsertInstance } from "./orgTemplates";
+import { applyOrgChange } from "./orgInit";
 
 // Roles hired from a template (org-hire.md W8): the server side of publish,
 // catalog, the instance row, its record and lessons, driven through the same
@@ -24,8 +25,9 @@ function fixtures() {
     ],
     teams: [{ _id: ACME, name: "Acme" }, { _id: OTHER, name: "Other" }, { _id: CODECAST, name: "Codecast" }],
     projects: [{ _id: P, user_id: ME, team_id: ACME, workspace: WS, short_id: "pr-1", title: "Growth", status: "active", created_at: 1, updated_at: 1 }],
-    org_roles: [{ _id: "role-1", short_id: "or-1", handle: "acme-growth-cmo", name: "CMO", status: "active", trust: "understand", scope: { project_ids: [P], plan_ids: [] } }],
+    org_roles: [{ _id: "role-1", short_id: "or-1", handle: "acme-growth-cmo", name: "CMO", status: "active", trust: "understand", scope_type: "team", team_id: ACME, host_user_id: ME, reports_to: { kind: "user", user_id: ME }, scope: { project_ids: [P], plan_ids: [] }, created_at: 1, updated_at: 1 }],
     org_templates: [], org_template_instances: [], org_template_lessons: [],
+    counters: [], org_changes: [], org_role_history: [], role_wake_outbox: [], anchors: [], conversations: [], session_owners: [], managed_sessions: [], tasks: [], plans: [], docs: [],
   });
 }
 const manifest = (version = "2.0.0"): any => ({
@@ -129,5 +131,44 @@ describe("the instance row, its record and lessons", () => {
     await expect(performSetLessonStatus(ctx(db), ME, { lesson_id: lesson.id, status: "released" })).rejects.toThrow(/Name the version/);
     expect((await performSetLessonStatus(ctx(db), ME, { lesson_id: lesson.id, status: "released", released_in: "2.1.0" })).status).toBe("released");
     expect((await performListLessons(ctx(db), MATE, key))[0]).toMatchObject({ status: "released", released_in: "2.1.0" });
+  });
+});
+
+describe("the hire and upgrade changes through the org apply core (org-hire.md H3, H9)", () => {
+  beforeEach(() => { process.env.CODECAST_TEMPLATES_TEAM_ID = CODECAST; });
+  afterEach(() => { delete process.env.CODECAST_TEMPLATES_TEAM_ID; });
+  const boundary = { team_id: ACME } as any;
+  const human = { provision: false, human_decision: "sd-1" } as any;
+  const humanCtx = (db: any) => ({ db, auth: { getUserIdentity: async () => ({ subject: ME }) } }) as any;
+  test("a hire writes the placeholder row awaiting its host, makes the role the project's lead, and the host's bind takes the row over by name", async () => {
+    const db = fixtures();
+    await performPublish(ctx(db), ME, { as_codecast: true, manifest: manifest(), digest: D1, status: "stable" });
+    const hire = { kind: "hire", handle: "acme-growth-cmo", template: "growth", version: "2.0.0", digest: D1, instance: "acme-growth", project: "pr-1", config: { "product.domain": "acme.io" }, update_policy: "stable" } as const;
+    await expect(applyOrgChange(humanCtx(db), ME, boundary, { ...hire, digest: D2 }, human)).rejects.toThrow(/not published/);
+    const applied = await applyOrgChange(humanCtx(db), ME, boundary, hire, human);
+    expect(applied.status).toBe("applied");
+    expect((applied as any).note).toContain("it leads Growth");
+    const rows = await db.query("org_template_instances").collect();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ instance: "acme-growth", phase: "awaiting_host", role_id: "role-1", workspace: WS, update_policy: "stable", config: { "product.domain": "acme.io" } });
+    expect(rows[0].instance_key).toMatch(/^pending:/);
+    expect((await db.get(P as any)).owner_role_id).toBe("role-1");
+    // The host step arrives with the receipt's key and takes the same row.
+    const bound = await performUpsertInstance(ctx(db), ME, { instance_key: "receipt-uuid", instance: "acme-growth", template_id: "growth", version: "2.0.0", digest: D1, project_id: P as any, role_id: "role-1" as any, host: { machine: "mbp", dir: "/src/acme" }, phase: "ready" });
+    expect(bound._id).toBe(rows[0]._id);
+    expect(bound).toMatchObject({ instance_key: "receipt-uuid", phase: "ready", config: { "product.domain": "acme.io" } });
+    expect(await db.query("org_template_instances").collect()).toHaveLength(1);
+    // A second host with another key cannot take a bound row by name.
+    await expect(performUpsertInstance(ctx(db), ME, { instance_key: "other-host", instance: "acme-growth", template_id: "growth", version: "2.0.0", digest: D1, project_id: P as any })).rejects.toThrow(/under another host/);
+    // Authority through the same core lands on the role.
+    const granted = await applyOrgChange(humanCtx(db), ME, boundary, { kind: "authority", handle: "acme-growth-cmo", authority: [{ id: "ads-spend", kind: "spend", label: "Paid search", limit: { usd_per_month: 300 } }] }, human);
+    expect((granted as any).note).toBe("@acme-growth-cmo may spend (Paid search, up to $300 a month)");
+    expect((await performInstanceStatus(ctx(db), MATE, { instance_key: "receipt-uuid" })).readiness.ads.missing).toEqual(["runs as propose: trust is understand"]);
+    // An accepted upgrade waits on the row for the host.
+    await performPublish(ctx(db), ME, { as_codecast: true, manifest: manifest("2.1.0"), digest: D2, status: "stable" });
+    await expect(applyOrgChange(humanCtx(db), ME, boundary, { kind: "upgrade", instance: "acme-growth", template: "growth", to: "2.1.0", digest: D3 }, human)).rejects.toThrow(/not published/);
+    const up = await applyOrgChange(humanCtx(db), ME, boundary, { kind: "upgrade", instance: "acme-growth", template: "growth", to: "2.1.0", digest: D2 }, human);
+    expect((up as any).note).toContain("bind acme-growth --to 2.1.0");
+    expect((await db.get(rows[0]._id)).pending_upgrade).toMatchObject({ to: "2.1.0", digest: D2, accepted_by: ME });
   });
 });
