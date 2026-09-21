@@ -15,6 +15,8 @@ cast call <id> --json             # the same as data; always includes the segmen
 
 ## Rooms and presence
 
+Starting a huddle from a channel buzzes every other member: the whole team for a public channel, or that channel's members for a private channel. Channels with more than seven people ask for confirmation first. Joining an existing huddle does not buzz the channel again. Busy and quiet-hours settings still apply.
+
 A room is a string key and never a stored row, so every client derives the same key without coordination.
 
 | Key | What it is | Who the key admits |
