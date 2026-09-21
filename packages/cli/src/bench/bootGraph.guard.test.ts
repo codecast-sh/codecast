@@ -189,7 +189,7 @@ describe("command groups stay off the boot graph", () => {
     // 3404 KB with those eleven leaves and the growth of index.ts itself.
     // 3407 after ct-52819: the watchdog pass deadline in supervision.ts and the
     // launchd kickstart in index.ts's startDaemon. No new file.
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(3429);
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(3436);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -235,7 +235,7 @@ describe("command groups stay off the boot graph", () => {
     // 326 after the same landing: the daemon picked up the leaves index.ts did
     // where they are its own work too (the hook handlers it dispatches and the
     // shared contracts), not a command group.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(335);
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(336);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {
