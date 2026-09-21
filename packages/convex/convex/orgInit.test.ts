@@ -97,7 +97,7 @@ describe("org.analysisInputs", () => {
     expect(r.workspace).toEqual({ kind: "team", id: TEAM, name: "Acme" });
     expect(r.projects.map((p) => p.title).sort()).toEqual(["Billing", "Growth"]);
     expect(r.projects.find((p) => p.title === "Growth")).toMatchObject({ tasks: { total: 1, open: 1, by_status: { in_progress: 1 } }, plans: 1, description: "Bring users in" });
-    expect(r.plans).toEqual([expect.objectContaining({ short_id: "pl-1", progress: { total: 1, done: 0, in_progress: 0, open: 1 } })]);
+    expect(r.plans).toEqual([expect.objectContaining({ short_id: "pl-1", progress: { total: 1, done: 0, in_progress: 0, open: 1, source: "window" } })]);
     expect(r.tasks).toEqual({ total: 3, by_status: { in_progress: 1, open: 2 }, unfiled_open: 1, truncated: false, closed_counted: "inside the window only" });
     expect(r.docs_by_type).toEqual({ note: 1, design: 1 });
     // Sessions: the caller's row counts; the teammate's private row does not.
@@ -177,6 +177,49 @@ describe("org.analysisInputs", () => {
   });
 
   // Union, 2026-09-20: ranked by helpers alone, the list held the largest finished
+  // A seated session is the role, not a candidate: the role row names it.
+  test("a role row names the session that is its seat, and that session leaves the long running list", async () => {
+    const D = 24 * H;
+    const base = { user_id: ME, team_id: TEAM, status: "active", agent_type: "claude", is_private: false, updated_at: NOW - H, created_at: 1, message_count: 10 };
+    const db = fixtures({
+      org_roles: [{ _id: "org_roles_g", team_id: TEAM, workspace: WS, short_id: "or-1", handle: "growth", name: "Market growth mandate", status: "active", scope: { project_ids: [P], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, caps: { hands_per_day: 2, wakes_per_day: 8, tokens_per_day: 100000 }, created_at: 1, updated_at: 1 }],
+      conversations: [
+        { ...base, _id: "conversations_seat", short_id: "jxseat", title: "Market growth mandate", started_at: NOW - 40 * D, standing_role_id: "org_roles_g" },
+        { ...base, _id: "conversations_old", short_id: "jxold", title: "Another long job", started_at: NOW - 30 * D },
+      ],
+    });
+    const r = await computeAnalysisInputs(ctxOf(db), ME as any, TEAM, NOW);
+    expect(r.org.roles.find((x: any) => x.handle === "growth").seat).toEqual({ session: "jxseat", title: "Market growth mandate" });
+    expect(r.sessions.long_running.rows.map((s: any) => s.short_id)).toEqual(["jxold"]);
+  });
+
+  // A weekly job is parked six days in seven and the scan reads active rows only.
+  test("a session a live routine wakes is listed even when the scan skipped it (parked between wakes, or dismissed), with helpers unknown", async () => {
+    const D = 24 * H;
+    const base = { user_id: ME, team_id: TEAM, status: "active", agent_type: "claude", is_private: false, updated_at: NOW - H, created_at: 1, message_count: 10 };
+    const db = fixtures({
+      conversations: [
+        { ...base, _id: "conversations_old", short_id: "jxold", title: "Market growth mandate", started_at: NOW - 34 * D },
+        // Parked: its process ended after the last weekly run, so status is not active and the scan skips it.
+        { ...base, _id: "conversations_weekly", short_id: "jxweekly", title: "Weekly blog posts", status: "completed", started_at: NOW - 40 * D, updated_at: NOW - 3 * D, message_count: 700 },
+        // Dismissed from the inbox by a person who reviewed the loop: skipped by the scan too.
+        { ...base, _id: "conversations_quiet", short_id: "jxquiet", title: "Ads campaign", inbox_dismissed_at: NOW - 5 * D, started_at: NOW - 44 * D, message_count: 2800 },
+        // Another team's routine session: never ours.
+        { ...base, _id: "conversations_other", short_id: "jxother", team_id: "teams_other", title: "Their job", status: "completed", started_at: NOW - 40 * D },
+      ],
+      agent_tasks: [
+        { _id: "agent_tasks_w", user_id: ME, short_id: "tr-10", title: "Weekly post", originating_conversation_id: "conversations_weekly", schedule_type: "recurring", interval_ms: 7 * D, status: "scheduled", run_at: NOW + D },
+        { _id: "agent_tasks_q", user_id: ME, short_id: "tr-11", title: "Ads check", originating_conversation_id: "conversations_quiet", schedule_type: "recurring", interval_ms: 3 * D, status: "scheduled", run_at: NOW + D },
+        { _id: "agent_tasks_o", user_id: OUTSIDER, short_id: "tr-12", title: "Theirs", originating_conversation_id: "conversations_other", schedule_type: "recurring", interval_ms: D, status: "scheduled", run_at: NOW + D },
+      ],
+    });
+    const r = await computeAnalysisInputs(ctxOf(db), ME as any, TEAM, NOW);
+    const rows = r.sessions.long_running.rows;
+    expect(rows.map((s: any) => s.short_id)).toEqual(["jxquiet", "jxweekly", "jxold"]);
+    expect(rows[1]).toMatchObject({ title: "Weekly blog posts", helpers: null, scanned: false, routines: [{ short_id: "tr-10", title: "Weekly post", schedule: "recurring", every_ms: 7 * D }] });
+    expect(rows[2].scanned).toBeUndefined();
+  });
+
   // A seated session's limit is sized on what it spends, so its row carries
   // the last week's use in the unit the caps count, and says what it covers.
   test("a long running row carries its measured use for the week: input plus output tokens and model calls a day, the days covered, and not counted when no message carries usage", async () => {

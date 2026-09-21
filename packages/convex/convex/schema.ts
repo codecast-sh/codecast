@@ -716,7 +716,8 @@ export default defineSchema({
     // (no-error) write path never pays for the extra read.
     pending_api_error: v.optional(v.boolean()),
     // Which banner family parked the session ("auth" | "limit" | "error" |
-    // "connection" | "fatal", see classifyApiErrorBanner) — drives the
+    // "connection" | "fatal" | "throttle" | "safety" | "context", see
+    // classifyApiErrorBanner) — drives the
     // session-card pill label. Set/cleared in lockstep with pending_api_error.
     pending_api_error_kind: v.optional(v.string()),
     // When the block landed — the newest banner message's timestamp. Set and
@@ -907,11 +908,15 @@ export default defineSchema({
     // untouched by it — the role sits between the session and the person.
     org_role_id: v.optional(v.id("org_roles")),
     // The role put this session in front of the person (org-roles-run-work.md
-    // R1). A session under a role stays out of its host's needs input; with
-    // this set it is a first class card there, carrying the role's line.
-    // Written only by sessionOwnership.performEscalateSession; clearing
-    // removes it. A reparent to a person drops it with the role pointer.
-    escalated_by_role: v.optional(v.object({ role_id: v.id("org_roles"), line: v.string(), at: v.number() })),
+    // R1, revised). A session under a role stays out of its host's needs
+    // input. With this set it reaches the person through the ROLE's card by
+    // default: the role's standing session files in needs input carrying this
+    // line (the inbox projection derives it from the children), and the
+    // session stays nested under it. `direct` is the exception: the session
+    // itself is the card (`cast escalate --direct`, or the person's own Put in
+    // my inbox). Written only by sessionOwnership.performEscalateSession;
+    // clearing removes it. A reparent to a person drops it with the pointer.
+    escalated_by_role: v.optional(v.object({ role_id: v.id("org_roles"), line: v.string(), at: v.number(), direct: v.optional(v.boolean()) })),
     // Set when this row IS a role's standing session (org-roles-standing.md
     // T1), the way anchor_id marks the workspace anchor's. Reserved for the
     // provisioning wave; nothing writes it in the org page slice.
@@ -1132,7 +1137,7 @@ export default defineSchema({
     bot_user_id: v.id("users"), // the synthetic is_bot identity it renders as
     host_user_id: v.id("users"), // the human whose daemon runs + bills the session
     conversation_id: v.optional(v.id("conversations")), // the persistent session (once started)
-    name: v.string(), // display name (default "Anchor", or custom)
+    name: v.string(), // display name; a seat carries its role's
     persona: v.optional(v.string()), // skill name or inline persona reference
     project_path: v.optional(v.string()), // cwd for the anchor and its hands
     model: v.optional(v.string()),
@@ -1540,6 +1545,8 @@ export default defineSchema({
     // Secret inputs bound on a host: which machine, and the hash of the path.
     bindings: v.optional(v.record(v.string(), v.object({ host: v.string(), path_hash: v.string(), bound_at: v.number() }))),
     ledgers: v.optional(v.record(v.string(), v.object({ taskId: v.string(), shortId: v.string() }))),
+    // The routines' triggers on the host's receipt, so the role page can show and activate them (H8).
+    routines: v.optional(v.record(v.string(), v.object({ triggerId: v.optional(v.string()), external: v.optional(v.boolean()), retired: v.optional(v.boolean()) }))),
     // The instance's own record (orgTemplateState): written by the role with
     // sources a person can open, read by readiness and the role page.
     evidence: v.optional(v.record(v.string(), v.object({ status: v.union(v.literal("pass"), v.literal("fail")), observed_at: v.number(), source: v.string(), detail: v.optional(v.record(v.string(), v.string())) }))),
@@ -4045,6 +4052,23 @@ export default defineSchema({
     .index("by_installation_id", ["installation_id"])
     .index("by_account_login", ["account_login"]),
 
+  // An install the server agreed to before GitHub was ever asked: who clicked
+  // Install, at which scope, and for how long the answer stays valid. The
+  // install URL carries only the nonce (hashed here, so the row is not itself
+  // a bearer token), and the callback reads the principal back from this row
+  // rather than from the request it was handed.
+  github_app_install_intents: defineTable({
+    nonce_hash: v.string(),
+    user_id: v.id("users"),
+    scope: v.union(v.literal("team"), v.literal("personal")),
+    team_id: v.optional(v.id("teams")),
+    created_at: v.number(),
+    expires_at: v.number(),
+    // Set the moment a callback spends it. A second callback carrying the same
+    // nonce is a replay and binds nothing.
+    consumed_at: v.optional(v.number()),
+  }).index("by_nonce_hash", ["nonce_hash"]),
+
   github_installation_tokens: defineTable({
     installation_id: v.number(),
     // Absent on the installation-wide token the server's own work uses. Set to
@@ -5528,6 +5552,12 @@ export default defineSchema({
         v.literal("skipped"),
       ),
     ),
+    // The rolling recap while the call is live (transcripts.flush claims a
+    // run, generateSummary { rolling: true } writes it): when the last run
+    // was claimed and the segment seq it covered. The throttle reads both;
+    // summary_status stays untouched until the call ends.
+    summary_at: v.optional(v.number()),
+    summary_seq: v.optional(v.number()),
     routes: v.array(
       v.object({
         kind: v.union(v.literal("session"), v.literal("doc"), v.literal("slack")),
@@ -5628,6 +5658,13 @@ export default defineSchema({
     // a retried mirror can never post the same reply twice.
     agent_conversation_id: v.optional(v.id("conversations")),
     source_message_id: v.optional(v.id("messages")),
+    // Set when this row is something the room SAW rather than something
+    // somebody said: "agent_joined" | "agent_left" | "transcribe_on" |
+    // "transcribe_off". `user_id` is who did it (the person who added or
+    // removed the agent, or pressed the transcription switch); an agent event
+    // also carries `agent_conversation_id`. `text` is empty. Written only by
+    // callChat.postEvent; never relayed to the fed sessions.
+    event: v.optional(v.string()),
   })
     .index("by_room", ["room_key"]),
 

@@ -1,5 +1,5 @@
 {
-  "about": "A role's sessions ride the role's standing session (org-roles-run-work.md R1, isUnderRole). A settled session under a role leaves needs input and files with the role; the hidden standing session surfaces by its own state once something rides it, and stays hidden with nothing under it. An escalated session stands alone in needs input whatever rest it declared, and reads working while it produces. A session the viewer pinned keeps its place; one whose role has no standing session on the list, or whose standing session was dismissed, keeps its own placement; one under a stashed role is stashed with it. A role's session that asks does not lift the role into questions.",
+  "about": "A role's sessions ride the role's standing session (org-roles-run-work.md R1, isUnderRole). A settled session under a role leaves needs input and files with the role; the hidden standing session surfaces by its own state once something rides it, and stays hidden with nothing under it. An escalation reaches the person through the role (R1, revised): a session the role escalated keeps riding the role, and the role's standing session files in needs input with every session under it, whatever rest the role declared. A direct escalation is the child's own card in needs input. A session the viewer pinned keeps its place; one whose role has no standing session on the list, or whose standing session was dismissed, keeps its own placement; one under a stashed role is stashed with it, its escalation included. A role's session that asks does not lift the role into questions.",
   "epoch": "E",
   "asking": [
     "growth_asking"
@@ -80,6 +80,22 @@
       }
     },
     {
+      "_id": "growth_direct",
+      "status": "active",
+      "updated_at": "E-7m",
+      "message_count": 12,
+      "is_idle": true,
+      "org_role_id": "growth",
+      "thread_state_status": "done",
+      "agent_status": "done",
+      "escalated_by_role": {
+        "role_id": "growth",
+        "line": "a permission prompt is open in here",
+        "at": "E-7m",
+        "direct": true
+      }
+    },
+    {
       "_id": "quiet_role",
       "status": "active",
       "updated_at": "E-8m",
@@ -115,6 +131,19 @@
       "message_count": 12,
       "is_idle": true,
       "org_role_id": "stashedrole"
+    },
+    {
+      "_id": "stashed_role_escalated",
+      "status": "active",
+      "updated_at": "E-11m",
+      "message_count": 12,
+      "is_idle": true,
+      "org_role_id": "stashedrole",
+      "escalated_by_role": {
+        "role_id": "stashedrole",
+        "line": "needs you",
+        "at": "E-11m"
+      }
     },
     {
       "_id": "retired_role",
@@ -164,13 +193,13 @@
         "questions": 0,
         "pinned": 1,
         "new": 0,
-        "needs_input": 5,
+        "needs_input": 11,
         "done": 0,
-        "dormant": 4,
-        "working": 1,
+        "dormant": 0,
+        "working": 0,
         "idle": 0,
         "snoozed": 0,
-        "stashed": 2,
+        "stashed": 3,
         "dismissed": 1,
         "hidden": 0
       },
@@ -189,7 +218,7 @@
         "hidden": 0
       }
     },
-    "set_digest": "9c4efc228cf56366",
+    "set_digest": "6a94bb0c917942ee",
     "placements": {
       "absentrolewaitingz17000000000000": [
         "needs_input",
@@ -207,12 +236,17 @@
         false
       ],
       "growthaskingz1200000000000000000": [
-        "dormant",
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "growthdirectz1200000000000000000": [
+        "needs_input",
         "needs_input",
         false
       ],
       "growthescalatedworkingz220000000": [
-        "working",
+        "needs_input",
         "working",
         false
       ],
@@ -227,17 +261,17 @@
         false
       ],
       "growthrolez100000000000000000000": [
-        "dormant",
-        "dormant",
+        "needs_input",
+        "needs_input",
         false
       ],
       "growthwaitingz130000000000000000": [
-        "dormant",
+        "needs_input",
         "needs_input",
         false
       ],
       "growthworkingz130000000000000000": [
-        "dormant",
+        "needs_input",
         "working",
         false
       ],
@@ -256,6 +290,11 @@
         "dormant",
         false
       ],
+      "stashedroleescalatedz20000000000": [
+        "stashed",
+        "needs_input",
+        false
+      ],
       "stashedrolewaitingz1800000000000": [
         "stashed",
         "needs_input",
@@ -272,6 +311,7 @@
       "blockedroledonez1500000000000000": -900000,
       "blockedrolez11000000000000000000": -840000,
       "growthaskingz1200000000000000000": -240000,
+      "growthdirectz1200000000000000000": -420000,
       "growthescalatedworkingz220000000": -420000,
       "growthescalatedz1500000000000000": -360000,
       "growthpinnedz1200000000000000000": -300000,
@@ -281,24 +321,26 @@
       "quietrolez9000000000000000000000": -480000,
       "retiredrolewaitingz1800000000000": -780000,
       "retiredrolez11000000000000000000": -720000,
+      "stashedroleescalatedz20000000000": -660000,
       "stashedrolewaitingz1800000000000": -660000,
       "stashedrolez11000000000000000000": -600000
     },
     "sort_order": {
-      "dormant": [
+      "needs_input": [
+        "growthrolez100000000000000000000",
         "growthwaitingz130000000000000000",
         "growthworkingz130000000000000000",
         "growthaskingz1200000000000000000",
-        "growthrolez100000000000000000000"
-      ],
-      "needs_input": [
         "growthescalatedz1500000000000000",
+        "growthdirectz1200000000000000000",
+        "growthescalatedworkingz220000000",
         "absentrolewaitingz17000000000000",
         "retiredrolewaitingz1800000000000",
         "blockedrolez11000000000000000000",
         "blockedroledonez1500000000000000"
       ],
       "stashed": [
+        "stashedroleescalatedz20000000000",
         "stashedrolewaitingz1800000000000",
         "stashedrolez11000000000000000000"
       ]

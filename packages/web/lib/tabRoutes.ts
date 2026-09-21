@@ -3,6 +3,11 @@
 // src/routes.manifest.test.ts parses the sets below for parity with App.tsx.
 
 import { countLeaves, findLeaf, leavesOf, sanitizeLayout, setLeafPath } from "../store/stageSplit";
+// The single-segment routes that live inside the shell, shared with the
+// desktop hand-off gate (which may import nothing, so the list lives there).
+import { IN_SHELL_ROOT_SEGMENTS, isPublicProfilePath } from "./desktopHandoff";
+
+export { IN_SHELL_ROOT_SEGMENTS };
 
 // Routes that live OUTSIDE the dashboard tab shell. The tab system (DashboardLayout
 // / TabBar / TabContent) is only mounted for dashboard routes, but `tabs`/`activeTabId`
@@ -56,23 +61,6 @@ const NON_TAB_EXACT = new Set([
 // tab-routable — the rule below matches "/r" and "/r/…" only.
 const NON_TAB_PREFIXES = ["/settings", "/auth", "/join", "/share", "/blog", "/documentation", "/compare", "/a", "/r", "/slack/connect"];
 
-// Every single-segment top-level route that lives INSIDE the dashboard (a tab
-// page or a standalone shell page). Public profiles live at the root as a bare
-// single segment (/:username), so the only way to tell `/ashot` (a handle, full-
-// page, outside the shell) from `/inbox` (a tab) is to know the real routes: any
-// bare single segment NOT in this set is a profile handle. KEEP IN SYNC with the
-// single-segment <Route>s in src/App.tsx — the routes.manifest parity test asserts
-// this set equals the manifest's in-shell single-segment routes, so drift fails loudly.
-const IN_SHELL_ROOT_SEGMENTS = new Set([
-  // Tab pages (TabContent patterns)
-  "inbox", "feed", "crosstalk", "org", "browser", "chat", "community", "search", "notifications", "questions", "threads", "docs", "capabilities", "plans", "tasks", "files", "vault", "pages", "artifacts",
-  "projects", "initiatives", "workflows", "routines", "triggers", "schedules", "sessions", "anchor", "team", "config", "calls",
-  // Standalone shell pages (own <Route>, not in TabContent)
-  "explore", "timeline", "windows", "orchestration", "roadmap", "cli",
-  // The repository index (its history, source and commit pages are deeper paths)
-  "repo",
-]);
-
 export function isNonTabRoute(path: string): boolean {
   const clean = path.split("?")[0].split("#")[0];
   if (NON_TAB_EXACT.has(clean)) return true;
@@ -81,9 +69,25 @@ export function isNonTabRoute(path: string): boolean {
   // handle (App.tsx serves PublicProfile at root-level ":username", outside the
   // shell). Without this, a signed-in user's in-app click to /<handle> would be
   // intercepted by the tab navigator into a blank TabContent pane.
-  const single = clean.match(/^\/([^/]+)$/);
-  if (single && !IN_SHELL_ROOT_SEGMENTS.has(single[1])) return true;
-  return false;
+  return isPublicProfilePath(clean);
+}
+
+/**
+ * The path the tab shell adopts into its active tab on entering router
+ * location `key`, or null when there is nothing to adopt: the shell already
+ * entered on this location (`entered`), or the location lies outside the
+ * shell. The shell adopts the address bar once per router location — the
+ * document's first load, and every real navigation that mounts it (a share
+ * page resolving to a conversation, a sign-in returning to a task, history
+ * landing on a shell route). A remount at the same location (the layout
+ * around it changing, a tab switch) is not a navigation: adopting there
+ * stamped whatever URL the previous tab had written into the tab being
+ * switched to.
+ */
+export function shellEntryPath(entered: string | null, key: string, pathname: string, search: string): string | null {
+  if (entered === key) return null;
+  if (isNonTabRoute(pathname)) return null;
+  return pathname + search;
 }
 
 /**

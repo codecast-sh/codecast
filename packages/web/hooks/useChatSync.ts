@@ -28,6 +28,7 @@ import {
   selectChannelMessages,
   selectThreadReplies,
   chatReactionSyncOpts,
+  teamChannelPushOpts,
   chatSendState,
   type ChatMessageRow,
   type ChatChannelRow,
@@ -58,6 +59,8 @@ import {
 } from "../lib/chatViews";
 import type { ChatMessageView } from "../components/chat/chatTypes";
 import { prefetchStorageImageUrls } from "./useStorageImageUrl";
+import { useChatPrefetch } from "./useChatPrefetch";
+import { ingestChatPage } from "../lib/ingestChatPage";
 
 import { useWatchEffect } from "./useWatchEffect";
 import { useSyncCollection } from "./useSyncCollection";
@@ -242,8 +245,12 @@ export function useChatChannelsSync(): { error?: Error } {
     useCallback(
       (data: any) => {
         if (!data) return;
-        syncTable("chatChannels", data.channels ?? []);
-        syncTable("chatReads", data.reads ?? []);
+        // The team's complete visible set: a cached room of this team the
+        // push omits is one the viewer can no longer read. No team (a signed
+        // out answer) means no scope to prune.
+        const prune = data.team_id ? teamChannelPushOpts(String(data.team_id)) : undefined;
+        syncTable("chatChannels", data.channels ?? [], prune);
+        syncTable("chatReads", data.reads ?? [], prune);
         syncTable("chatSlackLinks", data.slack_links ?? []);
         syncChatRail(syncTable, data.rail ?? [], "team");
         // This rail came from the server, not from IndexedDB. Only now is a
@@ -253,6 +260,8 @@ export function useChatChannelsSync(): { error?: Error } {
       [syncTable],
     ),
   );
+
+  useChatPrefetch(result, feedPeople);
 
   // Handed back rather than dropped: the rail itself degrades to its cached
   // rows (that is the whole point of useQueryNoThrow here), but a caller that
@@ -390,28 +399,20 @@ export function useChannelMessagesSync(channelId: string | undefined): ChannelFe
     useCallback(
       (data: any) => {
         if (!data) return;
-        const messages: ChatMessageRow[] = data.messages ?? [];
-        syncTable("chatMessages", messages);
-        syncTable("chatAuthors", data.authors ?? []);
-        syncTable(
-          "chatReactions",
-          data.reactions ?? [],
-          chatReactionSyncOpts(messages.map((m) => m._id)),
-        );
-        // The server's per-root reply rollups. Without them a thread this
-        // client never opened shows NO affordance at all — the anchor answers
-        // and the room looks like it ignored you.
-        syncTable(
-          "chatThreadSummaries",
-          (data.threads ?? []).map((t: any) => ({ ...t, _id: String(t.root_id) })),
-        );
+        if (data.unavailable) {
+          // The server's word on a room this client cached: retire it, so no
+          // surface keeps offering a room the server refuses.
+          if (channelId) useInboxStore.getState().retireChatChannel(channelId);
+          return;
+        }
+        const messages = ingestChatPage(data);
         prefetchAttachmentImages(convex, messages);
         // Only seed the history cursor; never let a live re-push rewind a
         // cursor the reader has already paged past.
         setOlderCursor((prev) => (prev === null ? (data.next_cursor ?? null) : prev));
         lowerFloor(messages, !!data.has_more);
       },
-      [syncTable, convex],
+      [syncTable, convex, channelId],
     ),
   );
 
@@ -486,8 +487,7 @@ export function useChannelMessagesSync(channelId: string | undefined): ChannelFe
 
 /** A thread's root and replies, live. Threads are short by construction (the
  *  server's page is 200), so this has no backwards paging of its own. */
-export function useThreadSync(rootId: string | undefined): { loading: boolean; error?: Error } {
-  const syncTable = useInboxStore((s) => s.syncTable);
+export function useThreadSync(rootId: string | undefined): { loading: boolean; error?: Error; unavailable: boolean } {
   const convex = useConvex();
   const live = rootId && isConvexId(rootId);
   const { data: result, error } = useQueryNoThrow(api.chat.getThread, live ? { root_id: rootId } : "skip");
@@ -497,21 +497,16 @@ export function useThreadSync(rootId: string | undefined): { loading: boolean; e
     useCallback(
       (data: any) => {
         if (!data) return;
-        const rows: ChatMessageRow[] = [...(data.root ? [data.root] : []), ...(data.replies ?? [])];
-        if (rows.length) syncTable("chatMessages", rows);
-        syncTable("chatAuthors", data.authors ?? []);
-        syncTable(
-          "chatReactions",
-          data.reactions ?? [],
-          chatReactionSyncOpts(rows.map((m) => m._id)),
-        );
+        const rows = ingestChatPage(data);
         prefetchAttachmentImages(convex, rows);
       },
-      [syncTable, convex],
+      [convex],
     ),
   );
 
-  return { loading: !!live && result === undefined && !error, error };
+  // Same flag as a channel feed's: the server will not show this viewer the
+  // room the thread lives in, so a composer here could only post a refusal.
+  return { loading: !!live && result === undefined && !error, error, unavailable: !!result?.unavailable };
 }
 
 // ── Readers ─────────────────────────────────────────────────────────────────
@@ -568,7 +563,7 @@ function anchorBots(anchors: Record<string, any> | undefined): ChatMember[] {
   for (const id in anchors ?? {}) {
     const a = anchors![id];
     if (!a?.bot_user_id || a.status === "decommissioned") continue;
-    out.push({ _id: String(a.bot_user_id), name: a.bot_name ?? a.name ?? "Anchor", image: a.bot_avatar ?? null, is_bot: true } as ChatMember);
+    out.push({ _id: String(a.bot_user_id), name: a.role?.name ?? a.bot_name ?? a.name ?? "Workspace agent", image: a.bot_avatar ?? null, is_bot: true } as ChatMember);
   }
   return out;
 }

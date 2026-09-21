@@ -41,6 +41,18 @@ export type RoutableDevice = {
  * outranks every device that couldn't. Falls back to the whole pool when nothing
  * qualifies — leaving a session unowned is worse than routing it imperfectly.
  */
+/**
+ * `/Users/<name>` or `/home/<name>` for a posix path. A session filed under
+ * one home belongs to the machine that keeps that home, even when the folder
+ * is a worktree outside the directories that machine advertises as projects.
+ */
+export function pathHome(p: string): string | null {
+  const parts = p.split("/").filter(Boolean);
+  if (parts.length < 2) return null;
+  if (parts[0] !== "Users" && parts[0] !== "home") return null;
+  return `/${parts[0]}/${parts[1]}`;
+}
+
 function mostRecentPreferringOpenable(pool: RoutableDevice[], paths: string[]): string {
   const byRecency = [...pool].sort((a, b) => b.last_seen - a.last_seen);
   if (paths.length === 0) return byRecency[0].device_id;
@@ -90,6 +102,19 @@ export function pickOwnerDevice(
   const paths = [opts.gitRoot, opts.projectPath].filter((p): p is string => !!p);
   const hasCheckout = (d: RoutableDevice) =>
     (d.local_project_roots ?? []).some((r) => paths.some((p) => pathUnderRoot(p, r)));
+  // Same home as a reported project, even when the session folder itself is
+  // not one of those projects (an intern worktree under ~/.intern-data while
+  // the machine advertises ~/src/<repo>).
+  const servesPath = (d: RoutableDevice) => {
+    if (hasCheckout(d)) return true;
+    const homes = new Set(
+      (d.local_project_roots ?? []).map(pathHome).filter((h): h is string => !!h),
+    );
+    return paths.some((p) => {
+      const home = pathHome(p);
+      return !!home && homes.has(home);
+    });
+  };
   let online = devices.filter((d) => now - d.last_seen < DEVICE_ONLINE_MS);
 
   // 1. Explicit pick, if online.
@@ -131,6 +156,24 @@ export function pickOwnerDevice(
   if (paths.length > 0) {
     const matches = onlineLocals.filter(hasCheckout).sort((a, b) => b.last_seen - a.last_seen);
     if (matches.length > 0) return matches[0].device_id;
+  }
+
+  // 3a. Online local whose home is the path's home. The exact directory is
+  //     not a reported project (a worktree beside ~/src), but this machine
+  //     is the one that has the files. A different home must not win just
+  //     because it heartbeated more recently.
+  if (paths.length > 0) {
+    const sameHome = onlineLocals.filter(servesPath).sort((a, b) => b.last_seen - a.last_seen);
+    if (sameHome.length > 0) return sameHome[0].device_id;
+  }
+
+  // 3b. The machine that has this home went offline (it signed into another
+  //     account, or it slept). An awake machine with a different home must
+  //     not take the session. An online device that actually has the folder
+  //     still wins (rung 3 already, rung 5 below).
+  if (opts.ownerDeviceId && paths.length > 0 && !online.some(hasCheckout)) {
+    const owner = devices.find((d) => d.device_id === opts.ownerDeviceId);
+    if (owner && servesPath(owner)) return opts.ownerDeviceId;
   }
 
   // 4. Most-recently-active online local device — preferring one that could

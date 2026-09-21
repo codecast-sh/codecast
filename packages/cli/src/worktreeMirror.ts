@@ -158,10 +158,17 @@ export async function buildWorktreeMirror(
   });
 
   // The git reads cost a process each, and a busy repository holds hundreds of
-  // agent worktrees: spend them on the main checkout, the ones `cast ws`
-  // manages, and the ones a session is in.
+  // agent worktrees (135 here) that nobody browses: those are read only while
+  // a session is in them. Everything else is few and worth knowing about, the
+  // release and integration checkouts most of all.
+  // The budget goes to the worktrees someone is looking at first: the main
+  // checkout, then occupied ones, then the ones `cast ws` manages. A repository
+  // with 300 worktrees (union-mobile here) spent it on the first 40 listed and
+  // left an occupied one "not inspected".
+  const priority = (w: WorktreeEntry) => (w.main ? 3 : w.sessions?.length ? 2 : w.manager === "codecast" ? 1 : 0);
   const detailed = worktrees
-    .filter((w) => !w.prunable && (w.main || w.manager === "codecast" || w.sessions?.length))
+    .filter((w) => !w.prunable && (w.manager !== "claude" || w.sessions?.length))
+    .sort((a, b) => priority(b) - priority(a))
     .slice(0, WORKTREE_DETAIL_CAP);
   // One worktree at a time: three processes, never three times the cap.
   for (const w of detailed) {

@@ -370,7 +370,14 @@ export async function patchConversationVisibility(
   },
   updates: Record<string, any>,
 ): Promise<number> {
-  await ctx.db.patch(conversation._id, updates);
+  // A team role may hold only a session its team can see: a session that
+  // stops being visible leaves the role, and its escalation, in this same
+  // patch (org-roles-run-work.md R1, revised). Imported at the call so this
+  // module stays free of the ownership module's graph.
+  const { roleDropForVisibility } = await import("../sessionOwnership");
+  const drop = await roleDropForVisibility(ctx, { ...conversation, ...updates });
+  await ctx.db.patch(conversation._id, drop ? { ...updates, ...drop.patch } : updates);
+  if (drop) await drop.tell();
   const after = { ...conversation, ...updates };
   return recomputeWorkspaceForConversation(ctx, after);
 }

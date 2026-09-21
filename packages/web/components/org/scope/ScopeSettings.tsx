@@ -24,6 +24,8 @@ import { parentName } from "../orgMeta";
 import { RetireRoleConfirm } from "../RetireRoleConfirm";
 import { sameParent, type OrgParentRef, type OrgRole, type OrgTree } from "../orgTypes";
 import { DEFAULT_CAPS, TRUST_META, TRUST_STAGES, type RoleCaps, type RoleCounters, type ScopeOverlap, type TrustStage } from "./scopeTypes";
+import { CHIEF_OF_STAFF_HANDLE } from "../orgStaffingTypes";
+import { SlackConnect } from "../../anchor/SlackConnect";
 
 const NO_INTENTS: OrgIntent[] = [];
 
@@ -322,6 +324,13 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
           >
             <MessageSquare className="w-3.5 h-3.5" /> Open the retired agent's thread
           </Link>
+        </Section>
+      )}
+
+      {/* The root role is the workspace's agent (S22): its Slack lives here. */}
+      {role.handle === CHIEF_OF_STAFF_HANDLE && canEdit && (
+        <Section title="Slack" hint="Connect a Slack workspace so @mentions there wake it, and it can post as itself.">
+          <SlackConnect scope={tree.workspace.kind} teamId={tree.workspace.kind === "team" ? tree.workspace.id : null} agentName={role.name} />
         </Section>
       )}
 

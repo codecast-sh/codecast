@@ -61,7 +61,7 @@ type State = {
 export type OrgWrite = { table: string; id: string; before: Record<string, any>; after: Record<string, any> };
 
 const FIELDS: Record<string, string[]> = {
-  org_roles: ["status", "name", "handle", "avatar", "charter", "tenure", "review_backend", "reports_to", "scope", "caps", "trust", "anchor_id"],
+  org_roles: ["status", "name", "handle", "avatar", "charter", "tenure", "review_backend", "reports_to", "scope", "caps", "trust", "anchor_id", "authority"],
   conversations: ["org_role_id", "standing_role_id", "anchor_id", "acting_user_id", "title", "title_is_custom", "seat_previous", "persistent", "status", "inbox_pinned_at"],
   anchors: ["org_role_id", "status"],
   users: ["bot_kind"],
@@ -71,6 +71,8 @@ const FIELDS: Record<string, string[]> = {
   projects: ["status", "description", "owner_role_id", "goal", "success_metrics", "priority", "non_goals", "risks", "budget"],
   docs: ["project_id"],
   initiatives: ["owner"],
+  // An accepted upgrade waits on the instance row for the host step (org-hire.md H9); until then the acceptance is the one thing an undo can withdraw.
+  org_template_instances: ["pending_upgrade"],
 };
 
 function recordWrite(s: State, table: string, id: string, before: any, after: any) {

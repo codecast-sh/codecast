@@ -89,6 +89,16 @@ describe("isHandoffEligiblePath", () => {
     expect(isHandoffEligiblePath("/inbox")).toBe(true);
   });
 
+  test("blocks public profiles — a bare handle at the root is a public page, not an app route", () => {
+    expect(isHandoffEligiblePath("/ashot")).toBe(false);
+    expect(isHandoffEligiblePath("/some-handle")).toBe(false);
+    expect(isHandoffEligiblePath("/ashot?tab=pins")).toBe(false);
+    // The same single segments the tab shell owns stay app routes.
+    expect(isHandoffEligiblePath("/tasks")).toBe(true);
+    expect(isHandoffEligiblePath("/repo")).toBe(true);
+    expect(isHandoffEligiblePath("/timeline")).toBe(true);
+  });
+
   test("blocks the marketing site — the root is the landing page, not an app route", () => {
     expect(isHandoffEligiblePath("/")).toBe(false);
     expect(isHandoffEligiblePath("/about")).toBe(false);

@@ -264,7 +264,7 @@ const GLOBAL_COMMANDS: ReadonlyArray<{
    *  wall as its whole view and needs no command to open one. */
   hidden?: () => boolean;
 }> = [
-  { action: "anchor.toggle", label: "Talk to Anchor", icon: AnchorGlyph, keywords: "agent assistant bot standing member ask personal team" },
+  { action: "anchor.toggle", label: "Talk to the workspace's agent", icon: AnchorGlyph, keywords: "agent assistant bot standing member ask personal team chief of staff" },
   { action: "people.wall", label: "The team — hold a face to talk", icon: Users, keywords: "people wall faces who is around hold to talk walkie everyone roster", hidden: isPeopleWindow },
   { action: "terminal.toggle", label: "Toggle terminal", icon: Terminal, keywords: "shell console panel tmux" },
   { action: "ui.zenToggle", label: "Toggle zen mode", icon: Focus, keywords: "focus minimal distraction free" },

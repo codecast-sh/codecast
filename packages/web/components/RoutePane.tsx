@@ -76,6 +76,7 @@ const RepoBranches = lazyPage("@/app/repo/[owner]/[name]/branches/page", () => i
 const RepoWorktrees = lazyPage("@/app/repo/[owner]/[name]/worktrees/page", () => import("@/app/repo/[owner]/[name]/worktrees/page"));
 const RepoTags = lazyPage("@/app/repo/[owner]/[name]/tags/page", () => import("@/app/repo/[owner]/[name]/tags/page"));
 const RepoPulls = lazyPage("@/app/repo/[owner]/[name]/pulls/page", () => import("@/app/repo/[owner]/[name]/pulls/page"));
+const RepoSessions = lazyPage("@/app/repo/[owner]/[name]/sessions/page", () => import("@/app/repo/[owner]/[name]/sessions/page"));
 const RepoSearch = lazyPage("@/app/repo/[owner]/[name]/search/page", () => import("@/app/repo/[owner]/[name]/search/page"));
 const RepoTree = lazyPage("@/app/repo/[owner]/[name]/tree/[ref]/page", () => import("@/app/repo/[owner]/[name]/tree/[ref]/page"));
 const RepoBlob = lazyPage("@/app/repo/[owner]/[name]/blob/[ref]/page", () => import("@/app/repo/[owner]/[name]/blob/[ref]/page"));
@@ -118,6 +119,7 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/repo\/([^/]+)\/([^/]+)\/worktrees$/, paramNames: ["owner", "name"], component: RepoWorktrees },
   { pattern: /^\/repo\/([^/]+)\/([^/]+)\/tags$/, paramNames: ["owner", "name"], component: RepoTags },
   { pattern: /^\/repo\/([^/]+)\/([^/]+)\/pulls$/, paramNames: ["owner", "name"], component: RepoPulls },
+  { pattern: /^\/repo\/([^/]+)\/([^/]+)\/sessions$/, paramNames: ["owner", "name"], component: RepoSessions },
   { pattern: /^\/repo\/([^/]+)\/([^/]+)\/search$/, paramNames: ["owner", "name"], component: RepoSearch },
   { pattern: /^\/repo\/([^/]+)\/([^/]+)$/, paramNames: ["owner", "name"], component: RepoHome },
   // Same component as the bare route, so opening a channel reconciles in place

@@ -282,6 +282,7 @@ export function fleetTileMeta(
       if (kind === "throttle") return { text: "rate limited · retrying", tone: "amber" };
       if (kind === "connection") return { text: "connection dropped", tone: "red" };
       if (kind === "fatal") return { text: "api error · send continue", tone: "red" };
+      if (kind === "context") return { text: "context full · compact or clear", tone: "amber" };
       return { text: "api error · retrying", tone: "red" };
     }
     const ts = threadStateView(s, s.message_count ?? 0, now);

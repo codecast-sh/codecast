@@ -521,7 +521,7 @@ export const ChatMessage = memo(function ChatMessage({
         {message.failed && (
           <div className="ch-send-failed">
             <AlertTriangle className="w-3 h-3" />
-            <span>Not sent</span>
+            <span>{message.failReason ? `Not sent: ${message.failReason}` : "Not sent"}</span>
             {onRetrySend && (
               <button type="button" className="ch-send-retry" onClick={() => onRetrySend(message.id)}>
                 Retry

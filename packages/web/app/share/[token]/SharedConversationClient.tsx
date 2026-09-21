@@ -9,22 +9,28 @@ export default function SharedConversationClient() {
   const token = params.token as string;
   const router = useRouter();
 
-  const conversation = useQuery(api.conversations.getSharedConversation, {
+  // In-app arrivals only (a profile's pinned session, a deep link the
+  // desktop routed here): a document load of /share/<token> never reaches
+  // this page, because the web server answers it with the same redirect
+  // (server/share.ts). The meta query is the light lookup: the token to its
+  // conversation id, without loading the transcript.
+  const conversation = useQuery(api.conversations.getSharedConversationMeta, {
     share_token: token,
   });
+  const conversationId = conversation?.conversation_id;
 
   useWatchEffect(() => {
-    if (conversation?._id) {
+    if (conversationId) {
       // Carry the token through the redirect: the conversation page (and every
       // id-keyed query under it) must PRESENT it — the server no longer grants
       // "shared" access on the token's mere existence (issue #27).
-      setShareTokenScope(conversation._id, token);
+      setShareTokenScope(conversationId, token);
       // Keep the #msg- anchor (bookmark deep links) alongside the token.
       router.replace(
-        `/conversation/${conversation._id}?share=${encodeURIComponent(token)}${window.location.hash}`
+        `/conversation/${conversationId}?share=${encodeURIComponent(token)}${window.location.hash}`
       );
     }
-  }, [conversation, router, token]);
+  }, [conversationId, router, token]);
 
   if (conversation === null) {
     return (

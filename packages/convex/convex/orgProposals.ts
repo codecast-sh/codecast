@@ -6,7 +6,7 @@ import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import { canSendProductMessage, enqueuePendingMessage, getAuthenticatedUserId } from "./pendingMessages";
 import { nextShortId } from "./counters";
-import { resolveSessionConversation } from "./lib/access";
+import { resolveSessionConversation, workspaceKey } from "./lib/access";
 import { resolveActor } from "./lib/actor";
 import { computeOrgHealth } from "./orgHealth";
 import { userCanAccessRole, userCanAdminRole } from "./lib/orgAccess";
@@ -102,6 +102,27 @@ async function requireAdmin(ctx: Ctx, userId: Id<"users">, proposal: ProposalRow
 
 // ── Create ──────────────────────────────────────────────────────────────────
 
+/**
+ * A record change carries its record's title (org-staffing.md S9): the row
+ * reads "Mark done: <title>" wherever the proposal is read, and a reader's
+ * store may not hold that team's records, so the title travels with the
+ * proposal. The analyzer writes it from its inputs; a spec that left it out
+ * gets it here, from the record itself, when the record is in the
+ * proposal's workspace. Access is one equality on `workspace`, never a read
+ * of team_id. A ref that is not a short id, or a record elsewhere, leaves
+ * the change as written.
+ */
+async function withRecordTitle<T extends OrgChange>(ctx: Ctx, change: T, wsKey: string): Promise<T> {
+  if (change.kind !== "plan_status" && change.kind !== "task_status" && change.kind !== "project_status") return change;
+  if (change.title?.trim()) return change;
+  const table = change.kind === "plan_status" ? "plans" : change.kind === "task_status" ? "tasks" : "projects";
+  const ref = (change.kind === "plan_status" ? change.plan : change.kind === "task_status" ? change.task : change.project).trim();
+  if (!/^(pl|ct|pr)-\d+$/.test(ref)) return change;
+  const row = await ctx.db.query(table).withIndex("by_short_id", (q: any) => q.eq("short_id", ref)).first();
+  if (!row || row.workspace !== wsKey || typeof row.title !== "string" || !row.title.trim()) return change;
+  return { ...change, title: row.title.trim() };
+}
+
 export async function performCreateProposal(
   ctx: Ctx,
   userId: Id<"users">,
@@ -171,18 +192,20 @@ export async function performCreateProposal(
   }
 
   const changes = [];
+  const wsKey = workspaceKey(args.team_id ? { type: "team", teamId: args.team_id } : { type: "personal", userId });
   for (const [i, c] of spec.changes.entries()) {
+    const change = await withRecordTitle(ctx, c.change, wsKey);
     const id = await ctx.db.insert("org_proposal_changes", {
       proposal_id: proposalId,
       seq: i + 1,
-      change: c.change,
+      change,
       rationale: c.rationale,
       evidence: c.evidence ?? [],
       expected_effect: c.expected_effect,
       risk: c.risk,
       status: "proposed",
     });
-    changes.push({ id, seq: i + 1, change: c.change, status: "proposed", line: describeOrgChange(c.change), depends: orgChangeDependencies(spec.changes.map((x, j) => ({ seq: j + 1, change: x.change })))[i + 1] });
+    changes.push({ id, seq: i + 1, change, status: "proposed", line: describeOrgChange(change), depends: orgChangeDependencies(spec.changes.map((x, j) => ({ seq: j + 1, change: x.change })))[i + 1] });
   }
 
   // The queue: one advisory decision for the person the author reports to,
@@ -743,6 +766,7 @@ export async function performReviseProposal(ctx: Ctx, userId: Id<"users">, args:
       writes.push(() => ctx.db.patch(c._id, patch));
     } else {
       const added = normalizeOrgSpecChange(op.change);
+      added.change = await withRecordTitle(ctx, added.change, workspaceKey(proposal.team_id ? { type: "team", teamId: proposal.team_id } : { type: "personal", userId: proposal.scope_user_id ?? userId }));
       const seq = nextSeq++;
       claim(added.change, seq, "add");
       const line = describeOrgChange(added.change);

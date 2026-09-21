@@ -49,12 +49,14 @@ export function openFeedTargetPicker(opts: {
       title: opts.title,
       kinds: ["session", "doc"],
       notePlaceholder: opts.withNote ? "Tell the agent what to do with it (optional)" : undefined,
-      confirmLabel: feed ? "Feed" : "Send",
+      confirmLabel: feed ? "Add" : "Send",
       extras: [
         {
           key: "new-session",
-          label: feed ? "Feed a new agent session" : "Send to a new agent session",
-          description: "Spawns an agent that reads along and replies here",
+          label: feed ? "A new agent session" : "Send to a new agent session",
+          description: feed
+            ? "Hears everything said here and answers in the thread"
+            : "Spawns an agent that reads along and replies here",
           icon: "sparkles",
           primary: true,
         },
@@ -62,7 +64,7 @@ export function openFeedTargetPicker(opts: {
           ? []
           : [{ key: "new-doc", label: "Save as a new doc", icon: "doc" as const }]),
         ...(opts.showSlack
-          ? [{ key: "slack", label: "Feed the Slack channel id typed above", icon: "slack" as const, needsQuery: true }]
+          ? [{ key: "slack", label: "The Slack channel id typed above", icon: "slack" as const, needsQuery: true }]
           : []),
       ],
       onPick: (t: PalettePickTarget, r: PalettePickResult) => {

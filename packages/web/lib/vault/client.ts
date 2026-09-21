@@ -114,12 +114,75 @@ export async function scanVault(
   opts: { ignored?: boolean } = {},
 ): Promise<VaultScanResponse> {
   const query = `vault=${encodeURIComponent(vaultId)}${opts.ignored ? "&ignored=1" : ""}`;
-  const res = await vaultFetch(ep, `/vault/scan?${query}`, {
-    // A big vault walk can exceed the default budget.
-    signal: AbortSignal.timeout(60_000),
-  });
+  // The capability rides along with the scan rather than waiting for the first
+  // image: a scan always precedes rendering a note, so by the time an <img> is
+  // built the capability is cached and vaultAssetUrl answers synchronously.
+  const [res] = await Promise.all([
+    vaultFetch(ep, `/vault/scan?${query}`, {
+      // A big vault walk can exceed the default budget.
+      signal: AbortSignal.timeout(60_000),
+    }),
+    ensureVaultCapability(ep, vaultId).catch(() => {}),
+  ]);
   if (!res.ok) throw new Error(`vault scan: ${res.status}`);
   return (await res.json()) as VaultScanResponse;
+}
+
+// --- Attachment capabilities -------------------------------------------------
+//
+// An <img> can set no headers, so an attachment URL carries its own proof. It
+// used to carry the daemon's loopback bearer — the secret that also spawns
+// shells — and a URL is readable by whatever renders it: an SVG from the vault,
+// opened as a document, runs at the daemon's origin and reads its own location.
+// So the URL carries a vault-read capability instead: one vault, reads only,
+// expiring. The daemon mints it on /vault/cap behind the full header envelope.
+
+interface CachedCapability {
+  value: string;
+  expires_at: number;
+}
+
+/** Keyed by daemon and vault. The token is part of the key so a rotated daemon
+ *  token never reuses a capability minted under the old one. */
+const capabilities = new Map<string, CachedCapability>();
+const capabilityMints = new Map<string, Promise<void>>();
+/** Daemons with no /vault/cap route — a CLI from before the capability. Their
+ *  attachment URLs keep the legacy token form until the user updates. */
+const legacyCapabilityDaemons = new Set<string>();
+/** Re-mint this far before expiry, so a tab open across the boundary never
+ *  renders a URL that is about to stop working. */
+const CAPABILITY_REFRESH_MS = 60 * 60 * 1000;
+
+function capabilityKey(ep: VaultEndpoint, vaultId: string): string {
+  return `${termHttpBase(ep)}|${ep.token}|${vaultId}`;
+}
+
+/** Fetch and cache a read capability for this vault, unless a fresh one is
+ *  already held. Resolves quietly for a daemon that has no such route. */
+export async function ensureVaultCapability(ep: VaultEndpoint, vaultId: string): Promise<void> {
+  const key = capabilityKey(ep, vaultId);
+  if (legacyCapabilityDaemons.has(key)) return;
+  const held = capabilities.get(key);
+  if (held && held.expires_at - Date.now() > CAPABILITY_REFRESH_MS) return;
+  const inFlight = capabilityMints.get(key);
+  if (inFlight) return inFlight;
+
+  const mint = (async () => {
+    try {
+      const res = await vaultFetch(ep, `/vault/cap?vault=${encodeURIComponent(vaultId)}`);
+      if (res.status === 404) {
+        legacyCapabilityDaemons.add(key);
+        return;
+      }
+      if (!res.ok) return;
+      const body = (await res.json()) as CachedCapability;
+      if (body?.value && typeof body.expires_at === "number") capabilities.set(key, body);
+    } finally {
+      capabilityMints.delete(key);
+    }
+  })();
+  capabilityMints.set(key, mint);
+  return mint;
 }
 
 export interface VaultFileContent {
@@ -149,10 +212,21 @@ export async function readVaultFile(
 }
 
 /** URL for an asset (image etc.) — usable directly as an <img> src.
- *  The token rides as a query param because img tags can't set headers; the
- *  daemon accepts either form on GET /vault/file. */
-export function vaultAssetUrl(ep: VaultEndpoint, vaultId: string, path: string): string {
-  return `${termHttpBase(ep)}/vault/file?vault=${encodeURIComponent(vaultId)}&path=${encodeURIComponent(path)}&token=${encodeURIComponent(ep.token)}`;
+ *  Null while no capability is held yet: scanVault mints one before any note
+ *  renders, so this is the cold path only, and it starts a mint of its own. */
+export function vaultAssetUrl(ep: VaultEndpoint, vaultId: string, path: string): string | null {
+  const base = `${termHttpBase(ep)}/vault/file?vault=${encodeURIComponent(vaultId)}&path=${encodeURIComponent(path)}`;
+  const key = capabilityKey(ep, vaultId);
+  // A daemon from before the capability accepts nothing else. Keeping the old
+  // form for it is what lets the web build ship ahead of the CLI release.
+  if (legacyCapabilityDaemons.has(key)) return `${base}&token=${encodeURIComponent(ep.token)}`;
+  const held = capabilities.get(key);
+  if (!held || held.expires_at <= Date.now()) {
+    void ensureVaultCapability(ep, vaultId).catch(() => {});
+    return null;
+  }
+  if (held.expires_at - Date.now() <= CAPABILITY_REFRESH_MS) void ensureVaultCapability(ep, vaultId).catch(() => {});
+  return `${base}&cap=${encodeURIComponent(held.value)}`;
 }
 
 export class VaultWriteConflict extends Error {

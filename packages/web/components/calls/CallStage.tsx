@@ -1,10 +1,8 @@
 import { useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
-import { toast } from "sonner";
 import Link from "next/link";
 import {
   AppWindow,
-  Captions,
   ChevronDown,
   Circle,
   CircleUserRound,
@@ -15,10 +13,8 @@ import {
   MicOff,
   Minimize2,
   MonitorUp,
-  Plus,
   Radio,
   Settings2,
-  Sparkles,
   Unlock,
   User,
   Users,
@@ -31,27 +27,25 @@ import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { AvatarImg } from "../../lib/avatarCache";
 import {
   getCallTiles,
-  getRoom,
   setCamera,
   setScreenShare,
   subscribeCallTiles,
-  type ParticipantTile, startTranscribing } from "../../lib/calls/callManager";
-import { humanizeConvexError, parseRoomKey } from "@codecast/shared/contracts";
+  type ParticipantTile } from "../../lib/calls/callManager";
+import { parseRoomKey } from "@codecast/shared/contracts";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { getScribeStatus, subscribeScribe } from "../../lib/calls/transcription";
-import { TranscribeControls, TranscribeSwitch } from "./TranscribePanel";
+import { TranscribeControls } from "./TranscribePanel";
 import { AddPeopleButton } from "./AddPeople";
 import { RoomKnocks } from "./RoomDoor";
 import { HangUpButton, MicButton } from "./CallControls";
-import { CallChatPanel } from "./CallChatPanel";
-import { FeedChip } from "./FeedChip";
+import { RoomThread, type RoomThreadCall } from "./RoomThread";
+import type { ThreadRow } from "./roomThreadModel";
 import { DeviceRows } from "./DeviceRows";
 import { faceTrackingNote } from "./useFaceCrop";
-import { openFeedTargetPicker, useAddLiveFeed, useRemoveLiveFeed, type FeedTarget } from "./useCallFeed";
-import { firstName, fmtClock, speakerColor } from "./speakers";
+import { firstName } from "./speakers";
 import { ScreenCursors } from "./ScreenCursors";
 import { useScreenCursorSender } from "../../hooks/useScreenCursorSender";
 import { FollowChip } from "./FollowInCall";
@@ -113,12 +107,12 @@ function CallErrorNotice({ error, fix }: { error: string; fix: AppPermissionKind
 //      an equal tile.
 //   2. FACES ADAPT, CHROME DISAPPEARS. Names render readably on every tile;
 //      controls live on one bottom bar; every glyph has a title.
-//   3. WORDS ARE A FIRST-CLASS LANE. The transcript rail shows the whole live
-//      transcript and owns the FEED gestures (point the words at an agent
-//      session, doc, or Slack — adding a feed auto-starts transcription, no
-//      separate toggle first). Captions flow along the stage bottom for
-//      everyone, scribe or not, and the header links out to the durable call
-//      page. A chat rail gives the room its text lane.
+//   3. THE ROOM HAS ONE THREAD. The thread rail holds what was said (folded
+//      into passages), what was typed, what an agent answered and who came
+//      and went, and it owns the way to add an agent (which starts
+//      transcription by itself, no separate toggle first). Captions flow
+//      along the stage bottom for everyone while the rail is closed; the
+//      header links out to the durable call page.
 //
 // The stage is an overlay, not a route: Esc (or collapse) drops back to the
 // ambient pill and the call continues beside the work.
@@ -150,7 +144,6 @@ const SMALL_SIZE_CHROME: Record<
   speaker: { icon: CircleUserRound, label: "Who's talking", hint: "Float one circle over your work: whoever is talking" },
   tiny: { icon: Circle, label: "Tiny", hint: "One tiny circle, the size of a menu bar icon" },
 };
-type RailTab = "transcript" | "chat";
 
 /**
  * The huddle, full bleed.
@@ -207,7 +200,22 @@ export function CallStage({
     | undefined;
 
   const [view, setView] = useState<StageView>("auto");
-  const [rail, setRail] = useState<RailTab | null>(null);
+  const [threadOpen, setThreadOpen] = useState(false);
+  // The thread's rows, read here so the header can count what arrived while
+  // the rail was closed: typed and agent lines later than the last time it
+  // was open, never the viewer's own lines and never an event row.
+  const rows = useQueryNoThrow(api.callChat.list, call.roomKey ? { room_key: call.roomKey } : "skip").data as
+    | ThreadRow[]
+    | null
+    | undefined;
+  const lastOpenRef = useRef(Date.now());
+  const toggleThread = () => {
+    if (threadOpen) lastOpenRef.current = Date.now();
+    setThreadOpen((o) => !o);
+  };
+  const unread = threadOpen
+    ? 0
+    : (rows ?? []).filter((r) => r.at > lastOpenRef.current && !r.mine && !r.event).length;
   const [pinned, setPinned] = useState<string | null>(null);
   // The face SPEAKER view follows when nothing is pinned: whoever spoke last.
   const [lastSpeaker, setLastSpeaker] = useState<string | null>(null);
@@ -222,7 +230,7 @@ export function CallStage({
     if (panel) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
-      // Typing in the chat composer: Esc leaves the field, not the stage.
+      // Typing in the thread composer: Esc leaves the field, not the stage.
       const el = document.activeElement as HTMLElement | null;
       if (el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT")) return el.blur();
       collapse();
@@ -238,8 +246,6 @@ export function CallStage({
   const { label } = useRoomDescription(call.roomKey);
   const { ringing, settledLine } = useOutgoingRings(call.roomKey);
   const lock = useRoomLock(call.roomKey);
-
-  const toggleRail = (tab: RailTab) => setRail((r) => (r === tab ? null : tab));
 
   // In the panel this header row IS the window's titlebar: it is what you drag
   // the window by, and `.electron-drag-region` is also what marks every button
@@ -373,36 +379,33 @@ export function CallStage({
 
         <HeaderRule />
 
-        {/* The rails: what else is open beside the stage. */}
-        {/* A rail toggle, not the transcription switch: the dot says the
-            room is being transcribed whether or not the rail is open, and
-            the switch itself lives in the rail, in words. */}
+        {/* The thread: the one rail beside the stage. Not the transcription
+            switch: the dot says the room is being transcribed whether or not
+            the rail is open, and the switch itself lives in the thread. The
+            count is what landed in the thread while it was closed. */}
         <StageChromeButton
-          onClick={() => toggleRail("transcript")}
-          active={rail === "transcript"}
-          accent="green"
+          onClick={toggleThread}
+          active={threadOpen}
+          accent="cyan"
           title={
             live
-              ? "Transcribing. Open the live transcript, its feeds, and the switch to stop."
-              : "Not transcribing. Open the transcript rail to start, or to feed an agent."
+              ? "Transcribing. Open the thread: the words, the chat, the agents in the room."
+              : "Open the thread: chat with the room, add an agent, start transcribing."
           }
         >
           <span className="relative">
-            <Captions className="h-3.5 w-3.5" />
-            {live && (
-              <LivePulseDot className="absolute -right-1 -top-1 h-1.5 w-1.5" />
-            )}
+            <MessageSquare className="h-3.5 w-3.5" />
+            {live && <LivePulseDot className="absolute -right-1 -top-1 h-1.5 w-1.5" />}
           </span>
-          transcript
-        </StageChromeButton>
-        <StageChromeButton
-          onClick={() => toggleRail("chat")}
-          active={rail === "chat"}
-          accent="cyan"
-          title="Chat with the room"
-        >
-          <MessageSquare className="h-3.5 w-3.5" />
-          chat
+          thread
+          {unread > 0 && (
+            <span
+              className="min-w-[16px] rounded-full bg-sol-cyan px-1 text-center font-mono text-[9.5px] font-semibold leading-4 tabular-nums text-sol-base03"
+              aria-label={`${unread} new lines`}
+            >
+              {unread > 99 ? "99+" : unread}
+            </span>
+          )}
         </StageChromeButton>
 
         <HeaderRule />
@@ -480,8 +483,8 @@ export function CallStage({
             />
           )}
         </div>
-        {rail && (
-          <StageRail tab={rail} onClose={() => setRail(null)} roomKey={call.roomKey} live={live ?? null} panel={panel} />
+        {threadOpen && call.roomKey && (
+          <ThreadRail onClose={toggleThread} roomKey={call.roomKey} live={live ?? null} rows={rows} panel={panel} />
         )}
       </div>
 
@@ -490,7 +493,7 @@ export function CallStage({
           video. Captions first — a lane, left-aligned, the speaker in a
           column — then the notice, then the one control bar. */}
       <div className="shrink-0 border-t border-white/[0.06] bg-black/[0.12]">
-        {rail !== "transcript" && <CaptionsLane live={live ?? null} />}
+        {!threadOpen && <CaptionsLane live={live ?? null} />}
         {call.error && <CallErrorNotice error={call.error} fix={call.errorFix} />}
         <ControlBar call={call} transcribing={!!live} />
       </div>
@@ -1045,185 +1048,45 @@ export function Avatar({ m, size, followed = false }: { m: any; size: number; fo
   );
 }
 
-// ── The rail: transcript (words + feeds) / chat ───────────────────────────
+// ── The rail: the room's one thread ──────────────────────────────────────
 
-function StageRail({
-  tab,
+// The thread beside the stage: what was said (folded into passages), what
+// was typed, what an agent answered, who came and went. RoomThread renders
+// it; this wrapper owns the reads it needs (the transcript's call record) and
+// the rail's box. In the panel the window is about 690px wide, so the rail
+// takes a share of the stage rather than a fixed 340px that would be half
+// the window.
+function ThreadRail({
   onClose,
   roomKey,
   live,
+  rows,
   panel,
 }: {
-  tab: RailTab;
   onClose: () => void;
-  roomKey: string | null;
-  live: {
-    transcript_id: string;
-    started_at: number;
-    routes: Array<{ kind: string; target: string; mode: string; added_by: string }>;
-  } | null;
+  roomKey: string;
+  live: { transcript_id: string } | null;
+  rows: ThreadRow[] | null | undefined;
   panel: boolean;
 }) {
-  return (
-    <aside className="relative flex w-[340px] shrink-0 flex-col overflow-hidden rounded-xl bg-white/[0.04] animate-in fade-in slide-in-from-right-2 duration-200">
-      {/* The header's transcript/chat buttons are the tabs; the lane only
-          needs a way out of its own. */}
-      <button
-        onClick={onClose}
-        className="absolute right-1.5 top-1.5 z-10 rounded-md p-1.5 text-sol-text-muted transition-colors hover:bg-white/10 hover:text-sol-text"
-        title="Close"
-      >
-        <X className="h-3.5 w-3.5" />
-      </button>
-      {tab === "chat" ? (
-        roomKey ? (
-          <CallChatPanel roomKey={roomKey} className="min-h-0 flex-1 pt-6" live={live} panel={panel} />
-        ) : null
-      ) : (
-        <TranscriptRail roomKey={roomKey} live={live} />
-      )}
-    </aside>
-  );
-}
-
-function TranscriptRail({
-  roomKey,
-  live,
-}: {
-  roomKey: string | null;
-  live: {
-    transcript_id: string;
-    started_at: number;
-    routes: Array<{ kind: string; target: string; mode: string; added_by: string }>;
-  } | null;
-}) {
-  const addFeed = useAddLiveFeed({
-    roomKey,
-    liveTranscriptId: live?.transcript_id ?? null,
-    getRoom,
-  });
-  const removeFeed = useRemoveLiveFeed(live?.transcript_id ?? null);
-  const myUserId = useInboxStore((s: any) => s.currentUser?._id?.toString?.() ?? null);
-  // The room's opt-out (liveRooms): "off" because somebody switched it off
-  // reads differently from "nobody has started yet".
-  const switchedOff = useInboxStore(
-    (s: any) => !!(s.liveRooms as any[]).find((r) => r.room_key === roomKey)?.transcribe_off,
-  );
-
   const call = useQueryNoThrow(
     api.transcripts.webGetCall,
     live ? { transcript_id: live.transcript_id as any } : "skip",
-  ).data as { segments: Array<any> } | null | undefined;
-  const scribeError = useSyncExternalStore(
-    subscribeScribe,
-    () => getScribeStatus().error,
-    () => null,
-  );
-
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const segCount = call?.segments?.length ?? 0;
-  useWatchEffect(() => {
-    const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [segCount]);
-
-  // addRoute/startScribe can refuse (room authorization, ended transcript);
-  // a silent close-and-nothing is the one wrong outcome.
-  const onPick = (t: FeedTarget) =>
-    void addFeed(t).catch((err: any) =>
-      toast.error(humanizeConvexError(err, "Could not point the words there")),
-    );
-  const openPicker = () =>
-    openFeedTargetPicker({ title: "Feed the live words to…", gesture: "feed", showSlack: true, onPick });
-
+  ).data as RoomThreadCall | null | undefined;
   return (
-    <div className="relative flex min-h-0 flex-1 flex-col">
-      {/* Feed bar: where the words are flowing, and the button that points
-          them somewhere new. Adding a feed with no scribe running starts
-          transcription in the same gesture. */}
-      <div className="shrink-0 py-2 pl-3 pr-9">
-        <div className="flex flex-wrap items-center gap-1">
-          {(live?.routes ?? []).map((r) => (
-            <FeedChip
-              key={`${r.kind}:${r.target}`}
-              route={r}
-              removable={!!myUserId && r.added_by === myUserId}
-              onRemove={() => void removeFeed(r.kind, r.target)}
-            />
-          ))}
-          <button
-            onClick={openPicker}
-            className="flex items-center gap-1 rounded-full bg-sol-violet/10 px-2.5 py-0.5 font-mono text-[11px] text-sol-violet transition-colors hover:bg-sol-violet/20"
-            title="Send the live words to an agent session, doc, or Slack"
-          >
-            <Plus className="h-3 w-3" />
-            feed
-          </button>
-          {/* The switch, in words, where the words are. "on" is the room's
-              truth (anyone transcribing), and off stops it for everyone. */}
-          <TranscribeSwitch live={!!live} className="ml-auto" />
-        </div>
-      </div>
-
-      {/* The words are content, not chrome: the stage turns selection off
-          wholesale (its toolbar is a toolbar, not a paragraph) and the
-          transcript turns it back on, so a call can still be quoted. */}
-      <div ref={scrollRef} className="min-h-0 flex-1 select-text overflow-y-auto px-3 pb-3 pt-1">
-        {!live ? (
-          <div className="flex h-full flex-col items-center justify-center gap-3 px-3 text-center">
-            <Captions className="h-5 w-5 text-sol-text-muted" />
-            <p className="text-[12px] leading-relaxed text-sol-text-muted">
-              {switchedOff
-                ? "Transcription is off for this huddle. Switch it back on — or feed an agent — and the words land here and on the call page."
-                : "Nobody is transcribing yet. Feed an agent — or just start the transcript — and the words land here and on the call page."}
-            </p>
-            <div className="flex flex-wrap items-center justify-center gap-1.5">
-              <button
-                onClick={openPicker}
-                className="flex items-center gap-1.5 rounded-full bg-sol-violet/15 px-3.5 py-1.5 text-[12px] font-medium text-sol-violet transition-colors hover:bg-sol-violet/25"
-              >
-                <Sparkles className="h-3.5 w-3.5" />
-                feed an agent
-              </button>
-              <button
-                onClick={() =>
-                  roomKey &&
-                  void startTranscribing(roomKey).then((ok) => {
-                    if (!ok) toast.error("Somebody else is transcribing this huddle already");
-                  })
-                }
-                className="flex items-center gap-1.5 rounded-full bg-sol-green/10 px-3.5 py-1.5 text-[12px] font-medium text-sol-green transition-colors hover:bg-sol-green/20"
-              >
-                <Captions className="h-3.5 w-3.5" />
-                start transcribing
-              </button>
-            </div>
-          </div>
-        ) : segCount === 0 ? (
-          <div className="py-6 text-center text-[12px] text-sol-text-muted">
-            {scribeError ?? "Listening — words appear as people speak."}
-          </div>
-        ) : (
-          <div className="space-y-1 pb-2">
-            {(call?.segments ?? []).map((s: any, i: number, arr: any[]) => {
-              const prev = arr[i - 1];
-              const newSpeaker = !prev || prev.speaker_id !== s.speaker_id;
-              return (
-                <div key={s.seq}>
-                  {newSpeaker && (
-                    <div className={`mt-2.5 font-mono text-[11px] font-medium ${speakerColor(s.speaker_id)}`}>
-                      {firstName(s.speaker_name)}
-                      <span className="ml-1.5 font-normal text-sol-text-muted">{fmtClock(s.t0)}</span>
-                    </div>
-                  )}
-                  <p className="text-[12.5px] leading-relaxed text-sol-text-secondary">{s.text}</p>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    </div>
+    <aside className="flex w-[min(340px,55%)] shrink-0 flex-col overflow-hidden rounded-xl bg-white/[0.04] animate-in fade-in slide-in-from-right-2 duration-200">
+      <RoomThread
+        roomKey={roomKey}
+        call={live ? call : null}
+        rows={rows}
+        liveTranscriptId={live?.transcript_id ?? null}
+        surface="stage"
+        seated
+        panel={panel}
+        onClose={onClose}
+        className="min-h-0 flex-1"
+      />
+    </aside>
   );
 }
 

@@ -3,7 +3,7 @@
 // never answers is a skip too rather than a stalled trigger.
 
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runTriggerPrecheck } from "./precheckRunner.js";
@@ -21,6 +21,32 @@ function withCwd(run: (cwd: string) => Promise<void>): () => Promise<void> {
 }
 
 describe("runTriggerPrecheck", () => {
+
+  test(
+    "a gate finds the CLIs an agent would, even under launchd's bare PATH",
+    withCwd(async (cwd) => {
+      // The daemon under launchd has PATH=/usr/bin:/bin:/usr/sbin:/sbin. A gate
+      // that names bun, rg or cast must still resolve them from the user's
+      // install directories, or it exits 127 on every firing and the trigger
+      // is dead without saying so.
+      const home = join(cwd, "home");
+      mkdirSync(join(home, ".bun", "bin"), { recursive: true });
+      const gate = join(home, ".bun", "bin", "fake-gate");
+      writeFileSync(gate, "#!/bin/sh\nexit 0\n");
+      chmodSync(gate, 0o755);
+      const saved = { PATH: process.env.PATH, HOME: process.env.HOME };
+      process.env.PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
+      process.env.HOME = home;
+      try {
+        const result = await runTriggerPrecheck({ command: "fake-gate", cwd });
+        expect(result.exitCode).toBe(0);
+        expect(triggerPrecheckPassed(result)).toBe(true);
+      } finally {
+        process.env.PATH = saved.PATH;
+        process.env.HOME = saved.HOME;
+      }
+    }),
+  );
   test(
     "exit 0 passes and the run proceeds",
     withCwd(async (cwd) => {

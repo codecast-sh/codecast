@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { getFunctionName } from "convex/server";
 import {
   appendRecordingSegments,
@@ -7,7 +7,11 @@ import {
   attachRecording,
   beat,
   finishRecordingTranscript,
+  flush,
+  start,
   stop,
+  ROLLING_SUMMARY_GAP_MS,
+  ROLLING_SUMMARY_MIN_WORDS,
   huddleDigestTarget,
   needsServerTranscription,
   ownRoomTarget,
@@ -787,5 +791,199 @@ describe("the routes a room starts with", () => {
   test("the room's own session is the one a live chunk addresses directly", () => {
     expect(ownRoomTarget("session:conv1")).toBe("conv1");
     expect(ownRoomTarget("channel:chan1")).toBeNull();
+  });
+});
+
+// THE RECAP WHILE THE CALL IS STILL GOING. The thread shows "So far" from the
+// same summary the end of the call rewrites. The throttle lives in flush (it
+// runs on every silence gap and has the db), and the claim is written in the
+// same mutation as the schedule so two gaps landing together run it once.
+describe("the rolling recap", () => {
+  const now = 1_800_000_000_000;
+  const huddle = (over: Record<string, unknown> = {}) => ({
+    _id: "t1",
+    room_key: "channel:chan1",
+    team_id: "team1",
+    started_by: "ua",
+    status: "live",
+    started_at: now - 10 * 60_000,
+    routes: [],
+    last_seq: 3,
+    ...over,
+  });
+  // Three segments of forty words each: exactly the rolling floor.
+  const words = (n: number) => Array.from({ length: n }, (_, i) => `w${i}`).join(" ");
+  const segments = (n = 3, per = 40) =>
+    Array.from({ length: n }, (_, i) => ({
+      _id: `s${i + 1}`, transcript_id: "t1", seq: i + 1, speaker_id: "ua", speaker_name: "Alice", text: words(per), t0: i * 1000, t1: i * 1000 + 900,
+    }));
+  const ctx = (rows: any[], segs: any[] = segments()) => {
+    const scheduled: { name: string; args: any }[] = [];
+    return {
+      db: makeFakeDb({ transcripts: rows, transcript_segments: segs, users: [], push_outbox: [] }),
+      auth: { async getUserIdentity() { return { subject: "ua|session" }; } },
+      scheduler: {
+        async runAfter(_d: number, reference: unknown, args: any) {
+          scheduled.push({ name: getFunctionName(reference as any), args });
+        },
+      },
+      _scheduled: scheduled,
+    };
+  };
+  const call = (fn: any, c: any, args: any) => (fn as any)._handler(c, args);
+  const summaries = (c: any) => c._scheduled.filter((s: any) => s.name === "transcripts:generateSummary");
+  let clock: any;
+  beforeEach(() => { clock = spyOn(Date, "now").mockReturnValue(now); });
+  afterEach(() => { clock.mockRestore(); });
+
+  test("a gap inside the window delivers the routes and claims no recap", async () => {
+    const c = ctx([huddle({ summary_at: now - ROLLING_SUMMARY_GAP_MS + 1_000, summary_seq: 0 })]);
+    await call(flush, c, { transcript_id: "t1" });
+    expect(c._scheduled.map((s: any) => s.name)).toEqual(["transcripts:deliverRoutes"]);
+    expect(c.db._patched).toHaveLength(0);
+  });
+
+  test("the first run waits the same window from the start of the call", async () => {
+    const c = ctx([huddle({ started_at: now - 30_000 })]);
+    await call(flush, c, { transcript_id: "t1" });
+    expect(summaries(c)).toHaveLength(0);
+  });
+
+  test("too few new words since the last run is no run", async () => {
+    const c = ctx([huddle({ summary_at: now - ROLLING_SUMMARY_GAP_MS, summary_seq: 2 })]);
+    await call(flush, c, { transcript_id: "t1" });
+    expect(summaries(c)).toHaveLength(0);
+    expect(c.db._patched).toHaveLength(0);
+  });
+
+  test("past the window with enough said: the claim and the run land together, and only once", async () => {
+    const c = ctx([huddle({ summary_at: now - ROLLING_SUMMARY_GAP_MS })]);
+    await call(flush, c, { transcript_id: "t1" });
+    expect(summaries(c)).toEqual([{ name: "transcripts:generateSummary", args: { transcript_id: "t1", rolling: true } }]);
+    expect(c.db._patched).toEqual([{ _id: "t1", patch: { summary_at: now, summary_seq: 3 } }]);
+    // A second gap right behind it reads the claim and schedules nothing.
+    await call(flush, c, { transcript_id: "t1" });
+    expect(summaries(c)).toHaveLength(1);
+    expect(c.db._patched).toHaveLength(1);
+  });
+
+  test("the words are counted from the claimed seq, not from the start", async () => {
+    // Forty new words past seq 2: under the floor even though the whole call is well over it.
+    const c = ctx([huddle({ summary_at: now - ROLLING_SUMMARY_GAP_MS, summary_seq: 2, last_seq: 3 })], segments(3, 100));
+    await call(flush, c, { transcript_id: "t1" });
+    expect(summaries(c)).toHaveLength(0);
+    const d = ctx([huddle({ summary_at: now - ROLLING_SUMMARY_GAP_MS, summary_seq: 1, last_seq: 3 })], segments(3, ROLLING_SUMMARY_MIN_WORDS / 2));
+    await call(flush, d, { transcript_id: "t1" });
+    expect(summaries(d)).toHaveLength(1);
+  });
+
+  test("a recording keeps its one summary at the end", async () => {
+    const c = ctx([huddle({ room_key: "rec:9f8e7d6c-1234-4abc-9def-0123456789ab", summary_at: now - ROLLING_SUMMARY_GAP_MS })]);
+    await call(flush, c, { transcript_id: "t1" });
+    expect(summaries(c)).toHaveLength(0);
+  });
+
+  test("a rolling verdict refreshes the summary and action items and touches nothing else", async () => {
+    const c = ctx([huddle({ summary_status: undefined, title: undefined })]);
+    await call(setSummary, c, {
+      transcript_id: "t1", summary_status: "done", rolling: true,
+      title: "Not yet", summary: "So far Alice has covered the rollout.", action_items: ["Alice: write it up"],
+    });
+    expect(c.db._patched).toEqual([{ _id: "t1", patch: { summary: "So far Alice has covered the rollout.", action_items: ["Alice: write it up"] } }]);
+    const row = await c.db.get("t1");
+    expect(row.summary_status).toBeUndefined();
+    expect(row.title).toBeUndefined();
+    // No digest, no push: those belong to the end of the call.
+    expect(c._scheduled).toHaveLength(0);
+  });
+
+  test("a rolling run that failed or skipped writes nothing", async () => {
+    const c = ctx([huddle({ summary: "kept" })]);
+    await call(setSummary, c, { transcript_id: "t1", summary_status: "failed", rolling: true });
+    await call(setSummary, c, { transcript_id: "t1", summary_status: "skipped", rolling: true });
+    expect(c.db._patched).toHaveLength(0);
+    expect((await c.db.get("t1")).summary).toBe("kept");
+  });
+
+  test("a rolling write landing after the call ended is ignored, so the final summary stands", async () => {
+    const ended = huddle({ status: "ended", ended_at: now, summary_status: "pending" });
+    const c = ctx([ended]);
+    await call(setSummary, c, { transcript_id: "t1", summary_status: "done", rolling: true, summary: "partial" });
+    expect(c.db._patched).toHaveLength(0);
+    expect(c._scheduled).toHaveLength(0);
+    // The end of the call's own verdict still lands as before: status, title, digest.
+    await call(setSummary, c, { transcript_id: "t1", summary_status: "done", title: "Rollout", summary: "final", action_items: [] });
+    const row = await c.db.get("t1");
+    expect(row).toMatchObject({ summary_status: "done", title: "Rollout", summary: "final" });
+    expect(c._scheduled.map((s: any) => s.name)).toEqual(["chat:postCallDigest"]);
+    // And a rolling straggler after that changes nothing either.
+    await call(setSummary, c, { transcript_id: "t1", summary_status: "done", rolling: true, summary: "stale partial" });
+    expect((await c.db.get("t1")).summary).toBe("final");
+  });
+});
+
+// THE ROOM'S THREAD SEES TRANSCRIPTION GO ON. A person pressing Transcribe on
+// a room with no run is news; a joining window's automatic start is every
+// huddle's normal breath and says nothing. Switching off is written by the
+// room switch (calls.setRoomTranscribeOff), not by the end of the run, which
+// also fires when the room empties.
+describe("the room's thread sees transcription go on", () => {
+  const now = 1_800_000_000_000;
+  const seated = () => ({
+    call_members: [{ _id: "cm1", room_key: "session:conv1", user_id: "ua", team_id: "team1", last_seen: now, expires_at: now + 60_000 }],
+    call_rooms: [],
+    call_room_state: [],
+    call_invites: [],
+    users: [{ _id: "ua", name: "Ada", email: "ada@x.org" }],
+    team_members: [{ team_id: "team1", user_id: "ua" }],
+    teams: [{ _id: "team1", features: { calls: true } }],
+    conversations: [{ _id: "conv1", short_id: "conv1", title: "Fix the auth race", agent_type: "claude_code", user_id: "ua", team_id: "team1" }],
+    messages: [],
+    call_agent_feeds: [],
+    transcripts: [],
+    transcript_segments: [],
+    call_chat_messages: [],
+  });
+  const ctx = (tables: Record<string, any[]>) => {
+    const scheduled: { name: string; args: any }[] = [];
+    return {
+      db: makeFakeDb(tables),
+      auth: { async getUserIdentity() { return { subject: "ua|session" }; } },
+      scheduler: {
+        async runAfter(_d: number, reference: unknown, args: any) {
+          scheduled.push({ name: getFunctionName(reference as any), args });
+        },
+      },
+      _scheduled: scheduled,
+    };
+  };
+  const call = (fn: any, c: any, args: any) => (fn as any)._handler(c, args);
+  const events = (c: any) => c.db._tables.call_chat_messages.map((r: any) => [r.event, r.user_id, r.agent_conversation_id]);
+  let clock: any;
+  beforeEach(() => { clock = spyOn(Date, "now").mockReturnValue(now); });
+  afterEach(() => { clock.mockRestore(); });
+
+  test("a manual start on a session room says the switch went on and that the room's own agent is in", async () => {
+    const c = ctx(seated());
+    const res = await call(start, c, { room_key: "session:conv1" });
+    expect(res.role).toBe("scribe");
+    expect(events(c)).toEqual([
+      ["transcribe_on", "ua", undefined],
+      ["agent_joined", "ua", "conv1"],
+    ]);
+    // Resuming the same run says nothing more.
+    await call(start, c, { room_key: "session:conv1" });
+    expect(c.db._tables.call_chat_messages).toHaveLength(2);
+  });
+
+  test("an automatic start writes no switch line, and the end of the run writes nothing at all", async () => {
+    const c = ctx(seated());
+    const res = await call(start, c, { room_key: "session:conv1", auto: true });
+    expect(res.role).toBe("scribe");
+    expect(events(c)).toEqual([["agent_joined", "ua", "conv1"]]);
+    await call(stop, c, { transcript_id: res.transcript_id });
+    expect(c.db._tables.transcripts[0].status).toBe("ended");
+    expect(c.db._tables.call_agent_feeds).toHaveLength(0);
+    expect(c.db._tables.call_chat_messages).toHaveLength(1);
   });
 });

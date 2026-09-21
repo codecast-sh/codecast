@@ -3402,6 +3402,12 @@ pre[class*="language-"] {
 .ch-msg-body:has(.entity-card-row) {
   max-width: none;
 }
+/* Chat cards keep the message measure: uncapped, a single card stretches the
+   whole list width on a wide display and the snippet reads as one long line.
+   78ch is the same measure as .ch-msg-body prose, so cards align with text. */
+.ch-msg .entity-card-row {
+  max-width: 78ch;
+}
 .ch-msg-body > p {
   max-width: 78ch;
 }

@@ -15,7 +15,6 @@ import { useWorkspaceSelection } from "../../../../hooks/useWorkspaceSelection";
 import { useTeamWorkspaceSuggestions } from "../../../../hooks/useTeamWorkspaceSuggestions";
 import { useSaveTeamSetup } from "../../../../lib/team/saveTeamSetup";
 import { useSwitchWorkspace } from "../../../../hooks/useSwitchWorkspace";
-import { adoptPathIntoActiveTab } from "../../../../src/compat/tabRouting";
 import { useCurrentUser } from "../../../../hooks/useCurrentUser";
 import { useInboxStore } from "../../../../store/inboxStore";
 
@@ -157,9 +156,6 @@ export default function JoinTeamPage() {
           toast.error("Could not save the team settings", { description: "You can change them in Settings." });
         });
     }
-    // This page lives outside the tab shell. Point the active tab at the
-    // feed first, or the shell re-asserts its old path on re-entry.
-    adoptPathIntoActiveTab(TEAM_FEED_PATH);
     router.push(TEAM_FEED_PATH);
     toast.success(isSetup ? `Saved your ${name} setup` : `Welcome to ${name}`, {
       description: "This is its feed. Sessions from shared workspaces land here.",

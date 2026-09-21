@@ -1,0 +1,484 @@
+/* The room thread (components/calls/RoomThread.tsx): one column for what was
+ * said, what was typed, what an agent answered and who came and went.
+ *
+ * Two surfaces share it. The stage rail is dark (the stage carries the `dark`
+ * class) and 340px wide; the call page follows the app theme and is as wide
+ * as the page. Everything here is sol-* tokens, so the same rules read in
+ * both; `data-surface` only changes what the page can afford to spend on
+ * width.
+ *
+ * The one visual rule: SPOKEN is quiet, TYPED is loud. A passage sits behind
+ * a thin rule in smaller, dimmer text; a typed line has an avatar, a name and
+ * a time in the thread's own text color. The eye tells them apart without a
+ * label or a tab. */
+
+.rt {
+  position: relative;
+}
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
+
+.rt-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  flex-shrink: 0;
+  padding: 8px 10px 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--sol-text) 7%, transparent);
+}
+.rt-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.rt-head-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+.rt-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 9999px;
+  padding: 2px 9px 2px 7px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--sol-violet);
+  background: color-mix(in srgb, var(--sol-violet) 12%, transparent);
+  transition: background 120ms;
+}
+.rt-add:hover {
+  background: color-mix(in srgb, var(--sol-violet) 22%, transparent);
+}
+.rt-head-closable {
+  padding-right: 34px;
+}
+.rt-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  border-radius: 6px;
+  padding: 4px;
+  color: var(--sol-text-muted);
+  transition: color 120ms, background 120ms;
+}
+.rt-close:hover {
+  color: var(--sol-text);
+  background: color-mix(in srgb, var(--sol-text) 8%, transparent);
+}
+
+/* The density control: three positions, the live one raised. */
+.rt-density {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  border-radius: 6px;
+  padding: 2px;
+  background: color-mix(in srgb, var(--sol-text) 5%, transparent);
+}
+.rt-density-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 18px;
+  border-radius: 4px;
+  color: var(--sol-text-muted);
+  transition: color 120ms, background 120ms;
+}
+.rt-density-btn:hover {
+  color: var(--sol-text);
+}
+.rt-density-btn[aria-checked="true"] {
+  color: var(--sol-text);
+  background: color-mix(in srgb, var(--sol-text) 12%, transparent);
+  box-shadow: 0 1px 0 rgb(0 0 0 / 0.2);
+}
+
+/* ── The list ───────────────────────────────────────────────────────────── */
+
+.rt-list {
+  padding: 8px 10px 10px;
+}
+.rt[data-surface="page"] .rt-list {
+  padding: 12px 24px 80px;
+}
+.rt-note {
+  padding: 6px 2px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--sol-text-dim);
+}
+
+/* The empty room: one card, two ways forward. */
+.rt-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin: 18px auto 0;
+  max-width: 300px;
+  padding: 18px 16px;
+  text-align: center;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--sol-text) 4%, transparent);
+}
+.rt-empty p {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--sol-text-muted);
+}
+.rt-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}
+.rt-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 9999px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  transition: background 120ms;
+}
+.rt-btn-violet {
+  color: var(--sol-violet);
+  background: color-mix(in srgb, var(--sol-violet) 15%, transparent);
+}
+.rt-btn-violet:hover {
+  background: color-mix(in srgb, var(--sol-violet) 25%, transparent);
+}
+.rt-btn-green {
+  color: var(--sol-green);
+  background: color-mix(in srgb, var(--sol-green) 10%, transparent);
+}
+.rt-btn-green:hover {
+  background: color-mix(in srgb, var(--sol-green) 20%, transparent);
+}
+
+/* ── Spoken words: a passage ────────────────────────────────────────────── */
+
+.rt-passage {
+  margin: 6px 0;
+  border-left: 2px solid color-mix(in srgb, var(--sol-text) 14%, transparent);
+  padding-left: 8px;
+}
+.rt-passage-live {
+  border-left-color: color-mix(in srgb, var(--sol-green) 55%, transparent);
+}
+.rt-passage-head {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr) auto;
+  column-gap: 6px;
+  align-items: baseline;
+  width: 100%;
+  border-radius: 6px;
+  margin-left: -4px;
+  padding: 3px 4px;
+  text-align: left;
+  transition: background 120ms;
+}
+.rt-passage-head:hover {
+  background: color-mix(in srgb, var(--sol-text) 5%, transparent);
+}
+.rt-passage-head:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--sol-blue) 60%, transparent);
+  outline-offset: 1px;
+}
+.rt-passage-chevron {
+  align-self: center;
+  color: var(--sol-text-dim);
+  transition: transform 160ms ease;
+}
+.rt-passage-open .rt-passage-chevron {
+  transform: rotate(90deg);
+}
+.rt-passage-who {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  font-weight: 500;
+}
+.rt-passage-when {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  color: var(--sol-text-dim);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.rt-passage-preview {
+  grid-column: 2 / 4;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--sol-text-muted);
+}
+/* Open: the whole run. The turns come from TranscriptTurnList, sized for
+   the call page; here they are spoken words in a thread, so a notch smaller
+   and a shade quieter than a typed line, and the live passage a shade
+   brighter than history because it is the captions now. */
+.rt-passage-body {
+  padding: 2px 0 4px;
+  animation: rt-open 180ms ease-out;
+}
+.rt-passage-body p {
+  font-size: 12.5px;
+  color: var(--sol-text-secondary);
+}
+.rt-passage-live .rt-passage-body p {
+  color: var(--sol-text);
+}
+.rt[data-surface="page"] .rt-passage-body p {
+  font-size: 13px;
+}
+@keyframes rt-open {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rt-passage-body {
+    animation: none;
+  }
+  .rt-passage-chevron {
+    transition: none;
+  }
+}
+
+/* ── The recap so far ───────────────────────────────────────────────────── */
+
+.rt-recap {
+  margin: 0 0 8px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--sol-violet) 7%, transparent);
+}
+.rt-recap-head {
+  display: grid;
+  grid-template-columns: 12px auto minmax(0, 1fr);
+  column-gap: 6px;
+  align-items: center;
+  width: 100%;
+  padding: 7px 10px;
+  text-align: left;
+  border-radius: 10px;
+  transition: background 120ms;
+}
+.rt-recap-head:hover {
+  background: color-mix(in srgb, var(--sol-violet) 6%, transparent);
+}
+.rt-recap-head:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--sol-blue) 60%, transparent);
+  outline-offset: 1px;
+}
+.rt-recap-open .rt-passage-chevron {
+  transform: rotate(90deg);
+}
+.rt-recap-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--sol-violet);
+  white-space: nowrap;
+}
+.rt-recap-line {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--sol-text-muted);
+}
+.rt-recap-body {
+  padding: 0 10px 10px 28px;
+  animation: rt-open 180ms ease-out;
+}
+.rt-recap-body > p {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--sol-text);
+}
+.rt-recap-items {
+  margin-top: 8px;
+}
+.rt-recap-items-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 3px;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--sol-text-dim);
+}
+.rt-recap-items li {
+  display: flex;
+  gap: 6px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--sol-text);
+}
+.rt[data-surface="page"] .rt-recap-body > p,
+.rt[data-surface="page"] .rt-recap-items li {
+  font-size: 13px;
+}
+
+/* ── Who came and went ──────────────────────────────────────────────────── */
+
+.rt-event {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 8px 0;
+  padding: 0 4px;
+  font-size: 11px;
+  line-height: 1.4;
+  text-align: center;
+  color: var(--sol-text-dim);
+}
+.rt-event-agent {
+  font-weight: 500;
+  color: var(--sol-text-muted);
+}
+button.rt-event-agent:hover {
+  color: var(--sol-violet);
+  text-decoration: underline;
+}
+.rt-event-when {
+  margin-left: 6px;
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  opacity: 0.8;
+}
+.rt-listening {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.rt-listening::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--sol-green);
+  animation: rt-pulse 1.6s ease-in-out infinite;
+}
+@keyframes rt-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rt-listening::before {
+    animation: none;
+  }
+}
+
+/* ── Typed lines ────────────────────────────────────────────────────────── */
+
+.rt-line {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.rt-line-cont {
+  margin-top: 2px;
+}
+.rt-working {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 11.5px;
+  color: var(--sol-text-muted);
+}
+
+/* ── The composer ───────────────────────────────────────────────────────── */
+
+.rt-foot {
+  flex-shrink: 0;
+  padding: 6px 8px 8px;
+}
+.rt[data-surface="page"] .rt-foot {
+  padding: 8px 24px 12px;
+  border-top: 1px solid color-mix(in srgb, var(--sol-border) 30%, transparent);
+}
+/* The thread reuses the chat composer's frame (ch-composer in chat.css) so
+ * paste/drop/pick and the thumbnail strip are the same as team chat;
+ * `.ch-composer-flush` pins it in the rail. */
+.rt .ch-att img {
+  max-height: 160px;
+}
+.rt .ch-atts-grid .ch-att {
+  width: 88px;
+  height: 88px;
+}
+
+/* An agent's line (moved here from callSurface.css with the chat panel).
+ *
+ * An agent answers in prose with the odd list or code span, so its row
+ * renders markdown, sized to the thread's own text. The dots are the "is
+ * working" foot of the list and the breathing mark on a working agent's
+ * chip: three, opacity only. */
+.call-chat-agent-body p {
+  margin: 0 0 4px;
+}
+.call-chat-agent-body p:last-child {
+  margin-bottom: 0;
+}
+.call-chat-agent-body pre {
+  margin: 4px 0;
+  max-width: 100%;
+  overflow-x: auto;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 11px;
+}
+.call-chat-agent-body ul,
+.call-chat-agent-body ol {
+  margin: 2px 0 4px;
+  padding-left: 1.1em;
+}
+.call-chat-dots {
+  display: inline-flex;
+  gap: 3px;
+  align-items: center;
+}
+.call-chat-dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: 9999px;
+  background: currentColor;
+  opacity: 0.35;
+  animation: call-chat-dot 1.2s ease-in-out infinite;
+}
+.call-chat-dots i:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.call-chat-dots i:nth-child(3) {
+  animation-delay: 0.4s;
+}
+@keyframes call-chat-dot {
+  0%, 80%, 100% { opacity: 0.35; }
+  40% { opacity: 1; }
+}

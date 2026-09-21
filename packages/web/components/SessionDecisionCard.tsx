@@ -19,7 +19,9 @@ import { MarkdownRenderer } from "./tools/MarkdownRenderer";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { hasOpenModal } from "../shortcuts";
 import { PublishedPageEmbed } from "./PublishedPageEmbed";
+import { CollapsibleBody } from "./CollapsibleBody";
 import { ChevronUp, ChevronDown, ArrowUpRight } from "lucide-react";
+import "./decisions/decisions.css";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { DecisionProposalOrigin } from "./org/ProposalAuthorPill";
@@ -32,6 +34,17 @@ import { DecisionProposalOrigin } from "./org/ProposalAuthorPill";
 //   advisory  The agent declared a default and kept working, so the thread is
 //             the main event. The card docks above the composer ("dock"), at
 //             most half the pane, and folds to one line ("line") out of the way.
+//
+// Every size that offers the options also shows the reasoning. A question
+// and its option labels are not enough to decide on; the context the asker
+// wrote is what the answer rests on. Full reads it whole, in the document
+// page's type. The dock shows as much as the half pane leaves after the
+// options, faded where it runs out, and opens the rest in full: the dock is
+// the glance, full is the read. The line shows the question only, and says so.
+//
+// Both sizes set their text in the conversation column (conv-col), the
+// measure the messages and the composer use, so a wide pane does not stretch
+// a paragraph across the whole screen.
 //
 // The queue (/questions) renders the same conversation pane and only adds a
 // stepper through DecisionStepperContext (hooks/useDecisionQueue): position,
@@ -390,7 +403,8 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
   );
 
   const optionRow = (
-    <div className={`px-6 shrink-0 ${full ? "pt-4 pb-4 border-t border-sol-border" : "pt-2 pb-3"}`}>
+    <div className={`shrink-0 ${full ? "border-t border-sol-border" : ""}`}>
+    <div className={`conv-col mx-auto w-full px-6 ${full ? "pt-4 pb-4" : "pt-2 pb-3"}`}>
       {isInfraDialog && (
         <div className="text-[12px] text-sol-text-dim mb-1">
           This is a usage prompt from the agent's harness, not a decision — open the session to handle it.
@@ -442,7 +456,17 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
 
       {escapeHatch}
     </div>
+    </div>
   );
+
+  // The reasoning, in the card's body type: the authored context of a
+  // `cast decide`, or the detail an AskUserQuestion carries. The dock and
+  // full both render it; only the folded line goes without.
+  const reasoning = item.contextMd
+    ? <MarkdownRenderer content={item.contextMd} />
+    : poll?.question.detail
+      ? <span className="whitespace-pre-line">{poll.question.detail}</span>
+      : null;
 
   // One line, out of the way: an advisory ask folded while you read the thread.
   if (size === "line") {
@@ -470,27 +494,27 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
         tabIndex={-1}
         // z-40 is load-bearing: the pane carries sticky header, state bar,
         // composer and a z-30 scroll button, each its own stacking context.
-        className="absolute inset-0 z-40 flex flex-col bg-sol-bg outline-none"
+        // decision-doc: the document page's type (the serif question, the
+        // body's leading), so the full card reads like the page it stands for.
+        className="decision-doc absolute inset-0 z-40 flex flex-col bg-sol-bg outline-none"
         onWheel={(e) => {
           // Scrolling up at the top of the question hands the pane to the thread.
           if (e.deltaY < 0 && (bodyRef.current?.scrollTop ?? 0) <= 0) shrink();
         }}
       >
-        <div className="px-6 shrink-0 pt-2">
+        <div className="conv-col mx-auto w-full px-6 shrink-0 pt-2">
           <div className="mb-2">{sizeToggle}</div>
           {stepperRail}
         </div>
-        <div ref={bodyRef} className="flex-1 min-h-0 overflow-y-auto px-6">
+        <div ref={bodyRef} className="flex-1 min-h-0 overflow-y-auto">
+        <div className="conv-col mx-auto w-full px-6 pb-4">
           {whoIsAsking}
           {(askedLine || documentLink) && <div className="-mt-2 mb-3 flex items-center gap-3 flex-wrap">{askedLine}{documentLink}</div>}
           <DecisionProposalOrigin contextMd={item.contextMd} className="mb-3 text-[12px]" size="md" />
-          {question && <h1 className="text-xl text-sol-text leading-snug mb-4">{question}</h1>}
-          {poll?.question.detail && (
-            <div className="text-sm text-sol-text-muted mb-4 border-l-2 border-sol-border pl-3 whitespace-pre-line">{poll.question.detail}</div>
-          )}
-          {item.contextMd && (
-            <div className="text-sm text-sol-text-muted mb-4 border-l-2 border-sol-border pl-3">
-              <MarkdownRenderer content={item.contextMd} />
+          {question && <h1 className="decision-question text-sol-text mb-4">{question}</h1>}
+          {reasoning && (
+            <div className="decision-body text-sm text-sol-text-muted mb-4 border-l-2 border-sol-border pl-4" data-decision-context>
+              {reasoning}
             </div>
           )}
           {!item.contextMd && recentText && (
@@ -526,29 +550,36 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
             </div>
           )}
         </div>
+        </div>
         {optionRow}
       </div>
     );
   }
 
-  // Docked: in flow above the composer, the question clamped, context a hover
-  // away; the thread above stays readable and scrollable.
+  // Docked: in flow above the composer, the question, the reasoning in the
+  // room the half pane leaves, the options always in reach; the thread
+  // above stays readable and scrollable. The reasoning is a fill body: it
+  // takes what is left after the header and the options, fades where the
+  // room runs out, and its toggle grows the card to full, where there is
+  // room to read.
   return (
     <div
       ref={rootRef}
       tabIndex={-1}
       // relative z-20: the composer below paints a fade gradient up over its
       // neighbour, which would wash out the card's bottom row.
-      className="relative z-20 shrink-0 flex flex-col overflow-y-auto border-t border-sol-border bg-sol-bg shadow-[0_-8px_24px_rgba(0,0,0,0.18)] outline-none"
+      // decision-card: the queue list card's type, so the docked question
+      // and its body look like the same decision seen in the list.
+      className="decision-card relative z-20 shrink-0 flex flex-col overflow-y-auto border-t border-sol-border bg-sol-bg shadow-[0_-8px_24px_rgba(0,0,0,0.18)] outline-none"
       style={{ maxHeight: maxDock }}
       onWheel={(e) => { if (e.deltaY > 0 && stepper) grow(); }}
     >
-      <div className="px-6 shrink-0 pt-1.5">
+      <div className="conv-col mx-auto w-full px-6 shrink-0 pt-1.5">
         <div className="mb-1.5">{sizeToggle}</div>
         {stepperRail ?? <div className="mb-1.5">{whoIsAsking}</div>}
       </div>
-      <div className="px-6 shrink-0">
-        <div className="text-sm text-sol-text leading-snug line-clamp-2" title={question}>{question || "Waiting on you"}</div>
+      <div className="conv-col mx-auto w-full px-6 shrink-0">
+        <div className="decision-question text-sol-text line-clamp-2" title={question}>{question || "Waiting on you"}</div>
         {(!item.blocking || askedLine || documentLink) && (
           <div className="text-[11px] text-sol-text-dim mt-1 flex items-center gap-1.5 flex-wrap">
             {!item.blocking && (
@@ -563,6 +594,17 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
           </div>
         )}
       </div>
+      {reasoning && (
+        <CollapsibleBody
+          collapsedHeight="fill"
+          onExpand={grow}
+          className="conv-col mx-auto w-full px-6 flex-1 mt-2"
+          toggleClassName="mt-1"
+          expandLabel="Read the whole thing"
+        >
+          <div className="decision-card-body border-l-2 border-sol-border pl-3" data-decision-context>{reasoning}</div>
+        </CollapsibleBody>
+      )}
       {optionRow}
     </div>
   );

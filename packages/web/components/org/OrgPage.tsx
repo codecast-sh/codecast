@@ -1320,13 +1320,5 @@ function OrgNodeMenu({ node, tree, onToggleCollapse, onOpenSession, onMove, onSe
       </>
     );
   }
-  if (node.kind === "anchor") {
-    return (
-      <>
-        <CtxHeader title={node.anchor.name} />
-        {node.anchor.conversation_id && <CtxItem icon={ExternalLink} onSelect={() => onOpenSession(node.anchor.conversation_id!)}>Open its session</CtxItem>}
-      </>
-    );
-  }
   return <CtxHeader title={`+${node.remaining} sessions`} />;
 }

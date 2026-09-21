@@ -7,11 +7,13 @@ import type { GitRunner } from "./repoMirror";
 const ROOT = "/nonexistent/repo";
 const WT = `${ROOT}/.codecast/worktrees/tips-modes`;
 const AGENT = `${ROOT}/.claude/worktrees/agent-a1`;
+const LAND = "/nonexistent/repo-land";
 
 const LISTING = [
   `worktree ${ROOT}\nHEAD aaaa111\nbranch refs/heads/main`,
   `worktree ${WT}\nHEAD bbbb222\nbranch refs/heads/codecast/tips-modes`,
   `worktree ${AGENT}\nHEAD cccc333\ndetached\nlocked`,
+  `worktree ${LAND}\nHEAD eeee555\nbranch refs/heads/land-all`,
   `worktree /tmp/gone\nHEAD dddd444\nbranch refs/heads/old\nprunable gitdir file points to non-existent location`,
 ].join("\n\n") + "\n";
 
@@ -43,6 +45,7 @@ describe("parseWorktreeList", () => {
       { path: ROOT, head_sha: "aaaa111", branch: "main" },
       { path: WT, head_sha: "bbbb222", branch: "codecast/tips-modes" },
       { path: AGENT, head_sha: "cccc333", locked: true },
+      { path: LAND, head_sha: "eeee555", branch: "land-all" },
       { path: "/tmp/gone", head_sha: "dddd444", branch: "old", prunable: true },
     ]);
   });
@@ -59,7 +62,7 @@ describe("buildWorktreeMirror", () => {
     expect(mirror.commits).toEqual([]);
     expect(mirror.rows.map((r) => [r.kind, r.path])).toEqual([["worktrees", ROOT]]);
     const names = payloadOf(mirror).worktrees.map((w) => [w.name, w.manager, !!w.main]);
-    expect(names).toEqual([["repo", "git", true], ["tips-modes", "codecast", false], ["agent-a1", "claude", false], ["gone", "git", false]]);
+    expect(names).toEqual([["repo", "git", true], ["tips-modes", "codecast", false], ["agent-a1", "claude", false], ["repo-land", "git", false], ["gone", "git", false]]);
   });
 
   test("a session belongs to the deepest worktree holding its cwd", async () => {
@@ -70,17 +73,20 @@ describe("buildWorktreeMirror", () => {
       ],
     }, fakeGit()))!;
     const byName = Object.fromEntries(payloadOf(mirror).worktrees.map((w) => [w.name, w.sessions]));
-    expect(byName).toEqual({ repo: ["conv-main"], "tips-modes": ["conv-wt"], "agent-a1": undefined, gone: undefined });
+    expect(byName).toEqual({ repo: ["conv-main"], "tips-modes": ["conv-wt"], "agent-a1": undefined, "repo-land": undefined, gone: undefined });
     expect(payloadOf(mirror).sessions_live).toBe(true);
   });
 
-  test("git reads go to the main checkout, cast ws worktrees and occupied ones only", async () => {
+  test("git reads go to every worktree but an agent's own, unless a session is in it", async () => {
     const calls: string[] = [];
     const mirror = (await buildWorktreeMirror(ROOT, {}, fakeGit(calls)))!;
     const wt = payloadOf(mirror).worktrees.find((w) => w.name === "tips-modes")!;
     expect(wt).toMatchObject({ dirty: true, ahead: 1, behind: 68, subject: "Add tip modes", committed_at: 1789000000000 });
     expect(payloadOf(mirror).worktrees[0].dirty).toBe(false);
-    expect(calls.filter((c) => c.includes("status --porcelain")).map((c) => c.split(" :: ")[0])).toEqual([ROOT, WT]);
+    expect(calls.filter((c) => c.includes("status --porcelain")).map((c) => c.split(" :: ")[0])).toEqual([ROOT, WT, LAND]);
+    const occupied: string[] = [];
+    await buildWorktreeMirror(ROOT, { sessions: [{ conversationId: "c", cwd: AGENT, dirty: true }] }, fakeGit(occupied));
+    expect(occupied.filter((c) => c.includes("log -1")).map((c) => c.split(" ")[c.split(" ").length - 1])).toContain("cccc333");
   });
 
   test("ahead counts the patches main lacks, asked once for each pair of commits", async () => {
@@ -90,11 +96,18 @@ describe("buildWorktreeMirror", () => {
     expect(calls.filter((c) => c.includes(":: cherry ")).length).toBe(1);
   });
 
+  test("an occupied worktree is inspected before an idle one", async () => {
+    const calls: string[] = [];
+    await buildWorktreeMirror(ROOT, { sessions: [{ conversationId: "c", cwd: LAND }] }, fakeGit(calls));
+    const order = calls.filter((c) => c.includes("status --porcelain")).map((c) => c.split(" :: ")[0]);
+    expect(order).toEqual([ROOT, LAND, WT]);
+  });
+
   test("an occupied worktree takes the daemon's status read instead of making its own", async () => {
     const calls: string[] = [];
     const mirror = (await buildWorktreeMirror(ROOT, { sessions: [{ conversationId: "c", cwd: `${WT}/packages`, dirty: false }] }, fakeGit(calls)))!;
     expect(payloadOf(mirror).worktrees.find((w) => w.name === "tips-modes")!.dirty).toBe(false);
-    expect(calls.filter((c) => c.includes("status --porcelain")).map((c) => c.split(" :: ")[0])).toEqual([ROOT]);
+    expect(calls.filter((c) => c.includes("status --porcelain")).map((c) => c.split(" :: ")[0])).toEqual([ROOT, LAND]);
   });
 
   test("the fingerprint ignores when the row was read and moves when a worktree does", async () => {
@@ -129,8 +142,10 @@ describe("mergeWorktreesPayload", () => {
 
 describe("worktreeOfPath", () => {
   test("names the repository root and worktree of any path inside one", () => {
-    expect(worktreeOfPath(`${WT}/packages/web/app.ts`)).toEqual({ root: ROOT, name: "tips-modes" });
-    expect(worktreeOfPath(AGENT)).toEqual({ root: ROOT, name: "agent-a1" });
+    expect(worktreeOfPath(`${WT}/packages/web/app.ts`)).toEqual({ path: WT, root: ROOT, name: "tips-modes" });
+    expect(worktreeOfPath(AGENT)).toEqual({ path: AGENT, root: ROOT, name: "agent-a1" });
+    expect(worktreeOfPath(".codecast/worktrees/tips-modes/app.ts")).toEqual({ path: ".codecast/worktrees/tips-modes", root: "", name: "tips-modes" });
+    expect(worktreeOfPath(`${AGENT}/.codecast/worktrees/inner`)).toEqual({ path: `${AGENT}/.codecast/worktrees/inner`, root: AGENT, name: "inner" });
     expect(worktreeOfPath(`${ROOT}/packages/web`)).toBeNull();
     expect(worktreeOfPath(`${ROOT}/.codecast/worktrees`)).toBeNull();
   });
