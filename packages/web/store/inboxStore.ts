@@ -6151,7 +6151,7 @@ export function mergeStampedBagLww(local: any, server: any, initialized: boolean
 // would collapse the laptop's sidebar on the ultrawide, or send a headset id
 // to a phone that cannot open it.
 export const PER_DEVICE_UI_KEYS = new Set([
-  "theme", "visual_style",
+  "visual_style",
   "sidebar_collapsed", "zen_mode", "nav_sections", "workspace",
   "sticky_headers_disabled", "diff_panel_open",
   "trigger_prompt_height", "thread_state_collapsed", "people_view",
