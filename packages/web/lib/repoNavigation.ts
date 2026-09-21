@@ -1,4 +1,4 @@
-import { normalizeGitOrigin } from "@codecast/shared/contracts";
+import { repositoryFromRemote } from "@codecast/shared/contracts";
 import { parseGitHubLocationUrl } from "@codecast/shared/entities";
 import {
   formatLineHash,
@@ -50,10 +50,7 @@ export function githubLocationHref(href: string | undefined | null, family: Repo
 const repositoryPattern = /^[a-z0-9][a-z0-9-]*\/[a-z0-9_.-]+$/i;
 
 export function githubRepository(value?: string | null): string | null {
-  if (!value) return null;
-  const normalized = normalizeGitOrigin(value.trim().replace(/\/+$/, ""));
-  const name = normalized?.startsWith("github.com/") ? normalized.slice(11) : null;
-  return name && repositoryPattern.test(name) && !name.endsWith("/.") && !name.endsWith("/..") ? name : null;
+  return repositoryFromRemote(value);
 }
 
 export function repositoryName(value?: string | null): string | null {

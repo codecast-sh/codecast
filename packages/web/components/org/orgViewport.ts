@@ -6,7 +6,7 @@ import type { OrgLayoutNode } from "./orgLayout";
  *  Rather than fit the whole tree that small, fit the root tier and pan. */
 export const MIN_READABLE_ZOOM = 0.92;
 export const FIT_PAD = 24;
-const ROOT_KINDS = new Set(["person", "role", "anchor"]);
+const ROOT_KINDS = new Set(["person", "role"]);
 
 type Rect = { x: number; y: number; w: number; h: number };
 function boundsOf(nodes: OrgLayoutNode[]): Rect | null {

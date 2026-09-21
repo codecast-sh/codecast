@@ -506,7 +506,7 @@ export default function TeamPage() {
           <ul className="space-y-1.5 text-sm text-sol-text-muted">
             <li className="flex gap-2"><span className="text-sol-red">•</span>Every member loses access, and their workspace moves to another team or to personal.</li>
             <li className="flex gap-2"><span className="text-sol-red">•</span>Sessions, tasks, docs and plans shared in this team stop being reachable. Personal work is untouched.</li>
-            <li className="flex gap-2"><span className="text-sol-red">•</span>Team chat and calls close, the invite link stops working, and the team&apos;s anchor agent is retired.</li>
+            <li className="flex gap-2"><span className="text-sol-red">•</span>Team chat and calls close, the invite link stops working, and the team&apos;s agent is retired.</li>
           </ul>
           <div className="space-y-1.5">
             <label htmlFor="delete-team-confirm" className="block text-xs text-sol-text-muted">

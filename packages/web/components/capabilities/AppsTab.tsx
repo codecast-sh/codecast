@@ -11,7 +11,6 @@ import {
   type AppDescriptor,
 } from "@codecast/shared/contracts";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
-import { type GithubInstallUser } from "../../lib/githubAppInstall";
 import { APP_LOOK, useAppConnection } from "../../lib/integrations";
 import { InlineSpinner, SurfaceError } from "./EmptyStates";
 
@@ -47,20 +46,18 @@ function AppCard({
   scope,
   connection,
   loading,
-  me,
 }: {
   descriptor: AppDescriptor;
   scope: AppConnectionScope;
   /** Undefined while the query has not answered (or failed) — unknown, not "no". */
   connection: AppConnectionStatus | undefined;
   loading: boolean;
-  me: GithubInstallUser | null | undefined;
 }) {
   const { icon: Icon, accent } = APP_LOOK[descriptor.id];
   const comingSoon = descriptor.connectKind === "coming-soon";
   const connected = connection?.status === "connected" ? connection : null;
 
-  const { connect, disconnect: revoke, busy, error } = useAppConnection(descriptor, connection, me, scope);
+  const { connect, disconnect: revoke, busy, error } = useAppConnection(descriptor, connection, scope);
   const disconnect = async () => {
     if (!connected?.disconnect_id) return;
     if (!confirm(`Disconnect ${descriptor.name}? Agents lose access it granted.`)) return;
@@ -190,7 +187,6 @@ function cardsOf(result: AppConnectionsResult | undefined) {
 
 export function AppsTab() {
   const connections = useQueryNoThrow(api.appConnections.listConnections, {});
-  const me = useQueryNoThrow(api.users.getCurrentUser, {});
   const result = connections.data as AppConnectionsResult | undefined;
   const loading = result === undefined && !connections.error;
   const cards = cardsOf(result);
@@ -217,7 +213,6 @@ export function AppsTab() {
             scope={card.scope}
             connection={card.connection}
             loading={loading}
-            me={me.data}
           />
         ))}
       </div>

@@ -70,6 +70,21 @@ export function normalizeGitOrigin(originUrl: string): string | null {
   return rest;
 }
 
+/**
+ * The GitHub repository a checkout's origin names, as canonical `owner/name`,
+ * or null for a remote on any other host or one that names no repository.
+ * The one rule shared by every server path that turns a session's
+ * `git_remote_url` into the repository its pages hang off.
+ */
+export function repositoryFromRemote(originUrl: string | undefined | null): string | null {
+  // A pasted URL may end in a slash after `.git`, which the normalizer would
+  // otherwise keep as part of the name.
+  const normalized = originUrl ? normalizeGitOrigin(originUrl.trim().replace(/\/+$/, "")) : null;
+  if (!normalized?.startsWith("github.com/")) return null;
+  const rest = normalized.slice("github.com/".length);
+  return /^[a-z0-9][a-z0-9-]*\/[a-z0-9._-]+$/.test(rest) && !rest.endsWith("/.") && !rest.endsWith("/..") ? rest : null;
+}
+
 export interface ProjectScopeInput {
   /** The repo's origin remote URL, when the project is a git checkout. */
   originUrl?: string;

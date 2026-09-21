@@ -46,6 +46,18 @@ export function ChatLabel({ card }: { card: ThreadCardModel }) {
   return <>{channel ? channelDisplayName(channel, members) : "channel"}</>;
 }
 
+/** The open card for a room the server will not show this viewer (left it,
+ *  never a member, dead link). The card came from a rail or inbox row that
+ *  predates the refusal; chat.sendMessage would refuse a post here, so the
+ *  card offers none. Shared by the chat and DM kinds. */
+export function ThreadUnavailableNote() {
+  return (
+    <div className="th-card-open">
+      <div className="th-card-note">This conversation isn&apos;t available anymore.</div>
+    </div>
+  );
+}
+
 /** A chat timeline inside a card: the unread rule, grouped rows, the usual
  *  message actions. Shared by the chat and DM kinds. */
 export function ChatTimelineRows({
@@ -224,6 +236,8 @@ export function ChatExpanded({
     },
     [channelId, rootId],
   );
+
+  if (sync.unavailable) return <ThreadUnavailableNote />;
 
   return (
     <div className="th-card-open">

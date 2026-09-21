@@ -412,6 +412,34 @@ export function vaultContentType(relPath: string): string {
   }
 }
 
+/** Content types a browser will run script from when the bytes are opened as a
+ *  DOCUMENT rather than loaded into an <img>. SVG is the one a vault serves
+ *  today; the rest are here so a new entry in vaultContentType cannot quietly
+ *  become an active document. */
+const ACTIVE_DOCUMENT_TYPES = new Set(["image/svg+xml", "text/html", "application/xhtml+xml", "text/xml", "application/xml"]);
+
+/**
+ * Response headers that keep vault bytes from becoming code.
+ *
+ * Every response gets `nosniff`, so a file whose bytes look like HTML is never
+ * re-typed into one. An ACTIVE type additionally gets a response CSP: `sandbox`
+ * with no `allow-scripts` and no `allow-same-origin`, so opening the URL
+ * directly — the browser's own "open image in new tab" is enough — renders an
+ * inert document with no script and an opaque origin. `<img>`, `<video>` and
+ * the PDF viewer are untouched: CSP applies to documents, and an SVG loaded as
+ * an image was already inert.
+ *
+ * This is what stands between repository content and the daemon's authority.
+ * The vault serves whatever a repo contains, and a repo is not trusted.
+ */
+export function vaultResponseSecurityHeaders(relPath: string): Record<string, string> {
+  const headers: Record<string, string> = { "X-Content-Type-Options": "nosniff" };
+  if (ACTIVE_DOCUMENT_TYPES.has(vaultContentType(relPath).split(";")[0]!.trim())) {
+    headers["Content-Security-Policy"] = "default-src 'none'; sandbox";
+  }
+  return headers;
+}
+
 /**
  * Full listing of a vault: every file the ignore rules allow, plus every
  * directory (so empty folders render), sorted by path. Symlinks are skipped — the same rule

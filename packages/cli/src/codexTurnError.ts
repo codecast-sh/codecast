@@ -1,4 +1,4 @@
-import { CLIENT_ERROR_BANNER_PREFIX, CODEX_SAFETY_ERROR_CODE, SAFETY_BANNER_PREFIX, codexErrorCode, codexErrorKind, limitBannerContent, throttleBannerContent, type CodexTurnError } from "@codecast/shared/contracts";
+import { CLIENT_ERROR_BANNER_PREFIX, CODEX_SAFETY_ERROR_CODE, SAFETY_BANNER_PREFIX, codexErrorCode, codexErrorKind, contextBannerContent, limitBannerContent, throttleBannerContent, type CodexTurnError } from "@codecast/shared/contracts";
 import type { ParsedMessage } from "./parser.js";
 
 // Why: the turn error's structured `codex_error_info` code is visible ONLY
@@ -17,6 +17,8 @@ function codexBannerContent(error: CodexTurnError, detail: string): string {
       return limitBannerContent(detail);
     case "throttle":
       return throttleBannerContent(detail, "Codex");
+    case "context":
+      return contextBannerContent(detail);
     default:
       return `${CLIENT_ERROR_BANNER_PREFIX} ${detail}`;
   }

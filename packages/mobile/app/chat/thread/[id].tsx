@@ -249,7 +249,7 @@ export default function ChatThreadScreen() {
         : {
             id: String(m.user_id),
             name: humanName
-              || (m.author_kind === 'agent' ? thread?.anchor?.name ?? 'Anchor' : 'Teammate'),
+              || (m.author_kind === 'agent' ? thread?.anchor?.name ?? 'Workspace agent' : 'Teammate'),
             avatarUrl: member?.github_avatar_url || member?.image || undefined,
             isAgent: m.author_kind === 'agent' || member?.is_bot,
           }),
@@ -348,7 +348,7 @@ export default function ChatThreadScreen() {
   }, [memberById]);
 
   const armed = thread?.anchor?.armed ?? false;
-  const anchorName = thread?.anchor?.name ?? 'Anchor';
+  const anchorName = thread?.anchor?.name ?? 'Workspace agent';
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>

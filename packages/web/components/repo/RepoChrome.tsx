@@ -13,6 +13,7 @@ import {
   GitBranch,
   GitPullRequest,
   History,
+  MessagesSquare,
   Search,
   Tag,
 } from "lucide-react";
@@ -24,6 +25,7 @@ import {
   repoHomeHref,
   repoPullsHref,
   repoSearchHref,
+  repoSessionsHref,
   repoTagsHref,
   repoTreeHref,
   repoWorktreesHref,
@@ -34,7 +36,7 @@ import { cn } from "../../lib/utils";
 import { repoShortcutAllowed } from "../../lib/repoContent";
 import { RepoFileFinder } from "./RepoFileFinder";
 
-export type RepoTab = "code" | "commits" | "branches" | "tags" | "pulls" | "search" | "worktrees";
+export type RepoTab = "code" | "commits" | "branches" | "tags" | "pulls" | "sessions" | "search" | "worktrees";
 
 export function BranchPicker({
   branches,
@@ -113,7 +115,7 @@ export function BranchPicker({
 }
 
 /**
- * The band and its tabs. The digits `1` to `7` move between them, ignored
+ * The band and its tabs. The digits `1` to `8` move between them, ignored
  * while typing so a filter box can contain a digit.
  *
  * The header builds its own hrefs from the repository, the ref it is showing
@@ -165,9 +167,11 @@ export function RepoHeader({
     { key: "branches", label: "Branches", href: repoBranchesHref(repository, family), icon: GitBranch, digit: "3" },
     { key: "tags", label: "Tags", href: repoTagsHref(repository, family), icon: Tag, digit: "4" },
     { key: "pulls", label: "Pull requests", href: repoPullsHref(repository, family), icon: GitPullRequest, digit: "5" },
-    { key: "search", label: "Search", href: repoSearchHref(repository, undefined, family), icon: Search, digit: "6" },
+    // The sessions that shaped the repository: the one tab GitHub has no answer to.
+    { key: "sessions", label: "Sessions", href: repoSessionsHref(repository, family), icon: MessagesSquare, digit: "6" },
+    { key: "search", label: "Search", href: repoSearchHref(repository, undefined, family), icon: Search, digit: "7" },
     // A fact about someone's machine, so only the signed in form of these pages carries it.
-    ...(family === "app" ? [{ key: "worktrees" as const, label: "Worktrees", href: repoWorktreesHref(repository), icon: FolderGit2, digit: "7" }] : []),
+    ...(family === "app" ? [{ key: "worktrees" as const, label: "Worktrees", href: repoWorktreesHref(repository), icon: FolderGit2, digit: "8" }] : []),
   ];
 
   useEventListener("keydown", (e: KeyboardEvent) => {

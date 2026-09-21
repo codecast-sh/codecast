@@ -2384,34 +2384,14 @@ export const getTeamMembers = query({
   },
 });
 
-export const linkGitHub = mutation({
-  args: {
-    github_id: v.string(),
-    github_username: v.string(),
-    github_avatar_url: v.optional(v.string()),
-    github_access_token: v.optional(v.string()),
-  },
-  handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) {
-      throw new Error("Not authenticated");
-    }
-    const existingUser = await ctx.db
-      .query("users")
-      .withIndex("by_github_id", (q) => q.eq("github_id", args.github_id))
-      .first();
-    if (existingUser && existingUser._id !== userId) {
-      throw new Error("This GitHub account is already linked to another user");
-    }
-    await ctx.db.patch(userId, {
-      github_id: args.github_id,
-      github_username: args.github_username,
-      github_avatar_url: args.github_avatar_url,
-      github_access_token: args.github_access_token,
-    });
-    return userId;
-  },
-});
+// There is no linkGitHub. A GitHub identity is written in ONE place, by the
+// auth provider's own profile (auth.ts), because `github_username` is read as
+// identity: it routes an issue's assignee to a codecast user (issueSync), it
+// resolves an @handle to an assignee (tasks), and it attributes a pull request
+// event to a team member (pull_requests). The public mutation that used to sit
+// here took a github_id, a username and an access token as ARGUMENTS, so any
+// signed-in account could claim any unclaimed GitHub login — and nothing in the
+// product called it. Unlinking stays: it only clears the caller's own fields.
 
 export const unlinkGitHub = mutation({
   args: {},
