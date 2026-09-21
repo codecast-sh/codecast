@@ -49,8 +49,8 @@ const BINARIES: Record<string, string> = {
 // site's Mac download button was dead while in-app auto-update kept working —
 // which is why it went unnoticed. Keep this prefix in sync with the upload
 // destination in scripts/deploy-all.sh.
-const MAC_DMG_URL = "https://dl.codecast.sh/desktop/Codecast-1.1.114-arm64.dmg";
-const MAC_DMG_VERSION = "1.1.114";
+const MAC_DMG_URL = "https://dl.codecast.sh/desktop/Codecast-1.1.115-arm64.dmg";
+const MAC_DMG_VERSION = "1.1.115";
 
 app.get("/api/health", async (c) =>
   c.json({
