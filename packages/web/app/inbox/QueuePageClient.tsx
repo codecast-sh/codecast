@@ -2,7 +2,6 @@ import { withInboxView } from "../../lib/inboxViewHistory";
 import { useState, useCallback, useRef, memo, useMemo, useDeferredValue, lazy, Suspense, type ReactNode } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useEventListener } from "../../hooks/useEventListener";
-import { useShortcutContext } from "../../shortcuts";
 import { useMutation } from "convex/react";
 import { useMissingSessionRow } from "../../hooks/useMissingSessionRow";
 import { useSearchParams } from "next/navigation";
@@ -31,7 +30,7 @@ import { animatedHideSession } from "../../store/undoActions";
 import { isParkedDispatchError } from "../../store/mutativeMiddleware";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 import { devRenderCount } from "../../lib/devRenderCount";
-import { useSyncOrgTreeFeeder } from "../../hooks/useSyncOrgTree";
+import { InboxShortcuts, OrgTreeFeeder } from "../../components/inbox/InboxEffects";
 import { useSeedOwnership } from "../../components/anchor/AnchorConversation";
 import { bootstrapCut, windowConversationSince, type WindowedConversation } from "../../lib/anchorWindow";
 import { standingRoleIdOf } from "../../lib/sessionIdentity";
@@ -285,11 +284,6 @@ export type InboxConversationProps = React.ComponentProps<typeof InboxConversati
  *  mounts, plus the way out to the plain view. */
 export type SeatSession = Omit<InboxConversationProps, "seat"> & { onSessionView: () => void };
 
-function OrgTreeFeeder() {
-  useSyncOrgTreeFeeder();
-  return null;
-}
-
 /**
  * What opening a session renders (initiatives-projects-role-page.md I3). A
  * role's standing session is the role page: the conversation with the scope
@@ -345,11 +339,6 @@ export function SessionPage(props: InboxConversationProps) {
 }
 
 // SessionCard moved to GlobalSessionPanel.tsx as part of the shared SessionListPanel
-
-function InboxShortcuts() {
-  useShortcutContext('inbox');
-  return null;
-}
 
 export function QueuePageClient() {
   const searchParams = useSearchParams();
