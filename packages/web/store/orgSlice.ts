@@ -447,7 +447,13 @@ export function orgIntentSatisfied(tree: OrgTree, intent: OrgIntent, changes?: R
       // The server names the batch that did the undo; the draft's mark does
       // not (applyOrgUndoIntent), so a named batch is the acknowledgement.
       if (!log) return false;
-      return undoIntentBatches(intent).every((b) => { const e = log[b]; return !e || (intent.redo ? !e.undone_by : !!e.undone_by?.batch); });
+      return undoIntentBatches(intent).every((b) => {
+        const e = log[b];
+        if (!e) return false;
+        if (!intent.redo) return !!e.undone_by?.batch;
+        const undoneBy = intent.from[b]?.batch;
+        return !e.undone_by && !!undoneBy && Object.values(log).some((entry) => entry.gesture === "redo" && entry.undoes === undoneBy);
+      });
     }
     case "withdraw": {
       if (!proposals) return false;
@@ -813,6 +819,7 @@ export function pruneOrgIntents(draft: Pick<OrgDraft, "orgTree" | "orgIntents" |
   if (draft.orgIntents.length === 0) return;
   const keep: OrgIntent[] = [];
   for (const i of draft.orgIntents) {
+    if (i.kind === "undoChange" && orgIntentSatisfied(draft.orgTree as OrgTree, i, undefined, undefined, draft.orgLog)) continue;
     const aged = now - i.at >= ORG_INTENT_TTL_MS;
     if (aged) {
       revertOrgIntent(draft, i);
@@ -820,9 +827,7 @@ export function pruneOrgIntents(draft: Pick<OrgDraft, "orgTree" | "orgIntents" |
       if (text) draft.orgIntentNotice = { text, at: now };
       continue;
     }
-    // An undo is judged on the record alone, so it settles on a page that
-    // holds no tree (a role's Scope view opened cold).
-    if ((draft.orgTree || i.kind === "undoChange") && orgIntentSatisfied(draft.orgTree as OrgTree, i, draft.orgProposalChanges, draft.orgProposals, draft.orgLog)) continue;
+    if (i.kind !== "undoChange" && draft.orgTree && orgIntentSatisfied(draft.orgTree, i, draft.orgProposalChanges, draft.orgProposals, draft.orgLog)) continue;
     keep.push(i);
   }
   if (keep.length !== draft.orgIntents.length) draft.orgIntents = keep;
