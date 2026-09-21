@@ -229,19 +229,21 @@ export function capturePane(target: string): PaneSnapshot | null {
  *
  * Long input is split because every byte is its own argv entry.
  */
-export function writePane(target: string, bytes: number[]): void {
-  if (!isValidPaneTarget(target) || bytes.length === 0) return;
+export function writePane(target: string, bytes: number[]): boolean {
+  if (!isValidPaneTarget(target) || bytes.length === 0) return false;
   const pane = target.includes(":") ? target : `${target}:0.0`;
   for (let i = 0; i < bytes.length; i += PANE_INPUT_CHUNK_BYTES) {
     const chunk = bytes.slice(i, i + PANE_INPUT_CHUNK_BYTES);
-    tmuxRun([
+    const result = tmuxRun([
       "send-keys",
       "-t",
       pane,
       "-H",
       ...chunk.map((b) => (b & 0xff).toString(16).padStart(2, "0")),
     ]);
+    if (result.status !== 0) return false;
   }
+  return true;
 }
 
 // One loop per pane, however many browsers are watching: the relay row is

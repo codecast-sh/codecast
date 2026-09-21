@@ -26,6 +26,7 @@
 import { MID_TURN_AGENT_STATUSES, STATUS_TRUST_TTL_MS, type AgentStatus } from "@codecast/shared/contracts";
 import fs from "fs";
 import path from "path";
+import { isSafeStatusSessionId } from "./statusSpool.js";
 
 /** How long an armed interrupt waits for a real hook before it writes. */
 export const INTERRUPT_SETTLE_MS = 500;
@@ -82,6 +83,7 @@ export async function readAskInputSidecar(
   sessionId: string,
   now: number,
 ): Promise<{ questions: any[] } | null> {
+  if (!isSafeStatusSessionId(sessionId)) return null;
   try {
     const file = path.join(dir, `${sessionId}.json`);
     const [stat, raw] = await Promise.all([fs.promises.stat(file), fs.promises.readFile(file, "utf8")]);
