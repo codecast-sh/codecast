@@ -129,7 +129,7 @@ import { PlanBlock } from "./conversation/blocks/planBlock";
 import { CastBrowserRowContext, ChatWakeContext } from "../lib/conversationBlockContexts";
 import { UserIcon } from "./conversation/blocks/shared";
 import { agentColorMap } from "../lib/conversationBlockStyles";
-import { AgentSwitchDivider, BashCommandBlock, ChatWakeBlock, CommandMessageBlock, CompactionSummaryBlock, HuddleSummaryBlock, InterruptStatusLine, MachineMoveDivider, NudgeLine, ScheduledTaskBlock, SessionMessageBlock, SkillExpansionBlock, SystemBlock, TaskNotificationLine, TeammateEventsBlock, WorkflowEventBlock } from "./conversation/blocks/systemBlocks";
+import { AgentSwitchDivider, BashCommandBlock, ChatWakeBlock, CommandMessageBlock, CompactionSummaryBlock, EscalationDivider, HuddleSummaryBlock, InterruptStatusLine, MachineMoveDivider, NudgeLine, ScheduledTaskBlock, SessionMessageBlock, SkillExpansionBlock, SystemBlock, TaskNotificationLine, TeammateEventsBlock, WorkflowEventBlock } from "./conversation/blocks/systemBlocks";
 import { AssistantBlock, CompactCollapsedTurn, CompactTurnCard, ForkSeedMark, GitDiffPanel, StoryTimelineView, ThreadSummaryView, UserPrompt } from "./conversation/blocks/turnBlocks";
 import { COMPACT_TAIL_HEIGHT, EMPTY_CHILD_CONVERSATIONS, EMPTY_RECEIPT_ENTRIES } from "../lib/conversationTurnDefaults";
 import { FOLD_KEPT_USER_KINDS, canAnchorForkChips, classifyUserMessage, cleanStickyContent, extractCompactionSummaryContent, isAlwaysVisibleToolCall, isHiddenStubMessage, isStickyWorthy, isToolReceiptRow, normalizePendingContent, parseCastCommand, parseWorkflowEventContent, sameStringArray, stripSystemTags } from "./conversation/classify";
@@ -1618,6 +1618,7 @@ const ConversationViewInner = (
         case 'interrupt': return 30;
         case 'machine_move': return commandExpansionMap.consumed.has(msg._id) ? 0 : 40;
         case 'agent_switch': return commandExpansionMap.consumed.has(msg._id) ? 0 : 40;
+        case 'session_escalation': return kind.escalation.line ? 110 : 40;
         case 'continuation': return 30;
         case 'normal':
           if (nudgeRuns.folded.has(msg._id)) return 0;
@@ -3335,6 +3336,8 @@ const ConversationViewInner = (
         case 'agent_switch':
           if (commandExpansionMap.consumed.has(msg._id)) return null;
           return <AgentSwitchDivider key={msg._id} toLabel={kind.toLabel} fromLabel={kind.fromLabel} content={msg.content || ""} timestamp={msg.timestamp} />;
+        case 'session_escalation':
+          return <EscalationDivider key={msg._id} escalation={kind.escalation} conversationShortId={conversation?._id ? String(conversation._id).slice(0, 7) : undefined} timestamp={msg.timestamp} />;
         case 'background_agent_stopped':
           return <InterruptStatusLine key={msg._id} label={kind.agentName ? `background agent "${kind.agentName}" stopped` : "background agent stopped"} tone="amber" />;
         case 'continuation':

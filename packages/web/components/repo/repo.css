@@ -184,3 +184,19 @@
   left: 0 !important;
   width: 100% !important;
 }
+
+/* The README. A README centers its logo and badges with `align="center"` on
+ * paragraphs, which is honoured here so the first screen reads as the author
+ * laid it out; images inside such a paragraph sit inline so a row of badges
+ * stays a row. */
+.repo-readme p[align="center"],
+.repo-readme div[align="center"] {
+  text-align: center;
+}
+
+.repo-readme p[align="center"] img,
+.repo-readme div[align="center"] img {
+  display: inline-block;
+  vertical-align: middle;
+  margin: 0 0.25rem;
+}

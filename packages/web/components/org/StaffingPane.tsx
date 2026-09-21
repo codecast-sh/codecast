@@ -11,7 +11,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { ArrowRight, Check, ChevronDown, ChevronRight, CornerDownRight, ExternalLink, Flag as FlagGlyph, MessageSquareText, Pause, Pencil, Play, Sparkles, Undo2, UserRoundPlus, X } from "lucide-react";
-import { compactAge } from "../../lib/threadState";
+import { agoOf } from "../../lib/threadState";
 import { cn } from "../../lib/utils";
 import { AnchorConversation } from "../anchor/AnchorConversation";
 import { OrgButton } from "./OrgButton";
@@ -214,7 +214,7 @@ function ProposalBody(props: StaffingPaneProps & { proposal: OrgProposalRow }) {
         <div className="mt-2 rounded-lg border px-3 py-2 flex items-center gap-2 text-[12px]" data-superseded-by={proposal.superseded_by.short_id} style={{ borderColor: "color-mix(in srgb, var(--sol-orange) 45%, transparent)", background: "color-mix(in srgb, var(--sol-orange) 8%, transparent)", color: "var(--sol-text-secondary)" }}>
           <Undo2 className="w-3.5 h-3.5 shrink-0" style={{ color: "var(--sol-orange)" }} />
           <span className="min-w-0 flex-1">
-            A newer proposal replaced this one {compactAge(now - proposal.superseded_by.created_at)} ago{proposal.superseded_by.status !== "open" ? ` (${proposal.superseded_by.status})` : ""}. <button type="button" onClick={() => props.onPickProposal(proposal.superseded_by!.short_id)} className="font-medium hover:underline" style={{ color: "var(--sol-violet)" }}>Open it</button>
+            A newer proposal replaced this one {agoOf(now - proposal.superseded_by.created_at)}{proposal.superseded_by.status !== "open" ? ` (${proposal.superseded_by.status})` : ""}. <button type="button" onClick={() => props.onPickProposal(proposal.superseded_by!.short_id)} className="font-medium hover:underline" style={{ color: "var(--sol-violet)" }}>Open it</button>
           </span>
           {proposal.status === "open" && props.onWithdraw && (
             <OrgButton size="sm" onClick={() => props.onWithdraw!(proposal._id)} data-withdraw>Withdraw</OrgButton>

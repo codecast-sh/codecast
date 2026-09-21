@@ -815,3 +815,52 @@ reads in one sentence what happened and to how many things, presses Undo,
 reads what will and will not change back, confirms, and the chart, the
 inbox and the board are where they were. They then press Redo and it is
 applied again.
+
+## S22. One agent at the root
+
+Written 2026-09-21. The founder: "anchor + chief of staff / org stuff being
+separate does not make sense, these need to become a single cohesive thing,
+having both separate is confusing." S12 decided this in words and the product
+did not follow: the sidebar still lists Anchor under Agents, /anchor is its
+own page with its own header, the chart draws an "Anchor · standing agent"
+card beside a "Chief of Staff · role" card, the anchor chip and panel in the
+app shell know nothing about roles, and a workspace without a chief of staff
+has an anchor with no place on the chart at all. Two names, two pages, two
+cards, one thing.
+
+**There is one root agent per workspace, and it is a role.** The workspace's
+standing agent is the root role of its org, named Chief of Staff by default
+and renamable like any role, with a face, a charter, a brief, sessions that
+report to it, tasks it owns, and the whole workspace as its scope. A
+workspace that has an anchor and no root role has one from the moment this
+lands: the migration names the anchor's session as the seat of a root role
+(the same seating S16 uses, nothing restarts, the Slack binding and every
+alias keep working), so no workspace has an unnamed root. A personal
+workspace has one too: the person's own root role, which is the goal tracker
+of R6 for one person.
+
+**One page.** `/anchor` is the root role's page, the role page as the
+session page (I3): conversation on the left, Scope on the right. The sidebar
+entry under Agents is the root role by its name and face, not the word
+Anchor, and it opens that page. The anchor chip in the app shell and the
+anchor panel become the root role's chip and panel: same face, same name,
+same conversation. `cast anchor say` and `@anchor` in chat stay as aliases
+of the root role's handle and print nothing about anchors.
+
+**One card.** The chart draws the root role once, at the top under the
+person it reports to, with its seat inside it as any role (R1 fixed this for
+other roles; the root is not an exception). No node of kind anchor remains
+in the layout; the anchors table stays as the seat's storage and nothing
+else reads it for display.
+
+**One word.** Anchor leaves every surface a person reads: the org page, the
+sidebar, the chip and panel, the first visit and the tour, the glossary, the
+skill, the CLI's printed sentences, the mobile app, the notifications. Where
+a sentence needs the thing, it says the role's name, or "the workspace's
+agent" when no name fits. The tables, the functions and the memory notes
+keep their names; the word is retired from the product, not from the code.
+
+**The test.** A person opens the sidebar, the chart and the inbox and sees
+the same agent in all three, with one name and one face, and opens the same
+page from each. Nothing on any screen invites them to wonder which of two
+agents they are talking to.

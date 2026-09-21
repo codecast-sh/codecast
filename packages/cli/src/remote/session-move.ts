@@ -24,7 +24,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { credentialHealth } from "../ccAccounts.js";
-import { resolveManifest } from "../workspace/resolver.js";
+import { collectCopyFiles, containedRemotePath, InvalidWorkspaceManifest, manifestCopyEntries } from "../workspace/copyFiles.js";
 import { trustOnlyBundle, type AgentAuthBundle } from "./agentAuth.js";
 import { AGENT_AUTH_RECEIVER } from "./agentAuthReceiver.py.js";
 import { deviceId as localDeviceId } from "./device.js";
@@ -850,27 +850,80 @@ export async function pullSession(sessionId: string, host: RemoteHost, move: Mov
  * the resolved workspace manifest's setup.copy (detection + workspace.toml +
  * .wt-setup-files) — so a project that declares extra secrets for local
  * worktrees automatically gets them on the remote too. Falls back to the .env
- * family when the manifest resolves to nothing (non-node projects, no config).
+ * family when the manifest declares nothing (non-node projects, no config).
+ *
+ * The entries come out of a file in the repository, so they go through the
+ * same strict collector the cloud path uses (workspace/copyFiles.ts) before
+ * anything is joined into a path: this used to join them raw into both the
+ * local worktree and the remote one, so `../../.aws/credentials` copied a file
+ * outside the repository to a directory outside the remote worktree. An
+ * invalid manifest fails here rather than falling back to the .env list, which
+ * would hide the rejection.
+ *
+ * Reports what it refused through `onWarn`; a transfer that silently shrank is
+ * worse than one that says why.
  */
-export function copyGitignoredFiles(host: RemoteHost, localCwd: string, remoteCwd: string): void {
+export function copyGitignoredFiles(
+  host: RemoteHost,
+  localCwd: string,
+  remoteCwd: string,
+  // The two process boundaries are injectable so a regression can assert what
+  // this WOULD transfer without an ssh or an rsync ever running.
+  opts: { onWarn?: (msg: string) => void; rsync?: (args: string[]) => void; mkdirRemote?: (dir: string) => void } = {},
+): string[] {
+  const warn = opts.onWarn ?? ((m: string) => console.error(`WARNING: ${m}`));
+  const rsync = opts.rsync ?? ((args: string[]) => { execFileSync("rsync", args, { stdio: "pipe" }); });
+  const mkdirRemote = opts.mkdirRemote ?? ((d: string) => { ssh(host, `mkdir -p ${shq(d)}`); });
+
+  let root: string;
+  try {
+    root = fs.realpathSync(localCwd);
+  } catch {
+    return [];
+  }
+
   let candidates: string[] = [];
   try {
-    candidates = resolveManifest(localCwd).setup.copy;
-  } catch { /* detection failure — use the fallback list */ }
+    candidates = manifestCopyEntries(root);
+  } catch (err) {
+    // A manifest that exists and does not parse is a declaration this transfer
+    // must not guess around. A resolver that could not run at all (no git, no
+    // detectable project) is the ordinary case the fallback list is for.
+    if (err instanceof InvalidWorkspaceManifest) {
+      warn(`setup-file copy skipped: ${err.message}`);
+      return [];
+    }
+  }
   if (candidates.length === 0) {
     candidates = [".env", ".env.local", ".env.development", ".env.production"];
   }
-  for (const rel of candidates) {
-    const local = path.join(localCwd, rel);
-    if (!fs.existsSync(local)) continue;
-    // Land nested entries in their parent dir; rsync -a recurses into dirs.
-    const destDir = path.posix.join(remoteCwd, path.posix.dirname(rel.split(path.sep).join("/")));
+
+  let files: string[];
+  try {
+    files = collectCopyFiles(root, candidates);
+  } catch (err) {
+    warn(`setup-file copy refused: ${err instanceof Error ? err.message : String(err)}`);
+    return [];
+  }
+
+  const copied: string[] = [];
+  for (const rel of files) {
+    let destDir: string;
+    try {
+      destDir = path.posix.dirname(containedRemotePath(remoteCwd, rel));
+    } catch (err) {
+      warn(`setup-file copy refused: ${err instanceof Error ? err.message : String(err)}`);
+      continue;
+    }
+    const local = path.join(root, rel);
     const args = ["-az", "-e", `ssh ${sshBase(host).join(" ")}`, local, `${host.user}@${host.address}:${destDir}/`];
     try {
-      if (destDir !== remoteCwd) ssh(host, `mkdir -p ${shq(destDir)}`);
-      execFileSync("rsync", args, { stdio: "pipe" });
+      if (destDir !== remoteCwd) mkdirRemote(destDir);
+      rsync(args);
+      copied.push(rel);
     } catch { /* best-effort */ }
   }
+  return copied;
 }
 
 /**

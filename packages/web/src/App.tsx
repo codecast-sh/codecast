@@ -81,6 +81,7 @@ const RepoBranches = lazy(() => import("@/app/repo/[owner]/[name]/branches/page"
 const RepoWorktrees = lazy(() => import("@/app/repo/[owner]/[name]/worktrees/page"));
 const RepoTags = lazy(() => import("@/app/repo/[owner]/[name]/tags/page"));
 const RepoPulls = lazy(() => import("@/app/repo/[owner]/[name]/pulls/page"));
+const RepoSessions = lazy(() => import("@/app/repo/[owner]/[name]/sessions/page"));
 const RepoSearch = lazy(() => import("@/app/repo/[owner]/[name]/search/page"));
 const PrView = lazy(() => import("@/app/pr/[owner]/[repo]/[number]/page"));
 const ReviewView = lazy(() => import("@/app/review/[id]/page"));
@@ -300,6 +301,7 @@ export function App() {
             <Route path="repo/:owner/:name/worktrees" element={<E name="RepoWorktrees"><RepoWorktrees /></E>} />
             <Route path="repo/:owner/:name/tags" element={<E name="RepoTags"><RepoTags /></E>} />
             <Route path="repo/:owner/:name/pulls" element={<E name="RepoPulls"><RepoPulls /></E>} />
+            <Route path="repo/:owner/:name/sessions" element={<E name="RepoSessions"><RepoSessions /></E>} />
             <Route path="repo/:owner/:name/search" element={<E name="RepoSearch"><RepoSearch /></E>} />
 
             {/* The standalone family: the same repository pages with no shell
@@ -318,6 +320,7 @@ export function App() {
             <Route path="r/:owner/:name/branches" element={<E name="RepoBranches"><RepoBranches /></E>} />
             <Route path="r/:owner/:name/tags" element={<E name="RepoTags"><RepoTags /></E>} />
             <Route path="r/:owner/:name/pulls" element={<E name="RepoPulls"><RepoPulls /></E>} />
+            <Route path="r/:owner/:name/sessions" element={<E name="RepoSessions"><RepoSessions /></E>} />
             <Route path="r/:owner/:name/search" element={<E name="RepoSearch"><RepoSearch /></E>} />
             <Route path="r/:owner/:repo/commit/:sha" element={<E name="CommitView"><CommitView /></E>} />
             <Route path="r/:owner/:repo/pull/:number" element={<E name="PrView"><PrView /></E>} />

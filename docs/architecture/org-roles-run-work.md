@@ -340,3 +340,46 @@ section says what codecast does on that machine, in the sentence `cast usage`
 prints (`describeLimitRecovery` in `contracts/usageLimits.ts`, one body for
 both), and what a person can do: move the session to another machine from its
 header chip, or add an account with `cast accounts save <name>`.
+
+## R1, revised: an escalation reaches the person through the role
+
+Written 2026-09-21 from the founder's reading of the first real escalation
+(Market growth mandate, escalated by @calling with a line about how a market
+is filled). Two things were wrong. The child session landed as its own card
+in his needs input, with the line cut short on the strip. And the line was
+nowhere inside the conversation itself.
+
+**By default the role's own card carries the ask, not the child.** When a
+role escalates one of its sessions, the role's standing session becomes the
+card in the person's needs input, carrying the role's face, the full line,
+and the session it is about as a pill. The child stays nested under the
+role, where it was. The person answers the role, which holds the context and
+relays, or opens the child from the pill. A role with several escalations
+has one card with several lines, newest first. This is the default because
+the role is the colleague the person deals with; its sessions are its own.
+
+**The child lands only as the exception.** `cast escalate --direct <session>
+"<line>"` puts the child session itself in front of the person as a first
+class card with the line, and it exists for the case where the person must
+act inside that session: an open permission prompt, an interactive question,
+a review of the child's own transcript. The role says why it chose direct in
+the line. A person's own "Put in my inbox" on a nested row stays what it is:
+the owner's gesture, always direct.
+
+**The line is in the conversation, whole.** An escalation writes one machine
+message into the child's conversation and one into the role's standing
+session, and each renders as an inline divider, not a bubble: the role's
+face, "handed to <person>" (or "put in front of <person>"), the full line
+rendered as markdown, the time. Handing back writes the same divider the
+other way ("back with @calling"). The strip on a card shows the first line
+of the reason and the divider holds all of it, so a person reads the whole
+reason where the work is. The same divider renders a person's own put in my
+inbox and hand back, so every move of a session between a role and a person
+is visible in the thread it moved.
+
+**Where it is recorded.** `escalated_by_role` on the child keeps its shape
+and gains `direct: boolean`; the role's standing session row carries
+`escalations: [{ conversation_id, line, at }]` derived by the inbox
+projection from its children (never a second store of the line), so the
+role's card and the child's strip cannot disagree. The chime and the digest
+follow the same rule: the role's card, or the child when direct.

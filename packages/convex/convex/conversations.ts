@@ -32,6 +32,7 @@ import {
   isBelowFoldAt,
   rollupParentIdOf,
   rideLeadPlacements,
+  roleEscalationsOf,
   selectWorkingSet,
   WORKING_SET_RECENCY_MS,
   BLOCKED_BANNER_KINDS,
@@ -2879,9 +2880,10 @@ export const listConversations = query({
 export const generateShareLink = mutation({
   args: {
     conversation_id: v.id("conversations"),
+    api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const authUserId = await getAuthUserId(ctx);
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!authUserId) {
       throw new Error("Unauthorized: must be logged in");
     }
@@ -2910,9 +2912,9 @@ export const generateShareLink = mutation({
 // session that was private/team-only does NOT change is_private; it grants
 // anonymous read of *this one session* via its share link, nothing more.
 export const pinToProfile = mutation({
-  args: { conversation_id: v.id("conversations") },
+  args: { conversation_id: v.id("conversations"), api_token: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    const authUserId = await getAuthUserId(ctx);
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!authUserId) throw new Error("Unauthorized: must be logged in");
     const conversation = await ctx.db.get(args.conversation_id);
     if (!conversation) throw new Error("Conversation not found");
@@ -2932,9 +2934,9 @@ export const pinToProfile = mutation({
 // owner may have circulated that link elsewhere; un-pinning only delists it from
 // the profile (profilePublicSessionVisible then drops it).
 export const unpinFromProfile = mutation({
-  args: { conversation_id: v.id("conversations") },
+  args: { conversation_id: v.id("conversations"), api_token: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    const authUserId = await getAuthUserId(ctx);
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!authUserId) throw new Error("Unauthorized: must be logged in");
     const conversation = await ctx.db.get(args.conversation_id);
     if (!conversation) throw new Error("Conversation not found");
@@ -8679,7 +8681,7 @@ export async function identityFieldsOf(conv: any, getDoc: (id: any) => Promise<a
     // order is the store draft's, so a web gesture's field lock retires on
     // this echo; null when absent, the spelling a hand back writes.
     escalated_by_role: conv.escalated_by_role
-      ? { role_id: conv.escalated_by_role.role_id.toString(), line: conv.escalated_by_role.line, at: conv.escalated_by_role.at }
+      ? { role_id: conv.escalated_by_role.role_id.toString(), line: conv.escalated_by_role.line, at: conv.escalated_by_role.at, ...(conv.escalated_by_role.direct ? { direct: true } : {}) }
       : null,
     role: role
       ? { _id: role._id.toString(), short_id: role.short_id, name: role.name, handle: role.handle, avatar: avatarOf(role), status: role.status, tenure_kind: role.tenure?.kind ?? "standing" }
@@ -9253,6 +9255,17 @@ export async function computeInboxSessions(
       // fold on its own account.
       row.below_fold = false;
     };
+  }
+  // The role's card carries the escalations that reach the person through it
+  // (org-roles-run-work.md R1, revised), derived from the sessions under it on
+  // this list by the same helper the web and the phone read, so no channel
+  // stores the line twice.
+  {
+    const rowsById = new Map(enrichedRows.map((r) => [r.conv._id.toString(), r]));
+    for (const [leadId, list] of roleEscalationsOf(rowsById.keys(), (id) => rowsById.get(id)?.conv)) {
+      const lead = rowsById.get(leadId);
+      if (lead) (lead.row as { escalations?: typeof list }).escalations = list;
+    }
   }
   for (const r of enrichedRows) {
     if (r.hidden) {

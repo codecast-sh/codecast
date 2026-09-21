@@ -452,6 +452,12 @@ function barHtml(o: BrandOpts): string {
   // back here in the fragment (the sandbox's opaque origin has no storage that
   // survives navigation, so the fragment IS the session).
   var idTok=frag.get("i")||"";
+  // The viewing gates this document cleared, in the query string the origin
+  // validated before serving us. Echoed back on every write so the mutation
+  // re-checks them: it is reachable without going through this page.
+  var qs=new URLSearchParams(location.search);
+  var gateK=qs.get("k")||"";
+  var gateE=qs.get("e")||"";
   // Opaque-origin storage: localStorage throws under the sandbox CSP, so every
   // touch is guarded and falls back to page-lifetime memory.
   var mem={};
@@ -524,7 +530,7 @@ function barHtml(o: BrandOpts): string {
   if(!CC.metaUrl)return;
   var api=function(path,body){return fetch(CC.apiBase+path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).then(function(r){return r.json();});};
   // View beacon — one per page load; carries the gate email when present.
-  try{api("/cli/artifacts/view",{slug:CC.slug,email:gateEmail||undefined});}catch(e){}
+  try{api("/cli/artifacts/view",{slug:CC.slug,email:gateEmail||undefined,k:gateK||undefined,e:gateE||undefined});}catch(e){}
   // Resolve the identity token to a display identity (+ @mention roster for
   // teammates). Server-authoritative: a bad token silently degrades the page
   // back to anonymous commenting.
@@ -826,6 +832,7 @@ function barHtml(o: BrandOpts): string {
     sSet("__cc_name",name||"");
     api("/cli/artifacts/comment",{slug:CC.slug,author_name:me?me.name:((name||"").trim()||"anonymous"),
       author_email:gateEmail||undefined,version:CC.version,
+      k:gateK||undefined,e:gateE||undefined,
       deliver:deliver?undefined:false,
       owner_key:ownerKey||undefined,
       identity_token:idTok||undefined,
@@ -1037,6 +1044,7 @@ function barHtml(o: BrandOpts): string {
           api("/cli/artifacts/comment",{slug:CC.slug,
             author_name:me?me.name:(sGet("__cc_name")||"anonymous"),
             author_email:gateEmail||undefined,version:CC.version,
+            k:gateK||undefined,e:gateE||undefined,
             deliver:false,owner_key:ownerKey||undefined,identity_token:idTok||undefined,
             parent_id:tid,comments:[{text:txt}]})
           .then(function(r){

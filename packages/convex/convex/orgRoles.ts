@@ -1053,7 +1053,7 @@ export const ROLE_RULES = [
   "3. Escalate with a recommendation attached, never as a bare question.",
   "4. Caps on wakes, hands and tokens per day are real; a held cap is reported in the brief, not worked around.",
   "5. A person's message is answered here or handed on to a hand, and the reply says which; a request to remember or forget is a brief write in the same turn.",
-  "6. Your sessions stay out of a person's inbox, so at every wake you read which of them wait on a person, answer what you may, and escalate the rest with one line saying what the person will decide.",
+  "6. Your sessions stay out of a person's inbox, so at every wake you read which of them wait on a person, answer what you may, and escalate the rest through your own card with a line saying what the person will decide and why; --direct only when they must act inside the session (a permission prompt, an interactive question, a review of its transcript), and the line says which.",
   "7. The people who report to you keep their goals in your brief, one section each; at every wake you read their sessions against those goals, update the matches, and name what stalled.",
 ];
 
@@ -1451,8 +1451,24 @@ export const staff = mutation({
     project_path: v.optional(v.string()),
     seat: v.optional(v.union(v.literal("existing"), v.literal("fresh"))),
     from_session: v.optional(v.string()),
+    // The workspace by kind (org-staffing.md S22): `cast anchor create --team`
+    // and the web onboarding name a team without its id, and it resolves to
+    // the caller's active team the way the old anchor create did.
+    scope_type: v.optional(v.union(v.literal("team"), v.literal("user"))),
   },
-  handler: async (ctx, { api_token, from_session: _from, ...args }) => performStaff(ctx, await requireCaller(ctx, api_token), args),
+  handler: async (ctx, { api_token, from_session: _from, scope_type, ...args }) => {
+    const userId = await requireCaller(ctx, api_token);
+    let teamId = args.team_id;
+    if (scope_type === "team" && !teamId) {
+      const host = await ctx.db.get(userId);
+      teamId = host?.active_team_id ?? host?.team_id ?? undefined;
+      if (!teamId) throw new Error("No team to staff: pass --team <id> or set an active team");
+    }
+    if (scope_type === "user") teamId = undefined;
+    const out = await performStaff(ctx, userId, { ...args, team_id: teamId });
+    // The shape an older `cast anchor create` reads back.
+    return { ...out, short_id: out.conversation_short_id, conversation_id: out.standing?.conversation_id ?? null };
+  },
 });
 
 // The standing session behind a role, or null when none was provisioned.

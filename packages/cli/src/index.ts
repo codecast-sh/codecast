@@ -3182,22 +3182,29 @@ program
   .description(
     "Put one of a role's sessions in front of the person, or take it back\n\n" +
     "A session that reports to a role stays out of its owner's needs input: the\n" +
-    "role reads it first. Escalating makes it a card in the person's needs input\n" +
-    "with the role's face and your one line, which says what the person will\n" +
-    "decide. --clear takes it back under the role. A role uses this on its own\n" +
-    "sessions; a person can use it on a session they own. A session cannot\n" +
-    "escalate itself: it tells its role why, and the role decides.\n\n" +
+    "role reads it first. Escalating puts YOUR card in the person's needs input,\n" +
+    "with your face, your one line and the session as a pill; the session stays\n" +
+    "under you and the person answers you. The line is written into both\n" +
+    "threads as a divider, whole, so write the reason as long as it needs to be.\n" +
+    "--direct puts the session itself in front of the person instead. Use it\n" +
+    "only when they must act inside that session: an open permission prompt, an\n" +
+    "interactive question, a review of its own transcript; say why in the line.\n" +
+    "--clear takes it back under you. A role uses this on its own sessions; a\n" +
+    "person can use it on a session they own. A session cannot escalate itself:\n" +
+    "it tells its role why, and the role decides.\n\n" +
     "Examples:\n" +
     "  cast escalate jx7c6zk \"the pricing copy is ready and needs your eye\"\n" +
+    "  cast escalate --direct jx7c6zk \"a permission prompt is open in here\"\n" +
     "  cast escalate --clear jx7c6zk   # it no longer needs the person"
   )
   .argument("<session>", "Session short ID (e.g. jx7c6zk), UUID, or full ID")
-  .argument("[line]", "One line saying what the person will decide (required from a role)")
+  .argument("[line]", "What the person will decide, and why (required from a role)")
   .option("--clear", "Take the session back under its role")
-  .action(async (session: string, line: string | undefined, opts: { clear?: boolean }) => {
+  .option("--direct", "Put the session itself in the person's inbox: they must act inside it")
+  .action(async (session: string, line: string | undefined, opts: { clear?: boolean; direct?: boolean }) => {
     const result = await cliPost("/cli/sessions/escalate", {
       session_id: session,
-      ...(opts.clear ? { clear: true } : { line }),
+      ...(opts.clear ? { clear: true } : { line, ...(opts.direct ? { direct: true } : {}) }),
       from_session: callingSession(),
     });
     const role = result.role ? `${c.cyan}@${result.role.handle}${c.reset}` : "";
@@ -3209,7 +3216,14 @@ program
         : `${c.dim}${result.short_id} was not escalated; it is already under ${role}${c.reset}`);
       return;
     }
-    console.log(`${c.green}ok${c.reset} escalated ${c.cyan}${result.short_id}${c.reset} ${c.dim}— in the person's needs input as${c.reset} ${role}${c.dim}: ${result.escalated_by_role.line} (cast escalate --clear ${result.short_id} to take it back)${c.reset}`);
+    if (!result.changed) {
+      console.log(`${c.dim}${result.short_id} already carries this line; nothing moved${c.reset}`);
+      return;
+    }
+    const where = result.reached?.direct
+      ? `${c.dim}— the session itself is in the person's needs input, from${c.reset} ${role}`
+      : `${c.dim}— in the person's needs input on your card (${result.reached?.short_id ?? "your session"}); the session stays under${c.reset} ${role}`;
+    console.log(`${c.green}ok${c.reset} escalated ${c.cyan}${result.short_id}${c.reset} ${where}${c.dim}: ${result.escalated_by_role.line} (cast escalate --clear ${result.short_id} to take it back)${c.reset}`);
   });
 
 program
@@ -8727,6 +8741,92 @@ async function resolveSessionConversationId(
     return null;
   }
 }
+
+/** A session's full conversation id from a short id, a full id, or nothing (this session). */
+async function resolveConversationFullId(
+  config: { auth_token?: string; convex_url?: string },
+  ref: string | undefined,
+): Promise<string> {
+  if (ref === undefined) {
+    const current = detectCurrentSessionId();
+    if (!current) {
+      console.error("No session detected — run this inside an agent session, or pass a session id (from `cast sessions`).");
+      process.exit(1);
+    }
+    const resolved = await resolveCurrentConversationId(current, {
+      readLocalMap: readLocalConversationMap,
+      resolveOnServer: (id) => resolveSessionConversationId(config, id),
+    });
+    if (!resolved) {
+      console.error("Could not resolve the current session — a session that just started may not have synced yet. Retry in a few seconds, or pass a session id (from `cast sessions`).");
+      process.exit(1);
+    }
+    ref = resolved;
+  }
+  const siteUrl = (config.convex_url ?? "").replace(".cloud", ".site");
+  const response = await cliFetchRead(`${siteUrl}/cli/read`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ api_token: config.auth_token, conversation_id: ref, start_line: 1, end_line: 1 }),
+  });
+  const result = await response.json();
+  if (result.error) {
+    console.error(`Error: ${result.details ? `${result.error}: ${result.details}` : result.error}`);
+    process.exit(1);
+  }
+  return result.conversation?.id ?? ref;
+}
+
+program
+  .command("share")
+  .description(
+    "Share a session: mint its share link, and with --public list it on your public profile\n" +
+    "and on the repository's public Sessions tab, where a stranger can open it.\n\n" +
+    "A share link alone is for whoever holds it. --public is the consent that makes the\n" +
+    "session world visible: it shows up under /u/<you> and on /r/<owner>/<repo>/sessions,\n" +
+    "and session blame on that public repository names it by title. --private takes it\n" +
+    "back down (the link keeps working for anyone who already has it).\n\n" +
+    "Examples:\n" +
+    "  cast share                    # share link for THIS session\n" +
+    "  cast share jx70ntf --public   # make that session public\n" +
+    "  cast share jx70ntf --private  # unlist it again"
+  )
+  .argument("[ref]", "Session id (short or full); defaults to the current session")
+  .option("--public", "Pin the session to your public profile, which lists it on the repository's public Sessions tab")
+  .option("--private", "Remove the session from your public profile")
+  .option("--json", "Output as JSON")
+  .action(async (ref: string | undefined, options: { public?: boolean; private?: boolean; json?: boolean }) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+    if (options.public && options.private) {
+      console.error("Pass --public or --private, not both.");
+      process.exit(1);
+    }
+    const conversationId = await resolveConversationFullId(config, ref);
+    let shareToken: string | undefined;
+    if (options.private) {
+      const result = await cliPost("/cli/sessions/unpin", { conversation_id: conversationId });
+      if (result?.error) { console.error(result.error); process.exit(1); }
+    } else if (options.public) {
+      const result = await cliPost("/cli/sessions/pin", { conversation_id: conversationId });
+      if (result?.error) { console.error(result.error); process.exit(1); }
+      shareToken = result.share_token;
+    } else {
+      const result = await cliPost("/cli/sessions/share", { conversation_id: conversationId });
+      if (result?.error) { console.error(result.error); process.exit(1); }
+      shareToken = result.share_token;
+    }
+    const url = shareToken ? `${WEB_URL}/share/${shareToken}` : undefined;
+    if (options.json) {
+      console.log(JSON.stringify({ conversation_id: conversationId, public: !!options.public, share_url: url ?? null }));
+      return;
+    }
+    if (options.private) console.log(`${c.green}ok${c.reset} No longer public`);
+    else console.log(`${c.green}ok${c.reset} ${url}${options.public ? `  ${c.dim}public${c.reset}` : ""}`);
+  });
 
 program
   .command("link")

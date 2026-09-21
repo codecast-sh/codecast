@@ -9,8 +9,8 @@ These are proposed plans for discussion. No source fixes or deployments were per
 | [001](001-security-identity.md) | Verified account and Slack identity linking | P0 / P1 | M / medium | ct-53052 | PROPOSED |
 | [002](002-security-backend-authority.md) | Backend resource, patch and credential authority | P0 / P1 / P2 | L / medium-high | ct-53053 | PROPOSED |
 | [003](003-security-content-desktop.md) | Content rendering and Electron authority | P0 / P1 / P2 | L / medium | ct-53054 | PROPOSED |
-| [004](004-security-local-machine.md) | Vault, hooks, copy and bridge admission | P1 / P2 | L / medium | ct-53055 | PROPOSED |
-| [005](005-security-integrations.md) | Integration install and reconnect proof | P1 | M-L / medium | ct-53056 | PROPOSED |
+| [004](004-security-local-machine.md) | Vault, hooks, copy and bridge admission | P1 / P2 | L / medium | ct-53055 | IN REVIEW — LOCAL-01/02/03 and the PARENT-08 admission half fixed in the tree with red-proven regressions; web must ship the vault capability client BEFORE the CLI release that drops the legacy `token=` attachment URL |
+| [005](005-security-integrations.md) | Integration install and reconnect proof | P1 | M-L / medium | ct-53056 | IN REVIEW — fixed in the tree; needs GITHUB_APP_CLIENT_ID/SECRET plus the App's user-authorization setting before deploy |
 | [006](006-security-publishing.md) | Published-page control isolation, writes and revocation | P1 / P2 | L / high | ct-53057 | PROPOSED |
 | [007](007-security-principal-cache.md) | Logout and account isolation across windows | P1 | L / high | ct-53058 | PROPOSED |
 | [008](008-security-release-assurance.md) | Release authenticity, dependencies and coverage closure | P1 / P2 | L / high | ct-53059 | PROPOSED |

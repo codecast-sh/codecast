@@ -1,59 +1,34 @@
 // The `state` a GitHub App install carries from the button to the install
-// callback (convex/http.ts `/api/github-app/callback`). Three places used to
-// spell it: the web install URL, the CLI's connect-url action and the callback
-// that reads it back. One builder and one parser here, so the workspace an
-// installation binds to cannot drift between them.
+// callback (convex/http.ts `/api/github-app/callback`).
 //
-// The state is NOT signed (the callback binds an installation only when the
-// named installer really belongs to the named team, or IS the personal owner),
-// so it carries identity, never authority.
+// It is an OPAQUE SINGLE-USE NONCE and nothing else. The state used to carry
+// the workspace and the user the installation binds to, base64 JSON that
+// anyone could write: a forged state named any Codecast principal, and the
+// callback bound an installation to it. The nonce names an install intent the
+// server minted for an authenticated caller (githubApp.getInstallUrl), so the
+// callback reads identity out of its own database instead of out of the
+// request.
+//
+// Holding the nonce is still not proof that the caller controls the
+// installation; the callback establishes that separately through GitHub's
+// user-token flow.
 
-import { isAppConnectionScope, type AppConnectionScope } from "./appDescriptors";
+/** How long an install intent stays usable after the button is clicked. */
+export const GITHUB_INSTALL_INTENT_TTL_MS = 15 * 60 * 1000;
 
-export interface GithubAppInstallState {
-  user_id: string;
-  scope: AppConnectionScope;
-  /** Present for a team install: the team the installation binds to. */
-  team_id?: string;
+/** A fresh install nonce: 48 hex characters of CSPRNG output. */
+export function newGithubAppInstallNonce(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(24));
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 /**
- * The state for an install at `scope`. A team install needs a team; with none
- * there is nothing to bind to, and the answer is null rather than a state the
- * callback would refuse.
+ * The nonce a callback's `state` names, or null when the state is not one —
+ * including every legacy identity-carrying state, which now binds nothing.
  */
-export function githubAppInstallState(args: {
-  userId: string;
-  scope: AppConnectionScope;
-  teamId?: string | null;
-}): string | null {
-  if (args.scope === "team" && !args.teamId) return null;
-  const state: GithubAppInstallState =
-    args.scope === "team"
-      ? { user_id: args.userId, scope: "team", team_id: args.teamId! }
-      : { user_id: args.userId, scope: "personal" };
-  return btoa(JSON.stringify(state));
-}
-
-/**
- * Read a state back. Installs minted before scopes existed carry only
- * `team_id` and `user_id`; those read as team installs. Anything without a
- * user, or a team install without a team, is null — "bind to nothing" is the
- * only safe reading of a state that names no owner.
- */
-export function parseGithubAppInstallState(raw: string | null | undefined): GithubAppInstallState | null {
-  if (!raw) return null;
-  let data: any;
-  try {
-    data = JSON.parse(atob(raw));
-  } catch {
-    return null;
-  }
-  if (!data || typeof data.user_id !== "string") return null;
-  const scope: AppConnectionScope = isAppConnectionScope(data.scope) ? data.scope : "team";
-  if (scope === "personal") return { user_id: data.user_id, scope };
-  if (typeof data.team_id !== "string" || !data.team_id) return null;
-  return { user_id: data.user_id, scope, team_id: data.team_id };
+export function parseGithubAppInstallState(raw: string | null | undefined): string | null {
+  if (typeof raw !== "string") return null;
+  return /^[0-9a-f]{48}$/.test(raw) ? raw : null;
 }
 
 /** The install URL for the App named by `slug`, carrying `state`. */

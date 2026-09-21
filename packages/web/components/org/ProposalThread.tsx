@@ -22,7 +22,7 @@ import { useCallback, useMemo, useState } from "react";
 import Link from "next/link";
 import { ChevronDown, ChevronRight, ChevronUp, ExternalLink, MessageSquareText, X } from "lucide-react";
 import { toast } from "sonner";
-import { compactAge } from "../../lib/threadState";
+import { agoOf } from "../../lib/threadState";
 import { cn } from "../../lib/utils";
 import { AnchorConversation } from "../anchor/AnchorConversation";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
@@ -154,7 +154,7 @@ export function ProposalLetter({ proposal, thread, firstTime, now, onOpenSession
           ? <RoleAvatar avatar={thread.role.avatar ?? thread.role.handle} size={24} />
           : <span className="w-6 h-6 rounded-full inline-flex items-center justify-center shrink-0" style={{ background: "color-mix(in srgb, var(--sol-violet) 16%, transparent)", color: "var(--sol-violet)" }}><MessageSquareText className="w-3.5 h-3.5" /></span>}
         <span className="text-xs font-medium" style={{ color: "var(--sol-text-secondary)" }} data-letter-author>{thread.named ? thread.name : "The agent that wrote this"}</span>
-        <span className="text-xs tabular-nums" style={{ color: "var(--sol-text-dim)" }} title={new Date(proposal.created_at).toLocaleString()}>{compactAge(Math.max(0, now - proposal.created_at))} ago</span>
+        <span className="text-xs tabular-nums" style={{ color: "var(--sol-text-dim)" }} title={new Date(proposal.created_at).toLocaleString()}>{agoOf(Math.max(0, now - proposal.created_at))}</span>
         <button type="button" onClick={() => onOpenSession(thread.conversationId)} className="ml-auto w-6 h-6 inline-flex items-center justify-center rounded-md hover:bg-sol-bg-highlight" style={{ color: "var(--sol-text-dim)" }} aria-label="Open the full session" title="Open the full session, with every step the author took" data-thread-open>
           <ExternalLink className="w-3.5 h-3.5" />
         </button>

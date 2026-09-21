@@ -92,6 +92,9 @@ export const THREAD_STATE_STATUS_META: Record<
   },
 };
 
+/** The compact age as a phrase: "4m ago", and "just now" on its own (never "just now ago"). */
+export const agoOf = (ms: number): string => { const age = compactAge(ms); return age === "just now" ? age : `${age} ago`; };
+
 /** "4m" / "2h" / "3d" — the compact age used across the inbox chrome. */
 export function compactAge(ms: number): string {
   const minutes = Math.floor(ms / 60_000);
@@ -117,10 +120,10 @@ export function threadStateView(
 
   const { freshness, messagesSince, ageMs } = threadStateFreshness(fields!, liveMessageCount, now);
   if (freshness === "stale") return null;
-  const age = ageMs == null ? null : compactAge(ageMs);
+  const age = ageMs == null ? null : agoOf(ageMs);
 
   const parts: string[] = [];
-  if (age) parts.push(age === "just now" ? "just now" : `${age} ago`);
+  if (age) parts.push(age);
   if (messagesSince != null && messagesSince > 0) {
     parts.push(messagesSince === 1 ? "1 message since" : `${messagesSince} messages since`);
   }

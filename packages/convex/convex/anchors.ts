@@ -169,8 +169,13 @@ export function bootstrapMessage(opts: {
       `  person's inbox, so a person sees only what you put in front of them, and a wait you neither`,
       `  answered nor escalated is a wait nobody can see. At every wake, read which of your sessions`,
       `  are waiting on a person. Answer what your trust stage and your grants let you answer. Put`,
-      `  the rest in front of the person with \`cast escalate <session> "<one line>"\`, where the line`,
-      `  says what they will decide, and take a session back with \`cast escalate --clear <session>\``,
+      `  the rest in front of the person with \`cast escalate <session> "<line>"\`: that puts YOUR card`,
+      `  in their inbox with the line and the session, the session stays under you, and the person`,
+      `  answers you, so hold the context and relay their answer. The line says what they will decide`,
+      `  and why; it is written whole into both threads, so make it as long as the reason needs.`,
+      `  \`--direct\` puts the session itself in their inbox, and only for what they must do inside it:`,
+      `  an open permission prompt, an interactive question, a review of that session's own`,
+      `  transcript; the line says which. Take a session back with \`cast escalate --clear <session>\``,
       `  once it no longer needs them. Never escalate without a reason the person can read.`,
       `- **The people who report to you have goals, and you keep them.** A person who reports to`,
       `  you is not asking your permission for anything: they asked you to keep them on their three`,
@@ -558,25 +563,10 @@ export async function provisionStandingAgent(
   };
 }
 
-// provisionAnchor — the workspace anchor. Backs `cast anchor create`.
-export const provisionAnchor = mutation({
-  args: {
-    api_token: v.optional(v.string()),
-    scope_type: v.union(v.literal("team"), v.literal("user")),
-    team_id: v.optional(v.id("teams")),
-    name: v.optional(v.string()),
-    avatar_url: v.optional(v.string()),
-    persona: v.optional(v.string()),
-    project_path: v.optional(v.string()),
-    model: v.optional(v.string()),
-    bootstrap: v.optional(v.boolean()),
-  },
-  handler: async (ctx, args) => {
-    const hostUserId = await getAuthenticatedUserId(ctx, args.api_token);
-    if (!hostUserId) throw new Error("Authentication failed: invalid token or session");
-    return await provisionStandingAgent(ctx, hostUserId, args);
-  },
-});
+// There is no door that provisions a bare workspace anchor (org-staffing.md
+// S22): a workspace's standing agent is its root role, and `orgRoles.staff`
+// is the one way to seat it. `cast anchor create` and the web onboarding go
+// through that mutation.
 
 // Deliver a message into an anchor's standing session, auto-resuming it if
 // dormant (the normal pending-message rail does the resume). This is the
@@ -720,11 +710,18 @@ export const listAnchors = query({
       const bot = await ctx.db.get(a.bot_user_id as Id<"users">);
       const team = a.team_id ? await ctx.db.get(a.team_id as Id<"teams">) : null;
       const conv = a.conversation_id ? await ctx.db.get(a.conversation_id as Id<"conversations">) : null;
+      // The role this row is the seat of (org-staffing.md S22): the shell
+      // draws the root role's face and name from this row alone, without
+      // feeding the whole org tree.
+      const role = a.org_role_id ? await ctx.db.get(a.org_role_id as Id<"org_roles">) : null;
       out.push({
         ...a,
         bot_name: bot?.name ?? a.name,
         // Set once the anchor is a role's seat (the chief of staff, S12).
         org_role_id: a.org_role_id ?? null,
+        role: role && role.status !== "retired"
+          ? { _id: role._id, short_id: role.short_id, name: role.name, handle: role.handle, avatar: role.avatar ?? null, status: role.status }
+          : null,
         bot_avatar: bot?.image ?? null,
         team_name: (team as any)?.name ?? null,
         in_my_team: a.team_id ? teamIds.has(a.team_id.toString()) : false,
