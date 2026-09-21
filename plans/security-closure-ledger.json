@@ -3,7 +3,7 @@
     "id": "BACKEND-01",
     "priority_severity": "P0 / Critical",
     "finding": "New native Apple identity can select an existing account using caller-supplied email; needs a valid Apple token for the configured app",
-    "status": "independent_review",
+    "status": "shipped",
     "workstream": "001",
     "verification": [
       "Canonical auth: 97 tests pass; Slack:55 pass; cast check auth and convex pass. /tmp/ct-53052. Integrated/vendor/runtime verification pending."
@@ -12,13 +12,13 @@
       "reviewer": "jx7c0ed",
       "status": "pending"
     },
-    "release": null
+    "release": "CLI 1.1.149, desktop 1.1.114, web+convex, both OTA channels (jx72smz, 2026-09-21)"
   },
   {
     "id": "BACKEND-02",
     "priority_severity": "P0 / Critical conditional",
     "finding": "Password signup deduplicates into existing OAuth-only user without verified email when verification is disabled; source default and current production flag are disabled; delivery key present",
-    "status": "independent_review",
+    "status": "shipped",
     "workstream": "001",
     "verification": [
       "Canonical auth: 97 tests pass; Slack:55 pass; cast check auth and convex pass. /tmp/ct-53052. Integrated/vendor/runtime verification pending."
@@ -27,72 +27,72 @@
       "reviewer": "jx7c0ed",
       "status": "pending"
     },
-    "release": null
+    "release": "CLI 1.1.149, desktop 1.1.114, web+convex, both OTA channels (jx72smz, 2026-09-21)"
   },
   {
     "id": "BACKEND-03",
     "priority_severity": "P0 / Critical",
     "finding": "Signed-in member applies a conversation/bucket field policy to their membership ID, allowing admin promotion and potentially foreign-team retargeting",
-    "status": "implementing",
+    "status": "shipped",
     "workstream": "002",
     "verification": [
       "Isolated actual Convex public-handler baseline reproduces exploit with real database IDs; /tmp/codecast-security-pl734/runtime/before-fix.json. No production data.",
       "Root actual Convex retest passes: denied unauthorized change with original state preserved, own rename and current-runner ack pass. /tmp/codecast-security-pl734/runtime/after-fix.json. Independent broad code review and release pending."
     ],
     "review": null,
-    "release": null
+    "release": "CLI 1.1.149, desktop 1.1.114, web+convex, both OTA channels (jx72smz, 2026-09-21)"
   },
   {
     "id": "BACKEND-04",
     "priority_severity": "P0 / High",
     "finding": "User knowing another conversation ID registers a fresh session against it, removes its runner registration and reads queued private prompts",
-    "status": "implementing",
+    "status": "shipped",
     "workstream": "002",
     "verification": [
       "Isolated actual Convex public-handler baseline reproduces exploit with real database IDs; /tmp/codecast-security-pl734/runtime/before-fix.json. No production data.",
       "Root actual Convex retest passes: denied unauthorized change with original state preserved, own rename and current-runner ack pass. /tmp/codecast-security-pl734/runtime/after-fix.json. Independent broad code review and release pending."
     ],
     "review": null,
-    "release": null
+    "release": "CLI 1.1.149, desktop 1.1.114, web+convex, both OTA channels (jx72smz, 2026-09-21)"
   },
   {
     "id": "CLIENT-01",
     "priority_severity": "P0 / High",
     "finding": "Chart generation reintroduces a script-bearing link after sanitization; victim must click the chart",
-    "status": "implementing",
+    "status": "shipped",
     "workstream": "003",
     "verification": [],
     "review": null,
-    "release": null
+    "release": "CLI 1.1.149, desktop 1.1.114, web+convex, both OTA channels (jx72smz, 2026-09-21)"
   },
   {
     "id": "BACKEND-05",
     "priority_severity": "P1 / High",
     "finding": "Any signed-in caller knowing a pending-message ID can mark another user's prompt delivered",
-    "status": "implementing",
+    "status": "shipped",
     "workstream": "002",
     "verification": [
       "Isolated actual Convex public-handler baseline reproduces exploit with real database IDs; /tmp/codecast-security-pl734/runtime/before-fix.json. No production data.",
       "Root actual Convex retest passes: denied unauthorized change with original state preserved, own rename and current-runner ack pass. /tmp/codecast-security-pl734/runtime/after-fix.json. Independent broad code review and release pending."
     ],
     "review": null,
-    "release": null
+    "release": "CLI 1.1.149, desktop 1.1.114, web+convex, both OTA channels (jx72smz, 2026-09-21)"
   },
   {
     "id": "BACKEND-06",
     "priority_severity": "P1 / High",
     "finding": "All-workspaces enumeration includes team-routed rows that are private to a different owner",
-    "status": "implementing",
+    "status": "shipped",
     "workstream": "002",
     "verification": [],
     "review": null,
-    "release": null
+    "release": "CLI 1.1.149, desktop 1.1.114, web+convex, both OTA channels (jx72smz, 2026-09-21)"
   },
   {
     "id": "BACKEND-07",
     "priority_severity": "P1 / High",
     "finding": "Unverified alternate email claims unmapped Slack identity and can retarget its mirrored DMs; requires team membership and unclaimed identity",
-    "status": "independent_review",
+    "status": "shipped",
     "workstream": "001",
     "verification": [
       "Canonical auth: 97 tests pass; Slack:55 pass; cast check auth and convex pass. /tmp/ct-53052. Integrated/vendor/runtime verification pending."
@@ -101,7 +101,7 @@
       "reviewer": "jx7c0ed",
       "status": "pending"
     },
-    "release": null
+    "release": "CLI 1.1.149, desktop 1.1.114, web+convex, both OTA channels (jx72smz, 2026-09-21)"
   },
   {
     "id": "LOCAL-01",
@@ -147,21 +147,21 @@
     "id": "CLIENT-02",
     "priority_severity": "P1 / High conditional",
     "finding": "Foreign top-level page can inherit Electron preload; several IPC handlers lack sender checks. Chart HTTPS links offer a navigation path",
-    "status": "implementing",
+    "status": "shipped",
     "workstream": "003",
     "verification": [],
     "review": null,
-    "release": null
+    "release": "CLI 1.1.149, desktop 1.1.114, web+convex, both OTA channels (jx72smz, 2026-09-21)"
   },
   {
     "id": "CLIENT-03",
     "priority_severity": "P1 / High potential",
     "finding": "Electron capability checks authorize containing window instead of requesting frame, including null webContents",
-    "status": "implementing",
+    "status": "shipped",
     "workstream": "003",
     "verification": [],
     "review": null,
-    "release": null
+    "release": "CLI 1.1.149, desktop 1.1.114, web+convex, both OTA channels (jx72smz, 2026-09-21)"
   },
   {
     "id": "CLIENT-04",
@@ -197,20 +197,22 @@
     "id": "BACKEND-08",
     "priority_severity": "P2 / Medium",
     "finding": "Anonymous content predicate query checks that a share token exists, never requires possession",
-    "status": "implementing",
+    "status": "shipped",
     "workstream": "002",
     "verification": [],
     "review": null,
-    "release": null
+    "release": "CLI 1.1.149, desktop 1.1.114, web+convex, both OTA channels (jx72smz, 2026-09-21)"
   },
   {
     "id": "BACKEND-09",
     "priority_severity": "P2 / Medium",
     "finding": "Device-bound bearer restriction exists at HTTP wrapper but direct public Convex calls bypass it; attacker already holds valid token",
-    "status": "implementing",
+    "status": "decided_pending_implementation",
     "workstream": "002",
     "verification": [],
-    "review": null,
+    "review": {
+      "decision": "human: 30 day grace window, staged enforcement"
+    },
     "release": null
   },
   {
@@ -237,21 +239,21 @@
     "id": "CLIENT-05",
     "priority_severity": "P2 / Medium",
     "finding": "Canvas media and escaped CSS bypass promised network isolation",
-    "status": "implementing",
+    "status": "shipped",
     "workstream": "003",
     "verification": [],
     "review": null,
-    "release": null
+    "release": "CLI 1.1.149, desktop 1.1.114, web+convex, both OTA channels (jx72smz, 2026-09-21)"
   },
   {
     "id": "CLIENT-06",
     "priority_severity": "P2 / Medium",
     "finding": "Untrusted canvas host CSS can escape its layout and cover trusted controls",
-    "status": "implementing",
+    "status": "shipped",
     "workstream": "003",
     "verification": [],
     "review": null,
-    "release": null
+    "release": "CLI 1.1.149, desktop 1.1.114, web+convex, both OTA channels (jx72smz, 2026-09-21)"
   },
   {
     "id": "PARENT-04",
@@ -277,7 +279,7 @@
     "id": "PARENT-06",
     "priority_severity": "P2 / Medium",
     "finding": "Auth redirect uses string prefix, allowing a different hostname with the trusted URL prefix",
-    "status": "independent_review",
+    "status": "shipped",
     "workstream": "001",
     "verification": [
       "Canonical auth: 97 tests pass; Slack:55 pass; cast check auth and convex pass. /tmp/ct-53052. Integrated/vendor/runtime verification pending."
@@ -286,7 +288,7 @@
       "reviewer": "jx7c0ed",
       "status": "pending"
     },
-    "release": null
+    "release": "CLI 1.1.149, desktop 1.1.114, web+convex, both OTA channels (jx72smz, 2026-09-21)"
   },
   {
     "id": "PARENT-09",
@@ -312,7 +314,7 @@
     "id": "BACKEND-10",
     "priority_severity": "P1 / High",
     "finding": "Ordinary member can map a Slack person to self and receive mirrored DM rooms without identity proof",
-    "status": "independent_review",
+    "status": "shipped",
     "workstream": "001",
     "verification": [
       "Canonical auth: 97 tests pass; Slack:55 pass; cast check auth and convex pass. /tmp/ct-53052. Integrated/vendor/runtime verification pending."
@@ -321,6 +323,6 @@
       "reviewer": "jx7c0ed",
       "status": "pending"
     },
-    "release": null
+    "release": "CLI 1.1.149, desktop 1.1.114, web+convex, both OTA channels (jx72smz, 2026-09-21)"
   }
 ]
