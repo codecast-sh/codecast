@@ -1015,7 +1015,7 @@ export function ToolBlock({ tool, result, changeIndex, changeRange, shareSelecti
             )
           ) : isApplyPatch || isFileChange ? (
             (isApplyPatch ? applyPatchDiffs : fileChangeDiffs).length > 0 ? (
-              <div className="max-h-80 overflow-auto">
+              <div>
                 {(isApplyPatch ? applyPatchDiffs : fileChangeDiffs).map((diff, idx) => {
                   const diffLanguage = getFileExtension(diff.filePath);
                   const diffStartLine = diff.hunks[0]?.oldStart || diff.hunks[0]?.newStart || 1;
