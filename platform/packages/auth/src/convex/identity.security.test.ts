@@ -192,7 +192,7 @@ describe("installed auth library identity persistence", () => {
     expect(await current.authorize({ flow: "signIn", email, password }, f.ctx)).toEqual(initial);
     await expect(current.authorize({ flow: "signUp", email: email.toLowerCase(), password: "other-password" }, f.ctx)).rejects.toThrow();
     await expect(current.authorize({ flow: "signIn", email: email.toLowerCase(), password }, f.ctx)).rejects.toThrow();
-    await current.authorize({ flow: "reset", email }, f.ctx);
+    await current.authorize({ flow: "reset", email, redirectTo: "/" }, f.ctx);
     const recovered = await current.authorize({ flow: "reset-verification", email, code: f.sent[0].code, newPassword: "new-fixture-password" }, f.ctx);
     expect(recovered.userId).toBe(initial.userId);
     expect(await current.authorize({ flow: "signIn", email, password: "new-fixture-password" }, f.ctx)).toEqual(initial);
