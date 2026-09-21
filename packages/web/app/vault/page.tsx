@@ -10,6 +10,7 @@
 
 import { lazy, Suspense, useCallback, useMemo, useRef, useState } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { useVaultLocalPath } from "../../hooks/useVaultLocalPath";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useConvex } from "convex/react";
 import {
@@ -37,7 +38,7 @@ import {
   WifiOff,
   X,
 } from "lucide-react";
-import { isVaultAssetPath, isVaultMarkdownPath } from "@codecast/shared/contracts";
+import { isVaultMarkdownPath } from "@codecast/shared/contracts";
 import { AuthGuard } from "../../components/AuthGuard";
 import {
   DropdownMenu,
@@ -46,7 +47,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu";
-import { VAULT_SORT_OPTIONS, ancestorDirs, type VaultSortMode } from "../../lib/vault/explorerModel";
+import { VAULT_SORT_OPTIONS, type VaultSortMode } from "../../lib/vault/explorerModel";
 import { useTabActive } from "../../hooks/usePagePresence";
 import { useShortcutAction } from "../../shortcuts";
 import { VaultExplorer } from "../../components/vault/VaultExplorer";
@@ -61,9 +62,7 @@ import { VaultScopeLine } from "../../components/vault/VaultScopeLine";
 import { useDocForFile, useVaultTeamResolver } from "../../components/vault/useVaultScope";
 import { vaultPresence } from "../../lib/vault/scopeModel";
 import { vaultLandingPath } from "../../lib/vault/projectVault";
-import { filesHref, resolveVaultTarget } from "../../lib/vault/vaultHref";
-import { locateVault } from "../../lib/vault/client";
-import { inferHomeDir, resolveCustomPath } from "../../lib/utils";
+import { filesHref } from "../../lib/vault/vaultHref";
 import { collapsePanelSoon } from "../../lib/vault/collapsePanelSoon";
 import { useVaultStore, type VaultUnreachableReason } from "../../store/vaultStore";
 import {
@@ -418,90 +417,7 @@ function VaultContent() {
     if (connection === "idle") void connect(convex);
   }, [connection, connect, convex]);
 
-  // ?path=<local path> → pick the vault whose root contains it, then rewrite
-  // the URL to the ordinary ?f= form (replace, so Back skips the redirect).
-  // A file opens; a directory expands in the tree with nothing selected. The
-  // effect re-runs as each prerequisite lands: the vault list, the selected
-  // vault, its file table.
-  //
-  // A path outside every vault the browser knows is the daemon's question,
-  // not a dead end: it has the disk, so it names the vault holding the path,
-  // registering one when none did (GET /vault/locate). The answer joins the
-  // vault list and this effect re-runs into the ordinary branch. Asked once
-  // per link, so a path that truly does not exist reports that rather than
-  // asking forever.
-  const scannedAtForPath = useVaultStore((s) => s.scannedAt);
-  const locatedPathRef = useRef<string | null>(null);
-  useWatchEffect(() => {
-    if (!localPath) return;
-    if (connection !== "connected" && connection !== "cached") return;
-    const store = useVaultStore.getState();
-    const activeRoot = vaults.find((v) => v.id === activeVaultId)?.root;
-    const target = resolveVaultTarget(localPath, vaults, activeRoot);
-    if (!target) {
-      const fail = (message: string) => {
-        useVaultStore.setState({ opError: message });
-        router.replace(filesHref());
-      };
-      const abs = resolveCustomPath(localPath, inferHomeDir(vaults.map((v) => v.root)), activeRoot);
-      if (!store.endpoint || !abs || locatedPathRef.current === localPath) {
-        fail(`No vault on this machine contains ${localPath}. Add one with \`cast vault add <dir>\`.`);
-        return;
-      }
-      locatedPathRef.current = localPath;
-      void locateVault(store.endpoint, abs)
-        .then((located) => {
-          if (located) store.adoptVault(located.vault);
-          else fail(`${abs} does not exist on this machine.`);
-        })
-        .catch(() => fail(`No vault on this machine contains ${localPath}. Add one with \`cast vault add <dir>\`.`));
-      return;
-    }
-    if (target.vaultId !== activeVaultId) {
-      void selectVault(target.vaultId);
-      return;
-    }
-    if (!scannedAtForPath) return;
-    if (store.opError) store.clearOpError(); // a stale "no vault contains…" from an earlier link
-    const { files } = store;
-    let rel = target.rel;
-    let entry = rel ? files[rel] : undefined;
-    // Agents write paths relative to wherever they were looking — a package
-    // dir, not the repo root. When the literal path isn't here but exactly one
-    // file ends with it, that is the file they meant.
-    if (rel && !entry && !Object.keys(files).some((p) => p.startsWith(`${rel}/`))) {
-      const suffix = `/${rel}`;
-      const candidates = Object.keys(files).filter((p) => p.endsWith(suffix) && !files[p].dir);
-      if (candidates.length === 1) {
-        rel = candidates[0];
-        entry = files[rel];
-      }
-    }
-    const isDir = !rel || !!entry?.dir || Object.keys(files).some((p) => p.startsWith(`${rel}/`));
-    store.setLeftPaneTab("files");
-    if (entry && !entry.dir) {
-      // A source file in a notes vault sits behind the "all files" toggle;
-      // flip it so the tree shows what the link opened.
-      if (!store.showAllFiles && !isVaultMarkdownPath(rel) && !isVaultAssetPath(rel)) store.setShowAllFiles(true);
-      store.noteOpened(rel);
-      store.requestReveal(rel);
-      router.replace(filesHref({ path: rel, line: targetLine }));
-      return;
-    }
-    if (isDir) {
-      if (rel) store.setDirsExpanded([...ancestorDirs(rel), rel], true);
-      router.replace(filesHref());
-      return;
-    }
-    // Nothing by that name: open the nearest directory that does exist, say
-    // so, and put the name into the quick switcher — the near-misses (a moved
-    // file, a typo in the transcript) are then one keystroke away.
-    const existing = ancestorDirs(rel).filter((d) => files[d]?.dir || Object.keys(files).some((p) => p.startsWith(`${d}/`)));
-    if (existing.length) store.setDirsExpanded(existing, true);
-    useVaultStore.setState({ opError: `${target.abs} isn't in this vault.` });
-    store.openQuickSwitch(rel.slice(rel.lastIndexOf("/") + 1));
-    router.replace(filesHref());
-  }, [localPath, connection, vaults, activeVaultId, scannedAtForPath, selectVault, router, targetLine]);
+  useVaultLocalPath(localPath, targetLine, router);
 
   // `line` rides along in the URL for search results: the note view doesn't
   // scroll to it yet, but the link already carries where the hit was.
