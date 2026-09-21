@@ -3703,10 +3703,14 @@ pre[class*="language-"] {
 }
 
 .minimal-style [data-sv-nav] {
-  padding: 10px 6px 12px;
+  padding: 0 6px 12px;
   background: var(--sol-bg-alt);
   border-right: 1px solid var(--cc-panel-rule);
   scrollbar-color: transparent transparent;
+}
+
+.minimal-style [data-sidebar-scroll] {
+  padding-top: 10px;
 }
 
 .minimal-style [data-sv-nav]:hover {
@@ -4005,12 +4009,12 @@ pre[class*="language-"] {
   text-transform: none;
 }
 
-.minimal-style [data-cc-scroll-tools] {
+[data-cc-scroll-tools] {
   right: 20px;
   gap: 8px;
 }
 
-.minimal-style [data-cc-scroll-tools] button {
+[data-cc-scroll-tools] button {
   padding: 7px;
   border-color: var(--cc-panel-rule);
   background: var(--sol-card);
@@ -4018,18 +4022,18 @@ pre[class*="language-"] {
   box-shadow: 0 2px 10px color-mix(in srgb, var(--sol-text) 7%, transparent);
 }
 
-.minimal-style [data-cc-scroll-tools] button:hover {
+[data-cc-scroll-tools] button:hover {
   border-color: var(--sol-border);
   background: var(--sol-bg-highlight);
   color: var(--sol-text);
 }
 
-.minimal-style [data-cc-scroll-tools] > div:last-child {
+[data-cc-scroll-tools] > div:has(> [data-cc-scroll-progress]) {
   width: 3px;
   background: transparent;
 }
 
-.minimal-style [data-cc-scroll-progress] {
+[data-cc-scroll-progress] {
   background: color-mix(in srgb, var(--sol-text-dim) 55%, transparent);
 }
 
@@ -5030,11 +5034,11 @@ pre[class*="language-"] {
     border-radius: 16px;
   }
 
-  .minimal-style [data-cc-scroll-tools] {
+  [data-cc-scroll-tools] {
     right: 8px;
   }
 
-  .minimal-style [data-cc-scroll-tools] > div:last-child {
+  [data-cc-scroll-tools] > div:has(> [data-cc-scroll-progress]) {
     display: none;
   }
 

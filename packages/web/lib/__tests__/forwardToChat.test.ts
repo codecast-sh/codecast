@@ -26,6 +26,9 @@ describe("openForwardToChat", () => {
       chatChannels: {},
       chatMessages: {},
       chatReads: {},
+      sessions: {},
+      conversations: {},
+      messages: {},
       pending: {},
       currentUser: { _id: ME },
       clientState: { ui: {} },
@@ -50,6 +53,41 @@ describe("openForwardToChat", () => {
     expect(rows.length).toBe(1);
     expect(rows[0].channel_id).toBe(CHANNEL);
     expect(rows[0].content).toBe(`worth a look\n\n${URL}`);
+  });
+
+  it("previews a cached session title before choosing a recipient", () => {
+    const id = serverId("session");
+    useInboxStore.setState({ sessions: { [id]: { _id: id, title: "Polish the chat send dialog", short_id: "jx7test" } } } as any);
+    openForwardToChat({ url: `https://codecast.sh/conversation/${id}`, label: "session" });
+    expect(currentPick().preview?.title).toBe("Polish the chat send dialog");
+  });
+
+  it("previews the exact linked message instead of another message in the session", () => {
+    const id = serverId("session");
+    const messageId = serverId("message");
+    useInboxStore.setState({
+      sessions: { [id]: { _id: id, title: "Chat polish", short_id: "jx7test" } },
+      messages: { [id]: [{ _id: serverId("other"), content: "Unrelated message" }, { _id: messageId, content: "Please **review** the [dialog](https://example.com)." }] },
+    } as any);
+    openForwardToChat({ url: `https://codecast.sh/conversation/jx7test#msg-${messageId}`, label: "message" });
+    expect(currentPick().preview?.title).toBe("Chat polish");
+    expect(currentPick().preview?.text).toBe("Please review the dialog.");
+  });
+
+  it("carries an excerpt for public share links without changing the sent message", () => {
+    const url = "https://codecast.sh/share/message/share-token";
+    openForwardToChat({ url, label: "messages", previewTitle: "Chat polish", previewText: "First selected message\n\nSecond selected message" });
+    expect(currentPick().preview).toEqual({ title: "Chat polish", text: "First selected message Second selected message", url });
+    currentPick().onPick({ kind: "channel", id: CHANNEL, label: "#general" }, { query: "" });
+    expect(Object.values(useInboxStore.getState().chatMessages)[0].content).toBe(url);
+  });
+
+  it("bounds long excerpts and falls back to the link for uncached content", () => {
+    openForwardToChat({ url: URL, previewText: "A long message ".repeat(200) });
+    expect(currentPick().preview!.text!.length).toBeLessThanOrEqual(240);
+    expect(currentPick().preview!.text).toEndWith("…");
+    openForwardToChat({ url: URL });
+    expect(currentPick().preview).toEqual({ title: "Shared link", text: undefined, url: URL });
   });
 
   it("sends note + url with attached images", () => {

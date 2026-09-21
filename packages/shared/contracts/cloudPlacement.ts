@@ -8,15 +8,8 @@
  * machine". Pure data in, verdict out; no runtime imports.
  */
 
-/**
- * A machine that boots itself when work arrives: the cloud Linux class, an EC2
- * box whose idle state is "stopped". A remote Mac cannot stop (so "offline"
- * means gone) and a laptop can only be opened by a human. The same rule
- * deviceName.ts uses to call a machine "Cloud Linux", so the name and the
- * behaviour cannot diverge.
- */
 export function deviceWakesOnUse(d: { is_remote?: boolean; platform?: string }): boolean {
-  return d.is_remote === true && /linux/i.test(d.platform ?? "");
+  return d.is_remote === true && /^(linux|darwin|macos)$/i.test(d.platform ?? "");
 }
 
 /** True if `p` is at or below a known project root (`root` or a child of it). */

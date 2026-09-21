@@ -11,7 +11,7 @@ import { projectsWithoutAnOwnerAmongWatchers } from "@codecast/shared/contracts/
 import { capacity, capacityFlags, type HealthFlag, isOverloaded, overloadRatio, type RoleLedger, type RoleLoad } from "@codecast/shared/contracts/orgCapacity";
 import { computeReportingPeople } from "./orgGoals";
 import { extractRepoFromRemoteUrl } from "@codecast/shared/contracts";
-import { computeStale, type ActivityCommit, type ActivitySession } from "./lib/orgActivity";
+import { activityPlanOf, computeStale, type ActivityCommit, type ActivitySession } from "./lib/orgActivity";
 import { isActiveTask } from "@codecast/shared/tasks";
 
 // org.health (docs/architecture/org-staffing.md S3): the flow signals the
@@ -205,12 +205,35 @@ export function activitySessionsFromScan(scan: OrgScan): ActivitySession[] {
   return out;
 }
 
-/** The landed commits for a set of repos over a window, capped per repo. */
-export async function readActivityCommits(ctx: Ctx, repos: string[], since: number, perRepoCap = ACTIVITY_COMMITS_PER_REPO): Promise<ActivityCommit[]> {
+/** Whose commits a workspace's activity may read: its team (or, for a
+ *  personal workspace, its person) and the sessions the scan already read. */
+export type CommitOwner = { teamId?: Id<"teams">; userId: Id<"users">; sessionIds: ReadonlySet<string> };
+
+/** The commits of a set of repos over a window, capped per repo, and only the
+ *  ones this workspace made. A repository is shared ground: several workspaces
+ *  can work in one checkout, and the commits table holds every author's. A row
+ *  belongs here when the webhook stamped this team on it, or when the session
+ *  that made it is one the scan read or is routed to this workspace; a row
+ *  that names neither a team nor a session belongs to nobody we can name and
+ *  is left out. Without this, four Union sessions in another product's
+ *  checkout read as 301 commits of Union work with no project (2026-09-20). */
+export async function readActivityCommits(ctx: Ctx, repos: string[], since: number, owner: CommitOwner, perRepoCap = ACTIVITY_COMMITS_PER_REPO): Promise<ActivityCommit[]> {
   const out: ActivityCommit[] = [];
+  const sessionIsOurs = new Map<string, boolean>();
+  const ours = async (c: any): Promise<boolean> => {
+    if (c.team_id) return !!owner.teamId && String(c.team_id) === String(owner.teamId);
+    if (!c.conversation_id) return false;
+    const key = String(c.conversation_id);
+    if (owner.sessionIds.has(key)) return true;
+    if (!sessionIsOurs.has(key)) {
+      const conv: any = await ctx.db.get(c.conversation_id);
+      sessionIsOurs.set(key, !!conv && (owner.teamId ? String(conv.team_id ?? "") === String(owner.teamId) : !conv.team_id && String(conv.user_id) === String(owner.userId)));
+    }
+    return sessionIsOurs.get(key)!;
+  };
   for (const repo of repos) {
     const rows: any[] = await ctx.db.query("commits").withIndex("by_repository_timestamp", (q: any) => q.eq("repository", repo).gte("timestamp", since)).order("desc").take(perRepoCap);
-    for (const c of rows) out.push({ repository: c.repository, timestamp: c.timestamp, author_name: c.author_name, author_email: c.author_email, files: c.files ?? null, task_ids: (c.task_ids ?? []).map((id: any) => String(id)) });
+    for (const c of rows) if (await ours(c)) out.push({ repository: c.repository, timestamp: c.timestamp, author_name: c.author_name, author_email: c.author_email, files: c.files ?? null, task_ids: (c.task_ids ?? []).map((id: any) => String(id)), branch: c.branch ?? null });
   }
   return out;
 }
@@ -341,7 +364,7 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
     commits: [],
     sessions: activitySessionsFromScan(scan),
     projects: projects.map((p) => ({ id: String(p._id), title: p.title, status: p.status, project_path: p.project_path ?? null, updated_at: p.updated_at ?? p._creationTime })),
-    plans: plans.map((p) => ({ id: String(p._id), short_id: p.short_id, title: p.title, status: p.status, project_id: p.project_id ? String(p.project_id) : null, updated_at: p.updated_at ?? p._creationTime })),
+    plans: plans.map(activityPlanOf),
     tasks: tasks.map((t) => ({ id: String(t._id), short_id: t.short_id, title: t.title, status: t.status, plan_id: t.plan_id ? String(t.plan_id) : null, project_id: t.project_id ? String(t.project_id) : null, updated_at: t.updated_at ?? t._creationTime, conversation_ids: (t.conversation_ids ?? []).map((id: any) => String(id)) })),
     members: [],
   });

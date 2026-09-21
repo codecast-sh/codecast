@@ -1,7 +1,7 @@
 
 ## Tasks & Plans
 
-Work tracking for agents (cast task / plan). Gives agents `cast task` and `cast plan` to track what they're working on — they create tasks, log progress, and mark work done, and you see it on the dashboard. Agents only use this for real work, not questions or quick lookups.
+Work tracking for agents (cast task / plan). Gives agents `cast task` and `cast plan` to track what they're working on — they create tasks, log progress, and mark work done, and you see it on the dashboard. Use it for substantial work, coordination, handoffs, or follow-up beyond the session. Simple work you can and intend to finish in this session does not need filing.
 
 Run `cast guide tasks` for the commands and flags. The guide ships inside the binary you run, so it always matches the `cast` that will execute them.
 <!-- cast @VERSION@ -->

@@ -809,7 +809,12 @@ export const listMessages = query({
     // for a caller with no identity.
     const userId = await getAuthenticatedUserId(ctx as any, args.api_token);
     const channel = await readChannel(ctx, userId, args.channel_id);
-    if (!channel) return empty;
+    // An empty page, not a throw, so a cached room degrades instead of
+    // unmounting. `unavailable` is what lets the reader tell it from a room
+    // nobody has posted in: without it the page invites a post that
+    // sendMessage then refuses. One flag for missing and for forbidden, on the
+    // same terms as loadChannel.
+    if (!channel) return { ...empty, unavailable: true };
 
     const limit = Math.min(Math.max(args.limit ?? 50, 1), 100);
     const page = await ctx.db
@@ -840,6 +845,7 @@ export const listMessages = query({
       authors,
       has_more: !page.isDone,
       next_cursor: page.isDone ? null : page.continueCursor,
+      unavailable: false,
     };
   },
 });

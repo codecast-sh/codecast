@@ -220,6 +220,7 @@ import {
 import { createOrgSlice, ORG_SYNC_REGISTRY, projectLeadScopeOutcome, pushRoleFieldsIntent, type OrgSliceState } from "./orgSlice";
 import { writeAsServerShape } from "./serverShape";
 import { createInitiativeSlice, type InitiativeSliceActions } from "./initiativeSlice";
+import { createComposeSlice, type ComposeSliceState } from "./composeSlice";
 // Re-exported so chat surfaces import their selectors from the store, like every
 // other view does, instead of reaching into the slice file.
 export {
@@ -1338,7 +1339,10 @@ export function convBucketMap(assignments: Record<string, BucketAssignmentItem>)
 // conversation_id → the viewer's read mark. Same two-rows-per-conversation
 // problem as convBucketMap (an optimistic `sessionread-` stub alongside the
 // real server row), resolved the same way: real beats stub, then newer wins.
+const sessionReadMaps = new WeakMap<Record<string, SessionReadItem>, Record<string, SessionReadItem>>();
 export function sessionReadMap(reads: Record<string, SessionReadItem>): Record<string, SessionReadItem> {
+  const cached = sessionReadMaps.get(reads);
+  if (cached) return cached;
   const winner: Record<string, SessionReadItem> = {};
   for (const r of Object.values(reads)) {
     const prev = winner[r.conversation_id];
@@ -1348,6 +1352,7 @@ export function sessionReadMap(reads: Record<string, SessionReadItem>): Record<s
     }
     winner[r.conversation_id] = r;
   }
+  sessionReadMaps.set(reads, winner);
   return winner;
 }
 
@@ -1367,6 +1372,12 @@ function findSessionReadInDraft(
   return best;
 }
 
+const sessionUnreadMaps = new WeakMap<
+  Record<string, InboxSession>,
+  WeakMap<Record<string, SessionReadItem>, WeakMap<Record<string, number>, Record<string, boolean>>>
+>();
+const sessionUnreadSignatures = new WeakMap<Record<string, boolean>, string>();
+
 /** Which sessions are lit for this viewer, derived from the marks, the rows'
  *  own updated_at, and the local "last opened" record as the fallback for a
  *  session with no server mark yet. Derived once per list render and handed to
@@ -1377,6 +1388,12 @@ export function sessionUnreadMap(state: {
   sessionReads: Record<string, SessionReadItem>;
   _lastViewedAt: Record<string, number>;
 }): Record<string, boolean> {
+  let byReads = sessionUnreadMaps.get(state.sessions);
+  if (!byReads) sessionUnreadMaps.set(state.sessions, byReads = new WeakMap());
+  let byViewed = byReads.get(state.sessionReads);
+  if (!byViewed) byReads.set(state.sessionReads, byViewed = new WeakMap());
+  const cached = byViewed.get(state._lastViewedAt);
+  if (cached) return cached;
   const marks = sessionReadMap(state.sessionReads);
   const out: Record<string, boolean> = {};
   for (const id in state.sessions) {
@@ -1388,6 +1405,7 @@ export function sessionUnreadMap(state: {
       localViewedAt: state._lastViewedAt[id],
     })) out[id] = true;
   }
+  byViewed.set(state._lastViewedAt, out);
   return out;
 }
 
@@ -1412,23 +1430,18 @@ export function sessionActivityFacts(row: {
 // activity, so the signature string stays identical and nothing re-renders
 // (store/wakeSig.ts — same rule sessionsWakeSig follows). It cannot ride
 // sessionsWakeSig itself: that signature deliberately omits updated_at.
-let _unreadSigSessions: unknown;
-let _unreadSigReads: unknown;
-let _unreadSigViewed: unknown;
-let _unreadSig = "";
 export function sessionUnreadWakeSig(state: {
   sessions: Record<string, InboxSession>;
   sessionReads: Record<string, SessionReadItem>;
   _lastViewedAt: Record<string, number>;
 }): string {
-  if (state.sessions === _unreadSigSessions
-    && state.sessionReads === _unreadSigReads
-    && state._lastViewedAt === _unreadSigViewed) return _unreadSig;
-  _unreadSigSessions = state.sessions;
-  _unreadSigReads = state.sessionReads;
-  _unreadSigViewed = state._lastViewedAt;
-  _unreadSig = Object.keys(sessionUnreadMap(state)).sort().join(",");
-  return _unreadSig;
+  const unread = sessionUnreadMap(state);
+  let signature = sessionUnreadSignatures.get(unread);
+  if (signature === undefined) {
+    signature = Object.keys(unread).sort().join(",");
+    sessionUnreadSignatures.set(unread, signature);
+  }
+  return signature;
 }
 
 // Close the open subtree under a parent in the draft — the optimistic mirror
@@ -4727,7 +4740,7 @@ export type RoomKnock = {
 // RegisteredCollectionSlots: every collection in CLIENT_SYNC_REGISTRY gets a
 // typed `Record<string, any>` slot here by registration alone; the explicit
 // fields below narrow the ones with a real row type.
-interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSliceActions, Omit<RegisteredCollectionSlots, keyof ChatSliceState | keyof OrgSliceState> {
+interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSliceActions, ComposeSliceState, Omit<RegisteredCollectionSlots, keyof ChatSliceState | keyof OrgSliceState> {
   sessions: Record<string, InboxSession>;
   pending: Record<string, PendingEntry>;
   currentSessionId: string | null;
@@ -4984,20 +4997,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   closePalette: () => void;
   togglePalette: () => void;
 
-  // -- New-session compose popup --
-  // The floating new-session popup (ComposeView), shown as an in-app overlay —
-  // the same surface the command palette's compose mode uses. Every "New Session"
-  // affordance opens this. `initialQuery` pre-fills the composer (e.g. doc-review
-  // "New agent"); `nonce` bumps each open so the overlay remounts on a fresh
-  // blank session. `context` lets a caller seed the new session's project when
-  // there's no current conversation to inherit it from — doc review passes the
-  // doc's own project so the new agent spawns where the doc lives (without it
-  // ComposeView falls back to currentConversation/recents, which are empty on the
-  // docs page → a pathless start the daemon defaults to $HOME). Ephemeral UI
-  // state (raw set), like the palette toggle.
-  compose: { open: boolean; initialQuery?: string; context?: { projectPath?: string; gitRoot?: string }; nonce: number };
-  openCompose: (initialQuery?: string, context?: { projectPath?: string; gitRoot?: string }) => void;
-  closeCompose: () => void;
+  // -- New-session composers: store/composeSlice.ts (ComposeSliceState) --
 
   // -- Create modal --
   createModal: CreateModalKind | null;
@@ -7979,13 +7979,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     }
   },
 
-  compose: { open: false, nonce: 0 },
-  openCompose: (initialQuery?: string, context?: { projectPath?: string; gitRoot?: string }) => {
-    set({ compose: { open: true, initialQuery, context, nonce: get().compose.nonce + 1 } });
-  },
-  closeCompose: () => {
-    set({ compose: { ...get().compose, open: false } });
-  },
+  ...createComposeSlice(set, get),
 
   createModal: null,
   createModalDefaults: null,

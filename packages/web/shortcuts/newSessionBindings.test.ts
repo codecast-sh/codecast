@@ -19,6 +19,11 @@ describe("new-session key bindings", () => {
     expect(resolveAction({ key: "n", code: "KeyN", ctrlKey: true })).toBe("session.compose");
   });
 
+  test("Ctrl+Shift+N is the docked composer, and fires over the open modal", () => {
+    expect(resolveAction({ key: "N", code: "KeyN", ctrlKey: true, shiftKey: true })).toBe("session.composeDock");
+    expect(SHORTCUTS.find((d) => d.action === "session.composeDock")?.worksInModal).toBe(true);
+  });
+
   test("Ctrl+Alt+N opens the full session page", () => {
     expect(resolveAction({ key: "n", code: "KeyN", ctrlKey: true, altKey: true })).toBe("session.create");
   });

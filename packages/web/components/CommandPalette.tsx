@@ -66,6 +66,8 @@ import { openForwardToChat } from "../lib/forwardToChat";
 import { settleComposerAttachments } from "../lib/draftImages";
 import type { ChatAttachment } from "../store/chatSlice";
 import "./chat/chat.css";
+import "./CommandPalette.css";
+import { PalettePickPreview } from "./PalettePickPreview";
 
 // Loaded only on the confirm step so the search palette does not pull the
 // composer module (and the HMR cycle that comes with an eager import).
@@ -1984,12 +1986,14 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
 
   // One compose entry for both hosts: the standalone Electron palette window
   // flips itself into the compose popup; in-app opens the compose overlay.
-  const startCompose = useCallback((text: string) => {
+  // `dock` asks for the small docked composer; the standalone window has no
+  // dock to open it in, so it keeps its one popup.
+  const startCompose = useCallback((text: string, dock = false) => {
     if (standalone) {
       window.dispatchEvent(new CustomEvent("codecast-compose", { detail: text }));
     } else {
       closePalette();
-      useInboxStore.getState().openCompose(text || undefined);
+      useInboxStore.getState().openCompose(text || undefined, undefined, { dock });
     }
   }, [standalone, closePalette]);
 
@@ -2126,7 +2130,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     }
     if (actionKey === "newtab") { window.open(path, "_blank"); closePalette(); return; }
     if (actionKey === "copylink") { void copyToClipboard(`${shareOrigin()}${path}`).then(() => toast.success("Link copied")); closePalette(); return; }
-    if (actionKey === "forward") { openForwardToChat({ url: `${shareOrigin()}${path}`, label: targetType }); return; }
+    if (actionKey === "forward") { openForwardToChat({ url: `${shareOrigin()}${path}`, label: targetType, previewTitle: target.display_title || target.title || target.name }); return; }
     if (actionKey.startsWith("create_")) { closePalette(); openCreateModal(actionKey.slice(7) as "task" | "plan" | "doc", targetType === "project" ? { project_id: target._id } : { plan_id: target._id, project_id: target.project_id }); return; }
     if (actionKey === "clear_deadline") { state.updateProject(target._id, { target_date: null }); closePalette(); return; }
     if (actionKey === "trigger_duplicate") { navigate(`/triggers?task=${target._id}&duplicate=1`); return; }
@@ -2365,7 +2369,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     const confirmContent = (
       <div
         ref={pickConfirmRef}
-        className="w-[580px] rounded-xl border border-sol-border bg-sol-bg shadow-2xl shadow-black/40 overflow-visible flex flex-col"
+        className="w-[min(580px,calc(100vw-24px))] rounded-xl border border-sol-border bg-sol-bg shadow-2xl shadow-black/40 flex flex-col"
       >
         <div className="px-4 pt-3">
           <div className="text-xs font-mono text-sol-text-dim truncate">{pick.title}</div>
@@ -2373,63 +2377,68 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         <button
           type="button"
           onClick={() => setPickChosen(null)}
-          className="mx-3 mt-2 flex items-center gap-3 rounded-lg border border-sol-border bg-sol-bg-inset px-3 py-2 text-left transition-colors hover:bg-sol-bg-highlight"
+          className="mx-3 mt-3 flex min-w-0 items-center gap-2 rounded-lg border border-sol-border/60 bg-sol-bg-alt/50 px-3 py-2 text-left hover:bg-sol-bg-highlight focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-cyan/40"
         >
+          <span className="text-[11px] text-sol-text-dim">To</span>
           {icon}
           <span className="truncate flex-1 text-sm text-sol-text">{label}</span>
-          {tag && <span className="text-[10px] text-sol-text-dim flex-shrink-0">{tag}</span>}
+          {tag && <span className="hidden text-[10px] text-sol-text-dim flex-shrink-0 sm:inline">{tag}</span>}
           <span className="text-[11px] text-sol-text-muted flex-shrink-0">change</span>
         </button>
-        <div
-          className="ch-composer ch-composer-flush mx-3 mt-2 [&_form_button[type=submit]]:hidden"
-          onKeyDownCapture={(e) => {
-            if (e.key !== "Backspace") return;
-            const t = e.target as HTMLTextAreaElement;
-            if (!(t instanceof HTMLTextAreaElement) || t.value !== "" || t.selectionStart !== 0) return;
-            const images = useInboxStore.getState().drafts[PALETTE_PICK_DRAFT]?.draft_image_storage_ids as unknown[] | undefined;
-            if (images && images.length > 0) return;
-            e.preventDefault();
-            e.stopPropagation();
-            setPickChosen(null);
-          }}
-        >
-          <Suspense fallback={<div className="h-10" />}>
-            <PaletteMessageInput
-              key={PALETTE_PICK_DRAFT}
-              conversationId={PALETTE_PICK_DRAFT}
-              bareComposer
-              chatMentionMode={chatTarget}
-              mentionTeamId={activeTeamId ? String(activeTeamId) : undefined}
-              composerPlaceholder={pick.notePlaceholder}
-              autoFocusInput
-              onDropFiles={pickDropRef}
-              onGateSend={async (text, images) => {
-                const attachments = await settleComposerAttachments(images);
-                sendPick(text, attachments);
-              }}
-            />
-          </Suspense>
-          <div className="ch-composer-foot">
-            <button
-              type="button"
-              className="ch-composer-attach"
-              title="Attach an image"
-              onClick={() => pickPickerRef.current?.click()}
-            >
-              <ImagePlus className="w-3.5 h-3.5" />
-            </button>
-            <input
-              ref={pickPickerRef}
-              type="file"
-              accept="image/*"
-              multiple
-              className="hidden"
-              onChange={(e) => {
-                const files = Array.from(e.target.files ?? []);
-                if (files.length) pickDropRef.current?.(files);
-                e.target.value = "";
-              }}
-            />
+        {pick.preview && <div className="px-4"><PalettePickPreview preview={pick.preview} /></div>}
+        <div className="px-3 pt-3">
+          <div
+            className="ch-composer ch-composer-flush palette-pick-composer [&_form_button[type=submit]]:hidden"
+            onKeyDownCapture={(e) => {
+              if (e.key !== "Backspace") return;
+              const t = e.target as HTMLTextAreaElement;
+              if (!(t instanceof HTMLTextAreaElement) || t.value !== "" || t.selectionStart !== 0) return;
+              const images = useInboxStore.getState().drafts[PALETTE_PICK_DRAFT]?.draft_image_storage_ids as unknown[] | undefined;
+              if (images && images.length > 0) return;
+              e.preventDefault();
+              e.stopPropagation();
+              setPickChosen(null);
+            }}
+          >
+            <Suspense fallback={<div className="h-10" />}>
+              <PaletteMessageInput
+                key={PALETTE_PICK_DRAFT}
+                conversationId={PALETTE_PICK_DRAFT}
+                bareComposer
+                chatMentionMode={chatTarget}
+                mentionTeamId={activeTeamId ? String(activeTeamId) : undefined}
+                composerPlaceholder={pick.notePlaceholder}
+                autoFocusInput
+                onDropFiles={pickDropRef}
+                onGateSend={async (text, images) => {
+                  const attachments = await settleComposerAttachments(images);
+                  sendPick(text, attachments);
+                }}
+              />
+            </Suspense>
+            <div className="ch-composer-foot">
+              <button
+                type="button"
+                className="ch-composer-attach"
+                title="Attach an image"
+                aria-label="Attach an image"
+                onClick={() => pickPickerRef.current?.click()}
+              >
+                <ImagePlus className="w-3.5 h-3.5" />
+              </button>
+              <input
+                ref={pickPickerRef}
+                type="file"
+                accept="image/*"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  const files = Array.from(e.target.files ?? []);
+                  if (files.length) pickDropRef.current?.(files);
+                  e.target.value = "";
+                }}
+              />
+            </div>
           </div>
         </div>
         <div className="px-3 py-3 flex items-center justify-between">
@@ -2477,6 +2486,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       {pick && (
         <div className="px-4 pt-3 pb-0">
           <div className="text-xs font-mono text-sol-text-dim truncate">{pick.title}</div>
+          <PalettePickPreview preview={pick.preview} />
         </div>
       )}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-sol-border/60">
@@ -3054,6 +3064,18 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
             <span className="truncate flex-1">New Session</span>
             <MenuKeyCaps action="session.compose" />
           </CommandPrimitive.Item>
+          {!standalone && (
+          <CommandPrimitive.Item
+            key="create-session-docked"
+            value="New session docked small composer minimize corner"
+            onSelect={() => startCompose("", true)}
+            className={itemClass}
+          >
+            <PanelBottom className="w-4 h-4 text-sol-cyan flex-shrink-0" />
+            <span className="truncate flex-1">New Session (docked)</span>
+            <MenuKeyCaps action="session.composeDock" />
+          </CommandPrimitive.Item>
+          )}
           <CommandPrimitive.Item
             key="create-task"
             value="Create task new todo"

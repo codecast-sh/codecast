@@ -596,7 +596,21 @@ export default function ChatPage({ scope = "team" }: { scope?: ChatRailScope } =
             <div className="ch-drop-card">Drop images to attach</div>
           </div>
         )}
-        {activeChannelId ? (
+        {feed.unavailable ? (
+          // The server will not show this viewer the room the URL names (a room
+          // they left, a DM that was never theirs, a dead link). No header and
+          // no composer: the empty room state here invited a post that
+          // chat.sendMessage could only refuse.
+          <div className="ch-empty">
+            <div className="ch-empty-title">This channel isn&apos;t available</div>
+            <div className="ch-empty-sub">
+              It was removed, or you are not a member of it.
+            </div>
+            <button type="button" className="ch-empty-action" onClick={() => router.replace(base)}>
+              {community ? "Back to the community" : "Back to chat"}
+            </button>
+          </div>
+        ) : activeChannelId ? (
           <>
             <header ref={headTitlebarRef} className="ch-head">
               {activeChannel?.kind === "dm" ? (
@@ -829,7 +843,7 @@ export default function ChatPage({ scope = "team" }: { scope?: ChatRailScope } =
           onClose={closeSearch}
         />
       )}
-      {threadRootId && activeChannelId && (
+      {threadRootId && activeChannelId && !feed.unavailable && (
         <ChatThreadPanel
           channelId={activeChannelId}
           channelName={activeChannel?.name ?? "channel"}

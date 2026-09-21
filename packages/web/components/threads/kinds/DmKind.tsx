@@ -104,6 +104,16 @@ export function DmExpanded({
     [channelId],
   );
 
+  // The card came from a rail that predates the refusal; chat.sendMessage
+  // would refuse a post here, so the card offers none.
+  if (feed.unavailable) {
+    return (
+      <div className="th-card-open">
+        <div className="th-card-note">This conversation isn&apos;t available anymore.</div>
+      </div>
+    );
+  }
+
   return (
     <div className="th-card-open">
       {messages.length === 0 && !feed.loading ? (

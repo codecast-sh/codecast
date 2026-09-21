@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFile, spawnSync } from "../../proc.js";
-import { isCodecastOwnedHomePath } from "../../codecastOwned.js";
+import { isCodecastHookCommand, isCodecastOwnedHomePath } from "../../codecastOwned.js";
 import type { Config } from "../../config/types.js";
 import { INSTALLABLE_CLIENTS } from "../../remote/agentAuth.js";
 import { GH_WRAPPER_REL } from "../ghWrapper.js";
@@ -28,6 +28,14 @@ export const INSTRUCTION_FILE_RE = /^(?:AGENTS(?:\.override)?|CLAUDE(?:\.local)?
 export const CLAUDE_RUNTIME_ROOTS: readonly string[] = [
   ".claude/plugins/marketplaces", ".claude/plugins/installed_plugins.json", ".claude/plugins/known_marketplaces.json",
 ];
+export const AGENT_RUNTIME_ROOTS: readonly string[] = [
+  ...CLAUDE_RUNTIME_ROOTS, ".codex/skills/.system", ".claude/skills/synced",
+  ".claude/hooks/peon-ping/.last_update_check", ".claude/plugins/.last_inuse_sweep",
+];
+export function isAgentRuntimePath(rel: string): boolean {
+  return AGENT_RUNTIME_ROOTS.some((root) => rel === root || rel.startsWith(`${root}/`))
+    || /^\.claude\/plugins\/cache\/.*\/(?:\.in_use(?:\/|$)|\.orphaned_at$)/.test(rel);
+}
 export const CONTEXT_DENYLIST: readonly string[] = [
   ".claude/.credentials.json", ".claude.json", ".claude/history.jsonl",
   ".claude/sessions", ".claude/session-env", ".claude/shell-snapshots", ".claude/file-history",
@@ -36,7 +44,7 @@ export const CONTEXT_DENYLIST: readonly string[] = [
   ".claude/jobs", ".claude/paste-cache", ".claude/tasks", ".claude/teams", ".claude/telemetry", ".claude/worktrees",
   ".claude/daemon-auth-status.json", ".claude/daemon-auth-cooldown", ".claude/stats-cache.json",
   ".claude/.last-cleanup", ".claude/.last-update-result.json", ".claude/commands.zip",
-  ...CLAUDE_RUNTIME_ROOTS,
+  ...AGENT_RUNTIME_ROOTS,
   ".codex/auth.json", ".codex/sessions", ".codex/archived_sessions", ".codex/cache", ".codex/tmp", ".codex/.tmp",
   ".codex/shell_snapshots", ".codex/thread-writer-locks", ".codex/models_cache.json", ".codex/installation_id",
   ".codex/browser", ".codex/computer-use", ".codex/dictation-history", ".codex/history", ".codex/ipc",
@@ -113,7 +121,7 @@ export function isDeniedPath(rel: string, isDir = false): boolean {
 }
 
 export function isDefaultExcluded(rel: string): boolean {
-  return DEFAULT_EXCLUDES.some((p) => globToRegExp(p).test(rel) || globToRegExp(p).test(`${rel}/`));
+  return isAgentRuntimePath(rel) || DEFAULT_EXCLUDES.some((p) => globToRegExp(p).test(rel) || globToRegExp(p).test(`${rel}/`));
 }
 
 export function isAccountDataPath(rel: string): boolean {
@@ -217,6 +225,50 @@ export function commandCompatibilityWarnings(text: string, rel: string): string[
   return found.map((command) => `${rel}: host compatibility requires review for ${command}`);
 }
 
+function* portableHookSteps(bytes: Buffer, source: string, home: string, kind: MirrorKind): ContextSteps<{ bytes: Buffer; warnings: string[] }> {
+  const warnings: string[] = [];
+  if (!["claude-settings", "codex-hooks", "gemini-settings"].includes(kind)) return { bytes, warnings };
+  let config: Record<string, any>;
+  try { config = parseJsonLoose(bytes.toString("utf8")) as Record<string, any>; }
+  catch { throw new Error(`cannot parse active context config: ${source}`); }
+  if (!config?.hooks || typeof config.hooks !== "object" || Array.isArray(config.hooks)) return { bytes, warnings };
+  for (const [event, groups] of Object.entries(config.hooks)) {
+    if (!Array.isArray(groups)) continue;
+    const kept = [];
+    for (const group of groups) {
+      const nested = Array.isArray(group?.hooks);
+      const entries = nested ? group.hooks : [group];
+      const available = [];
+      for (const entry of entries) {
+        const missing: string[] = [];
+        if (typeof entry?.command === "string" && !isCodecastHookCommand(entry.command, home)) {
+          const refs = contextReferences(entry.command, source, home);
+          const denied = refs.some((ref) => { const rel = homeRelative(ref, home); return rel !== null && isDeniedPath(rel); });
+          for (const ref of denied ? [] : refs) {
+            const rel = homeRelative(ref, home);
+            if (rel === null || isDeniedPath(rel) || isDefaultExcluded(rel)) continue;
+            try { yield { op: "stat", path: ref }; }
+            catch (err) {
+              if (!["ENOENT", "ENOTDIR", "ELOOP"].includes((err as NodeJS.ErrnoException).code ?? "")) throw err;
+              missing.push(ref);
+            }
+          }
+        }
+        if (missing.length) warnings.push(`${source}: omitted ${event} hook from the remote copy; missing locally: ${missing.join(", ")}`);
+        else available.push(entry);
+      }
+      if (available.length) kept.push(nested ? { ...group, hooks: available } : group);
+    }
+    if (kept.length) config.hooks[event] = kept;
+    else delete config.hooks[event];
+  }
+  return { bytes: warnings.length ? Buffer.from(JSON.stringify(config, null, 2) + "\n") : bytes, warnings };
+}
+
+export async function portableHooks(bytes: Buffer, source: string, home: string, kind: MirrorKind): Promise<{ bytes: Buffer; warnings: string[] }> {
+  return executeStepsAsync(portableHookSteps(bytes, source, home, kind));
+}
+
 export interface ProjectContextFile {
   sourcePath: string;
   relativePath: string;
@@ -313,9 +365,12 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
     const prefix: Buffer = yield { op: "prefix", path: real };
     if (isNativeBinary(prefix)) { result.skipped.push({ path: logical, reason: "native binary" }); return; }
     if (actual.size + result.totalBytes > (opts.maxBytes ?? CONTEXT_SIZE_CAP)) throw new Error(`project context exceeds ${(opts.maxBytes ?? CONTEXT_SIZE_CAP) / 1048576} MiB at ${logical}`);
-    const bytes: Buffer = yield { op: "bytes", path: real };
+    let bytes: Buffer = yield { op: "bytes", path: real };
     scanned.add(logical);
     const kind = kindForPath(rel);
+    const hooks = yield* portableHookSteps(bytes, logical, home, kind);
+    bytes = hooks.bytes;
+    result.warnings.push(...hooks.warnings);
     const credential = !isActiveConfig(kind) && credentialContentReason(bytes);
     if (credential) { credentialPaths.add(logical); result.skipped.push({ path: logical, reason: credential }); return; }
     const emit = scope !== "project" || opts.includeTracked !== false || !tracked.has(rel);
@@ -436,8 +491,7 @@ export function collectProjectContext(opts: ProjectContextOptions): ProjectConte
   return next.value;
 }
 
-export async function collectProjectContextAsync(opts: ProjectContextOptions): Promise<ProjectContext> {
-  const steps = projectContextSteps(opts);
+async function executeStepsAsync<T>(steps: ContextSteps<T>): Promise<T> {
   let next = steps.next();
   while (!next.done) {
     let value: unknown;
@@ -445,4 +499,8 @@ export async function collectProjectContextAsync(opts: ProjectContextOptions): P
     next = steps.next(value);
   }
   return next.value;
+}
+
+export async function collectProjectContextAsync(opts: ProjectContextOptions): Promise<ProjectContext> {
+  return executeStepsAsync(projectContextSteps(opts));
 }

@@ -232,3 +232,15 @@ test("moving an app window's page into the main window closes the app window", a
   assert.deepEqual(rig.mainWindow.webContents.sent.filter(([ch]) => ch === "adopt-tab").map(([, p]) => p), ["/tasks/ct-1"]);
   assert.equal(work.isDestroyed(), true);
 });
+
+test("a plain breakout asking for a chat path gets the Chat window instead of showing chat itself", async () => {
+  const rig = harness.loadShell();
+  rig.handlers.get("detach-tab")(null, "/feed");
+  const plain = rig.windows.at(-1);
+  const created = rig.windows.length;
+  rig.handlers.get("route-navigate")({ sender: plain.webContents }, "/chat/ch1");
+  assert.equal(rig.windows.length, created + 1);
+  const chat = rig.windows.at(-1);
+  assert.ok(chat.options.webPreferences.additionalArguments.includes("--app-window=chat"));
+  assert.deepEqual(chat.last("loadURL"), ["https://codecast.sh/chat/ch1"]);
+});
