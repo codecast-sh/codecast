@@ -397,8 +397,10 @@ export type DesktopWindowRole = {
   peopleWall: boolean;
   /** Which of the Chat and Work windows exist right now (lib/desktopApps):
    *  the sidebar marks their sections as popped out, and every navigation
-   *  to their routes is handed to them. Empty on an older shell. */
-  apps: Partial<Record<string, boolean>>;
+   *  to their routes is handed to them. Null on a shell from before app
+   *  windows, which cannot say; the windows then say it for themselves
+   *  (lib/appWindowRegistry). */
+  apps: Partial<Record<string, boolean>> | null;
   /** The app THIS window is, when the shell made it one out of a warm spare
    *  window: a spare's preload arguments were fixed before anyone knew what
    *  it would become, so its identity arrives here instead. */
@@ -1315,7 +1317,7 @@ let windowRole: DesktopWindowRole = {
   voiceWindow: false,
   facesOverlay: false,
   peopleWall: false,
-  apps: {},
+  apps: null,
   app: null,
 };
 // The bridge the tracker installed on. In the app there is exactly one and it
@@ -1361,7 +1363,7 @@ export function installWindowRoleTracker(): void {
       voiceWindow: !!role.voiceWindow,
       facesOverlay: !!role.facesOverlay,
       peopleWall: !!role.peopleWall,
-      apps: role.apps && typeof role.apps === "object" ? { ...role.apps } : {},
+      apps: role.apps && typeof role.apps === "object" ? { ...role.apps } : null,
       app: typeof role.app === "string" ? role.app : null,
     };
     for (const cb of windowRoleWatchers) cb();

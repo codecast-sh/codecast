@@ -37,7 +37,7 @@ function recordJs(win) {
 test("opening an app window loads its home with the app flag; a second open raises and navigates the same window", async () => {
   const rig = harness.loadShell();
   const created = rig.windows.length;
-  rig.handlers.get("open-app-window")(null, "chat");
+  rig.handlers.get("open-app-window")(rig.event(), "chat");
   assert.equal(rig.windows.length, created + 1);
   const chat = rig.windows.at(-1);
   assert.ok(chat.options.webPreferences.additionalArguments.includes("--app-window=chat"));
@@ -47,18 +47,18 @@ test("opening an app window loads its home with the app flag; a second open rais
   assert.equal(chat.isVisible(), true);
 
   recordJs(chat);
-  rig.handlers.get("open-app-window")(null, "chat", "/chat/ch1");
+  rig.handlers.get("open-app-window")(rig.event(), "chat", "/chat/ch1");
   assert.equal(rig.windows.length, created + 1);
   assert.deepEqual(navigations(chat), [{ path: "/chat/ch1", tabId: null, placed: true }]);
   assert.ok(chat.did("focus").length >= 1);
 
-  assert.equal(rig.handlers.get("open-app-window")(null, "people"), false);
+  assert.equal(rig.handlers.get("open-app-window")(rig.event(), "people"), false);
   assert.equal(rig.windows.length, created + 1);
 });
 
 test("an app window opens on the path it was asked for and remembers its bounds", async () => {
   const rig = harness.loadShell();
-  rig.handlers.get("open-app-window")(null, "work", "/tasks/ct-1");
+  rig.handlers.get("open-app-window")(rig.event(), "work", "/tasks/ct-1");
   const work = rig.windows.at(-1);
   assert.deepEqual(work.last("loadURL"), ["https://codecast.sh/tasks/ct-1"]);
   work.bounds = { x: 300, y: 200, width: 900, height: 700 };
@@ -66,7 +66,7 @@ test("an app window opens on the path it was asked for and remembers its bounds"
   assert.deepEqual(harness.readSettings().appWindows.work.bounds, { x: 300, y: 200, width: 900, height: 700 });
   work.destroy();
 
-  rig.handlers.get("open-app-window")(null, "work");
+  rig.handlers.get("open-app-window")(rig.event(), "work");
   const again = rig.windows.at(-1);
   assert.notEqual(again, work);
   assert.deepEqual(again.last("setBounds"), [{ x: 300, y: 200, width: 900, height: 700 }]);
@@ -76,7 +76,7 @@ test("the window role says which app windows exist, and closing one clears it", 
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const rig = harness.loadShell();
   recordSends(rig);
-  rig.handlers.get("open-app-window")(null, "chat");
+  rig.handlers.get("open-app-window")(rig.event(), "chat");
   recordSends(rig);
   t.mock.timers.tick(50);
   assert.deepEqual(lastRole(rig.mainWindow).apps, { chat: true });
@@ -89,48 +89,48 @@ test("the window role says which app windows exist, and closing one clears it", 
 test("route-navigate lands a chat path in the Chat window and a session in the main window", async () => {
   const rig = harness.loadShell();
   recordJs(rig.mainWindow);
-  rig.handlers.get("open-app-window")(null, "chat");
+  rig.handlers.get("open-app-window")(rig.event(), "chat");
   const chat = rig.windows.at(-1);
   recordJs(chat);
 
   // From the main window: chat goes to the Chat window.
-  rig.handlers.get("route-navigate")({ sender: rig.mainWindow.webContents }, "/chat/ch1?m=1");
+  rig.handlers.get("route-navigate")(rig.event(rig.mainWindow.webContents), "/chat/ch1?m=1");
   assert.deepEqual(navigations(chat), [{ path: "/chat/ch1?m=1", tabId: null, placed: true }]);
   assert.deepEqual(navigations(rig.mainWindow), []);
 
   // From the Chat window: a session goes to the main window; a task, with no
   // Work window, goes to the main window too.
-  rig.handlers.get("route-navigate")({ sender: chat.webContents }, "/conversation/c1");
-  rig.handlers.get("route-navigate")({ sender: chat.webContents }, "/tasks/ct-1");
+  rig.handlers.get("route-navigate")(rig.event(chat.webContents), "/conversation/c1");
+  rig.handlers.get("route-navigate")(rig.event(chat.webContents), "/tasks/ct-1");
   assert.deepEqual(navigations(rig.mainWindow).map((n) => n.path), ["/conversation/c1", "/tasks/ct-1"]);
   assert.ok(rig.mainWindow.did("focus").length >= 2);
 
   // A stray absolute URL never rides the channel.
-  assert.equal(rig.handlers.get("route-navigate")({ sender: chat.webContents }, "https://evil"), false);
+  assert.equal(rig.handlers.get("route-navigate")(rig.event(chat.webContents), "https://evil"), false);
 });
 
 test("detaching a chat path opens the Chat window rather than a plain breakout", async () => {
   const rig = harness.loadShell();
   const created = rig.windows.length;
-  rig.handlers.get("detach-tab")(null, "/chat/ch1");
+  rig.handlers.get("detach-tab")(rig.event(), "/chat/ch1");
   const win = rig.windows.at(-1);
   assert.equal(rig.windows.length, created + 1);
   assert.ok(win.options.webPreferences.additionalArguments.includes("--app-window=chat"));
   assert.deepEqual(win.last("loadURL"), ["https://codecast.sh/chat/ch1"]);
   // The same path again raises it: no second window.
-  rig.handlers.get("detach-tab")(null, "/chat/ch2");
+  rig.handlers.get("detach-tab")(rig.event(), "/chat/ch2");
   assert.equal(rig.windows.length, created + 1);
 });
 
 test("a banner for a chat route lands in the Chat window even when the main window shows that channel", async () => {
   const rig = harness.loadShell();
-  rig.handlers.get("open-app-window")(null, "chat");
+  rig.handlers.get("open-app-window")(rig.event(), "chat");
   const chat = rig.windows.at(-1);
   recordJs(chat);
   recordJs(rig.mainWindow);
   const report = rig.handlers.get("report-window-state");
-  report({ sender: rig.mainWindow.webContents }, { active: "/chat/ch1", open: [], inCall: false });
-  report({ sender: chat.webContents }, { active: "/chat/ch2", open: [], inCall: false });
+  report(rig.event(rig.mainWindow.webContents), { active: "/chat/ch1", open: [], inCall: false });
+  report(rig.event(chat.webContents), { active: "/chat/ch2", open: [], inCall: false });
   const { pickWindow } = require("./notificationRouter");
   const windows = [
     { id: rig.mainWindow.id ?? 1, isMain: true, app: null, active: "/chat/ch1", open: [] },
@@ -143,7 +143,7 @@ test("a banner for a chat route lands in the Chat window even when the main wind
 test("a deep link for a work path lands in the Work window when one exists", async () => {
   const rig = harness.loadShell();
   recordSends(rig);
-  rig.handlers.get("open-app-window")(null, "work");
+  rig.handlers.get("open-app-window")(rig.event(), "work");
   const work = rig.windows.at(-1);
   recordSends(rig);
   rig.listeners.get("open-url")?.({ preventDefault() {} }, "codecast://open/tasks/ct-9");
@@ -170,7 +170,7 @@ test("an app window claims the warm spare: no new window, told what it is before
   };
 
   const created = rig.windows.length;
-  rig.handlers.get("open-app-window")(null, "work", "/docs");
+  rig.handlers.get("open-app-window")(rig.event(), "work", "/docs");
   // The claim builds no window of its own (the NEXT spare warms on a timer).
   assert.equal(rig.windows.length, created);
 
@@ -185,14 +185,14 @@ test("an app window claims the warm spare: no new window, told what it is before
   assert.equal(spare.isVisible(), true);
 
   // It is the Work window from here on: a second open raises it.
-  rig.handlers.get("open-app-window")(null, "work");
+  rig.handlers.get("open-app-window")(rig.event(), "work");
   assert.equal(rig.windows.length, created);
 });
 
 test("a deep link for a chat path reaches the Chat window even with the main window closed", async () => {
   const rig = harness.loadShell();
   recordSends(rig);
-  rig.handlers.get("open-app-window")(null, "chat");
+  rig.handlers.get("open-app-window")(rig.event(), "chat");
   const chat = rig.windows.at(-1);
   recordSends(rig);
   rig.mainWindow.destroy();
@@ -216,19 +216,31 @@ test("a deep link for a chat path reaches the Chat window even with the main win
 test("first open lands beside the main window when the display has room, else cascades", async () => {
   const rig = harness.loadShell();
   rig.mainWindow.bounds = { x: 0, y: 0, width: 400, height: 300 };
-  rig.handlers.get("open-app-window")(null, "chat");
+  rig.handlers.get("open-app-window")(rig.event(), "chat");
   assert.deepEqual(rig.windows.at(-1).last("setPosition"), [412, 0]);
   rig.mainWindow.bounds = { x: 0, y: 0, width: 1500, height: 900 };
-  rig.handlers.get("open-app-window")(null, "work");
+  rig.handlers.get("open-app-window")(rig.event(), "work");
   assert.deepEqual(rig.windows.at(-1).last("setPosition"), [60, 60]);
 });
 
 test("moving an app window's page into the main window closes the app window", async () => {
   const rig = harness.loadShell();
   recordSends(rig);
-  rig.handlers.get("open-app-window")(null, "work");
+  rig.handlers.get("open-app-window")(rig.event(), "work");
   const work = rig.windows.at(-1);
-  rig.handlers.get("attach-tab")({ sender: work.webContents }, "/tasks/ct-1");
+  rig.handlers.get("attach-tab")(rig.event(work.webContents), "/tasks/ct-1");
   assert.deepEqual(rig.mainWindow.webContents.sent.filter(([ch]) => ch === "adopt-tab").map(([, p]) => p), ["/tasks/ct-1"]);
   assert.equal(work.isDestroyed(), true);
+});
+
+test("a plain breakout asking for a chat path gets the Chat window instead of showing chat itself", async () => {
+  const rig = harness.loadShell();
+  rig.handlers.get("detach-tab")(rig.event(), "/feed");
+  const plain = rig.windows.at(-1);
+  const created = rig.windows.length;
+  rig.handlers.get("route-navigate")(rig.event(plain.webContents), "/chat/ch1");
+  assert.equal(rig.windows.length, created + 1);
+  const chat = rig.windows.at(-1);
+  assert.ok(chat.options.webPreferences.additionalArguments.includes("--app-window=chat"));
+  assert.deepEqual(chat.last("loadURL"), ["https://codecast.sh/chat/ch1"]);
 });

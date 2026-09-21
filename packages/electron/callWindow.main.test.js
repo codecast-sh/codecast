@@ -202,7 +202,7 @@ test("showing a hidden huddle raises the same window", () => {
   const { win } = openCallWindow(rig, "session:abc");
   win.close();
   assert.equal(win.isVisible(), false);
-  assert.equal(rig.handlers.get("show-call-panel")(), true);
+  assert.equal(rig.handlers.get("show-call-panel")(rig.event()), true);
   assert.equal(win.isVisible(), true);
   assert.equal(win.did("show").length, 1);
 });
@@ -278,13 +278,13 @@ test("an opener may ask for a size, and the window is born in it", () => {
   // The walkie card's "Float faces over my work" wants circles, not a stage
   // that shrinks a frame later. The size is remembered like any other.
   const rig = loadShell({ callPanelWindow: { size: "panel" } });
-  rig.handlers.get("open-call-panel")(null, "dm:a:b", { mic: true, size: "speaker" });
+  rig.handlers.get("open-call-panel")(rig.event(), "dm:a:b", { mic: true, size: "speaker" });
   const win = rig.windows[rig.windows.length - 1];
   assert.match(win.last("loadURL")[0], /size=speaker/);
   assert.deepEqual(win.last("setAlwaysOnTop"), [true, "floating"]);
   assert.equal(readSettings().callPanelWindow.size, "speaker");
   // Asked again on the window that exists, the shape changes in place.
-  rig.handlers.get("open-call-panel")(null, "dm:a:b", { size: "panel" });
+  rig.handlers.get("open-call-panel")(rig.event(), "dm:a:b", { size: "panel" });
   assert.deepEqual(win.last("setAlwaysOnTop"), [false, "floating"]);
   assert.equal(win.isResizable(), true);
 });
@@ -292,8 +292,8 @@ test("an opener may ask for a size, and the window is born in it", () => {
 test("showing a huddle finds the regular window hosting it when no panel exists", () => {
   const rig = loadShell();
   rig.mainWindow.webContents.once = () => {};
-  rig.handlers.get("report-window-state")({ sender: rig.mainWindow.webContents }, { inCall: true });
-  assert.equal(rig.handlers.get("show-call-panel")(), true);
+  rig.handlers.get("report-window-state")(rig.event(rig.mainWindow.webContents), { inCall: true });
+  assert.equal(rig.handlers.get("show-call-panel")(rig.event()), true);
   assert.equal(rig.mainWindow.did("show").length, 1);
   assert.equal(rig.mainWindow.did("focus").length, 1);
 });
@@ -306,9 +306,9 @@ test("showing a huddle finds the regular window hosting it when no panel exists"
 
 /** The voice window as the app boots it: no room, idle, hidden. */
 function bootVoiceWindow(rig) {
-  rig.handlers.get("open-faces-window")(null);
+  rig.handlers.get("open-faces-window")(rig.event());
   const win = rig.windows[rig.windows.length - 1];
-  const sender = { sender: win.webContents };
+  const sender = rig.event(win.webContents);
   return { win, sender };
 }
 
@@ -323,7 +323,7 @@ test("a host takes a room as a command — the window is never reloaded under it
   const sent = [];
   win.webContents.send = (channel, payload) => sent.push([channel, payload]);
   const loads = win.did("loadURL").length;
-  rig.handlers.get("open-call-panel")(null, "dm:a:b", { mic: true, size: "speaker" });
+  rig.handlers.get("open-call-panel")(rig.event(), "dm:a:b", { mic: true, size: "speaker" });
   assert.equal(win.did("loadURL").length, loads);
   assert.deepEqual(sent, [
     ["call-panel-open", { room: "dm:a:b", mic: true, camera: false, scribe: false, ring: false, size: "speaker" }],
@@ -338,7 +338,7 @@ test("before the renderer declares itself, a room still reaches it the older way
   // the one form every renderer understands.
   const rig = loadShell();
   const { win } = bootVoiceWindow(rig);
-  rig.handlers.get("open-call-panel")(null, "dm:a:b", { mic: true });
+  rig.handlers.get("open-call-panel")(rig.event(), "dm:a:b", { mic: true });
   assert.match(win.last("loadURL")[0], /call-panel\?room=dm%3Aa%3Ab&mic=1/);
 });
 
@@ -401,18 +401,18 @@ test("the strip's corner is remembered on its own, apart from the circles and th
 
 test("commands from other windows reach the host, and nobody when there is none", () => {
   const rig = loadShell();
-  assert.equal(rig.handlers.get("voice-command")(null, "startBurst", ["ch1", "dm:a:b"]), false);
+  assert.equal(rig.handlers.get("voice-command")(rig.event(), "startBurst", ["ch1", "dm:a:b"]), false);
   const { win, sender } = bootVoiceWindow(rig);
   // Built but not yet declared: the renderer may still be loading, or old.
-  assert.equal(rig.handlers.get("voice-command")(null, "startBurst", ["ch1", "dm:a:b"]), false);
+  assert.equal(rig.handlers.get("voice-command")(rig.event(), "startBurst", ["ch1", "dm:a:b"]), false);
   declareHost(rig, sender);
   const sent = [];
   win.webContents.send = (channel, payload) => sent.push([channel, payload]);
-  assert.equal(rig.handlers.get("voice-command")(null, "startBurst", ["ch1", "dm:a:b"]), true);
+  assert.equal(rig.handlers.get("voice-command")(rig.event(), "startBurst", ["ch1", "dm:a:b"]), true);
   assert.deepEqual(sent, [["voice-command", { cmd: "startBurst", args: ["ch1", "dm:a:b"] }]]);
   // A command with no name, or with arguments that are not a list, is dropped.
-  assert.equal(rig.handlers.get("voice-command")(null, "", []), false);
-  rig.handlers.get("voice-command")(null, "endBurst", "not-a-list");
+  assert.equal(rig.handlers.get("voice-command")(rig.event(), "", []), false);
+  rig.handlers.get("voice-command")(rig.event(), "endBurst", "not-a-list");
   assert.deepEqual(sent[sent.length - 1], ["voice-command", { cmd: "endBurst", args: [] }]);
 });
 
@@ -420,7 +420,7 @@ test("the host's mirror reaches every other window, and a window that opens late
   const rig = loadShell();
   // A people window of its own, from before the host declared (with a host
   // the buddy list is the host's wall, not a window).
-  rig.handlers.get("open-people-window")();
+  rig.handlers.get("open-people-window")(rig.event());
   const people = rig.windows[rig.windows.length - 1];
   const { win, sender } = bootVoiceWindow(rig);
   declareHost(rig, sender);
@@ -446,7 +446,7 @@ test("the host's mirror reaches every other window, and a window that opens late
     if (channel === "voice-mirror") late.push(payload);
   };
   people.webContents.once = () => {};
-  rig.handlers.get("report-window-state")({ sender: people.webContents }, { active: "/people", open: [] });
+  rig.handlers.get("report-window-state")(rig.event(people.webContents), { active: "/people", open: [] });
   assert.deepEqual(late, [mirror]);
 });
 
@@ -485,13 +485,13 @@ test("raising the huddle on a host tells the host, which takes the call's shape 
   win.webContents.send = (channel) => sent.push(channel);
   rig.handlers.get("report-call-panel-state")(sender, { room: "dm:a:b", mic: true, camera: false, scribe: false });
   rig.handlers.get("set-call-window-size")(sender, "wall");
-  assert.equal(rig.handlers.get("show-call-panel")(), true);
+  assert.equal(rig.handlers.get("show-call-panel")(rig.event()), true);
   assert.deepEqual(sent, ["call-panel-show"]);
   assert.equal(rig.handlers.get("get-call-window-size")(sender), "wall");
   // In a call shape that was merely closed, the shell reveals it as well.
   rig.handlers.get("set-call-window-size")(sender, "speaker");
   win.hide();
-  assert.equal(rig.handlers.get("show-call-panel")(), true);
+  assert.equal(rig.handlers.get("show-call-panel")(rig.event()), true);
   assert.equal(win.isVisible(), true);
 });
 
@@ -506,7 +506,7 @@ test("with a host, asking for the people window asks the host for the wall — a
   const { sender } = bootVoiceWindow(rig);
   declareHost(rig, sender);
   const count = rig.windows.length;
-  rig.handlers.get("open-people-window")();
+  rig.handlers.get("open-people-window")(rig.event());
   // No second window.
   assert.equal(rig.windows.length, count);
   assert.equal(readSettings().peopleWindow.open, true);
@@ -517,11 +517,11 @@ test("with a host, asking for the people window asks the host for the wall — a
   assert.equal(role.facesOverlay, false);
   assert.equal(role.peopleWindow, false);
   // Putting it away.
-  rig.handlers.get("close-people-window")();
+  rig.handlers.get("close-people-window")(rig.event());
   assert.equal(readSettings().peopleWindow.open, false);
   // And asking for the faces puts the wall away in turn.
-  rig.handlers.get("open-people-window")();
-  rig.handlers.get("open-faces-window")();
+  rig.handlers.get("open-people-window")(rig.event());
+  rig.handlers.get("open-faces-window")(rig.event());
   assert.equal(readSettings().peopleWindow.open, false);
   assert.equal(readSettings().facesWindow.open, true);
 });
@@ -529,7 +529,7 @@ test("with a host, asking for the people window asks the host for the wall — a
 test("without a host, the people window is still a window of its own", () => {
   const rig = loadShell();
   const count = rig.windows.length;
-  rig.handlers.get("open-people-window")();
+  rig.handlers.get("open-people-window")(rig.event());
   assert.equal(rig.windows.length, count + 1);
   assert.match(rig.windows[rig.windows.length - 1].last("loadURL")[0], /\/people$/);
 });
@@ -585,7 +585,7 @@ test("closing the wall puts the buddy list away; the host stays", () => {
   const rig = loadShell();
   const { win, sender } = bootVoiceWindow(rig);
   declareHost(rig, sender);
-  rig.handlers.get("open-people-window")();
+  rig.handlers.get("open-people-window")(rig.event());
   rig.handlers.get("set-call-window-size")(sender, "wall");
   assert.equal(win.isVisible(), true);
   // With focus, because the person asked for it.
@@ -657,19 +657,19 @@ test("a focused window silences the conversation it shows; other banners and rin
   };
   // The main window reports the conversation it is on.
   rig.handlers.get("report-window-state")(
-    { sender: Object.assign(rig.mainWindow.webContents, { once: () => {} }) },
+    rig.event(Object.assign(rig.mainWindow.webContents, { once: () => {} })),
     { active: "/conversation/c1", open: [], inCall: false },
   );
   const handle = rig.handlers.get("show-notification");
   assert.equal(
-    handle(null, { title: "a", body: "b", data: { key: "n1", conversationId: "c1", kind: "session_idle" } }).shown,
+    handle(rig.event(), { title: "a", body: "b", data: { key: "n1", conversationId: "c1", kind: "session_idle" } }).shown,
     false,
     "the conversation on screen",
   );
   assert.equal(
-    handle(null, { title: "a", body: "b", data: { key: "n2", conversationId: "c2", kind: "session_idle" } }).shown,
+    handle(rig.event(), { title: "a", body: "b", data: { key: "n2", conversationId: "c2", kind: "session_idle" } }).shown,
     true,
     "any other conversation",
   );
-  assert.equal(handle(null, { title: "Sam wants to huddle", body: "b", data: { key: "ring:1", kind: "call", force: true } }).shown, true);
+  assert.equal(handle(rig.event(), { title: "Sam wants to huddle", body: "b", data: { key: "ring:1", kind: "call", force: true } }).shown, true);
 });

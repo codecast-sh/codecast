@@ -565,7 +565,11 @@ export function isStandaloneSharePath(path: string): boolean {
  * driver stamps it (AGENT_TAB_KEY) before the first script, or announces
  * itself (AGENT_TAB_EVENT) when it attached to a document already parsing.
  */
-export function runPreBootHandoff(appPreloadUrls: string[], sharePreloadUrls: string[] = []): void {
+export function runPreBootHandoff(
+  appPreloadUrls: string[],
+  sharePreloadUrls: string[] = [],
+  conversationPreloadUrls: string[] = [],
+): void {
   if (typeof window === "undefined" || typeof document === "undefined") return;
 
   let verdict: PreBootVerdict = "boot";
@@ -573,8 +577,15 @@ export function runPreBootHandoff(appPreloadUrls: string[], sharePreloadUrls: st
     verdict = preBootVerdict(readPreBootContext());
   } catch {}
 
-  const preload = () =>
-    preloadApp(isStandaloneSharePath(window.location.pathname) ? sharePreloadUrls : appPreloadUrls);
+  const preload = () => {
+    const path = window.location.pathname;
+    const urls = isStandaloneSharePath(path)
+      ? sharePreloadUrls
+      : /^\/(?:inbox(?:\/|$)|conversation\/)/.test(path)
+        ? [...appPreloadUrls, ...conversationPreloadUrls]
+        : appPreloadUrls;
+    preloadApp([...new Set(urls)]);
+  };
 
   if (verdict === "boot") {
     preload();

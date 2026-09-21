@@ -19,7 +19,7 @@ function warmSpare(t) {
 test("detaching a tab discards a crashed spare and loads a fresh window", (t) => {
   const { rig, spare } = warmSpare(t);
   spare.webContents.isCrashed = () => true;
-  rig.handlers.get("detach-tab")(null, "/inbox");
+  rig.handlers.get("detach-tab")(rig.event(), "/inbox");
   const detached = rig.windows.at(-1);
   assert.equal(spare.isDestroyed(), true);
   assert.notEqual(detached, spare);
@@ -31,7 +31,7 @@ test("detaching a tab discards a crashed spare and loads a fresh window", (t) =>
 test("detaching a tab still reuses a healthy ready spare", async (t) => {
   const { rig, spare } = warmSpare(t);
   const created = rig.windows.length;
-  rig.handlers.get("detach-tab")(null, "/questions");
+  rig.handlers.get("detach-tab")(rig.event(), "/questions");
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(rig.windows.length, created);
   assert.equal(spare.isDestroyed(), false);

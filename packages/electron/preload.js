@@ -15,6 +15,9 @@
 const { contextBridge, ipcRenderer, webFrame } = require("electron");
 const { createBridge, bufferedChannel } = require("@platform/desktop");
 
+const { trustedShellUrl, originOf } = require("./shellAuthority");
+const origins = ["https://codecast.sh", "https://local.codecast.sh", originOf(process.env.CODECAST_URL)].filter(Boolean);
+if (process.isMainFrame && trustedShellUrl(globalThis.location.href, origins)) {
 const zoomArg = process.argv.find(a => a.startsWith('--zoom-factor='));
 if (zoomArg) {
   const z = parseFloat(zoomArg.split('=')[1]);
@@ -196,3 +199,5 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   callRingHide: () => ipcRenderer.send("call-ring-hide"),
   callRingAnswer: (inviteId, roomKey) => ipcRenderer.send("call-ring-answer", inviteId, roomKey),
 });
+
+}

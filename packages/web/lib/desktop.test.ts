@@ -360,7 +360,7 @@ describe("desktop window role", () => {
       voiceWindow: false,
       facesOverlay: false,
       peopleWall: false,
-      apps: {},
+      apps: null,
       app: null,
     });
   });

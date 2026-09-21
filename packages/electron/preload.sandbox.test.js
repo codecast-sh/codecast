@@ -69,7 +69,7 @@ function runProbe(prefs) {
   });
 }
 
-test("the real preload exposes the bridge under preloadPrefs(), and not under the default sandbox", async () => {
+test("the real preload requires preloadPrefs and refuses a data document even outside the sandbox", async () => {
   const sandboxed = await runProbe({});
   const unsandboxed = await runProbe({ sandbox: false });
   // The reason the helper exists. If Electron ever lets a sandboxed preload
@@ -78,5 +78,5 @@ test("the real preload exposes the bridge under preloadPrefs(), and not under th
   assert.equal(sandboxed.bridge, "undefined");
   // The fix.
   assert.equal(unsandboxed.preloadError, null);
-  assert.equal(unsandboxed.bridge, "object");
+  assert.equal(unsandboxed.bridge, "undefined");
 });

@@ -47,11 +47,12 @@ class FakeWindow {
       getZoomFactor: () => this.zoom,
       executeJavaScript: () => Promise.resolve(),
       setWindowOpenHandler: () => {},
-      getURL: () => "https://codecast.sh/",
+      getURL: () => this.url ?? "https://codecast.sh/",
       reloadIgnoringCache: () => {},
       openDevTools: () => {},
       session: { clearCache: () => Promise.resolve() },
     });
+    this.webContents.mainFrame = { url: "https://codecast.sh/" };
   }
   record(name, ...args) {
     this.calls.push([name, ...args]);
@@ -96,6 +97,8 @@ class FakeWindow {
     this.events.get(event)?.(...args);
   }
   loadURL(url) {
+    this.url = url;
+    this.webContents.mainFrame.url = url;
     this.record("loadURL", url);
   }
   show() {
@@ -298,6 +301,7 @@ const harness = {
       globalThis.setTimeout = realTimeout;
     }
     rig.mainWindow = rig.windows[rig.windows.length - 1];
+    rig.event = (wc = rig.mainWindow.webContents) => ({ sender: wc, senderFrame: wc.mainFrame });
     return rig;
   },
 
@@ -308,17 +312,17 @@ const harness = {
 
 /** The call window, opened the way the renderer opens it. */
 function openCallWindow(rig, room = "dm:a:b", opts = { mic: true }) {
-  rig.handlers.get("open-call-panel")(null, room, opts);
+  rig.handlers.get("open-call-panel")(rig.event(), room, opts);
   const win = rig.windows[rig.windows.length - 1];
-  const sender = { sender: win.webContents };
+  const sender = rig.event(win.webContents);
   return { win, sender };
 }
 
 /** The faces overlay, opened the way the people window's button opens it. */
 function openFacesWindow(rig) {
-  rig.handlers.get("open-faces-window")(null);
+  rig.handlers.get("open-faces-window")(rig.event());
   const win = rig.windows[rig.windows.length - 1];
-  const sender = { sender: win.webContents };
+  const sender = rig.event(win.webContents);
   return { win, sender };
 }
 

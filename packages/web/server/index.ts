@@ -8,11 +8,13 @@ import { createRequire } from "module";
 import { botMetaMiddleware, prerenderedRouteCount } from "./bot-meta";
 import { registerShareRoutes, getShellHtml, shareSsrReady } from "./share";
 import { registerHashedAssets, registerMissingArtifactGuard, registerStableEntryPoints } from "./staticAssets";
+import { responsePolicy } from "./responsePolicy";
 
 const require = createRequire(import.meta.url);
 const pkg = require("../package.json");
 
 const app = new Hono();
+app.use("*", responsePolicy);
 
 const DIST_DIR = join(import.meta.dirname, "../dist");
 

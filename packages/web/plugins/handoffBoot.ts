@@ -38,7 +38,7 @@ export function handoffBootPlugin(): Plugin {
       order: "post",
       async handler(_html, ctx) {
         const source = path.resolve(config.root, GATE_SOURCE);
-        const preload = ctx.bundle ? bootChunkUrls(ctx.bundle, ctx.chunk, config.base) : { app: [], share: [] };
+        const preload = ctx.bundle ? bootChunkUrls(ctx.bundle, ctx.chunk, config.base) : { app: [], share: [], conversation: [] };
         const gate = await fs.readFile(source, "utf8");
         const { code } = await transformWithEsbuild(gate, source, {
           format: "iife",
@@ -51,7 +51,7 @@ export function handoffBootPlugin(): Plugin {
         return [
           {
             tag: "script",
-            children: `${code};${GLOBAL_NAME}.runPreBootHandoff(${JSON.stringify(preload.app)},${JSON.stringify(preload.share)})`,
+            children: `${code};${GLOBAL_NAME}.runPreBootHandoff(${JSON.stringify(preload.app)},${JSON.stringify(preload.share)},${JSON.stringify(preload.conversation)})`,
             injectTo: "head-prepend",
           },
         ];
@@ -74,20 +74,20 @@ const SHARE_BOOT_MODULE = "src/shareBoot.tsx";
  * nothing. The share graph is the one exception — a merged share entry just
  * lands in the app set, which is the pre-split behaviour.
  */
-function bootChunkUrls(
+export function bootChunkUrls(
   bundle: OutputBundle,
   entryChunk: OutputChunk | undefined,
   base: string,
-): { app: string[]; share: string[] } {
+): { app: string[]; share: string[]; conversation: string[] } {
   const entry = entryChunk ?? (Object.values(bundle).find((c) => c.type === "chunk" && c.isEntry) as OutputChunk | undefined);
   if (!entry?.dynamicImports.length) {
     // Not fatal, but every normal page load would then wait a whole round trip
     // for the entry to run before it could even start fetching the app.
     console.warn(`[${PLUGIN_NAME}] no dynamic import found on the html entry chunk — the app preload hints are missing.`);
-    return { app: [], share: [] };
+    return { app: [], share: [], conversation: [] };
   }
 
-  const graph = (roots: string[]): string[] => {
+  const graph = (roots: string[], includeImports = true): string[] => {
     const seen = new Set<string>();
     const walk = (file: string) => {
       if (seen.has(file)) return;
@@ -96,7 +96,7 @@ function bootChunkUrls(
       if (chunk?.type !== "chunk") return;
       // Static imports only — matching what Vite would have preloaded. The boot
       // chunk's own dynamic imports (lazy routes, mermaid, …) stay on demand.
-      for (const next of chunk.imports) walk(next);
+      if (includeImports) for (const next of chunk.imports) walk(next);
     };
     roots.forEach(walk);
     const prefix = base.endsWith("/") ? base : `${base}/`;
@@ -109,5 +109,9 @@ function bootChunkUrls(
   };
   const share = entry.dynamicImports.filter(isShare);
   const app = entry.dynamicImports.filter((f) => !isShare(f));
-  return { app: graph(app), share: graph(share) };
+  const conversation = Object.values(bundle)
+    .filter((chunk): chunk is OutputChunk => chunk.type === "chunk"
+      && Object.keys(chunk.modules).some((id) => id.endsWith("/components/ConversationDiffLayout.tsx")))
+    .map((chunk) => chunk.fileName);
+  return { app: graph(app), share: graph(share), conversation: graph(conversation, false) };
 }

@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { useLocation } from "react-router";
-import { desktopAppWindow, type DesktopApp } from "../lib/desktopApps";
+import { desktopAppWindow, hasAppWindow, type DesktopApp } from "../lib/desktopApps";
+import { appWindowPresence, subscribeAppWindowPresence } from "../lib/appWindowRegistry";
 import {
   getDesktopWindowRole,
   subscribeWindowRole,
@@ -27,4 +28,18 @@ export function useDesktopAppWindow(): DesktopApp | null {
   const { pathname } = useLocation();
   useSyncExternalStore(subscribeWindowRole, getDesktopWindowRole, getDesktopWindowRole);
   return desktopAppWindow(pathname);
+}
+
+/** Which app windows the windows themselves report (lib/appWindowRegistry). */
+export function useAppWindowPresence() {
+  return useSyncExternalStore(subscribeAppWindowPresence, appWindowPresence, appWindowPresence);
+}
+
+/** Whether `app` has a window anywhere, by either the shell's or the windows'
+ *  own word, as a React value. */
+export function useHasAppWindow(app: DesktopApp): boolean {
+  const { pathname } = useLocation();
+  useSyncExternalStore(subscribeWindowRole, getDesktopWindowRole, getDesktopWindowRole);
+  useAppWindowPresence();
+  return desktopAppWindow(pathname) === app || hasAppWindow(app);
 }
