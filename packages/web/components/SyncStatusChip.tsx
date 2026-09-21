@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useInboxStore } from "../store/inboxStore";
-import { useDaemonHealth } from "../hooks/useDaemonHealth";
+import { useLocalDaemonHealth } from "../hooks/useLocalDaemonHealth";
 import { connectionChipCopy, useAppOffline } from "../hooks/useAppOffline";
 import { describeDaemonHealth, type DaemonHealthCopy } from "../lib/daemonHealthCopy";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
@@ -175,7 +175,7 @@ export function SyncStatusChip() {
   // slot itself always renders, so the header never reflows around it.
   const [mounted, setMounted] = useState(false);
   useMountEffect(() => setMounted(true));
-  const daemonHealth = useDaemonHealth();
+  const daemonHealth = useLocalDaemonHealth();
   const appOffline = useAppOffline();
   const connection = mounted ? connectionChipCopy(appOffline) : null;
   const daemonIssue = mounted && !appOffline.offline ? describeDaemonHealth(daemonHealth) : null;

@@ -5,7 +5,8 @@ import { useDynamicRuns } from "../../hooks/useSyncWorkflows";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
-import { DynamicRunView, wfStatusMeta, wfFmtTokens } from "../../components/DynamicRunView";
+import { WorkflowRunNodes } from "../../components/WorkflowRunNodes";
+import { wfStatusMeta, wfFmtTokens } from "../../lib/workflowRun";
 import { AppLoader } from "../../components/AppLoader";
 import { ExternalLink, Workflow } from "lucide-react";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
@@ -48,8 +49,8 @@ function RunCard({ run }: { run: any }) {
           )}
         </div>
       </div>
-      <div className="px-4 py-3">
-        <DynamicRunView run={run} />
+      <div className="px-2 py-2">
+        <WorkflowRunNodes run={run} />
       </div>
     </div>
   );

@@ -7,9 +7,9 @@ import { useCurrentUser } from "../hooks/useCurrentUser";
 import {
   offlineTierFor,
   formatDuration,
-  useDaemonHealth,
   type OfflineTier,
 } from "../hooks/useDaemonHealth";
+import { useLocalDaemonHealth } from "../hooks/useLocalDaemonHealth";
 import { useAppOffline } from "../hooks/useAppOffline";
 import { useStatusNotice, type StatusNotice } from "../hooks/useStatusNotice";
 
@@ -35,7 +35,7 @@ function useCliOfflineNotice(): StatusNotice | null {
   // freshness and the post-wake grace (raw Date.now() here would re-introduce
   // the false "offline" banner that climbs while a stalled subscription freezes
   // daemon_last_seen).
-  const health = useDaemonHealth();
+  const health = useLocalDaemonHealth();
   // When this client itself has no connection, daemon_last_seen is stale
   // because WE can't sync — that's the ConnectionBanner's story, not the CLI's.
   const { offline: appOffline } = useAppOffline();

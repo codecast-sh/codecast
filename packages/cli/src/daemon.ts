@@ -352,7 +352,8 @@ import {
 } from "./execution/index.js";
 import { providerKeySourcePrefix } from "./providerKeyLaunch.js";
 import { providerKeyStorePath, readProviderKeyStore } from "./providerKeyStore.js";
-import { getProviderKeyPublicKey, applyProviderKeyCommand } from "./providerKeyCrypto.js";
+import { MintFlowControl, submitMintApprovalCode } from "./mintFlowControl.js";
+import { getProviderKeyPublicKey, applyProviderKeyCommand, decryptProviderKeyPayload } from "./providerKeyCrypto.js";
 import type { LoopFreezeSummary, LoopFreezeState } from "./loopFreezeState.js";
 import { defaultConfigDir } from "./config/configDir.js";
 import { findTmuxSessionsById } from "./tmuxSessionLookup.js";
@@ -3671,8 +3672,7 @@ async function watchLoginFlow(
 const MINT_FLOW_TMUX = "cc-mint-flow";
 const MINT_FLOW_TIMEOUT_MS = 5 * 60 * 1000;
 const MINT_FLOW_POLL_MS = 2000;
-let mintFlowActive = false;
-let mintFlowGeneration = 0;
+const mintFlow = new MintFlowControl();
 
 function mintUrlPath(): string {
   return path.join(CONFIG_DIR, "mint-flow.url");
@@ -3695,29 +3695,30 @@ function openInDefaultBrowser(url: string): void {
   spawn(process.platform === "darwin" ? "open" : "xdg-open", [url], { stdio: "ignore", detached: true }).unref();
 }
 
-async function startMintFlow(profile: string, force = false): Promise<string> {
-  if (isRemoteDevice()) {
-    throw new Error("Remote devices run a pushed copy of the primary's credential — mint on the primary machine");
-  }
-  if (mintFlowActive && !force) return "mint_flow_already_running";
-  const gen = ++mintFlowGeneration;
-  mintFlowActive = true;
-  try {
-    const meta = listProfiles().find((p) => p.name === profile);
-    if (!meta) throw new Error(`no saved profile "${profile}" on this machine`);
-    fs.rmSync(mintUrlPath(), { force: true });
-    const hook = writeMintBrowserHook();
-    await killTmuxSessionAndTree(MINT_FLOW_TMUX).catch(() => {});
-    tmuxExecSync(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", MINT_FLOW_TMUX, buildMintFlowCommand(hook)], { timeout: 5000 });
-    log(`[MINT-FLOW] started setup-token mint for "${profile}"${meta.email ? ` (${meta.email})` : ""}${force ? " [forced relaunch]" : ""}`);
-    void watchMintFlow(profile, meta.email, gen)
-      .catch((err) => log(`[MINT-FLOW] watcher failed: ${err instanceof Error ? err.message : String(err)}`))
-      .finally(() => { if (gen === mintFlowGeneration) mintFlowActive = false; });
-    return "mint_flow_started";
-  } catch (err) {
-    if (gen === mintFlowGeneration) mintFlowActive = false;
-    throw err;
-  }
+async function startMintFlow(profile: string, force = false, startedAt?: number): Promise<string> {
+  return mintFlow.run(async () => {
+    if (isRemoteDevice()) {
+      throw new Error("Remote devices run a pushed copy of the primary's credential — mint on the primary machine");
+    }
+    const gen = mintFlow.begin(startedAt, force);
+    if (gen === null) return "mint_flow_already_running";
+    try {
+      const meta = listProfiles().find((p) => p.name === profile);
+      if (!meta) throw new Error(`no saved profile "${profile}" on this machine`);
+      fs.rmSync(mintUrlPath(), { force: true });
+      const hook = writeMintBrowserHook();
+      await killTmuxSessionAndTree(MINT_FLOW_TMUX).catch(() => {});
+      tmuxExecSync(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", MINT_FLOW_TMUX, buildMintFlowCommand(hook)], { timeout: 5000 });
+      log(`[MINT-FLOW] started setup-token mint for "${profile}"${meta.email ? ` (${meta.email})` : ""}${force ? " [forced relaunch]" : ""}`);
+      void watchMintFlow(profile, meta.email, gen, startedAt)
+        .catch((err) => log(`[MINT-FLOW] watcher failed: ${err instanceof Error ? err.message : String(err)}`))
+        .finally(() => { if (mintFlow.current(gen)) mintFlow.active = false; });
+      return "mint_flow_started";
+    } catch (err) {
+      if (mintFlow.current(gen)) mintFlow.active = false;
+      throw err;
+    }
+  });
 }
 
 /** The profile's own access token when it is still usable, for the direct
@@ -3747,7 +3748,7 @@ async function comparableAccessToken(profile: string): Promise<string | null> {
   }
 }
 
-async function watchMintFlow(profile: string, email: string | undefined, gen: number): Promise<void> {
+async function watchMintFlow(profile: string, email: string | undefined, gen: number, startedAt?: number): Promise<void> {
   const deadline = Date.now() + MINT_FLOW_TIMEOUT_MS;
   let lastPane = "";
   let urlHandled = false;
@@ -3755,7 +3756,9 @@ async function watchMintFlow(profile: string, email: string | undefined, gen: nu
   // `storedFor` is the profile the token actually landed under — the requested
   // profile in the common case, another saved profile when the browser was
   // signed into that account instead (see attributeFingerprint).
-  const finish = async (status: "confirmed" | "rejected", rawReason?: string, storedFor?: string): Promise<void> => {
+  const finish = async (status: "confirmed" | "rejected", rawReason?: string, storedFor?: string, token?: string): Promise<void> => mintFlow.run(async () => {
+    if (!mintFlow.current(gen)) return;
+    if (token && storedFor) writeAccountToken(storedFor, token);
     // The reason renders inline in the Settings dialog — keep it one line.
     const reason = rawReason?.replace(/\s+/g, " ").trim().slice(0, 240);
     await killTmuxSessionAndTree(MINT_FLOW_TMUX).catch(() => {});
@@ -3765,10 +3768,11 @@ async function watchMintFlow(profile: string, email: string | undefined, gen: nu
     // The token's metadata reaches the web on the inventory beat; push it now.
     if (status === "confirmed") sendHeartbeat().catch(() => {});
     const ownerEmail = owner === profile ? email : listProfiles().find((p) => p.name === owner)?.email;
-    await syncServiceRef?.reportMintFlow(status, owner, ownerEmail, reason).catch((err) => {
+    await syncServiceRef?.reportMintFlow(status, owner, ownerEmail, reason, undefined, startedAt).catch((err) => {
       log(`[MINT-FLOW] outcome report failed: ${err instanceof Error ? err.message : String(err)}`);
     });
-  };
+    mintFlow.active = false;
+  });
 
   const storeMinted = async (token: string): Promise<void> => {
     let owner: string | null = null;
@@ -3809,16 +3813,15 @@ async function watchMintFlow(profile: string, email: string | undefined, gen: nu
           `the browser signed into a different Claude account than ${email ?? profile} (and none of the other saved accounts) — sign out of claude.ai, sign in as ${email ?? profile}, and try again`,
         );
       }
-      writeAccountToken(owner, token);
+      return await finish("confirmed", caveat, owner, token);
     } catch (err) {
       return finish("rejected", `could not verify or store the token: ${err instanceof Error ? err.message : String(err)}`);
     }
-    return finish("confirmed", caveat, owner);
   };
 
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, MINT_FLOW_POLL_MS));
-    if (gen !== mintFlowGeneration) return;
+    if (!mintFlow.current(gen)) return;
     if (!urlHandled) {
       let url = "";
       try { url = fs.readFileSync(mintUrlPath(), "utf-8").trim(); } catch {}
@@ -3826,7 +3829,7 @@ async function watchMintFlow(profile: string, email: string | undefined, gen: nu
         urlHandled = true;
         openInDefaultBrowser(url);
         log(`[MINT-FLOW] sign-in page opened in the default browser for "${profile}"`);
-        syncServiceRef?.reportMintFlow("pending", profile, email, undefined, url).catch((err) => {
+        syncServiceRef?.reportMintFlow("pending", profile, email, undefined, url, startedAt).catch((err) => {
           log(`[MINT-FLOW] url report failed: ${err instanceof Error ? err.message : String(err)}`);
         });
       }
@@ -6230,16 +6233,36 @@ async function executeRemoteCommand(
           break;
         }
 
+        if (parsed.cancel_mint === true) {
+          result = await mintFlow.run(async () => {
+            if (!mintFlow.cancel(parsed.mint_started_at)) return "mint_flow_already_ended";
+            await killTmuxSessionAndTree(MINT_FLOW_TMUX).catch(() => {});
+            fs.rmSync(mintUrlPath(), { force: true });
+            return "mint_flow_cancelled";
+          });
+          break;
+        }
+
+        if (parsed.mint_code) {
+          result = await mintFlow.run(async () => {
+            if (!mintFlow.active || mintFlow.startedAt !== parsed.mint_started_at) throw new Error("This mint has ended. Start again.");
+            await submitMintApprovalCode(args => tmuxExec(args, { timeout: 3000 }), MINT_FLOW_TMUX,
+              decryptProviderKeyPayload(CONFIG_DIR, parsed.mint_code));
+            return "mint_code_submitted";
+          });
+          break;
+        }
+
         // mint mode: mint a setup-token for ONE saved profile (the web's
         // guided "mint a token"). Returns at once — the flow takes as long as
         // the person's browser dance, far past any command TTL — and the
         // watcher reports the outcome through reportMintFlow (see MINT-FLOW).
         if (typeof parsed.mint === "string" && parsed.mint) {
           try {
-            result = await startMintFlow(parsed.mint, parsed.force === true);
+            result = await startMintFlow(parsed.mint, parsed.force === true, parsed.mint_started_at);
           } catch (err) {
             error = `Mint launch failed: ${err instanceof Error ? err.message : String(err)}`;
-            syncServiceRef?.reportMintFlow("rejected", parsed.mint, undefined, error).catch(() => {});
+            syncServiceRef?.reportMintFlow("rejected", parsed.mint, undefined, error, undefined, parsed.mint_started_at).catch(() => {});
           }
           break;
         }

@@ -181,28 +181,38 @@ elif [ -n "${PROFILE_SKIPPED}" ]; then
   echo ""
 fi
 
+INSTALL_TTY=""
+exec 3<&1
+for INSTALL_FD in 0 3 2; do
+  INSTALL_TTY_CANDIDATE="$(tty <&"${INSTALL_FD}" 2>/dev/null)" || continue
+  case "${INSTALL_TTY_CANDIDATE}" in
+    /dev/tty) continue ;;
+    /dev/*)
+      if ( : < "${INSTALL_TTY_CANDIDATE}" ) 2>/dev/null; then
+        INSTALL_TTY="${INSTALL_TTY_CANDIDATE}"
+        break
+      fi
+      ;;
+  esac
+done
+exec 3<&-
+
 if [ -n "${TOKEN}" ]; then
   echo "Linking device..."
-  # When installed via `curl | sh`, this script's stdin is the pipe, not a
-  # terminal, so the login wizard's prompts (sync settings, memory, stable)
-  # can't read input. Redirect from the controlling terminal so onboarding
-  # runs interactively; fall back to the pipe for headless/CI installs.
-  if [ -r /dev/tty ]; then
-    "${INSTALL_DIR}/codecast" login "${TOKEN}" < /dev/tty
+  if [ -n "${INSTALL_TTY}" ]; then
+    "${INSTALL_DIR}/codecast" login "${TOKEN}" < "${INSTALL_TTY}"
   else
-    "${INSTALL_DIR}/codecast" login "${TOKEN}"
+    "${INSTALL_DIR}/codecast" login "${TOKEN}" < /dev/null
   fi
 else
   if [ -f "${HOME}/.codecast/config.json" ]; then
     # Already authenticated (fresh install or update) — make sure the daemon runs
     echo "Existing login found. Starting daemon..."
     "${INSTALL_DIR}/codecast" start 2>/dev/null || true
-  elif [ -r /dev/tty ]; then
-    # Fresh interactive install: go straight into sign-in so one command takes the
-    # user from nothing to synced. stdin is the curl pipe, so read from the terminal.
+  elif [ -n "${INSTALL_TTY}" ]; then
     echo "Next: sign in to link this machine (opens your browser)."
     echo ""
-    if ! "${INSTALL_DIR}/codecast" auth < /dev/tty; then
+    if ! "${INSTALL_DIR}/codecast" auth < "${INSTALL_TTY}"; then
       echo ""
       echo "Sign-in did not complete. Run 'cast auth' anytime to finish setup."
     fi

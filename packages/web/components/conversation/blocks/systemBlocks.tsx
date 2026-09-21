@@ -9,7 +9,8 @@ import { fmtDuration, fmtClock } from "../../triggerCadence";
 import { TriggerPromptView } from "../../TriggerPromptView";
 import { CollapsibleBody, ExpandableLine } from "../../CollapsibleBody";
 import { isMonitorEventNotification, isMonitorEndedNotification, isOrphanSummaryNotification, monitorNotificationDescription, parseNotificationSummary, decodeEntities } from "../../monitorRows";
-import { DynamicRunView, wfStatusMeta, wfFmtTokens } from "../../DynamicRunView";
+import { WorkflowRunNodes } from "../../WorkflowRunNodes";
+import { wfStatusMeta, wfFmtTokens } from "../../../lib/workflowRun";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { copyToClipboard } from "../../../lib/utils";
 import { useWorkflowRun } from "../../../hooks/useSyncWorkflows";
@@ -1178,8 +1179,8 @@ function DynamicRunCard({ runId, name }: { runId?: string; name?: string }) {
           )}
         </div>
       </div>
-      <div className="px-3 py-2">
-        {run ? <DynamicRunView run={run} compact /> : <span className="text-[11px] text-sol-text-dim">loading run…</span>}
+      <div className="px-1.5 py-1.5">
+        {run ? <WorkflowRunNodes run={run} /> : <span className="px-1.5 text-[11px] text-sol-text-dim">loading run…</span>}
       </div>
     </div>
   );
