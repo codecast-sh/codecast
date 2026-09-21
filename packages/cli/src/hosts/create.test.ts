@@ -42,6 +42,7 @@ describe("remote machine launch", () => {
     }
     const script = macDaemonScript({ user: "ec2-user", homeDir: "/Users/ec2-user" });
     expect(script).toContain("launchctl bootstrap system");
+    expect(script).toContain("launchctl kickstart -k system/sh.codecast.remote.ec2-user");
     expect(script).toContain("CODECAST_REMOTE_DEVICE");
     expect(script).not.toContain("shutdown");
     expect(() => macDaemonScript({ user: "bad'user" })).toThrow("unsupported");

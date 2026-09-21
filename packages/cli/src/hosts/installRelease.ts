@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync } from "../proc.js";
 import { sshBase, type RemoteHost } from "../remote/session-move.js";
 
 export function hostReleaseScript(platform: "linux" | "darwin", systemLinks = true): string {

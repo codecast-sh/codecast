@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync } from "../proc.js";
 import { remoteExec } from "../browser/remote.js";
 import { pushCodecastConfig } from "../browser/provisionLinux.js";
 import { agentCliInstallScript, parseAgentCliReport } from "../browser/provisionAgents.js";
@@ -74,6 +74,7 @@ sudo chown root:wheel /Library/LaunchDaemons/${label}.plist
 sudo chmod 644 /Library/LaunchDaemons/${label}.plist
 plutil -lint /Library/LaunchDaemons/${label}.plist
 sudo launchctl print system/${label} >/dev/null 2>&1 || sudo launchctl bootstrap system /Library/LaunchDaemons/${label}.plist
+sudo launchctl kickstart -k system/${label}
 for attempt in {1..30}; do
   if sudo launchctl print system/${label} | grep -q 'state = running'; then echo MAC-DAEMON-OK; exit 0; fi
   sleep 1
@@ -95,7 +96,7 @@ export async function provisionMacHost(host: RemoteHost, opts: { skipDaemon?: bo
   const { installMacCast } = await import("./updateMac.js");
   installMacCast(host, log);
   log("installing missing agent CLIs…");
-  const agents = run(host, agentCliInstallScript(readInstalledClientVersions()), 15 * 60_000);
+  const agents = run(host, agentCliInstallScript(readInstalledClientVersions(), { upgradeCodex: true }), 15 * 60_000);
   if (!agents.includes("AGENT-CLIS-OK")) throw new Error(`Agent setup did not complete: ${agents.slice(-600)}`);
   log(parseAgentCliReport(agents));
   log("connecting Codecast and syncing agent configuration…");

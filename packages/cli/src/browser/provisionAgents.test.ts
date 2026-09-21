@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { agentCliInstallScript, NODE_22_VERSION, parseAgentCliReport } from "./provisionAgents";
+import { agentCliInstallScript, codexCompatibilityScript, NODE_22_VERSION, parseAgentCliReport } from "./provisionAgents";
 
 describe("agentCliInstallScript", () => {
   const script = agentCliInstallScript({ claude: "2.1.263", codex: "0.153.4", gemini: "0.58.0", grok: "1.2.3", opencode: "1.18.3", pi: "0.73.1" });
@@ -89,5 +89,21 @@ describe("agentCliInstallScript", () => {
   test("parseAgentCliReport keeps the per-client version lines", () => {
     expect(parseAgentCliReport("noise\nclaude=2.1.263 (Claude Code)\ncodex=codex-cli 0.153.4\ngemini=missing\ngrok=missing\nnode=v22.12.0\nAGENT-CLIS-OK\n"))
       .toBe("claude=2.1.263 (Claude Code)  codex=codex-cli 0.153.4  gemini=missing  grok=missing  node=v22.12.0");
+  });
+
+  test.each(["0.142.5", "0.155.1", "0.156.0"])("explicit provisioning upgrades older Codex without downgrading %s", (current) => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "codex-compatible-"));
+    const bin = path.join(home, ".bun/bin");
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(path.join(home, "version"), current);
+    fs.writeFileSync(path.join(bin, "codex"), '#!/bin/sh\nprintf "codex-cli %s\\n" "$(cat "$HOME/version")"\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(bin, "bun"), '#!/bin/sh\nprintf "%s" "$*" > "$HOME/install"\nprintf 0.155.1 > "$HOME/version"\n', { mode: 0o755 });
+    try {
+      const result = spawnSync("bash", ["-e", "-s"], { input: codexCompatibilityScript("0.155.1"), env: { ...process.env, HOME: home, PATH: `${bin}:/usr/bin:/bin` }, encoding: "utf8" });
+      expect(result.status).toBe(0);
+      expect(fs.readFileSync(path.join(home, "version"), "utf8")).toBe(current === "0.142.5" ? "0.155.1" : current);
+      expect(fs.existsSync(path.join(home, "install"))).toBe(current === "0.142.5");
+      if (current === "0.142.5") expect(fs.readFileSync(path.join(home, "install"), "utf8")).toBe("install -g @openai/codex@0.155.1");
+    } finally { fs.rmSync(home, { recursive: true, force: true }); }
   });
 });

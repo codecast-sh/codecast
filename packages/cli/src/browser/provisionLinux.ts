@@ -581,9 +581,9 @@ export async function provisionLinuxHost(
 
   // The agent CLIs at the laptop's versions when missing (claude, codex,
   // gemini, grok) and a user-local Node ≥ 20 that shadows apt's node 18 via
-  // /usr/local/bin (browser/provisionAgents.ts). Present versions are kept.
+  // /usr/local/bin (browser/provisionAgents.ts).
   onProgress("installing agent CLIs (claude, codex, gemini, grok) + node…");
-  const agentsOut = runScript(host, agentCliInstallScript(readInstalledClientVersions()), 900_000);
+  const agentsOut = runScript(host, agentCliInstallScript(readInstalledClientVersions(), { upgradeCodex: true }), 900_000);
   if (!agentsOut.includes("AGENT-CLIS-OK")) throw new Error(`agent CLI install did not complete:\n${agentsOut.slice(-800)}`);
   const agents = parseAgentCliReport(agentsOut);
   onProgress(`  ${agents}`);
