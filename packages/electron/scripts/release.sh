@@ -77,7 +77,7 @@ ASAR_LIST=$(npx asar list "$ASAR")
 # on disk beside the asar (asarUnpack), or dlopen fails inside the archive.
 for src in $(jq -r '.build.files[] | select(endswith(".js"))' package.json); do
   for mod in $(grep -oE 'require\("\./[^"]+"\)' "$src" | sed -E 's|require\("\./([^"]+)"\)|\1|'); do
-    case "$mod" in *.js|*.node) f="/$mod" ;; *) f="/$mod.js" ;; esac
+    case "$mod" in *.js|*.mjs|*.node) f="/$mod" ;; *) f="/$mod.js" ;; esac
     if ! echo "$ASAR_LIST" | grep -qx "$f"; then
       echo "  ERROR: $src requires ./$mod but $f is not in the asar — add it to build.files"
       exit 1

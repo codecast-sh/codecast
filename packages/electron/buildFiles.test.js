@@ -89,3 +89,13 @@ test("the entry points themselves are packaged", () => {
   assert.ok(allowed.has("main.js"));
   assert.ok(allowed.has("preload.js"));
 });
+
+test("release verification preserves explicit module extensions", () => {
+  const { execFileSync } = require("node:child_process");
+  const script = readFileSync(join(HERE, "scripts/release.sh"), "utf8");
+  const normalize = script.match(/case "\$mod" in .*? esac/)[0];
+  for (const mod of ["notificationRouter", "notificationRouter.js", "appWindows.mjs", "native/notifications.node"]) {
+    const actual = execFileSync("bash", ["-c", `${normalize}; printf '%s' "$f"`], { env: { ...process.env, mod }, encoding: "utf8" });
+    assert.equal(actual, `/${localRequires("main.js").find(f => f === mod || f === `${mod}.js`) ?? mod}`);
+  }
+});
