@@ -62,7 +62,7 @@ describe("the huddle button on an empty room", () => {
   // that says what the button does. Losing it would leave an unlabelled icon.
   test("dropping the word does not drop the label", () => {
     const markup = renderToStaticMarkup(<HuddleButton roomKey="channel:ch1" compact />);
-    expect(title(markup)).toContain("Start a huddle here");
+    expect(title(markup)).toContain("Start a huddle and buzz everyone in the channel");
     expect(markup).toContain(`aria-label="${title(markup)}"`);
   });
 
