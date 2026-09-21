@@ -59,12 +59,15 @@ async function entryOf(ctx: Ctx, userId: Id<"users">, batch: any): Promise<OrgLo
   const lead = batch.lead_row_id ? await ctx.db.get(batch.lead_row_id) : null;
   const actor = await ctx.db.get(batch.user_id);
   const undone = batch.undone_by;
+  const target = batch.gesture === "undo" && batch.undoes ? await ctx.db.get(batch.undoes) : null;
+  const targetLead = target?.workspace === batch.workspace && target.lead_row_id ? await ctx.db.get(target.lead_row_id) : null;
   return {
     _id: String(batch._id), batch: String(batch._id), workspace: batch.workspace, ...(batch.team_id ? { team_id: String(batch.team_id) } : {}),
     seq: batch.seq, at: batch.created_at, door: batch.door, gesture: batch.gesture,
     actor: { user_id: String(batch.user_id), name: personName(actor ?? {}), ...(batch.proposal ? { proposal: batch.proposal } : {}), ...(batch.ask ? { ask: batch.ask } : {}) },
     row_count: batch.row_count, kinds: batch.kinds, lead: lead ? publicRow(lead) : null, role_ids: batch.role_ids,
     ...(batch.undoes ? { undoes: String(batch.undoes) } : {}),
+    ...(batch.gesture === "undo" ? { undoes_lead: targetLead?.workspace === batch.workspace ? publicRow(targetLead) : null } : {}),
     ...(undone ? { undone_by: { ...undone, name: personName((await ctx.db.get(undone.user_id)) ?? {}) } } : {}),
     may_undo: !!lead && await mayChangeRow(ctx, userId, lead),
   };

@@ -66,7 +66,7 @@ export function orgLogFixture(now: number): { entries: OrgLogEntry[]; rows: Reco
     entry("b-ask", 299, tAsk, { door: "proposal", gesture: "accept_ask", actor: { ...ME, proposal: { short_id: "op-7", title: "First review" }, ask: { index: 0, title: "Close the plans and tasks the work has already passed" } }, row_count: 100, kinds: { plan_status: 34, task_status: 66 }, lead: askRows[0] }),
     entry("b-budget", 199, tBudget, { door: "settings", gesture: "save", actor: ME, row_count: 1, kinds: { budget: 1 }, lead: budget }),
     entry("b-move", 198, tMove, { door: "chart", gesture: "drag", actor: ME, row_count: 1, kinds: { move: 1 }, lead: move, role_ids: move.role_ids }),
-    entry("b-undo-hire", 196, tUndo, { door: "history", gesture: "undo", actor: ME, row_count: 1, kinds: { retire: 1 }, lead: unhire, undoes: "b-hire" }),
+    entry("b-undo-hire", 196, tUndo, { door: "history", gesture: "undo", actor: ME, row_count: 1, kinds: { retire: 1 }, lead: unhire, undoes: "b-hire", undoes_lead: hire }),
     entry("b-hire", 190, tHire, { door: "proposal", gesture: "accept_change", actor: { ...ME, proposal: { short_id: "op-6" } }, row_count: 1, kinds: { role: 1 }, lead: hire, undone_by: { batch: "b-undo-hire", ...ME, at: tUndo } }),
     entry("b-lead", 150, tLead, { door: "project_page", gesture: "save", actor: SAM, row_count: 1, kinds: { lead: 1 }, lead, role_ids: lead.role_ids, may_undo: false }),
   ];

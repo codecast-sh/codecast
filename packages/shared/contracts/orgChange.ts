@@ -159,6 +159,7 @@ export type OrgLogEntry = {
   lead: OrgLogRow | null;
   role_ids: string[];
   undoes?: string;
+  undoes_lead?: OrgLogRow | null;
   undone_by?: { batch: string; user_id: string; name: string; at: number };
   /** The viewer could have made this change, so they may undo it. */
   may_undo: boolean;
@@ -487,10 +488,10 @@ export function dependentBatches(target: { batch: string; rows: ReadonlyArray<Or
 /** The entry's one sentence: its ask or proposal when it has one, else its
  *  first row, with the count of rows inside ("Accepted "Close the plans the
  *  work has already passed": 100 records"). */
-export function orgLogEntryLine(entry: Pick<OrgLogEntry, "gesture" | "actor" | "row_count" | "lead">): string {
+export function orgLogEntryLine(entry: Pick<OrgLogEntry, "gesture" | "actor" | "row_count" | "lead" | "undoes_lead">): string {
   const records = entry.row_count > 1 ? `: ${n(entry.row_count, "record")}` : "";
   const first = entry.lead ? orgLogLine(entry.lead) : "";
-  if (entry.gesture === "undo") return `Undid "${first}"${records}`;
+  if (entry.gesture === "undo") return entry.undoes_lead ? `Undid "${orgLogLine(entry.undoes_lead)}"${records}` : `Undid a change${records}`;
   if (entry.gesture === "redo") return `Applied again "${first}"${records}`;
   if (entry.actor.ask) return `Accepted "${entry.actor.ask.title}"${records}`;
   if (entry.gesture === "accept_all" && entry.actor.proposal) return `Accepted all of ${entry.actor.proposal.title ? `"${entry.actor.proposal.title}"` : entry.actor.proposal.short_id}${records}`;

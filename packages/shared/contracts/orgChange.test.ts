@@ -182,10 +182,15 @@ describe("an entry reads as one sentence with the count of rows inside", () => {
     expect(orgLogEntryLine({ gesture: "accept_ask", actor: { ...actor, ask: { index: 0, title: "Close the plans and tasks the work has already passed" } }, row_count: 100, lead }))
       .toBe('Accepted "Close the plans and tasks the work has already passed": 100 records');
   });
+  test("an undo names the original hire rather than the retirement it performed", () => {
+    const hire = row("role", { after: { status: "active", name: "Growth", handle: "growth" } });
+    expect(orgLogEntryLine({ gesture: "undo", actor, row_count: 1, lead: invertRow(hire), undoes_lead: hire })).toBe(`Undid "${orgLogLine(hire)}"`);
+    expect(orgLogEntryLine({ gesture: "undo", actor, row_count: 1, lead: invertRow(hire) })).toBe("Undid a change");
+  });
   test("one row is its own sentence; undo and redo say so", () => {
     expect(orgLogEntryLine({ gesture: "save", actor, row_count: 1, lead })).toBe("Mark plan pl-7 done");
     expect(orgLogEntryLine({ gesture: "save", actor, row_count: 3, lead })).toBe("Mark plan pl-7 done, and 2 more changes");
-    expect(orgLogEntryLine({ gesture: "undo", actor, row_count: 1, lead })).toBe('Undid "Mark plan pl-7 done"');
+    expect(orgLogEntryLine({ gesture: "undo", actor, row_count: 1, lead: invertRow(lead), undoes_lead: lead })).toBe('Undid "Mark plan pl-7 done"');
     expect(orgLogEntryLine({ gesture: "redo", actor, row_count: 2, lead })).toBe('Applied again "Mark plan pl-7 done": 2 records');
   });
 });
