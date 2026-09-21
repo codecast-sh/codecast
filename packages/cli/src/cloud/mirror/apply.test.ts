@@ -99,6 +99,43 @@ beforeEach(() => {
   home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "mirror-apply-")));
   refreshRuns = 0;
 });
+test("a clean legacy hook file acquires field ownership before stale hooks are removed", async () => {
+  const entry: BundleInput = { path: ".cursor/hooks.json", kind: "verbatim", mode: "0600", bytes: Buffer.from('{"hooks":{"stop":[{"command":"missing-hook"}]}}') };
+  await apply(await bundleOf([entry]));
+  const next = { ...entry, kind: "codex-hooks" as const, bytes: Buffer.from('{"hooks":{}}') };
+  expect((await apply(await bundleOf([next]))).errors).toEqual([]);
+  expect(read(".cursor/hooks.json")).not.toContain("missing-hook");
+  expect(readStamp(home)!.files[entry.path]!.source).toBe(next.bytes.toString());
+});
+
+test("changed legacy hooks still require conflict resolution", async () => {
+  const entry: BundleInput = { path: ".cursor/hooks.json", kind: "verbatim", mode: "0600", bytes: Buffer.from('{"hooks":{}}') };
+  await apply(await bundleOf([entry]));
+  write(entry.path, '{"hooks":{"stop":[{"command":"host-hook"}]}}');
+  const result = await apply(await bundleOf([{ ...entry, kind: "codex-hooks", bytes: Buffer.from('{"hooks":{"start":[]}}') }]));
+  expect(result.errors[0]?.error).toContain("field ownership");
+  expect(read(entry.path)).toContain("host-hook");
+});
+
+test("Grok's installer identity stays host-owned while portable settings update", async () => {
+  const entry: BundleInput = { path: ".grok/config.toml", kind: "toml-remap", mode: "0600", bytes: Buffer.from('[cli]\ninstaller = "brew"\n[ui]\ntheme = "light"\n') };
+  await apply(await bundleOf([entry]));
+  write(entry.path, read(entry.path).replace('"brew"', '"native"'));
+  expect((await apply(await bundleOf([entry]))).host_edited).toEqual([]);
+  expect((await apply(await bundleOf([{ ...entry, bytes: Buffer.from(entry.bytes.toString().replace('"light"', '"dark"')) }]))).host_edited).toEqual([]);
+  expect(read(entry.path)).toContain('installer = "native"');
+  expect(read(entry.path)).toContain('theme = "dark"');
+});
+
+test("agent runtime files leave mirror ownership without pruning host updates", async () => {
+  const files: BundleInput[] = [".codex/skills/.system/a/SKILL.md", ".claude/skills/synced/id/manifest.json", ".claude/plugins/cache/org/a/v1/.orphaned_at"].map((path) => ({ path, kind: "verbatim", mode: "0600", bytes: Buffer.from("original") }));
+  await apply(await bundleOf(files));
+  for (const file of files) write(file.path, "runtime update");
+  const result = await apply(await bundleOf([]));
+  expect(result.host_edited).toEqual([]);
+  expect(result.errors).toEqual([]);
+  for (const file of files) { expect(read(file.path)).toBe("runtime update"); expect(readStamp(home)!.files[file.path]).toBeUndefined(); }
+});
 afterEach(() => {
   fs.rmSync(home, { recursive: true, force: true });
 });
@@ -866,6 +903,43 @@ test("identical project documentation aliases are satisfied without writes and r
   expect(pruned.pruned).toEqual([alias]);
   expect(fs.lstatSync(path.join(home, alias), { throwIfNoEntry: false })).toBeUndefined();
   expect(read(target)).toBe("# context\n");
+  expect(verifyMirrorStamp(home)?.complete).toBe(true);
+});
+
+test("project directory aliases are verified without writing or pruning their targets", async () => {
+  const root = "work/app";
+  const target = `${root}/packages/convex/README.md`;
+  const alias = `${root}/convex/README.md`;
+  write(target, "same", 0o600);
+  fs.symlinkSync("packages/convex", path.join(home, root, "convex"));
+  const make = (include = true) => parseMirrorBundle(buildMirrorBundle(include ? [{ path: alias, kind: "verbatim", mode: "0600", bytes: Buffer.from("same") }] : [], { source: source(), target_home: home, managed_roots: [root], project_roots: [root] }).bytes);
+  expect((await apply(await make())).errors).toEqual([]);
+  expect(verifyMirrorStamp(home)?.complete).toBe(true);
+  write(target, "changed");
+  expect(verifyMirrorStamp(home)?.complete).toBe(false);
+  expect((await apply(await make())).errors.some((error) => /bytes or mode/.test(error.error))).toBe(true);
+  expect(read(target)).toBe("changed");
+  write(target, "same");
+  expect((await apply(await make(false))).errors).toEqual([]);
+  expect(read(target)).toBe("same");
+  expect(fs.readlinkSync(path.join(home, root, "convex"))).toBe("packages/convex");
+  expect(readStamp(home)?.files[alias]).toBeUndefined();
+  expect(verifyMirrorStamp(home)?.complete).toBe(true);
+});
+
+test("project aliases verify after their mirrored targets even when the alias sorts first", async () => {
+  const root = "work/app";
+  const target = `${root}/packages/convex/README.md`;
+  const alias = `${root}/convex/README.md`;
+  write(target, "old", 0o600);
+  fs.symlinkSync("packages/convex", path.join(home, root, "convex"));
+  const make = (text: string) => parseMirrorBundle(buildMirrorBundle([alias, target].map((path) => ({ path, kind: "verbatim" as const, mode: "0600" as const, bytes: Buffer.from(text) })), { source: source(), target_home: home, managed_roots: [root], project_roots: [root] }).bytes);
+  expect((await apply(await make("old"))).errors).toEqual([]);
+  const changed = await apply(await make("new"));
+  expect(changed.errors).toEqual([]);
+  expect(changed.applied).toEqual([target]);
+  expect(read(target)).toBe("new");
+  expect(fs.readlinkSync(path.join(home, root, "convex"))).toBe("packages/convex");
   expect(verifyMirrorStamp(home)?.complete).toBe(true);
 });
 

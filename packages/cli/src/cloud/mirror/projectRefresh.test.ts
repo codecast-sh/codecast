@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { applyMirrorBundle, cleanTrackedFiles, matchesGitBlob, readStamp, verifyMirrorStamp, withMirrorLock } from "./apply";
 import { buildMirrorBundle, parseMirrorBundle } from "./bundle";
-import { CLAUDE_RUNTIME_ROOTS } from "./discovery";
+import { AGENT_RUNTIME_ROOTS } from "./discovery";
 import { buildHomeMirror, mirrorHomeToHost, runMirrorTick, type LocalMirrorStamps, type MirrorDeps } from "./push";
 import { projectDestination, readProjectRegistrations, registerProjectContext } from "./projectRefresh";
 import { startMirrorScheduler } from "./scheduler";
@@ -17,6 +17,19 @@ const temp = () => { const p = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdi
 const write = (root: string, rel: string, text: string) => { const file = path.join(root, rel); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text); };
 const read = (root: string, rel: string) => fs.readFileSync(path.join(root, rel), "utf8");
 afterEach(() => { for (const p of scratch.splice(0)) fs.rmSync(p, { force: true, recursive: true }); });
+
+test("project references to home git config reuse its filtered canonical projection", async () => {
+  const home = temp();
+  const root = path.join(home, "src/repo");
+  write(home, ".gitconfig", "[alias]\n\tst = status\n[user]\n\tname = Laptop Owner\n\temail = owner@example.com\n");
+  write(root, "AGENTS.md", `Read ${home}/.gitconfig for Git aliases.\n`);
+  const mirror = await buildHomeMirror({ home, hostHome: "/home/u", config: { user_id: "u" }, deviceId: "d", gitEnv: { GIT_CONFIG_GLOBAL: path.join(home, ".gitconfig"), GIT_CONFIG_NOSYSTEM: "1" }, projects: [{ host: "u@host", sourceRoot: root, targetRoot: "/home/u/work/repo" }] });
+  const parsed = await parseMirrorBundle(mirror.bytes);
+  const configs = parsed.files.filter((file) => file.path === ".gitconfig");
+  expect(configs).toHaveLength(1);
+  expect(configs[0]!.bytes.toString()).toContain("st = status");
+  expect(configs[0]!.bytes.toString()).not.toContain("owner@example.com");
+});
 
 test("next generation releases unchanged and drifted Claude catalogs while ordinary source removals still prune", async () => {
   const local = temp();
@@ -41,7 +54,7 @@ test("next generation releases unchanged and drifted Claude catalogs while ordin
   fs.unlinkSync(path.join(local, removed));
   write(local, portable, "updated portable context\n");
   const next = await buildHomeMirror({ home: local, hostHome: remote, config: { user_id: "u" }, deviceId: "d", gitEnv: { GIT_CONFIG_GLOBAL: path.join(local, ".gitconfig"), GIT_CONFIG_NOSYSTEM: "1" } });
-  expect(next.header.unmanaged_roots).toEqual([...CLAUDE_RUNTIME_ROOTS]);
+  expect(next.header.unmanaged_roots).toEqual([...AGENT_RUNTIME_ROOTS]);
   expect(next.header.files.some((file) => catalogPaths.includes(file.path))).toBe(false);
   const result = await apply(next.bytes);
   expect(result.errors).toEqual([]);

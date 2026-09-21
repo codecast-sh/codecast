@@ -50,10 +50,10 @@ describe("new-session machines", () => {
 });
 
 describe("isCloudHost / cloudHostOf — the machine the toggle points at", () => {
-  test("true only for the user's own remote Linux box", () => {
+  test("true for the user's remote Linux and Mac boxes", () => {
     expect(isCloudHost(cloud)).toBe(true);
     expect(isCloudHost(cloudAwake)).toBe(true);
-    expect(isCloudHost(remoteMac)).toBe(false);
+    expect(isCloudHost(remoteMac)).toBe(true);
     expect(isCloudHost(linuxLaptop)).toBe(false);
     expect(isCloudHost(linuxBox)).toBe(false);
     expect(isCloudHost(mini)).toBe(false);
@@ -61,7 +61,8 @@ describe("isCloudHost / cloudHostOf — the machine the toggle points at", () =>
 
   test("cloudHostOf returns the host even while it sleeps, null without one", () => {
     expect(cloudHostOf([laptop, cloud])).toBe(cloud);
-    expect(cloudHostOf([laptop, linuxBox, remoteMac])).toBeNull();
+    expect(cloudHostOf([laptop, linuxBox, remoteMac])).toBe(remoteMac);
+    expect(cloudHostOf([laptop, linuxBox])).toBeNull();
     expect(cloudHostOf([])).toBeNull();
   });
 });

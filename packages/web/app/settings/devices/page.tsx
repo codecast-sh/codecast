@@ -5,7 +5,8 @@ import { useMemo, useState } from "react";
 import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
-import { ArrowRightLeft, MonitorSmartphone, Terminal } from "lucide-react";
+import { ArrowRightLeft, Cloud, MonitorSmartphone, Terminal } from "lucide-react";
+import { RemoteMachineSetup } from "../../../components/settings/RemoteMachineSetup";
 import { useInboxStore } from "../../../store/inboxStore";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
@@ -359,6 +360,7 @@ const openCliSection = () => useInboxStore.getState().openSettingsModal("cli");
 
 export default function DevicesSettingsPage() {
   const { devices } = useDevices();
+  const [remoteSetupOpen, setRemoteSetupOpen] = useState(false);
   const sorted = useMemo(
     () =>
       [...devices].sort(
@@ -407,6 +409,12 @@ export default function DevicesSettingsPage() {
           onClick={openCliSection}
         />
         <SettingsLinkRow
+          icon={Cloud}
+          label="Add a cloud machine"
+          description="Set up Linux or Mac in your AWS account"
+          onClick={() => setRemoteSetupOpen(true)}
+        />
+        <SettingsLinkRow
           icon={ArrowRightLeft}
           label="Migrate sessions between machines"
           description="Move many sessions to a cloud host, or bring them back, in one batch"
@@ -414,6 +422,7 @@ export default function DevicesSettingsPage() {
         />
       </SettingsSection>
       <AgentBoxesSection />
+      <RemoteMachineSetup open={remoteSetupOpen} onOpenChange={setRemoteSetupOpen} />
     </SettingsPanel>
   );
 }

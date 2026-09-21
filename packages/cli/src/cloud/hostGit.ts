@@ -292,8 +292,11 @@ while [ "$lock_held" = 0 ]; do
   sleep 0.25
 done
 identity=kept
+HOST_GIT="$HOME/.codecast/git/host.gitconfig"
+touch "$HOST_GIT" && chmod 600 "$HOST_GIT"
+git config --file "$GC" --get-all include.path | grep -Fxq "$HOST_GIT" || git config --file "$GC" --add include.path "$HOST_GIT"
 if [ -n "$ID_NAME" ] && [ -n "$ID_EMAIL" ]; then
-  git config --file "$GC" user.name "$ID_NAME" && git config --file "$GC" user.email "$ID_EMAIL" && git config --file "$GC" push.autoSetupRemote true && identity=mirrored
+  git config --file "$GC" user.name "$ID_NAME" && git config --file "$GC" user.email "$ID_EMAIL" && git config --file "$HOST_GIT" push.autoSetupRemote true && identity=mirrored
 elif [ -z "$(git config --file "$GC" --get user.email 2>/dev/null)" ]; then
   git config --file "$GC" user.name ${shq(PLACEHOLDER_NAME)} && git config --file "$GC" user.email ${shq(PLACEHOLDER_EMAIL)} && identity=placeholder
 fi
@@ -315,7 +318,7 @@ git config --file "$GC" ${shq(CREDENTIAL_USE_PATH_KEY)} true 2>/dev/null || true
 # per-url form of this key, so it reaches EVERY https remote on the host, not
 # only github.com: nothing on the box can ask a human for a password after
 # this, which is what we want on a machine with no human at it.
-[ -n "$(git config --file "$GC" --get core.askPass 2>/dev/null)" ] || git config --file "$GC" core.askPass ${shq(NO_ASKPASS)} 2>/dev/null || true
+[ -n "$(git config --file "$GC" --includes --get core.askPass 2>/dev/null)" ] || git config --file "$HOST_GIT" core.askPass ${shq(NO_ASKPASS)} 2>/dev/null || true
 [ -f "$GC" ] && chmod 600 "$GC"
 if [ "$lock_held" = 1 ] && grep -q "$lock_token" "$LOCK" 2>/dev/null; then rm -f "$LOCK"; fi
 # 5b. gh: a wrapper ahead of the real gh hands it GH_TOKEN from the same

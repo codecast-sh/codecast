@@ -53,9 +53,9 @@ describe("cloudPlacementFor — one verdict for the web and the server", () => {
 });
 
 describe("deviceWakesOnUse — the cloud Linux class", () => {
-  test("true only for a remote Linux box", () => {
+  test("true for remote Linux and Mac boxes", () => {
     expect(deviceWakesOnUse({ is_remote: true, platform: "linux" })).toBe(true);
-    expect(deviceWakesOnUse({ is_remote: true, platform: "darwin" })).toBe(false);
+    expect(deviceWakesOnUse({ is_remote: true, platform: "darwin" })).toBe(true);
     expect(deviceWakesOnUse({ is_remote: false, platform: "linux" })).toBe(false);
     expect(deviceWakesOnUse({ platform: "linux" })).toBe(false);
     expect(deviceWakesOnUse({ is_remote: true })).toBe(false);

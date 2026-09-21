@@ -23,7 +23,7 @@ import {
 
 import {
   AGENT_CONTEXT_ROOTS, CONTEXT_SIZE_CAP, INSTRUCTION_FILE_RE, LOCAL_BIN_ROOT, LOCAL_BIN_SCRIPT_CAP, SKILL_STATE_FILES, commandCompatibilityWarnings, configPatterns,
-  activeContextReferences, isPortableScript, contextReferences, isAccessError, isAccountDataPath, isActiveConfig, isDefaultExcluded, isDeniedPath, isNativeBinary, isReferencedDirectory, matchesContextPattern,
+  activeContextReferences, isPortableScript, contextReferences, isAccessError, isAccountDataPath, isActiveConfig, isDefaultExcluded, isDeniedPath, isNativeBinary, isReferencedDirectory, matchesContextPattern, portableHooks,
 } from "./discovery.js";
 
 export { CONTEXT_DENYLIST as MIRROR_DENYLIST, DEFAULT_EXCLUDES, globToRegExp, isDeniedPath, isDefaultExcluded } from "./discovery.js";
@@ -163,6 +163,9 @@ export async function collectMirrorFiles(opts: CollectOptions): Promise<Inventor
     if (script && !isPortableScript(bytes, home)) { totalBytes -= stat.size; skip(rel, "not a portable text script"); return; }
     const credential = !isActiveConfig(kind) && credentialContentReason(bytes);
     if (credential) { totalBytes -= stat.size; skip(rel, credential); return; }
+    const hooks = await portableHooks(bytes, path.join(home, rel), home, kind);
+    bytes = hooks.bytes;
+    warnings.push(...hooks.warnings);
     const text = portableText(bytes);
     if (text !== null) warnings.push(...commandCompatibilityWarnings(text, rel));
     totalBytes += bytes.length - stat.size;
