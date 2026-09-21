@@ -13399,7 +13399,7 @@ roleGroup
   .option("--json", "Machine-readable output")
   .action(async (handle: string, options: any) => {
     const role_id = await resolveRoleId(handle, options.team);
-    const raw = options.grant === "-" ? await new Response(process.stdin).text() : options.grant;
+    const raw = options.grant === "-" ? readStdinBody() : options.grant;
     const authority = raw ? JSON.parse(raw) : [];
     if (!Array.isArray(authority)) { console.error("--grant is a JSON list"); process.exit(1); }
     const result = await cliPost("/cli/role/authority", { role_id, authority, revoke: options.revoke, from_session: callingSession() });
