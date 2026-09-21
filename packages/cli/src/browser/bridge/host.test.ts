@@ -13,7 +13,7 @@ import { freePort } from "../instance.js";
 import { probeHost, proveBridgeHost, startBridgeHost, type RunningHost } from "./host.js";
 import { CLOSE_HANDSHAKE_TIMEOUT } from "./protocol.js";
 import { dial, FakeExtension, TEST_TOKEN as TOKEN } from "./host.testutil.js";
-import { BRIDGE_PROTOCOL, bridgeProof, CLOSE_BAD_TOKEN, randomNonce, secretMatches, tabIdOfTarget, targetIdOfTab } from "./protocol.js";
+import { BRIDGE_PROTOCOL, BRIDGE_STORE_URL, bridgeProof, CLOSE_BAD_TOKEN, randomNonce, secretMatches, tabIdOfTarget, targetIdOfTab } from "./protocol.js";
 
 let host: RunningHost | null = null;
 
@@ -637,6 +637,7 @@ describe("bridge host as a CDP endpoint", () => {
     // the setup hint on its next call.
     expect(watcher.isOpen()).toBe(true);
     await expect(watcher.send("Target.getTargets")).rejects.toThrow(/extension is not connected/);
+    await expect(watcher.send("Target.getTargets")).rejects.toThrow(BRIDGE_STORE_URL);
     watcher.close();
   });
 

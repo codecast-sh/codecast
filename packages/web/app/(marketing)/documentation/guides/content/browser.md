@@ -14,6 +14,18 @@ cast browser extension status                  # is the bridge connected
 cast preview localhost:3000                    # offer a page as a pane beside the conversation
 ```
 
+## Install and pair
+
+1. Install [Codecast from the Chrome Web Store](https://chromewebstore.google.com/detail/codecast/odfpgkdaibmjhhnbndgbjlhdbciciifd) in the desktop Chrome profile you want your agents to use.
+2. With the Codecast CLI installed on the same computer, run `cast browser extension setup` in a terminal. Click **Pair** in the extension page it opens.
+3. Run `cast browser extension status` to confirm the extension is connected.
+
+Chrome updates the extension automatically. Repeat setup on each computer you use. A cloud machine's CLI cannot pair with Chrome on your laptop: the extension and CLI communicate locally on the same computer. You can find these steps in **Settings → CLI** and **Settings → Integrations**.
+
+If Chrome shows an error instead of the pairing page, check that the extension is installed and enabled in that Chrome profile. Run `cast update` if setup still opens the old development extension. For a profile other than Chrome's default, run `cast browser extension setup --show-token` locally and open the pairing URL in that profile. Keep that URL private.
+
+If you previously loaded the extension unpacked, disable that development copy at `chrome://extensions`, install the store version, then pair again. Keep only one copy enabled so they do not compete for the local bridge.
+
 ## Snapshot, then act on a ref
 
 `snapshot` prints the page as an accessibility tree and gives each element a ref such as `#e42`. Every action verb takes a ref or a CSS selector: `click`, `type --submit`, `fill`, `press`, `hover`, `select`, `drag`, `upload`. The loop is one snapshot, then one or more actions on the refs it printed.

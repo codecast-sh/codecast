@@ -3,8 +3,8 @@
   "minimum_chrome_version": "116",
   "name": "Codecast",
   "short_name": "Codecast",
-  "version": "0.1.2",
-  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAw46Qcb9BYV9TSDQdsCiMwljPrj8xuWm/68v3WQ6St89FVeq4mEziHfpuokT+SxhCWh+4rq2eOD+jTFCgYHAMu5B6VRnaV3Ik9jugMYF8LHPwwKSOjnXGIKenlJDQ9VbA/cpSr9dPfhj0cd5pt3mElFEkTO/PS99ueOeq3pOX+xwUembbsaqZfyn7HtT4dpq8hivTN0+XbPl1pEsw0rZ6pe95neJi/JDl80F470U0VzsKNQIZCDbI08YHaYFBOtfkOmxiM3FJmZkLpiCBU2RwwWw95LsEOP/1aE1uF8ItC2KDlLtNQ3Rk0RNTU1BMLs3AXE59KCIShbr2LSLhKEaEBQIDAQAB",
+  "version": "0.1.3",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtZOIMGI4YSJM4NP5uJHeZbUm1k1khxm7gDMW2h5O/pTRN7GSgZT9nqed8heIdk0jpgzEnrVvwIsmBgTSw6/iNhJZxiP3/VweQAvFbsGfgY4RuS4Vr9CWBg3y2fi3A/kNqpF9qGR8eUKz/OgVSYljvWAyGCERHNR8dhKldbE+aIoiaB73X2a2fnZWaX+ayyHplKVFsfM1ePDXM2Rvtnn0LLbjUcvFKRO8+kjH2UvBzUHwG4f8xKtabzHMHjiFJrcBZmnsZzkdfkCMx6ZpDLtSBkJV9vVrt37G9rENiXWcNNz1e2J5HrnCQ3QfqwMjOXRMn/9Orn4/hdzkzcvD2raPyQIDAQAB",
   "description": "Lets Codecast agents open and drive their own tabs in this Chrome, in one tab group, over a local token authenticated bridge.",
   "icons": {
     "16": "icons/icon-16.png",
@@ -17,7 +17,8 @@
     "tabs",
     "tabGroups",
     "storage",
-    "alarms", "offscreen"
+    "alarms",
+    "offscreen"
   ],
   "background": {
     "service_worker": "background.js"

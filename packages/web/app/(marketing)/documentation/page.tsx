@@ -6,6 +6,8 @@ import { InstallTabs } from "@/components/install-tabs";
 import { GUIDES, GUIDE_CATEGORIES, guideHref } from "./guides/guides";
 import { useRouteMeta } from "../pageMeta";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
+import { SITE_LINKS } from "@/lib/siteLinks";
+import { BROWSER_EXTENSION_SETUP_COMMAND } from "@codecast/shared/contracts";
 
 const SOL = {
   base03: "#002b36",
@@ -138,6 +140,7 @@ function Callout({ type, children }: { type: "info" | "tip" | "warn"; children: 
 const TOC = [
   { id: "getting-started", label: "Getting Started", children: [
     { id: "installation", label: "Installation" },
+    { id: "chrome-extension", label: "Chrome Extension" },
     { id: "authentication", label: "Authentication" },
     { id: "daemon", label: "The Daemon" },
   ]},
@@ -300,6 +303,18 @@ export default function DocsPage() {
           <InstallTabs location="documentation" />
           <p className="mt-4 text-sm" style={{ color: SOL.base01 }}>
             This installs the <InlineCode>cast</InlineCode> CLI and background daemon. No root access required.
+          </p>
+
+          <Heading id="chrome-extension" level={3}>Chrome Extension</Heading>
+          <p style={{ color: SOL.base00 }}>
+            For agents to work in your Chrome with your existing logins,{" "}
+            <a href={SITE_LINKS.chromeExtension} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2" style={{ color: SOL.cyan }}>install Codecast from the Chrome Web Store</a>.
+            Then run this in a terminal on the same computer and click Pair in the extension:
+          </p>
+          <Code>{`$ ${BROWSER_EXTENSION_SETUP_COMMAND}\n$ cast browser extension status`}</Code>
+          <p className="text-sm" style={{ color: SOL.base01 }}>
+            Set this up once on each computer, in the Chrome profile you want agents to use. Chrome updates the extension automatically.{" "}
+            <Link href="/documentation/browser" className="underline underline-offset-2" style={{ color: SOL.cyan }}>Browser setup and troubleshooting</Link>.
           </p>
 
           <Heading id="authentication" level={3}>Authentication</Heading>

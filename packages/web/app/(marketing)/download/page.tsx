@@ -8,6 +8,9 @@ import { InstallTabs } from "@/components/install-tabs";
 import { track } from "@/lib/analytics";
 import { useRouteMeta } from "../pageMeta";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
+import { SITE_LINKS } from "@/lib/siteLinks";
+import { BROWSER_EXTENSION_SETUP_COMMAND } from "@codecast/shared/contracts";
+import { Chrome, ExternalLink } from "lucide-react";
 
 // The server 302s this to the pinned dmg on dl.codecast.sh (release.sh bumps the pin).
 const MAC_DOWNLOAD_URL = "https://codecast.sh/download/mac";
@@ -276,6 +279,26 @@ export default function DownloadPage() {
         </p>
         <div className="mx-auto max-w-xl text-left">
           <InstallTabs location="download_page" />
+        </div>
+      </section>
+
+      <section id="chrome-extension" className="mx-auto max-w-3xl px-6 pb-16">
+        <div className="rounded-xl border border-[#eee8d5] bg-white/40 p-6 sm:p-8">
+          <Chrome className="mb-4 h-7 w-7 text-[#2aa198]" />
+          <h2 className="font-mono text-2xl font-bold text-[#002b36]">Your Chrome, ready for your agents</h2>
+          <p className="mt-3 text-sm leading-relaxed text-[#657b83]">
+            Let agents check a page, fill a form, or verify a change using the sites you’re already signed into.
+            Each session works in its own tabs, together in one Cast group.
+          </p>
+          <a href={SITE_LINKS.chromeExtension} target="_blank" rel="noopener noreferrer" className="mt-5 inline-flex items-center gap-2 rounded-lg bg-[#002b36] px-4 py-2.5 text-sm font-medium text-[#fdf6e3] hover:bg-[#073642]">
+            Add to Chrome <ExternalLink className="h-3.5 w-3.5" />
+          </a>
+          <p className="mt-5 text-sm text-[#657b83]">Then pair it from a terminal on the same computer:</p>
+          <code className="mt-2 block break-words rounded-md bg-[#eee8d5] p-3 font-mono text-sm text-[#002b36]">{BROWSER_EXTENSION_SETUP_COMMAND}</code>
+          <p className="mt-3 text-xs leading-relaxed text-[#657b83]">
+            Requires desktop Chrome and the Codecast CLI. Chrome keeps the extension up to date.{" "}
+            <Link href="/documentation/browser" className="text-[#2aa198] underline underline-offset-2">Setup guide</Link>
+          </p>
         </div>
       </section>
 

@@ -19,7 +19,7 @@ import {
   bridgeHostLogPath, bridgeStatePath, bridgeWsUrl, ensureBridgeConfig, ensureBridgeHost, probeHost, readBridgeState,
   reloadExtension, rotateBridgeToken, runBridgeHost, stopBridgeHost, waitForExtension, type BridgeHostStatus,
 } from "./host.js";
-import { BRIDGE_STORE_URL, bridgePairingUrl } from "./protocol.js";
+import { BRIDGE_EXTENSION_ID, BRIDGE_STORE_URL, bridgePairingUrl } from "./protocol.js";
 import { connectRealBridge, isRealMode, requireRealBridge, setStickyTarget, stickyTarget } from "./real.js";
 import { CHROME_LAUNCHER_NAME, discardPairingPage, installChromeLauncher, openInRealChrome, REAL_CHROME_LAUNCH_ARGS, restartRealChrome } from "./realChrome.js";
 import { ownedDesktopPane, PANE_HOW_TO } from "../desktopPane.js";
@@ -112,6 +112,7 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
       console.log(`${OK} ordinary commands use the human's Chrome through the extension`);
       if (mode === "real" && !readBridgeState()?.token) {
         console.log(`${WARN} the bridge is not set up yet — run \`cast browser extension setup\``);
+        console.log(`  Install Codecast from ${fmt.highlight(BRIDGE_STORE_URL)} first.`);
       }
     });
 
@@ -138,7 +139,7 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
       const url = bridgePairingUrl(state);
       const secret = o.showToken ? { token: state.token, url } : {};
       if (o.json) {
-        console.log(JSON.stringify({ port: state.port, tokenFile: bridgeStatePath(), ...secret }));
+        console.log(JSON.stringify({ port: state.port, tokenFile: bridgeStatePath(), extensionId: BRIDGE_EXTENSION_ID, storeUrl: BRIDGE_STORE_URL, ...secret }));
         return;
       }
       // The extension has a fixed ID, so its options page has a fixed URL:
@@ -148,6 +149,7 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
       // extension connecting is the one proof the pairing worked, and only
       // when it does not arrive do the install steps belong on screen.
       console.log(`${OK} bridge host listening on 127.0.0.1:${state.port}`);
+      console.log(`  Chrome extension: ${fmt.highlight(BRIDGE_STORE_URL)}`);
       const opened = openInRealChrome(url);
       if (opened) {
         console.log(fmt.muted("  opened the pairing in your Chrome; a new token asks for one click there. Waiting for the extension to connect…"));
@@ -168,13 +170,8 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
       console.log(opened
         ? "  If Chrome showed an error page instead of the extension's options, install it (one time), or reload it at chrome://extensions if it predates this pairing flow:"
         : "  Install the extension (one time):");
-      if (BRIDGE_STORE_URL) {
-        console.log(`    1. Install it from the Chrome Web Store: ${fmt.highlight(BRIDGE_STORE_URL)}`);
-        console.log(`    2. Chrome keeps it up to date from there`);
-      } else {
-        console.log(`    1. Open ${fmt.highlight("chrome://extensions")} in your real Chrome, turn on Developer mode`);
-        console.log(`    2. ${fmt.highlight("Load unpacked")} → select the repo's ${fmt.highlight("packages/browser-extension")} directory`);
-      }
+      console.log(`    1. Install Codecast from the Chrome Web Store: ${fmt.highlight(BRIDGE_STORE_URL)}`);
+      console.log(`    2. Use the same Chrome profile you want your agents to work in. Chrome keeps the extension up to date.`);
       if (o.showToken) {
         console.log(`    3. ${opened ? "Run this command again, or open" : "Open"} this URL in that Chrome:`);
         console.log(`         ${fmt.highlight(url)}`);
@@ -198,6 +195,7 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
       const state = readBridgeState();
       if (!state?.token) {
         console.log(`${fmt.muted(icons.dot)} not set up — \`cast browser extension setup\``);
+        console.log(`  Install Codecast from ${fmt.highlight(BRIDGE_STORE_URL)} first.`);
         return;
       }
       // The extension can only prove itself to a running host, so a host that
@@ -223,6 +221,9 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
         console.log(`${WARN} extension not connected — it was paired before, so check Chrome is running with the extension enabled (reload it at chrome://extensions), or re-run \`cast browser extension setup\``);
       } else {
         console.log(`${WARN} extension not connected — run \`cast browser extension setup\`; it hands the extension the current token`);
+      }
+      if (!s.extensionConnected) {
+        console.log(`  Install Codecast from ${fmt.highlight(BRIDGE_STORE_URL)} if it is not installed yet.`);
       }
       console.log(fmt.muted(`  CDP endpoint for any engine: ${bridgeWsUrl(bridge).replace(bridge.token, "<token>")} (token in ${bridgeStatePath()})`));
     });

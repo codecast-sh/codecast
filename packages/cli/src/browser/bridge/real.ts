@@ -28,6 +28,7 @@ import {
 } from "./host.js";
 import { discardPairingPage, launchRealChrome, realChromeRunning, wakeExtension } from "./realChrome.js";
 import { realChromePid } from "../localChrome.js";
+import { BRIDGE_STORE_URL } from "./protocol.js";
 
 const cloneScope = new AsyncLocalStorage<boolean>();
 
@@ -168,9 +169,9 @@ export function realModeHint(sessionKey: string | null): string | null {
     return "your real Chrome is paired and holds this login: `cast browser target real` moves this session there (`open --real <url>` for one verb)";
   }
   if (extensionPaired()) {
-    return "your real Chrome holds this login, but the codecast extension is not connected right now: open Chrome (or reload the extension), then `cast browser target real`";
+    return `your real Chrome holds this login, but the codecast extension is not connected right now: open Chrome (or reload the extension), then \`cast browser target real\`. If it is no longer installed, get it from ${BRIDGE_STORE_URL} and run \`cast browser extension setup\``;
   }
-  return "your real Chrome holds this login: pair the codecast extension once with `cast browser extension setup`, and sessions use your Chrome by default from then on";
+  return `your real Chrome holds this login: install Codecast from ${BRIDGE_STORE_URL}, then run \`cast browser extension setup\` in a terminal on the same computer`;
 }
 
 /**
@@ -194,7 +195,7 @@ export function splitTargetFlags(args: string[]): TargetFlags & { args: string[]
 export function requireBridgeConfigured(): BridgeState {
   const state = readBridgeState();
   if (!state?.token) {
-    throw new Error("the extension bridge is not set up — the human must run `cast browser extension setup` in their Chrome. No separate browser was started.");
+    throw new Error(`the extension bridge is not set up — install Codecast from ${BRIDGE_STORE_URL}, then run \`cast browser extension setup\` in a terminal on the same computer. No separate browser was started.`);
   }
   return state;
 }
@@ -392,6 +393,7 @@ export async function requireRealBridge(start?: BridgeHostStarter, deps?: RealCh
           "  Chrome's extension system is not answering: reload the extension at chrome://extensions, or restart Chrome.\n" +
           "  (The wake opens the extension's options page as a tab once per outage; it closes itself.)\n"
         : "the cast bridge extension has not been paired with this machine's bridge host.\n") +
+        `  If the extension is not installed, install Codecast from ${BRIDGE_STORE_URL}.\n` +
         "  If it still does not connect, run `cast browser extension setup` to pair it again.\n" +
         "  Tell the human if it remains disconnected. No separate browser was started.",
     );
