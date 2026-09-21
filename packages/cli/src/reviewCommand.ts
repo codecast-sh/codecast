@@ -11,6 +11,7 @@
 // scoped to the worktree: two worktrees of one repository hold different
 // diffs, so they hold different batches.
 
+import { commandGroup } from "./commandGroups.js";
 import { execFileSync } from "./proc.js";
 import path from "path";
 import type { Command } from "commander";
@@ -172,7 +173,7 @@ export function staleIdsOf(repoRoot: string, notes: ReviewNoteRow[]): Set<string
 export function registerReviewCommand(program: Command, deps: PublishDeps): void {
   const review = program
     .command("review")
-    .description("Collect review notes on files and lines, then hand the batch to a session")
+    .description(commandGroup("review").description)
     .addHelpText("after", `
   cast review add src/api.ts:42 "this leaks on the error path"
   cast review add src/api.ts:10-20 "extract this"
