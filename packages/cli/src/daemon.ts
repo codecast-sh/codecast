@@ -274,6 +274,7 @@ import {
   loadOrCreateIdentity,
   type LoopbackIdentity,
 } from "./loopbackIdentity.js";
+import { INTERRUPT_SETTLE_MS, classifyInputBytes, createKeystrokeInference, parseAskInputSidecar, readAskInputSidecar, singleSelectOptionCount, type InputIntent } from "./keystrokeInference.js";
 import { HookStatusGate } from "./hookStatusGate.js";
 import {
   SPOOL_EXT,
@@ -283,7 +284,7 @@ import {
   isSpoolableStatus,
   sweepStatusSpools,
 } from "./statusSpool.js";
-import { startPaneStream, isPaneStreaming } from "./terminal/paneStream.js";
+import { startPaneStream, isPaneStreaming, writePane } from "./terminal/paneStream.js";
 import { attachWatchServer } from "./browser/watchServer.js";
 import { handleBrowserFocusHttp } from "./browser/focusHttp.js";
 import { handleNotificationHttp } from "./notificationDelivery.js";
@@ -1260,6 +1261,7 @@ const lastIdleNotifiedSize = new Map<string, number>();
 const lastWorkingStatusSent = new Map<string, number>();
 const WORKING_STATUS_THROTTLE_MS = 10_000;
 const lastSentAgentStatus = new Map<string, AgentStatus>();
+const lastAgentStatusSentAt = new Map<string, number>();
 // When each session's CURRENT turn began. A `cast state --status dormant|done`
 // stamp counts as a settle verdict only if written after this, so a declaration
 // never outlives the turn that made it (see declaredSettleVerdict). Empty after
@@ -1869,6 +1871,8 @@ function sendAgentStatus(
   opts?: { hibernatedAt?: number | null; sessionBoundary?: boolean },
 ): void {
   if (isSupersededAppServerSession(sessionId, conversationId)) return;
+  if (!presumed) keystrokeInference.cancel(sessionId);
+  lastAgentStatusSentAt.set(sessionId, Date.now());
   const prevStatus = lastSentAgentStatus.get(sessionId);
   const parking = hibernationInFlight.get(sessionId);
   if (parking && prevStatus !== status) parking.cancel();
@@ -2001,7 +2005,7 @@ let watchServerHandle: { close(): void } | null = null;
 let vaultMirror: VaultMirror | null = null;
 
 function terminalServerOptions(): TerminalServerOptions {
-  return { token: terminalToken(), log };
+  return { token: terminalToken(), log, onInput: observePaneInput };
 }
 
 // The vault routes ride the same loopback server and the same persisted token;
@@ -2323,6 +2327,7 @@ const bypassPermissionsCleaned = new Set<string>();
 // for the entire wait. We hold the block until a non-blocked status arrives (the answer
 // landed and the agent moved on). See classifyBypassBlock.
 const awaitingAskUserQuestion = new Set<string>();
+const preAskUserQuestionStatus = new Map<string, AgentStatus>();
 
 const syncStats = {
   messagesSynced: 0,
@@ -4696,6 +4701,10 @@ export function clearSessionTrackingForKill(sessionId: string | null | undefined
   resumeInFlight.delete(sessionId);
   resumeInFlightStarted.delete(sessionId);
   restartingSessionIds.delete(sessionId);
+  awaitingAskUserQuestion.delete(sessionId);
+  preAskUserQuestionStatus.delete(sessionId);
+  lastAgentStatusSentAt.delete(sessionId);
+  keystrokeInference.cancel(sessionId);
 }
 
 // Test/inspection seam: which per-session kill-teardown maps still hold an entry.
@@ -5169,6 +5178,9 @@ async function executeRemoteCommand(
         const alreadyRunning = isPaneStreaming(target);
         startPaneStream(target, {
           log,
+          write: (pane, bytes) => {
+            if (writePane(pane, bytes)) observePaneInput(pane, bytes);
+          },
           push: async (msg) => {
             try {
               const res = await fetch(`${siteUrl}/cli/terminal/frame`, {
@@ -5859,6 +5871,7 @@ async function executeRemoteCommand(
         }
         if (tmuxTarget) {
           await tmuxExec(["send-keys", "-t", tmuxTarget, "Escape", "Escape"]);
+          observeSessionInput(sessionId, { kind: "escape" });
           result = "escape_sent";
           log(`[REMOTE] Sent double Escape to session ${sessionId.slice(0, 8)} via tmux ${tmuxTarget} (pane=${paneState ?? "unread"} hook=${hookStatus ?? "unknown"})`);
         } else {
@@ -5867,6 +5880,7 @@ async function executeRemoteCommand(
           // the no-pane path only runs once the hook status proves a turn.
           try {
             process.kill(proc!.pid, "SIGINT");
+            observeSessionInput(sessionId, { kind: "ctrl-c" });
             result = "escape_sent_sigint";
             log(`[REMOTE] Sent SIGINT to session ${sessionId.slice(0, 8)} pid=${proc!.pid}`);
           } catch (killErr) {
@@ -13203,14 +13217,71 @@ export function extractAssistantProseAbovePrompt(paneText: string): string {
 // the card is full-fidelity instead of a box-art-stripped scrape. Stale files (>5min, or
 // from a prior question) are ignored; the live menu's question is the cross-check.
 function readAskUserQuestionInput(sessionId: string): { questions: any[] } | null {
+  if (!isSafeStatusSessionId(sessionId)) return null;
   try {
     const p = path.join(ASK_INPUT_DIR, `${sessionId}.json`);
     const stat = fs.statSync(p);
-    if (Date.now() - stat.mtimeMs > 5 * 60_000) return null;
-    const parsed = JSON.parse(fs.readFileSync(p, "utf8"));
-    if (Array.isArray(parsed?.questions) && parsed.questions.length) return { questions: parsed.questions };
+    return parseAskInputSidecar(fs.readFileSync(p, "utf8"), stat.mtimeMs, Date.now());
   } catch {}
   return null;
+}
+
+const keystrokeInference = createKeystrokeInference({
+  readBaseline: (sessionId) => {
+    const status = lastSentAgentStatus.get(sessionId);
+    if (!status) return null;
+    return {
+      status,
+      statusSentAt: lastAgentStatusSentAt.get(sessionId) ?? 0,
+      turnStartedAt: turnStartedAt.get(sessionId) ?? 0,
+      agentType: detectSessionAgentType(sessionId),
+    };
+  },
+  isAwaitingQuestion: (sessionId) => awaitingAskUserQuestion.has(sessionId),
+  readOptionCount: async (sessionId) =>
+    singleSelectOptionCount((await readAskInputSidecar(ASK_INPUT_DIR, sessionId, Date.now()))?.questions),
+  writeInterrupted: (sessionId) => {
+    const convId = conversationCacheRef?.[sessionId];
+    if (!convId || !syncServiceRef) return;
+    log(`[INFER] Interrupt keystroke ended session ${sessionId.slice(0, 8)}'s turn; no hook arrived in ${INTERRUPT_SETTLE_MS}ms`);
+    sendAgentStatus(syncServiceRef, convId, sessionId, "idle", undefined, undefined, true);
+  },
+  writeQuestionAnswered: (sessionId) => {
+    const convId = conversationCacheRef?.[sessionId];
+    if (!convId || !syncServiceRef) return;
+    awaitingAskUserQuestion.delete(sessionId);
+    const restored = preAskUserQuestionStatus.get(sessionId) ?? "working";
+    preAskUserQuestionStatus.delete(sessionId);
+    log(`[INFER] Session ${sessionId.slice(0, 8)} answered its question; restoring ${restored}`);
+    sendAgentStatus(syncServiceRef, convId, sessionId, restored, undefined, undefined, true);
+  },
+  log,
+});
+
+async function sessionIdForTmuxTarget(target: string): Promise<string | null> {
+  const normalized = target.includes(":") ? target : `${target}:0.0`;
+  for (const [sessionId, cached] of sessionProcessCache) {
+    if (cached.tmuxTarget === normalized) return sessionId;
+  }
+  const [name, pane] = normalized.split(":");
+  if (pane !== "0.0") return null;
+  return (await getTmuxSessionOption(name, "@codecast_session_id"))?.trim() || null;
+}
+
+function observePaneInput(target: string, bytes: ArrayLike<number>): void {
+  const intent = classifyInputBytes(bytes);
+  if (!intent) return;
+  const name = target.split(":")[0];
+  if (!name || !isManagedTmuxName(name)) return;
+  void (async () => {
+    const sessionId = await sessionIdForTmuxTarget(target);
+    if (sessionId && isSafeStatusSessionId(sessionId)) await keystrokeInference.observeInput(sessionId, intent);
+  })().catch((err) => log(`[INFER] input observation failed for ${target}: ${err instanceof Error ? err.message : String(err)}`));
+}
+
+function observeSessionInput(sessionId: string, intent: InputIntent): void {
+  void keystrokeInference.observeInput(sessionId, intent)
+    .catch((err) => log(`[INFER] input observation failed for ${sessionId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`));
 }
 
 // Guard against a stale sidecar (a prior question's tool_input) being stamped onto the
@@ -20164,6 +20235,7 @@ function findReapTranscript(sessionId: string, now: number = Date.now()): Sessio
 // asked one. See askUserQuestionStillPending for why mtime and not existence.
 // Async because both callers run on the maintenance tick.
 async function askInputSidecarMtimeMs(sessionId: string): Promise<number | null> {
+  if (!isSafeStatusSessionId(sessionId)) return null;
   try {
     return (await fs.promises.stat(path.join(ASK_INPUT_DIR, `${sessionId}.json`))).mtimeMs;
   } catch {
@@ -27789,6 +27861,13 @@ async function main(): Promise<void> {
       // the whole wait — worst for raw-iTerm sessions, where the question can't be
       // scraped from a pane or read from the buffered JSONL until it's answered.
       const inheritedMode = data.permission_mode || prev?.permission_mode;
+      const opensQuestionWait = data.status === "permission_blocked" && (data.message || "").startsWith("AskUserQuestion");
+      if (opensQuestionWait && !awaitingAskUserQuestion.has(sessionId)) {
+        const before = lastSentAgentStatus.get(sessionId);
+        if (before && ACTIVE_AGENT_STATUSES.has(before)) preAskUserQuestionStatus.set(sessionId, before);
+      } else if (data.status && data.status !== "permission_blocked") {
+        preAskUserQuestionStatus.delete(sessionId);
+      }
       if (classifyBypassBlock(awaitingAskUserQuestion, sessionId, data.status, inheritedMode, data.message).suppress) {
         log(`Suppressing phantom permission_blocked in bypassPermissions mode for session ${sessionId.slice(0, 8)}`);
         data = { ...data, status: "working" };
@@ -28100,6 +28179,10 @@ async function main(): Promise<void> {
         if (f.mtimeMs >= cutoff) continue;
         await fs.promises.unlink(f.filePath).catch(() => {});
         lastHookStatus.delete(f.sessionId);
+        awaitingAskUserQuestion.delete(f.sessionId);
+        preAskUserQuestionStatus.delete(f.sessionId);
+        lastAgentStatusSentAt.delete(f.sessionId);
+        keystrokeInference.cancel(f.sessionId);
         bypassPermissionsCleaned.delete(f.sessionId);
       }
       await sweepStatusLineStamps(cutoff);
