@@ -265,6 +265,13 @@ echo PROVISION-BASE-OK`;
 /** The daemon systemd unit; installed after the cast binary and config exist. */
 export function daemonUnitScript(): string {
   return `set -euo pipefail
+tmux_pids=$(bash -c ${shq(DAEMON_CGROUP_TMUX_SCRIPT)})
+if [ -n "$tmux_pids" ]; then
+  echo "The daemon service owns tmux servers ($tmux_pids); finish those sessions before provisioning again" >&2
+  exit 1
+fi
+if sudo systemctl cat codecast-daemon.service >/dev/null 2>&1; then sudo systemctl stop codecast-daemon.service; fi
+CODECAST_NO_AUTO_UPDATE=1 /usr/local/bin/cast stop
 sudo tee /etc/systemd/system/codecast-daemon.service >/dev/null <<'UNIT'
 [Unit]
 Description=codecast daemon (remote device)
@@ -284,7 +291,8 @@ WantedBy=multi-user.target
 UNIT
 sudo systemctl daemon-reload
 sudo systemctl enable --now codecast-daemon.service
-sudo systemctl restart codecast-daemon.service
+sleep 3
+sudo systemctl is-active --quiet codecast-daemon.service
 echo DAEMON-UNIT-OK`;
 }
 
