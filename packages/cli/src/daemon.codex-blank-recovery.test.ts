@@ -16,7 +16,7 @@ function fixture(server: { running: boolean; threadStart: (...args: any[]) => Pr
   const events: string[] = [];
   const hooks = { context: () => {} };
   const deps = {
-    codexAppServerInstance: server, pendingSessionStarts: starts,
+    readyCodexAppServer: async () => server, pendingSessionStarts: starts,
     appServerConversations: bindings, persistedAppServerThreads: persisted,
     blankCodexRecoveryParams, resolveCodexPermissionDefaults: () => permissions,
     buildCodexStableContext: async () => { hooks.context(); return { text: "Project instructions", data: {} }; },
