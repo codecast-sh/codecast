@@ -162,9 +162,9 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, children
   }, []);
 
   useEventListener("keydown", useCallback((e: KeyboardEvent) => {
-    if (e.key === "Escape") { e.preventDefault(); close(); }
-    else if (e.key === "ArrowRight") { e.preventDefault(); goNext(); }
-    else if (e.key === "ArrowLeft") { e.preventDefault(); goPrev(); }
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); }
+    else if (e.key === "ArrowRight") { e.preventDefault(); e.stopPropagation(); goNext(); }
+    else if (e.key === "ArrowLeft") { e.preventDefault(); e.stopPropagation(); goPrev(); }
   }, [close, goNext, goPrev]), isOpen ? document : null);
 
   const ctx = useMemo(() => ({ register, open, openList }), [register, open, openList]);
@@ -194,6 +194,9 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, children
       {children}
       {isOpen && currentSrc && createPortal(
         <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Image gallery"
           className="fixed inset-0 z-[10001] flex items-center justify-center"
           style={{ backgroundColor: "rgba(0,0,0,0.92)" }}
           onClick={close}

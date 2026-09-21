@@ -1138,7 +1138,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // them (attachReviewToMessage), so a bare Enter with an empty input is a valid send.
   const reviewCount = useInboxStore((s) => (s.reviewComments[conversationId] ?? []).length);
   const hasContent = (composeMode ? composeHasContent : message.trim().length > 0) || pastedImages.length > 0 || queuedMessages.length > 0;
-  const isExpanded = composeMode || !!onSendAndAdvance || isFocused || message.length > 0 || pastedImages.length > 0 || queuedMessages.length > 0 || reviewCount > 0 || !!branchMapNode;
+  const isExpanded = composeMode || !!onSubmitWithIntent || !!onSendAndAdvance || isFocused || message.length > 0 || pastedImages.length > 0 || queuedMessages.length > 0 || reviewCount > 0 || !!branchMapNode;
 
   const toggleCompose = useCallback(() => {
     if (composeMode) {
@@ -2698,7 +2698,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         </div>
           );
         })(),
-        composerRootRef.current?.closest<HTMLElement>('[role="dialog"]') ?? document.body
+        composerRootRef.current?.closest<HTMLElement>('[role="dialog"][aria-modal="true"]') ?? document.body
       )}
     </div>
   );

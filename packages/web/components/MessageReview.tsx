@@ -27,6 +27,7 @@ import { altChordDirection } from "../shortcuts";
 import { focusComposer } from "../lib/composerControl";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { KeyCap, MenuKeyCaps } from "./KeyboardShortcutsHelp";
+import { useReviewComposer } from "./reviewContext";
 
 const RightCommentRail = lazy(() => import("./comments/RightCommentRail").then((m) => ({ default: m.RightCommentRail })));
 
@@ -63,6 +64,7 @@ type Props = {
 };
 
 function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: Props) {
+  const scrollToBlock = useReviewComposer()?.scrollToBlock;
   const { user: author } = useCurrentUser();
 
   const isReviewTarget = useInboxStore((s) => s.reviewMessageId === messageId);
@@ -381,11 +383,15 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
   // keep active block in view + hold focus so single-letter keys are captured here
   useWatchEffect(() => {
     if (!isReviewTarget || editingId) return;
-    getQuoteUnits(contentRef.current)[activeBlock]?.scrollIntoView({ block: "nearest" });
+    const block = getQuoteUnits(contentRef.current)[activeBlock];
+    if (block) {
+      if (scrollToBlock) scrollToBlock(block, "nearest");
+      else block.scrollIntoView({ block: "nearest" });
+    }
     if (containerRef.current && !containerRef.current.contains(document.activeElement)) {
       containerRef.current.focus({ preventScroll: true } as any);
     }
-  }, [isReviewTarget, activeBlock, editingId]);
+  }, [isReviewTarget, activeBlock, editingId, scrollToBlock]);
 
   const focusRegion = useCallback(() => containerRef.current?.focus({ preventScroll: true } as any), []);
 
@@ -410,6 +416,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
   return (
     <div
       ref={containerRef}
+      data-review-message={messageId}
       className={
         "cc-msg-review" +
         (engaged ? (railInMargin ? " cc-rail-margin" : " cc-rail-inline") : "") +
@@ -510,6 +517,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
                 else cardRefs.current.delete(c.id);
               }}
               className="cc-rail-item"
+              data-review-comment={c.id}
               style={{ top: stackTops[c.id] ?? rects[c.blockIndex]?.top ?? 0 }}
             >
               {c.id === editingId ? (

@@ -2,6 +2,7 @@ import { toast } from "sonner";
 import { copyToClipboard, shareOrigin } from "./utils";
 import { openForwardToChat } from "./forwardToChat";
 import type { ToolCall, ToolResult } from "../components/conversation/types";
+import { cacheLocalDateFormat } from "./localDateCache";
 
 function messageLink(conversationId: string | undefined, messageId: string) {
   return `${shareOrigin()}/conversation/${conversationId}#msg-${messageId}`;
@@ -51,12 +52,12 @@ export function formatMessagePartsForCopy(
   return parts.join("\n\n");
 }
 
-function formatTimestamp(ts: number) {
-  return new Date(ts).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
+const formatTimestamp = cacheLocalDateFormat((date) => date.toLocaleTimeString([], {
+  hour: "2-digit",
+  minute: "2-digit",
+}));
+
+const formatCalendarDate = cacheLocalDateFormat((date) => date.toLocaleDateString([], { month: "short", day: "numeric" }));
 
 export function formatDuration(startTs: number): string {
   const diff = Date.now() - startTs;
@@ -132,16 +133,14 @@ export function formatRelativeTime(ts: number): string {
   if (minutes < 60) return `${minutes}m ago`;
   if (hours < 24) return `${hours}h ago`;
   if (days < 7) return `${days}d ago`;
-  return new Date(ts).toLocaleDateString([], { month: "short", day: "numeric" });
+  return formatCalendarDate(ts);
 }
 
-export function formatFullTimestamp(ts: number): string {
-  return new Date(ts).toLocaleString([], {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-}
+export const formatFullTimestamp = cacheLocalDateFormat((date) => date.toLocaleString([], {
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+}));

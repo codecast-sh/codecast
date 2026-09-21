@@ -2,7 +2,7 @@
 // own local copy of TimelineItem, so the compiler cannot catch a disagreement
 // about the item type string. These tests are what does.
 import { describe, expect, it } from "bun:test";
-import { buildCompositeTimeline, type TimelineItem } from "../compositeTimeline";
+import { buildCompositeTimeline, mergeTimelineMessages, type TimelineItem } from "../compositeTimeline";
 
 const msg = (id: string, timestamp: number) => ({ _id: id, role: "user", content: id, timestamp });
 const commit = (id: string, sha: string, timestamp: number) => ({ _id: id, sha, message: id, timestamp });
@@ -15,6 +15,54 @@ const event = (id: string, created_at: number, extra: Record<string, unknown> = 
 });
 
 const typesOf = (items: TimelineItem[]) => items.map((i) => i.type);
+
+describe("mergeTimelineMessages", () => {
+  it("places a persisted interruption before newer replies so the tail keeps the latest activity time", () => {
+    const latest = 1_790_000_000_000;
+    const interruption = {
+      ...msg("old-interrupt", latest - 6 * 24 * 60 * 60 * 1000),
+      content: "[Request interrupted by user]",
+      _isSettledControl: true,
+    };
+    const reply = { ...msg("latest-reply", latest), role: "assistant" };
+    const base = buildCompositeTimeline([reply], [], []);
+    const items = mergeTimelineMessages(base, [interruption]);
+    expect(items.map((item) => item.data._id)).toEqual(["old-interrupt", "latest-reply"]);
+    expect(items.at(-1)?.timestamp).toBe(latest);
+    expect(items[0].data).toBe(interruption);
+    expect(base).toHaveLength(1);
+    expect(base[0].data).toBe(reply);
+  });
+
+  it("orders local and server pending messages among messages, commits, PRs, and events", () => {
+    const base = buildCompositeTimeline(
+      [msg("reply", 500)],
+      [commit("commit", "sha", 200)],
+      [{ _id: "pr", number: 1, title: "PR", state: "open", created_at: 400 }],
+      [event("event", 600)],
+    );
+    const pending = [
+      { ...msg("latest-pending", 700), _isOptimistic: true },
+      { ...msg("serverpending_1", 300), _serverPendingStatus: "queued" },
+      { ...msg("old-interrupt", 100), content: "<turn_aborted>" },
+    ];
+    const items = mergeTimelineMessages(base, pending);
+    expect(items.map((item) => item.data._id)).toEqual([
+      "old-interrupt", "commit", "serverpending_1", "pr", "reply", "event", "latest-pending",
+    ]);
+  });
+
+  it("preserves arrival order for equal timestamps", () => {
+    const base = buildCompositeTimeline([msg("reply", 100)], [], []);
+    const items = mergeTimelineMessages(base, [msg("interrupt", 100), msg("follow-up", 100)]);
+    expect(items.map((item) => item.data._id)).toEqual(["reply", "interrupt", "follow-up"]);
+  });
+
+  it("reuses the base when there are no pending messages", () => {
+    const base = buildCompositeTimeline([msg("reply", 100)], [], []);
+    expect(mergeTimelineMessages(base, [])).toBe(base);
+  });
+});
 
 describe("buildCompositeTimeline", () => {
   it("names an external event item 'external_event'", () => {
