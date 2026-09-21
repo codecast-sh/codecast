@@ -119,6 +119,17 @@ describe("helper extraction from hook commands, shebangs and skill text", () => 
     expect(script).not.toContain("hooks/notify\" >");
     expect(script).not.toContain("chmod +x");
   });
+
+  test("Codecast-owned hooks are installed by the host and their embedded code is not a portable tool requirement", () => {
+    write(home, ".claude/settings.json", JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: "~/.claude/hooks/codecast-status.sh" }] }] } }));
+    write(home, ".claude/hooks/codecast-status.sh", "#!/bin/bash\npython3 <<'PY'\nimport json\nresult = time.time()\nPY\n");
+    expect(scanMirroredHelpers({ laptopHome: home }).tools).toEqual([]);
+  });
+
+  test("functions defined by a shell helper are not missing external commands", () => {
+    write(home, ".claude/hooks/status.sh", "#!/bin/bash\ncc_draw() { echo ok; }\ncc_draw\nshellcheck file.sh\n");
+    expect(scanMirroredHelpers({ laptopHome: home }).tools.map((tool) => tool.tool)).toEqual(["shellcheck"]);
+  });
 });
 
 describe("hostToolsScript shape", () => {
@@ -506,8 +517,7 @@ trust_level = "trusted"
     expect(staticMcpVerdict("~/bin/native", home)?.reason).toMatch(/Mach-O/);
     expect(staticMcpVerdict(`${home}/bin/native`, home)?.reason).toMatch(/Mach-O/);
     // A Mach-O outside the laptop home (/usr/local/bin/node on a Mac) is the host's probe to decide: the same path may well exist there.
-    write(dir, "usr-local-bin/node", Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0x07, 0x00, 0x00, 0x01]), 0o755);
-    expect(staticMcpVerdict(path.join(dir, "usr-local-bin/node"), home)).toBeUndefined();
+    expect(staticMcpVerdict("/usr/local/bin/node", home)).toBeUndefined();
     write(home, "bin/script", "#!/bin/sh\necho hi\n", 0o755);
     expect(staticMcpVerdict("~/bin/script", home)).toBeUndefined();
     expect(staticMcpVerdict("npx", home)).toBeUndefined();

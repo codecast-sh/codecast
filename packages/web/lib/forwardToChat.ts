@@ -9,19 +9,36 @@
 import { toast } from "sonner";
 import { useInboxStore } from "../store/inboxStore";
 import type { PalettePickResult, PalettePickTarget } from "./palettePick";
+import { parseEntityUrl, parseMessageRefUrl } from "./entityLinks";
+import { findEntityInStore } from "./liveEntities";
+import { cleanNotificationBody } from "./notificationText";
 
 export type ForwardToChatPayload = {
   /** The link to send — the same URL the surface's copy-link action copies. */
   url: string;
   /** Short name of what is being sent, shown in the picker title. */
   label?: string;
+  previewTitle?: string;
+  previewText?: string;
 };
 
 export function openForwardToChat(payload: ForwardToChatPayload) {
-  useInboxStore.getState().openPalette({
+  const state = useInboxStore.getState();
+  const ref = parseEntityUrl(payload.url);
+  const entity = ref ? findEntityInStore(state, ref.type, ref.id) : undefined;
+  const messageRef = parseMessageRefUrl(payload.url);
+  const messages = ref?.type === "session" ? state.messages[entity?._id ?? ref.id] : undefined;
+  const message = messageRef?.kind === "message" ? messages?.find((row) => row._id === messageRef.id) : undefined;
+  const previewText = payload.previewText ?? message?.content;
+  state.openPalette({
     pick: {
       title: `Send ${payload.label ?? "link"} to…`,
       kinds: ["channel"],
+      preview: {
+        title: cleanNotificationBody(payload.previewTitle || entity?.display_title || entity?.title || entity?.name || `Shared ${payload.label ?? "link"}`, 160),
+        text: previewText ? cleanNotificationBody(previewText, 240) : undefined,
+        url: payload.url,
+      },
       notePlaceholder: "Add a message (optional)",
       confirmLabel: "Send",
       onPick: (target: PalettePickTarget, result: PalettePickResult) => {

@@ -211,6 +211,87 @@ describe("applyTaskUpdate", () => {
     expect(revisionsOf(rows)[0].before.interval_ms).toBe(60 * 60 * 1000);
   });
 
+  // Routing used to be the one part of a trigger an edit could not reach, so
+  // rebinding one meant cancelling it and creating a replacement — a new id, a
+  // lost history, and seven of them in one sitting on 2026-09-20. It is an
+  // editable field like any other now, versioned and audited the same way.
+  describe("routing", () => {
+    const OTHER = "conv2";
+    const other = () => ({ _id: OTHER, user_id: USER });
+
+    test("unbinding turns an inject trigger into a spawn trigger", async () => {
+      const task = editable();
+      const { db, rows } = fakeDb([task, home()]);
+
+      const result = await applyTaskUpdate({ db } as any, task as any, { originating_conversation_id: null }, ACTOR);
+
+      expect(result).toEqual({ ok: true, changed: ["originating_conversation_id"] });
+      expect(task.originating_conversation_id).toBeUndefined();
+      expect(revisionsOf(rows)[0].before.originating_conversation_id).toBe(CONV);
+    });
+
+    test("rebinding moves the trigger and refreshes BOTH homes", async () => {
+      const task = editable();
+      const homeConv = home();
+      const otherConv = other();
+      const { db } = fakeDb([task, homeConv, otherConv]);
+
+      await applyTaskUpdate({ db } as any, task as any, { originating_conversation_id: OTHER as any }, ACTOR);
+
+      expect(task.originating_conversation_id).toBe(OTHER);
+      // The old home no longer has an armed trigger; the new one does. Without
+      // the second refresh the new home's badge would lag until something else
+      // touched it, because patchTask reads the binding off the pre-edit row.
+      expect(homeConv.armed_trigger_kind ?? "none").toBe("none");
+      expect(otherConv.armed_trigger_kind).toBeDefined();
+      expect(otherConv.armed_trigger_kind).not.toBe("none");
+    });
+
+    test("the result thread and the wake flag are editable and audited", async () => {
+      const task = editable();
+      const { db, rows } = fakeDb([task, home(), other()]);
+
+      const result = await applyTaskUpdate(
+        { db } as any,
+        task as any,
+        { target_conversation_id: OTHER as any, wake_creator: true },
+        ACTOR
+      );
+
+      expect(result.changed).toEqual(["target_conversation_id", "wake_creator"]);
+      expect(task.target_conversation_id).toBe(OTHER);
+      expect(task.wake_creator).toBe(true);
+      expect(revisionsOf(rows)[0].before.target_conversation_id).toBeUndefined();
+    });
+
+    test("clearing the thread and the wake flag drops them rather than storing false", async () => {
+      const task = editable();
+      task.target_conversation_id = OTHER;
+      task.wake_creator = true;
+      const { db } = fakeDb([task, home(), other()]);
+
+      await applyTaskUpdate(
+        { db } as any,
+        task as any,
+        { target_conversation_id: null, wake_creator: false },
+        ACTOR
+      );
+
+      expect(task.target_conversation_id).toBeUndefined();
+      expect(task.wake_creator).toBeUndefined();
+    });
+
+    test("rebinding to the same session is a no-op edit", async () => {
+      const task = editable();
+      const { db, rows } = fakeDb([task, home()]);
+
+      const result = await applyTaskUpdate({ db } as any, task as any, { originating_conversation_id: CONV as any }, ACTOR);
+
+      expect(result).toEqual({ ok: true, changed: [] });
+      expect(revisionsOf(rows)).toHaveLength(0);
+    });
+  });
+
   test("rejects a running or finished task", async () => {
     for (const status of ["running", "completed", "failed"]) {
       const task = editable();

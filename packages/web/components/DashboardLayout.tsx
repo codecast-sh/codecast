@@ -65,7 +65,7 @@ import { useShortcutAction, useShortcutContext, useGlobalShortcutActions } from 
 import { useFollowMode } from "../hooks/useFollowMode";
 import { FollowPill } from "./presence/FollowPill";
 import { usePrefetch } from "../hooks/usePrefetch";
-import { desktopHeaderClass, setupDesktopDrag, isElectron, borrowsTabShell, isStandaloneCommunityPath } from "../lib/desktop";
+import { desktopHeaderClass, setupDesktopDrag, isElectron, borrowsTabShell, isStandaloneCommunityPath, getDesktopWindowRole } from "../lib/desktop";
 import { SessionListPanel } from "./GlobalSessionPanel";
 import { FilePathMenuHost } from "./FilePathMenuHost";
 import { LinkMenuHost } from "./LinkMenuHost";
@@ -83,8 +83,11 @@ import { useRecentSwitcher } from "../hooks/useRecentSwitcher";
 import { RecentSwitcher } from "./RecentSwitcher";
 import { TabBar, AttachTabButton } from "./TabBar";
 import { AppWindowBar } from "./desktop/AppWindowBar";
-import { useDesktopAppWindow } from "../hooks/useDesktopWindowRole";
-import { desktopAppWindow } from "../lib/desktopApps";
+import { useAppWindowPresence, useDesktopAppWindow, useDesktopWindowRole } from "../hooks/useDesktopWindowRole";
+import { DESKTOP_APPS, desktopAppWindow, routeElsewhere } from "../lib/desktopApps";
+import { routerNavigate } from "../lib/tabRoutes";
+import { announceAppWindow, appWindowPresence, installAppWindowRegistry } from "../lib/appWindowRegistry";
+import { yieldOwnedRoutes } from "../lib/stage";
 import { tabTitle } from "../lib/tabTitle";
 import { pathLabel, poppedTabPath } from "../lib/pathLabel";
 import { leavesOf } from "../store/stageSplit";
@@ -431,6 +434,30 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // its page. A hook: a window made from the warm spare becomes one after
   // it has mounted.
   const appWindow = useDesktopAppWindow();
+  // Every window says which app windows exist, shell or no shell
+  // (lib/appWindowRegistry): this window listens from the first render, and
+  // while it IS an app it holds that app's lock and answers "open" requests
+  // as navigations the shell placed. Register before paint, so a path handed
+  // over the channel during boot is not missed.
+  useMountEffect(() => {
+    installAppWindowRegistry((path) => {
+      if (path) window.dispatchEvent(new CustomEvent("codecast-navigate", { detail: { path, tabId: null, placed: true } }));
+      window.focus();
+    });
+    // A console handle beside __inboxStore: which app windows this window
+    // believes in, by the shell's word and by the windows' own.
+    (window as any).__appWindows = () => ({ self: desktopAppWindow(), role: getDesktopWindowRole().apps, presence: appWindowPresence() });
+  });
+  useWatchEffect(() => (appWindow ? announceAppWindow(appWindow) : undefined), [appWindow]);
+  // The main window never keeps what an app window owns: when one appears,
+  // the tabs and panes on its routes are handed to it (lib/stage).
+  const presence = useAppWindowPresence();
+  const roleApps = useDesktopWindowRole().apps;
+  useWatchEffect(() => {
+    if (appWindow || borrowsTabShell()) return;
+    // `roleApps` is null on a shell that cannot say, and in a browser.
+    if (Object.values(presence).some(Boolean) || Object.values(roleApps ?? {}).some(Boolean)) yieldOwnedRoutes();
+  }, [appWindow, presence, roleApps]);
   // Shell display modes, as classes on the shell root and on anything that
   // portals out of it (the phone drawers), so the mode's scoped rules apply.
   const shellModeClass = `${resolveSimpleView(s.clientState.ui) ? " simple-view" : ""}${resolveInboxCompact(s.clientState.ui) ? " inbox-compact" : ""}`;
@@ -825,6 +852,15 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         });
       }
       if (isNonTabRoute(window.location.pathname)) return;
+      // An app window's history can reach past the window's own life: one
+      // claimed from the warm spare still holds the inbox it was parked on.
+      // Back onto a route another window owns hands it there and puts this
+      // window on its own home instead.
+      const here = desktopAppWindow();
+      if (here && routeElsewhere(window.location.pathname + window.location.search)) {
+        routerNavigate(DESKTOP_APPS[here].home, "replace");
+        return;
+      }
       // A detached tab window or a browser pane's page navigates via React
       // Router only — the shared tabs its store hydrates belong to another
       // window, so mirroring this window's URL into the "active tab" would
@@ -833,6 +869,13 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       const store = useInboxStore.getState();
       const tab = store.tabs.find((t) => t.id === store.activeTabId);
       if (!tab) return;
+      // History can walk back onto a route another window owns now (a chat
+      // entry from before the Chat window opened): that window shows it, and
+      // this one keeps its tab and its address as they are.
+      if (routeElsewhere(window.location.pathname + window.location.search)) {
+        window.history.replaceState({ tabNav: true, tabId: tab.id }, "", tab.path);
+        return;
+      }
       // A session-select entry is the inbox pane's to reconcile while that
       // pane is mounted; once the tab shows another page, the pane is gone
       // and the tab itself must return to the inbox (poppedTabPath).

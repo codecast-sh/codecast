@@ -22,7 +22,7 @@ describe("deviceDisplayName", () => {
 
   it("names remote boxes by class", () => {
     expect(deviceDisplayName({ label: "Linux - ip-172-31-40-243", platform: "linux", is_remote: true })).toBe("Cloud Linux");
-    expect(deviceDisplayName({ label: "macOS - 36563bd2-ab96", platform: "darwin", is_remote: true })).toBe("Remote Mac");
+    expect(deviceDisplayName({ label: "macOS - 36563bd2-ab96", platform: "darwin", is_remote: true })).toBe("Cloud Mac");
   });
 
   it("falls back to the raw label and handles a missing device", () => {

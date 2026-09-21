@@ -197,6 +197,65 @@ describe("identity reuse and nested fields", () => {
 });
 
 describe("delta vs snapshot semantics", () => {
+  it("does not enumerate unchanged cached rows for a no-op delta", () => {
+    let enumerations = 0;
+    const prev = new Proxy({ a: row("a"), b: row("b") }, {
+      ownKeys(target) {
+        enumerations++;
+        return Reflect.ownKeys(target);
+      },
+    });
+    const pending = {};
+    const result = applySyncTable("items", [row("a")], pending, prev, { isDelta: true });
+    expect(result.table).toBe(prev);
+    expect(result.pending).toBe(pending);
+    expect(enumerations).toBe(0);
+  });
+
+  it("retires an echoed field lock without copying an unchanged delta table", () => {
+    const prev = { a: row("a", { title: "local" }), b: row("b") };
+    const pending: Record<string, PendingEntry> = {
+      "items:a:title": { type: "field", value: "local", ts: 1 },
+      "items:b": { type: "include", ts: 1 },
+    };
+    const result = applySyncTable("items", [row("a", { title: "local" })], pending, prev, { isDelta: true });
+    expect(result.table).toBe(prev);
+    expect(result.pending["items:a:title"]).toBeUndefined();
+    expect(result.pending["items:b"]).toBe(pending["items:b"]);
+    expect(pending["items:a:title"]).toBeDefined();
+  });
+
+  it("removes excluded cached rows even when the delta is empty", () => {
+    const prev = Object.freeze({ a: row("a"), b: row("b") });
+    const pending: Record<string, PendingEntry> = { "items:a": { type: "exclude", ts: 1 } };
+    const result = applySyncTable("items", [], pending, prev, { isDelta: true });
+    expect(Object.keys(result.table)).toEqual(["b"]);
+    expect(result.table.b).toBe(prev.b);
+    expect(result.pending).toBe(pending);
+    expect(prev.a).toBeDefined();
+  });
+
+  it("retains pending overrides and overlay fields in changed delta rows", () => {
+    const prev = Object.freeze({ a: row("a", { title: "local", live: "on" }), b: row("b") });
+    const pending: Record<string, PendingEntry> = { "items:a:title": { type: "field", value: "local", ts: 1 } };
+    const incoming = row("a", { title: "server", live: null, updated_at: 2 });
+    const result = applySyncTable("items", [incoming], pending, prev, { isDelta: true, preserveFields: ["live"] });
+    expect(result.table.a).toEqual({ ...incoming, title: "local", live: "on" });
+    expect(result.table.b).toBe(prev.b);
+    expect(result.pending).toBe(pending);
+    expect(prev.a.updated_at).toBeUndefined();
+  });
+
+  it("preserves duplicate-row precedence and existing order in delta batches", () => {
+    const prev = { a: row("a"), b: row("b") };
+    const incoming = [row("c", { title: "first" }), row("a", { title: "first" }), row("a", { title: "last" }), row("c", { title: "last" })];
+    const result = applySyncTable("items", incoming, {}, prev, { isDelta: true });
+    expect(Object.keys(result.table)).toEqual(["a", "b", "c"]);
+    expect(result.table.a.title).toBe("last");
+    expect(result.table.c.title).toBe("first");
+    expect(result.table.b).toBe(prev.b);
+  });
+
   it("drops rows absent from a snapshot and keeps them in a delta", () => {
     const prev = { a: row("a"), b: row("b") };
 

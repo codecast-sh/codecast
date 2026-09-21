@@ -6,7 +6,7 @@ import { sshBase, type RemoteHost } from "../../remote/session-move";
 import { mirrorForPrepare } from "../prepare";
 import { MIRROR_MAGIC, buildMirrorBundle, parseMirrorBundle, type BuiltBundle } from "./bundle";
 import {
-  MIRROR_APPLY_COMMAND, NOT_LOGGED_IN_REASON, OLDER_HOST_REASON, hostKey, mirrorHomeToHost, pushMirrorToHostAsync, readLocalStamps, runMirrorTick,
+  MIRROR_APPLY_COMMAND, NOT_LOGGED_IN_REASON, OLDER_HOST_REASON, buildHomeMirror, hostKey, mirrorHomeToHost, pushMirrorToHostAsync, readLocalStamps, runMirrorTick,
   writeLocalStamps, type LocalMirrorStamps, type MirrorDeps, type MirrorPushOutcome,
 } from "./push";
 
@@ -52,6 +52,19 @@ afterEach(() => {
 });
 
 const bundle = Buffer.concat([Buffer.from(MIRROR_MAGIC), Buffer.from("payload-bytes-that-must-not-leak")]);
+
+test("an unused dangling local command does not block the mirror, but a required command does", async () => {
+  const home = path.join(dir, "home");
+  fs.mkdirSync(path.join(home, ".local/bin"), { recursive: true });
+  fs.symlinkSync("/missing-fig-command", path.join(home, ".local/bin/fig"));
+  const opts = { home, hostHome: "/home/ubuntu", config: null, deviceId: "test-device", gitEnv: {} };
+  const mirror = await buildHomeMirror(opts);
+  expect(mirror.summary.warnings).toContain("omitted unavailable local command .local/bin/fig");
+  expect(mirror.summary.files.some((file) => file.path === ".local/bin/fig")).toBe(false);
+  fs.mkdirSync(path.join(home, ".claude"));
+  fs.writeFileSync(path.join(home, ".claude/settings.json"), JSON.stringify({ statusLine: { type: "command", command: "~/.local/bin/fig" } }));
+  await expect(buildHomeMirror(opts)).rejects.toThrow(/missing active context reference/);
+});
 
 describe("pushMirrorToHostAsync", () => {
   test("runs ssh with sshBase args and the exact remote command, streams the bundle, parses the last JSON line", async () => {

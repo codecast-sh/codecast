@@ -40,6 +40,8 @@ import { DANGLING_SEED_REFS_SCRIPT } from "../cloud/transfer.js";
 import { cloudSeedLabel } from "@codecast/shared/contracts";
 import { commandGroup } from "../commandGroups.js";
 import { registerHostKeepaliveCommand } from "../cloud/keepalive.js";
+import { registerHostCreateCommand } from "./create.js";
+import { remoteExec } from "../browser/remote.js";
 
 const OK = fmt.success(icons.check);
 
@@ -103,6 +105,9 @@ export function estimateHostCost(input: {
   volumeGiB?: number;
   state: HostState | string;
 }): HostCost {
+  if (/^mac\d|^mac-/.test(input.instanceType ?? "")) {
+    return { hourlyUsd: null, diskMonthlyUsd: null, line: "Mac dedicated host billing continues while the instance is stopped; 24-hour minimum allocation. Release the dedicated host to end its charges. Storage is billed separately." };
+  }
   const hourlyUsd = input.instanceType ? EC2_HOURLY_USD[input.instanceType] ?? null : null;
   const diskMonthlyUsd = typeof input.volumeGiB === "number" ? input.volumeGiB * GP3_USD_PER_GIB_MONTH : null;
   const disk = diskMonthlyUsd === null ? "disk size unknown" : `about ${usd(diskMonthlyUsd)}/month disk`;
@@ -760,7 +765,7 @@ function printHostReport(r: HostReport, opts: { verbose?: boolean } = {}): void 
 /** The registered host an id names, or the default Linux one. */
 function pick(id: string | undefined, what: string): CloudHost {
   const rows = readHosts();
-  const h = id ? rows.find((r) => r.id === id) : rows.find((r) => r.provider === "aws");
+  const h = id ? rows.find((r) => r.id === id) : rows.find((r) => r.provider === "aws" && r.platform !== "darwin") ?? rows[0];
   if (!h) die(id ? `no host ${id}` : what, "`cast hosts add <instance-id> --key <pem>` first");
   return h;
 }
@@ -827,6 +832,7 @@ function printKeyReport(host: CloudHost, state: HostGitState, origin: string, op
 export function buildHostsCommand(parent: Command): Command {
   const hosts = parent.command("hosts").description(commandGroup("hosts").description);
   registerHostKeepaliveCommand(hosts);
+  registerHostCreateCommand(hosts);
 
   hosts
     .command("ls", { isDefault: true })
@@ -856,9 +862,8 @@ export function buildHostsCommand(parent: Command): Command {
       }
       console.log(
         fmt.muted(
-          "  A Linux host sleeps when idle and then costs only its disk, about a dollar a month.\n" +
-            "  An Apple silicon Mac cannot sleep — Apple's licence sets a 24-hour minimum lease, so it\n" +
-            "  bills continuously (~EUR75/month) until deleted. Use one only for work that needs macOS.",
+          "  Linux compute stops billing when stopped; storage remains.\n" +
+            "  AWS Macs use dedicated hosts with a 24-hour minimum; stopping the instance does not release the host.",
         ),
       );
     });
@@ -868,31 +873,56 @@ export function buildHostsCommand(parent: Command): Command {
     .description("Register an existing EC2 instance as a host")
     .requiredOption("--key <path>", "SSH private key for it")
     .option("--region <name>", "AWS region", "us-west-2")
-    .option("--user <name>", "SSH user for the image", "ubuntu")
-    .action((instanceId: string, o: { key: string; region: string; user: string }) => {
+    .option("--profile <name>", "AWS credentials profile (remembered for wake and sleep)")
+    .option("--user <name>", "SSH user (ubuntu for Linux, ec2-user for Mac)")
+    .option("--provision", "Install tools, sync configuration, and start the remote service")
+    .option("--service-user <name>", "With --provision, create a separate Mac login with SSH and passwordless sudo")
+    .action(async (instanceId: string, o: { key: string; region: string; user?: string; profile?: string; provision?: boolean; serviceUser?: string }) => {
+      if (o.serviceUser && !o.provision) die("--service-user requires --provision");
       const host: CloudHost = {
-        id: instanceId, provider: "aws", region: o.region, user: o.user,
-        keyPath: path.resolve(o.key),
+        id: instanceId, provider: "aws", region: o.region, user: o.user ?? "ubuntu",
+        keyPath: path.resolve(o.key.replace(/^~(?=\/)/, os.homedir())), profile: o.profile,
       };
-      const s = hostState(host);
+      if (!fs.existsSync(host.keyPath)) die(`SSH key not found: ${host.keyPath}`);
+      const s = inspectHost(host);
       if (s.state === "missing") die(`${instanceId} was not found in ${o.region}`);
-      upsertHost({ ...host, address: s.address });
-      console.log(`${OK} registered ${instanceId} (${s.state})`);
+      const previous = readHosts().find((entry) => entry.id === instanceId);
+      upsertHost({ ...previous, ...host, platform: s.platform, user: o.user ?? previous?.user ?? (s.platform === "darwin" ? "ec2-user" : "ubuntu"), address: s.address });
+      console.log(`${OK} registered ${instanceId} (${s.platform === "darwin" ? "Mac" : "Linux"}, ${s.state})`);
+      if (o.provision) await hosts.parseAsync(["provision", instanceId, ...(o.serviceUser ? ["--service-user", o.serviceUser] : [])], { from: "user" });
     });
 
   hosts
     .command("provision [id]")
-    .description("Set up a Linux host as a full remote service: display, live stream, idle auto-stop, codecast daemon")
+    .description("Set up a Linux or Mac host: agent tools, config sync, and an unattended daemon")
     .option("--idle <minutes>", "Auto-stop after this many idle minutes (0 disables)", "20")
     .option("--no-daemon", "Skip the codecast daemon (browser + stream only; sessions cannot move there)")
     .option("--git-identity <identity>", 'The identity commits on the host carry ("Name <email>"); default: this laptop\'s git config')
-    .action(async (id: string | undefined, o: { idle: string; daemon: boolean; gitIdentity?: string }) => {
+    .option("--service-user <name>", "Create a separate Mac login with SSH and passwordless sudo; preserves the current login")
+    .action(async (id: string | undefined, o: { idle: string; daemon: boolean; gitIdentity?: string; serviceUser?: string }) => {
       const h = pick(id, "no linux host registered");
       const idle = parseInt(o.idle, 10);
+      if (!/^\d+$/.test(o.idle) || !Number.isSafeInteger(idle)) die("Idle minutes must be a nonnegative whole number");
       const { provisionLinuxHost, IDLE_WATCHDOG_VERSION } = await import("../browser/provisionLinux.js");
       console.log(`provisioning ${h.id} (${h.region})…`);
       const up = await ensureUp(h, (m) => console.log(fmt.muted(`  ${m}`)));
       try {
+        if (up.platform === "darwin" || up.provider === "scaleway-mac") {
+          const { provisionMacHost } = await import("./provisionMac.js");
+          let remote = toRemoteHost(up);
+          if (o.serviceUser) {
+            const { provisionMacLogin } = await import("./macLogin.js");
+            console.log(fmt.muted(`  preparing separate login ${o.serviceUser}…`));
+            remote = provisionMacLogin(remote, o.serviceUser);
+            patchHost(up.id, { user: remote.user });
+          }
+          const report = await provisionMacHost(remote, { skipDaemon: !o.daemon, gitIdentity: o.gitIdentity }, (m) => console.log(fmt.muted(`  ${m}`)));
+          patchHost(up.id, { deviceId: report.deviceId, platform: "darwin", idleStopMinutes: 0 });
+          console.log(`${OK} Mac ready: ${report.version}, device ${report.deviceId}`);
+          console.log(fmt.muted("  Mac auto-stop is disabled. AWS dedicated host charges continue until the host is released."));
+          return;
+        }
+        if (o.serviceUser) die("--service-user is currently supported for Mac hosts only");
         const report = await provisionLinuxHost(toRemoteHost(up), { idleStopMinutes: idle, skipDaemon: !o.daemon, gitIdentity: o.gitIdentity }, (m) =>
           console.log(fmt.muted(`  ${m}`)),
         );
@@ -924,6 +954,17 @@ export function buildHostsCommand(parent: Command): Command {
       console.log(`updating ${h.id} (${h.region})…`);
       const up = await ensureUp(h, (m) => console.log(fmt.muted(`  ${m}`)));
       const remote = toRemoteHost(up);
+      if (up.platform === "darwin" || up.provider === "scaleway-mac") {
+        const { installMacCast } = await import("./updateMac.js");
+        const version = installMacCast(remote, (message) => console.log(fmt.muted(`  ${message}`)));
+        console.log(`${OK} ${version} is installed on ${up.id}`);
+        if (o.restart) {
+          const { macServiceLabel } = await import("./provisionMac.js");
+          remoteExec(remote, `sudo -n launchctl kickstart -k system/${macServiceLabel(remote.user)}`, 60_000);
+          console.log(`${OK} Mac service restarted`);
+        }
+        return;
+      }
       try {
         const { version } = installLinuxCast(remote, (m) => console.log(fmt.muted(`  ${m}`)));
         console.log(`${OK} cast ${version} is installed on ${h.id} and runs there`);

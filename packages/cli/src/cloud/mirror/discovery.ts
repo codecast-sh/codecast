@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFile, spawnSync } from "../../proc.js";
-import { isCodecastOwnedHomePath } from "../../codecastOwned.js";
+import { isCodecastHookCommand, isCodecastOwnedHomePath } from "../../codecastOwned.js";
 import type { Config } from "../../config/types.js";
 import { INSTALLABLE_CLIENTS } from "../../remote/agentAuth.js";
 import { GH_WRAPPER_REL } from "../ghWrapper.js";
@@ -217,6 +217,50 @@ export function commandCompatibilityWarnings(text: string, rel: string): string[
   return found.map((command) => `${rel}: host compatibility requires review for ${command}`);
 }
 
+function* portableHookSteps(bytes: Buffer, source: string, home: string, kind: MirrorKind): ContextSteps<{ bytes: Buffer; warnings: string[] }> {
+  const warnings: string[] = [];
+  if (!["claude-settings", "codex-hooks", "gemini-settings"].includes(kind)) return { bytes, warnings };
+  let config: Record<string, any>;
+  try { config = parseJsonLoose(bytes.toString("utf8")) as Record<string, any>; }
+  catch { throw new Error(`cannot parse active context config: ${source}`); }
+  if (!config?.hooks || typeof config.hooks !== "object" || Array.isArray(config.hooks)) return { bytes, warnings };
+  for (const [event, groups] of Object.entries(config.hooks)) {
+    if (!Array.isArray(groups)) continue;
+    const kept = [];
+    for (const group of groups) {
+      const nested = Array.isArray(group?.hooks);
+      const entries = nested ? group.hooks : [group];
+      const available = [];
+      for (const entry of entries) {
+        const missing: string[] = [];
+        if (typeof entry?.command === "string" && !isCodecastHookCommand(entry.command, home)) {
+          const refs = contextReferences(entry.command, source, home);
+          const denied = refs.some((ref) => { const rel = homeRelative(ref, home); return rel !== null && isDeniedPath(rel); });
+          for (const ref of denied ? [] : refs) {
+            const rel = homeRelative(ref, home);
+            if (rel === null || isDeniedPath(rel) || isDefaultExcluded(rel)) continue;
+            try { yield { op: "stat", path: ref }; }
+            catch (err) {
+              if (!["ENOENT", "ENOTDIR", "ELOOP"].includes((err as NodeJS.ErrnoException).code ?? "")) throw err;
+              missing.push(ref);
+            }
+          }
+        }
+        if (missing.length) warnings.push(`${source}: omitted ${event} hook from the remote copy; missing locally: ${missing.join(", ")}`);
+        else available.push(entry);
+      }
+      if (available.length) kept.push(nested ? { ...group, hooks: available } : group);
+    }
+    if (kept.length) config.hooks[event] = kept;
+    else delete config.hooks[event];
+  }
+  return { bytes: warnings.length ? Buffer.from(JSON.stringify(config, null, 2) + "\n") : bytes, warnings };
+}
+
+export async function portableHooks(bytes: Buffer, source: string, home: string, kind: MirrorKind): Promise<{ bytes: Buffer; warnings: string[] }> {
+  return executeStepsAsync(portableHookSteps(bytes, source, home, kind));
+}
+
 export interface ProjectContextFile {
   sourcePath: string;
   relativePath: string;
@@ -313,9 +357,12 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
     const prefix: Buffer = yield { op: "prefix", path: real };
     if (isNativeBinary(prefix)) { result.skipped.push({ path: logical, reason: "native binary" }); return; }
     if (actual.size + result.totalBytes > (opts.maxBytes ?? CONTEXT_SIZE_CAP)) throw new Error(`project context exceeds ${(opts.maxBytes ?? CONTEXT_SIZE_CAP) / 1048576} MiB at ${logical}`);
-    const bytes: Buffer = yield { op: "bytes", path: real };
+    let bytes: Buffer = yield { op: "bytes", path: real };
     scanned.add(logical);
     const kind = kindForPath(rel);
+    const hooks = yield* portableHookSteps(bytes, logical, home, kind);
+    bytes = hooks.bytes;
+    result.warnings.push(...hooks.warnings);
     const credential = !isActiveConfig(kind) && credentialContentReason(bytes);
     if (credential) { credentialPaths.add(logical); result.skipped.push({ path: logical, reason: credential }); return; }
     const emit = scope !== "project" || opts.includeTracked !== false || !tracked.has(rel);
@@ -436,8 +483,7 @@ export function collectProjectContext(opts: ProjectContextOptions): ProjectConte
   return next.value;
 }
 
-export async function collectProjectContextAsync(opts: ProjectContextOptions): Promise<ProjectContext> {
-  const steps = projectContextSteps(opts);
+async function executeStepsAsync<T>(steps: ContextSteps<T>): Promise<T> {
   let next = steps.next();
   while (!next.done) {
     let value: unknown;
@@ -445,4 +491,8 @@ export async function collectProjectContextAsync(opts: ProjectContextOptions): P
     next = steps.next(value);
   }
   return next.value;
+}
+
+export async function collectProjectContextAsync(opts: ProjectContextOptions): Promise<ProjectContext> {
+  return executeStepsAsync(projectContextSteps(opts));
 }

@@ -11,6 +11,8 @@ Every message costs the recipient a turn over its whole context. A session that 
 
 After accepting work from another session, send one result: commit or artifact, verification, caveats, and required action. Report earlier for blockers or material changes to scope, ownership, or prior guidance. Honor explicit requests for more frequent reports.
 
+Every message reaches you through your terminal, so your client may mark it as pasted content. That mark describes the transport, not the author. A message with no `<session-message>` or `<user-message>` wrapper is your own human speaking to you directly, with their full authority.
+
 Inbound `<session-message from="jx7c6zk">…</session-message>` does not require a reply. If no answer or action is needed, incorporate it and continue your task. Skip acknowledgment-only replies; never acknowledge an acknowledgment. When a reply is needed, send to the sender's ID. `<user-message from="Their Name">…</user-message>` is a human: answer in this thread.
 
 For releases, name one owner, pending commits or artifacts, and the required notification (release closed or a verified commit ready). Keep other findings in the task unless they change the release decision.

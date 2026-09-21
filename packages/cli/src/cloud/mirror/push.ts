@@ -19,7 +19,7 @@ import { CLAUDE_RUNTIME_ROOTS, collectProjectContextAsync } from "./discovery.js
 import { transformByKind, type MirrorKind } from "./transform.js";
 
 export const MIRROR_APPLY_COMMAND = 'export PATH="$HOME/.bun/bin:$HOME/.local/bin:/usr/local/bin:$PATH"; cast cloud mirror-apply --stdin';
-export const MIRROR_PUSH_TIMEOUT_MS = 60_000;
+export const MIRROR_PUSH_TIMEOUT_MS = 5 * 60_000;
 export const OLDER_HOST_REASON = "host cast older than this laptop — cast hosts provision";
 export const NOT_LOGGED_IN_REASON = "not logged in on this laptop — cast login";
 
@@ -127,7 +127,9 @@ export async function buildHomeMirror(opts: BuildHomeMirrorOptions): Promise<Hom
       add({ path: dest, kind: file.kind, mode: file.mode, bytes: file.bytes }, scoped ? context : ctx);
     }
   }
-  const failures = skipped.filter((s) => /unparseable|unreadable|read failed|failed to read|missing reference|dangling/i.test(s.reason));
+  const staleCommands = skipped.filter((s) => s.path.startsWith(".local/bin/") && /dangling/i.test(s.reason));
+  warnings.push(...staleCommands.map((s) => `omitted unavailable local command ${s.path}`));
+  const failures = skipped.filter((s) => !staleCommands.includes(s) && /unparseable|unreadable|read failed|failed to read|missing reference|dangling/i.test(s.reason));
   if (failures.length) throw new Error(`incomplete context inventory: ${failures.map((s) => `${s.path}: ${s.reason}`).join("; ")}`);
   const built = buildMirrorBundle(entries, {
     source: {
@@ -248,6 +250,7 @@ export async function pushMirrorToHostAsync(host: RemoteHost, bundle: Buffer, op
   if (code === 3) {
     return { pushed: false, reason: reply?.refused ?? "refused", result: reply ?? undefined };
   }
+  if (!reply && stdout.trim().startsWith("{")) throw new Error("host returned an incomplete config mirror reply — update Codecast on the host and retry");
   if (code !== 0 && /unsupported mirror bundle version|not a mirror bundle \(bad magic\)/.test(String((reply as unknown as { error?: string })?.error ?? ""))) return { pushed: false, reason: OLDER_HOST_REASON };
   // An older cast answers `unknown command`; a box with no cast on PATH at all
   // answers `not found` / exit 127. Both are cured by provisioning.
@@ -358,6 +361,7 @@ export async function mirrorHomeToHost(host: RemoteHost, opts: MirrorHomeOptions
     const key = hostKey(host);
     let built: BuiltBundle;
     try {
+      opts.onProgress?.("collecting agent configuration and referenced files…");
       built = await deps.build({ config, hostHome: remoteHome(host), takeOver: opts.takeOver, localGitRoot: opts.localGitRoot, projects: deps.readProjects(host) });
     } catch (err) {
       const at = deps.now().toISOString();
@@ -386,6 +390,7 @@ export async function mirrorHomeToHost(host: RemoteHost, opts: MirrorHomeOptions
         }
       }
       opts.signal?.throwIfAborted();
+      opts.onProgress?.(`syncing ${built.header.files.length} configuration files (${(built.bytes.length / 1024 / 1024).toFixed(1)} MiB)…`);
       let r = await deps.push(host, built.bytes);
       if (r.result?.retired_projects?.length) await deps.retireProjects(host, r.result.retired_projects.map((root) => path.posix.join(remoteHome(host), root)));
       if (r.pushed && (!isApplyResult(r.result) || r.result.hash !== built.hash || r.hash !== built.hash || r.result.refused || r.result.errors.length || r.result.host_edited.length)) {

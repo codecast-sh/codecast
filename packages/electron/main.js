@@ -694,6 +694,13 @@ function createAppWindow(app, navPath = null) {
 // Chat window asking for a session hands it to the main window.
 function routeToWindow(navPath, from = null) {
   const here = from ? appOf(from) : null;
+  // A plain breakout never shows an app's routes (the web asks the same
+  // way): the app's window opens, or comes forward, with the path.
+  const app = appForRoute(navPath);
+  if (app && from && from !== mainWindow && !here) {
+    createAppWindow(app, navPath);
+    return true;
+  }
   const place = placeRoute(navPath, here, openAppWindows());
   let win = null;
   if (place === "here" && from && !from.isDestroyed()) win = from;

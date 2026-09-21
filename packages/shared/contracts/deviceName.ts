@@ -67,7 +67,7 @@ export function deviceDisplayName(d: DeviceNameSource | undefined | null): strin
   if (!d) return "Unknown device";
   // The same predicate that decides "this machine boots when work arrives",
   // so the name and the placement rule cannot diverge.
-  if (deviceWakesOnUse(d)) return "Cloud Linux";
+  if (deviceWakesOnUse(d)) return /linux/i.test(d.platform) ? "Cloud Linux" : "Cloud Mac";
   if (d.is_remote) return "Remote Mac";
   const host = hostnameFromLabel(d.label);
   if (AWS_AUTO_HOSTNAME.test(host)) return `AWS ${deviceKindLabel(d)}`;
