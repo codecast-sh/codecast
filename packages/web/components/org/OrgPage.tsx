@@ -9,7 +9,7 @@ import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useEventListener } from "../../hooks/useEventListener";
 import { create as mutate } from "mutative";
-import { Network, Plus, Map as MapIcon, Users, Briefcase, Search, ArrowLeft, ArrowRightLeft, ChevronDown, ChevronRight, ExternalLink, Trash2, Pencil } from "lucide-react";
+import { Network, Plus, Map as MapIcon, Users, Briefcase, Search, ArrowLeft, ArrowRightLeft, ChevronDown, ChevronRight, ExternalLink, Trash2, Pencil, History } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { createOrgSlice, orgRoleReparentMakesCycle, reparentToastLine, type OrgUpdateRoleInput } from "../../store/orgSlice";
 import { useSyncOrgTree } from "../../hooks/useSyncOrgTree";
@@ -32,6 +32,7 @@ import { Avatar } from "../tasks/TaskCommentStream";
 import { cn } from "../../lib/utils";
 import { OrgGraph, type OrgReparentRequest } from "./OrgGraph";
 import { OrgScopePanel, type OrgPanelMode, type OrgSessionsSource } from "./OrgScopePanel";
+import { OrgHistory, OrgHistoryPreview } from "./history/OrgHistory";
 import { STAFFING_LEAD_W } from "../../lib/orgPanelLayout";
 import { AsksSheet, ProposalThread, type ProposalAbout, type ProposalThreadLayout } from "./ProposalThread";
 import { askNames, asksProgress, proposalAsks, type AskView } from "./staffingAsks";
@@ -277,7 +278,7 @@ export function OrgPageInner() {
   }, [searchParams, router]);
   const setPanelMode = useCallback((mode: OrgPanelMode) => {
     setPanelModeState(mode);
-    if (mode === "staffing") setStaffingOpen(true);
+    if (mode !== "node") setStaffingOpen(true);
   }, []);
   const focusChangeId = storeFocusChangeId;
   const setFocusChangeId = useCallback((id: string | null) => useInboxStore.getState().setOrgFocusChangeId(id), []);
@@ -778,7 +779,7 @@ export function OrgPageInner() {
       preview={preview}
     />
   ) : null;
-  const effectivePanelMode: OrgPanelMode = nodeSelected ? panelMode : "staffing";
+  const effectivePanelMode: OrgPanelMode = nodeSelected || panelMode === "history" ? panelMode : "staffing";
   // The pane is the page only while it is open (S19): closed, the chart's
   // own header comes back, with its guide and its counters.
   const threadLeads = panelOpen && effectivePanelMode === "staffing" && !!threadNode;
@@ -843,6 +844,7 @@ export function OrgPageInner() {
     mode: panelMode,
     onMode: setPanelMode,
     staffing: phoneProposal ?? staffingPane,
+    history: preview ? <OrgHistoryPreview /> : <OrgHistory />,
     staffingLead: threadLeads && !phone ? threadNode : undefined,
     staffingLeadWidth: leadW,
     staffingFill: !!phoneProposal,
@@ -922,6 +924,17 @@ export function OrgPageInner() {
           >
             {staffingPaneWord(!!proposal)}
             {staffingCount > 0 && <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-semibold tabular-nums" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }}>{staffingCount}</span>}
+          </button>
+          <button
+            type="button"
+            onClick={() => setPanelMode("history")}
+            className={cn("h-[34px] inline-flex items-center gap-1.5 px-3 rounded-lg border text-[12.5px] font-medium transition-colors", panelOpen && effectivePanelMode === "history" ? "bg-sol-bg-highlight" : "hover:bg-sol-bg-highlight/60")}
+            style={{ borderColor: "color-mix(in srgb, var(--sol-border) 30%, transparent)", color: "var(--sol-text-muted)" }}
+            title="What changed, who changed it, and a way back"
+            aria-pressed={panelOpen && effectivePanelMode === "history"}
+            data-org-history-open
+          >
+            <History className="w-3.5 h-3.5" /> History
           </button>
           <button
             type="button"
