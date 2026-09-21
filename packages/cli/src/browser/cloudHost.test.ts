@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
+import { promisify } from "node:util";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { ensureUp, patchHost, readHosts, registryLockPath, writeHosts, type CloudHost } from "./cloudHost";
+import { patchHost, readHosts, registryLockPath, writeHosts, type CloudHost } from "./cloudHost";
 
 let dir: string, prev: string | undefined;
 const base: CloudHost = { id: "i-1", provider: "aws", region: "us-west-2", user: "ubuntu", keyPath: "/k", address: "1.1.1.1", forwardAgent: true, idleStopMinutes: 20 };
@@ -78,16 +79,6 @@ describe("patchHost — field-level registry writes under a lock", () => {
 });
 
 describe("ensureUp — the address write is a field-level patch", () => {
-  let savedHome: string | undefined, savedPath: string | undefined;
-  beforeEach(() => {
-    savedHome = process.env.HOME;
-    savedPath = process.env.PATH;
-  });
-  afterEach(() => {
-    process.env.HOME = savedHome;
-    process.env.PATH = savedPath;
-  });
-
   test("a forwardAgent cleared while ensureUp held a stale host object is not resurrected by its address write", async () => {
     // aws() resolves its PATH from agentSpawnPath(): ~/.local/bin first, so a
     // fake aws under a redirected HOME wins over anything on the real PATH.
@@ -101,12 +92,14 @@ case "$*" in
 esac
 `, { mode: 0o755 });
     fs.writeFileSync(path.join(localBin, "ssh"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-    process.env.HOME = home;
-    process.env.PATH = `${localBin}:${process.env.PATH}`;
     // The object ensureUp was handed still says forwardAgent: true; `cast hosts forward-agent --off` ran meanwhile.
     patchHost("i-1", { forwardAgent: false, gitAccess: { origin: "o", read: true, write: true, checkedAt: 7 } });
-    const up = await ensureUp({ ...base, address: "1.1.1.1", forwardAgent: true });
-    expect(up.address).toBe("5.5.5.5");
+    const { stdout } = await promisify(execFile)(process.execPath, ["-e", `
+      import { ensureUp } from ${JSON.stringify(path.resolve(import.meta.dir, "cloudHost.ts"))};
+      if (Bun.which("ssh") !== ${JSON.stringify(path.join(localBin, "ssh"))}) throw new Error("fixture ssh not selected");
+      console.log(JSON.stringify(await ensureUp(${JSON.stringify(base)})));
+    `], { env: { ...process.env, HOME: home, PATH: `${localBin}:${process.env.PATH}` }, timeout: 30_000 });
+    expect(JSON.parse(stdout).address).toBe("5.5.5.5");
     const entry = readHosts().find((h) => h.id === "i-1")!;
     expect(entry.address).toBe("5.5.5.5");
     expect(entry.forwardAgent).toBe(false);
@@ -114,5 +107,5 @@ esac
     expect(entry.idleStopMinutes).toBe(20);
     expect(readHosts().find((h) => h.id === "i-2")!.address).toBe("2.2.2.2");
     expect(fs.existsSync(registryLockPath())).toBe(false);
-  });
+  }, 40_000);
 });
