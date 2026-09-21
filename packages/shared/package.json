@@ -46,6 +46,10 @@
     "./search": "./search/index.ts"
   },
   "dependencies": {
+    "css-tree": "3.2.1",
     "@platform/analytics": "file:../../platform/packages/analytics"
+  },
+  "devDependencies": {
+    "@types/css-tree": "^2.3.11"
   }
 }

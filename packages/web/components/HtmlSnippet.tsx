@@ -133,7 +133,7 @@ function ShadowCanvas({ html, className = "" }: { html: string; className?: stri
     }
   }, [html]);
 
-  return <div ref={hostRef} className={className} />;
+  return <div className={className} style={{ contain: "layout paint", isolation: "isolate", position: "relative" }}><div ref={hostRef} /></div>;
 }
 
 // The fence language the canvas claims. Owned here so every markdown dispatcher

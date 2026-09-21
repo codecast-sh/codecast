@@ -188,7 +188,7 @@ The prompt is the agent's entire briefing, and humans read it in the dashboard (
 
 **Where a run happens.** Decide by what the run needs and where its result belongs. A follow-up that continues THIS work, needs what this conversation knows, and fires once or a few times belongs here: that is the default, each run arrives in this session as a new turn with the full history, and the result lands in the thread. A standing duty that repeats on a schedule (a monitor, a digest, a sweep) belongs in a fresh session per run: pass \`--spawn\`. An inline run reloads this session's whole history each time it fires, because the prompt cache has expired by then, and every firing grows the thread, so a repeating job run inline costs more each time and buries the conversation it lives in. A fresh run arrives with none of your context, so write everything it needs into the prompt; each run is handed the previous run's summary, which is the continuity most repeating jobs need.
 
-Fresh runs stay out of the human's inbox: a run that completes cleanly is read under its trigger. A \`--spawn\` trigger that fires once is this session's worker: its run nests under this session, its result posts here as a message without waking you, and you are woken instead if the run fails, dies without reporting, or completes \`--needs-attention\`, so the outcome is yours to act on, never a card the human has to read. Add \`--wake\` when you must act on a clean report too, at the cost of a turn over this whole context. A run that hits a usage limit parks and resumes its own session at the window reset. \`--thread\` posts every run's result here; reserve it for results the human reads in this thread. \`--for <session>\` binds a specific session from any shell.
+Fresh runs stay out of the human's inbox: every \`--spawn\` run nests under the session that armed it and is read there, never as a loose card. What differs is where the result goes. A trigger that fires once is this session's worker: its result posts here as a message without waking you. A repeating trigger posts nothing on a clean run, because a line per firing would bury the thread; its summary is read under the trigger. Either way you are woken if a run fails, dies without reporting, or completes \`--needs-attention\`, so a finding is never buried in a run nobody reads. Add \`--wake\` when you must act on a clean report too, at the cost of a turn over this whole context. A run that hits a usage limit parks and resumes its own session at the window reset. \`--thread\` posts every run's result here; reserve it for results the human reads in this thread. \`--for <session>\` binds a specific session from any shell.
 
 \`\`\`bash
 # Set triggers (created in a session, these inject into it when they fire)
@@ -227,7 +227,7 @@ Options:
 - \`--in <duration>\`: delay before run (30m, 2h, 1d)
 - \`--every <duration>\`: recurring interval
 - \`--on <event>\`: fire on webhook (pr_comment, pr_opened, pr_merged, push, issue_opened, issue_assigned, issue_labeled, issue_closed, issue_commented). The \`issue_*\` events cover Linear and GitHub alike: one trigger fires wherever the issue lives.
-- \`--spawn\`: fresh session per run, no history; read under the trigger, not in the inbox. Fired once from a session, the run is that session's worker: nested under it, woken on failure
+- \`--spawn\`: fresh session per run, no history; nested under the session that armed it, not a card in the inbox. Woken on a failure, a death or \`--needs-attention\`; a clean result posts back only for a trigger that fires once
 - \`--wake\`: with \`--spawn\` on a once trigger, wake this session with a clean report too
 - \`--thread\`: post each run's result into this conversation as a message
 - \`--for <session>\`: bind runs to a specific session (defaults to the one you're in)
@@ -248,7 +248,7 @@ You operate within a structured work tracking system. A human monitors your prog
 
 ### When to create structure
 
-**Create a task** when your work will change code, fix a bug, or produce a deliverable AND will run long enough that someone could check on it in flight. Run \`cast task create "Title" -p <priority>\` before you start implementing. Skip it for questions, explanations and quick lookups, and for a small change you will finish within a few minutes: a task that opens and closes before anyone reads it is noise on the board, not progress. File one late rather than early — when the work turns out bigger than it looked, create the task then and carry on.
+**Create tasks selectively.** Simple, self-contained work you can and intend to finish in this session does not need a task, even when it changes code, fixes a bug, or produces a deliverable. Create a task when the work is substantial enough to benefit from progress tracking, needs coordination or a handoff, is likely to continue beyond this session, or the user asks for tracking. Run \`cast task create "Title" -p <priority>\` once that need is clear. If a small request grows into larger work, file it then; don't create a task preemptively for every request.
 
 **Tasks you create are internal by default** — they track your own work and stay off the human's board in the dashboard. Add \`--human\` only when the human must see and manage the task outside this session: a decision only they can make, a manual step, follow-up work that outlives you. Use it rarely; when in doubt, leave it off.
 
@@ -258,7 +258,7 @@ You operate within a structured work tracking system. A human monitors your prog
 
 **\`--from-meeting\` is for tasks people decided, not tasks you decided.** Use it when you transcribe a commitment out of a meeting or a conversation with humans in it. Such a task reaches the human's board on its own, because a person already agreed to it. Never use it for your own work.
 
-**Create a plan** when the user describes work with multiple distinct parts — a feature with frontend and backend changes, a refactor that touches several subsystems, a bug that needs investigation then fixing. Run \`cast plan create "Title" -g "goal"\` and add tasks with \`cast task create "Title" --plan <plan_id>\`. Don't create plans for single-task work.
+**Create a plan** when substantial work needs coordination across multiple tasks or sessions. Several implementation steps, touching both frontend and backend, or investigating before fixing do not by themselves warrant a plan. Run \`cast plan create "Title" -g "goal"\` and add tasks with \`cast task create "Title" --plan <plan_id>\`. Keep simple work in the session and single-task work in one task.
 
 **Bind before you build.** Whenever the work warrants a task or plan, your session should be bound to it — \`cast task start <id>\` claims a task, \`cast plan bind <plan_id>\` attaches to a plan. Binding is one command and it keeps your session, its progress, and the work item connected in the dashboard; work done unbound is invisible to the human tracking it. When the session's focus moves to a different piece of work, move the binding with it — claim the task you are actually advancing, not the one the session started on.
 
@@ -1127,7 +1127,8 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     detail:
       "Gives agents `cast task` and `cast plan` to track what they're working on — they " +
       "create tasks, log progress, and mark work done, and you see it on the dashboard. " +
-      "Agents only use this for real work, not questions or quick lookups.",
+      "Use it for substantial work, coordination, handoffs, or follow-up beyond the session. " +
+      "Simple work you can and intend to finish in this session does not need filing.",
     writesTo: "CLAUDE.md — a ## Tasks & Plans section with guidelines and commands",
     shipped: "2026-06-18",
     enabledKey: "work_enabled",
