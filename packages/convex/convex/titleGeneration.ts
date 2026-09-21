@@ -1,3 +1,4 @@
+import { FOREIGN_TEXT_CAPS, escapeForeignControlChars, fenceForeignText, inlineForeignText } from "@codecast/shared/contracts";
 import { internalMutation, internalAction, internalQuery, type MutationCtx } from "./functions";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
@@ -225,7 +226,7 @@ export function buildShortTitlePrompt(kind: "session" | "task" | "plan", title: 
   return `Give this ${noun} a short name: 1-2 words, 20 characters max. The NAME a teammate would say out loud to refer to it, never a generic word alone ("Fix", "Update"). Prefer the title's most specific noun.
 Examples: "Auth redirect" for "Auth redirect fix", "Chokidar" for "Replace chokidar", "Italy trip" for "Italy trip planning".
 
-Title: ${JSON.stringify(title)}${context ? `\nContext:\n${context}` : ""}
+Title: ${JSON.stringify(inlineForeignText(title))}${context ? `\nContext:\n${fenceForeignText(escapeForeignControlChars(context), `${kind} being named`, { maxChars: FOREIGN_TEXT_CAPS.descriptionChars })}` : ""}
 
 Output ONLY the JSON object, no markdown, no preamble:
 {"short_title": "..."}`;

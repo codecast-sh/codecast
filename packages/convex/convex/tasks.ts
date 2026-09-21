@@ -8,11 +8,12 @@ import { matchHandle, teamRoster } from "./lib/mentionResolve";
 import { chainAssignees, roleAssigneeInfo, type AssigneeInfo } from "@codecast/shared/contracts/orgAssignee";
 import { noteOrgAssignment } from "./orgEvents";
 import { enqueueStartSession } from "./devices";
-import { fromConvexAgentType, toConvexAgentType } from "@codecast/shared/contracts";
+import { fromConvexAgentType, inlineForeignText, toConvexAgentType } from "@codecast/shared/contracts";
 import { docRelatesToTask } from "@codecast/shared/tasks";
 import {
   MAX_TASK_DEPTH,
   TASK_STATUS_CATEGORIES,
+  buildTaskSpawnPrompt,
   findTeamTaskStatus,
   isActiveTask,
   isTaskStatusCategory,
@@ -1401,8 +1402,8 @@ export const snippet = query({
           const plan = await ctx.db.get(conv.active_plan_id);
           if (plan) {
             const planLines: string[] = [];
-            planLines.push(`Active Plan: ${plan.title} (${plan.short_id}) [${plan.status}]`);
-            if (plan.goal) planLines.push(`Goal: ${plan.goal}`);
+            planLines.push(`Active Plan: ${inlineForeignText(plan.title)} (${plan.short_id}) [${plan.status}]`);
+            if (plan.goal) planLines.push(`Goal: ${inlineForeignText(plan.goal)}`);
             if (plan.progress) {
               const p = plan.progress;
               planLines.push(`Progress: ${p.done}/${p.total} done, ${p.in_progress} in progress, ${p.open} open`);
@@ -1411,7 +1412,7 @@ export const snippet = query({
               for (const tid of plan.task_ids.slice(0, 10)) {
                 const t = await ctx.db.get(tid);
                 // Skip subtasks that predate the task_ids exclusion rule.
-                if (t && !t.parent_id) planLines.push(`  - ${t.short_id}: ${t.title} [${t.status}]`);
+                if (t && !t.parent_id) planLines.push(`  - ${t.short_id}: ${inlineForeignText(t.title)} [${t.status}]`);
               }
             }
             activePlanSnippet = planLines.join("\n");
@@ -1447,7 +1448,7 @@ export const snippet = query({
         lines.push("In Progress:");
         for (const t of inProgress.slice(0, 10)) {
           const owner = userMap.get(t.user_id.toString()) || "";
-          lines.push(`- ${t.short_id}: ${t.title}${owner ? ` (${owner})` : ""}${t.labels?.length ? ` [${t.labels.join(", ")}]` : ""}${progressNote(t)}`);
+          lines.push(`- ${t.short_id}: ${inlineForeignText(t.title)}${owner ? ` (${inlineForeignText(owner)})` : ""}${t.labels?.length ? ` [${inlineForeignText(t.labels.join(", "))}]` : ""}${progressNote(t)}`);
         }
       }
 
@@ -1455,7 +1456,7 @@ export const snippet = query({
         lines.push("Open:");
         for (const t of open.slice(0, 10)) {
           const owner = userMap.get(t.user_id.toString()) || "";
-          lines.push(`- ${t.short_id}: ${t.title}${owner ? ` (${owner})` : ""}${t.priority === "high" || t.priority === "urgent" ? ` [${t.priority}]` : ""}${progressNote(t)}`);
+          lines.push(`- ${t.short_id}: ${inlineForeignText(t.title)}${owner ? ` (${inlineForeignText(owner)})` : ""}${t.priority === "high" || t.priority === "urgent" ? ` [${t.priority}]` : ""}${progressNote(t)}`);
         }
       }
 
@@ -1470,7 +1471,7 @@ export const snippet = query({
             if (depth > 2) return;
             for (const c of childrenByParent.get(parentKey) ?? []) {
               if (c.status === "done" || c.status === "dropped") continue;
-              lines.push(`${indent}- ${c.short_id}: ${c.title} [${c.status}]`);
+              lines.push(`${indent}- ${c.short_id}: ${inlineForeignText(c.title)} [${c.status}]`);
               renderTree(String(c._id), indent + "  ", depth + 1);
             }
           };
@@ -1481,7 +1482,7 @@ export const snippet = query({
           // never see the row it is working. Show its parent breadcrumb too.
           if (bound.parent_id) {
             const bp: any = await ctx.db.get(bound.parent_id);
-            lines.push(`Your task ${bound.short_id}: ${bound.title} [${bound.status}]${bp ? ` — subtask of ${bp.short_id} ${bp.title}` : ""}`);
+            lines.push(`Your task ${bound.short_id}: ${inlineForeignText(bound.title)} [${bound.status}]${bp ? ` — subtask of ${bp.short_id} ${inlineForeignText(bp.title)}` : ""}`);
           } else if (p.total > 0) {
             lines.push(`Your task ${bound.short_id} — ${p.done}/${p.total} subtasks done, open ones:`);
           }
@@ -1497,7 +1498,7 @@ export const snippet = query({
     if (sessionPlans.length > 0) {
       lines.push("Related Plans:");
       for (const p of sessionPlans) {
-        lines.push(`- ${p.title} (${p.doc_type})`);
+        lines.push(`- ${inlineForeignText(p.title)} (${p.doc_type})`);
       }
     }
 
@@ -3675,18 +3676,7 @@ export async function spawnSessionForTask(
   // session linked via active_task_id, so clobbering assignee only lost the
   // human owner and dropped the task out of the launcher's "assigned to me" view.
 
-  // Build minimal task prompt
-  const lines = [`You have been assigned the following task:\n\n**${task.title}**`];
-  if ((task as any).description) lines.push(`\n${(task as any).description}`);
-  if ((task as any).acceptance_criteria?.length) {
-    lines.push("\n**Acceptance criteria:**");
-    (task as any).acceptance_criteria.forEach((c: string) => lines.push(`- ${c}`));
-  }
-  lines.push(`\nTask ID: ${task.short_id} · Priority: ${(task as any).priority || "medium"}`);
-
-  // Lead with the user's instruction when supplied, then the task scaffold.
-  const lead = initial_message?.trim();
-  const content = lead ? `${lead}\n\n${lines.join("\n")}` : lines.join("\n");
+  const content = buildTaskSpawnPrompt(task, initial_message);
 
   // Single canonical writer: stamps owner_user_id for the daemon's delivery poll and flips
   // has_pending_messages. The task session is the launcher's own, so owner == sender.

@@ -1,3 +1,5 @@
+import { FOREIGN_TEXT_CAPS, fenceForeignText, inlineForeignText } from "@codecast/shared/contracts";
+import { FOREIGN_PLAN_CAPS, foreignProse, referenceGuidance, foreignTaskSource } from "@codecast/shared/tasks";
 import type { RegisteredQuery } from "convex/server";
 import { resolveActor } from "./lib/actor";
 import { afterRoleDocWrite } from "./orgRoles";
@@ -1969,15 +1971,15 @@ export const expandMentions = query({
               .withIndex("by_task_id", (c: any) => c.eq("task_id", task._id))
               .order("desc")
               .take(10);
-            let md = `\n\n---\n### Task: ${task.title}\n`;
+            let md = `### Task: ${inlineForeignText(task.title)}\n`;
             md += `\`${task.short_id}\` | Status: **${task.status || "open"}** | Priority: **${(task as any).priority || "medium"}**\n`;
-            if ((task as any).labels?.length) md += `Labels: ${(task as any).labels.join(", ")}\n`;
+            if ((task as any).labels?.length) md += `Labels: ${inlineForeignText((task as any).labels.join(", "))}\n`;
             md += `\n`;
-            if ((task as any).body) {
-              md += `#### Description\n\n${(task as any).body}\n\n`;
+            if (task.description) {
+              md += `#### Description\n\n${foreignProse(task.description, FOREIGN_TEXT_CAPS.descriptionChars) || ""}\n\n`;
             }
             if ((task as any).acceptance_criteria) {
-              md += `#### Acceptance Criteria\n\n${(task as any).acceptance_criteria}\n\n`;
+              md += `#### Acceptance Criteria\n\n${foreignProse(task.acceptance_criteria?.join("\n"), FOREIGN_TEXT_CAPS.descriptionChars) || ""}\n\n`;
             }
             // Linked sessions
             const linkedConvs = await ctx.db.query("conversations")
@@ -1988,8 +1990,8 @@ export const expandMentions = query({
             if (taskSessions.length > 0) {
               md += `#### Linked Sessions\n\n`;
               for (const s of taskSessions) {
-                md += `- **${s.title || "Untitled"}** \`${(s as any).short_id}\` (${(s as any).message_count || 0} msgs)`;
-                if ((s as any).idle_summary) md += ` — ${(s as any).idle_summary.slice(0, 200)}`;
+                md += `- **${inlineForeignText(s.title) || "Untitled"}** \`${(s as any).short_id}\` (${(s as any).message_count || 0} msgs)`;
+                if ((s as any).idle_summary) md += ` — ${inlineForeignText((s as any).idle_summary)}`;
                 md += `\n`;
               }
               md += `\n`;
@@ -1997,14 +1999,22 @@ export const expandMentions = query({
             if (comments.length > 0) {
               md += `#### Activity Log (${comments.length} recent)\n\n`;
               for (const c of comments.reverse()) {
-                const content = (c as any).content || "";
+                const content = c.text || "";
                 const ts = new Date((c as any)._creationTime).toISOString().slice(0, 16).replace("T", " ");
                 const tag = (c as any).comment_type ? `[${(c as any).comment_type}]` : "";
-                md += `**${ts}** ${tag}\n${content.slice(0, 500)}${content.length > 500 ? "..." : ""}\n\n`;
+                md += `**${ts}** ${tag}\n${foreignProse(content, FOREIGN_TEXT_CAPS.commentChars) || ""}\n\n`;
               }
             }
-            md += `> \`cast task context ${task.short_id}\` for full context including all sessions and docs\n---\n`;
-            results.push({ type: "task", shortId: mention.shortId, markdown: md });
+            const taskSource = foreignTaskSource(task);
+            const taskBlock = fenceForeignText(md, taskSource, {
+              maxChars: FOREIGN_TEXT_CAPS.blockChars,
+              note: referenceGuidance(taskSource),
+            });
+            results.push({
+              type: "task",
+              shortId: mention.shortId,
+              markdown: `\n\n---\n${taskBlock}\n\n> \`cast task context ${task.short_id}\` for full context including all sessions and docs\n---\n`,
+            });
           }
 
         } else if (mention.type === "plan" && mention.shortId) {
@@ -2012,13 +2022,13 @@ export const expandMentions = query({
             .filter((q: any) => q.eq(q.field("short_id"), mention.shortId))
             .first();
           if (plan && (await canAccessPlan(ctx, userId, plan))) {
-            let md = `\n\n---\n### Plan: ${(plan as any).title}\n`;
+            let md = `### Plan: ${inlineForeignText((plan as any).title)}\n`;
             md += `\`${(plan as any).short_id}\` | Status: **${(plan as any).status || "draft"}**\n\n`;
             if ((plan as any).goal) {
-              md += `#### Goal\n\n${(plan as any).goal}\n\n`;
+              md += `#### Goal\n\n${foreignProse((plan as any).goal, FOREIGN_TEXT_CAPS.descriptionChars) || ""}\n\n`;
             }
             if ((plan as any).acceptance_criteria) {
-              md += `#### Acceptance Criteria\n\n${(plan as any).acceptance_criteria}\n\n`;
+              md += `#### Acceptance Criteria\n\n${foreignProse(plan.acceptance_criteria?.join("\n"), FOREIGN_TEXT_CAPS.descriptionChars) || ""}\n\n`;
             }
             const taskIds = (plan as any).task_ids || [];
             if (taskIds.length > 0) {
@@ -2036,12 +2046,11 @@ export const expandMentions = query({
                 else if (st === "in_progress") ipCount++;
                 else openCount++;
                 const icon = st === "done" ? "[x]" : st === "in_progress" ? "[~]" : "[ ]";
-                md += `- ${icon} **${(t as any).title}** \`${(t as any).short_id}\` — ${st}`;
+                md += `- ${icon} **${inlineForeignText((t as any).title)}** \`${(t as any).short_id}\` — ${st}`;
                 if ((t as any).priority && (t as any).priority !== "medium") md += ` (${(t as any).priority})`;
                 md += `\n`;
-                if ((t as any).body) {
-                  const bodyPreview = (t as any).body.slice(0, 200);
-                  md += `  ${bodyPreview}${(t as any).body.length > 200 ? "..." : ""}\n`;
+                if (t.description) {
+                  md += `  ${inlineForeignText(t.description)}\n`;
                 }
               }
               md += `\nProgress: ${doneCount}/${taskIds.length} done, ${ipCount} in progress, ${openCount} open\n\n`;
@@ -2067,7 +2076,7 @@ export const expandMentions = query({
             if (decisions.length) {
               md += `#### Decisions\n\n`;
               for (const d of decisions) {
-                md += `- **${d.content}**${d.rationale ? `: ${d.rationale}` : ""}\n`;
+                md += `- **${inlineForeignText(d.content)}**${d.rationale ? `: ${inlineForeignText(d.rationale)}` : ""}\n`;
               }
               md += `\n`;
             }
@@ -2076,7 +2085,7 @@ export const expandMentions = query({
               md += `#### Progress Log (recent)\n\n`;
               for (const entry of recentProgress) {
                 const ts = entry.timestamp ? new Date(entry.timestamp).toISOString().slice(0, 16).replace("T", " ") : "";
-                md += `**${ts}** ${entry.content}\n\n`;
+                md += `**${ts}** ${foreignProse(entry.content, FOREIGN_TEXT_CAPS.commentChars) || ""}\n\n`;
               }
             }
             // Linked doc content
@@ -2088,11 +2097,19 @@ export const expandMentions = query({
                 && (await canAccessDoc(ctx, userId, doc))
                 && (doc as any).content
               ) {
-                md += `#### Plan Document\n\n${(doc as any).content.slice(0, 3000)}${(doc as any).content.length > 3000 ? "\n\n..." : ""}\n\n`;
+                md += `#### Plan Document\n\n${foreignProse((doc as any).content, FOREIGN_PLAN_CAPS.bodyChars) || ""}\n\n`;
               }
             }
-            md += `> \`cast plan show ${(plan as any).short_id}\` for full plan with all task details\n---\n`;
-            results.push({ type: "plan", shortId: mention.shortId, markdown: md });
+            const planSource = `plan ${inlineForeignText((plan as any).short_id)}`;
+            const planBlock = fenceForeignText(md, planSource, {
+              maxChars: FOREIGN_PLAN_CAPS.blockChars,
+              note: referenceGuidance(planSource),
+            });
+            results.push({
+              type: "plan",
+              shortId: mention.shortId,
+              markdown: `\n\n---\n${planBlock}\n\n> \`cast plan show ${(plan as any).short_id}\` for full plan with all task details\n---\n`,
+            });
           }
 
         } else if (mention.type === "session" && mention.shortId) {
