@@ -7,7 +7,7 @@
 // react-native-svg, so a face adds no native library to the bundle.
 import type { ReactNode } from 'react';
 import { Image, View, type ImageSourcePropType, type StyleProp, type ViewStyle } from 'react-native';
-import { AVATAR_LABELS, AVATAR_URLS } from '@codecast/web/components/org/avatars';
+import { AVATAR_LABELS, AVATAR_URLS } from '@codecast/web/lib/orgAvatars';
 import type { AvatarKey } from '@codecast/shared/contracts/orgAvatars';
 import { faceBadgeSize, faceIdentity, type IdentityRow } from '@codecast/web/lib/sessionIdentity';
 import { useTheme } from '@/constants/Theme';
