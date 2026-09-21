@@ -19,7 +19,7 @@ import { OrgHistoryView, OrgLogRows, OrgUndoPreviewCard, type OrgHistoryState } 
 import { orgLogFixture } from "./orgLogFixture";
 
 /** The fields an entry paints: a push that moved none of them wakes nothing. */
-const entrySig = (e: OrgLogEntry) => `${e.seq}|${e.row_count}|${e.undone_by?.batch ?? ""}|${e.undone_by?.at ?? ""}|${e.may_undo ? 1 : 0}`;
+const entrySig = (e: OrgLogEntry) => `${e.seq}|${e.row_count}|${e.undone_by?.batch ?? ""}|${e.undone_by?.at ?? ""}|${e.may_undo ? 1 : 0}|${e.undoes_lead?._id ?? ""}`;
 const rowSig = (r: OrgLogRow) => String(r.seq);
 const bySeq = (a: OrgLogRow, b: OrgLogRow) => a.seq - b.seq;
 
