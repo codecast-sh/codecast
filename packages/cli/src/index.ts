@@ -66,6 +66,8 @@ import type { SessionPresence } from "./formatter.js";
 import {
   buildTaskTree,
   referenceGuidance,
+  renderFencedTaskRecord,
+  foreignProse,
   renderFencedPlanRecord,
   renderFencedPlanTasks,
 } from "@codecast/shared/tasks";
@@ -16430,36 +16432,34 @@ work
       return;
     }
     const t = result.task;
-    console.log(`\n# ${t.title}`);
+    console.log(`\n# ${inlineForeignText(t.title)}`);
     console.log(`ID: ${t.short_id} | Status: ${t.status} | Priority: ${t.priority} | Type: ${t.task_type}`);
-    if (t.assignee) console.log(`Assignee: ${result.assignee_name || t.assignee}. ${ASSIGNEE_MEANS}`);
-    if (t.labels?.length) console.log(`Labels: ${t.labels.join(", ")}`);
+    if (t.assignee) console.log(`Assignee: ${inlineForeignText(result.assignee_name || t.assignee)}. ${ASSIGNEE_MEANS}`);
+    if (t.labels?.length) console.log(`Labels: ${inlineForeignText(t.labels.join(", "))}`);
     if (result.parent) {
-      console.log(`Subtask of: ${result.parent.short_id} ${result.parent.title} [${result.parent.status}]`);
+      console.log(`Subtask of: ${result.parent.short_id} ${inlineForeignText(result.parent.title)} [${result.parent.status}]`);
     }
-    if (t.description) console.log(`\n${t.description}`);
+    const foreignBlock = renderFencedTaskRecord({ ...t, comments: result.comments });
+    if (foreignBlock) console.log(`\n${foreignBlock}`);
     if (result.project) {
-      console.log(`\nProject: ${result.project.title}`);
-      if (result.project.description) console.log(result.project.description);
+      console.log(`\nProject: ${inlineForeignText(result.project.title)}`);
+      if (result.project.description) {
+        const source = `project of ${inlineForeignText(t.short_id)}`;
+        console.log(fenceForeignText(foreignProse(result.project.description, FOREIGN_TEXT_CAPS.descriptionChars) || "", source, { note: referenceGuidance(source) }));
+      }
     }
     if (result.subtasks?.length) {
       const p = result.subtaskProgress;
       console.log(`\n## Subtasks${p ? ` (${p.done}/${p.total} done)` : ""}`);
       const printSub = (sub: any, indent: string) => {
-        const who = sub.assignee_name ? ` @${String(sub.assignee_name).replace(/^@/, "")}` : "";
-        console.log(`${indent}- ${sub.short_id}: ${sub.title} [${sub.status}]${who}`);
+        const who = sub.assignee_name ? ` @${inlineForeignText(sub.assignee_name).replace(/^@/, "")}` : "";
+        console.log(`${indent}- ${sub.short_id}: ${inlineForeignText(sub.title)} [${sub.status}]${who}`);
         for (const child of sub.subtasks || []) printSub(child, indent + "  ");
       };
       for (const sub of result.subtasks) printSub(sub, "");
     }
     if (t.blocked_by?.length) console.log(`\nBlocked by: ${t.blocked_by.join(", ")}`);
     if (t.blocks?.length) console.log(`Blocks: ${t.blocks.join(", ")}`);
-    if (result.comments?.length) {
-      console.log(`\n## Comments`);
-      for (const cm of result.comments) {
-        console.log(`- [${cm.author}] ${cm.text}`);
-      }
-    }
     if (result.relatedDocs?.length) {
       // Why: a linked plan doc is prose someone else wrote, and this command
       // exists to feed it to an agent. One block for the section — the docs
@@ -16484,14 +16484,14 @@ work
     if (result.sessions?.length) {
       console.log(`\n## Sessions (newest last · cast read <id>)`);
       for (const sess of result.sessions) {
-        const title = sess.title ? ` ${sess.title}` : "";
-        const summary = sess.summary ? ` — ${sess.summary}` : "";
+        const title = sess.title ? ` ${inlineForeignText(sess.title)}` : "";
+        const summary = sess.summary ? ` — ${inlineForeignText(sess.summary)}` : "";
         console.log(`- ${sess.short_id}:${title}${summary}`);
       }
     } else if (result.sessionSummaries?.length) {
       console.log(`\n## Session History`);
       for (const s of result.sessionSummaries) {
-        console.log(`- ${s}`);
+        console.log(`- ${inlineForeignText(s)}`);
       }
     }
     console.log();
