@@ -47,6 +47,23 @@ test("agent-spawn runtime and model options preserve the actual tmux session nam
   }
 });
 
+test("environment assignments preserve agent-spawn and tmux launch ownership", () => {
+  for (const command of [
+    "AGENT_RUNTIME=codex /home/me/agent-spawn.sh --codex implementer release-history-ui /repo brief",
+    "AGENT_RUNTIME=codex CODEX_YOLO=1 /home/me/agent-spawn.sh --codex implementer release-history-ui /repo brief",
+    "/bin/bash -c 'AGENT_RUNTIME=codex /home/me/agent-spawn.sh --codex implementer release-history-ui /repo brief'",
+    "MODE=test /bin/bash -c 'AGENT_RUNTIME=codex tmux new -d -s release-history-ui'",
+  ]) {
+    expect(tmuxSpawns(shell(command))).toEqual([{ name: "release-history-ui", timestamp: startedAt }]);
+  }
+  for (const command of [
+    "AGENT_RUNTIME=codex echo 'agent-spawn.sh implementer example /repo'",
+    "AGENT_RUNTIME=codex /home/me/agent-spawn.sh --dry-run implementer example /repo",
+    "AGENT_RUNTIME=codex bash -nc 'tmux new -s example'",
+    "AGENT_RUNTIME=codex",
+  ]) expect(tmuxSpawns(shell(command))).toEqual([]);
+});
+
 test("syntax-only shells cannot replace the real launch parent", () => {
   const dir = mkdtempSync(join(tmpdir(), "cast-tmux-noexec-"));
   try {

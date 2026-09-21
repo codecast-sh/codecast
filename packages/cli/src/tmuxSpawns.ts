@@ -61,6 +61,7 @@ function shellCommands(source: string, depth = 0): string[][] {
   flushWord();
   if (words.length) commands.push(words);
   return commands.flatMap(words => {
+    while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0] ?? "")) words = words.slice(1);
     if (depth >= 4 || !/^(?:.*\/)?(?:ba|z|da|k)?sh$/.test(words[0])) return [words];
     for (let at = 1; at < words.length; at++) {
       if (/^-[ceiluvx]+$/.test(words[at]) && words[at].includes("c")) {

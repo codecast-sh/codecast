@@ -226,6 +226,7 @@ import { decideEscape, turnLooksActive } from "./escapeInterrupt.js";
 import { markSynced, markExamined, updateSyncRecord, getSyncRecord, findUnsyncedFilesAsync, type SyncRecord } from "./syncLedger.js";
 import { ensureGrokFolderTrusted } from "./grokFolderTrust.js";
 import { SyncService, AuthExpiredError, type ConversationLifecycle, type CreateConversationParams } from "./syncService.js";
+import { subagentPromptParent } from "./agentPromptOrigin.js";
 import { redactSecrets, maskToken } from "./redact.js";
 import { RetryQueue, flushRetryQueueForShutdown, type RetryOperation } from "./retryQueue.js";
 import { DAEMON_STOP_SIGKILL_MS } from "./shutdownBudget.js";
@@ -10928,6 +10929,7 @@ async function processCodexSessionPass(
     }
 
     if (!conversationId) {
+      let createParams: CreateConversationParams | undefined;
       try {
         const projectPath = metadata.cwd;
         const firstMessageTimestamp = messages[0]?.timestamp;
@@ -10993,14 +10995,16 @@ async function processCodexSessionPass(
           // here — started stubs and forks resolved above stay first-class.
           let parentConversationId = nativeParentSessionId
             ? conversationCache[nativeParentSessionId]
-            : undefined;
+            : firstUserMessage && subagentPromptParent(firstUserMessage.content, new Set([
+              ...Object.values(conversationCache), ...persistedAppServerThreads.keys(),
+            ]));
           if (nativeParentSessionId) {
             if (parentConversationId) {
               log(`Detected native Codex review ${sessionId.slice(0, 8)} -> wrapper ${nativeParentSessionId.slice(0, 8)}`);
             } else {
               pendingNativeParents.set(sessionId, { parentSessionId: nativeParentSessionId, description: "review" });
             }
-          } else {
+          } else if (!parentConversationId) {
             try {
               const spawnerConvId = await resolveSpawnerConversation(filePath, sessionId, "codex", conversationCache);
               if (spawnerConvId) {
@@ -11012,7 +11016,7 @@ async function processCodexSessionPass(
           }
 
           const finishCreate = captureTranscriptMapping(sessionId,conversationCache,lineageKeys);
-          conversationId = await syncService.createConversation({
+          createParams = {
             userId,
             teamId,
             sessionId,
@@ -11025,7 +11029,8 @@ async function processCodexSessionPass(
             parentConversationId,
             isSubagent: !!nativeParentSessionId || !!parentConversationId || undefined,
             gitInfo: undefined,
-          });
+          };
+          conversationId = await syncService.createConversation(createParams);
           conversationId = finishCreate(conversationId);
           setConversationCache(conversationId);
           await linkPendingNativeChildren(sessionId, conversationId, syncService, conversationCache);
@@ -11055,6 +11060,11 @@ async function processCodexSessionPass(
         log(`Failed to create Codex conversation, queueing for retry: ${errMsg}`);
 
         await retainPendingTranscript(pendingMessages, sessionId, messages, filePath, lastPosition + bytesConsumed);
+
+        if (createParams) {
+          queueTranscriptConversation(retryQueue, createParams as unknown as Record<string, unknown>, errMsg);
+          return;
+        }
 
         const firstMsgTimestamp = messages[0]?.timestamp;
         const firstUserMessage = messages.find(msg => msg.role === "user");
