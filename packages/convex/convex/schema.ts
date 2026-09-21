@@ -4130,6 +4130,8 @@ export default defineSchema({
     // trigger; anything else records a skipped run and spends no session.
     // Event triggers ignore it — the webhook already IS the evidence.
     precheck: v.optional(v.string()),
+    requested_run_source: v.optional(v.literal("manual")),
+    last_run_source: v.optional(v.string()),
     // `cast trigger add --spawn --wake`: a clean report of a once run wakes
     // the session that armed it (runOwnerWakeOf) instead of only posting
     // there. Failures, deaths and --needs-attention wake it regardless.
@@ -4252,6 +4254,7 @@ export default defineSchema({
     // Tail of stdout+stderr, capped by TRIGGER_PRECHECK_OUTPUT_CHARS.
     output: v.optional(v.string()),
     reason: v.string(),
+    source: v.optional(v.string()),
     created_at: v.number(),
   }).index("by_task", ["task_id", "created_at"]),
 

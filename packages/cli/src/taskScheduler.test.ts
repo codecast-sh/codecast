@@ -37,7 +37,7 @@ interface MockCalls {
   /** The exact prompt each injection carried. */
   prompts: string[];
   /** Firings the precheck gate refused, with what it reported. */
-  skipped: Array<{ taskId: string; reason: string; command: string; exitCode?: number; timedOut: boolean }>;
+  skipped: Array<{ taskId: string; reason: string; command: string; exitCode?: number; timedOut: boolean; source?: string }>;
 }
 
 function makeScheduler(
@@ -71,13 +71,14 @@ function makeScheduler(
     // the fake must exist at all, or the read throws and the whole injection is
     // reported as a failed run.
     getSessionFiling: async () => opts.filing ?? null,
-    skipTaskRun: async (taskId: string, _daemonId: string, result: any, reason: string) => {
+    skipTaskRun: async (taskId: string, _daemonId: string, result: any, reason: string, source?: string) => {
       calls.skipped.push({
         taskId,
         reason,
         command: result.command,
         exitCode: result.exitCode,
         timedOut: result.timedOut,
+        source,
       });
       return true;
     },
@@ -381,6 +382,33 @@ describe("precheck gate", () => {
     expect(result.timedOut).toBe(true);
     expect(triggerPrecheckPassed(result)).toBe(false);
     expect(Date.now() - started).toBeLessThan(10_000);
+  });
+
+  it("uses the claimed manual source even when the due row says recurring", async () => {
+    const marker = path.join(dir, "precheck-ran");
+    const task = injectTask(`touch '${marker}'; exit 1`, { project_path: dir, last_run_source: "recurring" });
+    const { scheduler, calls } = makeScheduler([task], { claimResult: t => ({ ...t, last_run_source: "manual" }) });
+    await scheduler.poll();
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(calls.injected).toEqual(["conv123"]);
+    expect(calls.skipped).toEqual([]);
+  });
+
+  it.each(["recurring", "scheduled"])("a %s claim after a manual run applies the gate again", async source => {
+    const task = injectTask("exit 1", { project_path: dir, last_run_source: "manual" });
+    const { scheduler, calls } = makeScheduler([task], { claimResult: t => ({ ...t, last_run_source: source }) });
+    await scheduler.poll();
+    expect(calls.injected).toEqual([]);
+    expect(calls.skipped).toHaveLength(1);
+    expect(calls.skipped[0].source).toBe(source);
+  });
+
+  it("a server without firing stamps derives the source from the schedule, never the old row", async () => {
+    const task = injectTask("exit 1", { project_path: dir, last_run_source: "manual" });
+    const { scheduler, calls } = makeScheduler([task], { claimResult: () => ({ status: "running" }) });
+    await scheduler.poll();
+    expect(calls.skipped[0].source).toBe("recurring");
+    expect(calls.injected).toEqual([]);
   });
 
   it("an event trigger ignores the precheck — the webhook already is the evidence", async () => {

@@ -12,7 +12,7 @@ import { appendModelEffortFlags, resolvePrintModelAlias } from "./launchCommand.
 import { SAFE_MODE_DENY_RULES, SAFE_MODE_MANDATE, definitionLaunchFlags } from "./agentLaunch.js";
 import { resolveAgentLaunch, type AgentDefinitionSpec } from "@codecast/shared/contracts";
 import { runTriggerPrecheck } from "./precheckRunner.js";
-import { describeTriggerPrecheckFailure, triggerPrecheckPassed, triggerLifecycleInstructions, runResultThreadOf } from "@codecast/shared/contracts";
+import { describeTriggerPrecheckFailure, triggerPrecheckPassed, triggerFiringSource, triggerPrecheckApplies, triggerLifecycleInstructions, runResultThreadOf } from "@codecast/shared/contracts";
 
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 const _execAsync = promisify(exec);
@@ -256,7 +256,7 @@ export class TaskScheduler {
 
     this.log(`Claimed task "${task.title}" (${task._id})`);
 
-    if (await this.precheckRefusedRun(task)) return;
+    if (await this.precheckRefusedRun(task, claimed)) return;
 
     // --context current path: inject the prompt into the originating conversation
     // instead of spawning a fresh agent. The daemon's pending_messages subscription
@@ -431,8 +431,10 @@ export class TaskScheduler {
    * lease expires into reclaimStaleTasks — the gate can never strand a trigger
    * in `running`.
    */
-  private async precheckRefusedRun(task: any): Promise<boolean> {
-    if (!task.precheck || task.schedule_type === "event") return false;
+  private async precheckRefusedRun(task: any, claimed: any): Promise<boolean> {
+    if (!task.precheck) return false;
+    const source = claimed?.last_run_source ?? triggerFiringSource(task.schedule_type);
+    if (!triggerPrecheckApplies(source)) return false;
 
     // The gate is an optimization, not a fence, so it only speaks where it can
     // speak truthfully. Run it somewhere else and "has this checkout moved?"
@@ -451,8 +453,8 @@ export class TaskScheduler {
     }
 
     const reason = describeTriggerPrecheckFailure(result);
-    this.log(`Skipping run of task "${task.title}": ${reason}`);
-    await this.syncService.skipTaskRun(task._id, this.daemonId, result, reason);
+    this.log(`Skipping ${source} run of task "${task.title}": ${reason}`);
+    await this.syncService.skipTaskRun(task._id, this.daemonId, result, reason, source);
     return true;
   }
 

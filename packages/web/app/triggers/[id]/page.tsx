@@ -444,9 +444,14 @@ export default function TriggerDetailPage() {
                   {t.precheck}
                 </p>
                 <p className="mt-1 text-[10px] text-sol-text-dim">
-                  Runs before each firing. Exit 0 runs the trigger; anything else records a
-                  skipped run.
+                  Runs before scheduled and recurring firings. Exit 0 runs the trigger;
+                  anything else records a skipped run. Manual and event runs bypass it.
                 </p>
+                {t.last_run_source === "manual" && (
+                  <p className="mt-1.5 text-[11px] text-sol-text-dim">
+                    The last run was manual, so the precheck did not run.
+                  </p>
+                )}
                 {t.last_precheck_skip_at && (
                   <p className="mt-1.5 text-[11px] text-sol-yellow">
                     Last skipped {fmtDuration(Math.max(0, now - t.last_precheck_skip_at))} ago

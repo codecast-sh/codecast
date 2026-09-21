@@ -41,6 +41,7 @@ export type TriggerRun = {
   trigger_message_timestamp?: number;
   precheck_command?: string;
   precheck_output?: string;
+  source?: string;
 };
 
 // A schedule's run history, from the store (hooks/useSyncTriggers feeds and
@@ -85,7 +86,7 @@ const DOT_RESTING = "bg-[color-mix(in_srgb,var(--sol-orange)_55%,var(--sol-card)
 function SkippedRunRow({ run, num, now }: { run: TriggerRun; num: number; now: number }) {
   return (
     <ShortcutTooltip
-      label={run.precheck_command ? `precheck: ${run.precheck_command}` : "skipped by the precheck"}
+      label={run.precheck_command ? `${run.source ? `${run.source} precheck` : "precheck"}: ${run.precheck_command}` : "skipped by the precheck"}
       hint={run.precheck_output || undefined}
     >
       <div
