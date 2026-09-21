@@ -8,7 +8,7 @@ const { trayIconState } = require("./trayIcon");
 function loadTray() {
   const source = fs.readFileSync(path.join(__dirname, "main.js"), "utf8");
   const traySource = source.slice(source.indexOf('const { trayIconState }'), source.indexOf("function buildAppMenu()"));
-  const badgeSource = source.slice(source.indexOf('ipcMain.handle("set-badge-count"'), source.indexOf('ipcMain.handle("get-env"'));
+  const badgeSource = source.slice(source.indexOf('shellIpc.handle("set-badge-count"'), source.indexOf('shellIpc.handle("get-env"'));
   const handlers = new Map();
   const badges = [];
   const images = [];
@@ -17,7 +17,7 @@ function loadTray() {
     require, path, __dirname,
     tray: null,
     app: { getVersion: () => "test", setBadgeCount: n => badges.push(n) },
-    ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
+    shellIpc: { handle: (name, handler) => handlers.set(name, handler) },
     Menu: { buildFromTemplate: items => items },
     nativeImage: { createFromPath: file => ({ file, setTemplateImage(value) { this.template = value; } }) },
     Tray: class {

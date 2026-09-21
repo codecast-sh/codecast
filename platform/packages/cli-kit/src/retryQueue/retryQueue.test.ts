@@ -159,7 +159,8 @@ describe("RetryQueue", () => {
   });
 
   it("collapses backoff on recovery without zeroing attempts", async () => {
-    queue = new RetryQueue({ initialDelayMs: 5, maxDelayMs: 60_000, maxAttempts: 10, onLog: (m) => logs.push(m) });
+    let now = 0;
+    queue = new RetryQueue({ now: () => now, initialDelayMs: 5, maxDelayMs: 60_000, maxAttempts: 10, onLog: (m) => logs.push(m) });
     let fail = true;
     const attemptsById = new Map<string, number>();
     queue.setExecutor(async (op) => {
@@ -168,10 +169,14 @@ describe("RetryQueue", () => {
       return true;
     });
     const slow = queue.add("slow", {});
+    now = 5;
+    await until(() => (attemptsById.get(slow) ?? 0) >= 1);
+    now = 15;
     await until(() => (attemptsById.get(slow) ?? 0) >= 2);
     // The slow op is now parked on a long backoff. One success pulls it forward.
     fail = false;
     queue.add("fast", {});
+    now = 20;
     await until(() => queue.getQueueSize() === 0, 5000);
     expect(logs.some((l) => l.includes("collapsed backoff on 1 queued op"))).toBe(true);
     expect(attemptsById.get(slow)).toBeGreaterThanOrEqual(3);
