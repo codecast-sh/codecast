@@ -12,7 +12,7 @@
 // (e.g. "You've hit your usage limit on the free plan, so video generation is
 // paused…") from being mistaken for a banner.
 
-export type ApiErrorBannerKind = "auth" | "limit" | "throttle" | "error" | "connection" | "fatal" | "safety";
+export type ApiErrorBannerKind = "auth" | "limit" | "throttle" | "error" | "connection" | "fatal" | "safety" | "context";
 
 export const SAFETY_BANNER_PREFIX = "Safety stop:";
 export const CODEX_SAFETY_ERROR_CODE = "misalignment_policy_violation";
@@ -57,6 +57,11 @@ const CODEX_ERROR_KIND: Readonly<Record<string, ApiErrorBannerKind>> = {
   // clears it, which is exactly what kind "safety" means, so these rows earn
   // the badge and SAFETY_BLOCK_HINT instead of a silent "error".
   cyber_policy: "safety",
+  // The conversation no longer fits the model's window. Codex offers the same
+  // way out Claude Code does — /compact in the session — so it earns the
+  // context park and its card, never a continue (which re-sends the same
+  // oversized prompt) and never an account switch.
+  context_window_exceeded: "context",
 };
 
 // codex spells the enum snake_case on the wire; some transports carry the Rust
@@ -111,7 +116,16 @@ export const BLOCKED_BANNER_KINDS: ReadonlySet<string> = new Set([
   "connection",
   "fatal",
   "safety",
+  "context",
 ]);
+
+// The blocked kinds no revive can act on. A "continue" re-sends the same
+// request and an account switch changes nothing about it: a safety stop waits
+// for a review, and a full context window waits for /compact or /clear typed
+// into the session. They keep the badge and the card — a person has to act —
+// but every fleet action (continue-all, the switch loop, the worker dismiss)
+// leaves them out, so the button counts name only what a click can fix.
+export const UNREVIVABLE_BANNER_KINDS: ReadonlySet<string> = new Set(["safety", "context"]);
 
 // The blocked subset a plain "continue" un-parks (auth needs /login or an
 // account switch — continuing a signed-out session just re-fails). Default
@@ -136,7 +150,7 @@ export const CONTINUE_BANNER_KINDS: readonly string[] = ["limit", "throttle", "c
 // Claude credential the auth branch swaps.
 const BLOCKED_KINDS_BY_AGENT: Readonly<Record<string, ReadonlySet<string>>> = {
   claude_code: BLOCKED_BANNER_KINDS,
-  codex: new Set(["limit", "throttle", "safety"]),
+  codex: new Set(["limit", "throttle", "safety", "context"]),
 };
 const NO_BLOCKED_KINDS: ReadonlySet<string> = new Set();
 
@@ -198,6 +212,30 @@ export const LIMIT_BANNER_PREFIX = "You've hit your usage limit";
 export function limitBannerContent(shownAs: string | null | undefined): string {
   const shown = (shownAs ?? "").replace(/\s+/g, " ").trim().slice(0, 200);
   return shown ? `${LIMIT_BANNER_PREFIX} · ${shown}` : LIMIT_BANNER_PREFIX;
+}
+
+// The context-overflow park. Claude Code writes it when a request is rejected
+// for size (error "invalid_request", no HTTP status on the entry) and the pane
+// shows "Context limit reached · /compact or /clear to continue". The JSONL
+// row carries only "Prompt is too long", sometimes with the reason automatic
+// compaction did not save the turn: "Prompt is too long · automatic
+// compaction failed: You've reached your Fable limit. Run /usage-credits …".
+//
+// The cure decides the kind. A bare overflow is kind "context": the person
+// types /compact or /clear into the session, and neither a continue nor an
+// account switch helps. When the tail names why compaction failed and that
+// reason is itself a park the recovery chain can act on (a spent window, an
+// expired login, a burst), the tail's kind wins: once that clears, the next
+// turn compacts on its own. Codex reports the same condition as a code
+// (context_window_exceeded); its parser rewrites it into this prefix so every
+// reader sees one shape.
+export const CONTEXT_BANNER_PREFIX = "Prompt is too long";
+const CONTEXT_BANNER_RE = /^prompt is too long\b/i;
+const COMPACTION_FAILED_RE = /automatic compaction failed:\s*([^\n]+)$/i;
+
+export function contextBannerContent(shownAs: string | null | undefined): string {
+  const shown = (shownAs ?? "").replace(/\s+/g, " ").trim().slice(0, 200);
+  return shown ? `${CONTEXT_BANNER_PREFIX} · ${shown}` : CONTEXT_BANNER_PREFIX;
 }
 
 // Auth subset — the user can act by re-running /login. "Login expired" covers
@@ -345,6 +383,11 @@ export function classifyApiErrorBanner(
   }
   if (isExceededLimit429(trimmed)) return "limit";
   if (trimmed.length === 0 || trimmed.length > 400) return null;
+  if (CONTEXT_BANNER_RE.test(trimmed) && !trimmed.includes("\n")) {
+    const failed = trimmed.match(COMPACTION_FAILED_RE);
+    const underlying = failed ? classifyApiErrorBanner(failed[1]) : null;
+    return underlying && underlying !== "context" && BLOCKED_BANNER_KINDS.has(underlying) ? underlying : "context";
+  }
   if (AUTH_BANNER_RE.test(trimmed)) return "auth";
   if (LIMIT_BANNER_RE.test(trimmed) || isModelSwitchLimitBanner(trimmed)) return "limit";
   const statusMatch = trimmed.match(STATUSFUL_BANNER_RE);

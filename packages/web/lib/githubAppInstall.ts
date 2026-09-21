@@ -1,13 +1,7 @@
-// The ONE place the web mints the GitHub App install URL. The state format
-// itself is shared with the CLI's connect-url action and the install callback
-// (`githubAppInstallState` in shared contracts), so the workspace an
-// installation binds to cannot drift between the three.
-
-import {
-  githubAppInstallState,
-  githubAppInstallUrlFor,
-  type AppConnectionScope,
-} from "@codecast/shared/contracts";
+// Which workspace a GitHub App install belongs to, as the web reads it. The
+// install URL itself is minted server-side (githubApp.getInstallUrl), because
+// its `state` is an intent bound to the authenticated caller; what stays here
+// is the team resolution the card renders beside the button.
 
 /** The fields of the current user this helper reads. */
 export interface GithubInstallUser {
@@ -25,16 +19,4 @@ export interface GithubInstallUser {
  */
 export function githubAppInstallTeam(user: GithubInstallUser): string | undefined {
   return user.active_team_id ?? user.team_id;
-}
-
-/**
- * The App install URL at `scope`, carrying the workspace and user in the
- * `state` the install callback reads back (`convex/http.ts`). Null for a team
- * install when the user has no team — there is nothing to bind it to. A
- * personal install needs no team.
- */
-export function githubAppInstallUrl(user: GithubInstallUser, scope: AppConnectionScope = "team"): string | null {
-  const state = githubAppInstallState({ userId: user._id, scope, teamId: githubAppInstallTeam(user) });
-  if (!state) return null;
-  return githubAppInstallUrlFor(import.meta.env.VITE_GITHUB_APP_SLUG || "codecast-sh", state);
 }

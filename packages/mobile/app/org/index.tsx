@@ -113,24 +113,6 @@ export default function OrgScreen() {
         </TouchableOpacity>
       );
     }
-    if (item.kind === 'anchor') {
-      const a = item.anchor;
-      const line = standingLineOf(a);
-      const color = line ? solColor(line.color, Theme) : Theme.orange;
-      return (
-        <TouchableOpacity style={[styles.row, pad]} activeOpacity={0.6} onPress={() => router.push('/org/workspace' as never)}>
-          <RNView style={[styles.rail, { backgroundColor: color }]} />
-          <RNView style={[styles.anchorFace, chipTint(Theme.orange)]}><FontAwesome name="anchor" size={13} color={Theme.orange} /></RNView>
-          <RNView style={styles.rowBody}>
-            <RNText style={styles.roleName} numberOfLines={1}>{a.name}</RNText>
-            <RNText style={[styles.standing, { color: Theme.textDim }]} numberOfLines={1}>
-              {line ? <RNText style={{ color }}>{line.label}{line.text ? ' · ' : ''}</RNText> : null}
-              {line?.text ?? (line ? '' : 'The workspace agent')}
-            </RNText>
-          </RNView>
-        </TouchableOpacity>
-      );
-    }
     if (item.kind === 'session') {
       const s = item.session;
       const color = solColor(ORG_STATE_META[s.state].color, Theme);
@@ -226,7 +208,6 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   standing: { fontSize: 12, marginTop: 2 },
   dim: { fontSize: 11, color: Theme.textDim },
   rail: { width: 3, alignSelf: 'stretch', borderRadius: 2 },
-  anchorFace: { width: 30, height: 30, borderRadius: 15, borderWidth: StyleSheet.hairlineWidth, alignItems: 'center', justifyContent: 'center' },
   dot: { width: 7, height: 7, borderRadius: 3.5, marginLeft: 1 },
   sessionTitle: { flex: 1, fontSize: 13, color: Theme.textSecondary },
   fold: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingLeft: 6 },

@@ -67,7 +67,7 @@ const OPTION_ROWS: OptionRow[] = [
   { key: "files", label: "Images and files", hint: "Images are copied across; other files arrive as links.", scope: "both" },
 ];
 const ADVANCED_ROWS: OptionRow[] = [
-  { key: "agent_lines", label: "Agent lines to Slack", hint: "What the anchor, roles and sessions post here goes to Slack, marked as an agent.", scope: "out" },
+  { key: "agent_lines", label: "Agent lines to Slack", hint: "What the workspace's agent, roles and sessions post here goes to Slack, marked as an agent.", scope: "out" },
   { key: "bot_messages", label: "Slack app messages", hint: "Lines Slack apps and bots post (an assistant, GitHub, alerts). Turning this on after the import runs it again for the missing lines.", scope: "in" },
   { key: "system_messages", label: "Join and topic notices", hint: "Who joined or left the Slack channel, topic changes, pins.", scope: "in" },
   { key: "match_people_by_email", label: "Match people by email", hint: "A Slack person with a teammate's email appears here as that teammate. Off: everyone from Slack shows under their Slack name.", scope: "in" },
@@ -679,7 +679,7 @@ function humanizeError(err: string): string {
   if (err.includes("not_in_channel")) return "The app is not in the Slack channel. In Slack, run /invite @Codecast there, then resume.";
   if (err.includes("channel_not_found")) return "Slack can't find that channel any more.";
   if (err.includes("is_archived")) return "The Slack channel is archived.";
-  if (err.includes("missing_scope")) return "The Slack app needs newer permissions. Reconnect Slack from the anchor page.";
+  if (err.includes("missing_scope")) return "The Slack app needs newer permissions. Reconnect Slack from the workspace agent's Settings.";
   if (err.includes("invalid_auth") || err.includes("token_revoked") || err.includes("account_inactive")) return "Slack revoked the app's access. Reconnect Slack.";
   if (err.includes("ratelimited")) return "Slack is rate limiting the app. It retries on its own; nothing to do.";
   return `Slack reported a problem (${err}). Reconnect Slack if this keeps happening.`;

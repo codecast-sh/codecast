@@ -69,6 +69,13 @@ describe("coverage", () => {
     expect(c.projects[2].lead).toBeUndefined();
   });
 
+  test("a paused lead is not a lead: the project counts as without one and names the paused role", () => {
+    const c = computeCoverage(base({ roles: [role("r_platform", "platform", [], { status: "paused" }), role("r_root", "chief-of-staff")] }));
+    expect([c.with_lead, c.with_lead_paused, c.with_work]).toEqual([0, 1, 3]);
+    expect(c.projects[1]).toMatchObject({ lead_paused: "@platform", lead_by: "owner" });
+    expect(c.projects[1].lead).toBeUndefined();
+  });
+
   test("a whole workspace role covers nothing, so a chief of staff never hides an uncovered project", () => {
     const c = computeCoverage(base({ roles: [role("r_root", "chief-of-staff")] }));
     expect([c.with_lead, c.with_work]).toEqual([0, 3]);

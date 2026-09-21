@@ -1,7 +1,9 @@
-// Every anchor the viewer can see — their personal one and one per team —
-// store-fed from anchors.listAnchors. One feeder (mounted once in the shell),
-// many readers: the global chip and drawer, the inbox's anchor marking, the
-// /anchor page's scope switcher, and chat's DM naming for personal bots.
+// Every standing agent the viewer can see, their personal workspace's and
+// one per team, store-fed from anchors.listAnchors. One feeder (mounted once
+// in the shell), many readers: the shell's chip and slide-over, the sidebar's
+// entry, the inbox's marking, and chat's DM naming for personal bots. A row
+// is the seat of the workspace's root role (org-staffing.md S22): `role` is
+// that role's identity, and every surface draws the role, never the row.
 import { useMemo } from "react";
 import { registerKnownAgentMembers } from "../lib/chatViews";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -28,6 +30,9 @@ export type AnchorRow = {
   persona?: string | null;
   project_path?: string | null;
   status: "provisioning" | "active" | "paused" | "decommissioned";
+  /** The root role this row is the seat of; null until the workspace's agent
+   *  is seated (the S22 migration seats every live one). */
+  role?: { _id: string; short_id: string; name: string; handle: string; avatar: string | null; status: string } | null;
   is_host: boolean;
   in_my_team: boolean;
   conv_status?: string | null;
@@ -57,15 +62,21 @@ export function useSyncAnchors(): { ready: boolean } {
     for (const id in anchors) {
       const a = anchors[id];
       if (!a?.bot_user_id || a.status === "decommissioned") continue;
-      list.push({ _id: String(a.bot_user_id), name: a.bot_name ?? a.name ?? "Anchor", image: a.bot_avatar ?? null, is_bot: true, anchor_id: String(a._id) } as any);
+      list.push({ _id: String(a.bot_user_id), name: agentName(a), image: a.bot_avatar ?? null, is_bot: true, anchor_id: String(a._id) } as any);
     }
     registerKnownAgentMembers(list);
   }, [botsSig]);
   return result;
 }
 
+/** The name a person reads for a standing agent: its role's, else what the
+ *  row was called. Never the word anchor. */
+export function agentName(a: Partial<AnchorRow> | null | undefined): string {
+  return a?.role?.name || a?.bot_name || a?.name || "Workspace agent";
+}
+
 const SIG = (a: any) =>
-  `${a._id}|${a.scope_type}|${a.team_id ?? ""}|${a.bot_name}|${a.bot_avatar ?? ""}|${a.team_name ?? ""}|${a.status}|${a.conversation_id ?? ""}|${a.conv_status ?? ""}|${a.agent_status ?? ""}|${a.awaiting_input ? 1 : 0}|${a.has_pending_messages ? 1 : 0}|${Math.floor((a.conv_updated_at ?? 0) / 60_000)}`;
+  `${a._id}|${a.scope_type}|${a.team_id ?? ""}|${a.bot_name}|${a.bot_avatar ?? ""}|${a.team_name ?? ""}|${a.status}|${a.role ? `${a.role._id}:${a.role.short_id}:${a.role.name}:${a.role.handle}:${a.role.avatar ?? ""}:${a.role.status}` : ""}|${a.conversation_id ?? ""}|${a.conv_status ?? ""}|${a.agent_status ?? ""}|${a.awaiting_input ? 1 : 0}|${a.has_pending_messages ? 1 : 0}|${Math.floor((a.conv_updated_at ?? 0) / 60_000)}`;
 
 /** Reader: all visible anchors, personal first, then teams by name. */
 export function useAnchors(): AnchorRow[] {
@@ -84,6 +95,21 @@ export function useAnchors(): AnchorRow[] {
 export function useAnchor(anchorId: string | null | undefined): AnchorRow | null {
   const rows = useAnchors();
   return useMemo(() => rows.find((a) => a._id === anchorId) ?? null, [rows, anchorId]);
+}
+
+/** The active workspace's standing agent (org-staffing.md S22): the team's
+ *  when a team is active, else the personal one. Null when the workspace has
+ *  none yet, which is the onboarding's cue. */
+export function rootAgentOf(anchors: AnchorRow[], activeTeamId: string | null | undefined): AnchorRow | null {
+  return activeTeamId
+    ? anchors.find((a) => a.scope_type === "team" && a.team_id === activeTeamId) ?? null
+    : anchors.find((a) => a.scope_type === "user") ?? null;
+}
+
+export function useRootAgent(): AnchorRow | null {
+  const anchors = useAnchors();
+  const activeTeamId = useInboxStore((s) => (s.clientState.ui?.active_team_id as string | undefined) ?? null);
+  return useMemo(() => rootAgentOf(anchors, activeTeamId), [anchors, activeTeamId]);
 }
 
 export type AnchorLiveStatus = { label: string; dot: string; text: string; tone: "off" | "working" | "attention" | "online" | "dormant" };
@@ -122,13 +148,13 @@ export function defaultAnchorKey(anchors: AnchorRow[], activeTeamId: string | nu
   return "new:user";
 }
 
-/** The label a person reads to know WHICH anchor: "Personal" or the team's name. */
+/** The label a person reads to know WHICH workspace's agent: "Personal" or the team's name. */
 export function anchorScopeLabel(a: Pick<AnchorRow, "scope_type" | "team_name"> | null | undefined): string {
   if (!a) return "";
   return a.scope_type === "team" ? (a.team_name ?? "Team") : "Personal";
 }
 
-/** The identity fields of ONE anchor, for hot paths (an inbox card): the
+/** The identity fields of ONE standing agent, for hot paths (an inbox card): the
  *  subscription is a short string, so a heartbeat elsewhere never re-renders
  *  the row. Returns null when the id is empty or the row is not loaded. */
 export function useAnchorIdentity(anchorId: string | null | undefined): AnchorIdentity | null {
@@ -139,7 +165,7 @@ export function useAnchorIdentity(anchorId: string | null | undefined): AnchorId
 export type AnchorIdentity = Pick<AnchorRow, "_id" | "bot_name" | "bot_avatar" | "scope_type" | "team_name">;
 
 /** The two halves of useAnchorIdentity as pure functions, so a caller that
- *  already holds one store subscription (an inbox card) reads the anchor
+ *  already holds one store subscription (an inbox card) reads the row
  *  through it instead of opening a second one (ct-49746). */
 export function anchorIdentitySig(anchors: Record<string, any> | undefined, anchorId: string | null | undefined): string | null {
   if (!anchorId) return null;

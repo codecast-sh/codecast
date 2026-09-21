@@ -2185,7 +2185,7 @@ export const applyInboundMessage = internalMutation({
             channel, message, root, senderId: authorId, senderName: posted.actorName, mentions: posted.mentions,
           });
         } catch (error) {
-          console.warn("[slackSync] anchor wake skipped", error instanceof Error ? error.message : error);
+          console.warn("[slackSync] workspace agent wake skipped", error instanceof Error ? error.message : error);
         }
         if (posted.roles.length > 0 || posted.sessions.length > 0) {
           try {

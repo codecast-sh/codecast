@@ -1491,6 +1491,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         <RecentSwitcher
           items={switcherState.items}
           selectedIndex={switcherState.selectedIndex}
+          mode={switcherState.mode}
+          onSelectedIndexChange={switcherState.setSelectedIndex}
+          onSelect={switcherState.select}
         />
       )}
     </div>

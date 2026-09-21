@@ -25,6 +25,7 @@ import {
   editorPage,
 } from "./artifactPages";
 import { renderMarkdownDocument, restyleMarkdownDocument } from "./artifactMarkdown";
+import { sha256Hex, passwordHash, kTokenFor, eTokenFor } from "./lib/artifactGates";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -117,26 +118,6 @@ async function slugRateLimited(
 }
 
 export const corsPreflight = httpAction(async () => new Response(null, { status: 204, headers: CORS }));
-
-async function sha256Hex(s: string): Promise<string> {
-  const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s)));
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-async function passwordHash(password: string, slug: string): Promise<string> {
-  return await sha256Hex(`${password}:${slug}`);
-}
-
-/** Deterministic unlock token — knowing it ≈ knowing the password, and it
- * rotates when the password changes. Deterministic so the ?k= URL stays a
- * stable cache key. */
-async function kTokenFor(password_hash: string, slug: string): Promise<string> {
-  return (await sha256Hex(`${password_hash}:${slug}`)).slice(0, 24);
-}
-
-async function eTokenFor(owner_key: string, slug: string): Promise<string> {
-  return (await sha256Hex(`${owner_key}:emailgate:${slug}`)).slice(0, 24);
-}
 
 /** The public https origin of this deployment. TLS terminates at the proxy in
  * front of us, so request.url says http — force https for any non-local host
@@ -727,24 +708,25 @@ export const sourceForWeb = action({
 export const comment = httpAction(async (ctx, request) => {
   try {
     const body = await request.json();
-    // Unauthenticated, and it DELIVERS TEXT INTO A LIVE AGENT SESSION — the
-    // one endpoint where flooding is both cheap and consequential.
-    // Roomier than the old 6/min: replies post one at a time, and delivery
-    // into the session is owner-gated anyway — the flood risk is discussion
-    // spam, not agent injection.
-    const limited = await slugRateLimited(ctx, String(body.slug ?? ""), "artifact-comment", 12, 60_000);
-    if (limited) return limited;
     // "Send all": flush stored-but-undelivered comments to the session.
     // Owner-only — the mutation checks the key.
     if (body.deliver_pending === true) {
+      const limited = await slugRateLimited(ctx, String(body.slug ?? ""), "artifact-flush", 12, 60_000);
+      if (limited) return limited;
       const flushed = await ctx.runMutation(api.artifacts.deliverPendingComments, {
         slug: String(body.slug ?? ""),
         owner_key: typeof body.owner_key === "string" ? body.owner_key : undefined,
       });
       return json(flushed);
     }
+    // No limiter here: submitComments counts the window itself, in the same
+    // transaction as the insert. A pre-check at this layer would be a second
+    // transaction, spend the budget twice, and still not be atomic.
     const result = await ctx.runMutation(api.artifacts.submitComments, {
       slug: String(body.slug ?? ""),
+      // The gates the page cleared, echoed back for the mutation to re-check.
+      k: typeof body.k === "string" ? body.k : undefined,
+      e: typeof body.e === "string" ? body.e : undefined,
       author_name: String(body.author_name ?? ""),
       author_email: typeof body.author_email === "string" ? body.author_email : undefined,
       version: typeof body.version === "number" ? body.version : 0,
@@ -791,6 +773,8 @@ export const view = httpAction(async (ctx, request) => {
     await ctx.runMutation(api.artifacts.recordView, {
       slug: String(body.slug ?? ""),
       email: typeof body.email === "string" ? body.email : undefined,
+      k: typeof body.k === "string" ? body.k : undefined,
+      e: typeof body.e === "string" ? body.e : undefined,
     });
     return json({ ok: true });
   } catch {
@@ -831,9 +815,42 @@ const htmlResponse = (html: string, status: number, cache: string) =>
     },
   });
 
-const CACHE_CURRENT = "public, max-age=60, stale-while-revalidate=300";
-const CACHE_IMMUTABLE = "public, max-age=3600, stale-while-revalidate=86400";
-const CACHE_GATE = "public, max-age=60";
+// How long a browser or CDN may still answer from cache after the owner adds
+// a password, revokes an edit link, sets an expiry or deletes the page. Bytes
+// a viewer already has cannot be recalled by anyone; what this bounds is the
+// next network response. 60s fresh plus 300s stale-while-revalidate, so six
+// minutes in the worst case, for content that needed no authorization.
+//
+// Historical versions and versioned assets used to carry max-age=3600 with a
+// day of stale-while-revalidate, on the reasoning that a numbered version is
+// immutable. Its CONTENT is; its availability is not, and that policy put the
+// revocation bound a day out. They use the same six-minute policy now. The
+// edge already revalidates everything at 60s, so this mostly costs browser
+// re-requests on reload.
+export const REVOCATION_BOUND_MS = 360_000;
+const CACHE_PUBLIC = "public, max-age=60, stale-while-revalidate=300";
+// Anything that needed a gate token to obtain, and anything reflecting gate
+// state that the owner can change. A shared cache must never hold these.
+const CACHE_PROTECTED = "private, no-store";
+// Path-shape only (the bundle trailing-slash redirect): true whatever the
+// gates say, and it carries no content.
+const CACHE_SHAPE = "public, max-age=60";
+
+/** The policy for a body served off this artifact. Protected the moment a
+ * gate stands in front of it; otherwise public, but never past its expiry. */
+export function cachePolicy(
+  a: { password_hash?: string | null; email_gate?: boolean; expires_at?: number | null },
+  now = Date.now(),
+): string {
+  if (a.password_hash || a.email_gate) return CACHE_PROTECTED;
+  if (!a.expires_at) return CACHE_PUBLIC;
+  const left = a.expires_at - now;
+  if (left <= 0) return CACHE_PROTECTED;
+  if (left >= REVOCATION_BOUND_MS) return CACHE_PUBLIC;
+  // Inside the bound: cache no further than the moment the page stops
+  // existing, and no stale window past it.
+  return `public, max-age=${Math.floor(left / 1000)}`;
+}
 
 export const serve = httpAction(async (ctx, request) => {
   const url = new URL(request.url);
@@ -851,7 +868,7 @@ export const serve = httpAction(async (ctx, request) => {
 
   // --- Gates (order: expiry → password → email wall) ---
   if (artifact.expires_at && Date.now() > artifact.expires_at) {
-    return htmlResponse(expiredPage({ title: artifact.title }), 410, CACHE_GATE);
+    return htmlResponse(expiredPage({ title: artifact.title }), 410, CACHE_PROTECTED);
   }
   let kToken = "";
   if (artifact.password_hash) {
@@ -859,7 +876,7 @@ export const serve = httpAction(async (ctx, request) => {
     if (q.get("k") !== kToken) {
       if (q.get("meta") === "1") return json({ error: "Locked" }, 403);
       if (q.get("thumb") === "1") return notFound("Not found");
-      return htmlResponse(passwordGatePage({ slug, title: artifact.title, apiBase, shareUrl }), 200, CACHE_GATE);
+      return htmlResponse(passwordGatePage({ slug, title: artifact.title, apiBase, shareUrl }), 200, CACHE_PROTECTED);
     }
   }
   if (artifact.email_gate && artifact.owner_key) {
@@ -868,7 +885,7 @@ export const serve = httpAction(async (ctx, request) => {
     // stays hidden (no visual leak in unfurls).
     if (q.get("e") !== eToken && q.get("meta") !== "1") {
       if (q.get("thumb") === "1") return notFound("Not found");
-      return htmlResponse(emailGatePage({ slug, title: artifact.title, apiBase, shareUrl }), 200, CACHE_GATE);
+      return htmlResponse(emailGatePage({ slug, title: artifact.title, apiBase, shareUrl }), 200, CACHE_PROTECTED);
     }
   }
 
@@ -916,7 +933,7 @@ export const serve = httpAction(async (ctx, request) => {
       headers: {
         "Content-Type": "image/png",
         ...ARTIFACT_SECURITY_HEADERS,
-        "Cache-Control": CACHE_IMMUTABLE,
+        "Cache-Control": cachePolicy(artifact),
         "Access-Control-Allow-Origin": "*",
       },
     });
@@ -940,7 +957,7 @@ export const serve = httpAction(async (ctx, request) => {
       headers: {
         "Content-Type": asset.content_type,
         ...ARTIFACT_SECURITY_HEADERS,
-        "Cache-Control": versioned ? CACHE_IMMUTABLE : CACHE_CURRENT,
+        "Cache-Control": cachePolicy(artifact),
         "Access-Control-Allow-Origin": "*",
       },
     });
@@ -951,7 +968,7 @@ export const serve = httpAction(async (ctx, request) => {
   if (kind === "bundle" && !url.pathname.endsWith("/")) {
     return new Response(null, {
       status: 301,
-      headers: { Location: `${url.pathname}/${url.search}`, "Cache-Control": CACHE_GATE },
+      headers: { Location: `${url.pathname}/${url.search}`, "Cache-Control": CACHE_SHAPE },
     });
   }
 
@@ -980,7 +997,7 @@ export const serve = httpAction(async (ctx, request) => {
     return htmlResponse(
       diffPage({ slug, title: artifact.title, a, b, ops, apiBase, shareUrl }),
       200,
-      CACHE_IMMUTABLE,
+      cachePolicy(artifact),
     );
   }
 
@@ -1024,7 +1041,7 @@ export const serve = httpAction(async (ctx, request) => {
         headers: {
           "Content-Type": "text/plain; charset=utf-8",
           ...ARTIFACT_SECURITY_HEADERS,
-          "Cache-Control": CACHE_CURRENT,
+          "Cache-Control": cachePolicy(artifact),
           "Access-Control-Allow-Origin": "*",
         },
       });
@@ -1041,7 +1058,7 @@ export const serve = httpAction(async (ctx, request) => {
         canEdit: artifact.edit_mode === "link" || artifact.edit_mode === "team",
       }),
       200,
-      doc.version < artifact.version ? CACHE_IMMUTABLE : CACHE_CURRENT,
+      cachePolicy(artifact),
     );
   }
 
@@ -1088,5 +1105,5 @@ export const serve = httpAction(async (ctx, request) => {
     live: q.get("live") === "1",
     hasThumb: !!artifact.thumb_storage_id,
   });
-  return htmlResponse(branded, 200, doc.version < artifact.version ? CACHE_IMMUTABLE : CACHE_CURRENT);
+  return htmlResponse(branded, 200, cachePolicy(artifact));
 });

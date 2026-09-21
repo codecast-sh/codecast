@@ -103,6 +103,33 @@ describe("orgProposals.decide", () => {
     return { ...r, ids: r.changes.map((c: any) => String(c.id)) };
   }
 
+  test("a record change carries its record's title: filled from the record at post when the spec left it out, only inside the workspace, never over the analyzer's own", async () => {
+    const db = fixtures({
+      tasks: [
+        { _id: "tasks_ct-1", user_id: ME, team_id: TEAM, workspace: WS, project_id: P, short_id: "ct-1", title: "Fix the auth race", task_type: "task", status: "open", priority: "medium", created_at: 1, updated_at: 1 },
+        { _id: "tasks_ct-2", user_id: ME, team_id: "teams_other", workspace: "team:teams_other", short_id: "ct-2", title: "Another team's task", task_type: "task", status: "open", priority: "medium", created_at: 1, updated_at: 1 },
+      ],
+      plans: [
+        { _id: "plans_loose", user_id: ME, team_id: TEAM, workspace: WS, short_id: "pl-1", title: "Loose", status: "active", doc_id: "docs_loose", created_at: 1, updated_at: 1 },
+        { _id: "plans_second", user_id: ME, team_id: TEAM, workspace: WS, short_id: "pl-2", title: "Second plan", status: "active", created_at: 1, updated_at: 1 },
+      ],
+    });
+    const r = await propose(db, [
+      change({ kind: "task_status", task: "ct-1", status: "done", reason: "its commit landed" }),
+      change({ kind: "task_status", task: "ct-2", status: "done", reason: "its commit landed" }),
+      change({ kind: "plan_status", plan: "pl-1", status: "done", reason: "every task closed", title: "What the analyzer called it" }),
+      change({ kind: "project_status", project: "Billing", status: "paused", reason: "no commits in 30 days" }),
+    ]);
+    const stored = await Promise.all(r.ids.map((id: string) => db.get(id as any)));
+    expect(stored.map((c: any) => c.change.title)).toEqual(["Fix the auth race", undefined, "What the analyzer called it", undefined]);
+    // The line the CLI prints keeps the id; the page's line is the contract's changeLine.
+    expect(r.changes[0].line).toBe("mark task ct-1 done");
+    // A revise's add is filled the same way.
+    const rev = await performReviseProposal(ctxOf(db), ME as any, { proposal: r.short_id, from_session: "s1", ops: [{ op: "add", change: change({ kind: "plan_status", plan: "pl-2", status: "abandoned", reason: "nobody worked it" }) }] });
+    const added = await db.get(rev.changes[rev.changes.length - 1].id as any);
+    expect(added.change.title).toBe("Second plan");
+  });
+
   test("each change kind applies at once through the apply core; skip and edits are honored; the proposal resolves and its card clears", async () => {
     const db = fixtures();
     const p = await propose(db, [

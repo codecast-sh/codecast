@@ -543,8 +543,28 @@ files the project under one.
     flag when there is no gate.
   - `performEscalateSession` accepts a role's own standing session, so the
     open setup item can reach the person's inbox with the role's line.
+- **The web** (2026-09-21): `hooks/useTemplateHire.ts` holds the reads and
+  writes (catalog, the instance for a role, propose, mark setup, activate) so
+  the dialog and the page share them and a mount test stands in for the server
+  with one mock. `orgTemplateSpec.ts` is the pure builder: a draft (template,
+  project, answers, reports to, seat) becomes one proposal spec, one ask, every
+  change valid by the contract; secrets never enter it; a grant that waits on a
+  secret is still asked for, one that waits on an unanswered input is not. The
+  hire dialog's "From a template" tab is the catalog, the project, the lead
+  rule (hire under the lead, or name it as the seat), the answers by kind,
+  the secrets listed as bound on the host, the instance name and update
+  policy, a preview of what the person will decide, and the post; the folder
+  path for authors stays behind a fold. `TemplateSections.tsx` is the role
+  page's right column under the project card: the host step line while the
+  row awaits its host, setup with the one open ask first and Done on a
+  person's item, what it may do (trust, authority), routines with what each
+  still needs and Activate on a ready paused one, the scoreboard, and the
+  release with its bindings and update line. `RoleScopeView` gained the
+  `template` slot and `ScopePanel` fills it. The instance row records the
+  routines' trigger ids at bind so the page can show and activate them.
 - **Tests**: `convex/orgTemplates.test.ts` (including the hire and upgrade
   applies), `convex/orgRoles.authority.test.ts`, `convex/agentTasks.paused.test.ts`,
-  `convex/sessionOwnership.escalate.test.ts`, `orgTemplate.test.ts`, `orgTemplateArtifact.v2.test.ts`,
+  `convex/sessionOwnership.escalate.test.ts`, `web/components/org/orgTemplateSpec.test.ts`,
+  `orgTemplateHire.mount.test.tsx`, `TemplateSections.mount.test.tsx`, `orgTemplate.test.ts`, `orgTemplateArtifact.v2.test.ts`,
   `orgTemplateInstance.test.ts`, `orgTemplateState.test.ts`,
   `orgTemplateActivation.test.ts`, and `orgTemplateReadiness.test.ts` in shared.
