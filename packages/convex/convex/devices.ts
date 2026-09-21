@@ -1046,6 +1046,109 @@ export const reparentSessionToDevice = mutation({
   },
 });
 
+// How many sessions one claim moves. A machine that signed into a different
+// account can own more than this; the caller repeats until `more` is false.
+const CLAIM_ACCOUNT_PAGE = 100;
+
+export type ClaimDeviceAccountResult = {
+  moved: number;
+  more: boolean;
+  // The previous login's device row is still heartbeating. Try again once it
+  // goes quiet. Nothing was moved.
+  pending?: boolean;
+  error?: string;
+};
+
+/**
+ * This machine signed into a different account. Sessions it still owns under
+ * the previous account follow it: same device, new runner, no resume. A
+ * `cast pull` would start the agent again; these processes are already here.
+ *
+ * The previous account's row for this device must be offline, so a second
+ * daemon still signed in as that account is not robbed. The two accounts
+ * must share a team. Anything else is refused and nothing is written.
+ */
+export async function performClaimDeviceAccount(
+  ctx: { db: any },
+  callerId: Id<"users">,
+  args: { previousUserId: Id<"users">; deviceId: string },
+  now = Date.now(),
+): Promise<ClaimDeviceAccountResult> {
+  if (args.previousUserId.toString() === callerId.toString()) {
+    return { moved: 0, more: false };
+  }
+  const mine = await ctx.db
+    .query("devices")
+    .withIndex("by_user_device", (q: any) => q.eq("user_id", callerId).eq("device_id", args.deviceId))
+    .first();
+  if (!mine || now - (mine.last_seen ?? 0) >= DEVICE_ONLINE_MS) {
+    return { moved: 0, more: false, error: "this device is not online on the new account" };
+  }
+  const memberships = await ctx.db
+    .query("team_memberships")
+    .withIndex("by_user_id", (q: any) => q.eq("user_id", callerId))
+    .collect();
+  let shared = false;
+  for (const membership of memberships) {
+    if (await isTeamMember(ctx, args.previousUserId, membership.team_id)) {
+      shared = true;
+      break;
+    }
+  }
+  if (!shared) return { moved: 0, more: false, error: "the two accounts do not share a team" };
+
+  const previousDevice = await ctx.db
+    .query("devices")
+    .withIndex("by_user_device", (q: any) =>
+      q.eq("user_id", args.previousUserId).eq("device_id", args.deviceId),
+    )
+    .first();
+  if (previousDevice && now - previousDevice.last_seen < DEVICE_ONLINE_MS) {
+    return { moved: 0, more: false, pending: true };
+  }
+
+  const rows = await ctx.db
+    .query("conversations")
+    .withIndex("by_owner_device", (q: any) =>
+      q.eq("user_id", args.previousUserId).eq("owner_device_id", args.deviceId),
+    )
+    .take(CLAIM_ACCOUNT_PAGE + 1);
+  const page = rows.slice(0, CLAIM_ACCOUNT_PAGE);
+  for (const conv of page) {
+    if (!conv.author_user_id) {
+      await ctx.db.patch(conv._id, { user_id: callerId, author_user_id: conv.user_id });
+    } else {
+      await ctx.db.patch(conv._id, { user_id: callerId });
+    }
+    const managed = await ctx.db
+      .query("managed_sessions")
+      .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conv._id))
+      .collect();
+    for (const row of managed) {
+      if (row.user_id?.toString() === args.previousUserId.toString()) {
+        await ctx.db.patch(row._id, { user_id: callerId });
+      }
+    }
+  }
+  return { moved: page.length, more: rows.length > CLAIM_ACCOUNT_PAGE };
+}
+
+export const claimDeviceAccount = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    previous_user_id: v.id("users"),
+    device_id: v.string(),
+  },
+  handler: async (ctx, args): Promise<ClaimDeviceAccountResult> => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication required");
+    return performClaimDeviceAccount(ctx, userId, {
+      previousUserId: args.previous_user_id,
+      deviceId: args.device_id,
+    });
+  },
+});
+
 /** List the user's devices (for the web UI + `cast remote hosts`). */
 export const listDevices = query({
   args: { api_token: v.optional(v.string()) },

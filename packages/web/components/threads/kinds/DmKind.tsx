@@ -8,7 +8,7 @@ import { holdChatFocus } from "../../../lib/chatFocus";
 import { summaryCount, type ThreadCardModel } from "../../../lib/threadCards";
 import { CommentAvatar } from "../../comments/CommentAvatar";
 import { ChatComposer } from "../../chat/ChatComposer";
-import { ChatTimelineRows } from "./ChatThreadKind";
+import { ChatTimelineRows, ThreadUnavailableNote } from "./ChatThreadKind";
 import { useThreadsPage } from "../threadsContext";
 
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
@@ -83,12 +83,14 @@ export function DmExpanded({
   // is that statement, witnessed by the shell's tail sentinel. The marker is
   // the newest message in the ROOM, replies included, so a badge a thread
   // reply raised clears too. Re-marks as messages land (newestId moves).
+  // Never for a room the server refuses: the mark would only come back as
+  // "Channel not found", and the note below is what this card shows then.
   useWatchEffect(() => {
-    if (!seen || feed.loading) return;
+    if (!seen || feed.loading || feed.unavailable) return;
     const state = useInboxStore.getState();
     const marker = selectChannelReadMarker(state as any, channelId);
     state.markChannelRead(channelId, marker?._id);
-  }, [seen, channelId, newestId, feed.loading, channel.unreadCount]);
+  }, [seen, channelId, newestId, feed.loading, feed.unavailable, channel.unreadCount]);
 
   // A hold, not the page's single slot: several cards can be on screen at
   // once, and releasing this one must not erase another's.
@@ -104,15 +106,7 @@ export function DmExpanded({
     [channelId],
   );
 
-  // The card came from a rail that predates the refusal; chat.sendMessage
-  // would refuse a post here, so the card offers none.
-  if (feed.unavailable) {
-    return (
-      <div className="th-card-open">
-        <div className="th-card-note">This conversation isn&apos;t available anymore.</div>
-      </div>
-    );
-  }
+  if (feed.unavailable) return <ThreadUnavailableNote />;
 
   return (
     <div className="th-card-open">

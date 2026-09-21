@@ -5,6 +5,7 @@ import { performCreateRole, performRetireRole, performSetCaps, performSetProject
 import { applyOrgChange } from "./orgInit";
 import { performReparentSession } from "./sessionOwnership";
 import { openOrgBatch } from "./lib/orgChangeLog";
+import { invertRow, orgLogLine } from "@codecast/shared/contracts/orgChange";
 
 const ME = "u".repeat(31) + "m";
 const MATE = "u".repeat(31) + "t";
@@ -256,4 +257,181 @@ test("a gesture continued after a later edit still finds that edit as a dependen
   expect(preview.preview.depends.map((e) => e._id)).toEqual([dependent]);
   await f.undo(batch, { with: [dependent] });
   expect((await f.db.get(role._id)).status).toBe("retired");
+});
+
+// ── S21 "For us": the round trip for every change kind ─────────────────────
+// "The undo's own correctness is tested by the round trip: apply, undo, and
+// the workspace's org state compares equal to the snapshot taken before,
+// field by field, with the log two entries longer." Every kind of
+// `OrgChangeKind` goes through `applyOrgChange`, the function the proposal
+// apply path calls. Org state is every field the log tracks on every table it
+// tracks, plus a session's owner; audit tables (events, wakes, history) are
+// not org state. A thing the change brought into being is not erased by its
+// undo ("Undo is a new change, never an erasure"): it stays as a tombstone in
+// its ended status, and that is the one way the restored state may differ. A
+// kind whose way back is not the log's says so here, with the contract's words.
+const ORG_STATE: Record<string, string[]> = {
+  org_roles: ["status", "name", "handle", "avatar", "charter", "tenure", "review_backend", "reports_to", "scope", "caps", "trust", "anchor_id", "authority"],
+  conversations: ["org_role_id", "standing_role_id", "anchor_id", "acting_user_id", "title", "title_is_custom", "seat_previous", "persistent", "status", "inbox_pinned_at", "owner_user_id"],
+  anchors: ["org_role_id", "status"],
+  agent_tasks: ["status"],
+  tasks: ["status", "status_id", "assignee", "project_id", "closed_at", "review_verdict", "execution_status"],
+  plans: ["status", "project_id", "owner_role_id"],
+  projects: ["status", "description", "owner_role_id", "goal", "success_metrics", "priority", "non_goals", "risks", "budget"],
+  docs: ["project_id"],
+  initiatives: ["owner"],
+  session_owners: ["conversation_id", "user_id"],
+  org_template_instances: ["phase", "role_id", "version", "pending_upgrade"],
+};
+const TOMBSTONE: Record<string, string> = { org_roles: "retired", projects: "done", agent_tasks: "cancelled", anchors: "decommissioned" };
+function orgState(db: any): Map<string, { table: string; fields: Record<string, unknown> }> {
+  const out = new Map();
+  for (const [table, fields] of Object.entries(ORG_STATE)) for (const row of db._tables[table] ?? []) out.set(String(row._id), { table, fields: Object.fromEntries(fields.map((k) => [k, row[k] ?? null])) });
+  return out;
+}
+const writeCount = (db: any) => db._patched.length + db._inserted.length + db._deleted.length;
+const DIGEST = "a".repeat(64);
+const TEMPLATE = { _id: "org_templates_1", template_id: "seo", workspace: WS, name: "SEO", description: "", latest: { version: "1.1.0", digest: DIGEST }, releases: [{ version: "1.0.0", digest: DIGEST, status: "stable", manifest: { inputs: [] }, published_at: 1, published_by: ME }, { version: "1.1.0", digest: DIGEST, status: "stable", manifest: { inputs: [] }, published_at: 2, published_by: ME }], manifest: { inputs: [] }, created_by: ME, created_at: 1, updated_at: 1 };
+const HIRE = { kind: "hire", handle: "growth", template: "seo", version: "1.0.0", digest: DIGEST, instance: "seo-1", project: "pr-2" };
+const HOST_STEP = "a hire and an upgrade are recorded, and their way back is the host step";
+
+/** `kept`: what the undo leaves standing on purpose, by table, with the contract sentence that says so. */
+type Case = { kind: string; setup?: (f: ReturnType<typeof fixture>) => Promise<unknown>; change: any; kept?: Record<string, { fields: Record<string, unknown>; because: string }> };
+const CASES: Case[] = [
+  { kind: "role", change: { kind: "role", name: "Growth", handle: "growth", scope: { projects: ["pr-2"] } } },
+  { kind: "projects", change: { kind: "projects", changes: [{ op: "create", title: "New project" }] } },
+  { kind: "move", setup: (f) => f.role(), change: { kind: "move", handle: "growth", reports_to: MATE } },
+  { kind: "retire", setup: (f) => f.role(), change: { kind: "retire", handle: "growth" } },
+  { kind: "scope", setup: (f) => f.role(), change: { kind: "scope", handle: "growth", add: ["pr-1"], leave_sessions: true } },
+  { kind: "budget", setup: (f) => f.role(), change: { kind: "budget", handle: "growth", caps: { hands_per_day: 8 } } },
+  { kind: "trust", setup: (f) => f.role(), change: { kind: "trust", handle: "growth", trust: "decide" } },
+  { kind: "authority", setup: (f) => f.role(), change: { kind: "authority", handle: "growth", authority: [{ id: "ads", kind: "spend", label: "Google Ads", limit: { usd_per_day: 20 } }] } },
+  // The instance row the hire wrote stays, awaiting the host; the lead the hire named goes back.
+  { kind: "hire", setup: async (f) => { await f.role(); f.db._tables.org_templates = [TEMPLATE]; }, change: HIRE, kept: { org_template_instances: { fields: { phase: "awaiting_host", version: "1.0.0" }, because: HOST_STEP } } },
+  // Until the host runs it, an accepted upgrade is only the acceptance on the row, and that is what the undo withdraws.
+  { kind: "upgrade", setup: async (f) => { await f.role(); f.db._tables.org_templates = [TEMPLATE]; await f.apply(HIRE); }, change: { kind: "upgrade", instance: "seo-1", template: "seo", to: "1.1.0", digest: DIGEST } },
+  { kind: "routine", setup: (f) => f.apply({ kind: "role", name: "Growth", handle: "growth", seat: { existing: "jx70001" } }), change: { kind: "routine", handle: "growth", title: "Review", prompt: "Review progress", every: "1d" } },
+  { kind: "project_meta", change: { kind: "project_meta", project: "pr-1", goal: "Grow", priority: "p1" } },
+  { kind: "adopt", setup: (f) => f.role(), change: { kind: "adopt", handle: "growth", conversation: "jx70001" } },
+  { kind: "file", change: { kind: "file", plan: "pl-1", project: "pr-1" } },
+  { kind: "plan_status", change: { kind: "plan_status", plan: "pl-1", status: "done", reason: "finished" } },
+  { kind: "task_status", change: { kind: "task_status", task: "ct-1", status: "done", reason: "finished" } },
+  { kind: "project_status", change: { kind: "project_status", project: "pr-1", status: "paused", reason: "waiting" } },
+];
+
+describe("S21: every change kind round trips through apply, undo and redo", () => {
+  test("the table covers every kind the proposal contract names", async () => {
+    const { ORG_CHANGE_KINDS } = await import("@codecast/shared/contracts/orgProposal");
+    expect([...CASES.map((c) => c.kind)].sort()).toEqual([...ORG_CHANGE_KINDS].sort());
+  });
+  for (const c of CASES) test(c.kind, async () => {
+    const f = fixture();
+    await c.setup?.(f);
+    const before = orgState(f.db);
+    const batches = f.db._tables.org_change_batches?.length ?? 0;
+    const rows = f.db._tables.org_changes?.length ?? 0;
+    expect((await f.apply(c.change)).status).toBe("applied");
+    const applied = orgState(f.db);
+    expect(applied).not.toEqual(before);
+    expect(f.db._tables.org_change_batches).toHaveLength(batches + 1);
+    const batch = f.last();
+    const applyRows = f.db._tables.org_changes.slice(rows);
+    expect(applyRows.length).toBeGreaterThan(0);
+    for (const r of applyRows) expect(orgLogLine({ ...r, at: r.created_at })).toMatch(/\S/);
+    // The preview is a dry run: it says what will change and writes nothing.
+    const writes = writeCount(f.db);
+    const preview = await planUndo(f.ctx(), ME as any, batch);
+    expect(preview.preview.refused).toBeUndefined();
+    expect(preview.preview.will_change.length).toBeGreaterThan(0);
+    for (const r of preview.preview.will_change) expect(orgLogLine(r)).toMatch(/\S/);
+    expect(writeCount(f.db)).toBe(writes);
+    expect(orgState(f.db)).toEqual(applied);
+    // Undo: the state is the snapshot, save the tombstones of what the change made.
+    await f.undo(batch);
+    const restored = orgState(f.db);
+    for (const [id, was] of before) expect({ id, ...restored.get(id) }).toEqual({ id, ...was });
+    for (const [id, now] of restored) {
+      if (before.has(id)) continue;
+      const kept = c.kept?.[now.table];
+      if (kept) expect({ id, because: kept.because, ...Object.fromEntries(Object.keys(kept.fields).map((k) => [k, now.fields[k]])) }).toEqual({ id, because: kept.because, ...kept.fields });
+      else expect({ id, table: now.table, status: now.fields.status }).toEqual({ id, table: now.table, status: TOMBSTONE[now.table] });
+    }
+    expect(f.db._tables.org_change_batches).toHaveLength(batches + 2);
+    const undoBatch = f.last();
+    expect((await f.db.get(undoBatch))).toMatchObject({ gesture: "undo", undoes: batch });
+    expect((await f.db.get(batch)).undone_by.batch).toBe(undoBatch);
+    const undoRows = f.db._tables.org_changes.slice(rows + applyRows.length);
+    expect(undoRows.map((r: any) => r.undoes).sort()).toEqual(applyRows.map((r: any) => r._id).sort());
+    for (const r of applyRows) expect(undoRows.some((u: any) => u._id === r.undone_by)).toBe(true);
+    // Redo: the applied state again, and the log one entry longer still.
+    await f.redo(batch);
+    expect(orgState(f.db)).toEqual(applied);
+    expect(f.db._tables.org_change_batches).toHaveLength(batches + 3);
+    expect((await f.db.get(f.last()))).toMatchObject({ gesture: "redo", undoes: undoBatch });
+    expect((await f.db.get(batch)).undone_by).toBeUndefined();
+    for (const r of applyRows) expect((await f.db.get(r._id)).undone_by).toBeUndefined();
+  });
+});
+
+describe("S21: the record stays one chain under attack", () => {
+  test("a hire is recorded even when its project already has a lead, and its sentence renders both ways", async () => {
+    const f = fixture(); const role = await f.role(); f.db._tables.org_templates = [TEMPLATE];
+    await f.db.patch("projects_q", { owner_role_id: role._id });
+    const batches = f.db._tables.org_change_batches.length;
+    await f.apply(HIRE);
+    expect(f.db._tables.org_change_batches).toHaveLength(batches + 1);
+    const row = f.db._tables.org_changes.at(-1);
+    expect(orgLogLine({ ...row, at: 0 })).toBe("Hire @growth from the template seo (1.0.0) to lead Billing");
+    expect(orgLogLine(invertRow({ ...row, at: 0 }))).toContain("the instance waits for the host step");
+  });
+  test("a verb on an undo or redo entry acts on the entry it names, so the chain never forks", async () => {
+    const f = fixture(); const role = await f.role();
+    await performSetCaps(f.ctx(), ME as any, { role_id: role._id, hands: 8 }); const original = f.last();
+    await f.undo(original); const undone = f.last();
+    // Undoing the undo is the redo: the original comes off the strike, the undo goes on it.
+    expect(await f.undo(undone)).toMatchObject({ changed: 1 });
+    expect((await f.db.get(role._id)).caps.hands_per_day).toBe(8);
+    expect((await f.db.get(original)).undone_by).toBeUndefined();
+    expect((await f.db.get(undone)).undone_by).toBeDefined();
+    expect(await f.undo(undone)).toMatchObject({ already_applied: true });
+    // The original still answers both verbs from here.
+    expect(await f.undo(original)).toMatchObject({ changed: 1 });
+    expect((await f.db.get(role._id)).caps.hands_per_day).not.toBe(8);
+    expect(await f.redo(original)).toMatchObject({ changed: 1 });
+    expect((await f.db.get(role._id)).caps.hands_per_day).toBe(8);
+  });
+  test("an entry's own undo and redo are its history, never dependents of it", async () => {
+    const f = fixture(); const role = await f.role(); const hire = f.last();
+    await f.undo(hire); await f.redo(hire);
+    expect((await planUndo(f.ctx(), ME as any, hire)).preview.depends).toEqual([]);
+    await f.undo(hire);
+    expect((await f.db.get(role._id)).status).toBe("retired");
+  });
+  test("redo after a conflicting later change is refused and the preview names the record", async () => {
+    const f = fixture(); const role = await f.role();
+    await performSetCaps(f.ctx(), ME as any, { role_id: role._id, hands: 8 }); const batch = f.last();
+    await f.undo(batch);
+    await performSetCaps(f.ctx(), ME as any, { role_id: role._id, hands: 9 });
+    const p = await planUndo(f.ctx(), ME as any, batch);
+    expect(p.preview.will_change).toHaveLength(0);
+    expect(p.preview.left_alone.map((l) => l.row.skipped)).toEqual(["it changed after this, or is no longer editable by you"]);
+    await expect(f.redo(batch)).rejects.toThrow("Nothing can be restored");
+    expect((await f.db.get(role._id)).caps.hands_per_day).toBe(9);
+  });
+  test("a with list may only name the displayed dependents", async () => {
+    const f = fixture(); const role = await f.role(); const hire = f.last();
+    await f.apply({ kind: "task_status", task: "ct-1", status: "done", reason: "x" }); const other = f.last();
+    await expect(f.undo(hire, { with: [other] })).rejects.toThrow("Only the displayed dependent entries");
+    expect((await f.db.get("tasks_t")).status).toBe("done");
+    expect((await f.db.get(role._id)).status).toBe("active");
+  });
+  test("an accepted upgrade the host already ran is left alone", async () => {
+    const f = fixture(); await f.role(); f.db._tables.org_templates = [TEMPLATE]; await f.apply(HIRE);
+    await f.apply({ kind: "upgrade", instance: "seo-1", template: "seo", to: "1.1.0", digest: DIGEST }); const batch = f.last();
+    const instance = f.db._tables.org_template_instances[0];
+    await f.db.patch(instance._id, { pending_upgrade: undefined, version: "1.1.0", phase: "ready" });
+    expect((await planUndo(f.ctx(), ME as any, batch)).preview.left_alone).toHaveLength(1);
+    await expect(f.undo(batch)).rejects.toThrow("Nothing can be restored");
+    expect((await f.db.get(instance._id)).version).toBe("1.1.0");
+  });
 });

@@ -256,11 +256,15 @@ describe("session identity on the row (session-characters.md S1, S6)", () => {
     expect(hand.escalated_by_role).toBeNull();
   });
 
-  // org-roles-run-work.md R1, on rows through the server's own overlay: a
-  // role's session files with the role and leaves needs input; the one the
-  // role escalated is a needs input row of its own and carries the line.
-  test("a role's sessions ride its standing session; an escalated one stands alone with its line", async () => {
+  // org-roles-run-work.md R1 (revised), on rows through the server's own
+  // overlay: a role's session files with the role and leaves needs input; an
+  // escalation reaches the person through the ROLE's card, which files in
+  // needs input carrying the line, its sessions nested under it; a direct
+  // escalation is the child's own card.
+  test("a role's sessions ride its standing session; an escalation lifts the role's card into needs input; direct stands alone", async () => {
     const escalation = { role_id: "org_roles_infra", line: "the pricing copy is ready and needs your eye", at: EPOCH - 5 * MIN };
+    const older = { role_id: "org_roles_infra", line: "the launch date is yours to call", at: EPOCH - 9 * MIN };
+    const direct = { role_id: "org_roles_infra", line: "a permission prompt is open in here", at: EPOCH - 4 * MIN, direct: true };
     const tables = {
       org_roles: [{ _id: "org_roles_infra", short_id: "or-7", name: "Infra lead", handle: "infra", avatar: "stag", status: "active" }],
       // The role finished its wake and said so: its own state is done.
@@ -271,25 +275,38 @@ describe("session identity on the row (session-characters.md S1, S6)", () => {
         conv("standing", { updated_at: EPOCH - MIN, anchor_id: "anchors_infra", standing_role_id: "org_roles_infra", thread_state_status: "done" }),
         conv("waiting", { updated_at: EPOCH - 2 * MIN, org_role_id: "org_roles_infra" }),
         conv("escalated", { updated_at: EPOCH - 3 * MIN, org_role_id: "org_roles_infra", thread_state_status: "done", escalated_by_role: escalation }),
+        conv("older", { updated_at: EPOCH - 6 * MIN, org_role_id: "org_roles_infra", thread_state_status: "done", escalated_by_role: older }),
+        conv("direct", { updated_at: EPOCH - 3 * MIN, org_role_id: "org_roles_infra", thread_state_status: "done", escalated_by_role: direct }),
         conv("mine", { updated_at: EPOCH - 4 * MIN }),
         conv("quiet", { updated_at: EPOCH - MIN, anchor_id: "anchors_quiet", standing_role_id: "org_roles_quiet" }),
       ],
     };
     const { liveness } = await computeSessionsLiveness({ db: db(tables) }, ME as any);
     const bucketOf = (id: string) => (liveness as any)[`conversations_${id}`]?.bucket;
-    // On its own facts `waiting` is a needs input row; under the role it is not.
     expect(bucketOf("mine")).toBe("needs_input");
-    expect(bucketOf("standing")).toBe("done");
-    expect(bucketOf("waiting")).toBe("done");
+    // The role's own facts say done; the escalations under it put its card
+    // in needs input, and everything under it files there with it.
+    expect(bucketOf("standing")).toBe("needs_input");
+    expect(bucketOf("waiting")).toBe("needs_input");
+    expect(bucketOf("escalated")).toBe("needs_input");
     // The standing session surfaced because something rides it; one with
     // nothing under it stays out of the inbox.
     expect(bucketOf("quiet")).toBe("hidden");
-    expect(bucketOf("escalated")).toBe("needs_input");
+    // The direct one is a card of its own.
+    expect(bucketOf("direct")).toBe("needs_input");
 
     const { sessions } = await computeInboxSessions({ db: db(tables) }, ME as any, {});
     const row = sessions.find((s: any) => s._id === "conversations_escalated");
     // Key order is the store draft's, so a web gesture's field lock retires on the echo.
     expect(JSON.stringify(row.escalated_by_role)).toBe(JSON.stringify(escalation));
     expect(row.role?.handle).toBe("infra");
+    expect(JSON.stringify(sessions.find((s: any) => s._id === "conversations_direct").escalated_by_role)).toBe(JSON.stringify(direct));
+    // One card, two lines, newest first, derived from the children; the
+    // direct one is not on it.
+    const standing = sessions.find((s: any) => s._id === "conversations_standing");
+    expect(standing.escalations).toEqual([
+      { conversation_id: "conversations_escalated", line: escalation.line, at: escalation.at },
+      { conversation_id: "conversations_older", line: older.line, at: older.at },
+    ]);
   });
 });

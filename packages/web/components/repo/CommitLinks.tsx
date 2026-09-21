@@ -4,12 +4,15 @@
 // The same row appears on a history line and on the commit page, so a reader
 // scanning history sees exactly what they would see after opening it.
 import Link from "next/link";
-import { GitPullRequest, MessagesSquare } from "lucide-react";
+import { GitPullRequest, Lock, MessagesSquare } from "lucide-react";
 import { EntityIdPill } from "../EntityIdPill";
 
 export type CommitJoins = {
   conversation_id?: string | null;
-  session?: { _id: string; title?: string } | null;
+  // `href` is set by the public page: the share page of a public session, or
+  // null for a private one, which is named but opens nowhere. Absent, the
+  // session opens in the app, which is where a signed in reader may go.
+  session?: { _id: string; title?: string; href?: string | null } | null;
   // Two shapes for the same thing: the history query joins the tasks and hands
   // back rows, while the single-commit query hands back the raw id array. A
   // pill resolves either, so both callers get the same row of links.
@@ -40,12 +43,17 @@ export function CommitLinks({
 
   return (
     <div className={`flex items-center gap-1 flex-wrap ${className ?? ""}`}>
-      {sessionId && (
-        <Link href={`/conversation/${sessionId}`} className={PILL} title={joins.session?.title ?? "The session that wrote this"}>
+      {sessionId && (joins.session?.href === null ? (
+        <span className={PILL} title="This session is not public">
+          <Lock className="w-2.5 h-2.5 shrink-0 text-sol-text-dim" />
+          <span className="truncate">{joins.session?.title || "Session"}</span>
+        </span>
+      ) : (
+        <Link href={joins.session?.href ?? `/conversation/${sessionId}`} className={PILL} title={joins.session?.title ?? "The session that wrote this"}>
           <MessagesSquare className="w-2.5 h-2.5 shrink-0 text-sol-yellow" />
           <span className="truncate">{joins.session?.title || "Session"}</span>
         </Link>
-      )}
+      ))}
       {tasks.map((task) =>
         task.short_id ? (
           <EntityIdPill key={task._id} shortId={task.short_id} type="task" />

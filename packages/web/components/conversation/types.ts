@@ -1,4 +1,4 @@
-import type { ThreadStateFields, DecisionAnswerMessage } from "@codecast/shared/contracts";
+import type { ThreadStateFields, DecisionAnswerMessage, SessionEscalationMessage } from "@codecast/shared/contracts";
 import type { RoleWakeFrame } from "../roleWake";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import type { SentFileData } from "../tools/SentFileBlock";
@@ -335,6 +335,11 @@ export type ParsedApiError = {
   // resets 11:30pm (America/New_York)") — the session is parked until the
   // limit resets. Rendered as a distinct "usage limit" card.
   isLimit?: boolean;
+  // True for the context-overflow park ("Prompt is too long") — the
+  // conversation no longer fits the model's window, so the session waits for
+  // /compact or /clear typed into it. Rendered as a card whose actions send
+  // those commands; a continue would re-send the same oversized prompt.
+  isContext?: boolean;
   // True for statusless connection-drop banners ("API Error: Connection
   // closed mid-response. The response above may be incomplete.") — the turn
   // died mid-transmission; a plain "continue" resumes it. Rendered as a
@@ -391,7 +396,11 @@ export type UserMessageKind =
   // rendered as the wake card with the role's controls.
   | { kind: 'role_wake'; frame: RoleWakeFrame }
   // The human's answer to a `cast decide` question (store answerDecision).
-  | { kind: 'decision_answer'; decision: DecisionAnswerMessage };
+  | { kind: 'decision_answer'; decision: DecisionAnswerMessage }
+  // A session moving between its role and the person (<session-escalation …>,
+  // org-roles-run-work.md R1 revised): an inline divider with the role's face,
+  // the move and the whole line as markdown, in both threads.
+  | { kind: 'session_escalation'; escalation: SessionEscalationMessage };
 
 
 /** One side of a handoff link on the conversation payload. */

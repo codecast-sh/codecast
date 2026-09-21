@@ -56,7 +56,7 @@ export function IntegrationCard({
   showSources?: boolean;
 }) {
   const { icon: Icon, accent } = APP_LOOK[descriptor.id];
-  const { connect, disconnect, busy, error } = useAppConnection(descriptor, connection, me, scope);
+  const { connect, disconnect, busy, error } = useAppConnection(descriptor, connection, scope);
 
   const connected = connection?.status === "connected" ? connection : null;
   const comingSoon = descriptor.connectKind === "coming-soon" || connection?.status === "coming_soon";

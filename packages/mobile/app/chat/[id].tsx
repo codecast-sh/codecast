@@ -300,7 +300,7 @@ export default function ChatChannelScreen() {
           }
         : {
             id: String(msg.user_id),
-            name: humanName || (msg.author_kind === 'agent' ? 'Anchor' : 'Teammate'),
+            name: humanName || (msg.author_kind === 'agent' ? 'Workspace agent' : 'Teammate'),
             avatarUrl: member?.github_avatar_url || member?.image || undefined,
             isAgent: msg.author_kind === 'agent' || member?.is_bot,
           }),

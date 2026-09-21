@@ -2,6 +2,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, memo } from "react";
 import { getCommandType, cleanContent, extractSkillInfo, isHiddenSystemNotice, isWarningSystemNotice } from "../../../lib/conversationProcessor";
+import { compactionProgressMessage } from "../../../lib/compactionProgress";
+import { CompactionProgressCard } from "../CompactionProgressCard";
 import { getBuiltinCommands } from "../../../lib/builtinCommands";
 import { ShortcutTooltip } from "../../KeyboardShortcutsHelp";
 import { toast } from "sonner";
@@ -21,6 +23,8 @@ import { entityRemarkPlugins } from "../../../lib/remarkEntityIds";
 import { MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS } from "../../messageMarkdown";
 import { useJumpToSendingMessage } from "../../../hooks/useJumpToSendingMessage";
 import { isTeammateFramingOnly, parseSpawnedTaskPrompt, type ChatWakePrompt, type HuddleSummaryTag } from "../../sessionMessage";
+import { sessionEscalationCaption, type SessionEscalationMessage } from "@codecast/shared/contracts";
+import { RoleFace } from "../../org/RoleFace";
 import { CallTranscriptDisclosure } from "../../calls/TranscriptTurns";
 import { useInboxStore, useTrackedStore } from "../../../store/inboxStore";
 import { DecisionCompactCard } from "../../decisions/DecisionCompactCard";
@@ -330,22 +334,28 @@ export function NudgeLine({ messageId, text, count, timestamp, userName, avatarU
   );
 }
 
-// One captioned rule for an in-place switch (agent or machine). Clicking
-// discloses the notice text the agent was given.
+// One captioned rule for a machine move the thread records in place: an
+// agent or machine switch, or a session moving between its role and the
+// person. Clicking discloses the notice text the agent was given; `body` is
+// a line the reader must see whole (the role's reason), rendered as markdown
+// under the rule without a click. `lead` draws before the caption (a face).
 function SwitchDivider({
-  caption, fromLabel, content, extra, timestamp,
+  caption, fromLabel, content, extra, timestamp, lead, body, testId,
 }: {
   caption: string;
   fromLabel?: string;
   content: string;
   extra?: string;
   timestamp: number;
+  lead?: React.ReactNode;
+  body?: string;
+  testId?: string;
 }) {
   const [open, setOpen] = useState(false);
   const details = [content.trim(), extra?.trim()].filter(Boolean).join("\n\n");
   const hasDetails = details.includes("\n");
   return (
-    <div className="my-5">
+    <div className="my-5" data-switch-divider={testId}>
       <button
         type="button"
         onClick={() => hasDetails && setOpen((o) => !o)}
@@ -354,20 +364,52 @@ function SwitchDivider({
       >
         <TimelineRule color="var(--sol-violet)" label={caption}>
           <span className="flex items-center gap-1.5 text-[11px] text-sol-text-dim group-hover:text-sol-text-muted transition-colors">
-            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4M16 17H4m0 0l4 4m-4-4l4-4" />
-            </svg>
+            {lead ?? (
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4M16 17H4m0 0l4 4m-4-4l4-4" />
+              </svg>
+            )}
             {caption}
             {fromLabel && <span className="text-sol-text-dim/70">was {fromLabel}</span>}
+            <span className="text-sol-text-dim/60">· {formatRelativeTime(timestamp)}</span>
           </span>
         </TimelineRule>
       </button>
+      {body && (
+        <div data-switch-divider-body className="mt-2 mx-auto max-w-2xl px-4 py-3 rounded-md border border-sol-violet/35 bg-sol-violet/[0.07] text-[13px] text-sol-text leading-relaxed">
+          <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MESSAGE_MD_COMPONENTS}>{body}</ReactMarkdown>
+        </div>
+      )}
       {open && hasDetails && (
         <div className="mt-2 mx-auto max-w-2xl px-4 py-3 rounded-md border border-sol-border bg-sol-card text-xs text-sol-text-muted whitespace-pre-wrap leading-relaxed">
           {details}
         </div>
       )}
     </div>
+  );
+}
+
+// A session moving between its role and the person (org-roles-run-work.md
+// R1, revised): the role's face, who moved what where, the whole line as
+// markdown, the time. The same divider in the child's thread and the role's;
+// `conversationShortId` says which side the reader is on.
+export function EscalationDivider({ escalation, conversationShortId, timestamp }: { escalation: SessionEscalationMessage; conversationShortId?: string; timestamp: number }) {
+  const inChild = !!conversationShortId && conversationShortId === escalation.session.short_id;
+  const caption = sessionEscalationCaption(escalation, { inChild });
+  return (
+    <SwitchDivider
+      testId={`escalation-${escalation.move}`}
+      caption={caption}
+      content=""
+      timestamp={timestamp}
+      lead={
+        <span className="flex items-center gap-1">
+          <RoleFace role={escalation.role} size={16} />
+          {!inChild && <EntityIdPill shortId={escalation.session.short_id} compact />}
+        </span>
+      }
+      body={escalation.line || undefined}
+    />
   );
 }
 
@@ -1134,6 +1176,9 @@ function SystemBlockImpl({ content, subtype, timestamp, messageUuid, messageId, 
       </div>
     );
   }
+
+  const compaction = compactionProgressMessage(content);
+  if (compaction) return <CompactionProgressCard progress={compaction} className="mb-3" />;
 
   const cleanText = stripAnsiCodes(content.replace(/<[^>]+>/g, "")).slice(0, 200);
   if (!cleanText) return null;

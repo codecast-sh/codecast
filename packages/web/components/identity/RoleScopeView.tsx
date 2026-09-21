@@ -60,12 +60,14 @@ export type RoleScopeViewProps = {
    *  sessions that report to it. The page header says this number; the
    *  section must never say less. */
   waitingInArea?: number;
+  /** Page only: a template role's sections (org-hire.md H11), under its project card. */
+  template?: ReactNode;
   onTab?: (tab: RoleScopeTab) => void;
   onOpenSession?: (s: OrgSession) => void;
   className?: string;
 };
 
-export function RoleScopeView({ model, density, escalated = [], renderLead, renderInitiative, onFilePlan, sessions, goals, history, waitingInArea = 0, onTab, onOpenSession, className }: RoleScopeViewProps) {
+export function RoleScopeView({ model, density, escalated = [], renderLead, renderInitiative, onFilePlan, sessions, goals, history, template, waitingInArea = 0, onTab, onOpenSession, className }: RoleScopeViewProps) {
   const moreWaiting = !(density === "card") && waitingInArea > (model.sessions?.waiting ?? 0);
   const card = density === "card";
   const projects = card ? model.projects.slice(0, CARD_PROJECTS) : model.projects;
@@ -92,6 +94,7 @@ export function RoleScopeView({ model, density, escalated = [], renderLead, rend
         </ul>
         {hidden > 0 && <p className="text-sol-text-dim" data-scope-more={hidden}>and {hidden} more {hidden === 1 ? "project" : "projects"}</p>}
       </Section>
+      {!card && template}
 
       {(model.sessions || escalated.length > 0) && (
         <Section density={density} label="Sessions" name="sessions">
@@ -170,7 +173,7 @@ export function RoleScopeView({ model, density, escalated = [], renderLead, rend
 }
 
 /** A label and its value: beside each other on the card, stacked on the page. */
-function Section({ density, label, name, children }: { density: RoleScopeDensity; label: string; name: string; children: ReactNode }) {
+export function Section({ density, label, name, children }: { density: RoleScopeDensity; label: string; name: string; children: ReactNode }) {
   if (density === "card") {
     return (
       <>

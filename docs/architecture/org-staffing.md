@@ -346,10 +346,18 @@ seat; bring the records in line first, then size a seat on the load that will
 reach it. New change kinds, applied through the existing update paths:
 
 ```
-{ kind: "plan_status", plan: ref, status: "done" | "abandoned" | "active", reason }
-{ kind: "task_status", task: ref, status: "done" | "dropped" | "open" | "backlog", reason }
-{ kind: "project_status", project: ref, status: "paused" | "done" | "active", reason }
+{ kind: "plan_status", plan: ref, status: "done" | "abandoned" | "active", reason, title? }
+{ kind: "task_status", task: ref, status: "done" | "dropped" | "open" | "backlog", reason, title? }
+{ kind: "project_status", project: ref, status: "paused" | "done" | "active", reason, title? }
 ```
+
+`title` is the record's own title, carried on the change so its row reads
+"Mark done: <title>" with the id as a pill wherever the proposal is read: a
+reader's store may not hold that team's records. The analyzer copies it from
+its inputs; `orgProposals.post` and a revise's add fill it from the record
+when a spec left it out and the record is in the proposal's workspace
+(`withRecordTitle`). `recordChangeParts` in the contract is the one reading of
+the three fields; `changeLine`, the row, the log and the tooltip all use it.
 
 Accepting a plan_status of done or abandoned closes the plan's still open
 tasks in the same apply, through the one task path (`setTaskStatus`: the
@@ -815,3 +823,77 @@ reads in one sentence what happened and to how many things, presses Undo,
 reads what will and will not change back, confirms, and the chart, the
 inbox and the board are where they were. They then press Redo and it is
 applied again.
+
+## S22. One agent at the root
+
+Written 2026-09-21. The founder: "anchor + chief of staff / org stuff being
+separate does not make sense, these need to become a single cohesive thing,
+having both separate is confusing." S12 decided this in words and the product
+did not follow: the sidebar still lists Anchor under Agents, /anchor is its
+own page with its own header, the chart draws an "Anchor · standing agent"
+card beside a "Chief of Staff · role" card, the anchor chip and panel in the
+app shell know nothing about roles, and a workspace without a chief of staff
+has an anchor with no place on the chart at all. Two names, two pages, two
+cards, one thing.
+
+**There is one root agent per workspace, and it is a role.** The workspace's
+standing agent is the root role of its org, named Chief of Staff by default
+and renamable like any role, with a face, a charter, a brief, sessions that
+report to it, tasks it owns, and the whole workspace as its scope. A
+workspace that has an anchor and no root role has one from the moment this
+lands: the migration names the anchor's session as the seat of a root role
+(the same seating S16 uses, nothing restarts, the Slack binding and every
+alias keep working), so no workspace has an unnamed root. A personal
+workspace has one too: the person's own root role, which is the goal tracker
+of R6 for one person.
+
+**One page.** `/anchor` is the root role's page, the role page as the
+session page (I3): conversation on the left, Scope on the right. The sidebar
+entry under Agents is the root role by its name and face, not the word
+Anchor, and it opens that page. The anchor chip in the app shell and the
+anchor panel become the root role's chip and panel: same face, same name,
+same conversation. `cast anchor say` and `@anchor` in chat stay as aliases
+of the root role's handle and print nothing about anchors.
+
+**One card.** The chart draws the root role once, at the top under the
+person it reports to, with its seat inside it as any role (R1 fixed this for
+other roles; the root is not an exception). No node of kind anchor remains
+in the layout; the anchors table stays as the seat's storage and nothing
+else reads it for display.
+
+**One word.** Anchor leaves every surface a person reads: the org page, the
+sidebar, the chip and panel, the first visit and the tour, the glossary, the
+skill, the CLI's printed sentences, the mobile app, the notifications. Where
+a sentence needs the thing, it says the role's name, or "the workspace's
+agent" when no name fits. The tables, the functions and the memory notes
+keep their names; the word is retired from the product, not from the code.
+
+**The test.** A person opens the sidebar, the chart and the inbox and sees
+the same agent in all three, with one name and one face, and opens the same
+page from each. Nothing on any screen invites them to wonder which of two
+agents they are talking to.
+
+**As built (2026-09-21).** The seat is `orgRootSeat.seatRootRoles`, an
+internal mutation that walks live anchors with no role pointer and calls
+`performStaff` for each with `seat: "existing"`, so the session is adopted,
+the note and the briefing land in it, and the weekly review is armed. The run
+is all or nothing: a seating that fails throws out of the mutation, so no
+workspace is left with a Chief of Staff row and no seat. A workspace whose
+root role already stands in another session is reported as `two_roots` and
+left for a person; one whose root a person retired while keeping the agent is
+still seated, and the plan names it `retired_root` with the seat it replaces.
+`orgRootSeat:rootSeatPlan` is the read only listing. There is no door that
+provisions a bare anchor any more: `/cli/anchor/create`, `cast anchor create`
+and the web onboarding all run `orgRoles.staff`, and each names the team
+outright (`staffTeamFor` refuses a team scope with no team; the CLI resolves
+a bare `--team` through the same write resolver every other verb uses). `listAnchors`
+carries the seated role's `{name, handle, avatar, short_id}` so the shell
+draws the role from the row alone: `useRootAgent` (hooks/useSyncAnchors)
+answers "the active workspace's agent" for the sidebar's entry under Agents,
+the header chip and the slide-over. `/anchor` renders `ScopePageInner` for the
+root role in place (an `href` prop keeps the tab in that address), and the
+Slack connection is a section on the root role's Settings tab. The layout has
+no anchor node kind; `orgRows` on the phone follows. The guard is
+`lib/__tests__/anchorWord.guard.test.ts`: it reads string literals and JSX
+text under web, mobile, the CLI, the shared contracts and convex, and fails on
+the word outside the verb sense and the `cast anchor` command name.

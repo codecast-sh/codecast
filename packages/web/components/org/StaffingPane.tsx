@@ -11,12 +11,12 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { ArrowRight, Check, ChevronDown, ChevronRight, CornerDownRight, ExternalLink, Flag as FlagGlyph, MessageSquareText, Pause, Pencil, Play, Sparkles, Undo2, UserRoundPlus, X } from "lucide-react";
-import { compactAge } from "../../lib/threadState";
+import { agoOf } from "../../lib/threadState";
 import { cn } from "../../lib/utils";
 import { AnchorConversation } from "../anchor/AnchorConversation";
 import { OrgButton } from "./OrgButton";
 import { amendedMoves, revisedLine, revisionWord } from "./staffingRevise";
-import { latestOrgRevisionAt, type OrgVerdictSeen } from "@codecast/shared/contracts/orgProposal";
+import { latestOrgRevisionAt, recordChangeParts, type OrgChange, type OrgVerdictSeen } from "@codecast/shared/contracts/orgProposal";
 import type { TakeoverPreview } from "../../hooks/useTakeoverPreviews";
 import { TakeoverEdit } from "./TakeoverEdit";
 import { askNames, askOfChange, asksProgress, costLine, proposalAsks, type AskView } from "./staffingAsks";
@@ -214,7 +214,7 @@ function ProposalBody(props: StaffingPaneProps & { proposal: OrgProposalRow }) {
         <div className="mt-2 rounded-lg border px-3 py-2 flex items-center gap-2 text-[12px]" data-superseded-by={proposal.superseded_by.short_id} style={{ borderColor: "color-mix(in srgb, var(--sol-orange) 45%, transparent)", background: "color-mix(in srgb, var(--sol-orange) 8%, transparent)", color: "var(--sol-text-secondary)" }}>
           <Undo2 className="w-3.5 h-3.5 shrink-0" style={{ color: "var(--sol-orange)" }} />
           <span className="min-w-0 flex-1">
-            A newer proposal replaced this one {compactAge(now - proposal.superseded_by.created_at)} ago{proposal.superseded_by.status !== "open" ? ` (${proposal.superseded_by.status})` : ""}. <button type="button" onClick={() => props.onPickProposal(proposal.superseded_by!.short_id)} className="font-medium hover:underline" style={{ color: "var(--sol-violet)" }}>Open it</button>
+            A newer proposal replaced this one {agoOf(now - proposal.superseded_by.created_at)}{proposal.superseded_by.status !== "open" ? ` (${proposal.superseded_by.status})` : ""}. <button type="button" onClick={() => props.onPickProposal(proposal.superseded_by!.short_id)} className="font-medium hover:underline" style={{ color: "var(--sol-violet)" }}>Open it</button>
           </span>
           {proposal.status === "open" && props.onWithdraw && (
             <OrgButton size="sm" onClick={() => props.onWithdraw!(proposal._id)} data-withdraw>Withdraw</OrgButton>
@@ -228,7 +228,7 @@ function ProposalBody(props: StaffingPaneProps & { proposal: OrgProposalRow }) {
         </div>
       )}
 
-      <div className="mt-3 flex flex-col gap-2.5" data-asks>
+      <div className="mt-2.5 flex flex-col gap-2" data-asks>
         {loading && <p className="text-[12.5px]" style={{ color: "var(--sol-text-dim)" }} data-changes-loading>Loading what this proposal asks…</p>}
         {!loading && asks.length === 0 && <p className="text-[12.5px]" style={{ color: "var(--sol-text-dim)" }}>This proposal asks for nothing.</p>}
         {asks.map((ask) => (
@@ -324,7 +324,7 @@ function AskCard({ ask, number, tree, open, onToggle, selectedChangeId, revisedI
   };
   return (
     <section className={cn("rounded-xl border transition-colors", decided && "opacity-80")} data-ask={ask.index} data-ask-state={ask.state} style={{ borderColor: decided ? BORDER : "color-mix(in srgb, var(--sol-violet) 32%, transparent)", background: decided ? "transparent" : "var(--sol-card)" }}>
-      <div className="flex items-start gap-3 px-3.5 pt-3 pb-3">
+      <div className="flex items-start gap-3 px-3.5 pt-2.5 pb-2.5">
         <span className="shrink-0 w-6 h-6 mt-[1px] inline-flex items-center justify-center rounded-full text-[12px] font-semibold tabular-nums" aria-hidden style={{ background: `color-mix(in srgb, ${tone} 16%, transparent)`, color: tone }}>
           {ask.state === "accepted" ? <Check className="w-3.5 h-3.5" /> : ask.state === "skipped" ? <X className="w-3.5 h-3.5" /> : number}
         </span>
@@ -338,14 +338,14 @@ function AskCard({ ask, number, tree, open, onToggle, selectedChangeId, revisedI
           )}
           {!decided && (
             <>
-              <p className="mt-1 text-[12.5px] leading-relaxed" style={{ color: "var(--sol-text-secondary)" }} data-ask-why>{ask.why}</p>
-              <p className="mt-1.5 text-[12.5px] leading-relaxed" style={{ color: "var(--sol-text)" }} data-ask-effect>
+              <p className="mt-1 text-[12.5px] leading-normal" style={{ color: "var(--sol-text-secondary)" }} data-ask-why>{ask.why}</p>
+              <p className="mt-1 text-[12.5px] leading-normal" style={{ color: "var(--sol-text)" }} data-ask-effect>
                 <span style={{ color: "var(--sol-text-dim)" }}>If you accept: </span>{ask.effect}
               </p>
               {moving.length > 0 && (
                 <TakeoverEdit className="mt-2" phrase={moving.map((c) => takeovers![c._id].phrase).join(". ")} leave={leave} onLeave={setLeave} />
               )}
-              <div className="mt-2.5 flex items-center gap-1.5 flex-wrap" data-ask-controls>
+              <div className="mt-2 flex items-center gap-1.5 flex-wrap" data-ask-controls>
                 <OrgButton primary size="sm" onClick={() => onDecideAsk("accept", leave && moving.length > 0 ? { leave_sessions: true } : undefined)} data-ask-accept>Accept</OrgButton>
                 <OrgButton size="sm" onClick={() => onDecideAsk("skip")} data-ask-skip>Skip</OrgButton>
                 {onAskAboutAsk && (
@@ -364,7 +364,7 @@ function AskCard({ ask, number, tree, open, onToggle, selectedChangeId, revisedI
           )}
         </div>
       </div>
-      <button type="button" onClick={onToggle} aria-expanded={open} className="w-full flex items-center gap-1.5 px-3.5 h-8 border-t text-[12px] rounded-b-xl hover:bg-sol-bg-highlight/50" style={{ borderColor: BORDER, color: "var(--sol-text-muted)" }} data-ask-fold>
+      <button type="button" onClick={onToggle} aria-expanded={open} className="w-full flex items-center gap-1.5 px-3.5 h-7 border-t text-[12px] rounded-b-xl hover:bg-sol-bg-highlight/50" style={{ borderColor: BORDER, color: "var(--sol-text-muted)" }} data-ask-fold>
         {open ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
         <span className="tabular-nums">{ask.foldLabel}</span>
       </button>
@@ -450,6 +450,27 @@ export function StatusPill({ status }: { status: OrgChangeStatus }) {
 }
 
 /**
+ * A change's line as the row shows it. A record change that carries its
+ * record's title (S9) reads "Mark done: <title>" with the id as a pill, so a
+ * person learns what the record is without opening it; every other change,
+ * and a record change without a title, is `changeLine` as one string. The
+ * words are the contract's (recordChangeParts): the tooltip, the log and the
+ * chart's chips say the same line.
+ */
+export function ChangeLineText({ change }: { change: OrgChange }) {
+  const parts = recordChangeParts(change);
+  if (!parts?.title) return <>{changeLine(change)}</>;
+  const act = parts.act.charAt(0).toUpperCase() + parts.act.slice(1);
+  return (
+    <span data-record-line={parts.ref}>
+      <span style={{ color: "var(--sol-text-muted)" }}>{act}: </span>
+      <span className="font-medium" data-record-title>{parts.title}</span>
+      <span className="inline-flex items-center h-[16px] px-1 ml-1.5 rounded text-[10px] align-[1px] tabular-nums" style={{ background: "color-mix(in srgb, var(--sol-border) 35%, transparent)", color: "var(--sol-text-dim)", fontFamily: "var(--font-mono)" }} data-record-ref>{parts.ref}</span>
+    </span>
+  );
+}
+
+/**
  * One change. Unselected: status pill, the line on up to two rows (the pane
  * is 380px wide; one truncated row hid the role, the owner or the number the
  * line exists to say), the icon trio when it is still decidable, and on a
@@ -493,7 +514,7 @@ function ChangeRow({ change, tree, nested, selected, editing, revisedNew, takeov
           <span className="min-w-0 flex-1">
             <span className={cn("block text-[12.5px] leading-snug", selected ? "break-words" : "line-clamp-2", (change.status === "skipped" || removed) && "line-through opacity-60")} style={{ color: "var(--sol-text)" }} title={changeLine(change.change)}>
               {change.revision?.kind === "added" && <span className="inline-flex items-center h-[15px] px-1 mr-1.5 rounded text-[9.5px] font-semibold uppercase tracking-[0.06em] align-[1px] no-underline" style={{ background: "color-mix(in srgb, var(--sol-violet) 16%, transparent)", color: "var(--sol-violet)" }} data-revised-tag>new</span>}
-              {changeLine(change.change)}
+              <ChangeLineText change={change.change} />
             </span>
             {change.revision && <RevisionNote change={change} selected={selected} />}
             {change.depends && <span className="block text-[11px] leading-snug" style={{ color: "var(--sol-text-dim)" }} data-change-depends>{change.depends}</span>}
@@ -509,7 +530,7 @@ function ChangeRow({ change, tree, nested, selected, editing, revisedNew, takeov
                 {(selected ? nested : nested.slice(0, 3)).map((t) => (
                   <span key={t._id} className="flex items-start gap-1 text-[11px] leading-snug mt-0.5" style={{ color: "var(--sol-text-muted)" }} data-nested-task={t._id}>
                     <CornerDownRight className="w-3 h-3 shrink-0 mt-[1px]" style={{ color: "var(--sol-text-dim)" }} />
-                    <span className={cn("min-w-0 flex-1", selected ? "break-words" : "truncate")} title={changeLine(t.change)}>{changeLine(t.change)}</span>
+                    <span className={cn("min-w-0 flex-1", selected ? "break-words" : "truncate")} title={changeLine(t.change)}><ChangeLineText change={t.change} /></span>
                   </span>
                 ))}
                 {!selected && nested.length > 3 && <span className="block text-[10.5px] mt-0.5 pl-4" style={{ color: "var(--sol-text-dim)" }}>and {nested.length - 3} more</span>}

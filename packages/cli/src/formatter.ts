@@ -1,6 +1,6 @@
 import { c, fmt, UNVERIFIABLE_MARK } from "./colors.js";
 import { structuredPayloadSummary, structuredPayloadKeysFromRaw } from "@codecast/shared/render";
-import { threadStateHeadline, parseThreadStateStatus, sessionLivenessVerdict } from "@codecast/shared/contracts";
+import { escalationFirstLine, threadStateHeadline, parseThreadStateStatus, sessionLivenessVerdict } from "@codecast/shared/contracts";
 import type { LivenessVerdict } from "@codecast/shared/contracts";
 
 // One glyph per liveness verdict. Green is positive contact. The gray ring is a
@@ -1035,6 +1035,11 @@ interface MonitorSession {
   run_by?: string | null;
   owner?: { name: string | null; email: string | null } | null;
   owned_by_me?: boolean;
+  /** On a role's standing session: the sessions it put in front of the person through its card, newest first (R1, revised). */
+  escalations?: Array<{ conversation_id: string; line: string; at: number }> | null;
+  /** On a child a role put in front of the person directly: the role's line. */
+  escalated_by_role?: { role_id: string; line: string; at: number; direct?: boolean } | null;
+  role?: { handle: string; name: string } | null;
 }
 
 interface MonitorResult {
@@ -1189,6 +1194,17 @@ export function formatMonitor(result: MonitorResult, options: MonitorOptions = {
         ? `${c.cyan}${s.active_task.short_id}${c.reset} ${s.active_task.title}`
         : "";
     if (ctx) lines.push(`   ${ctx}`);
+
+    // A role's card carries what it put in front of the person (R1, revised):
+    // one line per session, the first line of the reason, and the hand back.
+    // A child put there directly wears the role's line itself.
+    for (const e of s.escalations ?? []) {
+      lines.push(`   ${c.yellow}↑${c.reset} ${c.magenta}${truncateId(e.conversation_id)}${c.reset}  ${escalationFirstLine(e.line).slice(0, 80)}  ${c.dim}${formatRelativeTime(new Date(e.at).toISOString())} · cast escalate --clear ${truncateId(e.conversation_id)} to hand back${c.reset}`);
+    }
+    if (s.escalated_by_role && !(s.escalations ?? []).length) {
+      const who = s.role ? `@${s.role.handle}` : "a role";
+      lines.push(`   ${c.yellow}↑${c.reset} ${c.magenta}${who}${c.reset}: ${escalationFirstLine(s.escalated_by_role.line).slice(0, 80)}  ${c.dim}cast escalate --clear ${truncateId(s.id)} to hand back${c.reset}`);
+    }
 
     // A pinned state is the agent's own account of where the row stands, so it
     // outranks the generated summary and the last user message. Marked with a

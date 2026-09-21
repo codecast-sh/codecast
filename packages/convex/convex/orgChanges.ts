@@ -202,7 +202,10 @@ export async function planUndo(ctx: Ctx, userId: Id<"users">, ref: string, inclu
   if (later.length > CAP || targetRows.length > CAP) return { original, target, preview: { ...preview, refused: "This history window is too large to undo safely" }, steps: [] as Step[] };
   const candidates = [];
   let count = targetRows.length;
+  // The entry's own chain (its undo, the redo of that, and on) is its history, never later work that depends on it.
+  const chain = new Set<string>([String(target._id)]);
   for (const batch of later.filter((b: any) => b._id !== target._id).sort((a: any, b: any) => a.seq - b.seq)) {
+    if (batch.undoes && chain.has(String(batch.undoes))) { chain.add(String(batch._id)); continue; }
     const rows = await rowsOf(ctx, batch._id);
     count += rows.length;
     if (count > CAP) return { original, target, preview: { ...preview, refused: "This history window is too large to undo safely" }, steps: [] as Step[] };
@@ -306,6 +309,15 @@ export async function performUndo(ctx: Ctx, userId: Id<"users">, args: { batch: 
   await refuseUnlessHuman(ctx, args, "Undo and redo");
   if ((await ctx.db.get(userId))?.is_bot) throw new Error("Undo and redo are human only");
   const original = await requireBatch(ctx, userId, args.batch);
+  // "Redo is undo of the undo": an undo or redo entry stands for the entry it
+  // took back or applied again, so a verb on it is the matching verb on that
+  // entry, and the record keeps one chain. A struck one is already answered.
+  if (original.gesture === "undo" || original.gesture === "redo") {
+    if (!!original.undone_by !== redo) return { batch: original._id, already_applied: true };
+    let root = original;
+    while ((root.gesture === "undo" || root.gesture === "redo") && root.undoes) root = await requireBatch(ctx, userId, root.undoes);
+    return performUndo(ctx, userId, { ...args, batch: String(root._id) }, original.gesture === "undo" ? !redo : redo);
+  }
   if (!redo && original.undone_by) return { batch: original.undone_by.batch, already_applied: true };
   if (redo && !original.undone_by) return { batch: original._id, already_applied: true };
   const plan = await planUndo(ctx, userId, args.batch, args.with);
