@@ -19,6 +19,7 @@ function install(overrides: Record<string, any> = {}) {
     account_login: "union-ai",
     repository_selection: "selected",
     repositories: [repo(1, "union-ai/union-web")],
+    updated_at: 1,
     ...overrides,
   };
 }
@@ -134,7 +135,7 @@ describe("backfillInstallationPulls", () => {
   });
 
   test("a narrowed pass reads only the repositories named", async () => {
-    const { ctx, calls } = harness(install(), { "union-ai/union-mobile": [pull(3262, "open")] });
+    const { ctx, calls } = harness(install({ repositories: [repo(1, "union-ai/union-web"), repo(2, "union-ai/union-mobile")] }), { "union-ai/union-mobile": [pull(3262, "open")] });
     await (backfillInstallationPulls as any)._handler(ctx, { installation_id: 42, repositories: ["union-ai/union-mobile"] });
     const listed = calls.filter((c) => c.name.includes("listPulls")).map((c) => c.args.repository);
     expect(new Set(listed)).toEqual(new Set(["union-ai/union-mobile"]));
