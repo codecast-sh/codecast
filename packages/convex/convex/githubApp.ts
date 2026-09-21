@@ -9,7 +9,16 @@ import { Doc, Id } from "./_generated/dataModel";
 import { isTeamMember } from "./privacy";
 import { requireUser } from "./lib/auth";
 import { normalizeRepository, repositoryOwner } from "./lib/gitRefs";
-import { parseOwnerRepo } from "@codecast/shared/contracts";
+import {
+  parseOwnerRepo,
+  parseGithubAppInstallState,
+  newGithubAppInstallNonce,
+  githubAppInstallUrlFor,
+  isAppConnectionScope,
+  GITHUB_INSTALL_INTENT_TTL_MS,
+  type AppConnectionScope,
+} from "@codecast/shared/contracts";
+import { sha256Hex } from "./lib/hash";
 import { activeTeamMembershipFor, requireTeamAdmin, requireTeamMembership, effectiveTeamForResource } from "./lib/access";
 
 const GITHUB_API_BASE = "https://api.github.com";
@@ -248,6 +257,235 @@ function installationScopeKey(row: { team_id?: Id<"teams">; scope_user_id?: Id<"
   return row.team_id ? `team:${row.team_id}` : row.scope_user_id ? `user:${row.scope_user_id}` : "none";
 }
 
+/* ==========================================================================
+ * Install intents — who the callback is allowed to bind an installation to
+ * ========================================================================== */
+//
+// GitHub sends the install callback to a public URL and echoes back whatever
+// `state` the install link carried. That state used to name the Codecast user
+// and team the installation would bind to, so anyone who could write a state
+// could choose the workspace an installation landed in — their own, for
+// someone else's organisation, or a colleague's team for an installation they
+// controlled. Identity now comes from an intent this server minted for an
+// authenticated caller; the state is only the nonce that finds it.
+
+/** The install URL for the caller, minting the intent the callback reads back.
+ *  Takes `api_token` for the same reason every other connect action does: the
+ *  CLI reaches this flow, and a second URL builder is the drift that would let
+ *  the two disagree about what a callback carries. */
+export const getInstallUrl = action({
+  args: { scope: v.optional(v.string()), api_token: v.optional(v.string()) },
+  handler: async (ctx, args): Promise<{ ok: boolean; url?: string; error?: string }> => {
+    const scope: AppConnectionScope = isAppConnectionScope(args.scope) ? args.scope : "team";
+    const me: any = await ctx.runQuery(internal.oauthConnectors.resolveTeam, { api_token: args.api_token });
+    if (!me?.user_id) return { ok: false, error: "not signed in" };
+    if (scope === "team" && !me.team_id) {
+      return { ok: false, error: "Join or create a team first, or install the GitHub App for yourself" };
+    }
+    const nonce = newGithubAppInstallNonce();
+    const intent: { ok: boolean; error?: string } = await ctx.runMutation(internal.githubApp.createInstallIntent, {
+      nonce_hash: await sha256Hex(nonce),
+      user_id: me.user_id,
+      scope,
+      team_id: scope === "team" ? me.team_id : undefined,
+    });
+    if (!intent.ok) return { ok: false, error: intent.error };
+    return { ok: true, url: githubAppInstallUrlFor(process.env.GITHUB_APP_SLUG || "codecast-sh", nonce) };
+  },
+});
+
+export const createInstallIntent = internalMutation({
+  args: {
+    nonce_hash: v.string(),
+    user_id: v.id("users"),
+    scope: v.union(v.literal("team"), v.literal("personal")),
+    team_id: v.optional(v.id("teams")),
+  },
+  handler: async (ctx, args): Promise<{ ok: boolean; error?: string }> => {
+    if ((args.scope === "team") !== !!args.team_id) {
+      return { ok: false, error: "An install binds to exactly one of a team or a person" };
+    }
+    // Membership is checked here AND when the intent is spent: an intent minted
+    // an hour ago by someone since removed from the team must not still bind.
+    if (args.team_id && !(await isTeamMember(ctx, args.user_id, args.team_id))) {
+      return { ok: false, error: "Join or create a team first, or install the GitHub App for yourself" };
+    }
+    const now = Date.now();
+    await ctx.db.insert("github_app_install_intents", {
+      nonce_hash: args.nonce_hash,
+      user_id: args.user_id,
+      scope: args.scope,
+      team_id: args.team_id,
+      created_at: now,
+      expires_at: now + GITHUB_INSTALL_INTENT_TTL_MS,
+    });
+    return { ok: true };
+  },
+});
+
+/** Spend an intent: single use, unexpired, and its authority still current.
+ *  Consuming and checking happen in one mutation, so two callbacks racing the
+ *  same nonce cannot both bind. */
+export const consumeInstallIntent = internalMutation({
+  args: { nonce_hash: v.string() },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<
+    { ok: true; user_id: Id<"users">; scope: AppConnectionScope; team_id?: Id<"teams"> } | { ok: false; error: string }
+  > => {
+    const intent = await ctx.db
+      .query("github_app_install_intents")
+      .withIndex("by_nonce_hash", (q) => q.eq("nonce_hash", args.nonce_hash))
+      .first();
+    if (!intent) return { ok: false, error: "unknown_intent" };
+    if (intent.consumed_at) return { ok: false, error: "intent_already_used" };
+    const now = Date.now();
+    if (now > intent.expires_at) {
+      await ctx.db.delete(intent._id);
+      return { ok: false, error: "intent_expired" };
+    }
+    await ctx.db.patch(intent._id, { consumed_at: now });
+    if (intent.scope === "team") {
+      if (!intent.team_id || !(await isTeamMember(ctx, intent.user_id, intent.team_id))) {
+        return { ok: false, error: "not_a_team_member" };
+      }
+    }
+    return { ok: true, user_id: intent.user_id, scope: intent.scope, team_id: intent.team_id };
+  },
+});
+
+/* ==========================================================================
+ * The install callback
+ * ========================================================================== */
+
+const GITHUB_OAUTH_TOKEN_URL = "https://github.com/login/oauth/access_token";
+
+/**
+ * Does the person who came back from GitHub actually control this
+ * installation? The App's own credentials can read ANY installation of the
+ * App, so fetching one proves nothing about the caller. GitHub's answer is the
+ * user-token flow: the install redirect carries a `code` (the App requests
+ * user authorization during installation), which exchanges for a token that
+ * speaks for that GitHub user, and `GET /user/installations` lists only the
+ * installations that user may administer.
+ *
+ * With no client pair configured there is no way to ask the question, so the
+ * install refuses. A binding nobody proved is the finding this closes.
+ */
+export async function verifyInstallerControlsInstallation(
+  installationId: number,
+  code: string | null,
+): Promise<{ ok: true; login?: string } | { ok: false; error: string }> {
+  const clientId = process.env.GITHUB_APP_CLIENT_ID;
+  const clientSecret = process.env.GITHUB_APP_CLIENT_SECRET;
+  if (!clientId || !clientSecret) return { ok: false, error: "install_verification_unconfigured" };
+  if (!code) return { ok: false, error: "install_not_authorized" };
+
+  const tokenResponse = await fetch(GITHUB_OAUTH_TOKEN_URL, {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify({ client_id: clientId, client_secret: clientSecret, code }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  const token = tokenResponse.ok ? (await tokenResponse.json().catch(() => null))?.access_token : null;
+  if (typeof token !== "string" || !token) return { ok: false, error: "install_not_authorized" };
+
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+  for (let page = 1; page <= 5; page++) {
+    const response = await fetch(`${GITHUB_API_BASE}/user/installations?per_page=100&page=${page}`, { headers });
+    if (!response.ok) return { ok: false, error: "install_verification_failed" };
+    const data = await response.json().catch(() => null);
+    const installations = Array.isArray(data?.installations) ? data.installations : [];
+    const match = installations.find((i: any) => Number(i?.id) === installationId);
+    if (match) return { ok: true, login: typeof match.account?.login === "string" ? match.account.login : undefined };
+    if (installations.length < 100) break;
+  }
+  return { ok: false, error: "installer_does_not_control_installation" };
+}
+
+/** Where the callback sends the browser, with whatever it has to report. */
+function installRedirect(query: string): Response {
+  const site = process.env.SITE_URL || "https://codecast.sh";
+  return new Response(null, {
+    status: 302,
+    headers: { Location: `${site}/settings/integrations/github-app${query}` },
+  });
+}
+
+export async function installCallbackHandler(ctx: any, request: Request): Promise<Response> {
+  const url = new URL(request.url);
+  const installationId = url.searchParams.get("installation_id");
+  const setupAction = url.searchParams.get("setup_action");
+
+  if (!installationId) return new Response("Missing installation_id", { status: 400 });
+  if (setupAction !== "install" && setupAction !== "update") return installRedirect("");
+
+  const nonce = parseGithubAppInstallState(url.searchParams.get("state"));
+  if (!nonce) return installRedirect("?error=missing_intent");
+
+  try {
+    // Ownership before the intent is spent: a GitHub hiccup should cost the
+    // caller a retry of the same link, not a new one.
+    const proof = await verifyInstallerControlsInstallation(parseInt(installationId), url.searchParams.get("code"));
+    if (!proof.ok) {
+      console.warn("[github-app install] refused", { reason: proof.error, installation_id: installationId });
+      return installRedirect(`?error=${proof.error}`);
+    }
+
+    const intent = await ctx.runMutation(internal.githubApp.consumeInstallIntent, {
+      nonce_hash: await sha256Hex(nonce),
+    });
+    if (!intent.ok) {
+      console.warn("[github-app install] refused", { reason: intent.error, installation_id: installationId });
+      return installRedirect(`?error=${intent.error}`);
+    }
+
+    const installationDetails = await ctx.runAction(internal.githubApp.fetchInstallationDetails, {
+      installation_id: parseInt(installationId),
+    });
+
+    await ctx.runMutation(internal.githubApp.storeInstallation, {
+      team_id: intent.scope === "team" ? intent.team_id : undefined,
+      scope_user_id: intent.scope === "personal" ? intent.user_id : undefined,
+      installation_id: installationDetails.installation_id,
+      account_login: installationDetails.account_login,
+      account_type: installationDetails.account_type,
+      account_id: installationDetails.account_id,
+      repository_selection: installationDetails.repository_selection,
+      repositories: installationDetails.repositories,
+      installed_by_user_id: intent.user_id,
+    });
+
+    // The audit line, identifiers redacted: enough to trace a grant back to
+    // the intent that authorised it, never enough to be one.
+    console.log("[github-app install] bound", {
+      outcome: "ok",
+      scope: intent.scope,
+      actor: String(intent.user_id).slice(0, 6),
+      workspace: String(intent.team_id ?? intent.user_id).slice(0, 6),
+      installation_id: installationDetails.installation_id,
+      account_login: installationDetails.account_login,
+      verified_login: proof.login,
+    });
+
+    // The pull requests that already exist on the account arrive now, not
+    // one webhook at a time as people happen to touch them.
+    await ctx.scheduler.runAfter(0, internal.githubApp.backfillInstallationPulls, {
+      installation_id: installationDetails.installation_id,
+    });
+
+    return installRedirect("?success=true");
+  } catch (error) {
+    console.error("Failed to process GitHub App installation:", error);
+    return installRedirect("?error=installation_failed");
+  }
+}
+
 export const storeInstallation = internalMutation({
   args: {
     /** Exactly one of these: the team the install binds to, or the person
@@ -268,11 +506,11 @@ export const storeInstallation = internalMutation({
     installed_by_user_id: v.optional(v.id("users")),
   },
   handler: async (ctx, args) => {
-    // The callback's install `state` is client-supplied and unsigned, so it
-    // names identity, never authority: a team install binds only if the named
-    // installer actually belongs to that team, and a personal install binds
-    // only to the installer themself. Blocks binding your GitHub installation
-    // to a team you're not in, or to another person.
+    // The callback resolves the installer from a consumed install intent, so
+    // these checks are the second reading of the same authority: a team
+    // install binds only if the installer belongs to that team, and a personal
+    // install binds only to the installer themself. Any future caller of this
+    // mutation inherits the rule rather than being trusted.
     if (!!args.team_id === !!args.scope_user_id) {
       throw new Error("An installation binds to exactly one of a team or a person");
     }

@@ -25,6 +25,7 @@ import {
   editorPage,
 } from "./artifactPages";
 import { renderMarkdownDocument, restyleMarkdownDocument } from "./artifactMarkdown";
+import { sha256Hex, passwordHash, kTokenFor, eTokenFor } from "./lib/artifactGates";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -117,26 +118,6 @@ async function slugRateLimited(
 }
 
 export const corsPreflight = httpAction(async () => new Response(null, { status: 204, headers: CORS }));
-
-async function sha256Hex(s: string): Promise<string> {
-  const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s)));
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-async function passwordHash(password: string, slug: string): Promise<string> {
-  return await sha256Hex(`${password}:${slug}`);
-}
-
-/** Deterministic unlock token — knowing it ≈ knowing the password, and it
- * rotates when the password changes. Deterministic so the ?k= URL stays a
- * stable cache key. */
-async function kTokenFor(password_hash: string, slug: string): Promise<string> {
-  return (await sha256Hex(`${password_hash}:${slug}`)).slice(0, 24);
-}
-
-async function eTokenFor(owner_key: string, slug: string): Promise<string> {
-  return (await sha256Hex(`${owner_key}:emailgate:${slug}`)).slice(0, 24);
-}
 
 /** The public https origin of this deployment. TLS terminates at the proxy in
  * front of us, so request.url says http — force https for any non-local host
@@ -727,24 +708,25 @@ export const sourceForWeb = action({
 export const comment = httpAction(async (ctx, request) => {
   try {
     const body = await request.json();
-    // Unauthenticated, and it DELIVERS TEXT INTO A LIVE AGENT SESSION — the
-    // one endpoint where flooding is both cheap and consequential.
-    // Roomier than the old 6/min: replies post one at a time, and delivery
-    // into the session is owner-gated anyway — the flood risk is discussion
-    // spam, not agent injection.
-    const limited = await slugRateLimited(ctx, String(body.slug ?? ""), "artifact-comment", 12, 60_000);
-    if (limited) return limited;
     // "Send all": flush stored-but-undelivered comments to the session.
     // Owner-only — the mutation checks the key.
     if (body.deliver_pending === true) {
+      const limited = await slugRateLimited(ctx, String(body.slug ?? ""), "artifact-flush", 12, 60_000);
+      if (limited) return limited;
       const flushed = await ctx.runMutation(api.artifacts.deliverPendingComments, {
         slug: String(body.slug ?? ""),
         owner_key: typeof body.owner_key === "string" ? body.owner_key : undefined,
       });
       return json(flushed);
     }
+    // No limiter here: submitComments counts the window itself, in the same
+    // transaction as the insert. A pre-check at this layer would be a second
+    // transaction, spend the budget twice, and still not be atomic.
     const result = await ctx.runMutation(api.artifacts.submitComments, {
       slug: String(body.slug ?? ""),
+      // The gates the page cleared, echoed back for the mutation to re-check.
+      k: typeof body.k === "string" ? body.k : undefined,
+      e: typeof body.e === "string" ? body.e : undefined,
       author_name: String(body.author_name ?? ""),
       author_email: typeof body.author_email === "string" ? body.author_email : undefined,
       version: typeof body.version === "number" ? body.version : 0,
@@ -791,6 +773,8 @@ export const view = httpAction(async (ctx, request) => {
     await ctx.runMutation(api.artifacts.recordView, {
       slug: String(body.slug ?? ""),
       email: typeof body.email === "string" ? body.email : undefined,
+      k: typeof body.k === "string" ? body.k : undefined,
+      e: typeof body.e === "string" ? body.e : undefined,
     });
     return json({ ok: true });
   } catch {

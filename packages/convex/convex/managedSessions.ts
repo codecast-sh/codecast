@@ -121,14 +121,20 @@ export async function performRegisterManagedSession(
     if (existing && existing.user_id.toString() !== authUserId.toString() && !existing.conversation_id) {
       return { notOwner: true as const };
     }
-    if (args.device_id) {
-      const device = await ctx.db.query("devices")
+    // Only a device this caller owns may be stamped as the conversation's
+    // runner. An UNKNOWN device is not somebody else's device: the daemon's
+    // first heartbeat is what creates the row, and a boot or an account switch
+    // can register a session before that beat lands. Refusing there loses the
+    // session entirely, so the registration proceeds and only the ownership
+    // stamp waits for a device we can confirm.
+    const ownedDevice = args.device_id
+      ? await ctx.db.query("devices")
         .withIndex("by_user_device", (q: any) => q.eq("user_id", authUserId).eq("device_id", args.device_id))
-        .first();
-      if (!device) throw new Error("Unknown device");
-    }
+        .first()
+      : null;
+    const stampDeviceId = ownedDevice ? args.device_id : undefined;
 
-    if (args.device_id && effectiveConversationId) {
+    if (stampDeviceId && effectiveConversationId) {
       const conv = await ctx.db.get(effectiveConversationId);
       const owner = (conv as any)?.owner_device_id as string | undefined;
       if (owner && owner !== args.device_id) {
@@ -160,13 +166,13 @@ export async function performRegisterManagedSession(
           ...(args.tmux_session !== undefined ? { tmux_session: args.tmux_session } : {}),
           ...(effectiveConversationId ? { conversation_id: effectiveConversationId } : {}),
         });
-        if (args.device_id && effectiveConversationId) {
+        if (stampDeviceId && effectiveConversationId) {
           // Registering a live local process for this conversation disproves any
           // "couldn't start / no local checkout - clone it first" banner stamped
           // before the session came up. Piggyback the clear on the ownership patch
           // we already write (no extra read/write). setSessionError handles the
           // reverse: refusing to WRITE such a banner while the session is live.
-          await ctx.db.patch(effectiveConversationId, { owner_device_id: args.device_id, session_error: undefined });
+          await ctx.db.patch(effectiveConversationId, { owner_device_id: stampDeviceId, session_error: undefined });
         }
         return existing._id;
       }
@@ -204,8 +210,8 @@ export async function performRegisterManagedSession(
     // Claim ownership: stamp this device as the conversation's owner. Also clear
     // any stale "no local checkout" banner — a fresh local process disproves it
     // (see the matching patch on the re-registration path above).
-    if (args.device_id && effectiveConversationId) {
-      await ctx.db.patch(effectiveConversationId, { owner_device_id: args.device_id, session_error: undefined });
+    if (stampDeviceId && effectiveConversationId) {
+      await ctx.db.patch(effectiveConversationId, { owner_device_id: stampDeviceId, session_error: undefined });
     }
 
     return id;

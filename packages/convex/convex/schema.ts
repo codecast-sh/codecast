@@ -1540,6 +1540,8 @@ export default defineSchema({
     // Secret inputs bound on a host: which machine, and the hash of the path.
     bindings: v.optional(v.record(v.string(), v.object({ host: v.string(), path_hash: v.string(), bound_at: v.number() }))),
     ledgers: v.optional(v.record(v.string(), v.object({ taskId: v.string(), shortId: v.string() }))),
+    // The routines' triggers on the host's receipt, so the role page can show and activate them (H8).
+    routines: v.optional(v.record(v.string(), v.object({ triggerId: v.optional(v.string()), external: v.optional(v.boolean()), retired: v.optional(v.boolean()) }))),
     // The instance's own record (orgTemplateState): written by the role with
     // sources a person can open, read by readiness and the role page.
     evidence: v.optional(v.record(v.string(), v.object({ status: v.union(v.literal("pass"), v.literal("fail")), observed_at: v.number(), source: v.string(), detail: v.optional(v.record(v.string(), v.string())) }))),
@@ -4044,6 +4046,23 @@ export default defineSchema({
     .index("by_scope_user", ["scope_user_id"])
     .index("by_installation_id", ["installation_id"])
     .index("by_account_login", ["account_login"]),
+
+  // An install the server agreed to before GitHub was ever asked: who clicked
+  // Install, at which scope, and for how long the answer stays valid. The
+  // install URL carries only the nonce (hashed here, so the row is not itself
+  // a bearer token), and the callback reads the principal back from this row
+  // rather than from the request it was handed.
+  github_app_install_intents: defineTable({
+    nonce_hash: v.string(),
+    user_id: v.id("users"),
+    scope: v.union(v.literal("team"), v.literal("personal")),
+    team_id: v.optional(v.id("teams")),
+    created_at: v.number(),
+    expires_at: v.number(),
+    // Set the moment a callback spends it. A second callback carrying the same
+    // nonce is a replay and binds nothing.
+    consumed_at: v.optional(v.number()),
+  }).index("by_nonce_hash", ["nonce_hash"]),
 
   github_installation_tokens: defineTable({
     installation_id: v.number(),
