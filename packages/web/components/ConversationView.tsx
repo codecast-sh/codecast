@@ -3848,12 +3848,9 @@ const ConversationViewInner = (
                     the pill): the live tmux badge is how you reach the
                     terminal split, which simple view users still want. */}
                 <span data-simple-dim className="contents [.simple-view_&]:inline-flex [.simple-view_&]:items-center">
-                  <TmuxAttachPill tmuxSession={managedSession?.tmux_session} isLive={isSessionLive} conversationKey={conversation?._id.toString()} />
+                  <TmuxAttachPill tmuxSession={managedSession?.tmux_session} agentType={conversation?.agent_type} isLive={isSessionLive} conversationKey={conversation?._id.toString()} />
                 </span>
 
-                {/* Runs on a remote host whose daemon is struggling: say so
-                    here, on the session it actually affects — the header
-                    fleet chip deliberately ignores remote machines. */}
                 {conversation?._id && !guest && <span data-cc-keep className="contents"><SessionDaemonChip conversationId={String(conversation._id)} /></span>}
 
                 {sessionGalleryImages.length > 0 && <SessionGalleryButton images={sessionGalleryImages} />}

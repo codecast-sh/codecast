@@ -47,10 +47,12 @@ import { useWatchEffect } from "../hooks/useWatchEffect";
 
 export function TmuxAttachPill({
   tmuxSession,
+  agentType,
   isLive,
   conversationKey,
 }: {
   tmuxSession?: string | null;
+  agentType?: string | null;
   isLive: boolean;
   /** Enables open-as-split and the machine lookup; without it the pill falls back to copy-only. */
   conversationKey?: string;
@@ -69,7 +71,7 @@ export function TmuxAttachPill({
     else if (p && tmuxSession && p !== tmuxSession) setAnim("tmux-pill-change"); // restart moved it
   }, [tmuxSession]);
 
-  if (!tmuxSession) return null;
+  if (!tmuxSession && agentType !== "codex") return null;
 
   const machineName = machine ? deviceDisplayName(machine as any) : null;
   const foreign = !!machine && !machine.is_mine;
@@ -95,29 +97,36 @@ export function TmuxAttachPill({
   const canSplit = !!conversationKey && !!tmuxSession && !foreign;
   const splitOpen = !!conversationKey && isConversationTerminalOpen(conversationKey);
 
-  const pillColors = isLive
+  const paneLive = !!tmuxSession && isLive;
+  const pillColors = paneLive
     ? "bg-sol-green/10 text-sol-green border-sol-green/30 hover:bg-sol-green/20"
     : "bg-gray-500/10 text-gray-400 border-gray-500/25 hover:bg-gray-500/20";
-  const borderColor = isLive ? "border-sol-green/30" : "border-gray-500/25";
+  const borderColor = paneLive ? "border-sol-green/30" : "border-gray-500/25";
 
   return (
     <span className={`inline-flex items-stretch rounded-full border overflow-hidden ${borderColor} ${anim ?? ""}`} onAnimationEnd={() => setAnim(null)}>
       <ShortcutTooltip
         label={
-          canSplit
-            ? splitOpen
-              ? "Hide this agent's terminal"
-              : "Watch this agent's terminal (opens above the conversation)"
-            : copyLabel
+          !tmuxSession
+            ? "No tmux terminal attached. Codex app-server sessions run without one; continue the session here in Codecast."
+            : canSplit
+              ? splitOpen
+                ? "Hide this agent's terminal"
+                : "Watch this agent's terminal (opens above the conversation)"
+              : copyLabel
         }
         side="bottom"
       >
         <button
+          type="button"
+          aria-disabled={!tmuxSession}
+          aria-label={!tmuxSession ? "No tmux terminal attached" : undefined}
           onClick={() => {
+            if (!tmuxSession) return;
             if (canSplit) toggleConversationTerminal(conversationKey!, tmuxSession);
             else copyAttach();
           }}
-          className={`inline-flex items-center gap-1 pl-2 pr-1.5 py-0.5 text-[10px] font-medium transition-colors border-0 ${pillColors} ${splitOpen ? "bg-sol-green/25" : ""}`}
+          className={`inline-flex items-center gap-1 pl-2 pr-1.5 py-0.5 text-[10px] font-medium transition-colors border-0 ${pillColors} ${splitOpen ? "bg-sol-green/25" : ""} ${!tmuxSession ? "cursor-default" : ""}`}
         >
           <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
@@ -125,7 +134,7 @@ export function TmuxAttachPill({
           {/* Naming the machine is what makes the pill honest at a glance — a
               bare "tmux" reads as "here" no matter where the pane really is. */}
           <span className="cq-sq2">{foreign ? machineName : "tmux"}</span>
-          <DeviceDot online={isLive} />
+          {tmuxSession && <DeviceDot online={isLive} />}
         </button>
       </ShortcutTooltip>
       {canSplit && (
