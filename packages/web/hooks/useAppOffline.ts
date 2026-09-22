@@ -8,6 +8,15 @@ import { useWatchEffect } from "./useWatchEffect";
 // a stalled CONNECTING. navigator.onLine flips false for a moment on every
 // network change, so it is a hint, not a verdict — same grace.
 export const DISCONNECT_GRACE_MS = WEBSOCKET_HANDSHAKE_TIMEOUT_MS + 5_000;
+// The OS flag can also be wrong for the life of the process: Chromium reads
+// the interface list at startup and again only when reachability flips, so an
+// app launched while a link renegotiates (2026-09-21: the desktop app
+// relaunched two seconds before en0 had an address) reports no network until
+// it is relaunched. The socket is the verdict. The Convex client drops a
+// socket after 60s of server silence (WebSocketManager.serverInactivityThreshold),
+// so a socket still up that long after the OS said offline proves the flag stale.
+const CONVEX_SERVER_INACTIVITY_MS = 60_000;
+export const STALE_OS_OFFLINE_MS = CONVEX_SERVER_INACTIVITY_MS + 15_000;
 
 export type AppOffline = { offline: boolean; online: boolean };
 
@@ -45,7 +54,8 @@ export function connectionChipCopy({ offline, online }: AppOffline): ConnectionC
 /**
  * Is this client running from local cache right now? True when the OS
  * reports no network, or the Convex WebSocket has been down past the grace
- * period. Drives the ConnectionBanner (OS-offline card only) and the header
+ * period. An OS flag that stays offline while the socket outlives the server
+ * inactivity threshold is stale and stops counting. Drives the ConnectionBanner (OS-offline card only) and the header
  * LED, and suppresses banners that would misattribute our own lost
  * connection to something else (e.g. the CLI daemon looking stale merely
  * because nothing can sync).
@@ -64,11 +74,12 @@ export function useAppOffline(): AppOffline {
   );
   const wsDown = !wsConnected;
 
-  const [online, setOnline] = useState(() => navigator.onLine);
+  const [osOnline, setOsOnline] = useState(() => navigator.onLine);
+  const [osFlagStale, setOsFlagStale] = useState(false);
   const [downLong, setDownLong] = useState(false);
 
   useMountEffect(() => {
-    const sync = () => setOnline(navigator.onLine);
+    const sync = () => setOsOnline(navigator.onLine);
     window.addEventListener("online", sync);
     window.addEventListener("offline", sync);
     return () => {
@@ -77,6 +88,20 @@ export function useAppOffline(): AppOffline {
     };
   });
 
+  useWatchEffect(() => {
+    if (osOnline) {
+      setOsFlagStale(false);
+      return;
+    }
+    if (wsDown) return;
+    const t = setTimeout(() => {
+      console.warn(`[useAppOffline] navigator.onLine has said offline for ${STALE_OS_OFFLINE_MS}ms while the Convex socket stayed up; treating the OS flag as stale`);
+      setOsFlagStale(true);
+    }, STALE_OS_OFFLINE_MS);
+    return () => clearTimeout(t);
+  }, [osOnline, wsDown]);
+
+  const online = osOnline || osFlagStale;
   const down = wsDown || !online;
   useWatchEffect(() => {
     if (!down) {
