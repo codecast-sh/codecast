@@ -182,7 +182,7 @@ jobs:
 
       - name: Unit tests (convex package)
         working-directory: packages/convex
-        run: bun test convex/
+        run: bun test convex/ scripts/
 
   test-web:
     needs: [code_paths]

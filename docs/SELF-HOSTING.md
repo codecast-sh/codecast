@@ -526,13 +526,19 @@ cat your-app.pem | base64 | tr -d '\n'
 npx convex env set GITHUB_APP_ID "your-app-id"
 npx convex env set GITHUB_APP_PRIVATE_KEY "base64-encoded-pem"
 npx convex env set GITHUB_APP_WEBHOOK_SECRET "your-webhook-secret"
+npx convex env set GITHUB_APP_SLUG "codecast-yourorg"
+
+# The App's OAuth client pair, from the same settings page. The install
+# callback exchanges the `code` GitHub sends for a user token and asks
+# GET /user/installations whether that person administers the installation.
+# Without this pair an install cannot be verified, and is refused.
+npx convex env set GITHUB_APP_CLIENT_ID "Iv1...."
+npx convex env set GITHUB_APP_CLIENT_SECRET "your-app-client-secret"
 ```
 
-Set the app slug in the web app so install links work:
-```bash
-# In packages/web/.env.local
-VITE_GITHUB_APP_SLUG=codecast-yourorg
-```
+In the App's settings, turn ON **Request user authorization (OAuth) during
+installation**. That is what makes GitHub send the `code` the callback needs;
+with it off, every install is refused as unverified.
 
 ### Install
 
@@ -607,6 +613,9 @@ If neither is set, semantic search is disabled but full-text search still works.
 | `GITHUB_APP_ID` | For PR integration | GitHub App numeric ID |
 | `GITHUB_APP_PRIVATE_KEY` | For PR integration | GitHub App RSA private key (base64) |
 | `GITHUB_APP_WEBHOOK_SECRET` | For PR integration | Webhook signature verification |
+| `GITHUB_APP_SLUG` | For PR integration | GitHub App install link |
+| `GITHUB_APP_CLIENT_ID` | For PR integration | Verifies who completes an install |
+| `GITHUB_APP_CLIENT_SECRET` | For PR integration | Verifies who completes an install |
 
 ### Convex Backend Service (Railway env vars)
 
@@ -622,7 +631,6 @@ If neither is set, semantic search is disabled but full-text search still works.
 |----------|----------|---------|
 | `VITE_CONVEX_URL` | Yes | Convex backend URL |
 | `PORT` | No (default: 3000) | Server listen port |
-| `VITE_GITHUB_APP_SLUG` | For PR integration | GitHub App install link |
 | `VITE_SENTRY_DSN` | No | Error tracking |
 | `VITE_POSTHOG_KEY` | No | Product analytics |
 | `VITE_POSTHOG_HOST` | No | PostHog ingest host |
