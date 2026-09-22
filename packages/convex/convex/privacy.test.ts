@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { profileConversationVisible, buildShareUpdate, buildPathRestampUpdate, resolveCreationPrivacy, isConversationTeamVisible, canOwnerOrTeamAccess } from "./privacy";
+import { profileConversationVisible, buildShareUpdate, buildPathRestampUpdate, resolveCreationPrivacy, isConversationTeamVisible, canOwnerOrTeamAccess, createTeamFeedFilter, getProfileVisibilityPredicate, resolveVisibilityMode } from "./privacy";
 import { makeFakeDb } from "./testDb";
 
 // Regression for the profile-feed privacy leak: a teammate's profile page
@@ -398,5 +398,61 @@ describe("canOwnerOrTeamAccess — canonical owner definition plus team visibili
   test("no share-token tier: a minted token grants nothing here", async () => {
     const tokened = { ...privateConvRow, share_token: "tok" };
     expect(await canOwnerOrTeamAccess(ctxWith({}), "u_stranger" as any, tokened)).toBe(false);
+  });
+});
+
+// "Share in full going forward" (teamVisibility.ts): the owner's membership
+// carries a history, and a session started before a boundary is read at the
+// level it had. Every surface that decides a conversation's level must read
+// the history, not the bare membership level.
+describe("membership visibility history is read per conversation", () => {
+  const owner = "u_owner";
+  const pinnedMembership = {
+    _id: "m1", user_id: owner, team_id: "t1",
+    visibility: "full",
+    visibility_history: [{ before: 1_000, visibility: "hidden" }],
+  };
+  const oldConv = { user_id: owner, team_id: "t1", is_private: false, started_at: 500 } as any;
+  const newConv = { user_id: owner, team_id: "t1", is_private: false, started_at: 1_500 } as any;
+
+  test("isConversationTeamVisible hides the session started before the boundary and shows the later one", async () => {
+    const ctx = { db: makeFakeDb({ team_memberships: [pinnedMembership] }) } as any;
+    expect(await isConversationTeamVisible(ctx, oldConv)).toBe(false);
+    expect(await isConversationTeamVisible(ctx, newConv)).toBe(true);
+  });
+
+  test("the feed filter answers per conversation, and its member-level answer is the current level", async () => {
+    const ctx = { db: makeFakeDb({ team_memberships: [pinnedMembership] }) } as any;
+    const filter = await createTeamFeedFilter(ctx, "t1" as any);
+    expect(filter.isVisible(oldConv)).toBe(false);
+    expect(filter.isVisible(newConv)).toBe(true);
+    expect(filter.getVisibilityFor(oldConv)).toBe("hidden");
+    expect(filter.getVisibilityFor(newConv)).toBe("full");
+    expect(filter.getVisibility(owner)).toBe("full");
+  });
+
+  test("a teammate's profile view follows the same split", async () => {
+    const ctx = {
+      db: makeFakeDb({
+        team_memberships: [pinnedMembership, { _id: "m2", user_id: "u_viewer", team_id: "t1", visibility: "summary" }],
+      }),
+    } as any;
+    const visible = await getProfileVisibilityPredicate(ctx, "u_viewer" as any, owner as any, "t1" as any);
+    expect(visible(oldConv)).toBe(false);
+    expect(visible(newConv)).toBe(true);
+  });
+
+  test("a pinned summary past reads as summary while new sessions read full", async () => {
+    const ctx = {
+      db: makeFakeDb({
+        team_memberships: [{ ...pinnedMembership, visibility_history: [{ before: 1_000, visibility: "summary" }] }],
+      }),
+    } as any;
+    const filter = await createTeamFeedFilter(ctx, "t1" as any);
+    expect(filter.isVisible(oldConv)).toBe(true);
+    expect(resolveVisibilityMode(undefined, filter.getVisibilityFor(oldConv), true)).toBe("summary");
+    expect(resolveVisibilityMode(undefined, filter.getVisibilityFor(newConv), true)).toBe("full");
+    // A conversation's own override still wins over the membership split.
+    expect(resolveVisibilityMode("full", filter.getVisibilityFor(oldConv), true)).toBe("full");
   });
 });

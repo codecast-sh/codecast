@@ -7,7 +7,6 @@ import { Check, Users } from "lucide-react";
 import { Logo } from "../../../components/Logo";
 import { AppLoader } from "../../../components/AppLoader";
 import { TeamCrest } from "../../../components/team/TeamCrest";
-import { adoptPathIntoActiveTab } from "../../../src/compat/tabRouting";
 import { useSwitchWorkspace } from "../../../hooks/useSwitchWorkspace";
 import "../../../components/team/teamFlow.css";
 
@@ -138,10 +137,7 @@ export default function JoinTeamPage() {
 
   const isAlreadyMember = currentUser?.team_id?.toString() === teamInfo?._id.toString();
 
-  const goTo = (path: string) => {
-    adoptPathIntoActiveTab(path);
-    router.push(path);
-  };
+  const goTo = (path: string) => router.push(path);
 
   const handleJoinTeam = async () => {
     if (!currentUser?._id) return;
