@@ -313,6 +313,14 @@ export function ApiErrorCard({ error, agentType, conversationId, timestamp, comp
         to retry now.
       </p>
     );
+  } else if (error.isContext) {
+    heading = "Context limit reached";
+    icon = (
+      <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+        <path d="M4 6h16M4 12h16M4 18h10" strokeLinecap="round" />
+      </svg>
+    );
+    hint = <ContextParkActions conversationId={conversationId} />;
   } else if (error.isConnection) {
     heading = "Connection dropped";
     icon = (
@@ -385,7 +393,52 @@ export function ApiErrorCard({ error, agentType, conversationId, timestamp, comp
         <p className="mt-1.5 text-xs text-sol-text-dim">
           The session continued after this — nothing to do here.
         </p>
-      ) : !compact && hint}
+      ) : (!compact || error.isContext) && hint}
+    </div>
+  );
+}
+
+// The way out of a full context window is a slash command typed into the
+// session, so the card's actions send exactly what the terminal offers:
+// /compact keeps a summary of the conversation, /clear drops it. Both go
+// through the ordinary send path, the same one the model switcher uses for
+// /model; the daemon types a slash command into the pane and Claude Code runs
+// it. Shown in every feed density — without the buttons the card would only
+// restate the terminal's banner, and the whole point is to act from here.
+function ContextParkActions({ conversationId }: { conversationId?: string }) {
+  const send = (command: "/compact" | "/clear") => {
+    if (!conversationId) return;
+    const store = useInboxStore.getState();
+    store.sendMessage(conversationId, command);
+    store.markBlockedReviveRequested([conversationId]);
+  };
+  const button = "rounded px-2 py-0.5 text-[11px] font-semibold";
+  return (
+    <div className="mt-1.5 flex items-center gap-x-3 gap-y-1 flex-wrap text-xs text-sol-text-dim">
+      <span className="min-w-0 flex-1">
+        The agent cannot take another turn until the history is compacted or cleared. A plain retry sends the same
+        oversized prompt again.
+      </span>
+      {conversationId && (
+        <span className="ml-auto flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={() => send("/compact")}
+            title="Send /compact — replaces the conversation so far with a summary and keeps going"
+            className={`${button} bg-amber-500 text-sol-bg hover:bg-amber-400`}
+          >
+            Compact
+          </button>
+          <button
+            type="button"
+            onClick={() => send("/clear")}
+            title="Send /clear — drops the conversation history and starts fresh in this session"
+            className={`${button} border border-amber-500/40 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10`}
+          >
+            Clear
+          </button>
+        </span>
+      )}
     </div>
   );
 }

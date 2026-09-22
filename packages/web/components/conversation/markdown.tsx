@@ -9,6 +9,8 @@ import { entityRemarkPlugins } from "../../lib/remarkEntityIds";
 import { MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS, USER_MD_REMARK } from "../messageMarkdown";
 import { HighlightContext } from "../HighlightContext";
 import { MD_COMPONENTS_NO_IMG } from "../../lib/conversationMarkdown";
+import { compactionProgressMessage } from "../../lib/compactionProgress";
+import { CompactionProgressCard } from "./CompactionProgressCard";
 
 function extractTextFromHast(node: any): string {
   if (!node) return '';
@@ -120,6 +122,10 @@ const USER_PLAIN_TEXT_THRESHOLD = 4000;
 
 export const MessageMarkdown = memo(function MessageMarkdown({ content, userText }: { content: string; userText?: boolean }) {
   const query = useContext(HighlightContext);
+  // Claude's compaction screen sometimes lands as the message body (a status
+  // line, a block bar, a tip). Paint it as a progress row.
+  const compaction = compactionProgressMessage(content);
+  if (compaction) return <CompactionProgressCard progress={compaction} />;
   // An all-HTML body renders as a sanitized canvas — the markdown pipeline
   // escapes raw tags into garbled source.
   const html = tryRenderHtmlMessage(content);

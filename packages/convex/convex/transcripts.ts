@@ -63,6 +63,7 @@ import {
 import { requireAccessibleDoc } from "./lib/access";
 import { verifyApiToken } from "./apiTokens";
 import { enqueuePush } from "./pushRouter";
+import { postEvent } from "./callChat";
 
 export { asrTranscriptionSession };
 
@@ -113,7 +114,12 @@ export function withDefaultRoutes(roomKey: string, routes: Route[]): Route[] {
  *
  *  A new row is stamped with the session's newest assistant message: the
  *  watermark the mirror advances from, so what the agent said before the
- *  huddle is never replayed into it. */
+ *  huddle is never replayed into it.
+ *
+ *  The room's thread learns who came and went from this same diff: a row
+ *  inserted is an agent joining (credited to whoever added the route), a row
+ *  deleted while the transcript is live is an agent leaving. The wipe at the
+ *  end of a call writes nothing: the call ended, nobody left. */
 export async function syncAgentFeeds(ctx: any, t: Doc<"transcripts">): Promise<void> {
   const existing: Doc<"call_agent_feeds">[] = await ctx.db
     .query("call_agent_feeds")
@@ -132,8 +138,20 @@ export async function syncAgentFeeds(ctx: any, t: Doc<"transcripts">): Promise<v
     }
   }
   for (const row of existing) {
-    if (wanted.has(String(row.conversation_id))) wanted.delete(String(row.conversation_id));
-    else await ctx.db.delete(row._id);
+    if (wanted.has(String(row.conversation_id))) {
+      wanted.delete(String(row.conversation_id));
+      continue;
+    }
+    await ctx.db.delete(row._id);
+    if (t.status === "live") {
+      await postEvent(ctx, {
+        room_key: t.room_key,
+        team_id: t.team_id,
+        user_id: row.added_by,
+        event: "agent_left",
+        agent_conversation_id: row.conversation_id,
+      });
+    }
   }
   for (const { conversationId, addedBy } of wanted.values()) {
     const newest = await ctx.db
@@ -150,6 +168,13 @@ export async function syncAgentFeeds(ctx: any, t: Doc<"transcripts">): Promise<v
       team_id: t.team_id,
       added_by: addedBy,
       last_mirrored_message_id: newest?._id,
+    });
+    await postEvent(ctx, {
+      room_key: t.room_key,
+      team_id: t.team_id,
+      user_id: addedBy,
+      event: "agent_joined",
+      agent_conversation_id: conversationId,
     });
   }
 }
@@ -240,6 +265,12 @@ export const start = mutation({
       })),
       last_seq: 0,
     });
+    // A fresh run somebody PRESSED for is news to the room; a joining
+    // window's auto start is every huddle's ordinary breath, and which client
+    // won that race says nothing worth a line.
+    if (!args.auto) {
+      await postEvent(ctx, { room_key: args.room_key, team_id: auth.teamId, user_id: userId, event: "transcribe_on" });
+    }
     await syncAgentFeeds(ctx, (await ctx.db.get(id))!);
     return { transcript_id: id, existing: false, role: "scribe" };
   },
@@ -442,8 +473,42 @@ export const flush = mutation({
       transcript_id: t._id,
       include_after_routes: args.force === true,
     });
+    await claimRollingSummary(ctx, t, Date.now());
   },
 });
+
+// The recap while the call is live: at least this long since the last run,
+// and at least this many new words since it, before another run is worth
+// the model call. Each run reads the whole transcript so far.
+export const ROLLING_SUMMARY_GAP_MS = 90_000;
+export const ROLLING_SUMMARY_MIN_WORDS = 120;
+
+function countWords(texts: string[]): number {
+  return texts.reduce((n, text) => n + text.split(/\s+/).filter(Boolean).length, 0);
+}
+
+/** Schedule a rolling recap of a live huddle if enough has been said since
+ *  the last one. The claim (summary_at, summary_seq) is written in the same
+ *  mutation as the schedule, so two flushes landing together cannot both
+ *  run it. A recording has no thread to show a recap in, and its summary is
+ *  written once at the end like today. */
+export async function claimRollingSummary(ctx: any, t: Doc<"transcripts">, now: number): Promise<boolean> {
+  if (t.status !== "live" || isRecRoomKey(t.room_key)) return false;
+  if (now - (t.summary_at ?? t.started_at) < ROLLING_SUMMARY_GAP_MS) return false;
+  const since = t.summary_seq ?? 0;
+  if (t.last_seq <= since) return false;
+  const fresh: Doc<"transcript_segments">[] = await ctx.db
+    .query("transcript_segments")
+    .withIndex("by_transcript_seq", (q: any) => q.eq("transcript_id", t._id).gt("seq", since))
+    .collect();
+  if (countWords(fresh.map((s) => s.text)) < ROLLING_SUMMARY_MIN_WORDS) return false;
+  await ctx.db.patch(t._id, { summary_at: now, summary_seq: t.last_seq });
+  await ctx.scheduler.runAfter(0, internal.transcripts.generateSummary, {
+    transcript_id: t._id,
+    rolling: true,
+  });
+  return true;
+}
 
 /**
  * Has a recording's own lease gone stale?
@@ -682,6 +747,7 @@ export const getForSummary = internalQuery({
     return {
       title: t.title,
       room_key: t.room_key,
+      status: t.status,
       started_at: t.started_at,
       ended_at: t.ended_at,
       participants: t.participants ?? [],
@@ -701,10 +767,24 @@ export const setSummary = internalMutation({
     title: v.optional(v.string()),
     summary: v.optional(v.string()),
     action_items: v.optional(v.array(v.string())),
+    // A recap of a call still going (claimRollingSummary). It refreshes the
+    // summary and action items and nothing else: the status, the title, the
+    // digest and the push all belong to the end of the call. A rolling run
+    // that lands after the call ended is stale by definition and writes
+    // nothing, so it can never overwrite the final summary.
+    rolling: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const t = await ctx.db.get(args.transcript_id);
     if (!t) return;
+    if (args.rolling) {
+      if (t.status !== "live" || args.summary_status !== "done") return;
+      await ctx.db.patch(t._id, {
+        ...(args.summary ? { summary: args.summary } : {}),
+        ...(args.action_items ? { action_items: args.action_items } : {}),
+      });
+      return;
+    }
     // The first terminal write for this run. `endTranscript` (and, for a
     // recording, `attachRecording`) put the row at "pending" exactly once, so
     // this is what makes the digest below post once however many times the
@@ -803,20 +883,23 @@ async function scheduleHuddleDigest(
 }
 
 export const generateSummary = internalAction({
-  args: { transcript_id: v.id("transcripts") },
+  args: { transcript_id: v.id("transcripts"), rolling: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     const t = await ctx.runQuery(internal.transcripts.getForSummary, {
       transcript_id: args.transcript_id,
     });
     if (!t) return;
-    const wordCount = t.lines.reduce(
-      (n: number, l: { text: string }) => n + l.text.split(/\s+/).length,
-      0,
-    );
+    // A rolling run claimed while the call was live and read after it ended
+    // would recap a finished call as if it were still going; the end of the
+    // call has its own run.
+    const rolling = args.rolling === true;
+    if (rolling && t.status !== "live") return;
+    const wordCount = countWords(t.lines.map((l: { text: string }) => l.text));
     if (wordCount < SUMMARY_MIN_WORDS) {
       await ctx.runMutation(internal.transcripts.setSummary, {
         transcript_id: args.transcript_id,
         summary_status: "skipped",
+        rolling,
       });
       return;
     }
@@ -825,6 +908,7 @@ export const generateSummary = internalAction({
       await ctx.runMutation(internal.transcripts.setSummary, {
         transcript_id: args.transcript_id,
         summary_status: "failed",
+        rolling,
       });
       return;
     }
@@ -846,7 +930,7 @@ export const generateSummary = internalAction({
       : null;
     const source = isRecording
       ? `This is the transcript of a meeting recorded on ONE microphone in the room${durationMin ? `, about ${durationMin} min` : ""}. Voices are NOT separated and nobody is identified: attribute something to a person only when the words themselves name them, and otherwise write about what was said, not who said it.`
-      : `This is the transcript of a team huddle (voice call)${durationMin ? `, about ${durationMin} min` : ""}. Speakers are exactly attributed.`;
+      : `This is the transcript of a team huddle (voice call)${durationMin ? `, about ${durationMin} min` : ""}${rolling ? ", still going: summarize what has been said so far" : ""}. Speakers are exactly attributed.`;
     try {
       const response = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
@@ -883,6 +967,7 @@ ${text}`,
       await ctx.runMutation(internal.transcripts.setSummary, {
         transcript_id: args.transcript_id,
         summary_status: "done",
+        rolling,
         title: typeof parsed.title === "string" ? parsed.title.slice(0, 120) : undefined,
         summary: typeof parsed.summary === "string" ? parsed.summary.slice(0, 2000) : undefined,
         action_items: Array.isArray(parsed.action_items)
@@ -896,6 +981,7 @@ ${text}`,
       await ctx.runMutation(internal.transcripts.setSummary, {
         transcript_id: args.transcript_id,
         summary_status: "failed",
+        rolling,
       });
     }
   },

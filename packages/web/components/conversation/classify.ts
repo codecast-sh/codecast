@@ -1,6 +1,6 @@
 import { isCommandMessage, isStrippedCommand, isSkillExpansion, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName, isCodexTurnAbortedMessage } from "../../lib/conversationProcessor";
 import { isPollResponsePayload } from "@codecast/shared/contracts";
-import { classifyApiErrorBanner, isNoResponseStub, CLIENT_ERROR_BANNER_PREFIX, parseDecisionAnswer, isAgentSwitchNotice, parseAgentSwitchNotice, isMachineSwitchNotice, parseMachineSwitchNotice, isModelSwitchCommandName, isModelSwitchStdout, modelSwitchStdoutLabel } from "@codecast/shared/contracts";
+import { classifyApiErrorBanner, isNoResponseStub, CLIENT_ERROR_BANNER_PREFIX, parseDecisionAnswer, isSessionEscalationMessage, parseSessionEscalation, isAgentSwitchNotice, parseAgentSwitchNotice, isMachineSwitchNotice, parseMachineSwitchNotice, isModelSwitchCommandName, isModelSwitchStdout, modelSwitchStdoutLabel } from "@codecast/shared/contracts";
 import { isAskTool, isPlanWriteToolCall, isShellTool } from "@codecast/shared/render";
 import { isRoleWakeFrame, parseRoleWakeFrame } from "../roleWake";
 import { isBackgroundBashToolCall, parseTaskNotificationBlock } from "../monitorRows";
@@ -121,6 +121,9 @@ export function parseApiErrorContent(content?: string | null): ParsedApiError | 
   const isConnection = bannerKind === "connection";
   const isThrottle = bannerKind === "throttle";
   const isFatal = bannerKind === "fatal";
+  if (bannerKind === "context") {
+    return { message: "The conversation no longer fits in the model's context window.", isContext: true };
+  }
   const match = trimmed.match(/^API Error:\s*(\d{3})\s*([\s\S]*)$/i);
   if (!isAuth && !isLimit && !isConnection && !isThrottle && !isFatal && !match) return null;
 
@@ -327,6 +330,10 @@ export function classifyUserMessage(
   if (isRoleWakeFrame(tNoReminders)) {
     const frame = parseRoleWakeFrame(tNoReminders);
     if (frame) return { kind: 'role_wake', frame };
+  }
+  if (isSessionEscalationMessage(tNoReminders)) {
+    const escalation = parseSessionEscalation(tNoReminders);
+    if (escalation) return { kind: 'session_escalation', escalation };
   }
   const sessionMsg = parseInboundSessionMessage(t);
   if (sessionMsg) {
