@@ -1,4 +1,4 @@
-import { CollapsibleImage, ImageRowParagraph } from "../components/tools/MarkdownRenderer";
+import { CollapsibleImage, ImageRowParagraph } from "../components/tools/MarkdownImages";
 import { EntityAwareCode, EntityAwareLink } from "../components/EntityIdPill";
 import { MESSAGE_MD_COMPONENTS, renderMarkdownPre } from "../components/messageMarkdown";
 

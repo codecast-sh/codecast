@@ -11,7 +11,7 @@
 import rehypeHighlight from "rehype-highlight";
 import remarkBreaks from "remark-breaks";
 import { entityRemarkPlugins } from "../lib/remarkEntityIds";
-import { CollapsibleImage, ImageRowParagraph } from "./tools/MarkdownRenderer";
+import { CollapsibleImage, ImageRowParagraph } from "./tools/MarkdownImages";
 import { EntityAwareCode, EntityAwareLink } from "./EntityIdPill";
 import { CodeBlock } from "./CodeBlock";
 import { tryRenderCastDiff } from "./InlineDiff";
