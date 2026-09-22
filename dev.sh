@@ -128,11 +128,13 @@ check_rapid_restarts() {
     fi
 }
 
-# The convex dev watcher pushes whole-tree snapshots to PROD on every save: a
-# tree behind origin/main deletes newer functions and routes from prod (the
-# 2026-07-15 reparent-route outage). Never start the watcher from a stale tree.
-# Offline (fetch fails), judge by the last-known origin/main rather than
-# blocking local dev.
+# The convex pusher (packages/convex/scripts/gated-push.ts, behind `bun run
+# dev`) pushes whole-tree snapshots to PROD: a tree behind origin/main deletes
+# newer functions and routes from prod (the 2026-07-15 reparent-route outage).
+# Never start it from a stale tree; it re-checks freshness before every push
+# too, and only pushes a tree that has been quiet and typechecks whole (a raw
+# `convex dev` shipped a half-saved edit on 2026-09-21). Offline (fetch fails),
+# judge by the last-known origin/main rather than blocking local dev.
 convex_tree_is_fresh() {
     git -C "$ROOT_DIR" fetch origin --quiet 2>/dev/null || true
     git -C "$ROOT_DIR" merge-base --is-ancestor origin/main HEAD 2>/dev/null
