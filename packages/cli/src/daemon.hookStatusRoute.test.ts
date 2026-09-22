@@ -97,3 +97,45 @@ describe("hook status wire coercion", () => {
     expect(out.turn_completed_at).toBeUndefined();
   });
 });
+
+// LOCAL-02, second half. handleStatusData applied the launch fence and
+// returned, but the sink around it went on to persist the record and schedule
+// a transcript ingestion anyway — so a REJECTED hook post still did work. The
+// route itself is exercised in daemon.hookIngress.test.ts; these guard the
+// shape of the sink, which closes over a thousand lines of daemon state and
+// cannot be lifted out of it.
+describe("the hook status sink", () => {
+  const sink = src.slice(src.indexOf("setHookStatusSink((sessionId, data) => {"));
+  const body = sink.slice(0, sink.indexOf("\n  });"));
+
+  test("admission comes first, and a rejection returns before any effect", () => {
+    const admitAt = body.indexOf("admitHookPost(sessionId, data)");
+    expect(admitAt).toBeGreaterThan(-1);
+    expect(body.slice(admitAt, admitAt + 60)).toContain("return");
+    for (const effect of ["persistHookStatus(sessionId, data)", "handleStatusData(sessionId, data)", "sync.invalidate()"]) {
+      expect(body.indexOf(effect), effect).toBeGreaterThan(admitAt);
+    }
+  });
+
+  test("the transcript is resolved from the session, not taken from the post", () => {
+    expect(body).toContain("hookTranscriptFor(sessionId, data)");
+    expect(body).not.toContain("data.transcript_path ||");
+  });
+});
+
+// A hook post names a transcript, and that path decides which file is read and
+// attributed to the session. Only this session's own transcript is believed.
+describe("hook transcript resolution", () => {
+  const fn = src.slice(src.indexOf("function hookTranscriptFor("));
+
+  test("it compares the basename against the session id", () => {
+    const guard = fn.slice(0, fn.indexOf("return claudeTranscriptFor"));
+    expect(guard).toContain("path.basename(supplied)");
+    expect(guard).toContain("${sessionId}.jsonl");
+  });
+
+  test("an unmatched path falls back to the session file index rather than being used", () => {
+    const returns = fn.slice(0, fn.indexOf("\n  }\n")).match(/return [^;]+;/g) ?? [];
+    expect(returns).toEqual(["return supplied;", "return claudeTranscriptFor(sessionId);"]);
+  });
+});
