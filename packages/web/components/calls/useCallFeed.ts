@@ -49,12 +49,14 @@ export function openFeedTargetPicker(opts: {
       title: opts.title,
       kinds: ["session", "doc"],
       notePlaceholder: opts.withNote ? "Tell the agent what to do with it (optional)" : undefined,
-      confirmLabel: feed ? "Feed" : "Send",
+      confirmLabel: feed ? "Add" : "Send",
       extras: [
         {
           key: "new-session",
-          label: feed ? "Feed a new agent session" : "Send to a new agent session",
-          description: "Spawns an agent that reads along and replies here",
+          label: feed ? "A new agent session" : "Send to a new agent session",
+          description: feed
+            ? "Hears the room and answers here"
+            : "Spawns an agent that reads along and replies here",
           icon: "sparkles",
           primary: true,
         },
@@ -62,7 +64,7 @@ export function openFeedTargetPicker(opts: {
           ? []
           : [{ key: "new-doc", label: "Save as a new doc", icon: "doc" as const }]),
         ...(opts.showSlack
-          ? [{ key: "slack", label: "Feed the Slack channel id typed above", icon: "slack" as const, needsQuery: true }]
+          ? [{ key: "slack", label: "The Slack channel id typed above", icon: "slack" as const, needsQuery: true }]
           : []),
       ],
       onPick: (t: PalettePickTarget, r: PalettePickResult) => {
@@ -163,7 +165,7 @@ export function useSendExcerpt() {
         day: "numeric",
       });
       await store.createDoc({
-        title: excerpt.title ? `${excerpt.title} — huddle notes` : `Huddle notes · ${when}`,
+        title: excerpt.title ? `${excerpt.title} · huddle notes` : `Huddle notes · ${when}`,
         content: excerptBody(excerpt, note),
       });
       return null;
@@ -222,12 +224,12 @@ export function useAddLiveFeed(opts: {
           // run, so when that ended there is nothing left to point words at.
           throw new Error(
             isRecRoomKey(roomKey)
-              ? "That recording has ended — its words are already saved"
+              ? "That recording has ended. Its words are already saved."
               : "Join the huddle to start its transcription",
           );
         }
         if (!(await startTranscribing(roomKey, [{ ...route, mode: "live" }]))) {
-          throw new Error("Somebody else is transcribing this huddle — pick the feed again once their words show here");
+          throw new Error("Somebody else is transcribing this huddle. Pick the feed again once their words show here.");
         }
       };
       try {
@@ -239,7 +241,7 @@ export function useAddLiveFeed(opts: {
         if (target.kind === "new-session") {
           (useInboxStore.getState() as any).sendMessage(
             route.target,
-            "The huddle feed could not be attached — no transcript will arrive. Disregard the briefing above.",
+            "The huddle feed could not be attached, so no transcript will arrive. Disregard the briefing above.",
           );
         }
         throw err;

@@ -71,8 +71,8 @@ export function TranscribeSwitch({ live, className = "" }: { live: boolean; clas
       } ${className}`}
       title={
         on
-          ? "Transcribing. Click to stop for the whole huddle; the words so far stay on the call page."
-          : "Not transcribing. Click to start; every word lands here and on the call page."
+          ? "Transcribing. Click to stop for the whole huddle; the words so far stay in this thread."
+          : "Not transcribing. Click to start; every word lands in this thread."
       }
     >
       <span className={`h-1.5 w-1.5 rounded-full ${on ? "bg-sol-green animate-pulse" : "bg-sol-text-dim"}`} />

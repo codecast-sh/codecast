@@ -13,12 +13,18 @@
 //     chat is a way to talk to the agent in text while the huddle runs.
 // Both ride the transcript's own delivery identity: the agent speaks in the
 // room as whoever fed it, the way its transcript chunks arrive as them.
+//
+// THE ROOM SEES WHO CAME AND WENT. An agent added or removed, transcription
+// switched on or off: each is a row in this same thread with `event` set
+// (postEvent), so the timeline reads in one order with the words and the
+// typed lines. An event row is nobody's line: it is never relayed to the fed
+// sessions and never "mine".
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { internalMutation, mutation, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { huddleChatLineHeader } from "@codecast/shared/contracts";
+import { huddleChatLineHeader, isRecRoomKey } from "@codecast/shared/contracts";
 import { authorizeRoom } from "./callRooms";
 import { MAX_ATTACHMENTS } from "./chatText";
 
@@ -71,22 +77,54 @@ export const list = query({
     return rows.map((r) => {
       const u = users.get(String(r.user_id))!;
       const agent = r.agent_conversation_id ? agents.get(String(r.agent_conversation_id)) ?? null : null;
+      // An event row names its ACTOR (the person who added the agent or
+      // pressed the switch) and carries the agent beside it, so the room can
+      // read "Ada added Team huddle". An agent's own line is the agent's: its
+      // name is the session's, and it is never "mine" however the row is
+      // owned.
+      const spoken = agent && !r.event;
       return {
         _id: r._id,
         user_id: String(r.user_id),
-        // An agent's line is the agent's: its name is the session's, and it
-        // is never "mine" however the row is owned.
-        user_name: agent ? agent.title : u.name,
-        user_image: agent ? undefined : u.image,
+        user_name: spoken ? agent.title : u.name,
+        user_image: spoken ? undefined : u.image,
         text: r.text,
         attachments: r.attachments,
         at: r._creationTime,
-        mine: !agent && String(r.user_id) === String(userId),
+        mine: !agent && !r.event && String(r.user_id) === String(userId),
         agent,
+        event: (r.event ?? null) as RoomEvent | null,
       };
     });
   },
 });
+
+export type RoomEvent = "agent_joined" | "agent_left" | "transcribe_on" | "transcribe_off";
+
+/** Something the room saw, as a row in its thread: an agent came or went,
+ *  transcription went on or off. `user_id` is who did it. A recording has no
+ *  room and no thread (callChat.list refuses a rec key), so nothing is
+ *  written for one. Returns the row id, or null when nothing was written. */
+export async function postEvent(
+  ctx: any,
+  args: {
+    room_key: string;
+    team_id?: Id<"teams">;
+    user_id: Id<"users">;
+    event: RoomEvent;
+    agent_conversation_id?: Id<"conversations">;
+  },
+): Promise<Id<"call_chat_messages"> | null> {
+  if (isRecRoomKey(args.room_key)) return null;
+  return await ctx.db.insert("call_chat_messages", {
+    room_key: args.room_key,
+    team_id: args.team_id,
+    user_id: args.user_id,
+    text: "",
+    event: args.event,
+    ...(args.agent_conversation_id ? { agent_conversation_id: args.agent_conversation_id } : {}),
+  });
+}
 
 type AgentIdentity = {
   conversation_id: string;
