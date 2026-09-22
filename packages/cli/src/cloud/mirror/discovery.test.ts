@@ -147,6 +147,26 @@ test("nested environment files and native build trees cannot enter through refer
   expect(collectProjectContext({ root, home }).files).toEqual([]);
 });
 
+test("a doc naming a build directory does not ship it; a hook that requires a file there still does", async () => {
+  write("src/repo/docs/guide.md", `Run ${root}/packages/cli/dist/main.js after a build.\n`);
+  write("src/repo/packages/cli/dist/main.js", "compiled");
+  write("src/repo/packages/cli/dist/helper.tar", "archive");
+  expect(collectProjectContext({ root, home }).files.map((f) => f.relativePath)).toEqual(["docs/guide.md"]);
+  write("src/repo/.claude/settings.json", JSON.stringify({ statusLine: { command: `bash '${root}/packages/cli/dist/status.sh'` } }));
+  write("src/repo/packages/cli/dist/status.sh", "#!/bin/sh\n");
+  expect(collectProjectContext({ root, home }).files.map((f) => f.relativePath).sort()).toEqual([".claude/settings.json", "docs/guide.md", "packages/cli/dist/status.sh"]);
+});
+
+test("marketplace clones, bundled skills, install staging and trashed skills stay home; installed plugins and live skills travel", async () => {
+  const runtime = [".grok/marketplace-cache/11f3bbe6/demo.gif", ".grok/marketplace-cache/11f3bbe6/.claude-plugin/marketplace.json", ".grok/bundled/skills/a/SKILL.md",
+    ".codex/plugins/.remote-plugin-install-staging/x/SKILL.md", ".claude/skills/.trash/1789952314586-77452/setup/SKILL.md", ".claude/plugins/plugin-catalog-cache.json", ".cursor/statsig-cache.json"];
+  for (const file of runtime) write(file, "runtime");
+  write(".claude/skills/live/SKILL.md", "portable skill");
+  write(".codex/plugins/cache/org/plugin/skills/a/SKILL.md", "installed plugin");
+  const inv = await collectMirrorFiles({ home, hostHome: "/home/u", config: { cloud_mirror_include: ".grok/marketplace-cache/11f3bbe6/demo.gif,.claude/skills/.trash" } });
+  expect(inv.entries.map((e) => e.path)).toEqual([".claude/skills/live/SKILL.md", ".codex/plugins/cache/org/plugin/skills/a/SKILL.md"]);
+});
+
 test("unreadable source context fails but inaccessible prose examples are reported", async () => {
   write(".claude/skills/readme/SKILL.md", "Example: ~/src/agent-scripts/private.sh\n");
   write("src/agent-scripts/private.sh", "private");
@@ -284,6 +304,17 @@ test("required hooks fail if credentials or a deny rule prevent copying their de
   await expect(collectMirrorFiles({ home, hostHome: "/home/u" })).rejects.toThrow("active context reference is denied");
   write("src/repo/.claude/settings.json", JSON.stringify({ statusLine: { command: `${home}/.railway/hook.sh` } }));
   await expect(collectProjectContextAsync({ root, home })).rejects.toThrow("active context reference is denied");
+});
+
+test("the daemon's statusline hook stays home: the settings keep the command, the file does not travel, and no reference is required", async () => {
+  write(".claude/settings.json", JSON.stringify({ statusLine: { type: "command", command: `${home}/.claude/hooks/codecast-statusline.sh`, padding: 0 } }));
+  write(".claude/hooks/codecast-statusline.sh", "#!/bin/sh\necho status\n");
+  write(".claude/hooks/mine.sh", "#!/bin/sh\n");
+  const inv = await collectMirrorFiles({ home, hostHome: "/home/u" });
+  expect(inv.entries.map((e) => e.path)).toEqual([".claude/hooks/mine.sh", ".claude/settings.json"]);
+  expect(inv.warnings.some((w) => w.includes("codecast-statusline"))).toBe(false);
+  const wire = transformForHost(".claude/settings.json", inv.entries.find((e) => e.path === ".claude/settings.json")!.bytes, { fromHome: home, toHome: "/home/u" })!;
+  expect((parseJsonLoose(wire.toString("utf8")) as { statusLine: { command: string } }).statusLine.command).toBe("/home/u/.claude/hooks/codecast-statusline.sh");
 });
 
 test("host-owned hooks removed by the settings transform are not required source dependencies", async () => {

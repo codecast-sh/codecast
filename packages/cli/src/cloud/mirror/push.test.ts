@@ -6,8 +6,8 @@ import { sshBase, type RemoteHost } from "../../remote/session-move";
 import { mirrorForPrepare } from "../prepare";
 import { MIRROR_MAGIC, buildMirrorBundle, parseMirrorBundle, type BuiltBundle } from "./bundle";
 import {
-  MIRROR_APPLY_COMMAND, NOT_LOGGED_IN_REASON, OLDER_HOST_REASON, buildHomeMirror, hostKey, mirrorHomeToHost, pushMirrorToHostAsync, readLocalStamps, runMirrorTick,
-  writeLocalStamps, type LocalMirrorStamps, type MirrorDeps, type MirrorPushOutcome,
+  MIRROR_APPLY_COMMAND, MIRROR_REFUSAL_RETRY_MS, MIRROR_RETRY_MS, MirrorSourceCache, NOT_LOGGED_IN_REASON, OLDER_HOST_REASON, buildHomeMirror, failureRetryDelayMs, hostKey, mirrorHomeToHost, pushMirrorToHostAsync, readLocalStamps, resetBuildCache, runMirrorTick,
+  writeLocalStamps, type BuildHomeMirrorOptions, type LocalMirrorStamps, type MirrorDeps, type MirrorPushOutcome,
 } from "./push";
 
 let dir: string;
@@ -44,6 +44,7 @@ beforeEach(() => {
   savedEnv = { ...process.env };
   dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "mirror-push-")));
   installFakeSsh();
+  resetBuildCache();
 });
 
 afterEach(() => {
@@ -174,6 +175,28 @@ describe("mirrorHomeToHost", () => {
     const flaky: LocalMirrorStamps = { "ubuntu@cloud-test.invalid": { hash: "", at: "t", last_failure: { reason: "ssh exploded", at: "t", hash: "H1" } } };
     await mirrorHomeToHost(host, { deps: deps(flaky, pushes) });
     expect(pushes).toHaveLength(4);
+  });
+
+  test("a host that kept its own edits counts as delivered: no retry on the fast tick, one log line, and the verify tick offers the file again", async () => {
+    const pushes: string[] = [];
+    const logs: string[] = [];
+    const stamps: LocalMirrorStamps = {};
+    const kept = { ...deps(stamps, pushes, { pushed: true, hash: "H1", hostEdited: [".claude/projects/p/memory/MEMORY.md"], result: { hash: "H1", applied: ["a"], unchanged: 0, host_edited: [".claude/projects/p/memory/MEMORY.md"], pruned: [], errors: [] } }), listHosts: async () => [host], log: (m: string) => logs.push(m), loggedFailures: new Set<string>() };
+    expect(await runMirrorTick({ reason: "start", verifyRemote: true }, kept)).toMatchObject({ pushed: [hostKey(host)], failed: [] });
+    expect(stamps[hostKey(host)]).toMatchObject({ hash: "H1" });
+    expect(logs.filter((l) => l.includes("host kept its own edits of .claude/projects/p/memory/MEMORY.md"))).toHaveLength(1);
+    expect(await runMirrorTick({ reason: "fast", onlyIfChanged: true }, kept)).toMatchObject({ skipped: [hostKey(host)], pushed: [] });
+    expect(pushes).toHaveLength(1);
+    // The verify tick reads the host stamp (incomplete while an edit is kept) and pushes again, logging nothing new.
+    expect(await runMirrorTick({ reason: "periodic", verifyRemote: true }, kept)).toMatchObject({ pushed: [hostKey(host)] });
+    expect(pushes).toHaveLength(2);
+    expect(logs.filter((l) => l.includes("host kept its own edits"))).toHaveLength(1);
+  });
+
+  test("a failure reason that cannot clear on its own is not retried by the fast tick", () => {
+    expect(failureRetryDelayMs("ssh exploded")).toBe(MIRROR_RETRY_MS);
+    expect(failureRetryDelayMs("other_device")).toBe(MIRROR_REFUSAL_RETRY_MS);
+    expect(failureRetryDelayMs("x: remote edit conflict")).toBe(Number.POSITIVE_INFINITY);
   });
 
   test("no local memory of the host (a new address after a wake): the host's own stamp is read first, and an in-step host costs no upload", async () => {
@@ -319,6 +342,94 @@ describe("runMirrorTick", () => {
   });
 });
 
+describe("the change ledger between ticks", () => {
+  const hostA: RemoteHost = { ...host, address: "a.invalid" };
+  const hostB: RemoteHost = { ...host, address: "b.invalid", user: "codecast", homeDir: "/Users/codecast", remoteBaseDir: "/Users/codecast/work" };
+  const gitEnv = { GIT_CONFIG_GLOBAL: "/nonexistent/gitconfig", GIT_CONFIG_NOSYSTEM: "1" };
+  const later = (file: string) => { const t = new Date(Date.now() + 5_000); fs.utimesSync(file, t, t); };
+
+  function realDeps(home: string) {
+    const stamps: LocalMirrorStamps = {};
+    const pushes: string[] = [];
+    const builds: BuildHomeMirrorOptions[] = [];
+    let lastHash = "";
+    const deps: Partial<MirrorDeps> = {
+      listHosts: async () => [hostA, hostB],
+      build: async (o) => { builds.push(o); const b = await buildHomeMirror({ ...o, home, deviceId: "d", gitEnv }); lastHash = b.hash; return b; },
+      push: async (h) => { pushes.push(hostKey(h)); return { pushed: true, hash: lastHash, result: { hash: lastHash, applied: ["a"], unchanged: 0, host_edited: [], pruned: [], errors: [] } }; },
+      readStamp: async () => null,
+      readLocalStamps: () => stamps,
+      writeLocalStamps: (s) => { Object.assign(stamps, s); },
+      readConfig: () => ({ user_id: "u" }),
+      log: () => {},
+      now: () => new Date(),
+      loggedFailures: new Set(),
+    };
+    return { deps, stamps, pushes, builds };
+  }
+
+  test("an unchanged home answers a tick from the last hash without a build; an edit or a new file builds and ships again", async () => {
+    const home = path.join(dir, "home");
+    const claude = path.join(home, ".claude/CLAUDE.md");
+    fs.mkdirSync(path.join(home, ".claude/skills/one"), { recursive: true });
+    fs.writeFileSync(claude, "rules v1\n");
+    fs.writeFileSync(path.join(home, ".claude/skills/one/SKILL.md"), "skill\n");
+    const t = realDeps(home);
+    const tick = () => runMirrorTick({ reason: "mirror_changed", onlyIfChanged: true }, t.deps);
+
+    expect(await tick()).toMatchObject({ pushed: ["ubuntu@a.invalid", "codecast@b.invalid"], failed: [] });
+    expect(t.builds).toHaveLength(2);
+    expect(t.pushes).toHaveLength(2);
+    // Both hosts of one tick share one collection.
+    expect(t.builds[0]!.sources).toBeInstanceOf(MirrorSourceCache);
+    expect(t.builds[1]!.sources).toBe(t.builds[0]!.sources);
+    expect(await t.builds[0]!.sources!.inventory).toBeDefined();
+
+    // Nothing changed: the hash is answered from the ledger, so no build, no push, and the hosts are in step.
+    expect(await tick()).toEqual({ pushed: [], skipped: ["ubuntu@a.invalid", "codecast@b.invalid"], failed: [] });
+    expect(t.builds).toHaveLength(2);
+    expect(t.pushes).toHaveLength(2);
+
+    fs.writeFileSync(claude, "rules v2\n");
+    later(claude);
+    expect(await tick()).toMatchObject({ pushed: ["ubuntu@a.invalid", "codecast@b.invalid"] });
+    expect(t.builds).toHaveLength(4);
+    expect(t.pushes).toHaveLength(4);
+
+    fs.mkdirSync(path.join(home, ".claude/skills/two"));
+    fs.writeFileSync(path.join(home, ".claude/skills/two/SKILL.md"), "another\n");
+    later(path.join(home, ".claude/skills"));
+    expect(await tick()).toMatchObject({ pushed: ["ubuntu@a.invalid", "codecast@b.invalid"] });
+    expect(t.builds).toHaveLength(6);
+
+    // A verify tick always builds, so an edit the ledger missed still ships within the period.
+    expect(await runMirrorTick({ reason: "periodic", verifyRemote: true }, t.deps)).toMatchObject({ failed: [] });
+    expect(t.builds).toHaveLength(8);
+  });
+
+  test("force rebuilds past the ledger, and a build that throws forgets the cached hash", async () => {
+    const home = path.join(dir, "home");
+    fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+    fs.writeFileSync(path.join(home, ".claude/CLAUDE.md"), "rules\n");
+    const t = realDeps(home);
+    await mirrorHomeToHost(hostA, { onlyIfChanged: true, deps: t.deps });
+    expect(t.builds).toHaveLength(1);
+    await mirrorHomeToHost(hostA, { force: true, deps: t.deps });
+    expect(t.builds).toHaveLength(2);
+    expect(t.pushes).toHaveLength(2);
+
+    fs.writeFileSync(path.join(home, ".claude/settings.json"), "{ not json");
+    later(path.join(home, ".claude"));
+    await expect(mirrorHomeToHost(hostA, { onlyIfChanged: true, deps: t.deps })).rejects.toThrow();
+    expect(t.stamps["ubuntu@a.invalid"]!.last_failure).toBeDefined();
+    fs.writeFileSync(path.join(home, ".claude/settings.json"), "{}");
+    later(path.join(home, ".claude/settings.json"));
+    await mirrorHomeToHost(hostA, { onlyIfChanged: true, deps: t.deps });
+    expect(t.builds).toHaveLength(4);
+    expect(t.pushes).toHaveLength(3);
+  });
+});
+
 describe("mirrorForPrepare", () => {
   test("disabled mirror attempts nothing; a throwing or partial push blocks prepare and logs", async () => {
     const calls: string[] = [];
@@ -399,7 +510,6 @@ test("partial results and false hashes never make a local stamp current; source 
   };
   for (const result of [
     { hash: "H1", applied: [], unchanged: 0, host_edited: [], pruned: [], errors: [{ path: "x", error: "blocked" }] },
-    { hash: "H1", applied: [], unchanged: 0, host_edited: ["x"], pruned: [], errors: [] },
     { hash: "wrong", applied: [], unchanged: 0, host_edited: [], pruned: [], errors: [] },
   ]) {
     const r = await mirrorHomeToHost(host, { deps: { ...base, push: async () => ({ pushed: true, hash: result.hash, result }) } });
@@ -407,6 +517,12 @@ test("partial results and false hashes never make a local stamp current; source 
     expect(stamps[hostKey(host)]!.hash).toBe("");
     expect(stamps[hostKey(host)]!.last_failure).toBeDefined();
   }
+  // A file the host kept its own edits of is the host's; the rest applied, so the host is current.
+  const kept = { hash: "H1", applied: ["y"], unchanged: 0, host_edited: ["x"], pruned: [], errors: [] };
+  const r = await mirrorHomeToHost(host, { deps: { ...base, push: async () => ({ pushed: true, hash: "H1", result: kept, hostEdited: ["x"] }) } });
+  expect(r).toMatchObject({ pushed: true, hostEdited: ["x"], changed: 1 });
+  expect(stamps[hostKey(host)]).toMatchObject({ hash: "H1" });
+  expect(stamps[hostKey(host)]!.last_failure).toBeUndefined();
   await expect(mirrorHomeToHost(host, { deps: { ...base, build: async () => { throw new Error("unreadable input"); } } })).rejects.toThrow("unreadable input");
   expect(stamps[hostKey(host)]!.last_failure?.reason).toBe("unreadable input");
 });

@@ -25,6 +25,13 @@ export const CODECAST_HOOK_SCRIPTS = [
   "stable-feed.sh",
 ] as const;
 
+/**
+ * The statusline hook, written by `cast install` on every machine rather
+ * than by installHookScript (statuslineHook.ts). Owned like the six: a copy
+ * mirrored to a host is overwritten there and reads as a remote edit.
+ */
+export const STATUSLINE_HOOK_SCRIPT = "codecast-statusline.sh";
+
 /** The stable-context SessionStart hook file (installed by stableContext.ts). */
 export const STABLE_FEED_HOOK_FILE = "stable-feed.sh" satisfies (typeof CODECAST_HOOK_SCRIPTS)[number];
 
@@ -72,7 +79,7 @@ export const CODECAST_OWNED_HOME_PATHS: readonly string[] = [
   ORCH_SKILL_REL,
   ...CODECAST_SKILL_NAMES.map((name) => `.claude/skills/${name}`),
   ...ORCH_AGENT_FILES.map((f) => `.claude/agents/${f}`),
-  ...CODECAST_HOOK_SCRIPTS.map((f) => `.claude/hooks/${f}`),
+  ...[...CODECAST_HOOK_SCRIPTS, STATUSLINE_HOOK_SCRIPT].map((f) => `.claude/hooks/${f}`),
   // The rules file older codecast releases wrote; `cast uninstall` still removes it.
   ".cursor/rules/codecast.mdc",
   ".codecast",
@@ -92,7 +99,7 @@ export function isCodecastHookCommand(command: string | undefined | null, home?:
   if (home && command.includes(path.posix.join(home, ".codecast", "hooks") + "/")) return true;
   const first = command.trim().split(/\s+/)[0] ?? "";
   const base = path.posix.basename(first);
-  return (CODECAST_HOOK_SCRIPTS as readonly string[]).includes(base);
+  return base === STATUSLINE_HOOK_SCRIPT || (CODECAST_HOOK_SCRIPTS as readonly string[]).includes(base);
 }
 
 /** Is this home-relative path (posix) one codecast owns, or inside one? */

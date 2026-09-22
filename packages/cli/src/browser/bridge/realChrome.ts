@@ -3,15 +3,6 @@
  * not, and hand it a URL. Everything here addresses the instance on the
  * default profile, the one the cast extension lives in.
  *
- * Why the binary and never Apple events. `open -a` and `tell application`
- * address a bundle id, and the agent's separate Chrome is the same bundle on
- * another profile: with both running, Launch Services answers for whichever
- * it likes, in practice the clone, and a launch request activates the clone
- * instead of starting the human's Chrome. Chrome's own process singleton is
- * exact: a Chrome started without `--user-data-dir` hands its command line
- * to the instance holding the default profile and exits, or becomes that
- * instance when none is running.
- *
  * A launch opens Chrome's normal window. A windowless launch
  * (`--no-startup-window`) was tried first and looked right on a throwaway
  * profile, but in a real profile Chrome ended the extension's service
@@ -40,12 +31,20 @@ export function realChromeRunning(): boolean {
   return realChromePid() !== null;
 }
 
+export function chromeLaunchCommand(bin: string, args: string[], platform = process.platform): { command: string; args: string[] } {
+  if (platform === "darwin" && bin.includes(".app/Contents/MacOS/")) {
+    return { command: "/usr/bin/open", args: ["-n", "-g", "-a", bin.slice(0, bin.indexOf(".app/Contents/MacOS/") + 4), "--args", ...args] };
+  }
+  return { command: bin, args };
+}
+
 /** Start Chrome detached with `args`; true when a process was spawned. */
 function spawnChrome(args: string[]): boolean {
   const bin = findChromeBinary();
   if (!bin) return false;
   try {
-    const child = spawn(bin, [...keychainArgs(), ...args], { stdio: "ignore", detached: true });
+    const launch = chromeLaunchCommand(bin, [...keychainArgs(), ...args]);
+    const child = spawn(launch.command, launch.args, { stdio: "ignore", detached: true });
     child.on("error", () => {});
     child.unref();
     return !!child.pid;

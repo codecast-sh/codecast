@@ -103,6 +103,22 @@ Surfaces, and the size the face takes:
 | org chart session card | 20 |
 | notification rows | 20 on the session chip |
 | mobile session row | 20 |
+| huddle chat: an agent's line, the "is working" row | 20 |
+| huddle feed chip | 14 |
+
+**A huddle addresses an agent by its character.** Every session a live
+huddle feeds is personified in the room whether or not anyone opted in
+elsewhere (`agentRoomName`, `components/calls/FeedChip.tsx`), because the room
+needs a name to say: the chip, the composer's placeholder, the chat line and
+the join and leave events all use it, and `callChat.list` sends the character
+fields with each agent line so a viewer without the session in their store
+draws the same face. The name is also what delivery listens for: a spoken
+line that says it (or the agent's brand, "Claude") reaches the agent at once,
+mid-turn, while the rest of the room's words wait for its turn to end
+(`transcripts.sessionDeliveryVerdict`). A session spawned FOR a huddle is
+given a chosen character before its briefing is sent, one whose face and name
+no agent already in the room wears (`characterForRoom`), and the briefing
+tells it the name.
 
 The agent brand does not get a glyph of its own on the card any more: it rides
 the face as a small corner badge, so one mark answers "who" and "which agent"

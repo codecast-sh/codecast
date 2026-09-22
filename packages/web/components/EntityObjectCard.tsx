@@ -623,15 +623,19 @@ export function ObjectCardFrame({
       onClick={toggle}
       onKeyDown={onKeyDown}
       style={expanded && count > 1 ? { gridColumn: "1 / -1" } : undefined}
-      className={`entity-card group/card relative min-w-0 cursor-pointer overflow-hidden border ${expanded ? `rounded-lg ${accent.borderOpen} bg-sol-bg shadow-xl` : `rounded-md ${accent.border} bg-sol-card`} ${accent.borderHover} text-left transition-colors focus-visible:outline-none focus-visible:ring-1 ${accent.ring}`}
+      // The surface stays the same open or closed; only the border raise and
+      // the chevron say the card is open, so expanding never recolors it.
+      className={`entity-card group/card relative min-w-0 cursor-pointer overflow-hidden rounded-md border bg-sol-card ${expanded ? accent.borderOpen : accent.border} ${accent.borderHover} text-left transition-colors focus-visible:outline-none focus-visible:ring-1 ${accent.ring}`}
     >
       {/* A flat card renders as its own surface — no header strip; the
-          open/expand controls float over the top-right corner on hover. */}
+          open/expand controls float over the top-right corner on hover.
+          Once open, the footer carries Open and the full-page toggle, so the
+          corner keeps only the chevron rather than a second copy of both. */}
       {flat && (
         <>
           <div className="absolute right-1.5 top-1.5 z-[1] flex items-center gap-0.5 rounded bg-sol-card/80 opacity-0 backdrop-blur-sm transition-opacity focus-within:opacity-100 group-hover/card:opacity-100">
-            {resolved && <RevealButton target={reveal} className={`text-sol-text-dim ${accent.hoverText}`} />}
-            <RevealOpenLink href={href} label={openLabel} onOpen={openObject} variant="compact" />
+            {resolved && !expanded && <RevealButton target={reveal} className={`text-sol-text-dim ${accent.hoverText}`} />}
+            {!expanded && <RevealOpenLink href={href} label={openLabel} onOpen={openObject} variant="compact" />}
             <ChevronDown
               className={`h-3 w-3 text-sol-text-dim transition-transform duration-200 ${accent.chevronHover} ${expanded ? "rotate-180" : ""}`}
             />
@@ -655,8 +659,8 @@ export function ObjectCardFrame({
           </div>
           <div className="mt-[1px] flex flex-shrink-0 items-center gap-1.5">
             {header.timeAgo && !compact && <span className="text-[10px] text-sol-text-dim">{header.timeAgo}</span>}
-            {resolved && <RevealButton target={reveal} className={revealChrome} />}
-            {resolved && <RevealOpenLink href={href} label={openLabel} onOpen={openObject} variant="compact" />}
+            {resolved && !expanded && <RevealButton target={reveal} className={revealChrome} />}
+            {resolved && !expanded && <RevealOpenLink href={href} label={openLabel} onOpen={openObject} variant="compact" />}
             <ChevronDown
               className={`h-3 w-3 text-sol-text-dim transition-transform duration-200 ${accent.chevronHover} ${expanded ? "rotate-180" : ""}`}
             />

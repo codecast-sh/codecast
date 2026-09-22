@@ -7,7 +7,7 @@
 
 import { useInboxStore } from "../../store/inboxStore";
 import { useAnchorIdentity } from "../../hooks/useSyncAnchors";
-import { AnchorGlyph, AnchorScopePill } from "./AnchorIdentity";
+import { AnchorScopePill, ChiefOfStaffFace } from "./AnchorIdentity";
 
 export function AnchorHeaderPill({ conversationId }: { conversationId: string }) {
   const anchorId = useInboxStore((s) => {
@@ -18,7 +18,7 @@ export function AnchorHeaderPill({ conversationId }: { conversationId: string })
   if (!anchorId) return null;
   return (
     <span className="inline-flex items-center gap-1 flex-shrink-0" title="The workspace's agent">
-      <AnchorGlyph className="w-3.5 h-3.5 text-sol-cyan" />
+      <ChiefOfStaffFace size={14} />
       {identity && <AnchorScopePill anchor={identity} />}
     </span>
   );
