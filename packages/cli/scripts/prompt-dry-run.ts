@@ -40,6 +40,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { ccKeychainReadArgs, ccKeychainReadItems } from "../src/ccKeychain.ts";
+import { accountTokenFilePath } from "../src/ccAccounts.ts";
 
 function arg(name: string, fallback?: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -49,7 +50,7 @@ function arg(name: string, fallback?: string): string | undefined {
 const runDir = path.resolve(arg("run") ?? "");
 const promptFile = path.resolve(arg("prompt") ?? "");
 if (!arg("run") || !arg("prompt") || !fs.existsSync(promptFile)) {
-  console.error("usage: prompt-dry-run.ts --run <dir> --prompt <file> [--max-turns N] [--tools A,B] [--guard <dir>] [--serve <dir>]");
+  console.error("usage: prompt-dry-run.ts --run <dir> --prompt <file> [--max-turns N] [--tools A,B] [--guard <dir>] [--serve <dir>] [--account <profile>]");
   process.exit(2);
 }
 const maxTurns = arg("max-turns", "80")!;
@@ -57,6 +58,17 @@ const tools = (arg("tools", "Bash,Read,Write,Edit") ?? "").split(",").filter(Boo
 const guardDir = path.resolve(arg("guard") ?? path.join(import.meta.dir, "prompt-dry-run-bin"));
 const serveDir = arg("serve") ? path.resolve(arg("serve")!) : undefined;
 
+/** A saved profile's setup token (`cast accounts token <name>`): a fixed sign-in
+ *  in a 0600 env file, so a run can spend that account's window while the
+ *  machine's login stays untouched. `--account <profile>` picks it; the token
+ *  still reaches the child through its environment only. */
+function profileToken(name: string): string {
+  const file = accountTokenFilePath(name);
+  if (!fs.existsSync(file)) throw new Error(`profile ${name} has no setup token; mint one with: cast accounts token ${name}`);
+  const m = fs.readFileSync(file, "utf8").match(/CLAUDE_CODE_OAUTH_TOKEN=['"]?([^'"\s]+)/);
+  if (!m) throw new Error(`no CLAUDE_CODE_OAUTH_TOKEN in ${file}`);
+  return m[1];
+}
 /** The machine login, best candidate first; the scoped item when this shell itself runs under a config dir. */
 function loginToken(): string {
   for (const item of ccKeychainReadItems()) {
@@ -81,7 +93,7 @@ const DROP = new Set(["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CODECAST_LAUNCH_T
 const env: Record<string, string> = {};
 for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !DROP.has(k)) env[k] = v;
 env.CLAUDE_CONFIG_DIR = configDir;
-env.CLAUDE_CODE_OAUTH_TOKEN = loginToken();
+env.CLAUDE_CODE_OAUTH_TOKEN = arg("account") ? profileToken(arg("account")!) : loginToken();
 env.CODECAST_DIR = noCast;
 env.RUN_DIR = runDir;
 env.DRY_RUN_REAL_CODECAST_DIR = process.env.CODECAST_DIR ?? "";
