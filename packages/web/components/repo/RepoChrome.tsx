@@ -32,9 +32,9 @@ import {
   type RepoRouteFamily,
 } from "../../lib/repoView";
 import { RepoWindowControl } from "./RepoWindowControl";
-import { CodeShareMenu, sharePageUrl } from "../menus/CodeShareItems";
+import { CodeShareMenu } from "../menus/CodeShareItems";
 import { useRepoLocation } from "./useRepoFamily";
-import { cn } from "../../lib/utils";
+import { cn, sharePageUrl } from "../../lib/utils";
 import { repoShortcutAllowed } from "../../lib/repoContent";
 import { RepoFileFinder } from "./RepoFileFinder";
 

@@ -46,8 +46,8 @@ import {
 } from "../../lib/repoView";
 import { SessionBlameStrip } from "./SessionBlame";
 import { serverErrorText } from "../../lib/errorCause";
-import { cn, copyToClipboard } from "../../lib/utils";
-import { CodeShareMenu, sharePageUrl } from "../menus/CodeShareItems";
+import { cn, copyToClipboard, sharePageUrl } from "../../lib/utils";
+import { CodeShareMenu } from "../menus/CodeShareItems";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { useRepoTransport } from "../../lib/repoTransport";
 import { repoShortcutAllowed } from "../../lib/repoContent";

@@ -24,7 +24,8 @@ import {
   MessageSquare,
 } from "lucide-react";
 import { CommentAvatar } from "../../../../../components/comments/CommentAvatar";
-import { CodeMenuItem, CodeShareMenu, copyText, sharePageUrl } from "../../../../../components/menus/CodeShareItems";
+import { CodeMenuItem, CodeShareMenu } from "../../../../../components/menus/CodeShareItems";
+import { copyText } from "../../../../../lib/copyText";
 import { BlobContent } from "../../../../../components/repo/BlobContent";
 import { CommitRail } from "../../../../../components/repo/CommitRail";
 import { RepoPageShell } from "../../../../../components/repo/RepoPageShell";
@@ -60,7 +61,7 @@ import {
   repoTreeHref,
   splitCommitMessage,
 } from "../../../../../lib/repoView";
-import { cn, copyToClipboard, relTimeShort } from "../../../../../lib/utils";
+import { cn, copyToClipboard, relTimeShort, sharePageUrl } from "../../../../../lib/utils";
 import "../../../../../components/repo/repo.css";
 
 // `api` is a proxy, so naming a function prod has not deployed yet still

@@ -5,7 +5,6 @@
 
 import type { ComponentType, ReactNode } from "react";
 import { ExternalLink, Forward, Link2, MoreHorizontal } from "lucide-react";
-import { toast } from "sonner";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -13,24 +12,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
-import { copyToClipboard, shareOrigin, cn } from "../../lib/utils";
+import { cn, sharePageUrl } from "../../lib/utils";
+import { copyText } from "../../lib/copyText";
 import { openForwardToChat } from "../../lib/forwardToChat";
 import { useTeamFeature } from "../../lib/teamFeatures";
-
-export async function copyText(text: string, ok = "Copied") {
-  try {
-    await copyToClipboard(text);
-    toast.success(ok);
-  } catch {
-    toast.error("Couldn't copy");
-  }
-}
-
-/** The public address of an in-app path, whatever pane the page is open in. */
-export function sharePageUrl(path: string): string {
-  if (/^https?:\/\//.test(path)) return path;
-  return `${shareOrigin()}${path.startsWith("/") ? path : `/${path}`}`;
-}
 
 const ITEM = "flex items-center gap-2 cursor-pointer text-[12px] text-sol-text";
 
