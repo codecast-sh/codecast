@@ -185,7 +185,10 @@ describe("command groups stay off the boot graph", () => {
     // hooks, so index.ts dispatches them), initiativeCommand.ts with its
     // contracts/initiative.ts (the initiative line formatters index.ts renders)
     // and the four org/idle/handoff contracts the tree reads directly.
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(251);
+    // 253 after hook admission: statusHook.ts now reads its token through
+    // hookIdentity.ts (node and atomicWrite only), and session-move.ts copies
+    // worktree files through workspace/copyFiles.ts.
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(253);
     // 3404 KB with those eleven leaves and the growth of index.ts itself.
     // 3407 after ct-52819: the watchdog pass deadline in supervision.ts and the
     // launchd kickstart in index.ts's startDaemon. No new file.
@@ -235,7 +238,12 @@ describe("command groups stay off the boot graph", () => {
     // 326 after the same landing: the daemon picked up the leaves index.ts did
     // where they are its own work too (the hook handlers it dispatches and the
     // shared contracts), not a command group.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(338);
+    // 349 after hook admission: the daemon authenticates hook posts
+    // (hookIdentity.ts, hookAdmission.ts) and upgrades the hook scripts it
+    // installed, so it carries the script constants and the handler modules that
+    // define them; plus deviceAccount.ts, vault/vaultCapability.ts and
+    // workspace/copyFiles.ts, all leaves on node alone or the workspace manifest.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(349);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {
