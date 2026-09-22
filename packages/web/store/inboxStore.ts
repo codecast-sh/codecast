@@ -232,7 +232,6 @@ export {
   selectChannelReadMarker,
   selectThreadReplies,
   selectChatReactions,
-  chatReactionSyncOpts,
   teamChannelPushOpts,
   isChatRoomRefusal,
   chatSendState,
