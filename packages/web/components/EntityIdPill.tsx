@@ -26,6 +26,7 @@ import { stripMarkdown, docContentPreview } from "../lib/notificationText";
 import {
   parseEntityUrl,
   parsePublishedPageUrl,
+  parseClaudeArtifactUrl,
   parseMessageRefUrl,
   isEntityId,
   entityMentionRegex,
@@ -61,7 +62,7 @@ import { FilePathContext, filePathMention, parseFilePathHref } from "../lib/file
 import { useKnownWorktrees } from "../hooks/useKnownWorktrees";
 import { worktreeRefOfCode } from "./worktree/worktreeModel";
 import { WorktreePill } from "./worktree/WorktreePill";
-import { PublishedPageEmbed, PublishedPagePill } from "./PublishedPageEmbed";
+import { ClaudeArtifactEmbed, ClaudeArtifactPill, PublishedPageEmbed, PublishedPagePill } from "./PublishedPageEmbed";
 import { useOpenLinkedSession } from "../hooks/useOpenLinkedSession";
 import { REF_NTH_ATTR, REF_NAMED_ATTR, REF_SUFFIX_ATTR } from "../lib/remarkEntityIds";
 import { REF_CERTAIN_ATTR } from "../lib/remarkEntityCards";
@@ -665,14 +666,15 @@ export function EntityAwareLink({ href, children, ...allProps }: any) {
         />
       );
     }
-    // A publish URL alone on its own line, hoisted by remarkEntityIds into
-    // "embed:artifact:<slug>|<caption>" — the page renders inline.
-    if (embedText.startsWith("embed:artifact:")) {
-      const payload = embedText.slice("embed:artifact:".length);
-      const sep = payload.indexOf("|");
-      const slug = sep === -1 ? payload : payload.slice(0, sep);
-      const caption = sep === -1 ? undefined : payload.slice(sep + 1);
-      if (slug) return <PublishedPageEmbed slug={slug} caption={caption} />;
+    // A page URL alone on its own line, hoisted by remarkEntityIds into
+    // "embed:artifact:<slug>|<caption>" (a published codecast page) or
+    // "embed:claude:<id>|<caption>" (a Claude artifact) — the page renders
+    // inline as a card.
+    const pageEmbed = /^embed:(artifact|claude):([^|]+)(?:\|([\s\S]*))?$/.exec(embedText);
+    if (pageEmbed) {
+      const [, kind, id, caption] = pageEmbed;
+      if (kind === "artifact") return <PublishedPageEmbed slug={id} caption={caption} />;
+      return <ClaudeArtifactEmbed id={id} caption={caption} />;
     }
   }
   if (href?.startsWith("entity://")) {
@@ -777,6 +779,10 @@ export function EntityAwareLink({ href, children, ...allProps }: any) {
   const page = parsePublishedPageUrl(href);
   if (page) {
     return <PublishedPagePill slug={page.slug} href={href} label={text && text !== href ? text : undefined} />;
+  }
+  const claude = parseClaudeArtifactUrl(href);
+  if (claude) {
+    return <ClaudeArtifactPill id={claude.id} href={href} label={text && text !== href ? text : undefined} />;
   }
   // A GitHub link to a place in a repository — a file, a tree, a compare, the
   // repository itself — opens the codecast page for it, in this window.
