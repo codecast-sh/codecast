@@ -71,7 +71,8 @@ async function verifyInitiatives() {
   mock.module("../../hooks/useCollectionRows", () => ({ useCollectionRows: (key: string, opts: any = {}) => (collections[key] ?? []).filter(opts.where ?? (() => true)).sort(opts.sort ?? (() => 0)) }));
   mock.module("../../hooks/useWorkspaceArgs", () => ({ useWorkspaceArgs: () => ({ workspace: "team", team_id: "fixture-team" }), workspaceStamp: (a: any) => ({ workspace: a.workspace, team_id: a.team_id }) }));
   mock.module("../../hooks/useIsPhone", () => ({ useIsPhone: () => env.phone, useMinWidth: () => env.wide, PHONE_MAX_WIDTH: 768 }));
-  mock.module("../../hooks/useCoarseNow", () => ({ useCoarseNow: () => fx.FIXTURE_NOW }));
+  const realNow = { ...(await import("../../hooks/useCoarseNow")) };
+  mock.module("../../hooks/useCoarseNow", () => ({ ...realNow, useCoarseNow: () => fx.FIXTURE_NOW, useNowWhen: () => fx.FIXTURE_NOW }));
   mock.module("../../hooks/useOrgRoles", () => ({ useOrgRoles: () => ({ roles: env.tree.roles, workspace: env.tree.workspace, roleBotUserIds: new Set<string>() }) }));
   mock.module("../../hooks/useTeamRoster", () => ({ useTeamRosterIdentity: () => [{ _id: "fixture-user-me", name: "Ashot" }, { _id: "fixture-user-sam", name: "Sam" }] }));
   mock.module("../../hooks/useRoleScope", () => ({ useRoleScope: () => ({ model: null, role: null, escalated: [] }), useScopeRows: () => ({ projects: collections.projects, plans: collections.plans, tasks: collections.tasks, roles: env.tree.roles }) }));
