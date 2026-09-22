@@ -1,7 +1,7 @@
 import { NodeViewWrapper, type NodeViewProps } from "@tiptap/react";
 import { EntityIdPill } from "../EntityIdPill";
-import { PublishedPagePill } from "../PublishedPageEmbed";
-import { parseEntityUrl, parsePublishedPageUrl } from "../../lib/entityLinks";
+import { ClaudeArtifactPill, PublishedPagePill } from "../PublishedPageEmbed";
+import { parseClaudeArtifactUrl, parseEntityUrl, parsePublishedPageUrl } from "../../lib/entityLinks";
 
 /**
  * Renders an entityRef atom with the SAME components the read view uses
@@ -22,10 +22,14 @@ export function EntityRefNodeView({ node }: NodeViewProps) {
   } else {
     const entity = parseEntityUrl(href);
     const page = entity ? null : parsePublishedPageUrl(href);
+    const claude = entity || page ? null : parseClaudeArtifactUrl(href);
+    const text = label && label !== href ? label : undefined;
     inner = entity ? (
       <EntityIdPill type={entity.type} id={entity.id} />
     ) : page ? (
-      <PublishedPagePill slug={page.slug} href={href} label={label && label !== href ? label : undefined} />
+      <PublishedPagePill slug={page.slug} href={href} label={text} />
+    ) : claude ? (
+      <ClaudeArtifactPill id={claude.id} href={href} label={text} />
     ) : (
       // Shouldn't happen (only pillable hrefs are converted), but degrade to
       // the ordinary editor link rather than dropping the reference.

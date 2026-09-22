@@ -23,6 +23,7 @@ import {
   contextualPrRefPayload,
   parseContextualPrRef,
   splitContextualPrRefs,
+  parseClaudeArtifactUrl,
 } from "./entityLinks";
 
 const MSG_CONVEX_ID = "kx82qtvpbmmrmwcjqmhzawejsx8bq9gm";
@@ -53,6 +54,34 @@ describe("parsePublishedPageUrl", () => {
       "https://a.codecast.sh/short",
       `/${slug}`,
     ]) expect(parsePublishedPageUrl(url)).toBeNull();
+  });
+});
+
+describe("parseClaudeArtifactUrl", () => {
+  const id = "2c5e5d6e-0a70-4e04-9c7a-1c4f1f5b8b6d";
+  const url = `https://claude.ai/public/artifacts/${id}`;
+
+  test("recognizes the share URL, the older claude.site host and the embed path", () => {
+    for (const href of [
+      url,
+      `${url}/`,
+      `${url}?x=1#top`,
+      `${url}/embed`,
+      `https://www.claude.ai/public/artifacts/${id}`,
+      `https://claude.site/artifacts/${id}`,
+      `https://claude.ai/public/artifacts/${id.toUpperCase()}`,
+    ]) expect(parseClaudeArtifactUrl(href)).toEqual({ id, url });
+  });
+
+  test("rejects other claude.ai pages, non-uuid ids and foreign hosts", () => {
+    for (const href of [
+      "https://claude.ai/chat/abc",
+      `https://claude.ai/public/artifacts/${id}/assets/x.png`,
+      "https://claude.ai/public/artifacts/not-a-uuid",
+      `https://example.com/public/artifacts/${id}`,
+      `https://claude.ai.example.com/public/artifacts/${id}`,
+      `/public/artifacts/${id}`,
+    ]) expect(parseClaudeArtifactUrl(href)).toBeNull();
   });
 });
 

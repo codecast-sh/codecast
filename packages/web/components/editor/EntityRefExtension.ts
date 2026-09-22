@@ -6,6 +6,7 @@ import type { NodeType } from "@tiptap/pm/model";
 import {
   parseEntityUrl,
   parsePublishedPageUrl,
+  parseClaudeArtifactUrl,
   MENTION_ID_SOURCE,
   entityTypeFromId,
   isConvexId,
@@ -48,9 +49,10 @@ function isPillableRef(id: string): boolean {
   return /^doc:/i.test(id) || !!entityTypeFromId(id) || isConvexId(id);
 }
 
-/** True when this href renders as a rich pill (entity page or published page). */
+/** True when this href renders as a rich pill (entity page, published page
+ *  or Claude artifact). */
 export function isPillableHref(href: string | null | undefined): boolean {
-  return !!(parseEntityUrl(href) || parsePublishedPageUrl(href));
+  return !!(parseEntityUrl(href) || parsePublishedPageUrl(href) || parseClaudeArtifactUrl(href));
 }
 
 /**

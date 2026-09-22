@@ -1,7 +1,7 @@
 import { findAndReplace } from "mdast-util-find-and-replace";
 import remarkGfm from "remark-gfm";
 import type { Options as ReactMarkdownOptions } from "react-markdown";
-import { isConvexId, isEntityId, bareEntityIdRegex, entityMentionRegex, entityTypeFromId, parseEntityUrl, parsePublishedPageUrl, parseMessageRefUrl, messageRefPayload, contextualPrRefRegex, contextualPrRefPayload, splitContextualPrRefs } from "./entityLinks";
+import { isConvexId, isEntityId, bareEntityIdRegex, entityMentionRegex, entityTypeFromId, parseEntityUrl, parsePublishedPageUrl, parseClaudeArtifactUrl, parseMessageRefUrl, messageRefPayload, contextualPrRefRegex, contextualPrRefPayload, splitContextualPrRefs } from "./entityLinks";
 import { FILE_PATH_SCAN_RE, mentionFromMatch } from "./filePathLinks";
 import { filesHref } from "./vault/vaultHref";
 
@@ -42,19 +42,25 @@ function isUrlLabel(text: string, href: string): boolean {
 }
 
 /**
- * A publish URL (codecast.sh/a/<slug>) standing alone on its own line becomes
- * a block-level page embed — the page renders inline in the conversation, the
- * way the decision queue frames an attached report. Link text the author wrote
- * (`[caption](url)`) rides along as the caption, image-style; a bare autolink
- * has none. Same text-node payload trick as doc embeds: react-markdown's url
- * sanitizer drops the embed:// href, so the text carries `artifact:<slug>|<caption>`.
+ * A page URL standing alone on its own line becomes a block-level embed — the
+ * page renders inline in the conversation, the way the decision queue frames
+ * an attached report. Two kinds of page qualify: a published codecast page
+ * (codecast.sh/a/<slug>, payload `artifact:<slug>`) and a public Claude
+ * artifact (claude.ai/public/artifacts/<id>, payload `claude:<id>`). Link text
+ * the author wrote (`[caption](url)`) rides along as the caption, image-style;
+ * a bare autolink has none. Same text-node payload trick as doc embeds:
+ * react-markdown's url sanitizer drops the embed:// href, so the text carries
+ * `<kind>:<id>|<caption>`.
  */
 function toPageEmbedLink(link: any): any | null {
-  const page = parsePublishedPageUrl(link?.type === "link" ? link.url : null);
-  if (!page) return null;
+  const href = link?.type === "link" ? link.url : null;
+  const page = parsePublishedPageUrl(href);
+  const claude = page ? null : parseClaudeArtifactUrl(href);
+  if (!page && !claude) return null;
   const text = mdastText(link).trim();
   const caption = text && !isUrlLabel(text, link.url) ? text : "";
-  const payload = `artifact:${page.slug}${caption ? `|${caption}` : ""}`;
+  const ref = page ? `artifact:${page.slug}` : `claude:${claude!.id}`;
+  const payload = `${ref}${caption ? `|${caption}` : ""}`;
   return {
     type: "link",
     url: `embed://${payload}`,
