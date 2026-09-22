@@ -31,7 +31,7 @@ import { installationCoversRepo, routingTeamForInstallation } from "./githubApp"
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { resolveCreationPrivacy } from "./privacy";
 import { applyCommitFilesTo } from "./commits";
-import { matchFileLines, newResolveCaches, resolveCommitSessions } from "./blame";
+import { matchFileLines, newResolveCaches, resolveCommitSessions, type BlameViewer } from "./blame";
 import { contentLinesToMatch } from "@codecast/shared/blame";
 import { WORKTREES_KIND, mergeWorktreesPayload, type WorktreesPayload } from "@codecast/shared/contracts";
 
@@ -124,7 +124,7 @@ async function installationForRepository(
 }
 
 /** The checkouts publishing a repository (repos.ingestLocal), whichever team they belong to. */
-async function localSourcesFor(ctx: { db: any }, repository: string) {
+export async function localSourcesFor(ctx: { db: any }, repository: string) {
   const rows = await ctx.db
     .query("repo_sources")
     .withIndex("by_repository", (q: any) => q.eq("repository", normalizeRepository(repository)))
@@ -258,12 +258,16 @@ export const repoAccessPublic = internalQuery({
 });
 
 /** Does this viewer have any way to browse this repository? */
+export async function canBrowseRepository(ctx: { db: any }, userId: Id<"users">, repository: string): Promise<boolean> {
+  return !!(await browseAccessForUser(ctx, userId, repository));
+}
+
 export const canBrowse = query({
   args: { repository: v.string() },
   handler: async (ctx, args): Promise<boolean> => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return false;
-    return !!(await browseAccessForUser(ctx, userId, args.repository));
+    return await canBrowseRepository(ctx, userId, args.repository);
   },
 });
 
@@ -280,7 +284,7 @@ export const getCacheRow = internalQuery({
 });
 
 /** The one cache lookup: the key's repository is the canonical spelling. */
-async function cacheRowByKey(ctx: { db: any }, repository: string, kind: string, ref: string, path: string) {
+export async function cacheRowByKey(ctx: { db: any }, repository: string, kind: string, ref: string, path: string) {
   return await ctx.db
     .query("repo_cache")
     .withIndex("by_key", (q: any) =>
@@ -304,6 +308,22 @@ export const upsertCache = internalMutation({
     return await writeCacheRow(ctx, args);
   },
 });
+
+/** True when the cached meta row came from GitHub rather than a checkout. */
+async function metaFromGitHub(ctx: { db: any }, repository: string): Promise<boolean> {
+  const row = await cacheRowByKey(ctx, repository, "meta", "-", "");
+  return !!row && !isLocalMeta(row);
+}
+
+/** A meta row a checkout published: the counts are placeholders and `private` is a guess. */
+function isLocalMeta(row: { kind: string; content: string } | null): boolean {
+  if (!row || row.kind !== "meta") return false;
+  try {
+    return JSON.parse(row.content)?.source === "local";
+  } catch {
+    return false;
+  }
+}
 
 /** The one cache write: a row is replaced whole under its key, stamped now. */
 async function writeCacheRow(
@@ -629,6 +649,11 @@ export const ingestLocal = mutation({
 
     for (const row of args.rows) {
       if (!LOCAL_KINDS.has(row.kind)) continue;
+      // A checkout's meta says private and zero of everything, because a
+      // checkout cannot know GitHub's side. Once GitHub has answered, that
+      // answer stands: the public route opens on it, and the About block reads
+      // it, and a checkout's placeholder must not take either away.
+      if (row.kind === "meta" && await metaFromGitHub(ctx, repository)) continue;
       const keyed = row.kind === WORKTREES_KIND ? await worktreesRowFor(ctx, userId, repository, args.root, row.content) : row;
       await writeCacheRow(ctx, { team_id: teamId, repository, ...keyed });
     }
@@ -1035,9 +1060,12 @@ async function fillCache(
     ref: spec.ref,
     path: spec.path,
   });
-  if (isFresh(cached, Date.now())) return { cached: true };
+  // A checkout's meta is a placeholder (private, no counts); when GitHub can
+  // answer, it is asked however fresh that placeholder is, and only GitHub is.
+  const placeholder = spec.kind === "meta" && !!access.installation_id && isLocalMeta(cached);
+  if (!placeholder && isFresh(cached, Date.now())) return { cached: true };
 
-  const checkoutCanAnswer = !!access.local_team_id && LOCAL_KINDS.has(spec.kind);
+  const checkoutCanAnswer = !placeholder && !!access.local_team_id && LOCAL_KINDS.has(spec.kind);
   if (checkoutCanAnswer) {
     const asked = await askCheckouts(ctx, access, { repository, kind: spec.kind, ref: spec.ref, path: spec.path, params });
     if (asked.requested) return { cached: !!cached, requested: true };
@@ -1143,7 +1171,9 @@ export const repoVisibility = internalQuery({
   args: { repository: v.string() },
   handler: async (ctx, args): Promise<{ known: boolean; private: boolean; stale: boolean }> => {
     const row = await cacheRowByKey(ctx, args.repository, "meta", "-", "");
-    if (!row) return { known: false, private: true, stale: true };
+    // A checkout's row is not an answer about visibility, only a placeholder
+    // until GitHub is asked, which `stale` makes the route do.
+    if (!row || isLocalMeta(row)) return { known: false, private: true, stale: true };
 
     const meta = JSON.parse(row.content);
     return {
@@ -1326,34 +1356,49 @@ export const getBlameSessions = query({
     const blame = await readCache(ctx, args.repository, "blame", ref, path);
     if (!blame) return null;
     const userId = await requireUser(ctx);
-    const caches = newResolveCaches();
-
-    const ranges: { start_line: number; end_line: number; sha: string; message?: string; committed_at?: number }[] = blame.ranges ?? [];
-    const bySha = new Map<string, { sha: string; summary?: string; author_time?: number }>();
-    for (const r of ranges) {
-      if (!bySha.has(r.sha)) bySha.set(r.sha, { sha: r.sha, summary: r.message?.split("\n")[0], author_time: r.committed_at || undefined });
-    }
-    const resolved = await resolveCommitSessions(ctx, userId, [...bySha.values()], caches);
-
-    const blob = await readCache(ctx, args.repository, "blob", ref, path);
-    const lines: string[] = typeof blob?.content === "string" && !blob.truncated ? blob.content.split("\n") : [];
-    const blamed = ranges.flatMap((r) =>
-      lines.slice(r.start_line - 1, r.end_line).map((text) => ({ text, authorMs: r.committed_at || undefined })),
-    );
-    const wanted = contentLinesToMatch(blamed, Date.now()).map((l) => ({ text: l.t, deadline: l.d }));
-
-    const repository = normalizeRepository(args.repository);
-    const sources = await ctx.db
-      .query("repo_sources")
-      .withIndex("by_repository", (q: any) => q.eq("repository", repository))
-      .take(50);
-    const roots = [...new Set(sources.map((s: any) => String(s.root).replace(/\/+$/, "")))];
-    const filePaths = roots.map((root) => `${root}/${path}`);
-    const lineMatches = wanted.length > 0 ? await matchFileLines(ctx, userId, filePaths, wanted, caches) : [];
-
-    return { by_sha: resolved, line_matches: lineMatches };
+    // The conversation cache rides along for the public projection only; a Map
+    // is not a query result.
+    const { conversations: _conversations, ...resolution } = await blameSessionsFor(ctx, userId, args.repository, ref, path, blame);
+    return resolution;
   },
 });
+
+/**
+ * The join behind session blame, for whichever viewer is asking. The signed in
+ * query above hands it the viewer; the public route (repoSessions) hands it
+ * nobody and reduces the answer afterwards. `blame` is the cached git blame
+ * row, already read under the caller's own access rule.
+ */
+export async function blameSessionsFor(
+  ctx: any,
+  viewer: BlameViewer,
+  repository: string,
+  ref: string,
+  path: string,
+  blame: { ranges?: { start_line: number; end_line: number; sha: string; message?: string; committed_at?: number }[] },
+) {
+  const caches = newResolveCaches();
+  const ranges = blame.ranges ?? [];
+  const bySha = new Map<string, { sha: string; summary?: string; author_time?: number }>();
+  for (const r of ranges) {
+    if (!bySha.has(r.sha)) bySha.set(r.sha, { sha: r.sha, summary: r.message?.split("\n")[0], author_time: r.committed_at || undefined });
+  }
+  const resolved = await resolveCommitSessions(ctx, viewer, [...bySha.values()], caches);
+
+  const blobRow = await cacheRowByKey(ctx, repository, "blob", ref, path);
+  const blob = blobRow ? JSON.parse(blobRow.content) : null;
+  const lines: string[] = typeof blob?.content === "string" && !blob.truncated ? blob.content.split("\n") : [];
+  const blamed = ranges.flatMap((r) =>
+    lines.slice(r.start_line - 1, r.end_line).map((text) => ({ text, authorMs: r.committed_at || undefined })),
+  );
+  const wanted = contentLinesToMatch(blamed, Date.now()).map((l) => ({ text: l.t, deadline: l.d }));
+
+  const roots = (await localSourcesFor(ctx, repository)).map((s: any) => String(s.root).replace(/\/+$/, ""));
+  const filePaths = [...new Set(roots)].map((root) => `${root}/${path}`);
+  const lineMatches = wanted.length > 0 ? await matchFileLines(ctx, viewer, filePaths, wanted, caches) : [];
+
+  return { by_sha: resolved, line_matches: lineMatches, conversations: caches.conversations };
+}
 /**
  * Every checkout of a repository the viewer's teams publish, each with its
  * worktrees and the person whose machine it is on. No ensure action stands

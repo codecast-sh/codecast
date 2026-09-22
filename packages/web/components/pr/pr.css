@@ -71,6 +71,52 @@
   background: color-mix(in srgb, var(--sol-text-dim) 18%, transparent);
 }
 
+/* The title and the verbs share a row when there is room. The title keeps a
+ * floor of 16rem, so a narrow pane wraps the verbs underneath instead of
+ * squeezing the title down to one word a line. Below 560px the type steps
+ * down too: a 26px title of a long sentence would otherwise fill the pane. */
+.pr-title-row {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+}
+
+.pr-title {
+  flex: 1 1 16rem;
+  min-width: min(100%, 16rem);
+  overflow-wrap: break-word;
+}
+
+.pr-title-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  max-width: 100%;
+  padding-top: 0.25rem;
+}
+
+.pr-branch {
+  min-width: 0;
+}
+
+@container (max-width: 560px) {
+  .pr-title,
+  .pr-title-input {
+    font-size: 18px;
+  }
+  .pr-band {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+  .pr-figures {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.75rem 1.25rem;
+  }
+}
+
 /* The right rail carries context, not content: it goes away before the diff
  * does. 900px is the width below which two columns stop being readable. */
 .pr-rail {

@@ -5,7 +5,7 @@ import {
   foldSessionBlame,
   nextBlameMode,
   sessionBlameColors,
-  sessionBlameHref,
+  sessionHref,
   summarizeSessionBlame,
   breadcrumbTrail,
   commitBalanceAccent,
@@ -452,8 +452,12 @@ describe("session blame", () => {
   });
 
   it("links a session at its message when one is known", () => {
-    expect(sessionBlameHref({ ...s1, message_id: "m9" })).toBe("/conversation/c1#msg-m9");
-    expect(sessionBlameHref(s1)).toBe("/conversation/c1");
+    expect(sessionHref({ ...s1, message_id: "m9" })).toBe("/conversation/c1#msg-m9");
+    expect(sessionHref(s1)).toBe("/conversation/c1");
+    // On the public page a public session opens on its share page, exact
+    // message included, and a private one opens nowhere at all.
+    expect(sessionHref({ ...s1, public: true, share_token: "tok", message_id: "m9" })).toBe("/share/tok#msg-m9");
+    expect(sessionHref({ ...s1, public: false, title: "Ann's session on Sep 20" })).toBeNull();
   });
 
   it("cycles blame modes", () => {

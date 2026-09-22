@@ -39,6 +39,7 @@ describe("worktreeRefOfCode", () => {
   test("inline code is a worktree only as a path inside one or a branch one has checked out", () => {
     expect(worktreeRefOfCode("codecast/tips-modes", CHECKOUTS)?.worktree).toBe(tips);
     expect(worktreeRefOfCode("~/src/union-mobile/.codecast/worktrees/tips-modes", CHECKOUTS)?.worktree).toBe(tips);
+    expect(worktreeRefOfCode(".codecast/worktrees/tips-modes", CHECKOUTS)?.worktree).toBe(tips);
     expect(worktreeRefOfCode("~/src/union-mobile/.codecast/worktrees", CHECKOUTS)).toBeNull();
     expect(worktreeRefOfCode("~/src/union-mobile/.codecast/worktrees/tips-modes/app/tips.ts", CHECKOUTS)).toBeNull();
     expect(worktreeRefOfCode("tips-modes", CHECKOUTS)).toBeNull();
@@ -54,6 +55,11 @@ describe("worktreesOfSession", () => {
   test("a session born in a worktree names it, with or without a published list", () => {
     expect(worktreesOfSession(undefined, { _id: "c", worktree_name: "tips-modes" }).map((r) => r.name)).toEqual(["tips-modes"]);
     expect(worktreesOfSession(list, { _id: "c", project_path: `${tips.path}/packages/web` }).map((r) => r.name)).toEqual(["tips-modes"]);
+  });
+
+  test("a session in the main checkout names the worktrees it edited files in", () => {
+    const session = { _id: "c", project_path: ROOT, recent_files: [`${tips.path}/packages/web/app.ts`, `${ROOT}/packages/cli/x.ts`, `${tips.path}/b.ts`] };
+    expect(worktreesOfSession(undefined, session)).toEqual([{ name: "tips-modes", path: tips.path }]);
   });
 
   test("a session in the main checkout names the worktrees whose record names it, never the main checkout", () => {

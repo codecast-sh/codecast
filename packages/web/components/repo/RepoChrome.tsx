@@ -13,6 +13,7 @@ import {
   GitBranch,
   GitPullRequest,
   History,
+  MessagesSquare,
   Search,
   Tag,
 } from "lucide-react";
@@ -24,17 +25,20 @@ import {
   repoHomeHref,
   repoPullsHref,
   repoSearchHref,
+  repoSessionsHref,
   repoTagsHref,
   repoTreeHref,
   repoWorktreesHref,
   type RepoRouteFamily,
 } from "../../lib/repoView";
 import { RepoWindowControl } from "./RepoWindowControl";
+import { CodeShareMenu, sharePageUrl } from "../menus/CodeShareItems";
+import { useRepoLocation } from "./useRepoFamily";
 import { cn } from "../../lib/utils";
 import { repoShortcutAllowed } from "../../lib/repoContent";
 import { RepoFileFinder } from "./RepoFileFinder";
 
-export type RepoTab = "code" | "commits" | "branches" | "tags" | "pulls" | "search" | "worktrees";
+export type RepoTab = "code" | "commits" | "branches" | "tags" | "pulls" | "sessions" | "search" | "worktrees";
 
 export function BranchPicker({
   branches,
@@ -113,7 +117,7 @@ export function BranchPicker({
 }
 
 /**
- * The band and its tabs. The digits `1` to `7` move between them, ignored
+ * The band and its tabs. The digits `1` to `8` move between them, ignored
  * while typing so a filter box can contain a digit.
  *
  * The header builds its own hrefs from the repository, the ref it is showing
@@ -144,6 +148,8 @@ export function RepoHeader({
 }) {
   const router = useRouter();
   const [owner, name] = repository.split("/");
+  const loc = useRepoLocation();
+  const pageUrl = sharePageUrl(`${loc.pathname}${loc.search}${loc.hash}`);
 
   // The band's own element, so the digit shortcuts below can tell whether this
   // copy of the header is the one on screen. A background tab keeps its pane
@@ -165,9 +171,11 @@ export function RepoHeader({
     { key: "branches", label: "Branches", href: repoBranchesHref(repository, family), icon: GitBranch, digit: "3" },
     { key: "tags", label: "Tags", href: repoTagsHref(repository, family), icon: Tag, digit: "4" },
     { key: "pulls", label: "Pull requests", href: repoPullsHref(repository, family), icon: GitPullRequest, digit: "5" },
-    { key: "search", label: "Search", href: repoSearchHref(repository, undefined, family), icon: Search, digit: "6" },
+    // The sessions that shaped the repository: the one tab GitHub has no answer to.
+    { key: "sessions", label: "Sessions", href: repoSessionsHref(repository, family), icon: MessagesSquare, digit: "6" },
+    { key: "search", label: "Search", href: repoSearchHref(repository, undefined, family), icon: Search, digit: "7" },
     // A fact about someone's machine, so only the signed in form of these pages carries it.
-    ...(family === "app" ? [{ key: "worktrees" as const, label: "Worktrees", href: repoWorktreesHref(repository), icon: FolderGit2, digit: "7" }] : []),
+    ...(family === "app" ? [{ key: "worktrees" as const, label: "Worktrees", href: repoWorktreesHref(repository), icon: FolderGit2, digit: "8" }] : []),
   ];
 
   useEventListener("keydown", (e: KeyboardEvent) => {
@@ -182,7 +190,7 @@ export function RepoHeader({
           is what makes `t` work on all of them, GitHub's own behaviour. */}
       <RepoFileFinder repository={repository} refName={refName} family={family} anchorRef={bandRef} />
       <div className="flex items-center gap-3 px-4 pt-3 pb-2 flex-wrap">
-        <h1 className="repo-rise flex items-baseline gap-1 min-w-0" style={{ ["--d" as string]: "0ms" }}>
+        <h1 className="repo-head-name repo-rise flex items-baseline gap-1 min-w-0" style={{ ["--d" as string]: "0ms" }}>
           <Link href="/repo" className="text-[13px] text-sol-text-muted hover:text-sol-text transition-colors">
             {owner}
           </Link>
@@ -195,18 +203,20 @@ export function RepoHeader({
           </Link>
         </h1>
 
-        <div className="repo-rise flex items-center gap-2 ml-auto" style={{ ["--d" as string]: "60ms" }}>
+        <div className="repo-head-actions repo-rise" style={{ ["--d" as string]: "60ms" }}>
           {middle}
           {trailing}
           <RepoWindowControl />
+          <CodeShareMenu url={pageUrl} label="repository" previewTitle={repository} />
           <a
             href={`https://github.com/${repository}`}
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center gap-1.5 h-7 rounded-md border border-sol-border/60 px-2 text-[12px] text-sol-text-muted hover:text-sol-text hover:border-sol-border transition-colors"
+            title="Open on GitHub"
           >
             <ExternalLink className="w-3 h-3" />
-            GitHub
+            <span className="repo-github-label">GitHub</span>
           </a>
         </div>
       </div>

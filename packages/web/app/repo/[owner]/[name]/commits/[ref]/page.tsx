@@ -19,7 +19,7 @@ import { RepoPageShell } from "../../../../../../components/repo/RepoPageShell";
 import { useRepoFamily } from "../../../../../../components/repo/useRepoFamily";
 import { Button } from "../../../../../../components/ui/button";
 import { useCoarseNow } from "../../../../../../hooks/useCoarseNow";
-import { useRepoBranches, useRepoLog } from "../../../../../../hooks/useRepoBrowse";
+import { useRepoBranches, useRepoCommitSessions, useRepoLog } from "../../../../../../hooks/useRepoBrowse";
 import {
   useExternalEvents,
   useSyncRepositoryExternalEvents,
@@ -30,6 +30,7 @@ import {
   commitPageHref,
   repoCommitsHref,
   repoTreeHref,
+  sessionHref,
   splitCommitMessage,
   type RepoRouteFamily,
 } from "../../../../../../lib/repoView";
@@ -92,6 +93,10 @@ function CommitsContent({
   const branch = refName || branches.data?.default_branch || "";
   const log = useRepoLog(repository, branch || undefined, filePath, author);
   const mode = useRepoTransport();
+  // The signed in history joins its sessions itself. The public page asks
+  // separately, and learns each session only as far as its owner allowed.
+  const shas = useMemo(() => log.commits.slice(0, 100).map((commit) => commit.sha), [log.commits]);
+  const publicSessions = useRepoCommitSessions(repository, mode === "public" ? shas : null);
 
   const rows = useMemo(() => log.commits.map((commit) => ({ ...commit, ...splitCommitMessage(commit.message),
     date: new Date(commit.timestamp).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" }) })), [log.commits]);
@@ -219,7 +224,16 @@ function CommitsContent({
                     <span title={new Date(commit.timestamp).toLocaleString()}>
                       {relTimeShort(commit.timestamp, now)}
                     </span>
-                    {mode === "convex" && <CommitLinks repository={repository} joins={commit} />}
+                    {mode === "convex" ? (
+                      <CommitLinks repository={repository} joins={commit} />
+                    ) : (
+                      publicSessions.data?.by_sha[commit.sha] && (
+                        <CommitLinks
+                          repository={repository}
+                          joins={{ session: { _id: publicSessions.data.by_sha[commit.sha].conversation_id, title: publicSessions.data.by_sha[commit.sha].title, href: sessionHref(publicSessions.data.by_sha[commit.sha]) } }}
+                        />
+                      )
+                    )}
                     {commit.additions !== undefined && <span className="text-sol-green">+{commit.additions}</span>}
                     {commit.deletions !== undefined && <span className="text-sol-red">−{commit.deletions}</span>}
                     {commit.changed_files != null && <span>{commit.changed_files} files</span>}

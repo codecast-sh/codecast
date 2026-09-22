@@ -394,21 +394,23 @@ export function PRContent({
           onSetShepherd={(conversationId, enabled) =>
             void setShepherd({ pr_id: pr._id, conversation_id: conversationId, enabled })
           }
-          actions={isAuthenticated && (
+          actions={({ editTitle }) => (
             <>
-              <ReviewMenu
-                pr={pr}
-                notes={notes}
-                authorLogin={user?.github_username}
-                onNavigate={jumpToComment}
-                open={reviewOpen}
-                onOpenChange={setReviewOpen}
-                sessionChoices={sessionChoices}
-                openThreads={openThreadStops.length}
-                onWalk={() => jumpTo(openThreadStops[0].file, openThreadStops[0].key)}
-              />
-              <MergeMenu pr={pr} />
-              <MoreMenu pr={pr} />
+              {isAuthenticated && (
+                <ReviewMenu
+                  pr={pr}
+                  notes={notes}
+                  authorLogin={user?.github_username}
+                  onNavigate={jumpToComment}
+                  open={reviewOpen}
+                  onOpenChange={setReviewOpen}
+                  sessionChoices={sessionChoices}
+                  openThreads={openThreadStops.length}
+                  onWalk={() => jumpTo(openThreadStops[0].file, openThreadStops[0].key)}
+                />
+              )}
+              {isAuthenticated && <MergeMenu pr={pr} />}
+              <MoreMenu pr={pr} canWrite={isAuthenticated} onEditTitle={editTitle} />
             </>
           )}
         />
@@ -419,7 +421,7 @@ export function PRContent({
           <nav
             role="tablist"
             aria-label="Pull request views"
-            className="flex items-center gap-1 border-b border-sol-border/50 px-4 shrink-0"
+            className="pr-tabs flex items-center gap-1 border-b border-sol-border/50 px-4 shrink-0 overflow-x-auto"
           >
             {TABS.map(({ key, label, icon: Icon, digit }) => (
               <button
@@ -428,7 +430,7 @@ export function PRContent({
                 role="tab"
                 aria-selected={tab === key}
                 onClick={() => setTab(key)}
-                className={`group flex items-center gap-2 border-b-2 px-3 py-2 text-[12px] transition-colors ${
+                className={`group flex items-center gap-2 border-b-2 px-3 py-2 text-[12px] whitespace-nowrap transition-colors ${
                   tab === key
                     ? "border-current text-sol-text"
                     : "border-transparent text-sol-text-muted hover:text-sol-text"

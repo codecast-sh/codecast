@@ -47,6 +47,7 @@ import {
 import { SessionBlameStrip } from "./SessionBlame";
 import { serverErrorText } from "../../lib/errorCause";
 import { cn, copyToClipboard } from "../../lib/utils";
+import { CodeShareMenu, sharePageUrl } from "../menus/CodeShareItems";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { useRepoTransport } from "../../lib/repoTransport";
 import { repoShortcutAllowed } from "../../lib/repoContent";
@@ -237,7 +238,7 @@ export function BlobContent({
             {lineCount} lines · {formatSize(blob.data.size)}
           </span>
         )}
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex items-center gap-2 flex-wrap max-w-full justify-end">
           <div className="flex items-center h-7 rounded-md border border-sol-border/60 overflow-hidden text-[12px]" role="radiogroup" aria-label="Blame" title="Who is behind each line: the commit, or the codecast session that wrote it">
             <span className="flex items-center gap-1 pl-2 pr-1.5 text-sol-text-dim"><UserSquare2 className="w-3.5 h-3.5" />Blame</span>
             {BLAME_MODES.map((mode) => (
@@ -273,10 +274,12 @@ export function BlobContent({
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center gap-1.5 h-7 rounded-md border border-sol-border/60 px-2 text-[12px] text-sol-text-muted hover:text-sol-text hover:border-sol-border transition-colors"
+            title="Open on GitHub"
           >
             <ExternalLink className="w-3 h-3" />
-            GitHub
+            <span className="repo-github-label">GitHub</span>
           </a>
+          <CodeShareMenu url={sharePageUrl(pageHref)} label="file" previewTitle={path} />
         </div>
       </div>
 

@@ -6,7 +6,7 @@ import { useInboxStore } from "../store/inboxStore";
 import { useRepoAccess, useRepoViewerScope } from "./useRepoAccess";
 import { repoBrowseKey, retainRepoBrowseRows, type RepoBrowseRow } from "../lib/repoBrowseCache";
 import { useWatchEffect } from "./useWatchEffect";
-import { pathSegments, type BlameSessionResolution, type RepoTreeEntry } from "../lib/repoView";
+import { pathSegments, type BlameSessionRef, type BlameSessionResolution, type RepoTreeEntry } from "../lib/repoView";
 import { publicRepoUrl, usePublicRepoRead, useRepoTransport } from "../lib/repoTransport";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { WORKTREES_KIND, type WorktreesPayload } from "@codecast/shared/contracts";
@@ -268,12 +268,10 @@ export function useRepoBlame(
 }
 
 /**
- * The sessions behind a file's blame lines.
- *
- * Joined server side from the same cached blame row, so it is asked for only
- * once the git blame has arrived (`enabled`) and the ensure it repeats is a
- * fresh-cache no-op. Sessions are codecast's own, so the public transport
- * (a shared page with no viewer) has none to show and is never asked.
+ * The sessions behind a file's lines. Signed in, the join names every session
+ * the viewer may open. On the public page it names each session as far as its
+ * owner allowed: a public one with its title and share link, any other as
+ * "<name>'s session on <date>" with no link (repoSessions.publicSessionRef).
  */
 export function useRepoBlameSessions(
   repository: string | undefined,
@@ -281,12 +279,60 @@ export function useRepoBlameSessions(
   path: string | undefined,
   enabled: boolean,
 ): RepoRead<BlameSessionResolution> {
-  const mode = useRepoTransport();
   return useEnsuredRead<BlameSessionResolution>({
     ensureRef: api.repos.ensureBlame,
     queryRef: api.repos.getBlameSessions,
-    args: enabled && mode === "convex" && repository && ref && path ? { repository, ref, path } : null,
+    args: enabled && repository && ref && path ? { repository, ref, path } : null,
     publicKind: "blamesessions",
+  });
+}
+
+// ── Sessions ──
+
+export type RepoSessionCommit = { sha: string; subject: string; timestamp: number; insertions: number; deletions: number; files_changed: number };
+
+export type RepoSession = BlameSessionRef & {
+  agent_type: string;
+  message_count: number;
+  started_at: number;
+  updated_at: number;
+  branch?: string;
+  commits: RepoSessionCommit[];
+  files: string[];
+  files_total: number;
+};
+
+/**
+ * Every session that touched a repository, newest first. Signed in it is the
+ * sessions the viewer may open, each marked public or not; on the public page
+ * it is only the sessions their owners made public. Nothing at GitHub can
+ * answer this, so there is no ensure.
+ */
+export function useRepoSessions(repository: string | undefined): RepoRead<RepoSession[]> {
+  return useEnsuredRead<RepoSession[]>({
+    queryRef: api.repoSessions.getSessions,
+    args: repository ? { repository } : null,
+    publicKind: "sessions",
+  });
+}
+
+/**
+ * The session behind each of a page of commits, for the public page only: the
+ * signed in history read joins its sessions itself. `shas === null` reads
+ * nothing.
+ */
+export function useRepoCommitSessions(
+  repository: string | undefined,
+  shas: readonly string[] | null,
+): RepoRead<{ by_sha: Record<string, BlameSessionRef> }> {
+  const mode = useRepoTransport();
+  const list = shas && shas.length > 0 ? shas.join(",") : "";
+  // The args exist only on the public side, so the signed in query behind the
+  // descriptor is never asked; it is named because a read has to name one.
+  return useEnsuredRead<{ by_sha: Record<string, BlameSessionRef> }>({
+    queryRef: api.repoSessions.getSessions,
+    args: mode === "public" && repository && list ? { repository, shas: list } : null,
+    publicKind: "commitsessions",
   });
 }
 

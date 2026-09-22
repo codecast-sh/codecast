@@ -6,11 +6,13 @@ import {
   Check,
   ChevronDown,
   CircleDot,
+  GitBranch,
   GitMerge,
   GitPullRequestClosed,
   GitPullRequestDraft,
   MessageSquare,
   MoreHorizontal,
+  Pencil,
   Radio,
   RotateCcw,
   Send,
@@ -27,9 +29,12 @@ import {
 } from "../ui/dropdown-menu";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { ConfirmButton } from "../integrations/parts";
+import { CodeMenuItem, CodeShareItems, copyText, sharePageUrl } from "../menus/CodeShareItems";
 import { useInboxStore } from "../../store/inboxStore";
 import { accentVar } from "../../lib/externalEvents";
 import { mergeStateMeta, notePlace, prStateKey, type CodeCommentRow } from "../../lib/prView";
+import { prPageHref } from "../../lib/repoView";
+import { useRepoFamily } from "../repo/useRepoFamily";
 
 // The verbs of a pull request, in codecast, reaching GitHub. Every one calls
 // the same server function `cast pr` calls (prCli), so the page and the CLI
@@ -356,16 +361,34 @@ export function MergeMenu({ pr }: { pr: any }) {
   );
 }
 
-/** Everything else a pull request can have done to it, behind one button. */
-export function MoreMenu({ pr }: { pr: any }) {
+/** Everything else a pull request can have done to it, behind one button.
+ *
+ *  Share sits first, because handing the page to someone does not change it.
+ *  Edits follow. Closing it is last, on its own, so it is never next to a
+ *  copy. */
+export function MoreMenu({
+  pr,
+  canWrite = false,
+  onEditTitle,
+}: {
+  pr: any;
+  /** Signed in, so the verbs that reach GitHub are offered. */
+  canWrite?: boolean;
+  onEditTitle?: () => void;
+}) {
   const close = useAction(api.prCli.close);
   const reopen = useAction(api.prCli.reopen);
   const draft = useAction(api.prCli.draft);
   const reviewers = useAction(api.prCli.reviewers);
+  const family = useRepoFamily();
   const [asking, setAsking] = useState(false);
   const [login, setLogin] = useState("");
   const locator = { repository: pr.repository, number: pr.number };
   const state = prStateKey(pr);
+  const pageUrl = sharePageUrl(prPageHref(pr.repository, pr.number, family));
+  const githubUrl = `https://github.com/${pr.repository}/pull/${pr.number}`;
+  const branch = pr.head_ref && pr.base_ref ? `${pr.head_ref} -> ${pr.base_ref}` : "";
+  const openish = state === "open" || state === "draft";
 
   const act = async (fn: () => Promise<any>, done: string) => {
     try {
@@ -388,48 +411,76 @@ export function MoreMenu({ pr }: { pr: any }) {
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-60 bg-sol-bg border-sol-border">
-          {(state === "open" || state === "draft") && (
-            <DropdownMenuItem className="flex items-center gap-2 cursor-pointer text-[12px] text-sol-text" onClick={() => setAsking(true)}>
-              <UserPlus className="w-3.5 h-3.5 text-sol-text-dim" /> Request a review
-            </DropdownMenuItem>
-          )}
-          {state === "open" && (
-            <DropdownMenuItem
-              className="flex items-center gap-2 cursor-pointer text-[12px] text-sol-text"
-              onClick={() => act(() => draft({ ...locator, draft: true }), "Back to draft")}
-            >
-              <GitPullRequestDraft className="w-3.5 h-3.5 text-sol-text-dim" /> Convert to draft
-            </DropdownMenuItem>
-          )}
-          {state === "draft" && (
-            <DropdownMenuItem
-              className="flex items-center gap-2 cursor-pointer text-[12px] text-sol-text"
-              onClick={() => act(() => draft({ ...locator, draft: false }), "Ready for review")}
-            >
-              <CircleDot className="w-3.5 h-3.5 text-sol-green" /> Ready for review
-            </DropdownMenuItem>
-          )}
-          {(state === "open" || state === "draft") && (
+          <CodeShareItems
+            url={pageUrl}
+            label="pull request"
+            previewTitle={pr.title}
+            githubUrl={githubUrl}
+          />
+
+          {(canWrite && onEditTitle || branch) && (
             <>
               <DropdownMenuSeparator className="bg-sol-border" />
-              <DropdownMenuItem
-                className="flex items-center gap-2 cursor-pointer text-[12px] text-sol-red"
-                onClick={() => act(() => close(locator), "Closed")}
-              >
-                <GitPullRequestClosed className="w-3.5 h-3.5" /> Close without merging
-              </DropdownMenuItem>
+              {canWrite && onEditTitle && (
+                <CodeMenuItem icon={Pencil} onSelect={onEditTitle}>Edit title</CodeMenuItem>
+              )}
+              {branch && (
+                <CodeMenuItem icon={GitBranch} onSelect={() => { void copyText(branch, "Branch copied"); }}>
+                  Copy branch
+                </CodeMenuItem>
+              )}
             </>
           )}
-          {state === "closed" && (
-            <DropdownMenuItem
-              className="flex items-center gap-2 cursor-pointer text-[12px] text-sol-text"
-              onClick={() => act(() => reopen(locator), "Reopened")}
-            >
-              <RotateCcw className="w-3.5 h-3.5 text-sol-text-dim" /> Reopen
-            </DropdownMenuItem>
+
+          {canWrite && openish && (
+            <>
+              <DropdownMenuSeparator className="bg-sol-border" />
+              <CodeMenuItem icon={UserPlus} onSelect={() => setAsking(true)}>Request a review</CodeMenuItem>
+              {state === "open" && (
+                <CodeMenuItem
+                  icon={GitPullRequestDraft}
+                  onSelect={() => { void act(() => draft({ ...locator, draft: true }), "Back to draft"); }}
+                >
+                  Convert to draft
+                </CodeMenuItem>
+              )}
+              {state === "draft" && (
+                <CodeMenuItem
+                  icon={CircleDot}
+                  onSelect={() => { void act(() => draft({ ...locator, draft: false }), "Ready for review"); }}
+                >
+                  Ready for review
+                </CodeMenuItem>
+              )}
+            </>
           )}
+
+          {canWrite && openish && (
+            <>
+              <DropdownMenuSeparator className="bg-sol-border" />
+              <CodeMenuItem
+                icon={GitPullRequestClosed}
+                tone="danger"
+                onSelect={() => { void act(() => close(locator), "Closed"); }}
+              >
+                Close without merging
+              </CodeMenuItem>
+            </>
+          )}
+          {canWrite && state === "closed" && (
+            <>
+              <DropdownMenuSeparator className="bg-sol-border" />
+              <CodeMenuItem
+                icon={RotateCcw}
+                onSelect={() => { void act(() => reopen(locator), "Reopened"); }}
+              >
+                Reopen
+              </CodeMenuItem>
+            </>
+          )}
+
           <DropdownMenuSeparator className="bg-sol-border" />
-          <div className="px-2 py-1.5 text-[10px] text-sol-text-dim flex items-center gap-1.5">
+          <div className="px-2 py-1.5 text-[10px] text-sol-text-dim flex items-center gap-1.5 flex-wrap">
             <KeyCap size="xs">r</KeyCap> review <KeyCap size="xs">n</KeyCap> <KeyCap size="xs">p</KeyCap> threads <KeyCap size="xs">m</KeyCap> viewed
           </div>
         </DropdownMenuContent>

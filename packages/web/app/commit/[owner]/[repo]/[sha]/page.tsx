@@ -24,6 +24,7 @@ import {
   MessageSquare,
 } from "lucide-react";
 import { CommentAvatar } from "../../../../../components/comments/CommentAvatar";
+import { CodeMenuItem, CodeShareMenu, copyText, sharePageUrl } from "../../../../../components/menus/CodeShareItems";
 import { BlobContent } from "../../../../../components/repo/BlobContent";
 import { CommitRail } from "../../../../../components/repo/CommitRail";
 import { RepoPageShell } from "../../../../../components/repo/RepoPageShell";
@@ -156,9 +157,13 @@ function CommitHeader({
   const { subject, body } = splitCommitMessage(commit.message);
   const [owner, name] = repository.split("/");
 
+  const pageUrl = sharePageUrl(commitPageHref(repository, commit.sha, family));
+  const githubUrl = `https://github.com/${repository}/commit/${commit.sha}`;
+
   return (
     <header ref={headRef} className="repo-band border-b border-sol-border/60 px-4 py-3 shrink-0">
-      <div className="flex items-start gap-3">
+      <div className="commit-head">
+        <div className="commit-head-main min-w-0 flex items-start gap-3">
         <GitCommitHorizontal className="w-5 h-5 mt-1 shrink-0" style={{ color: "var(--repo-accent)" }} />
         <div className="min-w-0 flex-1">
           {/* The same breadcrumb the source pages carry, so a commit is one
@@ -179,7 +184,7 @@ function CommitHeader({
             </Link>
           </div>
           <h1
-            className="repo-rise font-serif text-[22px] leading-tight text-sol-text"
+            className="commit-subject repo-rise font-serif text-[22px] leading-tight text-sol-text"
             style={{ ["--d" as string]: "40ms" }}
           >
             {subject}
@@ -209,10 +214,10 @@ function CommitHeader({
             {commit.branch && (
               <Link
                 href={repoCommitsHref(repository, commit.branch, { family })}
-                className="flex items-center gap-1 hover:text-sol-text transition-colors"
+                className="flex items-center gap-1 min-w-0 max-w-full hover:text-sol-text transition-colors"
               >
-                <GitBranch className="w-3 h-3" />
-                {commit.branch}
+                <GitBranch className="w-3 h-3 shrink-0" />
+                <span className="truncate">{commit.branch}</span>
               </Link>
             )}
             <span className="flex items-center gap-1.5">
@@ -229,8 +234,9 @@ function CommitHeader({
             <CommitLinks repository={repository} joins={commit} />
           </div>
         </div>
+        </div>
 
-        <div className="flex items-center gap-1 shrink-0">
+        <div className="commit-head-actions">
           {/* Both arrows, always: a disabled one says the history ends here,
               where a missing one only said the page had not looked. */}
           <NeighbourArrow repository={repository} neighbour={neighbours.newer} direction="newer" />
@@ -251,22 +257,23 @@ function CommitHeader({
             <MessageSquare className="w-3 h-3" />
             {threadCount > 0 && <span className="tabular-nums">{threadCount}</span>}
           </button>
-          <Link href={repoTreeHref(repository, commit.sha, undefined, family)}>
+          <Link href={repoTreeHref(repository, commit.sha, undefined, family)} title="Browse the tree at this commit">
             <Button variant="outline" size="sm" className="h-7">
               Browse tree
             </Button>
           </Link>
           <RepoWindowControl />
-          <a
-            href={`https://github.com/${repository}/commit/${commit.sha}`}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
+          <a href={githubUrl} target="_blank" rel="noopener noreferrer" title="Open on GitHub">
             <Button variant="outline" size="sm" className="h-7">
-              <ExternalLink className="w-3 h-3 mr-1.5" />
-              GitHub
+              <ExternalLink className="w-3 h-3" />
+              <span className="repo-github-label">GitHub</span>
             </Button>
           </a>
+          <CodeShareMenu url={pageUrl} label="commit" previewTitle={subject}>
+            <CodeMenuItem icon={Copy} onSelect={() => { void copyText(commit.sha, "Sha copied"); }}>
+              Copy sha
+            </CodeMenuItem>
+          </CodeShareMenu>
         </div>
       </div>
     </header>

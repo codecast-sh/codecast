@@ -176,6 +176,63 @@
   border-color: color-mix(in srgb, var(--session-hue) 60%, transparent);
 }
 
+/* A commit's subject and its verbs share a row when there is room. The
+   subject keeps a floor, so a narrow pane wraps the verbs under it instead
+   of squeezing the sentence down to one word a line. */
+.commit-head {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.commit-head-main {
+  flex: 1 1 16rem;
+  min-width: min(100%, 16rem);
+}
+
+.commit-subject {
+  overflow-wrap: break-word;
+}
+
+.commit-head-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  max-width: 100%;
+  margin-left: auto;
+}
+
+/* The repository band: the name keeps a floor, and the controls wrap as
+   their own row once they no longer fit beside it. */
+.repo-head-name {
+  flex: 1 1 8rem;
+  min-width: min(100%, 8rem);
+}
+
+.repo-head-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  max-width: 100%;
+  margin-left: auto;
+}
+
+@container (max-width: 560px) {
+  .commit-subject {
+    font-size: 17px;
+  }
+  .commit-head-actions,
+  .repo-head-actions {
+    margin-left: 0;
+  }
+  .repo-github-label {
+    display: none;
+  }
+}
+
 /* The commit page's discussion rail. The composer inside it is the
    conversation's own MessageInput, whose chat-style mention menu is a fixed
    480px anchored at the caret: wider than the rail. Here it spans the
@@ -183,4 +240,20 @@
 .commit-rail .cc-cmt-mi .absolute.bottom-0.z-30 {
   left: 0 !important;
   width: 100% !important;
+}
+
+/* The README. A README centers its logo and badges with `align="center"` on
+ * paragraphs, which is honoured here so the first screen reads as the author
+ * laid it out; images inside such a paragraph sit inline so a row of badges
+ * stays a row. */
+.repo-readme p[align="center"],
+.repo-readme div[align="center"] {
+  text-align: center;
+}
+
+.repo-readme p[align="center"] img,
+.repo-readme div[align="center"] img {
+  display: inline-block;
+  vertical-align: middle;
+  margin: 0 0.25rem;
 }

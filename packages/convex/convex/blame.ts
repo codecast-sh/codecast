@@ -63,9 +63,17 @@ export function newResolveCaches(): ResolveCaches {
   return { conversations: new Map(), users: new Map() };
 }
 
+/**
+ * Who is asking. A user id resolves only the sessions that person owns or
+ * shares a team with. `null` is a reader with no account at all — the public
+ * repository pages — for whom every session resolves, and the caller then
+ * reduces each one to what a stranger may see (repoSessions.publicSessionRef).
+ */
+export type BlameViewer = Id<"users"> | null;
+
 async function accessibleConversation(
   ctx: { db: any },
-  userId: Id<"users">,
+  viewer: BlameViewer,
   cache: Map<string, Doc<"conversations"> | null>,
   conversationId: Id<"conversations">,
 ): Promise<Doc<"conversations"> | null> {
@@ -74,8 +82,11 @@ async function accessibleConversation(
   const conv = await ctx.db.get(conversationId);
   let visible: Doc<"conversations"> | null = null;
   if (conv) {
-    const access = await checkConversationAccess(ctx, userId, conv);
-    if (access === "owner" || access === "team") visible = conv;
+    if (viewer === null) visible = conv;
+    else {
+      const access = await checkConversationAccess(ctx, viewer, conv);
+      if (access === "owner" || access === "team") visible = conv;
+    }
   }
   cache.set(key, visible);
   return visible;
@@ -113,7 +124,7 @@ async function sessionRefFor(
  */
 export async function resolveCommitSessions(
   ctx: { db: any },
-  userId: Id<"users">,
+  viewer: BlameViewer,
   descriptors: CommitDescriptor[],
   caches: ResolveCaches = newResolveCaches(),
 ): Promise<Record<string, ResolvedSession>> {
@@ -134,7 +145,7 @@ export async function resolveCommitSessions(
       .collect();
     for (const row of named) {
       if (!row.conversation_id) continue;
-      conv = await accessibleConversation(ctx, userId, caches.conversations, row.conversation_id);
+      conv = await accessibleConversation(ctx, viewer, caches.conversations, row.conversation_id);
       if (conv) break;
     }
 
@@ -151,7 +162,7 @@ export async function resolveCommitSessions(
         .collect();
       const accessible: CommitRowLite[] = [];
       for (const row of candidates) {
-        if (await accessibleConversation(ctx, userId, caches.conversations, row.conversation_id))
+        if (await accessibleConversation(ctx, viewer, caches.conversations, row.conversation_id))
           accessible.push(row);
       }
       const best = pickRowForSha(sha, accessible);
@@ -176,7 +187,7 @@ export async function resolveCommitSessions(
       for (const row of rankRowsBySummary(desc.summary, desc.author_time, windowRows)) {
         const candidate = await accessibleConversation(
           ctx,
-          userId,
+          viewer,
           caches.conversations,
           row.conversation_id as Id<"conversations">,
         );
@@ -208,7 +219,7 @@ export async function resolveCommitSessions(
  */
 export async function matchFileLines(
   ctx: { db: any },
-  userId: Id<"users">,
+  viewer: BlameViewer,
   filePaths: string[],
   lines: MatchLine[],
   caches: ResolveCaches = newResolveCaches(),
@@ -228,7 +239,7 @@ export async function matchFileLines(
       .take(MAX_FILE_EDIT_ROWS);
     for (const row of recentEdits) {
       if (row.change_type !== "edit" && row.change_type !== "write") continue;
-      if (await accessibleConversation(ctx, userId, caches.conversations, row.conversation_id))
+      if (await accessibleConversation(ctx, viewer, caches.conversations, row.conversation_id))
         editRows.push(row);
     }
   }

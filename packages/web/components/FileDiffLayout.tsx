@@ -575,13 +575,13 @@ function FileHeaderName({
       {href ? (
         <Link
           href={href}
-          className={cn("font-mono text-xs truncate hover:underline decoration-sol-border underline-offset-2", className)}
+          className={cn("font-mono text-xs truncate min-w-0 hover:underline decoration-sol-border underline-offset-2", className)}
           title={`Open ${path} at this revision`}
         >
           {label}
         </Link>
       ) : (
-        <span className={cn("font-mono text-xs truncate", className)}>{label}</span>
+        <span className={cn("font-mono text-xs truncate min-w-0", className)}>{label}</span>
       )}
       <CopyButton text={path} />
       {onOpenFile && (
@@ -654,8 +654,8 @@ function FileDiffContent({
     return (
       <div className="h-full overflow-auto">
         <div className="sticky top-0 z-10 bg-sol-bg border-b border-sol-border px-4 py-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 min-w-0">
+          <div className="flex items-center justify-between gap-x-3 gap-y-1 flex-wrap">
+            <div className="flex items-center gap-2 min-w-[min(100%,10rem)] flex-1 basis-[10rem]">
               {onToggleSidebar && (
                 <button
                   onClick={onToggleSidebar}
@@ -710,8 +710,8 @@ function FileDiffContent({
 
   return (
     <div className="h-full overflow-y-auto overflow-x-hidden">
-      <div className="sticky top-0 z-10 bg-sol-bg-alt border-b border-sol-border/30 px-3 py-1 flex items-center justify-between">
-        <div className="flex items-center gap-1.5 min-w-0">
+      <div className="sticky top-0 z-10 bg-sol-bg-alt border-b border-sol-border/30 px-3 py-1 flex items-center justify-between gap-x-3 gap-y-1 flex-wrap">
+        <div className="flex items-center gap-1.5 min-w-[min(100%,10rem)] flex-1 basis-[10rem]">
           {onToggleSidebar && (
             <button
               onClick={onToggleSidebar}
@@ -855,8 +855,8 @@ function UnifiedDiffView({
 
         return (
           <div key={file.filename} className="overflow-hidden mb-4 last:mb-0" id={`file-${index}`} style={{ contentVisibility: "auto", containIntrinsicBlockSize: "auto 500px" }}>
-            <div className="sticky top-0 z-10 bg-sol-bg-alt px-3 py-1.5 flex items-center justify-between border-y border-sol-border/30">
-              <div className="flex items-center gap-1.5 min-w-0">
+            <div className="sticky top-0 z-10 bg-sol-bg-alt px-3 py-1.5 flex items-center justify-between gap-x-3 gap-y-1 flex-wrap border-y border-sol-border/30">
+              <div className="flex items-center gap-1.5 min-w-[min(100%,10rem)] flex-1 basis-[10rem]">
                 <span className={cn("text-[10px] font-bold shrink-0", status.color)}>
                   {status.label}
                 </span>

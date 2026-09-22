@@ -5,13 +5,15 @@
 // line the person, the session and how long ago. The strip above the file
 // lists the sessions that shaped it, most lines first, and hovering or picking
 // one lights its lines up wherever they fall.
+import type { ReactNode } from "react";
 import Link from "next/link";
-import { GitCommitHorizontal, MessagesSquare } from "lucide-react";
+import { GitCommitHorizontal, Lock, MessagesSquare } from "lucide-react";
 import { AuthorAvatar } from "../entityDisplay";
 import {
   blameViaLabel,
-  sessionBlameHref,
+  sessionHref,
   type BlameSession,
+  type BlameSessionRef,
   type SessionBlameRange,
   type SessionBlameSummary,
 } from "../../lib/repoView";
@@ -61,10 +63,21 @@ export function SessionBlameCell({
   );
 }
 
+/**
+ * The label is a link when the session opens somewhere for this reader, and a
+ * plain span for a private session on the public page, which is named but
+ * cannot be opened.
+ */
+function SessionAnchor({ session, className, title, children }: { session: BlameSessionRef; className: string; title?: string; children: ReactNode }) {
+  const href = sessionHref(session);
+  if (!href) return <span className={className} title={title}>{children}</span>;
+  return <Link href={href} className={className} title={title}>{children}</Link>;
+}
+
 function SessionLabel({ session, range }: { session: BlameSession; range: SessionBlameRange }) {
   return (
-    <Link
-      href={sessionBlameHref(session)}
+    <SessionAnchor
+      session={session}
       className="flex items-center gap-1.5 min-w-0 text-sol-text-muted hover:text-sol-text transition-colors"
     >
       <AuthorAvatar name={session.author_name} avatar={session.author_image} size={12} />
@@ -77,7 +90,7 @@ function SessionLabel({ session, range }: { session: BlameSession; range: Sessio
       {range.newest_at ? (
         <span className="ml-auto shrink-0 tabular-nums text-sol-text-dim">{relTimeShort(range.newest_at)}</span>
       ) : null}
-    </Link>
+    </SessionAnchor>
   );
 }
 
@@ -141,19 +154,25 @@ export function SessionBlameStrip({
             >
               <span className="w-2 h-2 rounded-full shrink-0" style={{ background: color }} />
               <span className="truncate">{entry.session.title}</span>
-              {firstName(entry.session.author_name) && (
+              {entry.session.public !== false && firstName(entry.session.author_name) && (
                 <span className="text-sol-text-dim shrink-0">{firstName(entry.session.author_name)}</span>
               )}
               <span className="tabular-nums text-sol-text-dim shrink-0 pl-1.5 border-l border-sol-border/40">{entry.lines}</span>
             </button>
-            <Link
-              href={sessionBlameHref(entry.session)}
-              className="flex items-center h-full pr-2 pl-0.5 text-sol-text-dim hover:text-sol-text"
-              title="Open the session"
-              aria-label={`Open ${entry.session.title}`}
-            >
-              <MessagesSquare className="w-3 h-3" />
-            </Link>
+            {sessionHref(entry.session) ? (
+              <Link
+                href={sessionHref(entry.session)!}
+                className="flex items-center h-full pr-2 pl-0.5 text-sol-text-dim hover:text-sol-text"
+                title="Open the session"
+                aria-label={`Open ${entry.session.title}`}
+              >
+                <MessagesSquare className="w-3 h-3" />
+              </Link>
+            ) : (
+              <span className="flex items-center h-full pr-2 pl-0.5 text-sol-text-dim" title="This session is not public">
+                <Lock className="w-3 h-3" />
+              </span>
+            )}
           </span>
         );
       })}

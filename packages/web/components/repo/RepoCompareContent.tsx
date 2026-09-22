@@ -15,14 +15,14 @@ export function RepoCompareContent({ repository, base, head, family }: {
   const data = comparison.data;
   const files = useMemo(() => (data?.files ?? []).map((file) => ({ ...file, changes: file.additions + file.deletions })), [data]);
   return <div className="flex flex-col h-full min-h-0">
-    <form key={`${base}:${head}`} className="flex gap-2 px-4 py-3 border-b border-sol-border/40 text-xs" onSubmit={(event) => {
+    <form key={`${base}:${head}`} className="flex flex-wrap gap-2 px-4 py-3 border-b border-sol-border/40 text-xs" onSubmit={(event) => {
       event.preventDefault(); const fields = new FormData(event.currentTarget);
       const nextBase = String(fields.get("base") || "").trim(); const nextHead = String(fields.get("head") || "").trim();
       if (nextBase && nextHead) router.push(repoCompareHref(repository, nextBase, nextHead, family));
     }}>
-      <label className="flex items-center gap-2 min-w-0">Base <input name="base" defaultValue={base} className="min-w-0 w-44 rounded border border-sol-border bg-sol-bg px-2 py-1" /></label>
+      <label className="flex items-center gap-2 min-w-0 flex-1 basis-40">Base <input name="base" defaultValue={base} className="min-w-0 w-full max-w-44 rounded border border-sol-border bg-sol-bg px-2 py-1" /></label>
       <span className="self-center text-sol-text-dim">…</span>
-      <label className="flex items-center gap-2 min-w-0">Head <input name="head" defaultValue={head} className="min-w-0 w-44 rounded border border-sol-border bg-sol-bg px-2 py-1" /></label>
+      <label className="flex items-center gap-2 min-w-0 flex-1 basis-40">Head <input name="head" defaultValue={head} className="min-w-0 w-full max-w-44 rounded border border-sol-border bg-sol-bg px-2 py-1" /></label>
       <button className="text-sol-blue">Compare</button>
     </form>
     {comparison.error && <p className="p-4 text-xs text-sol-red">{serverErrorText(comparison.error)}</p>}

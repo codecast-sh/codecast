@@ -51,7 +51,18 @@ export const PUBLIC_KINDS = [
   "lastcommits",
   "pulls",
   "search",
+  // Answered from codecast's own tables rather than the cache, after the same
+  // gate: every session reduced to what a stranger may see (repoSessions).
+  "sessions",
+  "commitsessions",
+  "blamesessions",
 ] as const;
+
+/** The kinds a session join answers; each maps to one internal query in repoSessions. */
+export const SESSION_KINDS: readonly PublicKind[] = ["sessions", "commitsessions", "blamesessions"];
+
+const SHA_LIST_LIMIT = 100;
+const FULL_SHA = /^[0-9a-f]{40}$/;
 
 export type PublicKind = (typeof PUBLIC_KINDS)[number];
 
@@ -115,7 +126,10 @@ export function paramsForKind(kind: PublicKind, q: URLSearchParams): Record<stri
       return { ref, recursive: q.get("recursive") === "1" };
     case "blob":
     case "blame":
+    case "blamesessions":
       return { ref, path };
+    case "commitsessions":
+      return { shas: (q.get("shas") ?? "").split(",").map((sha) => sha.trim().toLowerCase()).filter(Boolean) };
     case "readme":
       return { ref };
     case "lastcommits":
@@ -148,7 +162,12 @@ export function paramsComplete(kind: PublicKind, params: Record<string, unknown>
   switch (kind) {
     case "blob":
     case "blame":
+    case "blamesessions":
       return filled("ref") && filled("path");
+    case "commitsessions": {
+      const shas = params.shas;
+      return Array.isArray(shas) && shas.length > 0 && shas.length <= SHA_LIST_LIMIT && shas.every((sha) => FULL_SHA.test(String(sha)));
+    }
     case "tree":
     case "readme":
     case "log":
@@ -217,6 +236,7 @@ export const serve = httpAction(async (ctx, request) => {
   if (!paramsComplete(kind, params)) {
     return json({ error: "bad_request" }, 400, "no-store");
   }
+  if (SESSION_KINDS.includes(kind)) return await serveSessions(ctx, repository, kind, params);
   if (kind !== "meta") {
     try {
       const filled = await ctx.runAction(internal.repos.ensureCachedPublic, {
@@ -241,3 +261,29 @@ export const serve = httpAction(async (ctx, request) => {
 
   return json(data, 200, cacheHeaderFor(params));
 });
+
+/**
+ * The session joins. Nothing here reads GitHub except the blame a session
+ * blame needs under it, which is filled the same way the blob page filled it.
+ * Each answer is a public reduction (repoSessions.publicSessionRef) or the one
+ * refusal.
+ */
+async function serveSessions(ctx: any, repository: string, kind: PublicKind, params: Record<string, unknown>): Promise<Response> {
+  if (kind === "sessions") {
+    return json(await ctx.runQuery(internal.repoSessions.publicSessions, { repository }), 200, "no-store");
+  }
+  if (kind === "commitsessions") {
+    return json(await ctx.runQuery(internal.repoSessions.publicCommitSessions, { repository, shas: params.shas as string[] }), 200, "no-store");
+  }
+  try {
+    const filled = await ctx.runAction(internal.repos.ensureCachedPublic, { repository, kind: "blame", ref: params.ref, path: params.path });
+    if (!filled.installed) return notFound();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("404")) return notFound();
+    return json({ error: "upstream_unavailable" }, 502, "no-store");
+  }
+  const data = await ctx.runQuery(internal.repoSessions.publicBlameSessions, { repository, ref: params.ref as string, path: params.path as string });
+  if (data === null) return notFound();
+  return json(data, 200, "no-store");
+}

@@ -4,11 +4,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { gitSshUrl, remoteHome, shq, sshBase, type RemoteHost } from "../remote/session-move.js";
 import { hostProbeOrigin } from "./hostGit.js";
-import { MANIFEST_REL_PATH, resolveManifest } from "../workspace/resolver.js";
+import { MANIFEST_REL_PATH } from "../workspace/resolver.js";
+import { collectCopyFiles, manifestCopyEntries, sourceStat, validateRelativePath } from "../workspace/copyFiles.js";
 import { buildMirrorBundle } from "./mirror/bundle.js";
 import { kindForPath, transformForHost } from "./mirror/transform.js";
 import { collectProjectContext } from "./mirror/discovery.js";
-import { ManifestError } from "../workspace/manifest.js";
 import { CLOUD_SEED_EXCLUDES, createWipSnapshotStrict } from "../wipSnapshot.js";
 
 function checked(result: SpawnSyncReturns<string>, operation: string): string {
@@ -350,54 +350,18 @@ export function listDanglingSeedRefs(host: RemoteHost, repoPath: string): string
 export const DANGLING_SEED_REFS_SCRIPT =
   `for n in $(git for-each-ref --format='%(refname:strip=3)' ${CLOUD_SEED_REF_PREFIX}); do [ -d ".codecast/workspaces/$n" ] || echo "$n"; done`;
 
-function validateRelativePath(rel: string): void {
-  if (!rel || /[\\:\x00-\x1f\x7f]/.test(rel)
-    || rel.split("/").some((part) => !part || part === "." || part === ".." || part.toLowerCase() === ".git")) {
-    throw new Error(`unsafe workspace copy path: ${JSON.stringify(rel)}`);
-  }
-}
-
-function sourceStat(root: string, rel: string): fs.Stats | undefined {
-  validateRelativePath(rel);
-  let current = root;
-  let stat: fs.Stats | undefined;
-  for (const part of rel.split("/")) {
-    current = path.join(current, part);
-    stat = fs.lstatSync(current, { throwIfNoEntry: false });
-    if (!stat) return undefined;
-    if (stat.isSymbolicLink()) throw new Error(`workspace copy refuses symlink: ${rel}`);
-  }
-  return stat;
-}
-
 export function cloudCopyFiles(localGitRoot: string): string[] {
   const root = fs.realpathSync(localGitRoot);
+  // Both of these must be real files before anything is read through them.
   sourceStat(root, MANIFEST_REL_PATH);
   sourceStat(root, ".wt-setup-files");
-  let candidates: string[];
-  try {
-    candidates = resolveManifest(root).setup.copy;
-  } catch (err) {
-    if (!(err instanceof ManifestError)) throw err;
-    throw new Error("invalid workspace manifest; fix .codecast/workspace.toml before cloud acquire");
-  }
-  const files = new Set<string>();
-  const context = new Set(collectProjectContext({ root, includeTracked: false, includeAncestors: false }).files.filter((f) => f.scope === "project").map((f) => f.relativePath));
-  const visit = (rel: string) => {
-    validateRelativePath(rel);
-    if (context.has(rel)) { files.add(rel); return; }
-    const stat = sourceStat(root, rel);
-    if (!stat) return;
-    if (stat.isDirectory()) {
-      for (const child of fs.readdirSync(path.join(root, rel))) visit(`${rel}/${child}`);
-    } else if (stat.isFile()) {
-      files.add(rel);
-    } else {
-      throw new Error(`workspace copy requires a regular file: ${rel}`);
-    }
-  };
-  for (const rel of [...candidates, MANIFEST_REL_PATH, ".wt-setup-files"]) visit(rel);
-  return [...files];
+  const candidates = manifestCopyEntries(root, "invalid workspace manifest; fix .codecast/workspace.toml before cloud acquire");
+  const known = new Set(
+    collectProjectContext({ root, includeTracked: false, includeAncestors: false })
+      .files.filter((f) => f.scope === "project")
+      .map((f) => f.relativePath),
+  );
+  return collectCopyFiles(root, [...candidates, MANIFEST_REL_PATH, ".wt-setup-files"], { known });
 }
 
 const receiveFile = `

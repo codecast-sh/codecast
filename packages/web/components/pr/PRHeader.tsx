@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useAction } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -43,14 +43,23 @@ import {
 
 const api = _api as any;
 
-/** The title, editable in place by anyone who may edit the pull request. */
-function EditableTitle({ pr }: { pr: any }) {
+/** The title, editable in place by anyone who may edit the pull request.
+ *  `editNonce` bumps when the overflow menu asks for the same editor. */
+function EditableTitle({ pr, editNonce = 0 }: { pr: any; editNonce?: number }) {
   const edit = useAction(api.prCli.edit);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<string>(pr.title);
+  const [seen, setSeen] = useState(editNonce);
+  if (editNonce !== seen) {
+    setSeen(editNonce);
+    if (editNonce > 0) {
+      setDraft(pr.title);
+      setEditing(true);
+    }
+  }
   if (!editing) {
     return (
-      <h1 className="group/title font-serif text-[26px] leading-tight text-sol-text min-w-0 flex-1">
+      <h1 className="pr-title group/title font-serif text-[26px] leading-tight text-sol-text">
         {pr.title}
         <button
           type="button"
@@ -65,7 +74,7 @@ function EditableTitle({ pr }: { pr: any }) {
   }
   return (
     <form
-      className="min-w-0 flex-1 flex items-center gap-2"
+      className="pr-title flex items-center gap-2"
       onSubmit={async (e) => {
         e.preventDefault();
         const title = draft.trim();
@@ -81,7 +90,7 @@ function EditableTitle({ pr }: { pr: any }) {
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={(e) => { if (e.key === "Escape") setEditing(false); }}
-        className="w-full bg-transparent font-serif text-[26px] leading-tight text-sol-text border-b border-sol-cyan/60 focus:outline-none"
+        className="pr-title-input w-full bg-transparent font-serif text-[26px] leading-tight text-sol-text border-b border-sol-cyan/60 focus:outline-none"
       />
       <button type="submit" className="cc-comment-btn">Save</button>
     </form>
@@ -151,7 +160,7 @@ function CopyRef({ text }: { text: string }) {
   return (
     <button
       type="button"
-      className="group inline-flex items-center gap-1.5 rounded-md border border-sol-border/40 bg-sol-bg-alt/50 px-2 py-0.5 font-mono text-[11px] text-sol-text-muted hover:border-sol-border hover:text-sol-text transition-colors"
+      className="pr-branch group inline-flex items-center gap-1.5 max-w-full rounded-md border border-sol-border/40 bg-sol-bg-alt/50 px-2 py-0.5 font-mono text-[11px] text-sol-text-muted hover:border-sol-border hover:text-sol-text transition-colors"
       title="Copy the branch names"
       onClick={async () => {
         await copyToClipboard(text);
@@ -159,7 +168,7 @@ function CopyRef({ text }: { text: string }) {
         setTimeout(() => setCopied(false), 1600);
       }}
     >
-      {text}
+      <span className="truncate">{text}</span>
       {copied ? (
         <Check className="w-3 h-3 text-sol-green" />
       ) : (
@@ -216,7 +225,7 @@ function ShepherdControl({
 
   if (!bound) {
     return (
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 flex-wrap max-w-full">
         <button
           type="button"
           className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-sol-border px-2.5 py-1 text-[11px] text-sol-text-muted hover:text-sol-text hover:border-sol-cyan/50 transition-colors"
@@ -251,14 +260,14 @@ function ShepherdControl({
   }
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex items-center gap-2 flex-wrap max-w-full">
       <Chip accent={style.accent} title="What the shepherd is waiting on">
         <Radio className="w-3 h-3" />
         {style.label}
       </Chip>
       <Link
         href={`/conversation/${bound}`}
-        className="rounded-full border border-sol-border/50 px-2 py-0.5 font-mono text-[11px] text-sol-text-muted hover:text-sol-cyan hover:border-sol-cyan/40 transition-colors"
+        className="max-w-[12rem] truncate rounded-full border border-sol-border/50 px-2 py-0.5 font-mono text-[11px] text-sol-text-muted hover:text-sol-cyan hover:border-sol-cyan/40 transition-colors"
       >
         {sessionChoices.find((s) => s.id === bound)?.title ?? "session"}
       </Link>
@@ -286,8 +295,9 @@ export function PRHeader({
   openComments: number;
   sessionChoices: { id: string; title: string }[];
   onSetShepherd: (conversationId: string | undefined, enabled: boolean) => void;
-  /** The verbs: review, merge, and the rest. */
-  actions?: React.ReactNode;
+  /** The verbs: review, merge, and the rest. A function receives the way to
+   *  open the title editor, which lives in this header. */
+  actions?: ReactNode | ((controls: { editTitle: () => void }) => ReactNode);
 }) {
   const stateKey = prStateKey(pr);
   const state = PR_STATE_META[stateKey];
@@ -295,6 +305,9 @@ export function PRHeader({
   const merge = mergeStateMeta(pr);
   const decision = reviewDecisionMeta(pr.review_decision);
   const [owner, repo] = repository.split("/");
+  const [editNonce, setEditNonce] = useState(0);
+  const editTitle = () => setEditNonce((n) => n + 1);
+  const verbs = typeof actions === "function" ? actions({ editTitle }) : actions;
 
   return (
     <header className="pr-band border-b border-sol-border/60 px-5 pt-4 pb-3 shrink-0">
@@ -318,9 +331,9 @@ export function PRHeader({
         </span>
       </div>
 
-      <div className="pr-rise mt-1.5 flex items-start gap-3 flex-wrap" style={{ ["--d" as string]: "60ms" }}>
-        <EditableTitle pr={pr} />
-        <div className="flex items-center gap-2 shrink-0 pt-1">
+      <div className="pr-rise pr-title-row mt-1.5" style={{ ["--d" as string]: "60ms" }}>
+        <EditableTitle pr={pr} editNonce={editNonce} />
+        <div className="pr-title-actions">
           <Chip accent={state.accent}>
             <StateIcon className="w-3.5 h-3.5" />
             {state.label}
@@ -328,7 +341,7 @@ export function PRHeader({
           {merge && <Chip accent={merge.accent}>{merge.label}</Chip>}
           {decision && <Chip accent={decision.accent}>{decision.label}</Chip>}
           <ShepherdControl pr={pr} sessionChoices={sessionChoices} onSetShepherd={onSetShepherd} />
-          {actions && <span className="ml-1 flex items-center gap-1.5">{actions}</span>}
+          {verbs && <span className="ml-1 flex items-center gap-1.5 flex-wrap">{verbs}</span>}
         </div>
       </div>
 
@@ -346,7 +359,7 @@ export function PRHeader({
       </div>
 
       <div
-        className="pr-rise mt-3 flex items-start flex-wrap gap-x-8 gap-y-3 text-[12px]"
+        className="pr-rise pr-figures mt-3 flex items-start flex-wrap gap-x-8 gap-y-3 text-[12px]"
         style={{ ["--d" as string]: "180ms" }}
       >
         <Figure label="Checks">
