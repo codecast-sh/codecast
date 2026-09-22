@@ -196,6 +196,7 @@ export function useChatToasts(): void {
       recent.push(Date.now());
       burstRef.current.set(channelId, recent);
 
+      const isCall = !!(full?.call ?? last.call);
       const author = byId.get(String(last.user_id)) ?? knownAgentMember(String(last.user_id));
       const slackAuthor = slackAuthorFor(full?.external_author ? full : last);
       const isAgent = !slackAuthor && (last.author_kind === "agent" || !!author?.is_bot);
@@ -209,8 +210,8 @@ export function useChatToasts(): void {
             )
           : channelRow?.name ?? "channel",
         isDm,
-        authorName: slackAuthor?.name ?? memberName(author),
-        authorAvatarUrl: slackAuthor ? slackAuthor.avatarUrl : isAgent ? undefined : author?.image || author?.github_avatar_url,
+        authorName: isCall ? "Huddle" : slackAuthor?.name ?? memberName(author),
+        authorAvatarUrl: isCall ? undefined : slackAuthor ? slackAuthor.avatarUrl : isAgent ? undefined : author?.image || author?.github_avatar_url,
         authorIsAgent: isAgent,
         preview: toastPreview(full?.content ?? last.preview ?? ""),
         tier,
@@ -218,6 +219,7 @@ export function useChatToasts(): void {
         // moved by more than one while we were away.
         collapsedCount: Math.max(1, (row.unread ?? 0) - prev.unread),
         inThread: !!threadRootId,
+        isCall,
       };
 
       // Every card gets the sound (Slack's rule: a banner is never silent).

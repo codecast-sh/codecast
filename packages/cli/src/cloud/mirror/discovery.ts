@@ -4,9 +4,11 @@ import * as path from "node:path";
 import { execFile, spawnSync } from "../../proc.js";
 import { isCodecastHookCommand, isCodecastOwnedHomePath } from "../../codecastOwned.js";
 import type { Config } from "../../config/types.js";
+import type { TouchLedger } from "./ledger.js";
 import { INSTALLABLE_CLIENTS } from "../../remote/agentAuth.js";
 import { GH_WRAPPER_REL } from "../ghWrapper.js";
-import { credentialContentReason, homeRelative, kindForPath, parseJsonLoose, portableText, transformByKind, type MirrorKind } from "./transform.js";
+import { credentialContentReason, homeRelative, isActiveConfig, kindForPath, parseJsonLoose, portableText, transformByKind, type MirrorKind } from "./transform.js";
+export { isActiveConfig } from "./transform.js";
 
 export const AGENT_CONTEXT_ROOTS = [".claude", ".codex", ".gemini", ".grok", ".opencode", ".agents", ".config/opencode", ".cursor", ".pi"] as const;
 /** Single state files that installed skills read; their directories hold other state, so only these files travel. */
@@ -81,6 +83,11 @@ export const DEFAULT_EXCLUDES: readonly string[] = [
   "**/*.app/**", "**/*.framework/**", "**/*.xcframework/**",
   "**/.state.json", "**/.usage-cache.json",
   "**/*.jsonl", "**/*.lock", "**/*.sock", "**/*.pid", "**/*.pyc", "**/*.dylib", "**/*.dll", "**/*.exe", "**/*.so", "**/*.node",
+  // Trees an agent fetches for itself on the host (marketplace clones, bundled
+  // skills, install staging, catalog caches) and what it threw away. Installed
+  // plugins stay: they are the human's choice and their assets are context.
+  "**/.trash/**", ".codex/plugins/.remote-plugin-install-staging/**",
+  ".grok/marketplace-cache/**", ".grok/bundled/**", ".claude/plugins/plugin-catalog-cache.json", ".cursor/statsig-cache.json",
 ];
 
 const globCache = new Map<string, RegExp>();
@@ -205,6 +212,8 @@ export function activeContextReferences(text: string, source: string, home: stri
   const required = new Set<string>();
   const visit = (value: unknown, dependency?: "command" | "path", mcp = false): void => {
     if (typeof value === "string" && dependency) {
+      // A codecast hook command (the statusline) names a script the host's own daemon writes.
+      if (dependency === "command" && isCodecastHookCommand(value, home)) return;
       for (const ref of contextReferences(dependency === "command" ? value : JSON.stringify(value), source, home)) required.add(ref);
     } else if (Array.isArray(value)) {
       for (const item of value) visit(item, dependency, mcp);
@@ -285,6 +294,8 @@ export interface ProjectContextOptions {
   includeAncestors?: boolean;
   config?: Pick<Config, "cloud_mirror_include" | "cloud_mirror_exclude"> | null;
   maxBytes?: number;
+  /** Records every path the walk touches, so a later tick can ask "did any of it change" with stats alone. */
+  ledger?: TouchLedger;
 }
 
 export interface ProjectContext {
@@ -332,7 +343,10 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
     const logical = path.resolve(source);
     if (homeRelative(logical, root) === null && homeRelative(logical, home) === null || denied(logical, true)) return;
     const projectPath = homeRelative(logical, root);
-    if (!includeAll && projectPath && /(?:^|\/)(?:dist(?:-[^/]+)?|build|target)(?:\/|$)/.test(projectPath) && !/(?:^|\/)\.(?:claude|codex|gemini|grok|opencode|agents|cursor|pi)\//.test(projectPath)) return;
+    // Build output stays out of the walk and out of prose references (a doc
+    // naming `packages/cli/dist` must not ship the compiled CLI); only an
+    // active config that requires a file there, or an explicit include, enters it.
+    if ((!includeAll || optionalReference) && projectPath && /(?:^|\/)(?:dist(?:-[^/]+)?|build|target)(?:\/|$)/.test(projectPath) && !/(?:^|\/)\.(?:claude|codex|gemini|grok|opencode|agents|cursor|pi)\//.test(projectPath)) return;
     const stat: fs.Stats | undefined = yield { op: "lstat", path: logical };
     if (!stat || denied(logical, stat.isDirectory())) return;
     if (stat.isFile() && !includeAll && !isContextFile(homeRelative(logical, root) ?? homeRelative(logical, home)!)) return;
@@ -428,9 +442,6 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
 type ContextOperation = { op: "lstat" | "realpath" | "stat" | "readdir" | "prefix" | "bytes" | "tracked"; path: string };
 type ContextSteps<T> = Generator<ContextOperation, T, any>;
 
-export function isActiveConfig(kind: MirrorKind): boolean {
-  return ["claude-settings", "claude-mcp", "codex-toml", "codex-hooks", "gemini-settings", "opencode-json", "json-remap", "toml-remap"].includes(kind);
-}
 
 export function isAccessError(err: unknown): boolean {
   return ["EACCES", "EPERM", "ENOENT", "ENOTDIR"].includes((err as NodeJS.ErrnoException)?.code ?? "");
@@ -491,10 +502,11 @@ export function collectProjectContext(opts: ProjectContextOptions): ProjectConte
   return next.value;
 }
 
-async function executeStepsAsync<T>(steps: ContextSteps<T>): Promise<T> {
+async function executeStepsAsync<T>(steps: ContextSteps<T>, ledger?: TouchLedger): Promise<T> {
   let next = steps.next();
   while (!next.done) {
     let value: unknown;
+    if (next.value.op !== "tracked") ledger?.note(next.value.path);
     try { value = await executeContextAsync(next.value); } catch (err) { next = steps.throw(err); continue; }
     next = steps.next(value);
   }
@@ -502,5 +514,5 @@ async function executeStepsAsync<T>(steps: ContextSteps<T>): Promise<T> {
 }
 
 export async function collectProjectContextAsync(opts: ProjectContextOptions): Promise<ProjectContext> {
-  return executeStepsAsync(projectContextSteps(opts));
+  return executeStepsAsync(projectContextSteps(opts), opts.ledger);
 }

@@ -10,7 +10,6 @@ import {
   ImagePlus,
   ListChecks,
   Sparkles,
-  X,
   type LucideIcon,
 } from "lucide-react";
 import { useMutation } from "convex/react";
@@ -19,17 +18,15 @@ import { toast } from "sonner";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import {
-  ACTIVE_AGENT_STATUSES,
   humanizeConvexError,
   isRecRoomKey,
   sessionRoomConversationId,
 } from "@codecast/shared/contracts";
-import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
+import { useInboxStore } from "../../store/inboxStore";
 import { navigateMainWindow } from "../../lib/desktop";
 import { settleComposerAttachments } from "../../lib/draftImages";
 import { getRoom, startTranscribing } from "../../lib/calls/callManager";
 import { getScribeStatus, subscribeScribe } from "../../lib/calls/transcription";
-import { findSessionRow, NEW_AGENT_NAME } from "../../lib/calls/findSessionRow";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useConversationFileDrop } from "../../hooks/useConversationFileDrop";
 import { AgentTypeIcon } from "../AgentTypeIcon";
@@ -41,11 +38,14 @@ import { PublishedPagePill } from "../PublishedPageEmbed";
 import { pageShareUrl } from "../../lib/publishedPageUrls";
 import type { ChatAttachment } from "../../store/chatSlice";
 import { fmtClock as fmtWallClock, fmtDuration } from "../triggerCadence";
+import { CrossfadeText, LivePulseDot } from "../SessionActivityLine";
+import { prefersReducedMotion } from "../../hooks/useBottomAnchoredList";
 import { Avatar } from "./Avatar";
 import { FeedChip } from "./FeedChip";
+import { SessionFace } from "../identity";
 import { TranscribeSwitch } from "./TranscribePanel";
 import { TranscriptTurnList } from "./TranscriptTurns";
-import { openFeedTargetPicker, useAddLiveFeed, useRemoveLiveFeed, type FeedTarget } from "./useCallFeed";
+import { openFeedTargetPicker, useAddLiveFeed, useAgentsInRoom, useRemoveLiveFeed, type FeedTarget } from "./useCallFeed";
 import { firstName, fmtClock, speakerColor } from "./speakers";
 import {
   PASSAGE_PREVIEW_CHARS,
@@ -136,7 +136,6 @@ export function RoomThread({
   surface,
   seated,
   panel,
-  onClose,
   selection,
   className,
 }: {
@@ -152,7 +151,6 @@ export function RoomThread({
   seated: boolean;
   /** The desktop call window: links to a session open in the main window. */
   panel?: boolean;
-  onClose?: () => void;
   selection?: RoomThreadSelection;
   className?: string;
 }) {
@@ -260,7 +258,7 @@ export function RoomThread({
   const working = agents.filter((a) => a.working);
   const ownRoomId = sessionRoomConversationId(roomKey);
 
-  const addFeed = useAddLiveFeed({ roomKey, liveTranscriptId, getRoom });
+  const addFeed = useAddLiveFeed({ roomKey, liveTranscriptId, routes, getRoom });
   const removeFeed = useRemoveLiveFeed(liveTranscriptId);
   // addRoute/startScribe can refuse (room authorization, ended transcript);
   // a silent close-and-nothing is the one wrong outcome.
@@ -284,17 +282,55 @@ export function RoomThread({
   const canRemove = transcribing;
 
   // Follow the tail while the reader is at the bottom; a reader who scrolled
-  // up to quote something keeps their place.
+  // up to quote something keeps their place, and a count of what landed
+  // below the fold meanwhile shows on a pill (team chat's), so a new line
+  // never arrives in silence.
+  const [behind, setBehind] = useState(0);
+  const lastLenRef = useRef(timeline.length);
   const onScroll = () => {
     const el = scrollRef.current;
-    if (el) stuckRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 160;
+    if (!el) return;
+    stuckRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 160;
+    if (stuckRef.current) setBehind((b) => (b ? 0 : b));
+  };
+  const scrollToEnd = (el: HTMLDivElement, smooth: boolean) => {
+    // Smooth over a short distance, a jump over a long one: a stuck reader
+    // never watches a long animated scroll, and a smooth scroll never
+    // crosses the 160px line that onScroll reads as "scrolled away".
+    const delta = el.scrollHeight - el.clientHeight - el.scrollTop;
+    const behavior = smooth && delta > 0 && delta < 160 && !prefersReducedMotion() ? "smooth" : "auto";
+    // The test DOM has no scrollTo.
+    if (typeof el.scrollTo === "function") el.scrollTo({ top: el.scrollHeight, behavior });
+    else el.scrollTop = el.scrollHeight;
   };
   const lastPassage = passages[passages.length - 1];
   const tailSize = lastPassage?.segments.length ?? 0;
   useWatchEffect(() => {
     const el = scrollRef.current;
-    if (el && stuckRef.current) el.scrollTop = el.scrollHeight;
+    const grew = timeline.length - lastLenRef.current;
+    const hadRows = lastLenRef.current > 0;
+    lastLenRef.current = timeline.length;
+    if (el && stuckRef.current) scrollToEnd(el, true);
+    // Only a live room lands lines below a reader who scrolled up; the first
+    // load of a call, and the page of an ended one, is history, not news.
+    else if (grew > 0 && hadRows && !ended) setBehind((b) => b + grew);
   }, [timeline.length, tailSize, working.length]);
+  // A fold that opens or closes changes the list's height over 200ms; a
+  // stuck reader stays at the end when it settles.
+  const onFoldSettled = (e: React.TransitionEvent) => {
+    const el = scrollRef.current;
+    if (el && stuckRef.current && e.propertyName === "grid-template-rows") scrollToEnd(el, false);
+  };
+  const jumpToEnd = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    stuckRef.current = true;
+    el.scrollTo({ top: el.scrollHeight, behavior: prefersReducedMotion() ? "auto" : "smooth" });
+    setBehind(0);
+  };
+  // Rows that arrive after the thread mounted rise in; opening the rail does
+  // not animate the whole history.
+  const mountedAt = useRef(Date.now());
 
   const send = (body: string, attachments: ChatAttachment[]) => {
     if (!body && attachments.length === 0) return;
@@ -324,12 +360,16 @@ export function RoomThread({
   };
 
   const composer = !recording;
-  // The rail's box holds about 26 characters a line, so the stage keeps the
-  // placeholder to the bare words (the chips above say who hears); the page
-  // has room to name the agent.
+  // The stage's box holds about 45 characters a line: room for the promise
+  // that an agent hears a typed line, not for a long title; the page has
+  // room to name the agent.
   const placeholder =
     surface === "stage"
-      ? "Message the room"
+      ? agents.length === 1
+        ? "Message the room · the agent hears you"
+        : agents.length > 1
+          ? "Message the room · the agents hear you"
+          : "Message the room"
       : agents.length === 1
         ? `Message the room · ${clip(agents[0].name, 22)} hears you`
         : agents.length > 1
@@ -353,11 +393,12 @@ export function RoomThread({
   // ever seen agents come and go is still empty.
   const empty = passages.length === 0 && chatRows.every((r) => r.event);
   const showChips = routes.length > 0;
-  const showDensity = !recording;
+  // Nothing to fold, open or hide until someone has spoken.
+  const showDensity = !recording && passages.length > 0;
   const showSwitch = seated && !recording;
-  const showHead = showChips || canAdd || showDensity || showSwitch || !!onClose;
+  const showHead = showChips || canAdd || showDensity || showSwitch;
   // Only the density control: no band, no rule, it sits with the recap row.
-  const quietHead = showHead && !showChips && !canAdd && !showSwitch && !onClose;
+  const quietHead = showHead && !showChips && !canAdd && !showSwitch;
   // The empty card leads while nobody is in the room; the header's own Add
   // button would be the same call twice, so it steps aside for the card.
   const emptyCard = empty && !recording && !ended && agents.length === 0;
@@ -389,11 +430,15 @@ export function RoomThread({
           much of the spoken words to show, and the transcription switch.
           Nothing to show, no band. */}
       {showHead && (
-        <div className={`rt-head${onClose ? " rt-head-closable" : ""}${quietHead ? " rt-head-quiet" : ""}`}>
+        <div className={`rt-head${quietHead ? " rt-head-quiet" : ""}`}>
           {routes.map((r) => {
             const agent = r.kind === "session" ? roster.find((a) => a.target === r.target) : null;
             return (
-              <span key={`${r.kind}:${r.target}`} className="rt-chip">
+              <span
+                key={`${r.kind}:${r.target}`}
+                className="rt-chip"
+                title={agent ? `An agent in the room: it ${HEARS}. The arrow opens its session.` : undefined}
+              >
                 <FeedChip
                   route={r}
                   label={agent?.name}
@@ -425,30 +470,33 @@ export function RoomThread({
           <span className="rt-head-right">
             {showDensity && <DensityControl value={density} onChange={setDensity} />}
             {showSwitch && <TranscribeSwitch live={transcribing} />}
-            {onClose && (
-              <button type="button" onClick={onClose} className="rt-close" title="Close the thread">
-                <X className="h-3.5 w-3.5" />
-              </button>
-            )}
           </span>
         </div>
       )}
 
-      {/* How selecting works: one quiet line under the control it belongs
-          with, never inside the summary block. */}
-      {selection?.hint && passages.length > 0 && density !== "hidden" && <p className="rt-hint">{selection.hint}</p>}
-
       {/* The room is being transcribed and nothing has been said yet: one
           status line pinned under the header, not a row in the timeline. The
           empty card below already says it when nobody is in the room. */}
-      {listening && <p className="rt-note rt-listening">{scribeError ?? "Listening. Words appear here as people speak."}</p>}
+      {listening && (
+        <p className="rt-note rt-listening">
+          <LivePulseDot className="h-1.5 w-1.5" />
+          {scribeError ?? "Listening. Words appear here as people speak."}
+        </p>
+      )}
 
       {/* What people said is content; the stage around this thread is chrome
           and turns selection off, so the list turns it back on. */}
-      <div ref={scrollRef} onScroll={onScroll} className="rt-list min-h-0 flex-1 select-text overflow-y-auto">
+      <div
+        ref={scrollRef}
+        onScroll={onScroll}
+        onTransitionEnd={onFoldSettled}
+        className="rt-list min-h-0 flex-1 select-text overflow-y-auto"
+      >
         {call?.summary ? (
           <RecapCard summary={call.summary} items={call.action_items ?? []} live={!ended} />
-        ) : ended && !recording ? (
+        ) : ended && !recording && !(empty && call.summary_status === "skipped") ? (
+          // An empty call says "Nothing was said." below; "Too short to
+          // summarize." would be the same fact on a second line.
           <p className="rt-note">
             {call.summary_status === "skipped"
               ? "Too short to summarize."
@@ -457,6 +505,10 @@ export function RoomThread({
                 : "Summary pending…"}
           </p>
         ) : null}
+
+        {/* How selecting works: one quiet line after the recap, before the
+            first turn it explains, and only while a turn is open to click. */}
+        {selection?.hint && density !== "hidden" && passages.some(isOpen) && <p className="rt-hint">{selection.hint}</p>}
 
         {spokenHidden && (
           <p className="rt-note">
@@ -478,12 +530,11 @@ export function RoomThread({
             <p className="rt-note">Nothing was said.</p>
           ) : !emptyCard ? null : (
             <div className="rt-empty">
-              <Sparkles className="h-4 w-4 text-sol-violet" />
               <p>
                 {switchedOff
-                  ? "Transcription is off for this huddle. Add an agent, or switch it back on, and the words land here."
+                  ? "Transcription is off for this huddle. Add an agent, or switch it back on, and what people say shows up here."
                   : transcribing
-                    ? `Listening. Words appear here as people speak. Add an agent and it ${HEARS}.`
+                    ? `Listening. What people say shows up here. Add an agent and it ${HEARS}.`
                     : `Add an agent to the room. It ${HEARS}.`}
               </p>
               <div className="rt-empty-actions">
@@ -494,9 +545,9 @@ export function RoomThread({
                   </button>
                 )}
                 {!transcribing && seated && (
-                  <button type="button" onClick={transcribeAlone} className="rt-btn rt-btn-green" title="Transcribe the huddle with no agent: the words land in this thread">
+                  <button type="button" onClick={transcribeAlone} className="rt-btn rt-btn-green" title="Transcribe the huddle with no agent: what people say shows up in this thread">
                     <Captions className="h-3.5 w-3.5" />
-                    Transcribe only
+                    Transcribe without one
                   </button>
                 )}
               </div>
@@ -528,6 +579,7 @@ export function RoomThread({
                   idPrefix={idPrefix}
                   open={isOpen(item)}
                   live={transcribing && item.index === newestIndex}
+                  fresh={item.at > mountedAt.current}
                   recording={recording}
                   onToggle={() => toggle(item)}
                   selection={selection}
@@ -541,6 +593,7 @@ export function RoomThread({
                   ownRoomId={ownRoomId}
                   ended={ended}
                   explain={item.row._id === explainEventId}
+                  fresh={item.at > mountedAt.current}
                   dayOf={startedAt}
                   onOpen={openSession}
                 />
@@ -554,7 +607,11 @@ export function RoomThread({
                 prev.row.user_name === m.user_name &&
                 !!prev.row.agent === !!m.agent &&
                 m.at - prev.at < 180_000;
-              node = <ChatLine m={m} sameAuthor={sameAuthor} dayOf={startedAt} stage={surface === "stage"} onOpen={openSession} />;
+              // The server's echo of a pending line takes the pending row's
+              // place with the same words; it arrived already, so it does
+              // not rise a second time.
+              const fresh = m.at > mountedAt.current && !(m.mine && !m.pending);
+              node = <ChatLine m={m} sameAuthor={sameAuthor} fresh={fresh} dayOf={startedAt} stage={surface === "stage"} onOpen={openSession} />;
             }
             const key = item.kind === "passage" ? `p${item.index}` : item.row._id;
             return divider ? (
@@ -568,54 +625,67 @@ export function RoomThread({
           })
         )}
         {working.map((a) => (
-          <div key={`working-${a.id}`} className="rt-working">
-            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-sol-violet/15">
-              <AgentTypeIcon agentType={a.agentType} className="h-3 w-3" />
-            </span>
+          <div key={`working-${a.id}`} className="rt-working rt-in">
+            {a.row ? (
+              <SessionFace row={a.row} size={20} className="shrink-0" />
+            ) : (
+              <span className="flex h-5 w-5 items-center justify-center rounded-full bg-sol-violet/15">
+                <AgentTypeIcon agentType={a.agentType} className="h-3 w-3" />
+              </span>
+            )}
             <span className="truncate">{a.name} is working</span>
             <WorkingDots />
           </div>
         ))}
       </div>
 
-      {composer && (
-        <div className="rt-foot">
-          <div className="ch-composer ch-composer-flush">
-            <MessageInput
-              key={draftKey}
-              conversationId={draftKey}
-              bareComposer
-              chatMentionMode
-              mentionTeamId={mentionTeamId}
-              composerPlaceholder={placeholder}
-              onDropFiles={dropFilesRef}
-              onGateSend={async (text, images) => {
-                const attachments = await settleComposerAttachments(images);
-                const content = text.trim();
-                if (!content && attachments.length === 0) return;
-                send(content, attachments);
-              }}
-            />
-            <div className="ch-composer-foot">
-              <button type="button" className="ch-composer-attach" title="Attach an image" onClick={() => pickerRef.current?.click()}>
-                <ImagePlus className="h-3.5 w-3.5" />
-              </button>
-              <input
-                ref={pickerRef}
-                type="file"
-                accept="image/*"
-                multiple
-                className="hidden"
-                onChange={(e) => {
-                  const files = Array.from(e.target.files ?? []);
-                  if (files.length) dropFilesRef.current?.(files);
-                  e.target.value = "";
+      {/* The pill sits above the foot whatever the composer's height, and
+          above the list's edge when there is no composer. */}
+      <div className="rt-tail">
+        {behind > 0 && (
+          <button type="button" className="ch-jump" onClick={jumpToEnd}>
+            {behind} new {behind === 1 ? "line" : "lines"} ↓
+          </button>
+        )}
+        {composer && (
+          <div className="rt-foot">
+            <div className="ch-composer ch-composer-flush">
+              <MessageInput
+                key={draftKey}
+                conversationId={draftKey}
+                bareComposer
+                chatMentionMode
+                mentionTeamId={mentionTeamId}
+                composerPlaceholder={placeholder}
+                onDropFiles={dropFilesRef}
+                onGateSend={async (text, images) => {
+                  const attachments = await settleComposerAttachments(images);
+                  const content = text.trim();
+                  if (!content && attachments.length === 0) return;
+                  send(content, attachments);
                 }}
               />
+              <div className="ch-composer-foot">
+                <button type="button" className="ch-composer-attach" title="Attach an image" onClick={() => pickerRef.current?.click()}>
+                  <ImagePlus className="h-3.5 w-3.5" />
+                </button>
+                <input
+                  ref={pickerRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  className="hidden"
+                  onChange={(e) => {
+                    const files = Array.from(e.target.files ?? []);
+                    if (files.length) dropFilesRef.current?.(files);
+                    e.target.value = "";
+                  }}
+                />
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }
@@ -640,11 +710,37 @@ function WorkingDots({ className = "", title }: { className?: string; title?: st
   );
 }
 
+/** A body that folds with motion both ways: a grid row that goes from 0fr to
+ *  1fr and back over 200ms. The row itself is always mounted, so opening has
+ *  something to transition from; the body stays mounted through the close
+ *  and leaves when the transition ends. With reduced motion there is no
+ *  transition to wait for, so the body leaves at once. */
+function Fold({ open, children }: { open: boolean; children: React.ReactNode }) {
+  const [wasOpen, setWasOpen] = useState(open);
+  const [closing, setClosing] = useState(false);
+  if (wasOpen !== open) {
+    setWasOpen(open);
+    setClosing(!open && !prefersReducedMotion());
+  }
+  return (
+    <div
+      className="rt-fold"
+      data-open={open}
+      onTransitionEnd={(e) => {
+        if (e.target === e.currentTarget) setClosing(false);
+      }}
+    >
+      <div className="rt-fold-in">{(open || closing) && children}</div>
+    </div>
+  );
+}
+
 function PassageBlock({
   passage,
   idPrefix,
   open,
   live,
+  fresh,
   recording,
   onToggle,
   selection,
@@ -655,6 +751,8 @@ function PassageBlock({
   open: boolean;
   /** The newest passage of a live call: it reads like captions, not history. */
   live: boolean;
+  /** Began after the thread mounted: it rises in like any other new row. */
+  fresh: boolean;
   recording: boolean;
   onToggle: () => void;
   selection?: RoomThreadSelection;
@@ -663,7 +761,7 @@ function PassageBlock({
   const n = passage.turns.length;
   const bodyId = `${idPrefix}p${passage.index}`;
   return (
-    <section className={`rt-passage${open ? " rt-passage-open" : ""}${live ? " rt-passage-live" : ""}`}>
+    <section className={`rt-passage${open ? " rt-passage-open" : ""}${live ? " rt-passage-live" : ""}${fresh ? " rt-in" : ""}`}>
       <button
         type="button"
         className="rt-passage-head"
@@ -685,14 +783,14 @@ function PassageBlock({
             ))
           )}
         </span>
-        <span className="rt-passage-when">
+        <span className="rt-when">
           {fmtClock(passage.t0)} · {fmtDuration(Math.max(1000, passage.t1 - passage.t0))} · {n} {units}
           {n === 1 ? "" : "s"}
         </span>
         {!open && <span className="rt-passage-preview">{recording ? spokenPreview(passage) : passage.preview}</span>}
       </button>
-      {open && (
-        <div id={bodyId} className="rt-passage-body animate-in fade-in slide-in-from-top-1 duration-200">
+      <Fold open={open}>
+        <div id={bodyId} className="rt-passage-body">
           <TranscriptTurnList
             turns={passage.turns}
             isSelected={selection?.isSelected}
@@ -701,7 +799,7 @@ function PassageBlock({
             activeIndex={selection?.activeIndex ?? null}
           />
         </div>
-      )}
+      </Fold>
     </section>
   );
 }
@@ -732,10 +830,12 @@ function RecapCard({ summary, items, live }: { summary: string; items: string[];
           <Sparkles className="h-3 w-3" />
           {label}
         </span>
-        {!open && <span className="rt-recap-line">{firstSentence(summary)}</span>}
+        {/* The sentence regenerates every 90 s while the call runs; the old
+            one fades out under the new so words never swap mid read. */}
+        {!open && <CrossfadeText text={firstSentence(summary)} className="rt-recap-line" />}
       </button>
-      {open && (
-        <div className="rt-recap-body animate-in fade-in slide-in-from-top-1 duration-200">
+      <Fold open={open}>
+        <div className="rt-recap-body">
           <p>{summary}</p>
           {items.length > 0 && (
             <div className="rt-recap-items">
@@ -745,7 +845,7 @@ function RecapCard({ summary, items, live }: { summary: string; items: string[];
               <ul>
                 {items.map((a, i) => (
                   <li key={i}>
-                    <span className="text-sol-cyan">→</span>
+                    <span className="text-sol-violet">→</span>
                     <span>{a}</span>
                   </li>
                 ))}
@@ -753,7 +853,7 @@ function RecapCard({ summary, items, live }: { summary: string; items: string[];
             </div>
           )}
         </div>
-      )}
+      </Fold>
     </section>
   );
 }
@@ -766,6 +866,7 @@ function EventLine({
   ownRoomId,
   ended,
   explain,
+  fresh,
   dayOf,
   onOpen,
 }: {
@@ -776,14 +877,16 @@ function EventLine({
   ended: boolean;
   /** Say what an agent does here; once per call, on the first agent event. */
   explain: boolean;
+  /** Landed after the thread mounted: it rises in. */
+  fresh: boolean;
   dayOf: number | undefined;
   onOpen: (id: string) => void;
 }) {
   const actor = me && row.user_id === me ? "You" : firstName(row.user_name);
   const agent = row.agent;
   const name = agent ? (
-    <button type="button" className="rt-event-agent" onClick={() => onOpen(agent.conversation_id)} title="Open the agent's session">
-      {agent.title}
+    <button type="button" className="rt-event-agent" onClick={() => onOpen(agent.conversation_id)} title={`Open ${agent.title}`}>
+      {agent.name ?? agent.title}
     </button>
   ) : (
     <span className="rt-event-agent">an agent</span>
@@ -791,12 +894,14 @@ function EventLine({
   // The room's own agent is not somebody's guest: it was in the room before
   // anyone, so the line says it is here rather than who brought it.
   const ownRoom = !!agent && !!ownRoomId && (agent.conversation_id === ownRoomId || agent.short_id === ownRoomId);
-  const spoken = row.event === "transcribe_on" || row.event === "transcribe_off";
   const Glyph = row.event === "transcribe_off" ? CaptionsOff : row.event === "transcribe_on" ? Captions : Sparkles;
+  // On and joined keep their accents; off and left go dim, as an ended thing should.
+  const tone =
+    row.event === "transcribe_on" ? "text-sol-green" : row.event === "agent_joined" ? "text-sol-violet" : "text-sol-text-dim";
   return (
-    <div className="rt-event" role="note">
+    <div className={`rt-event${fresh ? " rt-in" : ""}`} role="note">
       <span className="rt-event-glyph flex w-5 shrink-0 justify-center" aria-hidden="true">
-        <Glyph className={`h-3 w-3 ${spoken ? "text-sol-green" : "text-sol-violet"}`} />
+        <Glyph className={`h-3 w-3 ${tone}`} />
       </span>
       <span>
         {row.event === "agent_joined" ? (
@@ -819,7 +924,7 @@ function EventLine({
             {actor} switched transcription {row.event === "transcribe_on" ? "on" : "off"}
           </>
         )}
-        <span className="rt-event-when">{fmtWallClock(row.at, dayOf)}</span>
+        <span className="rt-when rt-event-when">{fmtWallClock(row.at, dayOf)}</span>
       </span>
     </div>
   );
@@ -842,25 +947,37 @@ const STAGE_MD_COMPONENTS = { ...MESSAGE_MD_COMPONENTS, a: StageLink };
 function ChatLine({
   m,
   sameAuthor,
+  fresh,
   dayOf,
   stage,
   onOpen,
 }: {
   m: LocalRow;
   sameAuthor: boolean;
+  /** Landed after the thread mounted: it rises in. */
+  fresh: boolean;
   dayOf: number | undefined;
   /** In the rail: a page link is a pill, not a card. */
   stage: boolean;
   onOpen: (id: string) => void;
 }) {
   return (
-    <div className={`rt-line${sameAuthor ? " rt-line-cont" : ""}`}>
+    <div className={`rt-line${sameAuthor ? " rt-line-cont" : ""}${fresh ? " rt-in" : ""}`}>
       <span className="w-5 shrink-0 pt-0.5">
         {!sameAuthor &&
           (m.agent ? (
-            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-sol-violet/15">
-              <AgentTypeIcon agentType={m.agent.agent_type} className="h-3 w-3" />
-            </span>
+            // The agent's face (session-characters.md S3): the character the
+            // room addresses, the same face its session wears everywhere.
+            <SessionFace
+              row={{
+                _id: m.agent.conversation_id,
+                title: m.agent.title,
+                character_avatar: m.agent.character_avatar ?? null,
+                character_name: m.agent.character_name ?? null,
+              }}
+              size={20}
+              className="shrink-0"
+            />
           ) : (
             <Avatar m={{ user_image: m.user_image, user_name: m.user_name }} size={20} />
           ))}
@@ -872,15 +989,15 @@ function ChatLine({
               <button
                 type="button"
                 onClick={() => onOpen(m.agent!.conversation_id)}
-                className="max-w-[200px] truncate text-[11px] font-medium text-sol-violet hover:underline"
-                title="Open the agent's session"
+                className="max-w-[200px] truncate text-[11.5px] font-semibold text-sol-violet hover:underline"
+                title={`Open ${m.agent.title}`}
               >
-                {m.agent.title}
+                {m.agent.name ?? m.agent.title}
               </button>
             ) : (
-              <span className="text-[11px] font-medium text-sol-text">{m.mine ? "you" : firstName(m.user_name)}</span>
+              <span className="text-[11.5px] font-semibold text-sol-text">{m.mine ? "you" : firstName(m.user_name)}</span>
             )}
-            <span className="text-[9.5px] text-sol-text-muted">{fmtWallClock(m.at, dayOf)}</span>
+            <span className="rt-when">{fmtWallClock(m.at, dayOf)}</span>
           </div>
         )}
         {m.text ? (
@@ -977,50 +1094,5 @@ export function SegmentedRadio<K extends string>({
         </button>
       ))}
     </span>
-  );
-}
-
-// ── The agents in the room ─────────────────────────────────────────────────
-
-type AgentInRoom = {
-  id: string;
-  target: string;
-  addedBy: string;
-  name: string;
-  agentType: string;
-  working: boolean;
-};
-
-// The sessions the live transcript feeds, as participants: name, kind, and
-// whether one is mid-turn. Read from the store's session rows, subscribed
-// through a signature of the fields shown so the header does not re-render
-// on every heartbeat of every session.
-function useAgentsInRoom(routes: RoomThreadRoute[]): AgentInRoom[] {
-  const targets = routes.filter((r) => r.kind === "session");
-  const sig = targets.map((r) => r.target).join("|");
-  const s = useTrackedStore([
-    (st: any) =>
-      targets
-        .map((r) => {
-          const row = findSessionRow(st, r.target);
-          return row ? `${row._id}:${row.title ?? ""}:${row.agent_type ?? ""}:${row.agent_status ?? ""}` : r.target;
-        })
-        .join("|"),
-  ]);
-  return useMemo(
-    () =>
-      targets.map((r) => {
-        const row = findSessionRow(s, r.target);
-        return {
-          id: String(row?._id ?? r.target),
-          target: r.target,
-          addedBy: r.added_by,
-          name: (row?.title || NEW_AGENT_NAME).slice(0, 40),
-          agentType: row?.agent_type ?? "claude_code",
-          working: ACTIVE_AGENT_STATUSES.has(row?.agent_status ?? ""),
-        };
-      }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- sig stands in for the routes list
-    [sig, s],
   );
 }

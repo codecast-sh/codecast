@@ -88,6 +88,18 @@ describe("the prefetch worker", () => {
     expect(h.calls).toHaveLength(1);
   });
 
+  test("a line read on another device still arrives here as a toast, so its page is fetched; the first rail is not an arrival", async () => {
+    const h = harness();
+    const read = (id: string, tip: string, notify: "all" | "none" = "all") => ({ ...row(id, tip), unread: 0, notify_level: notify });
+    h.worker.update([read("dm", "old"), read("muted", "m-old", "none")], []);
+    await pause();
+    expect(h.calls).toHaveLength(0);
+    h.worker.update([read("dm", "new"), read("muted", "m-new", "none")], []);
+    await pause();
+    expect(h.calls.map(t => `${t.kind}:${t.messageId}`)).toEqual(["channel:new"]);
+    expect(h.cache.new).toBeDefined();
+  });
+
   test("runs two requests at most, and a disposed worker writes nothing late", async () => {
     const resolvers: Array<(data: any) => void> = [];
     const h = harness(() => new Promise(resolve => resolvers.push(resolve)));
