@@ -162,6 +162,7 @@
           }
         }
       ],
+      "@livekit/react-native-expo-plugin",
       "expo-router",
       "expo-updates",
       "expo-secure-store",

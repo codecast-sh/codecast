@@ -1163,7 +1163,7 @@ export default function InboxScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sessionsSig/pendingSendSig stand in for the churny refs; coarseNow drives the deadline signature
     [sessionsSig, pendingSendSig, inboxScope, meId, teamInboxIds, showOld, currentSessionId, pendingSessionCreates, sessionsWithQueuedMessages, coarseNow],
   );
-  const { visibleSessions, sorted: sortedAll, subsByParent, questions, pinned, newSessions, needsInput, done, dormant, working, stashed: stashedSessions, dismissed: dismissedOnly } = placed;
+  const { visibleSessions, sorted: sortedAll, subsByParent, questions, pinned, newSessions, needsInput, done, dormant, working, stashed: stashedSessions, dismissed: dismissedOnly, escalationsByLead } = placed;
   const activeSessions = useMemo(() => sortedAll.filter((s) => !s.is_deferred), [sortedAll]);
 
   // Label + project chip counts — same source as web's LabelChipsRow / palette
@@ -1359,8 +1359,9 @@ export default function InboxScreen() {
       onDismiss={() => handleStash(s._id)}
       onPin={() => handlePin(s._id)}
       onLongPress={() => handleSessionLongPress(s)}
+      escalations={escalationsByLead.get(s._id)}
     />
-  ), [router, handleStash, handlePin, handleSessionLongPress, unreadByConv]);
+  ), [router, handleStash, handlePin, handleSessionLongPress, unreadByConv, escalationsByLead]);
 
   // Collapsible section — collapse state lives in the shared store's
   // collapsedSections. Grouped-view sections keep their historical label keys;

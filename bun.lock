@@ -20,7 +20,7 @@
     },
     "packages/cli": {
       "name": "@codecast/cli",
-      "version": "1.1.143",
+      "version": "1.1.151",
       "bin": {
         "codecast": "./dist/index.js",
         "cast": "./dist/index.js",
@@ -79,7 +79,7 @@
     },
     "packages/electron": {
       "name": "@codecast/electron",
-      "version": "1.1.112",
+      "version": "1.1.115",
       "dependencies": {
         "@platform/desktop": "file:../../platform/packages/desktop",
         "electron-updater": "^6.3.0",
@@ -149,6 +149,7 @@
         "zustand": "^5.0.9",
       },
       "devDependencies": {
+        "@livekit/react-native-expo-plugin": "1.0.2",
         "@types/react": "~19.1.10",
         "react-test-renderer": "19.1.0",
         "typescript": "~5.9.2",
@@ -937,6 +938,8 @@
     "@livekit/protocol": ["@livekit/protocol@1.50.4", "", { "dependencies": { "@bufbuild/protobuf": "^1.10.0" } }, "sha512-L1uggNQAqyY21smQY8AllyOYbcv9Me9TaxwuLytL1R8ck9nbYPmQLNwEDi3pOFGAMa5F8I2nUi2Jc59W5awxlA=="],
 
     "@livekit/react-native": ["@livekit/react-native@2.12.0", "", { "dependencies": { "@livekit/components-react": "^2.9.17", "@livekit/mutex": "^1.1.1", "array.prototype.at": "^1.1.1", "base64-js": "1.5.1", "events": "^3.3.0", "loglevel": "^1.8.0", "promise.allsettled": "^1.0.5", "react-native-url-polyfill": "^3.0.0", "typed-emitter": "^2.1.0", "web-streams-polyfill": "^4.3.0", "well-known-symbols": "^4.1.0" }, "peerDependencies": { "@livekit/react-native-webrtc": "^144.1.2", "livekit-client": "^2.19.0", "react": "*", "react-native": "*" } }, "sha512-6n4PQr22vtbl6WL6QbLVCLzM5/bCdTt+hHUyMecL8AheEuypVwbhMe5Vj7UuxOeyNojqXdgi2yRWGhB9WH4Gxg=="],
+
+    "@livekit/react-native-expo-plugin": ["@livekit/react-native-expo-plugin@1.0.2", "", { "peerDependencies": { "@livekit/react-native": "^2.1.0", "expo": "*", "react": "*", "react-native": "*" } }, "sha512-Crnht6xAlvbSo677oXFBMzS6I5lCMfCNNyLIs6bQZOwlwempz6tWj4CddRknqCCd/dvAyHCa1HwslqXpvGoSJA=="],
 
     "@livekit/react-native-webrtc": ["@livekit/react-native-webrtc@144.1.2", "", { "dependencies": { "base64-js": "1.5.1", "debug": "4.3.4" }, "peerDependencies": { "react-native": ">=0.60.0" } }, "sha512-Ls8w3FGlf67SMNu6r8SUpbFHXMIkyEEGb25j6apZ7HrBSGqOFSRWAx7ms9z5d0D3e9Zs1AMNiziG1YWBLOtqiQ=="],
 
@@ -4244,7 +4247,7 @@
 
     "@codecast/convex/@platform/flags": ["@platform/flags@file:platform/packages/flags", { "devDependencies": { "@types/node": "^22.0.0", "typescript": "^5.7.2" }, "peerDependencies": { "posthog-js": ">=1.0.0", "posthog-react-native": ">=3.0.0", "react": ">=18.0.0" }, "optionalPeers": ["posthog-js", "posthog-react-native", "react"], "bin": { "platform-flags": "src/cli.ts" } }],
 
-    "@codecast/convex/@types/bun": ["@types/bun@1.4.1", "", { "dependencies": { "bun-types": "1.4.1" } }, "sha512-0AVGiTXGajf1rgKom3N+c5L7CBxuoyyv1i44M0nX4UDK0G/fnRAMiri93nHuVPIb429KKtAgj7HatVmmOjeQLA=="],
+    "@codecast/convex/@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
 
     "@codecast/electron/@platform/desktop": ["@platform/desktop@file:platform/packages/desktop", { "devDependencies": { "typescript": "^5.7.2" }, "peerDependencies": { "@electron/notarize": ">=2", "electron": ">=28", "electron-builder": ">=24" }, "optionalPeers": ["@electron/notarize", "electron-builder"] }],
 
@@ -5130,11 +5133,7 @@
 
     "@codecast/cli/convex/esbuild": ["esbuild@0.25.4", "", { "optionalDependencies": { "@esbuild/aix-ppc64": "0.25.4", "@esbuild/android-arm": "0.25.4", "@esbuild/android-arm64": "0.25.4", "@esbuild/android-x64": "0.25.4", "@esbuild/darwin-arm64": "0.25.4", "@esbuild/darwin-x64": "0.25.4", "@esbuild/freebsd-arm64": "0.25.4", "@esbuild/freebsd-x64": "0.25.4", "@esbuild/linux-arm": "0.25.4", "@esbuild/linux-arm64": "0.25.4", "@esbuild/linux-ia32": "0.25.4", "@esbuild/linux-loong64": "0.25.4", "@esbuild/linux-mips64el": "0.25.4", "@esbuild/linux-ppc64": "0.25.4", "@esbuild/linux-riscv64": "0.25.4", "@esbuild/linux-s390x": "0.25.4", "@esbuild/linux-x64": "0.25.4", "@esbuild/netbsd-arm64": "0.25.4", "@esbuild/netbsd-x64": "0.25.4", "@esbuild/openbsd-arm64": "0.25.4", "@esbuild/openbsd-x64": "0.25.4", "@esbuild/sunos-x64": "0.25.4", "@esbuild/win32-arm64": "0.25.4", "@esbuild/win32-ia32": "0.25.4", "@esbuild/win32-x64": "0.25.4" }, "bin": { "esbuild": "bin/esbuild" } }, "sha512-8pgjLUcUjcgDg+2Q4NYXnPbo/vncAY4UmyaCm0jZevERqCHZIaWwdJHkf8XQtu4AxSKCdvrUbT0XUr1IdZzI8Q=="],
 
-    "@codecast/convex/@platform/auth/@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
-
-    "@codecast/convex/@platform/email/@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
-
-    "@codecast/convex/@types/bun/bun-types": ["bun-types@1.4.1", "", { "dependencies": { "@types/node": "*" } }, "sha512-loKuVrAFZKfEv+JvWkHRS9GW5IqLuLRjVXN9p+vZvBN86O5hf/pBZQ5hSoyipsrMmWObZBDvWnlmKvjKTM0PdA=="],
+    "@codecast/convex/@types/bun/bun-types": ["bun-types@1.4.2", "", { "dependencies": { "@types/node": "*" } }, "sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w=="],
 
     "@codecast/web/@platform/auth/@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
 
@@ -6061,10 +6060,6 @@
     "@codecast/cli/convex/esbuild/@esbuild/win32-ia32": ["@esbuild/win32-ia32@0.25.4", "", { "os": "win32", "cpu": "ia32" }, "sha512-i1sW+1i+oWvQzSgfRcxxG2k4I9n3O9NRqy8U+uugaT2Dy7kLO9Y7wI72haOahxceMX8hZAzgGou1FhndRldxRg=="],
 
     "@codecast/cli/convex/esbuild/@esbuild/win32-x64": ["@esbuild/win32-x64@0.25.4", "", { "os": "win32", "cpu": "x64" }, "sha512-nOT2vZNw6hJ+z43oP1SPea/G/6AbN6X+bGNhNuq8NtRHy4wsMhw765IKLNmnjek7GvjWBYQ8Q5VBoYTFg9y1UQ=="],
-
-    "@codecast/convex/@platform/auth/@types/bun/bun-types": ["bun-types@1.4.2", "", { "dependencies": { "@types/node": "*" } }, "sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w=="],
-
-    "@codecast/convex/@platform/email/@types/bun/bun-types": ["bun-types@1.4.2", "", { "dependencies": { "@types/node": "*" } }, "sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w=="],
 
     "@codecast/web/@platform/auth/@types/bun/bun-types": ["bun-types@1.4.2", "", { "dependencies": { "@types/node": "*" } }, "sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w=="],
 
