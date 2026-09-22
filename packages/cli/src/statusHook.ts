@@ -10,6 +10,7 @@
 // showing "hasn't reached the agent" in the web UI.
 // python3 remains only for the AskUserQuestion sidecar (nested JSON dump).
 import { HOOK_FIELDS_READ } from "./hookJson.js";
+import { HOOK_TOKEN_READ } from "./hookIdentity.js";
 
 /** Report STATUS to the daemon. Returns instead of exiting so a combined
  *  UserPromptSubmit script can run the other jobs after a successful curl. */
@@ -18,6 +19,7 @@ codecast_status_emit() {
 [ -n "\${STATUS:-}" ] || return 0
 ts=$(date +%s)
 LT="\${CODECAST_LAUNCH_TOKEN:-}"
+${HOOK_TOKEN_READ}
 
 json_esc() {
   v=\$1
@@ -41,6 +43,10 @@ if [ -f "$HOOK_PORT_FILE" ]; then
   PORT=$(cat "$HOOK_PORT_FILE" 2>/dev/null)
   if [ -n "$PORT" ]; then
     set -- -s -G "http://127.0.0.1:$PORT/hook/status" --connect-timeout 1 --max-time 2
+    # Proves this post came from a hook this user installed. Without it the
+    # daemon's route was writable by any local process and by a web page whose
+    # browser still permits a plain loopback GET (hookIdentity.ts).
+    [ -n "\$CODECAST_HOOK_TOKEN" ] && set -- "$@" -H "Authorization: Bearer \$CODECAST_HOOK_TOKEN"
     set -- "$@" --data-urlencode "session_id=$SESSION_ID"
     set -- "$@" --data-urlencode "status=$STATUS"
     set -- "$@" --data-urlencode "ts=$ts"

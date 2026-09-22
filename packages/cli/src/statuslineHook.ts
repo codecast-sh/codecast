@@ -264,8 +264,13 @@ if [ -n "$cc_now" ] && [ -n "$cc_posted" ]; then
 fi
 
 cc_port=
+cc_token=
 if [ -n "$cc_post" ]; then
   [ -f "$HOME/.codecast/hook-port" ] && IFS= read -r cc_port <"$HOME/.codecast/hook-port" 2>/dev/null
+  # CODECAST_HOOK_TOKEN: proves this post came from a statusline this user
+  # installed. The daemon greps this marker to tell an upgraded script from one
+  # written before the route needed a token (hookAdmission.ts).
+  [ -f "$HOME/.codecast/hook-token" ] && IFS= read -r cc_token <"$HOME/.codecast/hook-token" 2>/dev/null
   case "$cc_port" in
     [1-9]|[1-9][0-9]*) ;;
     # Stamped only once a post is certain, so a tick skipped for a missing
@@ -287,6 +292,7 @@ printf '%s' "$payload" | curl -s -X POST \\
   "http://127.0.0.1:\${cc_port}${STATUSLINE_HOOK_PATH}?account=\${cc_account}" \\
   --connect-timeout 1 --max-time 2 \\
   -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer \${cc_token}" \\
   --data-binary @- -o /dev/null 2>/dev/null || true
 exit 0
 `;

@@ -48,7 +48,9 @@ import {
   scanVault,
   vaultContentHash,
   vaultContentType,
+  vaultResponseSecurityHeaders,
 } from "./vaultScope.js";
+import { mintVaultCapability, redactVaultUrl, vaultCapabilityAllows } from "./vaultCapability.js";
 import { VaultWatchHub, type VaultWatchHubOptions } from "./vaultWatcher.js";
 
 const VAULT_WS_PATH = "/vault/ws";
@@ -67,6 +69,9 @@ export interface VaultServerOptions extends TerminalServerOptions {
 // through it when it exists; the routes work without it (a bare HTTP harness in
 // tests, or before the WS endpoint is attached).
 let hub: VaultWatchHub | null = null;
+// One line per daemon boot, not one per image (see the compatibility note in
+// handleVaultHttp).
+let legacyBearerUrlLogged = false;
 
 function sendJson(res: http.ServerResponse, status: number, headers: Record<string, string>, body: unknown): void {
   res.writeHead(status, { "Content-Type": "application/json", ...headers });
@@ -160,6 +165,7 @@ async function handleGetFile(
   const data = await fsp.readFile(target.abs);
   res.writeHead(200, {
     ...headers,
+    ...vaultResponseSecurityHeaders(target.rel),
     "Content-Type": vaultContentType(target.rel),
     "Content-Length": String(data.length),
     "Cache-Control": "no-cache",
@@ -204,6 +210,7 @@ async function handlePutFile(
     if (mismatch) {
       res.writeHead(409, {
         ...headers,
+        ...vaultResponseSecurityHeaders(target.rel),
         "Content-Type": current ? vaultContentType(target.rel) : "application/json",
         ETag: currentEtag ?? "",
         "X-Vault-Mtime": String(currentMtime ?? 0),
@@ -342,21 +349,48 @@ export function handleVaultHttp(
 
   // Attachments are loaded straight into <img>/<video> tags, which can set
   // neither an Authorization header nor an Origin — so a file READ may instead
-  // present the same loopback token as a query param, and stands on that token
-  // alone. Reads only: a write or an op that arrived without the full header
-  // envelope is refused, so a URL that leaks (history, a referrer) can never be
-  // more than a read of a vault the leaker already had the token for.
-  const tokenInUrl =
+  // present a capability in the query string and stand on that alone.
+  //
+  // That capability used to BE the loopback bearer, which is the secret that
+  // also spawns shells on /term/ws. A URL is readable by whatever the URL
+  // renders: an SVG from the vault, opened as a document, runs at the daemon's
+  // origin and can read its own location. So the URL carries a vault-read
+  // capability now (vaultCapability.ts) — one vault, reads only, expiring —
+  // and it is accepted on this one route and nowhere else.
+  const capInUrl =
     req.method === "GET" &&
     parsed.pathname === "/vault/file" &&
-    tokenMatches(params.get("token"), opts);
+    vaultCapabilityAllows(params.get("cap"), opts.token, params.get("vault") ?? "");
 
-  if (!tokenInUrl && !authorizeLocalRequest(req, opts)) {
+  // COMPATIBILITY: a web build from before the capability still puts the
+  // bearer in the URL. Accepted on reads only, for one release; the client
+  // asks /vault/cap first and falls back to this only against a daemon that
+  // has no such route. Remove with the release that retires those clients.
+  const legacyTokenInUrl =
+    !capInUrl &&
+    req.method === "GET" &&
+    parsed.pathname === "/vault/file" &&
+    !params.get("cap") &&
+    tokenMatches(params.get("token"), opts);
+  if (legacyTokenInUrl && !legacyBearerUrlLogged) {
+    legacyBearerUrlLogged = true;
+    opts.log("[VAULT] a client read an attachment with the loopback bearer in the URL; update the web build");
+  }
+
+  if (!capInUrl && !legacyTokenInUrl && !authorizeLocalRequest(req, opts)) {
     sendJson(res, 403, headers, { error: "forbidden" });
     return true;
   }
 
   const dispatch = async (): Promise<void> => {
+    // Mint the read capability an attachment URL carries. Behind the full
+    // envelope, like every other route: a caller that cannot authenticate
+    // cannot ask for one.
+    if (req.method === "GET" && parsed.pathname === "/vault/cap") {
+      const vaultId = params.get("vault") ?? "";
+      if (!findVault(opts.configDir, vaultId)) return sendJson(res, 404, headers, { error: "unknown vault" });
+      return sendJson(res, 200, headers, mintVaultCapability(opts.token, vaultId));
+    }
     if (req.method === "GET" && parsed.pathname === "/vault/roots") {
       return sendJson(res, 200, headers, { vaults: listVaults(opts.configDir) });
     }
@@ -387,7 +421,7 @@ export function handleVaultHttp(
   };
 
   void dispatch().catch((err) => {
-    opts.log(`[VAULT] ${req.method} ${url} failed: ${(err as Error)?.message ?? err}`);
+    opts.log(`[VAULT] ${req.method} ${redactVaultUrl(url)} failed: ${(err as Error)?.message ?? err}`);
     if (!res.headersSent) sendJson(res, 500, headers, { error: "server error" });
     else res.end();
   });

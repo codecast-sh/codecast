@@ -20,8 +20,15 @@
  *   - a retired pane (killed, closed, relocated) admits nothing, except a new
  *     turn event from a token it has never seen, which proves a new process
  *     owns the pane and re-fences it;
- *   - a post with no token at all is a hook script from before this shipped:
- *     admitted for one release, logged once.
+ *   - a post with no token at all is a hook script from before this shipped.
+ *     The token reaches the script through the pane ENV, so a pane this daemon
+ *     launched always has one to forward; a post for a pane the ledger knows
+ *     that carries none can only be a script too old to read it. Admitted
+ *     while such a script is still installed on the machine, and logged once.
+ *     The caller decides that (`legacyScripts`), because what settles it is the
+ *     text of the scripts in ~/.claude/hooks, not a date — see hookAdmission.ts.
+ *     A pane this daemon never launched is `unmanaged` and unaffected either
+ *     way: nothing here fences a claude the user opened themselves.
  *
  * The ledger is persisted, so a daemon restart keeps fencing the panes it
  * launched instead of trusting every orphan again.
@@ -191,7 +198,7 @@ export class LaunchTokenLedger {
    * retired pane is owned again rather than being written to by whatever
    * survived the kill.
    */
-  admit(evt: { sessionId?: string; token?: string; newTurn?: boolean }): LaunchVerdict {
+  admit(evt: { sessionId?: string; token?: string; newTurn?: boolean; legacyScripts?: boolean }): LaunchVerdict {
     const token = isLaunchToken(evt.token) ? evt.token : undefined;
     const entry = token ? this.entries.get(token) : undefined;
     const sessionHead = evt.sessionId ? this.sessionHead.get(evt.sessionId) : undefined;
@@ -201,8 +208,14 @@ export class LaunchTokenLedger {
     if (!pane) return { decision: "accept", reason: "unmanaged", notable: false };
 
     if (!token) {
-      // A hook script installed before launch tokens shipped. Accepted for one
-      // release; the install refreshes the script, so this drains on its own.
+      // A hook script installed before launch tokens shipped. Believed only
+      // while such a script is actually on this machine; the daemon rewrites
+      // the ones it owns on first contact, so this drains on its own rather
+      // than on a release date. Defaults to believed, so a caller that knows
+      // nothing about installed scripts behaves as it always did.
+      if (evt.legacyScripts === false) {
+        return { decision: "drop", reason: "legacy", notable: true };
+      }
       const notable = !this.legacyLogged.has(pane);
       if (notable) this.legacyLogged.add(pane);
       return { decision: "accept", reason: "legacy", notable };
