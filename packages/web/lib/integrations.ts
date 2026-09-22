@@ -16,7 +16,6 @@ import { useAction, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { GitPullRequest, ListChecks, Mail, MessagesSquare, NotebookText } from "lucide-react";
 import type { AppConnectionScope, AppConnectionStatus, AppDescriptor, AppId } from "@codecast/shared/contracts";
-import { githubAppInstallUrl, type GithubInstallUser } from "./githubAppInstall";
 import { formatRelative } from "./utils";
 import type { IssueProvider, TaskExternal } from "../store/inboxStore";
 
@@ -71,14 +70,13 @@ export type AppConnectionActions = {
  * The connect and disconnect gestures for one app at one scope. Every branch
  * calls a flow that already exists server-side: Slack's getInstallUrl,
  * googleOAuth's getConnectUrl/disconnect, the generic oauthConnectors pair for
- * Linear and Notion, the GitHub App install URL and
+ * Linear and Notion, githubApp.getInstallUrl and
  * githubApp.deleteInstallation. `scope` says which workspace the connection
  * binds to — the team being looked at, or the person themself.
  */
 export function useAppConnection(
   descriptor: AppDescriptor,
   connection: AppConnectionStatus | undefined,
-  me: GithubInstallUser | null | undefined,
   scope: AppConnectionScope = "team",
 ): AppConnectionActions {
   const getSlackUrl = useAction(api.slack.getInstallUrl);
@@ -87,6 +85,7 @@ export function useAppConnection(
   const getConnectorUrl = useAction(api.oauthConnectors.getConnectUrl);
   const disconnectConnector = useAction(api.oauthConnectors.disconnect);
   const deleteGithubInstallation = useMutation(api.githubApp.deleteInstallation);
+  const getGithubInstallUrl = useAction(api.githubApp.getInstallUrl);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -117,16 +116,13 @@ export function useAppConnection(
 
   const connect = async () => {
     if (descriptor.connectKind === "github-app-install") {
-      // The shared helper resolves the SAME workspace the connected-state query
-      // reads (active_team_id ?? team_id) — minting from a different team would
-      // install into one workspace while the card reports another.
-      setError(null);
-      const url = me ? githubAppInstallUrl(me, scope) : null;
-      if (!url) {
-        setError("Join or create a team first, or install the GitHub App for yourself");
-        return;
-      }
-      openExternalUrl(url);
+      // The server mints the URL, because the install's `state` is now an
+      // intent bound to the authenticated caller — a URL a client could build
+      // for itself is the authority the install callback used to trust.
+      await attempt(
+        () => openMinted(() => getGithubInstallUrl({ scope }), "Couldn't start the GitHub App install"),
+        "Couldn't reach GitHub",
+      );
       return;
     }
     if (descriptor.connectKind !== "oauth-popup") return;

@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
+  type NormalizedIssue,
   diffAgainstTask,
   githubStateFor,
   githubStatusFor,
+  kindFromDiff,
   linearPriorityFor,
   linearStateFor,
   linearStatusFor,
@@ -345,5 +347,76 @@ describe("linearStateFor", () => {
 
   test("no plausible state is undefined, not a wrong guess", () => {
     expect(linearStateFor("done", [{ id: "s", name: "Todo", type: "unstarted" }])).toBeUndefined();
+  });
+});
+
+describe("linearStatusFor: closed-without-done states", () => {
+  test("a Duplicate column is dropped, not open", () => {
+    // Linear reports a team's Duplicate state with its own type; it is closed
+    // without being done, so it must not land as an open task.
+    expect(linearStatusFor("duplicate", "Duplicate")).toBe("dropped");
+    expect(linearStatusFor("cancelled", "Won't do")).toBe("dropped");
+  });
+});
+
+describe("diffAgainstTask: unassign (S2)", () => {
+  const issue = (over: Partial<NormalizedIssue> = {}): NormalizedIssue => ({
+    provider: "linear",
+    id: "i1",
+    identifier: "LIN-1",
+    url: "",
+    title: "Fix",
+    description: "",
+    status: "open",
+    labels: [],
+    remote_updated_at: 2_000,
+    ...over,
+  });
+
+  test("the provider going from someone to nobody clears ours", () => {
+    const task = { title: "Fix", status: "open", assignee: "user_ada", external: { assignee_label: "Ada" } };
+    expect(diffAgainstTask(task, issue())).toEqual({ assignee: null });
+  });
+
+  test("nobody on the provider and nobody recorded before is not an unassign", () => {
+    // A codecast-only assignment (a user with no Linear account, an assignee
+    // set locally) must survive every provider event that shows no assignee.
+    const task = { title: "Fix", status: "open", assignee: "user_ada", external: {} };
+    expect(diffAgainstTask(task, issue())).toEqual({});
+  });
+
+  test("an agent seat is never cleared by the provider", () => {
+    const task = { title: "Fix", status: "open", assignee: "agent:claude", external: { assignee_label: "Ada" } };
+    expect(diffAgainstTask(task, issue())).toEqual({});
+  });
+
+  test("an unmapped provider assignee still leaves ours alone", () => {
+    const task = { title: "Fix", status: "open", assignee: "user_ada", external: { assignee_label: "Ada" } };
+    expect(diffAgainstTask(task, issue({ assignee_email: "bob@x.dev", assignee_label: "Bob" }))).toEqual({});
+  });
+
+  test("a local reassignment newer than the event wins", () => {
+    const task = {
+      title: "Fix",
+      status: "open",
+      assignee: "user_ada",
+      external: { assignee_label: "Ada", field_ts: { assignee: 5_000 } },
+    };
+    expect(diffAgainstTask(task, issue())).toEqual({});
+  });
+});
+
+describe("kindFromDiff (S8 for pulls)", () => {
+  test("a created task is opened; an empty diff is no event at all", () => {
+    expect(kindFromDiff({}, true, "open")).toBe("issue_opened");
+    expect(kindFromDiff({}, false, "open")).toBeUndefined();
+  });
+
+  test("status leads, then assignee, then labels, else edited", () => {
+    expect(kindFromDiff({ status: "done", title: "x" }, false, "done")).toBe("issue_closed");
+    expect(kindFromDiff({ status: "in_progress" }, false, "in_progress")).toBe("issue_status");
+    expect(kindFromDiff({ assignee: null }, false, "open")).toBe("issue_assigned");
+    expect(kindFromDiff({ labels: ["bug"] }, false, "open")).toBe("issue_labeled");
+    expect(kindFromDiff({ title: "x", description: "y" }, false, "open")).toBe("issue_edited");
   });
 });

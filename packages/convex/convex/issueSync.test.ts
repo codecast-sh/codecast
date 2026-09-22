@@ -272,3 +272,317 @@ describe("markSourceSynced status transitions", () => {
     expect(pausedLate.last_error).toBe("Linear API 401");
   });
 });
+
+/* ---------------- The engine on a fake db (S3, S4, S8) ---------------- */
+
+import { applyRemote, pushTask } from "./issueSync";
+import { LinearGraphqlError, fetchLabels, findUserByEmail } from "./linearApi";
+
+/** A ctx with a fake db and a scheduler that records instead of running. */
+function engineCtx(tables: Record<string, any[]>) {
+  const db: any = makeFakeDb(tables);
+  if (!db.normalizeId) db.normalizeId = () => null;
+  const scheduled: Array<{ fn: any; args: any }> = [];
+  return {
+    ctx: { db, scheduler: { runAfter: async (_ms: number, fn: any, args: any) => { scheduled.push({ fn, args }); } } },
+    db,
+    scheduled,
+    tables,
+  };
+}
+
+const SOURCE = {
+  _id: "src_1",
+  provider: "linear",
+  kind: "linear_team",
+  external_id: "team_abc",
+  project_id: "proj_1",
+  user_id: "user_owner",
+  team_id: "team_cc",
+  workspace: "team:team_cc",
+  status: "active",
+  auto_spawn: false,
+  push_new_tasks: false,
+};
+
+const TASK = {
+  _id: "task_1",
+  short_id: "ct-1",
+  title: "Fix the sync",
+  description: "It drops events under load.",
+  status: "open",
+  priority: "high",
+  assignee: "user_ada",
+  labels: ["bug"],
+  team_id: "team_cc",
+  project_id: "proj_1",
+  user_id: "user_owner",
+  conversation_ids: [],
+  external: {
+    provider: "linear",
+    id: "issue_uuid_1",
+    identifier: "LIN-482",
+    url: "https://linear.app/acme/issue/LIN-482/fix-the-sync",
+    number: 482,
+    team_id: "team_abc",
+    team_key: "LIN",
+    project_id: "project_xyz",
+    source_id: "src_1",
+    remote_updated_at: 1_000,
+    synced_at: 1_000,
+    assignee_label: "Ada Lovelace",
+    state_name: "Todo",
+  },
+};
+
+const ADA = { _id: "user_ada", email: "ada@acme.dev", name: "Ada Lovelace" };
+
+const sameIssue = (over: Record<string, any> = {}) => normalizeLinearIssue({
+  ...LINEAR_ISSUE_CREATE.data,
+  state: { id: "s_todo", name: "Todo", type: "unstarted" },
+  assignee: { id: "u1", name: "Ada Lovelace", email: "ada@acme.dev" },
+  updatedAt: "2026-09-01T11:00:00.000Z",
+  ...over,
+});
+
+const apply = (ctx: any, args: Record<string, any>) => (applyRemote as any)._handler(ctx, args);
+
+describe("applyRemote on an existing task", () => {
+  test("a pull that changes nothing writes nothing and fires nothing", async () => {
+    const { ctx, db, scheduled } = engineCtx({
+      tasks: [structuredClone(TASK)], issue_sync_sources: [SOURCE], users: [ADA], task_history: [], task_comments: [],
+    });
+    const res = await apply(ctx, { source_id: "src_1", issue: sameIssue() });
+    expect(res.changed).toEqual([]);
+    // No patch at all — not even the clock: a reconcile that finds the same
+    // issue must not bump updated_at and push the row through the sync log.
+    expect(db._patched).toEqual([]);
+    expect(db._tables.task_history).toEqual([]);
+    expect(scheduled).toEqual([]);
+  });
+
+  test("a real edit patches the fields, writes history, and derives its kind", async () => {
+    const { ctx, db, scheduled, tables } = engineCtx({
+      tasks: [structuredClone(TASK)], issue_sync_sources: [SOURCE], users: [ADA], task_history: [], task_comments: [],
+    });
+    const res = await apply(ctx, {
+      source_id: "src_1",
+      issue: sameIssue({ title: "Fix the sync for real", state: { id: "s_done", name: "Done", type: "completed" } }),
+    });
+    expect(res.changed.sort()).toEqual(["status", "title"]);
+    const row = tables.tasks[0];
+    expect(row.title).toBe("Fix the sync for real");
+    expect(row.status).toBe("done");
+    expect(row.closed_at).toBeGreaterThan(0);
+    expect(row.external.state_name).toBe("Done");
+    expect(tables.task_history.map((h: any) => h.field).sort()).toEqual(["status", "title"]);
+    // No kind was passed (a pull), so the diff names it: a close.
+    const feed = scheduled.find((s) => s.args?.dedupe_key);
+    expect(feed?.args.kind).toBe("issue_closed");
+    expect(feed?.args.task_ids).toEqual(["task_1"]);
+    const trigger = scheduled.find((s) => s.args?.event_type);
+    expect(trigger?.args).toMatchObject({ event_type: "issues", action: "closed", repository: "LIN", team_id: "team_cc" });
+    expect(db._patched.length).toBe(1);
+  });
+
+  test("a webhook kind wins over the derived one", async () => {
+    const { ctx, scheduled } = engineCtx({
+      tasks: [structuredClone(TASK)], issue_sync_sources: [SOURCE], users: [ADA], task_history: [], task_comments: [],
+    });
+    await apply(ctx, { source_id: "src_1", issue: sameIssue({ title: "Renamed" }), event_kind: "issue_edited" });
+    expect(scheduled.find((s) => s.args?.dedupe_key)?.args.kind).toBe("issue_edited");
+  });
+
+  test("the provider unassigning clears our assignee as an undefined write", async () => {
+    const { ctx, db, tables } = engineCtx({
+      tasks: [structuredClone(TASK)], issue_sync_sources: [SOURCE], users: [ADA], task_history: [], task_comments: [],
+    });
+    const res = await apply(ctx, { source_id: "src_1", issue: sameIssue({ assignee: null }) });
+    expect(res.changed).toEqual(["assignee"]);
+    expect(db._patched[0].patch.assignee).toBeUndefined();
+    expect("assignee" in db._patched[0].patch).toBe(true);
+    expect(tables.tasks[0].external.assignee_label).toBeUndefined();
+    expect(tables.task_history[0]).toMatchObject({ field: "assignee", old_value: "user_ada", new_value: "" });
+  });
+
+  test("a category change drops the custom status refinement", async () => {
+    const { ctx, db } = engineCtx({
+      tasks: [{ ...structuredClone(TASK), status_id: "st_custom" }], issue_sync_sources: [SOURCE], users: [ADA], task_history: [], task_comments: [],
+    });
+    await apply(ctx, { source_id: "src_1", issue: sameIssue({ state: { id: "s_doing", name: "In Progress", type: "started" } }) });
+    expect(db._patched[0].patch).toMatchObject({ status: "in_progress" });
+    expect("status_id" in db._patched[0].patch).toBe(true);
+    expect(db._patched[0].patch.status_id).toBeUndefined();
+  });
+
+  test("a comment we already hold by provider id lands nothing and is not an event", async () => {
+    const { ctx, db, scheduled } = engineCtx({
+      tasks: [structuredClone(TASK)],
+      issue_sync_sources: [SOURCE],
+      users: [ADA],
+      task_history: [],
+      task_comments: [{ _id: "c1", task_id: "task_1", text: "Looking at it now.", created_at: 1, external: { provider: "linear", id: "comment_uuid_1" } }],
+    });
+    const res = await apply(ctx, {
+      source_id: "src_1",
+      issue: sameIssue(),
+      comments: [normalizeLinearComment(LINEAR_COMMENT_CREATE.data)],
+      comment_only: true,
+    });
+    expect(res.comments).toBe(0);
+    expect(db._inserted).toEqual([]);
+    expect(scheduled).toEqual([]);
+  });
+
+  test("a deletion drops the task once and is inert after", async () => {
+    const { ctx, db, tables } = engineCtx({
+      tasks: [structuredClone(TASK)], issue_sync_sources: [SOURCE], users: [ADA], task_history: [], task_comments: [],
+    });
+    await apply(ctx, { source_id: "src_1", issue: { ...sameIssue(), deleted: true }, event_kind: "issue_closed" });
+    expect(tables.tasks[0].status).toBe("dropped");
+    const writes = db._patched.length;
+    await apply(ctx, { source_id: "src_1", issue: { ...sameIssue(), deleted: true }, event_kind: "issue_closed" });
+    expect(db._patched.length).toBe(writes);
+  });
+});
+
+/* ---------------- Outbound label push against a mocked Linear (S5) ---------------- */
+
+describe("pushTask labels", () => {
+  const realFetch = globalThis.fetch;
+  const graphql = (handler: (query: string, variables: any) => any) => {
+    globalThis.fetch = (async (_url: any, init: any) => {
+      const { query, variables } = JSON.parse(init.body);
+      const out = handler(query, variables);
+      return { ok: true, status: 200, json: async () => out, text: async () => JSON.stringify(out) } as any;
+    }) as any;
+  };
+  const restore = () => { globalThis.fetch = realFetch; };
+
+  const pushCtx = (info: any) => {
+    const mutations: any[] = [];
+    return {
+      mutations,
+      ctx: {
+        runQuery: async () => info,
+        runAction: async () => ({ ok: true, token: "tok" }),
+        runMutation: async (_fn: any, args: any) => { mutations.push(args); },
+      },
+    };
+  };
+
+  const info = {
+    external: { provider: "linear", id: "issue_uuid_1", identifier: "LIN-482", team_id: "team_abc" },
+    title: "Fix",
+    description: "",
+    status: "open",
+    priority: "high",
+    labels: ["Bug", "needs-repro"],
+    assignee_cleared: false,
+    assignee_emails: [],
+    user_id: "user_owner",
+    team_id: "team_cc",
+  };
+
+  test("a label the app may not create is kept off the push, the rest lands, the task says why", async () => {
+    const calls: string[] = [];
+    graphql((query, variables) => {
+      if (query.includes("query Labels")) {
+        // "Bug" is a WORKSPACE label (team null) — it must be found, not re-created.
+        return { data: { issueLabels: { nodes: [{ id: "l_bug", name: "Bug", isGroup: false }, { id: "l_grp", name: "Area", isGroup: true }] } } };
+      }
+      if (query.includes("mutation CreateLabel")) {
+        calls.push(`create:${variables.input.name}`);
+        return { errors: [{ message: "not allowed to take action", extensions: { type: "forbidden", code: "FORBIDDEN", statusCode: 403, userPresentableMessage: "You are not allowed to create labels in this team." } }] };
+      }
+      if (query.includes("mutation UpdateIssue")) {
+        calls.push(`update:${JSON.stringify(variables.input)}`);
+        return { data: { issueUpdate: { success: true, issue: {} } } };
+      }
+      throw new Error(`unexpected query ${query.slice(0, 40)}`);
+    });
+    try {
+      const { ctx, mutations } = pushCtx(info);
+      const res = await (pushTask as any)._handler(ctx, { task_id: "task_1", fields: ["title", "labels"] });
+      expect(res.pushed).toEqual(["title", "labels"]);
+      expect(calls).toEqual(["create:needs-repro", 'update:{"title":"Fix","labelIds":["l_bug"]}']);
+      // The fields are stamped as pushed (the echo guard needs them) AND the
+      // refusal is on the task, in Linear's own words.
+      expect(mutations[0]).toMatchObject({ task_id: "task_1", fields: ["title", "labels"] });
+      expect(mutations[0].error).toContain("needs-repro");
+    } finally {
+      restore();
+    }
+  });
+
+  test("any other failure still parks the push with Linear's readable message", async () => {
+    graphql((query) => {
+      if (query.includes("query Labels")) return { data: { issueLabels: { nodes: [] } } };
+      if (query.includes("mutation CreateLabel")) return { data: { issueLabelCreate: { success: true, issueLabel: { id: "l_new", name: "needs-repro" } } } };
+      if (query.includes("mutation UpdateIssue")) {
+        return { errors: [{ message: "Entity not found", extensions: { type: "invalid input", userPresentableMessage: "This issue was archived." } }] };
+      }
+      throw new Error("unexpected");
+    });
+    try {
+      const { ctx, mutations } = pushCtx(info);
+      const res = await (pushTask as any)._handler(ctx, { task_id: "task_1", fields: ["labels"] });
+      expect(res.error).toBe("Linear GraphQL: This issue was archived.");
+      expect(mutations[0]).toMatchObject({ fields: [], error: "Linear GraphQL: This issue was archived." });
+    } finally {
+      restore();
+    }
+  });
+
+  test("clearing our assignee unassigns the issue; an agent seat pushes nothing", async () => {
+    const inputs: any[] = [];
+    graphql((query, variables) => {
+      if (query.includes("mutation UpdateIssue")) { inputs.push(variables.input); return { data: { issueUpdate: { success: true, issue: {} } } }; }
+      throw new Error("unexpected");
+    });
+    try {
+      await (pushTask as any)._handler(pushCtx({ ...info, assignee_cleared: true }).ctx, { task_id: "t", fields: ["assignee"] });
+      const agent = await (pushTask as any)._handler(pushCtx({ ...info, assignee_cleared: false, assignee_emails: [] }).ctx, { task_id: "t", fields: ["assignee"] });
+      expect(inputs).toEqual([{ assigneeId: null }]);
+      expect(agent.skipped).toBe("nothing_to_push");
+    } finally {
+      restore();
+    }
+  });
+
+  test("the assignee is looked up by every address we know for them", async () => {
+    const seen: any[] = [];
+    graphql((query, variables) => {
+      if (query.includes("query UserByEmail")) { seen.push(variables.emails); return { data: { users: { nodes: [{ id: "lu_1", email: "ada@alt.dev" }] } } }; }
+      if (query.includes("mutation UpdateIssue")) { seen.push(variables.input); return { data: { issueUpdate: { success: true, issue: {} } } }; }
+      throw new Error("unexpected");
+    });
+    try {
+      await (pushTask as any)._handler(pushCtx({ ...info, assignee_emails: ["ada@acme.dev", "ada@alt.dev"] }).ctx, { task_id: "t", fields: ["assignee"] });
+      expect(seen).toEqual([["ada@acme.dev", "ada@alt.dev"], { assigneeId: "lu_1" }]);
+      expect(await findUserByEmail("tok", [])).toBeNull();
+    } finally {
+      restore();
+    }
+  });
+
+  test("fetchLabels drops label groups", async () => {
+    graphql(() => ({ data: { issueLabels: { nodes: [{ id: "a", name: "Bug", isGroup: false }, { id: "g", name: "Area", isGroup: true }] } } }));
+    try {
+      expect(await fetchLabels("tok", "team_abc")).toEqual([{ id: "a", name: "Bug" }]);
+    } finally {
+      restore();
+    }
+  });
+});
+
+describe("LinearGraphqlError", () => {
+  test("prefers the sentence a person can act on and flags a forbidden refusal", () => {
+    const e = new LinearGraphqlError([
+      { message: "not allowed to take action", extensions: { type: "forbidden", userPresentableMessage: "You are not allowed to create labels in this team." } },
+    ]);
+    expect(e.message).toBe("Linear GraphQL: You are not allowed to create labels in this team.");
+    expect(e.forbidden).toBe(true);
+    expect(new LinearGraphqlError([{ message: "boom" }]).forbidden).toBe(false);
+  });
+});

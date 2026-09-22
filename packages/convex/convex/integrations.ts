@@ -16,8 +16,6 @@ import { verifyApiToken } from "./apiTokens";
 import { deleteInstallationRows, requireInstallationRevoker } from "./githubApp";
 import {
   APP_DESCRIPTORS,
-  githubAppInstallState,
-  githubAppInstallUrlFor,
   isAppConnectionScope,
   type AppConnectionScope,
   type AppId,
@@ -82,20 +80,10 @@ export const cliConnectUrl = action({
       });
     }
 
-    // GitHub is an App INSTALL, not an OAuth authorize: there is no code
-    // exchange and no scope list, only a state the install webhook reads back
-    // (githubAppInstallState, shared with the web button and the callback).
-    const me: any = await ctx.runQuery(internal.oauthConnectors.resolveTeam, {
-      api_token: args.api_token,
-    });
-    if (!me?.user_id) return { ok: false, error: "not signed in" };
-    const state = githubAppInstallState({
-      userId: String(me.user_id),
-      scope,
-      teamId: me.team_id ? String(me.team_id) : null,
-    });
-    if (!state) return { ok: false, error: "Join or create a team first, or connect GitHub with --personal" };
-    return { ok: true, url: githubAppInstallUrlFor(process.env.GITHUB_APP_SLUG || "codecast-sh", state) };
+    // GitHub is an App INSTALL, not an OAuth authorize: no code exchange and no
+    // scope list, only the install intent githubApp.getInstallUrl mints for the
+    // caller — the same one the web button and the callback use.
+    return await ctx.runAction(api.githubApp.getInstallUrl, { scope, api_token: args.api_token });
   },
 });
 

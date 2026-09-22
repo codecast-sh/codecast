@@ -29,6 +29,7 @@ import { issueProviderValidator, issueSyncSourceKindValidator } from "./issueSyn
 import {
   diffAgainstTask,
   githubStateFor,
+  kindFromDiff,
   linearPriorityFor,
   linearStateFor,
   normalizeGithubComment,
@@ -37,6 +38,7 @@ import {
   normalizeLinearIssue,
   type NormalizedComment,
   type NormalizedIssue,
+  type TaskDiff,
 } from "./lib/issueMapping";
 import * as linearApi from "./linearApi";
 import * as githubIssuesApi from "./githubIssuesApi";
@@ -493,26 +495,40 @@ async function applyRemoteInner(ctx: any, args: ApplyArgs) {
   const now = Date.now();
   const source: SourceDoc | null = args.source_id ? await ctx.db.get(args.source_id) : null;
   let task = await taskByExternal(ctx, issue.provider, issue.id);
+  let created = false;
+  let diff: TaskDiff = {};
 
   if (!task) {
     // Nothing to attach a comment or a deletion to, and no home to create in.
     if (args.comment_only || issue.deleted || !source) return { skipped: "no_task" };
     task = await createTaskFromIssue(ctx, source, issue, now);
+    created = true;
   } else if (!args.comment_only) {
-    await updateTaskFromIssue(ctx, source, task, issue, now);
+    diff = await updateTaskFromIssue(ctx, source, task, issue, now);
     task = await ctx.db.get(task._id);
   }
   if (!task) return { skipped: "no_task" };
 
+  let landed = 0;
   for (const comment of args.comments ?? []) {
-    await upsertComment(ctx, task._id, comment);
+    if (await upsertComment(ctx, task._id, comment)) landed++;
   }
 
-  await maybeDelegate(ctx, source, task, issue);
-  await recordFeedEvent(ctx, source, task, issue, args.event_kind, now);
-  await fireTriggers(ctx, source, issue, args.event_kind, args.github_action, !!args.comments?.length);
+  // A webhook names its kind. A pull (import, reconcile) does not, so the
+  // kind is what the diff says — and a pull that changed nothing is not an
+  // event: no feed row, no trigger, or every reconcile would re-fire
+  // "issues edited" for every issue inside its window.
+  const kind = args.event_kind
+    ?? kindFromDiff(diff, created, task.status)
+    ?? (landed > 0 ? "issue_commented" : undefined);
 
-  return { task_id: task._id };
+  await maybeDelegate(ctx, source, task, issue);
+  if (kind) {
+    await recordFeedEvent(ctx, source, task, issue, kind, now);
+    await fireTriggers(ctx, source, issue, kind, args.github_action, kind === "issue_commented");
+  }
+
+  return { task_id: task._id, created, changed: Object.keys(diff), comments: landed };
 }
 
 async function createTaskFromIssue(ctx: any, source: SourceDoc, issue: NormalizedIssue, now: number) {
@@ -549,32 +565,53 @@ async function createTaskFromIssue(ctx: any, source: SourceDoc, issue: Normalize
   return await ctx.db.get(id);
 }
 
+/**
+ * The fields of `external` that say WHAT the provider holds, as opposed to
+ * WHEN we last looked (`synced_at`, `remote_updated_at`). A pull that finds
+ * the same issue again moves only the clocks, and a clock alone is not worth a
+ * write: S3 says an inbound that changes nothing is a no-op, and a no-op that
+ * still patched the row would bump `updated_at` on every reconcile and push
+ * the task through the sync log for nothing.
+ */
+function externalFacts(ext: any): string {
+  if (!ext) return "";
+  const { synced_at: _s, remote_updated_at: _r, field_ts: _f, ...facts } = ext;
+  return JSON.stringify(facts, Object.keys(facts).sort());
+}
+
 async function updateTaskFromIssue(
   ctx: any,
   source: SourceDoc | null,
   task: any,
   issue: NormalizedIssue,
   now: number,
-) {
+): Promise<TaskDiff> {
   const teamId = task.team_id ?? source?.team_id;
   const assigneeId = await resolveProviderUser(ctx, issue, teamId);
 
   // A deletion is not a field edit: the row stays (it carries our comments,
   // sessions and history) and only its status moves (S6).
-  const diff = issue.deleted
+  const diff: TaskDiff = issue.deleted
     ? (task.status === "dropped" ? {} : { status: "dropped" })
     : diffAgainstTask(task, issue, { assignee: assigneeId ? String(assigneeId) : undefined });
 
-  const patch: Record<string, any> = {
-    ...diff,
-    external: externalFor(issue, source, now, task.external),
-    updated_at: now,
-  };
+  const external = externalFor(issue, source, now, task.external);
+  if (Object.keys(diff).length === 0 && externalFacts(external) === externalFacts(task.external)) {
+    return diff;
+  }
+
+  const patch: Record<string, any> = { ...diff, external, updated_at: now };
+  // The provider unassigned the issue: ours clears (S2). A cleared field is
+  // an undefined write, never a null one.
+  if (diff.assignee === null) patch.assignee = undefined;
   if (diff.status === "done" || diff.status === "dropped") patch.closed_at = now;
+  // A category change orphans a custom-status refinement (its id belongs to
+  // the old category); the same rule every status write in tasks.ts applies.
+  if (diff.status !== undefined && diff.status !== task.status) patch.status_id = undefined;
 
   for (const field of ["status", "title", "assignee", "priority"] as const) {
     if (diff[field] === undefined) continue;
-    await history(ctx, task._id, "updated", field, task[field] ?? "", diff[field]);
+    await history(ctx, task._id, "updated", field, task[field] ?? "", diff[field] ?? "");
   }
 
   await ctx.db.patch(task._id, patch);
@@ -582,6 +619,7 @@ async function updateTaskFromIssue(
   if (diff.status && task.plan_id) {
     await recalcPlanProgress(ctx, task.plan_id, task._id, diff.status);
   }
+  return diff;
 }
 
 /**
@@ -591,8 +629,8 @@ async function updateTaskFromIssue(
  * stop); we wrote the identical text moments ago and the webhook beat our own
  * id patch (link that row instead of duplicating it); otherwise it is new.
  */
-async function upsertComment(ctx: any, taskId: Id<"tasks">, comment: NormalizedComment) {
-  if (!comment.id) return;
+async function upsertComment(ctx: any, taskId: Id<"tasks">, comment: NormalizedComment): Promise<boolean> {
+  if (!comment.id) return false;
   const existing = await ctx.db
     .query("task_comments")
     .withIndex("by_external", (q: any) =>
@@ -600,11 +638,11 @@ async function upsertComment(ctx: any, taskId: Id<"tasks">, comment: NormalizedC
     .first();
 
   if (existing) {
-    if (comment.deleted) return;
+    if (comment.deleted) return false;
     if (existing.text !== comment.body) await ctx.db.patch(existing._id, { text: comment.body });
-    return;
+    return false;
   }
-  if (comment.deleted) return;
+  if (comment.deleted) return false;
 
   const recent = await ctx.db
     .query("task_comments")
@@ -620,7 +658,7 @@ async function upsertComment(ctx: any, taskId: Id<"tasks">, comment: NormalizedC
   };
   if (twin) {
     await ctx.db.patch(twin._id, { external });
-    return;
+    return false;
   }
 
   const id = await insertTaskComment(ctx, taskId, {
@@ -629,6 +667,7 @@ async function upsertComment(ctx: any, taskId: Id<"tasks">, comment: NormalizedC
     comment_type: "note",
   });
   await ctx.db.patch(id, { external });
+  return true;
 }
 
 /* ---------------- Delegation, feed, triggers (S7, S8) ---------------- */
@@ -751,15 +790,7 @@ export const taskPushContext = internalQuery({
       statusName = teamTaskStatuses(team?.task_statuses).find((s: any) => s.id === task.status_id)?.name;
     }
 
-    let assigneeEmail: string | undefined;
-    let assigneeLogin: string | undefined;
-    if (task.assignee && !task.assignee.startsWith("agent:")) {
-      const id = ctx.db.normalizeId("users", task.assignee);
-      const user = id ? await ctx.db.get(id) : null;
-      assigneeEmail = user?.email;
-      assigneeLogin = user?.github_username;
-    }
-
+    const { assignee_emails, assignee_login } = await providerAssignee(ctx, task.assignee);
     return {
       external: task.external,
       title: task.title,
@@ -768,13 +799,33 @@ export const taskPushContext = internalQuery({
       status_name: statusName,
       priority: task.priority,
       labels: task.labels ?? [],
-      assignee_email: assigneeEmail,
-      assignee_login: assigneeLogin,
+      // Cleared here means cleared there: the push unassigns the issue. An
+      // agent seat is not a provider user, so it is neither pushed nor a clear.
+      assignee_cleared: !task.assignee,
+      assignee_emails,
+      assignee_login,
       user_id: task.user_id,
       team_id: teamId,
     };
   },
 });
+
+/**
+ * The provider-side identity of our assignee: every email the user is known
+ * by (Linear matches on any of them — the address someone signs into Linear
+ * with is often not their codecast login) and their GitHub login.
+ */
+async function providerAssignee(
+  ctx: any,
+  assignee: string | undefined,
+): Promise<{ assignee_emails: string[]; assignee_login?: string }> {
+  if (!assignee || assignee.startsWith("agent:")) return { assignee_emails: [] };
+  const id = ctx.db.normalizeId("users", assignee);
+  const user = id ? await ctx.db.get(id) : null;
+  if (!user) return { assignee_emails: [] };
+  const emails = [user.email, ...(user.alternate_emails ?? [])].filter((e: unknown): e is string => typeof e === "string" && !!e);
+  return { assignee_emails: [...new Set(emails)], assignee_login: user.github_username };
+}
 
 /** Does `userId` hold a personal connection that can reach this container? */
 async function hasPersonalConnection(
@@ -853,22 +904,41 @@ export const pushTask = internalAction({
           const state = linearStateFor(info.status, states, info.status_name);
           if (state) input.stateId = state.id;
         }
+        let refused: string[] = [];
         if (want.has("labels") && ext.team_id) {
-          input.labelIds = await resolveLinearLabelIds(token, ext.team_id, info.labels);
+          const labels = await resolveLinearLabelIds(token, ext.team_id, info.labels);
+          input.labelIds = labels.ids;
+          refused = labels.refused;
         }
-        if (want.has("assignee") && info.assignee_email) {
-          const user = await linearApi.findUserByEmail(token, info.assignee_email);
-          if (user) input.assigneeId = user.id;
+        if (want.has("assignee")) {
+          if (info.assignee_cleared) input.assigneeId = null;
+          else if (info.assignee_emails.length > 0) {
+            const user = await linearApi.findUserByEmail(token, info.assignee_emails);
+            if (user) input.assigneeId = user.id;
+          }
         }
         if (Object.keys(input).length === 0) return { skipped: "nothing_to_push" };
         await linearApi.updateIssue(token, ext.id, input);
+        if (refused.length > 0) {
+          // The rest of the push landed; the task says which labels did not
+          // and why, instead of the whole write dying on one label.
+          await ctx.runMutation(internal.issueSync.stampPushed, {
+            task_id: args.task_id,
+            fields: args.fields,
+            error: `Linear kept these labels off ${ext.identifier}: ${refused.join(", ")}`.slice(0, 500),
+          });
+          return { pushed: args.fields, error: refused.join(", ") };
+        }
       } else {
         const patch: githubIssuesApi.GithubIssuePatch = {};
         if (want.has("title")) patch.title = info.title;
         if (want.has("description")) patch.body = info.description;
         if (want.has("status")) Object.assign(patch, githubStateFor(info.status));
         if (want.has("labels")) patch.labels = info.labels;
-        if (want.has("assignee") && info.assignee_login) patch.assignees = [info.assignee_login];
+        if (want.has("assignee")) {
+          if (info.assignee_cleared) patch.assignees = [];
+          else if (info.assignee_login) patch.assignees = [info.assignee_login];
+        }
         if (Object.keys(patch).length === 0) return { skipped: "nothing_to_push" };
         if (!ext.repo || ext.number == null) return { skipped: "no_repo" };
         await githubIssuesApi.updateIssue(token, ext.repo, ext.number, patch);
@@ -891,23 +961,42 @@ export const pushTask = internalAction({
   },
 });
 
-/** Label names -> Linear label ids, creating the ones the team does not have. */
-async function resolveLinearLabelIds(token: string, teamId: string, names: string[]): Promise<string[]> {
-  if (names.length === 0) return [];
+/**
+ * Label names -> Linear label ids, creating the ones neither the team nor the
+ * workspace has.
+ *
+ * Creation is the one write the app actor may lack: Linear lets a workspace
+ * forbid apps from minting team labels ("You are not allowed to create labels
+ * in this team"). Such a label is reported in `refused`, not thrown — the
+ * push still carries every label that exists, and the title, state and the
+ * rest of the write, so one unknown label cannot park the whole task.
+ */
+async function resolveLinearLabelIds(
+  token: string,
+  teamId: string,
+  names: string[],
+): Promise<{ ids: string[]; refused: string[] }> {
+  if (names.length === 0) return { ids: [], refused: [] };
   const existing = await linearApi.fetchLabels(token, teamId);
   const byName = new Map(existing.map((l) => [l.name.toLowerCase(), l.id]));
   const ids: string[] = [];
+  const refused: string[] = [];
   for (const name of names) {
     const hit = byName.get(name.toLowerCase());
     if (hit) {
       ids.push(hit);
       continue;
     }
-    const created = await linearApi.createLabel(token, teamId, name);
-    byName.set(name.toLowerCase(), created.id);
-    ids.push(created.id);
+    try {
+      const created = await linearApi.createLabel(token, teamId, name);
+      byName.set(name.toLowerCase(), created.id);
+      ids.push(created.id);
+    } catch (error) {
+      if (!(error instanceof linearApi.LinearGraphqlError) || !error.forbidden) throw error;
+      refused.push(name);
+    }
   }
-  return ids;
+  return { ids, refused };
 }
 
 /**
@@ -1004,14 +1093,7 @@ export const newTaskPushContext = internalQuery({
       .withIndex("by_project", (q: any) => q.eq("project_id", task.project_id))
       .first();
     if (!source || source.status !== "active" || !source.push_new_tasks) return null;
-    let assigneeEmail: string | undefined;
-    let assigneeLogin: string | undefined;
-    if (task.assignee && !task.assignee.startsWith("agent:")) {
-      const id = ctx.db.normalizeId("users", task.assignee);
-      const user = id ? await ctx.db.get(id) : null;
-      assigneeEmail = user?.email;
-      assigneeLogin = user?.github_username;
-    }
+    const { assignee_emails, assignee_login } = await providerAssignee(ctx, task.assignee);
     return {
       source,
       title: task.title,
@@ -1019,8 +1101,8 @@ export const newTaskPushContext = internalQuery({
       status: task.status,
       priority: task.priority,
       labels: task.labels ?? [],
-      assignee_email: assigneeEmail,
-      assignee_login: assigneeLogin,
+      assignee_emails,
+      assignee_login,
       user_id: task.user_id,
       team_id: task.team_id ?? source.team_id,
     };
@@ -1068,9 +1150,9 @@ export const pushNewTask = internalAction({
         const states = await linearApi.fetchWorkflowStates(token, teamId);
         const state = linearStateFor(info.status, states);
         if (state) input.stateId = state.id;
-        if (info.labels.length > 0) input.labelIds = await resolveLinearLabelIds(token, teamId, info.labels);
-        if (info.assignee_email) {
-          const user = await linearApi.findUserByEmail(token, info.assignee_email);
+        if (info.labels.length > 0) input.labelIds = (await resolveLinearLabelIds(token, teamId, info.labels)).ids;
+        if (info.assignee_emails.length > 0) {
+          const user = await linearApi.findUserByEmail(token, info.assignee_emails);
           if (user) input.assigneeId = user.id;
         }
         issue = normalizeLinearIssue(await linearApi.createIssue(token, input));

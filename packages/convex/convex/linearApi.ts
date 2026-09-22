@@ -47,9 +47,28 @@ export async function linearGraphql<T = any>(
   }
   const body = await res.json();
   if (Array.isArray(body?.errors) && body.errors.length > 0) {
-    throw new Error(`Linear GraphQL: ${body.errors.map((e: any) => e?.message ?? "error").join("; ")}`);
+    throw new LinearGraphqlError(body.errors);
   }
   return body?.data as T;
+}
+
+/**
+ * A refused GraphQL call. Linear's `message` is terse ("not allowed to take
+ * action"); the sentence a person can act on rides in
+ * `extensions.userPresentableMessage` ("You are not allowed to create labels
+ * in this team."), so that is what reaches `last_error`. `forbidden` is the
+ * one class a caller reasons about: the app actor lacks a permission, which
+ * no retry fixes.
+ */
+export class LinearGraphqlError extends Error {
+  readonly forbidden: boolean;
+  constructor(errors: any[]) {
+    const texts = errors.map((e: any) => e?.extensions?.userPresentableMessage ?? e?.message ?? "error");
+    super(`Linear GraphQL: ${texts.join("; ")}`);
+    this.name = "LinearGraphqlError";
+    this.forbidden = errors.some((e: any) =>
+      e?.extensions?.type === "forbidden" || e?.extensions?.code === "FORBIDDEN" || e?.extensions?.statusCode === 403);
+  }
 }
 
 /* ---------------- Reads ---------------- */
@@ -158,6 +177,11 @@ export async function fetchWorkflowStates(
   return [...nodes].sort((a, b) => (a?.position ?? 0) - (b?.position ?? 0));
 }
 
+/**
+ * The labels an issue in this team may carry: the team's own AND the
+ * workspace's (team null — "Bug", "Feature" live there in a fresh workspace).
+ * A label group is a folder, not a label: an issue cannot carry it.
+ */
 export async function fetchLabels(
   token: string,
   teamId: string,
@@ -165,20 +189,30 @@ export async function fetchLabels(
   const data = await linearGraphql(
     token,
     `query Labels($teamId: ID!) {
-       issueLabels(filter: { team: { id: { eq: $teamId } } }, first: 250) { nodes { id name } }
+       issueLabels(
+         filter: { or: [{ team: { id: { eq: $teamId } } }, { team: { null: true } }] },
+         first: 250
+       ) { nodes { id name isGroup } }
      }`,
     { teamId },
   );
-  return data?.issueLabels?.nodes ?? [];
+  const nodes: any[] = data?.issueLabels?.nodes ?? [];
+  return nodes.filter((l) => !l?.isGroup).map((l) => ({ id: l.id, name: l.name }));
 }
 
-export async function findUserByEmail(token: string, email: string): Promise<{ id: string; email: string } | null> {
+/** The Linear user known by any of these addresses, or null. */
+export async function findUserByEmail(
+  token: string,
+  email: string | string[],
+): Promise<{ id: string; email: string } | null> {
+  const emails = (Array.isArray(email) ? email : [email]).filter(Boolean);
+  if (emails.length === 0) return null;
   const data = await linearGraphql(
     token,
-    `query UserByEmail($email: String!) {
-       users(filter: { email: { eq: $email } }, first: 1) { nodes { id email } }
+    `query UserByEmail($emails: [String!]) {
+       users(filter: { email: { in: $emails } }, first: 1) { nodes { id email } }
      }`,
-    { email },
+    { emails },
   );
   return data?.users?.nodes?.[0] ?? null;
 }

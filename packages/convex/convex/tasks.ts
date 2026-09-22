@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
 import { internalMutation, mutation, query } from "./functions";
 import { verifyApiToken } from "./apiTokens";
+import { patchTask } from "./lib/taskWrite";
 import { resolveActor } from "./lib/actor";
 import { allRolesInBoundary, liveRoleByHandle, roleByHandleForRead } from "./lib/orgAccess";
 import { matchHandle, teamRoster } from "./lib/mentionResolve";
@@ -40,7 +41,8 @@ import { pickInheritedGitMeta, type GitMetaSource } from "./projectPaths";
 import { bucketTs } from "./presenceState";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { addConversationToWorkItem, linkConversationToEntityBestEffort, linkedEntityIdsForConversation } from "./conversationLinks";
-import { dropThreadRead, taskThreadParticipants, touchThread } from "./threadReads";
+import { agentCommentLevelOf, dropThreadRead, taskCommentIsNews, taskThreadParticipants, touchThread, type TaskCommentAuthorKind } from "./threadReads";
+import { extractMentionHandles } from "@codecast/shared/chat";
 import { resolveTeamForPath, teamVisibleConvTeam } from "./privacy";
 import { webBaseUrl } from "./slack";
 // Owner-or-team access check for a task. Moved to lib/access.ts (Wave-1
@@ -580,7 +582,7 @@ export async function handOpenTasksUpChain(ctx: any, role: any, actorUserId: Id<
       new_value: to,
       created_at: now,
     });
-    await ctx.db.patch(task._id, { assignee: to, updated_at: now });
+    await patchTask(ctx, task, { assignee: to, updated_at: now });
     await announceAssignment(ctx, { task, assignee: to, actorUserId, actorName: `${role.name} (retired)`, via: "human" });
     moved++;
   }
@@ -1001,7 +1003,7 @@ async function cascadeClose(ctx: any, ids: Id<"tasks">[], newStatus: string, use
     if (!t || !isSameWorkspace(t, scope)) continue;
     // status_id cleared: the cascade moves the subtree to a terminal category,
     // so any custom-status refinement from the old category is stale.
-    await ctx.db.patch(id, { status: newStatus, status_id: undefined, closed_at: now, updated_at: now });
+    await patchTask(ctx, t, { status: newStatus, status_id: undefined, closed_at: now, updated_at: now });
     // Release a session bound to this child so it isn't stuck on a closed task.
     for (const convId of t.conversation_ids ?? []) {
       const conv: any = await ctx.db.get(convId);
@@ -1036,7 +1038,7 @@ async function rollUpParentStart(ctx: any, task: any, newStatus: string | undefi
     const parent: any = await ctx.db.get(cursor);
     if (!parent) break;
     if (parent.status !== "open" && parent.status !== "backlog") break;
-    await ctx.db.patch(parent._id, {
+    await patchTask(ctx, parent, {
       status: "in_progress",
       // The old refinement belonged to the open/backlog category; stale now.
       status_id: undefined,
@@ -1063,35 +1065,11 @@ async function rollUpParentStart(ctx: any, task: any, newStatus: string | undefi
 }
 
 // ── Outbound issue sync (docs/architecture/issue-sync.md S5) ──
-// A task backed by a Linear or GitHub issue pushes the fields a write actually
-// moved. Scheduling lives ONLY in the public mutations below: the inbound path
-// (issueSync.applyRemote) patches tasks directly and never schedules a push,
-// which is what keeps provider and codecast from echoing at each other (S4.1).
-
-const SYNCED_EXTERNAL_FIELDS = ["title", "description", "status", "priority", "assignee", "labels"] as const;
-
-/** Which synced fields this patch really changes; empty means nothing to push. */
-function changedExternalFields(task: any, updates: Record<string, any>): string[] {
-  const changed: string[] = [];
-  for (const field of SYNCED_EXTERNAL_FIELDS) {
-    if (!(field in updates)) continue;
-    if (field === "labels") {
-      const before = [...new Set<string>(task.labels ?? [])].sort().join("\u0000");
-      const after = [...new Set<string>(updates.labels ?? [])].sort().join("\u0000");
-      if (before !== after) changed.push(field);
-      continue;
-    }
-    if ((updates[field] ?? "") !== (task[field] ?? "")) changed.push(field);
-  }
-  return changed;
-}
-
-async function schedulePushTask(ctx: any, task: any, updates: Record<string, any>) {
-  if (!task?.external) return;
-  const fields = changedExternalFields(task, updates);
-  if (fields.length === 0) return;
-  await ctx.scheduler.runAfter(0, internal.issueSync.pushTask, { task_id: task._id, fields });
-}
+// Field writes push through lib/taskWrite.patchTask (every synced-field write
+// on a task goes through it, never a raw patch). Comments and new tasks
+// schedule here: the inbound path (issueSync.applyRemote) never schedules a
+// push, which is what keeps provider and codecast from echoing at each other
+// (S4.1).
 
 async function schedulePushComment(ctx: any, task: any, commentId: Id<"task_comments">) {
   if (!task?.external) return;
@@ -2167,7 +2145,7 @@ export const update = mutation({
       });
     }
 
-    await ctx.db.patch(task._id, updates);
+    await patchTask(ctx, task, updates);
     if (hold) await noteMovedPastHold(ctx, task, hold, nextStatus ?? task.status, actor.name || "unknown", auth.userId);
     // blocked_by/blocks are raw overwrites; reflect the delta onto each
     // referenced task's other side so the stored mirror stays coherent.
@@ -2215,7 +2193,6 @@ export const update = mutation({
         planShortId = plan.short_id;
       }
     }
-    await schedulePushTask(ctx, task, updates);
     return {
       success: true,
       plan_id: planShortId,
@@ -2264,17 +2241,58 @@ export async function insertTaskComment(
   await ctx.db.patch(taskId, { updated_at: now, last_comment_at: now });
   const task = await ctx.db.get(taskId);
   if (task) {
+    // An @mention is attention AT a person, whoever typed it: the named
+    // people follow the thread from here on (membership's "mentioned" leg),
+    // so they must be subscribed before the participants are resolved.
+    const mentioned = await mentionedInTaskComment(ctx, task, fields.text);
+    for (const userId of mentioned) await subscribeUser(ctx, userId, taskId, "mentioned", actorId ? "human" : "agent");
+    const mentionedSet = new Set(mentioned.map(String));
+    // The row moves only for the participants this comment is news for
+    // (threadReads.taskCommentIsNews): a person's comment for everyone else,
+    // an agent's only when it needs a person, or per the reader's own level.
+    // The named people are participants of this comment outright, whether
+    // or not the subscription write above has landed in this transaction.
+    const recipients: Id<"users">[] = [];
+    const participants = await taskThreadParticipants(ctx, task);
+    for (const id of mentioned) if (!participants.some((p) => String(p) === String(id))) participants.push(id);
+    for (const userId of participants) {
+      const author: TaskCommentAuthorKind = !actorId ? "agent" : String(actorId) === String(userId) ? "self" : "person";
+      const level = agentCommentLevelOf(await ctx.db.get(userId));
+      if (taskCommentIsNews(fields, author, level, mentionedSet.has(String(userId)))) recipients.push(userId);
+    }
     await touchThread(ctx, {
       kind: "task",
       rootKey: String(taskId),
       teamId: task.team_id,
       refs: { task_id: taskId },
-      participants: await taskThreadParticipants(ctx, task),
+      participants: recipients,
       actorId,
       activityAt: now,
     });
   }
   return id;
+}
+
+/** The team members a task comment names with @handle (the chat grammar,
+ *  resolved against the task's team roster, so a display name can never
+ *  intercept a mention). A personal task has no roster and no mentions. */
+async function mentionedInTaskComment(
+  ctx: any,
+  task: { team_id?: Id<"teams"> },
+  text: string,
+): Promise<Id<"users">[]> {
+  const handles = extractMentionHandles(text);
+  if (handles.length === 0 || !task.team_id) return [];
+  const roster = await teamRoster(ctx, task.team_id);
+  const out: Id<"users">[] = [];
+  const seen = new Set<string>();
+  for (const handle of handles) {
+    const user = matchHandle(roster, handle);
+    if (!user || user.is_bot || seen.has(String(user._id))) continue;
+    seen.add(String(user._id));
+    out.push(user._id);
+  }
+  return out;
 }
 
 export const addComment = mutation({
@@ -3504,7 +3522,7 @@ export const webUpdate = mutation({
       });
     }
 
-    await ctx.db.patch(task._id, updates);
+    await patchTask(ctx, task, updates);
     if (hold) await noteMovedPastHold(ctx, task, hold, nextStatus ?? task.status, (await ctx.db.get(userId))?.name || "unknown", userId);
     if (cascadeIds.length > 0) await cascadeClose(ctx, cascadeIds, nextStatus!, userId, task);
     await rollUpParentStart(ctx, { ...task, parent_id: "parent_id" in updates ? updates.parent_id : task.parent_id }, nextStatus);
@@ -3522,7 +3540,6 @@ export const webUpdate = mutation({
       await announceAssignment(ctx, { task, assignee: resolvedAssignee, actorUserId: userId, via: "human" });
     }
 
-    await schedulePushTask(ctx, task, updates);
     return { success: true };
   },
 });
@@ -4218,7 +4235,7 @@ export const batchUpdateStatus = mutation({
         });
       }
 
-      await ctx.db.patch(task._id, updates);
+      await patchTask(ctx, task, updates);
 
       if (args.status !== task.status) {
         if (task.plan_id) affectedPlans.add(`${task.plan_id}:${task._id}:${args.status}`);
@@ -4295,7 +4312,7 @@ export const batchAssign = mutation({
         });
       }
 
-      await ctx.db.patch(task._id, { assignee: resolvedAssignee, updated_at: now });
+      await patchTask(ctx, task, { assignee: resolvedAssignee, updated_at: now });
 
       if (resolvedAssignee !== task.assignee) {
         await announceAssignment(ctx, { task, assignee: resolvedAssignee, actorUserId: auth.userId, via: "human" });
@@ -4326,7 +4343,7 @@ export const scheduleRetry = mutation({
     const now = Date.now();
     const newAttemptCount = (task.attempt_count || 0) + 1;
 
-    await ctx.db.patch(task._id, {
+    await patchTask(ctx, task, {
       status: "open" as any,
       execution_status: undefined,
       attempt_count: newAttemptCount,

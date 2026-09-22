@@ -71,7 +71,8 @@ export type TaskDiff = {
   description?: string;
   status?: string;
   priority?: string;
-  assignee?: string;
+  /** A user id, or null when the provider unassigned the issue (clear ours). */
+  assignee?: string | null;
   labels?: string[];
 };
 
@@ -95,6 +96,9 @@ export function linearStatusFor(stateType?: string, stateName?: string): string 
       return "done";
     case "canceled":
     case "cancelled":
+    // A team's "Duplicate" column reports its own type; it is closed without
+    // being done, which is our dropped.
+    case "duplicate":
       return "dropped";
     default:
       return "open";
@@ -271,8 +275,13 @@ export type DiffableTask = {
   priority?: string;
   assignee?: string;
   labels?: string[];
-  external?: { field_ts?: Record<string, number> };
+  external?: { field_ts?: Record<string, number>; assignee_label?: string };
 };
+
+/** Does the provider show anyone on the issue at all? */
+export function issueHasAssignee(issue: NormalizedIssue): boolean {
+  return !!(issue.assignee_email || issue.assignee_login || issue.assignee_label);
+}
 
 /**
  * The fields this inbound event may write, per S3.
@@ -285,7 +294,11 @@ export type DiffableTask = {
  *
  * `assignee` is resolved by the caller (mapping a provider user to one of ours
  * needs the db) and passed in; absent means "we could not map them", which is
- * not the same as "unassign" and so never lands in the diff.
+ * not the same as "unassign" and so never lands in the diff. An unassign is
+ * the provider going from someone (the `assignee_label` we recorded on the
+ * last inbound) to nobody: that clears ours, as `null`, unless ours is an
+ * agent seat — the provider never held that assignment, so it cannot take it
+ * away.
  */
 export function diffAgainstTask(
   task: DiffableTask,
@@ -316,11 +329,35 @@ export function diffAgainstTask(
   // recorded as external.assignee_label by the caller instead.
   if (resolved.assignee && resolved.assignee !== task.assignee && fresh("assignee")) {
     out.assignee = resolved.assignee;
+  } else if (
+    !issueHasAssignee(issue)
+    && task.external?.assignee_label
+    && task.assignee
+    && !task.assignee.startsWith("agent:")
+    && fresh("assignee")
+  ) {
+    out.assignee = null;
   }
 
   if (!sameLabelSet(issue.labels, task.labels) && fresh("labels")) out.labels = issue.labels;
 
   return out;
+}
+
+/**
+ * The feed kind (S8) a change deserves when no webhook action named one: a
+ * reconcile pull or an import sees only the diff it applied. Empty diff, no
+ * kind — a pull that moved nothing is not an event.
+ */
+export function kindFromDiff(diff: TaskDiff, created: boolean, status?: string): string | undefined {
+  if (created) return "issue_opened";
+  if (Object.keys(diff).length === 0) return undefined;
+  if (diff.status !== undefined) {
+    return status === "done" || status === "dropped" ? "issue_closed" : "issue_status";
+  }
+  if (diff.assignee !== undefined) return "issue_assigned";
+  if (diff.labels !== undefined) return "issue_labeled";
+  return "issue_edited";
 }
 
 /* ---------------- Reverse map for outbound (S5) ---------------- */

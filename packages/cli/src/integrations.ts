@@ -45,6 +45,8 @@ function scopeOption(options: { personal?: boolean; team?: boolean }): "team" | 
   return options.personal ? "personal" : options.team ? "team" : undefined;
 }
 
+const isUuid = (value: string): boolean => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+
 function appName(id: string): string {
   return APP_DESCRIPTORS[id as AppId]?.name ?? id;
 }
@@ -213,7 +215,10 @@ export function registerIntegrationsCommand(program: Command, deps: Integrations
       }
       console.log();
       for (const cand of candidates) {
-        const key = cand.external_key ? `${c.yellow}${cand.external_key}${c.reset}  ` : "";
+        // A project's external_key is its team's uuid (what a push needs to
+        // create an issue there), not a key a person types: only a real team
+        // key like "ENG" earns the highlight.
+        const key = cand.external_key && !isUuid(cand.external_key) ? `${c.yellow}${cand.external_key}${c.reset}  ` : "";
         console.log(`  ${key}${cand.name}  ${c.dim}${cand.kind}${c.reset}  ${c.dim}${cand.external_id}${c.reset}`);
       }
       console.log(`\n  ${fmt.muted(`Import one: cast integrations import ${provider} <key or name> --project "<project>"`)}\n`);
