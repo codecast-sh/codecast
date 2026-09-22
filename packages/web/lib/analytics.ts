@@ -10,6 +10,7 @@ import {
   setupErrorToasts as setupPlatformErrorToasts,
 } from "@platform/analytics/errors";
 import { CODECAST_EVENTS, type CodecastEventName, type CodecastEventProps } from "@codecast/shared/analytics";
+import { CHUNK_LOAD_ERROR_PATTERNS } from "./chunkReloadGuard";
 
 type AnalyticsRuntime = typeof import("@platform/analytics/web-runtime");
 
@@ -106,6 +107,9 @@ export function captureError(error: Error, context?: Record<string, unknown>) {
 //    listener call; the divider and panels keep working. The lookup uses
 //    throwOnMissing=true internally, so we can't fix it short of forking the
 //    library (4.11.2 still has it) — we just decline to report it.
+/** The regex that matches one string as written, for a list that mixes both. */
+const literalPattern = (text: string): RegExp => new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+
 const IGNORED_ERROR_PATTERNS: RegExp[] = [
   /Could not find data for Group with id/,
   // StaleDispatchBindingError: a dispatch settling after its binding was
@@ -117,6 +121,12 @@ const IGNORED_ERROR_PATTERNS: RegExp[] = [
   // on the next drain. Same "redelivers, not a failure" rationale as above.
   // The dropped (no-outbox) variant is NOT ignored — that write really is gone.
   /Dispatch not wired — .* parked for later delivery/,
+  // A stale tab after a deploy, in every wording the browsers use (the list
+  // the reload guard reloads on). The tab reloads itself onto the current
+  // build, so the report has no reader; the platform list carries only the
+  // CSS wording, and Safari's "Importing a module script failed" kept opening
+  // issues for the same condition.
+  ...CHUNK_LOAD_ERROR_PATTERNS.map(literalPattern),
 ];
 
 function isIgnoredError(message: string | undefined): boolean {

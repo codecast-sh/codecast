@@ -8,6 +8,7 @@ import { findConversationByAnyRef } from "./conversationSessionLookup";
 import { askCore, finalizeAnswer, normalizeVerdict, personMayResolve, withdrawCore, type AnsweredBy } from "./sessionDecisions";
 import { createStackCore } from "./decisionStacks";
 import { canAccessTask, canAccessPlan, computeWorkspaceKey, resolveWorkspaceKey, workspaceGrantsAccess } from "./lib/access";
+import { patchTask } from "./lib/taskWrite";
 import { createDataContext } from "./data";
 
 type Ctx = { db: any };
@@ -115,7 +116,8 @@ export async function pauseAtGateCore(
   // The station the task waits at is the one the gate parks it in: the
   // decision is bound there so a blocking gate holds the task (L5).
   if (run.task_id) {
-    await ctx.db.patch(run.task_id, { status: "in_review" as any, updated_at: now });
+    const held = await ctx.db.get(run.task_id);
+    if (held) await patchTask(ctx, held, { status: "in_review", updated_at: now });
   }
   const task = run.task_id ? await ctx.db.get(run.task_id) : null;
 
@@ -263,11 +265,8 @@ export const create = mutation({
     });
 
     if (args.task_id) {
-      await ctx.db.patch(args.task_id, {
-        workflow_run_id: runId,
-        status: "in_progress" as any,
-        updated_at: now,
-      });
+      const bound = await ctx.db.get(args.task_id);
+      if (bound) await patchTask(ctx, bound, { workflow_run_id: runId, status: "in_progress", updated_at: now });
     }
 
     if (args.plan_id) {
@@ -386,7 +385,7 @@ export async function createRunCore(
   });
 
   if (opts.task) {
-    await ctx.db.patch(opts.task._id, { workflow_run_id: runId, status: "in_progress" as any, updated_at: now });
+    await patchTask(ctx, opts.task, { workflow_run_id: runId, status: "in_progress", updated_at: now });
   }
   if (opts.plan) {
     await ctx.db.patch(opts.plan._id, { workflow_run_id: runId, updated_at: now });

@@ -261,7 +261,7 @@ You operate within a structured work tracking system. A human monitors your prog
 Once you have a task:
 1. \`cast task start <id>\` — claim it and bind your session
 2. Work on the implementation
-3. \`cast task comment <id> "progress" -t progress\` — log milestones as you go
+3. \`cast task comment <id> "progress" -t progress\` — log milestones as you go. A progress or note comment is the board's record: it reaches nobody's inbox. To reach the people following the task, post a \`-t blocker\` (you are stuck) or a \`-t review\` (a handoff, a verdict), or name them with \`@handle\`. A choice only a human can make is a \`cast decide\`, never a comment.
 4. \`cast task done <id> -m "summary"\` — mark complete with what you verified
 
 **Assignee is accountability, not permission.** ${ASSIGNEE_MEANS} Assign a task to yourself or to the role you work for so the board says who answers for it; never read another name on it as a reason to stop.
@@ -871,7 +871,7 @@ cast chat react <message_id> <emoji>        # toggle a reaction
 \`\`\`
 
 Mentions use @handles (github username, or a bot's name) — \`@samvit\` notifies Samvit.
-Mentioning the team's anchor (\`@anchor …\`) starts an agent turn that answers IN the thread —
+Mentioning the workspace's agent (\`@anchor …\`, or its role handle) starts an agent turn that answers IN the thread —
 but only for lines a HUMAN typed: your sends are stamped as agent-written and never wake it, so
 post freely. Two mentions DO wake from your lines, because they ask for that party's action:
 \`@<role handle>\` wakes an org role's standing session and \`@<session short id>\` (\`@jx7abcd\`)
@@ -882,13 +882,13 @@ An agent's lines are capped: 30 per channel per day, 5 new threads per channel p
 they never buzz a phone. Post facts other roles need (a decision, a release, a blocker), one
 line per event, in a thread rather than a new root, and never an acknowledgment.
 
-If you ARE the anchor and a wake asks you to answer a thread, reply with
+If you ARE the workspace's agent and a wake asks you to answer a thread, reply with
 \`cast chat reply <placeholder_id> "<your reply>"\` — one concise answer, like a colleague in
 chat, not a report. If you cannot answer, say why with \`--status error\` instead of staying
 silent. Once named in a thread you follow it: every later reply wakes you silently, and most
 of those lines are people talking to each other — \`cast chat reply <id> --pass\` unless the
 line is clearly for you. You can also start conversations yourself: \`cast anchor say --chat
-<channel|#name> [--thread <root>] "<text>"\` posts as the anchor, \`cast anchor say --dm
+<channel|#name> [--thread <root>] "<text>"\` posts as the agent, \`cast anchor say --dm
 <handle>[,<handle>] "<text>"\` messages people directly. Speak when it adds something, once.
 
 Post to chat when the TEAM should see it (a release landed, a deploy finished, a decision is
@@ -1248,7 +1248,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     detail:
       "Adds `cast chat` so agents can talk where the team talks: post progress to a channel " +
       "(a release channel agents report into is one command), read and search the history, " +
-      "and answer when someone @mentions the team's anchor in a thread. Sends from a managed " +
+      "and answer when someone @mentions the team's agent in a thread. Sends from a managed " +
       "session are stamped as agent-written, so they can never wake another person's machine.",
     writesTo: "CLAUDE.md — a ## Team chat section with the command reference",
     shipped: "2026-08-14",
