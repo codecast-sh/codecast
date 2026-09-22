@@ -2,14 +2,13 @@ import { useCallback, useState } from "react";
 import { CornerDownRight, X } from "lucide-react";
 import { useInboxStore, type SessionDecisionItem } from "../../../store/inboxStore";
 import { sessionLabel } from "../../../lib/notificationTypes";
-import { summaryCount, type ThreadCardModel } from "../../../lib/threadCards";
+import { summaryCount, type CardPreview, type ThreadCardModel } from "../../../lib/threadCards";
 import { AgentIcon } from "../../ConversationList";
 import { MarkdownRenderer } from "../../tools/MarkdownRenderer";
 import { PublishedPageEmbed } from "../../PublishedPageEmbed";
-import { useThreadsPage } from "../threadsContext";
 
 // The question kind: a pending decision (cast decide / AskUserQuestion),
-// answerable in place. The card shows the question; expanded, the context,
+// answerable in place. The row is the question itself; open, the context,
 // the report when one was attached, and the options — the same answer flow
 // the Questions page drives (store answerDecision: the row resolves, the
 // chosen option enters the session as a message, and the card drops off,
@@ -35,27 +34,18 @@ export function QuestionLabel({ card }: { card: ThreadCardModel }) {
   );
 }
 
-export function QuestionRoot({ card, expanded }: { card: ThreadCardModel; expanded: boolean }) {
+/** The question, and what happens if nobody answers. */
+export function useQuestionPreview(card: ThreadCardModel): CardPreview | null {
   const d = decisionOf(card);
-  const { toggle } = useThreadsPage();
-  return (
-    <>
-      <div className="th-card-root th-card-question">{d.question}</div>
-      {!expanded && (
-        <button type="button" className="th-card-summary" onClick={() => toggle(card)}>
-          <span className="th-card-count">{summaryCount(d.options.length, "option")}</span>
-          {d.blocking ? (
-            <span className="th-card-preview">The session is parked on your answer.</span>
-          ) : d.default_option !== undefined && d.options[d.default_option] ? (
-            <span className="th-card-preview">Proceeding with “{d.options[d.default_option].label}” unless you say otherwise.</span>
-          ) : null}
-        </button>
-      )}
-    </>
-  );
+  const tail = d.blocking
+    ? "The session is parked on your answer."
+    : d.default_option !== undefined && d.options[d.default_option]
+      ? `Proceeding with “${d.options[d.default_option].label}” unless you say otherwise.`
+      : summaryCount(d.options.length, "option");
+  return { who: d.question, text: tail };
 }
 
-export function QuestionExpanded({ card }: { card: ThreadCardModel; present: boolean; seen: boolean; frozenReadAt: number; focusComposer: boolean }) {
+export function QuestionExpanded({ card, focusComposer }: { card: ThreadCardModel; present: boolean; seen: boolean; frozenReadAt: number; focusComposer: boolean }) {
   const d = decisionOf(card);
   const [text, setText] = useState("");
   const answer = useCallback(
@@ -73,6 +63,7 @@ export function QuestionExpanded({ card }: { card: ThreadCardModel; present: boo
 
   return (
     <div className="th-card-open th-card-open-question">
+      <div className="th-card-question">{d.question}</div>
       {d.context_md && (
         <div className="th-question-context">
           <MarkdownRenderer content={d.context_md} />
@@ -98,6 +89,8 @@ export function QuestionExpanded({ card }: { card: ThreadCardModel; present: boo
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") answerText(); }}
+          // The `r` key's focus request; the mount itself never grabs focus.
+          ref={(el) => { if (el && focusComposer) el.focus(); }}
         />
         <button type="button" className="th-question-send" onClick={answerText} disabled={!text.trim()} title="Send answer">
           <CornerDownRight className="w-3.5 h-3.5" />

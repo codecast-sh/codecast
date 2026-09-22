@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { PanelRight, Wrench } from "lucide-react";
 import { useInboxStore, type InboxSession } from "../../../store/inboxStore";
-import { summaryCount, type ThreadCardModel } from "../../../lib/threadCards";
+import { summaryCount, type CardPreview, type ThreadCardModel } from "../../../lib/threadCards";
 import { threadStateView } from "../../../lib/threadState";
 import { sessionLabel } from "../../../lib/notificationTypes";
 import { classifyFeedMessage } from "../../../lib/conversationProcessor";
@@ -17,14 +17,14 @@ import { useThreadsPage } from "../threadsContext";
 import "../../chat/chat.css";
 
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
-// The session kind: the viewer's own inbox sessions, shown as cards only when
+// The session kind: the viewer's own inbox sessions, shown as rows only when
 // the Sessions toggle is on (off by default — their queue already lives in
 // the Inbox). Membership is the Inbox's own: placeInboxRows over
-// filterInboxScope, derived in hooks/useSessionThreadCards. Expanded, a card
-// is the DM kind's shape: the newest messages of the session inline and the
+// filterInboxScope, derived in hooks/useSessionThreadCards. Open, a row is
+// the DM kind's shape: the newest messages of the session inline and the
 // app's own composer sending into it; the side panel is a secondary button.
 
-/** How many of the session's newest visible messages an expanded card shows. */
+/** How many of the session's newest visible messages an open row shows. */
 const SESSION_WINDOW = 20;
 
 function sessionOf(card: ThreadCardModel): InboxSession {
@@ -43,23 +43,13 @@ export function SessionLabel({ card }: { card: ThreadCardModel }) {
   );
 }
 
-export function SessionRoot({ card, expanded }: { card: ThreadCardModel; expanded: boolean }) {
+/** The session's pinned state line, else its idle summary or subtitle. */
+export function useSessionPreview(card: ThreadCardModel): CardPreview | null {
   const session = sessionOf(card);
-  const { now, toggle } = useThreadsPage();
+  const { now } = useThreadsPage();
   const state = threadStateView(session as any, session.message_count ?? 0, now);
-  const line = state?.cardLine ?? session.subtitle ?? "";
-  const count = session.message_count ?? 0;
-  return (
-    <>
-      {line && <div className="th-card-root th-card-session-line">{line}</div>}
-      {!expanded && (
-        <button type="button" className="th-card-summary" onClick={() => toggle(card)}>
-          <span className="th-card-count">{summaryCount(count, "message")}</span>
-          {session.idle_summary && <span className="th-card-preview">{session.idle_summary}</span>}
-        </button>
-      )}
-    </>
-  );
+  const text = state?.cardLine ?? session.idle_summary ?? session.subtitle ?? "";
+  return text ? { text } : null;
 }
 
 // One message as the card shows it. The user side goes through the same
@@ -107,8 +97,7 @@ function toRows(messages: Message[]): SessionRow[] {
 function SessionRows({ rows, agentType }: { rows: SessionRow[]; agentType?: string }) {
   // The rows live in the card's capped scroll region (.th-card-replies),
   // pinned to the tail (cardWindow.useTailPin — every kind's scroller pins
-  // the same way): the newest message is the one the card is about, and the
-  // read law below assumes it is the one on screen.
+  // the same way): the newest message is the one the card is about.
   const newestKey = rows.length ? rows[rows.length - 1].key : "";
   const ref = useTailPin(`${newestKey}|${rows.length}`);
   return (
@@ -160,10 +149,9 @@ export function SessionExpanded({ card, seen, focusComposer }: { card: ThreadCar
   }, [all]);
   const newestId = all.length ? all[all.length - 1]._id : undefined;
 
-  // The DM law: present + the newest message actually on screen (`seen`, the
-  // shell's tail sentinel). Re-marks as messages land (newestId moves) and
-  // when the meta row's count catches up — the stamp reads message_count,
-  // which can bump after the message itself.
+  // The DM law: the row is open and the reader is here (`seen`). Re-marks as
+  // messages land (newestId moves) and when the meta row's count catches up
+  // — the stamp reads message_count, which can bump after the message itself.
   useWatchEffect(() => {
     if (!seen || !newestId) return;
     useInboxStore.getState().markSessionSeen(sessionId);

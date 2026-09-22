@@ -228,10 +228,9 @@ describe("the people wall chord", () => {
   });
 });
 
-// Ctrl+R opens the recently viewed list with its search box focused. Ctrl on
-// every platform and never a mac variant: the held Ctrl+Tab walk hands off to
-// it on R with Ctrl still down, which only works when both chords share the
-// modifier.
+// The recents search chord opens the Ctrl+Tab overlay with its field live.
+// Ctrl+R on mac, Alt+R elsewhere (Ctrl+R is reload there, in the desktop View
+// menu and the browser). The walk's own R handoff does not depend on it.
 describe("the recents search chord", () => {
   const defs = SHORTCUTS.filter((s) => s.action === "recents.open");
 
@@ -242,12 +241,9 @@ describe("the recents search chord", () => {
     expect(defs[0].skipInputCheck).toBe(true);
   });
 
-  test("shares Ctrl with the Ctrl+Tab walk on every platform, and collides with nothing", () => {
-    expect(defs[0].key).toBe("ctrl+r");
-    expect(defs[0].mac).toBeUndefined();
-    const walk = SHORTCUTS.find((s) => s.action === "session.mruSwitch");
-    expect(walk?.key.startsWith("ctrl+")).toBe(true);
-    expect(walk?.mac).toBeUndefined();
+  test("Ctrl+R on mac, Alt+R elsewhere, colliding with nothing", () => {
+    expect(defs[0].mac).toBe("ctrl+r");
+    expect(defs[0].key).toBe("alt+r");
     for (const isMac of [true, false]) {
       const collides = createShortcutCatalog(SHORTCUTS, { isMac })
         .conflicts()

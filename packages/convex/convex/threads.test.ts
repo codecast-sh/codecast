@@ -243,13 +243,102 @@ describe("touch per kind", () => {
     expect((await inbox(as(ctx, ALICE))).entries[0].unread).toBe(0);
     expect(ctx.db._tables.task_comments[0].author_user_id).toBe(ALICE);
 
+    // An agent's note is the board's: Alice's row does not move. Its blocker
+    // asks something of a person, so it does — as an agent's, under the
+    // session's title, never as Alice's own words.
     await call(cliAddTaskComment, ctx, {
       api_token: TOKEN, short_id: "ct-1", text: "from a session", conversation_id: "sess-personal",
     });
     expect(ctx.db._tables.task_comments[1].author_user_id).toBeUndefined();
+    expect((await inbox(as(ctx, ALICE))).entries[0].unread).toBe(0);
+    await call(cliAddTaskComment, ctx, {
+      api_token: TOKEN, short_id: "ct-1", text: "need a key", comment_type: "blocker", conversation_id: "sess-personal",
+    });
     const view = await inbox(as(ctx, ALICE));
     expect(view.entries[0].unread).toBe(1);
-    expect(view.entries[0].last_reply).toMatchObject({ author_kind: "agent", author_name: "Alice", preview: "from a session" });
+    expect(view.entries[0].last_reply).toMatchObject({ author_kind: "agent", author_name: "Alice", preview: "need a key" });
+  });
+
+  describe("agent comments reach a person only when they need one", () => {
+    const agentPost = (ctx: any, text: string, comment_type?: string) =>
+      call(cliAddTaskComment, ctx, { api_token: TOKEN, short_id: "ct-1", text, comment_type, conversation_id: "sess-personal" });
+    const setLevel = (ctx: any, userId: string, level: string) => {
+      const user = ctx.db._tables.users.find((u: any) => u._id === userId);
+      user.notification_preferences = { ...(user.notification_preferences ?? {}), task_agent_comments: level };
+    };
+
+    test("progress and notes file nobody; a blocker or a review files every follower", async () => {
+      const ctx = await context(null);
+      await agentPost(ctx, "started", "progress");
+      await agentPost(ctx, "rebased");
+      expect(rows(ctx).filter((r) => r.kind === "task")).toHaveLength(0);
+      await agentPost(ctx, "handing off", "review");
+      expect(rowOf(ctx, ALICE, "task")).toBeTruthy();
+      expect(rowOf(ctx, BOB, "task")).toBeTruthy();
+      expect((await inbox(as(ctx, ALICE))).entries[0].unread).toBe(1);
+      // Notes landing after the blocker do not add to the count either.
+      await agentPost(ctx, "still going", "progress");
+      expect((await inbox(as(ctx, ALICE))).entries[0].unread).toBe(1);
+    });
+
+    test("the reader's level: all files every agent comment, none files no agent comment", async () => {
+      const ctx = await context(null);
+      setLevel(ctx, ALICE, "all");
+      setLevel(ctx, BOB, "none");
+      await agentPost(ctx, "started", "progress");
+      expect(rowOf(ctx, ALICE, "task")).toBeTruthy();
+      expect(rowOf(ctx, BOB, "task")).toBeUndefined();
+      await agentPost(ctx, "stuck", "blocker");
+      expect(rowOf(ctx, BOB, "task")).toBeUndefined();
+      expect((await inbox(as(ctx, ALICE))).entries[0].unread).toBe(2);
+    });
+
+    test("an @mention reaches the named person whatever their level, and starts their follow", async () => {
+      const ctx = await context(null);
+      setLevel(ctx, CAROL, "none");
+      await agentPost(ctx, "@carol can you look?");
+      expect(rowOf(ctx, CAROL, "task")).toBeTruthy();
+      expect(rowOf(ctx, ALICE, "task")).toBeUndefined();
+      expect(ctx._emitted.find((e: any) => e.args.reason === "mentioned")?.args).toMatchObject({ user_id: CAROL, via: "agent" });
+      // The unread count agrees with the write: the mention counts, a later note does not.
+      ctx.db._tables.entity_subscriptions.push({ _id: "es-carol", user_id: CAROL, entity_type: "task", entity_id: String(TASK), reason: "mentioned", via: "agent", muted: false, created_at: 1 });
+      await agentPost(ctx, "working on it", "progress");
+      expect((await inbox(as(ctx, CAROL))).entries[0].unread).toBe(1);
+    });
+
+    test("a person's comment is news for everyone but its writer, whatever their level", async () => {
+      const ctx = await context(ALICE);
+      setLevel(ctx, ALICE, "none");
+      await call(webAddComment, as(ctx, BOB), { short_id: "ct-1", text: "what do you think?" });
+      expect((await inbox(ctx)).entries[0].unread).toBe(1);
+      expect((await inbox(as(ctx, BOB))).entries[0].unread).toBe(0);
+    });
+
+    test("the preview is the newest unread reply that is news: an agent's notes never hide a teammate's question", async () => {
+      const ctx = await context(ALICE);
+      await call(webAddComment, as(ctx, BOB), { short_id: "ct-1", text: "which key?" });
+      setLevel(ctx, ALICE, "all");
+      await agentPost(ctx, "trying the first", "progress");
+      setLevel(ctx, ALICE, "needs_person");
+      const view = await inbox(ctx);
+      expect(view.entries[0].unread).toBe(1);
+      expect(view.entries[0].last_reply).toMatchObject({ author_kind: "user", author_name: "Bob", preview: "which key?" });
+      // Nothing unread: the newest reply at all, an agent's, named by its session.
+      await call(markRead, ctx, { kind: "task", root_key: String(TASK) });
+      expect((await inbox(ctx)).entries[0].last_reply).toMatchObject({ author_kind: "agent", preview: "trying the first" });
+    });
+
+    test("the badge counts only rows with unread under the reader's level", async () => {
+      const ctx = await context(ALICE);
+      setLevel(ctx, ALICE, "all");
+      await agentPost(ctx, "started", "progress");
+      expect(await call(unreadCount, ctx, { team_id: TEAM })).toBe(1);
+      // The level changed under an already-moved row: the row holds nothing
+      // the new level counts, so the badge says so without a sweep.
+      setLevel(ctx, ALICE, "needs_person");
+      expect(await call(unreadCount, ctx, { team_id: TEAM })).toBe(0);
+      expect((await inbox(ctx)).entries[0].unread).toBe(0);
+    });
   });
 
   test("task payloads retain a private Codex author only for viewers who can read the session", async () => {
@@ -257,7 +346,7 @@ describe("touch per kind", () => {
       conversations: [conversation(PERSONAL_CONVERSATION, { is_private: true, session_id: "codex-thread", title: "Cast browser routing", agent_type: "codex" })],
     });
     await call(cliAddTaskComment, ctx, {
-      api_token: TOKEN, short_id: "ct-1", text: "recovered pairing", author: "Claude", conversation_id: "codex-thread",
+      api_token: TOKEN, short_id: "ct-1", text: "recovered pairing", author: "Claude", comment_type: "blocker", conversation_id: "codex-thread",
     });
     const ownerComment = (await inbox(ctx)).payload.tasks[0].comments[0];
     expect(ownerComment.session_info).toMatchObject({ _id: PERSONAL_CONVERSATION, title: "Cast browser routing", agent_type: "codex" });
@@ -411,7 +500,7 @@ describe("task thread membership: earned by a human act, never by identity", () 
 describe("dismiss", () => {
   test("dismiss archives the caller's row; the next reply files a fresh one", async () => {
     const ctx = await context(ALICE);
-    await call(cliAddTaskComment, ctx, { api_token: TOKEN, short_id: "ct-1", text: "status", conversation_id: "sess-personal" });
+    await call(cliAddTaskComment, ctx, { api_token: TOKEN, short_id: "ct-1", text: "status", comment_type: "blocker", conversation_id: "sess-personal" });
     expect(rowOf(ctx, ALICE, "task")).toBeTruthy();
 
     await call(dismiss, ctx, { kind: "task", root_key: String(TASK) });
@@ -419,7 +508,7 @@ describe("dismiss", () => {
     // Bob's follow is untouched: a dismiss is one person's triage.
     expect(rowOf(ctx, BOB, "task")).toBeTruthy();
 
-    await call(cliAddTaskComment, ctx, { api_token: TOKEN, short_id: "ct-1", text: "more", conversation_id: "sess-personal" });
+    await call(cliAddTaskComment, ctx, { api_token: TOKEN, short_id: "ct-1", text: "more", comment_type: "blocker", conversation_id: "sess-personal" });
     expect(rowOf(ctx, ALICE, "task")).toMatchObject({ last_read_at: 0 });
   });
 });

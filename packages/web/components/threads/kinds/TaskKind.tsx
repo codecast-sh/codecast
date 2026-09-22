@@ -1,30 +1,25 @@
-import { useState } from "react";
 import Link from "next/link";
 import { useInboxStore, useTrackedStore, type TaskDetail, type ThreadInboxRow } from "../../../store/inboxStore";
 import { useSyncTaskDetail } from "../../../hooks/useSyncTasks";
-import { summaryCount, type ThreadCardModel } from "../../../lib/threadCards";
+import { replyPreview, type CardPreview, type ThreadCardModel } from "../../../lib/threadCards";
 import { TaskStatusBadge } from "../../TaskStatusBadge";
 import { Badge } from "../../ui/badge";
 import { Avatar, TaskCommentStream, TimeAgo } from "../../tasks/TaskCommentStream";
 import { IssueLink } from "../../tasks/IssueLink";
 import { MarkdownRenderer } from "../../tools/MarkdownRenderer";
 import { useTailPin } from "../cardWindow";
-import { useThreadsPage } from "../threadsContext";
 
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
-// The task kind: the task itself, then its comment stream. The collapsed card
-// is the short id, the title, the status and the latest comment; expanded,
-// the status row grows the task's metadata (priority, assignee, plan, age),
-// the description renders clamped with its own expand, and below them the
-// newest few comments and the same composer the task page uses
+// The task kind: the task's comment stream. The row is the short id, the
+// title and the newest reply that is news (the server picks it: a teammate's
+// question outranks an agent's later notes). Open, the status row carries the
+// task's metadata, the description sits folded under a disclosure (the reader
+// wrote it or has seen it; the title is on the row), and the stream shows
+// what is NEW since the reader's last visit under a divider, the earlier
+// comments one click away, then the same composer the task page uses
 // (components/tasks/TaskCommentStream), fed by the task detail query so the
 // optimistic reply and the server echo land in tasks[id].comments exactly as
 // they do on the task page.
-
-/** The expanded card shows this many newest comments; the rest sit behind a
- *  "show earlier" reveal. The thread's news is its tail — the full stream is
- *  one click away here and lives whole on the task page. */
-const CARD_COMMENT_LIMIT = 5;
 
 function rowOf(card: ThreadCardModel): ThreadInboxRow {
   return card.source as ThreadInboxRow;
@@ -48,7 +43,8 @@ function useTaskRow(taskId: string): TaskDetail | undefined {
 }
 
 /** Short id AND title: the head label is the one column every kind shares,
- *  and a bare id is unscannable in a mixed list. */
+ *  and a bare id is unscannable in a mixed list. The status rides along as
+ *  a small badge so a done task reads as done before it is opened. */
 export function TaskLabel({ card }: { card: ThreadCardModel }) {
   const task = useTaskRow(taskIdOf(card));
   return (
@@ -56,70 +52,43 @@ export function TaskLabel({ card }: { card: ThreadCardModel }) {
       <span className="font-mono th-card-task-id">{task?.short_id ?? "task"}</span>
       {task?.external && <IssueLink external={task.external} />}
       {task?.title && <span className="th-card-task-name">{task.title}</span>}
+      {task?.status && <TaskStatusBadge status={task.status} />}
     </>
   );
 }
 
-export function TaskRoot({ card, expanded }: { card: ThreadCardModel; expanded: boolean }) {
-  const row = rowOf(card);
+export function useTaskPreview(card: ThreadCardModel): CardPreview | null {
+  return replyPreview(rowOf(card).last_reply);
+}
+
+/** The status row: priority, assignee, plan, age. */
+export function TaskMeta({ card }: { card: ThreadCardModel }) {
   const task = useTaskRow(taskIdOf(card));
-  const { toggle } = useThreadsPage();
-  const last = task?.comments?.[task.comments.length - 1];
-  const lastReply = row.last_reply;
-  const count = task?.comments?.length ?? 0;
+  if (!task) return null;
   return (
-    <>
-      {task ? (
-        <div className="th-card-root th-card-taskrow">
-          <TaskStatusBadge status={task.status} />
-          {/* Expanded, the row carries the task's metadata; collapsed it
-              stays one badge so the list scans. */}
-          {expanded && (
-            <>
-              {task.priority && (
-                <Badge variant="outline" className="text-[10px] px-1">{task.priority}</Badge>
-              )}
-              {task.assignee_info?.name && (
-                <span className="th-task-meta" title={`Assigned to ${task.assignee_info.name}`}>
-                  <Avatar name={task.assignee_info.name} image={task.assignee_info.image} />
-                  {task.assignee_info.name.split(" ")[0]}
-                </span>
-              )}
-              {task.plan?.short_id && (
-                <Link href={`/plans/${task.plan._id}`} className="th-task-meta font-mono" title={task.plan.title}>
-                  {task.plan.short_id}
-                </Link>
-              )}
-              <span className="th-task-meta th-task-meta-age">
-                created <TimeAgo ts={task.created_at} />
-              </span>
-            </>
-          )}
-        </div>
-      ) : (
-        <div className="th-card-root th-card-ghost" aria-hidden="true">
-          <div className="ch-skel-line ch-skel-head" />
-        </div>
+    <div className="th-card-taskrow">
+      {task.priority && (
+        <Badge variant="outline" className="text-[10px] px-1">{task.priority}</Badge>
       )}
-      {!expanded && (
-        <button type="button" className="th-card-summary" onClick={() => toggle(card)}>
-          <span className="th-card-count">{summaryCount(count, "comment")}</span>
-          {last?.comment_type && last.comment_type !== "note" && (
-            <Badge variant="outline" className="text-[10px] px-1">{last.comment_type}</Badge>
-          )}
-          {lastReply && (
-            <span className="th-card-preview">
-              <span className="th-card-preview-name">{lastReply.author_name ?? last?.author ?? "Agent"}:</span>{" "}
-              {lastReply.preview}
-            </span>
-          )}
-        </button>
+      {task.assignee_info?.name && (
+        <span className="th-task-meta" title={`Assigned to ${task.assignee_info.name}`}>
+          <Avatar name={task.assignee_info.name} image={task.assignee_info.image} />
+          {task.assignee_info.name.split(" ")[0]}
+        </span>
       )}
-    </>
+      {task.plan?.short_id && (
+        <Link href={`/plans/${task.plan._id}`} className="th-task-meta font-mono" title={task.plan.title}>
+          {task.plan.short_id}
+        </Link>
+      )}
+      <span className="th-task-meta th-task-meta-age">
+        created <TimeAgo ts={task.created_at} />
+      </span>
+    </div>
   );
 }
 
-export function TaskExpanded({ card, seen, focusComposer }: { card: ThreadCardModel; present: boolean; seen: boolean; frozenReadAt: number; focusComposer: boolean }) {
+export function TaskExpanded({ card, seen, frozenReadAt, focusComposer }: { card: ThreadCardModel; present: boolean; seen: boolean; frozenReadAt: number; focusComposer: boolean }) {
   const row = rowOf(card);
   const taskId = taskIdOf(card);
   // The detail feeder fills tasks[id].comments with the full server set; the
@@ -129,12 +98,10 @@ export function TaskExpanded({ card, seen, focusComposer }: { card: ThreadCardMo
 
   const commentCount = task?.comments?.length ?? 0;
 
-  // The read law: mark read only while the card's newest content has actually
-  // been in the viewport (`seen`, the shell's tail sentinel), never on mount —
-  // and never while the store holds nothing for an unread stream: on a cold
-  // cache the body renders empty and short, so the sentinel is trivially in
-  // view with the newest comment never rendered. The count dep fires the mark
-  // once the detail feeder answers.
+  // The read law: the row is open and the reader is here (`seen`) — and the
+  // store holds the stream. Never while it holds nothing for an unread
+  // stream: on a cold cache the body renders empty, the newest comment never
+  // shown. The count dep fires the mark once the detail feeder answers.
   useWatchEffect(() => {
     if (!seen) return;
     if (row.unread > 0 && commentCount === 0) return;
@@ -142,42 +109,24 @@ export function TaskExpanded({ card, seen, focusComposer }: { card: ThreadCardMo
     useInboxStore.getState().markThreadRead("task", row.root_key);
   }, [seen, row.root_key, row.last_activity_at, row.last_read_at, row.unread, commentCount]);
 
-  // The wrapper IS the capped scroller (65vh); pinned to the tail so the
-  // newest comment is what shows — the read sentinel below assumes it.
+  // The wrapper IS the capped scroller; pinned to the tail so the newest
+  // comment — the one that brought the reader here — is what shows first.
   const comments = task?.comments ?? EMPTY_COMMENTS;
   const pinRef = useTailPin(comments.length ? `${comments[comments.length - 1]._id}|${comments.length}` : "");
 
-  return (
-    <>
-      {/* The description sits ABOVE the scroller so the tail pin cannot bury
-          it: the card leads with what the task IS, then its conversation. */}
-      <TaskDescription task={task} />
-      <div ref={pinRef} className="th-card-open th-card-open-task">
-        {/* The input is always ready; the focus grab still rides only the
-            user's own expand, so default-open cards never fight over focus. */}
-        <TaskCommentStream shortId={task?.short_id} comments={comments} composerAutoOpen composerAutoFocus={focusComposer} initialLimit={CARD_COMMENT_LIMIT} />
-      </div>
-    </>
-  );
-}
-
-/** The task's own description, clamped to a few lines under a fade until the
- *  reader asks for the rest. A short description renders whole, no toggle. */
-function TaskDescription({ task }: { task: TaskDetail | undefined }) {
-  const [open, setOpen] = useState(false);
   const desc = (task?.description ?? "").trim();
-  if (!desc) return null;
-  const clampable = desc.length > 280 || desc.split("\n").length > 4;
+
   return (
-    <div className="th-task-desc">
-      <div className={clampable && !open ? "th-task-desc-clip" : undefined}>
-        <MarkdownRenderer content={desc} className="text-sm text-sol-text prose-sm prose-invert max-w-none" />
-      </div>
-      {clampable && (
-        <button type="button" className="th-task-desc-toggle" onClick={() => setOpen((v) => !v)}>
-          {open ? "Show less" : "Show more"}
-        </button>
+    <div ref={pinRef} className="th-card-open th-card-open-task">
+      {desc && (
+        <details className="th-task-desc">
+          <summary>Description</summary>
+          <MarkdownRenderer content={desc} className="text-sm text-sol-text prose-sm prose-invert max-w-none" />
+        </details>
       )}
+      {/* The input is always ready; the focus grab rides only the reader's
+          own `r`, so opening a row never steals the keyboard from the walk. */}
+      <TaskCommentStream shortId={task?.short_id} comments={comments} composerAutoOpen composerAutoFocus={focusComposer} newSince={frozenReadAt} clampComments />
     </div>
   );
 }

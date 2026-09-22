@@ -4,16 +4,16 @@ import { useInboxStore, useTrackedStore, type ThreadInboxRow } from "../../../st
 import { newPageCommentClientId } from "../../../store/chatSlice";
 import type { PageCommentRow, PageThreadRow } from "../../../store/threadTypes";
 import { relTimeShort } from "../../../lib/utils";
-import { summaryCount, type ThreadCardModel } from "../../../lib/threadCards";
+import { replyPreview, type CardPreview, type ThreadCardModel } from "../../../lib/threadCards";
 import { CommentAvatar } from "../../comments/CommentAvatar";
 import { useTailPin } from "../cardWindow";
 import { useThreadsPage } from "../threadsContext";
 
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 // The page kind: the comment discussion on a published page (cast publish).
-// The collapsed card is the page title and the newest comment; expanded, the
-// whole discussion oldest first with replies indented one level, and a reply
-// box that posts through the store's addPageComment (optimistic stub, server
+// The row is the page title and the newest comment; open, the whole
+// discussion oldest first with replies indented one level, and a reply box
+// that posts through the store's addPageComment (optimistic stub, server
 // echo supersedes by client_id). "Open" goes to the published page itself.
 
 function rowOf(card: ThreadCardModel): ThreadInboxRow {
@@ -37,27 +37,10 @@ export function PageLabel({ card }: { card: ThreadCardModel }) {
   return <>{page?.title ?? "Published page"}</>;
 }
 
-export function PageRoot({ card, expanded }: { card: ThreadCardModel; expanded: boolean }) {
-  const row = rowOf(card);
-  const page = usePageRow(row.root_key);
-  const { toggle } = useThreadsPage();
-  const lastReply = row.last_reply;
-  const count = page?.comments.length ?? 0;
-  return (
-    <>
-      {!expanded && (
-        <button type="button" className="th-card-summary" onClick={() => toggle(card)}>
-          <span className="th-card-count">{summaryCount(count, "comment")}</span>
-          {lastReply && (
-            <span className="th-card-preview">
-              <span className="th-card-preview-name">{lastReply.author_name ?? "A viewer"}:</span>{" "}
-              {lastReply.preview}
-            </span>
-          )}
-        </button>
-      )}
-    </>
-  );
+export function usePagePreview(card: ThreadCardModel): CardPreview | null {
+  const reply = replyPreview(rowOf(card).last_reply);
+  if (reply && !reply.who) reply.who = "A viewer";
+  return reply;
 }
 
 /** Roots in order, each followed by its replies — one level, like the source
@@ -81,7 +64,7 @@ function threadOrder(comments: PageCommentRow[]): Array<{ c: PageCommentRow; rep
   return out;
 }
 
-export function PageExpanded({ card, seen }: { card: ThreadCardModel; present: boolean; seen: boolean; frozenReadAt: number; focusComposer: boolean }) {
+export function PageExpanded({ card, seen, focusComposer }: { card: ThreadCardModel; present: boolean; seen: boolean; frozenReadAt: number; focusComposer: boolean }) {
   const row = rowOf(card);
   const page = usePageRow(row.root_key);
   const { now } = useThreadsPage();
@@ -89,12 +72,10 @@ export function PageExpanded({ card, seen }: { card: ThreadCardModel; present: b
 
   const commentCount = page?.comments?.length ?? 0;
 
-  // The read law: mark read only while the card's newest content has actually
-  // been in the viewport (`seen`, the shell's tail sentinel), never on mount —
-  // and never while the store holds nothing for an unread discussion: on a
-  // cold cache the body renders empty and short, so the sentinel is trivially
-  // in view with the newest comment never rendered. The count dep fires the
-  // mark once the page thread syncs in.
+  // The read law: the row is open and the reader is here (`seen`), and the
+  // store holds the discussion — never while it holds nothing for an unread
+  // one (a cold cache renders an empty body with the newest comment never
+  // shown; the count dep fires the mark once the page thread syncs in).
   useWatchEffect(() => {
     if (!seen) return;
     if (row.unread > 0 && commentCount === 0) return;
@@ -104,8 +85,8 @@ export function PageExpanded({ card, seen }: { card: ThreadCardModel; present: b
 
   const ordered = useMemo(() => threadOrder(page?.comments ?? []), [page?.comments]);
 
-  // The comments list is the capped scroller (55vh); pinned to the tail so
-  // the newest comment is what shows — the read sentinel below assumes it.
+  // The comments list is the capped scroller; pinned to the tail so the
+  // newest comment is what shows first.
   const pinRef = useTailPin(ordered.length ? `${ordered[ordered.length - 1].c._id}|${ordered.length}` : "");
 
   const send = useCallback(() => {
@@ -141,6 +122,8 @@ export function PageExpanded({ card, seen }: { card: ThreadCardModel; present: b
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") send(); }}
+          // The `r` key's focus request; the mount itself never grabs focus.
+          ref={(el) => { if (el && focusComposer) el.focus(); }}
         />
         <button type="button" className="th-question-send" onClick={send} disabled={!text.trim()} title="Reply">
           <CornerDownRight className="w-3.5 h-3.5" />

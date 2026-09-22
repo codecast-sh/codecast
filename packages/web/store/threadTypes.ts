@@ -13,6 +13,9 @@ export type ThreadLastReply = {
   author_kind?: "user" | "agent";
   /** Resolved display name (task comments carry only a string author). */
   author_name?: string;
+  /** An agent's reply names the session it came from, when the viewer may
+   *  see it: the author string is the token owner's name, not the agent's. */
+  session_title?: string;
   created_at: number;
   /** Plain text, at most 160 characters. */
   preview: string;
@@ -88,18 +91,13 @@ export function threadRowId(kind: ThreadKind, rootKey: string): string {
   return `${kind}:${rootKey}`;
 }
 
-/** One Threads card's open/closed state, keyed by the card id (ephemeral UI in
- *  the store so it survives leaving and re-entering the page). `at` is the
- *  card's activityAt when the state was decided: a user's collapse of an
- *  unread card holds only until newer unread lands (activityAt moves past
- *  `at`), then the card re-earns its default-open. `frozenReadAt` is the
- *  unread boundary frozen at expansion, so marking read cannot erase the
- *  "new" divider mid-read. */
-export type ThreadCardOpenEntry = {
-  expanded: boolean;
-  /** Who decided: the default rule, or the user's click. A fresh visit
-   *  re-derives `auto` entries; `user` entries hold. */
-  by: "auto" | "user";
-  at: number;
+/** The Threads page's one cursor (ephemeral UI in the store, so it survives
+ *  leaving and re-entering the page): the row the reader is on, and whether
+ *  it is open. One row is open at a time — the page is a reader, not a wall
+ *  of threads. `frozenReadAt` is the row's unread boundary as it stood when
+ *  it was opened, so marking read cannot erase the "new" divider mid-read. */
+export type ThreadsCursor = {
+  id: string | null;
+  open: boolean;
   frozenReadAt: number;
 };

@@ -5,21 +5,20 @@ import { selectChannelReadMarker, type ChatAttachment, type ChatRailChannel } fr
 import { useChannelMessages, useChannelMessagesSync } from "../../../hooks/useChatSync";
 import { channelDisplayName, dmCounterpart, memberName } from "../../../lib/chatViews";
 import { holdChatFocus } from "../../../lib/chatFocus";
-import { summaryCount, type ThreadCardModel } from "../../../lib/threadCards";
+import type { CardPreview, ThreadCardModel } from "../../../lib/threadCards";
 import { CommentAvatar } from "../../comments/CommentAvatar";
 import { ChatComposer } from "../../chat/ChatComposer";
-import { ChatTimelineRows } from "./ChatThreadKind";
+import { ChatTimelineRows, ThreadUnavailableNote } from "./ChatThreadKind";
 import { useThreadsPage } from "../threadsContext";
 
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 // The DM kind: a direct message room from the chat rail (a multi-person DM is
-// a DM too). The collapsed card is the rail row's story — who, and the last
-// line; expanded, the newest messages of the room and its composer, the
-// channel page's read law applied: the room is marked read while the reader
-// is present and the newest message is on screen, and re-marked as new ones
-// land.
+// a DM too). The row is the rail row's story — who, and the last line; open,
+// the newest messages of the room and its composer, the channel page's read
+// law applied: the room is marked read while the reader is present with the
+// row open, and re-marked as new ones land.
 
-/** How many of the room's newest messages an expanded card shows. */
+/** How many of the room's newest messages an open row shows. */
 const DM_WINDOW = 20;
 
 function channelOf(card: ThreadCardModel): ChatRailChannel {
@@ -42,21 +41,11 @@ export function DmLabel({ card }: { card: ThreadCardModel }) {
   return <>{channelDisplayName(channelOf(card), members)}</>;
 }
 
-export function DmRoot({ card, expanded }: { card: ThreadCardModel; expanded: boolean }) {
+/** The rail carries the room's last line, already attributed. */
+export function useDmPreview(card: ThreadCardModel): CardPreview | null {
   const channel = channelOf(card);
-  const { toggle } = useThreadsPage();
-  if (expanded) return null;
-  return (
-    <button type="button" className="th-card-summary" onClick={() => toggle(card)}>
-      {/* The rail carries no message count, so the slot is the count line's
-          empty form, or the last line of the room. */}
-      {channel.knownEmpty || !channel.lastMessagePreview ? (
-        <span className="th-card-count">{channel.knownEmpty ? summaryCount(0, "message") : "Messages"}</span>
-      ) : (
-        <span className="th-card-preview">{channel.lastMessagePreview}</span>
-      )}
-    </button>
-  );
+  if (channel.knownEmpty) return { text: "No messages yet" };
+  return channel.lastMessagePreview ? { text: channel.lastMessagePreview } : null;
 }
 
 export function DmExpanded({
@@ -79,19 +68,18 @@ export function DmExpanded({
   const messages = useMemo(() => (all.length > DM_WINDOW ? all.slice(-DM_WINDOW) : all), [all]);
   const newestId = messages.length ? messages[messages.length - 1].id : undefined;
 
-  // The channel page's own rule: present + newest on screen = read — `seen`
-  // is that statement, witnessed by the shell's tail sentinel. The marker is
-  // the newest message in the ROOM, replies included, so a badge a thread
-  // reply raised clears too. Re-marks as messages land (newestId moves).
+  // The channel page's own rule: present with the room open = read. The
+  // marker is the newest message in the ROOM, replies included, so a badge a
+  // thread reply raised clears too. Re-marks as messages land (newestId
+  // moves). Never for a room the server refuses: the mark would only come
+  // back as "Channel not found", and the note below is what this row shows.
   useWatchEffect(() => {
-    if (!seen || feed.loading) return;
+    if (!seen || feed.loading || feed.unavailable) return;
     const state = useInboxStore.getState();
     const marker = selectChannelReadMarker(state as any, channelId);
     state.markChannelRead(channelId, marker?._id);
-  }, [seen, channelId, newestId, feed.loading, channel.unreadCount]);
+  }, [seen, channelId, newestId, feed.loading, feed.unavailable, channel.unreadCount]);
 
-  // A hold, not the page's single slot: several cards can be on screen at
-  // once, and releasing this one must not erase another's.
   useWatchEffect(() => {
     if (!seen) return;
     return holdChatFocus({ channelId });
@@ -104,15 +92,7 @@ export function DmExpanded({
     [channelId],
   );
 
-  // The card came from a rail that predates the refusal; chat.sendMessage
-  // would refuse a post here, so the card offers none.
-  if (feed.unavailable) {
-    return (
-      <div className="th-card-open">
-        <div className="th-card-note">This conversation isn&apos;t available anymore.</div>
-      </div>
-    );
-  }
+  if (feed.unavailable) return <ThreadUnavailableNote />;
 
   return (
     <div className="th-card-open">

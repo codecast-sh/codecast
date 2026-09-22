@@ -7,7 +7,7 @@
 import type { LucideIcon } from "lucide-react";
 import { CircleHelp, GitCommitHorizontal, Globe, Hash, ListChecks, MessageSquare, Terminal, Users } from "lucide-react";
 import { parseCodeThreadRootKey } from "@codecast/shared/comments";
-import type { ThreadCardOpenEntry, ThreadInboxRow, ThreadKind } from "../store/threadTypes";
+import type { ThreadInboxRow, ThreadKind, ThreadLastReply } from "../store/threadTypes";
 import type { ChatRailChannel } from "../store/chatSlice";
 import type { InboxSession, SessionDecisionItem } from "../store/inboxStore";
 
@@ -388,49 +388,42 @@ export function unreadByChip(cards: ThreadCardModel[]): Record<ChipKey, number> 
   return out;
 }
 
-/** The unread boundary as it stands when a card is expanded. Frozen by the
- *  page so marking read cannot erase it mid-read. */
+/** The unread boundary as it stands when a card is opened. Frozen by the
+ *  page's cursor so marking read cannot erase the "new" divider mid-read. */
 export function frozenReadAtOf(card: ThreadCardModel): number {
   if (card.kind === "dm") return (card.source as ChatRailChannel).lastReadAt ?? 0;
   if (card.kind === "session" || card.kind === "question") return 0;
   return (card.source as ThreadInboxRow).last_read_at ?? 0;
 }
 
-// ── Open by default ─────────────────────────────────────────────────────────
-
-/** The default: every card renders expanded, composer and all, so the page
- *  reads and answers in place. The user's collapse is the only way down. */
-export function defaultOpenEntry(card: ThreadCardModel): ThreadCardOpenEntry {
-  return { expanded: true, by: "auto", at: card.activityAt, frozenReadAt: frozenReadAtOf(card) };
+/** "Done" archives the follow: only the thread_reads-backed kinds have a row
+ *  to archive. DM, session and question cards are projections of other state
+ *  with their own lifecycles. */
+export function isDismissible(card: ThreadCardModel): boolean {
+  return card.kind === "chat" || card.kind === "comment" || card.kind === "code" || card.kind === "task" || card.kind === "page";
 }
 
-/** A collapsed entry expires when NEWER unread lands: the reader closed the
- *  card on what it held then, not on what arrived since. Reading nothing new
- *  (unread from the same activity) keeps the collapse. */
-export function openEntryExpired(card: ThreadCardModel, entry: ThreadCardOpenEntry): boolean {
-  return !entry.expanded && card.unread > 0 && card.activityAt > entry.at;
-}
+// ── The row's second line ───────────────────────────────────────────────────
 
-/** What a card's open state IS, given its stored entry. `firstSight` is true
- *  the first time this page visit renders the card: a fresh visit re-derives
- *  `auto` entries (so a card read last visit collapses again) but honors the
- *  user's own choices. Expanded entries are never re-derived mid-visit — a
- *  card marking itself read under the reader must not collapse under them. */
-export function resolveOpenEntry(
-  card: ThreadCardModel,
-  entry: ThreadCardOpenEntry | undefined,
-  firstSight: boolean,
-): ThreadCardOpenEntry {
-  if (!entry) return defaultOpenEntry(card);
-  if (firstSight && entry.by === "auto") return defaultOpenEntry(card);
-  if (openEntryExpired(card, entry)) return defaultOpenEntry(card);
-  return entry;
-}
+/** Who spoke last and what they said, as the collapsed row shows it. */
+export type CardPreview = {
+  /** The speaker: a person's name, or an agent's session title. */
+  who?: string;
+  whoKind?: "user" | "agent";
+  text: string;
+};
 
-/** The user's toggle. Collapsing stamps the card's current activity so only
- *  newer unread reopens it; expanding freezes the unread boundary now. */
-export function toggledOpenEntry(card: ThreadCardModel, current: ThreadCardOpenEntry): ThreadCardOpenEntry {
-  return current.expanded
-    ? { expanded: false, by: "user", at: card.activityAt, frozenReadAt: current.frozenReadAt }
-    : { expanded: true, by: "user", at: card.activityAt, frozenReadAt: frozenReadAtOf(card) };
+/** A server row's newest reply as a preview line. An agent's reply is named
+ *  by its session, never by the token owner whose name it was signed with:
+ *  "Ashot: shipped it" would read as the reader's own words. */
+export function replyPreview(
+  last: ThreadLastReply | null | undefined,
+  nameOf?: (userId: string) => string | undefined,
+): CardPreview | null {
+  if (!last) return null;
+  if (last.author_kind === "agent") {
+    return { who: last.session_title ?? "Agent", whoKind: "agent", text: last.preview };
+  }
+  const who = last.author_name ?? (last.user_id ? nameOf?.(String(last.user_id)) : undefined);
+  return { who, whoKind: "user", text: last.preview };
 }

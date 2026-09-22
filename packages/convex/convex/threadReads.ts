@@ -36,6 +36,66 @@ export const THREAD_BADGE_SCAN = 200;
 
 type ReadCtx = Pick<QueryCtx, "db"> | Pick<MutationCtx, "db">;
 
+// ── Agent comments on tasks: which ones reach a person ──────────────────────
+//
+// A session posts to a task under its owner's token, and the board is the
+// audience for most of what it writes: started, reproduced, rebased, shipped.
+// Filing every such line in a person's inbox buries the few lines that are
+// addressed to them. So an agent's comment is news for a person only when it
+// asks something of a person — a blocker, or a review (a handoff, a verdict)
+// — or names them with an @mention. A person's comment is news for everyone
+// but its writer, always. The level is the reader's own setting
+// (notification_preferences.task_agent_comments); the rule above is the
+// default. The same predicate decides the write (which rows a comment files
+// or moves) and the read (what counts as unread), so the badge, the page and
+// the row never disagree.
+
+export type AgentCommentLevel = "all" | "needs_person" | "none";
+export const DEFAULT_AGENT_COMMENT_LEVEL: AgentCommentLevel = "needs_person";
+export const agentCommentLevelValidator = v.union(
+  v.literal("all"),
+  v.literal("needs_person"),
+  v.literal("none"),
+);
+
+/** The comment types an agent posts when a person has to act. */
+const NEEDS_PERSON_TYPES: ReadonlySet<string> = new Set(["blocker", "review"]);
+
+export function agentCommentLevelOf(
+  user: { notification_preferences?: { task_agent_comments?: AgentCommentLevel } } | null | undefined,
+): AgentCommentLevel {
+  return user?.notification_preferences?.task_agent_comments ?? DEFAULT_AGENT_COMMENT_LEVEL;
+}
+
+/** Who wrote a task comment, as one reader sees it: themself, another
+ *  person, or an agent. A row with no author_user_id is an agent's or the
+ *  system's; a bot user's row (an anchor, a role's standing session) is an
+ *  agent's too. */
+export type TaskCommentAuthorKind = "self" | "person" | "agent";
+
+export function taskCommentAuthorKind(
+  comment: { author_user_id?: Id<"users"> },
+  author: { is_bot?: boolean } | null | undefined,
+  viewerId: Id<"users">,
+): TaskCommentAuthorKind {
+  if (!comment.author_user_id || author?.is_bot) return "agent";
+  return String(comment.author_user_id) === String(viewerId) ? "self" : "person";
+}
+
+export function taskCommentIsNews(
+  comment: { comment_type?: string },
+  author: TaskCommentAuthorKind,
+  level: AgentCommentLevel,
+  mentioned: boolean,
+): boolean {
+  if (author === "self") return false;
+  if (author === "person") return true;
+  if (mentioned) return true;
+  if (level === "all") return true;
+  if (level === "none") return false;
+  return NEEDS_PERSON_TYPES.has(comment.comment_type ?? "note");
+}
+
 export type ThreadRefs = {
   channel_id?: Id<"chat_channels">;
   conversation_id?: Id<"conversations">;

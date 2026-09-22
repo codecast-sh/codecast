@@ -8,6 +8,7 @@ export const HELP_SECTIONS: { when: string | undefined; label: string; accent: s
   { when: "chat.dm", label: "Chat", accent: "bg-sol-magenta" },
   { when: "diff", label: "Diff", accent: "bg-sol-green" },
   { when: "list", label: "List", accent: "bg-sol-orange" },
+  { when: "threads", label: "Threads", accent: "bg-sol-cyan" },
   { when: "tasks", label: "Tasks", accent: "bg-sol-red" },
   { when: "docs", label: "Documents", accent: "bg-sol-yellow" },
   { when: "review", label: "Review", accent: "bg-sol-violet" },

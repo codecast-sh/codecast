@@ -19,7 +19,7 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { getAuthenticatedUserId } from "./pendingMessages";
-import { isSilentAgentRow } from "@codecast/shared/chat";
+import { extractMentionHandles, isSilentAgentRow } from "@codecast/shared/chat";
 import { parseCodeThreadRootKey, parseCommentThreadRootKey } from "@codecast/shared/comments";
 import { UNREAD_CAP, plainPreview } from "./chatText";
 import {
@@ -35,9 +35,13 @@ import { commentsForAnchor, isInCommentThread } from "./comments";
 import { canAccessComment, codeThreadRows } from "./codeComments";
 import { canAccessConversation, canAccessTask } from "./lib/access";
 import { attachCommentSessionInfo } from "./lib/commentSessionInfo";
+import { matchHandle } from "./lib/mentionResolve";
 import {
   THREAD_BADGE_SCAN,
+  agentCommentLevelOf,
   dropThreadRead,
+  taskCommentAuthorKind,
+  taskCommentIsNews,
   taskThreadMembership,
   threadKindValidator,
   type TaskThreadMembership,
@@ -53,6 +57,9 @@ export type ThreadLastReply = {
   user_id?: string;
   author_kind?: "user" | "agent";
   author_name?: string;
+  /** An agent's reply names the session it came from, when the viewer may
+   *  see that session: the author string is the token owner's name. */
+  session_title?: string;
   created_at: number;
   preview: string;
 };
@@ -183,7 +190,9 @@ type ThreadKindResolver = {
   /** The newest counted row's stamp, 0 when none. A read mark clamps to it. */
   newestAt(ctx: ReadCtx, row: ThreadRead, cache: PageCache): Promise<number>;
   load(ctx: ReadCtx, userId: Id<"users">, row: ThreadRead, cache: PageCache, payload: ListMinePayload): Promise<void>;
-  preview(ctx: ReadCtx, row: ThreadRead, cache: PageCache): Promise<ThreadLastReply | null>;
+  /** The reply the collapsed row previews: the newest one that is news for
+   *  the viewer, else the newest at all. */
+  preview(ctx: ReadCtx, userId: Id<"users">, row: ThreadRead, cache: PageCache): Promise<ThreadLastReply | null>;
 };
 
 // ── chat ────────────────────────────────────────────────────────────────────
@@ -239,7 +248,7 @@ const chatKind: ThreadKindResolver = {
     const root = await chatRoot(ctx, row, cache);
     if (root) payload.chat.roots.push(root);
   },
-  async preview(ctx, row, cache) {
+  async preview(ctx, _userId, row, cache) {
     const newest = await newestChatReply(ctx, chatRootId(row));
     if (!newest) return null;
     return {
@@ -327,7 +336,7 @@ const commentKind: ThreadKindResolver = {
       });
     }
   },
-  async preview(ctx, row, cache) {
+  async preview(ctx, _userId, row, cache) {
     const rows = await commentThread(ctx, row, cache);
     const newest = [...rows].reverse().find(isLandedComment);
     if (!newest) return null;
@@ -374,6 +383,21 @@ async function viewerCommentedOnTask(ctx: ReadCtx, userId: Id<"users">, taskId: 
   return !!own;
 }
 
+/** Whether one task comment is news for the viewer (threadReads.
+ *  taskCommentIsNews): the reader's own level, the author's kind, and
+ *  whether the text names them. */
+async function taskCommentNewsFor(
+  ctx: ReadCtx,
+  cache: PageCache,
+  userId: Id<"users">,
+  c: Doc<"task_comments">,
+): Promise<boolean> {
+  const viewer = await userFor(ctx, cache, userId);
+  const author = taskCommentAuthorKind(c, await userFor(ctx, cache, c.author_user_id), userId);
+  const mentioned = !!viewer && author === "agent" && extractMentionHandles(c.text).some((h) => matchHandle([viewer], h));
+  return taskCommentIsNews(c, author, agentCommentLevelOf(viewer), mentioned);
+}
+
 const taskKind: ThreadKindResolver = {
   // Access is membership, not the task ACL: a row survives only while the
   // viewer is a participant under taskThreadMembership's human-act rule, or
@@ -390,14 +414,14 @@ const taskKind: ThreadKindResolver = {
     if (membership.participants.some((id) => String(id) === String(userId))) return true;
     return await viewerCommentedOnTask(ctx, userId, task._id);
   },
-  async unread(ctx, userId, row) {
+  async unread(ctx, userId, row, cache) {
     const rows = await ctx.db
       .query("task_comments")
       .withIndex("by_task_created", (q: any) =>
         q.eq("task_id", taskId(row)).gt("created_at", row.last_read_at))
       .take(THREAD_UNREAD_SCAN);
-    // A row with no author_user_id is an agent's or the system's: news.
-    const counted = rows.filter((c) => String(c.author_user_id) !== String(userId)).length;
+    let counted = 0;
+    for (const c of rows) if (await taskCommentNewsFor(ctx, cache, userId, c)) counted++;
     return capped(counted);
   },
   async newestAt(ctx, row, cache) {
@@ -409,15 +433,27 @@ const taskKind: ThreadKindResolver = {
     const comments = await attachCommentSessionInfo(ctx, [...(await taskCommentsFor(ctx, row, cache))].reverse(), userId);
     payload.tasks.push({ ...task, comments });
   },
-  async preview(ctx, row, cache) {
-    const newest = (await taskCommentsFor(ctx, row, cache))[0];
+  async preview(ctx, userId, row, cache) {
+    // Newest first. The row previews the newest UNREAD reply that is news for
+    // the viewer — an agent's progress notes after a teammate's question must
+    // not hide the question — else the newest reply at all.
+    const comments = await taskCommentsFor(ctx, row, cache);
+    let newest: Doc<"task_comments"> | undefined;
+    for (const c of comments) {
+      if (c.created_at <= row.last_read_at) break;
+      if (await taskCommentNewsFor(ctx, cache, userId, c)) { newest = c; break; }
+    }
+    newest ??= comments[0];
     if (!newest) return null;
     const user = await userFor(ctx, cache, newest.author_user_id);
+    const kind = taskCommentAuthorKind(newest, user, userId);
+    const [withSession] = await attachCommentSessionInfo(ctx, [newest], userId);
     return {
       _id: String(newest._id),
       user_id: newest.author_user_id ? String(newest.author_user_id) : undefined,
-      author_kind: newest.author_user_id ? "user" : "agent",
+      author_kind: kind === "agent" ? "agent" : "user",
       author_name: displayName(user) ?? newest.author,
+      session_title: withSession.session_info?.title ?? undefined,
       created_at: newest.created_at,
       preview: plainPreview(newest.text, 160),
     };
@@ -487,7 +523,7 @@ const pageKind: ThreadKindResolver = {
       comments: comments.map(stripCommentEmail),
     });
   },
-  async preview(ctx, row, cache) {
+  async preview(ctx, _userId, row, cache) {
     const rows = await pageCommentsFor(ctx, row, cache);
     const newest = rows.reduce<Doc<"artifact_comments"> | null>(
       (best, c) => (!best || c.created_at >= best.created_at ? c : best), null);
@@ -554,7 +590,7 @@ const codeKind: ThreadKindResolver = {
     const rows = (await codeThreadFor(ctx, row, cache)).slice(-THREAD_PAYLOAD_ROWS);
     payload.codeComments.push(...rows);
   },
-  async preview(ctx, row, cache) {
+  async preview(ctx, _userId, row, cache) {
     const rows = await codeThreadFor(ctx, row, cache);
     const newest = rows[rows.length - 1];
     if (!newest) return null;
@@ -653,7 +689,7 @@ export const listMine = query({
         updated_at: row.updated_at,
         unread,
         unread_capped,
-        last_reply: await kind.preview(ctx, row, cache),
+        last_reply: await kind.preview(ctx, userId, row, cache),
       });
     }
     payload.chat.threads = await threadSummariesFor(ctx, payload.chat.roots);
@@ -691,7 +727,12 @@ export const unreadCount = query({
       const kind = THREAD_KINDS[row.kind];
       if (!kind) continue;
       if (row.last_activity_at <= row.last_read_at) continue;
-      if (await kind.access(ctx, userId, row, cache)) count++;
+      if (!(await kind.access(ctx, userId, row, cache))) continue;
+      // Activity past the mark is the cheap test; the kind's own count is
+      // the honest one — a task row moved by an agent's notes under an
+      // older rule holds nothing the reader's level counts.
+      if ((await kind.unread(ctx, userId, row, cache)).unread === 0) continue;
+      count++;
     }
     return count;
   },

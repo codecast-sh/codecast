@@ -6,8 +6,7 @@ import type { ChatAttachment } from "../../../store/chatSlice";
 import { useThreadMessages, useThreadSync } from "../../../hooks/useChatSync";
 import { channelDisplayName } from "../../../lib/chatViews";
 import { holdChatFocus } from "../../../lib/chatFocus";
-import { summaryCount, type ThreadCardModel } from "../../../lib/threadCards";
-import { CommentAvatar } from "../../comments/CommentAvatar";
+import { replyPreview, type CardPreview, type ThreadCardModel } from "../../../lib/threadCards";
 import { ChatMessage, ChatNewDivider } from "../../chat/ChatMessage";
 import { ChatComposer } from "../../chat/ChatComposer";
 import type { ChatMessageView } from "../../chat/chatTypes";
@@ -15,11 +14,11 @@ import { useTailPin } from "../cardWindow";
 import { useThreadsPage } from "../threadsContext";
 
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
-// The chat kind: a channel thread the viewer is in. The collapsed card shows
-// the room, the root message and a one-line rollup of the replies; expanded,
-// the whole thread IN PLACE, composer included — the thread panel's content
-// inlined, so a person walks their threads top to bottom without leaving the
-// page. The DM kind reuses the timeline rows below.
+// The chat kind: a channel thread the viewer is in. The row names the room
+// and previews the newest reply; open, the root message and the whole thread
+// IN PLACE, composer included — the thread panel's content inlined, so a
+// person walks their threads top to bottom without leaving the page. The DM
+// kind reuses the timeline rows below.
 
 function rowOf(card: ThreadCardModel): ThreadInboxRow {
   return card.source as ThreadInboxRow;
@@ -39,11 +38,28 @@ export function ChatGlyph({ card }: { card: ThreadCardModel }) {
   return <RoomIcon channel={chatCards.get(rowOf(card).root_key)?.channel} />;
 }
 
-/** The card head's object label: the room name. */
+/** The row's label: the room name. */
 export function ChatLabel({ card }: { card: ThreadCardModel }) {
   const { chatCards, members } = useThreadsPage();
   const channel = chatCards.get(rowOf(card).root_key)?.channel;
   return <>{channel ? channelDisplayName(channel, members) : "channel"}</>;
+}
+
+export function useChatPreview(card: ThreadCardModel): CardPreview | null {
+  const { nameOf } = useThreadsPage();
+  return replyPreview(rowOf(card).last_reply, nameOf);
+}
+
+/** The open card for a room the server will not show this viewer (left it,
+ *  never a member, dead link). The card came from a rail or inbox row that
+ *  predates the refusal; chat.sendMessage would refuse a post here, so the
+ *  card offers none. Shared by the chat and DM kinds. */
+export function ThreadUnavailableNote() {
+  return (
+    <div className="th-card-open">
+      <div className="th-card-note">This conversation isn&apos;t available anymore.</div>
+    </div>
+  );
 }
 
 /** A chat timeline inside a card: the unread rule, grouped rows, the usual
@@ -89,8 +105,7 @@ export function ChatTimelineRows({
   const retry = useCallback((id: string) => {
     useInboxStore.getState().retryChatSend(id);
   }, []);
-  // Pinned to the tail so the newest message is what the capped region shows —
-  // the read law's sentinel below this region assumes exactly that.
+  // Pinned to the tail so the newest message is what the capped region shows.
   const pinRef = useTailPin(messages.length ? `${messages[messages.length - 1].id}|${messages.length}` : "");
   return (
     <div ref={pinRef} className="th-card-replies">
@@ -120,58 +135,36 @@ export function ChatTimelineRows({
   );
 }
 
-/** Collapsed body: the root message (or a ghost while the cache is cold) and,
- *  when not expanded, the reply rollup — faces, count, last reply preview. */
-export function ChatRoot({ card, expanded }: { card: ThreadCardModel; expanded: boolean }) {
+/** The open row's first line: the root message the thread hangs on (or a
+ *  ghost while the cache is cold). */
+export function ChatMeta({ card }: { card: ThreadCardModel }) {
   const entry = rowOf(card);
-  const { chatCards, now, viewerId, handles, nameOf, toggle } = useThreadsPage();
+  const { chatCards, now, viewerId, handles } = useThreadsPage();
   const root = chatCards.get(entry.root_key)?.root ?? null;
-  const replyCount = root?.replyCount ?? 0;
-  const lastReply = entry.last_reply;
-  return (
-    <>
-      {root ? (
-        <div className="th-card-root">
-          <ChatMessage
-            message={root}
-            channelId={String(entry.channel_id ?? "")}
-            knownHandles={handles.known}
-            selfHandles={handles.self}
-            handleNames={handles.names}
-            now={now}
-            mine={root.author.id === viewerId}
-            inThread
-          />
-        </div>
-      ) : (
-        <div className="th-card-root th-card-ghost" aria-hidden="true">
-          <div className="ch-skel-line ch-skel-head" />
-          <div className="ch-skel-line" style={{ width: "62%" }} />
-        </div>
-      )}
-      {!expanded && (
-        <button type="button" className="th-card-summary" onClick={() => toggle(card)}>
-          {(root?.replyFaces ?? []).slice(0, 4).map((f) => (
-            <span key={f.id} className="th-card-face">
-              <CommentAvatar name={f.name} image={f.avatarUrl} size={16} letters={1} />
-            </span>
-          ))}
-          <span className="th-card-count">{summaryCount(replyCount, "reply", "replies")}</span>
-          {lastReply && (
-            <span className="th-card-preview">
-              <span className="th-card-preview-name">{lastReply.author_name ?? nameOf(String(lastReply.user_id ?? ""))}:</span>{" "}
-              {lastReply.preview}
-            </span>
-          )}
-        </button>
-      )}
-    </>
+  return root ? (
+    <div className="th-card-root">
+      <ChatMessage
+        message={root}
+        channelId={String(entry.channel_id ?? "")}
+        knownHandles={handles.known}
+        selfHandles={handles.self}
+        handleNames={handles.names}
+        now={now}
+        mine={root.author.id === viewerId}
+        inThread
+      />
+    </div>
+  ) : (
+    <div className="th-card-root th-card-ghost" aria-hidden="true">
+      <div className="ch-skel-line ch-skel-head" />
+      <div className="ch-skel-line" style={{ width: "62%" }} />
+    </div>
   );
 }
 
-/** The expanded half: the live thread and its composer. Its own component so
+/** The open half: the live thread and its composer. Its own component so
  *  the thread subscription and the read-mark effect mount only for the one
- *  open card. */
+ *  open row. */
 export function ChatExpanded({
   card,
   seen,
@@ -193,13 +186,10 @@ export function ChatExpanded({
   const sync = useThreadSync(rootId);
   const thread = useThreadMessages(rootId);
 
-  // The read law: presence + the card's newest content actually in the
-  // viewport (`seen`, witnessed by the shell's tail sentinel). Never while
-  // the thread query is still answering (DM's own gate): on a cold cache the
-  // body renders empty and short, so the sentinel is trivially in view with
-  // the newest message never rendered. Re-marks when new replies land while
-  // the reader is still looking (last_activity_at moves); a card expanded
-  // below the fold stays unread.
+  // The read law: the row is open and the reader is here (`seen`), and the
+  // thread query has answered — on a cold cache the body renders empty with
+  // the newest message never shown. Re-marks when new replies land while the
+  // reader is still looking (last_activity_at moves).
   useWatchEffect(() => {
     if (!seen || sync.loading) return;
     if (entry.last_read_at >= entry.last_activity_at && entry.unread === 0) return;
@@ -207,8 +197,7 @@ export function ChatExpanded({
   }, [seen, sync.loading, rootId, entry.last_activity_at, entry.last_read_at, entry.unread]);
 
   // The thread on the reader's screen is being read: its own arrivals must not
-  // toast at them. A hold, not the page's single slot — several cards can be
-  // on screen at once, and releasing this one must not erase another's.
+  // toast at them.
   useWatchEffect(() => {
     if (!seen) return;
     return holdChatFocus({ channelId, threadRootId: rootId });
@@ -224,6 +213,8 @@ export function ChatExpanded({
     },
     [channelId, rootId],
   );
+
+  if (sync.unavailable) return <ThreadUnavailableNote />;
 
   return (
     <div className="th-card-open">
