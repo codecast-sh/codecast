@@ -16,9 +16,11 @@ services:
   backend:
     image: ghcr.io/get-convex/convex-backend@sha256:69885bae73766f625404a5425b22702341e89b43002f1d700864f8364be0d1f8
     restart: unless-stopped
-    # 64 GB of a 128 GB box. Postgres gets its own budget; the OS keeps the rest
-    # for page cache. Raise only after measuring growth on this hardware — more
-    # headroom does not fix the growth, it only lengthens the cycle.
+    # 64 GB of a 247 GB box (see README.md). Postgres gets its own budget; the
+    # OS keeps the rest for page cache. Raise only after measuring growth on
+    # this hardware — more headroom does not fix the growth, it only lengthens
+    # the cycle. The 2026-09-22 resize tripled the spare RAM, so raising this
+    # is now cheap if the heap question (ct-52939) needs it.
     mem_limit: 64g
     env_file: [.env]
     networks: [codecast]
