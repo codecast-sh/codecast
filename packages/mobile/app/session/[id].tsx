@@ -15,7 +15,7 @@ const ImagePicker: typeof import('expo-image-picker') | null = optionalNative(
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Feather from '@expo/vector-icons/Feather';
 import { AgentLogoSvg } from '@/components/AgentLogo';
-import { MobileIdentityFace, MobileSessionIdentityLine, useSessionIdentityRow } from '@/components/identity';
+import { MobileIdentityFace, MobileSessionFace, MobileSessionIdentityLine, useSessionIdentityRow } from '@/components/identity';
 import { useInboxStore, isConvexId } from '@codecast/web/store/inboxStore';
 import { sessionIdentity } from '@codecast/web/lib/sessionIdentity';
 import { extractSessionImages, mergeSessionImages, type SessionImageEntry } from '@codecast/web/lib/sessionImages';
@@ -41,7 +41,7 @@ import { PulsingDot } from '@/components/SessionItem';
 import { AssignmentChip, AssignedToYouBanner } from '@/components/AssignmentChip';
 import { SessionHuddleButton } from '@/components/calls/SessionHuddleButton';
 import { ModelSwitcherChip } from '@/components/ModelSwitcherChip';
-import { agentSupportsFork, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE, isAgentSwitchNotice, parseAgentSwitchNotice, isMachineSwitchNotice, parseMachineSwitchNotice, stripPastedContent } from '@codecast/shared/contracts';
+import { agentSupportsFork, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE, isAgentSwitchNotice, parseAgentSwitchNotice, isMachineSwitchNotice, parseMachineSwitchNotice, isSessionEscalationMessage, parseSessionEscalation, sessionEscalationCaption, stripPastedContent } from '@codecast/shared/contracts';
 import { renderInlineMarkdown, MarkdownContent, MarkdownTextBlock, CodeBlockWithCopy, HighlightedCodeText, linkifyPlainText } from '@/components/MarkdownRenderer';
 import { openLink } from '@/lib/links';
 import { EntityPill } from '@/components/EntityPill';
@@ -5108,6 +5108,32 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
             // dedicated cards, not user bubbles of raw XML — mirrors web's
             // classifyUserMessage → SessionMessageBlock / ScheduledTaskBlock.
             if (item.role === 'user' && item.content) {
+              // A session moving between its role and the person
+              // (org-roles-run-work.md R1, revised): the same inline divider
+              // the web draws, in both threads: the role's face, the move,
+              // the whole line as markdown, the time.
+              if (isSessionEscalationMessage(item.content)) {
+                const esc = parseSessionEscalation(item.content);
+                if (esc) {
+                  const inChild = (conversation?.short_id ?? String(id).slice(0, 7)) === esc.session.short_id;
+                  const caption = sessionEscalationCaption(esc, { inChild });
+                  return (
+                    <RNView style={{ paddingVertical: 12, paddingHorizontal: 16 }} testID={`escalation-${esc.move}`}>
+                      <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                        <RNView style={{ flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: Theme.border }} />
+                        <MobileSessionFace size={16} row={{ _id: esc.role.short_id, standing_role_id: esc.role.short_id, role: { _id: esc.role.short_id, short_id: esc.role.short_id, name: esc.role.name, handle: esc.role.handle, avatar: esc.role.avatar ?? 'fox', status: 'active', tenure_kind: 'standing' } }} />
+                        <RNText style={{ fontSize: 11, color: Theme.textDim }} numberOfLines={2}>{caption} · {formatRelativeTime(item.timestamp)}</RNText>
+                        <RNView style={{ flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: Theme.border }} />
+                      </RNView>
+                      {!!esc.line && (
+                        <RNView style={{ marginTop: 8, borderWidth: 1, borderColor: Theme.border, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8 }}>
+                          <MarkdownContent text={esc.line} baseStyle={styles.teammateContent} isUser={false} />
+                        </RNView>
+                      )}
+                    </RNView>
+                  );
+                }
+              }
               if (isAgentSwitchNotice(item.content) || item.subtype === 'agent_switch') {
                 const parsed = parseAgentSwitchNotice(item.content);
                 const label = parsed ? `now using ${parsed.toLabel}` : 'agent switched';
