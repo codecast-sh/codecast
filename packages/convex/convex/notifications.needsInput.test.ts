@@ -496,6 +496,11 @@ describe("needs-input push — exclusions (mirrors the idle sound's guards)", ()
     ["agent_spawned", { agent_name: "researcher" }],
     // …and spawned schedule-run conversations.
     ["schedule_run", { agent_task_id: "task1" }],
+    // A session a role looks after reaches the person through the role
+    // (org-roles-run-work.md R1, revised): its own settle rings nobody, and
+    // an escalation through the role's card is still the role's to carry.
+    ["under_role", { org_role_id: "role1" }],
+    ["under_role", { org_role_id: "role1", escalated_by_role: { role_id: "role1", line: "needs you", at: 1 } }],
   ] as Array<[string, Rec]>)("%s sessions never push", async (reason, convOverride) => {
     const { ctx, tables } = settledIdleWorld({ conv: convOverride });
     const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
@@ -508,6 +513,17 @@ describe("needs-input push — exclusions (mirrors the idle sound's guards)", ()
   // --isolated / cloud / path-stamped session is first-class and pushes like
   // any other card. Fan-out from INSIDE a session still stands down — those
   // workers carry a spawner (reason agent_spawned), not because of the tree.
+  // The exception: a DIRECT escalation made the child the person's own card,
+  // so its settles ring them like any other.
+  test("a child a role put in front of the person directly pushes", async () => {
+    const { ctx, tables } = settledIdleWorld({
+      conv: { org_role_id: "role1", escalated_by_role: { role_id: "role1", line: "a permission prompt is open", at: 1, direct: true } },
+    });
+    const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    expect(res.notified).toBe(true);
+    expect(tables.notifications[0].type).toBe("session_idle");
+  });
+
   test("a human-started worktree session pushes", async () => {
     const { ctx, tables } = settledIdleWorld({
       conv: { worktree_name: "cloud-d03aaa", worktree_branch: "codecast/cloud-d03aaa" },
@@ -977,6 +993,32 @@ describe("needs-input digest — one alert an hour", () => {
     expect(digest.conversation_id).toBeUndefined(); // opens the inbox, not one session
     expect(tables.push_outbox.length).toBe(2);
     expect(tables.push_outbox[1].title).toBe("2 sessions need your attention");
+  });
+
+  // An escalation's chime rode the idle rail on the role's standing session
+  // with no settle episode of its own (R1, revised): the fold-up names it
+  // while the escalation under the role is open, and forgets it once handed
+  // back.
+  test("an escalation through the role's card stays in the fold-up while it is open", async () => {
+    const { ctx, tables } = fleetWorld();
+    const now = Date.now();
+    tables.conversations.push(
+      { _id: "standing", user_id: "u1", title: "Growth lead", status: "active", message_count: 40, updated_at: now - 60_000, last_message_role: "assistant", standing_role_id: "role1", anchor_id: "anchor1" },
+      { _id: "child", user_id: "u1", title: "Pricing copy", status: "active", message_count: 12, updated_at: now - 60_000, last_message_role: "assistant", org_role_id: "role1", escalated_by_role: { role_id: "role1", line: "needs your eye", at: now - 60_000 } },
+    );
+    tables.users[0].idle_digest_state = { last_alerted_at: now - 10_000 };
+    tables.notifications.push({ _id: "n_esc", recipient_user_id: "u1", type: "session_idle", conversation_id: "standing", message: "@growth: needs your eye", read: false, quiet: true, created_at: now - 5_000 });
+    tables.users[0].idle_digest_state.last_alerted_at = now - IDLE_DIGEST_WINDOW_MS - 1;
+    let res = await performIdleDigestFlush(ctx as any, "u1");
+    expect(res).toEqual({ notified: true, count: 1 });
+    expect(tables.notifications.find((n: Rec) => n.type === "sessions_need_input").message).toBe("Growth lead needs your attention");
+
+    // Handed back: the row is stale and the fold-up names nothing.
+    delete tables.conversations.find((c: Rec) => c._id === "child").escalated_by_role;
+    tables.notifications.push({ _id: "n_esc2", recipient_user_id: "u1", type: "session_idle", conversation_id: "standing", message: "@growth: needs your eye", read: false, quiet: true, created_at: now + 1 });
+    tables.users[0].idle_digest_state = { last_alerted_at: now - IDLE_DIGEST_WINDOW_MS - 1 };
+    res = await performIdleDigestFlush(ctx as any, "u1");
+    expect(res).toEqual({ notified: false, reason: "nothing_waiting" });
   });
 
   test("a session the user already answered is not named", async () => {

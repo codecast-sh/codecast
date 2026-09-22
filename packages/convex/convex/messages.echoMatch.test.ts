@@ -19,6 +19,15 @@ const row = (
 ) => ({ _id: id, content, created_at: createdAt, status, client_id: clientId, ...extra });
 
 describe("findEchoedPendingMessage", () => {
+  test("an echo wrapped in Claude Code's pasted_content tag matches the pending row it was pasted from", () => {
+    const body = "Org eval, round 10 on Union.\n\nAlive records closed: 0 of 4 runs.";
+    const a = row("cmd-a", body, 1_000, "injected");
+    // The tag as Claude Code 2.1.278 writes it: leading newlines, an id, and
+    // (on a long paste) no closing tag at all.
+    expect(findEchoedPendingMessage([a], `\n\n<pasted_content id="a83d">\n${body}`, 3_000)?._id).toBe("cmd-a");
+    expect(findEchoedPendingMessage([a], `<pasted_content id="a83d">\n${body}\n</pasted_content>`, 3_000)?._id).toBe("cmd-a");
+  });
+
   test("ABA regression: the echo matches the OLDER in-flight row, not the newest", () => {
     const a = row("cmd-a", "continue", 1_000, "injected");
     const b = row("cmd-b", "continue", 2_000, "pending");

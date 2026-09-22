@@ -2,6 +2,8 @@ import { SlackLogo } from "./SlackLogo";
 import { MIRROR_STATE_LABEL } from "@codecast/convex/convex/lib/slackMirror";
 import { useCallsAvailable, useTeamFeature } from "../lib/teamFeatures";
 import Link from "next/link";
+import { agentName, useRootAgent } from "../hooks/useSyncAnchors";
+import { AnchorAvatar } from "./anchor/AnchorIdentity";
 import { usePathname, useRouter } from "next/navigation";
 import { lazy, Suspense, useState, useMemo, useCallback, useRef, memo } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -905,6 +907,10 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const isInbox = pathname === "/conversation" || pathname?.startsWith("/conversation/") || pathname === "/inbox" || pathname?.startsWith("/inbox/");
   const isSessions = pathname?.startsWith("/sessions");
   const isOrg = pathname === "/org" || pathname?.startsWith("/org/");
+  const isRootAgent = pathname === "/anchor";
+  // The workspace's agent is its root role (org-staffing.md S22): the rail
+  // shows it by its name and face, and the entry opens its page.
+  const rootAgent = useRootAgent();
   const isWindows = pathname?.startsWith("/windows");
   const isTeamActivity = pathname === "/team/activity" || pathname?.startsWith("/team/activity");
   const isChat = pathname === "/chat" || pathname?.startsWith("/chat/");
@@ -1488,10 +1494,15 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
               </svg>
             }
           />
-          {/* The workspace's standing agent is the Chief of Staff now
-              (org-staffing.md S12), and its home is the root seat of the Org
-              chart — so the rail keeps listing places, not individuals, and
-              /anchor redirects to the chief's scope page for old links. */}
+          <NavSection
+            label={rootAgent ? agentName(rootAgent) : "Workspace agent"}
+            href="/anchor"
+            isActive={isRootAgent}
+            isNarrow={isNarrow}
+            onMobileClose={onMobileClose}
+            title={rootAgent ? `${agentName(rootAgent)}, the workspace's agent` : "Set up the workspace's agent"}
+            icon={<AnchorAvatar anchor={rootAgent} size={20} className="flex-shrink-0" />}
+          />
           <NavSection
             label="Windows"
             href="/windows"

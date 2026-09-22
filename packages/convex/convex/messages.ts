@@ -1,3 +1,4 @@
+import { stripPastedContent } from "@codecast/shared/contracts";
 import { mutation, query, internalMutation, type MutationCtx } from "./functions";
 import { countersFor } from "./orgEvents";
 import { calibrationSlot } from "./usageCalibration";
@@ -1161,7 +1162,11 @@ export function findEchoedPendingMessage<
   msgTimestamp: number,
   consumed?: ReadonlySet<unknown>,
 ): T | undefined {
-  const c = (safeContent || "")
+  // Claude Code 2.1.277+ wraps every bracketed paste in <pasted_content>, and
+  // the daemon pastes every delivery, so the echo carries a wrapper the pending
+  // row never had. Strip it on both sides (ct-52622: unmatched echoes left rows
+  // "injected", and the tmux receipt then rewrote the same message on idle).
+  const c = stripPastedContent(safeContent || "")
     .replace(/\[Image[:\s][^\]]*\]/gi, "")
     .replace(ECHO_CONTROL_CHARS_RE, "")
     .trim();
@@ -1171,7 +1176,7 @@ export function findEchoedPendingMessage<
     // the draft text for each attachment, so the pending content carries the
     // token exactly like the echo does. Stripping only the echo side left a
     // text+image send permanently unmatched (no thumbnail, no client_id).
-    const pc = redactSecrets(pm.content)
+    const pc = stripPastedContent(redactSecrets(pm.content))
       .replace(/\[Image[:\s][^\]]*\]/gi, "")
       .replace(/\[image\]/gi, "")
       .replace(ECHO_CONTROL_CHARS_RE, "")

@@ -1,5 +1,6 @@
 import { useRef } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { useMutation } from "convex/react";
+import { useQueryNoThrow } from "./useQueryNoThrow";
 import { api } from "@codecast/convex/convex/_generated/api";
 
 import { useWatchEffect } from "./useWatchEffect";
@@ -35,7 +36,10 @@ export function useDocPresence(opts: {
   const { docId, draftText = "", enabled, forceBroadcast } = opts;
   const update = useMutation(api.docSync.updatePresence);
   const remove = useMutation(api.docSync.removePresence);
-  const present = (useQuery(api.docSync.getPresence, enabled ? { doc_id: docId } : "skip") ?? []) as PresenceRow[];
+  // Presence only decorates the editor: when the doc is gone or the viewer
+  // lost access the query throws NOT_FOUND, and the editor's own doc read says
+  // so. The avatars go empty rather than taking the surface down.
+  const present = (useQueryNoThrow(api.docSync.getPresence, enabled ? { doc_id: docId } : "skip").data ?? []) as PresenceRow[];
   const broadcast = enabled && (forceBroadcast || present.length > 0);
 
   const draftRef = useRef(draftText);

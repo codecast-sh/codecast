@@ -667,6 +667,40 @@ export function parsePublishedPageUrl(href: string | undefined | null): { slug: 
   return m ? { slug: m[1] } : null;
 }
 
+// ---------------------------------------------------------------------------
+// Claude artifacts
+//
+// A Claude artifact shared publicly circulates as
+// https://claude.ai/public/artifacts/<uuid> (claude.site/artifacts/<uuid> is
+// the older host and redirects there). It is a page someone made, like a
+// published codecast page, so prose treats it the same way: a titled pill in a
+// sentence, a card when the link stands alone. claude.ai refuses to be framed
+// by other sites (frame-ancestors 'self'), so the card cannot show the live
+// page the way a codecast page card does.
+// ---------------------------------------------------------------------------
+
+const CLAUDE_ARTIFACT_HOSTS = new Set(["claude.ai", "www.claude.ai", "claude.site", "www.claude.site"]);
+
+/** If `href` points at a public Claude artifact, its id and canonical URL. */
+export function parseClaudeArtifactUrl(href: string | undefined | null): { id: string; url: string } | null {
+  if (!href || typeof href !== "string" || !/^https?:\/\//i.test(href.trim())) return null;
+  let u: URL;
+  try {
+    u = new URL(href.trim());
+  } catch {
+    return null;
+  }
+  if (!CLAUDE_ARTIFACT_HOSTS.has(u.hostname.toLowerCase())) return null;
+  const m = /^\/(?:public\/)?artifacts\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\/embed)?\/?$/i.exec(u.pathname);
+  if (!m) return null;
+  const id = m[1].toLowerCase();
+  return { id, url: claudeArtifactUrl(id) };
+}
+
+export function claudeArtifactUrl(id: string): string {
+  return `https://claude.ai/public/artifacts/${id}`;
+}
+
 /**
  * The path and fragment of an href that addresses one of OUR pages: an
  * absolute URL on an app host, or a path-only href. Anything on another host

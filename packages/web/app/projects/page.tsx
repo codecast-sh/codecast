@@ -66,8 +66,13 @@ function getColorClass(color?: string): string {
   return found ? found.tw : "bg-sol-cyan";
 }
 
+// A project the store holds before the server has counted it (an optimistic
+// create, a row from a feed that carries no counts) has no task_counts yet.
+const NO_TASK_COUNTS: ProjectItem["task_counts"] = { total: 0, done: 0, in_progress: 0 };
+const taskCountsOf = (project: ProjectItem) => project.task_counts ?? NO_TASK_COUNTS;
+
 function ProjectProgress({ project }: { project: ProjectItem }) {
-  const { task_counts } = project;
+  const task_counts = taskCountsOf(project);
   if (task_counts.total === 0) return null;
 
   const donePct = (task_counts.done / task_counts.total) * 100;
@@ -99,7 +104,7 @@ function ProjectCard({
 }) {
   const status = STATUS_CONFIG[project.status as ProjectStatus] || STATUS_CONFIG.active;
   const StatusIcon = status.icon;
-  const totalItems = project.task_counts.total + project.plan_count + project.doc_count;
+  const totalItems = taskCountsOf(project).total + (project.plan_count ?? 0) + (project.doc_count ?? 0);
 
   return (
     // A div with the button role, not a <button>: the lead chip inside it
@@ -154,10 +159,10 @@ function ProjectCard({
                 {project.plan_count} {project.plan_count === 1 ? "plan" : "plans"}
               </span>
             )}
-            {project.task_counts.total > 0 && (
+            {taskCountsOf(project).total > 0 && (
               <span className="flex items-center gap-1">
                 <ListChecks className="w-3 h-3" />
-                {project.task_counts.total} {project.task_counts.total === 1 ? "task" : "tasks"}
+                {taskCountsOf(project).total} {taskCountsOf(project).total === 1 ? "task" : "tasks"}
               </span>
             )}
             {project.doc_count > 0 && (

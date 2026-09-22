@@ -8,9 +8,9 @@ import { Switch } from "../../../components/ui/switch";
 import { toast } from "sonner";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import {
-  Bell, BellOff, Users, MessageSquare, Laptop, CheckCircle, Terminal, Mail,
+  Bell, BellOff, Users, MessageSquare, Laptop, CheckCircle, Terminal, Mail, MessagesSquare,
 } from "lucide-react";
-import { SettingsPanel, SettingsRow, SettingsSection } from "../../../components/settings/ui";
+import { SettingsOptionGroup, SettingsPanel, SettingsRow, SettingsSection } from "../../../components/settings/ui";
 import { useOsPermission } from "../../../hooks/useOsPermissions";
 import { PermissionRow } from "../../../components/permissions/PermissionRow";
 
@@ -55,6 +55,15 @@ const NOTIF_SECTIONS = [
     ],
   },
 ] as const;
+
+/* Which agent comments on tasks reach the Threads inbox. The server's rule
+ * (convex threadReads.ts taskCommentIsNews): a person's comment and an
+ * @mention always do; the level decides the rest of an agent's. */
+const AGENT_COMMENT_LEVELS = [
+  { value: "needs_person", label: "When they need you", description: "Blockers, handoffs and verdicts, and comments that @mention you. Progress notes stay on the task." },
+  { value: "all", label: "Everything", description: "Every agent comment on a task you follow, progress notes included." },
+  { value: "none", label: "Never", description: "Only people and @mentions reach you. The task page keeps the agent's record." },
+];
 
 const DEFAULT_PREFS = {
   team_session_start: true,
@@ -127,6 +136,15 @@ export default function NotificationsSettingsPage() {
     }
   }, [mutedMembers, updatePrefs]);
 
+  const agentCommentLevel = (prefs as any)?.task_agent_comments ?? "needs_person";
+  const setAgentCommentLevel = useCallback(async (level: string) => {
+    try {
+      await updatePrefs({ notification_preferences: { ...DEFAULT_PREFS, ...prefs, task_agent_comments: level } as any });
+    } catch {
+      toast.error("Failed to update preferences");
+    }
+  }, [prefs, updatePrefs]);
+
   if (!user) return null;
 
   type TeamMember = { _id: Id<"users">; name?: string | null; email?: string | null; github_avatar_url?: string | null; title?: string | null };
@@ -189,6 +207,23 @@ export default function NotificationsSettingsPage() {
               ))}
             </SettingsSection>
           ))}
+
+          {/* The Threads inbox is its own channel: not a push, a list you
+              read. What an agent writes on a task mostly belongs to the
+              board; this picks how much of it reaches the list. */}
+          <SettingsSection
+            title="Threads"
+            icon={MessagesSquare}
+            description="Which agent comments on tasks you follow land in your Threads inbox. Comments from people, and any comment that @mentions you, always do."
+            padded
+          >
+            <SettingsOptionGroup
+              label="Agent comments in Threads"
+              value={agentCommentLevel}
+              onChange={setAgentCommentLevel}
+              options={AGENT_COMMENT_LEVELS}
+            />
+          </SettingsSection>
 
           {/* Per-member muting */}
           {otherMembers && otherMembers.length > 0 && (

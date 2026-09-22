@@ -398,6 +398,12 @@ export async function enqueuePendingMessage(
     // sentence. The next ordinary message into the session releases it, and
     // it delivers first because it is older.
     defer?: boolean;
+    // A note for the session's own record, never a turn of its own, on ANY
+    // session: parked as "held" like `defer`, a standing session included
+    // (its wake flush folds it into the next frame). For a line the session
+    // itself caused, such as a role's own escalation divider, so the role is
+    // not woken to read what it just wrote.
+    hold?: boolean;
   }
 ): Promise<Id<"pending_messages">> {
   if (fields.client_id) {
@@ -425,7 +431,7 @@ export async function enqueuePendingMessage(
     }
   }
 
-  if (fields.defer && !conversation.standing_role_id) {
+  if (fields.hold || (fields.defer && !conversation.standing_role_id)) {
     return await insertEnqueuedPendingMessage(ctx, {
       conversationId: conversation._id,
       fromUserId,

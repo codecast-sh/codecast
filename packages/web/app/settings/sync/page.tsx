@@ -27,16 +27,15 @@ import {
   DialogFooter,
 } from "../../../components/ui/dialog";
 import { TeamIcon } from "../../../components/TeamIcon";
-import { SettingsOptionGroup, SettingsPanel, SettingsRow, SettingsSection } from "../../../components/settings/ui";
+import { SettingsPanel, SettingsRow, SettingsSection } from "../../../components/settings/ui";
+import { TeamVisibilityControl, describeTeamSharing } from "../../../components/settings/TeamVisibilityControl";
+import { describePinnedPast, hasPinnedPast, teamVisibilityOption, type TeamSharingFacts } from "../../../lib/teamVisibility";
 
-type TeamVisibility = "hidden" | "activity" | "summary" | "full";
-type UserTeam = {
+type UserTeam = TeamSharingFacts & {
   _id: Id<"teams">;
-  name: string;
   icon?: string | null;
   icon_color?: string | null;
   role?: string;
-  visibility?: TeamVisibility;
 };
 type DirectoryMapping = {
   _id?: string;
@@ -56,13 +55,6 @@ type SyncProject = {
   auto_share?: boolean;
 };
 
-const visibilityOptions: { value: TeamVisibility; label: string; description: string; preview: string }[] = [
-  { value: "hidden", label: "Hidden", description: "Teammates see nothing", preview: "Your sessions won't appear in the team feed" },
-  { value: "activity", label: "Activity", description: "Project name and session count", preview: "e.g. \"3 sessions in codecast today\"" },
-  { value: "summary", label: "Summary", description: "Session title and bullet summary", preview: "e.g. \"Fix auth bug - Updated login flow, added error handling\"" },
-  { value: "full", label: "Full", description: "Full conversation content", preview: "Teammates can read your complete session transcripts" },
-];
-
 export default function SyncPage() {
   const { user } = useCurrentUser();
   const syncSettings = user ? { sync_mode: user.sync_mode ?? "all", sync_projects: user.sync_projects ?? [] } : null;
@@ -73,7 +65,7 @@ export default function SyncPage() {
   const updateDirectoryMapping = useMutation(api.users.updateDirectoryTeamMapping);
   const removeDirectoryMapping = useMutation(api.users.removeDirectoryTeamMapping);
   const deleteConversationsForPath = useMutation(api.users.deleteConversationsForPath);
-  const setTeamVisibility = useMutation(api.teams.setTeamVisibility);
+  const setTeamMembershipVisibility = useInboxStore((s) => s.setTeamMembershipVisibility);
 
   const [editMode, setEditMode] = useState(false);
   const [newProject, setNewProject] = useState("");
@@ -217,10 +209,6 @@ export default function SyncPage() {
     }
   };
 
-  const handleVisibilityChange = async (teamId: Id<"teams">, visibility: TeamVisibility) => {
-    await setTeamVisibility({ team_id: teamId, visibility });
-  };
-
   const handleAddProject = async () => {
     if (!newProject.trim()) return;
     const projectPath = newProject.trim();
@@ -344,11 +332,11 @@ export default function SyncPage() {
       </SettingsSection>
 
       <SettingsSection
-        title="Projects & sharing"
+        title="Sharing"
         icon={FolderGit2}
         description={
           hasTeams
-            ? "Synced projects stay private to you until you share one with a team."
+            ? "Synced projects stay private to you until you share one with a team. Each team's level sets how much teammates see of the projects you share with it."
             : "Projects whose sessions sync to your workspace."
         }
         actions={
@@ -357,6 +345,61 @@ export default function SyncPage() {
           </Button>
         }
       >
+        {hasTeams && (
+          <>
+            <div className="flex items-baseline gap-1.5 bg-sol-bg-alt/50 px-4 py-1.5 sm:px-5">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-sol-text-dim">
+                What each team sees
+              </span>
+              <span className="text-[10px] text-sol-text-dim/70">{teams.length}</span>
+            </div>
+            {teams.map((team) => {
+              const option = teamVisibilityOption(team.visibility);
+              const pinned = hasPinnedPast(team);
+              return (
+                <SettingsRow
+                  key={team._id}
+                  label={
+                    <span className="flex items-center gap-1.5">
+                      <TeamIcon icon={team.icon} color={team.icon_color} className="h-3.5 w-3.5" />
+                      <span className="font-medium">{team.name}</span>
+                      <span className="text-xs text-sol-text-muted">· {describeTeamSharing(team)}</span>
+                    </span>
+                  }
+                  description={
+                    <>
+                      Teammates see {option.sees}.
+                      {pinned && (
+                        <>
+                          {" "}
+                          {describePinnedPast(team)}{" "}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setTeamMembershipVisibility(String(team._id), option.value, "everything");
+                              toast.success(`${team.name} now sees ${option.sees} for every session`);
+                            }}
+                            className="text-sol-cyan hover:underline"
+                          >
+                            Include past sessions
+                          </button>
+                        </>
+                      )}
+                    </>
+                  }
+                >
+                  <TeamVisibilityControl team={team} />
+                </SettingsRow>
+              );
+            })}
+            <div className="flex items-baseline gap-1.5 bg-sol-bg-alt/50 px-4 py-1.5 sm:px-5">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-sol-text-dim">
+                Projects
+              </span>
+              <span className="text-[10px] text-sol-text-dim/70">{filteredProjects.length}</span>
+            </div>
+          </>
+        )}
         <div className="flex items-center gap-2.5 px-4 py-2.5 sm:px-5">
           <Search className="h-4 w-4 flex-shrink-0 text-sol-text-dim" />
           <input
@@ -486,8 +529,8 @@ export default function SyncPage() {
                                   >
                                     <Eye className="mr-2 h-4 w-4" />
                                     <span className="flex-1">{team.name}</span>
-                                    <span className="ml-3 text-xs capitalize text-sol-text-dim">
-                                      {team.visibility || "summary"}
+                                    <span className="ml-3 text-xs text-sol-text-dim">
+                                      {teamVisibilityOption(team.visibility).label}
                                     </span>
                                   </DropdownMenuItem>
                                 ))}
@@ -520,43 +563,6 @@ export default function SyncPage() {
         )}
       </SettingsSection>
 
-      {hasTeams && (
-        <SettingsSection
-          title="Team visibility"
-          icon={Eye}
-          description="How much detail teammates see across the projects you share with each team."
-        >
-          {teams.map((team) => {
-            const currentVisibility = team.visibility || "summary";
-            const currentOption = visibilityOptions.find((option) => option.value === currentVisibility);
-            return (
-              <SettingsRow
-                key={team._id}
-                label={
-                  <span className="flex items-center gap-1.5">
-                    <TeamIcon icon={team.icon} color={team.icon_color} className="h-3.5 w-3.5" />
-                    {team.name}
-                  </span>
-                }
-                description={currentOption?.description}
-              >
-                <SettingsOptionGroup
-                  label={`What ${team.name} sees`}
-                  variant="pill"
-                  value={currentVisibility}
-                  onChange={(v) => handleVisibilityChange(team._id, v as TeamVisibility)}
-                  options={visibilityOptions.map((opt) => ({
-                    value: opt.value,
-                    label: opt.label,
-                    title: currentVisibility === opt.value ? opt.description : `Switch to: ${opt.preview}`,
-                  }))}
-                />
-              </SettingsRow>
-            );
-          })}
-        </SettingsSection>
-      )}
-
       <SettingsSection
         title="CLI"
         icon={Terminal}
@@ -575,7 +581,7 @@ export default function SyncPage() {
       </SettingsSection>
 
       <Dialog open={!!pendingUnsync} onOpenChange={(open) => !open && setPendingUnsync(null)}>
-        <DialogContent className="bg-sol-bg border-sol-border">
+        <DialogContent className="bg-sol-bg border-sol-border sm:max-w-xl">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-sol-text">
               <AlertTriangle className="h-5 w-5 text-sol-yellow" />
@@ -591,7 +597,7 @@ export default function SyncPage() {
               {pendingUnsync?.path}
             </div>
           </div>
-          <DialogFooter className="gap-2 sm:gap-0">
+          <DialogFooter className="min-w-0 flex-wrap gap-2 sm:space-x-0">
             <Button
               variant="outline"
               onClick={() => setPendingUnsync(null)}

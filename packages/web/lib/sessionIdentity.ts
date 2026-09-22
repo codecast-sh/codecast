@@ -13,6 +13,7 @@
 //             feature on is a choice rather than something that happens to you.
 import { characterOf, defaultCharacterFor, type Character } from "@codecast/shared/contracts/sessionCharacter";
 import { isAvatarKey, defaultAvatarFor, type AvatarKey } from "@codecast/shared/contracts/orgAvatars";
+import { isDirectEscalation } from "@codecast/shared/contracts";
 import type { SessionRoleSnapshot } from "../store/inboxStore";
 
 export type IdentityRow = {
@@ -23,7 +24,7 @@ export type IdentityRow = {
   standing_role_id?: string | null;
   org_role_id?: string | null;
   role?: SessionRoleSnapshot | null;
-  escalated_by_role?: { role_id: string; line: string; at: number } | null;
+  escalated_by_role?: { role_id: string; line: string; at: number; direct?: boolean } | null;
 };
 
 export type SessionIdentity =
@@ -90,20 +91,22 @@ export function standingRoleIdOf(row: IdentityRow): string | null {
 }
 
 /** The role a session reports to, when the role still looks after it: the
- *  session renders as a small row under that role's card. An escalated session
- *  answers null here and `escalationOf` instead. */
+ *  session renders as a small row under that role's card. A session the role
+ *  escalated through its own card is still the role's (R1, revised); only a
+ *  DIRECT escalation answers null here and `escalationOf` instead. */
 export function roleLookingAfter(row: IdentityRow): SessionRoleSnapshot | null {
-  if (row.standing_role_id || row.escalated_by_role) return null;
+  if (row.standing_role_id || isDirectEscalation(row.escalated_by_role)) return null;
   return row.org_role_id && row.role ? row.role : null;
 }
 
-/** A role put this session in front of the person: who, and the one line that
- *  says what the person will decide. `role` is null when the row's snapshot
+/** A role put this session in front of the person: who, the one line that
+ *  says what the person will decide, and whether it is the session's own card
+ *  (direct) or a line on the role's. `role` is null when the row's snapshot
  *  has not arrived, and the line still renders. */
-export function escalationOf(row: IdentityRow): { role: SessionRoleSnapshot | null; line: string; at: number } | null {
+export function escalationOf(row: IdentityRow): { role: SessionRoleSnapshot | null; line: string; at: number; direct: boolean } | null {
   const e = row.escalated_by_role;
   if (!e) return null;
-  return { role: row.role && row.role._id === e.role_id ? row.role : null, line: e.line, at: e.at };
+  return { role: row.role && row.role._id === e.role_id ? row.role : null, line: e.line, at: e.at, direct: isDirectEscalation(e) };
 }
 
 /** The identity fields alone, lifted off a bigger row. Surfaces that carry a

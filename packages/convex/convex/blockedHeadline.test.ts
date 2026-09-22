@@ -28,6 +28,19 @@ describe("blockedHeadlineCause", () => {
     expect(blockedHeadlineCause([conv("throttle"), conv("throttle"), conv("fatal")])).toBe("rate-limit bursts");
   });
 
+  // A full context window is parked until /compact reaches the session: it
+  // headlines when it is the largest slice, and a fleet revive leaves it out
+  // exactly as it leaves out a safety stop — a continue would re-send the
+  // same oversized prompt.
+  test("full context windows headline and stay out of the acted set", () => {
+    expect(blockedHeadlineCause([conv("context"), conv("context"), conv("limit")])).toBe("full context windows");
+    expect(blockedHeadlineCause([conv("context"), conv("limit")])).toBe("usage limits");
+    const full = conv("context", { _id: "full" });
+    const limit = conv("limit", { _id: "limit" });
+    expect(actedBlockedConversations([full, limit], false)).toEqual([limit]);
+    expect(actedBlockedConversations([full, limit], true)).toEqual([limit]);
+  });
+
   // A park with no kind recorded is the original limit shape.
   test("counts an unstamped park as a usage limit", () => {
     expect(blockedHeadlineCause([{}, {}, conv("auth")])).toBe("usage limits");

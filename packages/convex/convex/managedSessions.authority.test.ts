@@ -45,10 +45,23 @@ describe("managed session execution authority", () => {
     expect((await (registerManagedSession as any)._handler(ctx, { session_id: "target", conversation_id: "mine", pid: 2 })).notOwner).toBe(true);
     unchanged(ctx);
   });
-  test("an unknown caller device is refused before cleanup", async () => {
+  test("a device this caller does not own never becomes the conversation's runner", async () => {
     const ctx = fixture(CALLER);
-    await expect((registerManagedSession as any)._handler(ctx, { session_id: "new", conversation_id: "conv", pid: 2, device_id: "foreign" })).rejects.toThrow("device");
-    unchanged(ctx);
+    await (registerManagedSession as any)._handler(ctx, { session_id: "new", conversation_id: "conv", pid: 2, device_id: "foreign" });
+    expect(ctx.db._tables.conversations[0].owner_device_id).toBeUndefined();
+  });
+
+  // The daemon's first heartbeat is what creates the device row, and a boot or
+  // an account switch can register a session before that beat lands. Throwing
+  // there lost the session: it never registered, so nothing managed it.
+  test("a session still registers when its device has not heartbeated yet", async () => {
+    const ctx = fixture(CALLER);
+    ctx.db._tables.devices.length = 0;
+    await (registerManagedSession as any)._handler(ctx, { session_id: "fresh", conversation_id: "conv", pid: 2, device_id: "device" });
+    const row = ctx.db._tables.managed_sessions.find((r: any) => r.session_id === "fresh");
+    expect(row).toBeDefined();
+    expect(row.user_id).toBe(CALLER);
+    expect(ctx.db._tables.conversations[0].owner_device_id).toBeUndefined();
   });
   test("explicit runner transfer permits fresh-row takeover", async () => {
     const ctx = fixture(CALLER);

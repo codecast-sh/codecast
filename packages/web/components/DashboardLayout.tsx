@@ -35,6 +35,7 @@ import { OrgIntroAnywhere } from "./org/OrgIntroAnywhere";
 import { DesktopAppBanner } from "./DesktopAppBanner";
 import { CliOfflineBanner } from "./CliOfflineBanner";
 import { NotificationNudgeBanner } from "./NotificationNudgeBanner";
+import { TeamSharingNudgeBanner } from "./TeamSharingNudgeBanner";
 import { DeviceSetupDialog } from "./permissions/DeviceSetupDialog";
 import { ConnectionBanner } from "./ConnectionBanner";
 import { StorageHealthBanner } from "./StorageHealthBanner";
@@ -75,6 +76,7 @@ import { useSyncCore } from "../hooks/useSyncCore";
 import { useChatChannelsSync, useChatUnread } from "../hooks/useChatSync";
 import { useThreadUnreadSync } from "../hooks/useThreadsSync";
 import { useChatToasts } from "../hooks/useChatToasts";
+import { useChatPrefetch } from "../hooks/useChatPrefetch";
 import { useSyncDocs, useSyncMentionDocs } from "../hooks/useSyncDocs";
 import { useSyncMentionPlans } from "../hooks/useSyncPlans";
 import { useSyncMentionTasks } from "../hooks/useSyncTasks";
@@ -262,6 +264,13 @@ export function DashboardLayout(props: DashboardLayoutProps) {
 // own solo host); a follower window receives the same slice over replication
 // instead (store/syncReplication.ts), so mounting these there would only
 // duplicate every subscription.
+// The chat prefetch in its own component: it wakes on every notification and
+// rail push, and HostFeeders re-running all of its feeders for that buys nothing.
+function ChatPrefetchFeeder() {
+  useChatPrefetch();
+  return null;
+}
+
 function HostFeeders() {
   // The tasks delta cursor machine: its empty deltas re-rendered the whole
   // layout when it lived in DashboardLayoutInner.
@@ -323,6 +332,7 @@ function DashboardSyncEffects() {
         change while the document lives, but the rule stays visible. */}
     {PANE_EMBED ? null : <WindowOnlyEffects />}
     {isSyncHost ? <HostFeeders /> : null}
+    {isSyncHost ? <ChatPrefetchFeeder /> : null}
   </>;
 }
 
@@ -1297,6 +1307,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         <CliOfflineBanner />
         <TmuxMissingBanner />
         <NotificationNudgeBanner />
+        <TeamSharingNudgeBanner />
         <DeviceSetupDialog />
       </ErrorBoundary>
 
@@ -1491,6 +1502,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         <RecentSwitcher
           items={switcherState.items}
           selectedIndex={switcherState.selectedIndex}
+          mode={switcherState.mode}
+          onSelectedIndexChange={switcherState.setSelectedIndex}
+          onSelect={switcherState.select}
         />
       )}
     </div>

@@ -7,6 +7,7 @@ import {
   summarizeIdleDigest,
 } from "@codecast/shared/contracts";
 import { v } from "convex/values";
+import { isDirectEscalation } from "@codecast/shared/contracts";
 import { internal } from "./_generated/api";
 import { enqueuePush, readMissedSince } from "./pushRouter";
 import { getAuthUserId } from "@convex-dev/auth/server";
@@ -894,6 +895,14 @@ export async function performNeedsInputCheck(
     }
     return { notified: false, reason: "hidden" };
   }
+  // A session a role looks after reaches the person through the role
+  // (org-roles-run-work.md R1, revised): its own settle rings nobody. The
+  // role reads it first, and the escalation the role makes is what chimes,
+  // on the role's card. Only a DIRECT escalation makes the session the
+  // person's own card, and then its settles ring them like any other.
+  if (conv.org_role_id && !conv.standing_role_id && !isDirectEscalation(conv.escalated_by_role)) {
+    return { notified: false, reason: "under_role" };
+  }
   // ── Push etiquette (chime only) ────────────────────────────────────────────
   // The sound skips pinned (isSessionWaitingForInput's !is_pinned arms).
   if (conv.inbox_pinned_at) return { notified: false, reason: "pinned" };
@@ -998,7 +1007,22 @@ export async function performNeedsInputCheck(
 // injector both wrap their prompts in a sentinel tag the human never types.
 function isMachineStartedTurn(content: string | undefined | null): boolean {
   const c = (content || "").trimStart();
-  return c.startsWith("<session-message") || c.startsWith("<scheduled-task");
+  return c.startsWith("<session-message") || c.startsWith("<scheduled-task") || c.startsWith("<session-escalation");
+}
+
+// The escalation a row carries is still open, so the chime it earned still
+// stands (org-roles-run-work.md R1, revised): a child put in front of the
+// person directly, a standing session that escalated itself, or a role's
+// standing session with a session under it that reaches the person through
+// the role's card. Read off the rows, never off the notification.
+export async function escalationOpenFor(ctx: { db: any }, conv: any): Promise<boolean> {
+  if (conv?.escalated_by_role) return true;
+  if (!conv?.standing_role_id) return false;
+  const under = await ctx.db
+    .query("conversations")
+    .withIndex("by_org_role", (q: any) => q.eq("org_role_id", conv.standing_role_id))
+    .collect();
+  return under.some((c: any) => c.escalated_by_role && !isDirectEscalation(c.escalated_by_role));
 }
 
 export function notifPreview(text: string | undefined | null, max = 200): string | null {
@@ -1069,7 +1093,10 @@ export async function performIdleDigestFlush(
     // The episode this row announced, still current: the dedupe key names the
     // message count the session settled at, so a reply (which grows the count)
     // reads as answered.
-    if (!String(conv.needs_input_notified_key ?? "").startsWith(`${conv.message_count || 0}:`)) continue;
+    // An escalation's chime rides this rail with no episode key of its own:
+    // it is current while the escalation is open (the role's card, or the
+    // child when direct).
+    if (!String(conv.needs_input_notified_key ?? "").startsWith(`${conv.message_count || 0}:`) && !(await escalationOpenFor(ctx, conv))) continue;
     titles.push(sessionLabelOf(conv));
   }
 

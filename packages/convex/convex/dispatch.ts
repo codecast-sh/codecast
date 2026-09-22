@@ -11,6 +11,8 @@ import { upsertBinding } from "./capabilityBindings";
 import { Id } from "./_generated/dataModel";
 import { checkRateLimit } from "./rateLimit";
 import { resolveTeamForPath, buildShareUpdate } from "./privacy";
+import { applyMembershipVisibilityChange } from "./teams";
+import { isTeamVisibilityLevel } from "./teamVisibility";
 import { hasRecentPendingDaemonCommand, resumeConversationSession } from "./daemonCommandUtils";
 import { resolveAssigneeToUserId, recalcPlanProgress, notifySubscribers, subscribeUser, resolveWorkerParentConversation, resolveTaskGitContext } from "./tasks";
 import { api, internal } from "./_generated/api";
@@ -1281,6 +1283,15 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       : await buildShareUpdate(ctx, conv, userId);
     // Also rewrites linked work items' stored access key.
     await patchConversationVisibility(ctx, conv, updates);
+  },
+
+  // A member's level for a whole team (settings, the share-in-full nudge).
+  // Distinct from setTeamVisibility below, which is one conversation's override.
+  setTeamMembershipVisibility: async (ctx, userId, [teamId, visibility, mode]: [string, string, "everything" | "going_forward" | undefined]) => {
+    if (!isServerId(teamId)) throw new Error("Unknown team");
+    if (!isTeamVisibilityLevel(visibility)) throw new Error("Unknown visibility level");
+    if (mode !== undefined && mode !== "everything" && mode !== "going_forward") throw new Error("Unknown visibility mode");
+    return applyMembershipVisibilityChange(ctx, userId, teamId as Id<"teams">, visibility, mode);
   },
 
   setTeamVisibility: async (ctx, userId, [convId, visibility]: [string, "summary" | "full" | null]) => {

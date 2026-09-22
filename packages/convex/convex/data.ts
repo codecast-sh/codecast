@@ -109,8 +109,11 @@ export async function scopedFetch(
   // is in the V8 heap at a time — heavy fields are dropped before accumulating.
   const stripSet = strip ? new Set(strip) : null;
   // The index a read walks: the owner or team index by default; a status or
-  // updated_at index when the caller asked for one slice of the tasks table.
-  const slice = table === "tasks" && (opts.status !== undefined || opts.updatedSince !== undefined)
+  // updated_at index when the caller asked for one slice of the tasks table,
+  // and a status index for one slice of the plans table (plans have no
+  // updated_at index), so a reader of the open plans is not bounded by how
+  // many newer plans of any status exist.
+  const slice = (table === "tasks" && (opts.status !== undefined || opts.updatedSince !== undefined)) || (table === "plans" && opts.status !== undefined)
     ? { status: opts.status, since: opts.updatedSince }
     : null;
   const byOwner = (field: "user_id" | "team_id", id: any) => {

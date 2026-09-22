@@ -467,10 +467,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
           <span className="flex items-center gap-1.5"><FooterKeys combo="enter" /> send</span>
           <span className="flex items-center gap-1.5"><FooterKeys combo="meta+enter" /> send &amp; open</span>
         </span>
-        <span className="flex items-center gap-3">
-          {instance && !docked && <span className="flex items-center gap-1.5"><FooterKeys combo={DOCK_COMBO} /> minimize</span>}
-          <span className="flex items-center gap-1.5"><FooterKeys combo="escape" /> {docked ? "minimize" : "close"}</span>
-        </span>
+        <span className="flex items-center gap-1.5"><FooterKeys combo="escape" /> {docked ? "minimize" : "close"}</span>
       </div>
       </div>
     </div>
@@ -494,7 +491,8 @@ function ComposeChrome({ instance, stubId, onRequestClose }: { instance: Compose
 
   if (instance.mode === "modal") {
     return (
-      <button onClick={() => dockCompose(instance.id)} className={`absolute top-2 right-2 z-10 ${chromeButton}`} aria-label="Minimize to a docked composer">
+      <button onClick={() => dockCompose(instance.id)} className={`absolute top-2 right-2 z-10 flex items-center gap-1.5 ${chromeButton}`} aria-label="Minimize to a docked composer">
+        <span className="opacity-70"><FooterKeys combo={DOCK_COMBO} /></span>
         <Minus className="w-3.5 h-3.5" />
       </button>
     );

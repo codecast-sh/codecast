@@ -87,14 +87,18 @@ export function parseDesktopDeepLinkPath(url: string): string | null {
 // Paths that should never auto-hand-off to the desktop app — the marketing
 // site (codecast.sh itself: the landing page and its public pages; a visitor
 // looking at the site is not opening a conversation, and parseDesktopDeepLinkPath
-// already returns null for "/"), auth/oauth flows, public share pages (often
-// opened by people without the app), published artifacts (/a/<slug>, same
-// audience), the standalone repository pages (/r/<owner>/<name>/…: code links
-// pasted into chat, guest readable, meant to stay in the browser like a GitHub
-// link), the in-app palette popup, downloads, and API routes.
+// already returns null for "/"), auth/oauth flows, the standalone share pages
+// (/share/message|doc|plan, often opened by people without the app; a
+// conversation share never reaches this gate as a document, because the web
+// server answers /share/<token> with a redirect to its /conversation/<id>
+// form), published artifacts (/a/<slug>, same audience), the standalone
+// repository pages (/r/<owner>/<name>/…: code links pasted into chat, guest
+// readable, meant to stay in the browser like a GitHub link), the in-app
+// palette popup, downloads, and API routes.
 // The community rooms (/community) are a public page too: a link from the
 // marketing site or a search result opens them in the browser, whether or not
-// the reader owns the desktop app.
+// the reader owns the desktop app. So is a public profile (/:username), which
+// the rule below the list recognizes.
 const HANDOFF_DENY = [
   /^\/$/,
   /^\/(about|features|documentation|privacy|security|support|terms|changelog|pricing|download|blog|compare)(\/|$)/,
@@ -110,8 +114,36 @@ const HANDOFF_DENY = [
   /^\/api\//,
 ];
 
+// Every single-segment top-level route that lives INSIDE the app (a tab page
+// or a standalone shell page). Public profiles live at the root as a bare
+// handle (/:username), so the only way to tell `/ashot` (a public page) from
+// `/inbox` (an app page) is to know the real routes: any bare single segment
+// NOT in this set is a profile handle. One list serves two readers: the tab
+// shell (lib/tabRoutes: which paths a tab may hold) and the hand-off gate
+// below (a profile is a public page, never sent to the desktop app). It lives
+// here because this file may import nothing. KEEP IN SYNC with the
+// single-segment routes in src/routes.manifest.ts — its parity test parses
+// this set, so drift fails loudly.
+export const IN_SHELL_ROOT_SEGMENTS = new Set([
+  // Tab pages (RoutePane patterns)
+  "inbox", "feed", "crosstalk", "org", "browser", "chat", "community", "search", "notifications", "questions", "threads", "docs", "capabilities", "plans", "tasks", "files", "vault", "pages", "artifacts",
+  "projects", "initiatives", "workflows", "routines", "triggers", "schedules", "sessions", "anchor", "team", "config", "calls",
+  // Standalone shell pages (own <Route>, not in RoutePane)
+  "explore", "timeline", "windows", "orchestration", "roadmap", "cli",
+  // The repository index (its history, source and commit pages are deeper paths)
+  "repo",
+]);
+
+/** A public profile handle at the root (/:username): a bare single segment
+ *  that names no app route. */
+export function isPublicProfilePath(path: string): boolean {
+  const single = path.split("?")[0].split("#")[0].match(/^\/([^/]+)$/);
+  return !!single && !IN_SHELL_ROOT_SEGMENTS.has(single[1]);
+}
+
 export function isHandoffEligiblePath(path: string): boolean {
   if (!path) return false;
+  if (isPublicProfilePath(path)) return false;
   return !HANDOFF_DENY.some((re) => re.test(path));
 }
 

@@ -30,6 +30,7 @@ import type { Doc, Id } from "../_generated/dataModel";
 import { internalAction, internalMutation } from "../functions";
 import { MAX_CHANNELS_PER_TEAM, UNREAD_CAP, plainPreview } from "../chatText";
 import { rewriteNotificationMessage } from "../lib/notificationActor";
+import { escalationOpenFor } from "../notifications";
 import { deliver } from "./send";
 import { notificationDigest, type DigestEntry, type DigestSection } from "./templates";
 import { BRAND } from "./render";
@@ -347,6 +348,23 @@ async function buildDigestForUser(
   );
   const olderPending = pendingDecisions.filter((d) => d.created_at <= since).length;
 
+  // --- Sessions a role put in front of the person (org-roles-run-work.md R1,
+  // revised). The chime rode the idle rail on the card it reached (the role's
+  // standing session, or the child when direct); a row is worth a line here
+  // while that escalation is still open, read off the conversation. ---
+  const inFront: DigestEntry[] = [];
+  const seenConv = new Set<string>();
+  for (const n of [...notifRows].sort((a, b) => b.created_at - a.created_at)) {
+    if (n.read || n.type !== "session_idle" || !n.conversation_id || n.created_at > cutoff) continue;
+    const key = n.conversation_id.toString();
+    if (seenConv.has(key)) continue;
+    seenConv.add(key);
+    const conv = await ctx.db.get(n.conversation_id);
+    if (!conv || conv.inbox_killed_at || !(await escalationOpenFor(ctx, conv))) continue;
+    const entry = await escalationDigestEntry(ctx, base, conv, n.message);
+    if (entry) inFront.push(entry);
+  }
+
   // --- Plain unread chat, using chat.ts's own counting rules ---
   const chatLines: DigestEntry[] = [];
   const chatChannels: string[] = [];
@@ -433,6 +451,9 @@ async function buildDigestForUser(
   if (handed.length > 0) {
     sections.push({ heading: "Handed to you", entries: cap.take(handed).map(toEntry) });
   }
+  if (inFront.length > 0) {
+    sections.push({ heading: "In front of you", entries: cap.take(inFront) });
+  }
   if (chatLines.length > 0) {
     sections.push({ heading: "Unread chat", entries: cap.take(chatLines) });
   }
@@ -441,11 +462,33 @@ async function buildDigestForUser(
     blockingDecisions: newDecisions.filter((d) => d.blocking).length,
     advisoryDecisions: newDecisions.filter((d) => !d.blocking).length,
     firstPersonalTitle: personal[0] ? toEntry(personal[0]).title : undefined,
-    personalCount: personal.length + handed.length,
+    personalCount: personal.length + handed.length + inFront.length,
     chatChannels,
     chatCount,
   });
   return { subject, preheader, sections, moreCount: cap.moreCount() };
+}
+
+// One digest line for a card an escalation reached: the role's face is its
+// handle in bold, the sentence says whether the person answers the role or
+// must act inside the session, and the excerpt is the line the role wrote.
+export async function escalationDigestEntry(
+  ctx: { db: any },
+  siteUrl: string,
+  conv: any,
+  message: string,
+): Promise<DigestEntry | null> {
+  const direct = !!conv.escalated_by_role;
+  const roleId = direct ? conv.escalated_by_role.role_id : conv.standing_role_id;
+  const role = roleId ? await ctx.db.get(roleId) : null;
+  if (!role) return null;
+  const label = (conv.title ?? "").trim() || conv.short_id || "a session";
+  return {
+    title: direct ? `**@${role.handle}** put "${label}" in front of you` : `**@${role.handle}** needs you`,
+    excerpt: message.length > 240 ? `${message.slice(0, 240)}…` : message,
+    url: entityUrl(siteUrl, { conversation_id: conv._id.toString() }),
+    linkLabel: direct ? "Open the session" : "Answer the role",
+  };
 }
 
 // ---------------------------------------------------------------------------

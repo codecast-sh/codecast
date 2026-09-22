@@ -164,7 +164,7 @@ export function resolveSessionAuthor(
   const actingId = session.acting_user_id ?? conv?.acting_user_id;
   if (actingId) {
     const bot = teamMembers?.find((x) => x && x._id === actingId);
-    if (bot) return { name: bot.name || bot.email || "Anchor", avatar: bot.image || bot.github_avatar_url };
+    if (bot) return { name: bot.name || bot.email || "Workspace agent", avatar: bot.image || bot.github_avatar_url };
     if (session.author_name) return { name: session.author_name, avatar: session.author_avatar ?? null };
   }
   // Authorship, not steering rights: a second-party-owned session is "mine"

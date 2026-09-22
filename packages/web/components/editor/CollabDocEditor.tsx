@@ -6,6 +6,7 @@ import type { ComposeEditorHandle } from "./ComposeEditor";
 import { AppLoader } from "../AppLoader";
 import { useTiptapSync } from "@convex-dev/prosemirror-sync/tiptap";
 import { useQuery, useMutation, useConvex } from "convex/react";
+import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { toast } from "sonner";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import {
@@ -371,7 +372,9 @@ function CollabDocEditorLive({
   const editorClass = `doc-editor ${titleFirst ? "doc-editor--title-first " : ""}${className}`;
   const syncApi = api.docSync as unknown as SyncApi;
   const sync = useTiptapSync(syncApi, docId);
-  const presences = useQuery(api.docSync.getPresence, { doc_id: docId }) || [];
+  // Enrichment only (see useDocPresence): a NOT_FOUND here must not unmount
+  // the editor, which reads the doc itself and reports that on its own.
+  const presences = useQueryNoThrow(api.docSync.getPresence, { doc_id: docId }).data || [];
   const createdRef = useRef(false);
   const extensionsRef = useRef<any[] | null>(null);
 

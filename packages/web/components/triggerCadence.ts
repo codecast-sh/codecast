@@ -21,11 +21,13 @@ export function fmtDuration(ms: number): string {
   return remHours ? `${days}d ${remHours}h` : `${days}d`;
 }
 
-// Absolute wall-clock label: "9:58 PM" today, "Jul 12 9:58 PM" otherwise.
-// Pairs with fmtDuration: countdown answers "how long", this answers "when".
-export function fmtClock(ts: number): string {
+// Absolute wall-clock label: "9:58 PM" on the anchor day (today unless one
+// is given), "Jul 12 9:58 PM" otherwise. Pairs with fmtDuration: countdown
+// answers "how long", this answers "when". A call's thread anchors on the
+// call's own day, so a line from an earlier day says so.
+export function fmtClock(ts: number, anchor: number = Date.now()): string {
   const d = new Date(ts);
-  const sameDay = new Date().toDateString() === d.toDateString();
+  const sameDay = new Date(anchor).toDateString() === d.toDateString();
   const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   if (sameDay) return time;
   return `${d.toLocaleDateString([], { month: "short", day: "numeric" })} ${time}`;

@@ -1247,6 +1247,9 @@ export async function requestNotificationPermission(): Promise<boolean> {
   if (typeof Notification === "undefined") return false;
   if (Notification.permission === "granted") return true;
   if (Notification.permission === "denied") return false;
+  // An embedded webview (an in-app browser, a kiosk shell) can expose the
+  // Notification global with no way to ask.
+  if (typeof Notification.requestPermission !== "function") return false;
   const result = await Notification.requestPermission();
   return result === "granted";
 }
