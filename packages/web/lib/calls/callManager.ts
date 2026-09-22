@@ -260,44 +260,62 @@ function startLevelMeter() {
 
 // ── lifecycle ─────────────────────────────────────────────────────────────
 
+// The room whose seat THIS client stamped as a walkie join. The stamp lives on
+// the server row, and the server sweeps that row when a heartbeat misses the
+// lease (a laptop asleep past 45s while livekit-client quietly reconnects).
+// The recovery join below re-takes the seat, and a re-taken seat without the
+// stamp reads to every third party as a burst that ended: the far side's
+// surface drops from the call back to the strip. So the stamp is remembered
+// here for the life of the seat and re-sent with every re-take.
+let walkieJoinedSeat: string | null = null;
+
 async function controlJoin(roomKey: string, opts?: { walkieJoin?: boolean }) {
   if (!convex) throw new Error("calls not bound yet");
+  if (opts?.walkieJoin) walkieJoinedSeat = roomKey;
   await convex.mutation(api.calls.joinRoom, {
     room_key: roomKey,
     muted: useInboxStore.getState().call.muted,
     languages: localTranscribeLanguages(),
     // Only ever true, never false: the stamp says a conversation started here
     // and nothing takes that back but leaving.
-    ...(opts?.walkieJoin ? { walkie_join: true } : {}),
+    ...(opts?.walkieJoin || walkieJoinedSeat === roomKey ? { walkie_join: true } : {}),
   });
+}
+
+/** One beat of the seat lease: refresh the row, and re-take it when the
+ *  server has swept it. Exported for the seam tests; the app reaches it only
+ *  through the interval `startHeartbeat` arms. */
+export async function heartbeatOnce(roomKey: string): Promise<void> {
+  const { call } = useInboxStore.getState();
+  if (!convex || call.roomKey !== roomKey) return;
+  let res: any;
+  try {
+    res = await convex.mutation(api.calls.heartbeat, {
+      room_key: roomKey,
+      muted: call.muted,
+      camera: call.camera,
+      sharing: call.sharing,
+      languages: localTranscribeLanguages(),
+    });
+  } catch {
+    return;
+  }
+  // ok:false = the server lease-swept our row (laptop slept >45s while
+  // livekit-client quietly reconnected the media). Re-take the seat so
+  // occupancy matches the audible truth; if authorization now fails
+  // (removed from team, session privatized), fall out of the call
+  // entirely rather than haunting it. The re-take carries the walkie
+  // stamp the swept row had (`walkieJoinedSeat`), so a conversation that
+  // survived the sleep is still a conversation to everyone watching.
+  const cur = useInboxStore.getState().call;
+  if (res?.ok === false && cur.roomKey === roomKey && cur.phase === "connected") {
+    await controlJoin(roomKey).catch(() => void leaveCall());
+  }
 }
 
 function startHeartbeat(roomKey: string) {
   stopHeartbeat();
-  heartbeatTimer = setInterval(() => {
-    const { call } = useInboxStore.getState();
-    if (!convex || call.roomKey !== roomKey) return;
-    convex
-      .mutation(api.calls.heartbeat, {
-        room_key: roomKey,
-        muted: call.muted,
-        camera: call.camera,
-        sharing: call.sharing,
-        languages: localTranscribeLanguages(),
-      })
-      .then((res: any) => {
-        // ok:false = the server lease-swept our row (laptop slept >45s while
-        // livekit-client quietly reconnected the media). Re-take the seat so
-        // occupancy matches the audible truth; if authorization now fails
-        // (removed from team, session privatized), fall out of the call
-        // entirely rather than haunting it.
-        const cur = useInboxStore.getState().call;
-        if (res?.ok === false && cur.roomKey === roomKey && cur.phase === "connected") {
-          controlJoin(roomKey).catch(() => void leaveCall());
-        }
-      })
-      .catch(() => {});
-  }, CALL_HEARTBEAT_MS);
+  heartbeatTimer = setInterval(() => void heartbeatOnce(roomKey), CALL_HEARTBEAT_MS);
 }
 
 function stopHeartbeat() {
@@ -326,8 +344,41 @@ function detachAudio(track: RemoteTrack, participantId: string) {
   }
 }
 
+/** Is this LiveKit identity (a user id, per `mintAccessToken`) a live seat in
+ *  the room's occupancy as the store holds it? Prewarm rows never reach the
+ *  store: `getRoomOccupancy` projects `liveMembers`, which drops them. */
+function seatedInRoom(roomKey: string, identity: string): boolean {
+  const rows = useInboxStore.getState().callOccupancy?.[roomKey] ?? [];
+  return rows.some((m: any) => String(m?.user_id ?? "") === identity);
+}
+
+// Participants connected ahead of their seat row, owed a join chime when it
+// lands. Cleared with the media: a seat that never came is no arrival.
+const joinChimePending = new Set<string>();
+let seatSoundWatch: (() => void) | null = null;
+
+function watchSeatSounds(roomKey: string) {
+  if (seatSoundWatch) return;
+  seatSoundWatch = useInboxStore.subscribe((st: any, prev: any) => {
+    if (st.callOccupancy?.[roomKey] === prev.callOccupancy?.[roomKey]) return;
+    for (const identity of [...joinChimePending]) {
+      if (!seatedInRoom(roomKey, identity)) continue;
+      joinChimePending.delete(identity);
+      soundCallJoin();
+    }
+    if (joinChimePending.size === 0) stopSeatSoundWatch();
+  });
+}
+
+function stopSeatSoundWatch() {
+  seatSoundWatch?.();
+  seatSoundWatch = null;
+  joinChimePending.clear();
+}
+
 function teardownMedia() {
   stopHeartbeat();
+  stopSeatSoundWatch();
   stopLevelMeter();
   for (const el of audioEls.values()) el.remove();
   audioEls.clear();
@@ -497,6 +548,9 @@ async function joinCallHere(roomKey: string, opts?: JoinOpts): Promise<void> {
     return;
   }
   deliberateRoomKey = opts?.intent === "deliberate" ? roomKey : null;
+  // A fresh seat starts unstamped; `controlJoin` records the stamp if this
+  // join carries one.
+  walkieJoinedSeat = null;
   // A deliberate join starts the way the person's last call ended: mic on
   // unless they muted once and never unmuted (lib/calls/joinPrefs).
   if (opts?.intent === "deliberate") setCall({ muted: !readJoinPrefs().micOn });
@@ -569,12 +623,25 @@ async function joinCallHere(roomKey: string, opts?: JoinOpts): Promise<void> {
     r.on(RoomEvent.ActiveSpeakersChanged, (speakers: Participant[]) => {
       setCall({ speaking: speakers.map((s) => s.identity) });
     });
-    r.on(RoomEvent.ParticipantConnected, () => {
-      soundCallJoin();
+    // THE SOUNDS FOLLOW THE ROSTER, NOT THE SFU. A prewarm (roomPrewarm) is a
+    // media connection with no seat behind it: a teammate who opened this DM
+    // or rested on a face is in the LiveKit room, and nobody's screen says a
+    // person is here. Chiming for that connection announces an arrival that
+    // did not happen. So a participant earns the join chime when their SEAT
+    // shows in the occupancy this client already subscribes to: now, if the
+    // row landed first, or the moment it lands (`watchSeatSounds`), which is
+    // also the moment a prewarm becomes a real join. One who leaves without
+    // ever having been seated leaves in silence.
+    r.on(RoomEvent.ParticipantConnected, (p: RemoteParticipant) => {
+      if (seatedInRoom(roomKey, p.identity)) soundCallJoin();
+      else {
+        joinChimePending.add(p.identity);
+        watchSeatSounds(roomKey);
+      }
       rebuildTiles();
     });
-    r.on(RoomEvent.ParticipantDisconnected, () => {
-      soundCallLeave();
+    r.on(RoomEvent.ParticipantDisconnected, (p: RemoteParticipant) => {
+      if (!joinChimePending.delete(p.identity)) soundCallLeave();
       rebuildTiles();
     });
     r.on(RoomEvent.TrackSubscribed, (track, _pub, participant: RemoteParticipant) => {
@@ -635,13 +702,19 @@ async function joinCallHere(roomKey: string, opts?: JoinOpts): Promise<void> {
       // livekit-client's own retries): reflect reality and free the row.
       void leaveCall();
     });
+    // A RECONNECT IS STILL THE CALL. livekit-client's `Reconnecting` is the
+    // media plane repairing itself under a seat that never moved: the row is
+    // ours, the heartbeat keeps it, and the people on the far side hear a
+    // pause, not a hang-up. Reading it as "connecting" made every consumer of
+    // the phase (the desktop's in-huddle report, the seated room the knocks
+    // and the auto-scribe watch, the surface lookups) say the call had ended
+    // and then that it had begun again. Only a `Disconnected` that livekit
+    // gave up on ends it, above.
     r.on(RoomEvent.ConnectionStateChanged, (state: ConnectionState) => {
       const call = useInboxStore.getState().call;
       if (call.roomKey !== roomKey) return;
       if (state === ConnectionState.Connected && call.phase !== "connected") {
         setCall({ phase: "connected" });
-      } else if (state === ConnectionState.Reconnecting) {
-        setCall({ phase: "connecting" });
       }
     });
 
@@ -774,6 +847,7 @@ export function setCallOutlivesWindow(on: boolean): void {
 async function yieldRoomToOtherWindow(): Promise<void> {
   callGen++;
   deliberateRoomKey = null;
+  walkieJoinedSeat = null;
   callOutlivesWindow = false;
   await stopScribe({ keepLive: true });
   teardownMedia();
@@ -797,12 +871,23 @@ async function leaveCallHere(): Promise<void> {
   const roomKey = currentRoomKey ?? useInboxStore.getState().call.roomKey;
   callGen++;
   deliberateRoomKey = null;
+  walkieJoinedSeat = null;
+  // THE SEAT GOES FIRST. Hanging up is a fact about the person, and the row is
+  // how everyone else learns it; the scribe's local teardown below is this
+  // client's own housekeeping and can take a second or more to settle. Sent
+  // ahead of it, so a teammate's row of faces drops ours the moment we press
+  // End rather than after our pipes close.
+  //
   // Hanging up releases our scribe run but never ENDS the transcript: the
   // huddle may go on without us, and the people still in it are the record.
   // Somebody seated adopts the run (transcripts.start, via auto-scribe) once
-  // our seat lease is gone; if we were the last one out, `leaveRoom` below
-  // ends it server-side the moment the room empties, and the orphan sweep
-  // backstops a tab that never got to say goodbye.
+  // our seat lease is gone; if we were the last one out, `leaveRoom` ends it
+  // server-side the moment the room empties, and the orphan sweep backstops a
+  // tab that never got to say goodbye.
+  const left =
+    convex && roomKey
+      ? convex.mutation(api.calls.leaveRoom, { room_key: roomKey }).catch(() => {})
+      : null;
   await stopScribe({ keepLive: true });
   teardownMedia();
   setCall({
@@ -816,9 +901,7 @@ async function leaveCallHere(): Promise<void> {
     micDenied: false,
   });
   soundCallLeave();
-  if (convex && roomKey) {
-    await convex.mutation(api.calls.leaveRoom, { room_key: roomKey }).catch(() => {});
-  }
+  if (left) await left;
 }
 
 /**

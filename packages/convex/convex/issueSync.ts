@@ -197,8 +197,11 @@ function externalFor(
     field_ts: prev?.field_ts,
     assignee_label: issue.assignee_label,
     state_name: issue.state_name,
-    // A successful inbound proves the connection works, so a stale error goes.
-    last_error: undefined,
+    // The error is the last PUSH's verdict, and only the next push may clear
+    // it (stampPushed): an inbound proves the provider can reach us, not that
+    // our write reached the provider, and wiping it here would both hide the
+    // failure and cost a write on every reconcile that saw the issue.
+    last_error: prev?.last_error,
   };
 }
 
@@ -590,9 +593,11 @@ async function updateTaskFromIssue(
   const assigneeId = await resolveProviderUser(ctx, issue, teamId);
 
   // A deletion is not a field edit: the row stays (it carries our comments,
-  // sessions and history) and only its status moves (S6).
+  // sessions and history) and only its status moves (S6). A task already
+  // closed keeps its verdict: trashing a finished issue does not un-finish
+  // the work, it only takes the twin away.
   const diff: TaskDiff = issue.deleted
-    ? (task.status === "dropped" ? {} : { status: "dropped" })
+    ? (task.status === "dropped" || task.status === "done" ? {} : { status: "dropped" })
     : diffAgainstTask(task, issue, { assignee: assigneeId ? String(assigneeId) : undefined });
 
   const external = externalFor(issue, source, now, task.external);
@@ -921,11 +926,14 @@ export const pushTask = internalAction({
         await linearApi.updateIssue(token, ext.id, input);
         if (refused.length > 0) {
           // The rest of the push landed; the task says which labels did not
-          // and why, instead of the whole write dying on one label.
+          // and why, instead of the whole write dying on one label. The
+          // provider's set wins on the next inbound (S3), so the history row
+          // is what remains of the label a person put on and Linear refused.
           await ctx.runMutation(internal.issueSync.stampPushed, {
             task_id: args.task_id,
             fields: args.fields,
             error: `Linear kept these labels off ${ext.identifier}: ${refused.join(", ")}`.slice(0, 500),
+            refused_labels: refused,
           });
           return { pushed: args.fields, error: refused.join(", ") };
         }
@@ -1004,7 +1012,13 @@ async function resolveLinearLabelIds(
  * already in flight lose to the write it crossed.
  */
 export const stampPushed = internalMutation({
-  args: { task_id: v.id("tasks"), fields: v.array(v.string()), error: v.optional(v.string()) },
+  args: {
+    task_id: v.id("tasks"),
+    fields: v.array(v.string()),
+    error: v.optional(v.string()),
+    /** Labels the provider would not take; recorded in the task's history. */
+    refused_labels: v.optional(v.array(v.string())),
+  },
   handler: async (ctx, args) => {
     const task = await ctx.db.get(args.task_id);
     if (!task?.external) return;
@@ -1014,6 +1028,9 @@ export const stampPushed = internalMutation({
     await ctx.db.patch(args.task_id, {
       external: { ...task.external, field_ts, synced_at: now, last_error: args.error },
     });
+    if (args.refused_labels?.length) {
+      await history(ctx, args.task_id, "sync_refused", "labels", undefined, args.refused_labels.join(", "));
+    }
   },
 });
 

@@ -10,7 +10,6 @@ import {
   ImagePlus,
   ListChecks,
   Sparkles,
-  X,
   type LucideIcon,
 } from "lucide-react";
 import { useMutation } from "convex/react";
@@ -29,7 +28,7 @@ import { navigateMainWindow } from "../../lib/desktop";
 import { settleComposerAttachments } from "../../lib/draftImages";
 import { getRoom, startTranscribing } from "../../lib/calls/callManager";
 import { getScribeStatus, subscribeScribe } from "../../lib/calls/transcription";
-import { findSessionRow } from "../../lib/calls/findSessionRow";
+import { agentRoomName, findSessionRow } from "../../lib/calls/findSessionRow";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useConversationFileDrop } from "../../hooks/useConversationFileDrop";
 import { AgentTypeIcon } from "../AgentTypeIcon";
@@ -42,7 +41,9 @@ import { pageShareUrl } from "../../lib/publishedPageUrls";
 import type { ChatAttachment } from "../../store/chatSlice";
 import { fmtClock as fmtWallClock, fmtDuration } from "../triggerCadence";
 import { Avatar } from "./Avatar";
-import { FeedChip, NEW_AGENT_NAME } from "./FeedChip";
+import { FeedChip } from "./FeedChip";
+import { identitySig } from "../../lib/sessionIdentity";
+import { SessionFace } from "../identity";
 import { TranscribeSwitch } from "./TranscribePanel";
 import { TranscriptTurnList } from "./TranscriptTurns";
 import { openFeedTargetPicker, useAddLiveFeed, useRemoveLiveFeed, type FeedTarget } from "./useCallFeed";
@@ -136,7 +137,6 @@ export function RoomThread({
   surface,
   seated,
   panel,
-  onClose,
   selection,
   className,
 }: {
@@ -152,7 +152,6 @@ export function RoomThread({
   seated: boolean;
   /** The desktop call window: links to a session open in the main window. */
   panel?: boolean;
-  onClose?: () => void;
   selection?: RoomThreadSelection;
   className?: string;
 }) {
@@ -260,7 +259,7 @@ export function RoomThread({
   const working = agents.filter((a) => a.working);
   const ownRoomId = sessionRoomConversationId(roomKey);
 
-  const addFeed = useAddLiveFeed({ roomKey, liveTranscriptId, getRoom });
+  const addFeed = useAddLiveFeed({ roomKey, liveTranscriptId, routes, getRoom });
   const removeFeed = useRemoveLiveFeed(liveTranscriptId);
   // addRoute/startScribe can refuse (room authorization, ended transcript);
   // a silent close-and-nothing is the one wrong outcome.
@@ -324,12 +323,16 @@ export function RoomThread({
   };
 
   const composer = !recording;
-  // The rail's box holds about 26 characters a line, so the stage keeps the
-  // placeholder to the bare words (the chips above say who hears); the page
-  // has room to name the agent.
+  // The stage's box holds about 45 characters a line: room for the promise
+  // that an agent hears a typed line, not for a long title; the page has
+  // room to name the agent.
   const placeholder =
     surface === "stage"
-      ? "Message the room"
+      ? agents.length === 1
+        ? "Message the room · the agent hears you"
+        : agents.length > 1
+          ? "Message the room · the agents hear you"
+          : "Message the room"
       : agents.length === 1
         ? `Message the room · ${clip(agents[0].name, 22)} hears you`
         : agents.length > 1
@@ -353,11 +356,12 @@ export function RoomThread({
   // ever seen agents come and go is still empty.
   const empty = passages.length === 0 && chatRows.every((r) => r.event);
   const showChips = routes.length > 0;
-  const showDensity = !recording;
+  // Nothing to fold, open or hide until someone has spoken.
+  const showDensity = !recording && passages.length > 0;
   const showSwitch = seated && !recording;
-  const showHead = showChips || canAdd || showDensity || showSwitch || !!onClose;
+  const showHead = showChips || canAdd || showDensity || showSwitch;
   // Only the density control: no band, no rule, it sits with the recap row.
-  const quietHead = showHead && !showChips && !canAdd && !showSwitch && !onClose;
+  const quietHead = showHead && !showChips && !canAdd && !showSwitch;
   // The empty card leads while nobody is in the room; the header's own Add
   // button would be the same call twice, so it steps aside for the card.
   const emptyCard = empty && !recording && !ended && agents.length === 0;
@@ -389,11 +393,15 @@ export function RoomThread({
           much of the spoken words to show, and the transcription switch.
           Nothing to show, no band. */}
       {showHead && (
-        <div className={`rt-head${onClose ? " rt-head-closable" : ""}${quietHead ? " rt-head-quiet" : ""}`}>
+        <div className={`rt-head${quietHead ? " rt-head-quiet" : ""}`}>
           {routes.map((r) => {
             const agent = r.kind === "session" ? roster.find((a) => a.target === r.target) : null;
             return (
-              <span key={`${r.kind}:${r.target}`} className="rt-chip">
+              <span
+                key={`${r.kind}:${r.target}`}
+                className="rt-chip"
+                title={agent ? `An agent in the room: it ${HEARS}. The arrow opens its session.` : undefined}
+              >
                 <FeedChip
                   route={r}
                   label={agent?.name}
@@ -425,11 +433,6 @@ export function RoomThread({
           <span className="rt-head-right">
             {showDensity && <DensityControl value={density} onChange={setDensity} />}
             {showSwitch && <TranscribeSwitch live={transcribing} />}
-            {onClose && (
-              <button type="button" onClick={onClose} className="rt-close" title="Close the thread">
-                <X className="h-3.5 w-3.5" />
-              </button>
-            )}
           </span>
         </div>
       )}
@@ -448,7 +451,9 @@ export function RoomThread({
       <div ref={scrollRef} onScroll={onScroll} className="rt-list min-h-0 flex-1 select-text overflow-y-auto">
         {call?.summary ? (
           <RecapCard summary={call.summary} items={call.action_items ?? []} live={!ended} />
-        ) : ended && !recording ? (
+        ) : ended && !recording && !(empty && call.summary_status === "skipped") ? (
+          // An empty call says "Nothing was said." below; "Too short to
+          // summarize." would be the same fact on a second line.
           <p className="rt-note">
             {call.summary_status === "skipped"
               ? "Too short to summarize."
@@ -478,12 +483,11 @@ export function RoomThread({
             <p className="rt-note">Nothing was said.</p>
           ) : !emptyCard ? null : (
             <div className="rt-empty">
-              <Sparkles className="h-4 w-4 text-sol-violet" />
               <p>
                 {switchedOff
-                  ? "Transcription is off for this huddle. Add an agent, or switch it back on, and the words land here."
+                  ? "Transcription is off for this huddle. Add an agent, or switch it back on, and what people say shows up here."
                   : transcribing
-                    ? `Listening. Words appear here as people speak. Add an agent and it ${HEARS}.`
+                    ? `Listening. What people say shows up here. Add an agent and it ${HEARS}.`
                     : `Add an agent to the room. It ${HEARS}.`}
               </p>
               <div className="rt-empty-actions">
@@ -494,9 +498,9 @@ export function RoomThread({
                   </button>
                 )}
                 {!transcribing && seated && (
-                  <button type="button" onClick={transcribeAlone} className="rt-btn rt-btn-green" title="Transcribe the huddle with no agent: the words land in this thread">
+                  <button type="button" onClick={transcribeAlone} className="rt-btn rt-btn-green" title="Transcribe the huddle with no agent: what people say shows up in this thread">
                     <Captions className="h-3.5 w-3.5" />
-                    Transcribe only
+                    Transcribe without one
                   </button>
                 )}
               </div>
@@ -569,9 +573,13 @@ export function RoomThread({
         )}
         {working.map((a) => (
           <div key={`working-${a.id}`} className="rt-working">
-            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-sol-violet/15">
-              <AgentTypeIcon agentType={a.agentType} className="h-3 w-3" />
-            </span>
+            {a.row ? (
+              <SessionFace row={a.row} size={20} className="shrink-0" />
+            ) : (
+              <span className="flex h-5 w-5 items-center justify-center rounded-full bg-sol-violet/15">
+                <AgentTypeIcon agentType={a.agentType} className="h-3 w-3" />
+              </span>
+            )}
             <span className="truncate">{a.name} is working</span>
             <WorkingDots />
           </div>
@@ -685,7 +693,7 @@ function PassageBlock({
             ))
           )}
         </span>
-        <span className="rt-passage-when">
+        <span className="rt-when">
           {fmtClock(passage.t0)} · {fmtDuration(Math.max(1000, passage.t1 - passage.t0))} · {n} {units}
           {n === 1 ? "" : "s"}
         </span>
@@ -782,8 +790,8 @@ function EventLine({
   const actor = me && row.user_id === me ? "You" : firstName(row.user_name);
   const agent = row.agent;
   const name = agent ? (
-    <button type="button" className="rt-event-agent" onClick={() => onOpen(agent.conversation_id)} title="Open the agent's session">
-      {agent.title}
+    <button type="button" className="rt-event-agent" onClick={() => onOpen(agent.conversation_id)} title={`Open ${agent.title}`}>
+      {agent.name ?? agent.title}
     </button>
   ) : (
     <span className="rt-event-agent">an agent</span>
@@ -791,12 +799,14 @@ function EventLine({
   // The room's own agent is not somebody's guest: it was in the room before
   // anyone, so the line says it is here rather than who brought it.
   const ownRoom = !!agent && !!ownRoomId && (agent.conversation_id === ownRoomId || agent.short_id === ownRoomId);
-  const spoken = row.event === "transcribe_on" || row.event === "transcribe_off";
   const Glyph = row.event === "transcribe_off" ? CaptionsOff : row.event === "transcribe_on" ? Captions : Sparkles;
+  // On and joined keep their accents; off and left go dim, as an ended thing should.
+  const tone =
+    row.event === "transcribe_on" ? "text-sol-green" : row.event === "agent_joined" ? "text-sol-violet" : "text-sol-text-dim";
   return (
     <div className="rt-event" role="note">
       <span className="rt-event-glyph flex w-5 shrink-0 justify-center" aria-hidden="true">
-        <Glyph className={`h-3 w-3 ${spoken ? "text-sol-green" : "text-sol-violet"}`} />
+        <Glyph className={`h-3 w-3 ${tone}`} />
       </span>
       <span>
         {row.event === "agent_joined" ? (
@@ -819,7 +829,7 @@ function EventLine({
             {actor} switched transcription {row.event === "transcribe_on" ? "on" : "off"}
           </>
         )}
-        <span className="rt-event-when">{fmtWallClock(row.at, dayOf)}</span>
+        <span className="rt-when rt-event-when">{fmtWallClock(row.at, dayOf)}</span>
       </span>
     </div>
   );
@@ -858,9 +868,18 @@ function ChatLine({
       <span className="w-5 shrink-0 pt-0.5">
         {!sameAuthor &&
           (m.agent ? (
-            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-sol-violet/15">
-              <AgentTypeIcon agentType={m.agent.agent_type} className="h-3 w-3" />
-            </span>
+            // The agent's face (session-characters.md S3): the character the
+            // room addresses, the same face its session wears everywhere.
+            <SessionFace
+              row={{
+                _id: m.agent.conversation_id,
+                title: m.agent.title,
+                character_avatar: m.agent.character_avatar ?? null,
+                character_name: m.agent.character_name ?? null,
+              }}
+              size={20}
+              className="shrink-0"
+            />
           ) : (
             <Avatar m={{ user_image: m.user_image, user_name: m.user_name }} size={20} />
           ))}
@@ -872,15 +891,15 @@ function ChatLine({
               <button
                 type="button"
                 onClick={() => onOpen(m.agent!.conversation_id)}
-                className="max-w-[200px] truncate text-[11px] font-medium text-sol-violet hover:underline"
-                title="Open the agent's session"
+                className="max-w-[200px] truncate text-[11.5px] font-semibold text-sol-violet hover:underline"
+                title={`Open ${m.agent.title}`}
               >
-                {m.agent.title}
+                {m.agent.name ?? m.agent.title}
               </button>
             ) : (
-              <span className="text-[11px] font-medium text-sol-text">{m.mine ? "you" : firstName(m.user_name)}</span>
+              <span className="text-[11.5px] font-semibold text-sol-text">{m.mine ? "you" : firstName(m.user_name)}</span>
             )}
-            <span className="text-[9.5px] text-sol-text-muted">{fmtWallClock(m.at, dayOf)}</span>
+            <span className="rt-when">{fmtWallClock(m.at, dayOf)}</span>
           </div>
         )}
         {m.text ? (
@@ -986,9 +1005,12 @@ type AgentInRoom = {
   id: string;
   target: string;
   addedBy: string;
+  /** What the room calls it: its character (agentRoomName). */
   name: string;
   agentType: string;
   working: boolean;
+  /** The store row, for its face; null until the row lands. */
+  row: any | null;
 };
 
 // The sessions the live transcript feeds, as participants: name, kind, and
@@ -1003,7 +1025,7 @@ function useAgentsInRoom(routes: RoomThreadRoute[]): AgentInRoom[] {
       targets
         .map((r) => {
           const row = findSessionRow(st, r.target);
-          return row ? `${row._id}:${row.title ?? ""}:${row.agent_type ?? ""}:${row.agent_status ?? ""}` : r.target;
+          return row ? `${identitySig(row)}:${row.title ?? ""}:${row.agent_type ?? ""}:${row.agent_status ?? ""}` : r.target;
         })
         .join("|"),
   ]);
@@ -1015,9 +1037,10 @@ function useAgentsInRoom(routes: RoomThreadRoute[]): AgentInRoom[] {
           id: String(row?._id ?? r.target),
           target: r.target,
           addedBy: r.added_by,
-          name: (row?.title || NEW_AGENT_NAME).slice(0, 40),
+          name: (row ? agentRoomName(row) : "new agent").slice(0, 40),
           agentType: row?.agent_type ?? "claude_code",
           working: ACTIVE_AGENT_STATUSES.has(row?.agent_status ?? ""),
+          row,
         };
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sig stands in for the routes list

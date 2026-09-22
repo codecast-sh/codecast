@@ -277,6 +277,8 @@ export type ChatRailRow = {
     created_at: number;
     preview: string;
     thread_root_id?: string;
+    /** A huddle's digest (convex chat.ts railFor). */
+    call?: true;
   } | null;
   /** DM rooms only: the newest message from the other person (null when the
    *  viewer alone has spoken). Absent on channels. */

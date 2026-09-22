@@ -152,7 +152,7 @@ export function standingLabel(usage: CcUsage | undefined | null, now: number): s
  * one. Eligible, just unproven. Stable for ties. Reads usageStanding, the
  * same standing the bars render, so the top pick is the one a person would
  * point to on the meters. */
-export function rankByHeadroom<P extends { usage?: CcUsage | null }>(profiles: P[], now: number): P[] {
+export function rankByHeadroom<P extends { usage?: CcUsage | null }>(profiles: readonly P[], now: number): P[] {
   return [...profiles].sort((a, b) => headroomScore(a.usage, now) - headroomScore(b.usage, now));
 }
 
@@ -174,7 +174,7 @@ export function headroomScore(usage: CcUsage | undefined | null, now: number): n
  * headroom" is the set auto-switch would choose from. */
 export function fallbackProfiles<
   P extends { email?: string; usage?: CcUsage | null; login_expired_at?: number | null },
->(profiles: P[], activeEmail: string | undefined, now: number): P[] {
+>(profiles: readonly P[], activeEmail: string | undefined, now: number): P[] {
   return rankByHeadroom(
     profiles.filter(
       (p) => p.email && p.email !== activeEmail && !p.login_expired_at && !isUsageExhausted(p.usage, now),
@@ -432,25 +432,77 @@ export function restartShareOfRemaining(
   return reloadCostTokens(contextTokens) / remaining;
 }
 
+type ProposalDevice = {
+  online?: boolean;
+  is_remote?: boolean;
+  active_email?: string;
+  // Either spelling: the server row uses cc_*, the web roster uses the short names.
+  cc_recovery_ask?: boolean | null;
+  cc_auto_switch?: boolean | null;
+  cc_auto_continue?: boolean | null;
+  ask_first?: boolean | null;
+  auto_switch?: boolean | null;
+  auto_continue?: boolean | null;
+  profiles?: ReadonlyArray<{
+    name?: string;
+    email?: string;
+    usage?: CcUsage | null;
+    login_expired_at?: number | null;
+  }>;
+  auto_switch_state?: { last_decision?: RecoveryDecision | null } | null;
+};
+
+function recoveryFlagsOf(d: ProposalDevice): {
+  cc_recovery_ask?: boolean | null;
+  cc_auto_switch?: boolean | null;
+  cc_auto_continue?: boolean | null;
+} | null {
+  const ask = d.cc_recovery_ask ?? d.ask_first;
+  const auto = d.cc_auto_switch ?? d.auto_switch;
+  const cont = d.cc_auto_continue ?? d.auto_continue;
+  if (ask === undefined && auto === undefined && cont === undefined) return null;
+  return { cc_recovery_ask: ask, cc_auto_switch: auto, cc_auto_continue: cont };
+}
+
 /** The account switch a machine has recommended and is waiting on, if any.
  * Only an online primary machine can carry one out, so only those count; with
  * several, the newest ask wins. The one reading shared by the blocked sessions
- * banner and the per-session park card, so both surface the same question. */
+ * banner and the per-session park card, so both surface the same question.
+ *
+ * A machine that is not in ask mode does not surface a stored ask: auto mode
+ * switches on its own, and a proposal left over from an earlier setting would
+ * ask for an approval that will never be the thing that happens.
+ *
+ * When `now` is passed and the device carries its profiles, the target is the
+ * account a fresh ranking would pick, and the percent is that account's live
+ * standing. The stored sentence is a snapshot; the meters move, and a frozen
+ * "56% used" was still on screen after that account's week had pegged. */
 export function pendingProposal(
-  devices:
-    | ReadonlyArray<{
-        online?: boolean;
-        is_remote?: boolean;
-        auto_switch_state?: { last_decision?: RecoveryDecision | null } | null;
-      }>
-    | undefined
-    | null,
+  devices: ReadonlyArray<ProposalDevice> | undefined | null,
+  now?: number,
 ): RecoveryDecision | null {
   let newest: RecoveryDecision | null = null;
   for (const d of devices ?? []) {
     if (d.online === false || d.is_remote) continue;
-    const decision = d.auto_switch_state?.last_decision;
-    if (decision?.kind === "propose" && (!newest || decision.at > newest.at)) newest = decision;
+    const stored = d.auto_switch_state?.last_decision;
+    if (stored?.kind !== "propose") continue;
+    const flags = recoveryFlagsOf(d);
+    if (flags && recoveryModeOf(flags) !== "ask") continue;
+    let decision = stored;
+    if (now != null && d.profiles) {
+      const best = fallbackProfiles(d.profiles, d.active_email, now)[0];
+      // Nothing left to recommend: a spent or signed-out target is not an ask.
+      if (!best?.email) continue;
+      const pct = usageStanding(best.usage, now).percent;
+      decision = {
+        ...stored,
+        target_name: best.name ?? best.email,
+        target_email: best.email,
+        target_percent: pct ?? undefined,
+        from_email: stored.from_email ?? d.active_email,
+      };
+    }
+    if (!newest || decision.at > newest.at) newest = decision;
   }
   return newest;
 }
