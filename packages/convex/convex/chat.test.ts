@@ -1790,7 +1790,7 @@ describe("replyAsAnchor", () => {
     const ctx = context(ALICE, anchorSeed("thinking"));
     await expect(call(replyAsAnchor, ctx, {
       message_id: "placeholder", content: "Checked it, the migration is safe to run",
-    })).rejects.toThrow("Only the anchor's host");
+    })).rejects.toThrow("Only the agent's host");
     expect(messagesIn(ctx)[0].content).toBe("");
     expect(messagesIn(ctx)[0].agent_status).toBe("thinking");
   });
@@ -1822,7 +1822,7 @@ describe("replyAsAnchor", () => {
     seed.chat_messages[0].user_id = ALICE;
     const ctx = context(BOB, seed);
     await expect(call(replyAsAnchor, ctx, { message_id: "placeholder", content: "hi" }))
-      .rejects.toThrow("does not belong to this anchor");
+      .rejects.toThrow("does not belong to this agent");
   });
 
   test("an empty answer is refused; an empty failure report is not", async () => {
