@@ -4,10 +4,10 @@
   "private": true,
   "license": "MIT",
   "scripts": {
-    "dev": "convex dev",
+    "dev": "bun scripts/gated-push.ts",
     "deploy": "convex deploy",
     "typecheck": "tsc --noEmit -p convex/tsconfig.json",
-    "test": "bun test convex/"
+    "test": "bun test convex/ scripts/"
   },
   "dependencies": {
     "@auth/core": "^0.37.2",
