@@ -1,7 +1,7 @@
 "use client";
 
-// In a conversation header: when the open conversation IS an anchor's, say
-// which anchor — the scope pill beside the title. Reads the store, so it works
+// In a conversation header: when the open conversation IS the workspace
+// agent's, say which workspace — the pill beside the title. Reads the store, so it works
 // on the stage, in the slide-over and on the /anchor page alike, and costs a
 // one-string subscription for every other conversation.
 
@@ -17,7 +17,7 @@ export function AnchorHeaderPill({ conversationId }: { conversationId: string })
   const identity = useAnchorIdentity(anchorId);
   if (!anchorId) return null;
   return (
-    <span className="inline-flex items-center gap-1 flex-shrink-0" title="This is an anchor — a standing agent member">
+    <span className="inline-flex items-center gap-1 flex-shrink-0" title="The workspace's agent">
       <AnchorGlyph className="w-3.5 h-3.5 text-sol-cyan" />
       {identity && <AnchorScopePill anchor={identity} />}
     </span>
