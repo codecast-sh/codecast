@@ -451,7 +451,7 @@ function CastDecideBlock({ decide, rawCmd, output, isError, conversationId }: { 
 
 
   return (
-    <div className="my-1">
+    <div data-cc-decide className="my-1">
       <div
         className="flex items-center gap-1.5 text-xs cursor-pointer group flex-wrap"
         onClick={() => setExpanded(!expanded)}
