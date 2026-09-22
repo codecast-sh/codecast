@@ -5865,6 +5865,16 @@ function stripImageRef(s: string): string {
   return s.replace(/\[Image[:\s][^\]]*\]/gi, "").trim();
 }
 
+// The newest message the view would render: the conversation view sorts the
+// server tail and the unconfirmed pending lines together by timestamp, so the
+// last thing on screen is the newer of the two tails.
+function lastTimelineMessage(draft: Draft, convId: string): Message | undefined {
+  const server = draft.messages[convId]?.at(-1);
+  const pending = draft.pendingMessages[convId]?.findLast((m) => !m._isLocalQueue && !m._isFailed);
+  if (!server || !pending) return server ?? pending;
+  return pending.timestamp >= server.timestamp ? pending : server;
+}
+
 function appendOptimisticMessage(draft: Draft, convId: string, content: string, images?: OptimisticImage[], clientId?: string): string {
   // A caller-supplied clientId lets a DIFFERENT window (the compose popup) seed
   // an optimistic bubble in this window that still dedupes against the server
@@ -9344,7 +9354,11 @@ const inboxStoreConfig = (set: any, get: any) => ({
         session.agent_status = "idle";
         session.is_idle = true;
       }
-      if (session || this.conversations[convId]) {
+      // One line per interruption, not per press. A second Escape on a turn
+      // that already ended in "user interrupted" (a server echo or the line
+      // this window painted moments ago) still reaches the daemon, which
+      // judges it, but paints nothing: the conversation already ends there.
+      if ((session || this.conversations[convId]) && !isInterruptControlMessage(lastTimelineMessage(this, convId)?.content)) {
         appendOptimisticMessage(this, convId, agentType === "codex" ? "<turn_aborted>" : "[Request interrupted by user]");
       }
     }

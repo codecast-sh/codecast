@@ -2373,6 +2373,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       >
         <div className="px-4 pt-3">
           <div className="text-xs font-mono text-sol-text-dim truncate">{pick.title}</div>
+          <PalettePickPreview preview={pick.preview} />
         </div>
         <button
           type="button"
@@ -2385,7 +2386,6 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           {tag && <span className="hidden text-[10px] text-sol-text-dim flex-shrink-0 sm:inline">{tag}</span>}
           <span className="text-[11px] text-sol-text-muted flex-shrink-0">change</span>
         </button>
-        {pick.preview && <div className="px-4"><PalettePickPreview preview={pick.preview} /></div>}
         <div className="px-3 pt-3">
           <div
             className="ch-composer ch-composer-flush palette-pick-composer [&_form_button[type=submit]]:hidden"

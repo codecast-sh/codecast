@@ -6519,7 +6519,9 @@ async function executeRemoteCommand(
             try {
               const switchResult = useProfile(profile);
               switched = switchResult.to;
-              log(`[ACCOUNTS] Switched CC account to "${profile}"${switchResult.toEmail ? ` (${switchResult.toEmail})` : ""}${switchResult.from ? `, re-saved outgoing as "${switchResult.from}"` : ""}`);
+              log(
+                `[ACCOUNTS] ${switchResult.keptLive ? "Already on" : "Switched CC account to"} "${profile}"${switchResult.toEmail ? ` (${switchResult.toEmail})` : ""}${switchResult.from ? `, re-saved outgoing as "${switchResult.from}"` : ""}${switchResult.keptLive ? ", kept the live login" : ""}`,
+              );
               // Remotes run on a pushed COPY of this credential — refresh them now
               // instead of waiting for the 30-min loop.
               pushCredentialToRemoteHosts("account_switch").catch(() => {});

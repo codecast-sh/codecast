@@ -10,7 +10,15 @@
  * The one visual rule: SPOKEN is quiet, TYPED is loud. A passage sits behind
  * a thin rule in smaller, dimmer text; a typed line has an avatar, a name and
  * a time in the thread's own text color. The eye tells them apart without a
- * label or a tab. */
+ * label or a tab.
+ *
+ * Type sits on four steps per surface, and the sheet has these numbers and no
+ * others. Stage: body 12.5px/1.5, secondary 11.5px/1.45, label 11.5px/600,
+ * meta 10.5px mono. Page: body 13px/1.55, secondary 12px/1.45, the same label
+ * and meta. Spoken words in an open passage sit one notch under the body of
+ * their surface (12px on the stage, 12.5px on the page). Gaps are on a 4px
+ * unit: 4px between lines of one author, 12px between rows, 16px before a
+ * divider and 4px after it. */
 
 .rt {
   position: relative;
@@ -26,6 +34,11 @@
   flex-shrink: 0;
   padding: 8px 10px 6px;
   border-bottom: 1px solid color-mix(in srgb, var(--sol-text) 7%, transparent);
+}
+/* The page's list sits on a 24px inset; the chips, Add an agent, the words
+   control and the switch share that edge. */
+.rt[data-surface="page"] .rt-head {
+  padding: 8px 24px 6px;
 }
 .rt-chip {
   display: inline-flex;
@@ -53,14 +66,26 @@
 .rt[data-surface="stage"] .rt-chip .truncate {
   max-width: 130px;
 }
+/* The remove x sits beside the agent's name at the top of the rail and acts
+   in one click, so on the stage it shows only when the pointer or focus is
+   on the chip; the page keeps it in view (no pointer is promised there). */
+.rt[data-surface="stage"] .rt-chip .fc-remove {
+  opacity: 0;
+  transition: opacity 120ms;
+}
+.rt[data-surface="stage"] .rt-chip:hover .fc-remove,
+.rt[data-surface="stage"] .rt-chip:focus-within .fc-remove {
+  opacity: 1;
+}
 .rt-add {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   border-radius: 9999px;
   padding: 2px 9px 2px 7px;
-  font-size: 11px;
-  font-weight: 500;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 16px;
   color: var(--sol-violet);
   background: color-mix(in srgb, var(--sol-violet) 12%, transparent);
   transition: background 120ms;
@@ -68,23 +93,10 @@
 .rt-add:hover {
   background: color-mix(in srgb, var(--sol-violet) 22%, transparent);
 }
-.rt-head-closable {
-  padding-right: 34px;
+/* Every pill in the header is 20px tall: 16px of line and a 2px pad. */
+.rt-head [role="switch"] {
+  line-height: 16px;
 }
-.rt-close {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  border-radius: 6px;
-  padding: 4px;
-  color: var(--sol-text-muted);
-  transition: color 120ms, background 120ms;
-}
-.rt-close:hover {
-  color: var(--sol-text);
-  background: color-mix(in srgb, var(--sol-text) 8%, transparent);
-}
-
 /* The density control: a word for what it controls, then the positions. */
 .rt-density-group {
   display: inline-flex;
@@ -122,7 +134,7 @@
   height: 20px;
   padding: 0 8px;
   font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 11px;
+  font-size: 10.5px;
 }
 .rt-seg-btn:hover {
   color: var(--sol-text);
@@ -130,7 +142,7 @@
 .rt-seg-btn[aria-checked="true"] {
   color: var(--sol-text);
   background: color-mix(in srgb, var(--sol-text) 12%, transparent);
-  box-shadow: 0 1px 0 rgb(0 0 0 / 0.2);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--sol-text) 14%, transparent);
 }
 
 /* ── The list ───────────────────────────────────────────────────────────── */
@@ -141,11 +153,54 @@
 .rt[data-surface="page"] .rt-list {
   padding: 12px 24px 80px;
 }
-.rt-note {
-  padding: 6px 2px;
+/* The secondary step: a note, a folded preview, the recap's one line, an
+   event, the working foot and the selection hint. */
+.rt-note,
+.rt-passage-preview,
+.rt-recap-line,
+.rt-event,
+.rt-working,
+.rt-hint {
   font-size: 11.5px;
-  line-height: 1.5;
+  line-height: 1.45;
   color: var(--sol-text-muted);
+}
+.rt[data-surface="page"] .rt-note,
+.rt[data-surface="page"] .rt-passage-preview,
+.rt[data-surface="page"] .rt-recap-line,
+.rt[data-surface="page"] .rt-event,
+.rt[data-surface="page"] .rt-working,
+.rt[data-surface="page"] .rt-hint {
+  font-size: 12px;
+}
+/* The body step: a typed or agent line, the recap's prose and items, the
+   empty card's sentence. */
+.rt-line-body,
+.rt-recap-body > p,
+.rt-recap-items li,
+.rt-empty p {
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.rt[data-surface="page"] .rt-line-body,
+.rt[data-surface="page"] .rt-recap-body > p,
+.rt[data-surface="page"] .rt-recap-items li,
+.rt[data-surface="page"] .rt-empty p {
+  font-size: 13px;
+  line-height: 1.55;
+}
+/* A clock, wherever it sits: a passage head, an event, a typed line. */
+.rt-when {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--sol-text-muted);
+  white-space: nowrap;
+}
+/* A note shares the words column with names and event text (20px glyph
+   column + 8px gap). */
+.rt-note {
+  padding: 4px 0 4px 28px;
 }
 .rt-note-btn {
   color: var(--sol-blue);
@@ -156,15 +211,22 @@
   color: var(--sol-text);
 }
 /* "Earlier in this room" / "This call": a label with a rule, between groups. */
+.rt-divider,
+.rt-recap-items-label {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10.5px;
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+/* 16px above and 4px below: the label sits close to what it heads and far
+   from what it leaves. No padding, so the margins alone set the gaps. */
 .rt-divider {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 6px 0 2px;
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 10.5px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  margin: 16px 0 4px;
+  padding: 0;
   white-space: nowrap;
 }
 .rt-divider::after {
@@ -173,14 +235,14 @@
   height: 1px;
   background: color-mix(in srgb, var(--sol-text) 10%, transparent);
 }
-/* How selecting works: one quiet line under the header's control. */
+/* How selecting works: one quiet line in the list, after the recap and
+   before the first turn it explains. The list's 24px plus the 28px glyph
+   column keeps it on the names' edge, and it scrolls with the content. */
 .rt-hint {
-  flex-shrink: 0;
-  padding: 2px 24px 0;
-  text-align: right;
-  font-size: 10.5px;
-  line-height: 1.5;
-  color: var(--sol-text-muted);
+  padding: 0 0 8px 28px;
+  text-align: left;
+  max-width: 72ch;
+  color: var(--sol-text-dim);
 }
 
 /* The empty room: one card, two ways forward. */
@@ -197,9 +259,7 @@
   background: color-mix(in srgb, var(--sol-text) 4%, transparent);
 }
 .rt-empty p {
-  font-size: 12.5px;
-  line-height: 1.55;
-  color: var(--sol-text-muted);
+  color: var(--sol-text-secondary);
 }
 .rt-empty-actions {
   display: flex;
@@ -226,18 +286,33 @@
 .rt-btn-violet:hover {
   background: color-mix(in srgb, var(--sol-violet) 88%, black);
 }
+/* On the stage a solid violet fill puts dark text on mid violet; a tint with
+   the stage's own text reads at about 9:1 and matches the header's pill. */
+.rt[data-surface="stage"] .rt-btn-violet {
+  color: var(--sol-text);
+  background: color-mix(in srgb, var(--sol-violet) 30%, transparent);
+}
+.rt[data-surface="stage"] .rt-btn-violet:hover {
+  background: color-mix(in srgb, var(--sol-violet) 42%, transparent);
+}
+/* The second way is quiet: green lives in the glyph, since green is also the
+   stage's "transcribing live" colour and a green label would read as a state. */
 .rt-btn-green {
-  color: var(--sol-green);
+  color: var(--sol-text-muted);
   text-underline-offset: 3px;
 }
+.rt-btn-green svg {
+  color: var(--sol-green);
+}
 .rt-btn-green:hover {
+  color: var(--sol-green);
   text-decoration: underline;
 }
 
 /* ── Spoken words: a passage ────────────────────────────────────────────── */
 
 .rt-passage {
-  margin: 6px 0;
+  margin: 12px 0;
   border-left: 2px solid color-mix(in srgb, var(--sol-text) 14%, transparent);
   padding-left: 8px;
 }
@@ -252,7 +327,7 @@
   width: 100%;
   border-radius: 6px;
   margin-left: -4px;
-  padding: 3px 4px;
+  padding: 4px 4px;
   text-align: left;
   transition: background 120ms;
 }
@@ -261,7 +336,7 @@
 }
 .rt-passage-chevron {
   align-self: center;
-  color: var(--sol-text-dim);
+  color: var(--sol-text-muted);
   transition: transform 160ms ease;
 }
 .rt-passage-open .rt-passage-chevron {
@@ -272,16 +347,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 11px;
+  font-size: 11.5px;
   font-weight: 500;
-}
-.rt-passage-when {
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 10px;
-  color: var(--sol-text-muted);
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
 }
 .rt-passage-preview {
   grid-column: 2 / 4;
@@ -289,18 +356,16 @@
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
-  font-size: 11.5px;
-  line-height: 1.45;
-  color: var(--sol-text-muted);
 }
 /* Open: the whole run. The turns come from TranscriptTurnList, sized for
-   the call page; here they are spoken words in a thread, so a notch smaller
-   and a shade quieter than a typed line on both surfaces (a typed line is
-   12.5px on the stage and 13px on the page, see .rt-line-body), and the
-   live passage a shade brighter than history because it is the captions
-   now. */
+   the call page; here they are spoken words in a thread, so one notch under
+   the body of the surface (12px under a 12.5px typed line on the stage,
+   12.5px under 13px on the page). On the stage history is a shade quieter
+   and the live passage a shade brighter because it is the captions now; on
+   the page the transcript is what the page is for, so it reads in secondary
+   text and the size step alone says it is spoken. */
 .rt-passage-body {
-  padding: 2px 0 4px;
+  padding: 4px 0;
 }
 /* The head sits 4px out (margin-left) with 4px of padding, then a 12px
    chevron column and a 6px gap: the names start 18px in from the passage
@@ -310,11 +375,16 @@
   padding-left: 18px;
 }
 .rt-passage-body p {
-  font-size: 12.5px;
+  font-size: 12px;
+  line-height: 1.5;
   color: var(--sol-text-muted);
 }
+.rt[data-surface="page"] .rt-passage-body p {
+  font-size: 12.5px;
+  color: var(--sol-text-secondary);
+}
 .rt-passage-live .rt-passage-body p {
-  color: var(--sol-text);
+  color: var(--sol-text-secondary);
 }
 .rt-passage-head:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--sol-blue) 60%, transparent);
@@ -324,9 +394,10 @@
 /* ── The recap so far ───────────────────────────────────────────────────── */
 
 .rt-recap {
-  margin: 0 0 8px;
+  margin: 0 0 12px;
   border-radius: 10px;
-  background: color-mix(in srgb, var(--sol-violet) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--sol-violet) 18%, transparent);
+  background: color-mix(in srgb, var(--sol-violet) 6%, transparent);
 }
 .rt-recap-head {
   display: grid;
@@ -353,7 +424,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 11px;
+  font-size: 11.5px;
   font-weight: 600;
   color: var(--sol-violet);
   white-space: nowrap;
@@ -363,15 +434,11 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
-  color: var(--sol-text-muted);
 }
 .rt-recap-body {
   padding: 0 10px 10px 28px;
 }
 .rt-recap-body > p {
-  font-size: 12.5px;
-  line-height: 1.55;
   color: var(--sol-text);
 }
 .rt-recap-items {
@@ -381,23 +448,13 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  margin-bottom: 3px;
-  font-size: 10.5px;
-  font-weight: 500;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  margin-bottom: 4px;
   color: var(--sol-text-muted);
 }
 .rt-recap-items li {
   display: flex;
   gap: 6px;
-  font-size: 12.5px;
-  line-height: 1.5;
   color: var(--sol-text);
-}
-.rt[data-surface="page"] .rt-recap-body > p,
-.rt[data-surface="page"] .rt-recap-items li {
-  font-size: 13px;
 }
 
 /* ── Who came and went ──────────────────────────────────────────────────── */
@@ -409,12 +466,9 @@
   align-items: flex-start;
   justify-content: flex-start;
   gap: 8px;
-  margin: 8px 0;
+  margin: 12px 0;
   padding: 0;
-  font-size: 11px;
-  line-height: 1.4;
   text-align: left;
-  color: var(--sol-text-muted);
 }
 .rt-event-glyph {
   margin-top: 2px;
@@ -429,9 +483,6 @@ button.rt-event-agent:hover {
 }
 .rt-event-when {
   margin-left: 6px;
-  font-size: 9.5px;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
 }
 /* Pinned under the header while the room is transcribed and nothing has
    been said: a status line, not a row in the timeline. */
@@ -441,7 +492,6 @@ button.rt-event-agent:hover {
   align-items: center;
   gap: 6px;
   padding: 4px 10px 2px;
-  font-size: 11px;
 }
 .rt[data-surface="page"] .rt-listening {
   padding: 4px 24px 2px;
@@ -452,16 +502,8 @@ button.rt-event-agent:hover {
   height: 6px;
   border-radius: 9999px;
   background: var(--sol-green);
-  animation: rt-pulse 1.6s ease-in-out infinite;
-}
-@keyframes rt-pulse {
-  0%, 100% { opacity: 0.35; }
-  50% { opacity: 1; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .rt-listening::before {
-    animation: none;
-  }
   .rt-passage-chevron {
     transition: none;
   }
@@ -472,27 +514,18 @@ button.rt-event-agent:hover {
 .rt-line {
   display: flex;
   gap: 8px;
-  margin-top: 10px;
+  margin-top: 12px;
 }
 .rt-line-cont {
-  margin-top: 2px;
+  margin-top: 4px;
 }
-/* The body of a typed or agent line: the thread's own text, a notch larger
-   than spoken words, and larger again on the page where there is room. */
-.rt-line-body {
-  font-size: 12.5px;
-  line-height: 1.625;
-}
-.rt[data-surface="page"] .rt-line-body {
-  font-size: 13px;
-}
+/* The body of a typed or agent line is the body step (declared with the
+   list): the thread's own text, a notch over spoken words on both surfaces. */
 .rt-working {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 10px;
-  font-size: 11.5px;
-  color: var(--sol-text-muted);
+  margin-top: 12px;
 }
 
 /* ── The composer ───────────────────────────────────────────────────────── */
@@ -504,6 +537,29 @@ button.rt-event-agent:hover {
 .rt[data-surface="page"] .rt-foot {
   padding: 8px 24px 12px;
   border-top: 1px solid color-mix(in srgb, var(--sol-border) 30%, transparent);
+}
+/* On the stage every surface in the rail is a wash of the text colour, so the
+   composer takes the same wash instead of the card colour, and its focus ring
+   is cyan, the thread's accent there, not team chat's blue. */
+.rt[data-surface="stage"] .ch-composer {
+  background: color-mix(in srgb, var(--sol-text) 4%, transparent);
+  border-color: color-mix(in srgb, var(--sol-text) 9%, transparent);
+}
+.rt[data-surface="stage"] .ch-composer:focus-within {
+  border-color: color-mix(in srgb, var(--sol-cyan) 55%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--sol-cyan) 11%, transparent);
+}
+/* What you type is the size of what you sent: the composer's input sits on
+   the body step of its surface, not on team chat's text-sm. */
+.rt .ch-composer textarea,
+.rt .ch-composer [contenteditable="true"] {
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.rt[data-surface="page"] .ch-composer textarea,
+.rt[data-surface="page"] .ch-composer [contenteditable="true"] {
+  font-size: 13px;
+  line-height: 1.55;
 }
 /* The thread reuses the chat composer's frame (ch-composer in chat.css) so
  * paste/drop/pick and the thumbnail strip are the same as team chat;
@@ -533,7 +589,10 @@ button.rt-event-agent:hover {
   overflow-x: auto;
   border-radius: 6px;
   padding: 6px 8px;
-  font-size: 11px;
+  font-size: 11.5px;
+}
+.rt[data-surface="page"] .rt-md pre {
+  font-size: 12px;
 }
 .rt-md ul,
 .rt-md ol {

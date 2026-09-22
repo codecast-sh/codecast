@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { execFile, spawnSync } from "../../proc.js";
 import { isCodecastHookCommand, isCodecastOwnedHomePath } from "../../codecastOwned.js";
 import type { Config } from "../../config/types.js";
+import type { TouchLedger } from "./ledger.js";
 import { INSTALLABLE_CLIENTS } from "../../remote/agentAuth.js";
 import { GH_WRAPPER_REL } from "../ghWrapper.js";
 import { credentialContentReason, homeRelative, kindForPath, parseJsonLoose, portableText, transformByKind, type MirrorKind } from "./transform.js";
@@ -81,6 +82,12 @@ export const DEFAULT_EXCLUDES: readonly string[] = [
   "**/*.app/**", "**/*.framework/**", "**/*.xcframework/**",
   "**/.state.json", "**/.usage-cache.json",
   "**/*.jsonl", "**/*.lock", "**/*.sock", "**/*.pid", "**/*.pyc", "**/*.dylib", "**/*.dll", "**/*.exe", "**/*.so", "**/*.node",
+  // Trees an agent fetches for itself on the host (plugin and marketplace
+  // caches, bundled skills) and what it threw away. They were the bulk of the
+  // bundle (100 MiB of a 237 MiB bundle on 2026-09-22) and change under the
+  // agent's own hand, so shipping them costs a rebuild every tick.
+  "**/.trash/**", ".codex/plugins/cache/**", ".codex/plugins/.remote-plugin-install-staging/**",
+  ".grok/marketplace-cache/**", ".grok/bundled/**", ".claude/plugins/plugin-catalog-cache.json", ".cursor/statsig-cache.json",
 ];
 
 const globCache = new Map<string, RegExp>();
@@ -285,6 +292,8 @@ export interface ProjectContextOptions {
   includeAncestors?: boolean;
   config?: Pick<Config, "cloud_mirror_include" | "cloud_mirror_exclude"> | null;
   maxBytes?: number;
+  /** Records every path the walk touches, so a later tick can ask "did any of it change" with stats alone. */
+  ledger?: TouchLedger;
 }
 
 export interface ProjectContext {
@@ -332,7 +341,10 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
     const logical = path.resolve(source);
     if (homeRelative(logical, root) === null && homeRelative(logical, home) === null || denied(logical, true)) return;
     const projectPath = homeRelative(logical, root);
-    if (!includeAll && projectPath && /(?:^|\/)(?:dist(?:-[^/]+)?|build|target)(?:\/|$)/.test(projectPath) && !/(?:^|\/)\.(?:claude|codex|gemini|grok|opencode|agents|cursor|pi)\//.test(projectPath)) return;
+    // Build output stays out of the walk and out of prose references (a doc
+    // naming `packages/cli/dist` must not ship the compiled CLI); only an
+    // active config that requires a file there, or an explicit include, enters it.
+    if ((!includeAll || optionalReference) && projectPath && /(?:^|\/)(?:dist(?:-[^/]+)?|build|target)(?:\/|$)/.test(projectPath) && !/(?:^|\/)\.(?:claude|codex|gemini|grok|opencode|agents|cursor|pi)\//.test(projectPath)) return;
     const stat: fs.Stats | undefined = yield { op: "lstat", path: logical };
     if (!stat || denied(logical, stat.isDirectory())) return;
     if (stat.isFile() && !includeAll && !isContextFile(homeRelative(logical, root) ?? homeRelative(logical, home)!)) return;
@@ -491,10 +503,11 @@ export function collectProjectContext(opts: ProjectContextOptions): ProjectConte
   return next.value;
 }
 
-async function executeStepsAsync<T>(steps: ContextSteps<T>): Promise<T> {
+async function executeStepsAsync<T>(steps: ContextSteps<T>, ledger?: TouchLedger): Promise<T> {
   let next = steps.next();
   while (!next.done) {
     let value: unknown;
+    if (next.value.op !== "tracked") ledger?.note(next.value.path);
     try { value = await executeContextAsync(next.value); } catch (err) { next = steps.throw(err); continue; }
     next = steps.next(value);
   }
@@ -502,5 +515,5 @@ async function executeStepsAsync<T>(steps: ContextSteps<T>): Promise<T> {
 }
 
 export async function collectProjectContextAsync(opts: ProjectContextOptions): Promise<ProjectContext> {
-  return executeStepsAsync(projectContextSteps(opts));
+  return executeStepsAsync(projectContextSteps(opts), opts.ledger);
 }

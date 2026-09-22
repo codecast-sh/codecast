@@ -478,7 +478,7 @@ export function CallStage({
           )}
         </div>
         {threadOpen && call.roomKey && (
-          <ThreadRail onClose={toggleThread} roomKey={call.roomKey} live={live ?? null} rows={rows} panel={panel} />
+          <ThreadRail roomKey={call.roomKey} live={live ?? null} rows={rows} panel={panel} />
         )}
       </div>
 
@@ -1033,13 +1033,11 @@ function AudioOnlyStage({
 // takes a share of the stage rather than a fixed 340px that would be half
 // the window.
 function ThreadRail({
-  onClose,
   roomKey,
   live,
   rows,
   panel,
 }: {
-  onClose: () => void;
   roomKey: string;
   live: { transcript_id: string } | null;
   rows: ThreadRow[] | null | undefined;
@@ -1059,7 +1057,6 @@ function ThreadRail({
         surface="stage"
         seated
         panel={panel}
-        onClose={onClose}
         className="min-h-0 flex-1"
       />
     </aside>
