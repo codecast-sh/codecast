@@ -17,7 +17,6 @@ import { useWorkspaceSelection } from "../../../../hooks/useWorkspaceSelection";
 import { InvitePanel } from "../../../../components/team/InvitePanel";
 import { useTeamWorkspaceSuggestions } from "../../../../hooks/useTeamWorkspaceSuggestions";
 import { useSaveTeamSetup } from "../../../../lib/team/saveTeamSetup";
-import { adoptPathIntoActiveTab } from "../../../../src/compat/tabRouting";
 import { useCurrentUser } from "../../../../hooks/useCurrentUser";
 import { useInboxStore } from "../../../../store/inboxStore";
 import { cn } from "../../../../lib/utils";
@@ -215,10 +214,6 @@ export default function CreateTeamPage() {
   };
 
   const openTeam = () => {
-    // This page lives outside the tab shell. Point the active tab at the
-    // feed first, or the shell re-asserts its old path on re-entry and the
-    // push lands on whatever the user last had open.
-    adoptPathIntoActiveTab(TEAM_FEED_PATH);
     router.push(TEAM_FEED_PATH);
     // The new team's feed starts empty, so close the flow with a word of
     // arrival. The crest travels with it: the thing the user just built is

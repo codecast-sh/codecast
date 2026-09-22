@@ -3,7 +3,12 @@ import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { api, internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { createTeamFeedFilter, isTeamAdmin } from "./privacy";
+import { isTeamAdmin } from "./privacy";
+import {
+  nextMembershipVisibility,
+  type TeamVisibilityLevel,
+  type VisibilityChangeMode,
+} from "./teamVisibility";
 import { canAccessConversation } from "./lib/access";
 import {
   PRESENCE_FRESH_MS,
@@ -100,15 +105,25 @@ export const getUserTeams = query({
     if (!userId) {
       return [];
     }
-    const memberships = await ctx.db
-      .query("team_memberships")
-      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-      .collect();
+    const [memberships, mappings] = await Promise.all([
+      ctx.db
+        .query("team_memberships")
+        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+        .collect(),
+      ctx.db
+        .query("directory_team_mappings")
+        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+        .collect(),
+    ]);
 
     const teams = await Promise.all(
       memberships.map(async (m) => {
         const team = await ctx.db.get(m.team_id);
         if (!team) return null;
+        const roster = await ctx.db
+          .query("team_memberships")
+          .withIndex("by_team_id", (q) => q.eq("team_id", m.team_id))
+          .collect();
         return {
           _id: team._id,
           name: team.name,
@@ -119,6 +134,11 @@ export const getUserTeams = query({
           role: m.role,
           joined_at: m.joined_at,
           visibility: m.visibility || "summary",
+          visibility_history: m.visibility_history,
+          // Sharing settings and the share-in-full nudge: a level only matters
+          // when someone else is on the team and a project flows to it.
+          member_count: roster.length,
+          shared_project_count: mappings.filter((dm) => dm.team_id.toString() === m.team_id.toString()).length,
           // The client's own create key, echoed back. A create whose dispatch
           // was parked (no binding at click time) resolves its stub against
           // this instead of being declared failed.
@@ -365,17 +385,6 @@ export const getTeamByInviteCode = query({
   },
 });
 
-// Message counters in the roster's session preview move on every streamed turn.
-// They are shown only as a coarse hover figure, so step them before they leave
-// the server — the same trick bucketTs plays on the presence timestamps. The web
-// store already steps this field by 16 (COUNTER_QUANTUM, inboxStore.ts), so the
-// value a client renders is unchanged.
-const MEMBER_COUNTER_STEP = 16;
-function stepCount(n: number | undefined): number | undefined {
-  if (n === undefined) return undefined;
-  return Math.floor(n / MEMBER_COUNTER_STEP) * MEMBER_COUNTER_STEP;
-}
-
 export const getTeamMembers = query({
   args: {
     team_id: v.id("teams"),
@@ -398,11 +407,19 @@ export const getTeamMembers = query({
       .query("team_memberships")
       .withIndex("by_team_id", (q) => q.eq("team_id", args.team_id))
       .collect();
-    // Visibility gate for the avatar-bar session preview: the most recent
-    // conversation may be private (team_id is routing, not visibility), so we
-    // must not expose its title/last-message. Pick the most recent *team-visible*
-    // session in this team instead.
-    const feedFilter = await createTeamFeedFilter(ctx, args.team_id);
+    // THIS QUERY READS NO CONVERSATION, AND MUST NOT START AGAIN. It is the
+    // most subscribed query in the app (the avatar bar, the team page, the
+    // settings sync and several mobile screens all mount it), and a Convex
+    // query re-runs whenever anything it read changes. A running agent bumps
+    // its conversation's updated_at several times a second, so reading even one
+    // conversation here re-runs the whole roster for every open tab and phone
+    // at agent-streaming rate. It used to read each member's ten most recent
+    // sessions for four preview fields (title, last message, message count,
+    // updated_at), and on 2026-09-22 that made this query 33% of all backend
+    // CPU while nothing rendered those fields any more — the March tooltip
+    // they were added for had stopped reading them. A surface that wants a
+    // member's recent session derives it from the sessions the store already
+    // syncs. What remains here changes at heartbeat rate, which is survivable.
     const now = Date.now();
     const members = await Promise.all(
       memberships.map(async (m) => {
@@ -463,14 +480,6 @@ export const getTeamMembers = query({
           const auth = await authorizeRoom(ctx, authUserId, liveCall.room_key);
           if (auth.ok) visibleRoomKey = liveCall.room_key;
         }
-        const recentConvos = await ctx.db
-          .query("conversations")
-          .withIndex("by_team_user_updated", (q) =>
-            q.eq("team_id", args.team_id).eq("user_id", user._id)
-          )
-          .order("desc")
-          .take(10);
-        const recentConvo = recentConvos.find((c) => feedFilter.isVisible(c));
         return {
           _id: user._id,
           name: user.name,
@@ -510,16 +519,6 @@ export const getTeamMembers = query({
           // byte-identical row every heartbeat.
           viewing_conversation_id: viewingConversationId,
           viewing_since: viewingConversationId ? bucketTs(presenceRow?.viewing_since) : undefined,
-          recent_session_title: recentConvo?.title,
-          // Coarse for the same reason as the presence fields above: this
-          // roster is always mounted, and a teammate's streaming agent bumps
-          // updated_at and message_count several times a second. Bucketed, most
-          // of those turns yield a byte-identical result and Convex skips the
-          // push; invalidation is unchanged. Both feed a hover figure and a
-          // relative age only.
-          recent_session_messages: stepCount(recentConvo?.message_count),
-          recent_session_updated: bucketTs(recentConvo?.updated_at),
-          recent_session_last_message: recentConvo?.last_message_preview,
         };
       })
     );
@@ -634,6 +633,7 @@ export async function retireTeam(
     role: m.role,
     joined_at: m.joined_at ?? now,
     visibility: m.visibility,
+    visibility_history: m.visibility_history,
   }));
   // The tombstone lands first so the roster survives even if a later step
   // throws; the whole mutation is one transaction either way.
@@ -724,6 +724,7 @@ export const restoreTeam = internalMutation({
         role: m.role,
         joined_at: m.joined_at,
         visibility: m.visibility,
+        visibility_history: m.visibility_history,
       });
       seated++;
     }
@@ -1355,33 +1356,50 @@ export const setActiveTeam = mutation({
   },
 });
 
+// The one writer of a member's team visibility. `mode` matters only when the
+// level goes UP: "everything" opens past sessions too, "going_forward" pins the
+// sessions started before now at the level they had (teamVisibility.ts). A
+// lowering always applies to everything. Called by the mutation below and by
+// the dispatch side effect of the web store's setTeamMembershipVisibility.
+export async function applyMembershipVisibilityChange(
+  ctx: { db: any },
+  userId: Id<"users">,
+  teamId: Id<"teams">,
+  visibility: TeamVisibilityLevel,
+  mode: VisibilityChangeMode = "everything",
+) {
+  const membership = await ctx.db
+    .query("team_memberships")
+    .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", teamId))
+    .unique();
+  if (!membership) {
+    throw new Error("Not a member of this team");
+  }
+  const next = nextMembershipVisibility(membership, visibility, mode, Date.now());
+  await ctx.db.patch(membership._id, next);
+  return next;
+}
+
+const teamVisibilityLevelArg = v.union(
+  v.literal("hidden"),
+  v.literal("activity"),
+  v.literal("summary"),
+  v.literal("full")
+);
+
 export const setTeamVisibility = mutation({
   args: {
     team_id: v.id("teams"),
-    visibility: v.union(
-      v.literal("hidden"),
-      v.literal("activity"),
-      v.literal("summary"),
-      v.literal("full")
-    ),
+    visibility: teamVisibilityLevelArg,
+    mode: v.optional(v.union(v.literal("everything"), v.literal("going_forward"))),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) {
       throw new Error("Not authenticated");
     }
-
-    const membership = await ctx.db
-      .query("team_memberships")
-      .withIndex("by_user_team", (q) => q.eq("user_id", userId).eq("team_id", args.team_id))
-      .unique();
-
-    if (!membership) {
-      throw new Error("Not a member of this team");
-    }
-
-    await ctx.db.patch(membership._id, { visibility: args.visibility });
-    return { success: true };
+    const next = await applyMembershipVisibilityChange(ctx, userId, args.team_id, args.visibility, args.mode);
+    return { success: true, ...next };
   },
 });
 

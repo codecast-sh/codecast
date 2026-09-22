@@ -1,5 +1,6 @@
 import { Id } from "./_generated/dataModel";
 import { isSessionOwner } from "./sessionOwners";
+import { currentMembershipVisibility, effectiveMembershipVisibility, type MembershipVisibilityFacts } from "./teamVisibility";
 
 type DbCtx = { db: any };
 
@@ -10,6 +11,8 @@ type ConversationForAccess = {
   is_private: boolean;
   team_visibility?: string;
   share_token?: string;
+  // Decides which segment of the owner's visibility history applies.
+  started_at?: number;
 };
 
 export type AccessLevel = "owner" | "team" | "shared" | "denied";
@@ -48,18 +51,17 @@ export async function isTeamAdmin(
   return m?.role === "admin";
 }
 
-async function getOwnerTeamVisibility(
+async function getOwnerMembership(
   ctx: DbCtx,
   ownerId: Id<"users">,
   teamId: Id<"teams">
-): Promise<string> {
-  const membership = await ctx.db
+): Promise<MembershipVisibilityFacts | null> {
+  return ctx.db
     .query("team_memberships")
     .withIndex("by_user_team", (q: any) =>
       q.eq("user_id", ownerId).eq("team_id", teamId)
     )
     .first();
-  return membership?.visibility || "summary";
 }
 
 export function isVisibilityShareable(visibility: string): boolean {
@@ -68,19 +70,20 @@ export function isVisibilityShareable(visibility: string): boolean {
 
 // ── Access control (single conversation) ──
 // is_private is the source of truth (set at creation from directory_team_mappings auto_share).
-// team_visibility is the per-conversation override. Membership visibility is user-level opt-out.
+// team_visibility is the per-conversation override. Membership visibility is user-level opt-out,
+// read per conversation: a "going forward" switch pins sessions started before it at the
+// level they had (teamVisibility.ts).
 
 export async function isConversationTeamVisible(
   ctx: DbCtx,
   conversation: ConversationForAccess
 ): Promise<boolean> {
   if (!conversation.team_id) return false;
-  const ownerVisibility = await getOwnerTeamVisibility(
-    ctx,
-    conversation.user_id,
-    conversation.team_id
+  const membership = await getOwnerMembership(ctx, conversation.user_id, conversation.team_id);
+  return isConversationTeamVisibleSync(
+    conversation,
+    effectiveMembershipVisibility(membership, conversation.started_at)
   );
-  return isConversationTeamVisibleSync(conversation, ownerVisibility);
 }
 
 function isConversationTeamVisibleSync(
@@ -186,11 +189,17 @@ type ConversationForFeed = {
   team_id?: any;
   is_private: boolean;
   team_visibility?: string;
+  started_at?: number;
 };
 
 export type TeamFeedFilter = {
   isVisible: (conversation: ConversationForFeed) => boolean;
+  /** The member's CURRENT level: the most they show for any session. Use it
+   *  for member-level gates ("is this member hidden"); a conversation's own
+   *  level is getVisibilityFor. */
   getVisibility: (userId: string) => string;
+  /** The level the owner shows THIS conversation at (history-aware). */
+  getVisibilityFor: (conversation: ConversationForFeed) => string;
   memberships: Array<{ user_id: Id<"users">; visibility?: string }>;
 };
 
@@ -203,21 +212,21 @@ export async function createTeamFeedFilter(
     .withIndex("by_team_id", (q: any) => q.eq("team_id", teamId))
     .collect();
 
-  const visibilityMap = new Map<string, string>(
-    memberships.map((m: any) => [m.user_id.toString(), m.visibility || "summary"])
+  const membershipMap = new Map<string, MembershipVisibilityFacts>(
+    memberships.map((m: any) => [m.user_id.toString(), m])
   );
+
+  const getVisibilityFor = (conversation: ConversationForFeed): string =>
+    effectiveMembershipVisibility(membershipMap.get(conversation.user_id.toString()), conversation.started_at);
 
   const isVisible = (conversation: ConversationForFeed): boolean => {
     if (!conversation.team_id) return false;
-    const ownerVis = visibilityMap.get(conversation.user_id.toString()) || "summary";
-    return isConversationTeamVisibleSync(conversation as any, ownerVis);
+    return isConversationTeamVisibleSync(conversation as any, getVisibilityFor(conversation));
   };
 
-  const getVisibility = (userId: string): string => {
-    return visibilityMap.get(userId) || "summary";
-  };
+  const getVisibility = (userId: string): string => currentMembershipVisibility(membershipMap.get(userId));
 
-  return { isVisible, getVisibility, memberships };
+  return { isVisible, getVisibility, getVisibilityFor, memberships };
 }
 
 // ── Profile activity visibility ──
@@ -255,8 +264,8 @@ export async function getProfileVisibilityPredicate(
   const isMember = filter.memberships.some(
     (m) => m.user_id.toString() === viewerId.toString()
   );
-  const ownerVis = filter.getVisibility(targetUserId.toString());
-  return (conversation) => profileConversationVisible(false, isMember, ownerVis, conversation);
+  return (conversation) =>
+    profileConversationVisible(false, isMember, filter.getVisibilityFor(conversation), conversation);
 }
 
 // ── Public profile visibility (the third, anonymous tier) ──

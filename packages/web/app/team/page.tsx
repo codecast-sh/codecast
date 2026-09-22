@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "convex/react";
+import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Card } from "../../components/ui/card";
 import { Input } from "../../components/ui/input";
@@ -7,7 +8,7 @@ import Link from "next/link";
 
 export default function TeamPage() {
   const user = useQuery(api.users.getCurrentUser);
-  const teamMembers = useQuery(
+  const { data: teamMembers } = useQueryNoThrow(
     api.teams.getTeamMembers,
     user?.team_id ? { team_id: user.team_id } : "skip"
   );

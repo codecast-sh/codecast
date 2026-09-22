@@ -6,12 +6,17 @@ import { copyToClipboard } from "../lib/utils";
 import { openForwardToChat } from "../lib/forwardToChat";
 import { useTeamFeature } from "../lib/teamFeatures";
 import { toast } from "sonner";
+import { useInboxStore } from "../store/inboxStore";
+import { TEAM_VISIBILITY_RANK, currentMembershipVisibility, teamVisibilityFor } from "../lib/teamVisibility";
 
 interface SharePopoverProps {
   isPrivate?: boolean;
   teamVisibility?: string | null;
   hasShareToken: boolean;
   hasTeam: boolean;
+  /** The team this session is shared with: lets the popover offer "share all
+   *  new sessions in full" right after this one was shared in full. */
+  teamId?: string | null;
   onSetPrivate?: () => void | Promise<void>;
   onSetTeamVisibility?: (mode: "summary" | "full") => void | Promise<void>;
   onGenerateShareLink: () => Promise<string>;
@@ -50,6 +55,7 @@ export function SharePopover({
   teamVisibility,
   hasShareToken,
   hasTeam,
+  teamId,
   onSetPrivate,
   onSetTeamVisibility,
   onGenerateShareLink,
@@ -59,6 +65,14 @@ export function SharePopover({
   forwardLabel,
 }: SharePopoverProps) {
   const chatOn = useTeamFeature("chat");
+  // The moment to suggest the team-wide switch: this session is now Full while
+  // the member's level for the team is still lower, and someone else is on it.
+  const teams = useInboxStore((s) => s.teams);
+  const setTeamMembershipVisibility = useInboxStore((s) => s.setTeamMembershipVisibility);
+  const team = teamVisibilityFor(teams, teamId);
+  const teamBelowFull =
+    !!team && (team.member_count ?? 0) > 1 &&
+    TEAM_VISIBILITY_RANK[currentMembershipVisibility(team)] < TEAM_VISIBILITY_RANK.full;
   const [isOpen, setIsOpen] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [isGeneratingLink, setIsGeneratingLink] = useState(false);
@@ -207,6 +221,18 @@ export function SharePopover({
                 {currentMode === "summary" && "Team sees title and activity summary"}
                 {currentMode === "full" && "Team can view the full conversation"}
               </p>
+              {currentMode === "full" && teamBelowFull && team && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTeamMembershipVisibility(String(team._id), "full", "going_forward");
+                    toast.success(`${team.name} sees the whole conversation for new sessions`);
+                  }}
+                  className="text-[11px] text-sol-cyan hover:underline"
+                >
+                  Share all new sessions with {team.name} in full
+                </button>
+              )}
             </div>
           )}
 
