@@ -18,14 +18,14 @@ function CommitRows({ repository, commits, total }: { repository: string; commit
   const rows = commits ?? [];
   if (rows.length === 0) {
     return (
-      <div className="h-full flex flex-col items-center justify-center gap-2 px-8 text-center">
+      <div className="flex flex-col items-center justify-center gap-2 px-8 py-16 text-center">
         <GitCommitHorizontal className="w-8 h-8 text-sol-text-dim/40" />
         <p className="text-[13px] text-sol-text-muted">{commits ? "No commits on this pull request" : "Commits have not loaded yet"}</p>
       </div>
     );
   }
   return (
-    <div className="h-full overflow-y-auto px-5 py-4" data-main-scroll>
+    <div className="px-5 py-4">
       {total !== undefined && total > rows.length && <p className="mb-3 text-[11px] text-sol-text-dim">Showing {rows.length} of {total} commits</p>}
       <ol className="divide-y divide-sol-border/40 rounded-xl border border-sol-border/50 bg-sol-card">
         {rows.map((commit, index) => {

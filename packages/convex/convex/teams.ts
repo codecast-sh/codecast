@@ -16,6 +16,7 @@ import {
   derivePresenceState,
 } from "./presenceState";
 import { authorizeRoom, liveMembers } from "./callRooms";
+import { roomSeatClass, type SeatClass } from "./calls";
 import { normalizeTeamTaskStatuses } from "@codecast/shared/tasks";
 import { purgeChatMembership } from "./chat";
 import { decommissionAnchorRow } from "./anchors";
@@ -476,9 +477,24 @@ export const getTeamMembers = query({
           .collect();
         const liveCall = liveMembers(callRows, now)[0];
         let visibleRoomKey: string | undefined;
+        // Burst or call (calls.roomSeatClass), so a teammate outside the
+        // room can tell three seconds of somebody's voice from a huddle. The
+        // class is a fact about the ROOM (one deliberate join makes it a
+        // call for everyone in it), so it reads the room's live seats, not
+        // this member's row alone. Withheld with the key: a burst between
+        // two people is theirs, and "in a huddle" stays the bare boolean for
+        // a viewer the room does not admit.
+        let seat: SeatClass | undefined;
         if (liveCall) {
           const auth = await authorizeRoom(ctx, authUserId, liveCall.room_key);
-          if (auth.ok) visibleRoomKey = liveCall.room_key;
+          if (auth.ok) {
+            visibleRoomKey = liveCall.room_key;
+            const roomRows = await ctx.db
+              .query("call_members")
+              .withIndex("by_room", (q) => q.eq("room_key", liveCall.room_key))
+              .collect();
+            seat = await roomSeatClass(ctx, liveCall.room_key, liveMembers(roomRows, now));
+          }
         }
         return {
           _id: user._id,
@@ -519,6 +535,15 @@ export const getTeamMembers = query({
           // byte-identical row every heartbeat.
           viewing_conversation_id: viewingConversationId,
           viewing_since: viewingConversationId ? bucketTs(presenceRow?.viewing_since) : undefined,
+          // The seat, for the viewers the room admits: what the seat means
+          // (burst or call) and when this member stepped in on purpose.
+          // Bucketed like every timestamp here and set once, so neither
+          // re-pushes the roster; both absent when the key is.
+          seat,
+          walkie_joined_at:
+            visibleRoomKey && liveCall?.walkie_joined_at
+              ? bucketTs(liveCall.walkie_joined_at)
+              : undefined,
         };
       })
     );

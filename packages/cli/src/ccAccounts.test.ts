@@ -1458,6 +1458,54 @@ describe("refreshUsageSnapshots (sandboxed $HOME, injected fetch)", () => {
     expect(again.usage).toEqual([]);
   });
 
+  it("refreshes a lapsed active grant and does not stamp it dead from a stale saved snapshot", async () => {
+    fs.writeFileSync(path.join(home, ".claude", ".credentials.json"), credFor("at-active", NOW - 60_000));
+    invalidateAccountsCache();
+    const calls = { tokenPosts: [] as string[], usage: [] as string[] };
+    const fetchImpl: typeof fetch = (async (url: any, init: any) => {
+      if (String(url).includes("/oauth/token")) {
+        const rt = new URLSearchParams(String(init?.body)).get("refresh_token") ?? "";
+        calls.tokenPosts.push(rt);
+        // The saved profile's refresh token was already rotated away.
+        if (rt === "rt-at-a-stale") return new Response('{"error":"invalid_grant"}', { status: 401 });
+        return new Response(
+          JSON.stringify({ access_token: "at-active-new", refresh_token: "rt-active-new", expires_in: 28800 }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      calls.usage.push(String(init?.headers?.Authorization ?? "").replace("Bearer ", ""));
+      return new Response(
+        JSON.stringify({ limits: [{ kind: "session", percent: 11, resets_at: iso(SESSION_RESET_S) }] }),
+        { status: 200 },
+      );
+    }) as any;
+    const res = await refreshUsageSnapshots({ now: NOW, fetchImpl });
+    expect(calls.tokenPosts).toContain("rt-at-active");
+    expect(calls.tokenPosts).not.toContain("rt-at-a-stale");
+    expect(calls.usage).toContain("at-active-new");
+    expect(res.expired).toEqual([]);
+    expect(readIndex().profiles.a.login_expired_at).toBeUndefined();
+    const stored = JSON.parse(fs.readFileSync(path.join(home, ".codecast", "cc-accounts", "a.json"), "utf-8"));
+    expect(stored.credentials.claudeAiOauth.refreshToken).toBe("rt-active-new");
+    const live = JSON.parse(fs.readFileSync(path.join(home, ".claude", ".credentials.json"), "utf-8"));
+    expect(live.claudeAiOauth.accessToken).toBe("at-active-new");
+  });
+
+  it("keeps the live login when asked to switch to the account already in use", () => {
+    fs.writeFileSync(path.join(home, ".claude", ".credentials.json"), credFor("at-live", NOW + 8 * 3600_000));
+    fs.writeFileSync(
+      path.join(home, ".codecast", "cc-accounts", "a.json"),
+      profileFor("at-old", "uuid-a", "a@x.com", NOW - 60_000),
+    );
+    invalidateAccountsCache();
+    const result = useProfile("a");
+    expect(result.keptLive).toBe(true);
+    const live = JSON.parse(fs.readFileSync(path.join(home, ".claude", ".credentials.json"), "utf-8"));
+    expect(live.claudeAiOauth.accessToken).toBe("at-live");
+    const stored = JSON.parse(fs.readFileSync(path.join(home, ".codecast", "cc-accounts", "a.json"), "utf-8"));
+    expect(stored.credentials.claudeAiOauth.accessToken).toBe("at-live");
+  });
+
   it("marks a refused grant login-expired, keeps the last snapshot, and never retries it until re-saved", async () => {
     // Seed c with a reading from a probe made while its token still lived
     // (an hour ago it had 1000ms left), so the refusal has a snapshot to keep.

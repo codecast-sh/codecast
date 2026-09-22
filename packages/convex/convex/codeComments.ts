@@ -32,7 +32,9 @@ import type { MutationCtx } from "./_generated/server";
 import { codeThreadRootKey } from "@codecast/shared/comments";
 
 const GITHUB_API_BASE = "https://api.github.com";
-const SUMMARY_LENGTH = 140;
+// The feed row clips a long summary and expands it on click, so keep the whole
+// comment; the cap only bounds a pathological paste.
+const SUMMARY_LENGTH = 4000;
 
 type Ctx = { db: any; scheduler?: any };
 
@@ -382,9 +384,9 @@ export const create = mutation({
       args.line_end = args.line_end ?? parent.line_end;
       args.side = args.side ?? parent.side;
     }
-    if (pullRequestId) {
-      const pr = await ctx.db.get(pullRequestId);
-      if (!pr || !(await canAccessPullRequest(ctx, userId, pr))) throw new Error("Pull request not found");
+    const pr = pullRequestId ? await ctx.db.get(pullRequestId) : null;
+    if (pullRequestId && (!pr || !(await canAccessPullRequest(ctx, userId, pr)))) {
+      throw new Error("Pull request not found");
     }
     if (args.pending && !pullRequestId) throw new Error("A pending review note needs a pull request");
 
@@ -419,16 +421,17 @@ export const create = mutation({
     const inserted = await ctx.db.get(commentId);
     if (inserted) await fanOutCodeComment(ctx, inserted, { teamId, actorId: userId, parent });
 
+    // The row supplies the verb ("commented on"); the title names the place.
     const where = args.file_path
       ? (args.line_number ? `${args.file_path}:${args.line_number}` : args.file_path)
-      : "the pull request";
+      : pr ? `PR #${pr.number}: ${pr.title}` : "the pull request";
     await recordExternalEvent(ctx, {
       source: "codecast",
       team_id: teamId,
       repository: args.repository,
       kind: "code_comment",
       actor_user_id: userId,
-      title: `Comment on ${where}`,
+      title: where,
       summary: args.content.slice(0, SUMMARY_LENGTH),
       url: args.ref ? commitUrl(args.repository, args.ref) : undefined,
       sha: args.ref,
@@ -444,8 +447,8 @@ export const create = mutation({
     // Mirroring is the default: a comment nobody on GitHub can see is a comment
     // the reviewer will never answer.
     if (args.mirror !== false) {
-      const targets = pullRequestId
-        ? [await ctx.db.get(pullRequestId)]
+      const targets = pr
+        ? [pr]
         : await openPRsTouchingFile(ctx, args.repository, args.file_path);
       const target = targets.filter(Boolean)[0] as Doc<"pull_requests"> | undefined;
       if (target && target.state === "open") {

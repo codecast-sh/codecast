@@ -11,7 +11,8 @@
  * which is what "who did what, when" needs.
  */
 import { useMemo, useState, type ReactNode } from "react";
-import { ArrowRight, History, ListPlus, MessageSquare, Pencil, Terminal, UserRound } from "lucide-react";
+import { ArrowRight, History, Link2, ListPlus, MessageSquare, Pencil, Terminal, UserRound } from "lucide-react";
+import { ISSUE_PROVIDER_NAME } from "../../lib/integrations";
 import { SegmentedToggle } from "../SegmentedToggle";
 import { AgentTypeIcon } from "../AgentTypeIcon";
 import { CollapsibleBody } from "../CollapsibleBody";
@@ -61,17 +62,37 @@ function Line({ children }: { children: ReactNode }) {
   return <span className="inline-flex items-center flex-wrap gap-x-2 gap-y-0.5 min-w-0">{children}</span>;
 }
 
+/** The issue sync writes three actions of its own (issue-sync.md S6, S5). */
+const SYNC_ACTIONS = new Set(["synced_from_provider", "synced_to_provider", "sync_refused"]);
+
 function changeStyle(row: HistoryRow) {
   if (row.action === "created") return { icon: ListPlus, color: "text-sol-green" };
+  if (row.action === "sync_refused") return { icon: Link2, color: "text-sol-red" };
+  if (SYNC_ACTIONS.has(row.action)) return { icon: Link2, color: "text-sol-cyan" };
   if (row.field === "status") return { icon: ArrowRight, color: "text-sol-yellow" };
   if (row.field === "assignee") return { icon: UserRound, color: "text-sol-cyan" };
   return { icon: Pencil, color: "text-sol-text-dim" };
 }
 
-function ChangeBody({ row }: { row: HistoryRow }) {
+function ChangeBody({ row, provider }: { row: HistoryRow; provider?: "linear" | "github" }) {
   const dim = "text-sol-text-muted";
   if (row.action === "created") {
     return <><Who person={row.actor} /><span className={dim}>created this task</span></>;
+  }
+  if (SYNC_ACTIONS.has(row.action)) {
+    const name = provider ? ISSUE_PROVIDER_NAME[provider] : "the issue tracker";
+    const verb = row.action === "synced_from_provider"
+      ? `imported from ${name} as`
+      : row.action === "synced_to_provider"
+        ? `created on ${name} as`
+        : `${name} refused these labels:`;
+    return (
+      <>
+        <Who person={row.actor} />
+        <span className={dim}>{verb}</span>
+        <span className="text-sol-text truncate max-w-[14rem]">{row.new_value}</span>
+      </>
+    );
   }
   if (row.field === "status") {
     return (
@@ -111,7 +132,7 @@ export function TaskTimeline({
   externalEvents,
   openLinkedSession,
 }: {
-  task: { _id: string; created_at: number; creator?: Person | null; history?: HistoryRow[]; comments?: TaskCommentRow[] };
+  task: { _id: string; created_at: number; creator?: Person | null; history?: HistoryRow[]; comments?: TaskCommentRow[]; external?: { provider: "linear" | "github" } };
   sessions: TaskLinkedSession[];
   externalEvents: ExternalEventRecord[];
   openLinkedSession: (info: any) => void;
@@ -204,7 +225,7 @@ export function TaskTimeline({
             const style = changeStyle(item.row);
             return (
               <RailRow key={item.key} icon={style.icon} color={style.color} ts={item.ts} clock>
-                <Line><ChangeBody row={item.row} /></Line>
+                <Line><ChangeBody row={item.row} provider={task.external?.provider} /></Line>
               </RailRow>
             );
           })}
