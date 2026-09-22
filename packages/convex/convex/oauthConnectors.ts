@@ -28,6 +28,7 @@ import {
   verifyStateWith,
 } from "./googleOAuth";
 import { claimRefreshOn, writeRefreshOutcomeOn, singleFlightRefresh } from "./lib/tokenRefresh";
+import { sha256Hex } from "./lib/hash";
 
 /* ==========================================================================
  * The provider table
@@ -318,11 +319,6 @@ export const callbackHandler = async (ctx: any, request: Request): Promise<Respo
 
 export const callback = httpAction(callbackHandler);
 
-async function sha256Hex(s: string): Promise<string> {
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
-  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
 /** The one connection row a scope holds for a provider, pending or not. */
 async function connectionRowFor(
   ctx: { db: any },
@@ -365,8 +361,34 @@ export const storeConnection = internalMutation({
     const now = Date.now();
     const existing = await connectionRowFor(ctx, args.provider, teamId ? { team_id: teamId } : { user_id: userId });
     if (existing) {
-      const stillPending = !!existing.pending_confirm_hash;
+      // A RECONNECT onto a confirmed row does not touch the live credentials.
+      // Overwriting them activated a grant nobody confirmed — the redirect
+      // lands in whichever browser followed it, and finishConfirm had nothing
+      // left to check — so a reconnect bypassed the confirmation first connect
+      // requires. The new grant waits in `pending_replacement` until the
+      // authenticated session that started it promotes it, and the old one
+      // keeps working meanwhile.
+      if (!existing.pending_confirm_hash) {
+        await (ctx.db as any).patch(existing._id, {
+          pending_replacement: {
+            confirm_hash: args.pending_confirm_hash,
+            expires_at: now + CONFIRM_TTL_MS,
+            initiated_by: userId,
+            access_token_enc: args.access_token_enc,
+            refresh_token_enc: args.refresh_token_enc,
+            access_expires_at: args.access_expires_at,
+            granted_scopes: args.granted_scopes,
+            account_label: args.account_label,
+            account_id: args.account_id,
+          },
+          updated_at: now,
+        });
+        return { ok: true, id: existing._id.toString() };
+      }
+      // Still pending: there is no live grant to protect, so the newest
+      // attempt replaces the older one whole.
       await (ctx.db as any).patch(existing._id, {
+        connected_by: userId,
         access_token_enc: args.access_token_enc,
         refresh_token_enc: args.refresh_token_enc ?? existing.refresh_token_enc,
         access_expires_at: args.access_expires_at,
@@ -377,9 +399,8 @@ export const storeConnection = internalMutation({
         account_label: args.account_label ?? existing.account_label,
         account_id: args.account_id ?? existing.account_id,
         updated_at: now,
-        ...(stillPending
-          ? { pending_confirm_hash: args.pending_confirm_hash, pending_expires_at: now + CONFIRM_TTL_MS }
-          : {}),
+        pending_confirm_hash: args.pending_confirm_hash,
+        pending_expires_at: now + CONFIRM_TTL_MS,
       });
       return { ok: true, id: existing._id.toString() };
     }
@@ -421,6 +442,21 @@ export const confirmConnection = action({
   },
 });
 
+/** Is this person still allowed to hold this connection? Asked at CONFIRM, not
+ *  only at connect: the fifteen minutes in between are enough to leave a team,
+ *  and a grant activated after that answers for a workspace nobody in it
+ *  authorised. */
+async function stillAuthorized(ctx: { db: any }, row: any, userId: any): Promise<boolean> {
+  if (row.team_id) {
+    const member = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", row.team_id))
+      .first();
+    return !!member;
+  }
+  return String(row.scope_user_id) === String(userId);
+}
+
 export const finishConfirm = internalMutation({
   args: { user_id: v.string(), installation_id: v.string(), token_hash: v.string() },
   handler: async (ctx, args): Promise<{ ok: boolean; error?: string }> => {
@@ -428,17 +464,55 @@ export const finishConfirm = internalMutation({
     if (!rowId) return { ok: false, error: "no_such_installation" };
     const r = await (ctx.db as any).get(rowId);
     if (!r) return { ok: false, error: "no_such_installation" };
-    if (!r.pending_confirm_hash) return { ok: true }; // already confirmed
-    if (typeof r.pending_expires_at === "number" && Date.now() > r.pending_expires_at) {
-      await (ctx.db as any).delete(rowId);
+    const userId = (ctx.db as any).normalizeId("users", args.user_id);
+    if (!userId) return { ok: false, error: "wrong_user" };
+    const now = Date.now();
+
+    if (r.pending_confirm_hash) {
+      // First connect: nothing is live yet, so an expired attempt takes the
+      // whole row with it.
+      if (typeof r.pending_expires_at === "number" && now > r.pending_expires_at) {
+        await (ctx.db as any).delete(rowId);
+        return { ok: false, error: "expired" };
+      }
+      if (r.pending_confirm_hash !== args.token_hash) return { ok: false, error: "bad_token" };
+      if (String(r.connected_by) !== String(userId)) return { ok: false, error: "wrong_user" };
+      if (!(await stillAuthorized(ctx, r, userId))) return { ok: false, error: "not_authorized" };
+      await (ctx.db as any).patch(rowId, {
+        pending_confirm_hash: undefined,
+        pending_expires_at: undefined,
+        updated_at: now,
+      });
+      return { ok: true };
+    }
+
+    const replacement = r.pending_replacement;
+    if (!replacement) return { ok: true }; // already confirmed, nothing staged
+
+    // A reconnect: the live grant stays exactly as it is until this promotion
+    // succeeds, and every refusal below leaves it working.
+    if (now > replacement.expires_at) {
+      await (ctx.db as any).patch(rowId, { pending_replacement: undefined, updated_at: now });
       return { ok: false, error: "expired" };
     }
-    if (r.pending_confirm_hash !== args.token_hash) return { ok: false, error: "bad_token" };
-    if (String(r.connected_by) !== args.user_id) return { ok: false, error: "wrong_user" };
+    if (replacement.confirm_hash !== args.token_hash) return { ok: false, error: "bad_token" };
+    if (String(replacement.initiated_by) !== String(userId)) return { ok: false, error: "wrong_user" };
+    if (!(await stillAuthorized(ctx, r, userId))) return { ok: false, error: "not_authorized" };
     await (ctx.db as any).patch(rowId, {
-      pending_confirm_hash: undefined,
-      pending_expires_at: undefined,
-      updated_at: Date.now(),
+      connected_by: userId,
+      access_token_enc: replacement.access_token_enc,
+      refresh_token_enc: replacement.refresh_token_enc,
+      access_expires_at: replacement.access_expires_at,
+      granted_scopes: replacement.granted_scopes,
+      account_label: replacement.account_label ?? r.account_label,
+      account_id: replacement.account_id ?? r.account_id,
+      // The promotion is the newest word on this connection: a refresh that
+      // was in flight against the old credentials must not land on top of it.
+      last_error: undefined,
+      refresh_lease_id: undefined,
+      refresh_lease_until: undefined,
+      pending_replacement: undefined,
+      updated_at: now,
     });
     return { ok: true };
   },

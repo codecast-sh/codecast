@@ -3,7 +3,7 @@ import { getFunctionName } from "convex/server";
 import { makeFakeDb } from "./testDb";
 import {
   PROVIDERS, storeConnection, finishConfirm, deleteConnection, getConnectUrl, accessExpiresAt, needsRefresh, REFRESH_MARGIN_MS,
-  getConnection, updateStoredTokens, getFreshAccessToken, claimRefresh, REFRESH_LEASE_MS,
+  getConnection, updateStoredTokens, getFreshAccessToken, claimRefresh, REFRESH_LEASE_MS, connectionForWork,
 } from "./oauthConnectors";
 import { stampOf, stampMatches } from "./lib/tokenRefresh";
 import { signStateWith, verifyStateWith, encryptRefreshToken, decryptRefreshToken } from "./googleOAuth";
@@ -108,6 +108,7 @@ describe("storeConnection + finishConfirm", () => {
   const t0 = () => ({
     users: [{ _id: OWNER }],
     teams: [{ _id: TEAM }],
+    team_memberships: [{ _id: "tm_owner", user_id: OWNER, team_id: TEAM }],
     app_installations: [] as any[],
   });
 
@@ -133,13 +134,15 @@ describe("storeConnection + finishConfirm", () => {
     expect(t.app_installations[0].pending_confirm_hash).toBeUndefined();
   });
 
-  test("re-connecting the same team upserts one row, never two", async () => {
+  test("re-connecting an UNCONFIRMED row upserts it whole — there is no live grant to protect", async () => {
     const t = t0();
     const c = ctx(t);
     await (storeConnection as any)._handler(c, base);
     await (storeConnection as any)._handler(c, { ...base, access_token_enc: "enc-token-2", pending_confirm_hash: "hash-2" });
     expect(t.app_installations).toHaveLength(1);
     expect(t.app_installations[0].access_token_enc).toBe("enc-token-2");
+    expect(t.app_installations[0].pending_confirm_hash).toBe("hash-2");
+    expect(t.app_installations[0].pending_replacement).toBeUndefined();
   });
 
   test("an expired pending row is deleted on confirm, not left as a live grant", async () => {
@@ -235,6 +238,7 @@ describe("getFreshAccessToken (Linear)", () => {
 
   const registry: Record<string, any> = {
     "oauthConnectors:getConnection": getConnection,
+    "oauthConnectors:finishConfirm": finishConfirm,
     "oauthConnectors:updateStoredTokens": updateStoredTokens,
     "oauthConnectors:storeConnection": storeConnection,
     "oauthConnectors:claimRefresh": claimRefresh,
@@ -285,6 +289,7 @@ describe("getFreshAccessToken (Linear)", () => {
     return {
       users: [{ _id: OWNER }],
       teams: [{ _id: TEAM }],
+      team_memberships: [{ _id: "tm_owner", user_id: OWNER, team_id: TEAM }],
       app_installations: [{
         _id: "inst_1", provider: "linear", team_id: TEAM, connected_by: OWNER, granted_scopes: ["read"],
         access_token_enc: await encryptRefreshToken("access-0", SECRET),
@@ -300,13 +305,23 @@ describe("getFreshAccessToken (Linear)", () => {
     refresh: await decryptRefreshToken(t.app_installations[0].refresh_token_enc, SECRET),
     row: t.app_installations[0],
   });
-  /** A reconnect landing while a refresh is in flight. */
-  const reconnect = (t: any) => (async () => (storeConnection as any)._handler(ctx(t), {
-    provider: "linear", user_id: OWNER, team_id: TEAM, granted_scopes: ["read"], pending_confirm_hash: "h",
-    access_token_enc: await encryptRefreshToken("access-re", SECRET),
-    refresh_token_enc: await encryptRefreshToken("refresh-re", SECRET),
-    access_expires_at: Date.now() + 86_399_000,
-  }))();
+  /** A reconnect landing while a refresh is in flight, CONFIRMED — which is
+   *  what makes it the newest word on the row. Storing alone only stages the
+   *  new grant; until the owner confirms, the refresh is still working on the
+   *  credentials in force. */
+  const reconnect = (t: any) => (async () => {
+    const c = ctx(t);
+    const stored = await (storeConnection as any)._handler(c, {
+      provider: "linear", user_id: OWNER, team_id: TEAM, granted_scopes: ["read"], pending_confirm_hash: "h",
+      access_token_enc: await encryptRefreshToken("access-re", SECRET),
+      refresh_token_enc: await encryptRefreshToken("refresh-re", SECRET),
+      access_expires_at: Date.now() + 86_399_000,
+    });
+    const confirmed = await (finishConfirm as any)._handler(c, {
+      user_id: OWNER, installation_id: stored.id, token_hash: "h",
+    });
+    if (!confirmed.ok) throw new Error(`reconnect not confirmed: ${confirmed.error}`);
+  })();
   const expireLease = (t: any) => { t.app_installations[0].refresh_lease_until = Date.now() - 1; };
 
   test("an unknown-age token refreshes once; the rotated pair and expiry land together, and a fresh row skips the provider", async () => {
@@ -624,5 +639,169 @@ describe("personal scope on the shared table", () => {
     const owner = await (deleteConnection as any)._handler(c, { user_id: OWNER, installation_id: "ai_me" });
     expect(owner.ok).toBe(true);
     expect(await c.db.get("ai_me")).toBeNull();
+  });
+});
+
+/* ------------------------------------------------------------------------
+ * PARENT-02: a reconnect must not activate a grant nobody confirmed.
+ *
+ * First connect is two-phase for a reason: the provider's redirect lands in
+ * whichever browser followed it, so only the authenticated session that
+ * started the flow may finish it. A RECONNECT used to skip that entirely —
+ * storeConnection patched the live credentials of an already-confirmed row and
+ * set no pending hash, finishConfirm returned early with nothing to check, and
+ * connectionForWork handed the replacement to the next piece of work. Anyone
+ * who could reach the callback could therefore swap a team's Linear grant for
+ * their own.
+ * ---------------------------------------------------------------------- */
+describe("reconnecting a confirmed connection", () => {
+  const MATE = "u_mate";
+  const t0 = () => ({
+    users: [{ _id: OWNER }, { _id: MATE }, { _id: "u_attacker" }],
+    teams: [{ _id: TEAM }],
+    team_memberships: [
+      { _id: "tm_owner", user_id: OWNER, team_id: TEAM },
+      { _id: "tm_mate", user_id: MATE, team_id: TEAM },
+    ],
+    app_installations: [{
+      _id: "ai_live", provider: "linear", team_id: TEAM, connected_by: OWNER,
+      account_label: "Acme", account_id: "acct_old",
+      access_token_enc: "live-enc", refresh_token_enc: "live-refresh", access_expires_at: 9_000,
+      granted_scopes: ["read"], created_at: 1, updated_at: 1,
+    }] as any[],
+  });
+
+  const restore = (c: any, over: Record<string, any> = {}) => (storeConnection as any)._handler(c, {
+    provider: "linear", user_id: MATE, team_id: TEAM,
+    account_label: "Attacker Workspace", account_id: "acct_new",
+    access_token_enc: "new-enc", refresh_token_enc: "new-refresh", access_expires_at: 99_000,
+    granted_scopes: ["read", "write"], pending_confirm_hash: "hash-new",
+    ...over,
+  });
+  const live = (t: any) => t.app_installations[0];
+
+  test("the new grant is staged, and the old one keeps working", async () => {
+    const t = t0();
+    const c = ctx(t);
+    const res = await restore(c);
+    expect(res.ok).toBe(true);
+    expect(res.id).toBe("ai_live");
+    expect(live(t)).toMatchObject({
+      access_token_enc: "live-enc", refresh_token_enc: "live-refresh", access_expires_at: 9_000,
+      granted_scopes: ["read"], account_label: "Acme", account_id: "acct_old", connected_by: OWNER,
+    });
+    expect(live(t).pending_replacement).toMatchObject({ confirm_hash: "hash-new", initiated_by: MATE, access_token_enc: "new-enc" });
+    // The work path sees the connection it always saw, never the replacement.
+    const found = await connectionForWork(c, "linear", { team_id: TEAM });
+    expect(found?.access_token_enc).toBe("live-enc");
+  });
+
+  test("only the person who started the reconnect can promote it", async () => {
+    const t = t0();
+    const c = ctx(t);
+    await restore(c);
+    const relay = await (finishConfirm as any)._handler(c, { user_id: "u_attacker", installation_id: "ai_live", token_hash: "hash-new" });
+    expect(relay).toEqual({ ok: false, error: "wrong_user" });
+    // Not even the original connector, who did not start this one.
+    const owner = await (finishConfirm as any)._handler(c, { user_id: OWNER, installation_id: "ai_live", token_hash: "hash-new" });
+    expect(owner).toEqual({ ok: false, error: "wrong_user" });
+    expect(live(t).access_token_enc).toBe("live-enc");
+    expect(live(t).pending_replacement).toBeTruthy();
+  });
+
+  test("a wrong token promotes nothing and keeps the old grant", async () => {
+    const t = t0();
+    const c = ctx(t);
+    await restore(c);
+    expect(await (finishConfirm as any)._handler(c, { user_id: MATE, installation_id: "ai_live", token_hash: "nope" }))
+      .toEqual({ ok: false, error: "bad_token" });
+    expect(live(t).access_token_enc).toBe("live-enc");
+    expect((await connectionForWork(c, "linear", { team_id: TEAM }))?.access_token_enc).toBe("live-enc");
+  });
+
+  test("the right person with the right token promotes the whole grant, once", async () => {
+    const t = t0();
+    const c = ctx(t);
+    await restore(c);
+    expect(await (finishConfirm as any)._handler(c, { user_id: MATE, installation_id: "ai_live", token_hash: "hash-new" }))
+      .toEqual({ ok: true });
+    expect(live(t)).toMatchObject({
+      access_token_enc: "new-enc", refresh_token_enc: "new-refresh", access_expires_at: 99_000,
+      granted_scopes: ["read", "write"], account_label: "Attacker Workspace", account_id: "acct_new",
+      connected_by: MATE,
+    });
+    expect(live(t).pending_replacement).toBeUndefined();
+    // Replay: the token is spent, and a second confirm changes nothing.
+    expect(await (finishConfirm as any)._handler(c, { user_id: MATE, installation_id: "ai_live", token_hash: "hash-new" }))
+      .toEqual({ ok: true });
+    expect(live(t).access_token_enc).toBe("new-enc");
+  });
+
+  test("an expired replacement is dropped and the old grant survives", async () => {
+    const t = t0();
+    const c = ctx(t);
+    await restore(c);
+    live(t).pending_replacement.expires_at = Date.now() - 1;
+    expect(await (finishConfirm as any)._handler(c, { user_id: MATE, installation_id: "ai_live", token_hash: "hash-new" }))
+      .toEqual({ ok: false, error: "expired" });
+    expect(live(t).pending_replacement).toBeUndefined();
+    expect(live(t).access_token_enc).toBe("live-enc");
+    expect((await connectionForWork(c, "linear", { team_id: TEAM }))?.access_token_enc).toBe("live-enc");
+  });
+
+  test("someone who has left the team cannot promote, even holding their own token", async () => {
+    const t = t0();
+    const c = ctx(t);
+    await restore(c);
+    t.team_memberships = t.team_memberships.filter((m: any) => m.user_id !== MATE);
+    expect(await (finishConfirm as any)._handler(c, { user_id: MATE, installation_id: "ai_live", token_hash: "hash-new" }))
+      .toEqual({ ok: false, error: "not_authorized" });
+    expect(live(t).access_token_enc).toBe("live-enc");
+  });
+
+  test("a personal connection promotes only for its owner", async () => {
+    const t = {
+      users: [{ _id: OWNER }, { _id: MATE }],
+      teams: [{ _id: TEAM }],
+      team_memberships: [{ _id: "tm_mate", user_id: MATE, team_id: TEAM }],
+      app_installations: [{
+        _id: "ai_mine", provider: "linear", scope_user_id: OWNER, connected_by: OWNER,
+        access_token_enc: "live-enc", granted_scopes: ["read"], created_at: 1, updated_at: 1,
+      }] as any[],
+    };
+    const c = ctx(t);
+    // A reconnect someone else starts cannot even stage onto my row: the
+    // lookup is by scope, so MATE's callback finds no row of mine.
+    await (storeConnection as any)._handler(c, {
+      provider: "linear", user_id: MATE, access_token_enc: "mate-enc", granted_scopes: ["read"], pending_confirm_hash: "h-mate",
+    });
+    expect(t.app_installations).toHaveLength(2);
+    expect(t.app_installations[0].access_token_enc).toBe("live-enc");
+    expect(t.app_installations[0].pending_replacement).toBeUndefined();
+  });
+
+  test("the last reconnect is the one staged; an abandoned one is replaced whole", async () => {
+    const t = t0();
+    const c = ctx(t);
+    await restore(c);
+    await restore(c, { user_id: OWNER, access_token_enc: "newer-enc", pending_confirm_hash: "hash-newer" });
+    expect(live(t).pending_replacement).toMatchObject({ confirm_hash: "hash-newer", initiated_by: OWNER, access_token_enc: "newer-enc" });
+    expect(await (finishConfirm as any)._handler(c, { user_id: MATE, installation_id: "ai_live", token_hash: "hash-new" }))
+      .toEqual({ ok: false, error: "bad_token" });
+  });
+
+  test("first connect still revalidates authority at confirm time", async () => {
+    const t = t0();
+    t.app_installations = [{
+      _id: "ai_pending", provider: "linear", team_id: TEAM, connected_by: MATE,
+      access_token_enc: "pending-enc", granted_scopes: ["read"],
+      pending_confirm_hash: "h", pending_expires_at: Date.now() + 60_000, created_at: 1, updated_at: 1,
+    }];
+    const c = ctx(t);
+    t.team_memberships = t.team_memberships.filter((m: any) => m.user_id !== MATE);
+    expect(await (finishConfirm as any)._handler(c, { user_id: MATE, installation_id: "ai_pending", token_hash: "h" }))
+      .toEqual({ ok: false, error: "not_authorized" });
+    expect(t.app_installations[0].pending_confirm_hash).toBe("h");
+    expect(await connectionForWork(c, "linear", { team_id: TEAM })).toBeNull();
   });
 });
