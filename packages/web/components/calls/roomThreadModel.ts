@@ -58,6 +58,11 @@ export type AgentRef = {
   short_id: string | null;
   title: string;
   agent_type: string;
+  /** What the room calls it (its character); absent on rows cached before
+   *  the server sent it, when the title stands in. */
+  name?: string;
+  character_avatar?: string | null;
+  character_name?: string | null;
 };
 
 /** A row of callChat.list. An event row has `event` set and an empty text. */
