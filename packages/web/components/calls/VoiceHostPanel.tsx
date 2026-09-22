@@ -3,33 +3,23 @@ import { toast } from "sonner";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useDesktopWindowRole } from "../../hooks/useDesktopWindowRole";
-import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
-import { callDockSurface, useWalkieStatus } from "../../hooks/useWalkie";
+import { useTrackedStore } from "../../store/inboxStore";
+import { useWalkieStatus } from "../../hooks/useWalkie";
+import { useFaceRow } from "../../hooks/useFaceRow";
+import { useCallsAvailable } from "../../lib/teamFeatures";
 import { CallStage } from "./CallStage";
-import { CallFaces } from "./CallFaces";
-import { WalkieBanner } from "./WalkieDock";
-import { PresenceFaces } from "../people/PresenceFaces";
+import { FloatingFaceRow } from "../faces/FaceRow";
+import { EngagementCard } from "../faces/EngagementCard";
 import { PeoplePanel } from "../people/PeoplePanel";
-import { RingCard, type RingInvite } from "./RingCard";
 import { voiceHostView } from "../../lib/calls/voiceHostView";
 import { soundCallRing } from "../../lib/sounds";
 import { CALL_RING_PERIOD_MS } from "@codecast/shared/contracts";
-import {
-  acceptInvite,
-  declineInvite,
-  getCallTiles,
-  subscribeCallTiles,
-  takeOverCall,
-} from "../../lib/calls/callManager";
-import { inOwnCall, publishVoiceMirror, runVoiceCommand, walkieHoldsRoom } from "../../lib/calls/walkie";
+import { acceptInvite, takeOverCall } from "../../lib/calls/callManager";
+import { publishVoiceMirror, runVoiceCommand, walkieHoldsRoom } from "../../lib/calls/walkie";
 import { callWindowReport } from "../../lib/calls/callHandoff";
 import { getScribeStatus, subscribeScribe } from "../../lib/calls/transcription";
 import {
   declareVoiceHost,
-  faceTierForSize,
-  facesModeForSize,
-  getVoiceWindowState,
-  isCallWindowSize,
   onCallPanelOpen,
   onCallPanelShow,
   onCallRingAccept,
@@ -40,6 +30,7 @@ import {
   setCallWindowInteractive,
   setCallWindowSize,
   setRingAttention,
+  voiceShapeForCallSize,
   type CallWindowSize,
   type VoiceWindowShape,
 } from "../../lib/desktop";
@@ -52,32 +43,31 @@ import "./voiceHost.css";
  * The persistent call panel window on a shell that keeps one. It is built at
  * boot, hidden, and it never goes away: the walkie's ear lives here (this is
  * the window the door elects), so a teammate's burst plays here, this
- * person's burst is spoken here, and a call — however it starts — joins here.
+ * person's burst is spoken here, and a call, however it starts, joins here.
  * Every other window is a remote for it.
  *
- * ── Why the shape is DERIVED ──────────────────────────────────────────────
- * Nothing chooses a shape for this window; what is happening does. The same
- * lookup the in-app dock used (`callDockSurface`) says whether the walkie
- * holds the room, and from that (lib/calls/voiceHostView):
- *
- *   walkie   the strip, tucked in the bottom-right corner of the screen
- *   a call   the call size the person last chose (stage, circles, speaker,
- *            tiny), or the one they picked on the strip
- *   nothing  the team, if they keep it over their work — the wall (the buddy
- *            list) or the faces (the same team as circles); otherwise hidden
- *
- * A burst becoming a call is therefore this window going from `walkie` to a
- * call size: a resize, from the shell's side, of the window that already
- * holds the room. That is the whole of what ends the re-join.
+ * ── One row, one shape ────────────────────────────────────────────────────
+ * Presence, a burst, a ring and a call are the same row of faces in
+ * different states (lib/faces/faceRow), so this window has one shape for
+ * all of them: the float, the row and its card over the work, anchored to
+ * one corner the shell remembers. What is happening changes what the row
+ * draws; it never changes where the window is. The stage is the expanded
+ * call and opens only on an explicit expand; the wall is the buddy list.
+ * lib/calls/voiceHostView says which, and when the float is up at all: the
+ * header shows the same row while the app is in front, so the float shows
+ * only for something happening while the app is behind another window, or
+ * for as long as the person keeps it popped out.
  *
  * ── The three things it says to the shell ─────────────────────────────────
  * Its shape, whenever the derivation changes. What room it hosts, so every
- * other window knows the call lives here. And, once, that it is the host —
+ * other window knows the call lives here. And, once, that it is the host:
  * from then on rooms arrive as commands rather than in the URL.
  */
 export function VoiceHostPanel({ urlRoom, params }: { urlRoom: string | null; params: URLSearchParams }) {
   const role = useDesktopWindowRole();
   const walkie = useWalkieStatus();
+  const row = useFaceRow();
+  const callsEnabled = useCallsAvailable();
   const s = useTrackedStore([
     (st: any) => st.call.phase,
     (st: any) => st.call.roomKey,
@@ -85,42 +75,34 @@ export function VoiceHostPanel({ urlRoom, params }: { urlRoom: string | null; pa
     (st: any) => st.call.camera,
     (st: any) => st.call.sharing,
     (st: any) => st.call.micDenied,
-    // The rings, as their ids: the oldest live one is the card.
+    // The rings, as their ids: the sound is keyed by the invite it is for.
     (st: any) => (st.myCalls?.incoming ?? []).map((i: any) => i._id).join("|"),
+    (st: any) => st.currentUser?._id,
     (st: any) => st.currentUser?.status === "busy",
   ]);
   const call = s.call;
-  const tiles = useSyncExternalStore(subscribeCallTiles, getCallTiles, () => []);
-  const remoteVideo = tiles.some((t) => !t.isLocal);
+  const viewerId = s.currentUser?._id ? String(s.currentUser._id) : "";
 
-  // The call's own shape: what the person last left a huddle in, per machine,
-  // until they pick another on the stage or the strip.
-  const [callSize, setCallSize] = useState<CallWindowSize>(() => {
-    const seeded = params.get("size");
-    return isCallWindowSize(seeded) ? seeded : "panel";
-  });
-  useMountEffect(() => {
-    void getVoiceWindowState().then((state) => {
-      if (state && !params.get("size")) setCallSize(state.callSize);
-    });
-  });
-
-  // A voice room this client stepped into from the walkie keeps the strip's
-  // shape until video arrives or the person opens it — "float the faces" and
-  // "open the call" on the strip land here. Forgotten with the call.
-  const [expanded, setExpanded] = useState(false);
-  if (expanded && call.phase === "idle") setExpanded(false);
-
-  // The call, put away with the stage's X: it keeps running behind the wall,
-  // the faces or nothing, and comes back when any window asks to show it.
-  const [hiddenCall, setHiddenCall] = useState(false);
-  if (hiddenCall && call.phase === "idle") setHiddenCall(false);
-  const hideCall = useCallback(() => setHiddenCall(true), []);
-
+  // The stage, opened by the person: the elsewhere pill, an opener that
+  // asked for the stage (a room in the URL with no other size named, the
+  // older way in). Never by a burst becoming a call, which is the row
+  // changing state. Put away by the stage's own X, and forgotten when the
+  // call ENDS: only on that transition, because an expand can arrive a
+  // moment before the join lands and must survive the idle it arrives in.
+  const [expanded, setExpanded] = useState(
+    () => !!urlRoom && params.get("ring") !== "1" && !params.get("size"),
+  );
+  const lastPhase = useRef(call.phase);
+  if (lastPhase.current !== call.phase) {
+    if (call.phase === "idle" && expanded) setExpanded(false);
+    lastPhase.current = call.phase;
+  }
+  const hideCall = useCallback(() => setExpanded(false), []);
+  const expand = useCallback(() => setExpanded(true), []);
+  // The stage's shrink menu and an opener's size still speak the legacy call
+  // sizes; the stage stays the stage and every other size is the float.
   const applySize = useCallback((size: CallWindowSize) => {
-    setCallSize(size);
-    setExpanded(true);
-    setHiddenCall(false);
+    setExpanded(voiceShapeForCallSize(size) === "panel");
   }, []);
 
   // ── The ways a room reaches this window ───────────────────────────────────
@@ -139,71 +121,56 @@ export function VoiceHostPanel({ urlRoom, params }: { urlRoom: string | null; pa
     if (call.phase === "idle") joining.current = null;
   }, [call.phase]);
 
-  const surface = callDockSurface(walkie, call, {
-    expanded,
-    video: remoteVideo || !!call.camera || !!call.sharing,
-  });
-  // SOMEBODY IS CALLING. The oldest live invite is the card; a person already
-  // in a call of their own is not rung here (the stage stays; the ring window
-  // and the banner say it). A burst being heard is not a call of their own —
-  // the one rule (lib/calls/walkie inOwnCall) the ring hook and the ring
-  // window stand down by, so one ring is one card.
-  const invite: RingInvite | null = (s.myCalls?.incoming?.[0] as RingInvite | undefined) ?? null;
-  const ringing = !!invite && !inOwnCall(walkie, call);
+  const inCall = call.phase !== "idle" && !!call.roomKey;
+  const ringing = row.card.kind === "ring-in";
   const view: VoiceWindowShape = voiceHostView({
-    surface,
-    callSize,
-    hiddenCall,
+    engaged: row.me !== null,
+    inCall,
+    expanded,
+    floating: role.facesOverlay,
+    appFocused: role.appFocused,
     wallWanted: role.peopleWall,
-    facesWanted: role.facesOverlay,
-    ringing,
   });
 
   // The ring, sounded from here: one cycle per period, louder each of the
-  // first three, until the invite goes — answered anywhere, declined,
-  // cancelled by the caller, or expired. Busy is a silent ring: the card is
-  // up, the sound is not. And the dock bounces for as long as the card is up.
-  const quiet = !!s.currentUser && s.currentUser.status === "busy";
-  const inviteId = invite?._id ?? null;
+  // first three, until the invite goes (answered anywhere, declined,
+  // cancelled by the caller, or expired). Busy is a silent ring: the card is
+  // up, the sound is not. And the dock bounces for as long as the ring is.
+  const quiet = s.currentUser?.status === "busy";
+  const card = row.card;
+  const invite: any = ringing
+    ? (s.myCalls?.incoming ?? []).find((r: any) => r.room_key === card.roomKey && String(r.from_user) === card.from)
+    : null;
+  const inviteId = invite ? String(invite._id) : null;
   useWatchEffect(() => {
-    if (!ringing || !inviteId) return;
+    if (!inviteId) return;
     setRingAttention(true);
     let t: ReturnType<typeof setInterval> | null = null;
     if (!quiet) {
       let cycle = 0;
-      soundCallRing(cycle, String(inviteId));
-      t = setInterval(() => soundCallRing(++cycle, String(inviteId)), CALL_RING_PERIOD_MS);
+      soundCallRing(cycle, inviteId);
+      t = setInterval(() => soundCallRing(++cycle, inviteId), CALL_RING_PERIOD_MS);
     }
     return () => {
       if (t) clearInterval(t);
       setRingAttention(false);
     };
-  }, [ringing, inviteId, quiet]);
-  const answerRing = useCallback(() => {
-    if (!invite) return;
-    setExpanded(true);
-    setHiddenCall(false);
-    if (claim(invite.room_key)) void acceptInvite(String(invite._id), invite.room_key);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- claim is a stable ref helper
-  }, [invite]);
-  const declineRing = useCallback(() => {
-    if (invite) void declineInvite(String(invite._id));
-  }, [invite]);
+  }, [inviteId, quiet]);
 
   // The shape, told to the shell whenever the derivation moves. The shell
   // reveals and hides the window to match; this component never asks for
   // either by name. A build that answers null has no shapes at all, and says
   // so once rather than leaving a window that silently never changes.
   //
-  // A LAYOUT effect, deliberately. The shape's own surface mounts in the same
-  // commit and reports how big the window has to be from a passive effect
+  // A LAYOUT effect, deliberately. The float mounts in the same commit and
+  // reports how big the window has to be from a passive effect
   // (useFloatingCircles), and React runs a child's passive effect before a
-  // parent's — so from a plain effect here the size report reached the shell
-  // FIRST, while the window was still in its previous shape. The shell refuses
-  // a resize in the idle shape, so the report was dropped, the faces came up
-  // in the seed-sized window with the row cut off at both ends, and stayed so
-  // until a hover re-sent the size. Layout effects run before every passive
-  // effect, parent or child, so the ask is on the wire before the report.
+  // parent's, so from a plain effect here the size report reached the shell
+  // FIRST, while the window was still in its previous shape. The shell
+  // refuses a resize in the idle shape, so the report was dropped and the
+  // row came up cut off in the seed sized window until a hover re-sent it.
+  // Layout effects run before every passive effect, parent or child, so the
+  // ask is on the wire before the report.
   const warned = useRef(false);
   useLayoutEffect(() => {
     void setCallWindowSize(view).then((landed) => {
@@ -213,8 +180,8 @@ export function VoiceHostPanel({ urlRoom, params }: { urlRoom: string | null; pa
     });
   }, [view]);
 
-  // Toasts are the app's and the stage's; a strip or a circle floating over
-  // somebody's editor is no place for one (presenceFaces.css reads the class).
+  // Toasts are the app's and the stage's; a row floating over somebody's
+  // editor is no place for one (voiceHost.css reads the class).
   useWatchEffect(() => {
     if (view === "panel") return;
     document.documentElement.classList.add("faces-overlay-window");
@@ -232,14 +199,14 @@ export function VoiceHostPanel({ urlRoom, params }: { urlRoom: string | null; pa
         camera: params.get("cam") === "1",
         scribe: params.get("scribe") === "1",
       });
-      setExpanded(true);
     }
     // 2. A room handed over as a command: an opener in another window, or an
-    //    answered ring on its way (the accept follows and is what joins).
+    //    answered ring on its way (the accept follows and is what joins). An
+    //    opener that asked for the stage gets the stage; one that asked for
+    //    the float, or did not say, gets the row.
     onCallPanelOpen((payload) => {
       if (!payload?.room) return;
-      if (payload.size) setCallSize(payload.size);
-      setExpanded(true);
+      if (payload.size) applySize(payload.size);
       if (payload.ring) return;
       if (!claim(payload.room)) return;
       void takeOverCall({
@@ -249,22 +216,20 @@ export function VoiceHostPanel({ urlRoom, params }: { urlRoom: string | null; pa
         scribe: !!payload.scribe,
       });
     });
-    // 3. The ring window answered. The accept is what takes the seat.
+    // 3. The ring window answered (an older shell's). The accept is what
+    //    takes the seat.
     onCallRingAccept(({ inviteId, roomKey }) => {
       if (!inviteId || !roomKey || !claim(roomKey)) return;
-      setExpanded(true);
       void acceptInvite(inviteId, roomKey);
     });
     // And every gesture from every other window: a press, a join, a hang-up.
+    // None of them opens the stage: the row shows the call where the person
+    // is, and the stage waits for an explicit expand.
     onVoiceCommand(({ cmd, args }) => {
-      if (cmd === "joinCall" || cmd === "startHuddle" || cmd === "acceptInvite") {
-        setExpanded(true);
-        setHiddenCall(false);
-      }
       void runVoiceCommand(cmd, args);
     });
-    // The elsewhere pill, in any window: bring the call back.
-    onCallPanelShow(() => setHiddenCall(false));
+    // The elsewhere pill, in any window: the explicit expand.
+    onCallPanelShow(expand);
     // Listeners first, then the declaration: from here rooms are commands.
     declareVoiceHost();
   });
@@ -272,9 +237,9 @@ export function VoiceHostPanel({ urlRoom, params }: { urlRoom: string | null; pa
   // ── What the other windows are told ───────────────────────────────────────
   //
   // The room this window hosts, so the rest of the app shows "in a huddle in
-  // another window" and raises this one on a click. A seat the walkie holds —
-  // a burst being spoken or heard — is not a huddle, and is not reported as
-  // one: the strip in the corner is already the whole of what there is to see.
+  // another window" and raises this one on a click. A seat the walkie holds,
+  // a burst being spoken or heard, is not a huddle, and is not reported as
+  // one: the row is already the whole of what there is to see.
   const scribe = useSyncExternalStore(subscribeScribe, getScribeStatus, getScribeStatus).active;
   const hostedRoom = walkieHoldsRoom(walkie, call.roomKey) ? null : call.roomKey;
   useWatchEffect(() => {
@@ -289,109 +254,42 @@ export function VoiceHostPanel({ urlRoom, params }: { urlRoom: string | null; pa
     publishVoiceMirror();
   }, [call.phase, call.roomKey, call.muted, call.camera, call.micDenied]);
 
-  // A call running behind the wall or the faces: the pill that brings it back.
-  const callBehind = hiddenCall && call.phase !== "idle";
-  const showCall = useCallback(() => setHiddenCall(false), []);
-
-  if (view === "ring" && invite) {
+  if (view === "panel") {
     return (
-      <div className="dark voice-ring-window">
-        <RingCardHost invite={invite} onAnswer={answerRing} onDecline={declineRing} />
-      </div>
+      <>
+        <CallStage panel onSetSize={applySize} onHide={hideCall} />
+        {/* A ring during a call: the row's card, over the stage where the
+            person is. Nothing else in the app draws it while a host exists. */}
+        {ringing && (
+          <div className="dark voice-stage-ring">
+            <EngagementCard card={row.card} density="float" />
+          </div>
+        )}
+      </>
     );
   }
-  if (view === "walkie") return <WalkieStripHost onShape={applySize} />;
   if (view === "wall") {
     return (
       <div className="voice-wall-window">
-        <PeoplePanel host callBehind={callBehind} onShowCall={showCall} />
+        <PeoplePanel host callBehind={inCall} onShowCall={expand} />
       </div>
     );
   }
-  if (view === "faces") {
+  if (view === "float") {
     return (
-      <div className="dark contents">
-        <PresenceFaces bridge={CALL_WINDOW_BRIDGE} />
+      <div className="dark voice-float-window">
+        <FloatingFaceRow row={row} viewerId={viewerId} callsEnabled={callsEnabled} bridge={CALL_WINDOW_BRIDGE}>
+          {row.card.kind !== "none" && <EngagementCard card={row.card} density="float" />}
+        </FloatingFaceRow>
       </div>
     );
   }
-  if (view === "idle" || view === "ring") return null;
-  if (view !== "panel") {
-    return (
-      <CallFaces
-        mode={facesModeForSize(view)}
-        tier={faceTierForSize(view)}
-        onSetSize={applySize}
-        onHide={hideCall}
-        held={call.phase === "connected"}
-      />
-    );
-  }
-  return <CallStage panel onSetSize={applySize} onHide={hideCall} />;
+  return null;
 }
 
-// The call window's own switches, for the idle faces drawn inside it.
+// The call window's own switches, for the float drawn inside it.
 const CALL_WINDOW_BRIDGE = {
   setInteractive: setCallWindowInteractive,
   setContentSize: setCallWindowContentSize,
   setDragging: setCallWindowDragging,
 };
-
-/**
- * The strip, as the whole contents of a see-through window.
- *
- * The card is exactly the one the in-app dock draws (WalkieBanner); this only
- * gives it a box to sit in and keeps the window that size. The window takes
- * every click — the strip is all controls — and drags by its own header,
- * which the stylesheet marks as the drag region (voiceHost.css).
- */
-function WalkieStripHost({ onShape }: { onShape: (size: CallWindowSize) => void }) {
-  const ref = useRef<HTMLDivElement | null>(null);
-  useMountEffect(() => {
-    const el = ref.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    const measure = () => {
-      const r = el.getBoundingClientRect();
-      if (r.width > 0 && r.height > 0) {
-        setCallWindowContentSize({ width: Math.ceil(r.width), height: Math.ceil(r.height) });
-      }
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  });
-  return (
-    <div className="dark voice-walkie-window">
-      <div ref={ref} className="voice-walkie-card">
-        <WalkieBanner onShape={onShape} />
-      </div>
-    </div>
-  );
-}
-
-/**
- * The ring card as the whole contents of a see-through window pinned over
- * everything: the window is kept exactly the card's size, plus the room its
- * glow needs, off the card's own measure.
- */
-function RingCardHost({ invite, onAnswer, onDecline }: { invite: RingInvite; onAnswer: () => void; onDecline: () => void }) {
-  const ref = useRef<HTMLDivElement | null>(null);
-  useWatchEffect(() => {
-    const el = ref.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    const measure = () => {
-      const r = el.getBoundingClientRect();
-      // The card's own gutter carries its glow (RingCard), so this is the
-      // whole of what the window needs to be.
-      if (r.width > 0 && r.height > 0) {
-        setCallWindowContentSize({ width: Math.ceil(r.width), height: Math.ceil(r.height) });
-      }
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [invite._id]);
-  return <RingCard ref={ref} invite={invite} onAnswer={onAnswer} onDecline={onDecline} />;
-}

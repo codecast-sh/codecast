@@ -8,7 +8,8 @@ import {
 import { fleetCountedSessions, fleetSessionsWakeSig } from "../fleetBands";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useLiveRoomOfMember } from "../../hooks/useLiveRooms";
-import { useWalkieStatus } from "../../hooks/useWalkie";
+import { useFaceRow } from "../../hooks/useFaceRow";
+import { engagementOf, isInHuddle } from "../../lib/faces/faceRow";
 import {
   fleetSummariesByMember,
   memberPresenceVisual,
@@ -90,18 +91,19 @@ export function useMemberActivity(member: any): MemberActivity {
   const memberId = String(member?._id ?? "");
   const fleets = useFleetSummaries();
   const room = useLiveRoomOfMember(memberId);
-  // "Talking" only where it is free and true: a burst this client is HEARING
-  // right now. Whether a teammate is talking to somebody else is not something
-  // this viewer is told, and must not be guessed at.
-  const walkie = useWalkieStatus();
-  const talking = String(walkie.incoming?.fromUserId ?? "") === memberId && !!memberId;
+  // Talking and in a call are the face row's answers (one derivation for
+  // every surface); a scalar each, so a row change that moves neither for
+  // this person leaves the line's memo alone.
+  const row = useFaceRow();
+  const engagement = engagementOf(memberId, row);
+  const inHuddle = isInHuddle(memberId, row);
   // A scalar, so this always-mounted hook never subscribes to a churny row.
   const viewerId = useInboxStore((st: any) => (st.currentUser?._id ? String(st.currentUser._id) : ""));
   const fleet = fleets.get(memberId) ?? null;
   const visual = memberPresenceVisual(member);
   const line = useMemo(
-    () => presenceActivityLine(member, { now, fleet, room, talking, viewerId }),
-    [member, now, fleet, room, talking, viewerId],
+    () => presenceActivityLine(member, { now, fleet, room, engagement, inHuddle, viewerId }),
+    [member, now, fleet, room, engagement, inHuddle, viewerId],
   );
   return { visual, line, fleet, room };
 }

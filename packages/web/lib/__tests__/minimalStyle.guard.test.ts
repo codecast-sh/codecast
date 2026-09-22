@@ -50,7 +50,7 @@ describe("Minimal interface style", () => {
   test("paints your bubble, in the feed and pinned, from the one color you chose", () => {
     // Both bubbles read the same variable, and the stylesheet's fallback hue is
     // the default preset, so a root with no inline hue still paints the default.
-    expect(css.match(/background: var\(--cc-user-bubble\) !important;/g)).toHaveLength(2);
+    expect(css.match(/background(?:-color)?: var\(--cc-user-bubble\) !important;/g)).toHaveLength(2);
     const fallback = css.match(/--cc-user-bubble-hue: (#[0-9a-f]{6});/)?.[1];
     expect(fallback).toBe(resolveBubbleHue(undefined));
     expect(resolveBubbleHue(DEFAULT_BUBBLE_PRESET)).toBe(fallback!);

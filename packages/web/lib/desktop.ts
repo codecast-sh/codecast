@@ -1,3 +1,4 @@
+import { useSyncExternalStore } from "react";
 import { naturalTier, type FaceTier, type FacesMode } from "./calls/faceCrop";
 import { BrowserBannerGate } from "./notificationGate";
 import { PANE_EMBED } from "./browserPane";
@@ -116,18 +117,18 @@ declare global {
       voiceMirror?: (payload: VoiceMirror) => void;
       onVoiceMirror?: (cb: (payload: VoiceMirror) => void) => void;
       getVoiceWindowState?: () => Promise<{ size: VoiceWindowShape; callSize: CallWindowSize } | null>;
-      // The call window's four sizes: the stage, a row of face circles, one
-      // speaker circle, and that circle at the size of a menu bar icon. ONE window — `transparent` and `frame` are
-      // construction-time options, so the window is born see-through and
-      // frameless and the stage paints its own card inside that glass. A size
-      // change therefore never moves the call between windows.
+      // The voice window's shapes: the float (the face row over the work),
+      // the stage, the wall and idle. ONE window: `transparent` and `frame`
+      // are construction-time options, so the window is born see-through and
+      // frameless and the stage paints its own card inside that glass. A
+      // shape change therefore never moves the call between windows.
       //
-      // The last three are what the see-through sizes need and the stage does
-      // not: `setCallWindowInteractive` is the click-through switch (the window
-      // ignores the mouse except over a circle), `setCallWindowContentSize`
-      // keeps the window the size of its circles, and `setCallWindowDragging`
-      // has the shell follow the cursor while a circle is held. Absent on
-      // older builds — gate on them.
+      // The last three are what the float needs and the stage does not:
+      // `setCallWindowInteractive` is the click-through switch (the window
+      // ignores the mouse except over a face or the card),
+      // `setCallWindowContentSize` keeps the window the size of its row, and
+      // `setCallWindowDragging` has the shell follow the cursor while a face
+      // is held. Absent on older builds; gate on them.
       setCallWindowSize?: (size: VoiceWindowShape) => Promise<VoiceWindowShape | null>;
       getCallWindowSize?: () => Promise<VoiceWindowShape | null>;
       setCallWindowInteractive?: (on: boolean) => void;
@@ -135,19 +136,11 @@ declare global {
       setCallWindowDragging?: (on: boolean) => void;
       // The host has a ring up: the dock bounces until the app is activated.
       setRingAttention?: (on: boolean) => void;
-      // The faces overlay (route /faces): the team as photo circles floating
-      // over the work when there is no call — the same see-through window
-      // family as the call circles, sharing their saved spot and yielding to
-      // them while a call is minimized. Open state persists in the shell.
-      // The three setters are the same switches the call circles use,
-      // addressed to this window. Absent on older builds — gate on them.
-      isFacesWindow?: boolean;
+      // The face row popped out of the header into the float. A standing
+      // arrangement the shell persists; the host reads it off the window
+      // role (`facesOverlay`). Absent on older builds; gate on them.
       openFacesWindow?: () => Promise<void>;
       closeFacesWindow?: () => Promise<void>;
-      getFacesWindowOpen?: () => Promise<boolean>;
-      setFacesWindowInteractive?: (on: boolean) => void;
-      setFacesWindowContentSize?: (size: { width: number; height: number }) => void;
-      setFacesWindowDragging?: (on: boolean) => void;
       // Screen-share primitives (huddles). The shell lists capturable
       // screens/windows and lets the web pre-select one for the NEXT
       // getDisplayMedia; the picker UI itself is web-owned. Absent on older
@@ -368,7 +361,9 @@ export type DesktopWindowState = {
 
 // This window's role among the desktop's windows, pushed by the shell.
 //   leader:       the ONE window that may play notification sounds
-//   appFocused:   some app window (not just this one) has OS focus
+//   appFocused:   a window the person works in (any app window but the
+//                 voice window) has OS focus. The voice host shows the float
+//                 for a ring or a burst only while this is false
 //   anyInCall:    some window hosts a connected call
 //   peopleWindow: a people window exists somewhere in the app. The window that
 //                 IS it (isPeopleWindow) owns the roster, the call and walkie
@@ -387,13 +382,12 @@ export type DesktopWindowRole = {
    *  window sends its gestures there instead of opening a microphone of its
    *  own. False on an older shell, where each window keeps its own. */
   voiceWindow: boolean;
-  /** The person wants the idle team floating over their work. The voice host
-   *  takes the faces shape off this; the people window's toggle draws it, so
-   *  a close from the overlay's own chrome — or from another window — is
-   *  reflected everywhere. */
+  /** The person popped the face row out of the header into the float. The
+   *  voice host keeps the float up off this; the header shows a chip that
+   *  brings the row back (useFacesFloating). */
   facesOverlay: boolean;
   /** The person wants the buddy list up, as the WALL shape of the voice host.
-   *  Exclusive with the faces: they are two sizes of one glance at the team. */
+   *  Exclusive with the float: they are two sizes of one glance at the team. */
   peopleWall: boolean;
   /** Which of the Chat and Work windows exist right now (lib/desktopApps):
    *  the sidebar marks their sections as popped out, and every navigation
@@ -721,28 +715,40 @@ export function onCallPanelHandback(
 // BrowserWindow is CONSTRUCTED, so the window is born see-through and frameless
 // and the stage paints its own card inside that glass. That is the whole point:
 // a call changing shape must never be a call changing WINDOWS, because changing
-// windows means leaving the room and re-joining it, and a person switching to a
-// circle is not asking for their audio to be re-established.
+// windows means leaving the room and re-joining it, and a person switching to
+// the float is not asking for their audio to be re-established.
 //
 // The shell keeps the last size per machine, so the next popout comes back the
 // shape the person left it.
 // ---------------------------------------------------------------------------
 
+/**
+ * The older per call window's sizes: the stage and its three circle sizes.
+ * Still spoken by the LEGACY path (CallPanel on a shell without a voice
+ * host, CallFaces, the stage's shrink menu); a voice host lands every one
+ * of them that is not the stage on the float.
+ */
 export type CallWindowSize = "panel" | "circles" | "speaker" | "tiny";
 
 /**
- * Every shape the voice window takes: the call's four sizes, plus the four
- * the walkie and the team add. A burst becoming a call is this window going
- * from `walkie` to a call size — a resize of the window that already holds
- * the microphone, never a second window joining the room.
+ * Every shape the voice window takes. Presence, a burst, a ring and a call
+ * are the same row of faces in different states, so they are ONE shape at
+ * ONE anchor, and a burst becoming a call is the float drawing something
+ * else in a window that does not move.
  *
- *   ring    somebody is calling: the caller's face and Join, pinned over all
- *   walkie  the burst strip, in the bottom-right corner of the screen
+ *   float   the face row and its card, always on top, click through except
+ *           the faces and the card, anchored to one remembered corner
+ *   panel   the stage: the expanded call, opened on an explicit expand
  *   wall    the buddy list, in the people window's own rectangle
- *   faces   the idle team as photo circles, at the call circles' spot
  *   idle    nothing to show: the window is hidden and waits
  */
-export type VoiceWindowShape = CallWindowSize | "ring" | "walkie" | "wall" | "faces" | "idle";
+export type VoiceWindowShape = "float" | "panel" | "wall" | "idle";
+
+/** The shape the host gives a legacy call size: the stage stays the stage,
+ *  every circle size is the float. */
+export function voiceShapeForCallSize(size: CallWindowSize): "panel" | "float" {
+  return size === "panel" ? "panel" : "float";
+}
 
 export const CALL_WINDOW_SIZES: readonly CallWindowSize[] = ["panel", "circles", "speaker", "tiny"];
 
@@ -784,8 +790,8 @@ export function faceTierForSize(size: CallWindowSize): FaceTier {
 /**
  * Whether this build can make the window small at all.
  *
- * The circle sizes need a see-through, click-through, always-on-top window, and
- * only the shell can make one — a browser has no approximation worth offering.
+ * The float needs a see-through, click-through, always-on-top window, and
+ * only the shell can make one; a browser has no approximation worth offering.
  * An older desktop build has the panel and none of this, which is why the check
  * is for the FUNCTION rather than for "am I on the desktop": the surface can
  * then say the app needs an update instead of a button doing nothing.
@@ -795,8 +801,8 @@ export function canResizeCallWindow(): boolean {
 }
 
 /**
- * Put the window into a size. Returns the size it actually landed on, or null
- * if this build cannot do it — the caller says so rather than pretending.
+ * Put the window into a shape. Returns the shape it actually landed on, or
+ * null if this build cannot do it; the caller says so rather than pretending.
  */
 export async function setCallWindowSize(size: VoiceWindowShape): Promise<VoiceWindowShape | null> {
   const set = bridge("setCallWindowSize");
@@ -804,7 +810,7 @@ export async function setCallWindowSize(size: VoiceWindowShape): Promise<VoiceWi
   return (await set(size)) ?? null;
 }
 
-/** Which size the shell has this window in. Null on a build without sizes. */
+/** Which shape the shell has this window in. Null on a build without shapes. */
 export async function getCallWindowSize(): Promise<VoiceWindowShape | null> {
   const get = bridge("getCallWindowSize");
   if (!get) return null;
@@ -894,31 +900,31 @@ export async function getVoiceWindowState(): Promise<{ size: VoiceWindowShape; c
 /**
  * Does the window take the mouse right now?
  *
- * In the circle sizes the window is a rectangle and the product is a few
- * circles. Everywhere else the pointer belongs to whatever application is
- * underneath, so the window ignores mouse events and the renderer — the only
- * side that knows where the circles are — turns that off while the pointer is
- * over one. Ignored by the shell in the panel size, where the stage takes every
- * click by construction.
+ * In the float the window is a rectangle and the product is a few faces and
+ * a card. Everywhere else the pointer belongs to whatever application is
+ * underneath, so the window ignores mouse events and the renderer, the only
+ * side that knows where the faces are, turns that off while the pointer is
+ * over one. Ignored by the shell in the panel shape, where the stage takes
+ * every click by construction.
  */
 export function setCallWindowInteractive(on: boolean): void {
   bridge("setCallWindowInteractive")?.(on);
 }
 
-/** Size the window to its circles (they change with the size and the room). */
+/** Size the window to its row (it changes with who is on it and the card). */
 export function setCallWindowContentSize(size: { width: number; height: number }): void {
   bridge("setCallWindowContentSize")?.(size);
 }
 
 /**
- * Drag the window by a circle.
+ * Drag the window by a face.
  *
  * Deliberately not `-webkit-app-region: drag`, which is what the STAGE uses:
  * over a drag region the window manager takes the mouse events, so a
  * click-through renderer would stop receiving the moves that tell it when the
- * pointer LEFT the circle, and the window would be stuck taking clicks that
+ * pointer LEFT the face, and the window would be stuck taking clicks that
  * belong to the app underneath. Instead the shell follows the cursor itself
- * between these two calls — no per-move IPC, and it composes with click-through
+ * between these two calls: no per-move IPC, and it composes with click-through
  * rather than fighting it.
  */
 export function setCallWindowDragging(on: boolean): void {
@@ -926,26 +932,20 @@ export function setCallWindowDragging(on: boolean): void {
 }
 
 // ---------------------------------------------------------------------------
-// The faces overlay: the team as photo circles floating over the work, when
-// there is no call. The same see-through window family as the call circles —
-// frameless, always on top, click-through except over a circle — and the same
-// spot on screen: the shell keeps one saved position for both, and the overlay
-// yields while a call is minimized to circles, returning when it ends.
+// The face row, popped out. The row lives in the app's header until the
+// person sends it to the float: the voice host's see-through window over the
+// work, always on top, click-through except over a face or the card. The
+// header then shows one chip that brings the row back. A standing
+// arrangement: the shell persists it (settings.facesWindow.open) and tells
+// every window through the role (`facesOverlay`), so the chip and the host
+// read the same answer.
 //
-// Desktop-only, like the call circles and for the same reason: a transparent
-// click-through always-on-top window is something only the shell can make, and
-// a browser has no approximation worth offering. The people window is the
-// browser's version of "keep the team beside your work".
+// Desktop-only, for the same reason as every see-through shape: a transparent
+// click-through always-on-top window is something only the shell can make,
+// and a browser has no approximation worth offering.
 // ---------------------------------------------------------------------------
 
-export const FACES_ROUTE = "/faces";
-
-/** This renderer IS the faces overlay window. */
-export function isFacesWindow(): boolean {
-  return typeof window !== "undefined" && window.__CODECAST_ELECTRON__?.isFacesWindow === true;
-}
-
-/** Whether this build can open the overlay at all — the check is for the
+/** Whether this build can float the row at all. The check is for the
  *  function rather than "am I on the desktop", so an older shell reads as
  *  "needs an update" instead of a button doing nothing. */
 export function canOpenFacesOverlay(): boolean {
@@ -960,21 +960,27 @@ export async function closeFacesWindow(): Promise<void> {
   await bridge("closeFacesWindow")?.();
 }
 
-/** Whether an overlay window exists right now (it may be yielding to a call). */
-export async function getFacesWindowOpen(): Promise<boolean> {
-  return (await bridge("getFacesWindowOpen")?.()) ?? false;
+/**
+ * The pop out, as a React value: whether this build can float the row,
+ * whether it is floating now, and the one switch. The header renders the row
+ * and a pop out button while `floating` is false, and a single chip that
+ * brings the row back while it is true.
+ */
+export function useFacesFloating(): {
+  available: boolean;
+  floating: boolean;
+  setFloating: (on: boolean) => void;
+} {
+  const role = useSyncExternalStore(subscribeWindowRole, getDesktopWindowRole, getDesktopWindowRole);
+  return {
+    available: canOpenFacesOverlay(),
+    floating: role.facesOverlay,
+    setFloating: setFacesFloating,
+  };
 }
 
-export function setFacesWindowInteractive(on: boolean): void {
-  bridge("setFacesWindowInteractive")?.(on);
-}
-
-export function setFacesWindowContentSize(size: { width: number; height: number }): void {
-  bridge("setFacesWindowContentSize")?.(size);
-}
-
-export function setFacesWindowDragging(on: boolean): void {
-  bridge("setFacesWindowDragging")?.(on);
+function setFacesFloating(on: boolean): void {
+  void (on ? openFacesWindow() : closeFacesWindow());
 }
 
 /**

@@ -47,16 +47,14 @@ test("the stage is an ordinary window: no float, no click-through, resizable", (
   assert.equal(win.did("showInactive").length, 0);
 });
 
-test("every circle size floats over the work, lets the mouse through and cannot be dragged by an edge", () => {
+test("the float sits over the work, lets the mouse through and cannot be dragged by an edge", () => {
   const rig = loadShell();
   const { win, sender } = openCallWindow(rig);
-  for (const size of ["circles", "speaker", "tiny"]) {
-    rig.handlers.get("set-call-window-size")(sender, size);
-    assert.deepEqual(win.last("setAlwaysOnTop"), [true, "floating"], size);
-    assert.deepEqual(win.last("setIgnoreMouseEvents"), [true, { forward: true }], size);
-    assert.deepEqual(win.last("setVisibleOnAllWorkspaces"), [true, { visibleOnFullScreen: false, skipTransformProcessType: true }], size);
-    assert.equal(win.isResizable(), false, size);
-  }
+  rig.handlers.get("set-call-window-size")(sender, "float");
+  assert.deepEqual(win.last("setAlwaysOnTop"), [true, "floating"]);
+  assert.deepEqual(win.last("setIgnoreMouseEvents"), [true, { forward: true }]);
+  assert.deepEqual(win.last("setVisibleOnAllWorkspaces"), [true, { visibleOnFullScreen: false, skipTransformProcessType: true }]);
+  assert.equal(win.isResizable(), false);
 });
 
 test("going back to the stage undoes all three, together", () => {
@@ -64,7 +62,7 @@ test("going back to the stage undoes all three, together", () => {
   // unusable, and one still floating sits over every other window.
   const rig = loadShell();
   const { win, sender } = openCallWindow(rig);
-  rig.handlers.get("set-call-window-size")(sender, "tiny");
+  rig.handlers.get("set-call-window-size")(sender, "float");
   rig.handlers.get("set-call-window-size")(sender, "panel");
   assert.deepEqual(win.last("setAlwaysOnTop"), [false, "floating"]);
   assert.deepEqual(win.last("setIgnoreMouseEvents"), [false, { forward: true }]);
@@ -74,8 +72,8 @@ test("going back to the stage undoes all three, together", () => {
 test("the size the renderer asked for is the size it is told it got", () => {
   const rig = loadShell();
   const { sender } = openCallWindow(rig);
-  assert.equal(rig.handlers.get("set-call-window-size")(sender, "speaker"), "speaker");
-  assert.equal(rig.handlers.get("get-call-window-size")(sender), "speaker");
+  assert.equal(rig.handlers.get("set-call-window-size")(sender, "float"), "float");
+  assert.equal(rig.handlers.get("get-call-window-size")(sender), "float");
 });
 
 test("an unknown size lands on the stage, never on an invisible window", () => {
@@ -84,7 +82,7 @@ test("an unknown size lands on the stage, never on an invisible window", () => {
   // see and click.
   const rig = loadShell();
   const { win, sender } = openCallWindow(rig);
-  rig.handlers.get("set-call-window-size")(sender, "circles");
+  rig.handlers.get("set-call-window-size")(sender, "float");
   assert.equal(rig.handlers.get("set-call-window-size")(sender, "banana"), "panel");
   assert.deepEqual(win.last("setIgnoreMouseEvents"), [false, { forward: true }]);
 });
@@ -93,47 +91,48 @@ test("only the call window may reshape itself", () => {
   const rig = loadShell();
   openCallWindow(rig);
   const impostor = { sender: { id: 99 } };
-  assert.equal(rig.handlers.get("set-call-window-size")(impostor, "circles"), null);
+  assert.equal(rig.handlers.get("set-call-window-size")(impostor, "float"), null);
   assert.equal(rig.handlers.get("get-call-window-size")(impostor), null);
 });
 
 test("the size is remembered per machine and restored on the next popout", () => {
   const rig = loadShell();
   const { win, sender } = openCallWindow(rig);
-  rig.handlers.get("set-call-window-size")(sender, "tiny");
-  assert.equal(readSettings().callPanelWindow.size, "tiny");
+  rig.handlers.get("set-call-window-size")(sender, "float");
+  assert.equal(readSettings().callPanelWindow.size, "float");
   win.close();
 
   // A fresh launch, reading the file the last one wrote.
   const next = loadShell(readSettings());
   const reopened = openCallWindow(next);
-  assert.equal(next.handlers.get("get-call-window-size")(reopened.sender), "tiny");
-  // Seeded into the URL too, so the first paint is already the circle rather
+  assert.equal(next.handlers.get("get-call-window-size")(reopened.sender), "float");
+  // Seeded into the URL too, so the first paint is already the float rather
   // than a stage that snaps a frame later.
-  assert.match(reopened.win.last("loadURL")[0], /size=tiny/);
-  // And it opens without taking the keyboard: a circle is a glance you keep
+  assert.match(reopened.win.last("loadURL")[0], /size=float/);
+  // And it opens without taking the keyboard: the float is a glance you keep
   // beside your work.
   reopened.win.emit("ready-to-show");
   assert.equal(reopened.win.did("showInactive").length, 1);
   assert.equal(reopened.win.did("show").length, 0);
 });
 
-test("the stage's bounds and the circles' position are remembered separately", () => {
+test("the stage's bounds and the float's anchor are remembered separately", () => {
   // One window, two places. Saving one over the other would drag each size to
   // where the other was last left.
   const rig = loadShell({ callPanelWindow: { bounds: { x: 200, y: 120, width: 900, height: 600 } } });
   const { win, sender } = openCallWindow(rig);
   assert.deepEqual(win.getBounds(), { x: 200, y: 120, width: 900, height: 600 });
 
-  rig.handlers.get("set-call-window-size")(sender, "circles");
+  rig.handlers.get("set-call-window-size")(sender, "float");
   win.setPosition(40, 40);
   win.close();
   const saved = readSettings().callPanelWindow;
-  assert.deepEqual(saved.circles, { x: 40, y: 40 });
+  // Left in the top left of the display: anchored by that corner.
+  assert.deepEqual(saved.float, { x: 40, y: 40, corner: "top-left" });
   assert.deepEqual(saved.bounds, { x: 200, y: 120, width: 900, height: 600 });
 });
 
-test("the circles size the window to themselves; the stage does not", () => {
+test("the float sizes the window to itself; the stage does not", () => {
   const rig = loadShell();
   const { win, sender } = openCallWindow(rig);
   // In the stage the person's own bounds are the answer — a renderer resizing
@@ -143,7 +142,7 @@ test("the circles size the window to themselves; the stage does not", () => {
   assert.deepEqual(win.getContentSize(), stage);
   assert.deepEqual(win.getContentSize(), [960, 640]);
 
-  rig.handlers.get("set-call-window-size")(sender, "circles");
+  rig.handlers.get("set-call-window-size")(sender, "float");
   rig.handlers.get("set-call-window-content-size")(sender, { width: 224, height: 112 });
   assert.deepEqual(win.getContentSize(), [224, 112]);
   // And the flag goes straight back: the person still cannot drag an edge.
@@ -153,7 +152,7 @@ test("the circles size the window to themselves; the stage does not", () => {
 test("a nonsense content size is ignored rather than applied", () => {
   const rig = loadShell();
   const { win, sender } = openCallWindow(rig);
-  rig.handlers.get("set-call-window-size")(sender, "speaker");
+  rig.handlers.get("set-call-window-size")(sender, "float");
   const before = win.getContentSize();
   for (const bad of [null, { width: 0, height: 10 }, { width: 9000, height: 9000 }, { width: "x", height: 10 }]) {
     rig.handlers.get("set-call-window-content-size")(sender, bad);
@@ -169,10 +168,10 @@ test("click-through is refused in the stage, where it would make the window uncl
   assert.equal(win.did("setIgnoreMouseEvents").length, before);
 });
 
-test("click-through follows the renderer's hit test in a circle size", () => {
+test("click-through follows the renderer's hit test in the float", () => {
   const rig = loadShell();
   const { win, sender } = openCallWindow(rig);
-  rig.handlers.get("set-call-window-size")(sender, "circles");
+  rig.handlers.get("set-call-window-size")(sender, "float");
   rig.handlers.get("set-call-window-interactive")(sender, true);
   assert.deepEqual(win.last("setIgnoreMouseEvents"), [false, { forward: true }]);
   rig.handlers.get("set-call-window-interactive")(sender, false);
@@ -217,19 +216,18 @@ test("a hang-up hands nothing back", () => {
 });
 
 test("changing size hands nothing back, because the window never closed", () => {
-  // The whole point of one window with three sizes: the media stays put, so
+  // The whole point of one window with two sizes: the media stays put, so
   // there is no moment where the call is between windows.
   const rig = loadShell();
   const { sender } = openCallWindow(rig);
   const sent = [];
   rig.mainWindow.webContents.send = (channel) => sent.push(channel);
-  rig.handlers.get("set-call-window-size")(sender, "circles");
-  rig.handlers.get("set-call-window-size")(sender, "speaker");
+  rig.handlers.get("set-call-window-size")(sender, "float");
   rig.handlers.get("set-call-window-size")(sender, "panel");
   assert.deepEqual(sent, []);
 });
 
-test("dragging by a circle is refused in the stage, which drags by its header row", () => {
+test("dragging by a face is refused in the stage, which drags by its header row", () => {
   // The stage uses a real `-webkit-app-region: drag` region, handled by the
   // window manager. Following the cursor from here as well would be two things
   // moving one window.
@@ -240,10 +238,10 @@ test("dragging by a circle is refused in the stage, which drags by its header ro
   assert.equal(cursorReads.count, 0);
 });
 
-test("dragging by a circle has the shell follow the cursor, and stops when told", () => {
+test("dragging by a face has the shell follow the cursor, and stops when told", () => {
   const rig = loadShell();
   const { win, sender } = openCallWindow(rig);
-  rig.handlers.get("set-call-window-size")(sender, "speaker");
+  rig.handlers.get("set-call-window-size")(sender, "float");
   cursorReads.count = 0;
   rig.handlers.get("set-call-window-dragging")(sender, true);
   // One read to take the offset between the cursor and the window's corner.
@@ -262,27 +260,27 @@ test("dragging by a circle has the shell follow the cursor, and stops when told"
   );
 });
 
-test("a zoomed page still gets a window the size of its circles", () => {
+test("a zoomed page still gets a window the size of its faces", () => {
   // The renderer measures in CSS pixels; the window is sized in device-
   // independent ones. At 1.5x a 112px row needs a 168px window, and a window
   // sized to 112 would clip the faces it exists to show.
   const rig = loadShell();
   const { win, sender } = openCallWindow(rig);
-  rig.handlers.get("set-call-window-size")(sender, "circles");
+  rig.handlers.get("set-call-window-size")(sender, "float");
   win.webContents.setZoomFactor(1.5);
   rig.handlers.get("set-call-window-content-size")(sender, { width: 112, height: 112 });
   assert.deepEqual(win.getContentSize(), [168, 168]);
 });
 
 test("an opener may ask for a size, and the window is born in it", () => {
-  // The walkie card's "Float faces over my work" wants circles, not a stage
-  // that shrinks a frame later. The size is remembered like any other.
+  // An opener that wants the faces over the work asks for the float, not a
+  // stage that shrinks a frame later. The size is remembered like any other.
   const rig = loadShell({ callPanelWindow: { size: "panel" } });
-  rig.handlers.get("open-call-panel")(rig.event(), "dm:a:b", { mic: true, size: "speaker" });
+  rig.handlers.get("open-call-panel")(rig.event(), "dm:a:b", { mic: true, size: "float" });
   const win = rig.windows[rig.windows.length - 1];
-  assert.match(win.last("loadURL")[0], /size=speaker/);
+  assert.match(win.last("loadURL")[0], /size=float/);
   assert.deepEqual(win.last("setAlwaysOnTop"), [true, "floating"]);
-  assert.equal(readSettings().callPanelWindow.size, "speaker");
+  assert.equal(readSettings().callPanelWindow.size, "float");
   // Asked again on the window that exists, the shape changes in place.
   rig.handlers.get("open-call-panel")(rig.event(), "dm:a:b", { size: "panel" });
   assert.deepEqual(win.last("setAlwaysOnTop"), [false, "floating"]);
@@ -323,13 +321,13 @@ test("a host takes a room as a command — the window is never reloaded under it
   const sent = [];
   win.webContents.send = (channel, payload) => sent.push([channel, payload]);
   const loads = win.did("loadURL").length;
-  rig.handlers.get("open-call-panel")(rig.event(), "dm:a:b", { mic: true, size: "speaker" });
+  rig.handlers.get("open-call-panel")(rig.event(), "dm:a:b", { mic: true, size: "float" });
   assert.equal(win.did("loadURL").length, loads);
   assert.deepEqual(sent, [
-    ["call-panel-open", { room: "dm:a:b", mic: true, camera: false, scribe: false, ring: false, size: "speaker" }],
+    ["call-panel-open", { room: "dm:a:b", mic: true, camera: false, scribe: false, ring: false, size: "float" }],
   ]);
   // The shell does not move the window itself: the host reshapes once it has
-  // the room, so the strip it may be showing is not yanked mid-burst.
+  // the room, so the row it may be showing is not yanked mid-burst.
   assert.equal(rig.handlers.get("get-call-window-size")(sender), "idle");
 });
 
@@ -353,50 +351,17 @@ test("a host's hang-up hides the window; it is destroyed only by quitting", () =
   assert.equal(win.isVisible(), false);
 });
 
-test("the strip is a shape: bottom-right corner, floating, taking the mouse, never remembered as a call size", () => {
-  const rig = loadShell({ callPanelWindow: { size: "tiny" } });
-  const { win, sender } = bootVoiceWindow(rig);
-  assert.equal(rig.handlers.get("set-call-window-size")(sender, "walkie"), "walkie");
-  assert.deepEqual(win.last("setAlwaysOnTop"), [true, "floating"]);
-  assert.deepEqual(win.last("setIgnoreMouseEvents"), [false, { forward: true }]);
-  assert.deepEqual(win.last("setVisibleOnAllWorkspaces"), [true, { visibleOnFullScreen: false, skipTransformProcessType: true }]);
-  assert.equal(win.isResizable(), false);
-  // One rem in, five rem up from the bottom-right of the 1600x1000 work area.
-  const [w, h] = win.getContentSize();
-  assert.deepEqual(win.getPosition(), [1600 - w - 16, 1000 - h - 80]);
-  assert.equal(win.did("showInactive").length, 1);
-  // The call size the person chose is untouched, and it is what the host is
-  // told to open a call in.
-  assert.equal(readSettings().callPanelWindow.size, "tiny");
-  assert.deepEqual(rig.handlers.get("get-voice-window-state")(sender), { size: "walkie", callSize: "tiny" });
-});
-
-test("the strip grows from its bottom-right corner, so the corner it is tucked into stays put", () => {
-  const rig = loadShell();
-  const { win, sender } = bootVoiceWindow(rig);
-  rig.handlers.get("set-call-window-size")(sender, "walkie");
-  const [x0, y0] = win.getPosition();
-  const [w0, h0] = win.getContentSize();
-  rig.handlers.get("set-call-window-content-size")(sender, { width: w0, height: h0 + 60 });
-  assert.deepEqual(win.getPosition(), [x0, y0 - 60]);
-  rig.handlers.get("set-call-window-content-size")(sender, { width: w0, height: h0 });
-  assert.deepEqual(win.getPosition(), [x0, y0]);
-});
-
-test("the strip's corner is remembered on its own, apart from the circles and the stage", async () => {
-  const rig = loadShell({ callPanelWindow: { circles: { x: 40, y: 40 } } });
-  const { win, sender } = bootVoiceWindow(rig);
-  rig.handlers.get("set-call-window-size")(sender, "walkie");
-  win.setPosition(900, 700);
-  win.emit("move");
-  await new Promise((r) => setTimeout(r, 500));
-  const saved = readSettings().callPanelWindow;
-  assert.deepEqual(saved.walkie, { x: 900, y: 700 });
-  assert.deepEqual(saved.circles, { x: 40, y: 40 });
-  // And a strip that comes back lands where it was left.
-  rig.handlers.get("set-call-window-size")(sender, "idle");
-  rig.handlers.get("set-call-window-size")(sender, "walkie");
-  assert.deepEqual(win.last("setPosition"), [900, 700]);
+test("the host is told the shape it is in and the call shape the person chose", () => {
+  const rig = loadShell({ callPanelWindow: { size: "panel" } });
+  const { sender } = bootVoiceWindow(rig);
+  assert.deepEqual(rig.handlers.get("get-voice-window-state")(sender), { size: "idle", callSize: "panel" });
+  assert.equal(rig.handlers.get("set-call-window-size")(sender, "float"), "float");
+  // The float is a call shape the person can leave a call in, so it is the
+  // one the next call opens in.
+  assert.deepEqual(rig.handlers.get("get-voice-window-state")(sender), { size: "float", callSize: "float" });
+  // The wall is not: a call never opens as the buddy list.
+  rig.handlers.get("set-call-window-size")(sender, "wall");
+  assert.deepEqual(rig.handlers.get("get-voice-window-state")(sender), { size: "wall", callSize: "float" });
 });
 
 test("commands from other windows reach the host, and nobody when there is none", () => {
@@ -478,7 +443,7 @@ test("the call lives in the voice window only while it hosts a room", async () =
 test("raising the huddle on a host tells the host, which takes the call's shape itself", () => {
   // The host derives its shape from what is happening; the shell moving it
   // would fight that. A host hiding the call behind the wall is told to stop.
-  const rig = loadShell({ callPanelWindow: { size: "speaker" } });
+  const rig = loadShell({ callPanelWindow: { size: "float" } });
   const { win, sender } = bootVoiceWindow(rig);
   declareHost(rig, sender);
   const sent = [];
@@ -489,7 +454,7 @@ test("raising the huddle on a host tells the host, which takes the call's shape 
   assert.deepEqual(sent, ["call-panel-show"]);
   assert.equal(rig.handlers.get("get-call-window-size")(sender), "wall");
   // In a call shape that was merely closed, the shell reveals it as well.
-  rig.handlers.get("set-call-window-size")(sender, "speaker");
+  rig.handlers.get("set-call-window-size")(sender, "float");
   win.hide();
   assert.equal(rig.handlers.get("show-call-panel")(rig.event()), true);
   assert.equal(win.isVisible(), true);
@@ -598,30 +563,12 @@ test("closing the wall puts the buddy list away; the host stays", () => {
 
 
 // ── The ring ──────────────────────────────────────────────────────────────
+//
+// A ring is the float showing the row with the ring card, at the float's own
+// anchor. The shell's part is the dock: it bounces for as long as the host
+// says a ring is up.
 
-test("the ring shape is pinned above everything at the top-right of the cursor's display, revealed without focus", () => {
-  const rig = loadShell();
-  const { win, sender } = bootVoiceWindow(rig);
-  declareHost(rig, sender);
-  assert.equal(rig.handlers.get("set-call-window-size")(sender, "ring"), "ring");
-  assert.deepEqual(win.last("setAlwaysOnTop"), [true, "screen-saver"]);
-  assert.deepEqual(win.last("setIgnoreMouseEvents"), [false, { forward: true }]);
-  assert.deepEqual(win.last("setVisibleOnAllWorkspaces"), [true, { visibleOnFullScreen: false, skipTransformProcessType: true }]);
-  assert.equal(win.isResizable(), false);
-  // The rig's cursor is at 400,400 on a 1600x1000 work area.
-  const [w] = win.getContentSize();
-  assert.deepEqual(win.getPosition(), [1600 - w - 16, 16]);
-  assert.equal(win.did("showInactive").length, 1);
-  assert.equal(win.did("focus").length, 0);
-  // A card that grows keeps its right edge where it is.
-  const [x0, y0] = win.getPosition();
-  rig.handlers.get("set-call-window-content-size")(sender, { width: w + 40, height: 300 });
-  assert.deepEqual(win.getPosition(), [x0 - 40, y0]);
-  // Never remembered as the size the person left a call in.
-  assert.equal(readSettings().callPanelWindow?.size, undefined);
-});
-
-test("a ring bounces the dock until it is answered, and stops the moment the shape changes", () => {
+test("a ring bounces the dock until the host says it stopped, and only the host may ask", () => {
   const rig = loadShell();
   const bounces = [];
   const cancels = [];
@@ -632,16 +579,21 @@ test("a ring bounces the dock until it is answered, and stops the moment the sha
   rig.electron.app.dock.cancelBounce = (id) => cancels.push(id);
   const { sender } = bootVoiceWindow(rig);
   declareHost(rig, sender);
-  rig.handlers.get("set-call-window-size")(sender, "ring");
-  assert.deepEqual(bounces, ["critical"]);
-  // The host may also say so on its own; a second ask does not bounce twice.
   rig.handlers.get("ring-attention")(sender, true);
   assert.deepEqual(bounces, ["critical"]);
-  rig.handlers.get("set-call-window-size")(sender, "panel");
+  // A second ask does not bounce twice.
+  rig.handlers.get("ring-attention")(sender, true);
+  assert.deepEqual(bounces, ["critical"]);
+  rig.handlers.get("ring-attention")(sender, false);
   assert.deepEqual(cancels, [7]);
   // Only the host may ask.
   rig.handlers.get("ring-attention")({ sender: { id: 999 } }, true);
   assert.deepEqual(bounces, ["critical"]);
+  // And the shape has nothing to do with it: the float is the float.
+  rig.handlers.get("set-call-window-size")(sender, "float");
+  rig.handlers.get("set-call-window-size")(sender, "idle");
+  assert.deepEqual(bounces, ["critical"]);
+  assert.deepEqual(cancels, [7]);
 });
 
 // The focused window silences only what it is SHOWING (ct-49551). The old rule

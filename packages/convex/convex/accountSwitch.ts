@@ -1518,7 +1518,7 @@ export const autoSwitchCheck = internalMutation({
     const allowSwitch = mode === "auto";
     if (mode === "off") return { acted: "off" };
 
-    const state = primary.cc_auto_switch_state ?? {};
+    let state = primary.cc_auto_switch_state ?? {};
     const attempts = state.attempts ?? [];
     const { blocked, skipped } = await listBlockedConversations(ctx, args.user_id, false);
     // Before any account decision: the workers this pass will not act on leave
@@ -1575,6 +1575,13 @@ export const autoSwitchCheck = internalMutation({
         });
       }
       return { acted: "nothing_blocked", dismissed };
+    }
+    // Auto mode switches on its own. A proposal left over from ask mode would
+    // keep the banner waiting for an approval that is not how this machine
+    // recovers. Drop it before any early return so a cooldown cannot preserve it.
+    if (!askFirst && state.last_decision?.kind === "propose") {
+      state = { ...state, last_decision: undefined };
+      await ctx.db.patch(primary._id, { cc_auto_switch_state: state });
     }
     if (state.last_action_at && now - state.last_action_at < AUTO_SWITCH_COOLDOWN_MS) {
       // A recent action is still settling — but don't just drop this check: a
@@ -1885,7 +1892,10 @@ export const autoSwitchCheck = internalMutation({
         const already =
           state.last_decision?.kind === "propose" &&
           state.last_decision.target_email === best.email &&
-          state.last_decision.parked_count === proposal.parked_count;
+          state.last_decision.parked_count === proposal.parked_count &&
+          state.last_decision.from_email === proposal.from_email &&
+          state.last_decision.pegged_window === proposal.pegged_window &&
+          Math.round(state.last_decision.target_percent ?? -1) === Math.round(proposal.target_percent ?? -1);
         // Only touch the row when the recommendation actually changed, so a
         // re-check that lands on the same proposal does not churn the state.
         if (!already) {
@@ -1912,7 +1922,10 @@ export const autoSwitchCheck = internalMutation({
             `${ask} ${describeDecision(proposal) ?? "Sessions are parked on a usage limit."}`,
           );
         }
-        const retryAt = withCodexRetry(decision.retry_at);
+        // The active window's reset can be hours away. Meters move sooner: the
+        // named account pegs, a fuller one appears. Look again within a few
+        // minutes so the stored ask matches the bars the person is reading.
+        const retryAt = Math.min(withCodexRetry(decision.retry_at), now + 3 * AUTO_SWITCH_PROBE_RETRY_MS);
         if (!state.next_check_at || state.next_check_at <= now || retryAt < state.next_check_at) {
           await ctx.scheduler.runAt(retryAt, internal.accountSwitch.autoSwitchCheck, {
             user_id: args.user_id,

@@ -1,42 +1,36 @@
-/* The strip as the whole contents of the voice window.
+/* The float as the whole contents of the voice window.
  *
- * The window is see-through and exactly the size of this card plus the room
- * its shadow needs; the shell keeps it that size off the card's own measure
- * (VoiceHostPanel's WalkieStripHost), anchored to the bottom-right corner it
- * is tucked into. Nothing here is a placement: the window IS the placement.
+ * The window is see-through and exactly the size of the row plus its card;
+ * the shell keeps it that size off the row's own measure (FloatingFaceRow),
+ * anchored to the corner the person tucked it into. Nothing here is a
+ * placement: the window IS the placement. The row hangs from the window's
+ * top left, and the shell's anchor decides which way the window grows.
  */
-.voice-walkie-window {
+.voice-float-window {
   position: fixed;
   inset: 0;
-  display: flex;
-  align-items: flex-end;
-  justify-content: flex-end;
   background: transparent;
   overflow: hidden;
 }
 
-.voice-walkie-card {
-  /* The card's own width, never the viewport's: the window is sized FROM this
-     measure, so a card that shrank to a narrow window (the wall's, a moment
-     earlier) would report that width back and pin the window there. */
-  width: 448px;
-  /* And never shrunk to fit: the window follows the card, not the reverse. */
-  flex: none;
-  /* Room for the card's shadow (walkie.css, 30px blur) so it is not cut off
-     at the window's edge. Transparent, and the window takes clicks there —
-     it is the strip's own margin. */
-  padding: 14px;
-  box-sizing: border-box;
+/* No toasts on the glass. The app-wide Toaster mounts in every window, but
+   the float lets clicks through, and a toast here is an unreachable card
+   hovering over somebody's editor. Errors this window produces surface where
+   the action lands (the main window's DM, the refusal line), not here.
+   Scoped to the html class the host sets, since the toaster is a sibling of
+   the route's subtree, not a child. */
+.faces-overlay-window [data-sonner-toaster] {
+  display: none;
 }
 
-/* Drag by the header row, the way the stage drags by its own. A real drag
- * region, because nothing here competes for the mouse events: the strip is
- * not click-through. Every control on that row stays a control. */
-.voice-walkie-card .walkie-strip-head {
-  -webkit-app-region: drag;
-}
-.voice-walkie-card .walkie-strip-head :is(button, a, input, textarea, select, [role="button"]) {
-  -webkit-app-region: no-drag;
+/* A ring arriving while the stage is up: the row's ring card over the stage,
+ * where the person is, so a call during a call is answered without the
+ * float and the stage fighting for the window. */
+.voice-stage-ring {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 1000;
 }
 
 /* The wall as the whole contents of the voice window: the buddy list in a
@@ -50,16 +44,4 @@
   border-radius: 12px;
   border: 1px solid color-mix(in srgb, var(--sol-text) 14%, transparent);
   box-shadow: inset 0 1px 0 color-mix(in srgb, var(--sol-text) 5%, transparent);
-}
-
-/* The ring as the whole contents of the voice window: the card centred in a
- * window the shell keeps at the card's size plus its glow, at the top-right
- * of the display the person is looking at. */
-.voice-ring-window {
-  position: fixed;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  background: transparent;
-  overflow: hidden;
 }

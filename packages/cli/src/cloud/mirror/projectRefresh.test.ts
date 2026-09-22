@@ -6,6 +6,7 @@ import { applyMirrorBundle, cleanTrackedFiles, matchesGitBlob, readStamp, verify
 import { buildMirrorBundle, parseMirrorBundle } from "./bundle";
 import { AGENT_RUNTIME_ROOTS } from "./discovery";
 import { buildHomeMirror, mirrorHomeToHost, runMirrorTick, type LocalMirrorStamps, type MirrorDeps } from "./push";
+import { CODECAST_OWNED_HOME_PATHS } from "../../codecastOwned";
 import { projectDestination, readProjectRegistrations, registerProjectContext } from "./projectRefresh";
 import { startMirrorScheduler } from "./scheduler";
 import { claudeProjectDirName } from "../../projectPathResolver";
@@ -54,7 +55,7 @@ test("next generation releases unchanged and drifted Claude catalogs while ordin
   fs.unlinkSync(path.join(local, removed));
   write(local, portable, "updated portable context\n");
   const next = await buildHomeMirror({ home: local, hostHome: remote, config: { user_id: "u" }, deviceId: "d", gitEnv: { GIT_CONFIG_GLOBAL: path.join(local, ".gitconfig"), GIT_CONFIG_NOSYSTEM: "1" } });
-  expect(next.header.unmanaged_roots).toEqual([...AGENT_RUNTIME_ROOTS]);
+  expect(next.header.unmanaged_roots).toEqual([...AGENT_RUNTIME_ROOTS, ...CODECAST_OWNED_HOME_PATHS]);
   expect(next.header.files.some((file) => catalogPaths.includes(file.path))).toBe(false);
   const result = await apply(next.bytes);
   expect(result.errors).toEqual([]);
@@ -181,8 +182,9 @@ test("temp HOME end-to-end refresh covers edits, deletions, drift, conflicts, pi
   expect(verifyMirrorStamp(remote)?.complete).toBe(false);
   expect((await runMirrorTick({ reason: "verify", verifyRemote: true }, deps)).pushed).toHaveLength(1);
   expect(fs.statSync(path.join(worktree, "docs/new.md")).mode & 0o777).toBe(0o600);
+  // The host keeps its own edit; the push still counts as delivered, and the host stamp stays incomplete so the verify tick offers the file again.
   write(worktree, "docs/new.md", "remote edit\n");
-  expect((await runMirrorTick({ reason: "verify", verifyRemote: true }, deps)).failed).toHaveLength(1);
+  expect(await runMirrorTick({ reason: "verify", verifyRemote: true }, deps)).toMatchObject({ pushed: [expect.any(String)], failed: [] });
   expect(verifyMirrorStamp(remote)?.complete).toBe(false);
   expect(read(worktree, "docs/new.md")).toBe("remote edit\n");
   write(worktree, "docs/new.md", "second\n");
@@ -190,7 +192,7 @@ test("temp HOME end-to-end refresh covers edits, deletions, drift, conflicts, pi
   expect(verifyMirrorStamp(remote)?.complete).toBe(true);
   write(worktree, "docs/work.md", "reappeared\n");
   expect(verifyMirrorStamp(remote)?.complete).toBe(false);
-  expect((await runMirrorTick({ reason: "verify", verifyRemote: true }, deps)).failed).toHaveLength(1);
+  expect(await runMirrorTick({ reason: "verify", verifyRemote: true }, deps)).toMatchObject({ pushed: [expect.any(String)], failed: [] });
   expect(pushes).toBe(6);
 });
 
