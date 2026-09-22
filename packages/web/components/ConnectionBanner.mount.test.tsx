@@ -34,8 +34,12 @@ async function mountBanner(opts: { online: boolean; wsConnected: boolean }) {
   const { useStatusNoticeStore } = await import("../hooks/useStatusNotice");
   const timing = await import("../hooks/useAppOffline");
 
+  // Every act here is synchronous and never awaited. Awaiting act (sync or
+  // async) hands its last flush to setImmediate, which these fake timers
+  // hold, so on some runners the await never returned. A synchronous act
+  // drains React's queue before it returns and schedules nothing.
   const root = createRoot(document.getElementById("root")!);
-  await act(async () => {
+  act(() => {
     root.render(
       React.createElement(ConvexProvider, { client: client as any },
         React.createElement(StatusNoticeStack),
@@ -44,13 +48,15 @@ async function mountBanner(opts: { online: boolean; wsConnected: boolean }) {
     );
   });
 
-  const advance = (ms: number) => act(async () => { jest.advanceTimersByTime(ms); });
-  const setOnline = (online: boolean) => act(async () => {
-    state.online = online;
-    window.dispatchEvent(new dom.window.Event(online ? "online" : "offline"));
-  });
+  const advance = async (ms: number) => { act(() => { jest.advanceTimersByTime(ms); }); };
+  const setOnline = async (online: boolean) => {
+    act(() => {
+      state.online = online;
+      window.dispatchEvent(new dom.window.Event(online ? "online" : "offline"));
+    });
+  };
   const unmount = async () => {
-    await act(async () => root.unmount());
+    act(() => root.unmount());
     useStatusNoticeStore.getState().set("connection", null);
     closeDomWindow(dom);
   };
