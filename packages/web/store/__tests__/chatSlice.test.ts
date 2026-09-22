@@ -5,12 +5,12 @@ import {
   selectChannelMessages,
   selectThreadReplies,
   selectChatReactions,
-  chatReactionSyncOpts,
   chatSendState,
   chatReactionStubId,
   teamChannelPushOpts,
   isChatRoomRefusal,
 } from "../inboxStore";
+import { chatReactionSyncOpts } from "../../lib/ingestChatPage";
 import { _resetChatRailMemo, type ChatMessageRow } from "../chatSlice";
 
 type DispatchCall = { action: string; args: any[]; result?: unknown };

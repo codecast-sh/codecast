@@ -1298,60 +1298,10 @@ export const CHAT_SYNC_REGISTRY = {
   // Delta: each page contributes its roots without pruning other channels'.
   chatThreadSummaries: { isDelta: true },
   // No client_id column server-side: a reaction has no identity beyond
-  // (message, user, emoji). chatReactionSyncOpts supersedes on that instead.
+  // (message, user, emoji). chatReactionSyncOpts (lib/ingestChatPage) supersedes on that instead.
   chatReactions: { isDelta: true },
   chatRail: { kind: "list" as const },
 };
-
-/**
- * Sync options for a reaction push whose payload is the COMPLETE server set for
- * a known group of messages — which is what chat.listMessages and chat.getThread
- * return alongside their page.
- *
- * Three things happen that a plain delta cannot do:
- *   - a row absent from the page is a real removal (someone took their reaction
- *     back), so it is pruned rather than kept forever;
- *   - the exclude tombstone from this viewer's own optimistic un-react has done
- *     its job once the server agrees, so it is retired instead of accumulating
- *     one dead entry per reaction ever removed;
- *   - an optimistic stub whose real row has arrived is dropped, which is the
- *     supersede a client_id altKey would do if the table had one.
- */
-export function chatReactionSyncOpts(messageIds: Iterable<string>) {
-  const scope = new Set<string>();
-  for (const id of messageIds) scope.add(String(id));
-  return {
-    isDelta: true,
-    pruneAbsentScope: (row: any) => scope.has(String(row?.message_id)),
-    transform: (draft: any, table: Record<string, ChatReactionRow>, incoming: ChatReactionRow[]) => {
-      const confirmed = new Set<string>();
-      for (const row of incoming) {
-        confirmed.add(`${row.message_id}\x1f${row.user_id}\x1f${row.emoji}`);
-      }
-      for (const id of Object.keys(table)) {
-        const row = table[id];
-        if (!row || !scope.has(String(row.message_id))) continue;
-        if (isConvexId(id)) continue;
-        // A stub whose server twin is in this authoritative page.
-        if (confirmed.has(`${row.message_id}\x1f${row.user_id}\x1f${row.emoji}`)) {
-          delete table[id];
-          delete draft.pending[`chatReactions:${id}`];
-        }
-      }
-      // Retire tombstones the server has now confirmed. The row is already out of
-      // `table` (pruned above, or never re-added), and prev no longer holds it, so
-      // nothing can bring it back.
-      const prefix = "chatReactions:";
-      for (const key of Object.keys(draft.pending)) {
-        if (!key.startsWith(prefix)) continue;
-        const id = key.slice(prefix.length);
-        if (id.includes(":")) continue; // a field entry, not a record tombstone
-        if (table[id]) continue;
-        delete draft.pending[key];
-      }
-    },
-  };
-}
 
 // ── Selectors ───────────────────────────────────────────────────────────────
 
