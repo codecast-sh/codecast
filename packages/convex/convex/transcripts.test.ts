@@ -6,8 +6,12 @@ import {
   asrTranscriptionSession,
   attachRecording,
   beat,
+  cliHoldCall,
+  fedSessionPacing,
   finishRecordingTranscript,
   flush,
+  HOLD_MAX_MS,
+  sessionDeliveryVerdict,
   start,
   stop,
   ROLLING_SUMMARY_GAP_MS,
@@ -25,6 +29,8 @@ import {
 } from "./transcripts";
 import { LIVE_TRANSCRIBE_MODEL } from "@codecast/shared/contracts";
 import { makeFakeDb } from "./testDb";
+import { characterOf } from "@codecast/shared/contracts/sessionCharacter";
+import { hashToken } from "./apiTokens";
 import {
   CALL_MEMBER_STALE_MS,
   MAX_RECORDING_MS,
@@ -985,5 +991,167 @@ describe("the room's thread sees transcription go on", () => {
     expect(c.db._tables.transcripts[0].status).toBe("ended");
     expect(c.db._tables.call_agent_feeds).toHaveLength(0);
     expect(c.db._tables.call_chat_messages).toHaveLength(1);
+  });
+});
+
+// A fed agent gets whole turns to itself. The room's words wait while it is
+// mid-turn or holding the room off, and arrive together when the turn or the
+// hold ends; a line that names it goes through at once. These pin the rule
+// (sessionDeliveryVerdict), the facts it reads (fedSessionPacing) and the
+// agent's own lever (cliHoldCall).
+describe("pacing the words to a fed agent", () => {
+  const seg = (text: string, endedAt: number) => ({ text, ended_at: endedAt });
+  const ember = { names: ["Ember", "Claude"], busy: false };
+
+  test("an idle agent gets a lull flush as context", () => {
+    const v = sessionDeliveryVerdict({ reason: "flush", now: 10_000, route: {}, pacing: ember, unsent: [seg("so the build is red", 9_000)] });
+    expect(v).toEqual({ deliver: true, lane: "context", held: false });
+  });
+
+  test("a busy agent's context waits, with the watermark untouched", () => {
+    const v = sessionDeliveryVerdict({ reason: "flush", now: 10_000, route: {}, pacing: { ...ember, busy: true }, unsent: [seg("so the build is red", 9_000)] });
+    expect(v).toEqual({ deliver: false });
+  });
+
+  test("a line that names the agent goes through mid-turn, as an ask", () => {
+    const v = sessionDeliveryVerdict({
+      reason: "flush",
+      now: 10_000,
+      route: { hold_until: 99_000 },
+      pacing: { ...ember, busy: true },
+      unsent: [seg("the build is red", 8_000), seg("Ember, can you look at it", 9_000)],
+    });
+    expect(v).toEqual({ deliver: true, lane: "ask", held: false });
+  });
+
+  test("the brand said as a name counts too, and a name inside a word does not", () => {
+    const busy = { ...ember, busy: true };
+    expect(sessionDeliveryVerdict({ reason: "flush", now: 10_000, route: {}, pacing: busy, unsent: [seg("claude what do you think", 9_000)] }).deliver).toBe(true);
+    expect(sessionDeliveryVerdict({ reason: "flush", now: 10_000, route: {}, pacing: busy, unsent: [seg("remember to ship it", 9_000)] }).deliver).toBe(false);
+  });
+
+  test("a hold the agent asked for waits like a busy turn, and lifts when it ends", () => {
+    const held = sessionDeliveryVerdict({ reason: "flush", now: 10_000, route: { hold_until: 20_000 }, pacing: ember, unsent: [seg("chatter", 9_000)] });
+    expect(held).toEqual({ deliver: false });
+    const lifted = sessionDeliveryVerdict({ reason: "flush", now: 21_000, route: { hold_until: 20_000 }, pacing: ember, unsent: [seg("chatter", 9_000)] });
+    expect(lifted).toEqual({ deliver: true, lane: "context", held: false });
+  });
+
+  test("the catch up at a turn's end says the words waited, and waits for a quiet room", () => {
+    const quiet = sessionDeliveryVerdict({ reason: "settle", now: 10_000, route: {}, pacing: ember, unsent: [seg("chatter", 7_000)] });
+    expect(quiet).toEqual({ deliver: true, lane: "context", held: true });
+    // Somebody is mid-sentence: the scribe's next lull delivers instead.
+    const talking = sessionDeliveryVerdict({ reason: "settle", now: 10_000, route: {}, pacing: ember, unsent: [seg("and then we", 9_000)] });
+    expect(talking).toEqual({ deliver: false });
+    const expired = sessionDeliveryVerdict({ reason: "hold_expired", now: 10_000, route: {}, pacing: ember, unsent: [seg("chatter", 7_000)] });
+    expect(expired).toEqual({ deliver: true, lane: "context", held: true });
+  });
+
+  test("a route whose session cannot be resolved is delivered as before", () => {
+    const v = sessionDeliveryVerdict({ reason: "flush", now: 10_000, route: {}, pacing: null, unsent: [seg("hello", 9_000)] });
+    expect(v).toEqual({ deliver: true, lane: "context", held: false });
+  });
+
+  const convo = (over: Record<string, unknown> = {}) => ({
+    _id: "conv1",
+    short_id: "conv1",
+    title: "Fix the auth race",
+    agent_type: "claude_code",
+    user_id: "ua",
+    ...over,
+  });
+  const pacingCtx = (managed: Record<string, unknown> | null, conv = convo()) => ({
+    db: makeFakeDb({ conversations: [conv], managed_sessions: managed ? [{ _id: "ms1", conversation_id: "conv1", ...managed }] : [] }),
+  });
+
+  test("the names a room may use: the character (chosen or default) and the brand", async () => {
+    const now = 100_000;
+    const dflt = await fedSessionPacing(pacingCtx(null), "conv1", now);
+    expect(dflt?.names).toEqual([characterOf({ _id: "conv1" }).name, "Claude"]);
+    const chosen = await fedSessionPacing(pacingCtx(null, convo({ character_name: "Sage", agent_type: "codex" })), "conv1", now);
+    expect(chosen?.names).toEqual(["Sage", "Codex"]);
+    expect(await fedSessionPacing(pacingCtx(null), "nope", now)).toBeNull();
+  });
+
+  test("busy is a fresh heartbeat and a turn in progress; a dead or idle daemon never holds the words", async () => {
+    const now = 100_000;
+    const fresh = { last_heartbeat: now - 1_000, agent_status_updated_at: now - 5_000 };
+    expect((await fedSessionPacing(pacingCtx({ ...fresh, agent_status: "working" }), "conv1", now))?.busy).toBe(true);
+    expect((await fedSessionPacing(pacingCtx({ ...fresh, agent_status: "thinking" }), "conv1", now))?.busy).toBe(true);
+    expect((await fedSessionPacing(pacingCtx({ ...fresh, agent_status: "idle" }), "conv1", now))?.busy).toBe(false);
+    // "working" from a daemon that stopped beating is a stale claim.
+    expect((await fedSessionPacing(pacingCtx({ last_heartbeat: now - 10 * 60_000, agent_status: "working", agent_status_updated_at: now - 10 * 60_000 }), "conv1", now))?.busy).toBe(false);
+    expect((await fedSessionPacing(pacingCtx(null), "conv1", now))?.busy).toBe(false);
+  });
+
+  const holdCtx = async (rows: Record<string, any[]>) => {
+    const scheduled: { delay: number; name: string; args: any }[] = [];
+    return {
+      db: makeFakeDb({
+        api_tokens: [{ _id: "tok1", token_hash: await hashToken("tok"), user_id: "ua" }],
+        users: [{ _id: "ua", name: "Ada" }],
+        conversations: [convo()],
+        ...rows,
+      }),
+      scheduler: {
+        async runAfter(delay: number, reference: unknown, args: any) {
+          scheduled.push({ delay, name: getFunctionName(reference as any), args });
+        },
+      },
+      _scheduled: scheduled,
+    };
+  };
+  const liveHuddle = () => ({
+    _id: "t1",
+    room_key: "channel:chan1",
+    team_id: "team1",
+    started_by: "ub",
+    status: "live",
+    started_at: 1_000,
+    routes: [
+      { kind: "session", target: "conv1", mode: "live", sent_seq: 2, added_by: "ub" },
+      { kind: "doc", target: "d1", mode: "live", sent_seq: 2, added_by: "ub" },
+    ],
+    last_seq: 4,
+  });
+
+  test("cast call hold stamps the agent's own route and schedules the catch up at the hold's end", async () => {
+    const c = await holdCtx({
+      transcripts: [liveHuddle()],
+      call_agent_feeds: [{ _id: "f1", conversation_id: "conv1", transcript_id: "t1", room_key: "channel:chan1", added_by: "ub" }],
+    });
+    const before = Date.now();
+    const out = await (cliHoldCall as any)._handler(c, { api_token: "tok", session: "conv1", duration_ms: 3 * 60_000 });
+    expect(out.held).toBe(true);
+    expect(out.room_key).toBe("channel:chan1");
+    expect(out.held_until).toBeGreaterThanOrEqual(before + 3 * 60_000);
+    const t = await c.db.get("t1" as any);
+    expect(t.routes[0].hold_until).toBe(out.held_until);
+    expect(t.routes[1].hold_until).toBeUndefined();
+    expect(t.routes[0].sent_seq).toBe(2);
+    expect(c._scheduled).toHaveLength(1);
+    expect(c._scheduled[0].name).toBe("transcripts:deliverRoutes");
+    expect(c._scheduled[0].args.reason).toBe("hold_expired");
+    expect(c._scheduled[0].delay).toBeGreaterThan(3 * 60_000 - 1_000);
+  });
+
+  test("hold off lifts the hold and delivers what waited now; the ask is capped", async () => {
+    const c = await holdCtx({
+      transcripts: [liveHuddle()],
+      call_agent_feeds: [{ _id: "f1", conversation_id: "conv1", transcript_id: "t1", room_key: "channel:chan1", added_by: "ub" }],
+    });
+    const long = await (cliHoldCall as any)._handler(c, { api_token: "tok", session: "conv1", duration_ms: 24 * 60 * 60_000 });
+    expect(long.held_until - Date.now()).toBeLessThanOrEqual(HOLD_MAX_MS);
+    const off = await (cliHoldCall as any)._handler(c, { api_token: "tok", session: "conv1", duration_ms: 0 });
+    expect(off.held).toBe(false);
+    expect((await c.db.get("t1" as any)).routes[0].hold_until).toBeUndefined();
+    expect(c._scheduled[1]).toMatchObject({ delay: 0, name: "transcripts:deliverRoutes" });
+  });
+
+  test("a session in no huddle has nothing to hold", async () => {
+    const c = await holdCtx({ transcripts: [], call_agent_feeds: [] });
+    const out = await (cliHoldCall as any)._handler(c, { api_token: "tok", session: "conv1", duration_ms: 60_000 });
+    expect(out).toEqual({ held: false, reason: "not_in_huddle", short_id: "conv1" });
+    expect(c._scheduled).toHaveLength(0);
   });
 });

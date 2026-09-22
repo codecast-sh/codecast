@@ -64,6 +64,7 @@ import {
 } from "./cloud/agentBridge.js";
 import { worktreeEnvPrefix } from "./worktreeEnv.js";
 import { hasActiveCloudWork } from "./cloud/activity.js";
+import { startMirrorProcess } from "./cloud/mirror/process.js";
 import { releaseSessionWorktree } from "./worktreeGc.js";
 import { reparentNotice, type ReparentCommandFacts } from "./sessionMoveNotice.js";
 import { createWipSnapshot, defaultRemote, pushWipSnapshot, restoreWipSnapshot } from "./wipSnapshot.js";
@@ -3369,31 +3370,16 @@ async function pushAgentAuthToRemoteHosts(reason: string, opts: { onlyIfChanged?
 }
 
 // Home mirror fan-out (cloud/mirror): this laptop's instruction files and
-// agent config to every reachable host, on the credential loop's cadence.
-// Hash-gated on the fast tick, stamp-verified on the periodic one, and a
-// host whose push failed is left alone until the local hash changes or the
-// periodic tick — a push that retried every minute would keep a broken box
-// awake (its idle watchdog counts inbound ssh as activity).
-let remoteMirrorPushInFlight = false;
-
-async function pushMirrorToRemoteHosts(reason: string, opts: { onlyIfChanged?: boolean; verifyRemote?: boolean } = {}): Promise<void> {
-  if (isRemoteDevice() || remoteMirrorPushInFlight) return;
-  const config = readConfig();
-  if (!config || !isCloudMirrorEnabled(config)) return;
-  remoteMirrorPushInFlight = true;
-  try {
-    const { runMirrorTick } = await import("./cloud/mirror/push.js");
-    await runMirrorTick({ reason, onlyIfChanged: opts.onlyIfChanged, verifyRemote: opts.verifyRemote }, {
-      listHosts: reachableTransferHosts,
-      readConfig: () => config,
-      log: (m) => log(`[MIRROR] ${m}`),
-    });
-  } catch (err) {
-    log(`[MIRROR] mirror push failed (${reason}): ${err instanceof Error ? err.message : String(err)}`);
-  } finally {
-    remoteMirrorPushInFlight = false;
-  }
-}
+// agent config to every reachable host. It runs in its own process
+// (`cast cloud mirror-run`, supervised by startMirrorProcess): a build walks,
+// reads and credential-scans every context file, and in-process that froze
+// this loop for 10 to 18 seconds a minute (2026-09-22). The runner keeps the
+// credential loop's cadence: a hash-gated tick every minute, a stamp-verified
+// one every 30 minutes, and a host whose push failed is left alone until the
+// local hash changes or the periodic tick — a push that retried every minute
+// would keep a broken box awake (its idle watchdog counts inbound ssh as
+// activity). Its log lines land here under [MIRROR].
+let mirrorProcess: ReturnType<typeof startMirrorProcess> | undefined;
 
 // SSH agent bridge (cloud/agentBridge.ts): for every registry host the human
 // turned forward-agent on, hold ONE dedicated ssh connection with agent
@@ -6519,7 +6505,9 @@ async function executeRemoteCommand(
             try {
               const switchResult = useProfile(profile);
               switched = switchResult.to;
-              log(`[ACCOUNTS] Switched CC account to "${profile}"${switchResult.toEmail ? ` (${switchResult.toEmail})` : ""}${switchResult.from ? `, re-saved outgoing as "${switchResult.from}"` : ""}`);
+              log(
+                `[ACCOUNTS] ${switchResult.keptLive ? "Already on" : "Switched CC account to"} "${profile}"${switchResult.toEmail ? ` (${switchResult.toEmail})` : ""}${switchResult.from ? `, re-saved outgoing as "${switchResult.from}"` : ""}${switchResult.keptLive ? ", kept the live login" : ""}`,
+              );
               // Remotes run on a pushed COPY of this credential — refresh them now
               // instead of waiting for the 30-min loop.
               pushCredentialToRemoteHosts("account_switch").catch(() => {});
@@ -27290,13 +27278,13 @@ async function main(): Promise<void> {
   // common case near-instant; this tick is the backfill/safety net.
   setTimeout(() => { pushProviderKeysToRemoteHosts("daemon start").catch(() => {}); }, 62_000);
   setInterval(() => { pushProviderKeysToRemoteHosts("periodic", { onlyIfChanged: true }).catch(() => {}); }, REMOTE_CRED_CHANGE_TICK_MS);
-  // Home mirror (cloud/mirror) on the same cadence: verify each host's stamp
-  // at start and every 30 minutes (a re-provisioned host has no stamp), and a
-  // hash-gated fast tick that ships an edited skill or CLAUDE.md within ~a
-  // minute. Failed hosts back off until the hash changes or the periodic tick.
-  setTimeout(() => { pushMirrorToRemoteHosts("daemon start", { verifyRemote: true }).catch(() => {}); }, 64_000);
-  setInterval(() => { pushMirrorToRemoteHosts("mirror_changed", { onlyIfChanged: true }).catch(() => {}); }, REMOTE_CRED_CHANGE_TICK_MS);
-  setInterval(() => { pushMirrorToRemoteHosts("periodic", { verifyRemote: true }).catch(() => {}); }, REMOTE_CRED_REFRESH_INTERVAL_MS);
+  // Home mirror (cloud/mirror) in its own process, started after the first
+  // minute like the other remote fan-outs; it exits when the mirror is turned
+  // off and is retried every minute while it is on.
+  mirrorProcess = startMirrorProcess({
+    shouldRun: () => !isRemoteDevice() && isCloudMirrorEnabled(readConfig()),
+    log: (m) => log(`[MIRROR] ${m}`),
+  });
   // The opt-in SSH agent bridge (cloud/agentBridge.ts), on the same tick.
   setTimeout(() => { maintainAgentBridges().catch(() => {}); }, 66_000);
   setInterval(() => { maintainAgentBridges().catch(() => {}); }, AGENT_BRIDGE_TICK_MS);
@@ -29968,6 +29956,7 @@ async function main(): Promise<void> {
 
   const shutdown = async () => {
     closeDaemonWorkers();
+    void mirrorProcess?.stop().catch((err) => log(`[MIRROR] stop failed: ${err instanceof Error ? err.message : String(err)}`));
     appServerShuttingDown = true;
     clearInterval(appServerRecoveryTimer);
     skipRespawn = true;

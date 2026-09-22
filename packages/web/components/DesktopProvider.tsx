@@ -59,7 +59,11 @@ const BANNER_FRESH_MS = 3 * 60_000;
 // The engine is loaded lazily, on the desktop only: this provider wraps every
 // page, and the walkie pulls the media stack in with it.
 let walkie: typeof import("../lib/calls/walkie") | null = null;
-function inHuddle(st: any): boolean {
+/** Exported for the call seam tests: a LiveKit reconnect must read as still
+ *  in the huddle, which this answers from the store's `phase` alone. */
+export function inHuddle(st: any): boolean {
+  // `connected` holds through a LiveKit reconnect (callManager never demotes
+  // the phase for one), so the report never flickers to "not in a call".
   if (st.call?.phase !== "connected") return false;
   if (!walkie) return true;
   return !walkie.walkieHoldsRoom(walkie.getWalkieStatus(), st.call.roomKey ?? null);

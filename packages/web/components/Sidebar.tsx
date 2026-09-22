@@ -30,7 +30,7 @@ import { channelDisplayName, chatViewRoomKey, dmCounterpart, memberName, suggest
 import { memberAvatarUrl } from "../lib/liveEntities";
 import { dmOtherIds } from "@codecast/shared/chat";
 import { CommentAvatar } from "./comments/CommentAvatar";
-import { readPins, isPinned, isThreadsPin, togglePin, type SidebarPin } from "../lib/sidebarPins";
+import { readPins, isPinned, isThreadsPin, pinApp, togglePin, type SidebarPin } from "../lib/sidebarPins";
 import { useConvexSync } from "../hooks/useConvexSync";
 import { useSyncProjects } from "../hooks/useSyncProjects";
 import { useSyncSavedViews } from "../hooks/useSyncSavedViews";
@@ -762,9 +762,12 @@ function PinnedRail({
   onNavigate,
   applyView,
   activeViewIds,
+  scope,
 }: {
   onNavigate: (href: string) => void;
   applyView: (view: any) => void;
+  /** An app's own window shows only that app's pins (pinApp). */
+  scope?: DesktopApp;
   /** Ids of the currently applied saved views (tasks page, docs page) — a
    *  pinned view lights up exactly when its section row would. */
   activeViewIds: Array<string | undefined>;
@@ -785,7 +788,8 @@ function PinnedRail({
   // kept, so turning chat back on restores it). The Threads pin is a VIEW even
   // in its legacy channel-kind form (isThreadsPin), so it survives chat off.
   const chatOn = useTeamFeature("chat");
-  const visiblePins = chatOn ? pins : pins.filter((p) => isThreadsPin(p) || p.kind !== "channel");
+  const visiblePins = (chatOn ? pins : pins.filter((p) => isThreadsPin(p) || p.kind !== "channel"))
+    .filter((p) => !scope || pinApp(p) === scope);
   if (visiblePins.length === 0) return null;
 
   // The icon already names the kind (a hash IS the channel marker), so the
@@ -1264,6 +1268,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             onNavigate={(href) => { router.push(href); onMobileClose?.(); }}
             applyView={applyView}
             activeViewIds={[activeTaskViewId, activeDocViewId]}
+            scope={scope}
           />
         )}
         {scope === "work" ? null : (<>

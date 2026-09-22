@@ -681,9 +681,21 @@ export interface TransformOutcome {
   referencedFiles: string[];
 }
 
-/** One entry's bytes for the wire, by kind. Throws on unparseable content. */
-export function transformByKind(kind: MirrorKind, bytes: Buffer, ctx: TransformContext): TransformOutcome {
+/** Kinds whose transform scrubs secrets: scanned for credentials after the transform, never before. */
+export function isActiveConfig(kind: MirrorKind): boolean {
+  return ["claude-settings", "claude-mcp", "codex-toml", "codex-hooks", "gemini-settings", "opencode-json", "json-remap", "toml-remap"].includes(kind);
+}
+
+/**
+ * One entry's bytes for the wire, by kind. Throws on unparseable content, and
+ * on credential material in the output. A caller whose collection already
+ * scanned the source bytes passes `prescanned`: the path remap cannot
+ * introduce a credential, so only the kinds whose transform scrubs (an active
+ * config) are checked again, on what the scrub left.
+ */
+export function transformByKind(kind: MirrorKind, bytes: Buffer, ctx: TransformContext, opts: { prescanned?: boolean } = {}): TransformOutcome {
   const result = transformContentByKind(kind, bytes, ctx);
+  if (opts.prescanned && !isActiveConfig(kind)) return result;
   const credential = credentialContentReason(result.bytes);
   if (credential) throw new Error(credential);
   return result;
