@@ -187,6 +187,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
   const isPrivate = conversation?.is_private !== false;
   const teamVisibility = (conversation as any)?.team_visibility || (conversation as any)?.effective_team_visibility;
   const hasTeam = !!(conversation as any)?.team_id;
+  const teamId = ((conversation as any)?.team_id ?? null) as string | null;
   // Element props for the memoized ConversationView: built once per input
   // change, not per render, or the memo below it never holds.
   const shareControls = useMemo(() => isOwnSession ? (
@@ -195,6 +196,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
       teamVisibility={teamVisibility}
       hasShareToken={!!shareToken}
       hasTeam={hasTeam}
+      teamId={teamId}
       onSetPrivate={() => { setPrivacy(convId, true); toast.success("Made private"); }}
       onSetTeamVisibility={(mode) => { setTeamVisibility(convId, mode); toast.success(mode === "full" ? "Sharing full conversation with team" : "Sharing summary with team"); }}
       onGenerateShareLink={async () => { const token = await generateShareLink({ conversation_id: convId }); return `${shareOrigin()}/conversation/${convId}?share=${encodeURIComponent(token)}`; }}
@@ -202,7 +204,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
       forwardUrl={`${shareOrigin()}/conversation/${convId}`}
       forwardLabel="session"
     />
-  ) : null, [isOwnSession, isPrivate, teamVisibility, shareToken, hasTeam, convId, shareUrl, setPrivacy, setTeamVisibility, generateShareLink]);
+  ) : null, [isOwnSession, isPrivate, teamVisibility, shareToken, hasTeam, teamId, convId, shareUrl, setPrivacy, setTeamVisibility, generateShareLink]);
   const activePlanId = (conversation as any)?.active_plan_id;
   const workflowRunId = (conversation as any)?.workflow_run_id;
   const convSessionId = (conversation as any)?.session_id;

@@ -9,24 +9,27 @@ import { useTeamFeature } from "../../lib/teamFeatures";
 import { memberName } from "../../lib/chatViews";
 import {
   THREAD_KIND_META,
+  THREAD_KIND_SPECS,
   cardsForChip,
   chipFromSearch,
   dmCards,
+  frozenReadAtOf,
+  isDismissible,
   markViewRead,
-  resolveOpenEntry,
   serverCards,
   sortCards,
-  toggledOpenEntry,
   unreadByChip,
   unreadOnlyCards,
   visibleChips,
   type ThreadCardModel,
 } from "../../lib/threadKinds";
-import type { ThreadCardOpenEntry } from "../../store/threadTypes";
+import type { ThreadInboxRow, ThreadsCursor } from "../../store/threadTypes";
+import { useShortcutAction, useShortcutContext } from "../../shortcuts/ShortcutProvider";
+import { KeyCap } from "../KeyboardShortcutsHelp";
 import { SegmentedToggle } from "../SegmentedToggle";
 import { Switch } from "../ui/switch";
 import { NewMessageModal } from "../chat/NewMessageModal";
-import { ThreadCard } from "./ThreadCard";
+import { ThreadCard, openCardIn } from "./ThreadCard";
 import { ThreadsHeader } from "./ThreadsHeader";
 import { ThreadsEmpty } from "./ThreadsEmpty";
 import { useSessionThreadCards } from "../../hooks/useSessionThreadCards";
@@ -35,17 +38,16 @@ import { ThreadsPageCtx, type ThreadsPageContextValue } from "./threadsContext";
 import "../chat/chat.css";
 import "./threads.css";
 
-import { useWatchEffect } from "../../hooks/useWatchEffect";
-// The Threads page body: every conversation the viewer is in — chat threads,
-// DMs, session comment threads, task comment streams, and (toggle) inbox
-// sessions — one card list, newest activity first, filtered by a single
-// select chip. Every card renders expanded, composer included, so one
-// scrolling pass reads and answers the inbox in place; a thread the viewer
-// answered last retires until someone else replies (lib/threadCards owns the
-// rules; ThreadCard windows the heavy bodies and witnesses the read law). A
-// card's unread boundary is frozen at expansion so marking read cannot erase
-// it mid-read; reads happen only while the reader is present (tab active,
-// window focused) AND the card's newest content has been in the viewport.
+// The Threads page body: every conversation with something new for the
+// viewer — chat threads, DMs, session comment threads, task comment streams,
+// page discussions, pending questions and (toggle) inbox sessions — one list
+// of rows, newest activity first, filtered by a single select chip. The page
+// is a reader: rows are collapsed to two lines each, and ONE row is open at
+// a time, showing its thread in place with the composer. The keyboard walks
+// it — j/k open the next row, Enter toggles, e is done, r replies — and the
+// mouse does the same by clicking. Reading a row (opening it while present)
+// marks it read; a row read this visit stays listed until the page is left,
+// so it never vanishes under the reader (lib/threadCards owns the rules).
 //
 // The chips are the app's SegmentedToggle rather than GenericListView's tab
 // bar: the page is a single-select view over one list in chat-style chrome,
@@ -53,6 +55,11 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 // pill group is the control every chat-style header already uses.
 
 const CLOCK_MS = 30_000;
+
+/** How long the `r` key's focus request stands: long enough for the body to
+ *  mount and its composer to take it, short enough that the next `r` is a
+ *  fresh request. */
+const FOCUS_REQUEST_MS = 400;
 
 export function ThreadsView({ present }: { present: boolean }) {
   const router = useRouter();
@@ -112,42 +119,111 @@ export function ThreadsView({ present }: { present: boolean }) {
   const heldRef = useRef<Set<string>>(new Set());
   const cards = useMemo(() => unreadOnlyCards(chipped, heldRef.current), [chipped]);
 
-  // ── Open cards ────────────────────────────────────────────────────────────
-  // Cards render expanded by default; the reader's toggles override, and a
-  // collapse holds until NEWER unread lands
-  // (lib/threadCards.resolveOpenEntry). Entries live in the store (ephemeral
-  // UI) so choices survive leaving the page; `sighted` marks the cards this
-  // visit has rendered — a card's first sight re-derives its `auto` entry
-  // (a card read last visit collapses again), while a sighted card's entry
-  // is settled, so marking itself read never collapses it under the reader.
-  const openEntries = useInboxStore((s) => s.threadCardOpen);
-  const sightedRef = useRef<Set<string>>(new Set());
-  useWatchEffect(() => {
-    const sighted = sightedRef.current;
-    const patch: Record<string, ThreadCardOpenEntry> = {};
-    for (const card of cards) {
-      const entry = openEntries[card.id];
-      const resolved = resolveOpenEntry(card, entry, !sighted.has(card.id));
-      sighted.add(card.id);
-      if (resolved !== entry) patch[card.id] = resolved;
-    }
-    if (Object.keys(patch).length) useInboxStore.getState().patchThreadCardOpen(patch);
-  }, [cards, openEntries]);
+  // ── The cursor ────────────────────────────────────────────────────────────
+  // One row is selected and at most that row is open. The cursor lives in
+  // the store (ephemeral UI) so leaving and returning lands on the same row.
+  const cursor = useInboxStore((s) => s.threadsCursor);
+  const cursorIndex = useMemo(() => cards.findIndex((c) => c.id === cursor.id), [cards, cursor.id]);
+  // Where the cursor last stood, for when its row leaves the list (dismissed
+  // elsewhere, answered, retired): the next move starts from here.
+  const lastIndexRef = useRef(0);
+  if (cursorIndex >= 0) lastIndexRef.current = cursorIndex;
+
+  const setCursor = useCallback((next: ThreadsCursor) => useInboxStore.getState().setThreadsCursor(next), []);
+  const select = useCallback((card: ThreadCardModel) => setCursor({ id: card.id, open: false, frozenReadAt: 0 }), [setCursor]);
+  const openCard = useCallback(
+    (card: ThreadCardModel) => setCursor({ id: card.id, open: true, frozenReadAt: frozenReadAtOf(card) }),
+    [setCursor],
+  );
   const toggle = useCallback((card: ThreadCardModel) => {
-    const st = useInboxStore.getState();
-    const current = resolveOpenEntry(card, st.threadCardOpen[card.id], false);
-    st.patchThreadCardOpen({ [card.id]: toggledOpenEntry(card, current) });
-  }, []);
+    const c = useInboxStore.getState().threadsCursor;
+    if (c.id === card.id && c.open) setCursor({ ...c, open: false });
+    else openCard(card);
+  }, [openCard, setCursor]);
+
+  /** The row the cursor is on, or the one it would land on next. */
+  const cardAt = useCallback((index: number): ThreadCardModel | undefined => {
+    if (cards.length === 0) return undefined;
+    return cards[Math.min(cards.length - 1, Math.max(0, index))];
+  }, [cards]);
+  const move = useCallback((delta: number): boolean => {
+    if (cards.length === 0) return false;
+    const from = cursorIndex >= 0 ? cursorIndex : lastIndexRef.current - (delta > 0 ? 1 : 0);
+    const target = cardAt(from + delta);
+    if (!target) return false;
+    // A walk reads: the next row opens as the cursor lands on it.
+    openCard(target);
+    return true;
+  }, [cards.length, cursorIndex, cardAt, openCard]);
+
+  // Done: archive the follow (or, for a kind with no follow to archive, mark
+  // it read) and step to the next row, keeping the open state — a reader
+  // clearing the inbox with `e` never has to press Enter between rows.
+  const done = useCallback((): boolean => {
+    const card = cursorIndex >= 0 ? cards[cursorIndex] : undefined;
+    if (!card) return false;
+    const next = cards[cursorIndex + 1] ?? cards[cursorIndex - 1];
+    if (isDismissible(card)) {
+      const row = card.source as ThreadInboxRow;
+      useInboxStore.getState().dismissThread(row.kind, row.root_key);
+    } else {
+      THREAD_KIND_SPECS[card.kind].markRead(card);
+    }
+    heldRef.current.delete(card.id);
+    if (next) setCursor({ id: next.id, open: cursor.open, frozenReadAt: cursor.open ? frozenReadAtOf(next) : 0 });
+    else setCursor({ id: null, open: false, frozenReadAt: 0 });
+    return true;
+  }, [cards, cursorIndex, cursor.open, setCursor]);
+
+  // `r`: open the row if it is closed, and hand its composer the focus once.
+  const [focusId, setFocusId] = useState<string | null>(null);
+  const reply = useCallback((): boolean => {
+    const card = cursorIndex >= 0 ? cards[cursorIndex] : cardAt(lastIndexRef.current);
+    if (!card) return false;
+    if (!(cursor.id === card.id && cursor.open)) openCard(card);
+    setFocusId(card.id);
+    window.setTimeout(() => setFocusId((id) => (id === card.id ? null : id)), FOCUS_REQUEST_MS);
+    return true;
+  }, [cards, cursorIndex, cursor, cardAt, openCard]);
+
+  // The keyboard: the app's list chords for the walk, the page's own for the
+  // inbox verbs. Both stand only while the reader is here.
+  useShortcutContext("list", present);
+  useShortcutContext("threads", present);
+  useShortcutAction("list.down", () => move(1));
+  useShortcutAction("list.up", () => move(-1));
+  useShortcutAction("list.first", () => { const c = cardAt(0); if (!c) return false; openCard(c); return true; });
+  useShortcutAction("list.last", () => { const c = cardAt(cards.length - 1); if (!c) return false; openCard(c); return true; });
+  useShortcutAction("list.open", () => {
+    const card = cursorIndex >= 0 ? cards[cursorIndex] : cardAt(lastIndexRef.current);
+    if (!card) return false;
+    toggle(card);
+    return true;
+  });
+  useShortcutAction("threads.done", done);
+  useShortcutAction("threads.reply", reply);
+  useShortcutAction("threads.openIn", () => {
+    const card = cursorIndex >= 0 ? cards[cursorIndex] : undefined;
+    if (!card) return false;
+    openCardIn(card, router);
+    return true;
+  });
+  useShortcutAction("threads.collapse", () => {
+    if (!cursor.open) return false;
+    setCursor({ ...cursor, open: false });
+    return true;
+  });
 
   const nameOf = useCallback((userId: string) => memberName(byId.get(String(userId))), [byId]);
   const ctx = useMemo<ThreadsPageContextValue>(
-    () => ({ now, present, teamId, viewerId, members, handles, nameOf, chatCards, commentThreads, toggle }),
-    [now, present, teamId, viewerId, members, handles, nameOf, chatCards, commentThreads, toggle],
+    () => ({ now, present, teamId, viewerId, members, handles, nameOf, chatCards, commentThreads, select, toggle }),
+    [now, present, teamId, viewerId, members, handles, nameOf, chatCards, commentThreads, select, toggle],
   );
 
   // ── Header + chips ────────────────────────────────────────────────────────
   const viewUnread = counts[chip];
   const markAll = useCallback(() => markViewRead(cards, chip, teamId), [cards, chip, teamId]);
+  useShortcutAction("threads.markAllRead", () => { if (viewUnread === 0) return false; markAll(); return true; });
   const chipItems = useMemo(
     () => visibleChips(chatOn).map((c) => ({
       key: c.key,
@@ -180,10 +256,18 @@ export function ThreadsView({ present }: { present: boolean }) {
           <div className="th-bar">
             <SegmentedToggle value={chip} onChange={setChip} items={chipItems} collapse />
             {/* An additive switch, not a second chip: sessions join the All view. */}
-            <label className="th-toggle" title="Show your inbox sessions as cards (under All)">
+            <label className="th-toggle" title="Show your inbox sessions as rows (under All)">
               <Switch checked={includeSessions} onCheckedChange={toggleSessions} />
               Sessions
             </label>
+            {cards.length > 0 && (
+              <span className="th-keys" aria-hidden="true">
+                <span className="th-key"><KeyCap size="xs">j</KeyCap><KeyCap size="xs">k</KeyCap> read</span>
+                <span className="th-key"><KeyCap size="xs">e</KeyCap> done</span>
+                <span className="th-key"><KeyCap size="xs">r</KeyCap> reply</span>
+                <span className="th-key"><KeyCap size="xs">o</KeyCap> open</span>
+              </span>
+            )}
           </div>
 
           {showSkeleton ? (
@@ -216,21 +300,22 @@ export function ThreadsView({ present }: { present: boolean }) {
                   </p>
                 </div>
               )}
-              {cards.map((card, i) => {
-                const entry = resolveOpenEntry(card, openEntries[card.id], !sightedRef.current.has(card.id));
-                return (
-                  <ThreadCard
-                    key={card.id}
-                    card={card}
-                    expanded={entry.expanded}
-                    expandedBy={entry.by}
-                    frozenReadAt={entry.frozenReadAt}
-                    // The first screenful mounts bodies on the first frame,
-                    // before the viewport observers have answered.
-                    defaultNear={i < 8}
-                  />
-                );
-              })}
+              <div className="th-list" role="list">
+                {cards.map((card, i) => {
+                  const selected = card.id === cursor.id;
+                  return (
+                    <ThreadCard
+                      key={card.id}
+                      card={card}
+                      index={i}
+                      selected={selected}
+                      open={selected && cursor.open}
+                      frozenReadAt={selected ? cursor.frozenReadAt : 0}
+                      focusComposer={selected && focusId === card.id}
+                    />
+                  );
+                })}
+              </div>
               {/* The feed pages the mixed list, so only All can promise older
                   items; a kind chip's list is whatever has paged in. */}
               {feed.hasMore && chip === "all" && (
@@ -246,4 +331,3 @@ export function ThreadsView({ present }: { present: boolean }) {
     </ThreadsPageCtx.Provider>
   );
 }
-

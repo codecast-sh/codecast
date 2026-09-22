@@ -17,11 +17,11 @@ function rule(selector: string): Record<string, string> {
   );
 }
 
-describe("expanded chat thread scrolling", () => {
+describe("open chat thread scrolling", () => {
   test("keeps replies in the page scroll instead of a nested scroller", () => {
     const replies = rule(".th-kind-chat .th-card-replies");
     expect(css.indexOf("\n.th-kind-chat .th-card-replies {")).toBeGreaterThan(
-      css.indexOf("\n.th-card-auto .th-card-replies {"),
+      css.indexOf("\n.th-card-replies {"),
     );
     expect(replies["max-height"]).toBe("none");
     expect(replies["overflow-y"]).toBe("visible");

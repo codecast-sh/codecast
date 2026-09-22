@@ -2,11 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   cardsForChip,
   dmCards,
-  defaultOpenEntry,
-  openEntryExpired,
-  resolveOpenEntry,
   sortCards,
-  toggledOpenEntry,
   unreadByChip,
 } from "./threadCards";
 import type { ChatRailChannel } from "../store/chatSlice";
@@ -86,20 +82,15 @@ describe("rank and timestamp", () => {
   });
 });
 
-describe("open map", () => {
-  test("a user collapse holds across the viewer's own send, expires on inbound", () => {
+describe("activity", () => {
+  test("the viewer's own send does not move a room's activity; the counterpart's does", () => {
     const at = (inboundAt: number) => dmCards([room("b", { sortAt: inboundAt, lastInboundAt: inboundAt, unreadCount: 1 })])[0];
     const card = at(T0);
-    const collapsed = toggledOpenEntry(card, defaultOpenEntry(card));
-    expect(collapsed.expanded).toBe(false);
-    // The viewer replies: sortAt moves, activityAt does not — the collapse stands.
+    // The viewer replies: sortAt moves, activityAt does not — the row keeps its rank.
     const afterOwnSend = dmCards([room("b", { sortAt: T0 + 5000, lastInboundAt: T0, unreadCount: 1 })])[0];
-    expect(openEntryExpired(afterOwnSend, collapsed)).toBe(false);
-    expect(resolveOpenEntry(afterOwnSend, collapsed, false)).toBe(collapsed);
-    // The counterpart speaks again: newer unread re-earns the default-open.
-    const afterInbound = at(T0 + 8000);
-    expect(openEntryExpired(afterInbound, collapsed)).toBe(true);
-    expect(resolveOpenEntry(afterInbound, collapsed, false).expanded).toBe(true);
+    expect(afterOwnSend.activityAt).toBe(card.activityAt);
+    // The counterpart speaks again: the row moves up.
+    expect(at(T0 + 8000).activityAt).toBe(T0 + 8000);
   });
 });
 

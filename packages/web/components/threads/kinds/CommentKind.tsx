@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useMemo } from "react";
 import { CheckCircle2, FileCode2, MessageSquare, Quote } from "lucide-react";
 import { useInboxStore, type ThreadInboxRow } from "../../../store/inboxStore";
 import { useCurrentUser } from "../../../hooks/useCurrentUser";
@@ -13,9 +13,8 @@ import {
 } from "../../../lib/commentThread";
 import { sessionLabel } from "../../../lib/notificationTypes";
 import { cleanContent } from "../../../lib/conversationProcessor";
-import { summaryCount, type ThreadCardModel } from "../../../lib/threadCards";
+import { replyPreview, type CardPreview, type ThreadCardModel } from "../../../lib/threadCards";
 import { AgentIcon } from "../../ConversationList";
-import { CommentCard } from "../../comments/CommentCard";
 import { CommentThread } from "../../comments/CommentThread";
 import { FileLineThread } from "../../comments/FileLineThread";
 import { useTailPin } from "../cardWindow";
@@ -23,10 +22,10 @@ import { useThreadsPage } from "../threadsContext";
 
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 // The comment kind: one comment thread on a session — anchored to a message,
-// to a code line, or to the conversation itself. The collapsed card names the
-// session and the anchor and shows the root comment; expanded, the whole
-// thread through the same renderers the conversation's rail uses, composer
-// and agent ping included.
+// to a code line, or to the conversation itself. The row names the session
+// and previews the newest reply (or the root comment while it has none);
+// open, the anchor line, then the whole thread through the same renderers
+// the conversation's rail uses, composer and agent ping included.
 
 function rowOf(card: ThreadCardModel): ThreadInboxRow {
   return card.source as ThreadInboxRow;
@@ -83,6 +82,20 @@ export function CommentLabel({ card }: { card: ThreadCardModel }) {
   );
 }
 
+/** The newest reply; a thread with only its root previews the root. */
+export function useCommentPreview(card: ThreadCardModel): CardPreview | null {
+  const row = rowOf(card);
+  const comments = useThreadComments(row.root_key);
+  const { nameOf } = useThreadsPage();
+  const reply = replyPreview(row.last_reply, nameOf);
+  if (reply?.who === undefined && reply?.whoKind === "user") reply.who = "Teammate";
+  if (reply) return reply;
+  const root = comments[0];
+  if (!root) return null;
+  const agent = isAgentComment(root);
+  return { who: agent ? "Agent" : (root as any).user?.name ?? "Teammate", whoKind: agent ? "agent" : "user", text: cleanContent(root.content).replace(/\s+/g, " ").trim().slice(0, 160) };
+}
+
 /** The anchor line: a quoted excerpt of the message, the file and line, or
  *  "General" for the conversation thread. */
 function AnchorLine({ conversationId, messageId, filePath, lineNumber }: { conversationId: string; messageId?: string; filePath?: string; lineNumber?: number }) {
@@ -116,61 +129,20 @@ function AnchorLine({ conversationId, messageId, filePath, lineNumber }: { conve
   );
 }
 
-export function CommentRoot({ card, expanded }: { card: ThreadCardModel; expanded: boolean }) {
+export function CommentMeta({ card }: { card: ThreadCardModel }) {
   const row = rowOf(card);
   const anchor = anchorOf(row);
   const comments = useThreadComments(row.root_key);
-  const { user } = useCurrentUser();
-  const currentUserId = user?._id as string | undefined;
-  const agentType = useAgentType(anchor.conversationId);
-  const { editComment, deleteComment } = useCommentActions(anchor.conversationId);
-  const { toggle } = useThreadsPage();
-  const root = comments[0];
   const resolved = isThreadResolved(comments);
-  const replies = Math.max(0, comments.length - 1);
-  const lastReply = row.last_reply;
-  const open = useCallback(() => toggle(card), [toggle, card]);
   return (
-    <>
-      <div className="th-card-anchorrow">
-        <AnchorLine {...anchor} />
-        {resolved && (
-          <span className="th-card-chip th-card-chip-resolved">
-            <CheckCircle2 className="w-3 h-3" /> Resolved
-          </span>
-        )}
-      </div>
-      {!expanded && (
-        root ? (
-          <div className="th-card-root th-card-comment">
-            <CommentCard
-              comment={root}
-              currentUserId={currentUserId}
-              agentType={agentType}
-              onReply={open}
-              onEdit={editComment}
-              onDelete={deleteComment}
-            />
-          </div>
-        ) : (
-          <div className="th-card-root th-card-ghost" aria-hidden="true">
-            <div className="ch-skel-line ch-skel-head" />
-            <div className="ch-skel-line" style={{ width: "62%" }} />
-          </div>
-        )
+    <div className="th-card-anchorrow">
+      <AnchorLine {...anchor} />
+      {resolved && (
+        <span className="th-card-chip th-card-chip-resolved">
+          <CheckCircle2 className="w-3 h-3" /> Resolved
+        </span>
       )}
-      {!expanded && (
-        <button type="button" className="th-card-summary" onClick={open}>
-          <span className="th-card-count">{summaryCount(replies, "reply", "replies")}</span>
-          {lastReply && replies > 0 && (
-            <span className="th-card-preview">
-              <span className="th-card-preview-name">{lastReply.author_name ?? (lastReply.author_kind === "agent" ? "Agent" : "Teammate")}:</span>{" "}
-              {lastReply.preview}
-            </span>
-          )}
-        </button>
-      )}
-    </>
+    </div>
   );
 }
 
@@ -185,13 +157,11 @@ export function CommentExpanded({ card, seen, focusComposer }: { card: ThreadCar
   const agentType = useAgentType(conversationId);
   const actions = useCommentActions(conversationId);
 
-  // The read law: presence + the card's newest content actually in the
-  // viewport (`seen`, the shell's tail sentinel). Never while the store holds
-  // nothing for an unread thread: on a cold cache the body renders empty and
-  // short, so the sentinel is trivially in view with the newest comment never
-  // rendered — the mark waits for content (and fires once it syncs in, the
-  // length dep). Re-marks when a reply lands while the reader is still
-  // looking (last_activity_at moves).
+  // The read law: the row is open and the reader is here (`seen`), and the
+  // store holds the thread — never while it holds nothing for an unread
+  // thread (a cold cache renders an empty body with the newest reply never
+  // shown; the length dep fires the mark once it syncs in). Re-marks when a
+  // reply lands while the reader is still looking (last_activity_at moves).
   useWatchEffect(() => {
     if (!seen) return;
     if (row.unread > 0 && comments.length === 0) return;
@@ -213,8 +183,8 @@ export function CommentExpanded({ card, seen, focusComposer }: { card: ThreadCar
   );
   const agentBusy = comments.some((c) => isAgentComment(c) && (c.agent_status === "thinking" || c.agent_status === "streaming"));
 
-  // The wrapper IS the capped scroller (65vh); pinned to the tail so the
-  // newest reply is what shows — the read sentinel below assumes it.
+  // The wrapper IS the capped scroller; pinned to the tail so the newest
+  // reply is what shows first.
   const pinRef = useTailPin(comments.length ? `${comments[comments.length - 1]._id}|${comments.length}` : "");
 
   if (filePath) {

@@ -122,6 +122,11 @@ export type ShortcutAction =
   | 'list.first'
   | 'list.last'
   | 'list.tab'
+  | 'threads.done'
+  | 'threads.reply'
+  | 'threads.openIn'
+  | 'threads.collapse'
+  | 'threads.markAllRead'
   | 'task.status'
   | 'task.priority'
   | 'task.labels'
@@ -182,20 +187,21 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'alt+shift+backspace', action: 'session.dormantAdvance', skipInputCheck: 'whenEmpty', description: 'Dormant and advance (a machine wakes it)' },
   { key: 'ctrl+n', action: 'session.compose', skipInputCheck: true, description: 'New session' },
   { key: 'ctrl+alt+n', action: 'session.create', skipInputCheck: true, description: 'New session (full page)' },
-  // The docked composer: small, non-modal, any number at once. worksInModal
-  // because the same chord minimizes the center modal, whose aria-modal would
-  // otherwise make the dispatcher stand down.
-  { key: 'ctrl+shift+n', action: 'session.composeDock', skipInputCheck: true, worksInModal: true, description: 'New session in a docked composer (minimizes the open one)' },
+  { key: 'ctrl+shift+n', action: 'session.compose', skipInputCheck: true, description: 'Quick compose (palette)' },
+  // The docked composer: small, non-modal, any number at once. M as in mini.
+  // Ctrl+Shift+N stays the desktop's global chord for the compose popup.
+  // worksInModal because the same chord minimizes the center modal, whose
+  // aria-modal would otherwise make the dispatcher stand down.
+  { key: 'ctrl+shift+m', action: 'session.composeDock', skipInputCheck: true, worksInModal: true, description: 'New session in a docked composer (minimizes the open one)' },
   { key: 'ctrl+shift+e', action: 'session.rename', skipInputCheck: true, description: 'Rename session' },
   { key: 'ctrl+tab', action: 'session.mruSwitch', skipInputCheck: true, description: 'Switch recently viewed (MRU)' },
-  // Ctrl+R = Recent: the header's recently viewed list, opened with a search
-  // box focused (VS Code's Open Recent chord). Ctrl on every platform, no mac
-  // variant, because the held Ctrl+Tab overlay hands off to it: Tab through
-  // the list, then R with Ctrl still down switches to searching it, which a
-  // chord on another modifier could not do. Ctrl+R is the browser reload off
-  // mac, but a page may intercept it (unlike Ctrl+Tab, which never reaches the
-  // page in a browser tab, so this list is a desktop surface either way).
-  { key: 'ctrl+r', action: 'recents.open', skipInputCheck: true, description: 'Search recently viewed' },
+  // Recent: the recently viewed list with its search field live, the same
+  // overlay Ctrl+Tab walks (VS Code's Open Recent chord). Ctrl+R on mac;
+  // Alt+R elsewhere, where Ctrl+R is the desktop View menu's reload and the
+  // browser's, the same split session.jumpPinned makes. The held Ctrl+Tab walk
+  // reaches search on R on every platform by itself (hooks/useRecentSwitcher),
+  // so this chord only has to open the list from rest.
+  { key: 'alt+r', mac: 'ctrl+r', action: 'recents.open', skipInputCheck: true, description: 'Search recently viewed' },
 
   { key: 'ctrl+t', mac: 'meta+t', action: 'tab.new', skipInputCheck: true, description: 'New tab' },
   { key: 'ctrl+w', mac: 'meta+w', action: 'tab.close', skipInputCheck: true, description: 'Close tab' },
@@ -387,6 +393,16 @@ export const SHORTCUTS: ShortcutDef[] = [
   // DocumentDetailLayout's edit toggle). The defs exist so the shortcuts help
   // covers them; the 'tasks'/'docs' contexts are never activated, so they are
   // inert in dispatch.
+  // The Threads reader's inbox verbs. The walk itself is the list context
+  // (j/k/Enter/Home/End, which the page also declares); these are the verbs
+  // an inbox adds. `e` is Gmail's archive and the list context's rename: the
+  // list def wins the match, the page registers no rename, so the dispatch
+  // declines and falls through to done. Shift+I is Gmail's mark-read.
+  { key: 'e', action: 'threads.done', when: 'threads', description: 'Done — archive the thread and move on' },
+  { key: 'r', action: 'threads.reply', when: 'threads', description: 'Reply — focus the composer' },
+  { key: 'o', action: 'threads.openIn', when: 'threads', description: 'Open the task, room or page' },
+  { key: 'escape', action: 'threads.collapse', when: 'threads', description: 'Close the open thread' },
+  { key: 'shift+i', action: 'threads.markAllRead', when: 'threads', description: 'Mark every thread in the view read' },
   { key: 's', action: 'task.status', when: 'tasks', description: 'Set status' },
   { key: 'p', action: 'task.priority', when: 'tasks', description: 'Set priority' },
   { key: 'l', action: 'task.labels', when: 'tasks', description: 'Edit labels' },

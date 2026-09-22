@@ -3,6 +3,7 @@ import { internalMutation, internalAction } from "./functions";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { isHumanTask, taskThreadParticipants } from "./threadReads";
+import { patchTask } from "./lib/taskWrite";
 
 // Retroactive sweep for the thread-membership rules (pl-394): task threads
 // reach only people enrolled by a HUMAN act. Legacy entity_subscriptions rows
@@ -220,7 +221,7 @@ export const sweepPage = internalMutation({
         cleared++;
         await bump(task.user_id, "cleared");
         if (!dryRun) {
-          await ctx.db.patch(task._id, { assignee: undefined, updated_at: Date.now() });
+          await patchTask(ctx, task, { assignee: undefined, updated_at: Date.now() });
         }
       }
       return {

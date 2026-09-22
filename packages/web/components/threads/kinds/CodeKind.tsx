@@ -6,16 +6,16 @@ import { useInboxStore, type ThreadInboxRow } from "../../../store/inboxStore";
 import { useCodeComments } from "../../../hooks/useSyncCodeComments";
 import { useLineComments } from "../../../hooks/useLineComments";
 import { serverCommentId, threadResolved, threadSide, type CodeCommentRow } from "../../../lib/prView";
-import { summaryCount, type ThreadCardModel } from "../../../lib/threadCards";
-import { PRCommentCard, PRLineThread } from "../../pr/PRThread";
+import { replyPreview, type CardPreview, type ThreadCardModel } from "../../../lib/threadCards";
+import { PRLineThread } from "../../pr/PRThread";
 import { useTailPin } from "../cardWindow";
-import { useThreadsPage } from "../threadsContext";
 
 // The code kind: one thread of comments on code — a line of a commit's diff,
-// a line of a pull request, or the commit or pull request itself. The
-// collapsed card names the repository and the ref, then the file and line,
-// and shows the root comment; expanded, the same thread the commit page
-// draws under the line, composer and resolve control included.
+// a line of a pull request, or the commit or pull request itself. The row
+// names the repository and the ref and previews the newest reply (or the
+// root comment while it has none); open, the file and line, then the same
+// thread the commit page draws under the line, composer and resolve control
+// included.
 
 function rowOf(card: ThreadCardModel): ThreadInboxRow {
   return card.source as ThreadInboxRow;
@@ -71,6 +71,24 @@ export function CodeLabel({ card }: { card: ThreadCardModel }) {
   );
 }
 
+export function useCodePreview(card: ThreadCardModel): CardPreview | null {
+  const row = rowOf(card);
+  const comments = useThreadRows(row);
+  const reply = replyPreview(row.last_reply);
+  if (reply) {
+    if (reply.whoKind === "user" && !reply.who) reply.who = "Teammate";
+    return reply;
+  }
+  const root = comments[0];
+  if (!root) return null;
+  const agent = (root as any).author_kind === "agent";
+  return {
+    who: agent ? "Agent" : (root as any).author_name ?? (root as any).author_github_username ?? "Teammate",
+    whoKind: agent ? "agent" : "user",
+    text: String((root as any).content ?? "").replace(/\s+/g, " ").trim().slice(0, 160),
+  };
+}
+
 function AnchorLine({ filePath, lineNumber, prNumber }: { filePath?: string; lineNumber?: number; prNumber?: number }) {
   if (filePath) {
     return (
@@ -88,51 +106,21 @@ function AnchorLine({ filePath, lineNumber, prNumber }: { filePath?: string; lin
   );
 }
 
-export function CodeRoot({ card, expanded }: { card: ThreadCardModel; expanded: boolean }) {
+export function CodeMeta({ card }: { card: ThreadCardModel }) {
   const row = rowOf(card);
   const { filePath, lineNumber } = anchorOf(row);
   const prNumber = usePrNumber(row.pull_request_id);
   const comments = useThreadRows(row);
-  const { toggle } = useThreadsPage();
-  const root = comments[0];
   const resolved = comments.length > 0 && threadResolved(comments);
-  const replies = Math.max(0, comments.length - 1);
-  const lastReply = row.last_reply;
-  const open = useCallback(() => toggle(card), [toggle, card]);
   return (
-    <>
-      <div className="th-card-anchorrow">
-        <AnchorLine filePath={filePath} lineNumber={lineNumber} prNumber={prNumber} />
-        {resolved && (
-          <span className="th-card-chip th-card-chip-resolved">
-            <CheckCircle2 className="w-3 h-3" /> Resolved
-          </span>
-        )}
-      </div>
-      {!expanded && (
-        root ? (
-          <div className="th-card-root th-card-comment">
-            <PRCommentCard comment={root} />
-          </div>
-        ) : (
-          <div className="th-card-root th-card-ghost" aria-hidden="true">
-            <div className="ch-skel-line ch-skel-head" />
-            <div className="ch-skel-line" style={{ width: "62%" }} />
-          </div>
-        )
+    <div className="th-card-anchorrow">
+      <AnchorLine filePath={filePath} lineNumber={lineNumber} prNumber={prNumber} />
+      {resolved && (
+        <span className="th-card-chip th-card-chip-resolved">
+          <CheckCircle2 className="w-3 h-3" /> Resolved
+        </span>
       )}
-      {!expanded && (
-        <button type="button" className="th-card-summary" onClick={open}>
-          <span className="th-card-count">{summaryCount(replies, "reply", "replies")}</span>
-          {lastReply && replies > 0 && (
-            <span className="th-card-preview">
-              <span className="th-card-preview-name">{lastReply.author_name ?? (lastReply.author_kind === "agent" ? "Agent" : "Teammate")}:</span>{" "}
-              {lastReply.preview}
-            </span>
-          )}
-        </button>
-      )}
-    </>
+    </div>
   );
 }
 
@@ -142,9 +130,9 @@ export function CodeExpanded({ card, seen }: { card: ThreadCardModel; present: b
   const comments = useThreadRows(row);
   const lineComments = useLineComments({ repository: anchor.repository, ref: anchor.ref, comments });
 
-  // The read law, as the comment kind keeps it: presence plus the newest
-  // content actually in view, and never while the store holds nothing for an
-  // unread thread.
+  // The read law, as the comment kind keeps it: the row is open and the
+  // reader is here, and never while the store holds nothing for an unread
+  // thread.
   useWatchEffect(() => {
     if (!seen) return;
     if (row.unread > 0 && comments.length === 0) return;
