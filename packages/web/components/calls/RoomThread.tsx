@@ -10,7 +10,6 @@ import {
   ImagePlus,
   ListChecks,
   Sparkles,
-  X,
   type LucideIcon,
 } from "lucide-react";
 import { useMutation } from "convex/react";
@@ -136,7 +135,6 @@ export function RoomThread({
   surface,
   seated,
   panel,
-  onClose,
   selection,
   className,
 }: {
@@ -152,7 +150,6 @@ export function RoomThread({
   seated: boolean;
   /** The desktop call window: links to a session open in the main window. */
   panel?: boolean;
-  onClose?: () => void;
   selection?: RoomThreadSelection;
   className?: string;
 }) {
@@ -324,12 +321,16 @@ export function RoomThread({
   };
 
   const composer = !recording;
-  // The rail's box holds about 26 characters a line, so the stage keeps the
-  // placeholder to the bare words (the chips above say who hears); the page
-  // has room to name the agent.
+  // The stage's box holds about 45 characters a line: room for the promise
+  // that an agent hears a typed line, not for a long title; the page has
+  // room to name the agent.
   const placeholder =
     surface === "stage"
-      ? "Message the room"
+      ? agents.length === 1
+        ? "Message the room · the agent hears you"
+        : agents.length > 1
+          ? "Message the room · the agents hear you"
+          : "Message the room"
       : agents.length === 1
         ? `Message the room · ${clip(agents[0].name, 22)} hears you`
         : agents.length > 1
@@ -353,11 +354,12 @@ export function RoomThread({
   // ever seen agents come and go is still empty.
   const empty = passages.length === 0 && chatRows.every((r) => r.event);
   const showChips = routes.length > 0;
-  const showDensity = !recording;
+  // Nothing to fold, open or hide until someone has spoken.
+  const showDensity = !recording && passages.length > 0;
   const showSwitch = seated && !recording;
-  const showHead = showChips || canAdd || showDensity || showSwitch || !!onClose;
+  const showHead = showChips || canAdd || showDensity || showSwitch;
   // Only the density control: no band, no rule, it sits with the recap row.
-  const quietHead = showHead && !showChips && !canAdd && !showSwitch && !onClose;
+  const quietHead = showHead && !showChips && !canAdd && !showSwitch;
   // The empty card leads while nobody is in the room; the header's own Add
   // button would be the same call twice, so it steps aside for the card.
   const emptyCard = empty && !recording && !ended && agents.length === 0;
@@ -389,11 +391,15 @@ export function RoomThread({
           much of the spoken words to show, and the transcription switch.
           Nothing to show, no band. */}
       {showHead && (
-        <div className={`rt-head${onClose ? " rt-head-closable" : ""}${quietHead ? " rt-head-quiet" : ""}`}>
+        <div className={`rt-head${quietHead ? " rt-head-quiet" : ""}`}>
           {routes.map((r) => {
             const agent = r.kind === "session" ? roster.find((a) => a.target === r.target) : null;
             return (
-              <span key={`${r.kind}:${r.target}`} className="rt-chip">
+              <span
+                key={`${r.kind}:${r.target}`}
+                className="rt-chip"
+                title={agent ? `An agent in the room: it ${HEARS}. The arrow opens its session.` : undefined}
+              >
                 <FeedChip
                   route={r}
                   label={agent?.name}
@@ -425,11 +431,6 @@ export function RoomThread({
           <span className="rt-head-right">
             {showDensity && <DensityControl value={density} onChange={setDensity} />}
             {showSwitch && <TranscribeSwitch live={transcribing} />}
-            {onClose && (
-              <button type="button" onClick={onClose} className="rt-close" title="Close the thread">
-                <X className="h-3.5 w-3.5" />
-              </button>
-            )}
           </span>
         </div>
       )}
@@ -481,9 +482,9 @@ export function RoomThread({
               <Sparkles className="h-4 w-4 text-sol-violet" />
               <p>
                 {switchedOff
-                  ? "Transcription is off for this huddle. Add an agent, or switch it back on, and the words land here."
+                  ? "Transcription is off for this huddle. Add an agent, or switch it back on, and what people say shows up here."
                   : transcribing
-                    ? `Listening. Words appear here as people speak. Add an agent and it ${HEARS}.`
+                    ? `Listening. What people say shows up here. Add an agent and it ${HEARS}.`
                     : `Add an agent to the room. It ${HEARS}.`}
               </p>
               <div className="rt-empty-actions">
@@ -494,9 +495,9 @@ export function RoomThread({
                   </button>
                 )}
                 {!transcribing && seated && (
-                  <button type="button" onClick={transcribeAlone} className="rt-btn rt-btn-green" title="Transcribe the huddle with no agent: the words land in this thread">
+                  <button type="button" onClick={transcribeAlone} className="rt-btn rt-btn-green" title="Transcribe the huddle with no agent: what people say shows up in this thread">
                     <Captions className="h-3.5 w-3.5" />
-                    Transcribe only
+                    Transcribe without one
                   </button>
                 )}
               </div>

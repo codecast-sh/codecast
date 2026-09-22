@@ -193,13 +193,14 @@ describe("which surface the dock shows", () => {
     expect(surface(held("listen"), seated, true)).toBe("walkie");
   });
 
-  test("the room held open after the key comes up is still the walkie's — and draws no card for the sender", () => {
+  test("the room held open after the key comes up is still the walkie's, for the sender too", () => {
     // The gap this closes: between the burst clearing and the room being held
     // the engine used to answer for nobody, and the dock took a room the walkie
-    // had not let go of. The live room spans the whole of it now — but MY OWN
-    // lingering seat draws nothing: Stop means the card goes. A listener's
-    // linger keeps its card, which carries Talk and Join live.
-    expect(surface(lingering("burst"), { ...seated, muted: true })).toBe("none");
+    // had not let go of. The live room spans the whole of it now, and MY OWN
+    // lingering seat draws too: the far side's roster shows me in the room for
+    // that half minute, and a surface that vanished at Stop and came back as a
+    // call when their join landed read as off, then on (pl-756).
+    expect(surface(lingering("burst"), { ...seated, muted: true })).toBe("walkie");
     expect(surface(lingering("listen"), { ...seated, muted: false })).toBe("walkie");
   });
 

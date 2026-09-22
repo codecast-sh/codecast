@@ -11,8 +11,9 @@
    coincide. */
 .th-bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 6px 10px;
   width: 100%;
   max-width: calc(920px + 36px);
   margin: 0 auto;
@@ -55,7 +56,7 @@
   gap: 4px;
 }
 
-@container (max-width: 720px) {
+@container (max-width: 1180px) {
   .th-keys { display: none; }
 }
 

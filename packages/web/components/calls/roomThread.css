@@ -53,6 +53,17 @@
 .rt[data-surface="stage"] .rt-chip .truncate {
   max-width: 130px;
 }
+/* The remove x sits beside the agent's name at the top of the rail and acts
+   in one click, so on the stage it shows only when the pointer or focus is
+   on the chip; the page keeps it in view (no pointer is promised there). */
+.rt[data-surface="stage"] .rt-chip .fc-remove {
+  opacity: 0;
+  transition: opacity 120ms;
+}
+.rt[data-surface="stage"] .rt-chip:hover .fc-remove,
+.rt[data-surface="stage"] .rt-chip:focus-within .fc-remove {
+  opacity: 1;
+}
 .rt-add {
   display: inline-flex;
   align-items: center;
@@ -68,23 +79,6 @@
 .rt-add:hover {
   background: color-mix(in srgb, var(--sol-violet) 22%, transparent);
 }
-.rt-head-closable {
-  padding-right: 34px;
-}
-.rt-close {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  border-radius: 6px;
-  padding: 4px;
-  color: var(--sol-text-muted);
-  transition: color 120ms, background 120ms;
-}
-.rt-close:hover {
-  color: var(--sol-text);
-  background: color-mix(in srgb, var(--sol-text) 8%, transparent);
-}
-
 /* The density control: a word for what it controls, then the positions. */
 .rt-density-group {
   display: inline-flex;
@@ -452,16 +446,8 @@ button.rt-event-agent:hover {
   height: 6px;
   border-radius: 9999px;
   background: var(--sol-green);
-  animation: rt-pulse 1.6s ease-in-out infinite;
-}
-@keyframes rt-pulse {
-  0%, 100% { opacity: 0.35; }
-  50% { opacity: 1; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .rt-listening::before {
-    animation: none;
-  }
   .rt-passage-chevron {
     transition: none;
   }

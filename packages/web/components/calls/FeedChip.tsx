@@ -1,4 +1,4 @@
-import { X } from "lucide-react";
+import { Sparkles, X } from "lucide-react";
 import { useTrackedStore } from "../../store/inboxStore";
 import { findSessionRow } from "../../lib/calls/findSessionRow";
 
@@ -34,17 +34,17 @@ export function FeedChip({
   const agent = route.kind === "session";
   return (
     <span className="flex items-center gap-1.5 rounded-full bg-sol-bg-highlight px-2 py-0.5 font-mono text-[10.5px] text-sol-text-muted">
-      <span
-        className={`h-1.5 w-1.5 rounded-full ${
-          agent ? "bg-sol-violet" : route.kind === "doc" ? "bg-sol-yellow" : "bg-sol-cyan"
-        }`}
-      />
+      {agent ? (
+        <Sparkles className="h-2.5 w-2.5 shrink-0 text-sol-violet" />
+      ) : (
+        <span className={`h-1.5 w-1.5 rounded-full ${route.kind === "doc" ? "bg-sol-yellow" : "bg-sol-cyan"}`} />
+      )}
       <span className="max-w-[130px] truncate">{label}</span>
       {removable && (
         <button
           type="button"
           onClick={onRemove}
-          className="text-sol-text-muted hover:text-sol-red"
+          className="fc-remove text-sol-text-muted hover:text-sol-red"
           title={agent ? `Remove ${label} from the room` : "Stop this feed"}
         >
           <X className="h-2.5 w-2.5" />

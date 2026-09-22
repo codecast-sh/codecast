@@ -172,7 +172,10 @@ export function normalizeLinearIssue(
     remote_updated_at: ts(data?.updatedAt, now),
     remote_created_at: data?.createdAt ? ts(data.createdAt, now) : undefined,
     actor: opts.actor,
-    deleted: opts.deleted || undefined,
+    // Trashed and archived issues are gone from every Linear view; the
+    // remove webhook says `trashed`, an archive arrives as an update carrying
+    // `archivedAt`. Either is the issue leaving (S6).
+    deleted: opts.deleted || !!data?.trashed || !!data?.archivedAt || undefined,
   };
 }
 
