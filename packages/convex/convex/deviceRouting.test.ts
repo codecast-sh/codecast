@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { pickOwnerDevice, type RoutableDevice } from "./deviceRouting";
+import { conversationRepoName, deviceCanHostRepo, pickOwnerDevice, type RoutableDevice } from "./deviceRouting";
 
 const NOW = 1_000_000_000;
 const fresh = NOW - 10_000; // seen 10s ago → online
@@ -351,5 +351,39 @@ describe("pickOwnerDevice — a machine that can't open the path doesn't win on 
     expect(
       pickOwnerDevice(devices, { projectPath: "/Users/jasonbenn/.claude", targetDeviceId: "nose" }, NOW),
     ).toBe("nose");
+  });
+});
+
+describe("deviceCanHostRepo — a takeover claimant must hold a checkout of the repo", () => {
+  const mac = { local_project_roots: ["/Users/ashot/src/codecast", "/Users/ashot/src/mail"] };
+  const linux = { local_project_roots: ["/home/ubuntu/src/eaiden"] };
+
+  test("conversationRepoName: git_root wins, a worktree names its parent repo, junk names nothing", () => {
+    expect(conversationRepoName({ git_root: "/Users/ashot/src/codecast", project_path: "/Users/ashot/src/mail" })).toBe("codecast");
+    expect(conversationRepoName({ project_path: "/Users/ashot/src/codecast/.codecast/worktrees/fix-auth" })).toBe("codecast");
+    expect(conversationRepoName({ project_path: "/home/ubuntu" })).toBeNull();
+    expect(conversationRepoName({ project_path: "/tmp/x" })).toBeNull();
+    expect(conversationRepoName({})).toBeNull();
+    // No usable path: the remote still names the repo.
+    expect(conversationRepoName({ project_path: "/home/ubuntu", git_remote_url: "git@github.com:codecast-sh/codecast.git" })).toBe("codecast");
+    expect(conversationRepoName({ git_remote_url: "https://github.com/codecast-sh/mail" })).toBe("mail");
+  });
+
+  test("a root whose basename matches the repo (recorded on another machine) hosts it", () => {
+    const conv = { git_root: "/Users/other/work/codecast", git_remote_url: "git@github.com:codecast-sh/codecast.git" };
+    expect(deviceCanHostRepo(mac, conv)).toBe(true);
+    expect(deviceCanHostRepo(linux, conv)).toBe(false);
+    expect(deviceCanHostRepo({ local_project_roots: [] }, conv)).toBe(false);
+    expect(deviceCanHostRepo({}, conv)).toBe(false);
+  });
+
+  test("the exact path under a root hosts it (same machine, new device id)", () => {
+    expect(deviceCanHostRepo(mac, { project_path: "/Users/ashot/src/codecast/packages/cli" })).toBe(true);
+  });
+
+  test("a conversation with no repo fits any device", () => {
+    expect(deviceCanHostRepo(linux, {})).toBe(true);
+    expect(deviceCanHostRepo(linux, { project_path: "/home/ubuntu" })).toBe(true);
+    expect(deviceCanHostRepo({}, { project_path: "/tmp/scratch" })).toBe(true);
   });
 });

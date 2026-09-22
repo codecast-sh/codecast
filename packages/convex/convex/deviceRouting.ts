@@ -24,7 +24,50 @@ export const DEVICE_ONLINE_MS = 2 * 60 * 1000;
 // ladder answer "can this machine open that folder" identically. Re-exported
 // so every existing importer keeps its path.
 export { pathUnderRoot, platformCanOpenPath } from "@codecast/shared/contracts";
-import { pathUnderRoot, platformCanOpenPath } from "@codecast/shared/contracts";
+import { pathUnderRoot, platformCanOpenPath, posixRepoBasename } from "@codecast/shared/contracts";
+import { normalizeProjectPath } from "./projectPaths";
+
+/** The repo fields of a `conversations` row that say where it runs. */
+export type ConversationRepoRef = {
+  git_root?: string | null;
+  project_path?: string | null;
+  git_remote_url?: string | null;
+};
+
+/**
+ * The name of the checkout a conversation needs, or null when it needs none.
+ * `git_root` wins, then `project_path`; a junk path (a bare home dir, a temp
+ * dir — `normalizeProjectPath` says null) names nothing. A worktree path
+ * normalizes to its parent repo, so the name is the repo's basename. With no
+ * usable path the git remote still names the repo ("…/codecast.git" → codecast).
+ */
+export function conversationRepoName(conv: ConversationRepoRef): string | null {
+  const path = conv.git_root || conv.project_path;
+  const normalized = path ? normalizeProjectPath(path) : null;
+  if (normalized) return posixRepoBasename(normalized) || null;
+  const remote = conv.git_remote_url?.replace(/\/+$/, "").replace(/\.git$/, "");
+  return remote ? remote.split(/[/:]/).pop() || null : null;
+}
+
+/**
+ * Can this device host the conversation's repo? A conversation that names no
+ * repo (a blank quick create, a junk path) fits any machine. One that names a
+ * repo needs a checkout on the device: `local_project_roots` holds the path
+ * itself (same machine, new device id after a key rotation) or a root whose
+ * basename is the repo's name — the paths were recorded on another machine, so
+ * that basename match is the same convention the daemon's resolveLocalRepo uses.
+ */
+export function deviceCanHostRepo(
+  device: Pick<RoutableDevice, "local_project_roots">,
+  conv: ConversationRepoRef,
+): boolean {
+  const name = conversationRepoName(conv);
+  if (!name) return true;
+  const path = conv.git_root || conv.project_path;
+  return (device.local_project_roots ?? []).some(
+    (r) => (!!path && pathUnderRoot(path, r)) || posixRepoBasename(r) === name,
+  );
+}
 
 /** Minimal device shape the routing decision needs (a subset of the `devices` row). */
 export type RoutableDevice = {

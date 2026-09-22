@@ -302,6 +302,48 @@ describe("resolveResumeCwd", () => {
     });
     expect(cwd).toBe("/Users/ashot/src/outreach");
   });
+
+  // The recorded git root seeds the convention resolver (conventionSeed), so the
+  // repo is looked up by ITS name rather than by whatever leaf the cwd ends in,
+  // and the in-repo subpath is put back afterwards — the start_session placement.
+  describe("recordedRoot seed", () => {
+    const root = "/Users/ashot/src/codecast";
+    const local = "/home/ubuntu/work/codecast";
+    const byRoot = (p: string) => (p === root ? local : null);
+
+    test("resolves the root by convention and keeps the subpath when it exists locally", async () => {
+      const cwd = await resolveResumeCwd({
+        recordedCwd: `${root}/packages/cli`,
+        recordedRoot: root,
+        resolveLocalRepo: byRoot,
+        exists: (p) => p === local || p === `${local}/packages/cli`,
+      });
+      expect(cwd).toBe(`${local}/packages/cli`);
+    });
+
+    test("falls back to the local root when the subpath is absent there", async () => {
+      const cwd = await resolveResumeCwd({
+        recordedCwd: `${root}/packages/gone`,
+        recordedRoot: root,
+        resolveLocalRepo: byRoot,
+        exists: (p) => p === local,
+      });
+      expect(cwd).toBe(local);
+    });
+
+    test("a root the cwd does not live under is ignored (a root stamped off another conversation)", async () => {
+      const seen: string[] = [];
+      const cwd = await resolveResumeCwd({
+        recordedCwd: "/Users/ec2-user/src/outreach",
+        recordedRoot: root,
+        resolveLocalRepo: (p) => { seen.push(p); return null; },
+        remapViaRemote: async () => null,
+        exists: () => false,
+      });
+      expect(cwd).toBeNull();
+      expect(seen).toEqual(["/Users/ec2-user/src/outreach"]);
+    });
+  });
 });
 
 describe("pickProjectPath", () => {

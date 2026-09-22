@@ -72,8 +72,13 @@ export function tabTitle(tab: AppTab, sessions: Record<string, any>, channels: R
   // was stamped at the address it opened with, and the pane has navigated
   // since. pathLabel reads the live path (and any title a backend learned).
   if (isBrowserRoutePath(tab.path)) return pathLabel(tab.path);
-  // A stored title with a query string in it is a raw path that leaked in
-  // before pathLabel stripped queries — never show it, re-derive instead.
-  const stored = tab.title && !tab.title.includes("?") ? tab.title : null;
-  return stored ?? pathLabel(tab.path);
+  return storedTitle(tab) ?? pathLabel(tab.path);
+}
+
+// A stored title with a query string in it is a raw path that leaked in
+// before pathLabel stripped queries, and a stored title that is a bare record
+// id (a call, a session) is no title at all. Never show either; re-derive.
+function storedTitle(tab: AppTab): string | null {
+  const t = tab.title;
+  return t && !t.includes("?") && !isConvexId(t) ? t : null;
 }

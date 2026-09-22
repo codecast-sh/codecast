@@ -231,6 +231,7 @@ const SettingsTeamJoin = lazy(() => import("@/app/settings/team/join/page"));
 const SettingsNotifications = lazy(() => import("@/app/settings/notifications/page"));
 const SettingsIntegrations = lazy(() => import("@/app/settings/integrations/page"));
 const SettingsDesktop = lazy(() => import("@/app/settings/desktop/page"));
+const SettingsApps = lazy(() => import("@/app/settings/apps/page"));
 
 /**
  * The single source of truth. Order is grouped to mirror App.tsx for reviewability; the
@@ -442,6 +443,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "settings/integrations", component: cast(SettingsIntegrations), layout: "settings" },
   { path: "settings/integrations/github-app", component: cast(SettingsIntegrations), layout: "settings" },
   { path: "settings/desktop", component: cast(SettingsDesktop), layout: "settings" },
+  { path: "settings/apps", component: cast(SettingsApps), layout: "settings" },
 
   // -- Public profiles (anonymous, guest-viewable, at the ROOT: /<handle>) --
   // MUST stay last: React Router ranks static segments above this dynamic one, so

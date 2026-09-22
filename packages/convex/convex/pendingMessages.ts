@@ -23,7 +23,7 @@ import {
   isFencedPendingMessage,
   legacyConversationAcceptsDaemonWork,
 } from "./executionBindings";
-import { DEVICE_ONLINE_MS } from "./deviceRouting";
+import { conversationRepoName, DEVICE_ONLINE_MS, deviceCanHostRepo, type ConversationRepoRef } from "./deviceRouting";
 import { requestRemoteWake } from "./cloud";
 import { isConversationSafetyBlocked, type ConversationSafetyState } from "./conversationSafety";
 import { enqueueRoleEvent } from "./orgEvents";
@@ -227,19 +227,25 @@ async function getDeviceRow(
 // `ownerDeviceId`? Only when the owner device is OFFLINE (dead laptop, or the
 // same machine after a machine-key rotation minted a new device id — the old id
 // never heartbeats again) and the claimant is a REGISTERED, NON-REMOTE device of
-// the same user. Remote boxes only ever serve explicitly-moved sessions, and an
-// unregistered claimant proves nothing — both fail closed. A missing OWNER row
-// counts as offline: a device that never registered cannot be delivering.
+// the same user that can HOST the conversation's repo (deviceCanHostRepo: a
+// checkout whose basename matches, or no repo to host at all). Remote boxes only
+// ever serve explicitly-moved sessions, an unregistered claimant proves nothing,
+// and a machine without the checkout would run the session in its $HOME (the
+// 2026-09-22 adoption of a Mac's codecast session into /home/ubuntu) — all fail
+// closed. A missing OWNER row counts as offline: a device that never registered
+// cannot be delivering.
 export async function resolveOfflineOwnerTakeover(
   ctx: { db: any },
   userId: Id<"users">,
   claimantDeviceId: string,
   ownerDeviceId: string | undefined,
-  now: number
+  now: number,
+  conversation: ConversationRepoRef = {},
 ): Promise<boolean> {
   if (!ownerDeviceId || ownerDeviceId === claimantDeviceId) return false;
   const claimant = await getDeviceRow(ctx, userId, claimantDeviceId);
   if (!claimant || claimant.is_remote) return false;
+  if (!deviceCanHostRepo(claimant, conversation)) return false;
   const owner = await getDeviceRow(ctx, userId, ownerDeviceId);
   // A remote owner that is offline is a cloud host that put itself to sleep,
   // not a dead laptop: its worktree and transcript are on its disk, and the
@@ -263,7 +269,7 @@ export async function claimPendingMessageForDaemon(
   const conversation = await ctx.db.get(message.conversation_id);
   if (!conversation) return null;
   const takeover = conversation.owner_device_id && conversation.owner_device_id !== deviceId
-    ? await resolveOfflineOwnerTakeover(ctx, userId, deviceId, conversation.owner_device_id, now)
+    ? await resolveOfflineOwnerTakeover(ctx, userId, deviceId, conversation.owner_device_id, now, conversation)
     : false;
   if (!canDaemonSeePendingMessage(message, conversation, userId, deviceId, takeover)) return null;
   if (targetConversationId && targetConversationId !== message.conversation_id) {
@@ -1398,12 +1404,17 @@ export async function collectDeliverableForOwner(
   // not refire on every fleet heartbeat; while a mismatch-owned pending row
   // exists, refiring as device liveness changes is exactly what re-evaluates the
   // takeover.
+  // The answer depends on the owner device AND on which repo the conversation
+  // needs (deviceCanHostRepo), so the cache is keyed by both — two conversations
+  // of one dead owner in different repos get their own verdicts, and the same
+  // repo shares one. No extra reads: the verdict for a key is computed once.
   const takeoverCache = new Map<string, boolean>();
-  const mayTakeOver = async (ownerDeviceId: string): Promise<boolean> => {
-    const cached = takeoverCache.get(ownerDeviceId);
+  const mayTakeOver = async (ownerDeviceId: string, conversation: ConversationRepoRef): Promise<boolean> => {
+    const key = `${ownerDeviceId}\0${conversationRepoName(conversation) ?? ""}`;
+    const cached = takeoverCache.get(key);
     if (cached !== undefined) return cached;
-    const result = await resolveOfflineOwnerTakeover(ctx, ownerUserId, deviceId, ownerDeviceId, now);
-    takeoverCache.set(ownerDeviceId, result);
+    const result = await resolveOfflineOwnerTakeover(ctx, ownerUserId, deviceId, ownerDeviceId, now, conversation);
+    takeoverCache.set(key, result);
     return result;
   };
 
@@ -1416,7 +1427,7 @@ export async function collectDeliverableForOwner(
     const conversation = await ctx.db.get(message.conversation_id);
     if (!conversation) continue;
     const takeover = conversation.owner_device_id && conversation.owner_device_id !== deviceId
-      ? await mayTakeOver(conversation.owner_device_id)
+      ? await mayTakeOver(conversation.owner_device_id, conversation)
       : false;
     if (canDaemonSeePendingMessage(message, conversation, ownerUserId, deviceId, takeover)) {
       // Stamped here so delivery can refuse a leftover Codex app-server thread

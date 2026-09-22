@@ -1386,24 +1386,18 @@ pre[class*="language-"] {
   }
 }
 
-/* Pending message diagonal stripes */
+/* Pending message: sent from here, not yet confirmed by the session. Faint
+   diagonal bands over the bubble mark it as not yet taken. The bands follow
+   the text colour so they read on every theme and every bubble tint; only
+   the image is set, so the style that owns the bubble's colour (classic,
+   minimal) keeps painting under it, and the bands lift on their own when the
+   row loses the class. */
 .pending-stripes {
-  background-image: repeating-linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--sol-blue) 5%, transparent),
-    color-mix(in srgb, var(--sol-blue) 5%, transparent) 6px,
-    color-mix(in srgb, var(--sol-blue) 8%, transparent) 6px,
-    color-mix(in srgb, var(--sol-blue) 8%, transparent) 12px
-  );
+  --stripe: color-mix(in srgb, var(--sol-text) 3%, transparent);
+  background-image: repeating-linear-gradient(135deg, transparent 0 6px, var(--stripe) 6px 12px);
 }
 .dark .pending-stripes {
-  background-image: repeating-linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--sol-blue) 6%, transparent),
-    color-mix(in srgb, var(--sol-blue) 6%, transparent) 6px,
-    color-mix(in srgb, var(--sol-blue) 10%, transparent) 6px,
-    color-mix(in srgb, var(--sol-blue) 10%, transparent) 12px
-  );
+  --stripe: color-mix(in srgb, var(--sol-text) 3.5%, transparent);
 }
 
 /* Queued message: confirmed sent, waiting for sync */
@@ -3450,15 +3444,8 @@ pre[class*="language-"] {
 .ch-msg-body > p {
   max-width: 78ch;
 }
-/* An expanded card turns its row into a full-width cutout: the row breaks out
-   of the message body column, back across the avatar gutter to the list's
-   left edge (12px breathing inset) and out to its right padding — a window
-   into the object, wide enough to read real content without opening anything.
-   Scoped to the chat message grid; other hosts keep the in-column width. */
-.ch-msg .entity-card-row:has(> .entity-card[aria-expanded="true"]) {
-  margin-left: calc(12px - var(--ch-gutter));
-  margin-right: -8px;
-}
+/* An expanded card keeps the row's column: it grows in place, aligned with
+   the text above and below it, never shifting out across the avatar gutter. */
 /* The inline browse opens and closes by animating the grid row track — the
    only way to transition height:auto without measuring. The child needs
    min-height:0 + overflow:hidden to actually shrink with the track. */
@@ -3669,6 +3656,15 @@ pre[class*="language-"] {
   letter-spacing: 0;
 }
 
+/* Safety net, first so every rule below it can refine: the shared components
+   still speak in utility sizes, and on the surfaces Minimal owns they fold
+   onto the scale. */
+.minimal-style :is([data-sv-nav], [data-sv-rail], [data-cc-topbar], [data-cc-tabbar]) :is(.text-xs, .text-\[12px\]) { font-size: var(--t-sub); }
+.minimal-style :is([data-sv-nav], [data-sv-rail], [data-cc-topbar], [data-cc-tabbar]) .text-sm { font-size: var(--t-ui); }
+.minimal-style :is([data-sv-nav], [data-sv-rail], [data-cc-topbar], [data-cc-tabbar], [data-cc-conversation]) :is(.text-\[9px\], .text-\[10px\], .text-\[11px\], .text-\[10\.5px\]) { font-size: var(--t-mark); }
+.minimal-style :is([data-sv-nav], [data-sv-rail], [data-cc-topbar], [data-cc-tabbar], [data-cc-conversation]) :is(.font-bold, .font-extrabold, .font-semibold) { font-weight: 600; }
+.minimal-style :is([data-sv-nav], [data-sv-rail], [data-cc-topbar], [data-cc-tabbar], [data-cc-conversation]) :is(.tracking-wide, .tracking-wider, .tracking-widest) { letter-spacing: 0; }
+
 .minimal-style [data-cc-topbar] {
   border-color: var(--cc-panel-rule);
   background: var(--sol-bg);
@@ -3703,7 +3699,12 @@ pre[class*="language-"] {
 .minimal-style [data-cc-topbar-search] input:focus {
   border-color: var(--sol-border);
   background: var(--sol-card);
-  box-shadow: 0 0 0 1px var(--sol-border);
+  box-shadow: none;
+}
+.minimal-style kbd {
+  border-color: var(--cc-panel-rule);
+  background: transparent;
+  box-shadow: none;
 }
 
 .minimal-style [data-cc-topbar-search] svg {
@@ -3748,47 +3749,76 @@ pre[class*="language-"] {
 }
 
 .minimal-style [data-sv-nav] {
-  padding: 0 6px 12px;
+  padding: 0 8px 12px;
   background: var(--sol-bg-alt);
   border-right: 1px solid var(--cc-panel-rule);
   scrollbar-color: transparent transparent;
+  font-size: var(--t-ui);
 }
 
 .minimal-style [data-sidebar-scroll] {
-  padding-top: 10px;
+  padding-top: 0;
 }
 
 .minimal-style [data-sv-nav]:hover {
   scrollbar-color: color-mix(in srgb, var(--sol-text-dim) 30%, transparent) transparent;
 }
 
-.minimal-style [data-sv-nav] .uppercase {
-  margin: 14px 10px 6px;
+/* Group labels sit on the row scale in dim ink, the way a file browser labels
+   its folders, and start on the same left edge as the row icons (22px). The
+   first label sits where the list head's controls sit across the screen. */
+.minimal-style [data-sv-nav] :is(.uppercase, [data-rail-heading]) {
+  margin: 18px 14px 4px;
   padding: 0;
-  font-size: 11px;
-  font-weight: 500;
+  font-size: var(--t-ui);
+  font-weight: 400;
+  line-height: 20px;
   letter-spacing: 0;
   text-transform: none;
   color: var(--sol-text-dim);
 }
+.minimal-style [data-sidebar-scroll] > :first-child > :first-child > :is(.uppercase, [data-rail-heading]):first-child {
+  margin-top: 8px;
+}
 
+/* Every row in the page's ink at 400; the open row is the fill alone; an
+   unread row is 500; a count is a dim number on the right edge, not a badge. */
+.minimal-style [data-sv-nav] .text-sm {
+  font-size: var(--t-ui);
+  font-weight: 400;
+}
 .minimal-style [data-sv-nav] button.w-full,
 .minimal-style [data-sv-nav] a.w-full,
 .minimal-style [data-sv-nav] [data-nav-row] {
   width: calc(100% - 8px);
+  min-height: 30px;
   margin-inline: 4px;
-  padding: 7px 10px;
+  padding: 5px 10px;
   gap: 10px;
   border-left-width: 0;
   border-radius: 8px;
+  color: var(--sol-text);
   font-size: var(--t-ui);
+  font-weight: 400;
   line-height: 20px;
+}
+.minimal-style [data-sv-nav] :is(button.w-full, a.w-full, [data-nav-row], [class*="group/nav"]) :is(.font-semibold, .font-bold, .font-medium):not([data-sv-count], [data-sv-count] *) {
+  font-weight: 500;
+}
+.minimal-style [data-sv-nav] button[aria-expanded] {
+  color: var(--sol-text-dim);
+}
+.minimal-style [data-sv-nav] button[aria-expanded] svg {
+  width: 10px;
+  height: 10px;
 }
 
 .minimal-style [data-sv-nav] [class*="group/nav"] {
   margin-inline: 4px;
   border-left: 0;
   border-radius: 8px;
+  color: var(--sol-text);
+  font-weight: 400;
 }
 
 .minimal-style [data-sv-nav] [class*="group/nav"] [data-nav-row] {
@@ -3807,19 +3837,23 @@ pre[class*="language-"] {
   stroke-width: 1.7;
 }
 
-.minimal-style [data-sv-nav] [data-sv-count] {
-  min-width: 19px;
-  height: 19px;
+.minimal-style [data-sv-nav] [data-sv-count],
+.minimal-style [data-sv-nav] [data-sv-count] > * {
+  min-width: 0;
+  height: auto;
   margin-left: auto;
+  padding: 0 2px;
   border: 0;
-  background: var(--sol-bg-highlight) !important;
-  color: var(--sol-text-muted) !important;
-  font-size: var(--t-mark);
-  font-weight: 600;
+  background: transparent !important;
+  color: var(--sol-text-dim) !important;
+  font-size: var(--t-sub);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
 }
-.minimal-style [data-sv-nav] [data-sv-count="mention"] {
-  background: var(--sol-red) !important;
-  color: #fff !important;
+.minimal-style [data-sv-nav] [data-sv-count="mention"],
+.minimal-style [data-sv-nav] [data-sv-count="mention"] > * {
+  color: var(--sol-red) !important;
+  font-weight: 500;
 }
 
 .minimal-style .cc-panel__head {
@@ -3926,7 +3960,7 @@ pre[class*="language-"] {
   padding: 11px 16px;
   border: 0 !important;
   border-radius: 20px;
-  background: var(--cc-user-bubble) !important;
+  background-color: var(--cc-user-bubble) !important;
   box-shadow: none;
 }
 
@@ -3960,8 +3994,8 @@ pre[class*="language-"] {
   padding: 11px 16px;
   border: 0 !important;
   border-radius: 20px;
-  background: var(--cc-user-bubble) !important;
-  box-shadow: 0 6px 20px color-mix(in srgb, var(--sol-text) 11%, transparent);
+  background-color: var(--cc-user-bubble) !important;
+  box-shadow: none;
   backdrop-filter: none;
 }
 
@@ -3989,12 +4023,17 @@ pre[class*="language-"] {
   border-color: var(--sol-border);
   border-radius: 18px;
   background: var(--sol-card);
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--sol-text) 8%, transparent), 0 8px 24px color-mix(in srgb, var(--sol-text) 6%, transparent);
+  box-shadow: none;
 }
 
 .minimal-style [data-cc-conversation] [data-sv-composer] form:not(.w-full) > div:focus-within {
-  border-color: color-mix(in srgb, var(--sol-text-dim) 55%, var(--sol-border));
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--sol-text) 10%, transparent), 0 10px 30px color-mix(in srgb, var(--sol-text) 8%, transparent);
+  border-color: color-mix(in srgb, var(--sol-text) 35%, transparent);
+  box-shadow: none;
+}
+.minimal-style [data-cc-scroll-tools] button,
+.minimal-style [data-cc-assistant-message-toolbar],
+.minimal-style [data-cc-user-message-toolbar] {
+  box-shadow: none;
 }
 
 .minimal-style [data-cc-conversation] [data-sv-composer] textarea {
@@ -4127,19 +4166,10 @@ pre[class*="language-"] {
   background: transparent !important;
 }
 
-.minimal-style [data-sv-rail] [data-session-id]:hover {
-  background: var(--sol-bg-highlight) !important;
-}
-
-.minimal-style [data-sv-rail] [data-session-id][data-active="true"] {
-  border-left-color: var(--sol-text-muted) !important;
-  background: var(--sol-bg-highlight) !important;
-  box-shadow: none;
-  --tw-ring-color: transparent;
-}
-
 .minimal-style [data-sv-rail] {
-  background: var(--sol-bg);
+  --sv-card-bg: transparent;
+  --sv-card-active-bg: var(--sol-bg-highlight);
+  background: var(--sol-bg-alt);
   scrollbar-color: transparent transparent;
 }
 
@@ -4147,23 +4177,36 @@ pre[class*="language-"] {
   scrollbar-color: color-mix(in srgb, var(--sol-text-dim) 30%, transparent) transparent;
 }
 
+/* The group head matches the navigation's labels: the row size, dim ink, the
+   same air above (18px) and below (4px + the row's own margin). */
 .minimal-style [data-sv-rail] [data-sv-sec] {
-  padding: 12px 12px 5px;
+  padding: 18px 16px 4px 22px;
+  border-bottom: 0 !important;
+  background: transparent !important;
   font-family: var(--font-ui);
-  font-size: 12px;
-  font-weight: 500;
+  font-size: var(--t-ui);
+  font-weight: 400;
+  line-height: 20px;
   letter-spacing: 0;
   text-transform: none;
-  color: var(--sol-text-dim);
 }
-
+.minimal-style [data-sv-rail] [data-sv-sec],
 .minimal-style [data-sv-rail] [data-sv-sec] > span {
-  font-size: 12px;
+  color: var(--sol-text-dim) !important;
+}
+.minimal-style [data-sv-rail] [data-sv-sec] > span {
+  font-size: var(--t-ui);
+  font-weight: 400;
+}
+.minimal-style [data-sv-rail] [data-sv-sec] svg {
+  width: 12px;
+  height: 12px;
+  color: var(--sol-text-dim) !important;
 }
 
 .minimal-style [data-sv-rail] [data-sv-sec] .uppercase,
 .minimal-style [data-sv-rail] [data-sv-hidden-head] .uppercase {
-  font-weight: 500;
+  font-weight: 400;
   letter-spacing: 0;
   text-transform: none;
 }
@@ -4177,19 +4220,6 @@ pre[class*="language-"] {
 
 .minimal-style [data-sv-rail] [data-sv-hidden-head] button {
   font-family: var(--font-ui);
-}
-
-.minimal-style [data-sv-rail] [data-sv-title] {
-  color: var(--sol-text-secondary);
-  font-size: 15px;
-  font-weight: 400;
-  line-height: 1.25;
-  letter-spacing: -0.006em;
-}
-
-.minimal-style [data-sv-rail] [data-active="true"] [data-sv-title] {
-  color: var(--sol-text);
-  font-weight: 600;
 }
 
 .minimal-style [data-sv-rail] [data-sv-state],
@@ -4246,16 +4276,11 @@ pre[class*="language-"] {
 }
 
 .minimal-style [data-sv-rail] [data-sv-controls] {
-  gap: 2px;
+  gap: 0;
   padding: 0;
   border: 0;
   border-radius: 0;
   background: transparent;
-}
-
-.minimal-style [data-sv-rail] [data-sv-controls] button {
-  border-radius: 6px;
-  box-shadow: none;
 }
 
 .minimal-style [data-sv-rail] [data-sv-fade] {
@@ -4292,13 +4317,6 @@ pre[class*="language-"] {
   align-items: center;
   justify-content: center;
   color: var(--sol-text-muted);
-}
-
-.minimal-style [data-sv-convhead] .cc-panel__title {
-  font-size: var(--t-read);
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  color: var(--sol-text);
 }
 
 /* What this session belongs to: the trigger that runs it, its plan, its
@@ -4433,15 +4451,6 @@ pre[class*="language-"] {
   font-family: var(--font-ui);
 }
 
-/* Session rows: the title is the content, so it reads at text strength. */
-.minimal-style [data-sv-rail] [data-sv-title] > span.truncate {
-  color: var(--sol-text-secondary);
-  font-weight: 400;
-}
-.minimal-style [data-sv-rail] [data-sv-title] > span.flex-shrink-0.font-medium {
-  font-weight: 600;
-}
-
 /* ==== Minimal: one type scale, one inset, one head height =================
    Four sizes: 15 for what you read and write (prose, bubbles, composer, the
    conversation title), 13 for what you scan (session rows, navigation, tabs,
@@ -4503,53 +4512,76 @@ pre[class*="language-"] {
 }
 .minimal-style [data-cc-tabbar] {
   height: 36px;
-  padding-inline: 10px;
+  padding-inline: 8px;
+  gap: 2px;
   border-bottom-color: var(--cc-panel-rule);
   background: var(--sol-bg);
   font-family: var(--font-ui);
-  font-size: var(--t-sub);
+  font-size: var(--t-ui);
 }
-.minimal-style [data-cc-tabbar] button,
-.minimal-style [data-cc-tabbar] a {
+/* A tab is a row: title at the row size in the page's ink, the open one a
+   soft fill alone, the others in dim ink. No hairline between tabs. */
+.minimal-style [data-cc-tabbar] :is(button, a)[class] {
+  height: 28px;
+  padding-inline: 10px 6px;
+  border-color: transparent !important;
   border-radius: 7px;
+  box-shadow: none;
+  color: var(--sol-text-dim);
+  font-size: var(--t-ui);
+  font-weight: 400;
+}
+.minimal-style [data-cc-tabbar] button[class*="bg-sol-bg "],
+.minimal-style [data-cc-tabbar] button[class*="text-sol-text "] {
+  background: var(--sol-bg-highlight);
+  color: var(--sol-text);
+}
+.minimal-style [data-cc-tabbar] button > span[aria-hidden] {
+  display: none;
+}
+.minimal-style [data-cc-tabbar] button svg {
+  width: 13px;
+  height: 13px;
 }
 /* The tab strip appears only when there is a second tab to switch to. */
 .minimal-style [data-cc-tabbar]:not(:has(> div > :nth-child(2))) {
   display: none;
 }
 
-/* Left navigation */
-.minimal-style [data-sv-nav] {
-  padding-inline: 8px;
-  font-size: var(--t-ui);
+/* The notice under the top bar (notifications off) is one quiet row at the
+   row size, in one ink, with a plain text action and no tint. */
+.minimal-style [data-cc-banner] {
+  border-bottom: 1px solid var(--cc-panel-rule);
+  background: var(--sol-bg-alt);
+  background-image: none;
 }
-.minimal-style [data-sv-nav] .text-sm,
-.minimal-style [data-sv-nav] [data-nav-row],
-.minimal-style [data-sv-nav] button.w-full,
-.minimal-style [data-sv-nav] a.w-full {
+.minimal-style [data-cc-banner] > div {
+  min-height: 36px;
+  padding: 0 var(--cc-inset);
+}
+.minimal-style [data-cc-banner] span {
+  color: var(--sol-text-muted);
   font-size: var(--t-ui);
   font-weight: 400;
 }
-.minimal-style [data-sv-nav] button.w-full,
-.minimal-style [data-sv-nav] a.w-full,
-.minimal-style [data-sv-nav] [data-nav-row] {
-  min-height: 30px;
-  padding: 5px 8px;
-}
-.minimal-style [data-sv-nav] :is(button.w-full, a.w-full, [data-nav-row]):is([aria-current="page"], .bg-sol-bg-highlight, [data-active="true"]) {
-  font-weight: 600;
-}
-.minimal-style [data-sv-nav] .uppercase {
-  margin: 16px 8px 4px;
-  font-size: var(--t-mark);
-  font-weight: 500;
+.minimal-style [data-cc-banner] svg {
+  width: 14px;
+  height: 14px;
   color: var(--sol-text-dim);
 }
-.minimal-style [data-sv-nav] [data-sv-count] {
-  font-size: var(--t-mark);
+.minimal-style [data-cc-banner] button {
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--sol-text);
+  font-size: var(--t-ui);
   font-weight: 500;
 }
-/* The Chat list is a plain list here: no crosshatch, no inset shadow, no
+.minimal-style [data-cc-banner] button[aria-label="Dismiss"] {
+  color: var(--sol-text-dim);
+}
+
+/* Left navigation: the Chat list is a plain list here: no crosshatch, no inset shadow, no
    source mark on every row. Classic keeps its texture. */
 .minimal-style [data-sv-nav] .nav-subsection {
   background: none;
@@ -4573,54 +4605,76 @@ pre[class*="language-"] {
 }
 .minimal-style [data-sv-rail] [data-sv-head-tools] button,
 .minimal-style [data-sv-rail] [data-sv-controls] button {
+  min-width: 28px;
+  height: 28px;
+  padding: 0 6px;
+  gap: 4px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent !important;
   color: var(--sol-text-dim);
+  font-size: var(--t-sub);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+.minimal-style [data-sv-rail] [data-sv-head-tools] button svg,
+.minimal-style [data-sv-rail] [data-sv-controls] button svg {
+  width: 14px;
+  height: 14px;
+  stroke-width: 1.7;
 }
 .minimal-style [data-sv-rail] [data-sv-head-tools] button:hover,
-.minimal-style [data-sv-rail] [data-sv-head-tools] button[aria-pressed="true"],
-.minimal-style [data-sv-rail] [data-sv-head-tools] button[data-state="open"] {
+.minimal-style [data-sv-rail] [data-sv-controls] button:hover {
+  background: color-mix(in srgb, var(--sol-text) 5%, transparent) !important;
   color: var(--sol-text);
+}
+/* The pressed one gets the fill alone: no tint, no box, no colour. */
+.minimal-style [data-sv-rail] [data-sv-head-tools] button[aria-pressed="true"],
+.minimal-style [data-sv-rail] [data-sv-head-tools] button[data-state="open"],
+.minimal-style [data-sv-rail] [data-sv-controls] button[class*=" bg-sol-"] {
+  background: var(--sol-bg-highlight) !important;
+  color: var(--sol-text);
+}
+.minimal-style [data-sv-rail] [data-sv-head-tools] button[data-cc-keep] {
+  animation: none;
 }
 
 /* Session list: the row is simple view's card, in Minimal's ink. Everything
    simple view shows on a card stays: the summary, your last prompt, the pin,
    the thumbnail, the lineage and the schedule rows beneath. Color marks a
    state; kinds (section heads, pins, project names) read in the page's ink. */
-.minimal-style [data-sv-rail] {
-  --sv-card-bg: var(--sol-card);
-  --sv-card-active-bg: var(--sol-bg-highlight);
-  background: var(--sol-bg-alt);
-}
+/* A row, not a card: no border, no shadow, the open one a soft fill alone.
+   The avatar starts on the same left edge as the navigation's icons (22px). */
 .minimal-style [data-sv-rail] [data-session-id] {
-  margin: 4px 8px;
-  border: 1px solid var(--cc-panel-rule);
-  border-radius: 12px;
-  background: var(--sv-card-bg) !important;
-  box-shadow: 0 1px 0 color-mix(in srgb, var(--sol-text) 3%, transparent);
-}
-.minimal-style [data-sv-rail] [data-session-id]:hover {
-  border-color: var(--sol-border);
-  background: var(--sol-card-hover) !important;
-}
-.minimal-style [data-sv-rail] [data-session-id][data-active="true"] {
-  border-color: color-mix(in srgb, var(--sol-text) 22%, transparent);
-  background: var(--sv-card-active-bg) !important;
+  margin: 1px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent !important;
   box-shadow: none;
 }
+.minimal-style [data-sv-rail] [data-session-id]:hover {
+  background: color-mix(in srgb, var(--sol-text) 4%, transparent) !important;
+}
+.minimal-style [data-sv-rail] [data-session-id][data-active="true"] {
+  background: var(--sv-card-active-bg) !important;
+  box-shadow: none;
+  --tw-ring-color: transparent;
+}
 .minimal-style [data-sv-rail] [data-session-id] > [role="button"] {
-  padding: 11px 14px;
+  padding: 8px 14px;
 }
 .minimal-style.inbox-compact [data-sv-rail] [data-session-id] > [role="button"],
 .minimal-style .inbox-compact [data-sv-rail] [data-session-id] > [role="button"] {
-  padding: 8px 14px;
+  padding: 5px 14px;
 }
 .minimal-style [data-sv-rail] [data-sv-title] {
   font-size: var(--t-ui);
   font-weight: 400;
-  line-height: 1.3;
+  line-height: 20px;
   letter-spacing: -0.004em;
 }
 .minimal-style [data-sv-rail] [data-sv-title] > span.flex-shrink-0.font-medium {
-  font-weight: 600;
+  font-weight: 500;
   color: var(--sol-text);
 }
 .minimal-style [data-sv-rail] [data-sv-title] > span.truncate {
@@ -4682,20 +4736,6 @@ pre[class*="language-"] {
   background: transparent;
   color: var(--sol-text-dim);
   font-size: var(--t-mark);
-}
-.minimal-style [data-sv-rail] [data-sv-sec],
-.minimal-style [data-sv-rail] [data-sv-sec] > span,
-.minimal-style [data-sv-rail] [data-sv-sec] svg {
-  color: var(--sol-text-muted) !important;
-  border-bottom-color: var(--cc-panel-rule) !important;
-}
-.minimal-style [data-sv-rail] [data-sv-sec] {
-  padding: 14px var(--cc-inset) 4px;
-  font-size: var(--t-sub);
-  font-weight: 500;
-}
-.minimal-style [data-sv-rail] [data-sv-sec] > span {
-  font-size: var(--t-sub);
 }
 .minimal-style [data-sv-rail] :is([data-schedrow], [data-schedstrip]) {
   margin-inline: 8px;
@@ -4876,14 +4916,6 @@ pre[class*="language-"] {
   font-size: var(--t-mark);
 }
 
-/* Safety net: the shared components still speak in utility sizes. On the
-   surfaces Minimal owns they fold onto the scale. */
-.minimal-style :is([data-sv-nav], [data-sv-rail], [data-cc-topbar], [data-cc-tabbar]) :is(.text-xs, .text-\[12px\]) { font-size: var(--t-sub); }
-.minimal-style :is([data-sv-nav], [data-sv-rail], [data-cc-topbar], [data-cc-tabbar]) .text-sm { font-size: var(--t-ui); }
-.minimal-style :is([data-sv-nav], [data-sv-rail], [data-cc-topbar], [data-cc-tabbar], [data-cc-conversation]) :is(.text-\[9px\], .text-\[10px\], .text-\[11px\], .text-\[10\.5px\]) { font-size: var(--t-mark); }
-.minimal-style :is([data-sv-nav], [data-sv-rail], [data-cc-topbar], [data-cc-tabbar], [data-cc-conversation]) :is(.font-bold, .font-extrabold, .font-semibold) { font-weight: 600; }
-.minimal-style :is([data-sv-nav], [data-sv-rail], [data-cc-topbar], [data-cc-tabbar], [data-cc-conversation]) :is(.tracking-wide, .tracking-wider, .tracking-widest) { letter-spacing: 0; }
-
 /* ==== Minimal: one ink =====================================================
    Colour marks a live state and nothing else: the dot beside a running
    session, the red of a mention or an overdue trigger. Every kind mark (a
@@ -4892,72 +4924,9 @@ pre[class*="language-"] {
    Lists carry two weights: 400 for a row, 500 for a name, an unread row or a
    state word. 600 belongs to a title. */
 
-/* Left navigation: a list of places. Every row in the page's ink at 400; the
-   open row is the fill alone; an unread row is 500; a count is a dim number
-   on the right edge, not a badge. Group labels sit on the row scale in dim
-   ink, the way a file browser labels its folders. */
-.minimal-style [data-sv-nav] :is(.uppercase, [data-rail-heading]) {
-  margin: 18px 8px 4px;
-  font-size: var(--t-ui);
-  font-weight: 400;
-  letter-spacing: 0;
-  text-transform: none;
-  color: var(--sol-text-dim);
-}
-.minimal-style [data-sv-nav] :is(button.w-full, a.w-full, [data-nav-row], [class*="group/nav"]) {
-  color: var(--sol-text);
-  font-weight: 400;
-}
-.minimal-style [data-sv-nav] :is(button.w-full, a.w-full, [data-nav-row]):is([aria-current="page"], .bg-sol-bg-highlight, [data-active="true"]) {
-  font-weight: 400;
-}
-.minimal-style [data-sv-nav] :is(button.w-full, a.w-full, [data-nav-row], [class*="group/nav"]) :is(.font-semibold, .font-bold, .font-medium) {
-  font-weight: 500;
-}
-.minimal-style [data-sv-nav] [data-sv-count] {
-  min-width: 0;
-  height: auto;
-  margin-left: auto;
-  padding: 0 2px;
-  background: transparent !important;
-  color: var(--sol-text-dim) !important;
-  font-size: var(--t-sub);
-  font-weight: 400;
-  font-variant-numeric: tabular-nums;
-}
-.minimal-style [data-sv-nav] [data-sv-count="mention"] {
-  background: transparent !important;
-  color: var(--sol-red) !important;
-  font-weight: 500;
-}
-.minimal-style [data-sv-nav] button[aria-expanded] {
-  color: var(--sol-text-dim);
-}
-.minimal-style [data-sv-nav] button[aria-expanded] svg {
-  width: 10px;
-  height: 10px;
-}
-
 /* Session list: the name at 500, the title after it at 400 in the same ink.
    A state or a reason (dormant, done, login, limit, a draft, a branch) is a
-   word in quiet ink; the dot beside the row already carries its colour. The
-   group label matches the navigation's. */
-.minimal-style [data-sv-rail] [data-sv-title] > span.flex-shrink-0.font-medium {
-  font-weight: 500;
-}
-.minimal-style [data-sv-rail] [data-sv-sec],
-.minimal-style [data-sv-rail] [data-sv-sec] > span,
-.minimal-style [data-sv-rail] [data-sv-sec] svg {
-  color: var(--sol-text-dim) !important;
-}
-.minimal-style [data-sv-rail] [data-sv-sec] {
-  padding-top: 18px;
-  font-size: var(--t-ui);
-  font-weight: 400;
-}
-.minimal-style [data-sv-rail] [data-sv-sec] > span {
-  font-size: var(--t-ui);
-}
+   word in quiet ink; the dot beside the row already carries its colour. */
 .minimal-style [data-sv-rail] [data-session-id] :is(
   [data-sv-status-chip],
   [data-role-escalated-count],
@@ -4980,6 +4949,9 @@ pre[class*="language-"] {
 .minimal-style [data-sv-rail] [data-session-id] [data-sv-status] span[class*="border-"] a {
   padding: 0;
 }
+.minimal-style [data-sv-rail] [data-session-id] :is([data-sv-status-chip], span[class*="amber-500"]) > svg {
+  display: none;
+}
 .minimal-style [data-sv-rail] [data-session-id] [data-sv-status] a[class*="border"]:hover,
 .minimal-style [data-sv-rail] [data-session-id] [data-sv-status] span[class*="border-"] a:hover {
   background: transparent;
@@ -4989,20 +4961,36 @@ pre[class*="language-"] {
   color: var(--sol-text-dim);
   font-weight: 400;
 }
-.minimal-style [data-sv-rail] [data-sv-head-tools] > button[data-cc-keep] {
-  border-color: var(--cc-panel-rule);
+/* A row an org role escalated to you: the title in the page's ink like any
+   other, the gesture a plain word, the avatar's badge a mark in muted ink. */
+.minimal-style [data-sv-rail] [data-session-id] [data-sv-title] :is([class*="text-violet"], [class*="text-gray"]) {
+  color: var(--sol-text);
+}
+.minimal-style [data-sv-rail] [data-session-id] :is(.text-gray-500, .text-gray-400) {
+  color: var(--sol-text-dim);
+}
+.minimal-style [data-sv-rail] [data-session-id] [data-role-gesture] button {
+  padding: 0;
+  border: 0;
   background: transparent;
   color: var(--sol-text-muted);
   font-size: var(--t-mark);
   font-weight: 500;
 }
-.minimal-style [data-sv-rail] [data-sv-head-tools] > button[data-cc-keep]:hover {
-  background: var(--sol-bg-highlight);
-}
-.minimal-style [data-sv-rail] [data-sv-head-tools] button[aria-pressed="true"],
-.minimal-style [data-sv-rail] [data-sv-head-tools] button[data-state="open"] {
-  background: var(--sol-bg-highlight);
+.minimal-style [data-sv-rail] [data-session-id] [data-role-gesture] button:hover {
   color: var(--sol-text);
+  text-decoration: underline;
+}
+.minimal-style [data-sv-rail] [data-face-badge] svg,
+.minimal-style [data-sv-rail] [data-session-id] button[class*="text-amber-4"] {
+  color: var(--sol-text-muted);
+}
+.minimal-style [data-cc-topbar] .font-bold {
+  font-weight: 500;
+}
+/* The project's dot is a kind mark: dim ink, not a colour per project. */
+.minimal-style [data-sv-rail] [data-sv-meta] .font-medium > span.rounded-full[class*="bg-"] {
+  background: var(--sol-text-dim);
 }
 /* The triggers line under the list: one dim sentence, the overdue count the
    only red word in it. */
@@ -5034,6 +5022,30 @@ pre[class*="language-"] {
 .minimal-style [data-sv-rail] [data-sv-triggers-foot] > button > span[class*="text-sol-red"] {
   color: var(--sol-red);
   font-weight: 500;
+}
+
+/* A message from another session: a quiet block on a hairline, its label
+   and the sender's name in muted ink. The pin on a session row's state line
+   is a mark, so it reads in dim ink too. */
+.minimal-style [data-cc-conversation] [data-cc-session-msg] {
+  border-left-color: var(--cc-panel-rule);
+  background: var(--sol-bg-alt);
+}
+.minimal-style [data-cc-conversation] [data-cc-session-msg] > div:first-child :is(svg, span) {
+  color: var(--sol-text-muted);
+  font-family: var(--font-ui);
+  font-size: var(--t-sub);
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.minimal-style [data-cc-conversation] [data-cc-session-msg] > div:first-child span[class*="border"] {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.minimal-style [data-sv-rail] [data-sv-state] > svg {
+  color: var(--sol-text-dim);
 }
 
 /* A reference to a task, a page, a pull request or a person is a link in the
@@ -5114,7 +5126,7 @@ pre[class*="language-"] {
 .minimal-style :is(.decision-card, .decision-doc) {
   font-family: var(--font-ui);
   border-top-color: var(--cc-panel-rule);
-  box-shadow: 0 -8px 24px color-mix(in srgb, var(--sol-text) 6%, transparent);
+  box-shadow: none;
 }
 .minimal-style .decision-card .decision-question {
   font-family: var(--font-ui);
@@ -5167,6 +5179,12 @@ pre[class*="language-"] {
 .minimal-style [role="dialog"] {
   font-family: var(--font-ui);
 }
+/* Anything that floats over the page (a menu, a popover, a dialog, a tooltip)
+   is set apart by a hairline rule, never a shadow. */
+.minimal-style :is([role="dialog"], [role="menu"], [role="listbox"], [role="tooltip"], [data-radix-popper-content-wrapper] > *, [data-radix-menu-content], [data-radix-popover-content]) {
+  border-color: var(--sol-border);
+  box-shadow: none;
+}
 
 .minimal-style [role="dialog"] input,
 .minimal-style [role="dialog"] textarea,
@@ -5198,6 +5216,16 @@ pre[class*="language-"] {
 
 .minimal-style [data-cc-settings] {
   max-width: 46rem;
+}
+/* A chosen option in settings is framed in ink on a soft fill, like the
+   chosen visual style above. */
+.minimal-style [data-cc-settings] button[class*="border-sol-cyan"] {
+  border-color: color-mix(in srgb, var(--sol-text) 35%, transparent);
+  background: var(--sol-bg-highlight);
+  color: var(--sol-text);
+}
+.minimal-style [data-cc-settings] button[class*="border-sol-cyan"] :is([class*="text-sol-cyan"], svg) {
+  color: var(--sol-text);
 }
 
 .visual-style-options {

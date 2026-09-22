@@ -299,21 +299,31 @@ export default function SyncPage() {
     return name.includes(query) || path.includes(query);
   });
 
-  // Group by effective state so the list answers "what am I sharing?" at a glance.
-  const projectGroups = (() => {
-    const shared: SyncProject[] = [];
+  // One group per team (its level control in the header, the projects that
+  // flow to it underneath), then the projects only you see, then the ones not
+  // syncing. The card answers "what does this team see, and of what" in one
+  // glance. A team with nothing shared still shows its header unless a search
+  // is narrowing the list.
+  type SharingGroup = { key: string; team?: UserTeam; label?: string; items: SyncProject[] };
+  const sharingGroups = (() => {
+    const byTeam = new Map<string, SyncProject[]>(teams.map((team) => [String(team._id), []]));
     const privateSynced: SyncProject[] = [];
     const notSyncing: SyncProject[] = [];
     filteredProjects.forEach((project) => {
-      if (!isSynced(project.path)) notSyncing.push(project);
-      else if (getTeamForProject(project.path)) shared.push(project);
+      if (!isSynced(project.path)) { notSyncing.push(project); return; }
+      const shared = getTeamForProject(project.path);
+      const bucket = shared ? byTeam.get(String(shared.team._id)) : undefined;
+      if (bucket) bucket.push(project);
       else privateSynced.push(project);
     });
-    return [
-      { key: "shared", label: "Shared with a team", items: shared },
+    const groups: SharingGroup[] = teams
+      .map((team) => ({ key: String(team._id), team, items: byTeam.get(String(team._id)) ?? [] }))
+      .filter((group) => group.items.length > 0 || !searchQuery);
+    groups.push(
       { key: "private", label: hasTeams ? "Private — only you" : "Syncing", items: privateSynced },
       { key: "off", label: "Not syncing", items: notSyncing },
-    ].filter((group) => group.items.length > 0);
+    );
+    return groups.filter((group) => group.team || group.items.length > 0);
   })();
 
   return (
@@ -345,61 +355,6 @@ export default function SyncPage() {
           </Button>
         }
       >
-        {hasTeams && (
-          <>
-            <div className="flex items-baseline gap-1.5 bg-sol-bg-alt/50 px-4 py-1.5 sm:px-5">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-sol-text-dim">
-                What each team sees
-              </span>
-              <span className="text-[10px] text-sol-text-dim/70">{teams.length}</span>
-            </div>
-            {teams.map((team) => {
-              const option = teamVisibilityOption(team.visibility);
-              const pinned = hasPinnedPast(team);
-              return (
-                <SettingsRow
-                  key={team._id}
-                  label={
-                    <span className="flex items-center gap-1.5">
-                      <TeamIcon icon={team.icon} color={team.icon_color} className="h-3.5 w-3.5" />
-                      <span className="font-medium">{team.name}</span>
-                      <span className="text-xs text-sol-text-muted">· {describeTeamSharing(team)}</span>
-                    </span>
-                  }
-                  description={
-                    <>
-                      Teammates see {option.sees}.
-                      {pinned && (
-                        <>
-                          {" "}
-                          {describePinnedPast(team)}{" "}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setTeamMembershipVisibility(String(team._id), option.value, "everything");
-                              toast.success(`${team.name} now sees ${option.sees} for every session`);
-                            }}
-                            className="text-sol-cyan hover:underline"
-                          >
-                            Include past sessions
-                          </button>
-                        </>
-                      )}
-                    </>
-                  }
-                >
-                  <TeamVisibilityControl team={team} />
-                </SettingsRow>
-              );
-            })}
-            <div className="flex items-baseline gap-1.5 bg-sol-bg-alt/50 px-4 py-1.5 sm:px-5">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-sol-text-dim">
-                Projects
-              </span>
-              <span className="text-[10px] text-sol-text-dim/70">{filteredProjects.length}</span>
-            </div>
-          </>
-        )}
         <div className="flex items-center gap-2.5 px-4 py-2.5 sm:px-5">
           <Search className="h-4 w-4 flex-shrink-0 text-sol-text-dim" />
           <input
@@ -426,16 +381,31 @@ export default function SyncPage() {
           </div>
         )}
 
-        {projectGroups.length > 0 ? (
+        {sharingGroups.length > 0 ? (
           <>
-            {projectGroups.map((group) => (
+            {sharingGroups.map((group) => (
               <Fragment key={group.key}>
-                {projectGroups.length > 1 && (
+                {group.team ? (
+                  <TeamSharingHeader
+                    team={group.team}
+                    projectCount={group.items.length}
+                    onIncludePast={() => {
+                      const option = teamVisibilityOption(group.team!.visibility);
+                      setTeamMembershipVisibility(String(group.team!._id), option.value, "everything");
+                      toast.success(`${group.team!.name} now sees ${option.sees} for every session`);
+                    }}
+                  />
+                ) : (
                   <div className="flex items-baseline gap-1.5 bg-sol-bg-alt/50 px-4 py-1.5 sm:px-5">
                     <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-sol-text-dim">
                       {group.label}
                     </span>
                     <span className="text-[10px] text-sol-text-dim/70">{group.items.length}</span>
+                  </div>
+                )}
+                {group.team && group.items.length === 0 && (
+                  <div className="px-4 py-2 pl-12 text-xs text-sol-text-dim sm:px-5 sm:pl-14">
+                    Nothing shared with {group.team.name} yet. Pick it on a project below.
                   </div>
                 )}
                 {group.items.map((project) => {
@@ -624,5 +594,41 @@ export default function SyncPage() {
         </DialogContent>
       </Dialog>
     </SettingsPanel>
+  );
+}
+
+/** The header of a team's group: who is on it, what they see, and the level
+ *  control. The projects that flow to the team follow as the group's rows. */
+function TeamSharingHeader({ team, projectCount, onIncludePast }: { team: UserTeam; projectCount: number; onIncludePast: () => void }) {
+  const option = teamVisibilityOption(team.visibility);
+  return (
+    <SettingsRow
+      className="bg-sol-bg-alt/50"
+      label={
+        <span className="flex items-center gap-1.5">
+          <TeamIcon icon={team.icon} color={team.icon_color} className="h-3.5 w-3.5" />
+          <span className="font-medium">{team.name}</span>
+          <span className="text-xs text-sol-text-muted">
+            · {describeTeamSharing(team)} · {projectCount === 1 ? "1 project" : `${projectCount} projects`}
+          </span>
+        </span>
+      }
+      description={
+        <>
+          Teammates see {option.sees}.
+          {hasPinnedPast(team) && (
+            <>
+              {" "}
+              {describePinnedPast(team)}{" "}
+              <button type="button" onClick={onIncludePast} className="text-sol-cyan hover:underline">
+                Include past sessions
+              </button>
+            </>
+          )}
+        </>
+      }
+    >
+      <TeamVisibilityControl team={team} />
+    </SettingsRow>
   );
 }

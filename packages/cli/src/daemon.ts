@@ -64,6 +64,7 @@ import {
 } from "./cloud/agentBridge.js";
 import { worktreeEnvPrefix } from "./worktreeEnv.js";
 import { hasActiveCloudWork } from "./cloud/activity.js";
+import { startMirrorProcess } from "./cloud/mirror/process.js";
 import { releaseSessionWorktree } from "./worktreeGc.js";
 import { reparentNotice, type ReparentCommandFacts } from "./sessionMoveNotice.js";
 import { createWipSnapshot, defaultRemote, pushWipSnapshot, restoreWipSnapshot } from "./wipSnapshot.js";
@@ -452,38 +453,40 @@ function resolveLocalRepo(remotePath: string): string | null {
   return resolved;
 }
 
-// Claude indexes a session by the slug of the cwd it runs in:
-// ~/.claude/projects/<cwd-slug>/<sessionId>.jsonl. When we reconstitute a session
-// whose origin path lives on another machine (a fork, or any cross-host resume),
-// the JSONL must land under the *locally-resolved* repo path — the same cwd
-// `claude --resume` will actually use — or Claude reports "No conversation found
-// with session ID" and the resume crashes, poisoning the fatal-reason cache and
-// falling back to a blank session. Resolve the write dir the same way we resolve
-// the resume cwd so the two always agree.
-function localSessionDir(remotePath?: string): string | undefined {
-  if (!remotePath) return undefined;
-  return resolveLocalRepo(remotePath) ?? remotePath;
-}
-
 // Resolve the cwd a resume/reconstitute must run in, or null to REFUSE. Wires the
 // daemon's resolveLocalRepo + (when a conversation is known) a git-remote remap
 // through the sync service. Mirrors the start_session contract so a resume that
 // lands on a machine without the checkout never silently runs in $HOME (which
 // mislabels the project as the home dir — see resolveResumeCwd).
+/** What a conversation records about its project (a fetched export, or the
+ *  server's project info): enough to place it, and to say whether it names a
+ *  repo at all. */
+type ConversationProjectInfo = {
+  project_path?: string | null;
+  git_root?: string | null;
+  git_remote_url?: string | null;
+};
+
 async function resolveResumeCwdOrRefuse(opts: {
   recordedCwd?: string;
   cwdOverride?: string;
   conversationId?: string;
+  /** The conversation's recorded project when the caller already holds it (an
+   *  export in hand): saves the project-info fetch and seeds the convention
+   *  resolver with the repo root. */
+  projectInfo?: ConversationProjectInfo | null;
 }): Promise<string | null> {
   const conversationId = opts.conversationId;
+  const svc = syncServiceRef;
   return resolveResumeCwd({
     cwdOverride: opts.cwdOverride,
     recordedCwd: opts.recordedCwd,
+    recordedRoot: opts.projectInfo?.git_root ?? null,
     resolveLocalRepo,
-    remapViaRemote: (conversationId && syncServiceRef)
+    remapViaRemote: (svc && (opts.projectInfo || conversationId))
       ? async () => {
-          const svc = syncServiceRef!;
-          const info = await svc.getProjectInfo(conversationId).catch(() => null);
+          const info = opts.projectInfo
+            ?? (conversationId ? await svc.getProjectInfo(conversationId).catch(() => null) : null);
           const resolved = await resolveLocalProjectPath({
             projectPath: info?.project_path ?? opts.recordedCwd ?? null,
             gitRoot: info?.git_root ?? null,
@@ -496,16 +499,55 @@ async function resolveResumeCwdOrRefuse(opts: {
   });
 }
 
-// Where a transcript regenerated from Convex should say it ran. Explicit
-// override first, then the conversation's recorded project path; never the
-// daemon's own cwd (see generatedSessionCwd) and never the filesystem root.
-// Null means "refuse to regenerate": a rollout with no honest cwd is one the
-// resume path would only refuse anyway, after overwriting the real file.
-function regenerationCwd(data: ExportResult, cwdOverride?: string): string | null {
-  for (const candidate of [cwdOverride, data.conversation.project_path]) {
-    if (isResumableCwd(candidate) && fs.existsSync(candidate)) return candidate;
-  }
-  return null;
+// Where a transcript regenerated from Convex should say it ran — and where the
+// session it feeds will run. Resolved exactly like a resume
+// (resolveResumeCwdOrRefuse): the explicit override, then the recorded project
+// path if it exists here, else a local checkout of the same repo by convention
+// or by git remote, keeping the in-repo subpath. Never the daemon's own cwd
+// (see generatedSessionCwd), never the filesystem root, and never $HOME: a
+// recorded path that exists only on another machine used to fail a bare
+// existence check here, and the delivery fallback then ran the session in the
+// home directory of the wrong box (2026-09-22). Null means "refuse to
+// regenerate": a rollout with no honest cwd is one the resume path would only
+// refuse anyway, after overwriting the real file.
+async function regenerationCwd(data: ExportResult, cwdOverride?: string): Promise<string | null> {
+  const conv = data.conversation;
+  return resolveResumeCwdOrRefuse({
+    cwdOverride,
+    recordedCwd: conv.project_path ?? undefined,
+    conversationId: conv.id,
+    projectInfo: conv,
+  });
+}
+
+// Does the conversation name a project at all? A blank quick-create records
+// nothing; anything else — a path, a repo root, a remote — is a repo the
+// session must run in, and $HOME is never a substitute for it.
+export function conversationNamesRepo(conv: ConversationProjectInfo | null | undefined): boolean {
+  return isResumableCwd(conv?.project_path) || !!conv?.git_root?.trim() || !!conv?.git_remote_url?.trim();
+}
+
+export type FreshDeliveryPlacement =
+  | { kind: "run"; cwd: string }
+  | { kind: "refuse"; reason: "no_local_checkout" | "remote_no_project" };
+
+// Where a fresh delivery session (startFreshSessionForDelivery) may run once
+// the resolver has spoken. A resolved checkout runs there. A conversation that
+// names a repo the resolver could not place is refused — the message stays
+// pending and the caller surfaces "clone it first" — rather than running in
+// $HOME on whichever machine happened to take the delivery. $HOME is only for
+// a conversation with no project at all, and only on a local device; a remote
+// box would run it under the wrong identity and context.
+export function placeFreshDeliverySession(args: {
+  resolvedCwd: string | null;
+  conversation: ConversationProjectInfo | null | undefined;
+  isRemote: boolean;
+  home: string;
+}): FreshDeliveryPlacement {
+  if (args.resolvedCwd) return { kind: "run", cwd: args.resolvedCwd };
+  if (conversationNamesRepo(args.conversation)) return { kind: "refuse", reason: "no_local_checkout" };
+  if (args.isRemote) return { kind: "refuse", reason: "remote_no_project" };
+  return { kind: "run", cwd: args.home };
 }
 
 // "Clone it first" is only an actionable banner when there is a git remote to
@@ -521,6 +563,11 @@ export function noLocalCheckoutBannerActionable(args: {
   recordedPath?: string | null | undefined;
 }): boolean {
   return !!args.remote;
+}
+
+// The banner itself, shared by start_session and every resume/delivery refusal.
+export function noLocalCheckoutError(remote: string | null | undefined, recordedPath: string | null | undefined): string {
+  return `No local checkout for ${remote ?? "<unknown remote>"} (recorded path ${recordedPath ?? "unknown"} doesn't exist here). Clone it first.`;
 }
 
 // When a resume can't be placed in a real local checkout, mirror start_session:
@@ -547,7 +594,7 @@ async function refuseResumeNoLocalCheckout(
       log(`[REMOTE] resume ${short}: no local checkout and no remote/path to act on — staying silent (cleared any stale banner)`);
       return;
     }
-    const err = `No local checkout for ${remote ?? "<unknown remote>"} (recorded path ${recordedCwd ?? "unknown"} doesn't exist here). Clone it first.`;
+    const err = noLocalCheckoutError(remote, recordedCwd);
     syncServiceRef.setSessionError(conversationId, err).catch(() => {});
     log(`[REMOTE] resume refused for ${short}: ${err}`);
   } else {
@@ -3369,31 +3416,16 @@ async function pushAgentAuthToRemoteHosts(reason: string, opts: { onlyIfChanged?
 }
 
 // Home mirror fan-out (cloud/mirror): this laptop's instruction files and
-// agent config to every reachable host, on the credential loop's cadence.
-// Hash-gated on the fast tick, stamp-verified on the periodic one, and a
-// host whose push failed is left alone until the local hash changes or the
-// periodic tick — a push that retried every minute would keep a broken box
-// awake (its idle watchdog counts inbound ssh as activity).
-let remoteMirrorPushInFlight = false;
-
-async function pushMirrorToRemoteHosts(reason: string, opts: { onlyIfChanged?: boolean; verifyRemote?: boolean } = {}): Promise<void> {
-  if (isRemoteDevice() || remoteMirrorPushInFlight) return;
-  const config = readConfig();
-  if (!config || !isCloudMirrorEnabled(config)) return;
-  remoteMirrorPushInFlight = true;
-  try {
-    const { runMirrorTick } = await import("./cloud/mirror/push.js");
-    await runMirrorTick({ reason, onlyIfChanged: opts.onlyIfChanged, verifyRemote: opts.verifyRemote }, {
-      listHosts: reachableTransferHosts,
-      readConfig: () => config,
-      log: (m) => log(`[MIRROR] ${m}`),
-    });
-  } catch (err) {
-    log(`[MIRROR] mirror push failed (${reason}): ${err instanceof Error ? err.message : String(err)}`);
-  } finally {
-    remoteMirrorPushInFlight = false;
-  }
-}
+// agent config to every reachable host. It runs in its own process
+// (`cast cloud mirror-run`, supervised by startMirrorProcess): a build walks,
+// reads and credential-scans every context file, and in-process that froze
+// this loop for 10 to 18 seconds a minute (2026-09-22). The runner keeps the
+// credential loop's cadence: a hash-gated tick every minute, a stamp-verified
+// one every 30 minutes, and a host whose push failed is left alone until the
+// local hash changes or the periodic tick — a push that retried every minute
+// would keep a broken box awake (its idle watchdog counts inbound ssh as
+// activity). Its log lines land here under [MIRROR].
+let mirrorProcess: ReturnType<typeof startMirrorProcess> | undefined;
 
 // SSH agent bridge (cloud/agentBridge.ts): for every registry host the human
 // turned forward-agent on, hold ONE dedicated ssh connection with agent
@@ -5633,7 +5665,7 @@ async function executeRemoteCommand(
               log(`[REMOTE] start_session: no local checkout and no remote/path to act on — staying silent (cleared any stale banner)`);
               break;
             }
-            error = `No local checkout for ${remote ?? "<unknown remote>"} (recorded path ${rawPath} doesn't exist here). Clone it first.`;
+            error = noLocalCheckoutError(remote, rawPath);
             log(`[REMOTE] start_session refused: ${error}`);
             syncServiceRef.setSessionError(conversationId, error).catch(() => {});
             break;
@@ -6519,7 +6551,9 @@ async function executeRemoteCommand(
             try {
               const switchResult = useProfile(profile);
               switched = switchResult.to;
-              log(`[ACCOUNTS] Switched CC account to "${profile}"${switchResult.toEmail ? ` (${switchResult.toEmail})` : ""}${switchResult.from ? `, re-saved outgoing as "${switchResult.from}"` : ""}`);
+              log(
+                `[ACCOUNTS] ${switchResult.keptLive ? "Already on" : "Switched CC account to"} "${profile}"${switchResult.toEmail ? ` (${switchResult.toEmail})` : ""}${switchResult.from ? `, re-saved outgoing as "${switchResult.from}"` : ""}${switchResult.keptLive ? ", kept the live login" : ""}`,
+              );
               // Remotes run on a pushed COPY of this credential — refresh them now
               // instead of waiting for the 30-min loop.
               pushCredentialToRemoteHosts("account_switch").catch(() => {});
@@ -23033,19 +23067,18 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
         return false;
       }
       const reconAgentType = agentTypeHint || (data.conversation.agent_type === "codex" ? "codex" : undefined) || "claude";
-      const reconCwd = regenerationCwd(data, cwdOverride);
+      // The transcript is written under the same cwd the resume will run in:
+      // Claude indexes a session by the slug of its cwd
+      // (~/.claude/projects/<cwd-slug>/<sessionId>.jsonl), so a JSONL under any
+      // other directory makes `claude --resume` report "No conversation found".
+      const reconCwd = await regenerationCwd(data, cwdOverride);
       if (!reconCwd) {
-        logDelivery(`Reconstitution refused for ${sessionId.slice(0, 8)}: no project path to regenerate under`);
-        await refuseResumeNoLocalCheckout(sessionId, conversationId, undefined);
+        logDelivery(`Reconstitution refused for ${sessionId.slice(0, 8)}: no local checkout for ${data.conversation.project_path ?? "<no project path>"}`);
+        await refuseResumeNoLocalCheckout(sessionId, conversationId, data.conversation.project_path ?? undefined);
         return false;
       }
       let jsonl = "";
       let reconId: string;
-      // Write under the same cwd the resume will run in (see localSessionDir):
-      // a valid override wins, otherwise the locally-resolved repo path.
-      const reconDir = (cwdOverride && fs.existsSync(cwdOverride))
-        ? cwdOverride
-        : localSessionDir(data.conversation.project_path || undefined);
       let result: { sessionId: string; filePath: string };
       if (reconAgentType === "codex") {
         ({ jsonl, sessionId: reconId } = generateCodexJsonl(data, { sessionId, cwd: reconCwd }));
@@ -23053,17 +23086,17 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       } else if (reconAgentType === "grok") {
         // grok's bundle lives under the cwd's own directory; a synthetic
         // `forked-…` key is not a UUID grok accepts, so the writer mints one.
-        const files = generateGrokSession(data, { tailMessages: chooseClaudeAutoTrim(data), cwd: reconDir });
+        const files = generateGrokSession(data, { tailMessages: chooseClaudeAutoTrim(data), cwd: reconCwd });
         reconId = files.sessionId;
         result = writeGrokSession(files);
       } else if (reconAgentType === "pi") {
-        const pi = generatePiSession(data, { tailMessages: chooseClaudeAutoTrim(data), cwd: reconDir });
+        const pi = generatePiSession(data, { tailMessages: chooseClaudeAutoTrim(data), cwd: reconCwd });
         reconId = pi.sessionId;
         const piPath = piSessionFilePath(pi.cwd, pi.sessionId);
         await writeRebuiltDeltaTranscript("pi", pi.jsonl, piPath, pi.sessionId);
         result = { sessionId: pi.sessionId, filePath: piPath };
       } else if (reconAgentType === "opencode") {
-        const sesId = await rebuildOpencodeSession(data, reconDir);
+        const sesId = await rebuildOpencodeSession(data, reconCwd);
         if (!sesId) {
           logDelivery(`Cannot rebuild ${sessionId.slice(0, 8)} as opencode: serve sidecar unavailable`);
           return false;
@@ -23073,7 +23106,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       } else {
         const tailMessages = chooseClaudeAutoTrim(data);
         ({ jsonl, sessionId: reconId } = generateClaudeCodeJsonl(data, { tailMessages, sessionId, cwd: reconCwd }));
-        result = writeClaudeCodeSession(jsonl, reconId, reconDir);
+        result = writeClaudeCodeSession(jsonl, reconId, reconCwd);
       }
       logDelivery(`Reconstituted ${sessionId.slice(0, 8)} (${data.messages.length} msgs)`);
       if (conversationId && reconId !== sessionId) {
@@ -23688,7 +23721,7 @@ async function repairAndResumeSession(
         const agentType = agentTypeHint || sessionFile?.agentType || "claude";
         const isCodexSession = agentType === "codex";
         const failureReason = !isCodexSession ? resumeFatalReasons.get(sessionId) ?? null : null;
-        const projectPath = regenerationCwd(exportData, cwdOverride);
+        const projectPath = await regenerationCwd(exportData, cwdOverride);
         if (!projectPath) {
           // Writing the rollout anyway would stamp it with the daemon's own cwd
           // (`/`) and overwrite whatever transcript is on disk with one that
@@ -23716,7 +23749,7 @@ async function repairAndResumeSession(
         }
 
         if (targetSessionId !== sessionId) {
-          const { filePath: repairFilePath } = writeClaudeCodeSession(jsonl, targetSessionId, localSessionDir(projectPath));
+          const { filePath: repairFilePath } = writeClaudeCodeSession(jsonl, targetSessionId, projectPath);
           setPosition(repairFilePath, fs.statSync(repairFilePath).size);
           remapConversationSession(sessionId, targetSessionId, convId);
           if (titleCache[sessionId] && !titleCache[targetSessionId]) {
@@ -23749,7 +23782,7 @@ async function repairAndResumeSession(
           writeCodexSession(jsonl, sessionId, "rollout");
           log(`Wrote new Codex session file for ${sessionId.slice(0, 8)}`);
         } else {
-          const { filePath: repairFilePath } = writeClaudeCodeSession(jsonl, sessionId, localSessionDir(projectPath));
+          const { filePath: repairFilePath } = writeClaudeCodeSession(jsonl, sessionId, projectPath);
           setPosition(repairFilePath, fs.statSync(repairFilePath).size);
           log(`Wrote new session file for ${sessionId.slice(0, 8)}`);
         }
@@ -24005,9 +24038,10 @@ async function startFreshSessionForDelivery(
       const siteUrl = config.convex_url.replace(".cloud", ".site");
       exportData = await fetchExport(siteUrl, config.auth_token!, conversationId);
       declaredAgentType = fromConvexAgentType(exportData.conversation?.agent_type);
-      if (exportData.conversation?.project_path && fs.existsSync(exportData.conversation.project_path)) {
-        projectPath = exportData.conversation.project_path;
-      }
+      // The recorded path may belong to another machine (a takeover after the
+      // owner looked offline): place it the way a resume is placed — by git
+      // remote, then by convention — never by a bare existence check.
+      projectPath = await regenerationCwd(exportData);
     } catch (err) {
       // Delivery must never invent a backend when it cannot resolve the durable
       // conversation identity. Leaving the message pending is recoverable;
@@ -24033,17 +24067,26 @@ async function startFreshSessionForDelivery(
     return null;
   }
 
-  if (!projectPath) {
-    // $HOME is an acceptable last resort only on the LOCAL primary daemon (a
-    // blank quick-create lands in the user's home). On a remote box it would
-    // run the session under /Users/<remote-user> with the wrong identity and
-    // context — refuse and leave the message pending for the local fleet.
-    if (isRemoteDevice()) {
+  const placement = placeFreshDeliverySession({
+    resolvedCwd: projectPath,
+    conversation: exportData?.conversation,
+    isRemote: isRemoteDevice(),
+    home: process.env.HOME || "/tmp",
+  });
+  if (placement.kind === "refuse") {
+    if (placement.reason === "no_local_checkout") {
+      // The conversation names a repo this machine has no checkout of. Leave
+      // the message pending and put the same "clone it first" banner up that a
+      // resume would (owner check first; only a nameable remote earns it).
+      const recorded = exportData?.conversation.project_path ?? undefined;
+      logDelivery(`Refusing fresh session for conv=${conversationId.slice(0, 12)} — no local checkout for ${recorded ?? "<no project path>"} (remote ${exportData?.conversation.git_remote_url ?? "<unknown>"}); leaving the message pending`);
+      await refuseResumeNoLocalCheckout(exportData?.conversation.session_id || conversationId, conversationId, recorded);
+    } else {
       logDelivery(`Refusing fresh session for conv=${conversationId.slice(0, 12)} — remote device with no real project path`);
-      return null;
     }
-    projectPath = process.env.HOME || "/tmp";
+    return null;
   }
+  projectPath = placement.cwd;
 
   const shortId = Math.random().toString(36).slice(2, 8);
   const tmuxSession = `cc-claude-${shortId}`;
@@ -24126,15 +24169,15 @@ async function materializeSession(
 
       const TOKEN_BUDGET = CLAUDE_AUTO_TRIM_TARGET_TOKENS;
       const tailMessages = chooseClaudeTailMessagesForTokenBudget(exportData, TOKEN_BUDGET);
-      const projectPath = regenerationCwd(exportData);
+      const projectPath = await regenerationCwd(exportData);
       if (!projectPath) {
-        logDelivery(`Materialization refused for ${conversationId.slice(0, 12)}: no project path to regenerate under`);
+        logDelivery(`Materialization refused for ${conversationId.slice(0, 12)}: no local checkout for ${exportData.conversation.project_path ?? "<no project path>"}`);
         return null;
       }
       // Use the conversation's actual session_id so the JSONL matches Convex
       const convSessionId = exportData.conversation.session_id || undefined;
       const { jsonl, sessionId } = generateClaudeCodeJsonl(exportData, { tailMessages, sessionId: convSessionId, cwd: projectPath });
-      const { filePath: matFilePath } = writeClaudeCodeSession(jsonl, sessionId, localSessionDir(projectPath));
+      const { filePath: matFilePath } = writeClaudeCodeSession(jsonl, sessionId, projectPath);
       setPosition(matFilePath, fs.statSync(matFilePath).size);
 
       conversationCache[sessionId] = conversationId;
@@ -27290,13 +27333,13 @@ async function main(): Promise<void> {
   // common case near-instant; this tick is the backfill/safety net.
   setTimeout(() => { pushProviderKeysToRemoteHosts("daemon start").catch(() => {}); }, 62_000);
   setInterval(() => { pushProviderKeysToRemoteHosts("periodic", { onlyIfChanged: true }).catch(() => {}); }, REMOTE_CRED_CHANGE_TICK_MS);
-  // Home mirror (cloud/mirror) on the same cadence: verify each host's stamp
-  // at start and every 30 minutes (a re-provisioned host has no stamp), and a
-  // hash-gated fast tick that ships an edited skill or CLAUDE.md within ~a
-  // minute. Failed hosts back off until the hash changes or the periodic tick.
-  setTimeout(() => { pushMirrorToRemoteHosts("daemon start", { verifyRemote: true }).catch(() => {}); }, 64_000);
-  setInterval(() => { pushMirrorToRemoteHosts("mirror_changed", { onlyIfChanged: true }).catch(() => {}); }, REMOTE_CRED_CHANGE_TICK_MS);
-  setInterval(() => { pushMirrorToRemoteHosts("periodic", { verifyRemote: true }).catch(() => {}); }, REMOTE_CRED_REFRESH_INTERVAL_MS);
+  // Home mirror (cloud/mirror) in its own process, started after the first
+  // minute like the other remote fan-outs; it exits when the mirror is turned
+  // off and is retried every minute while it is on.
+  mirrorProcess = startMirrorProcess({
+    shouldRun: () => !isRemoteDevice() && isCloudMirrorEnabled(readConfig()),
+    log: (m) => log(`[MIRROR] ${m}`),
+  });
   // The opt-in SSH agent bridge (cloud/agentBridge.ts), on the same tick.
   setTimeout(() => { maintainAgentBridges().catch(() => {}); }, 66_000);
   setInterval(() => { maintainAgentBridges().catch(() => {}); }, AGENT_BRIDGE_TICK_MS);
@@ -29968,6 +30011,7 @@ async function main(): Promise<void> {
 
   const shutdown = async () => {
     closeDaemonWorkers();
+    void mirrorProcess?.stop().catch((err) => log(`[MIRROR] stop failed: ${err instanceof Error ? err.message : String(err)}`));
     appServerShuttingDown = true;
     clearInterval(appServerRecoveryTimer);
     skipRespawn = true;

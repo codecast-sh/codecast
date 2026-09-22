@@ -87,6 +87,10 @@ function seedOwnershipWorld(opts: {
   ownerLastSeen?: number;
   claimantIsRemote?: boolean;
   claimantRegistered?: boolean;
+  /** Checkouts the claimant advertises (devices.local_project_roots). */
+  claimantRoots?: string[];
+  /** Repo fields on the conversation; absent = a blank quick create. */
+  conversationRepo?: { git_root?: string; project_path?: string; git_remote_url?: string };
 }) {
   const devices: Rec[] = [];
   if (opts.ownerDeviceId && opts.ownerLastSeen !== undefined) {
@@ -104,6 +108,7 @@ function seedOwnershipWorld(opts: {
       device_id: "device_live",
       last_seen: NOW - ONLINE_AGO,
       is_remote: opts.claimantIsRemote ?? false,
+      ...(opts.claimantRoots ? { local_project_roots: opts.claimantRoots } : {}),
     });
   }
   return createDb({
@@ -112,6 +117,7 @@ function seedOwnershipWorld(opts: {
         _id: "conv_1",
         user_id: "user_a",
         owner_device_id: opts.ownerDeviceId,
+        ...(opts.conversationRepo ?? {}),
       },
     ],
     devices,
@@ -206,6 +212,101 @@ describe("DPM-02 — offline-owner takeover", () => {
     const deliverable = await collectDeliverableForOwner({ db } as any, "user_a" as any, "device_live", NOW);
     expect(deliverable).toEqual([]);
     expect(tables.conversations[0].owner_device_id).toBe("device_dead");
+  });
+
+  // The claimant must be able to HOST the repo. On 2026-09-22 the AWS Linux box
+  // adopted a Mac's codecast session this way and ran it in /home/ubuntu: the
+  // owner's paths come from another machine, so the claimant's checkout is
+  // recognised by basename (the daemon's resolveLocalRepo convention).
+  const macRepo = {
+    git_root: "/Users/ashot/src/codecast",
+    project_path: "/Users/ashot/src/codecast",
+    git_remote_url: "git@github.com:codecast-sh/codecast.git",
+  };
+
+  test("offline owner, claimant holding a checkout with the repo's basename → takes over", async () => {
+    const { db, tables } = seedOwnershipWorld({
+      ownerDeviceId: "device_dead",
+      ownerLastSeen: NOW - OFFLINE_AGO,
+      claimantRoots: ["/home/ubuntu/work/codecast"],
+      conversationRepo: macRepo,
+    });
+    const deliverable = await collectDeliverableForOwner({ db } as any, "user_a" as any, "device_live", NOW);
+    expect(deliverable.map((m: any) => m._id)).toEqual(["pm_1"]);
+    const claimed = await claimPendingMessageForDaemon({ db } as any, "pm_1" as any, "user_a" as any, "device_live", NOW);
+    expect(claimed?._id).toBe("pm_1");
+    expect(tables.conversations[0].owner_device_id).toBe("device_live");
+  });
+
+  test("SECURITY PIN: offline owner, claimant with NO checkout of the repo → refused, row stays with the owner", async () => {
+    const { db, tables } = seedOwnershipWorld({
+      ownerDeviceId: "device_dead",
+      ownerLastSeen: NOW - OFFLINE_AGO,
+      claimantRoots: ["/home/ubuntu/src/eaiden"],
+      conversationRepo: macRepo,
+    });
+    const deliverable = await collectDeliverableForOwner({ db } as any, "user_a" as any, "device_live", NOW);
+    expect(deliverable).toEqual([]);
+    const claimed = await claimPendingMessageForDaemon({ db } as any, "pm_1" as any, "user_a" as any, "device_live", NOW);
+    expect(claimed).toBeNull();
+    expect(tables.conversations[0].owner_device_id).toBe("device_dead");
+  });
+
+  test("offline owner, conversation with NO repo (junk path) → any local claimant takes over, as before", async () => {
+    const { db, tables } = seedOwnershipWorld({
+      ownerDeviceId: "device_dead",
+      ownerLastSeen: NOW - OFFLINE_AGO,
+      claimantRoots: ["/home/ubuntu/src/eaiden"],
+      conversationRepo: { project_path: "/Users/ashot" },
+    });
+    const deliverable = await collectDeliverableForOwner({ db } as any, "user_a" as any, "device_live", NOW);
+    expect(deliverable.map((m: any) => m._id)).toEqual(["pm_1"]);
+    await claimPendingMessageForDaemon({ db } as any, "pm_1" as any, "user_a" as any, "device_live", NOW);
+    expect(tables.conversations[0].owner_device_id).toBe("device_live");
+  });
+
+  test("SECURITY PIN: a REMOTE claimant with the checkout still never takes over an offline REMOTE owner", async () => {
+    const { db, tables } = seedOwnershipWorld({
+      ownerDeviceId: "device_box",
+      ownerLastSeen: NOW - OFFLINE_AGO,
+      claimantIsRemote: true,
+      claimantRoots: ["/home/ubuntu/work/codecast"],
+      conversationRepo: macRepo,
+    });
+    tables.devices.find((d: Rec) => d._id === "dev_owner")!.is_remote = true;
+    const deliverable = await collectDeliverableForOwner({ db } as any, "user_a" as any, "device_live", NOW);
+    expect(deliverable).toEqual([]);
+    const claimed = await claimPendingMessageForDaemon({ db } as any, "pm_1" as any, "user_a" as any, "device_live", NOW);
+    expect(claimed).toBeNull();
+    expect(tables.conversations[0].owner_device_id).toBe("device_box");
+  });
+
+  test("the per-owner takeover cache is keyed by repo: one dead owner, two repos, two verdicts", async () => {
+    const { db, tables } = seedOwnershipWorld({
+      ownerDeviceId: "device_dead",
+      ownerLastSeen: NOW - OFFLINE_AGO,
+      claimantRoots: ["/home/ubuntu/work/codecast"],
+      conversationRepo: macRepo,
+    });
+    tables.conversations.push({
+      _id: "conv_2",
+      user_id: "user_a",
+      owner_device_id: "device_dead",
+      git_root: "/Users/ashot/src/mail",
+      git_remote_url: "git@github.com:ashot/mail.git",
+    });
+    tables.pending_messages.push({
+      _id: "pm_2",
+      conversation_id: "conv_2",
+      from_user_id: "user_a",
+      owner_user_id: "user_a",
+      content: "hello",
+      status: "pending",
+      created_at: NOW - 50_000,
+      retry_count: 0,
+    });
+    const deliverable = await collectDeliverableForOwner({ db } as any, "user_a" as any, "device_live", NOW);
+    expect(deliverable.map((m: any) => m._id)).toEqual(["pm_1"]);
   });
 
   test("unowned conversations keep first-claim semantics (unchanged legacy path)", async () => {
