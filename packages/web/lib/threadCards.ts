@@ -427,3 +427,22 @@ export function replyPreview(
   const who = last.author_name ?? (last.user_id ? nameOf?.(String(last.user_id)) : undefined);
   return { who, whoKind: "user", text: last.preview };
 }
+
+// ── The cursor's moves ──────────────────────────────────────────────────────
+
+/** Where a walk of `delta` rows lands. From a cursor that is on the list, the
+ *  neighbour, clamped to the ends. From a cursor whose row has left the list
+ *  (dismissed elsewhere, answered, retired), the row now standing where it
+ *  stood — walking down from a gone row must not skip the one that took its
+ *  place. -1 when there is nothing to land on. */
+export function walkIndex(length: number, cursorIndex: number, lastIndex: number, delta: number): number {
+  if (length === 0) return -1;
+  const from = cursorIndex >= 0 ? cursorIndex : lastIndex - (delta > 0 ? 1 : 0);
+  return Math.min(length - 1, Math.max(0, from + delta));
+}
+
+/** The row the cursor steps to after the one at `index` is done with: the
+ *  next, else the previous, else none. */
+export function afterDone<T>(cards: T[], index: number): T | undefined {
+  return cards[index + 1] ?? cards[index - 1];
+}

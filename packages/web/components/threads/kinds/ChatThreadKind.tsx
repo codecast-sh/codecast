@@ -1,12 +1,13 @@
 import { useCallback, useMemo } from "react";
 import { Hash, Lock, Users } from "lucide-react";
 import { authorGroupKey, buildChatTimeline } from "@codecast/shared/chat";
-import { useInboxStore, type ThreadInboxRow } from "../../../store/inboxStore";
+import { useInboxStore } from "../../../store/inboxStore";
 import type { ChatAttachment } from "../../../store/chatSlice";
 import { useThreadMessages, useThreadSync } from "../../../hooks/useChatSync";
 import { channelDisplayName } from "../../../lib/chatViews";
 import { holdChatFocus } from "../../../lib/chatFocus";
-import { replyPreview, type CardPreview, type ThreadCardModel } from "../../../lib/threadCards";
+import type { ThreadCardModel } from "../../../lib/threadCards";
+import { rowOf } from "../../../lib/threadRows";
 import { ChatMessage, ChatNewDivider } from "../../chat/ChatMessage";
 import { ChatComposer } from "../../chat/ChatComposer";
 import type { ChatMessageView } from "../../chat/chatTypes";
@@ -19,10 +20,6 @@ import { useWatchEffect } from "../../../hooks/useWatchEffect";
 // IN PLACE, composer included — the thread panel's content inlined, so a
 // person walks their threads top to bottom without leaving the page. The DM
 // kind reuses the timeline rows below.
-
-function rowOf(card: ThreadCardModel): ThreadInboxRow {
-  return card.source as ThreadInboxRow;
-}
 
 /** The room's glyph: DM, private room, or channel. */
 export function RoomIcon({ channel }: { channel: { kind?: string; isPrivate?: boolean } | undefined }) {
@@ -43,11 +40,6 @@ export function ChatLabel({ card }: { card: ThreadCardModel }) {
   const { chatCards, members } = useThreadsPage();
   const channel = chatCards.get(rowOf(card).root_key)?.channel;
   return <>{channel ? channelDisplayName(channel, members) : "channel"}</>;
-}
-
-export function useChatPreview(card: ThreadCardModel): CardPreview | null {
-  const { nameOf } = useThreadsPage();
-  return replyPreview(rowOf(card).last_reply, nameOf);
 }
 
 /** The open card for a room the server will not show this viewer (left it,

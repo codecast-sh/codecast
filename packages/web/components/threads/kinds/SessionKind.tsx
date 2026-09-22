@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { PanelRight, Wrench } from "lucide-react";
 import { useInboxStore, type InboxSession } from "../../../store/inboxStore";
-import { summaryCount, type CardPreview, type ThreadCardModel } from "../../../lib/threadCards";
+import { summaryCount, type ThreadCardModel } from "../../../lib/threadCards";
 import { threadStateView } from "../../../lib/threadState";
 import { sessionLabel } from "../../../lib/notificationTypes";
 import { classifyFeedMessage } from "../../../lib/conversationProcessor";
@@ -41,15 +41,6 @@ export function SessionLabel({ card }: { card: ThreadCardModel }) {
       {sessionLabel(session) ?? "Session"}
     </>
   );
-}
-
-/** The session's pinned state line, else its idle summary or subtitle. */
-export function useSessionPreview(card: ThreadCardModel): CardPreview | null {
-  const session = sessionOf(card);
-  const { now } = useThreadsPage();
-  const state = threadStateView(session as any, session.message_count ?? 0, now);
-  const text = state?.cardLine ?? session.idle_summary ?? session.subtitle ?? "";
-  return text ? { text } : null;
 }
 
 // One message as the card shows it. The user side goes through the same

@@ -2,7 +2,7 @@ import { useCallback, useState } from "react";
 import { CornerDownRight, X } from "lucide-react";
 import { useInboxStore, type SessionDecisionItem } from "../../../store/inboxStore";
 import { sessionLabel } from "../../../lib/notificationTypes";
-import { summaryCount, type CardPreview, type ThreadCardModel } from "../../../lib/threadCards";
+import type { ThreadCardModel } from "../../../lib/threadCards";
 import { AgentIcon } from "../../ConversationList";
 import { MarkdownRenderer } from "../../tools/MarkdownRenderer";
 import { PublishedPageEmbed } from "../../PublishedPageEmbed";
@@ -32,17 +32,6 @@ export function QuestionLabel({ card }: { card: ThreadCardModel }) {
       {label ?? "A session"} asks
     </>
   );
-}
-
-/** The question, and what happens if nobody answers. */
-export function useQuestionPreview(card: ThreadCardModel): CardPreview | null {
-  const d = decisionOf(card);
-  const tail = d.blocking
-    ? "The session is parked on your answer."
-    : d.default_option !== undefined && d.options[d.default_option]
-      ? `Proceeding with “${d.options[d.default_option].label}” unless you say otherwise.`
-      : summaryCount(d.options.length, "option");
-  return { who: d.question, text: tail };
 }
 
 export function QuestionExpanded({ card, focusComposer }: { card: ThreadCardModel; present: boolean; seen: boolean; frozenReadAt: number; focusComposer: boolean }) {

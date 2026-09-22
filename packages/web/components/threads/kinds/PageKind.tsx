@@ -1,10 +1,12 @@
 import { useCallback, useMemo, useState } from "react";
 import { CornerDownRight, ExternalLink } from "lucide-react";
-import { useInboxStore, useTrackedStore, type ThreadInboxRow } from "../../../store/inboxStore";
+import { useInboxStore } from "../../../store/inboxStore";
 import { newPageCommentClientId } from "../../../store/chatSlice";
-import type { PageCommentRow, PageThreadRow } from "../../../store/threadTypes";
+import type { PageCommentRow } from "../../../store/threadTypes";
 import { relTimeShort } from "../../../lib/utils";
-import { replyPreview, type CardPreview, type ThreadCardModel } from "../../../lib/threadCards";
+import type { ThreadCardModel } from "../../../lib/threadCards";
+import { rowOf } from "../../../lib/threadRows";
+import { usePageThreadRow as usePageRow } from "../../../hooks/useThreadPreviews";
 import { CommentAvatar } from "../../comments/CommentAvatar";
 import { useTailPin } from "../cardWindow";
 import { useThreadsPage } from "../threadsContext";
@@ -16,31 +18,9 @@ import { useWatchEffect } from "../../../hooks/useWatchEffect";
 // that posts through the store's addPageComment (optimistic stub, server
 // echo supersedes by client_id). "Open" goes to the published page itself.
 
-function rowOf(card: ThreadCardModel): ThreadInboxRow {
-  return card.source as ThreadInboxRow;
-}
-
-/** The page row, woken only by what a card shows. */
-function pageSig(p: PageThreadRow | undefined): string {
-  if (!p) return "";
-  const last = p.comments[p.comments.length - 1];
-  return `${p.title}|${p.slug}|${p.comments.length}|${last?._id ?? ""}|${last?.text.length ?? 0}`;
-}
-
-function usePageRow(artifactId: string): PageThreadRow | undefined {
-  const s = useTrackedStore([(s: any) => pageSig(s.pageThreads[artifactId])]);
-  return (s as any).pageThreads[artifactId] as PageThreadRow | undefined;
-}
-
 export function PageLabel({ card }: { card: ThreadCardModel }) {
   const page = usePageRow(rowOf(card).root_key);
   return <>{page?.title ?? "Published page"}</>;
-}
-
-export function usePagePreview(card: ThreadCardModel): CardPreview | null {
-  const reply = replyPreview(rowOf(card).last_reply);
-  if (reply && !reply.who) reply.who = "A viewer";
-  return reply;
 }
 
 /** Roots in order, each followed by its replies — one level, like the source

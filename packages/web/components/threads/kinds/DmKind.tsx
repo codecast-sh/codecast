@@ -5,7 +5,7 @@ import { selectChannelReadMarker, type ChatAttachment, type ChatRailChannel } fr
 import { useChannelMessages, useChannelMessagesSync } from "../../../hooks/useChatSync";
 import { channelDisplayName, dmCounterpart, memberName } from "../../../lib/chatViews";
 import { holdChatFocus } from "../../../lib/chatFocus";
-import type { CardPreview, ThreadCardModel } from "../../../lib/threadCards";
+import type { ThreadCardModel } from "../../../lib/threadCards";
 import { CommentAvatar } from "../../comments/CommentAvatar";
 import { ChatComposer } from "../../chat/ChatComposer";
 import { ChatTimelineRows, ThreadUnavailableNote } from "./ChatThreadKind";
@@ -39,13 +39,6 @@ export function DmGlyph({ card }: { card: ThreadCardModel }) {
 export function DmLabel({ card }: { card: ThreadCardModel }) {
   const { members } = useThreadsPage();
   return <>{channelDisplayName(channelOf(card), members)}</>;
-}
-
-/** The rail carries the room's last line, already attributed. */
-export function useDmPreview(card: ThreadCardModel): CardPreview | null {
-  const channel = channelOf(card);
-  if (channel.knownEmpty) return { text: "No messages yet" };
-  return channel.lastMessagePreview ? { text: channel.lastMessagePreview } : null;
 }
 
 export function DmExpanded({

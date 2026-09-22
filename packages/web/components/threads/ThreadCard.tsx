@@ -6,6 +6,7 @@ import { relTimeShort } from "../../lib/utils";
 import type { ThreadInboxRow } from "../../store/threadTypes";
 import { THREAD_KIND_SPECS, isDismissible } from "../../lib/threadKinds";
 import type { ThreadCardModel } from "../../lib/threadCards";
+import { openCardIn } from "../../lib/threadRows";
 import { useThreadsPage } from "./threadsContext";
 
 import { useWatchEffect } from "../../hooks/useWatchEffect";
@@ -20,21 +21,6 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 // selects and opens, the tools act (Done, Open). The page owns the cursor
 // (threadsContext.select / toggle) so the keyboard and the mouse move the
 // same thing.
-
-/** Open the card's object in place: the task page, the room, the published
- *  page. A comment thread opens ON its message — the conversation view
- *  honors scrollToMessageId and pages it in (the same path the rail's jump
- *  uses). Shared by the row's tool and the page's `o` key. */
-export function openCardIn(card: ThreadCardModel, router: { push: (href: string) => void }): void {
-  if (card.kind === "comment") {
-    const row = card.source as ThreadInboxRow;
-    const conversationId = String(row.conversation_id ?? row.root_key.split(":")[0]);
-    const st = useInboxStore.getState();
-    st.requestNavigate(conversationId, { scrollToMessageId: row.message_id ? String(row.message_id) : undefined, source: "gesture" });
-    if (row.message_id) st.openCommentThread(String(row.message_id));
-  }
-  router.push(card.href);
-}
 
 /** Who spoke last: a person by name, an agent by its session. */
 function PreviewWho({ who, kind }: { who?: string; kind?: "user" | "agent" }) {
