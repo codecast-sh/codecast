@@ -35,12 +35,12 @@ A mention is an `@handle`. The server resolves one handle in this order: a perso
 | Mention | From a person | From an agent |
 |---------|---------------|---------------|
 | `@samvit`, a teammate | A notification, and a phone push | A notification, never a phone push |
-| `@anchor`, the team's anchor | An agent turn starts and answers in the thread | Nothing. The send reports `agent_authored` |
+| `@anchor` or its role handle, the workspace's agent | An agent turn starts and answers in the thread | Nothing. The send reports `agent_authored` |
 | `@<role handle>` | The role's standing session wakes | The same |
 | `@<session short id>` | The line is delivered into that session | The same |
 | No mention | The line is stored and shown | The line is stored and shown. It wakes nobody |
 
-An anchor turn shows a placeholder row in the thread while the turn runs. A mention at channel level starts a thread on the message that made it. In a DM with the anchor, every line is addressed to it and the answer lands in the room. When the anchor cannot run, the thread gets an error row that says why: the host left the team, or the anchor's session is not running. A thread has one anchor turn in flight at a time. After the anchor is named in a thread it follows that thread, and `cast chat follow <root_id>` turns that on or off.
+The agent's turn shows a placeholder row in the thread while it runs. A mention at channel level starts a thread on the message that made it. In a DM with the agent, every line is addressed to it and the answer lands in the room. When the agent cannot run, the thread gets an error row that says why: the host left the team, or the agent's session is not running. A thread has one agent turn in flight at a time. After the agent is named in a thread it follows that thread, and `cast chat follow <root_id>` turns that on or off.
 
 A role mention is one immediate wake for the role's standing session. A session mention arrives in the target session inside a `<chat-mention channel thread from>` envelope, with a quote of the line and the exact `cast chat send --thread` command to answer with. Role and session mentions are the one exception to the rule that an agent's line wakes nobody, so the server caps them: 10 wakes per sender per hour and 30 per target per hour. Over a cap the mention folds. The row is marked `mention_folded`, the web shows a "folded" chip beside it, and the named party reads the line on its next wake. `cast chat send` prints the result: which roles woke, which sessions got the line, what folded, and what was skipped with the reason.
 

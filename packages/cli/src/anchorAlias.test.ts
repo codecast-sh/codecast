@@ -17,7 +17,7 @@ describe("cast anchor forwards to the chief of staff", () => {
     const fwd = chiefForward(chief, "wake", { message: "what changed?", from_session: "jxactor" })!;
     expect(fwd.route).toBe("/cli/role/wake");
     expect(fwd.body).toEqual({ role_id: "org_roles_cos", message: "what changed?", from_session: "jxactor" });
-    expect(fwd.note).toBe(`anchor is now the Chief of Staff (@${CHIEF_OF_STAFF_HANDLE}) · forwarding to cast role wake ${CHIEF_OF_STAFF_HANDLE}`);
+    expect(fwd.note).toBe(`the workspace's agent is its root role (@${CHIEF_OF_STAFF_HANDLE}) · forwarding to cast role wake ${CHIEF_OF_STAFF_HANDLE}`);
   });
 
   test("brief restarts the role, rm retires it, create and ls only say so", () => {
@@ -26,7 +26,7 @@ describe("cast anchor forwards to the chief of staff", () => {
     expect(chiefForward(chief, "rm")).toMatchObject({ route: "/cli/org/retire", body: { role_id: "org_roles_cos", standing_session: "retire" }, roleVerb: "role retire" });
     expect(chiefForward(chief, "brief")!.body).toEqual({ role_id: "org_roles_cos" });
     expect(chiefForward(chief, "create")).toMatchObject({ route: null, roleVerb: "org staff" });
-    expect(chiefForward(chief, "create")!.note).toBe(`anchor is now the Chief of Staff (@${CHIEF_OF_STAFF_HANDLE}) · use cast org staff`);
-    expect(chiefForward(chief, "ls")!.note).toBe(`anchor is now the Chief of Staff (@${CHIEF_OF_STAFF_HANDLE}) · use cast role show ${CHIEF_OF_STAFF_HANDLE}`);
+    expect(chiefForward(chief, "create")!.note).toBe(`the workspace's agent is its root role (@${CHIEF_OF_STAFF_HANDLE}) · use cast org staff`);
+    expect(chiefForward(chief, "ls")!.note).toBe(`the workspace's agent is its root role (@${CHIEF_OF_STAFF_HANDLE}) · use cast role show ${CHIEF_OF_STAFF_HANDLE}`);
   });
 });

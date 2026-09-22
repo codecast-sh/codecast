@@ -334,7 +334,12 @@ describe("channel authorization", () => {
     const ctx = context(ALICE);
     const root = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "internal" });
     const outsider = as(ctx, OUTSIDER);
-    expect((await call(getThread, outsider, { root_id: root.message_id })).root).toBe(null);
+    const refused = await call(getThread, outsider, { root_id: root.message_id });
+    expect(refused.root).toBe(null);
+    // The Threads card hides its composer on this flag; a thread the member
+    // CAN read must not trip it.
+    expect(refused.unavailable).toBe(true);
+    expect((await call(getThread, ctx, { root_id: root.message_id })).unavailable).toBe(false);
     expect((await call(listChannels, outsider, { team_id: TEAM })).channels).toEqual([]);
     expect((await call(searchMessages, outsider, { team_id: TEAM, q: "internal" })).results)
       .toEqual([]);

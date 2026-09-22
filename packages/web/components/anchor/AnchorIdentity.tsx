@@ -1,16 +1,21 @@
 "use client";
 
-// The anchor's face and name, and — always beside them — WHICH anchor it is.
-// A person can have several (a personal one, one per team), and every surface
-// that shows an anchor must make the scope legible at a glance: the drawer
-// header, the /anchor page, an inbox row, a chat DM. One component set so the
-// glyph, the avatar and the scope pill cannot drift between surfaces.
+// The workspace's agent: its face, its name, and beside them WHICH workspace
+// it belongs to. A person can have several (their personal workspace's, one
+// per team), and every surface that shows one must make the workspace legible
+// at a glance: the drawer header, an inbox row, a chat DM. One component set
+// so the face, the name and the workspace pill cannot drift between surfaces.
+//
+// The agent is the workspace's root role (org-staffing.md S22), so the face
+// is the role's (S13) whenever the row carries one; the glyph on a tinted
+// tile is the fallback for a row not yet seated.
 
 import { AvatarImg } from "../../lib/avatarCache";
-import { anchorScopeLabel, type AnchorRow } from "../../hooks/useSyncAnchors";
+import { agentName, anchorScopeLabel, type AnchorRow } from "../../hooks/useSyncAnchors";
+import { RoleFace } from "../org/RoleFace";
 
-/** The anchor mark. Custom (not lucide's boat anchor): a head over a keel —
- *  a standing member, not a nautical object. */
+/** The standing agent mark. Custom (not lucide's boat anchor): a head over a
+ *  keel — a standing member, not a nautical object. */
 export function AnchorGlyph({ className }: { className?: string }) {
   return (
     <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden>
@@ -20,11 +25,13 @@ export function AnchorGlyph({ className }: { className?: string }) {
   );
 }
 
-type Identity = Pick<AnchorRow, "bot_name" | "bot_avatar" | "scope_type" | "team_name">;
+type Identity = Pick<AnchorRow, "bot_name" | "bot_avatar" | "scope_type" | "team_name"> & Partial<Pick<AnchorRow, "role" | "name">>;
 
-/** Avatar (or the glyph on a tinted tile). Same shape at every size. */
+/** The role's face when the row is a seat; else the avatar, else the glyph on
+ *  a tinted tile. Same shape at every size. */
 export function AnchorAvatar({ anchor, size = 28, className = "" }: { anchor: Identity | null | undefined; size?: number; className?: string }) {
-  const name = anchor?.bot_name || "Anchor";
+  const name = agentName(anchor);
+  if (anchor?.role) return <RoleFace role={anchor.role} size={size} className={`shrink-0 ${className}`} title={name} />;
   const style = { width: size, height: size };
   const radius = size >= 32 ? "rounded-lg" : "rounded-md";
   return (
@@ -45,9 +52,9 @@ export function AnchorAvatar({ anchor, size = 28, className = "" }: { anchor: Id
   );
 }
 
-/** "Personal" or the team's name — the pill that answers "which one am I
- *  talking to". Team scope carries a small people mark so the two kinds read
- *  differently even before the words do. */
+/** "Personal" or the team's name — the pill that answers "which workspace's
+ *  agent am I talking to". Team scope carries a small people mark so the two
+ *  kinds read differently even before the words do. */
 export function AnchorScopePill({ anchor, className = "" }: { anchor: Identity | null | undefined; className?: string }) {
   if (!anchor) return null;
   const team = anchor.scope_type === "team";
@@ -58,7 +65,7 @@ export function AnchorScopePill({ anchor, className = "" }: { anchor: Identity |
           ? "bg-sol-blue/12 text-sol-blue border border-sol-blue/25"
           : "bg-sol-violet/12 text-sol-violet border border-sol-violet/25"
       } ${className}`}
-      title={team ? `Team anchor for ${anchor.team_name ?? "this team"}` : "Your personal anchor — private to you"}
+      title={team ? `The agent of ${anchor.team_name ?? "this team"}'s workspace` : "The agent of your personal workspace, private to you"}
     >
       {team ? (
         <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden>
@@ -74,8 +81,8 @@ export function AnchorScopePill({ anchor, className = "" }: { anchor: Identity |
   );
 }
 
-/** Face + name + scope pill in one line. `size` scales the avatar; the pill
- *  and name stay legible at every size. */
+/** Face + name + workspace pill in one line. `size` scales the face; the
+ *  pill and name stay legible at every size. */
 export function AnchorIdentityLine({
   anchor, size = 28, subtitle, className = "",
 }: { anchor: Identity | null | undefined; size?: number; subtitle?: React.ReactNode; className?: string }) {
@@ -84,7 +91,7 @@ export function AnchorIdentityLine({
       <AnchorAvatar anchor={anchor} size={size} />
       <div className="min-w-0">
         <div className="flex items-center gap-1.5 min-w-0">
-          <span className="font-semibold truncate">{anchor?.bot_name || "Anchor"}</span>
+          <span className="font-semibold truncate">{agentName(anchor)}</span>
           <AnchorScopePill anchor={anchor} />
         </div>
         {subtitle && <div className="text-xs text-sol-text-muted truncate">{subtitle}</div>}

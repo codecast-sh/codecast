@@ -1,8 +1,8 @@
-// The word anchor leaves the product (docs/architecture/org-staffing.md S12):
-// once `cast org staff` has seated the workspace anchor as the Chief of
-// Staff, its anchors row carries `org_role_id`, and every `cast anchor` verb
-// but `say` is an alias of the role verb. This maps a verb to the role route
-// it forwards to, so the CLI says so once and does the role thing.
+// The word anchor leaves the product (docs/architecture/org-staffing.md S12,
+// S22): the workspace's agent is its root role, its anchors row carries
+// `org_role_id`, and every `cast anchor` verb but `say` is an alias of the
+// role verb. This maps a verb to the role route it forwards to, so the CLI
+// says so once and does the role thing.
 
 export const CHIEF_OF_STAFF_HANDLE = "chief-of-staff";
 
@@ -52,7 +52,7 @@ export function chiefForward(
   // running while the CLI says it was retired, so this door names the choice.
   if (verb === "rm") body.standing_session = "retire";
   return {
-    note: `anchor is now the Chief of Staff (@${CHIEF_OF_STAFF_HANDLE})${route ? ` · forwarding to cast ${roleVerb} ${CHIEF_OF_STAFF_HANDLE}` : ` · use cast ${roleVerb} ${verb === "ls" ? CHIEF_OF_STAFF_HANDLE : ""}`.trimEnd()}`,
+    note: `the workspace's agent is its root role (@${CHIEF_OF_STAFF_HANDLE})${route ? ` · forwarding to cast ${roleVerb} ${CHIEF_OF_STAFF_HANDLE}` : ` · use cast ${roleVerb} ${verb === "ls" ? CHIEF_OF_STAFF_HANDLE : ""}`.trimEnd()}`,
     roleVerb,
     route,
     body,

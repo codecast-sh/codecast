@@ -269,7 +269,7 @@ export const seedCommunityPost = internalMutation({
     if (!channel || !isCommunity(channel)) throw new Error("Not a community channel");
     const anchor = await ctx.db.get(args.anchor_id);
     if (!anchor || !anchor.team_id || anchor.team_id.toString() !== channel.team_id.toString()) {
-      throw new Error("The anchor is not this channel's team's");
+      throw new Error("The workspace's agent is not this channel's team's");
     }
     if (!args.content.trim() || args.content.length > MAX_CHAT_CONTENT) throw new Error("Bad content");
     if (args.thread_root_id) {
@@ -985,12 +985,20 @@ export const getThread = query({
       authors: [] as Array<{ _id: Id<"users">; name: string; is_bot: boolean }>,
       has_more: false,
       next_cursor: null as string | null,
+      unavailable: false,
     };
     const userId = await getAuthenticatedUserId(ctx as any, args.api_token);
+    // Empty, not a throw, so a cached thread degrades instead of unmounting.
+    // `unavailable` is what lets the reader tell a refused room (left, never a
+    // member, dead link) from a thread whose root the cache holds and the
+    // server has not answered yet: without it the Threads card keeps its
+    // composer and invites a reply that sendMessage can only refuse with
+    // "Channel not found". One flag for missing and for forbidden, on the same
+    // terms as loadChannel and listMessages.
     const root = await ctx.db.get(args.root_id);
-    if (!root) return empty;
+    if (!root) return { ...empty, unavailable: true };
     const channel = await readChannel(ctx, userId, root.channel_id);
-    if (!channel) return empty;
+    if (!channel) return { ...empty, unavailable: true };
 
     const limit = Math.min(Math.max(args.limit ?? 200, 1), 300);
     const page = await ctx.db
@@ -1015,7 +1023,7 @@ export const getThread = query({
       anchor = {
         armed: anchorFollowsThread(channelAnchor, root),
         bot_user_id: channelAnchor.bot_user_id,
-        name: channelAnchor.name || "Anchor",
+        name: channelAnchor.name || "Workspace agent",
       };
     }
 
@@ -1027,6 +1035,7 @@ export const getThread = query({
       anchor,
       has_more: !page.isDone,
       next_cursor: page.isDone ? null : page.continueCursor,
+      unavailable: false,
     };
   },
 });
@@ -3135,7 +3144,7 @@ async function anchorSpokenFor(
       .withIndex("by_session_id", (q: any) => q.eq("session_id", args.session_id))
       .first();
     if (conv?.anchor_id) anchor = await ctx.db.get(conv.anchor_id);
-    if (!anchor) chatFail("INVALID", "This session is not an anchor. Pass --team or --personal to say which anchor speaks.");
+    if (!anchor) chatFail("INVALID", "This session is not a workspace's agent. Pass --team or --personal to say which agent speaks.");
   } else {
     const scopeType = args.scope_type ?? "user";
     let teamId = args.team_id;
@@ -3148,10 +3157,10 @@ async function anchorSpokenFor(
       : await ctx.db.query("anchors").withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", userId)).collect();
     anchor = rows.find((a) => a.status !== "decommissioned") ?? null;
   }
-  if (!anchor || anchor.status === "decommissioned") chatFail("NOT_FOUND", "Anchor not found");
+  if (!anchor || anchor.status === "decommissioned") chatFail("NOT_FOUND", "No workspace agent found");
   const isHost = anchor.host_user_id.toString() === userId.toString()
     || (!!anchor.scope_user_id && anchor.scope_user_id.toString() === userId.toString());
-  if (!isHost) chatFail("FORBIDDEN", "Only the anchor's host can speak as it");
+  if (!isHost) chatFail("FORBIDDEN", "Only the agent's host can speak as it");
   return anchor;
 }
 
@@ -3222,7 +3231,7 @@ export const sendAsAnchor = mutation({
         if (seen.has(id.toString())) continue;
         seen.add(id.toString());
         const member = await ctx.db.get(id);
-        if (!member || member.is_bot) chatFail("INVALID", "The anchor can only message human teammates");
+        if (!member || member.is_bot) chatFail("INVALID", "The workspace's agent can only message human teammates");
         if (!(await isTeamMember(ctx as any, id, teamId))) {
           chatFail("INVALID", `${displayName(member)} is not a member of this team`);
         }
@@ -3975,7 +3984,7 @@ export async function maybeWakeAnchor(
   if (anchor.team_id && !(await isTeamMember(ctx as any, anchor.host_user_id, opts.channel.team_id))) {
     return await visibleSkip(
       "host_not_in_team",
-      "The anchor's host is no longer on this team, so it cannot answer here.",
+      "The workspace agent's host is no longer on this team, so it cannot answer here.",
     );
   }
   // A dormant anchor with no session row is a wake that cannot be delivered.
@@ -3983,7 +3992,7 @@ export async function maybeWakeAnchor(
   if (!anchor.conversation_id) {
     return await visibleSkip(
       "anchor_has_no_session",
-      "The anchor could not be reached — its session is not running. Mention it again to retry.",
+      "The workspace's agent could not be reached: its session is not running. Mention it again to retry.",
     );
   }
   // One question, one turn. A second placeholder while the first is still in
@@ -4020,7 +4029,7 @@ export async function maybeWakeAnchor(
     if (error instanceof ConvexError) {
       return await visibleSkip(
         "rate_limited",
-        "The anchor is getting too many requests right now. Try again in a few minutes.",
+        "The workspace's agent is getting too many requests right now. Try again in a few minutes.",
       );
     }
     throw error;
@@ -4119,7 +4128,7 @@ export async function maybeWakeAnchor(
     // the thread now rather than showing ten minutes of spinner first — unless
     // nobody addressed it, in which case the silent row simply closes.
     await patchChat(ctx, placeholderId, addressed
-      ? { agent_status: "error", content: "The anchor could not be reached. Mention it again to retry." }
+      ? { agent_status: "error", content: "The workspace's agent could not be reached. Mention it again to retry." }
       : { agent_status: "passed" });
     return no("delivery_failed");
   }
@@ -4486,7 +4495,7 @@ export const expireAnchorReply = internalMutation({
       await patchChat(ctx, message._id, {
         agent_status: "error",
         content: message.content
-          || "No answer — the anchor did not respond. Mention it again to retry.",
+          || "No answer: the workspace's agent did not respond. Mention it again to retry.",
       });
     }
     await dropQueuedAnchorWake(ctx, message);
@@ -4610,16 +4619,16 @@ export const replyAsAnchor = mutation({
       chatFail("CONFLICT", "That reply is already finished");
     }
     const anchor = await ctx.db.get(message.agent_anchor_id);
-    if (!anchor) chatFail("NOT_FOUND", "Anchor not found");
+    if (!anchor) chatFail("NOT_FOUND", "No workspace agent found");
     // Both sides must agree: the row must be authored by THIS anchor's bot
     // identity, not merely point at the anchor.
     if (message.user_id.toString() !== anchor.bot_user_id.toString()) {
-      chatFail("FORBIDDEN", "That reply does not belong to this anchor");
+      chatFail("FORBIDDEN", "That reply does not belong to this agent");
     }
     const isHost = anchor.host_user_id.toString() === userId.toString()
       || (!!anchor.scope_user_id && anchor.scope_user_id.toString() === userId.toString());
     if (!isHost) {
-      chatFail("FORBIDDEN", "Only the anchor's host can write its reply");
+      chatFail("FORBIDDEN", "Only the agent's host can write its reply");
     }
     if (args.content.length > MAX_CHAT_CONTENT) {
       chatFail("INVALID", `Reply is longer than ${MAX_CHAT_CONTENT} characters`);
@@ -4629,7 +4638,7 @@ export const replyAsAnchor = mutation({
     // to produce one, so it is refused the same way a send is. An empty failure
     // report is allowed: the status carries the meaning there.
     if (!args.content.trim() && (args.status ?? "done") === "done") {
-      chatFail("INVALID", "An anchor reply cannot be empty");
+      chatFail("INVALID", "The agent's reply cannot be empty");
     }
     await chatRateLimit(ctx, userId, "chat.anchor_reply", ANCHOR_REPLY_LIMIT);
 

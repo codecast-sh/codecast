@@ -114,6 +114,8 @@ export type ChatMessageView = {
    *  flag is kept for callers that reason about the outbox. */
   pending?: boolean;
   failed?: boolean;
+  /** Why the send was refused, in the server's words. Only ever set with `failed`. */
+  failReason?: string;
 };
 
 export type ChatChannelView = {

@@ -8,6 +8,8 @@ import {
   chatReactionSyncOpts,
   chatSendState,
   chatReactionStubId,
+  teamChannelPushOpts,
+  isChatRoomRefusal,
 } from "../inboxStore";
 import { _resetChatRailMemo, type ChatMessageRow } from "../chatSlice";
 
@@ -729,5 +731,148 @@ describe("resolveChannelStubId", () => {
 
   it("passes an unresolved stub back as null", () => {
     expect(resolveChannelStubId({ [STUB]: { client_id: STUB } }, STUB)).toBeNull();
+  });
+});
+
+// ── Rooms the server no longer shows the viewer ───────────────────────────
+
+describe("rooms the viewer can no longer read", () => {
+  const owner = {};
+  let calls: DispatchCall[];
+
+  beforeEach(() => {
+    calls = [];
+    _resetChatRailMemo();
+    useInboxStore.setState({
+      chatChannels: {},
+      chatMessages: {},
+      chatReactions: {},
+      chatReads: {},
+      chatRail: [],
+      pending: {},
+      currentUser: { _id: ME },
+    } as any);
+    useInboxStore.getState()._setDispatch(async (action, args, _patches, result) => {
+      calls.push({ action, args, result });
+      return null;
+    }, { owner });
+  });
+
+  afterEach(() => {
+    useInboxStore.getState()._clearDispatch(owner);
+  });
+
+  const TEAM = serverId("team1");
+  const OTHER_TEAM = serverId("team2");
+  const GONE = serverId("changone");
+  const FOREIGN = serverId("chanforeign");
+  const READ = serverId("readgone");
+
+  function railRow(channelId: string) {
+    return {
+      channel_id: channelId, sort_at: 1, unread: 0, unread_mentions: 0,
+      notify_level: "mentions", joined: true, last_message: null,
+    };
+  }
+
+  it("prunes a channel of the pushed team that the complete set omits, and its read row", () => {
+    const s = useInboxStore.getState();
+    s.syncTable("chatChannels", [
+      { _id: CHANNEL, name: "general", team_id: TEAM, created_at: 1, updated_at: 1 },
+      { _id: GONE, name: "", kind: "dm", team_id: TEAM, created_at: 1, updated_at: 1 },
+      { _id: FOREIGN, name: "elsewhere", team_id: OTHER_TEAM, created_at: 1, updated_at: 1 },
+    ]);
+    s.syncTable("chatReads", [
+      { _id: READ, channel_id: GONE, team_id: TEAM, user_id: ME, last_read_at: 5, notify_level: "mentions", updated_at: 5 },
+    ]);
+    // An optimistic mark the server has not echoed: never pruned.
+    s.markChannelRead(CHANNEL);
+
+    const prune = teamChannelPushOpts(TEAM);
+    s.syncTable("chatChannels", [
+      { _id: CHANNEL, name: "general", team_id: TEAM, created_at: 1, updated_at: 1 },
+    ], prune);
+    s.syncTable("chatReads", [], prune);
+
+    const after = useInboxStore.getState();
+    expect(after.chatChannels[GONE]).toBeUndefined();
+    expect(after.chatChannels[CHANNEL]).toBeDefined();
+    // Another team's room is out of the push's scope.
+    expect(after.chatChannels[FOREIGN]).toBeDefined();
+    expect(after.chatReads[READ]).toBeUndefined();
+    expect(Object.values(after.chatReads).some((r) => r.channel_id === CHANNEL)).toBe(true);
+    // Tombstoned, so the removal reaches disk and a stale push cannot re-add it.
+    expect(after.pending[`chatChannels:${GONE}`]?.type).toBe("exclude");
+    expect(after.pending[`chatReads:${READ}`]?.type).toBe("exclude");
+  });
+
+  it("lets a pruned room back in when a later push carries it again", () => {
+    const s = useInboxStore.getState();
+    const prune = teamChannelPushOpts(TEAM);
+    s.syncTable("chatChannels", [
+      { _id: GONE, name: "", kind: "dm", team_id: TEAM, created_at: 1, updated_at: 1 },
+    ], prune);
+    s.syncTable("chatChannels", [], prune);
+    expect(useInboxStore.getState().chatChannels[GONE]).toBeUndefined();
+
+    // Rejoined (a DM reopened under the same dm_key keeps its id).
+    s.syncTable("chatChannels", [
+      { _id: GONE, name: "", kind: "dm", team_id: TEAM, created_at: 1, updated_at: 2 },
+    ], prune);
+    const after = useInboxStore.getState();
+    expect(after.chatChannels[GONE]?.updated_at).toBe(2);
+    expect(after.pending[`chatChannels:${GONE}`]).toBeUndefined();
+  });
+
+  it("does not prune when the push names no team", () => {
+    const s = useInboxStore.getState();
+    s.syncTable("chatChannels", [
+      { _id: GONE, name: "x", team_id: TEAM, created_at: 1, updated_at: 1 },
+    ]);
+    s.syncTable("chatChannels", []);
+    expect(useInboxStore.getState().chatChannels[GONE]).toBeDefined();
+  });
+
+  it("retireChatChannel drops the room, its reads and its rail row, without a dispatch", () => {
+    const s = useInboxStore.getState();
+    s.syncTable("chatChannels", [
+      { _id: GONE, name: "", kind: "dm", team_id: TEAM, created_at: 1, updated_at: 1 },
+    ]);
+    s.syncTable("chatReads", [
+      { _id: READ, channel_id: GONE, team_id: TEAM, user_id: ME, last_read_at: 5, notify_level: "mentions", updated_at: 5 },
+    ]);
+    s.syncTable("chatRail", [railRow(GONE), railRow(CHANNEL)]);
+
+    s.retireChatChannel(GONE);
+
+    const after = useInboxStore.getState();
+    expect(after.chatChannels[GONE]).toBeUndefined();
+    expect(after.chatReads[READ]).toBeUndefined();
+    expect(after.chatRail.map((r) => r.channel_id)).toEqual([CHANNEL]);
+    expect(after.pending[`chatChannels:${GONE}`]?.type).toBe("exclude");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("leaving a room retires it the same way", () => {
+    const s = useInboxStore.getState();
+    s.syncTable("chatChannels", [
+      { _id: GONE, name: "private", team_id: TEAM, created_at: 1, updated_at: 1 },
+    ]);
+    s.syncTable("chatRail", [railRow(GONE)]);
+    s.removeChatChannelMember(GONE, ME);
+    const after = useInboxStore.getState();
+    expect(after.chatChannels[GONE]).toBeUndefined();
+    expect(after.chatRail).toHaveLength(0);
+    expect(calls.map((c) => c.action)).toEqual(["removeChatChannelMember"]);
+  });
+
+  it("recognizes the server's refusal as it arrives through dispatch", () => {
+    const nested =
+      "[CONVEX M(dispatch:dispatch)] [Request ID: 66d41f67] Server Error\n" +
+      "Uncaught ConvexError: Uncaught ConvexError: {\"code\":\"NOT_FOUND\",\"message\":\"Channel not found\",\"retryable\":false}\n" +
+      "    at chatFail (../../convex/chat.ts:103:4)";
+    expect(isChatRoomRefusal(new Error(nested))).toBe(true);
+    expect(isChatRoomRefusal(new Error("Uncaught ConvexError: {\"code\":\"INVALID\",\"message\":\"That message is not in this channel\"}"))).toBe(false);
+    expect(isChatRoomRefusal(new Error("offline"))).toBe(false);
   });
 });

@@ -41,6 +41,7 @@ import { threadRowId, type PageCommentRow, type PageThreadRow, type ThreadInboxR
 import { inActiveWorkspace } from "../lib/workspaceScope";
 import { dmKeyFor, dmOtherIds, isLiveVoiceRow, mentionUserIds, type ChatMentionRef, type ChatVoiceStatus } from "@codecast/shared/chat";
 import { normalizeChannelName } from "@codecast/convex/convex/chatText";
+import { humanizeConvexError } from "@codecast/shared/contracts";
 import { mirrorState, mergeLinkOptions, type SlackDirection, type SlackLinkOptions, type SlackSendAuth } from "@codecast/convex/convex/lib/slackMirror";
 import { action, asyncAction, sync } from "./mutativeMiddleware";
 import type { PendingEntry } from "./syncProtocol";
@@ -498,6 +499,10 @@ export type ChatSliceActions = {
   dispatchChatDelete: (messageId: string) => void;
   toggleChatReaction: (messageId: string, emoji: string) => void;
   markChannelRead: (channelId: string, lastMessageId?: string) => void;
+  /** The server will not show the viewer this room any more (a refused read
+   *  mark, a listMessages answer flagged unavailable): drop the room, its read
+   *  rows and its rail row locally, on the terms leaving uses. */
+  retireChatChannel: (channelId: string) => void;
   /** Clears one thread's unread the moment it is opened; the mutation moves the
    *  server mark to the thread's newest activity. */
   markThreadRead: (kind: ThreadKind, rootKey: string) => void;
@@ -630,6 +635,34 @@ function upsertRead(
  *  gestures that really remove something plant theirs here, by hand. */
 function excludeRow(draft: ChatDraft, collection: string, id: string): void {
   draft.pending[`${collection}:${id}`] = { type: "exclude", ts: Date.now() };
+}
+
+/** The room disappears for the viewer now: the channel row, their read rows
+ *  and the rail row go. Each server row's removal is tombstoned so it reaches
+ *  disk and a push that predates it cannot re-add the row; a push that carries
+ *  the row AGAIN lifts the tombstone (liftExcludesForIncoming), because the
+ *  server saying "you can read this" outranks a local removal — that is what
+ *  lets a rejoined room, or a DM reopened under the same dm_key, come back. */
+function retireChannelRows(draft: ChatDraft, channelId: string): void {
+  if (draft.chatChannels[channelId]) {
+    delete draft.chatChannels[channelId];
+    if (isConvexId(channelId)) excludeRow(draft, "chatChannels", channelId);
+  }
+  for (const id in draft.chatReads) {
+    if (draft.chatReads[id]?.channel_id !== channelId) continue;
+    delete draft.chatReads[id];
+    if (isConvexId(id)) excludeRow(draft, "chatReads", id);
+  }
+  if (draft.chatRail.some((row) => String(row.channel_id) === channelId)) {
+    draft.chatRail = draft.chatRail.filter((row) => String(row.channel_id) !== channelId);
+  }
+}
+
+/** The server's one answer for a room it will not show the caller — missing,
+ *  left, removed, or the team's chat is off (chat.ts loadChannel) — read out of
+ *  the nested dispatch error the same way a failed send's reason is. */
+export function isChatRoomRefusal(error: unknown): boolean {
+  return humanizeConvexError(error, "") === "Channel not found";
 }
 
 export function createChatSlice(set: any, get: any): ChatSliceImpl {
@@ -1075,12 +1108,15 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
         // Leaving: the room disappears for you now. The server deletes the
         // membership + read rows; locally the channel row goes so the rail and
         // any open tab stop showing a room you cannot re-enter.
-        delete this.chatChannels[channelId];
-        for (const id in this.chatReads) {
-          if (this.chatReads[id]?.channel_id === channelId) delete this.chatReads[id];
-        }
+        retireChannelRows(this, channelId);
       }
       return { channelId, userId };
+    }),
+
+    // Local only: the server has already said no (a refused read mark, a
+    // listMessages page flagged unavailable), so there is nothing to dispatch.
+    retireChatChannel: sync(function (this: ChatDraft, channelId: string) {
+      retireChannelRows(this, channelId);
     }),
 
     setChannelNotifyLevel: action(function (this: ChatDraft, channelId: string, level: ChatNotifyLevel) {
@@ -1191,10 +1227,46 @@ export function newPageCommentClientId(): string {
   return `pagecmt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/** A delta table's exclude tombstone never clears on its own (absence is not
+ *  deletion there), so a room retired locally (retireChannelRows) would stay
+ *  hidden even after the server sends it again. Here the server's word wins: a
+ *  row carried by a push is readable, so its tombstone is lifted and the row
+ *  lands. Runs after the merge, which skipped the row on the tombstone. */
+function liftExcludesForIncoming(collection: "chatChannels" | "chatReads") {
+  return (draft: any, _table: any, incoming: Array<{ _id: string }>) => {
+    let lifted: Record<string, unknown> | null = null;
+    for (const row of incoming) {
+      const key = `${collection}:${row._id}`;
+      if (draft.pending[key]?.type !== "exclude") continue;
+      delete draft.pending[key];
+      (lifted ??= { ...draft[collection] })[row._id] = row;
+    }
+    // A synced collection is a frozen whole (inboxStore.syncTable), so a lifted
+    // row lands by replacing the object, never by writing into it.
+    if (lifted) draft[collection] = Object.freeze(lifted);
+  };
+}
+
+/** Sync options for a team's listChannels push, whose `channels` and `reads`
+ *  are the COMPLETE visible set for that team: a cached row of the team the
+ *  push omits is a room the viewer can no longer read (left, removed, the
+ *  team's chat turned off), so it prunes. The delta overlay alone kept it
+ *  forever, and every surface that trusts the cache — a /chat URL, a DM card
+ *  before the first push — kept offering a room the server refuses, whose read
+ *  mark then failed as "Channel not found". Rows of other teams (community
+ *  rooms fed by their own query included) are out of scope, and a stub the
+ *  server has not echoed is never pruned. */
+export function teamChannelPushOpts(teamId: string) {
+  return {
+    pruneAbsentScope: (row: { _id: string; team_id?: string }) =>
+      isConvexId(row._id) && String(row.team_id ?? "") === teamId,
+  };
+}
+
 export const CHAT_SYNC_REGISTRY = {
   // The stub carries client_id === its own stub id; the server row arrives with
   // the same client_id and rekeys the stub onto the real _id.
-  chatChannels: { isDelta: true, altKey: "client_id" },
+  chatChannels: { isDelta: true, altKey: "client_id", transform: liftExcludesForIncoming("chatChannels") },
   chatMessages: {
     isDelta: true,
     altKey: "client_id",
@@ -1214,7 +1286,7 @@ export const CHAT_SYNC_REGISTRY = {
   },
   // One row per (viewer, channel), so the channel is the natural key — the same
   // shape bucketAssignments uses for its per-conversation row.
-  chatReads: { isDelta: true, altKey: "channel_id" },
+  chatReads: { isDelta: true, altKey: "channel_id", transform: liftExcludesForIncoming("chatReads") },
   // The complete set for the team rides every listChannels push: snapshot, so
   // an unlink prunes.
   chatSlackLinks: { isDelta: false },

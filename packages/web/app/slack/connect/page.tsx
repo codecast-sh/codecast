@@ -8,14 +8,12 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { SlackLogo } from "../../../components/SlackLogo";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { canResumeSlackReturn, clearSlackReturn, readSlackReturn, SLACK_SIGN_IN_URL } from "../../../lib/slackReturn";
-import { adoptPathIntoActiveTab } from "../../../src/compat/tabRouting";
-import { isNonTabRoute } from "../../../lib/tabRoutes";
 
 const ERRORS: Record<string, string> = {
   bad_state: "The link from Slack had expired or was altered. Start again from the page you came from.",
   wrong_user: "This install was started by a different codecast account. Sign in as that account and try again.",
   not_admin: "Only a team admin can connect Slack for the team.",
-  no_anchor: "Create your anchor first, then connect Slack.",
+  no_anchor: "Seat the workspace's agent first, then connect Slack.",
   workspace_taken: "That Slack workspace is already connected to a different codecast team.",
   not_configured: "Slack is not configured on this server.",
   no_workspace: "Connect the team's Slack workspace first; then connect your own account.",
@@ -35,10 +33,7 @@ export default function SlackConnectPage() {
   const [pending] = useState(() => readSlackReturn());
   const started = useRef(false);
   const [failure, setFailure] = useState<{ code: string; returnTo: string } | null>(null);
-  const returnToApp = useCallback((path: string) => {
-    if (!isNonTabRoute(path)) adoptPathIntoActiveTab(path);
-    navigate(path, { replace: true });
-  }, [navigate]);
+  const returnToApp = useCallback((path: string) => navigate(path, { replace: true }), [navigate]);
 
   useWatchEffect(() => {
     if (started.current) return;

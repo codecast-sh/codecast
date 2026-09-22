@@ -298,7 +298,7 @@ export const getInstallUrl = action({
           ? "Only a team admin can connect Slack for the team"
           : args.scope_type === "self"
             ? "Connect the team's Slack workspace first"
-            : "No anchor to connect — create one first",
+            : "The workspace has no agent to connect: seat one first (cast org staff)",
       };
     }
     // The state names its initiator (user_id + scope). completeSlackInstall runs
@@ -542,7 +542,7 @@ export const resolveLinkContext = internalQuery({
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) return { ok: false, error: "Authentication failed" };
     const anchor = await callerAnchor(ctx, userId, args.team ? "team" : "user", args.team_id);
-    if (!anchor) return { ok: false, error: "No anchor to link — create one first" };
+    if (!anchor) return { ok: false, error: "The workspace has no agent to link: seat one first (cast org staff)" };
     const install = await installationForAnchor(ctx, anchor);
     return { ok: true, bot_token: install?.bot_token, workspace_id: install?.workspace_id };
   },
@@ -564,12 +564,12 @@ export const commitLinkChannel = internalMutation({
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) return { ok: false, error: "Authentication failed" };
     const anchor = await callerAnchor(ctx, userId, args.team ? "team" : "user", args.team_id);
-    if (!anchor) return { ok: false, error: "No anchor to link — create one first" };
+    if (!anchor) return { ok: false, error: "The workspace has no agent to link: seat one first (cast org staff)" };
     const existing = await channelRow(ctx, args.channel, args.workspace);
     if (existing) {
       const current = await ctx.db.get(existing.anchor_id as Id<"anchors">);
       if (!(await userCanAccessAnchor(ctx, userId, current))) {
-        return { ok: false, error: "That channel is already linked to an anchor you don't control" };
+        return { ok: false, error: "That channel is already linked to a workspace agent you don't control" };
       }
       await ctx.db.patch(existing._id, {
         anchor_id: anchor._id,
@@ -647,7 +647,7 @@ export const unlinkChannel = mutation({
     if (!row) return { channel: args.channel, removed: false };
     const anchor = await ctx.db.get(row.anchor_id as Id<"anchors">);
     if (!(await userCanAccessAnchor(ctx, userId, anchor))) {
-      throw new Error("That channel is linked to an anchor you don't control");
+      throw new Error("That channel is linked to a workspace agent you don't control");
     }
     await ctx.db.delete(row._id);
     return { channel: args.channel, removed: true };
@@ -774,7 +774,7 @@ export const postMessage = action({
     // No env-token fallback: with per-workspace installs, a shared env token would
     // be a confused deputy (post to the wrong workspace). Require the installation.
     const token = pc.bot_token;
-    if (!token) return { ok: false, error: "Slack not connected for this anchor — reconnect Slack" };
+    if (!token) return { ok: false, error: "Slack is not connected for this workspace's agent: reconnect Slack" };
     const resp = await fetch("https://slack.com/api/chat.postMessage", {
       method: "POST",
       headers: { "Content-Type": "application/json; charset=utf-8", Authorization: `Bearer ${token}` },

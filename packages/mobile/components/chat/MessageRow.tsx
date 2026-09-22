@@ -334,7 +334,7 @@ export const MessageRow = memo(function MessageRow({
             <FontAwesome name="comment-o" size={11} color={Theme.blue} />
             <RNText style={styles.threadText}>
               {message.thread.agentStatus === 'thinking' || message.thread.agentStatus === 'streaming'
-                ? 'Anchor is thinking…'
+                ? 'Thinking…'
                 : `${message.thread.replyCount}${message.thread.replyCapped ? '+' : ''} ${message.thread.replyCount === 1 ? 'reply' : 'replies'}`}
             </RNText>
           </TouchableOpacity>

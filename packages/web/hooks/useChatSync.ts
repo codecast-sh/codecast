@@ -27,7 +27,7 @@ import {
   selectChatRail,
   selectChannelMessages,
   selectThreadReplies,
-  chatReactionSyncOpts,
+  teamChannelPushOpts,
   chatSendState,
   type ChatMessageRow,
   type ChatChannelRow,
@@ -57,29 +57,15 @@ import {
   type HandleSets,
 } from "../lib/chatViews";
 import type { ChatMessageView } from "../components/chat/chatTypes";
-import { prefetchStorageImageUrls } from "./useStorageImageUrl";
+import { CHAT_PAGE_SIZE, ingestChatPage } from "../lib/ingestChatPage";
 
 import { useWatchEffect } from "./useWatchEffect";
 import { useSyncCollection } from "./useSyncCollection";
 const api = _api as any;
 
-/** Warm the image cache (id→URL mapping AND bytes) for every image attachment
- *  in a batch of ingested messages — so the history a channel just loaded
- *  paints its images from local cache, online or off. Audio stays out: a
- *  recording resolves its URL when its play button mounts. */
-function prefetchAttachmentImages(convex: ReturnType<typeof useConvex>, messages: ChatMessageRow[]): void {
-  const ids: string[] = [];
-  for (const m of messages) {
-    for (const a of m.attachments ?? []) {
-      if (a.storage_id && !a.mime?.startsWith("audio/")) ids.push(a.storage_id);
-    }
-  }
-  if (ids.length) prefetchStorageImageUrls(convex, ids);
-}
-
 /** One live page. Deliberately at the server's own default so a cold open costs
  *  one round trip and lands on a full screen of history. */
-const PAGE_SIZE = 50;
+const PAGE_SIZE = CHAT_PAGE_SIZE;
 
 // ── Signatures ──────────────────────────────────────────────────────────────
 
@@ -242,8 +228,12 @@ export function useChatChannelsSync(): { error?: Error } {
     useCallback(
       (data: any) => {
         if (!data) return;
-        syncTable("chatChannels", data.channels ?? []);
-        syncTable("chatReads", data.reads ?? []);
+        // The team's complete visible set: a cached room of this team the
+        // push omits is one the viewer can no longer read. No team (a signed
+        // out answer) means no scope to prune.
+        const prune = data.team_id ? teamChannelPushOpts(String(data.team_id)) : undefined;
+        syncTable("chatChannels", data.channels ?? [], prune);
+        syncTable("chatReads", data.reads ?? [], prune);
         syncTable("chatSlackLinks", data.slack_links ?? []);
         syncChatRail(syncTable, data.rail ?? [], "team");
         // This rail came from the server, not from IndexedDB. Only now is a
@@ -390,28 +380,19 @@ export function useChannelMessagesSync(channelId: string | undefined): ChannelFe
     useCallback(
       (data: any) => {
         if (!data) return;
-        const messages: ChatMessageRow[] = data.messages ?? [];
-        syncTable("chatMessages", messages);
-        syncTable("chatAuthors", data.authors ?? []);
-        syncTable(
-          "chatReactions",
-          data.reactions ?? [],
-          chatReactionSyncOpts(messages.map((m) => m._id)),
-        );
-        // The server's per-root reply rollups. Without them a thread this
-        // client never opened shows NO affordance at all — the anchor answers
-        // and the room looks like it ignored you.
-        syncTable(
-          "chatThreadSummaries",
-          (data.threads ?? []).map((t: any) => ({ ...t, _id: String(t.root_id) })),
-        );
-        prefetchAttachmentImages(convex, messages);
+        if (data.unavailable) {
+          // The server's word on a room this client cached: retire it, so no
+          // surface keeps offering a room the server refuses.
+          if (channelId) useInboxStore.getState().retireChatChannel(channelId);
+          return;
+        }
+        const messages = ingestChatPage(data, convex);
         // Only seed the history cursor; never let a live re-push rewind a
         // cursor the reader has already paged past.
         setOlderCursor((prev) => (prev === null ? (data.next_cursor ?? null) : prev));
         lowerFloor(messages, !!data.has_more);
       },
-      [syncTable, convex],
+      [syncTable, convex, channelId],
     ),
   );
 
@@ -425,15 +406,7 @@ export function useChannelMessagesSync(channelId: string | undefined): ChannelFe
         // The reader switched channels while the page was in flight — its rows
         // belong to a channel nothing is showing, so drop them.
         if (channelRef.current !== forChannel) return;
-        const messages: ChatMessageRow[] = page?.messages ?? [];
-        useInboxStore.getState().syncTable("chatMessages", messages);
-        useInboxStore
-          .getState()
-          .syncTable("chatReactions", page?.reactions ?? [], chatReactionSyncOpts(messages.map((m) => m._id)));
-        useInboxStore
-          .getState()
-          .syncTable("chatThreadSummaries", (page?.threads ?? []).map((t: any) => ({ ...t, _id: String(t.root_id) })));
-        prefetchAttachmentImages(convex, messages);
+        const messages = ingestChatPage(page, convex);
         setOlderCursor(page?.next_cursor ?? null);
         if (!page?.has_more) setOlderExhausted(true);
         lowerFloor(messages, !!page?.has_more);
@@ -454,12 +427,7 @@ export function useChannelMessagesSync(channelId: string | undefined): ChannelFe
       .query(api.chat.listMessages, { channel_id: forChannel, limit: PAGE_SIZE })
       .then((page: any) => {
         if (channelRef.current !== forChannel) return;
-        const messages: ChatMessageRow[] = page?.messages ?? [];
-        useInboxStore.getState().syncTable("chatMessages", messages);
-        useInboxStore
-          .getState()
-          .syncTable("chatReactions", page?.reactions ?? [], chatReactionSyncOpts(messages.map((m) => m._id)));
-        prefetchAttachmentImages(convex, messages);
+        const messages = ingestChatPage(page, convex);
         setOlderCursor((prev) => (prev === null ? (page?.next_cursor ?? null) : prev));
         lowerFloor(messages, !!page?.has_more);
         setRecovered(true);
@@ -486,8 +454,7 @@ export function useChannelMessagesSync(channelId: string | undefined): ChannelFe
 
 /** A thread's root and replies, live. Threads are short by construction (the
  *  server's page is 200), so this has no backwards paging of its own. */
-export function useThreadSync(rootId: string | undefined): { loading: boolean; error?: Error } {
-  const syncTable = useInboxStore((s) => s.syncTable);
+export function useThreadSync(rootId: string | undefined): { loading: boolean; error?: Error; unavailable: boolean } {
   const convex = useConvex();
   const live = rootId && isConvexId(rootId);
   const { data: result, error } = useQueryNoThrow(api.chat.getThread, live ? { root_id: rootId } : "skip");
@@ -497,21 +464,15 @@ export function useThreadSync(rootId: string | undefined): { loading: boolean; e
     useCallback(
       (data: any) => {
         if (!data) return;
-        const rows: ChatMessageRow[] = [...(data.root ? [data.root] : []), ...(data.replies ?? [])];
-        if (rows.length) syncTable("chatMessages", rows);
-        syncTable("chatAuthors", data.authors ?? []);
-        syncTable(
-          "chatReactions",
-          data.reactions ?? [],
-          chatReactionSyncOpts(rows.map((m) => m._id)),
-        );
-        prefetchAttachmentImages(convex, rows);
+        ingestChatPage(data, convex);
       },
-      [syncTable, convex],
+      [convex],
     ),
   );
 
-  return { loading: !!live && result === undefined && !error, error };
+  // Same flag as a channel feed's: the server will not show this viewer the
+  // room the thread lives in, so a composer here could only post a refusal.
+  return { loading: !!live && result === undefined && !error, error, unavailable: !!result?.unavailable };
 }
 
 // ── Readers ─────────────────────────────────────────────────────────────────
@@ -568,7 +529,7 @@ function anchorBots(anchors: Record<string, any> | undefined): ChatMember[] {
   for (const id in anchors ?? {}) {
     const a = anchors![id];
     if (!a?.bot_user_id || a.status === "decommissioned") continue;
-    out.push({ _id: String(a.bot_user_id), name: a.bot_name ?? a.name ?? "Anchor", image: a.bot_avatar ?? null, is_bot: true } as ChatMember);
+    out.push({ _id: String(a.bot_user_id), name: a.role?.name ?? a.bot_name ?? a.name ?? "Workspace agent", image: a.bot_avatar ?? null, is_bot: true } as ChatMember);
   }
   return out;
 }
@@ -809,7 +770,7 @@ export function useEnsureChatMessage(messageId: string | undefined): void {
     void convex
       .query(api.chat.getMessage, { message_id: messageId })
       .then((res: any) => {
-        if (res?.message) useInboxStore.getState().syncTable("chatMessages", [res.message]);
+        ingestChatPage(res, convex);
       })
       .catch(() => {});
   }, [convex, messageId, known]);

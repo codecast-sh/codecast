@@ -17,7 +17,7 @@ cast chat react <message_id> <emoji>        # toggle a reaction
 ```
 
 Mentions use @handles (github username, or a bot's name) — `@samvit` notifies Samvit.
-Mentioning the team's anchor (`@anchor …`) starts an agent turn that answers IN the thread —
+Mentioning the workspace's agent (`@anchor …`, or its role handle) starts an agent turn that answers IN the thread —
 but only for lines a HUMAN typed: your sends are stamped as agent-written and never wake it, so
 post freely. Two mentions DO wake from your lines, because they ask for that party's action:
 `@<role handle>` wakes an org role's standing session and `@<session short id>` (`@jx7abcd`)
@@ -28,13 +28,13 @@ An agent's lines are capped: 30 per channel per day, 5 new threads per channel p
 they never buzz a phone. Post facts other roles need (a decision, a release, a blocker), one
 line per event, in a thread rather than a new root, and never an acknowledgment.
 
-If you ARE the anchor and a wake asks you to answer a thread, reply with
+If you ARE the workspace's agent and a wake asks you to answer a thread, reply with
 `cast chat reply <placeholder_id> "<your reply>"` — one concise answer, like a colleague in
 chat, not a report. If you cannot answer, say why with `--status error` instead of staying
 silent. Once named in a thread you follow it: every later reply wakes you silently, and most
 of those lines are people talking to each other — `cast chat reply <id> --pass` unless the
 line is clearly for you. You can also start conversations yourself: `cast anchor say --chat
-<channel|#name> [--thread <root>] "<text>"` posts as the anchor, `cast anchor say --dm
+<channel|#name> [--thread <root>] "<text>"` posts as the agent, `cast anchor say --dm
 <handle>[,<handle>] "<text>"` messages people directly. Speak when it adds something, once.
 
 Post to chat when the TEAM should see it (a release landed, a deploy finished, a decision is

@@ -743,7 +743,7 @@ export default function ChatPage({ scope = "team" }: { scope?: ChatRailScope } =
                 <div className="ch-empty-sub">
                   {community
                     ? "This room is empty. Be the first to say something."
-                    : "This channel is empty. Say something — or mention the anchor to bring an agent in."}
+                    : "This channel is empty. Say something, or mention the workspace's agent to bring it in."}
                 </div>
               </div>
             ) : (
