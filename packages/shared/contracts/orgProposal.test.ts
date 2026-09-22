@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { applyProposalChanges, extractOrgProposal, orgProposalBlock, orgProposalVerdict } from "./orgProposal";
+import { applyProposalChanges, extractOrgProposal, orgProposalBlock, orgProposalVerdict, recordChangeParts, changeLine } from "./orgProposal";
 
 describe("org proposal block", () => {
   test("round trips through a decision context", () => {
@@ -135,6 +135,21 @@ describe("orderOrgChanges and describeOrgChange", () => {
     expect(describeOrgChange(GOOD.plan_status)).toBe("mark plan pl-7 done");
     expect(describeOrgChange(GOOD.task_status)).toBe("mark task ct-42 done");
     expect(describeOrgChange(GOOD.project_status)).toBe("mark project Legacy paused");
+  });
+
+  test("a record change carries its record's title: the row reads the title with the id beside it, the CLI walk keeps the id", () => {
+    const task = { ...GOOD.task_status, title: "Shadow mode for the machine-listening judge" };
+    expect(orgChangeError(task)).toBeNull();
+    expect(recordChangeParts(task)).toEqual({ act: "mark done", ref: "ct-42", title: "Shadow mode for the machine-listening judge" });
+    expect(changeLine(task)).toBe("Mark done: Shadow mode for the machine-listening judge (ct-42)");
+    expect(describeOrgChange(task)).toBe("mark task ct-42 done");
+    // Without a title the row keeps its old line; a title that repeats the ref is not said twice.
+    expect(recordChangeParts(GOOD.task_status)).toEqual({ act: "mark done", ref: "ct-42", title: null });
+    expect(changeLine(GOOD.task_status)).toBe("Mark task ct-42 done");
+    expect(recordChangeParts({ ...GOOD.project_status, title: "legacy" })).toEqual({ act: "mark paused", ref: "Legacy", title: null });
+    expect(changeLine({ ...GOOD.plan_status, title: "  Launch  " })).toBe("Mark done: Launch (pl-7)");
+    expect(recordChangeParts(GOOD.budget)).toBeNull();
+    expect(orgChangeError({ ...GOOD.task_status, title: 7 })).toBe("task_status title is the task's title, a string");
   });
 });
 

@@ -84,6 +84,9 @@ async function verifyProposalThread() {
   assert.equal(calls.pop(), "open:fixture-chief-conv");
   // Nothing is about anything yet: no line above the box.
   assert.equal(q("[data-about-line]"), null);
+  // The letter's last visible line is cut by the composer: a fade above the
+  // box says there is more to scroll, on every layout.
+  assert.ok(q("[data-thread] [data-letter-fade]"), "a fade sits over the cut, above the composer");
   await embed.onSendOverride!("why is growth in there");
   assert.equal(said.pop(), "fixture-chief-conv|op-9|null|null|why is growth in there");
   // Not the first time: no introduction.
@@ -140,11 +143,16 @@ async function verifyProposalThread() {
   // ── the phone: the conversation is the page, the bar at its foot opens the asks ──
   await renderThread({ layout: "phone", asksBar: { toDecide: 3, total: 3, updated: 2, onOpen: () => calls.push("asks") } });
   assert.equal(q("[data-proposal-thread]")!.getAttribute("data-thread-layout"), "phone");
-  assert.match(q("[data-asks-bar]")!.textContent!, /^3 to decide2 updated$/);
+  // The bar counts, then says what pressing it does: the verb sits on its
+  // own chip, so a cold reader takes the bar for a control.
+  assert.match(q("[data-asks-bar]")!.textContent!, /^3 to decide2 updatedOpen the asks$/);
+  assert.equal(q("[data-asks-bar-action]")!.textContent, "Open the asks");
+  assert.equal(q("[data-asks-bar]")!.getAttribute("aria-label"), "3 to decide. Open the asks");
+  assert.ok(q("[data-letter-fade]"), "the fade over the letter's cut is above the bar too");
   await click(q("[data-asks-bar]"));
   assert.equal(calls.pop(), "asks");
   await renderThread({ layout: "phone", asksBar: { toDecide: 0, total: 3, updated: 0, onOpen: () => {} } });
-  assert.equal(q("[data-asks-bar]")!.textContent, "All 3 decided");
+  assert.equal(q("[data-asks-bar]")!.textContent, "All 3 decidedSee them");
   assert.equal(q("[data-thread-back]"), null, "no list to go back to: the asks come to the conversation");
   // The sheet over it: the scrim and the handle both close it.
   await act(async () => root.render(React.createElement(AsksSheet, { onClose: () => calls.push("close") }, React.createElement("div", { "data-asks-inside": true }, "cards"))));
@@ -156,6 +164,7 @@ async function verifyProposalThread() {
   await renderThread({ preview: true });
   assert.ok(q("[data-thread-preview]"));
   assert.ok(q("[data-thread-preview] [data-proposal-letter]"));
+  assert.ok(q("[data-thread-preview] [data-letter-fade]"), "the preview frame fades the cut the same way");
   assert.equal(q("[data-thread]"), null);
 
   await act(async () => root.unmount());

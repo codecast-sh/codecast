@@ -166,6 +166,12 @@ describe("fleetTileMeta", () => {
     expect(retrying.text).toContain("retrying");
   });
 
+  it("names the slash commands for a full context window instead of a continue", () => {
+    const full = fleetTileMeta(sess({ pending_api_error: true, pending_api_error_kind: "context" }), "needsYou", NOW);
+    expect(full.text).toContain("compact or clear");
+    expect(full.text).not.toContain("continue");
+  });
+
   it("RUNNING shows the live status and elapsed; context line carries model and count", () => {
     const s = sess({ is_idle: false, agent_status: "thinking", model: "claude-opus-5", message_count: 789, updated_at: NOW - 12 * 60_000, git_root: "/Users/x/src/codecast" });
     expect(fleetTileMeta(s, "running", NOW).text).toBe("thinking · 12m");
