@@ -1,6 +1,7 @@
 import { shellEntryPath } from "../lib/tabRoutes";
 import { useEffect, useMemo, useRef } from "react";
 import { useLocation } from "react-router";
+import { useMountEffect } from "../hooks/useMountEffect";
 import { useInboxStore, useTrackedStore, type AppTab } from "../store/inboxStore";
 import { isPrewarmTab, clearPrewarmTab } from "../lib/openIntent";
 import { tabSessionId } from "../lib/tabTitle";
@@ -84,7 +85,6 @@ function TabPane({ tab, isActive, children }: { tab: AppTab; isActive: boolean; 
 // -- TabContent: renders all mounted tabs, toggles visibility --
 
 export function TabContent() {
-  const location = useLocation();
   const s = useTrackedStore([
     (s) => s.tabs,
     (s) => s.activeTabId,
@@ -92,10 +92,15 @@ export function TabContent() {
   // The pane chords live with the stage they act on.
   useStageShortcuts();
 
-  const { tabs } = s;
-  let { activeTabId } = s;
+  if (s.tabs.length === 0) return null;
+  return <TabStage tabs={s.tabs} storeActiveTabId={s.activeTabId} />;
+}
 
-  if (tabs.length === 0) return null;
+// Mounts once the first tab exists, so every hook below runs on every render
+// and the entry URL is adopted into a tab that is really there.
+function TabStage({ tabs, storeActiveTabId }: { tabs: AppTab[]; storeActiveTabId: string | null }) {
+  const location = useLocation();
+  let activeTabId = storeActiveTabId;
 
   // Fix stale activeTabId — use local override for this render,
   // then schedule the store update for next tick to avoid setState-during-render
@@ -128,7 +133,7 @@ export function TabContent() {
       );
     }
   }
-  useEffect(() => {
+  useMountEffect(() => {
     const url = entryRef.current;
     entryRef.current = null;
     if (!url) return;
@@ -138,7 +143,7 @@ export function TabContent() {
     if (active && active.path !== url) {
       store.updateTab(store.activeTabId, { path: url });
     }
-  }, []);
+  });
   // Every location this instance saw counts as entered, so a later remount at
   // it (history moved while mounted, then the layout changed) adopts nothing.
   useEffect(() => {

@@ -37,9 +37,6 @@
   "components/TabContent.tsx": {
     "no-restricted-syntax": {
       "count": 3
-    },
-    "react-hooks/rules-of-hooks": {
-      "count": 2
     }
   },
   "components/editor/ComposeEditor.tsx": {
