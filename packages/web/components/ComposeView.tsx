@@ -420,9 +420,9 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
         if (docked && !collapsed && !rootRef.current?.contains(document.activeElement)) refocusComposer();
       }}
       className={`relative border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col animate-in fade-in-0 duration-150 ${
-        !docked ? "w-[94vw] h-[88vh] max-w-[960px] max-h-[680px] rounded-xl zoom-in-95 slide-in-from-top-2"
+        !docked ? `w-[94vw] max-w-[960px] [--frame-h:min(88vh,680px)] ${FRAME_CAP} rounded-xl zoom-in-95 slide-in-from-top-2`
           : collapsed ? "w-[280px] max-w-full rounded-t-lg border-b-0 slide-in-from-bottom-4"
-          : "w-[460px] max-w-full h-[min(520px,calc(100vh-5rem))] rounded-t-xl border-b-0 slide-in-from-bottom-4"
+          : `w-[460px] max-w-full [--frame-h:min(520px,calc(100vh-5rem))] ${FRAME_CAP} rounded-t-xl border-b-0 slide-in-from-bottom-4`
       }`}
       onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
       {isDragging && (
@@ -474,6 +474,13 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
   );
 }
 
+// The frame is a fixed box (--frame-h) and clips its overflow, and the
+// composer inside it cannot shrink: a long draft used to grow the textarea
+// past the frame, and the caret then scrolled the title bar and pickers out
+// of the top while the send row sat below the clip. The composer's field
+// caps itself at --composer-max-h (MessageInput), so the frame hands it a
+// share of its own height and keeps the rest for the chrome around it.
+const FRAME_CAP = "h-[var(--frame-h)] [--composer-max-h:calc(var(--frame-h)*0.45)]";
 const DOCK_COMBO = getShortcutsForAction("session.composeDock")[0]?.key ?? "";
 const chromeButton = "p-1 rounded text-sol-text-dim/70 hover:text-sol-text hover:bg-sol-text-dim/15 transition-colors";
 

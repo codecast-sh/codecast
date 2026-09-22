@@ -147,6 +147,7 @@ const SettingsTeamJoin = lazy(() => import("@/app/settings/team/join/page"));
 const SettingsNotifications = lazy(() => import("@/app/settings/notifications/page"));
 const SettingsIntegrations = lazy(() => import("@/app/settings/integrations/page"));
 const SettingsDesktop = lazy(() => import("@/app/settings/desktop/page"));
+const SettingsApps = lazy(() => import("@/app/settings/apps/page"));
 // Registers the issue feed kinds with ExternalEventRow before any feed paints.
 import "@/lib/issueEventStyles";
 
@@ -374,6 +375,7 @@ export function App() {
               {/* Old deep link; the GitHub install flow still returns here. */}
               <Route path="integrations/github-app" element={<E name="SettingsIntegrations"><SettingsIntegrations /></E>} />
               <Route path="desktop" element={<E name="SettingsDesktop"><SettingsDesktop /></E>} />
+              <Route path="apps" element={<E name="SettingsApps"><SettingsApps /></E>} />
             </Route>
 
             {/* Public profiles — anonymous, guest-viewable, at the ROOT (/<handle>).

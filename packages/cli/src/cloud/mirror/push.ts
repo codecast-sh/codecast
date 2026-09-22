@@ -1,5 +1,6 @@
 import { spawn } from "../../proc.js";
-import { gzipSync } from "node:zlib";
+import { promisify } from "node:util";
+import { gzip } from "node:zlib";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -13,10 +14,13 @@ import { claudeProjectDirName } from "../../projectPathResolver.js";
 import { remoteHome, sshBase, type RemoteHost } from "../../remote/session-move.js";
 import { withMirrorLock, type ApplyResult, type MirrorStamp } from "./apply.js";
 import { buildMirrorBundle, sha256, type BuiltBundle } from "./bundle.js";
-import { MIRROR_MANAGED_ROOTS, collectMirrorFiles, type Inventory } from "./inventory.js";
+import { MIRROR_MANAGED_ROOTS, collectMirrorSources, renderInventoryForHost, type Inventory, type MirrorSources } from "./inventory.js";
+import { TouchLedger, ledgerUnchanged, signLedger, type MirrorLedger } from "./ledger.js";
 import { projectDestination, projectPathMappings, readProjectRegistrations, unregisterProjectContext, type ProjectRegistration } from "./projectRefresh.js";
-import { AGENT_RUNTIME_ROOTS, collectProjectContextAsync } from "./discovery.js";
+import { AGENT_RUNTIME_ROOTS, collectProjectContextAsync, type ProjectContext } from "./discovery.js";
 import { transformByKind, type MirrorKind } from "./transform.js";
+
+const gzipAsync = promisify(gzip);
 
 export const MIRROR_APPLY_COMMAND = 'export PATH="$HOME/.bun/bin:$HOME/.local/bin:/usr/local/bin:$PATH"; cast cloud mirror-apply --stdin';
 export const MIRROR_PUSH_TIMEOUT_MS = 5 * 60_000;
@@ -27,6 +31,22 @@ export const NOT_LOGGED_IN_REASON = "not logged in on this laptop — cast login
 export const FINAL_REFUSALS: ReadonlySet<string> = new Set(["other_user", "other_device", "other_home"]);
 export const MIRROR_RETRY_MS = 60_000;
 export const MIRROR_REFUSAL_RETRY_MS = 5 * 60_000;
+export const HOST_EDIT_REASON = "remote edit conflict";
+
+/**
+ * How long a fast tick leaves a host alone after a push of this hash failed
+ * for this reason. A transport failure or an older host clears on its own,
+ * so a minute. Ownership is a human's call, so five. A host edit stays until
+ * the human resolves it on the host or the laptop copy changes, so the fast
+ * tick never retries it: only the periodic verify tick does (2026-09-22: the
+ * retry rebuilt and re-uploaded 170 MiB every other minute to be refused
+ * again by the same two edited files).
+ */
+export function failureRetryDelayMs(reason: string): number {
+  if (FINAL_REFUSALS.has(reason)) return MIRROR_REFUSAL_RETRY_MS;
+  if (reason.includes(HOST_EDIT_REASON)) return Number.POSITIVE_INFINITY;
+  return MIRROR_RETRY_MS;
+}
 
 export function hostKey(host: RemoteHost): string {
   return `${host.user}@${host.address}`;
@@ -48,6 +68,28 @@ export interface HomeMirrorSummary {
 
 export interface HomeMirror extends BuiltBundle {
   summary: HomeMirrorSummary;
+  /** Every path the build touched, signed. A later tick reuses the hash while the ledger holds. */
+  ledger: MirrorLedger;
+}
+
+/**
+ * One tick's collection, shared by every host the tick mirrors to. The walk,
+ * the read and the credential scan of the home and of each project root are
+ * host-independent and are the whole cost of a build; only the path remap and
+ * the bundle differ per host.
+ */
+export class MirrorSourceCache {
+  readonly ledger = new TouchLedger();
+  inventory?: Promise<MirrorSources>;
+  readonly discoveries = new Map<string, Promise<ProjectContext>>();
+  signed?: Promise<MirrorLedger>;
+  /** One stat pass per remembered ledger per tick, however many hosts share it. */
+  readonly checks = new Map<MirrorLedger, Promise<boolean>>();
+  stillHolds(ledger: MirrorLedger): Promise<boolean> {
+    let check = this.checks.get(ledger);
+    if (!check) { check = ledgerUnchanged(ledger); this.checks.set(ledger, check); }
+    return check;
+  }
 }
 
 export interface BuildHomeMirrorOptions {
@@ -60,19 +102,30 @@ export interface BuildHomeMirrorOptions {
   castVersion?: string;
   gitEnv?: NodeJS.ProcessEnv;
   projects?: ProjectRegistration[];
+  /** Shared across the hosts of one tick; a fresh one is used when absent. */
+  sources?: MirrorSourceCache;
 }
 
 /** Collect + transform + bundle. Throws when the inventory refuses (size cap). */
 export async function buildHomeMirror(opts: BuildHomeMirrorOptions): Promise<HomeMirror> {
   const home = opts.home ?? (process.env.HOME || os.homedir());
-  const inv = await collectMirrorFiles({ home, config: opts.config, hostHome: opts.hostHome, localGitRoot: opts.localGitRoot, gitEnv: opts.gitEnv });
+  const sources = opts.sources ?? new MirrorSourceCache();
+  const inv = renderInventoryForHost(await (sources.inventory ??= collectMirrorSources({ home, config: opts.config, localGitRoot: opts.localGitRoot, gitEnv: opts.gitEnv, ledger: sources.ledger })), opts.hostHome);
   const projects = (opts.projects ?? []).filter((p) => !p.retired);
   const retired = (opts.projects ?? []).filter((p) => p.retired);
   const canonicalProjects = [...projects].sort((a, b) => a.targetRoot.length - b.targetRoot.length || a.targetRoot.localeCompare(b.targetRoot));
-  const discoveries = new Map<string, Awaited<ReturnType<typeof collectProjectContextAsync>>>();
+  const discoveries = new Map<string, ProjectContext>();
   for (const project of projects) if (!discoveries.has(project.sourceRoot)) {
-    if (!(await fs.promises.stat(project.sourceRoot)).isDirectory()) throw new Error(`project context root is not a directory: ${project.sourceRoot}`);
-    discoveries.set(project.sourceRoot, await collectProjectContextAsync({ root: project.sourceRoot, home, includeTracked: true, includeAncestors: true, config: opts.config }));
+    let discovery = sources.discoveries.get(project.sourceRoot);
+    if (!discovery) {
+      discovery = (async () => {
+        sources.ledger.note(project.sourceRoot);
+        if (!(await fs.promises.stat(project.sourceRoot)).isDirectory()) throw new Error(`project context root is not a directory: ${project.sourceRoot}`);
+        return collectProjectContextAsync({ root: project.sourceRoot, home, includeTracked: true, includeAncestors: true, config: opts.config, ledger: sources.ledger });
+      })();
+      sources.discoveries.set(project.sourceRoot, discovery);
+    }
+    discoveries.set(project.sourceRoot, await discovery);
   }
   const mappings = (project: ProjectRegistration) => projectPathMappings(project, home, opts.hostHome, discoveries.get(project.sourceRoot)?.files.map((f) => f.sourcePath));
   const ctx = { fromHome: home, toHome: opts.hostHome, pathMappings: canonicalProjects.flatMap(mappings) };
@@ -84,14 +137,14 @@ export async function buildHomeMirror(opts: BuildHomeMirrorOptions): Promise<Hom
   const add = (e: { path: string; kind: MirrorKind; mode: "0600" | "0700"; bytes: Buffer }, context = ctx) => {
     let transformed: ReturnType<typeof transformByKind>;
     try {
-      transformed = transformByKind(e.kind, e.bytes, context);
+      transformed = transformByKind(e.kind, e.bytes, context, { prescanned: true });
       if (e.kind === "claude-mcp") {
         const source = JSON.parse(e.bytes.toString("utf8"));
         const projection = JSON.parse(transformed.bytes.toString("utf8"));
         for (const project of projects) {
           const settings = source.projects?.[project.sourceRoot];
           if (!settings) continue;
-          const scoped = transformByKind(e.kind, Buffer.from(JSON.stringify({ projects: { [project.sourceRoot]: settings } })), { fromHome: home, toHome: opts.hostHome, pathMappings: mappings(project) });
+          const scoped = transformByKind(e.kind, Buffer.from(JSON.stringify({ projects: { [project.sourceRoot]: settings } })), { fromHome: home, toHome: opts.hostHome, pathMappings: mappings(project) }, { prescanned: true });
           Object.assign(projection.projects ??= {}, JSON.parse(scoped.bytes.toString("utf8")).projects);
           transformed.scrubbed.push(...scoped.scrubbed);
         }
@@ -160,6 +213,7 @@ export async function buildHomeMirror(opts: BuildHomeMirrorOptions): Promise<Hom
       totalBytes: built.header.files.reduce((n, f) => n + f.size, 0),
       warnings: [...new Set(warnings)],
     },
+    ledger: await (sources.signed ??= signLedger(sources.ledger.paths)),
   };
 }
 
@@ -188,7 +242,7 @@ function isApplyResult(value: unknown): value is ApplyResult {
 }
 
 function applyFailure(r: ApplyResult): string {
-  return [r.refused, ...r.errors.map((e) => `${e.path}: ${e.error}`), ...r.host_edited.map((p) => `${p}: remote edit conflict`)].filter(Boolean).join("; ");
+  return [r.refused, ...r.errors.map((e) => `${e.path}: ${e.error}`), ...r.host_edited.map((p) => `${p}: ${HOST_EDIT_REASON}`)].filter(Boolean).join("; ");
 }
 
 /**
@@ -246,7 +300,7 @@ async function mirrorSsh(host: RemoteHost, command: string, opts: { input?: Buff
 
 export async function pushMirrorToHostAsync(host: RemoteHost, bundle: Buffer, opts: { timeoutMs?: number; signal?: AbortSignal; command?: string } = {}): Promise<MirrorPushOutcome> {
   const command = `gzip -dc | ( ${opts.command ?? MIRROR_APPLY_COMMAND} )`;
-  const { code, stdout, stderr } = await mirrorSsh(host, command, { input: gzipSync(bundle), timeoutMs: opts.timeoutMs ?? MIRROR_PUSH_TIMEOUT_MS, signal: opts.signal });
+  const { code, stdout, stderr } = await mirrorSsh(host, command, { input: await gzipAsync(bundle), timeoutMs: opts.timeoutMs ?? MIRROR_PUSH_TIMEOUT_MS, signal: opts.signal });
   const reply = lastJsonLine(stdout) as ApplyResult | null;
   if (isApplyResult(reply) && (reply.errors.length || reply.host_edited.length)) {
     return { pushed: false, hash: reply.hash, result: reply, reason: applyFailure(reply) };
@@ -329,6 +383,8 @@ export interface MirrorHomeOptions {
   signal?: AbortSignal;
   /** Injection for tests. */
   deps?: Partial<MirrorDeps>;
+  /** The tick's shared collection (see MirrorSourceCache). */
+  sources?: MirrorSourceCache;
 }
 
 export interface MirrorHomeOutcome extends MirrorPushOutcome {
@@ -358,6 +414,21 @@ async function saveHostStamp(deps: MirrorDeps, key: string, stamp: LocalMirrorSt
   });
 }
 
+/**
+ * The last build per host, remembered by its hash and its change ledger.
+ * While every path in the ledger still stats the same, a tick answers "is the
+ * host in step" from the hash alone; the bundle is built again only when a
+ * push needs its bytes. So the minute tick costs a stat pass, not a collect,
+ * a transform and a credential scan of every file (2026-09-22: 139s and 32s of
+ * CPU per host per minute, freezing the daemon).
+ */
+const buildCache = new Map<string, { hash: string; ledger: MirrorLedger }>();
+
+/** For tests: forget every remembered build. */
+export function resetBuildCache(): void {
+  buildCache.clear();
+}
+
 export async function mirrorHomeToHost(host: RemoteHost, opts: MirrorHomeOptions = {}): Promise<MirrorHomeOutcome> {
   const deps = resolveDeps(opts.deps, opts.signal);
   return deps.lock(hostKey(host), async () => {
@@ -366,51 +437,73 @@ export async function mirrorHomeToHost(host: RemoteHost, opts: MirrorHomeOptions
     if (!config?.user_id) return { pushed: false, reason: NOT_LOGGED_IN_REASON, changed: 0 };
     opts.signal?.throwIfAborted();
     const key = hostKey(host);
-    let built: BuiltBundle;
-    try {
-      opts.onProgress?.("collecting agent configuration and referenced files…");
-      built = await deps.build({ config, hostHome: remoteHome(host), takeOver: opts.takeOver, localGitRoot: opts.localGitRoot, projects: deps.readProjects(host) });
-    } catch (err) {
-      const at = deps.now().toISOString();
-      await saveHostStamp(deps, key, { hash: "", at, last_failure: { reason: err instanceof Error ? err.message : String(err), at, hash: "" } });
-      throw err;
-    }
-    const summary = (built as Partial<HomeMirror>).summary;
-    for (const warning of summary?.warnings ?? []) {
-      (opts.onProgress ?? deps.log)(`context compatibility: ${warning}`);
-    }
+    const projects = deps.readProjects(host);
+    const buildOpts = { config, hostHome: remoteHome(host), takeOver: opts.takeOver, localGitRoot: opts.localGitRoot, projects, sources: opts.sources };
+    const cacheKey = JSON.stringify([key, buildOpts.hostHome, opts.takeOver ?? false, opts.localGitRoot ?? "", projects, config.cloud_mirror_include ?? "", config.cloud_mirror_exclude ?? ""]);
+    const build = async (): Promise<BuiltBundle> => {
+      let built: BuiltBundle;
+      try {
+        opts.onProgress?.("collecting agent configuration and referenced files…");
+        built = await deps.build(buildOpts);
+      } catch (err) {
+        buildCache.delete(cacheKey);
+        const at = deps.now().toISOString();
+        await saveHostStamp(deps, key, { hash: "", at, last_failure: { reason: err instanceof Error ? err.message : String(err), at, hash: "" } });
+        throw err;
+      }
+      const { summary, ledger } = built as Partial<HomeMirror>;
+      // Compatibility warnings describe the bundle, so they are worth a line when the bundle is new, not on every rebuild of the same one.
+      const unchanged = buildCache.get(cacheKey)?.hash === built.hash;
+      if (ledger) buildCache.set(cacheKey, { hash: built.hash, ledger }); else buildCache.delete(cacheKey);
+      if (opts.onProgress || !unchanged) for (const warning of summary?.warnings ?? []) {
+        (opts.onProgress ?? deps.log)(`context compatibility: ${warning}`);
+      }
+      return built;
+    };
+    const cached = opts.force ? undefined : buildCache.get(cacheKey);
+    let built: BuiltBundle | undefined;
+    let hash: string;
+    if (cached && await (opts.sources?.stillHolds(cached.ledger) ?? ledgerUnchanged(cached.ledger))) hash = cached.hash;
+    else { built = await build(); hash = built.hash; }
+    // The bytes, only when a push needs them. A change the ledger missed
+    // surfaces here as a different hash; the push carries the fresh bundle
+    // and the stamps record it.
+    const bundle = async (): Promise<BuiltBundle> => {
+      if (!built) { built = await build(); hash = built.hash; }
+      return built;
+    };
     const mine = deps.readLocalStamps()[key];
     const at = deps.now().toISOString();
     if (opts.onlyIfChanged && !opts.force) {
-      if (mine?.hash === built.hash && !mine.last_failure) return { pushed: false, hash: built.hash, skipped: "in step", changed: 0 };
-      if (mine?.last_failure?.hash === built.hash) {
-        const delay = FINAL_REFUSALS.has(mine.last_failure.reason) ? MIRROR_REFUSAL_RETRY_MS : MIRROR_RETRY_MS;
-        if (deps.now().getTime() - Date.parse(mine.last_failure.at) < delay) return { pushed: false, reason: mine.last_failure.reason, skipped: "refused earlier", changed: 0 };
+      if (mine?.hash === hash && !mine.last_failure) return { pushed: false, hash, skipped: "in step", changed: 0 };
+      if (mine?.last_failure?.hash === hash) {
+        if (deps.now().getTime() - Date.parse(mine.last_failure.at) < failureRetryDelayMs(mine.last_failure.reason)) return { pushed: false, reason: mine.last_failure.reason, skipped: "refused earlier", changed: 0 };
       }
     }
     try {
       if (!opts.force) {
         const remote = await deps.readStamp(host);
-        if (remote?.complete === true && remote.hash === built.hash) {
-          await saveHostStamp(deps, key, { hash: built.hash, at });
-          return { pushed: false, hash: built.hash, skipped: "in step", changed: 0 };
+        if (remote?.complete === true && remote.hash === hash) {
+          await saveHostStamp(deps, key, { hash, at });
+          return { pushed: false, hash, skipped: "in step", changed: 0 };
         }
       }
       opts.signal?.throwIfAborted();
-      opts.onProgress?.(`syncing ${built.header.files.length} configuration files (${(built.bytes.length / 1024 / 1024).toFixed(1)} MiB)…`);
-      let r = await deps.push(host, built.bytes);
+      const wire = await bundle();
+      opts.onProgress?.(`syncing ${wire.header.files.length} configuration files (${(wire.bytes.length / 1024 / 1024).toFixed(1)} MiB)…`);
+      let r = await deps.push(host, wire.bytes);
       if (r.result?.retired_projects?.length) await deps.retireProjects(host, r.result.retired_projects.map((root) => path.posix.join(remoteHome(host), root)));
-      if (r.pushed && (!isApplyResult(r.result) || r.result.hash !== built.hash || r.hash !== built.hash || r.result.refused || r.result.errors.length || r.result.host_edited.length)) {
+      if (r.pushed && (!isApplyResult(r.result) || r.result.hash !== hash || r.hash !== hash || r.result.refused || r.result.errors.length || r.result.host_edited.length)) {
         r = { ...r, pushed: false, reason: isApplyResult(r.result) ? applyFailure(r.result) || "receiver returned a different bundle hash" : "receiver returned an incomplete apply result" };
       }
       if (r.pushed) {
-        await saveHostStamp(deps, key, { hash: built.hash, at });
+        await saveHostStamp(deps, key, { hash, at });
         return { ...r, changed: (r.result?.applied.length ?? 0) + (r.result?.pruned.length ?? 0) };
       }
-      await saveHostStamp(deps, key, { hash: "", at, last_failure: { reason: r.reason ?? "refused", at, hash: built.hash } });
+      await saveHostStamp(deps, key, { hash: "", at, last_failure: { reason: r.reason ?? "refused", at, hash } });
       return { ...r, changed: 0 };
     } catch (err) {
-      await saveHostStamp(deps, key, { hash: "", at, last_failure: { reason: err instanceof Error ? err.message : String(err), at, hash: built.hash } });
+      await saveHostStamp(deps, key, { hash: "", at, last_failure: { reason: err instanceof Error ? err.message : String(err), at, hash } });
       throw err;
     }
   });
@@ -478,11 +571,12 @@ export async function runMirrorTick(opts: MirrorTickOptions, partial: Partial<Mi
   const report: MirrorTickReport = { pushed: [], skipped: [], failed: [] };
   const config = deps.readConfig();
   if (!isCloudMirrorEnabled(config)) return report;
+  const sources = new MirrorSourceCache();
   for (const host of await deps.listHosts()) {
     opts.signal?.throwIfAborted();
     const key = hostKey(host);
     try {
-      const r = await mirrorHomeToHost(host, { config, deps, signal: opts.signal, onlyIfChanged: opts.onlyIfChanged && !opts.verifyRemote });
+      const r = await mirrorHomeToHost(host, { config, deps, sources, signal: opts.signal, onlyIfChanged: opts.onlyIfChanged && !opts.verifyRemote });
       if (r.pushed) {
         report.pushed.push(key);
         deps.log(`mirrored ${r.changed} changed config file(s) to ${key} (${opts.reason}, ${(r.hash ?? "").slice(0, 8)})`);

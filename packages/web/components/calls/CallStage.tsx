@@ -68,6 +68,8 @@ import { popOutCall } from "../../lib/calls/popOutCall";
 import { useOsPermissions } from "../../hooks/useOsPermissions";
 import { permissionActionLabel, requestOsPermission, type AppPermissionKind } from "../../lib/osPermissions";
 import { LivePulseDot } from "../SessionActivityLine";
+import { prefersReducedMotion } from "../../hooks/useBottomAnchoredList";
+import { useAgentsInRoom } from "./useCallFeed";
 
 // The media notice, with the fix in reach: when the error is a device the OS
 // refused, the button is the one gesture that changes that (the OS prompt,
@@ -213,6 +215,9 @@ export function CallStage({
 
   const [view, setView] = useState<StageView>("auto");
   const [threadOpen, setThreadOpen] = useState(false);
+  // The rail leaves with motion: it stays mounted through a 150ms exit and
+  // goes on the animation's end. Exits are shorter than entrances (200ms in).
+  const [railClosing, setRailClosing] = useState(false);
   // The thread's rows, read here so the header can count what arrived while
   // the rail was closed: typed and agent lines later than the last one the
   // viewer saw, never the viewer's own lines and never an event row. The
@@ -231,7 +236,13 @@ export function CallStage({
     // opened for the first time starts from what is already there.
     if (rows && (threadOpen || !threadSeenAt.has(roomKey))) threadSeenAt.set(roomKey, newestAt);
   }, [rows, threadOpen, roomKey, newestAt]);
-  const toggleThread = () => setThreadOpen((o) => !o);
+  const toggleThread = () => {
+    if (threadOpen && !prefersReducedMotion()) setRailClosing(true);
+    setThreadOpen((o) => !o);
+  };
+  // The agents in the room, for the button: while the rail is closed, the
+  // state a person waits on most is "an agent is answering".
+  const agentWorking = useAgentsInRoom(live?.routes ?? []).some((a) => a.working);
   const seenAt = threadSeenAt.get(roomKey);
   const unread =
     threadOpen || seenAt === undefined ? 0 : (rows ?? []).filter((r) => r.at > seenAt && !r.mine && !r.event).length;
@@ -379,7 +390,8 @@ export function CallStage({
           active={threadOpen}
           accent="cyan"
           aria-label={
-            unread > 0 ? `Open the thread, ${unread} new line${unread === 1 ? "" : "s"}` : threadOpen ? "Close the thread" : "Open the thread"
+            (unread > 0 ? `Open the thread, ${unread} new line${unread === 1 ? "" : "s"}` : threadOpen ? "Close the thread" : "Open the thread") +
+            (!threadOpen && agentWorking ? ", an agent is working" : "")
           }
           title={
             live
@@ -392,9 +404,19 @@ export function CallStage({
             {live && <LivePulseDot className="absolute -right-1 -top-1 h-1.5 w-1.5" />}
           </span>
           thread
+          {!threadOpen && agentWorking && (
+            <span className="ch-typing-dots text-sol-violet" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </span>
+          )}
           {unread > 0 && (
+            // Keyed by the count so each new number arrives with the same
+            // 150ms scale in; past 99+ the key stops changing.
             <span
-              className="min-w-[16px] rounded-full bg-sol-cyan px-1 text-center font-mono text-[9.5px] font-semibold leading-4 tabular-nums text-sol-base03"
+              key={unread > 99 ? "99+" : unread}
+              className="min-w-[16px] rounded-full bg-sol-cyan px-1 text-center font-mono text-[9.5px] font-semibold leading-4 tabular-nums text-sol-base03 animate-in zoom-in-75 fade-in duration-150 motion-reduce:animate-none"
               aria-hidden="true"
             >
               {unread > 99 ? "99+" : unread}
@@ -477,8 +499,15 @@ export function CallStage({
             />
           )}
         </div>
-        {threadOpen && call.roomKey && (
-          <ThreadRail onClose={toggleThread} roomKey={call.roomKey} live={live ?? null} rows={rows} panel={panel} />
+        {(threadOpen || railClosing) && call.roomKey && (
+          <ThreadRail
+            roomKey={call.roomKey}
+            live={live ?? null}
+            rows={rows}
+            panel={panel}
+            closing={railClosing && !threadOpen}
+            onClosed={() => setRailClosing(false)}
+          />
         )}
       </div>
 
@@ -487,7 +516,17 @@ export function CallStage({
           video. Captions first — a lane, left-aligned, the speaker in a
           column — then the notice, then the one control bar. */}
       <div className="shrink-0 border-t border-white/[0.06] bg-black/[0.12]">
-        {!threadOpen && <CaptionsLane live={live ?? null} />}
+        {/* The lane folds to nothing while the rail is open (the open
+            passage shows the words) instead of leaving the tree, so the foot
+            changes height over the same 200ms the rail slides in. */}
+        <div
+          className="grid transition-[grid-template-rows] duration-200 ease-out motion-reduce:transition-none"
+          style={{ gridTemplateRows: threadOpen ? "0fr" : "1fr" }}
+        >
+          <div className="min-h-0 overflow-hidden">
+            <CaptionsLane live={live ?? null} />
+          </div>
+        </div>
         {call.error && <CallErrorNotice error={call.error} fix={call.errorFix} />}
         <ControlBar call={call} transcribing={!!live} />
       </div>
@@ -1033,24 +1072,37 @@ function AudioOnlyStage({
 // takes a share of the stage rather than a fixed 340px that would be half
 // the window.
 function ThreadRail({
-  onClose,
   roomKey,
   live,
   rows,
   panel,
+  closing,
+  onClosed,
 }: {
-  onClose: () => void;
   roomKey: string;
   live: { transcript_id: string } | null;
   rows: ThreadRow[] | null | undefined;
   panel: boolean;
+  /** On its way out: the exit runs and `onClosed` fires when it ends. */
+  closing: boolean;
+  onClosed: () => void;
 }) {
   const call = useQueryNoThrow(
     api.transcripts.webGetCall,
     live ? { transcript_id: live.transcript_id as any } : "skip",
   ).data as RoomThreadCall | null | undefined;
   return (
-    <aside className="flex w-[min(340px,55%)] shrink-0 flex-col overflow-hidden rounded-xl bg-white/[0.04] animate-in fade-in slide-in-from-right-2 duration-200">
+    <aside
+      className={`flex w-[min(340px,55%)] shrink-0 flex-col overflow-hidden rounded-xl bg-white/[0.04] motion-reduce:animate-none ${
+        closing
+          ? "animate-out fade-out slide-out-to-right-2 fill-mode-forwards duration-150"
+          : "animate-in fade-in slide-in-from-right-2 duration-200"
+      }`}
+      onAnimationEnd={(e) => {
+        // Rows inside the thread animate too; only the aside's own end counts.
+        if (e.target === e.currentTarget) onClosed();
+      }}
+    >
       <RoomThread
         roomKey={roomKey}
         call={live ? call : null}
@@ -1059,7 +1111,6 @@ function ThreadRail({
         surface="stage"
         seated
         panel={panel}
-        onClose={onClose}
         className="min-h-0 flex-1"
       />
     </aside>

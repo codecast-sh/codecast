@@ -1,13 +1,11 @@
 import { useCurrentUser } from "../../../hooks/useCurrentUser";
 import { useState, type CSSProperties, type ReactNode } from "react";
-import { useMountEffect } from "../../../hooks/useMountEffect";
 import { useQuery, useMutation } from "convex/react";
 import { toast } from "sonner";
 import {
-  Activity, Globe, LayoutList, Monitor, MonitorDot, Palette, User, Volume2,
+  Activity, Globe, LayoutList, MonitorDot, Palette, User, Volume2,
 } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { isDesktop, getAppVersion, checkDesktopUpdate } from "../../../lib/desktop";
 import { Input } from "../../../components/ui/input";
 import { Button } from "../../../components/ui/button";
 import { Textarea } from "../../../components/ui/textarea";
@@ -28,7 +26,6 @@ export default function ProfilePage() {
       <ProfileSection key={user._id} user={user} />
       <AppearanceSection />
       <InterfaceSection />
-      <DesktopSection />
       <DaemonSection user={user} />
       <PublicProfileSection user={user} />
     </SettingsPanel>
@@ -280,57 +277,6 @@ function SoundsLinkRow() {
       value={soundsOn ? "On" : "Off"}
       onClick={() => useInboxStore.getState().openSettingsModal("sounds")}
     />
-  );
-}
-
-// ── desktop ────────────────────────────────────────────────────────────────
-
-/** Version readout + the link-handoff opt-in; the whole section renders only
- *  where it means something. The "Update now" action lives in the global
- *  banner (DesktopProvider); here it's a passive at-a-glance readout. */
-function DesktopSection() {
-  const [current, setCurrent] = useState<string | null>(null);
-  const [update, setUpdate] = useState<{ current: string; latest: string } | null>(null);
-  const hasUsedDesktop = useInboxStore((s) => s.clientState?.dismissed?.has_used_desktop === true);
-  const preferBrowser = useInboxStore((s) => s.clientState?.dismissed?.prefer_browser_links === true);
-  const updateDismissed = useInboxStore((s) => s.updateClientDismissed);
-
-  useMountEffect(() => {
-    if (!isDesktop()) return;
-    getAppVersion().then(setCurrent);
-    checkDesktopUpdate().then(setUpdate);
-  });
-
-  const inDesktop = isDesktop() && !!current;
-  if (!inDesktop && !hasUsedDesktop) return null;
-
-  return (
-    <SettingsSection title="Desktop" icon={Monitor}>
-      {inDesktop && (
-        <SettingsRow
-          label="Desktop app"
-          description={update ? `Version ${current} — v${update.latest} available` : `Version ${current} — up to date`}
-        >
-          {update && (
-            <span className="rounded-md bg-sol-cyan/15 px-2 py-0.5 text-[11px] text-sol-cyan">Update available</span>
-          )}
-        </SettingsRow>
-      )}
-      {/* Inverse of the sticky "Always open Codecast links in browser" opt-out
-          from OpenInDesktopHandoff — the only place to turn the handoff back on. */}
-      {hasUsedDesktop && (
-        <SettingsRow
-          label="Open links in desktop app"
-          description="Hand off codecast.sh pages from the browser to the desktop app"
-        >
-          <Switch
-            checked={!preferBrowser}
-            onCheckedChange={(v) => updateDismissed("prefer_browser_links", !v)}
-            aria-label="Open links in desktop app"
-          />
-        </SettingsRow>
-      )}
-    </SettingsSection>
   );
 }
 

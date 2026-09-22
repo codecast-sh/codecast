@@ -44,9 +44,15 @@ import * as linearApi from "./linearApi";
 import * as githubIssuesApi from "./githubIssuesApi";
 import { createDataContext } from "./data";
 import { nextShortId } from "./counters";
-import { heldKeysFor, requireTeamMembership, resolveWorkspaceKey } from "./lib/access";
+import { heldKeysFor, requireTeamMembership, resolveWorkspaceKey, workspaceForResource } from "./lib/access";
 import { forbidden, notFound } from "./lib/auth";
-import { insertTaskComment, recalcPlanProgress, resolveAssigneeToUserId } from "./tasks";
+import {
+  insertTaskComment,
+  recalcPlanProgress,
+  reconcilePlanMembership,
+  resolveAssigneeToUserId,
+  resolveParentTask,
+} from "./tasks";
 import { verifyApiToken } from "./apiTokens";
 import { installationCoversRepo } from "./githubApp";
 import { connectionForWork } from "./oauthConnectors";
@@ -64,6 +70,7 @@ export const normalizedIssueValidator = v.object({
   team_key: v.optional(v.string()),
   team_id: v.optional(v.string()),
   project_id: v.optional(v.string()),
+  parent_issue_id: v.optional(v.string()),
   title: v.string(),
   description: v.optional(v.string()),
   status: v.string(),                       // our category
@@ -191,14 +198,18 @@ function externalFor(
     team_key: issue.team_key,
     team_id: issue.team_id,
     project_id: issue.project_id,
+    parent_issue_id: issue.parent_issue_id,
     source_id: source?._id ?? prev?.source_id,
     remote_updated_at: Math.max(issue.remote_updated_at, prev?.remote_updated_at ?? 0),
     synced_at: now,
     field_ts: prev?.field_ts,
     assignee_label: issue.assignee_label,
     state_name: issue.state_name,
-    // A successful inbound proves the connection works, so a stale error goes.
-    last_error: undefined,
+    // The error is the last PUSH's verdict, and only the next push may clear
+    // it (stampPushed): an inbound proves the provider can reach us, not that
+    // our write reached the provider, and wiping it here would both hide the
+    // failure and cost a write on every reconcile that saw the issue.
+    last_error: prev?.last_error,
   };
 }
 
@@ -358,6 +369,7 @@ async function issueFromTask(ctx: any, provider: string, issueId: string): Promi
     team_key: ext.team_key,
     team_id: ext.team_id,
     project_id: ext.project_id,
+    parent_issue_id: ext.parent_issue_id,
     title: task.title,
     description: task.description ?? "",
     status: task.status,
@@ -509,6 +521,16 @@ async function applyRemoteInner(ctx: any, args: ApplyArgs) {
   }
   if (!task) return { skipped: "no_task" };
 
+  let parentPending = false;
+  if (!args.comment_only) {
+    const link = await linkParent(ctx, task, issue);
+    parentPending = link === "pending";
+    if (link === "moved") {
+      diff = { ...diff, parent_id: "moved" } as TaskDiff & { parent_id: string };
+      task = await ctx.db.get(task._id);
+    }
+  }
+
   let landed = 0;
   for (const comment of args.comments ?? []) {
     if (await upsertComment(ctx, task._id, comment)) landed++;
@@ -528,7 +550,51 @@ async function applyRemoteInner(ctx: any, args: ApplyArgs) {
     await fireTriggers(ctx, source, issue, kind, args.github_action, kind === "issue_commented");
   }
 
-  return { task_id: task._id, created, changed: Object.keys(diff), comments: landed };
+  return { task_id: task._id, created, changed: Object.keys(diff), comments: landed, parent_pending: parentPending };
+}
+
+/**
+ * Put the task under the task that mirrors the issue's parent (S2: Linear
+ * sub-issues are subtasks here). The link goes through `resolveParentTask`,
+ * the same gate `cast task create --parent` uses, so a provider edit can no
+ * more make a cycle or exceed the depth cap than a person can; a refused link
+ * is logged and skipped, never thrown out of the inbound path. A parent the
+ * provider named that we do not hold yet is "pending": the pull that brought
+ * the child finishes its pages and retries (pullSource), and a webhook that
+ * arrives before its parent's is caught by the next reconcile.
+ */
+async function linkParent(
+  ctx: any,
+  task: any,
+  issue: NormalizedIssue,
+): Promise<"same" | "moved" | "pending" | "refused"> {
+  const current = task.parent_id ? String(task.parent_id) : "";
+  let want: any = null;
+  if (issue.parent_issue_id) {
+    want = await taskByExternal(ctx, issue.provider, issue.parent_issue_id);
+    if (!want) return "pending";
+  }
+  const next = want ? String(want._id) : "";
+  if (next === current) return "same";
+  // A local reparent pushed after this event was emitted wins (S3).
+  if (issue.remote_updated_at < (task.external?.field_ts?.parent_id ?? 0)) return "same";
+
+  if (want) {
+    try {
+      await resolveParentTask(ctx, task.user_id, String(want._id), {
+        workspace: workspaceForResource(task),
+        child: { _id: task._id, short_id: task.short_id },
+      });
+    } catch (error) {
+      console.warn(`issueSync.linkParent ${task.short_id} under ${want.short_id}: ${error instanceof Error ? error.message : String(error)}`);
+      return "refused";
+    }
+  }
+  const now = Date.now();
+  await ctx.db.patch(task._id, { parent_id: want ? want._id : undefined, updated_at: now });
+  await history(ctx, task._id, "updated", "parent", task.parent_id ?? "", want?._id ?? "");
+  await reconcilePlanMembership(ctx, task._id, task.plan_id, !!want);
+  return "moved";
 }
 
 async function createTaskFromIssue(ctx: any, source: SourceDoc, issue: NormalizedIssue, now: number) {
@@ -590,9 +656,11 @@ async function updateTaskFromIssue(
   const assigneeId = await resolveProviderUser(ctx, issue, teamId);
 
   // A deletion is not a field edit: the row stays (it carries our comments,
-  // sessions and history) and only its status moves (S6).
+  // sessions and history) and only its status moves (S6). A task already
+  // closed keeps its verdict: trashing a finished issue does not un-finish
+  // the work, it only takes the twin away.
   const diff: TaskDiff = issue.deleted
-    ? (task.status === "dropped" ? {} : { status: "dropped" })
+    ? (task.status === "dropped" || task.status === "done" ? {} : { status: "dropped" })
     : diffAgainstTask(task, issue, { assignee: assigneeId ? String(assigneeId) : undefined });
 
   const external = externalFor(issue, source, now, task.external);
@@ -793,6 +861,7 @@ export const taskPushContext = internalQuery({
     const { assignee_emails, assignee_login } = await providerAssignee(ctx, task.assignee);
     return {
       external: task.external,
+      parent_issue_id: await parentIssueId(ctx, task),
       title: task.title,
       description: task.description ?? "",
       status: task.status,
@@ -809,6 +878,18 @@ export const taskPushContext = internalQuery({
     };
   },
 });
+
+/**
+ * The provider id of the parent task's issue, when the parent has one on the
+ * same provider; null when the task has no parent, and undefined when the
+ * parent has no twin there (nothing to say to the provider).
+ */
+async function parentIssueId(ctx: any, task: any): Promise<string | null | undefined> {
+  if (!task.parent_id) return null;
+  const parent = await ctx.db.get(task.parent_id);
+  const ext = parent?.external;
+  return ext && ext.provider === task.external?.provider ? ext.id : undefined;
+}
 
 /**
  * The provider-side identity of our assignee: every email the user is known
@@ -917,15 +998,21 @@ export const pushTask = internalAction({
             if (user) input.assigneeId = user.id;
           }
         }
+        // A parent with no Linear twin is undefined: the issue keeps whatever
+        // parent it has, because we cannot name the new one to Linear.
+        if (want.has("parent_id") && info.parent_issue_id !== undefined) input.parentId = info.parent_issue_id;
         if (Object.keys(input).length === 0) return { skipped: "nothing_to_push" };
         await linearApi.updateIssue(token, ext.id, input);
         if (refused.length > 0) {
           // The rest of the push landed; the task says which labels did not
-          // and why, instead of the whole write dying on one label.
+          // and why, instead of the whole write dying on one label. The
+          // provider's set wins on the next inbound (S3), so the history row
+          // is what remains of the label a person put on and Linear refused.
           await ctx.runMutation(internal.issueSync.stampPushed, {
             task_id: args.task_id,
             fields: args.fields,
             error: `Linear kept these labels off ${ext.identifier}: ${refused.join(", ")}`.slice(0, 500),
+            refused_labels: refused,
           });
           return { pushed: args.fields, error: refused.join(", ") };
         }
@@ -1004,7 +1091,13 @@ async function resolveLinearLabelIds(
  * already in flight lose to the write it crossed.
  */
 export const stampPushed = internalMutation({
-  args: { task_id: v.id("tasks"), fields: v.array(v.string()), error: v.optional(v.string()) },
+  args: {
+    task_id: v.id("tasks"),
+    fields: v.array(v.string()),
+    error: v.optional(v.string()),
+    /** Labels the provider would not take; recorded in the task's history. */
+    refused_labels: v.optional(v.array(v.string())),
+  },
   handler: async (ctx, args) => {
     const task = await ctx.db.get(args.task_id);
     if (!task?.external) return;
@@ -1014,6 +1107,9 @@ export const stampPushed = internalMutation({
     await ctx.db.patch(args.task_id, {
       external: { ...task.external, field_ts, synced_at: now, last_error: args.error },
     });
+    if (args.refused_labels?.length) {
+      await history(ctx, args.task_id, "sync_refused", "labels", undefined, args.refused_labels.join(", "));
+    }
   },
 });
 
@@ -1094,8 +1190,10 @@ export const newTaskPushContext = internalQuery({
       .first();
     if (!source || source.status !== "active" || !source.push_new_tasks) return null;
     const { assignee_emails, assignee_login } = await providerAssignee(ctx, task.assignee);
+    const parent = task.parent_id ? await ctx.db.get(task.parent_id) : null;
     return {
       source,
+      parent_issue_id: parent?.external?.provider === source.provider ? parent.external.id : undefined,
       title: task.title,
       description: task.description ?? "",
       status: task.status,
@@ -1147,6 +1245,7 @@ export const pushNewTask = internalAction({
           priority: linearPriorityFor(info.priority),
         };
         if (source.kind === "linear_project") input.projectId = source.external_id;
+        if (info.parent_issue_id) input.parentId = info.parent_issue_id;
         const states = await linearApi.fetchWorkflowStates(token, teamId);
         const state = linearStateFor(info.status, states);
         if (state) input.stateId = state.id;
@@ -1237,6 +1336,19 @@ function isAuthFailure(message: string): boolean {
  */
 async function pullSource(ctx: any, source: any, since?: number): Promise<number> {
   let applied = 0;
+  // Children whose parent had not been applied when they were: a page is
+  // ordered by updatedAt, not by tree, so the parent may follow its child.
+  const pendingParents: Array<{ issue: NormalizedIssue }> = [];
+  const applyIssue = async (issue: NormalizedIssue, comments: NormalizedComment[]) => {
+    const res: any = await ctx.runMutation(internal.issueSync.applyRemote, { source_id: source._id, issue, comments });
+    if (res?.parent_pending) pendingParents.push({ issue });
+    applied++;
+  };
+  const linkPending = async () => {
+    for (const { issue } of pendingParents) {
+      await ctx.runMutation(internal.issueSync.applyRemote, { source_id: source._id, issue });
+    }
+  };
   if (source.provider === "linear") {
     const token = await tokenFor(ctx, "linear", source.team_id, source.user_id);
     if (!token) throw new Error("no_connection");
@@ -1253,16 +1365,12 @@ async function pullSource(ctx: any, source: any, since?: number): Promise<number
         const issue = normalizeLinearIssue(node);
         const comments = (node?.comments?.nodes ?? []).map((c: any) =>
           normalizeLinearComment(c, { issue_id: issue.id }));
-        await ctx.runMutation(internal.issueSync.applyRemote, {
-          source_id: source._id,
-          issue,
-          comments,
-        });
-        applied++;
+        await applyIssue(issue, comments);
       }
       if (!result.hasNextPage || !result.endCursor) break;
       after = result.endCursor;
     }
+    await linkPending();
     return applied;
   }
 
@@ -1279,15 +1387,11 @@ async function pullSource(ctx: any, source: any, since?: number): Promise<number
         ? (await githubIssuesApi.listIssueComments(token, repo, row.number))
           .map((c: any) => normalizeGithubComment(c, issue.id))
         : [];
-      await ctx.runMutation(internal.issueSync.applyRemote, {
-        source_id: source._id,
-        issue,
-        comments,
-      });
-      applied++;
+      await applyIssue(issue, comments);
     }
     if (rows.length < 100) break;
   }
+  await linkPending();
   return applied;
 }
 
@@ -1485,12 +1589,55 @@ async function removeSourceFor(ctx: any, userId: Id<"users">, id: Id<"issue_sync
     }
   }
   await ctx.db.delete(id);
-  // A project the import minted for itself (same title as the source) and
-  // never filled is clutter once the source goes; a project with tasks stays.
+  // A project the import minted for itself and never filled is clutter once
+  // the source goes; a project with anything in it stays.
   const project = await ctx.db.get(source.project_id);
-  if (project && tasks.length === 0 && project.title === source.name) await ctx.db.delete(project._id);
+  if (project && await isEmptyImportedProject(ctx, project)) await ctx.db.delete(project._id);
   return { success: true };
 }
+
+/**
+ * A project the import minted (`addSourceFor` stamps its description) that
+ * nothing ever landed in: no tasks, plans, docs or updates. Only such a
+ * project is ever deleted on the import's behalf.
+ */
+async function isEmptyImportedProject(ctx: any, project: any): Promise<boolean> {
+  if (!/^Imported from (linear|github)$/.test(project.description ?? "")) return false;
+  for (const [table, index] of [
+    ["tasks", "by_project_id"],
+    ["plans", "by_project_id"],
+    ["docs", "by_project_id"],
+    ["project_updates", "by_project_created"],
+  ] as const) {
+    const row = await ctx.db.query(table).withIndex(index, (q: any) => q.eq("project_id", project._id)).first();
+    if (row) return false;
+  }
+  return true;
+}
+
+/**
+ * Delete the projects an import minted and later orphaned: no source points
+ * at them and nothing was ever filed in them. A source removed before this
+ * rule existed left one behind, and a second project with the source's name
+ * makes `--project "<name>"` ambiguous for everyone.
+ */
+export const pruneOrphanImportedProjects = internalMutation({
+  args: { dry_run: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const removed: string[] = [];
+    for (const project of await ctx.db.query("projects").collect()) {
+      if (!(project as any).description?.startsWith("Imported from ")) continue;
+      const source = await ctx.db
+        .query("issue_sync_sources")
+        .withIndex("by_project", (q: any) => q.eq("project_id", project._id))
+        .first();
+      if (source || !(await isEmptyImportedProject(ctx, project))) continue;
+      removed.push(`${project.short_id ?? project._id} ${project.title}`);
+      if (!args.dry_run) await ctx.db.delete(project._id);
+    }
+    return { removed };
+  },
+});
 
 /** Linear teams and projects, or the GitHub repos the team's and the caller's own installations cover. */
 async function remoteCandidatesFor(

@@ -6,9 +6,23 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import * as path from "node:path";
 import { isolateCodecastDir, type IsolatedCodecastDir } from "../../test-helpers/codecastDir.js";
-import { takeStamp, takeWake, WAKE_MIN_GAP_MS, WAKE_ONCE_MS } from "./realChrome.js";
+import { chromeLaunchCommand, takeStamp, takeWake, WAKE_MIN_GAP_MS, WAKE_ONCE_MS } from "./realChrome.js";
 
 let isolation: IsolatedCodecastDir;
+
+test("macOS launches Chrome through Launch Services with a fresh default-profile process", () => {
+  const args = ["--disable-renderer-backgrounding", "--restore-last-session", "file:///private/tmp/pair.html"];
+  expect(chromeLaunchCommand("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", args, "darwin")).toEqual({
+    command: "/usr/bin/open",
+    args: ["-n", "-g", "-a", "/Applications/Google Chrome.app", "--args", ...args],
+  });
+});
+
+test("non-bundle and non-macOS Chrome launches retain their executable and arguments", () => {
+  expect(chromeLaunchCommand("/usr/bin/chromium", ["--restore-last-session"], "linux")).toEqual({ command: "/usr/bin/chromium", args: ["--restore-last-session"] });
+  expect(chromeLaunchCommand("/tmp/chromium", [], "darwin")).toEqual({ command: "/tmp/chromium", args: [] });
+});
+
 beforeEach(() => {
   isolation = isolateCodecastDir("real-chrome-test-");
 });
