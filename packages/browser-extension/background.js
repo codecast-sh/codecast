@@ -576,10 +576,19 @@ async function handle(m) {
  * (bridge/realChrome.ts launchRealChrome) runs with no window at all, and
  * tabs.create has nowhere to put a tab; so a window is made, behind whatever
  * the human is doing. A tab in an existing window is created as asked.
+ *
+ * With no window named, tabs.create uses the last focused window, and that can
+ * be an installed web app's window. Chrome allows tab groups only in normal
+ * windows, so placeInGroup then fails on every attempt ("Tabs can only be moved
+ * to and from normal windows"). So the tab goes to the last focused NORMAL one.
  */
 async function createTab(props) {
   const windows = await chrome.windows.getAll({ windowTypes: ["normal"] }).catch(() => []);
-  if (windows.length) return chrome.tabs.create(props);
+  if (windows.length) {
+    if (props.windowId !== undefined) return chrome.tabs.create(props);
+    const w = await chrome.windows.getLastFocused({ windowTypes: ["normal"] }).catch(() => windows[0]);
+    return chrome.tabs.create({ ...props, windowId: (w || windows[0]).id });
+  }
   const w = await chrome.windows.create({ url: props.url, focused: false, type: "normal" });
   const t = (w && w.tabs && w.tabs[0]) || (await chrome.tabs.query({ windowId: w.id }))[0];
   if (!t) throw new Error("Chrome opened a window but reports no tab in it");

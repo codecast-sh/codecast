@@ -513,6 +513,47 @@ const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
 const HELLO_TIMEOUT_MS = 15_000;
 
 /**
+ * The largest message this socket will hold. It exists for what the extension
+ * sends BACK — a full-page screenshot is the biggest thing on this wire — and
+ * it used to be 256 MiB, which is two orders of magnitude past any capture and
+ * a large amount of memory to hand an unauthenticated local client.
+ */
+const MAX_MESSAGE_BYTES = 64 * 1024 * 1024;
+
+/**
+ * How large a hello may be. /ext is the one face that authenticates AFTER the
+ * upgrade, so until the hello is proven this is what the socket is allowed;
+ * a real hello is a few hundred bytes.
+ *
+ * Enforced on the first message rather than on the raw socket: under bun an
+ * upgraded socket delivers nothing to an extra "data" listener, so a byte
+ * counter there would be a control that is not one. MAX_MESSAGE_BYTES is what
+ * bounds the buffering underneath it.
+ */
+const PRE_AUTH_MAX_BYTES = 256 * 1024;
+
+/** How many unproven /ext sockets may be mid-handshake at once. The real
+ *  extension opens one. */
+const MAX_PENDING_EXT_HANDSHAKES = 4;
+
+/**
+ * Origins a legitimate bridge client may present on an upgrade.
+ *
+ * The extension worker and our own CDP clients send NO Origin; a browser
+ * extension page sends `chrome-extension://…`. Everything else is a document,
+ * and a document has no business here — including the literal `null` an
+ * opaque origin sends (a sandboxed iframe, a data: or file: document), which
+ * used to be admitted because only http(s) was refused. Refusing before the
+ * token check means a probing page learns nothing, not even whether a stolen
+ * token would have worked.
+ */
+export function bridgeUpgradeOriginAllowed(origin: string | string[] | undefined): boolean {
+  if (origin === undefined) return true;
+  if (typeof origin !== "string") return false;
+  return /^(chrome|moz)-extension:\/\/[a-z0-9-]+\/?$/i.test(origin);
+}
+
+/**
  * How long the extension may go silent before its socket is declared dead:
  * a worker that is gone while Chrome's network process still holds the TCP
  * side open would otherwise keep every command waiting on a socket nobody
@@ -1120,7 +1161,23 @@ export function startBridgeHost(opts: {
     }
   });
 
-  const wss = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024 * 1024, perMessageDeflate: false });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES, perMessageDeflate: false });
+  // Unproven /ext sockets currently mid-handshake (see holdExtHandshake).
+  let pendingExtHandshakes = 0;
+
+  /** One unproven /ext socket, counted against the concurrent-handshake cap
+   *  until its hello is accepted or the socket goes away. */
+  const holdExtHandshake = (ws: WebSocket): { release(): void } => {
+    pendingExtHandshakes++;
+    let released = false;
+    const release = (): void => {
+      if (released) return;
+      released = true;
+      pendingExtHandshakes--;
+    };
+    ws.once("close", release);
+    return { release };
+  };
 
   /**
    * The extension face. The socket carries no token: the first message must
@@ -1129,13 +1186,22 @@ export function startBridgeHost(opts: {
    * a proven socket becomes THE extension; until then it can neither replace
    * the current one nor drive anything.
    */
-  const adoptExtension = (ws: WebSocket): void => {
+  const adoptExtension = (ws: WebSocket, preAuth: { release(): void }): void => {
     // A silent socket is a slow worker, not a wrong token: the code says
     // "try again", never "re-pair".
-    const hello = setTimeout(() => ws.close(CLOSE_HANDSHAKE_TIMEOUT, "no hello"), HELLO_TIMEOUT_MS);
+    const hello = setTimeout(() => {
+      preAuth.release();
+      ws.close(CLOSE_HANDSHAKE_TIMEOUT, "no hello");
+    }, HELLO_TIMEOUT_MS);
     ws.on("error", () => {});
     ws.once("message", (raw) => {
       clearTimeout(hello);
+      // An unproven socket does not get the screenshot-sized budget.
+      if ((raw as Buffer).length > PRE_AUTH_MAX_BYTES) {
+        preAuth.release();
+        ws.close(CLOSE_BAD_TOKEN, "hello too large");
+        return;
+      }
       let msg: any;
       try {
         msg = JSON.parse(String(raw));
@@ -1143,9 +1209,12 @@ export function startBridgeHost(opts: {
         msg = null;
       }
       if (msg?.op !== "hello" || !isNonce(msg.nonce) || !secretMatches(bridgeProof(token, "ext", msg.nonce), msg.auth)) {
+        preAuth.release();
         ws.close(CLOSE_BAD_TOKEN, "bad token");
         return;
       }
+      // Proven: the screenshot-sized budget is this socket's from here on.
+      preAuth.release();
       // One extension at a time; a newer connection wins so a reloaded
       // extension does not have to wait out a dead socket's timeout.
       if (ext && ext !== ws) ext.close(1000, "replaced by a newer extension connection");
@@ -1192,21 +1261,42 @@ export function startBridgeHost(opts: {
       url.pathname === "/ext" ? "ext" : pathToken || url.pathname === "/devtools/browser" ? "cdp" : null;
     const presented = url.searchParams.get("token") ?? pathToken;
 
-    // A web page always sends an http(s) Origin on WebSocket upgrades. Nothing
-    // legitimate here does. Refusing before the token check means a probing
-    // page learns nothing, not even whether a stolen token would have worked.
     // CDP clients present the token in the URL (they are our own processes,
     // which verified the host first); the extension proves it in its hello.
-    const pageOrigin = typeof origin === "string" && /^https?:/i.test(origin);
     const authed = role === "ext" || secretMatches(token, presented);
-    if (!role || pageOrigin || !isLoopbackHost(req.headers.host) || !authed) {
+
+    // Refused before the handshake completes, so the socket never reaches the
+    // WebSocket parser at all. An unknown path, a document's Origin and a
+    // non-loopback Host are all "you are not a bridge client"; there is no
+    // close code worth spending on them, and completing the upgrade would put
+    // a stranger in front of the frame reader.
+    if (!role || !bridgeUpgradeOriginAllowed(origin) || !isLoopbackHost(req.headers.host)) {
+      // end(), not write()+destroy(): the refusal has to reach the client
+      // before the socket goes away, or it reads as a reset and a caller
+      // cannot tell "refused" from "the host died".
+      socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+      return;
+    }
+
+    // Too many unproven sockets at once is either a bug or a squatter; either
+    // way the real extension opens one.
+    if (role === "ext" && pendingExtHandshakes >= MAX_PENDING_EXT_HANDSHAKES) {
+      socket.end("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+      return;
+    }
+
+    // A wrong token on an otherwise well-formed client DOES get a close code:
+    // that is our own tooling, and "bad token" is what tells it to re-pair.
+    if (!authed) {
       wss.handleUpgrade(req, socket, head, (ws) => ws.close(CLOSE_BAD_TOKEN, "bad token"));
       return;
     }
 
     wss.handleUpgrade(req, socket, head, (ws) => {
       if (role === "ext") {
-        adoptExtension(ws);
+        // /ext is the one face that authenticates AFTER the upgrade, so it is
+        // the one that needs a budget for what it may say before it has.
+        adoptExtension(ws, holdExtHandshake(ws));
         return;
       }
 

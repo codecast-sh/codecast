@@ -6,7 +6,7 @@ import { webcrypto } from 'node:crypto';
 const source = readFileSync(new URL('../../../browser-extension/background.js', import.meta.url), 'utf8');
 const statusSource = readFileSync(new URL('../../../browser-extension/status.js', import.meta.url), 'utf8');
 
-function worker(opts: { ownedTabs?: number[]; hungCleanup?: boolean; humanTabDuringCreate?: boolean; coldRenderer?: boolean; hungGroupQuery?: boolean; hungTabQuery?: boolean; firstOwnershipReadStalls?: boolean; selfAlreadyAttached?: boolean; lateTabQueryMs?: number; castGroupWithTabs?: number[]; keeperAlreadyOpen?: boolean; noOffscreenApi?: boolean; slowOverlay?: boolean } = {}) {
+function worker(opts: { ownedTabs?: number[]; hungCleanup?: boolean; humanTabDuringCreate?: boolean; coldRenderer?: boolean; hungGroupQuery?: boolean; hungTabQuery?: boolean; firstOwnershipReadStalls?: boolean; selfAlreadyAttached?: boolean; lateTabQueryMs?: number; castGroupWithTabs?: number[]; keeperAlreadyOpen?: boolean; noOffscreenApi?: boolean; slowOverlay?: boolean; appWindowFocused?: boolean } = {}) {
   const grouped: unknown[] = [];
   const detached: number[] = [];
   const created: unknown[] = [];
@@ -61,7 +61,13 @@ function worker(opts: { ownedTabs?: number[]; hungCleanup?: boolean; humanTabDur
       }, update: async (id: number, p: object) => ({ id, windowId: 1, ...p }),
       onCreated: event(), onUpdated: event(), onRemoved: event(),
     },
-    windows: { getAll: async () => [{ id: 1 }] },
+    // Window 9 stands for an installed web app's window: Chrome counts it as
+    // last focused, but it is not a normal window and cannot hold a tab group.
+    windows: {
+      getAll: async () => [{ id: 1 }],
+      getLastFocused: async (q: { windowTypes?: string[] } = {}) =>
+        opts.appWindowFocused && !q.windowTypes?.includes('normal') ? { id: 9, type: 'app' } : { id: 1, type: 'normal' },
+    },
     debugger: {
       attach: async ({ targetId }: { tabId?: number; targetId?: string }) => {
         if (!targetId) return;
@@ -185,7 +191,15 @@ describe('extension tab lifecycle', () => {
     await w.context.handle({ op: 'tabs.create', url: 'https://example.com', background: true });
     expect(w.grouped).toEqual([{ tabIds: [7] }]);
     expect(vm.runInContext('groups.get(42)', w.context)).toMatchObject({ title: 'Cast', color: 'red' });
-    expect(w.created).toEqual([{ url: 'https://example.com', active: false }]);
+    expect(w.created).toEqual([{ url: 'https://example.com', active: false, windowId: 1 }]);
+  });
+
+  test('a new tab goes to a normal window even while an app window has focus', async () => {
+    // tabs.create with no window lands in the last focused one; in an app window
+    // the grouping step then fails: "Tabs can only be moved to and from normal windows".
+    const w = worker({ appWindowFocused: true });
+    await w.context.handle({ op: 'tabs.create', url: 'https://example.com', background: true });
+    expect(w.created).toEqual([{ url: 'https://example.com', active: false, windowId: 1 }]);
   });
 
   test('an owned ungrouped tab is repaired when reattached', async () => {

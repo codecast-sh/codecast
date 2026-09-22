@@ -6,6 +6,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
+import * as http from "node:http";
 import * as net from "node:net";
 import { WebSocket, WebSocketServer } from "ws";
 import { CdpConnection, CdpError, listTargets } from "../cdp.js";
@@ -33,6 +34,59 @@ function closeCode(ws: WebSocket, timeoutMs = 3000): Promise<number> {
     ws.once("close", (code) => {
       clearTimeout(timer);
       resolve(code);
+    });
+  });
+}
+
+/**
+ * Did the host let this upgrade become a WebSocket? Driven over a raw socket:
+ * an upgrade the host refuses never becomes one at all — the socket is
+ * answered and closed before the frame parser sees a byte — so there is no
+ * close code to read. 101 means admitted; anything else, including a
+ * connection that just ends, means refused.
+ *
+ * The status line is not asserted on: the CLI runs on bun, and bun drops
+ * writes to an upgrade socket, so a refusal that answers 403 under node
+ * reaches the client as a bare close there. What matters either way is that no
+ * 101 is sent.
+ */
+function upgradeStatus(port: number, requestPath: string, headers: Record<string, string> = {}): Promise<number | null> {
+  return new Promise((resolve, reject) => {
+    const request = [
+      `GET ${requestPath} HTTP/1.1`,
+      `Host: 127.0.0.1:${port}`,
+      "Connection: Upgrade",
+      "Upgrade: websocket",
+      "Sec-WebSocket-Version: 13",
+      "Sec-WebSocket-Key: MDEyMzQ1Njc4OWFiY2RlZg==",
+      ...Object.entries(headers).map(([k, v]) => `${k}: ${v}`),
+      "",
+      "",
+    ].join("\r\n");
+    const socket = net.connect(port, "127.0.0.1", () => socket.write(request));
+    const timer = setTimeout(() => {
+      socket.destroy();
+      reject(new Error("no answer to the upgrade"));
+    }, 5000);
+    let seen = "";
+    const statusOf = (): number | null => {
+      const m = /^HTTP\/1\.1 (\d{3})/.exec(seen);
+      return m ? Number(m[1]) : null;
+    };
+    socket.on("data", (chunk) => {
+      seen += chunk.toString("latin1");
+      if (statusOf() === null) return;
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(statusOf());
+    });
+    socket.on("error", () => {
+      clearTimeout(timer);
+      resolve(statusOf());
+    });
+    socket.on("close", () => {
+      clearTimeout(timer);
+      resolve(statusOf());
     });
   });
 }
@@ -246,13 +300,64 @@ describe("bridge host auth", () => {
     expect(seen.at(-1)).toMatch(/^up: worker aaaa \(same worker, \ds old\) via retry/);
   });
 
-  test("rejects a correct token when the upgrade carries a web-page Origin", async () => {
+  // A document's Origin is refused BEFORE the handshake completes, so the
+  // socket never reaches the WebSocket frame parser. `null` matters as much as
+  // https: an opaque origin (a sandboxed iframe, a data: or file: document)
+  // sends the literal string, and only http(s) used to be refused.
+  test.each([
+    ["a web page", "https://evil.example"],
+    ["an opaque origin", "null"],
+    ["a plain-http page", "http://evil.example"],
+    ["a file document", "file://"],
+    ["an extension id with a path", "chrome-extension://abcd/evil.html"],
+  ])("refuses the upgrade outright for %s", async (_label, origin) => {
     const h = await freshHost();
-    const ws = new WebSocket(`ws://127.0.0.1:${h.port}/devtools/browser/${TOKEN}`, {
-      headers: { origin: "https://evil.example" },
-    });
+    expect(await upgradeStatus(h.port, `/devtools/browser/${TOKEN}`, { origin })).not.toBe(101);
+    expect(await upgradeStatus(h.port, "/ext", { origin })).not.toBe(101);
+  });
+
+  test("still admits the origins a real bridge client sends", async () => {
+    const h = await freshHost();
+    // No Origin at all: our own CDP clients and the extension worker.
+    expect(await upgradeStatus(h.port, `/devtools/browser/${TOKEN}`)).toBe(101);
+    // An extension page.
+    expect(await upgradeStatus(h.port, "/ext", { origin: "chrome-extension://fakeextensionid" })).toBe(101);
+  });
+
+  test("a wrong token on a well-formed client still gets the re-pair code", async () => {
+    const h = await freshHost();
+    const ws = new WebSocket(`ws://127.0.0.1:${h.port}/devtools/browser/wrong-token`);
     expect(await closeCode(ws)).toBe(CLOSE_BAD_TOKEN);
   });
+
+  test("an unproven extension socket is held to a hello-sized budget", async () => {
+    const h = await freshHost();
+    const ws = await dial(h.port, "/ext");
+    // A hello that is otherwise PERFECT — right nonce, right proof — and
+    // padded past the budget. Without the budget this is admitted as the
+    // extension, which is what makes the size the thing under test rather
+    // than the token.
+    const nonce = randomNonce();
+    ws.send(JSON.stringify({
+      op: "hello",
+      nonce,
+      auth: bridgeProof(TOKEN, "ext", nonce),
+      version: "1.0.0",
+      protocol: BRIDGE_PROTOCOL,
+      userAgent: "x".repeat(2 * 1024 * 1024),
+    }));
+    expect(await closeCode(ws, 8000)).toBe(CLOSE_BAD_TOKEN);
+    expect(h.extensionConnected()).toBe(false);
+  }, 15_000);
+
+  test("only a handful of unproven extension sockets may wait at once", async () => {
+    const h = await freshHost();
+    // Each stays silent, so each holds its handshake slot until it times out.
+    const held = await Promise.all([0, 1, 2, 3].map(() => dial(h.port, "/ext")));
+    expect(held.every((ws) => ws.readyState === WebSocket.OPEN)).toBe(true);
+    expect(await upgradeStatus(h.port, "/ext")).not.toBe(101);
+    for (const ws of held) ws.close();
+  }, 20_000);
 
   test("HTTP faces need the token AND a loopback Host (DNS rebinding)", async () => {
     const h = await freshHost();
