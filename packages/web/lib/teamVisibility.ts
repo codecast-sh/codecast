@@ -61,6 +61,15 @@ export type TeamSharingFacts = MembershipVisibilityFacts & {
   shared_project_count?: number;
 };
 
+/** Plain words for the row under a team's name: who is on it and what flows to it. */
+export function describeTeamSharing(team: TeamSharingFacts): string {
+  const others = Math.max(0, (team.member_count ?? 1) - 1);
+  const who = others === 0 ? "just you" : others === 1 ? "1 teammate" : `${others} teammates`;
+  const projects = team.shared_project_count ?? 0;
+  const what = projects === 0 ? "no projects shared yet" : projects === 1 ? "1 project shared" : `${projects} projects shared`;
+  return `${who} · ${what}`;
+}
+
 /** The team worth nudging about: someone else is on it, a project already
  *  flows to it, and the member shows less than the whole conversation. The
  *  first such team in the member's list, so the nudge names one team and
