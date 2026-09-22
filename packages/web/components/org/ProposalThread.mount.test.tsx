@@ -30,7 +30,8 @@ async function verifyProposalThread() {
   const toasts: string[] = [];
   const record = (kind: string) => (m: string, o?: { description?: string }) => toasts.push(`${kind}:${m}${o?.description ? ` / ${o.description}` : ""}`);
   mock.module("sonner", () => ({ toast: { error: record("error"), warning: record("warning"), success: record("success") } }));
-  mock.module("../tools/MarkdownRenderer", () => ({ MarkdownRenderer: ({ content }: { content: string }) => React.createElement("div", { "data-md": true }, content) }));
+  const md = ({ content }: { content: string }) => React.createElement("div", { "data-md": true }, content);
+  mock.module("../tools/MarkdownRenderer", () => ({ MarkdownRenderer: md, MarkdownBlocks: md }));
   mock.module("next/link", () => ({ default: ({ href, children, ...rest }: any) => React.createElement("a", { href, ...rest }, children) }));
   const { act } = React;
   const { createRoot } = await import("react-dom/client");
