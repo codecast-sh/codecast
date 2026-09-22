@@ -1,10 +1,6 @@
 import { X } from "lucide-react";
 import { useTrackedStore } from "../../store/inboxStore";
-import { findSessionRow } from "../../lib/calls/findSessionRow";
-
-/** What a session route is called before its session has a title. The room
- *  thread's roster uses the same word, so one missing title has one name. */
-export const NEW_AGENT_NAME = "new agent";
+import { findSessionRow, NEW_AGENT_NAME } from "../../lib/calls/findSessionRow";
 
 // A live transcript route rendered as a chip: what kind, where, removable by
 // its adder. Shared by the call stage's thread and the call page so a feed
