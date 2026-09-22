@@ -28,8 +28,8 @@ import {
 } from "../../../components/ui/dialog";
 import { TeamIcon } from "../../../components/TeamIcon";
 import { SettingsPanel, SettingsRow, SettingsSection } from "../../../components/settings/ui";
-import { TeamVisibilityControl, describeTeamSharing } from "../../../components/settings/TeamVisibilityControl";
-import { describePinnedPast, hasPinnedPast, teamVisibilityOption, type TeamSharingFacts } from "../../../lib/teamVisibility";
+import { TeamVisibilityControl } from "../../../components/settings/TeamVisibilityControl";
+import { describePinnedPast, describeTeamSharing, hasPinnedPast, teamVisibilityOption, type TeamSharingFacts } from "../../../lib/teamVisibility";
 
 type UserTeam = TeamSharingFacts & {
   _id: Id<"teams">;
