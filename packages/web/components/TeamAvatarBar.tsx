@@ -1,12 +1,11 @@
 import { useCallsAvailable } from "../lib/teamFeatures";
-import { useQuery } from "convex/react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { UserRound, Filter, Link2, Headphones, MessageSquare, ChevronRight, ArrowRight } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
-import { useConvexSync } from "../hooks/useConvexSync";
+import { useSyncCollection } from "../hooks/useSyncCollection";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { useOpenSession } from "../hooks/useOpenSession";
 import { useMissingSessionRow } from "../hooks/useMissingSessionRow";
@@ -46,14 +45,23 @@ interface TeamAvatarBarProps {
 // avatar row on each push. The pump renders nothing; the bar below reads the
 // store, whose teamMembers ref only changes when something displayable changed
 // (the sync layer quantizes presence timestamps and bails on identical pushes).
+//
+// It is a FEEDER, so it rides useSyncCollection and never a plain useQuery:
+// the bar paints the cached roster, and a terminal server error must degrade
+// to that cache, not unmount the bar. A plain useQuery re-throws the error
+// during render, the boundary around the bar latches on it, and the bar stays
+// "Failed to load" until somebody clicks retry — even after the server has
+// long since recovered. On 2026-09-21 a half-saved edit of getTeamMembers
+// reached prod for about a minute (ReferenceError: feedFilter is not defined),
+// and every bar that was open then stayed broken for hours afterwards.
 export function TeamMembersPump({ teamId }: { teamId: Id<"teams"> | undefined }) {
-  const teamMembersQuery = useQuery(
+  useSyncCollection(
+    "teamMembers",
     api.teams.getTeamMembers,
     // isConvexId: a just-created team holds an optimistic stub id until the
     // server echoes, and a stub is not an Id<"teams">.
-    teamId && isConvexId(String(teamId)) ? { team_id: teamId } : "skip"
+    teamId && isConvexId(String(teamId)) ? { team_id: teamId } : "skip",
   );
-  useConvexSync(teamMembersQuery, useCallback((d: any) => useInboxStore.getState().syncTable("teamMembers", d), []));
   return null;
 }
 

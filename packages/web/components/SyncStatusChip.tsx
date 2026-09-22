@@ -5,6 +5,7 @@ import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useInboxStore } from "../store/inboxStore";
 import { useLocalDaemonHealth } from "../hooks/useLocalDaemonHealth";
+import { blocksDelivery } from "../hooks/useDaemonHealth";
 import { connectionChipCopy, useAppOffline } from "../hooks/useAppOffline";
 import { describeDaemonHealth, type DaemonHealthCopy } from "../lib/daemonHealthCopy";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
@@ -194,7 +195,9 @@ export function SyncStatusChip() {
   // A fixed 20px slot in every state. The LED never carries text, so nothing
   // next to it shifts when sync starts, ticks through scopes, or settles: the
   // only thing that changes is the color and its pulse ring.
-  const active = mounted && (coldLoad || stalled || !!daemonIssue || !!connection);
+  // A daemon issue colours the dot; only one that is making a message late
+  // right now makes it pulse. The hour record is not a live symptom.
+  const active = mounted && (coldLoad || stalled || (!!daemonIssue && blocksDelivery(daemonHealth)) || !!connection);
   const color = !mounted
     ? "var(--sol-text-dim)"
     : connection

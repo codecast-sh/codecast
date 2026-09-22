@@ -27,7 +27,7 @@ import { useCallback, useRef } from "react";
 import type { FunctionArgs, FunctionReference } from "convex/server";
 import { getFunctionName } from "convex/server";
 import { captureError } from "../lib/analytics";
-import { useInboxStore } from "../store/inboxStore";
+import { useInboxStore, isConvexId } from "../store/inboxStore";
 import type { SyncOpts } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
 import { useServerAuthSettled } from "./useServerAuthSettled";
@@ -51,6 +51,20 @@ export function useFeederError(feeder: string, error: Error | undefined): void {
     console.warn(`[feeder:${feeder}] query failed; serving the cached rows`, error);
     captureError(error, { feeder });
   }, [feeder, error]);
+}
+
+/**
+ * Args for a feeder scoped to ONE entity by its Convex id, or "skip" when the
+ * id is not a Convex id. A surface can open an entity the server has not named
+ * yet: an optimistic session or task stub (a nanoid, a `temp_task_` key), a
+ * session reached by its daemon uuid. Its feeders would hand that key to a
+ * `v.id(...)` validator, which throws ArgumentValidationError on the server
+ * and reports it here for nothing — the row has no linked events, commits or
+ * pull requests until it exists. The store's altKey rekey turns the stub into
+ * the real id, and the feeder subscribes then.
+ */
+export function entityIdArgs<K extends string>(field: K, id: string | undefined): Record<K, string> | "skip" {
+  return id && isConvexId(id) ? ({ [field]: id } as Record<K, string>) : "skip";
 }
 
 export type SyncCollectionOpts<T = any> = {

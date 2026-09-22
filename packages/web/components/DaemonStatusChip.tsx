@@ -1,4 +1,6 @@
 import { StatusDot } from "./StatusDot";
+import { TopbarButton } from "./TopbarButton";
+import { TriangleAlert } from "lucide-react";
 import { useState } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { copyToClipboard } from "../lib/utils";
@@ -12,9 +14,16 @@ import { useInboxStore } from "../store/inboxStore";
 import { deviceDisplayName, isRemoteHost } from "@codecast/shared/contracts";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 
-function DaemonHealthPill({ view, prefix }: { view: DaemonHealthCopy; prefix?: string }) {
+// Two shapes for one story. The pill, with its glow and pulsing dot, is for a
+// daemon that is making a message late right now: it has to be seen. The
+// quiet shape is a warning glyph with the same tooltip, for a record that
+// nothing is wrong with at this moment (the hour tier: a machine that froze at
+// breakfast is fine by lunch, and a pulsing pill for the rest of the hour
+// reads as an outage that is not happening).
+function DaemonHealthPill({ view, prefix, quiet = false }: { view: DaemonHealthCopy; prefix?: string; quiet?: boolean }) {
   const [copied, setCopied] = useState(false);
   const color = `var(${view.colorVar})`;
+  const label = prefix ? `${prefix}: ${view.label}` : view.label;
 
   const handleClick = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -22,6 +31,16 @@ function DaemonHealthPill({ view, prefix }: { view: DaemonHealthCopy; prefix?: s
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
+
+  if (quiet) {
+    return (
+      <ShortcutTooltip label={copied ? `Copied ${view.command}` : `${label}. ${view.detail} Run ${view.command} to inspect. Click to copy.`}>
+        <TopbarButton desktopOnly aria-label={label} onClick={handleClick} style={{ color }} className="hover:text-current">
+          <TriangleAlert />
+        </TopbarButton>
+      </ShortcutTooltip>
+    );
+  }
 
   return (
     <ShortcutTooltip label={`${view.detail} Run ${view.command} to inspect. Click to copy.`}>
@@ -36,7 +55,7 @@ function DaemonHealthPill({ view, prefix }: { view: DaemonHealthCopy; prefix?: s
       >
         <StatusDot color={color} ping />
         <span className="text-[11px] font-mono font-bold whitespace-nowrap" style={{ color }}>
-          {copied ? "copied!" : prefix ? `${prefix}: ${view.label}` : view.label}
+          {copied ? "copied!" : label}
         </span>
       </button>
     </ShortcutTooltip>
@@ -63,7 +82,9 @@ export function DaemonStatusChip() {
   const view = describeDaemonHealth(health);
   if (!view) return null;
 
-  return <DaemonHealthPill view={view} prefix={health.device} />;
+  // The pill only while a message is late right now; the hour record gets the
+  // quiet glyph. Same line blocksDelivery draws for the delivery note.
+  return <DaemonHealthPill view={view} prefix={health.device} quiet={!blocksDelivery(health)} />;
 }
 
 export function SessionDaemonChip({ conversationId }: { conversationId?: string | null }) {

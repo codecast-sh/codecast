@@ -69,8 +69,16 @@ test("local quiet, offline, overloaded, stalled and draining states surface and 
   expect(globalText()).toContain("CLI on macOS - MacBook offline for 2h.");
   expect(useStatusNoticeStore.getState().notices.size).toBe(1);
   await update({ loop_freeze_ms: 40_000 });
+  expect(globalText()).toContain("MacBook: daemon under load");
   expect(syncLabel()).toBe("Sync status: daemon under load");
   expect(useStatusNoticeStore.getState().notices.size).toBe(0);
+  // The hour record alone: nothing is late right now, so the header shows a
+  // quiet glyph (no pill text) and the sync dot stops pulsing.
+  await update({ loop_freeze_1h_ms: 150_000, loop_freeze_max_ms: 40_000 });
+  expect(globalText()).not.toContain("daemon");
+  expect(host.querySelector('[data-global] [aria-label="macOS - MacBook: daemon under load"]')).not.toBeNull();
+  expect(syncLabel()).toBe("Sync status: daemon under load");
+  expect(host.querySelector('[aria-label^="Sync status:"] .animate-ping')).toBeNull();
   await update({ pending_sync_count: 27, pending_sync_conversations: 27, oldest_pending_ms: 360_000 });
   expect(syncLabel()).toBe("Sync status: sync stalled · 27 conversations");
   await update({ pending_sync_count: 12, pending_sync_messages: 904, oldest_pending_ms: 540_000, sync_no_progress_ms: 20_000 });

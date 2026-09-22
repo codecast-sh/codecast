@@ -6,7 +6,7 @@
 // guard enforces that). Mount the team feeder once, on the sync host; mount a
 // scoped feeder wherever that scope is open.
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { useSyncCollection } from "./useSyncCollection";
+import { useSyncCollection, entityIdArgs } from "./useSyncCollection";
 import { useCollectionRows } from "./useCollectionRows";
 import type { ExternalEventRecord } from "../lib/externalEvents";
 
@@ -23,27 +23,23 @@ export function useSyncTeamExternalEvents(args: { team_id?: string; limit?: numb
 }
 
 export function useSyncConversationExternalEvents(conversationId: string | undefined) {
-  return useSyncCollection(
-    KEY,
-    api.externalEvents.listForConversation,
-    conversationId ? { conversation_id: conversationId } : "skip",
-  );
+  return useSyncCollection(KEY, api.externalEvents.listForConversation, entityIdArgs("conversation_id", conversationId));
 }
 
 export function useSyncTaskExternalEvents(taskId: string | undefined) {
-  return useSyncCollection(KEY, api.externalEvents.listForTask, taskId ? { task_id: taskId } : "skip");
+  return useSyncCollection(KEY, api.externalEvents.listForTask, entityIdArgs("task_id", taskId));
 }
 
 export function useSyncPlanExternalEvents(planId: string | undefined) {
-  return useSyncCollection(KEY, api.externalEvents.listForPlan, planId ? { plan_id: planId } : "skip");
+  return useSyncCollection(KEY, api.externalEvents.listForPlan, entityIdArgs("plan_id", planId));
 }
 
 export function useSyncProjectExternalEvents(projectId: string | undefined) {
-  return useSyncCollection(KEY, api.externalEvents.listForProject, projectId ? { project_id: projectId } : "skip");
+  return useSyncCollection(KEY, api.externalEvents.listForProject, entityIdArgs("project_id", projectId));
 }
 
 export function useSyncPRExternalEvents(prId: string | undefined) {
-  return useSyncCollection(KEY, api.externalEvents.listForPR, prId ? { pr_id: prId } : "skip");
+  return useSyncCollection(KEY, api.externalEvents.listForPR, entityIdArgs("pr_id", prId));
 }
 
 export function useSyncRepositoryExternalEvents(
