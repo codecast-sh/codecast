@@ -98,12 +98,19 @@ describe("Codex limit parks (ct-49676)", () => {
     expect(codexErrorKind({ codexErrorInfo: "usage_limit_exceeded" })).toBe("limit");
   });
 
-  test("codes with no codecast cure keep the old marked client-error banner", () => {
-    // context_window_exceeded is a real CodexErrorInfo variant we deliberately
-    // do not map: a park the recovery loop cannot act on must not be badged as
-    // one it can.
+  test("a full context window parks on the context kind, whose cure is /compact in the session", () => {
+    // The recovery loop cannot act on it (no continue, no account switch), so
+    // the kind is unrevivable — but the card that offers /compact and /clear
+    // can, which is why it earns a park rather than the informational error.
     const banner = codexTurnErrorMessage("turn1", { message: "The conversation is too long.", codex_error_info: "context_window_exceeded" }, 1);
-    expect(codexErrorKind({ codex_error_info: "context_window_exceeded" })).toBeNull();
+    expect(codexErrorKind({ codex_error_info: "context_window_exceeded" })).toBe("context");
+    expect(classifyApiErrorBanner(banner.content)).toBe("context");
+    expect(banner.content).toBe("Prompt is too long · The conversation is too long.");
+  });
+
+  test("codes with no codecast cure keep the old marked client-error banner", () => {
+    const banner = codexTurnErrorMessage("turn1", { message: "Something else went wrong.", codex_error_info: "some_future_code" }, 1);
+    expect(codexErrorKind({ codex_error_info: "some_future_code" })).toBeNull();
     expect(classifyApiErrorBanner(banner.content)).toBe("error");
   });
 

@@ -15,6 +15,11 @@
 //     env may still hold whatever shell bootstrapped it — and a leaked
 //     CLAUDE_CODE_CHILD_SESSION makes any `claude` the precheck itself invokes
 //     start with transcript saving off (see agentEnv.ts).
+//   • It sees the same PATH an agent would. Under launchd the daemon's PATH is
+//     the bare system one, so a gate written in a terminal ("bun x.ts",
+//     "rg -q", "cast state show") exits 127 forever and the trigger never
+//     fires — eight of them did on 2026-09-22. agentSpawnPath() is the one
+//     list of where CLIs actually live.
 
 import { spawn } from "./proc.js";
 import {
@@ -23,6 +28,7 @@ import {
   type TriggerPrecheckResult,
 } from "@codecast/shared/contracts";
 import { scrubAgentEnv } from "./agentEnv.js";
+import { agentSpawnPath } from "./agentSpawnPath.js";
 
 /** Grace between "stop" and "stop for real" after a timeout. */
 const SIGKILL_DELAY_MS = 2_000;
@@ -71,7 +77,7 @@ export function runTriggerPrecheck(opts: {
         // Own process group, so the timeout kill reaches the whole pipeline.
         detached: true,
         stdio: ["ignore", "pipe", "pipe"],
-        env: scrubAgentEnv({ ...process.env }),
+        env: scrubAgentEnv({ ...process.env, PATH: agentSpawnPath() }),
       });
     } catch (err) {
       settle({ error: err instanceof Error ? err.message : String(err) });

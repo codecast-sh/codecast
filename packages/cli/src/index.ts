@@ -3182,22 +3182,29 @@ program
   .description(
     "Put one of a role's sessions in front of the person, or take it back\n\n" +
     "A session that reports to a role stays out of its owner's needs input: the\n" +
-    "role reads it first. Escalating makes it a card in the person's needs input\n" +
-    "with the role's face and your one line, which says what the person will\n" +
-    "decide. --clear takes it back under the role. A role uses this on its own\n" +
-    "sessions; a person can use it on a session they own. A session cannot\n" +
-    "escalate itself: it tells its role why, and the role decides.\n\n" +
+    "role reads it first. Escalating puts YOUR card in the person's needs input,\n" +
+    "with your face, your one line and the session as a pill; the session stays\n" +
+    "under you and the person answers you. The line is written into both\n" +
+    "threads as a divider, whole, so write the reason as long as it needs to be.\n" +
+    "--direct puts the session itself in front of the person instead. Use it\n" +
+    "only when they must act inside that session: an open permission prompt, an\n" +
+    "interactive question, a review of its own transcript; say why in the line.\n" +
+    "--clear takes it back under you. A role uses this on its own sessions; a\n" +
+    "person can use it on a session they own. A session cannot escalate itself:\n" +
+    "it tells its role why, and the role decides.\n\n" +
     "Examples:\n" +
     "  cast escalate jx7c6zk \"the pricing copy is ready and needs your eye\"\n" +
+    "  cast escalate --direct jx7c6zk \"a permission prompt is open in here\"\n" +
     "  cast escalate --clear jx7c6zk   # it no longer needs the person"
   )
   .argument("<session>", "Session short ID (e.g. jx7c6zk), UUID, or full ID")
-  .argument("[line]", "One line saying what the person will decide (required from a role)")
+  .argument("[line]", "What the person will decide, and why (required from a role)")
   .option("--clear", "Take the session back under its role")
-  .action(async (session: string, line: string | undefined, opts: { clear?: boolean }) => {
+  .option("--direct", "Put the session itself in the person's inbox: they must act inside it")
+  .action(async (session: string, line: string | undefined, opts: { clear?: boolean; direct?: boolean }) => {
     const result = await cliPost("/cli/sessions/escalate", {
       session_id: session,
-      ...(opts.clear ? { clear: true } : { line }),
+      ...(opts.clear ? { clear: true } : { line, ...(opts.direct ? { direct: true } : {}) }),
       from_session: callingSession(),
     });
     const role = result.role ? `${c.cyan}@${result.role.handle}${c.reset}` : "";
@@ -3209,7 +3216,15 @@ program
         : `${c.dim}${result.short_id} was not escalated; it is already under ${role}${c.reset}`);
       return;
     }
-    console.log(`${c.green}ok${c.reset} escalated ${c.cyan}${result.short_id}${c.reset} ${c.dim}— in the person's needs input as${c.reset} ${role}${c.dim}: ${result.escalated_by_role.line} (cast escalate --clear ${result.short_id} to take it back)${c.reset}`);
+    if (!result.changed) {
+      console.log(`${c.dim}${result.short_id} already carries this line; nothing moved${c.reset}`);
+      return;
+    }
+    const where = result.reached?.direct
+      ? `${c.dim}— the session itself is in the person's needs input, from${c.reset} ${role}`
+      : `${c.dim}— in the person's needs input on your card (${result.reached?.short_id ?? "your session"}); the session stays under${c.reset} ${role}`;
+    const first = String(result.escalated_by_role.line).split("\n").find((l: string) => l.trim())?.trim() ?? "";
+    console.log(`${c.green}ok${c.reset} escalated ${c.cyan}${result.short_id}${c.reset} ${where}${c.dim}: ${first} (cast escalate --clear ${result.short_id} to take it back)${c.reset}`);
   });
 
 program
@@ -8728,6 +8743,92 @@ async function resolveSessionConversationId(
   }
 }
 
+/** A session's full conversation id from a short id, a full id, or nothing (this session). */
+async function resolveConversationFullId(
+  config: { auth_token?: string; convex_url?: string },
+  ref: string | undefined,
+): Promise<string> {
+  if (ref === undefined) {
+    const current = detectCurrentSessionId();
+    if (!current) {
+      console.error("No session detected — run this inside an agent session, or pass a session id (from `cast sessions`).");
+      process.exit(1);
+    }
+    const resolved = await resolveCurrentConversationId(current, {
+      readLocalMap: readLocalConversationMap,
+      resolveOnServer: (id) => resolveSessionConversationId(config, id),
+    });
+    if (!resolved) {
+      console.error("Could not resolve the current session — a session that just started may not have synced yet. Retry in a few seconds, or pass a session id (from `cast sessions`).");
+      process.exit(1);
+    }
+    ref = resolved;
+  }
+  const siteUrl = (config.convex_url ?? "").replace(".cloud", ".site");
+  const response = await cliFetchRead(`${siteUrl}/cli/read`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ api_token: config.auth_token, conversation_id: ref, start_line: 1, end_line: 1 }),
+  });
+  const result = await response.json();
+  if (result.error) {
+    console.error(`Error: ${result.details ? `${result.error}: ${result.details}` : result.error}`);
+    process.exit(1);
+  }
+  return result.conversation?.id ?? ref;
+}
+
+program
+  .command("share")
+  .description(
+    "Share a session: mint its share link, and with --public list it on your public profile\n" +
+    "and on the repository's public Sessions tab, where a stranger can open it.\n\n" +
+    "A share link alone is for whoever holds it. --public is the consent that makes the\n" +
+    "session world visible: it shows up under /u/<you> and on /r/<owner>/<repo>/sessions,\n" +
+    "and session blame on that public repository names it by title. --private takes it\n" +
+    "back down (the link keeps working for anyone who already has it).\n\n" +
+    "Examples:\n" +
+    "  cast share                    # share link for THIS session\n" +
+    "  cast share jx70ntf --public   # make that session public\n" +
+    "  cast share jx70ntf --private  # unlist it again"
+  )
+  .argument("[ref]", "Session id (short or full); defaults to the current session")
+  .option("--public", "Pin the session to your public profile, which lists it on the repository's public Sessions tab")
+  .option("--private", "Remove the session from your public profile")
+  .option("--json", "Output as JSON")
+  .action(async (ref: string | undefined, options: { public?: boolean; private?: boolean; json?: boolean }) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+    if (options.public && options.private) {
+      console.error("Pass --public or --private, not both.");
+      process.exit(1);
+    }
+    const conversationId = await resolveConversationFullId(config, ref);
+    let shareToken: string | undefined;
+    if (options.private) {
+      const result = await cliPost("/cli/sessions/unpin", { conversation_id: conversationId });
+      if (result?.error) { console.error(result.error); process.exit(1); }
+    } else if (options.public) {
+      const result = await cliPost("/cli/sessions/pin", { conversation_id: conversationId });
+      if (result?.error) { console.error(result.error); process.exit(1); }
+      shareToken = result.share_token;
+    } else {
+      const result = await cliPost("/cli/sessions/share", { conversation_id: conversationId });
+      if (result?.error) { console.error(result.error); process.exit(1); }
+      shareToken = result.share_token;
+    }
+    const url = shareToken ? `${WEB_URL}/share/${shareToken}` : undefined;
+    if (options.json) {
+      console.log(JSON.stringify({ conversation_id: conversationId, public: !!options.public, share_url: url ?? null }));
+      return;
+    }
+    if (options.private) console.log(`${c.green}ok${c.reset} No longer public`);
+    else console.log(`${c.green}ok${c.reset} ${url}${options.public ? `  ${c.dim}public${c.reset}` : ""}`);
+  });
+
 program
   .command("link")
   .description(
@@ -12711,25 +12812,26 @@ function describeEventScope(filter: { event_type: string; action?: string; repos
   return `on ${name} in ${where}`;
 }
 
-// ── Anchors ──────────────────────────────────────────────────────────────────
-// A standing agent member: one per personal workspace, one per team. It owns a
-// long-lived, pinned session that never completes, is woken by events, and
-// delegates code work to ephemeral `cast spawn` hands.
+// ── The workspace's agent ────────────────────────────────────────────────────
+// One standing agent per workspace (personal or team): the root role of its
+// org, named Chief of Staff by default (docs/architecture/org-staffing.md
+// S22). It owns a long-lived session that never completes, is woken by
+// events, and delegates code work to `cast spawn` hands. `cast anchor` is the
+// alias this agent has always answered to; every verb here is a door onto
+// the role.
+/** The one line printed when a workspace has no standing agent yet. */
+const noAgentLine = (scopeType: "team" | "user") => `${scopeType === "team" ? "The team" : "Your personal workspace"} has no agent yet. Seat one: cast org staff${scopeType === "team" ? " --team" : ""}`;
+
 const anchor = program
   .command("anchor")
-  .description("Manage your standing agent member (Anchor)")
+  .description("The workspace's standing agent (alias of its root role, cast role …)")
   .showHelpAfterError(true);
 
 anchor
   .command("create")
-  .description("Provision the Anchor for your personal workspace or a team")
-  .option("--team [id]", "Make it the team's shared anchor (default: your active team)")
-  .option("--name <name>", "Display name (default: Anchor)")
-  .option("--avatar <url>", "Avatar image URL")
-  .option("--persona <skill>", "Persona skill name the anchor should adopt")
-  .option("-C, --dir <path>", "Project the anchor lives and works in (default: current)")
-  .option("--model <model>", "Model override (e.g. opus, sonnet)")
-  .option("--no-bootstrap", "Skip the 'I'm online' first message")
+  .description("Seat the workspace's agent: its root role, Chief of Staff by default (same as cast org staff)")
+  .option("--team [id]", "Seat the team's agent (default: your active team)")
+  .option("-C, --dir <path>", "Project the agent lives and works in (default: current)")
   .option("--json", "Machine-readable output")
   .action(async (options: any) => {
     const config = readConfig();
@@ -12743,8 +12845,15 @@ anchor
       ? path.resolve(options.dir.replace(/^~/, process.env.HOME || "~"))
       : getRealCwd();
 
+    // The team is named outright on this write (CLAUDE.md: writes must be
+    // explicit): a bare --team resolves through the same resolver every
+    // other write uses, and the server refuses a team scope with no team.
     const scopeType = options.team ? "team" : "user";
-    const teamId = typeof options.team === "string" ? options.team : undefined;
+    const teamId = scopeType === "team" ? workspaceArgs(await readWorkspace(typeof options.team === "string" ? options.team : undefined)).team_id : undefined;
+    if (scopeType === "team" && !teamId) {
+      console.error("No team named: pass --team <name|id> or make a team the active workspace");
+      process.exit(1);
+    }
 
     const resp = await cliFetch(`${siteUrl}/cli/anchor/create`, {
       method: "POST",
@@ -12753,17 +12862,12 @@ anchor
         api_token: config.auth_token,
         scope_type: scopeType,
         team_id: teamId,
-        name: options.name,
-        avatar_url: options.avatar,
-        persona: options.persona,
         project_path: dir,
-        model: options.model,
-        bootstrap: options.bootstrap !== false,
       }),
     });
     if (!resp.ok) {
       const body = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
-      console.error(`Anchor create failed: ${body.error || resp.statusText}`);
+      console.error(`Could not seat the workspace's agent: ${body.error || resp.statusText}`);
       process.exit(1);
     }
     const result = (await resp.json()) as any;
@@ -12771,15 +12875,13 @@ anchor
       console.log(JSON.stringify(result, null, 2));
       return;
     }
-    const where = scopeType === "team" ? "team" : "your personal workspace";
+    const where = scopeType === "team" ? "the team" : "your personal workspace";
+    const name = result.role?.name ?? "Chief of Staff";
     if (result.already_existed) {
-      const row = await cliPost("/cli/anchor/resolve", { scope_type: scopeType, team_id: teamId }).catch(() => null);
-      const fwd = chiefForward(row, "create");
-      if (fwd) console.log(`${c.dim}${fwd.note}${c.reset}`);
-      console.log(`${c.yellow}•${c.reset} ${where} already has an anchor ${c.cyan}${result.conversation_id ? String(result.conversation_id).slice(0, 7) : ""}${c.reset}`);
+      console.log(`${c.yellow}•${c.reset} ${where} already has its agent, ${c.cyan}${name}${c.reset} ${c.dim}(${result.short_id ?? ""}) · cast role show ${result.role?.handle ?? "chief-of-staff"}${c.reset}`);
     } else {
       console.log(
-        `${c.green}✓${c.reset} anchor for ${c.bold}${where}${c.reset} provisioned ` +
+        `${c.green}✓${c.reset} ${c.bold}${name}${c.reset} seated for ${where} ` +
         `${c.dim}(${result.short_id})${c.reset} — coming online in ${c.dim}${dir.replace(process.env.HOME || "~", "~")}${c.reset}`,
       );
     }
@@ -12788,7 +12890,7 @@ anchor
 anchor
   .command("ls")
   .alias("list")
-  .description("List the anchors you can see")
+  .description("List the workspace agents you can see (yours and your teams')")
   .option("--json", "Machine-readable output")
   .action(async (options: any) => {
     const config = readConfig();
@@ -12804,7 +12906,7 @@ anchor
     });
     if (!resp.ok) {
       const body = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
-      console.error(`Anchor list failed: ${body.error || resp.statusText}`);
+      console.error(`Could not list the workspace agents: ${body.error || resp.statusText}`);
       process.exit(1);
     }
     const anchors = (await resp.json()) as any[];
@@ -12813,7 +12915,7 @@ anchor
       return;
     }
     if (!anchors.length) {
-      console.log(`${c.dim}No anchors yet. Create one: cast anchor create${c.reset}`);
+      console.log(`${c.dim}No workspace agent yet. Seat one: cast org staff${c.reset}`);
       return;
     }
     for (const a of anchors) {
@@ -12830,9 +12932,9 @@ anchor
 
 anchor
   .command("wake")
-  .description("Send a message to an anchor (auto-resumes it if dormant)")
-  .argument("<message>", stdinText("What to tell the anchor"))
-  .option("--team [id]", "Target the team anchor (default: your personal anchor)")
+  .description("Send a message to the workspace's agent (auto-resumes it if dormant)")
+  .argument("<message>", stdinText("What to tell it"))
+  .option("--team [id]", "The team's agent (default: your personal workspace's)")
   .action(async (message: string, options: any) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -12850,7 +12952,7 @@ anchor
     });
     const anchorRow = resolveResp.ok ? ((await resolveResp.json()) as any) : null;
     if (!anchorRow?._id) {
-      console.error(`No ${scopeType === "team" ? "team" : "personal"} anchor found. Create one: cast anchor create${scopeType === "team" ? " --team" : ""}`);
+      console.error(`${noAgentLine(scopeType)}`);
       process.exit(1);
     }
     const fwd = chiefForward(anchorRow, "wake", { message, from_session: callingSession() });
@@ -12867,7 +12969,7 @@ anchor
     });
     if (!resp.ok) {
       const body = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
-      console.error(`Anchor wake failed: ${body.error || resp.statusText}`);
+      console.error(`Could not wake it: ${body.error || resp.statusText}`);
       process.exit(1);
     }
     console.log(`${c.green}✓${c.reset} woke ${c.cyan}${anchorRow.name}${c.reset}`);
@@ -12875,14 +12977,14 @@ anchor
 
 anchor
   .command("brief")
-  .description("Re-send an anchor its standing briefing (who it is, its routines, how it reaches people)")
-  .option("--team [id]", "Target the team anchor (default: your personal anchor)")
+  .description("Re-send the workspace's agent its standing briefing (who it is, its routines, how it reaches people)")
+  .option("--team [id]", "The team's agent (default: your personal workspace's)")
   .action(async (options: any) => {
     const scopeType = options.team ? "team" : "user";
     const teamId = typeof options.team === "string" ? options.team : undefined;
     const anchorRow = await cliPost("/cli/anchor/resolve", { scope_type: scopeType, team_id: teamId });
     if (!anchorRow?._id) {
-      console.error(`No ${scopeType === "team" ? "team" : "personal"} anchor found. Create one: cast anchor create${scopeType === "team" ? " --team" : ""}`);
+      console.error(`${noAgentLine(scopeType)}`);
       process.exit(1);
     }
     const fwd = chiefForward(anchorRow, "brief");
@@ -12899,8 +13001,8 @@ anchor
 anchor
   .command("rm")
   .alias("decommission")
-  .description("Retire an anchor: stop it being persistent and drop its Slack mappings")
-  .option("--team [id]", "Target the team anchor (default: your personal anchor)")
+  .description("Retire the workspace's agent: stop it being persistent and drop its Slack mappings")
+  .option("--team [id]", "The team's agent (default: your personal workspace's)")
   .action(async (options: any) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -12917,7 +13019,7 @@ anchor
     });
     const anchorRow = resolveResp.ok ? ((await resolveResp.json()) as any) : null;
     if (!anchorRow?._id) {
-      console.error(`No ${scopeType === "team" ? "team" : "personal"} anchor found.`);
+      console.error(`${noAgentLine(scopeType)}`);
       process.exit(1);
     }
     const fwd = chiefForward(anchorRow, "rm");
@@ -12942,9 +13044,9 @@ anchor
 
 anchor
   .command("link-channel")
-  .description("Map a Slack channel to an anchor so @mentions there wake it")
+  .description("Map a Slack channel to the workspace's agent so @mentions there wake it")
   .argument("<channel>", "Slack channel id (e.g. C0123ABCD)")
-  .option("--team [id]", "Link to the team anchor (default: your personal anchor)")
+  .option("--team [id]", "Link to the team's agent (default: your personal workspace's)")
   .option("-C, --dir <path>", "Project cwd for work from this channel")
   .action(async (channel: string, options: any) => {
     const config = readConfig();
@@ -12975,20 +13077,20 @@ anchor
       process.exit(1);
     }
     console.log(
-      `${c.green}✓${c.reset} ${channel} → your ${options.team ? "team" : "personal"} anchor` +
+      `${c.green}✓${c.reset} ${channel} → ${options.team ? "the team's" : "your personal workspace's"} agent` +
       `${result.replaced ? ` ${c.dim}(replaced)${c.reset}` : ""}`,
     );
   });
 
 anchor
   .command("say")
-  .description("Speak as the anchor: post in codecast chat (--chat / --dm) or in Slack (--channel). Used by the anchor itself")
-  .option("--chat <channel>", "Codecast channel: id or #name. Posts as the anchor")
-  .option("--dm <handles>", "Message people directly, as the anchor: comma-separated @handles")
+  .description("Speak as the workspace's agent: post in codecast chat (--chat / --dm) or in Slack (--channel). Used by the agent itself")
+  .option("--chat <channel>", "Codecast channel: id or #name. Posts as the agent")
+  .option("--dm <handles>", "Message people directly, as the agent: comma-separated @handles")
   .option("--channel <id>", "Slack channel id")
   .option("--thread <id>", "Reply on a thread: a codecast thread root id (with --chat) or a Slack thread ts (with --channel)")
-  .option("--team <name|id>", "Team whose roster resolves --dm handles / --chat #names (a team anchor uses its own team)")
-  .option("--personal", "Speak as your personal anchor (default when not run from inside an anchor session)")
+  .option("--team <name|id>", "Team whose roster resolves --dm handles / --chat #names (a team's agent uses its own team)")
+  .option("--personal", "Speak as your personal workspace's agent (default when not run from inside an agent's session)")
   .option("--json", "Machine-readable output")
   .argument("<text>", stdinText("Message text"))
   .action(async (rawText: string, options: any) => {
@@ -13023,7 +13125,7 @@ anchor
         return;
       }
       console.log(
-        `${c.green}✓${c.reset} said as the anchor ${c.dim}${result.message_id} · channel ${result.channel_id}${c.reset}`,
+        `${c.green}✓${c.reset} said as the workspace's agent ${c.dim}${result.message_id} · channel ${result.channel_id}${c.reset}`,
       );
       return;
     }
@@ -13621,7 +13723,7 @@ org
     // A role's standing agent is drawn once, on its role's line; only the
     // workspace anchor that is nobody's seat stands on its own.
     for (const a of tree.anchors.filter((x: any) => !x.org_role_id)) {
-      console.log(`  ${c.green}${a.name}${c.reset} ${c.dim}· anchor · ${a.status}${orgStandingLine(a)}${c.reset}`);
+      console.log(`  ${c.green}${a.name}${c.reset} ${c.dim}· workspace agent · ${a.status}${orgStandingLine(a)}${c.reset}`);
     }
   });
 
@@ -13751,7 +13853,7 @@ registerOrgTemplateCommands(program, orgDeps);
 // exist and every mention in chat ends at the ten-minute timeout.
 const chat = program
   .command("chat")
-  .description("Team chat: channels, threads, and the anchor's replies")
+  .description("Team chat: channels, threads, and the workspace agent's replies")
   .showHelpAfterError(true);
 
 // A `cast` running inside an agent session is an AGENT typing, not the
@@ -13967,17 +14069,17 @@ chat
       console.log(`${c.yellow}•${c.reset} not relayed to the thread's session: ${result.session_relay.skipped}`);
     }
     if (result.anchor_thinking_message_id && result.anchor_listening) {
-      console.log(`${c.dim}  the anchor follows this thread and is reading — it answers only if the line was for it${c.reset}`);
+      console.log(`${c.dim}  the workspace's agent follows this thread and is reading — it answers only if the line was for it${c.reset}`);
     } else if (result.anchor_thinking_message_id) {
-      console.log(`${c.dim}  the anchor is answering — placeholder ${result.anchor_thinking_message_id}${c.reset}`);
+      console.log(`${c.dim}  the workspace's agent is answering — placeholder ${result.anchor_thinking_message_id}${c.reset}`);
     } else if (result.anchor_wake_skipped) {
-      console.log(`${c.yellow}•${c.reset} the anchor was not woken: ${result.anchor_wake_skipped}`);
+      console.log(`${c.yellow}•${c.reset} the workspace's agent was not woken: ${result.anchor_wake_skipped}`);
     }
   });
 
 chat
   .command("reply")
-  .description("Fill the placeholder the anchor was woken for, or pass on it (run by the anchor)")
+  .description("Fill the placeholder the workspace's agent was woken for, or pass on it (run by the agent)")
   .argument("<message_id>", "The placeholder id from the wake prompt")
   .argument("[text]", stdinText("Your reply, omitted with --pass"))
   .option("--status <status>", "'done' (default), 'error' to report a turn you could not finish, or 'passed'")
@@ -14002,15 +14104,15 @@ chat
 
 chat
   .command("follow")
-  .description("Turn the anchor's answers in one thread on or off")
+  .description("Turn the workspace agent's answers in one thread on or off")
   .argument("<root_id>", "Thread root message id")
-  .option("--off", "Stop the anchor answering plain replies in this thread")
+  .option("--off", "Stop the agent answering plain replies in this thread")
   .action(async (rootId: string, options: any) => {
     const result = await cliPost("/cli/chat/anchor-follow", {
       root_id: rootId, follow: !options.off,
     });
     console.log(
-      `${c.green}✓${c.reset} anchor ${result.follow ? "follows" : "stops following"} that thread`,
+      `${c.green}✓${c.reset} the workspace's agent ${result.follow ? "follows" : "stops following"} that thread`,
     );
   });
 
@@ -14028,7 +14130,7 @@ chat
 
 chat
   .command("stop")
-  .description("Stop an in-flight anchor reply now instead of waiting out its deadline")
+  .description("Stop the workspace agent's in-flight reply now instead of waiting out its deadline")
   .argument("<message_id>", "The thinking placeholder's message id")
   .action(async (messageId: string) => {
     const result = await cliPost("/cli/chat/stop", { message_id: messageId });
@@ -16418,7 +16520,7 @@ work
   .description("Add a comment to a task")
   .argument("<short_id>", "Task short ID")
   .argument("<text>", stdinText("Comment text"))
-  .option("-t, --type <type>", "Comment type: note, progress, blocker, review", "note")
+  .option("-t, --type <type>", "Comment type: note or progress (the board's record, reaches no inbox); blocker or review (reach the people following the task)", "note")
   .option("-a, --author <name>", "Ignored: the author is the identity behind your token (a role signs as the role); kept for older scripts")
   .action(async (shortId: string, text: string, options: any) => {
     const sessionId = detectCurrentSessionId();

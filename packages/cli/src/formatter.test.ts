@@ -43,6 +43,23 @@ function result(sessions: any[], counts: Record<string, number> = {}) {
   };
 }
 
+// A role's card carries what it put in front of the person (org-roles-run-
+// work.md R1, revised): one row per session with the first line of the reason
+// and the hand back; a child put there directly wears the role's line.
+describe("formatMonitor prints a role's escalations", () => {
+  test("the role's card lists each session, first line only, with the hand back", () => {
+    const out = strip(formatMonitor(result([session({ escalations: [{ conversation_id: "jx7child000000000000000000000000", line: "the pricing copy needs your eye\n\nTwo options are in the thread.", at: Date.now() - 60_000 }] })]), { all: true }));
+    expect(out).toContain("↑ jx7chil");
+    expect(out).toContain("the pricing copy needs your eye");
+    expect(out).not.toContain("Two options");
+    expect(out).toContain("cast escalate --clear jx7chil to hand back");
+  });
+  test("a child put in front of the person directly wears the role's line", () => {
+    const out = strip(formatMonitor(result([session({ escalated_by_role: { role_id: "r", line: "a permission prompt is open", at: 1, direct: true }, role: { handle: "growth", name: "Growth" } })]), { all: true }));
+    expect(out).toContain("↑ @growth: a permission prompt is open");
+  });
+});
+
 // The liveness glyph is a three-way verdict, not a boolean. A row whose last
 // word from its device was "I am working", with no heartbeat behind it now, is
 // unverifiable: its daemon stopped answering and nobody watched the agent end.

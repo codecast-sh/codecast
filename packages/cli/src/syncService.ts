@@ -1602,6 +1602,18 @@ export class SyncService {
     return (await this.getConversationOwnerInfo(conversationId))?.ownerDeviceId ?? null;
   }
 
+  /** Move sessions this device still owns under a previous login onto the
+   *  account this process is signed in as. No resume: the processes are here. */
+  async claimDeviceAccount(previousUserId: string, deviceId: string): Promise<{
+    moved: number; more: boolean; pending?: boolean; error?: string;
+  }> {
+    return await this.mutate("devices:claimDeviceAccount", {
+      api_token: this.apiToken,
+      previous_user_id: previousUserId,
+      device_id: deviceId,
+    });
+  }
+
   async isWorktreeShared(conversationId: string, worktreePath: string): Promise<boolean> {
     const rows = await this.client.query("cloud:hostSessions" as any, {
       api_token: this.apiToken,
