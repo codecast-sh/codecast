@@ -94,7 +94,7 @@ test("the empty room is one card with the two ways forward", async () => {
   const card = r.container.querySelector(".rt-empty")!;
   expect(card.textContent).toContain("Add an agent to the room. It hears the room and answers here.");
   const buttons = [...card.querySelectorAll("button")].map((b) => b.textContent?.trim());
-  expect(buttons).toEqual(["Add an agent", "Transcribe only"]);
+  expect(buttons).toEqual(["Add an agent", "Transcribe without one"]);
   // The card is the one call to add an agent: the header's own button steps
   // aside while it is on screen. The composer is there.
   expect(r.container.querySelector(".rt-head .rt-add")).toBeNull();
@@ -325,13 +325,13 @@ test("a page link typed on a line of its own is a pill in the rail and a card on
   await page.unmount();
 });
 
-test("the stage keeps the placeholder to the bare words, and the chip follows a title that lands later", async () => {
+test("the stage's placeholder says the agent hears, without its title, and the chip follows a title that lands later", async () => {
   useInboxStore.setState({ currentUser: { _id: "u-me" }, liveRooms: [], sessions: {} } as any);
   const routes = [{ kind: "session", target: "conv_other", mode: "live", added_by: "u-me" }];
   const r = await render(
     <RoomThread roomKey={ROOM} call={call({ routes })} rows={[]} liveTranscriptId="t1" surface="stage" seated />,
   );
-  expect(r.container.querySelector("textarea")?.getAttribute("placeholder")).toBe("Message the room");
+  expect(r.container.querySelector("textarea")?.getAttribute("placeholder")).toBe("Message the room · the agent hears you");
   expect(r.container.querySelector(".rt-chip")?.textContent).toContain("new agent");
   await act(() => {
     useInboxStore.setState({
@@ -347,7 +347,7 @@ test("the recap's closed line is the first sentence, decimals included", async (
   const r = await render(
     <RoomThread
       roomKey={ROOM}
-      call={call({ status: "ended", summary: "We raised 3.5 million. Then the plan changed." })}
+      call={call({ status: "ended", summary: "We raised 3.5 million. Then the plan changed.", segments: [seg(0, "Ada", "we raised it", 0)] })}
       rows={[]}
       liveTranscriptId={null}
       surface="page"
@@ -358,4 +358,10 @@ test("the recap's closed line is the first sentence, decimals included", async (
   // With nothing but the density control to show, the page's header is quiet.
   expect(r.container.querySelector(".rt-head")?.classList.contains("rt-head-quiet")).toBe(true);
   await r.unmount();
+  // No spoken words, nothing for the density control to act on: no header at all.
+  const bare = await render(
+    <RoomThread roomKey={ROOM} call={call({ status: "ended" })} rows={[]} liveTranscriptId={null} surface="page" seated={false} />,
+  );
+  expect(bare.container.querySelector(".rt-head")).toBeNull();
+  await bare.unmount();
 });

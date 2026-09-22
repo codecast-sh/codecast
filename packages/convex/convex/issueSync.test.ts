@@ -275,7 +275,7 @@ describe("markSourceSynced status transitions", () => {
 
 /* ---------------- The engine on a fake db (S3, S4, S8) ---------------- */
 
-import { applyRemote, pushTask } from "./issueSync";
+import { applyRemote, pushTask, stampPushed } from "./issueSync";
 import { LinearGraphqlError, fetchLabels, findUserByEmail } from "./linearApi";
 
 /** A ctx with a fake db and a scheduler that records instead of running. */
@@ -584,5 +584,29 @@ describe("LinearGraphqlError", () => {
     expect(e.message).toBe("Linear GraphQL: You are not allowed to create labels in this team.");
     expect(e.forbidden).toBe(true);
     expect(new LinearGraphqlError([{ message: "boom" }]).forbidden).toBe(false);
+  });
+});
+
+describe("push errors survive inbound", () => {
+  test("a pull that finds the same issue keeps the last push's error and still writes nothing", async () => {
+    const parked = structuredClone(TASK);
+    parked.external.last_error = "Linear kept these labels off LIN-482: personal";
+    const { ctx, db, tables } = engineCtx({
+      tasks: [parked], issue_sync_sources: [SOURCE], users: [ADA], task_history: [], task_comments: [],
+    });
+    await apply(ctx, { source_id: "src_1", issue: sameIssue() });
+    expect(db._patched).toEqual([]);
+    expect(tables.tasks[0].external.last_error).toBe("Linear kept these labels off LIN-482: personal");
+  });
+
+  test("stampPushed records refused labels in the task's history", async () => {
+    const { ctx, tables } = engineCtx({ tasks: [structuredClone(TASK)], task_history: [] });
+    await (stampPushed as any)._handler(ctx, { task_id: "task_1", fields: ["labels"], error: "kept off", refused_labels: ["personal", "ops"] });
+    expect(tables.tasks[0].external.field_ts.labels).toBeGreaterThan(0);
+    expect(tables.tasks[0].external.last_error).toBe("kept off");
+    expect(tables.task_history[0]).toMatchObject({ actor_type: "system", action: "sync_refused", field: "labels", new_value: "personal, ops" });
+    await (stampPushed as any)._handler(ctx, { task_id: "task_1", fields: ["title"] });
+    expect(tables.tasks[0].external.last_error).toBeUndefined();
+    expect(tables.task_history.length).toBe(1);
   });
 });

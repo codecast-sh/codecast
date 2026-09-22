@@ -102,7 +102,7 @@ export function TeamVisibilityControl({ team }: { team: TeamSharingFacts }) {
           <DialogHeader>
             <DialogTitle className="text-sol-text">Show {team.name} more?</DialogTitle>
             <DialogDescription className="text-sol-text-muted">
-              Teammates in {team.name} see {currentOption.sees} today. {raiseOption?.label} means {raiseOption?.detail.replace(/\.$/, "")}. Choose which sessions that applies to.
+              Teammates in {team.name} see {currentOption.sees} today. With {raiseOption?.label}, {raiseOption ? lowerFirst(raiseOption.detail) : ""} Choose which sessions that applies to.
             </DialogDescription>
           </DialogHeader>
           {raiseTo && raiseOption && (
@@ -135,6 +135,10 @@ export function TeamVisibilityControl({ team }: { team: TeamSharingFacts }) {
       </Dialog>
     </>
   );
+}
+
+function lowerFirst(text: string): string {
+  return text.charAt(0).toLowerCase() + text.slice(1);
 }
 
 /** Plain words for the row under a team's name: who is on it and what flows to it. */

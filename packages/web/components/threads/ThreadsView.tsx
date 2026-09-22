@@ -10,6 +10,7 @@ import { memberName } from "../../lib/chatViews";
 import {
   THREAD_KIND_META,
   THREAD_KIND_SPECS,
+  afterDone,
   cardsForChip,
   chipFromSearch,
   dmCards,
@@ -21,6 +22,7 @@ import {
   unreadByChip,
   unreadOnlyCards,
   visibleChips,
+  walkIndex,
   type ThreadCardModel,
 } from "../../lib/threadKinds";
 import type { ThreadInboxRow, ThreadsCursor } from "../../store/threadTypes";
@@ -147,14 +149,12 @@ export function ThreadsView({ present }: { present: boolean }) {
     return cards[Math.min(cards.length - 1, Math.max(0, index))];
   }, [cards]);
   const move = useCallback((delta: number): boolean => {
-    if (cards.length === 0) return false;
-    const from = cursorIndex >= 0 ? cursorIndex : lastIndexRef.current - (delta > 0 ? 1 : 0);
-    const target = cardAt(from + delta);
+    const target = cards[walkIndex(cards.length, cursorIndex, lastIndexRef.current, delta)];
     if (!target) return false;
     // A walk reads: the next row opens as the cursor lands on it.
     openCard(target);
     return true;
-  }, [cards.length, cursorIndex, cardAt, openCard]);
+  }, [cards, cursorIndex, openCard]);
 
   // Done: archive the follow (or, for a kind with no follow to archive, mark
   // it read) and step to the next row, keeping the open state — a reader
@@ -162,7 +162,7 @@ export function ThreadsView({ present }: { present: boolean }) {
   const done = useCallback((): boolean => {
     const card = cursorIndex >= 0 ? cards[cursorIndex] : undefined;
     if (!card) return false;
-    const next = cards[cursorIndex + 1] ?? cards[cursorIndex - 1];
+    const next = afterDone(cards, cursorIndex);
     if (isDismissible(card)) {
       const row = card.source as ThreadInboxRow;
       useInboxStore.getState().dismissThread(row.kind, row.root_key);
@@ -187,32 +187,36 @@ export function ThreadsView({ present }: { present: boolean }) {
   }, [cards, cursorIndex, cursor, cardAt, openCard]);
 
   // The keyboard: the app's list chords for the walk, the page's own for the
-  // inbox verbs. Both stand only while the reader is here.
+  // inbox verbs. The contexts stand only while the reader is here, and every
+  // handler declines when they are not: a Threads pane in a background tab
+  // stays mounted, and its handlers must not answer a `j` meant for the list
+  // page in the active one.
   useShortcutContext("list", present);
   useShortcutContext("threads", present);
-  useShortcutAction("list.down", () => move(1));
-  useShortcutAction("list.up", () => move(-1));
-  useShortcutAction("list.first", () => { const c = cardAt(0); if (!c) return false; openCard(c); return true; });
-  useShortcutAction("list.last", () => { const c = cardAt(cards.length - 1); if (!c) return false; openCard(c); return true; });
-  useShortcutAction("list.open", () => {
+  const here = useCallback((fn: () => boolean) => () => (present ? fn() : false), [present]);
+  useShortcutAction("list.down", here(() => move(1)));
+  useShortcutAction("list.up", here(() => move(-1)));
+  useShortcutAction("list.first", here(() => { const c = cardAt(0); if (!c) return false; openCard(c); return true; }));
+  useShortcutAction("list.last", here(() => { const c = cardAt(cards.length - 1); if (!c) return false; openCard(c); return true; }));
+  useShortcutAction("list.open", here(() => {
     const card = cursorIndex >= 0 ? cards[cursorIndex] : cardAt(lastIndexRef.current);
     if (!card) return false;
     toggle(card);
     return true;
-  });
-  useShortcutAction("threads.done", done);
-  useShortcutAction("threads.reply", reply);
-  useShortcutAction("threads.openIn", () => {
+  }));
+  useShortcutAction("threads.done", here(done));
+  useShortcutAction("threads.reply", here(reply));
+  useShortcutAction("threads.openIn", here(() => {
     const card = cursorIndex >= 0 ? cards[cursorIndex] : undefined;
     if (!card) return false;
     openCardIn(card, router);
     return true;
-  });
-  useShortcutAction("threads.collapse", () => {
+  }));
+  useShortcutAction("threads.collapse", here(() => {
     if (!cursor.open) return false;
     setCursor({ ...cursor, open: false });
     return true;
-  });
+  }));
 
   const nameOf = useCallback((userId: string) => memberName(byId.get(String(userId))), [byId]);
   const ctx = useMemo<ThreadsPageContextValue>(
@@ -223,7 +227,7 @@ export function ThreadsView({ present }: { present: boolean }) {
   // ── Header + chips ────────────────────────────────────────────────────────
   const viewUnread = counts[chip];
   const markAll = useCallback(() => markViewRead(cards, chip, teamId), [cards, chip, teamId]);
-  useShortcutAction("threads.markAllRead", () => { if (viewUnread === 0) return false; markAll(); return true; });
+  useShortcutAction("threads.markAllRead", here(() => { if (viewUnread === 0) return false; markAll(); return true; }));
   const chipItems = useMemo(
     () => visibleChips(chatOn).map((c) => ({
       key: c.key,
