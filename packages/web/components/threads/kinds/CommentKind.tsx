@@ -1,19 +1,14 @@
 import { useMemo } from "react";
 import { CheckCircle2, FileCode2, MessageSquare, Quote } from "lucide-react";
-import { useInboxStore, type ThreadInboxRow } from "../../../store/inboxStore";
+import { useInboxStore } from "../../../store/inboxStore";
 import { useCurrentUser } from "../../../hooks/useCurrentUser";
 import { useCommentActions, useConversationCommentsSync } from "../../../hooks/useConversationComments";
-import {
-  isAgentComment,
-  isThreadResolved,
-  parseCommentThreadRootKey,
-  webThreadKeyFromAnchor,
-  type Comment,
-  type CommentThread as CommentThreadModel,
-} from "../../../lib/commentThread";
+import { isAgentComment, isThreadResolved, type CommentThread as CommentThreadModel } from "../../../lib/commentThread";
 import { sessionLabel } from "../../../lib/notificationTypes";
 import { cleanContent } from "../../../lib/conversationProcessor";
-import { replyPreview, type CardPreview, type ThreadCardModel } from "../../../lib/threadCards";
+import type { ThreadCardModel } from "../../../lib/threadCards";
+import { commentAnchorOf as anchorOf, rowOf } from "../../../lib/threadRows";
+import { useCommentThreadRows } from "../../../hooks/useThreadPreviews";
 import { AgentIcon } from "../../ConversationList";
 import { CommentThread } from "../../comments/CommentThread";
 import { FileLineThread } from "../../comments/FileLineThread";
@@ -26,34 +21,6 @@ import { useWatchEffect } from "../../../hooks/useWatchEffect";
 // and previews the newest reply (or the root comment while it has none);
 // open, the anchor line, then the whole thread through the same renderers
 // the conversation's rail uses, composer and agent ping included.
-
-function rowOf(card: ThreadCardModel): ThreadInboxRow {
-  return card.source as ThreadInboxRow;
-}
-
-/** Where the thread lives and which anchor it hangs on, from the row. */
-function anchorOf(row: ThreadInboxRow): { conversationId: string; webKey: string; messageId?: string; filePath?: string; lineNumber?: number } {
-  const parsed = parseCommentThreadRootKey(row.root_key);
-  const conversationId = String(row.conversation_id ?? parsed.conversationId);
-  const webKey = webThreadKeyFromAnchor(parsed.anchorKey);
-  return {
-    conversationId,
-    webKey,
-    messageId: row.message_id ? String(row.message_id) : undefined,
-    filePath: row.file_path,
-    lineNumber: row.line_number,
-  };
-}
-
-/** The rows of one thread, oldest first — from the page's ONE assembled map
- *  (threadsContext.commentThreads), never a per-card scan of the whole
- *  comments collection. */
-function useThreadComments(rootKey: string): Comment[] {
-  const { commentThreads } = useThreadsPage();
-  return commentThreads.get(rootKey) ?? EMPTY_COMMENTS;
-}
-
-const EMPTY_COMMENTS: Comment[] = [];
 
 function useAgentType(conversationId: string): string {
   return useInboxStore(
@@ -80,20 +47,6 @@ export function CommentLabel({ card }: { card: ThreadCardModel }) {
       {label ?? fallback}
     </>
   );
-}
-
-/** The newest reply; a thread with only its root previews the root. */
-export function useCommentPreview(card: ThreadCardModel): CardPreview | null {
-  const row = rowOf(card);
-  const comments = useThreadComments(row.root_key);
-  const { nameOf } = useThreadsPage();
-  const reply = replyPreview(row.last_reply, nameOf);
-  if (reply?.who === undefined && reply?.whoKind === "user") reply.who = "Teammate";
-  if (reply) return reply;
-  const root = comments[0];
-  if (!root) return null;
-  const agent = isAgentComment(root);
-  return { who: agent ? "Agent" : (root as any).user?.name ?? "Teammate", whoKind: agent ? "agent" : "user", text: cleanContent(root.content).replace(/\s+/g, " ").trim().slice(0, 160) };
 }
 
 /** The anchor line: a quoted excerpt of the message, the file and line, or
@@ -132,7 +85,7 @@ function AnchorLine({ conversationId, messageId, filePath, lineNumber }: { conve
 export function CommentMeta({ card }: { card: ThreadCardModel }) {
   const row = rowOf(card);
   const anchor = anchorOf(row);
-  const comments = useThreadComments(row.root_key);
+  const comments = useCommentThreadRows(card);
   const resolved = isThreadResolved(comments);
   return (
     <div className="th-card-anchorrow">
@@ -151,7 +104,7 @@ export function CommentExpanded({ card, seen, focusComposer }: { card: ThreadCar
   const anchor = anchorOf(row);
   const { conversationId, webKey, messageId, filePath, lineNumber } = anchor;
   useConversationCommentsSync(conversationId);
-  const comments = useThreadComments(row.root_key);
+  const comments = useCommentThreadRows(card);
   const { user, isAuthenticated } = useCurrentUser();
   const currentUserId = user?._id as string | undefined;
   const agentType = useAgentType(conversationId);

@@ -12,14 +12,24 @@ import {
   type ThreadCardModel,
   type ThreadKindMeta,
 } from "./threadCards";
-import { ChatExpanded, ChatGlyph, ChatLabel, ChatMeta, useChatPreview } from "../components/threads/kinds/ChatThreadKind";
-import { DmExpanded, DmGlyph, DmLabel, useDmPreview } from "../components/threads/kinds/DmKind";
-import { CommentExpanded, CommentLabel, CommentMeta, useCommentPreview } from "../components/threads/kinds/CommentKind";
-import { CodeExpanded, CodeLabel, CodeMeta, useCodePreview } from "../components/threads/kinds/CodeKind";
-import { TaskExpanded, TaskLabel, TaskMeta, useTaskPreview } from "../components/threads/kinds/TaskKind";
-import { SessionExpanded, SessionLabel, useSessionPreview } from "../components/threads/kinds/SessionKind";
-import { PageExpanded, PageLabel, usePagePreview } from "../components/threads/kinds/PageKind";
-import { QuestionExpanded, QuestionLabel, useQuestionPreview } from "../components/threads/kinds/QuestionKind";
+import { ChatExpanded, ChatGlyph, ChatLabel, ChatMeta } from "../components/threads/kinds/ChatThreadKind";
+import { DmExpanded, DmGlyph, DmLabel } from "../components/threads/kinds/DmKind";
+import { CommentExpanded, CommentLabel, CommentMeta } from "../components/threads/kinds/CommentKind";
+import { CodeExpanded, CodeLabel, CodeMeta } from "../components/threads/kinds/CodeKind";
+import { TaskExpanded, TaskLabel, TaskMeta } from "../components/threads/kinds/TaskKind";
+import { SessionExpanded, SessionLabel } from "../components/threads/kinds/SessionKind";
+import { PageExpanded, PageLabel } from "../components/threads/kinds/PageKind";
+import { QuestionExpanded, QuestionLabel } from "../components/threads/kinds/QuestionKind";
+import {
+  useChatPreview,
+  useCodePreview,
+  useCommentPreview,
+  useDmPreview,
+  usePagePreview,
+  useQuestionPreview,
+  useSessionPreview,
+  useTaskPreview,
+} from "../hooks/useThreadPreviews";
 
 // The Threads page's kind registry: one spec per card kind, each saying how a
 // row reads collapsed, what it shows open, and how it marks itself read. The

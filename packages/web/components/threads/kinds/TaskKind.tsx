@@ -1,7 +1,9 @@
 import Link from "next/link";
-import { useInboxStore, useTrackedStore, type TaskDetail, type ThreadInboxRow } from "../../../store/inboxStore";
+import { useInboxStore, type TaskDetail } from "../../../store/inboxStore";
 import { useSyncTaskDetail } from "../../../hooks/useSyncTasks";
-import { replyPreview, type CardPreview, type ThreadCardModel } from "../../../lib/threadCards";
+import { useTaskRow } from "../../../hooks/useThreadPreviews";
+import type { ThreadCardModel } from "../../../lib/threadCards";
+import { rowOf, taskIdOf } from "../../../lib/threadRows";
 import { TaskStatusBadge } from "../../TaskStatusBadge";
 import { Badge } from "../../ui/badge";
 import { Avatar, TaskCommentStream, TimeAgo } from "../../tasks/TaskCommentStream";
@@ -21,27 +23,6 @@ import { useWatchEffect } from "../../../hooks/useWatchEffect";
 // optimistic reply and the server echo land in tasks[id].comments exactly as
 // they do on the task page.
 
-function rowOf(card: ThreadCardModel): ThreadInboxRow {
-  return card.source as ThreadInboxRow;
-}
-
-function taskIdOf(card: ThreadCardModel): string {
-  const row = rowOf(card);
-  return String(row.task_id ?? row.root_key);
-}
-
-/** The task row, woken only by the fields a card shows. */
-function taskSig(t: TaskDetail | undefined): string {
-  if (!t) return "";
-  const last = t.comments?.[t.comments.length - 1];
-  return `${t.short_id}|${t.external?.identifier ?? ""}|${t.external?.synced_at ?? ""}|${t.external?.last_error ?? ""}|${t.title}|${t.status}|${t.priority ?? ""}|${t.assignee_info?.name ?? ""}|${t.plan?.short_id ?? ""}|${(t.description ?? "").length}|${t.comments?.length ?? 0}|${last?._id ?? ""}|${last?.text?.length ?? 0}`;
-}
-
-function useTaskRow(taskId: string): TaskDetail | undefined {
-  const s = useTrackedStore([(s) => taskSig(s.tasks[taskId] as TaskDetail | undefined)]);
-  return s.tasks[taskId] as TaskDetail | undefined;
-}
-
 /** Short id AND title: the head label is the one column every kind shares,
  *  and a bare id is unscannable in a mixed list. The status rides along as
  *  a small badge so a done task reads as done before it is opened. */
@@ -55,10 +36,6 @@ export function TaskLabel({ card }: { card: ThreadCardModel }) {
       {task?.status && <TaskStatusBadge status={task.status} />}
     </>
   );
-}
-
-export function useTaskPreview(card: ThreadCardModel): CardPreview | null {
-  return replyPreview(rowOf(card).last_reply);
 }
 
 /** The status row: priority, assignee, plan, age. */

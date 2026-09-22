@@ -1,12 +1,11 @@
-import { useCallback } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { CheckCircle2, FileCode2, GitCommitHorizontal, GitPullRequest } from "lucide-react";
-import { parseCodeThreadRootKey } from "@codecast/shared/comments";
-import { useInboxStore, type ThreadInboxRow } from "../../../store/inboxStore";
-import { useCodeComments } from "../../../hooks/useSyncCodeComments";
+import { useInboxStore } from "../../../store/inboxStore";
+import { useCodeThreadRows } from "../../../hooks/useThreadPreviews";
 import { useLineComments } from "../../../hooks/useLineComments";
-import { serverCommentId, threadResolved, threadSide, type CodeCommentRow } from "../../../lib/prView";
-import { replyPreview, type CardPreview, type ThreadCardModel } from "../../../lib/threadCards";
+import { serverCommentId, threadResolved, threadSide } from "../../../lib/prView";
+import type { ThreadCardModel } from "../../../lib/threadCards";
+import { codeAnchorOf as anchorOf, rowOf } from "../../../lib/threadRows";
 import { PRLineThread } from "../../pr/PRThread";
 import { useTailPin } from "../cardWindow";
 
@@ -17,39 +16,9 @@ import { useTailPin } from "../cardWindow";
 // thread the commit page draws under the line, composer and resolve control
 // included.
 
-function rowOf(card: ThreadCardModel): ThreadInboxRow {
-  return card.source as ThreadInboxRow;
-}
-
-/** Where the thread hangs, from the row's typed refs or, failing those, its key. */
-function anchorOf(row: ThreadInboxRow): { repository: string; ref: string; filePath?: string; lineNumber?: number } {
-  const parsed = parseCodeThreadRootKey(row.root_key);
-  return {
-    repository: row.repository ?? parsed.repository,
-    ref: row.ref ?? parsed.ref,
-    filePath: row.file_path ?? parsed.filePath,
-    lineNumber: row.line_number ?? parsed.lineNumber,
-  };
-}
-
 /** The pull request's number, when the row names one the store has seen. */
 function usePrNumber(prId: string | undefined): number | undefined {
   return useInboxStore((s) => (prId ? (s.pullRequests as Record<string, any>)[prId]?.number : undefined));
-}
-
-/** The thread's rows, oldest first, from the store the commit page reads. */
-function useThreadRows(row: ThreadInboxRow): CodeCommentRow[] {
-  const { repository, ref, filePath, lineNumber } = anchorOf(row);
-  return useCodeComments(
-    useCallback(
-      (c: CodeCommentRow) =>
-        c.repository === repository &&
-        c.ref === ref &&
-        (c.file_path ?? undefined) === filePath &&
-        (c.line_number ?? undefined) === lineNumber,
-      [repository, ref, filePath, lineNumber],
-    ),
-  );
 }
 
 export function CodeLabel({ card }: { card: ThreadCardModel }) {
@@ -69,24 +38,6 @@ export function CodeLabel({ card }: { card: ThreadCardModel }) {
       </span>
     </>
   );
-}
-
-export function useCodePreview(card: ThreadCardModel): CardPreview | null {
-  const row = rowOf(card);
-  const comments = useThreadRows(row);
-  const reply = replyPreview(row.last_reply);
-  if (reply) {
-    if (reply.whoKind === "user" && !reply.who) reply.who = "Teammate";
-    return reply;
-  }
-  const root = comments[0];
-  if (!root) return null;
-  const agent = (root as any).author_kind === "agent";
-  return {
-    who: agent ? "Agent" : (root as any).author_name ?? (root as any).author_github_username ?? "Teammate",
-    whoKind: agent ? "agent" : "user",
-    text: String((root as any).content ?? "").replace(/\s+/g, " ").trim().slice(0, 160),
-  };
 }
 
 function AnchorLine({ filePath, lineNumber, prNumber }: { filePath?: string; lineNumber?: number; prNumber?: number }) {
@@ -110,7 +61,7 @@ export function CodeMeta({ card }: { card: ThreadCardModel }) {
   const row = rowOf(card);
   const { filePath, lineNumber } = anchorOf(row);
   const prNumber = usePrNumber(row.pull_request_id);
-  const comments = useThreadRows(row);
+  const comments = useCodeThreadRows(card);
   const resolved = comments.length > 0 && threadResolved(comments);
   return (
     <div className="th-card-anchorrow">
@@ -127,7 +78,7 @@ export function CodeMeta({ card }: { card: ThreadCardModel }) {
 export function CodeExpanded({ card, seen }: { card: ThreadCardModel; present: boolean; seen: boolean; frozenReadAt: number; focusComposer: boolean }) {
   const row = rowOf(card);
   const anchor = anchorOf(row);
-  const comments = useThreadRows(row);
+  const comments = useCodeThreadRows(card);
   const lineComments = useLineComments({ repository: anchor.repository, ref: anchor.ref, comments });
 
   // The read law, as the comment kind keeps it: the row is open and the
