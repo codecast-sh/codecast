@@ -2,7 +2,7 @@ import { useCallback } from "react";
 import { toast } from "sonner";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "./useQueryNoThrow";
-import { copyToClipboard } from "../lib/utils";
+import { copyText } from "../lib/copyText";
 import { attachCopy, type SessionMachine } from "../components/tmuxAttach";
 
 /**
@@ -30,9 +30,7 @@ export function useAttachCopy(tmuxSession: string | null | undefined, conversati
       toast.info(message);
       return;
     }
-    copyToClipboard(command)
-      .then(() => toast.success(message))
-      .catch(() => toast.error("Failed to copy"));
+    void copyText(command, message);
   }, [command, message]);
   return { machine, attach: command, copyAttach };
 }

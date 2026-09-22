@@ -24,7 +24,7 @@ const COMMITS_SHOWN = 4;
 const firstName = (name: string | undefined) => name?.trim().split(/\s+/)[0] ?? "";
 
 /** True when the row mentions the text: its title, a file, a commit subject, its author or branch. */
-export function sessionMatches(row: RepoSession, needle: string): boolean {
+function sessionMatches(row: RepoSession, needle: string): boolean {
   const q = needle.trim().toLowerCase();
   if (!q) return true;
   return [row.title, row.author_name ?? "", row.branch ?? "", ...row.files, ...row.commits.map((c) => c.subject)]

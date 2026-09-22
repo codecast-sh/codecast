@@ -29,7 +29,9 @@ import {
 } from "../ui/dropdown-menu";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { ConfirmButton } from "../integrations/parts";
-import { CodeMenuItem, CodeShareItems, copyText, sharePageUrl } from "../menus/CodeShareItems";
+import { CodeMenuItem, CodeShareItems } from "../menus/CodeShareItems";
+import { copyText } from "../../lib/copyText";
+import { sharePageUrl } from "../../lib/utils";
 import { useInboxStore } from "../../store/inboxStore";
 import { accentVar } from "../../lib/externalEvents";
 import { mergeStateMeta, notePlace, prStateKey, type CodeCommentRow } from "../../lib/prView";

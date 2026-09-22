@@ -20,6 +20,12 @@ export function shareOrigin(): string {
   return "https://codecast.sh";
 }
 
+/** The public address of an in-app path, whatever pane the page is open in. */
+export function sharePageUrl(path: string): string {
+  if (/^https?:\/\//.test(path)) return path;
+  return `${shareOrigin()}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
 export function canonicalUrl(): string {
   if (typeof window === "undefined") return shareOrigin();
   return `${shareOrigin()}${window.location.pathname}${window.location.search}${window.location.hash}`;

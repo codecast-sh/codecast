@@ -12,6 +12,7 @@
 import { useMemo, useState } from "react";
 import { Bot, Copy, Download, GitBranch, Plus, Trash2, Upload, ArrowUp, ArrowDown } from "lucide-react";
 import { toast } from "sonner";
+import { copyText } from "../../../lib/copyText";
 import {
   AGENT_LAUNCH_OPTIONS,
   AGENT_MODEL_CONFIG,
@@ -90,12 +91,6 @@ function toSpec(d: DefinitionDraft): AgentDefinitionSpec & { _id?: string } {
   return spec;
 }
 
-function copyText(text: string, what: string) {
-  navigator.clipboard?.writeText(text).then(
-    () => toast.success(`${what} copied`),
-    () => toast.error("Clipboard unavailable"),
-  );
-}
 
 // ─── Definition editor ───────────────────────────────────────────────────────
 
@@ -244,7 +239,7 @@ function DefinitionEditor({
               <Trash2 className="mr-1 h-3.5 w-3.5" /> Delete
             </Button>
           )}
-          <Button variant="ghost" size="sm" onClick={() => copyText(serializeAgentDefinitionFile(toSpec(d)), "Definition markdown")}>
+          <Button variant="ghost" size="sm" onClick={() => copyText(serializeAgentDefinitionFile(toSpec(d)), "Definition markdown copied")}>
             <Download className="mr-1 h-3.5 w-3.5" /> Export
           </Button>
         </div>
@@ -359,7 +354,7 @@ function ChainEditor({
               <Trash2 className="mr-1 h-3.5 w-3.5" /> Delete
             </Button>
           )}
-          <Button variant="ghost" size="sm" onClick={() => copyText(serializeAgentChainFile({ name: c.name, description: c.description, steps: c.steps }), "Chain markdown")}>
+          <Button variant="ghost" size="sm" onClick={() => copyText(serializeAgentChainFile({ name: c.name, description: c.description, steps: c.steps }), "Chain markdown copied")}>
             <Download className="mr-1 h-3.5 w-3.5" /> Export
           </Button>
         </div>
@@ -489,7 +484,7 @@ export default function AgentLibraryPage() {
               </span>
               <Copy
                 className="h-3.5 w-3.5 shrink-0 text-sol-text-dim hover:text-sol-text"
-                onClick={(e) => { e.stopPropagation(); copyText(`cast exec --as ${d.name} "…"`, "Command"); }}
+                onClick={(e) => { e.stopPropagation(); copyText(`cast exec --as ${d.name} "…"`, "Command copied"); }}
               />
             </button>
           ),
