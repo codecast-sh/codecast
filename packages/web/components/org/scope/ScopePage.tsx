@@ -13,7 +13,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
-import { Anchor as AnchorGlyph, Archive, ArrowLeft, Network, PanelRightClose, PanelRightOpen, Pause, Play } from "lucide-react";
+import { Archive, ArrowLeft, Network, PanelRightClose, PanelRightOpen, Pause, Play } from "lucide-react";
 import { useInboxStore, useTrackedStore, type PlanItem, type ProjectItem } from "../../../store/inboxStore";
 import { useSyncOrgTree } from "../../../hooks/useSyncOrgTree";
 import { useSyncProjects } from "../../../hooks/useSyncProjects";
@@ -53,7 +53,8 @@ const todayUtc = () => new Date().toISOString().slice(0, 10);
  *  standing session (initiatives-projects-role-page.md I3): the pane's own
  *  props ride through to the conversation, the address stays the session's,
  *  and the board's tab is this visit's state rather than the URL's. */
-export function ScopePageInner({ id, session }: { id: string; session?: SeatSession }) {
+export function ScopePageInner({ id, session, href }: { id: string; session?: SeatSession; /** The page's own address when it is not /org/<id>: /anchor renders the root role here (S22), and its tab must not move the person off it. */ href?: string }) {
+  const base = href ?? `/org/${id}`;
   const { tree, ready } = useSyncOrgTree();
   // The panel's tabs paint from the store: keep the workspace's collections
   // fed here the way the project page does.
@@ -94,8 +95,8 @@ export function ScopePageInner({ id, session }: { id: string; session?: SeatSess
     // The tab a scope opens on is its bare URL: a role's Scope, the root's feed.
     if (next === scopeDefaultTab(!!role)) params.delete("tab"); else params.set("tab", next);
     const qs = params.toString();
-    router.replace(qs ? `/org/${id}?${qs}` : `/org/${id}`);
-  }, [searchParams, router, id, role, inPane]);
+    router.replace(qs ? `${base}?${qs}` : base);
+  }, [searchParams, router, base, role, inPane]);
   // The panel: open by default beside the conversation; on the phone the
   // conversation leads and the panel is a sheet one tap away. A link straight
   // to a tab opens the panel on it, whatever the width.
@@ -226,7 +227,7 @@ export function ScopePageInner({ id, session }: { id: string; session?: SeatSess
   const handle = role ? role.handle : "workspace";
   const paused = role?.status === "paused";
   const noStanding = !standingId;
-  const backHref = `/org/${id}?tab=${tab}`;
+  const backHref = `${base}?tab=${tab}`;
   const panelNode = (
     <ScopePanel
       tree={tree}
@@ -287,7 +288,7 @@ export function ScopePageInner({ id, session }: { id: string; session?: SeatSess
             <div className="flex items-center gap-2 flex-wrap min-w-0">
               <h1 className={cn("font-semibold tracking-tight leading-none truncate", phone ? "text-[18px]" : "text-[22px]")} style={{ fontFamily: "var(--font-serif)" }}>{name}</h1>
               <span className="inline-flex items-center h-[20px] px-1.5 rounded-md text-[10.5px] font-medium" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)", fontFamily: "var(--font-mono)" }}>@{handle}</span>
-              {!role && <span className="inline-flex items-center gap-1 text-[10.5px]" style={{ color: "var(--sol-text-dim)" }}><AnchorGlyph className="w-3 h-3" /> root anchor</span>}
+              {!role && <span className="inline-flex items-center gap-1 text-[10.5px]" style={{ color: "var(--sol-text-dim)" }}><Network className="w-3 h-3" /> the whole workspace</span>}
               {stateMeta && (
                 <span className="inline-flex items-center gap-1.5 h-[20px] px-1.5 rounded-md text-[10.5px] font-medium border" style={{ borderColor: `color-mix(in srgb, ${stateMeta.color} 45%, transparent)`, color: stateMeta.color }} data-scope-state={stateMeta.label}>
                   <span className={cn("w-[6px] h-[6px] rounded-full", stateMeta.pulse && "animate-pulse")} style={{ background: stateMeta.color }} />
@@ -344,7 +345,7 @@ export function ScopePageInner({ id, session }: { id: string; session?: SeatSess
           ) : role ? (
             <ScopeUnseated role={role} tree={tree} canEdit={canEdit} hostName={hostName} busy={provisioning} onProvision={provision} onOpenBoard={() => setPanelOpen(true)} />
           ) : (
-            <AnchorOnboarding scope={tree.workspace.kind} teamId={tree.workspace.kind === "team" ? tree.workspace.id : undefined} teamName={tree.workspace.name} compact />
+            <AnchorOnboarding compact />
           )}
         </div>
       } />
@@ -367,7 +368,7 @@ export function ScopeLead({ role, anchorName, tree, waiting, standingState }: { 
   return (
     <div className="conv-col mx-auto px-2 sm:px-3 md:px-4 pt-4 pb-2" data-scope-lead>
       <div className="flex items-center gap-2 mb-2">
-        {role ? <RoleFace role={role} size={24} /> : <span className="w-6 h-6 rounded-full inline-flex items-center justify-center shrink-0" style={{ background: "color-mix(in srgb, var(--sol-violet) 16%, transparent)", color: "var(--sol-violet)" }}><AnchorGlyph className="w-3.5 h-3.5" /></span>}
+        {role ? <RoleFace role={role} size={24} /> : <span className="w-6 h-6 rounded-full inline-flex items-center justify-center shrink-0" style={{ background: "color-mix(in srgb, var(--sol-violet) 16%, transparent)", color: "var(--sol-violet)" }}><Network className="w-3.5 h-3.5" /></span>}
         <span className="text-xs font-medium" style={{ color: "var(--sol-text-secondary)" }}>{name}</span>
       </div>
       <div className="pl-8 text-[13.5px] leading-relaxed" style={{ color: "var(--sol-text)" }}>

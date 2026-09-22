@@ -29,7 +29,7 @@ import "@xyflow/react/dist/style.css";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useTheme } from "../ThemeProvider";
 import { ghostNodeIdFor, ghostsFor, layoutOrgTree, parentRefOfNodeId, type OrgGhostOptions, type OrgGhostPlan, type OrgLayoutNode, type OrgLayoutView, focusTargetNodeId, type OrgFocusTarget } from "./orgLayout";
-import { AnchorCard, ClusterCard, PersonCard, RoleCard, SessionCard } from "./OrgNodeCards";
+import { ClusterCard, PersonCard, RoleCard, SessionCard } from "./OrgNodeCards";
 import { computeOrgViewport, FIT_PAD, hiddenRoots } from "./orgViewport";
 import { sameParent, type OrgParentRef, type OrgTree } from "./orgTypes";
 import { changeLine, GHOST, healthFlagsByNode } from "./orgMeta";
@@ -37,7 +37,7 @@ import type { OrgHealth, OrgProposalChange } from "./orgStaffingTypes";
 import { EditChangeForm } from "./StaffingPane";
 import { orgRoleReparentMakesCycle } from "../../store/orgSlice";
 
-const ORG_NODE_TYPES = { person: PersonCard, role: RoleCard, anchor: AnchorCard, session: SessionCard, cluster: ClusterCard };
+const ORG_NODE_TYPES = { person: PersonCard, role: RoleCard, session: SessionCard, cluster: ClusterCard };
 
 export type OrgReparentRequest = {
   subject: { kind: "session"; id: string; title: string } | { kind: "role"; id: string; title: string };
@@ -98,7 +98,6 @@ function titleOf(n: OrgLayoutNode): string {
   switch (n.kind) {
     case "person": return n.person.name;
     case "role": return n.role.name;
-    case "anchor": return n.anchor.name;
     case "session": return n.session.title || n.session.short_id;
     case "cluster": return `+${n.remaining} sessions`;
   }
@@ -141,7 +140,6 @@ function toFlowNodes(layout: OrgLayoutNode[], selectedId: string | null, dropTar
     switch (n.kind) {
       case "person": return { ...base, data: { ...common, ...decor, person: n.person, collapsed: n.collapsed, hidden: n.hidden, overflow: n.overflow } };
       case "role": return { ...base, data: { ...common, ...decor, role: n.role, collapsed: n.collapsed, hidden: n.hidden, overflow: n.overflow, tenure: n.tenure } };
-      case "anchor": return { ...base, data: { ...common, anchor: n.anchor } };
       case "session": return { ...base, data: { ...common, ...decor, session: n.session, parent: n.parent } };
       case "cluster": {
         const parentId = n.id.slice("cluster:".length);
@@ -448,7 +446,7 @@ function OrgGraphInner(props: OrgGraphProps) {
           zoomable
           position="bottom-right"
           nodeStrokeWidth={0}
-          nodeColor={(n) => n.type === "person" ? "var(--sol-cyan)" : n.type === "role" ? "var(--sol-violet)" : n.type === "anchor" ? "var(--sol-orange)" : "color-mix(in srgb, var(--sol-border) 60%, transparent)"}
+          nodeColor={(n) => n.type === "person" ? "var(--sol-cyan)" : n.type === "role" ? "var(--sol-violet)" : "color-mix(in srgb, var(--sol-border) 60%, transparent)"}
           maskColor="color-mix(in srgb, var(--sol-bg) 70%, transparent)"
           style={{ background: "var(--sol-bg-alt)", border: "1px solid color-mix(in srgb, var(--sol-border) 40%, transparent)", borderRadius: 10 }}
         />

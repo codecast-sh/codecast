@@ -93,7 +93,10 @@ describe("the sentence is rendered from the row, by the proposal page's writers"
     expect(orgLogLine(row("trust", { before: { trust: "understand" }, after: { trust: "decide" } }))).toBe("@growth may decide on its own");
     expect(orgLogLine(row("budget", { after: { caps: { hands_per_day: 4 } } }))).toBe(changeLine({ kind: "budget", handle: "growth", caps: { hands_per_day: 4 } }));
     expect(orgLogLine(row("routine", { after: { routine: { agent_task_id: "a1", title: "Weekly review", every: "7d" } } }))).toBe(changeLine({ kind: "routine", handle: "growth", title: "Weekly review", prompt: "", every: "7d" }));
-    expect(orgLogLine(row("plan_status", { subject: { type: "plan", id: "pl1", short_id: "pl-7", label: "Launch" }, before: { status: "active" }, after: { status: "done" } }))).toBe("Mark plan pl-7 done");
+    expect(orgLogLine(row("plan_status", { subject: { type: "plan", id: "pl1", short_id: "pl-7", label: "Launch" }, before: { status: "active" }, after: { status: "done" } }))).toBe("Mark done: Launch (pl-7)");
+    // A subject with no title reads by its id, and a project's title is its ref: never said twice.
+    expect(orgLogLine(row("task_status", { subject: { type: "task", id: "t1", short_id: "ct-3", label: "ct-3" }, before: { status: "open" }, after: { status: "done" } }))).toBe("Mark task ct-3 done");
+    expect(orgLogLine(row("project_status", { subject: { type: "project", id: "p1", label: "Website" }, before: { status: "active" }, after: { status: "paused" } }))).toBe("Mark project Website paused");
     expect(orgLogLine(row("file", { subject: { type: "plan", id: "pl1", short_id: "pl-7", label: "Launch" }, before: { project_id: null }, after: { project_id: "p1" } }))).toBe("Put plan pl-7 under the project Website");
     expect(orgLogLine(row("projects", { subject: { type: "project", id: "p1", label: "Website" }, after: { projects: [{ op: "create", project_id: "p1", title: "Website" }] } }))).toBe("Create the project Website");
   });
@@ -188,9 +191,9 @@ describe("an entry reads as one sentence with the count of rows inside", () => {
     expect(orgLogEntryLine({ gesture: "undo", actor, row_count: 1, lead: invertRow(hire) })).toBe("Undid a change");
   });
   test("one row is its own sentence; undo and redo say so", () => {
-    expect(orgLogEntryLine({ gesture: "save", actor, row_count: 1, lead })).toBe("Mark plan pl-7 done");
-    expect(orgLogEntryLine({ gesture: "save", actor, row_count: 3, lead })).toBe("Mark plan pl-7 done, and 2 more changes");
-    expect(orgLogEntryLine({ gesture: "undo", actor, row_count: 1, lead: invertRow(lead), undoes_lead: lead })).toBe('Undid "Mark plan pl-7 done"');
-    expect(orgLogEntryLine({ gesture: "redo", actor, row_count: 2, lead })).toBe('Applied again "Mark plan pl-7 done": 2 records');
+    expect(orgLogEntryLine({ gesture: "save", actor, row_count: 1, lead })).toBe("Mark done: Launch (pl-7)");
+    expect(orgLogEntryLine({ gesture: "save", actor, row_count: 3, lead })).toBe("Mark done: Launch (pl-7), and 2 more changes");
+    expect(orgLogEntryLine({ gesture: "undo", actor, row_count: 1, lead: invertRow(lead), undoes_lead: lead })).toBe('Undid "Mark done: Launch (pl-7)"');
+    expect(orgLogEntryLine({ gesture: "redo", actor, row_count: 2, lead })).toBe('Applied again "Mark done: Launch (pl-7)": 2 records');
   });
 });

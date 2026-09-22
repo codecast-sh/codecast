@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { performCreateRole } from "./orgRoles";
 import { performEscalateSession, performRehomeSessions, performReparentSession } from "./sessionOwnership";
+import { isSessionEscalationMessage, parseSessionEscalation } from "@codecast/shared/contracts";
+import { patchConversationVisibility } from "./lib/access";
 
 // A role's triage (docs/architecture/org-roles-run-work.md R1): escalation
 // puts one of a role's sessions in front of the person with the role's line,
@@ -87,11 +89,14 @@ describe("cast escalate (R1)", () => {
   });
   test("the role puts one of its sessions in front of the person with its line; clear takes it back", async () => {
     const { db, ctx, role } = await roleWithTwoSessions();
-    const res = await performEscalateSession(ctx, ME as any, { session_id: "jx7aaaa", line: "  the pricing copy is ready\nand needs your eye ", from_session: id("s") });
+    const res = await performEscalateSession(ctx, ME as any, { session_id: "jx7aaaa", line: "  the pricing copy is ready  \r\nand needs your eye\n\n- option A\n- option B ", from_session: id("s") });
     expect(res.changed).toBe(true);
     expect(res.role).toEqual({ short_id: role.short_id, handle: "growth", name: "Growth" });
-    // The row carries the contract's shape, the line on one line.
-    expect(row(db, "a").escalated_by_role).toMatchObject({ role_id: role._id, line: "the pricing copy is ready and needs your eye" });
+    // The row carries the contract's shape, the line WHOLE: paragraphs and
+    // newlines survive (the divider renders all of it), only the edges and
+    // trailing spaces are trimmed. The chime carries the first line.
+    expect(row(db, "a").escalated_by_role).toMatchObject({ role_id: role._id, line: "the pricing copy is ready\nand needs your eye\n\n- option A\n- option B" });
+    expect(res.notify?.message).toBe("@growth: the pricing copy is ready (Session a)");
     expect(typeof row(db, "a").escalated_by_role.at).toBe("number");
     // The sibling is untouched: it stays under the role.
     expect(row(db, "b").escalated_by_role).toBeUndefined();
@@ -104,9 +109,11 @@ describe("cast escalate (R1)", () => {
     expect((await performEscalateSession(ctx, ME as any, { session_id: "jx7aaaa", clear: true })).changed).toBe(false);
   });
 
-  test("the role never escalates silently, and only its own sessions", async () => {
+  test("the role never escalates silently, only its own sessions, and only abuse is refused", async () => {
     const { db, ctx } = await roleWithTwoSessions();
-    await expect(performEscalateSession(ctx, ME as any, { session_id: "jx7aaaa", from_session: id("s") })).rejects.toThrow(/one line/);
+    await expect(performEscalateSession(ctx, ME as any, { session_id: "jx7aaaa", from_session: id("s") })).rejects.toThrow(/what the person will decide/);
+    await expect(performEscalateSession(ctx, ME as any, { session_id: "jx7aaaa", line: "x".repeat(4001), from_session: id("s") })).rejects.toThrow(/cap is 4000/);
+    expect((await performEscalateSession(ctx, ME as any, { session_id: "jx7aaaa", line: "y".repeat(4000), from_session: id("s") })).changed).toBe(true);
     db._tables.conversations.push(conv("x"));
     await expect(performEscalateSession(ctx, ME as any, { session_id: id("x"), line: "look", from_session: id("s") })).rejects.toThrow(/report to you/);
   });
@@ -133,6 +140,112 @@ describe("cast escalate (R1)", () => {
     await performReparentSession(ctx, ME as any, { session_id: id("a"), target: { kind: "user", user_id: MATE as any } });
     expect(row(db, "a").org_role_id).toBeUndefined();
     expect(row(db, "a").escalated_by_role).toBeUndefined();
+  });
+});
+
+// org-roles-run-work.md R1, revised: by default the escalation reaches the
+// person through the role's card, the child stays nested; --direct puts the
+// child; every move writes one divider into both threads through the
+// ordinary message rail; the chime follows the card.
+describe("an escalation reaches the person through the role (R1, revised)", () => {
+  const dividers = (db: any, convCh: string) => db._tables.pending_messages
+    .filter((m: any) => m.conversation_id === id(convCh) && isSessionEscalationMessage(m.content))
+    .map((m: any) => parseSessionEscalation(m.content)!);
+
+  test("by default the role's standing session is what reaches the person; the child keeps its stamp without direct", async () => {
+    const { db, ctx, role } = await roleWithTwoSessions();
+    Object.assign(row(db, "s"), { inbox_stashed_at: NOW });
+    const res = await performEscalateSession(ctx, ME as any, { session_id: "jx7aaaa", line: "the pricing copy needs your eye", from_session: id("s") });
+    expect(res.changed).toBe(true);
+    expect(row(db, "a").escalated_by_role).toEqual({ role_id: role._id, line: "the pricing copy needs your eye", at: res.escalated_by_role!.at });
+    expect(res.reached).toEqual({ conversation_id: id("s"), short_id: "jx7ssss", direct: false });
+    // The chime rings on the role's card, with the line.
+    expect(res.notify).toEqual({ conversation_id: id("s"), title: "@growth needs you", message: "@growth: the pricing copy needs your eye (Session a)" });
+    // The role's card is brought back into the inbox to carry it.
+    expect(row(db, "s").inbox_stashed_at).toBeUndefined();
+    // One divider in each thread, the same line whole.
+    const inChild = dividers(db, "a");
+    const inRole = dividers(db, "s");
+    expect(inChild.length).toBe(1);
+    expect(inRole.length).toBe(1);
+    expect(inChild[0]).toMatchObject({ move: "handed", by: "role", role: { handle: "growth", name: "Growth" }, session: { short_id: "jx7aaaa", title: "Session a" }, to: "Me", line: "the pricing copy needs your eye" });
+    expect(inRole[0]).toEqual(inChild[0]);
+    // Escalating again with the same line moves nothing and writes nothing.
+    const again = await performEscalateSession(ctx, ME as any, { session_id: "jx7aaaa", line: "the pricing copy needs your eye", from_session: id("s") });
+    expect(again.changed).toBe(false);
+    expect(again.notify).toBeNull();
+    expect(dividers(db, "a").length).toBe(1);
+  });
+
+  test("the role's own copy of the divider is held for its next turn; the child's copy is a turn", async () => {
+    const { db, ctx } = await roleWithTwoSessions();
+    await performEscalateSession(ctx, ME as any, { session_id: "jx7aaaa", line: "needs you", from_session: id("s") });
+    // Only the dividers: the reparent line the fixture wrote is a turn of its own.
+    const statusOf = (ch: string) => db._tables.pending_messages.filter((m: any) => m.conversation_id === id(ch) && isSessionEscalationMessage(m.content)).map((m: any) => m.status);
+    expect(statusOf("s")).toEqual(["held"]);
+    expect(statusOf("a")).toEqual(["pending"]);
+    // A person's hand back from the web is not the role's own line: the role
+    // hears it as a turn, the child too.
+    await performEscalateSession(ctx, ME as any, { session_id: "jx7aaaa", clear: true });
+    expect(statusOf("s")).toEqual(["held", "pending"]);
+  });
+
+  test("a session the team can no longer see leaves the role in the same patch, and both threads say so", async () => {
+    const { db, ctx, role } = await roleWithTwoSessions();
+    await performEscalateSession(ctx, ME as any, { session_id: "jx7aaaa", line: "needs you", from_session: id("s") });
+    await patchConversationVisibility(ctx, row(db, "a"), { is_private: true });
+    expect(row(db, "a").is_private).toBe(true);
+    expect(row(db, "a").org_role_id).toBeUndefined();
+    expect(row(db, "a").escalated_by_role).toBeUndefined();
+    const last = dividers(db, "a").at(-1)!;
+    expect(last).toMatchObject({ move: "back", left: true, role: { handle: "growth" } });
+    expect(last.line).toContain("no longer visible to the team");
+    expect(last.line).toContain("escalation is cleared");
+    expect(dividers(db, "s").at(-1)).toEqual(last);
+    // A change that keeps the team's view leaves the role alone.
+    await patchConversationVisibility(ctx, row(db, "b"), { team_visibility: "full" });
+    expect(row(db, "b").org_role_id).toBe(role._id);
+  });
+
+  test("--direct puts the child itself in front of the person; the chime rings on the child", async () => {
+    const { db, ctx, role } = await roleWithTwoSessions();
+    const res = await performEscalateSession(ctx, ME as any, { session_id: "jx7aaaa", line: "a permission prompt is open in here", direct: true, from_session: id("s") });
+    expect(row(db, "a").escalated_by_role).toEqual({ role_id: role._id, line: "a permission prompt is open in here", at: res.escalated_by_role!.at, direct: true });
+    expect(res.reached).toEqual({ conversation_id: id("a"), short_id: "jx7aaaa", direct: true });
+    expect(res.notify?.conversation_id).toBe(id("a"));
+    expect(res.notify?.title).toBe("@growth put a session in front of you");
+    expect(dividers(db, "a")[0].move).toBe("direct");
+    expect(dividers(db, "s")[0].move).toBe("direct");
+  });
+
+  test("a person's own gesture is always direct, rings nobody, and the divider names them", async () => {
+    const { db, ctx } = await roleWithTwoSessions();
+    const at = Date.now() - 1000;
+    const res = await performEscalateSession(ctx, ME as any, { session_id: "jx7bbbb", at });
+    expect(row(db, "b").escalated_by_role).toEqual({ role_id: db._tables.org_roles[0]._id, line: "Me put this in their inbox", at, direct: true });
+    expect(res.reached?.direct).toBe(true);
+    expect(res.notify).toBeNull();
+    expect(dividers(db, "b")[0]).toMatchObject({ move: "direct", by: "person", to: "Me", at });
+  });
+
+  test("hand back clears the stamp and writes the divider the other way into both threads; a no-op clear writes none", async () => {
+    const { db, ctx } = await roleWithTwoSessions();
+    await performEscalateSession(ctx, ME as any, { session_id: "jx7aaaa", line: "needs you", from_session: id("s") });
+    const cleared = await performEscalateSession(ctx, ME as any, { session_id: "jx7aaaa", clear: true });
+    expect(cleared.changed).toBe(true);
+    expect(row(db, "a").escalated_by_role).toBeUndefined();
+    expect(dividers(db, "a").map((d: any) => d.move)).toEqual(["handed", "back"]);
+    expect(dividers(db, "s").map((d: any) => d.move)).toEqual(["handed", "back"]);
+    expect(dividers(db, "a")[1]).toMatchObject({ by: "person", line: "" });
+    await performEscalateSession(ctx, ME as any, { session_id: "jx7aaaa", clear: true });
+    expect(dividers(db, "a").length).toBe(2);
+  });
+
+  test("a role escalating its own standing session has no other card to reach the person through", async () => {
+    const { db, ctx } = await roleWithTwoSessions();
+    const res = await performEscalateSession(ctx, ME as any, { session_id: "jx7ssss", line: "verify the domain", from_session: id("s") });
+    expect(res.reached).toEqual({ conversation_id: id("s"), short_id: "jx7ssss", direct: true });
+    expect(dividers(db, "s").length).toBe(1);
   });
 });
 

@@ -64,14 +64,14 @@ export const ORG_STAFFING_FIXTURE_PROPOSAL: OrgProposalRow = {
     },
     {
       _id: "fixture-change-7", proposal_id: "fixture-proposal-7", seq: 7, status: "proposed",
-      change: { kind: "plan_status", plan: "pl-61", status: "done", reason: "Every task closed 19 days ago; the two bound sessions ended with done handoffs." },
+      change: { kind: "plan_status", plan: "pl-61", status: "done", title: "Onboarding emails", reason: "Every task closed 19 days ago; the two bound sessions ended with done handoffs." },
       rationale: "The plan reads as active on the board and counts against Growth's load, but nothing under it has moved since August.",
       evidence: [{ label: "pl-61", href: "/plans/pl-61" }, { label: "last handoff", href: "/tasks/ct-4102" }],
       expected_effect: "Growth's active plan count drops to one, which is what its sessions say.",
     },
     {
       _id: "fixture-change-8", proposal_id: "fixture-proposal-7", seq: 8, status: "proposed",
-      change: { kind: "task_status", task: "ct-4102", status: "done", reason: "Three commits landed on the branch it names; the session that held it declared done 14 days ago." },
+      change: { kind: "task_status", task: "ct-4102", status: "done", title: "Fix the auth race on sign-in", reason: "Three commits landed on the branch it names; the session that held it declared done 14 days ago." },
       rationale: "An open task whose work shipped keeps a seat looking busier than it is.",
       evidence: [{ label: "ct-4102", href: "/tasks/ct-4102" }],
     },
@@ -219,7 +219,7 @@ export const ORG_STAFFING_FIXTURE_BIG_PROPOSAL: OrgProposalRow = (() => {
   ];
   for (let i = 1; i <= 8; i++) {
     const tasks = carried[i];
-    push({ kind: "plan_status", plan: `pl-${500 + i}`, status: i === 2 || i === 4 ? "abandoned" : "done", reason: planReasons[i - 1], ...(tasks ? { tasks } : {}) } as any, `Plan ${i}: the board says active, the evidence says finished.`, [{ label: `pl-${500 + i}`, href: `/plans/pl-${500 + i}` }]);
+    push({ kind: "plan_status", plan: `pl-${500 + i}`, status: i === 2 || i === 4 ? "abandoned" : "done", title: `Plan ${i} of the roadmap`, reason: planReasons[i - 1], ...(tasks ? { tasks } : {}) } as any, `Plan ${i}: the board says active, the evidence says finished.`, [{ label: `pl-${500 + i}`, href: `/plans/pl-${500 + i}` }]);
   }
   // 103 tasks: the first nine are the ones the plans above carry.
   const taskReasons = [
@@ -229,7 +229,7 @@ export const ORG_STAFFING_FIXTURE_BIG_PROPOSAL: OrgProposalRow = (() => {
     "Its session ended with a done handoff 14 days ago; nobody closed the row.",
   ];
   for (let i = 1; i <= 103; i++) {
-    push({ kind: "task_status", task: `ct-${9000 + i}`, status: i % 9 === 0 ? "dropped" : "done", reason: taskReasons[i % taskReasons.length] }, `Task ${i}: open on the board, finished in the tree.`);
+    push({ kind: "task_status", task: `ct-${9000 + i}`, status: i % 9 === 0 ? "dropped" : "done", title: `Task ${i} the tree already finished`, reason: taskReasons[i % taskReasons.length] }, `Task ${i}: open on the board, finished in the tree.`);
   }
   // 18 staffing changes, as the real review had them.
   for (let i = 1; i <= 10; i++) push({ kind: "file", plan: `pl-${600 + i}`, project: "Product" }, `pl-${600 + i} is product work with no project.`);

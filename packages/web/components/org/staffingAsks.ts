@@ -71,6 +71,18 @@ export function proposalAsks(p: Pick<OrgProposalRow, "asks" | "changes">, names?
   });
 }
 
+/**
+ * The phone's bar at the foot of the conversation (S19), in two parts: the
+ * count a person reads, and the verb that says the bar opens the asks (a
+ * count alone read as a status line: "nothing tells me so", org eval round
+ * 3). The verb goes on a chip drawn as a control.
+ */
+export function asksBarWords(toDecide: number, total: number): { count: string; action: string } {
+  return toDecide === 0
+    ? { count: `All ${total} decided`, action: "See them" }
+    : { count: `${toDecide} to decide`, action: "Open the asks" };
+}
+
 /** The header's count: an ask is decided once nothing in it waits. */
 export function asksProgress(asks: AskView[]): { decided: number; total: number; remaining: number } {
   const decided = asks.filter((a) => a.state !== "open").length;

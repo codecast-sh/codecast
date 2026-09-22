@@ -40,13 +40,15 @@ describe("computeOrgViewport", () => {
 
   it("names the root cards clipped past each edge of the free canvas", () => {
     // Root-tier fit on a narrow canvas: the last person is off to the right.
-    const vp = computeOrgViewport(nodes, 700, 500, 0, null)!;
-    const before = hiddenRoots(nodes, { x: vp.x, y: vp.y, zoom: vp.zoom }, 700);
+    // The fixture's root tier is three cards (two people and a role) about 820
+    // wide, so a 500 canvas at the readable floor clips the last one.
+    const vp = computeOrgViewport(nodes, 500, 500, 0, null)!;
+    const before = hiddenRoots(nodes, { x: vp.x, y: vp.y, zoom: vp.zoom }, 500);
     expect(before.left.length).toBe(0);
     expect(before.right.length).toBeGreaterThan(0);
     expect(before.right[0].kind).toBe("person");
     // Panned far right: the viewer's card falls off the left edge.
-    const after = hiddenRoots(nodes, { x: vp.x - 2000, y: vp.y, zoom: vp.zoom }, 700);
+    const after = hiddenRoots(nodes, { x: vp.x - 2000, y: vp.y, zoom: vp.zoom }, 500);
     expect(after.left.some((n) => n.id === personNodeId("fixture-user-me"))).toBe(true);
   });
 });

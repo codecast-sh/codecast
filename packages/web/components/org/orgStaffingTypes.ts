@@ -153,3 +153,5 @@ export function joinProposals(rows: Record<string, OrgProposalListRow>, changes:
 
 /** The handle the chief of staff always carries (S6). */
 export const CHIEF_OF_STAFF_HANDLE = "chief-of-staff";
+/** The name it is born with (S22: the workspace's root role, renamable). */
+export const CHIEF_OF_STAFF_NAME = "Chief of Staff";

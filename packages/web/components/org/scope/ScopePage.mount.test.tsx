@@ -84,7 +84,8 @@ async function verifyScopePage() {
   mock.module("sonner", () => ({ toast: { error: (m: string) => calls.push(`toast:${m}`), success: (m: string) => calls.push(`toast:${m}`), warning: () => {} } }));
   mock.module("../../anchor/AnchorConversation", () => ({
     AnchorConversation: (props: any) => React.createElement("div", { "data-thread": props.conversationId, "data-thread-autofocus": props.autoFocusInput ? "1" : "0", "data-thread-owner": props.seedOwnership ? "1" : "0", "data-thread-fold": props.foldBootstrap ? "1" : "0", "data-thread-fold-working": props.foldWorkingTurns ? "1" : "0", "data-thread-density": props.initialDensity ?? "" }, props.leadNode, React.createElement("textarea", { "data-composer": true })),
-    AnchorOnboarding: (props: any) => React.createElement("div", { "data-anchor-onboarding": props.scope }, "Meet the Anchor"),
+    // The onboarding reads the workspace from the org tree itself (S22).
+    AnchorOnboarding: (props: any) => React.createElement("div", { "data-anchor-onboarding": props.compact ? "compact" : "full" }, "Meet the workspace's agent"),
   }));
   // The conversation is the inbox's session pane with the seat's options (I3).
   mock.module("../../../app/inbox/QueuePageClient", () => ({
@@ -228,13 +229,13 @@ async function verifyScopePage() {
   assert.equal(qa("[data-scope-tab]").length, 7, "the root has no role only tabs");
   env.qs = "";
 
-  // ── the root: its anchor's conversation; without one, the gesture is to create it ──
+  // ── the root: its agent's conversation; without one, the gesture is to hire the root role ──
   await mount("workspace");
   assert.equal(q("[data-thread]")!.getAttribute("data-thread"), "fixture-anchor-conv");
   env.tree = { ...withStanding, anchors: [] };
   await mount("workspace");
   assert.equal(q("[data-thread]"), null);
-  assert.equal(q("[data-anchor-onboarding]")!.getAttribute("data-anchor-onboarding"), "team");
+  assert.equal(q("[data-anchor-onboarding]")!.getAttribute("data-anchor-onboarding"), "compact");
   env.tree = withStanding;
 
   // ── a plain member reads the seat's conversation; only the host, the parent or an admin sends ──

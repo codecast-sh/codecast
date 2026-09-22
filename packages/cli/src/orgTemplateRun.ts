@@ -393,6 +393,7 @@ export async function bindTemplate(deps: OrgInitDeps, instance: string, options:
       instance_key: receipt.key, instance, template_id: receipt.template.id, version: receipt.template.version, digest: receipt.template.hash,
       project_id: receipt.project.id, role_id: receipt.role!.id, host: { machine: os.hostname(), dir: receipt.project.dir }, phase: "ready",
       config: receipt.config ?? {}, bindings: receipt.bindings, ledgers: receipt.ledgers, ...boundary(receipt),
+      routines: Object.fromEntries(Object.entries(receipt.routines).map(([id, r]) => [id, { triggerId: r.triggerId, external: r.external, retired: r.retired }])),
     });
     receipt.instanceId = String(row._id ?? row.id);
     save(receipt);

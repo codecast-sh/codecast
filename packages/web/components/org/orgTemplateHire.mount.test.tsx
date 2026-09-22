@@ -16,6 +16,14 @@ async function verifyHireFlow() {
   mock.module("../../hooks/useScopeQueries", () => ({ useScopeSummary: () => ({ data: undefined }) }));
   // The form's other server read: what the new role would take over (R1).
   mock.module("../../hooks/useTakeoverPreviews", () => ({ useTakeoverPreviews: () => ({ byKey: {}, ready: true }) }));
+  // The template reads and writes (org-hire.md H3): one catalog entry, and a post that records the spec.
+  const proposed: any[] = [];
+  const manifest = { schemaVersion: 2, id: "growth", version: "2.0.0", name: "CMO", description: "One project CMO", role: { name: "CMO", handle: "{{instance}}-cmo", charter: "c.md", caps: { hands_per_day: 4, wakes_per_day: 12, tokens_per_day: 200000 } }, inputs: [{ key: "product.domain", label: "Apex domain", kind: "string", required: true }, { key: "accounts.ads", label: "Ads credentials", kind: "secret" }], authority: [{ id: "site-write", kind: "write", label: "Ship pages" }], setup: [{ id: "sc", title: "Verify the domain", who: "human" }], routines: [{ id: "weekly", title: "Weekly", every: "7d", prompt: "w.md" }] };
+  mock.module("../../hooks/useTemplateHire", () => ({
+    useTemplateCatalog: () => ({ templates: [{ template_id: "growth", workspace: "codecast", name: "CMO", description: "One project CMO", latest: { version: "2.0.0", digest: "a".repeat(64) }, asks: { inputs: 2, secrets: 1, authority: 1, setup: 1, routines: 1 }, manifest }], ready: true }),
+    useTemplateInstance: () => ({ instance: null, ready: true }),
+    useTemplateActions: () => ({ propose: async (spec: any) => { proposed.push(spec); return { short_id: "op-9", link: "/org?proposal=op-9" }; }, markSetup: async () => {}, activate: async () => {} }),
+  }));
   const React = await import("react");
   const { act } = React;
   const { createRoot } = await import("react-dom/client");
@@ -29,7 +37,7 @@ async function verifyHireFlow() {
     assert.ok(el, `Missing button "${text}". Rendered dialog: ${document.querySelector('[role="dialog"]')?.textContent ?? document.body.innerHTML}`);
     return el;
   };
-  button("From a folder");
+  button("From a template");
   const change = async (selector: string, value: string) => {
     const el = document.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector)!;
     assert.ok(el, selector);
@@ -41,10 +49,11 @@ async function verifyHireFlow() {
   await change('input[placeholder="Head of Growth"]', "Growth lead");
   await change("textarea", "Keep my custom charter exactly.");
   await change('input[type="number"]', "8");
-  await act(async () => button("From a folder").click());
+  await act(async () => button("From a template").click());
+  // The folder path for authors stays behind its fold: a command, copied, never run.
   assert.equal(button("Copy command").disabled, true);
   await change('input[placeholder="/path/to/templates/growth"]', "/src/templates/growth");
-  await change('input[name="template-instance"]', "product-growth");
+  await change('input[name="folder-instance"]', "product-growth");
   assert.equal(button("Copy command").disabled, false);
   assert.match(document.body.textContent!, /Understand trust with routines paused/);
   assert.match(document.body.textContent!, /Spending and publishing need separate authorization/);
@@ -52,8 +61,31 @@ async function verifyHireFlow() {
   assert.equal(copied.length, 1);
   assert.match(copied[0], /--project 'project-1'.*--team 'fixture-team'/);
   assert.equal(created.length, 0);
-  await act(async () => document.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
-  assert.equal(created.length, 0);
+  // The catalog form: choose the template, answer its input, and the preview names the one proposal.
+  const select = async (selector: string, value: string) => {
+    const el = document.querySelector<HTMLSelectElement>(selector)!;
+    assert.ok(el, selector);
+    await act(async () => { el.value = value; el.dispatchEvent(new Event("change", { bubbles: true })); });
+  };
+  const selects = () => [...document.querySelectorAll<HTMLSelectElement>("[data-template-form] select")];
+  assert.equal(button("Propose the hire").disabled, true);
+  await select(`[data-template-form] select:nth-of-type(1)`, "growth");
+  await act(async () => { const s = selects()[0]; s.value = "growth"; s.dispatchEvent(new Event("change", { bubbles: true })); });
+  assert.match(document.body.textContent!, /Bound on the host, never typed here/);
+  assert.match(document.body.textContent!, /Ads credentials/);
+  await change('input[name="input:product.domain"]', "product.example");
+  assert.equal(document.querySelector<HTMLInputElement>('input[name="template-instance"]')!.value, "product-growth");
+  assert.match(document.body.textContent!, /A new role CMO @product-growth-cmo at understand trust, reporting to me/);
+  assert.match(document.body.textContent!, /Authority outside codecast: write \(Ship pages\)/);
+  assert.equal(button("Propose the hire").disabled, false);
+  await act(async () => document.querySelector("[data-template-form]")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+  assert.equal(created.length, 0, "a template hire never calls the manual create");
+  assert.equal(proposed.length, 1);
+  assert.deepEqual(proposed[0].changes.map((c: any) => c.kind), ["role", "authority", "hire"]);
+  assert.equal(proposed[0].team_id, "fixture-team");
+  assert.match(document.body.textContent!, /Proposed\. Nothing has changed yet\./);
+  assert.match(document.body.textContent!, /cast org template bind product-growth/);
+  assert.ok(document.querySelector("[data-template-posted='op-9']"));
   await act(async () => button("Write a role").click());
   assert.equal(document.querySelector("textarea")!.value, "Keep my custom charter exactly.");
   assert.equal(document.querySelector<HTMLInputElement>('input[placeholder="Head of Growth"]')!.value, "Growth lead");
@@ -67,9 +99,10 @@ async function verifyHireFlow() {
   assert.equal(created[0].provision, true);
   assert.equal(created[0].trust_stage, undefined);
   assert.deepEqual(created[0].scope, { project_ids: ["project-1"], plan_ids: [] });
-  await act(async () => button("From a folder").click());
-  assert.equal(document.querySelector<HTMLInputElement>('input[placeholder="/path/to/templates/growth"]')!.value, "/src/templates/growth");
-  assert.equal(document.querySelector<HTMLInputElement>('input[name="template-instance"]')!.value, "product-growth");
+  await act(async () => button("From a template").click());
+  // Back on the template tab, the posted state stands: the hire was proposed once and is not offered again.
+  assert.ok(document.querySelector("[data-template-posted='op-9']"));
+  assert.equal(document.querySelector("[data-template-form]"), null);
   await act(async () => root.unmount());
   closeDomWindow(dom);
   console.log("org template hire mount: passed");

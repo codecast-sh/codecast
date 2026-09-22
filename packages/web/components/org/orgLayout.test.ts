@@ -50,7 +50,7 @@ describe("orgLayout", () => {
     const first = sessionNodeId(ORG_FIXTURE.people[0].sessions[0]._id);
     expect(edges.some((e) => e.source === me && e.target === first && e.kind === "tree")).toBe(true);
     expect(edges.filter((e) => e.source === me).length).toBe(
-      1 /* stack head */ + 1 /* role */ + 1 /* anchor */,
+      1 /* stack head */ + 1 /* role */,
     );
   });
 
@@ -65,8 +65,8 @@ describe("orgLayout", () => {
     expect(node.kind).toBe("person");
     if (node.kind === "person") {
       expect(node.collapsed).toBe(true);
-      // 22 sessions + 1 role (+ its 7 sessions) + 1 anchor.
-      expect(node.hidden).toBe(22 + 1 + 7 + 1);
+      // 22 sessions + 1 role (+ its 7 sessions).
+      expect(node.hidden).toBe(22 + 1 + 7);
     }
     expect(folded.width).toBeLessThan(full.width);
     // The person still keeps the card's own width as its slot.
@@ -105,26 +105,27 @@ describe("orgLayout", () => {
     for (const s of roleSessions) expect(s.y).toBeGreaterThan(role.y + role.h);
   });
 
-  it("an anchor's bot user is drawn as the anchor card, not as a person", () => {
+  it("a seat's bot user is never drawn as a person", () => {
     const tree = {
       ...ORG_FIXTURE,
-      people: [...ORG_FIXTURE.people, { ...ORG_FIXTURE.people[1], user_id: "fixture-bot", name: "Anchor", is_me: false, sessions: [], total: 0 }],
+      people: [...ORG_FIXTURE.people, { ...ORG_FIXTURE.people[1], user_id: "fixture-bot", name: "Chief of Staff", is_me: false, sessions: [], total: 0 }],
     };
     const { nodes } = layoutOrgTree(tree, none);
     expect(nodes.some((n) => n.kind === "person" && n.person.user_id === "fixture-bot")).toBe(false);
-    expect(nodes.some((n) => n.kind === "anchor" && n.anchor.bot_user_id === "fixture-bot")).toBe(true);
   });
 
-  it("a role's seat is drawn inside the role card, never as an anchor node under the host (S16)", () => {
+  it("the root role is drawn once with its seat inside; no node is drawn from the anchors table (S22)", () => {
     const seat = { ...ORG_FIXTURE.anchors[0], anchor_id: "fixture-growth-anchor", name: "Head of Growth", org_role_id: "fixture-role-growth", conversation_id: "fixture-growth-conv" };
     const tree = { ...ORG_FIXTURE, anchors: [...ORG_FIXTURE.anchors, seat], roles: [{ ...ORG_FIXTURE.roles[0], anchor_id: "fixture-growth-anchor" }] };
     const { nodes } = layoutOrgTree(tree, none);
-    expect(nodes.some((n) => n.kind === "anchor" && n.anchor.anchor_id === "fixture-growth-anchor")).toBe(false);
-    expect(nodes.some((n) => n.kind === "anchor" && n.anchor.anchor_id === "fixture-anchor")).toBe(true, "the workspace anchor still has its node");
-    expect(nodes.some((n) => n.kind === "role" && n.role._id === "fixture-role-growth")).toBe(true);
-    // A seat known only by the role's pointer (an older tree without org_role_id) is skipped the same way.
+    expect(nodes.filter((n) => n.kind === "role" && n.role._id === "fixture-role-growth").length).toBe(1);
+    expect(nodes.some((n) => (n.kind as string) === "anchor")).toBe(false);
+    // Neither a seat known only by the role's pointer (an older tree without
+    // org_role_id) nor a workspace agent not yet seated adds a node: the
+    // anchors table is storage, not a card.
     const older = { ...tree, anchors: tree.anchors.map((a) => ({ ...a, org_role_id: undefined })) };
-    expect(layoutOrgTree(older, none).nodes.some((n) => n.kind === "anchor" && n.anchor.anchor_id === "fixture-growth-anchor")).toBe(false);
+    expect(layoutOrgTree(older, none).nodes.some((n) => (n.kind as string) === "anchor")).toBe(false);
+    expect(layoutOrgTree(older, none).nodes.length).toBe(nodes.length);
   });
 
   it("an opened stack with nothing extra loaded still shows every payload session", () => {

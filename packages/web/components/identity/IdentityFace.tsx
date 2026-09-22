@@ -43,6 +43,10 @@ export function IdentityFace({ row, size = 18, className, hover = true, onPick, 
     <SessionFace row={row} size={size} className={className} badge={badge} />
   );
   if (!hover) return face;
-  if (id.kind === "role") return <RoleHoverCard role={id.role} side={side} align={align}>{face}</RoleHoverCard>;
-  return <SessionHoverCard row={row} side={side} align={align}>{face}</SessionHoverCard>;
+  // The hover trigger is the flex item in the caller's row, not the face, and
+  // its default (min-w-0) lets a crowded row squeeze it narrower than the
+  // face, which then spills over its neighbour. A face has a fixed size.
+  const trigger = "inline-flex flex-shrink-0 items-center";
+  if (id.kind === "role") return <RoleHoverCard role={id.role} side={side} align={align} triggerClassName={trigger}>{face}</RoleHoverCard>;
+  return <SessionHoverCard row={row} side={side} align={align} triggerClassName={trigger}>{face}</SessionHoverCard>;
 }

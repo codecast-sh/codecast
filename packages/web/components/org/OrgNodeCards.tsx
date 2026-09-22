@@ -1,5 +1,5 @@
 "use client";
-// The five org cards: person, role, anchor, session, cluster. React Flow node
+// The four org cards: person, role, session, cluster. React Flow node
 // renderers, painted with the app's Solarized tokens. State colours are the
 // inbox's: needs input amber (THREAD_STATE_STATUS_META.blocked), working green,
 // done cyan, dormant blue, idle dim.
@@ -7,13 +7,13 @@ import { memo, type ReactNode } from "react";
 import { ProjectLeadMark } from "../charter/ProjectLeadChip";
 import Link from "next/link";
 import { Handle, Position, useStore, type NodeProps, type Node } from "@xyflow/react";
-import { ChevronDown, ChevronRight, GitFork, Layers, Anchor as AnchorGlyph, Shield, Crown, Check, Pencil, X, Clock, Sparkles, AlertTriangle } from "lucide-react";
+import { ChevronDown, ChevronRight, GitFork, Layers, Shield, Crown, Check, Pencil, X, Clock, Sparkles, AlertTriangle } from "lucide-react";
 import { AgentIcon } from "../ConversationList";
 import { Avatar } from "../tasks/TaskCommentStream";
 import { compactAge } from "../../lib/threadState";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { cn } from "../../lib/utils";
-import type { OrgAnchor, OrgPerson, OrgRole, OrgSession, StateCounts, OrgParentRef } from "./orgTypes";
+import type { OrgPerson, OrgRole, OrgSession, StateCounts, OrgParentRef } from "./orgTypes";
 import { ORG_STATE_ORDER } from "./orgTypes";
 import { CHANGE_KIND_WORD, GHOST, ORG_STATE_META, SEVERITY_META, standingLineOf } from "./orgMeta";
 import { RoleFace } from "./RoleFace";
@@ -592,43 +592,6 @@ export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<Role
       )}
       </div>
       <GhostChips chips={data.chips} focusChangeId={data.focusChangeId} onFocusChange={data.onFocusChange} />
-    </Frame>
-  );
-});
-
-// ---------------------------------------------------------------- anchor
-
-export type AnchorNodeData = CardData & { anchor: OrgAnchor };
-
-export const AnchorCard = memo(function AnchorCard({ data }: NodeProps<Node<AnchorNodeData>>) {
-  const a = data.anchor;
-  const st = a.state ? ORG_STATE_META[a.state] : null;
-  const live = a.state === "working";
-  return (
-    <Frame
-      selected={data.selected}
-      accent="var(--sol-orange)"
-      className="px-3 py-2 flex items-center gap-2.5"
-      style={{ borderRadius: 999, background: "color-mix(in srgb, var(--sol-orange) 6%, var(--sol-card))" }}
-    >
-      <Ports />
-      <span className="relative shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-full" style={{ background: "color-mix(in srgb, var(--sol-orange) 16%, transparent)", color: "var(--sol-orange)" }}>
-        <AnchorGlyph className="w-3.5 h-3.5" strokeWidth={1.75} />
-        {live && <span className="absolute inset-0 rounded-full animate-ping" style={{ background: "color-mix(in srgb, var(--sol-green) 30%, transparent)" }} />}
-      </span>
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-[12.5px] font-semibold leading-tight" style={{ color: "var(--sol-text)" }}>{a.name}</div>
-        <div className="text-[10px] leading-tight mt-[2px] flex items-center gap-1.5" style={{ color: "var(--sol-text-dim)" }}>
-          <span>standing agent</span>
-          {st && (
-            <>
-              <span aria-hidden>·</span>
-              <span style={{ color: st.color }}>{st.label}</span>
-            </>
-          )}
-        </div>
-        <StandingLine standing={a} className="mt-[3px]" />
-      </div>
     </Frame>
   );
 });

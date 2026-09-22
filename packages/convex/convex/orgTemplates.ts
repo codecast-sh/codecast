@@ -135,6 +135,7 @@ export type UpsertInstanceArgs = {
   instance_key: string; instance: string; template_id: string; version: string; digest: string; project_id: Id<"projects">;
   role_id?: Id<"org_roles">; host?: { machine: string; dir: string }; phase?: "awaiting_host" | "ready" | "upgrading" | "retired"; update_policy?: "manual" | "canary" | "stable";
   config?: Record<string, string>; bindings?: Record<string, { host: string; path_hash: string; bound_at: number }>; ledgers?: Record<string, { taskId: string; shortId: string }>;
+  routines?: Record<string, { triggerId?: string; external?: boolean; retired?: boolean }>;
 };
 
 /**
@@ -172,7 +173,7 @@ export async function performUpsertInstance(ctx: Ctx, userId: Id<"users">, args:
   const fields = {
     instance: args.instance, template_id: args.template_id, version: args.version, digest: args.digest, project_id: args.project_id,
     ...(args.role_id ? { role_id: args.role_id } : {}), ...(args.host ? { host: args.host } : {}),
-    ...(args.config ? { config: args.config } : {}), ...(args.bindings ? { bindings: args.bindings } : {}), ...(args.ledgers ? { ledgers: args.ledgers } : {}),
+    ...(args.config ? { config: args.config } : {}), ...(args.bindings ? { bindings: args.bindings } : {}), ...(args.ledgers ? { ledgers: args.ledgers } : {}), ...(args.routines ? { routines: args.routines } : {}),
     updated_at: now,
   };
   if (existing) {
@@ -227,7 +228,7 @@ export async function performInstanceStatus(ctx: Ctx, userId: Id<"users">, args:
   const { row, manifest } = await instanceFor(ctx, userId, args.instance_key);
   const role = row.role_id ? await ctx.db.get(row.role_id) : null;
   const state = stateOf(row, role);
-  return { ...row, trust: role?.trust ?? "understand", setup: setupRows(manifest, state), ask: nextHumanAsk(manifest, state), readiness: readiness(manifest, state, role?.trust ?? "understand") };
+  return { ...row, trust: role?.trust ?? "understand", authority: role?.authority ?? [], handle: role?.handle, setup: setupRows(manifest, state), ask: nextHumanAsk(manifest, state), readiness: readiness(manifest, state, role?.trust ?? "understand") };
 }
 export async function performListInstances(ctx: Ctx, userId: Id<"users">, args: { team_id?: Id<"teams">; template_id?: string }) {
   const access = await callerWorkspace(ctx, userId, args.team_id);
@@ -242,8 +243,16 @@ export async function performInstanceForRole(ctx: Ctx, userId: Id<"users">, args
   const status = await performInstanceStatus(ctx, userId, { instance_key: row.instance_key });
   const template = await visibleTemplate(ctx, row.template_id, row.workspace);
   const latest = template?.releases.filter((r: any) => r.status === "stable").map((r: any) => r.version).sort(compareVersions).at(-1);
-  const routines = ((template?.releases.find((r: any) => r.version === row.version && r.digest === row.digest)?.manifest as OrgTemplate | undefined)?.routines ?? []).map((r) => ({ id: r.id, title: r.title, every: r.every, mode: r.mode ?? "propose" }));
-  return { ...status, routines, template: template ? { name: template.name, avatar: template.avatar, latest_stable: latest, changelog: template.releases.find((r: any) => r.version === latest)?.changelog } : null, update_available: latest && row.update_policy === "stable" && compareVersions(latest, row.version) > 0 ? latest : null };
+  const pinned = template?.releases.find((r: any) => r.version === row.version && r.digest === row.digest)?.manifest as OrgTemplate | undefined;
+  const routines = [] as any[];
+  for (const r of pinned?.routines ?? []) {
+    const bound = row.routines?.[r.id];
+    const trigger = bound?.triggerId ? await ctx.db.get(bound.triggerId as Id<"agent_tasks">) : null;
+    routines.push({ id: r.id, title: r.title, every: r.every, mode: r.mode ?? "propose", external: !!bound?.external, retired: !!bound?.retired, trigger: trigger ? { id: String(trigger._id), short_id: trigger.short_id, status: trigger.status, run_at: trigger.run_at, precheck: trigger.precheck, interval_ms: trigger.interval_ms } : null });
+  }
+  const secrets = (pinned?.inputs ?? []).filter((i) => i.kind === "secret").map((i) => ({ key: i.key, label: i.label, bound: !!row.bindings?.[i.key] }));
+  const scoreboard = (pinned?.scoreboard ?? []).map((k) => ({ ...k, ...(row.scoreboard?.[k.key] ?? {}) }));
+  return { ...status, routines, secrets, scoreboard, template: template ? { name: template.name, avatar: template.avatar, latest_stable: latest, changelog: template.releases.find((r: any) => r.version === latest)?.changelog } : null, update_available: latest && row.update_policy === "stable" && compareVersions(latest, row.version) > 0 ? latest : null };
 }
 
 // ── Lessons (H9) ────────────────────────────────────────────────────────────
@@ -342,6 +351,7 @@ export const upsertInstance = mutation({
     config: v.optional(v.record(v.string(), v.string())),
     bindings: v.optional(v.record(v.string(), v.object({ host: v.string(), path_hash: v.string(), bound_at: v.number() }))),
     ledgers: v.optional(v.record(v.string(), v.object({ taskId: v.string(), shortId: v.string() }))),
+    routines: v.optional(v.record(v.string(), v.object({ triggerId: v.optional(v.string()), external: v.optional(v.boolean()), retired: v.optional(v.boolean()) }))),
   },
   handler: async (ctx, { api_token, ...args }) => performUpsertInstance(ctx, await requireCaller(ctx, api_token), args),
 });

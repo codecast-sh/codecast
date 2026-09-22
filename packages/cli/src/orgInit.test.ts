@@ -105,7 +105,8 @@ describe("buildOrgAnalyzerPrompt", () => {
     expect(ORG_INITIATIVES_RULE).toContain("An active initiative with no owner is the first finding of the review");
     expect(ORG_INITIATIVES_RULE).toContain("You never create an initiative");
     expect(ORG_COVERAGE_RULE).toContain("Wrap the project that exists");
-    expect(ORG_COVERAGE_RULE).toContain("Work outside any project gets a project first");
+    expect(ORG_COVERAGE_RULE).toContain("show to be its business gets a project first");
+    expect(ORG_COVERAGE_RULE).toContain("a paused lead is not one");
     expect(ORG_COVERAGE_RULE).toContain("Aim at about one role per project, and depart from that only with a reason the change states");
     expect(ORG_COVERAGE_RULE).toContain("says before and after in counts");
     // The old advice argued against a complete chart; it now says what complete means.
@@ -116,7 +117,7 @@ describe("buildOrgAnalyzerPrompt", () => {
     expect(summarizeInputs({}).coverage).toBeUndefined();
     expect(buildOrgAnalyzerPrompt({ mode: "review", workspace: "Acme", summary })).not.toContain("Coverage today");
     const s = summarizeInputs({ coverage: { active_initiatives: 0, active_without_owner: 0, with_work: 1, with_lead: 1, outside: { plans: [], areas: [] } } });
-    expect(s.coverage).toEqual({ initiatives_active: 0, initiatives_without_owner: 0, with_work: 1, with_lead: 1, outside_plans: 0, outside_areas: 0, outside_repositories: 0 });
+    expect(s.coverage).toEqual({ initiatives_active: 0, initiatives_without_owner: 0, with_work: 1, with_lead: 1, with_lead_paused: 0, outside_plans: 0, outside_areas: 0, outside_repositories: 0 });
     expect(coverageLine(s.coverage)).toBe("no active initiatives; 1 of 1 project with work has a lead");
   });
   test("the spec example parses with the reader cast org propose uses, and every change kind is described", () => {
@@ -192,8 +193,8 @@ describe("buildOrgAnalyzerPrompt", () => {
       expect(at("## Ground in what is happening")).toBeLessThan(at("## The capacity model"));
       expect(p).toContain("`stale_plan`, `stale_task`, `stale_project`");
       // The status kinds, with a reason each, and the group they form.
-      expect(p).toContain('- plan_status: { plan: ref, status: "done" | "abandoned" | "active", reason }');
-      expect(p).toContain('- task_status: { task: ref, status: "done" | "dropped" | "open" | "backlog", reason }');
+      expect(p).toContain('- plan_status: { plan: ref, status: "done" | "abandoned" | "active", reason, title }');
+      expect(p).toContain('- task_status: { task: ref, status: "done" | "dropped" | "open" | "backlog", reason, title }');
       // Sync before sizing, one change per plan, the cascade named, and the
       // file list coverage reported as could not verify.
       expect(p).toContain("Bring the records in line first, then size");
@@ -208,7 +209,7 @@ describe("buildOrgAnalyzerPrompt", () => {
       expect(p).toContain("Closing a plan closes its still open tasks in the same accept");
       expect(p).toContain("propose one change per plan");
       expect(p).toContain("report the rest as could not verify, never as work on the root");
-      expect(p).toContain('- project_status: { project: ref, status: "paused" | "done" | "active", reason }');
+      expect(p).toContain('- project_status: { project: ref, status: "paused" | "done" | "active", reason, title }');
       expect(p).toContain("the status changes that bring records in line come first, as their own group");
       expect(p).toContain('"Bring records in line"');
       // Loads are sized without the stale records.
@@ -328,7 +329,7 @@ describe("buildOrgAnalyzerPrompt", () => {
       expect(p.indexOf("## Sessions that already are roles")).toBeLessThan(p.indexOf("## The capacity model"));
     }
     expect(ORG_UNNAMED_ROLES_RULE).toContain("A session older than a week with a standing purpose is a role that has not been named");
-    expect(ORG_UNNAMED_ROLES_RULE).toContain("name the long running sessions you considered and did not propose");
+    expect(ORG_UNNAMED_ROLES_RULE).toContain("name every row of `sessions.long_running` you did not propose");
     expect(ORG_UNNAMED_ROLES_RULE).toContain("Naming keeps the reporting line the session has today");
     expect(ORG_UNNAMED_ROLES_RULE).toContain("a separate move change in the same ask");
   });
@@ -359,12 +360,12 @@ describe("buildOrgAnalyzerPrompt", () => {
       expect((parsed.spec!.changes[0].change as any).tenure).toEqual({ kind: "standing" });
     }
     expect(buildOrgAnalyzerPrompt({ mode: "init", workspace: "Acme", summary })).toContain("say whether the seat is standing or a program");
-    // S12: the chief of staff is the workspace's anchor; the analyzer's own
-    // session is the adopt target only where no anchor exists.
+    // S12 and S22: the chief of staff is the workspace's standing agent; the
+    // analyzer's own session is the adopt target only where none exists.
     const offer = buildOrgAnalyzerPrompt({ mode: "review", workspace: "Acme", summary, session: "abc-123" });
     expect(offer).toContain("`cast anchor ls --json`");
-    expect(offer).toContain("Only a workspace with no anchor adopts this session");
-    expect(offer).toContain("This session is `abc-123`; that is the adopt change's conversation only when the workspace has no anchor");
+    expect(offer).toContain("Only a workspace with no standing agent adopts this session");
+    expect(offer).toContain("This session is `abc-123`; that is the adopt change's conversation only when the workspace has no standing agent");
     expect(buildOrgAnalyzerPrompt({ mode: "review", workspace: "Acme", summary })).toContain("program roles whose end has come");
   });
 });

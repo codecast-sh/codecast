@@ -4,12 +4,16 @@
 // holds it, whether it is a card or a small row under the role's card, what
 // the header number says, and what the two gestures do in the same tick.
 //
-// Three cases, one mount each:
+// The cases, one mount each (R1, revised):
 //   nested     a session that reports to a role sits under the role's card as
 //              the small row a subagent uses, and Needs Input does not count it
-//   escalated  a session the role put in front of the person is a card of its
-//              own in Needs Input, with the role's face and its one line
-//   the count  the role's card says how many of its sessions it escalated
+//   through    a session the role escalated stays nested; the ROLE's card is
+//              the one in Needs Input, carrying the line, the session pill and
+//              Hand back per line; two escalations are one card with two lines
+//   direct     a session the role put in front of the person directly is a
+//              card of its own in Needs Input, with the role's face and line
+//   the count  the person's own Put in my inbox is direct: the role's card
+//              counts it, and Hand back moves it back in the same tick
 import { replaceGlobals } from "../../test-helpers/globals";
 import { afterAll, beforeEach, expect, mock, test } from "bun:test";
 import { JSDOM } from "jsdom";
@@ -61,6 +65,7 @@ mock.module("next/link", () => ({
 
 const React = await import("react");
 const { createRoot } = await import("react-dom/client");
+const { MemoryRouter } = await import("react-router");
 const act: <T>(cb: () => T | Promise<T>) => Promise<T> = (React as any).act;
 
 const { useInboxStore, __resetInboxPlacementCacheForTests } = await import("../../store/inboxStore");
@@ -121,7 +126,7 @@ async function mountInbox() {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
-  await act(async () => root.render(<SessionListPanel activeSessionId={null} />));
+  await act(async () => root.render(<MemoryRouter initialEntries={["/inbox"]}><SessionListPanel activeSessionId={null} /></MemoryRouter>));
   return {
     host,
     unmount: async () => {
@@ -175,11 +180,74 @@ test("a role's session is a small row under the role's card, and Needs Input doe
   await m.unmount();
 });
 
-test("an escalated session is a card of its own in Needs Input, with the role's face and line", async () => {
+test("by default the role's card is the one in Needs Input, carrying the lines; the sessions stay nested; Hand back per line", async () => {
+  const OLDER = id("older");
   seed([
     standing(),
     hand(WAITING, "Pricing page copy"),
-    hand(ESCALATED, "Launch date", { agent_status: "done", thread_state_status: "done", escalated_by_role: { role_id: ROLE_ID, line: "the pricing copy is ready and needs your eye", at: NOW - 120_000 } }),
+    hand(ESCALATED, "Launch date", { updated_at: NOW - 10_000, agent_status: "done", thread_state_status: "done", escalated_by_role: { role_id: ROLE_ID, line: "the pricing copy is ready and needs your eye\n\nTwo options are in the thread.", at: NOW - 120_000 } }),
+    hand(OLDER, "Cold email rewrite", { updated_at: NOW - 20_000, agent_status: "done", thread_state_status: "done", escalated_by_role: { role_id: ROLE_ID, line: "the launch date is yours to call", at: NOW - 600_000 } }),
+  ]);
+  const m = await mountInbox();
+
+  // The role's own facts say dormant; the escalations under it put its card
+  // in Needs Input, and it is the ONE card counted there.
+  expect(sectionOf(m.host, STANDING)).toBe("needs_input");
+  expect(headerCount(m.host, "needs_input")).toBe("1");
+  // Every session under the role files with it, as small rows (the card
+  // shows two before "+N more", so the two escalated ones are the newest).
+  for (const sid of [ESCALATED, OLDER]) {
+    expect(sectionOf(m.host, sid)).toBe("needs_input");
+    expect(cardOf(m.host, sid)!.querySelector('[aria-label="Reports to @growth"]')).not.toBeNull();
+    expect(cardOf(m.host, sid)!.querySelector("[data-escalation]")).toBeNull();
+    // The escalated rows say so.
+    expect(cardOf(m.host, sid)!.querySelector("[data-role-handed]")).not.toBeNull();
+  }
+  // The plain one is folded behind the card's "+1 more", never a card of its own.
+  expect(cardOf(m.host, WAITING)).toBeNull();
+
+  // One card, two lines, newest first, each with the session pill, the first
+  // line of the reason, the whole reason on hover, and Hand back.
+  const card = cardOf(m.host, STANDING)!;
+  const lines = [...card.querySelectorAll("[data-role-escalation]")];
+  expect(lines.map((l) => l.getAttribute("data-role-escalation"))).toEqual([ESCALATED, OLDER]);
+  // The pill resolves the session from the store by its id, so the person reads its title, never a sliced Convex id.
+  expect(lines[0].textContent).toContain("Launch date");
+  expect(lines[0].textContent).toContain("the pricing copy is ready and needs your eye");
+  expect(lines[0].textContent).not.toContain("Two options are in the thread.");
+  expect(lines[0].querySelector("button[title]")!.getAttribute("title")).toContain("Two options are in the thread.");
+  expect(lines[0].querySelector('[data-role-gesture="hand-back"]')!.textContent).toBe("Hand back");
+  // The card carries no direct count: nothing is in the person's inbox on its own.
+  expect(card.querySelector("[data-role-escalated-count]")).toBeNull();
+
+  // Unfold shows the whole reason.
+  await act(async () => { (lines[0].querySelector("button[title]") as HTMLElement).click(); });
+  expect(cardOf(m.host, STANDING)!.querySelector(`[data-role-escalation="${ESCALATED}"]`)!.textContent).toContain("Two options are in the thread.");
+
+  // Hand back on one line: that session is quietly the role's again, the
+  // other line stays, and the role's card stays in Needs Input for it.
+  await act(async () => {
+    (lines[0].querySelector('[data-role-gesture="hand-back"]') as HTMLElement).click();
+  });
+  const after = [...cardOf(m.host, STANDING)!.querySelectorAll("[data-role-escalation]")];
+  expect(after.map((l) => l.getAttribute("data-role-escalation"))).toEqual([OLDER]);
+  expect(cardOf(m.host, ESCALATED)!.querySelector("[data-role-handed]")).toBeNull();
+  expect(sectionOf(m.host, STANDING)).toBe("needs_input");
+
+  // Hand back the last one: the role's card goes back to its own state.
+  await act(async () => {
+    (after[0].querySelector('[data-role-gesture="hand-back"]') as HTMLElement).click();
+  });
+  expect(sectionOf(m.host, STANDING)).toBe("dormant");
+  expect(headerCount(m.host, "needs_input")).toBeNull();
+  await m.unmount();
+});
+
+test("a direct escalation is the session's own card in Needs Input, with the role's face and line", async () => {
+  seed([
+    standing(),
+    hand(WAITING, "Pricing page copy"),
+    hand(ESCALATED, "Launch date", { agent_status: "done", thread_state_status: "done", escalated_by_role: { role_id: ROLE_ID, line: "a permission prompt is open in here", at: NOW - 120_000, direct: true } }),
   ]);
   const m = await mountInbox();
 
@@ -190,12 +258,16 @@ test("an escalated session is a card of its own in Needs Input, with the role's 
   expect(el.querySelector('[aria-label="Reports to @growth"]')).toBeNull();
   const strip = el.querySelector("[data-escalation]")!;
   expect(strip.textContent).toContain("@growth:");
-  expect(strip.textContent).toContain("the pricing copy is ready and needs your eye");
+  expect(strip.textContent).toContain("a permission prompt is open in here");
   // The role's face, and the one gesture that sends it back.
   expect(strip.querySelector("img, svg, [role=img]")).not.toBeNull();
   expect(strip.querySelector('[data-role-gesture="hand-back"]')!.textContent).toBe("Hand back to @growth");
-  // The other session is still the role's.
+  // The role's card is untouched: dormant, with the other session under it,
+  // counting the one it put in the person's inbox.
+  expect(sectionOf(m.host, STANDING)).toBe("dormant");
   expect(sectionOf(m.host, WAITING)).toBe("dormant");
+  expect(cardOf(m.host, STANDING)!.querySelector("[data-role-escalated-count]")!.textContent).toBe("1 in your inbox");
+  expect(cardOf(m.host, STANDING)!.querySelector("[data-role-escalations]")).toBeNull();
   await m.unmount();
 });
 

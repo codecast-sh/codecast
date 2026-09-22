@@ -92,7 +92,7 @@ export default function ScopeBoardScreen() {
         head={
           <RNView style={styles.head}>
             <RNView style={styles.headTop}>
-              {role ? <RoleFace role={role} size={44} /> : <RNView style={[styles.anchorFace, chipTint(Theme.orange)]}><FontAwesome name="anchor" size={18} color={Theme.orange} /></RNView>}
+              {role ? <RoleFace role={role} size={44} /> : <RNView style={[styles.anchorFace, chipTint(Theme.orange)]}><FontAwesome name="sitemap" size={18} color={Theme.orange} /></RNView>}
               <RNView style={{ flex: 1, minWidth: 0 }}>
                 <RNText style={styles.name} numberOfLines={1}>{name}</RNText>
                 <RNText style={styles.dim} numberOfLines={1}>

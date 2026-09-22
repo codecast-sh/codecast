@@ -159,6 +159,13 @@ async function verifyStaffingPane() {
   // A record row inside the records ask: the evidence on the row, the status a closed set.
   await render({ proposal: ORG_STAFFING_FIXTURE_PROPOSAL, selectedChangeId: "fixture-change-7" });
   assert.match(q('[data-change-row="fixture-change-7"] [data-sync-evidence]')!.textContent!, /evidenceEvery task closed 19 days ago/);
+  // A record row names its record (S9): the act, the title a person can
+  // read cold, and the id as a pill; the tooltip carries the same line.
+  assert.equal(q('[data-change-row="fixture-change-7"] [data-record-title]')!.textContent, "Onboarding emails");
+  assert.equal(q('[data-change-row="fixture-change-7"] [data-record-ref]')!.textContent, "pl-61");
+  assert.match(q('[data-change-row="fixture-change-7"] [data-record-line]')!.textContent!, /^Mark done: Onboarding emailspl-61$/);
+  assert.equal(q('[data-change-row="fixture-change-7"] [title]')!.getAttribute("title"), "Mark done: Onboarding emails (pl-61)");
+  assert.doesNotMatch(q('[data-change-row="fixture-change-7"]')!.textContent!, /Mark plan pl-61/, "the id alone no longer stands for the record");
   await act(async () => qa('[data-change-row="fixture-change-7"] button[aria-label="Edit"]')[0].click());
   const statusSelect = q<HTMLSelectElement>('[data-edit-form] select[data-edit-select="status"]');
   assert.deepEqual([...statusSelect!.options].map((o) => o.value), ["done", "abandoned", "active"]);

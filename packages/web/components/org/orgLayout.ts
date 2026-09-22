@@ -3,16 +3,15 @@
 // spaced, parents centred over their children.
 //
 // Shape of the tree: people are roots, side by side. Under a person hang the
-// anchors they host, the roles that report to them, and a STACK of their own
-// sessions (a vertical list, so a parent with eight sessions stays one column
+// roles that report to them and a STACK of their own sessions (a vertical list, so a parent with eight sessions stays one column
 // wide instead of eight). Roles nest the same way. A stack ends in a cluster
 // card ("+N more") when the parent has more sessions than are loaded.
-import type { OrgAnchor, OrgPerson, OrgRole, OrgSession, OrgTree, OrgParentRef, StateCounts } from "./orgTypes";
+import type { OrgPerson, OrgRole, OrgSession, OrgTree, OrgParentRef, StateCounts } from "./orgTypes";
 import type { OrgChange, OrgChangeKind, OrgChangeStatus, OrgProposalChange } from "./orgStaffingTypes";
 import { editedOrgChange, seatSentence, type OrgRoleSeat } from "@codecast/shared/contracts/orgProposal";
 import { changeLine, chipLine, roleTenureChip, standingLineOf } from "./orgMeta";
 
-export type OrgNodeKind = "person" | "role" | "anchor" | "session" | "cluster";
+export type OrgNodeKind = "person" | "role" | "session" | "cluster";
 
 // ---------------------------------------------------------------- ghosts
 // Open proposal changes drawn INTO the tree (docs/architecture/org-staffing.md
@@ -51,7 +50,6 @@ type GhostDecor = { ghost?: OrgGhostStub; retire?: OrgGhostMeta; move?: OrgGhost
 export type OrgLayoutNode =
   | ({ id: string; kind: "person"; x: number; y: number; w: number; h: number; person: OrgPerson; collapsed: boolean; hidden: number; overflow: number } & GhostDecor)
   | ({ id: string; kind: "role"; x: number; y: number; w: number; h: number; role: OrgRole; collapsed: boolean; hidden: number; overflow: number; tenure?: { short: string; full: string } } & GhostDecor)
-  | { id: string; kind: "anchor"; x: number; y: number; w: number; h: number; anchor: OrgAnchor }
   | ({ id: string; kind: "session"; x: number; y: number; w: number; h: number; session: OrgSession; parent: OrgParentRef } & GhostDecor)
   | { id: string; kind: "cluster"; x: number; y: number; w: number; h: number; parent: OrgParentRef; remaining: number; loaded: number; total: number; counts: StateCounts; fullyLoaded: boolean };
 
@@ -72,7 +70,6 @@ export type OrgLayoutView = {
 export const ORG_SIZES = {
   person: { w: 232, h: 96 },
   role: { w: 232, h: 108 },
-  anchor: { w: 208, h: 60 },
   session: { w: 220, h: 50 },
   cluster: { w: 220, h: 58 },
   /** Extra card height when a node carries ghost chips. */
@@ -105,7 +102,6 @@ export const ORG_STACK_VISIBLE = 5;
 
 export const personNodeId = (userId: string) => `person:${userId}`;
 export const roleNodeId = (roleId: string) => `role:${roleId}`;
-export const anchorNodeId = (anchorId: string) => `anchor:${anchorId}`;
 export const sessionNodeId = (conversationId: string) => `session:${conversationId}`;
 export const clusterNodeId = (parentId: string) => `cluster:${parentId}`;
 
@@ -123,12 +119,11 @@ export function parentRefOfNodeId(id: string): OrgParentRef | null {
 
 type Branch = {
   id: string;
-  kind: "person" | "role" | "anchor";
+  kind: "person" | "role";
   w: number;
   h: number;
   person?: OrgPerson;
   role?: OrgRole;
-  anchor?: OrgAnchor;
   /** A program seat's tenure chip (S10), resolved HERE because this is where
    *  the whole tree is in hand: the plan or project name lives in some other
    *  role's scope_names, so a card resolving it alone would show a raw id and
@@ -205,8 +200,8 @@ function subtreeCount(b: Branch): number {
 export function buildBranches(tree: OrgTree, view: OrgLayoutView, ghosts?: Pick<OrgGhostPlan, "chips" | "stubs">): Branch[] {
   const filed = bucketedIds(tree);
   const chipRow = (id: string) => (ghosts?.chips[id]?.length ? ORG_SIZES.chipRow : 0);
-  // An anchor's bot is a team member too, but it is drawn as the anchor card,
-  // never as a person: its one session is emitted under `anchors`.
+  // A seat's bot is a team member too, but the seat is drawn inside its
+  // role's card (org-staffing.md S22), never as a person.
   const botIds = new Set(tree.anchors.map((a) => a.bot_user_id));
   const people = tree.people
     .filter((p) => !botIds.has(p.user_id))
@@ -228,17 +223,9 @@ export function buildBranches(tree: OrgTree, view: OrgLayoutView, ghosts?: Pick<
       orphanRoles.push(r);
     }
   }
-  // A role's seat is the role (org-staffing.md S16): its state paints on the
-  // role card and its hands stack under it, so the seat's anchor row is never
-  // drawn as a second node under the host. Only the workspace anchor is.
-  const seatAnchorIds = new Set(tree.roles.map((r) => r.anchor_id).filter(Boolean));
-  const anchorsUnderUser = new Map<string, OrgAnchor[]>();
-  const orphanAnchors: OrgAnchor[] = [];
-  for (const a of tree.anchors) {
-    if (a.status === "decommissioned" || a.org_role_id || seatAnchorIds.has(a.anchor_id)) continue;
-    if (personIds.has(a.host_user_id)) anchorsUnderUser.set(a.host_user_id, [...(anchorsUnderUser.get(a.host_user_id) ?? []), a]);
-    else orphanAnchors.push(a);
-  }
+  // A role's seat is the role (org-staffing.md S16, S22): its state paints
+  // on the role card and its hands stack under it. The anchors table is the
+  // seat's storage and nothing here draws a node from it.
 
   const byName = (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name);
   const visiting = new Set<string>();
@@ -265,30 +252,24 @@ export function buildBranches(tree: OrgTree, view: OrgLayoutView, ghosts?: Pick<
     if (collapsed) b.hidden = kids.length + r.total + kids.reduce((n, k) => n + subtreeCount(roleBranch(k)), 0);
     return b;
   };
-  const anchorBranch = (a: OrgAnchor): Branch => ({
-    id: anchorNodeId(a.anchor_id), kind: "anchor", w: ORG_SIZES.anchor.w, h: ORG_SIZES.anchor.h, anchor: a,
-    children: [], stack: null, collapsed: false, hidden: 0, overflow: 0, width: 0, height: 0,
-  });
   const personBranch = (p: OrgPerson): Branch => {
     const id = personNodeId(p.user_id);
     const collapsed = view.collapsed.has(id);
-    const anchors = (anchorsUnderUser.get(p.user_id) ?? []).sort(byName);
     const kids = (rolesUnderUser.get(p.user_id) ?? []).sort(byName);
     const b: Branch = {
       id, kind: "person", w: ORG_SIZES.person.w, h: ORG_SIZES.person.h + chipRow(id), person: p,
-      children: collapsed ? [] : [...anchors.map(anchorBranch), ...kids.map(roleBranch)],
+      children: collapsed ? [] : kids.map(roleBranch),
       stack: collapsed ? null : stackFor({ kind: "user", user_id: p.user_id }, p, view, filed),
       collapsed, hidden: 0, overflow: 0, width: 0, height: 0,
     };
     b.overflow = b.stack ? Math.max(0, b.stack.total - b.stack.sessions.length) : collapsed ? p.total : 0;
-    if (collapsed) b.hidden = anchors.length + kids.length + p.total + kids.reduce((n, k) => n + subtreeCount(roleBranch(k)), 0);
+    if (collapsed) b.hidden = kids.length + p.total + kids.reduce((n, k) => n + subtreeCount(roleBranch(k)), 0);
     return b;
   };
 
   return [
     ...people.map(personBranch),
     ...orphanRoles.sort(byName).map(roleBranch),
-    ...orphanAnchors.sort(byName).map(anchorBranch),
   ];
 }
 
@@ -310,8 +291,7 @@ function place(b: Branch, left: number, top: number, out: OrgLayoutNode[], edges
   const x = left + (b.width - b.w) / 2;
   const y = top;
   if (b.kind === "person") out.push({ id: b.id, kind: "person", x, y, w: b.w, h: b.h, person: b.person!, collapsed: b.collapsed, hidden: b.hidden, overflow: b.overflow });
-  else if (b.kind === "role") out.push({ id: b.id, kind: "role", x, y, w: b.w, h: b.h, role: b.role!, collapsed: b.collapsed, hidden: b.hidden, overflow: b.overflow, ...(b.tenure ? { tenure: b.tenure } : {}) });
-  else out.push({ id: b.id, kind: "anchor", x, y, w: b.w, h: b.h, anchor: b.anchor! });
+  else out.push({ id: b.id, kind: "role", x, y, w: b.w, h: b.h, role: b.role!, collapsed: b.collapsed, hidden: b.hidden, overflow: b.overflow, ...(b.tenure ? { tenure: b.tenure } : {}) });
 
   const parts: number[] = b.children.map((c) => c.width);
   if (b.stack) parts.push(ORG_SIZES.session.w);
@@ -375,7 +355,7 @@ function decorate(nodes: OrgLayoutNode[], edges: OrgLayoutEdge[], ghosts: OrgGho
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const moveOf = new Map(ghosts.moves.map((m) => [m.nodeId, m]));
   for (const n of nodes) {
-    if (n.kind === "anchor" || n.kind === "cluster") continue;
+    if (n.kind === "cluster") continue;
     const stub = ghosts.stubs[n.id];
     if (stub) n.ghost = stub;
     const chips = ghosts.chips[n.id];

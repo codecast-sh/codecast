@@ -6,10 +6,10 @@
 // their sessions. A session shows what it is, its parent, and an open link.
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { X, ExternalLink, Trash2, ArrowRightLeft, CheckSquare, FileText, Users, Anchor as AnchorGlyph, Pencil, Check, Crown, Shield } from "lucide-react";
+import { X, ExternalLink, Trash2, ArrowRightLeft, CheckSquare, FileText, Users, Pencil, Check, Crown, Shield } from "lucide-react";
 import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
 import type { TaskItem, DocItem, PlanItem, ProjectItem } from "../../store/inboxStore";
-import { compactAge } from "../../lib/threadState";
+import { compactAge, agoOf } from "../../lib/threadState";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { AgentIcon } from "../ConversationList";
 import { Avatar } from "../tasks/TaskCommentStream";
@@ -469,7 +469,6 @@ function RolePanel({ tree, role, sessions, canEdit, onOpenSession, onMove, onUpd
 function PersonPanel({ tree, person, sessions, onOpenSession, now }: { tree: OrgTree; person: OrgTree["people"][number]; sessions: OrgSessionsSource; onOpenSession: (id: string) => void; now: number }) {
   const parentId = parentNodeId({ kind: "user", user_id: person.user_id });
   const roles = tree.roles.filter((r) => r.reports_to.kind === "user" && r.reports_to.user_id === person.user_id && r.status !== "retired");
-  const anchors = tree.anchors.filter((a) => a.host_user_id === person.user_id);
   const rows = sessions.sessionsUnder(parentId).map<FeedRow>((s) => ({ kind: "session", id: `s:${s._id}`, title: s.title, at: s.updated_at, session: s }));
   return (
     <>
@@ -488,10 +487,9 @@ function PersonPanel({ tree, person, sessions, onOpenSession, now }: { tree: Org
       </div>
       <SectionLabel right={<StateTally counts={person.counts} />}>Direct sessions</SectionLabel>
       <StateBar counts={person.counts} />
-      <div className="mt-2 grid grid-cols-3 gap-2">
+      <div className="mt-2 grid grid-cols-2 gap-2">
         <Stat label="sessions" value={person.total} />
         <Stat label="roles" value={roles.length} />
-        <Stat label="anchors" value={anchors.length} />
       </div>
       <SectionLabel>Sessions</SectionLabel>
       <Feed rows={rows} now={now} onOpenSession={onOpenSession} more={<LoadMore parentId={parentId} sessions={sessions} />} />
@@ -519,7 +517,7 @@ function SessionPanel({ tree, session, parent, canEdit, onOpenSession, onMove, o
           <div className="mt-1 flex items-center gap-2 flex-wrap text-[11px]" style={{ color: "var(--sol-text-dim)", fontFamily: "var(--font-mono)" }}>
             <span>{session.short_id}</span>
             <StateChip state={session.state} />
-            <span>{compactAge(now - session.updated_at)} ago</span>
+            <span>{agoOf(now - session.updated_at)}</span>
           </div>
         </div>
       </div>
@@ -554,33 +552,6 @@ function KV({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
       <div className="text-[10px] uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>{k}</div>
       <div className="truncate mt-0.5" style={{ color: "var(--sol-text-secondary)", fontFamily: mono ? "var(--font-mono)" : undefined }} title={v}>{v}</div>
     </div>
-  );
-}
-
-function AnchorPanel({ tree, anchor, onOpenSession }: { tree: OrgTree; anchor: OrgTree["anchors"][number]; onOpenSession: (id: string) => void }) {
-  const host = tree.people.find((p) => p.user_id === anchor.host_user_id);
-  const st = anchor.state ? ORG_STATE_META[anchor.state] : null;
-  return (
-    <>
-      <div className="flex items-center gap-3">
-        <span className="inline-flex items-center justify-center w-9 h-9 rounded-full" style={{ background: "color-mix(in srgb, var(--sol-orange) 16%, transparent)", color: "var(--sol-orange)" }}><AnchorGlyph className="w-4 h-4" /></span>
-        <div className="min-w-0">
-          <div className="text-[20px] leading-tight font-semibold tracking-tight truncate" style={{ fontFamily: "var(--font-serif)", color: "var(--sol-text)" }}>{anchor.name}</div>
-          <div className="text-[11px] mt-0.5 flex items-center gap-1.5" style={{ color: "var(--sol-text-dim)" }}>
-            <span>standing agent · {anchor.status}</span>
-            {st && <span style={{ color: st.color }}>· {st.label}</span>}
-          </div>
-        </div>
-      </div>
-      <StandingLine standing={anchor} size="md" className="mt-3" />
-      <SectionLabel>Hosted by</SectionLabel>
-      <div className="text-[12.5px] font-medium" style={{ color: "var(--sol-text)" }}>{host?.name ?? "—"}</div>
-      {anchor.conversation_id && (
-        <OrgButton primary className="mt-5" onClick={() => onOpenSession(anchor.conversation_id!)}>
-          <ExternalLink className="w-3.5 h-3.5" /> Open its session
-        </OrgButton>
-      )}
-    </>
   );
 }
 
@@ -642,7 +613,6 @@ export function OrgScopePanel(props: OrgScopePanelProps) {
             {node.kind === "role" && <RolePanel tree={props.tree} role={node.role} sessions={props.sessions} canEdit={props.canEdit} onOpenSession={props.onOpenSession} onMove={props.onMove} onUpdateRole={props.onUpdateRole} onRetireRole={props.onRetireRole} onSelectNode={props.onSelectNode} now={now} changes={props.changes} focusChangeId={props.focusChangeId} onSelectChange={props.onSelectChange} />}
             {node.kind === "person" && <PersonPanel tree={props.tree} person={node.person} sessions={props.sessions} onOpenSession={props.onOpenSession} now={now} />}
             {node.kind === "session" && <SessionPanel tree={props.tree} session={node.session} parent={node.parent} canEdit={props.canEdit} onOpenSession={props.onOpenSession} onMove={props.onMove} onSelectNode={props.onSelectNode} now={now} />}
-            {node.kind === "anchor" && <AnchorPanel tree={props.tree} anchor={node.anchor} onOpenSession={props.onOpenSession} />}
             {node.kind === "cluster" && <p className="text-[12px]" style={{ color: "var(--sol-text-dim)" }}>Click the card to load more sessions.</p>}
           </>
         )}

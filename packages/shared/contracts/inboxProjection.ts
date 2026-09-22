@@ -82,7 +82,12 @@ export type InboxTruncation = (typeof INBOX_TRUNCATION_KINDS)[number];
 // person's needs input (isUnderRole); the standing session surfaces from
 // hidden once something rides it; an escalated session stands alone in needs
 // input until it is handed back.
-export const INBOX_PROJECTION_VERSION = 11 as const;
+// v12: an escalation reaches the person through the role (org-roles-run-work
+// .md R1, revised). A child the role escalated keeps riding the role, and the
+// ride lifts the role's standing session into needs input with the child's
+// line on it (roleEscalationsOf); only a `direct` escalation, or the person's
+// own gesture, makes the child a card of its own.
+export const INBOX_PROJECTION_VERSION = 12 as const;
 
 export type InboxProjection = {
   v: typeof INBOX_PROJECTION_VERSION;
@@ -738,7 +743,45 @@ export function settleRiders(
 // child's open ask lifts its parent into QUESTIONS, and a role's session
 // asking a question must not reach the person until the role says so.
 export function isUnderRole(row: RollupRow): boolean {
-  return !!row.org_role_id && !row.standing_role_id && !row.escalated_by_role;
+  return !!row.org_role_id && !row.standing_role_id && !isDirectEscalation(row.escalated_by_role);
+}
+
+// The shape of conversations.escalated_by_role as every channel reads it.
+export type RoleEscalationStamp = { role_id: string; line: string; at: number; direct?: boolean };
+
+// A direct escalation puts the CHILD in front of the person (`cast escalate
+// --direct`, or the person's own Put in my inbox): it stands alone as a card.
+// Any other stamp reaches the person through the role's card. A stamp written
+// before the flag existed is the role's ordinary escalation, so absent = not
+// direct.
+export function isDirectEscalation(stamp: unknown): boolean {
+  return !!stamp && typeof stamp === "object" && (stamp as RoleEscalationStamp).direct === true;
+}
+
+// One line a role's card carries: which of its sessions it put in front of
+// the person, and why. Derived from the children on every channel, never
+// stored on the role's row, so the card and the child's strip cannot disagree.
+export type RoleEscalation = { conversation_id: string; line: string; at: number };
+
+// lead id (the role's standing session) → the open escalations of the
+// sessions under it that reach the person through the role, newest first.
+// A direct escalation is the child's own card and is not on the role's.
+export function roleEscalationsOf(ids: Iterable<string>, rowOf: (id: string) => RollupRow | undefined): Map<string, RoleEscalation[]> {
+  const all = [...ids];
+  const leads = roleLeadIdsOf(all, rowOf);
+  const out = new Map<string, RoleEscalation[]>();
+  for (const id of all) {
+    const row = rowOf(id);
+    if (!row || !isUnderRole(row) || !row.escalated_by_role) continue;
+    const lead = leads.get(String(row.org_role_id));
+    if (!lead) continue;
+    const stamp = row.escalated_by_role as RoleEscalationStamp;
+    const list = out.get(lead) ?? [];
+    list.push({ conversation_id: id, line: stamp.line, at: stamp.at });
+    out.set(lead, list);
+  }
+  for (const list of out.values()) list.sort((a, b) => b.at - a.at || (a.conversation_id < b.conversation_id ? -1 : 1));
+  return out;
 }
 
 // role id → the id of the row that is that role's standing session, over the
@@ -767,6 +810,19 @@ export function rideLeadPlacements<P extends { bucket: InboxBucket }>(
   rowOf: (id: string) => RollupRow | undefined,
   copy: (rider: P, lead: P) => void = () => {},
 ): void {
+  // A role's escalation reaches the person through the role's card (R1,
+  // revised): a session under the role with an open escalation lifts the
+  // role's standing session into needs input BEFORE anything rides it, so
+  // every session under the role files in that one section with it. The
+  // role's own placement wins only where the person put it themselves
+  // (RIDE_KEEPS_OWN) or the role is retired (dismissed).
+  const present = (id: string) => (placements.has(id) ? rowOf(id) : undefined);
+  for (const leadId of roleEscalationsOf(placements.keys(), present).keys()) {
+    const lead = placements.get(leadId)!;
+    if (RIDE_KEEPS_OWN.has(lead.bucket) || lead.bucket === "dismissed") continue;
+    lead.bucket = "needs_input";
+    (lead as { work_state?: WorkState }).work_state = "needs_input";
+  }
   settleRiders(
     placements.keys(),
     (id) => (placements.has(id) ? rowOf(id) : undefined),

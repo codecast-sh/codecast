@@ -89,7 +89,7 @@ export default function RoleScreen() {
       <>
         {header}
         <RNView style={styles.center}>
-          <FontAwesome name="anchor" size={26} color={Theme.orange} />
+          <FontAwesome name="sitemap" size={26} color={Theme.orange} />
           <RNText style={styles.title}>No workspace agent yet</RNText>
           <RNText style={styles.body}>Set one up from the org page on the web; this page then becomes the conversation with it.</RNText>
           <TouchableOpacity onPress={() => router.push(boardHref as never)}><RNText style={styles.link}>Open the board</RNText></TouchableOpacity>

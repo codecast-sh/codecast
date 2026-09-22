@@ -113,12 +113,18 @@ export type OrgFileChange = { kind: "file"; plan: string; project: string };
 // Bring records in line (org-staffing.md S9): a plan, task or project whose
 // evidence says it is finished gets its status set, through the same update
 // paths a person uses. `reason` is the evidence, for the person deciding.
-export type OrgPlanStatusChange = { kind: "plan_status"; plan: string; status: "done" | "abandoned" | "active"; reason: string };
+// `title` is the record's own title, carried on the change so the row reads
+// "Mark done: <title>" wherever the proposal is read: a reader's store may
+// not hold that team's records, so the title travels with the proposal (the
+// analyzer writes it from its inputs; the server fills it at post time when
+// the record is in the workspace).
+export type OrgPlanStatusChange = { kind: "plan_status"; plan: string; status: "done" | "abandoned" | "active"; reason: string; title?: string };
 /** A task's status set: done or dropped closes it; open (or backlog, where the
  *  team's statuses have it) puts a row that was marked in progress but never
  *  worked back where it belongs, instead of dropping real backlog. */
-export type OrgTaskStatusChange = { kind: "task_status"; task: string; status: "done" | "dropped" | "open" | "backlog"; reason: string };
-export type OrgProjectStatusChange = { kind: "project_status"; project: string; status: "paused" | "done" | "active"; reason: string };
+export type OrgTaskStatusChange = { kind: "task_status"; task: string; status: "done" | "dropped" | "open" | "backlog"; reason: string; title?: string };
+export type OrgProjectStatusChange = { kind: "project_status"; project: string; status: "paused" | "done" | "active"; reason: string; title?: string };
+export type OrgRecordStatusChange = OrgPlanStatusChange | OrgTaskStatusChange | OrgProjectStatusChange;
 
 // Hiring from a template (org-hire.md W8). Trust is authority inside codecast;
 // `authority` is what a person lets a role do outside it: spend on an account,
@@ -333,14 +339,17 @@ export function orgChangeError(raw: any): string | null {
     case "plan_status":
       if (!nonEmpty(raw.plan)) return "plan_status needs a plan ref";
       if (!(PLAN_STATUS_CHANGES as readonly string[]).includes(raw.status)) return `plan_status status is one of ${PLAN_STATUS_CHANGES.join(", ")}`;
+      if (!optString(raw.title)) return "plan_status title is the plan's title, a string";
       return nonEmpty(raw.reason) ? null : "plan_status needs a reason: the evidence the record is stale";
     case "task_status":
       if (!nonEmpty(raw.task)) return "task_status needs a task ref";
       if (!(TASK_STATUS_CHANGES as readonly string[]).includes(raw.status)) return `task_status status is one of ${TASK_STATUS_CHANGES.join(", ")}`;
+      if (!optString(raw.title)) return "task_status title is the task's title, a string";
       return nonEmpty(raw.reason) ? null : "task_status needs a reason: the evidence the record is stale";
     case "project_status":
       if (!nonEmpty(raw.project)) return "project_status needs a project ref";
       if (!(PROJECT_STATUS_CHANGES as readonly string[]).includes(raw.status)) return `project_status status is one of ${PROJECT_STATUS_CHANGES.join(", ")}`;
+      if (!optString(raw.title)) return "project_status title is the project's title, a string";
       return nonEmpty(raw.reason) ? null : "project_status needs a reason: the evidence the record is stale";
   }
   return null;
@@ -1022,6 +1031,21 @@ export function describeOrgChange(c: OrgChange): string {
 }
 
 /**
+ * A record change as its row shows it (S9): the act ("mark done"), the
+ * record's ref ("ct-42") and its title when the change carries one. The row
+ * renders the act and the title with the ref as a pill; `changeLine` writes
+ * the same parts as one string ("Mark done: Fix the build (ct-42)"). A
+ * title that only repeats the ref (a project named by its title) is dropped,
+ * so the ref is never said twice. Null for every other kind of change.
+ */
+export function recordChangeParts(c: OrgChange): { act: string; ref: string; title: string | null } | null {
+  if (c.kind !== "plan_status" && c.kind !== "task_status" && c.kind !== "project_status") return null;
+  const ref = (c.kind === "plan_status" ? c.plan : c.kind === "task_status" ? c.task : c.project).trim();
+  const title = c.title?.trim() || null;
+  return { act: `mark ${c.status}`, ref, title: title && title.toLowerCase() !== ref.toLowerCase() ? title : null };
+}
+
+/**
  * The one line a change reads as to a person (org-staffing.md S17): a sentence
  * addressed to the reader, in the product's own words (standing agent, area
  * of work, daily limit), never the CLI walk's command syntax
@@ -1069,7 +1093,10 @@ function changeSentence(c: OrgChange): string {
     case "hire": return `hire ${at(c.handle)} from the template ${c.template} (${c.version}) to lead ${c.project}`;
     case "upgrade": return `move the instance ${c.instance} to ${c.template} ${c.to}`;
     case "file": return `put plan ${c.plan} under the project ${c.project}`;
-    case "plan_status": case "task_status": case "project_status": return describeOrgChange(c);
+    case "plan_status": case "task_status": case "project_status": {
+      const parts = recordChangeParts(c)!;
+      return parts.title ? `${parts.act}: ${parts.title} (${parts.ref})` : describeOrgChange(c);
+    }
     default: {
       const kind = (c as { kind?: unknown }).kind;
       return `a change this version of codecast cannot show yet${typeof kind === "string" && kind ? ` ("${kind}")` : ""}`;

@@ -22,7 +22,7 @@ import { useCallback, useMemo, useState } from "react";
 import Link from "next/link";
 import { ChevronDown, ChevronRight, ChevronUp, ExternalLink, MessageSquareText, X } from "lucide-react";
 import { toast } from "sonner";
-import { compactAge } from "../../lib/threadState";
+import { agoOf } from "../../lib/threadState";
 import { cn } from "../../lib/utils";
 import { AnchorConversation } from "../anchor/AnchorConversation";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
@@ -30,7 +30,7 @@ import { RoleAvatar } from "./avatars";
 import { RolePausedNote } from "./RolePausedNote";
 import { StatusPill } from "./StaffingPane";
 import { changeLine } from "./staffingModel";
-import { introducesItself, letterIntro, letterParts, type AskView } from "./staffingAsks";
+import { asksBarWords, introducesItself, letterIntro, letterParts, type AskView } from "./staffingAsks";
 import type { OrgProposalChange, OrgProposalRow } from "./orgStaffingTypes";
 import type { ProposalThreadRef } from "./staffingRevise";
 
@@ -90,8 +90,12 @@ export function ProposalThread(props: ProposalThreadProps) {
     <ProposalLetter proposal={proposal} thread={thread} firstTime={props.firstTime} now={minute * 60_000} onOpenSession={props.onOpenSession} />
   ), [proposal.summary_md, proposal.created_at, thread, props.firstTime, minute, props.onOpenSession]); // eslint-disable-line react-hooks/exhaustive-deps
   const bar = props.asksBar;
+  // The letter scrolls under the composer, so its last visible line is cut
+  // mid sentence; a short fade over the cut says there is more above the
+  // bar (org eval round 3: "cut mid sentence with no sign there is more").
   const composerNode = useMemo(() => (
     <>
+      <div aria-hidden className="relative z-[1] -mt-7 h-7 pointer-events-none" style={{ background: "linear-gradient(to bottom, transparent, var(--sol-bg))" }} data-letter-fade />
       {bar && <AsksBar {...bar} />}
       <AboutLine about={about} onClear={props.onClearAbout} />
     </>
@@ -154,7 +158,7 @@ export function ProposalLetter({ proposal, thread, firstTime, now, onOpenSession
           ? <RoleAvatar avatar={thread.role.avatar ?? thread.role.handle} size={24} />
           : <span className="w-6 h-6 rounded-full inline-flex items-center justify-center shrink-0" style={{ background: "color-mix(in srgb, var(--sol-violet) 16%, transparent)", color: "var(--sol-violet)" }}><MessageSquareText className="w-3.5 h-3.5" /></span>}
         <span className="text-xs font-medium" style={{ color: "var(--sol-text-secondary)" }} data-letter-author>{thread.named ? thread.name : "The agent that wrote this"}</span>
-        <span className="text-xs tabular-nums" style={{ color: "var(--sol-text-dim)" }} title={new Date(proposal.created_at).toLocaleString()}>{compactAge(Math.max(0, now - proposal.created_at))} ago</span>
+        <span className="text-xs tabular-nums" style={{ color: "var(--sol-text-dim)" }} title={new Date(proposal.created_at).toLocaleString()}>{agoOf(Math.max(0, now - proposal.created_at))}</span>
         <button type="button" onClick={() => onOpenSession(thread.conversationId)} className="ml-auto w-6 h-6 inline-flex items-center justify-center rounded-md hover:bg-sol-bg-highlight" style={{ color: "var(--sol-text-dim)" }} aria-label="Open the full session" title="Open the full session, with every step the author took" data-thread-open>
           <ExternalLink className="w-3.5 h-3.5" />
         </button>
@@ -202,14 +206,21 @@ export function AboutLine({ about, onClear }: { about: ProposalAbout; onClear: (
 }
 
 /** Phone (S19): the conversation is the page, and this bar at its foot says
- *  how many asks wait and opens them as a sheet. */
+ *  how many asks wait and opens them as a sheet. The count is on the left;
+ *  the verb sits on a filled chip at the right, so the bar reads as a
+ *  control and not a status line (staffingAsks.asksBarWords). */
 function AsksBar({ toDecide, total, updated, onOpen }: { toDecide: number; total: number; updated: number; onOpen: () => void }) {
   const done = toDecide === 0;
+  const tone = done ? "var(--sol-green)" : "var(--sol-violet)";
+  const words = asksBarWords(toDecide, total);
   return (
-    <button type="button" onClick={onOpen} className={cn("mx-3 mb-2 w-[calc(100%-1.5rem)] h-11 rounded-xl border flex items-center gap-2.5 px-3.5 text-left")} style={{ borderColor: `color-mix(in srgb, ${done ? "var(--sol-green)" : "var(--sol-violet)"} 45%, transparent)`, background: "var(--sol-card)", color: "var(--sol-text)" }} data-asks-bar>
-      <span className="min-w-0 flex-1 truncate text-[13.5px] font-semibold tabular-nums">{done ? `All ${total} decided` : `${toDecide} to decide`}</span>
-      {updated > 0 && <span className="shrink-0 inline-flex items-center h-5 px-1.5 rounded-full text-[10.5px] font-semibold tabular-nums" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }}>{updated} updated</span>}
-      <ChevronUp className="w-4 h-4 shrink-0" style={{ color: "var(--sol-text-dim)" }} />
+    <button type="button" onClick={onOpen} aria-label={`${words.count}. ${words.action}`} className={cn("mx-3 mb-2 w-[calc(100%-1.5rem)] h-11 rounded-xl border flex items-center gap-2.5 pl-3.5 pr-1.5 text-left")} style={{ borderColor: `color-mix(in srgb, ${tone} 45%, transparent)`, background: "var(--sol-card)", color: "var(--sol-text)" }} data-asks-bar>
+      <span className="min-w-0 flex-1 truncate text-[13.5px] font-semibold tabular-nums" data-asks-bar-count>{words.count}</span>
+      {updated > 0 && <span className="shrink-0 inline-flex items-center h-5 px-1.5 rounded-full text-[10.5px] font-semibold tabular-nums" style={{ background: "color-mix(in srgb, var(--sol-violet) 16%, transparent)", color: "var(--sol-violet)" }}>{updated} updated</span>}
+      <span className="shrink-0 inline-flex items-center gap-1 h-8 pl-2.5 pr-1.5 rounded-lg text-[12.5px] font-semibold" style={{ background: tone, color: "var(--sol-bg)" }} data-asks-bar-action>
+        {words.action}
+        <ChevronUp className="w-4 h-4" />
+      </span>
     </button>
   );
 }

@@ -236,7 +236,7 @@ export type CompanySignals = {
 /** The stale lists org.analysisInputs and org.health share (S9). One reading
  *  of "stale", computed by convex/lib/orgActivity from the rows. */
 export type StalePlanReason = "every task closed" | "no activity 21d" | "bound sessions all done" | "marked done, still worked";
-export type StaleTaskReason = "in progress, no session 14d" | "in progress, sessions done 14d" | "commits landed, still open";
+export type StaleTaskReason = "in progress, no session 14d" | "in progress, sessions done 14d" | "commits landed, still open" | "open, untouched 45d";
 export type StalePlan = { short_id: string; title: string; status: string; last_task_activity_at: number | null; sessions_live: number; reason: StalePlanReason };
 export type StaleTask = { short_id: string; title: string; status: string; last_session_activity_at: number | null; reason: StaleTaskReason };
 export type StaleProject = { id: string; title: string; reason: "no activity 30d" };

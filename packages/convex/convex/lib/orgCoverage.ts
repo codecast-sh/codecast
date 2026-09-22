@@ -40,7 +40,10 @@ export type CoverageInputs = {
 };
 
 /** `lead` is the role's handle. `watchers` are the roles on separate lines that list the project while it names none. */
-type LeadFacts = { lead?: string; lead_by?: "owner" | "scope"; watchers?: string[] };
+/** `lead_paused` names the role that would lead the project if it were not paused: a paused
+ *  seat drives nothing, so the project counts as without a lead until the person resumes or
+ *  replaces it (two of Codecast's three leads were paused and read as leads, 2026-09-21). */
+type LeadFacts = { lead?: string; lead_by?: "owner" | "scope"; lead_paused?: string; watchers?: string[] };
 
 export type ProjectCoverage = LeadFacts & { id: string; short_id?: string; title: string; open_tasks: number; open_plans: number; initiatives: string[] };
 
@@ -68,6 +71,8 @@ export type OrgCoverage = {
   projects: ProjectCoverage[];
   with_work: number;
   with_lead: number;
+  /** Projects with work whose only lead is paused: counted as without a lead above. */
+  with_lead_paused: number;
   outside: {
     plans: Array<{ short_id: string; title: string; open_tasks: number }>;
     open_tasks: number;
@@ -93,7 +98,7 @@ export function computeCoverage(input: CoverageInputs): OrgCoverage {
 
   const leadFacts = (project: CoverageProject): LeadFacts => {
     const lead = projectLeadOf(project, input.roles);
-    if (lead.kind === "lead") return { lead: `@${lead.role.handle}`, lead_by: lead.by };
+    if (lead.kind === "lead") return (lead.role as any).status === "paused" ? { lead_paused: `@${lead.role.handle}`, lead_by: lead.by } : { lead: `@${lead.role.handle}`, lead_by: lead.by };
     return lead.kind === "watchers" ? { watchers: lead.roles.map((r) => `@${r.handle}`) } : {};
   };
   const hasWork = (p: CoverageProject) => p.status === "active" && ((openByProject.get(String(p._id)) ?? 0) > 0 || (openPlansByProject.get(String(p._id)) ?? 0) > 0);
@@ -149,11 +154,13 @@ export function computeCoverage(input: CoverageInputs): OrgCoverage {
     projects,
     with_work: projects.length,
     with_lead: projects.filter((p) => p.lead).length,
+    with_lead_paused: projects.filter((p) => p.lead_paused).length,
     outside: {
       plans: input.plans.filter((p) => !p.project_id && !isClosedPlan(p.status) && (openByPlan.get(String(p._id)) ?? 0) > 0)
         .map((p) => ({ short_id: p.short_id, title: p.title, open_tasks: openByPlan.get(String(p._id))! })),
       open_tasks: looseTasks,
-      areas: input.areas.filter((a) => !a.project_id && (a.commits_30d > 0 || a.sessions_30d > 0))
+      // A path several projects share names none of them and is not outside any project either.
+      areas: input.areas.filter((a) => !a.project_id && !a.project_shared_by && (a.commits_30d > 0 || a.sessions_30d > 0))
         .map(({ repository, path_prefix, commits_30d, sessions_30d }) => ({ repository, path_prefix, commits_30d, sessions_30d })),
     },
   };

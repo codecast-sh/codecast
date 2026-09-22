@@ -62,6 +62,10 @@ export type OrgLogFields = {
   trust?: string;
   /** What the role may do outside codecast (org-hire.md H4); the list as stored. */
   authority?: unknown;
+  /** A hire from a template (org-hire.md): the instance the role now runs on one project. Null before. */
+  instance?: { instance: string; template_id: string; version: string; project_id: string } | null;
+  /** An accepted upgrade of an instance, waiting for the host step (H9). Null before, and null again when withdrawn. */
+  upgrade?: { instance: string; template_id: string; to: string } | null;
   standing_session?: { conversation_id: string; short_id: string } | null;
   routine?: { agent_task_id: string; title: string; every?: string } | null;
   // A project, a plan, a task.
@@ -326,12 +330,16 @@ export function orgLogRowChange(row: OrgLogRow): OrgChange | null {
     case "scope": return { kind: "scope", handle, ...(gained.length ? { add: gained } : {}), ...(lost.length ? { remove: lost } : {}) };
     case "budget": return { kind: "budget", handle, caps: row.after.caps ?? {} };
     case "trust": return { kind: "trust", handle, trust: (row.after.trust ?? "understand") as any };
+    case "hire": return row.after.instance ? { kind: "hire", handle, template: row.after.instance.template_id, version: row.after.instance.version, digest: "", instance: row.after.instance.instance, project: nameOf(row, row.after.instance.project_id, "its project") } : null;
+    case "upgrade": return row.after.upgrade ? { kind: "upgrade", instance: row.after.upgrade.instance, template: row.after.upgrade.template_id, to: row.after.upgrade.to, digest: "" } : null;
     case "authority": return { kind: "authority", handle, authority: ((row.after.authority as any[]) ?? []).map((g) => ({ id: g.id, kind: g.kind, label: g.label, ...(g.scope ? { scope: g.scope } : {}), ...(g.limit ? { limit: g.limit } : {}) })) };
     case "routine": return { kind: "routine", handle, title: row.after.routine?.title ?? "", prompt: "", every: row.after.routine?.every ?? "" };
     case "adopt": return { kind: "adopt", handle, conversation: row.after.standing_session?.short_id ?? row.effects.seat?.short_id ?? "" };
     case "file": return { kind: "file", plan: row.subject.short_id ?? row.subject.label, project: nameOf(row, row.after.project_id, "no project") };
-    case "plan_status": return { kind: "plan_status", plan: row.subject.short_id ?? row.subject.label, status: row.after.status as any, reason: "" };
-    case "task_status": return { kind: "task_status", task: row.subject.short_id ?? row.subject.label, status: row.after.status as any, reason: "" };
+    // The subject's label is the record's title (recordSubject), so the log
+    // reads the row the way the proposal did: "Mark done: Launch (pl-7)".
+    case "plan_status": return { kind: "plan_status", plan: row.subject.short_id ?? row.subject.label, status: row.after.status as any, reason: "", title: row.subject.label };
+    case "task_status": return { kind: "task_status", task: row.subject.short_id ?? row.subject.label, status: row.after.status as any, reason: "", title: row.subject.label };
     case "project_status": return { kind: "project_status", project: row.subject.label, status: row.after.status as any, reason: "" };
     case "project_meta": return {
       kind: "project_meta", project: row.subject.label,
@@ -372,6 +380,10 @@ function logOnlySentence(row: OrgLogRow): string {
 export function orgLogLine(row: OrgLogRow): string {
   const change = orgLogRowChange(row);
   if (change) return changeLine(change);
+  // A hire and an upgrade are recorded; their way back is the host step
+  // (org-staffing.md S21), so the inverse row says what the undo did do.
+  if (row.kind === "hire") return `Take back the hire of ${at(handleOf(row))}${row.before.instance ? ` as ${row.before.instance.instance}` : ""}: the project lead goes back, and the instance waits for the host step`;
+  if (row.kind === "upgrade") return `Withdraw the upgrade of ${row.before.upgrade?.instance ?? "the instance"}${row.before.upgrade ? ` to ${row.before.upgrade.template_id} ${row.before.upgrade.to}` : ""} before the host step runs it`;
   const line = (ORG_LOG_ONLY_KINDS as readonly string[]).includes(row.kind) ? logOnlySentence(row) : null;
   if (!line) return changeLine({ kind: row.kind } as any);
   return line.charAt(0).toUpperCase() + line.slice(1);

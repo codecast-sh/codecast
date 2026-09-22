@@ -16,6 +16,8 @@ import type { StalePlan, StaleProject, StaleTask, StaleWork } from "@codecast/sh
 const D = 86_400_000;
 export const STALE_PLAN_DAYS = 21;
 export const STALE_TASK_DAYS = 14;
+/** An open task nobody touched for this long, with no session on it in the window, is stale too: three Union tasks whose work landed in July sat open and unflagged because only in progress rows had a reason (2026-09-21). */
+export const STALE_OPEN_DAYS = 45;
 export const STALE_PROJECT_DAYS = 30;
 export const DONE_STILL_WORKED_DAYS = 7;
 export const ACTIVITY_WINDOW_DAYS = 30;
@@ -163,6 +165,8 @@ export type ActivityArea = {
   authors: Array<{ name: string; commits: number }>;
   sessions_30d: number;
   project_id?: string;
+  /** Set instead of project_id when the path the area's sessions run in is one several projects file under. */
+  project_shared_by?: number;
 };
 export type ActivityPerson = {
   user_id: string;
@@ -239,20 +243,37 @@ function computeAreas(input: ActivityInputs) {
 
   // A project resolves to an area by the project_path the area's sessions most
   // often run in, else by a project whose own path prefix equals the area's.
+  // A path several projects file under belongs to none of them alone: the
+  // last project to set the map won a whole repository's commits on Codecast
+  // (five projects share two paths, and packages/web read as Agents & Clients
+  // work, which has no open task; 2026-09-22). Such a path names no project
+  // and the area says how many share it, so the analyzer reads that project's
+  // load from its tasks and sessions and not from the path.
+  // Paths are keyed by their prefix inside the repository, not the absolute
+  // string: the same directory on two machines (Ashot's and Samvit's checkouts
+  // of union-mobile/outreach) is one path, and eight Union projects file under it.
+  const pathKey = (path: string) => projectPathPrefix(path) ?? path;
+  const projectsByPath = new Map<string, ActivityProject[]>();
+  for (const p of input.projects) if (p.project_path) projectsByPath.set(pathKey(p.project_path), [...(projectsByPath.get(pathKey(p.project_path)) ?? []), p]);
   const projectByPath = new Map<string, ActivityProject>();
-  for (const p of input.projects) if (p.project_path) projectByPath.set(p.project_path, p);
+  const sharedByPath = new Map<string, number>();
+  for (const [path, ps] of projectsByPath) { if (ps.length === 1) projectByPath.set(path, ps[0]); else sharedByPath.set(path, ps.length); }
 
   let areas: ActivityArea[] = Array.from(perArea.values()).map((a) => {
     const key = areaKey(a.repository, a.path_prefix);
     const paths = sessionProjectPaths.get(key);
     let projectId: string | undefined;
+    let sharedBy: number | undefined;
     if (paths) {
-      const top = Array.from(paths.entries()).sort((x, y) => y[1] - x[1]).map(([path]) => projectByPath.get(path)).find(Boolean);
+      const ranked = Array.from(paths.entries()).sort((x, y) => y[1] - x[1]).map(([path]) => pathKey(path));
+      const top = ranked.map((path) => projectByPath.get(path)).find(Boolean);
       if (top) projectId = top.id;
+      else sharedBy = ranked.map((path) => sharedByPath.get(path)).find(Boolean);
     }
-    if (!projectId) {
-      const byPrefix = input.projects.find((p) => projectPathPrefix(p.project_path) === a.path_prefix);
-      if (byPrefix) projectId = byPrefix.id;
+    if (!projectId && !sharedBy) {
+      const byPrefix = input.projects.filter((p) => projectPathPrefix(p.project_path) === a.path_prefix);
+      if (byPrefix.length === 1) projectId = byPrefix[0].id;
+      else if (byPrefix.length > 1) sharedBy = byPrefix.length;
     }
     return {
       repository: a.repository,
@@ -261,6 +282,7 @@ function computeAreas(input: ActivityInputs) {
       authors: Array.from(a.authors.entries()).sort((x, y) => y[1] - x[1]).map(([name, commits]) => ({ name, commits })),
       sessions_30d: sessionsPerArea.get(key)?.size ?? 0,
       ...(projectId ? { project_id: projectId } : {}),
+      ...(sharedBy ? { project_shared_by: sharedBy } : {}),
     };
   });
   areas.sort((x, y) => y.commits_30d - x.commits_30d || y.sessions_30d - x.sessions_30d || (x.path_prefix < y.path_prefix ? -1 : 1));
@@ -409,6 +431,7 @@ export function computeStale(input: ActivityInputs): StaleWork {
     else if (tasksWithCommit.has(String(t.id))) reason = "commits landed, still open";
     else if (t.status === "in_progress" && !everHad) reason = "in progress, no session 14d";
     else if (t.status === "in_progress" && linked.every((s) => s.state === "done")) reason = "in progress, sessions done 14d";
+    else if (t.status === "open" && !everHad && now - (t.updated_at ?? 0) >= STALE_OPEN_DAYS * D) reason = "open, untouched 45d";
     if (reason) tasks.push({ short_id: t.short_id, title: t.title, status: t.status, last_session_activity_at: lastSessionAt, reason });
   }
 
