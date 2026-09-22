@@ -56,3 +56,11 @@ export function useChatPrefetch(): void {
     worker.current?.update((rail ?? []).filter(row => String(channels[row.channel_id]?.team_id) === String(teamId)), notifications ?? []);
   }, [rail, notifications, teamId, ready]);
 }
+
+// Mounted on its own beside HostFeeders: the prefetch wakes on every
+// notification and rail push, and re-running every host feeder for that buys
+// nothing.
+export function ChatPrefetchFeeder(): null {
+  useChatPrefetch();
+  return null;
+}

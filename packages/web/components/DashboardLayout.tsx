@@ -76,14 +76,13 @@ import { useSyncCore } from "../hooks/useSyncCore";
 import { useChatChannelsSync, useChatUnread } from "../hooks/useChatSync";
 import { useThreadUnreadSync } from "../hooks/useThreadsSync";
 import { useChatToasts } from "../hooks/useChatToasts";
-import { useChatPrefetch } from "../hooks/useChatPrefetch";
+import { ChatPrefetchFeeder } from "../hooks/useChatPrefetch";
 import { useSyncDocs, useSyncMentionDocs } from "../hooks/useSyncDocs";
 import { useSyncMentionPlans } from "../hooks/useSyncPlans";
 import { useSyncMentionTasks } from "../hooks/useSyncTasks";
 import { isInboxSessionView, pageOwnsRailHighlight, railPointerOnNavigate, sessionFocusKind } from "../lib/inboxRouting";
 import { useOpenSession } from "../hooks/useOpenSession";
-import { useRecentSwitcher } from "../hooks/useRecentSwitcher";
-import { RecentSwitcher } from "./RecentSwitcher";
+import { RecentSwitcherHost } from "./RecentSwitcher";
 import { TabBar, AttachTabButton } from "./TabBar";
 import { AppWindowBar } from "./desktop/AppWindowBar";
 import { useAppWindowRegistry } from "../hooks/useAppWindowRegistry";
@@ -264,13 +263,6 @@ export function DashboardLayout(props: DashboardLayoutProps) {
 // own solo host); a follower window receives the same slice over replication
 // instead (store/syncReplication.ts), so mounting these there would only
 // duplicate every subscription.
-// The chat prefetch in its own component: it wakes on every notification and
-// rail push, and HostFeeders re-running all of its feeders for that buys nothing.
-function ChatPrefetchFeeder() {
-  useChatPrefetch();
-  return null;
-}
-
 function HostFeeders() {
   // The tasks delta cursor machine: its empty deltas re-rendered the whole
   // layout when it lived in DashboardLayoutInner.
@@ -869,7 +861,6 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // Follow mode, both sides (the lease, the mirror, the report).
   useFollowMode();
   useShortcutContext('desktop', isDesktopApp);
-  const switcherState = useRecentSwitcher();
 
   // Ctrl+N / Ctrl+Shift+N → the compose palette (modal overlay here; the
   // always-on-top window on desktop). Ctrl+Alt+N → a full new session in the main
@@ -1498,15 +1489,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       <ErrorBoundary name="FindBar" level="inline">
         <FindBar />
       </ErrorBoundary>
-      {switcherState.open && (
-        <RecentSwitcher
-          items={switcherState.items}
-          selectedIndex={switcherState.selectedIndex}
-          mode={switcherState.mode}
-          onSelectedIndexChange={switcherState.setSelectedIndex}
-          onSelect={switcherState.select}
-        />
-      )}
+      <RecentSwitcherHost />
     </div>
   );
 }

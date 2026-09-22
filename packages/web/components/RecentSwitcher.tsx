@@ -1,9 +1,17 @@
 import type { ResolvedVisit } from "../lib/recentVisits";
 import { RecentsPanel, type RecentsPanelMode } from "./RecentsPanel";
+import { useRecentSwitcher } from "../hooks/useRecentSwitcher";
 
 // The centered recents overlay (hooks/useRecentSwitcher): the held Ctrl+Tab
 // walk, and the same panel with its search field live once R is pressed or
 // Ctrl+R opened it directly.
+/** The switcher with its own state, so its key presses re-render only this leaf. */
+export function RecentSwitcherHost() {
+  const s = useRecentSwitcher();
+  if (!s.open) return null;
+  return <RecentSwitcher items={s.items} selectedIndex={s.selectedIndex} mode={s.mode} onSelectedIndexChange={s.setSelectedIndex} onSelect={s.select} />;
+}
+
 export function RecentSwitcher({
   items,
   selectedIndex,
