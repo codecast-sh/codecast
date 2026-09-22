@@ -5,8 +5,6 @@ import { MD_COMPONENTS } from "../../lib/markdownComponents";
 import { MD_REHYPE_PLUGINS, MD_REMARK_PLUGINS } from "../../lib/markdownPlugins";
 import { RevealHost } from "../ObjectReveal";
 
-export { CollapsibleImage, ImageRowParagraph } from "./MarkdownImages";
-
 interface MarkdownRendererProps {
   content: string;
   filePath?: string;

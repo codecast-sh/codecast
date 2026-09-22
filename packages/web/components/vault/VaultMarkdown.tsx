@@ -15,7 +15,7 @@ import rehypeRaw from "rehype-raw";
 import rehypeSanitize from "rehype-sanitize";
 import "katex/dist/katex.min.css";
 import { ChevronDown, ExternalLink } from "lucide-react";
-import { CollapsibleImage } from "../tools/MarkdownRenderer";
+import { CollapsibleImage } from "../tools/MarkdownImages";
 import { MD_COMPONENTS } from "../../lib/markdownComponents";
 import {
   parseWikiInner,
