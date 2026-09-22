@@ -10174,12 +10174,51 @@ program
   .command("call")
   .description(
     "Show one call: title, participants, summary, action items — and the\n" +
-    "full speaker-attributed transcript with --transcript"
+    "full speaker-attributed transcript with --transcript\n\n" +
+    "cast call hold <duration>|off   # from a session a live huddle feeds: hold\n" +
+    "                                # the room's words for a stretch of work"
   )
-  .argument("<id>", "Call id (or unique prefix) from `cast calls`")
+  .argument("<id>", "Call id (or unique prefix) from `cast calls`, or `hold`")
+  .argument("[duration]", "With `hold`: 3m, 90s, 1h, or `off` to lift it")
   .option("--transcript", "Print the full attributed transcript")
   .option("--json", "Machine-readable output (always includes segments)")
-  .action(async (ref: string, options: any) => {
+  .option("--for <session>", "With `hold`: the fed session (default: the current one)")
+  .action(async (ref: string, duration: string | undefined, options: any) => {
+    if (ref === "hold") {
+      // The agent asks its huddle for time. The words keep flowing into the
+      // transcript and arrive together when the hold ends; a line that names
+      // the agent still comes through at once.
+      const session = options.for || callingSession();
+      if (!session) {
+        console.error("No session given and none detected — pass one with --for");
+        process.exit(1);
+      }
+      const spec = (duration ?? "").trim().toLowerCase();
+      const ms = spec === "off" || spec === "0" ? 0 : spec ? parseDuration(spec) : undefined;
+      if (ms === undefined) {
+        console.error("Give a duration (3m, 90s, 1h) or `off`");
+        process.exit(1);
+      }
+      const out: any = await cliPost("/cli/calls/hold", { session, duration_ms: ms });
+      if (options.json) {
+        console.log(JSON.stringify(out, null, 2));
+        return;
+      }
+      if (!out.held && out.reason === "not_in_huddle") {
+        console.log(`${c.dim}${out.short_id} is not in a live huddle — nothing to hold${c.reset}`);
+        return;
+      }
+      if (!out.held) {
+        console.log(`${c.green}ok${c.reset} hold lifted on ${c.cyan}${out.short_id}${c.reset} — what the room said meanwhile arrives now`);
+        return;
+      }
+      const mins = Math.round((out.held_until - Date.now()) / 60_000);
+      console.log(
+        `${c.green}ok${c.reset} holding the huddle's words for ${c.cyan}${out.short_id}${c.reset} ` +
+        `${c.dim}(${mins < 1 ? "under a minute" : `${mins} min`}; a line that names you still reaches you; \`cast call hold off\` lifts it)${c.reset}`,
+      );
+      return;
+    }
     const id = await resolveCallId(ref);
     const call: any = await cliPost("/cli/calls/get", { transcript_id: id });
     if (!call) {

@@ -1,4 +1,4 @@
-import { Hash, BellOff, Clock } from "lucide-react";
+import { Hash, BellOff, Clock, PhoneCall } from "lucide-react";
 import { CommentAvatar } from "../comments/CommentAvatar";
 import type { ChatToastTier } from "../../lib/chatTimeline";
 import "./chat.css";
@@ -31,6 +31,9 @@ export type ChatToastData = {
   inThread?: boolean;
   /** A direct message: the card says who, not where — "#dm-room" is noise. */
   isDm?: boolean;
+  /** A huddle's digest: a row about the call, not something its scribe said.
+   *  The card names the huddle and wears the call badge, as the transcript does. */
+  isCall?: boolean;
 };
 
 export function ChatToast({
@@ -64,13 +67,19 @@ export function ChatToast({
         }
       }}
     >
-      <CommentAvatar
-        name={data.authorName}
-        image={data.authorAvatarUrl}
-        isAgent={data.authorIsAgent}
-        size={26}
-        letters={2}
-      />
+      {data.isCall ? (
+        <span className="ch-call-badge ch-toast-call" aria-hidden="true">
+          <PhoneCall className="w-3.5 h-3.5" />
+        </span>
+      ) : (
+        <CommentAvatar
+          name={data.authorName}
+          image={data.authorAvatarUrl}
+          isAgent={data.authorIsAgent}
+          size={26}
+          letters={2}
+        />
+      )}
       <div className="ch-toast-main">
         <div className="ch-toast-head">
           <span className="ch-toast-author">{data.authorName}</span>
