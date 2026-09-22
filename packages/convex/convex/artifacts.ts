@@ -28,6 +28,8 @@ import { findConversationByAnyRef } from "./conversationSessionLookup";
 import { isVisibilityShareable } from "./privacy";
 import { pageThreadParticipants, purgeThread, touchThread } from "./threadReads";
 import { evidencePatch, resolveEvidenceBinding } from "./taskEvidence";
+import { gateFailure } from "./lib/artifactGates";
+import { bumpWindow } from "./ipRateLimit";
 
 export const MAX_ARTIFACT_BYTES = 8 * 1024 * 1024;
 
@@ -38,6 +40,13 @@ export const MAX_ARTIFACT_BYTES = 8 * 1024 * 1024;
 export const MAX_ARTIFACT_HISTORY = 20;
 
 export const MAX_COMMENT_BATCH = 12;
+// Comment posts per page per minute. Roomy on purpose: replies post one at a
+// time, and delivery into the publishing session is owner-gated, so what this
+// bounds is discussion spam rather than agent injection.
+export const MAX_COMMENTS_PER_MINUTE = 12;
+// View beacons per page per minute. High enough that a genuinely busy page
+// never undercounts, low enough that the counter is not a free write loop.
+export const MAX_VIEWS_PER_MINUTE = 120;
 export const MAX_COMMENT_CHARS = 2000;
 
 const SLUG_ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -835,14 +844,26 @@ export const applyManage = internalMutation({
 // Beacons and viewer-facing writes (public, slug-keyed)
 // ---------------------------------------------------------------------------
 
+// The view beacon. Unauthenticated by design — a published page has no
+// account behind it — so the count is inflatable by anyone holding the URL
+// and always was. What this can do is refuse to count a page the caller
+// cannot open, and bound how fast one page's counters can be written.
 export const recordView = mutation({
-  args: { slug: v.string(), email: v.optional(v.string()) },
+  args: {
+    slug: v.string(),
+    email: v.optional(v.string()),
+    k: v.optional(v.string()),
+    e: v.optional(v.string()),
+  },
   handler: async (ctx, args) => {
     const artifact = await ctx.db
       .query("artifacts")
       .withIndex("by_slug", (q) => q.eq("slug", args.slug))
       .first();
     if (!artifact) return { ok: false };
+    if (await gateFailure(artifact, { k: args.k, e: args.e })) return { ok: false };
+    const budget = await bumpWindow(ctx.db, `artifact-view:${artifact._id}`, MAX_VIEWS_PER_MINUTE, 60_000);
+    if (!budget.ok) return { ok: false };
     const now = Date.now();
     const stats = await ctx.db
       .query("artifact_stats")
@@ -1163,6 +1184,12 @@ export const submitComments = mutation({
     // Idempotency key for the web outbox: a retry with the same client_id
     // returns the row already inserted.
     client_id: v.optional(v.string()),
+    // The viewing gates the page itself cleared, echoed back: ?k= for the
+    // password wall, ?e= for the email wall. This mutation is reachable
+    // without going through the page, so it checks them again rather than
+    // trusting that a caller came from one.
+    k: v.optional(v.string()),
+    e: v.optional(v.string()),
     comments: v.array(v.object({ text: v.string(), anchor: v.optional(v.string()) })),
   },
   handler: async (ctx, args) => {
@@ -1182,6 +1209,21 @@ export const submitComments = mutation({
       const userId = await getAuthUserId(ctx).catch(() => null);
       const user = userId ? await ctx.db.get(userId) : null;
       if (user) identity = { user, name: commenterDisplayName(user), avatar: commenterAvatar(user) };
+    }
+    // The page's own gates, checked here because this mutation is reachable
+    // without the page. Two principals stand behind the wall rather than in
+    // front of it: the owner_key holder, and a signed-in account that can
+    // already open this page in the app. An identity token alone is neither —
+    // any signed-in user can mint one for any slug, and it attests authorship,
+    // not admission.
+    const blocked = await gateFailure(artifact, { k: args.k, e: args.e });
+    if (blocked) {
+      const behindTheWall =
+        isOwner ||
+        (!!identity &&
+          (identity.user._id === artifact.user_id ||
+            (await teammatesWhoCanSee(ctx, artifact.user_id)).has(identity.user._id.toString())));
+      if (!behindTheWall) return { error: blocked };
     }
     if (args.client_id) {
       const dupe = await ctx.db
@@ -1213,6 +1255,15 @@ export const submitComments = mutation({
       }))
       .filter((c) => c.text.length > 0);
     if (!list.length) return { error: "Empty comment batch" };
+    // Flood bound, in the same transaction as the insert it guards — the HTTP
+    // route's pre-check was a separate transaction, so two concurrent posts
+    // could both read the same count and both pass. Keyed per artifact for the
+    // reason the HTTP limiter is slug-keyed: behind the proxy mesh the observed
+    // client address rotates per request, and the page is the honest unit of
+    // abuse anyway. Last of the checks, so nothing a request gets rejected for
+    // costs it budget.
+    const budget = await bumpWindow(ctx.db, `artifact-comment:${artifact._id}`, MAX_COMMENTS_PER_MINUTE, 60_000);
+    if (!budget.ok) return { error: "Too many comments on this page — try again shortly." };
     const author = identity ? identity.name : args.author_name.trim().slice(0, 80) || "anonymous";
     const email = identity
       ? identity.user.email?.toLowerCase()

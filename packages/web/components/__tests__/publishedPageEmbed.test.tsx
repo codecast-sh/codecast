@@ -4,7 +4,9 @@ import { JSDOM } from "jsdom";
 import { ConvexProvider, ConvexReactClient } from "convex/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { replaceGlobals } from "../../test-helpers/globals";
-import { PublishedPageEmbed } from "../PublishedPageEmbed";
+import { ClaudeArtifactEmbed, PublishedPageEmbed } from "../PublishedPageEmbed";
+import { useInboxStore } from "../../store/inboxStore";
+import { MemoryRouter } from "react-router";
 
 import { closeDomWindow } from "../../test-helpers/domGlobals";
 const client = new ConvexReactClient("https://example.convex.cloud");
@@ -78,3 +80,45 @@ describe("PublishedPageEmbed copy", () => {
   });
 });
 
+// A Claude artifact card suggests the Publish feature only to a reader whose
+// machines all have it off. Rendered on the client: the roster comes through
+// a store subscription, and a server render would read the store's initial
+// (empty) roster instead of the seeded one.
+describe("ClaudeArtifactEmbed publish suggestion", () => {
+  const ID = "2c5e5d6e-0a70-4e04-9c7a-1c4f1f5b8b6d";
+  const seed = (snippets: Record<string, boolean> | null) =>
+    useInboxStore.setState({
+      machineRoster: snippets ? [{ device_id: "dev-1", online: true, last_seen: 1, settings: { snippets } }] : [],
+    } as any);
+
+  async function mount(): Promise<HTMLElement> {
+    const container = dom.window.document.createElement("div");
+    dom.window.document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => {
+      // The suggestion is an in-app link (next/link shim over react-router),
+      // so it needs the Router every real surface has.
+      root.render(
+        <MemoryRouter>
+          <ConvexProvider client={client}>
+            <ClaudeArtifactEmbed id={ID} />
+          </ConvexProvider>
+        </MemoryRouter>,
+      );
+    });
+    return container;
+  }
+
+  test("offered when no machine has Publish on; silent when one does, or before the roster loads", async () => {
+    try {
+      seed(null);
+      expect((await mount()).querySelector('a[href="/settings/agent-features"]')).toBeNull();
+      seed({ memory: true });
+      expect((await mount()).querySelector('a[href="/settings/agent-features"]')).toBeTruthy();
+      seed({ publish: true });
+      expect((await mount()).querySelector('a[href="/settings/agent-features"]')).toBeNull();
+    } finally {
+      seed(null);
+    }
+  });
+});
