@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, type MutableRefObject } from "react";
+import { useCallback, useLayoutEffect, useRef, useState, type MutableRefObject, type ReactNode } from "react";
 import Link from "next/link";
 import { useMutation } from "convex/react";
 import { ArrowUp, ImagePlus, MessageSquare } from "lucide-react";
@@ -10,6 +10,7 @@ import { formatDateFull, formatRelative } from "../../lib/utils";
 import { useOpenLinkedSession } from "../../hooks/useOpenLinkedSession";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { AgentIcon } from "../ConversationList";
+import { ChatNewDivider } from "../chat/ChatMessage";
 import { Badge } from "../ui/badge";
 import { APP_LOOK, ISSUE_PROVIDER_NAME } from "../../lib/integrations";
 
@@ -109,13 +110,42 @@ function CommentProvenance({ external }: { external: TaskCommentExternal }) {
   );
 }
 
+/** A tall block folded to a few lines under a fade until the reader asks for
+ *  the rest. Measured, not guessed: a short block renders whole with no
+ *  toggle. Agent comments run to hundreds of words; in a reader one of them
+ *  must not be a screenful. */
+export function Clamp({ children, className = "" }: { children: ReactNode; className?: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || open) return;
+    setOverflows(el.scrollHeight > el.clientHeight + 4);
+  });
+  return (
+    <div className={className}>
+      <div ref={ref} className={open ? undefined : "th-clamp"}>{children}</div>
+      {(overflows || open) && (
+        <button type="button" className="th-task-desc-toggle" onClick={() => setOpen((v) => !v)}>
+          {open ? "Show less" : "Show more"}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function TaskCommentItem({
   comment,
   openLinkedSession,
+  clamp,
 }: {
   comment: TaskCommentRow;
   openLinkedSession: (info: any) => void;
+  /** Fold a long body (the Threads reader). */
+  clamp?: boolean;
 }) {
+  const body = <MarkdownRenderer content={comment.text} className="text-sm text-sol-text prose-sm prose-invert max-w-none" />;
   return (
     <div className="py-2.5 relative">
       <div className="flex items-center gap-2 mb-1.5">
@@ -141,7 +171,7 @@ export function TaskCommentItem({
         <TimeAgo ts={comment.created_at} className="text-[11px] text-gray-400" />
       </div>
       <div className="ml-[26px] border-l-2 border-sol-border/30 pl-3">
-        <MarkdownRenderer content={comment.text} className="text-sm text-sol-text prose-sm prose-invert max-w-none" />
+        {clamp ? <Clamp>{body}</Clamp> : body}
       </div>
     </div>
   );
@@ -305,7 +335,11 @@ export function TaskCommentComposer({
                 handleAddComment();
               }
               if (e.key === "Escape") {
-                if (!comment.trim() && commentImages.length === 0 && !autoOpen) setCommentOpen(false);
+                if (comment.trim() || commentImages.length > 0) return;
+                // An always-open box (the Threads reader) hands the keyboard
+                // back to the page instead: j/k walk on from here.
+                if (autoOpen) e.currentTarget.blur();
+                else setCommentOpen(false);
               }
             }}
             onPaste={handleCommentPaste}
@@ -330,21 +364,29 @@ export function TaskCommentComposer({
 
 // ── The stream ──────────────────────────────────────────────────────────────
 
-/** Comments oldest first, then the composer — the Threads card's expanded body. */
+/** With nothing new to show, a reader's stream shows this many newest
+ *  comments; with news, the new ones and one earlier for context. */
+const READER_TAIL = 3;
+
+/** Comments oldest first, then the composer — the Threads row's open body. */
 export function TaskCommentStream({
   shortId,
   comments,
   composerAutoOpen,
   composerAutoFocus,
-  initialLimit,
+  newSince,
+  clampComments,
 }: {
   shortId: string | undefined;
   comments: TaskCommentRow[];
   composerAutoOpen?: boolean;
   composerAutoFocus?: boolean;
-  /** Render only the newest N comments, the rest behind a "show earlier"
-   *  reveal (the Threads card). Unset renders the whole stream. */
-  initialLimit?: number;
+  /** The reader's frozen unread boundary: comments after it are NEW and show
+   *  under a divider with one earlier comment for context; the rest sit
+   *  behind a "show earlier" reveal. Unset renders the whole stream. */
+  newSince?: number;
+  /** Fold long bodies (the Threads reader). */
+  clampComments?: boolean;
 }) {
   const openLinkedSession = useOpenLinkedSession();
   const [showAll, setShowAll] = useState(false);
@@ -352,7 +394,11 @@ export function TaskCommentStream({
   // OBJECT here and crashed the whole Threads page. Hydration heals such rows
   // now; this guard keeps one bad row from ever taking the page down again.
   const sorted = (Array.isArray(comments) ? [...comments] : []).sort((a, b) => a.created_at - b.created_at);
-  const hidden = initialLimit !== undefined && !showAll ? Math.max(0, sorted.length - initialLimit) : 0;
+  const firstNew = newSince !== undefined ? sorted.findIndex((c) => c.created_at > newSince) : -1;
+  let hidden = 0;
+  if (newSince !== undefined && !showAll) {
+    hidden = firstNew >= 0 ? Math.max(0, firstNew - 1) : Math.max(0, sorted.length - READER_TAIL);
+  }
   const visible = hidden > 0 ? sorted.slice(hidden) : sorted;
   return (
     <div className="th-task-stream">
@@ -365,8 +411,13 @@ export function TaskCommentStream({
               Show {hidden} earlier {hidden === 1 ? "comment" : "comments"}
             </button>
           )}
-          {visible.map((c) => (
-            <TaskCommentItem key={c._id} comment={c} openLinkedSession={openLinkedSession} />
+          {visible.map((c, i) => (
+            <div key={c._id}>
+              {/* The divider marks where the news starts, once there is
+                  something read above it to divide from. */}
+              {firstNew > 0 && hidden + i === firstNew && <ChatNewDivider />}
+              <TaskCommentItem comment={c} openLinkedSession={openLinkedSession} clamp={clampComments} />
+            </div>
           ))}
         </div>
       )}
