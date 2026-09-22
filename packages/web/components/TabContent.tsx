@@ -1,5 +1,6 @@
-import { isNonTabRoute } from "../lib/tabRoutes";
-import { useEffect, useMemo } from "react";
+import { shellEntryPath } from "../lib/tabRoutes";
+import { useEffect, useMemo, useRef } from "react";
+import { useLocation } from "react-router";
 import { useInboxStore, useTrackedStore, type AppTab } from "../store/inboxStore";
 import { isPrewarmTab, clearPrewarmTab } from "../lib/openIntent";
 import { tabSessionId } from "../lib/tabTitle";
@@ -24,21 +25,11 @@ import StageSplitView from "./stage/StageSplitView";
 // This module keeps the tab lifecycle: which tabs mount, which is visible,
 // the one-shot entry-URL adoption.
 
-// The entry URL, adopted into the active tab ONCE PER DOCUMENT LOAD — not once
-// per TabContent mount. The component remounts when the layout around it
-// changes, and a remount is not a navigation: consuming the address bar again
-// there stamped whatever URL the previous tab had written into the tab being
-// switched to, corrupting stored tab paths (and, via clientState sync, the
-// server's copy of them). Document scope on globalThis for the same reason the
-// lazy pages live there: a dev hot update re-executes this module.
-// Only a shell path is worth adopting: the desktop enters at the app root `/`
-// (which then redirects to the inbox), and adopting that entry URL pinned the
-// active tab to a path no pane renders — a blank stage on every launch.
-const navBoot: { url: string | null } = ((globalThis as any).__codecastTabNavBoot ??= {
-  url: typeof window !== "undefined" && window.location && !isNonTabRoute(window.location.pathname)
-    ? window.location.pathname + window.location.search
-    : null,
-});
+// The router location the shell last entered on, document-scoped: the
+// component remounts when the layout around it changes, and a dev hot update
+// re-executes this module, but neither is a navigation. shellEntryPath
+// (lib/tabRoutes) decides what a mount adopts from it.
+const shellEntry: { key: string | null } = ((globalThis as any).__codecastTabShellEntry ??= { key: null });
 
 // Which tabs have mounted panes, document-scoped for the same reason: when
 // TabContent itself remounts, a surviving set means every previously visited
@@ -93,6 +84,7 @@ function TabPane({ tab, isActive, children }: { tab: AppTab; isActive: boolean; 
 // -- TabContent: renders all mounted tabs, toggles visibility --
 
 export function TabContent() {
+  const location = useLocation();
   const s = useTrackedStore([
     (s) => s.tabs,
     (s) => s.activeTabId,
@@ -111,28 +103,35 @@ export function TabContent() {
     activeTabId = tabs[0].id;
   }
 
-  // On full-page navigation (address bar, external link), the active tab's
-  // stored path may differ from the browser URL. Override it at render time so
-  // TabPanes immediately render the correct content (no effect-timing race).
-  // The store is updated in the effect below. Full-path compare: an entry URL
-  // that differs only in query (e.g. /search?q=new vs a restored /search?q=old)
+  // On entering the shell (a full-page load, or a real navigation from a page
+  // outside it: a share link resolving to its conversation, a sign-in
+  // returning to a task), the active tab's stored path may differ from the
+  // browser URL. The URL wins. Override it at render time so TabPanes
+  // immediately render the correct content (no effect-timing race); the store
+  // is updated in the effect below. Full-path compare: an entry URL that
+  // differs only in query (e.g. /search?q=new vs a restored /search?q=old)
   // must also win, or the restored tab silently clobbers the typed query.
-  // navBoot is consumed once per document load (see its declaration) — a
-  // TabContent remount must never re-adopt the address bar.
+  // Decided once per instance, on its first render: a remount at the same
+  // router location adopts nothing (see shellEntryPath).
+  const entryRef = useRef<string | null | undefined>(undefined);
+  if (entryRef.current === undefined) {
+    const entry = shellEntryPath(shellEntry.key, location.key, location.pathname, location.search);
+    entryRef.current = entry ? conversationTabPath(entry) : null;
+  }
   let renderTabs = tabs;
-  if (navBoot.url && activeTabId) {
+  const entryUrl = entryRef.current;
+  if (entryUrl && activeTabId) {
     const active = tabs.find((t: AppTab) => t.id === activeTabId);
-    const url = conversationTabPath(navBoot.url);
-    if (active && active.path !== url) {
+    if (active && active.path !== entryUrl) {
       renderTabs = tabs.map((t: AppTab) =>
-        t.id === activeTabId ? { ...t, path: url } : t
+        t.id === activeTabId ? { ...t, path: entryUrl } : t
       );
     }
   }
   useEffect(() => {
-    if (!navBoot.url) return;
-    const url = conversationTabPath(navBoot.url);
-    navBoot.url = null;
+    const url = entryRef.current;
+    entryRef.current = null;
+    if (!url) return;
     const store = useInboxStore.getState();
     if (!store.activeTabId) return;
     const active = store.tabs.find((t: AppTab) => t.id === store.activeTabId);
@@ -140,6 +139,11 @@ export function TabContent() {
       store.updateTab(store.activeTabId, { path: url });
     }
   }, []);
+  // Every location this instance saw counts as entered, so a later remount at
+  // it (history moved while mounted, then the layout changed) adopts nothing.
+  useEffect(() => {
+    shellEntry.key = location.key;
+  }, [location.key]);
 
   // Sync stale activeTabId to store after render
   useEffect(() => {

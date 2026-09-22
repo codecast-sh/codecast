@@ -52,7 +52,7 @@ export const SECTION_LABELS: Record<string, string> = {
   windows: "Windows",
   workflows: "Workflows",
   triggers: "Triggers",
-  anchor: "Anchor",
+  anchor: "Workspace agent",
   search: "Search",
   settings: "Settings",
   team: "Team",

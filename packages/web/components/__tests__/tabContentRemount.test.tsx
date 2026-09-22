@@ -8,7 +8,8 @@ import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
 // the pane set, so every background tab's DOM was destroyed and rebuilt cold
 // on the next visit, and (2) re-armed the entry-URL adoption, which stamped
 // the PREVIOUS tab's URL into the tab being switched to — corrupting stored
-// tab paths. Both now live on globalThis, scoped to the document load. This
+// tab paths. Both now live on globalThis: the pane set scoped to the document
+// load, the adoption keyed on the router location it last entered on. This
 // test mounts TabContent, visits two tabs, then unmounts and remounts it and
 // asserts both panes survive and no tab path is rewritten.
 
@@ -92,7 +93,18 @@ mock.module("@/app/inbox/page", () => ({ default: () => <div data-page="inbox" /
 mock.module("@/app/tasks/page", () => ({ default: () => <div data-page="tasks" /> }));
 
 const { TabContent } = await import("../TabContent");
+const { MemoryRouter } = await import("react-router");
 const React = await import("react");
+
+// TabContent reads the router location: it adopts the address bar into the
+// active tab once per router location (lib/tabRoutes shellEntryPath). A
+// fresh memory router starts on the same "default" key each time, exactly as
+// a remount inside one document does.
+const shell = () => (
+  <MemoryRouter initialEntries={["/inbox"]}>
+    <TabContent />
+  </MemoryRouter>
+);
 const { createRoot } = await import("react-dom/client");
 
 const act: <T>(cb: () => T | Promise<T>) => Promise<T> = (React as any).act;
@@ -117,7 +129,7 @@ describe("TabContent survives its own remount", () => {
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
-    await act(async () => root.render(<TabContent />));
+    await act(async () => root.render(shell()));
     // Lazy pages resolve a microtask later.
     await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
   });
@@ -141,7 +153,7 @@ describe("TabContent survives its own remount", () => {
     // fresh TabContent mounts in the new branch.
     await act(async () => root.unmount());
     root = createRoot(container);
-    await act(async () => root.render(<TabContent />));
+    await act(async () => root.render(shell()));
     await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
 
     // Both visited tabs come back (the active one visible, the other warm and

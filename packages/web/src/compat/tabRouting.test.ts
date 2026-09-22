@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { useInboxStore } from "@/store/inboxStore";
-import { adoptPathIntoActiveTab, isNonTabRoute, shouldUseTabRouting, tabNavigate } from "./tabRouting";
+import { isNonTabRoute, shouldUseTabRouting, tabNavigate } from "./tabRouting";
+import { shellEntryPath } from "../../lib/tabRoutes";
 import { healTabPaths, shellTabPath } from "@/lib/tabRoutes";
 
 const inboxTab = { id: "tab_1", title: "Inbox", path: "/inbox", createdAt: 1 };
@@ -222,19 +223,29 @@ describe("a tab may only hold a shell route", () => {
   });
 });
 
-// "Open team" on the create flow (a non-tab route) must land on the team feed.
-// The shell re-asserts the active tab's stored path on re-entry, so the flow
-// adopts the target path into the active tab before the real navigation.
-describe("adoptPathIntoActiveTab", () => {
-  it("points the active tab at the target path", () => {
-    useInboxStore.setState({ tabs: [{ ...inboxTab }], activeTabId: inboxTab.id });
-    adoptPathIntoActiveTab("/team/activity");
-    expect(useInboxStore.getState().tabs[0].path).toBe("/team/activity");
+
+// The shell adopts the address bar into its active tab once per router
+// location: on the document's first load and on every real navigation that
+// mounts it (a share link resolving to its conversation from the profile
+// page, a sign-in returning to a task). A remount at a location it already
+// entered adopts nothing, so a layout change or a tab switch never stamps the
+// previous tab's URL into the tab being switched to.
+describe("shellEntryPath", () => {
+  it("adopts the entry URL, query included, on the document's first load", () => {
+    expect(shellEntryPath(null, "default", "/search", "?q=new")).toBe("/search?q=new");
   });
 
-  it("does nothing when no tab shell exists", () => {
-    useInboxStore.setState({ tabs: [], activeTabId: null });
-    expect(() => adoptPathIntoActiveTab("/team/activity")).not.toThrow();
-    expect(useInboxStore.getState().tabs).toEqual([]);
+  it("adopts a conversation a share page resolved to, token and all", () => {
+    expect(shellEntryPath("k1", "k2", "/conversation/jx7abc", "?share=tok")).toBe("/conversation/jx7abc?share=tok");
+  });
+
+  it("adopts nothing on a remount at the location it already entered", () => {
+    expect(shellEntryPath("k2", "k2", "/conversation/jx7abc", "")).toBeNull();
+  });
+
+  it("adopts nothing outside the shell", () => {
+    expect(shellEntryPath(null, "default", "/", "")).toBeNull();
+    expect(shellEntryPath("k1", "k2", "/login", "")).toBeNull();
+    expect(shellEntryPath("k1", "k2", "/ashot", "")).toBeNull();
   });
 });
