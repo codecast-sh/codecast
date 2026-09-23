@@ -153,8 +153,9 @@ export async function enqueueStartSession(
     agentType: AgentClientId;
     projectPath?: string | null;
     gitRoot?: string | null;
-    // The machine the user picked by hand. Honoured when it's online, otherwise
-    // routing falls back to whatever is alive and has the checkout.
+    // The machine the user picked by hand. Honoured whether or not it is
+    // online: an offline pick queues the start for that machine. Routing never
+    // substitutes another machine for a pick.
     targetDeviceId?: string | null;
     sessionId?: string;
     isolated?: boolean;

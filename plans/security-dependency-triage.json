@@ -1,0 +1,2270 @@
+{
+  "summary": {
+    "generatedAt": "2026-09-24T00:20:45.757Z",
+    "bunVersion": "1.3.14",
+    "packages": 40,
+    "advisories": 195,
+    "bySeverity": {
+      "critical": 3,
+      "high": 93,
+      "moderate": 82,
+      "low": 17
+    },
+    "byStatus": {
+      "fixed": 1,
+      "not-reachable": 27,
+      "accepted-risk": 5,
+      "fix-planned": 7,
+      "untriaged": 0,
+      "expired": 0
+    }
+  },
+  "rows": [
+    {
+      "name": "@auth/core",
+      "resolvedVersions": [
+        "0.37.4"
+      ],
+      "dependencyTree": "@auth/core@0.37.4\n  ├─ @codecast/convex@workspace (requires ^0.37.2)\n  │  ├─ @codecast/web@workspace (requires workspace:*)\n  │  │  └─ mobile@workspace (requires workspace:*)\n  │  │  \n  │  └─ mobile@workspace (requires workspace:*)\n  │  \n  ├─ peer @convex-dev/auth@0.0.79 (requires ^0.37.0)\n  │  ├─ @codecast/convex@workspace (requires 0.0.79)\n  │  │  ├─ @codecast/web@workspace (requires workspace:*)\n  │  │  │  └─ mobile@workspace (requires workspace:*)\n  │  │  │  \n  │  │  └─ mobile@workspace (requires workspace:*)\n  │  │  \n  │  ├─ @codecast/web@workspace (requires 0.0.79)\n  │  │  └─ mobile@workspace (requires workspace:*)\n  │  │  \n  │  ├─ peer @platform/auth@platform/packages/auth (requires 0.0.79)\n  │  │  ├─ @codecast/cli@workspace (requires file:../../platform/packages/auth)\n  │  │  ├─ @codecast/convex@workspace (requires file:../../platform/packages/auth)\n  │  │  │  ├─ @codecast/web@workspace (requires workspace:*)\n  │  │  │  │  └─ mobile@workspace (requires workspace:*)\n  │  │  │  │  \n  │  │  │  └─ mobile@workspace (requires workspace:*)\n  │  │  │  \n  │  │  └─ @codecast/web@workspace (requires file:../../platform/packages/auth)\n  │  │     └─ mobile@workspace (requires workspace:*)\n  │  │  \n  │  └─ dev @platform/auth@platform/packages/auth (requires 0.0.79)\n  │     ├─ @codecast/cli@workspace (requires file:../../platform/packages/auth)\n  │     ├─ @codecast/convex@workspace (requires file:../../platform/packages/auth)\n  │     │  ├─ @codecast/web@workspace (requires workspace:*)\n  │     │  │  └─ mobile@workspace (requires workspace:*)\n  │     │  └─ mobile@workspace (requires workspace:*)\n  │     └─ @codecast/web@workspace (requires file:../../platform/packages/auth)\n  │        └─ mobile@workspace (requires workspace:*)\n  │  \n  ├─ peer @convex-dev/auth@0.0.90 (requires ^0.37.0)\n  │  └─ mobile@workspace (requires ^0.0.90)\n  ├─ optional peer @platform/auth@platform/packages/auth (requires ^0.37.2)",
+      "advisories": [
+        {
+          "id": 1139363,
+          "url": "https://github.com/advisories/GHSA-7rqj-j65f-68wh",
+          "title": "Auth.js: Email normalizer validates the address before Unicode normalization, allowing a homoglyph @ bypass",
+          "severity": "critical",
+          "vulnerable_versions": ">=0.1.0 <0.41.3"
+        },
+        {
+          "id": 1139572,
+          "url": "https://github.com/advisories/GHSA-xmf8-cvqr-rfgj",
+          "title": "Auth.js: getToken() throws an uncaught exception on malformed Bearer authorization headers",
+          "severity": "high",
+          "vulnerable_versions": ">=0.1.0 <0.41.3"
+        },
+        {
+          "id": 1139575,
+          "url": "https://github.com/advisories/GHSA-x445-f3h2-j279",
+          "title": "Auth.js: OAuth state, nonce, and PKCE check cookies are not bound to the provider that created them",
+          "severity": "moderate",
+          "vulnerable_versions": "<=0.41.2"
+        }
+      ],
+      "determination": {
+        "versions": "0.37.4 (peer of @convex-dev/auth)",
+        "modes": [
+          "runtime-backend"
+        ],
+        "symbol": "email normaliser (GHSA-7rqj-j65f-68wh) and getToken() bearer parsing (GHSA-xmf8-cvqr-rfgj)",
+        "untrustedInput": "indirect",
+        "decision": "fix-planned",
+        "evidence": "Convex Auth (@convex-dev/auth) is the consumer; our auth surface is GitHub, Apple and Google OAuth through @platform/auth (identity worker ct-53052), no email/magic link provider is configured, and getToken() is not called from our code. Upgrade rides the next @convex-dev/auth release that lifts the peer; tracked with the identity worker.",
+        "owner": "identity worker (ct-53052)",
+        "reviewBy": "2026-11-01"
+      },
+      "status": "fix-planned"
+    },
+    {
+      "name": "@babel/core",
+      "resolvedVersions": [],
+      "dependencyTree": "(bun why failed)",
+      "advisories": [
+        {
+          "id": 1123528,
+          "url": "https://github.com/advisories/GHSA-4x5r-pxfx-6jf8",
+          "title": "@babel/core: Arbitrary File Read via sourceMappingURL Comment",
+          "severity": "low",
+          "vulnerable_versions": "<=7.29.0"
+        }
+      ],
+      "determination": {
+        "versions": "see bun why",
+        "modes": [
+          "build-only"
+        ],
+        "symbol": "compiler",
+        "untrustedInput": "no",
+        "decision": "not-reachable",
+        "evidence": "build time only",
+        "owner": "release owner",
+        "reviewBy": "2026-12-23"
+      },
+      "status": "not-reachable"
+    },
+    {
+      "name": "@hono/node-server",
+      "resolvedVersions": [
+        "1.19.14"
+      ],
+      "dependencyTree": "@hono/node-server@1.19.14\n  └─ @codecast/web@workspace (requires ^1.19.11)\n     └─ mobile@workspace (requires workspace:*)",
+      "advisories": [
+        {
+          "id": 1139322,
+          "url": "https://github.com/advisories/GHSA-frvp-7c67-39w9",
+          "title": "Node.js Adapter for Hono: Path traversal in `serve-static` on Windows via encoded backslash (`%5C`)",
+          "severity": "moderate",
+          "vulnerable_versions": "<1.19.15"
+        }
+      ],
+      "determination": {
+        "versions": "resolved with hono",
+        "modes": [
+          "dev-only"
+        ],
+        "symbol": "request handling",
+        "untrustedInput": "no",
+        "decision": "not-reachable",
+        "evidence": "same as hono",
+        "owner": "release owner",
+        "reviewBy": "2026-12-23"
+      },
+      "status": "not-reachable"
+    },
+    {
+      "name": "@opentelemetry/core",
+      "resolvedVersions": [
+        "2.2.0"
+      ],
+      "dependencyTree": "@opentelemetry/core@2.2.0\n  ├─ @opentelemetry/exporter-logs-otlp-http@0.208.0 (requires 2.2.0)\n  │  └─ posthog-js@1.372.3 (requires ^0.208.0)\n  │     ├─ @codecast/web@workspace (requires ^1.363.3)\n  │     │  └─ mobile@workspace (requires workspace:*)\n  │     │  \n  │     ├─ optional peer @platform/analytics@platform/packages/analytics (requires ^1.363.3)\n  │     │  ├─ @codecast/convex@workspace (requires file:../../platform/packages/analytics)\n  │     │  │  ├─ @codecast/web@workspace (requires workspace:*)\n  │     │  │  │  └─ mobile@workspace (requires workspace:*)\n  │     │  │  │  \n  │     │  │  └─ mobile@workspace (requires workspace:*)\n  │     │  │  \n  │     │  ├─ @codecast/shared@workspace (requires file:../../platform/packages/analytics)\n  │     │  │  ├─ @codecast/cli@workspace (requires workspace:*)\n  │     │  │  ├─ @codecast/convex@workspace (requires workspace:*)\n  │     │  │  │  ├─ @codecast/web@workspace (requires workspace:*)\n  │     │  │  │  │  └─ mobile@workspace (requires workspace:*)\n  │     │  │  │  │  \n  │     │  │  │  └─ mobile@workspace (requires workspace:*)\n  │     │  │  │  \n  │     │  │  ├─ @codecast/web@workspace (requires workspace:*)\n  │     │  │  │  └─ mobile@workspace (requires workspace:*)\n  │     │  │  │  \n  │     │  │  └─ mobile@workspace (requires workspace:*)\n  │     │  │  \n  │     │  ├─ @codecast/web@workspace (requires file:../../platform/packages/analytics)\n  │     │  │  └─ mobile@workspace (requires workspace:*)\n  │     │  │  \n  │     │  └─ mobile@workspace (requires file:../../platform/packages/analytics)\n  │     │  \n  │     ├─ dev @platform/analytics@platform/packages/analytics (requires ^1.363.3)\n  │     │  ├─ @codecast/convex@workspace (requires file:../../platform/packages/analytics)\n  │     │  │  ├─ @codecast/web@workspace (requires workspace:*)\n  │     │  │  │  └─ mobile@workspace (requires workspace:*)\n  │     │  │  │  \n  │     │  │  └─ mobile@workspace (requires workspace:*)\n  │     │  │  \n  │     │  ├─ @codecast/shared@workspace (requires file:../../platform/packages/analytics)\n  │     │  │  ├─ @codecast/cli@workspace (requires workspace:*)",
+      "advisories": [
+        {
+          "id": 1153174,
+          "url": "https://github.com/advisories/GHSA-8988-4f7v-96qf",
+          "title": "OpenTelemetry Core: Unbounded memory allocation in W3C Baggage propagation",
+          "severity": "moderate",
+          "vulnerable_versions": "<2.8.0"
+        }
+      ],
+      "determination": {
+        "versions": "see bun why",
+        "modes": [
+          "dev-only"
+        ],
+        "symbol": "n/a",
+        "untrustedInput": "no",
+        "decision": "not-reachable",
+        "evidence": "tooling chain; no OTel exporter runs in shipped code",
+        "owner": "release owner",
+        "reviewBy": "2026-12-23"
+      },
+      "status": "not-reachable"
+    },
+    {
+      "name": "@tiptap/core",
+      "resolvedVersions": [
+        "3.22.5"
+      ],
+      "dependencyTree": "@tiptap/core@3.22.5\n  ├─ peer @tiptap/extension-blockquote@3.22.5 (requires 3.22.5)\n  │  └─ @tiptap/starter-kit@3.22.5 (requires ^3.22.5)\n  │     └─ @codecast/web@workspace (requires ^3.20.4)\n  │        └─ mobile@workspace (requires workspace:*)\n  │        \n  ├─ peer @tiptap/extension-bold@3.22.5 (requires 3.22.5)\n  │  └─ @tiptap/starter-kit@3.22.5 (requires ^3.22.5)\n  │     └─ @codecast/web@workspace (requires ^3.20.4)\n  │        └─ mobile@workspace (requires workspace:*)\n  │        \n  ├─ peer @tiptap/extension-bubble-menu@3.22.5 (requires 3.22.5)\n  │  ├─ @codecast/web@workspace (requires ^3.20.4)\n  │  │  └─ mobile@workspace (requires workspace:*)\n  │  │  \n  │  └─ optional @tiptap/react@3.22.5 (requires ^3.22.5)\n  │     └─ @codecast/web@workspace (requires ^3.20.4)\n  │        └─ mobile@workspace (requires workspace:*)\n  │  \n  ├─ peer @tiptap/extension-code@3.22.5 (requires 3.22.5)\n  │  └─ @tiptap/starter-kit@3.22.5 (requires ^3.22.5)\n  │     └─ @codecast/web@workspace (requires ^3.20.4)\n  │        └─ mobile@workspace (requires workspace:*)\n  │        \n  ├─ peer @tiptap/extension-code-block@3.22.5 (requires 3.22.5)\n  │  ├─ peer @tiptap/extension-code-block-lowlight@3.22.5 (requires 3.22.5)\n  │  │  └─ @codecast/web@workspace (requires ^3.20.4)\n  │  │     └─ mobile@workspace (requires workspace:*)\n  │  │     \n  │  └─ @tiptap/starter-kit@3.22.5 (requires ^3.22.5)\n  │     └─ @codecast/web@workspace (requires ^3.20.4)\n  │        └─ mobile@workspace (requires workspace:*)\n  │  \n  ├─ peer @tiptap/extension-code-block-lowlight@3.22.5 (requires 3.22.5)\n  │  └─ @codecast/web@workspace (requires ^3.20.4)\n  │     └─ mobile@workspace (requires workspace:*)\n  │     \n  ├─ peer @tiptap/extension-document@3.22.5 (requires 3.22.5)\n  │  └─ @tiptap/starter-kit@3.22.5 (requires ^3.22.5)\n  │     └─ @codecast/web@workspace (requires ^3.20.4)",
+      "advisories": [
+        {
+          "id": 1158508,
+          "url": "https://github.com/advisories/GHSA-cp6q-959q-f8rh",
+          "title": "Tiptap: mergeAttributes() turns an own __proto__ key into inherited executable DOM attributes",
+          "severity": "moderate",
+          "vulnerable_versions": ">=2.0.0-alpha.0 <3.30.4"
+        },
+        {
+          "id": 1193728,
+          "url": "https://github.com/advisories/GHSA-j95f-988m-3j2f",
+          "title": "Tiptap: Quadratic ReDoS in block and inline Markdown attribute parsing",
+          "severity": "high",
+          "vulnerable_versions": ">=3.7.0 <3.30.5"
+        }
+      ],
+      "determination": {
+        "versions": "see bun why",
+        "modes": [
+          "runtime-web"
+        ],
+        "symbol": "editor HTML handling",
+        "untrustedInput": "indirect",
+        "decision": "fix-planned",
+        "evidence": "the composer is a tiptap editor; content it loads is the viewer's own draft, not another user's, so the exposure is self inflicted. Bump with the content worker's renderer pass.",
+        "owner": "content worker (ct-53054)",
+        "reviewBy": "2026-10-15"
+      },
+      "status": "fix-planned"
+    },
+    {
+      "name": "@tootallnate/once",
+      "resolvedVersions": [
+        "2.0.0"
+      ],
+      "dependencyTree": "@tootallnate/once@2.0.0\n  └─ http-proxy-agent@5.0.0 (requires 2)\n     └─ make-fetch-happen@10.2.1 (requires ^5.0.0)\n        └─ node-gyp@9.4.1 (requires ^10.0.3)\n           └─ @electron/rebuild@3.6.1 (requires ^9.0.0)\n              └─ app-builder-lib@25.1.8 (requires 3.6.1)\n                 ├─ dmg-builder@25.1.8 (requires 25.1.8)\n                 │  ├─ electron-builder@25.1.8 (requires 25.1.8)\n                 │  │  ├─ dev @codecast/electron@workspace (requires ^25.0.0)\n                 │  │  └─ optional peer @platform/desktop@platform/packages/desktop (requires >=24)\n                 │  │     └─ @codecast/electron@workspace (requires file:../../platform/packages/desktop)\n                 │  └─ peer app-builder-lib@25.1.8 (requires 25.1.8)\n                 │     └─ *circular\n                 ├─ electron-builder@25.1.8 (requires 25.1.8)\n                 │  ├─ dev @codecast/electron@workspace (requires ^25.0.0)\n                 │  └─ optional peer @platform/desktop@platform/packages/desktop (requires >=24)\n                 │     └─ @codecast/electron@workspace (requires file:../../platform/packages/desktop)\n                 └─ electron-builder-squirrel-windows@25.1.8 (requires 25.1.8)\n                    └─ peer app-builder-lib@25.1.8 (requires 25.1.8)\n                       └─ *circular",
+      "advisories": [
+        {
+          "id": 1119438,
+          "url": "https://github.com/advisories/GHSA-vpq2-c234-7xj6",
+          "title": "@tootallnate/once vulnerable to Incorrect Control Flow Scoping",
+          "severity": "low",
+          "vulnerable_versions": "<2.0.1"
+        }
+      ],
+      "determination": {
+        "versions": "see bun why",
+        "modes": [
+          "build-only"
+        ],
+        "symbol": "n/a",
+        "untrustedInput": "no",
+        "decision": "not-reachable",
+        "evidence": "electron-builder chain",
+        "owner": "release owner",
+        "reviewBy": "2026-12-23"
+      },
+      "status": "not-reachable"
+    },
+    {
+      "name": "@xmldom/xmldom",
+      "resolvedVersions": [
+        "0.8.13"
+      ],
+      "dependencyTree": "@xmldom/xmldom@0.8.13\n  ├─ @expo/plist@0.4.8 (requires ^0.8.8)\n  │  ├─ @expo/cli@54.0.24 (requires ^0.4.8)\n  │  │  └─ expo@54.0.34 (requires 54.0.24)\n  │  │     ├─ mobile@workspace (requires ~54.0.29)\n  │  │     ├─ peer @bacons/apple-targets@5.0.0 (requires >=52)\n  │  │     │  └─ mobile@workspace (requires 5.0.0)\n  │  │     ├─ optional peer @sentry/react-native@8.9.2 (requires >=49.0.0)\n  │  │     │  ├─ mobile@workspace (requires ^8.5.0)\n  │  │     │  ├─ optional peer @platform/analytics@platform/packages/analytics (requires ^8.5.0)\n  │  │     │  │  ├─ @codecast/convex@workspace (requires file:../../platform/packages/analytics)\n  │  │     │  │  │  ├─ @codecast/web@workspace (requires workspace:*)\n  │  │     │  │  │  │  └─ mobile@workspace (requires workspace:*)\n  │  │     │  │  │  │  \n  │  │     │  │  │  └─ mobile@workspace (requires workspace:*)\n  │  │     │  │  │  \n  │  │     │  │  ├─ @codecast/shared@workspace (requires file:../../platform/packages/analytics)\n  │  │     │  │  │  ├─ @codecast/cli@workspace (requires workspace:*)\n  │  │     │  │  │  ├─ @codecast/convex@workspace (requires workspace:*)\n  │  │     │  │  │  │  ├─ @codecast/web@workspace (requires workspace:*)\n  │  │     │  │  │  │  │  └─ mobile@workspace (requires workspace:*)\n  │  │     │  │  │  │  │  \n  │  │     │  │  │  │  └─ mobile@workspace (requires workspace:*)\n  │  │     │  │  │  │  \n  │  │     │  │  │  ├─ @codecast/web@workspace (requires workspace:*)\n  │  │     │  │  │  │  └─ mobile@workspace (requires workspace:*)\n  │  │     │  │  │  │  \n  │  │     │  │  │  └─ mobile@workspace (requires workspace:*)\n  │  │     │  │  │  \n  │  │     │  │  ├─ @codecast/web@workspace (requires file:../../platform/packages/analytics)\n  │  │     │  │  │  └─ mobile@workspace (requires workspace:*)\n  │  │     │  │  │  \n  │  │     │  │  └─ mobile@workspace (requires file:../../platform/packages/analytics)\n  │  │     │  │  \n  │  │     │  └─ dev @platform/analytics@platform/packages/analytics (requires ^8.5.0)\n  │  │     │     ├─ @codecast/convex@workspace (requires file:../../platform/packages/analytics)\n  │  │     │     │  ├─ @codecast/web@workspace (requires workspace:*)\n  │  │     │     │  │  └─ mobile@workspace (requires workspace:*)\n  │  │     │     │  └─ mobile@workspace (requires workspace:*)\n  │  │     │     ├─ @codecast/shared@workspace (requires file:../../platform/packages/analytics)",
+      "advisories": [
+        {
+          "id": 1158517,
+          "url": "https://github.com/advisories/GHSA-6gmq-8vp8-gcm6",
+          "title": "xmldom: XML fragment injection via invalid EntityReference.nodeName during requireWellFormed serialization",
+          "severity": "moderate",
+          "vulnerable_versions": ">=0.9.0 <=0.9.11"
+        },
+        {
+          "id": 1158518,
+          "url": "https://github.com/advisories/GHSA-6gmq-8vp8-gcm6",
+          "title": "xmldom: XML fragment injection via invalid EntityReference.nodeName during requireWellFormed serialization",
+          "severity": "moderate",
+          "vulnerable_versions": ">=0.7.0 <=0.8.14"
+        },
+        {
+          "id": 1117097,
+          "url": "https://github.com/advisories/GHSA-wh4c-j3r5-mjhp",
+          "title": "xmldom: XML injection via unsafe CDATA serialization allows attacker-controlled markup insertion",
+          "severity": "high",
+          "vulnerable_versions": "<0.8.12"
+        },
+        {
+          "id": 1117894,
+          "url": "https://github.com/advisories/GHSA-2v35-w6hq-6mfw",
+          "title": "xmldom: Uncontrolled recursion in XML serialization leads to DoS",
+          "severity": "high",
+          "vulnerable_versions": "<0.8.13"
+        },
+        {
+          "id": 1117897,
+          "url": "https://github.com/advisories/GHSA-f6ww-3ggp-fr8h",
+          "title": "xmldom has XML injection through unvalidated DocumentType serialization",
+          "severity": "high",
+          "vulnerable_versions": "<0.8.13"
+        },
+        {
+          "id": 1117900,
+          "url": "https://github.com/advisories/GHSA-x6wf-f3px-wcqx",
+          "title": "xmldom has XML node injection through unvalidated processing instruction serialization",
+          "severity": "high",
+          "vulnerable_versions": "<0.8.13"
+        },
+        {
+          "id": 1117903,
+          "url": "https://github.com/advisories/GHSA-j759-j44w-7fr8",
+          "title": "xmldom has XML node injection through unvalidated comment serialization",
+          "severity": "high",
+          "vulnerable_versions": "<0.8.13"
+        },
+        {
+          "id": 1193671,
+          "url": "https://github.com/advisories/GHSA-6mj3-qw4j-hgrw",
+          "title": "xmldom: HTML raw-text closing-tag case mismatch causes output amplification",
+          "severity": "high",
+          "vulnerable_versions": ">=0.9.0-beta.1 <=0.9.11"
+        },
+        {
+          "id": 1193687,
+          "url": "https://github.com/advisories/GHSA-g53g-w8rj-fmg7",
+          "title": "xmldom PI grammar regex ReDoS: quadratic backtracking on unterminated processing instructions",
+          "severity": "high",
+          "vulnerable_versions": ">=0.9.0-beta.9 <=0.9.10"
+        },
+        {
+          "id": 1193689,
+          "url": "https://github.com/advisories/GHSA-w2rr-34g9-rvrj",
+          "title": "xmldom: Element name injection via createElement() bypasses requireWellFormed",
+          "severity": "high",
+          "vulnerable_versions": ">=0.7.0 <=0.8.13"
+        },
+        {
+          "id": 1193690,
+          "url": "https://github.com/advisories/GHSA-w2rr-34g9-rvrj",
+          "title": "xmldom: Element name injection via createElement() bypasses requireWellFormed",
+          "severity": "high",
+          "vulnerable_versions": ">=0.9.0 <=0.9.10"
+        },
+        {
+          "id": 1193692,
+          "url": "https://github.com/advisories/GHSA-4w3w-2rp5-g8jm",
+          "title": "xmldom: Attribute name injection via setAttribute() bypasses requireWellFormed",
+          "severity": "high",
+          "vulnerable_versions": ">=0.7.0 <=0.8.13"
+        },
+        {
+          "id": 1193693,
+          "url": "https://github.com/advisories/GHSA-4w3w-2rp5-g8jm",
+          "title": "xmldom: Attribute name injection via setAttribute() bypasses requireWellFormed",
+          "severity": "high",
+          "vulnerable_versions": ">=0.9.0 <=0.9.10"
+        },
+        {
+          "id": 1193695,
+          "url": "https://github.com/advisories/GHSA-c7q8-3ch8-vqpv",
+          "title": "xmldom: Processing Instruction Target Injection Bypasses requireWellFormed",
+          "severity": "high",
+          "vulnerable_versions": ">=0.9.0 <=0.9.11"
+        },
+        {
+          "id": 1193696,
+          "url": "https://github.com/advisories/GHSA-c7q8-3ch8-vqpv",
+          "title": "xmldom: Processing Instruction Target Injection Bypasses requireWellFormed",
+          "severity": "high",
+          "vulnerable_versions": ">=0.7.0 <=0.8.14"
+        },
+        {
+          "id": 1193699,
+          "url": "https://github.com/advisories/GHSA-27p8-2357-5qqv",
+          "title": "xmldom: DocType `name` Injection Bypasses requireWellFormed",
+          "severity": "high",
+          "vulnerable_versions": ">=0.9.0 <=0.9.11"
+        },
+        {
+          "id": 1193700,
+          "url": "https://github.com/advisories/GHSA-27p8-2357-5qqv",
+          "title": "xmldom: DocType `name` Injection Bypasses requireWellFormed",
+          "severity": "high",
+          "vulnerable_versions": ">=0.7.0 <=0.8.14"
+        },
+        {
+          "id": 1193701,
+          "url": "https://github.com/advisories/GHSA-3px3-54cx-rmw9",
+          "title": "xmldom: Creation-time XML Name/QName validation is bypassable via an embedded line terminator, allowing injection on the default serialization path",
+          "severity": "high",
+          "vulnerable_versions": ">=0.9.0 <=0.9.11"
+        },
+        {
+          "id": 1193702,
+          "url": "https://github.com/advisories/GHSA-vr34-hp96-76pp",
+          "title": "xmldom: requireWellFormed DocType publicId/systemId validation is bypassable via an embedded line terminator",
+          "severity": "high",
+          "vulnerable_versions": ">=0.9.10 <=0.9.11"
+        },
+        {
+          "id": 1193704,
+          "url": "https://github.com/advisories/GHSA-6h8r-xr42-gp59",
+          "title": "xmldom: Parser silently accepts a not-well-formed end tag whose name is followed by a line break and trailing content",
+          "severity": "moderate",
+          "vulnerable_versions": ">=0.9.0 <=0.9.11"
+        },
+        {
+          "id": 1193705,
+          "url": "https://github.com/advisories/GHSA-6h8r-xr42-gp59",
+          "title": "xmldom: Parser silently accepts a not-well-formed end tag whose name is followed by a line break and trailing content",
+          "severity": "moderate",
+          "vulnerable_versions": ">=0.7.0 <=0.8.14"
+        },
+        {
+          "id": 1193707,
+          "url": "https://github.com/advisories/GHSA-8344-3jmq-59r6",
+          "title": "xmldom: Quadratic-time attribute deduplication",
+          "severity": "high",
+          "vulnerable_versions": ">=0.9.0 <=0.9.11"
+        },
+        {
+          "id": 1193708,
+          "url": "https://github.com/advisories/GHSA-8344-3jmq-59r6",
+          "title": "xmldom: Quadratic-time attribute deduplication",
+          "severity": "high",
+          "vulnerable_versions": ">=0.7.0 <=0.8.14"
+        },
+        {
+          "id": 1193709,
+          "url": "https://github.com/advisories/GHSA-x4fp-j954-r2f4",
+          "title": "xmldom: End-tag Whitespace-Trim Regex ReDoS — quadratic backtracking in the 0.8.x end-tag parser",
+          "severity": "high",
+          "vulnerable_versions": ">=0.7.0 <=0.8.14"
+        },
+        {
+          "id": 1193711,
+          "url": "https://github.com/advisories/GHSA-965w-775f-mr7g",
+          "title": "xmldom: Quadratic-memory consumption",
+          "severity": "high",
+          "vulnerable_versions": ">=0.9.0 <=0.9.11"
+        },
+        {
+          "id": 1193712,
+          "url": "https://github.com/advisories/GHSA-965w-775f-mr7g",
+          "title": "xmldom: Quadratic-memory consumption",
+          "severity": "high",
+          "vulnerable_versions": ">=0.7.0 <=0.8.14"
+        },
+        {
+          "id": 1193714,
+          "url": "https://github.com/advisories/GHSA-93r5-fhx6-vmg9",
+          "title": "xmldom: Quadratic-time parsing via the malformed-input recovery path — `parseElementStartPart` re-scan and `normalize()` adjacent-text merge",
+          "severity": "high",
+          "vulnerable_versions": ">=0.9.0 <=0.9.11"
+        },
+        {
+          "id": 1193715,
+          "url": "https://github.com/advisories/GHSA-93r5-fhx6-vmg9",
+          "title": "xmldom: Quadratic-time parsing via the malformed-input recovery path — `parseElementStartPart` re-scan and `normalize()` adjacent-text merge",
+          "severity": "high",
+          "vulnerable_versions": ">=0.7.0 <=0.8.14"
+        }
+      ],
+      "determination": {
+        "versions": "see bun why @xmldom/xmldom",
+        "modes": [
+          "build-only"
+        ],
+        "symbol": "XML parsing",
+        "untrustedInput": "no",
+        "decision": "not-reachable",
+        "evidence": "expo / plist tooling only",
+        "owner": "release owner",
+        "reviewBy": "2026-12-23"
+      },
+      "status": "not-reachable"
+    },
+    {
+      "name": "app-builder-lib",
+      "resolvedVersions": [
+        "25.1.8"
+      ],
+      "dependencyTree": "app-builder-lib@25.1.8\n  ├─ dmg-builder@25.1.8 (requires 25.1.8)\n  │  ├─ electron-builder@25.1.8 (requires 25.1.8)\n  │  │  ├─ dev @codecast/electron@workspace (requires ^25.0.0)\n  │  │  └─ optional peer @platform/desktop@platform/packages/desktop (requires >=24)\n  │  │     └─ @codecast/electron@workspace (requires file:../../platform/packages/desktop)\n  │  │  \n  │  └─ peer app-builder-lib@25.1.8 (requires 25.1.8)\n  │     ├─ dmg-builder@25.1.8 (requires 25.1.8)\n  │     │  └─ *circular\n  │     ├─ electron-builder@25.1.8 (requires 25.1.8)\n  │     │  ├─ dev @codecast/electron@workspace (requires ^25.0.0)\n  │     │  └─ optional peer @platform/desktop@platform/packages/desktop (requires >=24)\n  │     │     └─ @codecast/electron@workspace (requires file:../../platform/packages/desktop)\n  │     └─ electron-builder-squirrel-windows@25.1.8 (requires 25.1.8)\n  │        └─ peer app-builder-lib@25.1.8 (requires 25.1.8)\n  │           └─ *circular\n  │  \n  ├─ electron-builder@25.1.8 (requires 25.1.8)\n  │  ├─ dev @codecast/electron@workspace (requires ^25.0.0)\n  │  └─ optional peer @platform/desktop@platform/packages/desktop (requires >=24)\n  │     └─ @codecast/electron@workspace (requires file:../../platform/packages/desktop)\n  │  \n  └─ electron-builder-squirrel-windows@25.1.8 (requires 25.1.8)\n     └─ peer app-builder-lib@25.1.8 (requires 25.1.8)\n        ├─ dmg-builder@25.1.8 (requires 25.1.8)\n        │  ├─ electron-builder@25.1.8 (requires 25.1.8)\n        │  │  ├─ dev @codecast/electron@workspace (requires ^25.0.0)\n        │  │  └─ optional peer @platform/desktop@platform/packages/desktop (requires >=24)\n        │  │     └─ @codecast/electron@workspace (requires file:../../platform/packages/desktop)\n        │  └─ peer app-builder-lib@25.1.8 (requires 25.1.8)\n        │     └─ *circular\n        ├─ electron-builder@25.1.8 (requires 25.1.8)\n        │  ├─ dev @codecast/electron@workspace (requires ^25.0.0)\n        │  └─ optional peer @platform/desktop@platform/packages/desktop (requires >=24)\n        │     └─ @codecast/electron@workspace (requires file:../../platform/packages/desktop)\n        └─ electron-builder-squirrel-windows@25.1.8 (requires 25.1.8)\n           └─ *circular",
+      "advisories": [
+        {
+          "id": 1124279,
+          "url": "https://github.com/advisories/GHSA-7g7r-gx96-252g",
+          "title": "electron-updater: Uncontrolled search path elements within `AppImage` built by `app-builder-lib`",
+          "severity": "high",
+          "vulnerable_versions": "<26.15.0"
+        }
+      ],
+      "determination": {
+        "versions": "see bun why",
+        "modes": [
+          "build-only"
+        ],
+        "symbol": "packaging",
+        "untrustedInput": "no",
+        "decision": "not-reachable",
+        "evidence": "electron-builder, build machine only",
+        "owner": "release owner",
+        "reviewBy": "2026-12-23"
+      },
+      "status": "not-reachable"
+    },
+    {
+      "name": "baseline-browser-mapping",
+      "resolvedVersions": [],
+      "dependencyTree": "(bun why failed)",
+      "advisories": [
+        {
+          "id": 1193686,
+          "url": "https://github.com/advisories/GHSA-w5vr-8v7q-w6rv",
+          "title": "baseline-browser-mapping process termination on invalid input causes denial of service",
+          "severity": "moderate",
+          "vulnerable_versions": ">=2.0.0 <2.11.0"
+        }
+      ],
+      "determination": {
+        "versions": "see bun why",
+        "modes": [
+          "build-only"
+        ],
+        "symbol": "n/a",
+        "untrustedInput": "no",
+        "decision": "not-reachable",
+        "evidence": "browserslist tooling",
+        "owner": "release owner",
+        "reviewBy": "2026-12-23"
+      },
+      "status": "not-reachable"
+    },
+    {
+      "name": "brace-expansion",
+      "resolvedVersions": [],
+      "dependencyTree": "(bun why failed)",
+      "advisories": [
+        {
+          "id": 1120311,
+          "url": "https://github.com/advisories/GHSA-jxxr-4gwj-5jf2",
+          "title": "brace-expansion: Large numeric range defeats documented `max` DoS protection",
+          "severity": "moderate",
+          "vulnerable_versions": ">=5.0.0 <5.0.6"
+        },
+        {
+          "id": 1130588,
+          "url": "https://github.com/advisories/GHSA-mh99-v99m-4gvg",
+          "title": "brace-expansion: DoS via unbounded expansion length causing an out-of-memory process crash",
+          "severity": "high",
+          "vulnerable_versions": "<1.1.17"
+        },
+        {
+          "id": 1130589,
+          "url": "https://github.com/advisories/GHSA-mh99-v99m-4gvg",
+          "title": "brace-expansion: DoS via unbounded expansion length causing an out-of-memory process crash",
+          "severity": "high",
+          "vulnerable_versions": ">=2.0.0 <2.1.3"
+        },
+        {
+          "id": 1130591,
+          "url": "https://github.com/advisories/GHSA-mh99-v99m-4gvg",
+          "title": "brace-expansion: DoS via unbounded expansion length causing an out-of-memory process crash",
+          "severity": "high",
+          "vulnerable_versions": ">=4.0.0 <5.0.8"
+        },
+        {
+          "id": 1130734,
+          "url": "https://github.com/advisories/GHSA-rgw5-rvv9-x895",
+          "title": "brace-expansion: DoS via unbounded intermediate arrays, bypassing the CVE-2026-14257 mitigation",
+          "severity": "high",
+          "vulnerable_versions": ">=4.0.0 <5.0.9"
+        },
+        {
+          "id": 1130736,
+          "url": "https://github.com/advisories/GHSA-rgw5-rvv9-x895",
+          "title": "brace-expansion: DoS via unbounded intermediate arrays, bypassing the CVE-2026-14257 mitigation",
+          "severity": "high",
+          "vulnerable_versions": ">=2.0.0 <2.1.4"
+        },
+        {
+          "id": 1130737,
+          "url": "https://github.com/advisories/GHSA-rgw5-rvv9-x895",
+          "title": "brace-expansion: DoS via unbounded intermediate arrays, bypassing the CVE-2026-14257 mitigation",
+          "severity": "high",
+          "vulnerable_versions": "<1.1.18"
+        },
+        {
+          "id": 1123896,
+          "url": "https://github.com/advisories/GHSA-3jxr-9vmj-r5cp",
+          "title": "brace-expansion: DoS via exponential-time expansion of consecutive non-expanding {} groups",
+          "severity": "high",
+          "vulnerable_versions": ">=2.0.0 <2.1.2"
+        },
+        {
+          "id": 1123897,
+          "url": "https://github.com/advisories/GHSA-3jxr-9vmj-r5cp",
+          "title": "brace-expansion: DoS via exponential-time expansion of consecutive non-expanding {} groups",
+          "severity": "high",
+          "vulnerable_versions": "<1.1.16"
+        },
+        {
+          "id": 1123898,
+          "url": "https://github.com/advisories/GHSA-3jxr-9vmj-r5cp",
+          "title": "brace-expansion: DoS via exponential-time expansion of consecutive non-expanding {} groups",
+          "severity": "high",
+          "vulnerable_versions": ">=3.0.0 <5.0.7"
+        }
+      ],
+      "determination": {
+        "versions": "see bun why",
+        "modes": [
+          "build-only",
+          "dev-only"
+        ],
+        "symbol": "ReDoS",
+        "untrustedInput": "no",
+        "decision": "not-reachable",
+        "evidence": "glob tooling only",
+        "owner": "release owner",
+        "reviewBy": "2026-12-23"
+      },
+      "status": "not-reachable"
+    },
+    {
+      "name": "browserslist",
+      "resolvedVersions": [],
+      "dependencyTree": "(bun why failed)",
+      "advisories": [
+        {
+          "id": 1153171,
+          "url": "https://github.com/advisories/GHSA-c83g-rgw3-j3cx",
+          "title": "Browserslist: Unbounded memory growth (no cache eviction) via distinct query results, leading to eventual OOM",
+          "severity": "high",
+          "vulnerable_versions": "<=4.28.6"
+        },
+        {
+          "id": 1153172,
+          "url": "https://github.com/advisories/GHSA-73wf-gq98-2v4g",
+          "title": "Browserslist: Uncaught crash / prototype write via untrusted browserslist-stats.json custom stats (normalizeStats)",
+          "severity": "high",
+          "vulnerable_versions": "<=4.28.6"
+        }
+      ],
+      "determination": {
+        "versions": "see bun why",
+        "modes": [
+          "build-only"
+        ],
+        "symbol": "query ReDoS",
+        "untrustedInput": "no",
+        "decision": "not-reachable",
+        "evidence": "build time only",
+        "owner": "release owner",
+        "reviewBy": "2026-12-23"
+      },
+      "status": "not-reachable"
+    },
+    {
+      "name": "builder-util-runtime",
+      "resolvedVersions": [
+        "9.2.10"
+      ],
+      "dependencyTree": "builder-util-runtime@9.2.10\n  ├─ app-builder-lib@25.1.8 (requires 9.2.10)\n  │  ├─ dmg-builder@25.1.8 (requires 25.1.8)\n  │  │  ├─ electron-builder@25.1.8 (requires 25.1.8)\n  │  │  │  ├─ dev @codecast/electron@workspace (requires ^25.0.0)\n  │  │  │  └─ optional peer @platform/desktop@platform/packages/desktop (requires >=24)\n  │  │  │     └─ @codecast/electron@workspace (requires file:../../platform/packages/desktop)\n  │  │  │  \n  │  │  └─ peer app-builder-lib@25.1.8 (requires 25.1.8)\n  │  │     └─ *circular\n  │  │  \n  │  ├─ electron-builder@25.1.8 (requires 25.1.8)\n  │  │  ├─ dev @codecast/electron@workspace (requires ^25.0.0)\n  │  │  └─ optional peer @platform/desktop@platform/packages/desktop (requires >=24)\n  │  │     └─ @codecast/electron@workspace (requires file:../../platform/packages/desktop)\n  │  │  \n  │  └─ electron-builder-squirrel-windows@25.1.8 (requires 25.1.8)\n  │     └─ peer app-builder-lib@25.1.8 (requires 25.1.8)\n  │        └─ *circular\n  │  \n  ├─ builder-util@25.1.7 (requires 9.2.10)\n  │  ├─ app-builder-lib@25.1.8 (requires 25.1.7)\n  │  │  ├─ dmg-builder@25.1.8 (requires 25.1.8)\n  │  │  │  ├─ electron-builder@25.1.8 (requires 25.1.8)\n  │  │  │  │  ├─ dev @codecast/electron@workspace (requires ^25.0.0)\n  │  │  │  │  └─ optional peer @platform/desktop@platform/packages/desktop (requires >=24)\n  │  │  │  │     └─ @codecast/electron@workspace (requires file:../../platform/packages/desktop)\n  │  │  │  │  \n  │  │  │  └─ peer app-builder-lib@25.1.8 (requires 25.1.8)\n  │  │  │     └─ *circular\n  │  │  │  \n  │  │  ├─ electron-builder@25.1.8 (requires 25.1.8)\n  │  │  │  ├─ dev @codecast/electron@workspace (requires ^25.0.0)\n  │  │  │  └─ optional peer @platform/desktop@platform/packages/desktop (requires >=24)\n  │  │  │     └─ @codecast/electron@workspace (requires file:../../platform/packages/desktop)\n  │  │  │  \n  │  │  └─ electron-builder-squirrel-windows@25.1.8 (requires 25.1.8)\n  │  │     └─ peer app-builder-lib@25.1.8 (requires 25.1.8)\n  │  │        └─ *circular\n  │  │",
+      "advisories": [
+        {
+          "id": 1124278,
+          "url": "https://github.com/advisories/GHSA-p2f4-r6v6-j797",
+          "title": "electron-updater: Cross-origin redirect leaks `PRIVATE-TOKEN` and mixed-case `Authorization` credentials in `builder-util-runtime`",
+          "severity": "high",
+          "vulnerable_versions": "<9.7.0"
+        }
+      ],
+      "determination": {
+        "versions": "see bun why",
+        "modes": [
+          "build-only"
+        ],
+        "symbol": "packaging",
+        "untrustedInput": "no",
+        "decision": "not-reachable",
+        "evidence": "electron-builder, build machine only",
+        "owner": "release owner",
+        "reviewBy": "2026-12-23"
+      },
+      "status": "not-reachable"
+    },
+    {
+      "name": "decode-uri-component",
+      "resolvedVersions": [
+        "0.2.2"
+      ],
+      "dependencyTree": "decode-uri-component@0.2.2\n  └─ query-string@7.1.3 (requires ^0.2.2)\n     ├─ @react-navigation/core@7.17.2 (requires ^7.1.3)\n     │  └─ @react-navigation/native@7.2.2 (requires ^7.17.2)\n     │     ├─ expo-router@6.0.23 (requires ^7.1.8)\n     │     │  ├─ mobile@workspace (requires ~6.0.20)\n     │     │  └─ optional peer @expo/cli@54.0.24 (requires *)\n     │     │     └─ expo@54.0.34 (requires 54.0.24)\n     │     │        ├─ mobile@workspace (requires ~54.0.29)\n     │     │        ├─ peer @bacons/apple-targets@5.0.0 (requires >=52)\n     │     │        │  └─ mobile@workspace (requires 5.0.0)\n     │     │        ├─ optional peer @sentry/react-native@8.9.2 (requires >=49.0.0)\n     │     │        │  ├─ mobile@workspace (requires ^8.5.0)\n     │     │        │  ├─ optional peer @platform/analytics@platform/packages/analytics (requires ^8.5.0)\n     │     │        │  │  ├─ @codecast/convex@workspace (requires file:../../platform/packages/analytics)\n     │     │        │  │  │  ├─ @codecast/web@workspace (requires workspace:*)\n     │     │        │  │  │  │  └─ mobile@workspace (requires workspace:*)\n     │     │        │  │  │  └─ mobile@workspace (requires workspace:*)\n     │     │        │  │  ├─ @codecast/shared@workspace (requires file:../../platform/packages/analytics)\n     │     │        │  │  │  ├─ @codecast/cli@workspace (requires workspace:*)\n     │     │        │  │  │  ├─ @codecast/convex@workspace (requires workspace:*)\n     │     │        │  │  │  │  ├─ @codecast/web@workspace (requires workspace:*)\n     │     │        │  │  │  │  │  └─ mobile@workspace (requires workspace:*)\n     │     │        │  │  │  │  └─ mobile@workspace (requires workspace:*)\n     │     │        │  │  │  ├─ @codecast/web@workspace (requires workspace:*)\n     │     │        │  │  │  │  └─ mobile@workspace (requires workspace:*)\n     │     │        │  │  │  └─ mobile@workspace (requires workspace:*)\n     │     │        │  │  ├─ @codecast/web@workspace (requires file:../../platform/packages/analytics)\n     │     │        │  │  │  └─ mobile@workspace (requires workspace:*)\n     │     │        │  │  └─ mobile@workspace (requires file:../../platform/packages/analytics)\n     │     │        │  └─ dev @platform/analytics@platform/packages/analytics (requires ^8.5.0)\n     │     │        │     ├─ @codecast/convex@workspace (requires file:../../platform/packages/analytics)\n     │     │        │     │  ├─ @codecast/web@workspace (requires workspace:*)\n     │     │        │     │  │  └─ mobile@workspace (requires workspace:*)\n     │     │        │     │  └─ mobile@workspace (requires workspace:*)\n     │     │        │     ├─ @codecast/shared@workspace (requires file:../../platform/packages/analytics)\n     │     │        │     │  ├─ @codecast/cli@workspace (requires workspace:*)\n     │     │        │     │  ├─ @codecast/convex@workspace (requires workspace:*)\n     │     │        │     │  │  ├─ @codecast/web@workspace (requires workspace:*)\n     │     │        │     │  │  │  └─ mobile@workspace (requires workspace:*)",
+      "advisories": [
+        {
+          "id": 1147955,
+          "url": "https://github.com/advisories/GHSA-vcc3-ghjq-m6fr",
+          "title": "decode-uri-component: Denial of service via exponential decoding of malformed percent-encoded input",
+          "severity": "moderate",
+          "vulnerable_versions": "<=0.4.2"
+        }
+      ],
+      "determination": {
+        "versions": "see bun why",
+        "modes": [
+          "build-only"
+        ],
+        "symbol": "DoS",
+        "untrustedInput": "no",
+        "decision": "not-reachable",
+        "evidence": "tooling only",
+        "owner": "release owner",
+        "reviewBy": "2026-12-23"
+      },
+      "status": "not-reachable"
+    },
+    {
+      "name": "dompurify",
+      "resolvedVersions": [
+        "3.4.8",
+        "3.4.1"
+      ],
+      "dependencyTree": "dompurify@3.4.8\n  └─ @codecast/web@workspace (requires ^3.4.8)\n     └─ mobile@workspace (requires workspace:*)\n\ndompurify@3.4.1\n  ├─ mermaid@11.14.0 (requires ^3.3.1)\n  │  └─ @codecast/web@workspace (requires ^11.13.0)\n  │     └─ mobile@workspace (requires workspace:*)\n  │     \n  └─ posthog-js@1.372.3 (requires ^3.3.2)\n     ├─ @codecast/web@workspace (requires ^1.363.3)\n     │  └─ mobile@workspace (requires workspace:*)\n     ├─ optional peer @platform/analytics@platform/packages/analytics (requires ^1.363.3)\n     │  ├─ @codecast/convex@workspace (requires file:../../platform/packages/analytics)\n     │  │  ├─ @codecast/web@workspace (requires workspace:*)\n     │  │  │  └─ mobile@workspace (requires workspace:*)\n     │  │  └─ mobile@workspace (requires workspace:*)\n     │  ├─ @codecast/shared@workspace (requires file:../../platform/packages/analytics)\n     │  │  ├─ @codecast/cli@workspace (requires workspace:*)\n     │  │  ├─ @codecast/convex@workspace (requires workspace:*)\n     │  │  │  ├─ @codecast/web@workspace (requires workspace:*)\n     │  │  │  │  └─ mobile@workspace (requires workspace:*)\n     │  │  │  └─ mobile@workspace (requires workspace:*)\n     │  │  ├─ @codecast/web@workspace (requires workspace:*)\n     │  │  │  └─ mobile@workspace (requires workspace:*)\n     │  │  └─ mobile@workspace (requires workspace:*)\n     │  ├─ @codecast/web@workspace (requires file:../../platform/packages/analytics)\n     │  │  └─ mobile@workspace (requires workspace:*)\n     │  └─ mobile@workspace (requires file:../../platform/packages/analytics)\n     ├─ dev @platform/analytics@platform/packages/analytics (requires ^1.363.3)\n     │  ├─ @codecast/convex@workspace (requires file:../../platform/packages/analytics)\n     │  │  ├─ @codecast/web@workspace (requires workspace:*)\n     │  │  │  └─ mobile@workspace (requires workspace:*)\n     │  │  └─ mobile@workspace (requires workspace:*)\n     │  ├─ @codecast/shared@workspace (requires file:../../platform/packages/analytics)\n     │  │  ├─ @codecast/cli@workspace (requires workspace:*)\n     │  │  ├─ @codecast/convex@workspace (requires workspace:*)\n     │  │  │  ├─ @codecast/web@workspace (requires workspace:*)\n     │  │  │  │  └─ mobile@workspace (requires workspace:*)\n     │  │  │  └─ mobile@workspace (requires workspace:*)",
+      "advisories": [
+        {
+          "id": 1120802,
+          "url": "https://github.com/advisories/GHSA-hpcv-96wg-7vj8",
+          "title": "DOMPurify: Cross-realm IN_PLACE sanitization leaves executable markup intact via realm-bound `instanceof` checks",
+          "severity": "moderate",
+          "vulnerable_versions": "<=3.4.5"
+        },
+        {
+          "id": 1120803,
+          "url": "https://github.com/advisories/GHSA-r47g-fvhr-h676",
+          "title": "DOMPurify: IN_PLACE mode preserves attributes of a clobbered root element, allowing XSS via attacker-controlled root DOM",
+          "severity": "moderate",
+          "vulnerable_versions": "<=3.4.5"
+        },
+        {
+          "id": 1120813,
+          "url": "https://github.com/advisories/GHSA-rp9w-3fw7-7cwq",
+          "title": "DOMPurify IN_PLACE Sanitization Bypass via Attached Shadow Root Inside <template>.content",
+          "severity": "moderate",
+          "vulnerable_versions": "<=3.4.6"
+        },
+        {
+          "id": 1124022,
+          "url": "https://github.com/advisories/GHSA-c2j3-45gr-mqc4",
+          "title": "DOMPurify: `CUSTOM_ELEMENT_HANDLING` bypasses `afterSanitizeElements` for allowed custom elements.",
+          "severity": "low",
+          "vulnerable_versions": "<=3.4.11"
+        },
+        {
+          "id": 1124233,
+          "url": "https://github.com/advisories/GHSA-cmwh-pvxp-8882",
+          "title": "DOMPurify: Permanent `ALLOWED_ATTR` pollution via `setConfig()` bypassing the hook clone-guard (incomplete fix of the 3.4.7 hook-pollution patch)",
+          "severity": "moderate",
+          "vulnerable_versions": "<=3.4.10"
+        },
+        {
+          "id": 1124234,
+          "url": "https://github.com/advisories/GHSA-vxr8-fq34-vvx9",
+          "title": "DOMPurify: Trusted Types policy survives `clearConfig()` and can poison later `RETURN_TRUSTED_TYPE` output",
+          "severity": "low",
+          "vulnerable_versions": "<3.4.9"
+        },
+        {
+          "id": 1124235,
+          "url": "https://github.com/advisories/GHSA-gvmj-g25r-r7wr",
+          "title": "DOMPurify: SAFE_FOR_TEMPLATES bypass - template expressions survive sanitization inside <template> content when using DOM output modes",
+          "severity": "low",
+          "vulnerable_versions": ">=3.0.0 <=3.4.7"
+        },
+        {
+          "id": 1124236,
+          "url": "https://github.com/advisories/GHSA-x4vx-rjvf-j5p4",
+          "title": "DOMPurify: `IN_PLACE` mode trusts attacker-controlled `nodeName` on live non-form nodes, allowing script retention and XSS via attacker-supplied DOM objects",
+          "severity": "low",
+          "vulnerable_versions": "<=3.4.6"
+        },
+        {
+          "id": 1124237,
+          "url": "https://github.com/advisories/GHSA-76mc-f452-cxcm",
+          "title": "DOMPurify: Hook mutation of `data.allowedTags` / `data.allowedAttributes` permanently pollutes `DEFAULT_ALLOWED_TAGS` / `DEFAULT_ALLOWED_ATTR`",
+          "severity": "moderate",
+          "vulnerable_versions": "<3.4.7"
+        },
+        {
+          "id": 1138538,
+          "url": "https://github.com/advisories/GHSA-55q2-fjhq-7xh7",
+          "title": "DOMPurify: IN_PLACE hook removal leaves a detached subtree executable, causing XSS",
+          "severity": "moderate",
+          "vulnerable_versions": "<=3.4.12"
+        }
+      ],
+      "determination": {
+        "versions": "see bun why dompurify",
+        "modes": [
+          "runtime-web"
+        ],
+        "symbol": "sanitiser bypass (mXSS) advisories",
+        "untrustedInput": "yes",
+        "decision": "fix-planned",
+        "evidence": "Renderer sanitisation is owned by the content worker (ct-53054, plan 003): canvasSanitize / HtmlSnippet decide what the sanitiser sees. The resolved copy must be at or above the advisory's fixed version before the plan closes; that worker owns the bump and its browser verification.",
+        "owner": "content worker (ct-53054)",
+        "reviewBy": "2026-10-15"
+      },
+      "status": "fix-planned"
+    },
+    {
+      "name": "esbuild",
+      "resolvedVersions": [
+        "0.24.2",
+        "0.27.0"
+      ],
+      "dependencyTree": "esbuild@0.24.2\n  └─ dev codecast-blame@workspace (requires ^0.24.0)\n\nesbuild@0.27.0\n  └─ convex@1.36.1 (requires 0.27.0)\n     ├─ @codecast/convex@workspace (requires ^1.31.6)\n     │  ├─ @codecast/web@workspace (requires workspace:*)\n     │  │  └─ mobile@workspace (requires workspace:*)\n     │  └─ mobile@workspace (requires workspace:*)\n     ├─ @codecast/web@workspace (requires ^1.31.6)\n     │  └─ mobile@workspace (requires workspace:*)\n     ├─ codecast (requires ^1.31.6)\n     ├─ mobile@workspace (requires ^1.31.2)\n     ├─ peer @convex-dev/auth@0.0.79 (requires ^1.17.0)\n     │  ├─ @codecast/convex@workspace (requires 0.0.79)\n     │  │  ├─ @codecast/web@workspace (requires workspace:*)\n     │  │  │  └─ mobile@workspace (requires workspace:*)\n     │  │  └─ mobile@workspace (requires workspace:*)\n     │  ├─ @codecast/web@workspace (requires 0.0.79)\n     │  │  └─ mobile@workspace (requires workspace:*)\n     │  ├─ peer @platform/auth@platform/packages/auth (requires 0.0.79)\n     │  │  ├─ @codecast/cli@workspace (requires file:../../platform/packages/auth)\n     │  │  ├─ @codecast/convex@workspace (requires file:../../platform/packages/auth)\n     │  │  │  ├─ @codecast/web@workspace (requires workspace:*)\n     │  │  │  │  └─ mobile@workspace (requires workspace:*)\n     │  │  │  └─ mobile@workspace (requires workspace:*)\n     │  │  └─ @codecast/web@workspace (requires file:../../platform/packages/auth)\n     │  │     └─ mobile@workspace (requires workspace:*)\n     │  └─ dev @platform/auth@platform/packages/auth (requires 0.0.79)\n     │     ├─ @codecast/cli@workspace (requires file:../../platform/packages/auth)\n     │     ├─ @codecast/convex@workspace (requires file:../../platform/packages/auth)\n     │     │  ├─ @codecast/web@workspace (requires workspace:*)\n     │     │  │  └─ mobile@workspace (requires workspace:*)\n     │     │  └─ mobile@workspace (requires workspace:*)\n     │     └─ @codecast/web@workspace (requires file:../../platform/packages/auth)\n     │        └─ mobile@workspace (requires workspace:*)\n     ├─ peer @convex-dev/auth@0.0.90 (requires ^1.17.0)\n     │  └─ mobile@workspace (requires ^0.0.90)\n     ├─ peer @convex-dev/prosemirror-sync@0.2.3 (requires ^1.24.8)\n     │  ├─ @codecast/convex@workspace (requires ^0.2.3)",
+      "advisories": [
+        {
+          "id": 1102341,
+          "url": "https://github.com/advisories/GHSA-67mh-4wv8-2f99",
+          "title": "esbuild enables any website to send any requests to the development server and read the response",
+          "severity": "moderate",
+          "vulnerable_versions": "<=0.24.2"
+        },
+        {
+          "id": 1120680,
+          "url": "https://github.com/advisories/GHSA-g7r4-m6w7-qqqr",
+          "title": "esbuild allows arbitrary file read when running the development server on Windows",
+          "severity": "low",
+          "vulnerable_versions": ">=0.27.3 <0.28.1"
+        }
+      ],
+      "determination": {
+        "versions": "see bun why",
+        "modes": [
+          "dev-only"
+        ],
+        "symbol": "dev server CORS (GHSA-67mh-4wv8-2f99)",
+        "untrustedInput": "no",
+        "decision": "accepted-risk",
+        "evidence": "the esbuild dev server is not what serves the app in dev (vite does), and never in prod; a developer's local port is the only exposure",
+        "owner": "release owner",
+        "reviewBy": "2026-12-23"
+      },
+      "status": "accepted-risk"
+    },
+    {
+      "name": "fast-uri",
+      "resolvedVersions": [
+        "3.1.0"
+      ],
+      "dependencyTree": "fast-uri@3.1.0\n  └─ ajv@8.20.0 (requires ^3.0.1)\n     ├─ expo-build-properties@1.0.10 (requires ^8.11.0)\n     │  └─ mobile@workspace (requires ~1.0.10)\n     ├─ expo-dev-launcher@6.0.21 (requires ^8.11.0)\n     │  └─ expo-dev-client@6.0.21 (requires 6.0.21)\n     │     └─ mobile@workspace (requires ~6.0.20)\n     ├─ workbox-build@7.4.1 (requires ^8.6.0)\n     │  └─ vite-plugin-pwa@1.3.0 (requires ^7.4.1)\n     │     └─ dev @codecast/web@workspace (requires ^1.3.0)\n     │        └─ mobile@workspace (requires workspace:*)\n     └─ peer @apideck/better-ajv-errors@0.3.7 (requires >=8)\n        └─ workbox-build@7.4.1 (requires ^0.3.1)\n           └─ vite-plugin-pwa@1.3.0 (requires ^7.4.1)\n              └─ dev @codecast/web@workspace (requires ^1.3.0)\n                 └─ mobile@workspace (requires workspace:*)",
+      "advisories": [
+        {
+          "id": 1158524,
+          "url": "https://github.com/advisories/GHSA-f65p-4m7j-42xc",
+          "title": "fast-uri vulnerable to server-side request forgery via malformed IPv6 normalization",
+          "severity": "high",
+          "vulnerable_versions": ">=3.0.0 <3.1.6"
+        },
+        {
+          "id": 1158530,
+          "url": "https://github.com/advisories/GHSA-jqff-g426-hqxp",
+          "title": "fast-uri vulnerable to host confusion via percent-encoded scheme normalization",
+          "severity": "high",
+          "vulnerable_versions": ">=3.0.0 <3.1.6"
+        },
+        {
+          "id": 1130720,
+          "url": "https://github.com/advisories/GHSA-7p8r-x3mc-p8w7",
+          "title": "fast-uri vulnerable to host confusion via backslash authority introducer",
+          "severity": "high",
+          "vulnerable_versions": ">=3.0.0 <3.1.5"
+        },
+        {
+          "id": 1124064,
+          "url": "https://github.com/advisories/GHSA-v2hh-gcrm-f6hx",
+          "title": "fast-uri vulnerable to host confusion via literal backslash authority delimiter",
+          "severity": "high",
+          "vulnerable_versions": ">=3.0.0 <=3.1.3"
+        },
+        {
+          "id": 1204921,
+          "url": "https://github.com/advisories/GHSA-4c8g-83qw-93j6",
+          "title": "fast-uri vulnerable to host confusion via failed IDN canonicalization",
+          "severity": "high",
+          "vulnerable_versions": ">=3.0.0 <3.1.3"
+        },
+        {
+          "id": 1145559,
+          "url": "https://github.com/advisories/GHSA-q3j6-qgpj-74h6",
+          "title": "fast-uri vulnerable to path traversal via percent-encoded dot segments",
+          "severity": "high",
+          "vulnerable_versions": ">=3.0.0 <=3.1.0"
+        },
+        {
+          "id": 1153168,
+          "url": "https://github.com/advisories/GHSA-v39h-62p7-jpjc",
+          "title": "fast-uri vulnerable to host confusion via percent-encoded authority delimiters",
+          "severity": "high",
+          "vulnerable_versions": ">=3.0.0 <=3.1.1"
+        }
+      ],
+      "determination": {
+        "versions": "see bun why fast-uri",
+        "modes": [
+          "dev-only"
+        ],
+        "symbol": "URI parsing",
+        "untrustedInput": "no",
+        "decision": "not-reachable",
+        "evidence": "ajv tooling chain only",
+        "owner": "release owner",
+        "reviewBy": "2026-12-23"
+      },
+      "status": "not-reachable"
+    },
+    {
+      "name": "fflate",
+      "resolvedVersions": [
+        "0.4.8"
+      ],
+      "dependencyTree": "fflate@0.4.8\n  ├─ @codecast/convex@workspace (requires ^0.4.8)\n  │  ├─ @codecast/web@workspace (requires workspace:*)\n  │  │  └─ mobile@workspace (requires workspace:*)\n  │  │  \n  │  └─ mobile@workspace (requires workspace:*)\n  │  \n  └─ posthog-js@1.372.3 (requires ^0.4.8)\n     ├─ @codecast/web@workspace (requires ^1.363.3)\n     │  └─ mobile@workspace (requires workspace:*)\n     ├─ optional peer @platform/analytics@platform/packages/analytics (requires ^1.363.3)\n     │  ├─ @codecast/convex@workspace (requires file:../../platform/packages/analytics)\n     │  │  ├─ @codecast/web@workspace (requires workspace:*)\n     │  │  │  └─ mobile@workspace (requires workspace:*)\n     │  │  └─ mobile@workspace (requires workspace:*)\n     │  ├─ @codecast/shared@workspace (requires file:../../platform/packages/analytics)\n     │  │  ├─ @codecast/cli@workspace (requires workspace:*)\n     │  │  ├─ @codecast/convex@workspace (requires workspace:*)\n     │  │  │  ├─ @codecast/web@workspace (requires workspace:*)\n     │  │  │  │  └─ mobile@workspace (requires workspace:*)\n     │  │  │  └─ mobile@workspace (requires workspace:*)\n     │  │  ├─ @codecast/web@workspace (requires workspace:*)\n     │  │  │  └─ mobile@workspace (requires workspace:*)\n     │  │  └─ mobile@workspace (requires workspace:*)\n     │  ├─ @codecast/web@workspace (requires file:../../platform/packages/analytics)\n     │  │  └─ mobile@workspace (requires workspace:*)\n     │  └─ mobile@workspace (requires file:../../platform/packages/analytics)\n     ├─ dev @platform/analytics@platform/packages/analytics (requires ^1.363.3)\n     │  ├─ @codecast/convex@workspace (requires file:../../platform/packages/analytics)\n     │  │  ├─ @codecast/web@workspace (requires workspace:*)\n     │  │  │  └─ mobile@workspace (requires workspace:*)\n     │  │  └─ mobile@workspace (requires workspace:*)\n     │  ├─ @codecast/shared@workspace (requires file:../../platform/packages/analytics)\n     │  │  ├─ @codecast/cli@workspace (requires workspace:*)\n     │  │  ├─ @codecast/convex@workspace (requires workspace:*)\n     │  │  │  ├─ @codecast/web@workspace (requires workspace:*)\n     │  │  │  │  └─ mobile@workspace (requires workspace:*)\n     │  │  │  └─ mobile@workspace (requires workspace:*)\n     │  │  ├─ @codecast/web@workspace (requires workspace:*)\n     │  │  │  └─ mobile@workspace (requires workspace:*)",
+      "advisories": [
+        {
+          "id": 1164786,
+          "url": "https://github.com/advisories/GHSA-px8p-9vwx-vf98",
+          "title": "fflate unzipSync can enter an infinite loop when parsing malformed ZIP64 archives",
+          "severity": "moderate",
+          "vulnerable_versions": ">=0.4.5 <0.4.9"
+        }
+      ],
+      "determination": {
+        "versions": "see bun why",
+        "modes": [
+          "runtime-web",
+          "dev-only"
+        ],
+        "symbol": "decompression bomb",
+        "untrustedInput": "indirect",
+        "decision": "accepted-risk",
+        "evidence": "used for client side unzip of artefacts the viewer chose; a bomb stalls the viewer's own tab. Re-read if fflate ever runs server side.",
+        "owner": "release owner",
+        "reviewBy": "2026-12-23"
+      },
+      "status": "accepted-risk"
+    },
+    {
+      "name": "form-data",
+      "resolvedVersions": [
+        "4.0.5"
+      ],
+      "dependencyTree": "form-data@4.0.5\n  └─ app-builder-lib@25.1.8 (requires ^4.0.0)\n     ├─ dmg-builder@25.1.8 (requires 25.1.8)\n     │  ├─ electron-builder@25.1.8 (requires 25.1.8)\n     │  │  ├─ dev @codecast/electron@workspace (requires ^25.0.0)\n     │  │  └─ optional peer @platform/desktop@platform/packages/desktop (requires >=24)\n     │  │     └─ @codecast/electron@workspace (requires file:../../platform/packages/desktop)\n     │  └─ peer app-builder-lib@25.1.8 (requires 25.1.8)\n     │     └─ *circular\n     ├─ electron-builder@25.1.8 (requires 25.1.8)\n     │  ├─ dev @codecast/electron@workspace (requires ^25.0.0)\n     │  └─ optional peer @platform/desktop@platform/packages/desktop (requires >=24)\n     │     └─ @codecast/electron@workspace (requires file:../../platform/packages/desktop)\n     └─ electron-builder-squirrel-windows@25.1.8 (requires 25.1.8)\n        └─ peer app-builder-lib@25.1.8 (requires 25.1.8)\n           └─ *circular",
+      "advisories": [
+        {
+          "id": 1120743,
+          "url": "https://github.com/advisories/GHSA-hmw2-7cc7-3qxx",
+          "title": "form-data: CRLF injection in form-data via unescaped multipart field names and filenames",
+          "severity": "high",
+          "vulnerable_versions": ">=4.0.0 <4.0.6"
+        }
+      ],
+      "determination": {
+        "versions": "see bun why form-data",
+        "modes": [
+          "dev-only"
+        ],
+        "symbol": "boundary randomness",
+        "untrustedInput": "no",
+        "decision": "not-reachable",
+        "evidence": "resolved under node tooling; runtime uploads use the platform FormData",
+        "owner": "release owner",
+        "reviewBy": "2026-12-23"
+      },
+      "status": "not-reachable"
+    },
+    {
+      "name": "highlight.js",
+      "resolvedVersions": [
+        "11.11.1",
+        "9.12.0"
+      ],
+      "dependencyTree": "highlight.js@11.11.1\n  ├─ @codecast/convex@workspace (requires ^11.11.1)\n  │  ├─ @codecast/web@workspace (requires workspace:*)\n  │  │  └─ mobile@workspace (requires workspace:*)\n  │  │  \n  │  └─ mobile@workspace (requires workspace:*)\n  │  \n  ├─ peer @tiptap/extension-code-block-lowlight@3.22.5 (requires ^11)\n  │  └─ @codecast/web@workspace (requires ^3.20.4)\n  │     └─ mobile@workspace (requires workspace:*)\n  │     \n  └─ lowlight@3.3.0 (requires ~11.11.0)\n     ├─ @codecast/web@workspace (requires ^3.3.0)\n     │  └─ mobile@workspace (requires workspace:*)\n     ├─ rehype-highlight@7.0.2 (requires ^3.0.0)\n     │  └─ @codecast/web@workspace (requires ^7.0.2)\n     │     └─ mobile@workspace (requires workspace:*)\n     └─ peer @tiptap/extension-code-block-lowlight@3.22.5 (requires ^2 || ^3)\n        └─ @codecast/web@workspace (requires ^3.20.4)\n           └─ mobile@workspace (requires workspace:*)\n\nhighlight.js@9.12.0\n  ├─ lowlight@1.9.2 (requires ~9.12.0)\n  │  └─ react-syntax-highlighter@6.1.2 (requires ~1.9.1)\n  │     └─ react-native-syntax-highlighter@2.1.0 (requires ^6.0.4)\n  │        └─ mobile@workspace (requires ^2.1.0)\n  └─ react-syntax-highlighter@6.1.2 (requires ~9.12.0)\n     └─ react-native-syntax-highlighter@2.1.0 (requires ^6.0.4)\n        └─ mobile@workspace (requires ^2.1.0)",
+      "advisories": [
+        {
+          "id": 1086450,
+          "url": "https://github.com/advisories/GHSA-7wwv-vh3v-89cq",
+          "title": "ReDOS vulnerabities: multiple grammars",
+          "severity": "moderate",
+          "vulnerable_versions": ">=9.0.0 <10.4.1"
+        },
+        {
+          "id": 1090060,
+          "url": "https://github.com/advisories/GHSA-vfrc-7r7c-w9mx",
+          "title": "Prototype Pollution in highlight.js",
+          "severity": "moderate",
+          "vulnerable_versions": "<9.18.2"
+        }
+      ],
+      "determination": {
+        "versions": "see bun why highlight.js",
+        "modes": [
+          "runtime-web"
+        ],
+        "symbol": "ReDoS in language grammars",
+        "untrustedInput": "yes",
+        "decision": "accepted-risk",
+        "evidence": "Highlighting runs in the viewer's own browser tab on content the viewer chose to open; a pathological block stalls that tab only. No server side highlighting. Re-read if highlighting ever moves server side.",
+        "owner": "release owner",
+        "reviewBy": "2026-12-23"
+      },
+      "status": "accepted-risk"
+    },
+    {
+      "name": "hono",
+      "resolvedVersions": [
+        "4.12.15"
+      ],
+      "dependencyTree": "hono@4.12.15\n  ├─ @codecast/web@workspace (requires ^4.12.8)\n  │  └─ mobile@workspace (requires workspace:*)\n  │  \n  └─ peer @hono/node-server@1.19.14 (requires ^4)\n     └─ @codecast/web@workspace (requires ^1.19.11)\n        └─ mobile@workspace (requires workspace:*)",
+      "advisories": [
+        {
+          "id": 1117915,
+          "url": "https://github.com/advisories/GHSA-qp7p-654g-cw7p",
+          "title": "Hono has CSS Declaration Injection via Style Object Values in JSX SSR",
+          "severity": "moderate",
+          "vulnerable_versions": "<4.12.18"
+        },
+        {
+          "id": 1118963,
+          "url": "https://github.com/advisories/GHSA-hm8q-7f3q-5f36",
+          "title": "Hono has improper validation of NumericDate claims (exp, nbf, iat) in JWT verify()",
+          "severity": "low",
+          "vulnerable_versions": "<4.12.18"
+        },
+        {
+          "id": 1118964,
+          "url": "https://github.com/advisories/GHSA-p77w-8qqv-26rm",
+          "title": "Hono's Cache Middleware ignores Vary: Authorization / Vary: Cookie leading to cross-user cache leakage",
+          "severity": "moderate",
+          "vulnerable_versions": "<4.12.18"
+        },
+        {
+          "id": 1118982,
+          "url": "https://github.com/advisories/GHSA-9vqf-7f2p-gf9v",
+          "title": "Hono: bodyLimit() can be bypassed for chunked / unknown-length requests",
+          "severity": "moderate",
+          "vulnerable_versions": "<4.12.16"
+        },
+        {
+          "id": 1118983,
+          "url": "https://github.com/advisories/GHSA-69xw-7hcm-h432",
+          "title": "hono/jsx has Unvalidated JSX Tag Names that May Allow HTML Injection",
+          "severity": "moderate",
+          "vulnerable_versions": "<4.12.16"
+        },
+        {
+          "id": 1120082,
+          "url": "https://github.com/advisories/GHSA-xrhx-7g5j-rcj5",
+          "title": "Hono: IP Restriction bypasses static deny rules for non-canonical IPv6 ",
+          "severity": "moderate",
+          "vulnerable_versions": "<4.12.21"
+        },
+        {
+          "id": 1120083,
+          "url": "https://github.com/advisories/GHSA-3hrh-pfw6-9m5x",
+          "title": "Hono: Cookie helper does not sanitize sameSite and priority, allowing Set-Cookie injection",
+          "severity": "moderate",
+          "vulnerable_versions": "<4.12.21"
+        },
+        {
+          "id": 1120084,
+          "url": "https://github.com/advisories/GHSA-f577-qrjj-4474",
+          "title": "Hono: JWT middleware accepts any Authorization scheme, not only Bearer",
+          "severity": "moderate",
+          "vulnerable_versions": "<4.12.21"
+        },
+        {
+          "id": 1120085,
+          "url": "https://github.com/advisories/GHSA-2gcr-mfcq-wcc3",
+          "title": "Hono: app.mount() strips mount prefix using undecoded path, causing incorrect routing for percent-encoded paths",
+          "severity": "moderate",
+          "vulnerable_versions": "<4.12.21"
+        },
+        {
+          "id": 1130733,
+          "url": "https://github.com/advisories/GHSA-8j4g-w8fx-2239",
+          "title": "Hono: ReDoS in CORS middleware via Access-Control-Request-Headers",
+          "severity": "moderate",
+          "vulnerable_versions": "<4.12.34"
+        },
+        {
+          "id": 1123997,
+          "url": "https://github.com/advisories/GHSA-rv63-4mwf-qqc2",
+          "title": "hono: Body Limit Middleware can be bypassed on AWS Lambda by understating `Content-Length`",
+          "severity": "moderate",
+          "vulnerable_versions": "<4.12.25"
+        },
+        {
+          "id": 1123998,
+          "url": "https://github.com/advisories/GHSA-wgpf-jwqj-8h8p",
+          "title": "hono: Lambda@Edge adapter keeps only the last value of a repeated request header, dropping the rest",
+          "severity": "moderate",
+          "vulnerable_versions": "<4.12.25"
+        },
+        {
+          "id": 1123999,
+          "url": "https://github.com/advisories/GHSA-88fw-hqm2-52qc",
+          "title": "hono: CORS Middleware reflects any Origin with credentials when `origin` defaults to the wildcard",
+          "severity": "high",
+          "vulnerable_versions": "<4.12.25"
+        },
+        {
+          "id": 1124000,
+          "url": "https://github.com/advisories/GHSA-wwfh-h76j-fc44",
+          "title": "hono: Path traversal in `serve-static` on Windows via encoded backslash (`%5C`)",
+          "severity": "moderate",
+          "vulnerable_versions": "<4.12.25"
+        },
+        {
+          "id": 1124001,
+          "url": "https://github.com/advisories/GHSA-j6c9-x7qj-28xf",
+          "title": "hono: AWS Lambda adapter merges multiple `Set-Cookie` headers into one value, dropping cookies on ALB single-header and Lattice",
+          "severity": "moderate",
+          "vulnerable_versions": "<4.12.25"
+        },
+        {
+          "id": 1124005,
+          "url": "https://github.com/advisories/GHSA-xgm2-5f3f-mvvc",
+          "title": "Hono: API Gateway v1 adapter can drop a distinct repeated request header value during de-duplication",
+          "severity": "moderate",
+          "vulnerable_versions": ">=4.3.3 <4.12.27"
+        },
+        {
+          "id": 1124009,
+          "url": "https://github.com/advisories/GHSA-hvrm-45r6-mjfj",
+          "title": "hono/jsx does not isolate context per request, leading to cross-request data disclosure",
+          "severity": "moderate",
+          "vulnerable_versions": ">=4.11.8 <4.12.27"
+        },
+        {
+          "id": 1124010,
+          "url": "https://github.com/advisories/GHSA-w62v-xxxg-mg59",
+          "title": "Hono: Server-Side XSS via JSX Escaping Bypass in cx() Utility",
+          "severity": "moderate",
+          "vulnerable_versions": ">=4.0.0 <4.12.27"
+        },
+        {
+          "id": 1138771,
+          "url": "https://github.com/advisories/GHSA-f23p-vx2j-j53r",
+          "title": "Hono: `memo()` retains SSR output across requests, leading to cross-user data disclosure",
+          "severity": "moderate",
+          "vulnerable_versions": ">=3.8.0 <4.12.34"
+        },
+        {
+          "id": 1138772,
+          "url": "https://github.com/advisories/GHSA-79qm-7rj5-m7r9",
+          "title": "Hono: Proxy Helper does not remove response headers listed in the `Connection` header",
+          "severity": "low",
+          "vulnerable_versions": ">=4.7.0 <4.12.34"
+        },
+        {
+          "id": 1138773,
+          "url": "https://github.com/advisories/GHSA-54fx-42gc-7vw4",
+          "title": "Hono: Algorithmic Complexity DoS in Language Middleware",
+          "severity": "moderate",
+          "vulnerable_versions": ">=4.12.0 <4.12.34"
+        },
+        {
+          "id": 1193729,
+          "url": "https://github.com/advisories/GHSA-gqvv-2mrq-wpjv",
+          "title": "Hono: Incomplete fix for CVE-2026-39408: `toSSG()` still writes files outside the output directory",
+          "severity": "moderate",
+          "vulnerable_versions": "<4.13.5"
+        },
+        {
+          "id": 1193730,
+          "url": "https://github.com/advisories/GHSA-g6gw-c38x-mqfc",
+          "title": "Hono: Unbounded dot-notation nesting in `parseBody()` can cause memory exhaustion",
+          "severity": "moderate",
+          "vulnerable_versions": "<4.13.5"
+        },
+        {
+          "id": 1193731,
+          "url": "https://github.com/advisories/GHSA-crvj-82cr-hjcx",
+          "title": "Hono: Query parser reads parameters after the URL fragment, causing cache-key and proxy interpretation differentials",
+          "severity": "moderate",
+          "vulnerable_versions": "<4.13.5"
+        }
+      ],
+      "determination": {
+        "versions": "resolved copies under @platform/auth and tooling",
+        "modes": [
+          "dev-only"
+        ],
+        "symbol": "router / body parsing advisories",
+        "untrustedInput": "no",
+        "decision": "not-reachable",
+        "evidence": "No production entrypoint runs a hono server: the backend is Convex http.ts, the web is Vite static plus Convex; hono appears only through dev tooling and package test harnesses (bun why hono). Re-read if a hono route ever ships.",
+        "owner": "release owner",
+        "reviewBy": "2026-12-23"
+      },
+      "status": "not-reachable"
+    },
+    {
+      "name": "image-size",
+      "resolvedVersions": [],
+      "dependencyTree": "(bun why failed)",
+      "advisories": [
+        {
+          "id": 1138808,
+          "url": "https://github.com/advisories/GHSA-w3rx-r6r6-pgpr",
+          "title": "image-size: ICNS parser allows denial of service through an infinite loop",
+          "severity": "high",
+          "vulnerable_versions": "<=2.0.2"
+        },
+        {
+          "id": 1138809,
+          "url": "https://github.com/advisories/GHSA-5p2g-fcmc-qvqq",
+          "title": "image-size: JXL and HEIF parsers allow denial of service through infinite loops",
+          "severity": "high",
+          "vulnerable_versions": "<=2.0.2"
+        }
+      ],
+      "determination": {
+        "versions": "see bun why image-size",
+        "modes": [
+          "build-only"
+        ],
+        "symbol": "malformed image DoS",
+        "untrustedInput": "no",
+        "decision": "not-reachable",
+        "evidence": "expo asset tooling only",
+        "owner": "release owner",
+        "reviewBy": "2026-12-23"
+      },
+      "status": "not-reachable"
+    },
+    {
+      "name": "ip-address",
+      "resolvedVersions": [
+        "10.1.1"
+      ],
+      "dependencyTree": "ip-address@10.1.1\n  └─ socks@2.8.8 (requires ^10.1.1)\n     └─ socks-proxy-agent@7.0.0 (requires ^2.6.2)\n        └─ make-fetch-happen@10.2.1 (requires ^7.0.0)\n           └─ node-gyp@9.4.1 (requires ^10.0.3)\n              └─ @electron/rebuild@3.6.1 (requires ^9.0.0)\n                 └─ app-builder-lib@25.1.8 (requires 3.6.1)\n                    ├─ dmg-builder@25.1.8 (requires 25.1.8)\n                    │  ├─ electron-builder@25.1.8 (requires 25.1.8)\n                    │  │  ├─ dev @codecast/electron@workspace (requires ^25.0.0)\n                    │  │  └─ optional peer @platform/desktop@platform/packages/desktop (requires >=24)\n                    │  │     └─ @codecast/electron@workspace (requires file:../../platform/packages/desktop)\n                    │  └─ peer app-builder-lib@25.1.8 (requires 25.1.8)\n                    │     └─ *circular\n                    ├─ electron-builder@25.1.8 (requires 25.1.8)\n                    │  ├─ dev @codecast/electron@workspace (requires ^25.0.0)\n                    │  └─ optional peer @platform/desktop@platform/packages/desktop (requires >=24)\n                    │     └─ @codecast/electron@workspace (requires file:../../platform/packages/desktop)\n                    └─ electron-builder-squirrel-windows@25.1.8 (requires 25.1.8)\n                       └─ peer app-builder-lib@25.1.8 (requires 25.1.8)\n                          └─ *circular",
+      "advisories": [
+        {
+          "id": 1130722,
+          "url": "https://github.com/advisories/GHSA-mwp4-54f8-5fhr",
+          "title": "ip-address: Address4 decodes leading-zero octets as decimal while resolvers decode them as octal, allowing SSRF and trust-boundary bypass",
+          "severity": "high",
+          "vulnerable_versions": "<=10.3.0"
+        },
+        {
+          "id": 1130723,
+          "url": "https://github.com/advisories/GHSA-4xrf-jv44-h6hh",
+          "title": "ip-address: a CIDR suffix on the parsed address suppresses special-use classification and can bypass SSRF and trust-boundary checks",
+          "severity": "moderate",
+          "vulnerable_versions": ">=10.1.1 <=10.2.1"
+        },
+        {
+          "id": 1130724,
+          "url": "https://github.com/advisories/GHSA-22jq-vg5j-6vgg",
+          "title": "ip-address: misclassification of IPv4-mapped/NAT64 IPv6 addresses can bypass SSRF and trust-boundary checks",
+          "severity": "moderate",
+          "vulnerable_versions": ">=10.1.1 <=10.2.0"
+        }
+      ],
+      "determination": {
+        "versions": "see bun why ip-address",
+        "modes": [
+          "build-only"
+        ],
+        "symbol": "IP parsing",
+        "untrustedInput": "no",
+        "decision": "not-reachable",
+        "evidence": "under electron-builder / socks tooling only",
+        "owner": "release owner",
+        "reviewBy": "2026-12-23"
+      },
+      "status": "not-reachable"
+    },
+    {
+      "name": "js-yaml",
+      "resolvedVersions": [],
+      "dependencyTree": "(bun why failed)",
+      "advisories": [
+        {
+          "id": 1121859,
+          "url": "https://github.com/advisories/GHSA-h67p-54hq-rp68",
+          "title": "JS-YAML: Quadratic-complexity DoS in merge key handling via repeated aliases",
+          "severity": "moderate",
+          "vulnerable_versions": "<3.15.0"
+        },
+        {
+          "id": 1121860,
+          "url": "https://github.com/advisories/GHSA-h67p-54hq-rp68",
+          "title": "JS-YAML: Quadratic-complexity DoS in merge key handling via repeated aliases",
+          "severity": "moderate",
+          "vulnerable_versions": ">=4.0.0 <=4.1.1"
+        },
+        {
+          "id": 1123911,
+          "url": "https://github.com/advisories/GHSA-52cp-r559-cp3m",
+          "title": "js-yaml: YAML merge-key chains can force quadratic CPU consumption",
+          "severity": "high",
+          "vulnerable_versions": ">=4.0.0 <4.3.0"
+        },
+        {
+          "id": 1123912,
+          "url": "https://github.com/advisories/GHSA-52cp-r559-cp3m",
+          "title": "js-yaml: YAML merge-key chains can force quadratic CPU consumption",
+          "severity": "high",
+          "vulnerable_versions": ">=3.0.0 <3.15.0"
+        },
+        {
+          "id": 1138114,
+          "url": "https://github.com/advisories/GHSA-5p4m-2wfm-xmqj",
+          "title": "JS-YAML: Quadratic CPU consumption in !!omap resolution (3.x and 4.x) — CVE-2026-59870 fix not backported",
+          "severity": "high",
+          "vulnerable_versions": ">=3.0.0 <3.15.1"
+        },
+        {
+          "id": 1138115,
+          "url": "https://github.com/advisories/GHSA-5p4m-2wfm-xmqj",
+          "title": "JS-YAML: Quadratic CPU consumption in !!omap resolution (3.x and 4.x) — CVE-2026-59870 fix not backported",
+          "severity": "high",
+          "vulnerable_versions": ">=4.0.0 <4.3.1"
+        },
+        {
+          "id": 1193726,
+          "url": "https://github.com/advisories/GHSA-2883-xcg3-v3hh",
+          "title": "js-yaml: maxTotalMergeKeys does not limit CPU use for empty merge sources",
+          "severity": "high",
+          "vulnerable_versions": ">=3.0.0 <3.15.2"
+        },
+        {
+          "id": 1193727,
+          "url": "https://github.com/advisories/GHSA-2883-xcg3-v3hh",
+          "title": "js-yaml: maxTotalMergeKeys does not limit CPU use for empty merge sources",
+          "severity": "high",
+          "vulnerable_versions": ">=4.0.0 <4.3.2"
+        }
+      ],
+      "determination": {
+        "versions": "see bun why js-yaml",
+        "modes": [
+          "build-only",
+          "dev-only"
+        ],
+        "symbol": "prototype pollution on merge keys",
+        "untrustedInput": "no",
+        "decision": "not-reachable",
+        "evidence": "no runtime parsing of untrusted YAML; the desktop feed parser is our own line parser",
+        "owner": "release owner",
+        "reviewBy": "2026-12-23"
+      },
+      "status": "not-reachable"
+    },
+    {
+      "name": "linkify-it",
+      "resolvedVersions": [
+        "5.0.0"
+      ],
+      "dependencyTree": "linkify-it@5.0.0\n  └─ markdown-it@14.1.1 (requires ^5.0.0)\n     ├─ prosemirror-markdown@1.13.4 (requires ^14.0.0)\n     │  └─ tiptap-markdown@0.9.0 (requires ^1.11.1)\n     │     └─ @codecast/web@workspace (requires ^0.9.0)\n     │        └─ mobile@workspace (requires workspace:*)\n     └─ tiptap-markdown@0.9.0 (requires ^14.1.0)\n        └─ @codecast/web@workspace (requires ^0.9.0)\n           └─ mobile@workspace (requires workspace:*)",
+      "advisories": [
+        {
+          "id": 1121797,
+          "url": "https://github.com/advisories/GHSA-22p9-wv53-3rq4",
+          "title": "LinkifyIt#match scan loop has quadratic algorithmic complexity",
+          "severity": "high",
+          "vulnerable_versions": "<=5.0.0"
+        },
+        {
+          "id": 1124012,
+          "url": "https://github.com/advisories/GHSA-v245-v573-v5vm",
+          "title": "linkify-it: Quadratic-complexity DoS via the `mailto:` validator scan-loop on attacker text",
+          "severity": "high",
+          "vulnerable_versions": "<=5.0.1"
+        }
+      ],
+      "determination": {
+        "versions": "with markdown-it",
+        "modes": [
+          "runtime-web"
+        ],
+        "symbol": "link detection",
+        "untrustedInput": "yes",
+        "decision": "fix-planned",
+        "evidence": "same as markdown-it",
+        "owner": "content worker (ct-53054)",
+        "reviewBy": "2026-10-15"
+      },
+      "status": "fix-planned"
+    },
+    {
+      "name": "markdown-it",
+      "resolvedVersions": [
+        "14.1.1"
+      ],
+      "dependencyTree": "markdown-it@14.1.1\n  ├─ prosemirror-markdown@1.13.4 (requires ^14.0.0)\n  │  └─ tiptap-markdown@0.9.0 (requires ^1.11.1)\n  │     └─ @codecast/web@workspace (requires ^0.9.0)\n  │        └─ mobile@workspace (requires workspace:*)\n  │        \n  └─ tiptap-markdown@0.9.0 (requires ^14.1.0)\n     └─ @codecast/web@workspace (requires ^0.9.0)\n        └─ mobile@workspace (requires workspace:*)",
+      "advisories": [
+        {
+          "id": 1120820,
+          "url": "https://github.com/advisories/GHSA-6v5v-wf23-fmfq",
+          "title": "markdown-it: Quadratic complexity DoS in smartquotes rule via replaceAt string operations",
+          "severity": "moderate",
+          "vulnerable_versions": "<=14.1.1"
+        }
+      ],
+      "determination": {
+        "versions": "see bun why markdown-it",
+        "modes": [
+          "runtime-web"
+        ],
+        "symbol": "linkify / reference parsing",
+        "untrustedInput": "yes",
+        "decision": "fix-planned",
+        "evidence": "Markdown rendering of agent output is the content worker's surface (plan 003). Bump alongside dompurify with browser verification.",
+        "owner": "content worker (ct-53054)",
+        "reviewBy": "2026-10-15"
+      },
+      "status": "fix-planned"
+    },
+    {
+      "name": "mermaid",
+      "resolvedVersions": [
+        "11.14.0"
+      ],
+      "dependencyTree": "mermaid@11.14.0\n  └─ @codecast/web@workspace (requires ^11.13.0)\n     └─ mobile@workspace (requires workspace:*)",
+      "advisories": [
+        {
+          "id": 1120138,
+          "url": "https://github.com/advisories/GHSA-ghcm-xqfw-q4vr",
+          "title": "Mermaid: Improper sanitization of `classDef` in state diagrams leads to HTML injection",
+          "severity": "moderate",
+          "vulnerable_versions": ">=11.0.0-alpha.1 <=11.14.0"
+        },
+        {
+          "id": 1120140,
+          "url": "https://github.com/advisories/GHSA-xcj9-5m2h-648r",
+          "title": "Mermaid: Improper sanitization of `classDefs` in diagrams leads to CSS injection",
+          "severity": "moderate",
+          "vulnerable_versions": ">=11.0.0-alpha.1 <=11.14.0"
+        },
+        {
+          "id": 1120326,
+          "url": "https://github.com/advisories/GHSA-6m6c-36f7-fhxh",
+          "title": "Mermaid Gantt Charts are vulnerable to an Infinite Loop DoS",
+          "severity": "moderate",
+          "vulnerable_versions": ">=11.0.0-alpha.1 <=11.14.0"
+        },
+        {
+          "id": 1122162,
+          "url": "https://github.com/advisories/GHSA-87f9-hvmw-gh4p",
+          "title": "Mermaid: Improper sanitization of configuration leads to CSS injection",
+          "severity": "moderate",
+          "vulnerable_versions": ">=11.0.0-alpha.1 <=11.14.0"
+        },
+        {
+          "id": 1138097,
+          "url": "https://github.com/advisories/GHSA-c4c3-pg64-4m4v",
+          "title": "Mermaid configuration APIs allow prototype pollution",
+          "severity": "low",
+          "vulnerable_versions": ">=11.0.0-alpha.1 <11.16.1"
+        },
+        {
+          "id": 1138099,
+          "url": "https://github.com/advisories/GHSA-6x64-9x62-f2gx",
+          "title": "Mermaid allows CSS injection applying to sibling elements of the diagram",
+          "severity": "moderate",
+          "vulnerable_versions": ">=11.0.0-alpha.1 <11.16.1"
+        },
+        {
+          "id": 1138100,
+          "url": "https://github.com/advisories/GHSA-3rrr-jr9j-h3q3",
+          "title": "Mermaid Architecture diagrams are vulnerable to prototype pollution",
+          "severity": "moderate",
+          "vulnerable_versions": ">=11.5.0 <11.16.1"
+        },
+        {
+          "id": 1138101,
+          "url": "https://github.com/advisories/GHSA-2v8p-3f2j-5mp7",
+          "title": "Mermaid XY Charts are vulnerable to an infinite loop DoS",
+          "severity": "moderate",
+          "vulnerable_versions": ">=11.0.0-alpha.1 <11.16.1"
+        },
+        {
+          "id": 1138113,
+          "url": "https://github.com/advisories/GHSA-rhh3-jpg6-66xh",
+          "title": "Mermaid radar diagrams are vulnerable to DoS",
+          "severity": "moderate",
+          "vulnerable_versions": ">=11.6.0 <11.16.1"
+        }
+      ],
+      "determination": {
+        "versions": "see bun why mermaid",
+        "modes": [
+          "runtime-web"
+        ],
+        "symbol": "diagram rendering from untrusted text",
+        "untrustedInput": "yes",
+        "decision": "fix-planned",
+        "evidence": "Mermaid renders agent output inside the web app; plan 003 content worker owns the sink and the bump.",
+        "owner": "content worker (ct-53054)",
+        "reviewBy": "2026-10-15"
+      },
+      "status": "fix-planned"
+    },
+    {
+      "name": "nanoid",
+      "resolvedVersions": [
+        "5.1.9",
+        "3.3.11"
+      ],
+      "dependencyTree": "nanoid@5.1.9\n  └─ codecast (requires ^5.1.7)\n\nnanoid@3.3.11\n  ├─ @react-navigation/core@7.17.2 (requires ^3.3.11)\n  │  └─ @react-navigation/native@7.2.2 (requires ^7.17.2)\n  │     ├─ expo-router@6.0.23 (requires ^7.1.8)\n  │     │  ├─ mobile@workspace (requires ~6.0.20)\n  │     │  └─ optional peer @expo/cli@54.0.24 (requires *)\n  │     │     └─ expo@54.0.34 (requires 54.0.24)\n  │     │        ├─ mobile@workspace (requires ~54.0.29)\n  │     │        ├─ peer @bacons/apple-targets@5.0.0 (requires >=52)\n  │     │        │  └─ mobile@workspace (requires 5.0.0)\n  │     │        ├─ optional peer @sentry/react-native@8.9.2 (requires >=49.0.0)\n  │     │        │  ├─ mobile@workspace (requires ^8.5.0)\n  │     │        │  ├─ optional peer @platform/analytics@platform/packages/analytics (requires ^8.5.0)\n  │     │        │  │  ├─ @codecast/convex@workspace (requires file:../../platform/packages/analytics)\n  │     │        │  │  │  ├─ @codecast/web@workspace (requires workspace:*)\n  │     │        │  │  │  │  └─ mobile@workspace (requires workspace:*)\n  │     │        │  │  │  └─ mobile@workspace (requires workspace:*)\n  │     │        │  │  ├─ @codecast/shared@workspace (requires file:../../platform/packages/analytics)\n  │     │        │  │  │  ├─ @codecast/cli@workspace (requires workspace:*)\n  │     │        │  │  │  ├─ @codecast/convex@workspace (requires workspace:*)\n  │     │        │  │  │  │  ├─ @codecast/web@workspace (requires workspace:*)\n  │     │        │  │  │  │  │  └─ mobile@workspace (requires workspace:*)\n  │     │        │  │  │  │  └─ mobile@workspace (requires workspace:*)\n  │     │        │  │  │  ├─ @codecast/web@workspace (requires workspace:*)\n  │     │        │  │  │  │  └─ mobile@workspace (requires workspace:*)\n  │     │        │  │  │  └─ mobile@workspace (requires workspace:*)\n  │     │        │  │  ├─ @codecast/web@workspace (requires file:../../platform/packages/analytics)\n  │     │        │  │  │  └─ mobile@workspace (requires workspace:*)\n  │     │        │  │  └─ mobile@workspace (requires file:../../platform/packages/analytics)\n  │     │        │  └─ dev @platform/analytics@platform/packages/analytics (requires ^8.5.0)\n  │     │        │     ├─ @codecast/convex@workspace (requires file:../../platform/packages/analytics)\n  │     │        │     │  ├─ @codecast/web@workspace (requires workspace:*)\n  │     │        │     │  │  └─ mobile@workspace (requires workspace:*)\n  │     │        │     │  └─ mobile@workspace (requires workspace:*)\n  │     │        │     ├─ @codecast/shared@workspace (requires file:../../platform/packages/analytics)\n  │     │        │     │  ├─ @codecast/cli@workspace (requires workspace:*)\n  │     │        │     │  ├─ @codecast/convex@workspace (requires workspace:*)",
+      "advisories": [
+        {
+          "id": 1138810,
+          "url": "https://github.com/advisories/GHSA-28wg-ghj8-5hjv",
+          "title": "nanoid: non-secure generators can loop indefinitely with negative size",
+          "severity": "high",
+          "vulnerable_versions": ">=4.0.0 <5.1.16"
+        },
+        {
+          "id": 1138811,
+          "url": "https://github.com/advisories/GHSA-28wg-ghj8-5hjv",
+          "title": "nanoid: non-secure generators can loop indefinitely with negative size",
+          "severity": "high",
+          "vulnerable_versions": "<3.3.16"
+        },
+        {
+          "id": 1139427,
+          "url": "https://github.com/advisories/GHSA-2v37-7h3g-55p8",
+          "title": "nanoid: custom generators can loop indefinitely when size is zero",
+          "severity": "high",
+          "vulnerable_versions": "<3.3.18"
+        },
+        {
+          "id": 1153188,
+          "url": "https://github.com/advisories/GHSA-xwg4-73v4-xw9w",
+          "title": "nanoid: Integer Overflow or Wraparound",
+          "severity": "high",
+          "vulnerable_versions": ">=4.0.0 <5.1.11"
+        },
+        {
+          "id": 1153189,
+          "url": "https://github.com/advisories/GHSA-xwg4-73v4-xw9w",
+          "title": "nanoid: Integer Overflow or Wraparound",
+          "severity": "high",
+          "vulnerable_versions": "<3.3.12"
+        }
+      ],
+      "determination": {
+        "versions": "see bun why nanoid",
+        "modes": [
+          "runtime-web",
+          "runtime-backend"
+        ],
+        "symbol": "predictable ids when a non-integer size is passed",
+        "untrustedInput": "no",
+        "decision": "not-reachable",
+        "evidence": "no call site passes a caller controlled size; grep nanoid( in packages shows constant sizes only",
+        "owner": "release owner",
+        "reviewBy": "2026-12-23"
+      },
+      "status": "not-reachable"
+    },
+    {
+      "name": "postcss",
+      "resolvedVersions": [
+        "8.5.12"
+      ],
+      "dependencyTree": "postcss@8.5.12\n  ├─ tailwindcss@3.4.19 (requires ^8.4.47)\n  │  ├─ dev @codecast/web@workspace (requires ^3.4.16)\n  │  │  └─ mobile@workspace (requires workspace:*)\n  │  │  \n  │  ├─ peer @tailwindcss/typography@0.5.19 (requires >=3.0.0 || insiders || >=4.0.0-alpha.20 || >=4.0.0-beta.1)\n  │  │  └─ dev @codecast/web@workspace (requires ^0.5.19)\n  │  │     └─ mobile@workspace (requires workspace:*)\n  │  │     \n  │  └─ peer tailwindcss-animate@1.0.7 (requires >=3.0.0 || insiders)\n  │     └─ @codecast/web@workspace (requires ^1.0.7)\n  │        └─ mobile@workspace (requires workspace:*)\n  │  \n  ├─ vite@6.4.2 (requires ^8.5.3)\n  │  ├─ peer @vitejs/plugin-react@4.7.0 (requires ^4.2.0 || ^5.0.0 || ^6.0.0 || ^7.0.0)\n  │  │  └─ dev @codecast/web@workspace (requires ^4.5.2)\n  │  │     └─ mobile@workspace (requires workspace:*)\n  │  │     \n  │  ├─ peer vite-plugin-pwa@1.3.0 (requires ^3.1.0 || ^4.0.0 || ^5.0.0 || ^6.0.0 || ^7.0.0 || ^8.0.0)\n  │  │  └─ dev @codecast/web@workspace (requires ^1.3.0)\n  │  │     └─ mobile@workspace (requires workspace:*)\n  │  │     \n  │  └─ dev @codecast/web@workspace (requires ^6.3.5)\n  │     └─ mobile@workspace (requires workspace:*)\n  │  \n  ├─ peer autoprefixer@10.5.0 (requires ^8.1.0)\n  │  └─ dev @codecast/web@workspace (requires ^10.4.20)\n  │     └─ mobile@workspace (requires workspace:*)\n  │     \n  ├─ peer postcss-import@15.1.0 (requires ^8.0.0)\n  │  └─ tailwindcss@3.4.19 (requires ^15.1.0)\n  │     ├─ dev @codecast/web@workspace (requires ^3.4.16)\n  │     │  └─ mobile@workspace (requires workspace:*)\n  │     │  \n  │     ├─ peer @tailwindcss/typography@0.5.19 (requires >=3.0.0 || insiders || >=4.0.0-alpha.20 || >=4.0.0-beta.1)\n  │     │  └─ dev @codecast/web@workspace (requires ^0.5.19)\n  │     │     └─ mobile@workspace (requires workspace:*)\n  │     │     \n  │     └─ peer tailwindcss-animate@1.0.7 (requires >=3.0.0 || insiders)\n  │        └─ @codecast/web@workspace (requires ^1.0.7)",
+      "advisories": [
+        {
+          "id": 1130709,
+          "url": "https://github.com/advisories/GHSA-fxqj-rqcc-2cmp",
+          "title": "PostCSS: incomplete fix of GHSA-6g55-p6wh-862q — attacker-controlled sourceMappingURL reads arbitrary .map files when `from` is unset",
+          "severity": "moderate",
+          "vulnerable_versions": "<=8.5.22"
+        },
+        {
+          "id": 1117015,
+          "url": "https://github.com/advisories/GHSA-qx2v-qp2m-jg93",
+          "title": "PostCSS has XSS via Unescaped </style> in its CSS Stringify Output",
+          "severity": "moderate",
+          "vulnerable_versions": "<8.5.10"
+        },
+        {
+          "id": 1124252,
+          "url": "https://github.com/advisories/GHSA-6g55-p6wh-862q",
+          "title": "PostCSS: Arbitrary file read and information disclosure via attacker-controlled sourceMappingURL in CSS comments",
+          "severity": "high",
+          "vulnerable_versions": "<=8.5.11"
+        },
+        {
+          "id": 1139510,
+          "url": "https://github.com/advisories/GHSA-r28c-9q8g-f849",
+          "title": "PostCSS: Path Traversal in Previous Source Map Auto-Loading (sourceMappingURL) leads to Arbitrary .map File Disclosure",
+          "severity": "high",
+          "vulnerable_versions": "<=8.5.17"
+        }
+      ],
+      "determination": {
+        "versions": "see bun why",
+        "modes": [
+          "build-only"
+        ],
+        "symbol": "parser",
+        "untrustedInput": "no",
+        "decision": "not-reachable",
+        "evidence": "build time only",
+        "owner": "release owner",
+        "reviewBy": "2026-12-23"
+      },
+      "status": "not-reachable"
+    },
+    {
+      "name": "postcss-selector-parser",
+      "resolvedVersions": [
+        "6.0.10",
+        "6.1.2"
+      ],
+      "dependencyTree": "postcss-selector-parser@6.0.10\n  └─ @tailwindcss/typography@0.5.19 (requires 6.0.10)\n     └─ dev @codecast/web@workspace (requires ^0.5.19)\n        └─ mobile@workspace (requires workspace:*)\n\npostcss-selector-parser@6.1.2\n  ├─ postcss-nested@6.2.0 (requires ^6.1.1)\n  │  └─ tailwindcss@3.4.19 (requires ^6.2.0)\n  │     ├─ dev @codecast/web@workspace (requires ^3.4.16)\n  │     │  └─ mobile@workspace (requires workspace:*)\n  │     │  \n  │     ├─ peer @tailwindcss/typography@0.5.19 (requires >=3.0.0 || insiders || >=4.0.0-alpha.20 || >=4.0.0-beta.1)\n  │     │  └─ dev @codecast/web@workspace (requires ^0.5.19)\n  │     │     └─ mobile@workspace (requires workspace:*)\n  │     │     \n  │     └─ peer tailwindcss-animate@1.0.7 (requires >=3.0.0 || insiders)\n  │        └─ @codecast/web@workspace (requires ^1.0.7)\n  │           └─ mobile@workspace (requires workspace:*)\n  │     \n  └─ tailwindcss@3.4.19 (requires ^6.1.2)\n     ├─ dev @codecast/web@workspace (requires ^3.4.16)\n     │  └─ mobile@workspace (requires workspace:*)\n     ├─ peer @tailwindcss/typography@0.5.19 (requires >=3.0.0 || insiders || >=4.0.0-alpha.20 || >=4.0.0-beta.1)\n     │  └─ dev @codecast/web@workspace (requires ^0.5.19)\n     │     └─ mobile@workspace (requires workspace:*)\n     └─ peer tailwindcss-animate@1.0.7 (requires >=3.0.0 || insiders)\n        └─ @codecast/web@workspace (requires ^1.0.7)\n           └─ mobile@workspace (requires workspace:*)",
+      "advisories": [
+        {
+          "id": 1153170,
+          "url": "https://github.com/advisories/GHSA-w9m9-85wc-3x92",
+          "title": "postcss-selector-parser allows denial of service through uncontrolled AST recursion",
+          "severity": "low",
+          "vulnerable_versions": ">=6.1.0 <6.1.3"
+        }
+      ],
+      "determination": {
+        "versions": "see bun why",
+        "modes": [
+          "build-only"
+        ],
+        "symbol": "parser",
+        "untrustedInput": "no",
+        "decision": "not-reachable",
+        "evidence": "build time only",
+        "owner": "release owner",
+        "reviewBy": "2026-12-23"
+      },
+      "status": "not-reachable"
+    },
+    {
+      "name": "prismjs",
+      "resolvedVersions": [
+        "1.30.0",
+        "1.17.1"
+      ],
+      "dependencyTree": "prismjs@1.30.0\n  ├─ @codecast/web@workspace (requires ^1.30.0)\n  │  └─ mobile@workspace (requires workspace:*)\n  │  \n  └─ react-syntax-highlighter@6.1.2 (requires ^1.8.4)\n     └─ react-native-syntax-highlighter@2.1.0 (requires ^6.0.4)\n        └─ mobile@workspace (requires ^2.1.0)\n\nprismjs@1.17.1\n  └─ refractor@2.10.1 (requires ~1.17.0)\n     └─ react-syntax-highlighter@6.1.2 (requires ^2.0.0)\n        └─ react-native-syntax-highlighter@2.1.0 (requires ^6.0.4)\n           └─ mobile@workspace (requires ^2.1.0)",
+      "advisories": [
+        {
+          "id": 1089189,
+          "url": "https://github.com/advisories/GHSA-hqhp-5p83-hx96",
+          "title": "prismjs Regular Expression Denial of Service vulnerability",
+          "severity": "moderate",
+          "vulnerable_versions": "<1.25.0"
+        },
+        {
+          "id": 1105770,
+          "url": "https://github.com/advisories/GHSA-x7hr-w5r2-h6wg",
+          "title": "PrismJS DOM Clobbering vulnerability",
+          "severity": "moderate",
+          "vulnerable_versions": "<1.30.0"
+        },
+        {
+          "id": 1087445,
+          "url": "https://github.com/advisories/GHSA-wvhm-4hhf-97x9",
+          "title": "Cross-Site Scripting in Prism",
+          "severity": "high",
+          "vulnerable_versions": ">=1.1.0 <1.21.0"
+        },
+        {
+          "id": 1089716,
+          "url": "https://github.com/advisories/GHSA-gj77-59wh-66hg",
+          "title": "Regular Expression Denial of Service (ReDoS) in Prism",
+          "severity": "high",
+          "vulnerable_versions": "<1.24.0"
+        },
+        {
+          "id": 1093292,
+          "url": "https://github.com/advisories/GHSA-h4hr-7fg3-h35w",
+          "title": "Denial of service in prismjs",
+          "severity": "high",
+          "vulnerable_versions": "<1.23.0"
+        },
+        {
+          "id": 1090424,
+          "url": "https://github.com/advisories/GHSA-3949-f494-cm99",
+          "title": "Cross-site Scripting in Prism",
+          "severity": "high",
+          "vulnerable_versions": ">=1.14.0 <1.27.0"
+        }
+      ],
+      "determination": {
+        "versions": "see bun why prismjs",
+        "modes": [
+          "runtime-web"
+        ],
+        "symbol": "ReDoS in language grammars",
+        "untrustedInput": "yes",
+        "decision": "accepted-risk",
+        "evidence": "same reasoning as highlight.js: client side only, viewer's own tab.",
+        "owner": "release owner",
+        "reviewBy": "2026-12-23"
+      },
+      "status": "accepted-risk"
+    },
+    {
+      "name": "protobufjs",
+      "resolvedVersions": [
+        "7.5.6"
+      ],
+      "dependencyTree": "protobufjs@7.5.6\n  └─ @opentelemetry/otlp-transformer@0.208.0 (requires ^7.3.0)\n     ├─ @opentelemetry/exporter-logs-otlp-http@0.208.0 (requires 0.208.0)\n     │  └─ posthog-js@1.372.3 (requires ^0.208.0)\n     │     ├─ @codecast/web@workspace (requires ^1.363.3)\n     │     │  └─ mobile@workspace (requires workspace:*)\n     │     ├─ optional peer @platform/analytics@platform/packages/analytics (requires ^1.363.3)\n     │     │  ├─ @codecast/convex@workspace (requires file:../../platform/packages/analytics)\n     │     │  │  ├─ @codecast/web@workspace (requires workspace:*)\n     │     │  │  │  └─ mobile@workspace (requires workspace:*)\n     │     │  │  └─ mobile@workspace (requires workspace:*)\n     │     │  ├─ @codecast/shared@workspace (requires file:../../platform/packages/analytics)\n     │     │  │  ├─ @codecast/cli@workspace (requires workspace:*)\n     │     │  │  ├─ @codecast/convex@workspace (requires workspace:*)\n     │     │  │  │  ├─ @codecast/web@workspace (requires workspace:*)\n     │     │  │  │  │  └─ mobile@workspace (requires workspace:*)\n     │     │  │  │  └─ mobile@workspace (requires workspace:*)\n     │     │  │  ├─ @codecast/web@workspace (requires workspace:*)\n     │     │  │  │  └─ mobile@workspace (requires workspace:*)\n     │     │  │  └─ mobile@workspace (requires workspace:*)\n     │     │  ├─ @codecast/web@workspace (requires file:../../platform/packages/analytics)\n     │     │  │  └─ mobile@workspace (requires workspace:*)\n     │     │  └─ mobile@workspace (requires file:../../platform/packages/analytics)\n     │     ├─ dev @platform/analytics@platform/packages/analytics (requires ^1.363.3)\n     │     │  ├─ @codecast/convex@workspace (requires file:../../platform/packages/analytics)\n     │     │  │  ├─ @codecast/web@workspace (requires workspace:*)\n     │     │  │  │  └─ mobile@workspace (requires workspace:*)\n     │     │  │  └─ mobile@workspace (requires workspace:*)\n     │     │  ├─ @codecast/shared@workspace (requires file:../../platform/packages/analytics)\n     │     │  │  ├─ @codecast/cli@workspace (requires workspace:*)\n     │     │  │  ├─ @codecast/convex@workspace (requires workspace:*)\n     │     │  │  │  ├─ @codecast/web@workspace (requires workspace:*)\n     │     │  │  │  │  └─ mobile@workspace (requires workspace:*)\n     │     │  │  │  └─ mobile@workspace (requires workspace:*)\n     │     │  │  ├─ @codecast/web@workspace (requires workspace:*)\n     │     │  │  │  └─ mobile@workspace (requires workspace:*)\n     │     │  │  └─ mobile@workspace (requires workspace:*)\n     │     │  ├─ @codecast/web@workspace (requires file:../../platform/packages/analytics)\n     │     │  │  └─ mobile@workspace (requires workspace:*)\n     │     │  └─ mobile@workspace (requires file:../../platform/packages/analytics)",
+      "advisories": [
+        {
+          "id": 1119378,
+          "url": "https://github.com/advisories/GHSA-jggg-4jg4-v7c6",
+          "title": "protobufjs: Denial of Service via unbounded recursive JSON descriptor expansion",
+          "severity": "moderate",
+          "vulnerable_versions": "<=7.5.7"
+        },
+        {
+          "id": 1123488,
+          "url": "https://github.com/advisories/GHSA-wcpc-wj8m-hjx6",
+          "title": "protobufjs: Denial of service through unbounded Any expansion during JSON conversion",
+          "severity": "high",
+          "vulnerable_versions": "<=7.6.0"
+        },
+        {
+          "id": 1123492,
+          "url": "https://github.com/advisories/GHSA-f38q-mgvj-vph7",
+          "title": "protobufjs : Schema-derived names can shadow runtime-significant properties",
+          "severity": "moderate",
+          "vulnerable_versions": "<=7.6.2"
+        },
+        {
+          "id": 1123964,
+          "url": "https://github.com/advisories/GHSA-j3f2-48v5-ccww",
+          "title": "protobufjs: Denial of Service via infinite loop in .proto option parsing",
+          "severity": "moderate",
+          "vulnerable_versions": ">=7.5.0 <=7.6.4"
+        }
+      ],
+      "determination": {
+        "versions": "see bun why protobufjs",
+        "modes": [
+          "dev-only"
+        ],
+        "symbol": "prototype pollution in reflection",
+        "untrustedInput": "no",
+        "decision": "not-reachable",
+        "evidence": "resolved under opentelemetry / tooling; no runtime protobuf decoding of untrusted bytes",
+        "owner": "release owner",
+        "reviewBy": "2026-12-23"
+      },
+      "status": "not-reachable"
+    },
+    {
+      "name": "react-router",
+      "resolvedVersions": [
+        "7.14.2"
+      ],
+      "dependencyTree": "react-router@7.14.2\n  └─ @codecast/web@workspace (requires ^7.5.0)\n     └─ mobile@workspace (requires workspace:*)",
+      "advisories": [
+        {
+          "id": 1120069,
+          "url": "https://github.com/advisories/GHSA-8x6r-g9mw-2r78",
+          "title": "React Router vulnerable to DoS via unbounded path expansion in __manifest endpoint",
+          "severity": "high",
+          "vulnerable_versions": ">=7.0.0 <7.15.0"
+        },
+        {
+          "id": 1120807,
+          "url": "https://github.com/advisories/GHSA-84g9-w2xq-vcv6",
+          "title": "React Router: Potential CSRF via PUT/PATCH/DELETE document requests",
+          "severity": "low",
+          "vulnerable_versions": ">=7.12.0 <7.15.1"
+        },
+        {
+          "id": 1124268,
+          "url": "https://github.com/advisories/GHSA-wrjc-x8rr-h8h6",
+          "title": "React Router: Open redirect via backslash in <Link> and useNavigate (CVE-2025-68470 bypass)",
+          "severity": "moderate",
+          "vulnerable_versions": ">=6.0.0 <7.18.0"
+        },
+        {
+          "id": 1124271,
+          "url": "https://github.com/advisories/GHSA-h8fp-f39c-q6mh",
+          "title": "React Router: RSCErrorHandler Missing Protocol Validation (XSS)",
+          "severity": "moderate",
+          "vulnerable_versions": ">=7.11.0 <7.18.0"
+        },
+        {
+          "id": 1124272,
+          "url": "https://github.com/advisories/GHSA-337j-9hxr-rhxg",
+          "title": "React Router: Arbitrary Constructor Injection via deserializeErrors() in React Router SSR Hydration",
+          "severity": "moderate",
+          "vulnerable_versions": ">=6.4.0 <7.18.0"
+        },
+        {
+          "id": 1124276,
+          "url": "https://github.com/advisories/GHSA-chx6-hx7r-mcp5",
+          "title": "React Router: Unauthenticated Denial of Service via Inefficient Route Matching",
+          "severity": "high",
+          "vulnerable_versions": ">=7.0.0 <7.18.0"
+        },
+        {
+          "id": 1138769,
+          "url": "https://github.com/advisories/GHSA-qwww-vcr4-c8h2",
+          "title": "React Router: RSC Mode CSRF Bypass Allows Action Execution Before 400 Response",
+          "severity": "high",
+          "vulnerable_versions": ">=7.12.0 <7.18.2"
+        }
+      ],
+      "determination": {
+        "versions": "7.14.2",
+        "modes": [
+          "runtime-web"
+        ],
+        "symbol": "client routing: open redirect via a backslash in <Link>/useNavigate (fixed 7.18.0); the RSC, manifest and SSR advisories concern server paths we do not run",
+        "untrustedInput": "indirect",
+        "decision": "fix-planned",
+        "evidence": "The web app is a client rendered SPA (no SSR, no RSC, no server loaders), so the DoS, CSRF and deserializeErrors rows do not apply. The backslash open redirect does apply wherever a navigation target comes from data (share links, deep links). Bump to >=7.18.2 in the next web release; verify the tab shell's route adoption still holds (tab_shell_routing traps).",
+        "owner": "release owner (jx7f70q)",
+        "reviewBy": "2026-10-15"
+      },
+      "status": "fix-planned"
+    },
+    {
+      "name": "shell-quote",
+      "resolvedVersions": [],
+      "dependencyTree": "(bun why failed)",
+      "advisories": [
+        {
+          "id": 1120422,
+          "url": "https://github.com/advisories/GHSA-w7jw-789q-3m8p",
+          "title": "shell-quote quote() does not escape newlines in object .op values",
+          "severity": "critical",
+          "vulnerable_versions": ">=1.1.0 <=1.8.3"
+        },
+        {
+          "id": 1123944,
+          "url": "https://github.com/advisories/GHSA-395f-4hp3-45gv",
+          "title": "shell-quote: Quadratic-complexity Denial of Service in `parse()` (CWE-407)",
+          "severity": "high",
+          "vulnerable_versions": "<=1.8.4"
+        }
+      ],
+      "determination": {
+        "versions": "see bun why shell-quote",
+        "modes": [
+          "dev-only"
+        ],
+        "symbol": "quote() injection",
+        "untrustedInput": "no",
+        "decision": "not-reachable",
+        "evidence": "dev tooling; the CLI never builds shell strings from untrusted data (update.ts moved to argv on 2026-09-23)",
+        "owner": "release owner",
+        "reviewBy": "2026-12-23"
+      },
+      "status": "not-reachable"
+    },
+    {
+      "name": "tar",
+      "resolvedVersions": [
+        "7.5.13"
+      ],
+      "dependencyTree": "tar@7.5.13\n  ├─ @expo/cli@54.0.24 (requires ^7.5.2)\n  │  └─ expo@54.0.34 (requires 54.0.24)\n  │     ├─ mobile@workspace (requires ~54.0.29)\n  │     ├─ peer @bacons/apple-targets@5.0.0 (requires >=52)\n  │     │  └─ mobile@workspace (requires 5.0.0)\n  │     ├─ optional peer @sentry/react-native@8.9.2 (requires >=49.0.0)\n  │     │  ├─ mobile@workspace (requires ^8.5.0)\n  │     │  ├─ optional peer @platform/analytics@platform/packages/analytics (requires ^8.5.0)\n  │     │  │  ├─ @codecast/convex@workspace (requires file:../../platform/packages/analytics)\n  │     │  │  │  ├─ @codecast/web@workspace (requires workspace:*)\n  │     │  │  │  │  └─ mobile@workspace (requires workspace:*)\n  │     │  │  │  │  \n  │     │  │  │  └─ mobile@workspace (requires workspace:*)\n  │     │  │  │  \n  │     │  │  ├─ @codecast/shared@workspace (requires file:../../platform/packages/analytics)\n  │     │  │  │  ├─ @codecast/cli@workspace (requires workspace:*)\n  │     │  │  │  ├─ @codecast/convex@workspace (requires workspace:*)\n  │     │  │  │  │  ├─ @codecast/web@workspace (requires workspace:*)\n  │     │  │  │  │  │  └─ mobile@workspace (requires workspace:*)\n  │     │  │  │  │  │  \n  │     │  │  │  │  └─ mobile@workspace (requires workspace:*)\n  │     │  │  │  │  \n  │     │  │  │  ├─ @codecast/web@workspace (requires workspace:*)\n  │     │  │  │  │  └─ mobile@workspace (requires workspace:*)\n  │     │  │  │  │  \n  │     │  │  │  └─ mobile@workspace (requires workspace:*)\n  │     │  │  │  \n  │     │  │  ├─ @codecast/web@workspace (requires file:../../platform/packages/analytics)\n  │     │  │  │  └─ mobile@workspace (requires workspace:*)\n  │     │  │  │  \n  │     │  │  └─ mobile@workspace (requires file:../../platform/packages/analytics)\n  │     │  │  \n  │     │  └─ dev @platform/analytics@platform/packages/analytics (requires ^8.5.0)\n  │     │     ├─ @codecast/convex@workspace (requires file:../../platform/packages/analytics)\n  │     │     │  ├─ @codecast/web@workspace (requires workspace:*)\n  │     │     │  │  └─ mobile@workspace (requires workspace:*)\n  │     │     │  └─ mobile@workspace (requires workspace:*)\n  │     │     ├─ @codecast/shared@workspace (requires file:../../platform/packages/analytics)\n  │     │     │  ├─ @codecast/cli@workspace (requires workspace:*)",
+      "advisories": [
+        {
+          "id": 1112659,
+          "url": "https://github.com/advisories/GHSA-34x7-hfp2-rc4v",
+          "title": "node-tar Vulnerable to Arbitrary File Creation/Overwrite via Hardlink Path Traversal",
+          "severity": "high",
+          "vulnerable_versions": "<7.5.7"
+        },
+        {
+          "id": 1113300,
+          "url": "https://github.com/advisories/GHSA-8qq5-rm4j-mr97",
+          "title": "node-tar is Vulnerable to Arbitrary File Overwrite and Symlink Poisoning via Insufficient Path Sanitization",
+          "severity": "high",
+          "vulnerable_versions": "<=7.5.2"
+        },
+        {
+          "id": 1113375,
+          "url": "https://github.com/advisories/GHSA-83g3-92jg-28cx",
+          "title": "Arbitrary File Read/Write via Hardlink Target Escape Through Symlink Chain in node-tar Extraction",
+          "severity": "high",
+          "vulnerable_versions": "<7.5.8"
+        },
+        {
+          "id": 1114200,
+          "url": "https://github.com/advisories/GHSA-qffp-2rhf-9h96",
+          "title": "tar has Hardlink Path Traversal via Drive-Relative Linkpath",
+          "severity": "high",
+          "vulnerable_versions": "<=7.5.9"
+        },
+        {
+          "id": 1114302,
+          "url": "https://github.com/advisories/GHSA-9ppj-qmqm-q256",
+          "title": "node-tar Symlink Path Traversal via Drive-Relative Linkpath",
+          "severity": "high",
+          "vulnerable_versions": "<=7.5.10"
+        },
+        {
+          "id": 1120782,
+          "url": "https://github.com/advisories/GHSA-vmf3-w455-68vh",
+          "title": "node-tar applies PAX size override to intermediary GNU long-name/long-link headers, causing tar parser interpretation differential (file smuggling)",
+          "severity": "moderate",
+          "vulnerable_versions": "<=7.5.15"
+        },
+        {
+          "id": 1114680,
+          "url": "https://github.com/advisories/GHSA-r6q2-hw4h-h46w",
+          "title": "Race Condition in node-tar Path Reservations via Unicode Ligature Collisions on macOS APFS",
+          "severity": "high",
+          "vulnerable_versions": "<=7.5.3"
+        },
+        {
+          "id": 1123939,
+          "url": "https://github.com/advisories/GHSA-w8wr-v893-vjvp",
+          "title": "node-tar: Process crash via PAX numeric path type confusion",
+          "severity": "moderate",
+          "vulnerable_versions": "<=7.5.17"
+        },
+        {
+          "id": 1123940,
+          "url": "https://github.com/advisories/GHSA-23hp-3jrh-7fpw",
+          "title": "node-tar: Decompression/parse DoS via unlimited input",
+          "severity": "critical",
+          "vulnerable_versions": "<=7.5.18"
+        },
+        {
+          "id": 1123941,
+          "url": "https://github.com/advisories/GHSA-8x88-c5mf-7j5w",
+          "title": "node-tar: Negative tar entry size causes infinite loop in archive replace",
+          "severity": "high",
+          "vulnerable_versions": "<=7.5.17"
+        },
+        {
+          "id": 1123942,
+          "url": "https://github.com/advisories/GHSA-gvwx-54wh-qm9j",
+          "title": "node-tar: Uncaught Exception DoS via NUL byte in PAX path/linkpath records",
+          "severity": "moderate",
+          "vulnerable_versions": "<=7.5.16"
+        },
+        {
+          "id": 1145647,
+          "url": "https://github.com/advisories/GHSA-r292-9mhp-454m",
+          "title": "node-tar: Uncontrolled recursion in mapHas/filesFilter allows uncatchable stack-overflow DoS via crafted long-path tar with member selection",
+          "severity": "high",
+          "vulnerable_versions": "<=7.5.20"
+        }
+      ],
+      "determination": {
+        "versions": "see bun why tar",
+        "modes": [
+          "build-only"
+        ],
+        "symbol": "path traversal on extraction",
+        "untrustedInput": "no",
+        "decision": "not-reachable",
+        "evidence": "Only build tooling (electron-builder, expo prebuild) extracts archives it downloaded itself; no user supplied archive is ever extracted at runtime.",
+        "owner": "release owner",
+        "reviewBy": "2026-12-23"
+      },
+      "status": "not-reachable"
+    },
+    {
+      "name": "tmp",
+      "resolvedVersions": [
+        "0.2.5"
+      ],
+      "dependencyTree": "tmp@0.2.5\n  └─ tmp-promise@3.0.3 (requires ^0.2.0)\n     └─ @malept/flatpak-bundler@0.4.0 (requires ^3.0.2)\n        └─ app-builder-lib@25.1.8 (requires ^0.4.0)\n           ├─ dmg-builder@25.1.8 (requires 25.1.8)\n           │  ├─ electron-builder@25.1.8 (requires 25.1.8)\n           │  │  ├─ dev @codecast/electron@workspace (requires ^25.0.0)\n           │  │  └─ optional peer @platform/desktop@platform/packages/desktop (requires >=24)\n           │  │     └─ @codecast/electron@workspace (requires file:../../platform/packages/desktop)\n           │  └─ peer app-builder-lib@25.1.8 (requires 25.1.8)\n           │     └─ *circular\n           ├─ electron-builder@25.1.8 (requires 25.1.8)\n           │  ├─ dev @codecast/electron@workspace (requires ^25.0.0)\n           │  └─ optional peer @platform/desktop@platform/packages/desktop (requires >=24)\n           │     └─ @codecast/electron@workspace (requires file:../../platform/packages/desktop)\n           └─ electron-builder-squirrel-windows@25.1.8 (requires 25.1.8)\n              └─ peer app-builder-lib@25.1.8 (requires 25.1.8)\n                 └─ *circular",
+      "advisories": [
+        {
+          "id": 1120654,
+          "url": "https://github.com/advisories/GHSA-ph9p-34f9-6g65",
+          "title": "tmp has Path Traversal via unsanitized prefix/postfix that enables directory escape",
+          "severity": "high",
+          "vulnerable_versions": "<0.2.6"
+        }
+      ],
+      "determination": {
+        "versions": "see bun why tmp",
+        "modes": [
+          "build-only",
+          "dev-only"
+        ],
+        "symbol": "symlink temp dir",
+        "untrustedInput": "no",
+        "decision": "not-reachable",
+        "evidence": "dev tooling only",
+        "owner": "release owner",
+        "reviewBy": "2026-12-23"
+      },
+      "status": "not-reachable"
+    },
+    {
+      "name": "turbo",
+      "resolvedVersions": [
+        "2.9.6"
+      ],
+      "dependencyTree": "turbo@2.9.6\n  └─ dev codecast (requires ^2.3.0)",
+      "advisories": [
+        {
+          "id": 1119389,
+          "url": "https://github.com/advisories/GHSA-3qcw-2rhx-2726",
+          "title": "Turbo: Unexpected local code execution during Yarn Berry detection",
+          "severity": "low",
+          "vulnerable_versions": ">=1.1.0 <2.9.14"
+        },
+        {
+          "id": 1121861,
+          "url": "https://github.com/advisories/GHSA-hcf7-66rw-9f5r",
+          "title": "Turbo: Login callback CSRF/session fixation",
+          "severity": "moderate",
+          "vulnerable_versions": "<=2.9.13"
+        }
+      ],
+      "determination": {
+        "versions": "see bun why",
+        "modes": [
+          "dev-only"
+        ],
+        "symbol": "task runner",
+        "untrustedInput": "no",
+        "decision": "not-reachable",
+        "evidence": "repo task runner only",
+        "owner": "release owner",
+        "reviewBy": "2026-12-23"
+      },
+      "status": "not-reachable"
+    },
+    {
+      "name": "undici",
+      "resolvedVersions": [
+        "7.26.0",
+        "6.25.0"
+      ],
+      "dependencyTree": "undici@7.26.0\n  ├─ e2b@2.24.0 (requires ^7.25.0)\n  │  └─ codecast (requires ^2.24.0)\n  └─ optional @electron/get@5.1.0 (requires ^7.24.4)\n     └─ electron@44.3.0 (requires ^5.0.0)\n        ├─ dev @codecast/electron@workspace (requires ^44.3.0)\n        └─ peer @platform/desktop@platform/packages/desktop (requires >=28)\n           └─ @codecast/electron@workspace (requires file:../../platform/packages/desktop)\n\nundici@6.25.0\n  ├─ @expo/cli@54.0.24 (requires ^6.18.2)\n  │  └─ expo@54.0.34 (requires 54.0.24)\n  │     ├─ mobile@workspace (requires ~54.0.29)\n  │     ├─ peer @bacons/apple-targets@5.0.0 (requires >=52)\n  │     │  └─ mobile@workspace (requires 5.0.0)\n  │     ├─ optional peer @sentry/react-native@8.9.2 (requires >=49.0.0)\n  │     │  ├─ mobile@workspace (requires ^8.5.0)\n  │     │  ├─ optional peer @platform/analytics@platform/packages/analytics (requires ^8.5.0)\n  │     │  │  ├─ @codecast/convex@workspace (requires file:../../platform/packages/analytics)\n  │     │  │  │  ├─ @codecast/web@workspace (requires workspace:*)\n  │     │  │  │  │  └─ mobile@workspace (requires workspace:*)\n  │     │  │  │  │  \n  │     │  │  │  └─ mobile@workspace (requires workspace:*)\n  │     │  │  │  \n  │     │  │  ├─ @codecast/shared@workspace (requires file:../../platform/packages/analytics)\n  │     │  │  │  ├─ @codecast/cli@workspace (requires workspace:*)\n  │     │  │  │  ├─ @codecast/convex@workspace (requires workspace:*)\n  │     │  │  │  │  ├─ @codecast/web@workspace (requires workspace:*)\n  │     │  │  │  │  │  └─ mobile@workspace (requires workspace:*)\n  │     │  │  │  │  │  \n  │     │  │  │  │  └─ mobile@workspace (requires workspace:*)\n  │     │  │  │  │  \n  │     │  │  │  ├─ @codecast/web@workspace (requires workspace:*)\n  │     │  │  │  │  └─ mobile@workspace (requires workspace:*)\n  │     │  │  │  │  \n  │     │  │  │  └─ mobile@workspace (requires workspace:*)\n  │     │  │  │  \n  │     │  │  ├─ @codecast/web@workspace (requires file:../../platform/packages/analytics)\n  │     │  │  │  └─ mobile@workspace (requires workspace:*)\n  │     │  │  │",
+      "advisories": [
+        {
+          "id": 1130715,
+          "url": "https://github.com/advisories/GHSA-8xcm-r25x-g524",
+          "title": "undici vulnerable to downstream response desynchronization via retry interceptor",
+          "severity": "moderate",
+          "vulnerable_versions": ">=7.0.0 <7.29.0"
+        },
+        {
+          "id": 1130716,
+          "url": "https://github.com/advisories/GHSA-8xcm-r25x-g524",
+          "title": "undici vulnerable to downstream response desynchronization via retry interceptor",
+          "severity": "moderate",
+          "vulnerable_versions": "<6.28.0"
+        },
+        {
+          "id": 1130718,
+          "url": "https://github.com/advisories/GHSA-4cwx-7wf7-3272",
+          "title": "undici vulnerable to cross-user information disclosure and parse-time crash via degenerate private cache directives",
+          "severity": "high",
+          "vulnerable_versions": ">=7.0.0 <7.29.0"
+        },
+        {
+          "id": 1130726,
+          "url": "https://github.com/advisories/GHSA-m8rv-5g2x-5cg5",
+          "title": "undici vulnerable to CRLF Injection via blob-like body 'type' property",
+          "severity": "moderate",
+          "vulnerable_versions": ">=7.0.0 <7.29.0"
+        },
+        {
+          "id": 1130727,
+          "url": "https://github.com/advisories/GHSA-m8rv-5g2x-5cg5",
+          "title": "undici vulnerable to CRLF Injection via blob-like body 'type' property",
+          "severity": "moderate",
+          "vulnerable_versions": "<6.28.0"
+        },
+        {
+          "id": 1130729,
+          "url": "https://github.com/advisories/GHSA-jr45-8vmc-qm54",
+          "title": "undici vulnerable to cross-user information disclosure via whitespace around equals in Cache-Control directives",
+          "severity": "moderate",
+          "vulnerable_versions": ">=7.0.0 <7.29.0"
+        },
+        {
+          "id": 1130731,
+          "url": "https://github.com/advisories/GHSA-v3r7-h72x-cjcm",
+          "title": "undici vulnerable to cookie attribute injection via unsanitized domain and unparsed setCookie fields",
+          "severity": "moderate",
+          "vulnerable_versions": ">=7.0.0 <7.29.0"
+        },
+        {
+          "id": 1130732,
+          "url": "https://github.com/advisories/GHSA-v3r7-h72x-cjcm",
+          "title": "undici vulnerable to cookie attribute injection via unsanitized domain and unparsed setCookie fields",
+          "severity": "moderate",
+          "vulnerable_versions": "<6.28.0"
+        },
+        {
+          "id": 1121187,
+          "url": "https://github.com/advisories/GHSA-vmh5-mc38-953g",
+          "title": "undici vulnerable to TLS certificate validation bypass via dropped requestTls in SOCKS5 ProxyAgent",
+          "severity": "high",
+          "vulnerable_versions": ">=7.23.0 <7.28.0"
+        },
+        {
+          "id": 1121241,
+          "url": "https://github.com/advisories/GHSA-p88m-4jfj-68fv",
+          "title": "undici vulnerable to HTTP header injection via Set-Cookie percent-decoding",
+          "severity": "moderate",
+          "vulnerable_versions": ">=7.0.0 <7.28.0"
+        },
+        {
+          "id": 1121242,
+          "url": "https://github.com/advisories/GHSA-p88m-4jfj-68fv",
+          "title": "undici vulnerable to HTTP header injection via Set-Cookie percent-decoding",
+          "severity": "moderate",
+          "vulnerable_versions": "<6.27.0"
+        },
+        {
+          "id": 1121244,
+          "url": "https://github.com/advisories/GHSA-vxpw-j846-p89q",
+          "title": "undici WebSocket client vulnerable to denial of service via fragment count bypass",
+          "severity": "high",
+          "vulnerable_versions": ">=7.0.0 <7.28.0"
+        },
+        {
+          "id": 1121245,
+          "url": "https://github.com/advisories/GHSA-vxpw-j846-p89q",
+          "title": "undici WebSocket client vulnerable to denial of service via fragment count bypass",
+          "severity": "high",
+          "vulnerable_versions": "<6.27.0"
+        },
+        {
+          "id": 1121247,
+          "url": "https://github.com/advisories/GHSA-hm92-r4w5-c3mj",
+          "title": "undici vulnerable to cross-origin request routing via SOCKS5 proxy pool reuse",
+          "severity": "high",
+          "vulnerable_versions": ">=7.23.0 <7.28.0"
+        },
+        {
+          "id": 1121254,
+          "url": "https://github.com/advisories/GHSA-g8m3-5g58-fq7m",
+          "title": "undici vulnerable to Set-Cookie SameSite attribute downgrade via permissive substring matching",
+          "severity": "low",
+          "vulnerable_versions": ">=7.0.0 <7.28.0"
+        },
+        {
+          "id": 1121255,
+          "url": "https://github.com/advisories/GHSA-g8m3-5g58-fq7m",
+          "title": "undici vulnerable to Set-Cookie SameSite attribute downgrade via permissive substring matching",
+          "severity": "low",
+          "vulnerable_versions": "<6.27.0"
+        },
+        {
+          "id": 1121428,
+          "url": "https://github.com/advisories/GHSA-pr7r-676h-xcf6",
+          "title": "undici vulnerable to cross-user information disclosure via shared cache whitespace bypass",
+          "severity": "moderate",
+          "vulnerable_versions": ">=7.0.0 <7.28.0"
+        },
+        {
+          "id": 1137242,
+          "url": "https://github.com/advisories/GHSA-35p6-xmwp-9g52",
+          "title": "undici vulnerable to HTTP response queue poisoning via keep-alive socket reuse",
+          "severity": "low",
+          "vulnerable_versions": ">=7.0.0 <7.28.0"
+        },
+        {
+          "id": 1137243,
+          "url": "https://github.com/advisories/GHSA-35p6-xmwp-9g52",
+          "title": "undici vulnerable to HTTP response queue poisoning via keep-alive socket reuse",
+          "severity": "low",
+          "vulnerable_versions": "<6.27.0"
+        }
+      ],
+      "determination": {
+        "versions": "see bun why undici",
+        "modes": [
+          "dev-only",
+          "build-only"
+        ],
+        "symbol": "fetch client advisories",
+        "untrustedInput": "no",
+        "decision": "not-reachable",
+        "evidence": "Runtime fetch is bun's own in the CLI and Convex's runtime on the backend; undici resolves only under node based tooling (electron-builder, expo, vite plugins).",
+        "owner": "release owner",
+        "reviewBy": "2026-12-23"
+      },
+      "status": "not-reachable"
+    },
+    {
+      "name": "uuid",
+      "resolvedVersions": [
+        "11.1.0",
+        "8.3.2",
+        "10.0.0",
+        "7.0.3"
+      ],
+      "dependencyTree": "uuid@11.1.0\n  └─ mermaid@11.14.0 (requires ^11.1.0)\n     └─ @codecast/web@workspace (requires ^11.13.0)\n        └─ mobile@workspace (requires workspace:*)\n\nuuid@8.3.2\n  └─ @bacons/xcode@1.0.0-alpha.32 (requires ^8.3.2)\n     └─ @bacons/apple-targets@5.0.0 (requires 1.0.0-alpha.32)\n        └─ mobile@workspace (requires 5.0.0)\n\nuuid@10.0.0\n  └─ svix@1.90.0 (requires ^10.0.0)\n     └─ resend@6.12.2 (requires 1.90.0)\n        └─ @codecast/convex@workspace (requires ^6.6.0)\n           ├─ @codecast/web@workspace (requires workspace:*)\n           │  └─ mobile@workspace (requires workspace:*)\n           └─ mobile@workspace (requires workspace:*)\n\nuuid@7.0.3\n  └─ xcode@3.0.1 (requires ^7.0.3)\n     ├─ @expo/config-plugins@54.0.4 (requires ^3.0.1)\n     │  ├─ @expo/cli@54.0.24 (requires ~54.0.4)\n     │  │  └─ expo@54.0.34 (requires 54.0.24)\n     │  │     ├─ mobile@workspace (requires ~54.0.29)\n     │  │     ├─ peer @bacons/apple-targets@5.0.0 (requires >=52)\n     │  │     │  └─ mobile@workspace (requires 5.0.0)\n     │  │     ├─ optional peer @sentry/react-native@8.9.2 (requires >=49.0.0)\n     │  │     │  ├─ mobile@workspace (requires ^8.5.0)\n     │  │     │  ├─ optional peer @platform/analytics@platform/packages/analytics (requires ^8.5.0)\n     │  │     │  │  ├─ @codecast/convex@workspace (requires file:../../platform/packages/analytics)\n     │  │     │  │  │  ├─ @codecast/web@workspace (requires workspace:*)\n     │  │     │  │  │  │  └─ mobile@workspace (requires workspace:*)\n     │  │     │  │  │  └─ mobile@workspace (requires workspace:*)\n     │  │     │  │  ├─ @codecast/shared@workspace (requires file:../../platform/packages/analytics)\n     │  │     │  │  │  ├─ @codecast/cli@workspace (requires workspace:*)\n     │  │     │  │  │  ├─ @codecast/convex@workspace (requires workspace:*)\n     │  │     │  │  │  │  ├─ @codecast/web@workspace (requires workspace:*)\n     │  │     │  │  │  │  │  └─ mobile@workspace (requires workspace:*)\n     │  │     │  │  │  │  └─ mobile@workspace (requires workspace:*)\n     │  │     │  │  │  ├─ @codecast/web@workspace (requires workspace:*)",
+      "advisories": [
+        {
+          "id": 1119441,
+          "url": "https://github.com/advisories/GHSA-w5hq-g745-h8pq",
+          "title": "uuid: Missing buffer bounds check in v3/v5/v6 when buf is provided",
+          "severity": "moderate",
+          "vulnerable_versions": "<11.1.1"
+        }
+      ],
+      "determination": {
+        "versions": "see bun why uuid",
+        "modes": [
+          "dev-only"
+        ],
+        "symbol": "predictable v1 ids",
+        "untrustedInput": "no",
+        "decision": "not-reachable",
+        "evidence": "we use crypto.randomUUID / nanoid for identifiers; uuid resolves under tooling",
+        "owner": "release owner",
+        "reviewBy": "2026-12-23"
+      },
+      "status": "not-reachable"
+    },
+    {
+      "name": "vite",
+      "resolvedVersions": [
+        "6.4.2"
+      ],
+      "dependencyTree": "vite@6.4.2\n  ├─ peer @vitejs/plugin-react@4.7.0 (requires ^4.2.0 || ^5.0.0 || ^6.0.0 || ^7.0.0)\n  │  └─ dev @codecast/web@workspace (requires ^4.5.2)\n  │     └─ mobile@workspace (requires workspace:*)\n  │     \n  ├─ peer vite-plugin-pwa@1.3.0 (requires ^3.1.0 || ^4.0.0 || ^5.0.0 || ^6.0.0 || ^7.0.0 || ^8.0.0)\n  │  └─ dev @codecast/web@workspace (requires ^1.3.0)\n  │     └─ mobile@workspace (requires workspace:*)\n  │     \n  └─ dev @codecast/web@workspace (requires ^6.3.5)\n     └─ mobile@workspace (requires workspace:*)",
+      "advisories": [
+        {
+          "id": 1120784,
+          "url": "https://github.com/advisories/GHSA-v6wh-96g9-6wx3",
+          "title": "launch-editor: NTLMv2 hash disclosure via UNC path handling on Windows",
+          "severity": "moderate",
+          "vulnerable_versions": "<=6.4.2"
+        },
+        {
+          "id": 1123525,
+          "url": "https://github.com/advisories/GHSA-fx2h-pf6j-xcff",
+          "title": "vite: `server.fs.deny` bypass on Windows alternate paths",
+          "severity": "high",
+          "vulnerable_versions": "<=6.4.2"
+        }
+      ],
+      "determination": {
+        "versions": "see bun why",
+        "modes": [
+          "dev-only"
+        ],
+        "symbol": "dev server file access / websocket advisories",
+        "untrustedInput": "indirect",
+        "decision": "accepted-risk",
+        "evidence": "dev server on a developer machine bound to localhost:3200; production is a static build served by Railway. Local exposure only; the browser sandbox note in plan 004 covers the same machine boundary.",
+        "owner": "release owner",
+        "reviewBy": "2026-12-23"
+      },
+      "status": "accepted-risk"
+    },
+    {
+      "name": "ws",
+      "resolvedVersions": [],
+      "dependencyTree": "(bun why failed)",
+      "advisories": [
+        {
+          "id": 1119108,
+          "url": "https://github.com/advisories/GHSA-58qx-3vcg-4xpx",
+          "title": "ws: Uninitialized memory disclosure",
+          "severity": "moderate",
+          "vulnerable_versions": ">=8.0.0 <8.20.1"
+        },
+        {
+          "id": 1123259,
+          "url": "https://github.com/advisories/GHSA-96hv-2xvq-fx4p",
+          "title": "ws: Memory exhaustion DoS from tiny fragments and data chunks",
+          "severity": "high",
+          "vulnerable_versions": ">=8.0.0 <8.21.0"
+        },
+        {
+          "id": 1123260,
+          "url": "https://github.com/advisories/GHSA-96hv-2xvq-fx4p",
+          "title": "ws: Memory exhaustion DoS from tiny fragments and data chunks",
+          "severity": "high",
+          "vulnerable_versions": ">=7.0.0 <7.5.11"
+        },
+        {
+          "id": 1123261,
+          "url": "https://github.com/advisories/GHSA-96hv-2xvq-fx4p",
+          "title": "ws: Memory exhaustion DoS from tiny fragments and data chunks",
+          "severity": "high",
+          "vulnerable_versions": ">=6.0.0 <6.2.4"
+        }
+      ],
+      "determination": {
+        "versions": "8.21.3 (packages/cli), 8.18.0 (nested under convex@1.36.1), 8.20.0 (@expo/cli, ink), 7.5.10 (metro, react-devtools-core), 6.2.3 (react-native)",
+        "modes": [
+          "runtime-cli",
+          "dev-only"
+        ],
+        "symbol": "receiver fragment handling (GHSA-96hv-2xvq-fx4p): memory exhaustion from tiny fragments on a server socket",
+        "untrustedInput": "yes",
+        "decision": "fixed",
+        "evidence": "The CLI's own ws (bridge host, loopback WebSocket server for the extension and CDP clients) is 8.21.3 in package.json and bun.lock; the resolved import is asserted by packages/cli/src/browser/bridge/wsVersion.test.ts. The nested 8.18.0 under convex is the Convex client's outbound socket to our own backend, a client role the advisory does not cover, and it is pinned exactly by convex; it moves when convex does. The 8.20.0/7.x/6.x copies are expo, metro, react-native and ink dev tooling, never in a shipped bundle. Pre-auth bounds on the bridge (origin allow list, 256 KiB hello cap, 4 concurrent handshakes, hello timeout) landed in 30a74b510.",
+        "owner": "release owner (jx7f70q)",
+        "reviewBy": "2026-12-23"
+      },
+      "status": "fixed"
+    }
+  ]
+}

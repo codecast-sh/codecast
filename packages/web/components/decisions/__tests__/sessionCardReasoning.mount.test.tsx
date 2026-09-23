@@ -73,16 +73,20 @@ function readingOrder(pane: HTMLElement) {
   return body;
 }
 
-test("an advisory card in a session view starts folded: the question and the default, no reasoning, one gesture to open", async () => {
+test("an advisory card in a session view starts folded to one badge: the question on its tooltip, no reasoning, one click to open", async () => {
   const { pane, unmount } = await mount(<SessionDecisionCard item={item(false)} stepper={null} />);
   const fold = pane.firstElementChild!;
   expect(fold.classList.contains("decision-card")).toBe(true);
   expect(fold.classList.contains("decision-fold")).toBe(true);
-  expect(fold.textContent).toContain("root seat");
-  expect(fold.textContent).toContain("proceeding with Wait");
+  const pill = fold.querySelector("button") as HTMLButtonElement;
+  expect(fold.querySelectorAll("button")).toHaveLength(1);
+  expect(pill.textContent).toContain("Asked for your steer");
+  expect(pill.title).toContain("root seat");
+  expect(pill.title).toContain("proceeding with Wait");
+  expect(fold.textContent).not.toContain("root seat");
   expect(pane.querySelector("[data-decision-context]")).toBeNull();
   expect(pane.querySelector("[data-option]")).toBeNull();
-  await act(() => { (fold.querySelector("button") as HTMLButtonElement).click(); });
+  await act(() => { pill.click(); });
   expect(pane.firstElementChild!.classList.contains("decision-doc")).toBe(true);
   const body = readingOrder(pane);
   expect(body.textContent).toContain("seats four workspaces and bills one turn each");

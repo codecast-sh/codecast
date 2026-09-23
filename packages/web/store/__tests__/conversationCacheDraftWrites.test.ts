@@ -1,3 +1,4 @@
+import "./fixtures/signedInPrincipal";
 import { indexedDB, IDBKeyRange } from "fake-indexeddb";
 import { expect, it } from "bun:test";
 import Dexie from "dexie";

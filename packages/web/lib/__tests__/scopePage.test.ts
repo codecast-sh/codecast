@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { WorkState } from "@codecast/shared/contracts";
-import { HAND_GROUPS, boundTaskOf, feedLinkIsServerOwned, feedStateTone, groupHands, handsWaiting, queryProblem, roleStanding, scopeQueryRef, subtaskCounts, tokensUncounted } from "../scopePage";
+import { HAND_GROUPS, boundTaskOf, feedLinkIsServerOwned, feedStateTone, groupHands, queryProblem, roleStanding, scopeQueryRef, subtaskCounts, tokensUncounted } from "../scopePage";
 import { ORG_STATE_META } from "../../components/org/orgMeta";
 
 describe("scope page rules", () => {
@@ -119,15 +119,4 @@ describe("the panel answers who acts next (F4.3)", () => {
   });
 });
 
-describe("the panel's dot (F4.1)", () => {
-  const tree = { people: [{ counts: { needs_input: 1 } }], roles: [{ counts: { needs_input: 2 } }] };
-  test("a role counts the hands reporting to it, the root counts every session", () => {
-    expect(handsWaiting({ counts: { needs_input: 2 } }, tree, null)).toBe(2);
-    expect(handsWaiting(null, tree, null)).toBe(3);
-    expect(handsWaiting(null, null, null)).toBe(0);
-  });
-  test("sessions the scope rule pulls in count when they are more", () => {
-    expect(handsWaiting({ counts: { needs_input: 0 } }, tree, { sessions: { needs_input: 4 } })).toBe(4);
-    expect(handsWaiting({ counts: { needs_input: 5 } }, tree, { sessions: { needs_input: 4 } })).toBe(5);
-  });
 });

@@ -10,7 +10,9 @@
 // and writes may park in that principal's outbox before any network round
 // trip. A token naming anyone else earns nothing until the server confirms it.
 
-export type AccessIdentity = { principalId: string; subject: string };
+import type { AccessIdentity } from "../accessIdentity";
+
+export type { AccessIdentity };
 
 // The subject this launch may act as before (or without) server verification.
 // Null until the persisted anchor is read, whenever the token names a

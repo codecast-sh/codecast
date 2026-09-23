@@ -1,3 +1,4 @@
+import { autonomyOn } from "@codecast/shared/contracts/roleAutonomy";
 import { useState } from "react";
 import { captureException } from "@sentry/react";
 import { Section } from "../identity/RoleScopeView";
@@ -50,7 +51,7 @@ export function TemplateSections({ roleId, canEdit }: { roleId: string; canEdit:
       )}
       <Section density="page" label="What it may do" name="template-authority">
         <ul className="space-y-0.5 px-2.5 pb-1.5 text-[12px] text-sol-text-muted">
-          <li>Trust <span className="text-sol-text">{instance.trust}</span>: {instance.trust === "understand" ? "reads and reports; does not act on its own inside codecast" : instance.trust === "decide" ? "may decide on its own" : "may direct work on its own"}</li>
+          <li>Starts work on its own: <span className="text-sol-text">{autonomyOn(instance.trust) ? "on" : "off"}</span>{autonomyOn(instance.trust) ? "" : "; it reads and recommends inside codecast"}</li>
           <li data-template-authority={authority.length}>Authority outside codecast: {authority.length ? authority.map((g) => `${g.kind} (${g.label}${g.limit?.usd_per_month !== undefined ? `, up to $${g.limit.usd_per_month} a month` : g.limit?.usd_per_day !== undefined ? `, up to $${g.limit.usd_per_day} a day` : g.limit?.per_day !== undefined ? `, up to ${g.limit.per_day} a day` : ""}${g.expires_at ? `, until ${new Date(g.expires_at).toISOString().slice(0, 10)}` : ""})`).join("; ") : "none granted"}</li>
         </ul>
       </Section>

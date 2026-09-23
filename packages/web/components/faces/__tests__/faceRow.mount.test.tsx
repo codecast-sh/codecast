@@ -246,9 +246,11 @@ describe("one circle, one attribute", () => {
     expect(h.q(".face-ask")).not.toBeNull();
     expect(h.q(`[data-face-id="${ANN}"]`)!.getAttribute("data-ask")).toBe("2");
     expect(h.circle(ANN).getAttribute("data-followed")).toBe("true");
-    expect(h.q(".people-face-joined")).toBeNull();
+    // The join is the ring and the card's words, never a label under the
+    // chin: the card in the band would cover it.
     await h.draw(bar(rowOf([entry(ANN, "Ann", { state: "joining" })])));
-    expect(h.q(".people-face-joined")!.textContent).toBe("joined");
+    expect(h.circle(ANN).getAttribute("data-state")).toBe("joining");
+    expect(h.q(".people-face-joined")).toBeNull();
     // In the bar the card carries the name: nothing hangs under the chin
     // that a card could stack on.
     expect(h.q(".face-name")).toBeNull();
@@ -379,11 +381,58 @@ describe("two densities, one row", () => {
     const row = rowOf([me(), entry(ANN, "Ann", { state: "live-with-me", tier: "linked" })], [link(ANN, "call")]);
     const h = await mount(<FloatingFaceRow row={row} viewerId={ME} bridge={bridge} />);
     expect(h.q(".face-row")!.getAttribute("data-density")).toBe("float");
-    expect(sizes[0]).toEqual(faceRowSize("float", 2, 1, false));
+    expect(sizes[0]).toEqual(faceRowSize("float", 2, 1));
     // Every circle is a hit region the window lifts click through for.
     expect(h.all("[data-face-hit]").length).toBe(2);
     await h.draw(bar(row));
     expect(h.q(".face-row")!.getAttribute("data-density")).toBe("bar");
+  });
+
+  test("the float's controls: a grip that moves the window, Open for a call, and a way to put it away, only while the pointer is in", async () => {
+    const drags: boolean[] = [];
+    const bridge = { setInteractive() {}, setContentSize() {}, setDragging: (on: boolean) => drags.push(on) };
+    const row = rowOf([me(), entry(ANN, "Ann", { state: "live-with-me", tier: "linked" })], [link(ANN, "call")]);
+    let closed = 0;
+    let opened = 0;
+    const chrome = { inCall: true, onExpand: () => opened++, onClose: () => closed++, closeWord: "Hide", closeTitle: "Hide the faces" };
+    // jsdom has no pointer capture; the grip's own calls are no-ops here.
+    const proto = dom.window.HTMLElement.prototype as any;
+    proto.setPointerCapture ??= () => {};
+    proto.releasePointerCapture ??= () => {};
+    proto.hasPointerCapture ??= () => false;
+    const Pointer = (dom.window as any).PointerEvent ?? dom.window.MouseEvent;
+    const h = await mount(<FloatingFaceRow row={row} viewerId={ME} bridge={bridge} chrome={chrome} />);
+    // Away from the pointer the window is only its faces: no card, no controls.
+    expect(h.q(".face-row-chrome")).toBeNull();
+    expect(h.q(".face-row-below")).toBeNull();
+    await act(async () => {
+      dom.window.document.dispatchEvent(new dom.window.MouseEvent("mousemove", { bubbles: true, clientX: 10, clientY: 10 }));
+    });
+    const bar = h.q(".face-row-chrome")!;
+    expect(bar).not.toBeNull();
+    // The controls are the footer of the one card under the row, which
+    // leads with a legend until a face is pointed at.
+    expect(bar.closest(".face-row-below")).not.toBeNull();
+    expect(h.q(".face-row-below .face-row-legend")).not.toBeNull();
+    expect(bar.getAttribute("data-chrome-hit")).not.toBeNull();
+    expect(h.all(".face-row-chrome .faces-btn-word").map((w) => w.textContent)).toEqual(["Move", "Open", "Hide"]);
+    // The grip: held, the window follows the cursor.
+    const grip = h.q('[data-chrome-btn="move"]')!;
+    await act(async () => {
+      grip.dispatchEvent(new Pointer("pointerdown", { bubbles: true, button: 0, pointerId: 1 }));
+    });
+    expect(drags).toEqual([true]);
+    await act(async () => {
+      grip.dispatchEvent(new Pointer("pointerup", { bubbles: true, button: 0, pointerId: 1 }));
+    });
+    expect(drags).toEqual([true, false]);
+    await h.click(h.q('[data-chrome-btn="open"]')!);
+    expect(opened).toBe(1);
+    await h.click(h.q('[data-chrome-btn="close"]')!);
+    expect(closed).toBe(1);
+    // No call: nothing to open, the grip and the way out stay.
+    await h.draw(<FloatingFaceRow row={rowOf([entry(ANN, "Ann")])} viewerId={ME} bridge={bridge} chrome={{ ...chrome, inCall: false, closeWord: "Close" }} />);
+    expect(h.all(".face-row-chrome .faces-btn-word").map((w) => w.textContent)).toEqual(["Move", "Close"]);
   });
 });
 
@@ -398,6 +447,7 @@ function actionsInto(log: Pressed[]) {
     snooze: on("snooze"),
     end: on("end"),
     mute: on("mute"),
+    camera: on("camera"),
     answer: on("answer"),
     decline: on("decline"),
     cancel: on("cancel"),
@@ -438,8 +488,8 @@ describe("the engagement card renders the model's card", () => {
     expect(el.getAttribute("data-card")).toBe("incoming");
     expect(el.getAttribute("data-density")).toBe("bar");
     expect(el.classList.contains("walkie-strip-rx")).toBe(true);
-    expect(h.q(".walkie-stage-badge")!.textContent).toBe("INCOMING");
-    expect(h.q(".walkie-strip-hint")!.textContent).toContain("Ann is talking to you");
+    expect(h.q(".walkie-stage-badge")).toBeNull();
+    expect(h.q(".walkie-stage")!.textContent).toBe("Ann is talking to you");
     expect(h.q(".walkie-key")).not.toBeNull();
     await h.click(h.q('[data-card-action="join"]')!);
     await h.click(h.q('[data-card-action="snooze"]')!);
@@ -468,21 +518,28 @@ describe("the engagement card renders the model's card", () => {
     const el = h.q(".engagement-card")!;
     expect(el.getAttribute("data-density")).toBe("float");
     expect(el.classList.contains("walkie-strip-tx")).toBe(true);
-    expect(h.q(".walkie-stage-badge")!.textContent).toBe("TALKING");
-    expect(h.q(".walkie-stage-with")!.textContent).toBe("with Ann");
-    expect(h.q(".engagement-card-hearing")!.textContent).toBe("Ann hears you");
+    expect(h.q(".walkie-stage-badge")!.textContent).toBe("Talking");
+    expect(h.q(".walkie-stage-with")!.textContent).toBe(" with Ann");
+    // The roster's fact rides the same line after the stage: one sentence,
+    // "Talking with Ann · Ann hears you", and no caption plate under it.
+    expect(h.q(".walkie-stage")!.textContent).toBe("Talking with Ann · Ann hears you");
+    expect(h.q(".walkie-strip-hint")).toBeNull();
     expect(h.q('[data-card-action="mute"]')).toBeNull();
     await h.click(h.q('[data-card-action="end"]')!);
     expect(log.map((p) => p.action)).toEqual(["end"]);
 
     // A huddle: no walkie words, the room's name, and a mute that toggles.
-    const huddle: FaceCard = { kind: "live", roomKey: ROOM, title: "Ann", end: true, mute: true, muted: true, words: null, hearing: null };
+    const huddle: FaceCard = { kind: "live", roomKey: ROOM, title: "Ann", end: true, mute: true, muted: true, camera: true, cameraOn: false, words: null, hearing: null };
     await h.draw(<EngagementCard card={huddle} density="float" actions={actionsInto(log)} />);
-    expect(h.q(".walkie-stage")).toBeNull();
+    expect(h.q(".walkie-stage-badge")).toBeNull();
     expect(h.q(".engagement-card-title")!.textContent).toBe("Ann");
     const mute = h.q('[data-card-action="mute"]')!;
-    expect(mute.textContent).toBe("Unmute");
-    expect(mute.getAttribute("aria-pressed")).toBe("true");
+    expect(mute.getAttribute("aria-label")).toBe("Unmute");
+    expect(mute.getAttribute("aria-pressed")).toBe("false");
+    // The camera switch beside it, off in this card.
+    expect(h.q('[data-card-action="camera"]')!.getAttribute("aria-pressed")).toBe("false");
+    await h.click(h.q('[data-card-action="camera"]')!);
+    expect(log.at(-1)).toMatchObject({ action: "camera", card: huddle });
     await h.click(mute);
     expect(log.at(-1)).toMatchObject({ action: "mute", card: huddle });
   });
@@ -493,7 +550,7 @@ describe("the engagement card renders the model's card", () => {
     const h = await mount(<EngagementCard card={card} density="bar" actions={actionsInto(log)} />);
     expect(h.q(".engagement-card")!.classList.contains("walkie-strip-joined")).toBe(true);
     expect(h.q('[role="status"]')!.textContent).toBe("Ann joined");
-    expect(h.q('[data-card-action="mute"]')!.textContent).toBe("Mute");
+    expect(h.q('[data-card-action="mute"]')!.getAttribute("aria-label")).toBe("Mute");
     await h.click(h.q('[data-card-action="end"]')!);
     expect(log[0]).toMatchObject({ action: "end", card });
   });
@@ -503,7 +560,7 @@ describe("the engagement card renders the model's card", () => {
     const card: FaceCard = { kind: "ring-in", roomKey: ROOM, from: ANN, name: "Ann", answer: true, decline: true };
     const h = await mount(<EngagementCard card={card} density="bar" actions={actionsInto(log)} />);
     expect(h.q(".engagement-card-title")!.textContent).toBe("Ann");
-    expect(h.q(".ring-card-line")!.textContent).toContain("Incoming huddle");
+    expect(h.q(".ring-card-line")!.textContent).toBe("Ann is calling");
     await h.click(h.q('[data-card-action="answer"]')!);
     await h.click(h.q('[data-card-action="decline"]')!);
     expect(log.map((p) => p.action)).toEqual(["answer", "decline"]);
@@ -513,7 +570,7 @@ describe("the engagement card renders the model's card", () => {
     const log: Pressed[] = [];
     const card: FaceCard = { kind: "ring-out", roomKey: ROOM, to: ANN, name: "Ann", cancel: true, status: "ringing" };
     const h = await mount(<EngagementCard card={card} density="bar" actions={actionsInto(log)} />);
-    expect(h.q(".ring-card-line")!.textContent).toContain("Ringing");
+    expect(h.q(".ring-card-line")!.textContent).toBe("Ringing Ann");
     await h.click(h.q('[data-card-action="cancel"]')!);
     expect(log[0]).toMatchObject({ action: "cancel", card });
   });
@@ -526,6 +583,8 @@ describe("the engagement card renders the model's card", () => {
         <EngagementCard card={card} density="bar" />
       </FaceRow>,
     );
-    expect(h.q(".face-row > .face-row-below > .engagement-card")).not.toBeNull();
+    expect(h.q(".face-row > .face-row-strip > .engagement-card")).not.toBeNull();
+    // Beside the faces, never under them: under a face is that face's card.
+    expect(h.q(".face-row-below")).toBeNull();
   });
 });

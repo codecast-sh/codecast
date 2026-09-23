@@ -52,10 +52,15 @@ const SCHED_ACCENT: Record<SchedAccent, string> = {
   paused: "border-l-sol-border",
   normal: "border-l-sol-amber/50",
 };
+// The box every child row's right-hand badge wears: a trigger's countdown, a
+// command "running", a claim "unverified". data-sv-wake-badge lets the compact
+// list fold it to plain text; "alert" marks the red states that keep color.
+export const WAKE_BADGE = "shrink-0 inline-flex items-center gap-1 justify-center min-w-[46px] px-1 py-0 rounded text-[9px] font-semibold tabular-nums border";
+export const RUNNING_BADGE_TONE = "bg-sol-green/10 text-sol-green border-sol-green/30";
 function schedBadgeTone(task: { status: string; run_at?: number }, now: number): string {
   if (task.status === "paused" || task.status === "completed") return "bg-sol-bg-alt text-sol-text-dim border-sol-border/50";
   if (task.status === "failed") return "bg-sol-red/10 text-sol-red border-sol-red/30";
-  if (task.status === "running") return "bg-sol-green/10 text-sol-green border-sol-green/30";
+  if (task.status === "running") return RUNNING_BADGE_TONE;
   // Stuck-due is the one badge state that earns red: the daemon should claim
   // due work within seconds, so minutes overdue means nothing is listening.
   if (isTaskOverdue(task, now)) return "bg-sol-red/10 text-sol-red border-sol-red/40 font-bold";
@@ -108,7 +113,10 @@ export function SchedHealthDot({ accent, task }: { accent: SchedAccent; task: { 
 export const SchedFireBadge = memo(function SchedFireBadge({ task, className = "" }: { task: TaskRow; className?: string }) {
   const now = useNowWhen((t) => taskStateLabel(task, t), 30_000);
   const badge = (
-    <span className={`${className} shrink-0 inline-flex items-center justify-center min-w-[46px] px-1 py-0 rounded text-[9px] font-semibold tabular-nums border transition-colors ${schedBadgeTone(task, now)}`}>
+    <span
+      data-sv-wake-badge={task.status === "failed" || isTaskOverdue(task, now) ? "alert" : ""}
+      className={`${className} ${WAKE_BADGE} transition-colors ${schedBadgeTone(task, now)}`}
+    >
       {taskStateLabel(task, now)}
     </span>
   );

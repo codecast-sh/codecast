@@ -32,7 +32,7 @@ function fixtures(extra: Record<string, any[]> = {}) {
       { _id: "m1", user_id: ME, team_id: TEAM, role: "admin", joined_at: 1 },
       { _id: "m2", user_id: MATE, team_id: TEAM, role: "member", joined_at: 1 },
     ],
-    teams: [{ _id: TEAM, name: "Acme" }],
+    teams: [{ _id: TEAM, name: "Acme", features: { chat: true, calls: true } }],
     counters: [],
     org_roles: [],
     org_role_history: [],
@@ -82,6 +82,8 @@ function fixtures(extra: Record<string, any[]> = {}) {
     user_presence: [],
     project_updates: [],
     commits: [],
+    transcripts: [],
+    chat_channel_members: [],
     artifacts: [],
     conversation_images: [],
     ...extra,
@@ -172,8 +174,113 @@ describe("org.analysisInputs", () => {
       routines: [{ short_id: "tr-886", title: "Daily growth run", schedule: "recurring", every_ms: D }],
       state_line: "Daily market growth run is complete", state_status: "dormant",
       first_message: "Steer our top of funnel to get true breadth across all market segments.",
-      projects: [{ short_id: "pr-2", title: "Billing", tasks_filed: 1, bound: false, by_path_only: false }, { short_id: "pr-1", title: "Growth", tasks_filed: 0, bound: false, by_path_only: true }], tasks_filed: 1, private: false,
+      // Its work share by project: the task it filed under Billing; Growth, its path's project, has nothing counted and leaves the row.
+      projects: [{ short_id: "pr-2", title: "Billing", tasks: 1, commits_30d: 0, messages_7d: 0, bound: false }], tasks_filed: 1, private: false,
     })]);
+  });
+
+  // Union, 2026-09-22: the growth seat got a four project area because its row
+  // listed four projects with one task in each. The counts say which dominates.
+  test("a long running row's projects carry its work share: tasks touched, commits of the window and messages of the week that name each, biggest first", async () => {
+    const D = 24 * H;
+    const base = { user_id: ME, team_id: TEAM, status: "active", agent_type: "claude", is_private: false, updated_at: NOW - H, created_at: 1, message_count: 10 };
+    const db = fixtures({
+      conversations: [{ ...base, _id: "conversations_old", short_id: "jxold", title: "Growth engine", started_at: NOW - 34 * D, project_path: "/repo/billing", active_task_id: "tasks_b1" }],
+      tasks: [
+        { _id: "tasks_b1", user_id: ME, team_id: TEAM, workspace: WS, project_id: Q, short_id: "ct-11", title: "Invoice retries", task_type: "task", status: "in_progress", priority: "low", created_from_conversation: "conversations_old", created_at: 1, updated_at: NOW - H },
+        { _id: "tasks_g1", user_id: ME, team_id: TEAM, workspace: WS, project_id: P, short_id: "ct-12", title: "Cold email daily run", task_type: "task", status: "open", priority: "low", created_at: 1, updated_at: NOW - H },
+      ],
+      commits: [
+        // Names Growth by its short id; another through the task it carries; a one word title ("Growth") is never named by its word alone; one outside the window; one that names nothing.
+        { _id: "commits_1", conversation_id: "conversations_old", sha: "a1", message: "pr-1: warm the list", author_name: "Me", author_email: "me@x.ai", timestamp: NOW - 2 * D, files_changed: 1, insertions: 1, deletions: 0 },
+        { _id: "commits_2", conversation_id: "conversations_old", sha: "a2", message: "ct-12 retries", author_name: "Me", author_email: "me@x.ai", timestamp: NOW - 3 * D, files_changed: 1, insertions: 1, deletions: 0, task_ids: ["tasks_g1"] },
+        { _id: "commits_3", conversation_id: "conversations_old", sha: "a3", message: "growth: bring users in faster", author_name: "Me", author_email: "me@x.ai", timestamp: NOW - 4 * D, files_changed: 1, insertions: 1, deletions: 0 },
+        { _id: "commits_4", conversation_id: "conversations_old", sha: "a4", message: "pr-1: old", author_name: "Me", author_email: "me@x.ai", timestamp: NOW - 40 * D, files_changed: 1, insertions: 1, deletions: 0 },
+        { _id: "commits_5", conversation_id: "conversations_old", sha: "a5", message: "tidy", author_name: "Me", author_email: "me@x.ai", timestamp: NOW - D, files_changed: 1, insertions: 1, deletions: 0 },
+      ],
+      messages: [
+        { _id: "messages_1", conversation_id: "conversations_old", role: "user", content: "Bring users in through the growth loop", timestamp: NOW - H },
+        { _id: "messages_2", conversation_id: "conversations_old", role: "assistant", content: "Working pr-1 now; the billing task waits.", timestamp: NOW - H },
+        // A tool result naming the project is not a word anyone wrote.
+        { _id: "messages_3", conversation_id: "conversations_old", role: "tool", content: "pr-1 pr-1 pr-1", timestamp: NOW - H },
+      ],
+    });
+    const r = await computeAnalysisInputs(ctxOf(db), ME as any, TEAM, NOW);
+    expect(r.sessions.long_running.rows[0].projects).toEqual([
+      { short_id: "pr-1", title: "Growth", tasks: 0, commits_30d: 2, messages_7d: 1, bound: false },
+      { short_id: "pr-2", title: "Billing", tasks: 1, commits_30d: 0, messages_7d: 0, bound: true },
+    ]);
+    // Growth is not on the org slice's list (never filed there, not bound); the session's own read put it there.
+    const org = await computeAnalysisOrg(ctxOf(db), ME as any, TEAM, NOW, (await computeAnalysisWork(ctxOf(db), ME as any, TEAM)).handoff);
+    expect(org.sessions.long_running.rows[0].projects.map((p: any) => p.short_id)).toEqual(["pr-2"]);
+  });
+
+  // The reviewer never read a word a person wrote (org-eval, 2026-09-23).
+  test("said: the team's ended calls with their summaries, and the chat threads where a person decided, asked or named a role or project; what the caller may not read is not there", async () => {
+    const D = 24 * H;
+    const PRIV = "chat_channels_priv";
+    const db = fixtures({
+      org_roles: [{ _id: "org_roles_g", user_id: ME, team_id: TEAM, short_id: "or-1", handle: "growth", name: "Growth lead", status: "active", scope: { project_ids: [], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, created_at: 1, updated_at: 1 }],
+      transcripts: [
+        { _id: "transcripts_1", room_key: "channel:chat_channels_1", team_id: TEAM, started_by: MATE, status: "ended", started_at: NOW - 2 * D, ended_at: NOW - 2 * D + H, title: "Pricing huddle", participants: [{ id: ME, name: "Me" }, { id: MATE, name: "Mate" }], summary: "Agreed to raise the price.", action_items: ["Me: update the page"], routes: [], last_seq: 3 },
+        // A private channel's huddle the caller was not in: not readable.
+        { _id: "transcripts_2", room_key: `channel:${PRIV}`, team_id: TEAM, started_by: MATE, status: "ended", started_at: NOW - 3 * D, ended_at: NOW - 3 * D + H, title: "Private", participants: [{ id: MATE, name: "Mate" }], summary: "secret", action_items: [], routes: [], last_seq: 3 },
+        // A recording its creator never shared, a live call, one outside the window, and one with nothing said.
+        { _id: "transcripts_3", room_key: "rec:01ARZ3NDEKTSV4RRFFQ69G5FAV", team_id: TEAM, started_by: ME, status: "ended", started_at: NOW - D, title: "My memo", summary: "mine", routes: [], last_seq: 1 },
+        { _id: "transcripts_4", room_key: "channel:chat_channels_1", team_id: TEAM, started_by: ME, status: "live", started_at: NOW - H, participants: [{ id: ME, name: "Me" }], routes: [], last_seq: 1 },
+        { _id: "transcripts_5", room_key: "channel:chat_channels_1", team_id: TEAM, started_by: ME, status: "ended", started_at: NOW - 40 * D, participants: [{ id: ME, name: "Me" }], summary: "old", routes: [], last_seq: 1 },
+        // A huddle that ended before a word was spoken or written.
+        { _id: "transcripts_6", room_key: "channel:chat_channels_1", team_key: TEAM, team_id: TEAM, started_by: ME, status: "ended", started_at: NOW - D, participants: [], routes: [], last_seq: 0 },
+      ],
+      chat_channels: [
+        { _id: "chat_channels_1", team_id: TEAM, name: "general", kind: "public", created_by: ME, created_at: 1, updated_at: 1 },
+        { _id: PRIV, team_id: TEAM, name: "leads", kind: "private", created_by: MATE, created_at: 1, updated_at: 1 },
+        { _id: "chat_channels_dm", team_id: TEAM, name: "me-mate", kind: "dm", created_by: ME, created_at: 1, updated_at: 1 },
+      ],
+      chat_channel_members: [{ _id: "ccm1", channel_id: PRIV, user_id: MATE, added_by: MATE, added_at: 1 }, { _id: "ccm2", channel_id: "chat_channels_dm", user_id: ME, added_by: ME, added_at: 1 }],
+      chat_messages: [
+        // A decision with an ask in reply, and an agent's reply that is context, not a signal.
+        { _id: "cm_root1", team_id: TEAM, channel_id: "chat_channels_1", user_id: ME, content: "We decided to drop the old funnel.", created_at: NOW - 5 * D },
+        { _id: "cm_r1a", team_id: TEAM, channel_id: "chat_channels_1", thread_root_id: "cm_root1", user_id: MATE, content: "Can you own the migration?", created_at: NOW - 5 * D + H },
+        { _id: "cm_r1b", team_id: TEAM, channel_id: "chat_channels_1", thread_root_id: "cm_root1", user_id: MATE, author_kind: "agent", content: "Decided: I will do it.", created_at: NOW - 5 * D + 2 * H },
+        { _id: "cm_r1c", team_id: TEAM, channel_id: "chat_channels_1", thread_root_id: "cm_root1", user_id: MATE, content: "ok", created_at: NOW - 5 * D + 3 * H },
+        // Names a role and a project, no decision, no ask.
+        { _id: "cm_root2", team_id: TEAM, channel_id: "chat_channels_1", user_id: MATE, content: "@growth is on Growth this week", created_at: NOW - 4 * D },
+        // Small talk: not for the reviewer.
+        { _id: "cm_root3", team_id: TEAM, channel_id: "chat_channels_1", user_id: MATE, content: "lunch", created_at: NOW - 3 * D },
+        // An agent's own line decides nothing.
+        { _id: "cm_root4", team_id: TEAM, channel_id: "chat_channels_1", user_id: ME, author_kind: "agent", content: "We decided to ship.", created_at: NOW - 2 * D },
+        // A private channel the caller is not in, and a direct message: never.
+        { _id: "cm_priv", team_id: TEAM, channel_id: PRIV, user_id: MATE, content: "We decided to fire everyone?", created_at: NOW - D },
+        { _id: "cm_dm", team_id: TEAM, channel_id: "chat_channels_dm", user_id: MATE, content: "Can you decide?", created_at: NOW - D },
+      ],
+    });
+    const r = await computeAnalysisInputs(ctxOf(db), ME as any, TEAM, NOW);
+    expect(r.channels.map((c: any) => c.name)).toEqual(["general", "me-mate"]);
+    expect(r.said.calls).toEqual([{ title: "Pricing huddle", started_at: NOW - 2 * D, ended_at: NOW - 2 * D + H, participants: ["Me", "Mate"], summary: "Agreed to raise the price.", action_items: ["Me: update the page"] }]);
+    expect(r.said.chat).toEqual([
+      { channel: "#general", at: NOW - 4 * D, by: "Mate", line: "@growth is on Growth this week", why: ["named"], replies: [] },
+      { channel: "#general", at: NOW - 5 * D, by: "Me", line: "We decided to drop the old funnel.", why: ["decided", "asked"], replies: [{ at: NOW - 5 * D + H, by: "Mate", line: "Can you own the migration?" }] },
+    ]);
+    expect(r.said.truncated).toBe(false);
+    // A personal workspace reads no team chat and no calls.
+    const mine = await computeAnalysisInputs(ctxOf(db), ME as any, undefined, NOW);
+    expect(mine.said).toEqual({ calls: [], chat: [], truncated: false });
+  });
+
+  test("said stops at its byte budget, newest threads first, and says so", async () => {
+    const many = (n: number, f: (i: number) => any) => Array.from({ length: n }, (_, i) => f(i));
+    // One channel's read (the cap) at the line cap is under the budget; four are not.
+    const db = fixtures({
+      chat_channels: many(4, (c) => ({ _id: `chat_channels_${c}`, team_id: TEAM, name: `room${c}`, kind: "public", created_by: ME, created_at: 1, updated_at: 1 })),
+      chat_messages: many(4 * ANALYSIS_CAPS.messages_per_channel, (i) => ({ _id: `cm_${i}`, team_id: TEAM, channel_id: `chat_channels_${i % 4}`, user_id: ME, content: `We decided to ${"x".repeat(ANALYSIS_CAPS.said_line_chars * 4)} ${i}`, created_at: NOW - i * H })),
+    });
+    const r = await computeAnalysisInputs(ctxOf(db), ME as any, TEAM, NOW);
+    expect(r.said.truncated).toBe(true);
+    expect(r.said.chat.length).toBeGreaterThan(0);
+    expect(r.said.chat.length).toBeLessThan(4 * ANALYSIS_CAPS.messages_per_channel);
+    expect(r.said.chat[0].at).toBe(NOW);
+    expect(JSON.stringify(r.said).length).toBeLessThanOrEqual(ANALYSIS_CAPS.said_bytes + 200);
   });
 
   // Union, 2026-09-20: ranked by helpers alone, the list held the largest finished

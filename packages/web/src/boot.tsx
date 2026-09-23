@@ -151,6 +151,9 @@ idle(() => {
   // The decision queue opens on every Questions-card click — it must open
   // instantly, so it warms with the hot set even in dev.
   void import("@/app/questions/page");
+  // Ctrl+N paints the compose backdrop at once and the composer only when its
+  // lazy module arrives, so a cold module reads as a blur that hangs.
+  void import("@/components/ComposeView");
   // Then every other shell route (prod only — in dev this would make Vite
   // transform the whole app at boot). Wait until the window is hidden or has
   // been open for a minute so startup and the first interaction stay clear.

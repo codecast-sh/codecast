@@ -8,6 +8,8 @@ const dom = new JSDOM("<!doctype html>", { url: "http://pending-input.test" });
 Object.assign(globalThis, { window: dom.window, document: dom.window.document, localStorage: dom.window.localStorage, indexedDB, IDBKeyRange });
 Dexie.dependencies.indexedDB = indexedDB;
 Dexie.dependencies.IDBKeyRange = IDBKeyRange;
+const { installSignedInPrincipal } = await import("./signedInPrincipal");
+installSignedInPrincipal("test-owner");
 const cache = await import("../../idbCache");
 const { useInboxStore, hydrateMergeValue } = await import("../../inboxStore");
 const { readPendingMessageJournal } = await import("../../pendingMessageJournal");

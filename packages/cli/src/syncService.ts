@@ -370,6 +370,8 @@ export interface CreateConversationParams {
   // conversation isn't resolvable yet, so the server never treats the row as
   // a human-started session (teammate start notifications).
   isSubagent?: boolean;
+  // The trigger this transcript is a spawned run of (taskScheduler.triggerRunTaskId).
+  agentTaskId?: string;
   // Agent-team stamps from a teammate's JSONL (see parser.extractTeamInfo).
   agentTeamName?: string;
   agentName?: string;
@@ -1037,6 +1039,7 @@ export class SyncService {
           worktree_status: gitInfo?.worktreeName ? "active" : undefined,
           subagent_description: params.subagentDescription,
           is_subagent: params.isSubagent || undefined,
+          agent_task_id: params.agentTaskId,
           agent_team_name: params.agentTeamName,
           agent_name: params.agentName,
           // The transcript this conversation is created from lives on THIS
@@ -1552,12 +1555,13 @@ export class SyncService {
     } catch {}
   }
 
-  async updateProjectPath(sessionId: string, projectPath: string, gitRoot?: string): Promise<{ updated: boolean } | null> {
+  async updateProjectPath(sessionId: string, projectPath: string, gitRoot?: string, gitRemoteUrl?: string): Promise<{ updated: boolean } | null> {
     try {
       const result = await this.mutate("conversations:updateProjectPath" as any, {
         session_id: sessionId,
         project_path: projectPath,
         git_root: gitRoot,
+        git_remote_url: gitRemoteUrl,
         api_token: this.apiToken,
       });
       return result as { updated: boolean } | null;
@@ -1571,12 +1575,13 @@ export class SyncService {
   // silently stranded conversations on their spawn-time stub id, so every
   // session-bound `cast` write from the agent failed "Conversation not found"
   // while message sync (keyed by conversation _id) looked perfectly healthy.
-  async updateSessionId(conversationId: string, sessionId: string, projectPath?: string, gitRoot?: string): Promise<void> {
+  async updateSessionId(conversationId: string, sessionId: string, projectPath?: string, gitRoot?: string, gitRemoteUrl?: string): Promise<void> {
     await this.mutate("conversations:updateSessionId" as any, {
       conversation_id: conversationId,
       session_id: sessionId,
       project_path: projectPath,
       git_root: gitRoot,
+      git_remote_url: gitRemoteUrl,
       api_token: this.apiToken,
     });
   }

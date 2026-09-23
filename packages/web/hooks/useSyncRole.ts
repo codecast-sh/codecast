@@ -1,3 +1,4 @@
+import { useAuthPrincipal } from "../lib/authPrincipal";
 import { useInboxStore } from "../store/inboxStore";
 import { startSyncReplication } from "../store/syncReplication";
 
@@ -13,7 +14,9 @@ export function useIsSyncHost(): boolean {
 }
 
 /** Mount cross-window replication for this window. `eligible` = this window
- *  mounts the full shell and may be elected host. */
+ *  mounts the full shell and may be elected host. Replication is scoped to
+ *  the account the window acts for and restarts when that changes. */
 export function useSyncReplication(eligible: boolean): void {
-  useWatchEffect(() => startSyncReplication({ eligible }), [eligible]);
+  const { principalId } = useAuthPrincipal();
+  useWatchEffect(() => startSyncReplication({ eligible, principalId }), [eligible, principalId]);
 }

@@ -498,10 +498,11 @@
   border-color: var(--sol-border);
 }
 
-/* SOMEBODY STEPPED IN. Four seconds, and the only moment this surface is
- * violet: violet is what a call is everywhere else in the product, and the
- * sentence on the card at this instant is that a burst just became one. */
-.walkie-strip-joined {
+/* A CALL. Violet is what a call is everywhere else in the product: the seats
+ * on the row wear it, so the card under them does too. `joined` is the four
+ * seconds after somebody stepped in, `call` is the line held open after. */
+.walkie-strip-joined,
+.walkie-strip-call {
   border-color: color-mix(in srgb, var(--sol-violet) 60%, transparent);
   box-shadow:
     0 10px 30px rgb(0 0 0 / 0.28),
@@ -646,8 +647,11 @@
 .walkie-stage-opening   { --stage-tone: color-mix(in srgb, var(--walkie-tx) 60%, var(--sol-text-dim)); }
 .walkie-stage-recording,
 .walkie-stage-live,
-.walkie-stage-both,
-.walkie-stage-locked    { --stage-tone: var(--walkie-tx); }
+.walkie-stage-both      { --stage-tone: var(--walkie-tx); }
+/* ON THE LINE is a call, and a call is violet: the seats on the row above
+   the card wear it, so the word under them does too. Warm here said "your
+   voice is going out" on a line where nothing may be said for minutes. */
+.walkie-stage-locked    { --stage-tone: var(--sol-violet); }
 .walkie-stage-incoming  { --stage-tone: var(--walkie-rx); }
 .walkie-stage-dropped,
 .walkie-stage-mic-off   { --stage-tone: var(--sol-red); }

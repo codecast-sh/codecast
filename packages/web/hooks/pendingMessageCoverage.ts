@@ -1,4 +1,4 @@
-type PendingRow = { _id: string; _clientId?: string; _isLocalQueue?: boolean; timestamp?: number };
+type PendingRow = { _id: string; _clientId?: string; _isLocalQueue?: boolean; _isSettled?: boolean; timestamp?: number };
 type Coverage = { access: string; coverage?: { kind: string; commandIds: string[] }; delivery?: { settled: string[]; failed: string[] } };
 
 export async function reconcilePendingMessageCoverage(options: {
@@ -12,7 +12,7 @@ export async function reconcilePendingMessageCoverage(options: {
     Math.max(...b[1].map(m => m.timestamp ?? 0), 0) - Math.max(...a[1].map(m => m.timestamp ?? 0), 0));
   for (const [conversationId, rows] of entries) {
     if (!/^[a-z0-9]{32}$/.test(conversationId)) continue;
-    const ids = [...new Set(rows.filter(row => !row._isLocalQueue).map(row => row._clientId ?? row._id))]
+    const ids = [...new Set(rows.filter(row => !row._isLocalQueue && !row._isSettled).map(row => row._clientId ?? row._id))]
       .filter(id => id.length > 0 && id.length <= 160 && id === id.trim());
     for (let offset = 0; offset < ids.length; offset += 64) {
       if (!options.isCurrent()) return;

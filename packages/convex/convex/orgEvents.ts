@@ -17,10 +17,12 @@
 // and every write path, so it must not import any of them back.
 
 import { DEFAULT_ROLE_CAPS } from "@codecast/shared/contracts/orgCapacity";
+import { autonomyOn } from "@codecast/shared/contracts/roleAutonomy";
 import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { conversationActsForRole, roleOfConversation } from "./lib/actor";
 import { isWholeWorkspace } from "./lib/orgScope";
+import { workspaceHasFeature } from "./lib/teamFeatureGuard";
 
 export type WakeKind = "immediate" | "fold" | "passive";
 export type WakeRef = { table: string; id: string; short_id?: string };
@@ -73,6 +75,13 @@ export function capsFor(role: { caps?: { hands_per_day: number; wakes_per_day: n
 
 export function trustOf(role: { trust?: string | null }): "understand" | "decide" | "direct" {
   return (role.trust as any) ?? DEFAULT_TRUST;
+}
+
+// The switch (org-staffing.md S23.1): does the role start work on its own? The
+// stored stage maps through the shared helper, so this file, the gates and
+// every surface read one answer.
+export function roleStartsOnItsOwn(role: { trust?: string | null }): boolean {
+  return autonomyOn(trustOf(role));
 }
 
 export function coalesceOf(role: { coalesce_ms?: number | null }): number {
@@ -134,6 +143,11 @@ export async function enqueueRoleEvent(
 ): Promise<Id<"role_wake_outbox"> | null> {
   const role = await ctx.db.get(roleId);
   if (!role || role.status === "retired" || !role.anchor_id) return null;
+  // The org feature is per team, default off (teams.features.org). A role in
+  // a workspace with it off is not woken: nothing shows it, so nothing should
+  // run under its name either. Turning the feature on resumes wakes from the
+  // next event; nothing queued in between is replayed.
+  if (!(await workspaceHasFeature(ctx, { team_id: role.team_id, user_id: role.scope_user_id }, "org"))) return null;
   const actor = opts.actorConversationId ? await ctx.db.get(opts.actorConversationId) : null;
   if (await actorIsExcluded(ctx, String(roleId), actor)) return null;
 

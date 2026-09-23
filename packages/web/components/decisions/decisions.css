@@ -132,13 +132,6 @@
   .decision-sheet-grid[data-split="true"] > .decision-sheet-options { position: sticky; top: 0; }
 }
 
-/* The fold: the question in the list card's serif, two lines at most. */
-.decision-fold .decision-question {
-  font-size: 0.95rem;
-  line-height: 1.35;
-  text-wrap: pretty;
-}
-
 /* The compact card (the queue, a task, a gate) reads like the document page,
    at list density: the question set in the same serif, the context in the
    same body type, the options as full width rows. One decision, one look,

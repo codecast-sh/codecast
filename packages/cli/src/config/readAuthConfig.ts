@@ -8,7 +8,8 @@
 import * as fs from "node:fs";
 import type { Config } from "./types.js";
 import { sharedConfigFile } from "./sharedConfig.js";
-import { decryptToken, isEncryptedToken, TokenDecryptError } from "../tokenEncryption.js";
+import { bearerFromStored } from "../bearerToken.js";
+import { TokenDecryptError } from "../tokenEncryption.js";
 
 // Re-exported so the stable-context fast path can reach the reader and the
 // directory it reads from in one dynamic import (fastPath.ts).
@@ -26,9 +27,9 @@ export function readAuthConfig(
   } catch {
     return null;
   }
-  if (config.auth_token && isEncryptedToken(config.auth_token)) {
+  if (config.auth_token) {
     try {
-      config.auth_token = decryptToken(config.auth_token);
+      config.auth_token = bearerFromStored(config.auth_token);
     } catch (err) {
       if (err instanceof TokenDecryptError) {
         opts.onUnreadable?.(err.message);
