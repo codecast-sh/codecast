@@ -89,6 +89,14 @@ test("indicators count offscreen replies and jump to the nearest in transcript o
     card.getBoundingClientRect = () => bounds(100, 160); scroll.append(card);
     await act(async () => { scroll.dispatchEvent(new dom.window.Event("scroll")); await new Promise(resolve => setTimeout(resolve, 40)); });
     expect(host.textContent).toBe("2 replies above3 replies below");
+    // A card still showing in the marker's strip of rail hides the marker
+    // rather than sitting under it; the count returns once it scrolls out.
+    card.getBoundingClientRect = () => bounds(-30, 20);
+    await act(async () => { scroll.dispatchEvent(new dom.window.Event("scroll")); await new Promise(resolve => setTimeout(resolve, 40)); });
+    expect(host.textContent).toBe("3 replies below");
+    card.getBoundingClientRect = () => bounds(-60, 0);
+    await act(async () => { scroll.dispatchEvent(new dom.window.Event("scroll")); await new Promise(resolve => setTimeout(resolve, 40)); });
+    expect(host.textContent).toBe("3 replies above3 replies below");
     await render("c2");
     expect(host.textContent).toBe("");
     await render("c1");

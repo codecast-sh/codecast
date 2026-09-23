@@ -11,6 +11,8 @@ import "./ReviewNavigation.css";
 
 type ScrollVirtualizer = Virtualizer<HTMLDivElement, Element>;
 
+/** Height of the strip at each edge of the viewport where an edge marker sits. */
+const EDGE_STRIP = 40;
 
 type Edge = { count: number; comment: PendingComment; position: number };
 type Edges = { above?: Edge; below?: Edge; left?: number };
@@ -37,8 +39,13 @@ export function ReviewScrollIndicators({ conversationId, scrollRef, messageIds, 
       const regionLeft = region ? region.getBoundingClientRect().left - viewport.left : 12;
       next.left = Math.max(12, rail ? rail.getBoundingClientRect().left - viewport.left
         : regionLeft >= 208 ? regionLeft - Math.min(240, regionLeft - 40) - 36 : regionLeft);
-      const top = viewport.top + topInset + 36;
-      const bottom = viewport.bottom - 36;
+      // A card counts as off screen only once it has fully left the viewport,
+      // and the marker stands in for it only while nothing else occupies the
+      // strip of rail it would sit on: a card still showing there is the
+      // better cue, and the marker must never cover one.
+      const top = viewport.top + topInset;
+      const bottom = viewport.bottom;
+      const blocked = { above: false, below: false };
       const cards = new Map(Array.from(scroll.querySelectorAll<HTMLElement>("[data-review-comment]"), (el) => [el.dataset.reviewComment, el]));
       for (const comment of comments) {
         const card = cards.get(comment.id);
@@ -48,6 +55,8 @@ export function ReviewScrollIndicators({ conversationId, scrollRef, messageIds, 
         const start = rect?.top ?? (row ? viewport.top + row.start - scroll.scrollTop : undefined);
         const end = rect?.bottom ?? (row ? viewport.top + row.end - scroll.scrollTop : undefined);
         if (start === undefined || end === undefined) continue;
+        if (rect && rect.top < top + EDGE_STRIP && rect.bottom > top) blocked.above = true;
+        if (rect && rect.top < bottom && rect.bottom > bottom - EDGE_STRIP) blocked.below = true;
         const direction = end <= top ? "above" : start >= bottom ? "below" : null;
         if (!direction) continue;
         const position = direction === "above" ? end : start;
@@ -64,6 +73,8 @@ export function ReviewScrollIndicators({ conversationId, scrollRef, messageIds, 
           }
         }
       }
+      if (blocked.above) delete next.above;
+      if (blocked.below) delete next.below;
     }
     setEdges((previous) => previous.left === next.left && (["above", "below"] as const).every((direction) => {
       return previous[direction]?.count === next[direction]?.count && previous[direction]?.comment === next[direction]?.comment;
@@ -104,7 +115,7 @@ export function ReviewScrollIndicators({ conversationId, scrollRef, messageIds, 
       type="button"
       className="cc-review-edge"
       data-direction={direction}
-      style={{ left: edges.left, ...(direction === "above" ? { top: topInset + 8 } : {}) }}
+      style={{ left: edges.left, ...(direction === "above" ? { top: topInset + 6 } : {}) }}
       aria-label={`${label}. Jump to nearest reply ${direction}`}
       title={`Jump to nearest reply ${direction}`}
       onClick={() => composer.jumpToComment?.(edge.comment)}
