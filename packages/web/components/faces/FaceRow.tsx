@@ -262,12 +262,16 @@ function FaceSeat({
         onPointerCancel={onPointerUp}
       >
         <CircleFace videoRef={videoRef} track={track} image={entry.image} name={entry.name} diameter={diameter} />
-        {entry.muted && (
-          <span className="face-mute">
-            <MicOff className="h-3 w-3" />
-          </span>
-        )}
       </button>
+      {/* The marks on the person sit on the circle's EDGE, outside its clip:
+          the presence badge, the mute badge, the unread count, the ask. The
+          mute badge inside the circle (the call circles' own spot) was cut
+          to a D by the circle's clip, and its icon with it. */}
+      {entry.muted && (
+        <span className="face-mute" aria-label="muted">
+          <MicOff className="h-3 w-3" />
+        </span>
+      )}
       {presence && <PresenceBadge state={presence} size={density === "bar" ? "sm" : "md"} className="face-pres" />}
       {entry.unread > 0 && (
         <span className="face-unread" aria-label={`${entry.unread} unread`}>
@@ -275,12 +279,9 @@ function FaceSeat({
         </span>
       )}
       {entry.ask > 0 && <span className="face-ask" aria-label={`${entry.ask} waiting on you`} />}
-      {/* "hey he joined", under the face it happened to, for the seconds the model says so. */}
-      {entry.state === "joining" && (
-        <span className="people-face-joined" role="status">
-          joined
-        </span>
-      )}
+      {/* No "joined" label under the chin: a face is `joining` only in my own
+          room, where the card under the row is the joined notice and says so
+          in words; a label there sat under the card that covered it. */}
       {/* The name under the chin, the floating circles' own hover. In the
           bar the card carries the name, so nothing hangs under a face there
           that a card could stack on. */}

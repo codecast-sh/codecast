@@ -1,37 +1,22 @@
 import { useCallsAvailable } from "../lib/teamFeatures";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useMemo } from "react";
 import { toast } from "sonner";
-import { UserRound, Filter, Link2, Headphones, MessageSquare, ChevronRight, ArrowRight, Maximize2, PictureInPicture2 } from "lucide-react";
+import { UserRound, Filter, Link2, Headphones, Maximize2, PictureInPicture2 } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { useSyncCollection } from "../hooks/useSyncCollection";
-import { useCoarseNow } from "../hooks/useCoarseNow";
-import { useOpenSession } from "../hooks/useOpenSession";
-import { useMissingSessionRow } from "../hooks/useMissingSessionRow";
 import { useFaceRow } from "../hooks/useFaceRow";
-import { cleanTitle } from "../lib/conversationProcessor";
 import { copyToClipboard, shareOrigin } from "../lib/utils";
 import { POP_OUT_PEOPLE_TITLE, canPopOutCall, useFacesFloating } from "../lib/desktop";
 import { focusExistingHuddle } from "../lib/calls/huddleWindow";
 import { popOutCall } from "../lib/calls/popOutCall";
 import { openCallStage } from "../lib/calls/callStage";
 import { ContextMenu, useContextMenu, CtxItem, CtxHeader } from "./ui/context-menu";
-import {
-  PRESENCE_META,
-  localTimeLine,
-  memberDisplayName,
-  presenceLine,
-  teammateWhereabouts,
-} from "./presence/memberPresence";
-import { MemberFace } from "./presence/MemberFace";
-import { useMemberActivity } from "./presence/useMemberActivity";
-import { useMemberHuddle } from "./presence/useMemberHuddle";
+import { memberDisplayName } from "./presence/memberPresence";
 import { popOutPeople } from "./people/popOutPeople";
 import { FaceRow } from "./faces/FaceRow";
 import { EngagementCard } from "./faces/EngagementCard";
-import { useOpenDm } from "../hooks/useChatSync";
-import { ErrorBoundary } from "./ErrorBoundary";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 
@@ -104,10 +89,6 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
   // a mute that moves no face hands back the same row and this bar sleeps.
   const row = useFaceRow();
   const floating = useFacesFloating();
-  // Opens (or creates, local-first) THIS member's DM room. A bare
-  // router.push("/chat") landed on the chat page's fallback: the busiest
-  // room, i.e. somebody else's DM.
-  const openDm = useOpenDm();
   const ctxMenu = useContextMenu<{ id: string; username?: string | null; displayName: string }>();
 
   // The header's slice of the row: me and the linked faces first (the model
@@ -198,6 +179,21 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
       >
         <EngagementCard card={row.card} density="bar" />
       </FaceRow>
+      {/* The faces that did not fit, counted right after the ones that did:
+          the count belongs to the roster, not to the controls after it. On a
+          team of 23 it sat past the huddle and the pop out buttons, two
+          controls away from the people it counts. */}
+      {hidden > 0 && (
+        <ShortcutTooltip label={`${hidden} more team members`}>
+          <button
+            onClick={() => router.push("/team/activity?filter=team")}
+            data-overflow
+            className="ml-1 flex h-8 w-8 items-center justify-center rounded-full border border-sol-border/60 bg-sol-bg-highlight text-xs text-sol-text-muted transition-colors hover:border-sol-border"
+          >
+            +{hidden}
+          </button>
+        </ShortcutTooltip>
+      )}
       {/* THE DOOR TO THE STAGE. The card under the row carries the two
           controls a call needs mid-work; the full stage (video, screen share,
           transcript) opens only when asked. On the desktop the call already
@@ -245,17 +241,6 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
           <PictureInPicture2 className="h-3.5 w-3.5" />
         </button>
       </ShortcutTooltip>
-      {hidden > 0 && (
-        <ShortcutTooltip label={`${hidden} more team members`}>
-          <button
-            onClick={() => router.push("/team/activity?filter=team")}
-            data-overflow
-            className="flex h-8 w-8 items-center justify-center rounded-full border-2 border-sol-border/50 bg-sol-bg-highlight text-xs text-sol-text-muted transition-colors hover:border-sol-border"
-          >
-            +{hidden}
-          </button>
-        </ShortcutTooltip>
-      )}
       {selectedMember && (
         <ShortcutTooltip label="Clear filter">
           <button
@@ -295,12 +280,3 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
     </div>
   );
 }
-
-// The rich hover card. Mounted only while its face (or the card itself) is
-// hovered: the bar owns one hover scope with a close-grace timer, so crossing
-// from the face into the card never drops it. Session data is read only here
-// (transient subscription), never by the always-mounted bar. The walkie is
-// not on this card: the face itself offers Talk, Ring and Message under a
-// click, and a second key on a card that appears after a dwell was the
-// founder's complaint.
-// Exported for the _membercard visual harness only.
