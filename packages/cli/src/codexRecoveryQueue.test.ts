@@ -2,6 +2,33 @@ import { describe, expect, test } from "bun:test";
 import { CodexRecoveryQueue } from "./codexRecoveryQueue.js";
 
 describe("CodexRecoveryQueue", () => {
+  test("delivery loads only its requested conversation and releases the demand after recovery", async () => {
+    const demands: string[][] = [];
+    const queue = new CodexRecoveryQueue(async (requested) => { demands.push([...requested]); }, () => {}, () => {});
+    queue.request(true);
+    await queue.wait();
+    await queue.demand("saved-idle-thread");
+    queue.request();
+    await queue.wait();
+    expect(demands).toEqual([[], ["saved-idle-thread"], []]);
+  });
+
+  test("delivery arriving during a sweep gets another pass before it returns", async () => {
+    let finish!: () => void;
+    const old = new Promise<void>((resolve) => { finish = resolve; });
+    const demands: string[][] = [];
+    const queue = new CodexRecoveryQueue(async (requested) => {
+      demands.push([...requested]);
+      if (demands.length === 1) await old;
+    }, () => {}, () => {});
+    queue.request();
+    await Promise.resolve();
+    const delivery = queue.demand("requested-later");
+    finish();
+    await delivery;
+    expect(demands).toEqual([[], ["requested-later"]]);
+  });
+
   test("reruns recovery for a new process after the old pass fails", async () => {
     let rejectOld!: (error: Error) => void;
     const oldPass = new Promise<void>((_resolve, reject) => { rejectOld = reject; });
