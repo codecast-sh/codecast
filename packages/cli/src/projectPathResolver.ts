@@ -224,6 +224,10 @@ export interface ResumeCwdInput {
   cwdOverride?: string | null;
   /** The cwd recorded in the session transcript — authoritative for where it ran. */
   recordedCwd?: string | null;
+  /** The conversation's recorded git root, when the caller holds it. Seeds the
+   *  convention resolver with the REPO ROOT (its basename is the repo name, not
+   *  a leaf subdir) and the in-repo subpath is put back afterwards. */
+  recordedRoot?: string | null;
   /** Convention/learned/user-mapping resolver (the daemon's resolveLocalRepo). */
   resolveLocalRepo: (p: string) => string | null;
   /** Remap via the conversation's git remote (resolveLocalProjectPath wrapper). Optional. */
@@ -237,7 +241,8 @@ export interface ResumeCwdInput {
 //   1. an explicit override that exists locally (remote-move worktree)
 //   2. the recorded transcript cwd, if it exists locally (same machine — the
 //      common case for every local resume)
-//   3. the convention/learned/user-mapping resolver (forks, renamed checkouts)
+//   3. the convention/learned/user-mapping resolver (forks, renamed checkouts),
+//      seeded with the recorded repo root when the caller knows it
 //   4. a git-remote remap to a sibling checkout
 //
 // Returns null when none resolve. Callers MUST NOT fall back to $HOME: doing so
@@ -266,8 +271,17 @@ export async function resolveResumeCwd(input: ResumeCwdInput): Promise<string | 
   const recorded = isResumableCwd(input.recordedCwd) ? input.recordedCwd.trim() : null;
   if (recorded) {
     if (exists(recorded)) return recorded;
-    const viaLocal = input.resolveLocalRepo(recorded);
-    if (viaLocal && exists(viaLocal)) return viaLocal;
+    // Same placement as start_session: resolve the repo root by convention,
+    // then re-append the subpath (falling back to the root when the subpath is
+    // absent locally — the agent can cd from there).
+    const seed = conventionSeed(recorded, input.recordedRoot);
+    const viaLocal = input.resolveLocalRepo(seed);
+    if (viaLocal) {
+      const subpath = seed !== recorded ? recorded.slice(seed.length) : "";
+      const full = subpath ? path.join(viaLocal, subpath) : viaLocal;
+      if (exists(full)) return full;
+      if (exists(viaLocal)) return viaLocal;
+    }
   }
 
   if (input.remapViaRemote) {

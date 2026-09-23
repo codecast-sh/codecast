@@ -23,7 +23,6 @@ import {
   isFencedPendingMessage,
   legacyConversationAcceptsDaemonWork,
 } from "./executionBindings";
-import { DEVICE_ONLINE_MS } from "./deviceRouting";
 import { requestRemoteWake } from "./cloud";
 import { isConversationSafetyBlocked, type ConversationSafetyState } from "./conversationSafety";
 import { enqueueRoleEvent } from "./orgEvents";
@@ -179,11 +178,6 @@ export function canDaemonSeePendingMessage(
   },
   userId: Id<"users">,
   deviceId: string,
-  // DPM-02: set only when the caller has PROVEN (via resolveOfflineOwnerTakeover)
-  // that the conversation's owning device is offline and this claimant is a
-  // registered local device. Without that proof the device gate fails closed on
-  // any owner mismatch, exactly as before.
-  allowOfflineOwnerTakeover?: boolean
 ): boolean {
   if (isConversationSafetyBlocked(conversation)) return false;
   // Absence is the only legacy marker. Quiescing and fenced conversations are
@@ -205,49 +199,13 @@ export function canDaemonSeePendingMessage(
   // the owner's daemon. (For a self-send these are the same user.)
   if (pendingMessageOwnerId(message, conversation) !== userId.toString()) return false;
   if (message.status !== "pending") return false;
-  return !conversation.owner_device_id
-    || conversation.owner_device_id === deviceId
-    || allowOfflineOwnerTakeover === true;
-}
-
-async function getDeviceRow(
-  ctx: { db: any },
-  userId: Id<"users">,
-  deviceId: string
-): Promise<any | null> {
-  return await ctx.db
-    .query("devices")
-    .withIndex("by_user_device", (q: any) =>
-      q.eq("user_id", userId).eq("device_id", deviceId)
-    )
-    .first();
-}
-
-// DPM-02: may `claimantDeviceId` take over delivery for a conversation owned by
-// `ownerDeviceId`? Only when the owner device is OFFLINE (dead laptop, or the
-// same machine after a machine-key rotation minted a new device id — the old id
-// never heartbeats again) and the claimant is a REGISTERED, NON-REMOTE device of
-// the same user. Remote boxes only ever serve explicitly-moved sessions, and an
-// unregistered claimant proves nothing — both fail closed. A missing OWNER row
-// counts as offline: a device that never registered cannot be delivering.
-export async function resolveOfflineOwnerTakeover(
-  ctx: { db: any },
-  userId: Id<"users">,
-  claimantDeviceId: string,
-  ownerDeviceId: string | undefined,
-  now: number
-): Promise<boolean> {
-  if (!ownerDeviceId || ownerDeviceId === claimantDeviceId) return false;
-  const claimant = await getDeviceRow(ctx, userId, claimantDeviceId);
-  if (!claimant || claimant.is_remote) return false;
-  const owner = await getDeviceRow(ctx, userId, ownerDeviceId);
-  // A remote owner that is offline is a cloud host that put itself to sleep,
-  // not a dead laptop: its worktree and transcript are on its disk, and the
-  // wake stamp (requestRemoteWake) boots it. Taking the message over would run
-  // the session on a machine that has none of that.
-  if (owner?.is_remote) return false;
-  const ownerOnline = !!owner && now - owner.last_seen < DEVICE_ONLINE_MS;
-  return !ownerOnline;
+  // DPM-02: the owning device is the ONLY device that delivers, however long it
+  // has been offline. Delivery to another machine happens when a person moves
+  // the conversation (reassignToDevice / moveToRemote restamp owner_device_id,
+  // so the target owns the row before it acts), never by a daemon adopting it:
+  // an adopter without the checkout runs the session in its $HOME. An unowned
+  // conversation is first-claim among the owner user's local daemons.
+  return !conversation.owner_device_id || conversation.owner_device_id === deviceId;
 }
 
 export async function claimPendingMessageForDaemon(
@@ -255,22 +213,18 @@ export async function claimPendingMessageForDaemon(
   messageId: Id<"pending_messages">,
   userId: Id<"users">,
   deviceId: string,
-  now: number = Date.now(),
   targetConversationId?: Id<"conversations">,
 ): Promise<any | null> {
   const message = await ctx.db.get(messageId);
   if (!message) return null;
   const conversation = await ctx.db.get(message.conversation_id);
   if (!conversation) return null;
-  const takeover = conversation.owner_device_id && conversation.owner_device_id !== deviceId
-    ? await resolveOfflineOwnerTakeover(ctx, userId, deviceId, conversation.owner_device_id, now)
-    : false;
-  if (!canDaemonSeePendingMessage(message, conversation, userId, deviceId, takeover)) return null;
+  if (!canDaemonSeePendingMessage(message, conversation, userId, deviceId)) return null;
   if (targetConversationId && targetConversationId !== message.conversation_id) {
     const target = await ctx.db.get(targetConversationId);
     if (!target || target.user_id !== userId || isConversationSafetyBlocked(target)) return null;
   }
-  if (!conversation.owner_device_id || takeover) {
+  if (!conversation.owner_device_id) {
     await ctx.db.patch(message.conversation_id, { owner_device_id: deviceId });
   }
   return message;
@@ -1368,7 +1322,6 @@ export async function collectDeliverableForOwner(
   ctx: { db: any },
   ownerUserId: Id<"users">,
   deviceId: string,
-  now: number = Date.now()
 ): Promise<any[]> {
   // Bounded scans, oldest first. Unbounded collects made this query's cost track
   // the pending BACKLOG, so the exact moment delivery fell behind (backend
@@ -1392,21 +1345,10 @@ export async function collectDeliverableForOwner(
       .take(DELIVERABLE_SCAN_CAP),
   ]);
 
-  // DPM-02: device rows are read LAZILY, only when a candidate's conversation is
-  // owned by a different device. In the common case (no mismatch-owned rows) the
-  // reactive query therefore takes no dependency on the devices table and does
-  // not refire on every fleet heartbeat; while a mismatch-owned pending row
-  // exists, refiring as device liveness changes is exactly what re-evaluates the
-  // takeover.
-  const takeoverCache = new Map<string, boolean>();
-  const mayTakeOver = async (ownerDeviceId: string): Promise<boolean> => {
-    const cached = takeoverCache.get(ownerDeviceId);
-    if (cached !== undefined) return cached;
-    const result = await resolveOfflineOwnerTakeover(ctx, ownerUserId, deviceId, ownerDeviceId, now);
-    takeoverCache.set(ownerDeviceId, result);
-    return result;
-  };
-
+  // DPM-02: this query reads pending rows and their conversations only. Owner
+  // mismatch is decided from the conversation row alone (canDaemonSeePendingMessage),
+  // so the subscription takes no dependency on the devices table and never
+  // refires on fleet heartbeats.
   const owned = [];
   const seen = new Set<string>();
   for (const message of [...byOwner, ...bySender]) {
@@ -1415,10 +1357,7 @@ export async function collectDeliverableForOwner(
     seen.add(key);
     const conversation = await ctx.db.get(message.conversation_id);
     if (!conversation) continue;
-    const takeover = conversation.owner_device_id && conversation.owner_device_id !== deviceId
-      ? await mayTakeOver(conversation.owner_device_id)
-      : false;
-    if (canDaemonSeePendingMessage(message, conversation, ownerUserId, deviceId, takeover)) {
+    if (canDaemonSeePendingMessage(message, conversation, ownerUserId, deviceId)) {
       // Stamped here so delivery can refuse a leftover Codex app-server thread
       // after an in-place switch. The conversation row is already loaded.
       owned.push({ ...message, conversation_agent_type: conversation.agent_type ?? null });
@@ -1453,7 +1392,7 @@ export const claimPendingMessageForDelivery = mutation({
     if (!authUserId) {
       throw new Error("Authentication failed: invalid token or session");
     }
-    return await claimPendingMessageForDaemon(ctx, args.message_id, authUserId, args.device_id, Date.now(), args.conversation_id);
+    return await claimPendingMessageForDaemon(ctx, args.message_id, authUserId, args.device_id, args.conversation_id);
   },
 });
 

@@ -6,6 +6,7 @@ import { waitFor } from "./test-helpers/messagingHarness.js";
 
 const source = readFileSync(new URL("./daemon.ts", import.meta.url), "utf8");
 const resumeSource = functionBlock(source, "autoResumeSession").text;
+const ownedSource = functionBlock(source, "ownedByOtherDevice").text.replace("export ", "");
 const ownerSource = functionBlock(source, "resumeOwnerVerdict").text.replace("export ", "");
 const switchSource = blockAt(source, source.indexOf('      case "switch_account": {')).text;
 type Resume = (id: string, content: string, cache: object, cwd?: string, conversation?: string, agent?: string, opts?: object) => Promise<boolean>;
@@ -78,6 +79,7 @@ function harness() {
     maintainCodexUsageSnapshot: async () => {},
   };
   const code = new Bun.Transpiler({ loader: "ts" }).transformSync(`
+    ${ownedSource}
     ${ownerSource}
     ${resumeSource}
     async function switchAccount(parsed) {

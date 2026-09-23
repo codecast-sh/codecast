@@ -418,7 +418,7 @@ describe("settled recipient recovery end to end", () => {
     expect(await healAndNotifyStuckMessages(ctx as any, now)).toMatchObject({ revived: 0, waiting: 1 });
     await db.patch("msBob", { agent_status_updated_at: now - 300000 });
     expect(await healAndNotifyStuckMessages(ctx as any, now)).toMatchObject({ revived: 1, waiting: 0 });
-    expect(await claimPendingMessageForDaemon(ctx as any, msg._id, "uBob" as any, "devBob", now))
+    expect(await claimPendingMessageForDaemon(ctx as any, msg._id, "uBob" as any, "devBob"))
       .toMatchObject({ content: msg.content, status: "pending", retry_count: 0 });
     await markPendingDelivered(ctx as any, msg);
     expect(await healAndNotifyStuckMessages(ctx as any, now)).toMatchObject({ revived: 0 });
@@ -431,7 +431,7 @@ describe("settled recipient recovery end to end", () => {
     await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "The release is ready" });
     const msg = tables.pending_messages[0];
     const originalContent = msg.content;
-    await claimPendingMessageForDaemon(ctx as any, msg._id, "uBob" as any, "devBob", now);
+    await claimPendingMessageForDaemon(ctx as any, msg._id, "uBob" as any, "devBob");
     await updatePendingMessageStatusForDaemon(ctx as any, msg._id, "uBob" as any, "devBob", { status: "injected" });
     await db.patch(msg._id, { created_at: now - 6 * 60 * 60_000, retry_count: 6 });
     await db.patch("msBob", { agent_status: agentStatus });
@@ -440,7 +440,7 @@ describe("settled recipient recovery end to end", () => {
     expect(await healAndNotifyStuckMessages(ctx as any, now)).toMatchObject({ revived: 1, waiting: 0 });
     const deliverable = await collectDeliverableForOwner(ctx as any, "uBob" as any, "devBob");
     expect(deliverable.map(row => row._id)).toEqual([msg._id]);
-    expect(await claimPendingMessageForDaemon(ctx as any, msg._id, "uBob" as any, "devBob", now)).toMatchObject({ content: originalContent, status: "pending", retry_count: 0 });
+    expect(await claimPendingMessageForDaemon(ctx as any, msg._id, "uBob" as any, "devBob")).toMatchObject({ content: originalContent, status: "pending", retry_count: 0 });
     await markPendingDelivered(ctx as any, await db.get(msg._id) as any);
     expect(await healAndNotifyStuckMessages(ctx as any, now)).toMatchObject({ revived: 0 });
     expect((await db.get(msg._id))?.status).toBe("delivered");
