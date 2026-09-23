@@ -15,11 +15,16 @@ import "./faceActions.css";
 
 export type FaceAction = "talk" | "ring" | "message";
 
+/** A context aware Ring: "Join huddle" when they are in one, "Knock" when
+ *  the room is locked (components/presence/useMemberHuddle). */
+export type HuddleGesture = { label: string; title: string; waiting: boolean; go: () => void };
+
 export function FaceActions({
   ptt,
   blocked,
   roomKey,
   ringIds,
+  huddle,
   onMessage,
   show = ["talk", "ring", "message"],
   size = "md",
@@ -31,6 +36,8 @@ export function FaceActions({
   roomKey: string;
   /** Who a Ring rings — the other person in a DM, everyone in a group. */
   ringIds: string[];
+  /** Present: the Ring button wears this label and gesture instead of a cold ring. */
+  huddle?: HuddleGesture;
   /** Absent: no Message button (the chat header is already the conversation). */
   onMessage?: () => void;
   show?: FaceAction[];
@@ -52,7 +59,7 @@ export function FaceActions({
               ? blocked
               : talking
                 ? "Stop talking"
-                : "Talk to them now — they see your face and hear you; click again to stop"
+                : "Talk to them now: they see your face and hear you; click again to stop"
           }
           {...talkToggleProps(ptt)}
         >
@@ -64,16 +71,17 @@ export function FaceActions({
         <button
           type="button"
           className="face-action face-action-ring"
-          disabled={!!ringBlocked || ringIds.length === 0}
-          title={ringBlocked ?? "Ring them and start a huddle — a real call, both ways"}
+          disabled={huddle ? huddle.waiting : !!ringBlocked || ringIds.length === 0}
+          title={huddle ? huddle.title : (ringBlocked ?? "Ring them and start a huddle, a real call both ways")}
           onClick={(e) => {
             e.preventDefault();
             e.stopPropagation();
-            void startHuddle({ roomKey, toUserIds: ringIds });
+            if (huddle) huddle.go();
+            else void startHuddle({ roomKey, toUserIds: ringIds });
           }}
         >
           <Headphones className="face-action-icon" />
-          <span className="face-action-word">Ring</span>
+          <span className="face-action-word">{huddle ? huddle.label : "Ring"}</span>
         </button>
       )}
       {show.includes("message") && onMessage && (

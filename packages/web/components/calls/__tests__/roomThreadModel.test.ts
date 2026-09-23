@@ -155,8 +155,10 @@ describe("buildPassages", () => {
     expect(p.endsWith("…")).toBe(true);
     expect(p.startsWith("Bob: word word")).toBe(true);
     expect(p).not.toContain("Ada Lovelace:");
-    // Short content is untouched and uses first names.
-    expect(buildPassages([seg(0, "Ada Lovelace", "hi all", 0)])[0].preview).toBe("Ada: hi all");
+    // Short content is untouched. One speaker: the words alone, the head
+    // already names them; two speakers: first names before the words.
+    expect(buildPassages([seg(0, "Ada Lovelace", "hi all", 0)])[0].preview).toBe("hi all");
+    expect(buildPassages([seg(0, "Ada Lovelace", "hi all", 0), seg(1, "Bob", "hey", 1000)])[0].preview).toBe("Ada: hi all · Bob: hey");
   });
 
   test("word count ignores blank and repeated whitespace", () => {

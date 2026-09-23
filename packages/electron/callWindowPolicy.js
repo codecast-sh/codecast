@@ -1,9 +1,10 @@
-// The call window: where a call goes when the window holding it closes, and
-// what kind of window each of its three sizes is.
+// The voice window: what kind of window each of its shapes is, where each
+// shape is remembered, and where a call goes when the window holding it
+// closes.
 //
 // Policy only, so it can be tested without an Electron app: main.js feeds it
 // facts and does what it says. The same split as notificationRouter.js, and for
-// the same reason — this decides the fate of a live call, and getting it wrong
+// the same reason: this decides the fate of a live call, and getting it wrong
 // is silent.
 //
 // A call lives in exactly one window, and it moves by being JOINED somewhere
@@ -14,54 +15,49 @@
 
 /**
  * The shapes the voice window takes. One window, because `transparent` and
- * `frame` are decided when a BrowserWindow is constructed — so the window is
+ * `frame` are decided when a BrowserWindow is constructed, so the window is
  * born see-through and frameless, and the shapes are what it paints inside
- * that glass, not seven windows.
+ * that glass.
  *
- * The call's four:
- *   panel     the stage: the huddle full bleed, a card the person can resize.
- *   circles   everybody, as a row of face circles over the work.
- *   speaker   one circle, whoever is talking.
- *   tiny      the same one circle at the size of a menu bar icon — the
- *             smallest thing that is still recognizably a person.
+ *   float   the face row: presence, a burst, a ring and a call as the same
+ *           faces in different states, with the one control card under
+ *           them. Always on top, on every desktop, click through except
+ *           over a face or the card, sized to its contents, and anchored to
+ *           ONE remembered corner it grows away from. A ring becoming a
+ *           burst becoming a call is this shape changing what it draws, and
+ *           the window does not move.
+ *   panel   the stage: the huddle full bleed, a card the person can resize,
+ *           opened only on an explicit expand.
+ *   wall    the buddy list, a card the person resizes, pinned above other
+ *           apps if they say so.
+ *   idle    nothing to show: the window is hidden and waits.
  *
- * And the five the ring, the walkie and the idle team add, which is what makes
- * a burst becoming a call a RESIZE of the window that already holds the
- * microphone — and answering a ring the same:
- *   ring      somebody is calling: the caller's face and Join, pinned over
- *             every other window at the top-right of the display the person
- *             is looking at, revealed without taking the keyboard.
- *   walkie    the burst strip, tucked in the bottom-right corner of the screen.
- *   wall      the buddy list — the team as a wall of faces, with status and
- *             every way to reach somebody — a card the person resizes, pinned
- *             above other apps if they say so.
- *   faces     the idle team as photo circles, at the call circles' own spot.
- *   idle      nothing to show: the window is hidden and waits.
- *
- * The circle family (circles, speaker, tiny, faces) floats, lets the mouse
- * through and cannot be dragged by an edge. The strip floats and takes every
- * click, because it is exactly the size of its card. The stage and the wall
- * are ordinary windows; the wall alone floats when its pin is set.
+ * The names the shapes had before they collapsed (ring, walkie, circles,
+ * speaker, tiny, faces) are still accepted from a renderer and all land on
+ * float: an older web build meets the float, not a click through window it
+ * cannot use, and never the stage it did not ask for.
  */
-const CALL_SIZES = ["panel", "circles", "speaker", "tiny"];
-const CALL_WINDOW_SIZES = [...CALL_SIZES, "ring", "walkie", "wall", "faces", "idle"];
+const CALL_SIZES = ["panel", "float"];
+const CALL_WINDOW_SIZES = [...CALL_SIZES, "wall", "idle"];
+const LEGACY_FLOAT_SIZES = ["ring", "walkie", "circles", "speaker", "tiny", "faces"];
 
 /**
  * A size name from a renderer, or "panel" if it is anything else.
  *
  * The renderer sends this over IPC, so it is untrusted input on a channel that
- * changes what the window IS — an unrecognized name must land on the ordinary
- * window, never on a click-through always-on-top one.
+ * changes what the window IS. An unrecognized name must land on the ordinary
+ * window, never on a click through always on top one.
  */
 function normalizeCallWindowSize(size) {
+  if (LEGACY_FLOAT_SIZES.includes(size)) return "float";
   return CALL_WINDOW_SIZES.includes(size) ? size : "panel";
 }
 
 /**
- * Is this one of the CALL's sizes — the ones a person chooses for a huddle and
- * the shell remembers per machine? The walkie and the idle team have shapes of
- * their own that are decided by what is happening, not chosen, so they are
- * never written down as "the size the person left the call in".
+ * Is this one of the CALL's sizes: the ones a person chooses for a huddle and
+ * the shell remembers per machine? The wall and idle are decided by what is
+ * happening, not chosen, so they are never written down as "the size the
+ * person left the call in".
  */
 function isCallSize(size) {
   return CALL_SIZES.includes(size);
@@ -70,31 +66,23 @@ function isCallSize(size) {
 /**
  * What kind of window each size is.
  *
- * The circle sizes are a glance you keep over your work: they float above
- * other apps, follow you between desktops, and let the mouse through
- * everywhere the renderer has not said there is a circle. The strip is the
- * same glance with a card in it — it floats and follows too, but it is sized
- * to its card and every pixel of it is a control, so it takes the mouse. The
- * panel is an ordinary window you put where you like and resize by its edges.
+ * The float is a glance you keep over your work: it floats above other apps,
+ * follows you between desktops, and lets the mouse through everywhere the
+ * renderer has not said there is a face or a card. The panel is an ordinary
+ * window you put where you like and resize by its edges. The wall floats
+ * only by its own pin.
  *
  * `resizable` is not only about the person dragging an edge. Electron refuses
  * `setSize`/`setContentSize` on a window that is not resizable, so main.js
- * lifts the flag for the call and puts it back — which is also why this
+ * lifts the flag for the call and puts it back, which is also why this
  * answers with a flag rather than main.js reading the size in two places.
  */
 function callWindowChrome(size, opts = {}) {
   const s = normalizeCallWindowSize(size);
-  if (s === "ring") {
-    // A ring sits above EVERYTHING — a full-screen app, another app's
-    // always-on-top palette — because the person it is for is, by
-    // definition, looking at something else. `level` is the one place a
-    // shape asks for more than "floating".
-    return { alwaysOnTop: true, visibleOnAllWorkspaces: true, clickThrough: false, resizable: false, level: "screen-saver" };
-  }
   if (s === "wall") {
     // The buddy list's pin: float above other apps and follow the person
     // between desktops, or be an ordinary window. Its own choice, remembered
-    // per machine, and never click-through — it is a list you click in.
+    // per machine, and never click through: it is a list you click in.
     const pinned = opts.pinned === true;
     return { alwaysOnTop: pinned, visibleOnAllWorkspaces: pinned, clickThrough: false, resizable: true };
   }
@@ -102,7 +90,7 @@ function callWindowChrome(size, opts = {}) {
   return {
     alwaysOnTop: floating,
     visibleOnAllWorkspaces: floating,
-    clickThrough: floating && s !== "walkie",
+    clickThrough: floating,
     resizable: !floating,
   };
 }
@@ -110,23 +98,56 @@ function callWindowChrome(size, opts = {}) {
 /**
  * Which remembered place a size belongs to.
  *
- * One window, four places. The stage is a card you put in the middle of the
- * screen; the circles are a row you tuck in a corner; the walkie strip sits in
- * the bottom-right corner, where it has always sat inside the app; the wall is
- * the buddy list's own rectangle, remembered where the people window used to
- * remember it. Saving one over another would drag each size to where the other
- * was last left, so each writer asks this before it writes. `null` for idle: a
+ * One window, three places. The stage is a card you put in the middle of the
+ * screen; the float is a corner you tuck the row into; the wall is the buddy
+ * list's own rectangle, remembered where the people window used to remember
+ * it. Saving one over another would drag each size to where the other was
+ * last left, so each writer asks this before it writes. `null` for idle: a
  * hidden window is nowhere, and there is nothing to remember about it.
  */
 function callWindowPlacementKey(size) {
   const s = normalizeCallWindowSize(size);
   if (s === "panel") return "bounds";
-  if (s === "walkie") return "walkie";
   if (s === "wall") return "wall";
-  // A ring is placed at the display the person is looking at, every time,
-  // and never remembered; a hidden window is nowhere.
-  if (s === "ring" || s === "idle") return null;
-  return "circles";
+  if (s === "float") return "float";
+  return null;
+}
+
+/**
+ * The corner of the float the row hangs from, and grows away from.
+ *
+ * Decided by where the window sits on its display: a row tucked in the
+ * bottom right grows up and to the left, one at the top left grows down and
+ * to the right. A corner, never the centre, because a state change adds and
+ * removes faces and cards, and a window that kept its centre would slide
+ * under a pointer at both ends. Ties go to the top and the right, where the
+ * row lives by default.
+ */
+function floatCornerFor(bounds, area) {
+  const cx = bounds.x + bounds.width / 2;
+  const cy = bounds.y + bounds.height / 2;
+  const vertical = cy > area.y + area.height / 2 ? "bottom" : "top";
+  const horizontal = cx < area.x + area.width / 2 ? "left" : "right";
+  return `${vertical}-${horizontal}`;
+}
+
+/** The screen point of `corner` on `bounds`. */
+function floatAnchorOf(bounds, corner) {
+  const [v, h] = corner.split("-");
+  return {
+    x: h === "right" ? bounds.x + bounds.width : bounds.x,
+    y: v === "bottom" ? bounds.y + bounds.height : bounds.y,
+    corner,
+  };
+}
+
+/** Where a window of `size` sits so that `corner` lands on `anchor`. */
+function floatPositionFor(anchor, size) {
+  const [v, h] = anchor.corner.split("-");
+  return {
+    x: Math.round(h === "right" ? anchor.x - size.width : anchor.x),
+    y: Math.round(v === "bottom" ? anchor.y - size.height : anchor.y),
+  };
 }
 
 /**
@@ -156,8 +177,8 @@ function shouldHandBackCall({ ended, quitting, room }) {
  * could hear it.
  *
  * A renderer that never declared (an older web build in a newer shell) keeps
- * the older contract: hang-up destroys, everything else is the palette gesture
- * — the window goes away, the microphone stays, showing the window again is
+ * the older contract: hang-up destroys, everything else is the palette gesture.
+ * The window goes away, the microphone stays, showing the window again is
  * how you get back.
  */
 function shouldHideCallWindow({ ended, quitting, host }) {
@@ -168,17 +189,15 @@ function shouldHideCallWindow({ ended, quitting, host }) {
 
 // What the voice window is called in window switchers (Mission Control, the
 // Window menu, AltTab), by the shape it is in. One window wears every shape,
-// so its name has to follow the shape or a ring reads as "Codecast Faces".
+// so its name has to follow the shape or a call reads as "Codecast Faces".
 const VOICE_WINDOW_TITLES = {
-  ring: "Codecast Ring",
-  walkie: "Codecast Walkie",
+  panel: "Codecast Call",
+  float: "Codecast Faces",
   wall: "Codecast People",
-  faces: "Codecast Faces",
 };
 
 function callWindowTitle(size) {
-  if (isCallSize(size)) return "Codecast Call";
-  return VOICE_WINDOW_TITLES[size] || "Codecast Voice";
+  return VOICE_WINDOW_TITLES[normalizeCallWindowSize(size)] || "Codecast Voice";
 }
 
 module.exports = {
@@ -187,8 +206,12 @@ module.exports = {
   shouldHideCallWindow,
   callWindowChrome,
   callWindowPlacementKey,
+  floatCornerFor,
+  floatAnchorOf,
+  floatPositionFor,
   normalizeCallWindowSize,
   isCallSize,
   CALL_SIZES,
   CALL_WINDOW_SIZES,
+  LEGACY_FLOAT_SIZES,
 };

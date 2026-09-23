@@ -58,6 +58,11 @@ export type AgentRef = {
   short_id: string | null;
   title: string;
   agent_type: string;
+  /** What the room calls it (its character); absent on rows cached before
+   *  the server sent it, when the title stands in. */
+  name?: string;
+  character_avatar?: string | null;
+  character_name?: string | null;
 };
 
 /** A row of callChat.list. An event row has `event` set and an empty text. */
@@ -161,7 +166,7 @@ export function buildPassages(
       turns,
       segments: run,
       wordCount: run.reduce((n, s) => n + countWords(s.text), 0),
-      preview: previewOf(turns),
+      preview: previewOf(turns, speakers.length === 1),
     };
   });
 }
@@ -188,12 +193,15 @@ function rank(item: TimelineItem): number {
   return item.kind === "passage" ? 1 : 0;
 }
 
-function previewOf(turns: Turn[]): string {
+/** The name before the words earns its place only when the preview changes
+ *  speaker: a passage with one speaker (a recording's microphone, one person
+ *  talking) has the name in its head already. */
+function previewOf(turns: Turn[], single: boolean): string {
   let out = "";
   for (const t of turns) {
     const words = t.segments.map((s) => s.text.trim()).filter(Boolean).join(" ");
     if (!words) continue;
-    const piece = `${firstName(t.speaker_name)}: ${words}`;
+    const piece = single ? words : `${firstName(t.speaker_name)}: ${words}`;
     out = out ? `${out} · ${piece}` : piece;
     if (out.length > PASSAGE_PREVIEW_CHARS) break;
   }

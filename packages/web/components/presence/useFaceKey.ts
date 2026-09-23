@@ -13,7 +13,6 @@ import { dmRoomKey } from "@codecast/shared/contracts";
 import {
   getWalkieStatus,
   subscribeWalkie,
-  walkieHoldsRoom,
   walkieJoinedRoom,
   type WalkieStatus,
 } from "../../lib/calls/walkie";
@@ -59,13 +58,7 @@ export const PREWARM_DWELL_MS = 400;
  * when the walkie moves, and it holds still through everything else.
  */
 export function walkieFacesSig(s: WalkieStatus): string {
-  return `${s.incoming?.fromUserId ?? ""}|${s.sending?.roomKey ?? ""}|${walkieJoinedRoom(s) ?? ""}|${walkieBurstRoom(s)}`;
-}
-
-/** The room the walkie holds as a burst rather than a call. `walkieHoldsRoom`
- *  is the rule; this names the room it is true of. */
-export function walkieBurstRoom(s: WalkieStatus): string {
-  return walkieHoldsRoom(s, null) ? (s.liveRoom?.key ?? "") : "";
+  return `${s.incoming?.fromUserId ?? ""}|${s.sending?.roomKey ?? ""}|${walkieJoinedRoom(s) ?? ""}`;
 }
 
 export type WalkieFaces = {
@@ -75,14 +68,12 @@ export type WalkieFaces = {
   sendingRoomKey: string;
   /** The room somebody stepped into on purpose, if any. */
   joinedRoom: string;
-  /** The room the walkie is holding as a burst — seated, but not a call. */
-  burstRoom: string;
 };
 
 // Cached at module scope, keyed by the signature: useSyncExternalStore compares
 // snapshots by identity, so a fresh object every call would render forever.
 let facesSig = "";
-let faces: WalkieFaces = { talkingId: "", sendingRoomKey: "", joinedRoom: "", burstRoom: "" };
+let faces: WalkieFaces = { talkingId: "", sendingRoomKey: "", joinedRoom: "" };
 
 function facesSnapshot(): WalkieFaces {
   const s = getWalkieStatus();
@@ -93,32 +84,17 @@ function facesSnapshot(): WalkieFaces {
       talkingId: String(s.incoming?.fromUserId ?? ""),
       sendingRoomKey: s.sending?.roomKey ?? "",
       joinedRoom: walkieJoinedRoom(s) ?? "",
-      burstRoom: walkieBurstRoom(s),
     };
   }
   return faces;
 }
 
-/** The walkie, as the three facts a wall or a bar of faces draws — and nothing
- *  else, so nine fields of engine churn wake nobody. */
+/** The walkie, as the three facts a wall or a bar of faces draws, and nothing
+ *  else, so nine fields of engine churn wake nobody. Whether a seat is a
+ *  burst or a call is the face row's question (lib/faces/faceRow isInHuddle),
+ *  not the walkie's. */
 export function useWalkieFaces(): WalkieFaces {
   return useSyncExternalStore(subscribeWalkie, facesSnapshot, facesSnapshot);
-}
-
-/**
- * The room this client's walkie is holding as a BURST, or null.
- *
- * What it is FOR: a seat in that room is a voice message rather than a
- * conversation, so a face seated there wears no huddle chip (memberInHuddle).
- * A burst holds its seat for half a minute after the key comes up, and without
- * this every face in it claimed a call for that whole window.
- *
- * `walkieHoldsRoom` is the same question the occupancy chip asks, so the two
- * cannot drift into two answers for "burst or call".
- */
-export function useWalkieBurstRoom(): string | null {
-  const { burstRoom } = useSyncExternalStore(subscribeWalkie, facesSnapshot, facesSnapshot);
-  return burstRoom || null;
 }
 
 export type FaceKey = {
@@ -130,13 +106,6 @@ export type FaceKey = {
   holding: boolean;
   /** Their voice is coming out of this machine right now. */
   talking: boolean;
-  /** A BURST IS NOT A HUDDLE. `in_huddle` is true for ANY live seat, so the
-   *  violet huddle chip used to light for three seconds of somebody's voice
-   *  and read the same as an hour in a call. While a burst is live with this
-   *  face the chip stands down and the rings say what is happening instead;
-   *  the moment somebody steps in on purpose it is a call again and the chip
-   *  comes back. Every surface that draws a face reads this one answer. */
-  burst: boolean;
   /** Why Talk cannot start, in the words a button says; null when it can. */
   blocked: string | null;
   /** The DM room this face's actions open into. */
@@ -172,16 +141,11 @@ export function useFaceKey({
   memberId,
   callsEnabled,
   talking,
-  joinedRoom,
 }: {
   viewerId: string;
   memberId: string;
   callsEnabled: boolean;
   talking: boolean;
-  /** The room somebody stepped into on purpose, from the same walkie facts
-   *  the caller took `talking` from. A caller with no such read leaves it
-   *  out and the hook asks the engine itself. */
-  joinedRoom?: string;
 }): FaceKey {
   const roomKey = dmRoomKey(viewerId, memberId);
   const ptt = usePushToTalk(
@@ -201,15 +165,6 @@ export function useFaceKey({
   // the cool one follows their voice, with no React render in either loop.
   const txRef = useWalkieLevelVar<HTMLSpanElement>(sending);
   const rxRef = useWalkieLevelVar<HTMLSpanElement>(talking, memberId);
-
-  // A burst is this face's voice (either direction) in a room nobody has
-  // stepped into. `joinedRoom` is what the engine sets the instant a burst
-  // becomes a call, so the chip returns on that edge with no timer. The
-  // subscription is its own line: a hook buried in an expression is one edit
-  // away from landing behind a condition.
-  const live = useWalkieFaces();
-  const joined = joinedRoom ?? live.joinedRoom;
-  const burst = (sending || talking) && joined !== roomKey;
 
   const blocked = callsEnabled ? ptt.reason : "Calls are not on for this team";
 
@@ -234,7 +189,7 @@ export function useFaceKey({
     },
   };
 
-  return { state, sending, holding: ptt.holding, talking, burst, blocked, roomKey, ptt, txRef, rxRef, warmProps };
+  return { state, sending, holding: ptt.holding, talking, blocked, roomKey, ptt, txRef, rxRef, warmProps };
 }
 
 /**

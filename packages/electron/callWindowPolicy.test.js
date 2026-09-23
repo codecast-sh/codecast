@@ -8,14 +8,18 @@ const {
   shouldHideCallWindow,
   callWindowChrome,
   callWindowPlacementKey,
+  floatCornerFor,
+  floatAnchorOf,
+  floatPositionFor,
   normalizeCallWindowSize,
   isCallSize,
   CALL_SIZES,
   CALL_WINDOW_SIZES,
+  LEGACY_FLOAT_SIZES,
 } = require("./callWindowPolicy");
 
 // A live call is at stake in every one of these, and the shell is the only
-// side that can see the windows — so the rule is pinned here rather than
+// side that can see the windows, so the rule is pinned here rather than
 // inferred from whichever window happens to be closing.
 
 const facts = (over) => ({
@@ -38,7 +42,7 @@ test("hiding keeps the huddle; for an older renderer, hang-up and quit actually 
   assert.equal(shouldHideCallWindow(facts({ quitting: true })), false);
 });
 
-test("a voice host is never destroyed by its own hang-up — only by the app quitting", () => {
+test("a voice host is never destroyed by its own hang-up, only by the app quitting", () => {
   // It holds the walkie's ear between calls. Destroying it on hang-up would
   // cost the next burst a renderer boot before anybody could hear it.
   assert.equal(shouldHideCallWindow(facts({ ended: true, host: true })), true);
@@ -61,46 +65,70 @@ test("a window that never hosted anything hands nothing back", () => {
   assert.equal(shouldHandBackCall(facts({ room: null })), false);
 });
 
-test("changing SIZE never reaches the arbiter, because the window does not close", () => {
-  // The reason this arbiter shrank. There used to be a third window — the
-  // floating faces — and minimizing was the panel closing while another window
-  // took the call, which the arbiter had to tell apart from a real close. One
-  // window with four sizes has no such moment: the size change keeps the same
-  // window and the same media, so the only close left is a close.
-  const [panel, ...circleSizes] = CALL_SIZES;
-  assert.equal(panel, "panel");
-  assert.deepEqual(circleSizes, ["circles", "speaker", "tiny"]);
-});
+// ── The shapes ────────────────────────────────────────────────────────────
 
-test("the walkie strip and the idle faces are shapes of the same window, never call sizes", () => {
-  // A burst becoming a call is this window changing shape. The shell
-  // remembers only the CALL shape the person chose; the strip and the faces
-  // are decided by what is happening and must never come back as "the size
-  // the person left the call in".
-  assert.deepEqual(CALL_WINDOW_SIZES, [...CALL_SIZES, "ring", "walkie", "wall", "faces", "idle"]);
+test("four shapes: the stage, the float, the wall and idle", () => {
+  // The float is the one shape for every state of the row. A burst becoming
+  // a call is the same shape drawing something else, so the window keeps
+  // its media and its place.
+  assert.deepEqual(CALL_SIZES, ["panel", "float"]);
+  assert.deepEqual(CALL_WINDOW_SIZES, ["panel", "float", "wall", "idle"]);
   for (const size of CALL_SIZES) assert.equal(isCallSize(size), true, size);
-  for (const size of ["ring", "walkie", "wall", "faces", "idle", "nonsense"]) assert.equal(isCallSize(size), false, size);
+  for (const size of ["wall", "idle", "nonsense"]) assert.equal(isCallSize(size), false, size);
 });
 
-test("the ring sits above everything, takes every click, and is never remembered", () => {
-  // The person it is for is looking at something else: a full-screen app, a
-  // palette pinned over the work. Nothing may cover it, and it is placed at
-  // the display they are looking at every time rather than where the last
-  // ring was.
-  assert.deepEqual(callWindowChrome("ring"), {
+test("the shapes the row replaced all land on the float", () => {
+  // An older web build still names them. Each was a floating glance; the
+  // float is that glance, so none of them may fall to the stage.
+  assert.deepEqual(LEGACY_FLOAT_SIZES, ["ring", "walkie", "circles", "speaker", "tiny", "faces"]);
+  for (const size of LEGACY_FLOAT_SIZES) assert.equal(normalizeCallWindowSize(size), "float", size);
+});
+
+test("an unknown size lands on the stage, never on a click-through window", () => {
+  // The size arrives over IPC from a renderer, on a channel that changes what
+  // the window IS. Anything unrecognized has to fail to the window a person
+  // can see and click.
+  for (const bad of ["banana", "", null, undefined, 3, {}]) {
+    assert.equal(normalizeCallWindowSize(bad), "panel", String(bad));
+  }
+  for (const size of CALL_WINDOW_SIZES) assert.equal(normalizeCallWindowSize(size), size);
+});
+
+// ── What kind of window each shape is ─────────────────────────────────────
+
+test("the stage is an ordinary window: no float, no click-through, resizable", () => {
+  assert.deepEqual(callWindowChrome("panel"), {
+    alwaysOnTop: false,
+    visibleOnAllWorkspaces: false,
+    clickThrough: false,
+    resizable: true,
+  });
+});
+
+test("the float is above the work, on every desktop, and lets the mouse through", () => {
+  assert.deepEqual(callWindowChrome("float"), {
     alwaysOnTop: true,
     visibleOnAllWorkspaces: true,
-    clickThrough: false,
+    clickThrough: true,
     resizable: false,
-    level: "screen-saver",
   });
-  assert.equal(callWindowPlacementKey("ring"), null);
+});
+
+test("the float and the click-through move together", () => {
+  // Apart they are each a bug: a window that floats over everything and still
+  // takes every click is a pane sitting on somebody's work, and a
+  // click-through window that is NOT on top is one you cannot reach at all.
+  for (const size of [...CALL_SIZES, "nonsense"]) {
+    const chrome = callWindowChrome(size);
+    assert.equal(chrome.alwaysOnTop, chrome.clickThrough, size);
+    assert.equal(chrome.resizable, !chrome.clickThrough, size);
+  }
 });
 
 test("the wall is an ordinary window that floats only by its own pin", () => {
   // The buddy list: a card the person resizes and clicks in. Its pin is the
-  // one it always had — above other apps, following the person between
-  // desktops — and nothing about it is ever click-through.
+  // one it always had, above other apps and following the person between
+  // desktops, and nothing about it is ever click-through.
   assert.deepEqual(callWindowChrome("wall"), {
     alwaysOnTop: false,
     visibleOnAllWorkspaces: false,
@@ -115,88 +143,54 @@ test("the wall is an ordinary window that floats only by its own pin", () => {
   });
   // The pin means nothing to any other shape.
   assert.deepEqual(callWindowChrome("panel", { pinned: true }), callWindowChrome("panel"));
-  assert.deepEqual(callWindowChrome("faces", { pinned: true }), callWindowChrome("faces"));
+  assert.deepEqual(callWindowChrome("float", { pinned: true }), callWindowChrome("float"));
 });
 
-// ── What kind of window each size is ──────────────────────────────────────
+// ── Where each shape is remembered ────────────────────────────────────────
 
-test("the stage is an ordinary window: no float, no click-through, resizable", () => {
-  assert.deepEqual(callWindowChrome("panel"), {
-    alwaysOnTop: false,
-    visibleOnAllWorkspaces: false,
-    clickThrough: false,
-    resizable: true,
-  });
-});
-
-test("every circle size floats above the work and lets the mouse through", () => {
-  for (const size of ["circles", "speaker", "tiny"]) {
-    assert.deepEqual(
-      callWindowChrome(size),
-      {
-        alwaysOnTop: true,
-        visibleOnAllWorkspaces: true,
-        clickThrough: true,
-        resizable: false,
-      },
-      size,
-    );
-  }
-});
-
-test("the float and the click-through move together", () => {
-  // Apart they are each a bug: a window that floats over everything and still
-  // takes every click is a pane sitting on somebody's work, and a
-  // click-through window that is NOT on top is one you cannot reach at all.
-  for (const size of [...CALL_SIZES, "faces", "nonsense"]) {
-    const chrome = callWindowChrome(size);
-    assert.equal(chrome.alwaysOnTop, chrome.clickThrough, size);
-    assert.equal(chrome.resizable, !chrome.clickThrough, size);
-  }
-});
-
-test("the idle faces are a circle shape: they float, let the mouse through, cannot be dragged by an edge", () => {
-  assert.deepEqual(callWindowChrome("faces"), callWindowChrome("circles"));
-});
-
-test("the strip floats and follows like a circle, but takes every click", () => {
-  // It is exactly its card, and every pixel of the card is a control: a strip
-  // that let the mouse through would be a Talk button nobody could press.
-  assert.deepEqual(callWindowChrome("walkie"), {
-    alwaysOnTop: true,
-    visibleOnAllWorkspaces: true,
-    clickThrough: false,
-    resizable: false,
-  });
-});
-
-test("an unknown size lands on the stage, never on a click-through window", () => {
-  // The size arrives over IPC from a renderer, on a channel that changes what
-  // the window IS. Anything unrecognized has to fail to the window a person
-  // can see and click.
-  for (const bad of ["banana", "", null, undefined, 3, {}]) {
-    assert.equal(normalizeCallWindowSize(bad), "panel", String(bad));
-  }
-  for (const size of CALL_WINDOW_SIZES) assert.equal(normalizeCallWindowSize(size), size);
-});
-
-test("the stage's bounds and the circles' position are remembered separately", () => {
-  // One window, two places. The stage is a card in the middle of the screen and
-  // the circles are a strip in a corner; saving one over the other would drag
-  // each size to where the other was last left.
+test("the stage's bounds, the float's anchor and the wall's rectangle are remembered separately", () => {
+  // Saving one over another would drag each shape to where the other was
+  // last left. A hidden window is nowhere.
   assert.equal(callWindowPlacementKey("panel"), "bounds");
-  assert.equal(callWindowPlacementKey("circles"), "circles");
-  assert.equal(callWindowPlacementKey("speaker"), "circles");
-  // Tiny is the same corner as the other two: one remembered spot for every
-  // small form, because they are the same glance at different sizes.
-  assert.equal(callWindowPlacementKey("tiny"), "circles");
-  // The idle faces share it too — the photos turn into video at one spot.
-  assert.equal(callWindowPlacementKey("faces"), "circles");
-  // The strip has a corner of its own, the wall its own rectangle, and a
-  // hidden window is nowhere.
-  assert.equal(callWindowPlacementKey("walkie"), "walkie");
+  assert.equal(callWindowPlacementKey("float"), "float");
   assert.equal(callWindowPlacementKey("wall"), "wall");
   assert.equal(callWindowPlacementKey("idle"), null);
+  // The old names share the float's one anchor: there is no strip corner and
+  // no ring corner left to jump to.
+  for (const size of LEGACY_FLOAT_SIZES) assert.equal(callWindowPlacementKey(size), "float", size);
+});
+
+// ── The anchor ────────────────────────────────────────────────────────────
+
+const AREA = { x: 0, y: 0, width: 1600, height: 1000 };
+
+test("the corner is the one the window sits nearest, ties to the top and the right", () => {
+  assert.equal(floatCornerFor({ x: 1300, y: 30, width: 200, height: 80 }, AREA), "top-right");
+  assert.equal(floatCornerFor({ x: 1300, y: 880, width: 200, height: 80 }, AREA), "bottom-right");
+  assert.equal(floatCornerFor({ x: 40, y: 880, width: 200, height: 80 }, AREA), "bottom-left");
+  assert.equal(floatCornerFor({ x: 40, y: 30, width: 200, height: 80 }, AREA), "top-left");
+  // Dead centre: the default corner, so a first drag that lands in the
+  // middle does not flip the row to growing rightwards.
+  assert.equal(floatCornerFor({ x: 700, y: 460, width: 200, height: 80 }, AREA), "top-right");
+  // A display that does not start at the origin is measured from its own edge.
+  assert.equal(floatCornerFor({ x: 1700, y: 30, width: 200, height: 80 }, { x: 1600, y: 0, width: 1600, height: 1000 }), "top-left");
+});
+
+test("the anchor is the corner's screen point, and hanging a size from it lands the same corner back", () => {
+  const bounds = { x: 1300, y: 30, width: 200, height: 80 };
+  for (const corner of ["top-left", "top-right", "bottom-left", "bottom-right"]) {
+    const anchor = floatAnchorOf(bounds, corner);
+    assert.equal(anchor.corner, corner);
+    // The same window, hung from its own anchor, sits where it was.
+    assert.deepEqual(floatPositionFor(anchor, bounds), { x: 1300, y: 30 }, corner);
+    // A bigger window hung from the same anchor keeps that corner put and
+    // grows away from it.
+    const bigger = floatPositionFor(anchor, { width: 300, height: 120 });
+    const grown = { ...bigger, width: 300, height: 120 };
+    assert.deepEqual(floatAnchorOf(grown, corner), anchor, corner);
+  }
+  assert.deepEqual(floatAnchorOf(bounds, "top-right"), { x: 1500, y: 30, corner: "top-right" });
+  assert.deepEqual(floatAnchorOf(bounds, "bottom-left"), { x: 1300, y: 110, corner: "bottom-left" });
 });
 
 // ── The window's own construction options ─────────────────────────────────
@@ -205,7 +199,7 @@ test("the stage's bounds and the circles' position are remembered separately", (
 // BrowserWindow needs a running Electron app and this is the one property of
 // the window that cannot be changed afterwards. `transparent` and `frame` are
 // decided at construction: get them wrong and the fix is a new build, which is
-// exactly why the circle sizes and the stage had to become one window.
+// exactly why the float and the stage had to become one window.
 
 const CREATE_CALL_WINDOW = (() => {
   const src = readFileSync(join(__dirname, "main.js"), "utf8");
@@ -230,43 +224,51 @@ test("the call window is born frameless and see-through", () => {
 test("the call window has no title bar and no traffic lights", () => {
   // The stage draws its own card, drags by its own header row and closes by its
   // own button. A titleBarStyle here would put OS buttons on a transparent
-  // window and cut a rectangle out of the circle sizes.
+  // window and cut a rectangle out of the float.
   assert.ok(!/titleBarStyle/.test(CREATE_CALL_WINDOW));
   assert.ok(!/trafficLightPosition/.test(CREATE_CALL_WINDOW));
-  // An opaque backgroundColor would fill the glass in the circle sizes.
+  // An opaque backgroundColor would fill the glass in the float.
   assert.ok(!/backgroundColor: "#(?!00000000)/.test(CREATE_CALL_WINDOW));
 });
 
-test("the call window keeps the FaceDetector flag, because it draws the circles", () => {
+test("the call window keeps the FaceDetector flag, because it draws the faces", () => {
   // Chromium stopped exposing the Shape Detection API by default; without this
-  // the circles fall back to a center crop that does not follow anybody.
+  // the faces fall back to a center crop that does not follow anybody.
   assert.ok(CREATE_CALL_WINDOW.includes('enableBlinkFeatures: "FaceDetector"'));
 });
 
 test("the call window is not throttled when it is behind other windows", () => {
-  // It holds the media, and the circle sizes exist to be looked at from
-  // another app.
+  // It holds the media, and the float exists to be looked at from another app.
   assert.ok(CREATE_CALL_WINDOW.includes("backgroundThrottling: false"));
 });
 
-test("the call never gets a second window for its circles or its faces", () => {
-  // The circle sizes used to be a window of their own, and moving the call
-  // there cost a re-join on every shape change. The idle faces overlay was a
-  // third window, yielding to the call's circles at a shared spot. Both are
-  // shapes of the one voice window now, so the old channels stay dead and no
-  // second see-through window is ever built.
+test("the float never gets a second window, and the old per-state spots are gone", () => {
+  // The circles used to be a window of their own, the idle faces a third,
+  // and each state of the voice window had a spot of its own to jump to.
+  // One window, one anchor: the old channels and the old placements stay dead.
   const src = readFileSync(join(__dirname, "main.js"), "utf8");
-  for (const dead of ["report-faces-state", "set-faces-size", "createFacesWindow", "facesWindow.", "set-faces-window-"]) {
+  for (const dead of [
+    "report-faces-state",
+    "set-faces-size",
+    "createFacesWindow",
+    "facesWindow.",
+    "set-faces-window-",
+    "get-faces-window-open",
+    "circlesPosition",
+    "walkiePosition",
+    "ringPosition",
+    "CALL_WALKIE_",
+    "CALL_CIRCLES_",
+  ]) {
     assert.ok(!src.includes(dead), `main.js still refers to \`${dead}\``);
   }
 });
 
 // Window switchers list the voice window by name, and it wears every shape.
 test("the voice window is named for the shape it is in", () => {
-  for (const size of CALL_SIZES) assert.equal(callWindowTitle(size), "Codecast Call", size);
-  assert.equal(callWindowTitle("faces"), "Codecast Faces");
+  assert.equal(callWindowTitle("panel"), "Codecast Call");
+  assert.equal(callWindowTitle("float"), "Codecast Faces");
   assert.equal(callWindowTitle("wall"), "Codecast People");
-  assert.equal(callWindowTitle("walkie"), "Codecast Walkie");
-  assert.equal(callWindowTitle("ring"), "Codecast Ring");
   assert.equal(callWindowTitle("idle"), "Codecast Voice");
+  for (const size of LEGACY_FLOAT_SIZES) assert.equal(callWindowTitle(size), "Codecast Faces", size);
 });

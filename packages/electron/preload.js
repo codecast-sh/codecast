@@ -5,10 +5,10 @@
 // screen-share sources, the host policy, detached tab windows — is
 // @platform/desktop's `createBridge`, so it is one implementation across every
 // app on that shell, buffering rules included. Codecast's own half is spread
-// over it below: the OS permission surface, the people window, the call window
-// and its four sizes, the faces overlay, and meeting detection with its offer
-// window. None of those exist in the package, and each is described where it
-// is defined.
+// over it below: the OS permission surface, the people window, the voice
+// window and its shapes, the popped out face row, and meeting detection with
+// its offer window. None of those exist in the package, and each is described
+// where it is defined.
 //
 // The exposed object is the same shape it has always been, on the same global,
 // hitting the same IPC channels.
@@ -99,9 +99,10 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   setAlwaysOnTop: (on) => ipcRenderer.invoke("set-always-on-top", on),
   getAlwaysOnTop: () => ipcRenderer.invoke("get-always-on-top"),
   // The voice window (route /call-panel): ONE persistent see-through window
-  // that holds everything with a microphone in it — the walkie's ear and its
-  // strip, the idle team as circles, and the call in all four of its sizes.
-  // `isCallPanelWindow` tells this renderer it IS that window.
+  // that holds everything with a microphone or a face in it: the walkie's
+  // ear, the face row floating over the work, the buddy list as a wall, and
+  // the call's stage. `isCallPanelWindow` tells this renderer it IS that
+  // window.
   //
   // `closeCallPanel` hides it, like the palette; the huddle stays here.
   // `showCallPanel` raises it again from the rest of the app. `openCallPanel`
@@ -132,26 +133,25 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   // The shapes. One window, because `transparent` and `frame` are decided
   // when a window is CONSTRUCTED: the voice window is born see-through and
   // frameless, and changing shape reshapes it in place rather than handing
-  // the call to another window — a call changing shape must never be a call
+  // the call to another window. A call changing shape must never be a call
   // re-joining a room.
   //
-  //   panel     the stage, a card the person resizes by its edges
-  //   circles   everybody, as a row of face circles over the work
-  //   speaker   one circle, whoever is talking
-  //   tiny      the same circle at the size of a menu bar icon
-  //   walkie    the burst strip, in the bottom-right corner of the screen
-  //   faces     the idle team as photo circles, at the call circles' spot
-  //   idle      nothing: hidden
+  //   float   the face row and its card over the work, anchored to one
+  //           remembered corner; a ring, a burst and a call are this shape
+  //           in different states, and it never moves between them
+  //   panel   the stage, a card the person resizes by its edges
+  //   wall    the buddy list, in the people window's own rectangle
+  //   idle    nothing: hidden
   //
-  // The three setters are what the see-through shapes need and the stage
-  // does not: `setCallWindowInteractive` decides whether the window takes the
-  // mouse at all (off except over a circle, so a click on the desktop behind
-  // reaches the desktop), `setCallWindowContentSize` keeps the window exactly
-  // as big as its circles or its card, and `setCallWindowDragging` has the
-  // shell follow the cursor while a circle is held — a drag region would eat
+  // The three setters are what the float needs and the stage does not:
+  // `setCallWindowInteractive` decides whether the window takes the mouse at
+  // all (off except over a face or the card, so a click on the desktop
+  // behind reaches the desktop), `setCallWindowContentSize` keeps the window
+  // exactly as big as its row and card, and `setCallWindowDragging` has the
+  // shell follow the cursor while a face is held; a drag region would eat
   // the mouse events the renderer needs to know the pointer left. The stage
-  // and the strip drag by a real drag region instead, since nothing there is
-  // competing for those events.
+  // drags by a real drag region instead, since nothing there is competing
+  // for those events.
   setCallWindowSize: (size) => ipcRenderer.invoke("set-call-window-size", size),
   getCallWindowSize: () => ipcRenderer.invoke("get-call-window-size"),
   getVoiceWindowState: () => ipcRenderer.invoke("get-voice-window-state"),
@@ -161,13 +161,12 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   // A ring is up in the host: the dock bounces until the app is activated.
   // The host says when it stops.
   setRingAttention: (on) => ipcRenderer.send("ring-attention", on === true),
-  // The idle faces: the team as circles floating over the work when there is
-  // no call — a shape of the voice window, at the call circles' spot. Opening
-  // is a standing arrangement that persists across launches; the host reads
-  // the flag off its window role and takes the shape itself.
+  // The face row, popped out of the header into the float. Opening is a
+  // standing arrangement that persists across launches; the host reads the
+  // flag off its window role (`facesOverlay`) and takes the shape itself,
+  // and the header shows one chip that brings the row back.
   openFacesWindow: () => ipcRenderer.invoke("open-faces-window"),
   closeFacesWindow: () => ipcRenderer.invoke("close-faces-window"),
-  getFacesWindowOpen: () => ipcRenderer.invoke("get-faces-window-open"),
   // Meeting detection: the shell polls the names of running programs (and
   // nothing else) while the setting is on, and offers to record when a meeting
   // app starts. The ANSWER lives here in the web layer — main never starts a

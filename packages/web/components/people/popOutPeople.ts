@@ -9,10 +9,11 @@ import { explainPopOut, popOutWindow } from "../../lib/popOut";
  * when a rung is missing.
  */
 export async function popOutPeople(opts: { list?: boolean } = {}): Promise<void> {
-  // THE FLOATING FACES ARE THE DEFAULT. Popping the team out means "keep them
-  // over my work", and a see-through row of faces is that with no window
-  // around it. The buddy list is the shell's fallback and one click away from
-  // the overlay's own chrome (`list: true` asks for it outright).
+  // THE FLOATING ROW IS THE DEFAULT. Popping the team out means "keep them
+  // over my work", and the face row in the float is that with no window
+  // around it: the header's row, sent to the voice host's see-through
+  // window (useFacesFloating is the same switch as a React value). The buddy
+  // list is the shell's fallback, and `list: true` asks for it outright.
   if (!opts.list && canOpenFacesOverlay()) {
     await openFacesWindow();
     return;

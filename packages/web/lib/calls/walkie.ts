@@ -524,11 +524,13 @@ export function personInOwnCall(): boolean {
 }
 
 /** Whether a voice host is showing the ring, so no other surface draws it:
- *  one exists (this window or another) and the person is not in a call of
- *  their own. False on a shell without a host, where the ring window and the
- *  in-app toast are the ring. */
+ *  one exists (this window or another). The host draws a ring as the face
+ *  row's card, in the float over the work, in the header when the app is
+ *  focused, or over the stage during a call, so the separate ring window
+ *  stands down whenever there is a host. False on a shell without one, where
+ *  the ring window and the in-app toast are the ring. */
 export function voiceHostShowsRing(): boolean {
-  return (isVoiceHost() || voiceHostElsewhere()) && !personInOwnCall();
+  return isVoiceHost() || voiceHostElsewhere();
 }
 
 /** The room somebody stepped into on purpose, for the readers that only ask

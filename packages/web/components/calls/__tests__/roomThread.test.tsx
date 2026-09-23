@@ -10,6 +10,8 @@
 import { afterAll, expect, mock, test } from "bun:test";
 import { act } from "react";
 import { JSDOM } from "jsdom";
+import { characterOf } from "@codecast/shared/contracts/sessionCharacter";
+import { clip } from "../roomThreadModel";
 import { replaceGlobals } from "../../../test-helpers/globals";
 import { closeDomWindow } from "../../../test-helpers/domGlobals";
 
@@ -56,13 +58,17 @@ afterAll(() => {
   mock.module("convex/react", () => realConvexReact);
 });
 
+const roots = new WeakMap<HTMLElement, ReturnType<typeof createRoot>>();
 async function render(node: React.ReactNode) {
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
+  roots.set(container, root);
   await act(() => root.render(node));
   return { container, unmount: () => act(() => root.unmount()) };
 }
+/** The root a render made, to render the same tree again with new props. */
+const root = (r: { container: HTMLElement }) => roots.get(r.container)!;
 
 const ROOM = "session:conv_room";
 const START = 1_700_000_000_000;
@@ -94,7 +100,7 @@ test("the empty room is one card with the two ways forward", async () => {
   const card = r.container.querySelector(".rt-empty")!;
   expect(card.textContent).toContain("Add an agent to the room. It hears the room and answers here.");
   const buttons = [...card.querySelectorAll("button")].map((b) => b.textContent?.trim());
-  expect(buttons).toEqual(["Add an agent", "Transcribe only"]);
+  expect(buttons).toEqual(["Add an agent", "Transcribe without one"]);
   // The card is the one call to add an agent: the header's own button steps
   // aside while it is on screen. The composer is there.
   expect(r.container.querySelector(".rt-head .rt-add")).toBeNull();
@@ -155,21 +161,36 @@ test("on the stage before transcription starts, an earlier call's events do not 
   await r.unmount();
 });
 
-test("after the call an agent's event reads in the past, typed lines from before the call are set apart, and old events are gone", async () => {
+test("after the call an agent's event reads in the past, typed lines from other calls are set apart, and other calls' events are gone", async () => {
   useInboxStore.setState({ currentUser: { _id: "u-me" }, liveRooms: [] } as any);
   const own = { conversation_id: "conv_room", short_id: "jx7room", title: "Room agent", agent_type: "claude_code" };
+  const END = START + 120_000;
   const rows = [
     // An earlier call's event is that call's log, not this room's content.
     { _id: "old-ev", user_id: "u-ann", user_name: "Ann Lee", text: "", at: START - 3_600_000, mine: false, agent: own, event: "agent_joined" },
     { _id: "old", user_id: "u-ann", user_name: "Ann Lee", text: "see https://example.com/notes before we start", at: START - 3_500_000, mine: false, agent: null },
     { _id: "e0", user_id: "u-me", user_name: "Ashot P", text: "", at: START + 100, mine: false, agent: own, event: "agent_joined" },
+    { _id: "e1", user_id: "u-me", user_name: "Ashot P", text: "", at: END - 100, mine: false, agent: null, event: "transcribe_off" },
+    // The next call in this room: its events are its own, its typed line is "later".
+    { _id: "next-ev", user_id: "u-me", user_name: "Ashot P", text: "", at: END + 180_000, mine: false, agent: own, event: "agent_joined" },
+    { _id: "next", user_id: "u-ann", user_name: "Ann Lee", text: "picking this up again", at: END + 200_000, mine: false, agent: null },
   ];
   const r = await render(
-    <RoomThread roomKey={ROOM} call={call({ status: "ended" })} rows={rows as any} liveTranscriptId={null} surface="page" seated={false} />,
+    <RoomThread
+      roomKey={ROOM}
+      call={call({ status: "ended", ended_at: END })}
+      rows={rows as any}
+      liveTranscriptId={null}
+      surface="page"
+      seated={false}
+    />,
   );
-  expect(eventTexts(r.container)).toEqual(["Room agent was in the room · it hears the room and answers here"]);
+  // Past tense, and no present tense promise about what the agent does.
+  expect(eventTexts(r.container)).toEqual(["Room agent was in the room", "You switched transcription off"]);
   const dividers = [...r.container.querySelectorAll(".rt-divider")].map((d) => d.textContent);
-  expect(dividers).toEqual(["Earlier in this room", "This call"]);
+  expect(dividers).toEqual(["Earlier in this room", "This call", "Later in this room"]);
+  // Typed lines only, no spoken words: nothing a summary would cover, so no note about one.
+  expect(r.container.querySelector(".rt-note:not(.rt-divider)")).toBeNull();
   // A link a person typed is a link, the same as one an agent wrote.
   const link = r.container.querySelector<HTMLAnchorElement>(".rt-line a");
   expect(link?.getAttribute("href")).toBe("https://example.com/notes");
@@ -223,7 +244,7 @@ test("a folded passage shows its preview and opens on click", async () => {
   expect(heads.length).toBe(2);
   expect(heads[0].getAttribute("aria-expanded")).toBe("false");
   expect(heads[0].querySelector(".rt-passage-who")?.textContent).toBe("Ada, Bob");
-  expect(heads[0].querySelector(".rt-passage-when")?.textContent).toBe("0:00 · 5s · 2 turns");
+  expect(heads[0].querySelector(".rt-when")?.textContent).toBe("0:00 · 5s · 2 turns");
   expect(heads[0].querySelector(".rt-passage-preview")?.textContent).toBe(
     "Ada: we should ship the thread on Friday · Bob: agreed, after the review",
   );
@@ -274,15 +295,18 @@ test("the composer names the one agent in the room", async () => {
   const r = await render(
     <RoomThread roomKey={ROOM} call={call({ routes })} rows={[]} liveTranscriptId="t1" surface="page" seated />,
   );
-  expect(r.container.querySelector("textarea")?.getAttribute("placeholder")).toBe("Message the room · Team huddle hears you");
-  // The chip carries the session's title and breathes while the agent
-  // works; the foot says so in words.
-  expect(r.container.querySelector(".rt-chip")?.textContent).toContain("Team huddle");
+  // An agent in the room goes by its character, the name people say to
+  // address it: the hash default here, since nobody chose one.
+  const name = characterOf({ _id: "conv_other" }).name;
+  expect(r.container.querySelector("textarea")?.getAttribute("placeholder")).toBe(`Message the room · ${name} hears you`);
+  // The chip carries that name and breathes while the agent works; the foot
+  // says so in words.
+  expect(r.container.querySelector(".rt-chip")?.textContent).toContain(name);
   expect(r.container.querySelector(".rt-chip .ch-typing-dots")).not.toBeNull();
-  expect(r.container.querySelector(".rt-working")?.textContent).toContain("Team huddle is working");
+  expect(r.container.querySelector(".rt-working")?.textContent).toContain(`${name} is working`);
   // With an agent in and no words yet, the room is listening, not empty.
   expect(r.container.querySelector(".rt-empty")).toBeNull();
-  expect(r.container.querySelector(".rt-note")?.textContent).toBe("Listening. Words appear here as people speak.");
+  expect(r.container.querySelector(".rt-note")?.textContent).toBe("Listening. Words show up here.");
   await r.unmount();
 });
 
@@ -300,9 +324,36 @@ test("the pinned listening line stays while no words have arrived, whatever was 
   // The line is about the silence since transcription started, not about
   // the room's history: a typed line from earlier does not say the room is
   // being listened to now.
-  expect(r.container.querySelector(".rt-listening")?.textContent).toBe("Listening. Words appear here as people speak.");
+  // On the stage the line is the first member of the controls' group at
+  // the header's right, not a pinned paragraph under it, so it costs the
+  // list no height; the switch beside it already says the room is live, so
+  // it is short, with the long form on the title.
+  const line = r.container.querySelector<HTMLElement>(".rt-head .rt-head-right .rt-listening")!;
+  expect(line.textContent).toBe("Nothing said yet");
+  expect(line.getAttribute("title")).toBe("Listening. Words show up here.");
+  expect(r.container.querySelector(".rt-note")).toBeNull();
   expect(r.container.querySelector(".rt-line")?.textContent).toContain("hello room");
   expect(r.container.querySelector('[role="switch"]')).not.toBeNull();
+  await r.unmount();
+});
+
+test("the stage keeps the call's events after transcription is switched off", async () => {
+  useInboxStore.setState({ currentUser: { _id: "u-me" }, liveRooms: [] } as any);
+  const own = { conversation_id: "conv_room", short_id: "jx7room", title: "Room agent", agent_type: "claude_code" };
+  const rows = [
+    { _id: "e0", user_id: "u-me", user_name: "Ashot P", text: "", at: START + 100, mine: false, agent: own, event: "agent_joined" },
+  ];
+  const r = await render(
+    <RoomThread roomKey={ROOM} call={call()} rows={rows as any} liveTranscriptId="t1" surface="stage" seated />,
+  );
+  expect(eventTexts(r.container)).toEqual(["Room agent is in the room · it hears the room and answers here"]);
+  // The stage hands the thread no call once nothing is live; the rows the
+  // switch just wrote are still this call's story, read in the past.
+  const after = [...rows, { _id: "e1", user_id: "u-me", user_name: "Ashot P", text: "", at: START + 5_000, mine: false, agent: null, event: "transcribe_off" }];
+  await act(() => {
+    root(r).render(<RoomThread roomKey={ROOM} call={null} rows={after as any} liveTranscriptId={null} surface="stage" seated />);
+  });
+  expect(eventTexts(r.container)).toEqual(["Room agent was in the room", "You switched transcription off"]);
   await r.unmount();
 });
 
@@ -325,20 +376,31 @@ test("a page link typed on a line of its own is a pill in the rail and a card on
   await page.unmount();
 });
 
-test("the stage keeps the placeholder to the bare words, and the chip follows a title that lands later", async () => {
+test("the stage's placeholder names the agent in a few characters, and the chip and placeholder follow the character that lands later", async () => {
   useInboxStore.setState({ currentUser: { _id: "u-me" }, liveRooms: [], sessions: {} } as any);
   const routes = [{ kind: "session", target: "conv_other", mode: "live", added_by: "u-me" }];
   const r = await render(
     <RoomThread roomKey={ROOM} call={call({ routes })} rows={[]} liveTranscriptId="t1" surface="stage" seated />,
   );
-  expect(r.container.querySelector("textarea")?.getAttribute("placeholder")).toBe("Message the room");
+  // The session has not landed yet, so the room calls it a new agent; the
+  // rail's placeholder is short enough for one line at the 272px rail.
+  expect(r.container.querySelector("textarea")?.getAttribute("placeholder")).toBe("Message · new agent hears you");
   expect(r.container.querySelector(".rt-chip")?.textContent).toContain("new agent");
   await act(() => {
     useInboxStore.setState({
       sessions: { conv_other: { _id: "conv_other", title: "Team huddle", agent_type: "claude_code", agent_status: "idle" } },
     } as any);
   });
-  expect(r.container.querySelector(".rt-chip")?.textContent).toContain("Team huddle");
+  const character = characterOf({ _id: "conv_other" }).name;
+  expect(r.container.querySelector(".rt-chip")?.textContent).toContain(character);
+  expect(r.container.querySelector("textarea")?.getAttribute("placeholder")).toBe(`Message · ${clip(character, 12)} hears you`);
+  // A name somebody chose for the session is what the room calls it.
+  await act(() => {
+    useInboxStore.setState({
+      sessions: { conv_other: { _id: "conv_other", title: "Team huddle", agent_type: "claude_code", agent_status: "idle", character_name: "Sage" } },
+    } as any);
+  });
+  expect(r.container.querySelector(".rt-chip")?.textContent).toContain("Sage");
   await r.unmount();
 });
 
@@ -347,7 +409,7 @@ test("the recap's closed line is the first sentence, decimals included", async (
   const r = await render(
     <RoomThread
       roomKey={ROOM}
-      call={call({ status: "ended", summary: "We raised 3.5 million. Then the plan changed." })}
+      call={call({ status: "ended", summary: "We raised 3.5 million. Then the plan changed.", segments: [seg(0, "Ada", "we raised it", 0)] })}
       rows={[]}
       liveTranscriptId={null}
       surface="page"
@@ -358,4 +420,10 @@ test("the recap's closed line is the first sentence, decimals included", async (
   // With nothing but the density control to show, the page's header is quiet.
   expect(r.container.querySelector(".rt-head")?.classList.contains("rt-head-quiet")).toBe(true);
   await r.unmount();
+  // No spoken words, nothing for the density control to act on: no header at all.
+  const bare = await render(
+    <RoomThread roomKey={ROOM} call={call({ status: "ended" })} rows={[]} liveTranscriptId={null} surface="page" seated={false} />,
+  );
+  expect(bare.container.querySelector(".rt-head")).toBeNull();
+  await bare.unmount();
 });

@@ -68,6 +68,8 @@ import { popOutCall } from "../../lib/calls/popOutCall";
 import { useOsPermissions } from "../../hooks/useOsPermissions";
 import { permissionActionLabel, requestOsPermission, type AppPermissionKind } from "../../lib/osPermissions";
 import { LivePulseDot } from "../SessionActivityLine";
+import { prefersReducedMotion } from "../../hooks/useBottomAnchoredList";
+import { useAgentsInRoom } from "./useCallFeed";
 
 // The media notice, with the fix in reach: when the error is a device the OS
 // refused, the button is the one gesture that changes that (the OS prompt,
@@ -78,8 +80,13 @@ function CallErrorNotice({ error, fix }: { error: string; fix: AppPermissionKind
   const readiness = fix ? permissions[fix] : null;
   const action = fix && readiness ? permissionActionLabel(readiness) : null;
   return (
-    <div className="mx-auto mt-2 flex max-w-lg items-start gap-2 rounded-full bg-sol-orange/10 px-3.5 py-1.5 text-[12px] text-sol-orange">
-      <span className="min-w-0 flex-1">{error}</span>
+    <div className="mx-auto mt-2 flex max-w-lg items-center gap-2 rounded-full bg-sol-orange/10 px-3.5 py-1.5 text-[12px] text-sol-orange">
+      {/* One line, however long the sentence: the notice sits over the stage
+          until dismissed, and a 380px window cannot spare a second row. The
+          whole sentence is in the title. */}
+      <span className="min-w-0 flex-1 truncate" title={error}>
+        {error}
+      </span>
       {fix && readiness && action && (
         <button
           onClick={() => requestOsPermission(fix, readiness).then(refresh)}
@@ -213,6 +220,9 @@ export function CallStage({
 
   const [view, setView] = useState<StageView>("auto");
   const [threadOpen, setThreadOpen] = useState(false);
+  // The rail leaves with motion: it stays mounted through a 150ms exit and
+  // goes on the animation's end. Exits are shorter than entrances (200ms in).
+  const [railClosing, setRailClosing] = useState(false);
   // The thread's rows, read here so the header can count what arrived while
   // the rail was closed: typed and agent lines later than the last one the
   // viewer saw, never the viewer's own lines and never an event row. The
@@ -231,7 +241,13 @@ export function CallStage({
     // opened for the first time starts from what is already there.
     if (rows && (threadOpen || !threadSeenAt.has(roomKey))) threadSeenAt.set(roomKey, newestAt);
   }, [rows, threadOpen, roomKey, newestAt]);
-  const toggleThread = () => setThreadOpen((o) => !o);
+  const toggleThread = () => {
+    if (threadOpen && !prefersReducedMotion()) setRailClosing(true);
+    setThreadOpen((o) => !o);
+  };
+  // The agents in the room, for the button: while the rail is closed, the
+  // state a person waits on most is "an agent is answering".
+  const agentWorking = useAgentsInRoom(live?.routes ?? []).some((a) => a.working);
   const seenAt = threadSeenAt.get(roomKey);
   const unread =
     threadOpen || seenAt === undefined ? 0 : (rows ?? []).filter((r) => r.at > seenAt && !r.mine && !r.event).length;
@@ -296,7 +312,7 @@ export function CallStage({
   // --sol-text (#002b36) on a #002b36 stage and every label disappears.
   return createPortal(
     <div
-      className={`dark fixed inset-0 z-[200] flex flex-col select-none bg-sol-base03 text-sol-text${
+      className={`call-stage dark fixed inset-0 z-[200] flex flex-col select-none bg-sol-base03 text-sol-text${
         // The window is see-through and frameless, so the stage's own surface
         // is the only surface there is: a rounded card, clipped so the video
         // inside it does not square off the corners — and EDGED, because the
@@ -310,11 +326,17 @@ export function CallStage({
       {/* Header: four groups on one line, thin rules between them. WHERE this
           is (the room, its links, its door); HOW it is seen (the view, as one
           segmented control); WHAT ELSE is open (the rails); and the WINDOW's
-          own controls (shrink, hide). Nothing else earns a place here. */}
+          own controls (shrink, hide). Nothing else earns a place here.
+          The stage is a container (`.call-stage`, callSurface.css): as it
+          narrows, the words beside the icons go first (`.stage-word` under
+          760px, `.stage-word-tight` under 640px) and the title's "huddle · "
+          with them, so the room's name is what survives truncation. The left
+          group clips: nothing in it may ever paint under the view control. */}
       <div ref={headRef} className="flex h-11 shrink-0 items-center gap-1 border-b border-white/[0.06] px-3">
-        <div className="flex min-w-0 shrink items-center gap-0.5">
+        <div className="flex min-w-0 shrink items-center gap-0.5 overflow-hidden">
           <span className="min-w-0 truncate px-1 font-mono text-[12.5px] text-sol-text-secondary">
-            {parsed?.kind === "session" ? `huddle · ${label}` : label}
+            {parsed?.kind === "session" && <span className="stage-word">huddle · </span>}
+            {label}
           </span>
           {roster.length > 0 && (
             <span className="shrink-0 rounded-full bg-white/[0.06] px-1.5 py-px font-mono text-[10.5px] text-sol-text-muted">
@@ -360,7 +382,7 @@ export function CallStage({
               violet while the room is closed, quiet chrome while it is open. */}
           <StageChromeButton onClick={lock.toggle} active={lock.locked} accent="violet" title={lock.title}>
             {lock.locked ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}
-            {lock.locked ? "locked" : "open"}
+            <span className="stage-word">{lock.locked ? "locked" : "open"}</span>
           </StageChromeButton>
         </div>
         <div className="min-w-2 flex-1" />
@@ -379,7 +401,8 @@ export function CallStage({
           active={threadOpen}
           accent="cyan"
           aria-label={
-            unread > 0 ? `Open the thread, ${unread} new line${unread === 1 ? "" : "s"}` : threadOpen ? "Close the thread" : "Open the thread"
+            (unread > 0 ? `Open the thread, ${unread} new line${unread === 1 ? "" : "s"}` : threadOpen ? "Close the thread" : "Open the thread") +
+            (!threadOpen && agentWorking ? ", an agent is working" : "")
           }
           title={
             live
@@ -391,10 +414,20 @@ export function CallStage({
             <MessageSquare className="h-3.5 w-3.5" />
             {live && <LivePulseDot className="absolute -right-1 -top-1 h-1.5 w-1.5" />}
           </span>
-          thread
+          <span className="stage-word-tight">thread</span>
+          {!threadOpen && agentWorking && (
+            <span className="ch-typing-dots text-sol-violet" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </span>
+          )}
           {unread > 0 && (
+            // Keyed by the count so each new number arrives with the same
+            // 150ms scale in; past 99+ the key stops changing.
             <span
-              className="min-w-[16px] rounded-full bg-sol-cyan px-1 text-center font-mono text-[9.5px] font-semibold leading-4 tabular-nums text-sol-base03"
+              key={unread > 99 ? "99+" : unread}
+              className="min-w-[16px] rounded-full bg-sol-cyan px-1 text-center font-mono text-[9.5px] font-semibold leading-4 tabular-nums text-sol-base03 animate-in zoom-in-75 fade-in duration-150 motion-reduce:animate-none"
               aria-hidden="true"
             >
               {unread > 99 ? "99+" : unread}
@@ -411,7 +444,7 @@ export function CallStage({
         {canPopOutCall() && (
           <StageChromeButton onClick={() => void popOutCall()} title={POP_OUT_CALL_TITLE}>
             <AppWindow className="h-3.5 w-3.5" />
-            pop out
+            <span className="stage-word-tight">pop out</span>
           </StageChromeButton>
         )}
         {/* The small sizes of this same window, behind one control: everybody
@@ -435,7 +468,7 @@ export function CallStage({
         {!panel && (
           <StageChromeButton onClick={collapse} title="Collapse to the pill. The call continues (Esc)">
             <ChevronDown className="h-3.5 w-3.5" />
-            collapse
+            <span className="stage-word-tight">collapse</span>
           </StageChromeButton>
         )}
       </div>
@@ -477,8 +510,15 @@ export function CallStage({
             />
           )}
         </div>
-        {threadOpen && call.roomKey && (
-          <ThreadRail onClose={toggleThread} roomKey={call.roomKey} live={live ?? null} rows={rows} panel={panel} />
+        {(threadOpen || railClosing) && call.roomKey && (
+          <ThreadRail
+            roomKey={call.roomKey}
+            live={live ?? null}
+            rows={rows}
+            panel={panel}
+            closing={railClosing && !threadOpen}
+            onClosed={() => setRailClosing(false)}
+          />
         )}
       </div>
 
@@ -487,7 +527,17 @@ export function CallStage({
           video. Captions first — a lane, left-aligned, the speaker in a
           column — then the notice, then the one control bar. */}
       <div className="shrink-0 border-t border-white/[0.06] bg-black/[0.12]">
-        {!threadOpen && <CaptionsLane live={live ?? null} />}
+        {/* The lane folds to nothing while the rail is open (the open
+            passage shows the words) instead of leaving the tree, so the foot
+            changes height over the same 200ms the rail slides in. */}
+        <div
+          className="grid transition-[grid-template-rows] duration-200 ease-out motion-reduce:transition-none"
+          style={{ gridTemplateRows: threadOpen ? "0fr" : "1fr" }}
+        >
+          <div className="min-h-0 overflow-hidden">
+            <CaptionsLane live={live ?? null} />
+          </div>
+        </div>
         {call.error && <CallErrorNotice error={call.error} fix={call.errorFix} />}
         <ControlBar call={call} transcribing={!!live} />
       </div>
@@ -1033,24 +1083,37 @@ function AudioOnlyStage({
 // takes a share of the stage rather than a fixed 340px that would be half
 // the window.
 function ThreadRail({
-  onClose,
   roomKey,
   live,
   rows,
   panel,
+  closing,
+  onClosed,
 }: {
-  onClose: () => void;
   roomKey: string;
   live: { transcript_id: string } | null;
   rows: ThreadRow[] | null | undefined;
   panel: boolean;
+  /** On its way out: the exit runs and `onClosed` fires when it ends. */
+  closing: boolean;
+  onClosed: () => void;
 }) {
   const call = useQueryNoThrow(
     api.transcripts.webGetCall,
     live ? { transcript_id: live.transcript_id as any } : "skip",
   ).data as RoomThreadCall | null | undefined;
   return (
-    <aside className="flex w-[min(340px,55%)] shrink-0 flex-col overflow-hidden rounded-xl bg-white/[0.04] animate-in fade-in slide-in-from-right-2 duration-200">
+    <aside
+      className={`flex w-[min(340px,55%)] shrink-0 flex-col overflow-hidden rounded-xl bg-white/[0.04] motion-reduce:animate-none ${
+        closing
+          ? "animate-out fade-out slide-out-to-right-2 fill-mode-forwards duration-150"
+          : "animate-in fade-in slide-in-from-right-2 duration-200"
+      }`}
+      onAnimationEnd={(e) => {
+        // Rows inside the thread animate too; only the aside's own end counts.
+        if (e.target === e.currentTarget) onClosed();
+      }}
+    >
       <RoomThread
         roomKey={roomKey}
         call={live ? call : null}
@@ -1059,7 +1122,6 @@ function ThreadRail({
         surface="stage"
         seated
         panel={panel}
-        onClose={onClose}
         className="min-h-0 flex-1"
       />
     </aside>

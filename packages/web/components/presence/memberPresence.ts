@@ -7,6 +7,7 @@ import { type InboxSession } from "../../store/inboxStore";
 import { fleetBandFor, type FleetBandOpts } from "../fleetBands";
 import { memberDisplayName as liveMemberDisplayName } from "../../lib/liveEntities";
 import { matchScore } from "../../lib/mentionRanking";
+import type { FaceState } from "../../lib/faces/faceRow";
 
 export type PresenceState = "active" | "idle" | "away" | "offline";
 /** What a badge draws. "busy" is the manual status, not a heartbeat state. */
@@ -94,12 +95,6 @@ export function memberPresenceVisual(member: any): PresenceVisual {
  * that draw faces stay testable and the walkie stays out of the presence
  * vocabulary.
  */
-export function memberInHuddle(member: any, walkieRoom?: string | null): boolean {
-  const room = member?.in_room_key ? String(member.in_room_key) : "";
-  if (walkieRoom && room && room === walkieRoom) return false;
-  return !!(member?.in_huddle || member?.in_room_key);
-}
-
 /** The name a surface prints for a member. One helper so the strip, the roster
  *  and the card cannot disagree about what a person is called — and it is the
  *  app's ONE rule, not a second one, because that promise was already broken:
@@ -344,8 +339,13 @@ export interface PresenceActivityCtx {
   /** The viewer, so a huddle they are in can say "with you" instead of
    *  reading them their own name. */
   viewerId?: string;
-  /** The viewer is hearing this member on the walkie right now. */
-  talking?: boolean;
+  /** This member's state on the face row (lib/faces/faceRow engagementOf):
+   *  the one answer to "are they talking, are they in a call". A caller with
+   *  no row leaves both out and the line reads presence alone. */
+  engagement?: FaceState;
+  /** Seated in a call, by the row's rule (isInHuddle): a call anywhere, never
+   *  a burst with the viewer. */
+  inHuddle?: boolean;
 }
 
 const CAP = (n: number) => (n > 20 ? "20+" : String(n));
@@ -410,10 +410,11 @@ function huddleLine(member: any, ctx: PresenceActivityCtx): string {
  * situation two ways.
  */
 export function presenceActivityLine(member: any, ctx: PresenceActivityCtx): string {
-  if (ctx.talking) return "talking on the walkie";
+  if (ctx.engagement === "talking-to-me") return "talking on the walkie";
+  if (ctx.engagement === "speaking") return "talking in a huddle with you";
 
   const room = ctx.room;
-  if (member?.in_room_key || member?.in_huddle || room) {
+  if (ctx.inHuddle) {
     // A locked room the viewer is not in: say it is locked rather than who is
     // in it. NOT because the server withholds the roster — it does not, and a
     // comment here used to claim it did. `calls.getLiveRooms` redacts only a

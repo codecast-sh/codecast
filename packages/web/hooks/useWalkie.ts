@@ -959,15 +959,12 @@ export function callDockSurface(
     video?: boolean;
   },
 ): DockSurface {
-  if (walkieHoldsRoom(status, call.roomKey)) {
-    // MY OWN seat, lingering after my talk ended, is not a card: the person
-    // said Stop and the card going with it is what Stop means. The room stays
-    // open a moment so an answer can arrive fast. A LISTENER's linger still
-    // draws — their card carries Talk and Join live, which is the whole point
-    // of keeping the seat.
-    if (!status.sending && !status.incoming && status.liveRoom?.mode === "burst") return "none";
-    return "walkie";
-  }
+  // A room the walkie holds is ALWAYS drawn, my own linger included. The seat
+  // stays open half a minute after Stop so an answer can arrive fast, and for
+  // that half minute the far side's roster shows me in the room. Answering
+  // "none" here made the surface vanish at Stop and come back as a call the
+  // moment the far side's join landed, which read as off, then on.
+  if (walkieHoldsRoom(status, call.roomKey)) return "walkie";
   if (call.phase === "idle") return "none";
   // A voice room this client stepped into FROM THE WALKIE keeps the walkie's
   // own shape — faces and an End, not a video card for a conversation with no

@@ -126,7 +126,6 @@ const Windows = lazy(() => import("@/app/windows/page"));
 const Palette = lazy(() => import("@/app/palette/page"));
 const People = lazy(() => import("@/app/people/page"));
 const CallPanel = lazy(() => import("@/app/call-panel/page"));
-const Faces = lazy(() => import("@/app/faces/page"));
 const MeetingOffer = lazy(() => import("@/app/meeting-offer/page"));
 const CallRing = lazy(() => import("@/app/call-ring/page"));
 
@@ -147,6 +146,7 @@ const SettingsTeamJoin = lazy(() => import("@/app/settings/team/join/page"));
 const SettingsNotifications = lazy(() => import("@/app/settings/notifications/page"));
 const SettingsIntegrations = lazy(() => import("@/app/settings/integrations/page"));
 const SettingsDesktop = lazy(() => import("@/app/settings/desktop/page"));
+const SettingsApps = lazy(() => import("@/app/settings/apps/page"));
 // Registers the issue feed kinds with ExternalEventRow before any feed paints.
 import "@/lib/issueEventStyles";
 
@@ -331,18 +331,17 @@ export function App() {
             <Route path="review/:id" element={<E name="ReviewView"><ReviewView /></E>} />
             <Route path="review/batch" element={<E name="ReviewBatch"><ReviewBatch /></E>} />
 
-            {/* The windows with no background: the palette card, and the call
-                window, whose two small sizes are circles of people's faces over
-                the work. Both are frameless transparent Electron windows; the
-                layout is what keeps the app's own body background from filling
-                their glass.
+            {/* The windows with no background: the palette card, and the voice
+                window, whose float is the row of people's faces over the work.
+                Both are frameless transparent Electron windows; the layout is
+                what keeps the app's own body background from filling their
+                glass.
 
                 The call window MUST stay above ":username" or the profile
                 catch-all eats it — same rule as /people. */}
             <Route element={<TransparentWindowLayout />}>
               <Route path="palette" element={<E name="Palette"><Palette /></E>} />
               <Route path="call-panel" element={<E name="CallPanel"><CallPanel /></E>} />
-              <Route path="faces" element={<E name="Faces"><Faces /></E>} />
               <Route path="meeting-offer" element={<E name="MeetingOffer"><MeetingOffer /></E>} />
               <Route path="call-ring" element={<E name="CallRing"><CallRing /></E>} />
             </Route>
@@ -374,6 +373,7 @@ export function App() {
               {/* Old deep link; the GitHub install flow still returns here. */}
               <Route path="integrations/github-app" element={<E name="SettingsIntegrations"><SettingsIntegrations /></E>} />
               <Route path="desktop" element={<E name="SettingsDesktop"><SettingsDesktop /></E>} />
+              <Route path="apps" element={<E name="SettingsApps"><SettingsApps /></E>} />
             </Route>
 
             {/* Public profiles — anonymous, guest-viewable, at the ROOT (/<handle>).

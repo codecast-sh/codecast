@@ -3,6 +3,7 @@ import { useTrackedStore, type LiveRoom } from "../store/inboxStore";
 import { describeRoomLive } from "../lib/calls/roomLabels";
 import { setRoomLock } from "../lib/calls/actions";
 import { useNowWhen } from "./useCoarseNow";
+import { useFaceRow } from "./useFaceRow";
 import { CALL_KNOCK_TTL_MS } from "@codecast/shared/contracts";
 
 // The live-rooms read layer: one derivation of "which huddles are running and
@@ -32,7 +33,8 @@ export type LiveRoomRow = {
    *  but unnamed — the room list must not leak titles. */
   redacted: boolean;
   members: { user_id: string; user_name?: string; user_image?: string }[];
-  /** I am seated in this room right now. */
+  /** I am seated in this room right now: the face row's engaged room (the
+   *  walkie's room, the call plane's, or a seat another window holds). */
   mine: boolean;
   /** I knocked at this locked door and it has not opened yet. */
   knocked: boolean;
@@ -69,9 +71,9 @@ export function useLiveRooms(): LiveRoomRow[] {
         })
         .join("|"),
     (st: any) => st.currentUser?._id,
-    (st: any) => st.call.roomKey,
     (st: any) => Object.keys(st.callKnocked ?? {}).sort().join("|"),
   ]);
+  const myRoom = useFaceRow().room;
   const knocked: Record<string, number> = s.callKnocked ?? {};
   // A knock expires on its own after the server's TTL; that is a clock
   // transition, not a field change, so it needs its own tick — one that wakes
@@ -87,7 +89,6 @@ export function useLiveRooms(): LiveRoomRow[] {
 
   return useMemo(() => {
     const rooms: LiveRoom[] = s.liveRooms ?? [];
-    const me = String(s.currentUser?._id ?? "");
     return rooms.map((room) => {
       const { label } = describeRoomLive(room.room_key, s as any);
       return {
@@ -97,14 +98,12 @@ export function useLiveRooms(): LiveRoomRow[] {
         canJoin: room.can_join,
         redacted: room.redacted,
         members: room.members,
-        mine:
-          s.call.roomKey === room.room_key ||
-          room.members.some((m) => String(m.user_id) === me),
+        mine: myRoom === room.room_key,
         knocked: now - (knocked[room.room_key] ?? 0) < CALL_KNOCK_TTL_MS,
       };
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [s.liveRooms, s.teamMembers, s.chatChannels, s.currentUser?._id, s.call.roomKey, knocked, now]);
+  }, [s.liveRooms, s.teamMembers, s.chatChannels, s.currentUser?._id, myRoom, knocked, now]);
 }
 
 /** The huddle a teammate is sitting in, or null. The strip's own `in_room_key`

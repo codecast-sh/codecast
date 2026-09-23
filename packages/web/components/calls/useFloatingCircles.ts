@@ -1,6 +1,6 @@
-// The machinery every floating circle window shares, whichever circles it is
-// showing. Two windows draw circles over the person's work — the minimized
-// call (CallFaces) and the idle presence overlay (PresenceFaces) — and both
+// The machinery a see-through window of circles needs, whichever circles it
+// is showing: the face row in the float (FloatingFaceRow) today, the older
+// shell's call circles (CallFaces) until every desktop has updated. Both
 // have to get the same two things right:
 //
 // CLICK-THROUGH. The window is a rectangle, the product is a few circles. It

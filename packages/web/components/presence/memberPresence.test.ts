@@ -4,7 +4,6 @@ import {
   groupMembersByBand,
   presenceBand,
   memberFleetSummary,
-  memberInHuddle,
   memberPresenceVisual,
   presenceActivityLine,
   presenceAvatarClass,
@@ -104,36 +103,50 @@ describe("presenceActivityLine ordering", () => {
 
   it("puts a live voice above everything", () => {
     expect(
-      presenceActivityLine(loud, ctx({ talking: true, room: { label: "#design" }, fleet: fleet({ working: 3 }) })),
+      presenceActivityLine(loud, ctx({ engagement: "talking-to-me", inHuddle: true, room: { label: "#design" }, fleet: fleet({ working: 3 }) })),
     ).toBe("talking on the walkie");
+    // An active speaker in my own huddle is talking too, and the line says where.
+    expect(presenceActivityLine(loud, ctx({ engagement: "speaking", inHuddle: true, room: { label: "#design" } }))).toBe(
+      "talking in a huddle with you",
+    );
   });
 
   it("puts the huddle above the fleet", () => {
     expect(
-      presenceActivityLine(loud, ctx({ room: { label: "#design" }, fleet: fleet({ working: 3 }) })),
+      presenceActivityLine(loud, ctx({ inHuddle: true, room: { label: "#design" }, fleet: fleet({ working: 3 }) })),
     ).toBe("in a huddle · #design");
   });
 
   it("says a locked huddle is locked instead of guessing its name", () => {
     expect(
-      presenceActivityLine(member(), ctx({ room: { label: "a huddle", locked: true } })),
+      presenceActivityLine(member(), ctx({ inHuddle: true, room: { label: "a huddle", locked: true } })),
     ).toBe("in a locked huddle");
   });
 
   it("names the room a member of it sits in, locked or not", () => {
     expect(
-      presenceActivityLine(member({ in_room_key: "call:1" }), ctx({ room: { label: "Ann, Bo", locked: true } })),
+      presenceActivityLine(member({ in_room_key: "call:1" }), ctx({ inHuddle: true, room: { label: "Ann, Bo", locked: true } })),
     ).toBe("in a huddle · Ann, Bo");
   });
 
   it("falls back to the bare huddle when the label is redacted away", () => {
-    expect(presenceActivityLine(member({ in_huddle: true }), ctx())).toBe("in a huddle");
+    expect(presenceActivityLine(member({ in_huddle: true }), ctx({ inHuddle: true }))).toBe("in a huddle");
+  });
+
+  // A SEAT IS NOT A HUDDLE. The roster's in_huddle is true for anyone seated,
+  // a burst's linger included; the face row decides what a seat is
+  // (isInHuddle), and a row that says no leaves the line to the fleet and
+  // the presence fact, whatever the roster row claims.
+  it("reads the row, not the roster: a seat the row calls a burst is not a huddle", () => {
+    expect(presenceActivityLine(member({ in_huddle: true, in_room_key: "dm:a:b" }), ctx({ inHuddle: false }))).toBe("active now");
+    expect(presenceActivityLine(member({ in_huddle: true }), ctx({ room: { label: "#design" } }))).toBe("active now");
   });
 
   // A people room's shared label names it from the VIEWER's seat, which is
   // right for the dock pill and wrong on a row about one of the people in it.
   describe("naming a people huddle from the row's own seat", () => {
     const riley = member({ _id: "riley", in_room_key: "dm:riley:jordan" });
+    const ctx = (over: Partial<Parameters<typeof presenceActivityLine>[1]> = {}) => ({ now: NOW, inHuddle: true, ...over });
     const peopleRoom = (members: Array<[string, string]>) => ({
       roomKey: "dm:riley:jordan",
       // What describeRoom hands every surface: the OTHER people, from the
@@ -315,44 +328,6 @@ describe("roster bands", () => {
 });
 
 // The founder's "this huddle indicator sticks around when I'm not in a call".
-//
-// A walkie burst seats everyone who hears it, and the seat is deliberately
-// held for half a minute after the key comes up so a reply lands in the same
-// room. `in_huddle` is true for that whole window with nobody in a call, so
-// the chip lit for three seconds of somebody's voice and stayed lit long after
-// the voice stopped.
-describe("memberInHuddle", () => {
-  const seated = (room: string) => ({ in_huddle: true, in_room_key: room });
-
-  it("wears the chip for an ordinary huddle seat", () => {
-    expect(memberInHuddle(seated("dm:a:b"), null)).toBe(true);
-    expect(memberInHuddle(seated("dm:a:b"), "dm:c:d")).toBe(true);
-  });
-
-  it("does NOT wear it for a seat the walkie is holding as a burst", () => {
-    // The seat exists — the person is audible — but a voice message is not a
-    // conversation, and the chip is what claims one.
-    expect(memberInHuddle(seated("dm:a:b"), "dm:a:b")).toBe(false);
-  });
-
-  it("wears it again the moment the burst becomes a call", () => {
-    // `walkieHoldsRoom` goes false on the upgrade, so the caller passes null
-    // and the same seat reads as the huddle it now is.
-    expect(memberInHuddle(seated("dm:a:b"), null)).toBe(true);
-  });
-
-  it("is false with no seat at all, whatever the walkie is doing", () => {
-    expect(memberInHuddle({}, "dm:a:b")).toBe(false);
-    expect(memberInHuddle(null, "dm:a:b")).toBe(false);
-  });
-
-  it("still reads a seat carried by in_huddle alone", () => {
-    // The roster reports in_room_key only when the viewer may see the room;
-    // in_huddle survives that redaction, and a chip is all it drives.
-    expect(memberInHuddle({ in_huddle: true }, "dm:a:b")).toBe(true);
-  });
-});
-
 describe("teammateWhereabouts", () => {
   const me = "u-me";
   const ann = { _id: "u-ann", name: "Ann", presence_state: "active", viewing_conversation_id: "c1", viewing_since: NOW - 120_000 };

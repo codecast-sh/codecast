@@ -330,7 +330,6 @@
    in no doubt where the voice is going. */
 .people-wall[data-holding] .people-face-seat:not([data-hold]),
 .people-strip[data-holding] .people-face-seat:not([data-hold]),
-.people-bar[data-holding] .people-face-seat:not([data-hold]),
 .presence-faces[data-holding] .people-face-seat:not([data-hold]) {
   opacity: 0.34;
 }
@@ -617,17 +616,6 @@
  * small: the classes above do the work and only three things are this
  * surface's own.
  */
-
-/* A BIGGER TARGET THAN THE PICTURE. A 32px circle is a small thing to hit with
-   a gesture you hold, so the key reaches four pixels past the face on every
-   side. A pseudo-element rather than padding: padding would resize the seat and
-   move the six faces apart. */
-.people-bar .people-face::before {
-  content: "";
-  position: absolute;
-  inset: -4px;
-  border-radius: 999px;
-}
 
 /* "Hey, he joined" — the moment a burst became a call, under the face it
    happened to, for four seconds. Absolute so it cannot move the bar: the

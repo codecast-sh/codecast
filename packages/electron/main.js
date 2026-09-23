@@ -61,6 +61,9 @@ const {
   shouldHideCallWindow,
   callWindowChrome,
   callWindowPlacementKey,
+  floatAnchorOf,
+  floatCornerFor,
+  floatPositionFor,
   isCallSize,
   normalizeCallWindowSize,
   callWindowTitle,
@@ -928,8 +931,9 @@ shellIpc.handle("get-always-on-top", (e) => {
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 // The voice window: ONE persistent see-through window (route /call-panel) that
-// holds everything with a microphone or a face in it — the walkie's ear and
-// its strip, the idle team as circles, and the call in all four of its sizes.
+// holds everything with a microphone or a face in it: the walkie's ear, the
+// face row floating over the work, the buddy list as a wall, and the call's
+// stage.
 //
 // A REAL window. The founder's screenshot was a call stage living in a Chrome
 // popup: no app chrome, the OS treating it as a browser, and a microphone
@@ -957,49 +961,58 @@ shellIpc.handle("get-always-on-top", (e) => {
 //
 // ── Why it is born see-through, whatever shape it is in ───────────────────
 // `transparent` and `frame` are BrowserWindow CONSTRUCTION options; Electron
-// has no runtime switch for either. The circle shapes need both, so the window
-// is born with both and the STAGE paints its own card inside the glass.
+// has no runtime switch for either. The float needs both, so the window is
+// born with both and the STAGE paints its own card inside the glass.
 //
 // It also means this window has no title bar and no traffic lights. The stage's
 // own header row is the drag surface, and its own button hides the window.
 //
 // ── The shapes ────────────────────────────────────────────────────────────
 // Decided by the renderer from what is happening (callWindowPolicy.js lists
-// them): the four call sizes the person chooses, plus `walkie` for the strip,
-// `faces` for the idle team, and `idle` for nothing at all. The shell applies
-// each as a placement, a size and a kind of window, and shows or hides the
-// window to match — the renderer never has to know how.
+// them): `float` for the face row, `panel` for the stage, `wall` for the
+// buddy list, and `idle` for nothing at all. The shell applies each as a
+// placement, a size and a kind of window, and shows or hides the window to
+// match; the renderer never has to know how.
+//
+// ── The float never moves ─────────────────────────────────────────────────
+// A ring, a burst and a call are the same row in different states, so they
+// are ONE shape at ONE remembered anchor: the corner the person tucked the
+// row into. The row grows and shrinks away from that corner as faces and the
+// card come and go, and a state change never moves the window. The old
+// arrangement gave every state a spot of its own (the ring top right, the
+// strip bottom right, the circles wherever they were dragged), and the
+// window jumped between them as a burst became a call.
 //
 // ── What a see-through shape needs from the shell ─────────────────────────
 // Three things an ordinary window never asks for, all runtime-settable:
 //
 //   ignore mouse events  The window is a rectangle, the product is a few
-//                        circles. It ignores the mouse so a click lands in
-//                        whatever is underneath, and the renderer — the only
-//                        side that knows where the circles are — turns that off
-//                        while the pointer is over one. The strip is the
-//                        exception: it is exactly its card, so it takes every
-//                        click.
-//   content size         It is sized to its circles or its card, which changes
-//                        with the shape and who is in the room.
-//   drag                 Held on a circle, the window follows the cursor. Not a
+//                        faces. It ignores the mouse so a click lands in
+//                        whatever is underneath, and the renderer, the only
+//                        side that knows where the faces and the card are,
+//                        turns that off while the pointer is over one.
+//   content size         It is sized to its row and its card, which change
+//                        with who is on the row and what is happening.
+//   drag                 Held on a face, the window follows the cursor. Not a
 //                        `-webkit-app-region: drag` region: over one of those
 //                        the window manager takes the mouse events, so the
 //                        renderer would never learn the pointer had left and
 //                        the window would stay stuck taking clicks that belong
-//                        to the application underneath. (The STAGE and the
-//                        strip do use a drag region, because they are not
-//                        click-through, so nothing is fighting for those
-//                        events there.)
+//                        to the application underneath. (The STAGE does use a
+//                        drag region, because it is not click-through, so
+//                        nothing is fighting for those events there.)
 // ---------------------------------------------------------------------------
 
 const CALL_PANEL_PATH = "/call-panel";
 const CALL_PANEL_SIZE = { width: 960, height: 640, minWidth: 520, minHeight: 380 };
-// What a circle shape is born as: about one speaker circle plus the room its
-// ring needs. The renderer reports the true size a frame later
+// What the float is born as: about one face plus the room its ring needs.
+// The renderer reports the true size a frame later
 // (set-call-window-content-size); this only keeps the first frame from being a
 // full-screen sheet of invisible glass.
-const CALL_CIRCLES_SIZE = { width: 112, height: 112 };
+const CALL_FLOAT_SEED = { width: 80, height: 80 };
+// The float's home the first time: the top right of the work area, out of
+// the way of most windows' content, indented enough to clear a menu bar.
+const CALL_FLOAT_INSET = 28;
 // Every floating window follows the person between desktops with these
 // options, and NEVER with `visibleOnFullScreen`. On macOS that flag makes
 // Electron call app.dock.hide() on every application — it turns the whole
@@ -1010,16 +1023,6 @@ const CALL_CIRCLES_SIZE = { width: 112, height: 112 };
 // keyboard to its own overlay. `skipTransformProcessType` is the documented
 // way to keep the process what it is.
 const WORKSPACES_OPTS = { visibleOnFullScreen: false, skipTransformProcessType: true };
-// What the strip is born as: the width it was designed at inside the app, and
-// a height the renderer corrects on its first measure.
-const CALL_WALKIE_SIZE = { width: 420, height: 140 };
-// What the ring is born as, likewise: the card's width, a height the renderer
-// corrects, and the margin it keeps from the corner of the display.
-const CALL_RING_SIZE = { width: 360, height: 200 };
-const CALL_RING_INSET = 16;
-// The strip's home corner: one rem in and five rem up from the bottom-right of
-// the work area, which is where it has always sat inside the app.
-const CALL_WALKIE_CORNER = { right: 16, bottom: 80 };
 
 let callWindow = null;
 let callPlaceTimer = null;
@@ -1035,8 +1038,8 @@ let callWindowHost = false;
 let callWindowEnded = false;
 // Which shape the window is in right now. The CALL shape the person last
 // chose is remembered per machine (settings), so the next huddle comes back
-// the shape they left it; the walkie, faces and idle shapes are never
-// remembered — they are decided by what is happening.
+// the shape they left it; the wall and idle are never remembered, because
+// they are decided by what is happening.
 let callWindowSize = "idle";
 // The last state the host mirrored to the other windows, replayed to a window
 // that opens later so it does not start from a blank.
@@ -1056,12 +1059,12 @@ function loadCallPanelState() {
   return saved && typeof saved === "object" ? saved : {};
 }
 
-// The stage's bounds, the circles' position and the strip's position are
+// The stage's bounds, the float's anchor and the wall's rectangle are
 // remembered SEPARATELY. They are the same window, but they are not the same
-// place: the stage is a card you put in the middle of the screen, the circles
-// are a row you tuck in a corner and the strip is a card in the bottom-right,
-// and saving one over another would drag each to where the other was last
-// left.
+// place: the stage is a card you put in the middle of the screen, the float
+// is a row you tuck in a corner and the wall is the buddy list's own
+// rectangle, and saving one over another would drag each to where the other
+// was last left.
 function saveCallPanelBounds(win) {
   if (!win || win.isDestroyed() || win.isMinimized()) return;
   const key = callWindowPlacementKey(callWindowSize);
@@ -1074,22 +1077,30 @@ function saveCallPanelBounds(win) {
   }
 }
 
-function saveCallCornerPosition(win) {
+// The float's anchor: the corner the row hangs from, as a screen point, and
+// which corner it is. Written after a drag lands, so the row comes back
+// exactly where it was left, and read by every resize so growth goes away
+// from it. The corner is chosen from where the window sits on its display
+// (callWindowPolicy floatCornerFor): a row dragged into the bottom right
+// starts growing up and to the left from there.
+function saveFloatAnchor(win) {
   if (!win || win.isDestroyed() || win.isMinimized()) return;
-  const key = callWindowPlacementKey(callWindowSize);
-  if (key !== "circles" && key !== "walkie") return;
-  const [x, y] = win.getPosition();
-  updateSettings({ callPanelWindow: { ...loadCallPanelState(), [key]: { x, y } } });
+  if (callWindowPlacementKey(callWindowSize) !== "float") return;
+  const bounds = win.getBounds();
+  const area = screen.getDisplayMatching(bounds).workArea;
+  updateSettings({
+    callPanelWindow: { ...loadCallPanelState(), float: floatAnchorOf(bounds, floatCornerFor(bounds, area)) },
+  });
 }
 
 function rememberCallWindowPlace(win) {
   saveCallPanelBounds(win);
-  saveCallCornerPosition(win);
+  saveFloatAnchor(win);
 }
 
 /** The call shape the person last left a huddle in. Always one of the call's
- *  own sizes: the walkie and idle shapes are never written, and a name that
- *  is not a call size lands on the stage. */
+ *  own sizes: the wall and idle are never written, and a name that is not
+ *  a call size lands on the stage. */
 function savedCallWindowSize() {
   const size = normalizeCallWindowSize(loadCallPanelState().size);
   return isCallSize(size) ? size : "panel";
@@ -1109,66 +1120,50 @@ function callPanelUrl(roomKey, opts) {
   // Opened by an answered ring: the accept follows on its own channel.
   if (opts && opts.ring) q.set("ring", "1");
   // The size the window is opening in, so the renderer's first paint is the
-  // right shape rather than a stage that snaps to circles a frame later.
+  // right shape rather than a stage that snaps to the float a frame later.
   if (roomKey && isCallSize(callWindowSize) && callWindowSize !== "panel") q.set("size", callWindowSize);
   const query = q.toString();
   return `${currentBaseUrl}${CALL_PANEL_PATH}${query ? `?${query}` : ""}`;
 }
 
-// Where the circles sit the first time: the top-right of the work area, out of
-// the way of most windows' content, indented enough to clear a menu bar.
-function defaultCirclesPosition(width) {
+// The float's anchor the first time: the top right of the work area, the
+// corner the row grows down and left from.
+function defaultFloatAnchor() {
   const area = screen.getPrimaryDisplay().workArea;
-  return { x: Math.round(area.x + area.width - width - 28), y: Math.round(area.y + 28) };
+  return { x: area.x + area.width - CALL_FLOAT_INSET, y: area.y + CALL_FLOAT_INSET, corner: "top-right" };
 }
 
-// Where the strip sits the first time: the bottom-right corner, where the
-// in-app strip has always been.
-function defaultWalkiePosition(size) {
-  const area = screen.getPrimaryDisplay().workArea;
+const FLOAT_CORNERS = ["top-left", "top-right", "bottom-left", "bottom-right"];
+
+/** The remembered anchor, or the default when none was ever written. */
+function floatAnchor() {
+  const saved = loadCallPanelState().float;
+  if (!saved || typeof saved.x !== "number" || typeof saved.y !== "number" || !FLOAT_CORNERS.includes(saved.corner)) {
+    return defaultFloatAnchor();
+  }
+  return { x: saved.x, y: saved.y, corner: saved.corner };
+}
+
+// Where a float of `size` sits: hung from its anchor, then made safe for the
+// display it is about to be used on. A display that is gone (an unplugged
+// monitor) would otherwise put the window somewhere nobody can see, and the
+// float has no title bar and no taskbar entry to recover it from.
+function floatPosition(size) {
+  const pos = floatPositionFor(floatAnchor(), size);
+  const area = screen.getDisplayMatching({ ...pos, ...size }).workArea;
   return {
-    x: Math.round(area.x + area.width - size.width - CALL_WALKIE_CORNER.right),
-    y: Math.round(area.y + area.height - size.height - CALL_WALKIE_CORNER.bottom),
-  };
-}
-
-// A remembered corner, made safe for the display it is about to be used on.
-// A display that is gone (an unplugged monitor) would otherwise put the window
-// somewhere nobody can see, and in the see-through shapes it has no title bar
-// and no taskbar entry to recover it from.
-function cornerPosition(key, size, fallback) {
-  const saved = loadCallPanelState()[key];
-  if (!saved || typeof saved.x !== "number" || typeof saved.y !== "number") return fallback;
-  const area = screen.getDisplayMatching({ x: saved.x, y: saved.y, ...size }).workArea;
-  return {
-    x: Math.min(Math.max(Math.round(saved.x), area.x), area.x + area.width - size.width),
-    y: Math.min(Math.max(Math.round(saved.y), area.y), area.y + area.height - size.height),
-  };
-}
-
-function circlesPosition(size) {
-  return cornerPosition("circles", size, defaultCirclesPosition(size.width));
-}
-
-function walkiePosition(size) {
-  return cornerPosition("walkie", size, defaultWalkiePosition(size));
-}
-
-function ringPosition(size) {
-  const cursor = screen.getCursorScreenPoint();
-  const area = screen.getDisplayNearestPoint(cursor).workArea;
-  return {
-    x: Math.round(area.x + area.width - size.width - CALL_RING_INSET),
-    y: Math.round(area.y + CALL_RING_INSET),
+    x: Math.min(Math.max(pos.x, area.x), area.x + area.width - size.width),
+    y: Math.min(Math.max(pos.y, area.y), area.y + area.height - size.height),
   };
 }
 
 // ── Attention ──────────────────────────────────────────────────────────────
 //
 // A ring is the one thing in this app that has to reach a person who is not
-// looking at it. The ring shape is pinned over every window, and beside it
+// looking at it. The float shows the ring over every window, and beside it
 // the dock icon bounces until the app is activated (macOS) or the frame
-// flashes (Windows). Held by the host for as long as the ring shape is up.
+// flashes (Windows). Held by the host for as long as the ring is up
+// (`ring-attention`).
 let ringBounce = null;
 
 function setRingAttention(on) {
@@ -1232,28 +1227,14 @@ function applyCallWindowSize(win, size, { reveal = true } = {}) {
     const bounds = clampToVisibleDisplay(loadPeopleState().bounds, PEOPLE_SIZE);
     win.setMinimumSize(PEOPLE_SIZE.minWidth, PEOPLE_SIZE.minHeight);
     win.setBounds(bounds || defaultWallBounds());
-  } else if (size === "ring") {
-    // The display the person is looking at — the cursor's — top right,
-    // where the ring window always was. Not remembered: a ring goes where
-    // the person is, not where the last one was.
-    win.setMinimumSize(1, 1);
-    win.setContentSize(CALL_RING_SIZE.width, CALL_RING_SIZE.height);
-    const [width, height] = win.getSize();
-    const pos = ringPosition({ width, height });
-    win.setPosition(pos.x, pos.y);
-  } else if (size === "walkie") {
-    win.setMinimumSize(1, 1);
-    win.setContentSize(CALL_WALKIE_SIZE.width, CALL_WALKIE_SIZE.height);
-    const [width, height] = win.getSize();
-    const pos = walkiePosition({ width, height });
-    win.setPosition(pos.x, pos.y);
   } else {
-    // No minimum, or a 520px floor would stop the window ever being the size of
-    // one 96px circle.
+    // The float. No minimum, or a 520px floor would stop the window ever
+    // being the size of one face. Hung from its anchor as a seed; the
+    // renderer's size report grows it away from that same corner.
     win.setMinimumSize(1, 1);
-    win.setContentSize(CALL_CIRCLES_SIZE.width, CALL_CIRCLES_SIZE.height);
+    win.setContentSize(CALL_FLOAT_SEED.width, CALL_FLOAT_SEED.height);
     const [width, height] = win.getSize();
-    const pos = circlesPosition({ width, height });
+    const pos = floatPosition({ width, height });
     win.setPosition(pos.x, pos.y);
   }
   win.setResizable(chrome.resizable);
@@ -1291,7 +1272,7 @@ function defaultPanelBounds() {
 
 /**
  * Change the window's shape from the shell's side — a request from a renderer
- * (its own size buttons, or an opener asking for circles) or from the shell's
+ * (its own size buttons, or an opener asking for the float) or from the shell's
  * own bookkeeping. Remembers the place the shape being LEFT was in, writes the
  * call size down if it is one, and applies the new shape.
  */
@@ -1303,12 +1284,9 @@ function setCallWindowShape(win, size, opts) {
     return next;
   }
   rememberCallWindowPlace(win);
-  const wasRing = callWindowSize === "ring";
   callWindowSize = next;
   rememberCallSize(next);
   applyCallWindowSize(win, next, opts);
-  if (next === "ring") setRingAttention(true);
-  else if (wasRing) setRingAttention(false);
   broadcastWindowRole();
   return next;
 }
@@ -1520,16 +1498,15 @@ function hasVoiceHost() {
   return !!callWindow && !callWindow.isDestroyed() && callWindowHost;
 }
 
-// Two windows draw circles over the person's work: the minimized call and the
-// idle faces overlay. Both need the same three runtime switches — lift
-// click-through while the pointer is over a circle, stay the size of their
-// circles, follow a held cursor — and the switches must behave identically or
-// the two surfaces drift into windows that feel different for no reason. Each
-// window registers its own channels; the logic is this one implementation.
+// The three runtime switches a see-through window asks of its shell: lift
+// click-through while the pointer is over a face or the card, stay the size
+// of its contents, follow a held cursor. One implementation, registered per
+// window, so a second see-through window could never drift into one that
+// feels different for no reason.
 function registerSeeThroughIpc(prefix, resolveSender, opts = {}) {
   const mayInteract = opts.mayInteract || (() => true);
   const mayResize = opts.mayResize || (() => true);
-  const anchor = opts.anchor || (() => "center");
+  const anchor = opts.anchor || (() => "top-left");
   const getWindow = opts.getWindow;
   let dragTimer = null;
   const stopDrag = () => {
@@ -1547,8 +1524,8 @@ function registerSeeThroughIpc(prefix, resolveSender, opts = {}) {
     win.setIgnoreMouseEvents(on !== true, { forward: true });
   });
 
-  // The circles are sized to their contents: the renderer measures them and
-  // says how big the window has to be.
+  // The float is sized to its contents: the renderer measures the row and
+  // the card and says how big the window has to be.
   shellIpc.on(`set-${prefix}-content-size`, (e, size) => {
     const win = resolveSender(e);
     if (!win || !mayResize()) return;
@@ -1558,7 +1535,7 @@ function registerSeeThroughIpc(prefix, resolveSender, opts = {}) {
     if (!(width > 0) || !(height > 0) || width > 4000 || height > 4000) return;
     // The renderer measures in CSS pixels and the window is sized in device-
     // independent ones, and the two come apart the moment somebody zooms the
-    // page: at 1.5x a 112px row of circles needs a 168px window, and a window
+    // page: at 1.5x a 112px row of faces needs a 168px window, and a window
     // sized to 112 would clip its own faces.
     const zoom = win.webContents.getZoomFactor();
     const [w, h] = [Math.round(width * zoom), Math.round(height * zoom)];
@@ -1569,27 +1546,22 @@ function registerSeeThroughIpc(prefix, resolveSender, opts = {}) {
     win.setResizable(true);
     win.setContentSize(w, h);
     win.setResizable(false);
-    // WIDTH growth keeps the row's centre fixed — the horizontal twin of the
-    // circles' top pinning in faces.css. The circles are drawn centred, so a
-    // top-left-anchored widen (hover adding a chrome wider than one face)
-    // would slide every circle away from the pointer that caused it.
-    // Math.trunc, not round: a hover's grow and shrink must cancel exactly at
-    // any zoom, or the window walks a pixel sideways per hover cycle. Height
-    // stays top-anchored — growth is downward, and the circles do not move.
+    // Growth goes AWAY from the anchored corner, and that corner stays put:
+    // a row anchored top right grows down and to the left, one anchored
+    // bottom right grows up and to the left. The faces nearest the anchor
+    // never move, whatever a state change adds at the far end, and a grow
+    // and shrink cancel exactly, so the window never walks.
     //
     // Then the display clamp. The window was placed while it was a small
-    // seed — a row that grew wider than the space to the screen edge would
-    // hang off it, chrome and all, with no title bar to recover it by.
+    // seed; a row that grew wider than the space to the screen edge would
+    // hang off it, card and all, with no title bar to recover it by.
     // Position wins over size when the display is smaller than the row: the
-    // left edge stays reachable and the far side overflows, same rule as
+    // near edge stays reachable and the far side overflows, same rule as
     // clampCorner on the web side.
-    //
-    // The strip is the other way round: it is tucked into the bottom-right
-    // corner, so it grows up and to the left, and that corner stays put.
     const [x, y] = win.getPosition();
-    const a = anchor();
-    const cx = a === "bottom-right" || a === "top-right" ? x + (curW - w) : x - Math.trunc((w - curW) / 2);
-    const cy = a === "bottom-right" ? y + (curH - h) : y;
+    const [av, ah] = anchor().split("-");
+    const cx = ah === "right" ? x + (curW - w) : x;
+    const cy = av === "bottom" ? y + (curH - h) : y;
     const area = screen.getDisplayMatching({ x: cx, y: cy, width: w, height: h }).workArea;
     const nx = Math.max(area.x, Math.min(cx, area.x + area.width - w));
     const ny = Math.max(area.y, Math.min(cy, area.y + area.height - h));
@@ -1629,18 +1601,15 @@ function registerSeeThroughIpc(prefix, resolveSender, opts = {}) {
 }
 
 const { stopDrag: stopCallWindowDrag } = registerSeeThroughIpc("call-window", senderIsCallWindow, {
-  // Only the click-through shapes have anything to lift or drag; the stage
-  // and the strip drag by their own header rows and take every click by
-  // construction.
+  // Only the float has anything to lift or drag; the stage drags by its own
+  // header row and takes every click by construction.
   mayInteract: () => callWindowChrome(callWindowSize, { pinned: wallPinned() }).clickThrough,
-  // Resizing is refused in the panel shape, where the person's own bounds are
-  // the answer and a renderer resizing the window under them would be the
-  // window fighting the hand on its edge.
-  mayResize: () => callWindowSize !== "panel" && callWindowSize !== "wall" && callWindowSize !== "idle",
-  // The strip grows and shrinks from its bottom-right corner, which is the
-  // corner it is tucked into; the circles keep their centre.
-  anchor: () =>
-    callWindowSize === "walkie" ? "bottom-right" : callWindowSize === "ring" ? "top-right" : "center",
+  // Resizing is refused in the panel and the wall, where the person's own
+  // bounds are the answer and a renderer resizing the window under them
+  // would be the window fighting the hand on its edge.
+  mayResize: () => callWindowSize === "float",
+  // The float grows away from the corner it is anchored to.
+  anchor: () => floatAnchor().corner,
   getWindow: () => callWindow,
 });
 
@@ -1753,16 +1722,15 @@ shellIpc.on("voice-mirror", (e, payload) => {
   }
 });
 
-// ── The idle faces ─────────────────────────────────────────────────────────
+// ── The float, popped out ──────────────────────────────────────────────────
 //
-// The team as photo circles floating over the work when there is no call —
-// a shape of the voice window, at the call circles' own spot, so a call
-// starting reads as the photos turning into video rather than a second thing
-// appearing. Opening is a declaration — "keep the team over my work" — so it
-// persists across launches; closing is its withdrawal. Any app window may ask:
-// the entry button lives in the people window, and the overlay's own chrome
-// is what closes it. The host reads the flag off its role and takes the shape
-// itself.
+// The face row lives in the app's header until the person pops it out; then
+// the host keeps the float up over their work whatever is happening, and the
+// header shows one chip that brings it back. Opening is a declaration, "keep
+// the faces over my work", so it persists across launches; closing is its
+// withdrawal. Any app window may ask. The host reads the flag off its role
+// and takes the shape itself; without the flag it shows the float only for
+// as long as something is happening while the app is behind another window.
 
 function facesOverlayWanted() {
   const saved = loadFullSettings().facesWindow;
@@ -1828,8 +1796,6 @@ shellIpc.handle("open-faces-window", () => {
 shellIpc.handle("close-faces-window", () => {
   setFacesOverlayWanted(false);
 });
-
-shellIpc.handle("get-faces-window-open", () => facesOverlayWanted());
 // ---------------------------------------------------------------------------
 // Multi-window notification routing. Every window runs the same web app and
 // would otherwise fire its own banner and sound for the same event. Main is
@@ -1918,7 +1884,12 @@ function flushWindowRole() {
     const windows = describeWindows();
     const leader = chooseLeader(windows);
     const anyInCall = windows.some((w) => w.inCall);
-    const appFocused = windows.some((w) => w.focused);
+    // Whether the person is IN the app: a window they work in has focus. The
+    // voice window is not one of those. Its float is glass over somebody
+    // else's work, and a click on a face there must not read as "the app
+    // has their attention", or the host would hide the float under the
+    // pointer that just reached for it.
+    const appFocused = windows.some((w) => w.focused && !w.isCallPanel);
     // Whether a people window exists at all — every window needs it: the one
     // that IS it renders the panel, the others stand down from the pumps and
     // surfaces it owns.
@@ -2992,12 +2963,13 @@ shellIpc.handle("open-os-permission-settings", (_e, kind) => {
   return computerPermissions.owns(k) ? computerPermissions.openSettings(k) : osPermissions.openSettings(k);
 });
 
-// Sign-in hands its OAuth flow to the user's real browser (issue #20): the
-// embedded window has no Google/GitHub sessions. https-only — the renderer
-// only ever passes app-origin auth URLs, and anything else has no business
-// being launched from here.
+// Hands a URL to the person's real browser. Sign-in sends its OAuth flow
+// here (the embedded window has no Google/GitHub sessions), and the browser
+// pane sends the page it shows, which is often a plain-http localhost dev
+// server. Web origins only: anything else has no business being launched
+// from here.
 shellIpc.handle("open-external", (_e, url) => {
-  if (typeof url === "string" && /^https:\/\//i.test(url)) shell.openExternal(url);
+  if (typeof url === "string" && /^https?:\/\//i.test(url)) shell.openExternal(url);
 });
 
 // Palette IPC
