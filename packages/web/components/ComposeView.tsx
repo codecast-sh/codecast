@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { useMountEffect } from "../hooks/useMountEffect";
@@ -394,6 +394,39 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
     });
   }, [sessionId, router, onClose]);
 
+  // Both frames clip their overflow, and the composer inside cannot shrink,
+  // so the composer's field caps itself at --composer-max-h (MessageInput)
+  // and scrolls past it. The modal is a fixed box and sets the cap in its
+  // classes as a share of its height. The dock instead grows with the draft
+  // up to --frame-h, and CSS cannot say "the frame's max minus everything
+  // else in it" across the composer's own boxes, so the dock measures:
+  // everything in the frame but the field is chrome, and the field gets what
+  // the max leaves. The field mounts one render after the frame (sessionId),
+  // so the measure re-runs then; every row the frame stacks is observed too,
+  // because a picker row that wraps or a row of pasted images moves the cap
+  // without moving the frame once the frame sits at its max.
+  useLayoutEffect(() => {
+    if (!docked || collapsed) return;
+    const root = rootRef.current;
+    if (!root) return;
+    const measure = () => {
+      for (const el of root.querySelectorAll<HTMLElement>(":scope > *, :scope > .contents > *")) ro.observe(el);
+      const field = root.querySelector<HTMLElement>("[data-composer-field]");
+      if (!field) return;
+      ro.observe(field);
+      const max = parseFloat(getComputedStyle(root).maxHeight) - (root.offsetHeight - root.clientHeight);
+      if (!Number.isFinite(max)) return;
+      root.style.setProperty("--composer-max-h", `${Math.max(48, max - (root.scrollHeight - field.offsetHeight))}px`);
+    };
+    const ro = new ResizeObserver(measure);
+    ro.observe(root);
+    measure();
+    return () => {
+      ro.disconnect();
+      root.style.removeProperty("--composer-max-h");
+    };
+  }, [docked, collapsed, sessionId]);
+
   const conversation = sessionId
     ? ({ _id: sessionId, status: "active" } as unknown as ConversationData)
     : null;
@@ -420,9 +453,9 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
         if (docked && !collapsed && !rootRef.current?.contains(document.activeElement)) refocusComposer();
       }}
       className={`relative border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col animate-in fade-in-0 duration-150 ${
-        !docked ? "w-[94vw] h-[88vh] max-w-[960px] max-h-[680px] rounded-xl zoom-in-95 slide-in-from-top-2"
+        !docked ? "w-[94vw] max-w-[960px] [--frame-h:min(88vh,680px)] h-[var(--frame-h)] [--composer-max-h:calc(var(--frame-h)*0.45)] rounded-xl zoom-in-95 slide-in-from-top-2"
           : collapsed ? "w-[280px] max-w-full rounded-t-lg border-b-0 slide-in-from-bottom-4"
-          : "w-[460px] max-w-full h-[min(520px,calc(100vh-5rem))] rounded-t-xl border-b-0 slide-in-from-bottom-4"
+          : "w-[460px] max-w-full [--frame-h:calc(100vh-5rem)] max-h-[var(--frame-h)] rounded-t-xl border-b-0 slide-in-from-bottom-4"
       }`}
       onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
       {isDragging && (
@@ -437,7 +470,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
       {/* Collapsed keeps everything mounted (draft, pickers, uploads) and only
           stops painting it. */}
       <div className={collapsed ? "hidden" : "contents"}>
-      <div className={`flex-1 min-h-0 flex flex-col px-4 ${docked ? "pt-3" : "pt-6"}`}>
+      <div className={`flex flex-col px-4 ${docked ? "shrink-0 pt-3" : "flex-1 min-h-0 pt-6"}`}>
         {conversation && <NewSessionView conversation={conversation} />}
       </div>
       {conversation && (
