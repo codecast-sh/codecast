@@ -36,10 +36,11 @@ what was said without having been on the call — the decisions, the asks, who o
 cast calls                        # team call history, live calls first
 cast call <id>                    # one call: summary + action items
 cast call <id> --transcript       # full who-said-what transcript
-cast call <id> --json             # machine-readable (includes segments)
+cast call <id> --json             # machine-readable, segments too
+cast call hold 3m|off             # hold the room's words while you work
 ```
 
-Reach for a transcript when a task or thread refers to something "we discussed on the call",
-and quote the exact line rather than paraphrasing from memory.
+Read the transcript when a task or thread refers to "what we said on the call", and quote
+the exact line rather than paraphrase it.
 <!-- cast @VERSION@ -->
 <!-- /codecast-calls -->
