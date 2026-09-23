@@ -72,8 +72,12 @@
 /* The face that goes with the badge. Away drains most of the color out of a
  * teammate, offline all of it — presence you can read from the avatar alone,
  * before the badge is even in focus. */
-.pres-av-away { filter: grayscale(60%); }
-.pres-av-offline { filter: grayscale(100%); opacity: 0.45; }
+.pres-av-away { --drain: grayscale(60%); }
+.pres-av-offline { --drain: grayscale(100%); opacity: 0.45; }
+/* The drain is a property, so a surface that lights a face (the face row's
+ * open card) can compose its own filter on top of it instead of replacing it. */
+.pres-av-away,
+.pres-av-offline { filter: var(--drain); }
 .pres-av-away,
 .pres-av-offline { transition: filter 200ms, opacity 200ms; }
 

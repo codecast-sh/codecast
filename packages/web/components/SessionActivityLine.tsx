@@ -44,7 +44,6 @@ export function CrossfadeText({ text, className = "" }: { text: string; classNam
       )}
       <span
         key={`in-${n}`}
-        data-sv-activity-text
         className={`col-start-1 row-start-1 truncate ${outgoing ? "animate-in fade-in-0 slide-in-from-bottom-0.5 duration-200" : ""}`}
       >
         {text}
