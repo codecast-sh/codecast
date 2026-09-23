@@ -2,7 +2,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import {
   Terminal, Bot, RefreshCw, User, KeyRound, Users, Plug, Monitor, Bell, Laptop, UserCog, Blocks, X,
-  Search, Volume2, Video, ArrowRightLeft } from "lucide-react";
+  Search, Volume2, Video, ArrowRightLeft, MonitorSmartphone } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { useEventListener } from "../../hooks/useEventListener";
@@ -28,6 +28,7 @@ import CliPanel from "../../app/settings/cli/page";
 import DevicesPanel from "../../app/settings/devices/page";
 import MigratePanel from "../../app/settings/migrate/page";
 import DesktopPanel from "../../app/settings/desktop/page";
+import AppsPanel from "../../app/settings/apps/page";
 
 const PANELS: Record<SettingsSectionId, React.ComponentType> = {
   "general": ProfilePanel,
@@ -47,6 +48,7 @@ const PANELS: Record<SettingsSectionId, React.ComponentType> = {
   "devices": DevicesPanel,
   "migrate": MigratePanel,
   "desktop": DesktopPanel,
+  "apps": AppsPanel,
 };
 
 interface SectionDef {
@@ -69,6 +71,7 @@ const GROUPS: { label: string; sections: SectionDef[] }[] = [
       { id: "sounds", label: "Sounds", icon: Volume2, desc: "What this machine says out loud, and how loudly", keywords: "audio volume mute chime cue walkie chat ring quiet" },
       { id: "calls", label: "Calls", icon: Video, desc: "How a call starts for you: camera, mic, devices, walkie, meetings", keywords: "camera microphone mic mute devices walkie huddle meeting record join always on recording light hands free press" },
       { id: "accounts", label: "Accounts", icon: KeyRound, desc: "Sign-in identities linked to this account", keywords: "github oauth email login delete danger" },
+      { id: "apps", label: "Apps", icon: MonitorSmartphone, desc: "Codecast on your Mac, your iPhone and in Chrome", keywords: "desktop mac macos download dmg ios iphone ipad app store mobile phone push chrome extension install" },
     ],
   },
   {

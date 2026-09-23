@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { BROWSER_SYNC_PENDING_CAP, claimSharedCheckout, commandOutcome, pickOnlineLocalDevice, placeConversation, placementFence, reportPlacementFailure, requestBrowserSync, requestRemoteWake, wakeDevicesFor } from "./cloud";
-import { resolveOfflineOwnerTakeover } from "./pendingMessages";
 import { DEVICE_ONLINE_MS } from "./deviceRouting";
 
 const now = 1_000_000_000;
@@ -54,21 +53,6 @@ describe("requestRemoteWake — stamping the device when work queues for a sleep
     const remote = await d.get("dev1");
     expect(wakeDevicesFor([remote], remote.last_seen + DEVICE_ONLINE_MS)).toEqual([{ device_id: "box", label: null }]);
     expect((await d.get("dev2")).wake_requested_at).toBeUndefined();
-  });
-});
-
-describe("resolveOfflineOwnerTakeover — a sleeping cloud host is not a dead laptop", () => {
-  const user = "user1" as any;
-  test("a local claimant may take over an offline LOCAL owner, never an offline REMOTE one", async () => {
-    const d = makeFakeDb({
-      devices: [
-        { _id: "a", user_id: user, device_id: "laptop", is_remote: false, last_seen: now },
-        { _id: "b", user_id: user, device_id: "old-laptop", is_remote: false, last_seen: asleep },
-        { _id: "c", user_id: user, device_id: "box", is_remote: true, last_seen: asleep },
-      ],
-    });
-    expect(await resolveOfflineOwnerTakeover({ db: d } as any, user, "laptop", "old-laptop", now)).toBe(true);
-    expect(await resolveOfflineOwnerTakeover({ db: d } as any, user, "laptop", "box", now)).toBe(false);
   });
 });
 

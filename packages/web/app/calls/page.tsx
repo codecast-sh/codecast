@@ -129,16 +129,20 @@ function CallListRow({ call, selected }: { call: any; selected: boolean }) {
       <div className="mt-1 flex items-center gap-2 pl-4">
         <span className="shrink-0 text-[11px] text-sol-text-dim">{fmtWhen(call.started_at)}</span>
         <RecordingScopeChip call={call} />
-        {people.length === 0 ? (
+        {recording ? (
+          // One microphone never fills participants, so the row reads the
+          // transcript itself: how many lines it has, or where it stands.
           <span className="text-[11px] italic text-sol-text-dim">
-            {live
-              ? recording
+            {call.last_seq > 0
+              ? `${call.last_seq} line${call.last_seq === 1 ? "" : "s"}`
+              : live
                 ? "listening"
-                : "no one spoke yet"
-              : recording
-                ? "nothing was said"
-                : "no one spoke"}
+                : call.transcribe_status === "pending"
+                  ? "transcribing…"
+                  : "nothing was said"}
           </span>
+        ) : people.length === 0 ? (
+          <span className="text-[11px] italic text-sol-text-dim">{live ? "no one spoke yet" : "no one spoke"}</span>
         ) : (
           <span className="min-w-0 truncate text-[11px]">
             {people.map((p: any, i: number) => (
@@ -382,15 +386,19 @@ function CallDetail({ id }: { id: string }) {
               <PhoneCall className="h-3.5 w-3.5" /> Join
             </button>
           )}
-          <button
-            onClick={() =>
-              openFeedTargetPicker({ title: "Send the whole call to…", gesture: "send", withNote: true, onPick: onPick("all") })
-            }
-            className="flex shrink-0 items-center gap-1.5 rounded-md bg-sol-violet/15 px-3 py-1.5 text-xs font-medium text-sol-violet transition-colors hover:bg-sol-violet/25"
-            title="Send the whole transcript to an agent session or doc"
-          >
-            <Sparkles className="h-3.5 w-3.5" /> Send to agent
-          </button>
+          {/* Nothing to send until a word was said; on a live call the
+              button appears with the first turn. */}
+          {turns.length > 0 && (
+            <button
+              onClick={() =>
+                openFeedTargetPicker({ title: "Send the whole call to…", gesture: "send", withNote: true, onPick: onPick("all") })
+              }
+              className="flex shrink-0 items-center gap-1.5 rounded-md bg-sol-violet/15 px-3 py-1.5 text-xs font-medium text-sol-violet transition-colors hover:bg-sol-violet/25"
+              title="Send the whole transcript to an agent session or doc"
+            >
+              <Sparkles className="h-3.5 w-3.5" /> Send to agent
+            </button>
+          )}
         </div>
       </div>
 
@@ -402,7 +410,7 @@ function CallDetail({ id }: { id: string }) {
           <audio
             ref={audioRef}
             controls
-            preload="none"
+            preload="metadata"
             src={call.recording_url}
             className="w-full max-w-lg"
             onTimeUpdate={(e) => setAudioMs(e.currentTarget.currentTime * 1000)}

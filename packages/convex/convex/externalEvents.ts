@@ -126,14 +126,20 @@ export async function recordExternalEvent(ctx: { db: any }, args: RecordArgs): P
     .first();
   if (existing) return existing._id;
 
+  // A row paints only what it stores. An actor known by id alone renders as a
+  // blank face, and a pull request known by id alone gets no link, so both are
+  // filled here once rather than by every caller.
+  const user = args.actor_user_id && !args.actor_login ? await ctx.db.get(args.actor_user_id) : null;
+  const pr = args.pr_id && args.pr_number === undefined ? await ctx.db.get(args.pr_id) : null;
+
   const taskIds = args.task_ids ?? [];
   return await ctx.db.insert("external_events", {
     team_id: args.team_id,
     source: args.source,
     repository: normalizeRepository(args.repository),
     kind: args.kind,
-    actor_login: args.actor_login,
-    actor_avatar_url: args.actor_avatar_url,
+    actor_login: args.actor_login ?? user?.github_username ?? user?.name,
+    actor_avatar_url: args.actor_avatar_url ?? user?.github_avatar_url ?? user?.image,
     actor_user_id: args.actor_user_id,
     title: args.title,
     summary: args.summary,
@@ -141,7 +147,7 @@ export async function recordExternalEvent(ctx: { db: any }, args: RecordArgs): P
     sha: args.sha,
     branch: args.branch,
     pr_id: args.pr_id,
-    pr_number: args.pr_number,
+    pr_number: args.pr_number ?? pr?.number,
     commit_id: args.commit_id,
     comment_id: args.comment_id,
     issue: args.issue,

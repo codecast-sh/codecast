@@ -5,10 +5,25 @@
  */
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import * as path from "node:path";
+import { readFileSync } from "node:fs";
 import { isolateCodecastDir, type IsolatedCodecastDir } from "../../test-helpers/codecastDir.js";
-import { takeStamp, takeWake, WAKE_MIN_GAP_MS, WAKE_ONCE_MS } from "./realChrome.js";
+import { chromeLaunchCommand, takeStamp, takeWake, WAKE_MIN_GAP_MS, WAKE_ONCE_MS } from "./realChrome.js";
 
 let isolation: IsolatedCodecastDir;
+
+test("macOS launches Chrome through Launch Services with a fresh default-profile process", () => {
+  const args = ["--disable-renderer-backgrounding", "--restore-last-session", "file:///private/tmp/pair.html"];
+  expect(chromeLaunchCommand("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", args, "darwin")).toEqual({
+    command: "/usr/bin/open",
+    args: ["-n", "-g", "-a", "/Applications/Google Chrome.app", "--args", ...args],
+  });
+});
+
+test("non-bundle and non-macOS Chrome launches retain their executable and arguments", () => {
+  expect(chromeLaunchCommand("/usr/bin/chromium", ["--restore-last-session"], "linux")).toEqual({ command: "/usr/bin/chromium", args: ["--restore-last-session"] });
+  expect(chromeLaunchCommand("/tmp/chromium", [], "darwin")).toEqual({ command: "/tmp/chromium", args: [] });
+});
+
 beforeEach(() => {
   isolation = isolateCodecastDir("real-chrome-test-");
 });
@@ -53,18 +68,21 @@ test("six processes claiming the same outage at once: exactly one wins", async (
   // true. Under the lock the claims serialize and exactly one wins.
   const at = Date.now() + 5_000;
   const script = `
+    import { writeFileSync } from "node:fs";
     import { takeWake } from ${JSON.stringify(path.join(import.meta.dir, "realChrome.ts"))};
     await new Promise((r) => setTimeout(r, Math.max(0, ${at} - Date.now())));
-    console.log(String(await takeWake("seen:race")));
+    writeFileSync(process.env.CAST_CLAIM_RESULT_FILE, String(await takeWake("seen:race")));
   `;
-  const children = Array.from({ length: 6 }, () =>
+  const results = Array.from({ length: 6 }, (_, index) => path.join(isolation.dir, `claim-${index}.txt`));
+  const children = results.map((result) =>
     Bun.spawn([process.execPath, "--eval", script], {
-      env: { ...process.env, CODECAST_DIR: isolation.dir, CAST_REAL_CHROME_CLAIM_DELAY_MS: "400" },
-      stdout: "pipe",
+      env: { ...process.env, CODECAST_DIR: isolation.dir, CAST_REAL_CHROME_CLAIM_DELAY_MS: "400", CAST_CLAIM_RESULT_FILE: result },
+      stdout: "ignore",
       stderr: "inherit",
     }),
   );
-  const answers = await Promise.all(children.map(async (c) => (await new Response(c.stdout).text()).trim()));
+  expect(await Promise.all(children.map((c) => c.exited))).toEqual([0, 0, 0, 0, 0, 0]);
+  const answers = results.map((result) => readFileSync(result, "utf8"));
   expect(answers.filter((a) => a === "true")).toHaveLength(1);
   expect(answers.filter((a) => a === "false")).toHaveLength(5);
 }, 90_000);

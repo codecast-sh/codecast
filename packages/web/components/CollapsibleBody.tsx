@@ -94,17 +94,6 @@ export function ExpandableLine({
 // lines whatever its content, so a caller with an expensive body (markdown that
 // re-parses on mount) can render a cheap slice while collapsed and the whole
 // thing only once the reader asks for it.
-//
-// Two ways to clip. A number clips to that many pixels wherever the body
-// sits. "fill" clips to whatever room its flex parent leaves: the caller
-// makes the wrapper a flex child (`flex-1`), and the body takes the space
-// left after its siblings and fades where that runs out. It is never
-// squeezed below `fillFloor` pixels, so a crowded parent shows a few lines
-// and a fade rather than a sliver; and the floor never exceeds the content,
-// so a short body leaves no empty gap under itself. A fill body cannot open
-// in place (its parent is what caps it), so it hands the toggle to
-// `onExpand`, which opens the content somewhere with room (the decision
-// card grows to the full pane).
 export function CollapsibleBody({
   collapsedHeight = 180,
   className = "",
@@ -112,11 +101,9 @@ export function CollapsibleBody({
   expandLabel = "Expand",
   collapseLabel = "Collapse",
   openOnFocus = false,
-  onExpand,
-  fillFloor = 88,
   children,
 }: {
-  collapsedHeight?: number | "fill";
+  collapsedHeight?: number;
   className?: string;
   toggleClassName?: string;
   /** What the toggle says. Name the content when the reader needs to know
@@ -126,19 +113,11 @@ export function CollapsibleBody({
   /** Open when focus enters the body. An editable body (a description, a
    *  form) must not stay clipped around the caret the reader just placed. */
   openOnFocus?: boolean;
-  /** The toggle opens the content elsewhere instead of in place. */
-  onExpand?: () => void;
-  /** Fill mode: the fewest pixels the body keeps when its parent is crowded. */
-  fillFloor?: number;
   children: React.ReactNode | ((expanded: boolean) => React.ReactNode);
 }) {
   const [expanded, setExpanded] = useState(false);
   const [overflows, setOverflows] = useState(false);
   const innerRef = useRef<HTMLDivElement>(null);
-  const boxRef = useRef<HTMLDivElement>(null);
-  const fill = collapsedHeight === "fill";
-  // The fill floor, capped at the content's own height (see above).
-  const [floor, setFloor] = useState(fillFloor);
 
   // The clip lives on the outer box, so the inner box keeps its natural height
   // and measures the real content. Markdown settles over several frames (fonts,
@@ -146,44 +125,27 @@ export function CollapsibleBody({
   // catches the final size. Keeping `children` out of the deps also matters in a
   // transcript: it is a fresh object every render, and depending on it would
   // rebuild the observer on every parent re-render, on every mounted card.
-  //
-  // A fill body measures against the box the flex parent gave it, so the
-  // box is observed too: the parent resizing (a pane, a window) is what
-  // changes whether the content fits.
   useWatchEffect(() => {
     const el = innerRef.current;
-    const box = boxRef.current;
-    if (!el || !box) return;
-    const limit = () => (collapsedHeight === "fill" ? box.clientHeight : collapsedHeight);
-    const measure = () => {
-      setOverflows(el.scrollHeight > limit() + 8);
-      if (collapsedHeight === "fill") setFloor(Math.min(fillFloor, el.scrollHeight));
-    };
+    if (!el) return;
+    const measure = () => setOverflows(el.scrollHeight > collapsedHeight + 8);
     measure();
     if (typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver(measure);
     ro.observe(el);
-    if (collapsedHeight === "fill") ro.observe(box);
     return () => ro.disconnect();
-  }, [collapsedHeight, fillFloor]);
+  }, [collapsedHeight]);
 
   const clipped = overflows && !expanded;
 
   return (
-    <div className={`${fill ? "flex flex-col" : ""} ${className}`} onFocusCapture={openOnFocus && !expanded ? () => setExpanded(true) : undefined}>
-      <div
-        ref={boxRef}
-        className={fill ? "flex-1 overflow-hidden" : undefined}
-        style={{
-          ...(fill ? { minHeight: floor } : {}),
-          ...(clipped ? { ...(fill ? {} : { maxHeight: collapsedHeight, overflow: "hidden" }), ...clipFade() } : {}),
-        }}
-      >
+    <div className={className} onFocusCapture={openOnFocus && !expanded ? () => setExpanded(true) : undefined}>
+      <div style={clipped ? { maxHeight: collapsedHeight, overflow: "hidden", ...clipFade() } : undefined}>
         <div ref={innerRef}>{typeof children === "function" ? children(expanded) : children}</div>
       </div>
       {overflows && (
         <button
-          onClick={onExpand ?? (() => setExpanded((e) => !e))}
+          onClick={() => setExpanded((e) => !e)}
           className={`shrink-0 flex items-center gap-1 text-[10px] text-sol-text-dim hover:text-sol-text-muted transition-colors ${toggleClassName}`}
         >
           {expanded ? <ChevronUp className="w-2.5 h-2.5" /> : <ChevronDown className="w-2.5 h-2.5" />}

@@ -167,9 +167,10 @@ test("composes windows, tray, menus, protocol and IPC from config", async () => 
   expect(await el.handlers.get("get-app-version")()).toBe("1.1.94");
   expect(await el.handlers.get("get-env")()).toBe("prod");
   expect(await el.handlers.get("get-system-idle-seconds")()).toBe(7);
-  el.handlers.get("open-external")({}, "http://insecure");
+  el.handlers.get("open-external")({}, "file:///etc/passwd");
+  el.handlers.get("open-external")({}, "http://localhost:3000/");
   el.handlers.get("open-external")({}, "https://codecast.sh/auth/cli");
-  expect(el.opened).toEqual(["https://codecast.sh/auth/cli"]);
+  expect(el.opened).toEqual(["http://localhost:3000/", "https://codecast.sh/auth/cli"]);
 
   // Navigation dispatches the configured event into the main window.
   api.navigateMain("/inbox");

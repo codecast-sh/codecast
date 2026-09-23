@@ -10,6 +10,7 @@ import type { PeopleDensity } from "./peopleDensity";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { type LiveRoomRow } from "../../hooks/useLiveRooms";
+import type { FaceState } from "../../lib/faces/faceRow";
 import { useCallsAvailable } from "../../lib/teamFeatures";
 import {
   canOpenFacesOverlay,
@@ -24,7 +25,8 @@ import {
 import { useDesktopWindowRole } from "../../hooks/useDesktopWindowRole";
 import { dmRoomKey } from "@codecast/shared/contracts";
 import { ErrorBoundary } from "../ErrorBoundary";
-import { CallDock } from "../calls/CallDock";
+import { useHandCallToPanel } from "../../hooks/useHandCallToPanel";
+import { engagementOf, isInHuddle, isTalking } from "../../lib/faces/faceRow";
 import { CallSettingsSheet } from "../calls/CallSettings";
 import { ElsewhereCallPill } from "../calls/ElsewhereCallPill";
 import { LiveNowRail } from "../calls/LiveNow";
@@ -142,17 +144,12 @@ export function PeoplePanel({
           {callsEnabled && <PeopleLegend />}
         </>
       )}
-      {/* The phone's own ringer and strip live HERE, in the window that hosts
-          the audio. CallDock portals to the body and decides for itself whether
-          it is a call dock, the walkie strip, or nothing at all — and once a
-          call panel exists it stands down entirely, so what is left of it in
-          this window is the walkie. Never inside the voice host: there the
-          strip and the call are shapes of the window itself. */}
-      {!host && (
-        <ErrorBoundary name="Call window" level="inline" fallback={null}>
-          <CallDock />
-        </ErrorBoundary>
-      )}
+      {/* A call that starts here moves to its own window (useHandCallToPanel),
+          the one rule the buddy list and the main window share on an older
+          shell. The faces in this window say who is talking; the row in the
+          header and the floating window carry the card. Never inside the
+          voice host: there the call is a shape of the window itself. */}
+      {!host && <CallHandoff />}
       {settingsOpen && <CallSettingsSheet onClose={() => setSettingsOpen(false)} />}
     </main>
   );
@@ -561,7 +558,7 @@ function Roster({
   compact: boolean;
   data: PeopleRosterData;
 }) {
-  const { now, viewerId, members, fleets, roomFor, dmFor, talkingId, strayWorkspace } = data;
+  const { now, viewerId, members, fleets, roomFor, dmFor, row, strayWorkspace } = data;
 
   const groups = useMemo(() => groupMembersByBand(members), [members]);
 
@@ -618,7 +615,9 @@ function Roster({
                     fleet={fleets.get(id) ?? null}
                     room={roomFor.get(id) ?? null}
                     dm={dmFor.get(id) ?? null}
-                    talking={!!id && id === talkingId}
+                    engagement={engagementOf(id, row)}
+                    inHuddle={isInHuddle(id, row)}
+                    talking={isTalking(id, row)}
                     compact={compact}
                   />
                 );
@@ -638,6 +637,8 @@ function RosterRow({
   fleet,
   room,
   dm,
+  engagement,
+  inHuddle,
   talking,
   compact,
 }: {
@@ -648,6 +649,9 @@ function RosterRow({
   fleet: FleetSummary | null;
   room: LiveRoomRow | null;
   dm: DmBadge | null;
+  /** The face row's answers for this person (lib/faces/faceRow). */
+  engagement: FaceState;
+  inHuddle: boolean;
   talking: boolean;
   /** One line per person: the name and what they are doing side by side. */
   compact: boolean;
@@ -656,8 +660,8 @@ function RosterRow({
   const name = memberDisplayName(member);
   const visual = memberPresenceVisual(member);
   const line = useMemo(
-    () => presenceActivityLine(member, { now, fleet, room, talking, viewerId }),
-    [member, now, fleet, room, talking, viewerId],
+    () => presenceActivityLine(member, { now, fleet, room, engagement, inHuddle, viewerId }),
+    [member, now, fleet, room, engagement, inHuddle, viewerId],
   );
   const huddle = useMemberHuddle(member, viewerId, room, name);
 
@@ -778,4 +782,11 @@ function RosterRow({
       </div>
     </div>
   );
+}
+
+/** The desktop handoff and nothing else: a huddle that starts in this window
+ *  moves to the call window the moment it is a call. */
+function CallHandoff() {
+  useHandCallToPanel();
+  return null;
 }

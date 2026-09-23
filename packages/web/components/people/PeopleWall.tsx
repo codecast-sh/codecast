@@ -18,6 +18,7 @@ import { type WallFace } from "./peopleWallLayout";
 import { usePeopleRoster, type PeopleRosterData } from "./usePeopleRoster";
 import { useWall } from "./usePeopleWall";
 import "./people.css";
+import { engagementOf, isInHuddle, isTalking } from "../../lib/faces/faceRow";
 
 /** What a face tells the surface about itself as a pointer or focus arrives:
  *  the words the wall would float under the circle, for shapes (the strip)
@@ -120,16 +121,18 @@ export function WallFaceButton({
   onDescribe?: (d: FaceDescription | null, ifShowing?: string) => void;
 }) {
   const { id, member, px } = face;
-  const { viewerId, now, fleets, roomFor, dmFor, talkingId } = data;
+  const { viewerId, now, fleets, roomFor, dmFor, row } = data;
   const name = memberDisplayName(member);
   const visual = memberPresenceVisual(member);
   const fleet = fleets.get(id) ?? null;
   const room = roomFor.get(id) ?? null;
   const dm = dmFor.get(id) ?? null;
-  const talking = !!id && id === talkingId;
+  const engagement = engagementOf(id, row);
+  const inHuddle = isInHuddle(id, row);
+  const talking = isTalking(id, row);
   const line = useMemo(
-    () => presenceActivityLine(member, { now, fleet, room, talking, viewerId }),
-    [member, now, fleet, room, talking, viewerId],
+    () => presenceActivityLine(member, { now, fleet, room, engagement, inHuddle, viewerId }),
+    [member, now, fleet, room, engagement, inHuddle, viewerId],
   );
 
   // The DM is opened (or created) at PRESS time, never at render: pointing at a
@@ -262,7 +265,6 @@ export function WallFaceButton({
           badgeSize={px >= 44 ? "md" : "sm"}
           title=""
           className="people-face-av"
-          showHuddle={!key.burst}
         />
         {unread > 0 && (
           <span

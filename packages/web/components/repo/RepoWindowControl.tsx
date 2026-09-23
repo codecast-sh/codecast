@@ -7,7 +7,7 @@ import Link from "next/link";
 import { ExternalLink, PanelsTopLeft } from "lucide-react";
 import { toast } from "sonner";
 import { useLocalAuth } from "../../lib/localAuth";
-import { openInBrowser } from "../../lib/popOut";
+import { explainOpenInBrowser, openInBrowser } from "../../lib/popOut";
 import { toAppHref, toStandaloneHref } from "../../lib/repoView";
 import { useRepoLocation } from "./useRepoFamily";
 
@@ -16,11 +16,7 @@ const CONTROL =
 
 function openAsPage(here: string): void {
   const url = new URL(toStandaloneHref(here), window.location.origin).toString();
-  if (openInBrowser(url) === "needs-update") {
-    toast.error("The desktop app needs an update for this", {
-      description: "This build cannot hand a page to your browser. Update Codecast and it opens on its own.",
-    });
-  }
+  explainOpenInBrowser(openInBrowser(url), toast);
 }
 
 export function RepoWindowControl() {
