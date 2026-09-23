@@ -186,7 +186,10 @@ describe("the attachment capability is narrow", () => {
   test("a tampered or expired capability reads nothing", async () => {
     const cap = await mint(vaultId);
     const expired = mintVaultCapability(TOKEN, vaultId, { ttlMs: -1000 }).value;
-    for (const bad of [cap.slice(0, -1) + "0", cap.replace("v1.", "v2."), expired, "", "junk"]) {
+    // Flip the last hex digit to a different one: overwriting it with a fixed
+    // "0" left the capability intact whenever its signature already ended in 0.
+    const tampered = cap.slice(0, -1) + (cap.endsWith("0") ? "1" : "0");
+    for (const bad of [tampered, cap.replace("v1.", "v2."), expired, "", "junk"]) {
       const res = await bare(`/vault/file?vault=${vaultId}&path=notes%2Fshot.png&cap=${encodeURIComponent(bad)}`);
       expect(res.status, JSON.stringify(bad)).toBe(403);
     }
