@@ -18,6 +18,7 @@ import {
 import { authorizeRoom, liveMembers } from "./callRooms";
 import { roomSeatClass, type SeatClass } from "./calls";
 import { normalizeTeamTaskStatuses } from "@codecast/shared/tasks";
+import { teamFeatureEnabled } from "@codecast/shared/contracts";
 import { purgeChatMembership } from "./chat";
 import { decommissionAnchorRow } from "./anchors";
 import { readLocalViewRevision } from "./localFirstCommands";
@@ -408,6 +409,12 @@ export const getTeamMembers = query({
       .query("team_memberships")
       .withIndex("by_team_id", (q) => q.eq("team_id", args.team_id))
       .collect();
+    // A role's bot user holds a membership like a person. The org feature is
+    // per team, default off (teams.features.org), and a team with it off
+    // shows no role bots on any roster surface (avatar bar, pickers, chat
+    // people). Slack shadow identities are bots too and stay. The team row
+    // changes at human speed, so reading it here costs no re-runs.
+    const orgOn = teamFeatureEnabled(await ctx.db.get(args.team_id), "org");
     // THIS QUERY READS NO CONVERSATION, AND MUST NOT START AGAIN. It is the
     // most subscribed query in the app (the avatar bar, the team page, the
     // settings sync and several mobile screens all mount it), and a Convex
@@ -426,6 +433,7 @@ export const getTeamMembers = query({
       memberships.map(async (m) => {
         const user = await ctx.db.get(m.user_id);
         if (!user) return null;
+        if (!orgOn && user.is_bot && user.bot_kind !== "slack") return null;
         // Person presence (active/idle/away/offline), derived in one place
         // (presenceState.ts) from the same rows push routing trusts. Devices
         // are read only for machine-wide opt-ins with a live app surface —

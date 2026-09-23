@@ -14,6 +14,8 @@ import { TeamIdentityPicker, type TeamIdentity } from "../../../../components/te
 import { VisibilityPicker, type TeamVisibility } from "../../../../components/team/VisibilityPicker";
 import { WorkspaceSharePicker } from "../../../../components/team/WorkspaceSharePicker";
 import { useWorkspaceSelection } from "../../../../hooks/useWorkspaceSelection";
+import { useShareImpact } from "../../../../hooks/useShareImpact";
+import { shareActionLabel } from "../../../../lib/team/shareImpact";
 import { InvitePanel } from "../../../../components/team/InvitePanel";
 import { useTeamWorkspaceSuggestions } from "../../../../hooks/useTeamWorkspaceSuggestions";
 import { useSaveTeamSetup } from "../../../../lib/team/saveTeamSetup";
@@ -87,7 +89,8 @@ export default function CreateTeamPage() {
   const updateTeamIcon = useMutation(api.teams.updateTeamIcon);
 
   const data = useTeamWorkspaceSuggestions(teamId);
-  const { selectedPaths, toggle, selectedCount } = useWorkspaceSelection(data, teamId);
+  const { selectedPaths, toggle, selectedCount, selectedList, includePast, setIncludePast } = useWorkspaceSelection(data, teamId);
+  const impact = useShareImpact(selectedList, data.allProjects);
   const save = useSaveTeamSetup();
 
   const trimmed = name.trim();
@@ -179,7 +182,7 @@ export default function CreateTeamPage() {
     const p = teamIdPromise.current;
     if (!p) return;
     p.then((id) =>
-      save({ teamId: id as Id<"teams">, visibility, selectedPaths: paths, allProjects: data.allProjects }),
+      save({ teamId: id as Id<"teams">, visibility, selectedPaths: paths, allProjects: data.allProjects, includePast }),
     ).catch((err) => {
       // When the create itself failed, its handler already put the error in
       // place (or toasted it); a settings toast here would blame the wrong
@@ -336,7 +339,7 @@ export default function CreateTeamPage() {
         onSkip={selectedCount > 0 ? () => finishSetup({}) : undefined}
         skipLabel="Skip for now"
         onContinue={() => finishSetup(selectedPaths)}
-        continueLabel={selectedCount > 0 ? `Share ${selectedCount} workspace${selectedCount === 1 ? "" : "s"}` : "Continue"}
+        continueLabel={shareActionLabel(impact, includePast) ?? "Continue"}
         enterAdvances
       >
         <WorkspaceSharePicker
@@ -345,6 +348,13 @@ export default function CreateTeamPage() {
           selectedPaths={selectedPaths}
           onToggle={toggle}
           isNewTeam
+          impact={{
+            teamName: trimmed || "Your team",
+            memberCount: 1,
+            visibility,
+            includePast,
+            onIncludePastChange: setIncludePast,
+          }}
         />
       </TeamFlowShell>
     );

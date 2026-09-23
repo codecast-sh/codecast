@@ -13,6 +13,7 @@ import type { Id } from "./_generated/dataModel";
 import {
   TEAM_FEATURE_KEYS,
   TEAM_FEATURES,
+  workspaceFeatureEnabled,
   type TeamFeatureKey,
 } from "@codecast/shared/contracts";
 import {
@@ -53,6 +54,27 @@ export async function teamHasFeature(
   return guard.has(scopeFor(ctx, teamId), key);
 }
 
+/**
+ * Is `key` on in a workspace: a team's own flag, or, for the personal
+ * workspace (no team), any team the person belongs to. The personal rule is
+ * the shared one (workspaceFeatureEnabled) so the web hook, the CLI and this
+ * guard agree on whose personal org exists.
+ */
+export async function workspaceHasFeature(
+  ctx: DbCtx,
+  scope: { team_id?: Id<"teams"> | null; user_id?: Id<"users"> | null },
+  key: TeamFeatureKey,
+): Promise<boolean> {
+  if (scope.team_id) return teamHasFeature(ctx, scope.team_id, key);
+  if (!scope.user_id) return false;
+  const memberships = await ctx.db
+    .query("team_memberships")
+    .withIndex("by_user_id", (q: any) => q.eq("user_id", scope.user_id))
+    .collect();
+  const teams = await Promise.all(memberships.map((m: any) => ctx.db.get(m.team_id)));
+  return workspaceFeatureEnabled(teams, null, key);
+}
+
 /** The message a caller sees when a feature is off — the same words on the
  *  CLI, the web and mobile, and it says who can fix it. */
 export function teamFeatureOffMessage(key: TeamFeatureKey): string {
@@ -71,6 +93,19 @@ export async function requireTeamFeature(
   fail: (message: string) => never = (m) => { throw new Error(m); },
 ): Promise<void> {
   return guard.require(scopeFor(ctx, teamId), key, fail);
+}
+
+/** The workspace guard: throws the shared message unless `key` is on for the
+ *  scope (a team's flag, or the personal rule). For writes that create org
+ *  rows, so a hidden feature cannot be reached by a stale client or a raw
+ *  API call. */
+export async function requireWorkspaceFeature(
+  ctx: DbCtx,
+  scope: { team_id?: Id<"teams"> | null; user_id?: Id<"users"> | null },
+  key: TeamFeatureKey,
+  fail: (message: string) => never = (m) => { throw new Error(m); },
+): Promise<void> {
+  if (!(await workspaceHasFeature(ctx, scope, key))) fail(guard.offMessage(key));
 }
 
 /**

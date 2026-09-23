@@ -7,6 +7,7 @@ import { ORG_AUTHORITY_KINDS, authorityWords, orgTenureError, type OrgAuthorityG
 import { intervalMs } from "@codecast/shared/contracts/orgTemplateManifest";
 import { leadScopeChange } from "@codecast/shared/contracts/orgLead";
 import { v } from "convex/values";
+import { requireWorkspaceFeature } from "./teamFeatures";
 import { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { nextShortId } from "./counters";
@@ -697,7 +698,9 @@ export const create = mutation({
   },
   handler: async (ctx, { api_token, from_session, provision, model, project_path, agent_type, adopt_conversation_id, leave_sessions, ...args }) => {
     await refuseUnlessHuman(ctx, { api_token, from_session }, "Staffing");
-    return performHireRole(ctx, await requireCaller(ctx, api_token), args, { provision, model, project_path, agent_type, adopt_conversation_id, leave_sessions });
+    const userId = await requireCaller(ctx, api_token);
+    await requireWorkspaceFeature(ctx, { team_id: args.team_id, user_id: userId }, "org");
+    return performHireRole(ctx, userId, args, { provision, model, project_path, agent_type, adopt_conversation_id, leave_sessions });
   },
 });
 
@@ -1468,7 +1471,9 @@ export const staff = mutation({
   },
   handler: async (ctx, { api_token, from_session: _from, scope_type, ...args }) => {
     const userId = await requireCaller(ctx, api_token);
-    const out = await performStaff(ctx, userId, { ...args, team_id: staffTeamFor(scope_type, args.team_id) });
+    const teamId = staffTeamFor(scope_type, args.team_id);
+    await requireWorkspaceFeature(ctx, { team_id: teamId, user_id: userId }, "org");
+    const out = await performStaff(ctx, userId, { ...args, team_id: teamId });
     // The shape an older `cast anchor create` reads back.
     return { ...out, short_id: out.conversation_short_id, conversation_id: out.standing?.conversation_id ?? null };
   },

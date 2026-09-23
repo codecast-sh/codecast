@@ -10,6 +10,7 @@ import { derivePresenceState } from "./presenceState";
 import { WORKING_SET_RECENCY_MS, extractRepoFromRemoteUrl, parseThreadStateStatus, threadStateHeadline, type ThreadStateStatus } from "@codecast/shared/contracts";
 import { accessJudgeFor, canAccessDoc, workspaceKey } from "./lib/access";
 import { userCanAccessRole } from "./lib/orgAccess";
+import { workspaceHasFeature } from "./teamFeatures";
 import { avatarOf } from "@codecast/shared/contracts/orgAvatars";
 import { overlapsAmong, planProjectsOf, resolveRoleRef, rolesInBoundary, type ScopeOverlap } from "./orgRoles";
 import { pendingOnLadder } from "./sessionDecisions";
@@ -325,6 +326,10 @@ export async function requireWorkspaceCaller(ctx: any, apiToken: string | undefi
   const userId = await getAuthenticatedUserId(ctx, apiToken);
   if (!userId) return null;
   if (teamId && !(await isTeamMember(ctx, userId, teamId))) return null;
+  // The org feature is per team, default off (teams.features.org). A
+  // workspace with it off has no org to read: the tree, the scope feed and
+  // the health views answer as they do for a stranger.
+  if (!(await workspaceHasFeature(ctx, { team_id: teamId, user_id: userId }, "org"))) return null;
   return userId;
 }
 

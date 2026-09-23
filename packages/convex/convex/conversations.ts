@@ -1078,8 +1078,11 @@ export const createConversation = mutation({
     const startedAt = args.started_at ?? now;
 
     const conversationPath = args.git_root || args.project_path;
+    // The daemon syncs old transcripts with their real start time: a session
+    // that predates a repo's share start stays private (privacy.ts
+    // mappingCoversStart), so a share made today never exposes yesterday.
     const { team_id: resolvedTeamId, is_private: isPrivate, auto_shared: autoShared } =
-      await resolveCreationPrivacy(ctx, args.user_id, conversationPath, args.team_id as Id<"teams"> | undefined);
+      await resolveCreationPrivacy(ctx, args.user_id, conversationPath, args.team_id as Id<"teams"> | undefined, startedAt);
 
     let parentConversationId: Id<"conversations"> | undefined;
     if (args.parent_conversation_id) {
@@ -4946,6 +4949,10 @@ export const updateProjectPath = mutation({
     session_id: v.string(),
     project_path: v.string(),
     git_root: v.optional(v.string()),
+    // The checkout's origin, stamped with the root so a session created
+    // without git info (codex rollouts before 2026-09) gains its repository
+    // identity in the same sweep. Older daemons omit it.
+    git_remote_url: v.optional(v.string()),
     api_token: v.string(),
   },
   handler: async (ctx, args) => {
@@ -4964,13 +4971,20 @@ export const updateProjectPath = mutation({
       return { updated: false };
     }
 
-    if (conversation.project_path === args.project_path && (!args.git_root || conversation.git_root === args.git_root)) {
+    if (
+      conversation.project_path === args.project_path &&
+      (!args.git_root || conversation.git_root === args.git_root) &&
+      (!args.git_remote_url || conversation.git_remote_url === args.git_remote_url)
+    ) {
       return { updated: false };
     }
 
     const patch: Record<string, any> = { project_path: args.project_path };
     if (args.git_root) {
       patch.git_root = args.git_root;
+    }
+    if (args.git_remote_url) {
+      patch.git_remote_url = args.git_remote_url;
     }
 
     // The path is being stamped after creation (pre-warmed/stub conversations
@@ -12237,6 +12251,7 @@ export const updateSessionId = mutation({
     // from where the session is really running.
     project_path: v.optional(v.string()),
     git_root: v.optional(v.string()),
+    git_remote_url: v.optional(v.string()),
     api_token: v.string(),
   },
   handler: async (ctx, args) => {
@@ -12251,6 +12266,7 @@ export const updateSessionId = mutation({
     const patch: Record<string, any> = { session_id: args.session_id };
     if (args.project_path) patch.project_path = args.project_path;
     if (args.git_root) patch.git_root = args.git_root;
+    if (args.git_remote_url) patch.git_remote_url = args.git_remote_url;
 
     // Stubs are created before their real path exists, so their team/privacy
     // resolved against nothing (→ private, teamless). Re-resolve against the

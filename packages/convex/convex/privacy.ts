@@ -290,12 +290,26 @@ export type DirectoryMapping = {
   team_id: Id<"teams">;
   path_prefix: string;
   auto_share: boolean;
+  /** Sessions started before this stay private; absent shares every session. */
+  share_since?: number;
 };
+
+// A mapping shares a session only if the session started on or after the
+// mapping's share start. A session with no start time is one being created
+// right now, so it is covered. Rows synced later from old transcripts carry
+// their real started_at and stay private when it predates the share.
+export function mappingCoversStart(
+  mapping: Pick<DirectoryMapping, "share_since">,
+  startedAt: number | undefined,
+): boolean {
+  return mapping.share_since == null || startedAt == null || startedAt >= mapping.share_since;
+}
 
 export function resolveTeamForPath(
   userMappings: DirectoryMapping[],
   conversationPath: string | undefined,
-  fallbackTeamId: Id<"teams"> | undefined
+  fallbackTeamId: Id<"teams"> | undefined,
+  startedAt?: number,
 ): { teamId: Id<"teams"> | undefined; isPrivate: boolean; autoShared: boolean } {
   let resolvedTeamId = fallbackTeamId;
   let isPrivate = true;
@@ -316,7 +330,10 @@ export function resolveTeamForPath(
 
     if (bestMatch) {
       resolvedTeamId = bestMatch.team_id;
-      if (bestMatch.auto_share) { isPrivate = false; autoShared = true; }
+      if (bestMatch.auto_share && mappingCoversStart(bestMatch, startedAt)) {
+        isPrivate = false;
+        autoShared = true;
+      }
     } else {
       resolvedTeamId = undefined;
     }
@@ -352,7 +369,8 @@ export async function resolveCreationPrivacy(
   ctx: DbCtx,
   ownerId: Id<"users">,
   conversationPath: string | undefined,
-  fallbackTeamId?: Id<"teams">
+  fallbackTeamId?: Id<"teams">,
+  startedAt?: number,
 ): Promise<{
   team_id: Id<"teams"> | undefined;
   is_private: boolean;
@@ -365,7 +383,8 @@ export async function resolveCreationPrivacy(
   const { teamId, isPrivate, autoShared } = resolveTeamForPath(
     mappings as DirectoryMapping[],
     conversationPath,
-    fallbackTeamId
+    fallbackTeamId,
+    startedAt,
   );
   return {
     team_id: teamId,
@@ -436,6 +455,7 @@ export function buildPathRestampUpdate(
     is_private?: boolean;
     auto_shared?: boolean;
     team_visibility?: string;
+    started_at?: number;
   },
   mappings: DirectoryMapping[],
   conversationPath: string | undefined
@@ -444,7 +464,12 @@ export function buildPathRestampUpdate(
   if (conversation.is_private === false && !conversation.auto_shared && conversation.team_id)
     return null;
 
-  const { teamId, autoShared } = resolveTeamForPath(mappings, conversationPath, undefined);
+  const { teamId, autoShared } = resolveTeamForPath(
+    mappings,
+    conversationPath,
+    undefined,
+    conversation.started_at,
+  );
   if (!teamId) return null;
 
   const patch: { team_id?: Id<"teams">; is_private?: boolean; auto_shared?: boolean } = {};
