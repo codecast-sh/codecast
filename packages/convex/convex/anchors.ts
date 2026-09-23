@@ -722,6 +722,11 @@ export const listAnchors = query({
         role: role && role.status !== "retired"
           ? { _id: role._id, short_id: role.short_id, name: role.name, handle: role.handle, avatar: role.avatar ?? null, status: role.status }
           : null,
+        // The workspace's root (org-staffing.md S22): the seat of its chief of
+        // staff, by the same rule the root seat migration uses. Every other
+        // role's standing session is a row here too, so a picker that takes
+        // the first row of a workspace lands on whichever lead is oldest.
+        is_root: !!role && role.status !== "retired" && role.handle === CHIEF_OF_STAFF_HANDLE,
         bot_avatar: bot?.image ?? null,
         team_name: (team as any)?.name ?? null,
         in_my_team: a.team_id ? teamIds.has(a.team_id.toString()) : false,

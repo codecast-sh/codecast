@@ -156,7 +156,7 @@ import {
   Laptop,
   Globe,
 } from "lucide-react";
-import { AnchorGlyph } from "./anchor/AnchorIdentity";
+import { ChiefOfStaffFace } from "./anchor/AnchorIdentity";
 import { BROWSER_ROUTE, displayHost } from "../lib/browserPane";
 import { typedAddress } from "../lib/browserPaneLinks";
 import { openBeside, openBrowserPane } from "../lib/stage";
@@ -264,7 +264,7 @@ const GLOBAL_COMMANDS: ReadonlyArray<{
    *  wall as its whole view and needs no command to open one. */
   hidden?: () => boolean;
 }> = [
-  { action: "anchor.toggle", label: "Talk to the workspace's agent", icon: AnchorGlyph, keywords: "agent assistant bot standing member ask personal team chief of staff" },
+  { action: "anchor.toggle", label: "Talk to the workspace's agent", icon: ChiefOfStaffFace, keywords: "agent assistant bot standing member ask personal team chief of staff" },
   { action: "people.wall", label: "The team — hold a face to talk", icon: Users, keywords: "people wall faces who is around hold to talk walkie everyone roster", hidden: isPeopleWindow },
   { action: "terminal.toggle", label: "Toggle terminal", icon: Terminal, keywords: "shell console panel tmux" },
   { action: "ui.zenToggle", label: "Toggle zen mode", icon: Focus, keywords: "focus minimal distraction free" },
@@ -2373,6 +2373,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       >
         <div className="px-4 pt-3">
           <div className="text-xs font-mono text-sol-text-dim truncate">{pick.title}</div>
+          <PalettePickPreview preview={pick.preview} />
         </div>
         <button
           type="button"
@@ -2385,7 +2386,6 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           {tag && <span className="hidden text-[10px] text-sol-text-dim flex-shrink-0 sm:inline">{tag}</span>}
           <span className="text-[11px] text-sol-text-muted flex-shrink-0">change</span>
         </button>
-        {pick.preview && <div className="px-4"><PalettePickPreview preview={pick.preview} /></div>}
         <div className="px-3 pt-3">
           <div
             className="ch-composer ch-composer-flush palette-pick-composer [&_form_button[type=submit]]:hidden"

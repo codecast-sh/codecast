@@ -10,7 +10,7 @@ import { ProjectPathPicker } from "../ProjectPathPicker";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { AnchorGlyph } from "./AnchorIdentity";
+import { ChiefOfStaffFace } from "./AnchorIdentity";
 import { bootstrapCut, windowConversationSince, type WindowedConversation } from "../../lib/anchorWindow";
 import { useSeedOwnership } from "../../hooks/useSeedOwnership";
 import { useSyncOrgTree } from "../../hooks/useSyncOrgTree";
@@ -134,9 +134,14 @@ export function AnchorOnboarding({ compact }: { compact?: boolean }) {
         host_user_id: String(meId),
         client_id: `orgrolestub-chief-${Math.random().toString(36).slice(2)}`,
       });
-      if (r?.role) toast.success(`${r.role.name} is coming online`);
+      // The page swaps to the role's page when the tree gains the root; a
+      // seat that already stood (a client whose rows were behind) has nothing
+      // to wait for, so say so rather than sit on "Bringing it online".
+      if (r?.already_existed) toast.success(`${r.role?.name ?? CHIEF_OF_STAFF_NAME} is already online`);
+      else if (r?.role) toast.success(`${r.role.name} is coming online`);
     } catch (e: any) {
       setErr(e?.message ?? "Could not bring the agent online");
+    } finally {
       setBusy(false);
     }
   };
@@ -145,8 +150,8 @@ export function AnchorOnboarding({ compact }: { compact?: boolean }) {
   return (
     <div className={`h-full flex items-center justify-center ${compact ? "px-5" : "px-6"}`}>
       <div className="max-w-md w-full text-center">
-        <div className={`mx-auto ${compact ? "w-11 h-11 mb-3" : "w-14 h-14 mb-5"} rounded-2xl bg-sol-cyan/15 flex items-center justify-center`}>
-          <AnchorGlyph className={`${compact ? "w-6 h-6" : "w-7 h-7"} text-sol-cyan`} />
+        <div className={`mx-auto ${compact ? "mb-3" : "mb-5"} flex items-center justify-center`}>
+          <ChiefOfStaffFace size={compact ? 44 : 56} />
         </div>
         <h1 className={`${compact ? "text-base" : "text-xl"} font-semibold tracking-tight mb-2`}>Meet {who}</h1>
         <p className="text-sm text-sol-text-muted mb-5 leading-relaxed">

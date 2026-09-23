@@ -4,6 +4,7 @@
 // entry, the inbox's marking, and chat's DM naming for personal bots. A row
 // is the seat of the workspace's root role (org-staffing.md S22): `role` is
 // that role's identity, and every surface draws the role, never the row.
+import { CHIEF_OF_STAFF_HANDLE } from "../components/org/orgStaffingTypes";
 import { useMemo } from "react";
 import { registerKnownAgentMembers } from "../lib/chatViews";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -16,6 +17,8 @@ const api = _api as any;
 
 export type AnchorRow = {
   _id: string;
+  /** The workspace's root: the chief of staff's seat (S22). Set by listAnchors. */
+  is_root?: boolean;
   scope_type: "team" | "user";
   team_id?: string | null;
   scope_user_id?: string | null;
@@ -101,9 +104,16 @@ export function useAnchor(anchorId: string | null | undefined): AnchorRow | null
  *  when a team is active, else the personal one. Null when the workspace has
  *  none yet, which is the onboarding's cue. */
 export function rootAgentOf(anchors: AnchorRow[], activeTeamId: string | null | undefined): AnchorRow | null {
-  return activeTeamId
-    ? anchors.find((a) => a.scope_type === "team" && a.team_id === activeTeamId) ?? null
-    : anchors.find((a) => a.scope_type === "user") ?? null;
+  const inWorkspace = anchors.filter((a) => activeTeamId
+    ? a.scope_type === "team" && a.team_id === activeTeamId
+    : a.scope_type === "user");
+  // Every role's standing session is a row, so the root is the row the server
+  // marks (the chief of staff's seat), else a seat that is no role's yet (a
+  // workspace still waiting for its root); a lead is never the root.
+  return inWorkspace.find((a) => a.is_root)
+    ?? inWorkspace.find((a) => a.role?.handle === CHIEF_OF_STAFF_HANDLE)
+    ?? inWorkspace.find((a) => !a.role)
+    ?? null;
 }
 
 export function useRootAgent(): AnchorRow | null {

@@ -13,16 +13,15 @@
 import { AvatarImg } from "../../lib/avatarCache";
 import { agentName, anchorScopeLabel, type AnchorRow } from "../../hooks/useSyncAnchors";
 import { RoleFace } from "../org/RoleFace";
+import { CHIEF_OF_STAFF_HANDLE, CHIEF_OF_STAFF_NAME } from "../org/orgStaffingTypes";
 
 /** The standing agent mark. Custom (not lucide's boat anchor): a head over a
  *  keel — a standing member, not a nautical object. */
-export function AnchorGlyph({ className }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden>
-      <circle cx="12" cy="5" r="2.5" strokeWidth={1.5} />
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 7.5V21M5 12H3a9 9 0 0018 0h-2" />
-    </svg>
-  );
+/** The root role's face before a workspace has one (org-staffing.md S22):
+ *  the chief of staff's default face, the same one its page shows once hired,
+ *  so nothing on the way in looks like a different thing from what arrives. */
+export function ChiefOfStaffFace({ className, size = 16 }: { className?: string; size?: number }) {
+  return <RoleFace role={{ handle: CHIEF_OF_STAFF_HANDLE, avatar: null, name: CHIEF_OF_STAFF_NAME }} size={size} className={className} />;
 }
 
 type Identity = Pick<AnchorRow, "bot_name" | "bot_avatar" | "scope_type" | "team_name"> & Partial<Pick<AnchorRow, "role" | "name">>;
@@ -40,14 +39,7 @@ export function AnchorAvatar({ anchor, size = 28, className = "" }: { anchor: Id
       alt={name}
       className={`${radius} object-cover ${className}`}
       style={style}
-      fallback={
-        <span
-          className={`${radius} bg-sol-cyan/15 text-sol-cyan flex items-center justify-center flex-shrink-0 ${className}`}
-          style={style}
-        >
-          <AnchorGlyph className="w-[62%] h-[62%]" />
-        </span>
-      }
+      fallback={<ChiefOfStaffFace size={size} className={`shrink-0 ${className}`} />}
     />
   );
 }

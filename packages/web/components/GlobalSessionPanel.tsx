@@ -34,11 +34,9 @@ import { sessionsWakeSig, resolveShowOld, showsBlockedBadge, sectionHeaderCount,
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
 import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
-import { LivePulseDot, SessionActivityLine } from "./SessionActivityLine";
-import { useLinger } from "../hooks/useLinger";
-import { activitySig, liveActivityOf } from "../lib/sessionActivity";
+import { LivePulseDot } from "./SessionActivityLine";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
-import { AUTO_CONTINUE_WINDOW_MS, actedBlockedConversations, skippedBlockedWorkers, blockedHeadlineCause, isBlockedConversation, isSubagentConversation, nestParentIdOf, usageStanding, standingLabel, LOGIN_FLOW_STALE_MS, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
+import { AUTO_CONTINUE_WINDOW_MS, actedBlockedConversations, skippedBlockedWorkers, blockedHeadlineCause, isBlockedConversation, isSubagentConversation, nestParentIdOf, usageStanding, standingLabel, isUsageExhausted, LOGIN_FLOW_STALE_MS, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
 import { contextShareOf, formatIdle, formatShare, formatTokens, restartPlan, restartReloadsContext } from "@codecast/convex/convex/wakeCost";
 import { withSafetyBlock } from "@codecast/shared/contracts";
 import { contextWindowTokens, restartShareOfRemaining, formatCountdown } from "@codecast/shared/contracts";
@@ -64,7 +62,7 @@ import { TriggerRowItem, TriggerHomeHeader, SchedChildArrow, SchedHealthDot, Sch
 import { schedAccent, type SchedAccent } from "../lib/triggerAccent";
 import { cleanUserMessage } from "./sessionMessage";
 import { AgentTypeIcon, formatAgentType } from "./AgentTypeIcon";
-import { AnchorGlyph, AnchorScopePill } from "./anchor/AnchorIdentity";
+import { AnchorScopePill, ChiefOfStaffFace } from "./anchor/AnchorIdentity";
 // Who is speaking on each row (docs/architecture/session-characters.md S3).
 import { IdentityFace, RoleHoverCard, SessionIdentityLine } from "./identity";
 import { RoleFace } from "./org/RoleFace";
@@ -555,7 +553,9 @@ function BlockedSessionsBanner({
   // A switch the machine recommended and is waiting on. Asking is the whole
   // point of that mode, so the ask shows the banner even for one parked
   // session, and a proposal raised after the last snooze breaks through it.
-  const proposal = pendingProposal(accountData?.devices);
+  // Live ranking, not the stored sentence: a proposal freezes the percent it
+  // saw, and that line was still naming a spent account after the meters moved.
+  const proposal = pendingProposal(accountData?.devices, now);
   const askPending = !!proposal && proposal.at > snoozedTs;
   if (!clientStateInitialized || blocked.length === 0) return null;
   if (!forced && !askPending && (blocked.length < 2 || snoozed)) return null;
@@ -640,7 +640,10 @@ function BlockedSessionsBanner({
   for (const device of executors) {
     for (const p of device.profiles) {
       // The account a machine is signed into now is "this account", not a switch.
+      // A dead login and a pegged window are not offers: suggesting one is how
+      // the banner named an account whose week was already full.
       if (p.email && device.active_email === p.email) continue;
+      if (p.login_expired_at || isUsageExhausted(p.usage, now)) continue;
       const key = p.email ? `email:${p.email}` : `name:${p.name}`;
       const existing = accountOptions.find((t) => t.key === key);
       if (!existing) accountOptions.push({ key, name: p.name, email: p.email, usage: p.usage, missingOn: [] });
@@ -663,7 +666,11 @@ function BlockedSessionsBanner({
   // exactly what the machine asked for — the same account the sentence names.
   const proposalKey = proposal?.target_email ? `email:${proposal.target_email}` : null;
   const proposedOption = proposalKey ? rankedAccounts.find((t) => t.key === proposalKey) : undefined;
-  const accountKey = onAccount ?? proposedOption?.key ?? "";
+  // Ask mode selects the account the fresh ranking named. Otherwise stay on
+  // the current login, unless that login is spent, in which case the button
+  // offers the account with the most room.
+  const activeExhausted = isUsageExhausted(activeUsage, now);
+  const accountKey = onAccount ?? proposedOption?.key ?? (activeExhausted ? rankedAccounts[0]?.key ?? "" : "");
   const selectedAccount = rankedAccounts.find((t) => t.key === accountKey);
   // The meters that matter are the ones the continue will run against: the
   // picked account when the picker moved, else the account the machines are on.
@@ -2001,18 +2008,11 @@ export const SessionCard = memo(function SessionCard({
     (s) => rosterDeviceOf(s.machineRoster as any, deviceId),
     (s) => memberListSig(s.teamMembers),
     (s) => anchorIdentitySig((s as any).anchors, anchorId),
-    // The activity line ("editing chat.ts") rides the liveness overlay, which
-    // the list's structural signature deliberately ignores, so the card reads
-    // it off the live row through its own dep: a tool call in one session
-    // wakes that one card and nothing else. The signature is text plus stamp,
-    // never the object (each overlay push hands back a new one).
-    (s) => activitySig(s.sessions[cardId]?.activity),
     // Teammates who have this session open (their faces in the meta row and
     // a ring on the card). The signature is the viewer id list, so a roster
     // push that changes nothing about who is here wakes nothing.
     (s) => viewersSig(s.teamMembers, cardId, s.currentUser?._id?.toString?.() ?? null),
   ]);
-  const rowActivity = st.sessions[cardId]?.activity ?? null;
   const viewers = viewersOf(st.teamMembers, cardId, st.currentUser?._id?.toString?.() ?? null);
   // The card's idle duration ("idle 3m") and trust-stale pulse read Date.now() at
   // render. Now that the panel no longer re-renders every heartbeat (it wakes on a
@@ -2034,15 +2034,9 @@ export const SessionCard = memo(function SessionCard({
       `${formatIdleDuration(session.updated_at)}|${sessionIdleAt(session, t) ? 1 : 0}|` +
       `${showsBlockedBadge(session.pending_api_error, false, reviveRequestedAtRef.current, t) ? 1 : 0}|` +
       `${threadStateView(session, session.message_count, t)?.cardLine ?? ""}|` +
-      // The activity line's freshness cutoff: a stamp that ages out hides on
-      // the clock, without waiting for a field change.
-      `${liveActivityOf(session, rowActivity, t) ? 1 : 0}|` +
       `${liveRestartStartedAt(st.restartingSessions, cardId, t) ? 1 : 0}`,
     30_000,
   );
-  // Held through one fade so the summary returns after the line leaves, not
-  // under it.
-  const activityShown = useLinger(liveActivityOf(session, rowActivity, Date.now()));
   const project = getProjectName(session.git_root, session.project_path);
   // The machine behind a worktree, read straight off the persisted roster —
   // useDevices() here would mount the roster feeder once per card. Only a cloud
@@ -2423,7 +2417,6 @@ export const SessionCard = memo(function SessionCard({
               </span>
             </div>
           )}
-          <SessionActivityLine shown={activityShown} compact />
           {cleanedUserMsg && (
             <div data-sv-prompt className="text-[10px] text-gray-500 mt-0.5 truncate leading-snug">
               <span className="text-gray-600 mr-0.5">&gt;</span>
@@ -2566,8 +2559,8 @@ export const SessionCard = memo(function SessionCard({
               badge={showAgentIcon ? <AgentTypeIcon agentType={session.agent_type || "claude_code"} className="w-full h-full p-[1px]" /> : undefined}
             />
           ) : session.is_anchor ? (
-            <span className="flex-shrink-0 flex items-center text-sol-cyan" title="The workspace's agent">
-              <AnchorGlyph className="w-3.5 h-3.5" />
+            <span className="flex-shrink-0 flex items-center" title="The workspace's agent">
+              <ChiefOfStaffFace size={14} />
             </span>
           ) : showAgentIcon ? (
             <span className="flex-shrink-0 flex items-center" title={formatAgentType(session.agent_type || "claude_code")}>
@@ -2713,10 +2706,7 @@ export const SessionCard = memo(function SessionCard({
             </span>
           </div>
         )}
-        {/* What the agent is doing right now takes the summary's slot while
-            the session works; the summary comes back once the line has faded. */}
-        <SessionActivityLine shown={activityShown} />
-        {cardSummary && !stateView && !activityShown.value && !session.implementation_session && (
+        {cardSummary && !stateView && !session.implementation_session && (
           <div data-sv-summary className="text-[11px] text-sol-text-muted mt-0.5 line-clamp-2 leading-snug whitespace-pre-line">
             <FormattedSummary text={cardSummary} />
           </div>
