@@ -246,9 +246,11 @@ describe("one circle, one attribute", () => {
     expect(h.q(".face-ask")).not.toBeNull();
     expect(h.q(`[data-face-id="${ANN}"]`)!.getAttribute("data-ask")).toBe("2");
     expect(h.circle(ANN).getAttribute("data-followed")).toBe("true");
-    expect(h.q(".people-face-joined")).toBeNull();
+    // The join is the ring and the card's words, never a label under the
+    // chin: the card in the band would cover it.
     await h.draw(bar(rowOf([entry(ANN, "Ann", { state: "joining" })])));
-    expect(h.q(".people-face-joined")!.textContent).toBe("joined");
+    expect(h.circle(ANN).getAttribute("data-state")).toBe("joining");
+    expect(h.q(".people-face-joined")).toBeNull();
     // In the bar the card carries the name: nothing hangs under the chin
     // that a card could stack on.
     expect(h.q(".face-name")).toBeNull();

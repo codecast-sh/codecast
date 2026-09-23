@@ -56,11 +56,26 @@ describe("the stylesheet agrees", () => {
     expect(cssVar(rule, "--link-w")).toBe(`${FACE_ROW_METRICS.float.link}px`);
     expect(cssVar(rule, "padding")).toBe(`${FACE_ROW_METRICS.float.pad}px`);
   });
+  test("the member card centres on the face in the bar, and floors at the window's edge in the float", () => {
+    // The bar's row sits inside the header with room on both sides, so the
+    // card may run left of the row and only a measured viewport edge
+    // (--shift, FaceCard) pushes it in: a floor at the row's own edge left
+    // the first four faces with a card hanging off to the right. The float's
+    // window is the viewport and is sized to hold the card from the band's
+    // edge (floatingRowSize), so there the floor is the viewport clamp.
+    expect(cssVar(".face-card {", "--lead")).toBe("calc(var(--anchor) - var(--card-w) / 2 + var(--shift, 0px))");
+    expect(cssVar('.face-card[data-density="float"] {', "--lead")).toBe("max(0px, calc(var(--anchor) - 8px - var(--card-w) / 2))");
+  });
   test("the pull", () => {
     expect(cssVar(".face-link {", "margin")).toBe(`0 calc(var(--face-gap) * -${LINK_PULL})`);
   });
-  test("the card hangs from the bar and sits under the float", () => {
-    expect(cssVar('.engagement-card[data-density="bar"] {', "position")).toBe("absolute");
+  test("the band hangs under the row and the card rides in it at both densities", () => {
+    // The row renders the card inside the band (faceRow.mount: `.face-row >
+    // .face-row-below > .engagement-card`); the band is what hangs, so the
+    // card itself stays in flow and never wraps the seats.
+    expect(cssVar(".face-row-below {", "position")).toBe("absolute");
+    expect(cssVar(".face-row-below {", "top")).toBe("100%");
+    expect(cssVar('.engagement-card[data-density="bar"] {', "position")).toBe("relative");
     expect(cssVar('.engagement-card[data-density="float"] {', "position")).toBe("relative");
   });
 });
