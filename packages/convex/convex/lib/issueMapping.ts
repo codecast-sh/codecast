@@ -22,6 +22,8 @@ export type NormalizedIssue = {
   team_key?: string;
   team_id?: string;
   project_id?: string;
+  /** The parent issue's provider id; undefined when the provider shows none. */
+  parent_issue_id?: string;
   title: string;
   /** Always a string: "" is a cleared body, so a clear syncs like any edit. */
   description?: string;
@@ -161,6 +163,8 @@ export function normalizeLinearIssue(
     team_key: teamKey,
     team_id: data?.team?.id,
     project_id: data?.project?.id,
+    // A webhook carries `parentId`; a GraphQL node carries `parent { id }`.
+    parent_issue_id: data?.parent?.id ?? data?.parentId ?? undefined,
     title: String(data?.title ?? ""),
     description: typeof data?.description === "string" ? data.description : "",
     status: linearStatusFor(data?.state?.type, data?.state?.name),
@@ -172,7 +176,10 @@ export function normalizeLinearIssue(
     remote_updated_at: ts(data?.updatedAt, now),
     remote_created_at: data?.createdAt ? ts(data.createdAt, now) : undefined,
     actor: opts.actor,
-    deleted: opts.deleted || undefined,
+    // Trashed and archived issues are gone from every Linear view; the
+    // remove webhook says `trashed`, an archive arrives as an update carrying
+    // `archivedAt`. Either is the issue leaving (S6).
+    deleted: opts.deleted || !!data?.trashed || !!data?.archivedAt || undefined,
   };
 }
 

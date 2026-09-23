@@ -20,6 +20,8 @@ export const taskExternalValidator = v.object({
   team_key: v.optional(v.string()),
   team_id: v.optional(v.string()),
   project_id: v.optional(v.string()),
+  /** The provider id of the issue's parent (Linear sub-issues), S2. */
+  parent_issue_id: v.optional(v.string()),
   source_id: v.optional(v.id("issue_sync_sources")),
   remote_updated_at: v.number(),
   synced_at: v.number(),

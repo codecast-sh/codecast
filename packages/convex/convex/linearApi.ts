@@ -24,6 +24,7 @@ const ISSUE_FIELDS = `
   state { id name type }
   team { id key }
   project { id }
+  parent { id }
   assignee { id name email }
   labels { nodes { id name } }
 `;
@@ -228,6 +229,8 @@ export type LinearIssueInput = {
   labelIds?: string[];
   teamId?: string;
   projectId?: string;
+  /** null detaches a sub-issue from its parent. */
+  parentId?: string | null;
 };
 
 export async function updateIssue(token: string, id: string, input: LinearIssueInput): Promise<any> {

@@ -23,6 +23,7 @@ external: {
   team_key?: string,     // Linear team key ("LIN")
   team_id?: string,      // Linear team uuid
   project_id?: string,   // Linear project uuid
+  parent_issue_id?: string, // the parent issue's provider id (Linear sub-issues), S2
   source_id?: Id<"issue_sync_sources">,
   remote_updated_at: number,   // provider updatedAt of the last inbound we applied
   synced_at: number,           // when we last touched the provider in either direction
@@ -145,10 +146,11 @@ them as health.
 |-----------------------|------------------------------------------|---------------------------------------|
 | title                 | title                                    | title                                 |
 | description           | description (markdown)                   | body (markdown)                       |
-| status (category)     | state.type: triage,backlog -> backlog; unstarted -> open; started -> in_progress; completed -> done; canceled -> dropped. Team states named like "review" under started -> in_review | open -> open (in_progress if assigned to an agent session); closed+completed -> done; closed+not_planned -> dropped |
+| status (category)     | state.type: triage,backlog -> backlog; unstarted -> open; started -> in_progress; completed -> done; canceled, duplicate -> dropped. Team states named like "review" under started -> in_review | open -> open (in_progress if assigned to an agent session); closed+completed -> done; closed+not_planned -> dropped |
 | priority              | 0 none, 1 urgent, 2 high, 3 medium, 4 low | not synced (GitHub has none)          |
 | assignee              | assignee.email -> users.email / alternate_emails | assignees[0].login -> users.github_username |
 | labels                | labels[].name                            | labels[].name                         |
+| parent_id (subtask)   | parentId (sub-issue), both ways          | not synced                            |
 | comments              | comments (markdown, user)                | issue comments                        |
 
 Outbound status uses the reverse map. For Linear the target state is the
@@ -157,7 +159,29 @@ state whose name matches our custom status name that wins.
 
 Unmapped assignee: keep our `assignee` unset, store the display in
 `external.assignee_label`. Outbound assignee only when the user maps to a
-provider user (Linear by email, GitHub by login); otherwise skip the field.
+provider user (Linear by any of the user's addresses, `email` and
+`alternate_emails`; GitHub by login); otherwise skip the field.
+
+Sub-issues are subtasks. Inbound, `external.parent_issue_id` records the
+issue's parent and `applyRemote` puts the task under the task that mirrors it,
+through `tasks.resolveParentTask` (the gate `cast task create --parent`
+uses), so a provider edit can no more make a cycle or exceed the depth cap
+than a person can; a refused link is logged and skipped. A parent we do not
+hold yet is retried once the pull finishes its pages (`pullSource`), and a
+webhook that beat its parent's is caught by the next reconcile. The provider
+detaching a sub-issue clears our `parent_id`; `field_ts.parent_id` lets a
+newer local reparent win (S3). Outbound, `parent_id` is a synced field: a
+task born under a parent with a Linear twin is created with `parentId`, a
+reparent pushes the new parent's issue id, a detach pushes `parentId: null`,
+and a parent with no twin on the provider pushes nothing.
+
+Unassign flows both ways. Inbound: the provider going from someone (the
+`assignee_label` recorded on the last inbound) to nobody clears our assignee,
+unless ours is an agent seat (`agent:`), which the provider never held.
+Nobody on the provider with nobody recorded before is not an unassign, so a
+codecast-only assignment survives. Outbound: a task whose assignee was
+cleared unassigns the issue; a task handed to an agent seat pushes nothing
+and leaves the provider's human in place.
 
 ## S3. Conflict policy: last writer wins per field, by provider clock
 
@@ -174,15 +198,24 @@ provider because the provider's value is what everyone else sees.
 
 Fields are compared before writing. An inbound event whose mapped values
 equal the task's current values is a no-op: no patch, no history row, no
-outbound. This single rule is what makes the loop terminate (S4).
+outbound. This single rule is what makes the loop terminate (S4). No-op
+means no write at all: `external` is compared on its facts (everything but
+`synced_at`, `remote_updated_at` and `field_ts`), so a reconcile that finds
+the same issue again does not bump `updated_at` or push the row through the
+sync log. `external.last_error` is the last push's verdict and only the next
+push clears it; an inbound never does.
 
 ## S4. Echo and loop prevention
 
 1. Inbound never calls outbound. Inbound handlers write through
    `issueSync.applyRemote` (internal mutation) which patches the task directly
-   and does not schedule `pushTask`. Public task mutations (`tasks.update`,
-   `webUpdate`, `addComment`, `webAddComment`, `create`, `webCreate`) are the
-   only places that schedule `pushTask`.
+   and does not schedule `pushTask`. Our own writes of a synced field all go
+   through `lib/taskWrite.patchTask`, which patches and schedules `pushTask`
+   for the fields that moved; comments and new tasks schedule from
+   `tasks.ts`. `taskWrite.guard.test.ts` reads the source and fails on a raw
+   `ctx.db.patch` of a synced field on a task, because the cascade close, the
+   parent roll-up, the batch mutations, the retry and the workflow runner
+   each once patched status or assignee raw and left the provider behind.
 2. Outbound causes a webhook back. That webhook maps to values equal to ours
    (S3 no-op) and stops.
 3. GitHub: events whose `sender.type === "Bot"` and login matches our app
@@ -202,8 +235,17 @@ outbound. This single rule is what makes the loop terminate (S4).
 loads the task and its connection, and issues one provider write per call:
 
 - Linear: GraphQL `issueUpdate(id, input)` with the mapped subset; labels
-  resolved to ids, created with `issueLabelCreate` when missing; assignee
-  resolved by email via `users(filter: { email })`.
+  resolved to ids against the team's labels AND the workspace's (team null),
+  label groups excluded, and created with `issueLabelCreate` when missing.
+  A workspace may forbid the app actor from creating team labels ("You are
+  not allowed to create labels in this team"): such a label is left off the
+  push, the rest of the write still lands, `external.last_error` names the
+  labels kept off, and a `task_history` row (`sync_refused`, field `labels`)
+  keeps the record after the provider's set wins on the next inbound (S3).
+  Assignee resolved by any of the user's addresses via
+  `users(filter: { email: { in } })`; a cleared assignee pushes
+  `assigneeId: null`. Errors carry Linear's `userPresentableMessage`
+  (`linearApi.LinearGraphqlError`), not its terse `message`.
 - GitHub: `PATCH /repos/{repo}/issues/{n}` with title, body, state,
   state_reason, labels, assignees.
 
@@ -250,7 +292,9 @@ verify the signature, dedupe, store the raw event, and schedule the handler.
   `repository.full_name`), then `applyRemote`:
   - Issue create -> create task in the source project (if none by external id).
   - Issue update -> field level apply per S3.
-  - Issue remove / deleted -> set task `dropped` and keep the row.
+  - Issue remove / deleted (Linear `trashed`, `archivedAt`; GitHub
+    `deleted`) -> a task still open becomes `dropped` and keeps the row; a
+    task already done or dropped keeps its verdict.
   - Comment create/update -> upsert comment.
 - Reconcile: cron every 15 minutes runs `issueSync.reconcileSources`, which
   for each active source pulls issues updated since `last_synced_at - 5 min`
@@ -291,6 +335,12 @@ integration work) through `internal.externalEvents.record`, with `source`
 `issue_closed`, `issue_reopened`, `issue_commented`, `issue_status`,
 `issue_edited`, the `issue { provider, key, url, title }` object, `task_ids`
 set to the backing task, and `dedupe_key` = `<provider>:<issue id>:<kind>:<event ts>`.
+A webhook names its kind from its action. A pull (import, reconcile) has no
+action, so the kind is derived from the diff it applied
+(`issueMapping.kindFromDiff`: created -> opened, status -> closed or status,
+assignee -> assigned, labels -> labeled, else edited, a landed comment ->
+commented), and a pull that changed nothing records no event and fires no
+trigger (S7).
 The web renders every row with `ExternalEventRow`
 (`components/feed/ExternalEventRow.tsx`); issue kinds register their icon,
 accent and verb through `registerExternalEventStyles` in

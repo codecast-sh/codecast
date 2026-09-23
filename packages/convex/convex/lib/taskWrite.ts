@@ -14,7 +14,7 @@
 
 import { internal } from "../_generated/api";
 
-export const SYNCED_EXTERNAL_FIELDS = ["title", "description", "status", "priority", "assignee", "labels"] as const;
+export const SYNCED_EXTERNAL_FIELDS = ["title", "description", "status", "priority", "assignee", "labels", "parent_id"] as const;
 
 /** Which synced fields this patch really changes; empty means nothing to push. */
 export function changedExternalFields(task: any, updates: Record<string, any>): string[] {
