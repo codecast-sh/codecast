@@ -1,4 +1,5 @@
 import { followersSig, sameViewAnchor, type FollowerRow, type ViewAnchor } from "../lib/follow";
+import { carryRingStubs } from "../lib/calls/ringStubs";
 import { nextMembershipVisibility, type TeamVisibilityLevel, type VisibilityChangeMode } from "@codecast/convex/convex/teamVisibility";
 import { queuedMessagesFromPending } from "./pendingMessageJournal";
 import { isSessionDismissed, isSessionKilled, isSessionStashed } from "../lib/sessionRetirement";
@@ -204,6 +205,7 @@ export { isConvexId };
 // so existing call sites that import from the store keep working.
 export { resolveAssigneeInfo, resolveSessionAuthor, computePlanProgress, mergeLiveTasks } from "../lib/liveEntities";
 import { deriveDocDisplayTitle, isForeignSession } from "../lib/liveEntities";
+import { feedCoverMetaKey } from "../lib/feedCatchup";
 import { DEFAULT_SETTINGS_SECTION, type SettingsSectionId } from "../lib/settingsSections";
 import { activeWorkspaceKey } from "../lib/workspaceScope";
 import type { AgentChainSpec, AgentDefinitionSpec } from "@codecast/shared/contracts";
@@ -785,6 +787,10 @@ export type InboxSession = {
   dismissed_at?: number;
   team_id?: string | null;
   is_private?: boolean;
+  // The per-session team level. The inbox projection never carries it; the
+  // field holds only what setTeamVisibility wrote optimistically, so a reader
+  // prefers a server row's value when it has one (lib/teamFeedRows).
+  team_visibility?: string | null;
   // Which device currently runs this session (null = unassigned; auto-routing
   // picks the most-recently-active local machine on next send).
   owner_device_id?: string | null;
@@ -1705,6 +1711,9 @@ export type ClientUI = {
   inbox_scope?: "mine" | "team";
   // Show each session's model as a badge in the inbox list. Off by default.
   show_model_badge?: boolean;
+  // Show each session's checkout position (its branch, or the short sha of a
+  // detached head) as a pill on inbox cards. On by default; read as `!== false`.
+  show_branch_pill?: boolean;
   // Show each session's agent client icon (Claude Code, opencode, …) next to
   // its title in the inbox list. On by default; read as `!== false`.
   show_agent_icon?: boolean;
@@ -2810,6 +2819,20 @@ export function orchestrationGroupLabelOf(s: InboxSession): string | null {
 // (the trust-TTL sweep that retires a stale "working" to needs-input) is NOT a
 // field change — drive that with a coarse re-render ticker (useCoarseNow), never
 // by widening this signature. See store/wakeSig.ts.
+// A conversation's sharing fields live on three rows of the draft: the inbox
+// session, the opened conversation's meta row, and every team feed cache that
+// holds the row. A share or hide patches all three, so the team feed reads the
+// change back in the same tick instead of after the server's next push.
+function patchConversationRows(draft: { sessions: any; conversations: any; feedConversations?: any }, id: string, apply: (row: any) => void) {
+  if (draft.sessions[id]) apply(draft.sessions[id]);
+  if (!draft.conversations[id]) draft.conversations[id] = { _id: id };
+  apply(draft.conversations[id]);
+  for (const rows of Object.values(draft.feedConversations ?? {}) as any[][]) {
+    const row = rows?.find((c: any) => c?._id === id);
+    if (row) apply(row);
+  }
+}
+
 export function sessionStructuralSig(s: InboxSession): string {
   return [
     s._id,
@@ -2888,6 +2911,11 @@ export function sessionStructuralSig(s: InboxSession): string {
 
 // Collection wake signature over the whole session map (memoized by map ref).
 export const sessionsWakeSig = makeCollectionSig<InboxSession>(sessionStructuralSig);
+// The team feed lists the viewer's own sessions by team and sharing; those
+// fields change on a share, a hide or a team restamp, never on a heartbeat.
+export const ownTeamRowsSig = makeCollectionSig<InboxSession>(
+  (s) => `${s._id}|${s.team_id ?? ""}|${s.is_private === undefined ? "" : s.is_private ? 1 : 0}|${s.team_visibility ?? ""}|${s.user_id ?? ""}`,
+);
 
 // Membership signature over pending sends, memoized by the pendingMessages ref.
 // pendingMessages mutates on every send-lifecycle tick, but placeInboxRows
@@ -2999,6 +3027,8 @@ export interface PlacedInbox {
   escalatedByRole: Map<string, number>;
   /** The role's standing session id → the escalations that reach the person through its card, newest first (the lines on the role's card). */
   escalationsByLead: Map<string, RoleEscalation[]>;
+  /** The role's standing session id → how many of its sessions ride its card (org-staffing.md S23.3): the count pill. The sessions themselves are never rows. */
+  roleSessionsByLead: Map<string, number>;
 }
 
 // The number a section header claims, for every surface that renders those
@@ -3528,14 +3558,26 @@ export function placeInboxRows(
   // that keeps its own bucket is one the viewer pinned, stashed or dismissed
   // on its own (RIDE_KEEPS_OWN): it files where that act put it and never
   // nests under a lead in another section.
-  // A role's session is a third child kind (isUnderRole): it nests under its
-  // role's standing session, which the shared ride already filed it with. An
-  // escalated one is not under its role, so it stays a card of its own.
+  // A role's session is the role's (org-staffing.md S23.3): it rides its
+  // role's standing session, which the shared ride already filed it with, but
+  // it is never a row under the card. The card carries a count that opens the
+  // role's page, where the sessions are the panel's business. A directly
+  // escalated one is not under its role, so it stays a card of its own; a
+  // retired role (dismissed card) triages nothing, so its sessions stand on
+  // their own facts.
   const nestParentOf = inboxNestParentOf(sorted);
   const subsByParent = new Map<string, InboxSession[]>();
+  const roleSessionsByLead = new Map<string, number>();
+  const roleRidden = new Set<string>();
   for (const s of sorted) {
     const nestParent = nestParentOf(s);
     if (!nestParent || !allIds.has(nestParent)) continue;
+    if (isUnderRole(s)) {
+      if (placements.get(nestParent)?.bucket === "dismissed") continue;
+      roleRidden.add(s._id);
+      roleSessionsByLead.set(nestParent, (roleSessionsByLead.get(nestParent) ?? 0) + 1);
+      continue;
+    }
     if (isMemberCandidate(s)) {
       const own = placements.get(s._id)?.bucket;
       const lead = placements.get(nestParent)?.bucket;
@@ -3558,7 +3600,7 @@ export function placeInboxRows(
     forks.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
   }
   const subsWithParent = nestedSessionIds(subsByParent);
-  const isTop = (s: InboxSession) => !subsWithParent.has(s._id);
+  const isTop = (s: InboxSession) => !subsWithParent.has(s._id) && !roleRidden.has(s._id);
   // A child row (never its own member — the shared isOrphanOrSubagent) whose
   // parent did not nest above it rides that absent parent, never a loose
   // flat card (it would ignore membership and the fold). A MEMBER whose nest
@@ -3661,9 +3703,9 @@ export function placeInboxRows(
   };
   // A role's sessions are the role's to triage, so they add to no header:
   // the number beside a section is what the person looks after there, and the
-  // role's card is one thing however many sessions sit under it (R1).
+  // role's card is one thing however many sessions ride it (R1, S23.3); they
+  // are not in subsByParent at all.
   for (const id of subsWithParent) {
-    if (isUnderRole(scoped[id] ?? {})) continue;
     const b = placements.get(id)?.bucket;
     const k = b ? SECTION_OF_BUCKET[b] : undefined;
     if (k) counts[k]++;
@@ -3738,6 +3780,7 @@ export function placeInboxRows(
     counts,
     escalatedByRole: prev && sameCounts(prev.escalatedByRole, escalatedByRole) ? prev.escalatedByRole : escalatedByRole,
     escalationsByLead: prev && sameEscalations(prev.escalationsByLead, escalationsByLead) ? prev.escalationsByLead : escalationsByLead,
+    roleSessionsByLead: prev && sameCounts(prev.roleSessionsByLead, roleSessionsByLead) ? prev.roleSessionsByLead : roleSessionsByLead,
   };
 
   // 8. Dev-only convergence check (C5): the full shared computation over the
@@ -4460,8 +4503,12 @@ function nestedSessionIds(subsByParent: Map<string, InboxSession[]>): Set<string
 // explicit "keep visible".
 function dropOrphanSubagents(list: InboxSession[], focusedId?: string | null): InboxSession[] {
   const present = new Set(list.map((s) => s._id));
+  const nestParentOf = inboxNestParentOf(list);
   return list.filter((s) => {
     if (s._id === focusedId || s.is_pinned) return true;
+    // A role's session whose role's card is on the list rides that card as a
+    // count, never as a row (org-staffing.md S23.3).
+    if (isUnderRole(s)) { const p = nestParentOf(s); if (p && p !== s._id && present.has(p)) return false; }
     if (!isSubagentConversation(s) && !isAgentTeamWorker(s)) return true;
     const p = nestParentIdOf(s);
     return !!p && p !== s._id && present.has(p);
@@ -5240,6 +5287,12 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // absent = unknown (fall back to the oldest cached row).
   feedCursors: Record<string, string | null>;
   mergeFeedConversations: (key: string, convs: any[]) => void;
+  // The team feed cache only grows, so removals reach it from the sync log:
+  // a member's departure (their rows leave every remaining member's cache)
+  // and a scope the log can no longer vouch for (revoked, or resynced past
+  // retention: the whole team's cache goes and refills from the server).
+  purgeMemberTeamRows: (teamId: string, userId: string) => void;
+  dropTeamFeedCache: (teamId: string) => void;
   setFeedHasMore: (key: string, hasMore: boolean) => void;
   setFeedCursor: (key: string, cursor: string | null) => void;
   sortedSessions: () => InboxSession[];
@@ -6493,7 +6546,9 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   // protect — the optimistic layer for calls is the ephemeral `call` slice,
   // not these rows). Timestamps are bucketed server-side (calls.ts), so
   // no-change pushes bail on the JSON compare.
-  myCalls: { kind: "singleton" },
+  // One exception: a stub ring the engine put up from the press stands
+  // until the server lists the person (lib/calls/ringStubs).
+  myCalls: { kind: "singleton", merge: { outgoing: (local, server) => carryRingStubs(local, server) } },
   callOccupancy: { kind: "singleton" },
   callConfig: { kind: "singleton" },
   // Live huddles, wholesale-replaced on every push (the server sorts rooms
@@ -7145,6 +7200,28 @@ function setSessionSnoozeInDraft(draft: Draft, id: string, until: number) {
 // per-row Date.now() drifts across a long sweep, and a receiver's field lock
 // holding a value the server never echoes back never retires.
 //
+// The team feed caches are keyed `<teamId>|<directoryFilter>` (TeamFeed in
+// ActivityFeed.tsx), so one team owns every key under its prefix.
+function teamFeedKeys(draft: { feedConversations: Record<string, any[]> }, teamId: string): string[] {
+  const prefix = `${teamId}|`;
+  return Object.keys(draft.feedConversations ?? {}).filter((k) => k.startsWith(prefix));
+}
+
+// Forget one team's feed cache: the rows, the paging state, and the covered
+// watermark the absence catch-up stands on, so the next view refills from the
+// server as a cold cache would.
+function dropTeamFeedCacheIn(
+  draft: { feedConversations: Record<string, any[]>; feedHasMore: Record<string, any>; feedCursors: Record<string, any>; syncMeta: Record<string, any> },
+  teamId: string,
+): void {
+  for (const key of teamFeedKeys(draft, teamId)) {
+    delete draft.feedConversations[key];
+    delete draft.feedHasMore[key];
+    delete draft.feedCursors[key];
+    delete draft.syncMeta[feedCoverMetaKey(key)];
+  }
+}
+
 // `stashHidden` is the stash's mode ("Stash and hide": survives trigger wakes).
 // Every stash writes inbox_stash_hidden explicitly — true or null — so a
 // re-stash never inherits the previous gesture's mode; a kill clears it with
@@ -7190,14 +7267,17 @@ function hideSessionInDraft(
     // Hiding it honestly means deleting it — store + IDB (the auto-generated
     // exclude pending persists the row delete, as with kills).
     //
-    // A TEAMMATE'S session is the same situation: the server's applyPatches
-    // owner-gate (dispatch.ts) silently DROPS a hide patch on a conversation we
-    // don't own, so inbox_stashed_at/inbox_dismissed_at never persists, the
-    // 5-min optimistic lock lapses, and the reconcile clear pass resurrects it
-    // into the active inbox. Stash/kill on a foreign session can only mean
-    // "forget my injected copy" — it returns iff we reopen it. Ownership MUST
-    // resolve through isForeignSession: a thin injected row often carries no
-    // user_id at all, and only conversations[sid].is_own knows whose it is.
+    // A TEAMMATE'S session is the same situation locally: the server's
+    // applyPatches owner-gate (dispatch.ts) DROPS a hide patch on a conversation
+    // we don't own, so its stamps never persist and the row is deleted here
+    // instead (the exclude pending keeps this cache from re-adding it). The
+    // durable half is server-side: the same dispatch (stashSession / killSession
+    // / killSessions by action name) records the viewer's hide in inbox_hides,
+    // and the team scan skips it, so the team board on every device drops the
+    // row on its next push rather than feeding it back. `cast restore` (or the
+    // restoreSession dispatch) deletes that record. Ownership MUST resolve
+    // through isForeignSession: a thin injected row often carries no user_id at
+    // all, and only conversations[sid].is_own knows whose it is.
     const ownerSess = draft.sessions[sid];
     const isForeign = !!ownerSess && isForeignSession(ownerSess, draft.conversations[sid], me);
     if (!isConvexId(sid) || isForeign) {
@@ -8762,6 +8842,24 @@ const inboxStoreConfig = (set: any, get: any) => ({
         }
       }
     }
+    dropTeamFeedCacheIn(this, teamId);
+  }),
+
+  // A `member`/`scope_removed` row in the team's scope: the departed user's
+  // rows leave the team feed cache for that team. Keyed by the runner
+  // (user_id), the same key the server's team scan uses, so a role's seat row
+  // leaves with its host. A rejoin needs no lifting: the cache has no
+  // excludes, and the live page re-adds the rows the server serves again.
+  purgeMemberTeamRows: sync(function (this: Draft, teamId: string, userId: string) {
+    for (const key of teamFeedKeys(this, teamId)) {
+      const rows = this.feedConversations[key] as any[];
+      const kept = rows.filter((c) => String(c?.user_id) !== userId);
+      if (kept.length !== rows.length) this.feedConversations[key] = kept;
+    }
+  }),
+
+  dropTeamFeedCache: sync(function (this: Draft, teamId: string) {
+    dropTeamFeedCacheIn(this, teamId);
   }),
 
   liftScopeExcludes: sync(function (this: Draft, scopeKey: string) {
@@ -9147,25 +9245,17 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // update local state, and the matching dispatch.ts SIDE_EFFECTS do the
   // authoritative write — same split as switchProject/resumeSession.
   setPrivacy: action(function (this: Draft, id: string, isPrivate: boolean) {
-    const apply = (c: any) => {
-      if (!c) return;
+    patchConversationRows(this, id, (c) => {
       c.is_private = isPrivate;
       if (isPrivate) c.team_visibility = "private";
-    };
-    apply(this.sessions[id]);
-    if (!this.conversations[id]) this.conversations[id] = { _id: id } as any;
-    apply(this.conversations[id]);
+    });
   }),
 
   setTeamVisibility: action(function (this: Draft, id: string, visibility: "summary" | "full" | null) {
-    const apply = (c: any) => {
-      if (!c) return;
+    patchConversationRows(this, id, (c) => {
       c.team_visibility = visibility ?? undefined;
       c.is_private = false;
-    };
-    apply(this.sessions[id]);
-    if (!this.conversations[id]) this.conversations[id] = { _id: id } as any;
-    apply(this.conversations[id]);
+    });
   }),
 
   // `teams` is a wholesale-synced list, so the row is patched optimistically
@@ -10924,7 +11014,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     // automatic heal-on-load already filters pathless stubs out, so this only
     // gates the user-triggered awaitConvexId retry.
     if (!stub.project_path && !stub.git_root) {
-      return Promise.reject(new Error("Pick a project for this session before sending"));
+      return Promise.reject(new Error("Pick a folder for this session before sending"));
     }
     // Route through createSessionFromStub (not a bare createSession) so the live
     // project/agent + isolated-worktree mode are sourced identically to the

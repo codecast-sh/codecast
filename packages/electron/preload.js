@@ -54,6 +54,9 @@ const onCallPanelShow = bufferedChannel(ipcRenderer, "call-panel-show", { latest
 // window's talk keys. Latest only: a window that subscribes late wants the
 // truth now, not a replay of every partial transcript on the way to it.
 const onVoiceMirror = bufferedChannel(ipcRenderer, "voice-mirror", { latest: true });
+// The host's camera pictures, a few small frames a second, for the circles in
+// the other windows. Latest only: a stale frame is worse than none.
+const onVoiceFrames = bufferedChannel(ipcRenderer, "voice-frames", { latest: true });
 
 // A meeting app started on this machine and the shell is offering to record
 // it. Buffered like a deep link: the offer is about something happening NOW,
@@ -130,6 +133,8 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   // every other window reads them off this.
   voiceMirror: (payload) => ipcRenderer.send("voice-mirror", payload),
   onVoiceMirror,
+  voiceFrames: (payload) => ipcRenderer.send("voice-frames", payload),
+  onVoiceFrames,
   // The shapes. One window, because `transparent` and `frame` are decided
   // when a window is CONSTRUCTED: the voice window is born see-through and
   // frameless, and changing shape reshapes it in place rather than handing

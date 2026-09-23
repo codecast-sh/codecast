@@ -2,10 +2,15 @@
  * said, what was typed, what an agent answered and who came and went.
  *
  * Two surfaces share it. The stage rail is dark (the stage carries the `dark`
- * class) and 340px wide; the call page follows the app theme and is as wide
- * as the page. Everything here is sol-* tokens, so the same rules read in
- * both; `data-surface` only changes what the page can afford to spend on
- * width.
+ * class) and up to 340px wide (55% of a narrow stage, about 272px at the
+ * 520px window); the call page follows the app theme and is as wide as the
+ * page. Everything here is sol-* tokens, so the same rules read in both.
+ * `data-surface` sets the surface's numbers (inset, body and secondary size,
+ * measure; the custom properties on .rt below) and a few treatments of one
+ * surface only: on the stage the violet tint instead of a solid fill, the
+ * remove x on hover, a cap on a chip's name, cyan on the jump pill and the
+ * composer ring, and the composer's wash; on the page spoken words in
+ * secondary text instead of muted.
  *
  * The one visual rule: SPOKEN is quiet, TYPED is loud. A passage sits behind
  * a thin rule in smaller, dimmer text; a typed line has an avatar, a name and
@@ -15,30 +20,71 @@
  * Type sits on four steps per surface, and the sheet has these numbers and no
  * others. Stage: body 12.5px/1.5, secondary 11.5px/1.45, label 11.5px/600,
  * meta 10.5px mono. Page: body 13px/1.55, secondary 12px/1.45, the same label
- * and meta. Spoken words in an open passage sit one notch under the body of
- * their surface (12px on the stage, 12.5px on the page). Gaps are on a 4px
- * unit: 4px between lines of one author, 12px between rows, 16px before a
- * divider and 4px after it. */
+ * and meta. Spoken words in an open passage sit half a pixel under the body
+ * of their surface (12px on the stage, 12.5px on the page). Gaps between
+ * rows are on a 4px unit: 4px between lines of one author, 12px between
+ * rows, 16px before a divider and 4px after it. A pill's own padding (2px
+ * tall, 7px and 9px wide on Add an agent) comes from its 20px height and
+ * its glyph, not from the unit. */
 
 .rt {
   position: relative;
+  --rt-inset: 10px;
+  --rt-body: 12.5px;
+  --rt-body-lh: 1.5;
+  --rt-secondary: 11.5px;
+  --rt-measure: 72ch;
+  --rt-hairline: color-mix(in srgb, var(--sol-text) 7%, transparent);
+}
+.rt[data-surface="page"] {
+  --rt-inset: 24px;
+  --rt-body: 13px;
+  --rt-body-lh: 1.55;
+  --rt-secondary: 12px;
+}
+/* The label step: a name over a typed line, Add an agent, the recap's word. */
+.rt-name,
+.rt-add,
+.rt-recap-label {
+  font-size: 11.5px;
+  font-weight: 600;
+}
+/* One focus ring for every control in the thread. The stage's accent is
+   cyan (the jump pill, the composer ring), so the ring follows it there. */
+.rt-passage-head:focus-visible,
+.rt-recap-head:focus-visible,
+.rt-add:focus-visible,
+.rt-btn:focus-visible,
+.rt-seg-btn:focus-visible,
+.rt-note-btn:focus-visible,
+.rt-event-agent:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--sol-blue) 60%, transparent);
+  outline-offset: 1px;
+}
+.rt[data-surface="stage"] :is(
+  .rt-passage-head,
+  .rt-recap-head,
+  .rt-add,
+  .rt-btn,
+  .rt-seg-btn,
+  .rt-note-btn,
+  .rt-event-agent
+):focus-visible {
+  outline-color: color-mix(in srgb, var(--sol-cyan) 60%, transparent);
 }
 
 /* ── Header ─────────────────────────────────────────────────────────────── */
 
+/* The chips, Add an agent, the words control and the switch share the
+   list's inset, so they sit on its edge. */
 .rt-head {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 4px 6px;
   flex-shrink: 0;
-  padding: 8px 10px 6px;
-  border-bottom: 1px solid color-mix(in srgb, var(--sol-text) 7%, transparent);
-}
-/* The page's list sits on a 24px inset; the chips, Add an agent, the words
-   control and the switch share that edge. */
-.rt[data-surface="page"] .rt-head {
-  padding: 8px 24px 6px;
+  padding: 8px var(--rt-inset) 6px;
+  border-bottom: 1px solid var(--rt-hairline);
 }
 .rt-chip {
   display: inline-flex;
@@ -54,15 +100,15 @@
 /* Only the density control is left (the page, after the call): no band, no
    rule, it sits on the recap's row. */
 .rt-head-quiet {
-  padding: 4px 24px 0;
+  padding: 4px var(--rt-inset) 0;
   border-bottom: 0;
 }
-/* The rail is 340px: the chips and Add an agent wrap together, and the last
-   row is always the controls' group (the listening line while nothing has
-   been said, the words control, the switch), so the controls have one fixed
-   home however many agents come and go. The group wraps as one unit when
-   the chips fill the first row, then takes the whole row; the controls keep
-   the right edge and the line takes what they leave. One agent is two rows. */
+/* In the rail the chips and Add an agent wrap together, and the last row is
+   always the controls' group (the listening line while nothing has been
+   said, the words control, the switch), so the controls have one fixed home
+   however many agents come and go. The group wraps as one unit when the
+   chips fill the first row, then takes the whole row; the controls keep the
+   right edge and the line takes what they leave. One agent is two rows. */
 .rt[data-surface="stage"] .rt-head-right {
   order: 1;
   flex: 1 1 auto;
@@ -89,15 +135,18 @@
   gap: 4px;
   border-radius: 9999px;
   padding: 2px 9px 2px 7px;
-  font-size: 11.5px;
-  font-weight: 600;
   line-height: 16px;
   color: var(--sol-violet);
   background: color-mix(in srgb, var(--sol-violet) 12%, transparent);
   transition: background 120ms;
 }
-.rt-add:hover {
+.rt-add:hover:not(:disabled) {
   background: color-mix(in srgb, var(--sol-violet) 22%, transparent);
+}
+.rt-add:disabled,
+.rt-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 /* Every pill in the header is 20px tall: 16px of line and a 2px pad. */
 .rt-head [role="switch"] {
@@ -121,7 +170,8 @@
   display: none;
 }
 /* A control with a few positions, the live one raised (SegmentedRadio):
-   the thread's words control and the stage's view control. */
+   the thread's words control and the stage's view control. The positions
+   are 16px in a 2px pad, so the control is 20px like the pills beside it. */
 .rt-seg {
   display: inline-flex;
   align-items: center;
@@ -136,11 +186,12 @@
   justify-content: center;
   gap: 6px;
   width: 22px;
-  height: 18px;
+  height: 16px;
   border-radius: 4px;
   color: var(--sol-text-muted);
   transition: color 120ms, background 120ms;
 }
+/* The stage's view control lives in the 44px stage header, not this row. */
 .rt-seg-btn-labeled {
   width: auto;
   height: 20px;
@@ -160,10 +211,10 @@
 /* ── The list ───────────────────────────────────────────────────────────── */
 
 .rt-list {
-  padding: 8px 10px 10px;
+  padding: 8px var(--rt-inset) 10px;
 }
 .rt[data-surface="page"] .rt-list {
-  padding: 12px 24px 80px;
+  padding-bottom: 80px;
 }
 /* The secondary step: a note, a folded preview, the recap's one line, an
    event, the working foot and the selection hint. */
@@ -173,17 +224,9 @@
 .rt-event,
 .rt-working,
 .rt-hint {
-  font-size: 11.5px;
+  font-size: var(--rt-secondary);
   line-height: 1.45;
   color: var(--sol-text-muted);
-}
-.rt[data-surface="page"] .rt-note,
-.rt[data-surface="page"] .rt-passage-preview,
-.rt[data-surface="page"] .rt-recap-line,
-.rt[data-surface="page"] .rt-event,
-.rt[data-surface="page"] .rt-working,
-.rt[data-surface="page"] .rt-hint {
-  font-size: 12px;
 }
 /* The body step: a typed or agent line, the recap's prose and items, the
    empty card's sentence. */
@@ -191,22 +234,15 @@
 .rt-recap-body > p,
 .rt-recap-items li,
 .rt-empty p {
-  font-size: 12.5px;
-  line-height: 1.5;
-}
-.rt[data-surface="page"] .rt-line-body,
-.rt[data-surface="page"] .rt-recap-body > p,
-.rt[data-surface="page"] .rt-recap-items li,
-.rt[data-surface="page"] .rt-empty p {
-  font-size: 13px;
-  line-height: 1.55;
+  font-size: var(--rt-body);
+  line-height: var(--rt-body-lh);
 }
 /* A measure for the page's prose: a long agent reply or recap stops at 72
    characters (the hint's width), it does not run the column on a wide
    screen. */
 .rt[data-surface="page"] .rt-line-body,
 .rt[data-surface="page"] .rt-recap-body {
-  max-width: 72ch;
+  max-width: var(--rt-measure);
 }
 /* A clock, wherever it sits: a passage head, an event, a typed line. */
 .rt-when {
@@ -239,7 +275,8 @@
   text-transform: uppercase;
 }
 /* 16px above and 4px below: the label sits close to what it heads and far
-   from what it leaves. No padding, so the margins alone set the gaps. */
+   from what it leaves. No padding, so the margins alone set the gaps. The
+   rule is a mark inside the list, a shade over the frame's hairline. */
 .rt-divider {
   display: flex;
   align-items: center;
@@ -254,13 +291,26 @@
   height: 1px;
   background: color-mix(in srgb, var(--sol-text) 10%, transparent);
 }
+/* The earlier group's label is a fold (a button with aria-expanded): it
+   fills the row like the plain label and its chevron turns when open. */
+.rt-divider[aria-expanded] {
+  width: 100%;
+  cursor: pointer;
+  text-align: left;
+  transition: color 120ms;
+}
+.rt-divider[aria-expanded]:hover {
+  color: var(--sol-text);
+}
+.rt-divider[aria-expanded="true"] .rt-chevron {
+  transform: rotate(90deg);
+}
 /* How selecting works: one quiet line in the list, after the recap and
-   before the first turn it explains. The list's 24px plus the 28px glyph
+   before the first turn it explains. The list's inset plus the 28px glyph
    column keeps it on the names' edge, and it scrolls with the content. */
 .rt-hint {
   padding: 0 0 8px 28px;
-  text-align: left;
-  max-width: 72ch;
+  max-width: var(--rt-measure);
   color: var(--sol-text-dim);
 }
 
@@ -269,10 +319,10 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
-  margin: 18px auto 0;
+  gap: 12px;
+  margin: 16px auto 0;
   max-width: 300px;
-  padding: 18px 16px;
+  padding: 16px;
   text-align: center;
   border-radius: 12px;
   background: color-mix(in srgb, var(--sol-text) 4%, transparent);
@@ -292,18 +342,20 @@
   gap: 6px;
   border-radius: 9999px;
   padding: 6px 14px;
-  font-size: 12px;
+  font-size: var(--rt-body);
   font-weight: 500;
   transition: background 120ms;
 }
 /* The first act is solid; the other way is a text button, so the eye knows
-   which to press first. */
+   which to press first. The hover mixes toward the theme's text, so it
+   darkens on the light theme and brightens on the dark one, the way every
+   other hover in the thread moves. */
 .rt-btn-violet {
   color: var(--sol-bg);
   background: var(--sol-violet);
 }
 .rt-btn-violet:hover {
-  background: color-mix(in srgb, var(--sol-violet) 88%, black);
+  background: color-mix(in srgb, var(--sol-violet) 85%, var(--sol-text));
 }
 /* On the stage a solid violet fill puts dark text on mid violet; a tint with
    the stage's own text reads at about 9:1 and matches the header's pill. */
@@ -318,7 +370,7 @@
    stage's "transcribing live" colour and a green label would read as a state. */
 .rt-btn-green {
   color: var(--sol-text-muted);
-  text-underline-offset: 3px;
+  text-underline-offset: 2px;
 }
 .rt-btn-green svg {
   color: var(--sol-green);
@@ -330,6 +382,7 @@
 
 /* ── Spoken words: a passage ────────────────────────────────────────────── */
 
+/* The rule is a mark inside the list, two shades over the frame's hairline. */
 .rt-passage {
   margin: 12px 0;
   border-left: 2px solid color-mix(in srgb, var(--sol-text) 14%, transparent);
@@ -348,19 +401,22 @@
   width: 100%;
   border-radius: 6px;
   margin-left: -4px;
-  padding: 4px 4px;
+  padding: 4px;
+  /* A button centres its text; the head is a row. */
   text-align: left;
   transition: background 120ms;
 }
 .rt-passage-head:hover {
   background: color-mix(in srgb, var(--sol-text) 5%, transparent);
 }
-.rt-passage-chevron {
+/* The fold mark, on a passage's head and on the recap's: it turns to point
+   down when the body is open. */
+.rt-chevron {
   align-self: center;
   color: var(--sol-text-muted);
   transition: transform 160ms ease;
 }
-.rt-passage-open .rt-passage-chevron {
+.rt-passage-open .rt-chevron {
   transform: rotate(90deg);
 }
 /* The head's meta ("7:52 PM · 2 min · 14 turns") is one line and does not
@@ -375,7 +431,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11.5px;
+  font-size: var(--rt-secondary);
   font-weight: 500;
 }
 .rt-passage-preview {
@@ -386,12 +442,12 @@
   -webkit-line-clamp: 2;
 }
 /* Open: the whole run. The turns come from TranscriptTurnList, sized for
-   the call page; here they are spoken words in a thread, so one notch under
-   the body of the surface (12px under a 12.5px typed line on the stage,
-   12.5px under 13px on the page). On the stage history is a shade quieter
-   and the live passage a shade brighter because it is the captions now; on
-   the page the transcript is what the page is for, so it reads in secondary
-   text and the size step alone says it is spoken. */
+   the call page; here they are spoken words in a thread, so half a pixel
+   under the body of the surface (12px under a 12.5px typed line on the
+   stage, 12.5px under 13px on the page). On the stage history is a shade
+   quieter and the live passage a shade brighter because it is the captions
+   now; on the page the transcript is what the page is for, so it reads in
+   secondary text and the size step alone says it is spoken. */
 .rt-passage-body {
   padding: 4px 0;
 }
@@ -403,20 +459,13 @@
   padding-left: 18px;
 }
 .rt-passage-body p {
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: calc(var(--rt-body) - 0.5px);
+  line-height: var(--rt-body-lh);
   color: var(--sol-text-muted);
 }
-.rt[data-surface="page"] .rt-passage-body p {
-  font-size: 12.5px;
-  color: var(--sol-text-secondary);
-}
+.rt[data-surface="page"] .rt-passage-body p,
 .rt-passage-live .rt-passage-body p {
   color: var(--sol-text-secondary);
-}
-.rt-passage-head:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--sol-blue) 60%, transparent);
-  outline-offset: 1px;
 }
 /* A body folds both ways with motion: a grid row from 0fr to 1fr and back.
    The row is always in the tree, so an opening has a height to grow from;
@@ -460,7 +509,8 @@
   column-gap: 6px;
   align-items: center;
   width: 100%;
-  padding: 7px 10px;
+  padding: 8px 10px;
+  /* A button centres its text; the head is a row. */
   text-align: left;
   border-radius: 10px;
   transition: background 120ms;
@@ -468,19 +518,13 @@
 .rt-recap-head:hover {
   background: color-mix(in srgb, var(--sol-violet) 6%, transparent);
 }
-.rt-recap-head:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--sol-blue) 60%, transparent);
-  outline-offset: 1px;
-}
-.rt-recap-open .rt-passage-chevron {
+.rt-recap-open .rt-chevron {
   transform: rotate(90deg);
 }
 .rt-recap-label {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 11.5px;
-  font-weight: 600;
   color: var(--sol-violet);
   white-space: nowrap;
 }
@@ -519,11 +563,8 @@
 .rt-event {
   display: flex;
   align-items: flex-start;
-  justify-content: flex-start;
   gap: 8px;
   margin: 12px 0;
-  padding: 0;
-  text-align: left;
 }
 .rt-event-glyph {
   margin-top: 2px;
@@ -536,8 +577,14 @@ button.rt-event-agent:hover {
   color: var(--sol-violet);
   text-decoration: underline;
 }
+/* The time sits on the first line's right edge, the way a chat line's time
+   sits beside its name, so a sentence that wraps keeps it out of its words. */
 .rt-event-when {
-  margin-left: 6px;
+  margin-left: auto;
+  padding-left: 8px;
+  padding-top: 1px;
+  flex-shrink: 0;
+  color: var(--sol-text-dim);
 }
 /* Pinned under the header while the room is transcribed and nothing has
    been said: a status line, not a row in the timeline. */
@@ -546,15 +593,12 @@ button.rt-event-agent:hover {
   flex-shrink: 0;
   align-items: flex-start;
   gap: 6px;
-  padding: 4px 10px 2px;
+  padding: 4px var(--rt-inset) 2px;
 }
 /* The dot stays on the first line if a scribe error wraps. */
 .rt-listening > svg {
   flex-shrink: 0;
   margin-top: 6px;
-}
-.rt[data-surface="page"] .rt-listening {
-  padding: 4px 24px 2px;
 }
 /* On the stage the line is the first member of the controls' group at the
    header's right. It takes what the words control and the switch leave and
@@ -564,18 +608,8 @@ button.rt-event-agent:hover {
   min-width: 0;
   align-items: center;
   padding: 0;
-  font-size: 11px;
+  font-size: var(--rt-secondary);
   color: var(--sol-text-muted);
-}
-@media (prefers-reduced-motion: reduce) {
-  .rt-passage-chevron,
-  .rt-passage,
-  .rt-fold {
-    transition: none;
-  }
-  .rt-in {
-    animation: none;
-  }
 }
 
 /* ── Typed lines ────────────────────────────────────────────────────────── */
@@ -620,13 +654,17 @@ button.rt-event-agent:hover {
   flex-shrink: 0;
   padding: 6px 8px 8px;
 }
+/* The page's foot frames the list from below with the header's hairline. */
 .rt[data-surface="page"] .rt-foot {
-  padding: 8px 24px 12px;
-  border-top: 1px solid color-mix(in srgb, var(--sol-border) 30%, transparent);
+  padding: 8px var(--rt-inset) 12px;
+  border-top: 1px solid var(--rt-hairline);
 }
-/* On the stage every surface in the rail is a wash of the text colour, so the
-   composer takes the same wash instead of the card colour, and its focus ring
-   is cyan, the thread's accent there, not team chat's blue. */
+/* The thread reuses the chat composer's frame (ch-composer in chat.css) so
+   paste/drop/pick and the thumbnail strip are the same as team chat;
+   `.ch-composer-flush` pins it in the rail. On the stage every surface in
+   the rail is a wash of the text colour, so the composer takes the same wash
+   instead of the card colour, and its focus ring is cyan, the thread's
+   accent there, not team chat's blue. */
 .rt[data-surface="stage"] .ch-composer {
   background: color-mix(in srgb, var(--sol-text) 4%, transparent);
   border-color: color-mix(in srgb, var(--sol-text) 9%, transparent);
@@ -639,8 +677,8 @@ button.rt-event-agent:hover {
    the body step of its surface, not on team chat's text-sm. */
 .rt .ch-composer textarea,
 .rt .ch-composer [contenteditable="true"] {
-  font-size: 12.5px;
-  line-height: 1.5;
+  font-size: var(--rt-body);
+  line-height: var(--rt-body-lh);
   padding-left: 30px;
 }
 /* The attach button used to have a 36px row of its own under the input, so
@@ -663,14 +701,7 @@ button.rt-event-agent:hover {
   width: 24px;
   height: 24px;
 }
-.rt[data-surface="page"] .ch-composer textarea,
-.rt[data-surface="page"] .ch-composer [contenteditable="true"] {
-  font-size: 13px;
-  line-height: 1.55;
-}
-/* The thread reuses the chat composer's frame (ch-composer in chat.css) so
- * paste/drop/pick and the thumbnail strip are the same as team chat;
- * `.ch-composer-flush` pins it in the rail. */
+/* Thumbnails in a line. */
 .rt .ch-att img {
   max-height: 160px;
 }
@@ -696,13 +727,26 @@ button.rt-event-agent:hover {
   overflow-x: auto;
   border-radius: 6px;
   padding: 6px 8px;
-  font-size: 11.5px;
-}
-.rt[data-surface="page"] .rt-md pre {
-  font-size: 12px;
+  font-size: var(--rt-secondary);
 }
 .rt-md ul,
 .rt-md ol {
   margin: 2px 0 4px;
   padding-left: 1.1em;
+}
+
+/* ── Reduced motion ─────────────────────────────────────────────────────── */
+
+/* Everything the thread moves: the live rule's fade, the fold mark's turn,
+   the fold itself and the rise of a new row. Hover colour fades stay; they
+   are not motion. */
+@media (prefers-reduced-motion: reduce) {
+  .rt-passage,
+  .rt-chevron,
+  .rt-fold {
+    transition: none;
+  }
+  .rt-in {
+    animation: none;
+  }
 }

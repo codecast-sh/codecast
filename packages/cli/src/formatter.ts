@@ -1,4 +1,5 @@
 import { c, fmt, UNVERIFIABLE_MARK } from "./colors.js";
+import { computeCumulativeFiles, type CumulativeChange } from "@codecast/shared/diff";
 import { structuredPayloadSummary, structuredPayloadKeysFromRaw } from "@codecast/shared/render";
 import { escalationFirstLine, threadStateHeadline, parseThreadStateStatus, sessionLivenessVerdict } from "@codecast/shared/contracts";
 import type { LivenessVerdict } from "@codecast/shared/contracts";
@@ -1450,6 +1451,11 @@ interface DiffSession {
   id: string;
   title: string;
   messages: DiffMessage[];
+  // The server's materialized file changes for the session (Edit/Write calls
+  // plus what the shell-changes hook observed on disk). When present they are
+  // the source of truth for the file tree; the transcript scan below only
+  // covers sessions that predate materialization.
+  fileChanges?: CumulativeChange[];
 }
 
 interface DiffInput {
@@ -1460,11 +1466,13 @@ interface DiffInput {
 }
 
 interface FileStats {
-  status: "M" | "A";
+  status: "M" | "A" | "D";
   additions: number;
   deletions: number;
   edits: Array<{ oldStr: string; newStr: string }>;
   writeContent?: string;
+  // A ready unified patch (from the shared folding) that supersedes edits/writeContent.
+  patch?: string;
 }
 
 interface CommitInfo {
@@ -1559,6 +1567,19 @@ function extractDiffData(sessions: DiffSession[]): {
     }
   }
 
+  for (const session of sessions) {
+    if (!session.fileChanges?.length) continue;
+    for (const file of computeCumulativeFiles(session.fileChanges, null)) {
+      files.set(file.filename, {
+        status: file.status === "added" ? "A" : file.status === "deleted" ? "D" : "M",
+        additions: file.additions,
+        deletions: file.deletions,
+        edits: [],
+        patch: file.patch,
+      });
+    }
+  }
+
   const duration = firstTimestamp && lastTimestamp
     ? Math.round((lastTimestamp - firstTimestamp) / 60000)
     : 0;
@@ -1569,6 +1590,12 @@ function extractDiffData(sessions: DiffSession[]): {
 function formatUnifiedDiff(filePath: string, stats: FileStats): string[] {
   const lines: string[] = [];
   const shortPath = filePath.startsWith("/") ? filePath.slice(1) : filePath;
+
+  if (stats.patch !== undefined) {
+    lines.push(`diff --codecast a/${shortPath} b/${shortPath}`);
+    lines.push(...stats.patch.replace(/\n$/, "").split("\n"));
+    return lines;
+  }
 
   if (stats.writeContent !== undefined && stats.edits.length === 0) {
     lines.push(`diff --codecast a/${shortPath} b/${shortPath}`);
@@ -1652,10 +1679,12 @@ export function formatDiffResults(input: DiffInput): string {
     for (const [filePath, stats] of sortedFiles.slice(0, 15)) {
       const shortPath = truncatePath(filePath);
       const paddedPath = shortPath.padEnd(40);
-      const statusIcon = stats.status === "A" ? "A" : "M";
+      const statusIcon = stats.status;
 
       if (stats.status === "A") {
         lines.push(` ${statusIcon} ${paddedPath} +${stats.additions} (new)`);
+      } else if (stats.status === "D") {
+        lines.push(` ${statusIcon} ${paddedPath} -${stats.deletions} (deleted)`);
       } else if (stats.deletions > 0) {
         lines.push(` ${statusIcon} ${paddedPath} +${stats.additions} -${stats.deletions}`);
       } else {

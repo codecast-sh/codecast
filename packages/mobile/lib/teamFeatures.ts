@@ -11,7 +11,7 @@
 // guard use.
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { TEAM_FEATURES, type TeamFeatureKey } from "@codecast/shared/contracts";
+import { TEAM_FEATURES, workspaceFeatureEnabled, type TeamFeatureKey } from "@codecast/shared/contracts";
 import { createFeatureHooks, defineFeatures, type FeatureSource } from "@platform/flags";
 
 const TEAM_FEATURE_CATALOG = defineFeatures(TEAM_FEATURES);
@@ -33,3 +33,12 @@ const hooks = createFeatureHooks(TEAM_FEATURE_CATALOG, useTeamSource);
 /** true/false once the teams list has loaded; undefined while unknown. */
 export const useActiveTeamFeature: (key: TeamFeatureKey) => boolean | undefined =
   hooks.useFeatureState;
+
+/** Is `key` on in the active WORKSPACE, personal included (the personal
+ *  workspace borrows a `personal` feature from any of the viewer's teams,
+ *  shared rule workspaceFeatureEnabled). undefined while unknown. */
+export function useWorkspaceFeatureState(key: TeamFeatureKey): boolean | undefined {
+  const src = useTeamSource();
+  if (!src) return undefined;
+  return workspaceFeatureEnabled(src.all as any[], src.active ? String((src.active as any)._id) : null, key);
+}

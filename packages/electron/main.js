@@ -1722,6 +1722,18 @@ shellIpc.on("voice-mirror", (e, payload) => {
   }
 });
 
+// The host's camera pictures for the other windows' face circles: small
+// JPEG frames by identity, a few a second. Relayed the same way, never kept:
+// a window that opens later gets the next frame, not an old one.
+shellIpc.on("voice-frames", (e, payload) => {
+  if (!senderIsCallWindow(e)) return;
+  if (!payload || typeof payload !== "object") return;
+  for (const win of toldWindows()) {
+    if (win === callWindow || win.webContents.isDestroyed()) continue;
+    win.webContents.send("voice-frames", payload);
+  }
+});
+
 // ── The float, popped out ──────────────────────────────────────────────────
 //
 // The face row lives in the app's header until the person pops it out; then

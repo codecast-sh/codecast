@@ -8,7 +8,9 @@ export interface FileChange {
   sequenceIndex: number;
   messageId: string;
   filePath: string;
-  changeType: "write" | "edit" | "commit";
+  // "write" with oldContent replaces a whole file whose prior text is known
+  // (a disk-observed change); "delete" removes the file.
+  changeType: "write" | "edit" | "delete" | "commit";
   oldContent?: string;
   newContent: string;
   commitMessage?: string;

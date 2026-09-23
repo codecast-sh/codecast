@@ -28,8 +28,7 @@ import {
   reportDesktopWindowState,
   isDetachedTabWindow,
   onCallPanelHandback,
-  onVoiceMirror,
-} from "../lib/desktop";
+  onVoiceMirror, onVoiceFrames } from "../lib/desktop";
 import { runPlaced } from "../lib/desktopApps";
 import { inboxTabSessionId } from "../lib/pathLabel";
 import { cleanNotificationBody } from "../lib/notificationText";
@@ -253,6 +252,11 @@ export function DesktopProvider() {
       // speaking. Latest-only on the shell's side, so subscribing late starts
       // from the truth.
       onVoiceMirror((payload) => mod.applyVoiceMirror(payload));
+    });
+    // The host's camera frames, for the circles this window draws without a
+    // track of its own (lib/calls/videoFrames).
+    void import("../lib/calls/videoFrames").then(({ applyVoiceFrames }) => {
+      onVoiceFrames((payload) => applyVoiceFrames(payload));
     });
     // The shell offers to record a meeting it noticed starting. It picked this
     // window; the answer, and the microphone, are ours.
