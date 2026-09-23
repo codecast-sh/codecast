@@ -4,7 +4,7 @@ import { useMemo, useRef, useState } from "react";
 import { useConvex } from "convex/react";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { Folder, FolderPlus, X } from "lucide-react";
+import { Eye, Folder, FolderPlus, X } from "lucide-react";
 import { toast } from "sonner";
 import { useInboxStore } from "../store/inboxStore";
 import { useConvexSync } from "../hooks/useConvexSync";
@@ -19,8 +19,26 @@ import {
   type ProjectPathOption,
 } from "../lib/utils";
 
+/** "The team can see sessions started here": the eye the feed chip and the
+ *  visibility control use for a shared session, with the team's name beside
+ *  it, because the eye alone reads as "preview" or "watch". Renders nothing
+ *  for a folder that is only the viewer's. */
+export function SharedWithMark({ team, className = "" }: { team?: string | null; className?: string }) {
+  if (!team) return null;
+  return (
+    <span
+      className={`inline-flex shrink-0 items-center gap-1 text-[10px] font-normal text-sol-cyan/80 ${className}`}
+      title={`Sessions here are shared with ${team}`}
+      aria-label={`shared with ${team}`}
+    >
+      <Eye className="h-3 w-3" aria-hidden="true" />
+      {team}
+    </span>
+  );
+}
+
 /**
- * Shared "pick a project directory" combobox. Recents come from the same
+ * Shared "pick a folder" combobox. Recents come from the same
  * getRecentProjectPaths query + store cache the new-session picker uses, so
  * both stay warm together. Typing filters recents AND completes against the
  * machine's disk (useDirListing: the folders inside the directory the text
@@ -33,7 +51,7 @@ import {
 export function ProjectPathPicker({
   value,
   onChange,
-  placeholder = "pick a project…",
+  placeholder = "pick a folder…",
   className = "",
 }: {
   value: string;
@@ -48,6 +66,12 @@ export function ProjectPathPicker({
   useConvexSync(fresh, setRecentProjects);
   const recents = fresh ?? cached;
   const convex = useConvex();
+  // The team a session in each recent folder will be shared with, so the
+  // choice of folder shows its consequence before the session starts.
+  const sharedWith = useMemo(
+    () => new Map(recents.map((p) => [p.path, (p as { team_name?: string | null }).team_name ?? null])),
+    [recents],
+  );
 
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -223,6 +247,7 @@ export function ProjectPathPicker({
                     <>
                       <span className={`truncate ${o.disk && !o.repo ? "" : "font-medium"}`}>{name}</span>
                       {o.repo && <span className="text-[10px] font-mono text-sol-text-dim/70">git</span>}
+                      <SharedWithMark team={sharedWith.get(o.path)} />
                       <span className="ml-auto font-mono text-[11px] text-sol-text-dim truncate pl-2">
                         {displayPath(o.path, home)}
                       </span>

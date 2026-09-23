@@ -142,7 +142,10 @@ const STAGE_VIEWS = [
 ] as const;
 
 /**
- * How each of the window's small sizes reads on the stage's chrome.
+ * How each of the window's small sizes reads on the stage's chrome, on the
+ * older shell's per call window (LegacyCallPanel). A voice host has one small
+ * shape, the float, and shrinks with one button (`onShrink`); these three
+ * would all land there, promising three pictures and drawing one.
  *
  * Keyed by the sizes themselves (`SMALL_CALL_WINDOW_SIZES`, which is the
  * shell's own list) so a new size without a button is a type error rather than
@@ -181,12 +184,16 @@ export function CallStage({
   onCollapse,
   panel = false,
   onSetSize,
+  onShrink,
   onHide,
 }: {
   onCollapse?: () => void;
   panel?: boolean;
-  /** Panel only: shrink the window to a row of circles, or to one. */
+  /** Panel only, older shell: shrink the window to a row of circles, or to one. */
   onSetSize?: (size: CallWindowSize) => void;
+  /** Panel only, voice host: shrink the window to the float, its one small
+   *  shape. One button, because one shape. */
+  onShrink?: () => void;
   /** Panel only: put the call away. The voice host keeps the call and shows
    *  the team (or nothing) instead; without this the shell hides the window. */
   onHide?: () => void;
@@ -200,6 +207,7 @@ export function CallStage({
   ]);
   const call = s.call;
   const roster: any[] = (call.roomKey && s.callOccupancy[call.roomKey]) || [];
+  const myUserId = useInboxStore((st: any) => st.currentUser?._id?.toString?.() ?? null);
   const tiles = useSyncExternalStore(subscribeCallTiles, getCallTiles, () => []);
   const speaking = useMemo(() => new Set<string>(call.speaking), [call.speaking]);
 
@@ -447,11 +455,18 @@ export function CallStage({
             <span className="stage-word-tight">pop out</span>
           </StageChromeButton>
         )}
-        {/* The small sizes of this same window, behind one control: everybody
-            as a row of circles, one circle of whoever is talking, or that
-            circle the size of a menu bar icon. The window keeps its media
-            across the change — that is why they are sizes and not windows —
-            so this is only a reshape. */}
+        {/* The voice host's one small shape: the face row floating over the
+            work. The window keeps its media across the change — that is why
+            it is a shape and not a window — so this is only a reshape. */}
+        {panel && onShrink && (
+          <StageChromeButton onClick={onShrink} title="Shrink this window to the faces floating over your work. The call keeps going">
+            <Minimize2 className="h-3.5 w-3.5" />
+            shrink
+          </StageChromeButton>
+        )}
+        {/* The older shell's small sizes of this same window, behind one
+            control: everybody as a row of circles, one circle of whoever is
+            talking, or that circle the size of a menu bar icon. */}
         {panel && onSetSize && <ShrinkMenu onSetSize={onSetSize} />}
         {/* The window's own close. There is no traffic light to do it. Hide,
             like the palette: the huddle stays in this window. Hang-up is the
@@ -516,6 +531,7 @@ export function CallStage({
             live={live ?? null}
             rows={rows}
             panel={panel}
+            sinceAt={roster.find((m) => String(m.user_id) === myUserId)?.joined_at}
             closing={railClosing && !threadOpen}
             onClosed={() => setRailClosing(false)}
           />
@@ -1087,6 +1103,7 @@ function ThreadRail({
   live,
   rows,
   panel,
+  sinceAt,
   closing,
   onClosed,
 }: {
@@ -1094,6 +1111,8 @@ function ThreadRail({
   live: { transcript_id: string } | null;
   rows: ThreadRow[] | null | undefined;
   panel: boolean;
+  /** When the viewer joined: the thread's divider anchor before any transcript. */
+  sinceAt?: number;
   /** On its way out: the exit runs and `onClosed` fires when it ends. */
   closing: boolean;
   onClosed: () => void;
@@ -1122,6 +1141,7 @@ function ThreadRail({
         surface="stage"
         seated
         panel={panel}
+        sinceAt={sinceAt}
         className="min-h-0 flex-1"
       />
     </aside>

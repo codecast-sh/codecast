@@ -78,14 +78,14 @@ describe("a teammate is talking to me", () => {
 });
 
 describe("the card is the size of what it is saying", () => {
-  test("320 wide in the header, never wider than the window, hung from the row", () => {
+  test("320 wide in the header, never wider than the window, riding in the band under the row", () => {
     const card = rule(".engagement-card", rowCss);
     expect(card.width).toBe("320px");
     expect(card["max-width"]).toBe("calc(100vw - 2rem)");
-    const bar = rule('.engagement-card[data-density="bar"]', rowCss);
-    expect(bar.position).toBe("absolute");
-    expect(bar.top).toBe("calc(100% + 8px)");
-    // In the floating window it sits under the row in flow.
+    // The band (.face-row-below) is what hangs from the row, at both
+    // densities (faces/__tests__/faceRowLayout pins it); the card stays in
+    // flow inside it, so it never wraps the seats and never hangs twice.
+    expect(rule('.engagement-card[data-density="bar"]', rowCss).position).toBe("relative");
     expect(rule('.engagement-card[data-density="float"]', rowCss).position).toBe("relative");
   });
 
@@ -200,6 +200,7 @@ describe("in a huddle", () => {
     expect(html).toContain("engagement-card-title");
     expect(html).toContain("#design");
     expect(html).toContain("Riley hears you");
+    expect(html.indexOf("engagement-card-title")).toBeLessThan(html.indexOf("Riley hears you"));
     expect(html).toContain(">End<");
     expect(html).toContain(">Mute<");
     // No walkie stage on an ordinary huddle: the room's name is the headline.
@@ -217,10 +218,21 @@ describe("somebody stepped in", () => {
     expect(html).toContain(">End<");
   });
 
-  test("and it is the one violet moment on a warm and cool surface", () => {
-    // Violet is what a call is everywhere else in the product, and the sentence
-    // on the card at this instant is that a burst just became one.
-    expect(rule(".walkie-strip-joined")["border-color"]).toContain("var(--sol-violet)");
+  test("and it is violet, the call's colour, which the line held open after it shares", () => {
+    // Violet is what a call is everywhere else in the product: the seats on
+    // the row wear it, so the joined notice and ON THE LINE under them do too.
+    const edge = rule(".walkie-strip-joined,\n.walkie-strip-call");
+    expect(edge["border-color"]).toContain("var(--sol-violet)");
+    expect(rule(".walkie-stage-locked   ")["--stage-tone"]).toBe("var(--sol-violet)");
+  });
+});
+
+describe("on the line, the card is the seats' violet", () => {
+  const html = render(live({ mute: true, words: words({ locked: true, muted: false, incoming: false }) }));
+
+  test("the edge is the call's, not the warm one a burst wears", () => {
+    expect(html).toContain("walkie-strip-call");
+    expect(html).not.toContain("walkie-strip-tx");
   });
 });
 
@@ -233,12 +245,16 @@ describe("a ring", () => {
     expect(html).toContain("ring-card-decline");
   });
 
-  test("out: who, the status, and a cancel", () => {
+  test("out: who, the status, and a cancel in the ring card's own button", () => {
     const html = render({ kind: "ring-out", roomKey: ROOM, to: "u-ann", name: NAME, cancel: true, status: "ringing" });
     expect(html).toContain(NAME);
     expect(html).toContain("Ringing");
     expect(html).toContain(">Cancel<".replace(">", ""));
     expect(html).toContain('data-card-action="cancel"');
+    // The two phone cards share one button family: Cancel is Decline's
+    // button, not the walkie strip's Snooze plate.
+    expect(html).toContain("ring-card-decline");
+    expect(html).not.toContain("walkie-strip-snooze");
   });
 });
 

@@ -282,6 +282,20 @@ describe("the header draws the model's row", () => {
     expect(h.q("[data-overflow]")?.textContent).toBe(`+${crowd.length + 2 - BAR_FACES}`);
   });
 
+  test("one rhythm for the people and one for the controls", async () => {
+    // The count keeps the row's own gap (the bar's 4px and 2px of its own is
+    // the 6px between faces); every control after the roster sits 8px from
+    // its neighbour. Measured on a team of 23: 6, 8, 8, then 4 before the
+    // pop out, which alone carried no margin of its own.
+    const crowd = Array.from({ length: BAR_FACES + 3 }, (_, i) => entry(`u-${i}`, `Person ${i}`));
+    fakeRow = rowOf([me(), entry(ANN, "Ann", { tier: "linked", state: "live-with-me" }), ...crowd], [link(ANN, "call")], liveCard);
+    const h = await mount();
+    expect(h.q("[data-overflow]")?.className.split(" ")).toContain("ml-0.5");
+    const controls = h.all(".people-bar > button:not([data-overflow])");
+    expect(controls.length).toBeGreaterThanOrEqual(3);
+    for (const el of controls) expect(el.className.split(" ")).toContain("ml-1");
+  });
+
   test("with nobody on the roster the bar is only its feeder", async () => {
     useInboxStore.setState({ teamMembers: [] } as any);
     const h = await mount();

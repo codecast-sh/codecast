@@ -29,6 +29,10 @@ import {
 import { TeamIcon } from "../../../components/TeamIcon";
 import { SettingsPanel, SettingsRow, SettingsSection } from "../../../components/settings/ui";
 import { TeamVisibilityControl } from "../../../components/settings/TeamVisibilityControl";
+import Link from "next/link";
+import { ShareReviewDialog, type ShareReviewRequest } from "../../../components/settings/ShareReviewDialog";
+import { useShareImpact } from "../../../hooks/useShareImpact";
+import { describeMappingScope, formatDateRange, formatSessionCount } from "../../../lib/team/shareImpact";
 import { describePinnedPast, describeTeamSharing, hasPinnedPast, teamVisibilityOption, type TeamSharingFacts } from "../../../lib/teamVisibility";
 
 type UserTeam = TeamSharingFacts & {
@@ -43,17 +47,35 @@ type DirectoryMapping = {
   team_id: Id<"teams">;
   team_name?: string;
   auto_share: boolean;
+  share_since?: number | null;
+  /** The repository the mapped checkout is a clone of; the rule reaches every clone of it. */
+  repository?: string;
   created_at?: number;
 };
 type SyncProject = {
   path: string;
   is_git_repo: boolean;
   session_count: number;
+  first_active?: number;
   last_active: number;
-  git_remote_url?: string | null;
+  /** repositoryKeyOfRemote of the checkout's origin; absent for a plain folder. */
+  repository?: string;
+  /** The team the server resolves this checkout to (its own rule, else the repository's). */
   team_id?: Id<"teams"> | null;
+  /** True when the rule is on this checkout itself, not inherited from the repository. */
+  mapped_directly?: boolean;
+  git_remote_url?: string | null;
   auto_share?: boolean;
 };
+
+/**
+ * One row of the sharing list: a repository with every checkout of it folded
+ * beneath (Dhaval had four clones of littlebird and twenty codex worktrees,
+ * one "Only me" row each), or a single folder with no repository. `path` is
+ * the newest checkout, the one a share is written on; the server stamps the
+ * repository on that rule and the other checkouts follow it.
+ */
+type ShareRow = SyncProject & { checkouts: SyncProject[] };
 
 export default function SyncPage() {
   const { user } = useCurrentUser();
@@ -74,9 +96,17 @@ export default function SyncPage() {
   const unsyncingRef = useRef(false);
   const [pendingUnsync, setPendingUnsync] = useState<{
     path: string;
+    /** Every checkout the action applies to; `path` names the row. */
+    paths: string[];
     sessionCount: number;
     action: "unsync" | "remove_team";
   } | null>(null);
+  // A repository moving to a team, or one already shared being narrowed,
+  // goes through the review: the level, the share start, the count that
+  // exposes, and the sessions themselves. Nothing writes until confirmed.
+  const [pendingShare, setPendingShare] = useState<ShareReviewRequest | null>(null);
+  const [isSharing, setIsSharing] = useState(false);
+  const setPrivacy = useInboxStore((s) => s.setPrivacy);
 
   const hasTeams = userTeams && userTeams.length > 0;
   const syncAll = syncSettings?.sync_mode === "all";
@@ -109,73 +139,115 @@ export default function SyncPage() {
     return null;
   }
 
-  const getTeamForProject = (path: string): { team: UserTeam; isDefault: boolean } | null => {
-    const mapping = mappingsByPath.get(path);
-    if (mapping?.team_id) {
-      const team = teams.find((team) => team._id === mapping.team_id);
-      if (team) return { team, isDefault: false };
+  // The rule a row is under: a rule on one of its checkouts (its own word),
+  // else the rule the server resolved through the repository (a checkout of
+  // the same repository elsewhere carries it), else the team's share paths.
+  type RowTeam = { team: UserTeam; isDefault: boolean; mapping?: DirectoryMapping; inherited?: boolean };
+  const getTeamForRow = (row: ShareRow): RowTeam | null => {
+    for (const checkout of row.checkouts) {
+      const mapping = mappingsByPath.get(checkout.path);
+      const team = mapping?.team_id ? teams.find((team) => team._id === mapping.team_id) : undefined;
+      if (mapping && team) return { team, isDefault: false, mapping };
+    }
+    const resolved = row.checkouts.find((checkout) => checkout.team_id);
+    if (resolved?.team_id) {
+      const team = teams.find((team) => team._id === resolved.team_id);
+      const mapping = mappings.find((m) => m.team_id === resolved.team_id && !!row.repository && m.repository === row.repository);
+      if (team) return { team, isDefault: false, mapping, inherited: true };
     }
     if (activeTeam && teamSharePaths.length > 0) {
-      const matches = teamSharePaths.some(sp => path === sp || path.startsWith(sp + "/"));
+      const matches = teamSharePaths.some(sp => row.path === sp || row.path.startsWith(sp + "/"));
       if (matches) return { team: activeTeam, isDefault: true };
     }
     return null;
   };
 
-  const getSessionCountForPath = (path: string): number => {
-    const project = allProjects.find(p => p.path === path);
-    return project?.session_count ?? 0;
+  const rowPaths = (row: ShareRow) => row.checkouts.map((checkout) => checkout.path);
+  const directMappingsOf = (row: ShareRow) => rowPaths(row).filter((path) => mappingsByPath.has(path));
+
+  const openReview = (row: ShareRow, teamId: Id<"teams">) => {
+    const current = getTeamForRow(row);
+    const existing = !!current && !current.isDefault && current.team._id === teamId;
+    setPendingShare({
+      path: row.path,
+      paths: rowPaths(row),
+      teamId,
+      shareSince: existing ? current?.mapping?.share_since ?? null : null,
+      existing,
+    });
   };
 
-  const handleTeamChange = async (path: string, teamId: Id<"teams"> | null) => {
+  const handleTeamChange = async (row: ShareRow, teamId: Id<"teams"> | null) => {
     if (teamId) {
-      await updateDirectoryMapping({
-        path_prefix: path,
-        team_id: teamId,
-        auto_share: true,
-      });
+      openReview(row, teamId);
     } else {
-      const existingMapping = mappingsByPath.get(path);
-      if (existingMapping) {
-        const count = getSessionCountForPath(path);
-        if (count > 0) {
-          setPendingUnsync({ path, sessionCount: count, action: "remove_team" });
-          return;
-        }
-        await removeDirectoryMapping({ path_prefix: path });
+      const direct = directMappingsOf(row);
+      if (direct.length === 0) return;
+      if (row.session_count > 0) {
+        setPendingUnsync({ path: row.path, paths: direct, sessionCount: row.session_count, action: "remove_team" });
+        return;
       }
+      for (const path of direct) await removeDirectoryMapping({ path_prefix: path });
     }
   };
 
-  const handleToggleProjectSync = async (path: string, shouldSync: boolean) => {
+  const handleToggleProjectSync = async (row: ShareRow, shouldSync: boolean) => {
+    const paths = rowPaths(row);
     if (shouldSync) {
-      const newProjects = [...syncProjects, path];
+      const newProjects = [...syncProjects, ...paths.filter((path) => !syncProjects.includes(path))];
       await updateSyncSettings({ sync_projects: newProjects });
     } else {
-      const count = getSessionCountForPath(path);
-      if (count > 0) {
-        setPendingUnsync({ path, sessionCount: count, action: "unsync" });
+      if (row.session_count > 0) {
+        setPendingUnsync({ path: row.path, paths, sessionCount: row.session_count, action: "unsync" });
         return;
       }
-      const newProjects = syncProjects.filter((projectPath: string) => projectPath !== path);
+      const newProjects = syncProjects.filter((projectPath: string) => !paths.includes(projectPath));
       await updateSyncSettings({ sync_projects: newProjects });
-      const existingMapping = mappingsByPath.get(path);
-      if (existingMapping) {
-        await removeDirectoryMapping({ path_prefix: path });
-      }
+      for (const path of directMappingsOf(row)) await removeDirectoryMapping({ path_prefix: path });
+    }
+  };
+
+  const executeShare = async ({ since, keepPrivate }: { since: number | null; keepPrivate: Id<"conversations">[] }) => {
+    if (!pendingShare || isSharing) return;
+    setIsSharing(true);
+    try {
+      // The kept sessions lock private first, so the mapping's backfill
+      // (which leaves a hand locked row alone) never exposes them.
+      for (const id of keepPrivate) setPrivacy(String(id), true);
+      await updateDirectoryMapping({
+        path_prefix: pendingShare.path,
+        team_id: pendingShare.teamId,
+        auto_share: true,
+        include_past: since == null,
+        share_since: since ?? undefined,
+      });
+      const team = teams.find((t) => t._id === pendingShare.teamId);
+      toast.success(`${getProjectName(pendingShare.path)} shares with ${team?.name ?? "the team"}`, {
+        description:
+          (since == null ? "Past sessions included." : "Sessions before the share start stay private.") +
+          (keepPrivate.length > 0 ? ` ${keepPrivate.length} kept private.` : ""),
+      });
+      setPendingShare(null);
+    } catch (err) {
+      console.error("Failed to share project:", err);
+      toast.error("Could not share the project");
+    } finally {
+      setIsSharing(false);
     }
   };
 
   const executeUnsync = async (deleteConversations: boolean) => {
     if (!pendingUnsync || unsyncingRef.current) return;
-    const { path, action } = pendingUnsync;
+    const { paths, action } = pendingUnsync;
 
     unsyncingRef.current = true;
     setIsUnsyncing(true);
     try {
       if (action === "unsync") {
-        const newProjects = syncProjects.filter((projectPath: string) => projectPath !== path);
+        const newProjects = syncProjects.filter((projectPath: string) => !paths.includes(projectPath));
         await updateSyncSettings({ sync_projects: newProjects });
+      }
+      for (const path of paths) {
         const existingMapping = mappingsByPath.get(path);
         if (existingMapping) {
           const first = await removeDirectoryMapping({ path_prefix: path, delete_conversations: deleteConversations });
@@ -184,19 +256,12 @@ export default function SyncPage() {
             const next = await deleteConversationsForPath({ path_prefix: path });
             hasMore = next?.hasMore;
           }
-        } else if (deleteConversations) {
+        } else if (action === "unsync" && deleteConversations) {
           let hasMore = true;
           while (hasMore) {
             const next = await deleteConversationsForPath({ path_prefix: path });
             hasMore = next?.hasMore ?? false;
           }
-        }
-      } else {
-        const first = await removeDirectoryMapping({ path_prefix: path, delete_conversations: deleteConversations });
-        let hasMore = first?.hasMore;
-        while (hasMore) {
-          const next = await deleteConversationsForPath({ path_prefix: path });
-          hasMore = next?.hasMore;
         }
       }
       setPendingUnsync(null);
@@ -232,18 +297,6 @@ export default function SyncPage() {
   };
 
   const prettyPath = (path: string) => path.replace(/^\/(?:Users|home)\/[^/]+/, "~");
-
-  const getRelativeTime = (timestamp: number) => {
-    if (!timestamp) return "no sessions yet";
-    const diff = Date.now() - timestamp;
-    const minutes = Math.floor(diff / 60000);
-    if (minutes < 1) return "just now";
-    if (minutes < 60) return `${minutes}m ago`;
-    const hours = Math.floor(diff / 3600000);
-    if (hours < 24) return `${hours}h ago`;
-    const days = Math.floor(diff / 86400000);
-    return `${days}d ago`;
-  };
 
   // Merge recent projects with paths from team mappings and sync_projects
   const allProjects = (() => {
@@ -291,12 +344,35 @@ export default function SyncPage() {
     return filtered.sort((a, b) => b.last_active - a.last_active);
   })();
 
-  const filteredProjects = allProjects.filter((project) => {
+  // Every checkout of one repository folds into one row, newest checkout
+  // first; a folder with no repository is a row of its own.
+  const shareRows: ShareRow[] = (() => {
+    const byRepository = new Map<string, ShareRow>();
+    const rows: ShareRow[] = [];
+    for (const project of allProjects) {
+      if (!project.repository) { rows.push({ ...project, checkouts: [project] }); continue; }
+      const row = byRepository.get(project.repository);
+      if (!row) {
+        const fresh = { ...project, checkouts: [project] };
+        byRepository.set(project.repository, fresh);
+        rows.push(fresh);
+        continue;
+      }
+      row.checkouts.push(project);
+      row.session_count += project.session_count;
+      row.last_active = Math.max(row.last_active, project.last_active);
+      const starts = [row.first_active, project.first_active].filter((t): t is number => typeof t === "number");
+      row.first_active = starts.length ? Math.min(...starts) : undefined;
+    }
+    return rows.sort((a, b) => b.last_active - a.last_active);
+  })();
+
+  const rowName = (row: ShareRow) => row.repository ? row.repository.split("/").pop() || row.repository : getProjectName(row.path);
+
+  const filteredProjects = shareRows.filter((row) => {
     if (!searchQuery) return true;
-    const name = getProjectName(project.path).toLowerCase();
-    const path = project.path.toLowerCase();
     const query = searchQuery.toLowerCase();
-    return name.includes(query) || path.includes(query);
+    return rowName(row).toLowerCase().includes(query) || row.checkouts.some((checkout) => checkout.path.toLowerCase().includes(query));
   });
 
   // One group per team (its level control in the header, the projects that
@@ -304,14 +380,14 @@ export default function SyncPage() {
   // syncing. The card answers "what does this team see, and of what" in one
   // glance. A team with nothing shared still shows its header unless a search
   // is narrowing the list.
-  type SharingGroup = { key: string; team?: UserTeam; label?: string; items: SyncProject[] };
+  type SharingGroup = { key: string; team?: UserTeam; label?: string; items: ShareRow[] };
   const sharingGroups = (() => {
-    const byTeam = new Map<string, SyncProject[]>(teams.map((team) => [String(team._id), []]));
-    const privateSynced: SyncProject[] = [];
-    const notSyncing: SyncProject[] = [];
+    const byTeam = new Map<string, ShareRow[]>(teams.map((team) => [String(team._id), []]));
+    const privateSynced: ShareRow[] = [];
+    const notSyncing: ShareRow[] = [];
     filteredProjects.forEach((project) => {
-      if (!isSynced(project.path)) { notSyncing.push(project); return; }
-      const shared = getTeamForProject(project.path);
+      if (!project.checkouts.some((checkout) => isSynced(checkout.path))) { notSyncing.push(project); return; }
+      const shared = getTeamForRow(project);
       const bucket = shared ? byTeam.get(String(shared.team._id)) : undefined;
       if (bucket) bucket.push(project);
       else privateSynced.push(project);
@@ -330,14 +406,14 @@ export default function SyncPage() {
     <SettingsPanel>
       <SettingsSection title="Sync" icon={RefreshCw}>
         <SettingsRow
-          label="Sync all projects"
+          label="Sync all folders"
           description={
             syncAll
-              ? "Sessions from every project upload to your workspace. They stay private to you unless you share them."
-              : `Only ${syncProjects.length} chosen project${syncProjects.length === 1 ? "" : "s"} upload${syncProjects.length === 1 ? "s" : ""} sessions — pick them in the list below.`
+              ? "Sessions from every folder upload to your workspace. They stay private to you unless you share them."
+              : `Only ${syncProjects.length} chosen folder${syncProjects.length === 1 ? "" : "s"} upload${syncProjects.length === 1 ? "s" : ""} sessions — pick them in the list below.`
           }
         >
-          <Switch checked={syncAll} onCheckedChange={handleToggleSyncAll} aria-label="Sync all projects" />
+          <Switch checked={syncAll} onCheckedChange={handleToggleSyncAll} aria-label="Sync all folders" />
         </SettingsRow>
       </SettingsSection>
 
@@ -346,8 +422,8 @@ export default function SyncPage() {
         icon={FolderGit2}
         description={
           hasTeams
-            ? "Synced projects stay private to you until you share one with a team. Each team's level sets how much teammates see of the projects you share with it."
-            : "Projects whose sessions sync to your workspace."
+            ? "Synced repositories and folders stay private to you until you share one with a team. A share covers every checkout and worktree of the repository. Each team's level sets how much teammates see of what you share with it."
+            : "Repositories and folders whose sessions sync to your workspace."
         }
         actions={
           <Button variant="outline" size="sm" onClick={() => setEditMode(!editMode)}>
@@ -360,7 +436,7 @@ export default function SyncPage() {
           <input
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search projects..."
+            placeholder="Search repositories and folders..."
             className="w-full bg-transparent text-sm text-sol-text placeholder:text-sol-text-dim focus:outline-none"
           />
         </div>
@@ -388,7 +464,7 @@ export default function SyncPage() {
                 {group.team ? (
                   <TeamSharingHeader
                     team={group.team}
-                    projectCount={group.items.length}
+                    rows={group.items}
                     onIncludePast={() => {
                       const option = teamVisibilityOption(group.team!.visibility);
                       setTeamMembershipVisibility(String(group.team!._id), option.value, "everything");
@@ -405,7 +481,7 @@ export default function SyncPage() {
                 )}
                 {group.team && group.items.length === 0 && (
                   <div className="px-4 py-2 pl-10 text-xs text-sol-text-dim sm:px-5 sm:pl-12">
-                    Nothing shared with {group.team.name} yet. Pick it on a project below.
+                    Nothing shared with {group.team.name} yet. Pick it on a repository below.
                   </div>
                 )}
                 {group.items.length > 0 && (
@@ -419,8 +495,9 @@ export default function SyncPage() {
                   }
                 >
                 {group.items.map((project) => {
-                  const synced = isSynced(project.path);
-                  const teamResult = getTeamForProject(project.path);
+                  const synced = project.checkouts.some((checkout) => isSynced(checkout.path));
+                  const teamResult = getTeamForRow(project);
+                  const more = project.checkouts.length - 1;
 
                   return (
                     <div
@@ -437,18 +514,31 @@ export default function SyncPage() {
                           )}
                           <div className="min-w-0">
                             <div className={`truncate text-sm font-medium ${synced ? "text-sol-text" : "text-sol-text-muted"}`}>
-                              {getProjectName(project.path)}
+                              {rowName(project)}
                             </div>
                             <div className="flex items-center gap-1.5 text-xs">
-                              <span className="truncate font-mono text-[11px] text-sol-text-muted">
+                              <span
+                                className="truncate font-mono text-[11px] text-sol-text-muted"
+                                title={more > 0 ? project.checkouts.map((checkout) => prettyPath(checkout.path)).join("\n") : undefined}
+                              >
                                 {prettyPath(project.path)}
+                                {more > 0 && (
+                                  <span className="ml-1 text-sol-text-dim">+{more} more checkout{more === 1 ? "" : "s"}</span>
+                                )}
                               </span>
-                              <span className="flex-shrink-0 text-sol-text-dim">
+                              <span className="flex-shrink-0 text-sol-text-dim tabular-nums">
                                 · {project.session_count > 0
-                                  ? `${project.session_count} session${project.session_count === 1 ? "" : "s"} · ${getRelativeTime(project.last_active)}`
+                                  ? `${formatSessionCount(project.session_count)} · ${formatDateRange(project.first_active ?? project.last_active, project.last_active)}`
                                   : "no sessions yet"}
                               </span>
                             </div>
+                            {teamResult && !teamResult.isDefault && (
+                              <MappingScopeLine
+                                paths={rowPaths(project)}
+                                shareSince={teamResult.mapping?.share_since ?? null}
+                                onReview={() => openReview(project, teamResult.team._id)}
+                              />
+                            )}
                           </div>
                         </div>
 
@@ -472,6 +562,14 @@ export default function SyncPage() {
                                         <Eye className="h-4 w-4" />
                                         <span>
                                           {teamResult.team.name}
+                                          {teamResult.inherited && (
+                                            <span
+                                              className="ml-0.5 text-xs text-sol-text-muted"
+                                              title="Shared through a rule on another checkout of this repository"
+                                            >
+                                              (repo)
+                                            </span>
+                                          )}
                                           {teamResult.isDefault && (
                                             <span
                                               className="ml-0.5 text-xs text-sol-text-muted"
@@ -493,8 +591,15 @@ export default function SyncPage() {
                                 </button>
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end" className="min-w-[200px]">
+                                {teamResult && !teamResult.isDefault && (
+                                  <DropdownMenuItem onClick={() => openReview(project, teamResult.team._id)}>
+                                    <Search className="mr-2 h-4 w-4" />
+                                    <span className="flex-1">Review sharing</span>
+                                    <span className="ml-3 text-xs text-sol-text-dim">scope, sessions</span>
+                                  </DropdownMenuItem>
+                                )}
                                 <DropdownMenuItem
-                                  onClick={() => handleTeamChange(project.path, null)}
+                                  onClick={() => handleTeamChange(project, null)}
                                   className={!teamResult || teamResult.isDefault ? "bg-sol-bg-highlight/40" : ""}
                                 >
                                   <EyeOff className="mr-2 h-4 w-4" />
@@ -504,7 +609,7 @@ export default function SyncPage() {
                                 {teams.map((team) => (
                                   <DropdownMenuItem
                                     key={team._id}
-                                    onClick={() => handleTeamChange(project.path, team._id)}
+                                    onClick={() => handleTeamChange(project, team._id)}
                                     className={teamResult?.team?._id === team._id && !teamResult?.isDefault ? "bg-sol-bg-highlight/40" : ""}
                                   >
                                     <Eye className="mr-2 h-4 w-4" />
@@ -521,8 +626,8 @@ export default function SyncPage() {
                           {!syncAll && (
                             <Switch
                               checked={synced}
-                              onCheckedChange={(v) => handleToggleProjectSync(project.path, v)}
-                              aria-label={`Sync ${getProjectName(project.path)}`}
+                              onCheckedChange={(v) => handleToggleProjectSync(project, v)}
+                              aria-label={`Sync ${rowName(project)}`}
                             />
                           )}
                         </div>
@@ -537,9 +642,9 @@ export default function SyncPage() {
         ) : (
           <div className="px-4 py-8 text-center text-sm text-sol-text-muted">
             {searchQuery ? (
-              <p>No projects matching &ldquo;{searchQuery}&rdquo;</p>
+              <p>Nothing matching &ldquo;{searchQuery}&rdquo;</p>
             ) : (
-              <p>No recent projects found. Start a coding session to see your projects here.</p>
+              <p>No recent folders found. Start a coding session to see your repositories and folders here.</p>
             )}
           </div>
         )}
@@ -562,6 +667,15 @@ export default function SyncPage() {
         </div>
       </SettingsSection>
 
+      <ShareReviewDialog
+        request={pendingShare}
+        team={pendingShare ? teams.find((t) => t._id === pendingShare.teamId) ?? null : null}
+        projects={recentProjects}
+        busy={isSharing}
+        onCancel={() => setPendingShare(null)}
+        onConfirm={executeShare}
+      />
+
       <Dialog open={!!pendingUnsync} onOpenChange={(open) => !open && setPendingUnsync(null)}>
         <DialogContent className="bg-sol-bg border-sol-border sm:max-w-xl">
           <DialogHeader>
@@ -570,7 +684,7 @@ export default function SyncPage() {
               Remove sync for {pendingUnsync ? getProjectName(pendingUnsync.path) : ""}?
             </DialogTitle>
             <DialogDescription className="text-sol-text-muted">
-              This project has {pendingUnsync?.sessionCount} synced conversation{pendingUnsync?.sessionCount !== 1 ? "s" : ""}.
+              This has {pendingUnsync?.sessionCount} synced conversation{pendingUnsync?.sessionCount !== 1 ? "s" : ""}.
               You can keep them on the server or delete them permanently.
             </DialogDescription>
           </DialogHeader>
@@ -611,8 +725,26 @@ export default function SyncPage() {
 
 /** The header of a team's group: who is on it, what they see, and the level
  *  control. The projects that flow to the team follow as the group's rows. */
-function TeamSharingHeader({ team, projectCount, onIncludePast }: { team: UserTeam; projectCount: number; onIncludePast: () => void }) {
+function TeamSharingHeader({ team, rows, onIncludePast }: { team: UserTeam; rows: ShareRow[]; onIncludePast: () => void }) {
   const option = teamVisibilityOption(team.visibility);
+  const projectCount = rows.length;
+  // Exact totals across every checkout the team's rules reach, each read at
+  // its own share start: what the team can open, what a start keeps private,
+  // and what the member hid by hand.
+  const paths = rows.flatMap((row) => row.checkouts.map((checkout) => checkout.path));
+  const impact = useShareImpact(paths, rows.flatMap((row) => row.checkouts));
+  const visible = Math.max(0, impact.sessions - impact.older);
+  const totals =
+    projectCount === 0
+      ? null
+      : impact.sessions === 0
+        ? "No sessions there yet."
+        : [
+            `Can open ${formatSessionCount(visible, impact.truncated)}${visible > 0 && impact.older === 0 && impact.first != null ? `, ${formatDateRange(impact.first, impact.last)}` : ""}.`,
+            impact.older > 0 ? `${formatSessionCount(impact.older)} before a share start stay private.` : "",
+            impact.hidden > 0 ? `${formatSessionCount(impact.hidden)} hidden by hand.` : "",
+            !impact.exact ? "Still counting." : "",
+          ].filter(Boolean).join(" ");
   return (
     <SettingsRow
       className="bg-sol-bg-alt/70"
@@ -621,13 +753,13 @@ function TeamSharingHeader({ team, projectCount, onIncludePast }: { team: UserTe
           <TeamIcon icon={team.icon} color={team.icon_color} className="h-3.5 w-3.5" />
           <span className="font-medium">{team.name}</span>
           <span className="text-xs text-sol-text-muted">
-            · {describeTeamSharing(team)} · {projectCount === 1 ? "1 project" : `${projectCount} projects`}
+            · {describeTeamSharing(team)} · {projectCount === 1 ? "1 shared" : `${projectCount} shared`}
           </span>
         </span>
       }
       description={
         <>
-          Teammates see {option.sees}.
+          Teammates see {option.sees}.{totals ? ` ${totals}` : ""}
           {hasPinnedPast(team) && (
             <>
               {" "}
@@ -642,5 +774,28 @@ function TeamSharingHeader({ team, projectCount, onIncludePast }: { team: UserTe
     >
       <TeamVisibilityControl team={team} />
     </SettingsRow>
+  );
+}
+
+/** One line under a shared repository: its share start and what that keeps
+ *  private, what the member hid by hand, the way to see the feed as the team
+ *  does, and the way into the review. */
+function MappingScopeLine({ paths, shareSince, onReview }: { paths: string[]; shareSince: number | null; onReview: () => void }) {
+  const impact = useShareImpact(paths, undefined);
+  return (
+    <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-sol-text-dim">
+      <span className="tabular-nums">{describeMappingScope(shareSince, impact.exact ? impact.older : undefined)}</span>
+      {impact.hidden > 0 && <span>· {formatSessionCount(impact.hidden)} hidden by hand</span>}
+      <Link
+        href={`/team/activity?dir=${encodeURIComponent(paths[0])}`}
+        className="text-sol-cyan hover:underline"
+        title="Open the team feed filtered to this repository"
+      >
+        View as the team
+      </Link>
+      <button type="button" onClick={onReview} className="text-sol-cyan hover:underline">
+        Review
+      </button>
+    </div>
   );
 }

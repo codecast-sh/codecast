@@ -1552,12 +1552,13 @@ export class SyncService {
     } catch {}
   }
 
-  async updateProjectPath(sessionId: string, projectPath: string, gitRoot?: string): Promise<{ updated: boolean } | null> {
+  async updateProjectPath(sessionId: string, projectPath: string, gitRoot?: string, gitRemoteUrl?: string): Promise<{ updated: boolean } | null> {
     try {
       const result = await this.mutate("conversations:updateProjectPath" as any, {
         session_id: sessionId,
         project_path: projectPath,
         git_root: gitRoot,
+        git_remote_url: gitRemoteUrl,
         api_token: this.apiToken,
       });
       return result as { updated: boolean } | null;
@@ -1571,12 +1572,13 @@ export class SyncService {
   // silently stranded conversations on their spawn-time stub id, so every
   // session-bound `cast` write from the agent failed "Conversation not found"
   // while message sync (keyed by conversation _id) looked perfectly healthy.
-  async updateSessionId(conversationId: string, sessionId: string, projectPath?: string, gitRoot?: string): Promise<void> {
+  async updateSessionId(conversationId: string, sessionId: string, projectPath?: string, gitRoot?: string, gitRemoteUrl?: string): Promise<void> {
     await this.mutate("conversations:updateSessionId" as any, {
       conversation_id: conversationId,
       session_id: sessionId,
       project_path: projectPath,
       git_root: gitRoot,
+      git_remote_url: gitRemoteUrl,
       api_token: this.apiToken,
     });
   }

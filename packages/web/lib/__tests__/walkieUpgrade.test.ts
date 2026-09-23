@@ -150,7 +150,7 @@ describe("walkie: the sender's claim about the other person", () => {
     // into it. A roster of exactly me is nobody listening.
     const out = senderHearing([seat(ME)], ME, them());
     expect(out.state).toBe("away");
-    expect(out.text).toBe("Jordan is away — they get the message");
+    expect(out.text).toBe("Jordan is away, so they get the message");
   });
 
   it("says away when the room is empty, and never calls it a failure", () => {
@@ -167,7 +167,7 @@ describe("walkie: the sender's claim about the other person", () => {
     for (const shut of [{ status: "busy" }, { pref: "off" }, { snoozed: true }]) {
       const out = senderHearing([seat(ME)], ME, them(shut));
       expect(out.state).toBe("busy");
-      expect(out.text).toBe("Jordan is busy — they get the message");
+      expect(out.text).toBe("Jordan is busy, so they get the message");
     }
   });
 
@@ -337,7 +337,7 @@ describe("walkie: the sender's claim, derived from the store", () => {
 
   it("renames live: the sentence follows the roster, not the burst", () => {
     const renamed = store({ teamMembers: [{ _id: THEM, name: "Jordan L." }] });
-    expect(senderHearingFrom(renamed, ROOM, NOW).text).toBe("Jordan L. is away — they get the message");
+    expect(senderHearingFrom(renamed, ROOM, NOW).text).toBe("Jordan L. is away, so they get the message");
   });
 });
 

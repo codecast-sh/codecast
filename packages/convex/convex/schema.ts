@@ -54,6 +54,7 @@ const visibilitySegment = v.object({
 const teamFeaturesValidator = v.object({
   chat: v.optional(v.boolean()),
   calls: v.optional(v.boolean()),
+  org: v.optional(v.boolean()),
 });
 
 // The entity kinds that can participate in entity-conversation links.
@@ -401,6 +402,15 @@ export default defineSchema({
     path_prefix: v.string(),
     team_id: v.id("teams"),
     auto_share: v.boolean(),
+    // Sessions started before this instant stay private. Absent means every
+    // session in the directory is shared, past included. A new mapping is
+    // stamped with its creation time unless the member includes the past.
+    share_since: v.optional(v.number()),
+    // The repository the mapped checkout is a clone of (repositoryKeyOfRemote),
+    // stamped from the sessions recorded there. Sessions in any other clone
+    // or linked worktree of it resolve to this mapping when no path rule
+    // covers them (privacy.ts matchDirectoryMapping).
+    repository: v.optional(v.string()),
     created_at: v.number(),
   })
     .index("by_user_id", ["user_id"])
@@ -437,6 +447,24 @@ export default defineSchema({
     .index("by_conversation", ["conversation_id"])
     // Membership check / dedupe — is this user already an owner of this session?
     .index("by_conversation_user", ["conversation_id", "user_id"]),
+
+  // A viewer's hide of a session they neither run nor own: a teammate's row on
+  // the team board. The owner's own triage lives on the conversation
+  // (inbox_stashed_at / inbox_dismissed_at) and hides the row from everyone's
+  // team board; those fields are the OWNER's and the dispatch gate refuses them
+  // from anyone else, so a viewer's hide needs its own row. One row per viewer
+  // and conversation; the team scan skips what the viewer hid. `cast restore`
+  // and the restore gesture delete it.
+  inbox_hides: defineTable({
+    user_id: v.id("users"),
+    conversation_id: v.id("conversations"),
+    kind: v.union(v.literal("stash"), v.literal("dismiss")),
+    at: v.number(),
+  })
+    // Everything one viewer hid: read once per team scan.
+    .index("by_user", ["user_id"])
+    // Upsert / restore for one viewer and one session.
+    .index("by_user_conversation", ["user_id", "conversation_id"]),
 
   conversations: defineTable({
     user_id: v.id("users"),
@@ -6056,6 +6084,10 @@ export default defineSchema({
       // Scope membership lifecycle: entity_id is the team id, op is
       // scope_added | scope_removed, emitted in the affected USER's scope.
       v.literal("scope"),
+      // Member lifecycle: entity_id is the departed USER id, op is
+      // scope_removed, emitted in the TEAM's scope, so every remaining
+      // member's client drops that user's rows from its team caches.
+      v.literal("member"),
     ),
     entity_id: v.string(),
     op: v.union(
