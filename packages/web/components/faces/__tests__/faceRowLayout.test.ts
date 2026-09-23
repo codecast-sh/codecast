@@ -59,8 +59,13 @@ describe("the stylesheet agrees", () => {
   test("the pull", () => {
     expect(cssVar(".face-link {", "margin")).toBe(`0 calc(var(--face-gap) * -${LINK_PULL})`);
   });
-  test("the card hangs from the bar and sits under the float", () => {
-    expect(cssVar('.engagement-card[data-density="bar"] {', "position")).toBe("absolute");
+  test("the band hangs under the row and the card rides in it at both densities", () => {
+    // The row renders the card inside the band (faceRow.mount: `.face-row >
+    // .face-row-below > .engagement-card`); the band is what hangs, so the
+    // card itself stays in flow and never wraps the seats.
+    expect(cssVar(".face-row-below {", "position")).toBe("absolute");
+    expect(cssVar(".face-row-below {", "top")).toBe("100%");
+    expect(cssVar('.engagement-card[data-density="bar"] {', "position")).toBe("relative");
     expect(cssVar('.engagement-card[data-density="float"] {', "position")).toBe("relative");
   });
 });

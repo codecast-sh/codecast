@@ -78,14 +78,14 @@ describe("a teammate is talking to me", () => {
 });
 
 describe("the card is the size of what it is saying", () => {
-  test("320 wide in the header, never wider than the window, hung from the row", () => {
+  test("320 wide in the header, never wider than the window, riding in the band under the row", () => {
     const card = rule(".engagement-card", rowCss);
     expect(card.width).toBe("320px");
     expect(card["max-width"]).toBe("calc(100vw - 2rem)");
-    const bar = rule('.engagement-card[data-density="bar"]', rowCss);
-    expect(bar.position).toBe("absolute");
-    expect(bar.top).toBe("calc(100% + 8px)");
-    // In the floating window it sits under the row in flow.
+    // The band (.face-row-below) is what hangs from the row, at both
+    // densities (faces/__tests__/faceRowLayout pins it); the card stays in
+    // flow inside it, so it never wraps the seats and never hangs twice.
+    expect(rule('.engagement-card[data-density="bar"]', rowCss).position).toBe("relative");
     expect(rule('.engagement-card[data-density="float"]', rowCss).position).toBe("relative");
   });
 

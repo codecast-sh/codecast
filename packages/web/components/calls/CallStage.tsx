@@ -200,6 +200,7 @@ export function CallStage({
   ]);
   const call = s.call;
   const roster: any[] = (call.roomKey && s.callOccupancy[call.roomKey]) || [];
+  const myUserId = useInboxStore((st: any) => st.currentUser?._id?.toString?.() ?? null);
   const tiles = useSyncExternalStore(subscribeCallTiles, getCallTiles, () => []);
   const speaking = useMemo(() => new Set<string>(call.speaking), [call.speaking]);
 
@@ -516,6 +517,7 @@ export function CallStage({
             live={live ?? null}
             rows={rows}
             panel={panel}
+            sinceAt={roster.find((m) => String(m.user_id) === myUserId)?.joined_at}
             closing={railClosing && !threadOpen}
             onClosed={() => setRailClosing(false)}
           />
@@ -1087,6 +1089,7 @@ function ThreadRail({
   live,
   rows,
   panel,
+  sinceAt,
   closing,
   onClosed,
 }: {
@@ -1094,6 +1097,8 @@ function ThreadRail({
   live: { transcript_id: string } | null;
   rows: ThreadRow[] | null | undefined;
   panel: boolean;
+  /** When the viewer joined: the thread's divider anchor before any transcript. */
+  sinceAt?: number;
   /** On its way out: the exit runs and `onClosed` fires when it ends. */
   closing: boolean;
   onClosed: () => void;
@@ -1122,6 +1127,7 @@ function ThreadRail({
         surface="stage"
         seated
         panel={panel}
+        sinceAt={sinceAt}
         className="min-h-0 flex-1"
       />
     </aside>

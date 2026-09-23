@@ -96,8 +96,12 @@
   background: color-mix(in srgb, var(--sol-violet) 12%, transparent);
   transition: background 120ms;
 }
-.rt-add:hover {
+.rt-add:hover:not(:disabled) {
   background: color-mix(in srgb, var(--sol-violet) 22%, transparent);
+}
+.rt-add:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 /* Every pill in the header is 20px tall: 16px of line and a 2px pad. */
 .rt-head [role="switch"] {
@@ -536,8 +540,14 @@ button.rt-event-agent:hover {
   color: var(--sol-violet);
   text-decoration: underline;
 }
+/* The time sits on the first line's right edge, the way a chat line's time
+   sits beside its name, so a sentence that wraps keeps it out of its words. */
 .rt-event-when {
-  margin-left: 6px;
+  margin-left: auto;
+  padding-left: 8px;
+  padding-top: 1px;
+  flex-shrink: 0;
+  color: var(--sol-text-dim);
 }
 /* Pinned under the header while the room is transcribed and nothing has
    been said: a status line, not a row in the timeline. */
