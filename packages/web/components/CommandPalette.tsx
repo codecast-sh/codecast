@@ -8,7 +8,7 @@ import { identityRowOf } from "../lib/sessionIdentity";
 import { RepositoryPaletteItems } from "./repo/RepositoryPaletteItems";
 import { getPaletteSessionCommands } from "../lib/paletteSessionCommands";
 import { withInboxView } from "../lib/inboxViewHistory";
-import { useTeamFeature, useCallsAvailable } from "../lib/teamFeatures";
+import { useTeamFeature, useCallsAvailable, useWorkspaceFeature, workspaceHasFeatureNow } from "../lib/teamFeatures";
 import type { TeamFeatureKey } from "@codecast/shared/contracts";
 import { useState, useCallback, useMemo, useRef, memo, lazy, Suspense } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -233,7 +233,7 @@ const NAV_PAGES: ReadonlyArray<{
   { label: "Team Charts", path: "/team/charts", icon: "grid", keywords: "activity punchcard heatmap hours messages typed sends members stats graphs" },
   { label: "Team Directory", path: "/team", icon: "grid", keywords: "members people profiles directory roster" },
   { label: "Initiatives", path: "/initiatives", icon: "grid", keywords: "initiative goals objectives company strategy roadmap health progress owner" },
-  { label: "Org", path: "/org", icon: "grid", keywords: "organization org chart roles reporting structure hierarchy people sessions tree reparent" },
+  { label: "Org", path: "/org", icon: "grid", keywords: "organization org chart roles reporting structure hierarchy people sessions tree reparent", feature: "org" },
   { label: "Search", path: "/search", icon: "search", keywords: "find query" },
   { label: "Settings", path: "/settings", icon: "settings", keywords: "preferences config profile general" },
   { label: "Workflows", path: "/routines", icon: "workflow", keywords: "orchestration runs graph dot gates routines", secondary: true },
@@ -264,7 +264,7 @@ const GLOBAL_COMMANDS: ReadonlyArray<{
    *  wall as its whole view and needs no command to open one. */
   hidden?: () => boolean;
 }> = [
-  { action: "anchor.toggle", label: "Talk to the workspace's agent", icon: ChiefOfStaffFace, keywords: "agent assistant bot standing member ask personal team chief of staff" },
+  { action: "anchor.toggle", label: "Talk to the workspace's agent", icon: ChiefOfStaffFace, keywords: "agent assistant bot standing member ask personal team chief of staff", hidden: () => !workspaceHasFeatureNow("org") },
   { action: "people.wall", label: "The team — hold a face to talk", icon: Users, keywords: "people wall faces who is around hold to talk walkie everyone roster", hidden: isPeopleWindow },
   { action: "terminal.toggle", label: "Toggle terminal", icon: Terminal, keywords: "shell console panel tmux" },
   { action: "ui.zenToggle", label: "Toggle zen mode", icon: Focus, keywords: "focus minimal distraction free" },
@@ -1610,7 +1610,8 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // rows and no "search chat" — the same "no UI at all" rule the sidebar uses.
   const chatOn = useTeamFeature("chat");
   const callsOn = useCallsAvailable();
-  const featureOn = (f: TeamFeatureKey | undefined) => !f || (f === "chat" ? chatOn : callsOn);
+  const orgOn = useWorkspaceFeature("org");
+  const featureOn = (f: TeamFeatureKey | undefined) => !f || (f === "chat" ? chatOn : f === "org" ? orgOn : callsOn);
 
   // Merge locally-loaded inbox sessions (own, instant) with the server list (own +
   // team-visible). Shows local sessions immediately, re-merges once when the server

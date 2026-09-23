@@ -154,6 +154,7 @@ import type * as lib_slackMirror from "../lib/slackMirror.js";
 import type * as lib_slackOutbound from "../lib/slackOutbound.js";
 import type * as lib_slackText from "../lib/slackText.js";
 import type * as lib_taskWrite from "../lib/taskWrite.js";
+import type * as lib_teamFeatureGuard from "../lib/teamFeatureGuard.js";
 import type * as lib_tokenRefresh from "../lib/tokenRefresh.js";
 import type * as lib_userSend from "../lib/userSend.js";
 import type * as lib_viewWriters from "../lib/viewWriters.js";
@@ -419,6 +420,7 @@ declare const fullApi: ApiFromModules<{
   "lib/slackOutbound": typeof lib_slackOutbound;
   "lib/slackText": typeof lib_slackText;
   "lib/taskWrite": typeof lib_taskWrite;
+  "lib/teamFeatureGuard": typeof lib_teamFeatureGuard;
   "lib/tokenRefresh": typeof lib_tokenRefresh;
   "lib/userSend": typeof lib_userSend;
   "lib/viewWriters": typeof lib_viewWriters;

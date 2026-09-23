@@ -54,6 +54,7 @@ const visibilitySegment = v.object({
 const teamFeaturesValidator = v.object({
   chat: v.optional(v.boolean()),
   calls: v.optional(v.boolean()),
+  org: v.optional(v.boolean()),
 });
 
 // The entity kinds that can participate in entity-conversation links.
@@ -401,6 +402,15 @@ export default defineSchema({
     path_prefix: v.string(),
     team_id: v.id("teams"),
     auto_share: v.boolean(),
+    // Sessions started before this instant stay private. Absent means every
+    // session in the directory is shared, past included. A new mapping is
+    // stamped with its creation time unless the member includes the past.
+    share_since: v.optional(v.number()),
+    // The repository the mapped checkout is a clone of (repositoryKeyOfRemote),
+    // stamped from the sessions recorded there. Sessions in any other clone
+    // or linked worktree of it resolve to this mapping when no path rule
+    // covers them (privacy.ts matchDirectoryMapping).
+    repository: v.optional(v.string()),
     created_at: v.number(),
   })
     .index("by_user_id", ["user_id"])

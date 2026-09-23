@@ -29,7 +29,11 @@ import {
 import { TeamIcon } from "../../../components/TeamIcon";
 import { SettingsPanel, SettingsRow, SettingsSection } from "../../../components/settings/ui";
 import { TeamVisibilityControl } from "../../../components/settings/TeamVisibilityControl";
+import { ShareImpactBand } from "../../../components/team/ShareImpactBand";
+import { useShareImpact } from "../../../hooks/useShareImpact";
+import { formatDateRange, formatSessionCount, shareActionLabel } from "../../../lib/team/shareImpact";
 import { describePinnedPast, describeTeamSharing, hasPinnedPast, teamVisibilityOption, type TeamSharingFacts } from "../../../lib/teamVisibility";
+import { formatShortDate } from "../../../lib/utils";
 
 type UserTeam = TeamSharingFacts & {
   _id: Id<"teams">;
@@ -43,12 +47,14 @@ type DirectoryMapping = {
   team_id: Id<"teams">;
   team_name?: string;
   auto_share: boolean;
+  share_since?: number | null;
   created_at?: number;
 };
 type SyncProject = {
   path: string;
   is_git_repo: boolean;
   session_count: number;
+  first_active?: number;
   last_active: number;
   git_remote_url?: string | null;
   team_id?: Id<"teams"> | null;
@@ -77,6 +83,11 @@ export default function SyncPage() {
     sessionCount: number;
     action: "unsync" | "remove_team";
   } | null>(null);
+  // A repo moving to a team confirms through the same band the setup flows
+  // show: the count, the dates and the switch that keeps the past private.
+  const [pendingShare, setPendingShare] = useState<{ path: string; teamId: Id<"teams"> } | null>(null);
+  const [includePast, setIncludePast] = useState(true);
+  const [isSharing, setIsSharing] = useState(false);
 
   const hasTeams = userTeams && userTeams.length > 0;
   const syncAll = syncSettings?.sync_mode === "all";
@@ -129,11 +140,8 @@ export default function SyncPage() {
 
   const handleTeamChange = async (path: string, teamId: Id<"teams"> | null) => {
     if (teamId) {
-      await updateDirectoryMapping({
-        path_prefix: path,
-        team_id: teamId,
-        auto_share: true,
-      });
+      setIncludePast(true);
+      setPendingShare({ path, teamId });
     } else {
       const existingMapping = mappingsByPath.get(path);
       if (existingMapping) {
@@ -163,6 +171,29 @@ export default function SyncPage() {
       if (existingMapping) {
         await removeDirectoryMapping({ path_prefix: path });
       }
+    }
+  };
+
+  const executeShare = async () => {
+    if (!pendingShare || isSharing) return;
+    setIsSharing(true);
+    try {
+      await updateDirectoryMapping({
+        path_prefix: pendingShare.path,
+        team_id: pendingShare.teamId,
+        auto_share: true,
+        include_past: includePast,
+      });
+      const team = teams.find((t) => t._id === pendingShare.teamId);
+      toast.success(`${getProjectName(pendingShare.path)} now shares with ${team?.name ?? "the team"}`, {
+        description: includePast ? "Past sessions included." : "Sessions from today on. Past sessions stay private.",
+      });
+      setPendingShare(null);
+    } catch (err) {
+      console.error("Failed to share project:", err);
+      toast.error("Could not share the project");
+    } finally {
+      setIsSharing(false);
     }
   };
 
@@ -232,18 +263,6 @@ export default function SyncPage() {
   };
 
   const prettyPath = (path: string) => path.replace(/^\/(?:Users|home)\/[^/]+/, "~");
-
-  const getRelativeTime = (timestamp: number) => {
-    if (!timestamp) return "no sessions yet";
-    const diff = Date.now() - timestamp;
-    const minutes = Math.floor(diff / 60000);
-    if (minutes < 1) return "just now";
-    if (minutes < 60) return `${minutes}m ago`;
-    const hours = Math.floor(diff / 3600000);
-    if (hours < 24) return `${hours}h ago`;
-    const days = Math.floor(diff / 86400000);
-    return `${days}d ago`;
-  };
 
   // Merge recent projects with paths from team mappings and sync_projects
   const allProjects = (() => {
@@ -443,9 +462,9 @@ export default function SyncPage() {
                               <span className="truncate font-mono text-[11px] text-sol-text-muted">
                                 {prettyPath(project.path)}
                               </span>
-                              <span className="flex-shrink-0 text-sol-text-dim">
+                              <span className="flex-shrink-0 text-sol-text-dim tabular-nums">
                                 · {project.session_count > 0
-                                  ? `${project.session_count} session${project.session_count === 1 ? "" : "s"} · ${getRelativeTime(project.last_active)}`
+                                  ? `${formatSessionCount(project.session_count)} · ${formatDateRange(project.first_active ?? project.last_active, project.last_active)}`
                                   : "no sessions yet"}
                               </span>
                             </div>
@@ -472,6 +491,14 @@ export default function SyncPage() {
                                         <Eye className="h-4 w-4" />
                                         <span>
                                           {teamResult.team.name}
+                                          {mappingsByPath.get(project.path)?.share_since != null && (
+                                            <span
+                                              className="ml-1 text-xs text-sol-text-muted"
+                                              title="Sessions started before this date stay private"
+                                            >
+                                              since {formatShortDate(mappingsByPath.get(project.path)!.share_since!)}
+                                            </span>
+                                          )}
                                           {teamResult.isDefault && (
                                             <span
                                               className="ml-0.5 text-xs text-sol-text-muted"
@@ -562,6 +589,17 @@ export default function SyncPage() {
         </div>
       </SettingsSection>
 
+      <ShareProjectDialog
+        pending={pendingShare}
+        team={pendingShare ? teams.find((t) => t._id === pendingShare.teamId) ?? null : null}
+        projects={recentProjects}
+        includePast={includePast}
+        onIncludePastChange={setIncludePast}
+        busy={isSharing}
+        onCancel={() => setPendingShare(null)}
+        onConfirm={executeShare}
+      />
+
       <Dialog open={!!pendingUnsync} onOpenChange={(open) => !open && setPendingUnsync(null)}>
         <DialogContent className="bg-sol-bg border-sol-border sm:max-w-xl">
           <DialogHeader>
@@ -606,6 +644,62 @@ export default function SyncPage() {
         </DialogContent>
       </Dialog>
     </SettingsPanel>
+  );
+}
+
+/** Moving one project to a team: the band says what that exposes, and the
+ *  button repeats the number. The impact query runs only while the dialog
+ *  has a project. */
+function ShareProjectDialog({ pending, team, projects, includePast, onIncludePastChange, busy, onCancel, onConfirm }: {
+  pending: { path: string; teamId: Id<"teams"> } | null;
+  team: UserTeam | null;
+  projects: SyncProject[];
+  includePast: boolean;
+  onIncludePastChange: (v: boolean) => void;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const impact = useShareImpact(pending ? [pending.path] : [], projects);
+  const name = pending ? pending.path.split("/").pop() || pending.path : "";
+  return (
+    <Dialog open={!!pending} onOpenChange={(open) => !open && onCancel()}>
+      <DialogContent className="bg-sol-bg border-sol-border sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-sol-text">
+            <Eye className="h-5 w-5 text-sol-cyan" />
+            Share {name} with {team?.name ?? "the team"}?
+          </DialogTitle>
+          <DialogDescription className="text-sol-text-muted">
+            Every session in this repo, now and later, follows your level for the team.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-2 py-1">
+          <div className="truncate rounded-md bg-sol-bg-alt px-3 py-2 font-mono text-xs text-sol-text-muted">
+            {pending?.path}
+          </div>
+          {team && (
+            <ShareImpactBand
+              teamName={team.name}
+              memberCount={team.member_count}
+              visibility={teamVisibilityOption(team.visibility).value}
+              selectedNames={[name]}
+              impact={impact}
+              includePast={includePast}
+              onIncludePastChange={onIncludePastChange}
+            />
+          )}
+        </div>
+        <DialogFooter className="min-w-0 flex-wrap gap-2 sm:space-x-0">
+          <Button variant="outline" onClick={onCancel} disabled={busy}>
+            Cancel
+          </Button>
+          <Button variant="cyan" onClick={onConfirm} disabled={busy}>
+            {busy ? "Sharing" : shareActionLabel(impact, includePast) ?? "Share"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

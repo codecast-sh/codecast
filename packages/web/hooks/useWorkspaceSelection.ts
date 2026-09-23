@@ -52,5 +52,13 @@ export function useWorkspaceSelection(
   const toggle = (path: string) =>
     setSelectedPaths((prev) => ({ ...prev, [path]: !prev[path] }));
   const selectedCount = Object.values(selectedPaths).filter(Boolean).length;
-  return { selectedPaths, toggle, selectedCount };
+  // Sorted, so the preview query's args are stable across toggles.
+  const selectedList = useMemo(
+    () => Object.keys(selectedPaths).filter((p) => selectedPaths[p]).sort(),
+    [selectedPaths],
+  );
+  // A share covers past sessions unless the member turns this off; the band
+  // shows the count either way so the default is a read choice, not a blind one.
+  const [includePast, setIncludePast] = useState(true);
+  return { selectedPaths, toggle, selectedCount, selectedList, includePast, setIncludePast };
 }

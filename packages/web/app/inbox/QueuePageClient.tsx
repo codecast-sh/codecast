@@ -188,6 +188,10 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
   const teamVisibility = (conversation as any)?.team_visibility || (conversation as any)?.effective_team_visibility;
   const hasTeam = !!(conversation as any)?.team_id;
   const teamId = ((conversation as any)?.team_id ?? null) as string | null;
+  // The repo whose team mapping shared this session, so the popover can say why.
+  const sharedVia = (conversation as any)?.auto_shared
+    ? ((conversation as any)?.git_root || (conversation as any)?.project_path || null) as string | null
+    : null;
   // Element props for the memoized ConversationView: built once per input
   // change, not per render, or the memo below it never holds.
   const shareControls = useMemo(() => isOwnSession ? (
@@ -203,8 +207,9 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
       shareUrl={shareUrl}
       forwardUrl={`${shareOrigin()}/conversation/${convId}`}
       forwardLabel="session"
+      sharedVia={sharedVia}
     />
-  ) : null, [isOwnSession, isPrivate, teamVisibility, shareToken, hasTeam, teamId, convId, shareUrl, setPrivacy, setTeamVisibility, generateShareLink]);
+  ) : null, [isOwnSession, isPrivate, teamVisibility, shareToken, hasTeam, teamId, convId, shareUrl, sharedVia, setPrivacy, setTeamVisibility, generateShareLink]);
   const activePlanId = (conversation as any)?.active_plan_id;
   const workflowRunId = (conversation as any)?.workflow_run_id;
   const convSessionId = (conversation as any)?.session_id;

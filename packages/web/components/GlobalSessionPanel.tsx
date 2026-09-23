@@ -239,6 +239,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
       shareUrl={shareUrl}
       forwardUrl={`${shareOrigin()}/conversation/${convId}`}
       forwardLabel="session"
+      sharedVia={(conversation as any).auto_shared ? conversation.git_root || conversation.project_path : null}
     />
   ) : null;
 

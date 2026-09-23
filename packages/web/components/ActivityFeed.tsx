@@ -12,6 +12,7 @@ import { useFlipAnimation } from "../hooks/useFlipAnimation";
 import { AgentIcon, type Conversation } from "./ConversationList";
 import { ImageLightbox } from "./ImageGallery";
 import { cleanTitle } from "../lib/conversationProcessor";
+import { feedActorId, derivePeople, type FeedPerson } from "../lib/liveEntities";
 import { shouldShowSession, isWarmupSession } from "../lib/sessionFilters";
 import { useInboxStore, useTrackedStore, sessionsWakeSig, isAgentActive, sortSessions, feedPagePersistence, isConvexId, type InboxSession } from "../store/inboxStore";
 import { feedCoverMetaKey, newestTs, oldestTs, planFeedCatchup, walkStep, FEED_CATCHUP_PAGE_LIMIT, FEED_CATCHUP_MAX_PAGES } from "../lib/feedCatchup";
@@ -20,7 +21,8 @@ import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { ExternalEventGroupRow } from "./feed/ExternalEventGroupRow";
 import { groupExternalEvents, isQuietExternalEvent, type ExternalEventGroup, type ExternalEventRecord } from "../lib/externalEvents";
 import { useExternalEvents, externalEventsNewestFirst } from "../hooks/useSyncExternalEvents";
-import { FolderGit2 } from "lucide-react";
+import { EyeOff, FolderGit2 } from "lucide-react";
+import { toast } from "sonner";
 import type { CSSProperties } from "react";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 // The team-tinted card and accent text used by the share nudge below.
@@ -249,6 +251,24 @@ export function FeedCard({ conv, showActor, onNavigate, projectColor }: {
           {project && <span className={`rounded px-1 py-px ${projectColor || "text-sol-text-dim/45"}`}>{project}</span>}
           {msgs > 0 && <HeatStat value={msgs} breaks={MSG_BREAKS}>{formatMsgCount(msgs)} msg</HeatStat>}
           {dur && <HeatStat value={conv.duration_ms / 60000} breaks={DUR_MIN_BREAKS}>{dur}</HeatStat>}
+          {/* Your own row on the team feed: one click takes it off. The store
+              hides it at once; the server write rides the action's side effect. */}
+          {conv.is_own && conv.is_private === false && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                useInboxStore.getState().setPrivacy(conv._id, true);
+                toast.success("Hidden from the team", { description: "Only you can open this session now." });
+              }}
+              className="inline-flex items-center gap-1 rounded px-1 py-px text-sol-text-dim/55 hover:text-sol-yellow hover:bg-sol-bg-alt transition-colors"
+              title="Hide this session from the team"
+              aria-label="Hide this session from the team"
+            >
+              <EyeOff className="w-3 h-3" aria-hidden="true" />
+              shared · hide
+            </button>
+          )}
           <AgentIcon agentType={conv.agent_type || "claude_code"} className="w-3 h-3 opacity-40 ml-auto shrink-0" />
         </div>
       </div>
@@ -269,10 +289,8 @@ export function FeedCard({ conv, showActor, onNavigate, projectColor }: {
   );
 }
 
-type Person = { id: string; name: string; image?: string | null; sessions: number };
-
 function PeopleRow({ people, onSelect, selectedId }: {
-  people: Person[];
+  people: FeedPerson[];
   onSelect: (id: Id<"users"> | undefined) => void;
   selectedId?: Id<"users">;
 }) {
@@ -314,7 +332,8 @@ function RollupHeader({ convs, compact }: {
     let active = 0;
     let msgs = 0;
     for (const c of convs) {
-      if (c.user_id) people.add(c.user_id.toString());
+      const actor = feedActorId(c);
+      if (actor) people.add(actor);
       if (c.is_active) active += 1;
       msgs += c.message_count || 0;
       const p = extractWorkspace(c.project_path);
@@ -407,7 +426,8 @@ function DaySection({ date, entries, showActor, onNavigate, compact, projectColo
     for (const c of convs) {
       const p = extractWorkspace(c.project_path);
       if (p) projSet.add(p);
-      if (c.user_id) actorSet.add(c.user_id.toString());
+      const actor = feedActorId(c);
+      if (actor) actorSet.add(actor);
       if (c.is_active) act++;
     }
     return { projects: [...projSet], people: actorSet.size, active: act };
@@ -503,7 +523,7 @@ function FeedBody({ source, sourceConvs, externalEvents = NO_EXTERNAL_EVENTS, ha
   // filters apply here.
   const visibleConvs = useMemo(() => {
     const list = sourceConvs.filter((c) => {
-      if (actorFilter && c.user_id?.toString() !== actorFilter.toString()) return false;
+      if (actorFilter && feedActorId(c) !== actorFilter.toString()) return false;
       if (projectFilter && extractWorkspace(c.project_path) !== projectFilter) return false;
       return true;
     });
@@ -562,18 +582,7 @@ function FeedBody({ source, sourceConvs, externalEvents = NO_EXTERNAL_EVENTS, ha
 
   // People from the full window set (ignores actor filter) so the row stays
   // populated and a selection can always be cleared.
-  const people = useMemo(() => {
-    if (!showPeople) return [];
-    const map = new Map<string, Person>();
-    for (const c of sourceConvs) {
-      const id = c.user_id?.toString();
-      if (!id) continue;
-      const cur = map.get(id) || { id, name: c.author_name || "Unknown", image: c.author_avatar, sessions: 0 };
-      cur.sessions += 1;
-      map.set(id, cur);
-    }
-    return [...map.values()].sort((a, b) => b.sessions - a.sessions);
-  }, [sourceConvs, showPeople]);
+  const people = useMemo(() => (showPeople ? derivePeople(sourceConvs) : []), [sourceConvs, showPeople]);
 
   const projectColors = useProjectColors(displayConvs);
 
@@ -961,6 +970,10 @@ function TeamFeed({ compact, directoryFilter, onNavigate, initialActorId, hidePe
   }, [loadingMore, knownCursor, convex, queryArgs, key, mergeFeed, setFeedCursor, setFeedHasMore]);
 
   const sourceConvs = useMemo(() => (cached ?? []).filter((c) => {
+    // The cache only grows, so a row the viewer hid (from a card or the
+    // session header) stays in it; the server's next page would not carry
+    // it, and neither must the feed.
+    if (c.is_own && c.is_private) return false;
     if (c.visibility_mode === "summary" || c.visibility_mode === "minimal") return !isWarmupSession(c);
     return shouldShowSession(c, { excludeDefaultTitles: !c.is_own });
   }), [cached]);

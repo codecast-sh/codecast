@@ -4,6 +4,7 @@ import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
 import { wakeDevicesFor } from "./cloud";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
+import { teamFeatureEnabled } from "@codecast/shared/contracts";
 import { paginationOptsValidator } from "convex/server";
 import type { PaginationOptions, PaginationResult, RegisteredQuery } from "convex/server";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -15,8 +16,9 @@ import { fromConvexAgentType, AGENT_CLIENTS, findModelOption } from "@codecast/s
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { hasRecentPendingDaemonCommand, resumeConversationSession } from "./daemonCommandUtils";
-import { resolveTeamForPath, resolveCreationPrivacy, getProfileVisibilityPredicate, profilePublicSessionVisible } from "./privacy";
-import { canAccessTask, canAccessDoc } from "./lib/access";
+import { resolveTeamForPath, resolveCreationPrivacy, getProfileVisibilityPredicate, profilePublicSessionVisible, conversationRepository, matchDirectoryMapping, type DirectoryMapping } from "./privacy";
+import { repositoryKeyOfRemote } from "@codecast/shared/contracts";
+import { canAccessTask, canAccessDoc, patchConversationVisibility } from "./lib/access";
 import { canReleaseCommandClaim, commandVisibleToClaimer, decideCommandClaim } from "./lib/daemonCommandClaim";
 import { stripMessageTags, isUserMessageNoise, fetchUserSendDays, type SendDayRow } from "./lib/userSend";
 import { ccAccountsValidator } from "./ccAccountsShared";
@@ -2376,8 +2378,12 @@ export const getTeamMembers = query({
       .query("users")
       .filter((q) => q.eq(q.field("team_id"), args.team_id))
       .collect();
+    // Role bot users carry the team's id too. The org feature is per team,
+    // default off: with it off a role bot is on no roster (teams.getTeamMembers
+    // applies the same rule).
+    const orgOn = teamFeatureEnabled(await ctx.db.get(args.team_id), "org");
 
-    return teamMembers.map((member) => ({
+    return teamMembers.filter((member) => orgOn || !(member.is_bot && member.bot_kind !== "slack")).map((member) => ({
       _id: member._id,
       name: member.name,
       github_username: member.github_username,
@@ -2523,6 +2529,7 @@ export const getDirectoryTeamMappings = query({
           team_id: m.team_id,
           team_name: team?.name ?? "Unknown Team",
           auto_share: m.auto_share,
+          share_since: m.share_since,
           created_at: m.created_at,
         };
       })
@@ -2575,6 +2582,7 @@ async function collectRecentProjects(ctx: QueryCtx, userId: Id<"users">, take = 
     git_root: string | null;
     git_remote_url?: string;
     session_count: number;
+    first_active: number;
     last_active: number;
   }>();
 
@@ -2582,9 +2590,11 @@ async function collectRecentProjects(ctx: QueryCtx, userId: Id<"users">, take = 
     const path = getConversationProjectPath(conv);
     if (!path) continue;
 
+    const startedAt = conv.started_at ?? conv.updated_at;
     const existing = projectMap.get(path);
     if (existing) {
       existing.session_count++;
+      existing.first_active = Math.min(existing.first_active, startedAt);
       existing.last_active = Math.max(existing.last_active, conv.updated_at);
       if (!existing.git_remote_url && conv.git_remote_url) {
         existing.git_remote_url = conv.git_remote_url;
@@ -2597,6 +2607,7 @@ async function collectRecentProjects(ctx: QueryCtx, userId: Id<"users">, take = 
       git_root: conv.git_root || null,
       git_remote_url: conv.git_remote_url,
       session_count: 1,
+      first_active: startedAt,
       last_active: conv.updated_at,
     });
   }
@@ -2733,12 +2744,46 @@ async function queueRetroactiveResolveConversations(
   ctx: any,
   userId: any,
   pathPrefix: string,
+  repository?: string,
 ) {
   await ctx.scheduler.runAfter(0, internal.users.backfillDirectoryTeamMappingConversations, {
     user_id: userId,
     path_prefix: pathPrefix,
+    repository,
     source: "git_root",
   });
+}
+
+// The repository a checkout root is a clone of, read off the sessions
+// recorded there: the daemon stamps every session's origin, so the newest
+// session in the folder knows. Undefined for a folder with no remote or no
+// synced session yet; the backfill fills it in once a session lands.
+export async function repositoryOfCheckout(ctx: any, userId: any, root: string): Promise<string | undefined> {
+  const rows = await ctx.db
+    .query("conversations")
+    .withIndex("by_user_git_root", (q: any) => q.eq("user_id", userId).eq("git_root", root))
+    .order("desc")
+    .take(20);
+  for (const row of rows) {
+    const key = conversationRepository(row);
+    if (key) return key;
+  }
+  return undefined;
+}
+
+// One page of the owner's sessions in a repository, for the pass that reaches
+// clones and worktrees no path rule names. Origins differ in form across
+// clones (ssh, https), so the walk is by owner and the match is on the key.
+async function getRepositoryConversationsPage(ctx: any, userId: any, repository: string, cursor?: string, numItems = DIRECTORY_MATCH_BATCH_SIZE) {
+  const page = await ctx.db
+    .query("conversations")
+    .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+    .paginate({ cursor: (cursor || null) as any, numItems });
+  return {
+    page: page.page.filter((conv: any) => conversationRepository(conv) === repository),
+    isDone: page.isDone,
+    continueCursor: page.continueCursor,
+  };
 }
 
 export const backfillDirectoryTeamMappingConversations = internalMutation({
@@ -2747,7 +2792,12 @@ export const backfillDirectoryTeamMappingConversations = internalMutation({
     path_prefix: v.string(),
     // Legacy arg — ignored. The backfill re-resolves from current mappings.
     team_id: v.optional(v.id("teams")),
-    source: v.optional(v.union(v.literal("git_root"), v.literal("project_path"))),
+    // The repository of the mapping that changed, when known: after the two
+    // path passes a third pass visits the owner's sessions in that repository
+    // wherever they live. Carried explicitly because a removed mapping is
+    // gone by the time the pass runs.
+    repository: v.optional(v.string()),
+    source: v.optional(v.union(v.literal("git_root"), v.literal("project_path"), v.literal("repository"))),
     cursor: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -2756,19 +2806,27 @@ export const backfillDirectoryTeamMappingConversations = internalMutation({
       .query("directory_team_mappings")
       .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
       .collect();
-    const page = await getMatchingConversationsPage(
-      ctx,
-      args.user_id,
-      args.path_prefix,
-      source,
-      args.cursor,
-    );
+    const page = source === "repository"
+      ? await getRepositoryConversationsPage(ctx, args.user_id, args.repository!, args.cursor)
+      : await getMatchingConversationsPage(
+          ctx,
+          args.user_id,
+          args.path_prefix,
+          source,
+          args.cursor,
+        );
 
     let updated = 0;
     for (const conv of page.page) {
       const convPath = conv.git_root || conv.project_path;
-      if (!convPath) continue;
-      const { teamId, isPrivate, autoShared } = resolveTeamForPath(mappings, convPath, undefined);
+      if (!convPath && !conversationRepository(conv)) continue;
+      // The owner's explicit choices outlive any mapping change, the same
+      // rule as buildPathRestampUpdate: a session locked private stays
+      // hidden, and a manual share (non-private without the auto stamp)
+      // stays shared. Only rows the mappings put in their state re-resolve.
+      if (conv.team_visibility === "private") continue;
+      if (conv.is_private === false && !conv.auto_shared && conv.team_id) continue;
+      const { teamId, isPrivate, autoShared } = resolveTeamForPath(mappings, convPath, undefined, conv.started_at, conversationRepository(conv));
 
       const patch: Record<string, unknown> = {};
       const newTeam = teamId ? teamId.toString() : null;
@@ -2778,30 +2836,37 @@ export const backfillDirectoryTeamMappingConversations = internalMutation({
       if ((conv.auto_shared ?? false) !== autoShared) patch.auto_shared = autoShared;
 
       if (Object.keys(patch).length > 0) {
-        await ctx.db.patch(conv._id, patch);
+        // Visibility and routing change together here, and linked work
+        // items carry a stored access key derived from them.
+        await patchConversationVisibility(ctx, conv, patch);
         updated++;
       }
     }
 
+    const next = (source === "git_root")
+      ? "project_path"
+      : (source === "project_path" && args.repository) ? "repository" : null;
     if (!page.isDone) {
       await ctx.scheduler.runAfter(0, internal.users.backfillDirectoryTeamMappingConversations, {
         user_id: args.user_id,
         path_prefix: args.path_prefix,
+        repository: args.repository,
         source,
         cursor: page.continueCursor,
       });
-    } else if (source === "git_root") {
+    } else if (next) {
       await ctx.scheduler.runAfter(0, internal.users.backfillDirectoryTeamMappingConversations, {
         user_id: args.user_id,
         path_prefix: args.path_prefix,
-        source: "project_path",
+        repository: args.repository,
+        source: next,
       });
     }
 
     return {
       updated,
       source,
-      isDone: page.isDone && source === "project_path",
+      isDone: page.isDone && next === null,
       continueCursor: page.isDone ? undefined : page.continueCursor,
     };
   },
@@ -2826,73 +2891,111 @@ export const backfillAutoShareConversations = internalMutation({
     // is_private/auto_shared values per conversation.
     for (const mapping of mappings) {
       await queueRetroactiveResolveConversations(
-        ctx, mapping.user_id, mapping.path_prefix
+        ctx, mapping.user_id, mapping.path_prefix, mapping.repository
       );
     }
     return { totalUpdated: 0, mappingsProcessed: mappings.length };
   },
 });
 
+// The one write behind every "share this directory with a team" control
+// (web settings, the team setup flows, `cast teams map`). A mapping shares
+// every session in the directory, past included, unless `include_past` is
+// false: then the mapping is stamped with a share start and sessions that
+// began before it stay private (privacy.ts mappingCoversStart). Changing the
+// team of an existing mapping keeps its share start unless the caller says
+// otherwise. Removing the mapping re-resolves the directory's sessions so
+// they fall back to a parent mapping or to private.
+export type MappingUpsertArgs = {
+  path_prefix: string;
+  team_id?: Id<"teams">;
+  auto_share?: boolean;
+  include_past?: boolean;
+};
+
+export async function upsertDirectoryMapping(
+  ctx: any,
+  userId: Id<"users">,
+  args: MappingUpsertArgs,
+): Promise<{ error: string } | { success: true; action: "removed" | "updated" | "created"; share_since: number | null }> {
+  const existingMapping = await ctx.db
+    .query("directory_team_mappings")
+    .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+    .filter((q: any) => q.eq(q.field("path_prefix"), args.path_prefix))
+    .first();
+
+  if (!args.team_id) {
+    if (existingMapping) {
+      await ctx.db.delete(existingMapping._id);
+      await queueRetroactiveResolveConversations(ctx, userId, args.path_prefix, existingMapping.repository);
+    }
+    return { success: true, action: "removed", share_since: null };
+  }
+
+  const membership = await ctx.db
+    .query("team_memberships")
+    .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", args.team_id!))
+    .unique();
+  if (!membership) {
+    return { error: "Not a member of this team" };
+  }
+
+  const autoShare = args.auto_share ?? (existingMapping ? existingMapping.auto_share : true);
+  const shareSince =
+    args.include_past === undefined
+      ? existingMapping?.share_since
+      : args.include_past
+        ? undefined
+        : existingMapping?.share_since ?? Date.now();
+
+  const repository = existingMapping?.repository ?? await repositoryOfCheckout(ctx, userId, args.path_prefix);
+  if (existingMapping) {
+    await ctx.db.patch(existingMapping._id, {
+      team_id: args.team_id,
+      auto_share: autoShare,
+      share_since: shareSince,
+      repository,
+    });
+  } else {
+    await ctx.db.insert("directory_team_mappings", {
+      user_id: userId,
+      path_prefix: args.path_prefix,
+      team_id: args.team_id,
+      auto_share: autoShare,
+      share_since: shareSince,
+      repository,
+      created_at: Date.now(),
+    });
+  }
+
+  // Re-resolve every matching conversation against current mappings,
+  // regardless of auto_share: the backfill applies the mapping's
+  // is_private/auto_shared per conversation, share start included.
+  await queueRetroactiveResolveConversations(ctx, userId, args.path_prefix, repository);
+
+  return { success: true, action: existingMapping ? "updated" : "created", share_since: shareSince ?? null };
+}
+
 export const updateDirectoryTeamMapping = mutation({
   args: {
     path_prefix: v.string(),
     team_id: v.optional(v.id("teams")),
     auto_share: v.optional(v.boolean()),
+    include_past: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) {
       throw new Error("Not authenticated");
     }
-
-    const existingMapping = await ctx.db
-      .query("directory_team_mappings")
-      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-      .filter((q) => q.eq(q.field("path_prefix"), args.path_prefix))
-      .first();
-
-    if (!args.team_id) {
-      if (existingMapping) {
-        await ctx.db.delete(existingMapping._id);
-        await queueRetroactiveResolveConversations(ctx, userId, args.path_prefix);
-      }
-      return { success: true, deleted: true };
-    }
-
-    const membership = await ctx.db
-      .query("team_memberships")
-      .withIndex("by_user_team", (q) => q.eq("user_id", userId).eq("team_id", args.team_id!))
-      .unique();
-    if (!membership) {
-      throw new Error("Not a member of this team");
-    }
-
-    const autoShare = args.auto_share ?? (existingMapping ? existingMapping.auto_share : true);
-
-    if (existingMapping) {
-      await ctx.db.patch(existingMapping._id, {
-        team_id: args.team_id,
-        auto_share: autoShare,
-      });
-    } else {
-      await ctx.db.insert("directory_team_mappings", {
-        user_id: userId,
-        path_prefix: args.path_prefix,
-        team_id: args.team_id,
-        auto_share: autoShare,
-        created_at: Date.now(),
-      });
-    }
-
-    // Re-resolve every matching conversation against current mappings,
-    // regardless of auto_share — the backfill applies the new mapping's
-    // is_private/auto_shared values per conversation.
-    await queueRetroactiveResolveConversations(ctx, userId, args.path_prefix);
-
+    const result = await upsertDirectoryMapping(ctx, userId, args);
+    if ("error" in result) throw new Error(result.error);
     return {
       success: true,
-      updated: !!existingMapping,
-      created: !existingMapping,
+      deleted: result.action === "removed",
+      updated: result.action === "updated",
+      created: result.action === "created",
+      share_since: result.share_since,
       retroactivelyShared: 0,
       retroactiveQueued: true,
     };
@@ -2968,17 +3071,40 @@ async function deleteConversationsForPathInternal(
   return { conversationsDeleted: 1, messagesDeleted: msgs.length, hasMore: !!nextConv };
 }
 
-async function countConversationsForPathInternal(
+// What a share of `pathPrefix` would expose: how many sessions, and the span
+// of their start dates. This is the number every share control shows before
+// it writes, so it walks the path index in full rather than the recent-
+// projects window. The scan visits at most SCAN_CAP rows per source; a count
+// at the cap is reported as truncated ("1,024+").
+export type PathShareSummary = {
+  count: number;
+  first_started_at: number | null;
+  last_started_at: number | null;
+  truncated: boolean;
+};
+
+const PATH_SCAN_CAP = 1024;
+
+export async function summarizeConversationsForPath(
   ctx: any,
   userId: any,
   pathPrefix: string,
-) {
+): Promise<PathShareSummary> {
   let count = 0;
-  await scanConversationsForPath(ctx, userId, pathPrefix, () => {
+  let first: number | null = null;
+  let last: number | null = null;
+  await scanConversationsForPath(ctx, userId, pathPrefix, (conv) => {
     count++;
+    // A stored NaN (Convex floats allow it) would poison every min/max
+    // after it and print as "Invalid Date"; only finite stamps count.
+    const started = conv.started_at ?? conv.updated_at ?? null;
+    if (typeof started === "number" && Number.isFinite(started)) {
+      first = first == null ? started : Math.min(first, started);
+      last = last == null ? started : Math.max(last, started);
+    }
     return true;
   });
-  return count;
+  return { count, first_started_at: first, last_started_at: last, truncated: count >= PATH_SCAN_CAP };
 }
 
 export const countConversationsForPath = query({
@@ -2987,8 +3113,26 @@ export const countConversationsForPath = query({
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
-    if (!userId) return { count: 0 };
-    return { count: await countConversationsForPathInternal(ctx, userId, args.path_prefix) };
+    if (!userId) return { count: 0, first_started_at: null, last_started_at: null, truncated: false };
+    return summarizeConversationsForPath(ctx, userId, args.path_prefix);
+  },
+});
+
+// The preview behind a share step: one summary per selected directory. Capped
+// so one call cannot outrun the transaction read budget; a picker asks for the
+// paths it has selected, never the whole list.
+export const shareImpactForPaths = query({
+  args: {
+    path_prefixes: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    const out: Record<string, PathShareSummary> = {};
+    if (!userId) return out;
+    for (const prefix of args.path_prefixes.slice(0, 12)) {
+      out[prefix] = await summarizeConversationsForPath(ctx, userId, prefix);
+    }
+    return out;
   },
 });
 
@@ -3022,20 +3166,26 @@ export const getRecentProjectsWithGitInfo = query({
       .withIndex("by_user_id", (q) => q.eq("user_id", userId))
       .collect();
 
-    const mappingsByPath = new Map(mappings.map(m => [m.path_prefix, m]));
-
     const projects = recentProjects
       .slice(0, limit)
       .map((data) => {
-        const mapping = mappingsByPath.get(data.path);
+        // The mapping that governs this checkout: its own path rule, else the
+        // rule on another clone of the same repository.
+        const repository = repositoryKeyOfRemote(data.git_remote_url);
+        const mapping = matchDirectoryMapping(mappings as DirectoryMapping[], data.path, repository);
         return {
           path: data.path,
           is_git_repo: !!data.git_root,
           git_remote_url: data.git_remote_url,
+          repository: repository ?? undefined,
           session_count: data.session_count,
+          first_active: data.first_active,
           last_active: data.last_active,
           team_id: mapping?.team_id ?? null,
           auto_share: mapping?.auto_share ?? false,
+          share_since: mapping?.share_since ?? null,
+          // Whether the rule is this checkout's own or inherited from the repository.
+          mapped_directly: !!mapping && mapping.path_prefix === data.path,
         };
       });
 
@@ -3758,63 +3908,21 @@ export const updateDirectoryMappingForCLI = mutation({
     path_prefix: v.string(),
     team_id: v.optional(v.string()),
     auto_share: v.optional(v.boolean()),
+    include_past: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const result = await verifyApiToken(ctx, args.api_token);
     if (!result) {
       return { error: "Unauthorized" };
     }
-
-    const existingMapping = await ctx.db
-      .query("directory_team_mappings")
-      .withIndex("by_user_id", (q) => q.eq("user_id", result.userId))
-      .filter((q) => q.eq(q.field("path_prefix"), args.path_prefix))
-      .first();
-
-    if (!args.team_id) {
-      if (existingMapping) {
-        await ctx.db.delete(existingMapping._id);
-        await queueRetroactiveResolveConversations(ctx, result.userId, args.path_prefix);
-      }
-      return { success: true, action: "removed" };
-    }
-
-    const teamId = args.team_id as any;
-    const membership = await ctx.db
-      .query("team_memberships")
-      .withIndex("by_user_team", (q) => q.eq("user_id", result.userId).eq("team_id", teamId))
-      .unique();
-    if (!membership) {
-      return { error: "Not a member of this team" };
-    }
-
-    const autoShare = args.auto_share ?? (existingMapping ? existingMapping.auto_share : true);
-
-    if (existingMapping) {
-      await ctx.db.patch(existingMapping._id, {
-        team_id: teamId,
-        auto_share: autoShare,
-      });
-    } else {
-      await ctx.db.insert("directory_team_mappings", {
-        user_id: result.userId,
-        path_prefix: args.path_prefix,
-        team_id: teamId,
-        auto_share: autoShare,
-        created_at: Date.now(),
-      });
-    }
-
-    // Re-resolve every matching conversation against current mappings,
-    // regardless of auto_share — see updateDirectoryTeamMapping for rationale.
-    await queueRetroactiveResolveConversations(ctx, result.userId, args.path_prefix);
-
-    return {
-      success: true,
-      action: existingMapping ? "updated" : "created",
-      retroactivelyShared: 0,
-      retroactiveQueued: true,
-    };
+    const upsert = await upsertDirectoryMapping(ctx, result.userId, {
+      path_prefix: args.path_prefix,
+      team_id: args.team_id as Id<"teams"> | undefined,
+      auto_share: args.auto_share,
+      include_past: args.include_past,
+    });
+    if ("error" in upsert) return upsert;
+    return { ...upsert, retroactivelyShared: 0, retroactiveQueued: true };
   },
 });
 
@@ -3828,7 +3936,7 @@ export const countConversationsForPathCLI = query({
     if (!result) {
       return { error: "Unauthorized" };
     }
-    return { count: await countConversationsForPathInternal(ctx, result.userId, args.path_prefix) };
+    return summarizeConversationsForPath(ctx, result.userId, args.path_prefix);
   },
 });
 
@@ -3865,6 +3973,7 @@ export const getProjectsWithTeamsForCLI = query({
 
     const projectMap = new Map<string, {
       session_count: number;
+      first_active: number;
       last_active: number;
     }>();
 
@@ -3872,13 +3981,16 @@ export const getProjectsWithTeamsForCLI = query({
       const key = conv.git_root || conv.project_path;
       if (!key) continue;
 
+      const startedAt = conv.started_at ?? conv.updated_at;
       const existing = projectMap.get(key);
       if (existing) {
         existing.session_count++;
+        existing.first_active = Math.min(existing.first_active, startedAt);
         existing.last_active = Math.max(existing.last_active, conv.updated_at);
       } else {
         projectMap.set(key, {
           session_count: 1,
+          first_active: startedAt,
           last_active: conv.updated_at,
         });
       }
@@ -3896,6 +4008,7 @@ export const getProjectsWithTeamsForCLI = query({
           path_prefix: m.path_prefix,
           team_id: m.team_id,
           team_name: team?.name ?? "Unknown",
+          share_since: m.share_since ?? null,
         };
       })
     );
@@ -3905,6 +4018,7 @@ export const getProjectsWithTeamsForCLI = query({
       if (!projectMap.has(m.path_prefix)) {
         projectMap.set(m.path_prefix, {
           session_count: 0,
+          first_active: 0,
           last_active: 0,
         });
       }
@@ -3918,9 +4032,11 @@ export const getProjectsWithTeamsForCLI = query({
         return {
           path,
           session_count: data.session_count,
+          first_active: data.first_active,
           last_active: data.last_active,
           team_id: mapping?.team_id ?? null,
           team_name: mapping?.team_name ?? null,
+          share_since: mapping?.share_since ?? null,
         };
       });
 

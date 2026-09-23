@@ -1,4 +1,5 @@
 import { useState } from "react";
+import Link from "next/link";
 import { Forward } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
@@ -27,6 +28,9 @@ interface SharePopoverProps {
   forwardUrl?: string;
   /** What the forwarded thing is, for the picker title (e.g. "session"). */
   forwardLabel?: string;
+  /** The directory whose team mapping shared this session, when a mapping
+   *  did: the popover then says why it is shared and where to change that. */
+  sharedVia?: string | null;
 }
 
 type VisibilityMode = "private" | "summary" | "full";
@@ -63,6 +67,7 @@ export function SharePopover({
   pageUrl,
   forwardUrl,
   forwardLabel,
+  sharedVia,
 }: SharePopoverProps) {
   const chatOn = useTeamFeature("chat");
   // The moment to suggest the team-wide switch: this session is now Full while
@@ -221,6 +226,16 @@ export function SharePopover({
                 {currentMode === "summary" && "Team sees title and activity summary"}
                 {currentMode === "full" && "Team can view the full conversation"}
               </p>
+              {currentMode !== "private" && sharedVia && (
+                <p className="text-[11px] text-sol-text-dim">
+                  Shared because the repo{" "}
+                  <span className="font-mono text-sol-text-muted">{sharedVia.split("/").pop() || sharedVia}</span>{" "}
+                  is shared with the team.{" "}
+                  <Link href="/settings/sync" className="text-sol-cyan hover:underline" onClick={() => setIsOpen(false)}>
+                    Manage repo sharing
+                  </Link>
+                </p>
+              )}
               {currentMode === "full" && teamBelowFull && team && (
                 <button
                   type="button"

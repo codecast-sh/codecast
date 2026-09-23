@@ -3,7 +3,9 @@ import { GitBranch, Check, Search, Terminal, Users } from "lucide-react";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { Input } from "../ui/input";
 import { KeyCap } from "../KeyboardShortcutsHelp";
-import { formatRelative } from "../../lib/utils";
+import { formatDateRange, formatSessionCount } from "../../lib/team/shareImpact";
+import { useShareImpact } from "../../hooks/useShareImpact";
+import { ShareImpactBand, type ShareImpactBandProps } from "./ShareImpactBand";
 import {
   isMappedToTeam,
   type SuggestedWorkspace,
@@ -18,10 +20,14 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 // Selection follows --team-flow-accent inside the create flow and falls back
 // to cyan elsewhere (see .tf-accent-scope in teamFlow.css).
 
-function workspaceName(path: string) {
+export function workspaceName(path: string) {
   const parts = path.split("/");
   return parts[parts.length - 1] || path;
 }
+
+/** What the picker needs to say what a share exposes; the band's own props
+ *  minus the numbers, which the picker derives from its selection. */
+export type ShareImpactContext = Omit<ShareImpactBandProps, "selectedNames" | "impact" | "className">;
 
 /**
  * Hints for repos that share a short name (two checkouts of "outreach").
@@ -60,7 +66,8 @@ function buildDupHints(paths: string[]): Map<string, string> {
  * The workspace share step: matched repos, the rest, the empty state that
  * points at the CLI, and repos teammates share that the viewer lacks locally.
  * `isNewTeam` swaps the copy for a team nobody has joined yet, where no
- * teammate matches can exist.
+ * teammate matches can exist. With `impact` the step closes on the band
+ * that says what the selection exposes, in sessions and dates.
  */
 export function WorkspaceSharePicker({
   data,
@@ -68,6 +75,7 @@ export function WorkspaceSharePicker({
   selectedPaths,
   onToggle,
   isNewTeam = false,
+  impact,
   className = "",
 }: {
   data: TeamWorkspaceSuggestions;
@@ -75,9 +83,12 @@ export function WorkspaceSharePicker({
   selectedPaths: Record<string, boolean>;
   onToggle: (path: string) => void;
   isNewTeam?: boolean;
+  impact?: ShareImpactContext;
   className?: string;
 }) {
   const { allProjects, matched, other, teamName, teamOnlyRepos, getSuggestion } = data;
+  const selectedList = Object.keys(selectedPaths).filter((p) => selectedPaths[p]).sort();
+  const totals = useShareImpact(selectedList, allProjects);
 
   // Duplicate short names are computed across both sections, so a matched
   // repo and an unmatched twin still tell each other apart.
@@ -186,7 +197,7 @@ export function WorkspaceSharePicker({
       {matchedShown.length > 0 && (
         <WorkspaceSection
           title="Shared by teammates"
-          subtitle="Your teammates already share these repos. Pre-selected for you."
+          subtitle="Your teammates share these repos, so they are selected for you. Untick any you want to keep to yourself."
           workspaces={matchedShown}
           grow={lastKey === "matched"}
           {...common}
@@ -202,6 +213,14 @@ export function WorkspaceSharePicker({
           workspaces={otherShown}
           grow={lastKey === "other"}
           {...common}
+        />
+      )}
+
+      {impact && allProjects && allProjects.length > 0 && (
+        <ShareImpactBand
+          {...impact}
+          selectedNames={selectedList.map(workspaceName)}
+          impact={totals}
         />
       )}
 
@@ -423,13 +442,12 @@ function WorkspaceSection({
                         {suggestion.match_reason}
                       </span>
                     )}
-                    <span>
-                      {ws.session_count} session
-                      {ws.session_count === 1 ? "" : "s"}
+                    <span className="tabular-nums">
+                      {formatSessionCount(ws.session_count)}
+                      {ws.last_active > 0 && (
+                        <> · {formatDateRange(ws.first_active ?? ws.last_active, ws.last_active)}</>
+                      )}
                     </span>
-                    {ws.last_active > 0 && (
-                      <span>{formatRelative(ws.last_active)}</span>
-                    )}
                   </div>
                 </div>
               </div>
