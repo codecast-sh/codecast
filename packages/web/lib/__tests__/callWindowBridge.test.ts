@@ -1,14 +1,19 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { renderToString } from "react-dom/server";
+import { createElement } from "react";
 import {
+  canOpenFacesOverlay,
   canResizeCallWindow,
   getCallWindowSize,
   setCallWindowContentSize,
   setCallWindowDragging,
   setCallWindowInteractive,
   setCallWindowSize,
-  type CallWindowSize,
+  useFacesFloating,
+  voiceShapeForCallSize,
+  type VoiceWindowShape,
 } from "../desktop";
 import { SMALL_CALL_WINDOW_SIZES, faceTierForSize, facesModeForSize } from "../desktop";
 
@@ -45,12 +50,12 @@ describe("canResizeCallWindow", () => {
   it("is false in a window that is not the call window", () => {
     // The main window has the same bridge object. Only the window the shell
     // opened as the call may reshape itself.
-    shell({ isCallPanelWindow: false, setCallWindowSize: async () => "circles" });
+    shell({ isCallPanelWindow: false, setCallWindowSize: async () => "float" });
     expect(canResizeCallWindow()).toBe(false);
   });
 
   it("is true only in the call window of a build that has the sizes", () => {
-    shell({ isCallPanelWindow: true, setCallWindowSize: async () => "circles" });
+    shell({ isCallPanelWindow: true, setCallWindowSize: async () => "float" });
     expect(canResizeCallWindow()).toBe(true);
   });
 });
@@ -60,30 +65,30 @@ describe("setCallWindowSize", () => {
     // Null is what the panel turns into "the desktop app needs an update". A
     // silent no-op here would read as the feature being broken.
     shell({ isCallPanelWindow: true });
-    return setCallWindowSize("circles").then((landed) => expect(landed).toBeNull());
+    return setCallWindowSize("float").then((landed) => expect(landed).toBeNull());
   });
 
-  it("reports the size the SHELL landed on, not the one asked for", () => {
-    // The shell is what the size actually is — it moves the window, floats it
-    // and lets the mouse through — so it has the last word, including when it
+  it("reports the shape the SHELL landed on, not the one asked for", () => {
+    // The shell is what the shape actually is (it moves the window, floats it
+    // and lets the mouse through), so it has the last word, including when it
     // refuses an unknown name and stays on the stage.
-    const asked: CallWindowSize[] = [];
+    const asked: VoiceWindowShape[] = [];
     shell({
       isCallPanelWindow: true,
-      setCallWindowSize: async (size: CallWindowSize) => {
+      setCallWindowSize: async (size: VoiceWindowShape) => {
         asked.push(size);
         return "panel";
       },
     });
-    return setCallWindowSize("speaker").then((landed) => {
-      expect(asked).toEqual(["speaker"]);
+    return setCallWindowSize("float").then((landed) => {
+      expect(asked).toEqual(["float"]);
       expect(landed).toBe("panel");
     });
   });
 
-  it("reads back the size the shell has the window in", () => {
-    shell({ isCallPanelWindow: true, getCallWindowSize: async () => "speaker" });
-    return getCallWindowSize().then((size) => expect(size).toBe("speaker"));
+  it("reads back the shape the shell has the window in", () => {
+    shell({ isCallPanelWindow: true, getCallWindowSize: async () => "float" });
+    return getCallWindowSize().then((size) => expect(size).toBe("float"));
   });
 
   it("reads back null where there is no shell to ask", () => {
@@ -124,7 +129,15 @@ describe("the three verbs a see-through size needs", () => {
   });
 });
 
-describe("what each size shows", () => {
+describe("the legacy call sizes", () => {
+  it("all land on the float in a voice host, except the stage", () => {
+    // The older per call window had three circle sizes; the row has one
+    // float. The stage's shrink menu and an opener still name the old three,
+    // and each is the float now.
+    expect(voiceShapeForCallSize("panel")).toBe("panel");
+    for (const size of SMALL_CALL_WINDOW_SIZES) expect(voiceShapeForCallSize(size)).toBe("float");
+  });
+
   it("keeps how MANY circles apart from how BIG they are", () => {
     // Mode and tier are separate questions, and `tiny` is the size that answers
     // them differently: one face, at the smallest tier. Every other size takes
@@ -161,5 +174,45 @@ describe("one place decides what an older build is told", () => {
     }
     const panel = readFileSync(join(web, "components/calls/CallPanel.tsx"), "utf8");
     expect(panel.includes("setCallWindowSize")).toBe(true);
+  });
+});
+
+// The pop out: the header's row sent to the float, and the chip that brings
+// it back. One switch, read off the window role so every window agrees.
+describe("useFacesFloating", () => {
+  function read() {
+    let got: ReturnType<typeof useFacesFloating> | null = null;
+    function Probe() {
+      got = useFacesFloating();
+      return null;
+    }
+    renderToString(createElement(Probe));
+    return got!;
+  }
+
+  it("is unavailable in a browser, where no shell can float a window", () => {
+    shell(null);
+    const f = read();
+    expect(f.available).toBe(false);
+    expect(f.floating).toBe(false);
+    expect(canOpenFacesOverlay()).toBe(false);
+  });
+
+  it("is unavailable on a desktop build without the float", () => {
+    shell({ isCallPanelWindow: false, openCallPanel: () => {} });
+    expect(read().available).toBe(false);
+  });
+
+  it("pops the row out and brings it back through the shell's own switch", () => {
+    const seen: string[] = [];
+    shell({
+      openFacesWindow: async () => void seen.push("open"),
+      closeFacesWindow: async () => void seen.push("close"),
+    });
+    const f = read();
+    expect(f.available).toBe(true);
+    f.setFloating(true);
+    f.setFloating(false);
+    expect(seen).toEqual(["open", "close"]);
   });
 });

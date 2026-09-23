@@ -87,10 +87,10 @@ export function CallPanel() {
   );
   const roomKey = params.get("room");
   // A shell that keeps this window alive between calls makes it the voice
-  // host: the walkie's ear, the strip, the idle faces and the call, in one
-  // window whose shape follows what is happening (VoiceHostPanel). Everything
-  // below is the older shell's per-call window, kept until every desktop has
-  // updated.
+  // host: the walkie's ear, the face row floating over the work and the
+  // call, in one window whose shape follows what is happening
+  // (VoiceHostPanel). Everything below is the older shell's per-call window
+  // with its circle sizes, kept until every desktop has updated.
   if (isVoiceHost()) return <VoiceHostPanel urlRoom={roomKey} params={params} />;
   return <LegacyCallPanel roomKey={roomKey} params={params} />;
 }

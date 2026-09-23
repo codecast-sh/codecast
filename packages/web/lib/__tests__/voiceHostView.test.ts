@@ -2,44 +2,52 @@ import { describe, expect, it } from "bun:test";
 import { voiceHostView } from "../calls/voiceHostView";
 
 // The voice window shows one thing at a time, and which one is a decision a
-// person feels: a strip that lost to the wall is a voice they never saw.
+// person feels: a ring that stayed hidden is a call they never saw, and a
+// float that hides under the pointer is one they cannot answer.
 
-const base = { surface: "none" as const, callSize: "panel" as const, hiddenCall: false, wallWanted: false, facesWanted: false };
+const base = { engaged: false, inCall: false, expanded: false, floating: false, appFocused: true, wallWanted: false };
 
 describe("the voice window's shape", () => {
   it("is hidden when nothing is happening and nothing is kept", () => {
     expect(voiceHostView(base)).toBe("idle");
+    expect(voiceHostView({ ...base, appFocused: false })).toBe("idle");
   });
 
-  it("keeps the team over the work: the wall, else the faces", () => {
-    expect(voiceHostView({ ...base, facesWanted: true })).toBe("faces");
+  it("is the float whenever the row is popped out, whatever is happening", () => {
+    for (const over of [{}, { appFocused: false }, { engaged: true }, { inCall: true }, { wallWanted: true }]) {
+      expect(voiceHostView({ ...base, ...over, floating: true })).toBe("float");
+    }
+  });
+
+  it("reaches a person who is looking elsewhere: a ring, a burst or a call while the app is behind", () => {
+    expect(voiceHostView({ ...base, engaged: true, appFocused: false })).toBe("float");
+    expect(voiceHostView({ ...base, engaged: true, inCall: true, appFocused: false })).toBe("float");
+    // The wall gives way: a voice arriving outranks the buddy list.
+    expect(voiceHostView({ ...base, engaged: true, appFocused: false, wallWanted: true })).toBe("float");
+  });
+
+  it("stays out of the way while the app is in front, where the header shows the same row", () => {
+    expect(voiceHostView({ ...base, engaged: true })).toBe("idle");
+    expect(voiceHostView({ ...base, engaged: true, inCall: true })).toBe("idle");
+    expect(voiceHostView({ ...base, engaged: true, wallWanted: true })).toBe("wall");
+  });
+
+  it("hides again after the engagement ends, unless popped out", () => {
+    expect(voiceHostView({ ...base, engaged: false, appFocused: false })).toBe("idle");
+    expect(voiceHostView({ ...base, engaged: false, appFocused: false, floating: true })).toBe("float");
+  });
+
+  it("the stage opens only on an explicit expand, and then outranks everything", () => {
+    expect(voiceHostView({ ...base, inCall: true, expanded: true })).toBe("panel");
+    expect(voiceHostView({ ...base, inCall: true, expanded: true, floating: true })).toBe("panel");
+    expect(voiceHostView({ ...base, inCall: true, expanded: true, appFocused: false, engaged: true })).toBe("panel");
+    // An expand with no call behind it is nothing: the stage has nothing to show.
+    expect(voiceHostView({ ...base, expanded: true })).toBe("idle");
+    expect(voiceHostView({ ...base, expanded: true, floating: true })).toBe("float");
+  });
+
+  it("keeps the wall over the work when nothing else is showing", () => {
     expect(voiceHostView({ ...base, wallWanted: true })).toBe("wall");
-    // Both asked for (never by the shell, which makes them exclusive): the
-    // one you can read wins.
-    expect(voiceHostView({ ...base, wallWanted: true, facesWanted: true })).toBe("wall");
-  });
-
-  it("a ring outranks everything, even the strip", () => {
-    for (const over of [{}, { wallWanted: true }, { surface: "walkie" as const }, { surface: "dock" as const, hiddenCall: true }]) {
-      expect(voiceHostView({ ...base, ...over, ringing: true })).toBe("ring");
-    }
-  });
-
-  it("the strip outranks everything else, whatever is wanted", () => {
-    for (const over of [{}, { wallWanted: true }, { facesWanted: true }, { hiddenCall: true }]) {
-      expect(voiceHostView({ ...base, ...over, surface: "walkie" })).toBe("walkie");
-    }
-  });
-
-  it("a call takes the size the person chose", () => {
-    expect(voiceHostView({ ...base, surface: "dock", callSize: "speaker" })).toBe("speaker");
-    expect(voiceHostView({ ...base, surface: "stage", callSize: "panel" })).toBe("panel");
-    expect(voiceHostView({ ...base, surface: "dock", callSize: "tiny", wallWanted: true })).toBe("tiny");
-  });
-
-  it("a call put away keeps running behind the team, or behind nothing", () => {
-    expect(voiceHostView({ ...base, surface: "dock", hiddenCall: true, wallWanted: true })).toBe("wall");
-    expect(voiceHostView({ ...base, surface: "dock", hiddenCall: true, facesWanted: true })).toBe("faces");
-    expect(voiceHostView({ ...base, surface: "dock", hiddenCall: true })).toBe("idle");
+    expect(voiceHostView({ ...base, wallWanted: true, appFocused: false })).toBe("wall");
   });
 });
