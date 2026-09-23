@@ -159,6 +159,122 @@ afterEach(async () => {
 
 const room = () => FakeRoom.made[FakeRoom.made.length - 1];
 
+// ── the ring is on the row from the press ───────────────────────────────────
+
+describe("the ring out is on the row before the invite lands", () => {
+  test("a stub ringing row stands in for the invite's round trip, then leaves", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    callManager.bindConvex({
+      ...convex,
+      mutation: async (fn: any, args: any) => {
+        if (!getFunctionName(fn).endsWith("invite")) return convex.mutation(fn, args);
+        await gate;
+        return { results: [{ to_user: "them", busy: false, cooldown: false }] };
+      },
+    } as any);
+    S().syncTable("myCalls", { incoming: [], outgoing: [], membership: null });
+    const ringing = callManager.ringInto(ROOM, ["them"]);
+    await settle();
+    flushSyncPublishes();
+    // MUTATION CHECK: drop the ringStubs(…, true) call in ringInto and this
+    // reads an empty outgoing list while the mutation is in flight.
+    expect(S().myCalls.outgoing).toMatchObject([{ room_key: ROOM, to_user: "them", status: "ringing" }]);
+    expect(String(S().myCalls.outgoing[0]._id).startsWith("stub:")).toBe(true);
+    // Cancel on a stub sends nothing: there is no invite to cancel yet.
+    await callManager.cancelOutgoing(String(S().myCalls.outgoing[0]._id));
+    expect(named("cancelInvite")).toHaveLength(0);
+    release();
+    await ringing;
+    flushSyncPublishes();
+    // Rung: the stub stands until the server's own list lands, a tick later.
+    expect(S().myCalls.outgoing).toMatchObject([{ to_user: "them", status: "ringing" }]);
+    S().syncTable("myCalls", { incoming: [], outgoing: [{ _id: "i1", room_key: ROOM, to_user: "them", to_name: "Them", status: "ringing" }], membership: null });
+    flushSyncPublishes();
+    expect(S().myCalls.outgoing.map((r: any) => String(r._id))).toEqual(["i1"]);
+  });
+
+  test("a server push with no row for the person keeps the stub; one with the row replaces it; an old stub is dropped", async () => {
+    callManager.bindConvex({
+      ...convex,
+      mutation: async (fn: any, args: any) => {
+        if (!getFunctionName(fn).endsWith("invite")) return convex.mutation(fn, args);
+        await new Promise(() => {});
+        return {};
+      },
+    } as any);
+    S().syncTable("myCalls", { incoming: [], outgoing: [], membership: null });
+    void callManager.ringInto(ROOM, ["them"]);
+    await settle();
+    flushSyncPublishes();
+    expect(S().myCalls.outgoing.map((r: any) => r.to_user)).toEqual(["them"]);
+    // My own seat write re-pushes getMyCalls before the invite exists.
+    S().syncTable("myCalls", { incoming: [], outgoing: [], membership: { room_key: ROOM } });
+    flushSyncPublishes();
+    // MUTATION CHECK: take the merge off the myCalls registry entry and this
+    // reads an empty list: the stub was replaced a tick before the row.
+    expect(S().myCalls.outgoing.map((r: any) => r.to_user)).toEqual(["them"]);
+    expect(S().myCalls.membership).toEqual({ room_key: ROOM });
+    // The server lists them: the stub is gone, the row stands alone.
+    S().syncTable("myCalls", { incoming: [], outgoing: [{ _id: "i1", room_key: ROOM, to_user: "them", to_name: "Them", status: "ringing" }], membership: null });
+    flushSyncPublishes();
+    expect(S().myCalls.outgoing.map((r: any) => String(r._id))).toEqual(["i1"]);
+    // A stub past its clock never outlives a push.
+    S().syncTable("myCalls", { incoming: [], outgoing: [{ _id: "stub:x:y", room_key: "x", to_user: "y", to_name: "Y", status: "ringing", created_at: 0, until: 1 }], membership: null });
+    flushSyncPublishes();
+    expect(S().myCalls.outgoing).toEqual([]);
+  });
+
+  test("a person the server did not ring loses the stub when the answer comes", async () => {
+    callManager.bindConvex({
+      ...convex,
+      mutation: async (fn: any, args: any) => {
+        if (!getFunctionName(fn).endsWith("invite")) return convex.mutation(fn, args);
+        return { results: [{ to_user: "them", busy: false, cooldown: true }, { to_user: "other", busy: false, cooldown: false }] };
+      },
+    } as any);
+    S().syncTable("myCalls", { incoming: [], outgoing: [], membership: null });
+    await callManager.ringInto(ROOM, ["them", "other"]);
+    flushSyncPublishes();
+    expect(S().myCalls.outgoing.map((r: any) => r.to_user)).toEqual(["other"]);
+  });
+
+  test("startHuddle rings on the row before the join, not after it", async () => {
+    let releaseToken!: () => void;
+    const tokenGate = new Promise<void>((r) => (releaseToken = r));
+    callManager.bindConvex({
+      ...convex,
+      action: async () => {
+        await tokenGate;
+        return { url: "wss://sfu.example", token: "tok" };
+      },
+    } as any);
+    S().syncTable("myCalls", { incoming: [], outgoing: [], membership: null });
+    const started = callManager.startHuddle({ roomKey: ROOM, toUserIds: ["them"] });
+    await settle();
+    flushSyncPublishes();
+    // Still joining (the token has not come back), and the ring is already up.
+    // MUTATION CHECK: move ringStubs(…, true) in startHuddleHere below the
+    // join and this reads an empty outgoing list here.
+    expect(S().call.phase).not.toBe("connected");
+    expect(S().myCalls.outgoing).toMatchObject([{ room_key: ROOM, to_user: "them", status: "ringing" }]);
+    releaseToken();
+    await started;
+    flushSyncPublishes();
+    expect(S().call.phase).toBe("connected");
+    expect(named("invite")).toHaveLength(1);
+    // The harness answers the invite with no results: nobody rung, no stub left.
+    expect(S().myCalls.outgoing).toEqual([]);
+  });
+
+  test("a person the server already lists as ringing gets no second row", async () => {
+    S().syncTable("myCalls", { incoming: [], outgoing: [{ _id: "i1", room_key: ROOM, to_user: "them", to_name: "Them", status: "ringing" }], membership: null });
+    await callManager.ringInto(ROOM, ["them"]);
+    flushSyncPublishes();
+    expect(S().myCalls.outgoing.map((r: any) => String(r._id))).toEqual(["i1"]);
+  });
+});
+
 // ── (d) a reconnect is still the call ───────────────────────────────────────
 
 describe("a LiveKit reconnect is still the call", () => {

@@ -161,6 +161,35 @@ test("on the stage before transcription starts, an earlier call's events do not 
   await r.unmount();
 });
 
+test("before transcription starts, the moment the viewer joined sets earlier chat apart, and an event's time sits outside its sentence", async () => {
+  useInboxStore.setState({ currentUser: { _id: "u-me" }, liveRooms: [] } as any);
+  const own = { conversation_id: "conv_room", short_id: "jx7room", title: "Room agent", agent_type: "claude_code" };
+  const rows = [
+    // An earlier huddle in this room, six hours ago: two agents answering.
+    { _id: "old", user_id: "u-ann", user_name: "Ann Lee", text: "see the notes before we start", at: START - 21_600_000, mine: false, agent: null },
+    { _id: "old-a", user_id: "", user_name: "Room agent", text: "Reading them now.", at: START - 21_500_000, mine: false, agent: own },
+    // Typed after the viewer joined this huddle, before anyone transcribed.
+    { _id: "now", user_id: "u-me", user_name: "Ashot P", text: "hello again", at: START + 60_000, mine: true, agent: null },
+  ];
+  const r = await render(
+    <RoomThread roomKey={ROOM} call={null} rows={rows as any} liveTranscriptId={null} surface="stage" seated sinceAt={START} />,
+  );
+  const dividers = [...r.container.querySelectorAll(".rt-divider")].map((d) => d.textContent);
+  expect(dividers).toEqual(["Earlier in this room", "This call"]);
+  await r.unmount();
+
+  // With a call, the event's time is a flex child beside the sentence, not inside it.
+  const ev = [{ _id: "e0", user_id: "u-me", user_name: "Ashot P", text: "", at: START + 100, mine: false, agent: own, event: "agent_joined" }];
+  const r2 = await render(
+    <RoomThread roomKey={ROOM} call={call()} rows={ev as any} liveTranscriptId="t1" surface="stage" seated />,
+  );
+  const row = r2.container.querySelector(".rt-event")!;
+  expect(row.children.length).toBe(3);
+  expect(row.children[2].classList.contains("rt-event-when")).toBe(true);
+  expect(row.children[1].querySelector(".rt-event-when")).toBeNull();
+  await r2.unmount();
+});
+
 test("after the call an agent's event reads in the past, typed lines from other calls are set apart, and other calls' events are gone", async () => {
   useInboxStore.setState({ currentUser: { _id: "u-me" }, liveRooms: [] } as any);
   const own = { conversation_id: "conv_room", short_id: "jx7room", title: "Room agent", agent_type: "claude_code" };

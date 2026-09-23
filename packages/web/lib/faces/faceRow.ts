@@ -320,6 +320,19 @@ function stateOf(
   if (input.rings.outgoing.some((r) => idOf(r.to_user) === id && (r.status ?? "ringing") === "ringing")) {
     return "ringing-them";
   }
+  // They answered. The ring settles a round trip before their seat lands, so
+  // a face that was ringing stays ringing until it is seated in my call (the
+  // server keeps the accepted ring in view for that window); it never reads
+  // online in between. A cancelled, declined or expired ring is not held.
+  if (
+    prev?.state === "ringing-them" &&
+    room &&
+    mode === "call" &&
+    !inMyRoom &&
+    input.rings.outgoing.some((r) => idOf(r.to_user) === id && r.room_key === room && r.status === "accepted")
+  ) {
+    return "ringing-them";
+  }
   if (input.walkie.incoming?.fromUserId === id) return "talking-to-me";
   if (room && mode) {
     if (inMyRoom) {
@@ -403,6 +416,11 @@ function cardOf(
       words: stageWordsFor(input, "listen", name),
     };
   }
+  // Ringing from inside the room: startHuddle seats the caller before the
+  // ring goes out, so until somebody else is seated the card is the ring out
+  // (ringing, declined, no answer), not a live call with nobody on it.
+  const ringOutHere = other ? undefined : input.rings.outgoing.find((r) => r.room_key === room && r.status !== "accepted");
+  if (room && mode === "call" && ringOutHere) return ringOutCard(ringOutHere);
   if (room && mode) {
     const end = true as const;
     const mute = mode === "call";
@@ -434,18 +452,21 @@ function cardOf(
       hearing,
     };
   }
-  const ringOut = input.rings.outgoing.find((r) => (r.status ?? "ringing") === "ringing") ?? input.rings.outgoing[0];
-  if (ringOut) {
-    return {
-      kind: "ring-out",
-      roomKey: ringOut.room_key,
-      to: idOf(ringOut.to_user),
-      name: ringOut.to_name ?? "Teammate",
-      cancel: true,
-      status: ringOut.status ?? "ringing",
-    };
-  }
+  const ringOut =
+    input.rings.outgoing.find((r) => (r.status ?? "ringing") === "ringing") ?? input.rings.outgoing.find((r) => r.status !== "accepted");
+  if (ringOut) return ringOutCard(ringOut);
   return { kind: "none" };
+}
+
+function ringOutCard(r: FaceRowInput["rings"]["outgoing"][number]): FaceCard {
+  return {
+    kind: "ring-out",
+    roomKey: r.room_key,
+    to: idOf(r.to_user),
+    name: r.to_name ?? "Teammate",
+    cancel: true,
+    status: r.status ?? "ringing",
+  };
 }
 
 /**
