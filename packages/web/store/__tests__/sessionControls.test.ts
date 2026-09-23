@@ -102,11 +102,43 @@ describe("session controls use the default optimistic store path", () => {
 
   it("does not mistake an earlier interruption for the new command's echo", async () => {
     const timestamp = store().sessions[ID].updated_at + 1;
-    const messages = [{ _id: "older-interrupt", role: "user", content: "[Request interrupted by user]", timestamp }];
+    const messages = [
+      { _id: "older-interrupt", role: "user", content: "[Request interrupted by user]", timestamp },
+      { _id: "reply", role: "assistant", content: "Stopped. What next?", timestamp: timestamp + 1 },
+    ];
     store().setMessages(ID, messages);
     await store().sendEscape(ID);
     store().setMessages(ID, messages);
     expect(store().pendingMessages[ID]).toHaveLength(1);
+  });
+
+  it("paints one interruption line however many times Escape is pressed", async () => {
+    // Every press still reaches the daemon (it judges whether a turn is live);
+    // only the line is deduped, because a turn ends in at most one interruption.
+    await store().sendEscape(ID);
+    await store().sendEscape(ID);
+    await store().sendEscape(ID);
+    expect(store().pendingMessages[ID]).toHaveLength(1);
+  });
+
+  it("does not add a line when the server tail already ends in an interruption", async () => {
+    const timestamp = store().sessions[ID].updated_at + 1;
+    store().setMessages(ID, [{ _id: "server-interrupt", role: "user", content: "[Request interrupted by user]", timestamp }]);
+    await store().sendEscape(ID);
+    expect(store().pendingMessages[ID] ?? []).toHaveLength(0);
+  });
+
+  it("paints again once the conversation has moved past the last interruption", async () => {
+    await store().sendEscape(ID);
+    const first = store().pendingMessages[ID][0];
+    const timestamp = first.timestamp + 1;
+    store().setMessages(ID, [
+      { _id: "server-interrupt", role: "user", content: "[Request interrupted by user]", timestamp },
+      { _id: "reply", role: "assistant", content: "Stopped.", timestamp: timestamp + 1 },
+    ]);
+    await store().sendEscape(ID);
+    expect(store().pendingMessages[ID]).toHaveLength(1);
+    expect(store().pendingMessages[ID][0]._id).not.toBe(first._id);
   });
 
   it("protects model selection through the standard action decorator", () => {
