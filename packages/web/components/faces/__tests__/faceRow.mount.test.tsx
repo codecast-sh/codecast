@@ -34,6 +34,12 @@ const ptt: PushToTalk = {
 };
 mock.module("../../../hooks/useWalkie", () => ({ ...realWalkieHooks, usePushToTalk: () => ptt }));
 
+// The card's session lookups: a router context and a server query.
+const realOpenSession = await import("../../../hooks/useOpenSession");
+mock.module("../../../hooks/useOpenSession", () => ({ ...realOpenSession, useOpenSession: () => () => {} }));
+const realMissingRow = await import("../../../hooks/useMissingSessionRow");
+mock.module("../../../hooks/useMissingSessionRow", () => ({ ...realMissingRow, useMissingSessionRow: () => null }));
+
 const realChatHooks = await import("../../../hooks/useChatSync");
 let openedDms: string[][] = [];
 mock.module("../../../hooks/useChatSync", () => ({
