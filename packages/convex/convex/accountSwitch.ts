@@ -53,6 +53,7 @@ import {
   PACED_CONTINUE_KINDS,
   tokenBackedProfile,
   activeTokenProfile,
+  fleetAccount,
   continueTargetPin,
   continueNeedsRestart,
   parkedOnActiveAccount,
@@ -1578,6 +1579,7 @@ export const autoSwitchCheck = internalMutation({
       authParks,
       primary,
       attempts,
+      now,
     );
     const activeDead = authDead.length > 0;
     const authSwitch = allowSwitch && activeDead ? authParks : [];
@@ -1634,7 +1636,9 @@ export const autoSwitchCheck = internalMutation({
     // move — the reason every switch/proposal is recorded with, so the park
     // card can explain the account change instead of it happening silently.
     const activeProfiles = primary.cc_accounts?.profiles ?? [];
-    const activeEmail = primary.cc_accounts?.active_email;
+    // The account the fleet runs on: the keychain login, or the launch profile
+    // after a token switch (fleetAccount). Every "active" read below means this.
+    const activeEmail = fleetAccount(primary.cc_accounts, now).email;
     const activeUsage = activeProfiles.find((p) => p.email && p.email === activeEmail)?.usage;
     const buildDecision = (
       kind: "switch" | "propose" | "continue" | "exhausted",
@@ -1816,7 +1820,7 @@ export const autoSwitchCheck = internalMutation({
     // token. Only the former can wait on the active account's windows.
     const onlineById = new Map(online.map((d) => [d.device_id, d]));
     const parksOnActive = targets.filter((c) =>
-      parkedOnActiveAccount(c, (c.owner_device_id && onlineById.get(c.owner_device_id)) || primary),
+      parkedOnActiveAccount(c, (c.owner_device_id && onlineById.get(c.owner_device_id)) || primary, now),
     );
     const decision = decideAutoSwitch({
       now,
@@ -1826,7 +1830,7 @@ export const autoSwitchCheck = internalMutation({
       // construction rather than by a filter that could be dropped.
       parkedAt: Math.max(...targets.map((c) => c.pending_api_error_at ?? c.updated_at ?? 0)),
       activeParkedAt: parksOnActive.length ? Math.max(...parksOnActive.map((c) => c.pending_api_error_at ?? c.updated_at ?? 0)) : null,
-      activeEmail: primary.cc_accounts?.active_email,
+      activeEmail,
       activeSince: primary.cc_accounts?.active_since,
       profiles: primary.cc_accounts?.profiles ?? [],
       attempts,
@@ -2381,6 +2385,9 @@ export const listAccountProfiles = query({
           // When the current login took over: a session whose last call predates
           // it restarts on a cache that belongs to another account.
           active_since: d.cc_accounts?.active_since,
+          // The profile sessions launch on when a token switch moved the fleet
+          // off the keychain login (fleetAccount); absent = the login.
+          launch_profile: d.cc_accounts?.launch_profile,
           login_flow: d.cc_login_flow,
           session_tokens: true,
           mint_flow: d.cc_mint_flow,

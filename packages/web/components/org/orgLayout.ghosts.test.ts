@@ -160,7 +160,7 @@ describe("ghostsFor", () => {
     expect(chips.map((c) => c.line)).toEqual([
       "@growth also looks after Platform",
       "@growth may use up to 800,000 tokens a day",
-      "@growth may decide on its own",
+      "@growth starts work on its own",
       '@growth runs "Weekly growth review" every week',
     ]);
     // The card grows by one chip row (on top of its standing line's row) so the layout never overlaps.
@@ -254,7 +254,7 @@ describe("ghostsFor", () => {
       "under Samvit Jain",
       "+ Platform \u2212 pl-3",
       "hands 4 \u00b7 tokens 800k",
-      "trust to decide",
+      "starts work on its own",
       "every 7d \u00b7 Weekly growth review",
     ]);
     expect(ghosts.chips[GROWTH]!.every((c) => c.line.length > c.chip.length)).toBe(true);

@@ -5,6 +5,8 @@
 // path and both tests share this one reading of the block and of the option
 // order, so an option index means the same thing everywhere.
 
+import { autonomyOn, trustForSwitch } from "./roleAutonomy";
+
 export const ORG_PROPOSAL_FENCE = "org-proposal";
 
 export type OrgProposalCaps = { hands_per_day?: number; wakes_per_day?: number; tokens_per_day?: number };
@@ -44,7 +46,8 @@ export type OrgRoleProposal = {
   /** "@handle" or "or-N" for a role, "me" or a member's name for a person; absent = the person applying. */
   reports_to?: string;
   charter?: string;
-  trust?: "understand";
+  /** The switch as stored (org-staffing.md S23.1); a hired role starts on, so a proposal rarely writes it. */
+  trust?: OrgTrustStage;
   caps?: OrgProposalCaps;
   /** See OrgLeaveSessions: the sessions in the new role's scope stay with their owner. */
   leave_sessions?: boolean;
@@ -92,7 +95,15 @@ export type OrgPriority = "p0" | "p1" | "p2" | "p3";
 export type OrgLeaveSessions = { leave_sessions?: boolean };
 export type OrgScopeChange = { kind: "scope"; handle: string; add?: string[]; remove?: string[] } & OrgLeaveSessions;
 export type OrgBudgetChange = { kind: "budget"; handle: string; caps: OrgProposalCaps };
+/** The switch (org-staffing.md S23.1). The wire kind stays `trust` for one release; a spec may
+ *  write `{ kind: "autonomy", handle, on }` and parseOrgProposalSpec maps it here. */
 export type OrgTrustChange = { kind: "trust"; handle: string; trust: OrgTrustStage };
+/** A spec's switch change before parsing maps it onto the stored kind. */
+export function normalizeAutonomyChange(raw: any): any {
+  if (!raw || typeof raw !== "object" || raw.kind !== "autonomy") return raw;
+  const { on, ...rest } = raw;
+  return { ...rest, kind: "trust", trust: typeof on === "boolean" ? trustForSwitch(on) : on };
+}
 export type OrgRoutineChange = { kind: "routine"; handle: string; title: string; prompt: string; every: string };
 export type OrgProjectMetaChange = {
   kind: "project_meta";
@@ -144,12 +155,31 @@ export type OrgHireChange = {
 /** Move an instance to another release of its template (H9); the host step performs it. */
 export type OrgUpgradeChange = { kind: "upgrade"; instance: string; template: string; to: string; digest: string };
 
-export type OrgChange = OrgProposal | OrgScopeChange | OrgBudgetChange | OrgTrustChange | OrgRoutineChange | OrgProjectMetaChange | OrgAdoptChange | OrgFileChange
-  | OrgPlanStatusChange | OrgTaskStatusChange | OrgProjectStatusChange | OrgAuthorityChange | OrgHireChange | OrgUpgradeChange;
+// The company's goals (initiatives-projects-role-page.md "I1, revised"): a
+// reviewer that reads one shared goal in the projects' own goals, a call or a
+// chat thread proposes it as a change, and a person accepts. Every ref here
+// is what the analyzer read: a project's short id, id or title; an
+// initiative's in-N, id or title; an owner as "@handle", "me" or a member's
+// name. `title` on the two changes to an existing initiative is its title,
+// carried so the row reads cold in a store that does not hold the row.
+/** Set a goal: the initiative with the sentence that says what reaching it
+ *  looks like, the projects that carry it, and who drives it. */
+export type OrgInitiativeChange = { kind: "initiative"; title: string; description: string; projects: string[]; owner?: string; target_date?: number; evidence?: string[] };
+/** Add projects to a goal that exists. */
+export type OrgInitiativeProjectsChange = { kind: "initiative_projects"; initiative: string; projects: string[]; title?: string };
+/** Give a goal an owner, a person or a role. */
+export type OrgInitiativeOwnerChange = { kind: "initiative_owner"; initiative: string; owner: string; title?: string };
+export type OrgGoalChange = OrgInitiativeChange | OrgInitiativeProjectsChange | OrgInitiativeOwnerChange;
 
-export const ORG_CHANGE_KINDS = [...ORG_PROPOSAL_KINDS, "file", "scope", "budget", "trust", "routine", "project_meta", "adopt", "plan_status", "task_status", "project_status", "authority", "hire", "upgrade"] as const;
+export type OrgChange = OrgProposal | OrgScopeChange | OrgBudgetChange | OrgTrustChange | OrgRoutineChange | OrgProjectMetaChange | OrgAdoptChange | OrgFileChange
+  | OrgPlanStatusChange | OrgTaskStatusChange | OrgProjectStatusChange | OrgAuthorityChange | OrgHireChange | OrgUpgradeChange | OrgGoalChange;
+
+export const ORG_CHANGE_KINDS = [...ORG_PROPOSAL_KINDS, "file", "scope", "budget", "trust", "routine", "project_meta", "adopt", "plan_status", "task_status", "project_status", "authority", "hire", "upgrade", "initiative", "initiative_projects", "initiative_owner"] as const;
 /** The kinds the pane groups under "Bring records in line" (S9). */
 export const ORG_SYNC_KINDS: readonly OrgChangeKind[] = ["plan_status", "task_status", "project_status"];
+/** The kinds that set, extend or staff a goal; one ask holds them (I1, revised). */
+export const ORG_GOAL_KINDS: readonly OrgChangeKind[] = ["initiative", "initiative_projects", "initiative_owner"];
+export const isOrgGoalChange = (c: { kind: string }): c is OrgGoalChange => (ORG_GOAL_KINDS as readonly string[]).includes(c.kind);
 export type OrgChangeKind = OrgChange["kind"];
 
 /** Accept order (S4, S9): the record syncs first (a plan, task or project
@@ -165,10 +195,14 @@ export type OrgChangeKind = OrgChange["kind"];
  *  proposal marks done on its own evidence must be done before the cascade
  *  reads it. Authority lands after trust on a role that exists; a hire lands
  *  after the role, its authority and any routine, since the instance row it
- *  writes names them; an upgrade stands alone. */
+ *  writes names them; an upgrade stands alone. A goal lands after the
+ *  projects and the roles it names (a project created in the same proposal,
+ *  an owner role it creates), and before the moves and scopes: an owner role
+ *  gains the goal's projects in its scope when the owner is set. */
 export const ORG_CHANGE_APPLY_RANK: Record<OrgChangeKind, number> = {
   task_status: 0, plan_status: 1, project_status: 2,
-  projects: 3, file: 4, role: 5, project_meta: 6, move: 7, scope: 8, budget: 9, trust: 10, authority: 11, adopt: 12, routine: 13, hire: 14, upgrade: 15, retire: 16,
+  projects: 3, file: 4, role: 5, project_meta: 6, initiative: 7, initiative_projects: 8, initiative_owner: 9,
+  move: 10, scope: 11, budget: 12, trust: 13, authority: 14, adopt: 15, routine: 16, hire: 17, upgrade: 18, retire: 19,
 };
 const UNRANKED = Math.max(...Object.values(ORG_CHANGE_APPLY_RANK)) + 1;
 
@@ -282,7 +316,7 @@ export function orgChangeError(raw: any): string | null {
     }
     case "trust": {
       const h = handle(); if (h) return h;
-      return ORG_TRUST_STAGES.includes(raw.trust) ? null : `trust is one of ${ORG_TRUST_STAGES.join(", ")}`;
+      return ORG_TRUST_STAGES.includes(raw.trust) ? null : "autonomy on is true or false";
     }
     case "routine": {
       const h = handle(); if (h) return h;
@@ -351,6 +385,21 @@ export function orgChangeError(raw: any): string | null {
       if (!(PROJECT_STATUS_CHANGES as readonly string[]).includes(raw.status)) return `project_status status is one of ${PROJECT_STATUS_CHANGES.join(", ")}`;
       if (!optString(raw.title)) return "project_status title is the project's title, a string";
       return nonEmpty(raw.reason) ? null : "project_status needs a reason: the evidence the record is stale";
+    case "initiative":
+      if (!nonEmpty(raw.title)) return "initiative needs a title: the goal's name";
+      if (!nonEmpty(raw.description)) return "initiative needs a description: the sentence that says what reaching the goal looks like";
+      if (!strings(raw.projects) || !raw.projects.length) return "initiative projects is a non-empty list of project refs: the projects that carry the goal";
+      if (raw.owner !== undefined && !nonEmpty(raw.owner)) return "initiative owner is \"@handle\" for a role, \"me\" or a member's name for a person";
+      if (raw.target_date !== undefined && !(typeof raw.target_date === "number" && raw.target_date > 0)) return "initiative target_date is unix ms";
+      return optStrings(raw.evidence) ? null : "initiative evidence is a list of strings";
+    case "initiative_projects":
+      if (!nonEmpty(raw.initiative)) return "initiative_projects needs an initiative ref (in-N, an id or its title)";
+      if (!strings(raw.projects) || !raw.projects.length) return "initiative_projects projects is a non-empty list of project refs";
+      return optString(raw.title) ? null : "initiative_projects title is the initiative's title, a string";
+    case "initiative_owner":
+      if (!nonEmpty(raw.initiative)) return "initiative_owner needs an initiative ref (in-N, an id or its title)";
+      if (!nonEmpty(raw.owner)) return "initiative_owner owner is \"@handle\" for a role, \"me\" or a member's name for a person";
+      return optString(raw.title) ? null : "initiative_owner title is the initiative's title, a string";
   }
   return null;
 }
@@ -552,7 +601,7 @@ export function orgChangeHandles(c: OrgChange): string[] {
   const h = (x: unknown) => (typeof x === "string" && x.trim().startsWith("@") ? x.trim().slice(1).toLowerCase() : null);
   const any = c as any;
   const own = typeof any.handle === "string" ? any.handle.trim().replace(/^@/, "").toLowerCase() : null;
-  return [own, h(any.reports_to), c.kind === "project_meta" ? h(any.owner) : null].filter((x): x is string => !!x);
+  return [own, h(any.reports_to), c.kind === "project_meta" || c.kind === "initiative" || c.kind === "initiative_owner" ? h(any.owner) : null].filter((x): x is string => !!x);
 }
 
 type AskRow = { seq: number; change: OrgChange; status?: string; rationale?: string; expected_effect?: string };
@@ -590,7 +639,25 @@ export type OrgAskNames = {
   role?: (handle: string) => string | undefined;
   project?: (ref: string) => string | undefined;
   plan?: (ref: string) => string | undefined;
+  initiative?: (ref: string) => string | undefined;
 };
+
+/** The one line a goal change reads as (I1, revised), for a person who has
+ *  not read the letter: "set a goal: Win the private network, carried by
+ *  Callers and Broker network, owned by @calling". The row, the derived ask,
+ *  the log and the CLI walk all say it this way; names resolve through the
+ *  same table the asks use, and a ref the reader's store does not know stands
+ *  as written. An owner of "me" reads as "you": the card has no speaker. */
+export function goalChangeSentence(c: OrgGoalChange, names?: OrgAskNames): string {
+  const owner = (ref: string | undefined) => !ref ? "" : ref.trim().toLowerCase() === "me" ? "you" : ref.trim().startsWith("@") ? `@${ref.trim().slice(1)}` : names?.role?.(ref.trim().toLowerCase()) ?? ref.trim();
+  const project = (ref: string) => names?.project?.(ref) ?? ref;
+  const goal = (ref: string, title?: string) => title?.trim() || names?.initiative?.(ref) || ref;
+  switch (c.kind) {
+    case "initiative": return `set a goal: ${c.title.trim()}, carried by ${andList(c.projects.map(project))}${c.owner ? `, owned by ${owner(c.owner)}` : ""}`;
+    case "initiative_projects": return `add ${andList(c.projects.map(project))} to the goal ${goal(c.initiative, c.title)}`;
+    case "initiative_owner": return c.owner.trim() ? `make ${owner(c.owner)} the owner of the goal ${goal(c.initiative, c.title)}` : `the goal ${goal(c.initiative, c.title)} has no owner`;
+  }
+}
 
 /**
  * A derived ask's words, for a person reading cold: no handle, no
@@ -620,10 +687,9 @@ function askWords(names?: OrgAskNames) {
   /** What rides with a new agent: its limit, its routine, the session that becomes it. */
   const rider = (c: OrgChange): string => {
     switch (c.kind) {
-      // The units (hands, wakes, tokens) are glossary words; the numbers are one tap away in the fold and the cost sheet.
       case "budget": return " It gets a daily limit of its own.";
       case "routine": return ` It runs ${c.title} ${everyWords(c.every)}.`;
-      case "trust": return c.trust === "understand" ? " It reads and reports, and does not act on its own." : c.trust === "decide" ? " It may decide on its own." : " It may direct work on its own.";
+      case "trust": return autonomyOn(c.trust) ? " It starts work in its area on its own." : " It reads and recommends; you start the work.";
       case "adopt": return ` The session ${c.conversation} becomes it.`;
       case "authority": return ` Outside codecast it may ${authorityWords(c.authority)}, inside the limits you set.`;
       case "hire": return ` It is hired from the template ${c.template} ${c.version}, and leads ${c.project}.`;
@@ -637,6 +703,8 @@ function askWords(names?: OrgAskNames) {
       case "retire": return `Retire ${agent(c.handle)}`;
       case "move": return `Move ${agent(c.handle)}`;
       case "scope": return `Change what ${agent(c.handle)} looks after`;
+      case "trust": return `${autonomyOn(c.trust) ? "Turn on" : "Turn off"} starting work on its own for ${agent(c.handle)}`;
+      case "initiative": case "initiative_projects": case "initiative_owner": { const s = goalChangeSentence(c, names); return s.charAt(0).toUpperCase() + s.slice(1); }
       default: return describeOrgChange(c);
     }
   };
@@ -656,6 +724,9 @@ function askWords(names?: OrgAskNames) {
         const parts = [c.add?.length ? `takes on ${things(c.add)}` : "", c.remove?.length ? `hands off ${things(c.remove)}` : ""].filter(Boolean);
         return `${agent(c.handle)} ${andList(parts)}.`;
       }
+      case "initiative": return `A new goal, ${c.title.trim()}, appears on the initiatives page with ${projects(c.projects)} under it${c.owner ? ` and ${parent(c.owner)} as its owner` : " and no owner yet"}. ${c.description.trim()}`;
+      case "initiative_projects": return `${projects(c.projects)} ${c.projects.length === 1 ? "counts" : "count"} toward the goal from now on, and its owner's area grows to include ${c.projects.length === 1 ? "it" : "them"}.`;
+      case "initiative_owner": return `${parent(c.owner)} drives the goal from now on: its health is what ${c.owner.trim().toLowerCase() === "me" ? "you say" : "they say"}, and the goal's projects join their area.`;
       default: return describeOrgChange(c);
     }
   };
@@ -671,16 +742,18 @@ function askWords(names?: OrgAskNames) {
 
 /**
  * The asks of a proposal that carries none (S19): one written before asks
- * existed, or one a person posted. The record changes are one ask; each role,
- * retire, move and scope change is its own, and a change on the handle of a
- * role this proposal creates (its adopt, its routine, its budget) rides with
- * that role, because accepting a seat without them leaves it half made;
- * whatever is left is one ask. Removed changes belong to no ask.
+ * existed, or one a person posted. The record changes are one ask; the goal
+ * changes are one ask (I1, revised); each role, retire, move and scope
+ * change is its own, and a change on the handle of a role this proposal
+ * creates (its adopt, its routine, its budget) rides with that role, because
+ * accepting a seat without them leaves it half made; whatever is left is one
+ * ask. Removed changes belong to no ask.
  */
 export function deriveAsks(changes: ReadonlyArray<AskRow>, names?: OrgAskNames): OrgAsk[] {
   const words = askWords(names);
   const live = orderOrgChanges(changes.filter((c) => c.status !== "removed"), (c) => c.change);
   const records = live.filter((c) => ORG_SYNC_KINDS.includes(c.change.kind));
+  const goals = live.filter((c) => isOrgGoalChange(c.change));
   const created = new Map<string, AskRow>(live.filter((c) => c.change.kind === "role").map((c) => [askHandle(c.change)!, c]));
   // A move of a role this proposal creates rides in that role's ask (a named
   // session put under an existing role, R2), so the person can accept the
@@ -689,7 +762,7 @@ export function deriveAsks(changes: ReadonlyArray<AskRow>, names?: OrgAskNames):
   const riders = new Map<AskRow, AskRow[]>();
   const rest: AskRow[] = [];
   for (const c of live) {
-    if (records.includes(c) || own.includes(c)) continue;
+    if (records.includes(c) || goals.includes(c) || own.includes(c)) continue;
     const role = created.get(askHandle(c.change) ?? "");
     if (role) riders.set(role, [...(riders.get(role) ?? []), c]);
     else rest.push(c);
@@ -703,6 +776,19 @@ export function deriveAsks(changes: ReadonlyArray<AskRow>, names?: OrgAskNames):
     effect: `${n(records.length, "record changes", "records change")} status. No work starts or stops.`,
     seqs: seqs(records),
   });
+  // The goals ask: one goal change reads as its own sentence; several read as
+  // a count, with each sentence inside the fold. The author's own why and
+  // effect stand when a lone change carries them.
+  if (goals.length) {
+    const one = goals.length === 1 ? goals[0] : null;
+    const sets = goals.filter((c) => c.change.kind === "initiative").length;
+    out.push({
+      title: one ? words.title(one.change) : `${n(sets, "goal", "goals")} to set${goals.length > sets ? `, and ${n(goals.length - sets, "change", "changes")} to the goals that exist` : ""}`,
+      why: one?.rationale?.trim() || "The projects' own goals, and what the company said in its calls and threads, point at these goals; the initiatives page does not hold them yet.",
+      effect: one?.expected_effect?.trim() || (one ? words.effect(one.change) : `${n(goals.length, "change", "changes")} on the initiatives page: a goal set, a project added to one, or an owner named. No work starts or stops.`),
+      seqs: seqs(goals),
+    });
+  }
   for (const c of own) {
     const rode = riders.get(c) ?? [];
     out.push({ title: words.title(c.change), why: c.rationale?.trim() || words.why(c.change), effect: c.expected_effect?.trim() || words.effect(c.change, rode.map((r) => r.change)), seqs: seqs([c, ...rode]) });
@@ -783,6 +869,9 @@ export function orgChangeKey(c: OrgChange): string | null {
     case "authority": return `authority:${h(c.handle)}`;
     case "hire": return `hire:${c.instance.trim().toLowerCase()}`;
     case "upgrade": return `upgrade:${c.instance.trim().toLowerCase()}`;
+    case "initiative": return `initiative:${c.title.trim().toLowerCase()}`;
+    case "initiative_projects": return `initiative_projects:${c.initiative.trim().toLowerCase()}`;
+    case "initiative_owner": return `initiative_owner:${c.initiative.trim().toLowerCase()}`;
     default: return null;
   }
 }
@@ -883,6 +972,7 @@ export function parseOrgProposalSpec(raw: unknown): { spec: OrgProposalSpec; err
   if (!nonEmpty(r.title)) errors.push("title is required");
   if (!nonEmpty(r.summary_md)) errors.push("summary_md is required: the summary a founder reads on a phone");
   if (!ORG_PROPOSAL_MODES.includes(r.mode)) errors.push(`mode is one of ${ORG_PROPOSAL_MODES.join(", ")}`);
+  if (Array.isArray(r.changes)) r.changes = r.changes.map((row: any) => row && typeof row === "object" && row.change ? { ...row, change: normalizeAutonomyChange(row.change) } : row);
   if (!Array.isArray(r.changes) || r.changes.length === 0) errors.push("changes is a non-empty list");
   else r.changes.forEach((c: any, i: number) => {
     const at = `changes[${i}]${c?.change?.kind ? ` (${c.change.kind})` : ""}`;
@@ -1016,7 +1106,7 @@ export function describeOrgChange(c: OrgChange): string {
     case "retire": return `retire ${at(c.handle)}`;
     case "scope": return `scope ${at(c.handle)}${c.add?.length ? ` +${list(c.add)}` : ""}${c.remove?.length ? ` -${list(c.remove)}` : ""}`;
     case "budget": return `budget ${at(c.handle)} ${Object.entries(c.caps).filter(([, v]) => v !== undefined).map(([k, v]) => `${k.replace("_per_day", "")} ${v}/day`).join(", ")}`;
-    case "trust": return `trust ${at(c.handle)} to ${c.trust}`;
+    case "trust": return `autonomy ${at(c.handle)} ${autonomyOn(c.trust) ? "on" : "off"}`;
     case "routine": return `routine on ${at(c.handle)}: ${c.title} every ${c.every}`;
     case "project_meta": return `charter ${c.project}${c.owner ? ` owner ${at(c.owner)}` : ""}${c.priority ? ` ${c.priority}` : ""}${c.goal ? `: ${c.goal}` : ""}`;
     case "adopt": return `adopt session ${c.conversation} as ${at(c.handle)}'s standing session`;
@@ -1027,6 +1117,9 @@ export function describeOrgChange(c: OrgChange): string {
     case "plan_status": return `mark plan ${c.plan} ${c.status}`;
     case "task_status": return `mark task ${c.task} ${c.status}`;
     case "project_status": return `mark project ${c.project} ${c.status}`;
+    case "initiative": return `create initiative ${c.title} over ${list(c.projects)}${c.owner ? ` owned by ${c.owner}` : ""}`;
+    case "initiative_projects": return `initiative ${c.initiative} +${list(c.projects)}`;
+    case "initiative_owner": return `initiative ${c.initiative} owner ${c.owner}`;
   }
 }
 
@@ -1062,11 +1155,6 @@ export function changeLine(change: OrgChange): string {
 
 /** "you" for the reader, else the parent as the change names it. */
 const whoReads = (ref: string | undefined) => !ref || ref === "me" ? "you" : ref;
-const TRUST_WORDS: Record<string, string> = {
-  understand: "may read and report, not act on its own",
-  decide: "may decide on its own",
-  direct: "may direct work on its own",
-};
 
 function changeSentence(c: OrgChange): string {
   switch (c.kind) {
@@ -1085,7 +1173,7 @@ function changeSentence(c: OrgChange): string {
       return `${at(c.handle)} ${parts.join(" and ") || "keeps its area of work"}`;
     }
     case "budget": return `${at(c.handle)} may use up to ${capsWords(c.caps)} a day`;
-    case "trust": return `${at(c.handle)} ${TRUST_WORDS[c.trust] ?? `may ${c.trust} on its own`}`;
+    case "trust": return `${at(c.handle)} ${autonomyOn(c.trust) ? "starts work on its own" : "stops starting work on its own"}`;
     case "routine": return `${at(c.handle)} runs "${c.title}" ${everyWords(c.every)}`;
     case "project_meta": return `write the charter of ${c.project}${c.owner ? `, owned by ${at(c.owner)}` : ""}${c.priority ? `, priority ${c.priority}` : ""}${c.goal ? `: ${c.goal}` : ""}`;
     case "adopt": return `make session ${c.conversation} the standing session of ${at(c.handle)}`;
@@ -1097,6 +1185,7 @@ function changeSentence(c: OrgChange): string {
       const parts = recordChangeParts(c)!;
       return parts.title ? `${parts.act}: ${parts.title} (${parts.ref})` : describeOrgChange(c);
     }
+    case "initiative": case "initiative_projects": case "initiative_owner": return goalChangeSentence(c);
     default: {
       const kind = (c as { kind?: unknown }).kind;
       return `a change this version of codecast cannot show yet${typeof kind === "string" && kind ? ` ("${kind}")` : ""}`;

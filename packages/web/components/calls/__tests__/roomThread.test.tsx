@@ -12,6 +12,7 @@ import { act } from "react";
 import { JSDOM } from "jsdom";
 import { characterOf } from "@codecast/shared/contracts/sessionCharacter";
 import { clip } from "../roomThreadModel";
+import { fmtClock as fmtWallClock } from "../../triggerCadence";
 import { replaceGlobals } from "../../../test-helpers/globals";
 import { closeDomWindow } from "../../../test-helpers/domGlobals";
 
@@ -93,14 +94,17 @@ const call = (over: Partial<any> = {}) => ({
 });
 
 test("the empty room is one card with the two ways forward", async () => {
-  useInboxStore.setState({ currentUser: { _id: "u-me" }, liveRooms: [] } as any);
+  useInboxStore.setState({ currentUser: { _id: "u-me" }, liveRooms: [], sessions: {} } as any);
+  // A session's own room: its agent joins the moment transcription starts,
+  // so transcribing leads and adding is for another agent. The session row
+  // has not landed, so the card does not name it.
   const r = await render(
     <RoomThread roomKey={ROOM} call={null} rows={[]} liveTranscriptId={null} surface="stage" seated />,
   );
   const card = r.container.querySelector(".rt-empty")!;
-  expect(card.textContent).toContain("Add an agent to the room. It hears the room and answers here.");
+  expect(card.textContent).toContain("Switch transcription on and this session's agent hears the room and answers here.");
   const buttons = [...card.querySelectorAll("button")].map((b) => b.textContent?.trim());
-  expect(buttons).toEqual(["Add an agent", "Transcribe without one"]);
+  expect(buttons).toEqual(["Transcribe", "Add another agent"]);
   // The card is the one call to add an agent: the header's own button steps
   // aside while it is on screen. The composer is there.
   expect(r.container.querySelector(".rt-head .rt-add")).toBeNull();
@@ -111,6 +115,29 @@ test("the empty room is one card with the two ways forward", async () => {
     expect(b.getAttribute("title") ?? b.getAttribute("aria-label")).toBeTruthy();
   }
   await r.unmount();
+
+  // Once the session row is there the card names its agent.
+  useInboxStore.setState({
+    sessions: { conv_room: { _id: "conv_room", title: "Room agent", agent_type: "claude_code", agent_status: "idle" } },
+  } as any);
+  const named = await render(
+    <RoomThread roomKey={ROOM} call={null} rows={[]} liveTranscriptId={null} surface="stage" seated />,
+  );
+  const name = characterOf({ _id: "conv_room" }).name;
+  expect(named.container.querySelector(".rt-empty p")?.textContent).toBe(`Switch transcription on and ${name} hears the room and answers here.`);
+  expect(named.container.querySelector<HTMLButtonElement>(".rt-empty button")?.getAttribute("title")).toBe(
+    `Start transcribing: ${name} joins the room and answers here`,
+  );
+  await named.unmount();
+
+  // A room with no agent of its own: adding one leads, transcribing alone is the quiet way.
+  const channel = await render(
+    <RoomThread roomKey="channel:ch1" call={null} rows={[]} liveTranscriptId={null} surface="stage" seated />,
+  );
+  const plain = channel.container.querySelector(".rt-empty")!;
+  expect(plain.textContent).toContain("Add an agent to the room. It hears the room and answers here.");
+  expect([...plain.querySelectorAll("button")].map((b) => b.textContent?.trim())).toEqual(["Add an agent", "Transcribe without one"]);
+  await channel.unmount();
 });
 
 const eventTexts = (root: Element) =>
@@ -161,6 +188,38 @@ test("on the stage before transcription starts, an earlier call's events do not 
   await r.unmount();
 });
 
+test("before transcription starts, the moment the viewer joined sets earlier chat apart, and an event's time sits outside its sentence", async () => {
+  useInboxStore.setState({ currentUser: { _id: "u-me" }, liveRooms: [] } as any);
+  const own = { conversation_id: "conv_room", short_id: "jx7room", title: "Room agent", agent_type: "claude_code" };
+  const rows = [
+    // An earlier huddle in this room, six hours ago: two agents answering.
+    { _id: "old", user_id: "u-ann", user_name: "Ann Lee", text: "see the notes before we start", at: START - 21_600_000, mine: false, agent: null },
+    { _id: "old-a", user_id: "", user_name: "Room agent", text: "Reading them now.", at: START - 21_500_000, mine: false, agent: own },
+    // Typed after the viewer joined this huddle, before anyone transcribed.
+    { _id: "now", user_id: "u-me", user_name: "Ashot P", text: "hello again", at: START + 60_000, mine: true, agent: null },
+  ];
+  const r = await render(
+    <RoomThread roomKey={ROOM} call={null} rows={rows as any} liveTranscriptId={null} surface="stage" seated sinceAt={START} />,
+  );
+  const dividers = [...r.container.querySelectorAll(".rt-divider")].map((d) => d.textContent);
+  // The stage's earlier lines are minutes old: the group is open.
+  expect(dividers).toEqual(["Earlier in this room · 2 lines", "This call"]);
+  expect(r.container.querySelector(".rt-divider")?.getAttribute("aria-expanded")).toBe("true");
+  expect(r.container.querySelectorAll(".rt-line").length).toBe(3);
+  await r.unmount();
+
+  // With a call, the event's time is a flex child beside the sentence, not inside it.
+  const ev = [{ _id: "e0", user_id: "u-me", user_name: "Ashot P", text: "", at: START + 100, mine: false, agent: own, event: "agent_joined" }];
+  const r2 = await render(
+    <RoomThread roomKey={ROOM} call={call()} rows={ev as any} liveTranscriptId="t1" surface="stage" seated />,
+  );
+  const row = r2.container.querySelector(".rt-event")!;
+  expect(row.children.length).toBe(3);
+  expect(row.children[2].classList.contains("rt-event-when")).toBe(true);
+  expect(row.children[1].querySelector(".rt-event-when")).toBeNull();
+  await r2.unmount();
+});
+
 test("after the call an agent's event reads in the past, typed lines from other calls are set apart, and other calls' events are gone", async () => {
   useInboxStore.setState({ currentUser: { _id: "u-me" }, liveRooms: [] } as any);
   const own = { conversation_id: "conv_room", short_id: "jx7room", title: "Room agent", agent_type: "claude_code" };
@@ -187,8 +246,18 @@ test("after the call an agent's event reads in the past, typed lines from other 
   );
   // Past tense, and no present tense promise about what the agent does.
   expect(eventTexts(r.container)).toEqual(["Room agent was in the room", "You switched transcription off"]);
-  const dividers = [...r.container.querySelectorAll(".rt-divider")].map((d) => d.textContent);
-  expect(dividers).toEqual(["Earlier in this room", "This call", "Later in this room"]);
+  // An ended call's page folds the earlier lines away: a month old "hello"
+  // has no place between the recap and the first words. Folded, "This
+  // call" has nothing above it to divide from.
+  const dividers = () => [...r.container.querySelectorAll(".rt-divider")].map((d) => d.textContent);
+  expect(dividers()).toEqual(["Earlier in this room · 1 line", "Later in this room"]);
+  const earlier = r.container.querySelector<HTMLButtonElement>(".rt-divider")!;
+  expect(earlier.getAttribute("aria-expanded")).toBe("false");
+  expect([...r.container.querySelectorAll(".rt-line")].map((l) => l.textContent)).toEqual([expect.stringContaining("picking this up again")]);
+  await act(() => {
+    earlier.click();
+  });
+  expect(dividers()).toEqual(["Earlier in this room · 1 line", "This call", "Later in this room"]);
   // Typed lines only, no spoken words: nothing a summary would cover, so no note about one.
   expect(r.container.querySelector(".rt-note:not(.rt-divider)")).toBeNull();
   // A link a person typed is a link, the same as one an agent wrote.
@@ -229,6 +298,7 @@ test("a folded passage shows its preview and opens on click", async () => {
     seg(0, "Ada", "we should ship the thread on Friday", 0),
     seg(1, "Bob", "agreed, after the review", 3000),
     seg(2, "Ada", "second passage starts here", 60_000),
+    seg(3, "Bob", "and goes on", 63_000),
   ];
   const r = await render(
     <RoomThread
@@ -244,7 +314,9 @@ test("a folded passage shows its preview and opens on click", async () => {
   expect(heads.length).toBe(2);
   expect(heads[0].getAttribute("aria-expanded")).toBe("false");
   expect(heads[0].querySelector(".rt-passage-who")?.textContent).toBe("Ada, Bob");
-  expect(heads[0].querySelector(".rt-when")?.textContent).toBe("0:00 · 5s · 2 turns");
+  // A huddle's head keeps the wall clock the typed and event rows use, so
+  // the thread has one clock; the turn rows inside carry the offset.
+  expect(heads[0].querySelector(".rt-when")?.textContent).toBe(`${fmtWallClock(START, START)} · 5s · 2 turns`);
   expect(heads[0].querySelector(".rt-passage-preview")?.textContent).toBe(
     "Ada: we should ship the thread on Friday · Bob: agreed, after the review",
   );
@@ -282,6 +354,29 @@ test("a folded passage shows its preview and opens on click", async () => {
   // After the call nothing can be added or switched.
   expect(r.container.querySelector(".rt-add")).toBeNull();
   expect(r.container.querySelector('[role="switch"]')).toBeNull();
+  await r.unmount();
+});
+
+test("a passage of one turn has no head: its row carries the name and the clock", async () => {
+  useInboxStore.setState({ currentUser: { _id: "u-me" }, liveRooms: [] } as any);
+  // An agent's reply between two short remarks splits the speech into two
+  // passages of one turn each; a head over each would say the speaker and
+  // the time twice and outweigh the words.
+  const segments = [seg(0, "Ada", "meeting a person is a", 0), seg(1, "Bob", "joe.", 30_000)];
+  const rows = [
+    { _id: "a1", user_id: "", user_name: "Room agent", text: "Noted.", at: START + 10_000, mine: false, agent: { conversation_id: "conv_x", short_id: "jx7x", title: "Room agent", agent_type: "claude_code" } },
+  ];
+  const r = await render(
+    <RoomThread roomKey={ROOM} call={call({ status: "ended", segments })} rows={rows as any} liveTranscriptId={null} surface="stage" seated={false} />,
+  );
+  expect(r.container.querySelectorAll(".rt-passage").length).toBe(2);
+  expect(r.container.querySelector(".rt-passage-head")).toBeNull();
+  const bodies = r.container.querySelectorAll(".rt-passage-body");
+  expect(bodies.length).toBe(2);
+  expect(bodies[0].textContent).toContain("Ada");
+  expect(bodies[0].textContent).toContain("meeting a person is a");
+  // The folded density has nothing to fold here: the words stay open.
+  expect(r.container.querySelector('[role="radio"][aria-checked="true"]')?.getAttribute("aria-label")).toBe("Spoken words folded");
   await r.unmount();
 });
 

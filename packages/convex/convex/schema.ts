@@ -54,6 +54,7 @@ const visibilitySegment = v.object({
 const teamFeaturesValidator = v.object({
   chat: v.optional(v.boolean()),
   calls: v.optional(v.boolean()),
+  org: v.optional(v.boolean()),
 });
 
 // The entity kinds that can participate in entity-conversation links.
@@ -401,6 +402,15 @@ export default defineSchema({
     path_prefix: v.string(),
     team_id: v.id("teams"),
     auto_share: v.boolean(),
+    // Sessions started before this instant stay private. Absent means every
+    // session in the directory is shared, past included. A new mapping is
+    // stamped with its creation time unless the member includes the past.
+    share_since: v.optional(v.number()),
+    // The repository the mapped checkout is a clone of (repositoryKeyOfRemote),
+    // stamped from the sessions recorded there. Sessions in any other clone
+    // or linked worktree of it resolve to this mapping when no path rule
+    // covers them (privacy.ts matchDirectoryMapping).
+    repository: v.optional(v.string()),
     created_at: v.number(),
   })
     .index("by_user_id", ["user_id"])
@@ -437,6 +447,24 @@ export default defineSchema({
     .index("by_conversation", ["conversation_id"])
     // Membership check / dedupe — is this user already an owner of this session?
     .index("by_conversation_user", ["conversation_id", "user_id"]),
+
+  // A viewer's hide of a session they neither run nor own: a teammate's row on
+  // the team board. The owner's own triage lives on the conversation
+  // (inbox_stashed_at / inbox_dismissed_at) and hides the row from everyone's
+  // team board; those fields are the OWNER's and the dispatch gate refuses them
+  // from anyone else, so a viewer's hide needs its own row. One row per viewer
+  // and conversation; the team scan skips what the viewer hid. `cast restore`
+  // and the restore gesture delete it.
+  inbox_hides: defineTable({
+    user_id: v.id("users"),
+    conversation_id: v.id("conversations"),
+    kind: v.union(v.literal("stash"), v.literal("dismiss")),
+    at: v.number(),
+  })
+    // Everything one viewer hid: read once per team scan.
+    .index("by_user", ["user_id"])
+    // Upsert / restore for one viewer and one session.
+    .index("by_user_conversation", ["user_id", "conversation_id"]),
 
   conversations: defineTable({
     user_id: v.id("users"),
@@ -1014,7 +1042,13 @@ export default defineSchema({
     .index("by_user_live_snoozed", ["user_id", "is_subagent", "inbox_killed_at", "inbox_snoozed_until"])
     // Inbox scan indexes (scanInboxConversations): exclude subagent / killed
     // rows at the index so the scan never reads docs the inbox filter drops.
-    .index("by_user_subagent_updated", ["user_id", "is_subagent", "updated_at"])
+    // The recent window reads PLAIN rows only: the four filing stamps are
+    // pinned to absent ahead of updated_at, so a stashed agent's fresh
+    // heartbeats cannot take a recent seat from a settled plain row (the
+    // shared rule: inboxProjection isFiled). The subagent window reads the
+    // same index — a parked parent's children carry its stamp (the hide
+    // cascade) and every caller discards them.
+    .index("by_user_plain_updated", ["user_id", "is_subagent", "inbox_pinned_at", "inbox_dismissed_at", "inbox_stashed_at", "inbox_snoozed_until", "updated_at"])
     .index("by_user_live_dismissed", ["user_id", "is_subagent", "inbox_killed_at", "inbox_dismissed_at"])
     .index("by_user_live_stashed", ["user_id", "is_subagent", "inbox_killed_at", "inbox_stashed_at"])
     .index("by_user_profile_pinned", ["user_id", "profile_pinned_at"])
@@ -2868,9 +2902,21 @@ export default defineSchema({
     tool_call_id: v.optional(v.string()),
     seq: v.number(),
     file_path: v.string(),
-    change_type: v.union(v.literal("write"), v.literal("edit"), v.literal("commit")),
+    // "write" replaces the whole file (old_content = the file before, when it
+    // existed), "edit" is one string replacement, "delete" removes the file,
+    // "commit" is a git commit the session made.
+    change_type: v.union(v.literal("write"), v.literal("edit"), v.literal("delete"), v.literal("commit")),
+    // The change's text lives in file_change_bodies (same conversation_id +
+    // change_key), so a whale session's index stays readable under the 16 MiB
+    // per-function read cap: whole-file writes carried inline pushed one
+    // conversation's rows to 26 MiB. These two hold only the sizes; the fold
+    // uses old_bytes === undefined as "the file did not exist before".
+    old_bytes: v.optional(v.number()),
+    new_bytes: v.optional(v.number()),
+    // Legacy inline text, present only on rows fileChangeBodies.migrate has
+    // not reached. Readers accept either place; writers fill the body table.
     old_content: v.optional(v.string()),
-    new_content: v.string(),
+    new_content: v.optional(v.string()),
     commit_message: v.optional(v.string()),
     commit_hash: v.optional(v.string()),
     timestamp: v.number(),
@@ -2887,6 +2933,17 @@ export default defineSchema({
     .index("by_type_timestamp", ["change_type", "timestamp"])
     // cast blame: attribute uncommitted lines to the newest edit of the file.
     .index("by_file_path", ["file_path"]),
+
+  // The before/after text of one file change, split from its file_changes row
+  // (fileChangeBodies.ts). Read by change_key on demand: the web asks for the
+  // few changes a fold needs, never a conversation's whole history.
+  file_change_bodies: defineTable({
+    conversation_id: v.id("conversations"),
+    change_key: v.string(),
+    old_content: v.optional(v.string()),
+    new_content: v.string(),
+  })
+    .index("by_conversation_change_key", ["conversation_id", "change_key"]),
 
   // Every image in a conversation, materialized at message ingest
   // (materializeConversationImages in messages.ts). The header gallery reads
@@ -6056,6 +6113,10 @@ export default defineSchema({
       // Scope membership lifecycle: entity_id is the team id, op is
       // scope_added | scope_removed, emitted in the affected USER's scope.
       v.literal("scope"),
+      // Member lifecycle: entity_id is the departed USER id, op is
+      // scope_removed, emitted in the TEAM's scope, so every remaining
+      // member's client drops that user's rows from its team caches.
+      v.literal("member"),
     ),
     entity_id: v.string(),
     op: v.union(

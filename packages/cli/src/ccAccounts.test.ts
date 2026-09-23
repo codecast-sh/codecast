@@ -21,6 +21,11 @@ import {
   credentialHealth,
   saveProfile,
   useProfile,
+  switchProfile,
+  switchModeFor,
+  launchProfileName,
+  readLaunchRecord,
+  clearLaunchProfile,
   deleteProfile,
   listProfiles,
   parseUsageResponse,
@@ -2218,5 +2223,113 @@ describe("refreshUsageSnapshots backoff (isolated CODECAST_DIR, injected fetch)"
     const forced = await refreshUsageSnapshots({ now: NOW + 1000, minIntervalMs: 0, fetchImpl: s.fetchImpl });
     expect(forced.probed).toEqual(["active"]);
     expect(s.served()).toBe(2);
+  });
+});
+
+// A token switch: the target's saved login is dead, its minted setup-token is
+// live, so the switch records a launch profile and leaves the keychain alone.
+describe("switchProfile: keychain vs token (sandboxed $HOME)", () => {
+  let home: string;
+  const savedEnv: Record<string, string | undefined> = {};
+  const credPath = () => path.join(home, ".claude", ".credentials.json");
+  const TOKEN = "sk-ant-oat01-" + "x".repeat(40);
+  const TOK_ACCOUNT = { accountUuid: "22bbd477-94d6-4412-ac36-518cc5f10353", emailAddress: "tok@example.com" };
+
+  // A saved profile of ANOTHER account whose login is dead: an empty credential
+  // pair on disk (nothing to refresh) plus the daemon's login-expired mark.
+  const seedDeadProfile = (name: string) => {
+    fs.mkdirSync(path.join(home, ".codecast", "cc-accounts"), { recursive: true });
+    fs.writeFileSync(
+      path.join(home, ".codecast", "cc-accounts", `${name}.json`),
+      JSON.stringify({ credentials: JSON.parse(LOGGED_OUT_STUB), oauthAccount: TOK_ACCOUNT, saved_at: 1 }),
+    );
+    const indexFile = path.join(home, ".codecast", "cc-accounts.json");
+    const index = fs.existsSync(indexFile) ? JSON.parse(fs.readFileSync(indexFile, "utf-8")) : { profiles: {} };
+    index.profiles[name] = { email: TOK_ACCOUNT.emailAddress, uuid: TOK_ACCOUNT.accountUuid, saved_at: 1, login_expired_at: 1000 };
+    fs.writeFileSync(indexFile, JSON.stringify(index));
+    invalidateAccountsCache();
+  };
+
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), "cc-switch-test-"));
+    for (const k of ["HOME", "PATH", "CC_ACCOUNTS_FORCE_FILE"]) savedEnv[k] = process.env[k];
+    process.env.HOME = home;
+    process.env.PATH = path.join(home, "empty-path");
+    process.env.CC_ACCOUNTS_FORCE_FILE = "1";
+    fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+    fs.mkdirSync(path.join(home, ".codecast"), { recursive: true });
+    fs.writeFileSync(credPath(), CRED);
+    fs.writeFileSync(path.join(home, ".claude.json"), JSON.stringify({ oauthAccount: OAUTH_ACCOUNT }));
+    invalidateAccountsCache();
+    saveProfile("footage");
+    seedDeadProfile("tok");
+  });
+
+  afterEach(() => {
+    for (const [k, v] of Object.entries(savedEnv)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    fs.rmSync(home, { recursive: true, force: true });
+    invalidateAccountsCache();
+  });
+
+  it("a dead login with no token can carry nothing; a live token makes it a token switch", () => {
+    expect(switchModeFor("tok")).toBeNull();
+    expect(() => switchProfile("tok")).toThrow(/unusable|logged-out/);
+    expect(readLaunchRecord()).toBeNull();
+    writeAccountToken("tok", TOKEN);
+    expect(switchModeFor("tok")).toBe("token");
+    expect(switchModeFor("footage")).toBe("keychain");
+  });
+
+  it("a token switch records the launch profile and leaves the keychain login untouched", () => {
+    writeAccountToken("tok", TOKEN);
+    const result = switchProfile("tok", 5_000_000);
+    expect(result).toMatchObject({ mode: "token", to: "tok", toEmail: "tok@example.com", from: null });
+    expect(JSON.parse(fs.readFileSync(credPath(), "utf-8")).claudeAiOauth.accessToken).toBe("at-123");
+    expect(readLaunchRecord()).toEqual({ profile: "tok", keychain_key: OAUTH_ACCOUNT.accountUuid, since: 5_000_000 });
+    expect(launchProfileName()).toBe("tok");
+    // The inventory the daemon publishes names the launch profile and dates
+    // the fleet change from the switch, not from the keychain stamp.
+    const payload = getAccountsHeartbeatPayload()!;
+    expect(payload.active_email).toBe(OAUTH_ACCOUNT.emailAddress);
+    expect(payload.launch_profile).toBe("tok");
+    expect(payload.active_since).toBe(5_000_000);
+    // A launch with no account asked for sources the token file.
+    expect(accountSourcePrefix(launchProfileName())).toContain("cc-token-tok.env");
+    expect(accountSourcePrefix(launchProfileName())).toContain("CODECAST_CC_ACCOUNT=tok");
+  });
+
+  it("a usable login wins even when a token exists: the switch goes through the keychain and clears the record", () => {
+    writeAccountToken("tok", TOKEN);
+    switchProfile("tok");
+    expect(launchProfileName()).toBe("tok");
+    // footage is the current login: a keychain switch (kept live), record gone.
+    expect(switchProfile("footage").mode).toBe("keychain");
+    expect(readLaunchRecord()).toBeNull();
+    expect(getAccountsHeartbeatPayload()!.launch_profile).toBeUndefined();
+  });
+
+  it("the record lapses when the token goes, the profile goes, or the keychain login changes", () => {
+    writeAccountToken("tok", TOKEN);
+    switchProfile("tok");
+    removeAccountToken("tok");
+    expect(readLaunchRecord()).toBeNull();
+
+    writeAccountToken("tok", TOKEN);
+    switchProfile("tok");
+    deleteProfile("tok");
+    expect(readLaunchRecord()).toBeNull();
+
+    seedDeadProfile("tok");
+    writeAccountToken("tok", TOKEN);
+    switchProfile("tok");
+    // A fresh sign-in on the machine: the keychain identity is a new account.
+    fs.writeFileSync(path.join(home, ".claude.json"), JSON.stringify({ oauthAccount: { ...OAUTH_ACCOUNT, accountUuid: "33bbd477-94d6-4412-ac36-518cc5f10353", emailAddress: "new@example.com" } }));
+    invalidateAccountsCache();
+    expect(launchProfileName()).toBeUndefined();
+    expect(readLaunchRecord()).toBeNull();
+    expect(clearLaunchProfile()).toBe(false);
   });
 });

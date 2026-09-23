@@ -218,7 +218,9 @@ describe("orgWakes.buildFrame", () => {
     for (const h of ["## You", "## Why you are awake", "## Your scope now", "## Your sessions", "## Charter"]) expect(f.text).toContain(h);
     expect(f.text).toContain("- a person wrote: go");
     expect(f.text).toContain("- (passive) decision sd-1 answered");
-    expect(f.text).toContain("trust direct · reports to Me");
+    expect(f.text).toContain("Infra lead (@infra-lead, or-1) · reports to Me");
+    // The frame names no switch and carries no counters (org-staffing.md S23).
+    expect(f.text).not.toMatch(/trust|Today:|tokens/);
     expect(f.text).toContain("4/40 wakes · 1/6 hands · 1200/400000 tokens");
     expect(f.text).toContain("plan pl-9 Move to Postgres: 1/3 done");
     expect(f.text).toContain("task ct-5 Deploy → in_review");
@@ -248,21 +250,26 @@ describe("orgWakes.buildFrame", () => {
   });
 });
 
-describe("trust and caps on hands and answers (T4)", () => {
-  test("understand refuses a hand start; direct allows it; over the cap refuses", async () => {
+describe("the switch and the limits on hands and answers (T4, S23.1)", () => {
+  test("a role whose switch is off cannot start a hand; on allows it; over the limit refuses", async () => {
     const { ctx, tables } = world();
     const standing = tables.conversations[0];
-    await expect(gateHandStart(ctx, standing)).rejects.toThrow(/understand stage and may not start hands/);
+    await expect(gateHandStart(ctx, standing)).rejects.toThrow(/does not start work on its own/);
+    // The refusal names no verb and asks nothing of a person (S23.1).
+    await expect(gateHandStart(ctx, standing)).rejects.not.toThrow(/cast role|trust|person/);
+    // decide reads as on (S23.1).
+    tables.org_roles[0].trust = "decide";
+    expect((await gateHandStart(ctx, standing))?._id).toBe("role1");
     tables.org_roles[0].trust = "direct";
     expect((await gateHandStart(ctx, standing))?._id).toBe("role1");
     tables.org_roles[0].counters = { day: new Date(Date.now()).toISOString().slice(0, 10), hands: DEFAULT_CAPS.hands_per_day, wakes: 0, tokens: 0 };
-    await expect(gateHandStart(ctx, standing)).rejects.toThrow(/cap of 6 hands today/);
+    await expect(gateHandStart(ctx, standing)).rejects.toThrow(/today's limit of 6 hands.*waiting for tomorrow/);
     tables.org_roles[0].status = "paused";
     await expect(gateHandStart(ctx, standing)).rejects.toThrow(/paused/);
     expect(await gateHandStart(ctx, tables.conversations[2])).toBeNull();
   });
 
-  test("a role at understand may not answer a decision it holds", async () => {
+  test("a role whose switch is off may not answer a decision it holds", async () => {
     const { ctx, tables } = world({}, {
       session_decisions: [{
         _id: "sd1", short_id: "sd-1", conversation_id: "stranger", session_id: "s-other", user_id: ME, question: "Ship?", options: [{ label: "Yes" }, { label: "No" }],
@@ -270,7 +277,8 @@ describe("trust and caps on hands and answers (T4)", () => {
       }],
     });
     const out = await answerCore(ctx, { userId: ME as any }, { decision_id: "sd-1", session_id: "s-standing", answer_index: 0 });
-    expect(out.error).toMatch(/understand stage and may not answer/);
+    expect(out.error).toMatch(/does not start work on its own, so it recommends/);
+    expect(out.error).not.toMatch(/cast role|trust/);
     expect(tables.session_decisions[0].status).toBe("pending");
   });
 });
@@ -497,6 +505,10 @@ describe("human only writes key on the browser identity (review: identity)", () 
     await expect(performUpdateRole(ctx, ME as any, { role_id: "role1", charter: "mine", api_token: "tok" })).rejects.toThrow(/human only/);
     const web = humanCtx(makeFakeDb(tables));
     expect((await performSetTrust(web, ME as any, { role_id: "role1", trust: "direct" })).trust).toBe("direct");
+    // The switch form (S23.1): on writes direct, off writes understand, and decide is never written.
+    expect((await performSetTrust(web, ME as any, { role_id: "role1", on: false })).trust).toBe("understand");
+    expect((await performSetTrust(web, ME as any, { role_id: "role1", trust: "decide" })).trust).toBe("direct");
+    await expect(performSetTrust(web, ME as any, { role_id: "role1", trust: "god" })).rejects.toThrow(/on or off/);
   });
 });
 
@@ -556,7 +568,7 @@ describe("a hand's briefing and the anchor's roles section (review: coherence, d
     expect(text).toContain("## Roles that report into this workspace");
     expect(text).toContain("cast brief @handle");
     expect(text).toContain("Never wake");
-    const roleText = bootstrapMessage({ name: "Infra lead", scopeType: "team", scopeLabel: "x", teamName: "Acme", role: { handle: "infra-lead", scopeNames: [], parentName: "Me", trust: "understand" } });
+    const roleText = bootstrapMessage({ name: "Infra lead", scopeType: "team", scopeLabel: "x", teamName: "Acme", role: { handle: "infra-lead", scopeNames: [], parentName: "Me", startsOnItsOwn: false } });
     expect(roleText).not.toContain("## Roles that report into this workspace");
   });
 
@@ -568,7 +580,7 @@ describe("a hand's briefing and the anchor's roles section (review: coherence, d
   // reply (dry runs prove that: /tmp/scopeconv/dryrun).
   test("a role's bootstrap says where a message went, only what it did, and that remembering is a brief write", () => {
     // The briefing wraps its lines; a phrase is read across the wrap.
-    const text = bootstrapMessage({ name: "Infra lead", scopeType: "team", scopeLabel: "x", teamName: "Acme", role: { handle: "infra-lead", scopeNames: ["project Infrastructure"], parentName: "Me", trust: "direct" } }).replace(/\s+/g, " ");
+    const text = bootstrapMessage({ name: "Infra lead", scopeType: "team", scopeLabel: "x", teamName: "Acme", role: { handle: "infra-lead", scopeNames: ["project Infrastructure"], parentName: "Me", startsOnItsOwn: true } }).replace(/\s+/g, " ");
     expect(text).toContain("## When a person writes to you");
     expect(text).toContain("answers them here or moves the work into a hand");
     expect(text).toContain("says which, in your own words, in the same turn");
@@ -597,7 +609,7 @@ describe("a hand's briefing and the anchor's roles section (review: coherence, d
   });
 
   test("the role bootstrap carries the triage principle: why, the two commands, and no scripted line (R1)", () => {
-    const text = bootstrapMessage({ name: "Growth", scopeType: "team", scopeLabel: "Acme", teamName: "Acme", role: { handle: "growth", parentName: "Me", scopeNames: ["project Growth"], trust: "decide" } as any });
+    const text = bootstrapMessage({ name: "Growth", scopeType: "team", scopeLabel: "Acme", teamName: "Acme", role: { handle: "growth", parentName: "Me", scopeNames: ["project Growth"], startsOnItsOwn: true } as any });
     expect(text).toContain("Your sessions are yours to triage");
     expect(text).toContain("a wait nobody can see");
     expect(text).toContain('cast escalate <session> "<line>"');

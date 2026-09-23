@@ -332,7 +332,8 @@ export const consumeInstallIntent = internalMutation({
     ctx,
     args,
   ): Promise<
-    { ok: true; user_id: Id<"users">; scope: AppConnectionScope; team_id?: Id<"teams"> } | { ok: false; error: string }
+    | { ok: true; user_id: Id<"users">; scope: AppConnectionScope; team_id?: Id<"teams">; created_at: number }
+    | { ok: false; error: string }
   > => {
     const intent = await ctx.db
       .query("github_app_install_intents")
@@ -351,9 +352,47 @@ export const consumeInstallIntent = internalMutation({
         return { ok: false, error: "not_a_team_member" };
       }
     }
-    return { ok: true, user_id: intent.user_id, scope: intent.scope, team_id: intent.team_id };
+    return { ok: true, user_id: intent.user_id, scope: intent.scope, team_id: intent.team_id, created_at: intent.created_at };
   },
 });
+
+/** The workspace an installation is already linked to, or null. */
+export const linkedInstallationScope = internalQuery({
+  args: { installation_id: v.number() },
+  handler: async (ctx, args): Promise<string | null> => {
+    const row = await ctx.db
+      .query("github_app_installations")
+      .withIndex("by_installation_id", (q) => q.eq("installation_id", args.installation_id))
+      .first();
+    return row ? installationScopeKey(row) : null;
+  },
+});
+
+/** How far GitHub's clock may run behind ours when we compare creation times. */
+const INSTALL_CLOCK_SKEW_MS = 60_000;
+
+/**
+ * With no user token to ask GitHub with, the intent is the only proof (sd-234).
+ * The installation_id is still the caller's to write, so the intent may claim
+ * only an installation GitHub created after the intent was minted, or update
+ * one already linked to the intent's own workspace.
+ */
+async function intentAloneMayClaim(
+  ctx: any,
+  intent: { user_id: Id<"users">; scope: AppConnectionScope; team_id?: Id<"teams">; created_at: number },
+  installation: { installation_id: number; created_at?: number },
+): Promise<boolean> {
+  if (installation.created_at !== undefined && installation.created_at >= intent.created_at - INSTALL_CLOCK_SKEW_MS) {
+    return true;
+  }
+  const linked: string | null = await ctx.runQuery(internal.githubApp.linkedInstallationScope, {
+    installation_id: installation.installation_id,
+  });
+  const own = installationScopeKey(
+    intent.scope === "team" ? { team_id: intent.team_id } : { scope_user_id: intent.user_id },
+  );
+  return linked === own;
+}
 
 /* ==========================================================================
  * The install callback
@@ -370,8 +409,8 @@ const GITHUB_OAUTH_TOKEN_URL = "https://github.com/login/oauth/access_token";
  * speaks for that GitHub user, and `GET /user/installations` lists only the
  * installations that user may administer.
  *
- * With no client pair configured there is no way to ask the question, so the
- * install refuses. A binding nobody proved is the finding this closes.
+ * With no client pair configured there is no way to ask the question; the
+ * callback then falls back to `intentAloneMayClaim`.
  */
 export async function verifyInstallerControlsInstallation(
   installationId: number,
@@ -435,7 +474,8 @@ export async function installCallbackHandler(ctx: any, request: Request): Promis
     // Ownership before the intent is spent: a GitHub hiccup should cost the
     // caller a retry of the same link, not a new one.
     const proof = await verifyInstallerControlsInstallation(parseInt(installationId), url.searchParams.get("code"));
-    if (!proof.ok) {
+    const intentOnly = !proof.ok && proof.error === "install_verification_unconfigured";
+    if (!proof.ok && !intentOnly) {
       console.warn("[github-app install] refused", { reason: proof.error, installation_id: installationId });
       return installRedirect(`?error=${proof.error}`);
     }
@@ -451,6 +491,10 @@ export async function installCallbackHandler(ctx: any, request: Request): Promis
     const installationDetails = await ctx.runAction(internal.githubApp.fetchInstallationDetails, {
       installation_id: parseInt(installationId),
     });
+    if (intentOnly && !(await intentAloneMayClaim(ctx, intent, installationDetails))) {
+      console.warn("[github-app install] refused", { reason: "install_not_fresh", installation_id: installationId });
+      return installRedirect("?error=install_not_fresh");
+    }
 
     await ctx.runMutation(internal.githubApp.storeInstallation, {
       team_id: intent.scope === "team" ? intent.team_id : undefined,
@@ -473,7 +517,8 @@ export async function installCallbackHandler(ctx: any, request: Request): Promis
       workspace: String(intent.team_id ?? intent.user_id).slice(0, 6),
       installation_id: installationDetails.installation_id,
       account_login: installationDetails.account_login,
-      verified_login: proof.login,
+      verified_login: proof.ok ? proof.login : undefined,
+      proof: intentOnly ? "intent_only" : "user_token",
     });
 
     // The pull requests that already exist on the account arrive now, not
@@ -894,6 +939,7 @@ type InstallationDetails = {
   repository_selection: "all" | "selected";
   repositories: InstallationRepository[] | undefined;
   suspended_at: number | undefined;
+  created_at?: number;
 };
 
 /** How many repositories one install may list or backfill in one pass. */
@@ -980,6 +1026,7 @@ export const fetchInstallationDetails = internalAction({
       repository_selection: data.repository_selection as "all" | "selected",
       repositories,
       suspended_at: data.suspended_at ? new Date(data.suspended_at).getTime() : undefined,
+      created_at: data.created_at ? new Date(data.created_at).getTime() : undefined,
     };
   },
 });

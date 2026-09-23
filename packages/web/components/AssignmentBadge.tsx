@@ -13,6 +13,7 @@
  * overflow-hidden actions row.
  */
 
+import { useWorkspaceFeature } from "../lib/teamFeatures";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -117,6 +118,7 @@ export function AssignmentBadge({
   const { byId, loaded } = useDevices();
   const owners = useOwnersFromStore(conversationId);
   const [makingRole, setMakingRole] = useState(false);
+  const orgOn = useWorkspaceFeature("org");
   // A session may run on a machine outside the viewer's own device list (a
   // teammate's, or the shared agent box whose daemon authenticates as the bot
   // account) — resolve it via the conversation so the lobe shows its hostname
@@ -190,6 +192,7 @@ export function AssignmentBadge({
       <DropdownMenuTrigger asChild>
         <button
           type="button"
+          data-runner-device
           title={`${deviceTitle} · ${ownerHover}`}
           className="inline-flex items-stretch rounded-full border border-sol-border/40 overflow-hidden text-[10px] font-medium outline-none transition-colors hover:border-sol-border/80"
         >
@@ -258,7 +261,7 @@ export function AssignmentBadge({
         {!isRunner && <div className="px-2 pb-1.5 text-[10px] text-sol-text-dim">Moving to your machine uses your account and billing.</div>}
         <RunOnDeviceItems conversationId={conversationId} ownerDeviceId={ownerDeviceId} allowRemoteMove={isRunner} />
         <DropdownMenuSeparator />
-        <OwnerMenuItems owners={owners} conversationId={conversationId} onMakeRole={() => setMakingRole(true)} />
+        <OwnerMenuItems owners={owners} conversationId={conversationId} onMakeRole={orgOn ? () => setMakingRole(true) : undefined} />
       </DropdownMenuContent>
     </DropdownMenu>
     </>

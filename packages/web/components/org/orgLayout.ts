@@ -585,7 +585,7 @@ export function ghostsFor(tree: OrgTree, changes: readonly OrgProposalChange[], 
       // S13), so the chip and the drawn avatar read the same as a live seat.
       ...(ch.tenure ? { tenure: ch.tenure } : {}),
       ...(ch.avatar ? { avatar: ch.avatar } : {}),
-      trust: "understand",
+      trust: "direct",
       created_by: host,
       created_at: now,
       updated_at: now,

@@ -1,12 +1,15 @@
 // The words for each daemon health state, shared by the header chip and the
 // per-message delivery note so both surfaces tell the same story. `label` is
 // the short chip text; `detail` is a full sentence for a tooltip or a bubble
-// note; `command` is what the user can run (click to copy).
+// note; `short` is the header pill's text, which drops the word "daemon" and
+// the machine name because the pill's tooltip carries both and the header has
+// no room for either; `command` is what the user can run (click to copy).
 import { formatDuration, OVERLOADED_FREEZE_MS, OVERLOADED_HOUR_MS, type DaemonHealth } from "../hooks/useDaemonHealth";
 
 export interface DaemonHealthCopy {
   colorVar: string;
   label: string;
+  short: string;
   detail: string;
   command: string;
 }
@@ -21,6 +24,7 @@ export function describeDaemonHealth(health: DaemonHealth): DaemonHealthCopy | n
         return {
           colorVar: "--sol-yellow",
           label: `daemon stale ${stale}`,
+          short: `stale ${stale}`,
           detail: `The CLI daemon hasn't synced in ${stale}. Messages can't reach agents until it does.`,
           command: "cast status",
         };
@@ -28,6 +32,7 @@ export function describeDaemonHealth(health: DaemonHealth): DaemonHealthCopy | n
       return {
         colorVar: health.tier === "severe" ? "--sol-red" : "--sol-orange",
         label: `daemon offline ${stale}`,
+        short: `offline ${stale}`,
         detail: `The CLI daemon has been offline for ${stale}. Messages can't reach agents until it is back.`,
         command: "cast restart",
       };
@@ -37,6 +42,7 @@ export function describeDaemonHealth(health: DaemonHealth): DaemonHealthCopy | n
       return {
         colorVar: "--sol-yellow",
         label: `daemon quiet ${quiet}`,
+        short: `quiet ${quiet}`,
         detail: `The CLI daemon hasn't checked in for ${quiet} — it may be frozen, restarting, or the machine may be asleep. Deliveries and echoes are delayed until it checks in.`,
         command: "cast status",
       };
@@ -45,6 +51,7 @@ export function describeDaemonHealth(health: DaemonHealth): DaemonHealthCopy | n
       return {
         colorVar: "--sol-cyan",
         label: `daemon restarted ${secs(health.sinceMs)} ago`,
+        short: "restarting",
         detail: `The CLI daemon restarted ${secs(health.sinceMs)} ago and is recovering sessions and watchers. Deliveries and echoes catch up once it settles.`,
         command: "cast status",
       };
@@ -72,6 +79,7 @@ export function describeDaemonHealth(health: DaemonHealth): DaemonHealthCopy | n
       return {
         colorVar: "--sol-orange",
         label: `daemon under load`,
+        short: "under load",
         detail,
         command: "cast status",
       };
@@ -94,6 +102,7 @@ export function describeDaemonHealth(health: DaemonHealth): DaemonHealthCopy | n
         return {
           colorVar: "--sol-blue",
           label: `syncing · ${count} ${unit}${plural}`,
+          short: `syncing · ${count}`,
           detail: `The CLI daemon is working through a backlog of ${count} ${unit}${plural}${convoNote}. The oldest has waited ${formatDuration(health.behindMs)}; the queue is still completing work, so this clears on its own.`,
           command: "cast status",
         };
@@ -101,6 +110,7 @@ export function describeDaemonHealth(health: DaemonHealth): DaemonHealthCopy | n
       return {
         colorVar: "--sol-yellow",
         label: `sync stalled · ${count} ${unit}${plural}`,
+        short: `stalled · ${count}`,
         detail: `The CLI daemon is online but ${count} ${unit}${plural}${convoNote} ${count === 1 ? "has" : "have"} been waiting to sync for ${formatDuration(health.stalledMs)}.`,
         command: "cast status",
       };

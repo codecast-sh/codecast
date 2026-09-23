@@ -25,7 +25,7 @@
 // machinery (useFloatingCircles) sizes the window and lifts click through;
 // `FloatingFaceRow` is the row with that machinery attached.
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from "react";
-import { MicOff } from "lucide-react";
+import { GripHorizontal, Maximize2, MicOff, X } from "lucide-react";
 import type { FaceEntry, FaceRow as FaceRowModel, FaceState, LinkKind } from "../../lib/faces/faceRow";
 import { useCircleFace } from "../../hooks/useCircleFace";
 import { CircleFace } from "../calls/FaceCircle";
@@ -34,6 +34,7 @@ import { getCallTiles, subscribeCallTiles, type ParticipantTile } from "../../li
 import { useFaceKey, useWalkieFaces, type FaceKey } from "../presence/useFaceKey";
 import { FaceCard } from "./FaceCard";
 import { useWalkieLevelVar } from "../../hooks/useWalkie";
+import { useVideoFrame } from "../../lib/calls/videoFrames";
 import { useMicLevelVar } from "../../hooks/useMicLevelVar";
 import { useEventListener } from "../../hooks/useEventListener";
 import { PresenceBadge } from "../presence/PresenceBadge";
@@ -75,6 +76,12 @@ export function faceRowWidth(density: FaceDensity, faces: number, links: number)
 /** The window a floating row needs: its circles and their margin, plus the
  *  name row while the pointer is on a face (the same band the call circles
  *  reserve, NAME_HEIGHT). */
+/** The band above the float's faces where its chrome sits while the pointer
+ *  is in. Reserved at all times (faceRow.css, the float's top padding): a
+ *  band that appeared on hover would push the faces down under the hand, and
+ *  a chrome laid over the faces covered the strip once the row grew a strip. */
+export const FLOAT_CHROME_BAND = 36;
+
 export function faceRowSize(
   density: FaceDensity,
   faces: number,
@@ -84,7 +91,7 @@ export function faceRowSize(
   const m = FACE_ROW_METRICS[density];
   return {
     width: faceRowWidth(density, faces, links),
-    height: m.pad * 2 + m.face + (hovered ? ROW_GAP + NAME_HEIGHT : 0),
+    height: m.pad * 2 + m.face + (density === "float" ? FLOAT_CHROME_BAND : 0) + (hovered ? ROW_GAP + NAME_HEIGHT : 0),
   };
 }
 
@@ -183,6 +190,7 @@ function FaceSeat({
   cardOpen,
   onHover,
   onToggle,
+  onPress,
   registerKey,
   onPointerDown,
   onPointerUp,
@@ -196,6 +204,8 @@ function FaceSeat({
   cardOpen: boolean;
   onHover: (id: string | null) => void;
   onToggle: (id: string) => void;
+  /** A press on the face: whatever the dwell was about to open, it waits. */
+  onPress: () => void;
   /** The seat's key, for the card's Talk button: one key per person. */
   registerKey: (id: string, key: FaceKey | null) => void;
   onPointerDown?: (e: React.PointerEvent) => void;
@@ -203,6 +213,9 @@ function FaceSeat({
 }) {
   const diameter = FACE_ROW_METRICS[density].face;
   const { hostRef, videoRef, track } = useCircleFace({ tile, image: entry.image, diameter, active: true });
+  // No track in this window (the media is in the voice host): the host's
+  // relayed frame stands in, so the header still shows the person, not a photo.
+  const frame = useVideoFrame(entry.video && !track ? entry.id : null);
   // The face is the key: its card carries Talk, Ring and Message, the room
   // warmed on a dwell. My own face keys nothing; there is nobody to talk to.
   const key = useFaceKey({
@@ -257,17 +270,24 @@ function FaceSeat({
           e.stopPropagation();
           if (canOpen) onToggle(entry.id);
         }}
-        onPointerDown={onPointerDown}
+        onPointerDown={(e) => {
+          onPress();
+          onPointerDown?.(e);
+        }}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
       >
-        <CircleFace videoRef={videoRef} track={track} image={entry.image} name={entry.name} diameter={diameter} />
-        {entry.muted && (
-          <span className="face-mute">
-            <MicOff className="h-3 w-3" />
-          </span>
-        )}
+        <CircleFace videoRef={videoRef} track={track} frame={frame} image={entry.image} name={entry.name} diameter={diameter} />
       </button>
+      {/* The marks on the person sit on the circle's EDGE, outside its clip:
+          the presence badge, the mute badge, the unread count, the ask. The
+          mute badge inside the circle (the call circles' own spot) was cut
+          to a D by the circle's clip, and its icon with it. */}
+      {entry.muted && (
+        <span className="face-mute" aria-label="muted">
+          <MicOff className="h-3 w-3" />
+        </span>
+      )}
       {presence && <PresenceBadge state={presence} size={density === "bar" ? "sm" : "md"} className="face-pres" />}
       {entry.unread > 0 && (
         <span className="face-unread" aria-label={`${entry.unread} unread`}>
@@ -275,12 +295,9 @@ function FaceSeat({
         </span>
       )}
       {entry.ask > 0 && <span className="face-ask" aria-label={`${entry.ask} waiting on you`} />}
-      {/* "hey he joined", under the face it happened to, for the seconds the model says so. */}
-      {entry.state === "joining" && (
-        <span className="people-face-joined" role="status">
-          joined
-        </span>
-      )}
+      {/* No "joined" label under the chin: a face is `joining` only in my own
+          room, where the card under the row is the joined notice and says so
+          in words; a label there sat under the card that covered it. */}
       {/* The name under the chin, the floating circles' own hover. In the
           bar the card carries the name, so nothing hangs under a face there
           that a card could stack on. */}
@@ -305,9 +322,11 @@ export function FaceRow({
   callsEnabled = true,
   rootRef,
   belowRef,
+  stripRef,
   onDragStart,
   onDragEnd,
   onOpenProfile,
+  chrome,
   className = "",
   children,
 }: {
@@ -317,16 +336,21 @@ export function FaceRow({
   callsEnabled?: boolean;
   /** The float machinery's root, when this row is the floating window's. */
   rootRef?: RefObject<HTMLDivElement | null>;
-  /** The band under the faces (the engagement card, the member card), for
-   *  whoever sizes a window from it. */
+  /** The band under the faces (the member card), for whoever sizes a
+   *  window from it. */
   belowRef?: (el: HTMLDivElement | null) => void;
+  /** The strip beside the faces (the engagement card), likewise. */
+  stripRef?: (el: HTMLDivElement | null) => void;
   /** Held on a circle, the floating window follows the cursor. */
   onDragStart?: (e: React.PointerEvent) => void;
   onDragEnd?: (e: React.PointerEvent) => void;
   /** The card's profile door. Absent: the card names the person, and that is all. */
   onOpenProfile?: (member: any) => void;
+  /** The float's controls, drawn over the faces while the pointer is in. */
+  chrome?: ReactNode;
   className?: string;
-  /** The engagement card, hung under the row (position: relative here). */
+  /** The engagement card, in the row beside the faces: one line, faces
+   *  first, then what is happening and what you can do about it. */
   children?: ReactNode;
 }) {
   const ownRef = useRef<HTMLDivElement | null>(null);
@@ -452,6 +476,7 @@ export function FaceRow({
             cardOpen={openId === entry.id}
             onHover={hover}
             onToggle={toggle}
+            onPress={clearTimers}
             registerKey={registerKey}
             onPointerDown={onDragStart}
             onPointerUp={onDragEnd}
@@ -461,9 +486,17 @@ export function FaceRow({
           ? [<span key={`link:${entry.id}`} className="face-link" data-link-kind={kind} aria-hidden="true" />, seat]
           : [seat];
       })}
-      {/* The band under the faces: the engagement card, and the one member
-          card while a face is pointed at or pinned. */}
-      {(children != null && children !== false) || openId ? (
+      {/* The strip: in the row, after the faces it is about. Never under
+          them, where a face's own card opens. */}
+      {children != null && children !== false && (
+        <div ref={stripRef} className="face-row-strip" data-chrome-hit>
+          {children}
+        </div>
+      )}
+      {chrome}
+      {/* The band under the faces: the one member card while a face is
+          pointed at or pinned. */}
+      {openId ? (
         <div
           ref={belowRef}
           className="face-row-below"
@@ -474,7 +507,6 @@ export function FaceRow({
           }}
           onMouseLeave={() => hover(null)}
         >
-          {children}
           {openId && (
             <FaceCard
               memberId={openId}
@@ -509,12 +541,20 @@ export function FloatingFaceRow({
   viewerId,
   callsEnabled = true,
   bridge,
+  onOpenProfile,
+  chrome,
   children,
 }: {
   row: FaceRowModel;
   viewerId: string;
   callsEnabled?: boolean;
   bridge: FloatingBridge;
+  /** The card's profile door; the float has no router, so its host hands
+   *  the path to the main window. */
+  onOpenProfile?: (member: any) => void;
+  /** The float's own controls: a grip to move it, the stage when a call is
+   *  up, and a way to put it away. Absent: no chrome (a rig, a test). */
+  chrome?: FloatChrome;
   /** The engagement card, in the band under the faces. */
   children?: ReactNode;
 }) {
@@ -527,28 +567,13 @@ export function FloatingFaceRow({
   );
   const faces = shown.entries.length;
   const links = shown.links.length;
-  const [card, setCard] = useState({ width: 0, height: 0 });
-  const observer = useRef<ResizeObserver | null>(null);
-  const belowRef = useCallback((el: HTMLDivElement | null) => {
-    observer.current?.disconnect();
-    observer.current = null;
-    if (!el) {
-      setCard({ width: 0, height: 0 });
-      return;
-    }
-    const measure = () => {
-      const r = el.getBoundingClientRect();
-      setCard({ width: Math.ceil(r.width), height: Math.ceil(r.height) });
-    };
-    measure();
-    if (typeof ResizeObserver !== "undefined") {
-      observer.current = new ResizeObserver(measure);
-      observer.current.observe(el);
-    }
-  }, []);
+  // Two measured boxes: the strip beside the faces and the member card's
+  // band under them. Each is its words, so each is read, not computed.
+  const [card, belowRef] = useMeasured();
+  const [strip, stripRef] = useMeasured();
   const { rootRef, hovered, startDrag, endDrag } = useFloatingCircles({
-    sizeFor: (hover) => floatingRowSize(faces, links, hover, card),
-    shapeSig: `${faces}|${links}|${card.width}x${card.height}`,
+    sizeFor: (hover) => floatingRowSize(faces, links, hover, card, strip),
+    shapeSig: `${faces}|${links}|${card.width}x${card.height}|${strip.width}x${strip.height}`,
     bridge,
   });
   return (
@@ -559,32 +584,105 @@ export function FloatingFaceRow({
       callsEnabled={callsEnabled}
       rootRef={rootRef}
       belowRef={belowRef}
+      stripRef={stripRef}
       onDragStart={startDrag}
       onDragEnd={endDrag}
-      className={hovered ? "face-row--hover" : ""}
+      onOpenProfile={onOpenProfile}
+      chrome={
+        chrome && hovered ? (
+          <div className="faces-chrome face-row-chrome" data-chrome-hit role="toolbar" aria-label="Floating faces">
+            {/* The grip: held, the window follows the cursor (a face drags
+                it too, but a grip says so). */}
+            <button
+              type="button"
+              className="faces-btn face-row-grip"
+              data-chrome-btn="move"
+              title="Hold to move"
+              onPointerDown={startDrag}
+              onPointerUp={endDrag}
+              onPointerCancel={endDrag}
+            >
+              <GripHorizontal className="h-4 w-4" />
+              <span className="faces-btn-word">Move</span>
+            </button>
+            {chrome.inCall && chrome.onExpand && (
+              <button type="button" className="faces-btn" data-chrome-btn="open" onClick={chrome.onExpand} title="Open the call window">
+                <Maximize2 className="h-4 w-4" />
+                <span className="faces-btn-word">Open</span>
+              </button>
+            )}
+            <button type="button" className="faces-btn" data-chrome-btn="close" onClick={chrome.onClose} title={chrome.closeTitle}>
+              <X className="h-4 w-4" />
+              <span className="faces-btn-word">{chrome.closeWord}</span>
+            </button>
+          </div>
+        ) : null
+      }
     >
       {children}
     </FaceRow>
   );
 }
 
-/** The gap between the faces and the band under them; while the pointer is
- *  on a face the name band takes its place (faceRow.css `.face-row-below`). */
-export const CARD_GAP = 8;
+/** What the float's chrome offers. `closeWord` is "Close" for a row the
+ *  person popped out (it goes back to the header) and "Hide" for one that
+ *  came out on its own for a ring or a call (it stays away until the next). */
+export type FloatChrome = {
+  inCall: boolean;
+  onExpand?: () => void;
+  onClose: () => void;
+  closeWord: string;
+  closeTitle: string;
+};
 
 /** The floating window with a card under the row: as wide as the wider of
- *  the two, as tall as both plus the gap between them. */
+ *  the two, as tall as both with the name band between them. The band is
+ *  reserved whether or not the pointer is in the window (faceRow.css
+ *  `.face-row-below`), so the card holds one spot and the window one height
+ *  for as long as the card is up; without a card the pointer still decides,
+ *  and the window is exactly its faces until a name needs the room. */
+/** The gap between the last face and the strip beside it (faceRow.css `.face-row-strip`). */
+export const STRIP_GAP = 10;
+
 export function floatingRowSize(
   faces: number,
   links: number,
   hovered: boolean,
   card: { width: number; height: number },
+  strip: { width: number; height: number } = { width: 0, height: 0 },
 ): { width: number; height: number } {
-  const size = faceRowSize("float", faces, links, hovered);
-  if (card.height === 0) return size;
-  const pad = FACE_ROW_METRICS.float.pad;
-  return {
-    width: Math.max(size.width, card.width + pad * 2),
-    height: size.height + card.height + (hovered ? 0 : CARD_GAP),
-  };
+  const m = FACE_ROW_METRICS.float;
+  const row = faceRowSize("float", faces, links, hovered || card.height > 0);
+  // The strip sits in the row after the faces: the row is that much wider,
+  // and as tall as the taller of the two.
+  const width = row.width + (strip.width > 0 ? STRIP_GAP + strip.width : 0);
+  const height = Math.max(row.height, strip.height + m.pad * 2);
+  if (card.height === 0) return { width, height };
+  // The card's band is under the name band (faceRow.css `.face-row-below`).
+  return { width: Math.max(width, card.width + m.pad * 2), height: height + card.height };
+}
+
+/** A box's size, read by a ResizeObserver: a ref to hand the element in,
+ *  and the latest size. Zero once the element is gone. */
+function useMeasured(): [{ width: number; height: number }, (el: HTMLDivElement | null) => void] {
+  const [size, setSize] = useState({ width: 0, height: 0 });
+  const observer = useRef<ResizeObserver | null>(null);
+  const ref = useCallback((el: HTMLDivElement | null) => {
+    observer.current?.disconnect();
+    observer.current = null;
+    if (!el) {
+      setSize({ width: 0, height: 0 });
+      return;
+    }
+    const measure = () => {
+      const r = el.getBoundingClientRect();
+      setSize({ width: Math.ceil(r.width), height: Math.ceil(r.height) });
+    };
+    measure();
+    if (typeof ResizeObserver !== "undefined") {
+      observer.current = new ResizeObserver(measure);
+      observer.current.observe(el);
+    }
+  }, []);
+  return [size, ref];
 }

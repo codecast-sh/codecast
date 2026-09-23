@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { hashToken, verifyApiToken, deviceBindingAllows } from "./apiTokens";
+import { hashToken, verifyApiToken, deviceBindingAllows, exchangeSetupTokenFor, createApiTokenDefinitions } from "./apiTokens";
 
 // A token today is bearer authority for a whole account: lift the file off a
 // laptop and it works from anywhere. Binding closes that without a migration —
@@ -165,5 +165,37 @@ describe("the gate is the only place the binding is checked", () => {
     expect(c.db._inserted).toEqual([]);
     expect(c.db._replaced).toEqual([]);
     expect(c.db._deleted).toEqual([]);
+  });
+});
+
+describe("setup tokens are exchange vouchers, never bearers", () => {
+  test("verifyApiToken refuses a live setup token; exchange still redeems it", async () => {
+    const SETUP = "setup-voucher";
+    const t = {
+      users: [{ _id: USER, name: "Owner" }],
+      api_tokens: [{ _id: "tok_setup", user_id: USER, token_hash: await hashToken(SETUP), name: "setup-1", created_at: 1, last_used_at: 1, expires_at: Date.now() + 60_000 }],
+    };
+    const c = ctx(t);
+    expect(await verifyApiToken(c, SETUP)).toBeNull();
+    const exchanged = await exchangeSetupTokenFor(c, SETUP);
+    expect(exchanged?.user_id).toBe(USER);
+    expect(await verifyApiToken(c, exchanged!.auth_token)).toMatchObject({ userId: USER });
+    expect(await exchangeSetupTokenFor(c, SETUP)).toBeNull();
+  });
+
+  test("a rename never moves a token across the setup prefix", async () => {
+    const t = {
+      users: [{ _id: USER, name: "Owner" }],
+      api_tokens: [
+        { _id: "tok_setup", user_id: USER, token_hash: "h1", name: "setup-1", created_at: 1, last_used_at: 1, expires_at: Date.now() + 60_000 },
+        { _id: "tok_cli", user_id: USER, token_hash: "h2", name: "CLI - 2026-09-01", created_at: 1, last_used_at: 1 },
+      ],
+    };
+    const c = { db: makeFakeDb(t), auth: { getUserIdentity: async () => ({ subject: `${USER}|session` }) } } as any;
+    const { renameToken } = createApiTokenDefinitions({ tables: { apiTokens: "api_tokens", users: "users" } } as any).mutations;
+    await expect(renameToken.handler(c, { token_id: "tok_setup", name: "laptop" })).rejects.toThrow("cannot be renamed");
+    await expect(renameToken.handler(c, { token_id: "tok_cli", name: "setup-2" })).rejects.toThrow("cannot be renamed");
+    await renameToken.handler(c, { token_id: "tok_cli", name: "laptop" });
+    expect(t.api_tokens[1].name).toBe("laptop");
   });
 });

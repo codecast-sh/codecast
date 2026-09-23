@@ -50,6 +50,9 @@ export function installTokensJs(tokens, convexUrl = CONVEX_URL) {
   return `(() => {
     localStorage.setItem(${JSON.stringify(`__convexAuthJWT_${s}`)}, ${JSON.stringify(tokens.token)});
     localStorage.setItem(${JSON.stringify(`__convexAuthRefreshToken_${s}`)}, ${JSON.stringify(tokens.refreshToken)});
+    // The device setup dialog (permissions/DeviceSetupDialog) opens once per
+    // fresh profile and would sit over every shot of the header.
+    localStorage.setItem("codecast.deviceSetup.v1", String(Date.now()));
     return "set";
   })()`;
 }
