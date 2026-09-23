@@ -633,7 +633,7 @@ export async function recalcPlanProgress(ctx: any, planId: Id<"plans">, updatedT
  * patch, with the FINAL parent state. Recalcs plan progress so the bar and the
  * auto-done flag never drift off a stale total.
  */
-async function reconcilePlanMembership(
+export async function reconcilePlanMembership(
   ctx: any,
   taskId: Id<"tasks">,
   planId: Id<"plans"> | undefined,
