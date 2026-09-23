@@ -1393,11 +1393,11 @@ pre[class*="language-"] {
    minimal) keeps painting under it, and the bands lift on their own when the
    row loses the class. */
 .pending-stripes {
-  --stripe: color-mix(in srgb, var(--sol-text) 3%, transparent);
+  --stripe: color-mix(in srgb, var(--sol-text) 2.25%, transparent);
   background-image: repeating-linear-gradient(135deg, transparent 0 6px, var(--stripe) 6px 12px);
 }
 .dark .pending-stripes {
-  --stripe: color-mix(in srgb, var(--sol-text) 3.5%, transparent);
+  --stripe: color-mix(in srgb, var(--sol-text) 2.75%, transparent);
 }
 
 /* Queued message: confirmed sent, waiting for sync */
