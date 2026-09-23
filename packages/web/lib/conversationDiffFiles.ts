@@ -12,7 +12,10 @@ export function computeCumulativeFiles(changes: FileChange[], upToIndex: number 
   const newFiles = new Set<string>();
   const seenFiles = new Set<string>();
   for (const change of relevantChanges) {
-    if (!seenFiles.has(change.filePath) && change.changeType === "write") newFiles.add(change.filePath);
+    // A write that carries the text it replaced is a change to an existing file.
+    if (!seenFiles.has(change.filePath) && change.changeType === "write" && change.oldContent === undefined) {
+      newFiles.add(change.filePath);
+    }
     seenFiles.add(change.filePath);
   }
   const files: (DiffFile & { lastIndex: number })[] = [];
@@ -21,7 +24,7 @@ export function computeCumulativeFiles(changes: FileChange[], upToIndex: number 
     const oldStr = diff.oldContent ?? "";
     const newStr = diff.newContent;
     const isNewFile = newFiles.has(filePath);
-    if (oldStr === newStr && !isNewFile) continue;
+    if (oldStr === newStr && !isNewFile && !diff.deleted) continue;
 
     const patch = generateUnifiedPatch(filePath, oldStr, newStr);
     const patchLines = patch.split('\n');
@@ -30,7 +33,7 @@ export function computeCumulativeFiles(changes: FileChange[], upToIndex: number 
 
     files.push({
       filename: filePath,
-      status: isNewFile ? "added" : "modified",
+      status: diff.deleted ? "deleted" : isNewFile ? "added" : "modified",
       additions,
       deletions,
       changes: additions + deletions,

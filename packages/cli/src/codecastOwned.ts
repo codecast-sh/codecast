@@ -18,6 +18,7 @@ import * as path from "node:path";
 /** The hook scripts codecast writes into ~/.claude/hooks/. */
 export const CODECAST_HOOK_SCRIPTS = [
   "codecast-status.sh",
+  "codecast-shell-changes.sh",
   "codecast-prompt.sh",
   "session-register.sh",
   "thread-state.sh",

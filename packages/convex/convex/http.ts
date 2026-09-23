@@ -2502,7 +2502,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, path_prefix, team_id, auto_share } = body;
+      const { api_token, path_prefix, team_id, auto_share, include_past } = body;
 
       if (!api_token || !path_prefix) {
         return new Response(JSON.stringify({ error: "Missing api_token or path_prefix" }), {
@@ -2516,9 +2516,10 @@ http.route({
         path_prefix,
         team_id,
         auto_share,
+        include_past: typeof include_past === "boolean" ? include_past : undefined,
       });
 
-      if (result.error) {
+      if ("error" in result) {
         return new Response(JSON.stringify({ error: result.error }), {
           status: result.error === "Unauthorized" ? 401 : 400,
           headers: { "Content-Type": "application/json", ...corsHeaders },

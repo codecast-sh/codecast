@@ -4,7 +4,7 @@ import { countersFor } from "./orgEvents";
 import { calibrationSlot } from "./usageCalibration";
 import { weightedTokens } from "@codecast/shared/contracts";
 import { linkLocalCommitToConversation } from "./gitActivity";
-import { ConvexError, v } from "convex/values";
+import { ConvexError, v, type Infer } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { Doc, Id } from "./_generated/dataModel";
@@ -682,6 +682,7 @@ export async function materializeFileChanges(
   toolCalls: Array<{ id: string; name: string; input: string }> | undefined,
   toolResults: Array<{ tool_use_id: string; content: string; is_error?: boolean }> | undefined,
   previousChanges: FileChange[] = [],
+  observed: WireFileChange[] = [],
 ): Promise<void> {
   // Late-arriving commit hashes: a `git commit` Bash RESULT lands on the next
   // (user) message, after the commit row materialized hash-less. The string
@@ -708,8 +709,23 @@ export async function materializeFileChanges(
   }
 
   const msg = { _id: messageId, timestamp, tool_calls: toolCalls, tool_results: toolResults };
-  if (!hasFileChangeToolCall(msg) && previousChanges.length === 0) return;
+  if (!hasFileChangeToolCall(msg) && previousChanges.length === 0 && observed.length === 0) return;
   const extracted = extractFileChanges([msg]);
+  // Disk-observed changes sit after the message's own tool-call changes, keyed
+  // by the call they belong to so a re-synced message upserts the same rows.
+  for (const fc of observed) {
+    extracted.push({
+      id: `${fc.tool_call_id}:fs:${fc.seq}`,
+      toolCallId: fc.tool_call_id,
+      sequenceIndex: extracted.length,
+      messageId,
+      filePath: fc.file_path,
+      changeType: fc.change_type,
+      oldContent: fc.old_content,
+      newContent: fc.new_content,
+      timestamp,
+    });
+  }
   const nextIds = new Set(extracted.map((change) => change.id));
   for (const previous of previousChanges) {
     if (nextIds.has(previous.id)) continue;
@@ -1307,6 +1323,22 @@ export async function rollUpUsage(
   }
 }
 
+// A file change the daemon observed on disk rather than read out of a tool
+// call: the shell-changes hook records what a Bash command changed and the
+// daemon carries it on the message holding that call's result
+// (packages/cli/src/shellChanges.ts). Whole-file contents: "write" replaces the
+// file (old_content is what it held before, absent for a new file), "delete"
+// removes it.
+const fileChangeWireValidator = v.object({
+  tool_call_id: v.string(),
+  seq: v.number(),
+  file_path: v.string(),
+  change_type: v.union(v.literal("write"), v.literal("edit"), v.literal("delete")),
+  old_content: v.optional(v.string()),
+  new_content: v.string(),
+});
+type WireFileChange = Infer<typeof fileChangeWireValidator>;
+
 export const addMessage = mutation({
   args: {
     conversation_id: v.id("conversations"),
@@ -1329,6 +1361,7 @@ export const addMessage = mutation({
       content: v.string(),
       is_error: v.optional(v.boolean()),
     }))),
+    file_changes: v.optional(v.array(fileChangeWireValidator)),
     images: v.optional(v.array(v.object({
       media_type: v.string(),
       data: v.optional(v.string()),
@@ -1425,7 +1458,7 @@ export const addMessage = mutation({
           current.content, current.images);
         if (safeToolCalls !== undefined || safeToolResults !== undefined) {
           await materializeFileChanges(ctx, args.conversation_id, existing._id, existing.timestamp,
-            current.tool_calls, current.tool_results, extractFileChanges([existing]));
+            current.tool_calls, current.tool_results, extractFileChanges([existing]), args.file_changes);
         }
         return existing._id;
       }
@@ -1505,7 +1538,7 @@ export const addMessage = mutation({
       await ctx.db.patch(matchingPending._id, { echo_message_id: messageId });
     }
     await scheduleUserSend(ctx, conversation, { role: args.role, content: contentToStore, tool_results: safeToolResults, from_user_id: fromUserIdToStore }, msgTimestamp);
-    await materializeFileChanges(ctx, args.conversation_id, messageId, msgTimestamp, safeToolCalls, safeToolResults);
+    await materializeFileChanges(ctx, args.conversation_id, messageId, msgTimestamp, safeToolCalls, safeToolResults, [], args.file_changes);
     await materializeConversationImages(ctx, args.conversation_id, messageId, msgTimestamp, contentToStore, images);
     const newMessageCount = conversation.message_count + 1;
     const now = Date.now();
@@ -1735,6 +1768,7 @@ const messageValidator = v.object({
     content: v.string(),
     is_error: v.optional(v.boolean()),
   }))),
+  file_changes: v.optional(v.array(fileChangeWireValidator)),
   images: v.optional(v.array(v.object({
     media_type: v.string(),
     data: v.optional(v.string()),
@@ -1959,7 +1993,7 @@ export const addMessages = mutation({
             current.content, current.images);
           if (safeToolCalls !== undefined || safeToolResults !== undefined) {
             await materializeFileChanges(ctx, args.conversation_id, existing._id, existing.timestamp,
-              current.tool_calls, current.tool_results, extractFileChanges([existing]));
+              current.tool_calls, current.tool_results, extractFileChanges([existing]), msg.file_changes);
           }
           ids.push(existing._id);
           continue;
@@ -2071,7 +2105,7 @@ export const addMessages = mutation({
       insertedCount++;
       insertedIndexes.add(batchIndex);
       await scheduleUserSend(ctx, conversation, { role: msg.role, content: contentToStore, tool_results: safeToolResults, from_user_id: matchingPending?.from_user_id }, msgTimestamp);
-      await materializeFileChanges(ctx, args.conversation_id, messageId, msgTimestamp, safeToolCalls, safeToolResults);
+      await materializeFileChanges(ctx, args.conversation_id, messageId, msgTimestamp, safeToolCalls, safeToolResults, [], msg.file_changes);
       await materializeConversationImages(ctx, args.conversation_id, messageId, msgTimestamp, contentToStore, images);
       if (msg.role === "user") lastUserContentStored = contentToStore;
     }

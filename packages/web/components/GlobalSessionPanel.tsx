@@ -30,6 +30,7 @@ import { sessionStartupState } from "../lib/sessionLifecycle";
 import { compressImage } from "../lib/compressImage";
 import { useConversationMessages } from "../hooks/useConversationMessages";
 import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, placeInboxRows, placementDecisionsSig, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, freshReviveRequestIds, isSessionHidden, resolveSessionAuthor, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipProjectFilters, passesFilterTerms, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
+import { useTeamShareActions } from "../hooks/useTeamShareActions";
 import { sessionsWakeSig, resolveShowOld, showsBlockedBadge, sectionHeaderCount, classifySession, inboxNestParentOf } from "../store/inboxStore";
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
 import { makeCollectionSig } from "../store/wakeSig";
@@ -138,8 +139,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
   } = useConversationMessages(sessionId, targetMessageId);
 
   const convCommand = useInboxStore((s) => s.convCommand);
-  const setPrivacy = useInboxStore((s) => s.setPrivacy);
-  const setTeamVisibility = useInboxStore((s) => s.setTeamVisibility);
+  const { setPrivate, shareWithTeam } = useTeamShareActions(sessionId);
   const generateShareLink = useMutation(api.conversations.generateShareLink);
   const [resumeState, setResumeState] = useState<"idle" | "resuming" | "sent" | "reconstituting" | "failed">("idle");
   const forceRestartAttemptedRef = useRef(false);
@@ -233,12 +233,13 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
       hasShareToken={!!conversation.share_token}
       hasTeam={!!(conversation as any).team_id}
       teamId={(conversation as any).team_id ?? null}
-      onSetPrivate={() => { setPrivacy(convId, true); toast.success("Made private"); }}
-      onSetTeamVisibility={(mode) => { setTeamVisibility(convId, mode); toast.success(mode === "full" ? "Sharing full conversation with team" : "Sharing summary with team"); }}
+      onSetPrivate={setPrivate}
+      onSetTeamVisibility={shareWithTeam}
       onGenerateShareLink={async () => { const token = await generateShareLink({ conversation_id: convId }); return `${shareOrigin()}/conversation/${convId}?share=${encodeURIComponent(token)}`; }}
       shareUrl={shareUrl}
       forwardUrl={`${shareOrigin()}/conversation/${convId}`}
       forwardLabel="session"
+      sharedVia={(conversation as any).auto_shared ? conversation.git_root || conversation.project_path : null}
     />
   ) : null;
 

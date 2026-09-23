@@ -41,28 +41,34 @@
 
 /* The band under the faces: the engagement card and the member card, out of
  * the seats' line so the row never wraps. In the bar it is a zero height
- * anchor the cards hang from; in the float it is in flow, the gap the layout
- * counts (CARD_GAP) below the row's padding box, and the window is measured
- * from it (FloatingFaceRow). While the pointer is on a face the names hang
- * under the chins, and the band moves down by the same band the window grows
- * by (ROW_GAP + NAME_HEIGHT) so a card never sits on a name. */
+ * anchor the cards hang from; in the float it hangs under the name band
+ * (ROW_GAP + NAME_HEIGHT below the faces, less the row's own padding) and the
+ * window is measured from it (FloatingFaceRow). The name band is reserved
+ * whether or not the pointer is in the window: the band used to drop by 28px
+ * while the pointer was in and rise again 1.5s after it left, so the card
+ * under a call moved every time the hand came near it, and at rest it sat
+ * 8px under the faces with a speaking ring's glow touching it. A card holds
+ * one spot; only the names come and go. */
 .face-row-below {
+  /* The lift both cards in the band share: the engagement card and the
+     member card are one column, so they throw one shadow. */
+  --card-shadow:
+    0 1px 2px color-mix(in srgb, var(--sol-text) 8%, transparent),
+    0 12px 32px -8px color-mix(in srgb, var(--sol-text) 22%, transparent);
   position: absolute;
   left: 0;
-  right: 0;
   top: 100%;
-}
-.face-row[data-density="float"] .face-row-below {
-  position: absolute;
-  left: 8px;
-  right: auto;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 8px;
+  padding-top: 8px;
+  z-index: 60;
 }
-.face-row--hover .face-row-below {
+.face-row[data-density="float"] .face-row-below {
+  left: 8px;
   top: calc(100% + 28px);
+  padding-top: 0;
 }
 
 /* ── The seat ───────────────────────────────────────────────────────────────
@@ -89,6 +95,12 @@
   width: var(--face);
   height: var(--face);
   cursor: pointer;
+  /* The presence weight (`--drain-opacity`, presence.css): the call circles'
+     `.face` base sets opacity 1 for its crossfade and ties the presence rule
+     on specificity, so an offline face in the header sat at full weight
+     (measured opacity 1 against the wall's 0.45) and only the moon told an
+     away letter avatar from an offline one. */
+  opacity: var(--drain-opacity, 1);
   transition: opacity 220ms ease, box-shadow 400ms ease, transform 160ms ease;
 }
 
@@ -100,7 +112,17 @@
   -webkit-appearance: none;
 }
 
-.face-row .face:focus-visible {
+/* ── Keyboard focus ─────────────────────────────────────────────────────────
+ *
+ * One mark for every control on the row and in the band under it: the face,
+ * the engagement card's buttons and the member card's. Only the face and the
+ * ring card's two answers had a rule of their own; End, Mute, Join live,
+ * Snooze, Talk back, Cancel and the member card's four controls wore the
+ * browser's blue and white double ring (measured `auto 1px rgb(0, 95, 204)`)
+ * beside a designed one. The band's selector outweighs the ring card's own
+ * (calls/ringCard.css), so one row has one focus colour. */
+.face-row .face:focus-visible,
+.face-row-below :is(button, a):focus-visible {
   outline: 2px solid var(--sol-cyan);
   outline-offset: 2px;
 }
@@ -118,11 +140,19 @@
 }
 
 /* My voice, going out: warm, and breathing with MY level. The level is my
- * microphone whatever the room is (a burst, or an open mic in a call). */
+ * microphone whatever the room is (a burst, or an open mic in a call). At
+ * rest the band is the seat's own (`--band`: violet on a call, warm on a
+ * burst) and the warm ring grows OUTSIDE it only while I speak, so an open
+ * microphone with nothing said looks like every other seat on the line, and
+ * a mute never changes the colour of my ring, only the badge. The warm ring
+ * starts at NOTHING: the band is translucent, so a warm ring of the band's
+ * own width under it tinted my violet pink while everyone else's stayed
+ * blue (measured rgb(120,101,147) against rgb(80,92,148)). */
 .face-row .face[data-me][data-level="mic"] {
   box-shadow:
-    0 0 0 calc(2px + var(--level) * 3px) color-mix(in srgb, var(--walkie-tx) 75%, transparent),
-    0 0 calc(4px + var(--level) * 18px) color-mix(in srgb, var(--walkie-tx) 40%, transparent);
+    0 0 0 2px var(--band, color-mix(in srgb, var(--walkie-tx) 75%, transparent)),
+    0 0 0 calc(var(--level) * 6px) color-mix(in srgb, var(--walkie-tx) 75%, transparent),
+    0 0 calc(var(--level) * 18px) color-mix(in srgb, var(--walkie-tx) 40%, transparent);
   transition: opacity 220ms ease, box-shadow 70ms linear, transform 160ms ease;
 }
 
@@ -138,7 +168,8 @@
 .face-row .face[data-state="in-call"],
 .face-row .face[data-state="live-with-me"],
 .face-row .face[data-state="joining"] {
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--sol-violet) 70%, transparent);
+  --band: color-mix(in srgb, var(--sol-violet) 70%, transparent);
+  box-shadow: 0 0 0 2px var(--band);
 }
 
 /* Somebody stepped in on purpose: the pop the walkie strip already plays. */
@@ -146,16 +177,26 @@
   animation: walkie-face-pop 320ms cubic-bezier(0.2, 1.4, 0.4, 1);
 }
 
-/* A ring, either way: a ripple leaving the face, the phone on the desk. */
+/* A ring, either way: a steady band, and a ripple leaving the face, the
+ * phone on the desk. The band stays so the state reads on every frame; the
+ * ripple alone was gone for the last third of each cycle. */
 .face-row .face[data-state="ringing-them"],
 .face-row .face[data-state="ringing-me"] {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--sol-cyan) 70%, transparent);
   animation: face-ring-ripple 1.4s ease-out infinite;
 }
 
 @keyframes face-ring-ripple {
-  0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--sol-cyan) 70%, transparent); }
-  70%  { box-shadow: 0 0 0 9px color-mix(in srgb, var(--sol-cyan) 0%, transparent); }
-  100% { box-shadow: 0 0 0 9px color-mix(in srgb, var(--sol-cyan) 0%, transparent); }
+  0% {
+    box-shadow:
+      0 0 0 2px color-mix(in srgb, var(--sol-cyan) 70%, transparent),
+      0 0 0 2px color-mix(in srgb, var(--sol-cyan) 55%, transparent);
+  }
+  70%, 100% {
+    box-shadow:
+      0 0 0 2px color-mix(in srgb, var(--sol-cyan) 70%, transparent),
+      0 0 0 10px color-mix(in srgb, var(--sol-cyan) 0%, transparent);
+  }
 }
 
 /* Speaking (cyan) and followed (the band) are the call circles' own rules in
@@ -177,7 +218,7 @@
  * at a glance. A short bridge, pulled into the gap so the linked pair sits
  * closer than the rest of the row, with a pulse that travels in the direction
  * of the voice: warm toward them while I send, cool toward me while they
- * talk, both at once for a two way exchange, a steady cyan bar for a call, a
+ * talk, both at once for a two way exchange, a steady violet bar for a call, a
  * ripple for a ring. */
 .face-link {
   --link-tone: var(--sol-cyan);
@@ -188,7 +229,7 @@
   /* The pull: each side of the bridge eats LINK_PULL of the row's gap. */
   margin: 0 calc(var(--face-gap) * -0.35);
   border-radius: 2px;
-  background: color-mix(in srgb, var(--link-tone) 28%, transparent);
+  background: color-mix(in srgb, var(--link-tone) 40%, transparent);
   overflow: hidden;
   pointer-events: none;
 }
@@ -223,8 +264,8 @@
   --link-tone: var(--walkie-rx);
   background: linear-gradient(
     90deg,
-    color-mix(in srgb, var(--walkie-rx) 28%, transparent),
-    color-mix(in srgb, var(--walkie-tx) 28%, transparent)
+    color-mix(in srgb, var(--walkie-rx) 40%, transparent),
+    color-mix(in srgb, var(--walkie-tx) 40%, transparent)
   );
 }
 .face-link[data-link-kind="both"]::before {
@@ -237,21 +278,31 @@
   animation: face-link-in 900ms linear infinite;
 }
 
-/* A call: steady, no travel. Two people on a line, not a voice in flight. */
+/* A call: steady, no travel. Two people on a line, not a voice in flight,
+ * in the seats' own violet: cyan between two violet faces read as a third
+ * state, and cyan is a voice (the speaking ring) or a bell (the ring). */
 .face-link[data-link-kind="call"] {
-  --link-tone: var(--sol-cyan);
+  --link-tone: var(--sol-violet);
   background: color-mix(in srgb, var(--link-tone) 70%, transparent);
 }
 
-/* A ring: the bridge breathes until somebody answers. */
+/* A ring: a dashed bridge that breathes until somebody answers. The dashes
+ * are counted, not repeated: each sits centred in its own share of the
+ * bridge, so the run is symmetric and no dash is cut at a face. */
 .face-link[data-link-kind="ring"] {
   --link-tone: var(--sol-cyan);
-  background: repeating-linear-gradient(
+  --ring-dashes: 2;
+  background: linear-gradient(
     90deg,
-    color-mix(in srgb, var(--link-tone) 70%, transparent) 0 4px,
-    transparent 4px 7px
+    transparent 0 22%,
+    color-mix(in srgb, var(--link-tone) 70%, transparent) 22% 78%,
+    transparent 78%
   );
+  background-size: calc(var(--link-w) / var(--ring-dashes)) 100%;
   animation: face-link-ring 1.4s ease-in-out infinite;
+}
+.face-row[data-density="float"] .face-link[data-link-kind="ring"] {
+  --ring-dashes: 3;
 }
 
 @keyframes face-link-out {
@@ -303,6 +354,32 @@
   pointer-events: none;
 }
 
+/* The mute badge is a mark on the person, like the count and the ask: on the
+ * circle's edge, in the presence badge's corner (an engaged face wears no
+ * presence badge, so the two never meet), cut out of the ring by the same
+ * band of background the presence badge uses (`--pres-cut`). Inside the
+ * circle, the call circles' own spot, the circle's clip cut the badge to a D
+ * and the icon with it, in both densities. Filled red with the background's
+ * glyph, the way the count is filled cyan: a black plate on a cream header
+ * was the one dark thing on the light theme. */
+.face-row .face-mute {
+  right: -1px;
+  bottom: -1px;
+  background: var(--sol-red);
+  color: var(--sol-bg);
+  box-shadow: 0 0 0 2px var(--sol-bg);
+  backdrop-filter: none;
+  pointer-events: none;
+}
+.face-row[data-density="bar"] .face-mute {
+  width: 14px;
+  height: 14px;
+}
+.face-row[data-density="bar"] .face-mute svg {
+  width: 9px;
+  height: 9px;
+}
+
 /* The presence badge in the corner every chat app uses, only while the face
  * is plain presence: an engaged face's ring already says more than a dot. */
 .face-seat .face-pres {
@@ -311,27 +388,46 @@
   bottom: -1px;
 }
 
-/* A face with its card open stays lit while the pointer is on the card. */
+/* A face with its card open stays lit while the pointer is on the card. The
+ * lift composes with the presence drain (`--drain`, presence.css): a bare
+ * brightness REPLACED the grayscale, so an offline photo flipped to full
+ * colour the moment its card opened and went grey again when it closed. */
 .face-seat[data-card] .face {
-  filter: brightness(1.06);
+  filter: var(--drain,) brightness(1.06);
 }
 
 /* ── The card ───────────────────────────────────────────────────────────────
  *
- * The one transient control card, under the linked faces. Its skin is the
- * walkie strip's (calls/walkie.css) so the words, the edges and the buttons
- * read exactly as they did on the strip it replaces. In the bar it hangs
- * from the header row; in the float it sits under the row in flow. */
+ * The one transient control card, under the linked faces: ONE ROW. A dot in
+ * the moment's tone, one plain sentence, and the buttons beside it, the
+ * height of a face and a half. The strip it replaced (calls/walkie.css) was
+ * built for a corner of the screen with nothing else to say who; this card
+ * hangs from the faces, so it keeps the strip's tones and button names and
+ * drops the loud word, the caption plate and the stacked full width buttons.
+ * In the bar it hangs from the header row; in the float it sits under the
+ * row in flow. */
 .engagement-card {
-  width: 320px;
-  max-width: calc(100vw - 2rem);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: max-content;
+  min-width: 0;
+  max-width: min(500px, calc(100vw - 2rem));
+  padding: 5px 6px 5px 12px;
+  border-radius: 999px;
+  box-shadow: none;
+  backdrop-filter: none;
+  background: var(--sol-bg-alt);
 }
 
 .engagement-card[data-density="bar"] {
-  position: absolute;
-  top: calc(100% + 8px);
-  left: 0;
-  z-index: 40;
+  position: relative;
+  /* The card lands the way the member card does (one entrance for the
+     band). Only in the bar: the float's window is revealed by the shell a
+     frame after the card mounts, and an animation started under a hidden
+     window sits on its first frame (calls/ringCard.css). A change of kind
+     keeps the same element, so only the first appearance plays it. */
+  animation: face-card-in 140ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .engagement-card[data-density="float"] {
@@ -342,27 +438,63 @@
   max-width: none;
 }
 
-/* A ring's two answers and the ring-out cancel wear the ring card's own
- * buttons (calls/ringCard.css), in the strip's frame. */
-.engagement-card .ring-card-actions {
-  margin-top: 10px;
-}
-
-.engagement-card-title {
-  font-size: 15px;
-  font-weight: 600;
-  line-height: 1.25;
+/* The line: the stage row from the strip, as a sentence. */
+.engagement-card .walkie-stage,
+.engagement-card .ring-card-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 16px;
+  letter-spacing: 0;
+  text-transform: none;
   color: var(--sol-text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
-
-/* "Riley hears you", in the words the roster decided (senderHearing). */
+.engagement-card .walkie-stage-dot,
+.engagement-card .ring-card-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--stage-tone, var(--ring-accent)) 22%, transparent);
+}
+.engagement-card-words {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.engagement-card .walkie-stage-badge {
+  font-weight: 600;
+  color: var(--stage-tone);
+}
+.engagement-card .walkie-stage-with {
+  display: inline;
+  color: var(--sol-text-muted);
+}
+.engagement-card .walkie-strip-hint {
+  margin: 0;
+  padding: 0;
+  background: none;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--sol-text);
+}
+.engagement-card-title {
+  font-weight: 600;
+  color: var(--sol-text);
+}
+.engagement-card .walkie-strip-headline-lead {
+  font-weight: 600;
+  color: var(--sol-violet);
+}
+/* "Riley hears you", in the words the roster decided (senderHearing), on
+ * the same line after the stage, in the caption's weight. */
 .engagement-card-hearing {
-  margin-top: 4px;
-  font-size: 13px;
-  line-height: 1.35;
   color: var(--sol-text-muted);
 }
 .engagement-card-hearing[data-hearing="away"],
@@ -370,17 +502,127 @@
   color: var(--sol-yellow);
 }
 
+/* The buttons: pills the height of the row, beside the words. */
+.engagement-card .walkie-strip-actions,
+.engagement-card .ring-card-actions {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  flex: none;
+  gap: 4px;
+  margin: 0;
+}
+.engagement-card :is(.walkie-strip-end, .walkie-strip-mute, .walkie-strip-join, .walkie-strip-snooze, .ring-card-join, .ring-card-decline) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  width: auto;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1;
+}
+.engagement-card .walkie-strip-mute,
+.engagement-card .walkie-strip-snooze,
+.engagement-card .ring-card-decline {
+  font-weight: 500;
+  background: transparent;
+  border-color: var(--sol-border);
+  color: var(--sol-text-muted);
+}
+.engagement-card .walkie-strip-mute:hover,
+.engagement-card .walkie-strip-snooze:hover,
+.engagement-card .ring-card-decline:hover {
+  filter: none;
+  color: var(--sol-text);
+  background: color-mix(in srgb, var(--sol-text) 6%, transparent);
+}
+.engagement-card .walkie-strip-mute-on {
+  color: var(--sol-red);
+  border-color: color-mix(in srgb, var(--sol-red) 45%, transparent);
+}
+.engagement-card .walkie-key.walkie-key-sm {
+  height: 26px;
+  border-radius: 999px;
+}
+
+/* A ring's two answers and the ring-out cancel wear the ring card's own
+ * buttons and line (calls/ringCard.css), in the strip's frame. The ring
+ * card is always dark and writes its own ink on `.ring-card`; here the ink
+ * is the theme's, or Join is dark words on nothing. */
+.engagement-card {
+  --ring-accent: var(--sol-green);
+  --ring-fg: var(--sol-text);
+  --ring-muted: var(--sol-text-muted);
+  /* The member card's radius and lift, so the two cards in one stack are
+     one family; the strip's own black plate under a light theme was a
+     heavier shadow than the card under it. The direction's edge glow rides
+     on top of the shared lift. */
+  border-radius: 12px;
+  box-shadow: var(--card-shadow);
+}
+.engagement-card.walkie-strip-tx {
+  box-shadow:
+    var(--card-shadow),
+    0 0 0 1px color-mix(in srgb, var(--walkie-tx) 22%, transparent),
+    0 0 22px color-mix(in srgb, var(--walkie-tx) 16%, transparent);
+}
+.engagement-card.walkie-strip-rx {
+  box-shadow:
+    var(--card-shadow),
+    0 0 0 1px color-mix(in srgb, var(--walkie-rx) 22%, transparent),
+    0 0 22px color-mix(in srgb, var(--walkie-rx) 16%, transparent);
+}
+.engagement-card.walkie-strip-tx.walkie-strip-rx {
+  box-shadow:
+    var(--card-shadow),
+    0 0 0 1px color-mix(in srgb, var(--walkie-tx) 45%, transparent),
+    0 0 22px color-mix(in srgb, var(--walkie-tx) 18%, transparent);
+}
+.engagement-card.walkie-strip-call,
+.engagement-card.walkie-strip-joined {
+  box-shadow:
+    var(--card-shadow),
+    0 0 0 1px color-mix(in srgb, var(--sol-violet) 30%, transparent),
+    0 0 22px color-mix(in srgb, var(--sol-violet) 18%, transparent);
+}
+/* The breathing dot beside "Ringing" and "Incoming huddle" is the ring's
+   own cyan, the band the two ringing faces above it wear; Join keeps the
+   ring card's green, the colour an answer is on every phone. */
+.engagement-card .ring-card-dot {
+  --ring-accent: var(--sol-cyan);
+}
+/* The ring out's one answer, Cancel, is the ring card's own button (the
+   ring in's Decline), across the whole row: the two phone cards share one
+   button family, where Cancel wore the walkie strip's Snooze plate. */
+.engagement-card .ring-card-actions > :only-child {
+  grid-column: 1 / -1;
+}
+.engagement-card .ring-card-decline {
+  border-color: var(--sol-border);
+}
+.engagement-card .ring-card-decline:hover {
+  background: color-mix(in srgb, var(--sol-text) 6%, transparent);
+  border-color: color-mix(in srgb, var(--sol-text) 30%, transparent);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .face-row .face,
   .face-seat {
     transition: none;
   }
+  /* Every selector here matches the specificity of the rule it silences:
+     a bare `.face-link` loses to `.face-link[data-link-kind]`, and the
+     pulses kept travelling under reduced motion. */
   .face-row .face[data-state="joining"],
   .face-row .face[data-state="ringing-them"],
   .face-row .face[data-state="ringing-me"],
-  .face-link,
-  .face-link::before,
-  .face-link::after {
+  .face-link[data-link-kind],
+  .face-link[data-link-kind]::before,
+  .face-link[data-link-kind]::after {
     animation: none;
   }
   /* A ring still says a ring, it just holds still. */
@@ -388,16 +630,24 @@
   .face-row .face[data-state="ringing-me"] {
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--sol-cyan) 60%, transparent);
   }
-  /* The pulse stops travelling and the bridge carries the colour alone. */
+  /* The pulse stops travelling and the bridge carries the colour alone:
+     two colours, still, when the voice goes both ways. */
   .face-link[data-link-kind="tx"],
   .face-link[data-link-kind="rx"],
-  .face-link[data-link-kind="both"],
   .face-link[data-link-kind="ring"] {
     background: color-mix(in srgb, var(--link-tone) 70%, transparent);
     opacity: 1;
   }
-  .face-link::before,
-  .face-link::after {
+  .face-link[data-link-kind="both"] {
+    background: linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--walkie-rx) 70%, transparent),
+      color-mix(in srgb, var(--walkie-tx) 70%, transparent)
+    );
+    opacity: 1;
+  }
+  .face-link[data-link-kind]::before,
+  .face-link[data-link-kind]::after {
     opacity: 0;
   }
 }
@@ -410,23 +660,25 @@
  * and pushed in from a viewport edge by --shift (measured); in the float it
  * sits in the band under the row, and the notch travels to the face. */
 .face-card {
-  --card-w: 272px;
+  --card-w: 320px;
   --notch: 8px;
-  position: absolute;
-  top: 10px;
-  left: calc(var(--anchor) + var(--shift, 0px));
+  /* Centred on the face. The row sits inside the header with room on both
+     sides, so the card may run left of the row; only a viewport edge pushes
+     it in, by --shift (measured from either edge in FaceCard). */
+  --lead: calc(var(--anchor) - var(--card-w) / 2 + var(--shift, 0px));
+  position: relative;
+  margin-left: var(--lead);
   width: var(--card-w);
   max-width: calc(100vw - 16px);
-  transform: translateX(-50%);
-  z-index: 60;
-  padding: 10px;
+  /* The engagement card's own inset (walkie-strip, 13px): stacked under it
+     the two cards are one column, and a name 3px off the name above it read
+     as a ragged edge. */
+  padding: 10px 13px;
   border-radius: 12px;
   border: 1px solid var(--sol-border);
   background: var(--sol-bg-alt);
   color: var(--sol-text);
-  box-shadow:
-    0 1px 2px color-mix(in srgb, var(--sol-text) 8%, transparent),
-    0 12px 32px -8px color-mix(in srgb, var(--sol-text) 22%, transparent);
+  box-shadow: var(--card-shadow);
   cursor: default;
   text-align: left;
   font-family: var(--font-mono);
@@ -436,7 +688,7 @@
   content: "";
   position: absolute;
   top: calc(-1 * var(--notch) / 2 - 1px);
-  left: calc(50% - var(--shift, 0px));
+  left: clamp(14px, calc(var(--anchor) - var(--lead)), calc(var(--card-w) - 14px));
   width: var(--notch);
   height: var(--notch);
   margin-left: calc(-1 * var(--notch) / 2);
@@ -446,28 +698,34 @@
   border-top: 1px solid var(--sol-border);
 }
 .face-card[data-density="float"] {
-  position: relative;
-  top: 0;
-  left: 0;
-  transform: none;
-  margin-top: 4px;
+  /* The band starts 8px in; the anchor is in the row's coordinates. Here
+     the window IS the viewport and is sized to hold the card from the band's
+     edge (floatingRowSize), so the floor is the viewport clamp: a face near
+     the window's edge gets the notch, not a card outside the window. */
+  --lead: max(0px, calc(var(--anchor) - 8px - var(--card-w) / 2));
 }
 .face-card[data-density="float"]::before {
-  left: clamp(14px, calc(var(--anchor) - 8px), calc(var(--card-w) - 14px));
+  left: clamp(14px, calc(var(--anchor) - 8px - var(--lead)), calc(var(--card-w) - 14px));
+}
+/* Stacked under the engagement card, the member card is the second card of
+ * one column: the same left edge, and no notch, which would point at the
+ * card above it rather than at a face. */
+.engagement-card + .face-card,
+.engagement-card + .face-card[data-density="float"] {
+  --lead: 0px;
+}
+.engagement-card + .face-card::before {
+  display: none;
 }
 @keyframes face-card-in {
-  from { opacity: 0; transform: translateX(-50%) translateY(-3px); }
-  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
-}
-.face-card[data-density="float"] {
-  animation-name: face-card-in-flat;
-}
-@keyframes face-card-in-flat {
   from { opacity: 0; transform: translateY(-3px); }
   to   { opacity: 1; transform: none; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .face-card { animation: none; }
+  .face-card,
+  .engagement-card[data-density="bar"] {
+    animation: none;
+  }
 }
 
 /* Who: the profile door. One target, the whole block. */
@@ -491,10 +749,6 @@
   font-size: 13px;
   font-weight: 600;
   line-height: 18px;
-}
-.face-card-name .face-card-dot {
-  position: static;
-  flex: none;
 }
 .face-card-you {
   flex: none;
@@ -530,6 +784,13 @@
   font-size: 11px;
   line-height: 14px;
   color: var(--sol-text-dim);
+}
+/* The presence fact under the activity line speaks in the line's voice. The
+ * chat surfaces print it as a line of its own ("Active now", "Last seen 3h
+ * ago"); under "talking in a huddle with you" a capital read as a second
+ * voice. The clock beside it keeps its case. */
+.face-card-presence {
+  text-transform: lowercase;
 }
 
 /* Where: the session they have open, and Follow. */

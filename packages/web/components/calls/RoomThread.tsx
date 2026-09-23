@@ -22,7 +22,7 @@ import {
   isRecRoomKey,
   sessionRoomConversationId,
 } from "@codecast/shared/contracts";
-import { useInboxStore } from "../../store/inboxStore";
+import { SessionCreatePendingError, useInboxStore } from "../../store/inboxStore";
 import { navigateMainWindow } from "../../lib/desktop";
 import { settleComposerAttachments } from "../../lib/draftImages";
 import { getRoom, startTranscribing } from "../../lib/calls/callManager";
@@ -137,6 +137,7 @@ export function RoomThread({
   seated,
   panel,
   selection,
+  sinceAt,
   className,
 }: {
   roomKey: string;
@@ -152,6 +153,8 @@ export function RoomThread({
   /** The desktop call window: links to a session open in the main window. */
   panel?: boolean;
   selection?: RoomThreadSelection;
+  /** When the viewer joined this huddle; the dividers' anchor before any transcript. */
+  sinceAt?: number;
   className?: string;
 }) {
   const recording = isRecRoomKey(roomKey);
@@ -275,8 +278,23 @@ export function RoomThread({
   const removeFeed = useRemoveLiveFeed(liveTranscriptId);
   // addRoute/startScribe can refuse (room authorization, ended transcript);
   // a silent close-and-nothing is the one wrong outcome.
-  const onPickFeed = (t: FeedTarget) =>
-    void addFeed(t).catch((err: any) => toast.error(humanizeConvexError(err, "Could not add the agent")));
+  // From the pick to the route landing there is a wait (a new session's
+  // create can park for minutes on a slow link): the header shows the agent
+  // on its way and the Add button rests, so a second click cannot spawn a
+  // second session.
+  const [adding, setAdding] = useState<FeedTarget | null>(null);
+  const onPickFeed = (t: FeedTarget) => {
+    setAdding(t);
+    void addFeed(t)
+      .catch((err: any) =>
+        toast.error(
+          err instanceof SessionCreatePendingError
+            ? "The agent's session is still starting. It joins the room when it lands."
+            : humanizeConvexError(err, "Could not add the agent"),
+        ),
+      )
+      .finally(() => setAdding(null));
+  };
   const openAddAgent = () =>
     openFeedTargetPicker({ title: "Add an agent to the room", gesture: "feed", showSlack: true, onPick: onPickFeed });
   // What an agent did is in the past once the call ended or nothing is live
@@ -286,10 +304,15 @@ export function RoomThread({
   // The explanation of what an agent does is said once per call, on the
   // first agent event of this call; the later ones just say who came.
   const explainEventId = past ? undefined : chatRows.find((r) => r.event === "agent_joined" && inCall(r.at))?._id;
-  const transcribeAlone = () =>
+  // No room means the server has not let this client into the huddle yet
+  // (or refused it), so nothing can be started; a refusal past that point
+  // is most often another scribe, but the server does not say which.
+  const transcribeAlone = () => {
+    if (!getRoom()) return void toast.error("Not connected to the huddle yet. Try again in a moment.");
     void startTranscribing(roomKey).then((ok) => {
-      if (!ok) toast.error("Somebody else is transcribing this huddle already");
+      if (!ok) toast.error("Could not start transcribing. Somebody else may be the scribe already.");
     });
+  };
 
   // Adding is allowed while a live feed could attach: on the stage whenever
   // the huddle runs (adding starts transcription when nobody is scribing),
@@ -410,7 +433,9 @@ export function RoomThread({
   // Event rows are the room's log, not its content: a room that has only
   // ever seen agents come and go is still empty.
   const empty = passages.length === 0 && chatRows.every((r) => r.event);
-  const showChips = routes.length > 0;
+  // The pick on its way shows as a chip until its route lands among the real ones.
+  const joining = adding && !("id" in adding && routes.some((r) => r.target === adding.id)) ? adding : null;
+  const showChips = routes.length > 0 || !!joining;
   // Nothing to fold, open or hide until someone has spoken.
   const showDensity = !recording && passages.length > 0;
   const showSwitch = seated && !recording;
@@ -429,8 +454,14 @@ export function RoomThread({
   // The chat outlives one call, so typed and agent lines from before this
   // call started and from after it ended are set apart from it. On the stage
   // the switch already says the room is live, so the header's line is short.
-  const earlier = anchorAt !== undefined ? timeline.filter((i) => i.at < anchorAt).length : 0;
-  const during = anchorAt !== undefined ? timeline.filter((i) => inCall(i.at)).length : timeline.length;
+  // Before transcription starts there is no call to anchor on, so the moment
+  // the viewer joined this huddle anchors the dividers instead: chat from an
+  // earlier huddle in this room falls under "Earlier in this room" rather
+  // than reading as agents in the room now. Events keep the call's anchor.
+  const dividerAt = anchorAt ?? sinceAt;
+  const inDivider = (at: number) => dividerAt !== undefined && at >= dividerAt && (endedAt === undefined || at <= endedAt);
+  const earlier = dividerAt !== undefined ? timeline.filter((i) => i.at < dividerAt).length : 0;
+  const during = dividerAt !== undefined ? timeline.filter((i) => inDivider(i.at)).length : timeline.length;
   const later = timeline.length - earlier - during;
 
   return (
@@ -483,8 +514,28 @@ export function RoomThread({
               </span>
             );
           })}
+          {joining && (
+            <span className="rt-chip" title="Joining the room">
+              <FeedChip
+                route={{ kind: joining.kind === "new-session" ? "session" : joining.kind, target: "", mode: "live" }}
+                label={joining.kind === "new-session" ? "new agent" : "label" in joining ? joining.label : undefined}
+                removable={false}
+                onRemove={() => {}}
+              />
+              <WorkingDots
+                className="text-sol-violet"
+                title={joining.kind === "new-session" ? "Starting the agent's session" : "Joining the room"}
+              />
+            </span>
+          )}
           {canAdd && !emptyCard && (
-            <button type="button" onClick={openAddAgent} className="rt-add" title={ADD_AGENT_TITLE}>
+            <button
+              type="button"
+              onClick={openAddAgent}
+              className="rt-add"
+              disabled={!!adding}
+              title={adding ? "An agent is joining the room" : ADD_AGENT_TITLE}
+            >
               <Sparkles className="h-3 w-3" />
               Add an agent
             </button>
@@ -572,7 +623,13 @@ export function RoomThread({
               </p>
               <div className="rt-empty-actions">
                 {canAdd && (
-                  <button type="button" onClick={openAddAgent} className="rt-btn rt-btn-violet" title={ADD_AGENT_TITLE}>
+                  <button
+                    type="button"
+                    onClick={openAddAgent}
+                    className="rt-btn rt-btn-violet"
+                    disabled={!!adding}
+                    title={adding ? "An agent is joining the room" : ADD_AGENT_TITLE}
+                  >
                     <Sparkles className="h-3.5 w-3.5" />
                     Add an agent
                   </button>
@@ -803,7 +860,7 @@ function PassageBlock({
         onClick={onToggle}
         title={`${open ? "Fold" : "Open"} this passage · ${n} ${units}${n === 1 ? "" : "s"}`}
       >
-        <ChevronRight className="rt-passage-chevron h-3 w-3" aria-hidden="true" />
+        <ChevronRight className="rt-chevron h-3 w-3" aria-hidden="true" />
         <span className="rt-passage-who">
           {recording ? (
             <span className="text-sol-text-muted">Spoken</span>
@@ -863,7 +920,7 @@ function RecapCard({ summary, items, live }: { summary: string; items: string[];
         onClick={() => setOpen((o) => !o)}
         title={open ? "Fold the recap" : live ? "What has been said so far, in a few lines" : "The summary and the action items"}
       >
-        <ChevronRight className="rt-passage-chevron h-3 w-3" aria-hidden="true" />
+        <ChevronRight className="rt-chevron h-3 w-3" aria-hidden="true" />
         <span className="rt-recap-label">
           <Sparkles className="h-3 w-3" />
           {label}
@@ -941,7 +998,7 @@ function EventLine({
       <span className="rt-event-glyph flex w-5 shrink-0 justify-center" aria-hidden="true">
         <Glyph className={`h-3 w-3 ${tone}`} />
       </span>
-      <span>
+      <span className="min-w-0 flex-1">
         {row.event === "agent_joined" ? (
           <>
             {ownRoom ? (
@@ -962,8 +1019,8 @@ function EventLine({
             {actor} switched transcription {row.event === "transcribe_on" ? "on" : "off"}
           </>
         )}
-        <span className="rt-when rt-event-when">{fmtWallClock(row.at, dayOf)}</span>
       </span>
+      <span className="rt-when rt-event-when">{fmtWallClock(row.at, dayOf)}</span>
     </div>
   );
 }
@@ -1027,13 +1084,13 @@ function ChatLine({
               <button
                 type="button"
                 onClick={() => onOpen(m.agent!.conversation_id)}
-                className="max-w-[200px] truncate text-[11.5px] font-semibold text-sol-violet hover:underline"
+                className="rt-name max-w-[200px] truncate text-sol-violet hover:underline"
                 title={`Open ${m.agent.title}`}
               >
                 {m.agent.name ?? m.agent.title}
               </button>
             ) : (
-              <span className="text-[11.5px] font-semibold text-sol-text">{m.mine ? "you" : firstName(m.user_name)}</span>
+              <span className="rt-name text-sol-text">{m.mine ? "you" : firstName(m.user_name)}</span>
             )}
             <span className="rt-when">{fmtWallClock(m.at, dayOf)}</span>
           </div>

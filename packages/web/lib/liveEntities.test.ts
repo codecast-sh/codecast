@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { isForeignSession, findEntityInStore } from "./liveEntities";
+import { isForeignSession, findEntityInStore, derivePeople, feedActorId } from "./liveEntities";
 
 // Regression for "dismiss doesn't stick on a session assigned to me": the
 // resolver ignored the owner signals, so hideSessionInDraft treated an
@@ -129,5 +129,36 @@ describe("findEntityInStore", () => {
     expect(findEntityInStore(state, "task", "ct-38940")?.status).toBe("in_progress");
     const moved = { ...state, tasks: { kx1: { ...TASK, status: "done" } } };
     expect(findEntityInStore(moved, "task", "ct-38940")?.status).toBe("done");
+  });
+});
+
+// Regression for Littlebird's "Chief 19" (2026-09-23): a role's standing
+// session is run by a human host (user_id) and rendered as the bot
+// (acting_user_id), and the server stamps author_name with the bot's name for
+// that one row. Keying people by user_id filed the seat under the host and,
+// because the seat was the host's newest row, labeled the host "Chief" with
+// every one of their own sessions counted under the bot.
+describe("derivePeople", () => {
+  const HOST = "users_alex";
+  const BOT = "users_chief";
+  const rows = [
+    { user_id: HOST, acting_user_id: BOT, author_name: "Chief of Staff", author_avatar: null },
+    { user_id: HOST, author_name: "Alexander Green", author_avatar: "a.png" },
+    { user_id: HOST, author_name: "Alexander Green", author_avatar: "a.png" },
+    { user_id: "users_david", author_name: "David Lu", author_avatar: null },
+  ];
+
+  it("gives the bot its own pill and keeps the host's name and count", () => {
+    expect(derivePeople(rows)).toEqual([
+      { id: HOST, name: "Alexander Green", image: "a.png", sessions: 2 },
+      { id: BOT, name: "Chief of Staff", image: null, sessions: 1 },
+      { id: "users_david", name: "David Lu", image: null, sessions: 1 },
+    ]);
+  });
+
+  it("feedActorId is the bot for a seat row and the runner otherwise", () => {
+    expect(feedActorId(rows[0])).toBe(BOT);
+    expect(feedActorId(rows[1])).toBe(HOST);
+    expect(feedActorId({ user_id: "" })).toBeUndefined();
   });
 });
