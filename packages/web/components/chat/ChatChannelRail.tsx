@@ -16,6 +16,8 @@ import {
 } from "../../lib/chatViews";
 import { hueFor, initials } from "../../lib/avatarInitials";
 import { useInboxStore } from "../../store/inboxStore";
+import { isThreadsPin, readPins } from "../../lib/sidebarPins";
+import { supersededChannelId } from "../../hooks/useChatSync";
 import { memberAvatarUrl } from "../../lib/liveEntities";
 import { SlackLogo } from "../SlackLogo";
 import { MIRROR_STATE_LABEL } from "@codecast/convex/convex/lib/slackMirror";
@@ -186,8 +188,19 @@ export const ChatChannelRail = memo(function ChatChannelRail({
 }) {
   const members = useInboxStore((s) => s.teamMembers) as ChatMember[];
   const viewer = useInboxStore((s) => (s as any).currentUser?._id ?? "");
-  const rooms = channels.filter((c) => c.kind !== "dm");
-  const dms = channels.filter((c) => c.kind === "dm");
+  // The channels pinned in the main sidebar, first here too, so the Chat
+  // window's rail carries chat's pins the way the main rail does. Pin ids
+  // resolve to live channel ids (a channel pinned as a stub keeps the stub).
+  const pinnedIds = useInboxStore((s) =>
+    readPins(s)
+      .filter((p) => p.kind === "channel" && !isThreadsPin(p))
+      .map((p) => supersededChannelId(s.chatChannels as any, p.id) ?? p.id)
+      .join(","),
+  );
+  const pinnedSet = new Set(pinnedIds.split(",").filter(Boolean));
+  const pinned = channels.filter((c) => pinnedSet.has(c.id));
+  const rooms = channels.filter((c) => c.kind !== "dm" && !pinnedSet.has(c.id));
+  const dms = channels.filter((c) => c.kind === "dm" && !pinnedSet.has(c.id));
   // The section never opens empty: teammates without an open room are listed
   // right below the real conversations, dimmer, one click from becoming one.
   const suggested = onOpenDm ? suggestedDmMembers(dms, members, viewer) : [];
@@ -199,6 +212,24 @@ export const ChatChannelRail = memo(function ChatChannelRail({
     <TooltipProvider delayDuration={200} skipDelayDuration={400}>
     <nav className="ch-rail" aria-label="Channels">
       <div ref={titlebarStripRef} className="titlebar-strip shrink-0" />
+      {pinned.length > 0 && (<>
+      <div className="ch-rail-head">
+        <span className="ch-rail-title">Pinned</span>
+      </div>
+      <div className="ch-rail-list">
+        {pinned.map((c) => (
+          <RailRow
+            key={c.id}
+            c={c}
+            active={c.id === activeChannelId}
+            members={members}
+            viewer={String(viewer)}
+            onSelect={onSelect}
+            onChannelContextMenu={onChannelContextMenu}
+          />
+        ))}
+      </div>
+      </>)}
       <div className="ch-rail-head">
         <span className="ch-rail-title">Channels</span>
         {onCreate && (

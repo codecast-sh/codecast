@@ -86,3 +86,47 @@ for (const c of cases) test(c.label, async () => {
     host.remove();
   }
 });
+
+// A huddle's digest is written under its scribe's account because the
+// transcript is theirs. The card names the huddle and wears the call badge,
+// whether only the rail says it is a call or the full row is already cached.
+for (const where of ["rail", "cached row"] as const) test(`huddle digest from the ${where} names the huddle, not its scribe`, async () => {
+  const channelId = `dm-huddle-${where}`;
+  const content = "**Team member out sick** · 1 min huddle with Cam and Ashot\n\nTesting issue noted.";
+  const last = { _id: "before", user_id: "cam", created_at: Date.now(), preview: "Earlier line" };
+  const row = { channel_id: channelId, last_message: last, unread: 0, unread_mentions: 0, notify_level: "all", joined: true, sort_at: Date.now() };
+  useInboxStore.setState({
+    currentUser: { _id: "viewer" },
+    chatRail: [row],
+    chatMessages: {},
+    chatChannels: { [channelId]: { name: "", kind: "dm", dm_key: "team:cam:viewer" } },
+    teamMembers: [{ _id: "cam", name: "Cam", image: "https://a/cam.png" }],
+    clientState: { ui: {} },
+  });
+  toasts.length = 0;
+  function Probe() { useChatToasts(); return null; }
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<Probe />));
+    const digest = { _id: "digest", user_id: "cam", created_at: Date.now(), preview: "Team member out sick · 1 min huddle with Cam and Ashot" };
+    await act(async () => useInboxStore.setState({
+      chatRail: [{ ...row, last_message: where === "rail" ? { ...digest, call: true } : digest }],
+      chatMessages: where === "rail" ? {} : { digest: { ...digest, channel_id: channelId, content, call: { transcript_id: "t1" } } },
+    }));
+    expect(toasts).toHaveLength(1);
+    const popup = toasts[0]();
+    expect(popup.props.data.isCall).toBe(true);
+    expect(popup.props.data.authorName).toBe("Huddle");
+    expect(popup.props.data.authorAvatarUrl).toBeUndefined();
+    await act(async () => root.render(popup));
+    expect(host.querySelector(".ch-toast-author")?.textContent).toBe("Huddle");
+    expect(host.querySelector(".ch-toast-call")).not.toBeNull();
+    expect(host.querySelector("img")).toBeNull();
+    expect(host.querySelector(".ch-toast-preview")?.textContent).toContain("1 min huddle with Cam and Ashot");
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});

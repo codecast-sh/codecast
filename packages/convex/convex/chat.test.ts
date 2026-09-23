@@ -3109,6 +3109,23 @@ describe("postCallDigest", () => {
     expect(messagesIn(ctx).length).toBe(1);
   });
 
+  // The scribe authors the row only because the transcript is theirs. What the
+  // other people are told about names the huddle, as the chat row itself does:
+  // the bell and the phone, and the rail a toast reads when the body is not
+  // loaded yet.
+  test("the digest reaches the others as the huddle, not as its scribe", async () => {
+    const ctx = context(ALICE);
+    const dm = await call(openDm, ctx, { team_id: TEAM, member_ids: [BOB] });
+    ctx._emitted.length = 0;
+    await call(postCallDigest, ctx, digest(`dm:${[ALICE, BOB].sort().join(":")}`));
+    const told = ctx._emitted.map((e: any) => e.args).filter((a: any) => a.direct_recipient_id === BOB);
+    expect(told.map((a: any) => a.event_type)).toEqual(["chat_dm"]);
+    expect(told[0].actor_name).toBe("Huddle");
+    expect(told[0].actor_user_id).toBe(ALICE);
+    const rail = (await call(listChannels, as(ctx, BOB), { team_id: TEAM })).rail.find((r: any) => r.channel_id === dm.channel_id);
+    expect(rail.last_message.call).toBe(true);
+  });
+
   test("a room with no channel behind it posts nothing", async () => {
     const ctx = context(null);
     expect((await call(postCallDigest, ctx, digest("dm:nobody:noone"))).posted).toBe(false);

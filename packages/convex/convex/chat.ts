@@ -623,6 +623,9 @@ type ChatRailRow = {
     // this to apply the on-screen rule (channel floor ≠ that thread) without
     // waiting for the message body to be in the store.
     thread_root_id?: Id<"chat_messages">;
+    // A huddle's digest: a row about the call, not words its scribe typed, so
+    // a toast names the huddle instead of the person who recorded it.
+    call?: true;
   } | null;
   last_inbound: { _id: Id<"chat_messages">; created_at: number } | null;
   sort_at: number;
@@ -741,6 +744,7 @@ async function railFor(
             ...(lastMessage.thread_root_id
               ? { thread_root_id: lastMessage.thread_root_id }
               : {}),
+            ...(lastMessage.call ? { call: true as const } : {}),
           }
         : null,
       // DM rooms only: what the other person last said, so a surface can key
@@ -2449,7 +2453,9 @@ export async function postChatMessage(
 
   // A Slack person with no codecast account authors as the workspace bridge;
   // the snapshot on the row is who actually spoke, and bells must name them.
-  const actorLabel = originSession?.title ?? opts.externalAuthor?.name;
+  // A huddle's digest is authored by its scribe only because the transcript is
+  // theirs: the bell and the phone name the huddle, as the transcript does.
+  const actorLabel = originSession?.title ?? opts.externalAuthor?.name ?? (opts.call ? "Huddle" : undefined);
   const { hereCount, actorName } = opts.history
     ? { hereCount: 0, actorName: await actorNameFor(ctx, authorId, actorLabel) }
     : await announceChatMessage(ctx, {

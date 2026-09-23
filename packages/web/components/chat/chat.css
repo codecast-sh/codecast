@@ -919,6 +919,13 @@ div.ch-reaction-tip {
   color: color-mix(in srgb, var(--sol-green) 80%, var(--sol-text));
 }
 
+/* The toast's face slot is 26px; the huddle badge fills it. */
+.ch-toast-call {
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+}
+
 .ch-call-kicker {
   font-size: 10px;
   font-weight: 600;
