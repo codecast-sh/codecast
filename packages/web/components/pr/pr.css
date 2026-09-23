@@ -71,30 +71,29 @@
   background: color-mix(in srgb, var(--sol-text-dim) 18%, transparent);
 }
 
-/* The title and the verbs share a row when there is room. The title keeps a
- * floor of 16rem, so a narrow pane wraps the verbs underneath instead of
- * squeezing the title down to one word a line. Below 560px the type steps
- * down too: a 26px title of a long sentence would otherwise fill the pane. */
-.pr-title-row {
+/* The status and the verbs live on the top row, with the repository path.
+ * They wrap onto their own line before they ever sit beside the title, so
+ * the title keeps the full width of the pane. Below 560px the type steps
+ * down: a 26px title of a long sentence would otherwise fill a narrow pane. */
+.pr-head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   flex-wrap: wrap;
   gap: 0.5rem 0.75rem;
 }
 
-.pr-title {
-  flex: 1 1 16rem;
-  min-width: min(100%, 16rem);
-  overflow-wrap: break-word;
-}
-
-.pr-title-actions {
+.pr-head-actions {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 0.5rem;
+  margin-left: auto;
   max-width: 100%;
-  padding-top: 0.25rem;
+}
+
+.pr-title {
+  width: 100%;
+  overflow-wrap: break-word;
 }
 
 .pr-branch {
