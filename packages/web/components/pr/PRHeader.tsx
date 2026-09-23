@@ -38,8 +38,8 @@ import {
 
 // The header band: who, what, where it is going, and whether it can land.
 // Everything here is one line of reading, the detail lives in the tabs. The
-// verbs (review, merge, the rest) sit on the title row, where the eye goes
-// after reading the title, and come in through `actions`.
+// verbs (review, merge, the rest) sit on the top row, above the title, so the
+// title keeps the full width of the pane. They come in through `actions`.
 
 const api = _api as any;
 
@@ -311,29 +311,24 @@ export function PRHeader({
 
   return (
     <header className="pr-band border-b border-sol-border/60 px-5 pt-4 pb-3 shrink-0">
-      <div className="pr-rise flex items-center gap-2 text-[11px] text-sol-text-dim" style={{ ["--d" as string]: "0ms" }}>
-        <span className="font-mono">{owner}</span>
-        <span className="opacity-40">/</span>
-        <span className="font-mono text-sol-text-muted">{repo}</span>
-        <span className="opacity-40">/</span>
-        <span className="font-mono text-sol-text-muted">#{number}</span>
-        <a
-          href={`https://github.com/${repository}/pull/${number}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="ml-1 inline-flex items-center gap-1 text-sol-text-dim hover:text-sol-cyan transition-colors"
-          title="Open on GitHub"
-        >
-          <ExternalLink className="w-3 h-3" />
-        </a>
-        <span className="ml-auto">
-          <RepoWindowControl />
+      <div className="pr-rise pr-head text-[11px] text-sol-text-dim" style={{ ["--d" as string]: "0ms" }}>
+        <span className="inline-flex items-center gap-2 min-w-0">
+          <span className="font-mono">{owner}</span>
+          <span className="opacity-40">/</span>
+          <span className="font-mono text-sol-text-muted truncate">{repo}</span>
+          <span className="opacity-40">/</span>
+          <span className="font-mono text-sol-text-muted">#{number}</span>
+          <a
+            href={`https://github.com/${repository}/pull/${number}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center text-sol-text-dim hover:text-sol-cyan transition-colors"
+            title="Open on GitHub"
+          >
+            <ExternalLink className="w-3 h-3" />
+          </a>
         </span>
-      </div>
-
-      <div className="pr-rise pr-title-row mt-1.5" style={{ ["--d" as string]: "60ms" }}>
-        <EditableTitle pr={pr} editNonce={editNonce} />
-        <div className="pr-title-actions">
+        <div className="pr-head-actions">
           <Chip accent={state.accent}>
             <StateIcon className="w-3.5 h-3.5" />
             {state.label}
@@ -341,8 +336,13 @@ export function PRHeader({
           {merge && <Chip accent={merge.accent}>{merge.label}</Chip>}
           {decision && <Chip accent={decision.accent}>{decision.label}</Chip>}
           <ShepherdControl pr={pr} sessionChoices={sessionChoices} onSetShepherd={onSetShepherd} />
-          {verbs && <span className="ml-1 flex items-center gap-1.5 flex-wrap">{verbs}</span>}
+          {verbs && <span className="flex items-center gap-1.5 flex-wrap">{verbs}</span>}
+          <RepoWindowControl />
         </div>
+      </div>
+
+      <div className="pr-rise mt-1.5" style={{ ["--d" as string]: "60ms" }}>
+        <EditableTitle pr={pr} editNonce={editNonce} />
       </div>
 
       <div className="pr-rise mt-2.5 flex items-center gap-3 flex-wrap" style={{ ["--d" as string]: "120ms" }}>

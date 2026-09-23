@@ -131,81 +131,79 @@ export function PRTimeline({
   const firstNew = lastSeenAt ? items.find((item) => item.at > lastSeenAt)?.key : undefined;
 
   return (
-    <div className="h-full flex flex-col">
-      <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4" data-main-scroll>
-        {pr.body ? (
-          <div className="pr-rise rounded-xl border border-sol-border/50 bg-sol-card px-4 py-3" style={{ ["--d" as string]: "220ms" }}>
-            <MarkdownRenderer content={pr.body} />
-          </div>
-        ) : (
-          <p className="text-[13px] text-sol-text-dim italic">This pull request has no description.</p>
-        )}
-
-        <div className="mt-4 space-y-2">
-          {items.map((item) => {
-            const day = dayLabel(item.at);
-            const divider = day !== lastDay ? day : null;
-            lastDay = day;
-            return (
-              <div key={item.key}>
-                {item.key === firstNew && (
-                  <div className="pr-since -mx-1 mb-2 mt-4 flex items-center gap-3 py-1">
-                    <span className="h-px flex-1 bg-sol-cyan/50" />
-                    <span className="text-[10px] uppercase tracking-wider text-sol-cyan">Since you last looked</span>
-                    <span className="h-px flex-1 bg-sol-cyan/50" />
-                  </div>
-                )}
-                {divider && (
-                  <div className="pr-day -mx-1 mb-2 mt-4 flex items-center gap-3 bg-sol-bg/80 py-1 first:mt-0">
-                    <span className="text-[10px] uppercase tracking-wider text-sol-text-dim">{divider}</span>
-                    <span className="h-px flex-1 bg-sol-border/40" />
-                  </div>
-                )}
-                {item.kind === "event" && (
-                  <ExternalEventRow
-                    event={externalEventRowToExternalEvent(item.event as ExternalEventRecord)}
-                    density="feed"
-                    showActor
-                    omitRefs={["pr"]}
-                    onNavigate={onNavigate}
-                  />
-                )}
-                {item.kind === "review" && <ReviewItem review={item.review} comments={comments} onJump={onJumpToThread} />}
-                {item.kind === "comment" && (
-                  <div
-                    className={`rounded-lg border px-3 py-2 space-y-2 ${
-                      threadResolved([item.comment, ...item.replies])
-                        ? "border-sol-green/30 opacity-70"
-                        : "border-sol-border/50"
-                    }`}
-                  >
-                    <PRCommentCard comment={item.comment} />
-                    {item.replies.map((reply) => (
-                      <div key={reply._id} className="pl-6">
-                        <PRCommentCard comment={reply} />
-                      </div>
-                    ))}
-                    {authed && (
-                      <button
-                        type="button"
-                        className="cc-comment-btn"
-                        onClick={() =>
-                          onResolve(item.comment._id, !threadResolved([item.comment, ...item.replies]))
-                        }
-                      >
-                        {threadResolved([item.comment, ...item.replies]) ? "Unresolve" : "Resolve"}
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })}
+    <div className="px-5 py-4">
+      {pr.body ? (
+        <div className="pr-rise rounded-xl border border-sol-border/50 bg-sol-card px-4 py-3" style={{ ["--d" as string]: "220ms" }}>
+          <MarkdownRenderer content={pr.body} />
         </div>
+      ) : (
+        <p className="text-[13px] text-sol-text-dim italic">This pull request has no description.</p>
+      )}
+
+      <div className="mt-4 space-y-2">
+        {items.map((item) => {
+          const day = dayLabel(item.at);
+          const divider = day !== lastDay ? day : null;
+          lastDay = day;
+          return (
+            <div key={item.key}>
+              {item.key === firstNew && (
+                <div className="pr-since -mx-1 mb-2 mt-4 flex items-center gap-3 py-1">
+                  <span className="h-px flex-1 bg-sol-cyan/50" />
+                  <span className="text-[10px] uppercase tracking-wider text-sol-cyan">Since you last looked</span>
+                  <span className="h-px flex-1 bg-sol-cyan/50" />
+                </div>
+              )}
+              {divider && (
+                <div className="pr-day -mx-1 mb-2 mt-4 flex items-center gap-3 bg-sol-bg/80 py-1 first:mt-0">
+                  <span className="text-[10px] uppercase tracking-wider text-sol-text-dim">{divider}</span>
+                  <span className="h-px flex-1 bg-sol-border/40" />
+                </div>
+              )}
+              {item.kind === "event" && (
+                <ExternalEventRow
+                  event={externalEventRowToExternalEvent(item.event as ExternalEventRecord)}
+                  density="feed"
+                  showActor
+                  omitRefs={["pr"]}
+                  onNavigate={onNavigate}
+                />
+              )}
+              {item.kind === "review" && <ReviewItem review={item.review} comments={comments} onJump={onJumpToThread} />}
+              {item.kind === "comment" && (
+                <div
+                  className={`rounded-lg border px-3 py-2 space-y-2 ${
+                    threadResolved([item.comment, ...item.replies])
+                      ? "border-sol-green/30 opacity-70"
+                      : "border-sol-border/50"
+                  }`}
+                >
+                  <PRCommentCard comment={item.comment} />
+                  {item.replies.map((reply) => (
+                    <div key={reply._id} className="pl-6">
+                      <PRCommentCard comment={reply} />
+                    </div>
+                  ))}
+                  {authed && (
+                    <button
+                      type="button"
+                      className="cc-comment-btn"
+                      onClick={() =>
+                        onResolve(item.comment._id, !threadResolved([item.comment, ...item.replies]))
+                      }
+                    >
+                      {threadResolved([item.comment, ...item.replies]) ? "Unresolve" : "Resolve"}
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
 
       {authed && (
-        <div className="border-t border-sol-border/50 px-5 py-3 shrink-0">
+        <div className="mt-4 border-t border-sol-border/50 pt-4">
           <PRComposer
             repository={pr.repository}
             threadKey={codeThreadRootKey(pr.repository, pr.head_sha ?? "", {})}

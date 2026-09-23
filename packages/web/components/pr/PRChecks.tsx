@@ -33,7 +33,7 @@ function CheckRows({ checks }: { checks: PrCheck[] | undefined }) {
 
   if (rows.length === 0) {
     return (
-      <div className="h-full flex flex-col items-center justify-center gap-2 px-8 text-center">
+      <div className="flex flex-col items-center justify-center gap-2 px-8 py-16 text-center">
         <ShieldCheck className="w-8 h-8 text-sol-text-dim/40" />
         <p className="text-[13px] text-sol-text-muted">{checks ? "No checks on this pull request" : "Checks have not loaded yet"}</p>
       </div>
@@ -41,7 +41,7 @@ function CheckRows({ checks }: { checks: PrCheck[] | undefined }) {
   }
 
   return (
-    <div className="h-full overflow-y-auto px-5 py-4" data-main-scroll>
+    <div className="px-5 py-4">
       <div className="mb-3 text-[11px] text-sol-text-dim">
         {fold.failed > 0 && <span className="text-sol-red">{fold.failed} failed · </span>}
         {fold.pending > 0 && <span className="text-sol-yellow">{fold.pending} running · </span>}
