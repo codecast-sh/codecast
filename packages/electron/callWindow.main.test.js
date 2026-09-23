@@ -415,6 +415,36 @@ test("the host's mirror reaches every other window, and a window that opens late
   assert.deepEqual(late, [mirror]);
 });
 
+test("the host's camera frames reach every other window and are never kept for a late one", () => {
+  const rig = loadShell();
+  const { win, sender } = bootVoiceWindow(rig);
+  declareHost(rig, sender);
+  const main = [];
+  rig.mainWindow.webContents.send = (channel, payload) => {
+    if (channel === "voice-frames") main.push(payload);
+  };
+  const own = [];
+  win.webContents.send = (channel, payload) => own.push([channel, payload]);
+  const frames = { "u-ann": "data:image/jpeg;base64,AAAA" };
+  rig.handlers.get("voice-frames")(sender, frames);
+  assert.deepEqual(main, [frames]);
+  // Never back to the host, and only the host may send them.
+  assert.deepEqual(own, []);
+  rig.handlers.get("voice-frames")({ sender: { id: 999 } }, { "u-bo": "data:x" });
+  assert.deepEqual(main, [frames]);
+  // A frame is a moment, not a state: a window that opens later gets the next
+  // one, never a replay.
+  rig.handlers.get("open-people-window")(rig.event());
+  const people = rig.windows[rig.windows.length - 1];
+  const late = [];
+  people.webContents.send = (channel, payload) => {
+    if (channel === "voice-frames") late.push(payload);
+  };
+  people.webContents.once = () => {};
+  rig.handlers.get("report-window-state")(rig.event(people.webContents), { active: "/people", open: [] });
+  assert.deepEqual(late, []);
+});
+
 test("the call lives in the voice window only while it hosts a room", async () => {
   const rig = loadShell();
   const roles = [];

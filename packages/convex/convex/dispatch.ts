@@ -41,6 +41,7 @@ import {
 } from "./buckets";
 import { advanceLocalViewRevision, runLocalCommand } from "./localFirstCommands";
 import { isSessionOwner } from "./sessionOwners";
+import { hideConversationForViewer, unhideConversationForViewer } from "./inboxHides";
 import { patchCommentWithRevision } from "./commentViewWrites";
 import { canAccessConversation, requireTeamMembership, patchConversationVisibility } from "./lib/access";
 import { patchConversationThroughFavoriteView } from "./favoriteViewWrites";
@@ -116,17 +117,16 @@ const TABLE_CONFIG: Record<string, TableConfig> = {
 const PATCH_ONLY_ACTIONS = new Set([
   "answerDecision", "applyWorkbench", "clearCurrentConversation", "clearSelection",
   "clearSidePanelSession", "closeSidePanel", "closeTab", "deferSession",
-  "initPagination", "injectSession", "killSession", "killSessions",
-  "markKilling", "navigateToSession", "openSidePanel", "openTab",
+  "initPagination", "injectSession", "markKilling", "navigateToSession", "openSidePanel", "openTab",
   "patchConversation", "pinSession", "renameSession", "requestNavigate",
-  "restoreSession", "saveCurrentTabState", "selectPanelSession", "setActiveBucketFilter",
+  "saveCurrentTabState", "selectPanelSession", "setActiveBucketFilter",
   "setActiveProjectFilter", "setCloudSessionMode", "setCloudSharedCheckout", "setConversationAgent",
   "setConversationAgentDefinition", "setConversationModel", "setCurrentConversation", "setCurrentSession",
   "setIsolatedWorktreeMode", "setNavCollapsed", "setPagination", "setRecentProjects",
   "setSessionCharacter", "setSessionCharacters", "setSessionRest", "setViewingDismissedId",
   "snoozeSession", "stageCloseLeaf", "stageExpandLeaf", "stageFocusLeaf",
   "stageInsertLeaf", "stageMoveLeaf", "stageSetLeafPath", "stageSetSizes",
-  "stashSession", "switchTab", "toggleBucketFilterTerm", "toggleCollapsedSection",
+  "switchTab", "toggleBucketFilterTerm", "toggleCollapsedSection",
   "toggleFavorite", "toggleProjectFilterTerm", "toggleSidePanel", "touchMru",
   "updateClientDismissed", "updateSessionProject", "updateTab", "wakeSnoozedSession",
   "wsHide", "wsSetPresentation", "wsSetSize", "wsShow",
@@ -661,10 +661,11 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   updateOrgRole: async (ctx, _userId, [roleId, fields, opts]: [string, any, { leave_sessions?: boolean } | undefined]) => {
     // A pause or resume is the standing agent's (org-roles-standing.md T4):
     // hands get their interrupt and held wakes flush, which a bare status
-    // patch would skip. Trust and caps have their own human-only mutations.
+    // patch would skip. The switch and the limits have their own human-only mutations.
     if (fields.status === "paused") await ctx.runMutation!((api as any).orgRoles.pause, { role_id: roleId });
     else if (fields.status === "active") await ctx.runMutation!((api as any).orgRoles.resume, { role_id: roleId });
-    if (fields.trust !== undefined) await ctx.runMutation!((api as any).orgRoles.setTrust, { role_id: roleId, trust: fields.trust });
+    if (fields.starts_on_its_own !== undefined) await ctx.runMutation!((api as any).orgRoles.setTrust, { role_id: roleId, on: !!fields.starts_on_its_own });
+    else if (fields.trust !== undefined) await ctx.runMutation!((api as any).orgRoles.setTrust, { role_id: roleId, trust: fields.trust });
     if (fields.caps !== undefined) {
       await ctx.runMutation!((api as any).orgRoles.setCaps, { role_id: roleId, hands: fields.caps.hands_per_day, wakes: fields.caps.wakes_per_day, tokens: fields.caps.tokens_per_day });
     }
@@ -672,7 +673,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     // whole list, and the mutation takes the difference against its own row.
     if (fields.reports_user_ids !== undefined) await ctx.runMutation!((api as any).orgRoles.setReports, { role_id: roleId, set: fields.reports_user_ids });
     const rest: Record<string, any> = { ...fields };
-    delete rest.trust; delete rest.caps; delete rest.reports_user_ids;
+    delete rest.trust; delete rest.starts_on_its_own; delete rest.caps; delete rest.reports_user_ids;
     if (rest.status === "paused" || rest.status === "active") delete rest.status;
     // tenure (S10) and avatar (S13) go through the plain update.
     if (!["name", "handle", "scope", "charter", "status", "tenure", "avatar"].some((k) => rest[k] !== undefined)) return null;
@@ -1267,6 +1268,31 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
 
   dismissBrowserPaneOffer: async (ctx, userId, [convId, at]: [string, number]) => {
     await stampBrowserPaneOfferHandled(ctx, userId, convId as Id<"conversations">, at);
+  },
+
+  // The inbox hide gestures. For the runner and the owner set the patches above
+  // carry the gesture (the row's own stamps). For anyone else — a teammate's
+  // row on the team board — applyPatches dropped the patch and the store only
+  // forgot its copy; the team fold then re-fed the row on the next push. The
+  // viewer's gesture is recorded in inbox_hides instead, which the team scan
+  // skips. hideConversationForViewer is a no-op for the runner and owners, so
+  // one handler serves both cases without the client telling them apart.
+  stashSession: async (ctx, userId, [convId]: [string, { hidden?: boolean } | undefined]) => {
+    const conv = await ctx.db.get(convId as Id<"conversations">);
+    await hideConversationForViewer(ctx, userId, conv, "stash");
+  },
+  killSession: async (ctx, userId, [convId]: [string]) => {
+    const conv = await ctx.db.get(convId as Id<"conversations">);
+    await hideConversationForViewer(ctx, userId, conv, "dismiss");
+  },
+  killSessions: async (ctx, userId, [convIds]: [string[]]) => {
+    for (const convId of convIds ?? []) {
+      const conv = await ctx.db.get(convId as Id<"conversations">);
+      await hideConversationForViewer(ctx, userId, conv, "dismiss");
+    }
+  },
+  restoreSession: async (ctx, userId, [convId]: [string]) => {
+    await unhideConversationForViewer(ctx, userId, convId as Id<"conversations">);
   },
 
   // Mirror of conversations.setPrivacy — these two fields are immutable in

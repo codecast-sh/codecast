@@ -900,3 +900,35 @@ no anchor node kind; `orgRows` on the phone follows. The guard is
 `lib/__tests__/anchorWord.guard.test.ts`: it reads string literals and JSX
 text under web, mobile, the CLI, the shared contracts and convex, and fails on
 the word outside the verb sense and the `cast anchor` command name.
+
+## S23. Less to reason about: no stages, no budgets, no rows under a role
+
+A person who opens the inbox should meet their agents the way they meet a colleague: a name, a face, what it is doing, and what it needs from them. On 2026-09-22 the founder met instead a role card with three session rows folded under it, a session put in front of him with no reason he recognised, and a lead asking him to "raise its trust to direct" so that it could start a builder, with the token budget in the same breath. The machinery was working as specified. The specification asked the person to hold too much in their head. This section takes three ideas out of the person's view and out of the role's voice.
+
+### S23.1 A role has one switch, not three stages
+
+The trust stages (understand, decide, direct) collapse into one switch on the role's page: **Starts work on its own**. On, the role starts hands and answers decisions inside its scope. Off, it reads, answers questions, and recommends; what needs doing goes to the person as one recommendation, and the person starts it or flips the switch. The root role's switch is off and cannot be turned on: it proposes, a person applies (S12). Every other role's switch defaults to on when a person hires it, whether through an accepted proposal, the org skill or `cast role create`, because a person who hired a lead wants it to lead.
+
+The words trust, stage, understand, decide and direct leave every person facing surface: the role page, the chart, the proposals, the history lines, the CLI's output and help. The stored field stays for one release under its name, mapped both ways (on is direct, off is understand; decide reads as on and is never written again), so nothing that reads it breaks while the surfaces move, and a source test pins the words gone the way S22's pins the old name.
+
+A role never asks for the switch. Its standing text says that when it cannot start work on its own it says so in one line and recommends; it does not queue a decision about its own settings, and the frame does not name the switch's state. The org review may propose flipping a role's switch, once, as one plain sentence with the evidence beside it, in the same ask as the rest of what it proposes for that role.
+
+### S23.2 Caps are a safety net the person does not see
+
+Hands, wakes and tokens per day stay as the bound that keeps a runaway role from spending a week's budget in a night. They stop being something the person sets, reads about, or is asked about:
+
+- The proposal never asks about limits. The analyzer's sizing rule and the "daily allowance" asks go; a proposal names roles, scopes, records and the switch, and nothing else about a role's operation. The eval rubric's sizing line goes with it.
+- The role page shows no numbers by default. A disclosure under the role's settings, **Limits**, holds the three values with the defaults filled in, for the person who wants to look.
+- A role that reaches a cap waits. It writes one line in its brief and its pinned state says it is waiting for tomorrow; the org health view carries that line; nothing reaches the person's inbox or their queue. The role's standing text drops "caps are real" and the frame drops the counters.
+
+### S23.3 A role's sessions are the role's
+
+The inbox never lists a role's hands as rows under the role's card. The card carries a count, **3 sessions**, that opens the role's page, where the sessions are the panel's business (F4). What reaches the person from under a role is the role's own line on its card (R1, revised), and nothing else. The chart keeps its nesting; the inbox does not.
+
+### S23.4 The line a person reads names who did it
+
+An escalation line always says who put the session in front of the person and why. A person's own gesture reads as their own; a role's reads as the role's, with its reason. The Calling lead's case read "Ashot Petrosian put this in their inbox" because the actor resolved to the host person when the caller's session was not named; the server resolves the caller from the session the command runs in, so a role's command is the role's whatever the CLI passed, and a line with no reason from a role is refused rather than filled in with a person's name.
+
+### What this changes
+
+Web: the role page's Settings tab (one switch, Limits disclosure), the chart's role card, the inbox card (count, no nested rows), the proposal thread and asks, history lines, the first visit copy. CLI: `cast role trust` becomes `cast role autonomy on|off` with the old verb as an alias for one release; `cast role caps` moves under `cast role limits`. Convex: the switch mapping, the actor resolution in `performEscalateSession`, the analyzer input and prompt (sizing gone), the standing text and the frame. Eval: the sizing rubric line removed; one round on Union to confirm no ask about limits appears and the cards still stand alone.

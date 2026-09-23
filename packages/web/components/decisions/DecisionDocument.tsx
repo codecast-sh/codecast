@@ -1,5 +1,6 @@
 "use client";
 
+import { autonomyOn } from "@codecast/shared/contracts/roleAutonomy";
 import { useCallback, useState } from "react";
 import Link from "next/link";
 import { useMutation } from "convex/react";
@@ -336,9 +337,9 @@ function GrantOffer({ offer, decisionId, ladder, grant }: {
       <div className="text-sm text-sol-text">
         You agreed with <span className="text-sol-cyan">{offer.role_name}</span> {offer.agreements} times on {offer.category} questions in this {scope}, from {offer.askers} different sessions.
       </div>
-      {trust === "understand" && (
+      {!autonomyOn(trust) && (
         <div className="mt-1 text-[12px] text-sol-text-dim">
-          Grants take effect once {offer.role_name} is at trust <span className="text-sol-text">decide</span>.{" "}
+          Grants take effect once {offer.role_name} starts work on its own.{" "}
           {hop?.role && <Link href={`/org/${hop.role.short_id ?? hop.role._id}`} className="text-sol-blue hover:underline">Open its settings</Link>}
         </div>
       )}

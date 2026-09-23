@@ -104,14 +104,10 @@ async function verifyStaffingPane() {
   assert.deepEqual(staleSeen, { revised_at: 0, seqs: [ORG_STAFFING_FIXTURE_PROPOSAL.changes.find((c) => c.change.kind === "role" && c.change.handle === "content")!.seq] });
   await act(async () => (card(1).querySelector("[data-ask-about]") as HTMLButtonElement).click());
   assert.equal(calls.pop(), "aboutAsk:1");
-  // The cost line, in words (no role in the fixture tree has a limit yet, so
-  // the growth limit is the first); the arithmetic behind one tap.
-  assert.equal(q("[data-cost-line]")!.textContent, "If you accept everything, the agents get their first daily limitSee the numbers");
-  assert.equal(q('[data-summary-detail="budget"]'), null);
-  await act(async () => q<HTMLButtonElement>("[data-cost-line]")!.click());
-  assert.match(q("[data-budget-today]")!.textContent!, /tokens$/);
-  assert.match(q("[data-budget-lines]")!.textContent!, /@growth/);
-  await act(async () => q<HTMLButtonElement>("[data-cost-line]")!.click());
+  // No cost line and no arithmetic (org-staffing.md S23.2): a proposal says
+  // nothing about what a role may do in a day.
+  assert.equal(q("[data-cost]"), null);
+  assert.equal(q("[data-cost-line]"), null);
   assert.equal(q('[data-summary-detail="budget"]'), null);
   // No composer of the chief's: the page renders the author's thread.
   assert.equal(q("[data-composer]"), null);
@@ -270,7 +266,7 @@ async function verifyStaffingPane() {
   // the glossary exists to define. None may be needed to say what is asked,
   // what it changes, and what to press.
   await render({ proposal: ORG_STAFFING_FIXTURE_PROPOSAL, selectedChangeId: null });
-  const firstScreen = [q("[data-asks-header]"), ...qa("[data-ask]"), q("[data-cost-line]")].map((el) => el!.textContent).join("\n");
+  const firstScreen = [q("[data-asks-header]"), ...qa("[data-ask]")].map((el) => el!.textContent).join("\n");
   console.log("first screen, in order:\n" + firstScreen.replace(/\n/g, "\n  "));
   const needsGlossary = /standing agent|\bscope\b|\bcharter\b|\bwakes?\b|\bhands?\b|\btokens?\b|\bop-\d+|\bseq\b|\bproposal\b|\bchief of staff\b/i;
   const hit = firstScreen.match(needsGlossary);

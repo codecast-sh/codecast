@@ -10,6 +10,7 @@
 import { useState } from "react";
 import { useSyncOrgTree } from "../../hooks/useSyncOrgTree";
 import { AuthGuard } from "../../components/AuthGuard";
+import { OrgFeatureGate } from "../../components/org/OrgFeatureGate";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { ScopePageInner } from "../../components/org/scope/ScopePage";
 import { AnchorOnboarding, CenteredNote } from "../../components/anchor/AnchorConversation";
@@ -20,7 +21,9 @@ export default function AnchorPage() {
   return (
     <AuthGuard>
       <DashboardLayout>
+        <OrgFeatureGate>
         <RootRolePage />
+        </OrgFeatureGate>
       </DashboardLayout>
     </AuthGuard>
   );

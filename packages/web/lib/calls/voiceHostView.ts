@@ -32,11 +32,15 @@ export function voiceHostView(input: {
   /** A window the person works in has focus (the voice window is not one). */
   appFocused: boolean;
   wallWanted: boolean;
+  /** The person hid the float this engagement (its Hide button); it comes
+   *  back for the next one. A popped out row is never dismissed, only put
+   *  back in the header. */
+  dismissed?: boolean;
 }): VoiceWindowShape {
-  const { engaged, inCall, expanded, floating, appFocused, wallWanted } = input;
+  const { engaged, inCall, expanded, floating, appFocused, wallWanted, dismissed = false } = input;
   if (inCall && expanded) return "panel";
   if (floating) return "float";
-  if (engaged && !appFocused) return "float";
+  if (engaged && !appFocused && !dismissed) return "float";
   if (wallWanted) return "wall";
   return "idle";
 }

@@ -3,6 +3,7 @@
 // under each hang their own sessions and the roles that report to them, and
 // roles nest the same way. A role opens its page, which is the conversation
 // with the agent that holds the seat; a session opens the session.
+import { useWorkspaceFeatureState } from '@/lib/teamFeatures';
 import { useCallback, useMemo, useState } from 'react';
 import { ActivityIndicator, FlatList, RefreshControl, StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
@@ -136,7 +137,8 @@ export default function OrgScreen() {
     );
   }, [Theme, router, now, toggleFold, toggleMore]);
 
-  const problem = queryProblem(error, missing, 'The org');
+  const orgOn = useWorkspaceFeatureState('org');
+  const problem = orgOn === false ? 'Organization is off for this workspace. A team admin can turn it on under Settings, Team.' : queryProblem(error, missing, 'The org');
   const roleCount = tree?.roles.filter((r) => r.status !== 'retired').length ?? 0;
 
   return (
