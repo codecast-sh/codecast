@@ -4,9 +4,9 @@ import { JSDOM } from "jsdom";
 import { replaceGlobals } from "../../../test-helpers/globals";
 
 // A reader cannot decide from a question and its option labels; the context
-// the asker wrote is what the answer rests on. Every size of the session
-// card that offers the options shows it: full reads it whole, the dock
-// clips it to the room the half pane leaves and opens the rest in full.
+// the asker wrote is what the answer rests on. The sheet reads it whole, in
+// one flow with the options after it; the fold shows the question and its
+// status only, and opening it is the sheet.
 mock.module("next/link", () => ({ default: ({ children, href, ...rest }: any) => <a href={typeof href === "string" ? href : "#"} {...rest}>{children}</a> }));
 mock.module("../../../lib/convexUrl", () => ({ CONVEX_URL: "https://convex.test", getConvexUrl: () => "https://convex.test" }));
 mock.module("../../../hooks/useQueryNoThrow", () => ({ useQueryNoThrow: () => ({ data: undefined, error: null }) }));
@@ -16,7 +16,6 @@ mock.module("../../PublishedPageEmbed", () => ({ PublishedPageEmbed: () => null 
 mock.module("../../tools/MarkdownRenderer", () => ({ MarkdownRenderer: ({ content }: { content: string }) => <div data-md>{content}</div> }));
 
 import { SessionDecisionCard } from "../../SessionDecisionCard";
-import { CollapsibleBody } from "../../CollapsibleBody";
 
 import { closeDomWindow } from "../../../test-helpers/domGlobals";
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { pretendToBeVisual: true, url: "https://codecast.sh/questions" });
@@ -61,18 +60,32 @@ async function mount(ui: React.ReactNode) {
   return { pane, unmount: () => act(() => root.unmount()) };
 }
 
-test("an advisory card docks and still shows the reasoning above the options", async () => {
-  const { pane, unmount } = await mount(<SessionDecisionCard item={item(false)} stepper={null} />);
+function readingOrder(pane: HTMLElement) {
+  const question = pane.querySelector("h1.decision-question")!;
   const body = pane.querySelector("[data-decision-context]")!;
-  expect(body).not.toBeNull();
-  expect(body.textContent).toContain("seats four workspaces and bills one turn each");
-  // The reasoning sits between the question and the option rows.
-  const question = pane.querySelector(".decision-question")!;
   const firstOption = pane.querySelector("[data-option]")!;
+  expect(question).not.toBeNull();
+  expect(body).not.toBeNull();
+  expect(firstOption).not.toBeNull();
+  // The reasoning sits between the question and the option rows, all in one flow.
   expect(question.compareDocumentPosition(body) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(body.compareDocumentPosition(firstOption) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  // The dock wears the list card's look; the question is in its serif class.
-  expect(pane.firstElementChild!.classList.contains("decision-card")).toBe(true);
+  return body;
+}
+
+test("an advisory card in a session view starts folded: the question and the default, no reasoning, one gesture to open", async () => {
+  const { pane, unmount } = await mount(<SessionDecisionCard item={item(false)} stepper={null} />);
+  const fold = pane.firstElementChild!;
+  expect(fold.classList.contains("decision-card")).toBe(true);
+  expect(fold.classList.contains("decision-fold")).toBe(true);
+  expect(fold.textContent).toContain("root seat");
+  expect(fold.textContent).toContain("proceeding with Wait");
+  expect(pane.querySelector("[data-decision-context]")).toBeNull();
+  expect(pane.querySelector("[data-option]")).toBeNull();
+  await act(() => { (fold.querySelector("button") as HTMLButtonElement).click(); });
+  expect(pane.firstElementChild!.classList.contains("decision-doc")).toBe(true);
+  const body = readingOrder(pane);
+  expect(body.textContent).toContain("seats four workspaces and bills one turn each");
   unmount();
 });
 
@@ -80,59 +93,44 @@ test("a blocking card owns the pane and reads the reasoning whole, in the docume
   const { pane, unmount } = await mount(<SessionDecisionCard item={item(true)} stepper={null} />);
   const root = pane.firstElementChild!;
   expect(root.classList.contains("decision-doc")).toBe(true);
-  const body = pane.querySelector("[data-decision-context]")!;
+  expect(root.classList.contains("decision-sheet")).toBe(true);
+  const body = readingOrder(pane);
   expect(body.textContent).toContain("bills one turn each");
   expect(pane.querySelector("h1.decision-question")!.textContent).toContain("root seat");
+  // Nothing in the sheet scrolls on its own: one scroll box holds the
+  // question, the reasoning and the options together.
+  const scrollers = Array.from(pane.querySelectorAll<HTMLElement>("[class*='overflow-y-auto']"));
+  expect(scrollers).toHaveLength(1);
+  expect(scrollers[0].contains(pane.querySelector("h1.decision-question"))).toBe(true);
+  expect(scrollers[0].contains(pane.querySelector("[data-option]"))).toBe(true);
   unmount();
 });
 
-test("a fill body hands its toggle to the caller instead of opening in place", async () => {
-  const opened: string[] = [];
-  const pane = document.createElement("div");
-  document.body.appendChild(pane);
-  const root2 = createRoot(pane);
-  // jsdom lays nothing out: fake a box shorter than its content.
-  const Faked = () => (
-    <CollapsibleBody collapsedHeight="fill" onExpand={() => opened.push("grow")} expandLabel="Read the whole thing">
-      <div data-inner ref={(el) => {
-        if (!el) return;
-        Object.defineProperty(el.parentElement!, "scrollHeight", { value: 400, configurable: true });
-        Object.defineProperty(el.parentElement!.parentElement!, "clientHeight", { value: 100, configurable: true });
-      }}>long</div>
-    </CollapsibleBody>
-  );
-  await act(() => root2.render(<Faked />));
-  const toggle = pane.querySelector("button")!;
-  expect(toggle).not.toBeNull();
-  expect(toggle.textContent).toContain("Read the whole thing");
-  // The box stays clipped by its flex parent: no inline max-height. Its
-  // floor is the default, since the content (400px) is taller than it.
-  const box = toggle.previousElementSibling as HTMLElement;
-  expect(box.style.maxHeight).toBe("");
-  expect(box.style.minHeight).toBe("88px");
-  await act(() => { toggle.click(); });
-  expect(opened).toEqual(["grow"]);
-  // Still clipped: the toggle did not open it in place, so it still offers to.
-  expect(pane.querySelector("button")!.textContent).toContain("Read the whole thing");
-  await act(() => root2.unmount());
+test("in the queue an advisory card opens as the sheet, with its place in the queue on the chrome row", async () => {
+  const stepper: any = { position: 2, total: 5, onDone: () => {}, onSkip: () => {}, onExit: () => {} };
+  const { pane, unmount } = await mount(<SessionDecisionCard item={item(false)} stepper={stepper} />);
+  const root = pane.firstElementChild!;
+  expect(root.classList.contains("decision-sheet")).toBe(true);
+  expect(root.textContent).toContain("decision 2 of 5");
+  readingOrder(pane);
+  unmount();
 });
 
-test("a fill body shorter than the floor keeps no empty room under itself", async () => {
-  const pane = document.createElement("div");
-  document.body.appendChild(pane);
-  const root = createRoot(pane);
-  const Short = () => (
-    <CollapsibleBody collapsedHeight="fill" onExpand={() => {}}>
-      <div data-inner ref={(el) => {
-        if (!el) return;
-        Object.defineProperty(el.parentElement!, "scrollHeight", { value: 30, configurable: true });
-        Object.defineProperty(el.parentElement!.parentElement!, "clientHeight", { value: 30, configurable: true });
-      }}>two lines</div>
-    </CollapsibleBody>
-  );
-  await act(() => root.render(<Short />));
-  const box = pane.querySelector("[data-inner]")!.parentElement!.parentElement as HTMLElement;
-  expect(box.style.minHeight).toBe("30px");
-  expect(pane.querySelector("button")).toBeNull();
-  await act(() => root.unmount());
+test("the sheet seats the reasoning and the options as the two cells of one grid, so a wide pane can set them side by side", async () => {
+  const { pane, unmount } = await mount(<SessionDecisionCard item={item(true)} stepper={null} />);
+  const grid = pane.querySelector(".decision-sheet-grid")!;
+  expect(grid.getAttribute("data-split")).toBe("true");
+  expect(grid.children).toHaveLength(2);
+  expect(grid.children[0].classList.contains("decision-sheet-context")).toBe(true);
+  expect(grid.children[1].classList.contains("decision-sheet-options")).toBe(true);
+  unmount();
+});
+
+test("a question with no reasoning keeps one column", async () => {
+  const bare = { ...item(true), contextMd: undefined };
+  const { pane, unmount } = await mount(<SessionDecisionCard item={bare} stepper={null} />);
+  const grid = pane.querySelector(".decision-sheet-grid")!;
+  expect(grid.getAttribute("data-split")).toBe("false");
+  expect(grid.children).toHaveLength(1);
+  unmount();
 });
