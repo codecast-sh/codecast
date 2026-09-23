@@ -245,6 +245,9 @@ export const continueAllBlocked = mutation({
       continueBlocked: true,
       now,
     });
+    if (primary && (res.devices > 0 || res.messaged > 0)) {
+      await recordManualRecovery(ctx, primary, blocked, now);
+    }
     return {
       continued: res.messaged + res.restarted,
       restarted: res.restarted,
@@ -362,6 +365,10 @@ export const requestAccountSwitch = mutation({
       );
     }
 
+    if (primary && (res.devices > 0 || res.messaged > 0)) {
+      await recordManualRecovery(ctx, primary, blocked, now);
+    }
+
     return {
       devices: res.devices,
       conversations: res.routed,
@@ -381,6 +388,29 @@ export const requestAccountSwitch = mutation({
     };
   },
 });
+
+async function recordManualRecovery(
+  ctx: { db: any },
+  device: Doc<"devices">,
+  blocked: Doc<"conversations">[],
+  now: number,
+): Promise<void> {
+  const state = device.cc_auto_switch_state ?? {};
+  const keys = new Set(blocked
+    .filter((c) => c.pending_api_error_kind === "limit")
+    .map((c) => c.agent_type === "codex" ? AUTO_SWITCH_CODEX_CONTINUE_KEY : AUTO_SWITCH_CONTINUE_KEY));
+  await ctx.db.patch(device._id, {
+    cc_auto_switch_state: {
+      ...state,
+      last_action_at: now,
+      last_action: "manual",
+      last_decision: undefined,
+      exhausted_at: undefined,
+      attempts: [...(state.attempts ?? []), ...[...keys].map((profile) => ({ profile, at: now }))]
+        .slice(-MAX_ATTEMPT_HISTORY),
+    },
+  });
+}
 
 // The switch/revive execution plan shared by the manual mutation and the
 // auto-switch loop: route each blocked conversation to its online owner device
