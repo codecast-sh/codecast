@@ -1722,6 +1722,7 @@ shellIpc.on("voice-mirror", (e, payload) => {
   }
 });
 
+
 // ── The float, popped out ──────────────────────────────────────────────────
 //
 // The face row lives in the app's header until the person pops it out; then

@@ -91,6 +91,20 @@ export function pendingCancelRef(
   return { clientId: messageId };
 }
 
+// Whether the conversation's server pending row still needs its own bubble
+// (the caller has already ruled out text that is on screen). In flight:
+// always. Delivered: only while this window's transcript has not reached the
+// row's send time, and only at the live tail; past that point its echo is
+// either rendering already or never coming. Cancelled: never.
+export function serverPendingBubbleVisible(
+  pending: { status: string; created_at: number },
+  window: { newestServerTs: number; atLiveTail: boolean },
+): boolean {
+  if (pending.status === "cancelled") return false;
+  if (pending.status !== "delivered") return true;
+  return window.atLiveTail && window.newestServerTs < pending.created_at;
+}
+
 export function pendingMessageReachedSession(messageId: string, pending?: { message_id: string; client_id?: string; status: string } | null): boolean {
   return !!pending && (pending.status === "injected" || pending.status === "delivered")
     && (messageId === `serverpending_${pending.message_id}` || messageId === pending.client_id);

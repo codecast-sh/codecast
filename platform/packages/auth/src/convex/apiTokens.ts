@@ -33,6 +33,12 @@ export const TOKEN_LAST_USED_THROTTLE_MS = 10 * 60 * 1000;
 
 export const SETUP_TOKEN_TTL_MS = 60 * 60 * 1000;
 
+const SETUP_TOKEN_PREFIX = "setup-";
+
+function isSetupToken(tokenDoc: { name: string }): boolean {
+  return tokenDoc.name.startsWith(SETUP_TOKEN_PREFIX);
+}
+
 /** The one hash-and-index lookup every token path shares. */
 export async function findTokenDoc(
   ctx: DbCtx,
@@ -65,6 +71,12 @@ export async function verifyApiToken(
   }
 
   if (tokenDoc.expires_at && tokenDoc.expires_at < Date.now()) {
+    return null;
+  }
+
+  // A setup token is a one hour voucher for `exchangeSetupTokenFor` and
+  // nothing else. It must never act as the account's bearer credential.
+  if (isSetupToken(tokenDoc)) {
     return null;
   }
 
@@ -139,7 +151,7 @@ export async function exchangeSetupTokenFor(
     return null;
   }
 
-  if (!tokenDoc.name.startsWith("setup-")) {
+  if (!isSetupToken(tokenDoc)) {
     return null;
   }
 
@@ -273,7 +285,7 @@ export function createApiTokenDefinitions<Extras extends Record<string, unknown>
       await ctx.db.insert(tables.apiTokens, {
         user_id: userId,
         token_hash: tokenHash,
-        name: `setup-${now}`,
+        name: `${SETUP_TOKEN_PREFIX}${now}`,
         created_at: now,
         last_used_at: now,
         expires_at: expiresAt,
@@ -346,6 +358,11 @@ export function createApiTokenDefinitions<Extras extends Record<string, unknown>
       const token = await ctx.db.get(args.token_id);
       if (!token || token.user_id !== userId) {
         throw new Error("Token not found");
+      }
+      // The name is what marks a setup voucher, so a rename must never move a
+      // token across that line in either direction.
+      if (isSetupToken(token) || args.name.startsWith(SETUP_TOKEN_PREFIX)) {
+        throw new Error("Setup tokens cannot be renamed");
       }
 
       await ctx.db.patch(args.token_id, { name: args.name });

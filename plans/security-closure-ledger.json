@@ -207,11 +207,14 @@
     "id": "BACKEND-09",
     "priority_severity": "P2 / Medium",
     "finding": "Device-bound bearer restriction exists at HTTP wrapper but direct public Convex calls bypass it; attacker already holds valid token",
-    "status": "decided_pending_implementation",
+    "status": "in_progress",
     "workstream": "002",
-    "verification": [],
+    "verification": [
+      "2026-09-23 prod read: 291 api_tokens, 49 named setup-, none live, none used as a bearer; setup tokens refused as bearers and renames across the setup- prefix blocked (platform apiTokens.deviceBinding.test.ts, 11 pass; fails without the guard)"
+    ],
     "review": {
-      "decision": "human: 30 day grace window, staged enforcement"
+      "decision": "human 2026-09-23: no token rotation and no grace window. Existing unbound tokens keep working. Order: close the direct path for bound tokens, make the CLI send device_id, then bind newly minted tokens.",
+      "worker": "jx7fwnn"
     },
     "release": null
   },

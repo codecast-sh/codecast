@@ -869,6 +869,7 @@ export function deleteProfile(name: string): CcProfileMeta {
         `(the daemon re-saves the active login automatically, so removing it wouldn't stick)`,
     );
   }
+  if (readLaunchRecord()?.profile === name) clearLaunchProfile();
   deleteProfileSecret(name);
   removeAccountToken(name);
   delete index.profiles[name];
@@ -1353,8 +1354,92 @@ export function removeAccountToken(name: string): boolean {
   const file = accountTokenFilePath(name);
   const existed = fs.existsSync(file);
   try { fs.rmSync(file, { force: true }); } catch {}
+  if (readLaunchRecord()?.profile === name) clearLaunchProfile();
   invalidateAccountsCache();
   return existed;
+}
+
+// ---------------------------------------------------------------------------
+// Launch profile: the account sessions run on when it is not the keychain login
+//
+// A switch normally writes the target's saved login into the keychain, and
+// the fleet follows because every session reads the keychain. A profile whose
+// saved login is dead cannot be written there (activating a dead credential
+// parks every session on "Login expired"), but its minted setup-token still
+// carries sessions. A TOKEN SWITCH records that profile here instead: new and
+// resumed sessions pin to it (the daemon sources its token file), the server
+// reads the same name off the accounts inventory as `launch_profile` so the
+// pin, auto-continue and auto-switch all agree on which account the fleet is
+// on, and the keychain login stays as it was. The record lapses on its own
+// when the token goes, when the profile is removed, or when the keychain
+// login changes identity (a fresh sign-in supersedes the choice); a keychain
+// switch clears it outright.
+// ---------------------------------------------------------------------------
+
+export interface LaunchRecord {
+  profile: string;
+  // The keychain login (uuid or email) at the time of the token switch; a
+  // different one later means the person signed into something else since.
+  keychain_key?: string;
+  since: number;
+}
+
+function launchRecordPath(): string {
+  return path.join(defaultConfigDir(), "cc-launch.json");
+}
+
+export function readLaunchRecord(): LaunchRecord | null {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(launchRecordPath(), "utf-8"));
+    if (parsed && typeof parsed.profile === "string" && typeof parsed.since === "number") return parsed;
+  } catch {}
+  return null;
+}
+
+export function setLaunchProfile(name: string, keychainKey: string | undefined, now = Date.now()): LaunchRecord {
+  assertValidProfileName(name);
+  const record: LaunchRecord = { profile: name, ...(keychainKey ? { keychain_key: keychainKey } : {}), since: now };
+  atomicWriteFile(launchRecordPath(), JSON.stringify(record), { mode: 0o644 });
+  invalidateAccountsCache();
+  return record;
+}
+
+export function clearLaunchProfile(): boolean {
+  const existed = fs.existsSync(launchRecordPath());
+  try { fs.rmSync(launchRecordPath(), { force: true }); } catch {}
+  if (existed) invalidateAccountsCache();
+  return existed;
+}
+
+/** The launch record while it still holds, else null (and the stale record is
+ *  dropped): the profile must still be saved, its setup-token live, and the
+ *  keychain login unchanged since the switch. `active` is the keychain login
+ *  when the caller already read it (the daemon's timers keep the keychain call
+ *  off the loop); otherwise it is read here. */
+export function launchRecordInEffect(
+  active: ReturnType<typeof activeAccountSummary> | null = activeAccountSummary(),
+  now = Date.now(),
+): LaunchRecord | null {
+  const record = readLaunchRecord();
+  if (!record) return null;
+  const meta = readProfileIndex().profiles[record.profile];
+  const token = meta ? accountTokenInfo(record.profile) : null;
+  const keychainKey = active?.uuid || active?.email;
+  const holds = !!token && token.expires_at > now && (!record.keychain_key || record.keychain_key === keychainKey);
+  if (!holds) {
+    clearLaunchProfile();
+    return null;
+  }
+  return record;
+}
+
+/** The profile sessions launch on when no account was asked for: the launch
+ *  record's, else none (the keychain login). */
+export function launchProfileName(
+  active?: ReturnType<typeof activeAccountSummary> | null,
+  now = Date.now(),
+): string | undefined {
+  return launchRecordInEffect(active, now)?.profile;
 }
 
 export interface AccountTokenInfo {
@@ -1615,6 +1700,52 @@ export function useProfile(name: string): SwitchResult {
   noteActiveAccount(targetIdentity?.accountUuid || targetIdentity?.emailAddress);
   invalidateAccountsCache();
   return { from, fromEmail, to: name, toEmail: target.oauthAccount?.emailAddress };
+}
+
+export type SwitchMode = "keychain" | "token";
+
+/** Which way a switch to `name` lands: on the keychain (its saved login is
+ *  usable) or on its minted setup-token (the login is dead or missing and the
+ *  token is live). Null when neither can carry a session. A usable login wins
+ *  even when a token exists: the keychain switch also moves `claude` started
+ *  by hand, and pinned sessions ride the token either way (accountSourcePrefix). */
+export function switchModeFor(name: string, now = Date.now()): SwitchMode | null {
+  assertValidProfileName(name);
+  const meta = readProfileIndex().profiles[name];
+  const raw = readProfileSecret(name);
+  let loginUsable = false;
+  if (raw) {
+    try {
+      loginUsable = credentialHealth(JSON.stringify(parseProfile(raw).credentials), now).usable && !meta?.login_expired_at;
+    } catch {
+      loginUsable = false;
+    }
+  }
+  if (loginUsable) return "keychain";
+  const token = accountTokenInfo(name);
+  return token && token.expires_at > now ? "token" : null;
+}
+
+/** Switch this machine's fleet to a saved profile: through the keychain when
+ *  its login is usable (useProfile), else onto its minted setup-token (the
+ *  launch record; the keychain login stays put). Throws with the fix in hand
+ *  when the profile can carry nothing. */
+export function switchProfile(name: string, now = Date.now()): SwitchResult & { mode: SwitchMode } {
+  const mode = switchModeFor(name, now);
+  if (mode === "keychain") {
+    const result = useProfile(name);
+    clearLaunchProfile();
+    return { ...result, mode };
+  }
+  if (mode === "token") {
+    const meta = readProfileIndex().profiles[name]!;
+    const active = activeAccountSummary();
+    setLaunchProfile(name, active?.uuid || active?.email, now);
+    return { from: null, to: name, toEmail: meta.email, mode };
+  }
+  // Neither: let useProfile name the exact reason (no profile, unusable login).
+  useProfile(name);
+  throw new CcAccountError(`Profile "${name}" has no usable login and no live setup-token`);
 }
 
 // ---------------------------------------------------------------------------
@@ -2740,6 +2871,9 @@ export interface AccountsHeartbeatPayload {
   // server's auto-switch loop trusts a usage snapshot of the active account
   // only if it was fetched after this.
   active_since?: number;
+  // The profile sessions launch on when it is not the keychain login (a token
+  // switch; see "Launch profile"). Absent = the fleet follows the keychain.
+  launch_profile?: string;
   profiles: Array<{
     name: string;
     email?: string;
@@ -2798,8 +2932,12 @@ function accountsPayload(active: ReturnType<typeof activeAccountSummary>): Accou
   let value: AccountsHeartbeatPayload | null = null;
   try {
     const stamp = readActiveStamp();
-    const activeSince =
-      stamp && (active?.uuid || active?.email) === stamp.key ? stamp.since : undefined;
+    // "active_since" is when the FLEET account last changed: the token switch
+    // when a launch record is in effect, else the keychain activation stamp.
+    const launch = launchRecordInEffect(active);
+    const activeSince = launch
+      ? launch.since
+      : stamp && (active?.uuid || active?.email) === stamp.key ? stamp.since : undefined;
     const usage = readUsageCache().accounts;
     const profiles = Object.entries(readProfileIndex().profiles).sort(([a], [b]) => a.localeCompare(b)).map(([name, { email, uuid, tier, subscription, login_expired_at }]) => {
       const tok = accountLaunchInfo(name);
@@ -2820,6 +2958,7 @@ function accountsPayload(active: ReturnType<typeof activeAccountSummary>): Accou
         active_email: active?.email,
         active_uuid: active?.uuid,
         ...(activeSince !== undefined ? { active_since: activeSince } : {}),
+        ...(launch ? { launch_profile: launch.profile } : {}),
         profiles,
       };
     }

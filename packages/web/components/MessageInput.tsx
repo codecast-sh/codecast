@@ -10,7 +10,7 @@ import { uploadBlobToStorage } from "../lib/uploadBlob";
 import { textareaCaretRect } from "../lib/textareaCaret";
 import { classifyApiErrorBanner, ACTIVE_AGENT_STATUSES, type AgentStatus } from "@codecast/shared/contracts";
 import { useNowWhen } from "../hooks/useCoarseNow";
-import { formatCountdown } from "@codecast/shared/contracts";
+import { formatCountdown, HIBERNATED_COPY } from "@codecast/shared/contracts";
 import { parseLimitResetAt } from "../lib/limitReset";
 import { pendingImageUploads, persistDraftImages, restoreDraftImages, settleDraftImageUpload } from "../lib/draftImages";
 import { isResentCopyOfSentMessage } from "../lib/staleDraft";
@@ -2214,6 +2214,13 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                         Cancel
                       </button>
                     )}
+                  </span>
+                ) : agentStatus === "hibernated" ? (
+                  /* The parked session's one home in the conversation: the
+                     header and the inbox row stay quiet about it. */
+                  <span data-hibernated-marker className="flex items-center gap-1.5 text-sol-blue">
+                    <span className="w-2 h-2 rounded-full bg-sol-blue/70" />
+                    {HIBERNATED_COPY}
                   </span>
                 ) : agentStatus === "thinking" ? (
                   <span className="flex items-center gap-1.5">

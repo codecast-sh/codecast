@@ -58,7 +58,9 @@ describe("buildOrgAnalyzerPrompt", () => {
       // proposal that creates the third project offers the seat.
       expect(ORG_ADOPT_RULE).toContain("counted after the changes in this proposal");
       expect(p).toContain(COMPANY_MODEL);
-      expect(p).toContain("staffing is budgeting");
+      // S23.2: a proposal moves scope and people, never what a role may do in a day.
+      expect(p).toContain("A proposal moves scope and people together, and nothing else about how a role operates");
+      expect(p).not.toMatch(/budget|allowance|what each may spend/);
     }
   });
   test("names what to read, the git roots, the propose command and the end state; never an apply by the analyzer", () => {
@@ -126,7 +128,8 @@ describe("buildOrgAnalyzerPrompt", () => {
     const parsed = parseOrgProposalSpec(JSON.parse(json));
     expect(parsed.errors).toEqual([]);
     expect(parsed.spec!.changes[0].change.kind).toBe("role");
-    for (const kind of ORG_CHANGE_KINDS) expect(p).toContain(`- ${kind}: {`);
+    // The prompt spells the switch as `autonomy` and never offers a limit (S23.1, S23.2).
+    for (const kind of ORG_CHANGE_KINDS) { if (kind === "budget") expect(p).not.toContain(`- ${kind}: {`); else if (kind === "trust") expect(p).toContain("- autonomy: { handle, on: true | false }"); else expect(p).toContain(`- ${kind}: {`); }
   });
   test("init designs from business lines; review reads flags and respects stability; the offer names the session or says it cannot", () => {
     const init = buildOrgAnalyzerPrompt({ mode: "init", workspace: "Acme", summary, session: "abc-123" });
@@ -153,10 +156,10 @@ describe("buildOrgAnalyzerPrompt", () => {
       // capacity section carries nothing about thresholds of its own.
       expect(p).toContain("A wide ledger with a quiet flow is not a seat problem");
       expect(p).toContain("A role does not do its scope's tasks; hands and people do.");
-      expect(p).toContain("`company.caps_total`");
-      expect(p).toContain("never write it as unchanged when a seat is added");
+      expect(p).not.toContain("`company.caps_total`");
+      expect(p).toContain("never propose a limit, never state one");
       expect(p).toContain("lead with the decision you are asking for");
-      expect(p).toContain("The ask stays under two hundred words, in short paragraphs; a seat's sizing against the model, its evidence and its caps live in the change, not here");
+      expect(p).toContain("The ask stays under two hundred words, in short paragraphs; a seat's load against the model and its evidence live in the change, not here");
       expect(p).not.toContain("allocated from the person's total");
     }
     // The split rules read from health: the streak for the ordinary case, the
@@ -203,7 +206,7 @@ describe("buildOrgAnalyzerPrompt", () => {
       expect(p).toContain("A row you did not read gets no status change");
       expect(p).toContain("A finished session is not evidence that the work landed; a plan already marked done is not either");
       expect(p).toContain("as abandoned when nothing under it finished");
-      expect(p).toContain("0 hands, 8 wakes and 200,000 tokens a day is the default");
+      expect(p).not.toContain("0 hands, 8 wakes and 200,000 tokens a day is the default");
       expect(p).toContain("`spend.wakes_by_day`");
       expect(p).toContain("A seat flagged `bypassed` is neither idle nor loaded");
       expect(p).toContain("Closing a plan closes its still open tasks in the same accept");
@@ -233,25 +236,19 @@ describe("buildOrgAnalyzerPrompt", () => {
       const p = buildOrgAnalyzerPrompt({ mode, workspace: "Acme", summary });
       expect(p).toContain("The summary is the ask.");
       for (const rule of Object.values(ORG_ASK_RULES)) expect(p).toContain(rule);
-      expect(p).toContain("has never heard of a role, a scope, a charter, a hand, a wake or a budget in tokens");
+      expect(p).toContain("has never heard of a role, a scope, a charter, a hand or a wake");
       expect(p).toContain("explained in plain words the first time it appears, or not used at all");
       expect(p).toContain("A signal from the health report is told as what is happening, never by its name");
       expect(p).toContain("A short id never stands in for a name");
       expect(p).toContain("Counts joined by commas are a defect");
-      expect(p).toContain("A budget stated as bare numbers is not a cost");
+      // The cost rule is gone with the limits (S23.2): nothing on the page states one.
+      expect(p).not.toContain("is not a cost");
+      expect(p).toContain("no limit, no count of what it may spend, no cost");
       expect(p).toContain("A sentence they would have to reread or decode is a defect in the summary");
       // Run 1 on the Codecast workspace showed these gaps: a cost counted in
       // wake ups nobody defined, a new agent named by its title after being
       // introduced as "one new agent", project names as bare lowercase words,
       // and "seats" leaking through the lines after the ask.
-      expect(p).toContain("a unit of spend is explained where the cost is stated, as what it lets an agent do, the first time it appears");
-      // S19: the page says the cost as one line ("about a quarter less");
-      // units on the first screen are the arithmetic, which goes below.
-      expect(p).toContain("on the first screen it is a comparison with today that a person can picture");
-      // The page's cost line reads the limit that costs money (costLine in
-      // web/components/org/staffingAsks.ts); a run that compared every unit
-      // wrote "a third to three quarters, depending on the unit".
-      expect(p).toContain("Read that share from the limit that costs money, how much the roles may read and write in a day");
       expect(p).toContain("introduced once with what it is and what it will do, and called by those same words after that");
       expect(p).toContain("A project's or a plan's name appears as it is filed, capitalized or quoted");
       expect(p).toContain("read the whole summary once more as that person, the lines after the ask included");
@@ -301,7 +298,7 @@ describe("buildOrgAnalyzerPrompt", () => {
       // the first screen carries the page's words, and the effect names what
       // the person will notice.
       expect(p).toContain("a role is the thing you add, retire or move (say once that a role is an agent that keeps watching one area of work, and call it a role from then on, in the letter and in every ask)");
-      expect(p).toContain("a daily limit is what it may spend, and a role that stays is said as staying, not as standing");
+      expect(p).toContain("and a role that stays is said as staying, not as standing");
       expect(p).toContain("The first screen carries the page's word and nothing else");
       expect(p).toContain("the effect names what the person will notice once they accept, never what the machine will do row by row");
       expect(at(ORG_ASKS_RULE)).toBeLessThan(at(ORG_LETTER_RULE));
@@ -488,7 +485,7 @@ describe("propose", () => {
       await expect(propose(d, { spec: specFile({ title: "T", summary_md: "S", mode: "init", changes: [{ change: { kind: "trust", handle: "growth", trust: "god" }, rationale: "r" }] }) })).rejects.toThrow("exit");
     } finally { cap.restore(); ex.restore(); }
     expect(posted).toEqual([]);
-    expect(cap.said()).toContain("changes[0] (trust): trust is one of understand, decide, direct");
+    expect(cap.said()).toContain("changes[0] (trust): autonomy on is true or false");
   });
   test("a good spec posts with the workspace and the calling session, then prints op-N and the link", async () => {
     let body: any;

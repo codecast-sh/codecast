@@ -10,6 +10,7 @@
 // header needs nothing else. It mounts no feeder: the page that shows it
 // mounts `useSyncOrgTreeFeeder()` once. Who leads is `projectLeadOf`, the one
 // rule the server and the analyzer also read.
+import { useWorkspaceFeature } from "../../lib/teamFeatures";
 import { useState } from "react";
 import { toast } from "sonner";
 import { UserPlus } from "lucide-react";
@@ -56,13 +57,14 @@ export function ProjectLeadChip({ projectId, size = "sm", editable = false, clas
   const setProjectLead = useInboxStore((s) => s.setProjectLead);
   const createOrgRole = useInboxStore((s) => s.createOrgRole);
   const [hireOpen, setHireOpen] = useState(false);
+  const orgOn = useWorkspaceFeature("org");
   // A lead whose scope gains this project takes over the sessions in it (R1):
   // that gesture waits at the gate for the count and the person's one edit.
   const [pending, setPending] = useState<{ role: OrgRole; text: string } | null>(null);
   // Nothing honest to say before the project and its workspace's roles are
   // here: "No lead" on a project whose lead has not loaded would be a lie.
   if (!project || (!roles && !otherWorkspace)) return null;
-  const canHire = !!roles && !!meId;
+  const canHire = !!roles && !!meId && orgOn;
 
   const onChange = (roleId: string | null) => {
     const tree = useInboxStore.getState().orgTree;

@@ -157,8 +157,8 @@ describe("orgProposals.decide", () => {
     expect(await decide(3, "accept", { caps: { wakes_per_day: 9 } })).toMatchObject({ status: "applied", note: "@growth: wakes 40 → 9/day" });
     expect((await db.get(GROWTH as any)).caps).toEqual({ hands_per_day: 6, wakes_per_day: 9, tokens_per_day: 400_000 });
     expect((await db.get(p.ids[3] as any)).edits).toEqual({ caps: { wakes_per_day: 9 } });
-    expect(await decide(4)).toMatchObject({ status: "applied", note: "@growth: trust understand → decide" });
-    expect((await db.get(GROWTH as any)).trust).toBe("decide");
+    expect(await decide(4)).toMatchObject({ status: "applied", note: "@growth: turned on starting work on its own" });
+    expect((await db.get(GROWTH as any)).trust).toBe("direct"); // decide reads as on and is written as direct (S23.1)
     expect(await decide(5)).toMatchObject({ status: "applied", note: expect.stringContaining('routine "Weekly review" every 7d (tr-1)') });
     const routine = (await db.query("agent_tasks").collect())[0];
     expect(routine).toMatchObject({ target_conversation_id: S_GROWTH, originating_conversation_id: S_GROWTH, schedule_type: "recurring", interval_ms: 7 * 86_400_000, prompt: "Run cast org review", status: "scheduled", user_id: ME });
@@ -285,7 +285,7 @@ describe("orgProposals.acceptAll", () => {
     expect(rows.map((c: any) => c.status)).toEqual(["failed", "applied", "applied"]);
     expect(rows[0].applied_note).toContain('No plan "pl-999"');
     expect((await db.get(GROWTH as any)).caps.wakes_per_day).toBe(12);
-    expect((await db.get(GROWTH as any)).trust).toBe("decide");
+    expect((await db.get(GROWTH as any)).trust).toBe("direct"); // decide is never written again (S23.1)
     // The failed one is still decidable: skipping it resolves the proposal.
     expect(await performDecideChange(ctxOf(db), ME as any, { change_id: String(rows[0]._id), verdict: "skip" })).toMatchObject({ status: "skipped", resolved: true });
     // Without runMutation (the plain harness) the same accept all lands the same way.
@@ -1046,7 +1046,7 @@ describe("a verdict the author revised under the reader is refused (S18)", () =>
     // The page reads the revised list and presses Accept on "Trust growth to decide", now index 0.
     const out = await performDecideAsk(ctxOf(db), ME as any, { proposal: r.short_id, ask: 0, verdict: "accept", provision: false, seen: seenOf(after, 0) });
     expect(out).toMatchObject({ ask: 0, title: "Trust growth to decide", applied: 1 });
-    expect((await growth(db)).trust).toBe("decide");
+    expect((await growth(db)).trust).toBe("direct"); // decide is never written again (S23.1)
     expect((await growth(db)).status).toBe("active");
     // A position past the revised list, read against the revised list, is a bad index, not a moved list.
     await expect(performDecideAsk(ctxOf(db), ME as any, { proposal: r.short_id, ask: 5, verdict: "accept", seen: { revised_at: after.asks && latestOrgRevisionAt(after.changes), seqs: [] } })).rejects.toThrow("there is no ask 5");
@@ -1166,5 +1166,52 @@ describe("accept all chunks by cost: one takeover change a transaction", () => {
     const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: spec([change({ kind: "scope", handle: "growth", add: ["pr-2"] })]) });
     await performDecideAsk(ctxOf(db), ME as any, { proposal: r.short_id, ask: 0, verdict: "accept", provision: false });
     expect(String(roleOfSession(db, 1))).toBe(GROWTH);
+  });
+});
+
+// The company's goals (initiatives-projects-role-page.md "I1, revised"): a
+// review proposes an initiative, a project into one and an owner for one as
+// changes; the goals ask holds them; accepting makes them through the
+// initiatives module's own cores; the page reads where the goal came from.
+describe("goal changes in a proposal", () => {
+  const goals = () => fixtures({ initiatives: [{ _id: "initiatives_win", user_id: ME, team_id: TEAM, workspace: WS, short_id: "in-2", title: "Win the private network", project_ids: [Q], status: "active", health: "none", created_at: 1, updated_at: 1 }], counters: [] });
+  test("the goals ask is derived, titles fill from the record, and accepting it sets the goal, adds the project and names the owner through the log", async () => {
+    const { recordOrigin } = await import("./orgChanges");
+    const db = goals();
+    const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: spec([
+      change({ kind: "initiative", title: "Grow trades", description: "Trades grow month over month without paid spend.", projects: ["pr-1"], owner: "@growth" }, "Growth's own goal says so."),
+      change({ kind: "initiative_projects", initiative: "in-2", projects: ["Growth"] }),
+      change({ kind: "initiative_owner", initiative: "in-2", owner: "Me" }),
+      change({ kind: "task_status", task: "ct-1", status: "done", reason: "landed", title: "t" }),
+    ]) });
+    // The initiative's title travels with the two changes to it (a reader's store may not hold the row).
+    expect(r.changes.map((c: any) => c.change.title ?? null)).toEqual(["Grow trades", "Win the private network", "Win the private network", "t"]);
+    expect(r.asks.map((a: any) => [a.title, a.seqs])).toEqual([
+      ["Bring 1 record up to date", [4]],
+      ["1 goal to set, and 2 changes to the goals that exist", [1, 2, 3]],
+    ]);
+    const out = await performDecideAsk(ctxOf(db), ME as any, { proposal: r.short_id, ask: 1, verdict: "accept", provision: false });
+    expect(out.results.map((x: any) => x.status)).toEqual(["applied", "applied", "applied"]);
+    const made = db._tables.initiatives.find((i: any) => i.title === "Grow trades");
+    expect(made).toMatchObject({ status: "proposed", workspace: WS, project_ids: [P], owner: { kind: "role", role_id: GROWTH } });
+    expect((await db.get("initiatives_win")).project_ids).toEqual([Q, P]);
+    expect((await db.get("initiatives_win")).owner).toEqual({ kind: "user", user_id: ME });
+    // Three log rows, one per change, in the proposal's batch; the page reads the goal's origin from the first.
+    const rows = db._tables.org_changes.filter((c: any) => c.subject.type === "initiative");
+    expect(rows.map((c: any) => c.kind)).toEqual(["initiative", "initiative_projects", "initiative_owner"]);
+    const origin = await recordOrigin(ctxOf(db), ME as any, String(made._id));
+    expect(origin).toMatchObject({ proposal: { short_id: r.short_id }, undone: false });
+    expect(await recordOrigin(ctxOf(db), ME as any, "initiatives_win")).toBeNull();
+    expect(await recordOrigin(ctxOf(db), MATE as any, String(made._id))).toMatchObject({ proposal: { short_id: r.short_id } });
+  });
+  test("a goal that already exists, a project already in it and an owner already named are applied as no-ops, never twins", async () => {
+    const db = goals();
+    const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, spec: spec([
+      change({ kind: "initiative", title: "win the private network", description: "d", projects: ["pr-1"] }),
+      change({ kind: "initiative_projects", initiative: "Win the private network", projects: ["pr-2"] }),
+    ]) });
+    const out = await performDecideAsk(ctxOf(db), ME as any, { proposal: r.short_id, ask: 0, verdict: "accept", provision: false });
+    expect(out.results.map((x: any) => [x.status, x.note])).toEqual([["applied", 'the goal "Win the private network" already exists (in-2)'], ["applied", 'in-2 "Win the private network" already carries pr-2']]);
+    expect(db._tables.initiatives).toHaveLength(1);
   });
 });

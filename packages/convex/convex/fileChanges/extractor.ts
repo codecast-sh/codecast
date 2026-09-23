@@ -8,12 +8,34 @@ export interface FileChange {
   sequenceIndex: number;
   messageId: string;
   filePath: string;
-  changeType: "write" | "edit" | "commit";
+  // "write" with oldContent replaces a whole file whose prior text is known
+  // (a disk-observed change); "delete" removes the file.
+  changeType: "write" | "edit" | "delete" | "commit";
   oldContent?: string;
   newContent: string;
   commitMessage?: string;
   commitHash?: string;
   timestamp: number;
+}
+
+/** A change without its text: what the server's index query returns and what
+ *  the diff viewer's timeline holds. `oldBytes === undefined` means the file
+ *  did not exist before the change. The text comes separately, by change id
+ *  (FileChangeBody), for the few changes a fold needs. */
+export type FileChangeRef = Omit<FileChange, "oldContent" | "newContent"> & {
+  oldBytes?: number;
+  newBytes: number;
+};
+
+export interface FileChangeBody {
+  oldContent?: string;
+  newContent: string;
+}
+
+/** A reference joined back with its text: the shape the fold reads. */
+export function withBody(ref: FileChangeRef, body: FileChangeBody): FileChange {
+  const { oldBytes: _o, newBytes: _n, ...rest } = ref;
+  return { ...rest, oldContent: body.oldContent, newContent: body.newContent };
 }
 
 /**

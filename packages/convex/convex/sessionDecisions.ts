@@ -23,7 +23,7 @@ import { pickAnsweredDecision, formatDecisionAnswer, decisionAnswerLabel } from 
 import type { Doc, Id } from "./_generated/dataModel";
 import { nextShortId } from "./counters";
 import { enqueuePendingMessage } from "./pendingMessages";
-import { enqueueRoleEvent, trustOf } from "./orgEvents";
+import { enqueueRoleEvent, roleStartsOnItsOwn } from "./orgEvents";
 import { roleOfConversation } from "./lib/actor";
 import { roleGrants, userCanAccessRole, userCanAdminRole } from "./lib/orgAccess";
 import { assignCategory, isHumanOnlyCategory } from "./lib/decisionCategory";
@@ -1338,8 +1338,8 @@ export const escalate = mutation({
 
 // Who the caller is on this decision. Two identities may answer, and a
 // calling session decides which: WITH a session, the caller is that session
-// and may answer only as the holder role under a live grant at trust
-// "decide" or above; a session never answers as a person, whatever token it
+// and may answer only as the holder role under a live grant when its switch
+// is on; a session never answers as a person, whatever token it
 // holds, because an agent holds its host's token and the asking session
 // would otherwise answer its own question. WITHOUT a session (a signed in
 // web user, or `cast decide answer` from a plain human shell), the caller is
@@ -1366,10 +1366,11 @@ async function answererFor(
     if (row.holder?.kind !== "role" || String(role._id) !== row.holder.id) {
       return { error: `${role.name} does not hold this decision; recommend instead (cast decide recommend), or a person answers it` };
     }
-    // Trust stage gate (org-roles-standing.md T4): a role at "understand"
-    // reads and recommends; it may not answer, grant or no grant.
-    if (trustOf(role) === "understand") {
-      return { error: `${role.name} is at the understand stage and may not answer decisions; recommend instead (cast decide recommend), or ask a person to raise its trust (cast role trust @${role.handle} decide)` };
+    // The switch (org-staffing.md S23.1): a role that does not start work on
+    // its own reads and recommends; it may not answer, grant or no grant, and
+    // it never asks a person to change its own settings.
+    if (!roleStartsOnItsOwn(role)) {
+      return { error: `${role.name} does not start work on its own, so it recommends rather than answers: cast decide recommend` };
     }
     const grant = await activeGrantFor(ctx, [role._id], row.category ?? "unknown", (row as any).scope_keys ?? [], now);
     if (!grant) return { error: `${role.name} no longer holds a grant for this decision; a person answers it` };

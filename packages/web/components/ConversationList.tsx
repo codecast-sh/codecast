@@ -252,10 +252,16 @@ export type Conversation = {
   fork_count?: number;
   forked_from?: string | null;
   is_private?: boolean;
+  // The per-session team level ("summary" | "full"; "private" marks a hide).
+  // Unset means the owner's membership level for the team applies.
+  team_visibility?: string | null;
   auto_shared?: boolean;
   visibility_mode?: "full" | "detailed" | "summary" | "minimal";
   activity_summary?: string;
   author_avatar?: string | null;
+  // The bot identity a role's standing session renders as; user_id stays the
+  // human host that runs and bills it. Absent on ordinary sessions.
+  acting_user_id?: string | null;
 };
 
 function formatDuration(ms: number): string {

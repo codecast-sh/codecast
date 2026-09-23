@@ -1,4 +1,5 @@
 import { ConvexHttpClient, ConvexClient } from "convex/browser";
+import { ShellChangeSync } from "./shellChangeSync.js";
 import { recoveringWebSocket } from "@codecast/shared/network";
 import { readFile, stat } from "node:fs/promises";
 import * as os from "node:os";
@@ -370,6 +371,8 @@ export interface CreateConversationParams {
   // conversation isn't resolvable yet, so the server never treats the row as
   // a human-started session (teammate start notifications).
   isSubagent?: boolean;
+  // The trigger this transcript is a spawned run of (taskScheduler.triggerRunTaskId).
+  agentTaskId?: string;
   // Agent-team stamps from a teammate's JSONL (see parser.extractTeamInfo).
   agentTeamName?: string;
   agentName?: string;
@@ -387,6 +390,7 @@ export class SyncService {
   private convexUrl: string;
   private userId?: string;
   private apiToken?: string;
+  private shellChangeSync?: ShellChangeSync;
   private lastRequestTime = 0;
   private throttleQueue: Promise<void> = Promise.resolve();
   // Per-network-leg deadline for image uploads. A field (not the bare constant)
@@ -419,6 +423,10 @@ export class SyncService {
     this.convexUrl = config.convexUrl;
     this.userId = config.userId;
     this.apiToken = config.authToken;
+  }
+
+  startShellChangeSync(onLog: (message: string) => void): void {
+    this.shellChangeSync ??= new ShellChangeSync((params) => this.mutate("shellChanges:sync", { ...params, api_token: this.apiToken }), { onLog });
   }
 
   // Every daemon mutation must bypass ConvexHttpClient's built-in mutation
@@ -1037,6 +1045,7 @@ export class SyncService {
           worktree_status: gitInfo?.worktreeName ? "active" : undefined,
           subagent_description: params.subagentDescription,
           is_subagent: params.isSubagent || undefined,
+          agent_task_id: params.agentTaskId,
           agent_team_name: params.agentTeamName,
           agent_name: params.agentName,
           // The transcript this conversation is created from lives on THIS
@@ -1247,6 +1256,7 @@ export class SyncService {
       content: truncate(redactSecrets(tr.content), MAX_TOOL_RESULT_SIZE),
       is_error: tr.isError,
     }));
+    this.shellChangeSync?.enqueue(params.conversationId, params.messageUuid, params.toolResults);
 
     const images: Array<{ media_type: string; storage_id?: string; data?: string; tool_use_id?: string }> = [];
     if (imageHolder[0].images && imageHolder[0].images.length > 0) {
@@ -1375,6 +1385,7 @@ export class SyncService {
         }
       }
 
+      this.shellChangeSync?.enqueue(params.conversationId, msg.messageUuid, msg.toolResults);
       preparedMessages.push({
         message_uuid: msg.messageUuid,
         role: roleMap[msg.role],
@@ -1552,12 +1563,13 @@ export class SyncService {
     } catch {}
   }
 
-  async updateProjectPath(sessionId: string, projectPath: string, gitRoot?: string): Promise<{ updated: boolean } | null> {
+  async updateProjectPath(sessionId: string, projectPath: string, gitRoot?: string, gitRemoteUrl?: string): Promise<{ updated: boolean } | null> {
     try {
       const result = await this.mutate("conversations:updateProjectPath" as any, {
         session_id: sessionId,
         project_path: projectPath,
         git_root: gitRoot,
+        git_remote_url: gitRemoteUrl,
         api_token: this.apiToken,
       });
       return result as { updated: boolean } | null;
@@ -1571,12 +1583,13 @@ export class SyncService {
   // silently stranded conversations on their spawn-time stub id, so every
   // session-bound `cast` write from the agent failed "Conversation not found"
   // while message sync (keyed by conversation _id) looked perfectly healthy.
-  async updateSessionId(conversationId: string, sessionId: string, projectPath?: string, gitRoot?: string): Promise<void> {
+  async updateSessionId(conversationId: string, sessionId: string, projectPath?: string, gitRoot?: string, gitRemoteUrl?: string): Promise<void> {
     await this.mutate("conversations:updateSessionId" as any, {
       conversation_id: conversationId,
       session_id: sessionId,
       project_path: projectPath,
       git_root: gitRoot,
+      git_remote_url: gitRemoteUrl,
       api_token: this.apiToken,
     });
   }

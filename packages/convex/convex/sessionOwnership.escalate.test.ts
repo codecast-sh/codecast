@@ -152,6 +152,26 @@ describe("an escalation reaches the person through the role (R1, revised)", () =
     .filter((m: any) => m.conversation_id === id(convCh) && isSessionEscalationMessage(m.content))
     .map((m: any) => parseSessionEscalation(m.content)!);
 
+  test("a terminal call that names no session is never read as the person (S23.4): refused without a line, the role's with one", async () => {
+    const { db, ctx } = await roleWithTwoSessions();
+    // No from_session and an api token: the server cannot see who typed it.
+    await expect(performEscalateSession(ctx, ME as any, { session_id: "jx7bbbb", api_token: "tok" }))
+      .rejects.toThrow(/did not name the session it runs in/);
+    expect(row(db, "b").escalated_by_role).toBeUndefined();
+    const res = await performEscalateSession(ctx, ME as any, { session_id: "jx7bbbb", line: "the market is filled and needs a call", api_token: "tok" });
+    // Recorded as the role's: through the role's card, with the role's chime,
+    // and the divider says the role handed it, not that Me put it there.
+    expect(row(db, "b").escalated_by_role).toMatchObject({ line: "the market is filled and needs a call" });
+    expect(row(db, "b").escalated_by_role.direct).toBeUndefined();
+    expect(res.reached?.direct).toBe(false);
+    expect(res.notify?.title).toBe("@growth needs you");
+    expect(dividers(db, "b")[0]).toMatchObject({ move: "handed", by: "role" });
+    expect(JSON.stringify(dividers(db, "b")[0])).not.toContain("put this in their inbox");
+    // A session under no role is out of an unnamed terminal call's reach.
+    db._tables.conversations.push(conv("x"));
+    await expect(performEscalateSession(ctx, ME as any, { session_id: id("x"), line: "look", api_token: "tok" })).rejects.toThrow(/Session not found/);
+  });
+
   test("by default the role's standing session is what reaches the person; the child keeps its stamp without direct", async () => {
     const { db, ctx, role } = await roleWithTwoSessions();
     Object.assign(row(db, "s"), { inbox_stashed_at: NOW });

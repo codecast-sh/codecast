@@ -43,12 +43,26 @@ export function useFloatingCircles(opts: {
 }) {
   const { shapeSig, bridge, hideDelayMs = 1500 } = opts;
   const [hovered, setHovered] = useState(false);
+  // Declared up here because the size effect and the click-through test read
+  // it: a drag in progress is the one state in which the window must keep
+  // taking the mouse, and must not be resized.
+  const dragging = useRef(false);
 
   const sizeForRef = useRef(opts.sizeFor);
   sizeForRef.current = opts.sizeFor;
 
   // ── The window is exactly as big as its circles ─────────────────────────
+  //
+  // Never mid-drag: the shell lifts and restores the window's resizable flag
+  // around a resize, and macOS ends the mouse tracking with it, so the drag
+  // died a beat after it started whenever a hover grew the window under the
+  // held button. The size is applied when the button comes up.
+  const pendingSize = useRef(false);
   useWatchEffect(() => {
+    if (dragging.current) {
+      pendingSize.current = true;
+      return;
+    }
     bridge.setContentSize(sizeForRef.current(hovered));
   }, [shapeSig, hovered]);
 
@@ -61,9 +75,6 @@ export function useFloatingCircles(opts: {
   // pointer's rate on the one window that must stay cheap.
   const rootRef = useRef<HTMLDivElement | null>(null);
   const regionsRef = useRef<HitRegion[]>([]);
-  // Declared up here because the click-through test below reads it: a drag in
-  // progress is the one state in which the window must keep taking the mouse.
-  const dragging = useRef(false);
   const interactiveRef = useRef(false);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -160,6 +171,10 @@ export function useFloatingCircles(opts: {
     if (!dragging.current) return;
     dragging.current = false;
     bridge.setDragging(false);
+    if (pendingSize.current) {
+      pendingSize.current = false;
+      bridge.setContentSize(sizeForRef.current(true));
+    }
     // The pointer may be off the glass by now, and no mousemove will come to
     // say so: the chrome goes on its way out the same as after any hover.
     hideLater();

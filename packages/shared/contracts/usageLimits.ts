@@ -165,20 +165,27 @@ export function headroomScore(usage: CcUsage | undefined | null, now: number): n
 }
 
 /** The other accounts a limit-parked session could fall back to: every saved
- * profile that is not the active login, shows no pegged window, and whose
- * saved login still works (`login_expired_at`: the daemon's token refresh was
- * refused, so a switch there lands on a dead credential and parks on an auth
- * banner instead of un-parking anything). Best headroom first. Shared by the
+ * profile that is not the account the fleet runs on, shows no pegged window,
+ * and can carry a session: its saved login still works, or a minted
+ * setup-token is live (`login_expired_at` alone means the daemon's token
+ * refresh was refused, so a switch there lands on a dead credential and parks
+ * on an auth banner instead of un-parking anything). Best headroom first. Shared by the
  * auto-switch decision (which further excludes profiles already tried this
  * window) and `cast usage`, so what the CLI reports as "N accounts with
  * headroom" is the set auto-switch would choose from. */
 export function fallbackProfiles<
-  P extends { email?: string; usage?: CcUsage | null; login_expired_at?: number | null },
+  P extends {
+    email?: string;
+    usage?: CcUsage | null;
+    login_expired_at?: number | null;
+    setup_token?: { expires_at: number } | null;
+  },
 >(profiles: readonly P[], activeEmail: string | undefined, now: number): P[] {
+  // A dead saved login is still a target when a minted setup-token is live:
+  // the switch lands sessions on the token and never touches the login.
+  const reachable = (p: P) => !p.login_expired_at || (!!p.setup_token && p.setup_token.expires_at > now);
   return rankByHeadroom(
-    profiles.filter(
-      (p) => p.email && p.email !== activeEmail && !p.login_expired_at && !isUsageExhausted(p.usage, now),
-    ),
+    profiles.filter((p) => p.email && p.email !== activeEmail && reachable(p) && !isUsageExhausted(p.usage, now)),
     now,
   );
 }
