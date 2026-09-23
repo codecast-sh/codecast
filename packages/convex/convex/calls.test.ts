@@ -119,6 +119,90 @@ describe("joinRoom rejoin after lease lapse", () => {
   });
 });
 
+// THE DEAD LEAVE WITH THE LIVING'S BEAT (pl-756 F5 a). A lapsed row is hidden
+// by liveMembers but stayed on disk until the next join into its room, and a
+// room nobody joins is where a dead seat is noticed. The heartbeat, which any
+// live member sends every 15s, sweeps the room it beats in.
+describe("heartbeat sweeps the room it beats in", () => {
+  function beatCtx(rows: any[]) {
+    const deleted: string[] = [];
+    const patched: Array<{ id: string; doc: any }> = [];
+    const ctx: any = {
+      auth: { getUserIdentity: async () => ({ subject: "u1|sess", tokenIdentifier: "x" }) },
+      db: {
+        query: (_t: string) => ({
+          withIndex: (_i: string, builder: any) => {
+            const eqs: Array<[string, any]> = [];
+            builder({ eq(f: string, v: any) { eqs.push([f, v]); return this; } });
+            const hit = rows.filter((r) => !deleted.includes(r._id) && eqs.every(([f, v]) => String(r[f]) === String(v)));
+            return { collect: async () => hit, unique: async () => hit[0] ?? null, first: async () => hit[0] ?? null };
+          },
+        }),
+        get: async (id: string) => rows.find((r) => r._id === id) ?? null,
+        delete: async (id: string) => { deleted.push(id); },
+        patch: async (id: string, doc: any) => {
+          if (deleted.includes(id)) throw new Error("Update on nonexistent document ID " + id);
+          patched.push({ id, doc });
+        },
+        insert: async () => { throw new Error("a heartbeat inserts nothing"); },
+      },
+    };
+    return { ctx, deleted, patched };
+  }
+  const seat = (id: string, user: string, lastSeen: number, over: Record<string, unknown> = {}) => ({
+    _id: id, room_key: "dm:u1:u2", team_id: "t1", user_id: user, user_name: user,
+    joined_at: lastSeen - 60_000, last_seen: lastSeen, muted: true, camera: false, sharing: false, ...over,
+  });
+
+  test("a live member's beat deletes every lapsed row in its room and touches nothing fresh", async () => {
+    const now = Date.now();
+    const rows = [
+      seat("mine", "u1", now - 14_000),
+      seat("dead", "u2", now - STALE - 1),
+      seat("fresh", "u3", now - 10_000),
+      // A prewarm whose hold lapsed is a dead row like any other.
+      seat("warm", "u4", now - STALE - 5_000, { prewarm: true }),
+      // A lease one beat from lapsing is still a seat: nobody is evicted early.
+      seat("late", "u5", now - STALE + 1_000),
+    ];
+    const { ctx, deleted, patched } = beatCtx(rows);
+    const { heartbeat } = await import("./calls");
+    const h = (heartbeat as any)._handler ?? (heartbeat as any).handler;
+    expect(await h(ctx, { room_key: "dm:u1:u2", muted: true })).toEqual({ ok: true });
+    expect(deleted.sort()).toEqual(["dead", "warm"]);
+    expect(patched.map((p) => p.id)).toEqual(["mine"]);
+  });
+
+  test("our own row is refreshed BEFORE the sweep, so a beat that arrives late keeps its seat", async () => {
+    // Laptop asleep 46s: the beat lands just past the lease. The row is ours
+    // and we are demonstrably alive, so the sweep must see it fresh.
+    const now = Date.now();
+    const rows = [seat("mine", "u1", now - STALE - 1_000)];
+    const { ctx, deleted, patched } = beatCtx(rows);
+    const { heartbeat } = await import("./calls");
+    const h = (heartbeat as any)._handler ?? (heartbeat as any).handler;
+    // The fake patch does not write through, so mirror it: a real db reads
+    // the fresh last_seen back in the sweep's collect.
+    ctx.db.patch = async (id: string, doc: any) => { rows[0].last_seen = doc.last_seen; patched.push({ id, doc }); };
+    expect(await h(ctx, { room_key: "dm:u1:u2" })).toEqual({ ok: true });
+    expect(patched.map((p) => p.id)).toEqual(["mine"]);
+    expect(deleted).toEqual([]);
+  });
+
+  test("a beat for a row already swept still sweeps the room and answers ok:false", async () => {
+    // The client's recovery join follows ok:false; meanwhile the dead peer
+    // beside it must not wait for that join to be cleared.
+    const now = Date.now();
+    const rows = [seat("dead", "u2", now - STALE - 1)];
+    const { ctx, deleted, patched } = beatCtx(rows);
+    const { heartbeat } = await import("./calls");
+    const h = (heartbeat as any)._handler ?? (heartbeat as any).handler;
+    expect(await h(ctx, { room_key: "dm:u1:u2" })).toEqual({ ok: false });
+    expect(deleted).toEqual(["dead"]);
+    expect(patched).toEqual([]);
+  });
+});
+
 // THE EXPLICIT-JOIN STAMP. A burst seats everyone who hears it, so being in the
 // room says nothing about whether a conversation started — and the microphone
 // stopped answering that question when auto-listen went hot. `walkie_join` is

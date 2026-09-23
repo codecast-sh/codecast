@@ -26,11 +26,47 @@ export type ConvexHandle = {
 // Silence long enough to count as a conversational gap. VAD closes an
 // utterance at 600ms; a gap is a real lull, not a breath.
 export const GAP_MS = 2_500;
-const FLUSH_MIN_INTERVAL_MS = 8_000;
+export const FLUSH_MIN_INTERVAL_MS = 8_000;
 // The hold limit: how long undelivered words may wait for a lull before the
 // engine flushes mid-conversation. Also unwedges a pipe whose VAD sticks with
 // `speaking` true, which would otherwise block delivery forever.
 export const MAX_HOLD_MS = 30_000;
+// The hold limit while every fed agent is mid-turn. The server holds context
+// for a busy agent anyway and delivers it when the turn ends, so a flush in
+// that window only spends a mutation and an action to be told to wait; the
+// engine flushes rarely instead. A line that names an agent flushes on the
+// next lull as usual, so an ask reaches a working agent at once.
+export const WORKING_HOLD_MS = 180_000;
+
+/** What the engine knows about the agents the words go to, asked at every
+ *  tick. `busy` is true only while EVERY fed agent is mid-turn (one idle
+ *  agent wants the lull cadence); `addressed` says whether a spoken line
+ *  names one of them. Both read the store on the caller's side. */
+export type ScribePacing = {
+  busy(): boolean;
+  addressed(text: string): boolean;
+};
+
+/** Whether the gap watcher flushes on this tick. Pure, so the cadence is one
+ *  readable rule with tests: never within FLUSH_MIN_INTERVAL_MS of the last
+ *  flush; then on a lull, or when the oldest words have waited the hold
+ *  limit. A busy room of agents that nobody addressed gets only the long
+ *  hold, never the lull. */
+export function flushDue(opts: {
+  sinceFlushMs: number;
+  anySpeaking: boolean;
+  quietForMs: number | null;
+  heldForMs: number | null;
+  busy: boolean;
+  addressed: boolean;
+}): boolean {
+  if (opts.sinceFlushMs < FLUSH_MIN_INTERVAL_MS) return false;
+  const waitForTurn = opts.busy && !opts.addressed;
+  const quiet = !opts.anySpeaking && opts.quietForMs !== null && opts.quietForMs >= GAP_MS;
+  const limit = waitForTurn ? WORKING_HOLD_MS : MAX_HOLD_MS;
+  const heldTooLong = opts.heldForMs !== null && opts.heldForMs >= limit;
+  return (quiet && !waitForTurn) || heldTooLong;
+}
 /** How much of the transcript the status snapshot carries: enough for a
  *  caption strip or a recording pill, never the transcript itself. */
 const TAIL = 6;
@@ -69,6 +105,7 @@ export type ScribeEngine = {
     roomKey: string;
     routes?: Array<{ kind: "session" | "doc" | "slack"; target: string; mode: "live" | "after" }>;
     auto?: boolean;
+    pacing?: ScribePacing;
   }): Promise<string | null>;
   /** Put a microphone on the run. `key` is the caller's handle for it and the
    *  only thing `detach` needs; a repeat attach on a live key is ignored. */
@@ -94,9 +131,11 @@ export function createScribeEngine(): ScribeEngine {
   const pipes = new Map<string, AsrPipe>();
   let lastSpeechEndMs = 0;
   let anySegmentsSinceFlush = false;
+  let addressedSinceFlush = false;
   let firstUnflushedAt = 0;
   let lastFlushAt = 0;
   let gapTimer: ReturnType<typeof setInterval> | null = null;
+  let pacing: ScribePacing | null = null;
 
   function nowMs(): number {
     return Date.now() - startedAt;
@@ -136,6 +175,7 @@ export function createScribeEngine(): ScribeEngine {
         },
         onUtterance: ({ text, t0, t1 }) => {
           anySegmentsSinceFlush = true;
+          if (pacing?.addressed(text)) addressedSinceFlush = true;
           if (!firstUnflushedAt) firstUnflushedAt = Date.now();
           emit({ tail: [...status.tail, { speaker: speakerName, text }].slice(-TAIL) });
           convex
@@ -197,26 +237,35 @@ export function createScribeEngine(): ScribeEngine {
       startedAt = Date.now();
       lastSpeechEndMs = 0;
       anySegmentsSinceFlush = false;
+      addressedSinceFlush = false;
       firstUnflushedAt = 0;
       lastFlushAt = Date.now();
+      pacing = opts.pacing ?? null;
       emit({ active: true, transcriptId, error: null, tail: [], startedAt });
 
       // The gap watcher: flush the live routes when nobody has spoken for
-      // GAP_MS, or when the oldest undelivered words have waited MAX_HOLD_MS —
-      // whichever comes first. FLUSH_MIN_INTERVAL_MS keeps a stop-start
-      // conversation from spamming a routed agent. The hold path fires between
-      // utterances, never mid-word: segments only exist once the VAD closes
-      // them.
+      // GAP_MS, or when the oldest undelivered words have waited the hold
+      // limit — whichever comes first (flushDue). FLUSH_MIN_INTERVAL_MS keeps
+      // a stop-start conversation from spamming a routed agent. The hold
+      // path fires between utterances, never mid-word: segments only exist
+      // once the VAD closes them.
       gapTimer = setInterval(() => {
         if (!status.active || !transcriptId || !convex) return;
-        if (!anySegmentsSinceFlush || Date.now() - lastFlushAt < FLUSH_MIN_INTERVAL_MS) return;
-        const anySpeaking = [...pipes.values()].some((p) => p.speaking);
-        const quiet = !anySpeaking && lastSpeechEndMs > 0 && Date.now() - lastSpeechEndMs >= GAP_MS;
-        const heldTooLong = firstUnflushedAt > 0 && Date.now() - firstUnflushedAt >= MAX_HOLD_MS;
-        if (quiet || heldTooLong) {
+        if (!anySegmentsSinceFlush) return;
+        const now = Date.now();
+        const due = flushDue({
+          sinceFlushMs: now - lastFlushAt,
+          anySpeaking: [...pipes.values()].some((p) => p.speaking),
+          quietForMs: lastSpeechEndMs > 0 ? now - lastSpeechEndMs : null,
+          heldForMs: firstUnflushedAt > 0 ? now - firstUnflushedAt : null,
+          busy: pacing?.busy() ?? false,
+          addressed: addressedSinceFlush,
+        });
+        if (due) {
           anySegmentsSinceFlush = false;
+          addressedSinceFlush = false;
           firstUnflushedAt = 0;
-          lastFlushAt = Date.now();
+          lastFlushAt = now;
           convex.mutation(api.transcripts.flush, { transcript_id: transcriptId }).catch(() => {});
         }
       }, 1000);
@@ -253,6 +302,7 @@ export function createScribeEngine(): ScribeEngine {
       for (const key of [...pipes.keys()]) detach(key);
       if (gapTimer) clearInterval(gapTimer);
       gapTimer = null;
+      pacing = null;
       transcriptId = null;
       emit({ active: false, transcriptId: null, trackCount: 0, tail: [], startedAt: null });
       if (client && id && !opts?.keepLive) {

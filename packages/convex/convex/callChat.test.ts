@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { getFunctionName } from "convex/server";
-import { agentLineText, list, mirrorAgentTurn, post, postEvent, scheduleAgentTurnMirror } from "./callChat";
+import { agentLineText, list, mirrorAgentTurn, post, postEvent, scheduleFedSessionSettle } from "./callChat";
 import { setRoomTranscribeOff } from "./calls";
 import { syncAgentFeeds } from "./transcripts";
 import { makeFakeDb } from "./testDb";
+import { characterOf } from "@codecast/shared/contracts/sessionCharacter";
 
 // A session fed a live huddle is a participant in the room's chat: what it
 // answers at the end of a turn shows up there, and what people type there
@@ -256,16 +257,17 @@ describe("mirrorAgentTurn", () => {
   });
 });
 
-describe("scheduleAgentTurnMirror", () => {
-  test("schedules the mirror only for a fed session", async () => {
+describe("scheduleFedSessionSettle", () => {
+  test("a fed session's settle mirrors its reply and delivers the words that waited", async () => {
     const fed = ctxWith({
       call_agent_feeds: [{ _id: "f1", conversation_id: "conv1", transcript_id: "t1", room_key: "session:conv1", added_by: "ua" }],
     });
-    expect(await scheduleAgentTurnMirror(fed, "conv1" as any)).toBe(true);
-    expect(fed._scheduled).toHaveLength(1);
-    expect(fed._scheduled[0].name).toBe("callChat:mirrorAgentTurn");
+    expect(await scheduleFedSessionSettle(fed, "conv1" as any)).toBe(true);
+    expect(fed._scheduled.map((s) => s.name)).toEqual(["callChat:mirrorAgentTurn", "transcripts:deliverRoutes"]);
+    // The catch up says why it runs, so delivery can wait for a quiet room.
+    expect(fed._scheduled[1].args).toMatchObject({ transcript_id: "t1", include_after_routes: false, reason: "settle" });
     const unfed = ctxWith({ call_agent_feeds: [] });
-    expect(await scheduleAgentTurnMirror(unfed, "conv1" as any)).toBe(false);
+    expect(await scheduleFedSessionSettle(unfed, "conv1" as any)).toBe(false);
     expect(unfed._scheduled).toHaveLength(0);
   });
 });
@@ -405,9 +407,11 @@ describe("list tells an event row from a line", () => {
     // The agent joining: the ACTOR's name, the agent separately, not mine.
     expect(rows[1]).toMatchObject({ user_name: "Ada Lovelace", mine: false, event: "agent_joined", text: "" });
     expect(rows[1].agent).toMatchObject({ conversation_id: "conv1", short_id: "conv1", title: "Fix the auth race", agent_type: "claude_code" });
-    // The agent's own line keeps its identity: the session's title, not mine.
-    expect(rows[2]).toMatchObject({ user_name: "Fix the auth race", user_image: undefined, mine: false, event: null });
-    expect(rows[2].agent).toMatchObject({ conversation_id: "conv1" });
+    // The agent's own line keeps its identity: what the room calls it (its
+    // character name, the hash default when nobody chose one), not mine.
+    const name = characterOf({ _id: "conv1" }).name;
+    expect(rows[2]).toMatchObject({ user_name: name, user_image: undefined, mine: false, event: null });
+    expect(rows[2].agent).toMatchObject({ conversation_id: "conv1", name, character_avatar: null, character_name: null });
     // Somebody else pressed the switch: their name, no agent.
     expect(rows[3]).toMatchObject({ user_name: "Bob", mine: false, event: "transcribe_off", agent: null });
   });

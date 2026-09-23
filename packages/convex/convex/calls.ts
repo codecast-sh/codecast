@@ -83,6 +83,44 @@ function projectMember(m: Doc<"call_members">) {
   };
 }
 
+/**
+ * WHAT A SEAT IN THIS ROOM MEANS TO SOMEBODY OUTSIDE IT.
+ *
+ * A walkie burst seats everyone who hears it, and the seat is held for half a
+ * minute after the key comes up so an answer lands without a rejoin. Read as
+ * "in a huddle", three seconds of somebody's voice lit every teammate's
+ * roster for the whole window, and nobody outside the room could tell that
+ * from an hour in a call. The seat rows carry no intent flag, so the class is
+ * read off what the room already records:
+ *
+ *   call    a channel or session huddle (always deliberate), a people room
+ *           somebody stepped into on purpose (a walkie_joined_at stamp on
+ *           ANY live seat, since one deliberate join makes the room a call
+ *           for everyone in it), or a people room somebody was rung into
+ *           (an accepted invite of the running huddle; joinRoom cancels the
+ *           grants when the room restarts from empty).
+ *   walkie  a people room with none of those: seats a burst put there, and
+ *           the linger after it.
+ *
+ * Invites change on a ring and an answer only, so reading them here adds no
+ * churn to a roster that already re-runs at heartbeat rate.
+ */
+export type SeatClass = "call" | "walkie";
+
+export async function roomSeatClass(
+  ctx: { db: any },
+  roomKey: string,
+  liveRows: Pick<Doc<"call_members">, "walkie_joined_at">[],
+): Promise<SeatClass> {
+  if (parseRoomKey(roomKey)?.kind !== "dm") return "call";
+  if (liveRows.some((m) => !!m.walkie_joined_at)) return "call";
+  const invites: Doc<"call_invites">[] = await ctx.db
+    .query("call_invites")
+    .withIndex("by_room", (q: any) => q.eq("room_key", roomKey))
+    .collect();
+  return invites.some((i) => i.status === "accepted") ? "call" : "walkie";
+}
+
 // Is calling available to the caller? Two gates: the deployment must have
 // LiveKit configured (the secret never leaves env), and calls are a per-team
 // opt-in — `teams` lists which of the caller's teams have it on so clients
@@ -428,17 +466,26 @@ export const heartbeat = mutation({
         q.eq("user_id", userId).eq("room_key", args.room_key),
       )
       .unique();
+    const now = Date.now();
     // A heartbeat for a row the sweep already removed is a no-op, not an
     // error: the client will notice via getMyCalls and reconnect or leave.
-    if (!row) return { ok: false };
-    const patch: Record<string, unknown> = { last_seen: Date.now() };
-    if (args.muted !== undefined) patch.muted = args.muted;
-    if (args.camera !== undefined) patch.camera = args.camera;
-    if (args.sharing !== undefined) patch.sharing = args.sharing;
-    const languages = stampedLanguages(args.languages);
-    if (languages) patch.languages = languages;
-    await ctx.db.patch(row._id, patch);
-    return { ok: true };
+    if (row) {
+      const patch: Record<string, unknown> = { last_seen: now };
+      if (args.muted !== undefined) patch.muted = args.muted;
+      if (args.camera !== undefined) patch.camera = args.camera;
+      if (args.sharing !== undefined) patch.sharing = args.sharing;
+      const languages = stampedLanguages(args.languages);
+      if (languages) patch.languages = languages;
+      await ctx.db.patch(row._id, patch);
+    }
+    // THE DEAD LEAVE WITH THE LIVING'S BEAT. `liveMembers` hides a lapsed row
+    // from every reader, but the row itself stayed until the next JOIN into
+    // the room, and a room with nobody joining is exactly where a dead seat
+    // is noticed: the roster carried a face whose client was gone. Sweeping
+    // here, after our own row is fresh, puts a bound on it: a seat whose lease
+    // lapsed is deleted within one heartbeat of anyone still in the room.
+    await sweepRoom(ctx, args.room_key, now);
+    return { ok: !!row };
   },
 });
 
@@ -1070,6 +1117,10 @@ export const getLiveRooms = query({
       // membership or the room's occupancy does, never with the clock.
       const canJoin = (await authorizeRoom(ctx, userId, roomKey)).ok;
       const state = await readRoomState(ctx, roomKey);
+      // Burst or call, for the people outside the room (roomSeatClass). On
+      // the room and on every seat, so a reader holding one row of either
+      // shape has the answer without a second lookup.
+      const seat = await roomSeatClass(ctx, roomKey, live);
       out.push({
         room_key: roomKey,
         team_id: live[0].team_id,
@@ -1081,10 +1132,11 @@ export const getLiveRooms = query({
         can_join: canJoin,
         redacted,
         title,
+        seat,
         members: live
           .slice()
           .sort((a, b) => String(a.user_id).localeCompare(String(b.user_id)))
-          .map(projectMember),
+          .map((m) => ({ ...projectMember(m), seat })),
       });
     }
     return out;

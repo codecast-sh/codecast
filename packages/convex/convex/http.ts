@@ -4259,6 +4259,10 @@ cliRoute("/cli/calls/list", async (ctx, body) => {
 cliRoute("/cli/calls/get", async (ctx, body) => {
   return await ctx.runQuery(api.transcripts.cliGetCall, body);
 });
+// `cast call hold <duration>|off`: a fed agent asks its huddle for time.
+cliRoute("/cli/calls/hold", async (ctx, body) => {
+  return await ctx.runMutation(api.transcripts.cliHoldCall, body);
+});
 cliRoute("/cli/work/list", async (ctx, body) => {
   return await ctx.runQuery(api.tasks.list, body);
 });

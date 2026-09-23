@@ -44,8 +44,13 @@ import { teamHasFeature } from "./teamFeatures";
 import { performSessionSend } from "./pendingMessages";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import {
+  addressesAgent,
+  agentSpokenNames,
   FALLBACK_TRANSCRIBE_MODEL,
+  HEARTBEAT_ALIVE_MS,
   LIVE_TRANSCRIBE_MODEL,
+  MID_TURN_AGENT_STATUSES,
+  trustedAgentStatus,
   REC_LEASE_STALE_MS,
   RECORDING_SUMMARY_PUSH_TYPE,
   TRANSCRIBE_MAX_BYTES,
@@ -60,6 +65,7 @@ import {
   sessionRoomConversationId,
   unionTranscribeLanguages,
 } from "@codecast/shared/contracts";
+import { characterOf } from "@codecast/shared/contracts/sessionCharacter";
 import { requireAccessibleDoc } from "./lib/access";
 import { verifyApiToken } from "./apiTokens";
 import { enqueuePush } from "./pushRouter";
@@ -78,7 +84,30 @@ const ROUTE_VALIDATOR = v.object({
   sent_seq: v.number(),
 });
 
-type Route = { kind: "session" | "doc" | "slack"; target: string; mode: "live" | "after"; sent_seq: number };
+type Route = {
+  kind: "session" | "doc" | "slack";
+  target: string;
+  mode: "live" | "after";
+  sent_seq: number;
+  added_by?: Id<"users">;
+  hold_until?: number;
+};
+
+// Why deliverRoutes is running. A flush is the scribe's lull; the other three
+// are clocks, and a clock-driven delivery to a session waits for the room to
+// be quiet so a catch up never cuts a sentence in half.
+const DELIVER_REASON = v.union(
+  v.literal("flush"),
+  v.literal("settle"),
+  v.literal("hold_expired"),
+  v.literal("route_added"),
+);
+type DeliverReason = "flush" | "settle" | "hold_expired" | "route_added";
+// A catch up delivery counts the room as quiet after this long without a
+// closed utterance: the scribe's own lull (scribeEngine GAP_MS).
+export const CATCH_UP_QUIET_MS = 2_500;
+// The longest a fed agent may hold the room off in one ask.
+export const HOLD_MAX_MS = 30 * 60_000;
 
 /** The session this room BELONGS to, if it is a session room: the one route
  *  target that is the huddle's own home rather than somewhere to report to. */
@@ -293,6 +322,7 @@ export const setRoutes = mutation({
         ...r,
         sent_seq: prior?.sent_seq ?? 0,
         added_by: prior?.added_by ?? userId,
+        ...(prior?.hold_until ? { hold_until: prior.hold_until } : {}),
       };
     });
     await ctx.db.patch(t._id, { routes });
@@ -341,6 +371,7 @@ export const addRoute = mutation({
       await ctx.scheduler.runAfter(0, internal.transcripts.deliverRoutes, {
         transcript_id: t._id,
         include_after_routes: false,
+        reason: "route_added",
       });
     }
   },
@@ -472,8 +503,94 @@ export const flush = mutation({
     await ctx.scheduler.runAfter(0, internal.transcripts.deliverRoutes, {
       transcript_id: t._id,
       include_after_routes: args.force === true,
+      reason: "flush",
     });
     await claimRollingSummary(ctx, t, Date.now());
+  },
+});
+
+/** How the words should be paced for one fed session right now: what the
+ *  room calls it (the names a spoken line uses to address it), and whether
+ *  it is mid-turn. Busy is a fresh heartbeat AND a turn in progress: a
+ *  daemon that died mid "working" must not hold the room's words forever,
+ *  and neither must a status that froze (trustedAgentStatus decays it). */
+export async function fedSessionPacing(
+  ctx: any,
+  target: string,
+  now: number,
+): Promise<{ conversation_id: string; names: string[]; busy: boolean } | null> {
+  const conv = await findConversationByAnyRefWhere(ctx, target, () => true);
+  if (!conv) return null;
+  const managed = await ctx.db
+    .query("managed_sessions")
+    .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conv._id))
+    .first();
+  const heartbeatFresh = !!managed?.last_heartbeat && now - managed.last_heartbeat < HEARTBEAT_ALIVE_MS;
+  const status = trustedAgentStatus(managed?.agent_status, managed?.agent_status_updated_at, now, heartbeatFresh);
+  const character = characterOf({
+    _id: String(conv._id),
+    character_avatar: (conv as any).character_avatar,
+    character_name: (conv as any).character_name,
+  });
+  return {
+    conversation_id: String(conv._id),
+    names: agentSpokenNames({ name: character.name, agentType: (conv as any).agent_type }),
+    busy: heartbeatFresh && MID_TURN_AGENT_STATUSES.has(status ?? ""),
+  };
+}
+
+/** `cast call hold <duration>` from a fed session: the live words wait on
+ *  this session's route until the hold ends (or `off` lifts it), except a
+ *  line that names the agent, which comes through at once. The hold's end
+ *  schedules the catch up delivery, so nothing waits past it. */
+export const cliHoldCall = mutation({
+  args: {
+    api_token: v.string(),
+    session: v.string(),
+    // 0 lifts the hold.
+    duration_ms: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token, false);
+    if (!auth) throw new Error("Unauthorized");
+    const conv = await findConversationByAnyRefWhere(
+      ctx,
+      args.session,
+      (c) => c.user_id?.toString() === auth.userId.toString() || c.owner_user_id?.toString() === auth.userId.toString(),
+    );
+    if (!conv) throw new Error(`No session found for "${args.session}" (you can only hold a huddle for a session you run or own)`);
+    const shortId = conv.short_id ?? conv._id.toString().slice(0, 7);
+    const feed = await ctx.db
+      .query("call_agent_feeds")
+      .withIndex("by_conversation", (q: any) => q.eq("conversation_id", conv._id))
+      .first();
+    const t = feed ? await ctx.db.get(feed.transcript_id) : null;
+    if (!feed || !t || t.status !== "live") {
+      return { held: false as const, reason: "not_in_huddle" as const, short_id: shortId };
+    }
+    const now = Date.now();
+    const holdUntil = args.duration_ms > 0 ? now + Math.min(args.duration_ms, HOLD_MAX_MS) : undefined;
+    // The route's target may be any ref of this conversation (id, short id,
+    // the agent's session id); resolve each session route the way delivery
+    // does rather than comparing strings.
+    const routes: Route[] = [];
+    for (const r of t.routes) {
+      if (r.kind !== "session") {
+        routes.push(r);
+        continue;
+      }
+      const target = await findConversationByAnyRefWhere(ctx, r.target, () => true);
+      const mine = target && String(target._id) === String(conv._id);
+      const { hold_until: _dropped, ...rest } = r;
+      routes.push(mine && holdUntil ? { ...rest, hold_until: holdUntil } : rest);
+    }
+    await ctx.db.patch(t._id, { routes });
+    await ctx.scheduler.runAfter(holdUntil ? holdUntil - now : 0, internal.transcripts.deliverRoutes, {
+      transcript_id: t._id,
+      include_after_routes: false,
+      reason: "hold_expired",
+    });
+    return { held: !!holdUntil, held_until: holdUntil ?? null, room_key: t.room_key, short_id: shortId };
   },
 });
 
@@ -1569,7 +1686,17 @@ export const readUnsent = internalQuery({
         q.eq("transcript_id", args.transcript_id).gt("seq", minSent),
       )
       .collect();
+    // The pacing of every fed session, keyed by route target, read here so
+    // the action decides from one consistent snapshot.
+    const now = Date.now();
+    const pacing: Record<string, { conversation_id: string; names: string[]; busy: boolean }> = {};
+    for (const r of t.routes) {
+      if (r.kind !== "session" || pacing[r.target]) continue;
+      const p = await fedSessionPacing(ctx, r.target, now);
+      if (p) pacing[r.target] = p;
+    }
     return {
+      now,
       transcript: {
         _id: t._id,
         room_key: t.room_key,
@@ -1584,7 +1711,10 @@ export const readUnsent = internalQuery({
         seq: s.seq,
         speaker_name: s.speaker_name,
         text: s.text,
+        // Wall clock of the utterance's end: the offsets are from started_at.
+        ended_at: t.started_at + s.t1,
       })),
+      pacing,
     };
   },
 });
@@ -1667,17 +1797,48 @@ export const slackTokenForChannel = internalQuery({
   },
 });
 
+/** Whether a session route's unsent words go now, and in which lane. Pure,
+ *  so the pacing rule is one readable function with tests.
+ *
+ *  A line that names the agent goes at once, mid-turn if need be: the ask
+ *  lane. Everything else is context, and context waits while the agent is
+ *  mid-turn or holding the room off (`hold_until`); its turn's end and the
+ *  hold's end each run delivery again. A clock-driven delivery (settle, hold
+ *  expiry) also waits for the room to be quiet, so a catch up never opens
+ *  on half a sentence: the scribe's next lull delivers it instead. */
+export function sessionDeliveryVerdict(opts: {
+  reason: DeliverReason;
+  now: number;
+  route: { hold_until?: number };
+  pacing: { names: string[]; busy: boolean } | null;
+  unsent: Array<{ text: string; ended_at: number }>;
+}): { deliver: false } | { deliver: true; lane: "ask" | "context"; held: boolean } {
+  const { reason, now, route, pacing, unsent } = opts;
+  const addressed = !!pacing && addressesAgent(unsent.map((s) => s.text).join("\n"), pacing.names);
+  if (addressed) return { deliver: true, lane: "ask", held: false };
+  const holding = (route.hold_until ?? 0) > now;
+  if (pacing?.busy || holding) return { deliver: false };
+  const clockDriven = reason === "settle" || reason === "hold_expired";
+  if (clockDriven) {
+    const lastEnd = Math.max(...unsent.map((s) => s.ended_at));
+    if (now - lastEnd < CATCH_UP_QUIET_MS) return { deliver: false };
+  }
+  return { deliver: true, lane: "context", held: clockDriven };
+}
+
 export const deliverRoutes = internalAction({
   args: {
     transcript_id: v.id("transcripts"),
     include_after_routes: v.boolean(),
+    reason: v.optional(DELIVER_REASON),
   },
   handler: async (ctx, args) => {
     const data = await ctx.runQuery(internal.transcripts.readUnsent, {
       transcript_id: args.transcript_id,
     });
     if (!data) return;
-    const { transcript, segments } = data;
+    const { transcript, segments, pacing, now } = data;
+    const reason: DeliverReason = args.reason ?? "flush";
     for (const route of transcript.routes) {
       if (route.mode === "after" && !args.include_after_routes) continue;
       const unsent = segments.filter((s: { seq: number }) => s.seq > route.sent_seq);
@@ -1690,14 +1851,24 @@ export const deliverRoutes = internalAction({
       const asUser = route.added_by ?? transcript.started_by;
       try {
         if (route.kind === "session") {
+          const target = pacing[route.target] ?? null;
+          // The stop's final delivery (include_after_routes) is the record of
+          // the call and bypasses the pacing: a busy agent still gets the end.
+          const verdict = args.include_after_routes
+            ? ({ deliver: true, lane: "context", held: false } as const)
+            : sessionDeliveryVerdict({ reason, now, route, pacing: target, unsent });
+          // The watermark stays put: the words wait for the turn's end, the
+          // hold's end or the next lull, whichever delivers them.
+          if (!verdict.deliver) continue;
           // A session hearing its OWN room is being spoken to, not sent a
           // report about a meeting elsewhere, and the two want different
           // words in front of the same chunk.
           const own = ownRoomTarget(transcript.room_key) === route.target;
+          const headerOpts = { name: target?.names[0] ?? "the agent", lane: verdict.lane, held: verdict.held };
           await ctx.runMutation(internal.transcripts.deliverToSession, {
             as_user: asUser,
             to: route.target,
-            body: `${own ? ownRoomChunkHeader() : liveFeedChunkHeader()}\n\n${chunk}`,
+            body: `${own ? ownRoomChunkHeader(headerOpts) : liveFeedChunkHeader(headerOpts)}\n\n${chunk}`,
           });
         } else if (route.kind === "doc") {
           await ctx.runMutation(internal.transcripts.deliverToDoc, {

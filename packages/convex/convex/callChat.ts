@@ -25,6 +25,7 @@ import { internalMutation, mutation, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { huddleChatLineHeader, isRecRoomKey } from "@codecast/shared/contracts";
+import { characterOf } from "@codecast/shared/contracts/sessionCharacter";
 import { authorizeRoom } from "./callRooms";
 import { MAX_ATTACHMENTS } from "./chatText";
 
@@ -79,14 +80,14 @@ export const list = query({
       const agent = r.agent_conversation_id ? agents.get(String(r.agent_conversation_id)) ?? null : null;
       // An event row names its ACTOR (the person who added the agent or
       // pressed the switch) and carries the agent beside it, so the room can
-      // read "Ada added Team huddle". An agent's own line is the agent's: its
-      // name is the session's, and it is never "mine" however the row is
+      // read "Ada added Ember". An agent's own line is the agent's: its name
+      // is what the room calls it, and it is never "mine" however the row is
       // owned.
       const spoken = agent && !r.event;
       return {
         _id: r._id,
         user_id: String(r.user_id),
-        user_name: spoken ? agent.title : u.name,
+        user_name: spoken ? agent.name : u.name,
         user_image: spoken ? undefined : u.image,
         text: r.text,
         attachments: r.attachments,
@@ -131,6 +132,11 @@ type AgentIdentity = {
   short_id: string | null;
   title: string;
   agent_type: string;
+  /** What the room calls it: its character name (session-characters.md S1),
+   *  the name people say to address it and the name beside its lines. */
+  name: string;
+  character_avatar: string | null;
+  character_name: string | null;
 };
 
 async function agentIdentity(ctx: any, id: Id<"conversations">): Promise<AgentIdentity | null> {
@@ -141,6 +147,9 @@ async function agentIdentity(ctx: any, id: Id<"conversations">): Promise<AgentId
     short_id: conv.short_id ?? null,
     title: conv.title || "agent session",
     agent_type: conv.agent_type,
+    name: characterOf({ _id: String(conv._id), character_avatar: conv.character_avatar, character_name: conv.character_name }).name,
+    character_avatar: conv.character_avatar ?? null,
+    character_name: conv.character_name ?? null,
   };
 }
 
@@ -279,9 +288,12 @@ export const mirrorAgentTurn = internalMutation({
 });
 
 /** Called from the status settle: is this session in a huddle, and if so
- *  arrange for its reply to be mirrored once the words have synced. One
- *  indexed read on the hot path; everything else runs later. */
-export async function scheduleAgentTurnMirror(ctx: any, conversationId: Id<"conversations">): Promise<boolean> {
+ *  arrange what a turn's end means there. Its reply is mirrored into the
+ *  room's chat once the words have synced, and the words the room said while
+ *  it worked (transcripts.deliverRoutes holds them for a busy agent) are
+ *  delivered now as one catch up. One indexed read on the hot path;
+ *  everything else runs later. */
+export async function scheduleFedSessionSettle(ctx: any, conversationId: Id<"conversations">): Promise<boolean> {
   const feed = await ctx.db
     .query("call_agent_feeds")
     .withIndex("by_conversation", (q: any) => q.eq("conversation_id", conversationId))
@@ -290,6 +302,11 @@ export async function scheduleAgentTurnMirror(ctx: any, conversationId: Id<"conv
   await ctx.scheduler.runAfter(MIRROR_DELAY_MS, internal.callChat.mirrorAgentTurn, {
     conversation_id: conversationId,
     attempt: 0,
+  });
+  await ctx.scheduler.runAfter(0, internal.transcripts.deliverRoutes, {
+    transcript_id: feed.transcript_id,
+    include_after_routes: false,
+    reason: "settle",
   });
   return true;
 }

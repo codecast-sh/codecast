@@ -5589,6 +5589,10 @@ export default defineSchema({
         // participant feeding an agent speaks as themselves); absent on routes
         // the scribe configured before this field existed → started_by.
         added_by: v.optional(v.id("users")),
+        // A hold the fed agent asked for (`cast call hold`): live delivery to
+        // this session waits until then, except for words that name it. The
+        // hold's expiry schedules the catch up delivery.
+        hold_until: v.optional(v.number()),
       }),
     ),
     // Monotonic per-transcript segment counter (writer-owned; the scribe is
