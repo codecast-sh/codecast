@@ -27,7 +27,8 @@ export type SettingsSectionId =
   | "cli"
   | "devices"
   | "migrate"
-  | "desktop";
+  | "desktop"
+  | "apps";
 
 export const DEFAULT_SETTINGS_SECTION: SettingsSectionId = "general";
 
@@ -51,6 +52,7 @@ const PATH_TO_SECTION: Record<string, SettingsSectionId> = {
   "/settings/devices": "devices",
   "/settings/migrate": "migrate",
   "/settings/desktop": "desktop",
+  "/settings/apps": "apps",
 };
 
 export interface SettingsPathHit {

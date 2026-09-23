@@ -13,7 +13,6 @@ import { useQuery, useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { cleanTitle } from "../lib/conversationProcessor";
-import { track } from "../lib/analytics";
 import { visitTimeAgo } from "../lib/recentVisits";
 import { getLabelColor } from "../lib/labelColors";
 import { shouldShowSession } from "../lib/sessionFilters";
@@ -30,7 +29,7 @@ import { channelDisplayName, chatViewRoomKey, dmCounterpart, memberName, suggest
 import { memberAvatarUrl } from "../lib/liveEntities";
 import { dmOtherIds } from "@codecast/shared/chat";
 import { CommentAvatar } from "./comments/CommentAvatar";
-import { readPins, isPinned, isThreadsPin, togglePin, type SidebarPin } from "../lib/sidebarPins";
+import { readPins, isPinned, isThreadsPin, pinApp, togglePin, type SidebarPin } from "../lib/sidebarPins";
 import { useConvexSync } from "../hooks/useConvexSync";
 import { useSyncProjects } from "../hooks/useSyncProjects";
 import { useSyncSavedViews } from "../hooks/useSyncSavedViews";
@@ -38,9 +37,9 @@ import { activeViewId, currentViewId, VIEW_ID_KEY } from "../lib/savedViews";
 import { projectDotClass } from "../lib/projectColors";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { TeamIcon } from "./TeamIcon";
-import { isDesktop } from "../lib/desktop";
 import { toast } from "sonner";
-import { FolderGit2, Globe, Workflow, Zap, MessageSquare, MessagesSquare, FolderKanban, Flag, Layers, Users, UserMinus, Hash, MoreHorizontal, Pin, PinOff, BellOff, Lock, SquarePen, Phone, PhoneCall } from "lucide-react";
+import { FolderGit2, Globe, Workflow, Zap, MessageSquare, MessagesSquare, FolderKanban, Flag, Layers, Users, UserMinus, Hash, MoreHorizontal, Pin, PinOff, BellOff, Lock, SquarePen, Phone, PhoneCall, Monitor, Smartphone } from "lucide-react";
+import { NATIVE_APP_COPY, NATIVE_APP_LINKS, nativeAppOffer, trackNativeAppClick } from "../lib/nativeApps";
 import { useSyncTeams } from "../hooks/useSyncTeams";
 import { AppPopOutButton } from "./desktop/AppPopOutButton";
 import { useDesktopAppWindow, useHasAppWindow } from "../hooks/useDesktopWindowRole";
@@ -762,9 +761,12 @@ function PinnedRail({
   onNavigate,
   applyView,
   activeViewIds,
+  scope,
 }: {
   onNavigate: (href: string) => void;
   applyView: (view: any) => void;
+  /** An app's own window shows only that app's pins (pinApp). */
+  scope?: DesktopApp;
   /** Ids of the currently applied saved views (tasks page, docs page) — a
    *  pinned view lights up exactly when its section row would. */
   activeViewIds: Array<string | undefined>;
@@ -785,7 +787,8 @@ function PinnedRail({
   // kept, so turning chat back on restores it). The Threads pin is a VIEW even
   // in its legacy channel-kind form (isThreadsPin), so it survives chat off.
   const chatOn = useTeamFeature("chat");
-  const visiblePins = chatOn ? pins : pins.filter((p) => isThreadsPin(p) || p.kind !== "channel");
+  const visiblePins = (chatOn ? pins : pins.filter((p) => isThreadsPin(p) || p.kind !== "channel"))
+    .filter((p) => !scope || pinApp(p) === scope);
   if (visiblePins.length === 0) return null;
 
   // The icon already names the kind (a hash IS the channel marker), so the
@@ -956,6 +959,11 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const closeCreateModal = useInboxStore((s) => s.closeCreateModal);
   const openCompose = useInboxStore((s) => s.openCompose);
   const hasUsedDesktop = useInboxStore((s) => s.clientState.dismissed?.has_used_desktop ?? false);
+  // The footer offers the native app for this device (lib/nativeApps); the Mac
+  // offer stops once the user runs the desktop app, the iOS one when the phone
+  // is the device you're already holding is the point, so it stays.
+  const nativeApp = nativeAppOffer();
+  const offerNativeApp = nativeApp !== null && !(nativeApp === "mac" && hasUsedDesktop);
 
   const favoritesQuery = useQuery(api.conversations.listFavorites);
   // Read bookmarks straight from the store (synced globally in useSyncInboxSessions)
@@ -1264,6 +1272,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             onNavigate={(href) => { router.push(href); onMobileClose?.(); }}
             applyView={applyView}
             activeViewIds={[activeTaskViewId, activeDocViewId]}
+            scope={scope}
           />
         )}
         {scope === "work" ? null : (<>
@@ -1681,16 +1690,16 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
       <div data-sidebar-scroll className="flex-1 overflow-y-auto scrollbar-auto pt-3 sm:pt-4">
         {sidebarContent}
       </div>
-      {!isDesktop() && !isNarrow && !hasUsedDesktop && (
+      {offerNativeApp && nativeApp && !isNarrow && (
         <a
-          href="https://codecast.sh/download/mac"
-          onClick={() => track("desktop_download_clicked", { location: "sidebar" })}
+          href={NATIVE_APP_LINKS[nativeApp]}
+          target={nativeApp === "ios" ? "_blank" : undefined}
+          rel={nativeApp === "ios" ? "noopener noreferrer" : undefined}
+          onClick={() => trackNativeAppClick(nativeApp, "sidebar")}
           className="flex items-center gap-2 px-3 py-2 mt-2 text-sm text-sol-text-dim hover:text-sol-cyan transition-colors border-t border-sol-border/30 pt-3"
         >
-          <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-          </svg>
-          <span>Get Desktop App</span>
+          {nativeApp === "mac" ? <Monitor className="w-4 h-4 flex-shrink-0" /> : <Smartphone className="w-4 h-4 flex-shrink-0" />}
+          <span>{NATIVE_APP_COPY[nativeApp].cta}</span>
         </a>
       )}
       <Suspense fallback={null}>

@@ -18,6 +18,7 @@ describe("settingsSectionForPath", () => {
     expect(settingsSectionForPath("/settings/cli")?.section).toBe("cli");
     expect(settingsSectionForPath("/settings/devices")?.section).toBe("devices");
     expect(settingsSectionForPath("/settings/desktop")?.section).toBe("desktop");
+    expect(settingsSectionForPath("/settings/apps")?.section).toBe("apps");
   });
 
   it("carries the query string (OAuth returns, team-setup handoff)", () => {
