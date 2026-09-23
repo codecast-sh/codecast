@@ -9,6 +9,8 @@ type MapDirectory = (args: {
   path_prefix: string;
   team_id: Id<"teams">;
   auto_share: boolean;
+  include_past?: boolean;
+  share_since?: number;
 }) => Promise<unknown>;
 
 export type SaveTeamSetupInput = {
@@ -16,6 +18,8 @@ export type SaveTeamSetupInput = {
   visibility: TeamVisibility;
   /** path -> selected. Only true entries are mapped. */
   selectedPaths: Record<string, boolean>;
+  /** A share start stamps each new mapping: sessions before it stay private. Null shares everything. */
+  shareSince?: number | null;
   /** The viewer's workspaces; paths already mapped to the team are skipped. */
   allProjects?: UserWorkspace[];
 };
@@ -29,7 +33,7 @@ export async function saveTeamSetup(
   input: SaveTeamSetupInput,
   mutations: { setTeamVisibility: SetVisibility; updateDirectoryMapping: MapDirectory },
 ): Promise<{ mapped: number }> {
-  const { teamId, visibility, selectedPaths, allProjects } = input;
+  const { teamId, visibility, selectedPaths, allProjects, shareSince = null } = input;
   await mutations.setTeamVisibility({ team_id: teamId, visibility });
 
   let mapped = 0;
@@ -37,7 +41,13 @@ export async function saveTeamSetup(
     if (!selected) continue;
     const ws = allProjects?.find((p) => p.path === path);
     if (ws && isMappedToTeam(ws, teamId)) continue;
-    await mutations.updateDirectoryMapping({ path_prefix: path, team_id: teamId, auto_share: true });
+    await mutations.updateDirectoryMapping({
+      path_prefix: path,
+      team_id: teamId,
+      auto_share: true,
+      include_past: shareSince == null,
+      share_since: shareSince ?? undefined,
+    });
     mapped++;
   }
   return { mapped };

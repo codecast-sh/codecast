@@ -13,7 +13,7 @@ import { isTeamMember } from "./privacy";
 import { nextShortId } from "./counters";
 import { canAccessConversation } from "./lib/access";
 import { armedTriggerKindFor } from "./dormancy";
-import { isViableInboxParent } from "./inboxFilters";
+import { restoreToInbox } from "./inboxFilters";
 import { configuredCloudWakeHosts, getCloudWakeHostForConversation } from "./cloudWake";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { enqueueRoleEvent } from "./orgEvents";
@@ -177,20 +177,24 @@ export async function stampRunConversation(
     .first();
   if (!conv) return null;
   const patch: Record<string, any> = {};
-  if (conv.agent_task_id !== task._id) patch.agent_task_id = task._id;
-  // Nest the run under the session that armed it (runParentOf: every spawn
-  // schedule, repeating included). A run nested under a live parent is read
-  // there instead of as a loose card, which is what keeps an hourly job from
-  // being a card an hour. isViableInboxParent is the same test orchestration
-  // workers use: a child surfaces only under a parent that is itself in the
-  // inbox, so nesting under a killed, dismissed or stashed session would make
-  // the run vanish rather than nest. When it fails the run stays top-level.
-  const parent = runParentOf(task);
-  if (parent && !conv.parent_conversation_id && parent.toString() !== conv._id.toString()) {
-    const parentConv = await ctx.db.get(parent);
-    if (isViableInboxParent(parentConv, userId.toString())) {
+  const firstStamp = conv.agent_task_id !== task._id;
+  if (firstStamp) patch.agent_task_id = task._id;
+  // A run is never a loose inbox card. It nests under the session that armed
+  // it (runParentOf: every spawn schedule, repeating included) whatever that
+  // session's inbox state, a stashed parent or a subagent worker included: the
+  // outcomes a person must see wake the parent (runOwnerWakeOf), and a wake
+  // brings a stashed or killed parent back, so hiding the run loses nothing.
+  // A repeating run with no parent to nest under is born stashed instead, and
+  // surfaces only for those same outcomes (wakeRunOwner). A once run with no
+  // parent stays a card: its single result is the deliverable.
+  if (!conv.parent_conversation_id) {
+    const parent = runParentOf(task);
+    const parentConv = parent && parent.toString() !== conv._id.toString() ? await ctx.db.get(parent) : null;
+    if (parentConv && parentConv.user_id.toString() === userId.toString()) {
       patch.parent_conversation_id = parent;
       patch.is_subagent = true;
+    } else if (firstStamp && task.schedule_type !== "once" && !conv.inbox_stashed_at && !conv.inbox_pinned_at) {
+      patch.inbox_stashed_at = Date.now();
     }
   }
   if (Object.keys(patch).length > 0) {
@@ -287,9 +291,13 @@ async function wakeRunOwner(
   now: number,
 ): Promise<boolean> {
   const ownerId = runOwnerWakeOf(task, outcome);
-  if (!ownerId) return false;
-  const owner = await ctx.db.get(ownerId);
-  if (!owner || owner.user_id !== task.user_id) return false;
+  const owner = ownerId ? await ctx.db.get(ownerId) : null;
+  if (!owner || owner.user_id !== task.user_id) {
+    // Nobody to wake: a run born hidden for want of a parent (stampRunConversation)
+    // is the only place this outcome can be read, so it comes back.
+    if (outcome !== "reported" && runConv && !runConv.parent_conversation_id) await restoreToInbox(ctx, runConv);
+    return false;
+  }
   const handle = task.short_id ?? task.title;
   const runRef = runConv ? runConv.short_id ?? runConv._id.toString().slice(0, 7) : null;
   const run = runRef ? `Run ${runRef} of ${handle}` : `A run of ${handle}`;
@@ -1096,16 +1104,7 @@ export const completeTaskRun = mutation({
           : attentionConvId
             ? await ctx.db.get(attentionConvId)
             : null;
-      if (
-        conv &&
-        conv.user_id === auth.userId &&
-        (conv.inbox_stashed_at || conv.inbox_dismissed_at)
-      ) {
-        await ctx.db.patch(conv._id, {
-          inbox_stashed_at: undefined,
-          inbox_dismissed_at: undefined,
-        });
-      }
+      if (conv && conv.user_id === auth.userId) await restoreToInbox(ctx, conv);
     }
 
     await patchTask(ctx, task, updates);
@@ -1206,9 +1205,7 @@ export const failTaskRun = mutation({
       // failures above stay quiet: the retry is still progress.
       if (task.originating_conversation_id) {
         const home = await ctx.db.get(task.originating_conversation_id);
-        if (home && (home.inbox_stashed_at || home.inbox_dismissed_at) && !home.inbox_killed_at) {
-          await ctx.db.patch(home._id, { inbox_stashed_at: undefined, inbox_dismissed_at: undefined });
-        }
+        if (home) await restoreToInbox(ctx, home);
       }
       // A fresh run's death is its owner's to act on: the run is nested under
       // it and out of the inbox, so the owner is told, not the human.

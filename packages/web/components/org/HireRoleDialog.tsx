@@ -16,7 +16,6 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { SelectBox } from "../ui/select-box";
 import { parentNodeId, parentRefOfNodeId, refMatches, refResolves } from "./orgLayout";
 import type { OrgParentRef, OrgTree } from "./orgTypes";
-import { DEFAULT_CAPS, TRUST_META, TRUST_STAGES, type RoleCaps, type TrustStage } from "./scope/scopeTypes";
 import { OrgTemplateHire } from "./orgTemplateHire";
 import { AVATAR_KEYS, avatarOf } from "@codecast/shared/contracts/orgAvatars";
 import { ORG_TENURE_THEN, seatSentence, type OrgRoleSeat, type OrgTenureSpec } from "@codecast/shared/contracts/orgProposal";
@@ -27,13 +26,6 @@ import { useTakeoverPreviews } from "../../hooks/useTakeoverPreviews";
 function slugify(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32);
 }
-
-// Why the two higher stages are locked here: trust changes are a person's
-// later act on the role page, logged on the charter (orgRoles.setTrust).
-const TRUST_UNLOCK_SENTENCE: Record<Exclude<TrustStage, "understand">, string> = {
-  decide: "Locked at creation. Raise it from the role's settings once its recommendations have held; the change is logged on the charter.",
-  direct: "Locked at creation. Raise it from the role's settings after decide has held; hands then start within the caps below.",
-};
 
 /** The charter the form proposes from what was picked; editable, and replaced
  *  only while the person has not typed their own. */
@@ -54,7 +46,7 @@ function proposeCharter(name: string, projects: Array<{ title: string; descripti
  *  the form resolves them against the workspace's projects and plans, so a
  *  ref nothing answers to is simply not ticked. `reports_to` is resolved by
  *  the caller against the tree (resolveOrgParentRef). */
-export type HireRoleInitial = { name?: string; handle?: string; charter?: string; caps?: Partial<RoleCaps>; scope?: { projects?: string[]; plans?: string[] }; reports_to?: OrgParentRef | null; tenure?: OrgTenureSpec; avatar?: string };
+export type HireRoleInitial = { name?: string; handle?: string; charter?: string; scope?: { projects?: string[]; plans?: string[] }; reports_to?: OrgParentRef | null; tenure?: OrgTenureSpec; avatar?: string };
 
 /** What the person changed in the form, so an edit sends only that: a scope
  *  ref the form could not resolve, or a parent the same proposal creates (a
@@ -105,7 +97,6 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
   const [planIds, setPlanIdsState] = useState<string[]>(() => plans.filter((p) => (initial?.scope?.plans ?? []).some((ref) => refMatches(ref, { id: p._id, title: p.title, short_id: p.short_id }))).map((p) => p._id));
   const setProjectIds = (v: string[]) => { setTouched((t) => ({ ...t, scope: true })); setProjectIdsState(v); };
   const setPlanIds = (v: string[]) => { setTouched((t) => ({ ...t, scope: true })); setPlanIdsState(v); };
-  const [caps, setCaps] = useState<RoleCaps>({ ...DEFAULT_CAPS, ...(initial?.caps ?? {}) });
   // The face (S13): a chosen avatar key, else the default derived from the
   // handle so every role has one. `avatar` is undefined until the person picks.
   const [avatar, setAvatar] = useState<string | undefined>(initial?.avatar);
@@ -170,7 +161,6 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
       scope: { project_ids: projectIds, plan_ids: planIds },
       reports_to: ref,
       ...(charter.trim() ? { charter: charter.trim() } : {}),
-      caps,
       tenure: buildTenure(),
       ...(avatar ? { avatar } : {}),
       provision: true,
@@ -293,7 +283,7 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
                   )}
                   {endKind === "project" && (
                     <SelectBox value={endProject} onChange={(e) => setEndProject(e.target.value)} className="text-[12.5px] flex-1" style={{ minWidth: 150 }}>
-                      <option value="">Pick a project…</option>
+                      <option value="">Pick a folder…</option>
                       {projects.map((p) => <option key={p._id} value={p._id}>{p.title}</option>)}
                     </SelectBox>
                   )}
@@ -313,35 +303,11 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
             )}
           </Field>
 
-          <Field label="Trust" hint="what it may do on its own">
-            <div className="grid sm:grid-cols-3 gap-2">
-              {TRUST_STAGES.map((stage, i) => {
-                const m = TRUST_META[stage];
-                const on = stage === "understand";
-                return (
-                  <div key={stage} aria-disabled={!on} title={on ? undefined : TRUST_UNLOCK_SENTENCE[stage as Exclude<TrustStage, "understand">]} className="rounded-lg border px-3 py-2.5" style={{ borderColor: on ? m.color : "color-mix(in srgb, var(--sol-border) 40%, transparent)", background: on ? `color-mix(in srgb, ${m.color} 9%, transparent)` : undefined, opacity: on ? 1 : 0.7 }}>
-                    <div className="flex items-center gap-2">
-                      <span className="w-5 h-5 rounded-full inline-flex items-center justify-center text-[10px] font-bold tabular-nums" style={{ background: on ? m.color : "color-mix(in srgb, var(--sol-border) 40%, transparent)", color: on ? "var(--sol-bg)" : "var(--sol-text-dim)" }}>{i + 1}</span>
-                      <span className="text-[12.5px] font-semibold" style={{ color: on ? m.color : "var(--sol-text)" }}>{m.label}</span>
-                      {!on && <Lock className="w-3 h-3 ml-auto" style={{ color: "var(--sol-text-dim)" }} />}
-                    </div>
-                    <p className="mt-1.5 text-[11px] leading-snug" style={{ color: "var(--sol-text-muted)" }}>{on ? m.sentence : TRUST_UNLOCK_SENTENCE[stage as Exclude<TrustStage, "understand">]}</p>
-                  </div>
-                );
-              })}
-            </div>
-          </Field>
-
-          <Field label="Daily caps" hint="hands it may start, wakes it may receive, tokens it may spend per UTC day">
-            <div className="grid grid-cols-3 gap-2">
-              {([["hands_per_day", "hands"], ["wakes_per_day", "wakes"], ["tokens_per_day", "tokens"]] as const).map(([k, label]) => (
-                <label key={k} className="flex flex-col gap-1">
-                  <span className="text-[10.5px]" style={{ color: "var(--sol-text-dim)" }}>{label}</span>
-                  <input type="number" min={0} step={k === "tokens_per_day" ? 10_000 : 1} value={caps[k]} onChange={(e) => setCaps({ ...caps, [k]: Math.max(0, Math.floor(Number(e.target.value) || 0)) })} className={INPUT} style={{ ...INPUT_STYLE, fontFamily: "var(--font-mono)" }} />
-                </label>
-              ))}
-            </div>
-          </Field>
+          {/* A hired role starts work on its own (org-staffing.md S23.1); the
+              switch and its limits live on the role's page, not in the hire. */}
+          <p className="text-[11.5px] leading-snug" style={{ color: "var(--sol-text-dim)" }} data-hire-autonomy-note>
+            It starts work in its area on its own. You can turn that off from its page.
+          </p>
 
           <div className="flex items-center justify-end gap-2 pt-1">
             <button type="button" onClick={onClose} className="h-8 px-3 rounded-lg text-[12.5px] hover:bg-sol-bg-highlight" style={{ color: "var(--sol-text-muted)" }}>Cancel</button>

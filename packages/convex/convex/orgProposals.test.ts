@@ -157,8 +157,8 @@ describe("orgProposals.decide", () => {
     expect(await decide(3, "accept", { caps: { wakes_per_day: 9 } })).toMatchObject({ status: "applied", note: "@growth: wakes 40 → 9/day" });
     expect((await db.get(GROWTH as any)).caps).toEqual({ hands_per_day: 6, wakes_per_day: 9, tokens_per_day: 400_000 });
     expect((await db.get(p.ids[3] as any)).edits).toEqual({ caps: { wakes_per_day: 9 } });
-    expect(await decide(4)).toMatchObject({ status: "applied", note: "@growth: trust understand → decide" });
-    expect((await db.get(GROWTH as any)).trust).toBe("decide");
+    expect(await decide(4)).toMatchObject({ status: "applied", note: "@growth: turned on starting work on its own" });
+    expect((await db.get(GROWTH as any)).trust).toBe("direct"); // decide reads as on and is written as direct (S23.1)
     expect(await decide(5)).toMatchObject({ status: "applied", note: expect.stringContaining('routine "Weekly review" every 7d (tr-1)') });
     const routine = (await db.query("agent_tasks").collect())[0];
     expect(routine).toMatchObject({ target_conversation_id: S_GROWTH, originating_conversation_id: S_GROWTH, schedule_type: "recurring", interval_ms: 7 * 86_400_000, prompt: "Run cast org review", status: "scheduled", user_id: ME });
@@ -285,7 +285,7 @@ describe("orgProposals.acceptAll", () => {
     expect(rows.map((c: any) => c.status)).toEqual(["failed", "applied", "applied"]);
     expect(rows[0].applied_note).toContain('No plan "pl-999"');
     expect((await db.get(GROWTH as any)).caps.wakes_per_day).toBe(12);
-    expect((await db.get(GROWTH as any)).trust).toBe("decide");
+    expect((await db.get(GROWTH as any)).trust).toBe("direct"); // decide is never written again (S23.1)
     // The failed one is still decidable: skipping it resolves the proposal.
     expect(await performDecideChange(ctxOf(db), ME as any, { change_id: String(rows[0]._id), verdict: "skip" })).toMatchObject({ status: "skipped", resolved: true });
     // Without runMutation (the plain harness) the same accept all lands the same way.
@@ -1046,7 +1046,7 @@ describe("a verdict the author revised under the reader is refused (S18)", () =>
     // The page reads the revised list and presses Accept on "Trust growth to decide", now index 0.
     const out = await performDecideAsk(ctxOf(db), ME as any, { proposal: r.short_id, ask: 0, verdict: "accept", provision: false, seen: seenOf(after, 0) });
     expect(out).toMatchObject({ ask: 0, title: "Trust growth to decide", applied: 1 });
-    expect((await growth(db)).trust).toBe("decide");
+    expect((await growth(db)).trust).toBe("direct"); // decide is never written again (S23.1)
     expect((await growth(db)).status).toBe("active");
     // A position past the revised list, read against the revised list, is a bad index, not a moved list.
     await expect(performDecideAsk(ctxOf(db), ME as any, { proposal: r.short_id, ask: 5, verdict: "accept", seen: { revised_at: after.asks && latestOrgRevisionAt(after.changes), seqs: [] } })).rejects.toThrow("there is no ask 5");

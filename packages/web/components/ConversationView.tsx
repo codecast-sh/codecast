@@ -1,5 +1,4 @@
 import { HandoffLinkChip, HandoffSessionLink, SessionHandoffCard, SessionHandoffNotice } from "./conversation/SessionHandoff";
-import { HibernatedMarker } from "./HibernatedMarker";
 import { sessionRepository } from "../lib/repoNavigation";
 import { repoTreeHref, repoCommitsHref } from "../lib/repoView";
 import { madeInTranscript, transcriptGitOutcomes } from "../lib/gitToolOutcome";
@@ -3668,7 +3667,10 @@ const ConversationViewInner = (
             {conversation && <AnchorHeaderPill conversationId={conversation._id.toString()} />}
             {conversation && <BrowserPaneOfferChip conversationId={conversation._id.toString()} />}
 
-            {managedSession?.agent_status === "hibernated" ? <HibernatedMarker status={managedSession.agent_status} /> : isSessionDisconnected && (managedSession?.agent_status === "starting" || managedSession?.agent_status === "resuming" || managedSession?.agent_status === "connected") ? (
+            {/* A hibernated session says so above the composer (MessageInput
+                status line), not here: the header stays quiet rather than
+                showing a "Disconnected" pill for a park the daemon lifts on send. */}
+            {managedSession?.agent_status === "hibernated" ? null : isSessionDisconnected && (managedSession?.agent_status === "starting" || managedSession?.agent_status === "resuming" || managedSession?.agent_status === "connected") ? (
               <span data-cc-conv-status className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] flex-shrink-0 bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30">
                 <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan animate-pulse" />
                 <span className="hidden sm:inline cq-sq3">{managedSession?.agent_status === "starting" ? "Starting" : managedSession?.agent_status === "resuming" ? "Resuming" : "Delivering"}</span>
@@ -3966,27 +3968,8 @@ const ConversationViewInner = (
                   </DropdownMenuContent>
                 </DropdownMenu>
 
-                <ShortcutTooltip label="Copy link" action="conv.copyLink" side="bottom">
-                  <button
-                    onClick={() => { copyToClipboard(`${shareOrigin()}/conversation/${conversation?._id}`).then(() => toast.success("Link copied")).catch(() => toast.error("Failed to copy")); }}
-                    className="cq-sq4 p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors"
-                  >
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                    </svg>
-                  </button>
-                </ShortcutTooltip>
-
-                {chatOn && (
-                  <button
-                    onClick={() => openForwardToChat({ url: `${shareOrigin()}/conversation/${conversation?._id}`, label: "session" })}
-                    className="cq-sq4 p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors"
-                    title="Send to chat"
-                  >
-                    <Forward className="w-3.5 h-3.5" />
-                  </button>
-                )}
-
+                {/* Copy link and send to chat live in the share popover
+                    (headerExtra) and in the menu below, not as bare icons. */}
                 {headerExtra}
 
                 <DropdownMenu>
@@ -4021,21 +4004,21 @@ const ConversationViewInner = (
                           <DensityMenuOptions density={density} setDensity={setDensity} guest={guest} />
                         </DropdownMenuSubContent>
                       </DropdownMenuSub>
-                      <DropdownMenuItem onSelect={() => { copyToClipboard(`${shareOrigin()}/conversation/${conversation?._id}`).then(() => toast.success("Link copied")).catch(() => toast.error("Failed to copy")); }}>
-                        <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                        </svg>
-                        Copy link
-                        <MenuKeyCaps action="conv.copyLink" />
-                      </DropdownMenuItem>
-                      {chatOn && (
-                        <DropdownMenuItem onSelect={() => setTimeout(() => openForwardToChat({ url: `${shareOrigin()}/conversation/${conversation?._id}`, label: "session" }))}>
-                          <Forward className="w-3 h-3 mr-1.5" />
-                          Send to chat
-                        </DropdownMenuItem>
-                      )}
                       <DropdownMenuSeparator />
                     </SqueezedHeaderActions>
+                    <DropdownMenuItem onSelect={() => { copyToClipboard(`${shareOrigin()}/conversation/${conversation?._id}`).then(() => toast.success("Link copied")).catch(() => toast.error("Failed to copy")); }}>
+                      <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                      </svg>
+                      Copy link
+                      <MenuKeyCaps action="conv.copyLink" />
+                    </DropdownMenuItem>
+                    {chatOn && (
+                      <DropdownMenuItem onSelect={() => setTimeout(() => openForwardToChat({ url: `${shareOrigin()}/conversation/${conversation?._id}`, label: "session" }))}>
+                        <Forward className="w-3 h-3 mr-1.5" />
+                        Send to chat
+                      </DropdownMenuItem>
+                    )}
                     {effectiveIsOwner && conversation?.session_id && (
                       <DropdownMenuItem disabled={isHeaderRestarting} onSelect={() => { setTimeout(() => handleRestartSession()); }}>
                         <svg className={`w-3 h-3 mr-1.5 text-orange-400 ${isHeaderRestarting ? "animate-spin" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -4673,7 +4656,7 @@ const ConversationViewInner = (
                   ))}
                 </div>
               ) : null}
-              <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss ?? sendAndStashFallback} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} workingSinceTs={workingSinceForClock(latestMessageTimestamp, now)} workingPhrase={workingPhrase} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected || conversation.status !== "active" ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={forkHandler} onForkSend={forkSendHandler} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} permissionModePending={modeSwitching} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={onSendOverride ?? (workflowRun?.status === "paused" ? handleGateRespond : undefined)} composerNode={composerNode} composerPlaceholder={composerPlaceholder} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} onSubmitWithIntent={onSubmitWithIntent} threadStateNode={onSendOverride ? undefined : threadStatePanel} branchMapNode={treePopoverOpen ? (
+              <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss ?? sendAndStashFallback} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} workingSinceTs={workingSinceForClock(latestMessageTimestamp, now)} workingPhrase={workingPhrase} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={managedSession?.agent_status === "hibernated" ? "hibernated" : isSessionDisconnected || conversation.status !== "active" ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={forkHandler} onForkSend={forkSendHandler} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} permissionModePending={modeSwitching} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={onSendOverride ?? (workflowRun?.status === "paused" ? handleGateRespond : undefined)} composerNode={composerNode} composerPlaceholder={composerPlaceholder} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} onSubmitWithIntent={onSubmitWithIntent} threadStateNode={onSendOverride ? undefined : threadStatePanel} branchMapNode={treePopoverOpen ? (
                 <ForkMapBox
                   tray
                   open

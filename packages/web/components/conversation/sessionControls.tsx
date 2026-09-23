@@ -27,6 +27,7 @@ import { browseProjectOrder, frequentProjectChips, mergeRecentProjectPaths, rece
 import { ChevronDown, Search } from "lucide-react";
 import { deviceDisplayName } from "../DeviceBadge";
 import { MachineChips } from "../MachineChips";
+import { SharedWithMark } from "../ProjectPathPicker";
 import { SessionModeToggles } from "../SessionModeToggles";
 import { dedupeProjectsByRepoName, pathOnMyMachines, repoName, resolveMachineSelection, resolveScopedProjects } from "../../lib/machinePicker";
 import { cloudHostOf, cloudParkNeeded, cloudToggleAvailable, defaultSessionMachineId, isCloudHost, machineSelectionAfterCloudToggle, machineSelectionAfterPick, switchReconfigureArgs, type SessionMachine } from "../../lib/sessionMachines";
@@ -277,6 +278,13 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
   );
   const suggestedPaths = useMemo(
     () => new Set(recentProjects.filter((p) => p.suggested).map((p) => p.path)),
+    [recentProjects],
+  );
+  // The team a session in each folder will be shared with (its own rule, else
+  // its repository's), shown on the chip so the folder choice carries its
+  // consequence.
+  const sharedWith = useMemo(
+    () => new Map(recentProjects.map((p) => [p.path, { teamId: p.team_id ?? null, team: p.team_name ?? null }] as const)),
     [recentProjects],
   );
 
@@ -706,6 +714,7 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
                     ) : (
                       <span>{p.path.split("/").filter(Boolean).pop()}</span>
                     )}
+                    <SharedWithMark {...sharedWith.get(p.path)} />
                   </button>
                 </Fragment>
               );
@@ -737,6 +746,7 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
               >
                 <FolderGlyph />
                 <span>{currentName}</span>
+                <SharedWithMark {...sharedWith.get(currentPath)} />
               </button>
             )}
             {visibleProjects.map((p: { path: string }) => {
@@ -750,12 +760,13 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
                 >
                   <FolderGlyph />
                   <span>{name}</span>
+                  <SharedWithMark {...sharedWith.get(p.path)} />
                 </button>
               );
             })}
             <button
               onClick={focusPicker}
-              title="Search projects or paste any folder path"
+              title="Search folders or paste any path"
               className="inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-md border border-dashed border-sol-border/50 text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/40 hover:bg-sol-cyan/5 transition-all"
             >
               <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>

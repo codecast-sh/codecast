@@ -10,6 +10,7 @@
 // (convex/orgChanges.ts), the web History tab and `cast org log` all read
 // this one file. Ids are strings here: the shared package knows no Convex.
 
+import { autonomyChangeWords, autonomyOn } from "./roleAutonomy";
 import {
   andList,
   changeLine,
@@ -379,6 +380,8 @@ function logOnlySentence(row: OrgLogRow): string {
  *  the undo preview and `cast org log` all print this. Total, like changeLine. */
 export function orgLogLine(row: OrgLogRow): string {
   const change = orgLogRowChange(row);
+  // The switch (org-staffing.md S23.1): history says what the person did.
+  if (change?.kind === "trust") return `${autonomyChangeWords(autonomyOn(change.trust)).replace(/^t/, "T")} for ${at(change.handle)}`;
   if (change) return changeLine(change);
   // A hire and an upgrade are recorded; their way back is the host step
   // (org-staffing.md S21), so the inverse row says what the undo did do.

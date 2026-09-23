@@ -56,7 +56,7 @@ describe("org history round trips", () => {
   test("budget, trust and role fields use reversible rows", async () => {
     const f = fixture(); const role = await f.role();
     await roundTrip(f, role._id, () => performSetCaps(f.ctx(), ME as any, { role_id: role._id, hands: 8 }), ["caps"]);
-    await roundTrip(f, role._id, () => performSetTrust(f.ctx(), ME as any, { role_id: role._id, trust: "decide" }), ["trust"]);
+    await roundTrip(f, role._id, () => performSetTrust(f.ctx(), ME as any, { role_id: role._id, on: false }), ["trust"]);
     await roundTrip(f, role._id, () => performUpdateRole(f.ctx(), ME as any, { role_id: role._id, name: "Market" }), ["name"]);
   });
   for (const [kind, target, fields, change] of [
@@ -304,7 +304,7 @@ const CASES: Case[] = [
   { kind: "retire", setup: (f) => f.role(), change: { kind: "retire", handle: "growth" } },
   { kind: "scope", setup: (f) => f.role(), change: { kind: "scope", handle: "growth", add: ["pr-1"], leave_sessions: true } },
   { kind: "budget", setup: (f) => f.role(), change: { kind: "budget", handle: "growth", caps: { hands_per_day: 8 } } },
-  { kind: "trust", setup: (f) => f.role(), change: { kind: "trust", handle: "growth", trust: "decide" } },
+  { kind: "trust", setup: (f) => f.role(), change: { kind: "trust", handle: "growth", trust: "understand" } },
   { kind: "authority", setup: (f) => f.role(), change: { kind: "authority", handle: "growth", authority: [{ id: "ads", kind: "spend", label: "Google Ads", limit: { usd_per_day: 20 } }] } },
   // The instance row the hire wrote stays, awaiting the host; the lead the hire named goes back.
   { kind: "hire", setup: async (f) => { await f.role(); f.db._tables.org_templates = [TEMPLATE]; }, change: HIRE, kept: { org_template_instances: { fields: { phase: "awaiting_host", version: "1.0.0" }, because: HOST_STEP } } },
