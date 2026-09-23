@@ -224,4 +224,63 @@ describe("pendingProposal — the ask the banner and the card surface", () => {
       ]),
     ).toBeNull();
   });
+  test("an auto-mode machine does not keep showing an ask", () => {
+    expect(
+      pendingProposal([
+        {
+          online: true,
+          auto_switch: true,
+          ask_first: false,
+          auto_switch_state: { last_decision: propose(5) },
+        },
+      ]),
+    ).toBeNull();
+  });
+  test("ask mode names the account a fresh ranking would pick, at its live percent", () => {
+    const decision = pendingProposal(
+      [
+        {
+          online: true,
+          ask_first: true,
+          active_email: "spent@x.com",
+          profiles: [
+            { name: "spent", email: "spent@x.com", usage: usage({ session: { percent: 100, resets_at: now + 1000 } }) },
+            { name: "dead", email: "dead@x.com", login_expired_at: now - 1, usage: usage({ weekly: { percent: 5, resets_at: now + 1000 } }) },
+            { name: "old", email: "old@x.com", usage: usage({ weekly: { percent: 56, resets_at: now + 1000 } }) },
+            { name: "room", email: "room@x.com", usage: usage({ weekly: { percent: 20, resets_at: now + 1000 } }) },
+          ],
+          auto_switch_state: {
+            last_decision: { kind: "propose", at: 5, target_name: "old", target_email: "old@x.com", target_percent: 56 },
+          },
+        },
+      ],
+      now,
+    );
+    expect(decision?.target_email).toBe("room@x.com");
+    expect(decision?.target_name).toBe("room");
+    expect(decision?.target_percent).toBe(20);
+    // The timestamp stays, so a snooze of the original ask is not reset.
+    expect(decision?.at).toBe(5);
+  });
+  test("a stored ask is dropped when every other account is spent", () => {
+    expect(
+      pendingProposal(
+        [
+          {
+            online: true,
+            ask_first: true,
+            active_email: "spent@x.com",
+            profiles: [
+              { name: "spent", email: "spent@x.com", usage: usage({ session: { percent: 100, resets_at: now + 1000 } }) },
+              { name: "old", email: "old@x.com", usage: usage({ weekly: { percent: 100, resets_at: now + 1000 } }) },
+            ],
+            auto_switch_state: {
+              last_decision: { kind: "propose", at: 5, target_email: "old@x.com", target_percent: 56 },
+            },
+          },
+        ],
+        now,
+      ),
+    ).toBeNull();
+  });
 })

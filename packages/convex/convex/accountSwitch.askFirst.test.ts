@@ -111,6 +111,74 @@ describe("ask-first recovery", () => {
     expect(f.device.cc_auto_switch_state.last_decision).toBe(first);
   });
 
+  test("a re-check rewrites the percent when the recommended account's meter moves", async () => {
+    const f = fixture();
+    await f.run();
+    f.device.cc_accounts.profiles[1].usage.weekly.percent = 70;
+    await f.run();
+    expect(Math.round(f.device.cc_auto_switch_state.last_decision.target_percent)).toBe(70);
+    // Same account: no second notification.
+    expect(f.tables.notifications).toHaveLength(1);
+  });
+
+  test("a re-check moves the recommendation onto a fuller account", async () => {
+    const f = fixture();
+    await f.run();
+    f.device.cc_accounts.profiles.push({
+      name: "roomier",
+      email: "roomier@example.com",
+      usage: {
+        fetched_at: f.now - 1_000,
+        session: { percent: 2, resets_at: f.now + 3_600_000 },
+        weekly: { percent: 10, resets_at: f.now + 86_400_000 },
+      },
+    });
+    await f.run();
+    expect(f.device.cc_auto_switch_state.last_decision.target_email).toBe("roomier@example.com");
+    expect(Math.round(f.device.cc_auto_switch_state.last_decision.target_percent)).toBe(10);
+  });
+
+  test("auto mode drops a leftover ask and switches", async () => {
+    const f = fixture({
+      cc_recovery_ask: false,
+      cc_auto_switch: true,
+      cc_auto_switch_state: {
+        last_decision: {
+          kind: "propose",
+          at: Date.now() - 60_000,
+          target_name: "old",
+          target_email: "old@example.com",
+          target_percent: 56,
+        },
+      },
+    });
+    const res = await f.run();
+    expect(res).toMatchObject({ acted: "switch", profile: "fresh" });
+    expect(f.device.cc_auto_switch_state.last_decision.kind).toBe("switch");
+    expect(f.device.cc_auto_switch_state.last_decision.target_email).toBe("fresh@example.com");
+  });
+
+  test("auto mode clears a leftover ask even while a switch is cooling down", async () => {
+    const f = fixture({
+      cc_recovery_ask: false,
+      cc_auto_switch: true,
+      cc_auto_switch_state: {
+        last_action_at: Date.now(),
+        last_decision: {
+          kind: "propose",
+          at: Date.now() - 60_000,
+          target_name: "old",
+          target_email: "old@example.com",
+          target_percent: 56,
+        },
+      },
+    });
+    const res = await f.run();
+    expect(res).toMatchObject({ acted: "cooldown" });
+    expect(f.device.cc_auto_switch_state.last_decision).toBeUndefined();
+    expect(f.tables.daemon_commands).toHaveLength(0);
+  });
+
   test("auto mode still switches without asking — ask-first is the only gate", async () => {
     const f = fixture({ cc_recovery_ask: false, cc_auto_switch: true });
     const res = await f.run();
