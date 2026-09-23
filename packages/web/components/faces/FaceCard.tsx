@@ -18,7 +18,6 @@ import { useMissingSessionRow } from "../../hooks/useMissingSessionRow";
 import { useOpenDm } from "../../hooks/useChatSync";
 import { cleanTitle } from "../../lib/conversationProcessor";
 import { PRESENCE_META, localTimeLine, memberDisplayName, presenceLine, teammateWhereabouts } from "../presence/memberPresence";
-import { PresenceBadge } from "../presence/PresenceBadge";
 import { useMemberActivity } from "../presence/useMemberActivity";
 import { useMemberHuddle } from "../presence/useMemberHuddle";
 import { FaceActions } from "../presence/FaceActions";
@@ -26,7 +25,7 @@ import type { FaceKey } from "../presence/useFaceKey";
 import { ErrorBoundary } from "../ErrorBoundary";
 
 /** The card's width: five words of activity and three buttons in a row. */
-export const FACE_CARD_WIDTH = 272;
+export const FACE_CARD_WIDTH = 320;
 
 /** The card's edge gutter: it never touches the viewport. */
 const EDGE = 8;
@@ -159,8 +158,11 @@ function FaceCardBody({
     >
       {/* The identity block is the door to the profile: one large target. */}
       <Who door={!!onOpenProfile} onClick={() => onOpenProfile?.(member)}>
+        {/* No presence dot before the name: the face the pointer is on
+            wears the badge, and the activity line under the name carries the
+            presence in its colour. A dot here indented the name by one glyph
+            while every line under it sat on the card's edge. */}
         <span className="face-card-name">
-          <PresenceBadge state={visual} size="sm" className="face-card-dot" />
           <span className="truncate">{displayName}</span>
           {isSelf && <span className="face-card-you">you</span>}
           {onOpenProfile && <ChevronRight className="face-card-chev" />}
