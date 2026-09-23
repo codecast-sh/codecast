@@ -39,7 +39,7 @@ export function SetupPromptBanner() {
     : "Start the daemon to sync your first session";
 
   return (
-    <div className="bg-gradient-to-r from-sol-yellow/10 via-sol-orange/10 to-sol-yellow/10 border-b border-sol-yellow/30">
+    <div data-cc-banner className="bg-gradient-to-r from-sol-yellow/10 via-sol-orange/10 to-sol-yellow/10 border-b border-sol-yellow/30">
       <div className="px-4 py-2 flex items-center justify-between gap-4">
         <div className="flex items-center gap-3 min-w-0">
           <Terminal className="w-4 h-4 text-sol-yellow flex-shrink-0" />

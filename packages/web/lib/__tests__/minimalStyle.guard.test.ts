@@ -34,6 +34,14 @@ describe("Minimal interface style", () => {
     expect(css).toContain('[data-session-id][data-active="true"]');
   });
 
+  test("draws a hairline between session rows, never under a group's last", () => {
+    // Rows carry no card frame, so the wrapper's pseudo-element separates
+    // neighbours; simple view and compact force the wrapper's own border
+    // transparent, which is why it is not a border on the wrapper.
+    expect(css).toMatch(/\.minimal-style \[data-sv-rail\] div:has\(> \[data-session-id\]\)::after \{[\s\S]*?border-bottom: 1px solid/);
+    expect(css).toMatch(/\.minimal-style \[data-sv-rail\] div:has\(> \[data-session-id\]\):last-child::after \{[\s\S]*?display: none;/);
+  });
+
   test("marks the rail controls for the Minimal treatment", () => {
     expect(panel).toContain("data-sv-controls");
     expect(css).toContain("[data-sv-rail] [data-sv-controls]");
@@ -50,7 +58,7 @@ describe("Minimal interface style", () => {
   test("paints your bubble, in the feed and pinned, from the one color you chose", () => {
     // Both bubbles read the same variable, and the stylesheet's fallback hue is
     // the default preset, so a root with no inline hue still paints the default.
-    expect(css.match(/background: var\(--cc-user-bubble\) !important;/g)).toHaveLength(2);
+    expect(css.match(/background(?:-color)?: var\(--cc-user-bubble\) !important;/g)).toHaveLength(2);
     const fallback = css.match(/--cc-user-bubble-hue: (#[0-9a-f]{6});/)?.[1];
     expect(fallback).toBe(resolveBubbleHue(undefined));
     expect(resolveBubbleHue(DEFAULT_BUBBLE_PRESET)).toBe(fallback!);

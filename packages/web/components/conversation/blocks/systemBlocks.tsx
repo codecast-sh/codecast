@@ -770,7 +770,7 @@ export function SessionMessageBlock({ from, name, body, timestamp, pendingStatus
     ? "text-sol-violet"
     : "text-sol-cyan";
   return (
-    <div className={`mb-2 mx-1 rounded border-l-2 ${accent}`}>
+    <div data-cc-session-msg className={`mb-2 mx-1 rounded border-l-2 ${accent}`}>
       <div className="flex items-center gap-2 px-3 pt-2 pb-1">
         <HeaderIcon className={`w-3.5 h-3.5 shrink-0 ${iconText}`} />
         <span className={`text-[11px] font-medium tracking-wide uppercase shrink-0 ${labelText}`}>{isTeammate ? "From teammate" : isAgentReport ? "Report from" : "Message from"}</span>
