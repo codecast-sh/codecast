@@ -18,8 +18,9 @@ import * as path from "node:path";
 import { isCodecastOwnedHomePath } from "../../codecastOwned.js";
 import type { Config } from "../../config/types.js";
 import {
-  credentialContentReason, homeRelative, kindForPath, parseGitConfigList, parseJsonLoose, portableText, projectClaudeMcp, renderGitconfig, type MirrorKind, type TransformContext,
+  credentialContentReason, homeRelative, kindForPath, parseGitConfigList, parseJsonLoose, portableText, projectClaudeMcp, renderGitconfig, type GitConfigPair, type MirrorKind,
 } from "./transform.js";
+import type { TouchLedger } from "./ledger.js";
 
 import {
   AGENT_CONTEXT_ROOTS, CONTEXT_SIZE_CAP, INSTRUCTION_FILE_RE, LOCAL_BIN_ROOT, LOCAL_BIN_SCRIPT_CAP, SKILL_STATE_FILES, commandCompatibilityWarnings, configPatterns,
@@ -56,6 +57,8 @@ export interface CollectOptions {
   /** Extra process env for the git call (tests pin GIT_CONFIG_GLOBAL). */
   gitEnv?: NodeJS.ProcessEnv;
   maxBytes?: number;
+  /** Records every path the walk touches, so a later tick can ask "did any of it change" with stats alone. */
+  ledger?: TouchLedger;
 }
 
 export interface Inventory {
@@ -65,6 +68,16 @@ export interface Inventory {
   warnings: string[];
   /** The laptop's git identity, reported only (shipped by the host git setup, not the mirror). */
   gitIdentity: { name?: string; email?: string };
+}
+
+/**
+ * Everything in an inventory that does not depend on the host: the files,
+ * plus the git pairs the host's `.gitconfig` is rendered from. One collection
+ * serves every host in a tick; `renderInventoryForHost` finishes it.
+ */
+export interface MirrorSources extends Inventory {
+  home: string;
+  gitPairs: GitConfigPair[];
 }
 
 function rootOf(rel: string): string {
@@ -81,8 +94,22 @@ function fileMode(stat: fs.Stats): "0600" | "0700" {
  * does not block its loop on a big skills tree.
  */
 export async function collectMirrorFiles(opts: CollectOptions): Promise<Inventory> {
+  return renderInventoryForHost(await collectMirrorSources(opts), opts.hostHome);
+}
+
+/** The host's `.gitconfig`, rendered from the collected pairs, joins the host-independent files. */
+export function renderInventoryForHost(sources: MirrorSources, hostHome: string): Inventory {
+  const rendered = renderGitconfig(sources.gitPairs, { fromHome: sources.home, toHome: hostHome });
+  const entries = sources.entries.filter((e) => e.path !== ".gitconfig");
+  if (rendered.text) entries.push({ path: ".gitconfig", kind: "gitconfig", mode: "0600", bytes: Buffer.from(rendered.text), root: ".gitconfig" });
+  entries.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  return { entries, skipped: sources.skipped, excludesApplied: sources.excludesApplied, warnings: sources.warnings, gitIdentity: sources.gitIdentity };
+}
+
+/** The host-independent part of `collectMirrorFiles`: every file, and the git pairs, but no rendered `.gitconfig`. */
+export async function collectMirrorSources(opts: Omit<CollectOptions, "hostHome">): Promise<MirrorSources> {
   const home = opts.home.replace(/\/+$/, "");
-  const ctx: TransformContext = { fromHome: home, toHome: opts.hostHome };
+  const ledger = opts.ledger;
   const entries = new Map<string, MirrorEntry>();
   const skipped: SkippedEntry[] = [];
   const excludes = configPatterns(opts.config?.cloud_mirror_exclude ?? undefined);
@@ -121,6 +148,7 @@ export async function collectMirrorFiles(opts: CollectOptions): Promise<Inventor
     if (isAccountDataPath(rel) && !includes.some((p) => matchesContextPattern(p, rel, true))) { skip(rel, "account data excluded"); return null; }
     if (isDefaultExcluded(rel) || excluded(rel, true)) { skip(rel, "excluded"); return null; }
     const abs = path.join(home, rel);
+    ledger?.note(abs);
     let real: string;
     try { real = await fs.promises.realpath(abs); } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
@@ -144,6 +172,7 @@ export async function collectMirrorFiles(opts: CollectOptions): Promise<Inventor
     if (!stat.isFile()) { skip(rel, "not a regular file"); return; }
     const script = rel.startsWith(`${LOCAL_BIN_ROOT}/`);
     if (script && stat.size > LOCAL_BIN_SCRIPT_CAP) { skip(rel, "not a portable text script"); return; }
+    ledger?.note(real);
     const fd = await fs.promises.open(real, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
     let bytes: Buffer;
     try {
@@ -187,6 +216,7 @@ export async function collectMirrorFiles(opts: CollectOptions): Promise<Inventor
           if (ancestors.has(resolved.real)) { skip(rel, "symlink cycle"); return []; }
           collectedDirs.add(rel);
           const chain = new Set(ancestors).add(resolved.real);
+          ledger?.note(resolved.real);
           return (await fs.promises.readdir(resolved.real)).sort().map((name) => ({ rel: `${rel}/${name}`, ancestors: chain }));
         }
         await addFile(rel, kindForPath(rel), resolved.real, resolved.stat);
@@ -197,11 +227,13 @@ export async function collectMirrorFiles(opts: CollectOptions): Promise<Inventor
   };
 
   for (const rel of [...MIRROR_SOURCES.map((src) => src.path), ...SKILL_STATE_FILES, LOCAL_BIN_ROOT]) await collect(rel);
+  ledger?.note(home);
   for (const name of await fs.promises.readdir(home)) if (INSTRUCTION_FILE_RE.test(name) || name === ".mcp.json") await collect(name);
   for (const inc of includes) await collect(inc);
 
   if (!excluded(".claude.json")) {
     const source = path.join(home, ".claude.json");
+    ledger?.note(source);
     const stat = await fs.promises.lstat(source).catch((err: NodeJS.ErrnoException) => { if (err.code !== "ENOENT") throw err; return null; });
     if (stat) {
       const real = await fs.promises.realpath(source);
@@ -222,16 +254,14 @@ export async function collectMirrorFiles(opts: CollectOptions): Promise<Inventor
 
   // Git: an allowlisted render of the global config and the global ignore file.
   const gitIdentity: Inventory["gitIdentity"] = {};
-  const gitPairs = readGlobalGitConfig(home, undefined, opts.gitEnv);
+  const gitPairs = readGlobalGitConfig(home, undefined, opts.gitEnv, ledger);
   for (const p of gitPairs) {
     if (p.key.toLowerCase() === "user.name") gitIdentity.name = p.value;
     if (p.key.toLowerCase() === "user.email") gitIdentity.email = p.value;
   }
 
-  const rendered = renderGitconfig(gitPairs, ctx);
-  if (rendered.text) {
-    entries.set(".gitconfig", { path: ".gitconfig", kind: "gitconfig", mode: "0600", bytes: Buffer.from(rendered.text), root: ".gitconfig" });
-  }
+  // The referenced files do not depend on the host home; the render itself does, so it happens per host.
+  const rendered = renderGitconfig(gitPairs, { fromHome: home, toHome: home });
   let ignoreRel: string | null = null;
   const excludesFile = [...gitPairs].reverse().find((p) => p.key.toLowerCase() === "core.excludesfile")?.value;
   if (excludesFile) {
@@ -286,14 +316,15 @@ export async function collectMirrorFiles(opts: CollectOptions): Promise<Inventor
       .map(([r, n]) => `${r} (${(n / 1048576).toFixed(1)} MiB)`).join(", ");
     throw new Error(`home mirror is ${(total / 1048576).toFixed(1)} MiB, over the ${MIRROR_SIZE_CAP / 1048576} MiB cap — largest: ${biggest}; exclude with \`cast config cloud_mirror_exclude\``);
   }
-  return { entries: list, skipped, excludesApplied: [...excludesApplied], warnings: [...new Set(warnings)], gitIdentity };
+  return { home, gitPairs, entries: list, skipped, excludesApplied: [...excludesApplied], warnings: [...new Set(warnings)], gitIdentity };
 }
 
-export function readGlobalGitConfig(home: string, cwd?: string, env?: NodeJS.ProcessEnv): Array<{ key: string; value: string }> {
+export function readGlobalGitConfig(home: string, cwd?: string, env?: NodeJS.ProcessEnv, ledger?: TouchLedger): Array<{ key: string; value: string }> {
   const gitEnv: NodeJS.ProcessEnv = { ...process.env, ...env, HOME: home };
   if (!gitEnv.XDG_CONFIG_HOME) gitEnv.XDG_CONFIG_HOME = path.join(home, ".config");
   const sources = gitEnv.GIT_CONFIG_GLOBAL ? [gitEnv.GIT_CONFIG_GLOBAL] : [path.join(gitEnv.XDG_CONFIG_HOME, "git/config"), path.join(home, ".gitconfig")];
   return sources.flatMap((file) => {
+    ledger?.note(file);
     if (!fs.lstatSync(file, { throwIfNoEntry: false })) return [];
     const output = execFileSync("git", ["config", "--file", file, "--includes", "--list", "-z", "--show-origin"], {
       cwd: cwd ?? home, env: gitEnv, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 30_000, maxBuffer: 8 * 1024 * 1024,

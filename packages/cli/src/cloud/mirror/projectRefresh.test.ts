@@ -6,6 +6,7 @@ import { applyMirrorBundle, cleanTrackedFiles, matchesGitBlob, readStamp, verify
 import { buildMirrorBundle, parseMirrorBundle } from "./bundle";
 import { AGENT_RUNTIME_ROOTS } from "./discovery";
 import { buildHomeMirror, mirrorHomeToHost, runMirrorTick, type LocalMirrorStamps, type MirrorDeps } from "./push";
+import { CODECAST_OWNED_HOME_PATHS } from "../../codecastOwned";
 import { projectDestination, readProjectRegistrations, registerProjectContext } from "./projectRefresh";
 import { startMirrorScheduler } from "./scheduler";
 import { claudeProjectDirName } from "../../projectPathResolver";
@@ -54,7 +55,7 @@ test("next generation releases unchanged and drifted Claude catalogs while ordin
   fs.unlinkSync(path.join(local, removed));
   write(local, portable, "updated portable context\n");
   const next = await buildHomeMirror({ home: local, hostHome: remote, config: { user_id: "u" }, deviceId: "d", gitEnv: { GIT_CONFIG_GLOBAL: path.join(local, ".gitconfig"), GIT_CONFIG_NOSYSTEM: "1" } });
-  expect(next.header.unmanaged_roots).toEqual([...AGENT_RUNTIME_ROOTS]);
+  expect(next.header.unmanaged_roots).toEqual([...AGENT_RUNTIME_ROOTS, ...CODECAST_OWNED_HOME_PATHS]);
   expect(next.header.files.some((file) => catalogPaths.includes(file.path))).toBe(false);
   const result = await apply(next.bytes);
   expect(result.errors).toEqual([]);

@@ -1,3 +1,4 @@
+import { STATUSLINE_HOOK_SCRIPT } from "./codecastOwned.js";
 // Claude Code's statusLine command -> codecast daemon, for LIVE account usage,
 // and the one line the terminal gets back for it.
 //
@@ -54,7 +55,7 @@
 // its path, or race the write.
 
 /** File name under ~/.claude/hooks/. */
-export const STATUSLINE_HOOK_FILE = "codecast-statusline.sh";
+export const STATUSLINE_HOOK_FILE: string = STATUSLINE_HOOK_SCRIPT;
 
 /** The daemon route the script posts to. */
 export const STATUSLINE_HOOK_PATH = "/hook/statusline";
