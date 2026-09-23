@@ -76,8 +76,11 @@ describe("codeComments.create", () => {
       kind: "code_comment",
       source: "codecast",
       team_id: TEAM,
-      title: "Comment on src/foo.ts:42",
+      title: "src/foo.ts:42",
       summary: "this leaks on the error path",
+      // The row paints only what it stores: a name for the face, not a bare id.
+      actor_user_id: USER,
+      actor_login: "Ashot",
       conversation_id: CONV,
       comment_id: comment._id,
     });
@@ -99,10 +102,20 @@ describe("codeComments.create", () => {
     const comment = ctx.db._tables.review_comments[0];
     expect(comment.file_path).toBeUndefined();
     expect(comment.pull_request_id).toBe(PR);
-    expect(ctx.db._tables.external_events[0].title).toBe("Comment on the pull request");
+    // The title names the pull request, and the number gives the row its link.
+    expect(ctx.db._tables.external_events[0]).toMatchObject({ title: "PR #12: PR", pr_number: 12 });
 
     // It mirrors as a GitHub issue comment on the PR, not a line comment.
     expect(ctx._scheduled[0].args).toMatchObject({ comment_id: comment._id, pr_id: PR });
+  });
+
+  test("the event keeps the whole comment, not its first line and a half", async () => {
+    const ctx = context(USER);
+    const content =
+      "CI failed on the two scope audits (simulation scope, network scope) because the new route was not classified. " +
+      "Classified it as a read-only action and pushed the fix.";
+    await (create as any)._handler(ctx, { repository: "codecast-sh/codecast", content, pull_request_id: PR });
+    expect(ctx.db._tables.external_events[0].summary).toBe(content);
   });
 
   test("an unanchored comment naming no pull request stays inside codecast", async () => {

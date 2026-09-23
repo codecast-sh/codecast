@@ -107,8 +107,7 @@ export const recordLocal = mutation({
     if (!privacy.team_id || privacy.is_private) return { published: false, reason: "private" };
     const teamId = privacy.team_id;
     const repository = normalizeRepository(args.repository);
-    const user = await ctx.db.get(userId);
-    const actor = { actor_user_id: userId, actor_login: user?.github_username ?? undefined, actor_avatar_url: user?.github_avatar_url ?? undefined };
+    const actor = { actor_user_id: userId };
 
     let recorded = 0;
     for (const e of args.events) {
