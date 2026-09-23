@@ -81,6 +81,7 @@ describe("userCanAccessAnchor", () => {
 });
 
 describe("visibleAnchorsForUser", () => {
+  const ORG_ON = { _id: TEAM, name: "Acme", features: { org: true } };
   test("returns the caller's personal anchor plus their teams', dedup + excluding decommissioned", async () => {
     const ctx = ctxWith({
       anchors: [
@@ -88,10 +89,45 @@ describe("visibleAnchorsForUser", () => {
         { _id: "a_team", team_id: TEAM, status: "active" },
         { _id: "a_dead", team_id: TEAM, status: "decommissioned" },
       ],
+      teams: [ORG_ON],
       team_memberships: [{ _id: "m1", user_id: ME, team_id: TEAM }],
     });
     const out = await visibleAnchorsForUser(ctx, ME);
     const ids = out.map((a: any) => a._id).sort();
+    expect(ids).toEqual(["a_personal", "a_team"]);
+  });
+
+  // The org feature is per team and default off. A team with it off shows
+  // none of its seats, and a person whose teams all have it off sees no
+  // personal seat either: the bot must not reach any roster, chat or face
+  // row of a workspace that never turned the feature on.
+  test("a team with org off shows no seats, its own or the caller's personal one", async () => {
+    const ctx = ctxWith({
+      anchors: [
+        { _id: "a_personal", scope_user_id: ME, status: "active" },
+        { _id: "a_team", team_id: TEAM, status: "active" },
+      ],
+      teams: [{ _id: TEAM, name: "Acme", features: { chat: true } }],
+      team_memberships: [{ _id: "m1", user_id: ME, team_id: TEAM }],
+    });
+    expect(await visibleAnchorsForUser(ctx, ME)).toEqual([]);
+  });
+
+  test("one org enabled team lends the personal seat, and only that team's seats show", async () => {
+    const OTHER = "teams_other" as any;
+    const ctx = ctxWith({
+      anchors: [
+        { _id: "a_personal", scope_user_id: ME, status: "active" },
+        { _id: "a_team", team_id: TEAM, status: "active" },
+        { _id: "a_other", team_id: OTHER, status: "active" },
+      ],
+      teams: [ORG_ON, { _id: OTHER, name: "Other", features: {} }],
+      team_memberships: [
+        { _id: "m1", user_id: ME, team_id: TEAM },
+        { _id: "m2", user_id: ME, team_id: OTHER },
+      ],
+    });
+    const ids = (await visibleAnchorsForUser(ctx, ME)).map((a: any) => a._id).sort();
     expect(ids).toEqual(["a_personal", "a_team"]);
   });
 

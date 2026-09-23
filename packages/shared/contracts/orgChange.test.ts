@@ -90,7 +90,8 @@ describe("the sentence is rendered from the row, by the proposal page's writers"
     expect(orgLogLine(row("retire", { before: { status: "active" }, after: { status: "retired" } }))).toBe("Retire @growth; its sessions go back to their owners");
     expect(orgLogLine(row("scope", { before: { scope: { project_ids: ["p2"], plan_ids: [] } }, after: { scope: { project_ids: ["p1"], plan_ids: [] } } }))).toBe("@growth also looks after Website and stops looking after Billing");
     expect(orgLogLine(row("move", { before: { reports_to: { kind: "user", user_id: "u1" } }, after: { reports_to: { kind: "role", role_id: "r2" } } }))).toBe("Move @growth under @ops");
-    expect(orgLogLine(row("trust", { before: { trust: "understand" }, after: { trust: "decide" } }))).toBe("@growth may decide on its own");
+    // The switch (org-staffing.md S23.1): history says what the person did, and decide reads as on.
+    expect(orgLogLine(row("trust", { before: { trust: "understand" }, after: { trust: "decide" } }))).toBe("Turned on starting work on its own for @growth");
     expect(orgLogLine(row("budget", { after: { caps: { hands_per_day: 4 } } }))).toBe(changeLine({ kind: "budget", handle: "growth", caps: { hands_per_day: 4 } }));
     expect(orgLogLine(row("routine", { after: { routine: { agent_task_id: "a1", title: "Weekly review", every: "7d" } } }))).toBe(changeLine({ kind: "routine", handle: "growth", title: "Weekly review", prompt: "", every: "7d" }));
     expect(orgLogLine(row("plan_status", { subject: { type: "plan", id: "pl1", short_id: "pl-7", label: "Launch" }, before: { status: "active" }, after: { status: "done" } }))).toBe("Mark done: Launch (pl-7)");
@@ -139,7 +140,7 @@ describe("the way back", () => {
     const inv = invertRow(r);
     expect(inv).toMatchObject({ kind: "trust", before: { trust: "decide" }, after: { trust: "understand" }, undoes: r._id, inverse: true });
     expect(inv.undone_by).toBeUndefined();
-    expect(orgLogLine(inv)).toBe("@growth may read and report, not act on its own");
+    expect(orgLogLine(inv)).toBe("Turned off starting work on its own for @growth");
     const twice = invertRow(inv);
     expect({ kind: twice.kind, before: twice.before, after: twice.after, inverse: twice.inverse }).toEqual({ kind: r.kind, before: r.before, after: r.after, inverse: false });
     expect(orgLogLine(invertRow(row("role", { after: { status: "active", name: "Growth", handle: "growth" } })))).toBe("Retire @growth; its sessions go back to their owners");

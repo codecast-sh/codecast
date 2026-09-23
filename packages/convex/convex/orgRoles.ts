@@ -7,6 +7,7 @@ import { ORG_AUTHORITY_KINDS, authorityWords, orgTenureError, type OrgAuthorityG
 import { intervalMs } from "@codecast/shared/contracts/orgTemplateManifest";
 import { leadScopeChange } from "@codecast/shared/contracts/orgLead";
 import { v } from "convex/values";
+import { requireWorkspaceFeature } from "./lib/teamFeatureGuard";
 import { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { nextShortId } from "./counters";
@@ -29,7 +30,8 @@ import { ACTIVE_AGENT_STATUSES, normalizeThreadState, parseThreadStateStatus } f
 import { siteUrl } from "./lib/siteUrl";
 import { movedFields, type OrgLogFields } from "@codecast/shared/contracts/orgChange";
 import { labelsOf, noteOrgChange, noteRoleChange, recordSubject, roleSubject, whereOfRecord, whereOfRole, withOrgChange } from "./lib/orgChangeLog";
-import { DEFAULT_CAPS, RESTART_CAUSE, capsFor, countersFor, enqueueRoleEvent, scheduleFlush, trustOf, unflushedRowsFor } from "./orgEvents";
+import { DEFAULT_CAPS, RESTART_CAUSE, capsFor, countersFor, enqueueRoleEvent, roleStartsOnItsOwn, scheduleFlush, trustOf, unflushedRowsFor } from "./orgEvents";
+import { autonomyChangeWords, switchFromStageWord, trustForSwitch } from "@codecast/shared/contracts/roleAutonomy";
 
 // Org roles: named seats in the reporting structure (docs/architecture/
 // org-roles.md S1, S2, S5). A role has no standing session in this slice; it is
@@ -346,7 +348,9 @@ async function performCreateRoleCore(
     status: "active",
     charter: args.charter?.trim() || undefined,
     review_backend: normalizeBackend(args.review_backend),
-    trust: "understand",
+    // The switch (org-staffing.md S23.1): on for every role a person hires,
+    // off for the root, which proposes and never applies (S12).
+    trust: trustForSwitch(handle !== CHIEF_OF_STAFF_HANDLE),
     caps: { ...DEFAULT_CAPS },
     tenure,
     avatar,
@@ -397,7 +401,7 @@ async function updateRole(
   }
   if (args.handle !== undefined) {
     const handle = requireHandle(args.handle);
-    // The trust ceiling and the one seat per company rule both key on the
+    // The switch ceiling and the one seat per company rule both key on the
     // handle (org-staffing.md S6), so the seat keeps it: retire or hire.
     if (handle !== role.handle && (role.handle === CHIEF_OF_STAFF_HANDLE || handle === CHIEF_OF_STAFF_HANDLE)) {
       throw new Error("The chief of staff seat keeps its handle: retire it with cast role retire, or hire one with cast org staff");
@@ -697,7 +701,9 @@ export const create = mutation({
   },
   handler: async (ctx, { api_token, from_session, provision, model, project_path, agent_type, adopt_conversation_id, leave_sessions, ...args }) => {
     await refuseUnlessHuman(ctx, { api_token, from_session }, "Staffing");
-    return performHireRole(ctx, await requireCaller(ctx, api_token), args, { provision, model, project_path, agent_type, adopt_conversation_id, leave_sessions });
+    const userId = await requireCaller(ctx, api_token);
+    await requireWorkspaceFeature(ctx, { team_id: args.team_id, user_id: userId }, "org");
+    return performHireRole(ctx, userId, args, { provision, model, project_path, agent_type, adopt_conversation_id, leave_sessions });
   },
 });
 
@@ -1051,7 +1057,7 @@ export const ROLE_RULES = [
   "1. Wake, read, act, brief: every turn starts from the frame and ends by updating the brief.",
   "2. Stay inside the scope; what falls outside goes up the reporting line.",
   "3. Escalate with a recommendation attached, never as a bare question.",
-  "4. Caps on wakes, hands and tokens per day are real; a held cap is reported in the brief, not worked around.",
+  "4. A day's limit that holds you is said in one line in the brief and in your pinned state, then waited out; it is never worked around and never put in front of a person.",
   "5. A person's message is answered here or handed on to a hand, and the reply says which; a request to remember or forget is a brief write in the same turn.",
   "6. Your sessions stay out of a person's inbox, so at every wake you read which of them wait on a person, answer what you may, and escalate the rest through your own card with a line saying what the person will decide and why; --direct only when they must act inside the session (a permission prompt, an interactive question, a review of its transcript), and the line says which.",
   "7. The people who report to you keep their goals in your brief, one section each; at every wake you read their sessions against those goals, update the matches, and name what stalled.",
@@ -1149,7 +1155,7 @@ async function performProvisionRoleCore(
   if (!role.brief_doc_id) patch.brief_doc_id = await insertRoleDoc(ctx, userId, role, "brief", `Brief: ${role.name}`, briefTemplate(role));
   if (!role.trust) patch.trust = "understand";
   if (!role.caps) patch.caps = { ...DEFAULT_CAPS };
-  const bootstrap: RoleBootstrap = { handle: role.handle, scopeNames, parentName, trust: trustOf(role) };
+  const bootstrap: RoleBootstrap = { handle: role.handle, scopeNames, parentName, startsOnItsOwn: roleStartsOnItsOwn(role) };
   const agentType = args.agent_type ? (normalizeBackend(args.agent_type) === "claude" ? "claude_code" : normalizeBackend(args.agent_type)) : undefined;
   const provisioned = await provisionStandingAgent(ctx, userId, {
     scope_type: role.scope_type,
@@ -1189,7 +1195,7 @@ export const provision = mutation({
 // ── The Chief of Staff (docs/architecture/org-staffing.md S6) ────────────────
 //
 // One role per company, handle `chief-of-staff`, scope the whole company,
-// trust understand and never above: it reads how work flows, proposes the
+// its switch off and never on: it reads how work flows, proposes the
 // chart, and applies nothing. `performStaff` creates it, provisions or adopts
 // its standing session, arms the weekly company review on that session and
 // queues the first review as an immediate wake. Idempotent per company.
@@ -1468,7 +1474,9 @@ export const staff = mutation({
   },
   handler: async (ctx, { api_token, from_session: _from, scope_type, ...args }) => {
     const userId = await requireCaller(ctx, api_token);
-    const out = await performStaff(ctx, userId, { ...args, team_id: staffTeamFor(scope_type, args.team_id) });
+    const teamId = staffTeamFor(scope_type, args.team_id);
+    await requireWorkspaceFeature(ctx, { team_id: teamId, user_id: userId }, "org");
+    const out = await performStaff(ctx, userId, { ...args, team_id: teamId });
     // The shape an older `cast anchor create` reads back.
     return { ...out, short_id: out.conversation_short_id, conversation_id: out.standing?.conversation_id ?? null };
   },
@@ -1544,33 +1552,40 @@ export async function performRestartRole(ctx: any, userId: Id<"users">, args: { 
   return { role_id: role._id, conversation_id: conv._id, short_id: conv.short_id };
 }
 
-// trust — human only, logged on the charter as a doc entry.
-export async function performSetTrust(ctx: any, userId: Id<"users">, args: { role_id: string; trust: string; from_session?: string; api_token?: string; human_decision?: string }): Promise<any> {
+// The switch (org-staffing.md S23.1): Starts work on its own. Human only,
+// logged on the charter as a doc entry. `on` is the switch; `trust` is the
+// stage word one release of clients still sends, read through the same
+// mapping (understand is off, decide and direct are on, and decide is never
+// written again).
+export type SetTrustArgs = { role_id: string; on?: boolean; trust?: string; from_session?: string; api_token?: string; human_decision?: string };
+export async function performSetTrust(ctx: any, userId: Id<"users">, args: SetTrustArgs): Promise<any> {
   return withOrgChange(ctx, userId, { kind: "trust" }, () => performSetTrustCore(ctx, userId, args));
 }
 
-async function performSetTrustCore(ctx: any, userId: Id<"users">, args: { role_id: string; trust: string; from_session?: string; api_token?: string; human_decision?: string }): Promise<any> {
-  await refuseUnlessHuman(ctx, args, "Trust stage");
+async function performSetTrustCore(ctx: any, userId: Id<"users">, args: SetTrustArgs): Promise<any> {
+  await refuseUnlessHuman(ctx, args, "Starts work on its own");
   const role = await requireRole(ctx, userId, args.role_id, "admin");
-  const trust = args.trust.trim().toLowerCase();
-  if (!(TRUST_STAGES as readonly string[]).includes(trust)) throw new Error(`Unknown trust stage "${args.trust}"; use understand, decide or direct`);
-  // The chief of staff proposes and applies nothing (org-staffing.md S6): its
-  // trust never rises above understand.
-  if (role.handle === CHIEF_OF_STAFF_HANDLE && trust !== "understand") throw new Error("The chief of staff stays at understand: it proposes, a person applies");
+  const on = typeof args.on === "boolean" ? args.on : typeof args.trust === "string" ? switchFromStageWord(args.trust) : null;
+  if (on === null) throw new Error(`Say on or off${args.trust ? ` (not "${args.trust}")` : ""}: cast role autonomy @${role.handle} on|off`);
+  // The root proposes and applies nothing (org-staffing.md S12, S23.1): its
+  // switch stays off.
+  if (role.handle === CHIEF_OF_STAFF_HANDLE && on) throw new Error("The workspace's root role does not start work on its own: it proposes, a person applies");
   const previous = trustOf(role);
+  const previousOn = roleStartsOnItsOwn(role);
+  const trust = trustForSwitch(on);
   const now = Date.now();
   await ctx.db.patch(role._id, { trust, updated_at: now });
-  if (role.charter_doc_id) {
+  if (role.charter_doc_id && previousOn !== on) {
     const charter = await ctx.db.get(role.charter_doc_id);
     if (charter) {
       const user = await ctx.db.get(userId);
-      const entries = [...(charter.entries ?? []), { type: "note", timestamp: now, content: `Trust stage ${previous} → ${trust}`, author: user?.name ?? "a person" }];
+      const entries = [...(charter.entries ?? []), { type: "note", timestamp: now, content: `${user?.name ?? "A person"} ${autonomyChangeWords(on)}`, author: user?.name ?? "a person" }];
       await ctx.db.patch(charter._id, { entries, updated_at: now });
     }
   }
-  const trusted = await ctx.db.get(role._id);
-  await noteRoleChange(ctx, userId, "trust", role, trusted);
-  return { ...trusted, previous_trust: previous };
+  const updated = await ctx.db.get(role._id);
+  await noteRoleChange(ctx, userId, "trust", role, updated);
+  return { ...updated, on, previous_on: previousOn, previous_trust: previous };
 }
 
 export async function performSetCaps(ctx: any, userId: Id<"users">, args: { role_id: string; hands?: number; wakes?: number; tokens?: number; from_session?: string; api_token?: string; human_decision?: string }): Promise<any> {
@@ -1765,7 +1780,7 @@ export function briefStateText(content: string): string {
 }
 
 // The role a calling session speaks for, with what the line needs to start:
-// the trust stage, the review backend, and the session's own agent.
+// the switch, the review backend, and the session's own agent.
 export async function roleForSession(ctx: Ctx, userId: Id<"users">, sessionRef: string): Promise<any | null> {
   const conv = await callerSession(ctx, userId, sessionRef);
   const roleId = conv?.standing_role_id ?? conv?.org_role_id;
@@ -1779,6 +1794,7 @@ export async function roleForSession(ctx: Ctx, userId: Id<"users">, sessionRef: 
     name: role.name,
     status: role.status,
     trust: trustOf(role),
+    starts_on_its_own: roleStartsOnItsOwn(role),
     review_backend: role.review_backend ?? null,
     // the-line.md L2: `cast workflow run` with no file runs this slug.
     line_workflow_slug: lineSlugOf(role),
@@ -1803,7 +1819,7 @@ export const restart = mutation({
   handler: async (ctx, { api_token, ...args }) => performRestartRole(ctx, await requireCaller(ctx, api_token), args),
 });
 export const setTrust = mutation({
-  args: { api_token: v.optional(v.string()), role_id: v.string(), trust: v.string(), from_session: v.optional(v.string()) },
+  args: { api_token: v.optional(v.string()), role_id: v.string(), on: v.optional(v.boolean()), trust: v.optional(v.string()), from_session: v.optional(v.string()) },
   handler: async (ctx, { api_token, ...args }) => performSetTrust(ctx, await requireCaller(ctx, api_token), { ...args, api_token }),
 });
 export const setAuthority = mutation({

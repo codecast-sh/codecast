@@ -236,6 +236,7 @@ const INTERFACE_TOGGLES: Array<{
   { prefKey: "show_agent_icon", label: "Agent icon", desc: "Show each session's agent client (Claude Code, opencode, …) next to its title in the inbox", defaultOn: true },
   { prefKey: "personify_sessions", label: "Personify every session", desc: "Give every session an animal face and a name, not just the ones you name yourself. Roles always have one", defaultOn: false },
   { prefKey: "show_model_badge", label: "Model badge", desc: "Show each session's model in the inbox session list" },
+  { prefKey: "show_branch_pill", label: "Branch pill", desc: "Show each session's git branch on inbox cards, or the short commit when its checkout is detached", defaultOn: true },
   { prefKey: "comments_enabled", label: "Comments", desc: "Show the tools to leave comments on conversations. You can always read and reply to comments others leave, even with this off." },
   { prefKey: "auto_open_browser_panes", label: "Open agent pane offers", desc: "When an agent offers a page (cast browser pane), open it beside the conversation you are reading instead of waiting for a click" },
   { prefKey: "composer_suggestions", label: "Suggested replies", desc: "One-tap reply suggestions above the composer when a session waits on you, predicted from the session and how you usually reply" },

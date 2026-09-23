@@ -221,14 +221,19 @@ are top level:
 
 | Window | Eligibility | Sort key | Cap |
 |---|---|---|---|
-| recent | status active or completed, `updated_at` within 30 days of the epoch | `updated_at` desc | 200 |
+| recent | not filed (no pin, dismiss, stash or snooze stamp: `isFiled`), status active or completed, `updated_at` within 30 days of the epoch | `updated_at` desc | 200 |
 | pinned | `inbox_pinned_at` set | `inbox_pinned_at` desc | 100 |
 | dismissed | `inbox_dismissed_at` within 30 days, not killed | `inbox_dismissed_at` desc | 200 |
 | stashed | `inbox_stashed_at` within 30 days, not killed | `inbox_stashed_at` desc | 200 |
 | owned | `owned_by_me` — the owner row alone, no status or recency gate | server side only | 200 |
 
 The caps and sort keys are shared constants; the server scan and the client selection
-must agree, pinned by a test that runs both over one fixture set. The working set is
+must agree, pinned by a test that runs both over one fixture set. A filed row is never
+recent material: a stashed agent keeps running, so its activity stamp stays fresh, and
+before v13 those stamps took the recent seats on a busy account and cut every settled
+plain row older than two days out of the set (dropped, not folded). The server's
+`by_user_plain_updated` index pins the four stamps to absent ahead of `updated_at`, so
+the scan reads plain rows only and the replica's `isFiled` cuts the same rows. The working set is
 the union of the window survivors. When a window overflows, the server names it in
 `truncated`, and the compare drops that window's rows on both sides (C6): a capped
 window is dark to the proof, and the heartbeat counts it. The owned window's cap order

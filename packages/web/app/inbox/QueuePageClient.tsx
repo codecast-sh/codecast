@@ -18,6 +18,7 @@ import type { ConversationData } from "../../components/conversation/types";
 import { shareOrigin } from "../../lib/utils";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
 import { useInboxStore, useTrackedStore, isConvexId, sortSessions, sessionsWakeSig, isInterruptControlMessage, ensureHydrated, resolveInboxHome } from "../../store/inboxStore";
+import { useTeamShareActions } from "../../hooks/useTeamShareActions";
 import { FleetBoard, InboxHomeToggle } from "../../components/FleetBoard";
 import { SharePopover } from "../../components/SharePopover";
 import { SessionErrorBanner, SessionResumeBanner } from "../../components/SessionErrorBanner";
@@ -26,7 +27,6 @@ import { EmptyState } from "../../components/EmptyState";
 import { PlanContextPanel } from "../../components/PlanContextPanel";
 import { WorkflowContextPanel } from "../../components/WorkflowContextPanel";
 import { TriggerContextPanel } from "../../components/TriggerContextPanel";
-import { toast } from "sonner";
 import { animatedHideSession } from "../../store/undoActions";
 import { isParkedDispatchError } from "../../store/mutativeMiddleware";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
@@ -85,8 +85,6 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
   } = useConversationMessages(sessionId, targetMessageId, undefined, targetTimestamp, targetNonce);
 
   const convCommand = useInboxStore((s) => s.convCommand);
-  const setPrivacy = useInboxStore((s) => s.setPrivacy);
-  const setTeamVisibility = useInboxStore((s) => s.setTeamVisibility);
   const generateShareLink = useMutation(api.conversations.generateShareLink);
   const [resumeState, setResumeState] = useState<"idle" | "resuming" | "sent" | "failed">("idle");
   const forceRestartAttemptedRef = useRef(false);
@@ -144,6 +142,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
   }, [sessionId, convCommand]);
 
   const convId = (conversation?._id ?? sessionId) as Id<"conversations">;
+  const { setPrivate, shareWithTeam } = useTeamShareActions(convId);
   useSeedOwnership(sessionId, !!seat?.seedOwnership);
   const isOwnSession = !!conversation && (!!seat?.seedOwnership || (conversation as any).is_own !== false);
   // A seat opens on the agent talking to the person: its provisioning prompt
@@ -188,6 +187,10 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
   const teamVisibility = (conversation as any)?.team_visibility || (conversation as any)?.effective_team_visibility;
   const hasTeam = !!(conversation as any)?.team_id;
   const teamId = ((conversation as any)?.team_id ?? null) as string | null;
+  // The repo whose team mapping shared this session, so the popover can say why.
+  const sharedVia = (conversation as any)?.auto_shared
+    ? ((conversation as any)?.git_root || (conversation as any)?.project_path || null) as string | null
+    : null;
   // Element props for the memoized ConversationView: built once per input
   // change, not per render, or the memo below it never holds.
   const shareControls = useMemo(() => isOwnSession ? (
@@ -197,14 +200,15 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
       hasShareToken={!!shareToken}
       hasTeam={hasTeam}
       teamId={teamId}
-      onSetPrivate={() => { setPrivacy(convId, true); toast.success("Made private"); }}
-      onSetTeamVisibility={(mode) => { setTeamVisibility(convId, mode); toast.success(mode === "full" ? "Sharing full conversation with team" : "Sharing summary with team"); }}
+      onSetPrivate={setPrivate}
+      onSetTeamVisibility={shareWithTeam}
       onGenerateShareLink={async () => { const token = await generateShareLink({ conversation_id: convId }); return `${shareOrigin()}/conversation/${convId}?share=${encodeURIComponent(token)}`; }}
       shareUrl={shareUrl}
       forwardUrl={`${shareOrigin()}/conversation/${convId}`}
       forwardLabel="session"
+      sharedVia={sharedVia}
     />
-  ) : null, [isOwnSession, isPrivate, teamVisibility, shareToken, hasTeam, teamId, convId, shareUrl, setPrivacy, setTeamVisibility, generateShareLink]);
+  ) : null, [isOwnSession, isPrivate, teamVisibility, shareToken, hasTeam, teamId, convId, shareUrl, sharedVia, setPrivate, shareWithTeam, generateShareLink]);
   const activePlanId = (conversation as any)?.active_plan_id;
   const workflowRunId = (conversation as any)?.workflow_run_id;
   const convSessionId = (conversation as any)?.session_id;

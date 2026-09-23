@@ -1,4 +1,5 @@
 import { ConvexHttpClient, ConvexClient } from "convex/browser";
+import { discardShellChanges, readShellChanges, type WireFileChange } from "./shellChanges.js";
 import { recoveringWebSocket } from "@codecast/shared/network";
 import { readFile, stat } from "node:fs/promises";
 import * as os from "node:os";
@@ -1247,6 +1248,7 @@ export class SyncService {
       content: truncate(redactSecrets(tr.content), MAX_TOOL_RESULT_SIZE),
       is_error: tr.isError,
     }));
+    const shell = await this.shellChangesFor(params.toolResults);
 
     const images: Array<{ media_type: string; storage_id?: string; data?: string; tool_use_id?: string }> = [];
     if (imageHolder[0].images && imageHolder[0].images.length > 0) {
@@ -1280,6 +1282,7 @@ export class SyncService {
           thinking: redactedThinking,
           tool_calls: toolCalls,
           tool_results: toolResults,
+          file_changes: shell.changes,
           images: images.length > 0 ? images : undefined,
           files: filesForWire(fileHolder[0].files),
           subtype: params.subtype,
@@ -1290,8 +1293,26 @@ export class SyncService {
           api_token: this.apiToken,
         }
       );
+      discardShellChanges(shell.ids);
       return messageId as string;
     });
+  }
+
+  // File changes the shell-changes hook recorded for these tool results
+  // (shellChanges.ts): carried on the result's message, forgotten once it lands.
+  private async shellChangesFor(
+    toolResults: Array<{ toolUseId: string }> | undefined,
+  ): Promise<{ changes: WireFileChange[] | undefined; ids: string[] }> {
+    if (!toolResults || toolResults.length === 0) return { changes: undefined, ids: [] };
+    const changes: WireFileChange[] = [];
+    const ids: string[] = [];
+    for (const tr of toolResults) {
+      const recorded = await readShellChanges(tr.toolUseId);
+      if (!recorded) continue;
+      changes.push(...recorded);
+      ids.push(tr.toolUseId);
+    }
+    return { changes: changes.length > 0 ? changes : undefined, ids };
   }
 
   async addMessages(params: {
@@ -1330,6 +1351,8 @@ export class SyncService {
 
     const preparedMessages: Array<any> = [];
     const preparedIndexes = onBatchAccepted ? new Map<object, number>() : undefined;
+    // Which recorded Bash calls each prepared message carries, forgotten once its batch lands.
+    const shellIdsByPrepared = new WeakMap<object, string[]>();
     for (const [inputIndex, msg] of params.messages.entries()) {
       const redactedContent = truncate(redactSecrets(msg.content), MAX_CONTENT_SIZE);
       const redactedThinking = msg.thinking
@@ -1375,6 +1398,7 @@ export class SyncService {
         }
       }
 
+      const shell = await this.shellChangesFor(msg.toolResults);
       preparedMessages.push({
         message_uuid: msg.messageUuid,
         role: roleMap[msg.role],
@@ -1382,6 +1406,7 @@ export class SyncService {
         thinking: redactedThinking,
         tool_calls: toolCalls,
         tool_results: toolResults,
+        file_changes: shell.changes,
         images: images.length > 0 ? images : undefined,
         files: filesForWire(msg.files),
         subtype: msg.subtype,
@@ -1391,6 +1416,7 @@ export class SyncService {
         api_message_id: msg.apiMessageId,
       });
       preparedIndexes?.set(preparedMessages[preparedMessages.length - 1], inputIndex);
+      if (shell.ids.length > 0) shellIdsByPrepared.set(preparedMessages[preparedMessages.length - 1], shell.ids);
     }
 
     let sendMessages = preparedMessages;
@@ -1442,6 +1468,7 @@ export class SyncService {
             `addMessages batch (${batch.length} msgs)`
           );
           if (onBatchAccepted) onBatchAccepted(batch.map(message => preparedIndexes!.get(message)!));
+          discardShellChanges(batch.flatMap((message) => shellIdsByPrepared.get(message) ?? []));
           const typed = result as { inserted: number; ids: string[] };
           totalInserted += typed.inserted;
           allIds.push(...typed.ids);
@@ -1552,12 +1579,13 @@ export class SyncService {
     } catch {}
   }
 
-  async updateProjectPath(sessionId: string, projectPath: string, gitRoot?: string): Promise<{ updated: boolean } | null> {
+  async updateProjectPath(sessionId: string, projectPath: string, gitRoot?: string, gitRemoteUrl?: string): Promise<{ updated: boolean } | null> {
     try {
       const result = await this.mutate("conversations:updateProjectPath" as any, {
         session_id: sessionId,
         project_path: projectPath,
         git_root: gitRoot,
+        git_remote_url: gitRemoteUrl,
         api_token: this.apiToken,
       });
       return result as { updated: boolean } | null;
@@ -1571,12 +1599,13 @@ export class SyncService {
   // silently stranded conversations on their spawn-time stub id, so every
   // session-bound `cast` write from the agent failed "Conversation not found"
   // while message sync (keyed by conversation _id) looked perfectly healthy.
-  async updateSessionId(conversationId: string, sessionId: string, projectPath?: string, gitRoot?: string): Promise<void> {
+  async updateSessionId(conversationId: string, sessionId: string, projectPath?: string, gitRoot?: string, gitRemoteUrl?: string): Promise<void> {
     await this.mutate("conversations:updateSessionId" as any, {
       conversation_id: conversationId,
       session_id: sessionId,
       project_path: projectPath,
       git_root: gitRoot,
+      git_remote_url: gitRemoteUrl,
       api_token: this.apiToken,
     });
   }

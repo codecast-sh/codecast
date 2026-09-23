@@ -31,7 +31,6 @@ import {
   countersFor,
   msToNextUtcDay,
   scheduleFlush,
-  trustOf,
   unflushedRowsFor,
 } from "./orgEvents";
 
@@ -162,7 +161,6 @@ export function authorityLine(authority: any[] | undefined, now: number): string
 export function buildFrame(input: FrameInput): Frame {
   const { role, rows, facts, now } = input;
   const since = role.last_frame_seq ?? 0;
-  const u = facts.usage;
   const budget = { left: FRAME_FACT_BUDGET };
   const sections: string[] = [];
 
@@ -172,11 +170,12 @@ export function buildFrame(input: FrameInput): Frame {
   ];
   sections.push([
     `## You`,
-    `${role.name} (@${role.handle}, ${role.short_id}) · trust ${trustOf(role)} · reports to ${input.parentName}`,
+    // The frame names no switch and carries no counters (org-staffing.md
+    // S23): the role learns it cannot start a hand when it tries, and a day's
+    // limit that holds it is a line in its brief, not a number it reads here.
+    `${role.name} (@${role.handle}, ${role.short_id}) · reports to ${input.parentName}`,
     `Scope: ${scopeNames.length ? scopeNames.join(", ") : "the whole workspace"}`,
-    `Today: ${u.wakes + 1}/${u.caps.wakes_per_day} wakes · ${u.hands}/${u.caps.hands_per_day} hands · ${u.tokens}/${u.caps.tokens_per_day} tokens`,
-    // Three things a person decides, in one place (org-hire.md H4): trust is
-    // above; authority is what the role may do outside codecast.
+    // Authority is what the role may do outside codecast (org-hire.md H4).
     `Authority outside codecast: ${authorityLine(role.authority, Date.now())}`,
   ].join("\n"));
 

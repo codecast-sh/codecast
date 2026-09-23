@@ -293,7 +293,7 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
                   )}
                   {endKind === "project" && (
                     <SelectBox value={endProject} onChange={(e) => setEndProject(e.target.value)} className="text-[12.5px] flex-1" style={{ minWidth: 150 }}>
-                      <option value="">Pick a project…</option>
+                      <option value="">Pick a folder…</option>
                       {projects.map((p) => <option key={p._id} value={p._id}>{p.title}</option>)}
                     </SelectBox>
                   )}

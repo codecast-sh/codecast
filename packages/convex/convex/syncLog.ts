@@ -21,7 +21,7 @@ import { v } from "convex/values";
 import { query } from "./_generated/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { ChangeEntity, ChangeScope } from "./changeLog";
-import { accessStampFromDoc, authorizedFor, heldKeysFor, isUserGrant, type AccessStamp } from "./lib/access";
+import { accessStampFromDoc, authorizedFor, heldKeysFor, isUserGrant, type AccessStamp } from "./lib/accessKeys";
 export { accessStampFromDoc, authorizedFor, type AccessStamp };
 
 export type SyncScopeKey = string; // "user:<id>" | "team:<id>"
@@ -363,13 +363,21 @@ async function allocatePosition(
 
 // Append one action in one scope. For upsert/delete of a tracked entity, the entity's
 // existing ACTIVE row in this scope (there is at most one, by this very rule) is moved
+// Lifecycle rows (a scope for a user, a member for a team) carry no cargo and
+// never coalesce: each one is an event the client acts on in order.
+export type LifecycleEntity = "scope" | "member";
+const LIFECYCLE_ENTITIES: ReadonlySet<string> = new Set<LifecycleEntity>(["scope", "member"]);
+export function isLifecycleEntity(entityType: string): entityType is LifecycleEntity {
+  return LIFECYCLE_ENTITIES.has(entityType);
+}
+
 // to the new position and flipped to the new op; scope lifecycle actions always insert.
 // `db` MUST be the raw (un-wrapped) writer so this never re-enters the interceptor.
 export async function appendSyncAction(
   db: any,
   collector: SyncAckCollector | null,
   scopeKey: SyncScopeKey,
-  entityType: ChangeEntity | "scope",
+  entityType: ChangeEntity | LifecycleEntity,
   entityId: string,
   op: SyncOp,
   extra: ActionExtra = {},
@@ -383,7 +391,7 @@ export async function appendSyncAction(
   collector?.seen.add(dedupeKey);
   const ts = Date.now();
   const position = dedupeHit ? null : await allocatePosition(db, collector, scopeKey, ts);
-  if (entityType !== "scope") {
+  if (!isLifecycleEntity(entityType)) {
     const existing = await db
       .query("sync_actions")
       .withIndex("by_scope_entity", (q: any) =>
@@ -525,9 +533,14 @@ export async function revokeStaleScope(
   }
 }
 
-// Scope membership lifecycle: emitted in the affected USER's own scope when a
-// team_memberships row is inserted/deleted, so the member's client learns to start
-// tracking (bootstrap) or purge (revoke) the team scope without a reload.
+// Membership lifecycle. In the affected USER's own scope when a team_memberships
+// row is inserted/deleted, so the member's client learns to start tracking
+// (bootstrap) or purge (revoke) the team scope without a reload. A removal also
+// lands in the TEAM's scope as a `member` row naming the departed user: their
+// conversations never fan out to the team scope (owner-only, E4), so nothing
+// else tells the remaining members' clients that the rows they cached from
+// the team feed are no longer the team's to show. One row per removal, not
+// one per conversation.
 export async function emitScopeAction(
   db: any,
   collector: SyncAckCollector | null,
@@ -536,6 +549,9 @@ export async function emitScopeAction(
   op: "scope_added" | "scope_removed",
 ): Promise<void> {
   await appendSyncAction(db, collector, userScopeKey(userId), "scope", String(teamId), op);
+  if (op === "scope_removed") {
+    await appendSyncAction(db, collector, teamScopeKey(teamId), "member", String(userId), "scope_removed");
+  }
 }
 
 // ── Read side ────────────────────────────────────────────────────────────────

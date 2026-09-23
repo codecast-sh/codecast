@@ -3336,6 +3336,32 @@ describe("inboxStore local-first state mutations", () => {
     expect(dispatches.find((d) => d.action === "setTeamVisibility")?.args).toEqual([CID, "full"]);
   });
 
+  // The team feed renders its own cached rows and the inbox session for a
+  // session the server never sent: a share or a hide must reach every copy in
+  // the same tick, or the chip reads the old state until the next push.
+  it("setPrivacy and setTeamVisibility patch the inbox session and every team feed cache row too", () => {
+    useInboxStore.setState({
+      sessions: { [CID]: { ...baseSession, _id: CID, is_private: false } },
+      conversations: {},
+      feedConversations: {
+        "team1|": [{ _id: CID, is_own: true, is_private: false, team_visibility: "summary" }, { _id: "other", is_own: false }],
+        "team1|repo": [{ _id: CID, is_own: true, is_private: false }],
+      } as any,
+    });
+    useInboxStore.getState().setPrivacy(CID, true);
+    let s = useInboxStore.getState();
+    expect((s.sessions[CID] as any).is_private).toBe(true);
+    expect((s.feedConversations as any)["team1|"][0]).toMatchObject({ is_private: true, team_visibility: "private" });
+    expect((s.feedConversations as any)["team1|repo"][0].is_private).toBe(true);
+    expect((s.feedConversations as any)["team1|"][1]).toEqual({ _id: "other", is_own: false });
+
+    useInboxStore.getState().setTeamVisibility(CID, "full");
+    s = useInboxStore.getState();
+    expect((s.sessions[CID] as any)).toMatchObject({ is_private: false, team_visibility: "full" });
+    expect((s.feedConversations as any)["team1|"][0]).toMatchObject({ is_private: false, team_visibility: "full" });
+    expect((s.feedConversations as any)["team1|repo"][0]).toMatchObject({ is_private: false, team_visibility: "full" });
+  });
+
   it("updatePlan mutates the plan by short_id, protects the field, and dispatches updatePlan", () => {
     useInboxStore.setState({ plans: { plan1: { _id: "plan1", short_id: "pl-9", status: "active" } as any } });
     useInboxStore.getState().updatePlan("pl-9", { status: "done" });

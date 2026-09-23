@@ -400,15 +400,19 @@ describe("inWorkingSet", () => {
     expect(inWorkingSet(row("recent"), EPOCH)).toEqual(["recent"]);
     expect(inWorkingSet(row("old", { updated_at: EPOCH - 31 * DAY }), EPOCH)).toEqual([]);
     expect(inWorkingSet(row("failed", { status: "failed" }), EPOCH)).toEqual([]);
-    expect(inWorkingSet(row("pin", { inbox_pinned_at: EPOCH - HOUR }), EPOCH)).toEqual(["recent", "pinned"]);
+    // A filed row is not recent material: its own window decides its seat.
+    expect(inWorkingSet(row("pin", { inbox_pinned_at: EPOCH - HOUR }), EPOCH)).toEqual(["pinned"]);
     // A pin holds its seat past the recency window.
     expect(inWorkingSet(row("oldpin", { updated_at: EPOCH - 40 * DAY, inbox_pinned_at: EPOCH - 40 * DAY }), EPOCH)).toEqual(["pinned"]);
-    expect(inWorkingSet(row("d", { inbox_dismissed_at: EPOCH - DAY }), EPOCH)).toEqual(["recent", "dismissed"]);
-    expect(inWorkingSet(row("dold", { inbox_dismissed_at: EPOCH - 31 * DAY }), EPOCH)).toEqual(["recent"]);
-    expect(inWorkingSet(row("st", { inbox_stashed_at: EPOCH - DAY }), EPOCH)).toEqual(["recent", "stashed"]);
+    expect(inWorkingSet(row("d", { inbox_dismissed_at: EPOCH - DAY }), EPOCH)).toEqual(["dismissed"]);
+    // A dismiss past its window falls off the shelf; fresh activity cannot
+    // bring it back through the recent window.
+    expect(inWorkingSet(row("dold", { inbox_dismissed_at: EPOCH - 31 * DAY }), EPOCH)).toEqual([]);
+    expect(inWorkingSet(row("st", { inbox_stashed_at: EPOCH - DAY }), EPOCH)).toEqual(["stashed"]);
+    expect(inWorkingSet(row("sn", { inbox_snoozed_until: EPOCH + DAY }), EPOCH)).toEqual(["snoozed"]);
     // Killed: out of the dismissed/stashed windows (per the C4 table); the pin
-    // keeps it visible and its recency keeps its recent seat.
-    expect(inWorkingSet(row("kd", { inbox_killed_at: EPOCH, inbox_dismissed_at: EPOCH - DAY, inbox_pinned_at: EPOCH - DAY }), EPOCH)).toEqual(["recent", "pinned"]);
+    // keeps it visible.
+    expect(inWorkingSet(row("kd", { inbox_killed_at: EPOCH, inbox_dismissed_at: EPOCH - DAY, inbox_pinned_at: EPOCH - DAY }), EPOCH)).toEqual(["pinned"]);
     expect(inWorkingSet(row("kdo", { inbox_killed_at: EPOCH, inbox_dismissed_at: EPOCH - DAY, inbox_pinned_at: EPOCH - DAY, updated_at: EPOCH - 40 * DAY }), EPOCH)).toEqual(["pinned"]);
     expect(inWorkingSet(row("own", { owned_by_me: true }), EPOCH)).toEqual(["recent", "owned"]);
     // An owner seat holds on its own: assignment puts the session in that
@@ -447,7 +451,24 @@ describe("selectWorkingSet", () => {
     const { members, truncated } = selectWorkingSet([row("a", { inbox_pinned_at: EPOCH - HOUR, owned_by_me: true })], EPOCH);
     expect(truncated).toEqual([]);
     expect(members.size).toBe(1);
-    expect(members.get("a")!.windows).toEqual(["recent", "pinned", "owned"]);
+    expect(members.get("a")!.windows).toEqual(["pinned", "owned"]);
+  });
+
+  test("filed rows with fresh activity never take a recent seat from a plain settled row", () => {
+    // Two hundred stashed sessions whose agents kept heartbeating, all fresher
+    // than one plain session that settled two days ago (the "Delta ideas"
+    // case, 2026-09-23). The plain row keeps its recent seat; the stashed
+    // rows sit in the stashed window only, and nothing is truncated.
+    const rows = [
+      row("plain", { updated_at: EPOCH - 2 * DAY }),
+      ...Array.from({ length: INBOX_WINDOW_CAPS.recent }, (_, i) =>
+        row(`s${i}`, { updated_at: EPOCH - HOUR - i * 1000, inbox_stashed_at: EPOCH - DAY - i * 1000 })),
+    ];
+    const { members, truncated } = selectWorkingSet(rows, EPOCH);
+    expect(truncated).toEqual([]);
+    expect(members.get("plain")!.windows).toEqual(["recent"]);
+    expect(members.get("s0")!.windows).toEqual(["stashed"]);
+    expect(members.size).toBe(INBOX_WINDOW_CAPS.recent + 1);
   });
 
   test("every truncation flag fires at its cap", () => {
@@ -637,9 +658,9 @@ describe("field ownership constants", () => {
     for (const f of INBOX_PROJECTION_FIELDS) expect(INBOX_FACT_FIELDS).not.toContain(f);
   });
 
-  test("the caps are the single source and the version is 12", () => {
+  test("the caps are the single source and the version is 13", () => {
     expect(INBOX_WINDOW_CAPS).toEqual({ recent: 200, pinned: 100, dismissed: 200, stashed: 200, snoozed: 200, owned: 200 });
-    expect(INBOX_PROJECTION_VERSION).toBe(12);
+    expect(INBOX_PROJECTION_VERSION).toBe(13);
   });
 });
 
