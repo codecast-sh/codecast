@@ -62,7 +62,7 @@ export function LimitParkCard({
   const exhausted = isExhaustionCurrent(device?.auto_switch_state?.exhausted_at, profiles, now);
   // A switch the machine recommended and is waiting on. Only while this park
   // is still live — a settled session's old proposal is history, not an ask.
-  const proposal = live && device ? pendingProposal([device]) : null;
+  const proposal = live && device ? pendingProposal([device], now) : null;
   // The freshest OTHER saved account with room left — the one manual recovery
   // worth a button. Expired logins and pegged accounts are not offers. When the
   // machine has PROPOSED a target, the button is that proposal's approval, so
