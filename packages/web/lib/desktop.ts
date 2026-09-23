@@ -116,6 +116,8 @@ declare global {
       onVoiceCommand?: (cb: (payload: { cmd: string; args: unknown[] }) => void) => void;
       voiceMirror?: (payload: VoiceMirror) => void;
       onVoiceMirror?: (cb: (payload: VoiceMirror) => void) => void;
+      voiceFrames?: (payload: Record<string, string | null>) => void;
+      onVoiceFrames?: (cb: (payload: Record<string, string | null>) => void) => void;
       getVoiceWindowState?: () => Promise<{ size: VoiceWindowShape; callSize: CallWindowSize } | null>;
       // The voice window's shapes: the float (the face row over the work),
       // the stage, the wall and idle. ONE window: `transparent` and `frame`
@@ -421,7 +423,9 @@ export type VoiceOpenPayload = {
  *  on purpose — it crosses a process boundary. */
 export type VoiceMirror = {
   walkie: unknown;
-  call: { roomKey: string | null; phase: string; muted: boolean; micDenied: boolean; camera: boolean };
+  /** `speaking` is the host's active speaker list: a remote's face row draws
+   *  the speaking ring from it, and my own camera face from `camera`. */
+  call: { roomKey: string | null; phase: string; muted: boolean; micDenied: boolean; camera: boolean; speaking: string[] };
 };
 
 export type DesktopDisplaySource = {
@@ -887,6 +891,15 @@ export function mirrorVoice(payload: VoiceMirror): void {
 /** Every other window: the host's mirror. */
 export function onVoiceMirror(cb: (payload: VoiceMirror) => void): void {
   bridge("onVoiceMirror")?.(cb);
+}
+
+/** The host's camera frames for the other windows' circles (lib/calls/videoFrames). */
+export function publishVoiceFrames(payload: Record<string, string | null>): void {
+  bridge("voiceFrames")?.(payload);
+}
+
+export function onVoiceFrames(cb: (payload: Record<string, string | null>) => void): void {
+  bridge("onVoiceFrames")?.(cb);
 }
 
 /** Host: a ring is up (or has stopped) — the dock bounces beside it. */

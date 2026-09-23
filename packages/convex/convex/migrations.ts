@@ -4,6 +4,7 @@ import { v } from "convex/values";
 import { redactSecrets } from "./redact";
 import { normalizeRepository } from "./lib/gitRefs";
 import { commitRecordedBy } from "./githubWebhooks";
+import { repositoryOfCheckout } from "./users";
 
 // One-time backfill: stamp conversations.model from each conversation's newest
 // assistant message carrying a real model id ("<synthetic>" = error banner, not
@@ -607,5 +608,29 @@ export const unlinkMergedCommits = internalMutation({
       console.log(`[unlinkMergedCommits] done dryRun=${dryRun} scanned=${scanned} unlinked=${unlinked}`);
     }
     return { dryRun, scanned, unlinked, samples, isDone: page.isDone, cursor: page.continueCursor };
+  },
+});
+
+// One-time: stamp directory_team_mappings.repository from the sessions
+// recorded under each mapped checkout, so a rule written before the field
+// existed reaches the owner's other clones and worktrees. Idempotent: rows
+// that carry the key, or whose folder has no session with a remote, are
+// skipped. Small table; one pass.
+//   packages/convex/run.sh migrations:stampMappingRepositories '{"dryRun":false}'
+export const stampMappingRepositories = internalMutation({
+  args: { dryRun: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const dryRun = args.dryRun ?? true;
+    const rows = await ctx.db.query("directory_team_mappings").collect();
+    const stamped: Array<{ path_prefix: string; repository: string }> = [];
+    let skipped = 0;
+    for (const row of rows) {
+      if (row.repository) { skipped++; continue; }
+      const repository = await repositoryOfCheckout(ctx, row.user_id, row.path_prefix);
+      if (!repository) { skipped++; continue; }
+      if (!dryRun) await ctx.db.patch(row._id, { repository });
+      stamped.push({ path_prefix: row.path_prefix, repository });
+    }
+    return { dryRun, scanned: rows.length, stamped, skipped };
   },
 });

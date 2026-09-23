@@ -168,8 +168,12 @@ describe("orgLine.sweep (L9)", () => {
     expect(tables.org_roles[0].counters).toEqual({ day: TODAY, hands: 1, wakes: 0, tokens: 0 });
   });
 
-  test("skips a paused role and a role below direct trust", async () => {
-    for (const role of [{ status: "paused" }, { trust: "decide" }, { trust: undefined }]) {
+  test("skips a paused role and a role whose switch is off; decide reads as on (S23.1)", async () => {
+    {
+      const { ctx } = fixtures({ role: { trust: "decide" } });
+      expect((await sweepCore(ctx, NOW)).started).toHaveLength(1);
+    }
+    for (const role of [{ status: "paused" }, { trust: "understand" }, { trust: undefined }]) {
       const { ctx, tables } = fixtures({ role });
       const res = await sweepCore(ctx, NOW);
       expect(res.started).toHaveLength(0);

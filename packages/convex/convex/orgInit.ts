@@ -29,7 +29,8 @@ import {
   resolveScopeRef,
   rolesInBoundary, performSetAuthority, performSetProjectLead } from "./orgRoles";
 import { performAcceptUpgrade, performUpsertInstance } from "./orgTemplates";
-import { capsFor, countersFor, trustOf } from "./orgEvents";
+import { capsFor, countersFor, roleStartsOnItsOwn, trustOf } from "./orgEvents";
+import { autonomyChangeWords } from "@codecast/shared/contracts/roleAutonomy";
 import { findDecision } from "./sessionDecisions";
 import { extractRepoFromRemoteUrl, threadStateHeadline } from "@codecast/shared/contracts";
 import {
@@ -304,6 +305,7 @@ export async function computeAnalysisOrg(ctx: Ctx, userId: Id<"users">, teamId: 
       status: role.status,
       seat: seatRow ? { session: seatRow.short_id ?? String(seatRow._id), title: seatRow.title ?? "" } : undefined,
       trust: trustOf(role),
+      starts_on_its_own: roleStartsOnItsOwn(role),
       caps,
       counters: countersFor(role, now),
       reports_to: parent,
@@ -972,7 +974,7 @@ export async function applyBudget(ctx: Ctx, userId: Id<"users">, boundary: Bound
 export async function applyTrust(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgTrustChange, opts: ApplyOpts): Promise<ApplyResult> {
   const role = await liveRole(ctx, boundary, p.handle);
   const r = await performSetTrust(ctx, userId, { role_id: String(role._id), trust: p.trust, human_decision: opts.human_decision });
-  return { status: "applied", note: `@${role.handle}: trust ${r.previous_trust} → ${p.trust}`, role: roleRef(role) };
+  return { status: "applied", note: `@${role.handle}: ${autonomyChangeWords(!!r.on)}`, role: roleRef(role) };
 }
 
 // Hiring from a template (docs/architecture/org-hire.md). Authority is the

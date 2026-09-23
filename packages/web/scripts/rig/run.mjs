@@ -17,8 +17,7 @@
 // environment (auth:store mints the sessions), Google Chrome in
 // /Applications (or RIG_CHROME).
 import { mkdirSync, writeFileSync } from "node:fs";
-import { bringUp, deadSeatLeg, reconnectLeg, ringLeg, settle, waitPresent, walkieLeg } from "./legs.mjs";
-import { killChrome } from "./chrome.mjs";
+import { alive, bringUp, deadSeatLeg, killSide, reconnectLeg, ringLeg, settle, waitPresent, walkieLeg } from "./legs.mjs";
 
 const args = process.argv.slice(2);
 const opt = (name, dflt) => {
@@ -55,7 +54,7 @@ try {
     } catch (e) {
       console.log(`  FAILED: ${e.message}`);
       for (const s of sides) {
-        if (s.child.exitCode !== null) continue;
+        if (!alive(s)) continue;
         try {
           await s.page.screenshot(`${DIR}/${name}-failed-${s.who}.png`);
           const rec = await s.page.evaluate(`__rig.stop ? __rig.stop() : null`);
@@ -68,15 +67,15 @@ try {
     }
     results.push(r);
     // A killed browser comes back for the next leg.
-    if (B.child.exitCode !== null && LEGS.indexOf(name) < LEGS.length - 1) {
+    if (!alive(B) && LEGS.indexOf(name) < LEGS.length - 1) {
       const fresh = await bringUp("jordan", { dir: DIR, fresh: false });
       Object.assign(B, fresh);
     }
     await settle(sides);
-    await Promise.all(sides.filter((s) => s.child.exitCode === null).map((s) => waitPresent(s)));
+    await Promise.all(sides.filter(alive).map((s) => waitPresent(s)));
   }
 } finally {
-  if (!KEEP) for (const s of sides) killChrome(s.child, s.profile);
+  if (!KEEP) for (const s of sides) killSide(s);
 }
 
 // ── the table ──

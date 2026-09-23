@@ -6,6 +6,7 @@ import { HOOK_FIELDS_READ } from "./hookJson.js";
 const dir = import.meta.dir;
 const importers = [
   "statusHook.ts",
+  "shellChangesHook.ts",
   "sessionRegisterHook.ts",
   "threadStateHook.ts",
   "taskPulseHook.ts",

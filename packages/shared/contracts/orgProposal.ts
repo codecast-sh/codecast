@@ -5,6 +5,8 @@
 // path and both tests share this one reading of the block and of the option
 // order, so an option index means the same thing everywhere.
 
+import { autonomyOn, trustForSwitch } from "./roleAutonomy";
+
 export const ORG_PROPOSAL_FENCE = "org-proposal";
 
 export type OrgProposalCaps = { hands_per_day?: number; wakes_per_day?: number; tokens_per_day?: number };
@@ -44,7 +46,8 @@ export type OrgRoleProposal = {
   /** "@handle" or "or-N" for a role, "me" or a member's name for a person; absent = the person applying. */
   reports_to?: string;
   charter?: string;
-  trust?: "understand";
+  /** The switch as stored (org-staffing.md S23.1); a hired role starts on, so a proposal rarely writes it. */
+  trust?: OrgTrustStage;
   caps?: OrgProposalCaps;
   /** See OrgLeaveSessions: the sessions in the new role's scope stay with their owner. */
   leave_sessions?: boolean;
@@ -92,7 +95,15 @@ export type OrgPriority = "p0" | "p1" | "p2" | "p3";
 export type OrgLeaveSessions = { leave_sessions?: boolean };
 export type OrgScopeChange = { kind: "scope"; handle: string; add?: string[]; remove?: string[] } & OrgLeaveSessions;
 export type OrgBudgetChange = { kind: "budget"; handle: string; caps: OrgProposalCaps };
+/** The switch (org-staffing.md S23.1). The wire kind stays `trust` for one release; a spec may
+ *  write `{ kind: "autonomy", handle, on }` and parseOrgProposalSpec maps it here. */
 export type OrgTrustChange = { kind: "trust"; handle: string; trust: OrgTrustStage };
+/** A spec's switch change before parsing maps it onto the stored kind. */
+export function normalizeAutonomyChange(raw: any): any {
+  if (!raw || typeof raw !== "object" || raw.kind !== "autonomy") return raw;
+  const { on, ...rest } = raw;
+  return { ...rest, kind: "trust", trust: typeof on === "boolean" ? trustForSwitch(on) : on };
+}
 export type OrgRoutineChange = { kind: "routine"; handle: string; title: string; prompt: string; every: string };
 export type OrgProjectMetaChange = {
   kind: "project_meta";
@@ -282,7 +293,7 @@ export function orgChangeError(raw: any): string | null {
     }
     case "trust": {
       const h = handle(); if (h) return h;
-      return ORG_TRUST_STAGES.includes(raw.trust) ? null : `trust is one of ${ORG_TRUST_STAGES.join(", ")}`;
+      return ORG_TRUST_STAGES.includes(raw.trust) ? null : "autonomy on is true or false";
     }
     case "routine": {
       const h = handle(); if (h) return h;
@@ -620,10 +631,9 @@ function askWords(names?: OrgAskNames) {
   /** What rides with a new agent: its limit, its routine, the session that becomes it. */
   const rider = (c: OrgChange): string => {
     switch (c.kind) {
-      // The units (hands, wakes, tokens) are glossary words; the numbers are one tap away in the fold and the cost sheet.
       case "budget": return " It gets a daily limit of its own.";
       case "routine": return ` It runs ${c.title} ${everyWords(c.every)}.`;
-      case "trust": return c.trust === "understand" ? " It reads and reports, and does not act on its own." : c.trust === "decide" ? " It may decide on its own." : " It may direct work on its own.";
+      case "trust": return autonomyOn(c.trust) ? " It starts work in its area on its own." : " It reads and recommends; you start the work.";
       case "adopt": return ` The session ${c.conversation} becomes it.`;
       case "authority": return ` Outside codecast it may ${authorityWords(c.authority)}, inside the limits you set.`;
       case "hire": return ` It is hired from the template ${c.template} ${c.version}, and leads ${c.project}.`;
@@ -637,6 +647,7 @@ function askWords(names?: OrgAskNames) {
       case "retire": return `Retire ${agent(c.handle)}`;
       case "move": return `Move ${agent(c.handle)}`;
       case "scope": return `Change what ${agent(c.handle)} looks after`;
+      case "trust": return `${autonomyOn(c.trust) ? "Turn on" : "Turn off"} starting work on its own for ${agent(c.handle)}`;
       default: return describeOrgChange(c);
     }
   };
@@ -883,6 +894,7 @@ export function parseOrgProposalSpec(raw: unknown): { spec: OrgProposalSpec; err
   if (!nonEmpty(r.title)) errors.push("title is required");
   if (!nonEmpty(r.summary_md)) errors.push("summary_md is required: the summary a founder reads on a phone");
   if (!ORG_PROPOSAL_MODES.includes(r.mode)) errors.push(`mode is one of ${ORG_PROPOSAL_MODES.join(", ")}`);
+  if (Array.isArray(r.changes)) r.changes = r.changes.map((row: any) => row && typeof row === "object" && row.change ? { ...row, change: normalizeAutonomyChange(row.change) } : row);
   if (!Array.isArray(r.changes) || r.changes.length === 0) errors.push("changes is a non-empty list");
   else r.changes.forEach((c: any, i: number) => {
     const at = `changes[${i}]${c?.change?.kind ? ` (${c.change.kind})` : ""}`;
@@ -1016,7 +1028,7 @@ export function describeOrgChange(c: OrgChange): string {
     case "retire": return `retire ${at(c.handle)}`;
     case "scope": return `scope ${at(c.handle)}${c.add?.length ? ` +${list(c.add)}` : ""}${c.remove?.length ? ` -${list(c.remove)}` : ""}`;
     case "budget": return `budget ${at(c.handle)} ${Object.entries(c.caps).filter(([, v]) => v !== undefined).map(([k, v]) => `${k.replace("_per_day", "")} ${v}/day`).join(", ")}`;
-    case "trust": return `trust ${at(c.handle)} to ${c.trust}`;
+    case "trust": return `autonomy ${at(c.handle)} ${autonomyOn(c.trust) ? "on" : "off"}`;
     case "routine": return `routine on ${at(c.handle)}: ${c.title} every ${c.every}`;
     case "project_meta": return `charter ${c.project}${c.owner ? ` owner ${at(c.owner)}` : ""}${c.priority ? ` ${c.priority}` : ""}${c.goal ? `: ${c.goal}` : ""}`;
     case "adopt": return `adopt session ${c.conversation} as ${at(c.handle)}'s standing session`;
@@ -1062,11 +1074,6 @@ export function changeLine(change: OrgChange): string {
 
 /** "you" for the reader, else the parent as the change names it. */
 const whoReads = (ref: string | undefined) => !ref || ref === "me" ? "you" : ref;
-const TRUST_WORDS: Record<string, string> = {
-  understand: "may read and report, not act on its own",
-  decide: "may decide on its own",
-  direct: "may direct work on its own",
-};
 
 function changeSentence(c: OrgChange): string {
   switch (c.kind) {
@@ -1085,7 +1092,7 @@ function changeSentence(c: OrgChange): string {
       return `${at(c.handle)} ${parts.join(" and ") || "keeps its area of work"}`;
     }
     case "budget": return `${at(c.handle)} may use up to ${capsWords(c.caps)} a day`;
-    case "trust": return `${at(c.handle)} ${TRUST_WORDS[c.trust] ?? `may ${c.trust} on its own`}`;
+    case "trust": return `${at(c.handle)} ${autonomyOn(c.trust) ? "starts work on its own" : "stops starting work on its own"}`;
     case "routine": return `${at(c.handle)} runs "${c.title}" ${everyWords(c.every)}`;
     case "project_meta": return `write the charter of ${c.project}${c.owner ? `, owned by ${at(c.owner)}` : ""}${c.priority ? `, priority ${c.priority}` : ""}${c.goal ? `: ${c.goal}` : ""}`;
     case "adopt": return `make session ${c.conversation} the standing session of ${at(c.handle)}`;

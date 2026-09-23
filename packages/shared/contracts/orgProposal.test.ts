@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { applyProposalChanges, extractOrgProposal, orgProposalBlock, orgProposalVerdict, recordChangeParts, changeLine } from "./orgProposal";
+import { applyProposalChanges, extractOrgProposal, normalizeAutonomyChange, orgProposalBlock, orgProposalVerdict, recordChangeParts, changeLine } from "./orgProposal";
 
 describe("org proposal block", () => {
   test("round trips through a decision context", () => {
@@ -66,7 +66,7 @@ describe("org change validation", () => {
       [{ kind: "scope", handle: "gr", add: "pr-1" }, "lists of project or plan refs"],
       [{ kind: "budget", handle: "gr", caps: {} }, "at least one of hands_per_day"],
       [{ kind: "budget", handle: "gr", caps: { tokens_per_day: -1 } }, "non-negative"],
-      [{ kind: "trust", handle: "gr", trust: "god" }, "one of understand, decide, direct"],
+      [{ kind: "trust", handle: "gr", trust: "god" }, "autonomy on is true or false"],
       [{ kind: "routine", handle: "gr", title: "t", prompt: "p", every: "weekly" }, "duration like 7d"],
       [{ kind: "routine", handle: "gr", title: "t", every: "7d" }, "title and a prompt"],
       [{ kind: "project_meta", project: "pr-1" }, "changes nothing"],
@@ -128,7 +128,7 @@ describe("orderOrgChanges and describeOrgChange", () => {
     expect(describeOrgChange(GOOD.retire)).toBe("retire @ops");
     expect(describeOrgChange(GOOD.scope)).toBe("scope @growth +pr-5 -pl-2");
     expect(describeOrgChange(GOOD.budget)).toBe("budget @growth tokens 800000/day");
-    expect(describeOrgChange(GOOD.trust)).toBe("trust @growth to decide");
+    expect(describeOrgChange(GOOD.trust)).toBe("autonomy @growth on");
     expect(describeOrgChange(GOOD.routine)).toBe("routine on @growth: Weekly funnel every 7d");
     expect(describeOrgChange(GOOD.project_meta)).toBe("charter pr-1 owner @growth p1: Ship the onboarding");
     expect(describeOrgChange(GOOD.adopt)).toBe("adopt session jx7abcd as @chief-of-staff's standing session");
@@ -495,5 +495,22 @@ describe("orgChangeTakeover and takeoverPhrase", () => {
     expect(takeoverPhrase("growth", { sessions: ["a", "b"], kept_in_front: [], over_cap: 0, told: { sessions: 1, deferred: 1 } }, true)).toBe("2 sessions now report to @growth and leave your needs input; 1 told now, 1 will read it on their next turn");
     expect(takeoverPhrase("growth", { sessions: [], kept_in_front: [], over_cap: 0 }, false)).toBe("");
     expect(takeoverPhrase("growth", null, true)).toBe("");
+  });
+});
+
+describe("the switch in a spec (org-staffing.md S23.1)", () => {
+  test("autonomy { on } maps onto the stored kind: on is direct, off is understand", () => {
+    expect(normalizeAutonomyChange({ kind: "autonomy", handle: "growth", on: true })).toEqual({ kind: "trust", handle: "growth", trust: "direct" });
+    expect(normalizeAutonomyChange({ kind: "autonomy", handle: "growth", on: false })).toEqual({ kind: "trust", handle: "growth", trust: "understand" });
+    expect(normalizeAutonomyChange({ kind: "scope", handle: "growth", add: ["pr-1"] })).toEqual({ kind: "scope", handle: "growth", add: ["pr-1"] });
+  });
+  test("parseOrgProposalSpec accepts the autonomy spelling and the words never say a stage", () => {
+    const r = parseOrgProposalSpec({ title: "t", summary_md: "s", mode: "review", changes: [{ change: { kind: "autonomy", handle: "growth", on: false }, rationale: "quiet quarter" }] });
+    expect(r.errors).toEqual([]);
+    const c = r.spec!.changes[0].change as any;
+    expect(c).toEqual({ kind: "trust", handle: "growth", trust: "understand" });
+    expect(changeLine(c)).toBe("@growth stops starting work on its own");
+    const bad = parseOrgProposalSpec({ title: "t", summary_md: "s", mode: "review", changes: [{ change: { kind: "autonomy", handle: "growth", on: "maybe" }, rationale: "r" }] });
+    expect(bad.errors.join("\n")).toContain("autonomy on is true or false");
   });
 });
