@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
+import { AppleIcon } from "@/components/marketing/AppBadges";
 import { Button } from "@/components/ui/button";
 import { Logo } from "@/components/Logo";
 import { useLocalAuth } from "@/lib/localAuth";
@@ -20,7 +21,6 @@ import { useLocalAuth } from "@/lib/localAuth";
 const MARKETING_NAV_LINKS = [
   { href: "/documentation", label: "Docs" },
   { href: "/features", label: "CLI" },
-  { href: "/download", label: "Download" },
   { href: "/pricing", label: "Pricing" },
   { href: "/changelog", label: "Changelog" },
   { href: "/blog", label: "Blog" },
@@ -84,6 +84,17 @@ export function MarketingNav({
               {label}
             </Link>
           ))}
+          {/* The apps page is the one link that stays visible at every width:
+              a visitor on a phone or a Mac should always see there is an app. */}
+          <Link
+            href="/download"
+            className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm font-medium transition-colors hover:bg-[#eee8d5]"
+            style={{ borderColor: active === "/download" ? INK : "#93a1a1", color: INK }}
+          >
+            <AppleIcon className="w-4 h-4" />
+            <span className="hidden sm:inline">Download</span>
+            <span className="sm:hidden">Apps</span>
+          </Link>
           <a
             href="https://github.com/codecast-sh/codecast"
             target="_blank"
