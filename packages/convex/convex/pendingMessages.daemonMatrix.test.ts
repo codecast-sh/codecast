@@ -85,25 +85,22 @@ const OFFLINE_AGO = 30 * 60_000; // well past DEVICE_ONLINE_MS
 function seedOwnershipWorld(opts: {
   ownerDeviceId?: string;
   ownerLastSeen?: number;
-  claimantIsRemote?: boolean;
-  claimantRegistered?: boolean;
 }) {
-  const devices: Rec[] = [];
+  const devices: Rec[] = [
+    {
+      _id: "dev_claimant",
+      user_id: "user_a",
+      device_id: "device_live",
+      last_seen: NOW - ONLINE_AGO,
+      is_remote: false,
+    },
+  ];
   if (opts.ownerDeviceId && opts.ownerLastSeen !== undefined) {
     devices.push({
       _id: "dev_owner",
       user_id: "user_a",
       device_id: opts.ownerDeviceId,
       last_seen: opts.ownerLastSeen,
-    });
-  }
-  if (opts.claimantRegistered !== false) {
-    devices.push({
-      _id: "dev_claimant",
-      user_id: "user_a",
-      device_id: "device_live",
-      last_seen: NOW - ONLINE_AGO,
-      is_remote: opts.claimantIsRemote ?? false,
     });
   }
   return createDb({
@@ -131,88 +128,53 @@ function seedOwnershipWorld(opts: {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DPM-02 — offline-owner delivery black hole.
-// A conversation owned by a DEAD device (retired laptop, or the same machine
-// after a machine-key rotation minted a new device id) must not black-hole
-// delivery: the user's live local daemon must see, claim (take over), and
-// deliver the row. deliverMessage's offline-owner reclaim is unreachable when
-// the subscription filters the row first, so the fix must live in the
-// visibility/claim layer itself.
+// DPM-02 — the owning device is the only device that delivers.
+// A conversation stamped with an owner_device_id is served by that device and
+// no other, however long it has been offline. Another machine gets the row only
+// when a person moves the conversation there (reassignToDevice / moveToRemote
+// restamp the owner first). A daemon that adopted a dead owner's conversation
+// on its own ran a Mac's repo session in /home/ubuntu on 2026-09-22: it had no
+// checkout to host it. Unowned conversations stay first-claim.
 // ─────────────────────────────────────────────────────────────────────────────
-describe("DPM-02 — offline-owner takeover", () => {
-  test("a pending row owned by an OFFLINE device is served and re-claimed by the user's live local daemon", async () => {
-    const { db, tables } = seedOwnershipWorld({
-      ownerDeviceId: "device_dead",
-      ownerLastSeen: NOW - OFFLINE_AGO,
-    });
+describe("DPM-02 — a stamped owner is exclusive, online or not", () => {
+  const expectRefused = async (db: any, tables: Record<string, Rec[]>, owner: string) => {
+    const deliverable = await collectDeliverableForOwner({ db } as any, "user_a" as any, "device_live");
+    expect(deliverable).toEqual([]);
+    const claimed = await claimPendingMessageForDaemon({ db } as any, "pm_1" as any, "user_a" as any, "device_live");
+    expect(claimed).toBeNull();
+    expect(tables.conversations[0].owner_device_id).toBe(owner);
+  };
 
-    const deliverable = await collectDeliverableForOwner(
-      { db } as any,
-      "user_a" as any,
-      "device_live",
-      NOW,
-    );
+  test("SECURITY PIN: an ONLINE owner device stays exclusive — row invisible to peers", async () => {
+    const { db, tables } = seedOwnershipWorld({ ownerDeviceId: "device_other", ownerLastSeen: NOW - ONLINE_AGO });
+    await expectRefused(db, tables, "device_other");
+  });
+
+  test("SECURITY PIN: an OFFLINE owner device stays exclusive — a live local daemon of the same user does not adopt the row", async () => {
+    const { db, tables } = seedOwnershipWorld({ ownerDeviceId: "device_dead", ownerLastSeen: NOW - OFFLINE_AGO });
+    await expectRefused(db, tables, "device_dead");
+  });
+
+  test("SECURITY PIN: an owner with NO device row at all is still exclusive (the rule reads only the conversation)", async () => {
+    const { db, tables } = seedOwnershipWorld({ ownerDeviceId: "device_ghost" }); // no dev row
+    await expectRefused(db, tables, "device_ghost");
+  });
+
+  test("a person's move restamps the owner, and the new owner delivers", async () => {
+    const { db, tables } = seedOwnershipWorld({ ownerDeviceId: "device_dead", ownerLastSeen: NOW - OFFLINE_AGO });
+    await db.patch("conv_1", { owner_device_id: "device_live" }); // what reassignToDevice / moveToRemote do
+    const deliverable = await collectDeliverableForOwner({ db } as any, "user_a" as any, "device_live");
     expect(deliverable.map((m: any) => m._id)).toEqual(["pm_1"]);
-
-    const claimed = await claimPendingMessageForDaemon(
-      { db } as any,
-      "pm_1" as any,
-      "user_a" as any,
-      "device_live",
-      NOW,
-    );
+    const claimed = await claimPendingMessageForDaemon({ db } as any, "pm_1" as any, "user_a" as any, "device_live");
     expect(claimed?._id).toBe("pm_1");
-    // Takeover re-stamps ownership so status writes and future routing follow the live device.
     expect(tables.conversations[0].owner_device_id).toBe("device_live");
   });
 
-  test("an owner device with NO device row at all counts as offline (never registered ⇒ cannot be delivering)", async () => {
-    const { db } = seedOwnershipWorld({ ownerDeviceId: "device_ghost" }); // no dev row
-    const deliverable = await collectDeliverableForOwner({ db } as any, "user_a" as any, "device_live", NOW);
-    expect(deliverable.map((m: any) => m._id)).toEqual(["pm_1"]);
-  });
-
-  test("SECURITY PIN: an ONLINE owner device stays exclusive — no takeover, row invisible to peers", async () => {
-    const { db, tables } = seedOwnershipWorld({
-      ownerDeviceId: "device_other",
-      ownerLastSeen: NOW - ONLINE_AGO,
-    });
-    const deliverable = await collectDeliverableForOwner({ db } as any, "user_a" as any, "device_live", NOW);
-    expect(deliverable).toEqual([]);
-    const claimed = await claimPendingMessageForDaemon({ db } as any, "pm_1" as any, "user_a" as any, "device_live", NOW);
-    expect(claimed).toBeNull();
-    expect(tables.conversations[0].owner_device_id).toBe("device_other");
-  });
-
-  test("SECURITY PIN: a REMOTE claimant never takes over an offline-owned conversation", async () => {
-    const { db, tables } = seedOwnershipWorld({
-      ownerDeviceId: "device_dead",
-      ownerLastSeen: NOW - OFFLINE_AGO,
-      claimantIsRemote: true,
-    });
-    const deliverable = await collectDeliverableForOwner({ db } as any, "user_a" as any, "device_live", NOW);
-    expect(deliverable).toEqual([]);
-    const claimed = await claimPendingMessageForDaemon({ db } as any, "pm_1" as any, "user_a" as any, "device_live", NOW);
-    expect(claimed).toBeNull();
-    expect(tables.conversations[0].owner_device_id).toBe("device_dead");
-  });
-
-  test("SECURITY PIN: an UNREGISTERED claimant cannot take over (fail closed without a device row)", async () => {
-    const { db, tables } = seedOwnershipWorld({
-      ownerDeviceId: "device_dead",
-      ownerLastSeen: NOW - OFFLINE_AGO,
-      claimantRegistered: false,
-    });
-    const deliverable = await collectDeliverableForOwner({ db } as any, "user_a" as any, "device_live", NOW);
-    expect(deliverable).toEqual([]);
-    expect(tables.conversations[0].owner_device_id).toBe("device_dead");
-  });
-
-  test("unowned conversations keep first-claim semantics (unchanged legacy path)", async () => {
+  test("unowned conversations keep first-claim semantics", async () => {
     const { db, tables } = seedOwnershipWorld({});
-    const deliverable = await collectDeliverableForOwner({ db } as any, "user_a" as any, "device_live", NOW);
+    const deliverable = await collectDeliverableForOwner({ db } as any, "user_a" as any, "device_live");
     expect(deliverable.map((m: any) => m._id)).toEqual(["pm_1"]);
-    await claimPendingMessageForDaemon({ db } as any, "pm_1" as any, "user_a" as any, "device_live", NOW);
+    await claimPendingMessageForDaemon({ db } as any, "pm_1" as any, "user_a" as any, "device_live");
     expect(tables.conversations[0].owner_device_id).toBe("device_live");
   });
 });
@@ -223,7 +185,7 @@ describe("DPM-02 — offline-owner takeover", () => {
 describe("DPM-01/DLF-01 — claim is ownership-only and loser-safe", () => {
   test("DLF-01: a successful claim does NOT change row status — a crash mid-claim leaves the row deliverable", async () => {
     const { db, tables } = seedOwnershipWorld({});
-    await claimPendingMessageForDaemon({ db } as any, "pm_1" as any, "user_a" as any, "device_live", NOW);
+    await claimPendingMessageForDaemon({ db } as any, "pm_1" as any, "user_a" as any, "device_live");
     expect(tables.pending_messages[0].status).toBe("pending");
   });
 
@@ -231,9 +193,9 @@ describe("DPM-01/DLF-01 — claim is ownership-only and loser-safe", () => {
     const { db, tables } = seedOwnershipWorld({});
     // second live device for the same user
     tables.devices.push({ _id: "dev_b", user_id: "user_a", device_id: "device_b", last_seen: NOW - ONLINE_AGO });
-    const first = await claimPendingMessageForDaemon({ db } as any, "pm_1" as any, "user_a" as any, "device_live", NOW);
+    const first = await claimPendingMessageForDaemon({ db } as any, "pm_1" as any, "user_a" as any, "device_live");
     expect(first?._id).toBe("pm_1");
-    const second = await claimPendingMessageForDaemon({ db } as any, "pm_1" as any, "user_a" as any, "device_b", NOW);
+    const second = await claimPendingMessageForDaemon({ db } as any, "pm_1" as any, "user_a" as any, "device_b");
     expect(second).toBeNull();
     expect(tables.conversations[0].owner_device_id).toBe("device_live");
   });
@@ -462,7 +424,7 @@ describe("DOF-01 — backlog ordering", () => {
         { _id: "pm_new", conversation_id: "conv_1", from_user_id: "user_a", owner_user_id: "user_a", content: "second", status: "pending", created_at: NOW - 10_000, retry_count: 0 },
       ],
     });
-    const deliverable = await collectDeliverableForOwner({ db } as any, "user_a" as any, "device_live", NOW);
+    const deliverable = await collectDeliverableForOwner({ db } as any, "user_a" as any, "device_live");
     expect(deliverable.map((m: any) => m._id)).toEqual(["pm_old", "pm_new"]);
   });
 });

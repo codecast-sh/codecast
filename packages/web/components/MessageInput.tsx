@@ -65,6 +65,11 @@ const ComposeEditor = lazy(() => import("./editor/ComposeEditor").then((m) => ({
 // browser grows the field with content, replacing the JS write→measure→write
 // autosize that forced two full-page reflows per keystroke. Safari falls back
 // to the JS path in resetTextareaHeight.
+// Growth stops at --composer-max-h and the field scrolls inside from there.
+// The default is a share of the viewport; a host that boxes the composer in
+// a frame of its own (ComposeView's modal and dock) sets the variable to a
+// share of that frame, so a long draft never pushes the host's other rows
+// out of its clip.
 // Chat's caret-anchored @ popup. Wide enough that a session row's title, its
 // message count and its age fit on one line — 340px truncated most of them.
 const CHAT_AC_WIDTH = 480;
@@ -2399,7 +2404,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
             return <div ref={acAnchorRef} className="relative h-0">{dropdown}</div>;
           })()}
           <form onSubmit={handleFormSubmit} className={bareComposer ? "w-full" : `mx-auto px-2 sm:px-4 transition-all duration-200 ease-out ${isExpanded ? "conv-col" : "max-w-md"}`}>
-            <div className={`flex flex-col ${bareComposer ? "" : "border"} transition-colors duration-150 ${bareComposer ? "px-2.5 py-0.5 rounded-lg bg-sol-text/[0.04] focus-within:bg-sol-text/[0.07]" : `border px-4 py-2 shadow-lg bg-sol-bg-alt ${isExpanded ? "rounded-2xl" : "rounded-full"}`} ${composeMode ? "min-h-[40vh]" : ""} ${isSelectionActive ? "border-sol-cyan/40 ring-1 ring-sol-cyan/20" : composeMode ? "border-sol-cyan/20" : bareComposer ? "" : "border-sol-border"}`}>
+            <div className={`flex flex-col ${bareComposer ? "" : "border"} transition-colors duration-150 ${bareComposer ? "px-2.5 py-0.5 rounded-lg bg-sol-text/[0.04] focus-within:bg-sol-text/[0.07]" : `border px-4 py-2 shadow-lg bg-sol-bg-alt ${isExpanded ? "rounded-2xl" : "rounded-full"}`} ${composeMode ? "min-h-[min(40vh,var(--composer-max-h,40vh))] max-h-[var(--composer-max-h,45vh)]" : ""} ${isSelectionActive ? "border-sol-cyan/40 ring-1 ring-sol-cyan/20" : composeMode ? "border-sol-cyan/20" : bareComposer ? "" : "border-sol-border"}`}>
               {isSelectionActive && (
                 <div className="flex items-center gap-2 pb-1.5 mb-1.5 border-b border-sol-cyan/20 text-[10px] text-sol-cyan">
                   <span className="font-medium">Rewriting message</span>
@@ -2588,7 +2593,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     placeholder={ghostVisible ? "" : composerPlaceholder ?? (bareComposer ? "Comment…" : onGateSend ? "Send a message to continue the workflow..." : onWorkflowLaunch ? "Goal override (optional) — press send to run workflow..." : reviewCount > 0 ? `Send ${reviewCount} quote${reviewCount !== 1 ? "s" : ""} as-is, or add a reply first...` : agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? "Approve or deny permission to continue..." : hasAskUserQuestion ? "Answer the question to continue..." : "Send a message...") : "Send a message...")}
                     rows={1}
                     style={FIELD_SIZING_STYLE}
-                    className={`block w-full [grid-area:1/1] bg-transparent text-sm placeholder:text-sol-text-dim focus:outline-none disabled:opacity-50 resize-none overflow-hidden leading-relaxed py-1 ${isSelectionActive && !isSelectionEditedRef.current ? "text-sol-text-dim italic" : "text-sol-text"}`}
+                    className={`block w-full [grid-area:1/1] bg-transparent text-sm placeholder:text-sol-text-dim focus:outline-none disabled:opacity-50 resize-none overflow-y-auto max-h-[var(--composer-max-h,45vh)] leading-relaxed py-1 ${isSelectionActive && !isSelectionEditedRef.current ? "text-sol-text-dim italic" : "text-sol-text"}`}
                   />
                   {!bareComposer && suggestionsEnabled && !onGateSend && !onWorkflowLaunch && !hasAskUserQuestion && (
                     <ComposerSuggestion

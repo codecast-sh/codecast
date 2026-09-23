@@ -209,7 +209,6 @@ const Palette = lazy(() => import("@/app/palette/page"));
 // People window
 const People = lazy(() => import("@/app/people/page"));
 const CallPanel = lazy(() => import("@/app/call-panel/page"));
-const Faces = lazy(() => import("@/app/faces/page"));
 const MeetingOffer = lazy(() => import("@/app/meeting-offer/page"));
 const CallRing = lazy(() => import("@/app/call-ring/page"));
 
@@ -231,6 +230,7 @@ const SettingsTeamJoin = lazy(() => import("@/app/settings/team/join/page"));
 const SettingsNotifications = lazy(() => import("@/app/settings/notifications/page"));
 const SettingsIntegrations = lazy(() => import("@/app/settings/integrations/page"));
 const SettingsDesktop = lazy(() => import("@/app/settings/desktop/page"));
+const SettingsApps = lazy(() => import("@/app/settings/apps/page"));
 
 /**
  * The single source of truth. Order is grouped to mirror App.tsx for reviewability; the
@@ -408,11 +408,6 @@ export const ROUTES: RouteEntry[] = [
   //    "call-panel" into the in-shell set — the opposite of what it is.
   { path: "call-panel", component: cast(CallPanel), layout: "callPanel" },
 
-  // -- The faces overlay (TransparentWindowLayout): the team as circles
-  //    floating over the work when there is no call. Same layout family as
-  //    the call panel's circle sizes, for the same reason: glass, not a page.
-  { path: "faces", component: cast(Faces), layout: "palette" },
-
   // -- The meeting-offer window (TransparentWindowLayout): the record-this-
   //    meeting card as a small chromeless corner window --
   { path: "meeting-offer", component: cast(MeetingOffer), layout: "palette" },
@@ -442,6 +437,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "settings/integrations", component: cast(SettingsIntegrations), layout: "settings" },
   { path: "settings/integrations/github-app", component: cast(SettingsIntegrations), layout: "settings" },
   { path: "settings/desktop", component: cast(SettingsDesktop), layout: "settings" },
+  { path: "settings/apps", component: cast(SettingsApps), layout: "settings" },
 
   // -- Public profiles (anonymous, guest-viewable, at the ROOT: /<handle>) --
   // MUST stay last: React Router ranks static segments above this dynamic one, so

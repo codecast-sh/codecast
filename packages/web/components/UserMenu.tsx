@@ -11,11 +11,9 @@ import { TopbarButton } from "./TopbarButton";
 import {
   Settings, Keyboard, SlidersHorizontal, CircleUser, History, Rss, ListChecks,
   FileText, FolderGit2, CalendarClock, ArrowLeftRight, ScrollText, Globe, LogOut,
-  BookOpen, ExternalLink, Radio, Newspaper, Home, Monitor,
+  BookOpen, ExternalLink, Radio, Newspaper, Home, MonitorSmartphone,
   Blocks,
 } from "lucide-react";
-import { isDesktopShell } from "../lib/desktop";
-import { track } from "../lib/analytics";
 import type { LucideIcon } from "lucide-react";
 
 function MenuItem({
@@ -227,19 +225,14 @@ export function UserMenu() {
               onClick={() => { setOpen(false); window.open("/", "_blank", "noopener"); }}
               trailing={<ExternalLink className="w-3.5 h-3.5 text-sol-text-dim" />}
             />
-            {/* Inside the desktop app the download is moot; Settings > Desktop owns updates. */}
-            {!isDesktopShell() && (
-              <MenuItem
-                icon={Monitor}
-                label="Desktop app"
-                onClick={() => {
-                  setOpen(false);
-                  track("desktop_download_clicked", { location: "user_menu" });
-                  window.open("/download", "_blank", "noopener");
-                }}
-                trailing={<ExternalLink className="w-3.5 h-3.5 text-sol-text-dim" />}
-              />
-            )}
+            {/* Settings > Apps: the desktop and iOS apps, with the one that
+                fits this device first. Shown inside the desktop app too, where
+                the iOS app is still worth offering. */}
+            <MenuItem
+              icon={MonitorSmartphone}
+              label="Desktop & iOS apps"
+              onClick={() => { setOpen(false); useInboxStore.getState().openSettingsModal("apps"); }}
+            />
           </div>
 
           <div className="border-t border-sol-border py-1">

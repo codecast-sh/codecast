@@ -1,7 +1,8 @@
 import { useCallsAvailable } from "../../lib/teamFeatures";
-import { useState } from "react";
-import { useWalkieStatus } from "../../hooks/useWalkie";
-import { walkieHoldsRoom } from "../../lib/calls/walkie";
+import { useCallback, useState } from "react";
+import type { FaceRow } from "../../lib/faces/faceRow";
+import { useFaceRowSelect } from "../../hooks/useFaceRow";
+import { roomHeldAsBurst } from "../../lib/faces/faceRow";
 import { Headphones } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { joinCall, startHuddle } from "../../lib/calls/actions";
@@ -80,19 +81,17 @@ export function OccupancyChip({
     (st: any) => st.callOccupancy[roomKey],
     (st: any) => st.call.roomKey === roomKey,
   ]);
-  // The same question CallDock asks, and for the same reason: a burst joins a
-  // room exactly the way a huddle does, so without this the DM header put a
-  // violet "in huddle" chip on a three-second voice message — six inches from
-  // a walkie strip already saying "Live to Jordan Lee". Two surfaces, two
-  // names, one thing. The strip is the one that knows what is happening, so
-  // this stands down while the walkie holds the room, and comes back the moment
-  // the room becomes a real huddle — which the live room's own mode says, so
-  // there is one answer here and in the dock rather than two.
-  const walkie = useWalkieStatus();
+  // A burst joins a room exactly the way a huddle does, so without this the DM
+  // header put a violet "in huddle" chip on a three-second voice message, six
+  // inches from the face row already showing who is talking. The row is the
+  // one that knows what is happening (lib/faces/faceRow roomHeldAsBurst), so
+  // this stands down while the room is held as a burst and comes back the
+  // moment the row's links say it became a call.
+  const burst = useFaceRowSelect(useCallback((row: FaceRow) => roomHeldAsBurst(roomKey, row), [roomKey]));
   const roster: any[] = s.callOccupancy[roomKey] || [];
   const inThisRoom = s.call.roomKey === roomKey;
   if (roster.length === 0) return null;
-  if (inThisRoom && walkieHoldsRoom(walkie, roomKey)) return null;
+  if (burst) return null;
 
   return (
     <button

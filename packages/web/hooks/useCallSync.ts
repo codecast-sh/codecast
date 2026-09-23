@@ -5,7 +5,7 @@ import { useInboxStore, useTrackedStore } from "../store/inboxStore";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useConvexSync } from "./useConvexSync";
 import { autoScribe, bindConvex, isDeliberateRoom } from "../lib/calls/callManager";
-import { getScribeStatus, stopScribe, subscribeScribe } from "../lib/calls/transcription";
+import { getScribeStatus, setScribeFeedTargets, stopScribe, subscribeScribe } from "../lib/calls/transcription";
 import { decideAutoScribe } from "../lib/calls/autoScribe";
 import { channelRoomKey, sessionRoomKey } from "@codecast/shared/contracts";
 import { channelRowRoomKey } from "../lib/chatViews";
@@ -114,6 +114,16 @@ export function useCallSync(): void {
     api.transcripts.getLive,
     enabled && seatedRoomKey ? { room_key: seatedRoomKey, tail: 1 } : "skip",
   );
+  // The agents the transcript feeds, handed to the scribe so its flush
+  // cadence can wait on their turns (scribeEngine WORKING_HOLD_MS). Routes
+  // are the server's list, so an agent anyone added mid-call counts.
+  const feedTargetsSig = ((liveTranscript as any)?.routes ?? [])
+    .filter((r: any) => r.kind === "session")
+    .map((r: any) => String(r.target))
+    .join("|");
+  useWatchEffect(() => {
+    setScribeFeedTargets(feedTargetsSig ? feedTargetsSig.split("|") : []);
+  }, [feedTargetsSig]);
   const scribeActive = useSyncExternalStore(subscribeScribe, () => getScribeStatus().active, () => false);
   const scribeStartedAt = useSyncExternalStore(subscribeScribe, () => getScribeStatus().startedAt, () => null);
   const roster = useTrackedStore([

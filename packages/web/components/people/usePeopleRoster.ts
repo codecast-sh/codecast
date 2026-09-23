@@ -13,7 +13,8 @@ import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useLiveRooms, type LiveRoomRow } from "../../hooks/useLiveRooms";
 import { useChatRail } from "../../hooks/useChatSync";
-import { useWalkieStatus } from "../../hooks/useWalkie";
+import { useFaceRow, type FaceRow } from "../../hooks/useFaceRow";
+import { useWalkieFaces } from "../presence/useFaceKey";
 import { useFleetSummaries } from "../presence/useMemberActivity";
 import { type FleetSummary } from "../presence/memberPresence";
 import {
@@ -42,8 +43,9 @@ export interface PeopleRosterData {
   dmFor: Map<string, DmBadge>;
   /** The live rooms themselves, for surfaces that offer the join. */
   rooms: LiveRoomRow[];
-  /** Whose voice is coming out of this machine right now, if anyone's. */
-  talkingId: string;
+  /** The face row (lib/faces/faceRow): every shape reads a person's state,
+   *  talking and in a call off it through the row's selectors. */
+  row: FaceRow;
   /** The room this client's own key is open into, if any. */
   sendingRoomKey: string | null;
   /** The active workspace pointer names a team the viewer has left. */
@@ -74,7 +76,8 @@ export function usePeopleRoster(): PeopleRosterData {
   const fleets = useFleetSummaries();
   const rooms = useLiveRooms();
   const rail = useChatRail();
-  const walkie = useWalkieStatus();
+  const row = useFaceRow();
+  const walkie = useWalkieFaces();
 
   // One walk of the roster: the viewer's own row out, everyone else in.
   const { members, me } = useMemo(() => {
@@ -96,8 +99,7 @@ export function usePeopleRoster(): PeopleRosterData {
     isStrayWorkspace(st.teams, st.clientState?.ui?.active_team_id),
   );
 
-  const talkingId = String(walkie.incoming?.fromUserId ?? "");
-  const sendingRoomKey = walkie.sending?.roomKey ?? null;
+  const sendingRoomKey = walkie.sendingRoomKey || null;
 
   // ONE object, stable between wakes. Every field above is a memoized ref or a
   // scalar, so this memo only produces a new ref when something a shape draws
@@ -113,11 +115,11 @@ export function usePeopleRoster(): PeopleRosterData {
       roomFor,
       dmFor,
       rooms,
-      talkingId,
+      row,
       sendingRoomKey,
       strayWorkspace,
       huddles: rooms.length,
     }),
-    [now, viewerId, members, me, fleets, roomFor, dmFor, rooms, talkingId, sendingRoomKey, strayWorkspace],
+    [now, viewerId, members, me, fleets, roomFor, dmFor, rooms, row, sendingRoomKey, strayWorkspace],
   );
 }

@@ -33,6 +33,7 @@ export function TeamCrest({ icon, color, size = "md", tone = "soft", className }
   // the small zoom, keyed on the icon alone.
   return (
     <div
+      data-team-crest
       className={cn(
         "relative flex items-center justify-center shrink-0 overflow-hidden",
         s.tile,

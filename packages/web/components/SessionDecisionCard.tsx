@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { usePendingPermissions } from "../hooks/useSyncPendingPermissions";
 import { isUsageLimitDialog } from "@codecast/shared/contracts";
 import { PermissionStack, PERMISSION_SKIP_TOOLS } from "./PermissionCard";
@@ -19,7 +19,6 @@ import { MarkdownRenderer } from "./tools/MarkdownRenderer";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { hasOpenModal } from "../shortcuts";
 import { PublishedPageEmbed } from "./PublishedPageEmbed";
-import { CollapsibleBody } from "./CollapsibleBody";
 import { ChevronUp, ChevronDown, ArrowUpRight } from "lucide-react";
 import "./decisions/decisions.css";
 
@@ -27,24 +26,28 @@ import { useWatchEffect } from "../hooks/useWatchEffect";
 import { DecisionProposalOrigin } from "./org/ProposalAuthorPill";
 // The decision card lives INSIDE the conversation — it is how a session asks
 // its human something, so it renders wherever the session renders (inbox,
-// queue, a deep link). Its size follows what the ask means for the thread:
+// queue, a deep link). It has two sizes:
 //
-//   blocking  The session is parked; nothing below the ask is live. The card
-//             owns the pane ("full") and the thread is one ArrowUp away.
-//   advisory  The agent declared a default and kept working, so the thread is
-//             the main event. The card docks above the composer ("dock"), at
-//             most half the pane, and folds to one line ("line") out of the way.
+//   full  The sheet. The card owns the pane and reads like the decision page:
+//         one row of chrome, then the question, the reasoning, the options
+//         and the keys in ONE flow, scrolled together. Nothing is pinned, so
+//         a long context never squeezes the options and tall options never
+//         squeeze the context. Where the pane is wide enough the reasoning
+//         and the options sit side by side and the options stick while the
+//         reasoning scrolls; in one column a strip at the foot names the
+//         options while they are below the fold and jumps to them.
+//   line  The fold: the question and its status in two rows above the
+//         composer, the thread the main event. Opening it is the sheet.
 //
-// Every size that offers the options also shows the reasoning. A question
-// and its option labels are not enough to decide on; the context the asker
-// wrote is what the answer rests on. Full reads it whole, in the document
-// page's type. The dock shows as much as the half pane leaves after the
-// options, faded where it runs out, and opens the rest in full: the dock is
-// the glance, full is the read. The line shows the question only, and says so.
+// A blocking ask parks the session, so it opens as the sheet. The queue is a
+// place to decide, so everything there opens as the sheet. An advisory ask in
+// a plain session view starts folded: the agent declared a default and kept
+// working, and the thread is what the reader came for.
 //
-// Both sizes set their text in the conversation column (conv-col), the
-// measure the messages and the composer use, so a wide pane does not stretch
-// a paragraph across the whole screen.
+// The sheet sets its text in the conversation column (conv-col), the measure
+// the messages and the composer use, so a wide pane does not stretch a
+// paragraph across the whole screen; two columns widen that only to seat the
+// options beside it.
 //
 // The queue (/questions) renders the same conversation pane and only adds a
 // stepper through DecisionStepperContext (hooks/useDecisionQueue): position,
@@ -59,7 +62,7 @@ import { DecisionProposalOrigin } from "./org/ProposalAuthorPill";
 // row's permission_blocked status is the ONLY evidence, and any "nothing
 // pending, must be resolved" inference on mount destroys a real question.
 
-type Size = "full" | "dock" | "line";
+type Size = "full" | "line";
 
 export function SessionDecisionCard({ item, stepper }: { item: QueueItem; stepper: DecisionStepper | null }) {
   const answerDecision = useInboxStore((s) => s.answerDecision);
@@ -68,7 +71,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
   const resolveSessionQuestion = useInboxStore((s) => s.resolveSessionQuestion);
   const navigateToSession = useInboxStore((s) => s.navigateToSession);
 
-  const [size, setSize] = useState<Size>(() => (item.blocking ? "full" : "dock"));
+  const [size, setSize] = useState<Size>(() => (item.blocking || stepper ? "full" : "line"));
   const full = size === "full";
   const [otherOpen, setOtherOpen] = useState(false);
   const [otherText, setOtherText] = useState("");
@@ -76,19 +79,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
   const bodyRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
 
-  // The dock is as tall as its content, capped at half the pane so nine
-  // options or a long free-text box never turn it back into the sheet.
-  const [maxDock, setMaxDock] = useState<number | undefined>(undefined);
-  useLayoutEffect(() => {
-    const root = rootRef.current;
-    const pane = root?.parentElement;
-    if (!pane) return;
-    const measure = () => setMaxDock(Math.floor(pane.clientHeight * 0.5));
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(pane);
-    return () => ro.disconnect();
-  }, []);
+  const optionsRef = useRef<HTMLDivElement>(null);
 
   // While the card owns the pane, the rest of the conversation (header, feed,
   // composer) is inert: the composer takes focus on mount, and every card key
@@ -158,7 +149,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
     // The card may be covering the thread (full size). Hand the pane back
     // so the jump is visible. Do not leave the queue for the list — the
     // jump already opened the session at the ask.
-    if (!stepper) setSize((s) => (s === "full" ? "dock" : s));
+    if (!stepper) setSize("line");
   }, [canJumpToAsk, jumpToDecisionAsk, stepper]);
 
   // The session title is WHO is asking, never WHAT. A poll-sourced card
@@ -233,8 +224,8 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
     onExit?.();
   }, [navigateToSession, item.conversationId, onExit]);
 
-  const shrink = useCallback(() => setSize((s) => (s === "full" ? "dock" : "line")), []);
-  const grow = useCallback(() => setSize((s) => (s === "line" ? "dock" : "full")), []);
+  const shrink = useCallback(() => setSize("line"), []);
+  const grow = useCallback(() => setSize("full"), []);
 
   const onSkip = stepper?.onSkip;
   useWatchEffect(() => {
@@ -251,7 +242,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
         sheet: full ? "full" : "peek",
       });
       if (!action) return;
-      // Outside the queue, a docked card must not claim the thread's keys:
+      // Outside the queue, a folded card must not claim the thread's keys:
       // j/k/digits belong to the conversation until the card owns the pane.
       if (!stepper && !full && action.kind !== "commit-free-text" && action.kind !== "close-free-text") {
         if (action.kind !== "full") return;

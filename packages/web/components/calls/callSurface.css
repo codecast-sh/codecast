@@ -1,73 +1,29 @@
-/* The one node the strip, the pill and the dock live in.
- *
- * It draws nothing. Every visible edge belongs to the content inside it — the
- * strip's own card, the dock's own card — so the morph moves a box and never
- * stretches a border or a corner radius.
+/* The call stage's own sheet. The corner root that once held the walkie
+ * strip, the pill and the floating dock retired with them (pl-756): every
+ * small call surface is the face row in the header now, and the stage is
+ * the one shape left here.
  */
 
-.call-surface-root {
-  position: fixed;
-  z-index: 150;
-  /* The root is a placement, not a surface: only what the content draws can be
-     clicked, and the empty stage-sized box must never swallow the stage. */
-  pointer-events: none;
-  user-select: none;
+/* ── The stage as a container ─────────────────────────────────────────────
+ * The stage header holds four groups on one 44px line and none of its
+ * buttons can shrink, so a narrow window (the desktop window's minimum is
+ * 520px) used to paint the room's group under the view control. The stage
+ * root is a container; as it narrows the words beside the icons go, the
+ * icons stay, and every button keeps its title. The room's title drops its
+ * "huddle · " prefix at the same step, so the room's name is what survives
+ * truncation. `.rt-seg-word` is the word on the view control's positions
+ * (RoomThread.tsx, SegmentedRadio). */
+.call-stage {
+  container: call-stage / inline-size;
 }
-
-/* THE STRIP'S OWN BOX, which used to be `.walkie-strip-host` in walkie.css.
- * 420px is the width the strip was designed at: a face big enough to
- * recognise, two lines of what is being said, and two answers that can be hit
- * without aiming. A phone, or a narrow window, still gets the whole card and no
- * horizontal scrollbar under it. */
-.call-surface-root[data-shape="walkie"] {
-  width: 420px;
-  max-width: calc(100vw - 2rem);
+@container call-stage (width < 760px) {
+  .stage-word,
+  .rt-seg-word {
+    display: none;
+  }
 }
-
-/* The pill hugs its own contents, and stops before it becomes a strip. */
-.call-surface-root[data-shape="pill"] {
-  max-width: 420px;
-}
-
-/* While the dock is growing into the stage it has to be ON TOP of the stage —
-   the stage is already there underneath, and what the eye should see is the
-   card opening into it rather than a card fading behind it. */
-.call-surface-root[data-morphing] {
-  z-index: 210;
-}
-
-.call-surface-layer {
-  pointer-events: auto;
-  height: 100%;
-  /* The corner the surfaces share: every scale in the morph grows out of it. */
-  transform-origin: 100% 100%;
-}
-
-/* The surface that is leaving, for as long as it takes to fade. Out of the
-   layout and out of reach: it is a picture of what was there, and clicking it
-   would be clicking a thing that has already gone. */
-.call-surface-leaving {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  pointer-events: none;
-}
-
-/* The grip that resizes the floating dock. The corner is pinned, so the box
-   grows up and to the left from the only edge that can move. */
-.call-surface-grip {
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 14px;
-  height: 14px;
-  cursor: nwse-resize;
-  border-top: 2px solid transparent;
-  border-left: 2px solid transparent;
-  border-top-left-radius: 12px;
-  transition: border-color 120ms;
-}
-
-.call-surface-grip:hover {
-  border-color: color-mix(in srgb, var(--sol-text) 35%, transparent);
+@container call-stage (width < 640px) {
+  .stage-word-tight {
+    display: none;
+  }
 }

@@ -32,7 +32,7 @@ import { TriageBar } from "./triage/TriageBar";
 import { TriageNuxGate } from "./triage/TriageNux";
 import { NewSnippetsBanner } from "./NewSnippetsBanner";
 import { OrgIntroAnywhere } from "./org/OrgIntroAnywhere";
-import { DesktopAppBanner } from "./DesktopAppBanner";
+import { NativeAppBanner } from "./NativeAppBanner";
 import { CliOfflineBanner } from "./CliOfflineBanner";
 import { NotificationNudgeBanner } from "./NotificationNudgeBanner";
 import { TeamSharingNudgeBanner } from "./TeamSharingNudgeBanner";
@@ -1291,7 +1291,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         <StatusNoticeStack />
         <ConnectionBanner />
         <StorageHealthBanner />
-        <DesktopAppBanner />
+        <NativeAppBanner />
         <SetupPromptBanner />
         <NewSnippetsBanner />
         <OrgIntroAnywhere />
