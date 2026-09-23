@@ -37,7 +37,7 @@ export default function ConversationDiffPage() {
     return (
       <AuthGuard>
         <DashboardLayout>
-          <div className="h-[calc(100vh-56px)] w-full flex items-center justify-center">
+          <div className="h-full w-full flex items-center justify-center">
             <div className="text-muted-foreground">Loading conversation...</div>
           </div>
         </DashboardLayout>

@@ -114,7 +114,7 @@ export default function RepositoriesPage() {
   return (
     <AuthGuard>
       <DashboardLayout>
-        <div className="repo-page h-[calc(100vh-56px)] flex flex-col">
+        <div className="repo-page h-full flex flex-col">
           <header ref={titlebarRef} className="repo-band border-b border-sol-border/60 px-4 py-3 shrink-0">
             <h1 className="repo-rise font-serif text-[20px] leading-none text-sol-text">Repositories</h1>
             <p className="repo-rise mt-1.5 text-[12px] text-sol-text-muted" style={{ ["--d" as string]: "60ms" }}>

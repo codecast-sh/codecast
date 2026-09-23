@@ -75,7 +75,7 @@ export function RepoPageShell({ repository, children }: { repository: string; ch
   return (
     <AuthGuard>
       <DashboardLayout>
-        <RepoTransportProvider mode="convex"><div className="h-[calc(100vh-56px)]">
+        <RepoTransportProvider mode="convex"><div className="h-full">
           {access.allowed === false ? <RepoUnavailable signedIn={signedIn} repository={repository} /> : children}
         </div></RepoTransportProvider>
       </DashboardLayout>
