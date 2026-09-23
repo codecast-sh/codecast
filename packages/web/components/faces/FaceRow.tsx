@@ -275,12 +275,9 @@ function FaceSeat({
         </span>
       )}
       {entry.ask > 0 && <span className="face-ask" aria-label={`${entry.ask} waiting on you`} />}
-      {/* "hey he joined", under the face it happened to, for the seconds the model says so. */}
-      {entry.state === "joining" && (
-        <span className="people-face-joined" role="status">
-          joined
-        </span>
-      )}
+      {/* No "joined" label under the chin: a face is `joining` only in my own
+          room, where the card under the row is the joined notice and says so
+          in words; a label there sat under the card that covered it. */}
       {/* The name under the chin, the floating circles' own hover. In the
           bar the card carries the name, so nothing hangs under a face there
           that a card could stack on. */}

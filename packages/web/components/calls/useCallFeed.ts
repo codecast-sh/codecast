@@ -10,7 +10,7 @@ import {
 } from "@codecast/shared/contracts";
 import { AVATAR_KEYS } from "@codecast/shared/contracts/orgAvatars";
 import { characterNameFor, defaultCharacterFor, type Character } from "@codecast/shared/contracts/sessionCharacter";
-import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
+import { SessionCreatePendingError, useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { startTranscribing } from "../../lib/calls/callManager";
 import { agentRoomName, findSessionRow } from "../../lib/calls/findSessionRow";
 import { characterFor, identitySig } from "../../lib/sessionIdentity";
@@ -117,6 +117,30 @@ function latestProjectPath(): { projectPath?: string; gitRoot?: string } {
 // the session will wear, decided from the stub id), and `onReady` runs with
 // the real id before the message is sent, so a write the briefing promises
 // (that character) lands before the agent reads it.
+/** Told to a session spawned for a room when no words will reach it. */
+const DISREGARD_BRIEFING =
+  "The huddle feed could not be attached, so no transcript will arrive. Disregard the briefing above.";
+
+// The store gives up on a create after its own window (a 30 s race and a 15 s
+// poll) with SessionCreatePendingError, but the durable outbox still owns the
+// create and the session lands later. A feed spawned for a room must wait for
+// that landing, or the session that lands holds a briefing promising words
+// and hears nothing: keep asking while the create is merely parked and the
+// stub still stands, up to five minutes.
+const SPAWN_WAIT_MS = 5 * 60_000;
+async function awaitSpawn(stubId: string): Promise<string> {
+  const store = useInboxStore.getState() as any;
+  const deadline = Date.now() + SPAWN_WAIT_MS;
+  for (;;) {
+    try {
+      return await store.awaitConvexId(stubId);
+    } catch (e) {
+      const parked = e instanceof SessionCreatePendingError && (store.sessions[stubId] || store.conversations[stubId]);
+      if (!parked || Date.now() >= deadline) throw e;
+    }
+  }
+}
+
 function spawnSessionWithMessage(
   body: string | ((stubId: string) => string),
   onReady?: (convexId: string) => void,
@@ -138,7 +162,7 @@ function spawnSessionWithMessage(
   const text = typeof body === "function" ? body(stubId) : body;
   const clientId = store.addOptimisticMessage(stubId, text);
   store.openSidePanel(stubId);
-  return (store.awaitConvexId(stubId) as Promise<string>).then((convexId: string) => {
+  return awaitSpawn(stubId).then((convexId: string) => {
     onReady?.(convexId);
     store.sendMessage(convexId, text, undefined, clientId);
     return convexId;
@@ -249,15 +273,27 @@ export function useAddLiveFeed(opts: {
         // first. The stub's bubble shows the stub's own default; the sent
         // message names the real one.
         let character: Character | null = null;
-        const convexId = await spawnSessionWithMessage(
-          (stubId) => {
-            character = characterForRoom(stubId, charactersInRoom(routes ?? []));
-            return huddleFeedBriefing({ name: character.name, label });
-          },
-          (id) => {
-            if (character) st.setSessionCharacter(id, { avatar: character.avatar, name: character.name });
-          },
-        );
+        let stub: string | null = null;
+        let convexId: string;
+        try {
+          convexId = await spawnSessionWithMessage(
+            (stubId) => {
+              stub = stubId;
+              character = characterForRoom(stubId, charactersInRoom(routes ?? []));
+              return huddleFeedBriefing({ name: character.name, label });
+            },
+            (id) => {
+              if (character) st.setSessionCharacter(id, { avatar: character.avatar, name: character.name });
+            },
+          );
+        } catch (err) {
+          // Given up on the wait, but the session may have landed by now
+          // (the create parked, then rekeyed): tell it no words are coming,
+          // so no session is left waiting on a briefing.
+          const landed = stub ? st.getConvexId(stub) : undefined;
+          if (landed) st.sendMessage(landed, DISREGARD_BRIEFING);
+          throw err;
+        }
         route = { kind: "session", target: convexId };
       }
       if (!route) return;
@@ -283,10 +319,15 @@ export function useAddLiveFeed(opts: {
         if (!room) {
           // A recording has no room to fall back into: its transcript IS the
           // run, so when that ended there is nothing left to point words at.
+          // A viewer on the huddle's stage whose media room is not connected
+          // yet (or failed) is already in the huddle: "join" is not the ask.
+          const here = useInboxStore.getState().call?.roomKey === roomKey;
           throw new Error(
             isRecRoomKey(roomKey)
               ? "That recording has ended. Its words are already saved."
-              : "Join the huddle to start its transcription",
+              : here
+                ? "The huddle's audio is still connecting. Try again in a moment."
+                : "Join the huddle to start its transcription",
           );
         }
         if (!(await startTranscribing(roomKey, [{ ...route, mode: "live" }]))) {
@@ -300,10 +341,7 @@ export function useAddLiveFeed(opts: {
         // refusal must not leave that session waiting forever for words that
         // will never come.
         if (target.kind === "new-session") {
-          (useInboxStore.getState() as any).sendMessage(
-            route.target,
-            "The huddle feed could not be attached, so no transcript will arrive. Disregard the briefing above.",
-          );
+          (useInboxStore.getState() as any).sendMessage(route.target, DISREGARD_BRIEFING);
         }
         throw err;
       }
