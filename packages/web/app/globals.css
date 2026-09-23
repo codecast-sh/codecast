@@ -145,6 +145,101 @@
 }
 [data-sv-convhead] [data-squeeze~="7"] .cc-panel__title { min-width: 0; }
 
+/* The header's grammar: text for facts, pills for what is alive right now,
+   icons for actions.
+
+   [data-cc-facts] holds what the session IS and is FOR: agent and model, the
+   code position, the task, the plan, a workflow run, age and size. The
+   components inside are the same pills the row used to show; here their
+   borders and tints are stripped so the strip reads as one line of dim text
+   with dots between, and only a status glyph keeps its colour. Each fact is
+   still a hover target and still opens what it opened before. */
+[data-sv-convhead] [data-cc-facts] {
+  gap: 0;
+  font-size: 10px;
+  color: var(--sol-text-dim);
+  /* The strip yields before anything else on the row: it shrinks and its
+     tail fades out, item by item from the least useful (age and size, last)
+     to the most (agent and model, first). The squeeze levels take over only
+     once it is down to its floor; level 6 removes it whole, after the title
+     has already yielded at level 5. */
+  flex: 0 1 auto;
+  min-width: 5.5rem;
+  overflow: hidden;
+  padding-right: 14px;
+  mask-image: linear-gradient(to right, #000 calc(100% - 14px), transparent);
+}
+[data-sv-convhead] [data-cc-facts] > * { flex: 0 0 auto; }
+[data-sv-convhead] [data-cc-facts] > * + *::before {
+  content: "·";
+  margin: 0 5px 0 4px;
+  color: color-mix(in srgb, var(--sol-text-dim) 55%, transparent);
+  flex: 0 0 auto;
+}
+[data-sv-convhead] [data-cc-facts] .rounded-full,
+[data-sv-convhead] [data-cc-facts] .rounded {
+  border-color: transparent;
+  background: transparent;
+  border-radius: 5px;
+  color: var(--sol-text-dim);
+  padding-left: 4px;
+  padding-right: 4px;
+}
+[data-sv-convhead] [data-cc-facts] .rounded-full:hover,
+[data-sv-convhead] [data-cc-facts] .rounded:hover {
+  background: color-mix(in srgb, var(--sol-text) 6%, transparent);
+  color: var(--sol-text-secondary);
+}
+[data-sv-convhead] [data-cc-facts] .divide-x > * {
+  border-color: color-mix(in srgb, var(--sol-text-dim) 30%, transparent);
+}
+
+/* [data-cc-runner] is ONE pill: the machine and its owners, the daemon
+   warning (present only while it blocks delivery) and the tmux terminal,
+   as segments of a single ring. The group draws the border and the radius;
+   every segment inside gives up its own ring, glow and fixed height and
+   stretches to the tallest one, so the seams meet and nothing sits a pixel
+   low. A segment keeps its own tint (blue for the machine, green for a live
+   pane, orange for a stalled daemon) and its own click. */
+[data-sv-convhead] [data-cc-runner] {
+  gap: 0;
+  align-items: stretch;
+  border-radius: 9999px;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 45%, transparent);
+  overflow: hidden;
+  font-size: 10px;
+}
+[data-sv-convhead] [data-cc-runner]:empty { display: none; }
+[data-sv-convhead] [data-cc-runner] > * { align-items: stretch; }
+[data-sv-convhead] [data-cc-runner] > :empty { display: none; }
+[data-sv-convhead] [data-cc-runner] > * + * {
+  border-left: 1px solid color-mix(in srgb, var(--sol-border) 45%, transparent);
+}
+[data-sv-convhead] [data-cc-runner] [data-runner-device],
+[data-sv-convhead] [data-cc-runner] [data-daemon-pill],
+[data-sv-convhead] [data-cc-runner] [data-tmux-pill] {
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  height: auto !important;
+  align-self: stretch;
+  align-items: stretch;
+}
+[data-sv-convhead] [data-cc-runner] [data-daemon-pill] {
+  padding: 2px 8px;
+  align-items: center;
+}
+[data-sv-convhead] [data-cc-runner] [data-daemon-pill] > span {
+  font-size: 10px;
+  font-weight: 500;
+}
+[data-sv-convhead] [data-cc-runner] [data-tmux-pill] > * + * {
+  border-left-color: color-mix(in srgb, var(--sol-border) 45%, transparent) !important;
+}
+/* The machine segment already names the machine; the tmux segment keeps
+   only its glyph and dot. */
+[data-sv-convhead] [data-cc-runner]:has([data-runner-device]) [data-tmux-pill] .cq-sq2 { display: none; }
+
 /* Status tabs swap a multi-pill segmented control for a single compact dropdown
    once the header is too tight to show every pill on one row alongside the
    toolbar. Measured for the Tasks header (the widest consumer: ~52 title + ~452
@@ -620,6 +715,18 @@ html, body {
   body {
     background-color: hsl(var(--background));
     color: hsl(var(--foreground));
+  }
+  /* No ligatures where a person types. JetBrains Mono draws pairs like ??
+     and !! as contextual alternates: the first character becomes an empty
+     spacer glyph and the pair is drawn in the last cell. Chrome reshapes a
+     field one keystroke at a time and can leave the spacers without their
+     pair, so "?????" typed by key painted as blanks and two marks while the
+     value held all five (2026-09-23). Pasted text shaped in one pass was
+     fine, which is why it looked like a lost keystroke. A field must show
+     exactly the characters it holds, so contextual and standard ligatures
+     are off for every editable surface. */
+  input, textarea, [contenteditable="true"] {
+    font-variant-ligatures: none;
   }
 }
 
@@ -1700,8 +1807,9 @@ pre[class*="language-"] {
 }
 /* A one line row is a line of text, not a card. A box around every line makes
    the list read as a stack of rectangles, so the row takes the rail's own
-   ground and shows no edge. A soft rounded fill marks the row under the
-   pointer and the open one, and nothing else does. Both styles paint a row
+   ground and shows no edge. A fill that runs edge to edge, like the section
+   headers above it, marks the row under the pointer and the open one, and
+   nothing else does. Both styles paint a row
    from --sv-card-bg and aim the pin and toolbar fades at it, so the row sets
    that one variable and the fill and the fades move together. :root lifts
    these over the Classic and Minimal card rules wherever they sit in this
@@ -1716,16 +1824,10 @@ pre[class*="language-"] {
   --sv-card-active-bg: color-mix(in srgb, var(--sol-text) 9%, var(--sol-bg-alt));
 }
 :root .inbox-compact [data-sv-rail] [data-session-id] {
-  margin: 1px 6px;
-  border-color: transparent !important;
-  border-radius: 8px;
-  background: var(--sv-card-bg) !important;
-}
-/* Outside simple view the rail keeps full width rows, so the fill runs edge to
-   edge like the section headers above it. */
-:root .inbox-compact:not(.simple-view) [data-sv-rail] [data-session-id] {
   margin: 0;
+  border-color: transparent !important;
   border-radius: 0;
+  background: var(--sv-card-bg) !important;
 }
 :root .inbox-compact [data-sv-rail] [data-session-id]:hover {
   --sv-card-bg: var(--sv-row-hover-bg);
@@ -1845,6 +1947,19 @@ pre[class*="language-"] {
   top: 50%;
   transform: translateY(-50%);
   background: none !important;
+}
+/* A child row's badge (a trigger's countdown, "running") reads as quiet text
+   beside the line's time, not a colored box. The red states keep their color:
+   a failed or overdue trigger is the one badge the person must see. */
+.inbox-compact [data-sv-rail] [data-sv-wake-badge] {
+  min-width: 0;
+  padding: 0;
+  border-color: transparent;
+  background: none;
+  font-weight: 400;
+}
+.inbox-compact [data-sv-rail] [data-sv-wake-badge]:not([data-sv-wake-badge="alert"]) {
+  color: var(--sol-text-dim);
 }
 /* The thumbnail is taller than the line. */
 .inbox-compact [data-sv-rail] [data-session-id] button.cursor-zoom-in {
@@ -4715,6 +4830,12 @@ pre[class*="language-"] {
   pointer-events: none;
 }
 .minimal-style [data-sv-rail] div:has(> [data-session-id]):last-child::after {
+  display: none;
+}
+/* A filled row (open or under the pointer) is its own separation, and a
+   hairline across either edge of the fill cuts it. */
+.minimal-style [data-sv-rail] div:has(> [data-session-id]:is(:hover, [data-active="true"]))::after,
+.minimal-style [data-sv-rail] div:has(> [data-session-id]):has(+ div > [data-session-id]:is(:hover, [data-active="true"]))::after {
   display: none;
 }
 .minimal-style [data-sv-rail] [data-session-id] > [role="button"] {

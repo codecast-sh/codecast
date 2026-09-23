@@ -1,22 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { hashToken, verifyApiToken, deviceBindingAllows } from "./apiTokens";
+import { listDevices } from "./devices";
+import { DEVICE_BOUND_TOKEN_PREFIX, presentToken } from "@platform/auth/convex";
 
-// A token today is bearer authority for a whole account: lift the file off a
-// laptop and it works from anywhere. Binding closes that without a migration —
-// the field is optional, so every token already in the wild keeps working, and
-// only a token that names a device is checked against the device presenting it.
-//
-// The tests below drive the REQUEST PATH, not the two halves separately. That
-// distinction is the point: a bound token has to clear the gate at the edge AND
-// the handler's own authentication, and those two halves see different bodies
-// because the edge strips device_id on the way through. Asserting each half
-// alone passed while the composition rejected every bound token.
+// Codecast's twin of the platform suite (@platform/auth apiTokens.deviceBinding
+// .test.ts owns the rule and the mint). This one drives the functions THIS
+// deployment registers: the internal query cliRoute runs at the HTTP edge, and
+// a public query a Convex client can call directly with api_token and nothing
+// else. Both doors must refuse a bound token that does not carry its device.
 
 const USER = "u_owner" as any;
-const BOUND = "bound-token";
+const BOUND = `${DEVICE_BOUND_TOKEN_PREFIX}bound-secret`;
 const LEGACY = "legacy-token";
-const EXPIRED = "expired-token";
 const THIS_DEVICE = "device-aaa";
 const OTHER_DEVICE = "device-bbb";
 
@@ -24,146 +20,84 @@ async function tables() {
   return {
     users: [{ _id: USER, name: "Owner" }],
     api_tokens: [
-      {
-        _id: "tok_bound",
-        user_id: USER,
-        token_hash: await hashToken(BOUND),
-        name: "macbook",
-        created_at: 1,
-        last_used_at: 1,
-        device_id: THIS_DEVICE,
-      },
-      {
-        // No device_id: this is the shape of every token minted before the
-        // field existed, and the reason no backfill is needed.
-        _id: "tok_legacy",
-        user_id: USER,
-        token_hash: await hashToken(LEGACY),
-        name: "old",
-        created_at: 1,
-        last_used_at: 1,
-      },
-      {
-        _id: "tok_expired",
-        user_id: USER,
-        token_hash: await hashToken(EXPIRED),
-        name: "stale",
-        created_at: 1,
-        last_used_at: 1,
-        expires_at: 2,
-        device_id: THIS_DEVICE,
-      },
+      { _id: "tok_bound", user_id: USER, token_hash: await hashToken(BOUND), name: "macbook", created_at: 1, last_used_at: 1, device_id: THIS_DEVICE },
+      { _id: "tok_legacy", user_id: USER, token_hash: await hashToken(LEGACY), name: "old", created_at: 1, last_used_at: 1 },
     ],
+    devices: [{ _id: "dev_1", user_id: USER, device_id: THIS_DEVICE, label: "macbook", platform: "darwin", last_seen: 1 }],
   };
 }
 
-function ctx(t: Record<string, any[]>) {
-  return { db: makeFakeDb(t) } as any;
-}
-
-const gate = (c: any, api_token: string, device_id?: string) =>
-  (deviceBindingAllows as any)._handler(c, { api_token, device_id });
+// No browser session: every handler falls through to the token.
+const ctx = (t: Record<string, any[]>) => ({ db: makeFakeDb(t), auth: { getUserIdentity: async () => null } }) as any;
+const from = (secret: string, device?: string) => (device ? presentToken(secret, device) : secret);
+const gate = (c: any, api_token: string) => (deviceBindingAllows as any)._handler(c, { api_token });
 
 type Reply = { status: 403 } | { status: 401 } | { status: 200; userId: string };
 
-// The real path a CLI request takes, mirrored from `cliRoute` (http.ts) and the
-// handler behind it (spawn.ts `getAuthenticatedUserId`). Two facts about it
-// decide whether binding works at all: the edge asks the gate with the device
-// the client sent, and it then DELETES device_id before the body reaches the
-// handler, because the mutations behind these routes validate a closed v.object
-// and reject an unrecognised field. So the handler authenticates with the token
-// alone — it has no device to present.
-async function cliSpawn(
-  t: Record<string, any[]>,
-  body: { api_token: string; device_id?: string },
-): Promise<Reply> {
+// cliRoute (http.ts): gate on api_token as it arrived, strip any device_id body
+// field, hand the body to the handler, which authenticates on api_token alone.
+async function overHttp(t: Record<string, any[]>, body: { api_token: string; device_id?: string }): Promise<Reply> {
   const c = ctx(t);
-  const allowed = await gate(
-    c,
-    body.api_token,
-    typeof body.device_id === "string" ? body.device_id : undefined,
-  );
-  if (!allowed) return { status: 403 };
-
+  if (!(await gate(c, body.api_token))) return { status: 403 };
   const { device_id: _strippedAtTheEdge, ...forwarded } = body;
   const auth = await verifyApiToken(c, forwarded.api_token);
   return auth ? { status: 200, userId: auth.userId as any } : { status: 401 };
 }
 
-describe("device binding over the whole /cli/spawn request path", () => {
-  test("a device-bound token presented with another device_id is rejected on /cli/spawn", async () => {
-    expect(await cliSpawn(await tables(), { api_token: BOUND, device_id: OTHER_DEVICE })).toEqual({
-      status: 403,
-    });
-  });
+// A Convex client calling devices.listDevices directly: the real registered
+// handler, which answers the roster for a good token and nothing otherwise.
+const direct = (t: Record<string, any[]>, api_token: string) =>
+  (listDevices as any)._handler(ctx(t), { api_token }) as Promise<Array<{ device_id: string }>>;
 
-  test("a device-bound token presented with no device_id at all is rejected", async () => {
-    // Otherwise the check is opt-out by omission and a thief simply stops
-    // sending the field.
-    expect(await cliSpawn(await tables(), { api_token: BOUND })).toEqual({ status: 403 });
+describe("a bound token at the HTTP edge (cliRoute)", () => {
+  test("from another machine is a 403", async () => {
+    expect(await overHttp(await tables(), { api_token: from(BOUND, OTHER_DEVICE) })).toEqual({ status: 403 });
   });
-
-  test("a device-bound token still works from the machine it names", async () => {
-    // The regression that matters most: the gate says yes, and then the handler
-    // has to say yes too, on a body the edge has already stripped. A binding
-    // check inside the handler's own auth sees "no device" here and locks the
-    // owner out of their own CLI.
-    expect(await cliSpawn(await tables(), { api_token: BOUND, device_id: THIS_DEVICE })).toEqual({
-      status: 200,
-      userId: USER,
-    });
+  test("with no device is a 403, and a device_id body field does not count", async () => {
+    expect(await overHttp(await tables(), { api_token: BOUND })).toEqual({ status: 403 });
+    expect(await overHttp(await tables(), { api_token: BOUND, device_id: THIS_DEVICE })).toEqual({ status: 403 });
   });
-
-  test("a legacy token with no device_id still authenticates", async () => {
-    const t = await tables();
-    expect(await cliSpawn(t, { api_token: LEGACY, device_id: OTHER_DEVICE })).toEqual({
-      status: 200,
-      userId: USER,
-    });
-    expect(await cliSpawn(t, { api_token: LEGACY })).toEqual({ status: 200, userId: USER });
+  test("from its own machine authenticates the handler behind the stripped body", async () => {
+    expect(await overHttp(await tables(), { api_token: from(BOUND, THIS_DEVICE) })).toEqual({ status: 200, userId: USER });
   });
-
-  test("an unknown token fails authentication, not the device gate", async () => {
-    // 401, never 403: reporting a bad token as a device mismatch sends whoever
-    // reads the error to the wrong machine.
-    expect(await cliSpawn(await tables(), { api_token: "nope", device_id: THIS_DEVICE })).toEqual({
-      status: 401,
-    });
-  });
-
-  test("an expired bound token fails even from its own device", async () => {
-    expect(await cliSpawn(await tables(), { api_token: EXPIRED, device_id: THIS_DEVICE })).toEqual({
-      status: 401,
-    });
+  test("an unknown token is a 401, never a 403", async () => {
+    expect(await overHttp(await tables(), { api_token: from("nope", THIS_DEVICE) })).toEqual({ status: 401 });
   });
 });
 
-describe("the gate is the only place the binding is checked", () => {
-  test("verifyApiToken accepts a bound token, because the edge already decided", async () => {
-    // A fence, not a redundancy: re-adding a device check inside this function
-    // rejects every bound token, since no caller here is given a device.
-    const auth = await verifyApiToken(ctx(await tables()), BOUND);
-    expect(auth?.userId).toBe(USER);
+describe("a bound token on a direct call to a public function (devices.listDevices)", () => {
+  test("with no device sees nothing", async () => {
+    // The door the HTTP gate never saw. Before the device travelled inside the
+    // token, the secret alone opened it.
+    expect(await direct(await tables(), BOUND)).toEqual([]);
   });
-
-  test("an unknown token passes the gate, to be refused by authentication", async () => {
-    expect(await gate(ctx(await tables()), "nope", THIS_DEVICE)).toBe(true);
+  test("from another machine sees nothing", async () => {
+    expect(await direct(await tables(), from(BOUND, OTHER_DEVICE))).toEqual([]);
   });
+  test("from its own machine sees the roster", async () => {
+    const rows = await direct(await tables(), from(BOUND, THIS_DEVICE));
+    expect(rows.map((r) => r.device_id)).toEqual([THIS_DEVICE]);
+  });
+});
 
-  // The constraint that outranks the feature. Token auth is read-only on
-  // purpose: it once patched last_used_at on every authenticated call, and that
-  // shared-doc write forced OCC conflicts across every concurrent write until
-  // the write path stalled entirely. Binding must stay a comparison.
-  test("neither the gate nor the verify writes anything", async () => {
+describe("an unbound token is unchanged on both doors", () => {
+  test("authenticates with or without a presented device", async () => {
     const t = await tables();
-    const c = ctx(t);
-    await gate(c, BOUND, OTHER_DEVICE);
-    await gate(c, LEGACY, undefined);
-    await verifyApiToken(c, BOUND);
-    await verifyApiToken(c, LEGACY);
+    expect(await overHttp(t, { api_token: LEGACY })).toEqual({ status: 200, userId: USER });
+    expect(await overHttp(t, { api_token: from(LEGACY, OTHER_DEVICE) })).toEqual({ status: 200, userId: USER });
+    expect((await direct(t, LEGACY)).length).toBe(1);
+    expect((await direct(t, from(LEGACY, OTHER_DEVICE))).length).toBe(1);
+  });
+
+  // Token auth is read-only on purpose: patching last_used_at on every call
+  // once forced OCC conflicts across every concurrent write. Binding is a comparison.
+  test("neither door writes anything", async () => {
+    const c = ctx(await tables());
+    await gate(c, from(BOUND, OTHER_DEVICE));
+    await verifyApiToken(c, from(BOUND, THIS_DEVICE));
+    await (listDevices as any)._handler(c, { api_token: BOUND });
     expect(c.db._patched).toEqual([]);
     expect(c.db._inserted).toEqual([]);
-    expect(c.db._replaced).toEqual([]);
     expect(c.db._deleted).toEqual([]);
   });
 });

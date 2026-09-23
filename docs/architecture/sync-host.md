@@ -110,13 +110,43 @@ deadline; stopping the runtime cancels outstanding send timers.
 
 ## Election
 
-`navigator.locks.request("codecast-sync-host")` — first holder is host,
-release on window death promotes the next in line. Web Locks and
+`navigator.locks.request("codecast-sync-host:<principal>")` — first holder is
+host, release on window death promotes the next in line. Web Locks and
 BroadcastChannel are both per-origin and shared across Electron windows of one
 session partition, so desktop and multi-tab web use the same mechanism.
 Windows that do not mount the full shell (palette, people) never request the
 lock; they are followers only. Where the Locks API is missing (React Native,
 SSR, old engines) the window is host with no transport — today's behavior.
+
+Both names carry the account the window acts for (the principal the stored
+JWT names, `lib/authPrincipal.ts`): `codecast-replication-v1:<principal>` and
+`codecast-sync-host:<principal>`. A host and its followers therefore share one
+account by construction, and a window that just signed in as someone else can
+never take a snapshot, an update or a mut from the previous account's host.
+A window with no account (signed out, a guest share page) runs no transport.
+
+## Account boundary
+
+Every window observes the same boundary: the JWT key changing in
+localStorage, through the wrapper's own write in the window that signs out or
+in, and through the native storage event in every sibling
+(`@platform/auth/web` authPrincipal; the auth library's own listener never
+fires, because it compares the event's storage area to the wrapper object).
+At the boundary `store/principalBoundary.ts` runs synchronously, before React
+renders anything for the next account: replication stops (channel closed, lock
+released), `clearProtectedInboxMemory` drops every row and unbinds dispatch,
+the outbox and write-through, a hydration still in flight is fenced by epoch,
+the disk cache is purged when an account was left, and persistence reboots
+when one was entered. The auth subtree remounts per principal epoch
+(`lib/authRoot.tsx`), so the provider re-reads storage. A token rotated for
+the same user is not a boundary: nothing above runs.
+
+The disk cache (`codecast-store`) belongs to one account: the one whose
+server-confirmed user row it holds (`meta.currentUser`). Hydration serves it
+only to a window whose stored JWT names that same principal; a cache someone
+else owns, or nobody does, is purged before any reader sees it. Write-through
+and outbox writes refuse the moment the stored JWT names someone else, which
+covers the gap between a sibling's sign-out and this window's storage event.
 
 Promotion (a follower wins the lock): flip `syncRole` to host in the store —
 the feeder gate is reactive, so subscriptions mount; wire `_setIDBWrite` and
@@ -139,10 +169,12 @@ follower's optimistic write appears in other windows before the echo.
 
 ## Invariants
 
-1. One host per origin at a time; every window is exactly one of host/follower.
+1. One host per origin and account at a time; every window is exactly one of host/follower.
 2. A follower never runs a registered global feeder and never writes state
    tables to IDB (outbox excluded).
 3. `pending` never crosses the wire.
 4. Replicated updates enter a follower only through `syncTable`/row apply, so
    local pending protection always wins until the value echoes.
 5. The classification snapshot test fails on any unclassified registry key.
+6. No window renders, persists or dispatches for an account after the stored
+   JWT stopped naming it; no row of one account is ever served to another.

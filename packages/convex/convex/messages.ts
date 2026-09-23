@@ -1,9 +1,17 @@
 import { stripPastedContent } from "@codecast/shared/contracts";
-import { mutation, query, internalMutation, type MutationCtx } from "./functions";
+import { mutation, query, internalMutation, type MutationCtx, type QueryCtx } from "./functions";
 import { countersFor } from "./orgEvents";
 import { calibrationSlot } from "./usageCalibration";
 import { weightedTokens } from "@codecast/shared/contracts";
 import { linkLocalCommitToConversation } from "./gitActivity";
+import {
+  deleteFileChange,
+  FILE_CHANGE_BODY_KEYS_LIMIT,
+  readFileChangeBodies,
+  readFileChangeIndex,
+  readFoldChanges,
+  writeFileChange,
+} from "./fileChangeBodies";
 import { ConvexError, v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
@@ -39,7 +47,7 @@ import {
   inlineDocSourceKey,
   shouldUseInlineDocSnapshotFallback,
 } from "./docExtraction";
-import { extractFileChanges, extractCommitHashFromContent, hasFileChangeToolCall, type FileChange } from "./fileChanges/extractor";
+import { extractFileChanges, extractCommitHashFromContent, hasFileChangeToolCall, type FileChange, type FileChangeBody, type FileChangeRef } from "./fileChanges/extractor";
 import { activityLine } from "@codecast/shared/render";
 import type { SessionActivity } from "@codecast/shared/contracts";
 import { extractSessionImages, type SessionImageEntry } from "./sessionImages";
@@ -712,12 +720,7 @@ export async function materializeFileChanges(
   const extracted = extractFileChanges([msg]);
   const nextIds = new Set(extracted.map((change) => change.id));
   for (const previous of previousChanges) {
-    if (nextIds.has(previous.id)) continue;
-    const rows = await ctx.db.query("file_changes")
-      .withIndex("by_conversation_change_key", (q) =>
-        q.eq("conversation_id", conversationId).eq("change_key", previous.id))
-      .collect();
-    for (const row of rows) await ctx.db.delete(row._id);
+    if (!nextIds.has(previous.id)) await deleteFileChange(ctx, conversationId, previous.id);
   }
   // Keep the conversation's "where does it work" list current in the same
   // transaction — feed/search cards render it (see schema.recent_files).
@@ -733,7 +736,7 @@ export async function materializeFileChanges(
       .collect();
     const [existing, ...duplicates] = matches;
     for (const duplicate of duplicates) await ctx.db.delete(duplicate._id);
-    const fields = {
+    await writeFileChange(ctx, existing ?? null, {
       conversation_id: conversationId,
       change_key: fc.id,
       message_id: messageId,
@@ -741,62 +744,76 @@ export async function materializeFileChanges(
       seq: fc.sequenceIndex,
       file_path: fc.filePath,
       change_type: fc.changeType,
-      old_content: fc.oldContent,
-      new_content: fc.newContent,
       commit_message: fc.commitMessage,
       commit_hash: fc.commitHash ?? existing?.commit_hash,
       timestamp: fc.timestamp,
-    };
-    if (!existing) await ctx.db.insert("file_changes", fields);
-    else if (Object.entries(fields).some(([key, value]) => existing[key as keyof typeof existing] !== value)) {
-      await ctx.db.patch(existing._id, fields);
-    }
+    }, { oldContent: fc.oldContent, newContent: fc.newContent });
   }
 }
 
+/** The conversation when the viewer may read its messages: owner, team
+ *  member, or share-token holder. Private (owner-only) conversations included.
+ *  Every reader of a thread's derived rows (file changes, images) gates here. */
+async function readableConversation(
+  ctx: QueryCtx,
+  conversationId: Id<"conversations">,
+  shareToken: string | undefined,
+): Promise<Doc<"conversations"> | null> {
+  const conversation = await ctx.db.get(conversationId);
+  if (!conversation) return null;
+  const viewerId = await getAuthUserId(ctx);
+  if ((await checkConversationAccess(ctx, viewerId, conversation, shareToken)) === "denied") return null;
+  return conversation;
+}
+
 /**
- * Complete, pagination-independent list of file changes for a conversation,
- * materialized at message ingest. The diff viewer merges this with its
- * client-side window extraction, which backfills conversations whose edits
- * predate materialization (no backfill was run).
+ * The changes a fold of the whole conversation reads, with their text, under
+ * a byte budget (fileChangeBodies.readFoldChanges). `cast diff` draws its tree
+ * from this; the web reads the index and bodies separately below.
  */
+export async function listConversationFileChanges(
+  ctx: QueryCtx,
+  conversationId: Id<"conversations">,
+): Promise<{ changes: FileChange[]; truncated: boolean }> {
+  return readFoldChanges(ctx, conversationId);
+}
+
+/** The fold payload for web builds that predate the index/bodies split. */
 export const getConversationFileChanges = query({
   args: { conversation_id: v.id("conversations"), share_token: v.optional(v.string()) },
   handler: async (ctx, args): Promise<FileChange[]> => {
-    // Access gate: this returns the full before/after source of every file the
-    // session edited — including private (owner-only) conversations. Match the
-    // other message readers: owner, team member, or share-token holder only.
-    const conversation = await ctx.db.get(args.conversation_id);
-    if (!conversation) return [];
-    const viewerId = await getAuthUserId(ctx);
-    if ((await checkConversationAccess(ctx, viewerId, conversation, args.share_token)) === "denied") {
-      return [];
-    }
-    const rows = await ctx.db
-      .query("file_changes")
-      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
-      .collect();
-    // Re-synced messages can leave duplicate rows; dedupe by the stable change_key,
-    // then order by (timestamp, in-message seq) to match the client extractor.
-    const byKey = new Map<string, (typeof rows)[number]>();
-    for (const r of rows) byKey.set(r.change_key, r);
-    return Array.from(byKey.values())
-      .sort((a, b) => a.timestamp - b.timestamp || a.seq - b.seq)
-      .map((r, i) => ({
-        id: r.change_key,
-        toolCallId: r.tool_call_id,
-        // Globally-ordered position so the result is correct on its own; the
-        // client merge re-derives this anyway when folding in window changes.
-        sequenceIndex: i,
-        messageId: r.message_id,
-        filePath: r.file_path,
-        changeType: r.change_type,
-        oldContent: r.old_content,
-        newContent: r.new_content,
-        commitMessage: r.commit_message,
-        commitHash: r.commit_hash,
-        timestamp: r.timestamp,
-      }));
+    if (!(await readableConversation(ctx, args.conversation_id, args.share_token))) return [];
+    return (await listConversationFileChanges(ctx, args.conversation_id)).changes;
+  },
+});
+
+/** Every change of the conversation without its text, in extractor order,
+ *  independent of how many message pages the client holds. Small enough for
+ *  any session: the timeline and the file tree render from it. */
+export const getConversationFileChangeIndex = query({
+  args: { conversation_id: v.id("conversations"), share_token: v.optional(v.string()) },
+  handler: async (ctx, args): Promise<FileChangeRef[]> => {
+    if (!(await readableConversation(ctx, args.conversation_id, args.share_token))) return [];
+    return readFileChangeIndex(ctx, args.conversation_id);
+  },
+});
+
+/** The text of the named changes, in the order asked, stopping before the
+ *  byte budget; `truncated` tells the client to ask for the rest. */
+export const getFileChangeBodies = query({
+  args: {
+    conversation_id: v.id("conversations"),
+    share_token: v.optional(v.string()),
+    change_keys: v.array(v.string()),
+  },
+  handler: async (ctx, args): Promise<{ bodies: Array<FileChangeBody & { id: string }>; truncated: boolean }> => {
+    if (!(await readableConversation(ctx, args.conversation_id, args.share_token))) return { bodies: [], truncated: false };
+    const keys = args.change_keys.slice(0, FILE_CHANGE_BODY_KEYS_LIMIT);
+    const { bodies, truncated } = await readFileChangeBodies(ctx, args.conversation_id, keys);
+    return {
+      bodies: Array.from(bodies, ([id, body]) => ({ id, ...body })),
+      truncated: truncated || args.change_keys.length > keys.length,
+    };
   },
 });
 
@@ -917,14 +934,7 @@ const SESSION_GALLERY_ROW_LIMIT = 2000;
 export const getConversationImages = query({
   args: { conversation_id: v.id("conversations"), share_token: v.optional(v.string()) },
   handler: async (ctx, args): Promise<SessionImageEntry[]> => {
-    // Same access gate as the other message readers: owner, team member, or
-    // share-token holder. The list names images in a possibly-private thread.
-    const conversation = await ctx.db.get(args.conversation_id);
-    if (!conversation) return [];
-    const viewerId = await getAuthUserId(ctx);
-    if ((await checkConversationAccess(ctx, viewerId, conversation, args.share_token)) === "denied") {
-      return [];
-    }
+    if (!(await readableConversation(ctx, args.conversation_id, args.share_token))) return [];
     // Newest-first, so a session past the cap keeps its RECENT images (the
     // gallery opens on the last one) instead of its oldest. Both writers append
     // in transcript order — live ingest as messages arrive, the sweep walking

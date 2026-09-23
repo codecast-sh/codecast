@@ -107,40 +107,52 @@
     "id": "LOCAL-01",
     "priority_severity": "P1 / High",
     "finding": "Directly opened vault SVG can execute at the daemon origin and read the URL's full control bearer; normal inline image rendering is inert",
-    "status": "implementation_pending",
+    "status": "shipped",
     "workstream": "004",
-    "verification": [],
+    "verification": [
+      "2026-09-23: CLI v1.1.153 (fd9451228): vault capability, legacy token= URLs still emitted until the web reader ships (decision 2026-09-23)"
+    ],
     "review": null,
-    "release": null
+    "release": "CLI v1.1.153 (fd9451228): vault capability, legacy token= URLs still emitted until the web reader ships (decision 2026-09-23)"
   },
   {
     "id": "PARENT-01",
     "priority_severity": "P1 / High",
     "finding": "Anonymous GitHub installation callback trusts unsigned caller identities; unbound installation can be linked without proving installer access",
-    "status": "implementation_pending",
+    "status": "in_progress",
     "workstream": "005",
-    "verification": [],
-    "review": null,
+    "verification": [
+      "2026-09-23: Convex prod (8ee6fff61). New installs fail with install_verification_unconfigured because GITHUB_APP_CLIENT_ID/SECRET are unset; decision sd-234"
+    ],
+    "review": {
+      "decision": "human 2026-09-23 (sd-234): accept the single use intent while GitHub OAuth credentials are unset. Narrowed: intent alone binds only an installation created after the intent, or updates one already linked to the same owner."
+    },
     "release": null
   },
   {
     "id": "PARENT-02",
     "priority_severity": "P1 / High",
     "finding": "Generic OAuth reconnect replaces an already-confirmed grant before confirmation; needs initiated connect flow and another provider authorization",
-    "status": "implementation_pending",
+    "status": "shipped",
     "workstream": "005",
-    "verification": [],
+    "verification": [
+      "2026-09-23: Convex prod (8ee6fff61): OAuth reconnect confirms before replacing a grant"
+    ],
     "review": null,
-    "release": null
+    "release": "Convex prod (8ee6fff61): OAuth reconnect confirms before replacing a grant"
   },
   {
     "id": "PARENT-03",
     "priority_severity": "P1 / High",
     "finding": "Arbitrary published-page scripts share a document with owner/edit/comment tokens; owner opening their management URL exposes its authority to that content",
-    "status": "implementation_pending",
+    "status": "accepted_risk",
     "workstream": "006",
-    "verification": [],
-    "review": null,
+    "verification": [
+      "2026-09-23: Design choice queued as sd-235"
+    ],
+    "review": {
+      "decision": "human 2026-09-23 (sd-235): leave as is for now. Risk: script in a published page (e.g. added by an edit link holder) can read #o=/#ed= when the owner opens the page. Options kept on file: sandboxed iframe shell, or management in the app."
+    },
     "release": null
   },
   {
@@ -167,9 +179,11 @@
     "id": "CLIENT-04",
     "priority_severity": "P1 / High privacy risk",
     "finding": "Auth storage wrapper prevents sibling-window logout events; global cache/replication can retain or mix old-principal state",
-    "status": "implementation_pending",
+    "status": "in_progress",
     "workstream": "007",
-    "verification": [],
+    "verification": [
+      "2026-09-23: worker jx7dqzw, ct-53058"
+    ],
     "review": null,
     "release": null
   },
@@ -177,9 +191,14 @@
     "id": "PARENT-07",
     "priority_severity": "P1 / High conditional",
     "finding": "Updater interpolates unsigned-manifest URL into a shell; installer/updater lack independent manifest authenticity",
-    "status": "implementation_pending",
+    "status": "implemented_pending_review",
     "workstream": "008",
-    "verification": [],
+    "verification": [
+      "canonical ~/src/platform/packages/cli-kit/src/update: checkBinaryEntry (https, release origin, plain path, hex digest, size bound), bounded manifest fetch, fetchBounded (same-origin https redirects, 3 hops, byte cap, partial download refused), swap restores the old binary on failure; bun test 115 pass, tsc --noEmit clean (2026-09-23)",
+      "packages/cli/src/update.ts: execFileSync argv curl with --proto =https --proto-redir =https --max-redirs 3 --max-filesize, url_effective origin check, darwin codesign gate for signed clients; packages/cli/src/update.test.ts 18 pass against the canonical package (tsconfig path override; vendored mirror stale until scripts/vendor-platform.sh)",
+      "packages/web/public/install.sh reads latest.json, binary only from dl.codecast.sh, sha256 verified before install; packages/cli/src/installerTerminal.test.ts 14 pass incl. wrong digest, foreign host, missing platform",
+      "signed manifest path: cli-kit signing.ts + release/sign-manifest.ts (keygen/sign/append/verify), finalize workflow signs when RELEASE_MANIFEST_SIGNING_KEY exists, client policy RELEASE_MANIFEST_SIGNING = { keys: {}, required: false } (no behaviour change); rollout and custody in docs/architecture/release-signing.md; no key created"
+    ],
     "review": null,
     "release": null
   },
@@ -187,9 +206,12 @@
     "id": "PARENT-08",
     "priority_severity": "P1 / High availability potential",
     "finding": "Vulnerable ws parser accepts unauthenticated extension first messages up to 256 MiB; opaque Origin is admitted",
-    "status": "implementation_pending",
+    "status": "implemented_pending_review",
     "workstream": "004/008",
-    "verification": [],
+    "verification": [
+      "packages/cli/package.json ws 8.21.3; bun.lock root ws@8.21.3 with convex's exact 8.18.0 pin nested (client role only); resolved import asserted by packages/cli/src/browser/bridge/wsVersion.test.ts (pass after install)",
+      "pre-auth bounds (origin allow list incl. null refusal, 256 KiB hello cap, 4 concurrent handshakes, hello timeout) already in tree from plan 004 (30a74b510); host/protocol/hostState/wsVersion/installer suites 68 pass (2026-09-23)"
+    ],
     "review": null,
     "release": null
   },
@@ -207,11 +229,14 @@
     "id": "BACKEND-09",
     "priority_severity": "P2 / Medium",
     "finding": "Device-bound bearer restriction exists at HTTP wrapper but direct public Convex calls bypass it; attacker already holds valid token",
-    "status": "decided_pending_implementation",
+    "status": "in_progress",
     "workstream": "002",
-    "verification": [],
+    "verification": [
+      "2026-09-23 prod read: 291 api_tokens, 49 named setup-, none live, none used as a bearer; setup tokens refused as bearers and renames across the setup- prefix blocked (platform apiTokens.deviceBinding.test.ts, 11 pass; fails without the guard)"
+    ],
     "review": {
-      "decision": "human: 30 day grace window, staged enforcement"
+      "decision": "human 2026-09-23: no token rotation and no grace window. Existing unbound tokens keep working. Order: close the direct path for bound tokens, make the CLI send device_id, then bind newly minted tokens.",
+      "worker": "jx7fwnn"
     },
     "release": null
   },
@@ -219,21 +244,25 @@
     "id": "LOCAL-02",
     "priority_severity": "P2 / Medium",
     "finding": "Unauthenticated hook GET changes state; rejected status events still persist/schedule caller-selected transcript ingestion",
-    "status": "implementation_pending",
+    "status": "shipped",
     "workstream": "004",
-    "verification": [],
+    "verification": [
+      "2026-09-23: CLI v1.1.153 (fd9451228): hook admission; prod machine check 2026-09-23: 55 hook status events accepted, 0 refusals"
+    ],
     "review": null,
-    "release": null
+    "release": "CLI v1.1.153 (fd9451228): hook admission; prod machine check 2026-09-23: 55 hook status events accepted, 0 refusals"
   },
   {
     "id": "LOCAL-03",
     "priority_severity": "P2 / Medium",
     "finding": "Repository setup-copy entries escape both worktrees in legacy remote move; requires user invoking that transfer to an authorized host",
-    "status": "implementation_pending",
+    "status": "shipped",
     "workstream": "004",
-    "verification": [],
+    "verification": [
+      "2026-09-23: CLI v1.1.153 (66cdfb34c): shared copyFiles collector"
+    ],
     "review": null,
-    "release": null
+    "release": "CLI v1.1.153 (66cdfb34c): shared copyFiles collector"
   },
   {
     "id": "CLIENT-05",
@@ -259,21 +288,26 @@
     "id": "PARENT-04",
     "priority_severity": "P2 / Medium",
     "finding": "Direct public comment mutation bypasses HTTP access/rate gate; expired/password page accepts anonymous stored comment",
-    "status": "implementation_pending",
+    "status": "shipped",
     "workstream": "006",
-    "verification": [],
+    "verification": [
+      "2026-09-23: Convex prod (eb57de3e0): gates inside artifacts.submitComments and recordView"
+    ],
     "review": null,
-    "release": null
+    "release": "Convex prod (eb57de3e0): gates inside artifacts.submitComments and recordView"
   },
   {
     "id": "PARENT-05",
     "priority_severity": "P2 / Medium",
     "finding": "Public caching of previously authorized artifact versions/assets weakens password/delete/expiry revocation",
-    "status": "implementation_pending",
+    "status": "shipped",
     "workstream": "006",
-    "verification": [],
+    "verification": [
+      "2026-09-23: Convex half live (eb57de3e0). Edge worker change not yet live: 2026-09-23 probe shows ?k= responses still cached (HIT, max-age=14400). Cloudflare purge token not available, revocation bounded by TTL",
+      "2026-09-23 live: public page public max-age=60 swr=300; ?k= private, no-store; password gate page hides body. Found and fixed: the zone Browser Cache TTL rewrites every subrequest Cache-Control to max-age=14400, so the worker now always writes its own policy (worker.test.js regression, fails on the committed worker). Cloudflare purge still unavailable; bound is 6 minutes."
+    ],
     "review": null,
-    "release": null
+    "release": "Edge worker 06b92a9d (2026-09-23) + Convex eb57de3e0"
   },
   {
     "id": "PARENT-06",
@@ -294,9 +328,12 @@
     "id": "PARENT-09",
     "priority_severity": "P2 / mixed, triage",
     "finding": "Dependency audit has 96 high/critical advisory/version match rows across 25 package names; these are not 96 exploitable app bugs",
-    "status": "implementation_pending",
+    "status": "implemented_pending_review",
     "workstream": "008",
-    "verification": [],
+    "verification": [
+      "scripts/security/dependency-triage.ts writes plans/security-dependency-triage.{json,md} from bun audit --json + bun why: 40 packages / 195 advisories; 1 fixed (ws), 27 not reachable, 5 accepted risk, 7 fix planned (dompurify, markdown-it, linkify-it, mermaid, @tiptap/core with the content worker; @auth/core with the identity worker; react-router bump by the release owner); every row carries resolved versions, modes, evidence, owner and a review expiry; --check fails on untriaged or expired rows",
+      "raw audit kept in plans/security-dependency-audit.json (not a clean bill)"
+    ],
     "review": null,
     "release": null
   },

@@ -304,7 +304,7 @@ export function changeHandles(change: OrgChange): string[] {
   const subject = changeHandle(change);
   if (subject) out.push(subject);
   if ("reports_to" in change && typeof change.reports_to === "string" && change.reports_to.startsWith("@")) out.push(change.reports_to.slice(1));
-  if (change.kind === "project_meta" && change.owner?.startsWith("@")) out.push(change.owner.slice(1));
+  if ((change.kind === "project_meta" || change.kind === "initiative" || change.kind === "initiative_owner") && change.owner?.startsWith("@")) out.push(change.owner.slice(1));
   return out;
 }
 

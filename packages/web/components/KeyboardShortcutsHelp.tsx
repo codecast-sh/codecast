@@ -215,13 +215,18 @@ function isTooltipAnchored(el: HTMLElement): boolean {
 // Rich tooltip for icon buttons: label plus the bound shortcut rendered as
 // KeyCaps (never plain-text key glyphs — see UI conventions). Replaces native
 // `title` attributes, which can't render keycaps and double up with Radix.
-export function ShortcutTooltip({ label, action, hint, side = "bottom", eager = false, children }: {
+export function ShortcutTooltip({ label, action, hint, side = "bottom", align, panel = false, eager = false, children }: {
   label: ReactNode;
   action?: ShortcutAction;
   // Optional trailing note rendered dimmed after the keycaps, e.g. "cycles" for a
   // key that steps through options rather than toggling.
   hint?: ReactNode;
   side?: "top" | "bottom" | "left" | "right";
+  align?: "start" | "center" | "end";
+  // `label` is a whole StatusPanel (header + sections) rather than a line of
+  // text: the content drops its padding and takes the panel width the sync
+  // LED's hover uses, so every status chip's hover reads as one family.
+  panel?: boolean;
   eager?: boolean;
   children: ReactNode;
 }) {
@@ -297,8 +302,16 @@ export function ShortcutTooltip({ label, action, hint, side = "bottom", eager = 
         {/* Bounded width + wrap: a label that carries a sentence (a trigger's
             standing prompt, a long path) folds into lines instead of running
             one unbroken row across the viewport and clipping. */}
-        <TooltipContent side={side} className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 max-w-[min(360px,calc(100vw-16px))] bg-sol-bg text-sol-text border border-sol-border shadow-md">
-          <span className="min-w-0 [overflow-wrap:anywhere]">{label}</span>
+        <TooltipContent
+          side={side}
+          align={align}
+          sideOffset={panel ? 6 : undefined}
+          collisionPadding={8}
+          className={panel
+            ? "w-[280px] max-w-[calc(100vw-16px)] p-0 bg-sol-bg text-sol-text border border-sol-border shadow-md"
+            : "flex flex-wrap items-center gap-x-1.5 gap-y-0.5 max-w-[min(360px,calc(100vw-16px))] bg-sol-bg text-sol-text border border-sol-border shadow-md"}
+        >
+          {panel ? label : <span className="min-w-0 [overflow-wrap:anywhere]">{label}</span>}
           {parts && (
             <span className="flex items-center gap-[2px]">
               {parts.map((part, i) => (

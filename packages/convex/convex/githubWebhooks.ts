@@ -1807,7 +1807,7 @@ export const postPRCommentIfNeeded = internalMutation({
     const commentBody = `## 🎙️ Codecast Conversation\n\n**${conversation.title || "Untitled Conversation"}**\n\nThis PR was created during a Codecast session.\n\n[View full conversation →](${conversationUrl})`;
 
     try {
-      void ctx.scheduler.runAfter(0, api.githubApi.postPRComment, {
+      void ctx.scheduler.runAfter(0, internal.githubApi.postPRComment, {
         repository: args.repository,
         pr_number: args.pr_number,
         comment_body: commentBody,

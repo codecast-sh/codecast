@@ -3,6 +3,16 @@
 // release base URL, channels, the minimum version source, and every side
 // effect (fetch, file system, download, clock) are injected so the logic runs
 // unchanged for any product and fully under test.
+//
+// Trust model. The manifest is fetched from the release origin over https.
+// Every binary entry is checked before a download starts (checkBinaryEntry:
+// https, the release origin, a plain asset path, a bare hex digest, a size
+// inside the bound), the download is bounded and may only follow redirects
+// that stay on the origin, and the bytes are hashed before the running
+// executable is touched. The swap keeps the old binary until the new one is in
+// place and puts it back if the swap fails part way. A manifest that carries a
+// signature is verified against the pinned keys (see manifestSigning below)
+// before any of its content is read.
 
 import * as nodeFs from "node:fs";
 import * as path from "node:path";
@@ -18,13 +28,15 @@ import {
   resolveChannel,
 } from "./version.js";
 import { verifySha256 } from "./checksum.js";
-import { type ReleaseManifest, isReleaseManifest } from "./manifest.js";
+import { type ReleaseManifest, checkBinaryEntry, isReleaseManifest, releaseOrigin } from "./manifest.js";
+import { type ManifestSigningPolicy, type SignatureAccepted, verifyManifestSignature } from "./signing.js";
 
 export interface UpdaterFs {
   existsSync(p: string): boolean;
   readFileSync(p: string): Uint8Array;
   readTextSync(p: string): string;
   writeTextSync(p: string, text: string): void;
+  writeFileSync(p: string, bytes: Uint8Array): void;
   mkdirSync(p: string): void;
   unlinkSync(p: string): void;
   renameSync(from: string, to: string): void;
@@ -38,6 +50,7 @@ export const nodeUpdaterFs: UpdaterFs = {
   readFileSync: (p) => new Uint8Array(nodeFs.readFileSync(p)),
   readTextSync: (p) => nodeFs.readFileSync(p, "utf-8"),
   writeTextSync: (p, text) => nodeFs.writeFileSync(p, text),
+  writeFileSync: (p, bytes) => nodeFs.writeFileSync(p, bytes),
   mkdirSync: (p) => nodeFs.mkdirSync(p, { recursive: true }),
   unlinkSync: (p) => nodeFs.unlinkSync(p),
   renameSync: (from, to) => nodeFs.renameSync(from, to),
@@ -53,6 +66,17 @@ export interface UpdateState {
   failedVersion?: string;
   failedAt?: string;
   channel?: string;
+  /** The `released` stamp of the newest manifest whose signature verified.
+   *  A later signed manifest may not carry an older stamp (anti-rollback). */
+  lastSignedReleased?: string;
+}
+
+/** What a product's download callback is handed beside the URL. */
+export interface DownloadOptions {
+  /** Refuse more bytes than this. */
+  maxBytes: number;
+  /** The only origin a redirect may land on. */
+  origin: string;
 }
 
 export interface UpdaterConfig {
@@ -78,12 +102,22 @@ export interface UpdaterConfig {
   retryIntervalMs?: number;
   /** The name the user types to update: "cast update". Shown in the notice. */
   updateCommand?: string;
+  /** Largest binary the updater will download or install. Default 512 MiB. */
+  maxBinaryBytes?: number;
+  /** Manifest signature policy. Absent or without keys: signatures are not
+   *  checked, which is how every client in the field behaves today. */
+  manifestSigning?: ManifestSigningPolicy;
+  /** Verify the platform's own code signature on the downloaded binary before
+   *  it replaces the running one. Absent: no platform check. Return ok:false
+   *  to refuse; the reason is reported as the update error. */
+  verifyPlatformSignature?: (binaryPath: string) => Promise<{ ok: boolean; reason?: string }>;
   // Injected side effects. Each has a production default.
   fetch?: typeof fetch;
   fs?: UpdaterFs;
-  /** Download `url` to `dest`. Default streams through fetch. Codecast passes a
-   *  curl based download because fetch is unreliable under launchd. */
-  download?: (url: string, dest: string) => Promise<void>;
+  /** Download `url` to `dest`, honouring the bounds in `opts`. Default streams
+   *  through fetch. Codecast passes a curl based download because fetch is
+   *  unreliable under launchd. Must throw on any failure. */
+  download?: (url: string, dest: string, opts: DownloadOptions) => Promise<void>;
   execPath?: string;
   platform?: string;
   arch?: string;
@@ -98,10 +132,26 @@ export interface UpdateResult {
 }
 
 const DAY = 24 * 60 * 60 * 1000;
+const DEFAULT_MAX_BINARY_BYTES = 512 * 1024 * 1024;
+const MAX_MANIFEST_BYTES = 256 * 1024;
+const MAX_REDIRECTS = 3;
+
+/** Why a manifest could not be used. Each is an update error verbatim. */
+export type ManifestError =
+  | `fetch_latest_${number}`
+  | "fetch_latest_failed"
+  | "manifest_too_large"
+  | "bad_manifest"
+  | `manifest_signature_${string}`
+  | "manifest_rollback_refused";
+
+export type LoadedManifest =
+  | { ok: true; manifest: ReleaseManifest; signature: SignatureAccepted }
+  | { ok: false; error: ManifestError };
 
 export class Updater {
   private readonly cfg: Required<
-    Pick<UpdaterConfig, "checkIntervalMs" | "retryIntervalMs" | "fetch" | "fs" | "execPath" | "platform" | "arch" | "now" | "log">
+    Pick<UpdaterConfig, "checkIntervalMs" | "retryIntervalMs" | "maxBinaryBytes" | "fetch" | "fs" | "execPath" | "platform" | "arch" | "now" | "log">
   > &
     UpdaterConfig;
   private readonly channels: ChannelSpec[];
@@ -111,6 +161,7 @@ export class Updater {
     this.cfg = {
       checkIntervalMs: DAY,
       retryIntervalMs: 6 * 60 * 60 * 1000,
+      maxBinaryBytes: DEFAULT_MAX_BINARY_BYTES,
       fetch: globalThis.fetch,
       fs: nodeUpdaterFs,
       execPath: process.execPath,
@@ -118,7 +169,7 @@ export class Updater {
       arch: process.arch,
       now: () => Date.now(),
       log: (line) => console.log(line),
-      ...config,
+      ...stripUndefined(config),
     };
     this.channels = config.channels && config.channels.length > 0 ? config.channels : [STABLE_CHANNEL];
     this.stateFile = path.join(config.stateDir, "update-state.json");
@@ -173,15 +224,57 @@ export class Updater {
     return exe.includes("bun") || (!exe.includes(bin) && !(alias && exe.includes(`/${alias}`)));
   }
 
-  async fetchManifest(channel: ChannelSpec = this.getChannel()): Promise<ReleaseManifest | null> {
+  /**
+   * Fetch, bound, verify and parse one channel's manifest. The one path every
+   * reader of latest.json goes through, so a manifest that fails a check is
+   * invisible to the version poll and the installer alike.
+   */
+  async loadManifest(channel: ChannelSpec = this.getChannel()): Promise<LoadedManifest> {
+    const url = manifestUrl(this.cfg.releaseBaseUrl, channel);
+    let bytes: Uint8Array;
     try {
-      const response = await this.cfg.fetch(manifestUrl(this.cfg.releaseBaseUrl, channel));
-      if (!response.ok) return null;
-      const body: unknown = await response.json();
-      return isReleaseManifest(body) ? body : null;
+      const response = await this.cfg.fetch(url);
+      if (!response.ok) return { ok: false, error: `fetch_latest_${response.status}` };
+      bytes = new Uint8Array(await response.arrayBuffer());
     } catch {
-      return null;
+      return { ok: false, error: "fetch_latest_failed" };
     }
+    if (bytes.byteLength > MAX_MANIFEST_BYTES) return { ok: false, error: "manifest_too_large" };
+
+    // The signature is over the exact manifest bytes, so it is checked before
+    // the bytes are parsed. A policy with no keys skips this entirely.
+    const signature = await verifyManifestSignature({
+      manifestBytes: bytes,
+      signatureUrl: `${url}.sig`,
+      policy: this.cfg.manifestSigning,
+      fetch: this.cfg.fetch,
+    });
+    if (!signature.ok) return { ok: false, error: `manifest_signature_${signature.reason}` };
+
+    let body: unknown;
+    try {
+      body = JSON.parse(new TextDecoder().decode(bytes));
+    } catch {
+      return { ok: false, error: "bad_manifest" };
+    }
+    if (!isReleaseManifest(body)) return { ok: false, error: "bad_manifest" };
+
+    // Anti-rollback, only meaningful for a manifest a key vouched for: a
+    // replayed older signed manifest cannot walk a client back to a version
+    // the publisher has since replaced. Legitimate recovery republishes with
+    // a fresh `released` stamp, which the pipeline does.
+    if (signature.verified) {
+      const last = this.readState().lastSignedReleased;
+      if (last && typeof body.released === "string" && body.released && body.released < last) {
+        return { ok: false, error: "manifest_rollback_refused" };
+      }
+    }
+    return { ok: true, manifest: body, signature };
+  }
+
+  async fetchManifest(channel: ChannelSpec = this.getChannel()): Promise<ReleaseManifest | null> {
+    const loaded = await this.loadManifest(channel);
+    return loaded.ok ? loaded.manifest : null;
   }
 
   /** Poll the manifest at most once per check interval (unless forced) and
@@ -247,35 +340,49 @@ export class Updater {
       try { fs.unlinkSync(newExe); } catch {}
     };
     try {
-      const channel = this.getChannel();
-      const response = await this.cfg.fetch(manifestUrl(this.cfg.releaseBaseUrl, channel));
-      if (!response.ok) return { success: false, error: `fetch_latest_${response.status}` };
-      const body: unknown = await response.json();
-      if (!isReleaseManifest(body)) return { success: false, error: "bad_manifest" };
-      const latest = body;
+      const loaded = await this.loadManifest();
+      if (!loaded.ok) return { success: false, error: loaded.error };
+      const latest = loaded.manifest;
       const binary = latest.binaries[key];
       if (!binary) return { success: false, error: `no_binary_${key}` };
 
+      const maxBytes = this.cfg.maxBinaryBytes;
+      const check = checkBinaryEntry(binary, { releaseBaseUrl: this.cfg.releaseBaseUrl, maxBytes });
+      if (!check.ok) {
+        const kind = check.error === "digest_malformed" ? "digest" : check.error === "size_out_of_bounds" ? "size" : "binary_url";
+        return { success: false, error: `bad_${kind}_${key}` };
+      }
+
       this.cfg.log(`Downloading ${this.cfg.productName} v${latest.version}...`);
       cleanupNew();
-      await this.download(binary.url, newExe);
+      await this.download(check.url.href, newExe, { maxBytes, origin: releaseOrigin(this.cfg.releaseBaseUrl) });
 
-      const check = await verifySha256(fs.readFileSync(newExe), binary.sha256);
-      if (!check.ok) {
+      const bytes = fs.readFileSync(newExe);
+      if (bytes.byteLength > maxBytes || (binary.size !== undefined && bytes.byteLength !== binary.size)) {
+        cleanupNew();
+        return { success: false, error: bytes.byteLength > maxBytes ? "download_too_large" : "download_incomplete" };
+      }
+      const digest = await verifySha256(bytes, binary.sha256);
+      if (!digest.ok) {
         cleanupNew();
         return { success: false, error: `checksum_mismatch_${key}` };
       }
+      if (this.cfg.verifyPlatformSignature) {
+        const sig = await this.cfg.verifyPlatformSignature(newExe);
+        if (!sig.ok) {
+          cleanupNew();
+          return { success: false, error: `platform_signature_${sig.reason ?? "refused"}` };
+        }
+      }
 
       fs.chmodSync(newExe, 0o755);
-      if (fs.existsSync(backupExe)) fs.unlinkSync(backupExe);
-      fs.renameSync(currentExe, backupExe);
-      fs.renameSync(newExe, currentExe);
-      try { fs.unlinkSync(backupExe); } catch {}
+      this.swap(currentExe, newExe, backupExe);
 
       const state = this.readState();
       state.availableVersion = undefined;
       state.failedVersion = undefined;
       state.failedAt = undefined;
+      if (loaded.signature.verified && latest.released) state.lastSignedReleased = latest.released;
       this.writeState(state);
 
       this.cfg.log(`Updated to v${latest.version}`);
@@ -288,12 +395,27 @@ export class Updater {
     }
   }
 
-  private async download(url: string, dest: string): Promise<void> {
-    if (this.cfg.download) return this.cfg.download(url, dest);
-    const response = await this.cfg.fetch(url);
-    if (!response.ok) throw new Error(`download_${response.status}`);
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    nodeFs.writeFileSync(dest, bytes);
+  /**
+   * Put the verified file in the running binary's place. The old binary moves
+   * aside first and comes back if the new one cannot take its place, so a
+   * failure part way leaves a runnable executable, never a missing one.
+   */
+  private swap(currentExe: string, newExe: string, backupExe: string): void {
+    const fs = this.cfg.fs;
+    if (fs.existsSync(backupExe)) fs.unlinkSync(backupExe);
+    fs.renameSync(currentExe, backupExe);
+    try {
+      fs.renameSync(newExe, currentExe);
+    } catch (err) {
+      try { fs.renameSync(backupExe, currentExe); } catch {}
+      throw err;
+    }
+    try { fs.unlinkSync(backupExe); } catch {}
+  }
+
+  private async download(url: string, dest: string, opts: DownloadOptions): Promise<void> {
+    if (this.cfg.download) return this.cfg.download(url, dest, opts);
+    this.cfg.fs.writeFileSync(dest, await fetchBounded(this.cfg.fetch, url, opts));
   }
 
   /** Keep the short alias (for example `cast` beside `codecast`) pointing at
@@ -328,6 +450,69 @@ export class Updater {
   assetName(key: string = this.platformKey): string {
     return assetName(this.cfg.binaryName, key);
   }
+}
+
+/**
+ * Download with the transport under our own control: redirects are followed
+ * by hand so every hop is checked against the release origin and https, the
+ * body is refused past the bound whether or not a length was declared, and a
+ * body shorter than its declared length is a partial download, not a file.
+ */
+export async function fetchBounded(fetchFn: typeof fetch, url: string, opts: DownloadOptions): Promise<Uint8Array> {
+  let current = url;
+  let response: Response | null = null;
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    const res = await fetchFn(current, { redirect: "manual" });
+    if (res.status >= 300 && res.status < 400) {
+      const location = res.headers.get("location");
+      if (!location) throw new Error(`download_${res.status}`);
+      let next: URL;
+      try {
+        next = new URL(location, current);
+      } catch {
+        throw new Error("download_redirect_refused");
+      }
+      if (next.protocol !== "https:" || next.origin !== opts.origin) throw new Error("download_redirect_refused");
+      current = next.href;
+      continue;
+    }
+    response = res;
+    break;
+  }
+  if (!response) throw new Error("download_too_many_redirects");
+  if (!response.ok) throw new Error(`download_${response.status}`);
+
+  const declared = response.headers.get("content-length");
+  const expected = declared !== null && /^\d+$/.test(declared) ? Number(declared) : null;
+  if (expected !== null && expected > opts.maxBytes) throw new Error("download_too_large");
+
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("download_no_body");
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > opts.maxBytes) {
+      await reader.cancel().catch(() => {});
+      throw new Error("download_too_large");
+    }
+    chunks.push(value);
+  }
+  if (expected !== null && total !== expected) throw new Error("download_incomplete");
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    out.set(c, offset);
+    offset += c.byteLength;
+  }
+  return out;
+}
+
+/** Spread-safe copy: an explicit `undefined` in the config must not shadow a default. */
+function stripUndefined<T extends object>(o: T): T {
+  return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as T;
 }
 
 export function createUpdater(config: UpdaterConfig): Updater {

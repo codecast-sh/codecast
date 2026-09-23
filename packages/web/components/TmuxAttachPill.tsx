@@ -104,7 +104,7 @@ export function TmuxAttachPill({
   const borderColor = paneLive ? "border-sol-green/30" : "border-gray-500/25";
 
   return (
-    <span className={`inline-flex items-stretch rounded-full border overflow-hidden ${borderColor} ${anim ?? ""}`} onAnimationEnd={() => setAnim(null)}>
+    <span data-tmux-pill className={`inline-flex items-stretch rounded-full border overflow-hidden ${borderColor} ${anim ?? ""}`} onAnimationEnd={() => setAnim(null)}>
       <ShortcutTooltip
         label={
           !tmuxSession

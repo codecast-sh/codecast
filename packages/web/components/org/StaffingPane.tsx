@@ -16,10 +16,12 @@ import { cn } from "../../lib/utils";
 import { AnchorConversation } from "../anchor/AnchorConversation";
 import { OrgButton } from "./OrgButton";
 import { amendedMoves, revisedLine, revisionWord } from "./staffingRevise";
-import { latestOrgRevisionAt, recordChangeParts, type OrgChange, type OrgVerdictSeen } from "@codecast/shared/contracts/orgProposal";
+import { isOrgGoalChange, latestOrgRevisionAt, recordChangeParts, type OrgChange, type OrgGoalChange, type OrgVerdictSeen } from "@codecast/shared/contracts/orgProposal";
+import { RoleFace } from "./RoleFace";
+import { AssigneeFace } from "../identity/AssigneeFace";
 import type { TakeoverPreview } from "../../hooks/useTakeoverPreviews";
 import { TakeoverEdit } from "./TakeoverEdit";
-import { askNames, askOfChange, asksProgress, costLine, proposalAsks, type AskView } from "./staffingAsks";
+import { askNames, askOfChange, asksProgress, proposalAsks, type AskView } from "./staffingAsks";
 import { SectionLabel } from "./OrgScopePanel";
 import { SEVERITY_META } from "./orgMeta";
 import type { OrgRole, OrgTree } from "./orgTypes";
@@ -41,9 +43,6 @@ import {
   syncEvidence,
   syncGroupSummary,
   tenureLine,
-  budgetArithmetic,
-  capsLine,
-  type BudgetArithmetic,
   type ChangeField,
   type HealthFlagRow,
 } from "./staffingModel";
@@ -181,7 +180,6 @@ function ProposalBody(props: StaffingPaneProps & { proposal: OrgProposalRow }) {
   const asks = useMemo(() => proposalAsks(proposal, askNames(tree)), [proposal.asks, proposal.changes, tree]); // eslint-disable-line react-hooks/exhaustive-deps
   const progress = asksProgress(asks);
   const loading = proposal.changes.length === 0 && (proposal.counts?.total ?? 0) > 0;
-  const budget = useMemo(() => budgetArithmetic(tree, proposal.changes), [tree, proposal.changes]);
   const others = openProposals(props.proposals).filter((p) => p._id !== proposal._id);
   // One fold open at a time. A change focused from the chart opens the card
   // that holds it; closing that card lets go of the change.
@@ -192,7 +190,6 @@ function ProposalBody(props: StaffingPaneProps & { proposal: OrgProposalRow }) {
     if (selectedChangeId) props.onSelectChange(null);
     setOpened(openIndex === i ? null : { proposalId: proposal._id, index: i });
   };
-  const [costOpen, setCostOpen] = useState(false);
   const revisedIds = useMemo(() => new Set(props.revised?.rows.map((r) => r._id) ?? []), [props.revised?.rows]);
   // What this render read: the verdicts it sends say so (onDecide, onDecideAsk).
   const revisedAt = latestOrgRevisionAt(proposal.changes);
@@ -253,15 +250,6 @@ function ProposalBody(props: StaffingPaneProps & { proposal: OrgProposalRow }) {
         ))}
       </div>
 
-      {!loading && asks.length > 0 && (
-        <div className="mt-3" data-cost>
-          <button type="button" onClick={() => setCostOpen((v) => !v)} aria-expanded={costOpen} className="w-full flex items-center gap-1.5 text-left text-[12.5px] px-1 h-7 rounded-md hover:bg-sol-bg-highlight/60" style={{ color: "var(--sol-text-secondary)" }} data-cost-line>
-            <span className="min-w-0 flex-1 truncate">{costLine(budget)}</span>
-            <span className="shrink-0 text-[11.5px]" style={{ color: "var(--sol-violet)" }}>{costOpen ? "Hide the numbers" : "See the numbers"}</span>
-          </button>
-          {costOpen && <BudgetSheet budget={budget} />}
-        </div>
-      )}
 
       {others.length > 0 && (
         <div className="mt-5 pt-3 border-t flex flex-col gap-1" style={{ borderColor: BORDER }} data-other-proposals>
@@ -398,37 +386,6 @@ function AskCard({ ask, number, tree, open, onToggle, selectedChangeId, revisedI
   );
 }
 
-/**
- * The budget arithmetic (S17), computed from the tree and the open changes
- * rather than quoted: what the standing agents may do in a day now, what
- * they may do if every remaining change lands, and the lines that move it.
- */
-function BudgetSheet({ budget }: { budget: BudgetArithmetic }) {
-  const moved = budget.lines.length > 0;
-  return (
-    <div className="mt-2 rounded-lg border p-2.5" style={{ borderColor: BORDER, background: "var(--sol-card)" }} data-summary-detail="budget">
-      <p className="text-[11px] leading-snug" style={{ color: "var(--sol-text-dim)" }}>What the standing agents may do in one day, added up across the {budget.seats} {budget.seats === 1 ? "agent" : "agents"} with a limit{budget.paused > 0 ? `; ${budget.paused} paused ${budget.paused === 1 ? "agent stays" : "agents stay"} outside the total` : ""}.</p>
-      <div className="mt-2 grid grid-cols-[64px_1fr] gap-x-2 gap-y-1 text-[12px]">
-        <span className="uppercase tracking-[0.08em] text-[10px] mt-[2px]" style={{ color: "var(--sol-text-dim)" }}>today</span>
-        <span className="tabular-nums" style={{ color: "var(--sol-text)" }} data-budget-today>{capsLine(budget.today)}</span>
-        <span className="uppercase tracking-[0.08em] text-[10px] mt-[2px]" style={{ color: moved ? "var(--sol-violet)" : "var(--sol-text-dim)" }}>after</span>
-        <span className="tabular-nums" style={{ color: "var(--sol-text)" }} data-budget-after>{moved ? capsLine(budget.after) : "the same: no open change moves a limit"}</span>
-      </div>
-      {moved && (
-        <div className="mt-2 flex flex-col gap-1" data-budget-lines>
-          {budget.lines.map((l, i) => (
-            <div key={i} className="text-[11.5px] leading-snug" style={{ color: "var(--sol-text-muted)" }}>
-              <span className="font-medium" style={{ color: "var(--sol-text)", fontFamily: "var(--font-mono)" }}>@{l.handle.replace(/^@/, "")}</span>
-              {l.name && <span> {l.name}</span>}
-              <span style={{ color: "var(--sol-text-dim)" }}> · {l.note}</span>
-              <span className="block tabular-nums">{l.before && l.after ? `from ${capsLine(l.before)} to ${capsLine(l.after)}` : l.after ? `adds ${capsLine(l.after)}` : `frees ${capsLine(l.before)}`}</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
 
 function Fact({ k, v, tone }: { k: string; v: string; tone?: string }) {
   return (
@@ -519,6 +476,7 @@ function ChangeRow({ change, tree, nested, selected, editing, revisedNew, takeov
             {change.revision && <RevisionNote change={change} selected={selected} />}
             {change.depends && <span className="block text-[11px] leading-snug" style={{ color: "var(--sol-text-dim)" }} data-change-depends>{change.depends}</span>}
             {tenure && <TenureChip line={tenure} />}
+            {isOrgGoalChange(change.change) && <GoalChangeDetails change={change.change} tree={tree} />}
             {evidence && (
               <span className={cn("block text-[11px] leading-snug mt-0.5", selected ? "break-words" : "line-clamp-2")} style={{ color: "var(--sol-text-muted)" }} data-sync-evidence title={evidence}>
                 <span className="uppercase tracking-[0.08em] text-[9.5px] mr-1" style={{ color: "var(--sol-green)" }}>evidence</span>{evidence}
@@ -606,6 +564,37 @@ function RevisionNote({ change, selected }: { change: OrgProposalChange; selecte
               now <span className="font-medium" style={{ color: "var(--sol-text)" }}>{m.to ?? "nothing"}</span>
             </span>
           ))}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/**
+ * What a goal change carries, under its line (initiatives-projects-role-page.md
+ * "I1, revised"): the projects as chips, named from the chart where it knows
+ * them, and the owner as a role's face or a person's face, resolved from the
+ * chart's roles and people. A ref the chart does not know stands as written,
+ * so the row still says what the author meant.
+ */
+export function GoalChangeDetails({ change, tree }: { change: OrgGoalChange; tree: OrgTree | null }) {
+  const projectName = (ref: string) => {
+    for (const r of tree?.roles ?? []) for (const p of r.scope_names.projects) if (p.id === ref || p.short_id === ref || p.title === ref) return p.title;
+    return ref;
+  };
+  const owner = change.kind === "initiative_projects" ? undefined : change.owner;
+  const role = owner?.startsWith("@") ? tree?.roles.find((r) => r.handle.toLowerCase() === owner.slice(1).toLowerCase()) ?? null : null;
+  const person = owner && !role ? tree?.people.find((p) => (owner.toLowerCase() === "me" ? p.is_me : p.name.toLowerCase() === owner.toLowerCase())) ?? null : null;
+  const projects = change.kind === "initiative_owner" ? [] : change.projects;
+  return (
+    <span className="flex flex-wrap items-center gap-1 mt-1" data-goal-details>
+      {projects.map((ref) => (
+        <span key={ref} className="inline-flex items-center h-[16px] px-1.5 rounded text-[10px] font-medium" style={{ background: "color-mix(in srgb, var(--sol-border) 35%, transparent)", color: "var(--sol-text-muted)" }} data-goal-project={ref}>{projectName(ref)}</span>
+      ))}
+      {owner && (
+        <span className="inline-flex items-center gap-1 h-[16px] text-[10.5px]" style={{ color: "var(--sol-text-secondary)" }} data-goal-owner={role ? `role:${role.handle}` : person ? `person:${person.name}` : `ref:${owner}`}>
+          {role ? <RoleFace role={role} size={14} /> : person ? <AssigneeFace info={{ name: person.name, image: person.image }} size={14} hover={false} /> : null}
+          <span>{role ? role.name : person ? (person.is_me ? "you" : person.name) : owner}</span>
         </span>
       )}
     </span>

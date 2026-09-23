@@ -5,10 +5,24 @@
 // drive; `createApiTokenDefinitions` wraps them into `{ args, handler }`
 // definitions the app hands to its own Convex builders and exports from its own
 // apiTokens.ts.
+//
+// Device binding. A mint that names a device stores that device on the row and
+// hands back a secret marked with DEVICE_BOUND_TOKEN_PREFIX (tokenFormat.ts).
+// From then on the token authenticates only when it arrives as
+// `<secret>.<device_id>` with the device the row names. The check lives in
+// `verifyApiToken`, which every authenticated function calls, so it holds on
+// both doors: a direct Convex call and an HTTP route through the app's
+// `cliRoute`. The HTTP edge asks `deviceBindingAllows` first only to answer a
+// wrong machine with a 403 and a pointer to `cast auth` instead of a bare 401.
+// A row with no device is unbound and behaves exactly as it always has, which
+// is what makes the rollout migration free: no existing token changes on the
+// wire, and a bound token exists only where a client that presents devices
+// asked for one.
 import { v } from "convex/values";
 import type { GenericId } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { type AuthTables, type DbCtx, resolveTables } from "./tables";
+import { DEVICE_BOUND_TOKEN_PREFIX, splitPresentedToken } from "../tokenFormat";
 
 export async function hashToken(token: string): Promise<string> {
   const encoder = new TextEncoder();
@@ -26,6 +40,32 @@ export function generateToken(): string {
     .join("");
 }
 
+/**
+ * A fresh long lived token row for `userId`, bound to `deviceId` when one is
+ * given. The one place a bearer secret is minted, so the mark and the stored
+ * device can never disagree: a marked secret always has a device on its row,
+ * and a row with a device always handed out a marked secret.
+ */
+async function mintBearerToken(
+  ctx: DbCtx,
+  userId: GenericId<"users">,
+  name: string,
+  deviceId: string | undefined,
+  tables: AuthTables,
+): Promise<string> {
+  const token = `${deviceId ? DEVICE_BOUND_TOKEN_PREFIX : ""}${generateToken()}`;
+  const now = Date.now();
+  await ctx.db.insert(tables.apiTokens, {
+    user_id: userId,
+    token_hash: await hashToken(token),
+    name,
+    created_at: now,
+    last_used_at: now,
+    ...(deviceId ? { device_id: deviceId } : {}),
+  });
+  return token;
+}
+
 // last_used_at is telemetry, not a correctness signal. Refresh it at most this
 // often, and only from the single heartbeat call (updateLastUsed=true), never
 // from the message hot path. See updateLastUsed below.
@@ -33,13 +73,23 @@ export const TOKEN_LAST_USED_THROTTLE_MS = 10 * 60 * 1000;
 
 export const SETUP_TOKEN_TTL_MS = 60 * 60 * 1000;
 
-/** The one hash-and-index lookup every token path shares. */
+const SETUP_TOKEN_PREFIX = "setup-";
+
+function isSetupToken(tokenDoc: { name: string }): boolean {
+  return tokenDoc.name.startsWith(SETUP_TOKEN_PREFIX);
+}
+
+/**
+ * The one hash-and-index lookup every token path shares. Takes the token as it
+ * arrived on the wire: a presented device id is split off before hashing, so a
+ * bound token's row is found whether or not the client presented one.
+ */
 export async function findTokenDoc(
   ctx: DbCtx,
   token: string,
   tables: AuthTables = resolveTables(),
 ): Promise<any | null> {
-  const tokenHash = await hashToken(token);
+  const tokenHash = await hashToken(splitPresentedToken(token).secret);
   return await ctx.db
     .query(tables.apiTokens)
     .withIndex(tables.apiTokensByHashIndex, (q: any) => q.eq("token_hash", tokenHash))
@@ -68,13 +118,22 @@ export async function verifyApiToken(
     return null;
   }
 
-  // The device binding is deliberately NOT checked here. No caller of this
-  // function has a device to give it: the app's `cliRoute` asks
-  // `deviceBindingAllows` and then DELETES device_id from the body, because the
-  // mutations behind those routes validate a closed v.object and reject an
-  // unrecognised field. A binding check here would therefore see "no device
-  // presented" on every real call and reject every bound token, locking the
-  // owner out of their own CLI the first time `cast auth` mints one.
+  // A setup token is a one hour voucher for `exchangeSetupTokenFor` and
+  // nothing else. It must never act as the account's bearer credential.
+  if (isSetupToken(tokenDoc)) {
+    return null;
+  }
+
+  // The device binding, enforced where every authenticated function already
+  // passes through. The device arrives inside `token` itself (tokenFormat.ts),
+  // which is why this check can live here: a direct Convex call and an HTTP
+  // route forward `api_token` alike, and neither needs a field its closed
+  // validator does not name. A bound token presented with no device fails
+  // too; treating the omission as "not applicable" would let a thief opt out
+  // by sending less.
+  if (!deviceBindingAllowsDoc(tokenDoc, token)) {
+    return null;
+  }
 
   if (updateLastUsed && Date.now() - (tokenDoc.last_used_at || 0) > TOKEN_LAST_USED_THROTTLE_MS) {
     try {
@@ -92,12 +151,19 @@ export async function verifyApiToken(
   };
 }
 
+/** The binding rule itself, on a row already looked up: unbound rows allow everything. */
+function deviceBindingAllowsDoc(tokenDoc: { device_id?: string }, presented: string): boolean {
+  if (!tokenDoc.device_id) return true; // unbound: every token minted before this existed
+  return tokenDoc.device_id === splitPresentedToken(presented).deviceId;
+}
+
 /**
  * Is this token allowed to act from the device presenting it?
  *
- * This is the ONLY place the binding is enforced. The app's `cliRoute` calls
- * it once for every route it declares, so those routes cannot forget it. The
- * route that gets forgotten is always the newest one.
+ * The same rule `verifyApiToken` enforces, asked ahead of the handler by the
+ * app's `cliRoute` so a request from the wrong machine gets a 403 that names
+ * the fix instead of the bare 401 authentication would give it. The handler
+ * still authenticates on its own; this is the better error, not the fence.
  *
  * Returns true for an unknown token as well: this answers only the device
  * question, and the handler's own `verifyApiToken` is what rejects a bad token.
@@ -110,23 +176,23 @@ export async function verifyApiToken(
  */
 export async function deviceBindingAllows(
   ctx: DbCtx,
-  args: { api_token: string; device_id?: string },
+  args: { api_token: string },
   tables: AuthTables = resolveTables(),
 ): Promise<boolean> {
   const tokenDoc = await findTokenDoc(ctx, args.api_token, tables);
   if (!tokenDoc) return true;
-  if (!tokenDoc.device_id) return true; // unbound: every token minted before this existed
-  // A bound token presented with no device_id fails here too. Treating a
-  // missing field as "not applicable" would make the check opt out by
-  // omission, and a thief would simply stop sending it.
-  return tokenDoc.device_id === args.device_id;
+  return deviceBindingAllowsDoc(tokenDoc, args.api_token);
 }
 
-/** Exchange a one hour setup token for a long lived token. Pure; exported for tests. */
+/**
+ * Exchange a one hour setup token for a long lived token, bound to `deviceId`
+ * when the redeeming machine names itself. Pure; exported for tests.
+ */
 export async function exchangeSetupTokenFor(
   ctx: DbCtx,
   setupToken: string,
   tables: AuthTables = resolveTables(),
+  deviceId?: string,
 ): Promise<{ auth_token: string; user_id: GenericId<"users"> } | null> {
   const tokenDoc = await findTokenDoc(ctx, setupToken, tables);
 
@@ -139,23 +205,19 @@ export async function exchangeSetupTokenFor(
     return null;
   }
 
-  if (!tokenDoc.name.startsWith("setup-")) {
+  if (!isSetupToken(tokenDoc)) {
     return null;
   }
 
   await ctx.db.delete(tokenDoc._id);
 
-  const newToken = generateToken();
-  const newTokenHash = await hashToken(newToken);
-  const now = Date.now();
-
-  await ctx.db.insert(tables.apiTokens, {
-    user_id: tokenDoc.user_id,
-    token_hash: newTokenHash,
-    name: `CLI - ${new Date(now).toISOString().split("T")[0]}`,
-    created_at: now,
-    last_used_at: now,
-  });
+  const newToken = await mintBearerToken(
+    ctx,
+    tokenDoc.user_id,
+    `CLI - ${new Date().toISOString().split("T")[0]}`,
+    deviceId,
+    tables,
+  );
 
   return { auth_token: newToken, user_id: tokenDoc.user_id };
 }
@@ -230,24 +292,18 @@ export function createApiTokenDefinitions<Extras extends Record<string, unknown>
   const createToken = {
     args: {
       name: v.string(),
+      // The machine the token is for, carried from the CLI through the
+      // authorize page. Present, the token binds to it; absent (an older CLI,
+      // the desktop sign in), the token is unbound as before.
+      device_id: v.optional(v.string()),
     },
-    handler: async (ctx: any, args: { name: string }) => {
+    handler: async (ctx: any, args: { name: string; device_id?: string }) => {
       const userId = await getAuthUserId(ctx);
       if (!userId) {
         throw new Error("Unauthorized: must be logged in to create API token");
       }
 
-      const token = generateToken();
-      const tokenHash = await hashToken(token);
-      const now = Date.now();
-
-      await ctx.db.insert(tables.apiTokens, {
-        user_id: userId,
-        token_hash: tokenHash,
-        name: args.name,
-        created_at: now,
-        last_used_at: now,
-      });
+      const token = await mintBearerToken(ctx, userId, args.name, args.device_id, tables);
 
       // Funnel: the only caller is the authorize page, so a token mint here IS a
       // completed browser based CLI auth.
@@ -273,7 +329,7 @@ export function createApiTokenDefinitions<Extras extends Record<string, unknown>
       await ctx.db.insert(tables.apiTokens, {
         user_id: userId,
         token_hash: tokenHash,
-        name: `setup-${now}`,
+        name: `${SETUP_TOKEN_PREFIX}${now}`,
         created_at: now,
         last_used_at: now,
         expires_at: expiresAt,
@@ -347,6 +403,11 @@ export function createApiTokenDefinitions<Extras extends Record<string, unknown>
       if (!token || token.user_id !== userId) {
         throw new Error("Token not found");
       }
+      // The name is what marks a setup voucher, so a rename must never move a
+      // token across that line in either direction.
+      if (isSetupToken(token) || args.name.startsWith(SETUP_TOKEN_PREFIX)) {
+        throw new Error("Setup tokens cannot be renamed");
+      }
 
       await ctx.db.patch(args.token_id, { name: args.name });
     },
@@ -355,12 +416,13 @@ export function createApiTokenDefinitions<Extras extends Record<string, unknown>
   const exchangeSetupToken = {
     args: {
       setupToken: v.string(),
+      device_id: v.optional(v.string()),
     },
     handler: async (
       ctx: any,
-      args: { setupToken: string },
+      args: { setupToken: string; device_id?: string },
     ): Promise<({ auth_token: string; user_id: GenericId<"users"> } & Extras) | null> => {
-      const exchanged = await exchangeSetupTokenFor(ctx, args.setupToken, tables);
+      const exchanged = await exchangeSetupTokenFor(ctx, args.setupToken, tables, args.device_id);
       if (!exchanged) return null;
 
       // Funnel: a setup token exchange is a completed `cast login <token>`.
@@ -377,9 +439,8 @@ export function createApiTokenDefinitions<Extras extends Record<string, unknown>
   const deviceBindingAllowsQuery = {
     args: {
       api_token: v.string(),
-      device_id: v.optional(v.string()),
     },
-    handler: async (ctx: any, args: { api_token: string; device_id?: string }): Promise<boolean> =>
+    handler: async (ctx: any, args: { api_token: string }): Promise<boolean> =>
       deviceBindingAllows(ctx, args, tables),
   };
 

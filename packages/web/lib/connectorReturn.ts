@@ -101,6 +101,8 @@ const KNOWN_REASONS: Record<string, string> = {
   install_verification_unconfigured:
     "This deployment cannot verify GitHub installs yet (GITHUB_APP_CLIENT_ID / GITHUB_APP_CLIENT_SECRET).",
   install_verification_failed: "GitHub could not be reached to verify the install. Try again.",
+  install_not_fresh:
+    "That GitHub installation existed before this install started. Uninstall the Codecast app on GitHub, then install it again from the GitHub card.",
   not_authorized: "You no longer have access to that workspace, so the connection was not activated.",
   wrong_user: "Only the person who started this connection can finish it.",
   denied: "You declined the authorization.",

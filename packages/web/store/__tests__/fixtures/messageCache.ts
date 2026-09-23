@@ -4,6 +4,7 @@ import { indexedDB, IDBKeyRange, IDBObjectStore } from "fake-indexeddb";
 
 Dexie.dependencies.indexedDB = indexedDB;
 Dexie.dependencies.IDBKeyRange = IDBKeyRange;
+const { stampCacheOwner } = await import("./signedInPrincipal");
 const cache = await import("../../idbCache");
 const { ensureHydrated, useInboxStore } = await import("../../inboxStore");
 const now = Date.now();
@@ -14,6 +15,7 @@ const db = new Dexie("codecast-store");
 await db.open();
 await db.table("conversationMessages").put({ convId: "cached", messages: [message("disk")], pagination, latestTimestamp: now });
 await db.table("conversationUserMessages").put({ convId: "cached", userMessages: [message("disk")] });
+await stampCacheOwner();
 const puts: string[] = [];
 const original = IDBObjectStore.prototype.put;
 let firstWriteTurnCount = 0;

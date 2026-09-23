@@ -6,7 +6,7 @@
 import { resolveOrgAsks, type OrgAskNames } from "@codecast/shared/contracts/orgProposal";
 import type { OrgProposalChange, OrgProposalRow } from "./orgStaffingTypes";
 import type { OrgTree } from "./orgTypes";
-import { isDecidable, isSyncChange, orderChanges, recordsInLine, splitAsk, type BudgetArithmetic, type BudgetCaps } from "./staffingModel";
+import { isDecidable, isSyncChange, orderChanges, recordsInLine, splitAsk } from "./staffingModel";
 
 /** Where one ask stands. `open` = something in it still waits on the person
  *  (a failed row does, the server takes it again); the other two are decided. */
@@ -97,36 +97,7 @@ export function askOfChange(asks: AskView[], changeId: string | null | undefined
 
 // ---------------------------------------------------------------- the cost line
 
-/** A share as a person says it. Exact numbers are one tap away. */
-function shareWords(share: number): string {
-  if (share < 0.15) return "a tenth";
-  if (share < 0.22) return "a fifth";
-  if (share < 0.29) return "a quarter";
-  if (share < 0.42) return "a third";
-  if (share < 0.58) return "half";
-  if (share < 0.71) return "two thirds";
-  return "three quarters";
-}
 
-/**
- * The one line under the asks (S19): what accepting everything still open
- * does to the daily limits, as a share, in words. Reads the limit that costs
- * money first (tokens), then the two that only count activity. The
- * arithmetic (staffingModel.budgetArithmetic) is behind the tap.
- */
-export function costLine(b: BudgetArithmetic): string {
-  const lead = "If you accept everything, ";
-  if (b.lines.length === 0) return `${lead}the daily limits stay as they are`;
-  const key = (["tokens_per_day", "wakes_per_day", "hands_per_day"] as (keyof BudgetCaps)[]).find((k) => b.today[k] > 0 || b.after[k] > 0) ?? "tokens_per_day";
-  const today = b.today[key], after = b.after[key];
-  if (today <= 0) return `${lead}the agents get their first daily limit`;
-  if (after <= 0) return `${lead}no agent has a daily limit left to use`;
-  const ratio = after / today;
-  if (Math.abs(ratio - 1) < 0.04) return `${lead}the daily limits add up to about the same`;
-  if (ratio >= 1.8) return `${lead}the daily limits add up to about ${Math.round(ratio) === 2 ? "double" : `${Math.round(ratio)} times as much`}`;
-  if (ratio < 0.12) return `${lead}the daily limits add up to almost nothing`;
-  return `${lead}the daily limits add up to about ${shareWords(Math.abs(ratio - 1))} ${ratio > 1 ? "more" : "less"}`;
-}
 
 // ---------------------------------------------------------------- the letter
 

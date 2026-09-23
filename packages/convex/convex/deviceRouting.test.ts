@@ -188,23 +188,16 @@ describe("pickOwnerDevice — an explicit pick outranks the heuristics", () => {
     expect(r).toBe("r1");
   });
 
-  test("an OFFLINE target falls back to a live machine that HAS the checkout", () => {
+  test("an OFFLINE target is never substituted, even by a live machine that HAS the checkout", () => {
+    // The person chose L1. A start that lands on L2 is a session they cannot
+    // find (a launch on 2026-09-23 was re-homed this way and sat unstarted).
     const devices = [
       local("L1", { last_seen: stale, local_project_roots: ["/x"] }),
       local("L2", { last_seen: fresh, local_project_roots: ["/x"] }),
-    ];
-    const r = pickOwnerDevice(devices, { projectPath: "/x", targetDeviceId: "L1" }, NOW);
-    expect(r).toBe("L2");
-  });
-
-  test("an OFFLINE target with a checkout-holding remote online → the remote, not a bare local", () => {
-    const devices = [
-      local("L1", { last_seen: stale, local_project_roots: ["/x"] }),
-      local("L2", { last_seen: fresh }), // online but no checkout — would strand /x
       remote("r1", { local_project_roots: ["/x"] }),
     ];
     const r = pickOwnerDevice(devices, { projectPath: "/x", targetDeviceId: "L1" }, NOW);
-    expect(r).toBe("r1");
+    expect(r).toBe("L1");
   });
 
   test("an OFFLINE target that no live machine can substitute for QUEUES for the target", () => {
@@ -216,16 +209,6 @@ describe("pickOwnerDevice — an explicit pick outranks the heuristics", () => {
     ];
     const r = pickOwnerDevice(devices, { projectPath: "/x", targetDeviceId: "L1" }, NOW);
     expect(r).toBe("L1");
-  });
-
-  test("a live checkout holder beats queueing, LOCAL preferred over remote", () => {
-    const devices = [
-      local("L1", { last_seen: stale, local_project_roots: ["/x"] }),
-      local("L2", { last_seen: fresh, local_project_roots: ["/x"] }),
-      remote("r1", { local_project_roots: ["/x"] }),
-    ];
-    const r = pickOwnerDevice(devices, { projectPath: "/x", targetDeviceId: "L1" }, NOW);
-    expect(r).toBe("L2");
   });
 
   test("an OFFLINE target with NO path hint queues for the target", () => {

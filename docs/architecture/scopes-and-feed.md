@@ -160,3 +160,32 @@ boundary of it: the org above it stays, the same scope stays reachable by
 every person who can see it, and a hand stays a first class session with its
 own page. We do not collapse a scope into one coordinator's thread, and we do
 not invent a per project memory separate from the brief.
+
+## F5. The first screen is a briefing, not a board
+
+On 2026-09-23 the founder opened the Calling lead's page and met two projects with task counts and progress bars, six plans with their fractions, "33 sessions are waiting on a person in this area", a tab strip carrying "83", and eight session rows in needs input. His words: "there's just too much going on here, we need to work on making this easier to digest at the top level, and then I can drill down; it just needs to be a bit calmer; so much asking for my attention and I can't digest that many plans, tasks and sessions, like what does it really mean?" The page was showing him the role's workload and asking him to triage it. That is the role's job (R1). The person's job is to know how the area is going and what, if anything, is theirs to do.
+
+### F5.1 Three questions, in words
+
+The panel's first screen (the Scope tab) answers three questions, in that order, in sentences a person reads in ten seconds:
+
+1. **What needs you.** Only what the role put in front of the person (R1, revised): each escalation as one line with its session pill. When there is none, one calm line: "Nothing needs you." Never a count of sessions waiting on a person, never a list of hands in needs input: those wait on the role, and the role answers or escalates.
+2. **Where it stands.** One sentence per project in the role's area, in the role's own words, from its brief (F5.2). No task counts, no progress bars, no plan fractions on the first screen. A project the role has not written about yet reads "no word from @calling yet" rather than numbers.
+3. **What it is doing.** One line: how many sessions are active under it and the one it is on now, as a pill. The rest is the Sessions tab.
+
+Everything else on the page today (plans with fractions, task counts, the board, the line, wakes, settings) stays exactly where it is, one tab away. The tab strip carries no numbers. The page's header keeps the role's name, face, status word and the one line of its pinned state.
+
+### F5.2 The role writes the meaning
+
+The sentences under "Where it stands" are the role's. Its brief gains a section `## Where it stands` with one line per project in its scope, and the role's standing text says it keeps those lines current at the end of any turn that changed what a project is doing: what moved, what is stuck, what it is waiting for, in plain words a person outside the work can read. The frame reads the lines back to it beside the counts so a stale line is visible to the role, and the panel shows the line's age when it is older than a week. No number the panel derives replaces the role's sentence; the counts stay on the Board and Tasks tabs for the person who drills down.
+
+### F5.3 What leaves the first screen
+
+- "N sessions are waiting on a person in this area" and the reporting line under it.
+- The Needs input list of hands and the Done and Parked sections.
+- Task counts and progress bars on project cards; plan rows with fractions.
+- Counts on tabs.
+
+### F5.4 Proof
+
+A mount test renders the Calling lead's fixture (two projects, six plans, 83 tasks, 33 waiting sessions, two escalations) and asserts the first screen holds exactly: two escalation lines, two project sentences, one activity line, and no digit outside those. A second test renders a role with no escalations and no brief lines and asserts "Nothing needs you" and "no word from @handle yet". The role prompt change is proved with the harness on a saved frame: three samples, each ending its turn with the section current.

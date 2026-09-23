@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { exhaustionBannerCopy, isAgentSpawnedConversation, isSubagentConversation, subagentLinkFields,
+  fleetAccount,
+  continueTargetPin,
+  continueNeedsRestart,
+  parkedOnActiveAccount,
   profileHasToken,
   profileHasSetupToken,
   tokenBackedProfile,
@@ -200,5 +204,49 @@ describe("per-session account tokens", () => {
     expect(activeTokenProfile({ ...accounts, active_email: "c@x.com" }, now)).toBeUndefined();
     expect(activeTokenProfile({ ...accounts, active_email: undefined }, now)).toBeUndefined();
     expect(activeTokenProfile(undefined, now)).toBeUndefined();
+  });
+});
+
+describe("token switch: the fleet account", () => {
+  const now = 1_000_000;
+  const live = { stored_at: 1, expires_at: now + 1 };
+  const key = { name: "key", email: "key@x.com", token: live };
+  const tok = { name: "tok", email: "tok@x.com", login_expired_at: 5, setup_token: live };
+  const accounts = { active_email: "key@x.com", launch_profile: "tok", profiles: [key, tok] };
+  const device = { is_remote: false, cc_accounts: accounts };
+
+  test("the fleet is the launch profile while its token is live, else the keychain login", () => {
+    expect(fleetAccount(accounts, now)).toEqual({ email: "tok@x.com", profile: "tok", viaToken: true });
+    // Token past its year: the record no longer holds, the keychain login is the fleet.
+    const spent = { ...accounts, profiles: [key, { ...tok, setup_token: { stored_at: 1, expires_at: now } }] };
+    expect(fleetAccount(spent, now)).toEqual({ email: "key@x.com", viaToken: false });
+    // A record naming a profile the inventory no longer lists is ignored.
+    expect(fleetAccount({ ...accounts, launch_profile: "gone" }, now)).toEqual({ email: "key@x.com", viaToken: false });
+    expect(fleetAccount({ active_email: "key@x.com", profiles: [key] }, now)).toEqual({ email: "key@x.com", viaToken: false });
+    expect(fleetAccount(undefined, now)).toEqual({ viaToken: false });
+  });
+
+  test("new sessions and continues pin to the launch profile; remotes never pin", () => {
+    expect(activeTokenProfile(accounts, now)).toBe("tok");
+    expect(continueTargetPin(device, now)).toBe("tok");
+    expect(continueTargetPin({ ...device, is_remote: true }, now)).toBeUndefined();
+    // Without a record the pin follows the keychain login as before.
+    expect(activeTokenProfile({ active_email: "key@x.com", profiles: [key, tok] }, now)).toBe("key");
+  });
+
+  test("after a token switch an unpinned process must restart: it runs on the keychain, not the fleet", () => {
+    expect(continueNeedsRestart({ pending_api_error_kind: "limit" }, device, now)).toBe(true);
+    expect(continueNeedsRestart({ pending_api_error_kind: "limit", cc_account: "key" }, device, now)).toBe(true);
+    expect(continueNeedsRestart({ pending_api_error_kind: "limit", cc_account: "tok" }, device, now)).toBe(false);
+    // Same session shapes on a machine with no record: unpinned continues in place.
+    const plain = { is_remote: false, cc_accounts: { active_email: "key@x.com", profiles: [key, tok] } };
+    expect(continueNeedsRestart({ pending_api_error_kind: "limit" }, plain, now)).toBe(false);
+  });
+
+  test("parks are read as facts about the token account, never the keychain login", () => {
+    expect(parkedOnActiveAccount({ cc_account: "tok" }, device, now)).toBe(true);
+    expect(parkedOnActiveAccount({}, device, now)).toBe(false);
+    expect(parkedOnActiveAccount({ cc_account: "key" }, device, now)).toBe(false);
+    expect(parkedOnActiveAccount({}, { ...device, is_remote: true }, now)).toBe(true);
   });
 });

@@ -164,6 +164,20 @@ for every row an authorized page returns (review C7). The purge's vocabulary cro
 (cursors keyed by log scope, purge keyed by workspace) relies on the invariant that
 `workspace: team:T` implies `team_id: T`, maintained by `computeWorkspaceKey`.
 
+**The team side of a departure.** A membership delete also appends `{ entity_type:
+"member", entity_id: <user_id>, op: scope_removed }` in the TEAM's scope. Conversations fan
+out to their owner only (cargo E4), so the remaining members' clients would otherwise never
+hear that the departed member's rows are no longer the team's: the team feed cache
+(`feedConversations`, keyed `<teamId>|<dir>`) only grows, and a removed member kept a pill
+with every session they ever shared (Littlebird, 2026-09-23). On the row the client drops
+that user's rows from the team's feed keys (`purgeMemberTeamRows`); one row per removal,
+never one per conversation. The same cache is dropped wholesale (`dropTeamFeedCache`: rows,
+paging state, covered watermark) whenever the log stops vouching for the scope: the
+viewer's own revocation (`purgeTeamScopeRows`, the heads absence sweep, `authorized: false`)
+and a retention resync, after which the removal row may be gone. A rejoin lifts nothing
+here: the cache holds no excludes, and the live page re-adds what the server serves again.
+Lifecycle rows (`scope`, `member`) carry no cargo and never coalesce.
+
 ### D6 — Read API (additive, `convex/syncLog.ts`)
 
 - `getHeads {}` — the caller's scopes (own user scope + team memberships) with

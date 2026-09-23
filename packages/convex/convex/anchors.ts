@@ -4,7 +4,7 @@ import { Id } from "./_generated/dataModel";
 import { buildShareUpdate, resolveCreationPrivacy } from "./privacy";
 import { patchConversationVisibility } from "./lib/access";
 import { enqueueStartSession } from "./devices";
-import { fromConvexAgentType } from "@codecast/shared/contracts";
+import { fromConvexAgentType, workspaceFeatureEnabled } from "@codecast/shared/contracts";
 import { enqueueKillSessionCommand } from "./cleanup";
 import { enqueuePendingMessage, formatSessionMessage, getAuthenticatedUserId } from "./pendingMessages";
 import { CHIEF_OF_STAFF_HANDLE, roleGrants } from "./lib/orgAccess";
@@ -60,8 +60,19 @@ export async function visibleAnchorsForUser(
     .query("team_memberships")
     .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
     .collect();
+  // The org feature is per team, default off (teams.features.org): a team
+  // with it off shows none of its seats, and the personal workspace shows its
+  // own seats only while some team of the person's has it on (the shared
+  // workspaceFeatureEnabled rule). Bot users reach every roster, chat member
+  // list and face row through this function, so this is where they stop.
+  const teams = await Promise.all(memberships.map((m: any) => ctx.db.get(m.team_id)));
+  const orgOnFor = new Set(
+    teams.filter((t: any) => t && workspaceFeatureEnabled([t], t._id, "org")).map((t: any) => t._id.toString()),
+  );
+  const personalOrgOn = workspaceFeatureEnabled(teams, null, "org");
   const teamAnchors: any[] = [];
   for (const m of memberships) {
+    if (!orgOnFor.has(m.team_id.toString())) continue;
     const rows = await ctx.db
       .query("anchors")
       .withIndex("by_team", (q: any) => q.eq("team_id", m.team_id))
@@ -70,7 +81,7 @@ export async function visibleAnchorsForUser(
   }
   const seen = new Set<string>();
   const out: any[] = [];
-  for (const a of [...personal, ...teamAnchors]) {
+  for (const a of [...(personalOrgOn ? personal : []), ...teamAnchors]) {
     if (a.status === "decommissioned") continue;
     if (seen.has(a._id.toString())) continue;
     seen.add(a._id.toString());
@@ -88,7 +99,8 @@ export type RoleBootstrap = {
   handle: string;
   scopeNames: string[];
   parentName: string;
-  trust: "understand" | "decide" | "direct";
+  /** The switch (org-staffing.md S23.1): the role starts work in its scope on its own. */
+  startsOnItsOwn: boolean;
 };
 
 export function bootstrapMessage(opts: {
@@ -100,7 +112,7 @@ export function bootstrapMessage(opts: {
   persona?: string;
   // Set when the standing agent is an org ROLE (org-roles-standing.md T1)
   // rather than the workspace anchor: the frame names its seat, its scope,
-  // its parent and its trust stage, and the rules of a role replace the
+  // its parent and its switch, and the rules of a role replace the
   // anchor's memory-and-delegation bullets. A person writing into the scope
   // is the front door (scopes-and-feed.md F4.2, F4.4): the role says where
   // each message went, and remembering is a brief write it says it made.
@@ -108,7 +120,7 @@ export function bootstrapMessage(opts: {
 }): string {
   const { name, scopeType, scopeLabel, persona, role } = opts;
   const who = role
-    ? `the standing agent for the **${name}** role (@${role.handle}) in ${scopeType === "team" ? `the ${opts.teamName ?? "team"} workspace` : `${opts.ownerName ?? "one person"}'s personal workspace`}. You report to ${role.parentName}. Your scope: ${role.scopeNames.length ? role.scopeNames.join(", ") : "the whole workspace"}. Your trust stage is **${role.trust}**`
+    ? `the standing agent for the **${name}** role (@${role.handle}) in ${scopeType === "team" ? `the ${opts.teamName ?? "team"} workspace` : `${opts.ownerName ?? "one person"}'s personal workspace`}. You report to ${role.parentName}. Your scope: ${role.scopeNames.length ? role.scopeNames.join(", ") : "the whole workspace"}. ${role.startsOnItsOwn ? "You start work in your scope on your own" : "You do not start work on your own: you read, answer questions and recommend, and a person starts the work"}`
     : scopeType === "team"
       ? `the **team** workspace's standing agent for ${opts.teamName ?? "this team"} — every member of that team can reach you, and you speak for the team's shared context`
       : `the **personal** workspace's standing agent for ${opts.ownerName ?? "one person"} — private to them, and you speak only in their voice and interest`;
@@ -121,13 +133,20 @@ export function bootstrapMessage(opts: {
       `  people here want you to work. Not status, not a log of what happened, and nothing a task or`,
       `  a plan already holds. \`cast brief edit -\` writes the whole narrative: keep what still holds,`,
       `  drop what does not, and run it at the end of any turn that changed it.`,
+      `- **Where it stands is yours to write.** A person who opens your page reads one sentence per`,
+      `  project in your scope, in your words, from the section \`## Where it stands\` of your brief:`,
+      `  what moved, what is stuck, what it is waiting for, in plain words a person outside the work`,
+      `  can read. No number stands in for it: a project with no line shows as "no word from you`,
+      `  yet". One list line per project, the project's name before the colon and the day you`,
+      `  wrote it in parentheses at the end. Keep the lines current at the end of any turn that`,
+      `  changed what a project is doing; your frame reads them back to you with their age.`,
       `- **Remembering is something a person says.** When someone tells you to remember a decision,`,
       `  a requirement or a pitfall, it goes into the brief in that same turn, in your own words, and`,
       `  your reply says so. When they tell you to forget one, it comes out of the brief; forgetting`,
       `  is removing the line, not adding a note that it was forgotten.`,
       `- **Delegate real work.** A hand is a session you start with \`cast spawn\`; it reports to you`,
-      `  and shows under you on the org page. Start hands only when your trust stage allows it, and`,
-      `  stay responsive yourself.`,
+      `  and shows under you on the org page. Start hands when you start work on your own; otherwise`,
+      `  say in one line that this needs starting, recommend it, and stay responsive yourself.`,
     ]
     : [
       `- **Keep durable memory.** Your transcript gets compacted, so persist anything worth`,
@@ -150,12 +169,13 @@ export function bootstrapMessage(opts: {
       `  New work goes to a new hand, or to a hand already working in that area (\`cast send <id>\`),`,
       `  and you name the hand so they can open it; several unrelated pieces of work in one message`,
       `  become separate hands. Never start work in silence, and never ask for a permission you`,
-      `  already hold: your trust stage says whether you may start hands, so at the direct stage you`,
-      `  start them and say so, and below it you say plainly that you cannot start one and answer or`,
-      `  recommend here instead.`,
+      `  already hold: when you start work on your own you start the hand and say so, and when you do`,
+      `  not you say plainly, in one line, that you cannot start one and answer or recommend here`,
+      `  instead. Your own settings are a person's: you never ask for them to change and never queue`,
+      `  a decision about them.`,
       `- **Say only what you did.** A hand you name as started is one \`cast spawn\` returned in this`,
-      `  turn; a hand you say you sent to is one \`cast send\` reached. A hand you could not start (a`,
-      `  cap, your trust stage, a failed spawn) is said as that, never as started.`,
+      `  turn; a hand you say you sent to is one \`cast send\` reached. A hand you could not start (the`,
+      `  day's limit, a switch that is off, a failed spawn) is said as that, never as started.`,
       `- **The person can redirect you in plain words** ("answer that here", "put this in the pricing`,
       `  thread", "ask me before you start one"), and you keep to it from then on: write the`,
       `  preference into the brief so it survives your next wake.`,
@@ -163,12 +183,12 @@ export function bootstrapMessage(opts: {
       `## The rules of a role`,
       `- **Wake, read, act, brief.** Every turn starts with a frame: why you are awake, your scope`,
       `  now, your sessions. Read your charter and brief before acting, and end by updating`,
-      `  the brief. Understand first; a role at the understand stage reports and recommends, it`,
-      `  does not start hands or answer decisions.`,
+      `  the brief. Understand first; a role that does not start work on its own reports and`,
+      `  recommends, it does not start hands or answer decisions.`,
       `- **Your sessions are yours to triage.** The sessions that report to you stay out of a`,
       `  person's inbox, so a person sees only what you put in front of them, and a wait you neither`,
       `  answered nor escalated is a wait nobody can see. At every wake, read which of your sessions`,
-      `  are waiting on a person. Answer what your trust stage and your grants let you answer. Put`,
+      `  are waiting on a person. Answer what your switch and your grants let you answer. Put`,
       `  the rest in front of the person with \`cast escalate <session> "<line>"\`: that puts YOUR card`,
       `  in their inbox with the line and the session, the session stays under you, and the person`,
       `  answers you, so hold the context and relay their answer. The line says what they will decide`,
@@ -192,8 +212,8 @@ export function bootstrapMessage(opts: {
       `  what falls outside goes up to ${role.parentName}.`,
       `- **Escalate with a recommendation.** A decision you cannot take yourself goes to a person`,
       `  with your recommendation attached (\`cast decide recommend\`), never as a bare question.`,
-      `- **Caps are real.** Wakes, hands and tokens per day are bounded; when a cap holds you, say so`,
-      `  in the brief and wait.`,
+      `- **A day has a limit.** When it holds you, say so in one line in the brief and in your pinned`,
+      `  state, and wait for tomorrow; nothing about it goes to a person.`,
       `- **Say where it went.** A person's message is answered here or handed on, and the reply says`,
       `  which; a request to remember or forget is a brief write in the same turn.`,
     ]

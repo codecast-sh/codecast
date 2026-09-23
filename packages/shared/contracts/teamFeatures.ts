@@ -9,7 +9,7 @@
 // the snippet fan-out can never disagree about which features exist or which
 // snippet belongs to which. PURE isomorphic data — no Node or DOM APIs.
 
-export type TeamFeatureKey = "chat" | "calls";
+export type TeamFeatureKey = "chat" | "calls" | "org";
 
 export interface TeamFeatureDescriptor {
   key: TeamFeatureKey;
@@ -24,6 +24,13 @@ export interface TeamFeatureDescriptor {
    * still has the feature on.
    */
   snippets: string[];
+  /**
+   * The feature is also seated in the PERSONAL workspace (org roles are hired
+   * per team and per person). A personal workspace has no flag row, so it
+   * borrows: on when any team the viewer belongs to has it on. Absent = a
+   * team-only feature, off in the personal workspace.
+   */
+  personal?: boolean;
 }
 
 export const TEAM_FEATURES: TeamFeatureDescriptor[] = [
@@ -39,6 +46,13 @@ export const TEAM_FEATURES: TeamFeatureDescriptor[] = [
     desc: "Huddles from a channel, a session or a teammate, with live transcription.",
     snippets: ["calls"],
   },
+  {
+    key: "org",
+    name: "Organization",
+    desc: "Agent roles with a standing session each, a chief of staff, role assignees on tasks, and the org page. In development.",
+    snippets: [],
+    personal: true,
+  },
 ];
 
 export const TEAM_FEATURE_KEYS: TeamFeatureKey[] = TEAM_FEATURES.map((f) => f.key);
@@ -52,6 +66,23 @@ export function teamFeatureEnabled(
   key: TeamFeatureKey,
 ): boolean {
   return team?.features?.[key] === true;
+}
+
+/**
+ * Is `key` on in a workspace? A team workspace reads its own team's flag. The
+ * personal workspace has no flag row: a feature marked `personal` in the
+ * catalog borrows from the viewer's teams (on when any has it on), and every
+ * other feature is off there. One rule for the web, the CLI and the server,
+ * so a person whose teams all have org off sees none of it anywhere.
+ */
+export function workspaceFeatureEnabled(
+  teams: Array<{ _id?: unknown; features?: TeamFeatures | null } | null | undefined>,
+  activeTeamId: string | null | undefined,
+  key: TeamFeatureKey,
+): boolean {
+  if (activeTeamId) return teamFeatureEnabled(teams.find((t) => String(t?._id) === String(activeTeamId)), key);
+  if (!TEAM_FEATURES.find((f) => f.key === key)?.personal) return false;
+  return teams.some((t) => teamFeatureEnabled(t, key));
 }
 
 /** Every catalog entry that names `snippet` in its snippet list. */
