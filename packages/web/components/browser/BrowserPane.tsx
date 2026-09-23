@@ -22,6 +22,7 @@ import {
   EyeOff,
   Globe,
   Laptop,
+  Link2,
   Lock,
   LockOpen,
   RotateCw,
@@ -29,6 +30,7 @@ import {
   Unplug,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import {
   browserRoutePath,
   displayHost,
@@ -44,14 +46,16 @@ import {
 import { pageAddressLabel } from "../../lib/browserPaneLinks";
 import { browserPaneRecents, rememberBrowserPaneUrl } from "../../lib/browserPaneRecents";
 import { useTabContext } from "../../lib/tabParams";
-import { bridge, isDesktop } from "../../lib/desktop";
+import { isDesktop } from "../../lib/desktop";
+import { copyText } from "../../lib/copyText";
+import { explainOpenInBrowser, openInBrowser } from "../../lib/popOut";
 import { stageClose, stageExpand } from "../../lib/stage";
 import { getTerminalEndpoint } from "../../lib/terminal/endpoint";
 import { useSqueezeToFit } from "../../hooks/useSqueezeToFit";
 import { DeviceIcon, deviceDisplayName, type Device } from "../DeviceBadge";
 import { useInboxStore } from "../../store/inboxStore";
 import { paneOfferOwner } from "../../lib/browserPaneOffer";
-import { KeyCap } from "../KeyboardShortcutsHelp";
+import { KeyCap, ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { isMac } from "../../shortcuts";
 import { PaneControls } from "../stage/PaneControls";
 import { FrameBackend } from "./backends/FrameBackend";
@@ -183,11 +187,10 @@ export function BrowserPane() {
   // long the address is.
   useSqueezeToFit(headRef, 1, fieldValue);
 
+  // The one way out of the app that lands in the person's own browser; a
+  // desktop build too old for it says so instead of doing nothing.
   const openOutside = useCallback(() => {
-    if (!shownUrl) return;
-    const openExternal = isDesktop() ? bridge("openExternal") : undefined;
-    if (openExternal) void openExternal(shownUrl);
-    else window.open(shownUrl, "_blank", "noopener,noreferrer");
+    if (shownUrl) explainOpenInBrowser(openInBrowser(shownUrl), toast);
   }, [shownUrl]);
 
   const goNative = useCallback(() => {
@@ -265,9 +268,11 @@ export function BrowserPane() {
   return (
     <div className="h-full flex flex-col min-h-0 bg-sol-bg">
       <div ref={headRef} className="cc-panel__head">
-        <span className="cc-panel__icon" title={secure ? "Served over https" : "Served over http"}>
-          {secure ? <Lock className="w-3 h-3" /> : <Globe className="w-3 h-3" />}
-        </span>
+        <ShortcutTooltip label={secure ? "Served over https" : "Served over http"}>
+          <span className="cc-panel__icon">
+            {secure ? <Lock className="w-3 h-3" /> : <Globe className="w-3 h-3" />}
+          </span>
+        </ShortcutTooltip>
         {source?.kind === "watch" ? (
           // What the agent is looking at, in the words the daemon uses for it:
           // its title, then its address. The session uuid is a handle, not a
@@ -319,55 +324,72 @@ export function BrowserPane() {
         )}
         {loopback && <LoopbackBadge device={machine} />}
         {source?.kind === "url" && (
-          <>
+          <ShortcutTooltip label="Reload this page">
             <button
               type="button"
               className="cc-panel__btn"
-              title="Reload this page"
+              aria-label="Reload this page"
               onClick={() => setReloadToken((n) => n + 1)}
             >
               <RotateCw className="w-3 h-3" />
             </button>
+          </ShortcutTooltip>
+        )}
+        {shownUrl && (
+          <ShortcutTooltip label="Copy link to this page">
             <button
               type="button"
               className="cc-panel__btn"
-              title="Open in your browser"
+              aria-label="Copy link to this page"
+              onClick={() => void copyText(shownUrl, "Link copied")}
+            >
+              <Link2 className="w-3 h-3" />
+            </button>
+          </ShortcutTooltip>
+        )}
+        {source?.kind === "url" && (
+          <ShortcutTooltip label="Open in your browser">
+            <button
+              type="button"
+              className="cc-panel__btn"
+              aria-label="Open in your browser"
               onClick={openOutside}
             >
               <ArrowUpRight className="w-3.5 h-3.5" />
             </button>
-          </>
+          </ShortcutTooltip>
         )}
         {/* Only in the pane you are working in: four panes each nagging about
             a page that may be perfectly fine is noise. */}
         {focused && state.kind === "ready" && state.opaque && graceOver && !askedWhy && (
           // Folds to its icon with the machine badge, never to a fragment of
           // the question: "not showing?" alone reads as a stray word.
-          <button
-            type="button"
-            onClick={() => setAskedWhy(true)}
-            className="group flex flex-shrink-0 items-center gap-1 px-1 text-[10px] text-sol-text-dim/70 transition-colors hover:text-sol-text-muted"
-            title="If this pane stays blank, the site may refuse to be shown inside another page"
-            aria-label="Page not showing?"
-          >
-            <CircleHelp className="w-3 h-3" />
-            <span className="cq-sq1 underline decoration-dotted decoration-sol-text-dim/40 underline-offset-2 group-hover:decoration-sol-text-muted">
-              Page not showing?
-            </span>
-          </button>
+          <ShortcutTooltip label="If this pane stays blank, the site may refuse to be shown inside another page">
+            <button
+              type="button"
+              onClick={() => setAskedWhy(true)}
+              className="group flex flex-shrink-0 items-center gap-1 px-1 text-[10px] text-sol-text-dim/70 transition-colors hover:text-sol-text-muted"
+              aria-label="Page not showing?"
+            >
+              <CircleHelp className="w-3 h-3" />
+              <span className="cq-sq1 underline decoration-dotted decoration-sol-text-dim/40 underline-offset-2 group-hover:decoration-sol-text-muted">
+                Page not showing?
+              </span>
+            </button>
+          </ShortcutTooltip>
         )}
         {actions.map((action) => (
-          <button
-            key={action.label}
-            type="button"
-            className={`cc-panel__btn ${action.active ? "is-on" : ""}`}
-            title={action.label}
-            aria-label={action.label}
-            aria-pressed={action.active}
-            onClick={action.onClick}
-          >
-            {action.icon}
-          </button>
+          <ShortcutTooltip key={action.label} label={action.label}>
+            <button
+              type="button"
+              className={`cc-panel__btn ${action.active ? "is-on" : ""}`}
+              aria-label={action.label}
+              aria-pressed={action.active}
+              onClick={action.onClick}
+            >
+              {action.icon}
+            </button>
+          </ShortcutTooltip>
         ))}
         {leafId && (
           <PaneControls onExpand={() => stageExpand(leafId)} onClose={() => stageClose(leafId)} />
@@ -589,10 +611,12 @@ function LoopbackBadge({ device }: { device: ReturnType<typeof useThisMachine> }
   // The label folds away first when the strip runs out of room (`cq-sq1`),
   // leaving the icon and its tooltip.
   return (
-    <span className="flex flex-shrink-0 items-center gap-1 text-[10px] text-sol-text-dim/80" title={tip} aria-label={tip}>
-      {device ? <DeviceIcon d={device} className="w-3 h-3" /> : <Laptop className="w-3 h-3" />}
-      <span className="cq-sq1 max-w-[140px] truncate">this machine{name ? ` · ${name}` : ""}</span>
-    </span>
+    <ShortcutTooltip label={tip}>
+      <span className="flex flex-shrink-0 items-center gap-1 text-[10px] text-sol-text-dim/80" aria-label={tip}>
+        {device ? <DeviceIcon d={device} className="w-3 h-3" /> : <Laptop className="w-3 h-3" />}
+        <span className="cq-sq1 max-w-[140px] truncate">this machine{name ? ` · ${name}` : ""}</span>
+      </span>
+    </ShortcutTooltip>
   );
 }
 

@@ -1364,12 +1364,13 @@ function createDesktopApp(userConfig, electron = require("electron")) {
     return { shown: true };
   });
 
-  // Sign-in hands its OAuth flow to the user's real browser: the embedded
-  // window has no Google/GitHub sessions. https-only — the renderer only ever
-  // passes app-origin auth URLs, and anything else has no business being
-  // launched from here.
+  // Hands a URL to the person's real browser. Sign-in sends its OAuth flow
+  // here (the embedded window has no Google/GitHub sessions), and the browser
+  // pane sends the page it shows, which is often a plain-http localhost dev
+  // server. Web origins only: anything else has no business being launched
+  // from here.
   ipcMain.handle("open-external", (_e, url) => {
-    if (typeof url === "string" && /^https:\/\//i.test(url)) shell.openExternal(url);
+    if (typeof url === "string" && /^https?:\/\//i.test(url)) shell.openExternal(url);
   });
 
   // Palette IPC

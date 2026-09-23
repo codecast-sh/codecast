@@ -122,6 +122,18 @@ export function explainPopOut(
   }
 }
 
+/** The toast for an `openInBrowser` that could not: one wording for every
+ *  control that hands a page out of the app. `toast` is passed in, as above. */
+export function explainOpenInBrowser(
+  outcome: ReturnType<typeof openInBrowser>,
+  toast: { error: (title: string, opts: { description: string }) => unknown },
+): void {
+  if (outcome !== "needs-update") return;
+  toast.error("The desktop app needs an update for this", {
+    description: "This build cannot hand a page to your browser. Update Codecast and it opens on its own.",
+  });
+}
+
 /**
  * The same page as a plain browser tab, outside every shell.
  *

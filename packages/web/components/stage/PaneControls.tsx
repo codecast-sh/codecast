@@ -6,6 +6,7 @@
 // split from reading as N different widgets glued together.
 
 import { Maximize2, X } from "lucide-react";
+import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
 
 export function PaneControls({
   onExpand,
@@ -22,14 +23,18 @@ export function PaneControls({
   return (
     <>
       {onExpand && (
-        <button onClick={onExpand} className="cc-panel__btn flex-shrink-0" title={expandTitle}>
-          <Maximize2 className="w-3 h-3" />
-        </button>
+        <ShortcutTooltip label={expandTitle}>
+          <button onClick={onExpand} className="cc-panel__btn flex-shrink-0" aria-label={expandTitle}>
+            <Maximize2 className="w-3 h-3" />
+          </button>
+        </ShortcutTooltip>
       )}
       {onClose && (
-        <button onClick={onClose} className="cc-panel__btn is-close flex-shrink-0" title={closeTitle}>
-          <X className="w-3.5 h-3.5" />
-        </button>
+        <ShortcutTooltip label={closeTitle}>
+          <button onClick={onClose} className="cc-panel__btn is-close flex-shrink-0" aria-label={closeTitle}>
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </ShortcutTooltip>
       )}
     </>
   );

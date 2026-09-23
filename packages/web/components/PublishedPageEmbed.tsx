@@ -369,7 +369,9 @@ export function ClaudeArtifactEmbed({ id, caption }: { id: string; caption?: str
         <span className="flex min-w-0 flex-col gap-0.5">
           <span className="text-xs font-medium text-sol-text">Open on claude.ai</span>
           <span className="text-[11px] leading-snug text-sol-text-dim">
-            claude.ai does not let other sites frame an artifact, so it opens in its own tab.
+            {canPane
+              ? "claude.ai does not let other sites frame an artifact. Open it in its own tab, or as a pane beside this conversation."
+              : "claude.ai does not let other sites frame an artifact, so it opens in its own tab."}
           </span>
           <span className="truncate font-mono text-[10px] text-sol-text-dim">claude.ai/public/artifacts/{id}</span>
         </span>
