@@ -632,7 +632,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, conversation_id, start_line, end_line, full_content, around_message_id, context } = body;
+      const { api_token, conversation_id, start_line, end_line, full_content, around_message_id, context, include_file_changes } = body;
 
       if (!api_token || !conversation_id) {
         return new Response(JSON.stringify({ error: "Missing api_token or conversation_id" }), {
@@ -643,7 +643,7 @@ http.route({
 
       const result = await readConversationRange(
         (pageArgs) => ctx.runQuery(api.conversations.readConversationMessages, pageArgs),
-        { api_token, conversation_id, start_line, end_line, full_content, around_message_id, context },
+        { api_token, conversation_id, start_line, end_line, full_content, around_message_id, context, include_file_changes },
       );
 
       if (result.error) {
@@ -2502,7 +2502,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, path_prefix, team_id, auto_share } = body;
+      const { api_token, path_prefix, team_id, auto_share, include_past } = body;
 
       if (!api_token || !path_prefix) {
         return new Response(JSON.stringify({ error: "Missing api_token or path_prefix" }), {
@@ -2516,9 +2516,10 @@ http.route({
         path_prefix,
         team_id,
         auto_share,
+        include_past: typeof include_past === "boolean" ? include_past : undefined,
       });
 
-      if (result.error) {
+      if ("error" in result) {
         return new Response(JSON.stringify({ error: result.error }), {
           status: result.error === "Unauthorized" ? 401 : 400,
           headers: { "Content-Type": "application/json", ...corsHeaders },

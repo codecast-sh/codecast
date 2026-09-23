@@ -246,9 +246,11 @@ describe("one circle, one attribute", () => {
     expect(h.q(".face-ask")).not.toBeNull();
     expect(h.q(`[data-face-id="${ANN}"]`)!.getAttribute("data-ask")).toBe("2");
     expect(h.circle(ANN).getAttribute("data-followed")).toBe("true");
-    expect(h.q(".people-face-joined")).toBeNull();
+    // The join is the ring and the card's words, never a label under the
+    // chin: the card in the band would cover it.
     await h.draw(bar(rowOf([entry(ANN, "Ann", { state: "joining" })])));
-    expect(h.q(".people-face-joined")!.textContent).toBe("joined");
+    expect(h.circle(ANN).getAttribute("data-state")).toBe("joining");
+    expect(h.q(".people-face-joined")).toBeNull();
     // In the bar the card carries the name: nothing hangs under the chin
     // that a card could stack on.
     expect(h.q(".face-name")).toBeNull();
@@ -438,8 +440,8 @@ describe("the engagement card renders the model's card", () => {
     expect(el.getAttribute("data-card")).toBe("incoming");
     expect(el.getAttribute("data-density")).toBe("bar");
     expect(el.classList.contains("walkie-strip-rx")).toBe(true);
-    expect(h.q(".walkie-stage-badge")!.textContent).toBe("INCOMING");
-    expect(h.q(".walkie-strip-hint")!.textContent).toContain("Ann is talking to you");
+    expect(h.q(".walkie-stage-badge")).toBeNull();
+    expect(h.q(".walkie-stage")!.textContent).toBe("Ann is talking to you");
     expect(h.q(".walkie-key")).not.toBeNull();
     await h.click(h.q('[data-card-action="join"]')!);
     await h.click(h.q('[data-card-action="snooze"]')!);
@@ -468,9 +470,12 @@ describe("the engagement card renders the model's card", () => {
     const el = h.q(".engagement-card")!;
     expect(el.getAttribute("data-density")).toBe("float");
     expect(el.classList.contains("walkie-strip-tx")).toBe(true);
-    expect(h.q(".walkie-stage-badge")!.textContent).toBe("TALKING");
-    expect(h.q(".walkie-stage-with")!.textContent).toBe("with Ann");
-    expect(h.q(".engagement-card-hearing")!.textContent).toBe("Ann hears you");
+    expect(h.q(".walkie-stage-badge")!.textContent).toBe("Talking");
+    expect(h.q(".walkie-stage-with")!.textContent).toBe(" with Ann");
+    // The roster's fact rides the same line after the stage: one sentence,
+    // "Talking with Ann · Ann hears you", and no caption plate under it.
+    expect(h.q(".walkie-stage")!.textContent).toBe("Talking with Ann · Ann hears you");
+    expect(h.q(".walkie-strip-hint")).toBeNull();
     expect(h.q('[data-card-action="mute"]')).toBeNull();
     await h.click(h.q('[data-card-action="end"]')!);
     expect(log.map((p) => p.action)).toEqual(["end"]);
@@ -478,7 +483,7 @@ describe("the engagement card renders the model's card", () => {
     // A huddle: no walkie words, the room's name, and a mute that toggles.
     const huddle: FaceCard = { kind: "live", roomKey: ROOM, title: "Ann", end: true, mute: true, muted: true, words: null, hearing: null };
     await h.draw(<EngagementCard card={huddle} density="float" actions={actionsInto(log)} />);
-    expect(h.q(".walkie-stage")).toBeNull();
+    expect(h.q(".walkie-stage-badge")).toBeNull();
     expect(h.q(".engagement-card-title")!.textContent).toBe("Ann");
     const mute = h.q('[data-card-action="mute"]')!;
     expect(mute.textContent).toBe("Unmute");
@@ -503,7 +508,7 @@ describe("the engagement card renders the model's card", () => {
     const card: FaceCard = { kind: "ring-in", roomKey: ROOM, from: ANN, name: "Ann", answer: true, decline: true };
     const h = await mount(<EngagementCard card={card} density="bar" actions={actionsInto(log)} />);
     expect(h.q(".engagement-card-title")!.textContent).toBe("Ann");
-    expect(h.q(".ring-card-line")!.textContent).toContain("Incoming huddle");
+    expect(h.q(".ring-card-line")!.textContent).toBe("Ann is calling");
     await h.click(h.q('[data-card-action="answer"]')!);
     await h.click(h.q('[data-card-action="decline"]')!);
     expect(log.map((p) => p.action)).toEqual(["answer", "decline"]);
@@ -513,7 +518,7 @@ describe("the engagement card renders the model's card", () => {
     const log: Pressed[] = [];
     const card: FaceCard = { kind: "ring-out", roomKey: ROOM, to: ANN, name: "Ann", cancel: true, status: "ringing" };
     const h = await mount(<EngagementCard card={card} density="bar" actions={actionsInto(log)} />);
-    expect(h.q(".ring-card-line")!.textContent).toContain("Ringing");
+    expect(h.q(".ring-card-line")!.textContent).toBe("Ringing Ann");
     await h.click(h.q('[data-card-action="cancel"]')!);
     expect(log[0]).toMatchObject({ action: "cancel", card });
   });

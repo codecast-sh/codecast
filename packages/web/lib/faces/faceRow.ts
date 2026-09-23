@@ -320,6 +320,19 @@ function stateOf(
   if (input.rings.outgoing.some((r) => idOf(r.to_user) === id && (r.status ?? "ringing") === "ringing")) {
     return "ringing-them";
   }
+  // They answered. The ring settles a round trip before their seat lands, so
+  // a face that was ringing stays ringing until it is seated in my call (the
+  // server keeps the accepted ring in view for that window); it never reads
+  // online in between. A cancelled, declined or expired ring is not held.
+  if (
+    prev?.state === "ringing-them" &&
+    room &&
+    mode === "call" &&
+    !inMyRoom &&
+    input.rings.outgoing.some((r) => idOf(r.to_user) === id && r.room_key === room && r.status === "accepted")
+  ) {
+    return "ringing-them";
+  }
   if (input.walkie.incoming?.fromUserId === id) return "talking-to-me";
   if (room && mode) {
     if (inMyRoom) {
@@ -403,6 +416,11 @@ function cardOf(
       words: stageWordsFor(input, "listen", name),
     };
   }
+  // Ringing from inside the room: startHuddle seats the caller before the
+  // ring goes out, so until somebody else is seated the card is the ring out
+  // (ringing, declined, no answer), not a live call with nobody on it.
+  const ringOutHere = other ? undefined : input.rings.outgoing.find((r) => r.room_key === room && r.status !== "accepted");
+  if (room && mode === "call" && ringOutHere) return ringOutCard(ringOutHere);
   if (room && mode) {
     const end = true as const;
     const mute = mode === "call";
@@ -434,18 +452,21 @@ function cardOf(
       hearing,
     };
   }
-  const ringOut = input.rings.outgoing.find((r) => (r.status ?? "ringing") === "ringing") ?? input.rings.outgoing[0];
-  if (ringOut) {
-    return {
-      kind: "ring-out",
-      roomKey: ringOut.room_key,
-      to: idOf(ringOut.to_user),
-      name: ringOut.to_name ?? "Teammate",
-      cancel: true,
-      status: ringOut.status ?? "ringing",
-    };
-  }
+  const ringOut =
+    input.rings.outgoing.find((r) => (r.status ?? "ringing") === "ringing") ?? input.rings.outgoing.find((r) => r.status !== "accepted");
+  if (ringOut) return ringOutCard(ringOut);
   return { kind: "none" };
+}
+
+function ringOutCard(r: FaceRowInput["rings"]["outgoing"][number]): FaceCard {
+  return {
+    kind: "ring-out",
+    roomKey: r.room_key,
+    to: idOf(r.to_user),
+    name: r.to_name ?? "Teammate",
+    cancel: true,
+    status: r.status ?? "ringing",
+  };
 }
 
 /**
@@ -658,7 +679,6 @@ export function faceRowInputSig(
   now: number,
 ): string {
   const call = walkieCallState();
-  const c = st.call ?? {};
   return [
     idOf(st.currentUser?._id),
     st.currentUser?.name ?? "",
@@ -667,7 +687,7 @@ export function faceRowInputSig(
     occupancySig(st.callOccupancy),
     liveRoomsSig(st.liveRooms),
     walkieRowSig(walkie),
-    `${call.phase}|${call.roomKey ?? ""}|${call.muted ? 1 : 0}|${call.micDenied ? 1 : 0}|${c.camera ? 1 : 0}|${(c.speaking ?? []).join(",")}`,
+    `${call.phase}|${call.roomKey ?? ""}|${call.muted ? 1 : 0}|${call.micDenied ? 1 : 0}|${call.camera ? 1 : 0}|${call.speaking.join(",")}`,
     tilesSig(tiles),
     st.followLeaderId ?? "",
     ringsSig(st.myCalls),
@@ -688,8 +708,10 @@ export function faceRowInputFrom(
   tiles: { identity: string; isLocal: boolean; kind: string }[],
   now: number,
 ): FaceRowInput {
+  // The call as the host holds it: in a remote window this window's own
+  // slice is idle for as long as the host has the microphone, so the phase,
+  // the camera and the speakers all come from the mirror or from nowhere.
   const call = walkieCallState();
-  const c = st.call ?? {};
   const u = st.currentUser;
   const room = walkie.liveRoom?.key ?? (call.phase !== "idle" ? call.roomKey : null);
   return {
@@ -710,8 +732,8 @@ export function faceRowInputFrom(
       roomKey: call.roomKey,
       muted: call.muted,
       micDenied: call.micDenied,
-      camera: !!c.camera,
-      speaking: c.speaking ?? [],
+      camera: call.camera,
+      speaking: call.speaking,
     },
     tiles,
     followLeaderId: st.followLeaderId ?? null,

@@ -1,10 +1,10 @@
 import { stripPastedContent } from "@codecast/shared/contracts";
-import { mutation, query, internalMutation, type MutationCtx } from "./functions";
+import { mutation, query, internalMutation, type MutationCtx, type QueryCtx } from "./functions";
 import { countersFor } from "./orgEvents";
 import { calibrationSlot } from "./usageCalibration";
 import { weightedTokens } from "@codecast/shared/contracts";
 import { linkLocalCommitToConversation } from "./gitActivity";
-import { ConvexError, v } from "convex/values";
+import { ConvexError, v, type Infer } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { Doc, Id } from "./_generated/dataModel";
@@ -682,6 +682,7 @@ export async function materializeFileChanges(
   toolCalls: Array<{ id: string; name: string; input: string }> | undefined,
   toolResults: Array<{ tool_use_id: string; content: string; is_error?: boolean }> | undefined,
   previousChanges: FileChange[] = [],
+  observed: WireFileChange[] = [],
 ): Promise<void> {
   // Late-arriving commit hashes: a `git commit` Bash RESULT lands on the next
   // (user) message, after the commit row materialized hash-less. The string
@@ -708,8 +709,23 @@ export async function materializeFileChanges(
   }
 
   const msg = { _id: messageId, timestamp, tool_calls: toolCalls, tool_results: toolResults };
-  if (!hasFileChangeToolCall(msg) && previousChanges.length === 0) return;
+  if (!hasFileChangeToolCall(msg) && previousChanges.length === 0 && observed.length === 0) return;
   const extracted = extractFileChanges([msg]);
+  // Disk-observed changes sit after the message's own tool-call changes, keyed
+  // by the call they belong to so a re-synced message upserts the same rows.
+  for (const fc of observed) {
+    extracted.push({
+      id: `${fc.tool_call_id}:fs:${fc.seq}`,
+      toolCallId: fc.tool_call_id,
+      sequenceIndex: extracted.length,
+      messageId,
+      filePath: fc.file_path,
+      changeType: fc.change_type,
+      oldContent: fc.old_content,
+      newContent: fc.new_content,
+      timestamp,
+    });
+  }
   const nextIds = new Set(extracted.map((change) => change.id));
   for (const previous of previousChanges) {
     if (nextIds.has(previous.id)) continue;
@@ -760,43 +776,52 @@ export async function materializeFileChanges(
  * client-side window extraction, which backfills conversations whose edits
  * predate materialization (no backfill was run).
  */
+/** Every materialized change of a conversation in extractor order. The caller
+ *  has already checked access: this returns the full before/after source of
+ *  every file the session edited. */
+export async function listConversationFileChanges(
+  ctx: QueryCtx,
+  conversationId: Id<"conversations">,
+): Promise<FileChange[]> {
+  const rows = await ctx.db
+    .query("file_changes")
+    .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conversationId))
+    .collect();
+  // Re-synced messages can leave duplicate rows; dedupe by the stable change_key,
+  // then order by (timestamp, in-message seq) to match the client extractor.
+  const byKey = new Map<string, (typeof rows)[number]>();
+  for (const r of rows) byKey.set(r.change_key, r);
+  return Array.from(byKey.values())
+    .sort((a, b) => a.timestamp - b.timestamp || a.seq - b.seq)
+    .map((r, i) => ({
+      id: r.change_key,
+      toolCallId: r.tool_call_id,
+      // Globally-ordered position so the result is correct on its own; the
+      // client merge re-derives this anyway when folding in window changes.
+      sequenceIndex: i,
+      messageId: r.message_id,
+      filePath: r.file_path,
+      changeType: r.change_type,
+      oldContent: r.old_content,
+      newContent: r.new_content,
+      commitMessage: r.commit_message,
+      commitHash: r.commit_hash,
+      timestamp: r.timestamp,
+    }));
+}
+
 export const getConversationFileChanges = query({
   args: { conversation_id: v.id("conversations"), share_token: v.optional(v.string()) },
   handler: async (ctx, args): Promise<FileChange[]> => {
-    // Access gate: this returns the full before/after source of every file the
-    // session edited — including private (owner-only) conversations. Match the
-    // other message readers: owner, team member, or share-token holder only.
+    // Access gate: match the other message readers: owner, team member, or
+    // share-token holder only — private (owner-only) conversations included.
     const conversation = await ctx.db.get(args.conversation_id);
     if (!conversation) return [];
     const viewerId = await getAuthUserId(ctx);
     if ((await checkConversationAccess(ctx, viewerId, conversation, args.share_token)) === "denied") {
       return [];
     }
-    const rows = await ctx.db
-      .query("file_changes")
-      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
-      .collect();
-    // Re-synced messages can leave duplicate rows; dedupe by the stable change_key,
-    // then order by (timestamp, in-message seq) to match the client extractor.
-    const byKey = new Map<string, (typeof rows)[number]>();
-    for (const r of rows) byKey.set(r.change_key, r);
-    return Array.from(byKey.values())
-      .sort((a, b) => a.timestamp - b.timestamp || a.seq - b.seq)
-      .map((r, i) => ({
-        id: r.change_key,
-        toolCallId: r.tool_call_id,
-        // Globally-ordered position so the result is correct on its own; the
-        // client merge re-derives this anyway when folding in window changes.
-        sequenceIndex: i,
-        messageId: r.message_id,
-        filePath: r.file_path,
-        changeType: r.change_type,
-        oldContent: r.old_content,
-        newContent: r.new_content,
-        commitMessage: r.commit_message,
-        commitHash: r.commit_hash,
-        timestamp: r.timestamp,
-      }));
+    return listConversationFileChanges(ctx, args.conversation_id);
   },
 });
 
@@ -1307,6 +1332,22 @@ export async function rollUpUsage(
   }
 }
 
+// A file change the daemon observed on disk rather than read out of a tool
+// call: the shell-changes hook records what a Bash command changed and the
+// daemon carries it on the message holding that call's result
+// (packages/cli/src/shellChanges.ts). Whole-file contents: "write" replaces the
+// file (old_content is what it held before, absent for a new file), "delete"
+// removes it.
+const fileChangeWireValidator = v.object({
+  tool_call_id: v.string(),
+  seq: v.number(),
+  file_path: v.string(),
+  change_type: v.union(v.literal("write"), v.literal("edit"), v.literal("delete")),
+  old_content: v.optional(v.string()),
+  new_content: v.string(),
+});
+type WireFileChange = Infer<typeof fileChangeWireValidator>;
+
 export const addMessage = mutation({
   args: {
     conversation_id: v.id("conversations"),
@@ -1329,6 +1370,7 @@ export const addMessage = mutation({
       content: v.string(),
       is_error: v.optional(v.boolean()),
     }))),
+    file_changes: v.optional(v.array(fileChangeWireValidator)),
     images: v.optional(v.array(v.object({
       media_type: v.string(),
       data: v.optional(v.string()),
@@ -1425,7 +1467,7 @@ export const addMessage = mutation({
           current.content, current.images);
         if (safeToolCalls !== undefined || safeToolResults !== undefined) {
           await materializeFileChanges(ctx, args.conversation_id, existing._id, existing.timestamp,
-            current.tool_calls, current.tool_results, extractFileChanges([existing]));
+            current.tool_calls, current.tool_results, extractFileChanges([existing]), args.file_changes);
         }
         return existing._id;
       }
@@ -1505,7 +1547,7 @@ export const addMessage = mutation({
       await ctx.db.patch(matchingPending._id, { echo_message_id: messageId });
     }
     await scheduleUserSend(ctx, conversation, { role: args.role, content: contentToStore, tool_results: safeToolResults, from_user_id: fromUserIdToStore }, msgTimestamp);
-    await materializeFileChanges(ctx, args.conversation_id, messageId, msgTimestamp, safeToolCalls, safeToolResults);
+    await materializeFileChanges(ctx, args.conversation_id, messageId, msgTimestamp, safeToolCalls, safeToolResults, [], args.file_changes);
     await materializeConversationImages(ctx, args.conversation_id, messageId, msgTimestamp, contentToStore, images);
     const newMessageCount = conversation.message_count + 1;
     const now = Date.now();
@@ -1735,6 +1777,7 @@ const messageValidator = v.object({
     content: v.string(),
     is_error: v.optional(v.boolean()),
   }))),
+  file_changes: v.optional(v.array(fileChangeWireValidator)),
   images: v.optional(v.array(v.object({
     media_type: v.string(),
     data: v.optional(v.string()),
@@ -1959,7 +2002,7 @@ export const addMessages = mutation({
             current.content, current.images);
           if (safeToolCalls !== undefined || safeToolResults !== undefined) {
             await materializeFileChanges(ctx, args.conversation_id, existing._id, existing.timestamp,
-              current.tool_calls, current.tool_results, extractFileChanges([existing]));
+              current.tool_calls, current.tool_results, extractFileChanges([existing]), msg.file_changes);
           }
           ids.push(existing._id);
           continue;
@@ -2071,7 +2114,7 @@ export const addMessages = mutation({
       insertedCount++;
       insertedIndexes.add(batchIndex);
       await scheduleUserSend(ctx, conversation, { role: msg.role, content: contentToStore, tool_results: safeToolResults, from_user_id: matchingPending?.from_user_id }, msgTimestamp);
-      await materializeFileChanges(ctx, args.conversation_id, messageId, msgTimestamp, safeToolCalls, safeToolResults);
+      await materializeFileChanges(ctx, args.conversation_id, messageId, msgTimestamp, safeToolCalls, safeToolResults, [], msg.file_changes);
       await materializeConversationImages(ctx, args.conversation_id, messageId, msgTimestamp, contentToStore, images);
       if (msg.role === "user") lastUserContentStored = contentToStore;
     }
