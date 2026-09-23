@@ -185,6 +185,10 @@ export function readWatchState(dir: string): WatchState | null {
 
 export function writeWatchState(dir: string, state: WatchState): void {
   fs.mkdirSync(dir, { recursive: true });
+  const previous = readWatchState(dir);
+  if (previous?.pid === state.pid && previous.startedAt === state.startedAt) {
+    state = { ...state, askedAt: Math.max(state.askedAt ?? 0, previous.askedAt ?? 0) };
+  }
   const tmp = `${statePath(dir)}.tmp-${process.pid}`;
   fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
   fs.renameSync(tmp, statePath(dir));
@@ -383,15 +387,20 @@ export async function checkProject(
       await sleep(300);
     }
     if (!state || !isPidAlive(state.pid)) {
-      for (const evicted of makeRoom(opts.maxWatchers ?? MAX_WATCHERS)) {
-        note(`stopped the ${evicted.project} watcher for ${evicted.root} (idle longest) to stay under ${opts.maxWatchers ?? MAX_WATCHERS} watchers on this machine`);
+      const releaseCapacity = await acquireFileLock(path.join(checkHome(), "capacity.lock"), { describe: "cast check watcher start", waitMs: 60_000 });
+      try {
+        for (const evicted of makeRoom(opts.maxWatchers ?? MAX_WATCHERS, kill)) {
+          note(`stopped the ${evicted.project} watcher for ${evicted.root} (idle longest) to stay under ${opts.maxWatchers ?? MAX_WATCHERS} watchers on this machine`);
+        }
+        (opts.start ?? startDetachedWatcher)(root, target);
+        started = true;
+        note(`starting the ${project} typecheck watcher for ${root} (first pass builds the whole program; later asks take seconds)`);
+        const deadline = Date.now() + 30_000;
+        while (Date.now() < deadline && !(state = readWatchState(dir))) await sleep(200);
+        if (!state) throw new Error(`the ${project} typecheck watcher did not start; its log is ${logPath(dir)}`);
+      } finally {
+        releaseCapacity();
       }
-      (opts.start ?? startDetachedWatcher)(root, target);
-      started = true;
-      note(`starting the ${project} typecheck watcher for ${root} (first pass builds the whole program; later asks take seconds)`);
-      const deadline = Date.now() + 30_000;
-      while (Date.now() < deadline && !(state = readWatchState(dir))) await sleep(200);
-      if (!state) throw new Error(`the ${project} typecheck watcher did not start; its log is ${logPath(dir)}`);
     }
   } finally {
     release();
@@ -456,9 +465,13 @@ export function listWatchers(): Array<WatchState & { dir: string }> {
  */
 export function makeRoom(max: number, kill: (pid: number) => void = (pid) => process.kill(pid, "SIGTERM")): Array<WatchState & { dir: string }> {
   const live = listWatchers().sort((a, b) => (a.askedAt ?? a.startedAt) - (b.askedAt ?? b.startedAt));
+  const needed = Math.max(0, live.length - max + 1);
+  const eligible = live.filter((state) => !state.inProgress);
+  if (eligible.length < needed) {
+    throw new Error(`typecheck capacity is full: ${live.length} watchers, limit ${max}; running passes are preserved. Ask again when a pass finishes; do not restart them with --fresh`);
+  }
   const evicted: Array<WatchState & { dir: string }> = [];
-  while (live.length >= max && live.length) {
-    const victim = live.shift()!;
+  for (const victim of eligible.slice(0, needed)) {
     try {
       kill(victim.pid);
     } catch {}
