@@ -26,7 +26,7 @@ import type { FaceKey } from "../presence/useFaceKey";
 import { ErrorBoundary } from "../ErrorBoundary";
 
 /** The card's width: five words of activity and three buttons in a row. */
-export const FACE_CARD_WIDTH = 272;
+export const FACE_CARD_WIDTH = 320;
 
 /** The card's edge gutter: it never touches the viewport. */
 const EDGE = 8;
