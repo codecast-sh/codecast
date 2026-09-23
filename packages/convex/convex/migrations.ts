@@ -3,6 +3,7 @@ import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { redactSecrets } from "./redact";
 import { normalizeRepository } from "./lib/gitRefs";
+import { commitRecordedBy } from "./githubWebhooks";
 
 // One-time backfill: stamp conversations.model from each conversation's newest
 // assistant message carrying a real model id ("<synthetic>" = error banner, not
@@ -548,5 +549,63 @@ export const backfillTaskConversationLinks = internalMutation({
       });
     }
     return { dryRun, scanned_linked_tasks: scanned, rows_written: linked, isDone: page.isDone, cursor: page.continueCursor };
+  },
+});
+
+// One-time repair: unlink commits a merge handed to the wrong session.
+//
+// Until 2026-09-22 a push that merged main into a branch linked every main
+// commit it carried to the one session sitting on that branch (the branch
+// fallback in conversationForCommit ignored GitHub's `distinct` flag), so a
+// session's timeline filled with its team's unrelated main history. A row is
+// unlinked only when all three hold: no edit row from that session names the
+// sha; the row was first stored on another branch than the session's; and the
+// GitHub commit event, written when the commit was first seen, names another
+// session or none, so the link was added afterwards.
+//   packages/convex/run.sh migrations:unlinkMergedCommits '{"dryRun":false,"auto":true}'
+export const unlinkMergedCommits = internalMutation({
+  args: {
+    dryRun: v.optional(v.boolean()),
+    cursor: v.optional(v.string()),
+    numItems: v.optional(v.number()),
+    auto: v.optional(v.boolean()),
+    scanned: v.optional(v.number()),
+    unlinked: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const dryRun = args.dryRun ?? true;
+    const numItems = args.numItems ?? 200;
+    const page = await ctx.db.query("commits").paginate({ cursor: args.cursor ?? null, numItems });
+
+    let scanned = args.scanned ?? 0;
+    let unlinked = args.unlinked ?? 0;
+    const samples: string[] = [];
+    for (const row of page.page) {
+      scanned++;
+      if (!row.conversation_id) continue;
+      const conversation = await ctx.db.get(row.conversation_id);
+      if (!conversation?.git_branch || !row.branch || row.branch === conversation.git_branch) continue;
+      if ((await commitRecordedBy(ctx, row.sha)) === row.conversation_id) continue;
+      const event = await ctx.db
+        .query("external_events")
+        .withIndex("by_dedupe_key", (q) => q.eq("dedupe_key", `commit:${row.sha}`))
+        .first();
+      if (!event || event.conversation_id === row.conversation_id) continue;
+      unlinked++;
+      if (samples.length < 5) samples.push(`${row.sha.slice(0, 7)} ${row.branch} -> ${row.conversation_id} (${conversation.git_branch})`);
+      if (!dryRun) await ctx.db.patch(row._id, { conversation_id: undefined });
+    }
+
+    if (args.auto && !page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.migrations.unlinkMergedCommits, {
+        ...args,
+        cursor: page.continueCursor,
+        scanned,
+        unlinked,
+      });
+    } else if (args.auto) {
+      console.log(`[unlinkMergedCommits] done dryRun=${dryRun} scanned=${scanned} unlinked=${unlinked}`);
+    }
+    return { dryRun, scanned, unlinked, samples, isDone: page.isDone, cursor: page.continueCursor };
   },
 });

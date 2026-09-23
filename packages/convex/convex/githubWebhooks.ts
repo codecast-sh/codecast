@@ -1282,6 +1282,16 @@ export const processStatusEvent = internalMutation({
 
 // ── Pushes and commits ──
 
+/** The session whose own edit row names this sha: the strong evidence. */
+export async function commitRecordedBy(ctx: { db: any }, sha: string): Promise<Id<"conversations"> | undefined> {
+  const prefix = sha.slice(0, 7);
+  const candidates = await ctx.db
+    .query("file_changes")
+    .withIndex("by_commit_hash", (q: any) => q.gte("commit_hash", prefix).lte("commit_hash", sha))
+    .take(50);
+  return candidates.find((row: any) => row.commit_hash && sha.startsWith(row.commit_hash))?.conversation_id;
+}
+
 /**
  * The session that wrote a commit.
  *
@@ -1297,13 +1307,8 @@ export async function conversationForCommit(
   sha: string,
   branch: string | undefined,
 ): Promise<Id<"conversations"> | undefined> {
-  const prefix = sha.slice(0, 7);
-  const candidates = await ctx.db
-    .query("file_changes")
-    .withIndex("by_commit_hash", (q: any) => q.gte("commit_hash", prefix).lte("commit_hash", sha))
-    .take(50);
-  const match = candidates.find((row: any) => row.commit_hash && sha.startsWith(row.commit_hash));
-  if (match) return match.conversation_id;
+  const recordedBy = await commitRecordedBy(ctx, sha);
+  if (recordedBy) return recordedBy;
 
   if (!branch) return undefined;
   const onBranch = await ctx.db
@@ -1373,7 +1378,11 @@ export const processPushEvent = internalMutation({
       const files = pushCommitFiles(commit);
 
       const links = await resolveTaskLinksFromText(ctx, message, branch);
-      const conversationId = await conversationForCommit(ctx, sha, branch);
+      // GitHub marks a commit it has already seen on another ref `distinct:
+      // false`: it arrived on this branch by a merge (usually main merged in),
+      // so the session sitting on the branch did not write it. Only its own
+      // edit row may claim it.
+      const conversationId = await conversationForCommit(ctx, sha, commit.distinct === false ? undefined : branch);
       if (!firstConversation) firstConversation = conversationId;
 
       const existing = await ctx.db

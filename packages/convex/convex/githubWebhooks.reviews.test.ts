@@ -304,6 +304,40 @@ describe("push", () => {
     expect(ctx.db._tables.commits[0].conversation_id).toBe(CONV);
   });
 
+  test("merging main into the branch does not hand main's commits to the session on it", async () => {
+    const mainSha = "2222222222222222222222222222222222222222";
+    const mergeSha = "3333333333333333333333333333333333333333";
+    const ctx = context(pushPayload({
+      ref: "refs/heads/ct-48298-git-backend",
+      after: mergeSha,
+      commits: [
+        { id: mainSha, distinct: false, message: "fix: someone else's work on main", timestamp: "2026-09-02T10:00:00Z", author: { name: "Sam", username: "sam" } },
+        { id: mergeSha, distinct: true, message: "Merge branch 'main' into ct-48298-git-backend", timestamp: "2026-09-03T10:00:00Z", author: { name: "Ashot", username: "ashot" } },
+      ],
+    }), undefined, "push", {
+      // main's own push already stored the commit, unlinked.
+      commits: [{ _id: "commit_main", sha: mainSha, message: "fix: someone else's work on main", timestamp: 1, repository: "codecast-sh/codecast", branch: "main", author_name: "Sam", author_email: "" }],
+    });
+    await (processPushEvent as any)._handler(ctx, { event_id: "event_1" });
+    const bySha = (sha: string) => ctx.db._tables.commits.find((c: any) => c.sha === sha);
+    expect(bySha(mainSha).conversation_id).toBeUndefined();
+    expect(bySha(mergeSha).conversation_id).toBe(CONV);
+    const events = ctx.db._tables.external_events;
+    expect(events.find((e: any) => e.sha === mainSha && e.kind === "commit").conversation_id).toBeUndefined();
+    expect(events.find((e: any) => e.kind === "push").conversation_id).toBe(CONV);
+  });
+
+  test("a merged commit its session recorded still links through the edit row", async () => {
+    const ctx = context(pushPayload({
+      ref: "refs/heads/some-other-branch",
+      commits: [{ ...pushPayload().commits[0], distinct: false }],
+    }), undefined, "push", {
+      file_changes: [{ _id: "fc_1", conversation_id: CONV, commit_hash: "1111111", change_type: "commit", file_path: "a.ts", new_content: "", timestamp: 1, change_key: "k", message_id: "m", seq: 1 }],
+    });
+    await (processPushEvent as any)._handler(ctx, { event_id: "event_1" });
+    expect(ctx.db._tables.commits[0].conversation_id).toBe(CONV);
+  });
+
   test("two sessions on one branch is not evidence", async () => {
     const ctx = context(pushPayload({ ref: "refs/heads/ct-48298-git-backend" }), undefined, "push", {
       conversations: [

@@ -1,8 +1,10 @@
 // Timeline lanes (commits, pull requests) — store-fed delta overlays.
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { normalizeRepository } from "@codecast/shared/contracts";
+import { useCallback } from "react";
 import { useSyncCollection, entityIdArgs } from "./useSyncCollection";
 import { useCollectionRows } from "./useCollectionRows";
+import { useInboxStore } from "../store/inboxStore";
 
 const api = _api as any;
 
@@ -93,8 +95,30 @@ export function useCommit(sha: string | undefined): any | undefined {
 // rows into the same collections the timeline lane uses, and the readers
 // narrow to this conversation.
 
+// The answer is EVERY commit linked to the conversation, but the collection is
+// a delta, where a missing row means "unchanged". So a cached row that still
+// names the conversation and is missing from the answer was unlinked on the
+// server; it goes back in without the link, and stays for the repo and PR
+// timelines that show it too.
+export function detachUnlinkedCommits(answer: any[], cached: Record<string, any>, conversationId: string): any[] {
+  const answered = new Set(answer.map((row) => row._id));
+  const detached: any[] = [];
+  for (const row of Object.values(cached)) {
+    if (row?.conversation_id !== conversationId || answered.has(row._id)) continue;
+    const { conversation_id: _unlinked, ...rest } = row;
+    detached.push(rest);
+  }
+  return detached.length ? [...answer, ...detached] : answer;
+}
+
 export function useSyncConversationCommits(conversationId: string | undefined) {
-  return useSyncCollection("commits", api.commits.getCommitsForConversation, entityIdArgs("conversation_id", conversationId));
+  const select = useCallback(
+    (answer: any) => (Array.isArray(answer) && conversationId
+      ? detachUnlinkedCommits(answer, useInboxStore.getState().commits ?? {}, conversationId)
+      : answer),
+    [conversationId],
+  );
+  return useSyncCollection("commits", api.commits.getCommitsForConversation, entityIdArgs("conversation_id", conversationId), { select });
 }
 
 export function useSyncConversationPullRequests(conversationId: string | undefined) {
