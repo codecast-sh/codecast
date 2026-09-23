@@ -1551,6 +1551,10 @@ export interface SwitchResult {
   fromEmail?: string;
   to: string;
   toEmail?: string;
+  // The machine was already on this account. The live credential was kept:
+  // writing the saved snapshot over it spends a refresh token the live login
+  // has already rotated, and the next probe then stamps the account dead.
+  keptLive?: boolean;
 }
 
 export function useProfile(name: string): SwitchResult {
@@ -1572,7 +1576,27 @@ export function useProfile(name: string): SwitchResult {
         `log into that account once and re-save it: cast accounts save ${name}`,
     );
   }
-  const fromEmail = activeAccountSummary()?.email;
+  const activeSummary = activeAccountSummary();
+  const targetUuid = target.oauthAccount?.accountUuid || readProfileIndex().profiles[name]?.uuid;
+  // Already this login. The saved snapshot is often an older refresh token.
+  // Writing it over the live credential spends the grant: the snapshot's
+  // refresh was rotated away, the next probe answers 401, and the account
+  // with the most room is stamped login-expired (2026-09-22, claude@).
+  if (
+    activeSummary?.uuid &&
+    targetUuid &&
+    activeSummary.uuid === targetUuid &&
+    credentialHealth(readActiveCredential()).usable
+  ) {
+    resnapshotActiveProfile();
+    return {
+      from: null,
+      to: name,
+      toEmail: activeSummary.email ?? target.oauthAccount?.emailAddress,
+      keptLive: true,
+    };
+  }
+  const fromEmail = activeSummary?.email;
   const from = resnapshotActiveProfile();
   writeActiveCredential(JSON.stringify(target.credentials));
   // The label MUST move with the credential. Leaving the outgoing account's
@@ -1645,6 +1669,9 @@ export interface RefreshResult {
   refreshed: boolean;
   expiresAt?: number;
   reason?: string;
+  // A definitive refusal (400/401). A transient failure leaves this unset so
+  // the caller does not stamp the login dead.
+  dead?: boolean;
 }
 
 /**
@@ -1669,7 +1696,7 @@ export async function refreshActiveCredential(
     return { refreshed: false, reason: "active credential is not JSON" };
   }
   const rotated = await rotateOauthCredential(cred, opts);
-  if (!rotated.ok) return { refreshed: false, reason: rotated.reason };
+  if (!rotated.ok) return { refreshed: false, reason: rotated.reason, dead: rotated.dead };
   writeActiveCredential(JSON.stringify(rotated.cred));
   invalidateAccountsCache();
   return { refreshed: true, expiresAt: rotated.expiresAt };
@@ -2525,11 +2552,44 @@ export async function refreshUsageSnapshots(
   const activeSince = noteActiveAccount(activeKey, now);
   // Keychain reads go async: this runs on a daemon timer, and a busy keychain
   // answered `security` in 2 to 3s (7 calls in one day's log, 2026-09-02).
-  if (activeKey && activeCred && credentialHealth(activeCred, now).pushable) {
+  // The signed-in grant is the authority for its own account. A saved profile
+  // of that account is often an older refresh token: refreshing the copy gets
+  // a 401 and would stamp the login expired while this machine is still signed
+  // in (2026-09-22: claude@, the fullest account, marked dead two seconds after
+  // a switch back onto it).
+  const activeHealth = activeCred ? credentialHealth(activeCred, now) : null;
+  let activeKeySettled = false;
+  if (activeKey && activeCred && activeHealth?.pushable) {
     try {
       const token = JSON.parse(activeCred)?.claudeAiOauth?.accessToken;
-      if (typeof token === "string" && token) jobs.set(activeKey, { label: "active", token });
+      if (typeof token === "string" && token) {
+        jobs.set(activeKey, { label: "active", token });
+        activeKeySettled = true;
+      }
     } catch {}
+  } else if (activeKey && activeCred && activeHealth?.usable) {
+    activeKeySettled = true;
+    const rotated = await refreshActiveCredential({ fetchImpl: opts.fetchImpl, now });
+    if (rotated.refreshed) {
+      summary.rotated.push("active");
+      const fresh = await readActiveCredentialAsync();
+      try {
+        const token = fresh ? JSON.parse(fresh)?.claudeAiOauth?.accessToken : undefined;
+        if (typeof token === "string" && token) jobs.set(activeKey, { label: "active", token });
+      } catch {}
+      // The rotation spent the previous refresh token. Fold the new pair into
+      // the saved profile before a later switch restores the spent one.
+      resnapshotActiveProfile();
+    } else if (rotated.dead) {
+      const doomed = readProfileIndex();
+      const match = Object.entries(doomed.profiles).find(([, meta]) => (meta.uuid || meta.email) === activeKey);
+      if (match && !match[1].login_expired_at) {
+        markLoginExpired(match[0], now);
+        summary.expired.push(match[0]);
+      }
+    } else if (rotated.reason) {
+      summary.failed.push({ name: "active", reason: rotated.reason });
+    }
   }
   const index = readProfileIndex();
   const knownKeys = new Set<string>();
@@ -2538,6 +2598,13 @@ export async function refreshUsageSnapshots(
     if (!key) continue;
     knownKeys.add(key);
     if (jobs.has(key)) continue; // active covers it with the freshest token
+    // The live grant was already judged above. A stale snapshot of the same
+    // account must not get its own refresh, or a 401 on the spent copy stamps
+    // the signed-in login dead.
+    if (key === activeKey && activeKeySettled) {
+      summary.skipped.push(name);
+      continue;
+    }
     if (meta.login_expired_at) {
       summary.skipped.push(name); // dead grant — keep last snapshot, no retry
       continue;
