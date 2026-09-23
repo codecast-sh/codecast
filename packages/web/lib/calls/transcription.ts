@@ -17,11 +17,45 @@
 // status snapshot via subscribe/getSnapshot; nothing here touches the store
 // except through convex mutations.
 import { Room, RoomEvent, Track } from "livekit-client";
-import { createScribeEngine, type ConvexHandle, type ScribeStatus } from "./scribeEngine";
+import { addressesAgent, agentSpokenNames, MID_TURN_AGENT_STATUSES } from "@codecast/shared/contracts";
+import { useInboxStore } from "../../store/inboxStore";
+import { characterFor } from "../sessionIdentity";
+import { findSessionRow } from "./findSessionRow";
+import { createScribeEngine, type ConvexHandle, type ScribePacing, type ScribeStatus } from "./scribeEngine";
 
 export { GAP_MS, MAX_HOLD_MS, type ScribeStatus } from "./scribeEngine";
 
 const engine = createScribeEngine();
+
+/** The sessions the live transcript feeds right now, by route target. The
+ *  server owns the route list (anyone in the room may add one); the seated
+ *  client watches it (useCallSync) and hands the targets here, so the
+ *  engine's pacing follows agents that joined after the run began. */
+let feedTargets: string[] = [];
+
+export function setScribeFeedTargets(targets: string[]): void {
+  feedTargets = targets;
+}
+
+/** The engine's view of the fed agents, read from the store at every tick:
+ *  busy while EVERY fed agent is mid-turn (the server holds context for a
+ *  busy agent, so the scribe need not ask it to), and whether a line names
+ *  one of them — the same names the server's own gate matches. */
+const pacing: ScribePacing = {
+  busy() {
+    const st = useInboxStore.getState() as any;
+    const rows = feedTargets.map((t) => findSessionRow(st, t)).filter(Boolean);
+    return rows.length > 0 && rows.every((row) => MID_TURN_AGENT_STATUSES.has(row.agent_status ?? ""));
+  },
+  addressed(text) {
+    const st = useInboxStore.getState() as any;
+    return feedTargets.some((t) => {
+      const row = findSessionRow(st, t);
+      if (!row) return false;
+      return addressesAgent(text, agentSpokenNames({ name: characterFor(row).name, agentType: row.agent_type }));
+    });
+  },
+};
 
 let room: Room | null = null;
 let roomListener: (() => void) | null = null;
@@ -95,6 +129,7 @@ export async function startScribe(opts: {
     roomKey: opts.roomKey,
     routes: opts.routes,
     auto: opts.auto,
+    pacing,
   });
   if (!id) return false;
   room = opts.room;

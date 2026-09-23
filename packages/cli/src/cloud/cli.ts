@@ -207,7 +207,8 @@ export function registerCloudCommand(program: Command): void {
           applyMirrorBundle(bundle, { home, configUserId, previousStamp: readStamp(home) }),
         );
         await writeStdout(JSON.stringify(result));
-        process.exit(result.refused ? 3 : result.errors.length || result.host_edited.length ? 1 : 0);
+        // A kept host edit is reported in the reply, not as a failure: the rest of the bundle applied.
+        process.exit(result.refused ? 3 : result.errors.length ? 1 : 0);
       } catch (err) {
         await writeStdout(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
         process.exit(1);

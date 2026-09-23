@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState, type RefCallback } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { codeThreadRootKey } from "@codecast/shared/comments";
@@ -28,7 +28,6 @@ import { useCodeComments, useSyncPRCodeComments } from "../../../../../hooks/use
 import { useSyncPullRequest, usePullRequest } from "../../../../../hooks/useSyncTimeline";
 import { usePRDetails } from "../../../../../hooks/usePRDetails";
 import { usePRLookup } from "../../../../../hooks/usePRLookup";
-import { useTitlebarHead } from "../../../../../hooks/useTitlebarHead";
 import { useInboxStore } from "../../../../../store/inboxStore";
 import {
   PR_STATE_META,
@@ -48,6 +47,7 @@ import {
 } from "../../../../../lib/prView";
 import { diffLineKey, type DiffLineAnchor } from "../../../../../lib/patchParser";
 import { accentVar } from "../../../../../lib/externalEvents";
+import { TitlebarStrip } from "../../../../../lib/pageLayout";
 import "../../../../../components/pr/pr.css";
 
 // `api` is a proxy, so naming a function prod has not deployed yet still
@@ -107,11 +107,9 @@ function PRUnavailable({ repository, number, reason, error, retry }: {
 export function PRContent({
   repository,
   number,
-  headRef,
 }: {
   repository: string;
   number: number;
-  headRef: RefCallback<HTMLDivElement>;
 }) {
   const router = useRouter();
   const { user, isAuthenticated } = useCurrentUser();
@@ -378,13 +376,20 @@ export function PRContent({
 
   const openComments = unresolvedThreadCount(comments) || (pr.unresolved_review_count ?? 0);
 
+  // The page scrolls as one: the header and the tabs go up with the content,
+  // and the composer sits at the end of the conversation. Files is the one
+  // view that fills the pane instead, because the diff keeps a file tree and
+  // a diff column that scroll on their own.
+  const fill = tab === "files";
   return (
     <div
       ref={rootRef}
-      className="pr-page h-full flex flex-col"
+      className={`pr-page h-full flex flex-col ${fill ? "" : "overflow-y-auto"}`}
+      data-main-scroll={fill ? undefined : true}
       style={{ ["--pr-accent" as string]: accentVar(PR_STATE_META[prStateKey(pr)].accent) }}
     >
-      <div ref={headRef}>
+      <TitlebarStrip />
+      <div>
         <PRHeader
           pr={pr}
           repository={repository}
@@ -416,7 +421,7 @@ export function PRContent({
         />
       </div>
 
-      <div className="flex-1 min-h-0 flex">
+      <div className={`flex-1 flex ${fill ? "min-h-0" : ""}`}>
         <div className="flex-1 min-w-0 flex flex-col">
           <nav
             role="tablist"
@@ -460,7 +465,7 @@ export function PRContent({
             ))}
           </nav>
 
-          <div className="flex-1 min-h-0">
+          <div className={`flex-1 ${fill ? "min-h-0" : ""}`}>
             {tab === "conversation" && (
               <PRTimeline
                 pr={pr}
@@ -543,14 +548,13 @@ export function PRContent({
 
 export default function PRPage() {
   const params = useParams();
-  const headRef = useTitlebarHead<HTMLDivElement>();
   const owner = params.owner as string;
   const repo = params.repo as string;
   const number = Number(params.number);
 
   return (
     <RepoPageShell repository={`${owner}/${repo}`}>
-      <PRContent repository={`${owner}/${repo}`} number={number} headRef={headRef} />
+      <PRContent repository={`${owner}/${repo}`} number={number} />
     </RepoPageShell>
   );
 }

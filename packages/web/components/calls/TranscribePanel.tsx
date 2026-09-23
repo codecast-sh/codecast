@@ -3,6 +3,7 @@ import { Captions, CaptionsOff } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
 import { getScribeStatus, subscribeScribe } from "../../lib/calls/transcription";
 import { startTranscribing, stopTranscribing } from "../../lib/calls/callManager";
+import { LivePulseDot } from "../SessionActivityLine";
 
 // The transcription switch, for the ROOM. Every huddle transcribes on its own
 // (one seated client becomes the scribe), so what a person switches here is a
@@ -75,7 +76,7 @@ export function TranscribeSwitch({ live, className = "" }: { live: boolean; clas
           : "Not transcribing. Click to start; every word lands in this thread."
       }
     >
-      <span className={`h-1.5 w-1.5 rounded-full ${on ? "bg-sol-green animate-pulse" : "bg-sol-text-dim"}`} />
+      {on ? <LivePulseDot className="h-1.5 w-1.5" /> : <span className="h-1.5 w-1.5 rounded-full bg-sol-text-dim" />}
       transcribing · {on ? "on" : "off"}
     </button>
   );

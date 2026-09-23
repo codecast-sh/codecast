@@ -116,23 +116,23 @@ const PEER = "device-peer-bbbbbbbb";
 
 describe("resumeOwnerVerdict", () => {
   test("a conversation owned by a LIVE peer is never resumed here (the D3 hole)", () => {
-    // Pre-fix this rule existed only for remote daemons, so a session owned by a
-    // live peer got resumed on both machines at once.
     expect(resumeOwnerVerdict({
       conversationId: "conv1",
       localDeviceId: LOCAL,
       isRemote: false,
       owner: { ownerDeviceId: PEER, ownerIsRemote: false, ownerOnline: true },
-    })).toBe("owned_by_live_device");
+    })).toBe("owned_by_other_device");
   });
 
-  test("a DEAD owner still fails over to this device (deliberate)", () => {
+  test("a conversation owned by an OFFLINE peer is never resumed here either (sd-213)", () => {
+    // A person reclaims it with the header chip, which restamps the owner first;
+    // the daemon never adopts another device's conversation on its own.
     expect(resumeOwnerVerdict({
       conversationId: "conv1",
       localDeviceId: LOCAL,
       isRemote: false,
       owner: { ownerDeviceId: PEER, ownerIsRemote: false, ownerOnline: false },
-    })).toBe("proceed");
+    })).toBe("owned_by_other_device");
   });
 
   test("an unowned conversation is adopted by a local daemon", () => {
@@ -157,12 +157,6 @@ describe("resumeOwnerVerdict", () => {
       conversationId: "conv1",
       localDeviceId: LOCAL,
       isRemote: true,
-      owner: { ownerDeviceId: PEER, ownerIsRemote: false, ownerOnline: false },
-    })).toBe("remote_unowned");
-    expect(resumeOwnerVerdict({
-      conversationId: "conv1",
-      localDeviceId: LOCAL,
-      isRemote: true,
       owner: { ownerDeviceId: LOCAL, ownerIsRemote: true, ownerOnline: true },
     })).toBe("proceed");
   });
@@ -172,13 +166,15 @@ describe("resumeOwnerVerdict", () => {
       .toBe("remote_no_conversation");
   });
 
-  test("the live-owner rule outranks the remote rule (same skip, clearer log)", () => {
-    expect(resumeOwnerVerdict({
-      conversationId: "conv1",
-      localDeviceId: LOCAL,
-      isRemote: true,
-      owner: { ownerDeviceId: PEER, ownerIsRemote: false, ownerOnline: true },
-    })).toBe("owned_by_live_device");
+  test("the other-owner rule outranks the remote rule (same skip, clearer log)", () => {
+    for (const online of [true, false]) {
+      expect(resumeOwnerVerdict({
+        conversationId: "conv1",
+        localDeviceId: LOCAL,
+        isRemote: true,
+        owner: { ownerDeviceId: PEER, ownerIsRemote: false, ownerOnline: online },
+      })).toBe("owned_by_other_device");
+    }
   });
 });
 

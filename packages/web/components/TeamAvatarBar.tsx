@@ -2,58 +2,63 @@ import { useCallsAvailable } from "../lib/teamFeatures";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { UserRound, Filter, Link2, Headphones, MessageSquare, ChevronRight, ArrowRight } from "lucide-react";
+import { UserRound, Filter, Link2, Headphones, MessageSquare, ChevronRight, ArrowRight, Maximize2, PictureInPicture2 } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { useSyncCollection } from "../hooks/useSyncCollection";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { useOpenSession } from "../hooks/useOpenSession";
 import { useMissingSessionRow } from "../hooks/useMissingSessionRow";
+import { useFaceRow } from "../hooks/useFaceRow";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { copyToClipboard, shareOrigin } from "../lib/utils";
+import { POP_OUT_PEOPLE_TITLE, canPopOutCall, useFacesFloating } from "../lib/desktop";
+import { focusExistingHuddle } from "../lib/calls/huddleWindow";
+import { popOutCall } from "../lib/calls/popOutCall";
+import { openCallStage } from "../lib/calls/callStage";
 import { ContextMenu, useContextMenu, CtxItem, CtxHeader } from "./ui/context-menu";
 import {
   PRESENCE_META,
-  compareMembersByPresence,
   localTimeLine,
   memberDisplayName,
   presenceLine,
-  teamBarSig,
   teammateWhereabouts,
 } from "./presence/memberPresence";
 import { MemberFace } from "./presence/MemberFace";
-import { TeamBarFace } from "./presence/TeamBarFace";
-import { useFaceKey, useWalkieFaces } from "./presence/useFaceKey";
-import { FaceActions } from "./presence/FaceActions";
 import { useMemberActivity } from "./presence/useMemberActivity";
 import { useMemberHuddle } from "./presence/useMemberHuddle";
-import { PopOutPeopleButton } from "./people/PopOutPeopleButton";
+import { popOutPeople } from "./people/popOutPeople";
+import { FaceRow } from "./faces/FaceRow";
+import { EngagementCard } from "./faces/EngagementCard";
 import { useOpenDm } from "../hooks/useChatSync";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
-import "./calls/walkie.css";
-import "./people/people.css";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 
 interface TeamAvatarBarProps {
   teamId?: Id<"teams">;
 }
 
+/** How many faces the header holds before the rest fold into a count. The
+ *  model puts me and the faces I am engaged with at the head, so the slice
+ *  never cuts a live conversation. */
+export const BAR_FACES = 6;
+
 // Data pump, isolated so the live query's push rate never re-renders the
 // visible bar: getTeamMembers re-emits every few seconds (teammates' presence
 // heartbeats), and a useQuery in the display component re-rendered the whole
 // avatar row on each push. The pump renders nothing; the bar below reads the
-// store, whose teamMembers ref only changes when something displayable changed
-// (the sync layer quantizes presence timestamps and bails on identical pushes).
+// store through the face row, whose identity only changes when something a
+// face draws changed.
 //
 // It is a FEEDER, so it rides useSyncCollection and never a plain useQuery:
 // the bar paints the cached roster, and a terminal server error must degrade
 // to that cache, not unmount the bar. A plain useQuery re-throws the error
 // during render, the boundary around the bar latches on it, and the bar stays
-// "Failed to load" until somebody clicks retry — even after the server has
-// long since recovered. On 2026-09-21 a half-saved edit of getTeamMembers
-// reached prod for about a minute (ReferenceError: feedFilter is not defined),
-// and every bar that was open then stayed broken for hours afterwards.
+// "Failed to load" until somebody clicks retry, long after the server has
+// recovered. On 2026-09-21 a half-saved edit of getTeamMembers reached prod
+// for about a minute (ReferenceError: feedFilter is not defined), and every
+// bar that was open then stayed broken for hours afterwards.
 export function TeamMembersPump({ teamId }: { teamId: Id<"teams"> | undefined }) {
   useSyncCollection(
     "teamMembers",
@@ -65,55 +70,74 @@ export function TeamMembersPump({ teamId }: { teamId: Id<"teams"> | undefined })
   return null;
 }
 
+/**
+ * THE HEADER IS THE FACE ROW (pl-756 F3).
+ *
+ * Presence, walkie, ringing and calls are the same faces in different states,
+ * and this bar draws them from the one model every surface reads
+ * (lib/faces/faceRow through useFaceRow): the row of circles, the links
+ * between the faces I am engaged with, and the one control card the
+ * engagement needs, hung under the row. Nothing here decides a state.
+ *
+ * What the bar adds is the shell's own chrome around the row: the hover card
+ * with a person's activity, follow and profile; the context menu; the count of
+ * faces that did not fit; the huddle and pop out buttons; and, while a call is
+ * up, the door to the full stage. Popped out, the row lives in the floating
+ * window and the header keeps one chip that brings it back.
+ */
 export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const memberFilter = searchParams.get("member");
-  // The teammate this window follows wears the selected ring too.
-  const followLeaderId = useInboxStore((s) => s.followLeaderId);
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
-  // Only the viewer's id is rendered (the "self" ring) — never the whole user
-  // doc, whose identity churns on daemon heartbeats.
+  // Only the viewer's id is rendered, never the whole user doc, whose
+  // identity churns on daemon heartbeats.
   const viewerId = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : ""));
   // Explicit prop, else the active workspace. No currentUser.team_id fallback:
   // an unset pointer IS the personal workspace, and falling back to the user's
   // default team would render that team's roster inside the personal space.
   const effectiveTeamId = propTeamId ?? activeTeamId;
-  // The always-visible bar renders identity + coarse presence, so it wakes on a
-  // signature of exactly those fields. The roster array itself re-pushes every
-  // few seconds on teammates' heartbeat counters; riding that churned this bar
-  // (and its avatar buttons) several times a minute forever.
-  const barSig = useInboxStore((s) => teamBarSig(s.teamMembers));
-  const teamMembers = useMemo(() => {
-    const roster = useInboxStore.getState().teamMembers;
-    return roster.length > 0 ? roster : null;
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- barSig stands in for the churny array
-  }, [barSig]);
+  // A scalar: the roster array itself re-pushes on every heartbeat.
+  const rosterCount = useInboxStore((s) => s.teamMembers.length);
   const callsEnabled = useCallsAvailable();
-  // THE BAR SHOWS THE FLOW. Who is talking to me, which room my own key is open
-  // into, and which room somebody stepped into on purpose — a signature of
-  // exactly those three, so the engine's other six fields (a linger expiring,
-  // the recognizer going down, an error clearing) wake this always-mounted
-  // surface never.
-  const faces = useWalkieFaces();
+  // THE ROW. One subscription, signature gated: a heartbeat, a level tick or
+  // a mute that moves no face hands back the same row and this bar sleeps.
+  const row = useFaceRow();
+  const floating = useFacesFloating();
   // Opens (or creates, local-first) THIS member's DM room. A bare
-  // router.push("/chat") landed on the chat page's fallback — the busiest
+  // router.push("/chat") landed on the chat page's fallback: the busiest
   // room, i.e. somebody else's DM.
   const openDm = useOpenDm();
   const ctxMenu = useContextMenu<{ id: string; username?: string | null; displayName: string }>();
-  // Which member's hover card is open. State-driven (not pure CSS hover) so
-  // the card — which subscribes to session data for its fleet line — is
+
+  // The header's slice of the row: me and the linked faces first (the model
+  // puts them at the head), then the rest by presence, up to the cap.
+  const shown = useMemo(
+    () => (row.entries.length > BAR_FACES ? { ...row, entries: row.entries.slice(0, BAR_FACES) } : row),
+    [row],
+  );
+  const hidden = row.entries.length - shown.entries.length;
+  // Something is happening on the row: an engagement, a ring, a voice. The
+  // minimal style hides the bar otherwise (globals.css).
+  const live = !!row.me || row.links.length > 0;
+
+  // Which face's hover card is open. State-driven (not pure CSS hover) so
+  // the card, which subscribes to session data for its fleet line, is
   // MOUNTED only while pointed at; the always-visible bar itself never
   // subscribes to session churn. Two timers make the hover humane: a short
   // dwell before opening (drive-by pointers don't flash cards) and a grace
-  // period before closing (crossing into the card, or between avatars, never
-  // drops it — the bug where the tooltip vanished on approach).
+  // period before closing (crossing into the card, or between faces, never
+  // drops it). The row's seats are found by delegation on `data-face-id`, so
+  // the row itself carries no hover wiring for this one surface.
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const hoverEnter = (id: string) => {
+  const hoverStay = () => {
     if (closeTimer.current) clearTimeout(closeTimer.current);
     closeTimer.current = null;
+  };
+  const hoverEnter = (id: string) => {
+    hoverStay();
     if (hoveredId === id) return;
     if (openTimer.current) clearTimeout(openTimer.current);
     // Instant switch when a card is already open; dwell when opening cold.
@@ -123,17 +147,41 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
   const hoverLeave = () => {
     if (openTimer.current) clearTimeout(openTimer.current);
     openTimer.current = null;
-    if (closeTimer.current) clearTimeout(closeTimer.current);
+    hoverStay();
     closeTimer.current = setTimeout(() => setHoveredId(null), 200);
   };
+  const seatOf = (target: EventTarget | null): HTMLElement | null =>
+    ((target as Element | null)?.closest?.("[data-face-id]") as HTMLElement | null) ?? null;
+  const onPointerOver = (e: React.MouseEvent) => {
+    const seat = seatOf(e.target);
+    if (seat) {
+      // The three actions are open under this face: two floating things
+      // under one face is one too many, so the card stands down.
+      if (seat.querySelector('[aria-expanded="true"]')) return hoverLeave();
+      return hoverEnter(seat.dataset.faceId!);
+    }
+    if ((e.target as Element | null)?.closest?.("[data-member-card]")) return hoverStay();
+    hoverLeave();
+  };
 
-  if (!effectiveTeamId || !teamMembers || teamMembers.length === 0) {
+  // The card hangs under the face it belongs to: the seat's own left edge,
+  // read once when the card opens (the row's FLIP moves seats by transform,
+  // so offsetLeft is the resting spot).
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  const [cardLeft, setCardLeft] = useState(0);
+  useLayoutEffect(() => {
+    if (!hoveredId) return;
+    const seat = rowRef.current?.querySelector<HTMLElement>(`[data-face-id="${hoveredId}"]`);
+    if (seat) setCardLeft(seat.offsetLeft);
+  }, [hoveredId]);
+  // The member row behind the card, subscribed only while the card is open.
+  const hoveredMember = useInboxStore((s) =>
+    hoveredId ? (s.teamMembers.find((m: any) => String(m?._id) === hoveredId) ?? null) : null,
+  );
+
+  if (!effectiveTeamId || rosterCount === 0) {
     return <TeamMembersPump teamId={effectiveTeamId} />;
   }
-
-  const sortedMembers = [...teamMembers]
-    .filter((m): m is NonNullable<typeof m> => m !== null)
-    .sort(compareMembersByPresence);
 
   const handleMemberClick = (memberId: string) => {
     if (memberFilter === memberId) {
@@ -151,60 +199,103 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
     router.push(`/team/activity?${params.toString()}`);
   };
 
-  const selectedMember = memberFilter ? sortedMembers.find(m => m._id === memberFilter) : null;
+  const selectedMember = memberFilter
+    ? useInboxStore.getState().teamMembers.find((m: any) => String(m?._id) === memberFilter)
+    : null;
+
+  // The row is floating over the work: one chip, and the pump.
+  if (floating.floating) {
+    return (
+      <div className="people-bar flex items-center gap-1 px-2" data-floating="1">
+        <TeamMembersPump teamId={effectiveTeamId} />
+        <button
+          type="button"
+          onClick={() => floating.setFloating(false)}
+          className="flex h-7 items-center gap-1.5 rounded-full border border-sol-cyan/40 bg-sol-cyan/10 px-2.5 text-[11px] text-sol-cyan transition-colors hover:bg-sol-cyan/20"
+          title="The faces are floating over your work. Click to bring them back here."
+        >
+          <PictureInPicture2 className="h-3 w-3" />
+          Faces are floating
+        </button>
+      </div>
+    );
+  }
+
+  const openTheCall = () => {
+    if (canPopOutCall()) {
+      void focusExistingHuddle().then((shown) => {
+        if (!shown) void popOutCall();
+      });
+      return;
+    }
+    openCallStage();
+  };
 
   return (
-    // While a key is down the rest of the bar steps back — one person is being
-    // talked to and the bar should look like it. Written once per burst from a
-    // signature the bar already subscribes to; nothing here moves at the frame
-    // rate of a voice.
-    <div className="people-bar flex items-center gap-1 px-2" data-holding={faces.sendingRoomKey ? "1" : undefined}>
+    <div
+      className="people-bar flex items-center gap-1 px-2"
+      data-live={live ? "1" : undefined}
+      onMouseOver={onPointerOver}
+      onMouseLeave={hoverLeave}
+      onClickCapture={(e) => {
+        // A click on a face opens its three actions; the hover card steps
+        // back so the two never stack.
+        if (seatOf(e.target)) hoverLeave();
+      }}
+      onContextMenu={(e) => {
+        const seat = seatOf(e.target);
+        const face = seat && row.entries.find((f) => f.id === seat.dataset.faceId);
+        if (!face) return;
+        const member = useInboxStore.getState().teamMembers.find((m: any) => String(m?._id) === face.id);
+        ctxMenu.open(e, { id: face.id, username: member?.github_username, displayName: face.name });
+      }}
+    >
       <TeamMembersPump teamId={effectiveTeamId} />
-      {sortedMembers.slice(0, 6).map((member) => (
-        <TeamBarFace
-          key={member._id}
-          member={member}
-          viewerId={viewerId}
-          callsEnabled={callsEnabled}
-          selected={memberFilter === member._id || followLeaderId === String(member._id)}
-          faces={faces}
-          onHoverEnter={() => hoverEnter(String(member._id))}
-          onHoverLeave={hoverLeave}
-          onContextMenu={(e) =>
-            ctxMenu.open(e, {
-              id: member._id,
-              username: member.github_username,
-              displayName: memberDisplayName(member),
-            })
-          }
-          card={
-            hoveredId === member._id ? (
-              // Its own boundary: a crash inside the card (or a join it starts)
-              // must degrade to a chip that NAMES this surface, not take the App
-              // boundary — and the whole shell — down with it.
-              <ErrorBoundary name="member card" level="inline">
-                <MemberHoverCard
-                  member={member}
-                  displayName={memberDisplayName(member)}
-                  isSelf={String(member._id) === viewerId}
-                  callsEnabled={callsEnabled}
-                  currentUserId={viewerId}
-                  onOpenProfile={() => router.push(`/team/${member.github_username || member._id}`)}
-                  onOpenChat={() => openDm([String(member._id)])}
-                />
-              </ErrorBoundary>
-            ) : null
-          }
-        />
-      ))}
-      {/* Group huddle: the strip is where the people are, so the "ring
-          several of them" gesture starts here — the new-huddle field, which
-          also reaches group threads and channels.
-
-          A solid circle the size of a face, with a solid border: a DASHED
-          ring with a headset in it once read as a seventh person, so the
-          border is solid and the word lives in the tooltip. */}
-      {callsEnabled && teamMembers.length > 1 && (
+      <FaceRow row={shown} density="bar" viewerId={viewerId} callsEnabled={callsEnabled} rootRef={rowRef}>
+        <EngagementCard card={row.card} density="bar" />
+        {hoveredId && hoveredMember && (
+          // Anchored on the hovered seat; the card positions itself under
+          // the anchor. Its own boundary: a crash inside the card (or a join
+          // it starts) must degrade to a chip that NAMES this surface, not
+          // take the App boundary, and the whole shell, down with it.
+          <span className="absolute top-0 h-full" style={{ left: cardLeft, width: 32 }} data-member-card>
+            <ErrorBoundary name="member card" level="inline">
+              <MemberHoverCard
+                member={hoveredMember}
+                displayName={memberDisplayName(hoveredMember)}
+                isSelf={String(hoveredMember._id) === viewerId}
+                callsEnabled={callsEnabled}
+                currentUserId={viewerId}
+                onOpenProfile={() => router.push(`/team/${hoveredMember.github_username || hoveredMember._id}`)}
+                onOpenChat={() => openDm([String(hoveredMember._id)])}
+              />
+            </ErrorBoundary>
+          </span>
+        )}
+      </FaceRow>
+      {/* THE DOOR TO THE STAGE. The card under the row carries the two
+          controls a call needs mid-work; the full stage (video, screen share,
+          transcript) opens only when asked. On the desktop the call already
+          has a window, so this raises it, or gives it one. */}
+      {(row.card.kind === "live" || row.card.kind === "joined-notice") && (
+        <ShortcutTooltip label="Open the call">
+          <button
+            type="button"
+            onClick={openTheCall}
+            data-open-call
+            className="ml-1 flex h-8 w-8 items-center justify-center rounded-full text-sol-text-muted transition-colors hover:bg-sol-bg-highlight hover:text-sol-text"
+            aria-label="Open the call"
+          >
+            <Maximize2 className="h-3.5 w-3.5" />
+          </button>
+        </ShortcutTooltip>
+      )}
+      {/* Group huddle: the row is where the people are, so the "ring several
+          of them" gesture starts here (the new-huddle field, which also
+          reaches group threads and channels). A solid circle the size of a
+          face with a solid border: a dashed ring with a headset in it once
+          read as a seventh person. */}
+      {callsEnabled && rosterCount > 1 && (
         <ShortcutTooltip label="Start a huddle with several teammates">
           <button
             onClick={() => useInboxStore.getState().openCreateModal("huddle")}
@@ -215,17 +306,28 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
           </button>
         </ShortcutTooltip>
       )}
-      {/* Pop the roster out into its own window — the buddy list, floating
-          beside whatever you are doing. Hidden inside the people window
-          itself, where the gesture has nowhere to go. */}
-      <PopOutPeopleButton className="flex h-8 w-8 items-center justify-center rounded-full text-sol-text-dim transition-colors hover:bg-sol-bg-highlight hover:text-sol-text" />
-      {teamMembers.length > 6 && (
-        <ShortcutTooltip label={`${teamMembers.length - 6} more team members`}>
+      {/* POP OUT. The same row, floating over the work in the shell's
+          see-through window; the header keeps a chip while it is out. Off
+          the desktop the buddy list window is the nearest thing. */}
+      <ShortcutTooltip label={POP_OUT_PEOPLE_TITLE}>
+        <button
+          type="button"
+          data-pop-out
+          onClick={() => (floating.available ? floating.setFloating(true) : void popOutPeople())}
+          className="flex h-8 w-8 items-center justify-center rounded-full text-sol-text-dim transition-colors hover:bg-sol-bg-highlight hover:text-sol-text"
+          aria-label={POP_OUT_PEOPLE_TITLE}
+        >
+          <PictureInPicture2 className="h-3.5 w-3.5" />
+        </button>
+      </ShortcutTooltip>
+      {hidden > 0 && (
+        <ShortcutTooltip label={`${hidden} more team members`}>
           <button
             onClick={() => router.push("/team/activity?filter=team")}
+            data-overflow
             className="flex h-8 w-8 items-center justify-center rounded-full border-2 border-sol-border/50 bg-sol-bg-highlight text-xs text-sol-text-muted transition-colors hover:border-sol-border"
           >
-            +{teamMembers.length - 6}
+            +{hidden}
           </button>
         </ShortcutTooltip>
       )}
@@ -269,10 +371,13 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
   );
 }
 
-// The rich hover card. Mounted only while its avatar (or the card itself) is
-// hovered — the wrapper span owns one hover scope with a close-grace timer,
-// so crossing from avatar into card never drops it. Session data is read only
-// here (transient subscription), never by the always-mounted bar.
+// The rich hover card. Mounted only while its face (or the card itself) is
+// hovered: the bar owns one hover scope with a close-grace timer, so crossing
+// from the face into the card never drops it. Session data is read only here
+// (transient subscription), never by the always-mounted bar. The walkie is
+// not on this card: the face itself offers Talk, Ring and Message under a
+// click, and a second key on a card that appears after a dwell was the
+// founder's complaint.
 // Exported for the _membercard visual harness only.
 export function MemberHoverCard({
   member,
@@ -292,7 +397,7 @@ export function MemberHoverCard({
   onOpenChat: () => void;
 }) {
   const now = useCoarseNow(15_000);
-  // One source for the badge, the activity line and the fleet counts — the
+  // One source for the badge, the activity line and the fleet counts: the
   // people window reads the same hook, so the two surfaces cannot phrase the
   // same situation differently.
   const { visual, line, fleet, room: liveRoom } = useMemberActivity(member);
@@ -301,7 +406,6 @@ export function MemberHoverCard({
   const time = localTimeLine(member.timezone, now);
   const presence = presenceLine(member, now);
   const presenceEchoesLine = presence.toLowerCase() === line.toLowerCase();
-  const avatar = member.image || member.github_avatar_url;
   // A quote is only worth quoting when it reads like a sentence the agent
   // wrote, not a bare status token.
   const quote =
@@ -314,22 +418,7 @@ export function MemberHoverCard({
   // (components/presence/useMemberHuddle), so the two surfaces cannot drift
   // into two answers for the same door.
   const huddle = useMemberHuddle(member, currentUserId, liveRoom, displayName);
-  // TALK, on the card as well as under the face. The card is where a pointer
-  // that dwelt on somebody ends up, and it offered a huddle and a message but
-  // not the one gesture the face exists for. The same key the face itself
-  // holds (useFaceKey), so the two cannot disagree about whether a talk is
-  // running: pressed here, it shows as Stop under the face and on the strip,
-  // and the card closing under the pointer does not end it — the engine owns
-  // the talk, the card only shows it.
   const memberId = String(member._id);
-  const faces = useWalkieFaces();
-  const key = useFaceKey({
-    viewerId: currentUserId,
-    memberId,
-    callsEnabled: callsEnabled && !isSelf,
-    talking: !!faces.talkingId && faces.talkingId === memberId,
-    joinedRoom: faces.joinedRoom,
-  });
 
   // Where they are: the session they have open, by the same rule the
   // palette's Teammates group uses (teammateWhereabouts), so the two surfaces
@@ -355,8 +444,8 @@ export function MemberHoverCard({
     useInboxStore.getState().setMyStatus(status);
   };
 
-  // Edge-aware anchoring: a 280px card anchored right-of-avatar clips off
-  // screen when the strip sits near the left edge (it did). Measure once on
+  // Edge-aware anchoring: a 280px card anchored right-of-face clips off
+  // screen when the bar sits near the left edge (it did). Measure once on
   // mount and flip.
   const cardRef = useRef<HTMLDivElement | null>(null);
   const [alignLeft, setAlignLeft] = useState(false);
@@ -370,13 +459,13 @@ export function MemberHoverCard({
 
   return (
     // pt-2 bridge, not mt-2 gap: the pointer never leaves the hover scope on
-    // the way from the avatar into the card.
+    // the way from the face into the card.
     <div
       ref={cardRef}
       className={`absolute top-full z-[80] cursor-default pt-2 ${alignLeft ? "left-0" : "right-0"}`}
     >
       <div className="w-[280px] rounded-lg border border-sol-border bg-sol-bg-alt p-3 text-left shadow-xl motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-1 motion-safe:duration-150">
-        {/* The whole identity block is the door to the profile — one large
+        {/* The whole identity block is the door to the profile: one large
             target instead of a name-sized hot zone that read as a label. The
             chevron is always there saying "this goes somewhere"; hovering
             highlights the row and names the destination. */}
@@ -410,7 +499,7 @@ export function MemberHoverCard({
               </div>
             )}
           </div>
-          {/* Chevron only — a text label here reserved width and truncated
+          {/* Chevron only: a text label here reserved width and truncated
               real names. The name's cyan shift + this slide say "profile". */}
           <ChevronRight className="h-3.5 w-3.5 shrink-0 self-center text-sol-text-dim transition-all group-hover:translate-x-0.5 group-hover:text-sol-cyan" />
         </button>
@@ -473,7 +562,7 @@ export function MemberHoverCard({
 
         <div className="mt-2.5 flex gap-1.5 border-t border-sol-border/60 pt-2">
           {isSelf ? (
-            // Your own card is the status switch — the one action that makes
+            // Your own card is the status switch: the one action that makes
             // sense on yourself.
             (["available", "busy", "away"] as const).map((st) => (
               <button
@@ -494,17 +583,6 @@ export function MemberHoverCard({
             ))
           ) : (
             <>
-              {callsEnabled && (
-                <FaceActions
-                  ptt={key.ptt}
-                  blocked={key.blocked}
-                  roomKey={key.roomKey}
-                  ringIds={[memberId]}
-                  show={["talk"]}
-                  size="sm"
-                  className="face-actions-fill"
-                />
-              )}
               {callsEnabled && (
                 <button
                   type="button"

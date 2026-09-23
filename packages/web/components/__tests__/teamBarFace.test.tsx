@@ -1,50 +1,49 @@
-// THE FACE IN THE AVATAR BAR IS A WALKIE KEY.
+// THE HEADER IS THE FACE ROW (pl-756 F3).
 //
-// The founder's complaint was that the walkie in the shell's team strip lived
-// inside a hover card that only appears after a pointer dwells for 120ms — "i
-// don't want a little mic in the dropdown here". The face is the key now, the
-// same key the people wall has, and these are the two halves of that promise:
-// the gesture (hold talks, a tap opens the conversation, and a tap can never
-// leave a burst behind) and the flow the bar shows while it happens.
-import { afterAll, afterEach, beforeAll, describe, expect, mock, test } from "bun:test";
+// The avatar bar used to draw its own faces (TeamBarFace) with its own rings
+// and its own answer to "is this person in a call". It draws the face row now,
+// from the one model every surface reads, and what is pinned here is the
+// shell's chrome around that row: the seats come from the model in the
+// model's order with the card hung under them; the header caps the row and
+// counts the rest; the hover card keeps a person's activity and profile and
+// no longer carries a walkie key; the context menu opens on a face; the pop
+// out sends the row away and leaves one chip; and the door to the stage is
+// there only while a call is up. Built on a hand made row so what is under
+// test is the bar, never the derivation.
+import type { Root } from "react-dom/client";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { act } from "react";
 import { JSDOM } from "jsdom";
-import { dmRoomKey } from "@codecast/shared/contracts";
-import { teamBarSig } from "../presence/memberPresence";
-import { JOINED_MS, walkieFacesSig } from "../presence/useFaceKey";
+import { replaceGlobals } from "../../test-helpers/globals";
+import { closeDomWindow } from "../../test-helpers/domGlobals";
+import type { FaceCard, FaceEntry, FaceRow as FaceRowModel, Link } from "../../lib/faces/faceRow";
 import type { PushToTalk } from "../../hooks/useWalkie";
+import { teamBarSig } from "../presence/memberPresence";
+import { walkieFacesSig } from "../presence/useFaceKey";
 
-// ── the world the face talks to ─────────────────────────────────────────────
+// ── the world the bar talks to ──────────────────────────────────────────────
 //
-// A FAITHFUL STAND-IN, never a stub: `mock.module` replaces a module for the
-// whole test process and bun loads every test file before running any of them,
-// so a partial replacement of a widely imported module breaks other files'
-// tests. This spreads the real hooks/useWalkie and overrides exactly one
-// export — the hook that would otherwise open a microphone. `pttHoldProps`,
-// `walkieKeyState` and `isWalkieHoldKey` stay real, which is the point: the
-// composition under test is the shipped one.
+// Faithful stand ins, never stubs: each real module is spread and exactly the
+// export that would reach a microphone, a router or the server is replaced.
 
 const realWalkieHooks = await import("../../hooks/useWalkie");
-
-const ptt: PushToTalk & { presses: number; releases: number } = {
+const ptt: PushToTalk = {
   holding: false,
+  locked: false,
   live: false,
   dropped: false,
   capturing: false,
   reason: null,
-  presses: 0,
-  releases: 0,
-  press: () => { ptt.presses++; },
-  release: () => { ptt.releases++; },
+  press: () => {},
+  release: () => {},
 };
-/** Every room the face asked to key, in order. */
-let keyedRooms: string[] = [];
+mock.module("../../hooks/useWalkie", () => ({ ...realWalkieHooks, usePushToTalk: () => ptt }));
 
-mock.module("../../hooks/useWalkie", () => ({
-  ...realWalkieHooks,
-  usePushToTalk: (roomKey: string | undefined) => {
-    keyedRooms.push(roomKey ?? "");
-    return ptt;
-  },
+const realChatHooks = await import("../../hooks/useChatSync");
+let openedDms: string[][] = [];
+mock.module("../../hooks/useChatSync", () => ({
+  ...realChatHooks,
+  useOpenDm: () => (ids: string[]) => openedDms.push(ids),
 }));
 
 const nav = { pushed: [] as string[] };
@@ -54,191 +53,313 @@ mock.module("next/navigation", () => ({
   usePathname: () => "/",
 }));
 
-let openedDms: string[][] = [];
-mock.module("../../hooks/useChatSync", () => ({
-  useOpenDm: () => (ids: string[]) => openedDms.push(ids),
+// The row, handed in by the test. The selectors that read the shared row
+// (MemberFace's chip, the live rooms) stay real.
+const realFaceRowHooks = await import("../../hooks/useFaceRow");
+let fakeRow: FaceRowModel;
+mock.module("../../hooks/useFaceRow", () => ({ ...realFaceRowHooks, useFaceRow: () => fakeRow }));
+
+const realTeamFeatures = await import("../../lib/teamFeatures");
+mock.module("../../lib/teamFeatures", () => ({ ...realTeamFeatures, useCallsAvailable: () => true }));
+
+// The feeder would open a Convex subscription; the bar paints the store.
+const realSyncCollection = await import("../../hooks/useSyncCollection");
+mock.module("../../hooks/useSyncCollection", () => ({ ...realSyncCollection, useSyncCollection: () => {} }));
+
+// The hover card's session lookups: a router context and a server query.
+const realOpenSession = await import("../../hooks/useOpenSession");
+mock.module("../../hooks/useOpenSession", () => ({ ...realOpenSession, useOpenSession: () => () => {} }));
+const realMissingRow = await import("../../hooks/useMissingSessionRow");
+mock.module("../../hooks/useMissingSessionRow", () => ({ ...realMissingRow, useMissingSessionRow: () => null }));
+
+// The context menu is a Radix dropdown in a portal; the bar's wiring is what
+// is under test, so the menu renders its items in place.
+const realCtx = await import("../ui/context-menu");
+mock.module("../ui/context-menu", () => ({
+  ...realCtx,
+  ContextMenu: ({ state, children }: { state: { menu: { payload: unknown } | null }; children: (p: any) => React.ReactNode }) =>
+    state.menu ? <div data-ctx-menu>{children(state.menu.payload)}</div> : null,
 }));
 
-// ── the flow the bar shows ──────────────────────────────────────────────────
+// The pop out: the shell's word on whether the row floats, and the switch.
+const realDesktop = await import("../../lib/desktop");
+const floating = { available: true, floating: false, set: [] as boolean[] };
+mock.module("../../lib/desktop", () => ({
+  ...realDesktop,
+  useFacesFloating: () => ({
+    available: floating.available,
+    floating: floating.floating,
+    setFloating: (on: boolean) => floating.set.push(on),
+  }),
+}));
 
-// A REAL DOM, because the gesture is the thing under test: React attaches its
-// listeners to a root and a hold is four events landing on one element.
-//
-// Handed back afterwards, every key of it. Bun runs all test files in one
-// process, and a stray `document` global makes react-dom/server take its
-// browser path in the files that come after — which is how a leak here fails a
-// diff-rendering test three files down the alphabet.
-const DOM_KEYS = [
-  "window", "document", "navigator", "HTMLElement", "Element", "Node", "Event",
-  "MouseEvent", "IS_REACT_ACT_ENVIRONMENT",
-] as const;
-const hadGlobals = new Map<string, { had: boolean; was: unknown }>();
-
-beforeAll(() => {
-  const dom = new JSDOM("<!doctype html><html><body></body></html>", { pretendToBeVisual: true });
-  const g = globalThis as any;
-  for (const k of DOM_KEYS) hadGlobals.set(k, { had: k in g, was: g[k] });
-  g.window = dom.window;
-  g.document = dom.window.document;
-  g.navigator = dom.window.navigator;
-  g.HTMLElement = dom.window.HTMLElement;
-  g.Element = dom.window.Element;
-  g.Node = dom.window.Node;
-  g.Event = dom.window.Event;
-  g.MouseEvent = dom.window.MouseEvent;
-  g.IS_REACT_ACT_ENVIRONMENT = true;
+const dom = new JSDOM("<!doctype html><html><body></body></html>", { pretendToBeVisual: true });
+const restoreGlobals = replaceGlobals({
+  window: dom.window,
+  document: dom.window.document,
+  navigator: dom.window.navigator,
+  HTMLElement: dom.window.HTMLElement,
+  Element: dom.window.Element,
+  Node: dom.window.Node,
+  Event: dom.window.Event,
+  MouseEvent: dom.window.MouseEvent,
+  KeyboardEvent: dom.window.KeyboardEvent,
+  getComputedStyle: dom.window.getComputedStyle,
+  // The context menu is a Radix popover: a focus scope and a resize observer.
+  MutationObserver: dom.window.MutationObserver,
+  CustomEvent: dom.window.CustomEvent,
+  FocusEvent: dom.window.FocusEvent,
+  ResizeObserver: class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  },
+  requestAnimationFrame: (cb: FrameRequestCallback) => setTimeout(() => cb(0), 0),
+  cancelAnimationFrame: (id: number) => clearTimeout(id),
+  IS_REACT_ACT_ENVIRONMENT: true,
 });
+const { createRoot } = await import("react-dom/client");
+const { useInboxStore } = await import("../../store/inboxStore");
+const { TeamAvatarBar, BAR_FACES } = await import("../TeamAvatarBar");
+const { getCallStageOpen, closeCallStage } = await import("../../lib/calls/callStage");
 
 afterAll(() => {
-  const g = globalThis as any;
-  for (const [k, { had, was }] of hadGlobals) {
-    if (had) g[k] = was;
-    else delete g[k];
-  }
+  mock.module("../ui/context-menu", () => realCtx);
+  mock.module("../../lib/desktop", () => realDesktop);
+  mock.module("../../hooks/useFaceRow", () => realFaceRowHooks);
+  closeDomWindow(dom);
+  restoreGlobals();
 });
 
-const VIEWER = "u_me";
-const MEMBER = { _id: "u_ann", name: "Ann Diaz", presence_state: "active" as const };
-const ROOM = dmRoomKey(VIEWER, String(MEMBER._id));
+// ── rows by hand ────────────────────────────────────────────────────────────
 
-type Faces = { talkingId: string; sendingRoomKey: string; joinedRoom: string };
-const idle: Faces = { talkingId: "", sendingRoomKey: "", joinedRoom: "" };
+const ME = "u-me";
+const ANN = "u-ann";
+const BO = "u-bo";
+const TEAM = "k97b3xkt3wvhmc3p03dgwxtfr583m6bg";
 
-const cleanups = new Set<() => Promise<void>>();
-afterEach(async () => {
-  for (const cleanup of cleanups) await cleanup();
-});
-
-async function mountFace(faces: Faces = idle, member: any = MEMBER) {
-  const React = await import("react");
-  const { createRoot } = await import("react-dom/client");
-  const { act } = await import("react");
-  const { TeamBarFace } = await import("../presence/TeamBarFace");
-  const host = document.createElement("div");
-  document.body.appendChild(host);
-  const root = createRoot(host);
-  const unmount = async () => {
-    if (!cleanups.delete(unmount)) return;
-    await act(async () => root.unmount());
-    host.remove();
+function entry(id: string, name: string, over: Partial<FaceEntry> = {}): FaceEntry {
+  return {
+    id,
+    name,
+    image: undefined,
+    me: false,
+    tier: "online",
+    state: "online",
+    level: null,
+    video: null,
+    muted: false,
+    followed: false,
+    joinedAgo: null,
+    unread: 0,
+    ask: 0,
+    ...over,
   };
-  cleanups.add(unmount);
-  const draw = async (f: Faces, m: any = member) => {
+}
+function me(over: Partial<FaceEntry> = {}): FaceEntry {
+  return entry(ME, "Me", { me: true, tier: "me", state: "in-call", ...over });
+}
+function rowOf(entries: FaceEntry[], links: Link[] = [], card: FaceCard = { kind: "none" }): FaceRowModel {
+  const mine = entries.find((e) => e.me) ?? null;
+  return { entries, links, card, me: mine, room: mine ? "dm:u-ann:u-me" : null };
+}
+const link = (to: string, kind: Link["kind"]): Link => ({ from: ME, to, kind });
+const liveCard: FaceCard = { kind: "live", roomKey: "dm:u-ann:u-me", title: "Ann", end: true, mute: true, muted: false, words: null, hearing: null };
+
+const member = (id: string, name: string) => ({ _id: id, name, presence_state: "active", github_username: name.toLowerCase() });
+
+let root: Root | null = null;
+let host: HTMLElement | null = null;
+
+beforeEach(() => {
+  fakeRow = rowOf([entry(ANN, "Ann"), entry(BO, "Bo")]);
+  floating.available = true;
+  floating.floating = false;
+  floating.set = [];
+  nav.pushed = [];
+  openedDms = [];
+  closeCallStage();
+  useInboxStore.setState({
+    currentUser: { _id: ME, name: "Me" },
+    teamMembers: [member(ME, "Me"), member(ANN, "Ann"), member(BO, "Bo")],
+    clientState: { ...useInboxStore.getState().clientState, ui: { ...(useInboxStore.getState().clientState?.ui ?? {}), active_team_id: TEAM } },
+    callOccupancy: {},
+    liveRooms: [],
+    followLeaderId: null,
+  } as any);
+});
+
+afterEach(async () => {
+  await act(async () => root?.unmount());
+  root = null;
+  host?.remove();
+  host = null;
+});
+
+async function mount() {
+  host = dom.window.document.body.appendChild(dom.window.document.createElement("div"));
+  root = createRoot(host);
+  await act(async () => root!.render(<TeamAvatarBar />));
+  const fire = async (el: Element, type: string) => {
     await act(async () => {
-      root.render(
-        React.createElement(TeamBarFace, {
-          member: m,
-          viewerId: VIEWER,
-          callsEnabled: true,
-          selected: false,
-          faces: f,
-          card: null,
-          onHoverEnter: () => {},
-          onHoverLeave: () => {},
-          onContextMenu: () => {},
-        }),
-      );
+      el.dispatchEvent(new dom.window.MouseEvent(type, { bubbles: true, cancelable: true }));
     });
   };
-  await draw(faces);
   return {
-    draw,
-    key: () => host.querySelector("button.people-face") as HTMLElement,
-    html: () => host.innerHTML,
-    act,
-    unmount,
+    draw: async (row: FaceRowModel) => {
+      fakeRow = row;
+      // The mocked hook reads the module variable, so a re-render is what
+      // hands the bar the new row.
+      await act(async () => root!.render(<TeamAvatarBar key={Math.random()} />));
+    },
+    q: <T extends Element = HTMLElement>(sel: string) => host!.querySelector(sel) as T | null,
+    all: (sel: string) => Array.from(host!.querySelectorAll(sel)) as HTMLElement[],
+    seat: (id: string) => host!.querySelector(`[data-face-id="${id}"]`) as HTMLElement,
+    face: (id: string) => host!.querySelector(`[data-face-id="${id}"] .face`) as HTMLElement,
+    fire,
+    html: () => host!.innerHTML,
   };
 }
 
-describe("the bar shows the flow", () => {
-  test("the face keys the DM room with this person, and nobody else's", async () => {
-    keyedRooms = [];
-    const f = await mountFace();
-    expect(keyedRooms[0]).toBe(ROOM);
-    expect(f.key().getAttribute("aria-label")).toBe(`Ann Diaz. Click for Talk, Ring and Message.`);
-    expect(f.key().getAttribute("data-tx")).toBeNull();
-    expect(f.key().getAttribute("data-rx")).toBeNull();
-    await f.unmount();
+// ── the row in the header ───────────────────────────────────────────────────
+
+describe("the header draws the model's row", () => {
+  test("one seat per entry, in the model's order, with me at the head and the link before the face", async () => {
+    fakeRow = rowOf([me({ state: "speaking", level: "mic" }), entry(ANN, "Ann", { tier: "linked", state: "hearing-me" }), entry(BO, "Bo")], [link(ANN, "tx")]);
+    const h = await mount();
+    expect(h.all("[data-face-id]").map((el) => el.dataset.faceId)).toEqual([ME, ANN, BO]);
+    expect(h.face(ANN).getAttribute("data-state")).toBe("hearing-me");
+    expect(h.q(".face-link")?.getAttribute("data-link-kind")).toBe("tx");
+    // The bar says something is live, for the styles that hide it otherwise.
+    expect(h.q(".people-bar")?.getAttribute("data-live")).toBe("1");
   });
 
-  test("the warm ring says my own microphone is open to them", async () => {
-    const f = await mountFace();
-    expect(f.key().getAttribute("data-tx")).toBeNull();
-    ptt.capturing = true;
-    await f.draw({ ...idle, sendingRoomKey: ROOM });
-    expect(f.key().getAttribute("data-tx")).toBe("1");
-    expect(f.key().getAttribute("data-walkie-state")).toBe("live");
-    ptt.capturing = false;
-    await f.unmount();
+  test("the card hangs under the row, and the door to the stage stands beside it only while a call is up", async () => {
+    const h = await mount();
+    expect(h.q(".engagement-card")).toBeNull();
+    expect(h.q("[data-open-call]")).toBeNull();
+    await h.draw(rowOf([me(), entry(ANN, "Ann", { tier: "linked", state: "live-with-me" })], [link(ANN, "call")], liveCard));
+    const card = h.q(".engagement-card")!;
+    expect(card.getAttribute("data-density")).toBe("bar");
+    expect(card.closest(".face-row")).not.toBeNull();
+    expect(h.q("[data-open-call]")).not.toBeNull();
+    // A listen offers the card's answers, not the stage.
+    await h.draw(
+      rowOf([me(), entry(ANN, "Ann", { tier: "linked", state: "talking-to-me" })], [link(ANN, "rx")], {
+        kind: "incoming", roomKey: "dm:u-ann:u-me", from: ANN, name: "Ann", reply: true, join: true, snooze: true,
+        words: { stage: "incoming", badge: "INCOMING", hint: "Ann is talking to you." },
+      }),
+    );
+    expect(h.q(".engagement-card")).not.toBeNull();
+    expect(h.q("[data-open-call]")).toBeNull();
   });
 
-  test("the cool ring says their voice is coming out of this machine", async () => {
-    const f = await mountFace();
-    await f.draw({ ...idle, talkingId: String(MEMBER._id) });
-    expect(f.key().getAttribute("data-rx")).toBe("1");
-    // Somebody else talking is not this face's business.
-    await f.draw({ ...idle, talkingId: "u_bo" });
-    expect(f.key().getAttribute("data-rx")).toBeNull();
-    await f.unmount();
+  test("Open the call opens the stage in a browser, and nothing opens it on its own", async () => {
+    fakeRow = rowOf([me(), entry(ANN, "Ann", { tier: "linked", state: "live-with-me" })], [link(ANN, "call")], liveCard);
+    const h = await mount();
+    expect(getCallStageOpen()).toBe(false);
+    await h.fire(h.q("[data-open-call]")!, "click");
+    expect(getCallStageOpen()).toBe(true);
   });
 
-  test("a join says so under the face, for four seconds", async () => {
-    const f = await mountFace();
-    expect(f.html()).not.toContain("joined");
-    await f.draw({ ...idle, joinedRoom: ROOM });
-    expect(f.html()).toContain("joined");
-    expect(f.key().getAttribute("data-joined")).toBe("1");
-    // And it is an event, not a badge the face now wears.
-    await f.act(async () => {
-      await Bun.sleep(JOINED_MS + 60);
+  test("the header caps the row and counts the rest; me and the linked faces are never cut", async () => {
+    const crowd = Array.from({ length: BAR_FACES + 3 }, (_, i) => entry(`u-${i}`, `Person ${i}`));
+    fakeRow = rowOf([me(), entry(ANN, "Ann", { tier: "linked", state: "live-with-me" }), ...crowd], [link(ANN, "call")], liveCard);
+    const h = await mount();
+    const ids = h.all("[data-face-id]").map((el) => el.dataset.faceId);
+    expect(ids.length).toBe(BAR_FACES);
+    expect(ids.slice(0, 2)).toEqual([ME, ANN]);
+    expect(h.q("[data-overflow]")?.textContent).toBe(`+${crowd.length + 2 - BAR_FACES}`);
+  });
+
+  test("with nobody on the roster the bar is only its feeder", async () => {
+    useInboxStore.setState({ teamMembers: [] } as any);
+    const h = await mount();
+    expect(h.q(".people-bar")).toBeNull();
+  });
+});
+
+// ── the chrome around the row ───────────────────────────────────────────────
+
+describe("the hover card", () => {
+  test("opens after a dwell on a face, with the person's activity and no walkie key", async () => {
+    const h = await mount();
+    await h.fire(h.face(ANN), "mouseover");
+    expect(h.q("[data-member-card]")).toBeNull();
+    await act(async () => {
+      await Bun.sleep(160);
     });
-    expect(f.html()).not.toContain("joined");
-    await f.unmount();
+    const card = h.q("[data-member-card]")!;
+    expect(card).not.toBeNull();
+    expect(card.textContent).toContain("Ann");
+    expect(card.textContent).toContain("Message");
+    // The walkie is on the face, not on the card: no key under a dwell.
+    expect(card.querySelector(".face-actions")).toBeNull();
+    expect(card.querySelector(".walkie-ptt")).toBeNull();
+    // Message on the card opens the DM with that person.
+    const message = Array.from(card.querySelectorAll("button")).find((b) => b.textContent?.trim() === "Message")!;
+    await h.fire(message, "click");
+    expect(openedDms).toEqual([[ANN]]);
   });
 
-  test("a burst is not a huddle: the violet chip stands down while one is live", async () => {
-    // `in_huddle` is true for any live seat, so the chip lit for three seconds
-    // of somebody's voice and read exactly like an hour in a call.
-    const inRoom = { ...MEMBER, in_huddle: true };
-    const f = await mountFace(idle, inRoom);
-    expect(f.html()).toContain("In a huddle");
-    await f.draw({ ...idle, talkingId: String(MEMBER._id) }, inRoom);
-    expect(f.html()).not.toContain("In a huddle");
-    // Somebody stepped in on purpose: it is a call now, and the chip is true
-    // again.
-    await f.draw({ talkingId: String(MEMBER._id), sendingRoomKey: "", joinedRoom: ROOM }, inRoom);
-    expect(f.html()).toContain("In a huddle");
-    await f.unmount();
+  test("stands down when the face is clicked: the three actions take its place", async () => {
+    const h = await mount();
+    await h.fire(h.face(ANN), "mouseover");
+    await act(async () => {
+      await Bun.sleep(160);
+    });
+    expect(h.q("[data-member-card]")).not.toBeNull();
+    await h.fire(h.face(ANN), "click");
+    await act(async () => {
+      await Bun.sleep(240);
+    });
+    expect(h.q("[data-member-card]")).toBeNull();
+    expect(h.seat(ANN).querySelector(".people-face-actions")).not.toBeNull();
+    // A pointer back over the open face does not stack the card on the actions.
+    await h.fire(h.face(ANN), "mouseover");
+    await act(async () => {
+      await Bun.sleep(160);
+    });
+    expect(h.q("[data-member-card]")).toBeNull();
+  });
+});
+
+describe("the context menu", () => {
+  test("opens on a face with the person's name and the profile door", async () => {
+    const h = await mount();
+    await h.fire(h.face(BO), "contextmenu");
+    const menu = h.q("[data-ctx-menu]")!;
+    expect(menu).not.toBeNull();
+    expect(menu.textContent).toContain("Bo");
+    expect(menu.textContent).toContain("Open profile");
+    // A right click off a face opens nothing.
+    await h.fire(h.q("[data-pop-out]")!, "contextmenu");
+    expect(h.all("[data-ctx-menu]").length).toBe(1);
+  });
+});
+
+describe("the pop out", () => {
+  test("sends the row to the floating window", async () => {
+    const h = await mount();
+    await h.fire(h.q("[data-pop-out]")!, "click");
+    expect(floating.set).toEqual([true]);
   });
 
-  test("a click opens Talk, Ring and Message under the face, and a blocked Talk says why", async () => {
-    ptt.reason = "You are in another call";
-    const f = await mountFace();
-    await f.act(() => f.key().dispatchEvent(new window.MouseEvent("click", { bubbles: true })));
-    const html = f.html();
-    expect(html).toContain("people-face-actions");
-    for (const word of ["Talk", "Ring", "Message"]) expect(html).toContain(`>${word}<`);
-    expect(html).toContain("You are in another call");
-    ptt.reason = null;
-  });
-
-  test("Message opens the conversation with that person; a click never opens a mic", async () => {
-    openedDms = [];
-    const before = ptt.presses;
-    const f = await mountFace();
-    await f.act(() => f.key().dispatchEvent(new window.MouseEvent("click", { bubbles: true })));
-    const seat = f.key().closest(".people-face-seat") as HTMLElement;
-    const message = [...seat.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Message");
-    await f.act(() => message!.dispatchEvent(new window.MouseEvent("click", { bubbles: true })));
-    expect(openedDms).toEqual([[String(MEMBER._id)]]);
-    expect(ptt.presses).toBe(before);
+  test("while the faces float the header keeps one chip, which brings them back", async () => {
+    floating.floating = true;
+    const h = await mount();
+    expect(h.q("[data-face-id]")).toBeNull();
+    const chip = h.q(".people-bar button")!;
+    expect(chip.textContent).toContain("Faces are floating");
+    await h.fire(chip, "click");
+    expect(floating.set).toEqual([false]);
   });
 });
 
 // ── wake discipline ─────────────────────────────────────────────────────────
 
 describe("the bar wakes on what it draws", () => {
-  const member = (over: any = {}) => ({
+  const roster = (over: any = {}) => ({
     _id: "u_ann",
     name: "Ann Diaz",
     image: "a.png",
@@ -247,11 +368,11 @@ describe("the bar wakes on what it draws", () => {
     ...over,
   });
 
-  test("heartbeats move nothing: the bar sleeps through a roster re-push", () => {
-    const before = teamBarSig([member()]);
+  test("heartbeats move nothing: the row's roster signature sleeps through a re-push", () => {
+    const before = teamBarSig([roster()]);
     // Everything a presence heartbeat touches, and nothing a 32px face draws.
     const after = teamBarSig([
-      member({
+      roster({
         presence_input_at: 1_700_000_600_000,
         recent_session_messages: 42,
         recent_session_updated: 1_700_000_600_000,
@@ -263,12 +384,12 @@ describe("the bar wakes on what it draws", () => {
   });
 
   test("a face that changes wakes it", () => {
-    const before = teamBarSig([member()]);
-    expect(teamBarSig([member({ in_huddle: true })])).not.toBe(before);
-    expect(teamBarSig([member({ status: "busy" })])).not.toBe(before);
-    expect(teamBarSig([member({ image: "b.png" })])).not.toBe(before);
-    expect(teamBarSig([member({ name: "Ann D" })])).not.toBe(before);
-    expect(teamBarSig([member({ in_room_key: "dm:a:b" })])).not.toBe(before);
+    const before = teamBarSig([roster()]);
+    expect(teamBarSig([roster({ in_huddle: true })])).not.toBe(before);
+    expect(teamBarSig([roster({ status: "busy" })])).not.toBe(before);
+    expect(teamBarSig([roster({ image: "b.png" })])).not.toBe(before);
+    expect(teamBarSig([roster({ name: "Ann D" })])).not.toBe(before);
+    expect(teamBarSig([roster({ in_room_key: "dm:a:b" })])).not.toBe(before);
   });
 
   const status = (over: any = {}) =>
@@ -282,37 +403,23 @@ describe("the bar wakes on what it draws", () => {
       error: null,
       ...over,
     }) as any;
-  const inRoom = (mode: string) => ({ liveRoom: { key: ROOM, mode, since: 1_000 } });
 
-  test("the walkie signature moves on the three facts a face draws", () => {
+  test("the walkie signature the faces read moves on the three facts a face draws", () => {
     const quiet = walkieFacesSig(status());
     expect(walkieFacesSig(status({ incoming: { fromUserId: "u_ann" } }))).not.toBe(quiet);
-    expect(walkieFacesSig(status({ sending: { roomKey: ROOM } }))).not.toBe(quiet);
-    expect(walkieFacesSig(status(inRoom("call")))).not.toBe(quiet);
+    expect(walkieFacesSig(status({ sending: { roomKey: "dm:a:b" } }))).not.toBe(quiet);
+    expect(walkieFacesSig(status({ liveRoom: { key: "dm:a:b", mode: "call", since: 1_000 } }))).not.toBe(quiet);
   });
 
   test("and holds still through the engine's own bookkeeping", () => {
     const quiet = walkieFacesSig(status());
     // The recognizer going down, a reply becoming possible, an error clearing:
     // engine churn that changes no pixel of a face, on a surface mounted for
-    // the life of the app.
+    // the life of the app. A room held as a burst is the face row's business
+    // now (isInHuddle reads the row's links), so it moves this signature no more.
     expect(walkieFacesSig(status({ asr: "unavailable" }))).toBe(quiet);
     expect(walkieFacesSig(status({ canReply: true }))).toBe(quiet);
     expect(walkieFacesSig(status({ error: "that burst did not send" }))).toBe(quiet);
-  });
-
-  test("a room held as a burst DOES move it, because the chip depends on it", () => {
-    // A seat is not a huddle: a burst seats everyone who hears it and holds
-    // that seat for half a minute afterwards, so the violet chip has to stand
-    // down for exactly the rooms the walkie is holding (memberInHuddle). That
-    // makes the room a fact a face draws, not bookkeeping — a signature that
-    // held still here would leave the chip lit until something else forced a
-    // render, which is the bug it exists to prevent.
-    const quiet = walkieFacesSig(status());
-    expect(walkieFacesSig(status(inRoom("burst")))).not.toBe(quiet);
-    expect(walkieFacesSig(status(inRoom("listen")))).not.toBe(quiet);
-    // And it is the ROOM, not churn: the same room reported twice is one
-    // signature, so a heartbeat inside a held room still wakes nobody.
-    expect(walkieFacesSig(status(inRoom("burst")))).toBe(walkieFacesSig(status(inRoom("burst"))));
+    expect(walkieFacesSig(status({ liveRoom: { key: "dm:a:b", mode: "burst", since: 1_000 } }))).toBe(quiet);
   });
 });

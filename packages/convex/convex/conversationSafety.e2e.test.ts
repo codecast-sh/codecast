@@ -121,7 +121,7 @@ describe("safety stop survives transcript ingestion and delivery recovery", () =
     const id = await enqueuePendingMessage(ctx, await ctx.db.get(CONVERSATION), USER, { content: "Forwarded update" });
     const service = {
       claimPendingMessageForDelivery: (messageId: string, destination?: string) =>
-        claimPendingMessageForDaemon(ctx, messageId as any, USER, "device", Date.now(), destination as any),
+        claimPendingMessageForDaemon(ctx, messageId as any, USER, "device", destination as any),
     };
     await requirePendingDeliveryAdmission(service, id, CONVERSATION);
     await expect(requirePendingDeliveryAdmission(service, id, child)).rejects.toBeInstanceOf(PendingDeliveryHeldError);

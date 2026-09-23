@@ -275,7 +275,7 @@ describe("markSourceSynced status transitions", () => {
 
 /* ---------------- The engine on a fake db (S3, S4, S8) ---------------- */
 
-import { applyRemote, pushTask } from "./issueSync";
+import { applyRemote, pushTask, stampPushed } from "./issueSync";
 import { LinearGraphqlError, fetchLabels, findUserByEmail } from "./linearApi";
 
 /** A ctx with a fake db and a scheduler that records instead of running. */
@@ -434,6 +434,21 @@ describe("applyRemote on an existing task", () => {
     expect(scheduled).toEqual([]);
   });
 
+  test("a deletion leaves a finished task finished", async () => {
+    const { ctx, db, tables } = engineCtx({
+      tasks: [{ ...structuredClone(TASK), status: "done" }], issue_sync_sources: [SOURCE], users: [ADA], task_history: [], task_comments: [],
+    });
+    await apply(ctx, { source_id: "src_1", issue: { ...sameIssue(), deleted: true }, event_kind: "issue_closed" });
+    expect(tables.tasks[0].status).toBe("done");
+    expect(db._patched.length).toBe(0);
+  });
+
+  test("a trashed or archived payload normalizes as deleted", () => {
+    expect(normalizeLinearIssue({ ...LINEAR_ISSUE_CREATE.data, trashed: true }).deleted).toBe(true);
+    expect(normalizeLinearIssue({ ...LINEAR_ISSUE_CREATE.data, archivedAt: "2026-09-22T00:00:00.000Z" }).deleted).toBe(true);
+    expect(normalizeLinearIssue(LINEAR_ISSUE_CREATE.data).deleted).toBeUndefined();
+  });
+
   test("a deletion drops the task once and is inert after", async () => {
     const { ctx, db, tables } = engineCtx({
       tasks: [structuredClone(TASK)], issue_sync_sources: [SOURCE], users: [ADA], task_history: [], task_comments: [],
@@ -584,5 +599,122 @@ describe("LinearGraphqlError", () => {
     expect(e.message).toBe("Linear GraphQL: You are not allowed to create labels in this team.");
     expect(e.forbidden).toBe(true);
     expect(new LinearGraphqlError([{ message: "boom" }]).forbidden).toBe(false);
+  });
+});
+
+describe("push errors survive inbound", () => {
+  test("a pull that finds the same issue keeps the last push's error and still writes nothing", async () => {
+    const parked = structuredClone(TASK);
+    parked.external.last_error = "Linear kept these labels off LIN-482: personal";
+    const { ctx, db, tables } = engineCtx({
+      tasks: [parked], issue_sync_sources: [SOURCE], users: [ADA], task_history: [], task_comments: [],
+    });
+    await apply(ctx, { source_id: "src_1", issue: sameIssue() });
+    expect(db._patched).toEqual([]);
+    expect(tables.tasks[0].external.last_error).toBe("Linear kept these labels off LIN-482: personal");
+  });
+
+  test("stampPushed records refused labels in the task's history", async () => {
+    const { ctx, tables } = engineCtx({ tasks: [structuredClone(TASK)], task_history: [] });
+    await (stampPushed as any)._handler(ctx, { task_id: "task_1", fields: ["labels"], error: "kept off", refused_labels: ["personal", "ops"] });
+    expect(tables.tasks[0].external.field_ts.labels).toBeGreaterThan(0);
+    expect(tables.tasks[0].external.last_error).toBe("kept off");
+    expect(tables.task_history[0]).toMatchObject({ actor_type: "system", action: "sync_refused", field: "labels", new_value: "personal, ops" });
+    await (stampPushed as any)._handler(ctx, { task_id: "task_1", fields: ["title"] });
+    expect(tables.tasks[0].external.last_error).toBeUndefined();
+    expect(tables.task_history.length).toBe(1);
+  });
+});
+
+/* ---------------- Sub-issues as subtasks (S2) ---------------- */
+
+describe("applyRemote parent linking", () => {
+  const PARENT = {
+    ...structuredClone(TASK),
+    _id: "task_parent",
+    short_id: "ct-0",
+    title: "Epic",
+    external: { ...TASK.external, id: "issue_parent", identifier: "LIN-1" },
+  };
+  const seed = (tasks: any[]) => engineCtx({
+    tasks,
+    issue_sync_sources: [SOURCE],
+    users: [ADA, { _id: "user_owner", email: "owner@acme.dev" }],
+    team_memberships: [{ _id: "m1", user_id: "user_owner", team_id: "team_cc" }],
+    task_history: [],
+    task_comments: [],
+    plans: [],
+  });
+
+  test("an issue whose parent we hold lands under that task", async () => {
+    const { ctx, tables } = seed([structuredClone(PARENT), structuredClone(TASK)]);
+    const res = await apply(ctx, { source_id: "src_1", issue: sameIssue({ parentId: "issue_parent" }) });
+    expect(res.changed).toContain("parent_id");
+    expect(res.parent_pending).toBe(false);
+    const child = tables.tasks.find((t: any) => t._id === "task_1");
+    expect(String(child.parent_id)).toBe("task_parent");
+    expect(child.external.parent_issue_id).toBe("issue_parent");
+    expect(tables.task_history.some((h: any) => h.field === "parent" && h.new_value === "task_parent")).toBe(true);
+  });
+
+  test("a parent we do not hold yet is pending, and links once it arrives", async () => {
+    const { ctx, tables } = seed([structuredClone(TASK)]);
+    const first = await apply(ctx, { source_id: "src_1", issue: sameIssue({ parentId: "issue_parent" }) });
+    expect(first.parent_pending).toBe(true);
+    expect(tables.tasks[0].parent_id).toBeUndefined();
+    tables.tasks.push(structuredClone(PARENT));
+    const again = await apply(ctx, { source_id: "src_1", issue: sameIssue({ parentId: "issue_parent" }) });
+    expect(again.parent_pending).toBe(false);
+    expect(String(tables.tasks[0].parent_id)).toBe("task_parent");
+  });
+
+  test("the provider detaching the sub-issue clears our parent", async () => {
+    const { ctx, tables } = seed([structuredClone(PARENT), { ...structuredClone(TASK), parent_id: "task_parent" }]);
+    await apply(ctx, { source_id: "src_1", issue: sameIssue({ parentId: null }) });
+    const child = tables.tasks.find((t: any) => t._id === "task_1");
+    expect(child.parent_id).toBeUndefined();
+  });
+
+  test("a local reparent newer than the event wins", async () => {
+    const child = { ...structuredClone(TASK), parent_id: "task_parent" };
+    child.external.field_ts = { parent_id: 9_999_999_999_999 };
+    const { ctx, tables } = seed([structuredClone(PARENT), child]);
+    await apply(ctx, { source_id: "src_1", issue: sameIssue({ parentId: null }) });
+    expect(String(tables.tasks[1].parent_id)).toBe("task_parent");
+  });
+
+  test("a link the depth cap or a cycle refuses is skipped, never thrown", async () => {
+    // The parent's issue names the child as ITS parent: a cycle.
+    const parent = { ...structuredClone(PARENT), parent_id: "task_1" };
+    const { ctx, tables } = seed([parent, structuredClone(TASK)]);
+    const res = await apply(ctx, { source_id: "src_1", issue: sameIssue({ parentId: "issue_parent" }) });
+    expect(res.changed).not.toContain("parent_id");
+    expect(tables.tasks[1].parent_id).toBeUndefined();
+  });
+});
+
+describe("pushTask parent", () => {
+  const realFetch = globalThis.fetch;
+  test("a reparent pushes the parent's issue id, a detach pushes null, a parent without a twin pushes nothing", async () => {
+    const inputs: any[] = [];
+    globalThis.fetch = (async (_url: any, init: any) => {
+      const { variables } = JSON.parse(init.body);
+      inputs.push(variables.input);
+      return { ok: true, status: 200, json: async () => ({ data: { issueUpdate: { success: true, issue: {} } } }) } as any;
+    }) as any;
+    const run = (parent_issue_id: any) => (pushTask as any)._handler({
+      runQuery: async () => ({ external: { provider: "linear", id: "i", identifier: "LIN-2", team_id: "t" }, parent_issue_id, labels: [], assignee_emails: [] }),
+      runAction: async () => ({ ok: true, token: "tok" }),
+      runMutation: async () => {},
+    }, { task_id: "t", fields: ["parent_id"] });
+    try {
+      await run("issue_parent");
+      await run(null);
+      const none = await run(undefined);
+      expect(inputs).toEqual([{ parentId: "issue_parent" }, { parentId: null }]);
+      expect(none.skipped).toBe("nothing_to_push");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 });

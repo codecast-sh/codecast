@@ -15,27 +15,39 @@
   outline: 2px solid var(--sol-cyan);
   outline-offset: 3px;
 }
+/* The edge marker is a rail line, not a badge: the same bare left accent bar
+   and small text as the cards it stands in for, with a blurred wash so feed
+   text sliding under it stays legible. It renders only once the nearest card
+   has fully left the viewport and no card occupies its strip of the rail. */
 .cc-review-edge {
   position: absolute;
   left: 12px;
   z-index: 25;
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 6px 9px;
-  border: 1px solid color-mix(in srgb, var(--sol-cyan) 40%, var(--sol-border));
-  border-radius: 20px;
-  background: var(--sol-card);
-  color: var(--sol-cyan);
-  box-shadow: 0 2px 8px color-mix(in srgb, var(--sol-text) 8%, transparent);
-  font-size: 11px;
+  gap: 0.3rem;
+  padding: 0.15rem 0.5rem 0.15rem 0.55rem;
+  border: none;
+  border-left: 2px solid color-mix(in srgb, var(--sol-cyan) 70%, var(--sol-border));
+  border-radius: 0 4px 4px 0;
+  background: color-mix(in srgb, var(--sol-bg) 82%, transparent);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  color: var(--sol-text-dim);
+  font-size: 0.72rem;
   font-weight: 500;
-  line-height: 16px;
+  line-height: 1.4;
+  white-space: nowrap;
   cursor: pointer;
+  animation: fadeIn 150ms ease-out;
+  transition: color 120ms, border-color 120ms;
+}
+.cc-review-edge svg {
+  color: var(--sol-cyan);
 }
 .cc-review-edge:hover {
-  background: color-mix(in srgb, var(--sol-cyan) 12%, var(--sol-card));
-  border-color: var(--sol-cyan);
+  color: var(--sol-text);
+  border-left-color: var(--sol-cyan);
 }
-.cc-review-edge[data-direction="above"] { top: 8px; }
-.cc-review-edge[data-direction="below"] { bottom: 8px; }
+.cc-review-edge[data-direction="above"] { top: 6px; }
+.cc-review-edge[data-direction="below"] { bottom: 6px; }
