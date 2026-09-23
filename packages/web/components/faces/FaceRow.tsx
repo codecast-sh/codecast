@@ -262,12 +262,16 @@ function FaceSeat({
         onPointerCancel={onPointerUp}
       >
         <CircleFace videoRef={videoRef} track={track} image={entry.image} name={entry.name} diameter={diameter} />
-        {entry.muted && (
-          <span className="face-mute">
-            <MicOff className="h-3 w-3" />
-          </span>
-        )}
       </button>
+      {/* The marks on the person sit on the circle's EDGE, outside its clip:
+          the presence badge, the mute badge, the unread count, the ask. The
+          mute badge inside the circle (the call circles' own spot) was cut
+          to a D by the circle's clip, and its icon with it. */}
+      {entry.muted && (
+        <span className="face-mute" aria-label="muted">
+          <MicOff className="h-3 w-3" />
+        </span>
+      )}
       {presence && <PresenceBadge state={presence} size={density === "bar" ? "sm" : "md"} className="face-pres" />}
       {entry.unread > 0 && (
         <span className="face-unread" aria-label={`${entry.unread} unread`}>
@@ -275,12 +279,9 @@ function FaceSeat({
         </span>
       )}
       {entry.ask > 0 && <span className="face-ask" aria-label={`${entry.ask} waiting on you`} />}
-      {/* "hey he joined", under the face it happened to, for the seconds the model says so. */}
-      {entry.state === "joining" && (
-        <span className="people-face-joined" role="status">
-          joined
-        </span>
-      )}
+      {/* No "joined" label under the chin: a face is `joining` only in my own
+          room, where the card under the row is the joined notice and says so
+          in words; a label there sat under the card that covered it. */}
       {/* The name under the chin, the floating circles' own hover. In the
           bar the card carries the name, so nothing hangs under a face there
           that a card could stack on. */}
@@ -546,7 +547,7 @@ export function FloatingFaceRow({
       observer.current.observe(el);
     }
   }, []);
-  const { rootRef, hovered, startDrag, endDrag } = useFloatingCircles({
+  const { rootRef, startDrag, endDrag } = useFloatingCircles({
     sizeFor: (hover) => floatingRowSize(faces, links, hover, card),
     shapeSig: `${faces}|${links}|${card.width}x${card.height}`,
     bridge,
@@ -561,30 +562,29 @@ export function FloatingFaceRow({
       belowRef={belowRef}
       onDragStart={startDrag}
       onDragEnd={endDrag}
-      className={hovered ? "face-row--hover" : ""}
     >
       {children}
     </FaceRow>
   );
 }
 
-/** The gap between the faces and the band under them; while the pointer is
- *  on a face the name band takes its place (faceRow.css `.face-row-below`). */
-export const CARD_GAP = 8;
-
 /** The floating window with a card under the row: as wide as the wider of
- *  the two, as tall as both plus the gap between them. */
+ *  the two, as tall as both with the name band between them. The band is
+ *  reserved whether or not the pointer is in the window (faceRow.css
+ *  `.face-row-below`), so the card holds one spot and the window one height
+ *  for as long as the card is up; without a card the pointer still decides,
+ *  and the window is exactly its faces until a name needs the room. */
 export function floatingRowSize(
   faces: number,
   links: number,
   hovered: boolean,
   card: { width: number; height: number },
 ): { width: number; height: number } {
-  const size = faceRowSize("float", faces, links, hovered);
-  if (card.height === 0) return size;
+  if (card.height === 0) return faceRowSize("float", faces, links, hovered);
+  const size = faceRowSize("float", faces, links, true);
   const pad = FACE_ROW_METRICS.float.pad;
   return {
     width: Math.max(size.width, card.width + pad * 2),
-    height: size.height + card.height + (hovered ? 0 : CARD_GAP),
+    height: size.height + card.height,
   };
 }

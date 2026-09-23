@@ -97,10 +97,12 @@ export function VoiceHostPanel({ urlRoom, params }: { urlRoom: string | null; pa
     if (call.phase === "idle" && expanded) setExpanded(false);
     lastPhase.current = call.phase;
   }
+  // Shrink and hide are one move here: the stage folds back into the float,
+  // and the view decides whether the float shows (voiceHostView).
   const hideCall = useCallback(() => setExpanded(false), []);
   const expand = useCallback(() => setExpanded(true), []);
-  // The stage's shrink menu and an opener's size still speak the legacy call
-  // sizes; the stage stays the stage and every other size is the float.
+  // An opener's size still speaks the legacy call sizes; the stage stays the
+  // stage and every other size is the float.
   const applySize = useCallback((size: CallWindowSize) => {
     setExpanded(voiceShapeForCallSize(size) === "panel");
   }, []);
@@ -248,15 +250,16 @@ export function VoiceHostPanel({ urlRoom, params }: { urlRoom: string | null; pa
   }, [hostedRoom, call.muted, call.camera, scribe]);
 
   // And the mirror: the walkie's engine publishes on its own moves, but a
-  // mute or a camera moves the call slice without the walkie noticing.
+  // mute, a camera or the speaker list moves the call slice without the
+  // walkie noticing, and a remote's face row draws all three.
   useWatchEffect(() => {
     publishVoiceMirror();
-  }, [call.phase, call.roomKey, call.muted, call.camera, call.micDenied]);
+  }, [call.phase, call.roomKey, call.muted, call.camera, call.micDenied, call.speaking]);
 
   if (view === "panel") {
     return (
       <>
-        <CallStage panel onSetSize={applySize} onHide={hideCall} />
+        <CallStage panel onShrink={hideCall} onHide={hideCall} />
         {/* A ring during a call: the row's card, over the stage where the
             person is. Nothing else in the app draws it while a host exists. */}
         {ringIn && (
