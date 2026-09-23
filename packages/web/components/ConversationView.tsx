@@ -1,5 +1,4 @@
 import { HandoffLinkChip, HandoffSessionLink, SessionHandoffCard, SessionHandoffNotice } from "./conversation/SessionHandoff";
-import { HibernatedMarker } from "./HibernatedMarker";
 import { sessionRepository } from "../lib/repoNavigation";
 import { repoTreeHref, repoCommitsHref } from "../lib/repoView";
 import { madeInTranscript, transcriptGitOutcomes } from "../lib/gitToolOutcome";
@@ -61,7 +60,7 @@ import { CommitCard } from "./CommitCard";
 import { PRCard } from "./PRCard";
 import { AnchorHeaderPill } from "./anchor/AnchorHeaderPill";
 import { useSqueezeToFit } from "../hooks/useSqueezeToFit";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger, DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent } from "./ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent } from "./ui/dropdown-menu";
 import { TooltipProvider } from "./ui/tooltip";
 import { useMutation, useQuery, useConvex } from "convex/react";
 import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
@@ -71,7 +70,6 @@ import { AssignedToYouBanner, useOwnersFromStore, type HandoffInfo } from "./Own
 import { TmuxAttachPill } from "./TmuxAttachPill";
 import { useAttachCopy } from "../hooks/useAttachCopy";
 import { SessionDaemonChip } from "./DaemonStatusChip";
-import { SessionFilesButton } from "./SessionFilesButton";
 import { BrowserWatchSplit } from "./browser/BrowserWatchSplit";
 import { PermissionStack, PERMISSION_SKIP_TOOLS } from "./PermissionCard";
 import { SessionDecisionCard } from "./SessionDecisionCard";
@@ -110,7 +108,9 @@ import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
-import { Maximize2, CornerDownRight, Split, Workflow, Loader2, Bot, Forward, ArrowRightLeft, Cpu } from "lucide-react";
+import { Maximize2, CornerDownRight, Split, Workflow, Loader2, Bot, Forward, ArrowRightLeft, Cpu, FolderTree } from "lucide-react";
+import { filesHref } from "../lib/vault/vaultHref";
+import { openFiles } from "../lib/filesPane";
 import { openForwardToChat } from "../lib/forwardToChat";
 import { useCallsAvailable, useTeamFeature } from "../lib/teamFeatures";
 import { CursorPopover, useContextMenu } from "./ui/context-menu";
@@ -118,7 +118,7 @@ import { IdentityFace } from "./identity";
 import { CharacterPicker } from "./identity/CharacterPicker";
 import { identityRowOf, type IdentityRow } from "../lib/sessionIdentity";
 import { buildMentionItems } from "../hooks/useMentionQuery";
-import { isActiveAgentStatus, type LiveAgentStatus } from "../lib/pendingBanner";
+import { isActiveAgentStatus, serverPendingBubbleVisible, type LiveAgentStatus } from "../lib/pendingBanner";
 import { sessionStartupState, SESSION_STARTING_GRACE_MS } from "../lib/sessionLifecycle";
 import { messageRowKey, uniqueRowKeys } from "../lib/messageRowKey";
 import { messageAgentTypes, sameMessageAuthor } from "../lib/messageAuthors";
@@ -134,7 +134,7 @@ import { AssistantBlock, CompactCollapsedTurn, CompactTurnCard, ForkSeedMark, Gi
 import { COMPACT_TAIL_HEIGHT, EMPTY_CHILD_CONVERSATIONS, EMPTY_RECEIPT_ENTRIES } from "../lib/conversationTurnDefaults";
 import { FOLD_KEPT_USER_KINDS, canAnchorForkChips, classifyUserMessage, cleanStickyContent, extractCompactionSummaryContent, isAlwaysVisibleToolCall, isHiddenStubMessage, isStickyWorthy, isToolReceiptRow, normalizePendingContent, parseCastCommand, parseWorkflowEventContent, sameStringArray, stripSystemTags } from "./conversation/classify";
 import { formatMessagePartsForCopy, formatRelativeTime } from "../lib/conversationFormat";
-import { ConversationMetadata, ConversationTaskProgress, ConversationTaskStatsMenuItem, DensityMenuOptions, DeviceMoveStatusStrip, EdgeMessagesIndicator, HandoffMarker, MessagesUnavailableState, RestartStatusStrip, SessionGalleryButton, SqueezedHeaderActions, TimelineRule } from "./conversation/sessionChrome";
+import { ConversationAgeFacts, ConversationMetadata, ConversationTaskProgress, ConversationTaskStatsMenuItem, DensityMenuOptions, DeviceMoveStatusStrip, EdgeMessagesIndicator, HandoffMarker, MessagesUnavailableState, RestartStatusStrip, SessionGalleryButton, SqueezedHeaderActions, TimelineRule } from "./conversation/sessionChrome";
 import { DENSITY_BY_CONVERSATION, DENSITY_OPTIONS, FEED_DENSITY_CYCLE, defaultDensity } from "../lib/conversationDensity";
 import { followRestoredConversation } from "../lib/followRestoredConversation";
 import { NewSessionView, NonOwnerMessageInput, ProjectSwitcher } from "./conversation/sessionControls";
@@ -1092,12 +1092,14 @@ const ConversationViewInner = (
     // This is the ONLY merge point — the store never mixes pending into messages[].
     const seen = new Set<string>();
     const seenContent = new Set<string>();
+    let newestServerTs = 0;
     for (const item of base) {
       if (item.type === 'message') {
         const m = item.data as any;
         seen.add(m._id);
         if (m.client_id) seen.add(m.client_id);
         if (m.role === 'user' && m.content) seenContent.add(normalizePendingContent(m.content));
+        if (!m._isOptimistic && !m._isQueued && !m._isFailed && m.timestamp > newestServerTs) newestServerTs = m.timestamp;
       }
     }
     const toAdd: any[] = pendingMsgs.filter((m: any) => {
@@ -1117,7 +1119,10 @@ const ConversationViewInner = (
     // its content isn't already on screen as a synced message or a local optimistic copy
     // (the sender's own browser already shows it via addOptimisticMessage). Dropped the moment
     // the real JSONL echo lands, since that fills seenContent with the same normalized key.
-    if (serverPending && serverPending.status !== 'delivered' && serverPending.status !== 'cancelled') {
+    // A delivered row keeps its bubble (as a plain message) while this window's transcript
+    // still ends before the send: the echo is on the server but not here yet, and a message
+    // that vanished until the tail caught up is the bug (serverPendingBubbleVisible).
+    if (serverPending && serverPendingBubbleVisible(serverPending, { newestServerTs, atLiveTail: !hasMoreBelow })) {
       const norm = normalizePendingContent(serverPending.content);
       if (norm && !seenContent.has(norm)) {
         toAdd.push({
@@ -1125,14 +1130,14 @@ const ConversationViewInner = (
           role: 'user',
           content: serverPending.content,
           timestamp: serverPending.created_at,
-          _isOptimistic: true,
+          ...(serverPending.status === 'delivered' ? {} : { _isOptimistic: true }),
           _serverPendingStatus: serverPending.status,
           _serverPendingReason: serverPending.hold_reason,
         });
       }
     }
     return mergeTimelineMessages(base, toAdd) as TimelineItem[];
-  }, [messages, allCommits, allPullRequests, conversationExternalEvents, pendingMsgs, serverPending, pendingConvId]);
+  }, [messages, allCommits, allPullRequests, conversationExternalEvents, pendingMsgs, serverPending, pendingConvId, hasMoreBelow]);
   timelineRef.current = timeline;
   scrollCtxRef.current = { messageCount: conversation?.message_count || messages.length, messagesLen: messages.length, timelineLen: timeline.length, loadedStartIndex: conversation?.loaded_start_index ?? 0 };
 
@@ -3668,14 +3673,17 @@ const ConversationViewInner = (
             {conversation && <AnchorHeaderPill conversationId={conversation._id.toString()} />}
             {conversation && <BrowserPaneOfferChip conversationId={conversation._id.toString()} />}
 
-            {managedSession?.agent_status === "hibernated" ? <HibernatedMarker status={managedSession.agent_status} /> : isSessionDisconnected && (managedSession?.agent_status === "starting" || managedSession?.agent_status === "resuming" || managedSession?.agent_status === "connected") ? (
-              <span data-cc-conv-status className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] flex-shrink-0 bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30">
+            {/* A hibernated session says so above the composer (MessageInput
+                status line), not here: the header stays quiet rather than
+                showing a "Disconnected" pill for a park the daemon lifts on send. */}
+            {managedSession?.agent_status === "hibernated" ? null : isSessionDisconnected && (managedSession?.agent_status === "starting" || managedSession?.agent_status === "resuming" || managedSession?.agent_status === "connected") ? (
+              <span data-cc-conv-status className="inline-flex items-center gap-1 px-1 text-[10px] flex-shrink-0 text-sol-cyan">
                 <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan animate-pulse" />
                 <span className="hidden sm:inline cq-sq3">{managedSession?.agent_status === "starting" ? "Starting" : managedSession?.agent_status === "resuming" ? "Resuming" : "Delivering"}</span>
                 <span className="sm:hidden cq-sq3">{managedSession?.agent_status === "starting" ? "Start" : managedSession?.agent_status === "resuming" ? "Rsum" : "Dlvr"}</span>
               </span>
             ) : isSessionDisconnected ? (
-              <span data-cc-conv-status className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] flex-shrink-0 bg-sol-text-dim/5 text-sol-text-dim/50 border border-sol-text-dim/10">
+              <span data-cc-conv-status className="inline-flex items-center gap-1 px-1 text-[10px] flex-shrink-0 text-sol-text-dim/60">
                 <span className="w-1.5 h-1.5 rounded-full bg-sol-text-dim/30" />
                 <span className="hidden sm:inline cq-sq3">Disconnected</span>
                 <span className="sm:hidden cq-sq3">Disc</span>
@@ -3683,13 +3691,13 @@ const ConversationViewInner = (
             ) : null}
 
             {!isSessionDisconnected && (managedSession?.agent_status === "working" || managedSession?.agent_status === "thinking" || managedSession?.agent_status === "compacting" || managedSession?.agent_status === "waiting" || managedSession?.agent_status === "dormant" || managedSession?.agent_status === "permission_blocked" || managedSession?.agent_status === "connected" || managedSession?.agent_status === "starting" || managedSession?.agent_status === "resuming" || (!managedSession?.agent_status && isConversationLive)) && (
-              <span data-cc-conv-status className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] flex-shrink-0 ${
-                managedSession?.agent_status === "thinking" ? "bg-sol-violet/10 text-sol-violet border border-sol-violet/30" :
-                managedSession?.agent_status === "compacting" ? "bg-amber-500/10 text-amber-400 border border-amber-500/30" :
-                managedSession?.agent_status === "waiting" || managedSession?.agent_status === "dormant" ? "bg-sol-blue/10 text-sol-blue border border-sol-blue/30" :
-                managedSession?.agent_status === "permission_blocked" ? "bg-sol-orange/10 text-sol-orange border border-sol-orange/30" :
-                managedSession?.agent_status === "connected" || managedSession?.agent_status === "starting" || managedSession?.agent_status === "resuming" ? "bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30" :
-                "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
+              <span data-cc-conv-status className={`inline-flex items-center gap-1 px-1 text-[10px] flex-shrink-0 ${
+                managedSession?.agent_status === "thinking" ? "text-sol-violet" :
+                managedSession?.agent_status === "compacting" ? "text-amber-400" :
+                managedSession?.agent_status === "waiting" || managedSession?.agent_status === "dormant" ? "text-sol-blue" :
+                managedSession?.agent_status === "permission_blocked" ? "text-sol-orange" :
+                managedSession?.agent_status === "connected" || managedSession?.agent_status === "starting" || managedSession?.agent_status === "resuming" ? "text-sol-cyan" :
+                "text-emerald-400"
               }`}>
                 <span className={`w-1.5 h-1.5 rounded-full animate-pulse ${
                   managedSession?.agent_status === "thinking" ? "bg-sol-violet" :
@@ -3719,10 +3727,14 @@ const ConversationViewInner = (
             )}
 
             {conversation && (
-              // Simple view keeps the metadata cluster functional (it owns the
-              // model picker) but pulls it back visually; the plan/task badges
-              // drop away entirely.
-              <span data-cc-conv-meta data-simple-dim className="cq-sq3 contents [.simple-view_&]:flex [.simple-view_&]:items-center [.simple-view_&]:gap-1">
+              // The facts strip: what this session is (agent and model), where
+              // its code sits, and what it is for (task, plan, workflow run),
+              // as one run of dim text with dots between. The pills' own
+              // colours are stripped by [data-cc-facts] in globals.css; only
+              // things that are alive keep a tint on this row. Simple view
+              // keeps the strip (it owns the model picker) but dims it; the
+              // plan, task and workflow drop away there.
+              <span data-cc-facts data-cc-conv-meta data-simple-dim className="cq-sq6 flex items-center min-w-0">
                 <ConversationMetadata
                   agentType={conversation.agent_type}
                   model={conversation.model}
@@ -3735,17 +3747,16 @@ const ConversationViewInner = (
                   controlOpen={sessionControlOpen}
                   onControlOpenChange={setSessionControlOpen}
                 />
-              </span>
-            )}
-
-            {(conversation as any)?.active_plan && (
-              <span data-simple-hide className="cq-sq3 contents">
-                <PlanBadge plan={(conversation as any).active_plan} />
-              </span>
-            )}
+                <BranchCodeLink session={conversation} />
+                <SessionWorktreePills session={conversation} repository={codeRepository} className="text-[10px] max-w-[180px]" />
             {(conversation as any)?.active_task && (
-              <span data-simple-hide className="cq-sq3 contents">
+              <span data-simple-hide className="contents">
                 <TaskBadge task={(conversation as any).active_task} />
+              </span>
+            )}
+            {(conversation as any)?.active_plan && (
+              <span data-simple-hide className="contents">
+                <PlanBadge plan={(conversation as any).active_plan} />
               </span>
             )}
             {/* A workflow run in flight inside this session. The launch card
@@ -3754,7 +3765,7 @@ const ConversationViewInner = (
                 live view. Server truth via the conversation's stamped run. */}
             {(conversation as any)?.is_workflow_primary && (conversation as any)?.workflow_run_id &&
               ["pending", "running", "paused"].includes((conversation as any)?.workflow_run_status) && (
-              <span data-simple-hide className="cq-sq3 contents">
+              <span data-simple-hide className="contents">
                 <Link
                   href={`/workflows/runs/${(conversation as any).workflow_run_id}`}
                   className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] flex-shrink-0 bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 hover:bg-sol-cyan/20 transition-colors max-w-[180px]"
@@ -3764,6 +3775,9 @@ const ConversationViewInner = (
                   <Workflow className="w-2.5 h-2.5 flex-shrink-0" />
                   <span className="truncate">{(conversation as any).workflow_run_name || "workflow"}</span>
                 </Link>
+              </span>
+            )}
+                <ConversationAgeFacts startedAt={conversation.started_at} messageCount={conversation.message_count} conversationId={conversation._id} />
               </span>
             )}
 
@@ -3826,11 +3840,20 @@ const ConversationViewInner = (
                   );
                 })()}
 
-                <BranchCodeLink session={conversation} />
-
-                <SessionWorktreePills session={conversation} repository={codeRepository} className="text-[10px] max-w-[180px]" />
-
+                {/* The runner: which machine, whose account, is its daemon
+                    delivering, and the terminal one click away. Three pills
+                    joined into one by [data-cc-runner] in globals.css, so
+                    "where is this running" reads as one thing. */}
+                <span data-cc-runner data-cc-keep="live" className="inline-flex items-center flex-shrink-0">
                 <ConversationAssignmentBadge conversation={conversation} isOwner={isOwner} guest={guest} compact={simpleViewPref} />
+                {conversation?._id && !guest && <SessionDaemonChip conversationId={String(conversation._id)} />}
+                {/* Kept in simple view (dimmed, copy sub-button hidden inside
+                    the pill): the live tmux badge is how you reach the
+                    terminal split, which simple view users still want. */}
+                <span data-simple-dim className="inline-flex items-stretch">
+                  <TmuxAttachPill tmuxSession={managedSession?.tmux_session} agentType={conversation?.agent_type} isLive={isSessionLive} conversationKey={conversation?._id.toString()} />
+                </span>
+                </span>
 
                 {/* Who has this session open right now: teammates' faces off
                     the roster's viewing field. A solo session shows nothing. */}
@@ -3847,24 +3870,8 @@ const ConversationViewInner = (
                   </span>
                 )}
 
-                {/* Kept in simple view (dimmed, copy sub-button hidden inside
-                    the pill): the live tmux badge is how you reach the
-                    terminal split, which simple view users still want. */}
-                <span data-simple-dim className="contents [.simple-view_&]:inline-flex [.simple-view_&]:items-center">
-                  <TmuxAttachPill tmuxSession={managedSession?.tmux_session} agentType={conversation?.agent_type} isLive={isSessionLive} conversationKey={conversation?._id.toString()} />
-                </span>
-
-                {conversation?._id && !guest && <span data-cc-keep className="contents"><SessionDaemonChip conversationId={String(conversation._id)} /></span>}
-
-                {sessionGalleryImages.length > 0 && <SessionGalleryButton images={sessionGalleryImages} />}
-
-                {/* The project's files, one click away regardless of what the
-                    transcript happens to mention. Opens beside on surfaces
-                    that can hold a second pane. */}
-                {filePathBase && !guest && <SessionFilesButton projectPath={filePathBase} />}
-
-                {/* Hairline between the identity/status pills and the plain
-                    icon actions — the two families read as one soup without it. */}
+                {/* Hairline between the live pills and the plain icon
+                    actions — the two families read as one soup without it. */}
                 <span aria-hidden className="w-px h-3.5 bg-sol-border/60 mx-0.5 flex-shrink-0" />
 
                 {(highlightQuery || isLocalSearchOpen) && (
@@ -3933,6 +3940,8 @@ const ConversationViewInner = (
                   </div>
                 )}
 
+                {sessionGalleryImages.length > 0 && <SessionGalleryButton images={sessionGalleryImages} />}
+
                 <ShortcutTooltip label="Search in conversation" side="bottom">
                   <button
                     onClick={() => {
@@ -3953,40 +3962,10 @@ const ConversationViewInner = (
                   </button>
                 </ShortcutTooltip>
 
-                <DropdownMenu>
-                  <ShortcutTooltip label={`View density: ${DENSITY_OPTIONS.find(o => o.value === density)!.label}`} action="conv.cycleDensity" hint="cycles" side="bottom">
-                    <DropdownMenuTrigger asChild>
-                      <button className={`cq-sq4 p-1 rounded hover:bg-sol-bg-alt transition-colors ${density !== "full" ? "text-sol-cyan" : "text-sol-text-dim hover:text-sol-text-secondary"}`}>
-                        {(() => { const Icon = DENSITY_OPTIONS.find(o => o.value === density)!.icon; return <Icon className="w-3.5 h-3.5" />; })()}
-                      </button>
-                    </DropdownMenuTrigger>
-                  </ShortcutTooltip>
-                  <DropdownMenuContent align="end" className="w-72">
-                    <DensityMenuOptions density={density} setDensity={setDensity} guest={guest} />
-                  </DropdownMenuContent>
-                </DropdownMenu>
-
-                <ShortcutTooltip label="Copy link" action="conv.copyLink" side="bottom">
-                  <button
-                    onClick={() => { copyToClipboard(`${shareOrigin()}/conversation/${conversation?._id}`).then(() => toast.success("Link copied")).catch(() => toast.error("Failed to copy")); }}
-                    className="cq-sq4 p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors"
-                  >
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                    </svg>
-                  </button>
-                </ShortcutTooltip>
-
-                {chatOn && (
-                  <button
-                    onClick={() => openForwardToChat({ url: `${shareOrigin()}/conversation/${conversation?._id}`, label: "session" })}
-                    className="cq-sq4 p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors"
-                    title="Send to chat"
-                  >
-                    <Forward className="w-3.5 h-3.5" />
-                  </button>
-                )}
-
+                {/* Copy link, send to chat, density, images and the project's
+                    files live in the share popover (headerExtra) and in the
+                    menu below, not as bare icons: search, share and the menu
+                    are the row's only plain actions. */}
                 {headerExtra}
 
                 <DropdownMenu>
@@ -4004,46 +3983,14 @@ const ConversationViewInner = (
                     {/* The icon actions the squeeze folded away (level 4 in
                         globals.css) come back here as menu rows. Mounted on
                         open, so it reads the row's current level. */}
-                    <SqueezedHeaderActions rowRef={squeezeRowRef}>
-                      <DropdownMenuItem onSelect={() => setTimeout(() => { if (propHighlightQuery) propClearHighlight?.(); setIsLocalSearchOpen(true); setLocalSearchQuery(""); setTimeout(() => localSearchInputRef.current?.focus(), 0); })}>
-                        <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                        </svg>
-                        Search in conversation
-                      </DropdownMenuItem>
-                      <DropdownMenuSub>
-                        <DropdownMenuSubTrigger>
-                          {(() => { const Icon = DENSITY_OPTIONS.find(o => o.value === density)!.icon; return <Icon className="w-3 h-3 mr-1.5" />; })()}
-                          View density
-                          <MenuKeyCaps action="conv.cycleDensity" />
-                        </DropdownMenuSubTrigger>
-                        <DropdownMenuSubContent className="w-72">
-                          <DensityMenuOptions density={density} setDensity={setDensity} guest={guest} />
-                        </DropdownMenuSubContent>
-                      </DropdownMenuSub>
-                      <DropdownMenuItem onSelect={() => { copyToClipboard(`${shareOrigin()}/conversation/${conversation?._id}`).then(() => toast.success("Link copied")).catch(() => toast.error("Failed to copy")); }}>
-                        <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                        </svg>
-                        Copy link
-                        <MenuKeyCaps action="conv.copyLink" />
-                      </DropdownMenuItem>
-                      {chatOn && (
-                        <DropdownMenuItem onSelect={() => setTimeout(() => openForwardToChat({ url: `${shareOrigin()}/conversation/${conversation?._id}`, label: "session" }))}>
-                          <Forward className="w-3 h-3 mr-1.5" />
-                          Send to chat
-                        </DropdownMenuItem>
-                      )}
-                      <DropdownMenuSeparator />
-                    </SqueezedHeaderActions>
-                    {effectiveIsOwner && conversation?.session_id && (
-                      <DropdownMenuItem disabled={isHeaderRestarting} onSelect={() => { setTimeout(() => handleRestartSession()); }}>
-                        <svg className={`w-3 h-3 mr-1.5 text-orange-400 ${isHeaderRestarting ? "animate-spin" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                        </svg>
-                        {isHeaderRestarting ? "Restarting…" : "Restart session"}
-                      </DropdownMenuItem>
-                    )}
+                    <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">Copy</DropdownMenuLabel>
+                    <DropdownMenuItem onSelect={() => { copyToClipboard(`${shareOrigin()}/conversation/${conversation?._id}`).then(() => toast.success("Link copied")).catch(() => toast.error("Failed to copy")); }}>
+                      <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                      </svg>
+                      Copy link
+                      <MenuKeyCaps action="conv.copyLink" />
+                    </DropdownMenuItem>
                     {conversation?.short_id && (
                       <DropdownMenuItem onSelect={() => { setTimeout(() => { copyToClipboard(conversation.short_id!).then(() => toast.success("ID copied")).catch(() => toast.error("Failed to copy")); }); }}>
                         <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -4074,15 +4021,6 @@ const ConversationViewInner = (
                       </svg>
                       Copy all messages
                     </DropdownMenuItem>
-                    {isOwner && (
-                      <DropdownMenuItem onSelect={() => setTimeout(() => useInboxStore.setState({ renamingSessionId: conversation._id }))}>
-                        <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                        </svg>
-                        Rename
-                        <MenuKeyCaps action="session.rename" />
-                      </DropdownMenuItem>
-                    )}
                     {conversation?.session_id && (
                       <>
                         <DropdownMenuItem onSelect={() => setTimeout(() => handleCopyResumeCommand("claude"))}>
@@ -4099,27 +4037,38 @@ const ConversationViewInner = (
                         </DropdownMenuItem>
                       </>
                     )}
-                    {isOwner && (
-                      <DropdownMenuItem onSelect={() => {
-                        toggleFavoriteMutation(conversation._id);
-                        toast.success(conversation.is_favorite ? "Removed from favorites" : "Added to favorites");
-                      }}>
-                        <svg className={`w-3 h-3 mr-1.5 ${conversation.is_favorite ? "text-amber-400" : ""}`} fill={conversation.is_favorite ? "currentColor" : "none"} viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
-                        </svg>
-                        {conversation.is_favorite ? "Remove from favorites" : "Add to favorites"}
-                        <MenuKeyCaps action="conv.favorite" />
-                      </DropdownMenuItem>
-                    )}
-                    {isOwner && (
-                      <DropdownMenuItem onSelect={togglePublicProfilePin}>
-                        <svg className={`w-3 h-3 mr-1.5 ${conversation.profile_pinned_at ? "text-sol-cyan" : ""}`} fill={conversation.profile_pinned_at ? "currentColor" : "none"} viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M16 4v6l3 3v2H5v-2l3-3V4M9 19h6m-3 0v3" />
-                        </svg>
-                        {conversation.profile_pinned_at ? "Unpin from public profile" : "Pin to public profile"}
+                    {chatOn && (
+                      <DropdownMenuItem onSelect={() => setTimeout(() => openForwardToChat({ url: `${shareOrigin()}/conversation/${conversation?._id}`, label: "session" }))}>
+                        <Forward className="w-3 h-3 mr-1.5" />
+                        Send to chat
                       </DropdownMenuItem>
                     )}
                     <DropdownMenuSeparator />
+                    <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">View</DropdownMenuLabel>
+                    <SqueezedHeaderActions rowRef={squeezeRowRef}>
+                      <DropdownMenuItem onSelect={() => setTimeout(() => { if (propHighlightQuery) propClearHighlight?.(); setIsLocalSearchOpen(true); setLocalSearchQuery(""); setTimeout(() => localSearchInputRef.current?.focus(), 0); })}>
+                        <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                        </svg>
+                        Search in conversation
+                      </DropdownMenuItem>
+                    </SqueezedHeaderActions>
+                    <DropdownMenuSub>
+                      <DropdownMenuSubTrigger>
+                        {(() => { const Icon = DENSITY_OPTIONS.find(o => o.value === density)!.icon; return <Icon className="w-3 h-3 mr-1.5" />; })()}
+                        View density
+                        <MenuKeyCaps action="conv.cycleDensity" />
+                      </DropdownMenuSubTrigger>
+                      <DropdownMenuSubContent className="w-72">
+                        <DensityMenuOptions density={density} setDensity={setDensity} guest={guest} />
+                      </DropdownMenuSubContent>
+                    </DropdownMenuSub>
+                    {filePathBase && !guest && (
+                      <DropdownMenuItem onSelect={() => setTimeout(() => openFiles(filesHref({ localPath: filePathBase })))}>
+                        <FolderTree className="w-3 h-3 mr-1.5" />
+                        Browse project files
+                      </DropdownMenuItem>
+                    )}
                     {hasAnyThinking && (
                       <DropdownMenuItem onClick={() => setShowThinking((s) => !s)}>
                         {showThinking ? "Hide thinking" : "Show thinking"}
@@ -4144,6 +4093,70 @@ const ConversationViewInner = (
                         <MenuKeyCaps action="conv.toggleDiff" />
                       </DropdownMenuItem>
                     )}
+                    {(isOwner || (effectiveIsOwner && conversation?.session_id)) && (
+                      <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">Session</DropdownMenuLabel>
+                      </>
+                    )}
+                    {isOwner && (
+                      <DropdownMenuItem onSelect={() => setTimeout(() => useInboxStore.setState({ renamingSessionId: conversation._id }))}>
+                        <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                        </svg>
+                        Rename
+                        <MenuKeyCaps action="session.rename" />
+                      </DropdownMenuItem>
+                    )}
+                    {isOwner && (
+                      <DropdownMenuItem onSelect={() => {
+                        toggleFavoriteMutation(conversation._id);
+                        toast.success(conversation.is_favorite ? "Removed from favorites" : "Added to favorites");
+                      }}>
+                        <svg className={`w-3 h-3 mr-1.5 ${conversation.is_favorite ? "text-amber-400" : ""}`} fill={conversation.is_favorite ? "currentColor" : "none"} viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+                        </svg>
+                        {conversation.is_favorite ? "Remove from favorites" : "Add to favorites"}
+                        <MenuKeyCaps action="conv.favorite" />
+                      </DropdownMenuItem>
+                    )}
+                    {isOwner && (
+                      <DropdownMenuItem onSelect={togglePublicProfilePin}>
+                        <svg className={`w-3 h-3 mr-1.5 ${conversation.profile_pinned_at ? "text-sol-cyan" : ""}`} fill={conversation.profile_pinned_at ? "currentColor" : "none"} viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M16 4v6l3 3v2H5v-2l3-3V4M9 19h6m-3 0v3" />
+                        </svg>
+                        {conversation.profile_pinned_at ? "Unpin from public profile" : "Pin to public profile"}
+                      </DropdownMenuItem>
+                    )}
+                    {effectiveIsOwner && conversation?.session_id && (
+                      <DropdownMenuItem disabled={isHeaderRestarting} onSelect={() => { setTimeout(() => handleRestartSession()); }}>
+                        <svg className={`w-3 h-3 mr-1.5 text-orange-400 ${isHeaderRestarting ? "animate-spin" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                        </svg>
+                        {isHeaderRestarting ? "Restarting…" : "Restart session"}
+                      </DropdownMenuItem>
+                    )}
+                    {isOwner && (
+                      <>
+                        {/* One row for the whole session control panel (model,
+                            effort, switch agent, fork as, hand off) — the
+                            header badge opens the same panel, so the menu
+                            never grows a second copy of its rails. The menu
+                            closes first; the panel opens on the next tick so
+                            the two Radix layers don't fight over focus. */}
+                        <DropdownMenuItem
+                          className="hidden sm:flex"
+                          onSelect={() => { setTimeout(() => setSessionControlOpen(true), 0); }}
+                        >
+                          <Cpu className="w-3 h-3 mr-1.5 text-sol-violet" />
+                          Model, agent, fork, hand off…
+                        </DropdownMenuItem>
+                      </>
+                    )}
+                    {(parentLinkId || handedOffFrom || handedOffTo || conversation.forked_from_details || (conversation.fork_children?.length ?? 0) > 0 || conversation.forked_from) && (
+                      <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">Lineage</DropdownMenuLabel>
                     {parentLinkId && (
                       <DropdownMenuItem asChild>
                         <Link href={convLink(parentLinkId)}>
@@ -4177,27 +4190,8 @@ const ConversationViewInner = (
                         </Link>
                       </DropdownMenuItem>
                     )}
-                    {isOwner && (
-                      <>
-                        <DropdownMenuSeparator />
-                        {/* One row for the whole session control panel (model,
-                            effort, switch agent, fork as, hand off) — the
-                            header badge opens the same panel, so the menu
-                            never grows a second copy of its rails. The menu
-                            closes first; the panel opens on the next tick so
-                            the two Radix layers don't fight over focus. */}
-                        <DropdownMenuItem
-                          className="hidden sm:flex"
-                          onSelect={() => { setTimeout(() => setSessionControlOpen(true), 0); }}
-                        >
-                          <Cpu className="w-3 h-3 mr-1.5 text-sol-violet" />
-                          Model, agent, fork, hand off…
-                        </DropdownMenuItem>
-                      </>
-                    )}
                     {((conversation.fork_children && conversation.fork_children.length > 0) || conversation.forked_from) && (
                       <>
-                        <DropdownMenuSeparator />
                         <DropdownMenuItem onClick={() => toggleMap()}>
                           <Split className="w-3 h-3 mr-1.5 text-sol-cyan" />
                           Branch map
@@ -4205,6 +4199,12 @@ const ConversationViewInner = (
                         </DropdownMenuItem>
                       </>
                     )}
+                      </>
+                    )}
+                    {((conversation.fork_count ?? 0) > 0 || (conversation.fork_children?.length ?? 0) > 0 || (conversation.compaction_count ?? 0) > 0 || subagentMenuItems) && (
+                      <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">Stats</DropdownMenuLabel>
                     {((conversation.fork_count ?? 0) > 0 || (conversation.fork_children?.length ?? 0) > 0) && (
                       <DropdownMenuItem disabled>
                         <Split className="w-3 h-3 mr-1.5 text-sol-cyan" />
@@ -4220,6 +4220,8 @@ const ConversationViewInner = (
                       </DropdownMenuItem>
                     )}
                     {subagentMenuItems}
+                      </>
+                    )}
                     {conversation?._id && <ConversationTaskStatsMenuItem conversationId={conversation._id} />}
                     {latestUsage && (
                       <>
@@ -4229,8 +4231,7 @@ const ConversationViewInner = (
                         </div>
                       </>
                     )}
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                  </DropdownMenuContent>                </DropdownMenu>
               </div>
               </TooltipProvider>
             )}
@@ -4522,6 +4523,15 @@ const ConversationViewInner = (
               const isToolRow = item.type === 'message' && isToolReceiptRow(item.data as Message, showThinking);
               const isForkSelected = forkSelectionIdx !== null && forkSelectionIdx === virtualItem.index;
               const isBelowForkSelection = forkSelectionIdx !== null && virtualItem.index > forkSelectionIdx;
+              // A row's rules draw even when the row itself renders nothing: a
+              // turn that died on a tool result ends on an empty row, and the
+              // idle stamp and trailing handoffs must not vanish with it.
+              const isTail = virtualItem.index === timeline.length - 1;
+              const showNewRule = virtualItem.index === firstUnseenIndex;
+              const rulesHere = handoffRulesAt(virtualItem.index);
+              const showIdleGap = isTail && shouldShowIdleGap({ lastActivityAt, now, hasMoreBelow: !!hasMoreBelow, agentStatus: managedSession?.agent_status });
+              const tailRules = isTail && !hasMoreBelow ? handoffRulesAt(timeline.length) : undefined;
+              const visible = !!content || showNewRule || !!rulesHere || showIdleGap || !!tailRules;
               return (
                 <div
                   key={virtualItem.key}
@@ -4533,24 +4543,24 @@ const ConversationViewInner = (
                     top: 0,
                     left: 0,
                     width: "100%",
-                    ...(content ? {} : { height: 0, overflow: "hidden" }),
+                    ...(visible ? {} : { height: 0, overflow: "hidden" }),
                   }}
                 >
-                  {content && (
+                  {visible && (
                     <div className={`conv-col mx-auto px-4 sm:px-5 md:px-6 ${condensedFeed || isToolRow ? "py-px" : "py-0.5 sm:py-1"} ${isNew ? "animate-message-in" : ""} ${isForkSelected ? "ring-2 ring-sol-cyan/60 bg-sol-cyan/5 rounded-lg" : ""} ${isBelowForkSelection ? "opacity-30 pointer-events-none" : ""} ${isSearchDimmed ? "search-dimmed" : ""} transition-opacity`}>
-                      {virtualItem.index === firstUnseenIndex && (
+                      {showNewRule && (
                         <TimelineRule color="var(--sol-orange)" label="New messages">
                           <span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-sol-orange">New</span>
                         </TimelineRule>
                       )}
-                      {handoffRulesAt(virtualItem.index)}
-                      <GalleryMessageScope messageId={item.type === 'message' ? (item.data as Message)._id : undefined}>{content}</GalleryMessageScope>
-                      {virtualItem.index === timeline.length - 1 && shouldShowIdleGap({ lastActivityAt, now, hasMoreBelow: !!hasMoreBelow, agentStatus: managedSession?.agent_status }) && (
+                      {rulesHere}
+                      {content && <GalleryMessageScope messageId={item.type === 'message' ? (item.data as Message)._id : undefined}>{content}</GalleryMessageScope>}
+                      {showIdleGap && (
                         <TimelineRule color="var(--sol-border)" className="mt-5 mb-1" faint>
                           <span className="text-[11px] text-sol-text-dim/60">{formatRelativeTime(lastActivityAt)}</span>
                         </TimelineRule>
                       )}
-                      {virtualItem.index === timeline.length - 1 && !hasMoreBelow && handoffRulesAt(timeline.length)}
+                      {tailRules}
                     </div>
                   )}
                 </div>
@@ -4673,7 +4683,7 @@ const ConversationViewInner = (
                   ))}
                 </div>
               ) : null}
-              <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss ?? sendAndStashFallback} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} workingSinceTs={workingSinceForClock(latestMessageTimestamp, now)} workingPhrase={workingPhrase} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected || conversation.status !== "active" ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={forkHandler} onForkSend={forkSendHandler} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} permissionModePending={modeSwitching} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={onSendOverride ?? (workflowRun?.status === "paused" ? handleGateRespond : undefined)} composerNode={composerNode} composerPlaceholder={composerPlaceholder} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} onSubmitWithIntent={onSubmitWithIntent} threadStateNode={onSendOverride ? undefined : threadStatePanel} branchMapNode={treePopoverOpen ? (
+              <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss ?? sendAndStashFallback} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} workingSinceTs={workingSinceForClock(latestMessageTimestamp, now)} workingPhrase={workingPhrase} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={managedSession?.agent_status === "hibernated" ? "hibernated" : isSessionDisconnected || conversation.status !== "active" ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={forkHandler} onForkSend={forkSendHandler} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} permissionModePending={modeSwitching} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={onSendOverride ?? (workflowRun?.status === "paused" ? handleGateRespond : undefined)} composerNode={composerNode} composerPlaceholder={composerPlaceholder} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} onSubmitWithIntent={onSubmitWithIntent} threadStateNode={onSendOverride ? undefined : threadStatePanel} branchMapNode={treePopoverOpen ? (
                 <ForkMapBox
                   tray
                   open

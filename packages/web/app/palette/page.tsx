@@ -52,6 +52,9 @@ function ReadyPaletteRoot() {
   const [mode, setMode] = useState<"search" | "compose">("search");
   const [composeNonce, setComposeNonce] = useState(0);
   const [composeQuery, setComposeQuery] = useState("");
+  // Bumped on every search ask, so a repeat ask for the face already painted
+  // still gets its ack below (setMode alone would not re-render).
+  const [searchNonce, setSearchNonce] = useState(0);
 
   const enterCompose = useCallback((query: string) => {
     setComposeQuery(query);
@@ -64,7 +67,10 @@ function ReadyPaletteRoot() {
   useWatchEffect(() => {
     if (!isElectron()) return;
     const offCompose = window.__CODECAST_ELECTRON__?.onComposeShow?.(() => enterCompose(""));
-    const offPalette = window.__CODECAST_ELECTRON__?.onPaletteShow?.(() => setMode("search"));
+    const offPalette = window.__CODECAST_ELECTRON__?.onPaletteShow?.(() => {
+      setMode("search");
+      setSearchNonce((n) => n + 1);
+    });
     return () => { offCompose?.(); offPalette?.(); };
   }, [enterCompose]);
 
@@ -77,13 +83,16 @@ function ReadyPaletteRoot() {
 
   // Tell the Electron shell the requested face is mounted + painted. The shell
   // holds the window hidden until this ack (or a short fallback) so it never
-  // flashes the previous face before the swap. rAF defers to after paint; a
-  // no-op in the browser (bridge() returns undefined off-desktop).
+  // flashes the previous face before the swap, and asks again when the ack
+  // names the other face (a reloaded page boots on search). It must run after
+  // the listener effect above, so that second ask has a listener. rAF defers
+  // to after paint; a no-op in the browser (bridge() returns undefined
+  // off-desktop).
   useWatchEffect(() => {
     if (!isElectron()) return;
     const raf = requestAnimationFrame(() => bridge("paletteReady")?.(mode));
     return () => cancelAnimationFrame(raf);
-  }, [mode, composeNonce]);
+  }, [mode, composeNonce, searchNonce]);
 
   if (mode === "compose") {
     return <ComposeView key={composeNonce} initialQuery={composeQuery} />;

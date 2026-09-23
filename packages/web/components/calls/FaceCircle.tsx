@@ -174,12 +174,16 @@ export function FaceCircle({
 export function CircleFace({
   videoRef,
   track,
+  frame,
   image,
   name,
   diameter,
 }: {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   track: ParticipantTile["track"] | undefined;
+  /** A frame the voice host relayed (lib/calls/videoFrames), for a window
+   *  that has no track of its own: the same person, seen, a beat behind. */
+  frame?: string | null;
   image?: string;
   name?: string;
   diameter: number;
@@ -188,6 +192,9 @@ export function CircleFace({
     return (
       <video ref={videoRef} autoPlay playsInline muted style={{ width: diameter, height: diameter }} />
     );
+  }
+  if (frame) {
+    return <img src={frame} alt="" className="face-frame" style={{ width: diameter, height: diameter }} draggable={false} />;
   }
   // Camera off. Their picture fills the circle — the same shape a face would
   // have, so a row of faces does not go ragged when somebody turns their

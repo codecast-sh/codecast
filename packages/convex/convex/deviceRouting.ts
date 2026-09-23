@@ -66,13 +66,14 @@ function mostRecentPreferringOpenable(pool: RoutableDevice[], paths: string[]): 
  * Priority:
  *   1. The device the user explicitly picked (`targetDeviceId`), if online — a
  *      machine chosen by hand outranks every heuristic, remote included.
- *   1b. A KNOWN pick that's offline narrows the fallback to machines that can
- *      actually serve it: a live machine holding the checkout (local first, then
- *      remote), else the command QUEUES for the picked machine until it wakes.
- *      Never the checkout-less most-recent local — the picker scoped the folder
- *      list to the picked machine's roots, so that fallback would strand the
- *      session in a directory it doesn't have. An UNKNOWN pick (garbage or a
- *      foreign device id) is ignored and the normal ladder decides.
+ *   1b. A KNOWN pick that's offline still wins: the command QUEUES for the
+ *      picked machine until it wakes. A person who started a session on their
+ *      own machine never finds it running somewhere else (a launch on
+ *      2026-09-23 was re-homed to a dead device row, then sat unstarted).
+ *      The picker also scoped the folder list to the pick's roots, so any
+ *      substitute could strand the session in a directory it doesn't have.
+ *      An UNKNOWN pick (garbage or a foreign device id) is ignored and the
+ *      normal ladder decides.
  *   2. The conversation's existing owner, if still online (sticky ownership). This
  *      preserves an explicit "move to remote": a remote owner stays the owner.
  *   3. The online LOCAL device whose `local_project_roots` contain the project path
@@ -122,19 +123,12 @@ export function pickOwnerDevice(
     return opts.targetDeviceId;
   }
 
-  // 1b. Explicit pick, offline but KNOWN: only a machine that can actually open
-  //     the picked machine's folder may substitute — the folder list was scoped
-  //     to the pick's roots, so the generic most-recent-local rung would land in
-  //     a directory it doesn't have (blank session, empty error banner). A live
-  //     checkout holder serves now (local outranks remote); otherwise the
-  //     command queues for the pick, same semantics as rung 6's sleeping Mac.
+  // 1b. Explicit pick, offline but KNOWN: the command queues for the pick, same
+  //     semantics as rung 6's sleeping Mac. No machine substitutes for a pick,
+  //     online checkout holder included: the person chose where this session
+  //     runs, and a start that lands elsewhere is a session they cannot find.
   //     An unknown id (garbage, another user's device) gets no such trust.
   if (opts.targetDeviceId && devices.some((d) => d.device_id === opts.targetDeviceId)) {
-    if (paths.length > 0) {
-      const liveHolders = online.filter(hasCheckout).sort((a, b) =>
-        Number(a.is_remote) - Number(b.is_remote) || b.last_seen - a.last_seen);
-      if (liveHolders.length > 0) return liveHolders[0].device_id;
-    }
     return opts.targetDeviceId;
   }
 

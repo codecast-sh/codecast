@@ -55,7 +55,7 @@ async function verifyHireFlow() {
   await change('input[placeholder="/path/to/templates/growth"]', "/src/templates/growth");
   await change('input[name="folder-instance"]', "product-growth");
   assert.equal(button("Copy command").disabled, false);
-  assert.match(document.body.textContent!, /Understand trust with routines paused/);
+  assert.match(document.body.textContent!, /creates the role with its routines paused/);
   assert.match(document.body.textContent!, /Spending and publishing need separate authorization/);
   await act(async () => button("Copy command").click());
   assert.equal(copied.length, 1);
@@ -75,7 +75,7 @@ async function verifyHireFlow() {
   assert.match(document.body.textContent!, /Ads credentials/);
   await change('input[name="input:product.domain"]', "product.example");
   assert.equal(document.querySelector<HTMLInputElement>('input[name="template-instance"]')!.value, "product-growth");
-  assert.match(document.body.textContent!, /A new role CMO @product-growth-cmo at understand trust, reporting to me/);
+  assert.match(document.body.textContent!, /A new role CMO @product-growth-cmo, reporting to me, that starts work on its own/);
   assert.match(document.body.textContent!, /Authority outside codecast: write \(Ship pages\)/);
   assert.equal(button("Propose the hire").disabled, false);
   await act(async () => document.querySelector("[data-template-form]")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));

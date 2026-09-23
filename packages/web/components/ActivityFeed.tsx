@@ -12,8 +12,9 @@ import { useFlipAnimation } from "../hooks/useFlipAnimation";
 import { AgentIcon, type Conversation } from "./ConversationList";
 import { ImageLightbox } from "./ImageGallery";
 import { cleanTitle } from "../lib/conversationProcessor";
+import { feedActorId, derivePeople, type FeedPerson } from "../lib/liveEntities";
 import { shouldShowSession, isWarmupSession } from "../lib/sessionFilters";
-import { useInboxStore, useTrackedStore, sessionsWakeSig, isAgentActive, sortSessions, feedPagePersistence, isConvexId, type InboxSession } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, sessionsWakeSig, ownTeamRowsSig, isAgentActive, sortSessions, feedPagePersistence, isConvexId, type InboxSession } from "../store/inboxStore";
 import { feedCoverMetaKey, newestTs, oldestTs, planFeedCatchup, walkStep, FEED_CATCHUP_PAGE_LIMIT, FEED_CATCHUP_MAX_PAGES } from "../lib/feedCatchup";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
@@ -27,6 +28,9 @@ import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import "./team/teamFlow.css";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
+import { useViewerIdentity } from "../hooks/useTeamRoster";
+import { TeamShareChip } from "./feed/TeamShareChip";
+import { mergeOwnSessionsIntoTeamFeed } from "../lib/teamFeedRows";
 import { LivePulseDot } from "./SessionActivityLine";
 // Activity feed. Two sources, one rendering (FeedBody):
 //   • personal mode → a VIEW over store.sessions (the liberal delta cache that the
@@ -165,13 +169,18 @@ function Avatar({ name, image, size = 18 }: { name: string; image?: string | nul
 
 // --- The card. Clean, scannable: title row · summary · one dim meta line. ---
 // Shared across the feed, tasks/[id], and docs/[id] — keep it exported and stable.
-export function FeedCard({ conv, showActor, onNavigate, projectColor }: {
+export function FeedCard({ conv, showActor, onNavigate, projectColor, shareTeamId }: {
   conv: Conversation;
   showActor: boolean;
   onNavigate?: (id: string) => void;
   projectColor?: string;
+  /** Team feed only: the viewer's own rows carry a share chip for this team,
+   *  and a row the team cannot see renders dimmed. */
+  shareTeamId?: string;
 }) {
   const router = useRouter();
+  const ownOnTeamFeed = !!shareTeamId && conv.is_own;
+  const hiddenFromTeam = ownOnTeamFeed && conv.is_private !== false;
   const project = extractWorkspace(conv.project_path);
   const summary = cardSummary(conv);
   const isActive = conv.is_active;
@@ -206,7 +215,14 @@ export function FeedCard({ conv, showActor, onNavigate, projectColor }: {
     <div
       data-flip-key={conv._id}
       onClick={() => (onNavigate ? onNavigate(conv._id) : router.push(`/conversation/${conv._id}`))}
-      className="group relative cursor-pointer rounded-lg border border-sol-border/25 bg-sol-card hover:bg-sol-card-hover hover:border-sol-border/50 shadow-sm hover:shadow transition-all overflow-hidden"
+      data-hidden-from-team={hiddenFromTeam || undefined}
+      className={`group relative cursor-pointer rounded-lg border transition-all overflow-hidden ${
+        hiddenFromTeam
+          // Yours alone: on the board only for you, so it sits back from the
+          // shared rows and comes forward under the pointer.
+          ? "border-dashed border-sol-border/40 bg-sol-bg-alt/20 opacity-55 hover:opacity-100 hover:bg-sol-card-hover hover:border-sol-border/50"
+          : "border-sol-border/25 bg-sol-card hover:bg-sol-card-hover hover:border-sol-border/50 shadow-sm hover:shadow"
+      }`}
     >
       {isActive && <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-sol-green/60" />}
       <div className="px-4 py-3 flex items-center gap-3">
@@ -249,6 +265,10 @@ export function FeedCard({ conv, showActor, onNavigate, projectColor }: {
           {project && <span className={`rounded px-1 py-px ${projectColor || "text-sol-text-dim/45"}`}>{project}</span>}
           {msgs > 0 && <HeatStat value={msgs} breaks={MSG_BREAKS}>{formatMsgCount(msgs)} msg</HeatStat>}
           {dur && <HeatStat value={conv.duration_ms / 60000} breaks={DUR_MIN_BREAKS}>{dur}</HeatStat>}
+          {/* Your own row on the team feed: what the team sees of it, and the
+              control to change that. The store applies the change at once;
+              the server write rides the action's side effect. */}
+          {ownOnTeamFeed && <TeamShareChip conv={conv} teamId={shareTeamId!} />}
           <AgentIcon agentType={conv.agent_type || "claude_code"} className="w-3 h-3 opacity-40 ml-auto shrink-0" />
         </div>
       </div>
@@ -269,10 +289,8 @@ export function FeedCard({ conv, showActor, onNavigate, projectColor }: {
   );
 }
 
-type Person = { id: string; name: string; image?: string | null; sessions: number };
-
 function PeopleRow({ people, onSelect, selectedId }: {
-  people: Person[];
+  people: FeedPerson[];
   onSelect: (id: Id<"users"> | undefined) => void;
   selectedId?: Id<"users">;
 }) {
@@ -314,7 +332,8 @@ function RollupHeader({ convs, compact }: {
     let active = 0;
     let msgs = 0;
     for (const c of convs) {
-      if (c.user_id) people.add(c.user_id.toString());
+      const actor = feedActorId(c);
+      if (actor) people.add(actor);
       if (c.is_active) active += 1;
       msgs += c.message_count || 0;
       const p = extractWorkspace(c.project_path);
@@ -383,7 +402,7 @@ function mergeDayEntries(convEntries: FeedEntry[], gitEntries: FeedEntry[]): Fee
   return out;
 }
 
-function DaySection({ date, entries, showActor, onNavigate, compact, projectColors, onProjectFilter }: {
+function DaySection({ date, entries, showActor, onNavigate, compact, projectColors, onProjectFilter, shareTeamId }: {
   date: string;
   entries: FeedEntry[];
   showActor: boolean;
@@ -391,6 +410,7 @@ function DaySection({ date, entries, showActor, onNavigate, compact, projectColo
   compact?: boolean;
   projectColors: Record<string, string>;
   onProjectFilter?: (project: string) => void;
+  shareTeamId?: string;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const label = formatDate(date);
@@ -407,7 +427,8 @@ function DaySection({ date, entries, showActor, onNavigate, compact, projectColo
     for (const c of convs) {
       const p = extractWorkspace(c.project_path);
       if (p) projSet.add(p);
-      if (c.user_id) actorSet.add(c.user_id.toString());
+      const actor = feedActorId(c);
+      if (actor) actorSet.add(actor);
       if (c.is_active) act++;
     }
     return { projects: [...projSet], people: actorSet.size, active: act };
@@ -453,6 +474,7 @@ function DaySection({ date, entries, showActor, onNavigate, compact, projectColo
                 showActor={showActor}
                 onNavigate={onNavigate}
                 projectColor={projectColors[extractWorkspace(entry.conv.project_path) || ""]}
+                shareTeamId={shareTeamId}
               />
             ),
           )}
@@ -464,7 +486,7 @@ function DaySection({ date, entries, showActor, onNavigate, compact, projectColo
 
 // Shared rendering for both sources: window/actor/project filter, live rollup,
 // people row (team only), day grouping, FLIP animation, infinite scroll.
-function FeedBody({ source, sourceConvs, externalEvents = NO_EXTERNAL_EVENTS, hasMore, loadMore, isLoading, isLoadingMore, onNavigate, compact, hidePeopleRow, initialActorId, shareNudge }: {
+function FeedBody({ source, sourceConvs, externalEvents = NO_EXTERNAL_EVENTS, hasMore, loadMore, isLoading, isLoadingMore, onNavigate, compact, hidePeopleRow, initialActorId, shareNudge, shareTeamId }: {
   source: "team" | "personal";
   sourceConvs: Conversation[];
   /** Team mode only: the git events to interleave into the day sections. */
@@ -479,6 +501,8 @@ function FeedBody({ source, sourceConvs, externalEvents = NO_EXTERNAL_EVENTS, ha
   initialActorId?: string;
   /** Team mode: a push to share workspaces, shown while the viewer shares none. */
   shareNudge?: ReactNode;
+  /** Team mode: the team whose sharing the viewer's own rows show and change. */
+  shareTeamId?: string;
 }) {
   const showActor = source === "team";
   const showPeople = source === "team" && !hidePeopleRow;
@@ -503,7 +527,7 @@ function FeedBody({ source, sourceConvs, externalEvents = NO_EXTERNAL_EVENTS, ha
   // filters apply here.
   const visibleConvs = useMemo(() => {
     const list = sourceConvs.filter((c) => {
-      if (actorFilter && c.user_id?.toString() !== actorFilter.toString()) return false;
+      if (actorFilter && feedActorId(c) !== actorFilter.toString()) return false;
       if (projectFilter && extractWorkspace(c.project_path) !== projectFilter) return false;
       return true;
     });
@@ -562,18 +586,7 @@ function FeedBody({ source, sourceConvs, externalEvents = NO_EXTERNAL_EVENTS, ha
 
   // People from the full window set (ignores actor filter) so the row stays
   // populated and a selection can always be cleared.
-  const people = useMemo(() => {
-    if (!showPeople) return [];
-    const map = new Map<string, Person>();
-    for (const c of sourceConvs) {
-      const id = c.user_id?.toString();
-      if (!id) continue;
-      const cur = map.get(id) || { id, name: c.author_name || "Unknown", image: c.author_avatar, sessions: 0 };
-      cur.sessions += 1;
-      map.set(id, cur);
-    }
-    return [...map.values()].sort((a, b) => b.sessions - a.sessions);
-  }, [sourceConvs, showPeople]);
+  const people = useMemo(() => (showPeople ? derivePeople(sourceConvs) : []), [sourceConvs, showPeople]);
 
   const projectColors = useProjectColors(displayConvs);
 
@@ -715,6 +728,7 @@ function FeedBody({ source, sourceConvs, externalEvents = NO_EXTERNAL_EVENTS, ha
               compact={compact}
               projectColors={projectColors}
               onProjectFilter={setProjectFilter}
+              shareTeamId={shareTeamId}
             />
           ))}
           {/* A filter can hide every loaded session while older pages still hold
@@ -960,10 +974,52 @@ function TeamFeed({ compact, directoryFilter, onNavigate, initialActorId, hidePe
     }
   }, [loadingMore, knownCursor, convex, queryArgs, key, mergeFeed, setFeedCursor, setFeedHasMore]);
 
-  const sourceConvs = useMemo(() => (cached ?? []).filter((c) => {
+  // The cache only grows, so a row the viewer hid (from a card or the session
+  // header) stays in it; the server's next page would not carry it, and
+  // neither must the feed. A row of the viewer's own that was hidden stays too, and renders as
+  // hidden: the feed is where they see which of their sessions the team can
+  // open, and change it (FeedCard's share chip).
+  const feedRows = useMemo(() => (cached ?? []).filter((c) => {
     if (c.visibility_mode === "summary" || c.visibility_mode === "minimal") return !isWarmupSession(c);
     return shouldShowSession(c, { excludeDefaultTitles: !c.is_own });
   }), [cached]);
+
+  // The server sends only what the team can see, so the viewer's private
+  // sessions for this team come from the inbox cache, which holds team_id and
+  // is_private for every session of theirs. Woken by the same structural
+  // signature the personal feed uses plus the sharing fields, refreshed on the
+  // coarse clock for the time-driven fields, never by a heartbeat.
+  const st = useTrackedStore([(x) => sessionsWakeSig(x.sessions), (x) => ownTeamRowsSig(x.sessions)]);
+  const coarseNow = useCoarseNow(15_000);
+  const viewer = useViewerIdentity();
+  const sourceConvs = useMemo(() => {
+    if (!activeTeamId) return feedRows;
+    const dirLeaf = directoryFilter ? directoryFilter.split("/").filter(Boolean).pop() : null;
+    return mergeOwnSessionsIntoTeamFeed({
+      feedRows,
+      sessions: st.sessions,
+      teamId: String(activeTeamId),
+      viewerId: viewer?._id,
+      keep: (sess) => {
+        if (sess.is_subagent) return false;
+        if (dirLeaf) {
+          const path = sess.git_root || sess.project_path;
+          if (!path || !path.split("/").filter(Boolean).includes(dirLeaf)) return false;
+        }
+        return shouldShowSession(sess, { excludeDefaultTitles: false });
+      },
+      toConv: (sess) => ({
+        ...inboxSessionToConv(sess),
+        user_id: viewer?._id ?? "",
+        author_name: viewer?.name ?? viewer?.email ?? "",
+        author_avatar: viewer?.image ?? viewer?.github_avatar_url ?? null,
+        is_private: sess.is_private ?? false,
+        team_visibility: sess.team_visibility ?? null,
+      }),
+    });
+    // coarseNow: the mapped rows carry time-driven fields (duration, liveness).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [feedRows, st.sessions, activeTeamId, directoryFilter, viewer, coarseNow]);
 
   // Read the store the team feeder fills; the feeder itself is mounted globally.
   // The externalEvents store key is one shared overlay: a conversation, task or
@@ -990,6 +1046,7 @@ function TeamFeed({ compact, directoryFilter, onNavigate, initialActorId, hidePe
       hidePeopleRow={hidePeopleRow}
       initialActorId={initialActorId}
       shareNudge={sharesNone ? <TeamShareNudge teamId={String(activeTeamId)} /> : undefined}
+      shareTeamId={activeTeamId ? String(activeTeamId) : undefined}
     />
   );
 }

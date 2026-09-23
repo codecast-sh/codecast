@@ -177,6 +177,15 @@ export function defaultMachineId(
      */
     lastPicked?: string | null;
     /**
+     * The machine this client runs on: the device whose daemon answers on
+     * loopback (useLocalDeviceId). A session started here runs here. It
+     * outranks the standing pick and every heuristic below, so a launch from
+     * a laptop is never re-homed to another machine by a remembered choice or
+     * a stale roster row; only an existing owner (rung 1) or a hand pick in
+     * this composer beats it.
+     */
+    localDeviceId?: string | null;
+    /**
      * Rungs 1-2 accept an OFFLINE machine when this says it can still serve: a
      * cloud host that is merely asleep boots when the session starts, so a
      * standing pick of it (or an existing session parked on it) holds while it
@@ -185,7 +194,7 @@ export function defaultMachineId(
     wakeOk?: (d: MachineCandidate) => boolean;
   } = {},
 ): string | null {
-  const { ownerDeviceId, projectPath, lastPicked } = opts;
+  const { ownerDeviceId, projectPath, lastPicked, localDeviceId } = opts;
   const canServe = (d: MachineCandidate) => d.online || !!opts.wakeOk?.(d);
 
   // 1. An existing conversation stays on the machine that owns it. This OUTRANKS
@@ -194,6 +203,12 @@ export function defaultMachineId(
   //    opening it. A standing preference is about where NEW work starts.
   const owner = ownerDeviceId ? devices.find((d) => d.device_id === ownerDeviceId) : undefined;
   if (owner && canServe(owner)) return owner.device_id;
+
+  // 1b. The machine you are sitting at. Its daemon answered this client on
+  //     loopback, so it is alive whatever the roster's minute-old `online`
+  //     says, and new work started here belongs here.
+  const here = localDeviceId ? devices.find((d) => d.device_id === localDeviceId) : undefined;
+  if (here) return here.device_id;
 
   // 2. Your standing choice. A stale id (machine removed or asleep) isn't
   //    selectable, so fall through rather than highlight a chip that can't serve.

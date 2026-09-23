@@ -94,7 +94,7 @@ export function buildHireSpec(d: HireDraft): HireSpec {
   const changes: OrgChange[] = [];
   if (!d.seatHandle) {
     changes.push({
-      kind: "role", name: sub(m.role.name), handle, scope: { projects: [ref], plans: [] }, reports_to: d.reportsTo, trust: "understand", caps: m.role.caps,
+      kind: "role", name: sub(m.role.name), handle, scope: { projects: [ref], plans: [] }, reports_to: d.reportsTo,
       ...(m.role.avatar ? { avatar: m.role.avatar } : {}),
       ...(m.role.tenure ? { tenure: m.role.tenure.kind === "standing" ? { kind: "standing" as const } : { kind: "program" as const, ends: { project: ref }, then: m.role.tenure.then } } : {}),
       charter: `Hired from the template ${m.id} ${m.version}. Its charter, routines and skills load from the pinned release on the host: cast org template instructions ${d.instance} charter.`,
@@ -109,7 +109,7 @@ export function buildHireSpec(d: HireDraft): HireSpec {
   const summary = [
     `${d.template.name} on ${d.project.title}, from the template ${m.id} ${m.version}.`, "",
     m.description, "",
-    d.seatHandle ? `@${d.seatHandle} is the seat: no new role.` : `A new role @${handle} at understand trust, reporting to ${d.reportsTo}, leads ${d.project.title}${d.reportsTo !== "me" ? ` under ${d.reportsTo}` : ""}.`,
+    d.seatHandle ? `@${d.seatHandle} is the seat: no new role.` : `A new role @${handle}, reporting to ${d.reportsTo}, leads ${d.project.title}${d.reportsTo !== "me" ? ` under ${d.reportsTo}` : ""}.`,
     routines.length ? `Routines, created paused for you to activate one by one: ${routines.join("; ")}.` : "",
     authority.length ? `Authority asked for now: ${authority.map((g) => `${g.kind} (${g.label})`).join("; ")}.` : "No authority outside codecast is asked for.",
     setup.length ? `${setup.length} setup step${setup.length === 1 ? "" : "s"} only you can do; the role puts one in front of you at a time.` : "",

@@ -28,8 +28,7 @@ import {
   reportDesktopWindowState,
   isDetachedTabWindow,
   onCallPanelHandback,
-  onVoiceMirror,
-} from "../lib/desktop";
+  onVoiceMirror } from "../lib/desktop";
 import { runPlaced } from "../lib/desktopApps";
 import { inboxTabSessionId } from "../lib/pathLabel";
 import { cleanNotificationBody } from "../lib/notificationText";

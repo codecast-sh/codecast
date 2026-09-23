@@ -7,6 +7,7 @@
 // palette; the role's page (/anchor) is the full home, with its scope beside
 // the conversation.
 
+import { useWorkspaceFeature } from "../../lib/teamFeatures";
 import { TopbarButton } from "../TopbarButton";
 import { lazy, Suspense, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -28,6 +29,9 @@ const AnchorOnboarding = lazy(() =>
 
 export function AnchorPanel() {
   const open = useInboxStore((st) => st.anchorPanel.open);
+  // The org feature is per team, default off: no chip and no slide-over when
+  // the active workspace has it off (the store keeps its state; nothing renders).
+  const orgOn = useWorkspaceFeature("org");
   const current = useRootAgent();
   const router = useRouter();
 
@@ -45,6 +49,7 @@ export function AnchorPanel() {
     close();
   };
 
+  if (!orgOn) return null;
   return (
     <div
       ref={rootRef}
@@ -133,6 +138,7 @@ function RootAgentHead({ current, onOpenFull }: { current: AnchorRow | null; onO
  *  needs you or is working; one click opens the panel. */
 export function AnchorChip() {
   const current = useRootAgent();
+  const orgOn = useWorkspaceFeature("org");
   const now = useCoarseNow(30_000);
   const open = useInboxStore((st) => st.anchorPanel.open);
   const status = deriveAnchorStatus(current, now);
@@ -147,6 +153,7 @@ export function AnchorChip() {
     : status.tone === "attention" ? `${name} needs you`
     : status.tone === "working" ? `${name} is working`
     : `Talk to ${name}`;
+  if (!orgOn) return null;
   return (
     <ShortcutTooltip label={label} action="anchor.toggle">
       <TopbarButton

@@ -4,7 +4,8 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { Database } from "bun:sqlite";
-import { findStaleCursorSessions, isAppServerManagedCodexSessionHead, shouldTreatClaudeFileAsStale } from "./daemon.js";
+import { runBounded, findStaleSessionFiles, findStaleCursorSessions, isAppServerManagedCodexSessionHead, shouldTreatClaudeFileAsStale } from "./daemon.js";
+import { updateSyncRecord } from "./syncLedger.js";
 import { clearPosition, setPosition } from "./positionTracker.js";
 import { setSlowSyncFsThresholdForTests, setSlowSyncSink } from "./slowSync.js";
 import { isolateCodecastDir } from "./test-helpers/codecastDir.js";
@@ -62,6 +63,39 @@ describe("shouldTreatClaudeFileAsStale", () => {
       )
     ).toBe(true);
   });
+});
+
+test("one failed startup transcript does not stop the rest of the catch-up sweep", async () => {
+  const synced: number[] = [];
+  await runBounded([0, 1, 2, 3, 4], 2, async item => {
+    if (item === 0) throw new Error("ingest reservation capacity");
+    synced.push(item);
+  }, "test recovery");
+  expect(synced.sort()).toEqual([1, 2, 3, 4]);
+});
+
+test("Claude recovery includes nested subagents without scanning tool output folders", async () => {
+  const previousHome = process.env.HOME;
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "claude-stale-"));
+  const root = path.join(home, ".claude/projects");
+  const files = ["project/11111111-1111-4111-8111-111111111111.jsonl", "project/11111111-1111-4111-8111-111111111111/subagents/agent-child.jsonl", "project/11111111-1111-4111-8111-111111111111/subagents/workflows/wf_run/agent-worker.jsonl"];
+  const ignored = "project/11111111-1111-4111-8111-111111111111/tool-results/output.jsonl";
+  try {
+    process.env.HOME = home;
+    for (const file of [...files, ignored]) {
+      const target = path.join(root, file);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, "{}\n");
+    }
+    const stale = await findStaleSessionFiles();
+    expect(stale.sort()).toEqual(files.map(file => path.join(root, file)).sort());
+    for (const file of files) updateSyncRecord(path.join(root, file), { lastSyncedPosition: 3, lastSyncedAt: Date.now() + 1000 });
+    expect(await findStaleSessionFiles()).toEqual([]);
+  } finally {
+    process.env.HOME = previousHome;
+    for (const file of files) clearPosition(path.join(root, file));
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 });
 
 describe("isAppServerManagedCodexSessionHead", () => {

@@ -90,6 +90,13 @@ export const ccAccountsValidator = v.object({
   // of the active account counts as evidence only if fetched after this;
   // a limit park stamped before it belongs to the previous login.
   active_since: v.optional(v.number()),
+  // The saved profile this machine's sessions LAUNCH on when it differs from
+  // the keychain login: set by a token switch (the target's saved login is
+  // dead, its minted setup-token is live, so the daemon moves sessions onto
+  // the token and leaves the keychain alone). Cleared by any keychain switch
+  // or a fresh sign-in. Every "which account do sessions run on" read goes
+  // through fleetAccount() so the pin, auto-continue and auto-switch agree.
+  launch_profile: v.optional(v.string()),
   profiles: v.array(
     v.object({
       name: v.string(),
@@ -167,16 +174,37 @@ export function tokenBackedProfile(
   return profileHasToken(accounts?.profiles.find((p) => p.name === name), now) ? name : undefined;
 }
 
-/** The pin for a NEW session: the profile covering the machine's current
- * login, if it has a launch credential. */
-export function activeTokenProfile(
-  accounts:
-    | { active_email?: string; profiles: Array<{ name: string; email?: string; token?: { expires_at: number }; setup_token?: { expires_at: number } }> }
-    | undefined
-    | null,
+type FleetAccounts = {
+  active_email?: string;
+  launch_profile?: string;
+  profiles: Array<{ name: string; email?: string; token?: { expires_at: number }; setup_token?: { expires_at: number } }>;
+};
+
+/** The account this machine's sessions run on. Normally the keychain login.
+ * After a token switch it is the launch profile: its saved login is dead and
+ * its minted setup-token carries every new and resumed session, so the
+ * keychain still names the old account while the fleet runs elsewhere. A
+ * launch profile counts only while the inventory still shows it with a live
+ * setup-token (the daemon drops the record when the token goes, but a stale
+ * heartbeat must not pin sessions to a token nobody can source). */
+export function fleetAccount(
+  accounts: FleetAccounts | undefined | null,
   now: number,
-): string | undefined {
-  return accounts?.active_email ? tokenBackedProfile(accounts, { email: accounts.active_email }, now) : undefined;
+): { email?: string; profile?: string; viaToken: boolean } {
+  if (!accounts) return { viaToken: false };
+  if (accounts.launch_profile) {
+    const launch = accounts.profiles.find((p) => p.name === accounts.launch_profile);
+    if (profileHasSetupToken(launch, now)) return { email: launch!.email, profile: launch!.name, viaToken: true };
+  }
+  return { email: accounts.active_email, viaToken: false };
+}
+
+/** The pin for a NEW session: the profile covering the account the fleet
+ * runs on (fleetAccount), if it has a launch credential. */
+export function activeTokenProfile(accounts: FleetAccounts | undefined | null, now: number): string | undefined {
+  const fleet = fleetAccount(accounts, now);
+  if (fleet.profile) return fleet.profile;
+  return fleet.email ? tokenBackedProfile(accounts, { email: fleet.email }, now) : undefined;
 }
 
 type ContinueDevice = {
@@ -207,7 +235,11 @@ export function continueNeedsRestart(
   now: number,
 ): boolean {
   if (conv.pending_api_error_kind === "auth") return true;
-  if (!conv.cc_account || device?.is_remote === true) return false;
+  if (device?.is_remote === true) return false;
+  // An unpinned process runs on the keychain login. That is the fleet account
+  // unless a token switch moved the fleet elsewhere, in which case a plain
+  // continue would retry the same spent (or dead) login.
+  if (!conv.cc_account) return fleetAccount(device?.cc_accounts, now).viaToken;
   return conv.cc_account !== continueTargetPin(device, now);
 }
 
@@ -223,14 +255,16 @@ export function continueNeedsRestart(
  * pushed credential, never a pin) run on the active login. */
 export function parkedOnActiveAccount(
   conv: { cc_account?: string | null },
-  device:
-    | { is_remote?: boolean; cc_accounts?: { active_email?: string; profiles: Array<{ name: string; email?: string }> } }
-    | undefined,
+  device: { is_remote?: boolean; cc_accounts?: FleetAccounts } | undefined,
+  now: number,
 ): boolean {
-  if (!conv.cc_account || device?.is_remote === true) return true;
+  if (device?.is_remote === true) return true;
+  const fleet = fleetAccount(device?.cc_accounts, now);
+  // Unpinned = the keychain login, which is the fleet account unless a token
+  // switch moved the fleet: then its park says nothing about the token account.
+  if (!conv.cc_account) return !fleet.viaToken;
   const pinned = device?.cc_accounts?.profiles.find((p) => p.name === conv.cc_account);
-  const activeEmail = device?.cc_accounts?.active_email;
-  return !!pinned?.email && !!activeEmail && pinned.email === activeEmail;
+  return !!pinned?.email && !!fleet.email && pinned.email === fleet.email;
 }
 
 // Codex logins are per machine and are never pushed to a remote, so a remote
@@ -466,15 +500,25 @@ export function splitAuthParks<T extends { _id: string; updated_at?: number; pen
         cc_accounts?: {
           active_email?: string;
           active_since?: number;
-          profiles: Array<{ email?: string; login_expired_at?: number; usage?: { fetched_at: number } }>;
+          launch_profile?: string;
+          profiles: Array<{
+            name: string;
+            email?: string;
+            login_expired_at?: number;
+            usage?: { fetched_at: number };
+            token?: { expires_at: number };
+            setup_token?: { expires_at: number };
+          }>;
         };
       }
     | undefined,
   attempts: Array<{ profile: string; at: number }>,
+  now: number,
 ): { restart: T[]; dead: T[] } {
   const accounts = device?.cc_accounts;
   const activeSince = accounts?.active_since ?? 0;
-  const active = accounts?.profiles.find((p) => !!p.email && p.email === accounts.active_email);
+  const fleetEmail = fleetAccount(accounts, now).email;
+  const active = accounts?.profiles.find((p) => !!p.email && p.email === fleetEmail);
   if (active?.login_expired_at && active.login_expired_at >= activeSince) return { restart: [], dead: parks };
   if (!active?.usage || active.usage.fetched_at < activeSince) return { restart: [], dead: [] };
   const parkedAt = (c: T): number => c.pending_api_error_at ?? c.updated_at ?? 0;
@@ -543,6 +587,9 @@ export interface AutoSwitchProfile {
   email?: string;
   usage?: CcUsage;
   login_expired_at?: number;
+  // A live minted token makes a dead saved login a switch target again
+  // (fallbackProfiles): the switch lands on the token, not the login.
+  setup_token?: { stored_at: number; expires_at: number };
 }
 
 // ---------------------------------------------------------------------------

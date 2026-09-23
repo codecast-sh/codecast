@@ -28,15 +28,22 @@ function fakeCtx(conversations: any[]) {
               lt: (f: string, v: any) => { constraints.lt = v; return q; },
             };
             builder(q);
-            return {
+            let dir = 1;
+            const chain = {
+              order(d: string) { dir = d === "desc" ? -1 : 1; return chain; },
               take: async (n: number) => {
+                const exact = constraints[`eq:${field}`];
                 const rows = conversations
                   .filter((c) => c.user_id === constraints["eq:user_id"])
-                  .filter((c) => typeof c[field] === "string" && c[field] >= constraints.gte && c[field] < constraints.lt)
-                  .sort((a, b) => (a[field] < b[field] ? -1 : a[field] > b[field] ? 1 : 0));
+                  .filter((c) => typeof c[field] === "string")
+                  .filter((c) => (exact !== undefined ? c[field] === exact : c[field] >= constraints.gte && c[field] < constraints.lt))
+                  // The index orders by the field, then by creation time.
+                  .sort((a, b) => (a[field] < b[field] ? -1 : a[field] > b[field] ? 1 : (a._creationTime ?? 0) - (b._creationTime ?? 0)));
+                if (dir < 0) rows.reverse();
                 return rows.slice(0, n);
               },
             };
+            return chain;
           },
         };
       },
@@ -97,5 +104,26 @@ describe("scanConversationsForPath", () => {
     const theirs = { ...conv({ project_path: "/p/x/a" }), user_id: "u2" };
     const ctx = fakeCtx([theirs]);
     expect(await collect(ctx, "/p/x")).toEqual([]);
+  });
+});
+
+describe("scanConversationsForPath reads newest first and reports the cap", () => {
+  test("a repository past the cap yields its newest sessions, flagged truncated", async () => {
+    const rows = Array.from({ length: 1100 }, (_, i) => conv({ git_root: "/home/u/big", _creationTime: i }));
+    const ctx = fakeCtx(rows);
+    const seen: number[] = [];
+    const { truncated } = await scanConversationsForPath(ctx, "u1", "/home/u/big", (c) => { seen.push(c._creationTime); return true; });
+    expect(truncated).toBe(true);
+    expect(seen.length).toBe(1024);
+    expect(seen[0]).toBe(1099);
+    expect(Math.min(...seen)).toBe(76);
+  });
+
+  test("a small repository is not flagged", async () => {
+    const ctx = fakeCtx([conv({ git_root: "/home/u/small", _creationTime: 1 }), conv({ git_root: "/home/u/small", _creationTime: 2 })]);
+    const seen: number[] = [];
+    const { truncated } = await scanConversationsForPath(ctx, "u1", "/home/u/small", (c) => { seen.push(c._creationTime); return true; });
+    expect(truncated).toBe(false);
+    expect(seen).toEqual([2, 1]);
   });
 });

@@ -258,6 +258,16 @@ async function applyLogPage(
       }
       continue;
     }
+    if (a.entity_type === "member") {
+      // A teammate left this team (the row rides the TEAM's scope, entity_id
+      // is the departed user): their rows leave the team feed cache, which
+      // only grows and hears of removals from nowhere else. Conversations
+      // never fan out to a team scope, so no per row delete will follow.
+      if (a.op === "scope_removed" && scopeKey.startsWith("team:")) {
+        store.purgeMemberTeamRows(scopeKey.slice(5), a.entity_id);
+      }
+      continue;
+    }
     entityActions.push(a);
   }
   store.retireAckedPending(scopeKey, upTo);
@@ -365,6 +375,10 @@ export async function catchUpScope(
     const s = useInboxStore.getState();
     s.clearSyncMeta(metaKey);
     s.clearCrawlMetaForScope(head.scope_key);
+    // The team feed cache only grows and learns of removals (a member who
+    // left) from this scope's rows alone; past retention the log cannot say
+    // which rows should have gone, so the cache goes and refills.
+    if (head.scope_key.startsWith("team:")) s.dropTeamFeedCache(head.scope_key.slice(5));
     s.recordSyncMeta(metaKey, { cursor: head.position });
     // Every write acknowledged at or below the head has landed in the floor
     // the recut cursor stands on; a lock still holding one would re-assert its

@@ -41,7 +41,7 @@ import { latestOrgRevisionAt, orgChangeTakeover, type OrgVerdictSeen } from "@co
 import { useTakeoverPreviews } from "../../hooks/useTakeoverPreviews";
 import { HireRoleDialog, type HireRoleInitial } from "./HireRoleDialog";
 import { ChiefSeatDialog, type ChiefSeatChoice } from "./ChiefSeatDialog";
-import { StaffingPane, type ProposalLinkLine } from "./StaffingPane";
+import { StaffingPane, asksLoading, asksProgressLine, type ProposalLinkLine } from "./StaffingPane";
 import { OrgEmptyCanvas, OrgGuide } from "./OrgFirstOpen";
 import { orgGuideSteps } from "../../lib/orgGuideSteps";
 import { OrgIntro } from "./OrgIntro";
@@ -783,6 +783,10 @@ export function OrgPageInner() {
   // The pane is the page only while it is open (S19): closed, the chart's
   // own header comes back, with its guide and its counters.
   const threadLeads = panelOpen && effectivePanelMode === "staffing" && !!threadNode;
+  // On a desktop the page's one line header names the proposal and counts
+  // the decisions, so the asks column is cards from its first pixel and the
+  // third ask's buttons stay on the first screen (StaffingPane.fit.test).
+  const titleInPageHeader = threadLeads && !phone && !nodeSelected;
   // A proposal on the phone is the page (S19): the sheet takes the whole
   // height, because a strip of chart above it cost five lines of the letter
   // and pushed the first ask under the fold (org eval, round 2).
@@ -819,7 +823,7 @@ export function OrgPageInner() {
       onProposeNow={proposeNow}
       onResumeChief={resumeChief}
       hasThread={!!threadRef}
-      onClose={threadLeads && !phone && !nodeSelected ? closePanel : undefined}
+      titleInPageHeader={titleInPageHeader}
       onAskAbout={threadRef ? askAbout : undefined}
       onAskAboutAsk={threadRef ? askAboutAsk : undefined}
       revised={threadRef ? { rows: revisedRows, who: threadRef.name, onSeen: seenRevisions } : undefined}
@@ -871,11 +875,19 @@ export function OrgPageInner() {
           <button type="button" onClick={closePanel} className="shrink-0 inline-flex items-center gap-1.5 font-medium hover:underline underline-offset-2" style={{ color: "var(--sol-violet)" }} data-org-back>
             <ArrowLeft className="w-3.5 h-3.5" /> Back to the chart
           </button>
-          <span className="min-w-0 truncate inline-flex items-center gap-1.5" style={{ color: "var(--sol-text-dim)" }}>
+          {/* The row is one line at any width: the crumb and the preview
+              note give way first, the proposal's title last. */}
+          <span className="min-w-0 truncate shrink-[2] inline-flex items-center gap-1.5" style={{ color: "var(--sol-text-dim)" }}>
             <Network className="w-3.5 h-3.5 shrink-0" style={{ color: "var(--sol-violet)" }} strokeWidth={1.75} />
             <span className="truncate" style={{ fontFamily: "var(--font-mono)" }}>Org / {tree?.workspace.name || (tree?.workspace.kind === "user" ? "personal" : "team")}</span>
           </span>
-          {preview && <span className="hidden sm:inline shrink-0 text-[11.5px]" style={{ color: "var(--sol-yellow)" }}>preview data, edits stay on this page</span>}
+          {preview && <span className="hidden sm:inline min-w-0 truncate shrink-[4] text-[11.5px]" style={{ color: "var(--sol-yellow)" }}>preview data, edits stay on this page</span>}
+          {titleInPageHeader && proposal && (
+            <span className="min-w-0 max-w-[48%] flex items-baseline gap-2.5 sm:ml-2" data-asks-header>
+              <h2 className="min-w-0 truncate text-[15px] leading-snug font-semibold tracking-tight" style={{ fontFamily: "var(--font-serif)", color: "var(--sol-text)" }}>{proposal.title}</h2>
+              <span className="shrink-0 text-[12px] tabular-nums" style={{ color: asksLeft.remaining === 0 && !asksLoading(proposal) ? "var(--sol-green)" : "var(--sol-text-muted)" }} data-progress>{asksProgressLine(asksLeft, asksLoading(proposal))}</span>
+            </span>
+          )}
           {tree && (
             <button type="button" onClick={() => setGlossary("words")} className="ml-auto shrink-0 underline-offset-2 hover:underline" style={{ color: "var(--sol-text-muted)" }} title="The eight words this page uses, each in one sentence" data-org-glossary-open>Words</button>
           )}

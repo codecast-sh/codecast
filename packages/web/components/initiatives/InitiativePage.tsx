@@ -41,6 +41,10 @@ import type { OrgRole } from "../org/orgTypes";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { HEALTH_COLOR, INITIATIVE_ACCENT } from "../../lib/initiativeColors";
 import { HealthChip, OwnerChip, ProgressBar, StatusGlyph, TargetDate } from "./InitiativeAtoms";
+import { api as _api } from "@codecast/convex/convex/_generated/api";
+import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
+import { isConvexId } from "../../lib/entityLinks";
+const api = _api as any;
 import { targetDayOf, targetDayStamp } from "@codecast/shared/time";
 import { InitiativePanel } from "./InitiativePanel";
 
@@ -131,6 +135,7 @@ export function InitiativePageInner({ id }: { id: string }) {
                   under <EntityIdPill type="initiative" id={all.find((r) => r._id === initiative.parent_initiative_id)?.short_id ?? initiative.parent_initiative_id} />
                 </span>
               )}
+              <OriginLine initiativeId={initiative._id} />
             </div>
           </div>
           {conversationId && (
@@ -208,6 +213,22 @@ function NotFound({ id, loading }: { id: string; loading: boolean }) {
         </>
       )}
     </div>
+  );
+}
+
+/** Where the goal came from (initiatives-projects-role-page.md "I1, revised"):
+ *  an initiative an accepted change made says so, from the org log, with the
+ *  proposal one click away. A goal set on the page says nothing here. */
+function OriginLine({ initiativeId }: { initiativeId: string }) {
+  const { data } = useQueryNoThrow(api.orgChanges.origin, isConvexId(initiativeId) ? { subject: initiativeId } : "skip");
+  if (!data) return null;
+  const day = new Date(data.at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: new Date(data.at).getFullYear() === new Date().getFullYear() ? undefined : "numeric" });
+  const words = `Proposed by the review on ${day}`;
+  return (
+    <span className="inline-flex items-center gap-1.5 text-[11.5px]" style={{ color: "var(--sol-text-dim)" }} data-initiative-origin={data.proposal?.short_id ?? "proposal"}>
+      {data.proposal ? <Link href={`/org?proposal=${data.proposal.short_id}`} className="hover:underline" title={data.proposal.title ?? data.proposal.short_id}>{words}</Link> : words}
+      {data.undone && <span title="The change that set it was undone; the goal stays as cancelled">(undone)</span>}
+    </span>
   );
 }
 
