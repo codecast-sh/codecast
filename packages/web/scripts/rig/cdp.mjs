@@ -42,8 +42,16 @@ export async function connectTarget(t) {
       for (const l of listeners) l(m);
     }
   };
+  // A page that dies (a killed browser, a navigation that drops the target)
+  // answers nothing: every call still in flight fails at once, so a leg
+  // reports the death instead of the whole run hanging on a promise.
+  ws.onclose = () => {
+    for (const { rej } of pending.values()) rej(new Error(`page gone: ${t.url}`));
+    pending.clear();
+  };
   const send = (method, params = {}) =>
     new Promise((res, rej) => {
+      if (ws.readyState !== WebSocket.OPEN) return rej(new Error(`page gone: ${t.url}`));
       const i = ++id;
       pending.set(i, { res, rej });
       ws.send(JSON.stringify({ id: i, method, params }));

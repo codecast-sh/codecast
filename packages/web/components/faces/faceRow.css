@@ -49,17 +49,17 @@
 .face-row-below {
   position: absolute;
   left: 0;
-  right: 0;
   top: 100%;
-}
-.face-row[data-density="float"] .face-row-below {
-  position: absolute;
-  left: 8px;
-  right: auto;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 8px;
+  padding-top: 8px;
+  z-index: 60;
+}
+.face-row[data-density="float"] .face-row-below {
+  left: 8px;
+  padding-top: 0;
 }
 .face-row--hover .face-row-below {
   top: calc(100% + 28px);
@@ -328,10 +328,7 @@
 }
 
 .engagement-card[data-density="bar"] {
-  position: absolute;
-  top: calc(100% + 8px);
-  left: 0;
-  z-index: 40;
+  position: relative;
 }
 
 .engagement-card[data-density="float"] {
@@ -410,15 +407,15 @@
  * and pushed in from a viewport edge by --shift (measured); in the float it
  * sits in the band under the row, and the notch travels to the face. */
 .face-card {
-  --card-w: 272px;
+  --card-w: 320px;
   --notch: 8px;
-  position: absolute;
-  top: 10px;
-  left: calc(var(--anchor) + var(--shift, 0px));
+  /* Centred on the face, never left of the row, pushed in from the
+     viewport's right edge by --shift (measured). */
+  --lead: max(0px, calc(var(--anchor) - var(--card-w) / 2 + var(--shift, 0px)));
+  position: relative;
+  margin-left: var(--lead);
   width: var(--card-w);
   max-width: calc(100vw - 16px);
-  transform: translateX(-50%);
-  z-index: 60;
   padding: 10px;
   border-radius: 12px;
   border: 1px solid var(--sol-border);
@@ -436,7 +433,7 @@
   content: "";
   position: absolute;
   top: calc(-1 * var(--notch) / 2 - 1px);
-  left: calc(50% - var(--shift, 0px));
+  left: clamp(14px, calc(var(--anchor) - var(--lead)), calc(var(--card-w) - 14px));
   width: var(--notch);
   height: var(--notch);
   margin-left: calc(-1 * var(--notch) / 2);
@@ -446,23 +443,13 @@
   border-top: 1px solid var(--sol-border);
 }
 .face-card[data-density="float"] {
-  position: relative;
-  top: 0;
-  left: 0;
-  transform: none;
-  margin-top: 4px;
+  /* The band starts 8px in; the anchor is in the row's coordinates. */
+  --lead: max(0px, calc(var(--anchor) - 8px - var(--card-w) / 2));
 }
 .face-card[data-density="float"]::before {
-  left: clamp(14px, calc(var(--anchor) - 8px), calc(var(--card-w) - 14px));
+  left: clamp(14px, calc(var(--anchor) - 8px - var(--lead)), calc(var(--card-w) - 14px));
 }
 @keyframes face-card-in {
-  from { opacity: 0; transform: translateX(-50%) translateY(-3px); }
-  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
-}
-.face-card[data-density="float"] {
-  animation-name: face-card-in-flat;
-}
-@keyframes face-card-in-flat {
   from { opacity: 0; transform: translateY(-3px); }
   to   { opacity: 1; transform: none; }
 }
