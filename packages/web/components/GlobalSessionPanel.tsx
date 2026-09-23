@@ -1,4 +1,3 @@
-import { HibernatedMarker } from "./HibernatedMarker";
 import { HIBERNATED_COPY } from "@codecast/shared/contracts";
 import { BranchCodeLink } from "./repo/RepositoryLinks";
 import React, { useState, useCallback, useRef, memo, useMemo } from "react";
@@ -22,6 +21,7 @@ import { AppLoader } from "./AppLoader";
 import type { ConversationData } from "./conversation/types";
 import { FormattedSummary } from "./FormattedSummary";
 import { sessionCardSummary } from "../lib/sessionSummary";
+import { isHandoffFrom } from "../lib/sessionHandoff";
 import { threadStateView, THREAD_STATE_PIN_CLASS, THREAD_STATE_STATUS_META } from "../lib/threadState";
 import { ORG_STATE_META } from "./org/orgMeta";
 import { StatusDot } from "./StatusDot";
@@ -30,17 +30,18 @@ import { sessionStartupState } from "../lib/sessionLifecycle";
 import { compressImage } from "../lib/compressImage";
 import { useConversationMessages } from "../hooks/useConversationMessages";
 import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, placeInboxRows, placementDecisionsSig, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, freshReviveRequestIds, isSessionHidden, resolveSessionAuthor, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipProjectFilters, passesFilterTerms, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
+import { useTeamShareActions } from "../hooks/useTeamShareActions";
 import { sessionsWakeSig, resolveShowOld, showsBlockedBadge, sectionHeaderCount, classifySession, inboxNestParentOf } from "../store/inboxStore";
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
 import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
 import { LivePulseDot } from "./SessionActivityLine";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
-import { AUTO_CONTINUE_WINDOW_MS, actedBlockedConversations, skippedBlockedWorkers, blockedHeadlineCause, isBlockedConversation, isSubagentConversation, nestParentIdOf, usageStanding, standingLabel, isUsageExhausted, LOGIN_FLOW_STALE_MS, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
+import { AUTO_CONTINUE_WINDOW_MS, fleetAccount, actedBlockedConversations, skippedBlockedWorkers, blockedHeadlineCause, isBlockedConversation, isSubagentConversation, nestParentIdOf, usageStanding, standingLabel, isUsageExhausted, LOGIN_FLOW_STALE_MS, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
 import { contextShareOf, formatIdle, formatShare, formatTokens, restartPlan, restartReloadsContext } from "@codecast/convex/convex/wakeCost";
 import { withSafetyBlock } from "@codecast/shared/contracts";
 import { contextWindowTokens, restartShareOfRemaining, formatCountdown } from "@codecast/shared/contracts";
-import { rankByHeadroom, isStashHidden, USER_RESTS, describeDecision, pendingProposal, type UserRest } from "@codecast/shared/contracts";
+import { fallbackProfiles, rankByHeadroom, isStashHidden, USER_RESTS, describeDecision, pendingProposal, type UserRest } from "@codecast/shared/contracts";
 import { sessionIdleAt, sessionLiveAt } from "../lib/liveness";
 import { TooltipProvider } from "./ui/tooltip";
 import { cleanTitle, msgCountColor, formatModel } from "../lib/conversationProcessor";
@@ -59,6 +60,7 @@ import { DeviceIcon, rosterDeviceOf, deviceWakesOnUse, deviceDisplayName } from 
 import { SessionWorktreeChip } from "./SessionWorktreeChip";
 import { TriggerRunList, useTriggerRuns, openRunInStore, type TriggerRun } from "./TriggerRunHistory";
 import { TriggerRowItem, TriggerHomeHeader, SchedChildArrow, SchedHealthDot, SchedFireBadge } from "./TriggerRow";
+import { WAKE_BADGE, RUNNING_BADGE_TONE } from "../lib/triggerBadges";
 import { schedAccent, type SchedAccent } from "../lib/triggerAccent";
 import { cleanUserMessage } from "./sessionMessage";
 import { AgentTypeIcon, formatAgentType } from "./AgentTypeIcon";
@@ -138,8 +140,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
   } = useConversationMessages(sessionId, targetMessageId);
 
   const convCommand = useInboxStore((s) => s.convCommand);
-  const setPrivacy = useInboxStore((s) => s.setPrivacy);
-  const setTeamVisibility = useInboxStore((s) => s.setTeamVisibility);
+  const { setPrivate, shareWithTeam } = useTeamShareActions(sessionId);
   const generateShareLink = useMutation(api.conversations.generateShareLink);
   const [resumeState, setResumeState] = useState<"idle" | "resuming" | "sent" | "reconstituting" | "failed">("idle");
   const forceRestartAttemptedRef = useRef(false);
@@ -226,21 +227,23 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
   // popover for them would hand out a working world-readable link one click
   // from a session they don't own (mirrors QueuePageClient's gate).
   const isOwnSession = (conversation as any).is_own !== false;
-  const shareControls = isOwnSession ? (
+  const shareControls = (
     <SharePopover
+      canManage={isOwnSession}
       isPrivate={conversation.is_private !== false}
       teamVisibility={(conversation as any).team_visibility || (conversation as any).effective_team_visibility}
       hasShareToken={!!conversation.share_token}
       hasTeam={!!(conversation as any).team_id}
       teamId={(conversation as any).team_id ?? null}
-      onSetPrivate={() => { setPrivacy(convId, true); toast.success("Made private"); }}
-      onSetTeamVisibility={(mode) => { setTeamVisibility(convId, mode); toast.success(mode === "full" ? "Sharing full conversation with team" : "Sharing summary with team"); }}
+      onSetPrivate={setPrivate}
+      onSetTeamVisibility={shareWithTeam}
       onGenerateShareLink={async () => { const token = await generateShareLink({ conversation_id: convId }); return `${shareOrigin()}/conversation/${convId}?share=${encodeURIComponent(token)}`; }}
       shareUrl={shareUrl}
-      forwardUrl={`${shareOrigin()}/conversation/${convId}`}
+      pageUrl={`${shareOrigin()}/conversation/${convId}`}
       forwardLabel="session"
+      sharedVia={(conversation as any).auto_shared ? conversation.git_root || conversation.project_path : null}
     />
-  ) : null;
+  );
 
   const activePlanId = (conversation as any)?.active_plan_id;
   const workflowRunId = (conversation as any)?.workflow_run_id;
@@ -633,17 +636,19 @@ function BlockedSessionsBanner({
     return owner && owner.online && !owner.is_remote ? owner : loginDevice;
   };
   const executors = [...new Map(acted.map((sess) => executorFor(sess)).filter((d) => !!d).map((d) => [d!.device_id, d!])).values()];
-  const activeEmails = [...new Set(executors.map((d) => d.active_email).filter((e): e is string => !!e))];
+  // The account each machine's sessions run on: the launch profile after a
+  // token switch, else the keychain login (fleetAccount).
+  const fleetEmailOf = (d: (typeof executors)[number]) => fleetAccount(d, now).email;
+  const activeEmails = [...new Set(executors.map(fleetEmailOf).filter((e): e is string => !!e))];
   const activeEmail = activeEmails.length === 1 ? activeEmails[0] : undefined;
   type AccountOption = { key: string; name: string; email?: string; usage?: CcUsage; missingOn: string[] };
   const accountOptions: AccountOption[] = [];
   for (const device of executors) {
-    for (const p of device.profiles) {
-      // The account a machine is signed into now is "this account", not a switch.
-      // A dead login and a pegged window are not offers: suggesting one is how
-      // the banner named an account whose week was already full.
-      if (p.email && device.active_email === p.email) continue;
-      if (p.login_expired_at || isUsageExhausted(p.usage, now)) continue;
+    // The account a machine runs now is "this account", not a switch. A dead
+    // login without a live token and a pegged window are not offers (the same
+    // fallbackProfiles rule auto-switch uses): suggesting one is how the
+    // banner named an account whose week was already full.
+    for (const p of fallbackProfiles(device.profiles, fleetEmailOf(device), now)) {
       const key = p.email ? `email:${p.email}` : `name:${p.name}`;
       const existing = accountOptions.find((t) => t.key === key);
       if (!existing) accountOptions.push({ key, name: p.name, email: p.email, usage: p.usage, missingOn: [] });
@@ -659,7 +664,7 @@ function BlockedSessionsBanner({
   // Usage of what the executing machines run now — the account that parked
   // these sessions, not whatever the machine at the desk is signed into.
   const activeUsage = executors
-    .flatMap((d) => d.profiles.filter((p) => p.email && p.email === d.active_email))
+    .flatMap((d) => d.profiles.filter((p) => p.email && p.email === fleetEmailOf(d)))
     .map((p) => p.usage)
     .find((u) => !!u);
   // The proposed account is the default pick, so the primary button approves
@@ -1185,6 +1190,16 @@ function primaryTriggerRow(rows: TriggerRow[]): TriggerRow {
     return (r.task.run_at ?? Infinity) < (best.task.run_at ?? Infinity) ? r : best;
   });
 }
+// The live badge a workflow, background command or monitor child row wears.
+function RunningBadge({ label }: { label: string }) {
+  return (
+    <span data-sv-wake-badge="" className={`ml-auto ${WAKE_BADGE} ${RUNNING_BADGE_TONE}`}>
+      <LivePulseDot />
+      {label}
+    </span>
+  );
+}
+
 const CardBarStrip = memo(function CardBarStrip({ session, rows, activeSessionId, onOpen, onOpenSession }: {
   session: InboxSession;
   rows: TriggerRow[];
@@ -1249,10 +1264,7 @@ const CardBarStrip = memo(function CardBarStrip({ session, rows, activeSessionId
       {primary ? (
         <SchedFireBadge task={primary.task} className="ml-auto" />
       ) : (
-        <span className="ml-auto shrink-0 inline-flex items-center gap-1 justify-center min-w-[46px] px-1 py-0 rounded text-[9px] font-semibold border bg-sol-green/10 text-sol-green border-sol-green/30">
-          <LivePulseDot />
-          running
-        </span>
+        <RunningBadge label="running" />
       )}
     </button>
   );
@@ -1327,10 +1339,7 @@ function WorkflowBar({ session, isActive }: { session: InboxSession; isActive: b
             <div className="flex items-center gap-1.5 min-w-0">
               <span className="text-[9px] font-semibold uppercase tracking-wider text-sol-cyan/70 shrink-0">Workflow</span>
               <span className="text-xs truncate min-w-0 text-gray-400 font-normal">{session.workflow_run_name || "workflow run"}</span>
-              <span className="ml-auto shrink-0 inline-flex items-center gap-1 justify-center min-w-[46px] px-1 py-0 rounded text-[9px] font-semibold border bg-sol-green/10 text-sol-green border-sol-green/30">
-                <LivePulseDot />
-                running
-              </span>
+              <RunningBadge label="running" />
             </div>
             <div className="flex items-baseline gap-1.5 mt-0.5 min-w-0">
               {session.workflow_run_activity ? (
@@ -1404,10 +1413,7 @@ export function MonitorBars({ session, isActive }: {
                       meta lives on the subrow and the persistent chip rides
                       the badge tooltip; the conversation block keeps the chip. */}
                   <ShortcutTooltip label={isBackground ? "Background command — runs until it exits or is stopped, then wakes the agent" : row.persistent ? "Persistent watch — runs until TaskStop or session end" : `One-shot watch${row.timeoutMs !== undefined ? ` — times out after ${fmtDuration(row.timeoutMs)}` : ""}`}>
-                    <span className="ml-auto shrink-0 inline-flex items-center gap-1 justify-center min-w-[46px] px-1 py-0 rounded text-[9px] font-semibold border bg-sol-green/10 text-sol-green border-sol-green/30">
-                      <LivePulseDot />
-                      {isBackground ? "running" : "watching"}
-                    </span>
+                    <RunningBadge label={isBackground ? "running" : "watching"} />
                   </ShortcutTooltip>
                 </div>
                 {/* Subrow: the last thing the watch saw (machine voice), or the
@@ -1569,7 +1575,7 @@ function WakeReasonRowShell({ isActive, family, title, detail, badge, badgeClass
               <span className="text-[9px] font-semibold uppercase tracking-wider text-sol-blue/70 shrink-0">{family}</span>
               <span className="text-xs truncate min-w-0 text-gray-400 font-normal">{title}</span>
               {badge && (
-                <span className={`ml-auto shrink-0 inline-flex items-center gap-1 justify-center min-w-[46px] px-1 py-0 rounded text-[9px] font-semibold border ${badgeClass ?? ""}`}>
+                <span data-sv-wake-badge="" className={`ml-auto ${WAKE_BADGE} ${badgeClass ?? ""}`}>
                   {badge}
                 </span>
               )}
@@ -1863,7 +1869,7 @@ function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen, on
 /** The card-chrome toggles the row draws, as one string. */
 function cardChromeSig(clientState: any): string {
   const ui = clientState?.ui;
-  return `${ui?.show_model_badge === true ? 1 : 0}${ui?.show_agent_icon !== false ? 1 : 0}${ui?.inbox_image_thumbs === true ? 1 : 0}${ui?.personify_sessions === true ? 1 : 0}`;
+  return `${ui?.show_model_badge === true ? 1 : 0}${ui?.show_agent_icon !== false ? 1 : 0}${ui?.inbox_image_thumbs === true ? 1 : 0}${ui?.personify_sessions === true ? 1 : 0}${ui?.show_branch_pill !== false ? 1 : 0}`;
 }
 
 /** Visible-child parent link: the parent's title, so the card wakes on that
@@ -1935,6 +1941,7 @@ export const SessionCard = memo(function SessionCard({
   subRow,
   escalatedCount = 0,
   escalations,
+  roleSessions = 0,
   isSelected = false,
 }: {
   session: InboxSession;
@@ -1970,6 +1977,8 @@ export const SessionCard = memo(function SessionCard({
   escalatedCount?: number;
   /** On a role's own card: the escalations that reach the person through it, newest first (R1, revised). */
   escalations?: RoleEscalation[];
+  /** On a role's own card: how many of its sessions ride it (org-staffing.md S23.3); the pill opens the role's page. */
+  roleSessions?: number;
   // Label + favorite state are derived ONCE in the parent (SessionListPanel) and
   // passed as scalar props, so a card does O(1) work per render instead of the two
   // selectors scanning the whole bucketAssignments / favorites collection on every
@@ -1983,6 +1992,7 @@ export const SessionCard = memo(function SessionCard({
   session = withSafetyBlock(session);
   const tipActions = useTipActions();
   const spawnedById = session.spawned_by_conversation_id || null;
+  const spawnedIsHandoff = isHandoffFrom(session, spawnedById);
   const anchorId = session.is_anchor ? (session.anchor_id ?? null) : null;
   const deviceId = session.owner_device_id;
   const hasDraft = !!session._hasDraft;
@@ -2084,6 +2094,7 @@ export const SessionCard = memo(function SessionCard({
   // begins/ends. The stamp is read at isRowRestarting below.
   const showModelBadge = st.clientState?.ui?.show_model_badge === true;
   const showAgentIcon = st.clientState?.ui?.show_agent_icon !== false;
+  const showBranchPill = st.clientState?.ui?.show_branch_pill !== false;
   // Personification is opt in (session-characters.md S2): a session shows a
   // face once somebody gives it one, or when the workspace asks for every
   // session to have one. A role's standing session always has one — the role
@@ -2376,7 +2387,6 @@ export const SessionCard = memo(function SessionCard({
             )}
             <div className="flex items-center gap-1 flex-shrink-0">
               {showBlockedBadge && <AuthErrorBadge kind={session.pending_api_error_kind} agentType={session.agent_type} />}
-            <HibernatedMarker status={session.agent_status} compact />
               {session.session_error && session.pending_api_error_kind !== "safety" && (
                 <span className="w-1.5 h-1.5 rounded-full bg-sol-red" title={session.session_error} />
               )}
@@ -2602,6 +2612,19 @@ export const SessionCard = memo(function SessionCard({
           {/* The role's one number (R1): how many of its sessions it has put
               in front of the person. Silent at zero: a role with nothing
               escalated asks nothing of them. */}
+          {/* A role's sessions are the role's (S23.3): never rows under its
+              card, one count that opens the role's page. */}
+          {roleSessions > 0 && session.role?.short_id && (
+            <Link
+              href={`/org/${session.role.short_id}`}
+              data-role-sessions={roleSessions}
+              onClick={(e) => e.stopPropagation()}
+              className="flex-shrink-0 px-1 rounded border border-sol-border/50 bg-sol-bg-alt text-[10px] font-medium text-sol-text-muted tabular-nums whitespace-nowrap hover:text-sol-text"
+              title={`${roleSessions} ${roleSessions === 1 ? "session" : "sessions"} under this role; its page lists them`}
+            >
+              {roleSessions} {roleSessions === 1 ? "session" : "sessions"}
+            </Link>
+          )}
           {escalatedCount > 0 && (
             <span
               data-role-escalated-count
@@ -2818,7 +2841,7 @@ export const SessionCard = memo(function SessionCard({
             </span>
           )}
           <div data-sv-status className="flex items-center gap-1.5 flex-shrink-0 ml-auto">
-            <BranchCodeLink session={session} className="max-w-[110px]" detail={false} />
+            {showBranchPill && <BranchCodeLink session={session} className="max-w-[110px]" detail={false} />}
             <PrStatusChip status={session.pr_status} />
             <BrowserPaneOfferGlyph offer={session.browser_pane_offer} />
             {isFork(session) && (
@@ -2888,7 +2911,6 @@ export const SessionCard = memo(function SessionCard({
               );
             })()}
             {showBlockedBadge && <AuthErrorBadge kind={session.pending_api_error_kind} agentType={session.agent_type} />}
-            <HibernatedMarker status={session.agent_status} compact />
             {session.session_error && session.pending_api_error_kind !== "safety" && (
               <span className="w-1.5 h-1.5 rounded-full bg-sol-red" title={session.session_error} />
             )}
@@ -2941,12 +2963,12 @@ export const SessionCard = memo(function SessionCard({
               e.stopPropagation();
               (onNavigateToSession ?? useInboxStore.getState().navigateToSession)(spawnedById);
             }}
-            title="View the session that spawned this one"
+            title={spawnedIsHandoff ? "View the session this one continues" : "View the session that spawned this one"}
           >
             <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
             </svg>
-            <span className="flex-shrink-0">spawned by</span>
+            <span className="flex-shrink-0">{spawnedIsHandoff ? "handed off from" : "spawned by"}</span>
             <span className="truncate underline underline-offset-2">
               {cleanTitle(spawnedByTitle || "parent session")}
             </span>
@@ -3499,7 +3521,7 @@ function SessionListPanelImpl({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [sessionsWakeSig(s.sessions), inboxScope, meId, s.teamInboxIds, showAllSessions, focusedId, s.sessionsWithQueuedMessages, pendingSendIds, blankOpts, placementDecisionsSig(s.sessionDecisions), s.questionResolutions, s.killedShelf.ids, coarseNow],
   );
-  const { visibleSessions, oldCount, sorted: sortedSessions, pinned, newSessions, needsInput, done, dormant, working, snoozed: snoozedList, stashed: stashedList, dismissed: dismissedList, subsByParent: globalSubByParent, forksByParent: globalForksByParent, questions: placedQuestions, isQuestion, escalatedByRole, escalationsByLead } = placed;
+  const { visibleSessions, oldCount, sorted: sortedSessions, pinned, newSessions, needsInput, done, dormant, working, snoozed: snoozedList, stashed: stashedList, dismissed: dismissedList, subsByParent: globalSubByParent, forksByParent: globalForksByParent, questions: placedQuestions, isQuestion, escalatedByRole, escalationsByLead, roleSessionsByLead } = placed;
 
   // -- Schedules in the inbox (status view) --
   // The same per-user webList the badges/strip/schedules page subscribe to
@@ -4615,6 +4637,7 @@ function SessionListPanelImpl({
                   forkColorKey={forkColorKeyOf(session)}
                   escalatedCount={escalatedByRole.get(standingRoleIdOf(session) ?? "") ?? 0}
                   escalations={escalationsByLead.get(session._id)}
+                  roleSessions={roleSessionsByLead.get(session._id)}
                   subRow={flatNestParentOf && roleLookingAfter(session) && flatNestParentOf(session) ? "role" : undefined}
                   sessionLabel={labelByConv[session._id] ?? null}
                   isUnread={!!unreadByConv[session._id]}

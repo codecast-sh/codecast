@@ -786,6 +786,27 @@ describe("getConversationPendingMessage", () => {
     expect(result?.status).toBe("pending");
   });
 
+  test("reports the newest settled row when nothing is in flight, so a lagging viewer keeps the message on screen", async () => {
+    const { getConversationPendingMessage } = await import("./pendingMessages");
+    const auth = { async getUserIdentity() { return { subject: "u_owner|session" }; } };
+    const ctx = {
+      auth,
+      db: makeFakeDb({
+        conversations: [{ _id: "conv_1", user_id: "u_owner" }],
+        pending_messages: [
+          { _id: "pm_old", conversation_id: "conv_1", from_user_id: "u_owner", status: "delivered", created_at: 1, retry_count: 0, content: "first" },
+          { _id: "pm_cancelled", conversation_id: "conv_1", from_user_id: "u_owner", status: "cancelled", created_at: 3, retry_count: 0, content: "never mind" },
+          { _id: "pm_new", conversation_id: "conv_1", from_user_id: "u_owner", status: "delivered", created_at: 2, retry_count: 0, content: "continue" },
+        ],
+      }),
+    } as any;
+    const result = await (getConversationPendingMessage as any)._handler(ctx, { conversation_id: "conv_1" });
+    expect(result?.message_id).toBe("pm_cancelled");
+    expect(result?.status).toBe("cancelled");
+    const empty = { auth, db: makeFakeDb({ conversations: [{ _id: "conv_1", user_id: "u_owner" }], pending_messages: [] }) } as any;
+    expect(await (getConversationPendingMessage as any)._handler(empty, { conversation_id: "conv_1" })).toBeNull();
+  });
+
   test("keeps showing the oldest queued message while delivery attempts flip its status", async () => {
     const { getConversationPendingMessage } = await import("./pendingMessages");
     const auth = { async getUserIdentity() { return { subject: "u_owner|session" }; } };

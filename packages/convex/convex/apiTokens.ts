@@ -36,7 +36,9 @@ export { hashToken, verifyApiToken } from "@platform/auth/convex";
 //
 // `deviceBindingAllows` stays internal for the same reason: wire-callable, it
 // would answer "is this token real, and which machine is it tied to?" for
-// anyone who reaches the deployment.
+// anyone who reaches the deployment. The binding itself is enforced inside
+// `verifyApiToken`, from the device carried in `api_token`, so it holds on a
+// direct Convex call as much as on an HTTP route.
 // The wire contract, stated once. The factory builds these with the untyped
 // builders it is handed, so without this annotation every export lands as
 // `any`, `ApiFromModules` drops the whole module, and `api.apiTokens.*` stops
@@ -45,7 +47,7 @@ export { hashToken, verifyApiToken } from "@platform/auth/convex";
 type ApiTokenFunctions = {
   createToken: RegisteredMutation<
     "public",
-    { name: string },
+    { name: string; device_id?: string },
     Promise<{ token: string; userId: Id<"users"> }>
   >;
   createSetupToken: RegisteredMutation<
@@ -74,7 +76,7 @@ type ApiTokenFunctions = {
   >;
   exchangeSetupToken: RegisteredMutation<
     "internal",
-    { setupToken: string },
+    { setupToken: string; device_id?: string },
     Promise<{
       auth_token: string;
       user_id: Id<"users">;
@@ -84,7 +86,7 @@ type ApiTokenFunctions = {
   >;
   deviceBindingAllows: RegisteredQuery<
     "internal",
-    { api_token: string; device_id?: string },
+    { api_token: string },
     Promise<boolean>
   >;
 };

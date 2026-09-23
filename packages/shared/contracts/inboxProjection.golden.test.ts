@@ -72,6 +72,7 @@ const GOLDEN_HASH_BY_VERSION: Record<number, string> = {
   // `stashed_role_escalated` row stays stashed with its role. No older fixture
   // moved.
   12: "cc7dfd659f0c1501",
+  13: "9d3297f417ee3752",
 };
 
 type Expected = {
@@ -218,7 +219,7 @@ describe("inbox projection golden fixtures", () => {
     expect(a.placements[oldest]).toBeUndefined();
   });
 
-  it("the recent overflow fixture keeps the dropped row through its pin", () => {
+  it("the recent overflow fixture keeps the pin outside the recent window", () => {
     const c = cases.find((x) => x.name === "recent-overflow")!;
     const a = actualFor(c);
     expect(a.truncated).toEqual(["recent"]);

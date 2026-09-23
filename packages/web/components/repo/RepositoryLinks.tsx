@@ -4,7 +4,7 @@ import { FolderGit2, GitBranch, ExternalLink } from "lucide-react";
 import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
 import { useCollectionRows } from "../../hooks/useCollectionRows";
 import { useSyncTaskExternalEvents, useSyncPlanExternalEvents, useSyncProjectExternalEvents } from "../../hooks/useSyncExternalEvents";
-import { githubRepository, repositoryName, repositoryEventMatches, sessionRepository, taskRepository, type RepositoryScope } from "../../lib/repoNavigation";
+import { githubRepository, isDefaultBranch, repositoryName, repositoryEventMatches, sessionRepository, taskRepository, type RepositoryScope } from "../../lib/repoNavigation";
 import { commitPageHref, repoCompareHref, repoHomeHref, repoTreeHref, repoCommitsHref, repoPullsHref, toStandaloneHref } from "../../lib/repoView";
 
 const repoSig = (row: any) => `${row.repository ?? ""}|${row.git_remote_url ?? ""}|${row.pr_status?.repository ?? ""}`;
@@ -29,27 +29,42 @@ const promptPart = "inline-flex items-center gap-1 px-1.5 py-0.5 hover:bg-sol-cy
  * when the daemon has reported them — the commit it sits on, how far it is
  * from its upstream, and a dirty marker. Each part opens the matching
  * repository page: the branch its tree, the sha its commit, the distance the
- * compare against the branch's upstream. `detail` off keeps only the branch,
- * for the places a card has no room for more.
+ * compare against the branch's upstream. `detail` off keeps only the first
+ * part, for the places a card has no room for more.
+ *
+ * The first part is always a checkout position, never a name for the
+ * repository: the branch, or the short sha when the checkout is detached and
+ * the daemon reported no branch. A card next to a project pill that already
+ * names the repository once read "codecast-sh/codecast" on one row and "main"
+ * on the next, and the two looked like the same kind of thing. A card also
+ * skips the default branch: nearly every session sits there, so the pill
+ * appears only where a session sits somewhere else. With no position at all
+ * the pill stays away from a card; the full header still names the branch or
+ * links the repository's home, since there the title says what it is.
  */
 export function BranchCodeLink({ session, className = "", detail = true }: { session: GitStateSession; className?: string; detail?: boolean }) {
   const repository = sessionRepository(session);
   const branch = session.git_branch || session.worktree_branch;
   if (!repository) return null;
+  if (!detail && isDefaultBranch(branch)) return null;
+  const head = session.git_commit_hash || null;
+  const position = branch || (detail ? repository : head?.slice(0, 7));
+  if (!position) return null;
+  const href = branch ? repoTreeHref(repository, branch) : !detail && head ? commitPageHref(repository, head) : repoHomeHref(repository);
   const stop = (e: SyntheticEvent) => e.stopPropagation();
-  const sha = detail && session.git_commit_hash ? session.git_commit_hash : null;
+  const sha = detail && head ? head : null;
   const ahead = detail ? session.git_ahead ?? 0 : 0;
   const behind = detail ? session.git_behind ?? 0 : 0;
   const dirty = detail && !!session.git_dirty;
   return (
     <span
       className={`cq-sq2-tight inline-flex items-stretch min-w-0 max-w-[320px] rounded border border-sol-cyan/25 bg-sol-cyan/5 font-mono text-[10px] text-sol-cyan divide-x divide-sol-cyan/20 ${className}`}
-      title={`${repository}${branch ? ` at ${branch}` : ""}${sha ? ` on ${sha.slice(0, 7)}` : ""}${dirty ? ", uncommitted changes" : ""}`}
+      title={`${repository}${branch ? ` at ${branch}` : head ? ` detached at ${head.slice(0, 7)}` : ""}${sha ? ` on ${sha.slice(0, 7)}` : ""}${dirty ? ", uncommitted changes" : ""}`}
     >
-      <Link href={branch ? repoTreeHref(repository, branch) : repoHomeHref(repository)} onClick={stop} onKeyDown={stop}
-        aria-label={`Browse code for ${repository}${branch ? ` at ${branch}` : ""}`}
+      <Link href={href} onClick={stop} onKeyDown={stop}
+        aria-label={`Browse code for ${repository}${branch ? ` at ${branch}` : head ? ` at ${head.slice(0, 7)}` : ""}`}
         className={`${promptPart} min-w-0`}>
-        <GitBranch className="w-3 h-3 shrink-0" /><span className="truncate">{branch || repository}</span>
+        <GitBranch className="w-3 h-3 shrink-0" /><span className="truncate">{position}</span>
         {dirty && <span className="text-sol-orange" aria-label="uncommitted changes">*</span>}
       </Link>
       {sha && (

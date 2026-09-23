@@ -695,3 +695,8 @@ function preloadApp(urls: string[]): void {
     document.head.appendChild(link);
   }
 }
+
+export function isStandaloneCommunityPath(pathname: string): boolean {
+  if (!/^\/community(\/|$)/.test(pathname)) return false;
+  return !isElectron() && !borrowsTabShell();
+}

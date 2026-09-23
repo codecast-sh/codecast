@@ -36,7 +36,7 @@ describe("changeLine and chipLine", () => {
   test("changeLine is total: a kind this build does not know still reads as a line", () => {
     expect(changeLine({ kind: "rename", handle: "growth" } as any)).toBe('A change this version of codecast cannot show yet ("rename")');
     expect(changeLine({} as any)).toBe("A change this version of codecast cannot show yet");
-    expect(changeLine({ kind: "trust", handle: "growth", trust: "decide" })).toBe("@growth may decide on its own");
+    expect(changeLine({ kind: "trust", handle: "growth", trust: "decide" })).toBe("@growth starts work on its own");
   });
 
   test("chipLine is the delta alone, with counts compacted", () => {

@@ -62,7 +62,7 @@ async function makeCtx(tasks: any[], opts: { withBot?: boolean } = {}) {
       { _id: JASON, name: "Jason Benn", github_username: "jbenn", active_team_id: TEAM, team_id: TEAM },
       ...(opts.withBot ? [{ _id: BOT, name: "Growth", is_bot: true, bot_kind: "role", team_id: TEAM, active_team_id: TEAM }] : []),
     ],
-    teams: [{ _id: TEAM, name: "Union" }, { _id: OTHER_TEAM, name: "Other" }],
+    teams: [{ _id: TEAM, name: "Union", features: { org: true } }, { _id: OTHER_TEAM, name: "Other" }],
     team_memberships: [
       { _id: "tm_1", user_id: OWNER, team_id: TEAM, role: "admin" },
       { _id: "tm_2", user_id: JASON, team_id: TEAM, role: "member" },

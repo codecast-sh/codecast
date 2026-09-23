@@ -13,7 +13,7 @@ import { findConversationByAnyRef } from "./conversationSessionLookup";
 import { listAgentBoxDevices, retainSessionCreator, sessionLaunchRunner } from "./sessionLaunch";
 import { roleOfConversation } from "./lib/actor";
 import { canAccessTask } from "./lib/access";
-import { capsFor, countersFor, trustOf } from "./orgEvents";
+import { capsFor, countersFor, roleStartsOnItsOwn } from "./orgEvents";
 import { charterLine, type CharterRow } from "./lib/orgCharter";
 import { applyHandoffLink, findHandoffSource, handoffChildFields } from "./handoff";
 
@@ -425,8 +425,8 @@ export const createSessionFromCli = mutation({
 // ── Hands under a role (org-roles-standing.md T4) ────────────────────────────
 //
 // The spawner's row says who is starting the session. A standing session or a
-// hand acts for its role: the role must be active, at trust "direct", and
-// under its daily hand cap. The new session is filed under the role (it
+// hand acts for its role: the role must be active, starting work on its own
+// (org-staffing.md S23.1), and under its daily hand limit. The new session is filed under the role (it
 // reports to it and shows under it on the org page) and the cap counter
 // advances. A person spawning from a plain terminal is unaffected.
 export async function gateHandStart(ctx: { db: any }, spawner: any | null): Promise<any | null> {
@@ -453,18 +453,19 @@ async function resolveReviewTarget(ctx: { db: any }, userId: Id<"users">, shortI
 export async function gateRoleCaps(role: any): Promise<void> {
   if (role.status === "paused") throw new Error(`${role.name} (@${role.handle}) is paused: no new hands until a person resumes it`);
   if (role.status === "retired") throw new Error(`${role.name} (@${role.handle}) is retired`);
-  const trust = trustOf(role);
-  if (trust !== "direct") {
-    throw new Error(`${role.name} (@${role.handle}) is at the ${trust} stage and may not start hands; a person can raise its trust with cast role trust @${role.handle} direct`);
+  // Off, the role recommends and a person starts the work; it never asks a
+  // person to change its own settings (S23.1), so the message names no verb.
+  if (!roleStartsOnItsOwn(role)) {
+    throw new Error(`${role.name} (@${role.handle}) does not start work on its own; say in one line that this needs starting and recommend it`);
   }
   const now = Date.now();
   const caps = capsFor(role);
   const counters = countersFor(role, now);
   if (counters.hands >= caps.hands_per_day) {
-    throw new Error(`${role.name} (@${role.handle}) reached its cap of ${caps.hands_per_day} hands today; say so in the brief and wait for the next day, or ask a person to raise the cap`);
+    throw new Error(`${role.name} (@${role.handle}) reached today's limit of ${caps.hands_per_day} hands; write one line in the brief, pin that you are waiting for tomorrow, and wait`);
   }
   if (counters.tokens >= caps.tokens_per_day) {
-    throw new Error(`${role.name} (@${role.handle}) reached its cap of ${caps.tokens_per_day} tokens today; no new hands until it resets`);
+    throw new Error(`${role.name} (@${role.handle}) reached today's limit; write one line in the brief, pin that you are waiting for tomorrow, and wait`);
   }
 }
 

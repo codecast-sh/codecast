@@ -1409,12 +1409,6 @@ export const getConversationPendingMessage = query({
     const msgs = await ctx.db
       .query("pending_messages")
       .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
-      .filter((q) =>
-        q.and(
-          q.neq(q.field("status"), "delivered"),
-          q.neq(q.field("status"), "cancelled")
-        )
-      )
       .collect();
 
     // The owner of this conversation sees the "delivering…" indicator for ANY in-flight message
@@ -1428,9 +1422,17 @@ export const getConversationPendingMessage = query({
     // delivery attempt flips a row to "injected" and a hold flips it back, so
     // preferring "pending" hopped the card between queued messages on each
     // retry (2026-09-14). Queue order is the order the session will take them.
+    // With nothing in flight, report the newest settled row instead of null. A
+    // viewer whose transcript tail lags the server (minutes under load) keeps
+    // a delivered message on screen until its echo arrives, instead of
+    // watching it vanish; a cancelled row tells the viewer to drop it.
     const msg = visible
       .filter((m) => SHOWN_PENDING_STATUSES.has(m.status))
-      .sort((a, b) => a.created_at - b.created_at)[0] ?? null;
+      .sort((a, b) => a.created_at - b.created_at)[0]
+      ?? visible
+        .filter((m) => TERMINAL_STATUSES.has(m.status as PendingStatus))
+        .sort((a, b) => b.created_at - a.created_at)[0]
+      ?? null;
     if (!msg) return null;
     return { message_id: msg._id, client_id: msg.client_id, created_at: msg.created_at, retry_count: msg.retry_count, status: msg.status as string, content: msg.content, hold_reason: msg.delivery_disposition_reason };
   },

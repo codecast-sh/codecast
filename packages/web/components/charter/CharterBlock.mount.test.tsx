@@ -31,6 +31,8 @@ const React = await import("react");
 const { createRoot } = await import("react-dom/client");
 const { MemoryRouter } = await import("react-router");
 const { CharterBlock } = await import("./CharterBlock");
+const { useInboxStore } = await import("../../store/inboxStore");
+useInboxStore.setState({ teams: [{ _id: "fixture-team", features: { org: true } }] } as any);
 const SLOW = 30_000;
 
 async function setup() {
@@ -104,7 +106,7 @@ describe("CharterBlock", () => {
     const link = [...document.querySelectorAll<HTMLAnchorElement>("a")].find((a) => a.getAttribute("href") === `/org/${role.short_id}`);
     assert.ok(link, "owner link to /org/or-N");
     // The advisory budget line.
-    assert.match(body, /Budget400ktokens\/day ·2hands\/dayadvisory/);
+    assert.match(body, /Daily limit400ktokens\/day ·2hands\/dayadvisory/);
     assert.equal(document.querySelector("[data-charter]")?.getAttribute("data-charter"), "project");
     t.unmount();
   }, SLOW);
@@ -114,7 +116,7 @@ describe("CharterBlock", () => {
     await t.render({ kind: "plan", charter: { ...full, risks: undefined, budget: undefined } });
     const body = t.text();
     assert.doesNotMatch(body, /Risks/);
-    assert.doesNotMatch(body, /Budget/);
+    assert.doesNotMatch(body, /Daily limit/);
     assert.match(body, /Success metrics/);
     assert.match(body, /Non goals/);
     t.unmount();
@@ -294,7 +296,7 @@ describe("CharterBlock", () => {
     const t = await setup();
     await t.render({ charter: full });
     const names = t.buttons().map((b) => b.getAttribute("aria-label")).filter(Boolean) as string[];
-    for (const n of ["Edit Goal", "Edit Success metric 1", "Edit Success metric 2", "Edit New success metric", "Edit Non goal 1", "Edit Risk 1", "Edit Budget tokens per day", "Edit Budget hands per day", "Remove Risk 1"]) {
+    for (const n of ["Edit Goal", "Edit Success metric 1", "Edit Success metric 2", "Edit New success metric", "Edit Non goal 1", "Edit Risk 1", "Edit Daily limit tokens per day", "Edit Daily limit hands per day", "Remove Risk 1"]) {
       assert.ok(names.includes(n), `${n} in ${names.join(" | ")}`);
     }
     await t.click(t.button(/Make the inbox/));

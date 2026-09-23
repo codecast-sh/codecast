@@ -11,7 +11,7 @@
 // (a plan_status / task_status / project_status change) before it proposes a
 // seat.
 
-import type { StalePlan, StaleProject, StaleTask, StaleWork } from "@codecast/shared/contracts/orgCapacity";
+import type { BoundRecord, LandedCommit, StalePlan, StaleProject, StaleTask, StaleWork } from "@codecast/shared/contracts/orgCapacity";
 
 const D = 86_400_000;
 export const STALE_PLAN_DAYS = 21;
@@ -104,6 +104,10 @@ export type ActivityCommit = {
   /** The ref a pushed commit landed on (bare name); absent for a commit read
    *  from a transcript, whose branch is not known. */
   branch?: string | null;
+  /** The sha and the message's first line, so a landing can be named to the
+   *  reader (landingFor); absent on a row read for its areas alone. */
+  sha?: string | null;
+  message?: string | null;
 };
 
 /** A commit is landed history only on the default branch. A transcript commit
@@ -176,8 +180,95 @@ export type ActivityPerson = {
 /** How much of the commit history carried a file list. A commit without one
  *  lands on the root prefix and reads as no seam; the analyzer reports the
  *  count as "could not verify" rather than as a finding about the root. */
-export type ActivityCommitCoverage = { total: number; with_files: number; without_files: number; spanning_areas: number };
-export type OrgActivity = { areas: ActivityArea[]; people: ActivityPerson[]; stale: StaleWork; commits: ActivityCommitCoverage };
+export type ActivityCommitCoverage = { total: number; with_files: number; without_files: number; spanning_areas: number; /** On main, with a message: the rows a record's landing was searched in. */ landed: number };
+export type OrgActivity = { areas: ActivityArea[]; people: ActivityPerson[]; stale: StaleWork; bound: { tasks: BoundRecord[]; plans: BoundRecord[] }; commits: ActivityCommitCoverage };
+
+// ── Naming a record in free text ────────────────────────────────────────────
+// A commit, a chat line or a session message names a record when it carries
+// the record's short id, or two or more of the distinctive words of its title.
+// One reading, shared by the landing join below, the work share of a long
+// running session (orgInit) and the chat threads that name a project
+// (orgInit signals), so every input matches the way the analyzer was told to
+// search: `--grep=<its id, or two or three distinctive words of its title>`.
+// Distinctive: four letters or more and not a word every title carries. One
+// word alone is never a match: a title with one distinctive word ("Infra")
+// matches only by its short id, because one word names half the log.
+const RECORD_STOP_WORDS = new Set([
+  "with", "from", "that", "this", "when", "then", "than", "into", "onto", "over", "under", "after", "before", "every",
+  "each", "their", "there", "these", "those", "which", "while", "about", "what", "have", "will", "been", "were", "also",
+  "only", "more", "most", "much", "many", "such", "very", "just", "make", "made", "take", "took", "uses", "used", "using",
+  "does", "done", "doing", "should", "would", "could", "still", "again", "never", "always", "because", "where", "whose",
+  "same", "other", "another", "some", "them", "they", "your", "ours", "here", "need", "needs", "want", "wants", "keep",
+  "keeps", "gets", "goes", "went", "come", "back", "down", "next", "first", "last", "both", "through", "without", "within",
+  "between", "across", "against", "instead", "rather", "whether", "either", "neither", "task", "tasks", "plan", "plans",
+  "project", "projects", "work", "works", "fix", "fixes", "feat", "chore", "test", "tests", "code", "page", "pages",
+  "file", "files", "data", "user", "users", "session", "sessions", "team", "teams", "part", "step", "steps", "thing",
+  "things", "issue", "issues", "update", "updates", "change", "changes", "improve", "support", "handle", "handles",
+  "check", "checks", "wire", "wires", "clean", "cleanup", "refactor", "review", "spec", "docs",
+]);
+const RECORD_WORD_MIN = 4;
+const wordsOf = (text: string | null | undefined): string[] => (text ?? "").toLowerCase().match(/[a-z0-9][a-z0-9'-]*[a-z0-9]|[a-z0-9]/g) ?? [];
+/** The distinctive words of a title, in order, deduped. */
+export function recordWords(title: string | null | undefined): string[] {
+  const out: string[] = [];
+  for (const w of wordsOf(title)) { const word = w.replace(/'s$/, ""); if (word.length >= RECORD_WORD_MIN && !/^\d+$/.test(word) && !RECORD_STOP_WORDS.has(word) && !out.includes(word)) out.push(word); }
+  return out;
+}
+export type RecordRef = { short_id?: string | null; title?: string | null };
+/** A text prepared for matching many records: its short ids and its word set. */
+export type NamedText = { ids: Set<string>; words: Set<string> };
+export function namedTextOf(text: string | null | undefined): NamedText {
+  const lower = (text ?? "").toLowerCase();
+  return { ids: new Set(lower.match(/\b[a-z]{2,3}-\d+\b/g) ?? []), words: new Set(wordsOf(lower).map((w) => w.replace(/'s$/, ""))) };
+}
+/** Whether a prepared text names the record: its short id, or two of its distinctive words. */
+export function namesRecord(text: NamedText, ref: RecordRef, words: string[] = recordWords(ref.title)): boolean {
+  if (ref.short_id && text.ids.has(ref.short_id.toLowerCase())) return true;
+  let hits = 0;
+  for (const w of words) if (text.words.has(w) && ++hits >= 2) return true;
+  return false;
+}
+
+// ── Landing: the commits on main that name a record ─────────────────────────
+// The analyzer used to search the main branch's log by title words for every
+// flagged record, and recall moved with how many rows a run cared to read (9
+// to 27 of 41 by sample, 2026-09-22). The join is done here instead, from the
+// commits the activity slice already holds: up to LANDING_PER_RECORD landed
+// commits per record, newest first, each with its sha, date and first line.
+// An empty list is a fact the run can cite: no commit on main in the window
+// names the record.
+export const LANDING_PER_RECORD = 3;
+export const LANDING_LINE_CHARS = 120;
+export function landingFor(commits: ActivityCommit[], ref: RecordRef, cap = LANDING_PER_RECORD): LandedCommit[] {
+  const words = recordWords(ref.title);
+  const hits: LandedCommit[] = [];
+  for (const c of commits) {
+    if (!c.sha || !isLandedCommit(c)) continue;
+    if (!namesRecord(namedTextOf(c.message), ref, words)) continue;
+    hits.push({ sha: c.sha.slice(0, 12), at: c.timestamp, line: (c.message ?? "").split("\n")[0].slice(0, LANDING_LINE_CHARS) });
+  }
+  return hits.sort((a, b) => b.at - a.at).slice(0, cap);
+}
+
+/** The open tasks and plans a scanned session is bound to, with their landing:
+ *  a record somebody is working is judged from what landed for it, not hunted
+ *  for. Capped, newest touch first. */
+export const BOUND_RECORDS_CAP = 60;
+export function computeBound(input: ActivityInputs): { tasks: BoundRecord[]; plans: BoundRecord[] } {
+  const sessionsOn = (key: "active_task_id" | "active_plan_id") => {
+    const m = new Map<string, ActivitySession[]>();
+    for (const s of input.sessions) if (s[key]) m.set(String(s[key]), [...(m.get(String(s[key])) ?? []), s]);
+    return m;
+  };
+  const shape = (rows: Array<ActivityTask | ActivityPlan>, on: Map<string, ActivitySession[]>, closed: (s: string) => boolean): BoundRecord[] =>
+    rows.filter((r) => !closed(r.status) && on.has(String(r.id)))
+      .map((r) => {
+        const bound = on.get(String(r.id))!;
+        return { short_id: r.short_id, title: r.title, status: r.status, sessions: bound.length, sessions_live: bound.filter((s) => s.state !== "done" && s.state !== "idle").length, updated_at: r.updated_at, landing: landingFor(input.commits, r) };
+      })
+      .sort((a, b) => b.updated_at - a.updated_at).slice(0, BOUND_RECORDS_CAP);
+  return { tasks: shape(input.tasks, sessionsOn("active_task_id"), isClosedTask), plans: shape(input.plans, sessionsOn("active_plan_id"), isClosedPlan) };
+}
 
 const CLOSED = new Set(["done", "dropped", "abandoned"]);
 export const isClosedTask = (s: string) => s === "done" || s === "dropped";
@@ -190,12 +281,13 @@ function computeAreas(input: ActivityInputs) {
   const filesCap = input.filesPerCommit ?? FILES_PER_COMMIT;
   const perArea = new Map<string, { repository: string; path_prefix: string; commits: number; authors: Map<string, number> }>();
   const authorToMember = matchAuthors(input.members);
-  const coverage: ActivityCommitCoverage = { total: 0, with_files: 0, without_files: 0, spanning_areas: 0 };
+  const coverage: ActivityCommitCoverage = { total: 0, with_files: 0, without_files: 0, spanning_areas: 0, landed: 0 };
 
   for (const c of input.commits) {
     const repo = (c.repository ?? "").trim();
     if (!repo) continue;
     coverage.total++;
+    if (c.sha && isLandedCommit(c)) coverage.landed++;
     const author = (c.author_name ?? c.author_email ?? "").trim() || "unknown";
     const areas = commitAreaPrefixes(c.files, filesCap);
     if (areas.length === 0) coverage.without_files++; else coverage.with_files++;
@@ -458,5 +550,7 @@ export function computeOrgActivity(input: ActivityInputs): OrgActivity {
   const { areas, authorToMember, coverage } = computeAreas(input);
   const people = computePeople(input, authorToMember);
   const stale = computeStale(input);
-  return { areas, people, stale, commits: coverage };
+  // Every flagged record carries what landed for it on main (landingFor).
+  for (const r of [...stale.plans, ...stale.tasks]) r.landing = landingFor(input.commits, r);
+  return { areas, people, stale, bound: computeBound(input), commits: coverage };
 }

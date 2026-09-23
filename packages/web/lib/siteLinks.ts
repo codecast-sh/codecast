@@ -10,6 +10,11 @@ export const SITE_LINKS = {
   community: "/community",
   githubOrg: "https://github.com/codecast-sh",
   githubRepo: "https://github.com/codecast-sh/codecast",
+  // The same repository read in codecast: GitHub's view plus the sessions that
+  // wrote it, readable signed out. The nav chip and the footer point here, and
+  // the page's own GitHub button is the way out to github.com.
+  repository: "codecast-sh/codecast",
+  repoPage: "/r/codecast-sh/codecast",
   githubIssues: "https://github.com/codecast-sh/codecast/issues",
   x: "https://x.com/codecastsh",
   appStore: "https://apps.apple.com/app/id6757820850",

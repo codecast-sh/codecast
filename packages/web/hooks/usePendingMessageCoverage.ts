@@ -19,8 +19,10 @@ export function usePendingMessageCoverage() {
         conversation_id: conversationId as any,
         command_ids: commandIds,
       }, signal),
+      // Settle, never remove: the server holding the row does not mean this
+      // window's tail has it yet. The bubble stays until the echo lands.
       settle: (conversationId, commandIds) => {
-        for (const clientId of commandIds) useInboxStore.getState().removeOptimisticMessage(conversationId, clientId);
+        for (const clientId of commandIds) useInboxStore.getState().settleOptimisticMessage(conversationId, clientId);
       },
       fail: (conversationId, commandIds) => {
         for (const clientId of commandIds) useInboxStore.getState().markOptimisticAsFailed(conversationId, clientId);

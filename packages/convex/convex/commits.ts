@@ -439,7 +439,7 @@ export const syncAllMyRepositories = action({
 
     for (const repo of activeRepos) {
       try {
-        const result = await ctx.runAction(api.githubApi.syncRepositoryCommits, {
+        const result = await ctx.runAction(internal.githubApi.syncRepositoryCommits, {
           repository: repo,
           github_access_token: token,
           per_page: args.per_page ?? 30,
@@ -507,7 +507,7 @@ export const syncRepositoriesForUser = internalAction({
 
     for (const repo of activeRepos) {
       try {
-        const result = await ctx.runAction(api.githubApi.syncRepositoryCommits, {
+        const result = await ctx.runAction(internal.githubApi.syncRepositoryCommits, {
           repository: repo,
           github_access_token: user.github_access_token,
           per_page: args.per_page ?? 100,

@@ -138,7 +138,7 @@ describe("proposal progress and grouping", () => {
     expect(changeLine({ kind: "budget", handle: "ops", caps: { hands_per_day: 1, wakes_per_day: 8, tokens_per_day: 200_000 } })).toBe("@ops may use up to 1 hand, 8 wakes and 200,000 tokens a day");
     expect(changeLine({ kind: "routine", handle: "platform", title: "Release check", prompt: "x", every: "1d" })).toBe('@platform runs "Release check" every day');
     expect(changeLine({ kind: "retire", handle: "ops" })).toBe("Retire @ops; its sessions go back to their owners");
-    expect(changeLine({ kind: "trust", handle: "growth", trust: "decide" })).toBe("@growth may decide on its own");
+    expect(changeLine({ kind: "trust", handle: "growth", trust: "decide" })).toBe("@growth starts work on its own");
   });
 
   test("a change on an existing role focuses that node; a ghost has no node", () => {

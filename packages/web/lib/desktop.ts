@@ -1,3 +1,4 @@
+export { isStandaloneCommunityPath } from "./desktopHandoff";
 import { useSyncExternalStore } from "react";
 import { naturalTier, type FaceTier, type FacesMode } from "./calls/faceCrop";
 import { BrowserBannerGate } from "./notificationGate";
@@ -421,7 +422,9 @@ export type VoiceOpenPayload = {
  *  on purpose — it crosses a process boundary. */
 export type VoiceMirror = {
   walkie: unknown;
-  call: { roomKey: string | null; phase: string; muted: boolean; micDenied: boolean; camera: boolean };
+  /** `speaking` is the host's active speaker list: a remote's face row draws
+   *  the speaking ring from it, and my own camera face from `camera`. */
+  call: { roomKey: string | null; phase: string; muted: boolean; micDenied: boolean; camera: boolean; speaking: string[] };
 };
 
 export type DesktopDisplaySource = {
@@ -888,6 +891,7 @@ export function mirrorVoice(payload: VoiceMirror): void {
 export function onVoiceMirror(cb: (payload: VoiceMirror) => void): void {
   bridge("onVoiceMirror")?.(cb);
 }
+
 
 /** Host: a ring is up (or has stopped) — the dock bounces beside it. */
 export function setRingAttention(on: boolean): void {
@@ -1694,7 +1698,3 @@ export function subscribeNativeBrowserPane(fn: () => void): () => void {
  * from this and the chat page adds the header from the same answer, so the two
  * can never disagree.
  */
-export function isStandaloneCommunityPath(pathname: string): boolean {
-  if (!/^\/community(\/|$)/.test(pathname)) return false;
-  return !isElectron() && !borrowsTabShell();
-}

@@ -36,6 +36,7 @@
       "shellAuthority.js",
       "appWindows.mjs",
       "callWindowPolicy.js",
+      "paletteFace.js",
       "meetingDetector.js",
       "notificationRouter.js",
       "osPermissions.js",

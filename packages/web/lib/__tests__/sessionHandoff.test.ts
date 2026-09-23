@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { composeHandoffPrompt } from "@codecast/shared/contracts";
-import { parseSessionHandoff } from "../sessionHandoff";
+import { isHandoffFrom, parseSessionHandoff } from "../sessionHandoff";
 
 const source = { short_id: "jx7fchg", title: "Landing page design", agent_type: "claude_code", model: "fable", message_count: 143 };
 const brief = "## Goal\n\nFinish the **landing page**.\n\n## Next steps\n\n1. Verify the logo.";
@@ -38,5 +38,17 @@ describe("session handoff presentation", () => {
     const prompt = composeHandoffPrompt({ source, brief });
     expect(parseSessionHandoff(`Please review this prompt:\n\n${prompt}`)).toBeNull();
     expect(parseSessionHandoff(prompt.replace("## Read more", "## Something else"))).toBeNull();
+  });
+});
+
+describe("isHandoffFrom", () => {
+  test("a handoff child names its link as a handoff even though it also carries spawned_by", () => {
+    expect(isHandoffFrom({ handed_off_from_conversation_id: "src" }, "src")).toBe(true);
+    expect(isHandoffFrom({ handed_off_from_details: { conversation_id: "src" } }, "src")).toBe(true);
+  });
+
+  test("a plain spawn, or a handoff child linked to some other parent, stays a spawn", () => {
+    expect(isHandoffFrom({}, "lead")).toBe(false);
+    expect(isHandoffFrom({ handed_off_from_conversation_id: "src" }, "lead")).toBe(false);
   });
 });

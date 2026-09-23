@@ -55,6 +55,8 @@ function task(overrides: Record<string, any> = {}) {
 
 async function world(overrides: Record<string, any[]> = {}) {
   const tables: Record<string, any[]> = {
+    teams: [{ _id: "teams_cloud", features: { org: true } }],
+    team_memberships: [{ _id: "memberships_cloud", user_id: USER, team_id: "teams_cloud" }],
     agent_tasks: [task()],
     conversations: [{ _id: CONV, user_id: USER, owner_device_id: DEVICE, session_id: "cloud-session", status: "active", armed_trigger_kind: "once" }],
     devices: [{ _id: "devices_cloud", user_id: USER, device_id: DEVICE, is_remote: true, last_seen: NOW - 600_000 }],
@@ -142,7 +144,7 @@ describe("dispatchCloudTriggers", () => {
 
   test.each([undefined, "tasks"])("ordinary role causes still obey the display limit with reference %s", async (table) => {
     const { ctx, tables } = await world({
-      org_roles: [{ _id: "role_cloud", status: "paused", anchor_id: CONV }],
+      org_roles: [{ _id: "role_cloud", status: "paused", anchor_id: CONV, scope_type: "personal", scope_user_id: USER, host_user_id: USER }],
       role_wake_outbox: [],
     });
     await enqueueRoleEvent(ctx, "role_cloud" as any, {
@@ -154,7 +156,7 @@ describe("dispatchCloudTriggers", () => {
 
   test("a role routine receives the same lifecycle defaults without changing its mandate or mode", async () => {
     const { ctx, tables } = await world({
-      org_roles: [{ _id: "role_cloud", status: "paused", anchor_id: CONV }],
+      org_roles: [{ _id: "role_cloud", status: "paused", anchor_id: CONV, scope_type: "personal", scope_user_id: USER, host_user_id: USER }],
       role_wake_outbox: [],
       agent_tasks: [task({ short_id: "tr-42", mode: "propose", schedule_type: "recurring", interval_ms: 60_000,
         prompt: "Ongoing mandate: keep checking until explicitly ended." })],

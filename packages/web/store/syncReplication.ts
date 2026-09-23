@@ -34,14 +34,25 @@ import {
   REPLICATED_STORE_KEYS,
 } from "./clientSyncRegistry";
 
+// Election and transport are scoped to the account the window acts for: a
+// host and its followers share one principal by construction, so a window
+// that just signed in as someone else can never take a snapshot, an update or
+// a mut from the previous account's host, and needs no per-message check.
 const LOCK_NAME = "codecast-sync-host";
 const CHANNEL_NAME = "codecast-replication-v1";
+export function replicationLockName(principalId: string): string {
+  return `${LOCK_NAME}:${principalId}`;
+}
+export function replicationChannelName(principalId: string): string {
+  return `${CHANNEL_NAME}:${principalId}`;
+}
 // A follower with no synced stream for this long acts as its own host (solo)
 // until a snapshot arrives. Covers: no other window, a wedged host, a palette
 // or people window running with the app closed.
 const SOLO_FALLBACK_MS = 8000;
 
 export type SyncReplicationStatus = {
+  principalId: string | null;
   role: "host" | "follower";
   elected: boolean;
   /** The Web Lock is held right now (elected AND not yet stopped). */
@@ -51,6 +62,13 @@ export type SyncReplicationStatus = {
 };
 
 let running: { stop: () => void; status: () => SyncReplicationStatus } | null = null;
+
+/** Stop this window's replication now, whatever role it held: channel closed,
+ *  lock released, write-through restored. The account boundary calls this
+ *  synchronously so no further message is sent or accepted for the old account. */
+export function stopSyncReplication(): void {
+  running?.stop();
+}
 
 function transportAvailable(): boolean {
   return (
@@ -241,22 +259,25 @@ function setRole(role: "host" | "follower"): void {
  * Start replication for this window. Idempotent per window; `eligible` says
  * whether this window may be ELECTED host (it mounts the full shell and its
  * feeders). Ineligible windows (palette, people) are followers when a host
- * lives and solo hosts otherwise. Returns a stop for unmount/HMR.
+ * lives and solo hosts otherwise. `principalId` is the account the window
+ * acts for; with none (signed out) there is nothing to replicate and the
+ * window stays a self-sufficient host. Returns a stop for unmount/HMR.
  */
-export function startSyncReplication(opts: { eligible: boolean }): () => void {
+export function startSyncReplication(opts: { eligible: boolean; principalId: string | null }): () => void {
   if (running) return running.stop;
-  if (!transportAvailable()) {
-    // No transport (React Native, SSR, ancient browser): stay host, changed
-    // nothing. Share pages and tests land here too.
+  if (!transportAvailable() || !opts.principalId) {
+    // No transport (React Native, SSR, ancient browser) or no account: stay
+    // host, changed nothing. Share pages and tests land here too.
     return () => {};
   }
+  const lockName = replicationLockName(opts.principalId);
 
   const selfId =
     typeof crypto !== "undefined" && (crypto as any).randomUUID
       ? crypto.randomUUID()
       : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
-  const bc = new BroadcastChannel(CHANNEL_NAME);
+  const bc = new BroadcastChannel(replicationChannelName(opts.principalId));
   const channel: ReplicationChannel = {
     post: (msg) => {
       try {
@@ -360,7 +381,7 @@ export function startSyncReplication(opts: { eligible: boolean }): () => void {
   if (opts.eligible) {
     (navigator as any).locks
       .request(
-        LOCK_NAME,
+        lockName,
         { mode: "exclusive", signal: lockAbort.signal },
         () => {
           // A grant that lands after stop() (the abort raced it: React's dev
@@ -412,6 +433,7 @@ export function startSyncReplication(opts: { eligible: boolean }): () => void {
   running = {
     stop,
     status: () => ({
+      principalId: opts.principalId,
       role: useInboxStore.getState().syncRole,
       elected,
       holdsLock,

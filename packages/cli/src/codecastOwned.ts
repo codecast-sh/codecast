@@ -18,6 +18,7 @@ import * as path from "node:path";
 /** The hook scripts codecast writes into ~/.claude/hooks/. */
 export const CODECAST_HOOK_SCRIPTS = [
   "codecast-status.sh",
+  "codecast-shell-changes.sh",
   "codecast-prompt.sh",
   "session-register.sh",
   "thread-state.sh",
@@ -27,7 +28,7 @@ export const CODECAST_HOOK_SCRIPTS = [
 
 /**
  * The statusline hook, written by `cast install` on every machine rather
- * than by installHookScript (statuslineHook.ts). Owned like the six: a copy
+ * than by installHookScript (statuslineHook.ts). Owned like the seven: a copy
  * mirrored to a host is overwritten there and reads as a remote edit.
  */
 export const STATUSLINE_HOOK_SCRIPT = "codecast-statusline.sh";
@@ -86,7 +87,7 @@ export const CODECAST_OWNED_HOME_PATHS: readonly string[] = [
 ];
 
 /**
- * Is this hook command one codecast installed? True for the six hook
+ * Is this hook command one codecast installed? True for the seven hook
  * scripts (by basename, any home), for anything under a `.codecast/hooks/`
  * directory (the codex/cursor/opencode stable-feed wrappers) and for the
  * orchestration scripts (`/.codecast/orchestration/`). A user's own hook that

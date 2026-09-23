@@ -138,22 +138,6 @@ export function groupHands<T extends { state: WorkState; updated_at: number }>(r
   return out;
 }
 
-/** F4.1: the panel's dot. How many hands under this scope wait on a person:
- *  the sessions reporting to the role (the tree's live counts), or for the
- *  root every session in the tree; plus the sessions the scope rule pulls in
- *  (bound to a task or plan here) that the summary counted, whichever is
- *  larger, so a closed panel never says "nothing" while something waits. */
-export function handsWaiting(
-  role: { counts: { needs_input: number } } | null,
-  tree: { people: { counts: { needs_input: number } }[]; roles: { counts: { needs_input: number } }[] } | null,
-  summary: { sessions: { needs_input: number } } | null | undefined,
-): number {
-  const underRole = role
-    ? role.counts.needs_input
-    : (tree ? [...tree.people, ...tree.roles].reduce((n, b) => n + (b.counts.needs_input ?? 0), 0) : 0);
-  return Math.max(underRole, summary?.sessions.needs_input ?? 0);
-}
-
 /** The task a hand is bound to: the session row's own pointer when the store
  *  has the row, else the task that lists the session among its conversations
  *  (`cast task start` writes both). Null when the hand is bound to nothing. */

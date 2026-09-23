@@ -1079,3 +1079,32 @@ export const taskScanWeight = internalQuery({
   },
 });
 
+
+// TEMPORARY: the team board scan for one viewer and team — what the per-member
+// scan admits after the plain-index rewrite (2026-09-23): the caps that fired,
+// rows per runner, and how old the oldest teammate row on the board is. A
+// board that only ever shows a teammate's last two days is the crowding bug
+// this checks for. Safe to delete.
+export const teamBoardProbe = internalQuery({
+  args: { who: v.string(), team: v.string() },
+  handler: async (ctx: any, args: { who: string; team: string }) => {
+    const user = await debugResolveUser(ctx, args.who);
+    if (!user) return { error: "no user" };
+    const now = Date.now();
+    const scan = await scanInboxConversations(ctx, user._id, now, { includeLiveness: false, teamScope: args.team as any });
+    // plain_old: rows nobody filed, not on my owner seat, settled more than
+    // two days ago — exactly the rows the crowding dropped.
+    const byRunner: Record<string, { rows: number; oldest_h: number; plain_old: number }> = {};
+    for (const c of scan.conversations) {
+      const uid = c.user_id.toString();
+      const ageH = Math.round((now - c.updated_at) / 3_600_000);
+      const cur = byRunner[uid] ?? { rows: 0, oldest_h: 0, plain_old: 0 };
+      cur.rows++;
+      cur.oldest_h = Math.max(cur.oldest_h, ageH);
+      const filed = c.inbox_pinned_at || c.inbox_dismissed_at || c.inbox_stashed_at || c.inbox_snoozed_until;
+      if (!filed && !scan.ownedByMeIds.has(c._id.toString()) && ageH > 48) cur.plain_old++;
+      byRunner[uid] = cur;
+    }
+    return { truncated: [...scan.truncated], candidates: scan.conversations.length, byRunner };
+  },
+});

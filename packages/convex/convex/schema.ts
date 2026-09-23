@@ -54,6 +54,7 @@ const visibilitySegment = v.object({
 const teamFeaturesValidator = v.object({
   chat: v.optional(v.boolean()),
   calls: v.optional(v.boolean()),
+  org: v.optional(v.boolean()),
 });
 
 // The entity kinds that can participate in entity-conversation links.
@@ -396,11 +397,45 @@ export default defineSchema({
     .index("by_team_id", ["team_id"])
     .index("by_user_team", ["user_id", "team_id"]),
 
+  // Exact session totals per folder for the Sync settings page, rebuilt by a
+  // paging job (pathStats.ts) so a folder of any size counts exactly without
+  // the page reading its sessions. Private to its user; never shared.
+  path_session_stats: defineTable({
+    user_id: v.id("users"),
+    path: v.string(),
+    count: v.number(),
+    first_started_at: v.optional(v.number()),
+    last_started_at: v.optional(v.number()),
+    hidden: v.number(),
+    manually_shared: v.number(),
+    // Start time histogram: bucket start (ms) and sessions in it, ascending.
+    buckets: v.array(v.number()),
+    bucket_counts: v.array(v.number()),
+    // 0 until the first rebuild lands.
+    computed_at: v.number(),
+    refresh_started_at: v.optional(v.number()),
+  }).index("by_user_path", ["user_id", "path"]),
+
   directory_team_mappings: defineTable({
     user_id: v.id("users"),
     path_prefix: v.string(),
-    team_id: v.id("teams"),
+    // The team a share rule sends sessions to. Absent on a "never share"
+    // rule, which has no team: it exists to keep its folder out of every
+    // share, the repository rule included (privacy.ts matchDirectoryMapping).
+    team_id: v.optional(v.id("teams")),
     auto_share: v.boolean(),
+    // A lock the owner wrote by hand: sessions in this folder are never
+    // shared by any rule. Beats a repository rule from another checkout.
+    private: v.optional(v.boolean()),
+    // Sessions started before this instant stay private. Absent means every
+    // session in the directory is shared, past included. A new mapping is
+    // stamped with its creation time unless the member includes the past.
+    share_since: v.optional(v.number()),
+    // The repository the mapped checkout is a clone of (repositoryKeyOfRemote),
+    // stamped from the sessions recorded there. Sessions in any other clone
+    // or linked worktree of it resolve to this mapping when no path rule
+    // covers them (privacy.ts matchDirectoryMapping).
+    repository: v.optional(v.string()),
     created_at: v.number(),
   })
     .index("by_user_id", ["user_id"])
@@ -437,6 +472,24 @@ export default defineSchema({
     .index("by_conversation", ["conversation_id"])
     // Membership check / dedupe — is this user already an owner of this session?
     .index("by_conversation_user", ["conversation_id", "user_id"]),
+
+  // A viewer's hide of a session they neither run nor own: a teammate's row on
+  // the team board. The owner's own triage lives on the conversation
+  // (inbox_stashed_at / inbox_dismissed_at) and hides the row from everyone's
+  // team board; those fields are the OWNER's and the dispatch gate refuses them
+  // from anyone else, so a viewer's hide needs its own row. One row per viewer
+  // and conversation; the team scan skips what the viewer hid. `cast restore`
+  // and the restore gesture delete it.
+  inbox_hides: defineTable({
+    user_id: v.id("users"),
+    conversation_id: v.id("conversations"),
+    kind: v.union(v.literal("stash"), v.literal("dismiss")),
+    at: v.number(),
+  })
+    // Everything one viewer hid: read once per team scan.
+    .index("by_user", ["user_id"])
+    // Upsert / restore for one viewer and one session.
+    .index("by_user_conversation", ["user_id", "conversation_id"]),
 
   conversations: defineTable({
     user_id: v.id("users"),
@@ -476,6 +529,11 @@ export default defineSchema({
     // create; the daemon re-reads it on every resume so a restart never
     // silently falls back to the machine's keychain login.
     cc_account: v.optional(v.string()),
+    // True when the machine chose `cc_account` (the account its sessions ran
+    // on at launch or at a switch), absent when a person named it
+    // (`--account`). An automatic pin follows the machine's account on the
+    // next resume (resumePinFor); a chosen one never moves.
+    cc_account_auto: v.optional(v.boolean()),
     // The Codex account profile this session's PROCESS is running on, recorded
     // by the daemon that launched it. Not a pin like cc_account: Codex reads
     // ~/.codex/auth.json once at start and holds that grant for life, so a
@@ -983,9 +1041,12 @@ export default defineSchema({
     // Sparse in practice (only banner-parked conversations are true) — lets the
     // stale-flag sweep find expired pending_api_error rows without a table scan.
     .index("by_pending_api_error", ["pending_api_error", "updated_at"])
-    .index("by_user_git_root", ["user_id", "git_root"])
+    // started_at last: a folder's rows come newest session first, not newest
+    // row first. A folder's past sessions synced today get new rows, and the
+    // Sync page's list must still open on the sessions run most recently.
+    .index("by_user_git_root", ["user_id", "git_root", "started_at"])
     .index("by_user_git_remote_url", ["user_id", "git_remote_url"])
-    .index("by_user_project_path", ["user_id", "project_path"])
+    .index("by_user_project_path", ["user_id", "project_path", "started_at"])
     .index("by_user_favorite", ["user_id", "is_favorite"])
     .index("by_user_private", ["user_id", "is_private"])
     .index("by_team_id", ["team_id"])
@@ -1014,7 +1075,13 @@ export default defineSchema({
     .index("by_user_live_snoozed", ["user_id", "is_subagent", "inbox_killed_at", "inbox_snoozed_until"])
     // Inbox scan indexes (scanInboxConversations): exclude subagent / killed
     // rows at the index so the scan never reads docs the inbox filter drops.
-    .index("by_user_subagent_updated", ["user_id", "is_subagent", "updated_at"])
+    // The recent window reads PLAIN rows only: the four filing stamps are
+    // pinned to absent ahead of updated_at, so a stashed agent's fresh
+    // heartbeats cannot take a recent seat from a settled plain row (the
+    // shared rule: inboxProjection isFiled). The subagent window reads the
+    // same index — a parked parent's children carry its stamp (the hide
+    // cascade) and every caller discards them.
+    .index("by_user_plain_updated", ["user_id", "is_subagent", "inbox_pinned_at", "inbox_dismissed_at", "inbox_stashed_at", "inbox_snoozed_until", "updated_at"])
     .index("by_user_live_dismissed", ["user_id", "is_subagent", "inbox_killed_at", "inbox_dismissed_at"])
     .index("by_user_live_stashed", ["user_id", "is_subagent", "inbox_killed_at", "inbox_stashed_at"])
     .index("by_user_profile_pinned", ["user_id", "profile_pinned_at"])
@@ -2868,9 +2935,21 @@ export default defineSchema({
     tool_call_id: v.optional(v.string()),
     seq: v.number(),
     file_path: v.string(),
-    change_type: v.union(v.literal("write"), v.literal("edit"), v.literal("commit")),
+    // "write" replaces the whole file (old_content = the file before, when it
+    // existed), "edit" is one string replacement, "delete" removes the file,
+    // "commit" is a git commit the session made.
+    change_type: v.union(v.literal("write"), v.literal("edit"), v.literal("delete"), v.literal("commit")),
+    // The change's text lives in file_change_bodies (same conversation_id +
+    // change_key), so a whale session's index stays readable under the 16 MiB
+    // per-function read cap: whole-file writes carried inline pushed one
+    // conversation's rows to 26 MiB. These two hold only the sizes; the fold
+    // uses old_bytes === undefined as "the file did not exist before".
+    old_bytes: v.optional(v.number()),
+    new_bytes: v.optional(v.number()),
+    // Legacy inline text, present only on rows fileChangeBodies.migrate has
+    // not reached. Readers accept either place; writers fill the body table.
     old_content: v.optional(v.string()),
-    new_content: v.string(),
+    new_content: v.optional(v.string()),
     commit_message: v.optional(v.string()),
     commit_hash: v.optional(v.string()),
     timestamp: v.number(),
@@ -2887,6 +2966,17 @@ export default defineSchema({
     .index("by_type_timestamp", ["change_type", "timestamp"])
     // cast blame: attribute uncommitted lines to the newest edit of the file.
     .index("by_file_path", ["file_path"]),
+
+  // The before/after text of one file change, split from its file_changes row
+  // (fileChangeBodies.ts). Read by change_key on demand: the web asks for the
+  // few changes a fold needs, never a conversation's whole history.
+  file_change_bodies: defineTable({
+    conversation_id: v.id("conversations"),
+    change_key: v.string(),
+    old_content: v.optional(v.string()),
+    new_content: v.string(),
+  })
+    .index("by_conversation_change_key", ["conversation_id", "change_key"]),
 
   // Every image in a conversation, materialized at message ingest
   // (materializeConversationImages in messages.ts). The header gallery reads
@@ -6056,6 +6146,10 @@ export default defineSchema({
       // Scope membership lifecycle: entity_id is the team id, op is
       // scope_added | scope_removed, emitted in the affected USER's scope.
       v.literal("scope"),
+      // Member lifecycle: entity_id is the departed USER id, op is
+      // scope_removed, emitted in the TEAM's scope, so every remaining
+      // member's client drops that user's rows from its team caches.
+      v.literal("member"),
     ),
     entity_id: v.string(),
     op: v.union(

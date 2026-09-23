@@ -22,7 +22,7 @@ import {
   isRecRoomKey,
   sessionRoomConversationId,
 } from "@codecast/shared/contracts";
-import { useInboxStore } from "../../store/inboxStore";
+import { SessionCreatePendingError, useInboxStore } from "../../store/inboxStore";
 import { navigateMainWindow } from "../../lib/desktop";
 import { settleComposerAttachments } from "../../lib/draftImages";
 import { getRoom, startTranscribing } from "../../lib/calls/callManager";
@@ -120,7 +120,6 @@ function readDensity(surface: Surface): Density {
 /** The one promise the thread makes about an agent, worded once: on the
  *  Add button, in the empty card, on the event line and in the picker. */
 const HEARS = "hears the room and answers here";
-const ADD_AGENT_TITLE = `Add an agent: it ${HEARS}`;
 
 function echoKey(text: string, attachments?: { storage_id: string }[] | null): string {
   return `${text}\0${(attachments ?? []).map((a) => a.storage_id).join(",")}`;
@@ -137,6 +136,7 @@ export function RoomThread({
   seated,
   panel,
   selection,
+  sinceAt,
   className,
 }: {
   roomKey: string;
@@ -152,6 +152,8 @@ export function RoomThread({
   /** The desktop call window: links to a session open in the main window. */
   panel?: boolean;
   selection?: RoomThreadSelection;
+  /** When the viewer joined this huddle; the dividers' anchor before any transcript. */
+  sinceAt?: number;
   className?: string;
 }) {
   const recording = isRecRoomKey(roomKey);
@@ -190,6 +192,14 @@ export function RoomThread({
     (s: any) => !!(s.liveRooms as any[] | undefined)?.find((r) => r.room_key === roomKey)?.transcribe_off,
   );
   const scribeError = useSyncExternalStore(subscribeScribe, () => getScribeStatus().error, () => null);
+  // The viewer's own mute (callManager writes it) and the room's: every
+  // seat muted means nobody can say anything for the scribe to hear.
+  const muted = useInboxStore((s: any) => s.call?.roomKey === roomKey && !!s.call?.muted);
+  const seats = useInboxStore((s: any) => ((s.callOccupancy?.[roomKey] ?? []) as any[]).length);
+  const allMuted = useInboxStore((s: any) => {
+    const r = (s.callOccupancy?.[roomKey] ?? []) as any[];
+    return r.length > 0 && r.every((m) => m.muted);
+  });
 
   const [storedDensity, setDensityState] = useState<Density>(() => readDensity(surface));
   // A recording is only spoken words and has no density control, so the
@@ -270,13 +280,39 @@ export function RoomThread({
   const agents = transcribing ? roster : [];
   const working = agents.filter((a) => a.working);
   const ownRoomId = sessionRoomConversationId(roomKey);
+  // A session's own room has an agent before anyone adds one: the server
+  // routes the session in the moment transcription starts (transcripts.ts
+  // withDefaultRoutes). Its name is read here for the empty card, so the
+  // card can promise who answers. Until the session row lands the name is
+  // "new agent", which is nobody: the card says "this session's agent".
+  const ownAgent = useAgentsInRoom(ownRoomId && routes.length === 0 ? [{ kind: "session", target: ownRoomId, added_by: "" }] : [])[0];
+  const ownName = ownAgent?.row ? ownAgent.name : "this session's agent";
+  // In an own room the header's button adds a second agent beside the
+  // room's own; the words say so, so the header and the empty card agree.
+  const addLabel = ownRoomId ? "Add another agent" : "Add an agent";
+  const addTitle = `${addLabel}: it ${HEARS}`;
 
   const addFeed = useAddLiveFeed({ roomKey, liveTranscriptId, routes, getRoom });
   const removeFeed = useRemoveLiveFeed(liveTranscriptId);
   // addRoute/startScribe can refuse (room authorization, ended transcript);
   // a silent close-and-nothing is the one wrong outcome.
-  const onPickFeed = (t: FeedTarget) =>
-    void addFeed(t).catch((err: any) => toast.error(humanizeConvexError(err, "Could not add the agent")));
+  // From the pick to the route landing there is a wait (a new session's
+  // create can park for minutes on a slow link): the header shows the agent
+  // on its way and the Add button rests, so a second click cannot spawn a
+  // second session.
+  const [adding, setAdding] = useState<FeedTarget | null>(null);
+  const onPickFeed = (t: FeedTarget) => {
+    setAdding(t);
+    void addFeed(t)
+      .catch((err: any) =>
+        toast.error(
+          err instanceof SessionCreatePendingError
+            ? "The agent's session is still starting. It joins the room when it lands."
+            : humanizeConvexError(err, "Could not add the agent"),
+        ),
+      )
+      .finally(() => setAdding(null));
+  };
   const openAddAgent = () =>
     openFeedTargetPicker({ title: "Add an agent to the room", gesture: "feed", showSlack: true, onPick: onPickFeed });
   // What an agent did is in the past once the call ended or nothing is live
@@ -286,10 +322,15 @@ export function RoomThread({
   // The explanation of what an agent does is said once per call, on the
   // first agent event of this call; the later ones just say who came.
   const explainEventId = past ? undefined : chatRows.find((r) => r.event === "agent_joined" && inCall(r.at))?._id;
-  const transcribeAlone = () =>
+  // No room means the server has not let this client into the huddle yet
+  // (or refused it), so nothing can be started; a refusal past that point
+  // is most often another scribe, but the server does not say which.
+  const transcribeAlone = () => {
+    if (!getRoom()) return void toast.error("Not connected to the huddle yet. Try again in a moment.");
     void startTranscribing(roomKey).then((ok) => {
-      if (!ok) toast.error("Somebody else is transcribing this huddle already");
+      if (!ok) toast.error("Could not start transcribing. Somebody else may be the scribe already.");
     });
+  };
 
   // Adding is allowed while a live feed could attach: on the stage whenever
   // the huddle runs (adding starts transcription when nobody is scribing),
@@ -396,8 +437,12 @@ export function RoomThread({
 
   const newestIndex = passages.length - 1;
   const activeIndex = selection?.activeIndex ?? null;
+  // A passage of one turn has no head to fold under (PassageBlock renders
+  // its turn row alone), so it is open in every density but hidden; the
+  // folded density folds passages of two or more turns.
   const isOpen = (p: Passage) =>
     (activeIndex !== null && p.turns.some((t) => t.index === activeIndex)) ||
+    (!recording && p.turns.length === 1) ||
     (overrides[p.index] ?? (density === "full" || (transcribing && p.index === newestIndex)));
   const toggle = (p: Passage) => {
     const opening = !isOpen(p);
@@ -410,7 +455,9 @@ export function RoomThread({
   // Event rows are the room's log, not its content: a room that has only
   // ever seen agents come and go is still empty.
   const empty = passages.length === 0 && chatRows.every((r) => r.event);
-  const showChips = routes.length > 0;
+  // The pick on its way shows as a chip until its route lands among the real ones.
+  const joining = adding && !("id" in adding && routes.some((r) => r.target === adding.id)) ? adding : null;
+  const showChips = routes.length > 0 || !!joining;
   // Nothing to fold, open or hide until someone has spoken.
   const showDensity = !recording && passages.length > 0;
   const showSwitch = seated && !recording;
@@ -424,14 +471,38 @@ export function RoomThread({
   // about the room's history: a typed line from earlier does not say the
   // room is being listened to now.
   const listening = transcribing && !recording && passages.length === 0 && density !== "hidden" && agents.length > 0;
-  const listeningText = scribeError ?? "Listening. Words show up here.";
+  // A muted room says nothing, so "listening" alone reads as a broken scribe
+  // to somebody whose mic is off. The words name the silence; the switch
+  // stays green, because transcription is on.
+  const soloMuted = muted && seats <= 1;
+  const listeningText =
+    scribeError ??
+    (soloMuted
+      ? "Listening, but your mic is muted."
+      : allMuted
+        ? "Listening, but everyone is muted."
+        : "Listening. Words show up here.");
+  const listeningShort = scribeError ?? (soloMuted ? "Your mic is muted" : allMuted ? "Everyone is muted" : "Nothing said yet");
   const spokenHidden = density === "hidden" && passages.length > 0;
   // The chat outlives one call, so typed and agent lines from before this
   // call started and from after it ended are set apart from it. On the stage
   // the switch already says the room is live, so the header's line is short.
-  const earlier = anchorAt !== undefined ? timeline.filter((i) => i.at < anchorAt).length : 0;
-  const during = anchorAt !== undefined ? timeline.filter((i) => inCall(i.at)).length : timeline.length;
+  // Before transcription starts there is no call to anchor on, so the moment
+  // the viewer joined this huddle anchors the dividers instead: chat from an
+  // earlier huddle in this room falls under "Earlier in this room" rather
+  // than reading as agents in the room now. Events keep the call's anchor.
+  const dividerAt = anchorAt ?? sinceAt;
+  const inDivider = (at: number) => dividerAt !== undefined && at >= dividerAt && (endedAt === undefined || at <= endedAt);
+  const earlier = dividerAt !== undefined ? timeline.filter((i) => i.at < dividerAt).length : 0;
+  const during = dividerAt !== undefined ? timeline.filter((i) => inDivider(i.at)).length : timeline.length;
   const later = timeline.length - earlier - during;
+  // On an ended call's page the earlier lines are a month old "hello"
+  // between the recap and the first words: folded until asked for. The
+  // stage's earlier lines are minutes old, so they stay open. The call
+  // loads after the thread mounts, so the default is read each render
+  // until the reader chooses.
+  const [earlierOverride, setEarlierOverride] = useState<boolean | null>(null);
+  const earlierOpen = earlierOverride ?? (surface === "stage" || !ended);
 
   return (
     <div
@@ -483,10 +554,30 @@ export function RoomThread({
               </span>
             );
           })}
+          {joining && (
+            <span className="rt-chip" title="Joining the room">
+              <FeedChip
+                route={{ kind: joining.kind === "new-session" ? "session" : joining.kind, target: "", mode: "live" }}
+                label={joining.kind === "new-session" ? "new agent" : "label" in joining ? joining.label : undefined}
+                removable={false}
+                onRemove={() => {}}
+              />
+              <WorkingDots
+                className="text-sol-violet"
+                title={joining.kind === "new-session" ? "Starting the agent's session" : "Joining the room"}
+              />
+            </span>
+          )}
           {canAdd && !emptyCard && (
-            <button type="button" onClick={openAddAgent} className="rt-add" title={ADD_AGENT_TITLE}>
+            <button
+              type="button"
+              onClick={openAddAgent}
+              className="rt-add"
+              disabled={!!adding}
+              title={adding ? "An agent is joining the room" : addTitle}
+            >
               <Sparkles className="h-3 w-3" />
-              Add an agent
+              {addLabel}
             </button>
           )}
           <span className="rt-head-right">
@@ -497,7 +588,7 @@ export function RoomThread({
                 line only says what is missing; the title has the long form. */}
             {listening && surface === "stage" && (
               <span className="rt-listening rt-head-listening" title={listeningText}>
-                <span className="truncate">{scribeError ?? "Nothing said yet"}</span>
+                <span className="truncate">{listeningShort}</span>
               </span>
             )}
             {showDensity && <DensityControl value={density} onChange={setDensity} />}
@@ -561,7 +652,41 @@ export function RoomThread({
             </p>
           ) : ended ? (
             <p className="rt-note">Nothing was said.</p>
-          ) : !emptyCard ? null : (
+          ) : !emptyCard ? null : ownRoomId && !transcribing ? (
+            // A session's own room: its agent joins the moment transcription
+            // starts, so transcribing is the first act and adding is for a
+            // second agent.
+            <div className="rt-empty">
+              <p>
+                Switch transcription on and {ownName} {HEARS}.
+              </p>
+              <div className="rt-empty-actions">
+                {seated && (
+                  <button
+                    type="button"
+                    onClick={transcribeAlone}
+                    className="rt-btn rt-btn-violet"
+                    title={`Start transcribing: ${ownName} joins the room and answers here`}
+                  >
+                    <Captions className="h-3.5 w-3.5" />
+                    Transcribe
+                  </button>
+                )}
+                {canAdd && (
+                  <button
+                    type="button"
+                    onClick={openAddAgent}
+                    className="rt-btn rt-btn-green"
+                    disabled={!!adding}
+                    title={adding ? "An agent is joining the room" : addTitle}
+                  >
+                    <Sparkles className="h-3.5 w-3.5" />
+                    Add another agent
+                  </button>
+                )}
+              </div>
+            </div>
+          ) : (
             <div className="rt-empty">
               <p>
                 {switchedOff
@@ -572,9 +697,15 @@ export function RoomThread({
               </p>
               <div className="rt-empty-actions">
                 {canAdd && (
-                  <button type="button" onClick={openAddAgent} className="rt-btn rt-btn-violet" title={ADD_AGENT_TITLE}>
+                  <button
+                    type="button"
+                    onClick={openAddAgent}
+                    className="rt-btn rt-btn-violet"
+                    disabled={!!adding}
+                    title={adding ? "An agent is joining the room" : addTitle}
+                  >
                     <Sparkles className="h-3.5 w-3.5" />
-                    Add an agent
+                    {addLabel}
                   </button>
                 )}
                 {!transcribing && seated && (
@@ -601,17 +732,32 @@ export function RoomThread({
           </div>
         ) : (
           timeline.map((item, i) => {
-            const divider =
-              earlier > 0 && i === 0
-                ? "Earlier in this room"
-                : earlier > 0 && i === earlier
-                  ? "This call"
-                  : later > 0 && i === earlier + during
-                    ? "Later in this room"
-                    : null;
-            let node: React.ReactNode;
-            if (item.kind === "passage") {
-              if (density === "hidden") return null;
+            const inEarlier = earlier > 0 && i < earlier;
+            // The earlier group's label is a fold: with the group closed
+            // the label stands alone and "This call" has nothing to divide.
+            const divider: React.ReactNode =
+              earlier > 0 && i === 0 ? (
+                <button
+                  type="button"
+                  className="rt-note rt-divider"
+                  aria-expanded={earlierOpen}
+                  onClick={() => setEarlierOverride(!earlierOpen)}
+                  title={earlierOpen ? "Fold what was typed here before this call" : "Show what was typed here before this call"}
+                >
+                  <ChevronRight className="rt-chevron h-3 w-3" aria-hidden="true" />
+                  Earlier in this room · {earlier} line{earlier === 1 ? "" : "s"}
+                </button>
+              ) : earlier > 0 && i === earlier && earlierOpen ? (
+                <p className="rt-note rt-divider">This call</p>
+              ) : later > 0 && i === earlier + during ? (
+                <p className="rt-note rt-divider">Later in this room</p>
+              ) : null;
+            const hidden = (inEarlier && !earlierOpen) || (item.kind === "passage" && density === "hidden");
+            if (hidden && !divider) return null;
+            let node: React.ReactNode = null;
+            if (hidden) {
+              /* the divider alone */
+            } else if (item.kind === "passage") {
               node = (
                 <PassageBlock
                   passage={item}
@@ -620,6 +766,7 @@ export function RoomThread({
                   live={transcribing && item.index === newestIndex}
                   fresh={item.at > mountedAt.current}
                   recording={recording}
+                  dayOf={anchorAt}
                   onToggle={() => toggle(item)}
                   selection={selection}
                 />
@@ -653,13 +800,11 @@ export function RoomThread({
               node = <ChatLine m={m} sameAuthor={sameAuthor} fresh={fresh} dayOf={anchorAt} stage={surface === "stage"} onOpen={openSession} />;
             }
             const key = item.kind === "passage" ? `p${item.index}` : item.row._id;
-            return divider ? (
+            return (
               <Fragment key={key}>
-                <p className="rt-note rt-divider">{divider}</p>
+                {divider}
                 {node}
               </Fragment>
-            ) : (
-              <Fragment key={key}>{node}</Fragment>
             );
           })
         )}
@@ -775,6 +920,7 @@ function PassageBlock({
   live,
   fresh,
   recording,
+  dayOf,
   onToggle,
   selection,
 }: {
@@ -787,14 +933,34 @@ function PassageBlock({
   /** Began after the thread mounted: it rises in like any other new row. */
   fresh: boolean;
   recording: boolean;
+  /** The call's start: a wall clock on the same day drops its date. */
+  dayOf: number | undefined;
   onToggle: () => void;
   selection?: RoomThreadSelection;
 }) {
   const units = recording ? "line" : "turn";
   const n = passage.turns.length;
   const bodyId = `${idPrefix}p${passage.index}`;
+  const className = `rt-passage${open ? " rt-passage-open" : ""}${live ? " rt-passage-live" : ""}${fresh ? " rt-in" : ""}`;
+  // One turn of a huddle: its row already carries the name and the clock,
+  // so a head over it would say the same twice and outweigh the words.
+  // The rule stays, so it still reads as spoken.
+  if (!recording && n === 1) {
+    return (
+      <section className={className}>
+        <div className="rt-passage-body">
+          <TranscriptTurnList
+            turns={passage.turns}
+            isSelected={selection?.isSelected}
+            onTurnClick={selection?.onTurnClick}
+            activeIndex={selection?.activeIndex ?? null}
+          />
+        </div>
+      </section>
+    );
+  }
   return (
-    <section className={`rt-passage${open ? " rt-passage-open" : ""}${live ? " rt-passage-live" : ""}${fresh ? " rt-in" : ""}`}>
+    <section className={className}>
       <button
         type="button"
         className="rt-passage-head"
@@ -803,7 +969,7 @@ function PassageBlock({
         onClick={onToggle}
         title={`${open ? "Fold" : "Open"} this passage · ${n} ${units}${n === 1 ? "" : "s"}`}
       >
-        <ChevronRight className="rt-passage-chevron h-3 w-3" aria-hidden="true" />
+        <ChevronRight className="rt-chevron h-3 w-3" aria-hidden="true" />
         <span className="rt-passage-who">
           {recording ? (
             <span className="text-sol-text-muted">Spoken</span>
@@ -817,7 +983,11 @@ function PassageBlock({
           )}
         </span>
         <span className="rt-when">
-          {fmtClock(passage.t0)} · {fmtDuration(Math.max(1000, passage.t1 - passage.t0))}
+          {/* A huddle's head keeps the wall clock the typed and event rows
+              use, so one thread has one clock; the turn rows inside read as
+              the offset into the call. A recording keeps the offset, since a
+              click seeks the audio by it. */}
+          {recording ? fmtClock(passage.t0) : fmtWallClock(passage.at, dayOf)} · {fmtDuration(Math.max(1000, passage.t1 - passage.t0))}
           {/* The count leaves the head on the stage (roomThread.css): the
               names need the room more, and the title carries it. */}
           <span className="rt-passage-turns">
@@ -863,7 +1033,7 @@ function RecapCard({ summary, items, live }: { summary: string; items: string[];
         onClick={() => setOpen((o) => !o)}
         title={open ? "Fold the recap" : live ? "What has been said so far, in a few lines" : "The summary and the action items"}
       >
-        <ChevronRight className="rt-passage-chevron h-3 w-3" aria-hidden="true" />
+        <ChevronRight className="rt-chevron h-3 w-3" aria-hidden="true" />
         <span className="rt-recap-label">
           <Sparkles className="h-3 w-3" />
           {label}
@@ -941,7 +1111,7 @@ function EventLine({
       <span className="rt-event-glyph flex w-5 shrink-0 justify-center" aria-hidden="true">
         <Glyph className={`h-3 w-3 ${tone}`} />
       </span>
-      <span>
+      <span className="min-w-0 flex-1">
         {row.event === "agent_joined" ? (
           <>
             {ownRoom ? (
@@ -962,8 +1132,8 @@ function EventLine({
             {actor} switched transcription {row.event === "transcribe_on" ? "on" : "off"}
           </>
         )}
-        <span className="rt-when rt-event-when">{fmtWallClock(row.at, dayOf)}</span>
       </span>
+      <span className="rt-when rt-event-when">{fmtWallClock(row.at, dayOf)}</span>
     </div>
   );
 }
@@ -1027,13 +1197,13 @@ function ChatLine({
               <button
                 type="button"
                 onClick={() => onOpen(m.agent!.conversation_id)}
-                className="max-w-[200px] truncate text-[11.5px] font-semibold text-sol-violet hover:underline"
+                className="rt-name max-w-[200px] truncate text-sol-violet hover:underline"
                 title={`Open ${m.agent.title}`}
               >
                 {m.agent.name ?? m.agent.title}
               </button>
             ) : (
-              <span className="text-[11.5px] font-semibold text-sol-text">{m.mine ? "you" : firstName(m.user_name)}</span>
+              <span className="rt-name text-sol-text">{m.mine ? "you" : firstName(m.user_name)}</span>
             )}
             <span className="rt-when">{fmtWallClock(m.at, dayOf)}</span>
           </div>
