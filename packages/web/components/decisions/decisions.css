@@ -102,6 +102,43 @@
 }
 .decision-option-page-thumb img { width: 100%; height: 100%; object-fit: cover; object-position: top; display: block; }
 
+/* The sheet (SessionDecisionCard, full): the card that owns the conversation
+   pane. One scroll for the whole read, in the conversation column. The sheet
+   is a container, so the layout follows the PANE's width, not the window's:
+   the same card sits in a narrow inbox split and in a wide stage pane. Wide
+   enough, the reasoning and the options seat side by side and the options
+   stick while the reasoning scrolls; the column widens only to make room
+   for them, and the reasoning keeps its reading measure. The question is
+   sized for the sheet's smaller canvas and never runs the whole width. */
+.decision-sheet { container-type: inline-size; }
+.decision-sheet-col { max-width: var(--conv-col-w, 56rem); }
+.decision-sheet .decision-question {
+  font-size: clamp(1.25rem, 1rem + 1vw, 1.7rem);
+  max-width: 32em;
+}
+.decision-sheet-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  row-gap: 1.5rem;
+}
+@container (min-width: 64rem) {
+  .decision-sheet-col { max-width: 84rem; }
+  .decision-sheet-grid[data-split="true"] {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 26rem);
+    column-gap: 3rem;
+    align-items: start;
+  }
+  .decision-sheet-grid[data-split="true"] > .decision-sheet-context { max-width: var(--conv-col-w, 56rem); }
+  .decision-sheet-grid[data-split="true"] > .decision-sheet-options { position: sticky; top: 0; }
+}
+
+/* The fold: the question in the list card's serif, two lines at most. */
+.decision-fold .decision-question {
+  font-size: 0.95rem;
+  line-height: 1.35;
+  text-wrap: pretty;
+}
+
 /* The compact card (the queue, a task, a gate) reads like the document page,
    at list density: the question set in the same serif, the context in the
    same body type, the options as full width rows. One decision, one look,
