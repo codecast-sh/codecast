@@ -10,8 +10,8 @@ import {
   type TeamVisibilityLevel,
 } from "@codecast/convex/convex/teamVisibility";
 
-export type { TeamVisibilityLevel, VisibilityChangeMode } from "@codecast/convex/convex/teamVisibility";
-export { TEAM_VISIBILITY_RANK, currentMembershipVisibility, hasPinnedPast, nextMembershipVisibility } from "@codecast/convex/convex/teamVisibility";
+export type { MembershipVisibilityFacts, TeamVisibilityLevel, VisibilityChangeMode } from "@codecast/convex/convex/teamVisibility";
+export { TEAM_VISIBILITY_RANK, currentMembershipVisibility, effectiveMembershipVisibility, hasPinnedPast, isVisibilityShareable, nextMembershipVisibility } from "@codecast/convex/convex/teamVisibility";
 
 export type TeamVisibilityOption = {
   value: TeamVisibilityLevel;

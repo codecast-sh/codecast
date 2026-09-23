@@ -21,6 +21,7 @@ import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { conversationActsForRole, roleOfConversation } from "./lib/actor";
 import { isWholeWorkspace } from "./lib/orgScope";
+import { workspaceHasFeature } from "./lib/teamFeatureGuard";
 
 export type WakeKind = "immediate" | "fold" | "passive";
 export type WakeRef = { table: string; id: string; short_id?: string };
@@ -134,6 +135,11 @@ export async function enqueueRoleEvent(
 ): Promise<Id<"role_wake_outbox"> | null> {
   const role = await ctx.db.get(roleId);
   if (!role || role.status === "retired" || !role.anchor_id) return null;
+  // The org feature is per team, default off (teams.features.org). A role in
+  // a workspace with it off is not woken: nothing shows it, so nothing should
+  // run under its name either. Turning the feature on resumes wakes from the
+  // next event; nothing queued in between is replayed.
+  if (!(await workspaceHasFeature(ctx, { team_id: role.team_id, user_id: role.scope_user_id }, "org"))) return null;
   const actor = opts.actorConversationId ? await ctx.db.get(opts.actorConversationId) : null;
   if (await actorIsExcluded(ctx, String(roleId), actor)) return null;
 

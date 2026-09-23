@@ -25,6 +25,7 @@ import { toast } from "sonner";
 import { useInboxStore } from "../../store/inboxStore";
 import { mutateOnUnload } from "../keepaliveMutation";
 import { memberDisplayName } from "../liveEntities";
+import { RING_STUB, RING_STUB_MS, isRingStub, ringStubId, type RingStub } from "./ringStubs";
 import { startScribe, stopScribe } from "./transcription";
 import { readJoinPrefs, rememberCamera, rememberDevice, rememberMic } from "./joinPrefs";
 import { huddleRoomOptions, SCREEN_SHARE_CAPTURE, SCREEN_SHARE_ENCODING } from "./livekitMedia";
@@ -1196,11 +1197,19 @@ async function startHuddleHere(opts: {
   if (huddleInOtherWindow() && await focusExistingHuddle()) return;
   if (!convex) return;
   setCall({ phase: "ringing_out" as const, roomKey: opts.roomKey, error: null, errorFix: null, muted: !readJoinPrefs().micOn });
+  // The ring is on the row from the press: the join takes a second, and the
+  // invite goes out only after it, so the stub rings stand from here until
+  // ringInto settles them (or the join fails and they are taken back).
+  ringStubs(opts.roomKey, opts.toUserIds, true);
   try {
     await joinCall(opts.roomKey, { intent: "deliberate" });
-    if (useInboxStore.getState().call.phase !== "connected") return;
+    if (useInboxStore.getState().call.phase !== "connected") {
+      ringStubs(opts.roomKey, opts.toUserIds, false);
+      return;
+    }
     await ringInto(opts.roomKey, opts.toUserIds, opts.anchorTitle, { ringChannel: opts.ringChannel });
   } catch (err: any) {
+    ringStubs(opts.roomKey, opts.toUserIds, false);
     setCall({ phase: "error", error: humanizeConvexError(err, "Could not start the huddle") });
   }
 }
@@ -1226,6 +1235,14 @@ export async function ringInto(
   opts?: { failMessage?: string; ringChannel?: boolean },
 ): Promise<RingOutcome[]> {
   if (!convex || (toUserIds.length === 0 && !opts?.ringChannel)) return [];
+  // The ring is on the row from the press. startHuddle seats the caller
+  // first, so until the invite's round trip lands the row would read a live
+  // call with nobody on it: an End that turns into a Cancel. A stub ring per
+  // person fills that window. A rung person's stub stays until the server's
+  // own list replaces it (the push lands a tick after the mutation resolves,
+  // and taking the stub back first reads online in between); a person the
+  // server did not ring loses theirs when the answer comes.
+  ringStubs(roomKey, toUserIds, true);
   try {
     const res = await convex.mutation(api.calls.invite, {
       room_key: roomKey,
@@ -1234,12 +1251,53 @@ export async function ringInto(
       ring_channel: opts?.ringChannel,
     });
     const results: RingOutcome[] = res?.results ?? [];
+    const rung = new Set(results.filter((r) => !(r.in_room || r.cooldown || r.refused)).map((r) => String(r.to_user)));
+    ringStubs(roomKey, toUserIds.filter((id) => !rung.has(id)), false);
     reportRingOutcomes(results);
     return results;
   } catch (err: any) {
+    ringStubs(roomKey, toUserIds, false);
     toast.error(humanizeConvexError(err, opts?.failMessage ?? "Could not ring them"));
     return [];
   }
+}
+
+/** Put up (or withdraw) a stub ring per person in myCalls.outgoing while the
+ *  invite is in flight (lib/calls/ringStubs). A person the server's own list
+ *  already shows ringing gets no stub. A person with a stub gets it again
+ *  with a fresh clock: startHuddle stubs at the press and ringInto stubs
+ *  again once the join lands, and a join that outlived the first clock would
+ *  otherwise leave the stub to expire inside the invite's round trip (the
+ *  face reads online, then ringing again when the row lands). A withdrawal
+ *  expires the stub's clock, and the list's merge drops it. */
+function ringStubs(roomKey: string, toUserIds: string[], on: boolean): void {
+  const st = useInboxStore.getState();
+  const cur = st.myCalls ?? { incoming: [], outgoing: [], membership: null };
+  const outgoing: any[] = cur.outgoing ?? [];
+  const now = Date.now();
+  let next: any[];
+  if (on) {
+    const members = st.teamMembers ?? [];
+    const listed = (id: string) =>
+      outgoing.some((r) => !isRingStub(r) && String(r.to_user) === id && r.room_key === roomKey && (r.status ?? "ringing") === "ringing");
+    const stubs: RingStub[] = toUserIds.filter((id) => !listed(id)).map((id) => ({
+      _id: ringStubId(roomKey, id),
+      room_key: roomKey,
+      to_user: id,
+      to_name: memberDisplayName(members.find((m: any) => String(m._id) === id), "Teammate"),
+      status: "ringing",
+      created_at: now,
+      until: now + RING_STUB_MS,
+    }));
+    if (!stubs.length) return;
+    const ids = new Set(stubs.map((s) => s._id));
+    next = [...outgoing.filter((r) => !ids.has(String(r._id))), ...stubs];
+  } else {
+    const ids = new Set(toUserIds.map((id) => ringStubId(roomKey, id)));
+    if (!outgoing.some((r) => ids.has(String(r._id)))) return;
+    next = outgoing.map((r) => (ids.has(String(r._id)) ? { ...r, until: 0 } : r));
+  }
+  st.syncTable("myCalls", { ...cur, outgoing: next });
 }
 
 // The outcomes worth a sentence. Busy rings quietly and shows as ringing;
@@ -1328,7 +1386,8 @@ export async function declineInvite(inviteId: string): Promise<void> {
 }
 
 export async function cancelOutgoing(inviteId: string): Promise<void> {
-  if (!convex) return;
+  // A stub (the invite still in flight) has nothing to cancel yet.
+  if (!convex || inviteId.startsWith(RING_STUB)) return;
   await convex.mutation(api.calls.cancelInvite, { invite_id: inviteId }).catch(() => {});
 }
 

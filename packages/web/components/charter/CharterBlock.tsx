@@ -5,6 +5,7 @@
 // edits inline; the caller turns each patch into the store action
 // (updateProject / updatePlan) so the row paints first and the dispatch side
 // effect carries the write. Empty: one line and the ask to the chief of staff.
+import { useWorkspaceFeature } from "../../lib/teamFeatures";
 import { useState } from "react";
 import Link from "next/link";
 import { Compass, Flag, ListChecks, Ban, AlertTriangle, Coins, Plus, X, Sparkles, UserRoundPlus } from "lucide-react";
@@ -150,6 +151,7 @@ export function CharterBlock({ kind, title, charter, canEdit, onChange, roles, o
   // (still loading, or the tree on screen is another workspace's) the seat
   // is unknown, not absent, so the label stays the plain ask.
   const rolesLoaded = roles != null;
+  const orgOn = useWorkspaceFeature("org");
   const hires = rolesLoaded && !chief;
   const askLabel = chief ? `Ask @${chief.handle} to draft one` : hires ? "Hire a Chief of Staff to draft one" : "Ask the Chief of Staff to draft one";
   const AskIcon = hires ? UserRoundPlus : Sparkles;
@@ -158,7 +160,7 @@ export function CharterBlock({ kind, title, charter, canEdit, onChange, roles, o
       <div className={cn("flex items-center gap-2 text-[12px] flex-wrap", className)} data-charter="empty">
         <Compass className="w-3.5 h-3.5 shrink-0" style={{ color: "var(--sol-text-dim)" }} />
         <span style={{ color: "var(--sol-text-dim)" }}>No charter yet.</span>
-        <Link
+        {orgOn && (<Link
           href={composeCharterHref(title)}
           className="inline-flex items-center gap-1 font-medium hover:underline"
           style={{ color: "var(--sol-cyan)" }}
@@ -166,7 +168,7 @@ export function CharterBlock({ kind, title, charter, canEdit, onChange, roles, o
           data-charter-ask={chief ? "ask" : hires ? "hire" : "unknown"}
         >
           <AskIcon className="w-3 h-3" /> {askLabel}
-        </Link>
+        </Link>)}
         {canEdit && (
           <button type="button" onClick={() => setOpened(true)} className="hover:underline" style={{ color: "var(--sol-text-dim)" }}>or write it</button>
         )}

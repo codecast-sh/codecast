@@ -17,6 +17,7 @@ import {
   walkieCallState,
 } from "../calls/walkie";
 import { runCallCommand } from "../calls/callManager";
+import { deriveFaceRow, faceRowInputFrom, faceRowInputSig } from "../faces/faceRow";
 import { walkieDoorOpen } from "../calls/walkieDoor";
 import { useInboxStore } from "../../store/inboxStore";
 
@@ -165,7 +166,39 @@ describe("the engine as a remote", () => {
     // This window's own call slice is idle — the host holds the room — and a
     // key reading it would call the burst "dropped".
     expect(useInboxStore.getState().call.phase).toBe("idle");
-    expect(walkieCallState()).toEqual({ roomKey: "dm:a:b", phase: "connected", muted: false, micDenied: false });
+    expect(walkieCallState()).toEqual({ roomKey: "dm:a:b", phase: "connected", muted: false, micDenied: false, camera: false, speaking: [] });
+  });
+
+  it("draws the host's camera and speakers on its face row, and re-derives when they move", () => {
+    // The main window's header row is a remote whenever a host exists. Its
+    // own call slice has no camera and nobody speaking, ever: the host holds
+    // the room. The row must read both from the mirror, in the input and in
+    // the signature that decides whether the row is derived again.
+    const s = shell();
+    s.role({ ...ROLE, voiceWindow: true });
+    const walkie = { ...getWalkieStatus(), sending: null, incoming: null, liveRoom: null };
+    const mirror = (camera: boolean, speaking: string[]) =>
+      applyVoiceMirror({ walkie, call: { roomKey: "dm:a:b", phase: "connected", muted: false, micDenied: false, camera, speaking } });
+    mirror(false, []);
+    const before = faceRowInputSig(useInboxStore.getState(), getWalkieStatus(), null, [], 0);
+    mirror(true, ["ann"]);
+    expect(useInboxStore.getState().call.camera).toBe(false);
+    expect(useInboxStore.getState().call.speaking).toEqual([]);
+    // MUTATION CHECK: read camera and speaking from the store's own call
+    // slice in faceRowInputFrom and this reads false and [].
+    const input = faceRowInputFrom(useInboxStore.getState(), getWalkieStatus(), null, [], 0);
+    expect(input.call).toMatchObject({ phase: "connected", roomKey: "dm:a:b", camera: true, speaking: ["ann"] });
+    expect(faceRowInputSig(useInboxStore.getState(), getWalkieStatus(), null, [], 0)).not.toBe(before);
+    // And the model, fed that input: my camera is my face, and Ann's ring is
+    // the speaking one.
+    const row = deriveFaceRow({
+      ...input,
+      viewer: { id: "me", name: "Me" },
+      roster: [{ _id: "me", name: "Me", presence_state: "active" }, { _id: "ann", name: "Ann", presence_state: "active" }] as any,
+      occupancy: { "dm:a:b": [{ user_id: "me" }, { user_id: "ann" }] } as any,
+    });
+    expect(row.me?.video).toBe("self");
+    expect(row.entries.find((e) => e.id === "ann")?.state).toBe("speaking");
   });
 
   it("sends a press to the host with a client id, and paints the bubble here first", async () => {

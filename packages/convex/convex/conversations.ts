@@ -69,6 +69,7 @@ import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
 import { armedTriggerHomeLoader, isArmedTriggerHome, isArmedTriggerHomeOfKind, isArmedLoopHome } from "./dormancy";
 import { subagentLinkFields } from "./ccAccountsShared";
 import { isSessionOwner } from "./sessionOwners";
+import { hideConversationForViewer, unhideConversationForViewer, viewerHiddenConversationIds } from "./inboxHides";
 import { approxMessageBytes, filterUserMessages, isImportNotice, isNavigableUserMessage, toNavigatorRow, type FilteredUserMessage } from "./userMessagesFilter";
 import {
   isTeamMember,
@@ -1078,8 +1079,11 @@ export const createConversation = mutation({
     const startedAt = args.started_at ?? now;
 
     const conversationPath = args.git_root || args.project_path;
+    // The daemon syncs old transcripts with their real start time: a session
+    // that predates a repo's share start stays private (privacy.ts
+    // mappingCoversStart), so a share made today never exposes yesterday.
     const { team_id: resolvedTeamId, is_private: isPrivate, auto_shared: autoShared } =
-      await resolveCreationPrivacy(ctx, args.user_id, conversationPath, args.team_id as Id<"teams"> | undefined);
+      await resolveCreationPrivacy(ctx, args.user_id, conversationPath, args.team_id as Id<"teams"> | undefined, startedAt, args.git_remote_url);
 
     let parentConversationId: Id<"conversations"> | undefined;
     if (args.parent_conversation_id) {
@@ -4946,6 +4950,10 @@ export const updateProjectPath = mutation({
     session_id: v.string(),
     project_path: v.string(),
     git_root: v.optional(v.string()),
+    // The checkout's origin, stamped with the root so a session created
+    // without git info (codex rollouts before 2026-09) gains its repository
+    // identity in the same sweep. Older daemons omit it.
+    git_remote_url: v.optional(v.string()),
     api_token: v.string(),
   },
   handler: async (ctx, args) => {
@@ -4964,7 +4972,11 @@ export const updateProjectPath = mutation({
       return { updated: false };
     }
 
-    if (conversation.project_path === args.project_path && (!args.git_root || conversation.git_root === args.git_root)) {
+    if (
+      conversation.project_path === args.project_path &&
+      (!args.git_root || conversation.git_root === args.git_root) &&
+      (!args.git_remote_url || conversation.git_remote_url === args.git_remote_url)
+    ) {
       return { updated: false };
     }
 
@@ -4972,19 +4984,28 @@ export const updateProjectPath = mutation({
     if (args.git_root) {
       patch.git_root = args.git_root;
     }
+    if (args.git_remote_url) {
+      patch.git_remote_url = args.git_remote_url;
+    }
 
     // The path is being stamped after creation (pre-warmed/stub conversations
     // are born pathless → private+teamless), so re-resolve team/privacy the
     // way creation would have. Explicit user choices win inside the helper.
-    const mappings = await ctx.db
-      .query("directory_team_mappings")
-      .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
-      .collect();
-    const restamp = buildPathRestampUpdate(
-      conversation,
-      mappings,
-      args.git_root || args.project_path
-    );
+    // Only a changed PATH re-resolves. Learning the checkout root of a path
+    // the row already had (the boot sweep backfilling codex worktrees that
+    // were created without git info) stamps identity and nothing else: a
+    // mapping on that checkout then reaches these rows when the owner sets
+    // or re-saves it, never as a side effect of a daemon upgrade.
+    const restamp = conversation.project_path === args.project_path
+      ? null
+      : buildPathRestampUpdate(
+          { ...conversation, git_remote_url: args.git_remote_url ?? conversation.git_remote_url },
+          await ctx.db
+            .query("directory_team_mappings")
+            .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
+            .collect(),
+          args.git_root || args.project_path
+        );
     if (restamp) Object.assign(patch, restamp);
 
     // A restamp can flip visibility (born-blank → team-shared), so linked
@@ -5338,6 +5359,9 @@ export const forkConversation = mutation({
       ctx,
       authUserId,
       original.git_root || original.project_path,
+      undefined,
+      undefined,
+      original.git_remote_url,
     );
 
     // Trust the denormalized message_count for display; the actual copy is
@@ -8875,6 +8899,10 @@ export async function scanInboxConversations(
   // also cover the caller's PRIVATE sessions, correctly visible to themselves).
   if (opts.teamScope) {
     const teamFilter = await createTeamFeedFilter(ctx, opts.teamScope);
+    // The caller's own triage of teammates' rows (inbox_hides): a stash or
+    // dismiss on a row they neither run nor own cannot live on the row, so it
+    // lives here, and the board skips it the same way it skips the owner's.
+    const viewerHidden = await viewerHiddenConversationIds(ctx, userId);
     const otherMemberIds = teamFilter.memberships
       .map((m) => m.user_id)
       .filter((id) => id.toString() !== userId.toString());
@@ -8897,6 +8925,7 @@ export async function scanInboxConversations(
       for (const c of memberRecent) {
         if (byId.has(c._id.toString())) continue;
         if (c.inbox_dismissed_at || c.inbox_stashed_at) continue; // teammate's own triage
+        if (viewerHidden.has(c._id.toString())) continue; // the caller's triage of it
         if (!teamFilter.isVisible(c)) continue;
         byId.set(c._id.toString(), c);
       }
@@ -10940,13 +10969,34 @@ export const cliSetSessionVisibility = mutation({
       c.owner_user_id?.toString() === userId.toString()
     );
     if (!conv) {
-      throw new Error(
-        `No session found for "${args.session}" (you can only manage sessions you run or own)`
-      );
+      // Not the runner or an owner: a teammate's session on the team board.
+      // The row's own stamps are the owner's, so the caller's gesture is a
+      // viewer hide (inbox_hides) — out of THEIR board only, the agent untouched.
+      const seen = await findConversationByAnyRefWhere(ctx, args.session, () => true);
+      if (!seen) {
+        throw new Error(
+          `No session found for "${args.session}" (you can only manage sessions you run or own)`
+        );
+      }
+      const seenShortId = seen.short_id ?? seen._id.toString().slice(0, 7);
+      if (args.action === "undismiss") {
+        const wasHidden = await unhideConversationForViewer(ctx, userId, seen._id);
+        return { ok: true as const, short_id: seenShortId, action: args.action, was_hidden: wasHidden, rearmed_schedules: 0, outcome: "viewer_hide" as const };
+      }
+      const hid = await hideConversationForViewer(ctx, userId, seen, args.action === "kill" ? "dismiss" : "stash");
+      if (!hid) {
+        throw new Error(
+          `No session found for "${args.session}" (you can only manage sessions you run or own, or hide a teammate's you can see)`
+        );
+      }
+      return { ok: true as const, short_id: seenShortId, action: args.action, outcome: "viewer_hide" as const, was_hidden: false };
     }
     const shortId = conv.short_id ?? conv._id.toString().slice(0, 7);
 
     if (args.action === "undismiss") {
+      // A restore clears the caller's viewer hide too, in case the row was hidden
+      // before they became an owner of it.
+      await unhideConversationForViewer(ctx, userId, conv._id);
       const { wasHidden, rearmed } = await resurfaceHiddenSession(ctx, conv, userId);
       return { ok: true as const, short_id: shortId, action: args.action, was_hidden: wasHidden, rearmed_schedules: rearmed };
     }
@@ -12237,6 +12287,7 @@ export const updateSessionId = mutation({
     // from where the session is really running.
     project_path: v.optional(v.string()),
     git_root: v.optional(v.string()),
+    git_remote_url: v.optional(v.string()),
     api_token: v.string(),
   },
   handler: async (ctx, args) => {
@@ -12251,6 +12302,7 @@ export const updateSessionId = mutation({
     const patch: Record<string, any> = { session_id: args.session_id };
     if (args.project_path) patch.project_path = args.project_path;
     if (args.git_root) patch.git_root = args.git_root;
+    if (args.git_remote_url) patch.git_remote_url = args.git_remote_url;
 
     // Stubs are created before their real path exists, so their team/privacy
     // resolved against nothing (→ private, teamless). Re-resolve against the
@@ -12261,7 +12313,7 @@ export const updateSessionId = mutation({
         .query("directory_team_mappings")
         .withIndex("by_user_id", (q) => q.eq("user_id", userId))
         .collect();
-      const restamp = buildPathRestampUpdate(conv, mappings, stampedPath);
+      const restamp = buildPathRestampUpdate({ ...conv, git_remote_url: args.git_remote_url ?? conv.git_remote_url }, mappings, stampedPath);
       if (restamp) Object.assign(patch, restamp);
     }
 

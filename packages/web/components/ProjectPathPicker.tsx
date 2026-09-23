@@ -5,6 +5,9 @@ import { useConvex } from "convex/react";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Folder, FolderPlus, X } from "lucide-react";
+import { TeamIcon } from "./TeamIcon";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
+import { effectiveMembershipVisibility, isVisibilityShareable, teamVisibilityFor } from "../lib/teamVisibility";
 import { toast } from "sonner";
 import { useInboxStore } from "../store/inboxStore";
 import { useConvexSync } from "../hooks/useConvexSync";
@@ -19,8 +22,40 @@ import {
   type ProjectPathOption,
 } from "../lib/utils";
 
+/** "Sessions started here are shared with this team": the team's own icon on
+ *  the folder chip, with the sentence in a tooltip. Renders nothing for a
+ *  folder that is only the viewer's, and nothing when the viewer's level for
+ *  the team (Hidden, Activity only) keeps every session out of its feed, since
+ *  then the sharing rule on the folder shares nothing. */
+export function SharedWithMark({ teamId, team, className = "" }: { teamId?: string | null; team?: string | null; className?: string }) {
+  // Woken by the fields the mark renders, never by a teams list re-push that
+  // changed nothing it shows.
+  const sig = useInboxStore((s) => {
+    const t = teamVisibilityFor(s.teams, teamId) as any;
+    return t ? `${t.icon ?? ""}|${t.icon_color ?? ""}|${t.visibility ?? ""}|${JSON.stringify(t.visibility_history ?? [])}` : "";
+  });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- sig stands in for the churny list
+  const membership = useMemo(() => teamVisibilityFor(useInboxStore.getState().teams, teamId) as any, [sig, teamId]);
+  if (!teamId || !team || !membership) return null;
+  if (!isVisibilityShareable(effectiveMembershipVisibility(membership, null))) return null;
+  return (
+    <TooltipProvider delayDuration={150}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className={`inline-flex shrink-0 items-center ${className}`} aria-label={`shared with ${team}`}>
+            <TeamIcon icon={membership.icon} color={membership.icon_color} className="h-3 w-3" />
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" sideOffset={6} className="border bg-popover px-2 py-1 text-[11px] text-popover-foreground shadow-md">
+          Sessions here are shared with {team}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
 /**
- * Shared "pick a project directory" combobox. Recents come from the same
+ * Shared "pick a folder" combobox. Recents come from the same
  * getRecentProjectPaths query + store cache the new-session picker uses, so
  * both stay warm together. Typing filters recents AND completes against the
  * machine's disk (useDirListing: the folders inside the directory the text
@@ -33,7 +68,7 @@ import {
 export function ProjectPathPicker({
   value,
   onChange,
-  placeholder = "pick a project…",
+  placeholder = "pick a folder…",
   className = "",
 }: {
   value: string;
@@ -48,6 +83,15 @@ export function ProjectPathPicker({
   useConvexSync(fresh, setRecentProjects);
   const recents = fresh ?? cached;
   const convex = useConvex();
+  // The team a session in each recent folder will be shared with, so the
+  // choice of folder shows its consequence before the session starts.
+  const sharedWith = useMemo(
+    () => new Map(recents.map((p) => {
+      const r = p as { team_id?: string | null; team_name?: string | null };
+      return [p.path, { teamId: r.team_id ?? null, team: r.team_name ?? null }] as const;
+    })),
+    [recents],
+  );
 
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -223,6 +267,7 @@ export function ProjectPathPicker({
                     <>
                       <span className={`truncate ${o.disk && !o.repo ? "" : "font-medium"}`}>{name}</span>
                       {o.repo && <span className="text-[10px] font-mono text-sol-text-dim/70">git</span>}
+                      <SharedWithMark {...sharedWith.get(o.path)} />
                       <span className="ml-auto font-mono text-[11px] text-sol-text-dim truncate pl-2">
                         {displayPath(o.path, home)}
                       </span>

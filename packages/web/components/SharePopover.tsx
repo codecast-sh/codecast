@@ -6,8 +6,7 @@ import { copyToClipboard } from "../lib/utils";
 import { openForwardToChat } from "../lib/forwardToChat";
 import { useTeamFeature } from "../lib/teamFeatures";
 import { toast } from "sonner";
-import { useInboxStore } from "../store/inboxStore";
-import { TEAM_VISIBILITY_RANK, currentMembershipVisibility, teamVisibilityFor } from "../lib/teamVisibility";
+import { TeamShareModePicker } from "./TeamShareModePicker";
 
 interface SharePopoverProps {
   isPrivate?: boolean;
@@ -27,6 +26,9 @@ interface SharePopoverProps {
   forwardUrl?: string;
   /** What the forwarded thing is, for the picker title (e.g. "session"). */
   forwardLabel?: string;
+  /** The directory whose team mapping shared this session, when a mapping
+   *  did: the popover then says why it is shared and where to change that. */
+  sharedVia?: string | null;
 }
 
 type VisibilityMode = "private" | "summary" | "full";
@@ -63,38 +65,16 @@ export function SharePopover({
   pageUrl,
   forwardUrl,
   forwardLabel,
+  sharedVia,
 }: SharePopoverProps) {
   const chatOn = useTeamFeature("chat");
-  // The moment to suggest the team-wide switch: this session is now Full while
-  // the member's level for the team is still lower, and someone else is on it.
-  const teams = useInboxStore((s) => s.teams);
-  const setTeamMembershipVisibility = useInboxStore((s) => s.setTeamMembershipVisibility);
-  const team = teamVisibilityFor(teams, teamId);
-  const teamBelowFull =
-    !!team && (team.member_count ?? 0) > 1 &&
-    TEAM_VISIBILITY_RANK[currentMembershipVisibility(team)] < TEAM_VISIBILITY_RANK.full;
   const [isOpen, setIsOpen] = useState(false);
-  const [isUpdating, setIsUpdating] = useState(false);
   const [isGeneratingLink, setIsGeneratingLink] = useState(false);
   const [copied, setCopied] = useState(false);
   const [pageCopied, setPageCopied] = useState(false);
 
   const currentMode: VisibilityMode = isPrivate ? "private" : (teamVisibility as VisibilityMode || "summary");
   const status = getShareStatus(isPrivate, teamVisibility, hasShareToken, hasTeam);
-
-  const handleSetMode = async (mode: VisibilityMode) => {
-    if (mode === currentMode) return;
-    setIsUpdating(true);
-    try {
-      if (mode === "private") {
-        await onSetPrivate?.();
-      } else {
-        await onSetTeamVisibility?.(mode);
-      }
-    } finally {
-      setIsUpdating(false);
-    }
-  };
 
   const handleCopyLink = async () => {
     let url = shareUrl;
@@ -169,71 +149,13 @@ export function SharePopover({
 
         <div className="p-3 space-y-3">
           {hasTeam && (
-            <div className="space-y-2">
-              <span className="text-xs font-medium text-sol-text-dim uppercase tracking-wide">Team</span>
-              <div className="flex rounded-lg border border-sol-border overflow-hidden">
-                <button
-                  onClick={() => handleSetMode("private")}
-                  disabled={isUpdating}
-                  className={`flex-1 px-3 py-2 text-xs font-medium transition-colors flex items-center justify-center gap-1.5 ${
-                    currentMode === "private"
-                      ? "bg-sol-base02/50 text-sol-text"
-                      : "bg-sol-bg text-sol-text-muted hover:bg-sol-bg-alt"
-                  }`}
-                >
-                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M3.98 8.223A10.477 10.477 0 001.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.45 10.45 0 0112 4.5c4.756 0 8.773 3.162 10.065 7.498a10.523 10.523 0 01-4.293 5.774M6.228 6.228L3 3m3.228 3.228l3.65 3.65m7.894 7.894L21 21m-3.228-3.228l-3.65-3.65m0 0a3 3 0 10-4.243-4.243m4.242 4.242L9.88 9.88" />
-                  </svg>
-                  Hidden
-                </button>
-                <button
-                  onClick={() => handleSetMode("summary")}
-                  disabled={isUpdating}
-                  className={`flex-1 px-3 py-2 text-xs font-medium transition-colors border-l border-r border-sol-border flex items-center justify-center gap-1.5 ${
-                    currentMode === "summary"
-                      ? "bg-teal-500/15 text-teal-600 dark:text-teal-400"
-                      : "bg-sol-bg text-sol-text-muted hover:bg-sol-bg-alt"
-                  }`}
-                >
-                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 6.75h12M8.25 12h12m-12 5.25h12M3.75 6.75h.007v.008H3.75V6.75zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zM3.75 12h.007v.008H3.75V12zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm-.375 5.25h.007v.008H3.75v-.008zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
-                  </svg>
-                  Summary
-                </button>
-                <button
-                  onClick={() => handleSetMode("full")}
-                  disabled={isUpdating}
-                  className={`flex-1 px-3 py-2 text-xs font-medium transition-colors flex items-center justify-center gap-1.5 ${
-                    currentMode === "full"
-                      ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
-                      : "bg-sol-bg text-sol-text-muted hover:bg-sol-bg-alt"
-                  }`}
-                >
-                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                  </svg>
-                  Full
-                </button>
-              </div>
-              <p className="text-[11px] text-sol-text-dim">
-                {currentMode === "private" && "Hidden from team members"}
-                {currentMode === "summary" && "Team sees title and activity summary"}
-                {currentMode === "full" && "Team can view the full conversation"}
-              </p>
-              {currentMode === "full" && teamBelowFull && team && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setTeamMembershipVisibility(String(team._id), "full", "going_forward");
-                    toast.success(`${team.name} sees the whole conversation for new sessions`);
-                  }}
-                  className="text-[11px] text-sol-cyan hover:underline"
-                >
-                  Share all new sessions with {team.name} in full
-                </button>
-              )}
-            </div>
+            <TeamShareModePicker
+              mode={currentMode}
+              onChange={(mode) => (mode === "private" ? onSetPrivate?.() : onSetTeamVisibility?.(mode))}
+              teamId={teamId}
+              sharedVia={sharedVia}
+              onNavigate={() => setIsOpen(false)}
+            />
           )}
 
           {pageUrl && (

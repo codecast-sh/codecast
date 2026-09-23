@@ -41,6 +41,7 @@ import {
 } from "./buckets";
 import { advanceLocalViewRevision, runLocalCommand } from "./localFirstCommands";
 import { isSessionOwner } from "./sessionOwners";
+import { hideConversationForViewer, unhideConversationForViewer } from "./inboxHides";
 import { patchCommentWithRevision } from "./commentViewWrites";
 import { canAccessConversation, requireTeamMembership, patchConversationVisibility } from "./lib/access";
 import { patchConversationThroughFavoriteView } from "./favoriteViewWrites";
@@ -116,17 +117,16 @@ const TABLE_CONFIG: Record<string, TableConfig> = {
 const PATCH_ONLY_ACTIONS = new Set([
   "answerDecision", "applyWorkbench", "clearCurrentConversation", "clearSelection",
   "clearSidePanelSession", "closeSidePanel", "closeTab", "deferSession",
-  "initPagination", "injectSession", "killSession", "killSessions",
-  "markKilling", "navigateToSession", "openSidePanel", "openTab",
+  "initPagination", "injectSession", "markKilling", "navigateToSession", "openSidePanel", "openTab",
   "patchConversation", "pinSession", "renameSession", "requestNavigate",
-  "restoreSession", "saveCurrentTabState", "selectPanelSession", "setActiveBucketFilter",
+  "saveCurrentTabState", "selectPanelSession", "setActiveBucketFilter",
   "setActiveProjectFilter", "setCloudSessionMode", "setCloudSharedCheckout", "setConversationAgent",
   "setConversationAgentDefinition", "setConversationModel", "setCurrentConversation", "setCurrentSession",
   "setIsolatedWorktreeMode", "setNavCollapsed", "setPagination", "setRecentProjects",
   "setSessionCharacter", "setSessionCharacters", "setSessionRest", "setViewingDismissedId",
   "snoozeSession", "stageCloseLeaf", "stageExpandLeaf", "stageFocusLeaf",
   "stageInsertLeaf", "stageMoveLeaf", "stageSetLeafPath", "stageSetSizes",
-  "stashSession", "switchTab", "toggleBucketFilterTerm", "toggleCollapsedSection",
+  "switchTab", "toggleBucketFilterTerm", "toggleCollapsedSection",
   "toggleFavorite", "toggleProjectFilterTerm", "toggleSidePanel", "touchMru",
   "updateClientDismissed", "updateSessionProject", "updateTab", "wakeSnoozedSession",
   "wsHide", "wsSetPresentation", "wsSetSize", "wsShow",
@@ -1267,6 +1267,31 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
 
   dismissBrowserPaneOffer: async (ctx, userId, [convId, at]: [string, number]) => {
     await stampBrowserPaneOfferHandled(ctx, userId, convId as Id<"conversations">, at);
+  },
+
+  // The inbox hide gestures. For the runner and the owner set the patches above
+  // carry the gesture (the row's own stamps). For anyone else — a teammate's
+  // row on the team board — applyPatches dropped the patch and the store only
+  // forgot its copy; the team fold then re-fed the row on the next push. The
+  // viewer's gesture is recorded in inbox_hides instead, which the team scan
+  // skips. hideConversationForViewer is a no-op for the runner and owners, so
+  // one handler serves both cases without the client telling them apart.
+  stashSession: async (ctx, userId, [convId]: [string, { hidden?: boolean } | undefined]) => {
+    const conv = await ctx.db.get(convId as Id<"conversations">);
+    await hideConversationForViewer(ctx, userId, conv, "stash");
+  },
+  killSession: async (ctx, userId, [convId]: [string]) => {
+    const conv = await ctx.db.get(convId as Id<"conversations">);
+    await hideConversationForViewer(ctx, userId, conv, "dismiss");
+  },
+  killSessions: async (ctx, userId, [convIds]: [string[]]) => {
+    for (const convId of convIds ?? []) {
+      const conv = await ctx.db.get(convId as Id<"conversations">);
+      await hideConversationForViewer(ctx, userId, conv, "dismiss");
+    }
+  },
+  restoreSession: async (ctx, userId, [convId]: [string]) => {
+    await unhideConversationForViewer(ctx, userId, convId as Id<"conversations">);
   },
 
   // Mirror of conversations.setPrivacy — these two fields are immutable in

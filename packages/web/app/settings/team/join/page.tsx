@@ -15,6 +15,8 @@ import { useWorkspaceSelection } from "../../../../hooks/useWorkspaceSelection";
 import { useTeamWorkspaceSuggestions } from "../../../../hooks/useTeamWorkspaceSuggestions";
 import { useSaveTeamSetup } from "../../../../lib/team/saveTeamSetup";
 import { useSwitchWorkspace } from "../../../../hooks/useSwitchWorkspace";
+import { useShareImpact } from "../../../../hooks/useShareImpact";
+import { shareActionLabel } from "../../../../lib/team/shareImpact";
 import { useCurrentUser } from "../../../../hooks/useCurrentUser";
 import { useInboxStore } from "../../../../store/inboxStore";
 
@@ -67,7 +69,8 @@ export default function JoinTeamPage() {
   const previewExpired = !!preview?.isExpired;
 
   const data = useTeamWorkspaceSuggestions(teamId);
-  const { selectedPaths, toggle, selectedCount } = useWorkspaceSelection(data, teamId);
+  const { selectedPaths, toggle, selectedList, since, setSince } = useWorkspaceSelection(data, teamId);
+  const impact = useShareImpact(selectedList, data.allProjects, since);
   const save = useSaveTeamSetup();
 
   // The member's default visibility on this team lands with the
@@ -147,7 +150,7 @@ export default function JoinTeamPage() {
     const id = teamId;
     const name = teamName || "the team";
     if (id) {
-      save({ teamId: id, visibility, selectedPaths: paths, allProjects: data.allProjects })
+      save({ teamId: id, visibility, selectedPaths: paths, allProjects: data.allProjects, shareSince: since })
         .then(({ mapped }) => {
           if (mapped > 0) toast.success(`Sharing ${mapped} workspace${mapped === 1 ? "" : "s"} with ${name}`);
         })
@@ -266,12 +269,12 @@ export default function JoinTeamPage() {
       stepIndex={2 - stepOffset}
       crest={crest}
       heading="Where you work"
-      description="Pick the repos you work in with this team. Sessions there show in the team feed."
+      description="Pick the repos you work in with this team. Sessions there show in the team feed; the summary below says exactly how many."
       onBack={goBack}
       onSkip={() => finishSetup({})}
       skipLabel="Skip for now"
       onContinue={() => finishSetup(selectedPaths)}
-      continueLabel={selectedCount > 0 ? `Share ${selectedCount} workspace${selectedCount === 1 ? "" : "s"}` : "Open team"}
+      continueLabel={shareActionLabel(impact, since) ?? "Open team"}
       enterAdvances
     >
       <WorkspaceSharePicker
@@ -279,6 +282,13 @@ export default function JoinTeamPage() {
         teamId={teamId}
         selectedPaths={selectedPaths}
         onToggle={toggle}
+        impact={{
+          teamName: teamName || "The team",
+          memberCount: storeTeam?.member_count ?? previewOk?.memberCount,
+          visibility,
+          since,
+          onSinceChange: setSince,
+        }}
       />
     </TeamFlowShell>
   );
