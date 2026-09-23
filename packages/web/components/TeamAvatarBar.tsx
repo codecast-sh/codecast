@@ -250,7 +250,7 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
           <button
             onClick={() => router.push("/team/activity?filter=team")}
             data-overflow
-            className="flex h-8 w-8 items-center justify-center rounded-full border-2 border-sol-border/50 bg-sol-bg-highlight text-xs text-sol-text-muted transition-colors hover:border-sol-border"
+            className="flex h-8 w-8 items-center justify-center rounded-full border border-sol-border/60 bg-sol-bg-highlight text-xs text-sol-text-muted transition-colors hover:border-sol-border"
           >
             +{hidden}
           </button>

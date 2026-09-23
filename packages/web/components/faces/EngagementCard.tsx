@@ -87,15 +87,17 @@ function inviteOut(c: RingOut): { _id: unknown } | undefined {
 }
 
 /** The strip's edge for a stage: warm while my voice goes out, cool while
- *  theirs comes in, both for both. */
+ *  theirs comes in, both for both, and the call's violet for a line held
+ *  open (ON THE LINE), the colour of the seats above it. */
 function edgeOf(stage: string | undefined): string {
   switch (stage) {
     case "recording":
     case "live":
-    case "locked":
     case "opening":
     case "dropped":
       return "walkie-strip-live walkie-strip-tx";
+    case "locked":
+      return "walkie-strip-live walkie-strip-call";
     case "incoming":
       return "walkie-strip-live walkie-strip-rx";
     case "both":
@@ -107,8 +109,18 @@ function edgeOf(stage: string | undefined): string {
   }
 }
 
-/** The loud word and the sentence under it, from walkieStageWords. */
-function Stage({ words, name }: { words: { stage: string; badge: string; hint: string }; name: string }) {
+/** The loud word, then the sentence under it, from walkieStageWords. What
+ *  the roster says about who hears me (`children`) sits between the two:
+ *  the fact first, the instruction after, the order the strip read in. */
+function Stage({
+  words,
+  name,
+  children,
+}: {
+  words: { stage: string; badge: string; hint: string };
+  name: string;
+  children?: React.ReactNode;
+}) {
   const bare = words.stage === "open" || words.stage === "incoming";
   return (
     <>
@@ -117,8 +129,19 @@ function Stage({ words, name }: { words: { stage: string; badge: string; hint: s
         <span className="walkie-stage-badge">{words.badge}</span>
         <span className="walkie-stage-with">{bare ? "" : `with ${name}`}</span>
       </div>
+      {children}
       <div className="walkie-strip-hint">{words.hint}</div>
     </>
+  );
+}
+
+/** "Riley hears you", in the words the roster decided (senderHearing). */
+function Hearing({ hearing }: { hearing: Extract<FaceCard, { kind: "live" }>["hearing"] }) {
+  if (!hearing) return null;
+  return (
+    <div className="engagement-card-hearing" data-hearing={hearing.state} role="status" aria-live="polite">
+      {hearing.text}
+    </div>
   );
 }
 
@@ -198,14 +221,14 @@ export function EngagementCard({
         card.words ? edgeOf(card.words.stage) : "walkie-strip-live",
         <>
           {card.words ? (
-            <Stage words={card.words} name={card.title} />
+            <Stage words={card.words} name={card.title}>
+              <Hearing hearing={card.hearing} />
+            </Stage>
           ) : (
-            <div className="engagement-card-title">{card.title}</div>
-          )}
-          {card.hearing && (
-            <div className="engagement-card-hearing" data-hearing={card.hearing.state} role="status" aria-live="polite">
-              {card.hearing.text}
-            </div>
+            <>
+              <div className="engagement-card-title">{card.title}</div>
+              <Hearing hearing={card.hearing} />
+            </>
           )}
           <LiveControls card={card} actions={actions} />
         </>,

@@ -742,7 +742,8 @@ export function walkieStageWords(input: {
   name: string;
 }): WalkieStageWords {
   const { sending, incoming, locked, muted, dropped, micDenied, name } = input;
-  const stopHint = "Click STOP when you are done.";
+  // END is the word on the card's button (EngagementCard), so the hint names it.
+  const stopHint = "Click END when you are done.";
   if (sending) {
     if (dropped) return { stage: "dropped", badge: "NOT HEARD", hint: `Still recording. ${name} gets it as a message. ${stopHint}` };
     if (!sending.live) return { stage: "opening", badge: "OPENING MIC", hint: "One moment. Do not talk yet." };

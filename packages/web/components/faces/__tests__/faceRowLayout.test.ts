@@ -56,11 +56,53 @@ describe("the stylesheet agrees", () => {
     expect(cssVar(rule, "--link-w")).toBe(`${FACE_ROW_METRICS.float.link}px`);
     expect(cssVar(rule, "padding")).toBe(`${FACE_ROW_METRICS.float.pad}px`);
   });
+  test("the member card centres on the face in the bar, and floors at the window's edge in the float", () => {
+    // The bar's row sits inside the header with room on both sides, so the
+    // card may run left of the row and only a measured viewport edge
+    // (--shift, FaceCard) pushes it in: a floor at the row's own edge left
+    // the first four faces with a card hanging off to the right. The float's
+    // window is the viewport and is sized to hold the card from the band's
+    // edge (floatingRowSize), so there the floor is the viewport clamp.
+    expect(cssVar(".face-card {", "--lead")).toBe("calc(var(--anchor) - var(--card-w) / 2 + var(--shift, 0px))");
+    expect(cssVar('.face-card[data-density="float"] {', "--lead")).toBe("max(0px, calc(var(--anchor) - 8px - var(--card-w) / 2))");
+  });
   test("the pull", () => {
     expect(cssVar(".face-link {", "margin")).toBe(`0 calc(var(--face-gap) * -${LINK_PULL})`);
   });
-  test("the card hangs from the bar and sits under the float", () => {
-    expect(cssVar('.engagement-card[data-density="bar"] {', "position")).toBe("absolute");
+  test("the band hangs under the row and the card rides in it at both densities", () => {
+    // The row renders the card inside the band (faceRow.mount: `.face-row >
+    // .face-row-below > .engagement-card`); the band is what hangs, so the
+    // card itself stays in flow and never wraps the seats.
+    expect(cssVar(".face-row-below {", "position")).toBe("absolute");
+    expect(cssVar(".face-row-below {", "top")).toBe("100%");
+    expect(cssVar('.engagement-card[data-density="bar"] {', "position")).toBe("relative");
     expect(cssVar('.engagement-card[data-density="float"] {', "position")).toBe("relative");
+  });
+});
+
+describe("one colour per state", () => {
+  test("my warm ring starts at nothing, so the band under it keeps its own colour", () => {
+    // The band is translucent: a warm ring of the band's own width under it
+    // tinted my violet pink while every other seat on the line stayed blue.
+    const mic = cssVar('.face-row .face[data-me][data-level="mic"] {', "box-shadow") ?? "";
+    expect(mic).toContain("0 0 0 calc(var(--level) * 6px)");
+    expect(mic).not.toContain("calc(2px + var(--level)");
+  });
+  test("a call's link is the seats' violet, not a third colour between two violet faces", () => {
+    expect(cssVar('.face-link[data-link-kind="call"] {', "--link-tone")).toBe("var(--sol-violet)");
+    expect(cssVar('.face-link[data-link-kind="ring"] {', "--link-tone")).toBe("var(--sol-cyan)");
+  });
+});
+
+describe("reduced motion silences the rules it names", () => {
+  // A selector in the media block must carry the specificity of the rule
+  // it silences, or the animation runs on: a bare `.face-link` loses to
+  // `.face-link[data-link-kind]` and the pulses kept travelling.
+  const reduced = css.split("@media (prefers-reduced-motion: reduce) {")[1]?.split("\n}\n")[0] ?? "";
+  test("the link pulses are silenced at the kind's own specificity", () => {
+    expect(reduced).toContain(".face-link[data-link-kind]::before");
+    expect(reduced).toContain(".face-link[data-link-kind]::after");
+    expect(reduced).toContain(".face-link[data-link-kind],");
+    expect(reduced).not.toMatch(/^\s*\.face-link(::before|::after)?,?\s*$/m);
   });
 });

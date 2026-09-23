@@ -421,7 +421,9 @@ export type VoiceOpenPayload = {
  *  on purpose — it crosses a process boundary. */
 export type VoiceMirror = {
   walkie: unknown;
-  call: { roomKey: string | null; phase: string; muted: boolean; micDenied: boolean; camera: boolean };
+  /** `speaking` is the host's active speaker list: a remote's face row draws
+   *  the speaking ring from it, and my own camera face from `camera`. */
+  call: { roomKey: string | null; phase: string; muted: boolean; micDenied: boolean; camera: boolean; speaking: string[] };
 };
 
 export type DesktopDisplaySource = {
