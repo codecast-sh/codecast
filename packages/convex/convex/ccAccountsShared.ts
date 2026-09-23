@@ -719,6 +719,7 @@ export function decideAutoSwitch(input: {
   // was still spent (jx7dnat: hundreds of continues into a usage limit).
   const continueHasNewEvidence =
     !lastContinue ||
+    (activeSince !== undefined && activeSince > lastContinue && activeFetchedAt >= activeSince) ||
     (!!sessionResetAt && sessionResetAt > lastContinue && sessionResetAt <= now) ||
     activeFetchedAt >= lastContinue + AUTO_SWITCH_ATTEMPT_EVIDENCE_MS;
   if (
