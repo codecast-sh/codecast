@@ -92,9 +92,10 @@ function normalizeHistory(
 
 /** The membership fields after the member picks `target`.
  *
- *  Lowering (or no change) applies to everything: every segment drops to at
- *  most the new level, so nothing older shows more than the member now allows.
- *  Raising for everything forgets the history. Raising going forward pins the
+ *  Lowering applies to everything: every segment drops to at most the new
+ *  level, so nothing older shows more than the member now allows. Raising for
+ *  everything forgets the history, and so does picking the current level for
+ *  everything ("include past sessions"). Raising going forward pins the
  *  sessions started before `now` at the level they had, then moves on. */
 export function nextMembershipVisibility(
   m: MembershipVisibilityFacts | null | undefined,
@@ -104,7 +105,10 @@ export function nextMembershipVisibility(
 ): { visibility: TeamVisibilityLevel; visibility_history: VisibilitySegment[] | undefined } {
   const current = currentMembershipVisibility(m);
   const history = m?.visibility_history ?? [];
-  if (TEAM_VISIBILITY_RANK[target] <= TEAM_VISIBILITY_RANK[current]) {
+  if (target === current) {
+    return { visibility: target, visibility_history: mode === "everything" ? undefined : normalizeHistory(history, target) };
+  }
+  if (TEAM_VISIBILITY_RANK[target] < TEAM_VISIBILITY_RANK[current]) {
     const capped = history.map((segment) => ({ ...segment, visibility: lower(segment.visibility, target) }));
     return { visibility: target, visibility_history: normalizeHistory(capped, target) };
   }

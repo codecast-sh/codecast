@@ -66,10 +66,11 @@ describe("nextMembershipVisibility", () => {
     expect(effectiveMembershipVisibility(next, T1)).toBe("full");
   });
 
-  test("no change is a no-op that keeps the history", () => {
+  test("the current level going forward is a no-op; the current level for everything lifts the pinned past", () => {
     const m = { visibility: "full", visibility_history: [{ before: T1, visibility: "summary" as const }] };
     expect(nextMembershipVisibility(m, "full", "going_forward", T2)).toEqual(m);
-    expect(nextMembershipVisibility(m, "full", "everything", T2)).toEqual(m);
+    // "Include past sessions": same level, everything.
+    expect(nextMembershipVisibility(m, "full", "everything", T2)).toEqual({ visibility: "full", visibility_history: undefined });
   });
 
   test("lowering applies to everything: every segment drops to at most the new level", () => {
