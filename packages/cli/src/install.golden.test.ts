@@ -177,6 +177,13 @@ function runCli(home: string, args: string[], attempt = ""): string {
       `  stderr: ${proc.stderr}`,
     );
   }
+  // Under heavy machine load bun has handed back exit 0 with an empty pipe
+  // (2026-09-22: the help golden was re-recorded as a 0 byte file and the next
+  // run passed against it). No install or help run prints nothing, so an
+  // empty capture is a harness fault, never a baseline.
+  if (proc.stdout.length === 0) {
+    throw new Error(`cast ${args.join(" ")} exited 0 with empty stdout${attempt}.\n  stderr: ${proc.stderr}`);
+  }
   return proc.stdout;
 }
 
