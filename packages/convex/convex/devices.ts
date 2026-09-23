@@ -153,8 +153,9 @@ export async function enqueueStartSession(
     agentType: AgentClientId;
     projectPath?: string | null;
     gitRoot?: string | null;
-    // The machine the user picked by hand. Honoured when it's online, otherwise
-    // routing falls back to whatever is alive and has the checkout.
+    // The machine the user picked by hand. Honoured whether or not it is
+    // online: an offline pick queues the start for that machine. Routing never
+    // substitutes another machine for a pick.
     targetDeviceId?: string | null;
     sessionId?: string;
     isolated?: boolean;
@@ -308,8 +309,8 @@ export async function enqueueStartSession(
       .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", target))
       .first();
     ccAccount = activeTokenProfile(targetDevice?.cc_accounts, Date.now());
-    if (ccAccount && conv && conv.cc_account !== ccAccount) {
-      await ctx.db.patch(opts.conversationId, { cc_account: ccAccount });
+    if (ccAccount && conv && (conv.cc_account !== ccAccount || conv.cc_account_auto !== true)) {
+      await ctx.db.patch(opts.conversationId, { cc_account: ccAccount, cc_account_auto: true });
     }
   }
   if (ccAccount) args.cc_account = ccAccount;

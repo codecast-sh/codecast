@@ -5,7 +5,9 @@ import {
   humanizeSwitchError,
   machineSwitchBlock,
   machineSwitchPendingCopy,
+  machineSwitchSuccessCopy,
   profileIsCurrentLogin,
+  profileIsFleetAccount,
   resolveMachineSwitch,
   stripSwitchPrefix,
 } from "../machineAccountSwitch";
@@ -144,4 +146,29 @@ test("pending copy distinguishes a slow wait", () => {
   expect(machineSwitchPendingCopy("slow", "petrosianasho", "ashot-mbp")).toBe(
     'Still waiting on ashot-mbp to switch to "petrosianasho"…',
   );
+});
+
+describe("token switch", () => {
+  test("a live minted token lifts the expired-login block", () => {
+    expect(machineSwitchBlock({ isActive: false, thisProfile: "tok", loginExpired: true, tokenLive: true })).toBeNull();
+    expect(machineSwitchBlock({ isActive: false, thisProfile: "tok", loginExpired: true, tokenLive: false })?.block).toBe("login_expired");
+    expect(machineSwitchBlock({ isActive: false, thisProfile: "tok", loginExpired: true, tokenLive: true, online: false })?.block).toBe("offline");
+  });
+
+  test("the fleet account is the launch profile when one is set, else the keychain login", () => {
+    const tok = { name: "tok", email: "tok@x.com" };
+    const key = { name: "key", email: "key@x.com" };
+    expect(profileIsFleetAccount(tok, { activeEmail: "key@x.com", launchProfile: "tok" })).toBe(true);
+    expect(profileIsFleetAccount(key, { activeEmail: "key@x.com", launchProfile: "tok" })).toBe(false);
+    expect(profileIsFleetAccount(key, { activeEmail: "key@x.com" })).toBe(true);
+    expect(profileIsFleetAccount(tok, { activeEmail: "key@x.com" })).toBe(false);
+  });
+
+  test("a token switch succeeds when the machine reports the launch profile, though the login never moves", () => {
+    const pending = { profile: "tok", email: "tok@x.com", startedAt: 0 };
+    expect(resolveMachineSwitch({ pending, activeEmail: "key@x.com", now: 1_000 }).phase).toBe("waiting");
+    expect(resolveMachineSwitch({ pending, activeEmail: "key@x.com", launchProfile: "tok", now: 1_000 }).phase).toBe("succeeded");
+    expect(machineSwitchSuccessCopy("tok", true).title).toMatch(/sessions now run on/i);
+    expect(machineSwitchSuccessCopy("tok").title).toMatch(/this machine is now/i);
+  });
 });

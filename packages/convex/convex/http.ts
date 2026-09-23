@@ -69,8 +69,11 @@ http.route({
         });
       }
 
+      // The redeeming machine's device id binds the long lived token it gets
+      // back. An older CLI sends none and gets an unbound token, as before.
       const result = await ctx.runMutation(internal.apiTokens.exchangeSetupToken, {
         setupToken,
+        device_id: typeof body.device_id === "string" ? body.device_id : undefined,
       });
 
       if (!result) {
@@ -632,7 +635,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, conversation_id, start_line, end_line, full_content, around_message_id, context } = body;
+      const { api_token, conversation_id, start_line, end_line, full_content, around_message_id, context, include_file_changes } = body;
 
       if (!api_token || !conversation_id) {
         return new Response(JSON.stringify({ error: "Missing api_token or conversation_id" }), {
@@ -643,7 +646,7 @@ http.route({
 
       const result = await readConversationRange(
         (pageArgs) => ctx.runQuery(api.conversations.readConversationMessages, pageArgs),
-        { api_token, conversation_id, start_line, end_line, full_content, around_message_id, context },
+        { api_token, conversation_id, start_line, end_line, full_content, around_message_id, context, include_file_changes },
       );
 
       if (result.error) {
@@ -2502,7 +2505,8 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, path_prefix, team_id, auto_share } = body;
+      const { api_token, path_prefix, team_id, auto_share, include_past } = body;
+      const lock = body.private === true;
 
       if (!api_token || !path_prefix) {
         return new Response(JSON.stringify({ error: "Missing api_token or path_prefix" }), {
@@ -2515,10 +2519,12 @@ http.route({
         api_token,
         path_prefix,
         team_id,
+        private: lock || undefined,
         auto_share,
+        include_past: typeof include_past === "boolean" ? include_past : undefined,
       });
 
-      if (result.error) {
+      if ("error" in result) {
         return new Response(JSON.stringify({ error: result.error }), {
           status: result.error === "Unauthorized" ? 401 : 400,
           headers: { "Content-Type": "application/json", ...corsHeaders },
@@ -3812,13 +3818,11 @@ function cliRoute(
   path: string,
   handler: (ctx: any, body: any) => Promise<any>,
   // forwardDeviceId: this route's own function takes device_id as a real
-  // argument (cast pull's destination, a terminal pane's machine, …), so after
-  // the binding check the field must survive into the body instead of being
-  // consumed. Note for the binding rollout: on these routes the one device_id
-  // field is BOTH the binding presentation and the argument, so a bound token
-  // can only ever name its own machine here — a route whose argument may
-  // legitimately be a DIFFERENT device (terminal watch of another machine)
-  // will need a separate presentation channel before its tokens are bound.
+  // argument (cast pull's destination, a terminal pane's machine, …), so the
+  // field must survive into the body instead of being stripped. It is only
+  // ever an argument: the device a token is presented FROM rides inside
+  // api_token itself (@platform/auth tokenFormat), so a route whose argument
+  // names a different machine than the caller's is fine.
   opts?: { forwardDeviceId?: boolean },
 ) {
   const corsHeaders = {
@@ -3832,14 +3836,14 @@ function cliRoute(
     handler: httpAction(async (ctx, request) => {
       try {
         const body = await request.json();
-        // Device binding, enforced once for every CLI endpoint rather than in
-        // each of the ~100 handlers. A token that names a device may only act
-        // from that device; a token that names none is unbound and behaves
-        // exactly as it always has, which is what makes this migration-free.
+        // Device binding, asked here ahead of the handler so a request from the
+        // wrong machine gets a 403 that names the fix. The handler's own
+        // verifyApiToken enforces the same rule on api_token as it arrived, so
+        // this is the better error, not the only check: a direct Convex call
+        // that never passes through here is refused just the same.
         if (typeof body?.api_token === "string") {
           const allowed = await ctx.runQuery(internal.apiTokens.deviceBindingAllows, {
             api_token: body.api_token,
-            device_id: typeof body.device_id === "string" ? body.device_id : undefined,
           });
           if (!allowed) {
             return new Response(
@@ -3852,8 +3856,8 @@ function cliRoute(
             );
           }
         }
-        // device_id is consumed HERE and only forwarded on routes that declare
-        // it (forwardDeviceId). Most cliRoute handlers pass the body straight
+        // A device_id body field is only forwarded on routes that declare it
+        // (forwardDeviceId). Most cliRoute handlers pass the body straight
         // into a mutation whose validator is a closed `v.object`, so an
         // unrecognised field is a hard rejection — but for routes whose own
         // function REQUIRES device_id, deleting it is an equally hard rejection
@@ -4080,7 +4084,11 @@ cliRoute("/cli/role/pause", async (ctx, body) => ctx.runMutation(api.orgRoles.pa
 cliRoute("/cli/role/resume", async (ctx, body) => ctx.runMutation(api.orgRoles.resume, body));
 cliRoute("/cli/role/retire", async (ctx, body) => ctx.runMutation(api.orgRoles.retire, body));
 cliRoute("/cli/role/restart", async (ctx, body) => ctx.runMutation(api.orgRoles.restart, body));
+// The switch (org-staffing.md S23.1) and the limits. /trust and /caps stay one
+// release for older CLIs; both pairs run the same mutation.
+cliRoute("/cli/role/autonomy", async (ctx, body) => ctx.runMutation(api.orgRoles.setTrust, body));
 cliRoute("/cli/role/trust", async (ctx, body) => ctx.runMutation(api.orgRoles.setTrust, body));
+cliRoute("/cli/role/limits", async (ctx, body) => ctx.runMutation(api.orgRoles.setCaps, body));
 cliRoute("/cli/role/caps", async (ctx, body) => ctx.runMutation(api.orgRoles.setCaps, body));
 cliRoute("/cli/role/authority", async (ctx, body) => ctx.runMutation((api as any).orgRoles.setAuthority, body));
 cliRoute("/cli/role/reports", async (ctx, body) => ctx.runMutation(api.orgRoles.setReports, body));

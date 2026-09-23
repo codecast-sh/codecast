@@ -8,6 +8,8 @@ const dom = new JSDOM("<!doctype html>", { url: "http://pending-input.test" });
 Object.assign(globalThis, { window: dom.window, document: dom.window.document, localStorage: dom.window.localStorage, indexedDB, IDBKeyRange });
 Dexie.dependencies.indexedDB = indexedDB;
 Dexie.dependencies.IDBKeyRange = IDBKeyRange;
+const { installSignedInPrincipal, stampCacheOwner } = await import("./signedInPrincipal");
+installSignedInPrincipal("test-owner");
 const cache = await import("../../idbCache");
 const { useInboxStore, hydrateMergeValue } = await import("../../inboxStore");
 const { readPendingMessageJournal } = await import("../../pendingMessageJournal");
@@ -16,6 +18,7 @@ for (let i = 0; i < 1000 && !useInboxStore.getState().clientStateInitialized; i+
 expect(useInboxStore.getState().clientStateInitialized).toBe(true);
 const state = () => useInboxStore.getState() as any;
 const owner = { _id: "test-owner" };
+await stampCacheOwner(owner._id);
 useInboxStore.setState({ currentUser: owner } as any);
 const resetWindow = () => {
   useInboxStore.setState({ currentUser: owner, pendingMessages: {}, messages: {}, sessions: {}, conversations: {} } as any);

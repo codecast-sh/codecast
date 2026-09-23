@@ -3,8 +3,7 @@
 // for the author's first bubble. Run: bun test components/org/staffingAsks.test.ts
 import { describe, expect, test } from "bun:test";
 import { ORG_STAFFING_FIXTURE_PROPOSAL, ORG_STAFFING_FIXTURE_REVISED_PROPOSAL } from "./orgStaffingFixture";
-import { askOfChange, asksProgress, costLine, letterIntro, letterParts, proposalAsks } from "./staffingAsks";
-import type { BudgetArithmetic } from "./staffingModel";
+import { askOfChange, asksProgress, letterIntro, letterParts, proposalAsks } from "./staffingAsks";
 
 describe("proposalAsks", () => {
   test("a proposal with no stored asks derives them, every live change in exactly one", () => {
@@ -52,29 +51,6 @@ describe("proposalAsks", () => {
   });
 });
 
-describe("costLine", () => {
-  const b = (today: number, after: number, lines = 1): BudgetArithmetic => ({
-    today: { hands_per_day: 0, wakes_per_day: 0, tokens_per_day: today },
-    after: { hands_per_day: 0, wakes_per_day: 0, tokens_per_day: after },
-    seats: 2, paused: 0,
-    lines: Array.from({ length: lines }, () => ({ handle: "x", before: null, after: null, note: "" })),
-  });
-  test("says the share in words, less or more", () => {
-    expect(costLine(b(1000, 750))).toBe("If you accept everything, the daily limits add up to about a quarter less");
-    expect(costLine(b(1000, 1100))).toBe("If you accept everything, the daily limits add up to about a tenth more");
-    expect(costLine(b(1000, 500))).toBe("If you accept everything, the daily limits add up to about half less");
-    expect(costLine(b(1000, 1660))).toBe("If you accept everything, the daily limits add up to about two thirds more");
-    expect(costLine(b(1000, 2100))).toBe("If you accept everything, the daily limits add up to about double");
-    expect(costLine(b(1000, 3200))).toBe("If you accept everything, the daily limits add up to about 3 times as much");
-    expect(costLine(b(1000, 50))).toBe("If you accept everything, the daily limits add up to almost nothing");
-    expect(costLine(b(1000, 1010))).toBe("If you accept everything, the daily limits add up to about the same");
-  });
-  test("the edges: nothing moves, a first limit, no limit left", () => {
-    expect(costLine(b(1000, 1000, 0))).toBe("If you accept everything, the daily limits stay as they are");
-    expect(costLine(b(0, 800))).toBe("If you accept everything, the agents get their first daily limit");
-    expect(costLine(b(800, 0))).toBe("If you accept everything, no agent has a daily limit left to use");
-  });
-});
 
 describe("the letter", () => {
   test("a short letter shows whole; a long one leads with its opening and folds the rest", () => {

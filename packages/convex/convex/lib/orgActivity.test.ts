@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { commitAreaPrefixes, computeOrgActivity, computeStale, pathPrefixOf, projectPathPrefix, type ActivityInputs } from "./orgActivity";
+import { commitAreaPrefixes, computeOrgActivity, computeStale, pathPrefixOf, projectPathPrefix, type ActivityInputs, landingFor, namedTextOf, namesRecord, recordWords } from "./orgActivity";
 
 // Ground in what is happening (docs/architecture/org-staffing.md S9): pure over
 // rows, so the areas, the people-by-area and the three stale lists are asserted
@@ -87,7 +87,7 @@ describe("areas and people (S9)", () => {
     const me = a.people.find((p) => p.user_id === ME)!;
     expect(me.areas.find((r) => r.path_prefix === "packages/web")).toEqual({ path_prefix: "packages/web", commits: 1, sessions: 1 });
     expect(me.areas.find((r) => r.path_prefix === "packages/convex")).toEqual({ path_prefix: "packages/convex", commits: 1, sessions: 0 });
-    expect(a.commits).toEqual({ total: 3, with_files: 3, without_files: 0, spanning_areas: 0 });
+    expect(a.commits).toEqual({ total: 3, with_files: 3, without_files: 0, spanning_areas: 0, landed: 0 });
   });
 
   test("real shaped rows: commits without a file list land on the root and are counted as unverified, not as a seam", () => {
@@ -102,7 +102,7 @@ describe("areas and people (S9)", () => {
         { repository: "acme/app", timestamp: NOW - D, author_name: "Mate", files: [{ filename: "packages/convex/convex/x.ts" }, { filename: "packages/web/y.tsx" }] },
       ],
     }));
-    expect(a.commits).toEqual({ total: 4, with_files: 2, without_files: 2, spanning_areas: 1 });
+    expect(a.commits).toEqual({ total: 4, with_files: 2, without_files: 2, spanning_areas: 1, landed: 0 });
     expect(a.areas.map((x) => [x.path_prefix, x.commits_30d])).toEqual([["", 2], ["packages/web", 1], ["packages/cli", 1], ["packages/convex", 1]]);
   });
 });
@@ -272,5 +272,71 @@ describe("stale reasons read the row's newest word", () => {
     // A session parked on the finished plan (waiting on a person, or on a wake) is not working it.
     expect(computeStale({ ...base, plans: [plan], sessions: [{ _id: "s1", state: "needs_input", updated_at: NOW, active_plan_id: "p1" }] }).plans).toEqual([]);
     expect(computeStale({ ...base, plans: [plan], sessions: [{ _id: "s1", state: "dormant", updated_at: NOW, active_plan_id: "p1" }] }).plans).toEqual([]);
+  });
+});
+
+// ── Landing per flagged record (org-eval, 2026-09-23) ───────────────────────
+// Recall on the stale sample moved with how many rows a run searched main
+// for (9 to 27 of 41 by sample). The join is in the inputs now: every flagged
+// record, and every open record a session is bound to, carries the commits on
+// main that name it, and a record with none says so with an empty list.
+describe("landing per flagged record", () => {
+  const D = 86_400_000;
+  const NOW = 1_800_000_000_000;
+  test("a record's words are the distinctive ones; a text names it by short id or by two of them, never by one", () => {
+    expect(recordWords("Fix the cold email optimizer's daily run")).toEqual(["cold", "email", "optimizer", "daily"]);
+    expect(recordWords("Infrastructure")).toEqual(["infrastructure"]);
+    const ref = { short_id: "ct-41", title: "Fix the cold email optimizer's daily run" };
+    expect(namesRecord(namedTextOf("feat: CT-41 lands"), ref)).toBe(true);
+    expect(namesRecord(namedTextOf("optimizer: send cold email on the daily schedule"), ref)).toBe(true);
+    expect(namesRecord(namedTextOf("the optimizer is slow"), ref)).toBe(false);
+    expect(namesRecord(namedTextOf("ct-410 is another task"), ref)).toBe(false);
+    expect(namesRecord(namedTextOf("infrastructure cleanup"), { short_id: "pr-3", title: "Infrastructure" })).toBe(false);
+  });
+  test("landing is the newest three commits on main that name the record, by id or by words; a branch commit and a stranger are not", () => {
+    const commits = [
+      { repository: "acme/app", timestamp: NOW - 20 * D, sha: "aaaaaaaaaaaaaaaa", message: "ct-41: first cut\n\nbody" },
+      { repository: "acme/app", timestamp: NOW - 10 * D, sha: "bbbbbbbbbbbbbbbb", message: "cold email optimizer: retry the daily run" },
+      { repository: "acme/app", timestamp: NOW - 5 * D, sha: "cccccccccccccccc", message: "optimizer daily run: cap the batch", branch: "feature/ct-41" },
+      { repository: "acme/app", timestamp: NOW - 4 * D, sha: "dddddddddddddddd", message: "email optimizer daily: ship", branch: "main" },
+      { repository: "acme/app", timestamp: NOW - 3 * D, sha: "eeeeeeeeeeeeeeee", message: "cold email daily: fourth", branch: "master" },
+      { repository: "acme/app", timestamp: NOW - 2 * D, sha: "ffffffffffffffff", message: "unrelated: the optimizer" },
+    ];
+    const ref = { short_id: "ct-41", title: "Fix the cold email optimizer's daily run" };
+    expect(landingFor(commits, ref)).toEqual([
+      { sha: "eeeeeeeeeeee", at: NOW - 3 * D, line: "cold email daily: fourth" },
+      { sha: "dddddddddddd", at: NOW - 4 * D, line: "email optimizer daily: ship" },
+      { sha: "bbbbbbbbbbbb", at: NOW - 10 * D, line: "cold email optimizer: retry the daily run" },
+    ]);
+    expect(landingFor(commits, { short_id: "ct-99", title: "Billing" })).toEqual([]);
+  });
+  test("every stale record carries its landing, and the open records a session is bound to are listed with theirs", () => {
+    const a = computeOrgActivity({
+      now: NOW,
+      commits: [
+        { repository: "acme/app", timestamp: NOW - 3 * D, sha: "abcdef0123456789", message: "ct-7: wire analytics" , task_ids: ["tasks_7"] },
+        { repository: "acme/app", timestamp: NOW - 2 * D, sha: "0123456789abcdef", message: "launch: landing copy pass" },
+      ],
+      sessions: [
+        { _id: "s1", state: "working", updated_at: NOW - D, active_task_id: "tasks_8", active_plan_id: "plans_1" },
+        { _id: "s2", state: "done", updated_at: NOW - 20 * D, active_task_id: "tasks_9" },
+      ],
+      projects: [],
+      plans: [{ id: "plans_1", short_id: "pl-1", title: "Launch the landing page", status: "active", updated_at: NOW - D }],
+      tasks: [
+        // A commit already landed for it and it sits open, quiet: stale, with the commit named.
+        { id: "tasks_7", short_id: "ct-7", title: "Wire analytics", status: "open", updated_at: NOW - 20 * D, plan_id: "plans_1" },
+        // Bound to a live session: listed under bound with its landing (the copy pass names two of its words).
+        { id: "tasks_8", short_id: "ct-8", title: "Landing page copy", status: "in_progress", updated_at: NOW - D, plan_id: "plans_1" },
+        // Closed: never listed.
+        { id: "tasks_9", short_id: "ct-9", title: "Old", status: "done", updated_at: NOW - 30 * D },
+      ],
+      members: [],
+    });
+    expect(a.commits.landed).toBe(2);
+    expect(a.stale.tasks).toEqual([expect.objectContaining({ short_id: "ct-7", reason: "commits landed, still open", landing: [{ sha: "abcdef012345", at: NOW - 3 * D, line: "ct-7: wire analytics" }] })]);
+    expect(a.bound.tasks).toEqual([{ short_id: "ct-8", title: "Landing page copy", status: "in_progress", sessions: 1, sessions_live: 1, updated_at: NOW - D, landing: [{ sha: "0123456789ab", at: NOW - 2 * D, line: "launch: landing copy pass" }] }]);
+    // The plan's words (launch, landing; page is a word every title carries): the copy pass names two; a record with none says so.
+    expect(a.bound.plans).toEqual([expect.objectContaining({ short_id: "pl-1", sessions: 1, landing: [{ sha: "0123456789ab", at: NOW - 2 * D, line: "launch: landing copy pass" }] })]);
   });
 });

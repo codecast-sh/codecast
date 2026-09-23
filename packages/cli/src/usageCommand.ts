@@ -24,7 +24,7 @@ import {
   type CcUsage,
   type RecoveryMode,
 } from "@codecast/shared/contracts";
-import { activeAccountSummary, listProfiles, readUsageCache, type UsageRetryState } from "./ccAccounts.js";
+import { activeAccountSummary, launchProfileName, listProfiles, readUsageCache, type UsageRetryState } from "./ccAccounts.js";
 
 export interface UsageProfile {
   name: string;
@@ -88,10 +88,14 @@ export { USAGE_WARN_PERCENT };
  * it is synthesized as one when no profile covers it. */
 export function loadLocalUsageProfiles(): UsageProfile[] {
   const { accounts: cache, retries } = readUsageCache();
+  // "active" here is the account sessions run on: the launch profile after a
+  // token switch, else the keychain login (fallbacks exclude it, meters lead
+  // with it).
+  const launch = launchProfileName();
   const profiles: UsageProfile[] = listProfiles().map((p) => ({
     name: p.name,
     email: p.email,
-    active: p.active,
+    active: launch ? p.name === launch : p.active,
     usage: cache[p.uuid || p.email || ""],
     retry: retries?.[p.uuid || p.email || ""],
   }));

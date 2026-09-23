@@ -36,13 +36,17 @@ function CliAuthContent() {
   const provider = searchParams.get("provider");
   const device = searchParams.get("device") || (isDesktopMode ? "Codecast Desktop" : "CLI Device");
   const deviceName = decodeURIComponent(device);
+  // The CLI's device id, when it sent one: the token minted below binds to it
+  // and works only from that machine. Absent (an older CLI, the desktop sign
+  // in, whose token is consumed by the exchange anyway), the token is unbound.
+  const deviceIdParam = searchParams.get("device_id");
 
   const deliverAuth = async () => {
     setStatus("sending");
 
     let tokenResult: { token: string };
     try {
-      tokenResult = await createToken({ name: deviceName });
+      tokenResult = await createToken({ name: deviceName, ...(deviceIdParam ? { device_id: deviceIdParam } : {}) });
     } catch (err) {
       console.error("Auth token mint error:", err);
       setStatus("error");

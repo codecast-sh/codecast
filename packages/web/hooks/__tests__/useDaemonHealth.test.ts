@@ -27,6 +27,7 @@ describe("computeDaemonHealth", () => {
     expect(health.kind).toBe("sync_stalled");
     expect(describeDaemonHealth(health)).toMatchObject({
       label: "sync stalled · 27 conversations",
+      short: "stalled · 27",
       detail: "The CLI daemon is online but 27 conversations have been waiting to sync for 6 min.",
       command: "cast status",
     });
@@ -101,6 +102,7 @@ describe("computeDaemonHealth", () => {
     expect(describeDaemonHealth(health)).toMatchObject({
       colorVar: "--sol-blue",
       label: "syncing · 904 messages",
+      short: "syncing · 904",
       command: "cast status",
     });
     expect(describeDaemonHealth(health)?.detail).toContain("working through a backlog of 904 messages across 12 conversations");

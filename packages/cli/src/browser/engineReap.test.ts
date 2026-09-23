@@ -16,7 +16,7 @@ import type { LivenessVerdict } from "@codecast/shared/contracts";
 import { writeBridgeState } from "./bridge/host.js";
 import { FakeExtension, testBridgeHost } from "./bridge/host.testutil.js";
 import { targetIdOfTab } from "./bridge/protocol.js";
-import { engineStateDir, realSessionKey } from "./engine.js";
+import { engineSessionKey, engineStateDir, realSessionKey } from "./engine.js";
 import { writeBoundTarget } from "./pinnedTab.js";
 
 let dir: string;
@@ -121,12 +121,12 @@ describe("reapEngineOrphans in real mode", () => {
     }
   });
 
-  test("a live owner is left alone, files and tab", async () => {
+  test.each(["env-busy", engineSessionKey("pane:%12")])("a live owner %s is left alone, files and tab", async (session) => {
     const { host, closes } = await bridgeWithTabs(7);
     try {
-      const key = realSessionKey("env-busy");
+      const key = realSessionKey(session);
       writeBoundTarget(key, targetIdOfTab(7), stateDir);
-      const report = await reapEngineOrphans({ force: true, stateDir, keep: null, live: owners("live") });
+      const report = await reapEngineOrphans({ force: true, stateDir, keep: null, live: { ...owners("live"), panes: new Set(["%12"]) } });
       expect(closes()).toEqual([]);
       expect(files()).toEqual([`${key}.target`]);
       expect(report.cleaned).toEqual([]);
@@ -196,6 +196,15 @@ describe("ownerState reads the agent off a -real key", () => {
     expect(ownerState("pane--12", live)).toBe("live");
     expect(ownerState("pane--12-real", live)).toBe("live");
     expect(ownerState("pane--13-real", live)).toBe("exited");
+  });
+
+  test("the actual engine key of a live pane is never reaped", () => {
+    const key = engineSessionKey("pane:%12");
+    expect(key).toBe("pane-12");
+    expect(ownerState(key, live)).toBe("live");
+    expect(ownerState(realSessionKey(key), live)).toBe("live");
+    expect(ownerState(realSessionKey(engineSessionKey("pane:%13")), live)).toBe("exited");
+    expect(ownerState(realSessionKey(key), { ...live, panes: null })).toBe("unverifiable");
   });
 });
 

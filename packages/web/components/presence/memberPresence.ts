@@ -7,7 +7,7 @@ import { type InboxSession } from "../../store/inboxStore";
 import { fleetBandFor, type FleetBandOpts } from "../fleetBands";
 import { memberDisplayName as liveMemberDisplayName } from "../../lib/liveEntities";
 import { matchScore } from "../../lib/mentionRanking";
-import type { FaceState } from "../../lib/faces/faceRow";
+import type { FaceState } from "../../lib/faces/faceState";
 
 export type PresenceState = "active" | "idle" | "away" | "offline";
 /** What a badge draws. "busy" is the manual status, not a heartbeat state. */
@@ -74,27 +74,6 @@ export function memberPresenceVisual(member: any): PresenceVisual {
   return inRoom ? "active" : state;
 }
 
-/**
- * IS THIS PERSON IN A HUDDLE — the question the violet chip on their face
- * answers, which is NOT the same as "does this person have a seat".
- *
- * A walkie burst seats everybody who hears it, and the seat is deliberately
- * held for half a minute after the key comes up so a reply lands in the same
- * room without re-joining (walkie's LINGER_MS). For that whole window
- * `in_huddle` is true with nobody in a call, so the chip lit for three seconds
- * of somebody's voice and then stayed lit long after the voice had stopped —
- * the founder's "sticks around when I'm not in a call".
- *
- * `walkieRoom` is the room this client's walkie is holding as a BURST, from
- * `walkieHoldsRoom` — the codebase's own answer to "burst or call", already
- * read by the occupancy chip for the same reason. A seat in that room is a
- * voice message, not a conversation, so it wears no chip. Every other seat is
- * a huddle and does.
- *
- * Pure, and takes the room rather than reading the engine, so the surfaces
- * that draw faces stay testable and the walkie stays out of the presence
- * vocabulary.
- */
 /** The name a surface prints for a member. One helper so the strip, the roster
  *  and the card cannot disagree about what a person is called — and it is the
  *  app's ONE rule, not a second one, because that promise was already broken:

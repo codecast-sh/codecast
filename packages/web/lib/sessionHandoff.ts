@@ -7,6 +7,17 @@ export interface SessionHandoffPrompt {
   direction: string | null;
 }
 
+// A handoff child is created through the spawn path, so it also carries
+// spawned_by (and the server folds that into parent_conversation_id). The
+// handoff pointer is the more specific fact, so it names the link.
+export function isHandoffFrom(
+  row: { handed_off_from_conversation_id?: string | null; handed_off_from_details?: { conversation_id: string } | null },
+  linkId: string | null | undefined,
+): boolean {
+  const from = row.handed_off_from_conversation_id || row.handed_off_from_details?.conversation_id || null;
+  return !!from && (!linkId || from === linkId);
+}
+
 export function parseSessionHandoff(content: string): SessionHandoffPrompt | null {
   const text = content.trim().replace(/\r\n/g, "\n");
   const header = text.match(/^# Handed off from ([\w-]+): ([^\n]+)\n\nRan on ([^\n]+)\.\n\nThis session continues that work\./);

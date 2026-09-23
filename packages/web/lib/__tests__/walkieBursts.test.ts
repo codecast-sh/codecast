@@ -429,7 +429,7 @@ describe("walkie: the stage words", () => {
     const w = walkieStageWords({ ...base, sending: { live: true, heardLive: false } });
     expect(w.stage).toBe("recording");
     expect(w.badge).toBe("RECORDING");
-    expect(w.hint).toContain("Click STOP");
+    expect(w.hint).toContain("Click END");
   });
 
   it("says TALKING, one way, only once the room actually carries the voice", () => {

@@ -52,5 +52,24 @@ export function useWorkspaceSelection(
   const toggle = (path: string) =>
     setSelectedPaths((prev) => ({ ...prev, [path]: !prev[path] }));
   const selectedCount = Object.values(selectedPaths).filter(Boolean).length;
-  return { selectedPaths, toggle, selectedCount };
+  // Sorted, so the preview query's args are stable across toggles.
+  const selectedList = useMemo(
+    () => Object.keys(selectedPaths).filter((p) => selectedPaths[p]).sort(),
+    [selectedPaths],
+  );
+  // The share start: null covers past sessions, the default; the band shows
+  // the count either way so the default is a read choice, not a blind one.
+  const [since, setSince] = useState<number | null>(null);
+  return { selectedPaths, toggle, selectedCount, selectedList, since, setSince };
+}
+
+
+// The selection state (seedWorkspaceSelection, useWorkspaceSelection) lives in
+// hooks/useWorkspaceSelection so this file stays a clean Fast Refresh boundary.
+// Selection follows --team-flow-accent inside the create flow and falls back
+// to cyan elsewhere (see .tf-accent-scope in teamFlow.css).
+
+export function workspaceName(path: string) {
+  const parts = path.split("/");
+  return parts[parts.length - 1] || path;
 }

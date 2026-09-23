@@ -20,7 +20,7 @@ function fixtures() {
       { _id: "m1", user_id: ME, team_id: TEAM, role: "admin", joined_at: 1 },
       { _id: "m2", user_id: MATE, team_id: TEAM, role: "member", joined_at: 1 },
     ],
-    teams: [{ _id: TEAM, name: "Acme" }],
+    teams: [{ _id: TEAM, name: "Acme", features: { org: true } }],
     counters: [],
     org_roles: [],
     org_role_history: [],

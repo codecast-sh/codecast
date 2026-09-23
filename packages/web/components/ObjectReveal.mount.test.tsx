@@ -28,7 +28,7 @@ beforeAll(async () => {
   mock.module("./stage/SessionPane", () => ({ SessionPane: ({ sessionId }: { sessionId: string }) => h("div", { "data-session": sessionId }, "session") }));
   mock.module("./RecentVisitRow", () => ({ PageIcon: () => h("i") }));
   mock.module("../lib/pageAccent", () => ({ pageAccent: () => "var(--sol-cyan)" }));
-  mock.module("./KeyboardShortcutsHelp", () => ({ KeyCap: ({ children }: any) => h("kbd", null, children) }));
+  mock.module("./KeyboardShortcutsHelp", () => ({ KeyCap: ({ children }: any) => h("kbd", null, children), ShortcutTooltip: ({ children }: any) => children }));
   mock.module("./ErrorBoundary", () => ({ ErrorBoundary: ({ children }: any) => h(React.Fragment, null, children) }));
   mock.module("../shortcuts", () => ({ hasOpenModal: () => false, isEditableTarget: () => false }));
   mock.module("../hooks/useOpenLinkedSession", () => ({ useOpenLinkedSession: () => () => {} }));

@@ -280,17 +280,17 @@ describe("splitAuthParks", () => {
   // login the machine holds now — a restart on the current login cures it.
   test("a park with no restart attempted on this login restarts on it", () => {
     const parks = [park("c1", activeSince + 60_000), park("c2", activeSince - 60_000)];
-    expect(splitAuthParks(parks, device(), [])).toEqual({ restart: parks, dead: [] });
+    expect(splitAuthParks(parks, device(), [], now)).toEqual({ restart: parks, dead: [] });
   });
 
   test("the daemon reporting the active login expired makes every park a switch", () => {
     const parks = [park("c1", now - 60_000)];
-    expect(splitAuthParks(parks, device({ expiredAt: now - 30_000 }), [])).toEqual({ restart: [], dead: parks });
+    expect(splitAuthParks(parks, device({ expiredAt: now - 30_000 }), [], now)).toEqual({ restart: [], dead: parks });
   });
 
   test("an expiry stamped before the login was activated is stale evidence", () => {
     const parks = [park("c1", now - 60_000)];
-    expect(splitAuthParks(parks, device({ expiredAt: activeSince - 60_000 }), [])).toEqual({
+    expect(splitAuthParks(parks, device({ expiredAt: activeSince - 60_000 }), [], now)).toEqual({
       restart: parks,
       dead: [],
     });
@@ -300,20 +300,20 @@ describe("splitAuthParks", () => {
     const restartAt = now - 3 * 60_000;
     const attempts = [{ profile: `${AUTO_SWITCH_AUTH_RESTART_KEY}:c1`, at: restartAt }];
     const parks = [park("c1", restartAt + 90_000), park("c2", restartAt - 60_000)];
-    expect(splitAuthParks(parks, device(), attempts)).toEqual({ restart: [], dead: parks });
+    expect(splitAuthParks(parks, device(), attempts, now)).toEqual({ restart: [], dead: parks });
   });
 
   test("a park older than the last restart is in flight: neither restarted again nor proof", () => {
     const restartAt = now - 60_000;
     const attempts = [{ profile: `${AUTO_SWITCH_AUTH_RESTART_KEY}:c1`, at: restartAt }];
     const parks = [park("c1", restartAt - 30_000)];
-    expect(splitAuthParks(parks, device(), attempts)).toEqual({ restart: [], dead: [] });
+    expect(splitAuthParks(parks, device(), attempts, now)).toEqual({ restart: [], dead: [] });
   });
 
   test("a restart attempted under the previous login says nothing about this one", () => {
     const attempts = [{ profile: `${AUTO_SWITCH_AUTH_RESTART_KEY}:c1`, at: activeSince - 60_000 }];
     const parks = [park("c1", activeSince - 30_000)];
-    expect(splitAuthParks(parks, device(), attempts)).toEqual({ restart: parks, dead: [] });
+    expect(splitAuthParks(parks, device(), attempts, now)).toEqual({ restart: parks, dead: [] });
   });
 
   test("only auth-restart attempts count; continues and switches are other keys", () => {
@@ -322,30 +322,30 @@ describe("splitAuthParks", () => {
       { profile: "a", at: now - 60_000 },
     ];
     const parks = [park("c1", now - 2 * 60_000)];
-    expect(splitAuthParks(parks, device(), attempts)).toEqual({ restart: parks, dead: [] });
+    expect(splitAuthParks(parks, device(), attempts, now)).toEqual({ restart: parks, dead: [] });
   });
 
   test("no inventory cannot prove a usable login for a restart", () => {
     const parks = [park("c1", now - 60_000)];
-    expect(splitAuthParks(parks, undefined, [])).toEqual({ restart: [], dead: [] });
+    expect(splitAuthParks(parks, undefined, [], now)).toEqual({ restart: [], dead: [] });
   });
 
   test("a later park in another conversation is not a failed restart", () => {
     const attempts = [{ profile: `${AUTO_SWITCH_AUTH_RESTART_KEY}:c1`, at: now - 60_000 }];
     const parks = [park("c2", now - 30_000)];
-    expect(splitAuthParks(parks, device(), attempts)).toEqual({ restart: parks, dead: [] });
+    expect(splitAuthParks(parks, device(), attempts, now)).toEqual({ restart: parks, dead: [] });
   });
 
   test("updating an old row without a banner timestamp cannot prove a new auth failure", () => {
     const attempts = [{ profile: `${AUTO_SWITCH_AUTH_RESTART_KEY}:c1`, at: now - 60_000 }];
     const parks = [{ _id: "c1", updated_at: now }];
-    expect(splitAuthParks(parks, device(), attempts)).toEqual({ restart: [], dead: [] });
+    expect(splitAuthParks(parks, device(), attempts, now)).toEqual({ restart: [], dead: [] });
   });
 
   test("a login whose only usage proof predates its activation is not ready", () => {
     const d = device();
     d.cc_accounts.profiles[1].usage = { fetched_at: activeSince - 1 };
-    expect(splitAuthParks([park("c1", now - 60_000)], d, [])).toEqual({ restart: [], dead: [] });
+    expect(splitAuthParks([park("c1", now - 60_000)], d, [], now)).toEqual({ restart: [], dead: [] });
   });
 
 });
@@ -1287,15 +1287,15 @@ describe("parks on another account's pin", () => {
   };
 
   test("parkedOnActiveAccount: unpinned and own-identity pins ran on the active login; other, unknown and identity-less pins did not", () => {
-    expect(parkedOnActiveAccount({}, device)).toBe(true);
-    expect(parkedOnActiveAccount({ cc_account: null }, device)).toBe(true);
-    expect(parkedOnActiveAccount({ cc_account: "ashot" }, device)).toBe(true);
-    expect(parkedOnActiveAccount({ cc_account: "spent" }, device)).toBe(false);
-    expect(parkedOnActiveAccount({ cc_account: "gone" }, device)).toBe(false);
-    expect(parkedOnActiveAccount({ cc_account: "ashot" }, { ...device, cc_accounts: { profiles: [{ name: "ashot" }] } })).toBe(false);
+    expect(parkedOnActiveAccount({}, device, now)).toBe(true);
+    expect(parkedOnActiveAccount({ cc_account: null }, device, now)).toBe(true);
+    expect(parkedOnActiveAccount({ cc_account: "ashot" }, device, now)).toBe(true);
+    expect(parkedOnActiveAccount({ cc_account: "spent" }, device, now)).toBe(false);
+    expect(parkedOnActiveAccount({ cc_account: "gone" }, device, now)).toBe(false);
+    expect(parkedOnActiveAccount({ cc_account: "ashot" }, { ...device, cc_accounts: { profiles: [{ name: "ashot" }] } }, now)).toBe(false);
     // Remotes run the pushed credential; a stale pin there is inert.
-    expect(parkedOnActiveAccount({ cc_account: "spent" }, { ...device, is_remote: true })).toBe(true);
-    expect(parkedOnActiveAccount({ cc_account: "spent" }, undefined)).toBe(false);
+    expect(parkedOnActiveAccount({ cc_account: "spent" }, { ...device, is_remote: true }, now)).toBe(true);
+    expect(parkedOnActiveAccount({ cc_account: "spent" }, undefined, now)).toBe(false);
   });
 
   test("a park that only implicates another account's pin continues at once — no wait on the active windows", () => {
@@ -1383,6 +1383,23 @@ describe("resumePinFor", () => {
     expect(resumePinFor({ ...limitParked, cc_account: "gone" }, keychainOnly, now)).toBeUndefined();
   });
 
+  test("a pin to an account whose meter shows it spent moves to the fleet pin, parked or not", () => {
+    // jx744vh (2026-09-23): no park stamp, pinned to apetrosian's full 5 hour
+    // window; a restart resumed it there while the fleet account had room.
+    const pegged = { fetched_at: now, session: { percent: 100, resets_at: now + 3600_000 } };
+    const withSpent = {
+      ...tokened,
+      cc_accounts: {
+        ...tokened.cc_accounts,
+        profiles: tokened.cc_accounts.profiles.map((p) => (p.name === "spent" ? { ...p, usage: pegged } : p)),
+      },
+    };
+    expect(resumePinFor({ cc_account: "spent" }, withSpent, now)).toBe("ashot");
+    expect(resumePinFor({ cc_account: "spent", pending_api_error: true, pending_api_error_kind: "throttle" }, withSpent, now)).toBe("ashot");
+    // Rolled window: the account has room again and the pin stands.
+    expect(resumePinFor({ cc_account: "spent" }, withSpent, now + 2 * 3600_000)).toBe("spent");
+  });
+
   test("existing pins survive while legacy unpinned sessions adopt the current token", () => {
     expect(resumePinFor({ cc_account: "spent" }, keychainOnly, now)).toBe("spent");
     expect(resumePinFor({ ...limitParked, pending_api_error: false }, keychainOnly, now)).toBe("spent");
@@ -1392,6 +1409,30 @@ describe("resumePinFor", () => {
     expect(resumePinFor({}, tokened, now)).toBe("ashot");
     expect(resumePinFor({}, keychainOnly, now)).toBeUndefined();
     expect(resumePinFor(limitParked, { ...keychainOnly, is_remote: true }, now)).toBe("spent");
+  });
+
+  // 2026-09-24: a token switch moved the fleet to "tok"; the switch back to the
+  // keychain left 18 sessions pinned to "tok", and every resume put them back.
+  test("a pin the machine chose follows the machine's account; a chosen one stays", () => {
+    const tokFleet = {
+      is_remote: false,
+      cc_accounts: {
+        active_email: "a@x.com",
+        launch_profile: "tok",
+        profiles: [
+          { name: "ashot", email: "a@x.com", token: live },
+          { name: "tok", email: "t@x.com", login_expired_at: 1, setup_token: live },
+        ],
+      },
+    };
+    // Back on the keychain: an automatic "tok" pin returns to the login's profile.
+    expect(resumePinFor({ cc_account: "tok", cc_account_auto: true }, tokened, now)).toBe("ashot");
+    expect(resumePinFor({ cc_account: "tok", cc_account_auto: true }, keychainOnly, now)).toBeUndefined();
+    // On the token fleet: an automatic keychain pin moves onto the token.
+    expect(resumePinFor({ cc_account: "ashot", cc_account_auto: true }, tokFleet, now)).toBe("tok");
+    // A person's --account pin never moves, and remotes never pin.
+    expect(resumePinFor({ cc_account: "tok" }, tokened, now)).toBe("tok");
+    expect(resumePinFor({ cc_account: "tok", cc_account_auto: true }, { ...tokened, is_remote: true }, now)).toBe("tok");
   });
 });
 

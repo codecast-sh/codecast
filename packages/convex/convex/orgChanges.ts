@@ -232,7 +232,7 @@ export async function planUndo(ctx: Ctx, userId: Id<"users">, ref: string, inclu
         continue;
       }
       if (!fieldsMatch(current, w.after)) {
-        preview.left_alone.push({ row: { ...publicRow(row), _id: `${row._id}:${w.id}`, subject: w.id === row.subject.id ? row.subject : { type: w.table === "conversations" ? "session" : w.table === "org_roles" ? "role" : w.table === "tasks" ? "task" : w.table === "plans" ? "plan" : "project", id: w.id, label: current?.title ?? current?.name ?? row.subject.label }, skipped: current ? "it changed after this, or is no longer editable by you" : "it no longer exists" } });
+        preview.left_alone.push({ row: { ...publicRow(row), _id: `${row._id}:${w.id}`, subject: w.id === row.subject.id ? row.subject : { type: w.table === "conversations" ? "session" : w.table === "org_roles" ? "role" : w.table === "tasks" ? "task" : w.table === "plans" ? "plan" : w.table === "initiatives" ? "initiative" : "project", id: w.id, label: current?.title ?? current?.name ?? row.subject.label }, skipped: current ? "it changed after this, or is no longer editable by you" : "it no longer exists" } });
         continue;
       }
       writes.push(w);
@@ -350,6 +350,22 @@ export async function performUndo(ctx: Ctx, userId: Id<"users">, args: { batch: 
   return { batch, changed: plan.steps.length, left_alone: plan.preview.left_alone.length };
 }
 
+/**
+ * Where a record came from (initiatives-projects-role-page.md "I1, revised"):
+ * the log row that brought it into being, when a proposal did. The
+ * initiative page says "Proposed by the review on <date>" from this. Null
+ * for a record made at any other door, one the viewer cannot read, or one
+ * nothing in the log made.
+ */
+export async function recordOrigin(ctx: Ctx, userId: Id<"users">, subjectId: string): Promise<{ at: number; batch: string; proposal?: { short_id: string; title?: string }; undone: boolean } | null> {
+  const rows: any[] = await ctx.db.query("org_changes").withIndex("by_subject", (q: any) => q.eq("subject.id", subjectId)).take(50);
+  const made = rows.find((r) => r.kind === "initiative" || r.kind === "projects" || r.kind === "role");
+  if (!made || !(await workspaceGrantsAccess(ctx, userId, made.workspace))) return null;
+  const batch = await ctx.db.get(made.batch);
+  if (!batch || batch.door !== "proposal") return null;
+  return { at: made.created_at, batch: String(batch._id), ...(batch.proposal ? { proposal: { short_id: batch.proposal.short_id, ...(batch.proposal.title ? { title: batch.proposal.title } : {}) } } : {}), undone: !!made.undone_by };
+}
+
 async function caller(ctx: any, token?: string) {
   const id = await getAuthenticatedUserId(ctx, token);
   if (!id) throw new Error("Authentication required");
@@ -358,6 +374,7 @@ async function caller(ctx: any, token?: string) {
 const authArgs = { api_token: v.optional(v.string()) };
 export const list = query({ args: { ...authArgs, team_id: v.optional(v.id("teams")), role: v.optional(v.string()), since: v.optional(v.number()), before: v.optional(v.number()), limit: v.optional(v.number()) }, handler: async (ctx, args) => listEntries(ctx, await caller(ctx, args.api_token), args) });
 export const get = query({ args: { ...authArgs, batch: v.string() }, handler: async (ctx, args) => getEntry(ctx, await caller(ctx, args.api_token), args.batch) });
+export const origin = query({ args: { subject: v.string() }, handler: async (ctx, args) => { const id = await getAuthenticatedUserId(ctx); return id ? recordOrigin(ctx, id, args.subject) : null; } });
 export const previewUndo = query({ args: { ...authArgs, batch: v.string(), with: v.optional(v.array(v.string())) }, handler: async (ctx, args) => (await planUndo(ctx, await caller(ctx, args.api_token), args.batch, args.with)).preview });
 const undoArgs = { ...authArgs, batch: v.string(), with: v.optional(v.array(v.string())), from_session: v.optional(v.string()) };
 export const undo = mutation({ args: undoArgs, handler: async (ctx, args) => performUndo(ctx, await caller(ctx, args.api_token), args) });

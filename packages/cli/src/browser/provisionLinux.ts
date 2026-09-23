@@ -36,7 +36,7 @@ import { cwdGitRoot } from "../cloud/hostGit.js";
 import { summarizeHostTools } from "../cloud/hostTools.js";
 import { agentCliInstallScript, parseAgentCliReport } from "./provisionAgents.js";
 import { remoteExec, scpTo } from "./remote.js";
-import { decryptToken } from "../tokenEncryption.js";
+import { isDeviceBoundToken, secretFromStored } from "../bearerToken.js";
 import { defaultConfigDir } from "../config/configDir.js";
 import { cloudIdleProbeScript } from "../cloud/idleProbe.js";
 
@@ -516,13 +516,21 @@ export function restartHostDaemon(host: RemoteHost, opts: { force?: boolean } = 
  * auth token DECRYPTED — `enc:` tokens are bound to this machine's hardware
  * key and would be unreadable there. The file is written 0600 over ssh stdin
  * so the secret never sits in argv or a local temp file.
+ *
+ * A token the server bound to this machine cannot be copied: the box would
+ * present its own device id and every call from it would be refused. The box
+ * must mint its own, so this refuses with the command that does that.
  */
 export function pushCodecastConfig(host: RemoteHost): void {
   const cfgPath = path.join(defaultConfigDir(), "config.json");
   const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
-  const token = typeof cfg.auth_token === "string" && cfg.auth_token.startsWith("enc:")
-    ? decryptToken(cfg.auth_token)
-    : cfg.auth_token;
+  const token = typeof cfg.auth_token === "string" ? secretFromStored(cfg.auth_token) : cfg.auth_token;
+  if (typeof token === "string" && isDeviceBoundToken(token)) {
+    throw new Error(
+      "This machine's Codecast token is bound to this machine and cannot be copied to the host. " +
+        `Sign the host in on its own: ssh ${host.user}@${host.address} cast auth`,
+    );
+  }
   const remoteCfg = {
     user_id: cfg.user_id,
     auth_token: token,

@@ -529,6 +529,18 @@ describe("invite fan-out", () => {
     expect(fresh.room_key).toBe("channel:ch1");
   });
 
+  test("getMyCalls keeps an accepted ring in the caller's outgoing for its seat's round trip", async () => {
+    const { ctx, rows, now } = fakeCtx();
+    rows.call_invites = [
+      { _id: "a1", room_key: "dm:ua:ub", team_id: "t1", from_user: "ua", to_user: "ub", status: "accepted", created_at: now - 8_000, responded_at: now - 2_000 },
+      { _id: "a2", room_key: "dm:ua:uc", team_id: "t1", from_user: "ua", to_user: "uc", status: "accepted", created_at: now - 90_000, responded_at: now - 60_000 },
+      { _id: "c1", room_key: "dm:ua:ud", team_id: "t1", from_user: "ua", to_user: "ud", status: "cancelled", created_at: now - 8_000, responded_at: now - 2_000 },
+    ];
+    const { getMyCalls } = await import("./calls");
+    const res = await ((getMyCalls as any)._handler ?? (getMyCalls as any).handler)(ctx, {});
+    expect(res.outgoing.map((r: any) => [String(r.to_user), r.status])).toEqual([["ub", "accepted"]]);
+  });
+
   test("settled rows older than ten minutes are swept on the next invite", async () => {
     const { ctx, rows, now } = fakeCtx();
     rows.call_invites = [

@@ -509,3 +509,62 @@ describe("requestAccountSwitch scoped to conversation ids", () => {
     expect(JSON.parse(f.tables.daemon_commands[0].args).conversation_ids).toEqual([worker._id]);
   });
 });
+
+describe("token switches through the backend handler", () => {
+  // The machine's keychain login is "current" (pegged). "tok" is a saved
+  // account whose login is dead but whose minted setup-token is live.
+  const withToken = (f: ReturnType<typeof fixture>, usage: any) => {
+    f.device.cc_accounts.profiles.push({
+      name: "tok", email: "tok@example.com", login_expired_at: f.now - 86_400_000,
+      setup_token: { stored_at: f.now - 1000, expires_at: f.now + 300 * 86_400_000 }, usage,
+    } as any);
+  };
+
+  test("auto-switch picks the token-backed dead login and pins the restarted sessions to it", async () => {
+    const f = fixture();
+    f.device.cc_auto_switch = true;
+    withToken(f, { fetched_at: f.now - 1_000, session: { percent: 10, resets_at: f.now + 3_600_000 } });
+    const parked = f.conversation("conversations_limit", "limit", { cc_account: undefined });
+    f.tables.conversations.push(parked);
+    expect(await f.run()).toMatchObject({ acted: "switch", profile: "tok", conversations: 1 });
+    const command = f.tables.daemon_commands[0];
+    expect(command.command).toBe("switch_account");
+    expect(JSON.parse(command.args)).toMatchObject({ profile: "tok", conversation_ids: [parked._id] });
+    // The row is corrected before the daemon kills the process, so the resume sources the token.
+    expect(parked.cc_account).toBe("tok");
+    expect(f.device.cc_auto_switch_state.last_decision).toMatchObject({ kind: "switch", target_name: "tok", from_email: "current@example.com" });
+  });
+
+  test("with the fleet on the token, a park of a token session is judged by the token account's meters", async () => {
+    const f = fixture();
+    f.device.cc_accounts.launch_profile = "tok";
+    f.device.cc_accounts.active_since = f.now - 3_600_000;
+    // The token account has room and its reading is fresher than the park settled.
+    withToken(f, { fetched_at: f.now - 1_000, session: { percent: 10, resets_at: f.now + 3_600_000 } });
+    const onToken = f.conversation("conversations_tok", "limit", { cc_account: "tok", pending_api_error_at: f.now - 600_000, updated_at: f.now - 600_000 });
+    const unpinned = f.conversation("conversations_old", "limit", { cc_account: undefined, pending_api_error_at: f.now - 600_000, updated_at: f.now - 600_000 });
+    f.tables.conversations.push(onToken, unpinned);
+    // The keychain login is pegged, but the fleet is not on it: a free continue.
+    expect(await f.run()).toMatchObject({ acted: "continue", conversations: 2, restarted: 1 });
+    // The token session gets a plain continue; the unpinned one ran on the
+    // keychain and is restarted with its pin corrected to the token account.
+    const sent = f.db._inserted.filter((i: any) => i.table === "pending_messages");
+    expect(sent.map((i: any) => i.doc.conversation_id)).toEqual([onToken._id]);
+    expect(unpinned.cc_account).toBe("tok");
+    expect(JSON.parse(f.tables.daemon_commands[0].args)).toMatchObject({ conversation_ids: [unpinned._id], continue_blocked: true });
+    expect(JSON.parse(f.tables.daemon_commands[0].args).profile).toBeUndefined();
+  });
+
+  test("with the fleet on the token, a pegged token account is not rescued by the keychain login's meters", async () => {
+    const f = fixture();
+    f.device.cc_accounts.launch_profile = "tok";
+    f.device.cc_accounts.active_since = f.now - 3_600_000;
+    // The keychain login has room now; the token account is pegged.
+    f.device.cc_accounts.profiles[0].usage = { fetched_at: f.now - 1_000, session: { percent: 5, resets_at: f.now + 3_600_000 } } as any;
+    withToken(f, { fetched_at: f.now - 1_000, session: { percent: 100, resets_at: f.now + 3_600_000 } });
+    f.tables.conversations.push(f.conversation("conversations_tok", "limit", { cc_account: "tok", pending_api_error_at: f.now - 600_000, updated_at: f.now - 600_000 }));
+    const res = await f.run();
+    expect(res.acted).not.toBe("continue");
+    expect(f.tables.daemon_commands).toHaveLength(0);
+  });
+});

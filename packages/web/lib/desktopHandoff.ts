@@ -695,3 +695,21 @@ function preloadApp(urls: string[]): void {
     document.head.appendChild(link);
   }
 }
+
+// The conversation a root-relative in-app path points at, or null for any
+// other page. Shared by deep-link navigation and the handoff notice so the
+// two can't disagree about what a path targets.
+export function conversationIdFromPath(path: string): string | null {
+  return path.match(/^\/conversation\/([^/?#]+)/)?.[1] ?? null;
+}
+
+// The token a share link carries (`/conversation/<id>?share=<token>`). Access
+// through a link requires PRESENTING the token on every read (issue #27), and
+// only the conversation route knows how to present and redeem it, so a path
+// that carries one must reach that route rather than the in-place inbox
+// shortcut a plain session link takes.
+export function shareTokenInPath(path: string): string | null {
+  const q = path.indexOf("?");
+  return q === -1 ? null : new URLSearchParams(path.slice(q + 1)).get("share");
+}
+

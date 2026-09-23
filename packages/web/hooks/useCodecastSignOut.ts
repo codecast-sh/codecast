@@ -4,22 +4,23 @@ import { purgeDurableAuthValues } from "@/lib/durableAuthStorage";
 import { purgeLocalCache } from "@/store/idbCache";
 import { clearProtectedInboxMemory } from "@/store/inboxStore";
 
-// Purge the local cache and in-memory state before the caller is allowed to
-// navigate. Failure stops logout rather than leaving a supposedly signed-out
-// browser with a readable local copy of the account's data. Module-level so
-// the returned callback keeps a stable identity across renders.
-async function clearCodecastLocalState(): Promise<void> {
-  clearProtectedInboxMemory();
-  await purgeLocalCache();
-}
-
-/** The only supported explicit logout path for the web application. */
+/**
+ * The only supported explicit logout path for the web application.
+ *
+ * Memory goes first, synchronously. The token removal is the boundary every
+ * window observes (store/principalBoundary): siblings clear and stop writing
+ * on it. Then every copy of the four auth keys goes (@convex-dev/auth rotation
+ * intentionally leaves a refresh-token IDB backup), and the disk cache last,
+ * awaited: a failed purge still stops the caller from navigating instead of
+ * leaving a supposedly signed-out browser with a readable local copy. The
+ * cache is unreadable to any other account regardless: hydration serves it
+ * only to the account whose user row it holds (idbCache).
+ */
 export function useCodecastSignOut(): () => Promise<void> {
-  // @convex-dev/auth rotation intentionally leaves a refresh-token IDB backup.
-  // Explicit logout must remove that copy as well as localStorage.
   return useDurableSignOut({
     keys: AUTH_STORAGE_KEYS,
     purge: purgeDurableAuthValues,
-    beforeSignOut: clearCodecastLocalState,
+    beforeSignOut: clearProtectedInboxMemory,
+    afterSignOut: purgeLocalCache,
   });
 }
