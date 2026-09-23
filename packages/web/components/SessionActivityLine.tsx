@@ -1,11 +1,10 @@
 "use client";
 import { useEffect, useState } from "react";
-import type { SessionActivity } from "@codecast/shared/contracts";
 import { EXIT_MS } from "../hooks/useLinger";
 
 /** The green "running" pulse every live surface shares (inbox card chrome,
- *  section headers, the composer's working line, the activity line). One
- *  definition so the meaning stays one color and one motion. */
+ *  section headers, the composer's working line). One definition so the
+ *  meaning stays one color and one motion. */
 export function LivePulseDot({ className = "w-1 h-1" }: { className?: string }) {
   return <span className={`shrink-0 rounded-full bg-sol-green animate-pulse motion-reduce:animate-none ${className}`} />;
 }
@@ -51,34 +50,5 @@ export function CrossfadeText({ text, className = "" }: { text: string; classNam
         {text}
       </span>
     </span>
-  );
-}
-
-/**
- * What a working session is doing right now, on an inbox card: a live pulse
- * and a present tense phrase ("editing chat.ts"). The caller decides whether
- * there is anything to show (lib/sessionActivity liveActivityOf) and holds it
- * through useLinger so the line fades out when the session stops working;
- * this renders that held value. Hover shows the whole phrase.
- */
-export function SessionActivityLine({
-  shown,
-  compact = false,
-}: {
-  shown: { value: SessionActivity | null; leaving: boolean };
-  compact?: boolean;
-}) {
-  if (!shown.value) return null;
-  return (
-    <div
-      data-sv-activity
-      title={shown.value.text}
-      className={`mt-0.5 flex items-center gap-1.5 min-w-0 leading-snug text-sol-text-secondary ${compact ? "text-[10px]" : "text-[11px]"} ${
-        shown.leaving ? "animate-out fade-out-0 fill-mode-forwards duration-200" : "animate-in fade-in-0 duration-200"
-      }`}
-    >
-      <LivePulseDot className={compact ? "w-1 h-1" : "w-1.5 h-1.5"} />
-      <CrossfadeText text={shown.value.text} className="flex-1" />
-    </div>
   );
 }

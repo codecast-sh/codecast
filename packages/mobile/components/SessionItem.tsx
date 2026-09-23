@@ -5,10 +5,7 @@ import { cleanUserMessage } from '@codecast/web/components/sessionMessage';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { useAckAssignment } from '@codecast/web/hooks/useAckAssignment';
 import { threadStateView } from '@codecast/web/lib/threadState';
-import { liveActivityOf } from '@codecast/web/lib/sessionActivity';
-import { useNowWhen } from '@codecast/web/hooks/useCoarseNow';
-import type { InboxSession } from '@codecast/web/store/inboxStore';
-import { escalationFirstLine, isDirectEscalation, type RoleEscalation, type SessionActivity } from '@codecast/shared/contracts';
+import { escalationFirstLine, isDirectEscalation, type RoleEscalation } from '@codecast/shared/contracts';
 import { gestureHandler } from '@/lib/gestureHandler';
 import * as Haptics from 'expo-haptics';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
@@ -37,10 +34,6 @@ export type SessionData = {
   is_pinned?: boolean;
   last_user_message?: string | null;
   idle_summary?: string | null;
-  // What the agent is doing right now ("editing chat.ts"), stamped at message
-  // ingest and carried by the liveness overlay. Shown under the title while
-  // the row is working and the stamp is fresh (shared isSessionActivityFresh).
-  activity?: SessionActivity | null;
   // The agent's pinned "where this stands" line (cast state) and its
   // provenance: when it was written, and the message count it was written at.
   thread_state?: string | null;
@@ -211,25 +204,6 @@ export function SessionItem({ session, isUnread, onPress, onPin, onLongPress, es
   // Tapping it zooms the image in a modal instead of opening the session
   // (the nested Pressable wins the touch over the row's TouchableOpacity).
   const showImageThumb = useInboxStore((s) => s.clientState?.ui?.inbox_image_thumbs === true);
-  // What the agent is doing right now, read off the live store row rather than
-  // the prop: the list wakes on structural change only, and this field rides
-  // the liveness overlay. The show rule (working and fresh) is the shared one
-  // the web card and composer apply.
-  //
-  // Freshness is time driven, not field driven: a stamp ages past the cutoff
-  // with no store write, so a selector that read Date.now() kept a stale line
-  // on screen until some unrelated write. The threshold clock (same as the web
-  // card) re-renders this row only when its own line flips between shown and
-  // hidden; the scalar selector below then re-runs with the fresh clock, and
-  // still wakes the row only when its own text changes.
-  const activityNow = useNowWhen((t) => {
-    const row = useInboxStore.getState().sessions[session._id] as InboxSession | undefined;
-    return liveActivityOf(row, row?.activity, t) ? "1" : "0";
-  }, 30_000);
-  const activityText = useInboxStore((s) => {
-    const row = s.sessions[session._id] as InboxSession | undefined;
-    return liveActivityOf(row, row?.activity, activityNow)?.text ?? null;
-  });
   const [thumbZoom, setThumbZoom] = useState(false);
   // Broken preview image → drop the slot, otherwise it reserves row width.
   const [thumbBroken, setThumbBroken] = useState(false);
@@ -381,16 +355,7 @@ export function SessionItem({ session, isUnread, onPress, onPin, onLongPress, es
           </RNText>
         </RNView>
       ) : null}
-      {activityText ? (
-        // The live line takes the summary's slot while the session works; the
-        // summary returns when the row settles. Same rule as the web card.
-        <RNView style={styles.activityRow}>
-          <PulsingDot color={Theme.green} />
-          <RNText style={styles.activityText} numberOfLines={1}>
-            {activityText}
-          </RNText>
-        </RNView>
-      ) : !stateView && (session.idle_summary || session.subtitle) ? (
+      {!stateView && (session.idle_summary || session.subtitle) ? (
         <RNText style={styles.summaryText} numberOfLines={2}>
           {session.idle_summary || session.subtitle}
         </RNText>
@@ -742,19 +707,6 @@ export const styles = themedStyles((Theme) => StyleSheet.create({
     color: Theme.textMuted,
     marginLeft: 14,
     marginBottom: 2,
-    lineHeight: 17,
-  },
-  activityRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginLeft: 14,
-    marginBottom: 2,
-    gap: 6,
-  },
-  activityText: {
-    flex: 1,
-    fontSize: 12,
-    color: Theme.textSecondary,
     lineHeight: 17,
   },
   stateRow: {
