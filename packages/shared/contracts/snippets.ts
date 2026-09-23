@@ -914,11 +914,12 @@ what was said without having been on the call — the decisions, the asks, who o
 cast calls                        # team call history, live calls first
 cast call <id>                    # one call: summary + action items
 cast call <id> --transcript       # full who-said-what transcript
-cast call <id> --json             # machine-readable (includes segments)
+cast call <id> --json             # machine-readable, segments too
+cast call hold 3m|off             # hold the room's words while you work
 \`\`\`
 
-Reach for a transcript when a task or thread refers to something "we discussed on the call",
-and quote the exact line rather than paraphrasing from memory.
+Read the transcript when a task or thread refers to "what we said on the call", and quote
+the exact line rather than paraphrase it.
 ${CALLS_SNIPPET_END}
 `;
 
@@ -967,6 +968,9 @@ Queue one when you are about to:
 - proceed on a guess about what they actually want the product to do.
 
 Do NOT queue what you can answer by reading more code, and never queue a status update.
+Never post a decision as a probe, a test or a layout sample: every ask reaches the human's
+real queue and phone the moment it is posted, and a withdraw comes after they have read it.
+To see how a card renders, mount the component on a fixture row or open one already answered.
 
 The answer arrives back here as a message.
 

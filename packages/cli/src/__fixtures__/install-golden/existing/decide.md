@@ -43,6 +43,9 @@ Queue one when you are about to:
 - proceed on a guess about what they actually want the product to do.
 
 Do NOT queue what you can answer by reading more code, and never queue a status update.
+Never post a decision as a probe, a test or a layout sample: every ask reaches the human's
+real queue and phone the moment it is posted, and a withdraw comes after they have read it.
+To see how a card renders, mount the component on a fixture row or open one already answered.
 
 The answer arrives back here as a message.
 

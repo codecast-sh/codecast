@@ -4,7 +4,7 @@
       "memory_enabled": true,
       "memory_version": "14"
     },
-    "stdout": "* Memory — installed in ~/.claude/CLAUDE.md\n",
+    "stdout": "",
     "wroteClaudeMd": true,
     "otherFiles": {}
   },
@@ -13,7 +13,7 @@
       "messaging_enabled": true,
       "messaging_version": "10"
     },
-    "stdout": "* Messaging — installed in ~/.claude/CLAUDE.md\n",
+    "stdout": "",
     "wroteClaudeMd": true,
     "otherFiles": {}
   },
@@ -22,7 +22,7 @@
       "pr_enabled": true,
       "pr_version": "1"
     },
-    "stdout": "* Pull requests — installed in ~/.claude/CLAUDE.md\n",
+    "stdout": "",
     "wroteClaudeMd": true,
     "otherFiles": {}
   },
@@ -31,7 +31,7 @@
       "forks_enabled": true,
       "forks_version": "8"
     },
-    "stdout": "* Forks & Sessions — installed in ~/.claude/CLAUDE.md\n",
+    "stdout": "",
     "wroteClaudeMd": true,
     "otherFiles": {}
   },
@@ -40,7 +40,7 @@
       "work_enabled": true,
       "work_version": "11"
     },
-    "stdout": "* Tasks & Plans — installed in ~/.claude/CLAUDE.md\n",
+    "stdout": "",
     "wroteClaudeMd": true,
     "otherFiles": {}
   },
@@ -49,7 +49,7 @@
       "task_enabled": true,
       "task_version": "8"
     },
-    "stdout": "* Triggers — installed in ~/.claude/CLAUDE.md\n",
+    "stdout": "",
     "wroteClaudeMd": true,
     "otherFiles": {}
   },
@@ -58,7 +58,7 @@
       "workflow_enabled": true,
       "workflow_version": "1"
     },
-    "stdout": "* Workflows — installed in ~/.claude/CLAUDE.md\n",
+    "stdout": "",
     "wroteClaudeMd": true,
     "otherFiles": {}
   },
@@ -67,7 +67,7 @@
       "visual_enabled": true,
       "visual_version": "6"
     },
-    "stdout": "* Visual Canvas — installed in ~/.claude/CLAUDE.md\n",
+    "stdout": "",
     "wroteClaudeMd": true,
     "otherFiles": {}
   },
@@ -76,7 +76,7 @@
       "publish_enabled": true,
       "publish_version": "4"
     },
-    "stdout": "* Publish — installed in ~/.claude/CLAUDE.md\n",
+    "stdout": "",
     "wroteClaudeMd": true,
     "otherFiles": {}
   },
@@ -85,7 +85,7 @@
       "state_enabled": true,
       "state_version": "6"
     },
-    "stdout": "* Thread State — installed in ~/.claude/CLAUDE.md\n",
+    "stdout": "",
     "wroteClaudeMd": true,
     "otherFiles": {
       ".claude/hooks/thread-state.sh": "5d32f0212c030ca5",
@@ -97,16 +97,16 @@
       "chat_enabled": true,
       "chat_version": "1"
     },
-    "stdout": "* Team chat — installed in ~/.claude/CLAUDE.md\n",
+    "stdout": "",
     "wroteClaudeMd": true,
     "otherFiles": {}
   },
   "calls": {
     "config": {
       "calls_enabled": true,
-      "calls_version": "1"
+      "calls_version": "2"
     },
-    "stdout": "* Calls — installed in ~/.claude/CLAUDE.md\n",
+    "stdout": "",
     "wroteClaudeMd": true,
     "otherFiles": {}
   },
@@ -115,7 +115,7 @@
       "browser_enabled": true,
       "browser_version": "17"
     },
-    "stdout": "* Browser — installed in ~/.claude/CLAUDE.md\n",
+    "stdout": "",
     "wroteClaudeMd": true,
     "otherFiles": {}
   },
@@ -124,7 +124,7 @@
       "computer_enabled": true,
       "computer_version": "1"
     },
-    "stdout": "* Computer — installed in ~/.claude/CLAUDE.md\n",
+    "stdout": "",
     "wroteClaudeMd": true,
     "otherFiles": {}
   },
@@ -133,16 +133,16 @@
       "check_enabled": true,
       "check_version": "1"
     },
-    "stdout": "* Typecheck — installed in ~/.claude/CLAUDE.md\n",
+    "stdout": "",
     "wroteClaudeMd": true,
     "otherFiles": {}
   },
   "decide": {
     "config": {
       "decide_enabled": true,
-      "decide_version": "2"
+      "decide_version": "3"
     },
-    "stdout": "* Decision queue — installed in ~/.claude/CLAUDE.md\n",
+    "stdout": "",
     "wroteClaudeMd": true,
     "otherFiles": {}
   },
@@ -151,7 +151,7 @@
       "limits_enabled": true,
       "limits_version": "1"
     },
-    "stdout": "* Usage limits — installed in ~/.claude/CLAUDE.md\n",
+    "stdout": "",
     "wroteClaudeMd": true,
     "otherFiles": {}
   },
@@ -160,7 +160,7 @@
       "orch_enabled": true,
       "orch_version": "11"
     },
-    "stdout": "* Orchestration — updated in ~/.claude/skills/, ~/.claude/agents/, and ~/.claude/settings.json (hooks)\n",
+    "stdout": "",
     "wroteClaudeMd": false,
     "otherFiles": {
       ".claude/agents/critic.md": "bd99e7786ce5b525",
@@ -177,7 +177,7 @@
       "skills_enabled": true,
       "skills_version": "1"
     },
-    "stdout": "* Skills — installed in ~/.claude/skills/cast-*/SKILL.md\n",
+    "stdout": "",
     "wroteClaudeMd": false,
     "otherFiles": {
       ".claude/skills/cast-ask-team/SKILL.md": "3eb017d168f57a2e",
