@@ -815,6 +815,36 @@ jobs:
             --metadata "version=$RELEASE_VERSION,source-sha=$SOURCE_COMMIT" \
             --no-progress
 
+      # Detached Ed25519 signature over the exact bytes just published. Skipped
+      # while no signing key is configured (rollout step 1 in
+      # docs/architecture/release-signing.md); once the secret exists every
+      # publish carries latest.json.sig and clients that pin the key verify it.
+      - name: Sign latest.json when a signing key is configured
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          RELEASE_MANIFEST_SIGNING_KEY: ${{ secrets.RELEASE_MANIFEST_SIGNING_KEY }}
+          RELEASE_MANIFEST_KEY_ID: ${{ secrets.RELEASE_MANIFEST_KEY_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${RELEASE_MANIFEST_SIGNING_KEY:-}" || -z "${RELEASE_MANIFEST_KEY_ID:-}" ]]; then
+            echo "::notice::no release manifest signing key configured; latest.json published unsigned"
+            exit 0
+          fi
+          bun platform/packages/cli-kit/release/sign-manifest.ts \
+            --manifest /tmp/cli-release/latest.json \
+            --key-id "$RELEASE_MANIFEST_KEY_ID" \
+            --out /tmp/cli-release/latest.json.sig
+          aws s3 cp /tmp/cli-release/latest.json.sig "s3://$R2_BUCKET/latest.json.sig" \
+            --endpoint-url "$R2_ENDPOINT" \
+            --content-type application/json \
+            --cache-control "no-cache, no-store, must-revalidate" \
+            --metadata "version=$RELEASE_VERSION,source-sha=$SOURCE_COMMIT" \
+            --no-progress
+
       - name: Verify the exact public manifest and referenced bytes
         shell: bash
         run: |

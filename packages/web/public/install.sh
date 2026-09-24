@@ -47,30 +47,87 @@ case "${ARCH}" in
     ;;
 esac
 
-BINARY_NAME="codecast-${PLATFORM}-${ARCH_NAME}"
+PLATFORM_KEY="${PLATFORM}-${ARCH_NAME}"
 INSTALL_DIR="${HOME}/.local/bin"
 
-echo "Platform: ${PLATFORM}-${ARCH_NAME}"
+echo "Platform: ${PLATFORM_KEY}"
 echo "Install directory: ${INSTALL_DIR}"
 
-DOWNLOAD_URL="${DOWNLOAD_HOST}/${BINARY_NAME}"
-
-mkdir -p "${INSTALL_DIR}"
-
-echo "Downloading cast..."
-TEMP_FILE="$(mktemp)"
+# One download tool for the manifest and the binary. curl is held to https on
+# every hop; wget follows only https too (--https-only).
 if command -v curl >/dev/null 2>&1; then
+  fetch_text() { curl -fsSL --proto '=https' --proto-redir '=https' --max-redirs 3 "$1"; }
   # --progress-bar (instead of -s) so the ~70MB binary shows download movement
   # rather than looking frozen; -f still fails on HTTP errors, -L still follows
   # redirects. The bar goes to stderr, which is the user's terminal under `| sh`.
-  curl -fL --progress-bar "${DOWNLOAD_URL}" -o "${TEMP_FILE}"
+  fetch_file() { curl -fL --proto '=https' --proto-redir '=https' --max-redirs 3 --progress-bar "$1" -o "$2"; }
 elif command -v wget >/dev/null 2>&1; then
+  fetch_text() { wget -q --https-only --max-redirect=3 -O - "$1"; }
   # --show-progress keeps the bar while -q silences wget's other chatter.
-  wget -q --show-progress "${DOWNLOAD_URL}" -O "${TEMP_FILE}"
+  fetch_file() { wget -q --https-only --max-redirect=3 --show-progress "$1" -O "$2"; }
 else
   echo "Error: curl or wget is required"
   exit 1
 fi
+
+if command -v sha256sum >/dev/null 2>&1; then
+  digest_of() { sha256sum "$1" | awk '{print $1}'; }
+elif command -v shasum >/dev/null 2>&1; then
+  digest_of() { shasum -a 256 "$1" | awk '{print $1}'; }
+else
+  echo "Error: sha256sum or shasum is required to verify the download"
+  exit 1
+fi
+
+# The release manifest names the exact binary for this platform and its
+# SHA-256. The installer takes the binary only from the release host and
+# refuses to install bytes whose digest does not match, so a wrong or altered
+# download never lands in PATH.
+echo "Reading release manifest..."
+MANIFEST="$(fetch_text "${DOWNLOAD_HOST}/latest.json")" || {
+  echo "Error: could not read ${DOWNLOAD_HOST}/latest.json"
+  exit 1
+}
+# Compact the JSON (no field of interest contains whitespace), cut this
+# platform's entry, then read its url and sha256 whatever their order.
+ENTRY="$(printf '%s' "${MANIFEST}" | tr -d ' \n\r\t' | sed -n "s/.*\"${PLATFORM_KEY}\":{\([^}]*\)}.*/\1/p")"
+DOWNLOAD_URL="$(printf '%s' "${ENTRY}" | sed -n 's/.*"url":"\([^"]*\)".*/\1/p')"
+EXPECTED_SHA="$(printf '%s' "${ENTRY}" | sed -n 's/.*"sha256":"\([^"]*\)".*/\1/p' | tr 'A-F' 'a-f')"
+RELEASE_VERSION="$(printf '%s' "${MANIFEST}" | tr -d ' \n\r\t' | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')"
+
+if [ -z "${ENTRY}" ]; then
+  echo "Error: manifest has no binary for ${PLATFORM_KEY}; refusing to install"
+  exit 1
+fi
+case "${DOWNLOAD_URL}" in
+  "${DOWNLOAD_HOST}"/*) ;;
+  *)
+    echo "Error: manifest names a binary outside ${DOWNLOAD_HOST}; refusing to install"
+    exit 1
+    ;;
+esac
+if printf '%s' "${DOWNLOAD_URL}" | LC_ALL=C grep -q '[^A-Za-z0-9._~/:-]'; then
+  echo "Error: manifest binary URL contains characters the installer does not accept; refusing to install"
+  exit 1
+fi
+if ! printf '%s' "${EXPECTED_SHA}" | LC_ALL=C grep -Eq '^[0-9a-f]{64}$'; then
+  echo "Error: manifest has no SHA-256 for ${PLATFORM_KEY}; refusing to install"
+  exit 1
+fi
+
+mkdir -p "${INSTALL_DIR}"
+
+echo "Downloading cast${RELEASE_VERSION:+ v${RELEASE_VERSION}}..."
+TEMP_FILE="$(mktemp)"
+fetch_file "${DOWNLOAD_URL}" "${TEMP_FILE}"
+
+ACTUAL_SHA="$(digest_of "${TEMP_FILE}")"
+if [ "${ACTUAL_SHA}" != "${EXPECTED_SHA}" ]; then
+  rm -f "${TEMP_FILE}"
+  echo "Error: downloaded binary does not match the release manifest (expected ${EXPECTED_SHA}, got ${ACTUAL_SHA}); refusing to install"
+  exit 1
+fi
+echo "Verified SHA-256."
 
 # Stop running daemon before replacing binary
 PID_FILE="${HOME}/.codecast/daemon.pid"

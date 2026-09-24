@@ -27,6 +27,7 @@
 const ORIGIN = "https://convex.codecast.sh";
 const SLUG_RE = /^[A-Za-z0-9]{6,32}$/;
 const EDGE_TTL = 60;
+const PUBLIC_POLICY = "public, max-age=60, stale-while-revalidate=300";
 // Viewing capabilities that appear in the query string. A request holding one
 // is authorization-dependent and must not be answered from a shared cache.
 const GATE_PARAMS = ["k", "e"];
@@ -65,12 +66,14 @@ export default {
     if (loc && loc.startsWith("/cli/a/")) {
       res.headers.set("Location", loc.replace(/^\/cli\/a\//, "/"));
     }
-    // The origin states the policy. This worker used to overwrite the bare
-    // slug's header with a public 60s policy whatever the origin said, which
-    // turned a password gate page or a protected body into a cacheable one.
-    if (isGated && !/no-store/.test(res.headers.get("Cache-Control") || "")) {
-      res.headers.set("Cache-Control", "private, no-store");
-    }
+    // The browser policy is always written here, never passed through: the
+    // zone's Browser Cache TTL rewrites every subrequest's Cache-Control
+    // (even the origin's `private, no-store`) to four hours before this
+    // worker can read it, and only a header the worker sets survives. So the
+    // worker cannot relay the origin's policy; it states the two it can know.
+    // A gated request is never stored. Everything else is public content, or
+    // a gate page that holds nothing, and gets the edge's own short bound.
+    res.headers.set("Cache-Control", isGated ? "private, no-store" : PUBLIC_POLICY);
     return res;
   },
 };
