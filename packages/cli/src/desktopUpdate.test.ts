@@ -157,3 +157,17 @@ describe("swap beside the app's own quit helper", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe("swapInBundle", () => {
+  it.if(process.platform === "darwin")("installs into an empty folder when there is no app yet", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "desk-install-"));
+    const fresh = path.join(dir, "fresh.app");
+    fs.mkdirSync(path.join(fresh, "Contents"), { recursive: true });
+    fs.writeFileSync(path.join(fresh, "Contents", "Info.plist"), "new");
+    const appPath = path.join(dir, "Codecast.app");
+    swapInBundle(fresh, appPath);
+    expect(fs.readFileSync(path.join(appPath, "Contents", "Info.plist"), "utf8")).toBe("new");
+    expect(fs.readdirSync(dir).sort()).toEqual(["Codecast.app", "fresh.app"]);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
