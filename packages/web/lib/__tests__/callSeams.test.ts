@@ -394,6 +394,12 @@ describe("hanging up frees the seat before the scribe's teardown", () => {
     expect(scribeStops).toBe(1);
     expect(named("leaveRoom")).toHaveLength(1);
     expect(named("leaveRoom")[0].args).toEqual({ room_key: ROOM });
+    // The call is over for the person while the flush still runs: the row
+    // lets go on End, not seconds later when the pipes have closed.
+    // MUTATION CHECK: move setCall({ phase: "idle" }) back below stopScribe
+    // and this reads "connected".
+    expect(S().call.phase).toBe("idle");
+    expect(S().call.roomKey).toBeNull();
 
     scribeStopping.resolve();
     await leaving;

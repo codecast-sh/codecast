@@ -3,6 +3,7 @@ import { isNotificationLeader, isVoiceHost } from "./desktop";
 import { agentAlertsSuppressed, deliverAlert, reportAlertError } from "./notificationDelivery";
 import type { CueSpec } from "./cueSpec";
 import {
+  STASH_AWAY,
   WALKIE_AWAY,
   WALKIE_JOINED,
   WALKIE_KEY_UP,
@@ -112,6 +113,17 @@ function play(
  *  so every level in this file was set by measuring a render, and the
  *  measurement is only worth anything while the two stay the same graph. Keep
  *  them in step — filter after the envelope for tones, before it for noise. */
+function scheduleEnvelope(gain: AudioParam, t0: number, n: { start: number; dur: number; gain: number }, attack: number) {
+  gain.setValueAtTime(attack > 0 ? 0 : n.gain, t0 + n.start);
+  if (attack > 0) gain.linearRampToValueAtTime(n.gain, t0 + n.start + attack);
+  gain.exponentialRampToValueAtTime(0.001, t0 + n.start + n.dur);
+}
+
+function scheduleGlide(freq: AudioParam, t0: number, n: { start: number; dur: number; sweepTo?: number }, from: number) {
+  freq.setValueAtTime(from, t0 + n.start);
+  if (n.sweepTo !== undefined) freq.exponentialRampToValueAtTime(n.sweepTo, t0 + n.start + n.dur);
+}
+
 function playCue(spec: CueSpec) {
   if (!isSupported()) return;
   try {
@@ -124,15 +136,10 @@ function playCue(spec: CueSpec) {
     for (const n of spec.tones ?? []) {
       const osc = ac.createOscillator();
       osc.type = n.type ?? "sine";
-      osc.frequency.setValueAtTime(n.freq, t0 + n.start);
-      if (n.sweepTo !== undefined) {
-        osc.frequency.exponentialRampToValueAtTime(n.sweepTo, t0 + n.start + n.dur);
-      }
+      scheduleGlide(osc.frequency, t0, n, n.freq);
 
       const env = ac.createGain();
-      env.gain.setValueAtTime(0, t0 + n.start);
-      env.gain.linearRampToValueAtTime(n.gain, t0 + n.start + (n.attack ?? 0.02));
-      env.gain.exponentialRampToValueAtTime(0.001, t0 + n.start + n.dur);
+      scheduleEnvelope(env.gain, t0, n, n.attack ?? 0.02);
 
       osc.connect(env);
       let tail: AudioNode = env;
@@ -159,12 +166,11 @@ function playCue(spec: CueSpec) {
 
       const band = ac.createBiquadFilter();
       band.type = "bandpass";
-      band.frequency.value = n.band;
+      scheduleGlide(band.frequency, t0, n, n.band);
       band.Q.value = n.q ?? 1;
 
       const env = ac.createGain();
-      env.gain.setValueAtTime(n.gain, t0 + n.start);
-      env.gain.exponentialRampToValueAtTime(0.001, t0 + n.start + n.dur);
+      scheduleEnvelope(env.gain, t0, n, n.attack ?? 0);
 
       src.connect(band);
       band.connect(env);
@@ -196,37 +202,8 @@ export function soundIdle(key?: string) {
 }
 
 export function soundDismiss() {
-  if (!isEnabled("ui") || !isSupported()) return;
-  try {
-    const ac = getCtx();
-    const master = ac.createGain();
-    master.gain.value = 0.08 * volumeFactor();
-    master.connect(ac.destination);
-
-    const bufferSize = ac.sampleRate * 0.3;
-    const buffer = ac.createBuffer(1, bufferSize, ac.sampleRate);
-    const data = buffer.getChannelData(0);
-    for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
-    const noise = ac.createBufferSource();
-    noise.buffer = buffer;
-
-    const filter = ac.createBiquadFilter();
-    filter.type = "bandpass";
-    filter.Q.value = 2;
-    filter.frequency.setValueAtTime(3000, ac.currentTime);
-    filter.frequency.exponentialRampToValueAtTime(300, ac.currentTime + 0.2);
-
-    const env = ac.createGain();
-    env.gain.setValueAtTime(0, ac.currentTime);
-    env.gain.linearRampToValueAtTime(0.6, ac.currentTime + 0.03);
-    env.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.22);
-
-    noise.connect(filter);
-    filter.connect(env);
-    env.connect(master);
-    noise.start(ac.currentTime);
-    noise.stop(ac.currentTime + 0.25);
-  } catch {}
+  if (!isEnabled("ui")) return;
+  playCue(STASH_AWAY);
 }
 
 export function soundKill() {

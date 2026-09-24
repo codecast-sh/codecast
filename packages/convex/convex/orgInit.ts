@@ -61,7 +61,7 @@ import { findInitiative } from "./lib/initiativeRef";
 import { performSetTrust, standingConversationOf } from "./orgRoles";
 import { insertTask } from "./agentTasks";
 import { charterPatch } from "./lib/orgCharter";
-import { enforceIndependentReview, recalcPlanProgress, resolveStatusWrite } from "./tasks";
+import { recalcPlanProgress, resolveStatusWrite } from "./tasks";
 
 // Org init and update (docs/architecture/org-init.md O1, O2): the evidence an
 // analyzer reads before proposing a chart, and the apply path that turns an
@@ -1365,7 +1365,6 @@ export async function setTaskStatus(ctx: Ctx, boundary: Boundary, task: any, sta
   const next = write.status ?? status;
   const closing = next === "done" || next === "dropped";
   const verdict = next === "done" ? { verdict: "approve" as const, at: now, note: "closed by an org proposal" } : undefined;
-  await enforceIndependentReview(ctx, task, null, next, verdict);
   const patch: Record<string, any> = { status: next, status_id: write.statusId.set ? write.statusId.value : task.status_id, updated_at: now, closed_at: closing ? now : undefined };
   if (verdict) patch.review_verdict = verdict;
   // A hand's "blocked" or "needs context" is a claim about open work; on a

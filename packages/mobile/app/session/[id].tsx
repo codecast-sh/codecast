@@ -24,7 +24,7 @@ import { isResentCopyOfSentMessage } from '@codecast/web/lib/staleDraft';
 import { useComposerField, nativeComposerText } from '@/lib/composerField';
 import { NativePressable } from '@/lib/gestureHandler';
 import { isTrustedImageSrc } from '@/lib/convex';
-import { parseInboundSessionMessage, isSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUnwrappedSessionReport, parseUserMessage, isScheduledTaskMessage, parseChatWakePrompt, parseHuddleSummaryTag, isToolResultCarrier, type ChatWakePrompt } from '@codecast/web/components/sessionMessage';
+import { parseInboundSessionMessage, isSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUnwrappedSessionReport, parseUserMessage, isScheduledTaskMessage, parseChatWakePrompt, chatWakePlace, chatWakeAction, parseHuddleSummaryTag, isToolResultCarrier, type ChatWakePrompt } from '@codecast/web/components/sessionMessage';
 import { buildNavigatorRows, sampleTicks, isStickyEligible, pickStickyFallbackFromLoaded, resolveStickyPrompt, countCommentsByMessage, type NavigatorRow } from '@codecast/web/lib/messageNavigator';
 import { resolveSessionTitle } from '@codecast/web/lib/sessionTitle';
 import { isHiddenSystemNotice, isWarningSystemNotice } from '@codecast/web/lib/conversationProcessor';
@@ -1881,14 +1881,20 @@ function ChatWakeBlock({ wake, timestamp }: { wake: ChatWakePrompt; timestamp?: 
         <Feather name="message-square" size={13} color={Theme.magenta + 'b3'} />
         <RNText style={[styles.sessionMessageLabel, { color: Theme.magenta + 'b3' }]}>Team chat</RNText>
         <TouchableOpacity disabled={!open} onPress={open} style={[styles.sessionMessageBadge, { borderColor: Theme.magenta + '4d', backgroundColor: Theme.magenta + '1a' }]}>
-          <RNText style={[styles.sessionMessageBadgeText, { color: Theme.magenta }]}>#{wake.channelName}</RNText>
+          <RNText style={[styles.sessionMessageBadgeText, { color: Theme.magenta }]}>{chatWakePlace(wake)}</RNText>
         </TouchableOpacity>
-        <RNText style={styles.sessionMessageTitle} numberOfLines={1}>{wake.askerName}{wake.addressed ? ' mentioned you' : ' replied in a thread'}</RNText>
+        <RNText style={styles.sessionMessageTitle} numberOfLines={1}>{wake.askerName} {chatWakeAction(wake)}</RNText>
         {timestamp != null && timestamp > 0 && (
           <RNText style={styles.sessionMessageTime}>{formatRelativeTime(timestamp)}</RNText>
         )}
       </RNView>
       <CollapsibleBody fadeColor={blendOver(Theme.magenta + '0d', Theme.bg)}>
+        {wake.context.map((entry, i) => (
+          <RNText key={`c${i}`} style={[styles.sessionMessageBody, { opacity: 0.6 }]} selectable>
+            <RNText style={{ fontWeight: '600', color: entry.self ? Theme.magenta : Theme.text }}>{entry.self ? 'You' : entry.name}</RNText>
+            {'  '}{entry.content}
+          </RNText>
+        ))}
         {wake.entries.map((entry, i) => (
           <RNText key={i} style={styles.sessionMessageBody} selectable>
             <RNText style={{ fontWeight: '600', color: entry.self ? Theme.magenta : Theme.text }}>{entry.self ? 'You' : entry.name}</RNText>

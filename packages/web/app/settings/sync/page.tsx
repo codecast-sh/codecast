@@ -27,6 +27,7 @@ import { SettingsPanel, SettingsRow, SettingsSection } from "../../../components
 import { TeamVisibilityControl } from "../../../components/settings/TeamVisibilityControl";
 import Link from "next/link";
 import { SharePanel, ShareTrigger, type ShareChoice, type ShareCurrent } from "../../../components/settings/SharePanel";
+import { SharingAgentCard } from "../../../components/settings/SharingAgentCard";
 import { useShareSummaries } from "../../../hooks/useShareSummaries";
 import {
   describeMappingScope,
@@ -578,6 +579,7 @@ export default function SyncPage() {
 
   return (
     <SettingsPanel>
+      <SharingAgentCard />
       <SettingsSection title="Sync" icon={RefreshCw}>
         <SettingsRow
           label="Sync all folders"
@@ -703,7 +705,7 @@ export default function SyncPage() {
                             </div>
                             <div className="flex items-center gap-1.5 text-xs">
                               <span
-                                className="truncate font-mono text-[11px] text-sol-text-muted"
+                                className="min-w-[12ch] truncate font-mono text-[11px] text-sol-text-muted"
                                 title={more > 0 ? project.checkouts.map((checkout) => prettyPath(checkout.path)).join("\n") : undefined}
                               >
                                 {prettyPath(project.path)}
@@ -726,8 +728,12 @@ export default function SyncPage() {
                                         : "counting"}
                               </span>
                               {!synced && local && <span className="flex-shrink-0 text-sol-text-dim">· not synced</span>}
-                              {isGone(project) && <span className="flex-shrink-0 text-sol-yellow">· folder moved or deleted</span>}
+
                             </div>
+                            {/* Its own line: beside the count it squeezed the path to nothing. */}
+                            {isGone(project) && (
+                              <div className="mt-0.5 text-[11px] text-sol-yellow">Folder moved or deleted on this machine</div>
+                            )}
                             {teamResult && !teamResult.isDefault && (
                               <MappingScopeLine
                                 path={project.path}
@@ -801,16 +807,15 @@ export default function SyncPage() {
       <SettingsSection
         title="CLI"
         icon={Terminal}
-        description="Manage sync settings from the command line. Changes sync to your daemon on the next cycle."
+        description="The same settings from the command line, which is also how an agent changes them. Sync changes reach your daemon within a minute."
       >
         <div className="space-y-1 px-4 py-3 font-mono text-sm sm:px-5">
-          <p><span className="text-sol-cyan">cast sync-settings</span> <span className="text-sol-text-muted">- Interactive project selection</span></p>
+          <p><span className="text-sol-cyan">cast sharing</span> <span className="text-sol-text-muted">- Everything on this page, in the terminal</span></p>
+          <p><span className="text-sol-cyan">cast sharing sync | unsync &lt;folder&gt;</span> <span className="text-sol-text-muted">- Start or stop uploading a folder</span></p>
           {hasTeams && (
             <>
-              <p><span className="text-sol-cyan">cast teams</span> <span className="text-sol-text-muted">- List your teams</span></p>
-              <p><span className="text-sol-cyan">cast teams map &lt;path&gt; &lt;team_id&gt;</span> <span className="text-sol-text-muted">- Map directory to team</span></p>
-              <p><span className="text-sol-cyan">cast teams mappings</span> <span className="text-sol-text-muted">- List directory mappings</span></p>
-              <p><span className="text-sol-cyan">cast teams lock &lt;path&gt;</span> <span className="text-sol-text-muted">- Never share a folder</span></p>
+              <p><span className="text-sol-cyan">cast sharing share &lt;folder&gt; --team &lt;name&gt;</span> <span className="text-sol-text-muted">- Share a folder with a team</span></p>
+              <p><span className="text-sol-cyan">cast sharing lock &lt;folder&gt;</span> <span className="text-sol-text-muted">- Never share a folder</span></p>
             </>
           )}
         </div>

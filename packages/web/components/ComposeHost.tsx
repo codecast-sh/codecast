@@ -32,7 +32,7 @@ export function ComposeHost() {
     <div ref={containerRef} className="fixed inset-x-0 bottom-0 z-[200] flex flex-row-reverse items-end gap-3 px-4 pointer-events-none">
       {hasModal && (
         <div
-          className="fixed inset-0 z-10 bg-black/50 backdrop-blur-sm pointer-events-auto animate-in fade-in-0 duration-150"
+          className="fixed inset-0 z-10 bg-black/60 pointer-events-auto animate-in fade-in-0 duration-150"
           onClick={() => (closeGuardRef.current ?? closeCompose)()}
         />
       )}
