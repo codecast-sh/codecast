@@ -33,7 +33,13 @@ const router = createNotificationRouter({
   // very channel (an exact match scores 100), because chat stays in chat.
   windowBonus: (win, target) => {
     const kind = (target && target.kind) || null;
-    if (win.isPeople && (kind === "call" || kind === "walkie")) return 110;
+    const ring = kind === "call" || kind === "walkie";
+    if (win.isPeople && ring) return 110;
+    // The voice window and the people window draw no dashboard, so a page
+    // navigated into them has no chrome and no way out: a chat banner once
+    // turned the float of faces into a small frameless chat window. Below
+    // pickWindow's floor, so they are never picked for anything else.
+    if ((win.isPeople || win.isCallPanel) && !ring) return -1;
     const route = target && target.route;
     if (win.app && route && appForRoute(route) === win.app) return 105;
     return null;
