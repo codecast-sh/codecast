@@ -108,7 +108,7 @@
     "react-markdown": "^10.1.0",
     "react-resizable-panels": "^4.0.15",
     "react-rnd": "^10.5.3",
-    "react-router": "^7.5.0",
+    "react-router": "^7.18.2",
     "rehype-highlight": "^7.0.2",
     "rehype-katex": "^7.0.1",
     "rehype-raw": "^7.0.0",
