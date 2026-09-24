@@ -10,6 +10,7 @@
 
 import * as path from "node:path";
 import { dirFilterByDepth } from "./fsWalk.js";
+import { checkoutRootOf } from "./fs/checkoutOf.js";
 import type { Config } from "./config/types.js";
 
 export const CLAUDE_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -85,11 +86,16 @@ export function isProjectAllowedToSync(projectPath: string, config: Config): boo
     return false;
   }
 
-  const normalizedProject = path.resolve(projectPath);
-  return config.sync_projects.some(allowed => {
+  const chosen = (p: string) => config.sync_projects!.some(allowed => {
     const normalizedAllowed = path.resolve(allowed);
-    return normalizedProject === normalizedAllowed || normalizedProject.startsWith(normalizedAllowed + path.sep);
+    return p === normalizedAllowed || p.startsWith(normalizedAllowed + path.sep);
   });
+  const normalizedProject = path.resolve(projectPath);
+  if (chosen(normalizedProject)) return true;
+  // A worktree outside its checkout (Codex keeps them under ~/.codex/worktrees)
+  // syncs when its checkout is chosen, the same reach a sharing rule has.
+  const checkout = checkoutRootOf(normalizedProject);
+  return !!checkout && checkout.root !== normalizedProject && chosen(checkout.root);
 }
 
 // The live watcher's own view of the same rule: these tmpdirs end up under

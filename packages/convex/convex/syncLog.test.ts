@@ -336,6 +336,23 @@ describe("makeChangeTrackedDb — dual emission through the interceptor", () => 
       ["scope", "scope_added"],
       ["scope", "scope_removed"],
     ]);
+    // The TEAM learns of the removal only: a join needs nothing from the
+    // remaining members' caches, a departure must drop the member's rows.
+    expect(actions(teamScopeKey("teams:9")).map((r) => [r.entity_type, r.entity_id, r.op])).toEqual([
+      ["member", "users:7", "scope_removed"],
+    ]);
+  });
+
+  test("a member removal row never coalesces with the team's entity rows or a repeat", async () => {
+    const { db, actions } = makeFakeDb();
+    await appendSyncAction(db, null, "team:teams:9", "tasks", "users:7", "upsert");
+    await appendSyncAction(db, null, "team:teams:9", "member", "users:7", "scope_removed");
+    await appendSyncAction(db, null, "team:teams:9", "member", "users:7", "scope_removed");
+    expect(actions("team:teams:9").map((r) => [r.entity_type, r.op])).toEqual([
+      ["tasks", "upsert"],
+      ["member", "scope_removed"],
+      ["member", "scope_removed"],
+    ]);
   });
 
   test("conversations never emit into the team scope", async () => {
@@ -827,7 +844,7 @@ describe("source guards", () => {
     const allowed = new Set(["syncLog.ts", "schema.ts", "changeLog.ts"]);
     const offenders = sources().filter((f) => !allowed.has(f) && readFileSync(join(DIR, f), "utf8").includes("access_key"));
     expect(offenders).toEqual([]);
-    expect(readFileSync(join(DIR, "lib", "access.ts"), "utf8")).toContain("access_key"); // the builder
+    expect(readFileSync(join(DIR, "lib", "accessKeys.ts"), "utf8")).toContain("access_key"); // the builder
   });
   test("scope_key is never an access input (lib/access.ts does not know the log's scopes)", () => {
     const access = readFileSync(join(DIR, "lib", "access.ts"), "utf8");

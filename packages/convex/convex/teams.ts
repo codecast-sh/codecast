@@ -140,7 +140,7 @@ export const getUserTeams = query({
           // Sharing settings and the share-in-full nudge: a level only matters
           // when someone else is on the team and a project flows to it.
           member_count: roster.length,
-          shared_project_count: mappings.filter((dm) => dm.team_id.toString() === m.team_id.toString()).length,
+          shared_project_count: mappings.filter((dm) => dm.team_id?.toString() === m.team_id.toString()).length,
           // The client's own create key, echoed back. A create whose dispatch
           // was parked (no binding at click time) resolves its stub against
           // this instead of being declared failed.

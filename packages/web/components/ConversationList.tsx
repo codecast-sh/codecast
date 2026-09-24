@@ -252,6 +252,9 @@ export type Conversation = {
   fork_count?: number;
   forked_from?: string | null;
   is_private?: boolean;
+  // The per-session team level ("summary" | "full"; "private" marks a hide).
+  // Unset means the owner's membership level for the team applies.
+  team_visibility?: string | null;
   auto_shared?: boolean;
   visibility_mode?: "full" | "detailed" | "summary" | "minimal";
   activity_summary?: string;

@@ -36,9 +36,13 @@ export type UserWorkspace = {
   is_git_repo: boolean;
   git_remote_url?: string;
   session_count: number;
+  /** Start of the oldest session in the recent window. */
+  first_active?: number;
   last_active: number;
   team_id: Id<"teams"> | null;
   auto_share: boolean;
+  /** The mapping's share start; sessions before it stay private. */
+  share_since?: number | null;
 };
 
 /** True when the workspace already flows to this team. */

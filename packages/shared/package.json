@@ -37,6 +37,7 @@
     "./docs": "./docs/index.ts",
     "./files": "./files/index.ts",
     "./time": "./time/index.ts",
+    "./team": "./team/index.ts",
     "./vault": "./vault/index.ts",
     "./chat": "./chat/index.ts",
     "./chat/dm": "./chat/dm.ts",

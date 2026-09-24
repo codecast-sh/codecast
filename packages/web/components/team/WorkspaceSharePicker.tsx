@@ -1,9 +1,12 @@
+import { workspaceName } from "../../hooks/useWorkspaceSelection";
 import { useCallback, useRef, useState } from "react";
 import { GitBranch, Check, Search, Terminal, Users } from "lucide-react";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { Input } from "../ui/input";
 import { KeyCap } from "../KeyboardShortcutsHelp";
-import { formatRelative } from "../../lib/utils";
+import { formatDateRange, formatSessionCount } from "../../lib/team/shareImpact";
+import { useShareImpact } from "../../hooks/useShareImpact";
+import { ShareImpactBand, type ShareImpactBandProps } from "./ShareImpactBand";
 import {
   isMappedToTeam,
   type SuggestedWorkspace,
@@ -13,15 +16,10 @@ import {
 import "./teamFlow.css";
 
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-// The selection state (seedWorkspaceSelection, useWorkspaceSelection) lives in
-// hooks/useWorkspaceSelection so this file stays a clean Fast Refresh boundary.
-// Selection follows --team-flow-accent inside the create flow and falls back
-// to cyan elsewhere (see .tf-accent-scope in teamFlow.css).
 
-function workspaceName(path: string) {
-  const parts = path.split("/");
-  return parts[parts.length - 1] || path;
-}
+/** What the picker needs to say what a share exposes; the band's own props
+ *  minus the numbers, which the picker derives from its selection. */
+export type ShareImpactContext = Omit<ShareImpactBandProps, "selectedNames" | "impact" | "className">;
 
 /**
  * Hints for repos that share a short name (two checkouts of "outreach").
@@ -60,7 +58,8 @@ function buildDupHints(paths: string[]): Map<string, string> {
  * The workspace share step: matched repos, the rest, the empty state that
  * points at the CLI, and repos teammates share that the viewer lacks locally.
  * `isNewTeam` swaps the copy for a team nobody has joined yet, where no
- * teammate matches can exist.
+ * teammate matches can exist. With `impact` the step closes on the band
+ * that says what the selection exposes, in sessions and dates.
  */
 export function WorkspaceSharePicker({
   data,
@@ -68,6 +67,7 @@ export function WorkspaceSharePicker({
   selectedPaths,
   onToggle,
   isNewTeam = false,
+  impact,
   className = "",
 }: {
   data: TeamWorkspaceSuggestions;
@@ -75,9 +75,12 @@ export function WorkspaceSharePicker({
   selectedPaths: Record<string, boolean>;
   onToggle: (path: string) => void;
   isNewTeam?: boolean;
+  impact?: ShareImpactContext;
   className?: string;
 }) {
   const { allProjects, matched, other, teamName, teamOnlyRepos, getSuggestion } = data;
+  const selectedList = Object.keys(selectedPaths).filter((p) => selectedPaths[p]).sort();
+  const totals = useShareImpact(selectedList, allProjects, impact?.since ?? null);
 
   // Duplicate short names are computed across both sections, so a matched
   // repo and an unmatched twin still tell each other apart.
@@ -151,7 +154,7 @@ export function WorkspaceSharePicker({
             onChange={(e) => setFilter(e.target.value)}
             onKeyDown={onFilterKeyDown}
             placeholder={`Filter ${total} workspaces`}
-            aria-label="Filter workspaces"
+            aria-label="Filter repositories"
             aria-keyshortcuts="/"
             autoComplete="off"
             className="pl-9 pr-9 bg-sol-bg-alt border-sol-border text-sol-text focus-visible:ring-[var(--tf-acc)]"
@@ -186,7 +189,7 @@ export function WorkspaceSharePicker({
       {matchedShown.length > 0 && (
         <WorkspaceSection
           title="Shared by teammates"
-          subtitle="Your teammates already share these repos. Pre-selected for you."
+          subtitle="Your teammates share these repos, so they are selected for you. Untick any you want to keep to yourself."
           workspaces={matchedShown}
           grow={lastKey === "matched"}
           {...common}
@@ -195,13 +198,21 @@ export function WorkspaceSharePicker({
 
       {otherShown.length > 0 && (
         <WorkspaceSection
-          title={isNewTeam ? "Your workspaces" : "Your other workspaces"}
+          title={isNewTeam ? "Your repositories" : "Your other repositories"}
           // In the create flow the page description already says what to pick,
           // so a subtitle here would repeat the same sentence.
-          subtitle={isNewTeam ? undefined : "Select any additional workspaces you'd like to share."}
+          subtitle={isNewTeam ? undefined : "Select any other repositories you'd like to share."}
           workspaces={otherShown}
           grow={lastKey === "other"}
           {...common}
+        />
+      )}
+
+      {impact && allProjects && allProjects.length > 0 && (
+        <ShareImpactBand
+          {...impact}
+          selectedNames={selectedList.map(workspaceName)}
+          impact={totals}
         />
       )}
 
@@ -216,7 +227,7 @@ export function WorkspaceSharePicker({
               <div key={i} className="h-[74px] rounded-lg border border-sol-border/50 bg-sol-bg-alt/40 animate-pulse" />
             ))}
           </div>
-          <p className="text-sm text-sol-text-dim">Loading your workspaces.</p>
+          <p className="text-sm text-sol-text-dim">Loading your repositories.</p>
         </div>
       )}
 
@@ -423,13 +434,12 @@ function WorkspaceSection({
                         {suggestion.match_reason}
                       </span>
                     )}
-                    <span>
-                      {ws.session_count} session
-                      {ws.session_count === 1 ? "" : "s"}
+                    <span className="tabular-nums">
+                      {formatSessionCount(ws.session_count)}
+                      {ws.last_active > 0 && (
+                        <> · {formatDateRange(ws.first_active ?? ws.last_active, ws.last_active)}</>
+                      )}
                     </span>
-                    {ws.last_active > 0 && (
-                      <span>{formatRelative(ws.last_active)}</span>
-                    )}
                   </div>
                 </div>
               </div>

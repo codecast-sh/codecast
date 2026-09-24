@@ -73,6 +73,7 @@ import {
   renderFencedPlanTasks,
 } from "@codecast/shared/tasks";
 import { describeDates, describeDatesFull, formatDateSmart, wasEdited } from "@codecast/shared/time";
+import { describeShareSpan, formatDateRange, formatSessionCount, summarizeShareImpact, type PathShareSummary } from "@codecast/shared/team";
 import { cliFetch, cliFetchRead, cliSearchRequest } from "./cliHttp.js";
 import type { OrgTarget } from "./orgTarget.js";
 import { registerOrgInitCommands } from "./orgInit.js";
@@ -610,6 +611,8 @@ interface DiscoveredProject {
   path: string;
   dirName: string;
   sessionCount: number;
+  /** Creation time of the oldest transcript: when work there began. */
+  firstModified: Date;
   lastModified: Date;
 }
 
@@ -650,6 +653,7 @@ function discoverProjects(): DiscoveredProject[] {
     if (sessionFiles.length === 0) continue;
 
     let lastModified = new Date(0);
+    let firstModified = new Date(8.64e15);
     let projectPath: string | null = null;
     for (const file of sessionFiles) {
       const filePath = path.join(dirPath, file);
@@ -661,6 +665,12 @@ function discoverProjects(): DiscoveredProject[] {
       }
       if (stats.mtime > lastModified) {
         lastModified = stats.mtime;
+      }
+      // birthtime is the transcript's creation on macOS and modern Linux;
+      // where the filesystem has none it equals mtime, still a fair start.
+      const born = stats.birthtimeMs > 0 ? stats.birthtime : stats.mtime;
+      if (born < firstModified) {
+        firstModified = born;
       }
       if (!projectPath) {
         projectPath = readProjectPathFromSession(filePath);
@@ -676,6 +686,7 @@ function discoverProjects(): DiscoveredProject[] {
       path: projectPath,
       dirName: entry.name,
       sessionCount: sessionFiles.length,
+      firstModified: firstModified < lastModified ? firstModified : lastModified,
       lastModified,
     });
   }
@@ -2047,7 +2058,18 @@ async function promptProjectSelection(config: Config): Promise<void> {
   }
 
   console.log("--- Sync Settings ---");
-  console.log(`Found ${projects.length} project${projects.length === 1 ? "" : "s"} with Claude Code sessions.\n`);
+  const total = projects.reduce((n, p) => n + p.sessionCount, 0);
+  const first = Math.min(...projects.map(p => p.firstModified.getTime()));
+  const last = Math.max(...projects.map(p => p.lastModified.getTime()));
+  console.log(
+    `Found ${projects.length} project${projects.length === 1 ? "" : "s"} with ${formatSessionCount(total)}, ${formatDateRange(first, last)}.\n`,
+  );
+  printProjectTable(
+    projects.slice(0, 15).map(p => ({ path: p.path, sessionCount: p.sessionCount, first: p.firstModified.getTime(), last: p.lastModified.getTime() })),
+    { hasTeams: false, more: Math.max(0, projects.length - 15) },
+  );
+  console.log(fmt.muted("Syncing uploads these sessions to your private Codecast workspace. Only you can"));
+  console.log(fmt.muted("open them. A team sees a project only after you share that project with it.\n"));
 
   const syncAll = await confirm({
     message: "Sync all projects? (recommended)",
@@ -2059,12 +2081,12 @@ async function promptProjectSelection(config: Config): Promise<void> {
     config.sync_projects = [];
     writeConfig(config);
     await updateSyncSettingsOnServer(config);
-    console.log("\nAll sessions will be synced.\n");
+    console.log(`\n${fmt.success(icons.check)} All ${projects.length} projects sync to your private workspace.\n`);
     return;
   }
 
   const choices = projects.map(p => ({
-    name: `${p.path} (${p.sessionCount} session${p.sessionCount === 1 ? "" : "s"})`,
+    name: `${p.path} (${formatSessionCount(p.sessionCount)}, ${formatDateRange(p.firstModified.getTime(), p.lastModified.getTime())})`,
     value: p.path,
     checked: true,
   }));
@@ -2115,146 +2137,177 @@ async function promptTeamSelection(config: Config): Promise<void> {
     return;
   }
 
-  console.log("--- Team Sharing ---");
+  // A member of exactly one team routes their sessions to it: that decides
+  // which inbox a session lands in, and grants nobody a read. Sharing is the
+  // per project step below, and it is never implied by membership.
+  if (teams.length === 1 && !config.team_id) {
+    config.team_id = teams[0]._id;
+    writeConfig(config);
+  }
 
+  console.log("--- Team Sharing ---");
   if (teams.length === 1) {
     console.log(`You're a member of ${fmt.accent(teams[0].name)}.`);
-    const shareWithTeam = await confirm({
-      message: `Share your sessions with ${teams[0].name} by default?`,
-      default: true,
-    });
-
-    if (shareWithTeam) {
-      config.team_id = teams[0]._id;
-
-      const shareMode = await select({
-        message: "What should teammates see?",
-        choices: [
-          { name: `Full ${fmt.muted("— complete session transcripts")}`, value: "full" as const },
-          { name: `Summary ${fmt.muted("— goals, outcomes, and files changed only")}`, value: "summary" as const },
-        ],
-        default: "full",
-      });
-
-      config.team_share_mode = shareMode;
-      writeConfig(config);
-      const modeLabel = shareMode === "full" ? "full transcripts" : "summaries only";
-      console.log(`\nSessions will be shared with ${fmt.accent(teams[0].name)} (${modeLabel}).`);
-      console.log(`${fmt.muted("You can configure per-project sharing with 'cast sync-settings'")}\n`);
-    } else {
-      console.log(`\nSessions will be private by default.`);
-      console.log(`${fmt.muted("You can share specific projects with 'cast sync-settings'")}\n`);
+  } else {
+    console.log(`You're a member of ${teams.length} teams:\n`);
+    for (const team of teams) {
+      const roleLabel = team.role === "admin" ? fmt.muted("(admin)") : "";
+      console.log(`  ${icons.bullet} ${fmt.accent(team.name)} ${roleLabel}`);
     }
-    return;
   }
-
-  console.log(`You're a member of ${teams.length} teams:\n`);
-  for (const team of teams) {
-    const roleLabel = team.role === "admin" ? fmt.muted("(admin)") : "";
-    console.log(`  ${icons.bullet} ${fmt.accent(team.name)} ${roleLabel}`);
-  }
-  console.log();
+  console.log(fmt.muted("Nothing is shared yet. A project you share shows its sessions on the team feed.\n"));
 
   const configureNow = await confirm({
-    message: "Configure which projects share with which teams now?",
+    message: "Pick projects to share with your team now?",
     default: true,
   });
 
-  if (configureNow) {
-    const projects = discoverProjects();
-    const serverProjects = await fetchProjectsWithTeams(config);
-
-    const projectMap = new Map<string, { sessionCount: number; teamId: string | null; teamName: string | null }>();
-    for (const p of serverProjects) {
-      projectMap.set(p.path, { sessionCount: p.session_count, teamId: p.team_id, teamName: p.team_name });
-    }
-    for (const p of projects) {
-      if (!projectMap.has(p.path)) {
-        projectMap.set(p.path, { sessionCount: p.sessionCount, teamId: null, teamName: null });
-      }
-    }
-
-    const projectList = Array.from(projectMap.entries())
-      .map(([path, data]) => ({ path, ...data }))
-      .sort((a, b) => b.sessionCount - a.sessionCount)
-      .slice(0, 15);
-
-    if (projectList.length === 0) {
-      console.log("No projects found yet. You can configure team sharing later.\n");
-      return;
-    }
-
-    const maxNameLen = Math.min(20, Math.max(...projectList.map(p => (p.path.split("/").pop() || p.path).length)));
-
-    console.log(`\n${c.bold}Your Projects${c.reset}\n`);
-    console.log(`  ${"Project".padEnd(maxNameLen)} ${"Sessions".padEnd(10)} ${"Team"}`);
-    console.log(`  ${"-".repeat(maxNameLen)} ${"-".repeat(10)} ${"-".repeat(15)}`);
-
-    for (const p of projectList) {
-      const name = (p.path.split("/").pop() || p.path).padEnd(maxNameLen);
-      const sessions = `${p.sessionCount}`.padEnd(10);
-      const team = p.teamName ? fmt.accent(p.teamName) : fmt.muted("Only Me");
-      console.log(`  ${fmt.value(name)} ${fmt.muted(sessions)} ${team}`);
-    }
-    console.log();
-
-    let continueEditing = true;
-    while (continueEditing) {
-      const projectChoices = [
-        { name: fmt.success("Done - continue setup"), value: "__done__" },
-        ...projectList.map(p => {
-          const name = p.path.split("/").pop() || p.path;
-          const team = p.teamName || "Only Me";
-          return {
-            name: `${name} ${fmt.muted(`→ ${team}`)}`,
-            value: p.path,
-          };
-        }),
-      ];
-
-      const selectedPath = await select({
-        message: "Select a project to change (or Done):",
-        choices: projectChoices,
-        pageSize: 12,
-      });
-
-      if (selectedPath === "__done__") {
-        continueEditing = false;
-        continue;
-      }
-
-      const project = projectList.find(p => p.path === selectedPath);
-      if (!project) continue;
-
-      const teamChoices = [
-        { name: `Only Me ${fmt.muted("(private)")}`, value: null as string | null },
-        ...teams.map(t => ({
-          name: `${t.name} ${t.role === "admin" ? fmt.muted("(admin)") : ""}`,
-          value: t._id,
-        })),
-      ];
-
-      const selectedTeam = await select({
-        message: `Share ${project.path.split("/").pop()} with:`,
-        choices: teamChoices,
-        default: project.teamId || null,
-      });
-
-      if (selectedTeam !== project.teamId) {
-        await updateDirectoryMapping(config, project.path, selectedTeam);
-        const teamName = selectedTeam
-          ? teams.find(t => t._id === selectedTeam)?.name || "team"
-          : "Only Me";
-        project.teamId = selectedTeam;
-        project.teamName = selectedTeam ? teamName : null;
-        console.log(`${fmt.success(icons.check)} ${project.path.split("/").pop()} → ${fmt.accent(teamName)}\n`);
-      }
-    }
-
-    console.log(`${fmt.muted("Configure more projects anytime with 'cast sync-settings'")}\n`);
-  } else {
-    console.log(`\n${fmt.muted("Run 'cast sync-settings' anytime to configure team sharing.")}\n`);
+  if (!configureNow) {
+    console.log(`\n${fmt.muted("Run 'cast sync-settings' anytime to share a project.")}\n`);
+    return;
   }
+
+  const projects = discoverProjects();
+  const serverProjects = await fetchProjectsWithTeams(config);
+
+  const projectMap = new Map<string, { sessionCount: number; first: number; last: number; teamId: string | null; teamName: string | null }>();
+  for (const p of serverProjects) {
+    projectMap.set(p.path, { sessionCount: p.session_count, first: p.first_active ?? p.last_active, last: p.last_active, teamId: p.private ? LOCK_CHOICE : p.team_id, teamName: p.private ? "Never share" : p.team_name });
+  }
+  for (const p of projects) {
+    if (!projectMap.has(p.path)) {
+      projectMap.set(p.path, { sessionCount: p.sessionCount, first: p.firstModified.getTime(), last: p.lastModified.getTime(), teamId: null, teamName: null });
+    }
+  }
+
+  const projectList = Array.from(projectMap.entries())
+    .map(([path, data]) => ({ path, ...data }))
+    .sort((a, b) => b.sessionCount - a.sessionCount)
+    .slice(0, 15);
+
+  if (projectList.length === 0) {
+    console.log("No projects found yet. You can configure team sharing later.\n");
+    return;
+  }
+
+  console.log(`\n${c.bold}Your Projects${c.reset}\n`);
+  printProjectTable(projectList, { hasTeams: true });
+
+  let continueEditing = true;
+  while (continueEditing) {
+    const projectChoices = [
+      { name: fmt.success("Done - continue setup"), value: "__done__" },
+      ...projectList.map(p => {
+        const name = p.path.split("/").pop() || p.path;
+        const team = p.teamName || "Only Me";
+        return {
+          name: `${name} ${fmt.muted(`→ ${team}`)}`,
+          value: p.path,
+        };
+      }),
+    ];
+
+    const selectedPath = await select({
+      message: "Select a project to change (or Done):",
+      choices: projectChoices,
+      pageSize: 12,
+    });
+
+    if (selectedPath === "__done__") {
+      continueEditing = false;
+      continue;
+    }
+
+    const project = projectList.find(p => p.path === selectedPath);
+    if (!project) continue;
+
+    const selectedTeam = await pickTeamForProject(project.path, teams, project.teamId);
+    if (selectedTeam === project.teamId) continue;
+
+    const team = selectedTeam ? teams.find(t => t._id === selectedTeam) : undefined;
+    const ok = team
+      ? (await shareProjectWithTeam(config, project.path, team)).ok
+      : await updateDirectoryMapping(config, project.path, null, undefined, { lock: selectedTeam === LOCK_CHOICE });
+    if (!ok) continue;
+    project.teamId = selectedTeam;
+    project.teamName = team?.name ?? (selectedTeam === LOCK_CHOICE ? "Never share" : null);
+    if (!team) console.log(`${fmt.success(icons.check)} ${getProjectName(project.path)} → ${fmt.accent(project.teamName ?? "Only Me")}\n`);
+  }
+
+  console.log(`${fmt.muted("Configure more projects anytime with 'cast sync-settings'")}\n`);
+}
+
+/** The project table every sharing surface prints: name, how many sessions,
+ *  from when to when, and (with teams) who sees them. */
+function printProjectTable(
+  rows: { path: string; sessionCount: number; first: number; last: number; teamName?: string | null }[],
+  opts: { hasTeams: boolean; more?: number },
+): void {
+  const maxNameLen = Math.min(25, Math.max(12, ...rows.map(r => getProjectName(r.path).length)));
+  const head = `  ${"Project".padEnd(maxNameLen)} ${"Sessions".padEnd(10)} ${"When".padEnd(20)}${opts.hasTeams ? " Team" : ""}`;
+  console.log(head);
+  console.log(`  ${"-".repeat(maxNameLen)} ${"-".repeat(10)} ${"-".repeat(20)}${opts.hasTeams ? ` ${"-".repeat(15)}` : ""}`);
+  for (const r of rows) {
+    const name = getProjectName(r.path).padEnd(maxNameLen);
+    const sessions = `${r.sessionCount}`.padEnd(10);
+    const when = (r.sessionCount > 0 && r.last > 0 ? formatDateRange(r.first || r.last, r.last) : "").padEnd(20);
+    const team = opts.hasTeams ? ` ${r.teamName ? fmt.accent(r.teamName) : fmt.muted("Only Me")}` : "";
+    console.log(`  ${fmt.value(name)} ${fmt.muted(sessions)} ${fmt.muted(when)}${team}`);
+  }
+  if (opts.more) console.log(`  ${fmt.muted(`... and ${opts.more} more`)}`);
+  console.log();
+}
+
+/** "Share <project> with:" — Only Me or one of the member's teams. */
+async function pickTeamForProject(projectPath: string, teams: Team[], current: string | null): Promise<string | null> {
+  const teamChoices = [
+    { name: `Only Me ${fmt.muted("(private)")}`, value: null as string | null },
+    { name: `Never share ${fmt.muted("(locked: no rule can share it, this repository's clones included)")}`, value: LOCK_CHOICE as string | null },
+    ...teams.map(t => ({
+      name: `${t.name} ${t.role === "admin" ? fmt.muted("(admin)") : ""}`,
+      value: t._id,
+    })),
+  ];
+  return select({
+    message: `Share ${getProjectName(projectPath)} with:`,
+    choices: teamChoices,
+    default: current || null,
+  });
+}
+
+/**
+ * One project, one team: say what the share exposes (how many sessions, from
+ * when), ask whether the past goes along, then write the mapping. The setup
+ * wizard, `cast sync-settings` and `cast teams map` all share it, so the
+ * numbers a person reads before a share are the same everywhere. `includePast`
+ * skips the question; without a terminal the default is to include the past,
+ * the same default the web setup flow shows with its switch on.
+ */
+async function shareProjectWithTeam(
+  config: Config,
+  projectPath: string,
+  team: Team,
+  opts: { includePast?: boolean } = {},
+): Promise<{ ok: boolean; includePast: boolean }> {
+  const name = getProjectName(projectPath);
+  const summary = await summarizeConversationsForPath(config, projectPath);
+  const impact = summarizeShareImpact([projectPath], { [projectPath]: summary }, undefined);
+  console.log(`  ${fmt.accent(team.name)} will see ${fmt.value(name)}: ${describeShareSpan(impact, null)}`);
+  let includePast = opts.includePast ?? true;
+  if (opts.includePast === undefined && impact.sessions > 0 && process.stdin.isTTY) {
+    includePast = await confirm({
+      message: `Include the ${formatSessionCount(impact.sessions, impact.truncated)} you already have there? (No = new sessions only)`,
+      default: true,
+    });
+  }
+  const ok = await updateDirectoryMapping(config, projectPath, team._id, includePast);
+  if (ok) {
+    const scope = includePast && impact.sessions > 0 ? `${formatSessionCount(impact.sessions, impact.truncated)} shared` : "sessions from today on";
+    console.log(`${fmt.success(icons.check)} ${name} → ${fmt.accent(team.name)} ${fmt.muted(`(${scope})`)}\n`);
+  } else {
+    console.log(`${fmt.error("Failed to update")}\n`);
+  }
+  return { ok, includePast };
 }
 
 
@@ -6159,10 +6212,17 @@ interface Team {
 interface ProjectWithTeam {
   path: string;
   session_count: number;
+  first_active?: number;
   last_active: number;
   team_id: string | null;
   team_name: string | null;
+  /** A "never share" lock: no rule can share the folder. */
+  private?: boolean;
+  share_since?: number | null;
 }
+
+/** The picker's value for a lock; a team id or null (Only Me) otherwise. */
+const LOCK_CHOICE = "__never_share__";
 
 async function fetchTeams(config: Config): Promise<Team[]> {
   if (!config.auth_token || !config.convex_url) return [];
@@ -6198,17 +6258,21 @@ async function fetchProjectsWithTeams(config: Config): Promise<ProjectWithTeam[]
   }
 }
 
-async function updateDirectoryMapping(config: Config, pathPrefix: string, teamId: string | null): Promise<boolean> {
+async function updateDirectoryMapping(config: Config, pathPrefix: string, teamId: string | null, includePast?: boolean, opts: { lock?: boolean } = {}): Promise<boolean> {
   if (!config.auth_token || !config.convex_url) return false;
   try {
     const siteUrl = config.convex_url.replace(".cloud", ".site");
     const body: Record<string, unknown> = {
       api_token: config.auth_token,
       path_prefix: pathPrefix,
-      auto_share: true,
+      auto_share: !opts.lock,
     };
+    if (opts.lock) body.private = true;
     if (teamId !== null) {
       body.team_id = teamId;
+    }
+    if (includePast !== undefined) {
+      body.include_past = includePast;
     }
     const response = await cliFetch(`${siteUrl}/cli/teams/mappings/update`, {
       method: "POST",
@@ -6230,8 +6294,12 @@ async function updateDirectoryMapping(config: Config, pathPrefix: string, teamId
   }
 }
 
-async function countConversationsForPath(config: Config, pathPrefix: string): Promise<number> {
-  if (!config.auth_token || !config.convex_url) return 0;
+const EMPTY_PATH_SUMMARY: PathShareSummary = { count: 0, first_started_at: null, last_started_at: null, truncated: false };
+
+/** How many synced sessions a directory holds and when they started: the
+ *  preview before a share, and the count before a delete. */
+async function summarizeConversationsForPath(config: Config, pathPrefix: string): Promise<PathShareSummary> {
+  if (!config.auth_token || !config.convex_url) return EMPTY_PATH_SUMMARY;
   try {
     const siteUrl = config.convex_url.replace(".cloud", ".site");
     const response = await cliFetchRead(`${siteUrl}/cli/conversations/count`, {
@@ -6239,11 +6307,16 @@ async function countConversationsForPath(config: Config, pathPrefix: string): Pr
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ api_token: config.auth_token, path_prefix: pathPrefix }),
     });
-    if (!response.ok) return 0;
+    if (!response.ok) return EMPTY_PATH_SUMMARY;
     const data = await response.json();
-    return data.count ?? 0;
+    return {
+      count: data.count ?? 0,
+      first_started_at: data.first_started_at ?? null,
+      last_started_at: data.last_started_at ?? null,
+      truncated: !!data.truncated,
+    };
   } catch {
-    return 0;
+    return EMPTY_PATH_SUMMARY;
   }
 }
 
@@ -6303,14 +6376,15 @@ program
     const serverProjects = await fetchProjectsWithTeams(config);
     const localProjects = discoverProjects();
 
-    const projectMap = new Map<string, { sessionCount: number; lastActive: number; teamId: string | null; teamName: string | null }>();
+    const projectMap = new Map<string, { sessionCount: number; firstActive: number; lastActive: number; teamId: string | null; teamName: string | null }>();
 
     for (const p of serverProjects) {
       projectMap.set(p.path, {
         sessionCount: p.session_count,
+        firstActive: p.first_active ?? p.last_active,
         lastActive: p.last_active,
-        teamId: p.team_id,
-        teamName: p.team_name,
+        teamId: p.private ? LOCK_CHOICE : p.team_id,
+        teamName: p.private ? "Never share" : p.team_name,
       });
     }
 
@@ -6318,7 +6392,8 @@ program
       if (!projectMap.has(p.path)) {
         projectMap.set(p.path, {
           sessionCount: p.sessionCount,
-          lastActive: Date.now(),
+          firstActive: p.firstModified.getTime(),
+          lastActive: p.lastModified.getTime(),
           teamId: null,
           teamName: null,
         });
@@ -6382,32 +6457,12 @@ program
     console.log(`\n${c.bold}cast${c.reset} ${fmt.muted("Sync Settings")}\n`);
 
     const displayProjects = projects.slice(0, 25);
-    const maxNameLen = Math.min(25, Math.max(12, ...displayProjects.map(p => getProjectName(p.path).length)));
 
-    const printProjectList = () => {
-      if (hasTeams) {
-        console.log(`  ${"Project".padEnd(maxNameLen)} ${"Sessions".padEnd(10)} ${"Team"}`);
-        console.log(`  ${"-".repeat(maxNameLen)} ${"-".repeat(10)} ${"-".repeat(15)}`);
-        displayProjects.forEach((p) => {
-          const name = getProjectName(p.path).padEnd(maxNameLen);
-          const sessions = `${p.sessionCount}`.padEnd(10);
-          const team = p.teamName ? fmt.accent(p.teamName) : fmt.muted("Only Me");
-          console.log(`  ${fmt.value(name)} ${fmt.muted(sessions)} ${team}`);
-        });
-      } else {
-        console.log(`  ${"Project".padEnd(maxNameLen)} ${"Sessions"}`);
-        console.log(`  ${"-".repeat(maxNameLen)} ${"-".repeat(10)}`);
-        displayProjects.forEach((p) => {
-          const name = getProjectName(p.path).padEnd(maxNameLen);
-          const sessions = `${p.sessionCount}`;
-          console.log(`  ${fmt.value(name)} ${fmt.muted(sessions)}`);
-        });
-      }
-      if (projects.length > 25) {
-        console.log(`  ${fmt.muted(`... and ${projects.length - 25} more`)}`);
-      }
-      console.log();
-    };
+    const printProjectList = () =>
+      printProjectTable(
+        displayProjects.map(p => ({ path: p.path, sessionCount: p.sessionCount, first: p.firstActive, last: p.lastActive, teamName: p.teamName })),
+        { hasTeams, more: Math.max(0, projects.length - 25) },
+      );
 
     const syncModeDisplay = config.sync_mode === "selected" ? "Selected projects only" : "All projects";
     console.log(`${c.bold}Sync Mode:${c.reset} ${config.sync_mode === "selected" ? fmt.muted(syncModeDisplay) : fmt.accent(syncModeDisplay)}`);
@@ -6500,7 +6555,7 @@ program
         const deselected = previousProjects.filter(p => !selectedProjects.includes(p));
 
         for (const removedPath of deselected) {
-          const count = await countConversationsForPath(config, removedPath);
+          const { count } = await summarizeConversationsForPath(config, removedPath);
           if (count > 0) {
             const shouldDelete = await confirm({
               message: `${getProjectName(removedPath)} has ${count} synced conversation${count !== 1 ? "s" : ""}. Delete them from the server?`,
@@ -6532,23 +6587,11 @@ program
         const project = displayProjects.find(p => p.path === action);
         if (!project) continue;
 
-        const teamChoices = [
-          { name: `Only Me ${fmt.muted("(private)")}`, value: null as string | null },
-          ...teams.map(t => ({
-            name: `${t.name} ${t.role === "admin" ? fmt.muted("(admin)") : ""}`,
-            value: t._id,
-          })),
-        ];
-
-        const selectedTeam = await select({
-          message: `Share ${getProjectName(project.path)} with:`,
-          choices: teamChoices,
-          default: project.teamId || null,
-        });
+        const selectedTeam = await pickTeamForProject(project.path, teams, project.teamId);
 
         if (selectedTeam !== project.teamId) {
           if (!selectedTeam && project.teamId) {
-            const count = await countConversationsForPath(config, project.path);
+            const { count } = await summarizeConversationsForPath(config, project.path);
             if (count > 0) {
               const shouldDelete = await confirm({
                 message: `${getProjectName(project.path)} has ${count} synced conversation${count !== 1 ? "s" : ""}. Delete them from the server?`,
@@ -6563,21 +6606,22 @@ program
             }
           }
 
-          const success = await updateDirectoryMapping(config, project.path, selectedTeam);
+          const team = selectedTeam ? teams.find(t => t._id === selectedTeam) : undefined;
+          const success = team
+            ? (await shareProjectWithTeam(config, project.path, team)).ok
+            : await updateDirectoryMapping(config, project.path, null, undefined, { lock: selectedTeam === LOCK_CHOICE });
           if (success) {
-            const newTeamName = selectedTeam
-              ? teams.find(t => t._id === selectedTeam)?.name || "team"
-              : "Only Me";
+            const newTeamName = team?.name ?? (selectedTeam === LOCK_CHOICE ? "Never share" : "Only Me");
             project.teamId = selectedTeam;
-            project.teamName = selectedTeam ? newTeamName : null;
+            project.teamName = team?.name ?? (selectedTeam === LOCK_CHOICE ? "Never share" : null);
 
             const choiceIdx = mainChoices.findIndex(c => c.value === project.path);
             if (choiceIdx !== -1) {
               mainChoices[choiceIdx].name = `${getProjectName(project.path)} ${fmt.muted(`→ ${newTeamName}`)}`;
             }
 
-            console.log(`${fmt.success(icons.check)} ${getProjectName(project.path)} → ${fmt.accent(newTeamName)}\n`);
-          } else {
+            if (!team) console.log(`${fmt.success(icons.check)} ${getProjectName(project.path)} → ${fmt.accent(newTeamName)}\n`);
+          } else if (!team) {
             console.log(`${fmt.error("Failed to update")}\n`);
           }
         }
@@ -6598,13 +6642,17 @@ program
     "Examples:\n" +
     "  cast teams                      # List your teams\n" +
     "  cast teams mappings             # Show directory-to-team mappings\n" +
-    "  cast teams map <path> <team>    # Map a directory to a team\n" +
-    "  cast teams unmap <path>         # Remove a directory mapping"
+    "  cast teams map <path> <team>    # Share a directory with a team (asks about past sessions)\n" +
+    "  cast teams map <path> <team> --new-only   # Share sessions from today on\n" +
+    "  cast teams lock <path>          # Never share: no rule can share the folder\n" +
+    "  cast teams unmap <path>         # Remove a directory mapping or a lock"
   )
-  .argument("[action]", "Action: mappings, map, unmap")
+  .argument("[action]", "Action: mappings, map, lock, unmap")
   .argument("[path]", "Directory path (for map/unmap)")
   .argument("[team]", "Team ID or name (for map)")
-  .action(async (action, pathArg, teamArg) => {
+  .option("--include-past", "Share every session already in the directory (no prompt)")
+  .option("--new-only", "Share only sessions started from now on (no prompt)")
+  .action(async (action, pathArg, teamArg, options: { includePast?: boolean; newOnly?: boolean }) => {
     const config = readConfig();
 
     if (!config?.auth_token) {
@@ -6651,13 +6699,22 @@ program
       console.log(`\n${c.bold}Directory Team Mappings${c.reset}\n`);
 
       const mapped = projects.filter(p => p.team_name);
-      const unmapped = projects.filter(p => !p.team_name);
+      const locked = projects.filter(p => p.private);
+      const unmapped = projects.filter(p => !p.team_name && !p.private);
 
       if (mapped.length > 0) {
         console.log(`${fmt.muted("Shared with teams:")}`);
         for (const p of mapped) {
           const name = getProjectName(p.path).padEnd(25);
           console.log(`  ${fmt.value(name)} ${fmt.accent(p.team_name || "")}`);
+        }
+        console.log();
+      }
+
+      if (locked.length > 0) {
+        console.log(`${fmt.muted("Never shared (locked by you):")}`);
+        for (const p of locked) {
+          console.log(`  ${fmt.value(getProjectName(p.path).padEnd(25))} ${fmt.muted(p.path)}`);
         }
         console.log();
       }
@@ -6688,13 +6745,24 @@ program
       }
 
       const absPath = path.resolve(pathArg);
-      const success = await updateDirectoryMapping(config, absPath, team._id);
-      if (success) {
-        console.log(`${fmt.success(icons.check)} ${getProjectName(absPath)} now shares with ${fmt.accent(team.name)}`);
-      } else {
-        console.error("Failed to update mapping.");
+      const includePast = options.includePast ? true : options.newOnly ? false : undefined;
+      const { ok } = await shareProjectWithTeam(config, absPath, team, { includePast });
+      if (!ok) process.exit(1);
+      return;
+    }
+
+    if (action === "lock") {
+      if (!pathArg) {
+        console.error("Usage: cast teams lock <path>");
         process.exit(1);
       }
+      const absPath = path.resolve(pathArg);
+      const ok = await updateDirectoryMapping(config, absPath, null, undefined, { lock: true });
+      if (!ok) {
+        console.error(fmt.error("Failed to lock"));
+        process.exit(1);
+      }
+      console.log(`${fmt.success(icons.check)} ${getProjectName(absPath)} → ${fmt.accent("Never share")} ${fmt.muted("(no rule can share it; `cast teams unmap` lifts the lock)")}`);
       return;
     }
 
@@ -6705,7 +6773,7 @@ program
       }
 
       const absPath = path.resolve(pathArg);
-      const count = await countConversationsForPath(config, absPath);
+      const { count } = await summarizeConversationsForPath(config, absPath);
       if (count > 0) {
         const shouldDelete = await confirm({
           message: `${getProjectName(absPath)} has ${count} synced conversation${count !== 1 ? "s" : ""}. Delete them from the server?`,

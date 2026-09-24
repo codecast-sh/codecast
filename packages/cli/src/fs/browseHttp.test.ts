@@ -138,3 +138,12 @@ describe("HTTP", () => {
     expect((await api("/other")).status).toBe(404);
   });
 });
+
+test("GET /fs/exists answers which absolute paths are directories on this machine", async () => {
+  const q = [path.join(home, "src", "codecast"), path.join(home, "src", "gone"), "relative"].map((p) => `p=${encodeURIComponent(p)}`).join("&");
+  const res = await api(`/fs/exists?${q}`);
+  expect(res.status).toBe(200);
+  const body = await res.json();
+  expect(body.home).toBe(home);
+  expect(body.exists).toEqual({ [path.join(home, "src", "codecast")]: true, [path.join(home, "src", "gone")]: false });
+});

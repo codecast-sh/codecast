@@ -74,6 +74,63 @@ export async function fetchDirListing(
   }
 }
 
+/** One folder's sessions on this machine (packages/cli/src/fs/localSessions.ts). */
+export type LocalFolder = {
+  path: string;
+  repository?: string;
+  sessions: number;
+  claude: number;
+  codex: number;
+  synced: number;
+  first: number;
+  last: number;
+  /** Each session's last activity, newest first. */
+  times: number[];
+  git: boolean;
+  exists: boolean;
+};
+
+/**
+ * Sessions per folder on the machine the browser runs on, synced or not.
+ * Null when that machine's daemon can't be asked (another machine, daemon
+ * down, an older daemon without the route). Stays on the loopback: the list of
+ * folders that did not sync never reaches the server.
+ */
+export async function fetchLocalSessions(convex: ConvexReactClient): Promise<LocalFolder[] | null> {
+  const ep = await endpointFor(convex);
+  if (!ep) return null;
+  try {
+    const res = await fetch(`${termHttpBase(ep)}/fs/sessions`, {
+      headers: { Authorization: `Bearer ${ep.token}` },
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!res.ok) return null;
+    return ((await res.json()) as { folders: LocalFolder[] }).folders;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Which of `paths` are directories on the machine the browser runs on, with
+ * that machine's home. Null when its daemon can't be asked.
+ */
+export async function fetchPathsExist(convex: ConvexReactClient, paths: string[]): Promise<{ home: string; exists: Record<string, boolean> } | null> {
+  if (paths.length === 0) return null;
+  const ep = await endpointFor(convex);
+  if (!ep) return null;
+  try {
+    const q = paths.slice(0, 300).map((p) => `p=${encodeURIComponent(p)}`).join("&");
+    const res = await fetch(`${termHttpBase(ep)}/fs/exists?${q}`, {
+      headers: { Authorization: `Bearer ${ep.token}` },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS * 2),
+    });
+    return res.ok ? ((await res.json()) as { home: string; exists: Record<string, boolean> }) : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Create a project folder (the daemon also `git init`s it). Resolves to the
  *  absolute path; throws when the daemon can't be reached or refuses. */
 export async function createProjectFolder(

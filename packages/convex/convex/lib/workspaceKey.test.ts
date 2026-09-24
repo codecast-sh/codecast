@@ -166,7 +166,8 @@ describe("INVARIANT 1 — access reads workspace, never team_id", () => {
   });
 
   test("source-level: no access helper in lib/access.ts reads team_id (only the key writer may)", () => {
-    const src = readFileSync(join(import.meta.dir, "access.ts"), "utf8");
+    // The readers live across access.ts and its key leaf accessKeys.ts.
+    const src = readFileSync(join(import.meta.dir, "access.ts"), "utf8") + readFileSync(join(import.meta.dir, "accessKeys.ts"), "utf8");
     // Slice out every function that grants access, then assert none mentions
     // team_id. computeWorkspaceKey / workspaceForResource are the WRITER side
     // and are excluded by name — they are the only place the axis is bridged.

@@ -205,6 +205,7 @@ export { isConvexId };
 // so existing call sites that import from the store keep working.
 export { resolveAssigneeInfo, resolveSessionAuthor, computePlanProgress, mergeLiveTasks } from "../lib/liveEntities";
 import { deriveDocDisplayTitle, isForeignSession } from "../lib/liveEntities";
+import { feedCoverMetaKey } from "../lib/feedCatchup";
 import { DEFAULT_SETTINGS_SECTION, type SettingsSectionId } from "../lib/settingsSections";
 import { activeWorkspaceKey } from "../lib/workspaceScope";
 import type { AgentChainSpec, AgentDefinitionSpec } from "@codecast/shared/contracts";
@@ -786,6 +787,10 @@ export type InboxSession = {
   dismissed_at?: number;
   team_id?: string | null;
   is_private?: boolean;
+  // The per-session team level. The inbox projection never carries it; the
+  // field holds only what setTeamVisibility wrote optimistically, so a reader
+  // prefers a server row's value when it has one (lib/teamFeedRows).
+  team_visibility?: string | null;
   // Which device currently runs this session (null = unassigned; auto-routing
   // picks the most-recently-active local machine on next send).
   owner_device_id?: string | null;
@@ -2817,6 +2822,20 @@ export function orchestrationGroupLabelOf(s: InboxSession): string | null {
 // (the trust-TTL sweep that retires a stale "working" to needs-input) is NOT a
 // field change — drive that with a coarse re-render ticker (useCoarseNow), never
 // by widening this signature. See store/wakeSig.ts.
+// A conversation's sharing fields live on three rows of the draft: the inbox
+// session, the opened conversation's meta row, and every team feed cache that
+// holds the row. A share or hide patches all three, so the team feed reads the
+// change back in the same tick instead of after the server's next push.
+function patchConversationRows(draft: { sessions: any; conversations: any; feedConversations?: any }, id: string, apply: (row: any) => void) {
+  if (draft.sessions[id]) apply(draft.sessions[id]);
+  if (!draft.conversations[id]) draft.conversations[id] = { _id: id };
+  apply(draft.conversations[id]);
+  for (const rows of Object.values(draft.feedConversations ?? {}) as any[][]) {
+    const row = rows?.find((c: any) => c?._id === id);
+    if (row) apply(row);
+  }
+}
+
 export function sessionStructuralSig(s: InboxSession): string {
   return [
     s._id,
@@ -2895,6 +2914,11 @@ export function sessionStructuralSig(s: InboxSession): string {
 
 // Collection wake signature over the whole session map (memoized by map ref).
 export const sessionsWakeSig = makeCollectionSig<InboxSession>(sessionStructuralSig);
+// The team feed lists the viewer's own sessions by team and sharing; those
+// fields change on a share, a hide or a team restamp, never on a heartbeat.
+export const ownTeamRowsSig = makeCollectionSig<InboxSession>(
+  (s) => `${s._id}|${s.team_id ?? ""}|${s.is_private === undefined ? "" : s.is_private ? 1 : 0}|${s.team_visibility ?? ""}|${s.user_id ?? ""}`,
+);
 
 // Membership signature over pending sends, memoized by the pendingMessages ref.
 // pendingMessages mutates on every send-lifecycle tick, but placeInboxRows
@@ -5266,6 +5290,12 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // absent = unknown (fall back to the oldest cached row).
   feedCursors: Record<string, string | null>;
   mergeFeedConversations: (key: string, convs: any[]) => void;
+  // The team feed cache only grows, so removals reach it from the sync log:
+  // a member's departure (their rows leave every remaining member's cache)
+  // and a scope the log can no longer vouch for (revoked, or resynced past
+  // retention: the whole team's cache goes and refills from the server).
+  purgeMemberTeamRows: (teamId: string, userId: string) => void;
+  dropTeamFeedCache: (teamId: string) => void;
   setFeedHasMore: (key: string, hasMore: boolean) => void;
   setFeedCursor: (key: string, cursor: string | null) => void;
   sortedSessions: () => InboxSession[];
@@ -7171,6 +7201,28 @@ function setSessionSnoozeInDraft(draft: Draft, id: string, until: number) {
 // per-row Date.now() drifts across a long sweep, and a receiver's field lock
 // holding a value the server never echoes back never retires.
 //
+// The team feed caches are keyed `<teamId>|<directoryFilter>` (TeamFeed in
+// ActivityFeed.tsx), so one team owns every key under its prefix.
+function teamFeedKeys(draft: { feedConversations: Record<string, any[]> }, teamId: string): string[] {
+  const prefix = `${teamId}|`;
+  return Object.keys(draft.feedConversations ?? {}).filter((k) => k.startsWith(prefix));
+}
+
+// Forget one team's feed cache: the rows, the paging state, and the covered
+// watermark the absence catch-up stands on, so the next view refills from the
+// server as a cold cache would.
+function dropTeamFeedCacheIn(
+  draft: { feedConversations: Record<string, any[]>; feedHasMore: Record<string, any>; feedCursors: Record<string, any>; syncMeta: Record<string, any> },
+  teamId: string,
+): void {
+  for (const key of teamFeedKeys(draft, teamId)) {
+    delete draft.feedConversations[key];
+    delete draft.feedHasMore[key];
+    delete draft.feedCursors[key];
+    delete draft.syncMeta[feedCoverMetaKey(key)];
+  }
+}
+
 // `stashHidden` is the stash's mode ("Stash and hide": survives trigger wakes).
 // Every stash writes inbox_stash_hidden explicitly — true or null — so a
 // re-stash never inherits the previous gesture's mode; a kill clears it with
@@ -8791,6 +8843,24 @@ const inboxStoreConfig = (set: any, get: any) => ({
         }
       }
     }
+    dropTeamFeedCacheIn(this, teamId);
+  }),
+
+  // A `member`/`scope_removed` row in the team's scope: the departed user's
+  // rows leave the team feed cache for that team. Keyed by the runner
+  // (user_id), the same key the server's team scan uses, so a role's seat row
+  // leaves with its host. A rejoin needs no lifting: the cache has no
+  // excludes, and the live page re-adds the rows the server serves again.
+  purgeMemberTeamRows: sync(function (this: Draft, teamId: string, userId: string) {
+    for (const key of teamFeedKeys(this, teamId)) {
+      const rows = this.feedConversations[key] as any[];
+      const kept = rows.filter((c) => String(c?.user_id) !== userId);
+      if (kept.length !== rows.length) this.feedConversations[key] = kept;
+    }
+  }),
+
+  dropTeamFeedCache: sync(function (this: Draft, teamId: string) {
+    dropTeamFeedCacheIn(this, teamId);
   }),
 
   liftScopeExcludes: sync(function (this: Draft, scopeKey: string) {
@@ -9176,25 +9246,17 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // update local state, and the matching dispatch.ts SIDE_EFFECTS do the
   // authoritative write — same split as switchProject/resumeSession.
   setPrivacy: action(function (this: Draft, id: string, isPrivate: boolean) {
-    const apply = (c: any) => {
-      if (!c) return;
+    patchConversationRows(this, id, (c) => {
       c.is_private = isPrivate;
       if (isPrivate) c.team_visibility = "private";
-    };
-    apply(this.sessions[id]);
-    if (!this.conversations[id]) this.conversations[id] = { _id: id } as any;
-    apply(this.conversations[id]);
+    });
   }),
 
   setTeamVisibility: action(function (this: Draft, id: string, visibility: "summary" | "full" | null) {
-    const apply = (c: any) => {
-      if (!c) return;
+    patchConversationRows(this, id, (c) => {
       c.team_visibility = visibility ?? undefined;
       c.is_private = false;
-    };
-    apply(this.sessions[id]);
-    if (!this.conversations[id]) this.conversations[id] = { _id: id } as any;
-    apply(this.conversations[id]);
+    });
   }),
 
   // `teams` is a wholesale-synced list, so the row is patched optimistically

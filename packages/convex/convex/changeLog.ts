@@ -19,7 +19,7 @@ import {
   type ActionExtra,
   type SyncAckCollector,
 } from "./syncLog";
-import { accessStampFor, computeWorkspaceKeyDb, type AccessStamp } from "./lib/access";
+import { accessStampFor, computeWorkspaceKeyDb, type AccessStamp } from "./lib/accessKeys";
 
 // One memoized POST-WRITE document read per tracked write. The sync log reads
 // it for three things (sync-log-cargo): the access-derived fan-out scopes, the

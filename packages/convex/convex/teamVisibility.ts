@@ -53,6 +53,13 @@ function lower(a: TeamVisibilityLevel, b: TeamVisibilityLevel): TeamVisibilityLe
 }
 
 /** The member's current level: what sessions started from now on are read at. */
+/** Whether a member at this level lets any session through to the team feed.
+ *  Hidden and activity-only members show nothing session by session, whatever
+ *  the session's own sharing says. */
+export function isVisibilityShareable(visibility: string): boolean {
+  return visibility !== "hidden" && visibility !== "activity";
+}
+
 export function currentMembershipVisibility(m: MembershipVisibilityFacts | null | undefined): TeamVisibilityLevel {
   return levelOf(m?.visibility);
 }
