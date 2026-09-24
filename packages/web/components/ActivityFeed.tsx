@@ -514,6 +514,14 @@ function FeedBody({ source, sourceConvs, externalEvents = NO_EXTERNAL_EVENTS, ha
   const animate = source === "team";
 
   const [actorFilter, setActorFilter] = useState<Id<"users"> | undefined>(initialActorId as Id<"users"> | undefined);
+  const previousSource = useRef(sourceConvs);
+  useWatchEffect(() => {
+    const previous = previousSource.current;
+    previousSource.current = sourceConvs;
+    if (actorFilter && previous.some((c) => feedActorId(c) === actorFilter) && !sourceConvs.some((c) => feedActorId(c) === actorFilter)) {
+      setActorFilter(undefined);
+    }
+  }, [sourceConvs, actorFilter]);
   const [projectFilter, setProjectFilter] = useState<string | null>(null);
   // Local state, not a saved preference: the ui prefs bag (ClientUI in
   // store/inboxStore.ts) is a closed type, so a saved key would mean editing
