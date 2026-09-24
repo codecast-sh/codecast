@@ -36,7 +36,7 @@ async function refresh() {
 
 
 $("reconnect").addEventListener("click", async () => {
-  await chrome.runtime.sendMessage({ op: "reconnect" }).catch(() => {});
+  await reconnectWorker();
   setTimeout(refresh, 600);
 });
 $("settings").addEventListener("click", () => chrome.runtime.openOptionsPage());
