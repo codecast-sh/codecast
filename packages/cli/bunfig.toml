@@ -17,4 +17,4 @@
 # only place this ordering is decidable. messagingHarness.ts checks at pane
 # spawn that it is in force.
 [test]
-preload = ["./src/test-helpers/isolatedTmuxServer.ts"]
+preload = ["./src/test-helpers/isolatedTmuxServer.ts", "./src/test-helpers/sandboxHarnessLedger.ts"]

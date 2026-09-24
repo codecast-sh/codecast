@@ -1,10 +1,12 @@
 // Claude Code UserPromptSubmit -> periodic task/plan reminder,
 // installed to ~/.claude/hooks/task-pulse.sh (and inlined into codecast-prompt.sh).
-import { HOOK_FIELDS_READ } from "./hookJson.js";
+import { HOOK_FEATURE_ON, HOOK_FIELDS_READ } from "./hookJson.js";
 
 /** Assumes SESSION_ID is set. Returns instead of exiting. */
-export const TASK_PULSE_JOB = `
+export const TASK_PULSE_JOB = `${HOOK_FEATURE_ON}
 task_pulse_job() {
+# Part of Tasks & Plans in Agent Features: off there, silent here.
+feature_on work_enabled || return 0
 PULSE_FILE="$HOME/.codecast/task-pulse/$SESSION_ID.json"
 [ -f "$PULSE_FILE" ] || return 0
 

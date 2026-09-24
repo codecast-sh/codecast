@@ -122,6 +122,19 @@ describe("removeOwnedHook", () => {
     expect(read(file).hooks.Stop).toEqual([{ matcher: "", hooks: [theirs] }]);
   });
 
+  test("removing a hook that is not there leaves the file byte for byte", () => {
+    // A group with no `matcher` key and a key of its own, as other tools write.
+    const file = settings({ hooks: { PostCompact: [{ hooks: [{ type: "command", command: "/x.sh" }], note: "mine" }] } });
+    const before = fs.readFileSync(file, "utf-8");
+    removeOwnedHook(CMD, { settingsPath: file });
+    expect(fs.readFileSync(file, "utf-8")).toBe(before);
+    installOwnedHook(["PostCompact"], CMD, { settingsPath: file });
+    expect(read(file).hooks.PostCompact[0]).toEqual({
+      hooks: [{ type: "command", command: "/x.sh" }, { type: "command", command: CMD }],
+      note: "mine",
+    });
+  });
+
   test("a hook the user edited by hand is left alone, not reverted", () => {
     // The case every hand-rolled remover got wrong. Once someone edits the
     // entry it is theirs; deleting it because we wrote it first destroys work.

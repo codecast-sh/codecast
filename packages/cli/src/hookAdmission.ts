@@ -20,6 +20,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { HOOK_TOKEN_MARKER, hookBearerToken, hookTokenMatches } from "./hookIdentity.js";
+import { withHarnessCause, writeHarnessFile } from "./harness.js";
 import { CODECAST_STATUS_HOOK } from "./statusHook.js";
 import { USER_PROMPT_HOOK } from "./userPromptHook.js";
 import { CODECAST_STATUSLINE_HOOK, STATUSLINE_HOOK_FILE } from "./statuslineHook.js";
@@ -70,7 +71,8 @@ export function refreshInstalledHookScripts(home: string): string[] {
       const current = fs.readFileSync(file, "utf-8");
       if (current === script) continue;
       if (!current.includes("codecast")) continue;
-      fs.writeFileSync(file, script, { mode: 0o755 });
+      withHarnessCause({ why: "hook script upgraded to send the daemon's hook token", automatic: true }, () =>
+        writeHarnessFile(file, script, "hooks", { mode: 0o755, executable: true }));
       rewritten.push(name);
     } catch {}
   }

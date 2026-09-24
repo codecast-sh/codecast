@@ -42,7 +42,9 @@
     },
     "stdout": "* Tasks & Plans — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
-    "otherFiles": {}
+    "otherFiles": {
+      ".claude/hooks/task-pulse.sh": "0996d7ad6f5dcbee"
+    }
   },
   "triggers": {
     "config": {
@@ -88,8 +90,8 @@
     "stdout": "* Thread State — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
     "otherFiles": {
-      ".claude/hooks/thread-state.sh": "31808f3df77b991f",
-      ".claude/settings.json": "1ab02a7497a2934b"
+      ".claude/hooks/thread-state.sh": "701cd264cbd17f2c",
+      ".claude/settings.json": "6d57b0e7e2769331"
     }
   },
   "chat": {
@@ -166,7 +168,7 @@
       ".claude/agents/critic.md": "bd99e7786ce5b525",
       ".claude/agents/implementer.md": "a8f235ac4fcefa4c",
       ".claude/agents/reviewer.md": "bdd5a03c6aac7951",
-      ".claude/settings.json": "c313dbe2c568fbcb",
+      ".claude/settings.json": "d3b7568f317c3f0f",
       ".claude/skills/codecast-orchestrate/SKILL.md": "2ed98decaba83c2e",
       ".codecast/orchestration/scripts/agent-complete.sh": "02834fb294e9cb68",
       ".codecast/orchestration/scripts/reground.sh": "0032a90b8d285b09"

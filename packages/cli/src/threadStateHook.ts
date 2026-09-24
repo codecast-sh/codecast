@@ -6,11 +6,13 @@
 // The stamp and mark files it reads are written by `cast state` — see
 // stateCommand.ts (writeThreadStatePulse / clearThreadStatePulse).
 import { THREAD_STATE_NUDGE_MSGS, THREAD_STATE_RECRUIT_MSGS } from "@codecast/shared/contracts";
-import { HOOK_FIELDS_READ } from "./hookJson.js";
+import { HOOK_FEATURE_ON, HOOK_FIELDS_READ } from "./hookJson.js";
 
 /** Assumes SESSION_ID, EVENT, TRANSCRIPT, STOP_ACTIVE. Returns instead of exiting. */
-export const THREAD_STATE_JOB = `
+export const THREAD_STATE_JOB = `${HOOK_FEATURE_ON}
 thread_state_job() {
+# Part of Thread State in Agent Features: off there, silent here.
+feature_on state_enabled || return 0
 DIR="$HOME/.codecast/thread-state"
 
 # Count user+assistant entries, the same unit the UI's "N messages since" uses.

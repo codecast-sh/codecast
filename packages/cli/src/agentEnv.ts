@@ -1,7 +1,7 @@
+import { writeHarnessFile } from "./harness.js";
 import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
-import { atomicWriteFile } from "./atomicWrite.js";
 
 // Env a daemon-launched agent must NOT inherit from whatever started it.
 //
@@ -132,7 +132,7 @@ export function ensureClaudeSettingsPersistence(home: string = process.env.HOME 
   } catch {}
   const next = planClaudeSettingsPersistence(text);
   if (next !== null) {
-    atomicWriteFile(file, next, text === null ? { mode: 0o644 } : {});
+    writeHarnessFile(file, next, "env", text === null ? { mode: 0o644 } : {});
     return "wrote";
   }
   if (text === null) return "left-alone"; // unreachable (null text always plans), kept for type honesty

@@ -38,6 +38,7 @@ export * from "./deviceName";
 export * from "./providerKeys";
 export * from "./providerKeyCrypto";
 export * from "./snippets";
+export * from "./harnessHooks";
 export * from "./agentSwitch";
 export * from "./machineSwitch";
 export * from "./forkSeed";

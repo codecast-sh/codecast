@@ -826,14 +826,12 @@ describe("the refresh gates in index.ts", () => {
   // Snippets kept current WITHOUT a per-snippet staleness gate in index.ts:
   //   - forks relies on the blanket refreshEnabledSnippets() pass alone and
   //     never writes its version key (recorded in snippets.wiring.test.ts);
-  //   - messaging's gate lives in ensureMessagingForMemory (./snippets.ts),
-  //     which compares messaging_hash itself;
   //   - orchestration installs no markdown at all;
   //   - skills installs SKILL.md files and byte-compares each on refresh
   //     (writeOwnedFile), so a body edit lands with no version gate.
   // A new catalog entry lands in the gated list below by default, so its
   // author either wires a gate or moves it here with a reason.
-  const UNGATED = new Set(["forks", "messaging", "orchestration", "skills"]);
+  const UNGATED = new Set(["forks", "orchestration", "skills"]);
 
   // Boolean assertions with a message, not toContain(indexSource): a failing
   // toContain prints the whole 700KB "received" source, burying the finding.

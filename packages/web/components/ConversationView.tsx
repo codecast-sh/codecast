@@ -69,7 +69,7 @@ import { ConversationAssignmentBadge } from "./AssignmentBadge";
 import { AssignedToYouBanner, useOwnersFromStore, type HandoffInfo } from "./OwnersBadge";
 import { TmuxAttachPill } from "./TmuxAttachPill";
 import { useAttachCopy } from "../hooks/useAttachCopy";
-import { SessionDaemonChip } from "./DaemonStatusChip";
+import { SessionDaemonChip, SessionHooksOffChip } from "./DaemonStatusChip";
 import { BrowserWatchSplit } from "./browser/BrowserWatchSplit";
 import { PermissionStack, PERMISSION_SKIP_TOOLS } from "./PermissionCard";
 import { SessionDecisionCard } from "./SessionDecisionCard";
@@ -3847,6 +3847,7 @@ const ConversationViewInner = (
                 <span data-cc-runner data-cc-keep="live" className="inline-flex items-center flex-shrink-0">
                 <ConversationAssignmentBadge conversation={conversation} isOwner={isOwner} guest={guest} compact={simpleViewPref} />
                 {conversation?._id && !guest && <SessionDaemonChip conversationId={String(conversation._id)} />}
+                {conversation?._id && !guest && <SessionHooksOffChip conversationId={String(conversation._id)} />}
                 {/* Kept in simple view (dimmed, copy sub-button hidden inside
                     the pill): the live tmux badge is how you reach the
                     terminal split, which simple view users still want. */}

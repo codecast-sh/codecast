@@ -8,6 +8,7 @@ import { DOC_TYPES } from "@codecast/shared/docs";
 import { ccAccountsValidator, ccAutoSwitchStateValidator, ccLoginFlowValidator, ccMintFlowValidator } from "./ccAccountsShared";
 import { deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
 import { capabilityTables } from "./capabilitiesSchema";
+import { externalAuthorValidator } from "./lib/externalAuthor";
 import { googleOAuthTables } from "./googleOAuthSchema";
 import { oauthConnectorTables } from "./oauthConnectorsSchema";
 import { issueSyncTables, taskExternalValidator, taskCommentExternalValidator } from "./issueSyncSchema";
@@ -227,6 +228,9 @@ export default defineSchema({
     encryption_master_key: v.optional(v.string()),
     sync_mode: v.optional(v.union(v.literal("all"), v.literal("selected"))),
     sync_projects: v.optional(v.array(v.string())),
+    // With sync_mode "all": folders that never upload, the folders inside
+    // them and their checkouts' worktrees included.
+    sync_excluded: v.optional(v.array(v.string())),
     team_share_paths: v.optional(v.array(v.string())),
     muted_members: v.optional(v.array(v.id("users"))),
     team_conversations_last_seen: v.optional(v.number()),
@@ -2807,9 +2811,31 @@ export default defineSchema({
     // Launchable `provider/model` ids per dynamic client (opencode/pi) on this
     // machine — heartbeat-reported (hash-gated), drives the web model pickers.
     model_inventory: v.optional(modelInventoryValidator),
+    // The cast version this device's daemon runs, and a newer release it could
+    // update to (absent when none), for the device page. Heartbeat-written.
+    cli_version: v.optional(v.string()),
+    update_available: v.optional(v.string()),
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_device", ["user_id", "device_id"]),
+
+  // Every change codecast made to a device's agent harness (CLAUDE.md, hooks,
+  // ~/.claude/settings.json), as the daemon's harness.ts recorded it: what,
+  // why, and whether anyone asked. The device page's change history reads
+  // this. Capped per device (harnessChanges.report).
+  harness_changes: defineTable({
+    user_id: v.id("users"),
+    device_id: v.string(),
+    at: v.number(),
+    file: v.string(),
+    action: v.union(v.literal("created"), v.literal("modified"), v.literal("removed")),
+    what: v.string(),
+    why: v.string(),
+    automatic: v.boolean(),
+    version: v.string(),
+    bytes_before: v.number(),
+    bytes_after: v.number(),
+  }).index("by_user_device_at", ["user_id", "device_id", "at"]),
 
   managed_sessions: defineTable({
     session_id: v.string(),
@@ -6475,12 +6501,7 @@ export default defineSchema({
     // Who really wrote an inbound Slack line, when the author could not be matched
     // to a codecast account and `user_id` is the workspace's bridge identity. A
     // snapshot at sync time: the UI shows this name and face, never the bridge's.
-    external_author: v.optional(v.object({
-      name: v.string(),
-      handle: v.optional(v.string()),
-      avatar_url: v.optional(v.string()),
-      is_bot: v.optional(v.boolean()),
-    })),
+    external_author: v.optional(externalAuthorValidator),
     // The author kept this line out of the channel's Slack mirror (composer
     // toggle). Absent means "follow the link's rules".
     sync_local_only: v.optional(v.boolean()),
@@ -6537,6 +6558,11 @@ export default defineSchema({
     user_id: v.id("users"),
     emoji: v.string(),
     created_at: v.number(),
+    // A reaction mirrored from Slack: the Slack person who made it. With no
+    // codecast match, `user_id` is the workspace bridge and `external_author`
+    // names the person, so two unmatched people are two reactions, not one.
+    slack_user: v.optional(v.string()),
+    external_author: v.optional(externalAuthorValidator),
   })
     .index("by_message", ["message_id"])
     // The toggle's own lookup: exactly one row may exist per (message, user,

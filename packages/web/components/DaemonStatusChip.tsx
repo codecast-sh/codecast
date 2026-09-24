@@ -1,6 +1,6 @@
 import { StatusDot } from "./StatusDot";
 import { TopbarButton } from "./TopbarButton";
-import { Check, TriangleAlert } from "lucide-react";
+import { Check, TriangleAlert, Unplug } from "lucide-react";
 import { useState } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { copyToClipboard } from "../lib/utils";
@@ -14,6 +14,7 @@ import { useInboxStore } from "../store/inboxStore";
 import { deviceDisplayName, isRemoteHost } from "@codecast/shared/contracts";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { StatusPanelHeader, StatusPanelSection } from "./StatusPanel";
+import { useHooksReminderHidden } from "../lib/hooksReminder";
 
 // Two shapes for one story. The pill, with its glow and pulsing dot, is for a
 // daemon that is making a message late right now: it has to be seen. The
@@ -139,4 +140,53 @@ export function SessionDaemonChip({ conversationId }: { conversationId?: string 
   if (!view) return null;
 
   return <DaemonHealthPill view={view} machine={ownerName} />;
+}
+
+/**
+ * A quiet mark on a session whose machine has codecast's hooks turned off:
+ * that session's status and delivery run on slower fallbacks, so the header
+ * says why and where to turn them back on. Never a pill and never pulsing: the
+ * person may have turned them off on purpose, and they can hide the mark for
+ * that machine in Settings > Harness.
+ */
+export function SessionHooksOffChip({ conversationId }: { conversationId?: string | null }) {
+  useSyncDevices();
+  const deviceId = useInboxStore((s) =>
+    conversationId ? (s.sessions[conversationId]?.owner_device_id as string | undefined) : undefined,
+  );
+  const hooksOff = useInboxStore((s) => {
+    if (!deviceId) return false;
+    const d = s.machineRoster.find((r) => r.device_id === deviceId) as { settings?: { hooks_enabled?: boolean } } | undefined;
+    return d?.settings?.hooks_enabled === false;
+  });
+  const hidden = useHooksReminderHidden(deviceId);
+  if (!hooksOff || hidden) return null;
+
+  const panel = (
+    <div className="min-w-0">
+      <StatusPanelHeader kicker="Codecast hooks" color="var(--sol-text-muted)" headline="Off on this machine" />
+      <StatusPanelSection>
+        <p className="text-xs leading-snug text-sol-text-dim">
+          Status for this session comes from its transcript and terminal instead, so it can lag, and messages to a
+          session you started yourself may not arrive. Click to turn the hooks back on, or to hide this mark.
+        </p>
+      </StatusPanelSection>
+    </div>
+  );
+  return (
+    <ShortcutTooltip label={panel} panel align="end">
+      <TopbarButton
+        desktopOnly
+        data-hooks-off
+        aria-label="Codecast hooks are off on this machine"
+        onClick={(e: React.MouseEvent) => {
+          e.stopPropagation();
+          useInboxStore.getState().openSettingsModal("harness");
+        }}
+        className="text-sol-text-dim hover:text-sol-text-muted"
+      >
+        <Unplug />
+      </TopbarButton>
+    </ShortcutTooltip>
+  );
 }

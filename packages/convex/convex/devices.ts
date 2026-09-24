@@ -27,6 +27,8 @@ import { listAgentBoxDevices, resolveSessionLaunchDevice } from "./sessionLaunch
 import { notifySessionExecutionTaken } from "./sessionAssignmentNotifications";
 import { releasePreviousOwner } from "./sessionRelease";
 import { cloudPlacementNeeded, findSharedCheckoutOccupant, parkOnCloudHost } from "./cloudPlacement";
+import { getSystemConfig } from "./systemConfig";
+import { isBelowMinimum } from "@platform/flags";
 
 async function getAuthenticatedUserId(
   ctx: { db: any },
@@ -1161,6 +1163,9 @@ export const listDevices = query({
       .query("devices")
       .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
       .collect();
+    // The fleet floor below which a daemon updates itself. A device below it
+    // with automatic update off waits for its Update button (Settings > Daemon).
+    const minCliVersion = await getSystemConfig(ctx, "min_cli_version");
     return rows
       .map((d: any) => ({
         device_id: d.device_id,
@@ -1178,6 +1183,9 @@ export const listDevices = query({
         is_remote: d.is_remote ?? false,
         local_project_roots: d.local_project_roots ?? [],
         settings: d.settings ?? undefined,
+        cli_version: d.cli_version ?? undefined,
+        update_available: d.update_available ?? undefined,
+        update_required: d.cli_version ? isBelowMinimum(d.cli_version, minCliVersion) : false,
         model_inventory: d.model_inventory ?? undefined,
         // Managed provider keys (pl-207): the ECDH public key the web seals a key
         // to, and which providers have a key on this device (ids only).
@@ -1527,6 +1535,40 @@ export const setDeviceSshHost = mutation({
   },
 });
 
+/** The caller's own device row, or a thrown error: every device-targeted
+ *  command below is for a machine the caller owns. */
+async function requireOwnDevice(ctx: any, apiToken: string | undefined, deviceId: string) {
+  const userId = await getAuthenticatedUserId(ctx, apiToken);
+  if (!userId) throw new Error("Authentication required");
+  const device = await ctx.db
+    .query("devices")
+    .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", deviceId))
+    .first();
+  if (!device) throw new Error("Unknown device");
+  return { userId, device };
+}
+
+/**
+ * Settings > Daemon's Update button: update this one machine now. The same
+ * `force_update` the admin tools send, targeted at the device; the daemon
+ * reports, replaces its binary and restarts, so the page sees the new version
+ * on the next heartbeat. Works with automatic update off: that switch stops
+ * updates nobody asked for, and this is one somebody asked for.
+ */
+export const requestDeviceUpdate = mutation({
+  args: { api_token: v.optional(v.string()), device_id: v.string() },
+  handler: async (ctx, args) => {
+    const { userId } = await requireOwnDevice(ctx, args.api_token, args.device_id);
+    const commandId = await ctx.db.insert("daemon_commands", {
+      user_id: userId,
+      command: "force_update" as const,
+      created_at: Date.now(),
+      target_device_id: args.device_id,
+    });
+    return { command_id: commandId };
+  },
+});
+
 export const setDeviceSnippet = mutation({
   args: {
     api_token: v.optional(v.string()),
@@ -1538,15 +1580,12 @@ export const setDeviceSnippet = mutation({
     global: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthenticatedUserId(ctx, args.api_token);
-    if (!userId) throw new Error("Authentication required");
-    const device = await ctx.db
-      .query("devices")
-      .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", args.device_id))
-      .first();
-    if (!device) throw new Error("Unknown device");
+    const { userId, device } = await requireOwnDevice(ctx, args.api_token, args.device_id);
 
     const isStable = args.snippet === "stable";
+    // Two machine settings ride the same command (the daemon handles them in
+    // apply_snippet): codecast's hooks and automatic update.
+    const settingKey = args.snippet === "hooks" ? "hooks_enabled" : args.snippet === "auto_update" ? "auto_update" : null;
     const mode = args.mode ?? (args.enabled ? "solo" : "off");
 
     const commandId = await ctx.db.insert("daemon_commands", {
@@ -1566,7 +1605,9 @@ export const setDeviceSnippet = mutation({
     const prev = (device as any).settings ?? {};
     const next = isStable
       ? { ...prev, stable_mode: mode, stable_global: args.global === true }
-      : { ...prev, snippets: { ...(prev.snippets ?? {}), [args.snippet]: args.enabled } };
+      : settingKey
+        ? { ...prev, [settingKey]: args.enabled }
+        : { ...prev, snippets: { ...(prev.snippets ?? {}), [args.snippet]: args.enabled } };
     await ctx.db.patch(device._id, { settings: next });
 
     return { command_id: commandId };

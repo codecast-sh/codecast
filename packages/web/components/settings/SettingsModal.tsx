@@ -2,7 +2,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import {
   Terminal, Bot, RefreshCw, User, KeyRound, Users, Plug, Monitor, Bell, Laptop, UserCog, Blocks, X,
-  Search, Volume2, Video, ArrowRightLeft, MonitorSmartphone } from "lucide-react";
+  Search, Volume2, Video, ArrowRightLeft, MonitorSmartphone, Unplug, Cpu } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { useEventListener } from "../../hooks/useEventListener";
@@ -22,6 +22,8 @@ import IntegrationsPanel from "../../app/settings/integrations/page";
 import AgentsPanel from "../../app/settings/agents/page";
 import AgentLibraryPanel from "../../app/settings/agent-library/page";
 import AgentFeaturesPanel from "../../app/settings/agent-features/page";
+import HarnessPanel from "../../app/settings/harness/page";
+import DaemonPanel from "../../app/settings/daemon/page";
 import ProviderKeysPanel from "../../app/settings/provider-keys/page";
 import ClaudeAccountsPanel from "../../app/settings/claude-accounts/page";
 import CliPanel from "../../app/settings/cli/page";
@@ -42,6 +44,8 @@ const PANELS: Record<SettingsSectionId, React.ComponentType> = {
   "agents": AgentsPanel,
   "agent-library": AgentLibraryPanel,
   "agent-features": AgentFeaturesPanel,
+  "harness": HarnessPanel,
+  "daemon": DaemonPanel,
   "provider-keys": ProviderKeysPanel,
   "claude-accounts": ClaudeAccountsPanel,
   "cli": CliPanel,
@@ -86,12 +90,14 @@ const GROUPS: { label: string; sections: SectionDef[] }[] = [
     label: "Machines",
     sections: [
       { id: "agent-features", label: "Agent Features", icon: Blocks, desc: "Capabilities your agents pick up per device", keywords: "snippets skills capabilities device" },
+      { id: "harness", label: "Harness", icon: Unplug, desc: "Codecast's hooks, and every change it made to your agent setup", keywords: "hooks claude.md agents.md settings.json statusline changes history harness automatic" },
       { id: "provider-keys", label: "Provider Keys", icon: KeyRound, desc: "Model provider credentials per device", keywords: "api key anthropic openai secret" },
       { id: "cli", label: "CLI", icon: Terminal, desc: "Install the cast CLI, sign a machine in and pair Chrome", keywords: "install token terminal shell chrome browser extension web store pair" },
       { id: "agents", label: "Agents", icon: Bot, desc: "Permission modes and default parameters", keywords: "permissions yolo model parameters defaults" },
       { id: "agent-library", label: "Agent Library", icon: Bot, desc: "Named agent definitions and chains: client, model, effort, tools, prompt", keywords: "definitions roles reviewer scout chain pipeline subagent model effort prompt as" },
       { id: "claude-accounts", label: "Claude Accounts", icon: UserCog, desc: "Saved Claude sign-ins and auto-switching", keywords: "usage limits switch profiles anthropic" },
       { id: "devices", label: "Devices", icon: Laptop, desc: "Every machine running the daemon", keywords: "machines daemon ssh checkouts online" },
+      { id: "daemon", label: "Daemon", icon: Cpu, desc: "Version, health and updates of each machine's daemon", keywords: "version update automatic auto update status running health restart upgrade" },
       { id: "migrate", label: "Migration", icon: ArrowRightLeft, desc: "Move many sessions to a cloud host or back, in one go", keywords: "migrate move bulk cloud host laptop transfer sessions batch" },
       { id: "desktop", label: "Desktop", icon: Monitor, desc: "The desktop app: shortcuts and meeting detection", keywords: "shortcuts hotkeys meetings version updates", desktopOnly: true },
     ],

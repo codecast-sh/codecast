@@ -227,6 +227,13 @@ function runInstall(slug: string, seed?: string, runs = 1, extraArgs: string[] =
       // Recorded elsewhere (config, CLAUDE.md) or scaffolding this harness wrote.
       if (rel === path.join(".codecast", "config.json")) continue;
       if (rel === path.join(".codecast", "update-state.json")) continue;
+      // The harness change history: timestamps make its bytes unstable, and
+      // harnessHooksInstall.test.ts covers what it records.
+      if (rel === path.join(".codecast", "harness-changes.jsonl")) continue;
+      // The machine key is random per machine, and the hook ownership ledger
+      // is signed with it, so neither has stable bytes.
+      if (rel.startsWith(path.join(".codecast", ".machine_key"))) continue;
+      if (path.basename(rel).startsWith(".codecast-owned.")) continue;
       if (rel === path.join(".claude", "CLAUDE.md")) continue;
       const body = fs.readFileSync(abs, "utf8").split(home).join("@HOME@");
       files[rel] = createHash("sha256").update(body).digest("hex").slice(0, 16);

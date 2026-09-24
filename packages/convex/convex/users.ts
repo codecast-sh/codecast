@@ -1,3 +1,4 @@
+import { getUserOrToken } from "./lib/auth";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { mutation, query, internalMutation, internalQuery } from "./functions";
 import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
@@ -433,6 +434,9 @@ export const daemonHeartbeat = mutation({
     managed_provider_ids: v.optional(v.array(v.string())),
     // Installed agent-feature snippets (by slug) + stable mode on this device.
     settings: v.optional(deviceSettingsValidator),
+    // A newer release the daemon could update to; "" once it checked and found
+    // none, absent before its first check (and from older daemons).
+    update_available: v.optional(v.string()),
     // Live model inventory for dynamic clients (opencode/pi) — the daemon sends
     // it only when its hash changes.
     model_inventory: v.optional(modelInventoryValidator),
@@ -605,6 +609,8 @@ export const daemonHeartbeat = mutation({
         ...(args.provider_key_pubkey !== undefined ? { provider_key_pubkey: args.provider_key_pubkey } : {}),
         ...(args.managed_provider_ids !== undefined ? { managed_provider_ids: args.managed_provider_ids } : {}),
         ...(args.settings !== undefined ? { settings: args.settings } : {}),
+        cli_version: args.version,
+        ...(args.update_available !== undefined ? { update_available: args.update_available || undefined } : {}),
         // Hash-gated: the daemon only attaches this when it changed, but guard
         // against a resend loop (e.g. a failed-ack daemon) rewriting the ~10KB
         // field every beat anyway.
@@ -735,6 +741,7 @@ export const daemonHeartbeat = mutation({
       wake_devices: wakeDevices,
       sync_mode: user?.sync_mode ?? "all",
       sync_projects: user?.sync_projects ?? [],
+      sync_excluded: user?.sync_excluded ?? [],
       // Older daemons still gate token minting on this wire field. Always true
       // now that per-session account tokens are the default behavior.
       cc_session_tokens: true,
@@ -2435,11 +2442,14 @@ export const unlinkGitHub = mutation({
 
 export const updateSyncSettings = mutation({
   args: {
+    // A CLI caller (cast sharing) presents its token; the web signs in.
+    api_token: v.optional(v.string()),
     sync_mode: v.optional(v.union(v.literal("all"), v.literal("selected"))),
     sync_projects: v.optional(v.array(v.string())),
+    sync_excluded: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
+    const userId = await getUserOrToken(ctx, args.api_token);
     if (!userId) {
       throw new Error("Not authenticated");
     }
@@ -2450,15 +2460,18 @@ export const updateSyncSettings = mutation({
     if (args.sync_projects !== undefined) {
       updateData.sync_projects = args.sync_projects;
     }
+    if (args.sync_excluded !== undefined) {
+      updateData.sync_excluded = [...new Set(args.sync_excluded)];
+    }
     await ctx.db.patch(userId, updateData);
     return userId;
   },
 });
 
 export const getSyncSettings = query({
-  args: {},
-  handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
+  args: { api_token: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getUserOrToken(ctx, args.api_token);
     if (!userId) {
       return null;
     }
@@ -2469,6 +2482,7 @@ export const getSyncSettings = query({
     return {
       sync_mode: user.sync_mode ?? "all",
       sync_projects: user.sync_projects ?? [],
+      sync_excluded: user.sync_excluded ?? [],
     };
   },
 });
@@ -2517,9 +2531,9 @@ export const updateSyncSettingsForCLI = mutation({
 });
 
 export const getDirectoryTeamMappings = query({
-  args: {},
-  handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
+  args: { api_token: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getUserOrToken(ctx, args.api_token);
     if (!userId) {
       return [];
     }
@@ -3063,8 +3077,16 @@ export async function upsertDirectoryMapping(
   return { success: true, action: existingMapping ? "updated" : "created", share_since: shareSince ?? null };
 }
 
+/** Operator path: repoint one user's folder rule, with the same backfill. */
+export const updateDirectoryMappingForUser = internalMutation({
+  args: { user_id: v.id("users"), path_prefix: v.string(), team_id: v.id("teams") },
+  handler: async (ctx, args) => upsertDirectoryMapping(ctx, args.user_id, { path_prefix: args.path_prefix, team_id: args.team_id }),
+});
+
 export const updateDirectoryTeamMapping = mutation({
   args: {
+    // A CLI caller (cast sharing) presents its token; the web signs in.
+    api_token: v.optional(v.string()),
     path_prefix: v.string(),
     team_id: v.optional(v.id("teams")),
     private: v.optional(v.boolean()),
@@ -3074,7 +3096,7 @@ export const updateDirectoryTeamMapping = mutation({
     lock_private: v.optional(v.array(v.id("conversations"))),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
+    const userId = await getUserOrToken(ctx, args.api_token);
     if (!userId) {
       throw new Error("Not authenticated");
     }
@@ -3094,11 +3116,13 @@ export const updateDirectoryTeamMapping = mutation({
 
 export const removeDirectoryTeamMapping = mutation({
   args: {
+    // A CLI caller (cast sharing) presents its token; the web signs in.
+    api_token: v.optional(v.string()),
     path_prefix: v.string(),
     delete_conversations: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
+    const userId = await getUserOrToken(ctx, args.api_token);
     if (!userId) {
       throw new Error("Not authenticated");
     }
@@ -3238,6 +3262,8 @@ export type PathSessionRow = {
   is_private: boolean;
   team_visibility: string | null;
   auto_shared: boolean;
+  /** The session's own folder, which may sit below the one listed. */
+  path: string | null;
 };
 
 export async function listConversationsForPathInternal(
@@ -3274,6 +3300,7 @@ export async function listConversationsForPathInternal(
           is_private: conv.is_private !== false,
           team_visibility: conv.team_visibility ?? null,
           auto_shared: !!conv.auto_shared,
+          path: getConversationProjectPath(conv) ?? null,
         });
       }
     }
@@ -3284,12 +3311,14 @@ export async function listConversationsForPathInternal(
 
 export const listConversationsForPath = query({
   args: {
+    // A CLI caller (cast sharing) presents its token; the web signs in.
+    api_token: v.optional(v.string()),
     // Every checkout of the repository under review; the rows merge, newest first.
     path_prefixes: v.array(v.string()),
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
+    const userId = await getUserOrToken(ctx, args.api_token);
     if (!userId) return { rows: [], total: 0, truncated: false };
     const limit = Math.min(args.limit ?? 50, 1000);
     const rows: PathSessionRow[] = [];
@@ -3328,13 +3357,15 @@ function summarizeNothing(): PathShareSummary {
 // settings page shows how many older sessions a live mapping keeps private.
 export const shareImpactForPaths = query({
   args: {
+    // A CLI caller (cast sharing) presents its token; the web signs in.
+    api_token: v.optional(v.string()),
     path_prefixes: v.array(v.string()),
     since: v.optional(v.number()),
     // The client's local midnight: the menu's "from today" reads its count off this.
     day_start: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
+    const userId = await getUserOrToken(ctx, args.api_token);
     const out: Record<string, PathShareSummary> = {};
     if (!userId) return out;
     const mappings = args.since === undefined
@@ -3381,10 +3412,12 @@ export const shareImpactForPaths = query({
 
 export const deleteConversationsForPath = mutation({
   args: {
+    // A CLI caller (cast sharing) presents its token; the web signs in.
+    api_token: v.optional(v.string()),
     path_prefix: v.string(),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
+    const userId = await getUserOrToken(ctx, args.api_token);
     if (!userId) {
       throw new Error("Not authenticated");
     }
@@ -3394,10 +3427,12 @@ export const deleteConversationsForPath = mutation({
 
 export const getRecentProjectsWithGitInfo = query({
   args: {
+    // A CLI caller (cast sharing) presents its token; the web signs in.
+    api_token: v.optional(v.string()),
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
+    const userId = await getUserOrToken(ctx, args.api_token);
     if (!userId) {
       return [];
     }

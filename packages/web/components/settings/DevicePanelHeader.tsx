@@ -19,6 +19,7 @@ export function DevicePanelHeader({
   selected,
   onSelect,
   note = "apply",
+  localDeviceId,
   className,
 }: {
   /** All candidate devices; pills render only when there is more than one. */
@@ -27,6 +28,8 @@ export function DevicePanelHeader({
   onSelect?: (id: string) => void;
   /** "apply" narrates whether changes land now; "seen" is a plain presence line. */
   note?: "apply" | "seen";
+  /** The machine this browser runs on, marked so the choice reads at a glance. */
+  localDeviceId?: string | null;
   className?: string;
 }) {
   const showPicker = !!devices && !!onSelect && devices.length > 1;
@@ -49,7 +52,7 @@ export function DevicePanelHeader({
               >
                 <DeviceDot online={d.online} />
                 <span className="font-medium">{deviceDisplayName(d)}</span>
-                <span className="opacity-60">{deviceKindLabel(d)}</span>
+                <span className="opacity-60">{d.device_id === localDeviceId ? "this computer" : deviceKindLabel(d)}</span>
               </button>
             );
           })}
@@ -60,7 +63,11 @@ export function DevicePanelHeader({
           <DeviceDot online={selected.online} />
           <span className="truncate font-medium text-sol-text">{deviceDisplayName(selected)}</span>
           {/* With a picker, the pills already name each machine's kind. */}
-          {!showPicker && <span className="shrink-0 text-xs text-sol-text-muted">{deviceKindLabel(selected)}</span>}
+          {!showPicker && (
+            <span className="shrink-0 text-xs text-sol-text-muted">
+              {selected.device_id === localDeviceId ? "this computer" : deviceKindLabel(selected)}
+            </span>
+          )}
         </div>
         <span className="shrink-0 text-[11px] text-sol-text-muted">
           {note === "apply"

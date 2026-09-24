@@ -43,3 +43,16 @@ ${HOOK_FIELDS_AWK}
 ')
 EOF
 `;
+
+/**
+ * Bash: `feature_on <config key>` succeeds when ~/.codecast/config.json sets
+ * that key to true. A hook job that belongs to an Agent Features entry (the
+ * thread state and task reminders) checks it first, so turning the feature
+ * off stops the job even inside the shared prompt script, whose bytes are the
+ * same on every machine. A grep, not a JSON parse: this runs on every prompt.
+ */
+export const HOOK_FEATURE_ON = `
+feature_on() {
+  grep -Eq "\\"$1\\"[[:space:]]*:[[:space:]]*true" "\${CODECAST_DIR:-$HOME/.codecast}/config.json" 2>/dev/null
+}
+`;

@@ -6,6 +6,7 @@
 // One builder means the feed params, exclusion filtering, and the recorded
 // item shape can never drift between agents.
 
+import { editHarnessJson, removeHarnessFile, writeHarnessFile } from "./harness.js";
 import fs from "fs";
 import path from "path";
 import {
@@ -270,30 +271,19 @@ export const STABLE_FEED_HOOK = stableFeedHookScript("claude");
 
 export function installStableHook(): void {
   const home = process.env.HOME || "";
-  const hooksDir = path.join(home, ".claude", "hooks");
-  const hookFile = path.join(hooksDir, STABLE_FEED_HOOK_FILE);
+  const hookFile = path.join(home, ".claude", "hooks", STABLE_FEED_HOOK_FILE);
   const settingsFile = path.join(home, ".claude", "settings.json");
 
   try {
-    fs.mkdirSync(hooksDir, { recursive: true });
-    fs.writeFileSync(hookFile, STABLE_FEED_HOOK, { mode: 0o755 });
-    // writeFileSync's mode only applies when creating a file. A pre-existing
-    // hook may have lost its executable bit, so repair it on every refresh.
-    fs.chmodSync(hookFile, 0o755);
-
-    let settings: any = {};
-    if (fs.existsSync(settingsFile)) {
-      settings = JSON.parse(fs.readFileSync(settingsFile, "utf-8"));
-    }
-    if (!settings.hooks) settings.hooks = {};
-    if (!settings.hooks.SessionStart) settings.hooks.SessionStart = [];
-
-    const hookArray = settings.hooks.SessionStart as any[];
-    const alreadyPresent = hookArray.some((matcher: any) =>
-      (matcher.hooks || []).some((h: any) => h.command?.includes(STABLE_FEED_HOOK_FILE))
-    );
-
-    if (!alreadyPresent) {
+    writeHarnessFile(hookFile, STABLE_FEED_HOOK, "stable-context", { mode: 0o755, executable: true });
+    editHarnessJson(settingsFile, "stable-context", (settings) => {
+      if (!settings.hooks) settings.hooks = {};
+      if (!settings.hooks.SessionStart) settings.hooks.SessionStart = [];
+      const hookArray = settings.hooks.SessionStart as any[];
+      const alreadyPresent = hookArray.some((matcher: any) =>
+        (matcher.hooks || []).some((h: any) => h.command?.includes(STABLE_FEED_HOOK_FILE))
+      );
+      if (alreadyPresent) return;
       const hookEntry = { type: "command", command: hookFile, timeout: 30 };
       if (hookArray.length > 0 && hookArray[0].matcher === "") {
         hookArray[0].hooks = hookArray[0].hooks || [];
@@ -301,9 +291,7 @@ export function installStableHook(): void {
       } else {
         hookArray.unshift({ matcher: "", hooks: [hookEntry] });
       }
-    }
-
-    fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 4));
+    });
   } catch {
     // Ignore errors - hook is optional enhancement
   }
@@ -321,13 +309,8 @@ function codecastHooksDir(): string {
 }
 
 function writeStableHookScript(client: Exclude<StableHookClient, "claude">): string {
-  const dir = codecastHooksDir();
-  fs.mkdirSync(dir, { recursive: true });
-  const file = path.join(dir, `stable-feed-${client}.sh`);
-  fs.writeFileSync(file, stableFeedHookScript(client), { mode: 0o755 });
-  // writeFileSync's mode only applies when creating a file. A pre-existing
-  // script may have lost its executable bit, so repair it on every refresh.
-  fs.chmodSync(file, 0o755);
+  const file = path.join(codecastHooksDir(), `stable-feed-${client}.sh`);
+  writeHarnessFile(file, stableFeedHookScript(client), "stable-context", { mode: 0o755, executable: true });
   return file;
 }
 
@@ -342,7 +325,7 @@ function ensureCodexHooksFeature(codexDir: string): void {
   const updated = /^\s*\[features\]\s*$/m.test(existing)
     ? existing.replace(/^(\s*\[features\]\s*)$/m, "$1\nhooks = true")
     : `${existing.trimEnd()}\n\n[features]\nhooks = true\n`.replace(/^\n+/, "");
-  fs.writeFileSync(configFile, updated);
+  writeHarnessFile(configFile, updated, "stable-context");
 }
 
 /** Codex: merge a SessionStart entry into ~/.codex/hooks.json. Codex's hook
@@ -357,23 +340,17 @@ export function installStableHookCodex(): void {
   try {
     ensureCodexHooksFeature(codexDir);
     const hookFile = writeStableHookScript("codex");
-    const hooksFile = path.join(codexDir, "hooks.json");
-    let config: any = {};
-    if (fs.existsSync(hooksFile)) {
-      config = JSON.parse(fs.readFileSync(hooksFile, "utf-8"));
-    }
-    if (!config.hooks) config.hooks = {};
-    if (!config.hooks.SessionStart) config.hooks.SessionStart = [];
-
-    const present = (config.hooks.SessionStart as any[]).some((matcher: any) =>
-      (matcher.hooks || []).some((h: any) => h.command === hookFile),
-    );
-    if (!present) {
+    editHarnessJson(path.join(codexDir, "hooks.json"), "stable-context", (config) => {
+      if (!config.hooks) config.hooks = {};
+      if (!config.hooks.SessionStart) config.hooks.SessionStart = [];
+      const present = (config.hooks.SessionStart as any[]).some((matcher: any) =>
+        (matcher.hooks || []).some((h: any) => h.command === hookFile),
+      );
+      if (present) return;
       config.hooks.SessionStart.push({
         hooks: [{ type: "command", command: hookFile, additionalContextLimit: 0, timeout: 30 }],
       });
-      fs.writeFileSync(hooksFile, JSON.stringify(config, null, 2));
-    }
+    });
   } catch {
     // Hook install is an optional enhancement — never break the caller.
   }
@@ -382,21 +359,19 @@ export function installStableHookCodex(): void {
 export function removeStableHookCodex(): void {
   const home = process.env.HOME || "";
   const hookFile = path.join(codecastHooksDir(), "stable-feed-codex.sh");
-  try { fs.unlinkSync(hookFile); } catch {}
+  try { removeHarnessFile(hookFile, "stable-context"); } catch {}
 
-  const hooksFile = path.join(home, ".codex", "hooks.json");
-  if (!fs.existsSync(hooksFile)) return;
   try {
-    const config = JSON.parse(fs.readFileSync(hooksFile, "utf-8"));
-    if (!config.hooks?.SessionStart) return;
-    for (const matcher of config.hooks.SessionStart) {
-      if (matcher.hooks) {
-        // Exact-path match so unrelated SessionStart hooks survive.
-        matcher.hooks = matcher.hooks.filter((h: any) => h.command !== hookFile);
+    editHarnessJson(path.join(home, ".codex", "hooks.json"), "stable-context", (config) => {
+      if (!config.hooks?.SessionStart) return;
+      for (const matcher of config.hooks.SessionStart) {
+        if (matcher.hooks) {
+          // Exact-path match so unrelated SessionStart hooks survive.
+          matcher.hooks = matcher.hooks.filter((h: any) => h.command !== hookFile);
+        }
       }
-    }
-    config.hooks.SessionStart = config.hooks.SessionStart.filter((m: any) => m.hooks && m.hooks.length > 0);
-    fs.writeFileSync(hooksFile, JSON.stringify(config, null, 2));
+      config.hooks.SessionStart = config.hooks.SessionStart.filter((m: any) => m.hooks && m.hooks.length > 0);
+    }, { createIfMissing: false });
   } catch {}
 }
 
@@ -410,20 +385,13 @@ export function installStableHookCursor(): void {
 
   try {
     const hookFile = writeStableHookScript("cursor");
-    const hooksFile = path.join(cursorDir, "hooks.json");
-    let config: any = {};
-    if (fs.existsSync(hooksFile)) {
-      config = JSON.parse(fs.readFileSync(hooksFile, "utf-8"));
-    }
-    if (config.version == null) config.version = 1;
-    if (!config.hooks) config.hooks = {};
-    if (!config.hooks.sessionStart) config.hooks.sessionStart = [];
-
-    const present = (config.hooks.sessionStart as any[]).some((h: any) => h.command === hookFile);
-    if (!present) {
-      config.hooks.sessionStart.push({ command: hookFile, timeout: 30 });
-      fs.writeFileSync(hooksFile, JSON.stringify(config, null, 2));
-    }
+    editHarnessJson(path.join(cursorDir, "hooks.json"), "stable-context", (config) => {
+      if (config.version == null) config.version = 1;
+      if (!config.hooks) config.hooks = {};
+      if (!config.hooks.sessionStart) config.hooks.sessionStart = [];
+      const present = (config.hooks.sessionStart as any[]).some((h: any) => h.command === hookFile);
+      if (!present) config.hooks.sessionStart.push({ command: hookFile, timeout: 30 });
+    });
   } catch {
     // Optional enhancement.
   }
@@ -432,16 +400,14 @@ export function installStableHookCursor(): void {
 export function removeStableHookCursor(): void {
   const home = process.env.HOME || "";
   const hookFile = path.join(codecastHooksDir(), "stable-feed-cursor.sh");
-  try { fs.unlinkSync(hookFile); } catch {}
+  try { removeHarnessFile(hookFile, "stable-context"); } catch {}
 
-  const hooksFile = path.join(home, ".cursor", "hooks.json");
-  if (!fs.existsSync(hooksFile)) return;
   try {
-    const config = JSON.parse(fs.readFileSync(hooksFile, "utf-8"));
-    if (!config.hooks?.sessionStart) return;
-    config.hooks.sessionStart = config.hooks.sessionStart.filter((h: any) => h.command !== hookFile);
-    if (config.hooks.sessionStart.length === 0) delete config.hooks.sessionStart;
-    fs.writeFileSync(hooksFile, JSON.stringify(config, null, 2));
+    editHarnessJson(path.join(home, ".cursor", "hooks.json"), "stable-context", (config) => {
+      if (!config.hooks?.sessionStart) return;
+      config.hooks.sessionStart = config.hooks.sessionStart.filter((h: any) => h.command !== hookFile);
+      if (config.hooks.sessionStart.length === 0) delete config.hooks.sessionStart;
+    }, { createIfMissing: false });
   } catch {}
 }
 
@@ -490,17 +456,15 @@ export function installStableHookOpencode(): void {
   if (!fs.existsSync(ocDir)) return;
   try {
     const scriptPath = writeStableHookScript("opencode");
-    const pluginDir = path.join(ocDir, "plugins");
-    fs.mkdirSync(pluginDir, { recursive: true });
-    fs.writeFileSync(path.join(pluginDir, "codecast-stable.js"), opencodeStablePlugin(scriptPath));
+    writeHarnessFile(path.join(ocDir, "plugins", "codecast-stable.js"), opencodeStablePlugin(scriptPath), "stable-context");
   } catch {
     // Optional enhancement.
   }
 }
 
 export function removeStableHookOpencode(): void {
-  try { fs.unlinkSync(path.join(codecastHooksDir(), "stable-feed-opencode.sh")); } catch {}
-  try { fs.unlinkSync(path.join(opencodeGlobalDir(), "plugins", "codecast-stable.js")); } catch {}
+  try { removeHarnessFile(path.join(codecastHooksDir(), "stable-feed-opencode.sh"), "stable-context"); } catch {}
+  try { removeHarnessFile(path.join(opencodeGlobalDir(), "plugins", "codecast-stable.js"), "stable-context"); } catch {}
 }
 
 const HOOK_INSTALLERS: Record<StableHookClient, () => void> = {
@@ -553,30 +517,19 @@ export function removeStableHook(): void {
 
   // The script contains no user data and is owned solely by Codecast. Removing
   // it as well as its settings entry makes `stable off` an actual uninstall.
-  try {
-    fs.unlinkSync(hookFile);
-  } catch {}
+  try { removeHarnessFile(hookFile, "stable-context"); } catch {}
 
-  if (!fs.existsSync(settingsFile)) return;
-
-  let settings: any;
-  try {
-    settings = JSON.parse(fs.readFileSync(settingsFile, "utf-8"));
-  } catch {
-    return;
-  }
-  if (!settings.hooks?.SessionStart) return;
-
-  for (const matcher of settings.hooks.SessionStart) {
-    if (matcher.hooks) {
-      // installStableHook writes this exact absolute path. Match it exactly so
-      // an unrelated SessionStart integration with a similar filename survives.
-      matcher.hooks = matcher.hooks.filter((h: any) => h.command !== hookFile);
+  editHarnessJson(settingsFile, "stable-context", (settings) => {
+    if (!settings.hooks?.SessionStart) return;
+    for (const matcher of settings.hooks.SessionStart) {
+      if (matcher.hooks) {
+        // installStableHook writes this exact absolute path. Match it exactly so
+        // an unrelated SessionStart integration with a similar filename survives.
+        matcher.hooks = matcher.hooks.filter((h: any) => h.command !== hookFile);
+      }
     }
-  }
-  settings.hooks.SessionStart = settings.hooks.SessionStart.filter(
-    (m: any) => m.hooks && m.hooks.length > 0
-  );
-
-  fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 4));
+    settings.hooks.SessionStart = settings.hooks.SessionStart.filter(
+      (m: any) => m.hooks && m.hooks.length > 0
+    );
+  }, { createIfMissing: false });
 }

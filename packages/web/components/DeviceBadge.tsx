@@ -41,7 +41,19 @@ export type Device = {
     snippets?: Record<string, boolean>;
     stable_mode?: "solo" | "team" | "off";
     stable_global?: boolean;
+    /** Codecast's Claude Code hooks installed here; absent from daemons that
+     *  predate the switch (their hooks are always installed). */
+    hooks_enabled?: boolean;
+    /** May this machine update codecast without being asked each time? */
+    auto_update?: boolean;
   };
+  /** The cast version the daemon runs, a newer release it could take, and
+   *  whether it is below the fleet minimum (Settings > Daemon). */
+  cli_version?: string;
+  update_available?: string;
+  update_required?: boolean;
+  /** When this daemon process started (devices.listDevices). */
+  daemon_started_at?: number;
   /** Per-repo git health on this device (daemon gitPlane sweep). */
   git_plane?: Array<{
     root: string;
