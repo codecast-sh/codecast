@@ -8,7 +8,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { FACES_PADDING, NAME_HEIGHT, ROW_GAP } from "../../../lib/calls/faceCrop";
-import { FACE_ROW_METRICS, LINK_PULL, faceRowSize, faceRowWidth, floatingRowSize } from "../../../lib/faces/layout";
+import { FACE_ROW_METRICS, LINK_PULL, faceRowSize, faceRowWidth, floatingRowSize, FACE_CARD_WIDTH } from "../../../lib/faces/layout";
 
 const css = readFileSync(join(import.meta.dir, "..", "faceRow.css"), "utf8");
 /** The value of a custom property inside one rule of the stylesheet. */
@@ -50,9 +50,18 @@ describe("the float", () => {
     const card = { width: 320, height: 200 };
     const still = floatingRowSize(2, 1, card);
     expect(still.height).toBe(2 * FACES_PADDING + 64 + ROW_GAP + NAME_HEIGHT + card.height);
-    expect(still.width).toBe(card.width + 2 * FACES_PADDING);
+    expect(still.width).toBe(FACE_CARD_WIDTH + 2 * FACES_PADDING);
     // Without a card the pointer still decides: the window is its faces.
-    expect(floatingRowSize(2, 1, { width: 0, height: 0 })).toEqual(faceRowSize("float", 2, 1));
+    // ONE WIDTH whether or not a card is up: the window is anchored at a
+    // corner, so a window that widened when the card opened slid every face
+    // sideways under the pointer. Only the height follows the card.
+    const bare = floatingRowSize(2, 1, { width: 0, height: 0 });
+    expect(bare.width).toBe(still.width);
+    expect(bare.height).toBe(faceRowSize("float", 2, 1).height);
+    // A row wider than the card sets the width, card or no card.
+    const wide = floatingRowSize(6, 0, { width: 0, height: 0 });
+    expect(wide.width).toBe(faceRowSize("float", 6, 0).width);
+    expect(floatingRowSize(6, 0, card).width).toBe(wide.width);
     expect(cssVar('.face-row[data-density="float"] .face-row-below {', "top")).toBe(`calc(100% + ${ROW_GAP + NAME_HEIGHT - FACES_PADDING}px)`);
     expect(css).not.toContain(".face-row--hover");
   });

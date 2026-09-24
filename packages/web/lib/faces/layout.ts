@@ -79,13 +79,19 @@ export function floatingRowSize(
 ): { width: number; height: number } {
   const m = FACE_ROW_METRICS.float;
   const row = faceRowSize("float", faces, links);
-  // The strip sits in the row after the faces: the row is that much wider,
-  // and as tall as the taller of the two.
-  const width = row.width + (strip.width > 0 ? STRIP_GAP + strip.width : 0);
+  // ONE WIDTH, WHETHER OR NOT A CARD IS UP: the wider of the row (with the
+  // strip after the faces) and the card. The window is anchored at a corner
+  // and grows away from it, so a window that widened when the card opened
+  // slid every face sideways under the pointer on each hover (the founder's
+  // "jumping around like crazy", 2026-09-23). The old overlay held
+  // max(row, CHROME_WIDTH) for the same reason. Only the height follows the
+  // card, and it grows down, away from the faces.
+  const rowWidth = row.width + (strip.width > 0 ? STRIP_GAP + strip.width : 0);
+  const width = Math.max(rowWidth, FACE_CARD_WIDTH + m.pad * 2);
   const height = Math.max(row.height, strip.height + m.pad * 2);
   if (card.height === 0) return { width, height };
   // The card's band is under the name band (faceRow.css `.face-row-below`).
-  return { width: Math.max(width, card.width + m.pad * 2), height: height + card.height };
+  return { width, height: height + card.height };
 }
 
 
