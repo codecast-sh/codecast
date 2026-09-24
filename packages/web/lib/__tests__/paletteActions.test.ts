@@ -175,4 +175,13 @@ describe("palette item ranking", () => {
     expect(paletteItemScore("Files vault new note create markdown", "emdash")).toBe(0);
     expect(paletteItemScore("Files vault new note create markdown", "note")).toBe(1);
   });
+  test("several sessions get only the verbs that act on every row, labeled with the count", () => {
+    const rows = [session, { ...session, _id: "session-2", parent_conversation_id: "p", git_branch: "main" }, { ...session, _id: "session-3" }];
+    const actions = paletteActions("session", rows, "me", true);
+    const got = actions.map(a => a.key);
+    expect(got).toEqual(expect.arrayContaining(["bucket", "device", "session_stash", "session_kill", "session_done", "session_pin", "character"]));
+    for (const one of ["agent_switch", "agent_fork", "agent_handoff", "model", "rename", "session_parent", "session_branch", "session_files", "open", "copy"]) expect(got).not.toContain(one);
+    expect(actions.find(a => a.key === "session_kill")?.label).toBe("Kill 3 sessions");
+    expect(actions.find(a => a.key === "bucket")?.label).toBe("Label 3 sessions…");
+  });
 });

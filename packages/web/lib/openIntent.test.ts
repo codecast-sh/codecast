@@ -8,6 +8,7 @@ import {
   divertNavigation,
   divertSessionOpen,
   endClickIntent,
+  installOpenIntent,
   isPrewarmTab,
   openTargetForClick,
   pendingOpenTarget,
@@ -148,5 +149,48 @@ describe("divertNavigation", () => {
     await new Promise((r) => setTimeout(r, 1));
     expect(pendingOpenTarget()).toBeNull();
     expect(divertNavigation("/tasks")).toBe(false);
+  });
+});
+
+describe("capture listener", () => {
+  const realWindow = (globalThis as any).window;
+  let onClick: ((e: any) => void) | null;
+  let uninstall: () => void;
+
+  beforeEach(() => {
+    onClick = null;
+    (globalThis as any).window = {
+      addEventListener: (type: string, fn: (e: any) => void) => { if (type === "click") onClick = fn; },
+      removeEventListener() {},
+    };
+    uninstall = installOpenIntent();
+  });
+
+  afterEach(() => {
+    uninstall();
+    endClickIntent();
+    if (realWindow === undefined) delete (globalThis as any).window;
+    else (globalThis as any).window = realWindow;
+  });
+
+  // Owns: whether the click lands inside a [data-owns-modifier-click] subtree.
+  const optionClick = (owns: boolean) => onClick!({
+    button: 0,
+    altKey: true,
+    target: { closest: (sel: string) => (sel === "[data-owns-modifier-click]" && owns ? {} : null) },
+    preventDefault() {},
+  });
+
+  it("arms a split for an Option-click on an ordinary row", () => {
+    optionClick(false);
+    expect(pendingOpenTarget()).toBe("split");
+  });
+
+  it("leaves an Option-click inside a subtree that owns it unarmed", () => {
+    // A label chip's Option-click excludes the label; the focus move that
+    // follows must navigate in place, not open a pane.
+    optionClick(true);
+    expect(pendingOpenTarget()).toBeNull();
+    expect(divertSessionOpen("s_top")).toBe(false);
   });
 });
