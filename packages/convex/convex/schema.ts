@@ -397,11 +397,45 @@ export default defineSchema({
     .index("by_team_id", ["team_id"])
     .index("by_user_team", ["user_id", "team_id"]),
 
+  // Exact session totals per folder for the Sync settings page, rebuilt by a
+  // paging job (pathStats.ts) so a folder of any size counts exactly without
+  // the page reading its sessions. Private to its user; never shared.
+  path_session_stats: defineTable({
+    user_id: v.id("users"),
+    path: v.string(),
+    count: v.number(),
+    first_started_at: v.optional(v.number()),
+    last_started_at: v.optional(v.number()),
+    hidden: v.number(),
+    manually_shared: v.number(),
+    // Start time histogram: bucket start (ms) and sessions in it, ascending.
+    buckets: v.array(v.number()),
+    bucket_counts: v.array(v.number()),
+    // 0 until the first rebuild lands.
+    computed_at: v.number(),
+    refresh_started_at: v.optional(v.number()),
+  }).index("by_user_path", ["user_id", "path"]),
+
   directory_team_mappings: defineTable({
     user_id: v.id("users"),
     path_prefix: v.string(),
-    team_id: v.id("teams"),
+    // The team a share rule sends sessions to. Absent on a "never share"
+    // rule, which has no team: it exists to keep its folder out of every
+    // share, the repository rule included (privacy.ts matchDirectoryMapping).
+    team_id: v.optional(v.id("teams")),
     auto_share: v.boolean(),
+    // A lock the owner wrote by hand: sessions in this folder are never
+    // shared by any rule. Beats a repository rule from another checkout.
+    private: v.optional(v.boolean()),
+    // Sessions started before this instant stay private. Absent means every
+    // session in the directory is shared, past included. A new mapping is
+    // stamped with its creation time unless the member includes the past.
+    share_since: v.optional(v.number()),
+    // The repository the mapped checkout is a clone of (repositoryKeyOfRemote),
+    // stamped from the sessions recorded there. Sessions in any other clone
+    // or linked worktree of it resolve to this mapping when no path rule
+    // covers them (privacy.ts matchDirectoryMapping).
+    repository: v.optional(v.string()),
     created_at: v.number(),
   })
     .index("by_user_id", ["user_id"])
@@ -1007,9 +1041,12 @@ export default defineSchema({
     // Sparse in practice (only banner-parked conversations are true) — lets the
     // stale-flag sweep find expired pending_api_error rows without a table scan.
     .index("by_pending_api_error", ["pending_api_error", "updated_at"])
-    .index("by_user_git_root", ["user_id", "git_root"])
+    // started_at last: a folder's rows come newest session first, not newest
+    // row first. A folder's past sessions synced today get new rows, and the
+    // Sync page's list must still open on the sessions run most recently.
+    .index("by_user_git_root", ["user_id", "git_root", "started_at"])
     .index("by_user_git_remote_url", ["user_id", "git_remote_url"])
-    .index("by_user_project_path", ["user_id", "project_path"])
+    .index("by_user_project_path", ["user_id", "project_path", "started_at"])
     .index("by_user_favorite", ["user_id", "is_favorite"])
     .index("by_user_private", ["user_id", "is_private"])
     .index("by_team_id", ["team_id"])
@@ -6109,6 +6146,10 @@ export default defineSchema({
       // Scope membership lifecycle: entity_id is the team id, op is
       // scope_added | scope_removed, emitted in the affected USER's scope.
       v.literal("scope"),
+      // Member lifecycle: entity_id is the departed USER id, op is
+      // scope_removed, emitted in the TEAM's scope, so every remaining
+      // member's client drops that user's rows from its team caches.
+      v.literal("member"),
     ),
     entity_id: v.string(),
     op: v.union(

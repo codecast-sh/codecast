@@ -1,6 +1,7 @@
+import { repositoryKeyOfRemote } from "@codecast/shared/contracts";
 import { Id } from "./_generated/dataModel";
 import { isSessionOwner } from "./sessionOwners";
-import { currentMembershipVisibility, effectiveMembershipVisibility, type MembershipVisibilityFacts } from "./teamVisibility";
+import { currentMembershipVisibility, effectiveMembershipVisibility, isVisibilityShareable, type MembershipVisibilityFacts } from "./teamVisibility";
 
 type DbCtx = { db: any };
 
@@ -64,9 +65,7 @@ async function getOwnerMembership(
     .first();
 }
 
-export function isVisibilityShareable(visibility: string): boolean {
-  return visibility !== "hidden" && visibility !== "activity";
-}
+export { isVisibilityShareable } from "./teamVisibility";
 
 // ── Access control (single conversation) ──
 // is_private is the source of truth (set at creation from directory_team_mappings auto_share).
@@ -287,22 +286,57 @@ export function profilePublicSessionVisible(conversation: {
 // Used by dispatch.ts and conversations.ts session creation.
 
 export type DirectoryMapping = {
-  team_id: Id<"teams">;
+  /** The team a share rule sends sessions to; absent on a "never share" rule. */
+  team_id?: Id<"teams">;
   path_prefix: string;
   auto_share: boolean;
+  /**
+   * A lock written by hand: nothing in this folder is ever shared by a rule.
+   * A path lock beats a repository rule the same way any path rule does
+   * (longest prefix), and among repository rules a lock wins over a share.
+   */
+  private?: boolean;
+  /** Sessions started before this stay private; absent shares every session. */
+  share_since?: number;
+  /**
+   * The repository the mapped checkout is a clone of (repositoryKeyOfRemote),
+   * stamped when the mapping is written. A session in ANY clone or linked
+   * worktree of that repository resolves to this mapping when no path rule
+   * covers it, so one share reaches every checkout, the ones outside the
+   * mapped folder included (codex keeps its worktrees under ~/.codex).
+   */
+  repository?: string;
 };
 
-export function resolveTeamForPath(
+/** The repository key of a session, from the remote its checkout recorded. */
+export function conversationRepository(conv: { git_remote_url?: string | null } | null | undefined): string | undefined {
+  return repositoryKeyOfRemote(conv?.git_remote_url) ?? undefined;
+}
+
+// A mapping shares a session only if the session started on or after the
+// mapping's share start. A session with no start time is one being created
+// right now, so it is covered. Rows synced later from old transcripts carry
+// their real started_at and stay private when it predates the share.
+export function mappingCoversStart(
+  mapping: Pick<DirectoryMapping, "share_since">,
+  startedAt: number | undefined,
+): boolean {
+  return mapping.share_since == null || startedAt == null || startedAt >= mapping.share_since;
+}
+
+// The mapping a session falls under. A directory rule is the explicit word
+// on a path, so the longest matching prefix wins; with no path rule, a
+// mapping stamped with the session's repository covers it. Neither the path
+// nor the repository alone is enough: a private clone of a shared repository
+// is a path rule on that clone, and a codex worktree outside every mapped
+// folder is reached only through the repository.
+export function matchDirectoryMapping(
   userMappings: DirectoryMapping[],
   conversationPath: string | undefined,
-  fallbackTeamId: Id<"teams"> | undefined
-): { teamId: Id<"teams"> | undefined; isPrivate: boolean; autoShared: boolean } {
-  let resolvedTeamId = fallbackTeamId;
-  let isPrivate = true;
-  let autoShared = false;
-
-  if (conversationPath && userMappings.length > 0) {
-    let bestMatch: DirectoryMapping | null = null;
+  repository?: string | null,
+): DirectoryMapping | null {
+  let bestMatch: DirectoryMapping | null = null;
+  if (conversationPath) {
     for (const mapping of userMappings) {
       if (
         conversationPath === mapping.path_prefix ||
@@ -313,10 +347,41 @@ export function resolveTeamForPath(
         }
       }
     }
+  }
+  if (!bestMatch && repository) {
+    for (const mapping of userMappings) {
+      if (mapping.repository !== repository) continue;
+      // A lock on any checkout of the repository is the owner's word on the
+      // whole repository: it wins over a share rule on another checkout.
+      if (!bestMatch || (!!mapping.private && !bestMatch.private) || (!!mapping.private === !!bestMatch.private && mapping.path_prefix.length > bestMatch.path_prefix.length)) bestMatch = mapping;
+    }
+  }
+  return bestMatch;
+}
 
-    if (bestMatch) {
+export function resolveTeamForPath(
+  userMappings: DirectoryMapping[],
+  conversationPath: string | undefined,
+  fallbackTeamId: Id<"teams"> | undefined,
+  startedAt?: number,
+  repository?: string | null,
+): { teamId: Id<"teams"> | undefined; isPrivate: boolean; autoShared: boolean } {
+  let resolvedTeamId = fallbackTeamId;
+  let isPrivate = true;
+  let autoShared = false;
+
+  if ((conversationPath || repository) && userMappings.length > 0) {
+    const bestMatch = matchDirectoryMapping(userMappings, conversationPath, repository);
+
+    if (bestMatch?.private) {
+      // A lock: private, and routed nowhere. The team fallback never applies.
+      resolvedTeamId = undefined;
+    } else if (bestMatch) {
       resolvedTeamId = bestMatch.team_id;
-      if (bestMatch.auto_share) { isPrivate = false; autoShared = true; }
+      if (bestMatch.auto_share && mappingCoversStart(bestMatch, startedAt)) {
+        isPrivate = false;
+        autoShared = true;
+      }
     } else {
       resolvedTeamId = undefined;
     }
@@ -352,7 +417,9 @@ export async function resolveCreationPrivacy(
   ctx: DbCtx,
   ownerId: Id<"users">,
   conversationPath: string | undefined,
-  fallbackTeamId?: Id<"teams">
+  fallbackTeamId?: Id<"teams">,
+  startedAt?: number,
+  gitRemoteUrl?: string | null,
 ): Promise<{
   team_id: Id<"teams"> | undefined;
   is_private: boolean;
@@ -365,7 +432,9 @@ export async function resolveCreationPrivacy(
   const { teamId, isPrivate, autoShared } = resolveTeamForPath(
     mappings as DirectoryMapping[],
     conversationPath,
-    fallbackTeamId
+    fallbackTeamId,
+    startedAt,
+    repositoryKeyOfRemote(gitRemoteUrl),
   );
   return {
     team_id: teamId,
@@ -385,7 +454,7 @@ export async function resolveCreationPrivacy(
 // team_id is only omitted if the owner belongs to no team at all.
 export async function buildShareUpdate(
   ctx: DbCtx,
-  conversation: { team_id?: Id<"teams">; git_root?: string; project_path?: string },
+  conversation: { team_id?: Id<"teams">; git_root?: string; project_path?: string; git_remote_url?: string },
   ownerId: Id<"users">
 ): Promise<{ is_private: false; team_id?: Id<"teams"> }> {
   const updates: { is_private: false; team_id?: Id<"teams"> } = { is_private: false };
@@ -401,7 +470,9 @@ export async function buildShareUpdate(
   const { teamId } = resolveTeamForPath(
     mappings as DirectoryMapping[],
     conversation.git_root || conversation.project_path,
-    undefined
+    undefined,
+    undefined,
+    conversationRepository(conversation),
   );
   if (teamId) {
     updates.team_id = teamId;
@@ -436,6 +507,8 @@ export function buildPathRestampUpdate(
     is_private?: boolean;
     auto_shared?: boolean;
     team_visibility?: string;
+    started_at?: number;
+    git_remote_url?: string;
   },
   mappings: DirectoryMapping[],
   conversationPath: string | undefined
@@ -444,7 +517,13 @@ export function buildPathRestampUpdate(
   if (conversation.is_private === false && !conversation.auto_shared && conversation.team_id)
     return null;
 
-  const { teamId, autoShared } = resolveTeamForPath(mappings, conversationPath, undefined);
+  const { teamId, autoShared } = resolveTeamForPath(
+    mappings,
+    conversationPath,
+    undefined,
+    conversation.started_at,
+    conversationRepository(conversation),
+  );
   if (!teamId) return null;
 
   const patch: { team_id?: Id<"teams">; is_private?: boolean; auto_shared?: boolean } = {};

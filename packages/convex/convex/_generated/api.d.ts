@@ -191,6 +191,7 @@ import type * as orgRoles from "../orgRoles.js";
 import type * as orgRootSeat from "../orgRootSeat.js";
 import type * as orgTemplates from "../orgTemplates.js";
 import type * as orgWakes from "../orgWakes.js";
+import type * as pathStats from "../pathStats.js";
 import type * as patterns from "../patterns.js";
 import type * as pendingMessageWrites from "../pendingMessageWrites.js";
 import type * as pendingMessages from "../pendingMessages.js";
@@ -461,6 +462,7 @@ declare const fullApi: ApiFromModules<{
   orgRootSeat: typeof orgRootSeat;
   orgTemplates: typeof orgTemplates;
   orgWakes: typeof orgWakes;
+  pathStats: typeof pathStats;
   patterns: typeof patterns;
   pendingMessageWrites: typeof pendingMessageWrites;
   pendingMessages: typeof pendingMessages;

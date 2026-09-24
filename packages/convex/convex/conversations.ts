@@ -84,6 +84,7 @@ import {
   buildShareUpdate,
   buildPathRestampUpdate,
   type AccessLevel,
+  matchDirectoryMapping,
 } from "./privacy";
 import { effectiveMembershipVisibility } from "./teamVisibility";
 import { patchConversationVisibility } from "./lib/access";
@@ -945,19 +946,9 @@ export const resolveTeamFromDirectory = query({
       .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
       .collect();
 
-    let bestMatch: { teamId: Id<"teams">; pathLength: number } | null = null;
-    for (const mapping of mappings) {
-      if (args.project_path === mapping.path_prefix || args.project_path.startsWith(mapping.path_prefix + "/")) {
-        if (!bestMatch || mapping.path_prefix.length > bestMatch.pathLength) {
-          bestMatch = {
-            teamId: mapping.team_id,
-            pathLength: mapping.path_prefix.length,
-          };
-        }
-      }
-    }
-
-    return bestMatch?.teamId || null;
+    // The same rule creation uses: longest path rule wins, and a lock is a
+    // rule with no team.
+    return matchDirectoryMapping(mappings, args.project_path)?.team_id ?? null;
   },
 });
 
@@ -1083,8 +1074,11 @@ export const createConversation = mutation({
     const startedAt = args.started_at ?? now;
 
     const conversationPath = args.git_root || args.project_path;
+    // The daemon syncs old transcripts with their real start time: a session
+    // that predates a repo's share start stays private (privacy.ts
+    // mappingCoversStart), so a share made today never exposes yesterday.
     const { team_id: resolvedTeamId, is_private: isPrivate, auto_shared: autoShared } =
-      await resolveCreationPrivacy(ctx, args.user_id, conversationPath, args.team_id as Id<"teams"> | undefined);
+      await resolveCreationPrivacy(ctx, args.user_id, conversationPath, args.team_id as Id<"teams"> | undefined, startedAt, args.git_remote_url);
 
     let parentConversationId: Id<"conversations"> | undefined;
     if (args.parent_conversation_id) {
@@ -4035,15 +4029,7 @@ export const searchForCLI = query({
         .query("directory_team_mappings")
         .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
         .collect();
-      let bestMatch: { teamId: Id<"teams">; pathLength: number } | null = null;
-      for (const mapping of mappings) {
-        if (args.project_path === mapping.path_prefix || args.project_path.startsWith(mapping.path_prefix + "/")) {
-          if (!bestMatch || mapping.path_prefix.length > bestMatch.pathLength) {
-            bestMatch = { teamId: mapping.team_id, pathLength: mapping.path_prefix.length };
-          }
-        }
-      }
-      resolvedTeamId = bestMatch?.teamId;
+      resolvedTeamId = matchDirectoryMapping(mappings, args.project_path)?.team_id;
     }
     const effectiveTeamIds = resolvedTeamId ? [resolvedTeamId] : userTeamIds;
 
@@ -4969,6 +4955,10 @@ export const updateProjectPath = mutation({
     session_id: v.string(),
     project_path: v.string(),
     git_root: v.optional(v.string()),
+    // The checkout's origin, stamped with the root so a session created
+    // without git info (codex rollouts before 2026-09) gains its repository
+    // identity in the same sweep. Older daemons omit it.
+    git_remote_url: v.optional(v.string()),
     api_token: v.string(),
   },
   handler: async (ctx, args) => {
@@ -4987,7 +4977,11 @@ export const updateProjectPath = mutation({
       return { updated: false };
     }
 
-    if (conversation.project_path === args.project_path && (!args.git_root || conversation.git_root === args.git_root)) {
+    if (
+      conversation.project_path === args.project_path &&
+      (!args.git_root || conversation.git_root === args.git_root) &&
+      (!args.git_remote_url || conversation.git_remote_url === args.git_remote_url)
+    ) {
       return { updated: false };
     }
 
@@ -4995,19 +4989,28 @@ export const updateProjectPath = mutation({
     if (args.git_root) {
       patch.git_root = args.git_root;
     }
+    if (args.git_remote_url) {
+      patch.git_remote_url = args.git_remote_url;
+    }
 
     // The path is being stamped after creation (pre-warmed/stub conversations
     // are born pathless → private+teamless), so re-resolve team/privacy the
     // way creation would have. Explicit user choices win inside the helper.
-    const mappings = await ctx.db
-      .query("directory_team_mappings")
-      .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
-      .collect();
-    const restamp = buildPathRestampUpdate(
-      conversation,
-      mappings,
-      args.git_root || args.project_path
-    );
+    // Only a changed PATH re-resolves. Learning the checkout root of a path
+    // the row already had (the boot sweep backfilling codex worktrees that
+    // were created without git info) stamps identity and nothing else: a
+    // mapping on that checkout then reaches these rows when the owner sets
+    // or re-saves it, never as a side effect of a daemon upgrade.
+    const restamp = conversation.project_path === args.project_path
+      ? null
+      : buildPathRestampUpdate(
+          { ...conversation, git_remote_url: args.git_remote_url ?? conversation.git_remote_url },
+          await ctx.db
+            .query("directory_team_mappings")
+            .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
+            .collect(),
+          args.git_root || args.project_path
+        );
     if (restamp) Object.assign(patch, restamp);
 
     // A restamp can flip visibility (born-blank → team-shared), so linked
@@ -5361,6 +5364,9 @@ export const forkConversation = mutation({
       ctx,
       authUserId,
       original.git_root || original.project_path,
+      undefined,
+      undefined,
+      original.git_remote_url,
     );
 
     // Trust the denormalized message_count for display; the actual copy is
@@ -6658,15 +6664,7 @@ export const feedForCLI = query({
         .query("directory_team_mappings")
         .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
         .collect();
-      let bestMatch: { teamId: Id<"teams">; pathLength: number } | null = null;
-      for (const mapping of mappings) {
-        if (args.project_path === mapping.path_prefix || args.project_path.startsWith(mapping.path_prefix + "/")) {
-          if (!bestMatch || mapping.path_prefix.length > bestMatch.pathLength) {
-            bestMatch = { teamId: mapping.team_id, pathLength: mapping.path_prefix.length };
-          }
-        }
-      }
-      resolvedTeamId = bestMatch?.teamId;
+      resolvedTeamId = matchDirectoryMapping(mappings, args.project_path)?.team_id;
     }
     const effectiveTeamIds = resolvedTeamId ? [resolvedTeamId] : userTeamIds;
 
@@ -12322,6 +12320,7 @@ export const updateSessionId = mutation({
     // from where the session is really running.
     project_path: v.optional(v.string()),
     git_root: v.optional(v.string()),
+    git_remote_url: v.optional(v.string()),
     api_token: v.string(),
   },
   handler: async (ctx, args) => {
@@ -12336,6 +12335,7 @@ export const updateSessionId = mutation({
     const patch: Record<string, any> = { session_id: args.session_id };
     if (args.project_path) patch.project_path = args.project_path;
     if (args.git_root) patch.git_root = args.git_root;
+    if (args.git_remote_url) patch.git_remote_url = args.git_remote_url;
 
     // Stubs are created before their real path exists, so their team/privacy
     // resolved against nothing (→ private, teamless). Re-resolve against the
@@ -12346,7 +12346,7 @@ export const updateSessionId = mutation({
         .query("directory_team_mappings")
         .withIndex("by_user_id", (q) => q.eq("user_id", userId))
         .collect();
-      const restamp = buildPathRestampUpdate(conv, mappings, stampedPath);
+      const restamp = buildPathRestampUpdate({ ...conv, git_remote_url: args.git_remote_url ?? conv.git_remote_url }, mappings, stampedPath);
       if (restamp) Object.assign(patch, restamp);
     }
 

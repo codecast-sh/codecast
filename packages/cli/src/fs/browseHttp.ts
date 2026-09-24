@@ -3,6 +3,8 @@
  *
  *   GET  /fs/dirs?path=<dir>   → the directories directly inside <dir>
  *   POST /fs/mkdir {path}      → create a project folder (and `git init` it)
+ *   GET  /fs/sessions          → sessions per folder on this machine (localSessions.ts)
+ *   GET  /fs/exists?p=…&p=…    → which of those absolute paths are directories here
  *
  * Mounted on the daemon's hook server next to the terminal, vault and browser
  * routes, behind the same envelope of an allowed origin plus the daemon's
@@ -25,6 +27,8 @@ import * as os from "os";
 import * as path from "path";
 import { execFile } from "../proc.js";
 import { authorizeLocalRequest, corsHeaders, type TerminalServerOptions } from "../terminal/terminalServer.js";
+import { readLocalConfig } from "../config/readLocalConfig.js";
+import { summarizeLocalSessions, type LocalSessionsSummary } from "./localSessions.js";
 
 export interface DirEntry {
   name: string;
@@ -54,6 +58,19 @@ export interface BrowseDeps {
   isDir: (p: string) => Promise<boolean>;
   mkdir: (p: string) => Promise<void>;
   gitInit: (p: string) => Promise<void>;
+  localSessions: () => Promise<LocalSessionsSummary>;
+}
+
+// A page open and a refresh a few seconds later share one walk; the walk reads
+// every transcript's first line, which is seconds on a large machine.
+const LOCAL_SESSIONS_TTL_MS = 30_000;
+let localSessionsCache: { at: number; value: Promise<LocalSessionsSummary> } | null = null;
+function cachedLocalSessions(): Promise<LocalSessionsSummary> {
+  if (localSessionsCache && Date.now() - localSessionsCache.at < LOCAL_SESSIONS_TTL_MS) return localSessionsCache.value;
+  const value = summarizeLocalSessions(readLocalConfig(), os.homedir());
+  localSessionsCache = { at: Date.now(), value };
+  value.catch(() => { localSessionsCache = null; });
+  return value;
 }
 
 async function isDirectory(p: string): Promise<boolean> {
@@ -76,6 +93,7 @@ export const defaultBrowseDeps: BrowseDeps = {
     new Promise((resolve) => {
       execFile("git", ["init", "-q"], { cwd: p, timeout: 10_000 }, () => resolve());
     }),
+  localSessions: cachedLocalSessions,
 };
 
 /** Expand `~` and make the path absolute. Returns null for anything that is
@@ -193,6 +211,15 @@ export function handleFsBrowseHttp(
         deps,
       );
       return listing ? send(200, listing) : send(400, { error: "path must be absolute or ~-relative" });
+    }
+    if (req.method === "GET" && parsed.pathname === "/fs/exists") {
+      const paths = parsed.searchParams.getAll("p").filter((p) => p.startsWith("/")).slice(0, 300);
+      const exists: Record<string, boolean> = {};
+      await Promise.all(paths.map(async (p) => { exists[p] = await deps.isDir(p); }));
+      return send(200, { home: deps.home(), exists });
+    }
+    if (req.method === "GET" && parsed.pathname === "/fs/sessions") {
+      return send(200, await deps.localSessions());
     }
     if (req.method === "POST" && parsed.pathname === "/fs/mkdir") {
       const body = await readJsonBody(req);
