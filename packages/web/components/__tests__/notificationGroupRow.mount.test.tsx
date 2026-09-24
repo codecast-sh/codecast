@@ -69,6 +69,11 @@ describe("NotificationGroupRow", () => {
     // The header toggles rather than navigating.
     const header = document.querySelector("button[aria-expanded]") as any;
     expect(header).toBeTruthy();
+    // A session with no character still shows a mark in its face, not an
+    // empty circle: the agent icon the single rows wear.
+    const faces = [...header.querySelectorAll("[data-group-face]")];
+    expect(faces.length).toBe(3);
+    for (const face of faces) expect(face.querySelector("svg")).toBeTruthy();
     await act(async () => { header.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })); });
     expect(open).toBe(true);
     expect(opened).toEqual([]);
