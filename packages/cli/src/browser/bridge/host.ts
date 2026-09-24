@@ -901,6 +901,14 @@ export function startBridgeHost(opts: {
     return tab;
   };
 
+  /** Whether this socket may raise a tab or Chrome's window. An agent's
+   *  engine sends `Page.bringToFront` and `Target.activateTarget` as part of
+   *  ordinary work (a tab switch, a keypress), and in the human's own Chrome
+   *  each one pulls their window forward. Only a socket without a session
+   *  raises: the focus route behind the web's "open tab" link and
+   *  `cast browser show`, which raise on purpose. */
+  const mayRaise = (client: Client): boolean => client.session === null;
+
   /** Browser-scope CDP, emulated. Returns the `result` or throws. */
   const browserMethod = async (client: Client, method: string, params: any): Promise<unknown> => {
     switch (method) {
@@ -967,7 +975,7 @@ export function startBridgeHost(opts: {
         // would otherwise raise the human's Chrome on every fresh session.
         const r = await extCall(
           "tabs.create",
-          { url: params?.url || "about:blank", background: params?.background !== false, ...(group ? { group } : {}) },
+          { url: params?.url || "about:blank", background: !mayRaise(client) || params?.background !== false, ...(group ? { group } : {}) },
           40_000, // the worker's process may be frozen for a while; it answers when it wakes
         );
         if (group) client.group = group;
@@ -986,7 +994,7 @@ export function startBridgeHost(opts: {
       }
       case "Target.activateTarget": {
         const { tabId } = await grantedTarget(client, params?.targetId);
-        await extCall("tabs.activate", { tabId }, 10_000);
+        if (mayRaise(client)) await extCall("tabs.activate", { tabId }, 10_000);
         return {};
       }
       case "Target.getBrowserContexts":
@@ -1002,7 +1010,8 @@ export function startBridgeHost(opts: {
   };
 
   /** Session-scope CDP: a couple of local no-ops, everything else to the tab. */
-  const sessionMethod = async (tabId: number, method: string, params: any): Promise<unknown> => {
+  const sessionMethod = async (client: Client, tabId: number, method: string, params: any): Promise<unknown> => {
+    if (method === "Page.bringToFront" && !mayRaise(client)) return {};
     switch (method) {
       // chrome.debugger cannot mint child sessions for a client it does not
       // know about, so pretend and never emit child attaches. Cross-origin
@@ -1033,7 +1042,7 @@ export function startBridgeHost(opts: {
           sendJson(client.ws, cdpError(msg.id, "Session with given id not found."));
           return;
         }
-        result = await sessionMethod(tabId, msg.method, msg.params);
+        result = await sessionMethod(client, tabId, msg.method, msg.params);
         sendJson(client.ws, { id: msg.id, sessionId: msg.sessionId, result });
       } else {
         result = await browserMethod(client, msg.method, msg.params);

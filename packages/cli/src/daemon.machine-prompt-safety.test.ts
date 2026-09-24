@@ -201,7 +201,7 @@ function fixture(transport = "tmux", cached = true) {
       "parsePollMessage", "pollDeclineText", "pollMenuSteps", "extractTmuxLiveRegion", "newestPaintedFrame", "isCodexTrustDialog", "isCodexUpdateDialog",
       "classifyTmuxLiveState", "livenessFromTmuxState", "isResumeCwdPicker", "turnStartedAtFor", "paneTextAfterLastMatch",
       "assertPromptAbsent", "inputGuard", "captureTmuxLiveState", "ensureTmuxReady", "withTmuxLock", "drainTmuxComposer", "tmuxComposerText", "tmuxComposerDraft",
-      "tmuxWatchablePrefix", "tmuxComposerPayloadMatcher", "tmuxComposerHoldsPayload", "awaitTmuxComposerPayload", "normalizePromptText",
+      "tmuxWatchablePrefix", "tmuxComposerPayloadMatcher", "tmuxComposerHoldsPayload", "composerShowsOnlyPayloadTail", "matchAtFullWindowSize", "awaitTmuxComposerPayload", "normalizePromptText",
       "captureTmuxComposerPane", "stripAnsi", "stripTmuxFaintText", "tmuxComposerRegion", "tmuxPromptStillHasInput", "tmuxPromptShowsPastePlaceholder", "pasteChipLines", "pasteChipContradicts",
       "tmuxPaneShowsBlockingPrompt", "takeTmuxSubmitVerdict", "recordTmuxSubmitVerdict", "verifyTmuxSubmitAfterPaste", "runTmuxSubmitVerify",
       "deliverIntoPane", "paneInteractiveQuestion", "paneInteractivePrompt", "injectViaTmux", "injectViaTmuxInner",
@@ -212,7 +212,7 @@ function fixture(transport = "tmux", cached = true) {
       "deliverMessage", "autoResumeSessionInner", "probeStartedPane", "classifyStartedPane", "paneContentAfterLaunchEcho",
     ];
     const constants = [
-      "RESUME_CWD_PICKER_RE", "DRAIN_MAX_CYCLES", "stripComposerChrome", "TMUX_ONLY_TERMINALS", "DELIVERY_TIMEOUT_MS", "TRUST_PROMPT_RE",
+      "RESUME_CWD_PICKER_RE", "DRAIN_MAX_CYCLES", "stripComposerChrome", "TMUX_WINDOW_WIDTH", "TMUX_WINDOW_HEIGHT", "TMUX_SIZE_ARGS", "TMUX_ONLY_TERMINALS", "DELIVERY_TIMEOUT_MS", "TRUST_PROMPT_RE",
       "PANE_TITLE_WORKING", "SUBMIT_VERDICT_TTL_MS", "submitVerdicts",
       "ANSI_ESCAPE_RE",
     ].map(name => {

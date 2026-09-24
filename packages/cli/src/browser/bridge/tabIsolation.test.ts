@@ -198,3 +198,19 @@ await program.parseAsync(["node", "fixture", "browser", ...args]);
   }
   // Two child processes each import the whole CLI; on a loaded machine one import alone took 18 s.
 }, 120_000);
+
+test("an agent's socket never raises the human's Chrome; a socket without a session still can", async () => {
+  const agent = await connect("env-a-real");
+  const { targetId } = await agent.send("Target.createTarget", { url: "https://a.example/", background: false });
+  expect(extension.seen.find(m => m.op === "tabs.create")?.background).toBe(true);
+  await agent.send("Target.activateTarget", { targetId });
+  const { sessionId } = await agent.send("Target.attachToTarget", { targetId, flatten: true });
+  await agent.send("Page.bringToFront", {}, sessionId);
+  expect(extension.seen.filter(m => m.op === "tabs.activate")).toEqual([]);
+  expect(extension.seen.filter(m => m.op === "cdp" && m.method === "Page.bringToFront")).toEqual([]);
+
+  const focus = await CdpConnection.fromPort(endpoint());
+  connections.push(focus);
+  await focus.send("Target.activateTarget", { targetId });
+  expect(extension.seen.filter(m => m.op === "tabs.activate").map(m => m.tabId)).toHaveLength(1);
+});

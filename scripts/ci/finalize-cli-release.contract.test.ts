@@ -130,6 +130,18 @@ describe("step order", () => {
     );
   });
 
+  test("a pinned client never sees a signature that does not match the manifest", () => {
+    // Old signature removed, then the manifest, then the new signature: the
+    // only intermediate state is "unsigned", which an optional policy accepts.
+    const publish = step(LATEST_JSON).run as string;
+    const removeSig = publish.indexOf('aws s3 rm "s3://$R2_BUCKET/latest.json.sig"');
+    const writeManifest = publish.indexOf('aws s3 cp /tmp/cli-release/latest.json "s3://$R2_BUCKET/latest.json"');
+    expect(removeSig).toBeGreaterThan(-1);
+    expect(writeManifest).toBeGreaterThan(-1);
+    expect(removeSig).toBeLessThan(writeManifest);
+    expect(at(LATEST_JSON)).toBeLessThan(at("Sign latest.json when a signing key is configured"));
+  });
+
   test("the public manifest is verified after it is written", () => {
     expect(at(LATEST_JSON)).toBeLessThan(at("Verify the exact public manifest and referenced bytes"));
   });

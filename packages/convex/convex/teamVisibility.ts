@@ -18,7 +18,8 @@
 // Pure, no convex imports: the web store applies the same transition
 // optimistically and the server applies it for real.
 
-export type TeamVisibilityLevel = "hidden" | "activity" | "summary" | "full";
+import type { TeamVisibilityLevel } from "@codecast/shared/team/visibility";
+export type { TeamVisibilityLevel };
 
 export type VisibilitySegment = { before: number; visibility: TeamVisibilityLevel };
 
