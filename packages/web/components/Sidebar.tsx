@@ -1,6 +1,6 @@
 import { SlackLogo } from "./SlackLogo";
 import { MIRROR_STATE_LABEL } from "@codecast/convex/convex/lib/slackMirror";
-import { useCallsAvailable, useTeamFeature } from "../lib/teamFeatures";
+import { useCallsAvailable, useTeamFeature, useWorkspaceFeature } from "../lib/teamFeatures";
 import Link from "next/link";
 import { agentName, useRootAgent } from "../hooks/useSyncAnchors";
 import { AnchorAvatar } from "./anchor/AnchorIdentity";
@@ -920,6 +920,9 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const isCalls = pathname === "/calls" || pathname?.startsWith("/calls/");
   // Per-team opt-in: no chat row (and no create-channel modal) unless the
   // active team turned chat on.
+  // The org feature is per team, default off: with it off the Org row and
+  // the workspace agent row do not exist, like chat.
+  const orgOn = useWorkspaceFeature("org");
   const chatOn = useTeamFeature("chat");
   const callsOn = useCallsAvailable();
   const isTasks = pathname === "/tasks" || pathname?.startsWith("/tasks/");
@@ -1487,6 +1490,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             onMobileClose={onMobileClose}
             icon={<Zap className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
           />
+          {orgOn && (<>
           <NavSection
             label="Org"
             href="/org"
@@ -1512,6 +1516,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             title={rootAgent ? `${agentName(rootAgent)}, the workspace's agent` : "Set up the workspace's agent"}
             icon={<AnchorAvatar anchor={rootAgent} size={20} className="flex-shrink-0" />}
           />
+          </>)}
           <NavSection
             label="Windows"
             href="/windows"

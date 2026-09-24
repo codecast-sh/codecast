@@ -1,4 +1,3 @@
-import { HibernatedMarker } from "./HibernatedMarker";
 import { HIBERNATED_COPY } from "@codecast/shared/contracts";
 import { BranchCodeLink } from "./repo/RepositoryLinks";
 import React, { useState, useCallback, useRef, memo, useMemo } from "react";
@@ -22,6 +21,7 @@ import { AppLoader } from "./AppLoader";
 import type { ConversationData } from "./conversation/types";
 import { FormattedSummary } from "./FormattedSummary";
 import { sessionCardSummary } from "../lib/sessionSummary";
+import { isHandoffFrom } from "../lib/sessionHandoff";
 import { threadStateView, THREAD_STATE_PIN_CLASS, THREAD_STATE_STATUS_META } from "../lib/threadState";
 import { ORG_STATE_META } from "./org/orgMeta";
 import { StatusDot } from "./StatusDot";
@@ -60,6 +60,7 @@ import { DeviceIcon, rosterDeviceOf, deviceWakesOnUse, deviceDisplayName } from 
 import { SessionWorktreeChip } from "./SessionWorktreeChip";
 import { TriggerRunList, useTriggerRuns, openRunInStore, type TriggerRun } from "./TriggerRunHistory";
 import { TriggerRowItem, TriggerHomeHeader, SchedChildArrow, SchedHealthDot, SchedFireBadge } from "./TriggerRow";
+import { WAKE_BADGE, RUNNING_BADGE_TONE } from "../lib/triggerBadges";
 import { schedAccent, type SchedAccent } from "../lib/triggerAccent";
 import { cleanUserMessage } from "./sessionMessage";
 import { AgentTypeIcon, formatAgentType } from "./AgentTypeIcon";
@@ -1189,6 +1190,16 @@ function primaryTriggerRow(rows: TriggerRow[]): TriggerRow {
     return (r.task.run_at ?? Infinity) < (best.task.run_at ?? Infinity) ? r : best;
   });
 }
+// The live badge a workflow, background command or monitor child row wears.
+function RunningBadge({ label }: { label: string }) {
+  return (
+    <span data-sv-wake-badge="" className={`ml-auto ${WAKE_BADGE} ${RUNNING_BADGE_TONE}`}>
+      <LivePulseDot />
+      {label}
+    </span>
+  );
+}
+
 const CardBarStrip = memo(function CardBarStrip({ session, rows, activeSessionId, onOpen, onOpenSession }: {
   session: InboxSession;
   rows: TriggerRow[];
@@ -1253,10 +1264,7 @@ const CardBarStrip = memo(function CardBarStrip({ session, rows, activeSessionId
       {primary ? (
         <SchedFireBadge task={primary.task} className="ml-auto" />
       ) : (
-        <span className="ml-auto shrink-0 inline-flex items-center gap-1 justify-center min-w-[46px] px-1 py-0 rounded text-[9px] font-semibold border bg-sol-green/10 text-sol-green border-sol-green/30">
-          <LivePulseDot />
-          running
-        </span>
+        <RunningBadge label="running" />
       )}
     </button>
   );
@@ -1331,10 +1339,7 @@ function WorkflowBar({ session, isActive }: { session: InboxSession; isActive: b
             <div className="flex items-center gap-1.5 min-w-0">
               <span className="text-[9px] font-semibold uppercase tracking-wider text-sol-cyan/70 shrink-0">Workflow</span>
               <span className="text-xs truncate min-w-0 text-gray-400 font-normal">{session.workflow_run_name || "workflow run"}</span>
-              <span className="ml-auto shrink-0 inline-flex items-center gap-1 justify-center min-w-[46px] px-1 py-0 rounded text-[9px] font-semibold border bg-sol-green/10 text-sol-green border-sol-green/30">
-                <LivePulseDot />
-                running
-              </span>
+              <RunningBadge label="running" />
             </div>
             <div className="flex items-baseline gap-1.5 mt-0.5 min-w-0">
               {session.workflow_run_activity ? (
@@ -1408,10 +1413,7 @@ export function MonitorBars({ session, isActive }: {
                       meta lives on the subrow and the persistent chip rides
                       the badge tooltip; the conversation block keeps the chip. */}
                   <ShortcutTooltip label={isBackground ? "Background command — runs until it exits or is stopped, then wakes the agent" : row.persistent ? "Persistent watch — runs until TaskStop or session end" : `One-shot watch${row.timeoutMs !== undefined ? ` — times out after ${fmtDuration(row.timeoutMs)}` : ""}`}>
-                    <span className="ml-auto shrink-0 inline-flex items-center gap-1 justify-center min-w-[46px] px-1 py-0 rounded text-[9px] font-semibold border bg-sol-green/10 text-sol-green border-sol-green/30">
-                      <LivePulseDot />
-                      {isBackground ? "running" : "watching"}
-                    </span>
+                    <RunningBadge label={isBackground ? "running" : "watching"} />
                   </ShortcutTooltip>
                 </div>
                 {/* Subrow: the last thing the watch saw (machine voice), or the
@@ -1573,7 +1575,7 @@ function WakeReasonRowShell({ isActive, family, title, detail, badge, badgeClass
               <span className="text-[9px] font-semibold uppercase tracking-wider text-sol-blue/70 shrink-0">{family}</span>
               <span className="text-xs truncate min-w-0 text-gray-400 font-normal">{title}</span>
               {badge && (
-                <span className={`ml-auto shrink-0 inline-flex items-center gap-1 justify-center min-w-[46px] px-1 py-0 rounded text-[9px] font-semibold border ${badgeClass ?? ""}`}>
+                <span data-sv-wake-badge="" className={`ml-auto ${WAKE_BADGE} ${badgeClass ?? ""}`}>
                   {badge}
                 </span>
               )}
@@ -1867,7 +1869,7 @@ function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen, on
 /** The card-chrome toggles the row draws, as one string. */
 function cardChromeSig(clientState: any): string {
   const ui = clientState?.ui;
-  return `${ui?.show_model_badge === true ? 1 : 0}${ui?.show_agent_icon !== false ? 1 : 0}${ui?.inbox_image_thumbs === true ? 1 : 0}${ui?.personify_sessions === true ? 1 : 0}`;
+  return `${ui?.show_model_badge === true ? 1 : 0}${ui?.show_agent_icon !== false ? 1 : 0}${ui?.inbox_image_thumbs === true ? 1 : 0}${ui?.personify_sessions === true ? 1 : 0}${ui?.show_branch_pill !== false ? 1 : 0}`;
 }
 
 /** Visible-child parent link: the parent's title, so the card wakes on that
@@ -1990,6 +1992,7 @@ export const SessionCard = memo(function SessionCard({
   session = withSafetyBlock(session);
   const tipActions = useTipActions();
   const spawnedById = session.spawned_by_conversation_id || null;
+  const spawnedIsHandoff = isHandoffFrom(session, spawnedById);
   const anchorId = session.is_anchor ? (session.anchor_id ?? null) : null;
   const deviceId = session.owner_device_id;
   const hasDraft = !!session._hasDraft;
@@ -2091,6 +2094,7 @@ export const SessionCard = memo(function SessionCard({
   // begins/ends. The stamp is read at isRowRestarting below.
   const showModelBadge = st.clientState?.ui?.show_model_badge === true;
   const showAgentIcon = st.clientState?.ui?.show_agent_icon !== false;
+  const showBranchPill = st.clientState?.ui?.show_branch_pill !== false;
   // Personification is opt in (session-characters.md S2): a session shows a
   // face once somebody gives it one, or when the workspace asks for every
   // session to have one. A role's standing session always has one — the role
@@ -2383,7 +2387,6 @@ export const SessionCard = memo(function SessionCard({
             )}
             <div className="flex items-center gap-1 flex-shrink-0">
               {showBlockedBadge && <AuthErrorBadge kind={session.pending_api_error_kind} agentType={session.agent_type} />}
-            <HibernatedMarker status={session.agent_status} compact />
               {session.session_error && session.pending_api_error_kind !== "safety" && (
                 <span className="w-1.5 h-1.5 rounded-full bg-sol-red" title={session.session_error} />
               )}
@@ -2838,7 +2841,7 @@ export const SessionCard = memo(function SessionCard({
             </span>
           )}
           <div data-sv-status className="flex items-center gap-1.5 flex-shrink-0 ml-auto">
-            <BranchCodeLink session={session} className="max-w-[110px]" detail={false} />
+            {showBranchPill && <BranchCodeLink session={session} className="max-w-[110px]" detail={false} />}
             <PrStatusChip status={session.pr_status} />
             <BrowserPaneOfferGlyph offer={session.browser_pane_offer} />
             {isFork(session) && (
@@ -2908,7 +2911,6 @@ export const SessionCard = memo(function SessionCard({
               );
             })()}
             {showBlockedBadge && <AuthErrorBadge kind={session.pending_api_error_kind} agentType={session.agent_type} />}
-            <HibernatedMarker status={session.agent_status} compact />
             {session.session_error && session.pending_api_error_kind !== "safety" && (
               <span className="w-1.5 h-1.5 rounded-full bg-sol-red" title={session.session_error} />
             )}
@@ -2961,12 +2963,12 @@ export const SessionCard = memo(function SessionCard({
               e.stopPropagation();
               (onNavigateToSession ?? useInboxStore.getState().navigateToSession)(spawnedById);
             }}
-            title="View the session that spawned this one"
+            title={spawnedIsHandoff ? "View the session this one continues" : "View the session that spawned this one"}
           >
             <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
             </svg>
-            <span className="flex-shrink-0">spawned by</span>
+            <span className="flex-shrink-0">{spawnedIsHandoff ? "handed off from" : "spawned by"}</span>
             <span className="truncate underline underline-offset-2">
               {cleanTitle(spawnedByTitle || "parent session")}
             </span>
