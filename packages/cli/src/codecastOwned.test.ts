@@ -87,10 +87,11 @@ describe("isCodecastOwnedHomePath", () => {
     expect(isCodecastOwnedHomePath(".claude/skills/codecast-orchestrate-fork/SKILL.md")).toBe(false);
   });
 
-  test("the table covers the six hooks plus the statusline hook, the skill, the three agents and .codecast", () => {
+  test("the table covers the seven hooks plus the statusline hook, the skill, the three agents and .codecast", () => {
     expect(CODECAST_OWNED_HOME_PATHS).toContain(".codecast");
     expect(CODECAST_OWNED_HOME_PATHS).toContain(".claude/hooks/codecast-statusline.sh");
-    expect(CODECAST_OWNED_HOME_PATHS.filter((p) => p.startsWith(".claude/hooks/"))).toHaveLength(7);
+    expect(CODECAST_OWNED_HOME_PATHS).toContain(".claude/hooks/codecast-shell-changes.sh");
+    expect(CODECAST_OWNED_HOME_PATHS.filter((p) => p.startsWith(".claude/hooks/"))).toHaveLength(8);
     expect(CODECAST_OWNED_HOME_PATHS.filter((p) => p.startsWith(".claude/agents/"))).toHaveLength(3);
   });
 });

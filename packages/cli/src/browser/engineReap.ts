@@ -27,7 +27,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "../proc.js";
 import {
-  baseSessionKey, engineHome, engineSession, engineStateDir, findEngine, isPaneSession, isRealSession, managedPort, runEngine,
+  baseSessionKey, engineHome, engineSession, engineSessionKey, engineStateDir, findEngine, isPaneSession, isRealSession, managedPort, runEngine,
   type EngineOptions,
 } from "./engine.js";
 import { CdpConnection, type CdpEndpoint } from "./cdp.js";
@@ -167,7 +167,7 @@ export function scanLiveOwners(opts: { registryDir?: string; projectsDir?: strin
 /**
  * Is the agent behind this session key still around? Mirrors engineSession():
  * the key is ownerKey() with `:` and other punctuation turned into `-`, so
- * `env:<uuid>` reads back as `env-<uuid>` and `pane:%12` as `pane--12`.
+ * `env:<uuid>` reads back as `env-<uuid>` and `pane:%12` as `pane-12`.
  */
 export function ownerState(key: string, live: LiveOwners): LivenessVerdict {
   // A real-mode session is the same agent under a suffixed key (engine.ts).
@@ -180,7 +180,7 @@ export function ownerState(key: string, live: LiveOwners): LivenessVerdict {
     // that lacks this pane is an observed exit.
     if (!live.panes) return "unverifiable";
     const flat = (s: string) => s.replace(/[^A-Za-z0-9_-]+/g, "-");
-    for (const p of live.panes) if (flat(p) === pane[1]) return "live";
+    for (const p of live.panes) if (engineSessionKey(`pane:${p}`) === key || flat(p) === pane[1]) return "live";
     return "exited";
   }
   return "unverifiable";

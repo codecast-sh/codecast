@@ -376,15 +376,44 @@ describe("resourceMonitor", () => {
       expect(late.previous("a", NOW + TICK)).toBe(0);
     });
 
-    it("expires unclaimed restored counters with the claim window and prunes live ones the tick did not collect", () => {
+    it("a session missing from a few ticks keeps its counter for the tick that finds it again", () => {
+      // The regression (2026-09-23): after a machine wake, a session drops out
+      // of the process cache for a few ticks while its pid is re-verified, and
+      // the prune deleted its live counter on the first uncollected tick. Every
+      // counter in the fleet restarted from zero at the wake, five hours banked
+      // across the night gone, on a daemon that never restarted.
+      const clock = new AwakeIdleClock();
+      clock.set("a", 5 * 3600_000);
+      clock.prune(new Set(), NOW);                      // tick 1: not collected
+      clock.prune(new Set(), NOW + TICK);               // tick 2: still not collected
+      expect(clock.get("a")).toBe(0);                   // nobody reads a held counter as idle
+      expect(JSON.parse(clock.encode(NOW + TICK)).idle.a).toBe(5 * 3600_000); // but the snapshot keeps it
+      const back = NOW + 2 * TICK;
+      clock.set("a", nextAwakeIdleMs({ prevIdleMs: clock.previous("a", back), cpu: 0, status: "idle", elapsedMs: TICK, sleepSkip: false }));
+      expect(clock.get("a")).toBe(5 * 3600_000 + TICK);
+    });
+
+    it("a session missing for longer than the claim window loses its counter", () => {
+      const clock = new AwakeIdleClock();
+      clock.set("a", 5 * 3600_000);
+      clock.prune(new Set(), NOW);
+      const late = NOW + AWAKE_IDLE_RESTORE_CLAIM_MS;
+      clock.prune(new Set(), late);
+      expect(clock.previous("a", late)).toBe(0);
+      expect(JSON.parse(clock.encode(late)).idle).toEqual({});
+    });
+
+    it("expires an unclaimed restored counter with the claim window, and holds a live one from the tick it went missing", () => {
       const clock = new AwakeIdleClock();
       clock.restore(new Map([["late", 5 * 3600_000]]), NOW);
       clock.set("gone", TICK);
       const after = NOW + AWAKE_IDLE_RESTORE_CLAIM_MS;
       clock.prune(new Set(), after);
-      expect(clock.get("gone")).toBe(0);
-      expect(clock.previous("late", after)).toBe(0);
-      expect(JSON.parse(clock.encode(after)).idle).toEqual({});
+      expect(clock.previous("late", after)).toBe(0);      // restored at NOW, never claimed: expired
+      expect(clock.get("gone")).toBe(0);                   // not collected this tick: not live
+      expect(JSON.parse(clock.encode(after)).idle).toEqual({ gone: TICK }); // but held for its own window
+      clock.prune(new Set(), after + AWAKE_IDLE_RESTORE_CLAIM_MS);
+      expect(JSON.parse(clock.encode(after + AWAKE_IDLE_RESTORE_CLAIM_MS)).idle).toEqual({});
     });
   });
 
