@@ -676,6 +676,60 @@ export const removeInstallation = internalMutation({
   },
 });
 
+/**
+ * Move a team installation to another team, with the repository rows its
+ * webhooks already routed. storeInstallation refuses to re-point a linked
+ * installation, so an install bound to the wrong team (the installer's active
+ * team at the time, before the right team existed) otherwise routes every push
+ * and PR of the account into that team's feed for good. Operator only: run it
+ * page by page, per table, until `done`.
+ */
+const MOVABLE_REPOSITORY_TABLES = {
+  external_events: "by_team_created",
+  commits: "by_team_timestamp",
+  pull_requests: "by_team_id",
+} as const;
+
+export const moveInstallationToTeam = internalMutation({
+  args: {
+    installation_id: v.number(),
+    to_team_id: v.id("teams"),
+    table: v.union(v.literal("installation"), v.literal("external_events"), v.literal("commits"), v.literal("pull_requests")),
+    cursor: v.optional(v.union(v.string(), v.null())),
+    dry: v.optional(v.boolean()),
+    /** Pull request rows carry their files and run past the memory cap at 500. */
+    page_size: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const installation = await ctx.db
+      .query("github_app_installations")
+      .withIndex("by_installation_id", (q) => q.eq("installation_id", args.installation_id))
+      .first();
+    if (!installation) throw new Error(`No installation ${args.installation_id}`);
+    // The installation row is patched last (table "installation"), so the old
+    // team is still readable from it while the rows are being moved.
+    const fromTeam = installation.team_id;
+    if (!fromTeam) throw new Error("Only a team installation can be moved");
+    if (String(fromTeam) === String(args.to_team_id)) return { moved: 0, done: true, cursor: null };
+
+    if (args.table === "installation") {
+      if (!args.dry) await ctx.db.patch(installation._id, { team_id: args.to_team_id, updated_at: Date.now() });
+      return { moved: 1, done: true, cursor: null };
+    }
+
+    const page = await (ctx.db.query(args.table) as any)
+      .withIndex(MOVABLE_REPOSITORY_TABLES[args.table], (q: any) => q.eq("team_id", fromTeam))
+      .paginate({ cursor: args.cursor ?? null, numItems: args.page_size ?? 500 });
+    let moved = 0;
+    for (const row of page.page) {
+      if (!row.repository || !installationCoversRepo(installation, row.repository)) continue;
+      moved++;
+      if (!args.dry) await ctx.db.patch(row._id, { team_id: args.to_team_id });
+    }
+    return { moved, done: page.isDone, cursor: page.continueCursor };
+  },
+});
+
 // ── Resolving an installation for a repository ──
 //
 // An installation is a credential: resolving one is what lets a caller mint a
