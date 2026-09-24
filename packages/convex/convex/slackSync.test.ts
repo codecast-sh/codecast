@@ -312,6 +312,27 @@ describe("edits, deletes, reactions from Slack", () => {
     const bad = await call(applyInboundReaction, ctx, { link_id: LINK, ts: "1700.000100", emoji: "not-emoji", add: true });
     expect(bad.status).toBe("bad_emoji");
   });
+  test("two unmatched Slack people are two reactions, each named as themselves", async () => {
+    const ctx = context(null);
+    await call(applyInboundMessage, ctx, base);
+    const react = (slack_user: string, name: string, add: boolean) => call(applyInboundReaction, ctx, {
+      link_id: LINK, ts: "1700.000100", emoji: "➕", add, slack_user, external_author: { name },
+    });
+    // A row from before reactions carried the Slack person.
+    await react("UDAN", "Dan", true);
+    delete ctx.db._tables.chat_reactions[0].slack_user;
+    expect((await react("UERIN", "Erin", true)).status).toBe("applied");
+    expect((await react("UERIN", "Erin", true)).status).toBe("noop");
+    const rows = ctx.db._tables.chat_reactions;
+    expect(rows.map((r: any) => r.external_author?.name)).toEqual(["Dan", "Erin"]);
+    expect(rows[0].user_id).toBe(rows[1].user_id);
+    // Erin takes hers back; Dan's stays.
+    expect((await react("UERIN", "Erin", false)).status).toBe("applied");
+    expect(ctx.db._tables.chat_reactions.map((r: any) => r.external_author?.name)).toEqual(["Dan"]);
+    // Dan's old row has no Slack id, and his removal still finds it.
+    expect((await react("UDAN", "Dan", false)).status).toBe("applied");
+    expect(ctx.db._tables.chat_reactions.length).toBe(0);
+  });
 });
 
 describe("outbound hooks in chat", () => {
@@ -356,6 +377,7 @@ describe("people mapping", () => {
     await call(applyInboundMessage, ctx, { link_id: LINK, ts: "2000.000001", content: "hi from carol", attachments: [], slack_user: "UCAROL", external_author: { name: "Carol" }, live: false });
     const before = messages(ctx).find((m: any) => m.external?.ts === "2000.000001");
     expect(before.external_author?.name).toBe("Carol");
+    await call(applyInboundReaction, ctx, { link_id: LINK, ts: "2000.000001", emoji: "👀", add: true, slack_user: "UCAROL", external_author: { name: "Carol" } });
     // An admin says Carol IS Bob.
     await call(mapSlackPerson, ctx, { team_id: TEAM, slack_user_id: "UCAROL", codecast_user_id: BOB });
     const row = ctx.db._tables.slack_users.find((r: any) => r.slack_user_id === "UCAROL");
@@ -363,9 +385,13 @@ describe("people mapping", () => {
     expect(row.codecast_user_id).toBe(BOB);
     expect(scheduledNames(ctx)).toContain("slackSync:reattributeSlackPerson");
     await call(reattributeSlackPerson, ctx, { team_id: TEAM, slack_user_id: "UCAROL", link_index: 0 });
+    await call(reattributeSlackPerson, ctx, { team_id: TEAM, slack_user_id: "UCAROL", link_index: 0, reactions: true });
     const after = messages(ctx).find((m: any) => m.external?.ts === "2000.000001");
     expect(after.user_id).toBe(BOB);
     expect(after.external_author).toBeUndefined();
+    const reaction = ctx.db._tables.chat_reactions.find((r: any) => r.slack_user === "UCAROL");
+    expect(reaction.user_id).toBe(BOB);
+    expect(reaction.external_author).toBeUndefined();
     // A refresh with a new email does not undo the choice.
     const refreshed = await call(upsertSlackUser, ctx, { workspace_id: WS, slack_user_id: "UCAROL", team_id: TEAM, profile: { id: "UCAROL", name: "carol", real_name: "Carol", profile: { email: "alice@example.test" } } });
     expect(refreshed.codecast_user_id).toBe(BOB);
@@ -376,9 +402,13 @@ describe("people mapping", () => {
     // Release: back to the Slack name, past lines return to the bridge.
     await call(mapSlackPerson, ctx, { team_id: TEAM, slack_user_id: "UCAROL", codecast_user_id: null });
     await call(reattributeSlackPerson, ctx, { team_id: TEAM, slack_user_id: "UCAROL", link_index: 0 });
+    await call(reattributeSlackPerson, ctx, { team_id: TEAM, slack_user_id: "UCAROL", link_index: 0, reactions: true });
     const released = messages(ctx).find((m: any) => m.external?.ts === "2000.000001");
     expect(released.external_author?.name).toBe("Carol");
     expect(released.user_id).not.toBe(BOB);
+    const releasedReaction = ctx.db._tables.chat_reactions.find((r: any) => r.slack_user === "UCAROL");
+    expect(releasedReaction.external_author?.name).toBe("Carol");
+    expect(releasedReaction.user_id).toBe(released.user_id);
   });
   test("a member may only claim their verified identity or release themselves", async () => {
     const bob = context(BOB);

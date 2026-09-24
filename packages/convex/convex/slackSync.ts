@@ -39,6 +39,7 @@ import {
   tombstoneChatMessage,
   wakeMentionedParties,
 } from "./chat";
+import { externalAuthorValidator } from "./lib/externalAuthor";
 import { resolveChatMentions, slackPersonForHandle, teamRoster } from "./lib/mentionResolve";
 import { isValidEmoji, MAX_CHAT_CONTENT, normalizeChannelName, oneLine } from "./chatText";
 import { botHandle, dmKeyFor, extractMentionHandles, memberHandle } from "@codecast/shared/chat";
@@ -1704,15 +1705,17 @@ export const linkSignedInPerson = internalMutation({
   },
 });
 
-// Re-author every inbound line by one Slack person across the team's mirrored
-// channels. One channel page per run, so a big room never exceeds one
-// mutation's budget; a mapping change on a quiet person costs one run.
+// Re-author every inbound line and reaction by one Slack person across the
+// team's mirrored channels. One channel page per run, so a big room never
+// exceeds one mutation's budget; a mapping change on a quiet person costs a
+// run for the lines and one for the reactions in each channel.
 export const reattributeSlackPerson = internalMutation({
   args: {
     team_id: v.id("teams"),
     slack_user_id: v.string(),
     link_index: v.number(),
     cursor: v.optional(v.string()),
+    reactions: v.optional(v.boolean()),
   },
   handler: async (ctx, args): Promise<void> => {
     const install = await installationForTeam(ctx, args.team_id);
@@ -1725,11 +1728,45 @@ export const reattributeSlackPerson = internalMutation({
       .collect();
     const link = links[args.link_index];
     if (!link) return;
+    const teammate = row.codecast_user_id ?? null;
+    const next = async (isDone: boolean, cursor: string) => {
+      if (!isDone) {
+        await ctx.scheduler.runAfter(0, internal.slackSync.reattributeSlackPerson, { ...args, cursor });
+      } else if (!args.reactions) {
+        await ctx.scheduler.runAfter(0, internal.slackSync.reattributeSlackPerson, { ...args, cursor: undefined, reactions: true });
+      } else if (args.link_index + 1 < links.length) {
+        await ctx.scheduler.runAfter(0, internal.slackSync.reattributeSlackPerson, { team_id: args.team_id, slack_user_id: args.slack_user_id, link_index: args.link_index + 1 });
+      }
+    };
+    if (args.reactions) {
+      const page = await ctx.db
+        .query("chat_reactions")
+        .withIndex("by_channel", (q: any) => q.eq("channel_id", link.chat_channel_id))
+        .paginate({ numItems: 300, cursor: args.cursor ?? null });
+      const owner = teammate ?? (await ensureBridgeUser(ctx, install));
+      const touched = new Set<Id<"chat_messages">>();
+      for (const r of page.page) {
+        if (r.slack_user !== args.slack_user_id) continue;
+        const settled = teammate ? !r.external_author : !!r.external_author;
+        if (r.user_id.toString() === owner.toString() && settled) continue;
+        // The teammate may already hold this emoji here from codecast itself:
+        // one person, one reaction.
+        const twins = teammate ? await ctx.db
+          .query("chat_reactions")
+          .withIndex("by_message_user_emoji", (q: any) => q.eq("message_id", r.message_id).eq("user_id", teammate).eq("emoji", r.emoji))
+          .collect() : [];
+        if (twins.some((t) => t._id !== r._id)) await ctx.db.delete(r._id);
+        else await ctx.db.patch(r._id, { user_id: owner, external_author: teammate ? undefined : slackPersonFace(row) });
+        touched.add(r.message_id);
+      }
+      for (const id of touched) await patchChat(ctx, id, {});
+      await next(page.isDone, page.continueCursor);
+      return;
+    }
     const page = await ctx.db
       .query("chat_messages")
       .withIndex("by_channel_external_ts", (q: any) => q.eq("channel_id", link.chat_channel_id))
       .paginate({ numItems: 300, cursor: args.cursor ?? null });
-    const teammate = row.codecast_user_id ?? null;
     let bridge: Id<"users"> | null = null;
     for (const m of page.page) {
       if (m.external?.provider !== "slack" || m.external.direction !== "inbound" || m.external.user !== args.slack_user_id) continue;
@@ -1738,19 +1775,22 @@ export const reattributeSlackPerson = internalMutation({
         await ctx.db.patch(m._id, { user_id: teammate, external_author: undefined });
       } else {
         bridge ??= await ensureBridgeUser(ctx, install);
-        await ctx.db.patch(m._id, {
-          user_id: bridge,
-          external_author: { name: row.name, handle: row.handle ?? undefined, avatar_url: row.avatar_url ?? undefined, is_bot: row.is_bot || undefined },
-        });
+        await ctx.db.patch(m._id, { user_id: bridge, external_author: slackPersonFace(row) });
       }
     }
-    if (!page.isDone) {
-      await ctx.scheduler.runAfter(0, internal.slackSync.reattributeSlackPerson, { ...args, cursor: page.continueCursor });
-    } else if (args.link_index + 1 < links.length) {
-      await ctx.scheduler.runAfter(0, internal.slackSync.reattributeSlackPerson, { team_id: args.team_id, slack_user_id: args.slack_user_id, link_index: args.link_index + 1 });
-    }
+    await next(page.isDone, page.continueCursor);
   },
 });
+
+// The name and face an unmatched Slack person wears on what they did here.
+function slackPersonFace(person: { name: string; handle?: string | null; avatar_url?: string | null; is_bot?: boolean | null }) {
+  return {
+    name: person.name,
+    handle: person.handle ?? undefined,
+    avatar_url: person.avatar_url ?? undefined,
+    is_bot: person.is_bot || undefined,
+  };
+}
 
 // Who a Slack line is BY, in chat's terms. A Slack person whose email matches a
 // teammate IS that teammate, when the link allows it; anyone else speaks through
@@ -1763,14 +1803,7 @@ function inboundAuthorFields(person: ResolvedPerson | null, link: Link): {
   if (!person) return {};
   const teammate = mappedTeammate(person, link);
   if (teammate) return { author_user_id: teammate };
-  return {
-    external_author: {
-      name: person.name,
-      handle: person.handle ?? undefined,
-      avatar_url: person.avatar_url ?? undefined,
-      is_bot: person.is_bot || undefined,
-    },
-  };
+  return { external_author: slackPersonFace(person) };
 }
 
 export async function buildInboundResolver(
@@ -2015,12 +2048,15 @@ export const processEvent = internalAction({
         const emoji = shortcodeToEmoji(String(event.reaction ?? ""));
         if (!emoji) return await finish("skipped", `unknown_emoji:${event.reaction}`);
         const person = await resolvePerson(ctx, install, String(event.user));
+        const author = inboundAuthorFields(person, link);
         const res = await ctx.runMutation(internal.slackSync.applyInboundReaction, {
           link_id: link._id,
           ts: String(event.item?.ts ?? ""),
           emoji,
           add: type === "reaction_added",
-          user_id: mappedTeammate(person, link) ?? undefined,
+          slack_user: person.slack_user_id,
+          user_id: author.author_user_id,
+          external_author: author.external_author,
         });
         await finish(res.status === "applied" ? "done" : "skipped", res.status === "applied" ? undefined : res.status);
         return;
@@ -2094,12 +2130,7 @@ export const applyInboundMessage = internalMutation({
     broadcast: v.optional(v.boolean()),
     slack_user: v.optional(v.string()),
     author_user_id: v.optional(v.id("users")),
-    external_author: v.optional(v.object({
-      name: v.string(),
-      handle: v.optional(v.string()),
-      avatar_url: v.optional(v.string()),
-      is_bot: v.optional(v.boolean()),
-    })),
+    external_author: v.optional(externalAuthorValidator),
     content: v.string(),
     attachments: v.array(v.object({
       storage_id: v.id("_storage"),
@@ -2251,7 +2282,9 @@ export const applyInboundReaction = internalMutation({
     ts: v.string(),
     emoji: v.string(),
     add: v.boolean(),
+    slack_user: v.optional(v.string()),
     user_id: v.optional(v.id("users")),
+    external_author: v.optional(externalAuthorValidator),
   },
   handler: async (ctx, args) => {
     const link = await ctx.db.get(args.link_id);
@@ -2262,10 +2295,16 @@ export const applyInboundReaction = internalMutation({
     const install = await ctx.db.get(link.installation_id);
     if (!install) return { status: "no_install" };
     const userId = args.user_id ?? (await ensureBridgeUser(ctx, install));
-    const existing = await ctx.db
+    const held = await ctx.db
       .query("chat_reactions")
       .withIndex("by_message_user_emoji", (q: any) => q.eq("message_id", row._id).eq("user_id", userId).eq("emoji", args.emoji))
-      .first();
+      .collect();
+    // A teammate is one person however many ways they reacted. The bridge
+    // speaks for everyone unmatched, so its rows are told apart by the Slack
+    // person; a removal may also clear a row written before rows carried one.
+    const existing = args.user_id
+      ? held[0]
+      : held.find((r) => r.slack_user === args.slack_user) ?? (args.add ? undefined : held.find((r) => !r.slack_user));
     if (args.add && !existing) {
       await ctx.db.insert("chat_reactions", {
         message_id: row._id,
@@ -2273,6 +2312,8 @@ export const applyInboundReaction = internalMutation({
         user_id: userId,
         emoji: args.emoji,
         created_at: Date.now(),
+        ...(args.slack_user ? { slack_user: args.slack_user } : {}),
+        ...(args.user_id ? {} : { external_author: args.external_author }),
       });
       await patchChat(ctx, row._id, {});
       return { status: "applied" };
@@ -2283,6 +2324,90 @@ export const applyInboundReaction = internalMutation({
       return { status: "applied" };
     }
     return { status: "noop" };
+  },
+});
+
+// Reactions mirrored before rows carried the Slack person sit under the bridge
+// with nobody named, one row standing for every unmatched person with that
+// emoji. Slack still knows who they were: ask it for each such message, write
+// the reactions again through the live path, then drop the nameless rows. A
+// message Slack will not answer for keeps its rows.
+export const bridgeReactionsToRepair = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const out: Array<{ link_id: Id<"slack_channel_links">; ts: string; reaction_ids: Array<Id<"chat_reactions">> }> = [];
+    for (const install of await ctx.db.query("slack_installations").take(500)) {
+      if (!install.bridge_user_id || !install.team_id) continue;
+      const links = await ctx.db
+        .query("slack_channel_links")
+        .withIndex("by_team", (q: any) => q.eq("team_id", install.team_id))
+        .collect();
+      for (const link of links) {
+        const byTs = new Map<string, Array<Id<"chat_reactions">>>();
+        const rows = await ctx.db
+          .query("chat_reactions")
+          .withIndex("by_channel", (q: any) => q.eq("channel_id", link.chat_channel_id))
+          .collect();
+        for (const r of rows) {
+          if (r.slack_user || r.user_id.toString() !== install.bridge_user_id.toString()) continue;
+          const message = await ctx.db.get(r.message_id);
+          const ts = message?.external?.ts;
+          if (!ts) continue;
+          byTs.set(ts, [...(byTs.get(ts) ?? []), r._id]);
+        }
+        for (const [ts, reaction_ids] of byTs) out.push({ link_id: link._id, ts, reaction_ids });
+      }
+    }
+    return out;
+  },
+});
+
+export const dropReactions = internalMutation({
+  args: { reaction_ids: v.array(v.id("chat_reactions")) },
+  handler: async (ctx, args) => {
+    const touched = new Set<Id<"chat_messages">>();
+    for (const id of args.reaction_ids) {
+      const r = await ctx.db.get(id);
+      if (!r) continue;
+      await ctx.db.delete(id);
+      touched.add(r.message_id);
+    }
+    for (const id of touched) await patchChat(ctx, id, {});
+  },
+});
+
+export const repairBridgeReactions = internalAction({
+  args: { dry: v.optional(v.boolean()) },
+  handler: async (ctx, args): Promise<{ messages: number; rewritten: number; kept: number; people: string[] }> => {
+    const todo: Array<{ link_id: Id<"slack_channel_links">; ts: string; reaction_ids: Array<Id<"chat_reactions">> }> =
+      await ctx.runQuery(internal.slackSync.bridgeReactionsToRepair, {});
+    let rewritten = 0;
+    let kept = 0;
+    const people = new Set<string>();
+    for (const item of todo) {
+      const c = await ctx.runQuery(internal.slackSync.linkContext, { link_id: item.link_id });
+      if (!c?.install) { kept += item.reaction_ids.length; continue; }
+      const resp = await slackApi(c.install.bot_token, "reactions.get", { channel: c.link.slack_channel_id, timestamp: item.ts, full: "true" });
+      if (!resp.ok) { kept += item.reaction_ids.length; continue; }
+      for (const group of (resp.message?.reactions ?? []) as Array<{ name: string; users?: string[] }>) {
+        const emoji = shortcodeToEmoji(group.name);
+        if (!emoji) continue;
+        for (const user of group.users ?? []) {
+          if (user === c.install.bot_user_id) continue;
+          const person = await resolvePerson(ctx, c.install, user);
+          const author = inboundAuthorFields(person, c.link);
+          people.add(`${emoji} ${person.name}`);
+          if (args.dry) continue;
+          await ctx.runMutation(internal.slackSync.applyInboundReaction, {
+            link_id: c.link._id, ts: item.ts, emoji, add: true,
+            slack_user: person.slack_user_id, user_id: author.author_user_id, external_author: author.external_author,
+          });
+        }
+      }
+      if (!args.dry) await ctx.runMutation(internal.slackSync.dropReactions, { reaction_ids: item.reaction_ids });
+      rewritten += item.reaction_ids.length;
+    }
+    return { messages: todo.length, rewritten, kept, people: [...people] };
   },
 });
 

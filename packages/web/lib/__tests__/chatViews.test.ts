@@ -171,6 +171,16 @@ describe("foldReactions", () => {
     expect(folded[0].names).toEqual(["Maya"]);
     expect(folded[0].mine).toBe(false);
   });
+
+  it("names an unmatched Slack reactor as themselves and counts each one, not the bridge", () => {
+    const rows: ChatReactionRow[] = [
+      { _id: "a", message_id: "m1", user_id: "bridge", emoji: "➕", created_at: 1, slack_user: "UDAN", external_author: { name: "Dan" } },
+      { _id: "b", message_id: "m1", user_id: "bridge", emoji: "➕", created_at: 2, slack_user: "UERIN", external_author: { name: "Erin" } },
+      { _id: "c", message_id: "m1", user_id: "u2", emoji: "➕", created_at: 3 },
+    ];
+    const folded = foldReactions(rows, "u1", (id) => (id === "bridge" ? "Union (Slack)" : memberName(byId.get(id))));
+    expect(folded).toEqual([{ emoji: "➕", count: 3, mine: false, names: ["Dan", "Erin", "Maya"] }]);
+  });
 });
 
 describe("sessionAuthorFor", () => {

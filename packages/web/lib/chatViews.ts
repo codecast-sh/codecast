@@ -473,25 +473,29 @@ export function toMessageViews(rows: ChatMessageRow[], ctx: ViewContext): ChatMe
 }
 
 /** Fold one message's reaction rows into pills. Same distinct-user counting as
- *  the store selector; kept here for callers that already hold the rows. */
+ *  the store selector; kept here for callers that already hold the rows. A
+ *  Slack person with no codecast match reacts through the workspace bridge, so
+ *  they count and are named as themselves, never as the bridge. */
 export function foldReactions(
   rows: ChatReactionRow[],
   viewerId: string,
   nameOf?: (userId: string) => string | undefined,
 ): ChatReaction[] {
-  const byEmoji = new Map<string, { users: Set<string>; first: number }>();
+  const byEmoji = new Map<string, { people: Map<string, () => string | undefined>; first: number }>();
   for (const row of rows) {
     let entry = byEmoji.get(row.emoji);
-    if (!entry) byEmoji.set(row.emoji, (entry = { users: new Set(), first: row.created_at }));
-    entry.users.add(row.user_id);
+    if (!entry) byEmoji.set(row.emoji, (entry = { people: new Map(), first: row.created_at }));
+    const outside = row.external_author;
+    if (outside) entry.people.set(`slack:${row.slack_user ?? outside.name}`, () => outside.name);
+    else entry.people.set(row.user_id, () => nameOf?.(row.user_id));
     if (row.created_at < entry.first) entry.first = row.created_at;
   }
   return [...byEmoji.entries()]
     .sort((a, b) => a[1].first - b[1].first)
     .map(([emoji, entry]) => ({
       emoji,
-      count: entry.users.size,
-      mine: entry.users.has(viewerId),
-      ...(nameOf ? { names: [...entry.users].map((u) => nameOf(u) ?? "Someone") } : {}),
+      count: entry.people.size,
+      mine: entry.people.has(viewerId),
+      ...(nameOf ? { names: [...entry.people.values()].map((name) => name() ?? "Someone") } : {}),
     }));
 }
