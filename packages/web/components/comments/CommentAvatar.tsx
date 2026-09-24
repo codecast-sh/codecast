@@ -61,7 +61,10 @@ export function CommentAvatar({
       src={image}
       alt={name}
       title={name}
-      className={`cc-cmt-avatar shrink-0 rounded-full object-cover ring-1 ring-sol-border/40 ${className}`}
+      // max-w-none: preflight caps every img at 100% of its parent, and a
+      // parent sized from this face (a lone reply face with a negative margin
+      // measures 12px) would squeeze the 16px circle into an oval.
+      className={`cc-cmt-avatar shrink-0 max-w-none rounded-full object-cover ring-1 ring-sol-border/40 ${className}`}
       style={{ width: size, height: size }}
       fallback={initialsFallback}
     />
