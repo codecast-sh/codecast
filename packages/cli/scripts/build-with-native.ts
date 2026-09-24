@@ -32,6 +32,24 @@ const target = args.find((arg) => arg.startsWith("--target="))?.split("=")[1];
  * splitting under `--compile` would cost the win silently.
  */
 const SPLIT_COMPILED_BUILDS = args.includes("--compile") && !args.includes("--splitting");
+
+/**
+ * Files the CLI starts as a `new Worker`. Bun bundles a worker only when the
+ * build names it as an entrypoint; otherwise the compiled binary has no such
+ * module and the worker dies with `ModuleNotFound resolving
+ * "/$bunfs/root/<name>"`. Every file here sits in `src/` beside `main.ts`.
+ * `--root` pins the build root to `src/`, so the worker lands at the root of
+ * the bundle, which is where `import.meta.url` points from any chunk. Without
+ * it bun derives the root from how the entry paths are written, and a relative
+ * `src/main.ts` beside an absolute worker path moves it up a level. Callers
+ * name the worker by its built `.js` name, which also resolves to the `.ts`
+ * file from source. `workerEntries.test.ts` holds every `new Worker` in `src/`
+ * to this list and compiles the same layout in miniature.
+ */
+export const WORKER_ENTRIES = ["opencodeStorage.worker.ts"];
+export function workerBuildArgs(srcDir: string, entries: string[] = WORKER_ENTRIES): string[] {
+  return [...entries.map((name) => path.join(srcDir, name)), "--root", srcDir];
+}
 const needsMac = needsMacHelper(target);
 /**
  * Whether this build embeds the macOS helpers (the browser icon and the
@@ -188,7 +206,7 @@ if (import.meta.main) {
     } else {
       fs.writeFileSync(COMPUTER_HELPER_PAYLOAD, "");
     }
-    run(process.execPath, ["build", ...args, ...(SPLIT_COMPILED_BUILDS ? ["--splitting"] : []), "--define", `CODECAST_MAC_ICON_HELPER=${JSON.stringify(helper)}`]);
+    run(process.execPath, ["build", ...args, ...workerBuildArgs(path.join(import.meta.dir, "../src")), ...(SPLIT_COMPILED_BUILDS ? ["--splitting"] : []), "--define", `CODECAST_MAC_ICON_HELPER=${JSON.stringify(helper)}`]);
     if (SPLIT_COMPILED_BUILDS) dropChunkSourcemaps();
   } finally {
     // Leave the tracked placeholder empty again: the payload belongs in the
