@@ -107,6 +107,7 @@ import {
   collectInboxOverlayDeps,
   overlaysAffecting,
   convHasPendingSend,
+  pendingRowsUnsettled,
   isInterruptControlMessage,
   sessionsWithPendingSend,
   freshReviveRequestIds,
@@ -848,7 +849,13 @@ export type Message = {
   _isQueued?: true;
   _clientId?: string;
   _isFailed?: true;
-  _isSettledControl?: true;
+  // The server holds this send (its transcript row exists, or a control line
+  // was consumed), but this window has not seen the echo yet. A settled row
+  // still renders, in place, until the echo lands in messages[] and
+  // prunePendingEchoes retires it; nothing redrives or counts it as in flight.
+  // Server evidence alone never removes a row: a sent message must never
+  // vanish before its echo is on screen.
+  _isSettled?: true;
   _isLocalQueue?: true;
   _queuePosition?: number;
   // The exact content the durable send dispatched for this row (mention
@@ -2629,11 +2636,11 @@ export function reconcilePendingSendForSession(
   let changed = false;
   const kept = pending.filter((m) => m._isLocalQueue || !pendingSendEchoed(m, localMessages ?? []));
   for (const message of kept) {
-    if (message._isFailed || message._isSettledControl || message._isLocalQueue) continue;
+    if (message._isFailed || message._isSettled || message._isLocalQueue) continue;
     if (!isInterruptControlMessage(message.content) && !/^\/(?:model|effort)(?:\s|$)/.test(message.content ?? "")) continue;
     if (Date.now() - message.timestamp < PENDING_SEND_PRUNE_GRACE_MS) continue;
     if (!pendingSendConsumed(session, message._sentBaselineTs ?? message.timestamp)) continue;
-    message._isSettledControl = true;
+    message._isSettled = true;
     delete message._isOptimistic;
     delete message._isQueued;
     changed = true;
@@ -5330,6 +5337,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   markOptimisticAsQueued: (convId: string, content: string) => void;
   markOptimisticAsFailed: (convId: string, clientId: string) => void;
   removeOptimisticMessage: (convId: string, clientId: string) => void;
+  settleOptimisticMessage: (convId: string, clientId: string) => void;
   // Swap an optimistic message's still-uploading images for their resolved
   // server records (drops the spinner) once a backgrounded upload completes.
   resolvePendingUploads: (convId: string, clientId: string, images: Array<OptimisticImage>) => void;
@@ -5886,14 +5894,13 @@ function stripImageRef(s: string): string {
   return s.replace(/\[Image[:\s][^\]]*\]/gi, "").trim();
 }
 
-// The newest message the view would render: the conversation view sorts the
-// server tail and the unconfirmed pending lines together by timestamp, so the
-// last thing on screen is the newer of the two tails.
+// The newest message the view would render: the conversation view puts every
+// unconfirmed pending line after the server tail (mergeUnconfirmedMessages in
+// hooks/useConversationMessages), so the last thing on screen is the pending
+// tail when there is one, else the server tail.
 function lastTimelineMessage(draft: Draft, convId: string): Message | undefined {
-  const server = draft.messages[convId]?.at(-1);
   const pending = draft.pendingMessages[convId]?.findLast((m) => !m._isLocalQueue && !m._isFailed);
-  if (!server || !pending) return server ?? pending;
-  return pending.timestamp >= server.timestamp ? pending : server;
+  return pending ?? draft.messages[convId]?.at(-1);
 }
 
 function appendOptimisticMessage(draft: Draft, convId: string, content: string, images?: OptimisticImage[], clientId?: string): string {
@@ -6715,7 +6722,7 @@ export function pendingRowSendArgs(message: Message): { content: string; imageId
 function redrivePendingMessagesFor(convexId: string, messages?: Message[]): void {
   const store = useInboxStore.getState();
   for (const message of messages ?? store.pendingMessages[convexId] ?? []) {
-    if (message._isFailed || message._isSettledControl || message._isLocalQueue) continue;
+    if (message._isFailed || message._isSettled || message._isLocalQueue) continue;
     const clientId = message._clientId || message._id;
     const requestedAt = recentlyRequestedPendingMessages.get(clientId);
     if (requestedAt && Date.now() - requestedAt < PENDING_MESSAGE_REDRIVE_COALESCE_MS) continue;
@@ -8605,7 +8612,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       // to drop a row on evidence this window doesn't have.
       if (!(id in this.sessions) && !(id in this.conversations)) continue;
       if (this.currentSessionId === id) continue;
-      if (this.pendingMessages[id]?.length) continue;
+      if (pendingRowsUnsettled(this.pendingMessages[id])) continue;
       if (id in this.pendingSessionCreates) continue;
       removed.push(id);
       delete this.sessions[id];
@@ -8643,7 +8650,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     for (const id of ids) {
       if (collection === "sessions") {
         if (this.currentSessionId === id) continue;
-        if (this.pendingMessages[id]?.length) continue;
+        if (pendingRowsUnsettled(this.pendingMessages[id])) continue;
         if (id in this.pendingSessionCreates) continue;
         delete this.sessions[id];
         delete this.conversations[id];
@@ -10605,6 +10612,21 @@ const inboxStoreConfig = (set: any, get: any) => ({
     else this.pendingMessages[convId] = kept;
   }),
 
+  // The server confirmed this send (its transcript row exists). The bubble is
+  // NOT removed: this window's tail may lag the server by minutes under load
+  // (33 minutes on 2026-09-23), and a removed bubble with no echo on screen
+  // is a message that vanished. The row loses its in-flight look and its
+  // redrive, and stays in place until prunePendingEchoes sees the echo land.
+  settleOptimisticMessage: sync(function (this: Draft, convId: string, clientId: string) {
+    const pending = this.pendingMessages[convId];
+    if (!pending) return;
+    this.pendingMessages[convId] = pending.map((m) => {
+      if ((m._clientId !== clientId && m._id !== clientId) || m._isSettled) return m;
+      const { _isOptimistic, _isQueued, ...rest } = m;
+      return { ...rest, _isSettled: true as const };
+    });
+  }),
+
   // Lands settled uploads on the row by client id, under whichever key holds it
   // now: the upload task captured the STUB id at send time, and a parked create
   // may have rekeyed the row to its real id while the upload was in flight. A
@@ -10980,7 +11002,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (!isConvexId(realId)) return null;
     const pending = get().pendingMessages[realId] || [];
     for (const m of pending as any[]) {
-      if (m._isLocalQueue || m._isSettledControl || m.images?.some((image: any) => image.uploading)) continue;
+      if (m._isLocalQueue || m._isSettled || m.images?.some((image: any) => image.uploading)) continue;
       // Prefer the recorded dispatch bytes (see redrivePendingMessagesFor) —
       // a row that already sent once must replay identically to dedupe.
       const content = m._dispatchContent || m.content || "";
@@ -10998,7 +11020,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     for (const [convId, messages] of Object.entries(get().pendingMessages) as [string, Message[]][]) {
       if (!isConvexId(convId)) continue;
       for (const message of messages) {
-        if (message._isFailed || message._isSettledControl || message._isLocalQueue) continue;
+        if (message._isFailed || message._isSettled || message._isLocalQueue) continue;
         await new Promise<void>((resolve) => setTimeout(resolve, 0));
         const state = get();
         if (state.currentUser?._id !== userId) return;

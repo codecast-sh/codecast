@@ -118,7 +118,7 @@ import { IdentityFace } from "./identity";
 import { CharacterPicker } from "./identity/CharacterPicker";
 import { identityRowOf, type IdentityRow } from "../lib/sessionIdentity";
 import { buildMentionItems } from "../hooks/useMentionQuery";
-import { isActiveAgentStatus, type LiveAgentStatus } from "../lib/pendingBanner";
+import { isActiveAgentStatus, serverPendingBubbleVisible, type LiveAgentStatus } from "../lib/pendingBanner";
 import { sessionStartupState, SESSION_STARTING_GRACE_MS } from "../lib/sessionLifecycle";
 import { messageRowKey, uniqueRowKeys } from "../lib/messageRowKey";
 import { messageAgentTypes, sameMessageAuthor } from "../lib/messageAuthors";
@@ -1092,12 +1092,14 @@ const ConversationViewInner = (
     // This is the ONLY merge point — the store never mixes pending into messages[].
     const seen = new Set<string>();
     const seenContent = new Set<string>();
+    let newestServerTs = 0;
     for (const item of base) {
       if (item.type === 'message') {
         const m = item.data as any;
         seen.add(m._id);
         if (m.client_id) seen.add(m.client_id);
         if (m.role === 'user' && m.content) seenContent.add(normalizePendingContent(m.content));
+        if (!m._isOptimistic && !m._isQueued && !m._isFailed && m.timestamp > newestServerTs) newestServerTs = m.timestamp;
       }
     }
     const toAdd: any[] = pendingMsgs.filter((m: any) => {
@@ -1117,7 +1119,10 @@ const ConversationViewInner = (
     // its content isn't already on screen as a synced message or a local optimistic copy
     // (the sender's own browser already shows it via addOptimisticMessage). Dropped the moment
     // the real JSONL echo lands, since that fills seenContent with the same normalized key.
-    if (serverPending && serverPending.status !== 'delivered' && serverPending.status !== 'cancelled') {
+    // A delivered row keeps its bubble (as a plain message) while this window's transcript
+    // still ends before the send: the echo is on the server but not here yet, and a message
+    // that vanished until the tail caught up is the bug (serverPendingBubbleVisible).
+    if (serverPending && serverPendingBubbleVisible(serverPending, { newestServerTs, atLiveTail: !hasMoreBelow })) {
       const norm = normalizePendingContent(serverPending.content);
       if (norm && !seenContent.has(norm)) {
         toAdd.push({
@@ -1125,14 +1130,14 @@ const ConversationViewInner = (
           role: 'user',
           content: serverPending.content,
           timestamp: serverPending.created_at,
-          _isOptimistic: true,
+          ...(serverPending.status === 'delivered' ? {} : { _isOptimistic: true }),
           _serverPendingStatus: serverPending.status,
           _serverPendingReason: serverPending.hold_reason,
         });
       }
     }
     return mergeTimelineMessages(base, toAdd) as TimelineItem[];
-  }, [messages, allCommits, allPullRequests, conversationExternalEvents, pendingMsgs, serverPending, pendingConvId]);
+  }, [messages, allCommits, allPullRequests, conversationExternalEvents, pendingMsgs, serverPending, pendingConvId, hasMoreBelow]);
   timelineRef.current = timeline;
   scrollCtxRef.current = { messageCount: conversation?.message_count || messages.length, messagesLen: messages.length, timelineLen: timeline.length, loadedStartIndex: conversation?.loaded_start_index ?? 0 };
 

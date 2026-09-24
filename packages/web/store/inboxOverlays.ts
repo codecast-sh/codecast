@@ -67,8 +67,16 @@ export const TRIAGE_PENDING_FIELDS: readonly string[] = TRIAGE_CONVERSATION_FIEL
 // echoes it back (which prunes it) or it fails. This is the durable,
 // persisted, local-first signal that we've sent something and are waiting to
 // confirm delivery — independent of whether ConversationView is mounted.
-export function convHasPendingSend(pending?: Array<{ _isFailed?: boolean; _isSettledControl?: boolean; _isLocalQueue?: boolean; content?: string }>): boolean {
-  return !!pending?.some((m) => !m._isFailed && !m._isSettledControl && !m._isLocalQueue && !isInterruptControlMessage(m.content));
+export function convHasPendingSend(pending?: Array<{ _isFailed?: boolean; _isSettled?: boolean; _isLocalQueue?: boolean; content?: string }>): boolean {
+  return !!pending?.some((m) => !m._isFailed && !m._isSettled && !m._isLocalQueue && !isInterruptControlMessage(m.content));
+}
+
+// Whether a conversation still holds a row this window alone knows about: an
+// unsent, in-flight or failed send. A settled row is on the server already,
+// so dropping the conversation's cache loses nothing. The prunes that skip a
+// conversation with pending input gate on this, not on the map's length.
+export function pendingRowsUnsettled(pending?: Array<{ _isSettled?: boolean }>): boolean {
+  return !!pending?.some((m) => !m._isSettled);
 }
 
 // Conversation ids that currently have an unconfirmed outbound message.
