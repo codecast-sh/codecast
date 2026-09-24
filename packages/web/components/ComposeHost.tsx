@@ -1,11 +1,8 @@
-import { lazy, Suspense, useRef } from "react";
+import { Suspense, useRef } from "react";
 import { useInboxStore } from "../store/inboxStore";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useFlipAnimation } from "../hooks/useFlipAnimation";
-
-const ComposeView = lazy(() =>
-  import("./ComposeView").then((module) => ({ default: module.ComposeView })),
-);
+import { composeViewComponent } from "../lib/composeViewLoader";
 
 /**
  * Hosts every open new-session composer (store/composeSlice.ts). The center
@@ -30,6 +27,7 @@ export function ComposeHost() {
 
   if (composes.length === 0) return null;
   const hasModal = composes.some((c) => c.mode === "modal");
+  const ComposeView = composeViewComponent();
   return (
     <div ref={containerRef} className="fixed inset-x-0 bottom-0 z-[200] flex flex-row-reverse items-end gap-3 px-4 pointer-events-none">
       {hasModal && (

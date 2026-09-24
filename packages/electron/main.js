@@ -53,6 +53,7 @@ for (const dir of ["downloads", "temp"]) {
 }
 
 const { pickWindow, chooseLeader, BannerGate } = require("./notificationRouter");
+const { createPaletteFace } = require("./paletteFace");
 // The desktop's apps (Chat, Work): which routes live in a window of their own.
 // An ES module the web bundle imports too, so both sides read one table.
 const { appForRoute, placeRoute, isDesktopApp, DESKTOP_APPS } = require("./appWindows.mjs");
@@ -1722,6 +1723,7 @@ shellIpc.on("voice-mirror", (e, payload) => {
   }
 });
 
+
 // ── The float, popped out ──────────────────────────────────────────────────
 //
 // The face row lives in the app's header until the person pops it out; then
@@ -2038,6 +2040,12 @@ function createPaletteWindow() {
     }
   });
 
+  // A reload (deploy, stale chunk) boots the page on search; the face it had
+  // is restored if the palette is open or opening.
+  win.webContents.on("did-navigate", () => {
+    if (paletteWindow === win) paletteFace.newDocument();
+  });
+
   win.on("blur", () => {
     hidePalette();
   });
@@ -2097,37 +2105,22 @@ function revealPaletteWindow() {
   paletteWindow.focus();
 }
 
-// Switch the palette window to the requested face (compose/search), then reveal
-// it only once the renderer acks it has painted that face — so the previous face
-// never flashes before the swap. The fallback timer covers older web builds (no
-// ack) and any missed ack, so the window can't get stuck hidden.
-let revealFallbackTimer = null;
-let pendingRevealMode = null; // "compose" | "search" | null
-function showPaletteFace(channel) {
+// The face the palette paints, and when the window may show it: see paletteFace.js.
+const paletteFace = createPaletteFace({
+  send: (channel) => paletteWindow?.webContents.send(channel),
+  reveal: () => revealPaletteWindow(),
+  isVisible: () => !!paletteWindow && paletteWindow.isVisible(),
+});
+
+function showPaletteFace(face) {
   if (!paletteWindow) return;
   placePaletteWindow();
-  pendingRevealMode = channel === "compose-show" ? "compose" : "search";
-  clearTimeout(revealFallbackTimer);
-  const waitingFor = pendingRevealMode;
-  revealFallbackTimer = setTimeout(() => finishReveal(waitingFor), 200);
-  paletteWindow.webContents.send(channel);
-}
-
-function finishReveal(mode) {
-  if (!pendingRevealMode) return;
-  // Reveal only when the renderer painted the face we asked for, so a stale ack
-  // for the previous face can't reveal it mid-swap. `mode` undefined = older web
-  // build whose ack carries no face → trust it (best effort).
-  if (mode && mode !== pendingRevealMode) return;
-  pendingRevealMode = null;
-  clearTimeout(revealFallbackTimer);
-  revealFallbackTimer = null;
-  revealPaletteWindow();
+  paletteFace.show(face);
 }
 
 function showPalette() {
   if (!paletteWindow) return;
-  showPaletteFace("palette-show");
+  showPaletteFace("search");
 }
 
 // Summon the same palette window into new-session compose mode. Used by the
@@ -2136,19 +2129,17 @@ function showCompose() {
   if (!paletteWindow) {
     createPaletteWindow();
     paletteWindow.once("ready-to-show", () => {
-      showPaletteFace("compose-show");
+      showPaletteFace("compose");
     });
     return;
   }
-  showPaletteFace("compose-show");
+  showPaletteFace("compose");
 }
 
 function hidePalette() {
   // Always cancel a pending reveal first — a late ack (or the fallback) must not
   // pop a window the user has already dismissed.
-  pendingRevealMode = null;
-  clearTimeout(revealFallbackTimer);
-  revealFallbackTimer = null;
+  paletteFace.hide();
   if (!paletteWindow || !paletteWindow.isVisible()) return;
   paletteWindow.hide();
 }
@@ -2976,7 +2967,7 @@ shellIpc.handle("open-external", (_e, url) => {
 // The palette renderer has painted a face (compose/search) — reveal the window
 // if it's the one we asked for.
 shellIpc.on("palette-ready", (_e, mode) => {
-  finishReveal(mode);
+  paletteFace.ready(mode);
 });
 
 // The palette picked a place: a task lands in the Work window when there is
