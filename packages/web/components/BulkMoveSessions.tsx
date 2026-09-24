@@ -18,7 +18,7 @@
 import React from "react";
 import { toast } from "sonner";
 import { ArrowRightLeft, Archive, Square, Tag } from "lucide-react";
-import { DeviceDot, DeviceIcon, deviceDisplayName, deviceWakesOnUse, useDevices } from "./DeviceBadge";
+import { DeviceDot, DeviceIcon, RUNNING_HERE_ROW, RunningHereTag, deviceDisplayName, deviceWakesOnUse, useDevices } from "./DeviceBadge";
 import { useBulkMoveSessions } from "../hooks/useBulkMoveSessions";
 import { CtxHeader, CtxItem, CtxSeparator, CtxSub, CtxSubContent, CtxSubTrigger } from "./ui/context-menu";
 import { useInboxStore, isConvexId, sortLabels, type InboxSession } from "../store/inboxStore";
@@ -37,19 +37,20 @@ export function MoveToDeviceItems({ sessions, onDone }: { sessions: any[]; onDon
       {rows.map((d, i) => {
         const here = d.device_id === everyOwner;
         const usable = d.online || (d.is_remote && deviceWakesOnUse(d));
-        const note = here ? "running here" : d.online ? "" : usable ? "asleep — wakes on move" : "offline";
+        const note = d.online ? "" : usable ? "asleep — wakes on move" : "offline";
         return (
           <React.Fragment key={d.device_id}>
             {i === locals.length && locals.length > 0 && remotes.length > 0 && <CtxSeparator />}
             <CtxItem
               disabled={here || !usable}
+              className={here ? RUNNING_HERE_ROW : undefined}
               leading={<DeviceIcon d={d} className={`w-3.5 h-3.5 ${d.is_remote ? "text-sol-violet" : "text-sol-blue"}`} />}
-              trailing={
+              trailing={here ? <RunningHereTag online={d.online} /> : (
                 <span className="ml-2 flex shrink-0 items-center gap-1 whitespace-nowrap text-[10px] text-sol-text-dim">
                   {note}
                   <DeviceDot online={d.online} />
                 </span>
-              }
+              )}
               onSelect={() => { void move(sessions, d); onDone?.(); }}
             >
               {deviceDisplayName(d)}

@@ -17,6 +17,11 @@ let root: ReturnType<typeof createRoot>;
 const client = daemonHealthClient();
 const settle = (ms = 0) => act(async () => { await new Promise(resolve => setTimeout(resolve, ms)); });
 const globalText = () => host.querySelector("[data-global]")!.textContent;
+// The pill's text is the short state alone; the machine and the full label
+// live on its aria-label (and in its hover panel), so scoping is read there.
+const pillLabel = (scope: string) => host.querySelector(`${scope} [data-daemon-pill]`)?.getAttribute("aria-label");
+const pillShape = (scope: string) => host.querySelector(`${scope} [data-daemon-pill]`)?.getAttribute("data-daemon-pill");
+const globalPill = () => pillLabel("[data-global]");
 const syncLabel = () => host.querySelector('[aria-label^="Sync status:"]')?.getAttribute("aria-label");
 const sessionText = (id: string) => host.querySelector(`[data-session="${id}"]`)!.textContent;
 const cache = (deviceId = "laptop") => sessionStorage.setItem("cast_term_endpoint", JSON.stringify({ port: 45123, token: "laptop", deviceId, tmux: true }));
@@ -40,15 +45,16 @@ test("two physical Macs: only the authenticated local daemon affects global noti
   const held = new Promise<void>(resolve => release = resolve);
   globalThis.fetch = (async (input, init) => { await held; return healthProbe(input, init); }) as typeof fetch;
   await mount();
-  expect(globalText()).not.toContain("daemon");
+  expect(globalPill()).toBeUndefined();
   expect(syncLabel()).toBe("Sync status: Up to date");
   await settle(450);
   await act(async () => { release(); await held; }); await settle();
-  expect(globalText()).not.toContain("daemon");
+  expect(globalPill()).toBeUndefined();
   expect(syncLabel()).toBe("Sync status: Up to date");
   expect(useStatusNoticeStore.getState().notices.size).toBe(0);
-  expect(sessionText("mini")).toContain("Mac-mini: daemon quiet");
-  expect(sessionText("cloud")).toContain("Cloud Linux: daemon stale");
+  expect(pillLabel('[data-session="mini"]')).toContain("Mac-mini: daemon quiet");
+  expect(sessionText("mini")).toContain("quiet");
+  expect(pillLabel('[data-session="cloud"]')).toContain("Cloud Linux: daemon stale");
   expect(sessionText("laptop")).toBe("Session delivery controls");
   expect(sessionText("missing")).toBe("Session delivery controls");
   expect(sessionText("unassigned")).toBe("Session delivery controls");
@@ -61,7 +67,9 @@ test("local quiet, offline, overloaded, stalled and draining states surface and 
   const rows = healthRows(Date.now());
   const update = (patch: object) => act(() => useInboxStore.getState().setMachineRoster(rows.map(d => d.device_id === "laptop" ? { ...d, ...patch } : d)));
   await update({ last_seen: Date.now() - 8 * 60_000 });
-  expect(globalText()).toContain("MacBook: daemon quiet 8 min");
+  expect(globalPill()).toContain("MacBook: daemon quiet 8 min");
+  expect(pillShape("[data-global]")).toBe("pill");
+  expect(globalText()).toContain("quiet 8 min");
   expect(syncLabel()).toBe("Sync status: daemon quiet 8 min");
   expect(sessionText("laptop")).toContain("Delivery delayed");
   expect(host.querySelector('[data-session="laptop"] button')?.textContent).toBe("cast status");
@@ -69,14 +77,16 @@ test("local quiet, offline, overloaded, stalled and draining states surface and 
   expect(globalText()).toContain("CLI on macOS - MacBook offline for 2h.");
   expect(useStatusNoticeStore.getState().notices.size).toBe(1);
   await update({ loop_freeze_ms: 40_000 });
-  expect(globalText()).toContain("MacBook: daemon under load");
+  expect(globalPill()).toContain("MacBook: daemon under load");
+  expect(pillShape("[data-global]")).toBe("pill");
   expect(syncLabel()).toBe("Sync status: daemon under load");
   expect(useStatusNoticeStore.getState().notices.size).toBe(0);
   // The hour record alone: nothing is late right now, so the header shows a
   // quiet glyph (no pill text) and the sync dot stops pulsing.
   await update({ loop_freeze_1h_ms: 150_000, loop_freeze_max_ms: 40_000 });
-  expect(globalText()).not.toContain("daemon");
-  expect(host.querySelector('[data-global] [aria-label="macOS - MacBook: daemon under load"]')).not.toBeNull();
+  expect(globalText()).not.toContain("load");
+  expect(globalPill()).toBe("macOS - MacBook: daemon under load");
+  expect(pillShape("[data-global]")).toBe("quiet");
   expect(syncLabel()).toBe("Sync status: daemon under load");
   expect(host.querySelector('[aria-label^="Sync status:"] .animate-ping')).toBeNull();
   await update({ pending_sync_count: 27, pending_sync_conversations: 27, oldest_pending_ms: 360_000 });
@@ -84,26 +94,26 @@ test("local quiet, offline, overloaded, stalled and draining states surface and 
   await update({ pending_sync_count: 12, pending_sync_messages: 904, oldest_pending_ms: 540_000, sync_no_progress_ms: 20_000 });
   expect(syncLabel()).toBe("Sync status: syncing · 904 messages");
   await update({});
-  expect(globalText()).not.toContain("daemon");
+  expect(globalPill()).toBeUndefined();
   expect(syncLabel()).toBe("Sync status: Up to date");
 });
 
 test("missing identity, missing local row, empty roster and changed viewer never borrow another daemon", async () => {
   globalThis.fetch = (async () => Response.json({}, { status: 401 })) as typeof fetch;
   await mount(); await settle(450);
-  expect(globalText()).not.toContain("daemon");
+  expect(globalPill()).toBeUndefined();
   expect(syncLabel()).toBe("Sync status: Up to date");
   cache(); globalThis.fetch = healthProbe as typeof fetch;
   await act(() => window.dispatchEvent(new dom.window.Event("focus"))); await settle();
   await act(() => useInboxStore.getState().setMachineRoster(healthRows(Date.now()).filter(d => d.device_id !== "laptop")));
-  expect(globalText()).not.toContain("daemon");
+  expect(globalPill()).toBeUndefined();
   expect(syncLabel()).toBe("Sync status: Up to date");
   await act(() => useInboxStore.getState().setMachineRoster([]));
-  expect(globalText()).not.toContain("daemon");
+  expect(globalPill()).toBeUndefined();
   await act(() => {
     localStorage.setItem("CAST_TERM_FORCE_RELAY", "1");
     useInboxStore.setState({ currentUser: { _id: "another-viewer", daemon_last_seen: Date.now() - 3_600_000 } as any, machineRoster: healthRows(Date.now()).map(d => ({ ...d, last_seen: Date.now() - 3_600_000 })) });
   });
-  expect(globalText()).not.toContain("daemon");
+  expect(globalPill()).toBeUndefined();
   expect(useStatusNoticeStore.getState().notices.size).toBe(0);
 });

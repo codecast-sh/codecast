@@ -47,8 +47,11 @@ type SelectionOpts = Parameters<typeof defaultMachineId>[1];
  * nothing. Cloud mode itself is derived from whichever machine wins here
  * (`isCloudHost(selected)`), never stored beside it.
  *
- * Ladder: owner if (online || cloud host) → last pick if (online || cloud
- * host) → the checkout holder → any online local → the usual remote rungs.
+ * Ladder: owner if (online || cloud host) → the machine this client runs on
+ * → last pick if (online || cloud host) → the checkout holder → any online
+ * local → the usual remote rungs. The local machine sits above the standing
+ * pick on purpose: a session started from a laptop runs on that laptop, and
+ * neither a remembered choice nor a stale roster row may re-home it.
  * No toggle rung: memory above the owner rung is what let an eagerly-created
  * laptop-owned row render as "Cloud Linux" without ever being parked.
  */
@@ -56,6 +59,7 @@ export function defaultSessionMachineId(devices: Candidate[], opts: SelectionOpt
   const own = devices.filter((d) => d.bot_name === undefined);
   const wakeOk = (d: MachineCandidate) => isCloudHost(d as Candidate);
   const intended = devices.find((d) => d.device_id === opts?.ownerDeviceId && (d.online || isCloudHost(d)))
+    ?? own.find((d) => d.device_id === opts?.localDeviceId)
     ?? devices.find((d) => d.device_id === opts?.lastPicked && (d.online || isCloudHost(d))
       && (!opts.projectPath || isCloudHost(d) || deviceSeesPath(d, opts.projectPath) || platformCanOpenPath(d.platform, opts.projectPath)));
   return intended?.device_id ?? defaultMachineId(own.length ? own : devices, { ...opts, wakeOk });

@@ -272,6 +272,19 @@ export function DeviceBadge({
   );
 }
 
+// The machine a session runs on is disabled as a target, but it is the one
+// row the reader looks for: undo the disabled dimming and mark it in blue.
+export const RUNNING_HERE_ROW = "data-[disabled]:opacity-100 bg-sol-blue/10 ring-1 ring-inset ring-sol-blue/40";
+
+export function RunningHereTag({ online, suffix }: { online: boolean; suffix?: string }) {
+  return (
+    <span className="ml-2 flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-sol-blue/20 px-2 py-0.5 text-[10px] font-medium text-sol-blue">
+      running here{suffix ? ` · ${suffix}` : ""}
+      <DeviceDot online={online} />
+    </span>
+  );
+}
+
 /**
  * Dropdown-menu items to move a conversation between devices. Drop inside an open
  * DropdownMenuContent. Shows every device; the current owner is marked, online
@@ -300,18 +313,17 @@ export function RunOnDeviceItems({
     <>
       <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">Run on device · which machine</DropdownMenuLabel>
       {foreignOwner && (
-        <DropdownMenuItem disabled>
+        <DropdownMenuItem disabled className={RUNNING_HERE_ROW}>
           <DeviceIcon d={foreignOwner} className="w-3 h-3 mr-1.5" />
           <span className="flex-1 truncate">{deviceDisplayName(foreignOwner)}</span>
-          <span className="ml-2 flex shrink-0 items-center gap-1 whitespace-nowrap text-[10px] text-gray-400">
-            running here ·{" "}
-            {foreignOwner.runner?.is_bot
+          <RunningHereTag
+            online={foreignOwner.online}
+            suffix={foreignOwner.runner?.is_bot
               ? "agent box"
               : foreignOwner.runner?.name
                 ? `${foreignOwner.runner.name.split(" ")[0]}'s`
                 : "teammate's"}
-            <DeviceDot online={foreignOwner.online} />
-          </span>
+          />
         </DropdownMenuItem>
       )}
       {locals.map((d) => {
@@ -321,13 +333,16 @@ export function RunOnDeviceItems({
             key={d.device_id}
             disabled={isOwner || !d.online}
             onSelect={() => !isOwner && d.online && runHere(d)}
+            className={isOwner ? RUNNING_HERE_ROW : undefined}
           >
             <DeviceIcon d={d} className="w-3 h-3 mr-1.5" />
             <span className="flex-1 truncate">{deviceDisplayName(d)}</span>
-            <span className="ml-2 flex shrink-0 items-center gap-1 whitespace-nowrap text-[10px] text-gray-400">
-              {isOwner ? "running here" : d.online ? "run here" : "offline"}
-              <DeviceDot online={d.online} />
-            </span>
+            {isOwner ? <RunningHereTag online={d.online} /> : (
+              <span className="ml-2 flex shrink-0 items-center gap-1 whitespace-nowrap text-[10px] text-gray-400">
+                {d.online ? "run here" : "offline"}
+                <DeviceDot online={d.online} />
+              </span>
+            )}
           </DropdownMenuItem>
         );
       })}
@@ -343,13 +358,16 @@ export function RunOnDeviceItems({
             key={d.device_id}
             disabled={isOwner || !usable}
             onSelect={() => !isOwner && usable && toRemote(d)}
+            className={isOwner ? RUNNING_HERE_ROW : undefined}
           >
             <DeviceIcon d={d} className="w-3 h-3 mr-1.5" />
             <span className="flex-1 truncate">{isOwner ? name : `Move to ${name}`}</span>
-            <span className="ml-2 flex shrink-0 items-center gap-1 whitespace-nowrap text-[10px] text-gray-400">
-              {isOwner ? "running here" : d.online ? "" : usable ? "asleep — wakes on move" : "offline"}
-              <DeviceDot online={d.online} />
-            </span>
+            {isOwner ? <RunningHereTag online={d.online} /> : (
+              <span className="ml-2 flex shrink-0 items-center gap-1 whitespace-nowrap text-[10px] text-gray-400">
+                {d.online ? "" : usable ? "asleep — wakes on move" : "offline"}
+                <DeviceDot online={d.online} />
+              </span>
+            )}
           </DropdownMenuItem>
         );
       })}

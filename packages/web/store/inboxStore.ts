@@ -1718,6 +1718,10 @@ export type ClientUI = {
   inbox_scope?: "mine" | "team";
   // Show each session's model as a badge in the inbox list. Off by default.
   show_model_badge?: boolean;
+  // Show a session's checkout position (its branch, or the short sha of a
+  // detached head) as a pill on inbox cards when it sits off the default
+  // branch. On by default; read as `!== false`.
+  show_branch_pill?: boolean;
   // Show each session's agent client icon (Claude Code, opencode, …) next to
   // its title in the inbox list. On by default; read as `!== false`.
   show_agent_icon?: boolean;
@@ -11033,7 +11037,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     // automatic heal-on-load already filters pathless stubs out, so this only
     // gates the user-triggered awaitConvexId retry.
     if (!stub.project_path && !stub.git_root) {
-      return Promise.reject(new Error("Pick a project for this session before sending"));
+      return Promise.reject(new Error("Pick a folder for this session before sending"));
     }
     // Route through createSessionFromStub (not a bare createSession) so the live
     // project/agent + isolated-worktree mode are sourced identically to the

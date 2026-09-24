@@ -39,6 +39,21 @@ describe("new-session machines", () => {
     expect(defaultSessionMachineId([mini, laptop], { lastPicked: mini.device_id })).toBe(mini.device_id);
   });
 
+  test("the machine this client runs on beats the standing pick and the checkout holder", () => {
+    // Started from the thinkpad, runs on the thinkpad: neither a remembered
+    // laptop pick nor the laptop's checkout re-homes the launch.
+    expect(defaultSessionMachineId([laptop, linuxLaptop], {
+      projectPath: "/Users/me/src/app", lastPicked: laptop.device_id, localDeviceId: linuxLaptop.device_id,
+    })).toBe(linuxLaptop.device_id);
+    // A stale roster row does not matter: the local daemon answered on loopback.
+    expect(defaultSessionMachineId([{ ...laptop, online: false }, cloudAwake], {
+      lastPicked: cloudAwake.device_id, localDeviceId: laptop.device_id,
+    })).toBe(laptop.device_id);
+    // An existing session still stays where it is; a box is never "here".
+    expect(defaultSessionMachineId([laptop, cloudAwake], { ownerDeviceId: cloudAwake.device_id, localDeviceId: laptop.device_id })).toBe(cloudAwake.device_id);
+    expect(defaultSessionMachineId([mini, laptop], { localDeviceId: mini.device_id })).toBe(laptop.device_id);
+  });
+
   test("an existing box session stays on its machine", () => {
     expect(defaultSessionMachineId([mini, laptop], { ownerDeviceId: mini.device_id, lastPicked: laptop.device_id })).toBe(mini.device_id);
   });

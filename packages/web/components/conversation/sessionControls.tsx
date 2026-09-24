@@ -27,10 +27,12 @@ import { browseProjectOrder, frequentProjectChips, mergeRecentProjectPaths, rece
 import { ChevronDown, Search } from "lucide-react";
 import { deviceDisplayName } from "../DeviceBadge";
 import { MachineChips } from "../MachineChips";
+import { SharedWithMark } from "../ProjectPathPicker";
 import { SessionModeToggles } from "../SessionModeToggles";
 import { dedupeProjectsByRepoName, pathOnMyMachines, repoName, resolveMachineSelection, resolveScopedProjects } from "../../lib/machinePicker";
 import { cloudHostOf, cloudParkNeeded, cloudToggleAvailable, defaultSessionMachineId, isCloudHost, machineSelectionAfterCloudToggle, machineSelectionAfterPick, switchReconfigureArgs, type SessionMachine } from "../../lib/sessionMachines";
 import { useSessionMachines } from "../../hooks/useSessionMachines";
+import { useLocalDeviceId } from "../../hooks/useLocalDeviceId";
 import type { ConversationData, NewSessionAgentControls, PickerHandle, RecentProject } from "./types";
 
 const api = _typedApi as any;
@@ -160,12 +162,17 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
   // machine holding this checkout → stable tiebreak), so it can't change under
   // the user between the render that shows a chip and the send that acts on it.
   const lastPickedDeviceId = useInboxStore((s) => s.clientState.ui?.last_picked_device_id ?? null);
+  // The machine this client runs on. A session started here runs here: it
+  // outranks the standing pick, so no remembered choice or stale roster row
+  // re-homes a laptop launch to another machine.
+  const localDeviceId = useLocalDeviceId(true);
   const ownerDeviceIdForPicker = storeSession?.owner_device_id ?? (conversation as any).owner_device_id ?? null;
   const machineOpts = useMemo(() => ({
     ownerDeviceId: ownerDeviceIdForPicker,
     projectPath: currentPath,
     lastPicked: lastPickedDeviceId,
-  }), [ownerDeviceIdForPicker, currentPath, lastPickedDeviceId]);
+    localDeviceId,
+  }), [ownerDeviceIdForPicker, currentPath, lastPickedDeviceId, localDeviceId]);
   // The machine this session WILL run on, plus the two things that must agree
   // with it: what gets stamped, and which machine's folders we offer. The stamp
   // already on the row is the last-resort rung — `devices` reads empty on mount
@@ -277,6 +284,13 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
   );
   const suggestedPaths = useMemo(
     () => new Set(recentProjects.filter((p) => p.suggested).map((p) => p.path)),
+    [recentProjects],
+  );
+  // The team a session in each folder will be shared with (its own rule, else
+  // its repository's), shown on the chip so the folder choice carries its
+  // consequence.
+  const sharedWith = useMemo(
+    () => new Map(recentProjects.map((p) => [p.path, { teamId: p.team_id ?? null, team: p.team_name ?? null }] as const)),
     [recentProjects],
   );
 
@@ -706,6 +720,7 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
                     ) : (
                       <span>{p.path.split("/").filter(Boolean).pop()}</span>
                     )}
+                    <SharedWithMark {...sharedWith.get(p.path)} />
                   </button>
                 </Fragment>
               );
@@ -737,6 +752,7 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
               >
                 <FolderGlyph />
                 <span>{currentName}</span>
+                <SharedWithMark {...sharedWith.get(currentPath)} />
               </button>
             )}
             {visibleProjects.map((p: { path: string }) => {
@@ -750,12 +766,13 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
                 >
                   <FolderGlyph />
                   <span>{name}</span>
+                  <SharedWithMark {...sharedWith.get(p.path)} />
                 </button>
               );
             })}
             <button
               onClick={focusPicker}
-              title="Search projects or paste any folder path"
+              title="Search folders or paste any path"
               className="inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-md border border-dashed border-sol-border/50 text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/40 hover:bg-sol-cyan/5 transition-all"
             >
               <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>

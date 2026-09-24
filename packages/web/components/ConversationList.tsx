@@ -11,6 +11,7 @@ import { cleanTitle, isSystemMessage, isCommandMessage, isImportNotice } from ".
 import { stripTeammateFraming } from "./sessionMessage";
 import { ClaudeIcon, CodexIcon, CursorIcon, GeminiIcon, GrokIcon } from "./BrandIcons";
 import { shouldShowSession, isSubagent, isTrivialSubagent, isWarmupSession } from "../lib/sessionFilters";
+import { isHandoffFrom } from "../lib/sessionHandoff";
 import { useConversationsWithError } from "../hooks/useConversationsWithError";
 import { useStableOrder } from "../hooks/useStableOrder";
 import { useFlipAnimation } from "../hooks/useFlipAnimation";
@@ -576,7 +577,9 @@ export function ConversationCard({ conv, filter, isFocused, onNavigate, hasTeam 
               const handoffFrom = conv.handed_off_from_conversation_id || conv.handed_off_from_details?.conversation_id || null;
               const linkId = conv.parent_conversation_id || handoffFrom;
               if (!linkId) return null;
-              const label = conv.parent_conversation_id
+              const label = isHandoffFrom(conv, linkId)
+                ? "handed off from"
+                : conv.parent_conversation_id
                 ? (conv.spawned_by_conversation_id && conv.parent_conversation_id === conv.spawned_by_conversation_id ? "spawned by" : "sub of")
                 : "handed off from";
               const title = conv.parent_conversation_id

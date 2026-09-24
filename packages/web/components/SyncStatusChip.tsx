@@ -9,6 +9,7 @@ import { blocksDelivery } from "../hooks/useDaemonHealth";
 import { connectionChipCopy, useAppOffline } from "../hooks/useAppOffline";
 import { describeDaemonHealth, type DaemonHealthCopy } from "../lib/daemonHealthCopy";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
+import { StatusPanelHeader, StatusPanelSection } from "./StatusPanel";
 
 // A healthy cold-open sync settles in a few seconds, and a catch-up after
 // hours away replays its backlog in well under twenty. Past this the backend
@@ -256,18 +257,9 @@ function SyncDetailPanel({ syncing, stalled, color, daemonIssue, connection }: {
   const hasBody = !!connection || !!daemonIssue || !syncing || applyStats.direct > 0 || applyStats.refetch > 0 || behind.length > 0 || scopes.length > 0;
   return (
     <div className="min-w-0">
-      <div className="px-3 pt-2 text-[10px] font-semibold uppercase tracking-wider text-sol-text-dim">Sync status</div>
-      <div className="flex items-center gap-2 border-b border-sol-border/60 px-3 py-2">
-        <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: color }} />
-        <span className="min-w-0 text-xs font-semibold text-sol-text">{headline}</span>
-        {syncing && total > 1 && (
-          <span className="ml-auto shrink-0 tabular-nums text-[11px] font-normal text-sol-text-dim">
-            {settled}/{total}
-          </span>
-        )}
-      </div>
+      <StatusPanelHeader kicker="Sync status" color={color} headline={headline} aside={syncing && total > 1 ? `${settled}/${total}` : undefined} />
       {hasBody && (
-        <div className="space-y-1.5 px-3 py-2">
+        <StatusPanelSection className="space-y-1.5">
           {connection ? <p className="text-xs leading-snug text-sol-text-dim">{connection.detail}</p> : daemonIssue ? <div className="space-y-1.5 text-xs leading-snug text-sol-text-dim">
             <p>{daemonIssue.detail}</p>
             <p>Check the affected machine with <code>{daemonIssue.command}</code>.</p>
@@ -303,10 +295,10 @@ function SyncDetailPanel({ syncing, stalled, color, daemonIssue, connection }: {
               )}
             </div>
           ))}
-        </div>
+        </StatusPanelSection>
       )}
       {crawls.length > 0 && (
-        <div className="border-t border-sol-border/60 px-3 py-2">
+        <StatusPanelSection>
           <div className="pb-1 text-[9px] font-semibold uppercase tracking-wider text-sol-text-dim">
             Background backfill
           </div>
@@ -324,12 +316,12 @@ function SyncDetailPanel({ syncing, stalled, color, daemonIssue, connection }: {
           <div className="pt-1.5 text-[10px] leading-snug text-sol-text-dim">
             Older items stream in at a throttled pace. The app is usable meanwhile.
           </div>
-        </div>
+        </StatusPanelSection>
       )}
       {stalled && !connection && (
-        <div className="border-t border-sol-border/60 px-3 py-2 text-[10px] leading-snug text-sol-yellow">
+        <StatusPanelSection className="text-[10px] leading-snug text-sol-yellow">
           Still waiting on the server. Recent data can be incomplete until this settles.
-        </div>
+        </StatusPanelSection>
       )}
     </div>
   );
