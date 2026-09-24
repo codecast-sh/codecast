@@ -621,8 +621,8 @@ describe("bridge host as a CDP endpoint", () => {
     // A plain create stays in the background (the human is working in this
     // Chrome; an engine that omits the flag must not raise it) and is
     // ungrouped from the extension's point of view of a new socket. Only an
-    // explicit `background: false` activates the tab.
-    const other = await CdpConnection.fromPort(cdpEndpoint(h.port));
+    // explicit `background: false` on a socket that may raise activates it.
+    const other = await CdpConnection.fromPort({ ...cdpEndpoint(h.port), raise: true });
     await other.send("Target.createTarget", { url: "https://b.example/" });
     const plain = ext.seen.filter((m) => m.op === "tabs.create")[1];
     expect(plain.background).toBe(true);

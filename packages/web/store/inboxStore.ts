@@ -1875,6 +1875,9 @@ export type ClientDismissed = {
   cli_offline?: number;
   tmux_missing?: number;
   team_sharing_prompt?: number;
+  // Onboarding strip after the first sync: "decide what syncs and what your
+  // team sees" (SharingSetupBanner). Stamped when taken or dismissed.
+  sharing_setup?: number;
   // Blocked-sessions banner X (timestamp snooze, cross-device).
   blocked_sessions_banner?: number;
   // "Turn on desktop notifications" nudge X (timestamp snooze; a missed
@@ -3580,13 +3583,13 @@ export function placeInboxRows(
   for (const s of sorted) {
     const nestParent = nestParentOf(s);
     if (!nestParent || !allIds.has(nestParent)) continue;
+    // A role's session is a subagent row under the role's card, whatever
+    // bucket it would file in alone; the card carries the count too.
     if (isUnderRole(s)) {
       if (placements.get(nestParent)?.bucket === "dismissed") continue;
       roleRidden.add(s._id);
       roleSessionsByLead.set(nestParent, (roleSessionsByLead.get(nestParent) ?? 0) + 1);
-      continue;
-    }
-    if (isMemberCandidate(s)) {
+    } else if (isMemberCandidate(s)) {
       const own = placements.get(s._id)?.bucket;
       const lead = placements.get(nestParent)?.bucket;
       if (own !== lead) continue;
@@ -3711,9 +3714,9 @@ export function placeInboxRows(
   };
   // A role's sessions are the role's to triage, so they add to no header:
   // the number beside a section is what the person looks after there, and the
-  // role's card is one thing however many sessions ride it (R1, S23.3); they
-  // are not in subsByParent at all.
+  // role's card is one thing however many sessions nest under it (R1, S23.3).
   for (const id of subsWithParent) {
+    if (roleRidden.has(id)) continue;
     const b = placements.get(id)?.bucket;
     const k = b ? SECTION_OF_BUCKET[b] : undefined;
     if (k) counts[k]++;
@@ -3972,6 +3975,26 @@ export function resolveComposeProjectPath(opts: {
   const convPath =
     rawConvPath && (!machineRoster || pathOnMyMachines(machineRoster, rawConvPath)) ? rawConvPath : undefined;
   return context?.projectPath || context?.gitRoot || convPath || activeProjectPath || recentProjects?.[0]?.path || undefined;
+}
+
+/** Where a session the web starts on its own lands when the caller has no
+ *  folder of its own: the compose default, read off the live store. */
+export function defaultNewSessionPath(st: {
+  currentConversation: { projectPath?: string; gitRoot?: string };
+  activeProjectFilter?: string | null;
+  activeProjectPath?: string | null;
+  chipFilterExclude?: boolean;
+  recentProjects?: Array<{ path: string }>;
+  machineRoster?: Array<Pick<MachineCandidate, "local_project_roots">>;
+}): string | undefined {
+  return resolveComposeProjectPath({
+    conversation: st.currentConversation,
+    activeProjectFilter: st.activeProjectFilter,
+    activeProjectPath: st.activeProjectPath,
+    chipFilterExclude: st.chipFilterExclude,
+    recentProjects: st.recentProjects,
+    machineRoster: st.machineRoster,
+  });
 }
 
 // The directory a label filter implies for a NEW session. Labels carry no
@@ -4484,7 +4507,7 @@ export function flatViewSessions(
     ? null
     : nestedSessionIds(subsByParent);
   const list = subIds
-    ? sortedSessions.filter((s) => !subIds.has(s._id) || s._id === opts.focusedId || isUnderRole(s))
+    ? sortedSessions.filter((s) => !subIds.has(s._id) || s._id === opts.focusedId)
     : [...sortedSessions];
   list.sort(flatViewComparator(opts.mode, opts.mode === "time" ? opts.manualOrder : undefined));
   let ordered = list;
@@ -4514,11 +4537,9 @@ function dropOrphanSubagents(list: InboxSession[], focusedId?: string | null): I
   const nestParentOf = inboxNestParentOf(list);
   return list.filter((s) => {
     if (s._id === focusedId || s.is_pinned) return true;
-    // A role's session whose role's card is on the list rides that card as a
-    // count, never as a row (org-staffing.md S23.3).
-    if (isUnderRole(s)) { const p = nestParentOf(s); if (p && p !== s._id && present.has(p)) return false; }
-    if (!isSubagentConversation(s) && !isAgentTeamWorker(s)) return true;
-    const p = nestParentIdOf(s);
+    // A role's session is a subagent of the role's card.
+    if (!isSubagentConversation(s) && !isAgentTeamWorker(s) && !isUnderRole(s)) return true;
+    const p = nestParentOf(s);
     return !!p && p !== s._id && present.has(p);
   });
 }

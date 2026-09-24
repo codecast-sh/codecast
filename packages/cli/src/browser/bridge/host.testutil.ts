@@ -121,6 +121,8 @@ export class FakeExtension {
         case "tabs.close":
           this.tabs = this.tabs.filter((t) => t.tabId !== m.tabId);
           return reply({});
+        case "tabs.activate":
+          return reply({});
         case "attach":
           this.attached.add(m.tabId);
           return reply({});

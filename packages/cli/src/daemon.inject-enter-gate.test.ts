@@ -621,3 +621,58 @@ describe("tmuxComposerText", () => {
     expect(tmuxComposerText("nothing")).toBeNull();
   });
 });
+
+// A short window (the web terminal split sized to its panel) makes Claude Code
+// scroll a wrapped composer to the cursor, so only the payload's last lines are
+// on screen and its start, which the gate reads, is not. The gate held Enter
+// for as long as the viewer stayed open (2026-09-24). A visible tail cannot be
+// told apart from a paste that lost its start, so the gate shows itself the
+// whole composer at full size and hands the size back.
+describe("awaitTmuxComposerPayload in a short window", () => {
+  const LONG = "we want to make changing the sharing and syncing settings of sessions agentic - so add this to cast cli as something that sessions can do";
+  const TAIL = "to cast cli as something that sessions can do";
+
+  const shortPane = (full: string, tail: string, fullHeight: boolean) => {
+    const calls: Args[] = [];
+    let manual = false;
+    const exec = async (args: Args) => {
+      calls.push(args);
+      if (args[0] === "display-message") return { stdout: manual || fullHeight ? "220|50\n" : "100|16\n" };
+      if (args[0] === "resize-window") manual = true;
+      if (args[0] === "set-option") manual = false;
+      return { stdout: args[0] === "capture-pane" ? BOX(manual || fullHeight ? full : tail) : "" };
+    };
+    return { calls, exec: exec as any, isManual: () => manual };
+  };
+
+  test("a scrolled composer is read at full size, then the size goes back", async () => {
+    const pane = shortPane(LONG, TAIL, false);
+    expect(await awaitTmuxComposerPayload("t:0.0", LONG, {
+      allowRePaste: false, budgetMs: 2_000,
+      rePaste: async () => { throw new Error("must not repeat the paste"); },
+      exec: pane.exec,
+    })).toBe("matched");
+    expect(pane.calls.some(c => c[0] === "resize-window")).toBe(true);
+    expect(pane.isManual()).toBe(false);
+  });
+
+  test("a tail at full size is a paste that lost its start, and is refused", async () => {
+    const pane = shortPane(TAIL, TAIL, true);
+    await expect(awaitTmuxComposerPayload("t:0.0", LONG, {
+      allowRePaste: false, budgetMs: 1_000,
+      rePaste: async () => { throw new Error("must not repeat the paste"); },
+      exec: pane.exec,
+    })).rejects.toThrow("INJECT_UNVERIFIED");
+    expect(pane.calls.some(c => c[0] === "resize-window")).toBe(false);
+  });
+
+  test("a scrolled composer whose full view is not the payload is refused", async () => {
+    const pane = shortPane(`draft ${LONG}`, TAIL, false);
+    await expect(awaitTmuxComposerPayload("t:0.0", LONG, {
+      allowRePaste: false, budgetMs: 1_000,
+      rePaste: async () => { throw new Error("must not repeat the paste"); },
+      exec: pane.exec,
+    })).rejects.toThrow(/INJECT_UNVERIFIED|AGENT_STDIN_NOT_READY/);
+    expect(pane.isManual()).toBe(false);
+  });
+});

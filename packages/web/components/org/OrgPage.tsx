@@ -18,7 +18,7 @@ import { useSyncOrgProposals, useSyncOrgProposal } from "../../hooks/useSyncOrgP
 import { useSwitchWorkspace } from "../../hooks/useSwitchWorkspace";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { spawnSessionWithPrompt } from "../../lib/spawnSession";
-import { resolveComposeProjectPath } from "../../store/inboxStore";
+import { defaultNewSessionPath } from "../../store/inboxStore";
 import { useOrgSessionsUnder } from "../../hooks/useOrgSessionsUnder";
 import { useOpenLinkedSession } from "../../hooks/useOpenLinkedSession";
 import { useIsPhone, useMinWidth } from "../../hooks/useIsPhone";
@@ -580,14 +580,7 @@ export function OrgPageInner() {
     // The provisioned standing session starts in a project, like every
     // session the web starts (the same resolution proposeNow uses).
     const st = useInboxStore.getState();
-    const projectPath = resolveComposeProjectPath({
-      conversation: st.currentConversation,
-      activeProjectFilter: st.activeProjectFilter,
-      activeProjectPath: st.activeProjectPath,
-      chipFilterExclude: st.chipFilterExclude,
-      recentProjects: st.recentProjects,
-      machineRoster: st.machineRoster,
-    });
+    const projectPath = defaultNewSessionPath(st);
     const input = { ...(tree.workspace.kind === "team" ? { team_id: tree.workspace.id } : {}), ...(projectPath ? { project_path: projectPath } : {}), host_user_id: host, client_id: `orgrolestub-chief-${Math.random().toString(36).slice(2)}`, ...(seat ? { seat } : {}) };
     if (preview) { run("staffChiefOfStaff", input); toast.success("Hiring the chief of staff", { description: "Its first review lands as a proposal here." }); return; }
     void useInboxStore.getState().staffChiefOfStaff(input).then((r) => {
@@ -659,14 +652,7 @@ export function OrgPageInner() {
       return;
     }
     const st = useInboxStore.getState();
-    const projectPath = resolveComposeProjectPath({
-      conversation: st.currentConversation,
-      activeProjectFilter: st.activeProjectFilter,
-      activeProjectPath: st.activeProjectPath,
-      chipFilterExclude: st.chipFilterExclude,
-      recentProjects: st.recentProjects,
-      machineRoster: st.machineRoster,
-    });
+    const projectPath = defaultNewSessionPath(st);
     const { stubId } = spawnSessionWithPrompt({
       prompt: "Review this company's organization: run `cast org review` and write the proposal it asks for. Propose the smallest set of changes that removes the bottlenecks you find, with evidence a person can click; apply nothing.",
       projectPath: projectPath ?? undefined,

@@ -361,7 +361,7 @@ the three fields; `changeLine`, the row, the log and the tooltip all use it.
 
 Accepting a plan_status of done or abandoned closes the plan's still open
 tasks in the same apply, through the one task path (`setTaskStatus`: the
-team's status vocabulary, the independent review rule, bound sessions
+team's status vocabulary, bound sessions
 released, plan progress reconciled); they are dropped, never done, and the
 applied note lists them. The analyzer therefore proposes one change per plan
 and names a task on its own only when its evidence differs from its plan's.
@@ -923,7 +923,7 @@ Hands, wakes and tokens per day stay as the bound that keeps a runaway role from
 
 ### S23.3 A role's sessions are the role's
 
-The inbox never lists a role's hands as rows under the role's card. The card carries a count, **3 sessions**, that opens the role's page, where the sessions are the panel's business (F4). What reaches the person from under a role is the role's own line on its card (R1, revised), and nothing else. The chart keeps its nesting; the inbox does not.
+A role's sessions are subagent rows under the role's card: the same small row a Task subagent gets, hidden and shown by the same subagent toggle, with no gesture of their own. The card also carries a count, **3 sessions**, that opens the role's page, where the sessions are the panel's business (F4). What reaches the person from under a role is the role's own line on its card (R1, revised), and nothing else. (Revised 2026-09-24: the first cut drew no rows at all, and the founder read the count alone as hiding the reports.)
 
 ### S23.4 The line a person reads names who did it
 
@@ -976,10 +976,11 @@ hire dialog names neither; `orgProposal.changeSentence`, the history line
 (`orgLogLine`), the chips and the kind labels say "starts work on its own";
 the proposal pane's cost line and sheet are gone; the overview tile with the
 day's counters is gone; the charter's project line reads "Daily limit". The
-inbox never lists a role's hands: `placeInboxRows` keeps them out of
-`subsByParent` and out of the flat cards, and hands each role's standing
-session a count (`roleSessionsByLead`) that the web card and the phone card
-draw as "N sessions" opening `/org/or-N` (`inboxRoleTriage.mount.test.tsx`);
+inbox nests a role's hands under its standing session in `subsByParent`
+like any subagent (the toggle hides them; no "Put in my inbox" on the row)
+and hands the standing session a count (`roleSessionsByLead`) that the web
+card and the phone card draw as "N sessions" opening `/org/or-N`
+(`inboxRoleTriage.mount.test.tsx`);
 the role's own lines (R1, revised) stay. `lib/__tests__/roleWords.guard.test.ts`
 pins trust, the stage words in their stage sense, cap, budget and allowance
 out of the web's readable strings, the way S22's guard pins anchor. The CLI

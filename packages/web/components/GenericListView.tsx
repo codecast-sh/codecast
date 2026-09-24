@@ -424,6 +424,7 @@ function AddFilterMenu({
                 <ChevronLeft className="w-3 h-3" /> {cat.label}
               </button>
               <FilterOptionList
+                key={cat.key}
                 options={cat.showEmptyOption ? cat.options : cat.options.filter((o) => o.key !== "")}
                 value={cat.value}
                 multi={cat.multi}

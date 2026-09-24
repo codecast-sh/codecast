@@ -158,7 +158,7 @@ export const GUIDES: Guide[] = [
   {
     slug: "org-roles",
     title: "The org: roles, scopes and the line",
-    dek: "Route work to a standing responsibility instead of a session: roles with scopes, wakes, proposals a person accepts, and a line with independent review.",
+    dek: "Route work to a standing responsibility instead of a session: roles with scopes, wakes, proposals a person accepts, and a line that reviews before it ships.",
     category: "Work tracking",
   },
   {
