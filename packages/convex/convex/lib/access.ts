@@ -218,6 +218,28 @@ export async function patchConversationVisibility(
   return recomputeWorkspaceForConversation(ctx, after);
 }
 
+// The owner scan below reads up to 12k rows and does not depend on the
+// conversation, so one execution scans each owner once. A folder rule backfill
+// patches 32 sessions per batch; scanning per session read past the 100 MB
+// function limit and the whole backfill failed without a trace. Keyed on the
+// execution's db so nothing outlives the mutation that read it.
+const ownerScans = new WeakMap<object, Map<string, Promise<any[]>>>();
+
+function ownerLinkedRows(ctx: AccessCtx, userId: Id<"users">): Promise<any[]> {
+  let scans = ownerScans.get(ctx.db);
+  if (!scans) ownerScans.set(ctx.db, (scans = new Map()));
+  let scan = scans.get(String(userId));
+  if (!scan) {
+    scan = Promise.all(
+      ["tasks", "plans", "docs"].map((table) =>
+        ctx.db.query(table as any).withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).take(4000),
+      ),
+    ).then((tables) => tables.flat());
+    scans.set(String(userId), scan);
+  }
+  return scan;
+}
+
 /**
  * THE propagation hook: rewrite the stored workspace key of every work item
  * linked to this conversation, after its visibility changed (share, unshare,
@@ -260,12 +282,7 @@ export async function recomputeWorkspaceForConversation(
   gather(await ctx.db.query("docs")
     .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conv._id))
     .collect());
-  for (const table of ["tasks", "plans", "docs"]) {
-    gather((await ctx.db.query(table)
-      .withIndex("by_user_id", (q: any) => q.eq("user_id", conv.user_id))
-      .take(4000))
-      .filter((row: any) => linkedConversationId(row) === convId));
-  }
+  gather((await ownerLinkedRows(ctx, conv.user_id)).filter((row: any) => linkedConversationId(row) === convId));
 
   let updated = 0;
   for (const row of rows) {
@@ -273,6 +290,9 @@ export async function recomputeWorkspaceForConversation(
     const key = computeWorkspaceKey(row, conv);
     if (row.workspace !== key) {
       await ctx.db.patch(row._id, { workspace: key });
+      // The row may be the owner scan's cached copy; keep it true for a later
+      // recompute in this execution.
+      row.workspace = key;
       updated++;
     }
   }

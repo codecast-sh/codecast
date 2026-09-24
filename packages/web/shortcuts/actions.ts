@@ -59,18 +59,19 @@ export function useGlobalShortcutActions() {
       state.closePalette();
       return;
     }
+    // A ticked multi-selection (lib/inboxSelection) is the target when there
+    // is one, ahead of the conversation open beside it: the bar says "N
+    // selected", so every verb acts on all of it.
+    const picked = useInboxSelection.getState().ids
+      .map((id) => state.sessions[id] ?? state.conversations[id])
+      .filter(Boolean);
+    if (picked.length > 1) {
+      state.openPalette({ targets: picked, targetType: 'session' });
+      return;
+    }
     const target = resolvePaletteTarget(state, pathname);
     if (target) { state.openPalette(target); return; }
     if (isInboxRoute(pathname)) {
-      // A ticked multi-selection (lib/inboxSelection) is the target when there
-      // is one — bulk verbs (move, label, stash, kill) act on all of it.
-      const picked = useInboxSelection.getState().ids
-        .map((id) => state.sessions[id] ?? state.conversations[id])
-        .filter(Boolean);
-      if (picked.length > 1) {
-        state.openPalette({ targets: picked, targetType: 'session' });
-        return;
-      }
       const focusedId = focusedActionSessionId(state, true);
       const session = focusedId ? state.sessions[focusedId] ?? state.conversations[focusedId] : null;
       if (session) {

@@ -403,7 +403,7 @@ describe("orgProposals.decide status changes (S9)", () => {
     const task = await db.get("tasks_open" as any);
     expect(task.status).toBe("done");
     // A person's approve is outside every role, so the close passes the
-    // independent review rule and stamps the verdict.
+    // status vocabulary and stamps the verdict.
     expect(task.review_verdict).toMatchObject({ verdict: "approve" });
     expect(await decide(2)).toMatchObject({ status: "applied" });
     expect((await db.get(Q as any)).status).toBe("paused");

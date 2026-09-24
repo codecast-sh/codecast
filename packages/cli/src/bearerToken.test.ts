@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { DEVICE_BOUND_TOKEN_PREFIX, splitPresentedToken } from "@platform/auth/cli";
 import { REQUEST_DEVICE_BOUND_TOKENS, bearerFromStored, mintDeviceId, secretFromStored, storedFromBearer } from "./bearerToken.js";
 import { deviceId } from "./remote/device.js";
-import { encryptToken, isEncryptedToken } from "./tokenEncryption.js";
+import { decryptToken, encryptToken, isEncryptedToken } from "./tokenEncryption.js";
 
 const PLAIN = "0123abcd";
 const BOUND = `${DEVICE_BOUND_TOKEN_PREFIX}0123abcd`;
@@ -25,10 +25,13 @@ describe("what a stored token becomes on the wire", () => {
 });
 
 describe("what goes back into the file", () => {
-  test("strips the device and encrypts, so a config never stores a presentation", () => {
+  test("encrypts, and keeps a bound secret with the device it was minted for", () => {
     const stored = storedFromBearer(bearerFromStored(BOUND));
     expect(isEncryptedToken(stored)).toBe(true);
     expect(secretFromStored(stored)).toBe(BOUND);
+    expect(decryptToken(stored)).toBe(`${BOUND}.${deviceId()}`);
+    // A fresh mint arrives as the bare secret, bound to the machine that asked.
+    expect(decryptToken(storedFromBearer(BOUND))).toBe(`${BOUND}.${deviceId()}`);
     expect(secretFromStored(storedFromBearer(PLAIN))).toBe(PLAIN);
   });
 
@@ -45,10 +48,8 @@ describe("what goes back into the file", () => {
 });
 
 describe("asking for bound tokens at mint", () => {
-  test("is OFF until sd-242 settles how remote hosts get a token", () => {
-    // Host provisioning copies this machine's token, and a bound token cannot
-    // be copied. Enforcement and presentation stay live regardless.
-    expect(REQUEST_DEVICE_BOUND_TOKENS).toBe(false);
-    expect(mintDeviceId()).toBeUndefined();
+  test("is ON: a new token names the device that minted it", () => {
+    expect(REQUEST_DEVICE_BOUND_TOKENS).toBe(true);
+    expect(mintDeviceId()).toBe(deviceId());
   });
 });
