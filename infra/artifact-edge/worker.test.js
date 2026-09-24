@@ -23,11 +23,18 @@ function stubOrigin(cacheControl, extra = {}) {
 const get = (path) => worker.fetch(new Request(`https://a.codecast.sh${path}`));
 
 describe("artifact edge cache", () => {
-  test("an ungated page is cached at the PoP and keeps the origin's policy", async () => {
+  test("an ungated page is cached at the PoP with the public policy", async () => {
     const calls = stubOrigin("public, max-age=60, stale-while-revalidate=300");
     const res = await get("/abcdefghijkl");
     expect(calls[0].cf).toEqual({ cacheEverything: true, cacheTtl: 60 });
     expect(res.headers.get("Cache-Control")).toBe("public, max-age=60, stale-while-revalidate=300");
+  });
+
+  test("the zone's four hour browser TTL never reaches the browser", async () => {
+    // Cloudflare rewrites the subrequest's header before the worker reads it.
+    stubOrigin("max-age=14400");
+    expect((await get("/abcdefghijkl/")).headers.get("Cache-Control")).toBe("public, max-age=60, stale-while-revalidate=300");
+    expect((await get("/abcdefghijkl/?k=deadbeef")).headers.get("Cache-Control")).toBe("private, no-store");
   });
 
   test("a request holding the password token is never stored at the PoP", async () => {
