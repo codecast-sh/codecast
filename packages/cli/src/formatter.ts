@@ -517,7 +517,7 @@ export function formatReadResult(result: ReadResult, options: FormatOptions = {}
         // this collapsed line is all a non-full read shows of it — readers have
         // mistaken that for an empty result. Point at the exact command.
         if (calls.some((tc) => tc.name === "StructuredOutput")) {
-          lines.push(`       ${fmt.muted(`↳ full payload: cast read ${truncateId(conv.id)} ${msg.line} --full`)}`);
+          lines.push(`       ${fmt.muted(`↳ full payload: cast read ${truncateId(conv.id)} ${msg.line < 0 ? `-n ${-msg.line}` : msg.line} --full`)}`);
         }
       }
     }

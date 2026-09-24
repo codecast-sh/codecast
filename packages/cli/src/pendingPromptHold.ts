@@ -17,6 +17,7 @@
 export const PROMPT_HOLD_MS = 45_000;
 
 const holds = new Map<string, number>();
+const expiries = new Map<string, ReturnType<typeof setTimeout>>();
 let redrive: (() => void) | null = null;
 
 // The delivery scan to run when a hold is released; the daemon installs its
@@ -25,8 +26,21 @@ export function setPendingRedrive(fn: (() => void) | null): void {
   redrive = fn;
 }
 
+// The hold re-drives delivery when it lapses. Nothing else marks that moment:
+// a prompt dismissed in the terminal never reports itself closed, so the
+// message waited for the next unrelated scan, up to a minute past the window
+// (2026-09-24).
 export function holdConversationForPrompt(conversationId: string, now: number = Date.now()): void {
   holds.set(conversationId, now);
+  clearTimeout(expiries.get(conversationId));
+  const expiry = setTimeout(() => {
+    expiries.delete(conversationId);
+    if (holds.get(conversationId) !== now) return;
+    holds.delete(conversationId);
+    redrive?.();
+  }, PROMPT_HOLD_MS);
+  expiry.unref?.();
+  expiries.set(conversationId, expiry);
 }
 
 // Milliseconds a scan should still skip this conversation; 0 when it may try
@@ -46,11 +60,15 @@ export function promptHoldRemainingMs(conversationId: string, now: number = Date
 // The prompt closed (answered from the app, dismissed in the terminal): drop
 // the hold and re-drive delivery now instead of waiting for the next poll.
 export function releasePromptHold(conversationId: string): boolean {
+  clearTimeout(expiries.get(conversationId));
+  expiries.delete(conversationId);
   if (!holds.delete(conversationId)) return false;
   redrive?.();
   return true;
 }
 
 export function clearPromptHolds(): void {
+  for (const expiry of expiries.values()) clearTimeout(expiry);
+  expiries.clear();
   holds.clear();
 }

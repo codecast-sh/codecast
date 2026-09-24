@@ -17,6 +17,8 @@ export type FilterableMessage = {
   from_user_id?: string;
   role: "user" | "assistant" | "system" | "tool";
   content?: string;
+  thinking?: string;
+  embedding?: number[];
   tool_calls?: Array<unknown> | null;
   tool_results?: Array<unknown> | null;
   subtype?: string;
@@ -122,7 +124,7 @@ export function toNavigatorRow(m: FilterableMessage): FilteredUserMessage {
 // from field lengths rather than JSON.stringify, which would itself cost the
 // serialization the number exists to avoid.
 export function approxMessageBytes(m: FilterableMessage): number {
-  let n = (m.content?.length ?? 0) + 200;
+  let n = (m.content?.length ?? 0) + (m.thinking?.length ?? 0) + (m.embedding?.length ?? 0) * 8 + 200;
   if (m.tool_results) for (const r of m.tool_results as Array<{ content?: string }>) n += r?.content?.length ?? 0;
   if (m.tool_calls) for (const c of m.tool_calls as Array<{ input?: string }>) n += c?.input?.length ?? 0;
   if (m.images) for (const i of m.images) n += i.data?.length ?? 0;
