@@ -544,8 +544,6 @@ async function handle(m) {
 
     case "cdp": {
       if (!attached.has(m.tabId)) await attachTab(m.tabId);
-      const groupId = await ownedGroupOf(m.tabId);
-      beginWork(groupId);
       const screenshot = m.method === "Page.captureScreenshot";
       try {
         if (screenshot) await setBorderVisible(m.tabId, false);
@@ -554,7 +552,6 @@ async function handle(m) {
         return { result: result || {} };
       } finally {
         if (screenshot) await setBorderVisible(m.tabId, true);
-        endWork(groupId);
       }
     }
 
@@ -755,18 +752,17 @@ function describeTab(t) {
     windowId: t.windowId,
     attached: attached.has(t.id),
     owned: ownedTabs.has(t.id),
-    ...(g ? { group: { title: plainTitle(t.groupId, g), color: g.color } } : {}),
+    ...(g ? { group: { title: plainOf(g.title), color: g.color } } : {}),
   };
 }
 
 // --------------------------------------------------------------------------
-// Tab groups: one per session, title animated while the session works
+// Tab groups: one per session
 // --------------------------------------------------------------------------
 
 const NO_GROUP = -1; // chrome.tabGroups.TAB_GROUP_ID_NONE
 const groups = new Map(); // groupId → chrome.tabGroups.TabGroup (title as Chrome shows it)
 const tabGroupOf = new Map(); // tabId → groupId, kept current by tab events
-const indicators = new Map(); // groupId → indicator state (beginWork)
 
 /**
  * Groups this extension created. Everything that touches a group (the
@@ -812,10 +808,14 @@ async function adoptCastGroups() {
   // Short bounds: this runs inside the first listing after a reload, and a
   // group query that does not answer must not hold that listing back. The
   // next listing tries again (ownedGroups stays empty until one succeeds).
-  // By colour, then the plain title: a group of ours reads "Cast ..." or
-  // "Cast ✓" while its session works (the indicator frames), and a query by
-  // the exact title would miss exactly the groups that are busiest.
+  // By colour, then the plain title: an older build left "Cast ..." or
+  // "Cast ✓" on a group it was animating, and a query by the exact title
+  // would miss those.
   const red = await bounded(chrome.tabGroups.query({ color: DEFAULT_CAST_GROUP.color }), "Chrome tabGroups.query", 5_000).catch(() => []);
+  for (const g of red) {
+    const plain = plainOf(g.title);
+    if (plain === DEFAULT_CAST_GROUP.title && g.title !== plain) chrome.tabGroups.update(g.id, { title: plain }).catch(() => {});
+  }
   const found = red.filter((g) => plainOf(g.title) === DEFAULT_CAST_GROUP.title && !ownedGroups.has(g.id));
   if (!found.length) return;
   for (const g of found) {
@@ -846,11 +846,8 @@ refreshGroups().catch(() => {});
  * join.
  */
 async function placeInGroup(tab, group) {
-  // Match on the plain title we keep, never on what Chrome shows right now:
-  // a session's group is mid animation exactly when its daemon opens a
-  // second tab, and a query by the animated title would start a new group.
   const existing = [...groups.values()].find(
-    (g) => ownedGroups.has(g.id) && g.windowId === tab.windowId && plainTitle(g.id, g) === group.title,
+    (g) => ownedGroups.has(g.id) && g.windowId === tab.windowId && plainOf(g.title) === group.title,
   );
   const groupId = await chrome.tabs.group({ tabIds: [tab.id], ...(existing ? { groupId: existing.id } : {}) });
   tabGroupOf.set(tab.id, groupId);
@@ -864,7 +861,7 @@ async function placeInGroup(tab, group) {
 
 /** The window of a group we made with this plain title, if one is open. */
 function windowOfOwnedGroup(title) {
-  const g = [...groups.values()].find((x) => ownedGroups.has(x.id) && plainTitle(x.id, x) === title);
+  const g = [...groups.values()].find((x) => ownedGroups.has(x.id) && plainOf(x.title) === title);
   return g ? g.windowId : undefined;
 }
 
@@ -883,116 +880,15 @@ async function ownedGroupOf(tabId) {
 }
 
 /**
- * The indicator's frames, all the same width: the dots are padded with
- * punctuation spaces (the width of a period in most fonts), so the tab strip
- * does not shift on every frame. One regular expression names every frame,
- * for the two places that must strip one off a title.
+ * A group title without the dots or checkmark an older build animated onto
+ * it, so a group left mid frame still matches and the host never sees one.
  */
-const DOT_FRAMES = [" .  ", " .. ", " ..."];
-const DONE_FRAME = " ✓";
-const FRAME_SUFFIX = /( \.{1,3} {0,2}| ✓)$/;
-const plainOf = (title) => (title || "").replace(FRAME_SUFFIX, "");
-
-/** The title without our dots or checkmark, so the host never sees a frame. */
-function plainTitle(groupId, g) {
-  const ind = indicators.get(groupId);
-  return ind ? ind.title : plainOf(g.title);
-}
-
-/** Resolves when Chrome has applied the title; errors (a closed group) are swallowed. */
-function setGroupTitle(groupId, title) {
-  return chrome.tabGroups.update(groupId, { title }).catch(() => {});
-}
-
-/**
- * Work is shown per span, not per CDP call. The engine sends its calls a
- * millisecond apart, so per call the dots never appeared and a checkmark
- * flashed after every verb; measured against a snapshot, five flips inside
- * 20 ms. A span opens on the first call and stays open while calls keep
- * arriving within QUIET_MS of each other; the dots start once the span has
- * run for START_MS (a verb that finishes sooner shows no dots at all), and
- * the span ends, with a checkmark for DONE_MS, only after QUIET_MS with no
- * call in flight. A call landing during the checkmark opens a new span.
- */
-const START_MS = 300;
-const QUIET_MS = 600;
-const DONE_MS = 3000;
-const FRAME_MS = 300;
-
-function beginWork(groupId) {
-  if (groupId === NO_GROUP || groupId === undefined) return;
-  let ind = indicators.get(groupId);
-  if (!ind) {
-    // The seed is the plain title: `groups` may hold a frame of ours.
-    ind = { title: plainOf((groups.get(groupId) || {}).title), inflight: 0, open: false, frame: 0, startTimer: null, ticker: null, quietTimer: null, doneTimer: null };
-    indicators.set(groupId, ind);
-  }
-  clearTimeout(ind.quietTimer);
-  ind.quietTimer = null;
-  if (ind.doneTimer) {
-    clearTimeout(ind.doneTimer);
-    ind.doneTimer = null;
-  }
-  ind.inflight++;
-  if (!ind.open) {
-    ind.open = true;
-    ind.startTimer = setTimeout(() => {
-      ind.startTimer = null;
-      ind.frame = 0;
-      setGroupTitle(groupId, ind.title + DOT_FRAMES[0]);
-      ind.ticker = setInterval(() => {
-        ind.frame = (ind.frame + 1) % DOT_FRAMES.length;
-        setGroupTitle(groupId, ind.title + DOT_FRAMES[ind.frame]);
-      }, FRAME_MS);
-    }, START_MS);
-  }
-}
-
-function endWork(groupId) {
-  const ind = indicators.get(groupId);
-  if (!ind) return;
-  if (--ind.inflight > 0) return;
-  ind.quietTimer = setTimeout(() => closeSpan(groupId, ind), QUIET_MS);
-}
-
-/** The span is over: plain title with a checkmark, then plain. The indicator
- *  is dropped only after Chrome has applied the plain title, so a call that
- *  lands in between never seeds a new indicator from the checkmark frame. */
-function closeSpan(groupId, ind) {
-  ind.quietTimer = null;
-  ind.open = false;
-  clearTimeout(ind.startTimer);
-  clearInterval(ind.ticker);
-  ind.startTimer = null;
-  ind.ticker = null;
-  setGroupTitle(groupId, ind.title + DONE_FRAME);
-  ind.doneTimer = setTimeout(async () => {
-    ind.doneTimer = null;
-    await setGroupTitle(groupId, ind.title);
-    if (indicators.get(groupId) === ind && !ind.open) indicators.delete(groupId);
-  }, DONE_MS);
-}
-
-function dropIndicator(groupId) {
-  const ind = indicators.get(groupId);
-  if (!ind) return;
-  clearTimeout(ind.startTimer);
-  clearInterval(ind.ticker);
-  clearTimeout(ind.quietTimer);
-  clearTimeout(ind.doneTimer);
-  indicators.delete(groupId);
-}
+const plainOf = (title) => (title || "").replace(/( \.{1,3} {0,2}| ✓)$/, "");
 
 chrome.tabGroups.onCreated.addListener((g) => groups.set(g.id, g));
-chrome.tabGroups.onUpdated.addListener((g) => {
-  groups.set(g.id, g);
-  // A title change from the human sticks; our own frames do not.
-  const ind = indicators.get(g.id);
-  if (ind && g.title !== ind.title && !FRAME_SUFFIX.test(g.title)) ind.title = g.title;
-});
+chrome.tabGroups.onUpdated.addListener((g) => groups.set(g.id, g));
 chrome.tabGroups.onRemoved.addListener((g) => {
   groups.delete(g.id);
-  dropIndicator(g.id);
   if (ownedGroups.delete(g.id)) persistOwned();
 });
 

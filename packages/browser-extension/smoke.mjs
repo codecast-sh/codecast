@@ -12,8 +12,8 @@
  *      click, screenshot, tab list. Skipped with a note if no engine binary
  *      is installed;
  *   3. a raw CDP client on the bridge, for what only the bridge adds: a
- *      background create into a named tab group, the group title animating
- *      while a command runs, the border overlay around the driven page, and
+ *      background create into a named tab group, the group title holding
+ *      still while a command runs, the border overlay around the driven page, and
  *      a screenshot that does not show it;
  *   4. the product path — the paired-extension default and then the plain
  *      verbs (open, snapshot, click, shot, tabs, stop) on the engine driver,
@@ -519,13 +519,6 @@ const isPixelOf = (px, color) => {
 };
 
 /**
- * The group indicator's frames (background.js DOT_FRAMES / DONE_FRAME): dots
- * padded to a fixed width with punctuation spaces, then a checkmark.
- */
-const DOT_FRAME = /^(.*) \.{1,3}\u2008{0,2}$/;
-const DONE_FRAME = " ✓";
-
-/**
  * What only the bridge adds on top of CDP, exercised as a raw client the way
  * the engine path will: a background create into a session group, the group
  * following the socket, the working indicator on the group title, the border
@@ -562,10 +555,9 @@ async function bridgeExtras(bridgePort, token, ext, cdpPort, pageUrl) {
     JSON.stringify(border),
   );
 
-  // A slow command: the group title should cycle dots meanwhile (they start
-  // 300 ms into the span), then show a checkmark 600 ms after the last call
-  // ends. The group is found by its title once and read by id after, since
-  // its title is the thing changing.
+  // A slow command: the group title holds still throughout, because any
+  // change to it resizes the group chip and shifts every tab after it.
+  // Read by id, found by its title once above.
   const slow = bridge.send("Runtime.evaluate", { expression: "new Promise((r) => setTimeout(r, 1500))", awaitPromise: true }, sessionId);
   const titles = new Set();
   const groupTitle = () => ext.eval(`chrome.tabGroups.get(${groupInfo.id}).then((g) => g.title)`);
@@ -574,13 +566,9 @@ async function bridgeExtras(bridgePort, token, ext, cdpPort, pageUrl) {
     await sleep(100);
   }
   await slow;
-  const withDots = [...titles].filter((t) => DOT_FRAME.test(t) && t.startsWith("cast smoke "));
-  check("bridge: group title animates while a command is in flight", withDots.length >= 2, JSON.stringify([...titles]));
-  check("bridge: every dot frame has the same width", withDots.every((t) => t.length === withDots[0].length), JSON.stringify(withDots));
   await sleep(900);
-  const afterwards = await groupTitle();
-  check("bridge: checkmark once the span has been quiet", afterwards === "cast smoke" + DONE_FRAME, JSON.stringify(afterwards));
-  // The plain title is what the host is told, never a frame of the animation.
+  titles.add(await groupTitle());
+  check("bridge: group title never changes while a command runs", titles.size === 1 && titles.has("cast smoke"), JSON.stringify([...titles]));
   const listed = await fetch(`http://127.0.0.1:${bridgePort}/json/list?token=${token}`).then((r) => r.json());
   check("bridge: /json/list carries no group", listed.every((t) => !("group" in t) && !("castGroup" in t)), JSON.stringify(listed).slice(0, 200));
 
@@ -604,9 +592,6 @@ async function bridgeExtras(bridgePort, token, ext, cdpPort, pageUrl) {
   const restored = await borderState();
   check("bridge: screenshot through the bridge hides the border", isWhitePixel(px), `pixel ${px.join(",")}`);
   check("bridge: border visible again after the screenshot", restored.present && restored.visibility === "visible", JSON.stringify(restored));
-
-  await sleep(4000);
-  check("bridge: plain title restored a few seconds after", (await groupTitle()) === "cast smoke", JSON.stringify(await groupTitle()));
 
   if (process.env.SMOKE_STORE_SHOTS && outside) {
     // The store shot shows a real page being driven: navigate through the
