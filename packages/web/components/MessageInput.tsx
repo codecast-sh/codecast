@@ -1776,6 +1776,14 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   };
 
   const acScrollRef = useRef(false);
+  // The image strip and the queue take keys while the caret stays in the
+  // textarea, so any sign the user is back on the text (a click in it, an
+  // edit) ends that selection before a Backspace meant for words reaches it.
+  const leaveStripSelection = () => {
+    setSelectedImageIndex(null);
+    setLightboxImageIndex(null);
+    setSelectedQueueIndex(null);
+  };
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (canHandoff && e.altKey && e.shiftKey && e.code === "KeyH") {
       e.preventDefault();
@@ -1845,11 +1853,12 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     // text (matching how those rungs take ↑). ⌥K / ⌥↑ climb from anywhere.
     const climbIntoTranscript = () => {
       if (!enterReviewFromComposer()) return false;
-      setSelectedImageIndex(null);
-      setLightboxImageIndex(null);
-      setSelectedQueueIndex(null);
+      leaveStripSelection();
       return true;
     };
+    // Only a bare Backspace/Delete removes a strip item. ⌥/⌘/Ctrl+Backspace
+    // are word and line deletes in the text, so they leave the strip alone.
+    const isStripDelete = (e.key === "Backspace" || e.key === "Delete") && !e.altKey && !e.metaKey && !e.ctrlKey;
     if (altChordDirection(e.nativeEvent) === "up" && climbIntoTranscript()) {
       e.preventDefault();
       return;
@@ -1875,7 +1884,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         }
         return;
       }
-      if (e.key === "Backspace" || e.key === "Delete") {
+      if (isStripDelete) {
         e.preventDefault();
         const nextIdx = pastedImages.length <= 1 ? null : Math.min(selectedImageIndex, pastedImages.length - 2);
         clearImage(selectedImageIndex);
@@ -1917,9 +1926,6 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         setLightboxImageIndex(null);
         return;
       }
-      if (e.key.length === 1 && !e.metaKey && !e.ctrlKey) {
-        setSelectedImageIndex(null);
-      }
     }
 
     if (selectedQueueIndex !== null && queuedMessages.length > 0) {
@@ -1940,7 +1946,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         }
         return;
       }
-      if (e.key === "Backspace" || e.key === "Delete") {
+      if (isStripDelete) {
         e.preventDefault();
         setQueuedMessages(prev => prev.filter((_, i) => i !== selectedQueueIndex));
         const newLen = queuedMessages.length - 1;
@@ -1967,9 +1973,6 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         setMessage(text);
         requestAnimationFrame(() => textareaRef.current?.focus());
         return;
-      }
-      if (e.key.length === 1 && !e.metaKey && !e.ctrlKey) {
-        setSelectedQueueIndex(null);
       }
     }
 
@@ -2595,7 +2598,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     data-composer-field
                     data-draft-conv={conversationId}
                     value={message}
-                    onChange={(e) => handleMessageChange(e.target.value)}
+                    onChange={(e) => { leaveStripSelection(); handleMessageChange(e.target.value); }}
+                    onMouseDown={leaveStripSelection}
                     onKeyDown={handleKeyDown}
                     onPaste={handlePaste}
                     onFocus={() => setIsFocused(true)}
