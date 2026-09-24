@@ -1,3 +1,4 @@
+import { writeHarnessFile } from "./harness.js";
 import * as fs from "fs";
 import * as path from "path";
 import { findModelOption } from "@codecast/shared/contracts";
@@ -49,6 +50,6 @@ export function reconcileClaudeSettingsModel(
   }
   const next = planClaudeSettingsModel(text, alias);
   if (next === null) return false;
-  fs.writeFileSync(file, next);
+  writeHarnessFile(file, next, "model");
   return true;
 }

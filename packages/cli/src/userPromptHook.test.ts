@@ -28,7 +28,7 @@ function run(sessionId: string, extra: Record<string, unknown> = {}, extraEnv: R
       transcript_path: extra.transcript_path ?? transcript(sessionId, Number(extra.messages ?? 0)),
       ...extra,
     }),
-    env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}`, ...extraEnv },
+    env: { ...process.env, HOME: home, CODECAST_DIR: path.join(home, ".codecast"), PATH: `${bin}:${process.env.PATH}`, ...extraEnv },
   }).toString();
 }
 
@@ -38,6 +38,9 @@ function status(sessionId: string): { status: string } {
 
 beforeAll(() => {
   home = fs.mkdtempSync(path.join(os.tmpdir(), "codecast-prompt-hook-"));
+  // The reminder jobs run only while their Agent Features entry is on.
+  fs.mkdirSync(path.join(home, ".codecast"), { recursive: true });
+  fs.writeFileSync(path.join(home, ".codecast", "config.json"), JSON.stringify({ state_enabled: true, work_enabled: true }, null, 2));
   hookFile = path.join(home, USER_PROMPT_HOOK_FILE);
   fs.writeFileSync(hookFile, USER_PROMPT_HOOK, { mode: 0o755 });
   bin = path.join(home, "bin");

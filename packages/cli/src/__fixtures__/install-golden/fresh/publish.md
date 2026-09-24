@@ -12,6 +12,8 @@ cast publish report.html --task ct-N   # the page attaches to the task as eviden
 cast publish ls | rm <target> | open <target>
 ```
 
+Video and audio in a bundle (.mp4, .webm, .mov, .mp3, .m4a, .wav) upload to media hosting instead of counting against the page's size limit; the page keeps its relative paths. For a film, write `<cast-player>` with one `<cast-chapter src="c01.mp4" title="...">` per file: the player loads by itself, plays the chapters back to back as one video with a chapter timeline, and takes the page's look from `--cast-accent`, `--cast-font` and `--cast-radius`.
+
 Everything the page's own owner panel can do is also a command, so you can manage a page you published earlier without the file or the browser (`<target>` is a slug or a path):
 
 ```bash

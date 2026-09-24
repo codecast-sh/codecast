@@ -39,7 +39,7 @@ function rewriteState(sessionId: string): void {
 function run(sessionId: string, event: "Stop" | "UserPromptSubmit", messages: number, extra: Record<string, unknown> = {}): string {
   return execFileSync("bash", [hookFile], {
     input: JSON.stringify({ session_id: sessionId, hook_event_name: event, transcript_path: transcript(sessionId, messages), ...extra }),
-    env: { ...process.env, HOME: home },
+    env: { ...process.env, HOME: home, CODECAST_DIR: path.join(home, ".codecast") },
   }).toString();
 }
 
@@ -49,6 +49,9 @@ function fresh(): string {
 
 beforeAll(() => {
   home = fs.mkdtempSync(path.join(os.tmpdir(), "codecast-thread-state-hook-"));
+  // The reminder jobs run only while their Agent Features entry is on.
+  fs.mkdirSync(path.join(home, ".codecast"), { recursive: true });
+  fs.writeFileSync(path.join(home, ".codecast", "config.json"), JSON.stringify({ state_enabled: true, work_enabled: true }, null, 2));
   hookFile = path.join(home, "thread-state.sh");
   fs.writeFileSync(hookFile, THREAD_STATE_HOOK, { mode: 0o755 });
 });
@@ -77,6 +80,12 @@ describe("thread-state hook", () => {
     expect(run(id, "Stop", THREAD_STATE_RECRUIT_MSGS + 300)).toBe("");
     const other = fresh();
     expect(run(other, "Stop", THREAD_STATE_RECRUIT_MSGS, { stop_hook_active: true })).toBe("");
+  });
+
+  test("silent while Thread State is off in Agent Features", () => {
+    fs.writeFileSync(path.join(home, ".codecast", "config.json"), JSON.stringify({ state_enabled: false }));
+    expect(run(fresh(), "Stop", THREAD_STATE_RECRUIT_MSGS)).toBe("");
+    fs.writeFileSync(path.join(home, ".codecast", "config.json"), JSON.stringify({ state_enabled: true, work_enabled: true }));
   });
 
   test("once it declares, the ordinary staleness reminder takes over", () => {
@@ -138,7 +147,7 @@ describe("thread-state hook", () => {
     stamp(id);
     const out = execFileSync("bash", [hookFile], {
       input: JSON.stringify({ session_id: id, hook_event_name: "Stop" }),
-      env: { ...process.env, HOME: home },
+      env: { ...process.env, HOME: home, CODECAST_DIR: path.join(home, ".codecast") },
     }).toString();
     expect(out).toBe("");
   });
@@ -150,7 +159,7 @@ describe("thread-state hook", () => {
     const t0 = Date.now();
     const out = execFileSync("bash", [hookFile], {
       input: JSON.stringify({ session_id: id, hook_event_name: "UserPromptSubmit", transcript_path: fifo }),
-      env: { ...process.env, HOME: home },
+      env: { ...process.env, HOME: home, CODECAST_DIR: path.join(home, ".codecast") },
       timeout: 2000,
     }).toString();
     expect(out).toBe("");
@@ -170,7 +179,7 @@ describe("thread-state hook", () => {
         hook_event_name: "UserPromptSubmit",
         transcript_path: transcript(id, THREAD_STATE_NUDGE_MSGS + 3),
       }),
-      env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}` },
+      env: { ...process.env, HOME: home, CODECAST_DIR: path.join(home, ".codecast"), PATH: `${bin}:${process.env.PATH}` },
     }).toString();
     expect(out.startsWith("<thread-state>")).toBe(true);
   });

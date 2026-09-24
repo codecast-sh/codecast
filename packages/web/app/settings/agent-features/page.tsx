@@ -1,22 +1,21 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { useMutation } from "convex/react";
-import { toast } from "sonner";
 import { Blocks, Layers } from "lucide-react";
 import {
   SNIPPET_CATALOG,
   STABLE_MODES,
   snippetAvailableForTeams,
   type StableMode,
+  type HarnessHook,
 } from "@codecast/shared/contracts";
 import { useInboxStore } from "../../../store/inboxStore";
-import { api } from "@codecast/convex/convex/_generated/api";
 import { Switch } from "../../../components/ui/switch";
-import { SettingsOptionGroup, SettingsPanel, SettingsRow, SettingsSection } from "../../../components/settings/ui";
-import { DevicePanelHeader } from "../../../components/settings/DevicePanelHeader";
-import { useDevices, type Device } from "../../../components/DeviceBadge";
+import { SettingsOptionGroup, SettingsRow, SettingsSection } from "../../../components/settings/ui";
+import { DeviceSettingsFrame } from "../../../components/settings/DeviceSettingsFrame";
+import { type Device } from "../../../components/DeviceBadge";
+import { useDeviceSettingsPanel } from "../../../components/settings/useDeviceSettingsPanel";
 import { isRecentlyShipped } from "../../../lib/newSnippets";
+import { hooksOfFeature } from "../../../lib/harnessHooksView";
 
 /**
  * "Agent Features" — the web twin of `cast install`. Each machine keeps its own
@@ -28,113 +27,54 @@ import { isRecentlyShipped } from "../../../lib/newSnippets";
  * (the command would expire before the daemon could run it).
  */
 export default function AgentFeaturesPage() {
-  const { devices, mostRecentOnlineLocal } = useDevices();
   // Team-gated snippets (chat, calls) only appear while some team has the
   // feature on; the daemon keeps a device's copy in step with the flag.
   const teams = useInboxStore((s) => s.teams);
-  const setSnippet = useMutation(api.devices.setDeviceSnippet);
-  const [pending, setPending] = useState<Set<string>>(new Set());
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-
-  const sorted = useMemo(
-    () =>
-      [...devices].sort(
-        (a, b) =>
-          Number(b.online) - Number(a.online) ||
-          Number(a.is_remote) - Number(b.is_remote) ||
-          b.last_seen - a.last_seen,
-      ),
-    [devices],
-  );
-
-  const selected =
-    sorted.find((d) => d.device_id === selectedId) ??
-    mostRecentOnlineLocal ??
-    sorted[0] ??
-    null;
-
-  const run = async (key: string, fn: () => Promise<unknown>) => {
-    setPending((p) => new Set(p).add(key));
-    try {
-      await fn();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't apply that change");
-    } finally {
-      setPending((p) => {
-        const n = new Set(p);
-        n.delete(key);
-        return n;
-      });
-    }
-  };
+  const panel = useDeviceSettingsPanel();
+  const { pending, run, setSnippet } = panel;
 
   return (
-    <SettingsPanel>
-      {sorted.length === 0 ? (
-        <SettingsSection title="Agent features" icon={Blocks} padded>
-          <p className="text-center text-sm text-sol-text-muted">
-            No devices yet. Start the daemon with{" "}
-            <code className="font-mono text-sol-text">cast daemon</code> on a machine to manage its
-            features here.
-          </p>
-        </SettingsSection>
-      ) : (
+    <DeviceSettingsFrame panel={panel} title="Agent features" icon={Blocks}>
+      {(selected) => (
         <>
-          {selected && (
-            <DevicePanelHeader devices={sorted} selected={selected} onSelect={setSelectedId} />
-          )}
-
-          {selected && !selected.settings ? (
-            <SettingsSection title="Agent features" icon={Blocks} padded>
-              <p className="text-sm text-sol-text-muted">
-                This machine&apos;s CLI predates feature sync. Update it with{" "}
-                <code className="font-mono text-sol-text">cast update</code>, and its installed
-                features will show up here.
-              </p>
-            </SettingsSection>
-          ) : (
-            selected && (
+          <StableSection d={selected} pending={pending} run={run} setSnippet={setSnippet} />
+          <SettingsSection
+            title="Features"
+            icon={Blocks}
+            description={
               <>
-                <StableSection d={selected} pending={pending} run={run} setSnippet={setSnippet} />
-                <SettingsSection
-                  title="Features"
-                  icon={Blocks}
-                  description={
-                    <>
-                      Capabilities you install into your agents — the same things{" "}
-                      <code className="font-mono text-sol-text-muted">cast install</code> writes into a
-                      machine&apos;s CLAUDE.md. Each machine has its own setup, so changes apply to the
-                      selected device.
-                    </>
-                  }
-                >
-                  {SNIPPET_CATALOG.filter((s) => snippetAvailableForTeams(s.slug, teams)).map((s) => (
-                    <FeatureRow
-                      key={s.slug}
-                      name={s.name}
-                      desc={s.desc}
-                      detail={s.detail}
-                      writesTo={s.writesTo}
-                      isNew={isRecentlyShipped(s)}
-                      on={(selected.settings?.snippets?.[s.slug] ?? (s.wireSlug ? selected.settings?.snippets?.[s.wireSlug] : undefined)) === true}
-                      disabled={!selected.online}
-                      busy={pending.has(s.slug)}
-                      onToggle={(next) =>
-                        run(s.slug, () =>
-                          // Send the pre-rename slug when one exists: old daemons only
-                          // match their exact slug, new daemons resolve it as an alias.
-                          setSnippet({ device_id: selected.device_id, snippet: s.wireSlug ?? s.slug, enabled: next }),
-                        )
-                      }
-                    />
-                  ))}
-                </SettingsSection>
+                Capabilities you install into your agents — the same things{" "}
+                <code className="font-mono text-sol-text-muted">cast install</code> writes into a
+                machine&apos;s CLAUDE.md. Each machine has its own setup, so changes apply to the
+                selected device. Every change shows in Harness, with what caused it.
               </>
-            )
-          )}
+            }
+          >
+            {SNIPPET_CATALOG.filter((s) => snippetAvailableForTeams(s.slug, teams)).map((s) => (
+              <FeatureRow
+                key={s.slug}
+                name={s.name}
+                desc={s.desc}
+                detail={s.detail}
+                writesTo={s.writesTo}
+                hooks={hooksOfFeature(s.slug)}
+                isNew={isRecentlyShipped(s)}
+                on={(selected.settings?.snippets?.[s.slug] ?? (s.wireSlug ? selected.settings?.snippets?.[s.wireSlug] : undefined)) === true}
+                disabled={!selected.online}
+                busy={pending.has(s.slug)}
+                onToggle={(next) =>
+                  run(s.slug, () =>
+                    // Send the pre-rename slug when one exists: old daemons only
+                    // match their exact slug, new daemons resolve it as an alias.
+                    setSnippet({ device_id: selected.device_id, snippet: s.wireSlug ?? s.slug, enabled: next }),
+                  )
+                }
+              />
+            ))}
+          </SettingsSection>
         </>
       )}
-    </SettingsPanel>
+    </DeviceSettingsFrame>
   );
 }
 
@@ -176,7 +116,7 @@ function StableSection({
     <SettingsSection
       title="Stable context"
       icon={Layers}
-      description="Inject recent session history into every new conversation, so agents start with shared context."
+      description="Inject recent session history into every new conversation, so agents start with shared context. Its SessionStart hook (~/.claude/hooks/stable-feed.sh) is added and removed with this setting."
     >
       <div className="px-4 py-3.5 sm:px-5">
         <SettingsOptionGroup
@@ -214,6 +154,7 @@ function FeatureRow({
   desc,
   detail,
   writesTo,
+  hooks,
   isNew,
   on,
   disabled,
@@ -224,6 +165,8 @@ function FeatureRow({
   desc: string;
   detail: string;
   writesTo: string;
+  /** Hooks this feature adds and removes with its section (HARNESS_HOOKS). */
+  hooks: HarnessHook[];
   isNew: boolean;
   on: boolean;
   disabled: boolean;
@@ -257,6 +200,11 @@ function FeatureRow({
           {desc}
           <span className="mt-1.5 block leading-relaxed">{detail}</span>
           <span className="mt-1.5 block font-mono text-[11px] text-sol-text-dim">{writesTo}</span>
+          {hooks.map((h) => (
+            <span key={h.file} className="mt-0.5 block font-mono text-[11px] text-sol-text-dim">
+              and the {h.name.toLowerCase()} hook (~/.claude/hooks/{h.file}), added and removed with this switch
+            </span>
+          ))}
         </>
       }
     >

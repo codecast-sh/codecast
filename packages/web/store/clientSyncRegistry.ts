@@ -185,6 +185,19 @@ export const CLIENT_SYNC_REGISTRY = {
     // tuples; a singleton would make every device's report clobber the fleet.
     sync: {},
   },
+  // What codecast changed in each device's agent harness (CLAUDE.md, hooks,
+  // ~/.claude/settings.json), for Settings > Harness. Server truth about a
+  // machine's disk, so not localFirst. Delta: the feed is scoped to the device
+  // on screen, and switching devices must not wipe the other one's cached
+  // history. Rows never change once written.
+  harnessChanges: {
+    persistence: { kind: "collection", key: "harnessChanges" },
+    hydration: { phase: "deferred" },
+    localFirst: false,
+    feeds: ["harnessChanges.listForDevice"],
+    validRow: (row: any) => typeof row?.device_id === "string" && typeof row?.at === "number",
+    sync: { isDelta: true },
+  },
   docs: {
     persistence: { kind: "collection", key: "docs" },
     hydration: { phase: "deferred" },
@@ -1118,6 +1131,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   tasks: "shared",
   capabilityBindings: "shared",
   capabilityState: "shared",
+  harnessChanges: "shared",
   docs: "shared",
   docDetails: "shared",
   sessionDecisions: "shared",

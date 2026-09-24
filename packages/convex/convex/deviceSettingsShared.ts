@@ -22,6 +22,10 @@ export const deviceSettingsValidator = v.object({
   // — a credit is something the human earned, so nothing spends one on their
   // behalf until they say so (ct-49529, `codex_reset_credit_auto` in config.json).
   codex_reset_credit_auto: v.optional(v.boolean()),
+  // Codecast's Claude Code hooks installed on this machine (hooks_enabled in
+  // config.json, on unless turned off), and whether it may update itself.
+  hooks_enabled: v.optional(v.boolean()),
+  auto_update: v.optional(v.boolean()),
 });
 
 // Daemon-reported model inventory for dynamic clients (opencode/pi): each
