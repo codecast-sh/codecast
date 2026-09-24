@@ -151,6 +151,21 @@ test("call and walkie banners land in the people window", () => {
   );
 });
 
+// The voice window (the float of faces) and the people window are not
+// dashboards: a chat banner navigated into the float drew the chat page in a
+// small frameless window nobody could close (2026-09-24). Every window reports
+// the store's shared tab list, so the float can claim to show the very channel.
+test("a banner for a page never lands in the voice window or the people window", () => {
+  const callWin = tabWin(7, "/chat/team", { isCallPanel: true, lastFocusedAt: 99, open: [{ id: "t2", path: "/chat/team" }] });
+  const people = peopleWin({ active: "/chat/team", open: [{ id: "t2", path: "/chat/team" }] });
+  const windows = [main({ open: [{ id: "t1", path: "/inbox" }, { id: "t2", path: "/chat/team" }] }), callWin, people];
+  assert.equal(pickWindow(windows, { route: "/chat/team?m=1", kind: "chat_mention" }).window.id, 1);
+  // With no dashboard window left, no pick: the shell boots the main window.
+  assert.equal(pickWindow([callWin, people], { route: "/chat/team", kind: "chat_mention" }), null);
+  // Its own banners still land there.
+  assert.equal(pickWindow(windows, { route: null, kind: "call" }).window.id, 9);
+});
+
 // --- BannerGate: whether a banner goes up at all (ct-49551) ------------------
 // A manual scheduler, so the 250 ms grace runs without real time.
 

@@ -28,6 +28,8 @@ import {
   installWindowRoleTracker,
   reportDesktopWindowState,
   isDetachedTabWindow,
+  isSatelliteWindow,
+  navigateFromHere,
   onCallPanelHandback,
   onVoiceMirror } from "../lib/desktop";
 import { runPlaced } from "../lib/desktopApps";
@@ -286,6 +288,9 @@ export function DesktopProvider() {
     // navigation lands in that tab instead of retargeting the active one.
     const goTo = (path: string | undefined, tabId?: string | null) => {
       if (!path) return;
+      // The voice and people windows draw no dashboard: a path landing in one
+      // goes to the main window, or the float becomes a page with no way out.
+      if (isSatelliteWindow()) return navigateFromHere(path, (p) => router.push(p));
       if (tabId) useInboxStore.getState().switchTab(tabId);
 
       // A share link never takes the in-place shortcut: its token must be
@@ -361,7 +366,10 @@ export function DesktopProvider() {
     const inboxFamily = (p: string) => p === "/inbox" || p.startsWith("/inbox?") || p.startsWith("/conversation/");
     const withSession = (p: string) =>
       inboxFamily(p) && st.currentSessionId ? `/conversation/${st.currentSessionId}` : p;
-    if (isDetachedTabWindow() || st.tabs.length === 0 || !st.activeTabId) {
+    // A satellite shows its own URL only. It hydrates the shared tabs too, and
+    // reporting them told the shell the float was showing the main window's
+    // channel, so a banner for that channel landed in the float.
+    if (isDetachedTabWindow() || isSatelliteWindow() || st.tabs.length === 0 || !st.activeTabId) {
       reportDesktopWindowState({ active: withSession(live), open: [], inCall: inHuddle(st, walkie) });
       return;
     }
