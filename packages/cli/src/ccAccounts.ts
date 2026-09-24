@@ -869,6 +869,7 @@ export function deleteProfile(name: string): CcProfileMeta {
         `(the daemon re-saves the active login automatically, so removing it wouldn't stick)`,
     );
   }
+  if (readLaunchRecord()?.profile === name) clearLaunchProfile();
   deleteProfileSecret(name);
   removeAccountToken(name);
   delete index.profiles[name];
@@ -1353,8 +1354,95 @@ export function removeAccountToken(name: string): boolean {
   const file = accountTokenFilePath(name);
   const existed = fs.existsSync(file);
   try { fs.rmSync(file, { force: true }); } catch {}
+  if (readLaunchRecord()?.profile === name) clearLaunchProfile();
   invalidateAccountsCache();
   return existed;
+}
+
+// ---------------------------------------------------------------------------
+// Launch profile: the account sessions run on when it is not the keychain login
+//
+// A switch normally writes the target's saved login into the keychain, and
+// the fleet follows because every session reads the keychain. A profile whose
+// saved login is dead cannot be written there (activating a dead credential
+// parks every session on "Login expired"), but its minted setup-token still
+// carries sessions. A TOKEN SWITCH records that profile here instead: new and
+// resumed sessions pin to it (the daemon sources its token file), the server
+// reads the same name off the accounts inventory as `launch_profile` so the
+// pin, auto-continue and auto-switch all agree on which account the fleet is
+// on, and the keychain login stays as it was. The record lapses on its own
+// when the token goes, when the profile is removed, or when the keychain
+// login changes identity (a fresh sign-in supersedes the choice); a keychain
+// switch clears it outright.
+// ---------------------------------------------------------------------------
+
+export interface LaunchRecord {
+  profile: string;
+  // The keychain login (uuid or email) at the time of the token switch, when
+  // the credential had PROVED that identity; a different verified identity
+  // later means the person signed into something else since. Unset when the
+  // identity was only a label: ~/.claude.json can name another account, and
+  // a freshly rotated access token is unverified until the daemon asks, so
+  // an unproven identity never counts as a change (it would have lapsed the
+  // record on every token rotation).
+  keychain_key?: string;
+  since: number;
+}
+
+type ActiveIdentity = { email?: string; uuid?: string; verified?: boolean } | null | undefined;
+
+function launchRecordPath(): string {
+  return path.join(defaultConfigDir(), "cc-launch.json");
+}
+
+export function readLaunchRecord(): LaunchRecord | null {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(launchRecordPath(), "utf-8"));
+    if (parsed && typeof parsed.profile === "string" && typeof parsed.since === "number") return parsed;
+  } catch {}
+  return null;
+}
+
+export function setLaunchProfile(name: string, keychainKey: string | undefined, now = Date.now()): LaunchRecord {
+  assertValidProfileName(name);
+  const record: LaunchRecord = { profile: name, ...(keychainKey ? { keychain_key: keychainKey } : {}), since: now };
+  atomicWriteFile(launchRecordPath(), JSON.stringify(record), { mode: 0o644 });
+  invalidateAccountsCache();
+  return record;
+}
+
+export function clearLaunchProfile(): boolean {
+  const existed = fs.existsSync(launchRecordPath());
+  try { fs.rmSync(launchRecordPath(), { force: true }); } catch {}
+  if (existed) invalidateAccountsCache();
+  return existed;
+}
+
+/** The launch record while it still holds, else null (and the stale record is
+ *  dropped): the profile must still be saved, its setup-token live, and the
+ *  keychain login not VERIFIED to be another account than at the switch.
+ *  `active` is the keychain identity when the caller has one (the inventory
+ *  publisher, a switch); a launch never reads the keychain for this, so it
+ *  passes nothing and only the token and profile rules apply. */
+export function launchRecordInEffect(active?: ActiveIdentity, now = Date.now()): LaunchRecord | null {
+  const record = readLaunchRecord();
+  if (!record) return null;
+  const meta = readProfileIndex().profiles[record.profile];
+  const token = meta ? accountTokenInfo(record.profile) : null;
+  const keychainKey = active?.verified ? active.uuid || active.email : undefined;
+  const identityMoved = !!record.keychain_key && !!keychainKey && record.keychain_key !== keychainKey;
+  const holds = !!token && token.expires_at > now && !identityMoved;
+  if (!holds) {
+    clearLaunchProfile();
+    return null;
+  }
+  return record;
+}
+
+/** The profile sessions launch on when no account was asked for: the launch
+ *  record's, else none (the keychain login). No keychain read. */
+export function launchProfileName(now = Date.now()): string | undefined {
+  return launchRecordInEffect(undefined, now)?.profile;
 }
 
 export interface AccountTokenInfo {
@@ -1460,8 +1548,12 @@ const CC_PROBE_MODEL = process.env.CODECAST_CC_PROBE_MODEL || "claude-haiku-4-5-
 
 /** One-token model call whose only purpose is the rate-limit headers. Costs a
  *  handful of input tokens on the account; never touches the credential store. */
-export async function fetchRateLimitFingerprint(bearerToken: string): Promise<RateLimitFingerprint> {
-  const res = await fetch(CC_MESSAGES_URL, {
+async function probeModel(
+  bearerToken: string,
+  model: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ status: number; fp: RateLimitFingerprint; body: () => Promise<string> }> {
+  const res = await fetchImpl(CC_MESSAGES_URL, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${bearerToken}`,
@@ -1470,18 +1562,87 @@ export async function fetchRateLimitFingerprint(bearerToken: string): Promise<Ra
       "content-type": "application/json",
       "user-agent": "codecast-account-probe",
     },
-    body: JSON.stringify({ model: CC_PROBE_MODEL, max_tokens: 1, messages: [{ role: "user", content: "hi" }] }),
+    body: JSON.stringify({ model, max_tokens: 1, messages: [{ role: "user", content: "hi" }] }),
     signal: AbortSignal.timeout(20000),
   });
-  const fp = parseRateLimitFingerprint(res.headers);
+  return { status: res.status, fp: parseRateLimitFingerprint(res.headers), body: () => res.text().catch(() => "") };
+}
+
+export async function fetchRateLimitFingerprint(bearerToken: string, fetchImpl?: typeof fetch): Promise<RateLimitFingerprint> {
+  const { status, fp, body } = await probeModel(bearerToken, CC_PROBE_MODEL, fetchImpl);
   // A limit-parked account answers 429 — with the same window headers, which
   // is all the fingerprint needs (2026-09-01: a mint for an exhausted account
   // was thrown away because the probe treated its 429 as a failure).
-  if (!res.ok && !(fp.five_hour_reset != null && fp.seven_day_reset != null)) {
-    const body = await res.text().catch(() => "");
-    throw new CcAccountError(`Account probe failed: HTTP ${res.status} ${body.slice(0, 160)}`);
+  if ((status < 200 || status >= 300) && !(fp.five_hour_reset != null && fp.seven_day_reset != null)) {
+    throw new CcAccountError(`Account probe failed: HTTP ${status} ${(await body()).slice(0, 160)}`);
   }
   return fp;
+}
+
+// The model whose own weekly window the usage endpoint reports as
+// `weekly_scoped` (the /usage screen's third bar).
+const CC_SCOPED_PROBE_MODEL = process.env.CODECAST_CC_SCOPED_PROBE_MODEL || "claude-fable-5-1";
+
+/**
+ * A usage reading for an account whose saved login is dead but whose setup
+ * token is live. The usage endpoint needs the login, so without this such an
+ * account is read only by its own running sessions, whose statusLine carries
+ * the two unified windows and never the model-scoped one: its Fable meter
+ * froze at the last poll. On 2026-09-23 claude@ read Fable 55% from a poll 30
+ * hours old while every Fable request on it was refused, and auto-switch kept
+ * continuing sessions into it instead of moving them.
+ *
+ * The token can make model requests, and those answer the question directly.
+ * One call on the probe model gives both unified windows from the headers. If
+ * those windows admit requests, one call on the scoped model tells whether its
+ * window is spent: a refusal there, with the unified windows open, can only be
+ * the model's own window. A success means it is not spent, and the endpoint's
+ * percent is unknowable, so an older reading below 100 is kept and a pegged one
+ * is dropped. When the unified windows refuse, the scoped call proves nothing
+ * and the previous scoped reading stands.
+ */
+export async function fetchTokenUsageSnapshot(
+  token: string,
+  prev: CcUsageSnapshot | undefined,
+  opts: { fetchImpl?: typeof fetch; now?: number } = {},
+): Promise<CcUsageSnapshot> {
+  const now = opts.now ?? Date.now();
+  const fp = await fetchRateLimitFingerprint(token, opts.fetchImpl);
+  const window = (util: number | null, reset: number | null): CcUsageWindow | undefined =>
+    util == null ? undefined : { percent: Math.round(util * 100), ...(reset != null && { resets_at: reset * 1000 }) };
+  const snap: CcUsageSnapshot = { fetched_at: now };
+  const session = window(fp.five_hour_utilization, fp.five_hour_reset);
+  const weekly = window(fp.seven_day_utilization, fp.seven_day_reset);
+  if (session) snap.session = session;
+  if (weekly) snap.weekly = weekly;
+  const prevScoped = prev?.weekly_scoped;
+  const unifiedOpen = (session?.percent ?? 0) < 100 && (weekly?.percent ?? 0) < 100;
+  if (!unifiedOpen) {
+    if (prevScoped) snap.weekly_scoped = prevScoped;
+    return snap;
+  }
+  const scoped = await probeModel(token, CC_SCOPED_PROBE_MODEL, opts.fetchImpl);
+  if (scoped.status === 429) {
+    const reset = prevScoped?.resets_at && prevScoped.resets_at > now ? prevScoped.resets_at : undefined;
+    snap.weekly_scoped = { percent: 100, ...(reset && { resets_at: reset }), label: prevScoped?.label ?? "Fable" };
+  } else if (scoped.status >= 200 && scoped.status < 300) {
+    if (prevScoped && prevScoped.percent < 100) snap.weekly_scoped = prevScoped;
+  } else if (prevScoped) {
+    snap.weekly_scoped = prevScoped;
+  }
+  return snap;
+}
+
+/** The stored setup token itself, or null. Only the usage probe reads it: a
+ *  launch sources the file and never handles the secret. */
+function readAccountTokenValue(name: string): string | null {
+  const info = accountTokenInfo(name);
+  if (!info || info.expires_at <= Date.now()) return null;
+  try {
+    return extractSetupToken(fs.readFileSync(info.file, "utf-8"));
+  } catch {
+    return null;
+  }
 }
 
 /** Launch-line prefix for a pinned session, or "" when no account was
@@ -1615,6 +1776,52 @@ export function useProfile(name: string): SwitchResult {
   noteActiveAccount(targetIdentity?.accountUuid || targetIdentity?.emailAddress);
   invalidateAccountsCache();
   return { from, fromEmail, to: name, toEmail: target.oauthAccount?.emailAddress };
+}
+
+export type SwitchMode = "keychain" | "token";
+
+/** Which way a switch to `name` lands: on the keychain (its saved login is
+ *  usable) or on its minted setup-token (the login is dead or missing and the
+ *  token is live). Null when neither can carry a session. A usable login wins
+ *  even when a token exists: the keychain switch also moves `claude` started
+ *  by hand, and pinned sessions ride the token either way (accountSourcePrefix). */
+export function switchModeFor(name: string, now = Date.now()): SwitchMode | null {
+  assertValidProfileName(name);
+  const meta = readProfileIndex().profiles[name];
+  const raw = readProfileSecret(name);
+  let loginUsable = false;
+  if (raw) {
+    try {
+      loginUsable = credentialHealth(JSON.stringify(parseProfile(raw).credentials), now).usable && !meta?.login_expired_at;
+    } catch {
+      loginUsable = false;
+    }
+  }
+  if (loginUsable) return "keychain";
+  const token = accountTokenInfo(name);
+  return token && token.expires_at > now ? "token" : null;
+}
+
+/** Switch this machine's fleet to a saved profile: through the keychain when
+ *  its login is usable (useProfile), else onto its minted setup-token (the
+ *  launch record; the keychain login stays put). Throws with the fix in hand
+ *  when the profile can carry nothing. */
+export function switchProfile(name: string, now = Date.now()): SwitchResult & { mode: SwitchMode } {
+  const mode = switchModeFor(name, now);
+  if (mode === "keychain") {
+    const result = useProfile(name);
+    clearLaunchProfile();
+    return { ...result, mode };
+  }
+  if (mode === "token") {
+    const meta = readProfileIndex().profiles[name]!;
+    const active = activeAccountIdentity();
+    setLaunchProfile(name, active?.verified ? active.uuid || active.email : undefined, now);
+    return { from: null, to: name, toEmail: meta.email, mode };
+  }
+  // Neither: let useProfile name the exact reason (no profile, unusable login).
+  useProfile(name);
+  throw new CcAccountError(`Profile "${name}" has no usable login and no live setup-token`);
 }
 
 // ---------------------------------------------------------------------------
@@ -2545,7 +2752,7 @@ export async function refreshUsageSnapshots(
   const cache = readUsageCache();
   const summary: UsageRefreshSummary = { probed: [], skipped: [], failed: [], rotated: [], expired: [] };
 
-  const jobs = new Map<string, { label: string; token: string }>();
+  const jobs = new Map<string, { label: string; token: string; viaToken?: boolean }>();
   const activeCred = await readActiveCredentialAsync();
   const active = activeAccountSummary(activeCred);
   const activeKey = active?.uuid || active?.email;
@@ -2593,6 +2800,14 @@ export async function refreshUsageSnapshots(
   }
   const index = readProfileIndex();
   const knownKeys = new Set<string>();
+  // When the saved login cannot be read (dead, or held by a live session), a
+  // live setup token still reads the account's windows (fetchTokenUsageSnapshot).
+  // Without it the meter froze while that account's sessions kept running.
+  const viaSetupToken = (key: string, name: string): boolean => {
+    const setupToken = readAccountTokenValue(name);
+    if (setupToken) jobs.set(key, { label: name, token: setupToken, viaToken: true });
+    return !!setupToken;
+  };
   for (const [name, meta] of Object.entries(index.profiles)) {
     const key = meta.uuid || meta.email;
     if (!key) continue;
@@ -2606,7 +2821,7 @@ export async function refreshUsageSnapshots(
       continue;
     }
     if (meta.login_expired_at) {
-      summary.skipped.push(name); // dead grant — keep last snapshot, no retry
+      if (!viaSetupToken(key, name)) summary.skipped.push(name); // dead grant — keep last snapshot, no retry
       continue;
     }
     const raw = await readProfileSecretAsync(name);
@@ -2629,12 +2844,15 @@ export async function refreshUsageSnapshots(
     let token = profile.credentials?.claudeAiOauth?.accessToken;
     if (!credentialHealth(JSON.stringify(profile.credentials), now).pushable) {
       const prev = cache.accounts[key];
-      if (prev && now - prev.fetched_at < minInterval) {
+      // A live feed keeps fetched_at moving, so only the overdue rule can get
+      // past this for an account whose sessions are running.
+      if (prev && now - prev.fetched_at < minInterval && !isLivePollOverdue(prev, now)) {
         summary.skipped.push(name); // inside the throttle — rotating now would buy nothing
         continue;
       }
       if (opts.heldProfiles?.has(name)) {
-        summary.skipped.push(name); // a live session rotates this store; read it back next pass
+        // A live session rotates this store; read it back next pass.
+        if (!viaSetupToken(key, name)) summary.skipped.push(name);
         continue;
       }
       const rotated = await refreshProfileCredential(name, { fetchImpl: opts.fetchImpl, now });
@@ -2682,7 +2900,10 @@ export async function refreshUsageSnapshots(
     try {
       // polled_at is what bounds the live feed's hold on this poll; it rides
       // the snapshot so a later live update can carry it forward.
-      probed.set(key, { ...(await fetchUsageSnapshot(job.token, { fetchImpl: opts.fetchImpl, now })), polled_at: now });
+      const snap = job.viaToken
+        ? await fetchTokenUsageSnapshot(job.token, prev, { fetchImpl: opts.fetchImpl, now })
+        : await fetchUsageSnapshot(job.token, { fetchImpl: opts.fetchImpl, now });
+      probed.set(key, { ...snap, polled_at: now });
       summary.probed.push(job.label);
       if (retries[key]) {
         delete retries[key]; // recovered — the next failure starts at 30s again
@@ -2740,6 +2961,9 @@ export interface AccountsHeartbeatPayload {
   // server's auto-switch loop trusts a usage snapshot of the active account
   // only if it was fetched after this.
   active_since?: number;
+  // The profile sessions launch on when it is not the keychain login (a token
+  // switch; see "Launch profile"). Absent = the fleet follows the keychain.
+  launch_profile?: string;
   profiles: Array<{
     name: string;
     email?: string;
@@ -2794,12 +3018,16 @@ export function createMtimeGatedCache<T>(
   };
 }
 
-function accountsPayload(active: ReturnType<typeof activeAccountSummary>): AccountsHeartbeatPayload | null {
+function accountsPayload(active: ReturnType<typeof activeAccountIdentity>): AccountsHeartbeatPayload | null {
   let value: AccountsHeartbeatPayload | null = null;
   try {
     const stamp = readActiveStamp();
-    const activeSince =
-      stamp && (active?.uuid || active?.email) === stamp.key ? stamp.since : undefined;
+    // "active_since" is when the FLEET account last changed: the token switch
+    // when a launch record is in effect, else the keychain activation stamp.
+    const launch = launchRecordInEffect(active);
+    const activeSince = launch
+      ? launch.since
+      : stamp && (active?.uuid || active?.email) === stamp.key ? stamp.since : undefined;
     const usage = readUsageCache().accounts;
     const profiles = Object.entries(readProfileIndex().profiles).sort(([a], [b]) => a.localeCompare(b)).map(([name, { email, uuid, tier, subscription, login_expired_at }]) => {
       const tok = accountLaunchInfo(name);
@@ -2820,6 +3048,7 @@ function accountsPayload(active: ReturnType<typeof activeAccountSummary>): Accou
         active_email: active?.email,
         active_uuid: active?.uuid,
         ...(activeSince !== undefined ? { active_since: activeSince } : {}),
+        ...(launch ? { launch_profile: launch.profile } : {}),
         profiles,
       };
     }
@@ -2829,16 +3058,16 @@ function accountsPayload(active: ReturnType<typeof activeAccountSummary>): Accou
   return value;
 }
 
-const accountsCachePaths = () => [indexPath(), claudeJsonPath(), usageCachePath(), activeStampPath(), defaultConfigDir()];
+const accountsCachePaths = () => [indexPath(), claudeJsonPath(), usageCachePath(), activeStampPath(), launchRecordPath(), defaultConfigDir()];
 const accountsCache = createMtimeGatedCache(accountsCachePaths, () => {
   try {
-    return accountsPayload(activeAccountSummary());
+    return accountsPayload(activeAccountIdentity());
   } catch {
     return null;
   }
 });
 const asyncAccountsCache = createMtimeGatedCache(accountsCachePaths, () =>
-  readActiveCredentialAsync().then(credential => accountsPayload(activeAccountSummary(credential))).catch(() => null),
+  readActiveCredentialAsync().then(credential => accountsPayload(activeAccountIdentity(credential))).catch(() => null),
 );
 
 export function invalidateAccountsCache(): void {

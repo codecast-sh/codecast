@@ -87,7 +87,8 @@ import {
   type LiveClaudeSession,
 } from "./ccLiveGate.js";
 import {
-  useProfile,
+  switchProfile,
+  launchProfileName,
   saveProfile,
   getAccountsHeartbeatPayloadAsync,
   autoSaveActiveProfile,
@@ -5558,9 +5559,13 @@ async function executeRemoteCommand(
         // while the keychain login (and every other session) stays put.
         // Validated by name shape here; a profile with no launch credential is
         // logged and the launch falls back to the keychain (accountSourcePrefix).
+        // No account asked for = the launch profile when a token switch set
+        // one (the fleet runs there, not on the keychain), else the keychain.
         const requestedAccount: string | undefined =
-          agentType === "claude" && typeof parsed.cc_account === "string" && /^[a-z0-9][a-z0-9._-]{0,40}$/i.test(parsed.cc_account)
-            ? parsed.cc_account
+          agentType === "claude"
+            ? typeof parsed.cc_account === "string" && /^[a-z0-9][a-z0-9._-]{0,40}$/i.test(parsed.cc_account)
+              ? parsed.cc_account
+              : launchProfileName()
             : undefined;
         // Per-session stable-context prefs from the new-session page. Same
         // ride-along contract as model/effort: unknown values dropped here.
@@ -6557,14 +6562,21 @@ async function executeRemoteCommand(
           let switched: string | null = null;
           if (profile) {
             try {
-              const switchResult = useProfile(profile);
+              // Keychain when the saved login is usable; onto the minted
+              // setup-token when it is not (the launch record: the fleet
+              // moves, the keychain login stays). The restarts below pin to
+              // the token either way (the server corrected the rows first).
+              const switchResult = switchProfile(profile);
               switched = switchResult.to;
               log(
-                `[ACCOUNTS] ${switchResult.keptLive ? "Already on" : "Switched CC account to"} "${profile}"${switchResult.toEmail ? ` (${switchResult.toEmail})` : ""}${switchResult.from ? `, re-saved outgoing as "${switchResult.from}"` : ""}${switchResult.keptLive ? ", kept the live login" : ""}`,
+                switchResult.mode === "token"
+                  ? `[ACCOUNTS] Switched fleet to "${profile}"${switchResult.toEmail ? ` (${switchResult.toEmail})` : ""} on its setup-token; the keychain login stays`
+                  : `[ACCOUNTS] ${switchResult.keptLive ? "Already on" : "Switched CC account to"} "${profile}"${switchResult.toEmail ? ` (${switchResult.toEmail})` : ""}${switchResult.from ? `, re-saved outgoing as "${switchResult.from}"` : ""}${switchResult.keptLive ? ", kept the live login" : ""}`,
               );
-              // Remotes run on a pushed COPY of this credential — refresh them now
-              // instead of waiting for the 30-min loop.
-              pushCredentialToRemoteHosts("account_switch").catch(() => {});
+              // Remotes run on a pushed COPY of the keychain credential — refresh
+              // them now instead of waiting for the 30-min loop. A token switch
+              // changed nothing they receive.
+              if (switchResult.mode === "keychain") pushCredentialToRemoteHosts("account_switch").catch(() => {});
               // Surface the new active account in Settings without waiting a beat.
               sendHeartbeat().catch(() => {});
               // Probe the new account's meters now, not at the next 5-minute
@@ -7251,7 +7263,9 @@ async function executeRemoteCommand(
             // `claude` that fell into the project's dontAsk default — the agent
             // came back stranded with every tool denied.
             const safeBlankArgs = sanitizeBinaryArgs(buildBlankLaunchArgs(blankAgentType, config));
-            const blankCmdText = `${AGENT_ENV_SCRUB}${launchTokenEnv(launchTokenLedger().issue(tmuxSession))} ${[blankBinary, ...safeBlankArgs].join(" ")}`;
+            // Same account rule as every other Claude launch (blankLaunchAccount).
+            const blankAccount = blankAgentType === "claude" ? await blankLaunchAccount(conversationId) : { prefix: "" as string, account: undefined as string | undefined };
+            const blankCmdText = `${blankAccount.prefix}${AGENT_ENV_SCRUB}${launchTokenEnv(launchTokenLedger().issue(tmuxSession))} ${[blankBinary, ...safeBlankArgs].join(" ")}`;
             try {
               tmuxExecSync(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", cwd], { timeout: 5000 });
               // Tag like the other creation paths so this session is discoverable
@@ -7261,6 +7275,10 @@ async function executeRemoteCommand(
               await setTmuxSessionOption(tmuxSession, "@codecast_conversation_id", conversationId).catch(() => {});
               await setTmuxSessionOption(tmuxSession, "@codecast_agent_type", blankAgentType).catch(() => {});
               await setTmuxSessionOption(tmuxSession, "@codecast_project_path", cwd).catch(() => {});
+              if (blankAgentType === "claude") {
+                if (blankAccount.account) await setTmuxSessionOption(tmuxSession, "@codecast_cc_account", blankAccount.account).catch(() => {});
+                markClaudeSessionLive(tmuxSession, blankAccount.account);
+              }
               await stampCodexPaneAccount(blankAgentType, tmuxSession, conversationId);
               tmuxExecSync(["send-keys", "-t", tmuxSession, "-l", blankCmdText], { timeout: 5000 });
               tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
@@ -23338,7 +23356,9 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     const resumePin = conversationId && syncServiceRef
       ? await syncServiceRef.pinForResume(conversationId)
       : null;
-    const pinnedAccount = resumePin ? resumePin.cc_account ?? undefined : convInfo?.cc_account ?? undefined;
+    // No pin at all = the launch profile after a token switch (the fleet's
+    // account), else the keychain, same rule as a fresh launch.
+    const pinnedAccount = (resumePin ? resumePin.cc_account ?? undefined : convInfo?.cc_account ?? undefined) ?? launchProfileName();
     resumeAccountPrefix = accountSourcePrefix(pinnedAccount, log);
     // An empty prefix means the pin did not resolve to a launch file, so this
     // resume lands on the keychain login after all — and then it DOES hold the
@@ -24016,6 +24036,25 @@ async function recoverBlankCodexForDelivery(
   return true;
 }
 
+/** The account a conversation's process launches on when it is started BLANK
+ *  (no transcript to resume: a reconstitution, a delivery with no live pane).
+ *  One rule with the fresh launch and the resume: the row's pin (the server's
+ *  answer for a parked row, else the raw row), else the launch profile after
+ *  a token switch, else the keychain. Without this a token switched fleet
+ *  quietly regrew sessions on the keychain login every time one lost its pane. */
+async function blankLaunchAccount(conversationId: string | undefined): Promise<{ prefix: string; account?: string }> {
+  let pin: string | undefined;
+  if (conversationId && syncServiceRef) {
+    const resumePin = await syncServiceRef.pinForResume(conversationId).catch(() => null);
+    pin = resumePin
+      ? resumePin.cc_account ?? undefined
+      : (await syncServiceRef.getProjectInfo(conversationId).catch(() => null))?.cc_account ?? undefined;
+  }
+  const account = pin ?? launchProfileName();
+  const prefix = accountSourcePrefix(account, log);
+  return { prefix, account: prefix ? account : undefined };
+}
+
 async function startFreshSessionForDelivery(
   conversationId: string,
 ): Promise<StartedSessionInfo | null> {
@@ -24103,13 +24142,17 @@ async function startFreshSessionForDelivery(
   // default (which silently denies every tool until the user manually opens
   // permissions). This is the path that strands "started without bypass" threads.
   const safeBlankArgs = sanitizeBinaryArgs(buildBlankLaunchArgs("claude", config));
-  const blankCmdText = `${AGENT_ENV_SCRUB}${launchTokenEnv(launchTokenLedger().issue(tmuxSession))} ${["claude", ...safeBlankArgs].join(" ")}`;
+  // Same account rule as every other Claude launch (blankLaunchAccount).
+  const blankAccount = await blankLaunchAccount(conversationId);
+  const blankCmdText = `${blankAccount.prefix}${AGENT_ENV_SCRUB}${launchTokenEnv(launchTokenLedger().issue(tmuxSession))} ${["claude", ...safeBlankArgs].join(" ")}`;
 
   try {
     tmuxExecSync(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", projectPath], { timeout: 5000 });
     await setTmuxSessionOption(tmuxSession, "@codecast_conversation_id", conversationId).catch(() => {});
     await setTmuxSessionOption(tmuxSession, "@codecast_agent_type", "claude").catch(() => {});
     await setTmuxSessionOption(tmuxSession, "@codecast_project_path", projectPath).catch(() => {});
+    if (blankAccount.account) await setTmuxSessionOption(tmuxSession, "@codecast_cc_account", blankAccount.account).catch(() => {});
+    markClaudeSessionLive(tmuxSession, blankAccount.account);
     tmuxExecSync(["send-keys", "-t", tmuxSession, "-l", blankCmdText], { timeout: 5000 });
     tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
     const entry: StartedSessionInfo = {
