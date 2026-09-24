@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { selectionGesture, useInboxSelection } from "./inboxSelection";
+import { selectionGesture, selectionIdsFor, useInboxSelection } from "./inboxSelection";
 
 // The inbox multi-selection: toggle, shift-range over screen order, clear.
 
@@ -57,5 +57,15 @@ describe("selectionGesture", () => {
     expect(selectionGesture(ev({ ctrlKey: true }))).toBe("toggle");
     expect(selectionGesture(ev({ shiftKey: true, metaKey: true }))).toBe("range");
     expect(selectionGesture(ev({}))).toBeNull();
+  });
+});
+
+describe("selectionIdsFor", () => {
+  test("a ticked card carries the whole selection; an unticked card carries only itself", () => {
+    useInboxSelection.getState().set(["b", "d", "e"]);
+    expect(selectionIdsFor("d")).toEqual(["b", "d", "e"]);
+    expect(selectionIdsFor("a")).toEqual(["a"]);
+    useInboxSelection.getState().clear();
+    expect(selectionIdsFor("d")).toEqual(["d"]);
   });
 });

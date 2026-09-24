@@ -41,6 +41,16 @@ export const useInboxSelection = create<InboxSelectionState>((set, get) => ({
   clear: () => set({ ids: [], anchorId: null }),
 }));
 
+/**
+ * The ids a gesture on one card acts on: the whole ticked selection when that
+ * card is part of it, else the card alone. The right-click menu, the character
+ * picker and every drag drop sink read this, so they cannot disagree.
+ */
+export function selectionIdsFor(id: string): string[] {
+  const picked = useInboxSelection.getState().ids;
+  return picked.includes(id) ? picked : [id];
+}
+
 /** The selection, but only the ids still present in `alive` (rows can leave the list). */
 export function selectedAlive(ids: string[], alive: (id: string) => boolean): string[] {
   return ids.filter(alive);
