@@ -42,6 +42,8 @@ interface DesktopUpdateState {
   appliedVersion?: string;
   lastAttemptVersion?: string;
   lastAttemptAt?: number;
+  /** Inode of the installed bundle that last passed codesign (installedBundleIntact). */
+  intactIno?: number;
 }
 
 function readState(): DesktopUpdateState {
@@ -207,6 +209,42 @@ async function ensureAppNotRunning(force: boolean, log: Logger): Promise<boolean
   return await waitForExit(8); // ~4s
 }
 
+// The app installs a bundle it staged itself when it quits (main.js
+// spawnUpdateSwap): a detached helper renames `.Codecast.app.incoming` over the
+// app once the process exits, then removes `.Codecast.app.old`. The daemon's
+// forced update quits the app too, so that helper runs at the same moment as
+// the daemon's own swap. Both used to stage in the same folder, and a helper
+// rename that landed during the daemon's copy installed a half-copied bundle:
+// "Codecast is damaged" (2026-09-24). So the daemon stages under its own names
+// and, once the app is gone, waits for the app's swap to finish first.
+export function stagingPaths(appPath: string) {
+  const dir = path.dirname(appPath);
+  return {
+    appIncoming: path.join(dir, ".Codecast.app.incoming"),
+    appOld: path.join(dir, ".Codecast.app.old"),
+    incoming: path.join(dir, ".Codecast.app.daemon-incoming"),
+    old: path.join(dir, ".Codecast.app.daemon-old"),
+  };
+}
+
+// Wait while the app's quit-time swap is in flight (its staged bundle or the
+// bundle it moved aside still exists). True when it settled. A staged bundle
+// left by an app that was killed before it could quit never moves, so after
+// the timeout it is removed: no helper is left to rename it.
+export async function waitForAppSwap(appPath: string, opts: { timeoutMs?: number; pollMs?: number } = {}): Promise<boolean> {
+  const { appIncoming, appOld } = stagingPaths(appPath);
+  const deadline = Date.now() + (opts.timeoutMs ?? 20_000);
+  while (fs.existsSync(appIncoming) || fs.existsSync(appOld)) {
+    if (Date.now() >= deadline) {
+      rmrf(appIncoming);
+      rmrf(appOld);
+      return false;
+    }
+    await sleep(opts.pollMs ?? 250);
+  }
+  return true;
+}
+
 // Parse only the fields we need from latest-mac.yml (avoids a YAML dependency).
 function parseFeed(text: string): { version?: string; zip?: string; sha512?: string } {
   const version = text.match(/^version:\s*(.+)$/m)?.[1]?.trim();
@@ -258,6 +296,44 @@ function rmrf(p: string): void {
   } catch {}
 }
 
+// Swap a verified bundle into appPath: stage a sibling on the same volume,
+// then two renames. Throws when the swap fails, after putting the old app back.
+export function swapInBundle(newApp: string, appPath: string): void {
+  const { incoming, old } = stagingPaths(appPath);
+  rmrf(incoming);
+  rmrf(old);
+  execFileSync("/usr/bin/ditto", [newApp, incoming], { stdio: ["ignore", "ignore", "ignore"] });
+  try {
+    fs.renameSync(appPath, old); // atomic
+    fs.renameSync(incoming, appPath); // atomic
+  } catch (e) {
+    // Roll back if the second rename failed and we moved the old one away.
+    if (!fs.existsSync(appPath) && fs.existsSync(old)) {
+      try { fs.renameSync(old, appPath); } catch {}
+    }
+    rmrf(incoming);
+    throw e;
+  }
+  rmrf(old);
+}
+
+// A bundle that fails its signature cannot launch, so it can never update
+// itself, and its version still reads as current: only the daemon can put a
+// good copy back. codesign reads the whole bundle, so a bundle that passed is
+// remembered by inode (every swap makes a new one) and not read again.
+function installedBundleIntact(): boolean {
+  let ino: number;
+  try {
+    ino = fs.statSync(APP_PATH).ino;
+  } catch {
+    return true;
+  }
+  if (readState().intactIno === ino) return true;
+  if (!verifyBundleSignature(APP_PATH, () => {})) return false;
+  writeState({ ...readState(), intactIno: ino });
+  return true;
+}
+
 /**
  * Check the published desktop feed and, if a newer version is available and the
  * app is not currently running, download + verify + atomically swap it in.
@@ -292,10 +368,11 @@ export async function checkForDesktopUpdate(
   }
 
   try {
-    if (!installed) {
-      bail("desktop update: could not read the installed app version");
-      return false;
-    }
+    // A damaged bundle cannot launch to update itself, and its version may
+    // still read as current, so it takes the reinstall path.
+    const damaged = !installed || (!isDesktopAppRunning() && !installedBundleIntact());
+    if (damaged) bail(`desktop update: the installed app ${installed ? `v${installed} ` : ""}fails its signature or has no readable version; reinstalling`);
+    const current = installed ?? "0.0.0";
 
     // Server-pinned floor: when the installed app is below min_desktop_version,
     // apply even while the app is running (quit + swap + relaunch) so an
@@ -303,7 +380,7 @@ export async function checkForDesktopUpdate(
     // A manual `--force` does the same. Unlike `--force`, the min-version path
     // still respects the per-version retry throttle, so a persistently failing
     // apply can't quit-and-relaunch the app every cycle.
-    const applyWhileRunning = shouldApplyWhileRunning(installed, opts);
+    const applyWhileRunning = shouldApplyWhileRunning(current, opts);
 
     const res = await fetch(DESKTOP_FEED);
     if (!res.ok) {
@@ -316,7 +393,7 @@ export async function checkForDesktopUpdate(
       return false;
     }
 
-    if (compareVersions(version, installed) <= 0) {
+    if (!damaged && compareVersions(version, current) <= 0) {
       // Already current — clear any stale per-version attempt bookkeeping.
       const st = readState();
       if (st.appliedVersion !== installed) writeState({ ...st, appliedVersion: installed });
@@ -414,26 +491,19 @@ export async function checkForDesktopUpdate(
       return false;
     }
 
-    // Atomic swap on the /Applications volume: stage a sibling, then rename.
-    const incoming = "/Applications/.Codecast.app.incoming";
-    const old = "/Applications/.Codecast.app.old";
-    rmrf(incoming);
-    rmrf(old);
-    execFileSync("/usr/bin/ditto", [newApp, incoming], { stdio: ["ignore", "ignore", "ignore"] });
+    if (!(await waitForAppSwap(APP_PATH))) log("desktop update: the app's own staged bundle never moved; removed it");
     try {
-      fs.renameSync(APP_PATH, old); // atomic
-      fs.renameSync(incoming, APP_PATH); // atomic
-    } catch (e) {
-      // Roll back if the second rename failed and we moved the old one away.
-      if (!fs.existsSync(APP_PATH) && fs.existsSync(old)) {
-        try { fs.renameSync(old, APP_PATH); } catch {}
+      // The app's quit helper may have installed this very version already.
+      if (plistVersion(APP_PLIST) === version && verifyBundleSignature(APP_PATH, () => {})) {
+        log(`desktop update: the app installed v${version} itself on quit`);
+      } else {
+        swapInBundle(newApp, APP_PATH);
       }
-      rmrf(incoming);
+    } catch (e) {
       bail(`desktop update: swap failed: ${e instanceof Error ? e.message : String(e)}`);
       rmrf(WORK_DIR);
       return false;
     }
-    rmrf(old);
     rmrf(WORK_DIR);
 
     // Defensive: clear quarantine so Gatekeeper doesn't block relaunch, and drop
