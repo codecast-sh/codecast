@@ -334,7 +334,9 @@ export class OpencodeStorageWatcher extends EventEmitter implements DirEventWatc
 
   private ensureWorker(): Worker {
     if (this.worker) return this.worker;
-    this.worker = new Worker(new URL("./opencodeStorage.worker.ts", import.meta.url).href);
+    // The built name: a compiled binary holds the worker only as `.js` (see
+    // WORKER_ENTRIES in scripts/build-with-native.ts), and source resolves it too.
+    this.worker = new Worker(new URL("./opencodeStorage.worker.js", import.meta.url).href);
     return this.worker;
   }
 
