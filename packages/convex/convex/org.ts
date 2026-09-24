@@ -1069,7 +1069,7 @@ export type BriefHand = {
 };
 export type BriefChange = { kind: "task" | "plan"; short_id?: string; title: string; status: string; updated_at: number };
 export type BriefFacts = {
-  scope: { projects: ScopeProject[]; plans: { id: string; short_id: string; title: string }[]; whole_workspace: boolean };
+  scope: { projects: ScopeProject[]; plans: { id: string; short_id: string; title: string; project_id?: string }[]; whole_workspace: boolean };
   tasks: { total: number; open: number; by_status: Record<string, number>; by_priority: Record<string, number> };
   plans: ScopeSummary["plans"];
   hands: BriefHand[];
@@ -1169,7 +1169,7 @@ export async function computeBriefFacts(ctx: Ctx, viewerId: Id<"users">, role: a
   );
 
   return {
-    scope: { projects: summary.projects, plans: resolved.plans.map((p) => ({ id: p._id.toString(), short_id: p.short_id, title: p.title })), whole_workspace: whole },
+    scope: { projects: summary.projects, plans: resolved.plans.map((p) => ({ id: p._id.toString(), short_id: p.short_id, title: p.title, project_id: p.project_id ? String(p.project_id) : undefined })), whole_workspace: whole },
     tasks: summary.tasks,
     plans: summary.plans,
     hands,

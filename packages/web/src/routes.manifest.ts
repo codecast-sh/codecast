@@ -101,6 +101,7 @@ const BlogTriggers = lazy(() => import("@/app/(marketing)/blog/this-post-wrote-i
 const BlogPublish = lazy(() => import("@/app/(marketing)/blog/a-url-for-everything-your-agent-makes/page"));
 const BlogAgentsTalk = lazy(() => import("@/app/(marketing)/blog/agents-that-talk-to-each-other/page"));
 const BlogPullRequests = lazy(() => import("@/app/(marketing)/blog/the-pull-request-that-knows-its-sessions/page"));
+const BlogTeamSees = lazy(() => import("@/app/(marketing)/blog/what-your-team-sees/page"));
 const CompareIndex = lazy(() => import("@/app/(marketing)/compare/page"));
 const Compare = lazy(() => import("@/app/(marketing)/compare/ComparePage"));
 
@@ -258,6 +259,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "blog/a-url-for-everything-your-agent-makes", component: cast(BlogPublish), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/agents-that-talk-to-each-other", component: cast(BlogAgentsTalk), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/the-pull-request-that-knows-its-sessions", component: cast(BlogPullRequests), layout: "marketing", guestOk: true, guestKind: "public" },
+  { path: "blog/what-your-team-sees", component: cast(BlogTeamSees), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "compare", component: cast(CompareIndex), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "compare/:slug", component: cast(Compare), layout: "marketing", guestOk: true, guestKind: "public" },
 

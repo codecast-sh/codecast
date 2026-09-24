@@ -1,4 +1,5 @@
 import { HIBERNATED_COPY } from "@codecast/shared/contracts";
+import { ShortId } from "./ShortId";
 import { BranchCodeLink } from "./repo/RepositoryLinks";
 import React, { useState, useCallback, useRef, memo, useMemo } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -3186,7 +3187,7 @@ function NeedsAttentionSection() {
             <div className="flex-1 min-w-0">
               <div className="text-sm text-sol-text truncate leading-tight">{task.title}</div>
               <div className="flex items-center gap-1.5 mt-1">
-                <span className="text-[10px] text-sol-text-dim font-mono">{task.short_id}</span>
+                <ShortId id={task.short_id} className="text-[10px] text-sol-text-dim" />
                 <TaskStatusBadge status={task.execution_status || "blocked"} type="execution" size="sm" />
                 {task.plan && (
                   <span className="text-[10px] text-sol-cyan/70 truncate max-w-[100px]" title={task.plan.title}>

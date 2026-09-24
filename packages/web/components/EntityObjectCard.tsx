@@ -9,6 +9,7 @@ import {
   GitCommitHorizontal,
   GitPullRequest,
   MessageSquare,
+  Network,
   Target,
   Zap,
 } from "lucide-react";
@@ -46,6 +47,7 @@ import { prState, repoObjectRefOf, repoObjectTitle } from "../lib/repoObjects";
 import { DocDates } from "./DocDates";
 import { FileDiffList } from "./FileDiffView";
 import { RevealButton, RevealOpenLink, type RevealTarget } from "./ObjectReveal";
+import { ProposalDetail, ProposalMeta, ProposalSnippet, useProposalChanges, useProposalTree } from "./org/ProposalCard";
 
 // The preview card a SHARED object renders as — the rich sibling of the inline
 // pill. remarkEntityCards promotes a references-only paragraph (or list) into
@@ -67,6 +69,7 @@ const TYPE_ICON: Record<EntityType, any> = {
   trigger: Zap,
   project: Folder,
   initiative: Flag,
+  proposal: Network,
   pr: GitPullRequest,
   commit: GitCommitHorizontal,
 };
@@ -714,6 +717,38 @@ export function ObjectCardFrame({
   );
 }
 
+/**
+ * A staffing proposal shared in a conversation (org-staffing.md S24): the
+ * changes as a small tree in the chart's faces and ghost chrome, their
+ * status, and Accept, Skip and Ask. The row came through useEntityResolution
+ * (store-fed); the changes and the tree are read from the store here.
+ */
+function ProposalEntityCard({ rawId, entity, served, count, href }: { rawId: string; entity: any; served: boolean; count: number; href: string }) {
+  const changes = useProposalChanges(entity?._id);
+  const tree = useProposalTree(entity);
+  const Icon = TYPE_ICON.proposal;
+  return (
+    <ObjectCardFrame
+      accent={ACCENT.proposal}
+      count={count}
+      ariaLabel={`${TYPE_LABEL.proposal}: ${entity?.title ?? rawId}`}
+      href={href}
+      openLabel="Open proposal"
+      footerId={entity?.short_id ?? rawId}
+      resolved={!!entity}
+      served={served}
+      header={{
+        icon: <Icon className={`h-3.5 w-3.5 ${ACCENT.proposal.text}`} />,
+        title: entity?.title ?? <span className="font-mono text-sol-text-dim">{rawId}</span>,
+        meta: entity ? <ProposalMeta proposal={entity} changes={changes} /> : undefined,
+        // No age: what waits is the meta line's, and a narrow pane needs the width for the title.
+      }}
+      snippet={entity ? <ProposalSnippet proposal={entity} changes={changes} tree={tree} href={href} compact={count > 1} /> : undefined}
+      detail={entity ? <ProposalDetail proposal={entity} changes={changes} tree={tree} href={href} summary={entity.summary_md ? <CardMarkdown content={entity.summary_md} /> : null} /> : null}
+    />
+  );
+}
+
 /** One shared entity (task, plan, session, doc, trigger, project), rendered as a browsable card. */
 export function EntityObjectCard({ refId, count, unresolved }: {
   refId: string;
@@ -739,6 +774,7 @@ export function EntityObjectCard({ refId, count, unresolved }: {
   // Same degrade rule as the pill: an id that resolves to no entity table (or
   // is still resolving) renders back as the text that was typed.
   if (!type) return <span className="font-mono text-[11px] text-sol-text-dim">{refId}</span>;
+  if (type === "proposal") return <ProposalEntityCard rawId={rawId} entity={entity} served={served} count={count} href={href} />;
   const isRepoObject = type === "pr" || type === "commit";
   // Same rule as the pill: a repository reference that names nothing codecast
   // knows is the text it was written as, not a "not available" card. One

@@ -8,7 +8,7 @@ import { askOfChange, asksProgress, letterIntro, letterParts, proposalAsks } fro
 describe("proposalAsks", () => {
   test("a proposal with no stored asks derives them, every live change in exactly one", () => {
     const asks = proposalAsks(ORG_STAFFING_FIXTURE_PROPOSAL);
-    expect(asks.map((a) => a.title)).toEqual(["Bring 2 records up to date", "Add an agent: Head of Platform", "Add an agent: Content Lead", "4 smaller changes: filing, goals and settings"]);
+    expect(asks.map((a) => a.title)).toEqual(["Bring 2 records up to date", "Add an agent: Head of Platform", "Add an agent: Content Lead", "3 smaller changes: filing, goals and settings" /* four rows, three drawn: the limit is never a row (S23.2) */]);
     const seen = asks.flatMap((a) => a.changes.map((c) => c.seq)).sort((a, b) => a - b);
     expect(seen).toEqual(ORG_STAFFING_FIXTURE_PROPOSAL.changes.map((c) => c.seq));
     expect(asks.map((a) => a.index)).toEqual([0, 1, 2, 3]);
@@ -20,7 +20,8 @@ describe("proposalAsks", () => {
     expect(asks.map((a) => a.title)).toEqual(["Close the paperwork", "Everything else"]);
     expect(asks[0].changes.map((c) => c.seq)).toEqual([8, 7], "tasks close before the plan that holds them");
     expect(asks[0].foldLabel).toBe("2 records");
-    expect(asks[1].foldLabel).toBe("6 changes");
+    // Six rows in the ask; the fold counts five, because the limit among them is never a row (S23.2).
+    expect(asks[1].foldLabel).toBe("5 changes");
   });
 
   test("state and verdict line: open while anything waits, then accepted or skipped", () => {
@@ -42,7 +43,7 @@ describe("proposalAsks", () => {
     const asks = proposalAsks(ORG_STAFFING_FIXTURE_REVISED_PROPOSAL);
     expect(asks.flatMap((a) => a.changes).some((c) => c.status === "removed")).toBe(false);
     expect(askOfChange(asks, "fixture-change-92")).toBeNull();
-    expect(askOfChange(asks, "fixture-change-93")?.title).toMatch(/smaller changes/);
+    expect(askOfChange(asks, "fixture-change-93")?.title).toMatch(/smaller change/);
   });
 
   test("the header counts asks, not rows", () => {

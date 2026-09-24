@@ -284,16 +284,17 @@ describe("the ?compose= parameter", () => {
 });
 
 describe("inline edit of a change", () => {
-  test("fields flatten one level and edits come back nested, only where changed", async () => {
+  test("fields flatten one level and edits come back nested, only where changed; a limit has no fields", async () => {
     const { changeEdits, changeFields } = await import("./staffingModel");
+    // A limit (S23.2) is never read, so never edited: no fields, no edits.
     const budget = P.changes[3].change;
-    const fields = changeFields(budget);
-    expect(fields).toEqual([
-      { key: "handle", label: "handle", kind: "text", value: "growth" },
-      { key: "caps.tokens_per_day", label: "caps tokens per day", kind: "number", value: "800000" },
-    ]);
-    expect(changeEdits(budget, fields)).toEqual({});
-    expect(changeEdits(budget, fields.map((f) => f.key === "caps.tokens_per_day" ? { ...f, value: "600000" } : f))).toEqual({ caps: { tokens_per_day: 600000 } });
+    expect(changeFields(budget)).toEqual([]);
+    expect(changeEdits(budget, [])).toEqual({});
+    const hire = { kind: "hire" as const, handle: "growth", template: "growth", version: "1.2.0", digest: "sha", instance: "growth-1", project: "Growth", config: { region: "us" } };
+    const fields = changeFields(hire);
+    expect(fields.find((f) => f.key === "config.region")).toEqual({ key: "config.region", label: "config region", kind: "text", value: "us" });
+    expect(changeEdits(hire, fields)).toEqual({});
+    expect(changeEdits(hire, fields.map((f) => f.key === "config.region" ? { ...f, value: "eu" } : f))).toEqual({ config: { region: "eu" } });
     const meta = P.changes[5].change;
     const metaFields = changeFields(meta);
     expect(metaFields.find((f) => f.key === "success_metrics")).toEqual({ key: "success_metrics", label: "success metrics", kind: "list", value: "organic signups per week, AI citation count" });

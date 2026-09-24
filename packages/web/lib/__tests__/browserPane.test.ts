@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
   appDocumentTitle,
+  appPathOf,
   browserPathLabel,
   browserRoutePath,
   displayHost,
@@ -306,6 +307,19 @@ describe("embed mode", () => {
     withWindow("http://localhost:3200", () => {
       expect(isAppOrigin("https://codecast.sh/inbox")).toBe(true);
       expect(paneSrc("http://localhost:3200/docs")).toBe("http://localhost:3200/docs?embed=1");
+    });
+  });
+
+  it("reads a codecast URL as the in-app path it names", () => {
+    expect(appPathOf("https://codecast.sh/org?proposal=op-19")).toBe("/org?proposal=op-19");
+    expect(appPathOf("https://codecast.sh/conversation/abc#msg-1")).toBe("/conversation/abc#msg-1");
+    expect(appPathOf("https://github.com/codecast/codecast")).toBeNull();
+    expect(appPathOf("https://convex.codecast.sh/cli/a/x")).toBeNull();
+    expect(appPathOf("/inbox")).toBeNull();
+    // A dev server on another port is the loopback pane's, not the app's.
+    withWindow("http://localhost:3200", () => {
+      expect(appPathOf("http://localhost:3200/tasks")).toBe("/tasks");
+      expect(appPathOf("http://localhost:3000/tasks")).toBeNull();
     });
   });
 

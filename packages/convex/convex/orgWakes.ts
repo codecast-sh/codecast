@@ -172,15 +172,22 @@ export function standingFrameLines(projects: Array<{ title: string; short_id?: s
   });
 }
 
+const SCOPE_PLANS_NAMED = 5;
+
 export function buildFrame(input: FrameInput): Frame {
   const { role, rows, facts, now } = input;
   const since = role.last_frame_seq ?? 0;
   const budget = { left: FRAME_FACT_BUDGET };
   const sections: string[] = [];
 
+  // A plan inside a listed project is named by its project; only plans that
+  // stand outside every listed project are named, a few of them at most.
+  const scopeProjectIds = new Set(facts.scope.projects.map((p) => String(p.id)));
+  const loosePlans = facts.scope.plans.filter((p) => !p.project_id || !scopeProjectIds.has(p.project_id));
   const scopeNames = [
     ...facts.scope.projects.map((p) => `project ${p.title}`),
-    ...facts.scope.plans.map((p) => `plan ${p.short_id} ${p.title}`),
+    ...loosePlans.slice(0, SCOPE_PLANS_NAMED).map((p) => `plan ${p.short_id} ${p.title}`),
+    ...(loosePlans.length > SCOPE_PLANS_NAMED ? [`and ${loosePlans.length - SCOPE_PLANS_NAMED} more plans`] : []),
   ];
   sections.push([
     `## You`,

@@ -1,5 +1,6 @@
 "use client";
 import { toast } from "sonner";
+import { ShortId } from "./ShortId";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useInboxStore, type TaskItem } from "../store/inboxStore";
 import { resolveTaskCloseGuard, setTaskErrorReporter } from "../lib/taskActions";
@@ -48,7 +49,7 @@ export function GlobalCloseGuardDialog() {
         <div className="max-h-40 overflow-y-auto mb-4 space-y-1">
           {guard.open.map((t: TaskItem) => (
             <div key={t._id} className="flex items-center gap-2 text-xs">
-              <span className="font-mono text-sol-text-dim">{t.short_id}</span>
+              <ShortId id={t.short_id} className="text-sol-text-dim" />
               <span className="text-sol-text truncate">{t.title}</span>
             </div>
           ))}
