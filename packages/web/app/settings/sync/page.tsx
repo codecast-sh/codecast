@@ -27,6 +27,8 @@ import { SettingsPanel, SettingsRow, SettingsSection } from "../../../components
 import { TeamVisibilityControl } from "../../../components/settings/TeamVisibilityControl";
 import Link from "next/link";
 import { SharePanel, ShareTrigger, type ShareChoice, type ShareCurrent } from "../../../components/settings/SharePanel";
+import { SharingAgentCard } from "../../../components/settings/SharingAgentCard";
+import { isFolderSyncing, planSyncChange, type SyncChange, type SyncSettings } from "@codecast/shared/team/syncPlan";
 import { useShareSummaries } from "../../../hooks/useShareSummaries";
 import {
   describeMappingScope,
@@ -87,7 +89,7 @@ type ShareRow = SyncProject & { checkouts: SyncProject[] };
 
 export default function SyncPage() {
   const { user } = useCurrentUser();
-  const syncSettings = user ? { sync_mode: user.sync_mode ?? "all", sync_projects: user.sync_projects ?? [] } : null;
+  const syncSettings: SyncSettings | null = user ? { sync_mode: user.sync_mode ?? "all", sync_projects: user.sync_projects ?? [], sync_excluded: user.sync_excluded ?? [] } : null;
   const userTeams = useInboxStore((s) => s.teams);
   const { data: projects } = useSettingsData("syncProjects");
   const { data: directoryMappings } = useSettingsData("directoryMappings");
@@ -134,6 +136,7 @@ export default function SyncPage() {
   const hasTeams = userTeams && userTeams.length > 0;
   const syncAll = syncSettings?.sync_mode === "all";
   const syncProjects = syncSettings?.sync_projects || [];
+  const syncExcluded = syncSettings?.sync_excluded || [];
   const teams = (userTeams?.filter(Boolean) ?? []) as UserTeam[];
   const mappings = (directoryMappings ?? []) as DirectoryMapping[];
   const recentProjects = (projects ?? []) as SyncProject[];
@@ -165,18 +168,20 @@ export default function SyncPage() {
 
   const handleToggleSyncAll = async () => {
     if (syncAll) {
+      // Every folder that uploads now stays chosen: the switch changes what a
+      // new folder does, not what syncs today.
       await updateSyncSettings({
         sync_mode: "selected",
-        sync_projects: allProjects.map(p => p.path),
+        sync_projects: allProjects.map(p => p.path).filter((path) => isSynced(path)),
       });
     } else {
-      await updateSyncSettings({ sync_mode: "all" });
+      const plan = planSyncChange(syncSettings!, { all: true });
+      if (plan.next) await updateSyncSettings(plan.next);
     }
   };
 
-  const isSynced = (path: string): boolean => {
-    return syncAll || syncProjects.includes(path);
-  };
+  // The daemon's own reading of the lists (@codecast/shared/team/syncPlan).
+  const isSynced = (path: string): boolean => !!syncSettings && isFolderSyncing(syncSettings, path);
 
   const activeTeam = user?.active_team_id ? teams.find((team) => team._id === user.active_team_id) || null : null;
   const teamSharePaths: string[] = (user as any)?.team_share_paths ?? [];
@@ -360,11 +365,23 @@ export default function SyncPage() {
     }
   };
 
+  // One write for a sync change, planned the way `cast sharing` plans it:
+  // with every folder syncing, stopping a folder excludes it; with chosen
+  // folders, it leaves the list. A folder above that still decides is said.
+  const writeSyncChange = async (change: SyncChange) => {
+    const plan = planSyncChange(syncSettings!, change);
+    if (plan.next) await updateSyncSettings(plan.next);
+    for (const { folder, by } of plan.stillCovered) {
+      toast.info(`${getProjectName(folder)} is inside ${getProjectName(by)}`, {
+        description: "unsync" in change ? `It keeps syncing while ${prettyPath(by)} is chosen.` : `It stays off while ${prettyPath(by)} is turned off.`,
+      });
+    }
+  };
+
   const handleToggleProjectSync = async (row: ShareRow, shouldSync: boolean) => {
     const paths = rowPaths(row);
     if (shouldSync) {
-      const newProjects = [...syncProjects, ...paths.filter((path) => !syncProjects.includes(path))];
-      await updateSyncSettings({ sync_projects: newProjects });
+      await writeSyncChange({ sync: paths });
       // The daemon uploads the folder's past sessions on its next heartbeat;
       // read the local numbers again once it has had the chance.
       setTimeout(() => setLocalTick((n) => n + 1), 45_000);
@@ -373,8 +390,7 @@ export default function SyncPage() {
         setPendingUnsync({ path: row.path, paths, sessionCount: row.session_count, action: "unsync" });
         return;
       }
-      const newProjects = syncProjects.filter((projectPath: string) => !paths.includes(projectPath));
-      await updateSyncSettings({ sync_projects: newProjects });
+      await writeSyncChange({ unsync: paths });
       for (const path of directMappingsOf(row)) await removeDirectoryMapping({ path_prefix: path });
     }
   };
@@ -386,10 +402,7 @@ export default function SyncPage() {
     unsyncingRef.current = true;
     setIsUnsyncing(true);
     try {
-      if (action === "unsync") {
-        const newProjects = syncProjects.filter((projectPath: string) => !paths.includes(projectPath));
-        await updateSyncSettings({ sync_projects: newProjects });
-      }
+      if (action === "unsync") await writeSyncChange({ unsync: paths });
       for (const path of paths) {
         const existingMapping = mappingsByPath.get(path);
         if (existingMapping) {
@@ -578,12 +591,15 @@ export default function SyncPage() {
 
   return (
     <SettingsPanel>
+      <SharingAgentCard />
       <SettingsSection title="Sync" icon={RefreshCw}>
         <SettingsRow
           label="Sync all folders"
           description={
             syncAll
-              ? "Sessions from every folder upload to your workspace. They stay private to you unless you share them."
+              ? syncExcluded.length === 0
+                ? "Sessions from every folder upload to your workspace, new folders included. They stay private to you unless you share them."
+                : `Every folder uploads, new ones included, except the ${syncExcluded.length} you turned off below. They stay private to you unless you share them.`
               : `Only ${syncProjects.length} chosen folder${syncProjects.length === 1 ? "" : "s"} upload${syncProjects.length === 1 ? "s" : ""} sessions — pick them in the list below.`
           }
         >
@@ -703,7 +719,7 @@ export default function SyncPage() {
                             </div>
                             <div className="flex items-center gap-1.5 text-xs">
                               <span
-                                className="truncate font-mono text-[11px] text-sol-text-muted"
+                                className="min-w-[12ch] truncate font-mono text-[11px] text-sol-text-muted"
                                 title={more > 0 ? project.checkouts.map((checkout) => prettyPath(checkout.path)).join("\n") : undefined}
                               >
                                 {prettyPath(project.path)}
@@ -726,8 +742,12 @@ export default function SyncPage() {
                                         : "counting"}
                               </span>
                               {!synced && local && <span className="flex-shrink-0 text-sol-text-dim">· not synced</span>}
-                              {isGone(project) && <span className="flex-shrink-0 text-sol-yellow">· folder moved or deleted</span>}
+
                             </div>
+                            {/* Its own line: beside the count it squeezed the path to nothing. */}
+                            {isGone(project) && (
+                              <div className="mt-0.5 text-[11px] text-sol-yellow">Folder moved or deleted on this machine</div>
+                            )}
                             {teamResult && !teamResult.isDefault && (
                               <MappingScopeLine
                                 path={project.path}
@@ -749,13 +769,11 @@ export default function SyncPage() {
                             />
                           )}
 
-                          {!syncAll && (
-                            <Switch
-                              checked={synced}
-                              onCheckedChange={(v) => handleToggleProjectSync(project, v)}
-                              aria-label={`Sync ${rowName(project)}`}
-                            />
-                          )}
+                          <Switch
+                            checked={synced}
+                            onCheckedChange={(v) => handleToggleProjectSync(project, v)}
+                            aria-label={`Sync ${rowName(project)}`}
+                          />
                         </div>
                       </div>
                       {open && (
@@ -801,16 +819,15 @@ export default function SyncPage() {
       <SettingsSection
         title="CLI"
         icon={Terminal}
-        description="Manage sync settings from the command line. Changes sync to your daemon on the next cycle."
+        description="The same settings from the command line, which is also how an agent changes them. Sync changes reach your daemon within a minute."
       >
         <div className="space-y-1 px-4 py-3 font-mono text-sm sm:px-5">
-          <p><span className="text-sol-cyan">cast sync-settings</span> <span className="text-sol-text-muted">- Interactive project selection</span></p>
+          <p><span className="text-sol-cyan">cast sharing</span> <span className="text-sol-text-muted">- Everything on this page, in the terminal</span></p>
+          <p><span className="text-sol-cyan">cast sharing sync | unsync &lt;folder&gt;</span> <span className="text-sol-text-muted">- Start or stop uploading a folder</span></p>
           {hasTeams && (
             <>
-              <p><span className="text-sol-cyan">cast teams</span> <span className="text-sol-text-muted">- List your teams</span></p>
-              <p><span className="text-sol-cyan">cast teams map &lt;path&gt; &lt;team_id&gt;</span> <span className="text-sol-text-muted">- Map directory to team</span></p>
-              <p><span className="text-sol-cyan">cast teams mappings</span> <span className="text-sol-text-muted">- List directory mappings</span></p>
-              <p><span className="text-sol-cyan">cast teams lock &lt;path&gt;</span> <span className="text-sol-text-muted">- Never share a folder</span></p>
+              <p><span className="text-sol-cyan">cast sharing share &lt;folder&gt; --team &lt;name&gt;</span> <span className="text-sol-text-muted">- Share a folder with a team</span></p>
+              <p><span className="text-sol-cyan">cast sharing lock &lt;folder&gt;</span> <span className="text-sol-text-muted">- Never share a folder</span></p>
             </>
           )}
         </div>

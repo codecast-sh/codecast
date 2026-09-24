@@ -91,12 +91,18 @@ function mergeMatchers(
   const matchers: HookMatcher[] = Array.isArray(existing)
     ? (existing as HookMatcher[]).map((m) => ({
         matcher: typeof m?.matcher === "string" ? m.matcher : "",
-        hooks: Array.isArray(m?.hooks) ? m.hooks.filter((h) => h?.command !== command) : [],
+        hooks: Array.isArray(m?.hooks) ? [...m.hooks] : [],
       }))
     : [];
 
+  // An entry already in the blanket matcher is refreshed where it stands.
+  // Moving it to the end would make two of our hooks on one event trade places
+  // on every refresh, and each swap is a real write to the user's file.
   const blanket = matchers.find((m) => m.matcher === "");
-  if (blanket) blanket.hooks.push(entry);
+  const at = blanket ? blanket.hooks.findIndex((h) => h?.command === command) : -1;
+  for (const m of matchers) m.hooks = m.hooks.filter((h) => h?.command !== command);
+  // `at` is the first copy, so no copy sat before it and the index still holds.
+  if (blanket) blanket.hooks.splice(at >= 0 ? at : blanket.hooks.length, 0, entry);
   else matchers.unshift({ matcher: "", hooks: [entry] });
 
   // A matcher we emptied by removing our own entry is ours to drop; one that
@@ -135,6 +141,7 @@ export function installOwnedHook(
     // our writes do not show up as a whole-file reformat in the user's git diff.
     indent: 2,
     mode: options.mode ?? 0o600,
+    what: "hooks",
   });
 }
 
@@ -147,15 +154,19 @@ export function installOwnedHook(
  */
 export function removeOwnedHook(
   command: string,
-  options: { settingsPath?: string; dryRun?: boolean } = {},
+  options: { settingsPath?: string; dryRun?: boolean; events?: readonly string[] } = {},
 ): ApplyResult {
   const target = options.settingsPath ?? defaultSettingsPath();
   const current = readSettings(target);
-  const events = Object.keys(
+  const present = Object.keys(
     (typeof current === "object" && current !== null
       ? (current as Record<string, unknown>).hooks
       : undefined) as Record<string, unknown> ?? {},
   );
+  // With `events`, only those events lose the hook; every other event is
+  // re-stated as it is, so the rest of our registration survives.
+  const only = options.events ? new Set(options.events) : null;
+  const events = present;
 
   // Rebuild each event without our command. An event left with nothing but our
   // entry ends up an empty array, which `applyOwnedJson` prunes along with the
@@ -163,11 +174,12 @@ export function removeOwnedHook(
   // exactly as it was before the install.
   const desired: OwnedKey[] = [];
   for (const event of events) {
-    const without = stripCommand(readAt(current, matcherKeyPath(event)), command);
-    if (without.length > 0) desired.push({ keyPath: matcherKeyPath(event), value: without });
+    const existing = readAt(current, matcherKeyPath(event));
+    const without = only && !only.has(event) ? existing : stripCommand(existing, command);
+    if (Array.isArray(without) && without.length > 0) desired.push({ keyPath: matcherKeyPath(event), value: without });
   }
   desired.push(...retainOwned(target, current, isHookKey));
-  return applyOwnedJson(target, desired, { adopt: true, dryRun: options.dryRun, indent: 2 });
+  return applyOwnedJson(target, desired, { adopt: true, dryRun: options.dryRun, indent: 2, what: "hooks" });
 }
 
 /**
@@ -224,7 +236,7 @@ export function installOwnedStatusLine(
   ];
   // No `adopt`: the value is wholly ours, so the default rule (a key we do not
   // own is a conflict, not a thing to take over) is the right one.
-  return applyOwnedJson(target, desired, { dryRun: options.dryRun, indent: 2, mode: options.mode ?? 0o600 });
+  return applyOwnedJson(target, desired, { dryRun: options.dryRun, indent: 2, mode: options.mode ?? 0o600, what: "statusline" });
 }
 
 /** Take our `statusLine` back out, leaving any hook entries we own in place. */
@@ -237,6 +249,7 @@ export function removeOwnedStatusLine(
     adopt: true,
     dryRun: options.dryRun,
     indent: 2,
+    what: "statusline",
   });
 }
 

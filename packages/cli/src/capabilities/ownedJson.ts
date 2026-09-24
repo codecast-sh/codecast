@@ -28,6 +28,7 @@
 import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
+import { jsonIndentOf, writeHarnessFile } from "../harness.js";
 
 /** One key we intend to own, addressed by a path of literal object keys.
  *  Keys are given as a segment array rather than a dotted string because real
@@ -320,11 +321,18 @@ export interface ApplyResult extends MergePlan {
 export function applyOwnedJson(
   target: string,
   desired: OwnedKey[],
-  opts: { dryRun?: boolean; indent?: number; mode?: number; adopt?: boolean } = {},
+  opts: { dryRun?: boolean; indent?: number; mode?: number; adopt?: boolean; what?: string } = {},
 ): ApplyResult {
+  const text = (() => {
+    try {
+      return fs.readFileSync(target, "utf-8");
+    } catch {
+      return undefined;
+    }
+  })();
   const raw = (() => {
     try {
-      return JSON.parse(fs.readFileSync(target, "utf-8"));
+      return text === undefined ? undefined : JSON.parse(text);
     } catch {
       return undefined;
     }
@@ -374,7 +382,10 @@ export function applyOwnedJson(
 
   fs.mkdirSync(path.dirname(target), { recursive: true });
   if (plan.changed) {
-    fs.writeFileSync(target, JSON.stringify(plan.next, null, opts.indent ?? 2) + "\n", { mode: opts.mode ?? 0o600 });
+    // The user's own indentation wins over ours, so a one key change does not
+    // show up as a whole file reformat in their diff.
+    const indent = jsonIndentOf(text) ?? opts.indent ?? 2;
+    writeHarnessFile(target, JSON.stringify(plan.next, null, indent) + "\n", opts.what ?? "settings", { mode: opts.mode ?? 0o600 });
   }
   if (Object.keys(plan.ledger).length === 0) {
     try {

@@ -1,3 +1,4 @@
+import { amzTimestamp, sha256Hex, sigV4Signature } from "./lib/awsSigV4";
 export type CloudWakeHost = {
   ownerUserId: string;
   deviceId: string;
@@ -80,14 +81,6 @@ export function findCloudWakeHost(hosts: CloudWakeHost[], ownerUserId: string, d
   return hosts.find((host) => host.ownerUserId === ownerUserId && host.deviceId === deviceId);
 }
 
-const encoder = new TextEncoder();
-const hex = (bytes: ArrayBuffer) => Array.from(new Uint8Array(bytes), (b) => b.toString(16).padStart(2, "0")).join("");
-const sha256 = async (value: string) => hex(await crypto.subtle.digest("SHA-256", encoder.encode(value)));
-
-async function hmac(key: ArrayBuffer, value: string): Promise<ArrayBuffer> {
-  const imported = await crypto.subtle.importKey("raw", key, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  return crypto.subtle.sign("HMAC", imported, encoder.encode(value));
-}
 
 export async function buildStartInstancesRequest(
   host: CloudWakeHost,
@@ -104,7 +97,7 @@ export async function buildStartInstancesRequest(
   }
   if (!(now instanceof Date) || !Number.isFinite(now.getTime()) || now.getUTCFullYear() < 1970
     || now.getUTCFullYear() > 9999 || typeof dryRun !== "boolean") throw new CloudWakeAwsError("InvalidRequest");
-  const timestamp = now.toISOString().replace(/[:-]|\.\d{3}/g, "");
+  const timestamp = amzTimestamp(now);
   const date = timestamp.slice(0, 8);
   const hostname = `ec2.${target.region}.amazonaws.com`;
   const body = new URLSearchParams({ Action: "StartInstances", Version: "2016-11-15", "InstanceId.1": target.instanceId });
@@ -121,13 +114,9 @@ export async function buildStartInstancesRequest(
   const canonicalHeaders = names.map((name) => `${name}:${headers[name]}\n`).join("");
   const scope = `${date}/${target.region}/ec2/aws4_request`;
   try {
-    const canonical = ["POST", "/", "", canonicalHeaders, signedHeaders, await sha256(payload)].join("\n");
-    const toSign = ["AWS4-HMAC-SHA256", timestamp, scope, await sha256(canonical)].join("\n");
-    const dateKey = await hmac(encoder.encode(`AWS4${secretAccessKey}`).buffer, date);
-    const regionKey = await hmac(dateKey, target.region);
-    const serviceKey = await hmac(regionKey, "ec2");
-    const signingKey = await hmac(serviceKey, "aws4_request");
-    const signature = hex(await hmac(signingKey, toSign));
+    const canonical = ["POST", "/", "", canonicalHeaders, signedHeaders, await sha256Hex(payload)].join("\n");
+    const toSign = ["AWS4-HMAC-SHA256", timestamp, scope, await sha256Hex(canonical)].join("\n");
+    const signature = await sigV4Signature(secretAccessKey, date, target.region, "ec2", toSign);
     headers.authorization = `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
   } catch {
     throw new CloudWakeAwsError("SigningFailed");

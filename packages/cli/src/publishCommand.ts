@@ -34,6 +34,12 @@ export function resolveArtifactTitle(html: string, filePath: string, override?: 
   return extractHtmlTitle(html) ?? path.basename(filePath).replace(/\.html?$/i, "");
 }
 
+/** Video and audio travel to media hosting (R2), not inside the bundle. Keep in
+ * sync with MEDIA_EXT in convex/artifactsHttp.ts. */
+export function isMediaPath(filePath: string): boolean {
+  return /\.(mp4|webm|mov|m4v|mp3|m4a|ogg|wav)$/i.test(filePath);
+}
+
 export function isHtmlPath(filePath: string): boolean {
   return /\.html?$/i.test(filePath);
 }

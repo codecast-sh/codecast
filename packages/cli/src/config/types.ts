@@ -65,6 +65,8 @@ export interface Config {
   excluded_paths?: string;
   sync_mode?: "all" | "selected";
   sync_projects?: string[];
+  /** Mirrored from the server: with sync_mode "all", folders that never upload. */
+  sync_excluded?: string[];
 
   // --- Stable-context mode ---
   stable_mode?: "solo" | "team";
