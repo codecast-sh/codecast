@@ -196,7 +196,7 @@
         "idle": 0,
         "snoozed": 0,
         "stashed": 2,
-        "dismissed": 5,
+        "dismissed": 4,
         "hidden": 0
       },
       "folded": {
@@ -214,14 +214,9 @@
         "hidden": 0
       }
     },
-    "set_digest": "c07565caf839c404",
+    "set_digest": "6319bed1ec4be5d3",
     "placements": {
       "dismissedoldrowz1500000000000000": [
-        "dismissed",
-        "needs_input",
-        false
-      ],
-      "dismissedoldstampz17000000000000": [
         "dismissed",
         "needs_input",
         false
@@ -299,7 +294,6 @@
     },
     "sort_at": {
       "dismissedoldrowz1500000000000000": -3456000000,
-      "dismissedoldstampz17000000000000": -18000000,
       "dismissedrecentz1500000000000000": -14400000,
       "everythingz100000000000000000000": -28800000,
       "horizonedgeinz130000000000000000": -2592000000,
@@ -318,7 +312,6 @@
     "sort_order": {
       "dismissed": [
         "dismissedrecentz1500000000000000",
-        "dismissedoldstampz17000000000000",
         "everythingz100000000000000000000",
         "dismissedoldrowz1500000000000000",
         "killeddismissedpinnedz2100000000"

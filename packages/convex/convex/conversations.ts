@@ -69,6 +69,7 @@ import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
 import { armedTriggerHomeLoader, isArmedTriggerHome, isArmedTriggerHomeOfKind, isArmedLoopHome } from "./dormancy";
 import { subagentLinkFields } from "./ccAccountsShared";
 import { isSessionOwner } from "./sessionOwners";
+import { hideConversationForViewer, unhideConversationForViewer, viewerHiddenConversationIds } from "./inboxHides";
 import { approxMessageBytes, filterUserMessages, isImportNotice, isNavigableUserMessage, toNavigatorRow, type FilteredUserMessage } from "./userMessagesFilter";
 import {
   isTeamMember,
@@ -8732,7 +8733,13 @@ export async function scanInboxConversations(
 
   // Recent window is bounded by both the row cap AND the 30d activity window:
   // the index range stops the scan at the cutoff so old sessions are never read.
-  // Pinned/dismissed have their own (separate) queries below and stay exempt.
+  // Pinned, dismissed, stashed and snoozed rows have their own queries below
+  // and are excluded here AT THE INDEX (the four stamps pinned to absent): a
+  // filed row is not recent material (shared inWorkingSet), and a stashed
+  // agent keeps heartbeating, so on a busy account those fresh stamps filled
+  // the 200 recent seats and cut every settled plain row older than two days
+  // out of the set — dropped, not folded, so the show-old toggle had nothing
+  // to show (2026-09-23).
   //
   // Subagent rows are excluded AT THE INDEX for every window. shouldShowInInbox
   // drops them anyway, but a busy account has more subagents than sessions in
@@ -8754,11 +8761,17 @@ export async function scanInboxConversations(
       return merged.slice(0, INBOX_WINDOW_CAP);
     });
 
+  const plainRange = (q: any, isSubagent: boolean | undefined) => q
+    .eq("user_id", userId)
+    .eq("is_subagent", isSubagent)
+    .eq("inbox_pinned_at", undefined)
+    .eq("inbox_dismissed_at", undefined)
+    .eq("inbox_stashed_at", undefined)
+    .eq("inbox_snoozed_until", undefined)
+    .gte("updated_at", sessionWindowCutoff);
   const recentConversationsQ = topLevelWindow((isSubagent) => ctx.db
     .query("conversations")
-    .withIndex("by_user_subagent_updated", (q: any) =>
-      q.eq("user_id", userId).eq("is_subagent", isSubagent).gte("updated_at", sessionWindowCutoff)
-    )
+    .withIndex("by_user_plain_updated", (q: any) => plainRange(q, isSubagent))
     .order("desc")
     .filter((q: any) => q.or(
       q.eq(q.field("status"), "active"),
@@ -8836,13 +8849,13 @@ export async function scanInboxConversations(
   // timeout: "Your request timed out performing too many system operations").
   // The subagent window is a sibling range of the same index the recent
   // window reads (is_subagent: true). Children never crowd the top-level caps:
-  // they are returned on their own, not merged into the candidate set.
+  // they are returned on their own, not merged into the candidate set. The
+  // index pins the filing stamps to absent, so a parked parent's children
+  // (stamped by the hide cascade, discarded by every caller) are never read.
   const recentSubagentsQ: Promise<any[]> = opts.subagentWindow && !opts.teamScope
     ? ctx.db
       .query("conversations")
-      .withIndex("by_user_subagent_updated", (q: any) =>
-        q.eq("user_id", userId).eq("is_subagent", true).gte("updated_at", sessionWindowCutoff)
-      )
+      .withIndex("by_user_plain_updated", (q: any) => plainRange(q, true))
       .order("desc")
       .filter((q: any) => q.or(
         q.eq(q.field("status"), "active"),
@@ -8897,28 +8910,57 @@ export async function scanInboxConversations(
   // also cover the caller's PRIVATE sessions, correctly visible to themselves).
   if (opts.teamScope) {
     const teamFilter = await createTeamFeedFilter(ctx, opts.teamScope);
+    // The caller's own triage of teammates' rows (inbox_hides): a stash or
+    // dismiss on a row they neither run nor own cannot live on the row, so it
+    // lives here, and the board skips it the same way it skips the owner's.
+    const viewerHidden = await viewerHiddenConversationIds(ctx, userId);
     const otherMemberIds = teamFilter.memberships
       .map((m) => m.user_id)
       .filter((id) => id.toString() !== userId.toString());
     if (otherMemberIds.length > TEAM_INBOX_MEMBER_CAP) truncated.add("members");
     const memberIds = otherMemberIds.slice(0, TEAM_INBOX_MEMBER_CAP);
-    const memberScans = await Promise.all(memberIds.map((memberId) => ctx.db
-      .query("conversations")
-      .withIndex("by_team_user_updated", (q: any) =>
-        q.eq("team_id", opts.teamScope).eq("user_id", memberId).gte("updated_at", sessionWindowCutoff)
-      )
-      .order("desc")
-      .filter((q: any) => q.or(
-        q.eq(q.field("status"), "active"),
-        q.eq(q.field("status"), "completed")
-      ))
-      .take(TEAM_INBOX_PER_MEMBER_CAP + 1)));
-    for (const memberScan of memberScans) {
-      if (memberScan.length > TEAM_INBOX_PER_MEMBER_CAP) truncated.add("member_rows");
-      const memberRecent = memberScan.slice(0, TEAM_INBOX_PER_MEMBER_CAP);
+    // A teammate's rows come through the same plain index as the caller's
+    // recent window, keyed by the runner and filtered to this team: the
+    // team index ranks by activity alone, and a teammate's stashed agents
+    // keep heartbeating, so on a busy member those fresh stamps took every
+    // per-member seat and the board dropped their settled sessions. The
+    // filed windows a teammate's triage decides (dismissed, stashed,
+    // snoozed) stay off the board; a teammate's pin is a session like any
+    // other, so the pinned rows in this team are read on their own.
+    const inTeamAndLive = (q: any) => q.and(
+      q.eq(q.field("team_id"), opts.teamScope),
+      q.or(q.eq(q.field("status"), "active"), q.eq(q.field("status"), "completed")),
+    );
+    const memberScans = await Promise.all(memberIds.map((memberId) => Promise.all([
+      ...([undefined, false] as const).map((isSubagent) => ctx.db
+        .query("conversations")
+        .withIndex("by_user_plain_updated", (q: any) => q
+          .eq("user_id", memberId)
+          .eq("is_subagent", isSubagent)
+          .eq("inbox_pinned_at", undefined)
+          .eq("inbox_dismissed_at", undefined)
+          .eq("inbox_stashed_at", undefined)
+          .eq("inbox_snoozed_until", undefined)
+          .gte("updated_at", sessionWindowCutoff))
+        .order("desc")
+        .filter(inTeamAndLive)
+        .take(TEAM_INBOX_PER_MEMBER_CAP + 1)),
+      ctx.db
+        .query("conversations")
+        .withIndex("by_user_pinned", (q: any) => q.eq("user_id", memberId).gt("inbox_pinned_at", 0))
+        .order("desc")
+        .filter((q: any) => q.and(inTeamAndLive(q), q.gte(q.field("updated_at"), sessionWindowCutoff)))
+        .take(TEAM_INBOX_PER_MEMBER_CAP + 1),
+    ]).then((ranges: any[][]) => {
+      const merged = ranges.flat().sort((x, y) => y.updated_at - x.updated_at);
+      if (merged.length > TEAM_INBOX_PER_MEMBER_CAP) truncated.add("member_rows");
+      return merged.slice(0, TEAM_INBOX_PER_MEMBER_CAP);
+    })));
+    for (const memberRecent of memberScans) {
       for (const c of memberRecent) {
         if (byId.has(c._id.toString())) continue;
-        if (c.inbox_dismissed_at || c.inbox_stashed_at) continue; // teammate's own triage
+        if (c.is_subagent || !shouldShowInInbox(c)) continue; // a pinned killed row, a child
+        if (viewerHidden.has(c._id.toString())) continue; // the caller's triage of it
         if (!teamFilter.isVisible(c)) continue;
         byId.set(c._id.toString(), c);
       }
@@ -10962,13 +11004,34 @@ export const cliSetSessionVisibility = mutation({
       c.owner_user_id?.toString() === userId.toString()
     );
     if (!conv) {
-      throw new Error(
-        `No session found for "${args.session}" (you can only manage sessions you run or own)`
-      );
+      // Not the runner or an owner: a teammate's session on the team board.
+      // The row's own stamps are the owner's, so the caller's gesture is a
+      // viewer hide (inbox_hides) — out of THEIR board only, the agent untouched.
+      const seen = await findConversationByAnyRefWhere(ctx, args.session, () => true);
+      if (!seen) {
+        throw new Error(
+          `No session found for "${args.session}" (you can only manage sessions you run or own)`
+        );
+      }
+      const seenShortId = seen.short_id ?? seen._id.toString().slice(0, 7);
+      if (args.action === "undismiss") {
+        const wasHidden = await unhideConversationForViewer(ctx, userId, seen._id);
+        return { ok: true as const, short_id: seenShortId, action: args.action, was_hidden: wasHidden, rearmed_schedules: 0, outcome: "viewer_hide" as const };
+      }
+      const hid = await hideConversationForViewer(ctx, userId, seen, args.action === "kill" ? "dismiss" : "stash");
+      if (!hid) {
+        throw new Error(
+          `No session found for "${args.session}" (you can only manage sessions you run or own, or hide a teammate's you can see)`
+        );
+      }
+      return { ok: true as const, short_id: seenShortId, action: args.action, outcome: "viewer_hide" as const, was_hidden: false };
     }
     const shortId = conv.short_id ?? conv._id.toString().slice(0, 7);
 
     if (args.action === "undismiss") {
+      // A restore clears the caller's viewer hide too, in case the row was hidden
+      // before they became an owner of it.
+      await unhideConversationForViewer(ctx, userId, conv._id);
       const { wasHidden, rearmed } = await resurfaceHiddenSession(ctx, conv, userId);
       return { ok: true as const, short_id: shortId, action: args.action, was_hidden: wasHidden, rearmed_schedules: rearmed };
     }

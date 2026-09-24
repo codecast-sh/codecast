@@ -3168,6 +3168,11 @@ program
       ? ` with ${result.cascaded_children} nested worker${result.cascaded_children === 1 ? "" : "s"}`
       : "";
     const wake = opts.hide ? "stays hidden through trigger wakes" : "returns on the next trigger wake";
+    if (result.outcome === "viewer_hide") {
+      // A teammate's session: out of YOUR board only; the runner still sees it.
+      console.log(`${c.green}ok${c.reset} hid ${c.cyan}${result.short_id}${c.reset} ${c.dim}— a teammate's session, hidden from your team board only; their inbox and the agent are untouched (cast restore ${result.short_id} to bring back)${c.reset}`);
+      return;
+    }
     const note = result.outcome === "reap"
       ? ` ${c.dim}(empty session — cleaned up entirely)${c.reset}`
       : ` ${c.dim}— hidden from inbox${grouped}, agent still alive, ${wake} (cast restore ${result.short_id} to bring back)${c.reset}`;
@@ -3195,6 +3200,12 @@ program
       process.exit(1);
     }
     const result = await cliPost("/cli/sessions/undismiss", { session: target });
+    if (result.outcome === "viewer_hide") {
+      console.log(result.was_hidden
+        ? `${c.green}ok${c.reset} restored ${c.cyan}${result.short_id}${c.reset} ${c.dim}— a teammate's session, back on your team board${c.reset}`
+        : `${c.dim}${result.short_id} was not hidden from your team board${c.reset}`);
+      return;
+    }
     if (result.was_hidden) {
       const rearmed = result.rearmed_schedules
         ? `, re-armed ${result.rearmed_schedules} trigger${result.rearmed_schedules === 1 ? "" : "s"} its kill canceled`
@@ -3269,6 +3280,11 @@ program
   .argument("<session>", "Session short ID (e.g. jx7c6zk)")
   .action(async (session: string) => {
     const result = await cliPost("/cli/sessions/kill", { session });
+    if (result.outcome === "viewer_hide") {
+      // Not the runner or an owner: nothing to tear down, only the caller's view changes.
+      console.log(`${c.green}ok${c.reset} hid ${c.cyan}${result.short_id}${c.reset} ${c.dim}— a teammate's session: hidden from your team board only, the agent was not touched (cast restore ${result.short_id} to bring back)${c.reset}`);
+      return;
+    }
     const canceled = result.canceled_schedules
       ? `, canceled ${result.canceled_schedules} trigger${result.canceled_schedules === 1 ? "" : "s"}`
       : "";

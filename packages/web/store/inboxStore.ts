@@ -7209,14 +7209,17 @@ function hideSessionInDraft(
     // Hiding it honestly means deleting it — store + IDB (the auto-generated
     // exclude pending persists the row delete, as with kills).
     //
-    // A TEAMMATE'S session is the same situation: the server's applyPatches
-    // owner-gate (dispatch.ts) silently DROPS a hide patch on a conversation we
-    // don't own, so inbox_stashed_at/inbox_dismissed_at never persists, the
-    // 5-min optimistic lock lapses, and the reconcile clear pass resurrects it
-    // into the active inbox. Stash/kill on a foreign session can only mean
-    // "forget my injected copy" — it returns iff we reopen it. Ownership MUST
-    // resolve through isForeignSession: a thin injected row often carries no
-    // user_id at all, and only conversations[sid].is_own knows whose it is.
+    // A TEAMMATE'S session is the same situation locally: the server's
+    // applyPatches owner-gate (dispatch.ts) DROPS a hide patch on a conversation
+    // we don't own, so its stamps never persist and the row is deleted here
+    // instead (the exclude pending keeps this cache from re-adding it). The
+    // durable half is server-side: the same dispatch (stashSession / killSession
+    // / killSessions by action name) records the viewer's hide in inbox_hides,
+    // and the team scan skips it, so the team board on every device drops the
+    // row on its next push rather than feeding it back. `cast restore` (or the
+    // restoreSession dispatch) deletes that record. Ownership MUST resolve
+    // through isForeignSession: a thin injected row often carries no user_id at
+    // all, and only conversations[sid].is_own knows whose it is.
     const ownerSess = draft.sessions[sid];
     const isForeign = !!ownerSess && isForeignSession(ownerSess, draft.conversations[sid], me);
     if (!isConvexId(sid) || isForeign) {

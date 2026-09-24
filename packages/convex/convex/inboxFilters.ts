@@ -62,6 +62,19 @@ export function classifyRetirement(conv: ConversationDoc): RetirementState | nul
   return null;
 }
 
+// Bring a stashed or dismissed row back into the active inbox: the one move
+// every claim on the human's eyes makes (--needs-attention, a dead loop, a
+// stall behind a hide, an orphan run's failure). Killed rows are exempt: kill
+// tore the agent down, and a straggling write must not resurrect it.
+export async function restoreToInbox(
+  ctx: { db: { patch: (id: any, patch: Record<string, unknown>) => Promise<void> } },
+  conv: Pick<ConversationDoc, "_id" | "inbox_stashed_at" | "inbox_dismissed_at" | "inbox_killed_at">,
+): Promise<boolean> {
+  if (conv.inbox_killed_at || !(conv.inbox_stashed_at || conv.inbox_dismissed_at)) return false;
+  await ctx.db.patch(conv._id, { inbox_stashed_at: undefined, inbox_dismissed_at: undefined });
+  return true;
+}
+
 // Whether `parent` is a conversation an orchestration worker can safely be
 // nested under at spawn time. We only stamp a worker's parent_conversation_id
 // when this holds, because listInboxSessions surfaces a child *only* under a

@@ -87,7 +87,13 @@ export type InboxTruncation = (typeof INBOX_TRUNCATION_KINDS)[number];
 // ride lifts the role's standing session into needs input with the child's
 // line on it (roleEscalationsOf); only a `direct` escalation, or the person's
 // own gesture, makes the child a card of its own.
-export const INBOX_PROJECTION_VERSION = 12 as const;
+// v13: a filed row (pinned, dismissed, stashed, snoozed) is not recent
+// material; its own window decides its seat (isFiled). A stashed agent keeps
+// running, so its activity stamp stays fresh, and on a busy account the
+// recent window's 200 seats went to stashed rows: every plain settled row
+// older than two days was cut from the set instead of folded, and the show
+// old toggle had nothing to show.
+export const INBOX_PROJECTION_VERSION = 13 as const;
 
 export type InboxProjection = {
   v: typeof INBOX_PROJECTION_VERSION;
@@ -1002,14 +1008,27 @@ export interface WorkingSetRow extends InboxVisibilityRow, RollupRow {
   owned_by_me?: boolean | null;
 }
 
+// A row someone filed on purpose: a pin, a dismiss, a stash or a snooze STAMP
+// (the same stamps placement reads). ONE predicate for the recent window's
+// eligibility and the fold's exemption, and the server's recent index pins
+// the same four fields to absent (schema by_user_plain_updated), so the scan
+// and the replica cut the recent window over the same rows.
+export function isFiled(row: Pick<WorkingSetRow, "inbox_pinned_at" | "inbox_dismissed_at" | "inbox_stashed_at" | "inbox_snoozed_until">): boolean {
+  return !!(row.inbox_pinned_at || row.inbox_dismissed_at || row.inbox_stashed_at || row.inbox_snoozed_until);
+}
+
 // Window eligibility BEFORE caps ([] = nonmember). Top-level rows only, after
 // shouldShowInInbox — both checks live here so a caller cannot forget them.
 export function inWorkingSet(row: WorkingSetRow, epoch: number): WorkingSetWindow[] {
   if (!shouldShowInInbox(row)) return [];
   const windows: WorkingSetWindow[] = [];
   const horizon = epoch - WORKING_SET_RECENCY_MS;
+  // The recent window is for rows nobody filed. A filed row holds its seat
+  // through its own window, or loses it there, never through activity: its
+  // agent may still be running (a stash keeps it alive), and fresh activity
+  // stamps on filed rows would crowd the plain rows out of the recent cap.
   const recentEligible =
-    (row.status === "active" || row.status === "completed") && row.updated_at >= horizon;
+    !isFiled(row) && (row.status === "active" || row.status === "completed") && row.updated_at >= horizon;
   if (recentEligible) windows.push("recent");
   if (row.inbox_pinned_at) windows.push("pinned");
   if (!row.inbox_killed_at) {
@@ -1081,8 +1100,7 @@ export function selectWorkingSet<Row extends WorkingSetRow>(
 // instead of the stamp diverged exactly at the 30-day stamp horizon (found by
 // the generated-world property test, 2026-09-01).
 export function isFoldExempt(row: WorkingSetRow): boolean {
-  if (row.inbox_pinned_at || row.inbox_dismissed_at || row.inbox_stashed_at || row.inbox_snoozed_until) return true;
-  return !!row.owned_by_me;
+  return isFiled(row) || !!row.owned_by_me;
 }
 
 // The per-row half of the fold, given the cut: exempt rows never fold, queued

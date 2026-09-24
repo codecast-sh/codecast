@@ -174,8 +174,8 @@
         "working": 2,
         "idle": 0,
         "snoozed": 0,
-        "stashed": 2,
-        "dismissed": 2,
+        "stashed": 1,
+        "dismissed": 1,
         "hidden": 0
       },
       "folded": {
@@ -193,7 +193,7 @@
         "hidden": 0
       }
     },
-    "set_digest": "7a68a03c2bab562e",
+    "set_digest": "593558f84323fa84",
     "placements": {
       "ancientpinz100000000000000000000": [
         "pinned",
@@ -222,16 +222,6 @@
       ],
       "edgez400000000000000000000000000": [
         "needs_input",
-        "needs_input",
-        false
-      ],
-      "expireddismissrecentactivityz280": [
-        "dismissed",
-        "needs_input",
-        false
-      ],
-      "expiredstashrecentactivityz26000": [
-        "stashed",
         "needs_input",
         false
       ],
@@ -298,8 +288,6 @@
       "bridgepinz9000000000000000000000": -57600000,
       "bridgestashedz130000000000000000": -64800000,
       "edgez400000000000000000000000000": -79200000,
-      "expireddismissrecentactivityz280": -82800000,
-      "expiredstashrecentactivityz26000": -172800000,
       "foldedaskz9000000000000000000000": -259200000,
       "foldedblankz11000000000000000000": -345600000,
       "foldeddonez100000000000000000000": -172800000,
@@ -313,10 +301,6 @@
       "oldqueuedz9000000000000000000000": -604800000
     },
     "sort_order": {
-      "dismissed": [
-        "bridgedismissedz1500000000000000",
-        "expireddismissrecentactivityz280"
-      ],
       "done": [
         "freshdonez9000000000000000000000",
         "foldeddonez100000000000000000000"
@@ -331,10 +315,6 @@
         "bridgepinz9000000000000000000000",
         "oldpinz6000000000000000000000000",
         "ancientpinz100000000000000000000"
-      ],
-      "stashed": [
-        "bridgestashedz130000000000000000",
-        "expiredstashrecentactivityz26000"
       ],
       "working": [
         "freshworkingz1200000000000000000",

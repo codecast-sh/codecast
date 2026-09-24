@@ -455,6 +455,32 @@ describe("overlay projection — truncation flags", () => {
     expect(base.truncated).toEqual(["recent", "dismissed", "stashed", "owned"]);
   });
 
+  test("stashed agents' fresh heartbeats never crowd a plain settled row out of the recent window", async () => {
+    // 201 stashed sessions still running (updated within the hour), and three
+    // plain sessions that settled an hour, two days and three days ago. The
+    // plain rows keep their recent seats: the index reads plain rows only, so
+    // the recent window is not even full. The 12h gap after the fresh row is
+    // the cut: the row at the gap stays shown and the one behind it folds (the
+    // show-old toggle counts it) — before the fix both were cut from the set
+    // outright, and the toggle had nothing to show.
+    const tables = {
+      conversations: [
+        conv("older", { updated_at: EPOCH - 72 * H }),
+        conv("old", { updated_at: EPOCH - 48 * H }),
+        conv("fresh", { updated_at: EPOCH - H }),
+        ...Array.from({ length: 201 }, (_, i) => conv(`s${i}`, { updated_at: EPOCH - MIN - i * 1000, inbox_stashed_at: EPOCH - H - i * 1000 })),
+      ],
+    };
+    const { liveness, projection } = await computeSessionsLiveness({ db: db(tables) }, ME as any);
+    expect(projection.truncated).toEqual(["stashed"]);
+    expect(liveness.conversations_older.bucket).toBe("needs_input");
+    expect(liveness.conversations_older.below_fold).toBe(true);
+    expect(liveness.conversations_old.below_fold).toBe(false);
+    expect(liveness.conversations_fresh.below_fold).toBe(false);
+    expect(projection.tally.folded.needs_input).toBe(1);
+    expect(projection.tally.shown.stashed).toBe(200);
+  });
+
   test("pinned: newest pins win, the cap + 1st is dropped and flagged", async () => {
     // The fake index orders by updated_at; the real by_user_pinned index orders
     // by inbox_pinned_at, so the fixture keeps the two in step.
@@ -488,6 +514,37 @@ describe("overlay projection — truncation flags", () => {
     expect(projection.team_id).toBe(TEAM);
     // 60 teammate rows are idle foreign parents competing for the 40 scan slots.
     expect(projection.truncated).toEqual(["members", "member_rows", "foreign_scan"]);
+  });
+
+  test("a teammate's stashed agents never crowd their settled sessions off the team board", async () => {
+    // One teammate: 61 stashed sessions still heartbeating, one plain session
+    // that settled two days ago, one pinned, and one in another team. The
+    // plain and pinned rows reach the board; the stashed rows stay off it and
+    // take no seats, so nothing is truncated; the other team's row is not read
+    // onto this board.
+    const TEAM = "teams_1";
+    const OTHER = "teams_2";
+    const tables = {
+      teams: [{ _id: TEAM }, { _id: OTHER }],
+      team_memberships: [
+        { _id: "tm_me", team_id: TEAM, user_id: ME },
+        { _id: "tm_m0", team_id: TEAM, user_id: "users_m0" },
+      ],
+      users: [{ _id: ME, name: "Me" }, { _id: "users_m0", name: "m0" }],
+      conversations: [
+        conv("mine"),
+        conv("settled", { user_id: "users_m0", team_id: TEAM, is_private: false, updated_at: EPOCH - 48 * H }),
+        conv("pinned", { user_id: "users_m0", team_id: TEAM, is_private: false, updated_at: EPOCH - 3 * H, inbox_pinned_at: EPOCH - 3 * H }),
+        conv("elsewhere", { user_id: "users_m0", team_id: OTHER, is_private: false, updated_at: EPOCH - H }),
+        ...Array.from({ length: 61 }, (_, i) => conv(`st${i}`, { user_id: "users_m0", team_id: TEAM, is_private: false, updated_at: EPOCH - MIN - i * 1000, inbox_stashed_at: EPOCH - H - i * 1000 })),
+      ],
+    };
+    const { liveness, projection } = await computeSessionsLiveness({ db: db(tables) }, ME as any, TEAM as any);
+    expect(projection.truncated).toEqual([]);
+    expect(liveness.conversations_settled?.bucket).toBeDefined();
+    expect(liveness.conversations_pinned?.bucket).toBeDefined();
+    expect(liveness.conversations_elsewhere).toBeUndefined();
+    expect(liveness.conversations_st0).toBeUndefined();
   });
 });
 
@@ -625,12 +682,12 @@ describe("fast-field ownership of subagent child rows", () => {
     const overlay = countingCtx(db(tables()));
     await computeSessionsLiveness(overlay.ctx, ME as any);
     for (const ops of [list.ops, overlay.ops]) {
-      expect(ops.filter((o) => o === "conversations.by_user_subagent_updated").length).toBe(3); // two top-level ranges + the subagent window
+      expect(ops.filter((o) => o === "conversations.by_user_plain_updated").length).toBe(3); // two top-level ranges + the subagent window
     }
     // With the fields on the list (liveness bundled), no window is read.
     const bundled = countingCtx(db(tables()));
     await computeInboxSessions(bundled.ctx, ME as any, {});
-    expect(bundled.ops.filter((o) => o === "conversations.by_user_subagent_updated").length).toBe(2);
+    expect(bundled.ops.filter((o) => o === "conversations.by_user_plain_updated").length).toBe(2);
   });
 });
 
