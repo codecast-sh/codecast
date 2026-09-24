@@ -2709,9 +2709,11 @@ let updateAbort = null;
 
 function emitUpdateStatus(status) {
   lastUpdateStatus = status;
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send("update-status", status);
-  }
+  // Every window draws the update banner and any of them can start the update
+  // (the Chat window hits the floor as readily as the main one); a status sent
+  // to the main window alone left the asking window to call a staged update
+  // stalled after 90s (2026-09-24).
+  for (const w of routedWindows()) w.webContents.send("update-status", status);
 }
 
 // The .app bundle we're actually running from (NOT hardcoded to /Applications —
