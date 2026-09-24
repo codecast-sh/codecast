@@ -65,11 +65,18 @@ test("current membership and org settings govern old cached feed cards, people a
     expect(el.textContent).toContain("Jonathan session");
     expect(el.textContent).toContain("Chief session");
     expect(el.textContent).toMatch(/3\s*people/);
+    const selectPerson = async (name: string) => {
+      const button = [...el.querySelectorAll("button")].find((b) => b.textContent?.includes(name));
+      expect(button).toBeDefined();
+      await act(async () => button!.click());
+    };
+    await selectPerson("Jonathan");
 
     await act(async () => useInboxStore.setState({ settingsData: roster([ME, "chief"]) } as any));
     expect(el.textContent).not.toContain("Jonathan");
     expect(el.textContent).toContain("Chief session");
     expect(el.textContent).toMatch(/2\s*people/);
+    await selectPerson("Chief");
 
     await act(async () => useInboxStore.setState({ teams: [{ _id: TEAM, features: { org: false } }] } as any));
     expect(el.textContent).not.toContain("Chief");
