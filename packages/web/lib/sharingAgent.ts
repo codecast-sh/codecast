@@ -1,6 +1,7 @@
 // "Set up with an agent": a fresh session that walks the person through what
 // syncs to codecast and what each team sees, using `cast sharing`. The
 // onboarding strip and the Sync & Privacy page both start it through here.
+import { toast } from "sonner";
 import { useInboxStore, defaultNewSessionPath } from "../store/inboxStore";
 import { spawnSessionWithPrompt } from "./spawnSession";
 import { openConversationBeside } from "../hooks/useOpenLinkedSession";
@@ -29,4 +30,11 @@ export function startSharingAgent(): string {
   if (st.settingsModalSection) st.closeSettingsModal();
   openConversationBeside(stubId);
   return stubId;
+}
+
+export function launchSharingAgent(): void {
+  startSharingAgent();
+  toast.success("Agent started", {
+    description: "It reads your folders first, then asks you. Nothing changes until you agree.",
+  });
 }
