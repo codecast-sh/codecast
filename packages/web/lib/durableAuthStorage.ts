@@ -7,4 +7,5 @@ export const {
   storage: durableAuthStorage,
   readDurableAuthValue,
   purgeDurableAuthValues,
+  subscribeWrites: subscribeAuthStorageWrites,
 } = createDurableAuthStorage({ dbName: "codecast-auth" });

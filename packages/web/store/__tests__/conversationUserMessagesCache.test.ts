@@ -1,3 +1,6 @@
+import Dexie from "dexie";
+import "fake-indexeddb/auto";
+import { stampCacheOwner } from "./fixtures/signedInPrincipal";
 import { indexedDB, IDBKeyRange } from "fake-indexeddb";
 import { describe, it, expect } from "bun:test";
 import {
@@ -11,6 +14,9 @@ import {
 // bun has no IndexedDB, and the Dexie singleton may already have failed to
 // open in another test file: bind it to fake-indexeddb and reopen.
 await _reopenForTests({ indexedDB, IDBKeyRange });
+Dexie.dependencies.indexedDB = indexedDB;
+Dexie.dependencies.IDBKeyRange = IDBKeyRange;
+await stampCacheOwner();
 
 // The message navigator (MessageBrowserPopover) reads the complete
 // getUserMessages list from the store. That list used to live only in memory,

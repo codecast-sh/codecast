@@ -12622,8 +12622,14 @@ const INITIAL_INBOX_DATA = Object.fromEntries(
     .map(([key, value]) => [key, cloneInitialValue(value)]),
 );
 
+// Every clear opens a new hydration epoch: a disk read that started for the
+// account before it (boot hydration, a conversation's tail) finds the epoch
+// moved when it resolves and lands nothing.
+let hydrationEpoch = 0;
+
 /** Synchronous gate used before an old principal store is closed or purged. */
 export function clearProtectedInboxMemory(): void {
+  hydrationEpoch++;
   const state = useInboxStore.getState() as any;
   state._clearRuntimeBindings?.();
   const reset = Object.fromEntries(
@@ -12767,6 +12773,7 @@ const _idbHydrating = new Map<string, Promise<boolean>>();
 const _userMsgsProbed = new Set<string>();
 export function ensureHydrated(convId: string): Promise<boolean> {
   const store = useInboxStore.getState();
+  const epoch = hydrationEpoch;
   const hasMessages = store.messages[convId]?.length > 0;
   // Already in memory — nothing to hydrate
   if (hasMessages && (store.userMessages[convId] || _userMsgsProbed.has(convId))) return Promise.resolve(true);
@@ -12776,6 +12783,7 @@ export function ensureHydrated(convId: string): Promise<boolean> {
   if (hasMessages) _userMsgsProbed.add(convId);
   const p = loadConversationMessages(convId).then((cached) => {
     _idbHydrating.delete(convId);
+    if (epoch !== hydrationEpoch) return false;
     const s = useInboxStore.getState();
     if (cached?.userMessages && !s.userMessages[convId]) s.setUserMessages(convId, cached.userMessages, "cache");
     if (!cached || cached.messages.length === 0) return hasMessages;
@@ -12917,6 +12925,10 @@ export function seedTeamInboxIdsFromCache(cachedSnapshot: unknown) {
 // -- IndexedDB cache: wire patch-driven writes + hydrate on load --
 async function hydrateInboxCacheFromIDB(): Promise<boolean> {
   if (!PERSISTENCE_AVAILABLE) return false;
+  // A clear during this hydration (an account boundary) moves the epoch; from
+  // then on every step here is a no-op and the store stays as the clear left it.
+  const epoch = hydrationEpoch;
+  const superseded = () => epoch !== hydrationEpoch;
 
   (useInboxStore.getState() as any)._setIDBWrite(writePatchesToIDB);
   (useInboxStore.getState() as any)._setOutbox(enqueueDispatch, removeDispatch, loadOutbox);
@@ -12948,7 +12960,7 @@ async function hydrateInboxCacheFromIDB(): Promise<boolean> {
   const paintCached = loadPaintCacheSync();
 
     const apply = (source: Record<string, any> | null, pick: string[]) => {
-      if (!source) return;
+      if (!source || superseded()) return;
       const state = useInboxStore.getState();
       const updates: Record<string, any> = {};
       for (const key of pick) {
@@ -13044,6 +13056,7 @@ async function hydrateInboxCacheFromIDB(): Promise<boolean> {
     }
 
     const cached = await loadCache(HYDRATION_CRITICAL_READ_KEYS);
+    if (superseded()) return false;
 
     // Strip stale large fields from cached conversations (git_diff, git_diff_staged, available_skills)
     if (cached?.conversations && typeof cached.conversations === "object") {
@@ -13136,6 +13149,7 @@ async function hydrateInboxCacheFromIDB(): Promise<boolean> {
     // of conversations into memory for the eviction cap to fight back out.
     const focusId = useInboxStore.getState().currentSessionId;
     if (focusId) await ensureHydrated(focusId);
+    if (superseded()) return false;
 
     if (!useInboxStore.getState().clientStateInitialized) {
       useInboxStore.setState({ clientStateInitialized: true });
@@ -13148,9 +13162,11 @@ async function hydrateInboxCacheFromIDB(): Promise<boolean> {
     // the user running many session tabs, most are backgrounded — they must still
     // hydrate and persist. setTimeout fires (throttled) even when hidden.
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    if (superseded()) return false;
     const deferred = await loadCache(HYDRATION_DEFERRED_KEYS, {
       pending: cached?.pending,
     });
+    if (superseded()) return false;
     apply(deferred, HYDRATION_DEFERRED_KEYS);
       // Re-enable IDB write-through only AFTER the deferred collections land.
       // If a live delta arrives while write-through is open but the store still
@@ -13191,6 +13207,15 @@ function bootPersistence(): void {
   } else {
     useInboxStore.setState({ clientStateInitialized: true });
   }
+}
+
+/**
+ * Persistence for the account this window now acts for, after a clear
+ * unbound it: write-through and the outbox rebound, then hydration, which
+ * serves the disk cache only to the account that owns it (idbCache).
+ */
+export function rebootPersistence(): void {
+  bootPersistence();
 }
 
 // Once per store, not once per module evaluation: after a dev hot swap the

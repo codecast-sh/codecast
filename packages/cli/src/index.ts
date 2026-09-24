@@ -115,7 +115,8 @@ import { requireDestructiveConfirm } from "./destructiveCommands.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
 import { glob } from "glob";
 import { getPosition, setPosition } from "./positionTracker.js";
-import { encryptToken, decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
+import { isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
+import { bearerFromStored, storedFromBearer } from "./bearerToken.js";
 import { getAllSyncRecords, findUnsyncedFiles } from "./syncLedger.js";
 import {
   getLastReconciliation,
@@ -695,22 +696,20 @@ function readConfig(): Config | null {
   const content = fs.readFileSync(CONFIG_FILE, "utf-8");
   const config = JSON.parse(content) as Config;
   if (config.auth_token) {
-    if (isEncryptedToken(config.auth_token)) {
-      try {
-        config.auth_token = decryptToken(config.auth_token);
-      } catch (err) {
-        if (err instanceof TokenDecryptError) {
-          if (!warnedAboutDecryptFailure) {
-            warnedAboutDecryptFailure = true;
-            process.stderr.write(`\n[cast] ${err.message}\n\n`);
-          }
-          return null;
+    const storedPlain = !isEncryptedToken(config.auth_token);
+    try {
+      config.auth_token = bearerFromStored(config.auth_token);
+    } catch (err) {
+      if (err instanceof TokenDecryptError) {
+        if (!warnedAboutDecryptFailure) {
+          warnedAboutDecryptFailure = true;
+          process.stderr.write(`\n[cast] ${err.message}\n\n`);
         }
-        throw err;
+        return null;
       }
-    } else {
-      writeConfig(config);
+      throw err;
     }
+    if (storedPlain) writeConfig(config);
   }
   return config;
 }
@@ -722,9 +721,7 @@ function writeConfig(config: Config): void {
     config.created_at = config.updated_at;
   }
   const toWrite = { ...config };
-  if (toWrite.auth_token && !isEncryptedToken(toWrite.auth_token)) {
-    toWrite.auth_token = encryptToken(toWrite.auth_token);
-  }
+  if (toWrite.auth_token) toWrite.auth_token = storedFromBearer(toWrite.auth_token);
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(toWrite, null, 2), { mode: 0o600 });
   fs.chmodSync(CONFIG_FILE, 0o600);
 }
@@ -1850,7 +1847,8 @@ async function runLogin(setupToken: string): Promise<void> {
     const response = await cliFetch(`${CONVEX_URL.replace(".cloud", ".site")}/cli/exchange-token`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token: setupToken }),
+      // device_id binds the long lived token the exchange hands back to this machine.
+      body: JSON.stringify({ token: setupToken, device_id: deviceId() }),
     });
 
     if (!response.ok) {
@@ -1943,7 +1941,9 @@ async function runAuth(): Promise<void> {
     process.exit(1);
   }
 
-  const cliUrl = `${WEB_URL}/auth/cli?nonce=${nonce}&port=${port}&device=${deviceName}`;
+  // device_id binds the minted token to this machine (bearerToken.ts explains
+  // what the CLI does with a bound token from then on).
+  const cliUrl = `${WEB_URL}/auth/cli?nonce=${nonce}&port=${port}&device=${deviceName}&device_id=${deviceId()}`;
 
   // Over SSH there is no browser to open here — the user signs in on another
   // machine, and the server relay (below) carries the token back to us.

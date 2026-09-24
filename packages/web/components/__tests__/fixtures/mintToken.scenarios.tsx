@@ -60,7 +60,10 @@ test("approval code is sealed to the device and success replaces waiting", async
   });
   await act(async () => {
     document.querySelector("form")!.dispatchEvent(new dom.window.Event("submit", { bubbles: true, cancelable: true }));
-    await new Promise(resolve => setTimeout(resolve, 30));
+    const deadline = Date.now() + 10_000;
+    while (!mintCalls.some(call => call.name === "accountSwitch:submitMintCode") && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
   });
   const sent = mintCalls.at(-1)!;
   expect(sent.name).toBe("accountSwitch:submitMintCode");

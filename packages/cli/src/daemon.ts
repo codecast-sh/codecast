@@ -223,7 +223,8 @@ import {
 } from "./sessionProcessMatcher.js";
 import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
 import { getPosition, setPosition } from "./positionTracker.js";
-import { encryptToken, decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
+import { TokenDecryptError } from "./tokenEncryption.js";
+import { bearerFromStored, storedFromBearer } from "./bearerToken.js";
 import { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS, ensureClaudeSettingsPersistence, launchTokenEnv, scrubAgentEnv } from "./agentEnv.js";
 import { launchTokenLedger } from "./launchToken.js";
 export { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS } from "./agentEnv.js";
@@ -7833,9 +7834,9 @@ function diagnoseConfig(): ConfigDiagnosis {
       reason: `[ERROR] ${CONFIG_FILE} is not valid JSON: ${err instanceof Error ? err.message : String(err)} — run 'cast auth' to recreate`,
     };
   }
-  if (config.auth_token && isEncryptedToken(config.auth_token)) {
+  if (config.auth_token) {
     try {
-      config.auth_token = decryptToken(config.auth_token);
+      config.auth_token = bearerFromStored(config.auth_token);
     } catch (err) {
       if (err instanceof TokenDecryptError) {
         return {
@@ -7940,9 +7941,7 @@ function patchConfig(updates: Partial<Config>): void {
   if (!config) return;
   Object.assign(config, updates);
   const toWrite = { ...config };
-  if (toWrite.auth_token && !isEncryptedToken(toWrite.auth_token)) {
-    toWrite.auth_token = encryptToken(toWrite.auth_token);
-  }
+  if (toWrite.auth_token) toWrite.auth_token = storedFromBearer(toWrite.auth_token);
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(toWrite, null, 2), { mode: 0o600 });
 }
 

@@ -1324,20 +1324,27 @@ export const getUserByUsername = query({
     user_id: v.optional(v.id("users")),
   },
   handler: async (ctx, args) => {
+    // Signed-in viewers read any card (the team page shows teammates). An
+    // anonymous caller reads only a profile its owner made public, the same
+    // gate getPublicProfile applies; otherwise this query was a lookup of any
+    // user's bio, title, timezone and presence by id or name.
+    const viewer = await getAuthUserId(ctx);
+    const card = (user: Doc<"users"> | null) =>
+      !viewer && !user?.public_profile_enabled ? null : profileHeaderCard(user);
     if (args.user_id) {
-      return profileHeaderCard(await ctx.db.get(args.user_id));
+      return card(await ctx.db.get(args.user_id));
     }
     if (args.username) {
       const byUsername = await ctx.db
         .query("users")
         .withIndex("by_github_username", (q) => q.eq("github_username", args.username))
         .first();
-      if (byUsername) return profileHeaderCard(byUsername);
+      if (byUsername) return card(byUsername);
       const asId = ctx.db.normalizeId("users", args.username);
-      if (asId) return profileHeaderCard(await ctx.db.get(asId));
+      if (asId) return card(await ctx.db.get(asId));
       const lower = args.username.toLowerCase();
       const all = await ctx.db.query("users").take(200);
-      return profileHeaderCard(all.find((u) =>
+      return card(all.find((u) =>
         u.name?.toLowerCase() === lower ||
         u.github_username?.toLowerCase() === lower
       ) ?? null);
