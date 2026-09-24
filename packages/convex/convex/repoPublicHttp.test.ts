@@ -11,6 +11,7 @@ import {
   paramsComplete,
   publicGate,
   notFound,
+  pulseBody,
 } from "./repoPublicHttp";
 import { cacheKeyFor, ttlFor } from "./repos";
 
@@ -81,6 +82,18 @@ describe("session kinds", () => {
 
   test("the sessions list needs nothing", () => {
     expect(paramsComplete("sessions", paramsForKind("sessions", new URLSearchParams()))).toBe(true);
+  });
+});
+
+describe("pulse", () => {
+  test("is a kind the route answers, with no params", () => {
+    expect(parsePublicRepoPath("/cli/public/repo/codecast-sh/codecast/pulse")).toEqual({ repository: "codecast-sh/codecast", kind: "pulse" });
+    expect(paramsComplete("pulse", paramsForKind("pulse", new URLSearchParams("ref=main")))).toBe(true);
+  });
+
+  test("carries stars from the meta row and the live count, and null stars when the row is missing", () => {
+    expect(pulseBody({ stargazers_count: 33 }, { live: 4 })).toEqual({ stargazers_count: 33, live: 4 });
+    expect(pulseBody(null, { live: 0 })).toEqual({ stargazers_count: null, live: 0 });
   });
 });
 

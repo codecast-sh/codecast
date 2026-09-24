@@ -56,6 +56,9 @@ export const PUBLIC_KINDS = [
   "sessions",
   "commitsessions",
   "blamesessions",
+  // Stars from the meta row and how many sessions are on the repository right
+  // now: two numbers for the marketing site's GitHub chip, one request.
+  "pulse",
 ] as const;
 
 /** The kinds a session join answers; each maps to one internal query in repoSessions. */
@@ -237,6 +240,7 @@ export const serve = httpAction(async (ctx, request) => {
     return json({ error: "bad_request" }, 400, "no-store");
   }
   if (SESSION_KINDS.includes(kind)) return await serveSessions(ctx, repository, kind, params);
+  if (kind === "pulse") return await servePulse(ctx, repository);
   if (kind !== "meta") {
     try {
       const filled = await ctx.runAction(internal.repos.ensureCachedPublic, {
@@ -261,6 +265,24 @@ export const serve = httpAction(async (ctx, request) => {
 
   return json(data, 200, cacheHeaderFor(params));
 });
+
+/**
+ * The pulse. The visibility check above already refreshed the meta row when it
+ * was stale, so stars come from the cache as written and cost no GitHub call;
+ * the live count is codecast's own (repoSessions.publicPulse).
+ */
+export function pulseBody(meta: { stargazers_count?: number } | null, pulse: { live: number }): { stargazers_count: number | null; live: number } {
+  return { stargazers_count: meta?.stargazers_count ?? null, live: pulse.live };
+}
+
+async function servePulse(ctx: any, repository: string): Promise<Response> {
+  const { ref, path } = cacheKeyFor("meta", {});
+  const [meta, pulse] = await Promise.all([
+    ctx.runQuery(internal.repos.publicRead, { repository, kind: "meta", ref, path }),
+    ctx.runQuery(internal.repoSessions.publicPulse, { repository }),
+  ]);
+  return json(pulseBody(meta, pulse), 200, "no-store");
+}
 
 /**
  * The session joins. Nothing here reads GitHub except the blame a session

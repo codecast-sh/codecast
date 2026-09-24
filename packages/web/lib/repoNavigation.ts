@@ -58,6 +58,13 @@ export function repositoryName(value?: string | null): string | null {
   return githubRepository(repositoryPattern.test(value) ? `https://github.com/${value}` : value);
 }
 
+/** The branch a checkout sits on when nobody moved it. A session carries no
+ *  repository default, so this is the CLI mirror's own fallback (main, else
+ *  master): a card that says "main" says where nearly every session sits. */
+export function isDefaultBranch(branch: string | null | undefined): boolean {
+  return branch === "main" || branch === "master";
+}
+
 export function sessionRepository(session: { git_remote_url?: string | null; pr_status?: { repository?: string } | null }): string | null {
   return githubRepository(session.git_remote_url) ?? repositoryName(session.pr_status?.repository);
 }

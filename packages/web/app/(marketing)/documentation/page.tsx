@@ -1142,7 +1142,7 @@ $ cast teams sync-settings`}</Code>
             <div className="p-3 rounded-lg" style={{ backgroundColor: `${SOL.base2}80` }}>
               <div className="font-mono text-sm font-medium mb-1" style={{ color: SOL.base03 }}>Directory mappings</div>
               <p className="text-sm" style={{ color: SOL.base00 }}>
-                Map project directories to teams with <InlineCode>auto_share: true</InlineCode>. All sessions in that directory are automatically shared.
+                Map project directories to teams with <InlineCode>auto_share: true</InlineCode>. Every session in that directory is shared, past ones included, unless the mapping carries a share start (<InlineCode>share_since</InlineCode>): then only sessions started after it are visible. Each share control shows the session count and date range before it writes.
               </p>
             </div>
             <div className="p-3 rounded-lg" style={{ backgroundColor: `${SOL.base2}80` }}>

@@ -41,7 +41,7 @@ export function MarketingFooter() {
           <div>
             <h2 className="font-semibold text-[#002b36] mb-3 text-sm">Connect</h2>
             <ul className="space-y-2 text-sm">
-              <li><a href={SITE_LINKS.githubRepo} className="hover:text-[#073642]" target="_blank" rel="noopener noreferrer">GitHub</a></li>
+              <li><Link href={SITE_LINKS.repoPage} className="hover:text-[#073642]">GitHub</Link></li>
               <li><a href={SITE_LINKS.x} className="hover:text-[#073642]" target="_blank" rel="noopener noreferrer">Twitter</a></li>
               <li><Link href={SITE_LINKS.community} className="hover:text-[#073642]">Community</Link></li>
             </ul>
