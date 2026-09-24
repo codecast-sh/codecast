@@ -55,8 +55,26 @@ const BINARIES: Record<string, string> = {
 // site's Mac download button was dead while in-app auto-update kept working —
 // which is why it went unnoticed. Keep this prefix in sync with the upload
 // destination in scripts/deploy-all.sh.
-const MAC_DMG_URL = "https://dl.codecast.sh/desktop/Codecast-1.1.119-arm64.dmg";
+//
+// The version comes from the published feed, the same latest-mac.yml the
+// updaters read, so the site serves a release the moment it is uploaded. A
+// constant bumped by the release lagged every release by a commit and a
+// Railway build (1.1.119 downloaded as 1.1.118, 2026-09-24). The constant is
+// only the fallback when the feed cannot be read.
 const MAC_DMG_VERSION = "1.1.119";
+const DESKTOP_FEED = "https://dl.codecast.sh/desktop/latest-mac.yml";
+let desktopLatest = { version: MAC_DMG_VERSION, at: 0 };
+async function latestDesktopVersion(): Promise<string> {
+  if (Date.now() - desktopLatest.at < 60_000) return desktopLatest.version;
+  desktopLatest = { ...desktopLatest, at: Date.now() };
+  try {
+    const res = await fetch(DESKTOP_FEED, { signal: AbortSignal.timeout(3_000) });
+    const version = res.ok ? (await res.text()).match(/^version:\s*(\d+\.\d+\.\d+)\s*$/m)?.[1] : undefined;
+    if (version) desktopLatest = { version, at: Date.now() };
+  } catch {}
+  return desktopLatest.version;
+}
+const macDmgUrl = (version: string) => `https://dl.codecast.sh/desktop/Codecast-${version}-arm64.dmg`;
 
 app.get("/api/health", async (c) =>
   c.json({
@@ -74,16 +92,17 @@ app.get("/api/health", async (c) =>
   })
 );
 
-app.get("/download/mac", (c) => {
-  phCapture("desktop_dmg_downloaded", { version: MAC_DMG_VERSION });
-  return c.redirect(`${MAC_DMG_URL}?v=${MAC_DMG_VERSION}`, 302);
+app.get("/download/mac", async (c) => {
+  const version = await latestDesktopVersion();
+  phCapture("desktop_dmg_downloaded", { version });
+  return c.redirect(`${macDmgUrl(version)}?v=${version}`, 302);
 });
 
 // Latest published desktop version, same-origin so the in-app update banner can
 // compare it against the running app's version without a cross-origin fetch to
-// the R2 feed. Bumped with every desktop release (alongside MAC_DMG_URL).
-app.get("/api/desktop/latest", (c) =>
-  c.json({ version: MAC_DMG_VERSION })
+// the R2 feed.
+app.get("/api/desktop/latest", async (c) =>
+  c.json({ version: await latestDesktopVersion() })
 );
 
 app.get("/download/:binary", (c) => {
