@@ -25,6 +25,11 @@ export const DEVICE_BOUND_TOKEN_PREFIX = "bound_";
 
 const PRESENTATION_SEPARATOR = ".";
 
+/** A device id a token may be bound to: no separator, bounded, printable. */
+export function isValidDeviceId(deviceId: string): boolean {
+  return /^[A-Za-z0-9_-]{1,128}$/.test(deviceId);
+}
+
 /** Does this secret say "present me with a device"? Client side only; the server reads the row. */
 export function isDeviceBoundToken(secret: string): boolean {
   return secret.startsWith(DEVICE_BOUND_TOKEN_PREFIX);

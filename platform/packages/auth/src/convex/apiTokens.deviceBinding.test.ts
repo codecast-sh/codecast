@@ -252,10 +252,11 @@ describe("minting a token for another machine (a remote host)", () => {
     expect(await direct(t, token)).toEqual({ status: 401 });
   });
 
-  test("an unbound laptop token may mint too", async () => {
+  test("an unbound laptop token may not mint, so a stolen one leaves nothing behind", async () => {
     const t = await tables();
-    const { token } = await mint(t, LEGACY);
-    expect(await direct(t, from(token, HOST_DEVICE))).toEqual({ status: 200, userId: USER });
+    const before = t.api_tokens.length;
+    await expect(mint(t, LEGACY)).rejects.toThrow("Unauthorized");
+    expect(t.api_tokens.length).toBe(before);
   });
 
   test("a bound laptop token without its device, or from another machine, is refused and writes nothing", async () => {
@@ -280,8 +281,18 @@ describe("minting a token for another machine (a remote host)", () => {
     expect(t.api_tokens.length).toBe(1);
   });
 
-  test("a blank device is refused", async () => {
-    await expect(mint(await tables(), LEGACY, "  ")).rejects.toThrow("device_id");
+  test("a blank device, or one holding the presentation separator, is refused", async () => {
+    for (const bad of ["  ", "host.evil", "a".repeat(129)]) {
+      await expect(mint(await tables(), from(BOUND, THIS_DEVICE), bad)).rejects.toThrow("device_id");
+    }
+  });
+
+  test("the label is trimmed, collapsed and bounded in the token's name", async () => {
+    const t = await tables();
+    await mint(t, from(BOUND, THIS_DEVICE), HOST_DEVICE, `  a\n  b ${"x".repeat(200)}`);
+    const row = t.api_tokens.find((r: any) => r.device_id === HOST_DEVICE);
+    expect(row.name).toMatch(/^Host - a b x+ - \d{4}-\d{2}-\d{2}$/);
+    expect(row.name.length).toBeLessThanOrEqual("Host - ".length + 64 + " - 2026-01-01".length);
   });
 });
 
