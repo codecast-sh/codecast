@@ -67,6 +67,12 @@ export interface CommandGroup {
 
 export const COMMAND_GROUPS: readonly CommandGroup[] = [
   {
+    token: "sharing",
+    hasOptions: true,
+    description: "See and change what syncs to codecast and what each team sees of it",
+    load: () => import("./sharing/command.js").then((m) => m.registerSharingCommand),
+  },
+  {
     token: "review",
     description: "Collect review notes on files and lines, then hand the batch to a session",
     load: () => import("./reviewCommand.js").then((m) => m.registerReviewCommand),

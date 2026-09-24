@@ -181,7 +181,7 @@ describe("focusBrowserTab", () => {
 describe("focusEndpoint", () => {
   test("a Chrome tab is reached by bare port, a bridge tab by port plus token", () => {
     expect(focusEndpoint({ port: 9333 })).toBe(9333);
-    expect(focusEndpoint({ port: 41729, token: "t0k" })).toEqual({ port: 41729, token: "t0k" });
+    expect(focusEndpoint({ port: 41729, token: "t0k" })).toEqual({ port: 41729, token: "t0k", raise: true });
   });
 });
 
@@ -222,6 +222,6 @@ describe("bridge focus engine", () => {
       },
     });
     expect(result).toEqual({ ok: true });
-    expect(calls).toEqual(['bridge:activate:1E21CD78@{"port":41729,"token":"t0k"}', "raise:90468"]);
+    expect(calls).toEqual(['bridge:activate:1E21CD78@{"port":41729,"token":"t0k","raise":true}', "raise:90468"]);
   });
 });

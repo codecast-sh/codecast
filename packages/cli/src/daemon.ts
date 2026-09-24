@@ -4615,20 +4615,25 @@ async function sendHeartbeat(): Promise<void> {
       const currentConfig = readConfig();
       const serverMode = data.sync_mode as "all" | "selected";
       const serverProjects: string[] = data.sync_projects ?? [];
+      const serverExcluded: string[] = data.sync_excluded ?? [];
       const localMode = currentConfig?.sync_mode ?? "all";
       const localProjects = currentConfig?.sync_projects ?? [];
+      const localExcluded = currentConfig?.sync_excluded ?? [];
 
-      if (serverMode !== localMode || JSON.stringify(serverProjects) !== JSON.stringify(localProjects)) {
-        log(`Sync settings updated from server: mode=${serverMode}, projects=${serverProjects.length}`);
-        patchConfig({ sync_mode: serverMode, sync_projects: serverProjects });
+      if (serverMode !== localMode || JSON.stringify(serverProjects) !== JSON.stringify(localProjects) || JSON.stringify(serverExcluded) !== JSON.stringify(localExcluded)) {
+        log(`Sync settings updated from server: mode=${serverMode}, projects=${serverProjects.length}, excluded=${serverExcluded.length}`);
+        patchConfig({ sync_mode: serverMode, sync_projects: serverProjects, sync_excluded: serverExcluded });
         if (activeConfig) {
           activeConfig.sync_mode = serverMode;
           activeConfig.sync_projects = serverProjects;
+          activeConfig.sync_excluded = serverExcluded;
         }
-        // A folder just chosen already holds sessions nobody touched since;
-        // the sweep uploads them now instead of at the next reconciliation.
+        // A folder just chosen (or no longer excluded) already holds sessions
+        // nobody touched since; the sweep uploads them now instead of at the
+        // next reconciliation.
         const widened = (serverMode === "all" && localMode !== "all")
-          || (serverMode === "selected" && serverProjects.some((p) => !localProjects.includes(p)));
+          || (serverMode === "selected" && serverProjects.some((p) => !localProjects.includes(p)))
+          || localExcluded.some((p) => !serverExcluded.includes(p));
         if (widened) void pushUnsyncedFilesHandler?.("Sync scope widened").catch(() => {});
       }
     }
@@ -7859,7 +7864,7 @@ function diagnoseConfig(): ConfigDiagnosis {
   }
   if (config.auth_token) {
     try {
-      config.auth_token = bearerFromStored(config.auth_token);
+      config.auth_token = bearerFromStored(config.auth_token, { heal: true });
     } catch (err) {
       if (err instanceof TokenDecryptError) {
         return {
@@ -16079,7 +16084,11 @@ class InputBlockedError extends Error {
 }
 
 function assertPromptAbsent(pane: string): void {
-  if (!pane.trim()) throw new InputBlockedError("terminal capture is empty");
+  // A blank capture is a pane between a clear and its next draw (claude clears
+  // the screen as it boots), not a dialog: refused for a short retry, never
+  // held for a human answer. Holding it cost 29 of 39 launches a 45s hold on
+  // 2026-09-24.
+  if (!pane.trim()) throw new Error("AGENT_STDIN_NOT_READY: terminal capture is empty; message remains pending");
   // Folder-trust is answered by acceptTrustPrompt, not held as a card. Grok's
   // y/n dialog currently fails parseInteractivePrompt (no numbered rows, no
   // cursor), but skipping the detectors here keeps a future parse from parking
@@ -16763,6 +16772,43 @@ export function tmuxComposerHoldsPayload(pane: string, payload: string): boolean
   return tmuxComposerPayloadMatcher(payload)?.(pane) ?? false;
 }
 
+// The composer shows the end of the payload and not its start: what Claude
+// Code draws when a wrapped composer is taller than a short window allows.
+function composerShowsOnlyPayloadTail(composer: string, payload: string): boolean {
+  const shown = stripComposerChrome(composer);
+  const whole = stripComposerChrome(payload);
+  return shown.length > 0 && shown.length < whole.length && whole.endsWith(shown);
+}
+
+// Reads the pane at the daemon's own window size, then hands the size back to
+// whichever client set it. resize-window flips the window to manual sizing, so
+// unsetting the option lets `window-size largest` return it to the attached
+// client, the same repair the terminal viewer makes when it detaches. A window
+// already at full size has nothing more to show. The TUI redraws after the
+// resize, which takes over a second on a loaded machine, so the wait runs to
+// the caller's deadline.
+async function matchAtFullWindowSize(exec: typeof tmuxExec, target: string, matches: (pane: string) => boolean, deadline: number): Promise<boolean> {
+  try {
+    const { stdout } = await exec(["display-message", "-p", "-t", target, "#{window_width}|#{window_height}"]);
+    const [width, height] = stdout.trim().split("|").map(part => parseInt(part, 10));
+    if (width >= Number(TMUX_WINDOW_WIDTH) && height >= Number(TMUX_WINDOW_HEIGHT)) return false;
+  } catch {
+    return false;
+  }
+  try {
+    await exec(["resize-window", "-t", target, ...TMUX_SIZE_ARGS]);
+    while (Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 150));
+      if (matches(await captureTmuxComposerPane(exec, target, 40))) return true;
+    }
+    return false;
+  } catch {
+    return false;
+  } finally {
+    await exec(["set-option", "-w", "-t", target, "-u", "window-size"]).catch(() => {});
+  }
+}
+
 export async function awaitTmuxComposerPayload(
   target: string,
   payload: string,
@@ -16781,9 +16827,30 @@ export async function awaitTmuxComposerPayload(
   const deadline = Date.now() + (opts.budgetMs ?? 20_000);
   const tick = () => new Promise(resolve => setTimeout(resolve, 150));
 
+  // One copy of the payload at the prompt, and nothing before it. A multi-line
+  // bracketed paste can render as a collapsed chip ("[Pasted text #1 +13
+  // lines]") with none of the text visible, so the chip at the prompt with
+  // nothing before it IS the payload. Either way a SECOND copy, a whole
+  // second chip or the watched prefix showing up again behind the first, is a
+  // re-paste that landed on a composer which had already taken the first, and
+  // submitting it sends the message twice (ct-49753).
+  const matches = (pane: string) => {
+    const composer = tmuxComposerRegion(pane) ?? "";
+    const chips = opts.bracketedPaste ? composer.match(/\[[^\]\n]*pasted[^\]\n]*\]/gi) : null;
+    return chips?.length
+      ? (chips.length === 1
+          && stripComposerChrome(composer) === stripComposerChrome(chips[0])
+          && !pasteChipContradicts(chips[0], pasteChipLines(payload)))
+        // The same payload, delivered as several pastes because the pane
+        // stalled mid-read — see composerHoldsSplitPaste.
+        || composerHoldsSplitPaste(composer, payload)
+      : holdsPayload(pane);
+  };
+
   let glyphlessTicks = 0;
   let foreignTicks = 0;
   let rePastes = 0;
+  let readAtFullSize = false;
   const drainAndRePaste = async (why: string) => {
     if (opts.allowRePaste === false) throw new TmuxDeliveryUncertainError("the original paste has not appeared intact");
     log(`${why} in ${target}, draining and re-pasting`);
@@ -16813,24 +16880,19 @@ export async function awaitTmuxComposerPayload(
     glyphlessTicks = 0;
     const afterGlyph = pane.slice(glyphAt + 1);
     const glyphLine = afterGlyph.split("\n", 1)[0];
-    // One copy of the payload at the prompt, and nothing before it. A multi-line
-    // bracketed paste can render as a collapsed chip ("[Pasted text #1 +13
-    // lines]") with none of the text visible, so the chip at the prompt with
-    // nothing before it IS the payload. Either way a SECOND copy, a whole
-    // second chip or the watched prefix showing up again behind the first, is a
-    // re-paste that landed on a composer which had already taken the first, and
-    // submitting it sends the message twice (ct-49753).
     const composer = tmuxComposerRegion(pane) ?? "";
-    const chips = opts.bracketedPaste ? composer.match(/\[[^\]\n]*pasted[^\]\n]*\]/gi) : null;
-    const matched = chips?.length
-      ? (chips.length === 1
-          && stripComposerChrome(composer) === stripComposerChrome(chips[0])
-          && !pasteChipContradicts(chips[0], pasteChipLines(payload)))
-        // The same payload, delivered as several pastes because the pane
-        // stalled mid-read — see composerHoldsSplitPaste.
-        || composerHoldsSplitPaste(composer, payload)
-      : holdsPayload(pane);
-    if (matched) return "matched";
+    if (matches(pane)) return "matched";
+
+    // A short window (the web terminal split, sized to its panel) scrolls a
+    // wrapped composer to the cursor: only the payload's last lines are on
+    // screen, and its start, which the check reads, is not. Enter was held for
+    // as long as the viewer stayed open (2026-09-24). A tail on screen looks
+    // the same as a paste that lost its start, so it is never accepted as is:
+    // the check reads the whole composer at full size, once.
+    if (!readAtFullSize && composerShowsOnlyPayloadTail(composer, payload)) {
+      readAtFullSize = true;
+      if (await matchAtFullWindowSize(exec, target, matches, deadline)) return "matched";
+    }
 
     if (!glyphLine.trim()) {
       foreignTicks = 0;
@@ -21906,7 +21968,9 @@ async function probeStartedPane(entry: StartedSessionInfo, inspectPane?: (pane: 
     await acceptTrustPrompt(entry.tmuxSession).catch(() => false);
     return { state, pane: paneContentAfterLaunchEcho(paneContent) };
   }
-  inspectPane?.(paneContent);
+  // A blank frame is the boot clear, which the classifier already reads as
+  // booting; there is nothing on it to inspect.
+  if (paneContent.trim()) inspectPane?.(paneContent);
   return { state, pane: paneContentAfterLaunchEcho(paneContent) };
 }
 
