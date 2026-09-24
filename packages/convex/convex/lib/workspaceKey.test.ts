@@ -326,6 +326,46 @@ describe("propagation — the stored key follows the linked conversation", () =>
     expect(keys(db).d3).toBe("team:t_team"); // unlinked, untouched
   });
 
+  // A folder rule backfill patches 32 sessions per batch; scanning the owner's
+  // work items once per session read past Convex's 100 MB limit.
+  test("one execution scans the owner's work items once, however many sessions it patches", async () => {
+    const db: any = fixture({
+      conversations: [1, 2, 3].map((i) => ({ _id: `c${i}`, user_id: OWNER, team_id: TEAM, is_private: true })),
+      docs: [1, 2, 3].map((i) => ({ _id: `d${i}`, user_id: OWNER, team_id: TEAM, related_conversation_ids: [`c${i}`], workspace: "user:u_owner" })),
+    });
+    let ownerScans = 0;
+    const query = db.query.bind(db);
+    db.query = (table: string) => {
+      const q = query(table);
+      const withIndex = q.withIndex.bind(q);
+      q.withIndex = (name: string, fn: any) => { if (name === "by_user_id") ownerScans++; return withIndex(name, fn); };
+      return q;
+    };
+    for (const conv of [...db._tables.conversations]) await patchConversationVisibility({ db } as any, conv, { is_private: false });
+    expect(db._tables.docs.map((d: any) => d.workspace)).toEqual(["team:t_team", "team:t_team", "team:t_team"]);
+    expect(ownerScans).toBe(3); // tasks, plans, docs: once each
+  });
+
+  test("a second recompute in the same execution sees the key the first one wrote", async () => {
+    const db: any = seed();
+    // Convex hands back copies, so a cached row does not see a later patch.
+    const query = db.query.bind(db);
+    db.query = (table: string) => {
+      const q = query(table);
+      const withIndex = q.withIndex.bind(q);
+      q.withIndex = (name: string, fn: any) => {
+        const r = withIndex(name, fn);
+        const take = r.take.bind(r);
+        r.take = async (n: number) => (await take(n)).map((row: any) => ({ ...row }));
+        return r;
+      };
+      return q;
+    };
+    await patchConversationVisibility({ db } as any, db._tables.conversations[0], { is_private: false });
+    await patchConversationVisibility({ db } as any, db._tables.conversations[0], { is_private: true, team_visibility: "private" });
+    expect(keys(db).d2).toBe("user:u_owner");
+  });
+
   test("a no-op visibility patch rewrites nothing", async () => {
     const db = seed();
     const before = db._patched.length;

@@ -1,6 +1,6 @@
 import { toast } from "sonner";
 import { copyToClipboard } from "./utils";
-import { useInboxStore, resolveComposeProjectPath, findProjectPathByName } from "../store/inboxStore";
+import { useInboxStore, defaultNewSessionPath, findProjectPathByName } from "../store/inboxStore";
 import { spawnSessionWithPrompt } from "./spawnSession";
 
 // The one error toast. Every surface that reports a caught error to the user
@@ -36,14 +36,7 @@ function spawnFixSession(errorText: string) {
   // user happens to be viewing. The compose default still wins when it already
   // points inside codecast (e.g. a codecast worktree is more precise than the
   // main checkout), and remains the last resort when no checkout is known.
-  const composePath = resolveComposeProjectPath({
-    conversation: conv,
-    activeProjectFilter: store.activeProjectFilter,
-    activeProjectPath: store.activeProjectPath,
-    chipFilterExclude: store.chipFilterExclude,
-    recentProjects: store.recentProjects,
-    machineRoster: store.machineRoster,
-  });
+  const composePath = defaultNewSessionPath(store);
   const insideCodecast = composePath?.split("/").includes("codecast");
   const path = insideCodecast
     ? composePath

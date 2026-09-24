@@ -432,6 +432,23 @@ describe("createSession side effect", () => {
     });
   });
 
+  test("a session created private stays off the team its folder is shared with", async () => {
+    const run = (sessionId: string, extra: Record<string, unknown>) => (dispatch as any)._handler({
+      auth: { getUserIdentity: async () => ({ subject: `${userId}|session` }) },
+      db,
+    }, { action: "createSession", args: [{ agent_type: "claude_code", project_path: "/repo", session_id: sessionId, ...extra }] });
+    const db = createSessionDb({
+      directory_team_mappings: [{ _id: "dtm_1", user_id: userId, path_prefix: "/repo", team_id: "teams_acme", auto_share: true }],
+      team_memberships: [{ _id: "tm_1", user_id: userId, team_id: "teams_acme", role: "member" }],
+    });
+    await run("shared-stub", {});
+    await run("private-stub", { private: true });
+    const row = (id: string) => db._tables.conversations.find((c: any) => c.session_id === id);
+    expect(row("shared-stub")).toMatchObject({ is_private: false });
+    expect(row("private-stub")).toMatchObject({ is_private: true, team_visibility: "private" });
+    expect(row("private-stub").auto_shared).toBeUndefined();
+  });
+
   test("atomically links a context-created session to its task", async () => {
     const taskId = "tasks_context";
     const db = createSessionDb({

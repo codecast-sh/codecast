@@ -197,7 +197,7 @@ async function verify() {
   await act(async () => { (document.querySelectorAll('[data-share-panel] input[name=share-scope]')[1] as HTMLInputElement).click(); });
   assert.match(p2(), /The 3 sessions before that stay private/);
   await act(async () => { ([...document.querySelectorAll("[data-share-panel] button")].at(-1) as HTMLButtonElement).click(); });
-  assert.equal(calls[0], 'updateSyncSettings:{"sync_projects":["/Users/me/src/site"]}', "sync turns on first");
+  assert.equal(calls[0], 'updateSyncSettings:{"sync_mode":"selected","sync_projects":["/Users/me/src/site"]}', "sync turns on first");
   assert.match(calls[1] ?? "", /^updateDirectoryTeamMapping:.*"team_id":"t_team"/);
   await act(async () => { root2.unmount(); });
 
@@ -215,9 +215,31 @@ async function verify() {
   await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
   const t3 = text();
   assert.match(t3, /No longer on this machine: moved or deleted/);
-  assert.match(t3, /folder moved or deleted/);
+  assert.match(t3, /Folder moved or deleted on this machine/);
   assert.ok(t3.indexOf("live") < t3.indexOf("No longer on this machine"), "the live folder lists above the moved one");
   await act(async () => { root3.unmount(); });
+
+  // ── with every folder syncing, one folder turns off by itself; new folders keep syncing ──
+  fx.gone = [];
+  fx.syncProjects = [{ path: "/Users/me/src/quiet", is_git_repo: true, session_count: 0, last_active: now, team_id: null }];
+  calls.length = 0;
+  const root4 = createRoot(document.getElementById("root")!);
+  await act(async () => { root4.render(React.createElement(SyncPage)); });
+  const quiet = () => document.querySelector<HTMLButtonElement>('[aria-label="Sync quiet"]');
+  assert.ok(quiet(), "each folder has its own sync switch while everything syncs");
+  await act(async () => { quiet()!.click(); });
+  assert.equal(calls[0], 'updateSyncSettings:{"sync_excluded":["/Users/me/src/quiet"]}', "turning one folder off excludes it and keeps sync all");
+  await act(async () => { root4.unmount(); });
+  fx.user = { ...fx.user, sync_mode: "all", sync_projects: [], sync_excluded: ["/Users/me/src/quiet"] };
+  state.currentUser = fx.user;
+  calls.length = 0;
+  const root5 = createRoot(document.getElementById("root")!);
+  await act(async () => { root5.render(React.createElement(SyncPage)); });
+  assert.match(text(), /except the 1 you turned off below/);
+  assert.match(text(), /Not syncing/);
+  await act(async () => { quiet()!.click(); });
+  assert.equal(calls[0], 'updateSyncSettings:{"sync_excluded":[]}', "turning it back on lifts the exclusion");
+  await act(async () => { root5.unmount(); });
 }
 
 test("the sync page: typed paths are rows, a lock has its own group", verify, 60_000);

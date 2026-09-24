@@ -1,3 +1,4 @@
+import { matchDirectoryMapping } from "@codecast/shared/team/directoryRules";
 import { repositoryKeyOfRemote } from "@codecast/shared/contracts";
 import { Id } from "./_generated/dataModel";
 import { isSessionOwner } from "./sessionOwners";
@@ -330,34 +331,7 @@ export function mappingCoversStart(
 // nor the repository alone is enough: a private clone of a shared repository
 // is a path rule on that clone, and a codex worktree outside every mapped
 // folder is reached only through the repository.
-export function matchDirectoryMapping(
-  userMappings: DirectoryMapping[],
-  conversationPath: string | undefined,
-  repository?: string | null,
-): DirectoryMapping | null {
-  let bestMatch: DirectoryMapping | null = null;
-  if (conversationPath) {
-    for (const mapping of userMappings) {
-      if (
-        conversationPath === mapping.path_prefix ||
-        conversationPath.startsWith(mapping.path_prefix + "/")
-      ) {
-        if (!bestMatch || mapping.path_prefix.length > bestMatch.path_prefix.length) {
-          bestMatch = mapping;
-        }
-      }
-    }
-  }
-  if (!bestMatch && repository) {
-    for (const mapping of userMappings) {
-      if (mapping.repository !== repository) continue;
-      // A lock on any checkout of the repository is the owner's word on the
-      // whole repository: it wins over a share rule on another checkout.
-      if (!bestMatch || (!!mapping.private && !bestMatch.private) || (!!mapping.private === !!bestMatch.private && mapping.path_prefix.length > bestMatch.path_prefix.length)) bestMatch = mapping;
-    }
-  }
-  return bestMatch;
-}
+export { matchDirectoryMapping };
 
 export function resolveTeamForPath(
   userMappings: DirectoryMapping[],

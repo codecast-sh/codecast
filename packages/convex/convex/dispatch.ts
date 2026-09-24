@@ -896,7 +896,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     });
   },
 
-  createSession: async (ctx, userId, [opts]: [{ agent_type?: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: string; cloud_start_from?: string; agent_definition?: string }]) => {
+  createSession: async (ctx, userId, [opts]: [{ agent_type?: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: string; cloud_start_from?: string; agent_definition?: string; private?: boolean }]) => {
     const sessionId = opts.session_id || crypto.randomUUID();
     // Dispatch args are v.any(): the mode and the seed choice are normalised at the boundary.
     const cloudWorkspace = normalizeCloudWorkspace(opts.cloud_workspace);
@@ -1016,8 +1016,12 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       started_at: now,
       updated_at: now,
       message_count: 0,
-      is_private: isPrivate,
-      auto_shared: autoShared || undefined,
+      // A session about the person's own settings (the sharing agent) is kept
+      // private from its first write, the way setPrivacy keeps one private:
+      // no folder rule can share it.
+      ...(opts.private
+        ? { is_private: true, team_visibility: "private" as const }
+        : { is_private: isPrivate, auto_shared: autoShared || undefined }),
       status: "active" as const,
       ...(linkedTask ? { active_task_id: linkedTask._id } : {}),
       // Stamp the plan so the inbox can group plan workers even without a viable

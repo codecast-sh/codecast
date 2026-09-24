@@ -1131,8 +1131,9 @@ $ cast teams invite mike@acme.com
 # Join with invite code
 $ cast teams join abc123
 
-# Sync settings
-$ cast teams sync-settings`}</Code>
+# See and change what syncs and what each team sees
+$ cast sharing
+$ cast sharing share ~/src/app --team acme-eng --dry-run`}</Code>
 
           <Heading id="team-sharing" level={3}>Sharing & Privacy</Heading>
           <p className="mb-4" style={{ color: SOL.base00 }}>
@@ -1159,6 +1160,11 @@ $ cast teams sync-settings`}</Code>
               </p>
             </div>
           </div>
+          <p className="mb-4" style={{ color: SOL.base00 }}>
+            <InlineCode>cast sharing</InlineCode> reads and changes all of it without prompts, so an agent can do it for you:
+            the Sync &amp; Privacy settings page has a Decide with an agent button that starts one, briefed to look through your
+            folders, recommend a setting for each, and change nothing until you agree.
+          </p>
           <Callout type="warn">
             Setting an <InlineCode>active_team_id</InlineCode> alone does NOT share sessions. You must also
             configure directory mappings or team share paths for sessions to be visible to teammates.

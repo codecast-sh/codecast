@@ -12,6 +12,7 @@ import * as path from "node:path";
 import { dirFilterByDepth } from "./fsWalk.js";
 import { checkoutRootOf } from "./fs/checkoutOf.js";
 import type { Config } from "./config/types.js";
+import { folderCovers } from "@codecast/shared/team/folderLists";
 
 export const CLAUDE_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -74,28 +75,27 @@ export function isPathExcluded(projectPath: string, excludedPaths?: string): boo
   return false;
 }
 
+/** A folder is in a list when it is one of them or sits below one; a
+ *  worktree outside its checkout (Codex keeps them under ~/.codex/worktrees)
+ *  counts as its checkout, the same reach a sharing rule has. */
+function inFolderList(list: string[] | undefined, projectPath: string): boolean {
+  if (!list || list.length === 0) return false;
+  const covers = (p: string) => list.some(entry => folderCovers(p, path.resolve(entry)));
+  const normalizedProject = path.resolve(projectPath);
+  if (covers(normalizedProject)) return true;
+  const checkout = checkoutRootOf(normalizedProject);
+  return !!checkout && checkout.root !== normalizedProject && covers(checkout.root);
+}
+
 export function isProjectAllowedToSync(projectPath: string, config: Config): boolean {
   if (isTestArtifactPath(projectPath)) {
     return false;
   }
   if (!config.sync_mode || config.sync_mode === "all") {
-    return true;
+    // "Everything except": the server's excluded folders never upload.
+    return !inFolderList(config.sync_excluded, projectPath);
   }
-
-  if (!config.sync_projects || config.sync_projects.length === 0) {
-    return false;
-  }
-
-  const chosen = (p: string) => config.sync_projects!.some(allowed => {
-    const normalizedAllowed = path.resolve(allowed);
-    return p === normalizedAllowed || p.startsWith(normalizedAllowed + path.sep);
-  });
-  const normalizedProject = path.resolve(projectPath);
-  if (chosen(normalizedProject)) return true;
-  // A worktree outside its checkout (Codex keeps them under ~/.codex/worktrees)
-  // syncs when its checkout is chosen, the same reach a sharing rule has.
-  const checkout = checkoutRootOf(normalizedProject);
-  return !!checkout && checkout.root !== normalizedProject && chosen(checkout.root);
+  return inFolderList(config.sync_projects, projectPath);
 }
 
 // The live watcher's own view of the same rule: these tmpdirs end up under

@@ -1,7 +1,8 @@
-// What each team visibility level means, in the words the settings page, the
-// per-session share popover and the share-in-full nudge all use. The rules
-// (rank, the time split, the transition) live in the convex module so the
+// Team visibility for the web: the words for each level come from
+// @codecast/shared/team (so `cast sharing` says the same thing), and the rules
+// (rank, the time split, the transition) from the convex module, so the
 // server and the store apply the same ones.
+import { teamVisibilityOption } from "@codecast/shared/team/visibility";
 import {
   TEAM_VISIBILITY_RANK,
   currentMembershipVisibility,
@@ -11,47 +12,8 @@ import {
 } from "@codecast/convex/convex/teamVisibility";
 
 export type { MembershipVisibilityFacts, TeamVisibilityLevel, VisibilityChangeMode } from "@codecast/convex/convex/teamVisibility";
+export { TEAM_VISIBILITY_OPTIONS, teamVisibilityOption, type TeamVisibilityOption } from "@codecast/shared/team/visibility";
 export { TEAM_VISIBILITY_RANK, currentMembershipVisibility, effectiveMembershipVisibility, hasPinnedPast, isVisibilityShareable, nextMembershipVisibility } from "@codecast/convex/convex/teamVisibility";
-
-export type TeamVisibilityOption = {
-  value: TeamVisibilityLevel;
-  label: string;
-  /** What teammates see, as a noun phrase: "titles and short summaries". */
-  sees: string;
-  /** One sentence for a menu item or a dialog. */
-  detail: string;
-};
-
-export const TEAM_VISIBILITY_OPTIONS: TeamVisibilityOption[] = [
-  {
-    value: "hidden",
-    label: "Hidden",
-    sees: "nothing",
-    detail: "Your sessions never appear to this team.",
-  },
-  {
-    value: "activity",
-    label: "Activity only",
-    sees: "project names and session counts",
-    detail: "Teammates see that you are working and where, with no titles or content.",
-  },
-  {
-    value: "summary",
-    label: "Summary",
-    sees: "titles and short summaries",
-    detail: "Teammates see what each session was about, not the conversation itself.",
-  },
-  {
-    value: "full",
-    label: "Full",
-    sees: "the whole conversation",
-    detail: "Teammates can open and read every session you share with this team.",
-  },
-];
-
-export function teamVisibilityOption(level: string | null | undefined): TeamVisibilityOption {
-  return TEAM_VISIBILITY_OPTIONS.find((o) => o.value === level) ?? TEAM_VISIBILITY_OPTIONS[2];
-}
 
 /** A team row as getUserTeams returns it, with the two counts sharing needs. */
 export type TeamSharingFacts = MembershipVisibilityFacts & {
