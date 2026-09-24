@@ -191,38 +191,51 @@ export const AWAKE_IDLE_SNAPSHOT_MAX_AGE_MS = 7 * 24 * 3600_000;
 // session again, and expires when none does.
 export const AWAKE_IDLE_RESTORE_CLAIM_MS = 15 * 60 * 1000;
 
-export type AwakeIdleSnapshot = { at: number; idle: Map<string, number> };
+export type AwakeIdleSnapshot = { at: number; idle: Map<string, number>; size: Map<string, number> };
 
-/** The snapshot's counters, or null when it is unreadable, from the future, or past the sanity bound. */
+/** The snapshot's counters and transcript sizes, or null when it is unreadable, from the future, or past the sanity bound. */
 export function decodeAwakeIdleSnapshot(raw: string, now: number): AwakeIdleSnapshot | null {
   try {
-    const snap = JSON.parse(raw) as { at?: unknown; idle?: unknown };
+    const snap = JSON.parse(raw) as { at?: unknown; idle?: unknown; size?: unknown };
     if (typeof snap.at !== "number" || now - snap.at > AWAKE_IDLE_SNAPSHOT_MAX_AGE_MS || now < snap.at) return null;
     const idle = new Map<string, number>();
     for (const [sessionId, ms] of Object.entries((snap.idle ?? {}) as Record<string, unknown>)) {
       if (typeof ms === "number" && Number.isFinite(ms) && ms > 0) idle.set(sessionId, ms);
     }
-    return { at: snap.at, idle };
+    const size = new Map<string, number>();
+    for (const [sessionId, bytes] of Object.entries((snap.size ?? {}) as Record<string, unknown>)) {
+      if (typeof bytes === "number" && Number.isFinite(bytes) && bytes >= 0) size.set(sessionId, bytes);
+    }
+    return { at: snap.at, idle, size };
   } catch {
     return null;
   }
 }
 
 /**
- * The counters a snapshot may hand to the next daemon, given when each session
- * last wrote its transcript. A session that wrote after the snapshot was
- * active in the gap and starts from zero; a session whose activity is unknown
- * (no transcript found, or a store whose file is shared) starts from zero too,
- * because an unknown stretch must not be presented as idle.
+ * The counters a snapshot may hand to the next daemon, given each session's
+ * transcript size now. A transcript that grew since the snapshot carried a
+ * turn in the gap, and that session starts from zero; one whose size is
+ * unknown (no transcript found, or a store whose file is shared, or a
+ * snapshot that recorded no size) starts from zero too, because an unknown
+ * stretch must not be presented as idle.
+ *
+ * Size, not mtime: something touches every transcript in a batch without
+ * adding content (14 of 16 live transcripts shared one mtime on 2026-09-24
+ * with tails hours older), and a restore that read that touch as activity
+ * dropped 15 of 16 counters at the first restart after the overnight sleep.
+ * A transcript only ever grows by append, so an unchanged size says nothing
+ * was written; a rewrite to the same byte count is not a shape it takes.
  */
 export function restorableAwakeIdle(
   snapshot: AwakeIdleSnapshot,
-  lastActivityAt: ReadonlyMap<string, number | undefined>,
+  sizeNow: ReadonlyMap<string, number | undefined>,
 ): Map<string, number> {
   const kept = new Map<string, number>();
   for (const [sessionId, ms] of snapshot.idle) {
-    const activeAt = lastActivityAt.get(sessionId);
-    if (activeAt !== undefined && activeAt <= snapshot.at) kept.set(sessionId, ms);
+    const then = snapshot.size.get(sessionId);
+    const now = sizeNow.get(sessionId);
+    if (then !== undefined && now !== undefined && now === then) kept.set(sessionId, ms);
   }
   return kept;
 }
@@ -275,12 +288,29 @@ export class AwakeIdleClock {
     }
   }
 
-  /** The snapshot for the next daemon: live counters plus held ones still inside their window. */
-  encode(now: number): string {
+  /** Every session the snapshot would carry, so the caller can size their transcripts first. */
+  sessionIds(now: number): string[] {
+    const ids = new Set<string>();
+    for (const [sessionId, held] of this.held) if (now < held.until) ids.add(sessionId);
+    for (const sessionId of this.live.keys()) ids.add(sessionId);
+    return [...ids];
+  }
+
+  /**
+   * The snapshot for the next daemon: live counters plus held ones still
+   * inside their window, each with its transcript size when known, which is
+   * what restorableAwakeIdle compares on the other side.
+   */
+  encode(now: number, transcriptSize: ReadonlyMap<string, number | undefined> = new Map()): string {
     const idle: Record<string, number> = {};
     for (const [sessionId, held] of this.held) if (now < held.until) idle[sessionId] = held.ms;
     for (const [sessionId, ms] of this.live) idle[sessionId] = ms;
-    return JSON.stringify({ at: now, idle });
+    const size: Record<string, number> = {};
+    for (const sessionId of Object.keys(idle)) {
+      const bytes = transcriptSize.get(sessionId);
+      if (bytes !== undefined) size[sessionId] = bytes;
+    }
+    return JSON.stringify({ at: now, idle, size });
   }
 }
 

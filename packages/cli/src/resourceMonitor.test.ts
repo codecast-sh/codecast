@@ -307,30 +307,43 @@ describe("resourceMonitor", () => {
   describe("awake idle snapshot", () => {
     const NOW = 1_800_000_000_000;
     const H = 3600_000;
-    const raw = (idle: Record<string, number>, at: number) => JSON.stringify({ at, idle });
+    const raw = (idle: Record<string, number>, at: number, size: Record<string, number> = {}) => JSON.stringify({ at, idle, size });
 
     it("decodes a snapshot and rejects a future stamp, one past the sanity bound, malformed text and junk values", () => {
-      const snap = decodeAwakeIdleSnapshot(raw({ a: "9" as any, b: -1, c: 0, d: 12 }, NOW), NOW + 40_000);
+      const snap = decodeAwakeIdleSnapshot(raw({ a: "9" as any, b: -1, c: 0, d: 12 }, NOW, { d: 100, e: -5 as any }), NOW + 40_000);
       expect(snap?.at).toBe(NOW);
       expect(snap?.idle).toEqual(new Map([["d", 12]]));
+      expect(snap?.size).toEqual(new Map([["d", 100]]));
       expect(decodeAwakeIdleSnapshot(raw({ a: 5 }, NOW + 60_000), NOW)).toBeNull();
       expect(decodeAwakeIdleSnapshot(raw({ a: 5 }, NOW), NOW + AWAKE_IDLE_SNAPSHOT_MAX_AGE_MS + 1)).toBeNull();
       expect(decodeAwakeIdleSnapshot("{not json", NOW)).toBeNull();
     });
 
-    it("keeps a counter through a seventeen hour gap when the session's transcript did not change", () => {
-      // The regression: a fifteen minute age rule discarded the whole fleet's
-      // counters after the laptop slept overnight (2026-09-20), though nothing
-      // had happened to any session in between.
-      const snap = decodeAwakeIdleSnapshot(raw({ slept: 6.6 * H }, NOW), NOW + 17 * H)!;
-      const kept = restorableAwakeIdle(snap, new Map([["slept", NOW - 9 * H]]));
+    it("keeps a counter through a seventeen hour gap when the transcript did not grow, whatever its mtime says", () => {
+      // Two regressions. A fifteen minute age rule discarded the whole fleet's
+      // counters after the laptop slept overnight (2026-09-20). Then an mtime
+      // rule dropped 15 of 16 counters at the restart after the next sleep
+      // (2026-09-24): something touches every transcript in a batch without
+      // adding content, so mtime moved while the tail stayed hours old.
+      const snap = decodeAwakeIdleSnapshot(raw({ slept: 6.6 * H }, NOW, { slept: 4096 }), NOW + 17 * H)!;
+      const kept = restorableAwakeIdle(snap, new Map([["slept", 4096]]));
       expect(kept.get("slept")).toBe(6.6 * H);
     });
 
-    it("drops a counter whose session wrote its transcript after the snapshot, and one whose activity is unknown", () => {
-      const snap = decodeAwakeIdleSnapshot(raw({ worked: 5 * H, unknown: 5 * H, still: 5 * H }, NOW), NOW + 60_000)!;
-      const kept = restorableAwakeIdle(snap, new Map([["worked", NOW + 30_000], ["unknown", undefined], ["still", NOW - 60_000]]));
+    it("drops a counter whose transcript grew since the snapshot, and one whose size is unknown on either side", () => {
+      const snap = decodeAwakeIdleSnapshot(raw({ worked: 5 * H, unknown: 5 * H, unrecorded: 5 * H, still: 5 * H }, NOW, { worked: 100, unknown: 100, still: 100 }), NOW + 60_000)!;
+      const kept = restorableAwakeIdle(snap, new Map([["worked", 160], ["unknown", undefined], ["unrecorded", 100], ["still", 100]]));
       expect([...kept.keys()]).toEqual(["still"]);
+    });
+
+    it("encode records the size of every session it carries, live or held", () => {
+      const clock = new AwakeIdleClock();
+      clock.restore(new Map([["held", 3 * H]]), NOW);
+      clock.set("live", H);
+      expect(clock.sessionIds(NOW).sort()).toEqual(["held", "live"]);
+      const snap = JSON.parse(clock.encode(NOW, new Map([["held", 10], ["live", 20], ["stranger", 30]])));
+      expect(snap.idle).toEqual({ held: 3 * H, live: H });
+      expect(snap.size).toEqual({ held: 10, live: 20 });
     });
   });
 
