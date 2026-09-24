@@ -64,7 +64,7 @@ describe("buildPublishPayload", () => {
     const paths = p.files!.map((f) => f.path).sort();
     expect(paths).toEqual(["app.js", "index.html"]);
     const appJs = p.files!.find((f) => f.path === "app.js")!;
-    expect(Buffer.from(appJs.content_b64, "base64").toString("utf-8")).toBe("console.log(1)");
+    expect(Buffer.from(appJs.content_b64!, "base64").toString("utf-8")).toBe("console.log(1)");
   });
 
   it("directory without an entry page throws the entry error", () => {
@@ -76,6 +76,15 @@ describe("buildPublishPayload", () => {
     write("index.html", "<title>Big</title>");
     write("huge.bin", Buffer.alloc(9 * 1024 * 1024));
     expect(() => buildPublishPayload(dir)).toThrow(/huge\.bin/);
+  });
+
+  it("sends video and audio to media hosting instead of the bundle, outside the size cap", () => {
+    write("index.html", "<title>Film</title><cast-player><cast-chapter src='c00.mp4'></cast-chapter></cast-player>");
+    write("c00.mp4", Buffer.alloc(20 * 1024 * 1024));
+    write("theme.m4a", Buffer.alloc(1024));
+    const p = buildPublishPayload(dir);
+    expect(p.files!.map((f) => f.path)).toEqual(["index.html"]);
+    expect(p.media!.map((m) => [m.path, m.size])).toEqual([["c00.mp4", 20 * 1024 * 1024], ["theme.m4a", 1024]]);
   });
 
   it("rejects unsupported file types", () => {

@@ -257,12 +257,19 @@ export function anchorAppPath(a: HTMLAnchorElement): string | null {
   }
 }
 
+/** Marks a subtree whose modifier clicks are its own gesture (a filter chip's
+ *  Option-click excludes). Without it, a navigation the gesture causes as a
+ *  side effect (focus moving off a session the filter just hid) claims the
+ *  armed intent and opens a pane nobody asked for. */
+export const OWNS_MODIFIER_CLICK = { "data-owns-modifier-click": "" } as const;
+
 function onCaptureClick(e: MouseEvent): void {
   const target = openTargetForClick(e);
   if (!target) return;
   if (target !== "split" && !isDesktop()) return; // the browser's own tab gestures
 
   const el = e.target as Element | null;
+  if (el?.closest?.("[data-owns-modifier-click]")) return;
   const a = el?.closest?.("a[href]") as HTMLAnchorElement | null;
   const path = a ? anchorAppPath(a) : null;
   if (a && !path) return; // the browser's link to keep (external, _blank…)

@@ -5,9 +5,8 @@
 // and is imported here. What stays codecast's: the catalog
 // (@codecast/shared/contracts/snippets.ts, one table with the bodies, slugs and
 // config keys, re-exported below for the CLI, the daemon and the tests), the
-// candidate list getSnippetTargets reads off the agent client registry, the
-// slug wrappers that throw on a typo, and ensureMessagingForMemory, which is
-// product policy.
+// candidate list getSnippetTargets reads off the agent client registry, and the
+// slug wrappers that throw on a typo.
 //
 // The engine's content hash is byte identical to the one the catalog ships
 // (both are FNV-1a over `{"scripts":[<body>]}`), so importing it changes no
@@ -19,6 +18,7 @@
 // startup, so memory-enabled daemons distribute it onto their machine's
 // CLAUDE.md autonomously after a self-update — without a `cast` command running.
 
+import { writeHarnessFile } from "./harness.js";
 import * as os from "os";
 import { readFileSync as fsReadFileSync } from "node:fs";
 import {
@@ -137,6 +137,19 @@ export function getSnippetTargets(): SnippetTarget[] {
  * group-readable keeps its mode across every refresh: we own a section, not the
  * file.
  */
+// Every section write goes through the harness writer, so it lands in the
+// change history with the action that caused it (harness.ts). Reads and the
+// directory check stay on the plain adapter.
+function sectionFs(spec: SectionSpec): typeof nodeFs {
+  const what = `section:${snippetByEndMarker(spec.endMarker)?.slug ?? "references"}`;
+  return {
+    readFile: (p) => nodeFs.readFile(p),
+    exists: (p) => nodeFs.exists(p),
+    mkdir: (p) => nodeFs.mkdir(p),
+    writeFile: (p, text) => { writeHarnessFile(p, text, what); },
+  };
+}
+
 export function installSectionToFile(
   filePath: string,
   dirPath: string,
@@ -144,7 +157,7 @@ export function installSectionToFile(
   snippet: string,
   update: boolean,
 ): SnippetInstallResult {
-  return installSectionToFileWith(nodeFs, { filePath, dirPath }, spec, renderSection(spec, snippet), update);
+  return installSectionToFileWith(sectionFs(spec), { filePath, dirPath }, spec, renderSection(spec, snippet), update);
 }
 
 /** Write `spec`'s section into every agent instruction file on this machine.
@@ -155,14 +168,14 @@ export function installSectionToTargets(
   snippet: string,
   update: boolean,
 ): SnippetInstallResult {
-  return installSectionToTargetsWith(nodeFs, getSnippetTargets(), spec, renderSection(spec, snippet), update);
+  return installSectionToTargetsWith(sectionFs(spec), getSnippetTargets(), spec, renderSection(spec, snippet), update);
 }
 
 // ------------------------------------------------------- what actually lands
 //
 // Both writers pass their body through here, so every install path on the
 // machine — `cast install`, the wizard, the daemon's refresh after a self
-// update, limitsGuidance, the capability driver — writes the same two things
+// update, the capability driver — writes the same two things
 // without knowing about either: this binary's version stamped above the end
 // marker, and the stub form when the machine is in stub mode.
 //
@@ -343,27 +356,4 @@ export function stampSnippet(
   version: string,
 ): boolean {
   return stampSnippetFor(config, requireSnippet(slug, "stampSnippet"), version);
-}
-
-// Messaging is on by default for anyone who has memory. Backfill/refresh it for
-// memory installs (respecting an explicit opt-out), install the snippet onto
-// disk, and return the config delta to persist — or null if nothing changed.
-// Callers persist with their own config writer (index.ts and daemon.ts each
-// have one). Idempotent: returns null once the installed CONTENT matches this
-// binary's body (the hash is the rewrite key; the version rides along as the
-// display/downgrade shadow).
-export function ensureMessagingForMemory(
-  config: { memory_enabled?: boolean; messaging_enabled?: boolean; messaging_version?: string; messaging_hash?: string } | null | undefined
-): { messaging_enabled: true; messaging_version: string; messaging_hash: string } | null {
-  if (!config?.memory_enabled) return null;        // only memory installs
-  if (config.messaging_enabled === false) return null; // respect explicit opt-out
-
-  const version = getMessagingVersion();
-  const hash = snippetContentHash(MESSAGING_SNIPPET);
-  if (config.messaging_enabled === true && config.messaging_hash === hash && config.messaging_version === version) {
-    return null; // already enabled and current
-  }
-
-  installMessagingSnippet(true);
-  return { messaging_enabled: true, messaging_version: version, messaging_hash: hash };
 }

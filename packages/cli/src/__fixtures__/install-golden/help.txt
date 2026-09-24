@@ -26,6 +26,7 @@ Snippets:
   orchestration Multi-agent plan execution (/orchestrate)
   skills        Slash commands over the team's shared state (/cast-pickup, /cast-why, /cast-ship, …)
   stable        Inject recent session history into every new conversation
+  hooks         Codecast's Claude Code hooks (session status, delivery, live usage)
 
 Examples:
   cast install                      Interactive wizard (all snippets)

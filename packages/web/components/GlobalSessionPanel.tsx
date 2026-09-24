@@ -11,8 +11,8 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useRouter } from "next/navigation";
 import { ContextMenu, CursorPopover, useContextMenu, CtxItem, CtxHeader, CtxSeparator } from "./ui/context-menu";
 import { SessionMenuItems } from "./menus/ObjectContextMenus";
-import { BulkSessionMenuItems, InboxSelectionBar, MoveToDeviceSubmenu } from "./BulkMoveSessions";
-import { selectionGesture, useInboxSelection } from "../lib/inboxSelection";
+import { BulkSessionMenuItems, InboxSelectionBar, MoveToDeviceSubmenu, labelSessions } from "./BulkMoveSessions";
+import { selectionGesture, selectionIdsFor, useInboxSelection } from "../lib/inboxSelection";
 import { useEventListener } from "../hooks/useEventListener";
 import { copyToClipboard, formatRelative, formatDateFull, formatShortDate } from "../lib/utils";
 import { ImageLightbox } from "./ImageGallery";
@@ -1910,10 +1910,8 @@ export /**
  * the two cannot disagree about what "this card" means.
  */
 function selectionTargets(session: InboxSession): InboxSession[] {
-  const picked = useInboxSelection.getState().ids;
-  if (!picked.includes(session._id)) return [session];
   const rows = useInboxStore.getState().sessions;
-  return picked
+  return selectionIdsFor(session._id)
     .map((id) => (id === session._id ? session : rows[id]))
     .filter((row): row is InboxSession => !!row);
 }
@@ -1970,8 +1968,7 @@ export const SessionCard = memo(function SessionCard({
   // the trigger's own row. The ↳ arrow goes schedule-amber there (child of a
   // trigger, not of a parent session).
   // "role": one of a role's sessions under the role's card (org-roles-run-work
-  // .md R1). The role looks after it, so it is a small row with one gesture of
-  // its own: Put in my inbox.
+  // .md R1): a subagent row whose arrow names the role.
   subRow?: "trigger" | "role";
   /** On a role's own card: how many of its sessions it has put in front of the person directly. */
   escalatedCount?: number;
@@ -2067,10 +2064,6 @@ export const SessionCard = memo(function SessionCard({
   // role's line on a card it escalated. Both read through lib/sessionIdentity.
   const roleAbove = subRow === "role" ? roleLookingAfter(session) : null;
   const escalation = escalationOf(session);
-  const putInMyInbox = () => {
-    const me = useInboxStore.getState().currentUser as { name?: string | null } | null;
-    useInboxStore.getState().putSessionInMyInbox(session._id, `${me?.name?.trim() || "Someone"} put this in their inbox`, Date.now());
-  };
   // Local-first "pending working": a message has been sent but the daemon
   // hasn't confirmed delivery yet (status not active). Reading the durable
   // pendingMessages map directly returns a stable boolean, so only this card
@@ -2294,7 +2287,9 @@ export const SessionCard = memo(function SessionCard({
     const dot = document.createElement("span");
     dot.className = `w-1.5 h-1.5 rounded-full flex-shrink-0 ${getLabelColor(project).dot}`;
     const text = document.createElement("span");
-    text.textContent = displayTitle;
+    // A ticked card carries the whole selection to every drop sink.
+    const carried = selectionIdsFor(session._id).length;
+    text.textContent = carried > 1 ? `${carried} sessions` : displayTitle;
     text.style.cssText = "overflow:hidden;text-overflow:ellipsis";
     ghost.append(dot, text);
     document.body.appendChild(ghost);
@@ -2441,19 +2436,8 @@ export const SessionCard = memo(function SessionCard({
             </div>
           )}
         </div>
-        {!isForeignSession && (onDismiss || onDefer || onPin || roleAbove) && (
+        {!isForeignSession && (onDismiss || onDefer || onPin) && (
           <div data-sv-fade className={`absolute top-0 bottom-0 right-0 flex items-center gap-1 py-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity pl-8 pr-2 bg-gradient-to-r from-transparent to-sol-bg-alt`}>
-            {roleAbove && (
-              <button
-                type="button"
-                data-role-gesture="put-in-my-inbox"
-                onClick={(e) => { e.stopPropagation(); putInMyInbox(); }}
-                title={`Take this out from under @${roleAbove.handle} and make it a card in your needs input`}
-                className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-sol-violet/15 text-sol-violet border border-sol-violet/35 hover:bg-sol-violet/25 transition-colors whitespace-nowrap"
-              >
-                Put in my inbox
-              </button>
-            )}
             {onDismiss && (
               <button
                 onClick={(e) => { e.stopPropagation(); onDismiss(session._id); }}
@@ -4078,26 +4062,9 @@ function SessionListPanelImpl({
   // Shared drop sink for every label target — chips AND the "by label" view's
   // sections. bucketId null = remove the label (dropping onto a project group
   // sends the session back to its own project tier).
+  // A drag of a ticked card carries the whole selection (selectionIdsFor).
   const dropSessionOnLabel = useCallback((draggedId: string, bucketId: string | null) => {
-    const store = useInboxStore.getState();
-    const real = store.getConvexId(draggedId) ?? draggedId;
-    if (!isConvexId(real)) {
-      toast.error("Session is still being created — try again in a moment");
-      return;
-    }
-    // A label mid-create (optimistic stub) can't take assignments yet — the
-    // server row supersedes the stub within ~a second.
-    if (bucketId && !isConvexId(bucketId)) {
-      toast.error("Label is still syncing — try again in a moment");
-      return;
-    }
-    store.assignSessionToBucket(real, bucketId);
-    if (bucketId) {
-      const name = store.buckets[bucketId]?.name;
-      if (name) toast.success(`Labeled ${name}`);
-    } else {
-      toast.success("Label removed");
-    }
+    labelSessions(selectionIdsFor(draggedId), bucketId);
   }, []);
 
   // Dropping a card on a status section files it there: the user's rest
@@ -4105,11 +4072,11 @@ function SessionListPanelImpl({
   const dropSessionOnRest = useMemo(() => Object.fromEntries(
     USER_RESTS.map((rest) => [rest, (draggedId: string) => {
       const store = useInboxStore.getState();
-      const row = store.sessions[draggedId];
-      if (!row) return;
-      if (row.inbox_killed_at) { toast.error("A killed session can't be filed — restore it first"); return; }
-      undoableSetSessionRest(draggedId, rest);
-      toast.success(USER_REST_LABEL[rest]);
+      const rows = selectionIdsFor(draggedId).map((id) => store.sessions[id]).filter((row): row is InboxSession => !!row);
+      const live = rows.filter((row) => !row.inbox_killed_at);
+      if (live.length === 0) { if (rows.length) toast.error("A killed session can't be filed — restore it first"); return; }
+      for (const row of live) undoableSetSessionRest(row._id, rest);
+      toast.success(live.length > 1 ? `${live.length} sessions: ${USER_REST_LABEL[rest]}` : USER_REST_LABEL[rest]);
     }]),
   ) as Record<UserRest, (draggedId: string) => void>, []);
 
@@ -4140,16 +4107,24 @@ function SessionListPanelImpl({
     };
     const draggedRow = flatList.find((sess) => sess._id === draggedId);
     if (draggedRow && nestedUnder(draggedRow)) return;
+    // A ticked card drags the whole selection: its slot owning rows move as
+    // one block, in their on-screen order.
+    const moving = new Set(selectionIdsFor(draggedId));
+    if (moving.has(targetId)) return;
+    const block = flatList.filter((sess) => moving.has(sess._id) && !nestedUnder(sess));
     const targetRow = flatList.find((sess) => sess._id === targetId);
     if (!targetRow) return;
     const targetParent = nestedUnder(targetRow);
-    const rest = flatList.filter((sess) => sess._id !== draggedId && !nestedUnder(sess));
+    const rest = flatList.filter((sess) => !moving.has(sess._id) && !nestedUnder(sess));
     const restKeys = rest.map((sess) => manualOrder?.[sess._id] ?? sess.started_at ?? sess.updated_at ?? 0);
     const targetIdx = rest.findIndex((sess) => sess._id === (targetParent ?? targetId));
     if (targetIdx < 0) return;
-    const insertIndex = (targetParent ? "after" : pos) === "before" ? targetIdx : targetIdx + 1;
-    const key = computeManualSortKey(restKeys, insertIndex);
-    useInboxStore.getState().setSessionManualOrder(draggedId, key);
+    let insertIndex = (targetParent ? "after" : pos) === "before" ? targetIdx : targetIdx + 1;
+    for (const sess of block) {
+      const key = computeManualSortKey(restKeys, insertIndex);
+      useInboxStore.getState().setSessionManualOrder(sess._id, key);
+      restKeys.splice(insertIndex++, 0, key);
+    }
   }, [flatList, manualOrder]);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const scrolledToRef = useRef<string | null>(null);
@@ -4423,7 +4398,7 @@ function SessionListPanelImpl({
                   onOpen={handleSelect}
                   onOpenSchedule={openScheduleTarget}
                 />
-                {(subMap.get(session._id) ?? []).filter((sub) => showSubagents || sub._id === activeSessionId || !!roleLookingAfter(sub)).map((sub) => (
+                {(subMap.get(session._id) ?? []).filter((sub) => showSubagents || sub._id === activeSessionId).map((sub) => (
                   <SessionCard
                     key={sub._id}
                     session={sub}
@@ -4580,9 +4555,7 @@ function SessionListPanelImpl({
             // The selected subagent always renders — even when subagents are
             // globally hidden or fall past the "+N more" cutoff. The row being
             // viewed must never vanish from the list.
-            // A role's sessions are not helpers of one turn: they are the work
-            // the role looks after, so the subagent toggle never hides them.
-            const subs = showSubagents ? allSubs : allSubs.filter((sub) => sub._id === activeSessionId || !!roleLookingAfter(sub));
+            const subs = showSubagents ? allSubs : allSubs.filter((sub) => sub._id === activeSessionId);
             const subsExpanded = !!expandedSubSessions[session._id];
             let visibleSubs = subs.length <= 2 || subsExpanded ? subs : subs.slice(0, 2);
             if (visibleSubs.length < subs.length && !visibleSubs.some((sub) => sub._id === activeSessionId)) {

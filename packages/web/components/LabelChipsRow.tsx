@@ -16,6 +16,7 @@ import {
   type BucketFilterTerm,
 } from "../store/inboxStore";
 import { getLabelColor } from "../lib/labelColors";
+import { OWNS_MODIFIER_CLICK } from "../lib/openIntent";
 import { ContextMenu, useContextMenu, CtxItem, CtxHeader, CtxSeparator } from "./ui/context-menu";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { isMac } from "../shortcuts";
@@ -568,7 +569,7 @@ export function LabelChipsRow({
     // parent). The row then grows to the whole chip list, nothing ever clips,
     // and the panel header runs off the window. The +N pill keeps its room
     // through flex-shrink-0 alone: the shell collapses first, the pill last.
-    <div ref={anchorRef} data-sv-label-chips className="relative flex-1 min-w-0 flex items-center gap-1">
+    <div ref={anchorRef} data-sv-label-chips {...OWNS_MODIFIER_CLICK} className="relative flex-1 min-w-0 flex items-center gap-1">
       {/* Clip shell: the chip row and the pinned active chips are hard-clipped
           at the component's edge so nothing can bleed under the panel's icon
           cluster at narrow widths. The +N pill and the popover sit OUTSIDE it:
@@ -751,6 +752,7 @@ export function LabelChipsRow({
       {popoverOpen && popoverPos && createPortal(
         <div
           ref={popoverRef}
+          {...OWNS_MODIFIER_CLICK}
           style={{ top: popoverPos.top, bottom: popoverPos.bottom, left: popoverPos.left, maxHeight: popoverPos.maxHeight }}
           className="fixed z-[9999] w-64 overflow-y-auto rounded-lg border border-sol-border/70 bg-sol-bg shadow-2xl shadow-black/30 py-1"
         >
@@ -890,8 +892,10 @@ export function LabelChipsRow({
           </div>
           {projectCounts.length > 0 && (
             <>
+              {/* Each row is a session folder (its repo root, else where it
+                  ran), not a Codecast project, which groups tasks and docs. */}
               <div className="mt-0.5 border-t border-sol-border/40 px-3 pt-2 pb-1 text-[9px] font-semibold uppercase tracking-widest text-sol-text-dim/70">
-                Projects
+                Folders
               </div>
               {projectCounts.map(([name, count]) => {
                 const pc = getLabelColor(name);
@@ -946,7 +950,7 @@ export function LabelChipsRow({
             : {
                 id: p.name,
                 name: p.name,
-                noun: "project",
+                noun: "folder",
                 filters: projectFilters,
                 set: (id: string | null, exclude?: boolean) => store.setActiveProjectFilter(id, id ? projectPathByName[p.name] || null : null, exclude),
                 toggle: (exclude: boolean) => store.toggleProjectFilterTerm(p.name, projectPathByName[p.name] || null, exclude),

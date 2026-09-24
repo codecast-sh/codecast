@@ -35,6 +35,7 @@ import { cliFetch } from "./cliHttp.js";
 import { fetchExport } from "./jsonlGenerator.js";
 import { claudeProjectDirName } from "./projectPathResolver.js";
 import { ensureClaudeSettingsPersistence, leakedTmuxGlobalMarkers } from "./agentEnv.js";
+import { formatHarnessChange, harnessLedgerPath, readHarnessChanges } from "./harness.js";
 import { isProjectAllowedToSync, isPathExcluded } from "./syncScope.js";
 import { getSnippetTargets, guidanceMode, guidanceSectionStatus } from "./snippets.js";
 import { c, fmt } from "./colors.js";
@@ -549,6 +550,25 @@ export async function runDoctor(deps: DoctorDeps, opts: DoctorOptions): Promise<
       } catch (err) {
         return { ok: false, warn: true, detail: `check failed: ${err instanceof Error ? err.message : String(err)}` };
       }
+    },
+  });
+
+  // What codecast has done to this machine's agent harness, so a user who
+  // finds CLAUDE.md or settings.json changed can see whether we did it and why
+  // (harness.ts records every write).
+  passive.push({
+    name: "harness",
+    run: () => {
+      const on = deps.config?.hooks_enabled !== false;
+      const hooks = on ? "hooks on (cast install hooks --disable removes them)" : "hooks off (cast install hooks restores them)";
+      const changes = readHarnessChanges(500);
+      if (changes.length === 0) return { ok: true, detail: `${hooks}; no changes recorded` };
+      const week = changes.filter((ch) => Date.now() - ch.at < 7 * 24 * 60 * 60 * 1000).length;
+      const last = changes[0];
+      return {
+        ok: true,
+        detail: `${hooks}; ${week} change(s) in 7 days, newest ${new Date(last.at).toISOString().slice(0, 16).replace("T", " ")}: ${formatHarnessChange(last)}; full list in ${harnessLedgerPath()}`,
+      };
     },
   });
 

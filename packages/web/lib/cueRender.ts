@@ -10,7 +10,7 @@
 // It exists because nobody working on these cues can play them out loud. Every
 // peak in a comment or a test comes from here.
 
-import type { CueNoise, CueSpec, CueTone } from "./cueSpec";
+import type { CueSpec } from "./cueSpec";
 
 export const RENDER_SAMPLE_RATE = 48_000;
 
@@ -19,19 +19,13 @@ const RAMP_FLOOR = 0.001;
 
 // ── the envelope `play()` writes on every note ────────────────────────────
 
-function toneEnvelope(t: number, n: CueTone): number {
+/** The envelope `playCue` writes: a linear rise over `attack` (none when it is
+ *  0), then an exponential fall to the floor at `dur`. */
+function envelope(t: number, n: { start: number; dur: number; gain: number }, attack: number): number {
   if (t < n.start || t > n.start + n.dur) return 0;
-  const attack = n.attack ?? 0.02;
   const local = t - n.start;
-  if (local <= attack) return (n.gain * local) / attack;
-  // exponentialRampToValueAtTime from `gain` at the attack to the floor at dur
+  if (attack > 0 && local <= attack) return (n.gain * local) / attack;
   return n.gain * Math.pow(RAMP_FLOOR / n.gain, (local - attack) / (n.dur - attack));
-}
-
-function noiseEnvelope(t: number, n: CueNoise): number {
-  if (t < n.start || t > n.start + n.dur) return 0;
-  // Noise cues open at full and only decay — a squelch tail has no attack.
-  return n.gain * Math.pow(RAMP_FLOOR / n.gain, (t - n.start) / n.dur);
 }
 
 // ── oscillators, band-limited to Nyquist the way Web Audio's are ──────────
@@ -56,10 +50,10 @@ function oscillator(type: OscillatorType, phase: number, freq: number, sampleRat
 }
 
 /** Instantaneous frequency, following the exponential glide when there is one. */
-function toneFrequency(t: number, n: CueTone): number {
-  if (n.sweepTo === undefined) return n.freq;
-  const local = Math.min(Math.max(t - n.start, 0), n.dur);
-  return n.freq * Math.pow(n.sweepTo / n.freq, local / n.dur);
+function glide(t: number, start: number, dur: number, from: number, to: number | undefined): number {
+  if (to === undefined) return from;
+  const local = Math.min(Math.max(t - start, 0), dur);
+  return from * Math.pow(to / from, local / dur);
 }
 
 // ── biquads, per the Web Audio spec's own coefficient formulas ────────────
@@ -105,9 +99,12 @@ function bandpassCoefficients(freq: number, q: number, sampleRate: number): Biqu
   return { b0: alpha / a0, b1: 0, b2: -alpha / a0, a1: (-2 * cos) / a0, a2: (1 - alpha) / a0 };
 }
 
-function filterInPlace(samples: Float32Array, c: Biquad): void {
+/** Pass a function to move the filter: Web Audio recomputes a biquad whose
+ *  frequency is ramping on every sample, and so does this. */
+function filterInPlace(samples: Float32Array, coefficients: Biquad | ((i: number) => Biquad)): void {
   let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
   for (let i = 0; i < samples.length; i++) {
+    const c = typeof coefficients === "function" ? coefficients(i) : coefficients;
     const x0 = samples[i];
     const y0 = c.b0 * x0 + c.b1 * x1 + c.b2 * x2 - c.a1 * y1 - c.a2 * y2;
     x2 = x1; x1 = x0; y2 = y1; y1 = y0;
@@ -147,9 +144,10 @@ export function renderCue(spec: CueSpec, sampleRate = RENDER_SAMPLE_RATE): Float
     let phase = 0;
     for (let i = 0; i < frames; i++) {
       const t = i / sampleRate;
-      phase += (2 * Math.PI * toneFrequency(t, n)) / sampleRate;
-      const env = toneEnvelope(t, n);
-      if (env !== 0) voice[i] = env * oscillator(n.type ?? "sine", phase, toneFrequency(t, n), sampleRate);
+      const freq = glide(t, n.start, n.dur, n.freq, n.sweepTo);
+      phase += (2 * Math.PI * freq) / sampleRate;
+      const env = envelope(t, n, n.attack ?? 0.02);
+      if (env !== 0) voice[i] = env * oscillator(n.type ?? "sine", phase, freq, sampleRate);
     }
     if (n.lowpass !== undefined) {
       filterInPlace(voice, lowpassCoefficients(n.lowpass, n.lowpassQ ?? 0, sampleRate));
@@ -160,10 +158,12 @@ export function renderCue(spec: CueSpec, sampleRate = RENDER_SAMPLE_RATE): Float
   let seed = 0x5eed;
   for (const n of spec.noise ?? []) {
     const voice = seededNoise(frames, (seed = (seed * 31 + 7) >>> 0));
-    filterInPlace(voice, bandpassCoefficients(n.band, n.q ?? 1, sampleRate));
+    filterInPlace(voice, n.sweepTo === undefined
+      ? bandpassCoefficients(n.band, n.q ?? 1, sampleRate)
+      : (i) => bandpassCoefficients(glide(i / sampleRate, n.start, n.dur, n.band, n.sweepTo), n.q ?? 1, sampleRate));
     for (let i = 0; i < frames; i++) {
       const t = i / sampleRate;
-      out[i] += noiseEnvelope(t, n) * voice[i];
+      out[i] += envelope(t, n, n.attack ?? 0) * voice[i];
     }
   }
 

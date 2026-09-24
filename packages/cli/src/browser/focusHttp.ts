@@ -63,7 +63,7 @@ export interface FocusTab {
 
 /** The CDP endpoint a tab is reached through (cdp.ts CdpEndpoint). */
 export function focusEndpoint(tab: Pick<FocusTab, "port" | "token">): CdpEndpoint {
-  return tab.token ? { port: tab.port, token: tab.token } : tab.port;
+  return tab.token ? { port: tab.port, token: tab.token, raise: true } : tab.port;
 }
 
 /**

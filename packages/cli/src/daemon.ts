@@ -45,6 +45,7 @@ import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
 import { walkFiles, walkEntryBatches, walkDirsSync, listFilesByMtime, type WalkEntry, type WalkFile, type WalkOptions } from "./fsWalk.js";
 import { ensureModelInventoryFresh, pendingModelInventoryPayload, markModelInventorySent } from "./modelInventory.js";
 import { reconcileClaudeSettingsModel } from "./claudeDefaultModel.js";
+import { formatHarnessChange, harnessCauseEnv, markHarnessChangesSent, removeHarnessFile, unsentHarnessChanges, withHarnessCause, writeHarnessFile, type HarnessChange } from "./harness.js";
 import { ensureCapabilityInventoryFresh, pendingCapabilityPayload, markCapabilityPayloadSent, pendingCapabilityContents, markCapabilityContentsSent, startCapabilitySourceWatcher, recordConvergenceSignals } from "./capabilities/heartbeat.js";
 import { reconcileFromHeartbeat } from "./capabilities/reconcile.js";
 import { deviceId, deviceLabel, isRemoteDevice, stableHostnameAsync } from "./remote/device.js";
@@ -243,9 +244,7 @@ import { DAEMON_STOP_SIGKILL_MS } from "./shutdownBudget.js";
 import { InvalidateSync, type InvalidateSyncOptions } from "./invalidateSync.js";
 import { detectPermissionPrompt } from "./permissionDetector.js";
 import { handlePermissionRequest } from "./permissionHandler.js";
-import { getVersion, performUpdate, ensureCastAlias } from "./update.js";
-import { ensureMessagingForMemory } from "./snippets.js";
-import { shouldAutoEnableLimitsGuidance } from "./limitsGuidance.js";
+import { getVersion, performUpdate, ensureCastAlias, checkForUpdates, isDevMode } from "./update.js";
 import { readInventoryAsync, toInvocableList } from "./capabilities/inventory.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
 import {
@@ -368,6 +367,25 @@ import { getProviderKeyPublicKey, applyProviderKeyCommand, decryptProviderKeyPay
 import type { LoopFreezeSummary, LoopFreezeState } from "./loopFreezeState.js";
 import { defaultConfigDir } from "./config/configDir.js";
 import { findTmuxSessionsById } from "./tmuxSessionLookup.js";
+
+// A file a person changed in the web's config editor. It goes in the change
+// history like any codecast write, so the history covers every change made
+// through codecast, not only the automatic ones.
+const EDITED_IN_CODECAST = { why: "edited in codecast", automatic: false };
+
+// Written when a person's Update button (force_update) replaced the binary;
+// read once by the next boot, so its refresh is attributed to that request.
+// A function, not a constant: this sits above CONFIG_DIR's declaration.
+const updateRequestedFile = () => path.join(CONFIG_DIR, "update-requested");
+function consumeUpdateRequested(): boolean {
+  try {
+    const at = Number(fs.readFileSync(updateRequestedFile(), "utf-8"));
+    fs.unlinkSync(updateRequestedFile());
+    return Number.isFinite(at) && Date.now() - at < 60 * 60 * 1000;
+  } catch {
+    return false;
+  }
+}
 
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 const EXEC_TIMEOUT_MS = 10_000;
@@ -4311,7 +4329,40 @@ function buildDeviceSettingsPayload(config: Config | null): DeviceSnippetSetting
     // credit is even on the table (ct-49529). It only ever proposes: the redeem
     // handler re-reads the config before spending anything.
     codex_reset_credit_auto: config.codex_reset_credit_auto === true,
+    hooks_enabled: config.hooks_enabled !== false,
+    auto_update: config.auto_update !== false,
   };
+}
+
+// Each change goes to the daemon log once, when this daemon first sees it,
+// whether or not the beat that carries it lands.
+let harnessLoggedThrough = 0;
+function logNewHarnessChanges(changes: HarnessChange[]): void {
+  for (const c of changes) {
+    if (c.at <= harnessLoggedThrough) continue;
+    log(`[HARNESS] ${formatHarnessChange(c)}`);
+    harnessLoggedThrough = c.at;
+  }
+}
+
+// The newer release this binary could update to, or null. The updater polls
+// its manifest at most once per interval and caches the answer, so this is a
+// file read on most beats; it runs off the beat so a slow manifest fetch never
+// delays presence.
+let updateAvailable: string | null = null;
+let updateChecked = false;
+let updateCheckInFlight = false;
+async function refreshUpdateAvailable(): Promise<void> {
+  if (updateCheckInFlight || isDevMode()) return;
+  updateCheckInFlight = true;
+  try {
+    updateAvailable = await checkForUpdates();
+    updateChecked = true;
+  } catch {
+    // Keep the last answer; the next beat asks again.
+  } finally {
+    updateCheckInFlight = false;
+  }
 }
 
 // Auto-enroll the machine's active CC login as a saved profile: after a fresh
@@ -4352,30 +4403,6 @@ async function maybeAutoSaveAccount(): Promise<void> {
   } catch (err) {
     log(`[ACCOUNTS] Auto-save of active login failed: ${err instanceof Error ? err.message : String(err)}`);
   }
-  maybeEnableLimitsGuidance();
-}
-
-// The "Usage limits" agent snippet turns itself on the first time this machine
-// has more than one saved Claude account (see limitsGuidance.ts). The daemon
-// only decides; the CLI owns config + instruction-file writes, so the install
-// goes through the same `cast install <slug>` the web Settings toggle uses.
-// One attempt per daemon lifetime; an explicit off is never overridden.
-let limitsGuidanceDecided = false;
-function maybeEnableLimitsGuidance(): void {
-  if (limitsGuidanceDecided) return;
-  try {
-    const config = readConfig();
-    if (config?.limits_enabled !== undefined) {
-      limitsGuidanceDecided = true;
-      return;
-    }
-    if (!shouldAutoEnableLimitsGuidance(config, Object.keys(readProfileIndex().profiles).length)) return;
-    limitsGuidanceDecided = true;
-    log(`[ACCOUNTS] Second Claude account saved — enabling the usage-limits agent snippet`);
-    runCastCommand(["install", "limits"], { timeoutMs: 60 * 1000 }).catch((e) =>
-      logError("cast install limits failed", e instanceof Error ? e : new Error(String(e)))
-    );
-  } catch {}
 }
 
 // Same per-beat enrollment for the Codex login: a fresh `codex login` appears
@@ -4485,6 +4512,9 @@ async function sendHeartbeat(): Promise<void> {
   ensureCapabilityInventoryFresh();
   const capabilityPayload = pendingCapabilityPayload();
   const capabilityContents = pendingCapabilityContents();
+  const harnessChanges = unsentHarnessChanges();
+  logNewHarnessChanges(harnessChanges);
+  void refreshUpdateAvailable();
 
   try {
     const deviceHostname = await stableHostnameAsync();
@@ -4542,6 +4572,13 @@ async function sendHeartbeat(): Promise<void> {
         // Installed agent-feature snippets + stable mode, so the web Settings
         // page mirrors (and can toggle) this device's setup.
         settings: buildDeviceSettingsPayload(config) ?? undefined,
+        // A newer CLI release this machine has not installed, for the device
+        // page: "" once checked and none is newer, absent until the first check.
+        // From the updater's cached manifest check, refreshed off the beat.
+        update_available: updateChecked ? (updateAvailable ?? "") : undefined,
+        // Changes codecast made to this machine's agent harness since the last
+        // accepted beat (harness.ts), for the device's change history.
+        harness_changes: harnessChanges.length > 0 ? harnessChanges : undefined,
         // Live model inventory for dynamic clients (opencode/pi), hash-gated so
         // the ~10KB list rides a beat only when it actually changed.
         model_inventory: modelInventory,
@@ -4571,6 +4608,7 @@ async function sendHeartbeat(): Promise<void> {
     if (modelInventory) markModelInventorySent(modelInventory.hash);
     if (capabilityPayload) markCapabilityPayloadSent(capabilityPayload.hash);
     if (capabilityContents) markCapabilityContentsSent(capabilityContents.map((c) => c.hash));
+    markHarnessChangesSent(harnessChanges);
 
     const data = await response.json();
     if (data.commands && data.commands.length > 0) {
@@ -4615,20 +4653,25 @@ async function sendHeartbeat(): Promise<void> {
       const currentConfig = readConfig();
       const serverMode = data.sync_mode as "all" | "selected";
       const serverProjects: string[] = data.sync_projects ?? [];
+      const serverExcluded: string[] = data.sync_excluded ?? [];
       const localMode = currentConfig?.sync_mode ?? "all";
       const localProjects = currentConfig?.sync_projects ?? [];
+      const localExcluded = currentConfig?.sync_excluded ?? [];
 
-      if (serverMode !== localMode || JSON.stringify(serverProjects) !== JSON.stringify(localProjects)) {
-        log(`Sync settings updated from server: mode=${serverMode}, projects=${serverProjects.length}`);
-        patchConfig({ sync_mode: serverMode, sync_projects: serverProjects });
+      if (serverMode !== localMode || JSON.stringify(serverProjects) !== JSON.stringify(localProjects) || JSON.stringify(serverExcluded) !== JSON.stringify(localExcluded)) {
+        log(`Sync settings updated from server: mode=${serverMode}, projects=${serverProjects.length}, excluded=${serverExcluded.length}`);
+        patchConfig({ sync_mode: serverMode, sync_projects: serverProjects, sync_excluded: serverExcluded });
         if (activeConfig) {
           activeConfig.sync_mode = serverMode;
           activeConfig.sync_projects = serverProjects;
+          activeConfig.sync_excluded = serverExcluded;
         }
-        // A folder just chosen already holds sessions nobody touched since;
-        // the sweep uploads them now instead of at the next reconciliation.
+        // A folder just chosen (or no longer excluded) already holds sessions
+        // nobody touched since; the sweep uploads them now instead of at the
+        // next reconciliation.
         const widened = (serverMode === "all" && localMode !== "all")
-          || (serverMode === "selected" && serverProjects.some((p) => !localProjects.includes(p)));
+          || (serverMode === "selected" && serverProjects.some((p) => !localProjects.includes(p)))
+          || localExcluded.some((p) => !serverExcluded.includes(p));
         if (widened) void pushUnsyncedFilesHandler?.("Sync scope widened").catch(() => {});
       }
     }
@@ -4676,7 +4719,8 @@ async function sendHeartbeat(): Promise<void> {
     // bare `claude` terminals on the model the user chose in codecast.
     if (data.default_models !== undefined) {
       try {
-        if (reconcileClaudeSettingsModel(data.default_models)) {
+        const cause = { why: `codecast default model is ${data.default_models?.claude}`, automatic: true };
+        if (withHarnessCause(cause, () => reconcileClaudeSettingsModel(data.default_models))) {
           log(`[DEFAULT-MODEL] settings.json model -> ${data.default_models?.claude} (codecast default)`);
         }
       } catch (err) {
@@ -4726,7 +4770,10 @@ async function reconcileGatedSnippets(avail: Record<string, boolean>): Promise<v
     for (const { slug, enable } of plan.actions) {
       const cliArgs = enable ? ["install", slug] : ["install", slug, "--disable"];
       log(`[SNIPPET] ${enable ? "installing" : "disabling"} ${slug} (team feature ${enable ? "on" : "off"})`);
-      const res = await runCastCommand(cliArgs, { timeoutMs: 60 * 1000 });
+      const res = await runCastCommand(cliArgs, {
+        timeoutMs: 60 * 1000,
+        env: harnessCauseEnv({ why: `a team turned ${slug} ${enable ? "on" : "off"}`, automatic: true }),
+      });
       if (res.code !== 0) {
         // Left unrecorded on purpose: the next beat retries it.
         log(`[SNIPPET] cast ${cliArgs.join(" ")} failed (exit ${res.code}): ${(res.stderr || res.stdout || "").trim().slice(-200)}`);
@@ -4784,7 +4831,7 @@ export function startMigrationRunner(batchId: string): { started: boolean; pid?:
 
 function runCastCommand(
   args: string[],
-  opts: { timeoutMs?: number; killGroup?: boolean } = {},
+  opts: { timeoutMs?: number; killGroup?: boolean; env?: Record<string, string> } = {},
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   const timeoutMs = opts.timeoutMs ?? 30 * 60 * 1000;
   const { cmd, prefixArgs } = resolveCastInvocation();
@@ -4796,7 +4843,7 @@ function runCastCommand(
       child = spawn(cmd, [...prefixArgs, ...args], {
         // The daemon's launchd PATH has no node/bun/homebrew; the cast shim and
         // anything it execs (a browser driver, claude) need the agent PATH.
-        env: { ...process.env, PATH: agentSpawnPath() },
+        env: { ...process.env, ...opts.env, PATH: agentSpawnPath() },
         stdio: ["ignore", "pipe", "pipe"],
         // killGroup: the child leads its own process group so the cap can
         // take its grandchildren with it (an `ssh -N` forward survives its
@@ -5460,6 +5507,10 @@ async function executeRemoteCommand(
         setTimeout(async () => {
           const result = await performUpdate();
           if (result.success) {
+            // The refresh this daemon's successor runs on boot rewrites the
+            // harness; someone asked for this update, so its changes are
+            // recorded as requested, not automatic.
+            try { fs.writeFileSync(updateRequestedFile(), String(Date.now()), { mode: 0o600 }); } catch { /* recorded as automatic */ }
             logLifecycle("update_complete", `Binary replaced from v${currentVersion}, restarting`);
             await flushRemoteLogs();
             restartDaemonProcess("remote update command");
@@ -7493,9 +7544,7 @@ async function executeRemoteCommand(
           error = "File carries capability-managed keys; pass override_owned to replace it wholesale";
           break;
         }
-        fs.mkdirSync(path.dirname(realTarget), { recursive: true });
-        const { atomicWriteFile } = await import("./atomicWrite.js");
-        atomicWriteFile(realTarget, writeContent);
+        withHarnessCause(EDITED_IN_CODECAST, () => writeHarnessFile(realTarget, writeContent, "edit"));
         result = JSON.stringify({ success: true });
         log(`[CONFIG] Wrote ${realTarget}`);
         break;
@@ -7531,7 +7580,7 @@ async function executeRemoteCommand(
           break;
         }
         fs.mkdirSync(resolvedDir, { recursive: true });
-        fs.writeFileSync(newPath, createContent, "utf-8");
+        withHarnessCause(EDITED_IN_CODECAST, () => writeHarnessFile(newPath, createContent, "edit"));
         result = JSON.stringify({ success: true, path: newPath });
         log(`[CONFIG] Created ${newPath}`);
         break;
@@ -7561,7 +7610,7 @@ async function executeRemoteCommand(
           error = "File not found";
           break;
         }
-        fs.unlinkSync(resolved);
+        withHarnessCause(EDITED_IN_CODECAST, () => removeHarnessFile(resolved, "edit"));
         result = JSON.stringify({ success: true });
         log(`[CONFIG] Deleted ${resolved}`);
         break;
@@ -7751,9 +7800,19 @@ async function executeRemoteCommand(
         const snippet = parsed.snippet;
         // Match aliases too: the web sends pre-rename slugs (e.g. "scheduling"
         // for triggers) so its toggles also work on daemons that predate a rename.
-        const known = snippet === "stable" || !!snippetBySlug(snippet);
+        // Two machine settings ride the same command: "hooks" (codecast's Claude
+        // Code hooks, harnessHooksInstall.ts) and "auto_update".
+        const known = snippet === "stable" || snippet === "hooks" || snippet === "auto_update" || !!snippetBySlug(snippet);
         if (typeof snippet !== "string" || !known) {
           error = `apply_snippet: unknown snippet ${JSON.stringify(snippet)}`;
+          break;
+        }
+        if (snippet === "auto_update") {
+          // A config flag only: `cast update --auto` would also run an update.
+          patchConfig({ auto_update: parsed.enabled === true });
+          log(`[UPDATE] automatic update ${parsed.enabled ? "on" : "off"} (web toggle)`);
+          result = JSON.stringify({ snippet, enabled: parsed.enabled === true });
+          await sendHeartbeat().catch(() => {});
           break;
         }
 
@@ -7769,7 +7828,10 @@ async function executeRemoteCommand(
         }
 
         log(`[SNIPPET] ${logVerb} (web toggle)`);
-        const res = await runCastCommand(cliArgs, { timeoutMs: 60 * 1000 });
+        const res = await runCastCommand(cliArgs, {
+          timeoutMs: 60 * 1000,
+          env: harnessCauseEnv({ why: `${snippet} turned ${parsed.enabled === false || parsed.mode === "off" ? "off" : "on"} in codecast settings`, automatic: false }),
+        });
         if (res.code === 0) {
           result = JSON.stringify({ snippet, ...(snippet === "stable" ? { mode: parsed.mode } : { enabled: parsed.enabled }) });
           // Push the freshly-written config state up now, don't wait for the
@@ -7859,7 +7921,7 @@ function diagnoseConfig(): ConfigDiagnosis {
   }
   if (config.auth_token) {
     try {
-      config.auth_token = bearerFromStored(config.auth_token);
+      config.auth_token = bearerFromStored(config.auth_token, { heal: true });
     } catch (err) {
       if (err instanceof TokenDecryptError) {
         return {
@@ -16079,7 +16141,11 @@ class InputBlockedError extends Error {
 }
 
 function assertPromptAbsent(pane: string): void {
-  if (!pane.trim()) throw new InputBlockedError("terminal capture is empty");
+  // A blank capture is a pane between a clear and its next draw (claude clears
+  // the screen as it boots), not a dialog: refused for a short retry, never
+  // held for a human answer. Holding it cost 29 of 39 launches a 45s hold on
+  // 2026-09-24.
+  if (!pane.trim()) throw new Error("AGENT_STDIN_NOT_READY: terminal capture is empty; message remains pending");
   // Folder-trust is answered by acceptTrustPrompt, not held as a card. Grok's
   // y/n dialog currently fails parseInteractivePrompt (no numbered rows, no
   // cursor), but skipping the detectors here keeps a future parse from parking
@@ -16763,6 +16829,43 @@ export function tmuxComposerHoldsPayload(pane: string, payload: string): boolean
   return tmuxComposerPayloadMatcher(payload)?.(pane) ?? false;
 }
 
+// The composer shows the end of the payload and not its start: what Claude
+// Code draws when a wrapped composer is taller than a short window allows.
+function composerShowsOnlyPayloadTail(composer: string, payload: string): boolean {
+  const shown = stripComposerChrome(composer);
+  const whole = stripComposerChrome(payload);
+  return shown.length > 0 && shown.length < whole.length && whole.endsWith(shown);
+}
+
+// Reads the pane at the daemon's own window size, then hands the size back to
+// whichever client set it. resize-window flips the window to manual sizing, so
+// unsetting the option lets `window-size largest` return it to the attached
+// client, the same repair the terminal viewer makes when it detaches. A window
+// already at full size has nothing more to show. The TUI redraws after the
+// resize, which takes over a second on a loaded machine, so the wait runs to
+// the caller's deadline.
+async function matchAtFullWindowSize(exec: typeof tmuxExec, target: string, matches: (pane: string) => boolean, deadline: number): Promise<boolean> {
+  try {
+    const { stdout } = await exec(["display-message", "-p", "-t", target, "#{window_width}|#{window_height}"]);
+    const [width, height] = stdout.trim().split("|").map(part => parseInt(part, 10));
+    if (width >= Number(TMUX_WINDOW_WIDTH) && height >= Number(TMUX_WINDOW_HEIGHT)) return false;
+  } catch {
+    return false;
+  }
+  try {
+    await exec(["resize-window", "-t", target, ...TMUX_SIZE_ARGS]);
+    while (Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 150));
+      if (matches(await captureTmuxComposerPane(exec, target, 40))) return true;
+    }
+    return false;
+  } catch {
+    return false;
+  } finally {
+    await exec(["set-option", "-w", "-t", target, "-u", "window-size"]).catch(() => {});
+  }
+}
+
 export async function awaitTmuxComposerPayload(
   target: string,
   payload: string,
@@ -16781,9 +16884,30 @@ export async function awaitTmuxComposerPayload(
   const deadline = Date.now() + (opts.budgetMs ?? 20_000);
   const tick = () => new Promise(resolve => setTimeout(resolve, 150));
 
+  // One copy of the payload at the prompt, and nothing before it. A multi-line
+  // bracketed paste can render as a collapsed chip ("[Pasted text #1 +13
+  // lines]") with none of the text visible, so the chip at the prompt with
+  // nothing before it IS the payload. Either way a SECOND copy, a whole
+  // second chip or the watched prefix showing up again behind the first, is a
+  // re-paste that landed on a composer which had already taken the first, and
+  // submitting it sends the message twice (ct-49753).
+  const matches = (pane: string) => {
+    const composer = tmuxComposerRegion(pane) ?? "";
+    const chips = opts.bracketedPaste ? composer.match(/\[[^\]\n]*pasted[^\]\n]*\]/gi) : null;
+    return chips?.length
+      ? (chips.length === 1
+          && stripComposerChrome(composer) === stripComposerChrome(chips[0])
+          && !pasteChipContradicts(chips[0], pasteChipLines(payload)))
+        // The same payload, delivered as several pastes because the pane
+        // stalled mid-read — see composerHoldsSplitPaste.
+        || composerHoldsSplitPaste(composer, payload)
+      : holdsPayload(pane);
+  };
+
   let glyphlessTicks = 0;
   let foreignTicks = 0;
   let rePastes = 0;
+  let readAtFullSize = false;
   const drainAndRePaste = async (why: string) => {
     if (opts.allowRePaste === false) throw new TmuxDeliveryUncertainError("the original paste has not appeared intact");
     log(`${why} in ${target}, draining and re-pasting`);
@@ -16813,24 +16937,19 @@ export async function awaitTmuxComposerPayload(
     glyphlessTicks = 0;
     const afterGlyph = pane.slice(glyphAt + 1);
     const glyphLine = afterGlyph.split("\n", 1)[0];
-    // One copy of the payload at the prompt, and nothing before it. A multi-line
-    // bracketed paste can render as a collapsed chip ("[Pasted text #1 +13
-    // lines]") with none of the text visible, so the chip at the prompt with
-    // nothing before it IS the payload. Either way a SECOND copy, a whole
-    // second chip or the watched prefix showing up again behind the first, is a
-    // re-paste that landed on a composer which had already taken the first, and
-    // submitting it sends the message twice (ct-49753).
     const composer = tmuxComposerRegion(pane) ?? "";
-    const chips = opts.bracketedPaste ? composer.match(/\[[^\]\n]*pasted[^\]\n]*\]/gi) : null;
-    const matched = chips?.length
-      ? (chips.length === 1
-          && stripComposerChrome(composer) === stripComposerChrome(chips[0])
-          && !pasteChipContradicts(chips[0], pasteChipLines(payload)))
-        // The same payload, delivered as several pastes because the pane
-        // stalled mid-read — see composerHoldsSplitPaste.
-        || composerHoldsSplitPaste(composer, payload)
-      : holdsPayload(pane);
-    if (matched) return "matched";
+    if (matches(pane)) return "matched";
+
+    // A short window (the web terminal split, sized to its panel) scrolls a
+    // wrapped composer to the cursor: only the payload's last lines are on
+    // screen, and its start, which the check reads, is not. Enter was held for
+    // as long as the viewer stayed open (2026-09-24). A tail on screen looks
+    // the same as a paste that lost its start, so it is never accepted as is:
+    // the check reads the whole composer at full size, once.
+    if (!readAtFullSize && composerShowsOnlyPayloadTail(composer, payload)) {
+      readAtFullSize = true;
+      if (await matchAtFullWindowSize(exec, target, matches, deadline)) return "matched";
+    }
 
     if (!glyphLine.trim()) {
       foreignTicks = 0;
@@ -21906,7 +22025,9 @@ async function probeStartedPane(entry: StartedSessionInfo, inspectPane?: (pane: 
     await acceptTrustPrompt(entry.tmuxSession).catch(() => false);
     return { state, pane: paneContentAfterLaunchEcho(paneContent) };
   }
-  inspectPane?.(paneContent);
+  // A blank frame is the boot clear, which the classifier already reads as
+  // booting; there is nothing on it to inspect.
+  if (paneContent.trim()) inspectPane?.(paneContent);
   return { state, pane: paneContentAfterLaunchEcho(paneContent) };
 }
 
@@ -26112,6 +26233,7 @@ function compareVersions(a: string, b: string): number {
   return 0;
 }
 
+let forcedUpdateDeclinedFor: string | null = null;
 async function checkForForcedUpdate(syncService: SyncService): Promise<boolean> {
   try {
     const minVersion = await syncService.getMinCliVersion();
@@ -26119,6 +26241,15 @@ async function checkForForcedUpdate(syncService: SyncService): Promise<boolean> 
 
     const currentVersion = getVersion();
     if (compareVersions(currentVersion, minVersion) < 0) {
+      // The user turned automatic updates off: the device page shows that an
+      // update is required, and the update waits for someone to ask for it.
+      if (readConfig()?.auto_update === false) {
+        if (forcedUpdateDeclinedFor !== minVersion) {
+          log(`[UPDATE] v${currentVersion} is below the minimum v${minVersion}; automatic update is off, so waiting for a manual update`);
+          forcedUpdateDeclinedFor = minVersion;
+        }
+        return false;
+      }
       logLifecycle("forced_update_start", `current=${currentVersion} min=${minVersion}`);
       await flushRemoteLogs();
       const result = await performUpdate();
@@ -27258,23 +27389,14 @@ async function main(): Promise<void> {
 
   if (bootedNewVersion) {
     log(`[SNIPPET] version changed to v${daemonVersion} — refreshing enabled snippets`);
-    runCastCommand(["snippets-refresh"], { timeoutMs: 60 * 1000 }).catch((e) =>
+    runCastCommand(["snippets-refresh"], {
+      timeoutMs: 60 * 1000,
+      env: harnessCauseEnv(consumeUpdateRequested()
+        ? { why: `update to v${daemonVersion}, requested in codecast`, automatic: false }
+        : { why: `automatic update to v${daemonVersion}`, automatic: true }),
+    }).catch((e) =>
       logError("snippets-refresh after update failed", e instanceof Error ? e : new Error(String(e)))
     );
-  }
-
-  // Messaging is on by default for memory installs. Backfill/refresh it here so
-  // every daemon distributes the snippet onto its own machine's CLAUDE.md on
-  // startup (including after a self-update restart) — no interactive `cast` needed.
-  try {
-    const msgPatch = ensureMessagingForMemory(activeConfig);
-    if (msgPatch) {
-      patchConfig(msgPatch);
-      Object.assign(activeConfig as object, msgPatch);
-      log("Ensured messaging snippet for memory install");
-    }
-  } catch (e) {
-    logError("ensureMessagingForMemory failed", e instanceof Error ? e : new Error(String(e)));
   }
 
   // Report crash recovery if we had crashes before this successful startup
@@ -30417,7 +30539,9 @@ export async function runWatchdog(): Promise<void> {
 
   // 3b. Check min_cli_version -- if daemon binary is outdated, update it
   // This catches cases where the daemon's own checkForForcedUpdate failed or killed the daemon
-  if (mayUpgradeDaemon && minCliVersion && compareVersions(version, minCliVersion) < 0) {
+  if (mayUpgradeDaemon && minCliVersion && compareVersions(version, minCliVersion) < 0 && config.auto_update === false) {
+    logLine(`Binary outdated: current=${version} min=${minCliVersion}; automatic update is off, leaving it`);
+  } else if (mayUpgradeDaemon && minCliVersion && compareVersions(version, minCliVersion) < 0) {
     logLine(`Binary outdated: current=${version} min=${minCliVersion}, updating...`);
     await sendWatchdogLog("info", `[LIFECYCLE] watchdog_update_start: current=${version} min=${minCliVersion}`);
     const result = await performUpdate();

@@ -92,20 +92,16 @@ import {
 import { listProfiles, saveProfile, switchProfile, launchProfileName, deleteProfile, getAccountsHeartbeatPayload, CcAccountError, accountLaunchInfo, accountTokenInfo, writeAccountToken, removeAccountToken, ensureProfileStore, profileStoreDir, adoptProfileStoreCredential, auditProfileIdentities, repairProfileIdentities, type ProfileAudit } from "./ccAccounts.js";
 import { buildUsageReport, loadLocalUsageProfiles, renderUsageReport } from "./usageCommand.js";
 import type { RecoveryMode } from "@codecast/shared/contracts";
-import { ensureLimitsGuidanceForMultiAccount } from "./limitsGuidance.js";
-import { CODECAST_STATUS_HOOK } from "./statusHook.js";
 import type { CumulativeChange } from "@codecast/shared/diff";
-import { THREAD_STATE_HOOK } from "./threadStateHook.js";
-import { SESSION_REGISTER_HOOK } from "./sessionRegisterHook.js";
-import { TASK_PULSE_HOOK } from "./taskPulseHook.js";
-import { USER_PROMPT_HOOK, USER_PROMPT_HOOK_FILE } from "./userPromptHook.js";
+import { USER_PROMPT_HOOK_FILE } from "./userPromptHook.js";
 import { writeThreadStatePulse } from "./threadStateStamp.js";
 import { AuthServer } from "./authServer.js";
 import { startRelayPoller } from "./authRelay.js";
 import { c, fmt, icons, UNVERIFIABLE_MARK } from "./colors.js";
 import { ensureTmux, tryInstallTmux, tmuxRun, hasTmux, listCodecastPanes, pickPaneForSession } from "./tmux.js";
+import { editHarnessJson, removeHarnessFile, withHarnessCause, writeHarnessFile } from "./harness.js";
 import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, getBrowserVersion, getChatVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure, getDecideVersion, getCallsVersion, getLimitsVersion, getComputerVersion, getCheckVersion, getSkillsVersion, getPrVersion} from "./update.js";
-import { type SnippetTarget, type SectionSpec, getSnippetTargets, installSectionToTargets, cutOwnedSections, MESSAGING_SECTION, PUBLISH_SECTION, REFERENCES_SECTION, MESSAGING_SNIPPET_END, installMessagingSnippet, ensureMessagingForMemory, installReferencesSnippet, REFERENCES_SNIPPET_END, installPublishSnippet, installBrowserSnippet, BROWSER_SECTION, installChatSnippet, CHAT_SECTION, snippetStale, stampSnippet } from "./snippets.js";
+import { type SnippetTarget, type SectionSpec, getSnippetTargets, installSectionToTargets, cutOwnedSections, MESSAGING_SECTION, PUBLISH_SECTION, REFERENCES_SECTION, MESSAGING_SNIPPET_END, installMessagingSnippet, installReferencesSnippet, REFERENCES_SNIPPET_END, installPublishSnippet, installBrowserSnippet, BROWSER_SECTION, installChatSnippet, CHAT_SECTION, snippetStale, stampSnippet } from "./snippets.js";
 import { installAllStableHooks, parseStableHookClient, removeAllStableHooks, runStableContextHook } from "./stableContext.js";
 import { isCredentialHelperFastPath, isStableContextFastPath as isStableContextFastPathArgv, runFastPath } from "./fastPath.js";
 import { DAEMON_BUILD_ID } from "./daemonBuildId.js";
@@ -711,7 +707,7 @@ function readConfig(): Config | null {
   if (config.auth_token) {
     const storedPlain = !isEncryptedToken(config.auth_token);
     try {
-      config.auth_token = bearerFromStored(config.auth_token);
+      config.auth_token = bearerFromStored(config.auth_token, { heal: true });
     } catch (err) {
       if (err instanceof TokenDecryptError) {
         if (!warnedAboutDecryptFailure) {
@@ -933,154 +929,13 @@ function readTaskPulse(): { task?: string; plan?: string } | null {
   return readTaskPulseFor(detectCurrentSessionId());
 }
 
-// One installer for every codecast agent hook: write the script, then register
-// it under each event in ~/.claude/settings.json without disturbing hooks the
-// user (or another tool) put there. Idempotent — a hook already registered for
-// an event is left alone, so re-running an install never duplicates it.
-// Errors are swallowed: hooks are an enhancement, never a reason to fail setup.
-// `matcher` scopes the registration to one tool ("Bash"); the default empty
-// matcher runs the script on every tool the event covers.
-function installHookScript(fileName: string, script: string, events: readonly string[], matcher = ""): void {
-  const home = process.env.HOME || "";
-  const hooksDir = path.join(home, ".claude", "hooks");
-  const hookFile = path.join(hooksDir, fileName);
-  const settingsFile = path.join(home, ".claude", "settings.json");
-
-  try {
-    fs.mkdirSync(hooksDir, { recursive: true });
-    fs.writeFileSync(hookFile, script, { mode: 0o755 });
-
-    let settings: any = {};
-    if (fs.existsSync(settingsFile)) {
-      settings = JSON.parse(fs.readFileSync(settingsFile, "utf-8"));
-    }
-    if (!settings.hooks) settings.hooks = {};
-
-    // 10s, not 5: these scripts normally finish in well under a second, but a
-    // loaded machine (dozens of live sessions spawning processes) can stretch
-    // interpreter startup past 5s. A timed-out UserPromptSubmit/Stop hook loses
-    // the status transition behind it, and a session that just took a message
-    // then reads as dormant/idle for minutes — the false "message hasn't
-    // reached the agent" chain. The extra headroom only ever costs anything
-    // when the hook would otherwise have been killed.
-    const HOOK_TIMEOUT_S = 10;
-    const hookEntry = { type: "command", command: hookFile, timeout: HOOK_TIMEOUT_S };
-
-    for (const event of events) {
-      if (!settings.hooks[event]) settings.hooks[event] = [];
-      const hookArray = settings.hooks[event] as any[];
-      let alreadyPresent = false;
-      for (const matcher of hookArray) {
-        for (const h of matcher.hooks || []) {
-          if (!h.command?.includes(fileName)) continue;
-          alreadyPresent = true;
-          // Idempotent registration still refreshes the timeout, or installs
-          // from before the bump would keep the old 5s cap forever.
-          if (typeof h.timeout !== "number" || h.timeout < HOOK_TIMEOUT_S) h.timeout = HOOK_TIMEOUT_S;
-        }
-      }
-      if (alreadyPresent) continue;
-      const group = matcher === ""
-        ? (hookArray.length > 0 && hookArray[0].matcher === "" ? hookArray[0] : undefined)
-        : hookArray.find((m) => m.matcher === matcher);
-      if (group) {
-        group.hooks = group.hooks || [];
-        group.hooks.push(hookEntry);
-      } else if (matcher === "") {
-        hookArray.unshift({ matcher, hooks: [hookEntry] });
-      } else {
-        hookArray.push({ matcher, hooks: [hookEntry] });
-      }
-    }
-
-    fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 4));
-  } catch {
-    // Ignore errors - hook is optional enhancement
-  }
-}
-
-function removeHookFromEvent(fileName: string, event: string): void {
-  const home = process.env.HOME || "";
-  const settingsFile = path.join(home, ".claude", "settings.json");
-  try {
-    if (!fs.existsSync(settingsFile)) return;
-    const settings: any = JSON.parse(fs.readFileSync(settingsFile, "utf-8"));
-    const hookArray = settings.hooks?.[event];
-    if (!Array.isArray(hookArray)) return;
-    let modified = false;
-    for (const matcher of hookArray) {
-      if (!Array.isArray(matcher.hooks)) continue;
-      const before = matcher.hooks.length;
-      matcher.hooks = matcher.hooks.filter((h: { command?: string }) => !h.command?.includes(fileName));
-      if (matcher.hooks.length !== before) modified = true;
-    }
-    settings.hooks[event] = hookArray.filter((m: { hooks?: unknown[] }) => !Array.isArray(m.hooks) || m.hooks.length > 0);
-    if (settings.hooks[event].length === 0) delete settings.hooks[event];
-    if (Object.keys(settings.hooks).length === 0) delete settings.hooks;
-    if (modified) fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 4));
-  } catch {
-    // Ignore errors - hook is optional enhancement
-  }
-}
-
-function installStatusHook(): void {
-  installHookScript("codecast-status.sh", CODECAST_STATUS_HOOK, [
-    // PostCompact is the only clearing signal a manual /compact emits: it ends
-    // at an idle prompt and no Stop follows (ct-49533).
-    // UserPromptSubmit is codecast-prompt.sh (one process for all four jobs).
-    "PreToolUse", "PreCompact", "PostCompact", "Stop", "PermissionRequest", "Notification", "SessionStart",
-  ]);
-}
-
-function installSessionRegisterHook(): void {
-  installHookScript("session-register.sh", SESSION_REGISTER_HOOK, ["SessionStart"]);
-}
-
-function removeShellChangesHook(): void {
-  installHookScript("codecast-shell-changes.sh", "#!/bin/sh\nexit 0\n", []);
-  for (const event of ["PreToolUse", "PostToolUse", "PostToolUseFailure"]) {
-    removeHookFromEvent("codecast-shell-changes.sh", event);
-  }
-}
-
-function installThreadStateHook(): void {
-  installHookScript("thread-state.sh", THREAD_STATE_HOOK, ["Stop"]);
-}
-
-function installTaskPulseHook(): void {
-  // Script stays on disk so a stale settings entry is not a missing file.
-  // UserPromptSubmit runs it inside codecast-prompt.sh.
-  installHookScript("task-pulse.sh", TASK_PULSE_HOOK, []);
-}
-
-function installUserPromptHook(): void {
-  installHookScript("codecast-prompt.sh", USER_PROMPT_HOOK, ["UserPromptSubmit"]);
-  for (const name of ["codecast-status.sh", "session-register.sh", "thread-state.sh", "task-pulse.sh"] as const) {
-    removeHookFromEvent(name, "UserPromptSubmit");
-  }
-}
-
-// Not a hook: `statusLine` is a single command Claude Code runs to draw the bar
-// under the composer, so a user who set their own has a status line they look
-// at. installOwnedStatusLine writes it only when the key is free (or ours) and
-// reports a conflict otherwise, and the ownership ledger is what lets
-// `cast uninstall` take it back out without touching a value we did not write.
-async function installStatusLineHook(): Promise<void> {
-  const home = process.env.HOME || "";
-  try {
-    // Loaded here rather than at the top of index.ts: the hook text and the
-    // ownership ledger are reach only an install or an update needs, and every
-    // other invocation was parsing them (bench/bootGraph.guard.test.ts).
-    const { CODECAST_STATUSLINE_HOOK, STATUSLINE_HOOK_FILE } = await import("./statuslineHook.js");
-    const { installOwnedStatusLine } = await import("./capabilities/hooks.js");
-    const hookFile = path.join(home, ".claude", "hooks", STATUSLINE_HOOK_FILE);
-    fs.mkdirSync(path.dirname(hookFile), { recursive: true });
-    fs.writeFileSync(hookFile, CODECAST_STATUSLINE_HOOK, { mode: 0o755 });
-    installOwnedStatusLine(hookFile, { settingsPath: path.join(home, ".claude", "settings.json") });
-  } catch {
-    // Live usage is an enhancement over the 5-minute poll, never a reason to
-    // fail an install.
-  }
+// Codecast's Claude Code hooks follow one switch, `hooks_enabled`: installed
+// when it is on (the default), removed when it is off. The list, the scripts
+// and the removal live in harnessHooksInstall.ts, loaded here on demand so an
+// ordinary command never parses them (bench/bootGraph.guard.test.ts).
+async function syncHooks(config?: Record<string, any> | null): Promise<void> {
+  const { syncHarnessHooks } = await import("./harnessHooksInstall.js");
+  syncHarnessHooks(config ?? readConfig());
 }
 
 function showWelcome(): void {
@@ -1795,13 +1650,7 @@ function startDaemon(): void {
 // applies recommended defaults instead of blocking on prompts.
 async function runOnboarding(config: Config): Promise<void> {
   installSlashCommand();
-  installSessionRegisterHook();
-  installStatusHook();
-  removeShellChangesHook();
-  await installStatusLineHook();
-  installTaskPulseHook();
-  installThreadStateHook();
-  installUserPromptHook();
+  await syncHooks(config);
 
   showWelcome();
 
@@ -1837,7 +1686,7 @@ async function runOnboarding(config: Config): Promise<void> {
     config.skills_version = getSkillsVersion();
     writeConfig(config);
     console.log(`${fmt.muted("Applied:")}`);
-    console.log(`  ${fmt.value("Sync: all projects")}     ${fmt.muted("change:")} ${fmt.cmd("cast sync-settings")}`);
+    console.log(`  ${fmt.value("Sync: all projects")}     ${fmt.muted("change:")} ${fmt.cmd("cast sharing")} ${fmt.muted("(or Set up with an agent on the web)")}`);
     console.log(`  ${fmt.value("Agent memory: on")}       ${fmt.muted("change:")} ${fmt.cmd("cast memory --disable")}`);
     console.log(`  ${fmt.value("Skills: on")}             ${fmt.muted("change:")} ${fmt.cmd("cast install skills --disable")}`);
     console.log(`  ${fmt.value("Stable context: off")}    ${fmt.muted("change:")} ${fmt.cmd("cast stable solo")}\n`);
@@ -2392,7 +2241,9 @@ function removeSnippetSection(enabledKey: string): boolean {
     }
     const next = cutOwnedSections(existing, spec);
     if (next === existing) continue;
-    fs.writeFileSync(target.filePath, next.trimEnd() + "\n", { mode: 0o600 });
+    // Through the harness writer: the user's file keeps its own mode, and the
+    // removal shows in the change history.
+    writeHarnessFile(target.filePath, next.trimEnd() + "\n", `section:${enabledKey.replace(/_enabled$/, "")}`);
     removedAnywhere = true;
   }
   return removedAnywhere;
@@ -2404,12 +2255,10 @@ function installWorkSnippet(update = false) { return installSnippetSection("work
 function installWorkflowSnippet(update = false) { return installSnippetSection("workflow", update); }
 function installVisualSnippet(update = false) { return installSnippetSection("visual", update); }
 function installForksSnippet(update = false) { return installSnippetSection("forks", update); }
-// The only snippet that ships a hook alongside its markdown. The section tells
-// the agent to keep its pinned state current; the hook is the one thing that
-// raises the question again once the work is underway, so enabling either half
-// on its own gives you half a feature.
+// The section tells the agent to keep its pinned state current; the
+// thread-state hook that raises the question again once work is underway is
+// one of the codecast hooks, and follows their switch (syncHooks).
 function installStateSnippet(update = false) {
-  installThreadStateHook();
   return installSnippetSection("state", update);
 }
 
@@ -2419,10 +2268,8 @@ function installStateSnippet(update = false) {
  *  exists is rewritten only on update, and only when the bytes differ, so a
  *  refresh on an unchanged machine touches nothing. */
 function writeOwnedFile(dest: string, content: string, mode: number, update: boolean): boolean {
-  fs.mkdirSync(path.dirname(dest), { recursive: true });
-  if (fs.existsSync(dest) && (!update || fs.readFileSync(dest, "utf-8") === content)) return false;
-  fs.writeFileSync(dest, content, { mode });
-  return true;
+  if (fs.existsSync(dest) && !update) return false;
+  return writeHarnessFile(dest, content, "orchestration", { mode, executable: (mode & 0o111) !== 0 });
 }
 
 // The orchestration files come from the bundle embedded in this binary
@@ -2447,21 +2294,17 @@ async function installOrchestration(update = false): Promise<{ installed: boolea
 
   // Merge hooks into settings
   const settingsPath = path.join(claudeDir, "settings.json");
-  let settings: any = {};
-  if (fs.existsSync(settingsPath)) {
-    try { settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8")); } catch {}
-  }
-  if (!settings.hooks) settings.hooks = {};
-  for (const [event, handlers] of Object.entries(ORCHESTRATION_BUNDLE.hooks)) {
-    if (!settings.hooks[event]) settings.hooks[event] = [];
-    settings.hooks[event] = settings.hooks[event].filter((h: any) =>
-      !h.hooks?.some((hh: any) => hh.command?.includes(ORCH_MARKER))
-    );
-    settings.hooks[event].push(...handlers);
-  }
-  fs.mkdirSync(claudeDir, { recursive: true });
-  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), { mode: 0o600 });
-  anyChange = true;
+  const hooksChanged = editHarnessJson(settingsPath, "orchestration", (settings) => {
+    if (!settings.hooks) settings.hooks = {};
+    for (const [event, handlers] of Object.entries(ORCHESTRATION_BUNDLE.hooks)) {
+      if (!settings.hooks[event]) settings.hooks[event] = [];
+      settings.hooks[event] = settings.hooks[event].filter((h: any) =>
+        !h.hooks?.some((hh: any) => hh.command?.includes(ORCH_MARKER))
+      );
+      settings.hooks[event].push(...handlers);
+    }
+  });
+  if (hooksChanged) anyChange = true;
 
   return { installed: anyChange && !update, updated: anyChange && update };
 }
@@ -2508,26 +2351,14 @@ async function refreshEnabledSnippets(config: Record<string, any>): Promise<void
   if (config.browser_enabled) installBrowserSnippet(true);
   if (config.chat_enabled) installChatSnippet(true);
   if (config.calls_enabled) installSnippetSection("calls", true);
-  // Usage-limit guidance turns itself on the first time a machine has more
-  // than one saved Claude account (never re-enabled after an explicit off).
-  if (ensureLimitsGuidanceForMultiAccount(config)) writeConfig(config);
   if (config.limits_enabled) installSnippetSection("limits", true);
   if (config.computer_enabled) installSnippetSection("computer", true);
   if (config.check_enabled) installSnippetSection("check", true);
   if (config.pr_enabled) installSnippetSection("pr", true);
-  // Messaging is on by default for memory installs — backfill/refresh + persist.
-  const msgPatch = ensureMessagingForMemory(config);
-  if (msgPatch) { Object.assign(config, msgPatch); writeConfig(config); }
-  else if (config.messaging_enabled) installMessagingSnippet(true);
+  if (config.messaging_enabled) installMessagingSnippet(true);
   if (config.orch_enabled) await installOrchestration(true);
   if (config.skills_enabled) await installSkillsSnippet(true);
-  installSessionRegisterHook();
-  installStatusHook();
-  removeShellChangesHook();
-  await installStatusLineHook();
-  installTaskPulseHook();
-  installThreadStateHook();
-  installUserPromptHook();
+  await syncHooks(config);
 }
 
 function uninstallOrchestration(): void {
@@ -2542,20 +2373,17 @@ function uninstallOrchestration(): void {
   }
 
   const settingsPath = path.join(claudeDir, "settings.json");
-  if (fs.existsSync(settingsPath)) {
-    try {
-      const settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
-      if (settings.hooks) {
-        for (const event of Object.keys(settings.hooks)) {
-          settings.hooks[event] = settings.hooks[event].filter((h: any) =>
-            !h.hooks?.some((hh: any) => hh.command?.includes(ORCH_MARKER))
-          );
-          if (settings.hooks[event].length === 0) delete settings.hooks[event];
-        }
-        fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), { mode: 0o600 });
+  try {
+    editHarnessJson(settingsPath, "orchestration", (settings) => {
+      if (!settings.hooks) return;
+      for (const event of Object.keys(settings.hooks)) {
+        settings.hooks[event] = settings.hooks[event].filter((h: any) =>
+          !h.hooks?.some((hh: any) => hh.command?.includes(ORCH_MARKER))
+        );
+        if (settings.hooks[event].length === 0) delete settings.hooks[event];
       }
-    } catch {}
-  }
+    }, { createIfMissing: false });
+  } catch {}
 
   const orchDest = path.join(defaultConfigDir(), "orchestration");
   if (fs.existsSync(orchDest)) fs.rmSync(orchDest, { recursive: true });
@@ -2571,8 +2399,9 @@ async function promptMemoryEnablement(interactive = true): Promise<void> {
   // HASH of the body this binary ships (snippetStale, ./snippets.ts) — a body
   // edit reinstalls with no version bump, and a version bump with identical
   // bytes touches nothing. The version constants are stamped alongside as a
-  // display value and downgrade shadow (stampSnippet).
-  // Work snippet is auto-installed with memory; schedule, workflow, plan are opt-in via their install commands
+  // display value and downgrade shadow (stampSnippet). Each feature refreshes
+  // only when its own flag is on: enabling memory turns on memory and nothing
+  // else.
   if (config.work_enabled && snippetStale(config, "tasks")) {
     const workResult = installWorkSnippet(true);
     stampSnippet(config, "tasks", getWorkVersion());
@@ -2589,24 +2418,11 @@ async function promptMemoryEnablement(interactive = true): Promise<void> {
     installWorkSnippet(false);
   } else if (config.work_enabled) {
     installWorkSnippet(false);
-  } else if (config.memory_enabled && !config.work_enabled) {
-    installWorkSnippet(false);
-    config.work_enabled = true;
-    stampSnippet(config, "tasks", getWorkVersion());
-    writeConfig(config);
-    const targets = getSnippetTargets();
-    console.log(`Work snippet installed in ${targets.map(t => t.label).join(", ")}.`);
   }
-  // Messaging is on by default for memory installs; ensureMessagingForMemory
-  // backfills it (continuity for anyone who had it inside the old work snippet)
-  // and refreshes it on a version bump. Returns null for non-memory installs.
-  const msgPatch = ensureMessagingForMemory(config);
-  if (msgPatch) {
-    const wasNew = config.messaging_enabled === undefined;
-    Object.assign(config, msgPatch);
+  if (config.messaging_enabled && snippetStale(config, "messaging")) {
+    installMessagingSnippet(true);
+    stampSnippet(config, "messaging", getMessagingVersion());
     writeConfig(config);
-    const targets = getSnippetTargets();
-    console.log(`Messaging snippet ${wasNew ? "installed" : "updated to latest version"} in ${targets.map(t => t.label).join(", ")}.`);
   } else if (config.messaging_enabled) {
     installMessagingSnippet(false);
   }
@@ -2834,8 +2650,6 @@ async function promptMemoryEnablement(interactive = true): Promise<void> {
     }
     config.memory_enabled = true;
     stampSnippet(config, "memory", getMemoryVersion());
-    config.work_enabled = true;
-    stampSnippet(config, "tasks", getWorkVersion());
     writeConfig(config);
     console.log();
   } else {
@@ -4585,12 +4399,11 @@ accountsCmd
     try {
       const meta = saveProfile(name);
       console.log(`${c.green}✓${c.reset} saved ${c.cyan}${name}${c.reset} (${meta.email ?? "unknown email"})`);
-      // A second saved account is when the usage-limits guidance becomes
-      // unambiguously right — turn it on now (once; an explicit off sticks).
+      // With a second account saved, the usage-limits guidance is worth
+      // having. It is the user's to turn on, so offer it rather than install it.
       const config = readConfig() || {};
-      if (ensureLimitsGuidanceForMultiAccount(config)) {
-        writeConfig(config as Config);
-        console.log(`${c.dim}  usage-limits agent guidance enabled (cast install limits --disable to turn off)${c.reset}`);
+      if (config.limits_enabled === undefined && listProfiles().length >= 2) {
+        console.log(`${c.dim}  tip: cast install limits tells your agents to keep working through usage limits${c.reset}`);
       }
     } catch (err) {
       console.error(err instanceof CcAccountError ? err.message : String(err));
@@ -8739,8 +8552,10 @@ program
   .description(
     "Read messages from a conversation\n\n" +
     "Examples:\n" +
-    "  cast read jx70ntf                   # Read all messages\n" +
+    "  cast read jx70ntf                   # Read the first 20 messages\n" +
     "  cast read jx70ntf 12:20             # Read messages 12-20\n" +
+    "  cast read jx70ntf -n 5              # Read the last 5 messages (fast on any session;\n" +
+    "                                      #  on a long one, lines count back from the end: -1 is the last)\n" +
     "  cast read jx70ntf 12:               # Read from message 12 to end\n" +
     "  cast read jx70ntf :20               # Read first 20 messages\n" +
     "  cast read jx70ntf 15                # Read single message 15\n" +
@@ -8755,6 +8570,7 @@ program
   .argument("[range]", "Message range (e.g., 12:20, 12:, :20, 15)")
   .option("-f, --full", "Show full tool call and tool result content (the only way to see a StructuredOutput payload)")
   .option("-c, --context <n>", "Messages to show on each side of a #msg-<id> anchor (default 10)")
+  .option("-n, --tail <n>", "Read the last n messages (at most 500)")
   .option("--ack", "Also mark the session read: clears its unread dot in the web and mobile inbox")
   .action(async (conversationId, range, options) => {
     const config = readConfig();
@@ -8782,6 +8598,15 @@ program
     // An explicit range wins over the anchor's window, but the anchor is still
     // sent so the linked message gets highlighted.
     const contextN = options.context !== undefined ? parseInt(options.context, 10) : undefined;
+    const tailN = options.tail !== undefined ? parseInt(options.tail, 10) : undefined;
+    if (tailN !== undefined && (!Number.isFinite(tailN) || tailN < 1)) {
+      console.error("Error: --tail takes a positive number of messages");
+      process.exit(1);
+    }
+    if (tailN !== undefined && (range || messageId)) {
+      console.error("Error: --tail reads the last messages; it cannot be combined with a range or a #msg anchor");
+      process.exit(1);
+    }
 
     const siteUrl = config.convex_url.replace(".cloud", ".site");
 
@@ -8797,6 +8622,7 @@ program
           full_content: options.full || undefined,
           around_message_id: messageId,
           context: Number.isFinite(contextN) ? contextN : undefined,
+          tail: tailN,
         }),
       });
 
@@ -9654,21 +9480,19 @@ program
     // there is ours to remove — so it comes out through its own writer.
     try { removeOwnedStatusLine({ settingsPath: settingsFile }); } catch {}
 
-    if (fs.existsSync(settingsFile)) {
-      try {
-        const settings = JSON.parse(fs.readFileSync(settingsFile, "utf-8"));
+    {
+      // Matched by file name rather than by exact command, so an entry written
+      // with another spelling of the path still comes out on uninstall.
+      const removed = editHarnessJson(settingsFile, "hooks", (settings) => {
         if (settings.hooks) {
-          let modified = false;
           for (const event of Object.keys(settings.hooks)) {
             const hookArray = settings.hooks[event];
             if (!Array.isArray(hookArray)) continue;
             for (const matcher of hookArray) {
               if (!Array.isArray(matcher.hooks)) continue;
-              const before = matcher.hooks.length;
               matcher.hooks = matcher.hooks.filter((h: any) =>
                 !h.command || !hookFiles.some(f => h.command.includes(f))
               );
-              if (matcher.hooks.length !== before) modified = true;
             }
             settings.hooks[event] = hookArray.filter((m: any) =>
               !Array.isArray(m.hooks) || m.hooks.length > 0
@@ -9676,21 +9500,13 @@ program
             if (settings.hooks[event].length === 0) delete settings.hooks[event];
           }
           if (Object.keys(settings.hooks).length === 0) delete settings.hooks;
-          if (modified) {
-            fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 4));
-            console.log("Removed hooks from ~/.claude/settings.json");
-          }
         }
-      } catch {
-        // settings.json parse error, skip
-      }
+      }, { createIfMissing: false });
+      if (removed) console.log("Removed hooks from ~/.claude/settings.json");
     }
 
     const hooksDir = path.join(claudeDir, "hooks");
-    for (const f of hookFiles) {
-      const p = path.join(hooksDir, f);
-      if (fs.existsSync(p)) fs.unlinkSync(p);
-    }
+    for (const f of hookFiles) removeHarnessFile(path.join(hooksDir, f), "hooks");
 
     // 4. Remove slash command and skills
     uninstallSkillsSnippet();
@@ -10505,7 +10321,8 @@ program
     "just that one (non-interactive). Add --disable to turn a snippet off.\n\n" +
     "Snippets:\n" +
     SNIPPET_CATALOG.map((s) => `  ${s.slug.padEnd(14)}${s.desc}`).join("\n") +
-    "\n  stable        Inject recent session history into every new conversation\n\n" +
+    "\n  stable        Inject recent session history into every new conversation\n" +
+    "  hooks         Codecast's Claude Code hooks (session status, delivery, live usage)\n\n" +
     "Examples:\n" +
     "  cast install                      Interactive wizard (all snippets)\n" +
     "  cast install --all                Install everything, no prompts\n" +
@@ -10575,10 +10392,22 @@ program
         return;
       }
 
+      // Codecast's Claude Code hooks: one switch for all of them. Off removes
+      // them and keeps every later refresh and update from putting them back.
+      if (key === "hooks") {
+        (config as any).hooks_enabled = !options.disable;
+        writeConfig(config as Config);
+        await syncHooks(config);
+        console.log(options.disable
+          ? `${icons.cross} codecast hooks removed. Session status, message delivery to sessions you start yourself, and live usage now fall back to slower paths. ${fmt.cmd("cast install hooks")} turns them back on.`
+          : `${icons.check} codecast hooks installed`);
+        return;
+      }
+
       const desc = snippetBySlug(key);
       const entry = desc ? snippets.find((s) => s.enabledKey === desc.enabledKey) : undefined;
       if (!entry) {
-        console.error(`Unknown snippet ${fmt.value(snippetArg)}. Available: ${allSnippetSlugs().join(", ")}, stable`);
+        console.error(`Unknown snippet ${fmt.value(snippetArg)}. Available: ${allSnippetSlugs().join(", ")}, stable, hooks`);
         process.exit(1);
       }
 
@@ -20298,7 +20127,7 @@ workflow
   .option("--auto-approve", "Skip human gate prompts, auto-select first option")
   .option("--task <short_id>", "Bind workflow to a task (injects task context)")
   .option("--plan <short_id>", "Bind workflow to a plan (injects plan context)")
-  .option("--review-backend <agent>", "Agent for the review station (claude, codex, ...); pick one that differs from implement for an independent review")
+  .option("--review-backend <agent>", "Agent for the review station (claude, codex, ...)")
   .action(async (fileArg: string | undefined, options: any) => {
     const { parseWorkflowSource } = await import("./workflow/parser.js");
     const { resolveWorkflowSource } = await import("./workflow/templates.js");
@@ -20322,8 +20151,7 @@ workflow
     const graph = parseWorkflowSource(source, resolved.dir);
     // A role running the line (org-roles-standing.md T4, the-line.md L3):
     // the review station takes the role's own review backend, and the run is
-    // refused when that backend is the role's own agent, or when the role is
-    // one whose switch is off starts nothing.
+    // A role whose switch is off starts nothing.
     let reviewBackend: string | undefined = options.reviewBackend;
     if (graph.nodes.has("review")) {
       const self = await ownRole().catch(() => null);
@@ -20333,11 +20161,6 @@ workflow
           process.exit(1);
         }
         if (!reviewBackend && self.review_backend) reviewBackend = self.review_backend;
-        const own = self.own_agent === "claude_code" ? "claude" : (self.own_agent ?? "claude");
-        if (reviewBackend && String(reviewBackend).toLowerCase() === own) {
-          console.error(`Review backend "${reviewBackend}" is @${self.handle}'s own agent; the line's review station must run on a different backend for an independent review (the-line.md L3). Set one with cast role update @${self.handle} --review-backend <agent>.`);
-          process.exit(1);
-        }
       }
     }
     if (reviewBackend) {
@@ -20346,14 +20169,13 @@ workflow
       review.agent = String(reviewBackend).toLowerCase();
       if (review.backend !== "session") review.backend = reviewBackend as any;
     }
-    // Outside a role the same rule is a warning: an independent review runs
-    // on a different backend from implement (the-line.md L3).
+    // A review on a second backend is a second opinion; one line says so.
     {
       const review = graph.nodes.get("review");
       const implement = graph.nodes.get("implement");
       const agentOf = (n: any) => (n.agent || (n.backend !== "session" ? n.backend : undefined) || "claude");
       if (review && implement && agentOf(review) === agentOf(implement)) {
-        console.error(`${c.yellow}warning:${c.reset} review and implement both run on ${agentOf(review)}; pass --review-backend <other> for an independent review`);
+        console.error(`${c.yellow}note:${c.reset} review and implement both run on ${agentOf(review)}; pass --review-backend <other> for a second opinion`);
       }
     }
 
@@ -20791,18 +20613,12 @@ if (!isStableContextFastPath && !isCredentialHelperFastPath(process.argv) && !pr
   autoUpdateInstalling = true;
   const { success } = await performUpdate();
   if (success) {
-    if (config?.memory_enabled) installMemorySnippet(true);
-    if (config?.task_enabled) installTaskSnippet(true);
-    if (config?.work_enabled) installWorkSnippet(true);
-    if (config?.workflow_enabled) installWorkflowSnippet(true);
-    if (config?.orch_enabled) await installOrchestration(true);
-    installSessionRegisterHook();
-    installStatusHook();
-    removeShellChangesHook();
-    await installStatusLineHook();
-    installTaskPulseHook();
-    installThreadStateHook();
-    installUserPromptHook();
+    // The same refresh `cast update` runs, so an automatic update can never
+    // write a different set of files than a manual one. Every write it makes
+    // is recorded as caused by this update.
+    if (config) {
+      await withHarnessCause({ why: `automatic update to v${available}`, automatic: true }, () => refreshEnabledSnippets(config));
+    }
 
     if (bounceDaemonIfBuildChanged(daemonWasRunning)) {
       console.log(`Updated to v${available} and restarted daemon.\n`);

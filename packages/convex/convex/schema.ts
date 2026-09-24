@@ -227,6 +227,9 @@ export default defineSchema({
     encryption_master_key: v.optional(v.string()),
     sync_mode: v.optional(v.union(v.literal("all"), v.literal("selected"))),
     sync_projects: v.optional(v.array(v.string())),
+    // With sync_mode "all": folders that never upload, the folders inside
+    // them and their checkouts' worktrees included.
+    sync_excluded: v.optional(v.array(v.string())),
     team_share_paths: v.optional(v.array(v.string())),
     muted_members: v.optional(v.array(v.id("users"))),
     team_conversations_last_seen: v.optional(v.number()),
@@ -2807,9 +2810,31 @@ export default defineSchema({
     // Launchable `provider/model` ids per dynamic client (opencode/pi) on this
     // machine — heartbeat-reported (hash-gated), drives the web model pickers.
     model_inventory: v.optional(modelInventoryValidator),
+    // The cast version this device's daemon runs, and a newer release it could
+    // update to (absent when none), for the device page. Heartbeat-written.
+    cli_version: v.optional(v.string()),
+    update_available: v.optional(v.string()),
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_device", ["user_id", "device_id"]),
+
+  // Every change codecast made to a device's agent harness (CLAUDE.md, hooks,
+  // ~/.claude/settings.json), as the daemon's harness.ts recorded it: what,
+  // why, and whether anyone asked. The device page's change history reads
+  // this. Capped per device (harnessChanges.report).
+  harness_changes: defineTable({
+    user_id: v.id("users"),
+    device_id: v.string(),
+    at: v.number(),
+    file: v.string(),
+    action: v.union(v.literal("created"), v.literal("modified"), v.literal("removed")),
+    what: v.string(),
+    why: v.string(),
+    automatic: v.boolean(),
+    version: v.string(),
+    bytes_before: v.number(),
+    bytes_after: v.number(),
+  }).index("by_user_device_at", ["user_id", "device_id", "at"]),
 
   managed_sessions: defineTable({
     session_id: v.string(),

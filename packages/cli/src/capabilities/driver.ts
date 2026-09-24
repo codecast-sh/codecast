@@ -11,10 +11,10 @@
 // user can write. A source-supplied writes[] list is kept only to COMPARE, and
 // a mismatch is a conflict and a refusal, never a merge.
 
+import { recordHarnessChange, removeHarnessFile, writeHarnessFile } from "../harness.js";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { atomicWriteFile } from "../atomicWrite.js";
 
 /* ==========================================================================
  * The op union — phase 2 arms only
@@ -201,7 +201,8 @@ export interface ApplyOutcome {
 }
 
 /**
- * Execute a plan. Writes go through atomicWriteFile; every write lands in the
+ * Execute a plan. Writes go through writeHarnessFile (atomic, and recorded in
+ * the harness change history); every write lands in the
  * ledger; removal deletes exactly the listed files, then their directory ONLY
  * if empty — never a recursive delete of a directory this driver did not
  * create, because a skill dir can hold a user's uncommitted edits.
@@ -216,7 +217,10 @@ export function apply(ops: PlannedOp[], ledger: DriverLedger): ApplyOutcome {
       continue;
     }
     if (op.op === "write_file") {
-      atomicWriteFile(op.path, op.content, op.mode !== undefined ? { mode: op.mode } : {});
+      writeHarnessFile(op.path, op.content, `capability:${op.slug}`, {
+        mode: op.mode,
+        executable: op.mode !== undefined && (op.mode & 0o111) !== 0,
+      });
       const list = next.files[op.slug] ?? [];
       if (!list.includes(op.path)) list.push(op.path);
       next.files[op.slug] = list;
@@ -231,6 +235,7 @@ export function apply(ops: PlannedOp[], ledger: DriverLedger): ApplyOutcome {
         // absent is fine
       }
       fs.symlinkSync(op.target, op.path);
+      recordHarnessChange(op.path, "created", `capability:${op.slug}`);
       const list = next.files[op.slug] ?? [];
       if (!list.includes(op.path)) list.push(op.path);
       next.files[op.slug] = list;
@@ -239,7 +244,7 @@ export function apply(ops: PlannedOp[], ledger: DriverLedger): ApplyOutcome {
     }
     // remove
     try {
-      fs.unlinkSync(op.path);
+      if (!removeHarnessFile(op.path, `capability:${op.slug}`)) fs.unlinkSync(op.path);
       outcome.removed.push(op.path);
     } catch {
       // Already gone: removal is idempotent.

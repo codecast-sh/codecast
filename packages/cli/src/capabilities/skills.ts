@@ -10,10 +10,10 @@
 // whose frontmatter both say "deploy" are still two skills if their dirs
 // differ, and renaming a dir is renaming the skill.
 
+import { writeHarnessFile } from "../harness.js";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { atomicWriteFile } from "../atomicWrite.js";
 
 export interface SkillFile {
   /** Path inside the skill directory ("SKILL.md", "scripts/run.sh"). */
@@ -61,7 +61,10 @@ export function materializeSkill(
       existing = undefined;
     }
     if (existing === file.content) continue;
-    atomicWriteFile(target, file.content, file.mode !== undefined ? { mode: file.mode } : {});
+    writeHarnessFile(target, file.content, `skill:${name}`, {
+      mode: file.mode,
+      executable: file.mode !== undefined && (file.mode & 0o111) !== 0,
+    });
     wroteFiles++;
   }
 
@@ -113,7 +116,7 @@ function ensureLink(contentDir: string, linkPath: string, files: SkillFile[]): "
         existing = undefined;
       }
       if (existing !== file.content) {
-        atomicWriteFile(target, file.content, file.mode !== undefined ? { mode: file.mode } : {});
+        writeHarnessFile(target, file.content, `skill:${path.basename(linkPath)}`, { mode: file.mode });
       }
     }
     return "copy";
@@ -125,7 +128,7 @@ function ensureLink(contentDir: string, linkPath: string, files: SkillFile[]): "
   } catch {
     // The probe: this filesystem will not link. Copy instead, and say so.
     for (const file of files) {
-      atomicWriteFile(path.join(linkPath, file.relPath), file.content, {});
+      writeHarnessFile(path.join(linkPath, file.relPath), file.content, `skill:${path.basename(linkPath)}`);
     }
     return "copy";
   }

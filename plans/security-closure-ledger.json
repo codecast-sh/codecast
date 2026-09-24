@@ -199,7 +199,8 @@
       "packages/cli/src/update.ts: execFileSync argv curl with --proto =https --proto-redir =https --max-redirs 3 --max-filesize, url_effective origin check, darwin codesign gate for signed clients; packages/cli/src/update.test.ts 18 pass against the canonical package (tsconfig path override; vendored mirror stale until scripts/vendor-platform.sh)",
       "packages/web/public/install.sh reads latest.json, binary only from dl.codecast.sh, sha256 verified before install; packages/cli/src/installerTerminal.test.ts 14 pass incl. wrong digest, foreign host, missing platform",
       "signed manifest path: cli-kit signing.ts + release/sign-manifest.ts (keygen/sign/append/verify), finalize workflow signs when RELEASE_MANIFEST_SIGNING_KEY exists, client policy RELEASE_MANIFEST_SIGNING = { keys: {}, required: false } (no behaviour change); rollout and custody in docs/architecture/release-signing.md; no key created",
-      "2026-09-23: Update path hardened (argv curl, origin/path/digest/size checks, darwin team signature gate, install.sh SHA-256), reviewed PASS against the live latest.json v1.1.153. Manifest signing key created 2026-09-23 (sd-240, repo secret + Keychain escrow, key id cli-release-2026); client pin follows the first verified signed release."
+      "2026-09-23: Update path hardened (argv curl, origin/path/digest/size checks, darwin team signature gate, install.sh SHA-256), reviewed PASS against the live latest.json v1.1.153. Manifest signing key created 2026-09-23 (sd-240, repo secret + Keychain escrow, key id cli-release-2026); client pin follows the first verified signed release.",
+      "2026-09-24: live latest.json v1.1.154 signed; verified with cli-release-2026. Tree: key pinned required:false; every publisher now removes a stale latest.json.sig before writing the manifest (finalize contract test). Ships in the next CLI release."
     ],
     "review": null,
     "release": null
@@ -236,7 +237,8 @@
     "workstream": "002",
     "verification": [
       "2026-09-23 prod read: 291 api_tokens, 49 named setup-, none live, none used as a bearer; setup tokens refused as bearers and renames across the setup- prefix blocked (platform apiTokens.deviceBinding.test.ts, 11 pass; fails without the guard)",
-      "2026-09-23 review PASS: enforcement in verifyApiToken on both doors; REQUEST_DEVICE_BOUND_TOKENS=false until the host mint (sd-242) ships"
+      "2026-09-23 review PASS: enforcement in verifyApiToken on both doors; REQUEST_DEVICE_BOUND_TOKENS=false until the host mint (sd-242) ships",
+      "2026-09-24: enforcement and host mint live (Convex, CLI 1.1.154). Tree: REQUEST_DEVICE_BOUND_TOKENS=true with a self heal for Migration Assistant or disk clones (hooks never heal; 5s mint timeout), mac-full-setup.sh and the runbook moved to the mint path. Two fresh reviews; the second NEEDS_CHANGES hook hang is fixed and tested. Ships in the next CLI release."
     ],
     "review": {
       "decision": "human 2026-09-23: no token rotation and no grace window. Existing unbound tokens keep working. Order: close the direct path for bound tokens, make the CLI send device_id, then bind newly minted tokens.",

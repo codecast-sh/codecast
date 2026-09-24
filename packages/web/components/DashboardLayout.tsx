@@ -36,6 +36,7 @@ import { NativeAppBanner } from "./NativeAppBanner";
 import { CliOfflineBanner } from "./CliOfflineBanner";
 import { NotificationNudgeBanner } from "./NotificationNudgeBanner";
 import { TeamSharingNudgeBanner } from "./TeamSharingNudgeBanner";
+import { SharingSetupBanner } from "./SharingSetupBanner";
 import { DeviceSetupDialog } from "./permissions/DeviceSetupDialog";
 import { ConnectionBanner } from "./ConnectionBanner";
 import { StorageHealthBanner } from "./StorageHealthBanner";
@@ -1298,6 +1299,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         <CliOfflineBanner />
         <TmuxMissingBanner />
         <NotificationNudgeBanner />
+        <SharingSetupBanner />
         <TeamSharingNudgeBanner />
         <DeviceSetupDialog />
       </ErrorBoundary>
