@@ -2925,7 +2925,12 @@ shellIpc.handle("get-system-idle-seconds", () => powerMonitor.getSystemIdleTime(
 shellIpc.handle("restart-for-update", () => installUpdateAndRestart());
 // Any renderer-invoked check is user-initiated ("Try again" / "Update now"),
 // which lets it supersede a wedged in-flight download (see checkForDesktopUpdate).
-shellIpc.handle("check-for-update", (_e, opts) => checkForDesktopUpdate({ manual: opts?.manual === true, userInitiated: true }));
+// The asking window hears the outcome directly, whatever list it is on: a
+// window that asked and heard nothing calls a staged update stalled.
+shellIpc.handle("check-for-update", async (e, opts) => {
+  await checkForDesktopUpdate({ manual: opts?.manual === true, userInitiated: true });
+  if (lastUpdateStatus && !e.sender.isDestroyed()) e.sender.send("update-status", lastUpdateStatus);
+});
 // Returns { shown } so the renderer knows whether IT announced the event —
 // a promise while a banner waits out the completion grace. Every window reports
 // the same server row, so the first report wins the banner and the rest collapse
