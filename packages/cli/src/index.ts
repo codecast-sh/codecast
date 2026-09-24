@@ -8611,7 +8611,7 @@ program
       process.exit(1);
     }
     if (tailN !== undefined && (range || messageId)) {
-      console.error("Error: --tail reads the last messages; it cannot be combined with a range or a #msg anchor");
+      console.error("Error: --tail reads the last messages; it cannot be combined with a range or a #msg link");
       process.exit(1);
     }
 

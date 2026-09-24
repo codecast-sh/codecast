@@ -866,10 +866,7 @@ async function leaveCallHere(shown?: string): Promise<void> {
     convex && roomKey
       ? convex.mutation(api.calls.leaveRoom, { room_key: roomKey }).catch(() => {})
       : null;
-  // The call is over for the person the moment they hang up: the slice goes
-  // idle first, and the scribe's flush (which reads none of it) and the
-  // media teardown follow. Idle waited on the flush before, and the row sat
-  // on a live call for seconds after End.
+  // Idle first, then the scribe flush and media teardown: waiting on the flush left the row live for seconds after End.
   setCall({
     phase: "idle",
     roomKey: null,

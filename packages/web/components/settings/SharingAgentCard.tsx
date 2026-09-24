@@ -1,16 +1,8 @@
 import { ArrowRight, Sparkles } from "lucide-react";
-import { toast } from "sonner";
-import { startSharingAgent } from "../../lib/sharingAgent";
+import { launchSharingAgent } from "../../lib/sharingAgent";
 import { cn } from "../../lib/utils";
 
 /** Start the sharing agent and say where it went. */
-export function launchSharingAgent(): void {
-  startSharingAgent();
-  toast.success("Agent started", {
-    description: "It reads your folders first, then asks you. Nothing changes until you agree.",
-  });
-}
-
 /**
  * "Decide with an agent" on the Sync & Privacy page: an agent reads the same
  * folders and teams this page lists, recommends a setting for each, and

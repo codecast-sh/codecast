@@ -3,7 +3,7 @@ import Link from "next/link";
 import { Sparkles, X } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { useMountEffect } from "../hooks/useMountEffect";
-import { launchSharingAgent } from "./settings/SharingAgentCard";
+import { launchSharingAgent } from "../lib/sharingAgent";
 
 /** How long after sign up the strip still counts as onboarding. */
 const ONBOARDING_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
