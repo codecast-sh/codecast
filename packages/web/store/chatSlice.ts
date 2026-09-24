@@ -244,6 +244,10 @@ export type ChatReactionRow = {
   user_id: string;
   emoji: string;
   created_at: number;
+  /** Mirrored from Slack by someone with no codecast match: `user_id` is the
+   *  workspace bridge, and these say who it really was. */
+  slack_user?: string;
+  external_author?: { name: string; avatar_url?: string };
 };
 
 /** One row of chat.listChannels' `rail` — the server's own unread numbers.
