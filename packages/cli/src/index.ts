@@ -12113,14 +12113,14 @@ program
 
 program
   .command("desktop-update")
-  .description("Update the Codecast desktop app out-of-band (bypasses the wedged macOS auto-updater)")
+  .description("Install or update the Codecast desktop app out-of-band (bypasses the wedged macOS auto-updater)")
   .option("-f, --force", "Reinstall even if already current; quit the app first if running")
   .action(async (opts) => {
     if (process.platform !== "darwin") {
       console.error("Desktop auto-update is macOS-only.");
       process.exit(1);
     }
-    const applied = await checkForDesktopUpdate((msg) => console.log(msg), { force: opts.force === true });
+    const applied = await checkForDesktopUpdate((msg) => console.log(msg), { force: opts.force === true, install: true });
     if (applied) {
       console.log("Desktop app updated and relaunched.");
     } else if (!opts.force) {
@@ -12205,8 +12205,9 @@ program
 
 program
   .command("reinstall-all")
-  .description("Send reinstall command to all daemons below a version (admin only)")
+  .description("Send a command to every daemon active in the last day, optionally below a version (admin only)")
   .option("--below <version>", "Only target daemons below this version")
+  .option("--command <command>", "reinstall, force_update, restart or desktop_update", "reinstall")
   .action(async (opts) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -12221,9 +12222,9 @@ program
     try {
       const result = await syncService.getClient().mutation(
         "users:sendDaemonCommandToAll" as any,
-        { command: "reinstall", max_version: opts.below }
+        { command: opts.command, max_version: opts.below, api_token: config.auth_token }
       );
-      console.log(`Sent reinstall to ${result.sent}/${result.total} active daemons`);
+      console.log(`Sent ${opts.command} to ${result.sent}/${result.total} active daemons`);
       process.exit(0);
     } catch (err) {
       console.error(`Failed: ${err instanceof Error ? err.message : String(err)}`);
