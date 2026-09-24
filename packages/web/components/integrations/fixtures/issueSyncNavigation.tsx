@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spyOn } from "bun:test";
 import "fake-indexeddb/auto";
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
@@ -8,6 +7,7 @@ import { ConvexProvider, ConvexReactClient } from "convex/react";
 import { replaceGlobals } from "../../../test-helpers/globals";
 
 const { JSDOM } = require("jsdom");
+const { spyOn } = require("bun:test");
 const originalPath = "/conversation/original";
 const projectPath = "/projects/linear-project";
 const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", {
@@ -25,7 +25,7 @@ const cache = await import("../../../store/idbCache");
 const setHydrating = cache.setHydrating;
 let finishHydration!: () => void;
 const hydrated = new Promise<void>((resolve) => { finishHydration = resolve; });
-const hydrationSpy = spyOn(cache, "setHydrating").mockImplementation((value) => {
+const hydrationSpy = spyOn(cache, "setHydrating").mockImplementation((value: boolean) => {
   setHydrating(value);
   if (!value) finishHydration();
 });
