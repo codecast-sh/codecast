@@ -45,6 +45,18 @@ export type OwnSessionRow = {
   team_visibility?: string | null;
 };
 
+export function visibleTeamFeedRows<T extends { user_id?: string | null; acting_user_id?: string | null }>(
+  rows: T[],
+  memberIds: ReadonlySet<string> | undefined,
+  orgEnabled: boolean,
+): T[] {
+  if (!memberIds) return [];
+  return rows.filter((row) =>
+    !!row.user_id && memberIds.has(row.user_id) &&
+    (!row.acting_user_id || (orgEnabled && memberIds.has(row.acting_user_id))),
+  );
+}
+
 /** One list for the team feed: the server's rows, with the viewer's own rows
  *  read at the inbox cache's privacy (that cache is live for the viewer's
  *  sessions; the feed cache keeps a row the server stopped serving once it was

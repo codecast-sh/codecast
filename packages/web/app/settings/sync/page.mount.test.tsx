@@ -215,7 +215,7 @@ async function verify() {
   await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
   const t3 = text();
   assert.match(t3, /No longer on this machine: moved or deleted/);
-  assert.match(t3, /folder moved or deleted/);
+  assert.match(t3, /Folder moved or deleted on this machine/);
   assert.ok(t3.indexOf("live") < t3.indexOf("No longer on this machine"), "the live folder lists above the moved one");
   await act(async () => { root3.unmount(); });
 }
