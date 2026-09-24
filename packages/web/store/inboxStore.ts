@@ -3580,13 +3580,13 @@ export function placeInboxRows(
   for (const s of sorted) {
     const nestParent = nestParentOf(s);
     if (!nestParent || !allIds.has(nestParent)) continue;
+    // A role's session is a subagent row under the role's card, whatever
+    // bucket it would file in alone; the card carries the count too.
     if (isUnderRole(s)) {
       if (placements.get(nestParent)?.bucket === "dismissed") continue;
       roleRidden.add(s._id);
       roleSessionsByLead.set(nestParent, (roleSessionsByLead.get(nestParent) ?? 0) + 1);
-      continue;
-    }
-    if (isMemberCandidate(s)) {
+    } else if (isMemberCandidate(s)) {
       const own = placements.get(s._id)?.bucket;
       const lead = placements.get(nestParent)?.bucket;
       if (own !== lead) continue;
@@ -3711,9 +3711,9 @@ export function placeInboxRows(
   };
   // A role's sessions are the role's to triage, so they add to no header:
   // the number beside a section is what the person looks after there, and the
-  // role's card is one thing however many sessions ride it (R1, S23.3); they
-  // are not in subsByParent at all.
+  // role's card is one thing however many sessions nest under it (R1, S23.3).
   for (const id of subsWithParent) {
+    if (roleRidden.has(id)) continue;
     const b = placements.get(id)?.bucket;
     const k = b ? SECTION_OF_BUCKET[b] : undefined;
     if (k) counts[k]++;
@@ -4484,7 +4484,7 @@ export function flatViewSessions(
     ? null
     : nestedSessionIds(subsByParent);
   const list = subIds
-    ? sortedSessions.filter((s) => !subIds.has(s._id) || s._id === opts.focusedId || isUnderRole(s))
+    ? sortedSessions.filter((s) => !subIds.has(s._id) || s._id === opts.focusedId)
     : [...sortedSessions];
   list.sort(flatViewComparator(opts.mode, opts.mode === "time" ? opts.manualOrder : undefined));
   let ordered = list;
@@ -4514,11 +4514,9 @@ function dropOrphanSubagents(list: InboxSession[], focusedId?: string | null): I
   const nestParentOf = inboxNestParentOf(list);
   return list.filter((s) => {
     if (s._id === focusedId || s.is_pinned) return true;
-    // A role's session whose role's card is on the list rides that card as a
-    // count, never as a row (org-staffing.md S23.3).
-    if (isUnderRole(s)) { const p = nestParentOf(s); if (p && p !== s._id && present.has(p)) return false; }
-    if (!isSubagentConversation(s) && !isAgentTeamWorker(s)) return true;
-    const p = nestParentIdOf(s);
+    // A role's session is a subagent of the role's card.
+    if (!isSubagentConversation(s) && !isAgentTeamWorker(s) && !isUnderRole(s)) return true;
+    const p = nestParentOf(s);
     return !!p && p !== s._id && present.has(p);
   });
 }

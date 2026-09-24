@@ -17,6 +17,22 @@ export type FilterOption = {
   count?: number;
 };
 
+/** The options as the menu draws them in multi mode: the empty "clear" row,
+ *  then every picked value, then the rest. A pick the option source no longer
+ *  lists (a label on no loaded task, a value from a shared URL) still gets a
+ *  row, named by its key, so the menu and the chip can always say what is
+ *  filtered and the pick can be undone. */
+function pickedFirst(options: FilterOption[], picked: Set<string>): FilterOption[] {
+  if (picked.size === 0) return options;
+  const byKey = new Map(options.map((o) => [o.key, o]));
+  const top = [...picked].map((k) => ({ ...(byKey.get(k) ?? { key: k, label: k }), section: undefined }));
+  return [
+    ...options.filter((o) => o.key === ""),
+    ...top,
+    ...options.filter((o) => o.key !== "" && !picked.has(o.key)),
+  ];
+}
+
 /** The option-button list, shared by the inline FilterDropdown popover and the
  *  "+ Filter" add-menu in GenericListView. Single-select picks-and-closes via
  *  onPicked; multi toggles in place and keeps the menu open. */
@@ -40,13 +56,24 @@ export function FilterOptionList({
 }) {
   const [query, setQuery] = useState("");
   const showSearch = searchable ?? options.length > 10;
+  const selected = multi ? new Set(value ? value.split(",") : []) : null;
+  // Ordered from the value the menu OPENED with, not the live one: rows that
+  // jump to the top while you are clicking down the list would move the next
+  // target out from under the pointer.
+  const [openedWith] = useState(value);
+  const ordered = useMemo(() => {
+    if (!multi) return options;
+    const picked = new Set(openedWith ? openedWith.split(",") : []);
+    // Keys picked since opening that the source does not list still need a row.
+    for (const k of selected!) if (!options.some((o) => o.key === k)) picked.add(k);
+    return pickedFirst(options, picked);
+  }, [options, multi, openedWith, value]);
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!showSearch || !q) return options;
+    if (!showSearch || !q) return ordered;
     // The empty option is the "clear" action, so it always stays reachable.
-    return options.filter((o) => o.key === "" || o.label.toLowerCase().includes(q));
-  }, [options, query, showSearch]);
-  const selected = multi ? new Set(value ? value.split(",") : []) : null;
+    return ordered.filter((o) => o.key === "" || o.label.toLowerCase().includes(q));
+  }, [ordered, query, showSearch]);
   const hasValue = multi ? selected!.size > 0 : !!value;
   const isSelected = (key: string) =>
     key === "" ? !hasValue : multi ? selected!.has(key) : key === value;
@@ -155,12 +182,10 @@ export function FilterDropdown({
   // at a glance where "Status (2)" makes you open the popover to find out. Past
   // two picks the names stop fitting, so the rest becomes a count.
   const pickedLabels = multi
-    ? options.filter((o) => o.key && selected!.has(o.key)).map((o) => o.label)
+    ? [...selected!].map((k) => options.find((o) => o.key === k)?.label ?? k)
     : [];
   const buttonLabel = multi && selected!.size > 0
-    ? pickedLabels.length === 0
-      ? `${label} (${selected!.size})`
-      : pickedLabels.length <= 2
+    ? pickedLabels.length <= 2
         ? pickedLabels.join(", ")
         : `${pickedLabels.slice(0, 2).join(", ")} +${pickedLabels.length - 2}`
     : active && value ? active.label : label;

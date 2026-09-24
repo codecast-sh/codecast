@@ -156,7 +156,7 @@ const cardOf = (host: HTMLElement, sessionId: string) => host.querySelector(`[da
 
 beforeEach(() => { document.body.innerHTML = ""; });
 
-test("a role's sessions are never rows: the role's card carries a count that opens its page, and Needs Input does not count them (S23.3)", async () => {
+test("a role's sessions are subagent rows under the role's card, with a count on the card, and Needs Input does not count them", async () => {
   seed([standing(), hand(WAITING, "Pricing page copy"), hand(WORKING, "Cold email rewrite", { agent_status: "working", is_idle: false }), row(MINE, { title: "My own session" })]);
   const m = await mountInbox();
 
@@ -167,15 +167,26 @@ test("a role's sessions are never rows: the role's card carries a count that ope
   // The role's card surfaced (a standing session with nothing under it stays
   // out of the inbox) and files by the role's own state.
   expect(sectionOf(m.host, STANDING)).toBe("dormant");
-  // Neither of its sessions is a row anywhere: the card carries the count,
-  // and the count opens the role's page, where the sessions live.
-  for (const sid of [WAITING, WORKING]) expect(cardOf(m.host, sid)).toBeNull();
+  // Its sessions are subagent rows under it, with no gesture of their own,
+  // and the card carries the count, which opens the role's page.
+  for (const sid of [WAITING, WORKING]) {
+    const sub = cardOf(m.host, sid)!;
+    expect(sub).not.toBeNull();
+    expect(sub.querySelector("[data-role-gesture]")).toBeNull();
+  }
   const pill = cardOf(m.host, STANDING)!.querySelector("[data-role-sessions]") as HTMLAnchorElement;
   expect(pill.textContent).toBe("2 sessions");
   expect(pill.getAttribute("href")).toBe("/org/or-7");
   // The role's card is one thing in its section, however many ride it.
   expect(headerCount(m.host, "dormant")).toBe("1");
   await m.unmount();
+
+  // The subagent toggle hides them like any other subagent row.
+  useInboxStore.setState({ clientState: { ui: { inbox_scope: "mine", show_old: true, show_subagents: false } } } as any);
+  const hidden = await mountInbox();
+  for (const sid of [WAITING, WORKING]) expect(cardOf(hidden.host, sid)).toBeNull();
+  expect(cardOf(hidden.host, STANDING)).not.toBeNull();
+  await hidden.unmount();
 });
 
 test("by default the role's card is the one in Needs Input, carrying the lines; the sessions stay off the list; Hand back per line", async () => {
@@ -253,10 +264,9 @@ test("a direct escalation is the session's own card in Needs Input, with the rol
   // The role's face, and the one gesture that sends it back.
   expect(strip.querySelector("img, svg, [role=img]")).not.toBeNull();
   expect(strip.querySelector('[data-role-gesture="hand-back"]')!.textContent).toBe("Hand back to @growth");
-  // The role's card is untouched: dormant, the other session counted on it
-  // and never a row (S23.3), counting the one it put in the person's inbox.
+  // The role's card is untouched: dormant, the other session nested under it,
+  // counting the one it put in the person's inbox.
   expect(sectionOf(m.host, STANDING)).toBe("dormant");
-  expect(cardOf(m.host, WAITING)).toBeNull();
   expect(cardOf(m.host, STANDING)!.querySelector("[data-role-sessions]")!.textContent).toBe("1 session");
   expect(cardOf(m.host, STANDING)!.querySelector("[data-role-escalated-count]")!.textContent).toBe("1 in your inbox");
   expect(cardOf(m.host, STANDING)!.querySelector("[data-role-escalations]")).toBeNull();
@@ -272,9 +282,9 @@ test("the role's card counts what it escalated, and both gestures move the row i
   expect(countOn()).toBeNull();
   expect(headerCount(m.host, "needs_input")).toBeNull();
 
-  // The sessions ride the card as a count, never as rows (S23.3).
+  // The sessions nest under the card as subagent rows, and the card counts them.
   expect(cardOf(m.host, STANDING)!.querySelector("[data-role-sessions]")!.textContent).toBe("2 sessions");
-  expect(cardOf(m.host, WAITING)).toBeNull();
+  expect(cardOf(m.host, WAITING)).not.toBeNull();
 
   // Put in my inbox (the person's gesture on the role's page): no await, no
   // server. The draft moves the row, and it becomes a card of its own.

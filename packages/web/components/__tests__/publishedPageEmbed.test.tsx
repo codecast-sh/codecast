@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, mock, test } from "bun:test";
+import { afterAll, describe, expect, mock, spyOn, test } from "bun:test";
 import { act } from "react";
 import { JSDOM } from "jsdom";
 import { ConvexProvider, ConvexReactClient } from "convex/react";
@@ -10,6 +10,12 @@ import { MemoryRouter } from "react-router";
 
 import { closeDomWindow } from "../../test-helpers/domGlobals";
 const client = new ConvexReactClient("https://example.convex.cloud");
+const watchQuery = spyOn(client, "watchQuery").mockImplementation(() => ({
+  onUpdate: () => () => {},
+  localQueryResult: () => undefined,
+  localQueryLogs: () => undefined,
+  journal: () => undefined,
+}));
 
 function markup(slug = "abc") {
   return renderToStaticMarkup(
@@ -56,7 +62,12 @@ const restoreGlobals = replaceGlobals({
 // here — after the globals above — not as a static import.
 const {createRoot} = await import("react-dom/client");
 
-afterAll(() => { closeDomWindow(dom); restoreGlobals(); });
+afterAll(async () => {
+  watchQuery.mockRestore();
+  await client.close();
+  closeDomWindow(dom);
+  restoreGlobals();
+});
 
 describe("PublishedPageEmbed copy", () => {
   test("the copy button writes the public share URL", async () => {
@@ -106,6 +117,7 @@ describe("ClaudeArtifactEmbed publish suggestion", () => {
         </MemoryRouter>,
       );
     });
+    await act(() => root.unmount());
     return container;
   }
 

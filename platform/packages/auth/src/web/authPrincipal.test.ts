@@ -135,3 +135,50 @@ describe("auth principal tracker", () => {
     expect(h.changes.length).toBe(1);
   });
 });
+
+// A token that is present but does not parse is not a logout. The library
+// still holds a token for someone; the tracker cannot say who, so it keeps
+// the account it last knew, reports the state, and changes nothing. A purge
+// on this path destroyed a signed-in user's cache, pending input and outbox.
+describe("unparsable token", () => {
+  test("after a valid principal, keeps the account and reports no change", () => {
+    const h = harness(fakeToken("userA"));
+    h.siblingWrite(JWT_KEY, "not.a.jwt");
+    expect(h.changes).toEqual([]);
+    expect(h.tracker.current()).toBe("userA");
+    expect(h.tracker.tokenState()).toBe("unparsable");
+    h.ownWrite(JWT_KEY, "header.payload");
+    expect(h.changes).toEqual([]);
+    expect(h.tracker.current()).toBe("userA");
+  });
+
+  test("a later valid token for another user is a change from the kept account", () => {
+    const h = harness(fakeToken("userA"));
+    h.siblingWrite(JWT_KEY, "garbage");
+    h.siblingWrite(JWT_KEY, fakeToken("userB"));
+    expect(h.changes).toEqual([{ epoch: 1, previous: "userA", next: "userB" }]);
+    expect(h.tracker.tokenState()).toBe("named");
+  });
+
+  test("a removal after an unparsable token is the logout", () => {
+    const h = harness(fakeToken("userA"));
+    h.siblingWrite(JWT_KEY, "garbage");
+    h.siblingWrite(JWT_KEY, null);
+    expect(h.changes).toEqual([{ epoch: 1, previous: "userA", next: null }]);
+    expect(h.tracker.tokenState()).toBe("absent");
+  });
+
+  test("unparsable at boot names nobody and stays silent", async () => {
+    const h = harness("garbage");
+    expect(h.tracker.current()).toBeNull();
+    expect(h.tracker.tokenState()).toBe("unparsable");
+    expect(await h.tracker.resolve()).toBeNull();
+    expect(h.changes).toEqual([]);
+  });
+
+  test("resolve keeps the account while the stored token is unparsable", async () => {
+    const h = harness(fakeToken("userA"));
+    h.siblingWrite(JWT_KEY, "garbage");
+    expect(await h.tracker.resolve()).toBe("userA");
+  });
+});

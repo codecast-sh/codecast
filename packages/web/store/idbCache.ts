@@ -277,6 +277,15 @@ async function resolveCacheOwnership(): Promise<string | null> {
   }
   boundOwner = principal;
   if (principal !== null && owner === principal) return principal;
+  // A stored token that does not parse is not a sign-out: the tracker keeps
+  // the account it last knew (served above when it owns the cache), and with
+  // no account known nothing is served. Nothing is purged either way; the
+  // cache is destroyed only by an explicit sign-out or by a change to another
+  // named account.
+  if (authPrincipal.tokenState() === "unparsable") {
+    console.warn("[cache] the stored token could not be parsed; keeping the cache as it is");
+    return null;
+  }
   if ((await foreignRowCount(principal)) > 0) await purgeLocalCache({ keepPendingInputFor: principal });
   return null;
 }

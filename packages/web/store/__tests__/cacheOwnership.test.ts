@@ -11,6 +11,8 @@ for (const scenario of [
   "signed-out-residue",
   "durable-only-token",
   "write-guard-race",
+  "unparsable-token-at-boot",
+  "unparsable-token-in-session",
 ]) {
   it(`cache ownership: ${scenario}`, () => {
     const result = Bun.spawnSync([process.execPath, `${import.meta.dir}/fixtures/cacheOwnership.ts`], {

@@ -186,6 +186,25 @@ describe("logout and account change across windows", () => {
     expect(probes.B.renders).toBe(rendersBefore);
   });
 
+  test("a token that fails to parse is not a logout: rows and dispatch stay", async () => {
+    await twoWindowsSignedInAsA();
+    seedInbox("userA");
+    (store.getState() as any)._setDispatch(async () => null);
+    const rendersBefore = probes.B.renders;
+    const warn = console.warn;
+    console.warn = () => {};
+    try {
+      localStorage.setItem(AUTH_JWT_STORAGE_KEY, "not.a.jwt");
+      await flush();
+    } finally {
+      console.warn = warn;
+    }
+    expect(inboxRows()).toBe(1);
+    expect((store.getState() as any)._isDispatchWired()).toBe(true);
+    expect(probes.B.renders).toBe(rendersBefore);
+    expect(probes.B.token).toBe(tA1);
+  });
+
   test("a cache read still in flight at the boundary lands nowhere", async () => {
     await twoWindowsSignedInAsA();
     const { default: Dexie } = await import("dexie");
