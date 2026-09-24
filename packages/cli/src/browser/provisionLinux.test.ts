@@ -46,8 +46,12 @@ describe("baseProvisionScript", () => {
     expect(s).toContain('[ "$MINUTES" -le 0 ] && exit 0');
   });
 
-  test("daemon unit marks the box as a remote device", () => {
-    expect(daemonUnitScript()).toContain("CODECAST_REMOTE_DEVICE=1");
+  test("daemon unit marks the box as a remote device, in the unit's environment and on disk", () => {
+    const s = daemonUnitScript();
+    expect(s).toContain("CODECAST_REMOTE_DEVICE=1");
+    // The marker precedes the unit so a daemon any other launcher starts there is remote too.
+    expect(s).toContain(": > /home/ubuntu/.codecast/remote-device");
+    expect(s.indexOf("remote-device")).toBeLessThan(s.indexOf("sudo tee /etc/systemd/system/codecast-daemon.service"));
   });
 });
 
@@ -458,7 +462,9 @@ describe("pushCodecastConfig", () => {
       const { deps, shipped, minted } = harness(encryptToken(BOUND), "hostdevice1234");
       await pushCodecastConfig(host, deps);
       expect(minted).toEqual([{ deviceId: "hostdevice1234", label: `${host.user}@${host.address}` }]);
-      expect(shipped[0].cfg.auth_token).toBe(HOST_TOKEN);
+      // Shipped with the device it was minted for, so the host never has to
+      // guess it (a host whose key rotated before would guess the old one).
+      expect(shipped[0].cfg.auth_token).toBe(`${HOST_TOKEN}.hostdevice1234`);
       expect(JSON.stringify(shipped[0].cfg)).not.toContain(BOUND);
     });
   }

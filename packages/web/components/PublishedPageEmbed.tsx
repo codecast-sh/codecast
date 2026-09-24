@@ -241,7 +241,7 @@ export function PublishedPageEmbed({ slug, caption, height }: {
         onLoad={onLoad}
         className="w-full bg-sol-card"
         style={{ height: expanded ? EMBED_HEIGHT_EXPANDED : (height ?? EMBED_HEIGHT) }}
-        sandbox="allow-scripts allow-popups"
+        sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
         title={title}
       />
     </PageCard>

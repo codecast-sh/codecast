@@ -63,6 +63,55 @@ export function MoveToDeviceItems({ sessions, onDone }: { sessions: any[]; onDon
 }
 
 
+/**
+ * File sessions under a label (null removes it). The one sink for the bulk
+ * menu, the selection bar and a card dropped on a label, so a drag of a ticked
+ * card files the whole selection the same way the menu does.
+ */
+export function labelSessions(ids: string[], bucketId: string | null) {
+  const store = useInboxStore.getState();
+  // A label mid-create (optimistic stub) can't take assignments yet; the
+  // server row supersedes the stub within about a second.
+  if (bucketId && !isConvexId(bucketId)) {
+    toast.error("Label is still syncing — try again in a moment");
+    return;
+  }
+  let applied = 0;
+  for (const id of ids) {
+    const real = store.getConvexId(id) ?? id;
+    if (!isConvexId(real)) continue;
+    store.assignSessionToBucket(real, bucketId);
+    applied++;
+  }
+  if (applied === 0) {
+    toast.error("Session is still being created — try again in a moment");
+    return;
+  }
+  const what = applied === 1 ? "" : ` ${applied} sessions`;
+  const name = bucketId ? store.buckets[bucketId]?.name : null;
+  toast.success(bucketId ? `Labeled${what}${name ? ` ${name}` : ""}` : `Label removed${what ? ` from${what}` : ""}`);
+}
+
+/** The label rows of a "Label…" menu: every label, then remove and new. */
+function LabelItems({ sessions, onDone }: { sessions: any[]; onDone?: () => void }) {
+  const labels = React.useMemo(() => sortLabels(useInboxStore.getState().buckets as any), []);
+  const apply = (bucketId: string | null) => { labelSessions(sessions.map((s) => s._id), bucketId); onDone?.(); };
+  return (
+    <>
+      {labels.map((b: any) => (
+        <CtxItem key={b._id} leading={<span className={`inline-block h-2 w-2 rounded-full ${getLabelColor(b.name || "").dot}`} />} onSelect={() => apply(b._id)}>
+          {b.name}
+        </CtxItem>
+      ))}
+      {labels.length > 0 && <CtxSeparator />}
+      <CtxItem onSelect={() => apply(null)}>Remove label</CtxItem>
+      <CtxItem onSelect={() => useInboxStore.getState().openPalette({ targets: sessions, targetType: "session", mode: "bucket" })}>
+        New label…
+      </CtxItem>
+    </>
+  );
+}
+
 /** "Move to…" as a submenu, for the single-session and bulk menus alike. */
 export function MoveToDeviceSubmenu({ sessions, label }: { sessions: any[]; label?: string }) {
   return (
@@ -92,18 +141,6 @@ export function BulkSessionMenuItems({
   onClear?: () => void;
 }) {
   const n = sessions.length;
-  const labels = React.useMemo(() => sortLabels(useInboxStore.getState().buckets as any), []);
-  const applyLabel = (bucketId: string | null, name?: string) => {
-    const store = useInboxStore.getState();
-    let applied = 0;
-    for (const s of sessions) {
-      const id = store.getConvexId(s._id) ?? s._id;
-      if (!isConvexId(id)) continue;
-      store.assignSessionToBucket(id, bucketId);
-      applied++;
-    }
-    toast.success(bucketId ? `Labeled ${applied} session${applied === 1 ? "" : "s"} ${name}` : `Label removed from ${applied}`);
-  };
   return (
     <>
       <CtxHeader title={`${n} sessions selected`} />
@@ -117,19 +154,7 @@ export function BulkSessionMenuItems({
       <CtxSub>
         <CtxSubTrigger icon={Tag}>Label {n} sessions</CtxSubTrigger>
         <CtxSubContent>
-          {labels.map((b: any) => {
-            const color = getLabelColor(b.name || "");
-            return (
-              <CtxItem key={b._id} leading={<span className={`inline-block h-2 w-2 rounded-full ${color.dot}`} />} onSelect={() => applyLabel(b._id, b.name)}>
-                {b.name}
-              </CtxItem>
-            );
-          })}
-          {labels.length > 0 && <CtxSeparator />}
-          <CtxItem onSelect={() => applyLabel(null)}>Remove label</CtxItem>
-          <CtxItem onSelect={() => useInboxStore.getState().openPalette({ targets: sessions, targetType: "session", mode: "bucket" })}>
-            New label…
-          </CtxItem>
+          <LabelItems sessions={sessions} />
         </CtxSubContent>
       </CtxSub>
       <CtxSeparator />
@@ -185,6 +210,16 @@ export function InboxSelectionBar({
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className={CTX_SURFACE}>
             <MoveToDeviceItems sessions={sessions} onDone={onClear} />
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button type="button" className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-sol-text hover:bg-sol-cyan/15">
+              <Tag className="h-3 w-3" /> Label
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className={CTX_SURFACE}>
+            <LabelItems sessions={sessions} onDone={onClear} />
           </DropdownMenuContent>
         </DropdownMenu>
         {onStash && (
