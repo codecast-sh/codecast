@@ -20,7 +20,7 @@ export function useWorkspaceArgs(): WorkspaceArgs {
 
 export function useActiveTeam() {
   const user = useQuery(api.users.getCurrentUser);
-  const teams = useQuery(api.teams.getUserTeams);
+  const teams = useQuery(api.teams.getUserTeams, {});
   const teamId = user?.active_team_id as Id<"teams"> | undefined;
   const activeTeam = teams?.find((t) => t?._id === teamId);
   const validTeams = (teams?.filter((t: any) => Boolean(t)) ?? []) as NonNullable<NonNullable<typeof teams>[number]>[];

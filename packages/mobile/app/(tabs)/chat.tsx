@@ -33,7 +33,7 @@ export default function ChatScreen() {
   const { width } = useWindowDimensions();
 
   const currentUser = useQuery(api.users.getCurrentUser);
-  const teams = useQuery(api.teams.getUserTeams);
+  const teams = useQuery(api.teams.getUserTeams, {});
   const saveActiveTeam = useMutation(api.teams.setActiveTeam);
 
   const activeTeamId = (currentUser?.active_team_id || currentUser?.team_id) as Id<'teams'> | undefined;

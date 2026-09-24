@@ -32,14 +32,18 @@ $SSH "export PATH=\"\$HOME/.bun/bin:\$PATH\"; cd /Users/$MUSER/work/codecast && 
 echo "[6/7] auth + onboarding"
 # CC credential (from local keychain)
 security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null | $SSH 'umask 077; mkdir -p ~/.claude; cat > ~/.claude/.credentials.json'
-# codecast daemon token (from local config, decrypted → plaintext on Mac)
-cd /Users/ashot/src/codecast/packages/cli && bun -e '
-import { decryptToken } from "./src/tokenEncryption.ts"; import * as fs from "fs"; import * as os from "os";
-const cfg=JSON.parse(fs.readFileSync(os.homedir()+"/.codecast/config.json","utf-8"));
-const raw=cfg.auth_token.startsWith("enc:")?decryptToken(cfg.auth_token):cfg.auth_token;
-const m={user_id:cfg.user_id,auth_token:raw,convex_url:cfg.convex_url,web_url:cfg.web_url,updated_at:Date.now(),created_at:Date.now()};
-process.stdout.write(JSON.stringify(m));
-' 2>/dev/null | $SSH 'umask 077; mkdir -p ~/.codecast; cat > ~/.codecast/config.json'
+# codecast token, through the path `cast hosts provision` uses: an unbound
+# token is copied, a device bound one never is (the Mac gets its own, minted
+# for its device id, which bun computes on the Mac from its own machine key).
+MAC_DEVICE=$($SSH "export PATH=\"\$HOME/.bun/bin:\$PATH\"; cd /Users/$MUSER/work/codecast/packages/cli && bun -e 'import { deviceId } from \"./src/remote/device.ts\"; console.log(deviceId())'" | tail -1)
+cd /Users/ashot/src/codecast/packages/cli && MAC_IP=$IP MAC_USER=$MUSER MAC_KEY=$KEY MAC_DEVICE=$MAC_DEVICE bun -e '
+import { pushCodecastConfig } from "./src/browser/provisionLinux.ts";
+const e = process.env;
+await pushCodecastConfig(
+  { address: e.MAC_IP, user: e.MAC_USER, keyPath: e.MAC_KEY, remoteBaseDir: `/Users/${e.MAC_USER}/work` },
+  { hostDeviceId: () => e.MAC_DEVICE || undefined },
+);
+' || { echo "codecast config push failed"; exit 1; }
 # claude onboarding pre-seed
 $SSH 'python3 -c "import json,os; d={\"hasCompletedOnboarding\":True,\"theme\":\"dark\",\"bypassPermissionsModeAccepted\":True,\"projects\":{}}; json.dump(d,open(os.path.expanduser(\"~/.claude.json\"),\"w\"),indent=1)"'
 echo "[7/7] start daemon"

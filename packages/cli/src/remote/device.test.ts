@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { resolveDeviceIdentity, resolveDeviceLabel, resolveStableHostname } from "./device.js";
+import { resolveDeviceIdentity, resolveDeviceLabel, resolveRemoteDevice, resolveStableHostname } from "./device.js";
 
 /**
  * Regression for the "Xiaomi-12-Lite" device-label bug: macOS overwrites the
@@ -217,5 +217,24 @@ describe("resolveDeviceLabel", () => {
   test("surrounding whitespace is trimmed", () => {
     expect(resolveDeviceLabel({ platform: "darwin", override: "  Cloud Mac  ", hostname: host("mbp") }))
       .toBe("Cloud Mac");
+  });
+});
+
+/**
+ * A cloud host is remote by the marker provisioning leaves on it, not only by
+ * the environment of the launcher that started its daemon: a daemon started
+ * from a session's shell on the box ran as a laptop, adopted a laptop's
+ * conversation and put it in $HOME (2026-09-22).
+ */
+describe("resolveRemoteDevice", () => {
+  test("the launch environment alone makes the device remote", () => {
+    expect(resolveRemoteDevice({ env: "1", marker: false })).toBe(true);
+  });
+  test("the marker alone makes the device remote, whoever started the daemon", () => {
+    expect(resolveRemoteDevice({ env: undefined, marker: true })).toBe(true);
+  });
+  test("a laptop has neither", () => {
+    expect(resolveRemoteDevice({ env: undefined, marker: false })).toBe(false);
+    expect(resolveRemoteDevice({ env: "0", marker: false })).toBe(false);
   });
 });

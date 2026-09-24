@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   AGENT_BRIDGE_SECURITY_NOTE, briefError, EC2_HOURLY_USD, estimateHostCost, forwardAgentRefusal, gitStatusLine,
-  GP3_USD_PER_GIB_MONTH, GH_NOT_LOGGED_IN_MESSAGE, grantDeployKey, hostGitReport, KEY_ALREADY_IN_USE_MESSAGE, keyReportLines, markOrphanWorktrees,
+  GP3_USD_PER_GIB_MONTH, GH_NOT_LOGGED_IN_MESSAGE, grantAccountKey, grantDeployKey, hostGitReport, KEY_ALREADY_IN_USE_MESSAGE, keyReportLines, markOrphanWorktrees,
   parseDanglingSeeds, parseRemoteWorkspaceList, readRemoteWorktrees, REMOTE_DANGLING_SEEDS_SCRIPT, worktreeGitLabel, REMOTE_WORKSPACE_LIST_SCRIPT, sessionLine, sessionSeed, sessionWhere, worktreeNote, type HostSession, type RemoteWorktree,
 } from "./cli.js";
 import { execFileSync } from "node:child_process";
@@ -419,6 +419,22 @@ describe("grantDeployKey through gh", () => {
     fs.writeFileSync(gh, `#!/bin/sh\nif [ "$1" = auth ]; then echo "auth $2" >> ${JSON.stringify(path.join(dir, "calls"))}; ${authStatus}; fi\necho "$@" > ${JSON.stringify(path.join(dir, "argv"))}\ncat "$4" > ${JSON.stringify(path.join(dir, "keyfile"))} 2>/dev/null\n${body}\n`, { mode: 0o755 });
     return gh;
   }
+
+  test("--account adds the key to the GitHub account as an authentication key, for every repository the account reaches", () => {
+    const gh = fakeGh("exit 0");
+    expect(grantAccountKey("ssh-ed25519 AAAA c", "i-1", gh)).toEqual({ ok: true });
+    const argv = fs.readFileSync(path.join(dir, "argv"), "utf-8").trim().split(" ");
+    expect(argv.slice(0, 2)).toEqual(["ssh-key", "add"]);
+    expect(argv[argv.indexOf("--title") + 1]).toBe("codecast-i-1");
+    expect(argv[argv.indexOf("--type") + 1]).toBe("authentication");
+    expect(fs.existsSync(argv[2]!)).toBe(false);
+    expect(fs.readFileSync(path.join(dir, "calls"), "utf-8")).toBe("auth status\n");
+  });
+
+  test("an account key GitHub already holds reports the one-key rule like a deploy key does", () => {
+    const gh = fakeGh("echo 'key is already in use' >&2; exit 1");
+    expect(grantAccountKey("ssh-ed25519 AAAA c", "i-1", gh)).toEqual({ ok: false, alreadyInUse: true, error: KEY_ALREADY_IN_USE_MESSAGE });
+  });
 
   test("adds the key with write access to the origin's repo from a 0600 scratch file that is removed afterwards", () => {
     const gh = fakeGh("exit 0");

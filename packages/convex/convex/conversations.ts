@@ -3504,11 +3504,12 @@ export const updateSlug = mutation({
 
 export const setPrivacy = mutation({
   args: {
+    api_token: v.optional(v.string()),
     conversation_id: v.id("conversations"),
     is_private: v.boolean(),
   },
   handler: async (ctx, args) => {
-    const authUserId = await getAuthUserId(ctx);
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!authUserId) {
       throw new Error("Unauthorized: must be logged in");
     }
@@ -3538,11 +3539,12 @@ export const setPrivacy = mutation({
 
 export const setTeamVisibility = mutation({
   args: {
+    api_token: v.optional(v.string()),
     conversation_id: v.id("conversations"),
     team_visibility: v.union(v.literal("summary"), v.literal("full"), v.null()),
   },
   handler: async (ctx, args) => {
-    const authUserId = await getAuthUserId(ctx);
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!authUserId) {
       throw new Error("Unauthorized: must be logged in");
     }
@@ -4464,7 +4466,7 @@ export const searchForCLI = query({
 // --messages` via ConvexClient.onUpdate (live push, no polling). Bounded take on
 // by_conversation_timestamp so a new message re-runs cheaply and pushes the
 // updated tail; the CLI dedupes by message_uuid. api_token authed; resolves a
-// short or full conversation id; same team-access check as readConversationMessages.
+// short or full conversation id; same access check as every CLI read (readableConversation).
 export const conversationMessagesForCLI = query({
   args: {
     api_token: v.string(),
@@ -4473,15 +4475,9 @@ export const conversationMessagesForCLI = query({
     full_content: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
-    const authUserId = await getAuthenticatedUserIdReadOnly(ctx, args.api_token);
-    if (!authUserId) return { error: "Unauthorized" };
-
-    const conv = await resolveConversationRef(ctx, args.conversation_id, authUserId);
-    if (!conv) return { error: "Conversation not found" };
-
-    if (!(await canOwnerOrTeamAccess(ctx, authUserId, conv))) {
-      return { error: "Access denied" };
-    }
+    const access = await readableConversation(ctx, args.api_token, args.conversation_id);
+    if ("error" in access) return { error: access.error };
+    const { conv } = access;
 
     const limit = Math.min(Math.max(args.limit ?? 30, 1), 100);
     const recent = await ctx.db
@@ -4507,41 +4503,46 @@ export const conversationMessagesForCLI = query({
   },
 });
 
-/** Messages one readConversationMessages call returns at most. */
+/** Messages one readConversationLines call returns at most. */
 export const READ_PAGE_SIZE = 50;
 
 /**
- * The lines one page of a read covers.
- *
- * An explicit range means every line in it: the page cap only decides how many
- * a single query returns, and `nextLine` tells the caller where the next page
- * starts, so a wide range is paged rather than silently cut at the cap. A start
- * with no end reads to the last message, as `cast read` documents. With no
- * range at all a read is the first twenty lines, and an anchored read is a
- * window around the anchor small enough to fit in one page.
+ * Bytes of message documents one step of a read deserializes before it hands
+ * back a cursor. Rows carry inline image data, thinking and embeddings, so a
+ * row count says nothing about memory: loading every row of a long session in
+ * one query ran out of Convex's 64 MB heap (`cast read`, `cast summary` and
+ * `cast diff` all failed on such a session, 2026-09-23).
  */
-export function readWindow(
+export const READ_STEP_BYTES = 4_000_000;
+
+/**
+ * The lines a read covers.
+ *
+ * An explicit range means every line in it, and a start with no end reads to
+ * the last message, as `cast read` documents. With no range at all a read is
+ * the first twenty lines, and an anchored read is a window of `context` lines
+ * on each side of the anchor. Pass `Infinity` as the count to learn how many
+ * lines the scan must reach before the true count is known.
+ */
+export function readRange(
   nonEmptyCount: number,
   args: { start_line?: number; end_line?: number; context?: number },
   targetLine: number | undefined,
-): { startLine: number; count: number; nextLine?: number } {
+): { startLine: number; lastLine: number } {
   let startLine: number;
   let endLine: number;
   if (targetLine !== undefined && args.start_line === undefined && args.end_line === undefined) {
     const ctxN = Math.min(Math.floor((READ_PAGE_SIZE - 1) / 2), Math.max(0, args.context ?? 10));
     startLine = Math.max(1, targetLine - ctxN);
-    endLine = Math.min(nonEmptyCount, targetLine + ctxN);
+    endLine = targetLine + ctxN;
   } else if (args.start_line === undefined && args.end_line === undefined) {
     startLine = 1;
-    endLine = Math.min(nonEmptyCount, 20);
+    endLine = 20;
   } else {
     startLine = Math.max(1, args.start_line ?? 1);
-    endLine = args.end_line ?? nonEmptyCount;
+    endLine = args.end_line ?? Infinity;
   }
-  const lastLine = Math.min(endLine, nonEmptyCount);
-  const count = Math.max(0, Math.min(lastLine - startLine + 1, READ_PAGE_SIZE));
-  const nextLine = count > 0 && startLine + count <= lastLine ? startLine + count : undefined;
-  return { startLine, count, nextLine };
+  return { startLine, lastLine: Math.min(endLine, nonEmptyCount) };
 }
 
 type ReadRangeArgs = {
@@ -4553,30 +4554,134 @@ type ReadRangeArgs = {
   around_message_id?: string;
   context?: number;
   include_file_changes?: boolean;
+  // The last N messages, found by scanning newest first.
+  tail?: number;
 };
 
+type ScanCursor = { creation_time: number; skip: number };
+
+type ReadSteps = {
+  scan: (args: {
+    api_token: string;
+    conversation_id: string;
+    after?: ScanCursor;
+    newest_first?: boolean;
+    around_message_id?: string;
+    include_file_changes?: boolean;
+  }) => Promise<any>;
+  fetch: (args: {
+    api_token: string;
+    conversation_id: string;
+    ids: string[];
+    first_line: number;
+    full_content?: boolean;
+  }) => Promise<any>;
+};
+
+/** Messages a tail read returns at most. */
+export const READ_TAIL_MAX = 500;
+
 /**
- * Read a whole range by paging readConversationMessages until it reports no
- * `next_line`. Pages after the first keep every argument but the start, so an
- * open end keeps reading to the last message and the anchor still marks its
- * line in the first page.
+ * Scan steps until `enough` says the ids cover what the read needs, or the
+ * last row is read. The first step carries the header and the file changes.
  */
-export async function readConversationRange(
-  runPage: (args: ReadRangeArgs) => Promise<any>,
+async function scanLines(
+  steps: ReadSteps,
   args: ReadRangeArgs,
-): Promise<any> {
-  const first = await runPage(args);
-  if (first?.error || first?.next_line === undefined) return first;
-  const messages = [...first.messages];
-  let next: number | undefined = first.next_line;
-  while (next !== undefined) {
-    // The first page already carried the file changes; later pages skip the read.
-    const page = await runPage({ ...args, start_line: next, include_file_changes: undefined });
-    if (page?.error) return page;
-    messages.push(...page.messages);
-    next = page.next_line;
+  newestFirst: boolean,
+  enough: (ids: string[], anchorIndex: number | undefined) => boolean,
+) {
+  const ids: string[] = [];
+  let head: any;
+  let anchorIndex: number | undefined;
+  let after: ScanCursor | undefined;
+  for (;;) {
+    const step = await steps.scan({
+      api_token: args.api_token,
+      conversation_id: args.conversation_id,
+      after,
+      newest_first: newestFirst || undefined,
+      around_message_id: anchorIndex === undefined ? args.around_message_id : undefined,
+      include_file_changes: head ? undefined : args.include_file_changes,
+    });
+    if (step?.error) return { error: step };
+    head ??= step;
+    if (step.anchor_index !== undefined && anchorIndex === undefined) anchorIndex = ids.length + step.anchor_index;
+    ids.push(...step.ids);
+    if (!step.cursor) return { ids, head, anchorIndex, complete: true };
+    after = step.cursor;
+    if (enough(ids, anchorIndex)) return { ids, head, anchorIndex, complete: false };
   }
-  return { ...first, messages, next_line: undefined };
+}
+
+/** Fetch the messages behind `ids` in steps, numbered from `firstLine`. */
+async function fetchLines(steps: ReadSteps, args: ReadRangeArgs, ids: string[], firstLine: number) {
+  const messages: any[] = [];
+  let done = 0;
+  while (done < ids.length) {
+    const page = await steps.fetch({
+      api_token: args.api_token,
+      conversation_id: args.conversation_id,
+      ids: ids.slice(done),
+      first_line: firstLine + done,
+      full_content: args.full_content,
+    });
+    if (page?.error) return { error: page };
+    messages.push(...page.messages);
+    done += page.consumed;
+  }
+  return { messages };
+}
+
+/**
+ * Read a range of a conversation in steps that each stay under a byte budget.
+ *
+ * Line numbers count only non-empty messages, so the lines cannot be found
+ * without reading the rows before them. The scan steps return just the ids of
+ * the non-empty rows, and stop as soon as the range (and the anchor) is
+ * reached. The fetch steps then load only the rows in the range.
+ *
+ * A tail read scans newest first and stops after N messages. When that scan
+ * reaches the first row the lines carry their true numbers; otherwise the
+ * true numbers are unknown without reading the whole session, so the lines
+ * count back from the end: -1 is the last message.
+ */
+export async function readConversationRange(steps: ReadSteps, args: ReadRangeArgs): Promise<any> {
+  if (args.tail !== undefined) {
+    const n = Math.max(1, Math.min(Math.floor(args.tail), READ_TAIL_MAX));
+    const scan = await scanLines(steps, { ...args, around_message_id: undefined }, true, (ids) => ids.length >= n);
+    if ("error" in scan) return scan.error;
+    const ids = scan.ids.slice(0, n).reverse();
+    const count = scan.complete ? scan.ids.length : Math.max(scan.ids.length, scan.head.conversation.message_count ?? 0);
+    const fetched = await fetchLines(steps, args, ids, scan.complete ? count - ids.length + 1 : -ids.length);
+    if ("error" in fetched) return fetched.error;
+    return { conversation: { ...scan.head.conversation, message_count: count }, messages: fetched.messages };
+  }
+
+  const anchorPending = (anchorIndex: number | undefined) => args.around_message_id !== undefined && anchorIndex === undefined;
+  const scan = await scanLines(steps, args, false, (ids, anchorIndex) =>
+    ids.length >= readRange(Infinity, args, anchorIndex === undefined ? undefined : anchorIndex + 1).lastLine && !anchorPending(anchorIndex));
+  if ("error" in scan) return scan.error;
+  const { ids, head, anchorIndex, complete } = scan;
+
+  // An anchor on an empty row snaps to the next visible line, or the last one.
+  const targetLine = anchorIndex === undefined || ids.length === 0 ? undefined : Math.min(anchorIndex, ids.length - 1) + 1;
+  // The stored count includes empty rows; it stands in only when the scan stopped early.
+  const count = complete ? ids.length : Math.max(ids.length, head.conversation.message_count ?? 0);
+  const { startLine, lastLine } = readRange(count, args, targetLine);
+  const fetched = await fetchLines(steps, args, ids.slice(startLine - 1, Math.min(lastLine, ids.length)), startLine);
+  if ("error" in fetched) return fetched.error;
+
+  const { file_changes, file_changes_truncated } = head;
+  return {
+    conversation: { ...head.conversation, message_count: count },
+    messages: fetched.messages,
+    ...(args.include_file_changes ? { file_changes, file_changes_truncated } : {}),
+    // Line of the anchored message (1-based) so callers can highlight it.
+    target_line: targetLine,
+    target_message_id: targetLine !== undefined ? args.around_message_id : undefined,
+    target_missing: (args.around_message_id !== undefined && targetLine === undefined) || undefined,
+  };
 }
 
 /** `cast diff`'s tree input: the changes a fold reads, with text, under a
@@ -4586,223 +4691,165 @@ async function foldChangesPayload(ctx: QueryCtx, conversationId: Id<"conversatio
   return { file_changes: changes, file_changes_truncated: truncated || undefined };
 }
 
-export const readConversationMessages = query({
+/** The conversation an API token names and may read, or the reason it may not. */
+async function readableConversation(ctx: QueryCtx, apiToken: string, ref: string) {
+  const authUserId = await getAuthenticatedUserIdReadOnly(ctx, apiToken);
+  if (!authUserId) return { error: "Unauthorized" as const };
+  const user = await ctx.db.get(authUserId);
+  if (!user) return { error: "User not found" as const };
+  const conv = await resolveConversationRef(ctx, ref, authUserId);
+  if (!conv) return { error: "Conversation not found" as const };
+  // Owners read their own conversations; team members read non-private ones.
+  if (!(await canOwnerOrTeamAccess(ctx, authUserId, conv))) return { error: "Access denied" as const };
+  return { conv, user };
+}
+
+/**
+ * Stream a conversation's message rows from a resume point, so only one row
+ * body is in the heap at a time, until READ_STEP_BYTES have been read or
+ * `visit` returns true. Returns where the next step resumes, or undefined once
+ * the last row is read.
+ */
+async function streamMessageRows(
+  ctx: QueryCtx,
+  conversationId: Id<"conversations">,
+  after: ScanCursor | undefined,
+  order: "asc" | "desc",
+  visit: (m: Doc<"messages">) => boolean | void,
+): Promise<ScanCursor | undefined> {
+  const rows = ctx.db
+    .query("messages")
+    .withIndex("by_conversation_id", (q) => {
+      const conv = q.eq("conversation_id", conversationId);
+      if (!after) return conv;
+      return order === "asc" ? conv.gte("_creationTime", after.creation_time) : conv.lte("_creationTime", after.creation_time);
+    })
+    .order(order);
+  let bytes = 0;
+  let lastTime = after?.creation_time;
+  let sameTime = after?.skip ?? 0;
+  let toSkip = after?.skip ?? 0;
+  for await (const m of rows) {
+    if (toSkip > 0 && m._creationTime === after?.creation_time) {
+      toSkip--;
+      continue;
+    }
+    toSkip = 0;
+    sameTime = m._creationTime === lastTime ? sameTime + 1 : 1;
+    lastTime = m._creationTime;
+    bytes += approxMessageBytes(m as any);
+    if (visit(m) === true || bytes >= READ_STEP_BYTES) return { creation_time: m._creationTime, skip: sameTime };
+  }
+  return undefined;
+}
+
+/**
+ * One scan step of a read: the ids of the non-empty messages after `after`,
+ * oldest first, or newest first for a tail read. `cursor` is absent once the
+ * last row is read.
+ */
+export const scanConversationLines = internalQuery({
   args: {
     api_token: v.string(),
     conversation_id: v.string(),
-    start_line: v.optional(v.number()),
-    end_line: v.optional(v.number()),
-    full_content: v.optional(v.boolean()),
-    // Anchor the window on a specific message (its Convex _id, as in the web's
-    // `#msg-<id>` share links). When set without an explicit range, the result
-    // is a window of `context` messages on each side of the anchor.
+    // Resume point: rows with this creation time, of which `skip` were already
+    // scanned. Two rows can share a creation time, so the time alone is not enough.
+    after: v.optional(v.object({ creation_time: v.number(), skip: v.number() })),
+    newest_first: v.optional(v.boolean()),
+    // Anchor on a message (its Convex _id, as in the web's `#msg-<id>` links).
     around_message_id: v.optional(v.string()),
-    context: v.optional(v.number()),
     // Also return the conversation's materialized file changes (Edit/Write
-    // calls plus disk-observed Bash changes) as `file_changes`; `cast diff`
-    // folds them into its file tree.
+    // calls plus disk-observed Bash changes); `cast diff` folds them into its tree.
     include_file_changes: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
-    const authUserId = await getAuthenticatedUserIdReadOnly(ctx, args.api_token);
-    if (!authUserId) {
-      return { error: "Unauthorized" };
-    }
-    const user = await ctx.db.get(authUserId);
-    if (!user) {
-      return { error: "User not found" };
-    }
+    const access = await readableConversation(ctx, args.api_token, args.conversation_id);
+    if ("error" in access) return { error: access.error };
+    const { conv } = access;
+    const after = args.after;
 
-    const conv = await resolveConversationRef(ctx, args.conversation_id, authUserId);
-    if (!conv) {
-      return { error: "Conversation not found" };
-    }
-
-    // Check access - user can see their own conversations, or non-private
-    // conversations from team members
-    if (!(await canOwnerOrTeamAccess(ctx, authUserId, conv))) {
-      return { error: "Access denied" };
-    }
-
-    const firstMessages = await ctx.db
-      .query("messages")
-      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
-      .order("asc")
-      .take(10);
-
+    const ids: string[] = [];
+    let anchorIndex: number | undefined;
     let firstUserMessage = "";
-    for (const msg of firstMessages) {
-      const hasToolResults = msg.tool_results && msg.tool_results.length > 0;
-      if (msg.role === "user" && !hasToolResults) {
-        const text = msg.content?.trim();
-        if (text) {
-          firstUserMessage = text.slice(0, 120);
-          if (text.length > 120) firstUserMessage += "...";
-          break;
-        }
+    let scanned = 0;
+    const cursor = await streamMessageRows(ctx, conv._id, after, args.newest_first ? "desc" : "asc", (m) => {
+      if (m._id === args.around_message_id) anchorIndex = ids.length;
+      if (isNonEmptyMessage(m)) ids.push(m._id);
+      // The title falls back to the first user prompt among the first rows.
+      if (!after && !args.newest_first && !firstUserMessage && scanned < 10 && m.role === "user" && !m.tool_results?.length) {
+        const text = m.content?.trim();
+        if (text) firstUserMessage = text.length > 120 ? `${text.slice(0, 120)}...` : text;
       }
-    }
-
-    const title = conv.title
-      || firstUserMessage
-      || (conv.slug ? formatSlugAsTitle(conv.slug) : null)
-      || "New Session";
-
-    // Get all messages and filter out empty ones (streaming artifacts)
-    const allMessages = await ctx.db
-      .query("messages")
-      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
-      .order("asc")
-      .collect();
-
-    const nonEmptyMessages = allMessages.filter(isNonEmptyMessage);
-
-    const nonEmptyCount = nonEmptyMessages.length;
-
-    // When anchored to a specific message (e.g. from a #msg-<id> share link),
-    // resolve it to a line number so we can center the window on it. The id is
-    // the message's Convex _id, matching the web's `msg-<_id>` DOM anchors.
-    let targetLine: number | undefined;
-    let targetMissing = false;
-    if (args.around_message_id) {
-      let targetIdx = nonEmptyMessages.findIndex((m) => m._id === args.around_message_id);
-      if (targetIdx < 0) {
-        // The anchored message may have been filtered out as empty — snap to the
-        // nearest visible message so the window still lands in the right place.
-        const rawIdx = allMessages.findIndex((m) => m._id === args.around_message_id);
-        if (rawIdx >= 0) {
-          let before = 0;
-          for (let i = 0; i < rawIdx; i++) {
-            if (isNonEmptyMessage(allMessages[i])) before++;
-          }
-          targetIdx = Math.min(before, nonEmptyCount - 1);
-        }
-      }
-      if (targetIdx >= 0) targetLine = targetIdx + 1;
-      else targetMissing = true;
-    }
-
-    const window = readWindow(nonEmptyCount, args, targetLine);
-    const startIdx = window.startLine - 1;
-    const count = window.count;
-
-    const slicedMessages = nonEmptyMessages.slice(startIdx, startIdx + count);
-
-    const fullContent = args.full_content === true;
-
-    const messages = slicedMessages.map((m, idx) => {
-      const truncateToolCalls = (calls: typeof m.tool_calls) => {
-        if (!calls) return undefined;
-        return calls.map((tc) => ({
-          id: tc.id,
-          name: tc.name,
-          input: fullContent ? tc.input : (tc.input && tc.input.length > 500 ? tc.input.slice(0, 500) + "..." : tc.input),
-        }));
-      };
-
-      const truncateToolResults = (results: typeof m.tool_results) => {
-        if (!results) return undefined;
-        return results.map((tr) => ({
-          tool_use_id: tr.tool_use_id,
-          content: fullContent ? tr.content : (tr.content && tr.content.length > 1000 ? tr.content.slice(0, 1000) + "..." : tr.content),
-          is_error: tr.is_error,
-        }));
-      };
-
-      return {
-        // The message's Convex _id — the anchor the web's `#msg-<id>` deep links
-        // use, so `cast link` can mint a resolvable permalink to a line that
-        // `cast read` just showed.
-        id: m._id,
-        line: startIdx + idx + 1,
-        role: m.role,
-        content: m.content || "",
-        timestamp: new Date(m.timestamp).toISOString(),
-        message_uuid: m.message_uuid || undefined,
-        tool_calls: truncateToolCalls(m.tool_calls),
-        tool_results: truncateToolResults(m.tool_results),
-      };
+      scanned++;
     });
 
     return {
-      conversation: {
-        id: conv._id,
-        title,
-        agent_type: conv.agent_type || "claude_code",
-        project_path: conv.project_path || null,
-        message_count: nonEmptyCount,
-        updated_at: new Date(conv.updated_at).toISOString(),
-      },
-      messages,
+      ids,
+      anchor_index: anchorIndex,
+      cursor,
+      ...(after ? {} : {
+        conversation: {
+          id: conv._id,
+          title: conv.title || firstUserMessage || (conv.slug ? formatSlugAsTitle(conv.slug) : null) || "New Session",
+          agent_type: conv.agent_type || "claude_code",
+          project_path: conv.project_path || null,
+          message_count: conv.message_count || 0,
+          updated_at: new Date(conv.updated_at).toISOString(),
+        },
+      }),
       ...(args.include_file_changes ? await foldChangesPayload(ctx, conv._id) : {}),
-      // Line of the anchored message (1-based) so callers can highlight it.
-      target_line: targetLine,
-      target_message_id: targetLine !== undefined ? args.around_message_id : undefined,
-      target_missing: targetMissing || undefined,
-      // First line of the requested range this page did not reach. The HTTP
-      // route keeps asking from here until the whole range is covered.
-      next_line: window.nextLine,
     };
   },
 });
 
-export const exportConversationMessages = query({
+/**
+ * One fetch step of a read: the messages behind `ids`, numbered from
+ * `first_line`, until READ_PAGE_SIZE rows or READ_STEP_BYTES are read.
+ * `consumed` says how many ids it covered, so the caller asks for the rest.
+ */
+export const readConversationLines = internalQuery({
   args: {
     api_token: v.string(),
     conversation_id: v.string(),
+    ids: v.array(v.string()),
+    first_line: v.number(),
+    full_content: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
-    const authUserId = await getAuthenticatedUserIdReadOnly(ctx, args.api_token);
-    if (!authUserId) {
-      return { error: "Unauthorized" };
-    }
-    const user = await ctx.db.get(authUserId);
-    if (!user) {
-      return { error: "User not found" };
-    }
+    const access = await readableConversation(ctx, args.api_token, args.conversation_id);
+    if ("error" in access) return { error: access.error };
+    const { conv } = access;
+    const fullContent = args.full_content === true;
+    const cap = (text: string | undefined, max: number) =>
+      fullContent || !text || text.length <= max ? text : `${text.slice(0, max)}...`;
 
-    const conv = await resolveConversationRef(ctx, args.conversation_id, authUserId);
-    if (!conv) {
-      return { error: "Conversation not found" };
-    }
-
-    if (!(await canOwnerOrTeamAccess(ctx, authUserId, conv))) {
-      return { error: "Access denied" };
-    }
-
-    const allMessages = await ctx.db
-      .query("messages")
-      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
-      .order("asc")
-      .collect();
-
-    const nonEmptyMessages = allMessages.filter(isNonEmptyMessage);
-
-    return {
-      conversation: {
-        id: conv._id,
-        title: conv.title || "New Session",
-        session_id: conv.session_id,
-        agent_type: conv.agent_type,
-        project_path: conv.project_path || null,
-        git_root: conv.git_root || null,
-        git_remote_url: conv.git_remote_url || null,
-        model: conv.model || null,
-        message_count: nonEmptyMessages.length,
-        started_at: new Date(conv.started_at).toISOString(),
-        updated_at: new Date(conv.updated_at).toISOString(),
-      },
-      messages: nonEmptyMessages.map((m) => ({
+    const messages = [];
+    let consumed = 0;
+    let bytes = 0;
+    for (const raw of args.ids.slice(0, READ_PAGE_SIZE)) {
+      if (consumed > 0 && bytes >= READ_STEP_BYTES) break;
+      const line = args.first_line + consumed;
+      consumed++;
+      const id = ctx.db.normalizeId("messages", raw);
+      const m = id ? await ctx.db.get(id) : null;
+      // A row deleted since the scan keeps its line number but shows nothing.
+      if (!m || m.conversation_id !== conv._id) continue;
+      bytes += approxMessageBytes(m as any);
+      messages.push({
+        // The message's Convex _id — the anchor the web's `#msg-<id>` deep links
+        // use, so `cast link` can mint a resolvable permalink to a line that
+        // `cast read` just showed.
+        id: m._id,
+        line,
         role: m.role,
         content: m.content || "",
-        thinking: m.thinking || undefined,
         timestamp: new Date(m.timestamp).toISOString(),
         message_uuid: m.message_uuid || undefined,
-        tool_calls: m.tool_calls,
-        tool_results: m.tool_results,
-        subtype: m.subtype || undefined,
-      })),
-    };
+        tool_calls: m.tool_calls?.map((tc) => ({ id: tc.id, name: tc.name, input: cap(tc.input, 500) })),
+        tool_results: m.tool_results?.map((tr) => ({ tool_use_id: tr.tool_use_id, content: cap(tr.content, 1000), is_error: tr.is_error })),
+      });
+    }
+    return { messages, consumed };
   },
 });
 
@@ -4814,43 +4861,42 @@ export const exportConversationMessagesPage = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const authUserId = await getAuthenticatedUserIdReadOnly(ctx, args.api_token);
-    if (!authUserId) {
-      return { error: "Unauthorized" };
-    }
-    const user = await ctx.db.get(authUserId);
-    if (!user) {
-      return { error: "User not found" };
-    }
+    const access = await readableConversation(ctx, args.api_token, args.conversation_id);
+    if ("error" in access) return { error: access.error };
+    const { conv } = access;
 
-    const conv = await resolveConversationRef(ctx, args.conversation_id, authUserId);
-    if (!conv) {
-      return { error: "Conversation not found" };
+    // The cursor is a JSON resume point from streamMessageRows. Pages stop at
+    // READ_STEP_BYTES as well as at `limit`, because one page of image rows
+    // can otherwise exceed the 64 MB heap.
+    let after: ScanCursor | undefined;
+    if (args.cursor) {
+      try {
+        const parsed = JSON.parse(args.cursor);
+        if (typeof parsed?.creation_time !== "number" || typeof parsed?.skip !== "number") throw new Error();
+        after = { creation_time: parsed.creation_time, skip: parsed.skip };
+      } catch {
+        return { error: "Invalid cursor" };
+      }
     }
-
-    if (!(await canOwnerOrTeamAccess(ctx, authUserId, conv))) {
-      return { error: "Access denied" };
-    }
-
     const pageSize = Math.max(1, Math.min(args.limit ?? 500, 1000));
-    const page = await ctx.db
-      .query("messages")
-      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
-      .order("asc")
-      .paginate({ cursor: args.cursor ?? null, numItems: pageSize });
-
-    const messages = page.page
-      .filter(isNonEmptyMessage)
-      .map((m) => ({
-        role: m.role,
-        content: m.content || "",
-        thinking: m.thinking || undefined,
-        timestamp: new Date(m.timestamp).toISOString(),
-        message_uuid: m.message_uuid || undefined,
-        tool_calls: m.tool_calls,
-        tool_results: m.tool_results,
-        subtype: m.subtype || undefined,
-      }));
+    const messages: any[] = [];
+    let read = 0;
+    const next = await streamMessageRows(ctx, conv._id, after, "asc", (m) => {
+      read++;
+      if (isNonEmptyMessage(m)) {
+        messages.push({
+          role: m.role,
+          content: m.content || "",
+          thinking: m.thinking || undefined,
+          timestamp: new Date(m.timestamp).toISOString(),
+          message_uuid: m.message_uuid || undefined,
+          tool_calls: m.tool_calls,
+          tool_results: m.tool_results,
+          subtype: m.subtype || undefined,
+        });
+      }
+      return read >= pageSize;
+    });
 
     return {
       conversation: {
@@ -4867,8 +4913,8 @@ export const exportConversationMessagesPage = query({
         updated_at: new Date(conv.updated_at).toISOString(),
       },
       messages,
-      next_cursor: page.isDone ? null : page.continueCursor,
-      done: page.isDone,
+      next_cursor: next ? JSON.stringify(next) : null,
+      done: !next,
     };
   },
 });

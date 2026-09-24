@@ -71,7 +71,7 @@ function UserProfileContent() {
   const currentUser = useQuery(api.users.getCurrentUser);
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
   const teamId = activeTeamId || currentUser?.active_team_id || currentUser?.team_id;
-  const myTeams = useQuery(api.teams.getUserTeams);
+  const myTeams = useQuery(api.teams.getUserTeams, {});
 
   // Own profile shows everything across teams; a teammate's profile is scoped
   // to the current workspace so you see their contribution to *this* team.

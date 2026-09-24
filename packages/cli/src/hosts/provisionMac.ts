@@ -4,6 +4,7 @@ import { pushCodecastConfig } from "../browser/provisionLinux.js";
 import { agentCliInstallScript, parseAgentCliReport } from "../browser/provisionAgents.js";
 import { readInstalledClientVersions } from "../remote/agentAuth.js";
 import { remoteHome, sshBase, type RemoteHost } from "../remote/session-move.js";
+import { REMOTE_DEVICE_MARKER_REL } from "../remote/device.js";
 import { cwdGitRoot } from "../cloud/hostGit.js";
 import { readHostDeviceId, readyHostHome, remoteRepoPath, waitForDeviceOnline } from "../cloud/prepare.js";
 import { convexClient } from "../remote/convexClient.js";
@@ -52,6 +53,9 @@ fi
 CAST_BIN=$(command -v cast)
 case "$CAST_BIN" in *[!a-zA-Z0-9/_.-]*) echo 'Invalid cast path' >&2; exit 1;; esac
 mkdir -p "$HOME/.codecast/logs"
+# The marker makes the box a remote device for any daemon started here, not
+# only the one launchd starts (remote/device.ts).
+: > "$HOME/${REMOTE_DEVICE_MARKER_REL}"
 sudo tee /Library/LaunchDaemons/${label}.plist >/dev/null <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

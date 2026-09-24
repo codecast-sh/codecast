@@ -426,14 +426,12 @@ export const KEY_ALREADY_IN_USE_MESSAGE =
  * already in use" — reported as such instead of as a raw API error, with the
  * choice the human has to make.
  */
-export function grantDeployKey(
+/** Add a key to GitHub through gh from a 0600 scratch file that is removed afterwards; `argv` names the gh verb that adds it. */
+function ghAddKey(
+  gh: string,
   pubkey: string,
-  origin: string,
-  hostId: string,
-  gh = "gh",
+  argv: (file: string) => string[],
 ): { ok: boolean; alreadyInUse?: boolean; error?: string } {
-  const repo = githubRepo(origin);
-  if (!repo) return { ok: false, error: `${origin} is not a GitHub repository; add the key by hand` };
   const auth = spawnSync(gh, ["auth", "status"], { encoding: "utf-8", stdio: "pipe", timeout: 60_000, env: process.env });
   if (auth.error) return { ok: false, error: (auth.error as NodeJS.ErrnoException).code === "ENOENT" ? "gh is not installed" : auth.error.message };
   if (auth.status !== 0) return { ok: false, error: GH_NOT_LOGGED_IN_MESSAGE };
@@ -441,8 +439,7 @@ export function grantDeployKey(
   const file = path.join(dir, "key.pub");
   try {
     fs.writeFileSync(file, `${pubkey}\n`, { mode: 0o600 });
-    const r = spawnSync(gh, ["repo", "deploy-key", "add", file, "--allow-write", "--title", `codecast-${hostId}`, "-R", repo],
-      { encoding: "utf-8", stdio: "pipe", timeout: 60_000, env: process.env });
+    const r = spawnSync(gh, argv(file), { encoding: "utf-8", stdio: "pipe", timeout: 60_000, env: process.env });
     if (r.error) return { ok: false, error: (r.error as NodeJS.ErrnoException).code === "ENOENT" ? "gh is not installed" : r.error.message };
     if (r.status === 0) return { ok: true };
     const err = `${r.stderr ?? ""}${r.stdout ?? ""}`;
@@ -451,6 +448,32 @@ export function grantDeployKey(
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+}
+
+/** The host's key as a deploy key with write access on one repository. */
+export function grantDeployKey(
+  pubkey: string,
+  origin: string,
+  hostId: string,
+  gh = "gh",
+): { ok: boolean; alreadyInUse?: boolean; error?: string } {
+  const repo = githubRepo(origin);
+  if (!repo) return { ok: false, error: `${origin} is not a GitHub repository; add the key by hand` };
+  return ghAddKey(gh, pubkey, (file) => ["repo", "deploy-key", "add", file, "--allow-write", "--title", `codecast-${hostId}`, "-R", repo]);
+}
+
+/**
+ * The host's key on the account itself: the host then reaches every
+ * repository this GitHub account can, which is what a host that carries this
+ * person's sessions across several repositories needs. gh needs the
+ * admin:public_key scope for it (`gh auth refresh -s admin:public_key`).
+ */
+export function grantAccountKey(
+  pubkey: string,
+  hostId: string,
+  gh = "gh",
+): { ok: boolean; alreadyInUse?: boolean; error?: string } {
+  return ghAddKey(gh, pubkey, (file) => ["ssh-key", "add", file, "--title", `codecast-${hostId}`, "--type", "authentication"]);
 }
 
 export interface HostMirrorStamp {
@@ -817,7 +840,7 @@ export function keyReportLines(host: CloudHost, state: HostGitState, origin: str
   if (deploy) lines.push(`Recommended: add it as a deploy key with WRITE access (one repo): ${fmt.highlight(deploy)}`);
   else lines.push(`Add it wherever ${origin} takes keys, with write access`);
   lines.push(fmt.muted(`Account-level key (broad: every repo you can reach): ${ACCOUNT_KEY_URL}`));
-  if (deploy) lines.push(fmt.muted(`or: cast hosts key ${host.id} --grant   (uses gh, adds it with write access)`));
+  if (deploy) lines.push(fmt.muted(`or: cast hosts key ${host.id} --grant   (uses gh, adds it with write access; --account for every repository you can reach)`));
   return lines;
 }
 
@@ -1067,8 +1090,9 @@ export function buildHostsCommand(parent: Command): Command {
     .option("--repo <origin>", "The origin to probe/grant (default: this directory's `git remote get-url origin`)")
     .option("--check", "Probe read/write access only; print nothing to paste")
     .option("--grant", "Add it as a deploy key with write access through `gh` (checks `gh auth status` first)")
+    .option("--account", "With --grant: add it to your GitHub account instead, so the host reaches every repository you can (gh needs the admin:public_key scope)")
     .option("--git-identity <identity>", 'The identity commits on the host carry ("Name <email>"); default: this laptop\'s git config')
-    .action(async (id: string | undefined, o: { repo?: string; check?: boolean; grant?: boolean; gitIdentity?: string }) => {
+    .action(async (id: string | undefined, o: { repo?: string; check?: boolean; grant?: boolean; account?: boolean; gitIdentity?: string }) => {
       const h = pick(id, "no linux host registered");
       const localGitRoot = cwdGitRoot();
       const origin = o.repo ?? repoOrigin(localGitRoot);
@@ -1093,9 +1117,9 @@ export function buildHostsCommand(parent: Command): Command {
         recordGitState(h.id, state);
         if (!state.pubkey) die("the host minted no key", "ssh-keygen is missing there — `cast hosts provision` installs the base packages");
         if (o.grant && !state.access.write) {
-          const r = grantDeployKey(state.pubkey, origin, h.id);
+          const r = o.account ? grantAccountKey(state.pubkey, h.id) : grantDeployKey(state.pubkey, origin, h.id);
           if (r.ok) {
-            say("deploy key added with write access — re-probing");
+            say(o.account ? "key added to your GitHub account — re-probing" : "deploy key added with write access — re-probing");
             state = probe();
             recordGitState(h.id, state);
           } else {

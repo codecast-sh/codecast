@@ -21,7 +21,7 @@ const TEAM_FEATURE_CATALOG = defineFeatures(TEAM_FEATURES);
  *  rather than a premature false. */
 function useTeamSource(): FeatureSource<TeamFeatureKey> | undefined {
   const currentUser = useQuery(api.users.getCurrentUser);
-  const teams = useQuery(api.teams.getUserTeams);
+  const teams = useQuery(api.teams.getUserTeams, {});
   if (currentUser === undefined || teams === undefined) return undefined;
   const activeTeamId = currentUser?.active_team_id || currentUser?.team_id;
   const active = teams?.find((t: any) => t && String(t._id) === String(activeTeamId));

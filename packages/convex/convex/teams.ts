@@ -1,6 +1,7 @@
+import { getUserOrToken } from "./lib/auth";
 import { mutation, query, action, internalMutation, internalQuery } from "./functions";
 import { v } from "convex/values";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { api, internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { isTeamAdmin } from "./privacy";
@@ -101,9 +102,9 @@ export function validateTeamCreateArgs(args: {
 }
 
 export const getUserTeams = query({
-  args: {},
-  handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
+  args: { api_token: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getUserOrToken(ctx, args.api_token);
     if (!userId) {
       return [];
     }
@@ -280,6 +281,53 @@ export const createTeam = mutation({
   },
 });
 
+/**
+ * Add a person to a team as a member: the membership row (its sync scope event
+ * rides the change log), their first team pointer if they have none, and the
+ * team activity line. Idempotent.
+ */
+async function addTeamMember(ctx: any, userId: Id<"users">, team: Doc<"teams">, how: string): Promise<void> {
+  const existingMembership = await ctx.db
+    .query("team_memberships")
+    .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", team._id))
+    .unique();
+  if (existingMembership) return;
+  const now = Date.now();
+  await ctx.db.insert("team_memberships", {
+    user_id: userId,
+    team_id: team._id,
+    role: "member",
+    joined_at: now,
+  });
+  const user = await ctx.db.get(userId);
+  if (!user?.team_id) {
+    await ctx.db.patch(userId, {
+      team_id: team._id,
+      role: "member",
+      active_team_id: team._id,
+    });
+  }
+
+  const actorName = user?.name || user?.email || "A member";
+  await ctx.scheduler.runAfter(0, internal.teamActivity.recordTeamActivity, {
+    team_id: team._id,
+    actor_user_id: userId,
+    event_type: "member_joined" as const,
+    title: `${actorName} joined ${team.name}`,
+    description: how,
+  });
+}
+
+/** Operator path: add an existing user to a team without an invite code. */
+export const addMemberByOperator = internalMutation({
+  args: { user_id: v.id("users"), team_id: v.id("teams") },
+  handler: async (ctx, args) => {
+    const team = await ctx.db.get(args.team_id);
+    if (!team || team.deleted_at) throw new Error("No such team");
+    await addTeamMember(ctx, args.user_id, team, "Added by a team admin");
+  },
+});
+
 export const joinTeam = mutation({
   args: {
     invite_code: v.string(),
@@ -302,38 +350,7 @@ export const joinTeam = mutation({
     if (team.invite_code_expires_at && Date.now() > team.invite_code_expires_at) {
       throw new Error("Invite code expired");
     }
-    const existingMembership = await ctx.db
-      .query("team_memberships")
-      .withIndex("by_user_team", (q) => q.eq("user_id", authUserId).eq("team_id", team._id))
-      .unique();
-    if (existingMembership) {
-      return team._id;
-    }
-    const now = Date.now();
-    await ctx.db.insert("team_memberships", {
-      user_id: authUserId,
-      team_id: team._id,
-      role: "member",
-      joined_at: now,
-    });
-    const user = await ctx.db.get(authUserId);
-    if (!user?.team_id) {
-      await ctx.db.patch(authUserId, {
-        team_id: team._id,
-        role: "member",
-        active_team_id: team._id,
-      });
-    }
-
-    const actorName = user?.name || user?.email || "A member";
-    await ctx.scheduler.runAfter(0, internal.teamActivity.recordTeamActivity, {
-      team_id: team._id,
-      actor_user_id: authUserId,
-      event_type: "member_joined" as const,
-      title: `${actorName} joined ${team.name}`,
-      description: "Joined via invite code",
-    });
-
+    await addTeamMember(ctx, authUserId, team, "Joined via invite code");
     return team._id;
   },
 });
@@ -513,6 +530,10 @@ export const getTeamMembers = query({
           // for a HUMAN-only role (e.g. the session owners multi-select) filter
           // these out — a bot's inbox is nobody's, so it can't be an owner.
           is_bot: !!user.is_bot,
+          // Which kind of bot: "anchor" is the workspace's agent, "slack" is
+          // a Slack person's shadow identity (chat mentions need them; the
+          // face row leaves them out, they cannot be called or messaged here).
+          bot_kind: user.is_bot ? user.bot_kind : undefined,
           role: m.role,
           daemon_last_seen: user.daemon_last_seen,
           github_username: user.github_username,
@@ -1422,12 +1443,14 @@ const teamVisibilityLevelArg = v.union(
 
 export const setTeamVisibility = mutation({
   args: {
+    // A CLI caller (cast sharing) presents its token; the web signs in.
+    api_token: v.optional(v.string()),
     team_id: v.id("teams"),
     visibility: teamVisibilityLevelArg,
     mode: v.optional(v.union(v.literal("everything"), v.literal("going_forward"))),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
+    const userId = await getUserOrToken(ctx, args.api_token);
     if (!userId) {
       throw new Error("Not authenticated");
     }
