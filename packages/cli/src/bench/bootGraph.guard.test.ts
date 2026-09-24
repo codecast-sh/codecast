@@ -188,7 +188,10 @@ describe("command groups stay off the boot graph", () => {
     // 253 after hook admission: statusHook.ts now reads its token through
     // hookIdentity.ts (node and atomicWrite only), and session-move.ts copies
     // worktree files through workspace/copyFiles.ts.
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(262);
+    // 263 after sync exclusions: syncScope.ts reads its folder lists through
+    // @codecast/shared/team/syncPlan (no imports), the rule the settings page
+    // and `cast sharing` read too.
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(263);
     // 3404 KB with those eleven leaves and the growth of index.ts itself.
     // 3407 after ct-52819: the watchdog pass deadline in supervision.ts and the
     // launchd kickstart in index.ts's startDaemon. No new file.
@@ -245,7 +248,8 @@ describe("command groups stay off the boot graph", () => {
     // installed, so it carries the script constants and the handler modules that
     // define them; plus deviceAccount.ts, vault/vaultCapability.ts and
     // workspace/copyFiles.ts, all leaves on node alone or the workspace manifest.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(357);
+    // 358 after sync exclusions: the shared folder list rule in syncScope.ts.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(358);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {
