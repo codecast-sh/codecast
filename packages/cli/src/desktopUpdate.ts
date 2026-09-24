@@ -14,7 +14,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { compareVersions, isBelowMinimum } from "@platform/cli-kit/update";
 import { defaultConfigDir } from "./config/configDir.js";
-import { execFileSync, spawnSync } from "./proc.js";
+import { execFileAsync, execFileSync, spawnSync } from "./proc.js";
 import { isDevMode } from "./update.js";
 import { codecastDir } from "./codecastDir.js";
 
@@ -35,6 +35,10 @@ const SHIPIT_CACHE = path.join(process.env.HOME || "", "Library", "Caches", "sh.
 // Don't re-download the (~95MB) artifact for the same target version more often
 // than this when an attempt fails; a successful apply no-ops via version compare.
 const RETRY_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6h
+// An attempt made by another process may never have failed: the watchdog
+// replaces a daemon it thinks is hung, and an install killed that way logs
+// nothing. It waits this long instead of the full throttle.
+const INTERRUPTED_RETRY_MS = 15 * 60 * 1000;
 
 type Logger = (msg: string) => void;
 
@@ -42,6 +46,8 @@ interface DesktopUpdateState {
   appliedVersion?: string;
   lastAttemptVersion?: string;
   lastAttemptAt?: number;
+  /** The daemon process that made the attempt (see INTERRUPTED_RETRY_MS). */
+  lastAttemptPid?: number;
   /** Inode of the installed bundle that last passed codesign (installedBundleIntact). */
   intactIno?: number;
 }
@@ -427,19 +433,20 @@ export async function checkForDesktopUpdate(
 
     // Throttle repeated failures for the same target version (skip when forced).
     const state = readState();
+    const retryAfter = state.lastAttemptPid === process.pid ? RETRY_INTERVAL_MS : INTERRUPTED_RETRY_MS;
     if (
       !force &&
       state.lastAttemptVersion === version &&
       state.lastAttemptAt &&
-      Date.now() - state.lastAttemptAt < RETRY_INTERVAL_MS
+      Date.now() - state.lastAttemptAt < retryAfter
     ) {
       if (belowFloor) {
         const ago = Math.round((Date.now() - state.lastAttemptAt) / 60_000);
-        bail(`desktop update: v${installed} is below the floor v${opts.minVersion}; the last attempt at v${version} failed ${ago} min ago, retrying after ${RETRY_INTERVAL_MS / 3_600_000}h`);
+        bail(`desktop update: v${installed} is below the floor v${opts.minVersion}; the last attempt at v${version} failed ${ago} min ago, retrying after ${Math.round(retryAfter / 60_000)} min`);
       }
       return false;
     }
-    writeState({ ...state, lastAttemptVersion: version, lastAttemptAt: Date.now() });
+    writeState({ ...state, lastAttemptVersion: version, lastAttemptAt: Date.now(), lastAttemptPid: process.pid });
 
     log(`desktop update: installing v${version} (from v${installed})`);
     rmrf(WORK_DIR);
@@ -447,11 +454,10 @@ export async function checkForDesktopUpdate(
     const zipPath = path.join(WORK_DIR, zip);
     const zipUrl = `${DESKTOP_BASE}/${zip}`;
 
-    // curl streams to disk and works reliably under launchd.
-    execFileSync("/usr/bin/curl", ["-fsSL", zipUrl, "-o", zipPath], {
-      timeout: 600000,
-      stdio: ["ignore", "ignore", "ignore"],
-    });
+    // curl streams to disk and works reliably under launchd. Off the event
+    // loop: a synchronous download froze the daemon for minutes, its
+    // heartbeats stopped, and the watchdog replaced it mid-install (2026-09-24).
+    await execFileAsync("/usr/bin/curl", ["-fsSL", zipUrl, "-o", zipPath], { timeout: 600000 });
 
     const got = await sha512Base64(zipPath);
     if (got !== sha512) {
@@ -463,9 +469,7 @@ export async function checkForDesktopUpdate(
     // Extract the .app from the zip.
     const extractDir = path.join(WORK_DIR, "extract");
     fs.mkdirSync(extractDir, { recursive: true });
-    execFileSync("/usr/bin/ditto", ["-x", "-k", zipPath, extractDir], {
-      stdio: ["ignore", "ignore", "ignore"],
-    });
+    await execFileAsync("/usr/bin/ditto", ["-x", "-k", zipPath, extractDir]);
     const newApp = path.join(extractDir, "Codecast.app");
     if (!fs.existsSync(newApp)) {
       bail("desktop update: Codecast.app not found in archive; aborting");
