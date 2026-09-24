@@ -8,7 +8,7 @@
 // card ("+N more") when the parent has more sessions than are loaded.
 import type { OrgPerson, OrgRole, OrgSession, OrgTree, OrgParentRef, StateCounts } from "./orgTypes";
 import type { OrgChange, OrgChangeKind, OrgChangeStatus, OrgProposalChange } from "./orgStaffingTypes";
-import { editedOrgChange, seatSentence, type OrgRoleSeat } from "@codecast/shared/contracts/orgProposal";
+import { editedOrgChange, isOrgQuietChange, seatSentence, type OrgRoleSeat } from "@codecast/shared/contracts/orgProposal";
 import { changeLine, chipLine, roleTenureChip, standingLineOf } from "./orgMeta";
 
 export type OrgNodeKind = "person" | "role" | "session" | "cluster";
@@ -541,7 +541,10 @@ export function ghostChipOf(c: OrgProposalChange, unresolved = false, name: (cha
  * change is still decidable, never dropped: what vanishes cannot be skipped.
  * An applied change whose subject is gone is history and stays silent. A kind
  * this build does not know is a chip too. Skipped changes are dropped; failed
- * ones stay decidable and are drawn as proposed with their status.
+ * ones stay decidable and are drawn as proposed with their status. A quiet
+ * kind (a limit, org-staffing.md S23.2, ORG_QUIET_KINDS) draws nothing at
+ * all: the pane's ask still carries it, so it is accepted or skipped with the
+ * rest, but no person reads a number.
  */
 export function ghostsFor(tree: OrgTree, changes: readonly OrgProposalChange[], opts: OrgGhostOptions = {}): OrgGhostPlan {
   const merged: OrgTree = { ...tree, people: tree.people.map((p) => ({ ...p })), roles: tree.roles.map((r) => ({ ...r, sessions: [...r.sessions] })), anchors: [...tree.anchors] };
@@ -638,6 +641,7 @@ export function ghostsFor(tree: OrgTree, changes: readonly OrgProposalChange[], 
   const isViewer = (conv: string) => !!viewer && (same(viewer.id ?? undefined, conv) || same(viewer.short_id ?? undefined, conv));
   for (const c of open) {
     const ch = eff(c);
+    if (isOrgQuietChange(ch)) continue;
     switch (ch.kind) {
       case "adopt": {
         const role = roleByHandle(ch.handle);

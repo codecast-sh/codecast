@@ -1,5 +1,6 @@
 "use client";
 import { RepositoryLinks } from "../../../components/repo/RepositoryLinks";
+import { ShortId } from "../../../components/ShortId";
 import { taskRepository } from "../../../lib/repoNavigation";
 import { useState, useCallback, useMemo, useRef, type ReactNode } from "react";
 import { copyToClipboard, canonicalUrl, formatDateFull, formatRelative } from "../../../lib/utils";
@@ -1106,7 +1107,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
               >
                 <CircleDot className="w-4 h-4 text-sol-cyan flex-shrink-0" />
                 <span className="text-sm font-medium text-sol-cyan">{(data as any).plan.title}</span>
-                <span className="text-[10px] font-mono text-sol-text-dim">{(data as any).plan.short_id}</span>
+                <ShortId id={(data as any).plan.short_id} className="text-[10px] text-sol-text-dim" />
                 <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-sol-cyan border-sol-cyan/30 ml-auto">{(data as any).plan.status}</Badge>
               </Link>
             </div>

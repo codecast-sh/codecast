@@ -1,5 +1,6 @@
 "use client";
 import { RepositoryLinks } from "../../../components/repo/RepositoryLinks";
+import { ShortId } from "../../../components/ShortId";
 import { useCallback, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
@@ -292,7 +293,7 @@ export default function PlanDetailPage() {
                     <span className="text-sol-text-muted">{plan.author.name}</span>
                   </span>
                 )}
-                <span className="font-mono text-sol-text-dim">{plan.short_id}</span>
+                <ShortId id={plan.short_id} className="text-sol-text-dim" />
                 <span className="flex items-center gap-1">
                   <Clock className="w-3 h-3" />
                   {formatDate(plan.created_at)}
