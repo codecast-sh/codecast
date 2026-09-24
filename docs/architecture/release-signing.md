@@ -101,19 +101,24 @@ recovery path is a new release with the replacement key pinned, force-updated
 through `min_cli_version`; clients at the old build refuse manifests until
 then, which is the intended failure mode of a leaked key.
 
-## Key custody (open decision)
+## Key custody
 
-Not decided, and nothing in the tree creates or stores a key. The parent
-session holds the question. The options as the worker sees them:
+Decided 2026-09-23 (sd-240): a repository secret plus an offline escrow copy,
+the pattern the Apple signing certificate follows.
 
-- **Repository secret only.** Generated once with `sign-manifest.ts --keygen`,
-  the PEM pasted into the repository secret, no copy anywhere else. Simplest;
-  a lost secret means a rotation under step 5's recovery rules.
-- **Repository secret plus an offline escrow copy** (the pattern the Apple
-  signing certificate already follows on the founder's machine). Recovers from
-  a lost secret without a fleet rotation.
-- **A hardware or KMS held key** signing in CI through an OIDC trust. Strongest,
-  and the most setup.
+- Key id `cli-release-2026`, Ed25519. Public key (base64 raw), the value to pin:
+  `4f1kzY89/uJGGB+hvoONtVag56qy1gOkVxhMzLdEc5M=`
+- The private PEM is the repository secret `RELEASE_MANIFEST_SIGNING_KEY`; the
+  key id is `RELEASE_MANIFEST_KEY_ID`. Step 2 is therefore live: the next
+  finalize run signs `latest.json`.
+- The escrow copy is in the founder's login Keychain, generic password,
+  account `codecast-release`, service
+  `codecast release manifest signing key cli-release-2026`. `security -w`
+  returns it hex encoded, so read it with
+  `security find-generic-password -a codecast-release -s '<service>' -w | xxd -r -p`.
+- Step 3 (pinning) waits until a real finalize run has published a
+  `latest.json.sig` that `sign-manifest.ts --verify` accepts with this key, so
+  a pipeline fault can never meet a pinned client.
 
 Whichever is chosen, the release signing key must never sit on a laptop
 release path: `deploy.sh` publishes unsigned, and stays a step 3 compatible
