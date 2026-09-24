@@ -9,6 +9,7 @@
 // in publishCommand.ts; this file owns IO: fs walks, HTTP, Chrome screenshots,
 // the fs.watch loop, and output.
 
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -27,6 +28,7 @@ import {
   formatArtifactTable,
   formatBytes,
   isHtmlPath,
+  isMediaPath,
   isMarkdownPath,
   parseExpires,
   pickBundleEntry,
@@ -115,7 +117,9 @@ interface PublishPayload {
   source_path: string;
   kind?: "markdown" | "bundle";
   content?: string;
-  files?: Array<{ path: string; content_b64: string }>;
+  files?: Array<{ path: string; content_b64?: string; media_url?: string; size?: number }>;
+  /** Video and audio files, uploaded to media hosting before the publish. */
+  media?: Array<{ path: string; abs: string; size: number }>;
   /** Local path of the html document a thumbnail should render. */
   entryHtmlPath?: string;
 }
@@ -128,9 +132,15 @@ export function buildPublishPayload(absPath: string, titleOverride?: string): Pu
     const relPaths = walkBundleDir(absPath);
     const entry = pickBundleEntry(relPaths);
     if (!entry.entry) throw new Error(entry.error);
-    const files: Array<{ path: string; content_b64: string }> = [];
+    const files: NonNullable<PublishPayload["files"]> = [];
+    const media: NonNullable<PublishPayload["media"]> = [];
     const sizes: Array<{ path: string; size: number }> = [];
     for (const rel of relPaths) {
+      if (isMediaPath(rel)) {
+        const abs = path.join(absPath, rel);
+        media.push({ path: rel, abs, size: fs.statSync(abs).size });
+        continue;
+      }
       const bytes = fs.readFileSync(path.join(absPath, rel));
       files.push({ path: rel, content_b64: bytes.toString("base64") });
       sizes.push({ path: rel, size: bytes.byteLength });
@@ -143,6 +153,7 @@ export function buildPublishPayload(absPath: string, titleOverride?: string): Pu
       source_path: absPath,
       kind: "bundle",
       files,
+      ...(media.length ? { media } : {}),
       entryHtmlPath: path.join(absPath, entry.entry),
     };
   }
@@ -539,6 +550,37 @@ export function publishRequestBody(
   };
 }
 
+// Media already uploaded this run, so --watch republishes don't rehash big files.
+const uploadedMedia = new Map<string, string>();
+
+/** Upload each media file to R2 (skipped when the same bytes are already there)
+ * and add it to the bundle as a path that the server redirects to the upload. */
+export async function uploadMedia(deps: PublishDeps, payload: PublishPayload): Promise<void> {
+  for (const m of payload.media ?? []) {
+    const stat = fs.statSync(m.abs);
+    const cacheKey = `${m.abs}:${stat.size}:${stat.mtimeMs}`;
+    let url = uploadedMedia.get(cacheKey);
+    if (!url) {
+      const hash = crypto.createHash("sha256");
+      for await (const chunk of fs.createReadStream(m.abs)) hash.update(chunk as Buffer);
+      const ext = path.extname(m.path).slice(1).toLowerCase();
+      const signed = await apiPost(deps, "/cli/media/sign", { sha256: hash.digest("hex"), size: stat.size, ext }, { exitOnError: false });
+      if (!signed.exists) {
+        process.stderr.write(fmt.muted(`uploading ${m.path} (${formatBytes(stat.size)})\n`));
+        const put = await fetch(signed.upload_url, {
+          method: "PUT",
+          headers: { "Content-Type": signed.content_type ?? "application/octet-stream", "Cache-Control": "public, max-age=31536000, immutable" },
+          body: await fs.openAsBlob(m.abs),
+        });
+        if (!put.ok) throw new Error(`Upload of ${m.path} failed (${put.status}): ${(await put.text()).slice(0, 200)}`);
+      }
+      url = signed.url as string;
+      uploadedMedia.set(cacheKey, url);
+    }
+    payload.files!.push({ path: m.path, media_url: url, size: stat.size });
+  }
+}
+
 async function publishOnce(
   deps: PublishDeps,
   absPath: string,
@@ -546,6 +588,7 @@ async function publishOnce(
   extra: { access?: Record<string, unknown>; sessionRef?: string; withThumb: boolean; forceNew: boolean; exitOnError: boolean },
 ): Promise<{ result: any; title: string }> {
   const payload = buildPublishPayload(absPath, options.title);
+  await uploadMedia(deps, payload);
   let thumbB64: string | undefined;
   if (extra.withThumb && options.thumb !== false && payload.entryHtmlPath) {
     thumbB64 = captureThumb(payload.entryHtmlPath) ?? undefined;

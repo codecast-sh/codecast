@@ -315,7 +315,7 @@ describe("published pages shared from Slack", () => {
     const html = render(`[a.codecast.sh/${slug}](${url})\n\n> *codecast* · **[Union — The Needs-Finding Machine (North Star demo)](${url})**\n>\n> A page published by Aivery with codecast`);
     expect(html.match(/<iframe\b/g)).toHaveLength(1);
     expect(html).toContain(`/cli/a/${slug}?theme=`);
-    expect(html).toContain('sandbox="allow-scripts allow-popups"');
+    expect(html).toContain('sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"');
     expect(html).not.toContain(`>a.codecast.sh/${slug}<`);
   });
 
