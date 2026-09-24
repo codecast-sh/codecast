@@ -30,7 +30,9 @@ import "./team/teamFlow.css";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useViewerIdentity } from "../hooks/useTeamRoster";
 import { TeamShareChip } from "./feed/TeamShareChip";
-import { mergeOwnSessionsIntoTeamFeed } from "../lib/teamFeedRows";
+import { mergeOwnSessionsIntoTeamFeed, visibleTeamFeedRows } from "../lib/teamFeedRows";
+import { settingsDataKey } from "../lib/settingsData";
+import { useTeamFeature } from "../lib/teamFeatures";
 import { LivePulseDot } from "./SessionActivityLine";
 // Activity feed. Two sources, one rendering (FeedBody):
 //   • personal mode → a VIEW over store.sessions (the liberal delta cache that the
@@ -992,10 +994,20 @@ function TeamFeed({ compact, directoryFilter, onNavigate, initialActorId, hidePe
   const st = useTrackedStore([(x) => sessionsWakeSig(x.sessions), (x) => ownTeamRowsSig(x.sessions)]);
   const coarseNow = useCoarseNow(15_000);
   const viewer = useViewerIdentity();
+  const orgEnabled = useTeamFeature("org");
+  const rosterKey = settingsDataKey("teamMembers", viewer?._id, activeTeamId);
+  const memberSignature = useInboxStore((s) => {
+    const members = rosterKey ? s.settingsData[rosterKey]?.value : undefined;
+    return Array.isArray(members) ? members.map((m) => String(m._id)).sort().join("|") : undefined;
+  });
+  const memberIds = useMemo(
+    () => memberSignature === undefined ? undefined : new Set(memberSignature.split("|").filter(Boolean)),
+    [memberSignature],
+  );
   const sourceConvs = useMemo(() => {
-    if (!activeTeamId) return feedRows;
+    if (!activeTeamId) return [];
     const dirLeaf = directoryFilter ? directoryFilter.split("/").filter(Boolean).pop() : null;
-    return mergeOwnSessionsIntoTeamFeed({
+    return visibleTeamFeedRows(mergeOwnSessionsIntoTeamFeed({
       feedRows,
       sessions: st.sessions,
       teamId: String(activeTeamId),
@@ -1016,10 +1028,10 @@ function TeamFeed({ compact, directoryFilter, onNavigate, initialActorId, hidePe
         is_private: sess.is_private ?? false,
         team_visibility: sess.team_visibility ?? null,
       }),
-    });
+    }), memberIds, orgEnabled);
     // coarseNow: the mapped rows carry time-driven fields (duration, liveness).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [feedRows, st.sessions, activeTeamId, directoryFilter, viewer, coarseNow]);
+  }, [feedRows, st.sessions, activeTeamId, directoryFilter, viewer, coarseNow, memberIds, orgEnabled]);
 
   // Read the store the team feeder fills; the feeder itself is mounted globally.
   // The externalEvents store key is one shared overlay: a conversation, task or
@@ -1040,7 +1052,7 @@ function TeamFeed({ compact, directoryFilter, onNavigate, initialActorId, hidePe
       hasMore={knownCursor === null ? false : (knownHasMore ?? liveHasMore)}
       loadMore={loadMore}
       isLoadingMore={loadingMore}
-      isLoading={!cached?.length && live === undefined}
+      isLoading={memberIds === undefined || (!cached?.length && live === undefined)}
       onNavigate={onNavigate}
       compact={compact}
       hidePeopleRow={hidePeopleRow}
@@ -1058,6 +1070,7 @@ function inboxSessionToConv(s: InboxSession): Conversation {
   return {
     _id: s._id,
     user_id: "",
+    acting_user_id: s.acting_user_id ?? null,
     title: s.title,
     subtitle: s.subtitle ?? s.idle_summary ?? null,
     image_preview_url: s.image_preview_url ?? null,

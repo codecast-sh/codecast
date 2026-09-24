@@ -2,7 +2,7 @@
 // rows, whose privacy wins when both hold a row, and what the share chip says.
 // Run: cd packages/web && bun test lib/__tests__/teamFeedRows.test.ts
 import { describe, expect, it } from "bun:test";
-import { mergeOwnSessionsIntoTeamFeed, teamShareState } from "../teamFeedRows";
+import { mergeOwnSessionsIntoTeamFeed, teamShareState, visibleTeamFeedRows } from "../teamFeedRows";
 import type { Conversation } from "../../components/ConversationList";
 
 const TEAM = "team1";
@@ -15,6 +15,35 @@ type S = { _id: string; user_id?: string | null; team_id?: string | null; is_pri
 const toConv = (s: S) => row({ _id: s._id, user_id: ME, is_own: true, is_private: s.is_private ?? false, team_visibility: s.team_visibility ?? null, title: s.title });
 const merge = (feedRows: Conversation[], sessions: Record<string, S>, keep: (s: S) => boolean = () => true) =>
   mergeOwnSessionsIntoTeamFeed({ feedRows, sessions, teamId: TEAM, viewerId: ME, keep, toConv });
+
+describe("visibleTeamFeedRows", () => {
+  const cached = [
+    row({ _id: "gone", user_id: "jonathan" }),
+    row({ _id: "human", user_id: ME, is_own: true }),
+    row({ _id: "chief", user_id: ME, acting_user_id: "chief", is_own: true }),
+    row({ _id: "gone-host", user_id: "jonathan", acting_user_id: "chief" }),
+  ];
+
+  it("heals pre-removal caches from the current roster without deleting history", () => {
+    expect(visibleTeamFeedRows(cached, new Set([ME, "chief"]), true).map((r) => r._id)).toEqual(["human", "chief"]);
+    expect(cached).toHaveLength(4);
+    expect(visibleTeamFeedRows(cached, new Set([ME, "jonathan", "chief"]), true)).toEqual(cached);
+  });
+
+  it("hides a historical role while org is off, even with a stale bot in the roster", () => {
+    expect(visibleTeamFeedRows(cached, new Set([ME, "chief"]), false).map((r) => r._id)).toEqual(["human"]);
+  });
+
+  it("needs the actor as well as its host in the roster", () => {
+    expect(visibleTeamFeedRows(cached, new Set([ME]), true).map((r) => r._id)).toEqual(["human"]);
+  });
+
+  it("does not treat an unknown or empty roster as permission to show cached rows", () => {
+    expect(visibleTeamFeedRows(cached, undefined, true)).toEqual([]);
+    expect(visibleTeamFeedRows(cached, new Set(), true)).toEqual([]);
+    expect(visibleTeamFeedRows([row({ user_id: undefined })], new Set([ME]), true)).toEqual([]);
+  });
+});
 
 describe("mergeOwnSessionsIntoTeamFeed", () => {
   it("adds the viewer's private sessions for the team, which the server never sends", () => {
