@@ -13,6 +13,10 @@ for (const scenario of [
   "write-guard-race",
   "unparsable-token-at-boot",
   "unparsable-token-in-session",
+  "caller-a-disk-b",
+  "pending-without-owner-row",
+  "durable-read-fails",
+  "durable-token-unparsable",
 ]) {
   it(`cache ownership: ${scenario}`, () => {
     const result = Bun.spawnSync([process.execPath, `${import.meta.dir}/fixtures/cacheOwnership.ts`], {

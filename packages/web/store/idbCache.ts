@@ -252,20 +252,28 @@ let boundOwner: string | null = null;
 // Rows on disk that are not the principal's own pending input. Pending input
 // is keyed by its owner (pendingInputKey), so a principal's typed-but-unsent
 // messages are theirs whoever the rest of the cache belongs to, and a cache
-// holding nothing else is a fresh cache with their journal in it.
+// holding nothing else is a fresh cache with their journal in it. One
+// transaction for both tables: two separate reads could straddle a pending
+// input write and count the same row as foreign.
 async function foreignRowCount(principal: string | null): Promise<number> {
   try {
-    const [meta, sessions, own] = await Promise.all([
-      db.meta.count(),
-      COLLECTION_TABLES.sessions?.count() ?? Promise.resolve(0),
-      principal ? db.meta.where("key").startsWith(`${PENDING_INPUT_PREFIX}${principal}:`).count() : Promise.resolve(0),
-    ]);
-    return meta - own + sessions;
+    const sessions = COLLECTION_TABLES.sessions;
+    // Index-only counts (no row values are read; meta holds large blobs), in
+    // one read transaction so both see the same snapshot.
+    return await db.transaction("r", sessions ? [db.meta, sessions] : [db.meta], async () => {
+      const meta = await db.meta.count();
+      const own = principal ? await db.meta.where("key").startsWith(`${PENDING_INPUT_PREFIX}${principal}:`).count() : 0;
+      const rows = sessions ? await sessions.count() : 0;
+      return meta - own + rows;
+    });
   } catch {
     return 0;
   }
 }
 
+// Disk ownership is decided by the disk alone: the persisted user row. A
+// caller's own idea of who is signed in proves nothing about rows written
+// by an earlier account, so it is never consulted here.
 async function resolveCacheOwnership(): Promise<string | null> {
   const principal = await authPrincipal.resolve();
   let owner: string | null = null;
@@ -277,13 +285,14 @@ async function resolveCacheOwnership(): Promise<string | null> {
   }
   boundOwner = principal;
   if (principal !== null && owner === principal) return principal;
-  // A stored token that does not parse is not a sign-out: the tracker keeps
-  // the account it last knew (served above when it owns the cache), and with
-  // no account known nothing is served. Nothing is purged either way; the
-  // cache is destroyed only by an explicit sign-out or by a change to another
-  // named account.
-  if (authPrincipal.tokenState() === "unparsable") {
-    console.warn("[cache] the stored token could not be parsed; keeping the cache as it is");
+  // A stored token that does not parse, or a durable tier that could not be
+  // read, is not a sign-out: the tracker keeps the account it last knew
+  // (served above when it owns the cache), and with no account known nothing
+  // is served. Nothing is purged either way; the cache is destroyed only by
+  // an explicit sign-out or by a change to another named account.
+  const tokenState = authPrincipal.tokenState();
+  if (tokenState === "unparsable" || tokenState === "unreadable") {
+    console.warn(`[cache] the stored token is ${tokenState}; keeping the cache as it is`);
     return null;
   }
   if ((await foreignRowCount(principal)) > 0) await purgeLocalCache({ keepPendingInputFor: principal });
@@ -372,11 +381,25 @@ export async function loadCache(
   context: Record<string, any> = {},
 ): Promise<Record<string, any> | null> {
   try {
-    if ((await ensureCacheOwnership()) === null) return null;
+    const wanted = keys ? new Set(keys) : null;
+    if ((await ensureCacheOwnership()) === null) {
+      // No collection row is served without a matching persisted user row.
+      // Pending input is keyed by its owner, so the principal's own rows are
+      // theirs whatever the rest of the disk holds; they are served even
+      // before the user row commits (a read right after sign-in) so a typed
+      // message is never withheld. Fail closed on whose rows: only the
+      // stored token's principal, never a caller's claim about someone else.
+      const principal = await authPrincipal.resolve();
+      const wantsPending = !wanted || wanted.has("pendingMessages") || wanted.has("queuedMessages");
+      const claimed = context.currentUser?._id;
+      if (!principal || !wantsPending || (claimed !== undefined && claimed !== principal)) return null;
+      const pendingMessages = await loadPendingInput(principal);
+      if (Object.keys(pendingMessages).length === 0) return null;
+      return { pendingMessages, queuedMessages: queuedMessagesFromPending(pendingMessages) };
+    }
     const result: Record<string, any> = {};
     let hasData = false;
 
-    const wanted = keys ? new Set(keys) : null;
     const collectionEntries = Object.entries(COLLECTION_TABLES)
       .filter(([key]) => !wanted || wanted.has(key));
     const metaKeys = (keys ?? [...META_KEYS]).filter((key) => META_KEYS.has(key));
@@ -821,7 +844,11 @@ async function purgeLocalCacheNow(keepPendingInputFor: string | null): Promise<v
   try {
     await db.delete();
   } finally {
-    // Dexie reopens lazily on next access; a signed-out page navigates away.
+    // Dexie 4 does NOT reopen on its own after delete(): every later access
+    // throws DatabaseClosedError. A signed-out page navigates away, but a
+    // window that purged on an account boundary keeps running for the next
+    // account, so reopen (an empty database with the current schema) now.
+    await db.open().catch(() => {});
   }
   if (kept.length) await db.meta.bulkPut(kept);
 }

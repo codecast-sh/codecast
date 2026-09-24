@@ -17,16 +17,25 @@ const scenario = process.env.SCENARIO!;
 // The token the browser holds when the cache module boots: in localStorage
 // for every scenario but the two that leave it empty.
 if (scenario === "unparsable-token-at-boot") local.setItem(AUTH_JWT_STORAGE_KEY, "not.a.jwt");
-else if (!["signed-out-residue", "durable-only-token"].includes(scenario)) local.setItem(AUTH_JWT_STORAGE_KEY, issue("userA"));
+else if (!["signed-out-residue", "durable-only-token", "durable-read-fails", "durable-token-unparsable"].includes(scenario)) local.setItem(AUTH_JWT_STORAGE_KEY, issue("userA"));
 // Booting the cache module also boots the principal tracker, which reads the
 // token above the way a real window does at module load. The database opens
 // lazily, so the seed below still lands first.
+// The durable token store cannot be opened (quota, a blocked upgrade, private
+// mode): every open of codecast-auth fails. Whether a token exists is unknown.
+if (scenario === "durable-read-fails") {
+  const open = indexedDB.open.bind(indexedDB);
+  (indexedDB as any).open = (name: string, version?: number) => {
+    if (name === "codecast-auth") throw new Error("IndexedDB open failed");
+    return version === undefined ? open(name) : open(name, version);
+  };
+}
 const cache = await import("../../idbCache");
 const { CACHE_SCHEMA_VERSION, loadCache, loadOutbox, _cacheOwnerForTests, enqueueDispatch, writePatchesToIDB } = cache;
 const ROW = { _id: "a".repeat(32), session_id: "sess", updated_at: Date.now(), title: "cached row" };
 
 // Seed the disk BEFORE the cache module boots, with the schema it expects.
-async function seed(opts: { owner?: string | null; rows?: boolean; outbox?: boolean }) {
+async function seed(opts: { owner?: string | null; rows?: boolean; outbox?: boolean; pendingFor?: string }) {
   const db = new Dexie("codecast-store");
   db.version(CACHE_SCHEMA_VERSION).stores({ ...COLLECTION_INDEXES, meta: "key", conversationMessages: "convId, latestTimestamp", conversationUserMessages: "convId", dispatchOutbox: "id" });
   await db.open();
@@ -36,15 +45,18 @@ async function seed(opts: { owner?: string | null; rows?: boolean; outbox?: bool
     await db.table("meta").put({ key: "clientState", value: { ui: { theme: "dark" } } });
   }
   if (opts.outbox) await db.table("dispatchOutbox").put({ id: "o1", action: "x", args: [], patches: [], result: null, ts: 1 });
+  if (opts.pendingFor) {
+    await db.table("meta").put({ key: `pendingInput:v1:${opts.pendingFor}:m1`, value: { id: "m1", conversationId: "c1", message: { _id: "m1", role: "user", content: "typed but unsent", timestamp: 1 }, stamps: {} } });
+  }
   db.close();
 }
-async function seedDurableToken(principalId: string) {
+async function seedDurableToken(principalId: string, raw?: string) {
   const req = indexedDB.open("codecast-auth", 1);
   await new Promise<void>((resolve, reject) => {
     req.onupgradeneeded = () => req.result.createObjectStore("tokens");
     req.onsuccess = () => {
       const tx = req.result.transaction("tokens", "readwrite");
-      tx.objectStore("tokens").put(issue(principalId), AUTH_JWT_STORAGE_KEY);
+      tx.objectStore("tokens").put(raw ?? issue(principalId), AUTH_JWT_STORAGE_KEY);
       tx.oncomplete = () => { req.result.close(); resolve(); };
       tx.onerror = () => reject(tx.error);
     };
@@ -83,11 +95,29 @@ if (scenario === "fresh") {
   await seed({ owner: "userA", rows: true });
 } else if (scenario === "unparsable-token-at-boot" || scenario === "unparsable-token-in-session") {
   await seed({ owner: "userA", rows: true, outbox: true });
+} else if (scenario === "caller-a-disk-b") {
+  // The caller believes user A is signed in (token A too), but the disk
+  // belongs to B. The caller's belief must not unlock B's rows.
+  await seed({ owner: "userB", rows: true, outbox: true, pendingFor: "userA" });
+} else if (scenario === "durable-token-unparsable") {
+  // localStorage empty, the durable tier holds a token that does not parse.
+  await seed({ owner: "userA", rows: true, outbox: true, pendingFor: "userA" });
+  await seedDurableToken("userA", "not.a.jwt");
+} else if (scenario === "durable-read-fails") {
+  await seed({ owner: "userA", rows: true, outbox: true, pendingFor: "userA" });
+} else if (scenario === "pending-without-owner-row") {
+  // A's typed message is on disk, keyed by owner; the user row has not
+  // committed yet (a read right after sign-in). No purge, pending served.
+  await seed({ pendingFor: "userA" });
 } else {
   throw new Error(`unknown scenario ${scenario}`);
 }
 
-const hydrated = await loadCache(["sessions", "clientState", "currentUser"]);
+const hydrated = scenario === "caller-a-disk-b"
+  ? await loadCache(["sessions", "clientState", "currentUser", "pendingMessages"], { currentUser: { _id: "userA" } })
+  : scenario === "pending-without-owner-row"
+    ? await loadCache(["sessions", "pendingMessages"])
+    : await loadCache(["sessions", "clientState", "currentUser"]);
 const owner = _cacheOwnerForTests();
 const outbox = await loadOutbox();
 
@@ -115,6 +145,10 @@ switch (scenario) {
     expect(owner).toBe("userA");
     expect(outbox).toEqual([]);
     expect(await diskRows()).toEqual({ sessions: 0, meta: 0, outbox: 0 });
+    // The window keeps running for the signed-in account: its writes land
+    // in the purged (reopened) database.
+    await enqueueDispatch({ id: "o2", action: "x", args: [], patches: [], result: null, ts: 2 });
+    expect((await loadOutbox()).map((o) => o.id)).toEqual(["o2"]);
     break;
   case "signed-out-residue":
     expect(hydrated).toBeNull();
@@ -129,6 +163,32 @@ switch (scenario) {
     // localStorage was wiped; the durable tier still names the owner.
     expect(hydrated?.sessions?.[ROW._id]?.title).toBe("cached row");
     expect(owner).toBe("userA");
+    break;
+  case "caller-a-disk-b": {
+    // B's rows are never served and are purged; A's own pending input is the
+    // only thing that survives, and it is what the read returns.
+    expect(hydrated?.sessions).toBeUndefined();
+    expect(hydrated?.pendingMessages?.c1?.[0]?.content).toBe("typed but unsent");
+    expect(owner).toBe("userA");
+    expect(outbox).toEqual([]);
+    const d = await diskRows();
+    expect(d.sessions).toBe(0);
+    expect(d.outbox).toBe(0);
+    expect(d.meta).toBe(1);
+    break;
+  }
+  case "durable-token-unparsable":
+  case "durable-read-fails":
+    // Nothing can be named, so nothing is served; nothing is purged either.
+    expect(hydrated).toBeNull();
+    expect(owner).toBeNull();
+    expect(await diskRows()).toEqual({ sessions: 1, meta: 3, outbox: 1 });
+    break;
+  case "pending-without-owner-row":
+    expect(hydrated?.sessions).toBeUndefined();
+    expect(hydrated?.pendingMessages?.c1?.[0]?.content).toBe("typed but unsent");
+    expect(owner).toBe("userA");
+    expect(await diskRows()).toEqual({ sessions: 0, meta: 1, outbox: 0 });
     break;
   case "unparsable-token-at-boot":
     // A token is stored but does not parse. That is not a logout: nothing is
