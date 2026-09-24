@@ -106,6 +106,10 @@ export interface DesktopUpdateOpts {
   force?: boolean;
   minVersion?: string | null;
   reinstall?: boolean;
+  // Install the app when /Applications has none. Only `cast desktop-update`,
+  // run by a person on this Mac, sets it: a floor or a remote command must
+  // never put the app on a machine that does not have it.
+  install?: boolean;
   // Where a bail-out goes when the run MATTERED: a forced request, or an app
   // below the floor. The daemon uploads only warn and error lines, so a
   // routine "deferring, app is running" stays local while "below the floor but
@@ -303,6 +307,10 @@ export function swapInBundle(newApp: string, appPath: string): void {
   rmrf(incoming);
   rmrf(old);
   execFileSync("/usr/bin/ditto", [newApp, incoming], { stdio: ["ignore", "ignore", "ignore"] });
+  if (!fs.existsSync(appPath)) {
+    fs.renameSync(incoming, appPath); // a fresh install: nothing to move aside
+    return;
+  }
   try {
     fs.renameSync(appPath, old); // atomic
     fs.renameSync(incoming, appPath); // atomic
@@ -362,7 +370,7 @@ export async function checkForDesktopUpdate(
     }
     return false;
   }
-  if (!fs.existsSync(APP_PATH)) {
+  if (!fs.existsSync(APP_PATH) && !opts.install) {
     if (force || opts.minVersion) bail("desktop update: /Applications/Codecast.app not found");
     return false;
   }
@@ -371,7 +379,8 @@ export async function checkForDesktopUpdate(
     // A damaged bundle cannot launch to update itself, and its version may
     // still read as current, so it takes the reinstall path.
     const damaged = !installed || (!isDesktopAppRunning() && !installedBundleIntact());
-    if (damaged) bail(`desktop update: the installed app ${installed ? `v${installed} ` : ""}fails its signature or has no readable version; reinstalling`);
+    if (!fs.existsSync(APP_PATH)) log("desktop update: the app is not installed; installing");
+    else if (damaged) bail(`desktop update: the installed app ${installed ? `v${installed} ` : ""}fails its signature or has no readable version; reinstalling`);
     const current = installed ?? "0.0.0";
 
     // Server-pinned floor: when the installed app is below min_desktop_version,
