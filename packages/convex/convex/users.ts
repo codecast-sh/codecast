@@ -962,12 +962,14 @@ export const sendDaemonCommandToAll = mutation({
     command: v.union(
       v.literal("restart"),
       v.literal("force_update"),
-      v.literal("reinstall")
+      v.literal("reinstall"),
+      v.literal("desktop_update")
     ),
     max_version: v.optional(v.string()),
+    api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const authUserId = await getAuthUserId(ctx);
+    const authUserId = await getUserOrToken(ctx, args.api_token);
     if (!authUserId) throw new Error("Not authenticated");
     const currentUser = await ctx.db.get(authUserId);
     if (!currentUser || currentUser.role !== "admin") throw new Error("Not authorized");
