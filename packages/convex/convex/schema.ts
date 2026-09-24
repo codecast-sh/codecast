@@ -439,6 +439,24 @@ export default defineSchema({
     // Membership check / dedupe — is this user already an owner of this session?
     .index("by_conversation_user", ["conversation_id", "user_id"]),
 
+  // A viewer's hide of a session they neither run nor own: a teammate's row on
+  // the team board. The owner's own triage lives on the conversation
+  // (inbox_stashed_at / inbox_dismissed_at) and hides the row from everyone's
+  // team board; those fields are the OWNER's and the dispatch gate refuses them
+  // from anyone else, so a viewer's hide needs its own row. One row per viewer
+  // and conversation; the team scan skips what the viewer hid. `cast restore`
+  // and the restore gesture delete it.
+  inbox_hides: defineTable({
+    user_id: v.id("users"),
+    conversation_id: v.id("conversations"),
+    kind: v.union(v.literal("stash"), v.literal("dismiss")),
+    at: v.number(),
+  })
+    // Everything one viewer hid: read once per team scan.
+    .index("by_user", ["user_id"])
+    // Upsert / restore for one viewer and one session.
+    .index("by_user_conversation", ["user_id", "conversation_id"]),
+
   conversations: defineTable({
     user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),
@@ -1020,7 +1038,13 @@ export default defineSchema({
     .index("by_user_live_snoozed", ["user_id", "is_subagent", "inbox_killed_at", "inbox_snoozed_until"])
     // Inbox scan indexes (scanInboxConversations): exclude subagent / killed
     // rows at the index so the scan never reads docs the inbox filter drops.
-    .index("by_user_subagent_updated", ["user_id", "is_subagent", "updated_at"])
+    // The recent window reads PLAIN rows only: the four filing stamps are
+    // pinned to absent ahead of updated_at, so a stashed agent's fresh
+    // heartbeats cannot take a recent seat from a settled plain row (the
+    // shared rule: inboxProjection isFiled). The subagent window reads the
+    // same index — a parked parent's children carry its stamp (the hide
+    // cascade) and every caller discards them.
+    .index("by_user_plain_updated", ["user_id", "is_subagent", "inbox_pinned_at", "inbox_dismissed_at", "inbox_stashed_at", "inbox_snoozed_until", "updated_at"])
     .index("by_user_live_dismissed", ["user_id", "is_subagent", "inbox_killed_at", "inbox_dismissed_at"])
     .index("by_user_live_stashed", ["user_id", "is_subagent", "inbox_killed_at", "inbox_stashed_at"])
     .index("by_user_profile_pinned", ["user_id", "profile_pinned_at"])

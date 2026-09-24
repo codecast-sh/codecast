@@ -1,11 +1,11 @@
 {
-  "about": "One past the recent cap: the 200 newest survive by updated_at, the oldest is dropped, `recent` is named in truncated. The dropped row is pinned so it stays a member through its pin (a row can lose one seat and keep another).",
+  "about": "One past the recent cap: the 200 newest unfiled rows survive; the oldest unfiled row is dropped. A pinned row holds its separate seat without competing for recent space.",
   "epoch": "E",
   "asking": [],
   "rows": [
     {
       "repeat": {
-        "count": 200,
+        "count": 201,
         "idPrefix": "rec",
         "row": {
           "status": "active",
