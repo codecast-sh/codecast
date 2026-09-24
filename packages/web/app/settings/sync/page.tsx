@@ -703,7 +703,7 @@ export default function SyncPage() {
                             </div>
                             <div className="flex items-center gap-1.5 text-xs">
                               <span
-                                className="truncate font-mono text-[11px] text-sol-text-muted"
+                                className="min-w-[12ch] truncate font-mono text-[11px] text-sol-text-muted"
                                 title={more > 0 ? project.checkouts.map((checkout) => prettyPath(checkout.path)).join("\n") : undefined}
                               >
                                 {prettyPath(project.path)}
@@ -726,8 +726,12 @@ export default function SyncPage() {
                                         : "counting"}
                               </span>
                               {!synced && local && <span className="flex-shrink-0 text-sol-text-dim">· not synced</span>}
-                              {isGone(project) && <span className="flex-shrink-0 text-sol-yellow">· folder moved or deleted</span>}
+
                             </div>
+                            {/* Its own line: beside the count it squeezed the path to nothing. */}
+                            {isGone(project) && (
+                              <div className="mt-0.5 text-[11px] text-sol-yellow">Folder moved or deleted on this machine</div>
+                            )}
                             {teamResult && !teamResult.isDefault && (
                               <MappingScopeLine
                                 path={project.path}

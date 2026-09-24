@@ -890,8 +890,10 @@ export function LabelChipsRow({
           </div>
           {projectCounts.length > 0 && (
             <>
+              {/* Each row is a session folder (its repo root, else where it
+                  ran), not a Codecast project, which groups tasks and docs. */}
               <div className="mt-0.5 border-t border-sol-border/40 px-3 pt-2 pb-1 text-[9px] font-semibold uppercase tracking-widest text-sol-text-dim/70">
-                Projects
+                Folders
               </div>
               {projectCounts.map(([name, count]) => {
                 const pc = getLabelColor(name);
@@ -946,7 +948,7 @@ export function LabelChipsRow({
             : {
                 id: p.name,
                 name: p.name,
-                noun: "project",
+                noun: "folder",
                 filters: projectFilters,
                 set: (id: string | null, exclude?: boolean) => store.setActiveProjectFilter(id, id ? projectPathByName[p.name] || null : null, exclude),
                 toggle: (exclude: boolean) => store.toggleProjectFilterTerm(p.name, projectPathByName[p.name] || null, exclude),

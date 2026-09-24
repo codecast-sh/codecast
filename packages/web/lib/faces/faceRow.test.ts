@@ -245,6 +245,39 @@ describe("every state in the vocabulary", () => {
 
 // ── links ───────────────────────────────────────────────────────────────────
 
+describe("who gets a face", () => {
+  test("a Slack person has no face; an agent has one, marked as an agent", () => {
+    const row = deriveFaceRow(
+      input({
+        roster: [
+          member(ME, "Me"),
+          member(ANN, "Ann"),
+          member(BOB, "Slack Bob", { is_bot: true, bot_kind: "slack" }),
+          member(CY, "Chief", { is_bot: true, bot_kind: "anchor" }),
+        ],
+      }),
+      null,
+    );
+    expect(row.entries.map((e) => e.id)).not.toContain(BOB);
+    expect(row.entries.find((e) => e.id === CY)?.bot).toBe(true);
+    expect(row.entries.find((e) => e.id === ANN)?.bot).toBeUndefined();
+  });
+
+  test("people sort before agents, whatever their presence", () => {
+    const row = deriveFaceRow(
+      input({
+        roster: [
+          member(ME, "Me"),
+          member(CY, "Chief", { is_bot: true, bot_kind: "anchor" }),
+          member(ANN, "Ann", { presence_state: "away" }),
+        ],
+      }),
+      null,
+    );
+    expect(row.entries.map((e) => e.id)).toEqual([ANN, CY]);
+  });
+});
+
 describe("every link kind", () => {
   test("both: two keys down in one room", () => {
     const row = deriveFaceRow(

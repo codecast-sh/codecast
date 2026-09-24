@@ -46,8 +46,12 @@ describe("baseProvisionScript", () => {
     expect(s).toContain('[ "$MINUTES" -le 0 ] && exit 0');
   });
 
-  test("daemon unit marks the box as a remote device", () => {
-    expect(daemonUnitScript()).toContain("CODECAST_REMOTE_DEVICE=1");
+  test("daemon unit marks the box as a remote device, in the unit's environment and on disk", () => {
+    const s = daemonUnitScript();
+    expect(s).toContain("CODECAST_REMOTE_DEVICE=1");
+    // The marker precedes the unit so a daemon any other launcher starts there is remote too.
+    expect(s).toContain(": > /home/ubuntu/.codecast/remote-device");
+    expect(s.indexOf("remote-device")).toBeLessThan(s.indexOf("sudo tee /etc/systemd/system/codecast-daemon.service"));
   });
 });
 

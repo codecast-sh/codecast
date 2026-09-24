@@ -131,13 +131,37 @@ function writeDeviceBinding(binding: DeviceBinding): void {
 }
 
 /**
- * True when this process runs on a remote box (the cloud Mac). A remote device
+ * The marker provisioning leaves on a cloud host, relative to $HOME. The
+ * launcher's environment (systemd, launchd) names the box remote for the
+ * daemon it starts; the marker names it remote for every other way a daemon
+ * comes up there — a `cast` command run in a session's shell that found no
+ * daemon and started one, a restart from a terminal — so the box never serves
+ * as a laptop because of who started its daemon.
+ */
+export const REMOTE_DEVICE_MARKER_REL = ".codecast/remote-device";
+const REMOTE_DEVICE_MARKER = path.join(defaultConfigDir(), "remote-device");
+let cachedRemoteMarker: boolean | null = null;
+
+/** The remote verdict from its two sources: the launch environment, and the marker on disk. */
+export function resolveRemoteDevice(input: { env: string | undefined; marker: boolean }): boolean {
+  return input.env === "1" || input.marker;
+}
+
+/**
+ * True when this process runs on a remote box (a cloud host). A remote device
  * only serves conversations explicitly moved to it (owner == this device) — it
- * must never adopt, resume, or spawn sessions on its own. Set in the remote's
- * cron/launch environment by `cast remote` setup.
+ * must never adopt, resume, or spawn sessions on its own. The launch
+ * environment is read per call (tests flip it); the marker once per process.
  */
 export function isRemoteDevice(): boolean {
-  return process.env.CODECAST_REMOTE_DEVICE === "1";
+  if (cachedRemoteMarker === null) {
+    try {
+      cachedRemoteMarker = fs.existsSync(REMOTE_DEVICE_MARKER);
+    } catch {
+      cachedRemoteMarker = false;
+    }
+  }
+  return resolveRemoteDevice({ env: process.env.CODECAST_REMOTE_DEVICE, marker: cachedRemoteMarker });
 }
 
 /**

@@ -33,6 +33,7 @@ import type { RemoteHost } from "../remote/session-move.js";
 import { copyCredentialToRemote, ensureRemoteClaudeReady, shq } from "../remote/session-move.js";
 import { readInstalledClientVersions } from "../remote/agentAuth.js";
 import { cwdGitRoot } from "../cloud/hostGit.js";
+import { REMOTE_DEVICE_MARKER_REL } from "../remote/device.js";
 import { summarizeHostTools } from "../cloud/hostTools.js";
 import { agentCliInstallScript, parseAgentCliReport } from "./provisionAgents.js";
 import { remoteExec, scpTo } from "./remote.js";
@@ -274,6 +275,9 @@ if [ -n "$tmux_pids" ]; then
 fi
 if sudo systemctl cat codecast-daemon.service >/dev/null 2>&1; then sudo systemctl stop codecast-daemon.service; fi
 CODECAST_NO_AUTO_UPDATE=1 /usr/local/bin/cast stop
+# The marker makes the box a remote device for any daemon started here, not
+# only the one this unit starts (remote/device.ts).
+install -d -m 700 /home/ubuntu/.codecast && : > /home/ubuntu/${REMOTE_DEVICE_MARKER_REL}
 sudo tee /etc/systemd/system/codecast-daemon.service >/dev/null <<'UNIT'
 [Unit]
 Description=codecast daemon (remote device)

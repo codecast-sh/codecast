@@ -3063,6 +3063,12 @@ export async function upsertDirectoryMapping(
   return { success: true, action: existingMapping ? "updated" : "created", share_since: shareSince ?? null };
 }
 
+/** Operator path: repoint one user's folder rule, with the same backfill. */
+export const updateDirectoryMappingForUser = internalMutation({
+  args: { user_id: v.id("users"), path_prefix: v.string(), team_id: v.id("teams") },
+  handler: async (ctx, args) => upsertDirectoryMapping(ctx, args.user_id, { path_prefix: args.path_prefix, team_id: args.team_id }),
+});
+
 export const updateDirectoryTeamMapping = mutation({
   args: {
     path_prefix: v.string(),

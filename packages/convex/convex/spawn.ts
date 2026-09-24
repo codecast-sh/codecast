@@ -368,7 +368,7 @@ export const createSessionFromCli = mutation({
     // trust stage and the daily hand cap gate it (org-roles-standing.md T4).
     const roleGate = await gateHandStart(ctx, spawner);
     // A review hand is gated by the role whose work it judges, not filed
-    // under it: the verdict must come from outside the role.
+    // under it, so its verdict is recorded as its own.
     const review = args.review_for_task ? await resolveReviewTarget(ctx, userId, args.review_for_task) : null;
     if (review?.role) await gateRoleCaps(review.role);
     // A hand's first turn opens with the unattended mandate and the hand

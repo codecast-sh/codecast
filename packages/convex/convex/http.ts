@@ -645,7 +645,10 @@ http.route({
       }
 
       const result = await readConversationRange(
-        (pageArgs) => ctx.runQuery(api.conversations.readConversationMessages, pageArgs),
+        {
+          scan: (stepArgs) => ctx.runQuery(internal.conversations.scanConversationLines, stepArgs),
+          fetch: (stepArgs) => ctx.runQuery(internal.conversations.readConversationLines, stepArgs),
+        },
         { api_token, conversation_id, start_line, end_line, full_content, around_message_id, context, include_file_changes },
       );
 

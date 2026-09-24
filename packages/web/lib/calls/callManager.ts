@@ -866,8 +866,10 @@ async function leaveCallHere(shown?: string): Promise<void> {
     convex && roomKey
       ? convex.mutation(api.calls.leaveRoom, { room_key: roomKey }).catch(() => {})
       : null;
-  await stopScribe({ keepLive: true });
-  teardownMedia();
+  // The call is over for the person the moment they hang up: the slice goes
+  // idle first, and the scribe's flush (which reads none of it) and the
+  // media teardown follow. Idle waited on the flush before, and the row sat
+  // on a live call for seconds after End.
   setCall({
     phase: "idle",
     roomKey: null,
@@ -879,6 +881,8 @@ async function leaveCallHere(shown?: string): Promise<void> {
     micDenied: false,
   });
   soundCallLeave();
+  await stopScribe({ keepLive: true });
+  teardownMedia();
   if (left) await left;
 }
 
