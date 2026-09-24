@@ -1,4 +1,5 @@
 import { useQuery } from "convex/react";
+import { ShortId } from "./ShortId";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import Link from "next/link";
@@ -87,7 +88,7 @@ export function PlanContextPanel({ planId }: { planId: Id<"plans"> }) {
       >
         <Target className="w-3.5 h-3.5 text-sol-cyan flex-shrink-0" />
         <span className="font-medium text-sol-cyan truncate">{plan.title}</span>
-        <span className="text-sol-text-dim font-mono">{plan.short_id}</span>
+        <ShortId id={plan.short_id} className="text-sol-text-dim" />
         <div className="flex items-center gap-1.5 ml-auto">
           <div className="w-16 h-1.5 rounded-full bg-sol-bg-highlight overflow-hidden">
             <div

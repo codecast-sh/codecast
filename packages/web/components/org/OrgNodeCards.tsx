@@ -4,6 +4,7 @@
 // inbox's: needs input amber (THREAD_STATE_STATUS_META.blocked), working green,
 // done cyan, dormant blue, idle dim.
 import { memo, type ReactNode } from "react";
+import { ShortId } from "../ShortId";
 import { ProjectLeadMark } from "../charter/ProjectLeadChip";
 import Link from "next/link";
 import { Handle, Position, useStore, type NodeProps, type Node } from "@xyflow/react";
@@ -623,7 +624,7 @@ export const SessionCard = memo(function SessionCard({ data }: NodeProps<Node<Se
         <div className="min-w-0 flex-1" title={ghost.line}>
           <div className="flex items-baseline gap-1.5 whitespace-nowrap overflow-hidden">
             <span className="truncate text-[13px] leading-[1.25] font-medium" style={{ color: "var(--sol-text)", opacity: dim ? GHOST.opacity : 1 }}>{s.title}</span>
-            <span className="shrink-0 text-[9.5px]" style={{ color: "var(--sol-text-dim)", fontFamily: "var(--font-mono)" }}>{s.short_id}</span>
+            <ShortId id={s.short_id} className="text-[9.5px]" style={{ color: "var(--sol-text-dim)" }} />
           </div>
           <div className="truncate text-[10.5px] leading-tight mt-[2px]" style={{ color: GHOST.color }} data-adopt-line>
             becomes {ghost.role_handle ? `@${ghost.role_handle}'s` : "the role's"} standing session
@@ -657,7 +658,7 @@ export const SessionCard = memo(function SessionCard({ data }: NodeProps<Node<Se
           {s.title || "Untitled"}
         </div>
         <div className="flex items-center gap-1.5 text-[9.5px] leading-tight mt-[1px]" style={{ color: "var(--sol-text-dim)", fontFamily: "var(--font-mono)" }}>
-          <span>{s.short_id}</span>
+          <ShortId id={s.short_id} />
           {s.git_branch && (
             <>
               <span aria-hidden>·</span>

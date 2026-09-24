@@ -121,7 +121,7 @@ export function InitiativePageInner({ id }: { id: string }) {
             <div className="flex items-center gap-2 min-w-0">
               <Flag className="w-4 h-4 shrink-0" style={{ color: INITIATIVE_ACCENT }} />
               <Title initiative={initiative} phone={phone} />
-              {initiative.short_id && <span className="shrink-0 inline-flex items-center h-[20px] px-1.5 rounded-md text-[10.5px] font-medium" style={{ background: INITIATIVE_ACCENT, color: "var(--sol-bg)", fontFamily: "var(--font-mono)" }}>{initiative.short_id}</span>}
+              {initiative.short_id && <span className="shrink-0 whitespace-nowrap inline-flex items-center h-[20px] px-1.5 rounded-md text-[10.5px] font-medium" style={{ background: INITIATIVE_ACCENT, color: "var(--sol-bg)", fontFamily: "var(--font-mono)" }}>{initiative.short_id}</span>}
             </div>
             {/* Line two: status, who drives it, how it is going, when it is due, how far along. */}
             <div className={cn("mt-2 flex items-center gap-x-4 gap-y-1.5 flex-wrap", phone ? "text-[12px]" : "text-[12.5px]")}>
