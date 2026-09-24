@@ -54,6 +54,7 @@ const visibilitySegment = v.object({
 const teamFeaturesValidator = v.object({
   chat: v.optional(v.boolean()),
   calls: v.optional(v.boolean()),
+  org: v.optional(v.boolean()),
 });
 
 // The entity kinds that can participate in entity-conversation links.

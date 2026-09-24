@@ -1,6 +1,8 @@
-// A scope's board on the phone (docs/architecture/scopes-and-feed.md F2, F3):
-// who holds the seat, what waits on a person, and everything in the scope as
-// one stream, newest first. The paging is web's own (useScopeFeedStream); only
+// A scope's board on the phone (docs/architecture/scopes-and-feed.md F2, F3,
+// F5): who holds the seat, then the briefing a role's first screen carries on
+// the web (what needs you, where each project stands in the role's words,
+// what it is doing), then everything in the scope as one stream, newest
+// first. The paging is web's own (useScopeFeedStream); only
 // the rows are drawn here. "workspace" is the root: the whole workspace.
 import { useCallback, useMemo } from 'react';
 import { ActivityIndicator, FlatList, Image, ScrollView, StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
@@ -19,11 +21,16 @@ import { openLink } from '@/lib/links';
 import { solColor } from '@/lib/solColor';
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import { useScopeFeedStream } from '@codecast/web/hooks/useScopeFeedStream';
-import { useScopeSummary, type ScopeRef } from '@codecast/web/hooks/useScopeQueries';
+import { useRoleBrief, type ScopeRef } from '@codecast/web/hooks/useScopeQueries';
+import { useRoleEscalations } from '@codecast/web/hooks/useRoleEscalations';
 import { compactAge } from '@codecast/web/lib/threadState';
-import { FEED_NEUTRAL_TONE, feedStateTone, handsWaiting, roleStanding, scopeQueryRef, scopeSeatOf } from '@codecast/web/lib/scopePage';
+import { FEED_NEUTRAL_TONE, feedStateTone, roleStanding, scopeQueryRef, scopeSeatOf } from '@codecast/web/lib/scopePage';
 import { parentName, standingLineOf } from '@codecast/web/components/org/orgMeta';
 import { FEED_KINDS, FEED_KIND_META, type FeedKind, type FeedRow } from '@codecast/web/components/org/scope/scopeTypes';
+import type { OrgRole, OrgTree } from '@codecast/web/components/org/orgTypes';
+import { escalationFirstLine } from '@codecast/shared/contracts';
+import { noWordYet, parseStandingSection, standingLineAgeDays, standingLineFor, standingLineStale } from '@codecast/shared/contracts/briefStanding';
+import { EntityPill } from '@/components/EntityPill';
 
 const KIND_ICON: Record<FeedKind, React.ComponentProps<typeof FontAwesome>['name']> = {
   session: 'terminal',
@@ -50,7 +57,7 @@ export default function ScopeBoardScreen() {
   // names every project for it. Only that case asks for the project list.
   const whole = !role || (role.scope.project_ids.length === 0 && role.scope.plan_ids.length === 0);
   const workspaceArgs = useWorkspaceArgs();
-  const projects = useQuery(api.projects.webList, whole && workspaceArgs !== 'skip' ? workspaceArgs : 'skip') as Array<{ _id: string }> | undefined;
+  const projects = useQuery(api.projects.webList, whole && workspaceArgs !== 'skip' ? workspaceArgs : 'skip') as Array<{ _id: string; title?: string; short_id?: string }> | undefined;
   const scopeRef: ScopeRef | null = useMemo(() => {
     if (!tree || (!role && !isRoot) || (whole && !projects)) return null;
     return scopeQueryRef(role, (projects ?? []).map((p) => String(p._id)), tree.workspace.kind === 'team' ? tree.workspace.id : undefined);
@@ -106,7 +113,7 @@ export default function ScopeBoardScreen() {
               </TouchableOpacity>
             </RNView>
             <SeatLine seat={role ? role.standing : anchor} />
-            <Summary scope={scopeRef} waitingFloor={handsWaiting(role, tree, null)} />
+            {role && <Briefing role={role} tree={tree} projects={whole ? (projects ?? []).map((p) => ({ id: String(p._id), title: p.title ?? '', short_id: p.short_id })) : role.scope_names.projects} />}
           </RNView>
         }
       />
@@ -134,26 +141,70 @@ function SeatLine({ seat }: { seat: Parameters<typeof standingLineOf>[0] }) {
   );
 }
 
-/** The board's counts (org.scopeSummary): what is open, and what waits on a person. */
-function Summary({ scope, waitingFloor }: { scope: ScopeRef; waitingFloor: number }) {
+/** The briefing (F5.1), the same three blocks as the web's first screen: what
+ *  the role put in front of the person, one sentence per project from the
+ *  role's brief, and what it is doing. No counts, no lists of hands. */
+function Briefing({ role, tree, projects }: { role: OrgRole; tree: OrgTree; projects: Array<{ id: string; title: string; short_id?: string }> }) {
   const Theme = useTheme();
-  const { data } = useScopeSummary(scope);
-  const waiting = Math.max(waitingFloor, data?.sessions.needs_input ?? 0);
-  const cells: Array<{ label: string; value: number | string; color?: string }> = [
-    // The tree's count is a floor known at once; a zero floor says nothing until the summary lands.
-    { label: 'waiting on you', value: data || waiting > 0 ? waiting : '·', color: waiting > 0 ? Theme.accent : undefined },
-    { label: 'open tasks', value: data ? data.tasks.open : '·' },
-    { label: 'open decisions', value: data ? data.decisions.open : '·', color: data && data.decisions.open > 0 ? Theme.accent : undefined },
-    { label: data?.plans.length === 1 ? 'plan' : 'plans', value: data ? data.plans.length : '·' },
-  ];
+  const router = useRouter();
+  const now = useCoarseNow(60_000);
+  const escalations = useRoleEscalations(role._id, role.standing?.conversation_id ?? null);
+  const { data: brief } = useRoleBrief(role._id);
+  const standing = useMemo(() => parseStandingSection(brief?.narrative), [brief?.narrative]);
+  const active = role.counts.working ?? 0;
+  const current = [...role.sessions].filter((s) => s.state === 'working').sort((a, b) => b.updated_at - a.updated_at)[0]
+    ?? [...role.sessions].sort((a, b) => b.updated_at - a.updated_at)[0];
+  void tree;
   return (
-    <RNView style={styles.summary}>
-      {cells.map((c) => (
-        <RNView key={c.label} style={styles.cell}>
-          <RNText style={[styles.cellValue, c.color ? { color: c.color } : null]}>{c.value}</RNText>
-          <RNText style={styles.cellLabel} numberOfLines={1}>{c.label}</RNText>
+    <RNView style={styles.briefing} testID="scope-briefing">
+      <RNView>
+        <RNText style={styles.blockLabel}>Needs you</RNText>
+        {escalations.length === 0 ? (
+          <RNText style={styles.calm} testID="scope-needs-nothing">Nothing needs you.</RNText>
+        ) : escalations.map((e) => (
+          <TouchableOpacity key={e.conversation_id} style={styles.escalation} activeOpacity={0.7} onPress={() => router.push(`/session/${e.conversation_id}` as never)} testID={`scope-escalation-${e.conversation_id}`}>
+            <FontAwesome name="arrow-up" size={10} color={Theme.violet} style={{ marginTop: 3 }} />
+            <RNView style={{ flex: 1, minWidth: 0 }}>
+              <RNText style={styles.escalationLine}>{escalationFirstLine(e.line)}</RNText>
+              <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 3 }}>
+                <EntityPill id={e.conversation_id} type="session" />
+                <RNText style={styles.dim}>{compactAge(now - e.at)}</RNText>
+              </RNView>
+            </RNView>
+          </TouchableOpacity>
+        ))}
+      </RNView>
+      <RNView>
+        <RNText style={styles.blockLabel}>Where it stands</RNText>
+        {projects.length === 0 ? <RNText style={styles.calm}>No project in its scope yet.</RNText> : projects.map((p) => {
+          const line = standingLineFor(standing, { title: p.title, short_id: p.short_id });
+          const days = line ? standingLineAgeDays(line, now) : null;
+          const stale = !!line && standingLineStale(line, now);
+          return (
+            <RNView key={p.id} style={{ marginBottom: 6 }} testID={`scope-stands-${p.short_id ?? p.id}`}>
+              <RNText style={styles.projectTitle}>{p.title}</RNText>
+              {line ? (
+                <RNText style={styles.standsLine}>
+                  {line.text}
+                  {stale && days !== null ? <RNText style={{ color: Theme.yellow, fontSize: 11 }}>{`  written ${days} days ago`}</RNText> : null}
+                </RNText>
+              ) : (
+                <RNText style={[styles.standsLine, { color: Theme.textDim, fontStyle: 'italic' }]}>{brief === undefined ? ' ' : noWordYet(role.handle)}</RNText>
+              )}
+            </RNView>
+          );
+        })}
+      </RNView>
+      <RNView>
+        <RNText style={styles.blockLabel}>What it is doing</RNText>
+        <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }} testID={`scope-doing-${active}`}>
+          <RNText style={styles.standsLine}>
+            {role.total === 0 ? 'No sessions under it yet.' : active === 0 ? 'No session at work right now.' : `${active} ${active === 1 ? 'session' : 'sessions'} at work`}
+            {current ? (active > 0 ? ' · on' : ' · last') : ''}
+          </RNText>
+          {current ? <EntityPill id={current._id} shortId={current.short_id} type="session" /> : null}
         </RNView>
-      ))}
+      </RNView>
     </RNView>
   );
 }
@@ -262,10 +313,13 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   seatLine: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   dot: { width: 6, height: 6, borderRadius: 3 },
   pinned: { flex: 1, fontSize: 12.5, lineHeight: 17, color: Theme.textSecondary },
-  summary: { flexDirection: 'row', borderWidth: StyleSheet.hairlineWidth, borderColor: Theme.borderLight, borderRadius: 10, backgroundColor: Theme.bgAlt },
-  cell: { flex: 1, alignItems: 'center', paddingVertical: 10, paddingHorizontal: 2 },
-  cellValue: { fontSize: 17, fontWeight: '700', color: Theme.text, fontVariant: ['tabular-nums'] },
-  cellLabel: { fontSize: 9.5, color: Theme.textDim, marginTop: 2 },
+  briefing: { gap: Spacing.md, borderWidth: StyleSheet.hairlineWidth, borderColor: Theme.borderLight, borderRadius: 10, backgroundColor: Theme.bgAlt, paddingHorizontal: Spacing.md, paddingVertical: Spacing.md },
+  blockLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 0.8, textTransform: 'uppercase', color: Theme.textDim, marginBottom: 4 },
+  calm: { fontSize: 13, color: Theme.textMuted },
+  escalation: { flexDirection: 'row', gap: 8, paddingVertical: 4 },
+  escalationLine: { fontSize: 12.5, lineHeight: 17, color: Theme.text },
+  projectTitle: { fontSize: 12.5, fontWeight: '700', color: Theme.text },
+  standsLine: { fontSize: 13, lineHeight: 18, color: Theme.textSecondary },
   kinds: { paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md, gap: 6 },
   kind: { flexDirection: 'row', alignItems: 'center', gap: 5, height: 26, paddingHorizontal: 10, borderRadius: 13, borderWidth: StyleSheet.hairlineWidth, borderColor: Theme.border },
   kindText: { fontSize: 11, fontWeight: '600', color: Theme.textMuted },

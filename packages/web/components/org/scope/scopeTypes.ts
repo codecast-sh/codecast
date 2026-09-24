@@ -51,13 +51,8 @@ export type ScopeSummary = {
   generated_at: number;
 };
 
+/** The switch as stored (org-staffing.md S23.1); read it through roleAutonomy.autonomyOn, never by the word. */
 export type TrustStage = "understand" | "decide" | "direct";
-export const TRUST_STAGES: TrustStage[] = ["understand", "decide", "direct"];
-export const TRUST_META: Record<TrustStage, { label: string; sentence: string; color: string }> = {
-  understand: { label: "understand", sentence: "Reads and reports. Cannot answer decisions or start hands.", color: "var(--sol-blue)" },
-  decide: { label: "decide", sentence: "Answers decisions inside its grants. Cannot start hands.", color: "var(--sol-violet)" },
-  direct: { label: "direct", sentence: "Starts hands within its daily caps and answers decisions.", color: "var(--sol-green)" },
-};
 
 export type RoleCaps = { hands_per_day: number; wakes_per_day: number; tokens_per_day: number };
 export type RoleCounters = { day: string; hands: number; wakes: number; tokens: number };

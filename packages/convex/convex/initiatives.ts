@@ -151,10 +151,10 @@ async function coverOwnerScope(ctx: Ctx, userId: Id<"users">, initiativeId: Id<"
 }
 
 /** What every write answers: the row as it now stands, and what happened to the owner role's scope. */
-async function written(ctx: Ctx, userId: Id<"users">, id: Id<"initiatives">, cover: boolean, extra: Record<string, any> = {}) {
+async function written<E extends Record<string, any>>(ctx: Ctx, userId: Id<"users">, id: Id<"initiatives">, cover: boolean, extra: E = {} as E) {
   const scope = cover ? await coverOwnerScope(ctx, userId, id) : null;
   const row = await ctx.db.get(id);
-  return { id, short_id: row.short_id, row, scope, ...extra };
+  return { id, short_id: row.short_id as string, row, scope, ...extra };
 }
 
 type Fields = {
@@ -207,6 +207,80 @@ const fieldArgs = {
   parent_initiative_id: v.optional(v.union(v.string(), v.null())),
 };
 
+// ── The cores ────────────────────────────────────────────────────────────────
+// Three writers, each the one path for its gesture: the mutations below, the
+// CLI and the proposal apply path (orgInit applyInitiative and siblings,
+// initiatives-projects-role-page.md "I1, revised") all call these, so a goal
+// a person sets on the page and a goal a person accepts from a review are
+// made the same way and logged the same way (org-staffing.md S21). Each
+// reports what it wrote to the org log inside the gesture that called it: a
+// door that opened a row first (the proposal) folds it in; a plain call from
+// the page writes a row of its own through the initiative door.
+
+/** The ids the log labels for an initiative row: its owner and its projects. */
+const labelIds = (row: any, patch: Record<string, any> = {}) => [row?.owner?.role_id, row?.owner?.user_id, patch.owner?.role_id, patch.owner?.user_id, ...(row?.project_ids ?? []), ...(patch.project_ids ?? [])];
+
+export type InitiativeWorkspace = { workspace: "personal" | "team"; team_id?: Id<"teams"> };
+
+/** Create an initiative in the named workspace. `client_key` makes a retried
+ *  create (the web's outbox, a CLI rerun) answer with the row it already made. */
+export async function performCreateInitiative(ctx: Ctx, userId: Id<"users">, where: InitiativeWorkspace, fields: Fields & { title: string }, client_key?: string) {
+  const db = await createDataContext(ctx as any, { userId, workspace: where.workspace, team_id: where.team_id });
+  if (client_key) {
+    const mine = await db.query("initiatives").collect();
+    const existing = mine.find((r: any) => r.client_key === client_key && String(r.user_id) === String(userId));
+    if (existing) return { id: existing._id, short_id: existing.short_id, row: existing, scope: null };
+  }
+  // The row a new initiative will be, enough for the workspace checks.
+  const draft = { user_id: userId, team_id: db.workspace.type === "team" ? db.workspace.teamId : undefined, workspace: db.workspaceKey };
+  const patch = await fieldsPatch(ctx, userId, draft, fields);
+  const short_id = await nextShortId(ctx.db as any, "in");
+  return withOrgChange(ctx, userId, { kind: "initiative", door: "initiative" }, async () => {
+    const id = await db.insert("initiatives", { status: "proposed", project_ids: [], ...patch, short_id, client_key, health: "none" });
+    const row = await ctx.db.get(id);
+    await noteOrgChange(ctx, userId, whereOfRecord(row), {
+      kind: "initiative", subject: recordSubject("initiative", row),
+      before: { status: null, owner: null, project_ids: [] },
+      after: { status: row.status, owner: partyRef(row.owner) ?? null, project_ids: row.project_ids.map(String) },
+      labels: await labelsOf(ctx, labelIds(row)),
+    });
+    return written(ctx, userId, id, true);
+  });
+}
+
+/** Edit an initiative's fields. An owner change is logged with the owner
+ *  before and after; the owner role's scope gain rides in the same row. */
+export async function performUpdateInitiative(ctx: Ctx, userId: Id<"users">, initiative: any, fields: Fields) {
+  const patch = await fieldsPatch(ctx, userId, initiative, fields);
+  return withOrgChange(ctx, userId, { kind: "initiative_owner", subject: recordSubject("initiative", initiative), door: "initiative" }, async () => {
+    await ctx.db.patch(initiative._id, { ...patch, updated_at: Date.now() });
+    if ("owner" in patch) await noteOrgChange(ctx, userId, whereOfRecord(initiative), {
+      kind: "initiative_owner", subject: recordSubject("initiative", initiative),
+      ...movedFields({ owner: partyRef(initiative.owner) ?? null }, { owner: partyRef(patch.owner) ?? null }),
+      labels: await labelsOf(ctx, labelIds(initiative, patch)),
+    });
+    return written(ctx, userId, initiative._id, "owner" in patch || "project_ids" in patch);
+  });
+}
+
+/** Add projects to an initiative, keeping its order; a project already in it
+ *  is left where it is. Answers `added`, the count that joined. */
+export async function performAddProjects(ctx: Ctx, userId: Id<"users">, initiative: any, refs: readonly string[]) {
+  const project_ids = await requireProjects(ctx, userId, initiative, [...initiative.project_ids.map(String), ...refs]);
+  const added = project_ids.length - initiative.project_ids.length;
+  return withOrgChange(ctx, userId, { kind: "initiative_projects", subject: recordSubject("initiative", initiative), door: "initiative" }, async () => {
+    if (added > 0) {
+      await ctx.db.patch(initiative._id, { project_ids, updated_at: Date.now() });
+      await noteOrgChange(ctx, userId, whereOfRecord(initiative), {
+        kind: "initiative_projects", subject: recordSubject("initiative", initiative),
+        before: { project_ids: initiative.project_ids.map(String) }, after: { project_ids: project_ids.map(String) },
+        labels: await labelsOf(ctx, labelIds(initiative, { project_ids })),
+      });
+    }
+    return written(ctx, userId, initiative._id, added > 0, { added: added > 0 });
+  });
+}
+
 export const create = mutation({
   args: {
     api_token: v.optional(v.string()),
@@ -219,33 +293,7 @@ export const create = mutation({
   },
   handler: async (ctx, { api_token, workspace, team_id, client_key, ...fields }) => {
     const userId = await requireCaller(ctx, api_token);
-    const db = await createDataContext(ctx, { userId, workspace, team_id });
-
-    // A retried create (the web's outbox, a CLI rerun) answers with the row it
-    // already made.
-    if (client_key) {
-      const mine = await db.query("initiatives").collect();
-      const existing = mine.find((r: any) => r.client_key === client_key && String(r.user_id) === String(userId));
-      if (existing) return { id: existing._id, short_id: existing.short_id, row: existing };
-    }
-
-    // The row a new initiative will be, enough for the workspace checks.
-    const draft = {
-      user_id: userId,
-      team_id: db.workspace.type === "team" ? db.workspace.teamId : undefined,
-      workspace: db.workspaceKey,
-    };
-    const patch = await fieldsPatch(ctx, userId, draft, fields);
-    const short_id = await nextShortId(ctx.db, "in");
-    const id = await db.insert("initiatives", {
-      status: "proposed",
-      project_ids: [],
-      ...patch,
-      short_id,
-      client_key,
-      health: "none",
-    });
-    return written(ctx, userId, id, true);
+    return performCreateInitiative(ctx, userId, { workspace, team_id }, fields, client_key);
   },
 });
 
@@ -258,17 +306,7 @@ export const update = mutation({
   },
   handler: async (ctx, { api_token, id, ...fields }) => {
     const userId = await requireCaller(ctx, api_token);
-    const initiative = await requireInitiative(ctx, userId, id);
-    const patch = await fieldsPatch(ctx, userId, initiative, fields);
-    return withOrgChange(ctx, userId, { kind: "initiative_owner", subject: recordSubject("initiative", initiative), door: "initiative" }, async () => {
-      await ctx.db.patch(initiative._id, { ...patch, updated_at: Date.now() });
-      if ("owner" in patch) await noteOrgChange(ctx, userId, whereOfRecord(initiative), {
-        kind: "initiative_owner", subject: recordSubject("initiative", initiative),
-        ...movedFields({ owner: partyRef(initiative.owner) ?? null }, { owner: partyRef(patch.owner) ?? null }),
-        labels: await labelsOf(ctx, [initiative.owner?.role_id, initiative.owner?.user_id, patch.owner?.role_id, patch.owner?.user_id]),
-      });
-      return written(ctx, userId, initiative._id, "owner" in patch || "project_ids" in patch);
-    });
+    return performUpdateInitiative(ctx, userId, await requireInitiative(ctx, userId, id), fields);
   },
 });
 
@@ -279,11 +317,7 @@ export const addProject = mutation({
   args: { api_token: v.optional(v.string()), id: v.string(), project_id: v.string() },
   handler: async (ctx, args) => {
     const userId = await requireCaller(ctx, args.api_token);
-    const initiative = await requireInitiative(ctx, userId, args.id);
-    const project_ids = await requireProjects(ctx, userId, initiative, [...initiative.project_ids.map(String), args.project_id]);
-    const added = project_ids.length > initiative.project_ids.length;
-    if (added) await ctx.db.patch(initiative._id, { project_ids, updated_at: Date.now() });
-    return written(ctx, userId, initiative._id, added, { added });
+    return performAddProjects(ctx, userId, await requireInitiative(ctx, userId, args.id), [args.project_id]);
   },
 });
 

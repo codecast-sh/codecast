@@ -70,7 +70,8 @@ const FIELDS: Record<string, string[]> = {
   plans: ["status", "project_id", "owner_role_id"],
   projects: ["status", "description", "owner_role_id", "goal", "success_metrics", "priority", "non_goals", "risks", "budget"],
   docs: ["project_id"],
-  initiatives: ["owner"],
+  // A goal (I1, revised): its status (a create reads from nothing to proposed; an undone create is cancelled, never erased), who drives it and the projects that carry it.
+  initiatives: ["status", "owner", "project_ids"],
   // An accepted upgrade waits on the instance row for the host step (org-hire.md H9); until then the acceptance is the one thing an undo can withdraw.
   org_template_instances: ["pending_upgrade"],
 };
@@ -78,9 +79,10 @@ const FIELDS: Record<string, string[]> = {
 function recordWrite(s: State, table: string, id: string, before: any, after: any) {
   if (!s.writes || !FIELDS[table]) return;
   const prior = s.writes.get(id) ?? { table, id, before: {}, after: {} };
-  const keys = before ? FIELDS[table] : table === "anchors" ? ["status", "org_role_id"] : table === "conversations" ? ["org_role_id", "standing_role_id", "anchor_id", "acting_user_id"] : table === "org_roles" || table === "projects" || table === "agent_tasks" ? ["status"] : [];
+  // An insert reads from the tombstone the undo will leave: a retired role, a done project, a cancelled goal (with nobody driving it and no projects), never an erasure.
+  const keys = before ? FIELDS[table] : table === "anchors" ? ["status", "org_role_id"] : table === "conversations" ? ["org_role_id", "standing_role_id", "anchor_id", "acting_user_id"] : table === "org_roles" || table === "projects" || table === "agent_tasks" ? ["status"] : table === "initiatives" ? ["status", "owner", "project_ids"] : [];
   for (const key of keys) {
-    const was = before ? before[key] ?? null : table === "org_roles" ? "retired" : table === "projects" ? "done" : table === "anchors" ? key === "status" ? "decommissioned" : null : table === "conversations" ? null : "cancelled";
+    const was = before ? before[key] ?? null : table === "org_roles" ? "retired" : table === "projects" ? "done" : table === "anchors" ? key === "status" ? "decommissioned" : null : table === "conversations" ? null : table === "initiatives" ? key === "status" ? "cancelled" : key === "project_ids" ? [] : null : "cancelled";
     const now = after?.[key] ?? null;
     if (canonical(was) === canonical(now)) continue;
     if (!(key in prior.before)) prior.before[key] = was;

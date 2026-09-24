@@ -48,14 +48,13 @@ async function verifyHireFlow() {
   };
   await change('input[placeholder="Head of Growth"]', "Growth lead");
   await change("textarea", "Keep my custom charter exactly.");
-  await change('input[type="number"]', "8");
   await act(async () => button("From a template").click());
   // The folder path for authors stays behind its fold: a command, copied, never run.
   assert.equal(button("Copy command").disabled, true);
   await change('input[placeholder="/path/to/templates/growth"]', "/src/templates/growth");
   await change('input[name="folder-instance"]', "product-growth");
   assert.equal(button("Copy command").disabled, false);
-  assert.match(document.body.textContent!, /Understand trust with routines paused/);
+  assert.match(document.body.textContent!, /creates the role with its routines paused/);
   assert.match(document.body.textContent!, /Spending and publishing need separate authorization/);
   await act(async () => button("Copy command").click());
   assert.equal(copied.length, 1);
@@ -75,7 +74,7 @@ async function verifyHireFlow() {
   assert.match(document.body.textContent!, /Ads credentials/);
   await change('input[name="input:product.domain"]', "product.example");
   assert.equal(document.querySelector<HTMLInputElement>('input[name="template-instance"]')!.value, "product-growth");
-  assert.match(document.body.textContent!, /A new role CMO @product-growth-cmo at understand trust, reporting to me/);
+  assert.match(document.body.textContent!, /A new role CMO @product-growth-cmo, reporting to me, that starts work on its own/);
   assert.match(document.body.textContent!, /Authority outside codecast: write \(Ship pages\)/);
   assert.equal(button("Propose the hire").disabled, false);
   await act(async () => document.querySelector("[data-template-form]")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
@@ -93,7 +92,7 @@ async function verifyHireFlow() {
   await act(async () => button("Create and start").click());
   assert.equal(created.length, 1);
   assert.equal(created[0].charter, "Keep my custom charter exactly.");
-  assert.equal(created[0].caps.hands_per_day, 8);
+  assert.equal(created[0].caps, undefined);
   assert.equal(created[0].handle, "growth-lead");
   assert.equal(created[0].project_path, "/src/product");
   assert.equal(created[0].provision, true);

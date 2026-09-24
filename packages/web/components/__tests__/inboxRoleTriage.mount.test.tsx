@@ -5,8 +5,9 @@
 // the header number says, and what the two gestures do in the same tick.
 //
 // The cases, one mount each (R1, revised):
-//   nested     a session that reports to a role sits under the role's card as
-//              the small row a subagent uses, and Needs Input does not count it
+//   count      a session that reports to a role is never a row in the inbox
+//              (org-staffing.md S23.3): the role's card carries a count that
+//              opens the role's page, and Needs Input does not count it
 //   through    a session the role escalated stays nested; the ROLE's card is
 //              the one in Needs Input, carrying the line, the session pill and
 //              Hand back per line; two escalations are one card with two lines
@@ -155,7 +156,7 @@ const cardOf = (host: HTMLElement, sessionId: string) => host.querySelector(`[da
 
 beforeEach(() => { document.body.innerHTML = ""; });
 
-test("a role's session is a small row under the role's card, and Needs Input does not count it", async () => {
+test("a role's sessions are never rows: the role's card carries a count that opens its page, and Needs Input does not count them (S23.3)", async () => {
   seed([standing(), hand(WAITING, "Pricing page copy"), hand(WORKING, "Cold email rewrite", { agent_status: "working", is_idle: false }), row(MINE, { title: "My own session" })]);
   const m = await mountInbox();
 
@@ -166,21 +167,18 @@ test("a role's session is a small row under the role's card, and Needs Input doe
   // The role's card surfaced (a standing session with nothing under it stays
   // out of the inbox) and files by the role's own state.
   expect(sectionOf(m.host, STANDING)).toBe("dormant");
-  // Both of its sessions sit in that section, right under it, as small rows.
-  for (const sid of [WAITING, WORKING]) {
-    expect(sectionOf(m.host, sid)).toBe("dormant");
-    const el = cardOf(m.host, sid)!;
-    expect(el.querySelector('[aria-label="Reports to @growth"]')).not.toBeNull();
-    expect(el.querySelector('[data-role-gesture="put-in-my-inbox"]')).not.toBeNull();
-    // A small row carries no strip and no count.
-    expect(el.querySelector("[data-escalation]")).toBeNull();
-  }
-  // The role's card is one thing in its section, however many sit under it.
+  // Neither of its sessions is a row anywhere: the card carries the count,
+  // and the count opens the role's page, where the sessions live.
+  for (const sid of [WAITING, WORKING]) expect(cardOf(m.host, sid)).toBeNull();
+  const pill = cardOf(m.host, STANDING)!.querySelector("[data-role-sessions]") as HTMLAnchorElement;
+  expect(pill.textContent).toBe("2 sessions");
+  expect(pill.getAttribute("href")).toBe("/org/or-7");
+  // The role's card is one thing in its section, however many ride it.
   expect(headerCount(m.host, "dormant")).toBe("1");
   await m.unmount();
 });
 
-test("by default the role's card is the one in Needs Input, carrying the lines; the sessions stay nested; Hand back per line", async () => {
+test("by default the role's card is the one in Needs Input, carrying the lines; the sessions stay off the list; Hand back per line", async () => {
   const OLDER = id("older");
   seed([
     standing(),
@@ -194,17 +192,10 @@ test("by default the role's card is the one in Needs Input, carrying the lines; 
   // in Needs Input, and it is the ONE card counted there.
   expect(sectionOf(m.host, STANDING)).toBe("needs_input");
   expect(headerCount(m.host, "needs_input")).toBe("1");
-  // Every session under the role files with it, as small rows (the card
-  // shows two before "+N more", so the two escalated ones are the newest).
-  for (const sid of [ESCALATED, OLDER]) {
-    expect(sectionOf(m.host, sid)).toBe("needs_input");
-    expect(cardOf(m.host, sid)!.querySelector('[aria-label="Reports to @growth"]')).not.toBeNull();
-    expect(cardOf(m.host, sid)!.querySelector("[data-escalation]")).toBeNull();
-    // The escalated rows say so.
-    expect(cardOf(m.host, sid)!.querySelector("[data-role-handed]")).not.toBeNull();
-  }
-  // The plain one is folded behind the card's "+1 more", never a card of its own.
-  expect(cardOf(m.host, WAITING)).toBeNull();
+  // No session under the role is a row (S23.3): the card counts all three,
+  // and the two escalated ones reach the person as its lines.
+  for (const sid of [ESCALATED, OLDER, WAITING]) expect(cardOf(m.host, sid)).toBeNull();
+  expect(cardOf(m.host, STANDING)!.querySelector("[data-role-sessions]")!.textContent).toBe("3 sessions");
 
   // One card, two lines, newest first, each with the session pill, the first
   // line of the reason, the whole reason on hover, and Hand back.
@@ -231,7 +222,7 @@ test("by default the role's card is the one in Needs Input, carrying the lines; 
   });
   const after = [...cardOf(m.host, STANDING)!.querySelectorAll("[data-role-escalation]")];
   expect(after.map((l) => l.getAttribute("data-role-escalation"))).toEqual([OLDER]);
-  expect(cardOf(m.host, ESCALATED)!.querySelector("[data-role-handed]")).toBeNull();
+  expect(cardOf(m.host, ESCALATED)).toBeNull();
   expect(sectionOf(m.host, STANDING)).toBe("needs_input");
 
   // Hand back the last one: the role's card goes back to its own state.
@@ -262,10 +253,11 @@ test("a direct escalation is the session's own card in Needs Input, with the rol
   // The role's face, and the one gesture that sends it back.
   expect(strip.querySelector("img, svg, [role=img]")).not.toBeNull();
   expect(strip.querySelector('[data-role-gesture="hand-back"]')!.textContent).toBe("Hand back to @growth");
-  // The role's card is untouched: dormant, with the other session under it,
-  // counting the one it put in the person's inbox.
+  // The role's card is untouched: dormant, the other session counted on it
+  // and never a row (S23.3), counting the one it put in the person's inbox.
   expect(sectionOf(m.host, STANDING)).toBe("dormant");
-  expect(sectionOf(m.host, WAITING)).toBe("dormant");
+  expect(cardOf(m.host, WAITING)).toBeNull();
+  expect(cardOf(m.host, STANDING)!.querySelector("[data-role-sessions]")!.textContent).toBe("1 session");
   expect(cardOf(m.host, STANDING)!.querySelector("[data-role-escalated-count]")!.textContent).toBe("1 in your inbox");
   expect(cardOf(m.host, STANDING)!.querySelector("[data-role-escalations]")).toBeNull();
   await m.unmount();
@@ -280,11 +272,17 @@ test("the role's card counts what it escalated, and both gestures move the row i
   expect(countOn()).toBeNull();
   expect(headerCount(m.host, "needs_input")).toBeNull();
 
-  // Put in my inbox: no await, no server. The draft moves the row.
+  // The sessions ride the card as a count, never as rows (S23.3).
+  expect(cardOf(m.host, STANDING)!.querySelector("[data-role-sessions]")!.textContent).toBe("2 sessions");
+  expect(cardOf(m.host, WAITING)).toBeNull();
+
+  // Put in my inbox (the person's gesture on the role's page): no await, no
+  // server. The draft moves the row, and it becomes a card of its own.
   await act(async () => {
-    (cardOf(m.host, WAITING)!.querySelector('[data-role-gesture="put-in-my-inbox"]') as HTMLElement).click();
+    useInboxStore.getState().putSessionInMyInbox(WAITING, "Ashot put this in their inbox", Date.now());
   });
   expect(sectionOf(m.host, WAITING)).toBe("needs_input");
+  expect(cardOf(m.host, STANDING)!.querySelector("[data-role-sessions]")!.textContent).toBe("1 session");
   expect(cardOf(m.host, WAITING)!.querySelector("[data-escalation]")!.textContent).toContain("Ashot put this in their inbox");
   expect(countOn()).toBe("1 in your inbox");
   expect(headerCount(m.host, "needs_input")).toBe("1");
@@ -293,7 +291,8 @@ test("the role's card counts what it escalated, and both gestures move the row i
   await act(async () => {
     (cardOf(m.host, WAITING)!.querySelector('[data-role-gesture="hand-back"]') as HTMLElement).click();
   });
-  expect(sectionOf(m.host, WAITING)).toBe("dormant");
+  expect(cardOf(m.host, WAITING)).toBeNull();
+  expect(cardOf(m.host, STANDING)!.querySelector("[data-role-sessions]")!.textContent).toBe("2 sessions");
   expect(countOn()).toBeNull();
   expect(headerCount(m.host, "needs_input")).toBeNull();
   await m.unmount();

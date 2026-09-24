@@ -177,7 +177,7 @@ async function verifyRoleScopeView() {
   await mount(<RoleHoverContent role={snapshot} />);
   assert.match(q('[data-scope-project="pr-4"]')!.textContent!, /^Growth · 1 open task/, "the card names the project; the store still counts its tasks");
   assert.equal(q('[data-scope-section="sessions"]'), null, "sessions are the tree's to say: without it the card says nothing rather than zero");
-  assert.match(q("[data-role-card]")!.textContent!, /decides in its area/);
+  assert.match(q("[data-role-card]")!.textContent!, /starts work on its own/);
 
   // ── neither: a face and a name, never an error ──
   env.card = undefined;

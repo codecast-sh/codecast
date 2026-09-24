@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { claimTask, completeTaskRun, failTaskRun, reclaimStaleTasks } from "./agentTasks";
+import { claimTask, completeTaskRun, failTaskRun, nestLooseTriggerRuns, reclaimStaleTasks } from "./agentTasks";
 import { hashToken } from "./apiTokens";
 import { makeFakeDb } from "./testDb";
 
@@ -170,21 +170,116 @@ describe("a recurring spawn run and its parent", () => {
     expect(wakes(tables)[0].content).toContain("boom");
   });
 
-  // Nesting under a session nobody reads would hide the run outright, which is
-  // strictly worse than the loose card it replaces.
-  test("a killed parent leaves the run a visible card", async () => {
+  // The parent's inbox state does not decide nesting: a stashed, killed or
+  // subagent parent still owns the run, and the outcomes a person must see
+  // wake it, which brings it back. A loose card per firing is what this ends.
+  for (const [label, extra] of [
+    ["stashed", { inbox_stashed_at: NOW - 1000 }],
+    ["killed", { inbox_killed_at: NOW - 1000 }],
+    ["subagent", { parent_conversation_id: "conversations_root", is_subagent: true }],
+  ] as const) {
+    test(`a ${label} parent still takes the run`, async () => {
+      const { ctx, tables } = await world(
+        { schedule_type: "recurring", interval_ms: 3_600_000 },
+        {
+          conversations: [
+            { _id: OWNER, user_id: USER, session_id: "owner-session", status: "active", owner_device_id: "laptop", ...extra },
+            { _id: RUN, user_id: USER, session_id: RUN_UUID, status: "active", short_id: "jx74v0r", agent_task_id: "agent_tasks_owned" },
+          ],
+        },
+      );
+      await complete(ctx, { daemon_id: DAEMON, run_session_uuid: RUN_UUID });
+      expect(run(tables)).toMatchObject({ parent_conversation_id: OWNER, is_subagent: true });
+      expect(wakes(tables)).toHaveLength(1);
+    });
+  }
+
+  test("another user's session never takes the run", async () => {
     const { ctx, tables } = await world(
       { schedule_type: "recurring", interval_ms: 3_600_000 },
       {
         conversations: [
-          { _id: OWNER, user_id: USER, session_id: "owner-session", status: "active", owner_device_id: "laptop", inbox_killed_at: NOW - 1000 },
-          { _id: RUN, user_id: USER, session_id: RUN_UUID, status: "active", short_id: "jx74v0r", agent_task_id: "agent_tasks_owned" },
+          { _id: OWNER, user_id: "users_other", session_id: "owner-session", status: "active" },
+          { _id: RUN, user_id: USER, session_id: RUN_UUID, status: "active", short_id: "jx74v0r" },
         ],
       },
     );
     await complete(ctx, { summary: "Nothing to report.", run_session_uuid: RUN_UUID });
     expect(run(tables).parent_conversation_id).toBeUndefined();
-    expect(run(tables).is_subagent).toBeUndefined();
+  });
+});
+
+// A trigger armed from a bare shell has no session to nest its runs under.
+// A repeating one is born hidden, so it is not a card per firing, and comes
+// back only when a person must see it. A once run stays a card: its single
+// result is the deliverable.
+describe("a spawn run with no parent", () => {
+  const orphan = (overrides: Record<string, any> = {}) =>
+    world({ created_by_conversation_id: undefined, ...overrides }, {
+      conversations: [{ _id: RUN, user_id: USER, session_id: RUN_UUID, status: "active", short_id: "jx74v0r" }],
+    });
+  const recurring = { schedule_type: "recurring", interval_ms: 14_400_000 };
+
+  test("a repeating run is born hidden and a clean report leaves it hidden", async () => {
+    const { ctx, tables } = await orphan(recurring);
+    await complete(ctx, { summary: "Nothing to report.", run_session_uuid: RUN_UUID });
+    expect(run(tables).parent_conversation_id).toBeUndefined();
+    expect(run(tables).inbox_stashed_at).toBe(NOW);
+  });
+
+  test("a repeating run that ends without reporting comes back", async () => {
+    const { ctx, tables } = await orphan(recurring);
+    await complete(ctx, { daemon_id: DAEMON, run_session_uuid: RUN_UUID });
+    expect(run(tables).inbox_stashed_at).toBeUndefined();
+  });
+
+  test("a repeating run that asks for attention comes back", async () => {
+    const { ctx, tables } = await orphan(recurring);
+    await complete(ctx, { summary: "Needs a person.", needs_attention: true, run_session_uuid: RUN_UUID });
+    expect(run(tables).inbox_stashed_at).toBeUndefined();
+  });
+
+  test("a once run stays a card", async () => {
+    const { ctx, tables } = await orphan();
+    await complete(ctx, { summary: "Done.", run_session_uuid: RUN_UUID });
+    expect(run(tables).inbox_stashed_at).toBeUndefined();
+  });
+});
+
+// Runs stamped before the rule existed are brought under it once, by the
+// same stamp new runs go through.
+describe("the backfill of loose runs", () => {
+  const backfill = (ctx: any, args: Record<string, any> = {}) => (nestLooseTriggerRuns as any)._handler(ctx, args);
+  const looseWorld = (overrides: Record<string, any>, runExtra: Record<string, any> = {}) =>
+    world({ schedule_type: "recurring", interval_ms: 86_400_000, status: "scheduled", ...overrides }, {
+      conversations: [
+        { _id: OWNER, user_id: USER, session_id: "owner-session", status: "active", parent_conversation_id: "conversations_root", is_subagent: true },
+        { _id: RUN, user_id: USER, session_id: RUN_UUID, status: "completed", short_id: "jx73047", agent_task_id: "agent_tasks_owned", ...runExtra },
+      ],
+    });
+
+  test("a loose run nests under the session that armed it", async () => {
+    const { ctx, tables } = await looseWorld({});
+    expect(await backfill(ctx)).toMatchObject({ loose: 1, nested: 1 });
+    expect(run(tables)).toMatchObject({ parent_conversation_id: OWNER, is_subagent: true });
+  });
+
+  test("a loose run with no parent is hidden", async () => {
+    const { ctx, tables } = await looseWorld({ created_by_conversation_id: undefined });
+    expect(await backfill(ctx)).toMatchObject({ loose: 1, hidden: 1 });
+    expect(run(tables).inbox_stashed_at).toBe(NOW);
+  });
+
+  test("a run blocked on the human stays visible", async () => {
+    const { ctx, tables } = await looseWorld({ created_by_conversation_id: undefined }, { thread_state_status: "blocked" });
+    await backfill(ctx);
+    expect(run(tables).inbox_stashed_at).toBeUndefined();
+  });
+
+  test("a dry run writes nothing", async () => {
+    const { ctx, tables } = await looseWorld({});
+    expect(await backfill(ctx, { dry: true })).toMatchObject({ loose: 1, nested: 0 });
+    expect(run(tables).parent_conversation_id).toBeUndefined();
   });
 });
 

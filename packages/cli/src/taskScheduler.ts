@@ -36,6 +36,15 @@ interface RunningTask {
   runSessionUuid?: string;
 }
 
+// Run session uuid -> trigger id for the runs this daemon has live, so the
+// transcript sync creates a run's conversation already stamped as that
+// trigger's run (conversations.createConversation agent_task_id), nested from
+// its first instant rather than a loose card until linkRunConversation lands.
+const liveRunTasks = new Map<string, string>();
+export function triggerRunTaskId(sessionId: string): string | undefined {
+  return liveRunTasks.get(sessionId);
+}
+
 interface TaskSchedulerConfig {
   syncService: SyncService;
   config: Config;
@@ -412,7 +421,10 @@ export class TaskScheduler {
     // the schedule strip/badge work DURING the run and folds the previous
     // completed run of a repeating schedule out of the inbox. completeTaskRun
     // backfills the link at run end if every attempt here loses the race.
-    if (runSessionUuid) this.scheduleRunLink(task._id, runSessionUuid);
+    if (runSessionUuid) {
+      liveRunTasks.set(runSessionUuid, task._id);
+      this.scheduleRunLink(task._id, runSessionUuid);
+    }
   }
 
   /**
@@ -512,6 +524,7 @@ export class TaskScheduler {
     const entry = this.running.get(taskId);
     if (entry) {
       clearInterval(entry.heartbeatTimer);
+      if (entry.runSessionUuid) liveRunTasks.delete(entry.runSessionUuid);
       this.running.delete(taskId);
     }
   }

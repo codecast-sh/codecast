@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { awaitTrackedSessionCreateResult, computeInboxVisible, computeNewDividerIndex, dropLatchedFeedHasMore, feedPagePersistence, findReusableBlankSession, getSessionRenderKey, hydrateMergeValue, isConvexId, isSessionDismissed, isSessionStashed, orchestrationGroupLabelOf, PENDING_SEND_PRUNE_GRACE_MS, pendingSendConsumed, reconcilePendingSendForSession, resolveAssigneeInfo, resolveSessionAuthor, resolveShowOld, seedLiveInboxIdsFromCache, seedTeamInboxIdsFromCache, selectNavCollapsed, selectSessionRailOpen, SessionCreatePendingError, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
+import { convHasPendingSend, pendingRowsUnsettled } from "../inboxOverlays";
 import { _resetSnapshotLedger } from "../idbCollectionDiff";
 import { isPersistedStoreKey } from "../idbCache";
 import { ingestPlanDetail } from "../../hooks/useSyncPlans";
@@ -2008,6 +2009,35 @@ describe("pending user messages must never be lost on reload", () => {
     expect(useInboxStore.getState().pendingMessages.c1).toHaveLength(0);
   });
 
+  // 2026-09-23: a "continue" sent from the browser vanished for half an hour.
+  // The coverage poll saw the server's transcript row and deleted the bubble,
+  // while this window's tail was 33 minutes behind the server. Server evidence
+  // may settle a row (no stripes, no redrive, not in flight) but never remove
+  // it: only the echo landing in messages[] retires the bubble.
+  it("keeps a server-confirmed message on screen until this window holds its echo", () => {
+    const store = useInboxStore.getState();
+    const clientId = store.addOptimisticMessage("c1", "continue");
+
+    store.settleOptimisticMessage("c1", clientId);
+    const settled = useInboxStore.getState().pendingMessages.c1;
+    expect(settled).toHaveLength(1);
+    expect(settled[0]).toMatchObject({ content: "continue", _clientId: clientId, _isSettled: true });
+    expect(settled[0]._isOptimistic).toBeUndefined();
+    expect(convHasPendingSend(settled)).toBe(false);
+    expect(pendingRowsUnsettled(settled)).toBe(false);
+
+    // Unrelated rows arriving do not retire it.
+    store.setMessages("c1", [{ _id: "s1", role: "assistant", content: "working", timestamp: 1 } as any]);
+    expect(useInboxStore.getState().pendingMessages.c1).toHaveLength(1);
+
+    // The echo does.
+    store.setMessages("c1", [
+      { _id: "s1", role: "assistant", content: "working", timestamp: 1 } as any,
+      { _id: "s2", role: "user", content: "continue", client_id: clientId, timestamp: 2 } as any,
+    ]);
+    expect(useInboxStore.getState().pendingMessages.c1).toHaveLength(0);
+  });
+
   it("carries an uploading image (preview + spinner flag) on the optimistic bubble", () => {
     const store = useInboxStore.getState();
     store.addOptimisticMessage("c1", "[image]", [
@@ -2127,7 +2157,7 @@ describe("syncTable sessions — stale optimistic pending-send reconcile", () =>
       ...baseSession, _id: "conv-model", session_id: "sess-model",
       message_count: 3, agent_status: "working" as const, is_idle: false, updated_at: 10,
     }]);
-    expect(useInboxStore.getState().pendingMessages["conv-model"]).toMatchObject([{ content: "/model", _isSettledControl: true }]);
+    expect(useInboxStore.getState().pendingMessages["conv-model"]).toMatchObject([{ content: "/model", _isSettled: true }]);
     expect(sessionsWithPendingSend(useInboxStore.getState().pendingMessages).has("conv-model")).toBe(false);
   });
 
@@ -2178,7 +2208,7 @@ describe("syncTable sessions — stale optimistic pending-send reconcile", () =>
       ...baseSession, _id: "conv-leftover", session_id: "sess-leftover",
       message_count: 50, is_idle: true, has_pending: false, updated_at: 10,
     }]);
-    expect(useInboxStore.getState().pendingMessages["conv-leftover"]).toMatchObject([{ content: "/model", _isSettledControl: true }]);
+    expect(useInboxStore.getState().pendingMessages["conv-leftover"]).toMatchObject([{ content: "/model", _isSettled: true }]);
   });
 
   it("keeps a FAILED send so the user can retry, even after the agent goes active", () => {
@@ -2223,7 +2253,7 @@ describe("syncTable sessions — stale optimistic pending-send reconcile", () =>
       ...baseSession, _id: "conv-advanced", session_id: "sess-advanced",
       message_count: 5, is_idle: true, has_pending: false, updated_at: 200,
     }]);
-    expect(useInboxStore.getState().pendingMessages["conv-advanced"]).toMatchObject([{ content: "/model", _isSettledControl: true }]);
+    expect(useInboxStore.getState().pendingMessages["conv-advanced"]).toMatchObject([{ content: "/model", _isSettled: true }]);
   });
 });
 
@@ -3334,6 +3364,32 @@ describe("inboxStore local-first state mutations", () => {
     expect(s.conversations[CID]?.is_private).toBe(false);
     expect(s.conversations[CID]?.team_visibility).toBe("full");
     expect(dispatches.find((d) => d.action === "setTeamVisibility")?.args).toEqual([CID, "full"]);
+  });
+
+  // The team feed renders its own cached rows and the inbox session for a
+  // session the server never sent: a share or a hide must reach every copy in
+  // the same tick, or the chip reads the old state until the next push.
+  it("setPrivacy and setTeamVisibility patch the inbox session and every team feed cache row too", () => {
+    useInboxStore.setState({
+      sessions: { [CID]: { ...baseSession, _id: CID, is_private: false } },
+      conversations: {},
+      feedConversations: {
+        "team1|": [{ _id: CID, is_own: true, is_private: false, team_visibility: "summary" }, { _id: "other", is_own: false }],
+        "team1|repo": [{ _id: CID, is_own: true, is_private: false }],
+      } as any,
+    });
+    useInboxStore.getState().setPrivacy(CID, true);
+    let s = useInboxStore.getState();
+    expect((s.sessions[CID] as any).is_private).toBe(true);
+    expect((s.feedConversations as any)["team1|"][0]).toMatchObject({ is_private: true, team_visibility: "private" });
+    expect((s.feedConversations as any)["team1|repo"][0].is_private).toBe(true);
+    expect((s.feedConversations as any)["team1|"][1]).toEqual({ _id: "other", is_own: false });
+
+    useInboxStore.getState().setTeamVisibility(CID, "full");
+    s = useInboxStore.getState();
+    expect((s.sessions[CID] as any)).toMatchObject({ is_private: false, team_visibility: "full" });
+    expect((s.feedConversations as any)["team1|"][0]).toMatchObject({ is_private: false, team_visibility: "full" });
+    expect((s.feedConversations as any)["team1|repo"][0]).toMatchObject({ is_private: false, team_visibility: "full" });
   });
 
   it("updatePlan mutates the plan by short_id, protects the field, and dispatches updatePlan", () => {

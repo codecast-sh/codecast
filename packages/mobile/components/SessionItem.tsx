@@ -182,7 +182,7 @@ function StatusDot({ session }: { session: SessionData }) {
   return <RNView style={[styles.statusDot, { backgroundColor: color }]} />;
 }
 
-export function SessionItem({ session, isUnread, onPress, onPin, onLongPress, escalations }: { session: SessionData; isUnread?: boolean; onPress: () => void; onPin?: () => void; onLongPress?: () => void; escalations?: RoleEscalation[] | null }) {
+export function SessionItem({ session, isUnread, onPress, onPin, onLongPress, escalations, roleSessions, onOpenRole }: { session: SessionData; isUnread?: boolean; onPress: () => void; onPin?: () => void; roleSessions?: number; onOpenRole?: () => void; onLongPress?: () => void; escalations?: RoleEscalation[] | null }) {
   const Theme = useTheme();
   const project = projectName(session);
   const agent = agentLabel(session.agent_type ?? "");
@@ -297,6 +297,13 @@ export function SessionItem({ session, isUnread, onPress, onPin, onLongPress, es
         </RNView>
       )}
 
+      {/* A role's sessions are the role's (org-staffing.md S23.3): never rows
+          in the inbox; the card says how many and opens the role's page. */}
+      {!!roleSessions && roleSessions > 0 && (
+        <Pressable onPress={onOpenRole} hitSlop={6} style={{ alignSelf: 'flex-start', marginTop: 4, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, borderWidth: StyleSheet.hairlineWidth, borderColor: Theme.border }} accessibilityRole="button" accessibilityLabel={`${roleSessions} ${roleSessions === 1 ? 'session' : 'sessions'} under this role`}>
+          <RNText maxFontSizeMultiplier={1.2} style={{ fontSize: 11, color: Theme.textSecondary }}>{roleSessions} {roleSessions === 1 ? 'session' : 'sessions'}</RNText>
+        </Pressable>
+      )}
       {escalationRows.map((e) => {
         // The role's card carries the sessions it put in front of the person
         // (R1, revised): the session, the first line of the reason, the whole
@@ -402,7 +409,7 @@ export function SessionItem({ session, isUnread, onPress, onPin, onLongPress, es
   );
 }
 
-export function SwipeableSessionItem({ session, isUnread, onPress, onDismiss, onPin, onLongPress, escalations }: {
+export function SwipeableSessionItem({ session, isUnread, onPress, onDismiss, onPin, onLongPress, roleSessions, onOpenRole, escalations }: {
   session: SessionData;
   isUnread?: boolean;
   onPress: () => void;
@@ -410,6 +417,8 @@ export function SwipeableSessionItem({ session, isUnread, onPress, onDismiss, on
   onPin?: () => void;
   onLongPress?: () => void;
   escalations?: RoleEscalation[] | null;
+  roleSessions?: number;
+  onOpenRole?: () => void;
 }) {
   const Theme = useTheme();
   const translateX = useRef(new RNAnimated.Value(0)).current;
@@ -517,7 +526,7 @@ export function SwipeableSessionItem({ session, isUnread, onPress, onDismiss, on
       style={[styles.conversationItem, { transform: [{ translateX }] }]}
       {...(responder ? responder.panHandlers : {})}
     >
-      <SessionItem session={session} escalations={escalations} isUnread={isUnread} onPress={() => { if (!didSwipe.current) onPress(); }} onPin={onPin} onLongPress={onLongPress} />
+      <SessionItem session={session} escalations={escalations} roleSessions={roleSessions} onOpenRole={onOpenRole} isUnread={isUnread} onPress={() => { if (!didSwipe.current) onPress(); }} onPin={onPin} onLongPress={onLongPress} />
     </RNAnimated.View>
   );
 

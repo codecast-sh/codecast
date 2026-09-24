@@ -11,7 +11,7 @@ function fakeCtx() {
   const role = { _id: "role1", team_id: "team1", status: "active", anchor_id: "anchor1", brief_doc_id: "brief1", charter_doc_id: "charter1", name: "Infra lead", handle: "infra" };
   const anchor = { _id: "anchor1", conversation_id: "conv1" };
   const conv = { _id: "conv1", user_id: "u1", standing_role_id: "role1", thread_state: null };
-  const rows: Record<string, any> = { role1: role, anchor1: anchor, conv1: conv };
+  const rows: Record<string, any> = { role1: role, anchor1: anchor, conv1: conv, team1: { _id: "team1", features: { org: true } } };
   const patches: Array<{ id: string; patch: any }> = [];
   const inserts: Array<{ table: string; row: any }> = [];
   const scheduled: any[] = [];

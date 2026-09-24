@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 import { useState, useCallback, useMemo, type MouseEvent } from "react";
 import { useRouter } from "next/navigation";
 import { useInboxStore, ProjectItem } from "../../store/inboxStore";
@@ -242,6 +244,12 @@ function CreateProjectInline({ onCreated }: { onCreated: () => void }) {
         onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSubmit(); } }}
         className="w-full bg-transparent text-xs text-sol-text-muted placeholder:text-sol-text-dim/40 outline-none"
       />
+      {/* A project is a grouping, not a sharing rule: people arrive here
+          looking for the switch that shares a folder, and it lives in Sync. */}
+      <p className="text-[11px] text-sol-text-dim">
+        A project groups tasks, plans and docs. Which sessions your team can see is set per repository in{" "}
+        <Link href="/settings/sync" className="text-sol-cyan hover:underline">Settings › Sync</Link>; sessions outside a shared repository stay private to you.
+      </p>
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1.5">
           {PROJECT_COLORS.map((c) => (

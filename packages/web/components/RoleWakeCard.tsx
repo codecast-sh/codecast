@@ -110,7 +110,7 @@ function FrameLine({ line }: { line: string }) {
     <div className={cn("flex gap-2 text-[12.5px] leading-[1.45]", item && "pl-0.5")}>
       {item && <span className="shrink-0 mt-[7px] w-1 h-1 rounded-full" style={{ background: held ? "var(--sol-yellow)" : soft(70) }} aria-hidden />}
       <div className="min-w-0 flex-1 [&_p]:m-0 [&_code]:text-[11.5px]" style={{ color: passive ? "var(--sol-text-muted)" : "var(--sol-text)" }}>
-        {held && <Tag color="var(--sol-yellow)" bg="color-mix(in srgb, var(--sol-yellow) 14%, transparent)" title="Held back by a cap or a pause before this wake">held</Tag>}
+        {held && <Tag color="var(--sol-yellow)" bg="color-mix(in srgb, var(--sol-yellow) 14%, transparent)" title="Held back by a limit or a pause before this wake">held</Tag>}
         {held && " "}
         {passive && <Tag title="A fact for this frame, not a wake of its own">passive</Tag>}
         {passive && " "}
@@ -197,7 +197,7 @@ export function RoleWakeCard({ frame, timestamp, now, role, canEdit, onSetPaused
           </Link>
         )}
         <span className="text-[11.5px] truncate" style={{ color: "var(--sol-text-muted)" }}>{describeWake(frame)}</span>
-        {frame.held > 0 && <Tag color="var(--sol-yellow)" bg="color-mix(in srgb, var(--sol-yellow) 14%, transparent)" title={`${frame.held} of these were held back by a cap or a pause and ride this wake`}>held backlog</Tag>}
+        {frame.held > 0 && <Tag color="var(--sol-yellow)" bg="color-mix(in srgb, var(--sol-yellow) 14%, transparent)" title={`${frame.held} of these were held back by a limit or a pause and ride this wake`}>held backlog</Tag>}
         {frame.restart && <Tag title="The first frame after a restart carries the charter and the brief in full">after restart</Tag>}
         {paused && <Tag color="var(--sol-yellow)" bg="color-mix(in srgb, var(--sol-yellow) 14%, transparent)">paused now</Tag>}
         {retired && <Tag>retired</Tag>}
@@ -207,7 +207,6 @@ export function RoleWakeCard({ frame, timestamp, now, role, canEdit, onSetPaused
       </div>
       {frame.you?.today && (
         <div className="px-3 pb-1.5 text-[11px] tabular-nums" style={{ color: "var(--sol-text-dim)" }}>
-          {frame.you.trust && <span>trust {frame.you.trust} · </span>}
           {frame.you.today}
         </div>
       )}
@@ -227,7 +226,7 @@ export function RoleWakeCard({ frame, timestamp, now, role, canEdit, onSetPaused
             title={paused ? "Held wakes ship as one frame" : "Hands stop at a safe point; wakes hold"}
           />
         )}
-        <FooterButton icon={SlidersHorizontal} label="Caps" href={`${rolePath}?tab=settings`} title="Daily caps on hands, wakes and tokens" />
+        <FooterButton icon={SlidersHorizontal} label="Limits" href={`${rolePath}?tab=settings`} title="The most it may do in one day, behind its settings" />
         <FooterButton icon={History} label="Why did this wake me" href={wakesPath} title="The wake log: every wake, its causes and its size" />
       </div>
     </div>

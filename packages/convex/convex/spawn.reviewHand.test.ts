@@ -39,7 +39,7 @@ describe("cast spawn review_for_task", () => {
 
   test("the role's cap gates the review hand too", async () => {
     const { ctx } = fixture({ caps: { hands_per_day: 1, wakes_per_day: 10, tokens_per_day: 1000000 }, counters: { day: new Date().toISOString().slice(0, 10), hands: 1, wakes: 0, tokens: 0 } });
-    await expect((createSessionFromCli as any)._handler(ctx, { agent_type: "codex", review_for_task: "ct-1" })).rejects.toThrow(/cap of 1 hands/);
+    await expect((createSessionFromCli as any)._handler(ctx, { agent_type: "codex", review_for_task: "ct-1" })).rejects.toThrow(/today's limit of 1 hands/);
   });
 
   test("a task with no role behind it spawns a plain reviewer and counts nothing", async () => {

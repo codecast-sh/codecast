@@ -24,7 +24,7 @@ function world(extra: Record<string, any[]> = {}) {
   const tables: Record<string, any[]> = {
     users: [{ _id: ME, name: "Me", email: "me@x.ai" }],
     team_memberships: [{ _id: "m1", user_id: ME, team_id: TEAM, role: "admin", joined_at: 1 }],
-    teams: [{ _id: TEAM, name: "Acme" }],
+    teams: [{ _id: TEAM, name: "Acme", features: { org: true } }],
     counters: [],
     org_roles: [],
     anchors: [],
@@ -454,15 +454,31 @@ describe("orgRoles.staff", () => {
     expect(String(tables.conversations.find((c) => c._id === "mine")!.standing_role_id)).toBe(String(role._id));
   });
 
-  test("setTrust refuses to raise the chief of staff above understand", async () => {
+  test("the root role's switch cannot be turned on (S12, S23.1)", async () => {
     const { ctx, tables } = world();
     const out = await performStaff(ctx, ME as any, { team_id: TEAM, adopt_conversation_id: "mine" });
-    for (const trust of ["decide", "direct"]) {
-      await expect(performSetTrust(ctx, ME as any, { role_id: String(out.role._id), trust, human_decision: "sd-1" } as any)).rejects.toThrow(/understand/);
+    for (const args of [{ on: true }, { trust: "decide" }, { trust: "direct" }]) {
+      await expect(performSetTrust(ctx, ME as any, { role_id: String(out.role._id), ...args, human_decision: "sd-1" } as any)).rejects.toThrow(/does not start work on its own/);
     }
     expect(tables.org_roles[0].trust).toBe("understand");
-    // Setting it to understand again is allowed (a no-op a person may make).
-    await performSetTrust(ctx, ME as any, { role_id: String(out.role._id), trust: "understand", human_decision: "sd-1" } as any);
+    // Turning it off again is allowed (a no-op a person may make).
+    await performSetTrust(ctx, ME as any, { role_id: String(out.role._id), on: false, human_decision: "sd-1" } as any);
+  });
+
+  test("a role a person hires starts with the switch on; the charter notes each flip in a person's words (S23.1)", async () => {
+    const { ctx, tables } = world();
+    const role = await performCreateRole(ctx, ME as any, { name: "Growth", handle: "growth", team_id: TEAM });
+    expect(role.trust).toBe("direct");
+    await performProvisionRole(ctx, ME as any, { role_id: String(role._id) });
+    const off = await performSetTrust(ctx, ME as any, { role_id: String(role._id), on: false, human_decision: "sd-1" } as any);
+    expect(off).toMatchObject({ on: false, previous_on: true, trust: "understand" });
+    const on = await performSetTrust(ctx, ME as any, { role_id: String(role._id), on: true, human_decision: "sd-1" } as any);
+    expect(on).toMatchObject({ on: true, previous_on: false, trust: "direct" });
+    const charter = tables.docs.find((d) => d._id === tables.org_roles.find((r) => r.handle === "growth")!.charter_doc_id)!;
+    const notes = (charter.entries ?? []).map((e: any) => e.content);
+    expect(notes).toContain("Me turned off starting work on its own");
+    expect(notes).toContain("Me turned on starting work on its own");
+    expect(notes.join("\n")).not.toMatch(/[Tt]rust|stage|understand|direct/);
   });
 
   test("retire takes the seat's markers off the adopted session, so it can be adopted again", async () => {

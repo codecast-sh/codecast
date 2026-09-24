@@ -395,7 +395,6 @@ function Fact({ label, value, sub, tone }: { label: string; value: React.ReactNo
 const fmtTokens = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
 
 export function BriefFactsBlock({ facts, roleHandle }: { facts: BriefFacts; roleHandle: string }) {
-  const u = facts.usage;
   const now = useCoarseNow(30_000);
   const openLinked = useOpenLinkedSession();
   return (
@@ -404,7 +403,6 @@ export function BriefFactsBlock({ facts, roleHandle }: { facts: BriefFacts; role
         <Fact label="Open tasks" value={facts.tasks.open} sub={`${facts.tasks.total} total · ${facts.tasks.by_status.in_progress ?? 0} in progress`} />
         <Fact label="Plans" value={facts.plans.length} sub={facts.plans.filter((p) => p.status === "active").length + " active"} />
         <Fact label="Decisions" value={facts.decisions.open} sub={`${facts.decisions.answered_today} answered today`} tone={facts.decisions.open > 0 ? "var(--sol-yellow)" : undefined} />
-        <Fact label="Today" value={`${u.wakes}/${u.caps.wakes_per_day}`} sub={`wakes · ${u.hands}/${u.caps.hands_per_day} sessions started · ${fmtTokens(u.tokens)}/${fmtTokens(u.caps.tokens_per_day)} tokens${u.uncounted_sessions ? ` · ${u.uncounted_sessions} uncounted` : ""}`} />
       </div>
       {facts.hands.length > 0 && (
         <section>
@@ -452,9 +450,20 @@ export function BriefFactsBlock({ facts, roleHandle }: { facts: BriefFacts; role
   );
 }
 
-export function ScopeBriefTab({ role, facts, factsProblem, narrative, canEdit, backHref }: { role: OrgRole; facts: BriefFacts | null; factsProblem: string | null; narrative: string; canEdit: boolean; backHref: string }) {
+/** The Brief tab: the viewer's goals when they report to the role (R6), a
+ *  template role's sections (org-hire.md H11), the facts, then the narrative.
+ *  The goals and the sections are brief content, so they read here, one tab
+ *  from the briefing (F5). */
+export function ScopeBriefTab({ role, facts, factsProblem, narrative, canEdit, backHref, goals, template }: { role: OrgRole; facts: BriefFacts | null; factsProblem: string | null; narrative: string; canEdit: boolean; backHref: string; goals?: React.ReactNode; template?: React.ReactNode }) {
   return (
     <div className="space-y-5">
+      {goals && (
+        <section data-scope-section="goals">
+          <h3 className="px-1 mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Your goals</h3>
+          {goals}
+        </section>
+      )}
+      {template}
       {facts ? <BriefFactsBlock facts={facts} roleHandle={role.handle} /> : (
         <p className="px-1 text-[12px]" style={{ color: "var(--sol-text-dim)" }}>{factsProblem ?? "Facts load when the connection returns."}</p>
       )}

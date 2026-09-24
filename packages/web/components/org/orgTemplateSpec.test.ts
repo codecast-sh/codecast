@@ -51,7 +51,7 @@ describe("hire spec", () => {
     for (const c of spec.changes) expect(orgChangeError(c), c.kind).toBeNull();
     expect(orgAsksErrors(spec.asks, spec.changes.map((change) => ({ change })))).toEqual([]);
     const role = spec.changes[0] as any;
-    expect(role).toMatchObject({ handle: "acme-growth-growth-cmo", name: "CMO", scope: { projects: ["pr-7"], plans: [] }, reports_to: "me", trust: "understand", avatar: "fox", tenure: { kind: "standing" } });
+    expect(role).toMatchObject({ handle: "acme-growth-growth-cmo", name: "CMO", scope: { projects: ["pr-7"], plans: [] }, reports_to: "me", avatar: "fox", tenure: { kind: "standing" } });
     expect((spec.changes[1] as any).authority[0].label).toBe("Paid search for Acme Growth");
     expect(spec.changes[2]).toMatchObject({ kind: "hire", handle: "acme-growth-growth-cmo", template: "growth", version: "2.0.0", instance: "acme-growth-growth", project: "pr-7", config: { "product.domain": "acme.io", "budget.monthly_envelope_usd": "300", "accounts.customer_id": "695", voice: "plain" }, update_policy: "stable" });
     expect((spec.changes[2] as any).config["accounts.ads"]).toBeUndefined();

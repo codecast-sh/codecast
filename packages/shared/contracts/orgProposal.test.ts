@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { applyProposalChanges, extractOrgProposal, orgProposalBlock, orgProposalVerdict, recordChangeParts, changeLine } from "./orgProposal";
+import { applyProposalChanges, extractOrgProposal, normalizeAutonomyChange, orgProposalBlock, orgProposalVerdict, recordChangeParts, changeLine } from "./orgProposal";
 
 describe("org proposal block", () => {
   test("round trips through a decision context", () => {
@@ -46,6 +46,9 @@ const GOOD: Record<OrgChange["kind"], OrgChange> = {
   authority: { kind: "authority", handle: "growth", authority: [{ id: "ads-spend", kind: "spend", label: "Paid search on the configured campaign", limit: { usd_per_month: 300 }, expires: "90d" }, { id: "site-write", kind: "write", label: "Ship pages into the working tree" }] },
   hire: { kind: "hire", handle: "growth", template: "growth", version: "2.0.0", digest: "a".repeat(64), instance: "acme-growth", project: "pr-1", config: { "product.domain": "acme.io" }, update_policy: "stable" },
   upgrade: { kind: "upgrade", instance: "acme-growth", template: "growth", to: "2.1.0", digest: "b".repeat(64) },
+  initiative: { kind: "initiative", title: "Win the private network", description: "Quiet is onboarded and three brokers trade through us.", projects: ["Callers", "Broker network"], owner: "@calling" },
+  initiative_projects: { kind: "initiative_projects", initiative: "in-2", title: "Win the private network", projects: ["Callers"] },
+  initiative_owner: { kind: "initiative_owner", initiative: "in-2", title: "Win the private network", owner: "@calling" },
 };
 
 describe("org change validation", () => {
@@ -66,7 +69,7 @@ describe("org change validation", () => {
       [{ kind: "scope", handle: "gr", add: "pr-1" }, "lists of project or plan refs"],
       [{ kind: "budget", handle: "gr", caps: {} }, "at least one of hands_per_day"],
       [{ kind: "budget", handle: "gr", caps: { tokens_per_day: -1 } }, "non-negative"],
-      [{ kind: "trust", handle: "gr", trust: "god" }, "one of understand, decide, direct"],
+      [{ kind: "trust", handle: "gr", trust: "god" }, "autonomy on is true or false"],
       [{ kind: "routine", handle: "gr", title: "t", prompt: "p", every: "weekly" }, "duration like 7d"],
       [{ kind: "routine", handle: "gr", title: "t", every: "7d" }, "title and a prompt"],
       [{ kind: "project_meta", project: "pr-1" }, "changes nothing"],
@@ -128,13 +131,16 @@ describe("orderOrgChanges and describeOrgChange", () => {
     expect(describeOrgChange(GOOD.retire)).toBe("retire @ops");
     expect(describeOrgChange(GOOD.scope)).toBe("scope @growth +pr-5 -pl-2");
     expect(describeOrgChange(GOOD.budget)).toBe("budget @growth tokens 800000/day");
-    expect(describeOrgChange(GOOD.trust)).toBe("trust @growth to decide");
+    expect(describeOrgChange(GOOD.trust)).toBe("autonomy @growth on");
     expect(describeOrgChange(GOOD.routine)).toBe("routine on @growth: Weekly funnel every 7d");
     expect(describeOrgChange(GOOD.project_meta)).toBe("charter pr-1 owner @growth p1: Ship the onboarding");
     expect(describeOrgChange(GOOD.adopt)).toBe("adopt session jx7abcd as @chief-of-staff's standing session");
     expect(describeOrgChange(GOOD.plan_status)).toBe("mark plan pl-7 done");
     expect(describeOrgChange(GOOD.task_status)).toBe("mark task ct-42 done");
     expect(describeOrgChange(GOOD.project_status)).toBe("mark project Legacy paused");
+    expect(describeOrgChange(GOOD.initiative)).toBe("create initiative Win the private network over Callers, Broker network owned by @calling");
+    expect(describeOrgChange(GOOD.initiative_projects)).toBe("initiative in-2 +Callers");
+    expect(describeOrgChange(GOOD.initiative_owner)).toBe("initiative in-2 owner @calling");
   });
 
   test("a record change carries its record's title: the row reads the title with the id beside it, the CLI walk keeps the id", () => {
@@ -225,6 +231,60 @@ describe("file change", () => {
     expect(describeOrgChange({ kind: "file", plan: "pl-1", project: "Platform" })).toBe("file plan pl-1 under project Platform");
     const rows = [{ kind: "role", name: "A", handle: "a" }, { kind: "file", plan: "pl-1", project: "P" }, { kind: "projects", changes: [] }] as any[];
     expect(orderOrgChanges(rows, (r) => r).map((r) => r.kind)).toEqual(["projects", "file", "role"]);
+  });
+});
+
+// The company's goals (initiatives-projects-role-page.md "I1, revised"): three
+// kinds, one sentence each for a person who has not read the letter, one ask.
+describe("goal changes", () => {
+  test("each kind names its first fault", () => {
+    expect(orgChangeError({ kind: "initiative", title: "Win" })).toContain("description");
+    expect(orgChangeError({ kind: "initiative", title: "Win", description: "d", projects: [] })).toContain("non-empty list of project refs");
+    expect(orgChangeError({ kind: "initiative", title: "Win", description: "d", projects: ["p"], owner: " " })).toContain("owner is");
+    expect(orgChangeError({ kind: "initiative_projects", initiative: "in-2" })).toContain("projects is a non-empty list");
+    expect(orgChangeError({ kind: "initiative_owner", initiative: "in-2" })).toContain("owner is");
+    expect(orgChangeError({ kind: "initiative", title: "Win", description: "d", projects: ["p"], target_date: 1_800_000_000_000 })).toBeNull();
+  });
+  test("the sentence reads cold, with the owner as written and \"me\" as you", () => {
+    expect(changeLine(GOOD.initiative)).toBe("Set a goal: Win the private network, carried by Callers and Broker network, owned by @calling");
+    expect(changeLine({ ...GOOD.initiative, owner: "me" } as any)).toBe("Set a goal: Win the private network, carried by Callers and Broker network, owned by you");
+    expect(changeLine({ ...GOOD.initiative, owner: undefined } as any)).toBe("Set a goal: Win the private network, carried by Callers and Broker network");
+    expect(changeLine(GOOD.initiative_projects)).toBe("Add Callers to the goal Win the private network");
+    expect(changeLine({ kind: "initiative_projects", initiative: "in-2", projects: ["Callers", "Broker network"] })).toBe("Add Callers and Broker network to the goal in-2");
+    expect(changeLine(GOOD.initiative_owner)).toBe("Make @calling the owner of the goal Win the private network");
+    expect(changeLine({ kind: "initiative_owner", initiative: "in-2", owner: "Ashot Petrosian" })).toBe("Make Ashot Petrosian the owner of the goal in-2");
+  });
+  test("one subject per proposal, and the owner handle counts as a role the change names", async () => {
+    const { orgChangeKey, orgChangeHandles } = await import("./orgProposal");
+    expect(orgChangeKey(GOOD.initiative)).toBe("initiative:win the private network");
+    expect(orgChangeKey(GOOD.initiative_projects)).toBe("initiative_projects:in-2");
+    expect(orgChangeKey(GOOD.initiative_owner)).toBe("initiative_owner:in-2");
+    expect(orgChangeHandles(GOOD.initiative)).toEqual(["calling"]);
+    expect(orgChangeHandles(GOOD.initiative_owner)).toEqual(["calling"]);
+  });
+  test("goals land after the projects and roles they name and before moves; every goal change is one ask", async () => {
+    const { deriveAsks } = await import("./orgProposal");
+    expect(ORG_CHANGE_APPLY_RANK.initiative).toBeGreaterThan(ORG_CHANGE_APPLY_RANK.role);
+    expect(ORG_CHANGE_APPLY_RANK.initiative).toBeGreaterThan(ORG_CHANGE_APPLY_RANK.projects);
+    expect(ORG_CHANGE_APPLY_RANK.initiative_owner).toBeLessThan(ORG_CHANGE_APPLY_RANK.move);
+    const one = deriveAsks([{ seq: 1, change: GOOD.initiative, rationale: "Three projects say the same goal.", expected_effect: "One page says what winning looks like." }]);
+    expect(one).toEqual([{ title: "Set a goal: Win the private network, carried by Callers and Broker network, owned by @calling", why: "Three projects say the same goal.", effect: "One page says what winning looks like.", seqs: [1] }]);
+    const names = { role: (h: string) => (h === "calling" ? "Calling lead" : undefined), project: (r: string) => (r === "Callers" ? "Callers & Call Management" : undefined), initiative: (r: string) => (r === "in-2" ? "Win the private network" : undefined) };
+    const many = deriveAsks([
+      { seq: 1, change: { kind: "task_status", task: "ct-1", status: "done", reason: "x" } },
+      { seq: 2, change: GOOD.initiative_owner },
+      { seq: 3, change: { kind: "initiative", title: "Grow trades", description: "d", projects: ["Matching"] } },
+      { seq: 4, change: { kind: "initiative_projects", initiative: "in-2", projects: ["Callers"] } },
+      { seq: 5, change: { kind: "role", name: "Calling lead", handle: "calling" } },
+    ] as any, names);
+    expect(many.map((a) => [a.title, a.seqs])).toEqual([
+      ["Bring 1 record up to date", [1]],
+      ["1 goal to set, and 2 changes to the goals that exist", [2, 3, 4]],
+      ["Add an agent: Calling lead", [5]],
+    ]);
+    // With names, a lone change speaks in the tree's names, not the refs.
+    expect(deriveAsks([{ seq: 1, change: { kind: "initiative_projects", initiative: "in-2", projects: ["Callers"] } }] as any, names)[0].title).toBe("Add Callers & Call Management to the goal Win the private network");
+    expect(deriveAsks([{ seq: 1, change: GOOD.initiative_owner }] as any, names)[0].effect).toBe("Calling lead drives the goal from now on: its health is what they say, and the goal's projects join their area.");
   });
 });
 
@@ -495,5 +555,22 @@ describe("orgChangeTakeover and takeoverPhrase", () => {
     expect(takeoverPhrase("growth", { sessions: ["a", "b"], kept_in_front: [], over_cap: 0, told: { sessions: 1, deferred: 1 } }, true)).toBe("2 sessions now report to @growth and leave your needs input; 1 told now, 1 will read it on their next turn");
     expect(takeoverPhrase("growth", { sessions: [], kept_in_front: [], over_cap: 0 }, false)).toBe("");
     expect(takeoverPhrase("growth", null, true)).toBe("");
+  });
+});
+
+describe("the switch in a spec (org-staffing.md S23.1)", () => {
+  test("autonomy { on } maps onto the stored kind: on is direct, off is understand", () => {
+    expect(normalizeAutonomyChange({ kind: "autonomy", handle: "growth", on: true })).toEqual({ kind: "trust", handle: "growth", trust: "direct" });
+    expect(normalizeAutonomyChange({ kind: "autonomy", handle: "growth", on: false })).toEqual({ kind: "trust", handle: "growth", trust: "understand" });
+    expect(normalizeAutonomyChange({ kind: "scope", handle: "growth", add: ["pr-1"] })).toEqual({ kind: "scope", handle: "growth", add: ["pr-1"] });
+  });
+  test("parseOrgProposalSpec accepts the autonomy spelling and the words never say a stage", () => {
+    const r = parseOrgProposalSpec({ title: "t", summary_md: "s", mode: "review", changes: [{ change: { kind: "autonomy", handle: "growth", on: false }, rationale: "quiet quarter" }] });
+    expect(r.errors).toEqual([]);
+    const c = r.spec!.changes[0].change as any;
+    expect(c).toEqual({ kind: "trust", handle: "growth", trust: "understand" });
+    expect(changeLine(c)).toBe("@growth stops starting work on its own");
+    const bad = parseOrgProposalSpec({ title: "t", summary_md: "s", mode: "review", changes: [{ change: { kind: "autonomy", handle: "growth", on: "maybe" }, rationale: "r" }] });
+    expect(bad.errors.join("\n")).toContain("autonomy on is true or false");
   });
 });

@@ -10,6 +10,7 @@
 // (convex/orgChanges.ts), the web History tab and `cast org log` all read
 // this one file. Ids are strings here: the shared package knows no Convex.
 
+import { autonomyChangeWords, autonomyOn } from "./roleAutonomy";
 import {
   andList,
   changeLine,
@@ -24,7 +25,7 @@ import {
 
 /** Kinds the proposal vocabulary does not have: a change made at a door that
  *  is not a proposal, or the inverse of a proposal kind. */
-export const ORG_LOG_ONLY_KINDS = ["session", "lead", "initiative_owner", "role_edit", "restore", "unseat", "routine_stop", "project_remove"] as const;
+export const ORG_LOG_ONLY_KINDS = ["session", "lead", "initiative_cancel", "role_edit", "restore", "unseat", "routine_stop", "project_remove"] as const;
 export type OrgLogOnlyKind = (typeof ORG_LOG_ONLY_KINDS)[number];
 export type OrgLogKind = OrgChangeKind | OrgLogOnlyKind;
 
@@ -78,8 +79,9 @@ export type OrgLogFields = {
   risks?: unknown;
   /** The projects kind: what each entry of the change created or folded. */
   projects?: Array<{ op: "create"; project_id: string; title: string } | { op: "merge"; from_id: string; into_id: string }>;
-  // An initiative.
+  // An initiative: who drives it, and the projects that carry it (ids, in order).
   owner?: OrgPartyRef | null;
+  project_ids?: string[] | null;
   // A session.
   parent?: OrgSessionParent;
 };
@@ -351,11 +353,22 @@ export function orgLogRowChange(row: OrgLogRow): OrgChange | null {
       kind: "projects",
       changes: (row.after.projects ?? []).map((p) => p.op === "create" ? { op: "create" as const, title: p.title } : { op: "merge" as const, from: nameOf(row, p.from_id, p.from_id), into: nameOf(row, p.into_id, p.into_id) }),
     };
+    // The goals (I1, revised). The subject's label is the initiative's title
+    // (recordSubject), so the row reads the way the proposal did. A cancelled
+    // create (the inverse) has no status after; logOnlySentence writes it.
+    case "initiative": return row.after.status ? { kind: "initiative", title: row.subject.label, description: "", projects: (row.after.project_ids ?? []).map((id) => nameOf(row, id, id)), ...(row.after.owner ? { owner: partyName(row, row.after.owner) } : {}) } : null;
+    // Projects the row added; the inverse row (which removes them) reads
+    // through orgLogLine's own words, since the change kind only adds.
+    case "initiative_projects": {
+      const added = (row.after.project_ids ?? []).filter((id) => !(row.before.project_ids ?? []).includes(id));
+      return added.length ? { kind: "initiative_projects", initiative: row.subject.short_id ?? row.subject.label, title: row.subject.label, projects: added.map((id) => nameOf(row, id, id)) } : null;
+    }
+    case "initiative_owner": return { kind: "initiative_owner", initiative: row.subject.short_id ?? row.subject.label, title: row.subject.label, owner: partyName(row, row.after.owner) ?? "" };
     default: return null;
   }
 }
 
-const EDIT_WORDS: Partial<Record<keyof OrgLogFields, string>> = { name: "name", handle: "handle", avatar: "face", charter: "charter", tenure: "tenure", review_backend: "reviewer", status: "status" };
+const EDIT_WORDS: Partial<Record<keyof OrgLogFields, string>> = { name: "name", handle: "handle", avatar: "face", charter: "charter", tenure: "tenure", review_backend: "reviewer", status: "status", owner: "owner", project_ids: "projects" };
 
 /** The sentence of a kind the proposal vocabulary does not have. */
 function logOnlySentence(row: OrgLogRow): string {
@@ -366,7 +379,7 @@ function logOnlySentence(row: OrgLogRow): string {
       return `session ${row.subject.label} now reports to ${to}`;
     }
     case "lead": return row.after.owner_role_id ? `${nameOf(row, row.after.owner_role_id)} now leads the project ${row.subject.label}` : `the project ${row.subject.label} has no lead`;
-    case "initiative_owner": { const who = partyName(row, row.after.owner); return who ? `${who} now owns the initiative ${row.subject.label}` : `the initiative ${row.subject.label} has no owner`; }
+    case "initiative_cancel": return `cancel the goal ${row.subject.label}; it stays on the initiatives page as cancelled`;
     case "role_edit": { const words = (Object.keys(row.after) as Array<keyof OrgLogFields>).map((k) => EDIT_WORDS[k]).filter(Boolean) as string[]; return `change the ${andList(words) || "settings"} of ${at(handleOf(row))}`; }
     case "restore": return `bring back ${at(handleOf(row))}, with its area of work, its limits and its routines`;
     case "unseat": return `${at(handleOf(row))} gives up its standing session${row.before.standing_session ? ` ${row.before.standing_session.short_id}` : ""}; the session keeps running under its person`;
@@ -379,11 +392,18 @@ function logOnlySentence(row: OrgLogRow): string {
  *  the undo preview and `cast org log` all print this. Total, like changeLine. */
 export function orgLogLine(row: OrgLogRow): string {
   const change = orgLogRowChange(row);
+  // The switch (org-staffing.md S23.1): history says what the person did.
+  if (change?.kind === "trust") return `${autonomyChangeWords(autonomyOn(change.trust)).replace(/^t/, "T")} for ${at(change.handle)}`;
   if (change) return changeLine(change);
   // A hire and an upgrade are recorded; their way back is the host step
   // (org-staffing.md S21), so the inverse row says what the undo did do.
   if (row.kind === "hire") return `Take back the hire of ${at(handleOf(row))}${row.before.instance ? ` as ${row.before.instance.instance}` : ""}: the project lead goes back, and the instance waits for the host step`;
   if (row.kind === "upgrade") return `Withdraw the upgrade of ${row.before.upgrade?.instance ?? "the instance"}${row.before.upgrade ? ` to ${row.before.upgrade.template_id} ${row.before.upgrade.to}` : ""} before the host step runs it`;
+  // The change kind only adds; a row that took projects off a goal (the inverse) says so.
+  if (row.kind === "initiative_projects") {
+    const removed = (row.before.project_ids ?? []).filter((id) => !(row.after.project_ids ?? []).includes(id));
+    return `Remove ${andList(removed.map((id) => nameOf(row, id, id))) || "the projects"} from the goal ${row.subject.label}`;
+  }
   const line = (ORG_LOG_ONLY_KINDS as readonly string[]).includes(row.kind) ? logOnlySentence(row) : null;
   if (!line) return changeLine({ kind: row.kind } as any);
   return line.charAt(0).toUpperCase() + line.slice(1);
@@ -420,7 +440,9 @@ export const ORG_INVERSE_KIND: Record<OrgLogKind, OrgLogKind> = {
   routine: "routine_stop", routine_stop: "routine",
   projects: "project_remove", project_remove: "projects",
   move: "move", scope: "scope", budget: "budget", trust: "trust", role_edit: "role_edit",
-  lead: "lead", initiative_owner: "initiative_owner", session: "session",
+  lead: "lead", session: "session",
+  // The goals (I1, revised): a set goal is cancelled, never erased; the other two restore their fields.
+  initiative: "initiative_cancel", initiative_cancel: "initiative", initiative_projects: "initiative_projects", initiative_owner: "initiative_owner",
   file: "file", project_meta: "project_meta", plan_status: "plan_status", task_status: "task_status", project_status: "project_status",
   // Hiring from a template (org-hire.md): authority restores its list; a hire
   // and an upgrade are recorded, and their way back is the host step.
@@ -462,7 +484,7 @@ export function leftAloneLine(left: number, total: number): string {
 function createdBy(rows: ReadonlyArray<OrgLogRow>): Set<string> {
   const ids = new Set<string>();
   for (const r of rows) {
-    if (r.kind === "role" || r.kind === "restore") ids.add(r.subject.id);
+    if (r.kind === "role" || r.kind === "restore" || r.kind === "initiative") ids.add(r.subject.id);
     if (r.kind === "projects") for (const p of r.after.projects ?? []) if (p.op === "create") ids.add(p.project_id);
     if (r.kind === "adopt" && r.after.standing_session) ids.add(r.after.standing_session.conversation_id);
   }

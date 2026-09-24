@@ -1,7 +1,8 @@
 "use client";
 // The scope page's Settings tab (docs/architecture/scopes-and-feed.md F3;
 // org-roles-standing.md T4, T6): the scope editor with overlap warnings, who
-// the role reports to, trust stage, daily caps, host and model, the channels it
+// the role reports to, the switch (Starts work on its own) with the limits
+// behind a disclosure (org-staffing.md S23), host and model, the channels it
 // follows, and retire. Every edit is a store action that paints in the same
 // tick and rides dispatch to the orgRoles mutation.
 import { useMemo, useState } from "react";
@@ -18,12 +19,12 @@ import { useWorkflows } from "../../../hooks/useSyncWorkflows";
 import { lineOptions } from "./lineBoard";
 import { lineIntentEchoed, orgRoleReparentMakesCycle, type OrgIntent, type OrgUpdateRoleInput } from "../../../store/orgSlice";
 import { SelectBox } from "../../ui/select-box";
-import { cn } from "../../../lib/utils";
 import { GatedScopeEditor, InlineEdit } from "../OrgScopePanel";
 import { parentName } from "../orgMeta";
 import { RetireRoleConfirm } from "../RetireRoleConfirm";
 import { sameParent, type OrgParentRef, type OrgRole, type OrgTree } from "../orgTypes";
-import { DEFAULT_CAPS, TRUST_META, TRUST_STAGES, type RoleCaps, type RoleCounters, type ScopeOverlap, type TrustStage } from "./scopeTypes";
+import { DEFAULT_CAPS, type RoleCaps, type RoleCounters, type ScopeOverlap } from "./scopeTypes";
+import { AUTONOMY_LABEL, autonomyOn, autonomySentence, trustForSwitch } from "@codecast/shared/contracts/roleAutonomy";
 import { CHIEF_OF_STAFF_HANDLE } from "../orgStaffingTypes";
 import { SlackConnect } from "../../anchor/SlackConnect";
 
@@ -135,6 +136,9 @@ export type ScopeSettingsProps = {
   counters: RoleCounters | null;
   /** The header's Retire lands here with the confirmation open. */
   armRetire?: boolean;
+  /** The record of what changed this role (org-staffing.md S21): it reads
+   *  where the role is changed. */
+  history?: React.ReactNode;
   /** `opts.leave_sessions` is the person's one edit on a scope that gains refs (R1). */
   onUpdate: (fields: OrgUpdateRoleInput, opts?: { leave_sessions?: boolean }) => void;
   onReparent: (target: OrgParentRef) => void;
@@ -143,18 +147,20 @@ export type ScopeSettingsProps = {
   onRetire: (standingSession?: "keep" | "retire") => void;
 };
 
-export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, standingId, counters, armRetire, onUpdate, onReparent, onRetire }: ScopeSettingsProps) {
+export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, standingId, counters, armRetire, history, onUpdate, onReparent, onRetire }: ScopeSettingsProps) {
   const [confirmRetire, setConfirmRetire] = useState(!!armRetire);
   // Keeping the standing agent is the default (S16).
   useWatchEffect(() => { if (armRetire) setConfirmRetire(true); }, [armRetire]);
   const caps: RoleCaps = role.caps ?? DEFAULT_CAPS;
   const [capsDraft, setCapsDraft] = useState<RoleCaps>(caps);
-  // The server value moves under the tab (a `cast role caps`, another window,
+  // The server value moves under the tab (a `cast role limits`, another window,
   // the echo after Save): the draft follows it, so Save never offers to write
   // stale numbers back over the change that just landed.
   useWatchEffect(() => { setCapsDraft(caps); }, [caps.hands_per_day, caps.wakes_per_day, caps.tokens_per_day]);
   const capsDirty = capsDraft.hands_per_day !== caps.hands_per_day || capsDraft.wakes_per_day !== caps.wakes_per_day || capsDraft.tokens_per_day !== caps.tokens_per_day;
-  const trust: TrustStage = role.trust ?? "understand";
+  // The switch (S23.1): on is direct, off is understand; the root stays off.
+  const startsOnItsOwn = autonomyOn(role.trust);
+  const isRoot = role.handle === CHIEF_OF_STAFF_HANDLE;
   const channels = useInboxStore((s) => (s as any).chatChannels as Record<string, any> | undefined);
   const followed = useMemo(() => (role.follow_channel_ids ?? []).map((id) => ({ id, name: channels?.[id]?.name ?? id.slice(0, 8) })), [role.follow_channel_ids, channels]);
 
@@ -250,34 +256,29 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
 
       <ReportingPeople tree={tree} role={role} canEdit={canEdit} onUpdate={onUpdate} />
 
-      <Section title="Trust" hint="What the role may do on its own. Each step is a person's decision and is logged on the charter.">
-        <div className="grid sm:grid-cols-3 gap-2">
-          {TRUST_STAGES.map((stage, i) => {
-            const m = TRUST_META[stage];
-            const on = stage === trust;
-            return (
-              <button
-                key={stage}
-                type="button"
-                disabled={!canEdit || on}
-                onClick={() => onUpdate({ trust: stage })}
-                aria-pressed={on}
-                className={cn("text-left rounded-lg border px-3 py-2.5 transition-colors disabled:cursor-default", !on && canEdit && "hover:bg-sol-bg-highlight/60")}
-                style={{ borderColor: on ? m.color : "color-mix(in srgb, var(--sol-border) 40%, transparent)", background: on ? `color-mix(in srgb, ${m.color} 9%, transparent)` : undefined }}
-              >
-                <div className="flex items-center gap-2">
-                  <span className="w-5 h-5 rounded-full inline-flex items-center justify-center text-[10px] font-bold tabular-nums" style={{ background: on ? m.color : "color-mix(in srgb, var(--sol-border) 40%, transparent)", color: on ? "var(--sol-bg)" : "var(--sol-text-dim)" }}>{i + 1}</span>
-                  <span className="text-[13px] font-semibold" style={{ color: on ? m.color : "var(--sol-text)" }}>{m.label}</span>
-                </div>
-                <p className="mt-1.5 text-[11.5px] leading-snug" style={{ color: "var(--sol-text-muted)" }}>{m.sentence}</p>
-              </button>
-            );
-          })}
-        </div>
+      <Section title={AUTONOMY_LABEL} hint={isRoot ? "The workspace's root role proposes and you apply, so it never starts work on its own." : autonomySentence(startsOnItsOwn)}>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={startsOnItsOwn}
+          aria-label={AUTONOMY_LABEL}
+          disabled={!canEdit || isRoot}
+          onClick={() => onUpdate({ trust: trustForSwitch(!startsOnItsOwn) })}
+          data-autonomy-switch={startsOnItsOwn ? "on" : "off"}
+          className="inline-flex items-center gap-2.5 rounded-full pl-1 pr-3 h-8 border transition-colors disabled:cursor-default disabled:opacity-60"
+          style={{ borderColor: startsOnItsOwn ? "var(--sol-green)" : "color-mix(in srgb, var(--sol-border) 45%, transparent)", background: startsOnItsOwn ? "color-mix(in srgb, var(--sol-green) 10%, transparent)" : undefined }}
+        >
+          <span className="relative inline-block w-9 h-5 rounded-full transition-colors" style={{ background: startsOnItsOwn ? "var(--sol-green)" : "color-mix(in srgb, var(--sol-text-dim) 35%, transparent)" }}>
+            <span className="absolute top-0.5 w-4 h-4 rounded-full transition-[left]" style={{ left: startsOnItsOwn ? 18 : 2, background: "var(--sol-bg)" }} />
+          </span>
+          <span className="text-[12.5px] font-semibold" style={{ color: startsOnItsOwn ? "var(--sol-green)" : "var(--sol-text-muted)" }}>{startsOnItsOwn ? "On" : "Off"}</span>
+        </button>
       </Section>
 
-      <Section title="Daily caps" hint="Hands the role may start, wakes it may receive, and tokens it may spend per UTC day. Today's counters reset at midnight.">
-        <div className="grid grid-cols-3 gap-2">
+      <Section title="Limits" hint="A safety net with the defaults filled in: the most it may do in one day. When it reaches one it waits for tomorrow and says so in its brief; nothing reaches you.">
+        <details data-role-limits>
+        <summary className="cursor-pointer text-[12px] select-none" style={{ color: "var(--sol-text-muted)" }}>Show the limits</summary>
+        <div className="mt-2.5 grid grid-cols-3 gap-2">
           {([["hands_per_day", "hands"], ["wakes_per_day", "wakes"], ["tokens_per_day", "tokens"]] as const).map(([k, label]) => (
             <label key={k} className="block">
               <span className="block text-[10.5px] mb-1" style={{ color: "var(--sol-text-dim)" }}>{label}</span>
@@ -296,10 +297,11 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
         </div>
         {canEdit && capsDirty && (
           <div className="mt-2.5 flex items-center gap-2">
-            <button type="button" onClick={() => onUpdate({ caps: capsDraft })} className="h-7 px-3 rounded-md text-[12px] font-semibold" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }}>Save caps</button>
+            <button type="button" onClick={() => onUpdate({ caps: capsDraft })} className="h-7 px-3 rounded-md text-[12px] font-semibold" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }}>Save limits</button>
             <button type="button" onClick={() => setCapsDraft(caps)} className="h-7 px-3 rounded-md text-[12px]" style={{ color: "var(--sol-text-muted)" }}>Reset</button>
           </div>
         )}
+        </details>
       </Section>
 
       <Section title="Where it runs" hint="The person whose machine runs the standing session, the machine, and the model. Change the model from the session's own model picker.">
@@ -343,6 +345,12 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
           </ul>
         )}
       </Section>
+
+      {history && (
+        <Section title="History" hint="What changed this role, newest first, each entry with its way back.">
+          <div data-scope-section="history">{history}</div>
+        </Section>
+      )}
 
       {canEdit && (
         <section className="rounded-xl border px-4 py-3.5" style={{ borderColor: "color-mix(in srgb, var(--sol-red) 30%, transparent)" }}>

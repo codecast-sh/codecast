@@ -8,6 +8,7 @@
 // answer leaves a face and a name, never an error (useQueryNoThrow).
 //
 // The whole card is one link: a click anywhere on it opens the role.
+import { autonomyOn } from "@codecast/shared/contracts/roleAutonomy";
 import Link from "next/link";
 import { ArrowUpRight } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -24,7 +25,7 @@ import type { SessionRoleSnapshot } from "../../store/inboxStore";
 
 export type RoleRef = Pick<SessionRoleSnapshot, "short_id" | "name" | "handle"> & Partial<SessionRoleSnapshot>;
 
-const TRUST_WORD: Record<string, string> = { understand: "reads and reports", decide: "decides in its area", direct: "starts sessions for the work" };
+const TRUST_WORD = (trust: string) => autonomyOn(trust) ? "starts work on its own" : "reads and recommends";
 
 export function RoleHoverContent({ role }: { role: RoleRef }) {
   // Enrichment, never the whole surface: if the answer never arrives the card
@@ -53,7 +54,7 @@ export function RoleHoverContent({ role }: { role: RoleRef }) {
             <span className="text-sol-violet font-medium">role</span>
             {r.status && r.status !== "active" && <span className="text-sol-yellow">{r.status}</span>}
             {tenureKind && <span className="text-sol-text-dim">{tenureKind === "program" ? "program seat" : "standing seat"}</span>}
-            {trust && <span className="text-sol-text-dim">· {TRUST_WORD[trust] ?? trust}</span>}
+            {trust && <span className="text-sol-text-dim">· {TRUST_WORD(trust)}</span>}
           </div>
         </div>
       </div>

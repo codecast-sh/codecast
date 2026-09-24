@@ -48,6 +48,7 @@ function seed(extra: Record<string, any[]> = {}) {
       { _id: BOSS, name: "Boss" },
       { _id: OWNER2, name: "Owner Two" },
     ],
+    teams: [{ _id: TEAM, features: { org: true } }],
     team_memberships: [
       { _id: "m1", user_id: HOST, team_id: TEAM, role: "admin" },
       { _id: "m2", user_id: BOSS, team_id: TEAM, role: "admin" },
@@ -421,7 +422,7 @@ describe("the race", () => {
     expect(s.error).toContain("Not a holder");
   });
 
-  test("a role session at trust understand cannot answer even under a grant", async () => {
+  test("a role session whose switch is off cannot answer even under a grant", async () => {
     const { ctx, tables } = seed({
       decision_grants: [
         { _id: "decision_grants_g1", role_id: "org_roles_lead", category: "approach", scope_key: "role:org_roles_lead", granted_by: BOSS, granted_at: NOW, expires_at: Date.now() + GRANT_TTL_MS },
@@ -430,7 +431,7 @@ describe("the race", () => {
     tables.org_roles[0].trust = "understand";
     await askApproach(ctx);
     const r = await answerCore(ctx, { userId: HOST }, { decision_id: "sd-1", session_id: "sess-lead", answer_index: 1 });
-    expect(r.error).toContain("understand stage");
+    expect(r.error).toContain("does not start work on its own");
   });
 
   test("a person's answer wins the race: the second writer sees already_resolved", async () => {

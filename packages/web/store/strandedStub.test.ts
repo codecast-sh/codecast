@@ -781,10 +781,10 @@ describe("healStrandedStub", () => {
     } as any);
 
     // ensureSessionCreated rejects rather than spawning in $HOME...
-    await expect(useInboxStore.getState().ensureSessionCreated(stubId)).rejects.toThrow(/pick a project/i);
+    await expect(useInboxStore.getState().ensureSessionCreated(stubId)).rejects.toThrow(/pick a folder/i);
     // ...and no createSession was dispatched (no silent $HOME spawn).
     expect(calls.filter((c) => c.action === "createSession")).toHaveLength(0);
     // The user-triggered send surfaces the same actionable error.
-    await expect(useInboxStore.getState().awaitConvexId(stubId)).rejects.toThrow(/pick a project/i);
+    await expect(useInboxStore.getState().awaitConvexId(stubId)).rejects.toThrow(/pick a folder/i);
   });
 });

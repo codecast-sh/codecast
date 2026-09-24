@@ -1,5 +1,6 @@
 import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, View as RNView, Modal, Alert, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, ActionSheetIOS, Switch } from 'react-native';
 import { TextInput, Text as RNText } from '@/components/Themed';
+import { useWorkspaceFeatureState } from '@/lib/teamFeatures';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { Component, type ReactNode, useState, useCallback, useRef, useMemo, useEffect } from 'react';
@@ -1071,6 +1072,9 @@ export default function InboxScreen() {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const router = useRouter();
   const isSearching = debouncedQuery.length >= 2;
+  // The org feature is per team, default off: the org button exists only
+  // once the workspace is known to have it on.
+  const orgOn = useWorkspaceFeatureState('org');
 
   // Wake-signature gates (see web store/wakeSig.ts). The raw s.sessions and
   // s.pendingMessages refs flip on every liveness tick and send-lifecycle
@@ -1163,7 +1167,7 @@ export default function InboxScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sessionsSig/pendingSendSig stand in for the churny refs; coarseNow drives the deadline signature
     [sessionsSig, pendingSendSig, inboxScope, meId, teamInboxIds, showOld, currentSessionId, pendingSessionCreates, sessionsWithQueuedMessages, coarseNow],
   );
-  const { visibleSessions, sorted: sortedAll, subsByParent, questions, pinned, newSessions, needsInput, done, dormant, working, stashed: stashedSessions, dismissed: dismissedOnly, escalationsByLead } = placed;
+  const { visibleSessions, sorted: sortedAll, subsByParent, questions, pinned, newSessions, needsInput, done, dormant, working, stashed: stashedSessions, dismissed: dismissedOnly, escalationsByLead, roleSessionsByLead } = placed;
   const activeSessions = useMemo(() => sortedAll.filter((s) => !s.is_deferred), [sortedAll]);
 
   // Label + project chip counts — same source as web's LabelChipsRow / palette
@@ -1360,8 +1364,10 @@ export default function InboxScreen() {
       onPin={() => handlePin(s._id)}
       onLongPress={() => handleSessionLongPress(s)}
       escalations={escalationsByLead.get(s._id)}
+      roleSessions={roleSessionsByLead.get(s._id)}
+      onOpenRole={s.role?.short_id ? () => router.push(`/org/${s.role!.short_id}`) : undefined}
     />
-  ), [router, handleStash, handlePin, handleSessionLongPress, unreadByConv, escalationsByLead]);
+  ), [router, handleStash, handlePin, handleSessionLongPress, unreadByConv, escalationsByLead, roleSessionsByLead]);
 
   // Collapsible section — collapse state lives in the shared store's
   // collapsedSections. Grouped-view sections keep their historical label keys;
@@ -1632,7 +1638,7 @@ export default function InboxScreen() {
             regenerates when Metro runs, so a new route is unknown to tsc. */}
         {/* The org sits here for the same reason the recorder does: no room
             for a sixth tab, and the inbox is one tap from opening the app. */}
-        {!isSearching && (
+        {!isSearching && orgOn === true && (
           <TouchableOpacity
             style={styles.recordBtn}
             onPress={() => router.push({ pathname: '/org' } as never)}

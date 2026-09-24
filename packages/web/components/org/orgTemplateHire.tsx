@@ -156,7 +156,7 @@ export function OrgTemplateHire({ projects, workspace, roles = [], initialProjec
         <div className="rounded-lg border border-sol-border/50 px-3 py-2.5 text-[12px] leading-relaxed" data-template-preview>
           <p className="font-semibold text-sol-text">What you will decide</p>
           <ul className="mt-1 list-disc pl-4 text-sol-text-muted">
-            {spec.changes.map((c, i) => <li key={i}>{c.kind === "role" ? `A new role ${c.name} @${c.handle} at understand trust, reporting to ${c.reports_to}` : c.kind === "authority" ? `Authority outside codecast: ${c.authority.map((g) => `${g.kind} (${g.label})`).join("; ")}` : c.kind === "hire" ? `The hire: ${c.template} ${c.version} as ${c.instance} on ${project?.title}` : ""}</li>)}
+            {spec.changes.map((c, i) => <li key={i}>{c.kind === "role" ? `A new role ${c.name} @${c.handle}, reporting to ${c.reports_to}, that starts work on its own` : c.kind === "authority" ? `Authority outside codecast: ${c.authority.map((g) => `${g.kind} (${g.label})`).join("; ")}` : c.kind === "hire" ? `The hire: ${c.template} ${c.version} as ${c.instance} on ${project?.title}` : ""}</li>)}
             <li>{manifest.routines.length} routine{manifest.routines.length === 1 ? "" : "s"}, created paused; you activate each from the role page once it is ready.</li>
             {humanSetupCount(manifest) > 0 && <li>{humanSetupCount(manifest)} setup step{humanSetupCount(manifest) === 1 ? "" : "s"} only you can do; the role puts one in front of you at a time.</li>}
           </ul>
@@ -203,7 +203,7 @@ function FolderPath({ projects, workspace, initialProjectId, projectPath }: { pr
           <span className={CAPTION}>Instance name</span>
           <input name="folder-instance" value={draft.instance} onChange={(e) => update({ instance: e.target.value })} placeholder="acme-growth" className={INPUT} spellCheck={false} autoCapitalize="none" maxLength={48} />
         </label>
-        <p className="text-sol-text-muted">Approval comes before setup. After you approve, reconcile creates the role at Understand trust with routines paused. Spending and publishing need separate authorization.</p>
+        <p className="text-sol-text-muted">Approval comes before setup. After you approve, reconcile creates the role with its routines paused. Spending and publishing need separate authorization.</p>
         {result.command ? (
           <pre aria-label="Template install command" className="max-h-44 overflow-auto whitespace-pre-wrap break-all rounded-lg border border-sol-border/50 bg-sol-bg-alt p-3 text-[11px] leading-relaxed text-sol-text" style={{ fontFamily: "var(--font-mono)" }}>{result.command}</pre>
         ) : <p role="status" className="text-[11.5px] text-sol-text-muted">{result.error}</p>}

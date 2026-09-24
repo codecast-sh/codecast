@@ -26,6 +26,7 @@ import {
   userRestOf,
   isSettleVerdictCurrent,
   HEARTBEAT_ALIVE_MS,
+  restoreToInbox,
 } from "./inboxFilters";
 import { loadArmedTriggerHomes, isArmedTriggerHome, isArmedLoopHome } from "./dormancy";
 import { displayNotificationActor, rewriteNotificationMessage } from "./lib/notificationActor";
@@ -890,7 +891,7 @@ export async function performNeedsInputCheck(
       state === "needs_input" &&
       (awaitingInput || stallKind === "permission_blocked" || stallKind === "stopped" || stallKind === "unresponsive");
     if (stalled) {
-      await ctx.db.patch(conv._id, { inbox_stashed_at: undefined, inbox_dismissed_at: undefined });
+      await restoreToInbox(ctx, conv);
       return { notified: false, reason: "unstashed_stall" };
     }
     return { notified: false, reason: "hidden" };

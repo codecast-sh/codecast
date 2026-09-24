@@ -277,7 +277,7 @@ export const submitReview = action({
       throw new Error(`Pull request with id ${args.pull_request_id} not found`);
     }
 
-    const githubResult = await ctx.runAction(api.githubApi.submitPRReview, {
+    const githubResult = await ctx.runAction(internal.githubApi.submitPRReview, {
       repository: pr.repository,
       pr_number: pr.number,
       event: args.event,
@@ -398,7 +398,7 @@ export async function submitReviewWithNotes(
       });
 
     try {
-      const result: any = await ctx.runAction(api.githubApi.submitPRReview, {
+      const result: any = await ctx.runAction(internal.githubApi.submitPRReview, {
         repository: reviewer.pr.repository,
         pr_number: reviewer.pr.number,
         event: args.event,

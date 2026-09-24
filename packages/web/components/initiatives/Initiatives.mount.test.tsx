@@ -31,7 +31,7 @@ async function verifyInitiatives() {
   // ── the world the pages read ──
   const { ORG_FIXTURE } = await import("../org/orgFixture");
   const fx = await import("./initiativeFixture");
-  const env = { phone: false, wide: true, tree: ORG_FIXTURE as OrgTree };
+  const env = { phone: false, wide: true, tree: ORG_FIXTURE as OrgTree, origin: null as null | { at: number; batch: string; proposal?: { short_id: string; title?: string }; undone: boolean } };
   const calls: string[] = [];
   const collections: Record<string, any[]> = {
     initiatives: fx.FIXTURE_INITIATIVES.map((r) => ({ ...r })),
@@ -73,6 +73,8 @@ async function verifyInitiatives() {
   mock.module("../../hooks/useIsPhone", () => ({ useIsPhone: () => env.phone, useMinWidth: () => env.wide, PHONE_MAX_WIDTH: 768 }));
   const realNow = { ...(await import("../../hooks/useCoarseNow")) };
   mock.module("../../hooks/useCoarseNow", () => ({ ...realNow, useCoarseNow: () => fx.FIXTURE_NOW, useNowWhen: () => fx.FIXTURE_NOW }));
+  // The org log's answer to "where did this goal come from" (I1, revised).
+  mock.module("../../hooks/useQueryNoThrow", () => ({ useQueryNoThrow: () => ({ data: env.origin, error: undefined, retry: () => {} }) }));
   mock.module("../../hooks/useOrgRoles", () => ({ useOrgRoles: () => ({ roles: env.tree.roles, workspace: env.tree.workspace, roleBotUserIds: new Set<string>() }) }));
   mock.module("../../hooks/useTeamRoster", () => ({ useTeamRosterIdentity: () => [{ _id: "fixture-user-me", name: "Ashot" }, { _id: "fixture-user-sam", name: "Sam" }] }));
   mock.module("../../hooks/useRoleScope", () => ({ useRoleScope: () => ({ model: null, role: null, escalated: [] }), useScopeRows: () => ({ projects: collections.projects, plans: collections.plans, tasks: collections.tasks, roles: env.tree.roles }) }));
@@ -254,6 +256,22 @@ async function verifyInitiatives() {
   // The list on the phone stacks each row's facts under its title.
   await mount(React.createElement(InitiativesList));
   assert.ok(q("[data-initiative-row='in-1'] [data-initiative-progress]"));
+
+  // ── where a goal came from (I1, revised): the review's proposal, dated, one click away ──
+  env.phone = false;
+  env.origin = { at: Date.UTC(2026, 8, 23, 12), batch: "b1", proposal: { short_id: "op-8", title: "Company review: Codecast" }, undone: false };
+  await mount(page("in-1"));
+  const origin = q("[data-initiative-origin]")!;
+  assert.ok(origin, "an initiative an accepted change made says so");
+  assert.equal(origin.getAttribute("data-initiative-origin"), "op-8");
+  assert.match(origin.textContent!, /^Proposed by the review on Sep 23$/);
+  assert.equal(origin.querySelector("a")!.getAttribute("href"), "/org?proposal=op-8");
+  env.origin = { ...env.origin, undone: true };
+  await mount(page("in-1"));
+  assert.match(q("[data-initiative-origin]")!.textContent!, /\(undone\)$/);
+  env.origin = null;
+  await mount(page("in-1"));
+  assert.equal(q("[data-initiative-origin]"), null, "a goal set on the page says nothing here");
 
   await act(async () => root.unmount());
 }

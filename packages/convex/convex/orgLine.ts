@@ -1,7 +1,7 @@
 import { internalMutation } from "./functions";
 import type { Id } from "./_generated/dataModel";
 import { resolveScope } from "./org";
-import { capsFor, countersFor, trustOf } from "./orgEvents";
+import { capsFor, countersFor, roleStartsOnItsOwn } from "./orgEvents";
 import { recordHandStart } from "./spawn";
 import { insertTaskComment } from "./tasks";
 import { createRunCore } from "./workflow_runs";
@@ -52,7 +52,7 @@ async function isBlocked(ctx: Ctx, task: any): Promise<boolean> {
 }
 
 export function roleMayStartHands(role: any, now: number): boolean {
-  if (role.status !== "active" || trustOf(role) !== "direct") return false;
+  if (role.status !== "active" || !roleStartsOnItsOwn(role)) return false;
   return countersFor(role, now).hands < capsFor(role).hands_per_day;
 }
 
@@ -109,13 +109,13 @@ export async function startLineRun(ctx: Ctx, role: any, task: any, now = Date.no
 
 export type SweepResult = { started: Array<{ role_id: string; task_id: string; run_id: string }>; skipped_capped: string[] };
 
-// L9: every two minutes. Paused roles and roles below `direct` never start
+// L9: every two minutes. Paused roles and roles whose switch is off never start
 // anything; a capped role is reported and left for tomorrow.
 export async function sweepCore(ctx: Ctx, now = Date.now()): Promise<SweepResult> {
   const result: SweepResult = { started: [], skipped_capped: [] };
   const roles: any[] = await ctx.db.query("org_roles").collect();
   for (const seed of roles) {
-    if (seed.status !== "active" || trustOf(seed) !== "direct") continue;
+    if (seed.status !== "active" || !roleStartsOnItsOwn(seed)) continue;
     let role = seed;
     for (const task of await lineCandidates(ctx, role)) {
       if (result.started.length >= MAX_STARTS_PER_SWEEP) return result;

@@ -53,9 +53,12 @@ beside each line, and corrected when a round shows it was wrong.
    alive is the worst error a proposal can make), and recall on the stale
    ones.
 5. Initiatives: read as the top of the tree; an ownerless one is the first
-   finding; owners proposed are the people or roles who drive that work.
-6. Sizing: daily limits follow the measured load of the area, and the cost
-   line compares with today in one sentence a person can picture.
+   finding; owners proposed are the people or roles who drive that work;
+   proposes a goal when the evidence shows one, with projects and owner, and
+   never applies it (initiatives-projects-role-page.md "I1, revised").
+6. No limits: the letter, the asks and the changes name no daily limit, no
+   count of what a role may spend and no cost; a proposal that asks about
+   one fails the line (org-staffing.md S23.2).
 7. Stability: three runs on the same inputs agree on the asks; where they
    differ, the difference is judgement the letter explains, not noise.
 8. Update: the second run proposes nothing already accepted and finds what

@@ -36,8 +36,9 @@ import { DecisionProposalOrigin } from "./org/ProposalAuthorPill";
 //         and the options sit side by side and the options stick while the
 //         reasoning scrolls; in one column a strip at the foot names the
 //         options while they are below the fold and jumps to them.
-//   line  The fold: the question and its status in two rows above the
-//         composer, the thread the main event. Opening it is the sheet.
+//   line  The fold: one small badge at the right edge above the composer,
+//         the question on its tooltip. The thread is the main event and
+//         the fold spends one thin row on it; opening it is the sheet.
 //
 // A blocking ask parks the session, so it opens as the sheet. The queue is a
 // place to decide, so everything there opens as the sheet. An advisory ask in
@@ -552,36 +553,31 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
     );
   }
 
-  // The fold: two rows above the composer, the thread the main event. The
-  // question in the list card's type so it reads as the same decision, its
-  // status under it, and one gesture (the row) to open the sheet.
+  // The fold: a badge, not a bar. One small pill at the right edge above the
+  // composer says an ask is waiting (and where it sits in the queue); the
+  // question itself is the pill's tooltip and one click away. The thread is
+  // the main event, so the fold spends one thin row and nothing more.
+  const foldTitle = [question || "Waiting on you", defaultLabel ? `proceeding with ${defaultLabel}` : null].filter(Boolean).join(" — ");
   return (
     <div
       ref={rootRef}
       tabIndex={-1}
       // relative z-20: the composer below paints a fade gradient up over its
-      // neighbour, which would wash out the row.
-      className="decision-card decision-fold relative z-20 shrink-0 border-t border-sol-border bg-sol-bg outline-none"
+      // neighbour, which would wash out the pill.
+      className="decision-card decision-fold relative z-20 shrink-0 flex justify-end px-4 py-1 outline-none"
       onWheel={(e) => { if (e.deltaY > 0 && stepper) grow(); }}
     >
-      <button onClick={grow} className="w-full text-left px-6 py-2 hover:bg-sol-card transition-colors" title="Open the question with its reasoning and options">
-        <span className="conv-col mx-auto w-full flex items-start gap-3 min-w-0">
-          <span className="mt-[7px] flex">{dot}</span>
-          <span className="min-w-0 flex-1">
-            <span className="decision-question text-sol-text line-clamp-2">{question || "Waiting on you"}</span>
-            <span className="mt-0.5 flex items-center gap-x-3 gap-y-0.5 flex-wrap text-[11px] text-sol-text-dim">
-              {badges}
-              {!item.blocking && (
-                <span>{defaultLabel ? <>proceeding with <span className="text-sol-text-muted">{defaultLabel}</span></> : "proceeding"}</span>
-              )}
-              {askedText && <span>{askedText}</span>}
-            </span>
-          </span>
-          <span className="shrink-0 mt-1 flex items-center gap-1 pl-2 pr-3 py-0.5 rounded-full border border-sol-blue/40 text-[11px] text-sol-blue">
-            <ChevronUp className="w-3.5 h-3.5" />
-            <span>{stepper ? `answer · ${stepper.position} of ${stepper.total}` : "answer"}</span>
-          </span>
-        </span>
+      <button
+        onClick={grow}
+        title={foldTitle}
+        className={`flex items-center gap-1.5 pl-2 pr-2.5 py-0.5 rounded-full border text-[11px] transition-colors ${
+          item.blocking ? "border-sol-yellow/50 text-sol-text hover:bg-sol-yellow/10" : "border-sol-blue/40 text-sol-blue hover:bg-sol-blue hover:text-sol-bg"
+        }`}
+      >
+        {dot}
+        <span className="truncate max-w-[16rem]">{stepper ? (session?.title || "Session") : item.blocking ? "Waiting on your decision" : "Asked for your steer"}</span>
+        <span className="opacity-70">{stepper ? `· ${stepper.position} of ${stepper.total}` : "· answer"}</span>
+        <ChevronUp className="w-3.5 h-3.5" />
       </button>
     </div>
   );

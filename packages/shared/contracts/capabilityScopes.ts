@@ -85,6 +85,23 @@ export function repositoryFromRemote(originUrl: string | undefined | null): stri
   return /^[a-z0-9][a-z0-9-]*\/[a-z0-9._-]+$/.test(rest) && !rest.endsWith("/.") && !rest.endsWith("/..") ? rest : null;
 }
 
+/**
+ * The key a sharing rule and a session meet on: the GitHub `owner/name` when
+ * the origin is on GitHub, else the last two segments of the normalized
+ * origin (`host/owner/name` → `owner/name`), else null for no remote. Every
+ * clone and every linked worktree of one repository produce the same key,
+ * whichever protocol cloned it, so a rule set on one checkout reaches the
+ * others and the ones that do not exist yet.
+ */
+export function repositoryKeyOfRemote(originUrl: string | undefined | null): string | null {
+  const github = repositoryFromRemote(originUrl);
+  if (github) return github;
+  const normalized = originUrl ? normalizeGitOrigin(originUrl) : null;
+  if (!normalized) return null;
+  const parts = normalized.split("/").filter(Boolean);
+  return parts.length >= 3 ? `${parts[parts.length - 2]}/${parts[parts.length - 1]}` : null;
+}
+
 export interface ProjectScopeInput {
   /** The repo's origin remote URL, when the project is a git checkout. */
   originUrl?: string;

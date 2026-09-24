@@ -2999,6 +2999,8 @@ export interface PlacedInbox {
   escalatedByRole: Map<string, number>;
   /** The role's standing session id → the escalations that reach the person through its card, newest first (the lines on the role's card). */
   escalationsByLead: Map<string, RoleEscalation[]>;
+  /** The role's standing session id → how many of its sessions ride its card (org-staffing.md S23.3): the count pill. The sessions themselves are never rows. */
+  roleSessionsByLead: Map<string, number>;
 }
 
 // The number a section header claims, for every surface that renders those
@@ -3528,14 +3530,26 @@ export function placeInboxRows(
   // that keeps its own bucket is one the viewer pinned, stashed or dismissed
   // on its own (RIDE_KEEPS_OWN): it files where that act put it and never
   // nests under a lead in another section.
-  // A role's session is a third child kind (isUnderRole): it nests under its
-  // role's standing session, which the shared ride already filed it with. An
-  // escalated one is not under its role, so it stays a card of its own.
+  // A role's session is the role's (org-staffing.md S23.3): it rides its
+  // role's standing session, which the shared ride already filed it with, but
+  // it is never a row under the card. The card carries a count that opens the
+  // role's page, where the sessions are the panel's business. A directly
+  // escalated one is not under its role, so it stays a card of its own; a
+  // retired role (dismissed card) triages nothing, so its sessions stand on
+  // their own facts.
   const nestParentOf = inboxNestParentOf(sorted);
   const subsByParent = new Map<string, InboxSession[]>();
+  const roleSessionsByLead = new Map<string, number>();
+  const roleRidden = new Set<string>();
   for (const s of sorted) {
     const nestParent = nestParentOf(s);
     if (!nestParent || !allIds.has(nestParent)) continue;
+    if (isUnderRole(s)) {
+      if (placements.get(nestParent)?.bucket === "dismissed") continue;
+      roleRidden.add(s._id);
+      roleSessionsByLead.set(nestParent, (roleSessionsByLead.get(nestParent) ?? 0) + 1);
+      continue;
+    }
     if (isMemberCandidate(s)) {
       const own = placements.get(s._id)?.bucket;
       const lead = placements.get(nestParent)?.bucket;
@@ -3558,7 +3572,7 @@ export function placeInboxRows(
     forks.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
   }
   const subsWithParent = nestedSessionIds(subsByParent);
-  const isTop = (s: InboxSession) => !subsWithParent.has(s._id);
+  const isTop = (s: InboxSession) => !subsWithParent.has(s._id) && !roleRidden.has(s._id);
   // A child row (never its own member — the shared isOrphanOrSubagent) whose
   // parent did not nest above it rides that absent parent, never a loose
   // flat card (it would ignore membership and the fold). A MEMBER whose nest
@@ -3661,9 +3675,9 @@ export function placeInboxRows(
   };
   // A role's sessions are the role's to triage, so they add to no header:
   // the number beside a section is what the person looks after there, and the
-  // role's card is one thing however many sessions sit under it (R1).
+  // role's card is one thing however many sessions ride it (R1, S23.3); they
+  // are not in subsByParent at all.
   for (const id of subsWithParent) {
-    if (isUnderRole(scoped[id] ?? {})) continue;
     const b = placements.get(id)?.bucket;
     const k = b ? SECTION_OF_BUCKET[b] : undefined;
     if (k) counts[k]++;
@@ -3738,6 +3752,7 @@ export function placeInboxRows(
     counts,
     escalatedByRole: prev && sameCounts(prev.escalatedByRole, escalatedByRole) ? prev.escalatedByRole : escalatedByRole,
     escalationsByLead: prev && sameEscalations(prev.escalationsByLead, escalationsByLead) ? prev.escalationsByLead : escalationsByLead,
+    roleSessionsByLead: prev && sameCounts(prev.roleSessionsByLead, roleSessionsByLead) ? prev.roleSessionsByLead : roleSessionsByLead,
   };
 
   // 8. Dev-only convergence check (C5): the full shared computation over the
@@ -4460,8 +4475,12 @@ function nestedSessionIds(subsByParent: Map<string, InboxSession[]>): Set<string
 // explicit "keep visible".
 function dropOrphanSubagents(list: InboxSession[], focusedId?: string | null): InboxSession[] {
   const present = new Set(list.map((s) => s._id));
+  const nestParentOf = inboxNestParentOf(list);
   return list.filter((s) => {
     if (s._id === focusedId || s.is_pinned) return true;
+    // A role's session whose role's card is on the list rides that card as a
+    // count, never as a row (org-staffing.md S23.3).
+    if (isUnderRole(s)) { const p = nestParentOf(s); if (p && p !== s._id && present.has(p)) return false; }
     if (!isSubagentConversation(s) && !isAgentTeamWorker(s)) return true;
     const p = nestParentIdOf(s);
     return !!p && p !== s._id && present.has(p);

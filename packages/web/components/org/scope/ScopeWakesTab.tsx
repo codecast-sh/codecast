@@ -16,7 +16,7 @@ import { dedupeTitles } from "../../roleWake";
 const STATUS_META: Record<RoleWakeRow["status"], { label: string; color: string; hint: string }> = {
   delivered: { label: "delivered", color: "var(--sol-green)", hint: "A frame went out to the standing session" },
   dropped: { label: "dropped", color: "var(--sol-text-dim)", hint: "Nothing new since the last frame; the rows were cleared" },
-  held: { label: "held", color: "var(--sol-yellow)", hint: "A cap or a pause kept the rows waiting; they ride the next wake" },
+  held: { label: "held", color: "var(--sol-yellow)", hint: "A limit or a pause kept the rows waiting; they ride the next wake" },
 };
 
 export function ScopeWakesTab({ role, highlight, now }: { role: OrgRole; highlight: string | null; now: number }) {

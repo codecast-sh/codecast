@@ -698,10 +698,18 @@ export async function roleDropForVisibility(
 export async function performEscalateSession(
   ctx: { db: any },
   authUserId: Id<"users">,
-  args: { session_id: string; line?: string; at?: number; clear?: boolean; direct?: boolean; from_session?: string },
+  args: { session_id: string; line?: string; at?: number; clear?: boolean; direct?: boolean; from_session?: string; api_token?: string },
 ): Promise<EscalateSessionResult> {
   const fromRef = args.from_session?.trim();
   const caller = fromRef ? await findConversationByAnyRefWhere(ctx, fromRef, async () => true) : null;
+  // Who did it (org-staffing.md S23.4). A browser call is the person's own
+  // gesture. A terminal call is the session the command ran in: the CLI names
+  // it, and the actor is what that session speaks as. A terminal call that
+  // names no session is a command the server cannot see the author of, and
+  // it is never read as the person: without a line it is refused, and with
+  // one it is recorded as the role's, so a person's name is never filled in
+  // for a role's escalation (the Calling lead's case, 2026-09-22).
+  const unnamedTerminal = !!args.api_token && !caller;
   const actor = await resolveActor(ctx, authUserId, caller);
   // A hand that could escalate itself would make the role's triage mean
   // nothing: every session would put itself in front of the person.
@@ -715,6 +723,9 @@ export async function performEscalateSession(
   // (standing_role_id) is the role, not a session that reports to it.
   const conversation = await findConversationByAnyRefWhere(ctx, args.session_id, async (c: any) => {
     if (actor.kind === "role") return (!!c.org_role_id && String(c.org_role_id) === String(actor.role?._id)) || (!!c.standing_role_id && String(c.standing_role_id) === String(actor.role?._id));
+    // An unnamed terminal call reaches only the sessions the token's owner
+    // could file under a role: the role's own hands and its standing session.
+    if (unnamedTerminal && !c.org_role_id && !c.standing_role_id) return false;
     const access = await checkConversationAccess(ctx, authUserId, c);
     if (access === "owner") return true;
     if (access !== "team" || !c.org_role_id) return false;
@@ -735,7 +746,7 @@ export async function performEscalateSession(
   const base = { ok: true as const, short_id: shortId, conversation_id: conversation._id, role: { short_id: role.short_id, handle: role.handle, name: role.name } };
   const standing = await standingSessionOf(ctx, role);
   const person = role.host_user_id ? await ctx.db.get(role.host_user_id) : await ctx.db.get(authUserId);
-  const by: "role" | "person" = actor.kind === "role" ? "role" : "person";
+  const by: "role" | "person" = actor.kind === "role" || unnamedTerminal ? "role" : "person";
   if (args.clear) {
     const had = conversation.escalated_by_role as EscalationStamp | undefined;
     if (had) {
@@ -749,15 +760,19 @@ export async function performEscalateSession(
   // The reason is as long as it needs to be: paragraphs survive, the divider
   // renders all of it, the strips show the first line. Only abuse is refused.
   const line = (args.line ?? "").replace(/\r\n?/g, "\n").replace(/[ \t]+\n/g, "\n").trim()
-    || (actor.kind === "user" ? `${personName(await ctx.db.get(authUserId))} put this in their inbox` : "");
-  if (!line) throw new Error("Say what the person will decide, and why: cast escalate <session> \"<line>\"");
+    || (actor.kind === "user" && !unnamedTerminal ? `${personName(await ctx.db.get(authUserId))} put this in their inbox` : "");
+  if (!line) {
+    throw new Error(unnamedTerminal
+      ? "This command did not name the session it runs in, so the line is required and reads as the role's: cast escalate <session> \"<line>\""
+      : "Say what the person will decide, and why: cast escalate <session> \"<line>\"");
+  }
   if (line.length > ESCALATION_LINE_MAX) throw new Error(`The line is ${line.length} characters; the cap is ${ESCALATION_LINE_MAX}. Say it shorter, or put the detail in the session and point at it.`);
   // A person's gesture on the web writes the row in a store draft first, and
   // the draft's field lock retires only on an echo equal to it by value, so the
   // web passes the stamp it drafted (the dismissBrowserPaneOffer pattern). A
   // role's own escalation is always stamped here. Only a stamp from the future
   // is refused: a gesture replayed from the offline outbox is honestly old.
-  const at = actor.kind === "user" && typeof args.at === "number" && args.at <= Date.now() + 60_000 ? args.at : Date.now();
+  const at = actor.kind === "user" && !unnamedTerminal && typeof args.at === "number" && args.at <= Date.now() + 60_000 ? args.at : Date.now();
   // Where it reaches the person (R1, revised). A person's own gesture is
   // always direct: they put the session in their own inbox. A role reaches
   // them through its own card unless it asks for direct, which exists for the
@@ -765,7 +780,7 @@ export async function performEscalateSession(
   // own standing session, or one with no standing session on the list, has
   // no other card to reach them through.
   const isStanding = String(conversation._id) === String(standing?._id);
-  const direct = actor.kind === "user" || !!args.direct || isStanding || !standing;
+  const direct = (actor.kind === "user" && !unnamedTerminal) || !!args.direct || isStanding || !standing;
   const escalated: EscalationStamp = { role_id: role._id, line, at, ...(direct ? { direct: true } : {}) };
   const before = conversation.escalated_by_role as EscalationStamp | undefined;
   const changed = before?.line !== line || !!before?.direct !== direct;
@@ -786,7 +801,7 @@ export async function performEscalateSession(
     reached: { conversation_id: reachedRow._id, short_id: reachedShort, direct },
     // The chime follows the card (R1, revised): the role's, or the child's
     // when direct. A person's own gesture rings nobody.
-    notify: changed && actor.kind === "role"
+    notify: changed && by === "role"
       ? { conversation_id: reachedRow._id, title: direct ? `@${role.handle} put a session in front of you` : `@${role.handle} needs you`, message: direct ? `@${role.handle}: ${title} — ${first}` : `@${role.handle}: ${first} (${title})` }
       : null,
   };

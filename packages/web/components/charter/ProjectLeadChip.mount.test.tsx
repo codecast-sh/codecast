@@ -47,6 +47,7 @@ const row = (r: Record<string, unknown>) => ({ workspace: WS, team_id: TEAM, upd
 
 const seed = async (patch: Record<string, unknown>) => act(async () => { useInboxStore.setState(patch as never); });
 await seed({
+  teams: [{ _id: TEAM, features: { org: true } }],
   currentUser: { _id: "fixture-user-me" },
   clientState: { ...(useInboxStore.getState().clientState as object), ui: { active_team_id: TEAM } },
   orgTree: tree,

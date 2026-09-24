@@ -105,7 +105,7 @@ async function verifyGhostCards() {
   assert.ok(growth.querySelector("[data-ghost-tag='retire']"), "retire tag");
   assert.equal(growth.querySelector("[data-ghost-chips]")?.getAttribute("data-ghost-chips"), "2");
   assert.ok(growth.querySelector("[data-ghost-actions='c-budget']"), "the focused chip's action row");
-  assert.equal(growth.querySelector("[data-ghost-actions='c-budget'] [data-ghost-word]")?.getAttribute("data-ghost-word"), "budget");
+  assert.equal(growth.querySelector("[data-ghost-actions='c-budget'] [data-ghost-word]")?.getAttribute("data-ghost-word"), "limit");
   assert.ok(growth.querySelector("[data-ghost-chip='c-budget']")?.getAttribute("aria-pressed") === "true");
   // A chip carries the delta, not the sentence; the sentence is its title.
   assert.equal(growth.querySelector("[data-ghost-chip='c-budget']")?.textContent?.trim(), "tokens 800k");
@@ -140,7 +140,7 @@ async function verifyGhostCards() {
 
   // Clicks reach the handlers.
   await act(async () => { (ghostRole.querySelector("button[aria-label='Accept role']") as HTMLElement).click(); });
-  await act(async () => { (growth.querySelector("[data-ghost-actions='c-budget'] button[aria-label='Edit budget']") as HTMLElement).click(); });
+  await act(async () => { (growth.querySelector("[data-ghost-actions='c-budget'] button[aria-label='Edit limit']") as HTMLElement).click(); });
   await act(async () => { (ghostRole.querySelector("button[aria-label='Skip role']") as HTMLElement).click(); });
   await act(async () => { (growth.querySelector("[data-ghost-chip='c-routine']") as HTMLElement).click(); });
   assert.deepEqual(calls, ["decide:c-role:accept", "edit:c-budget", "decide:c-role:skip", "focus:c-routine"]);

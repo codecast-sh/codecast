@@ -15,7 +15,7 @@
  * teams-list refresh that changes nothing re-renders nobody.
  */
 import { useInboxStore } from "../store/inboxStore";
-import { TEAM_FEATURES, type TeamFeatureKey } from "@codecast/shared/contracts";
+import { TEAM_FEATURES, workspaceFeatureEnabled, type TeamFeatureKey } from "@codecast/shared/contracts";
 import { anyHolderHasFeature, defineFeatures, holderHasFeature } from "@platform/flags";
 
 /** codecast's catalog as a @platform/flags catalog. Shared with the off-feature
@@ -49,4 +49,19 @@ export function useAnyTeamFeature(key: TeamFeatureKey): boolean {
 export function useCallsAvailable(): boolean {
   return useInboxStore((s) =>
     !!s.callConfig?.enabled && teamHasFeature(s.teams, s.clientState.ui?.active_team_id, "calls"));
+}
+
+/** Is `key` on in the ACTIVE workspace, personal included: a team reads its
+ *  own flag; the personal workspace borrows from the viewer's teams when the
+ *  catalog marks the feature `personal` (org roles), else it is off there.
+ *  Shared rule: workspaceFeatureEnabled. */
+export function useWorkspaceFeature(key: TeamFeatureKey): boolean {
+  return useInboxStore((s) => workspaceFeatureEnabled(s.teams || [], s.clientState.ui?.active_team_id, key));
+}
+
+/** The same answer as useWorkspaceFeature, read once off the store, for code
+ *  that cannot call a hook (a palette row's hidden() predicate). */
+export function workspaceHasFeatureNow(key: TeamFeatureKey): boolean {
+  const s = useInboxStore.getState();
+  return workspaceFeatureEnabled(s.teams || [], s.clientState.ui?.active_team_id, key);
 }

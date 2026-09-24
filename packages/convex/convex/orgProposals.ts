@@ -113,11 +113,11 @@ async function requireAdmin(ctx: Ctx, userId: Id<"users">, proposal: ProposalRow
  * the change as written.
  */
 async function withRecordTitle<T extends OrgChange>(ctx: Ctx, change: T, wsKey: string): Promise<T> {
-  if (change.kind !== "plan_status" && change.kind !== "task_status" && change.kind !== "project_status") return change;
+  if (change.kind !== "plan_status" && change.kind !== "task_status" && change.kind !== "project_status" && change.kind !== "initiative_projects" && change.kind !== "initiative_owner") return change;
   if (change.title?.trim()) return change;
-  const table = change.kind === "plan_status" ? "plans" : change.kind === "task_status" ? "tasks" : "projects";
-  const ref = (change.kind === "plan_status" ? change.plan : change.kind === "task_status" ? change.task : change.project).trim();
-  if (!/^(pl|ct|pr)-\d+$/.test(ref)) return change;
+  const table = change.kind === "plan_status" ? "plans" : change.kind === "task_status" ? "tasks" : change.kind === "project_status" ? "projects" : "initiatives";
+  const ref = (change.kind === "plan_status" ? change.plan : change.kind === "task_status" ? change.task : change.kind === "project_status" ? change.project : change.initiative).trim();
+  if (!/^(pl|ct|pr|in)-\d+$/.test(ref)) return change;
   const row = await ctx.db.query(table).withIndex("by_short_id", (q: any) => q.eq("short_id", ref)).first();
   if (!row || row.workspace !== wsKey || typeof row.title !== "string" || !row.title.trim()) return change;
   return { ...change, title: row.title.trim() };

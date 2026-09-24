@@ -148,3 +148,60 @@ with projects first and every project showing its lead and its initiative.
 They open an initiative and can say what the company is trying to reach,
 who drives it, how it is going and which projects carry it, without opening
 anything else.
+
+## I1, revised: the reviewer proposes goals
+
+Written 2026-09-23 from the founder's direction: the reviewer reads the
+company's initiatives and until now could only report on them. It now
+proposes them, the way it proposes every other change, and a person accepts.
+
+**When.** The reviewer proposes an initiative when the evidence shows one
+shared goal: the projects' own goals point at it, or a call or a chat thread
+names it. It proposes a project into an existing initiative when that
+project's work serves the initiative and the initiative does not list it.
+It proposes an owner when an active initiative has none, naming the person
+or the role that already drives that work. It still applies nothing: each is
+a change on a proposal, and nothing exists until a person accepts it.
+
+**Three change kinds** (`shared/contracts/orgProposal.ts`):
+
+- `initiative`: `{ title, description, projects: [ref], owner?: "@handle" |
+  "me" | a member's name, target_date?: unix ms }`. The description is the
+  sentence that says what reaching the goal looks like. Accepting creates the
+  initiative through `performCreateInitiative` (convex/initiatives.ts), the
+  same core `cast initiative create` and the page use, in `proposed` status
+  with its projects and its owner; an owner role gains the projects in its
+  scope the way it does on the page (`performCoverProjects`).
+- `initiative_projects`: `{ initiative: ref, projects: [ref], title? }`.
+  Accepting adds the projects through `performAddProjects`, the core behind
+  `cast initiative add-project` and the page's add.
+- `initiative_owner`: `{ initiative: ref, owner, title? }`. Accepting sets
+  the owner through `performUpdateInitiative`, the core behind `cast
+  initiative set --owner` and the page's owner chip.
+
+Each is one change in an ask, worded for a person who has not read the
+letter: "Set a goal: Win the private network, carried by Callers and Broker
+network, owned by @calling"; "Add Callers to the goal Win the private
+network"; "Make @calling the owner of the goal Win the private network". The
+page lists the projects under the row and shows the owner as a role's face or
+a person's face. `deriveAsks` puts every goal change of a proposal in one
+ask, the goals ask, after the records and before the seats. Every writer of
+these rows is the initiatives module's own: the proposal apply path never
+inserts or patches an initiative itself.
+
+**The way back.** Accepting logs one row per change (org-staffing.md S21):
+`initiative` with `status` from nothing to `proposed` and the owner and
+projects it set; `initiative_projects` with the project list before and
+after; `initiative_owner` with the owner before and after. Undo cancels a
+created initiative (the row stays, as a tombstone in `cancelled`, the way an
+undone project create stays `done`), removes the projects that were added,
+puts the owner back and takes back the scope an owner role gained. The S21
+round trip table test (convex/orgChanges.test.ts, "S21: every change kind
+round trips") carries the three kinds, so the suite fails until each round
+trips. The initiative page reads its own creation row from the log and says
+"Proposed by the review on <date>" for an initiative an accepted change made.
+
+**The prompt.** `ORG_INITIATIVES_RULE` states the principle: propose an
+initiative when the evidence shows one shared goal, an owner when an active
+initiative has none, both as changes, and apply nothing. The letter's goals
+paragraph is unchanged.

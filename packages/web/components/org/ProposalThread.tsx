@@ -25,6 +25,7 @@ import { toast } from "sonner";
 import { agoOf } from "../../lib/threadState";
 import { cn } from "../../lib/utils";
 import { AnchorConversation } from "../anchor/AnchorConversation";
+import { ComposerFade } from "../ComposerFade";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { RoleAvatar } from "./avatars";
 import { RolePausedNote } from "./RolePausedNote";
@@ -90,12 +91,8 @@ export function ProposalThread(props: ProposalThreadProps) {
     <ProposalLetter proposal={proposal} thread={thread} firstTime={props.firstTime} now={minute * 60_000} onOpenSession={props.onOpenSession} />
   ), [proposal.summary_md, proposal.created_at, thread, props.firstTime, minute, props.onOpenSession]); // eslint-disable-line react-hooks/exhaustive-deps
   const bar = props.asksBar;
-  // The letter scrolls under the composer, so its last visible line is cut
-  // mid sentence; a short fade over the cut says there is more above the
-  // bar (org eval round 3: "cut mid sentence with no sign there is more").
   const composerNode = useMemo(() => (
     <>
-      <div aria-hidden className="relative z-[1] -mt-7 h-7 pointer-events-none" style={{ background: "linear-gradient(to bottom, transparent, var(--sol-bg))" }} data-letter-fade />
       {bar && <AsksBar {...bar} />}
       <AboutLine about={about} onClear={props.onClearAbout} />
     </>
@@ -109,7 +106,12 @@ export function ProposalThread(props: ProposalThreadProps) {
         {preview ? (
           <div className="h-full flex flex-col" data-thread-preview>
             <div className="flex-1 min-h-0 overflow-y-auto">{letter}</div>
+            {/* The letter scrolls under the composer, so its last visible line
+                is cut mid sentence (org eval rounds 3 and 12: "cut mid sentence
+                with no sign there is more"). The live conversation view's
+                composer fades that cut; this frame draws the same fade. */}
             <div className="shrink-0 pb-3">
+              <ComposerFade />
               {composerNode}
               <div className="mx-3 h-10 rounded-lg border flex items-center px-3 text-[12.5px]" style={{ borderColor: BORDER, color: "var(--sol-text-dim)" }}>Reply to {thread.named ? thread.name : "the author"}</div>
             </div>

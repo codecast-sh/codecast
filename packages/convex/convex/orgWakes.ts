@@ -23,6 +23,7 @@ import { enqueuePendingMessage } from "./pendingMessages";
 import { computeBriefFacts, type BriefFacts } from "./org";
 import { PERSON_SESSION_LINES } from "./orgGoals";
 import { goalStateLine } from "@codecast/shared/contracts/roleGoals";
+import { parseStandingSection, standingLineAgeDays, standingLineFor, standingLineStale } from "@codecast/shared/contracts/briefStanding";
 import { collectLinesSince } from "./chat";
 import {
   OUTBOX_READ_CAP,
@@ -31,7 +32,6 @@ import {
   countersFor,
   msToNextUtcDay,
   scheduleFlush,
-  trustOf,
   unflushedRowsFor,
 } from "./orgEvents";
 
@@ -159,10 +159,22 @@ export function authorityLine(authority: any[] | undefined, now: number): string
   if (!rows.length) return "none granted";
   return rows.map((g) => `${g.kind} (${g.label}${g.limit?.usd_per_month !== undefined ? `, up to $${g.limit.usd_per_month} a month` : g.limit?.usd_per_day !== undefined ? `, up to $${g.limit.usd_per_day} a day` : g.limit?.per_day !== undefined ? `, up to ${g.limit.per_day} a day` : ""}${g.expires_at ? `, until ${new Date(g.expires_at).toISOString().slice(0, 10)}` : ""})`).join("; ");
 }
+// One line per project in scope: the brief's sentence and how old it is, or
+// that there is none. The frame never fills a missing line in for the role.
+export function standingFrameLines(projects: Array<{ title: string; short_id?: string }>, brief: string | null | undefined, now: number): string[] {
+  const lines = parseStandingSection(brief);
+  return projects.map((p) => {
+    const line = standingLineFor(lines, p);
+    if (!line) return `- ${p.title}: no line yet`;
+    const days = standingLineAgeDays(line, now);
+    const age = days === null ? "undated" : days === 0 ? "written today" : `written ${days} day${days === 1 ? "" : "s"} ago${standingLineStale(line, now) ? ", older than a week" : ""}`;
+    return `- ${p.title}: ${line.text} (${age})`;
+  });
+}
+
 export function buildFrame(input: FrameInput): Frame {
   const { role, rows, facts, now } = input;
   const since = role.last_frame_seq ?? 0;
-  const u = facts.usage;
   const budget = { left: FRAME_FACT_BUDGET };
   const sections: string[] = [];
 
@@ -172,11 +184,12 @@ export function buildFrame(input: FrameInput): Frame {
   ];
   sections.push([
     `## You`,
-    `${role.name} (@${role.handle}, ${role.short_id}) · trust ${trustOf(role)} · reports to ${input.parentName}`,
+    // The frame names no switch and carries no counters (org-staffing.md
+    // S23): the role learns it cannot start a hand when it tries, and a day's
+    // limit that holds it is a line in its brief, not a number it reads here.
+    `${role.name} (@${role.handle}, ${role.short_id}) · reports to ${input.parentName}`,
     `Scope: ${scopeNames.length ? scopeNames.join(", ") : "the whole workspace"}`,
-    `Today: ${u.wakes + 1}/${u.caps.wakes_per_day} wakes · ${u.hands}/${u.caps.hands_per_day} hands · ${u.tokens}/${u.caps.tokens_per_day} tokens`,
-    // Three things a person decides, in one place (org-hire.md H4): trust is
-    // above; authority is what the role may do outside codecast.
+    // Authority is what the role may do outside codecast (org-hire.md H4).
     `Authority outside codecast: ${authorityLine(role.authority, Date.now())}`,
   ].join("\n"));
 
@@ -204,9 +217,14 @@ export function buildFrame(input: FrameInput): Frame {
   // The charters lead (org-staffing.md S7): a role directs its hands toward
   // each project's goal, not its task list. One line per chartered project.
   const charterLines = facts.scope.projects.map((p) => charterLine(`- project ${p.title}`, p)).filter((l): l is string => !!l);
+  // Where it stands (scopes-and-feed.md F5.2): the role's own sentence per
+  // project, read back from its brief beside the counts, with the line's
+  // age, so a stale or missing line is visible to the role that owns it.
+  const standingLines = standingFrameLines(facts.scope.projects, input.brief?.content, now);
   sections.push([
     `## Your scope now`,
     ...(charterLines.length ? [`Direction:`, ...budgeted(charterLines, budget)] : []),
+    ...(standingLines.length ? [`Where it stands (your brief; a person reads these on your page):`, ...budgeted(standingLines, budget)] : []),
     ...factLines,
     ...(planLines.length ? [`Plans:`, ...budgeted(planLines, budget)] : []),
     ...(changedLines.length ? [`Changed since your last frame:`, ...budgeted(changedLines, budget)] : [`Nothing in scope changed since your last frame.`]),

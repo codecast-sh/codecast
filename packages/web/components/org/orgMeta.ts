@@ -74,11 +74,11 @@ export const CHANGE_KIND_META: Record<OrgChange["kind"], { label: string; descri
   project_status: { label: "Projects to pause or close", describe: "Marks a project paused, finished or active again." },
   projects: { label: "New or merged projects", describe: "Creates a lasting area of work, or folds one into another." },
   file: { label: "Plans filed under a project", describe: "Puts a plan under the project it belongs to, so the agent looking after that project sees it." },
-  role: { label: "New standing agents", describe: "Adds a standing agent with a name, an area of work to look after, and a daily limit." },
+  role: { label: "New standing agents", describe: "Adds a standing agent with a name and an area of work to look after." },
   move: { label: "Reporting line changes", describe: "Moves a standing agent under a different person or agent, and can change what it looks after." },
   scope: { label: "Area of work changes", describe: "Adds or removes the projects and plans a standing agent looks after." },
   budget: { label: "Daily limit changes", describe: "Raises or lowers how much an agent may do in one day." },
-  trust: { label: "Trust changes", describe: "Changes how far an agent may act on its own: understand, decide, or direct." },
+  trust: { label: "Starting work on its own", describe: "Turns on or off whether an agent starts work in its area without asking." },
   routine: { label: "Scheduled routines", describe: "Gives an agent a job it runs on a schedule." },
   project_meta: { label: "Project charters", describe: "Writes down what a project is for, who owns it, and how urgent it is." },
   adopt: { label: "Sessions adopted as standing agents", describe: "Makes an existing session the standing session of an agent." },
@@ -86,6 +86,10 @@ export const CHANGE_KIND_META: Record<OrgChange["kind"], { label: string; descri
   authority: { label: "Authority outside codecast", describe: "Lets an agent spend, publish, write or connect outside codecast, inside limits you set." },
   hire: { label: "Hires from a template", describe: "Hires an agent from a template: its answers, its release and the project it will lead." },
   upgrade: { label: "Template updates", describe: "Moves a hired agent to a newer release of its template." },
+  // The company's goals (initiatives-projects-role-page.md "I1, revised").
+  initiative: { label: "Goals to set", describe: "Sets a goal the company has not written down: its name, what reaching it looks like, the projects that carry it and who drives it." },
+  initiative_projects: { label: "Projects added to a goal", describe: "Adds projects whose work serves a goal that exists and does not list them." },
+  initiative_owner: { label: "Owners for a goal", describe: "Names who drives a goal that has no owner: a person or an agent." },
 };
 
 /** The kind's label, total: a kind this build does not know still reads as a
@@ -107,6 +111,7 @@ export { changeLine } from "@codecast/shared/contracts/orgProposal";
 /** The words for limits and cadences are the shared contract's, so a derived
  *  ask (server or page) and a row line say them the same way. */
 export { capsWords, everyWords } from "@codecast/shared/contracts/orgProposal";
+import { autonomyOn } from "@codecast/shared/contracts/roleAutonomy";
 
 const at = (h: string) => `@${h.replace(/^@/, "")}`;
 const compact = (n: number) => n >= 1_000_000 ? `${+(n / 1_000_000).toFixed(1)}M` : n >= 1_000 ? `${Math.round(n / 1_000)}k` : String(n);
@@ -116,7 +121,7 @@ const CAP_ORDER = ["hands_per_day", "wakes_per_day", "tokens_per_day"] as const;
 
 /**
  * The delta alone, for the chip on a card (org-staffing.md S5: "+ project X",
- * "tokens 800k", "trust to decide"). The card already names the role the
+ * "tokens 800k", "starts work on its own"). The card already names the role the
  * chip sits on, so the verb and the handle are left out; the full sentence
  * (changeLine) is the chip's title.
  */
@@ -128,7 +133,7 @@ export function chipLine(change: OrgChange): string {
     case "retire": return "retire";
     case "scope": return [refs(change.add, "+ "), refs(change.remove, "\u2212 ")].filter(Boolean).join(" ");
     case "budget": return CAP_ORDER.filter((k) => change.caps[k] !== undefined).map((k) => `${k.replace("_per_day", "")} ${compact(change.caps[k] as number)}`).join(" \u00b7 ");
-    case "trust": return `trust to ${change.trust}`;
+    case "trust": return autonomyOn(change.trust) ? "starts work on its own" : "stops starting work on its own";
     case "routine": return `every ${change.every} \u00b7 ${change.title}`;
     case "project_meta": return [change.project, change.priority, change.owner ? `owner ${at(change.owner)}` : ""].filter(Boolean).join(" \u00b7 ");
     case "adopt": return `adopt ${change.conversation}`;
@@ -136,6 +141,9 @@ export function chipLine(change: OrgChange): string {
     case "authority": return change.authority.map((g) => g.kind).join(" \u00b7 ");
     case "hire": return `${change.template} ${change.version}`;
     case "upgrade": return `to ${change.to}`;
+    case "initiative": return `+ ${change.title}`;
+    case "initiative_projects": return refs(change.projects, "+ ");
+    case "initiative_owner": return `owner ${change.owner.startsWith("@") ? at(change.owner) : change.owner}`;
     default: return changeLine(change);
   }
 }
@@ -148,8 +156,8 @@ export const CHANGE_KIND_WORD: Record<OrgChange["kind"], string> = {
   role: "role",
   move: "move",
   scope: "scope",
-  budget: "budget",
-  trust: "trust",
+  budget: "limit",
+  trust: "switch",
   routine: "routine",
   project_meta: "charter",
   adopt: "adopt",
@@ -160,6 +168,9 @@ export const CHANGE_KIND_WORD: Record<OrgChange["kind"], string> = {
   authority: "authority",
   hire: "hire",
   upgrade: "update",
+  initiative: "goal",
+  initiative_projects: "projects",
+  initiative_owner: "owner",
 };
 
 /** A ghost's colour (org-staffing.md S5): the page's violet, dashed, at 55%. */

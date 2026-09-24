@@ -217,7 +217,9 @@ export type CommitOwner = { teamId?: Id<"teams">; userId: Id<"users">; sessionId
  *  that names neither a team nor a session belongs to nobody we can name and
  *  is left out. Without this, four Union sessions in another product's
  *  checkout read as 301 commits of Union work with no project (2026-09-20). */
-export async function readActivityCommits(ctx: Ctx, repos: string[], since: number, owner: CommitOwner, perRepoCap = ACTIVITY_COMMITS_PER_REPO): Promise<ActivityCommit[]> {
+/** A commit message's first line, the one `git log --oneline` shows. */
+export const firstLine = (message: string | null | undefined): string => (message ?? "").split("\n")[0].trim();
+export async function readActivityCommits(ctx: Ctx, repos: string[], since: number, owner: CommitOwner, perRepoCap = ACTIVITY_COMMITS_PER_REPO, stats?: { truncated: string[] }): Promise<ActivityCommit[]> {
   const out: ActivityCommit[] = [];
   const sessionIsOurs = new Map<string, boolean>();
   const ours = async (c: any): Promise<boolean> => {
@@ -233,7 +235,8 @@ export async function readActivityCommits(ctx: Ctx, repos: string[], since: numb
   };
   for (const repo of repos) {
     const rows: any[] = await ctx.db.query("commits").withIndex("by_repository_timestamp", (q: any) => q.eq("repository", repo).gte("timestamp", since)).order("desc").take(perRepoCap);
-    for (const c of rows) if (await ours(c)) out.push({ repository: c.repository, timestamp: c.timestamp, author_name: c.author_name, author_email: c.author_email, files: c.files ?? null, task_ids: (c.task_ids ?? []).map((id: any) => String(id)), branch: c.branch ?? null });
+    if (rows.length >= perRepoCap) stats?.truncated.push(repo);
+    for (const c of rows) if ((c.timestamp ?? 0) >= since && (await ours(c))) out.push({ repository: c.repository, timestamp: c.timestamp, author_name: c.author_name, author_email: c.author_email, files: c.files ?? null, task_ids: (c.task_ids ?? []).map((id: any) => String(id)), branch: c.branch ?? null, sha: c.sha ?? null, message: firstLine(c.message) });
   }
   return out;
 }

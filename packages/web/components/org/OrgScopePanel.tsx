@@ -582,8 +582,9 @@ export function OrgScopePanel(props: OrgScopePanelProps) {
   // staffing pane alone.
   const mode: OrgPanelMode = node || props.mode === "history" ? props.mode : "staffing";
   // A proposal with nothing else selected is the page (org-staffing.md S19):
-  // no tab strip, the conversation starts on the first line, and the asks
-  // header carries the close. With a node selected too, the two tabs stay.
+  // no tab strip, the conversation starts on the first line, and the page's
+  // own header names the proposal and the way back. With a node selected
+  // too, the two tabs stay.
   const stripless = mode === "staffing" && !node && !!(props.staffingLead || props.staffingFill);
   return (
     <div className="h-full flex flex-col min-h-0" data-panel-strip={stripless ? "none" : "tabs"}>

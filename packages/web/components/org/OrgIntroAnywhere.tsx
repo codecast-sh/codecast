@@ -1,3 +1,4 @@
+import { useWorkspaceFeature } from "../../lib/teamFeatures";
 import { useEffect, useRef } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -14,6 +15,9 @@ import { showOrgIntroCard } from "../../lib/showOrgIntroCard";
  *  when the facts allow it, after the page has settled. */
 export function OrgIntroAnywhere() {
   const pathname = usePathname();
+  // The org feature is per team, default off: no intro card for a workspace
+  // that has it off.
+  const orgOn = useWorkspaceFeature("org");
   const router = useRouter();
   const phone = useIsPhone();
   const s = useTrackedStore([
@@ -40,7 +44,7 @@ export function OrgIntroAnywhere() {
 
   // eslint-disable-next-line no-restricted-syntax -- arms the rise timer when the facts that gate it change
   useEffect(() => {
-    if (risen.current) return;
+    if (risen.current || !orgOn) return;
     const facts: OrgIntroCardFacts = { initialized, signedIn, onOrgPage, phone, callPhase, composerHasText: false, introSeen, upsellSeen };
     if (!orgIntroCardMayRise(facts)) return;
     const t = window.setTimeout(() => {
@@ -62,7 +66,7 @@ export function OrgIntroAnywhere() {
       });
     }, ORG_MEET_SETTLE_MS);
     return () => window.clearTimeout(t);
-  }, [initialized, signedIn, onOrgPage, phone, callPhase, introSeen, upsellSeen, pathname, router]);
+  }, [orgOn, initialized, signedIn, onOrgPage, phone, callPhase, introSeen, upsellSeen, pathname, router]);
 
   return null;
 }

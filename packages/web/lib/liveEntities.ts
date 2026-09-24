@@ -150,6 +150,38 @@ export function isForeignSession(
  * author can't be named, and never labels your own row before `currentUser`
  * loads (an own synced row carries no author_name/is_own:false to mislead it).
  */
+/** The identity a feed row is attributed to: the bot a role's standing session
+ * renders as (acting_user_id), else the human who ran it (user_id). Every
+ * grouping of feed rows by person (people pills, per-day people counts, the
+ * actor filter) keys on this, never on user_id alone: a seat's user_id is its
+ * human host, so keying on it files the seat under the host and, because the
+ * seat is usually the host's newest row, labels the host with the bot's name
+ * and hides the human entirely (Littlebird's "Chief 19", 2026-09-23). */
+export function feedActorId(c: { user_id?: string | null; acting_user_id?: string | null }): string | undefined {
+  const id = c.acting_user_id ?? c.user_id;
+  return id ? String(id) : undefined;
+}
+
+export type FeedPerson = { id: string; name: string; image?: string | null; sessions: number };
+
+/** People pills for a feed: one entry per acting identity, newest row's name
+ * and avatar, sorted by session count. `author_name` is already the bot's for
+ * a seat row and the host's for the rest, so keyed by feedActorId the names
+ * line up with the ids. */
+export function derivePeople(
+  convs: Array<{ user_id?: string | null; acting_user_id?: string | null; author_name?: string | null; author_avatar?: string | null }>,
+): FeedPerson[] {
+  const map = new Map<string, FeedPerson>();
+  for (const c of convs) {
+    const id = feedActorId(c);
+    if (!id) continue;
+    const cur = map.get(id) || { id, name: c.author_name || "Unknown", image: c.author_avatar, sessions: 0 };
+    cur.sessions += 1;
+    map.set(id, cur);
+  }
+  return [...map.values()].sort((a, b) => b.sessions - a.sessions);
+}
+
 export function resolveSessionAuthor(
   session: { user_id?: string; author_name?: string | null; author_avatar?: string | null; acting_user_id?: string | null },
   conv: { user_id?: string; is_own?: boolean; acting_user_id?: string | null; user?: { name?: string | null; email?: string | null; avatar_url?: string | null } | null } | null | undefined,

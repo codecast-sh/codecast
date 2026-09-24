@@ -48,7 +48,9 @@ describe("capacity model", () => {
     expect(md).toContain("A role does not do its scope's tasks; hands and people do.");
     expect(md).toContain("How to read the numbers.");
     expect(md).toContain("How to size with it.");
-    expect(md).toContain("`company.caps_total`");
+    // The model sizes shape, never an allowance (org-staffing.md S23.2).
+    expect(md).not.toContain("`company.caps_total`");
+    expect(md).toContain("never propose a limit, never state one");
     expect(md).toContain("A wide ledger with a quiet flow is not a seat problem");
   });
 });

@@ -27,7 +27,7 @@ import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { cn } from "../../../lib/utils";
 import { Avatar } from "../../tasks/TaskCommentStream";
 import { ShortcutTooltip } from "../../KeyboardShortcutsHelp";
-import { canEditRole, handsWaiting, queryProblem, roleStanding, scopeQueryRef, scopeSeatOf } from "../../../lib/scopePage";
+import { canEditRole, queryProblem, roleStanding, scopeQueryRef, scopeSeatOf } from "../../../lib/scopePage";
 import { AnchorOnboarding } from "../../anchor/AnchorConversation";
 import { InboxConversation, type SeatSession } from "../../../app/inbox/QueuePageClient";
 import { useSeat } from "./useSeat";
@@ -39,6 +39,7 @@ import type { OrgParentRef, OrgRole, OrgTree } from "../orgTypes";
 import type { WorkState } from "@codecast/shared/contracts";
 import { useScopeIds } from "../../../hooks/useScopeIds";
 import { ScopePanel } from "./ScopePanel";
+import { useRoleEscalations } from "../../../hooks/useRoleEscalations";
 import { scopeDefaultTab, scopeTabFromParam, type ScopeTabKey } from "../../../lib/scopeTabs";
 import { ConversationWithPanel } from "./ConversationWithPanel";
 import { usePanelLayout } from "../../../hooks/usePanelLayout";
@@ -177,15 +178,18 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
   // moves with the session), then the brief's first line, which a seat that
   // never wrote a brief still carries from the provisioning template.
   const stripeLine = standingStateLine || treeStateLine || boardLine;
-  const waiting = handsWaiting(role, tree, summary);
+  // What needs the person (F5.1): the role's escalations, never a count of
+  // sessions waiting on a person; those wait on the role.
+  const escalations = useRoleEscalations(role?._id ?? null, role?.standing?.conversation_id ?? null);
+  const needsYou = escalations.length;
   // The first thing on the page is the agent saying what this area is, what it
   // is watching and what waits on the person, from the rows themselves; the
   // seat's provisioning prompt and its working turns fold away under it.
   const lead = useMemo(() => (
     tree && (role || anchor)
-      ? <ScopeLead role={role} anchorName={anchor?.name ?? null} tree={tree} waiting={waiting} standingState={standingState} />
+      ? <ScopeLead role={role} anchorName={anchor?.name ?? null} tree={tree} needsYou={needsYou} standingState={standingState} />
       : null
-  ), [tree, role, anchor?.name, waiting, standingState]);
+  ), [tree, role, anchor?.name, needsYou, standingState]);
 
   // -------- the conversation is the session page (I3)
   // The same pane the inbox mounts, so its banners, share control, context
@@ -236,7 +240,7 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
       onTab={setTab}
       onClose={() => setPanelOpen(false)}
       layout={panelLayout}
-      waiting={waiting}
+      escalations={escalations}
       scopeRef={scopeRef}
       scopeIds={scopeIds}
       summary={summary}
@@ -321,7 +325,7 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
               <ActionButton icon={paused ? Play : Pause} label={paused ? "Resume" : "Pause"} tip={paused ? "Held wakes ship as one frame" : "Hands stop at a safe point; wakes hold"} onClick={() => update({ status: paused ? "active" : "paused" })} />
             )}
             {!phone && role && canEdit && <ActionButton icon={Archive} label="Retire" danger tip="Retire this seat; you confirm on Settings" onClick={() => { setRetireArmed(true); openTab("settings"); }} />}
-            <PanelToggle open={panelOpen} waiting={waiting} compact={phone} onClick={() => setPanelOpen((v) => !v)} />
+            <PanelToggle open={panelOpen} needsYou={needsYou} compact={phone} onClick={() => setPanelOpen((v) => !v)} />
           </div>
         </div>
       </header>
@@ -357,14 +361,15 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
  *  the person, said from the rows (the role, its scope, the hands' states),
  *  not from the transcript; the header's stripe says what it is watching.
  *  Same frame as the proposal letter, so a lead reads the same everywhere. */
-export function ScopeLead({ role, anchorName, tree, waiting, standingState }: { role: OrgRole | null; anchorName: string | null; tree: OrgTree; waiting: number; standingState: WorkState | undefined }) {
+export function ScopeLead({ role, anchorName, tree, needsYou, standingState }: { role: OrgRole | null; anchorName: string | null; tree: OrgTree; needsYou: number; standingState: WorkState | undefined }) {
   const name = role ? role.name : anchorName ?? "The workspace agent";
   const owns = role ? [...role.scope_names.projects.map((p) => p.title), ...role.scope_names.plans.map((p) => p.title)] : [];
   const area = !role ? "the whole workspace" : owns.length > 0 ? owns.join(", ") : "the whole workspace";
   const parent = role ? parentName(tree, role.reports_to) : null;
-  const ask = waiting > 0
-    ? `${waiting} ${waiting === 1 ? "session is" : "sessions are"} waiting on a person: the Sessions tab on the board says which.`
-    : standingState === "needs_input" ? "I am waiting on you, below." : "Nothing is waiting on you.";
+  // F5.1: what needs the person is what the role put in front of them.
+  const ask = needsYou > 0
+    ? `${needsYou === 1 ? "One thing needs" : `${needsYou} things need`} you: the board says what.`
+    : standingState === "needs_input" ? "I am waiting on you, below." : "Nothing needs you.";
   return (
     <div className="conv-col mx-auto px-2 sm:px-3 md:px-4 pt-4 pb-2" data-scope-lead>
       <div className="flex items-center gap-2 mb-2">
@@ -373,17 +378,17 @@ export function ScopeLead({ role, anchorName, tree, waiting, standingState }: { 
       </div>
       <div className="pl-8 text-[13.5px] leading-relaxed" style={{ color: "var(--sol-text)" }}>
         <p>I look after {area}{parent ? ` and report to ${parent}` : ""}. Ask me for anything here: I answer, or start a session for the work and tell you which.</p>
-        <p className="mt-1.5" style={{ color: waiting > 0 || standingState === "needs_input" ? "var(--sol-yellow)" : "var(--sol-text-muted)" }} data-scope-lead-ask>{ask}</p>
+        <p className="mt-1.5" style={{ color: needsYou > 0 || standingState === "needs_input" ? "var(--sol-yellow)" : "var(--sol-text-muted)" }} data-scope-lead-ask>{ask}</p>
       </div>
     </div>
   );
 }
 
 /** The header's control for the board (F4.1). Closed, it still tells you
- *  the one thing that matters: a hand under this scope is waiting on a person. */
-function PanelToggle({ open, waiting, compact, onClick }: { open: boolean; waiting: number; compact: boolean; onClick: () => void }) {
+ *  the one thing that matters: the role put something in front of you. */
+function PanelToggle({ open, needsYou, compact, onClick }: { open: boolean; needsYou: number; compact: boolean; onClick: () => void }) {
   const Icon = open ? PanelRightClose : PanelRightOpen;
-  const tip = open ? "Close the board" : waiting > 0 ? `Open the board: ${waiting} session${waiting === 1 ? "" : "s"} waiting on a person` : "Open the board: feed, tasks, plans, pages, sessions, decisions";
+  const tip = open ? "Close the board" : needsYou > 0 ? `Open the board: ${needsYou === 1 ? "one thing needs" : `${needsYou} things need`} you` : "Open the board: feed, tasks, plans, pages, sessions, decisions";
   return (
     <ShortcutTooltip label={tip} side="bottom">
       <button
@@ -394,11 +399,11 @@ function PanelToggle({ open, waiting, compact, onClick }: { open: boolean; waiti
         aria-pressed={open}
         aria-label={compact ? tip : undefined}
         data-scope-panel-toggle={open ? "open" : "closed"}
-        data-scope-waiting={waiting}
+        data-scope-needs-you={needsYou}
       >
         <Icon className="w-3.5 h-3.5" />
         {!compact && "Board"}
-        {waiting > 0 && <span className="absolute -top-[3px] -right-[3px] w-[8px] h-[8px] rounded-full ring-2" style={{ background: "var(--sol-yellow)", ["--tw-ring-color" as any]: "var(--sol-bg)" }} aria-hidden data-scope-panel-dot />}
+        {needsYou > 0 && <span className="absolute -top-[3px] -right-[3px] w-[8px] h-[8px] rounded-full ring-2" style={{ background: "var(--sol-yellow)", ["--tw-ring-color" as any]: "var(--sol-bg)" }} aria-hidden data-scope-panel-dot />}
       </button>
     </ShortcutTooltip>
   );

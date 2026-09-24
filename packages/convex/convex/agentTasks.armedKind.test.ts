@@ -216,7 +216,6 @@ describe("every agent_tasks writer restamps the home (exhaustive)", () => {
       "args.task_id",       // created_by backlink repair + display summary (inert fields)
       "conv._id",           // conversation rows: agent_task_id backlink / un-stash
       "conversationId",     // refreshArmedTriggerKind's own conversation stamp
-      "home._id",           // un-stash of a failed loop's home (conversation row)
       "prev._id",           // superseded run fold (conversation row)
       "runConv._id",        // run conversation fold (conversation row)
       "t._id",              // adminBackfillCreatedBy (inert field)

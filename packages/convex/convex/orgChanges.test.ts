@@ -22,6 +22,8 @@ function fixture() {
     plans: [{ _id: "plans_p", user_id: ME, team_id: TEAM, workspace: WS, short_id: "pl-1", title: "Plan", status: "active", created_at: 1, updated_at: NOW }],
     tasks: [{ _id: "tasks_t", user_id: ME, team_id: TEAM, workspace: WS, short_id: "ct-1", title: "Task", status: "open", plan_id: "plans_p", created_at: 1, updated_at: NOW }],
     conversations: [{ _id: "conversations_c", short_id: "jx70001", user_id: ME, team_id: TEAM, is_private: false, status: "active", agent_type: "claude_code", title: "Session", project_path: "/repo/growth", message_count: 3, updated_at: NOW, created_at: 1 }],
+    initiatives: [{ _id: "initiatives_i", user_id: ME, team_id: TEAM, workspace: WS, short_id: "in-1", title: "Campaign", project_ids: ["projects_q"], status: "active", health: "none", created_at: 1, updated_at: NOW }],
+    counters: [],
   });
   const ctx = () => ({ db, auth: { getUserIdentity: async () => ({ subject: ME }) } });
   const last = () => db._tables.org_change_batches.at(-1)._id;
@@ -56,7 +58,7 @@ describe("org history round trips", () => {
   test("budget, trust and role fields use reversible rows", async () => {
     const f = fixture(); const role = await f.role();
     await roundTrip(f, role._id, () => performSetCaps(f.ctx(), ME as any, { role_id: role._id, hands: 8 }), ["caps"]);
-    await roundTrip(f, role._id, () => performSetTrust(f.ctx(), ME as any, { role_id: role._id, trust: "decide" }), ["trust"]);
+    await roundTrip(f, role._id, () => performSetTrust(f.ctx(), ME as any, { role_id: role._id, on: false }), ["trust"]);
     await roundTrip(f, role._id, () => performUpdateRole(f.ctx(), ME as any, { role_id: role._id, name: "Market" }), ["name"]);
   });
   for (const [kind, target, fields, change] of [
@@ -229,11 +231,11 @@ describe("org history remaining change kinds", () => {
     expect(f.db._tables.agent_tasks[0].status).toBe("cancelled");
   });
   test("an initiative owner undo removes only the scope it gained", async () => {
-    const { update } = await import("./initiatives");
+    const { performUpdateInitiative } = await import("./initiatives");
     const f = fixture(); const role = await f.role();
-    const id = await f.db.insert("initiatives", { user_id: ME, team_id: TEAM, workspace: WS, short_id: "in-1", title: "Campaign", project_ids: [P], status: "active" });
+    const id = await f.db.insert("initiatives", { user_id: ME, team_id: TEAM, workspace: WS, short_id: "in-2", title: "Campaign 2", project_ids: [P], status: "active" });
     const scope = role.scope;
-    await (update as any)._handler(f.ctx(), { id, owner: { kind: "role", role_id: role._id } }); const batch = f.last();
+    await performUpdateInitiative(f.ctx(), ME as any, await f.db.get(id), { owner: { kind: "role", role_id: role._id } }); const batch = f.last();
     await f.undo(batch);
     expect((await f.db.get(id)).owner).toBeUndefined();
     expect((await f.db.get(role._id)).scope).toEqual(scope);
@@ -279,11 +281,11 @@ const ORG_STATE: Record<string, string[]> = {
   plans: ["status", "project_id", "owner_role_id"],
   projects: ["status", "description", "owner_role_id", "goal", "success_metrics", "priority", "non_goals", "risks", "budget"],
   docs: ["project_id"],
-  initiatives: ["owner"],
+  initiatives: ["status", "owner", "project_ids"],
   session_owners: ["conversation_id", "user_id"],
   org_template_instances: ["phase", "role_id", "version", "pending_upgrade"],
 };
-const TOMBSTONE: Record<string, string> = { org_roles: "retired", projects: "done", agent_tasks: "cancelled", anchors: "decommissioned" };
+const TOMBSTONE: Record<string, string> = { org_roles: "retired", projects: "done", agent_tasks: "cancelled", anchors: "decommissioned", initiatives: "cancelled" };
 function orgState(db: any): Map<string, { table: string; fields: Record<string, unknown> }> {
   const out = new Map();
   for (const [table, fields] of Object.entries(ORG_STATE)) for (const row of db._tables[table] ?? []) out.set(String(row._id), { table, fields: Object.fromEntries(fields.map((k) => [k, row[k] ?? null])) });
@@ -304,7 +306,7 @@ const CASES: Case[] = [
   { kind: "retire", setup: (f) => f.role(), change: { kind: "retire", handle: "growth" } },
   { kind: "scope", setup: (f) => f.role(), change: { kind: "scope", handle: "growth", add: ["pr-1"], leave_sessions: true } },
   { kind: "budget", setup: (f) => f.role(), change: { kind: "budget", handle: "growth", caps: { hands_per_day: 8 } } },
-  { kind: "trust", setup: (f) => f.role(), change: { kind: "trust", handle: "growth", trust: "decide" } },
+  { kind: "trust", setup: (f) => f.role(), change: { kind: "trust", handle: "growth", trust: "understand" } },
   { kind: "authority", setup: (f) => f.role(), change: { kind: "authority", handle: "growth", authority: [{ id: "ads", kind: "spend", label: "Google Ads", limit: { usd_per_day: 20 } }] } },
   // The instance row the hire wrote stays, awaiting the host; the lead the hire named goes back.
   { kind: "hire", setup: async (f) => { await f.role(); f.db._tables.org_templates = [TEMPLATE]; }, change: HIRE, kept: { org_template_instances: { fields: { phase: "awaiting_host", version: "1.0.0" }, because: HOST_STEP } } },
@@ -317,6 +319,10 @@ const CASES: Case[] = [
   { kind: "plan_status", change: { kind: "plan_status", plan: "pl-1", status: "done", reason: "finished" } },
   { kind: "task_status", change: { kind: "task_status", task: "ct-1", status: "done", reason: "finished" } },
   { kind: "project_status", change: { kind: "project_status", project: "pr-1", status: "paused", reason: "waiting" } },
+  // The goals (initiatives-projects-role-page.md "I1, revised"): a set goal is cancelled by its undo, never erased; the owner role's scope gain goes back with it.
+  { kind: "initiative", setup: (f) => f.role(), change: { kind: "initiative", title: "Reach 1k teams", description: "A thousand teams run an agent every week.", projects: ["pr-1"], owner: "@growth" } },
+  { kind: "initiative_projects", change: { kind: "initiative_projects", initiative: "in-1", projects: ["pr-1"] } },
+  { kind: "initiative_owner", setup: (f) => f.role(), change: { kind: "initiative_owner", initiative: "Campaign", owner: "@growth" } },
 ];
 
 describe("S21: every change kind round trips through apply, undo and redo", () => {

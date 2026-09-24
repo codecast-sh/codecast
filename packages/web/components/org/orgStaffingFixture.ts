@@ -151,6 +151,28 @@ export const ORG_STAFFING_FIXTURE_SESSION_PROPOSAL: OrgProposalRow = {
       rationale: "No wake, no hand, no decision in 30 days; both plans in scope are done.",
       evidence: [{ label: "@ops health", href: "/org/or-4?tab=health" }],
     },
+    // The company's goals (initiatives-projects-role-page.md "I1, revised"):
+    // a goal set with its projects and owner, a project added to one, an
+    // owner named for one; the pane folds the three into the goals ask.
+    {
+      _id: "fixture-change-10", proposal_id: "fixture-proposal-8", seq: 2, status: "proposed",
+      change: { kind: "initiative", title: "Win the private network", description: "Three brokers trade through us every week and Quiet is onboarded.", projects: ["Growth", "pr-77"], owner: "@growth" },
+      rationale: "Growth and Broker outreach both name the private network as their Q3 goal; the initiatives page holds no goal for it.",
+      evidence: [{ label: "Growth charter", href: "/projects/Growth" }],
+      expected_effect: "One page says what winning the private network looks like, with both projects under it.",
+    },
+    {
+      _id: "fixture-change-11", proposal_id: "fixture-proposal-8", seq: 3, status: "proposed",
+      change: { kind: "initiative_projects", initiative: "in-3", title: "Every project has a lead", projects: ["Growth"] },
+      rationale: "The Growth project's lead work serves the goal and the goal does not list it.",
+      evidence: [],
+    },
+    {
+      _id: "fixture-change-12", proposal_id: "fixture-proposal-8", seq: 4, status: "proposed",
+      change: { kind: "initiative_owner", initiative: "in-3", title: "Every project has a lead", owner: "Ashot Petrosian" },
+      rationale: "The goal is active and nobody drives it; Ashot set it and answers for the leads.",
+      evidence: [],
+    },
   ],
 };
 
