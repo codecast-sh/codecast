@@ -22,7 +22,7 @@ import { v } from "convex/values";
 import type { GenericId } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { type AuthTables, type DbCtx, resolveTables } from "./tables";
-import { DEVICE_BOUND_TOKEN_PREFIX, splitPresentedToken } from "../tokenFormat";
+import { DEVICE_BOUND_TOKEN_PREFIX, isValidDeviceId, splitPresentedToken } from "../tokenFormat";
 
 export async function hashToken(token: string): Promise<string> {
   const encoder = new TextEncoder();
@@ -53,6 +53,9 @@ async function mintBearerToken(
   deviceId: string | undefined,
   tables: AuthTables,
 ): Promise<string> {
+  if (deviceId !== undefined && !isValidDeviceId(deviceId)) {
+    throw new Error("Invalid device_id");
+  }
   const token = `${deviceId ? DEVICE_BOUND_TOKEN_PREFIX : ""}${generateToken()}`;
   const now = Date.now();
   await ctx.db.insert(tables.apiTokens, {
@@ -369,10 +372,15 @@ export function createApiTokenDefinitions<Extras extends Record<string, unknown>
       if (!auth) {
         throw new Error("Unauthorized: invalid or expired token");
       }
-      if (!args.device_id.trim()) {
-        throw new Error("device_id is required");
+      // Only a bound caller mints. The CLI copies an unbound token as it always
+      // has, so the mint is never needed there, and refusing it means a stolen
+      // unbound token cannot leave behind credentials that outlive its revocation.
+      const caller = await ctx.db.get(auth.tokenId);
+      if (!caller?.device_id) {
+        throw new Error("Unauthorized: only a device bound token can mint for another device");
       }
-      const name = `Host - ${args.label} - ${new Date().toISOString().split("T")[0]}`;
+      const label = args.label.trim().replace(/\s+/g, " ").slice(0, 64) || "host";
+      const name = `Host - ${label} - ${new Date().toISOString().split("T")[0]}`;
       const token = await mintBearerToken(ctx, auth.userId, name, args.device_id, tables);
       return { token };
     },
