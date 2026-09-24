@@ -16,9 +16,20 @@ import type { AuthStorageWriteListener } from "./durableAuthStorage";
 
 export type AuthPrincipalChange = { epoch: number; previous: string | null; next: string | null };
 
+/**
+ * absent: no token stored. named: the token names a principal. unparsable:
+ * a token is stored but does not parse (a format the parser does not know,
+ * a truncated write). Unparsable is never a logout: the auth library still
+ * holds a token for someone, the tracker cannot say who, so it keeps the
+ * account it last knew and reports no change. Only an absent token or a
+ * token naming another principal moves the epoch.
+ */
+export type AuthTokenState = "absent" | "named" | "unparsable";
+
 export type AuthPrincipalTracker = {
-  /** The principal the stored JWT names right now. Pure: never notifies. */
+  /** The principal this window acts for right now. Pure: never notifies. */
   current: () => string | null;
+  tokenState: () => AuthTokenState;
   /** Increments on every principal change; a React key for the auth tree. */
   epoch: () => number;
   /**
@@ -65,13 +76,14 @@ export function createAuthPrincipalTracker(opts: {
   let durableAdopted = false;
   let parsedToken: string | null = null;
   let parsedPrincipal: string | null = null;
+  let warnedToken: string | null = null;
 
   function readLocal(): string | null {
     try { return local?.getItem(jwtKey) ?? null; } catch { return null; }
   }
 
-  function parse(token: string | null): string | null {
-    if (token === null) return null;
+  // The principal a token names, or null when it does not parse.
+  function parse(token: string): string | null {
     if (token !== parsedToken) {
       parsedToken = token;
       parsedPrincipal = parseAccessIdentity(token)?.principalId ?? null;
@@ -79,8 +91,26 @@ export function createAuthPrincipalTracker(opts: {
     return parsedPrincipal;
   }
 
+  function stateOf(token: string | null): AuthTokenState {
+    if (token === null) return "absent";
+    return parse(token) === null ? "unparsable" : "named";
+  }
+
+  // What the window acts as for a stored token: the named principal, nobody
+  // for no token, and for an unparsable token whatever it acted as before.
+  function principalFor(token: string | null): string | null {
+    if (token === null) return null;
+    const named = parse(token);
+    if (named !== null) return named;
+    if (warnedToken !== token) {
+      warnedToken = token;
+      console.warn("[auth principal] the stored token could not be parsed; keeping the current account");
+    }
+    return principal;
+  }
+
   function recompute(): void {
-    const next = parse(readLocal());
+    const next = principalFor(readLocal());
     durableAdopted = false;
     if (next === principal) return;
     const previous = principal;
@@ -92,7 +122,7 @@ export function createAuthPrincipalTracker(opts: {
     }
   }
 
-  principal = parse(readLocal());
+  principal = principalFor(readLocal());
 
   const onStorage = (event: StorageEventLike) => {
     if (nativeArea && event.storageArea !== undefined && event.storageArea !== nativeArea) return;
@@ -109,15 +139,16 @@ export function createAuthPrincipalTracker(opts: {
     current: () => {
       const token = readLocal();
       if (token === null) return durableAdopted ? principal : null;
-      return parse(token);
+      return principalFor(token);
     },
+    tokenState: () => stateOf(readLocal()),
     epoch: () => epoch,
     resolve: async () => {
       const token = readLocal();
-      if (token !== null) return parse(token);
+      if (token !== null) return principalFor(token);
       let durable: string | null = null;
       try { durable = await opts.readDurable(jwtKey); } catch { durable = null; }
-      const found = parse(durable);
+      const found = durable === null ? null : parse(durable);
       if (found !== null && principal === null && readLocal() === null) {
         principal = found;
         durableAdopted = true;

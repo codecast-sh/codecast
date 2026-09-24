@@ -16,7 +16,8 @@ const { COLLECTION_INDEXES } = await import("../../clientSyncRegistry");
 const scenario = process.env.SCENARIO!;
 // The token the browser holds when the cache module boots: in localStorage
 // for every scenario but the two that leave it empty.
-if (!["signed-out-residue", "durable-only-token"].includes(scenario)) local.setItem(AUTH_JWT_STORAGE_KEY, issue("userA"));
+if (scenario === "unparsable-token-at-boot") local.setItem(AUTH_JWT_STORAGE_KEY, "not.a.jwt");
+else if (!["signed-out-residue", "durable-only-token"].includes(scenario)) local.setItem(AUTH_JWT_STORAGE_KEY, issue("userA"));
 // Booting the cache module also boots the principal tracker, which reads the
 // token above the way a real window does at module load. The database opens
 // lazily, so the seed below still lands first.
@@ -80,6 +81,8 @@ if (scenario === "fresh") {
   await seedDurableToken("userA");
 } else if (scenario === "write-guard-race") {
   await seed({ owner: "userA", rows: true });
+} else if (scenario === "unparsable-token-at-boot" || scenario === "unparsable-token-in-session") {
+  await seed({ owner: "userA", rows: true, outbox: true });
 } else {
   throw new Error(`unknown scenario ${scenario}`);
 }
@@ -127,6 +130,26 @@ switch (scenario) {
     expect(hydrated?.sessions?.[ROW._id]?.title).toBe("cached row");
     expect(owner).toBe("userA");
     break;
+  case "unparsable-token-at-boot":
+    // A token is stored but does not parse. That is not a logout: nothing is
+    // served (nobody can be named) and nothing is purged (the cache, its
+    // outbox and pending input stay for whoever the token turns out to be).
+    expect(hydrated).toBeNull();
+    expect(owner).toBeNull();
+    expect((await diskRows())).toEqual({ sessions: 1, meta: 2, outbox: 1 });
+    break;
+  case "unparsable-token-in-session": {
+    expect(hydrated?.sessions?.[ROW._id]?.title).toBe("cached row");
+    // The token turns unparsable under a signed-in window (a rotation wrote a
+    // shape the parser does not know). The window keeps acting as userA:
+    // writes still land and the cache is still theirs.
+    local.setItem(AUTH_JWT_STORAGE_KEY, "not.a.jwt");
+    await enqueueDispatch({ id: "o2", action: "x", args: [], patches: [], result: null, ts: 2 });
+    expect((await loadOutbox()).map((o) => o.id)).toEqual(["o1", "o2"]);
+    expect((await loadCache(["sessions"]))?.sessions?.[ROW._id]?.title).toBe("cached row");
+    expect((await diskRows()).sessions).toBe(1);
+    break;
+  }
   case "write-guard-race": {
     expect(hydrated?.sessions?.[ROW._id]?.title).toBe("cached row");
     // A sibling signed in as someone else; this window's storage event has not

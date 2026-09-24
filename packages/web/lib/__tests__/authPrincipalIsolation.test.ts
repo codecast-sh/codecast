@@ -129,7 +129,17 @@ beforeEach(async () => {
   localStorage.setItem(AUTH_JWT_STORAGE_KEY, tA1);
   await flush();
 });
-afterAll(() => { for (const r of roots) act(() => r.unmount()); });
+// Leave the process as the next file expects it: signed in as user A with
+// persistence settled. Module singletons (the tracker, the cache, the store)
+// outlive this file, and a boundary transition still in flight here would
+// suspend write-through under the next file's first test.
+afterAll(async () => {
+  for (const r of roots) act(() => r.unmount());
+  roots = [];
+  localStorage.setItem(AUTH_JWT_STORAGE_KEY, tA1);
+  await flush();
+  for (let i = 0; i < 500 && !store.getState().clientStateInitialized; i++) await new Promise((r) => setTimeout(r, 10));
+});
 
 async function twoWindowsSignedInAsA() {
   roots.push(mountWindow("A"), mountWindow("B"));
@@ -184,6 +194,25 @@ describe("logout and account change across windows", () => {
     await flush();
     expect(inboxRows()).toBe(1);
     expect(probes.B.renders).toBe(rendersBefore);
+  });
+
+  test("a token that fails to parse is not a logout: rows and dispatch stay", async () => {
+    await twoWindowsSignedInAsA();
+    seedInbox("userA");
+    (store.getState() as any)._setDispatch(async () => null);
+    const rendersBefore = probes.B.renders;
+    const warn = console.warn;
+    console.warn = () => {};
+    try {
+      localStorage.setItem(AUTH_JWT_STORAGE_KEY, "not.a.jwt");
+      await flush();
+    } finally {
+      console.warn = warn;
+    }
+    expect(inboxRows()).toBe(1);
+    expect((store.getState() as any)._isDispatchWired()).toBe(true);
+    expect(probes.B.renders).toBe(rendersBefore);
+    expect(probes.B.token).toBe(tA1);
   });
 
   test("a cache read still in flight at the boundary lands nowhere", async () => {
