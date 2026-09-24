@@ -281,6 +281,7 @@ export function publishVoiceMirror(): void {
       muted: call?.muted !== false,
       micDenied: !!call?.micDenied,
       camera: !!call?.camera,
+      speaking: call?.speaking ?? [],
     },
   });
 }
@@ -392,13 +393,15 @@ function callState(): CallState {
  * else — where the local slice is idle for as long as the host holds the
  * microphone, and a key reading it would call every burst "dropped".
  */
-export function walkieCallState(): CallState & { micDenied: boolean } {
+export function walkieCallState(): CallState & { micDenied: boolean; camera: boolean; speaking: string[] } {
   if (voiceHostElsewhere() && mirroredCall) {
     return {
       roomKey: mirroredCall.roomKey,
       phase: mirroredCall.phase,
       muted: mirroredCall.muted,
       micDenied: mirroredCall.micDenied,
+      camera: !!mirroredCall.camera,
+      speaking: mirroredCall.speaking ?? EMPTY_SPEAKING,
     };
   }
   const call = useInboxStore.getState().call as any;
@@ -407,8 +410,12 @@ export function walkieCallState(): CallState & { micDenied: boolean } {
     phase: call?.phase ?? "idle",
     muted: call?.muted !== false,
     micDenied: !!call?.micDenied,
+    camera: !!call?.camera,
+    speaking: call?.speaking ?? EMPTY_SPEAKING,
   };
 }
+
+const EMPTY_SPEAKING: string[] = [];
 
 function inRoom(roomKey: string): boolean {
   const call = callState();

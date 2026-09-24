@@ -159,6 +159,19 @@ describe("the stage's size controls", () => {
     expect([...SMALL_CALL_WINDOW_SIZES]).toEqual(["circles", "speaker", "tiny"]);
     expect(SMALL_CALL_WINDOW_SIZES.some((s) => (s as string) === "panel")).toBe(false);
   });
+
+  it("a voice host shrinks the stage with one button; the three size menu is the older shell's", () => {
+    // In a host every small size lands on the float, so a menu offering
+    // three would promise three pictures and draw one. The host hands the
+    // stage `onShrink` and never `onSetSize`; the older per call window
+    // keeps the menu, where the three sizes still differ.
+    const web = join(import.meta.dir, "..", "..");
+    const host = readFileSync(join(web, "components/calls/VoiceHostPanel.tsx"), "utf8");
+    expect(host).toMatch(/<CallStage panel onShrink=/);
+    expect(host).not.toMatch(/<CallStage[^>]*onSetSize=/);
+    const legacy = readFileSync(join(web, "components/calls/CallPanel.tsx"), "utf8");
+    expect(legacy).toMatch(/<CallStage panel onSetSize=/);
+  });
 });
 
 describe("one place decides what an older build is told", () => {

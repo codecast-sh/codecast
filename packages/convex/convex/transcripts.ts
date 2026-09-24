@@ -1375,7 +1375,7 @@ export const getLive = query({
  *  trusts the scribe, which already holds the words. A guest who never
  *  spoke leaves no participant row and loses the record when the huddle
  *  ends: accepted. */
-async function canReadCall(
+export async function canReadCall(
   ctx: any,
   userId: Id<"users">,
   t: Doc<"transcripts">,

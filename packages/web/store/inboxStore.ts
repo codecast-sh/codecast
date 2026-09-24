@@ -1,4 +1,5 @@
 import { followersSig, sameViewAnchor, type FollowerRow, type ViewAnchor } from "../lib/follow";
+import { carryRingStubs } from "../lib/calls/ringStubs";
 import { nextMembershipVisibility, type TeamVisibilityLevel, type VisibilityChangeMode } from "@codecast/convex/convex/teamVisibility";
 import { queuedMessagesFromPending } from "./pendingMessageJournal";
 import { isSessionDismissed, isSessionKilled, isSessionStashed } from "../lib/sessionRetirement";
@@ -6549,7 +6550,9 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   // protect — the optimistic layer for calls is the ephemeral `call` slice,
   // not these rows). Timestamps are bucketed server-side (calls.ts), so
   // no-change pushes bail on the JSON compare.
-  myCalls: { kind: "singleton" },
+  // One exception: a stub ring the engine put up from the press stands
+  // until the server lists the person (lib/calls/ringStubs).
+  myCalls: { kind: "singleton", merge: { outgoing: (local, server) => carryRingStubs(local, server) } },
   callOccupancy: { kind: "singleton" },
   callConfig: { kind: "singleton" },
   // Live huddles, wholesale-replaced on every push (the server sorts rooms

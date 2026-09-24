@@ -70,7 +70,7 @@ export function clearJoinAnnouncement(): void {
 
 /** The far side stepped into the burst I am speaking. */
 export function theyJoinedText(name?: string | null): string {
-  return `${name?.trim() || "Somebody"} joined — it's a call now`;
+  return `${name?.trim() || "Somebody"} joined, it's a call now`;
 }
 
 /** I stepped into the burst somebody is speaking to me. */

@@ -1,3 +1,5 @@
+import { mediaFailureReason, participantImage, type ParticipantTile } from "./callMedia";
+export { mediaFailureReason, listDevices, grantDeviceNames, type ParticipantTile } from "./callMedia";
 // The media plane's one owner. Exactly one LiveKit Room lives here (module
 // singleton, never in React state, never in the store); components render
 // from the store's ephemeral `call` slice and call these methods. Convex
@@ -25,6 +27,7 @@ import { toast } from "sonner";
 import { useInboxStore } from "../../store/inboxStore";
 import { mutateOnUnload } from "../keepaliveMutation";
 import { memberDisplayName } from "../liveEntities";
+import { RING_STUB, RING_STUB_MS, isRingStub, ringStubId, type RingStub } from "./ringStubs";
 import { startScribe, stopScribe } from "./transcription";
 import { readJoinPrefs, rememberCamera, rememberDevice, rememberMic } from "./joinPrefs";
 import { huddleRoomOptions, SCREEN_SHARE_CAPTURE, SCREEN_SHARE_ENCODING } from "./livekitMedia";
@@ -47,7 +50,6 @@ import {
   soundCallJoin,
   soundCallLeave,
 } from "../sounds";
-
 type ConvexHandle = {
   mutation: (fn: any, args: any) => Promise<any>;
   action: (fn: any, args: any) => Promise<any>;
@@ -55,7 +57,6 @@ type ConvexHandle = {
   // call is still going before it gives up (see roomStillLive).
   query: (fn: any, args: any) => Promise<any>;
 };
-
 let convex: ConvexHandle | null = null;
 let room: Room | null = null;
 let currentRoomKey: string | null = null;
@@ -124,23 +125,6 @@ function ensureAudioHost(): HTMLElement {
   return audioHost;
 }
 
-// ── track fan-out to React ────────────────────────────────────────────────
-// One tile per VIDEO TRACK, not per participant: a person can have a camera
-// and a screen share up at once and both must render, each in its own
-// <video>. Keyed by track sid so a tile's identity is the track's identity —
-// React never remounts a <video> because a sibling track appeared, and the
-// snapshot always hands out a fresh object when a track is (re)published, so
-// useSyncExternalStore consumers re-run their attach effects.
-export type ParticipantTile = {
-  key: string;
-  identity: string;
-  name: string;
-  image?: string;
-  isLocal: boolean;
-  kind: "camera" | "screen";
-  track: Track;
-};
-
 let tilesSnapshot: ParticipantTile[] = [];
 const tileSubscribers = new Set<() => void>();
 
@@ -163,15 +147,6 @@ if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
   };
 }
 let tilesOverride: ParticipantTile[] | null = null;
-
-function participantImage(p: Participant): string | undefined {
-  try {
-    const meta = p.metadata ? JSON.parse(p.metadata) : null;
-    return meta?.image ?? undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 function rebuildTiles() {
   const next: ParticipantTile[] = [];
@@ -862,13 +837,16 @@ async function yieldRoomToOtherWindow(): Promise<void> {
   });
 }
 
-export async function leaveCall(): Promise<void> {
-  if (voiceHostElsewhere() && !currentRoomKey && (await sendVoiceCommand("leaveCall", []))) return;
-  return leaveCallHere();
+/** `roomKey`: the seat the card shows, for when this engine holds none of
+ *  its own (a reloaded window whose row on the server outlived it): the row
+ *  is what everyone else sees, so End must be able to delete it regardless. */
+export async function leaveCall(roomKey?: string): Promise<void> {
+  if (voiceHostElsewhere() && !currentRoomKey && (await sendVoiceCommand("leaveCall", roomKey ? [roomKey] : []))) return;
+  return leaveCallHere(roomKey);
 }
 
-async function leaveCallHere(): Promise<void> {
-  const roomKey = currentRoomKey ?? useInboxStore.getState().call.roomKey;
+async function leaveCallHere(shown?: string): Promise<void> {
+  const roomKey = currentRoomKey ?? useInboxStore.getState().call.roomKey ?? shown ?? null;
   callGen++;
   deliberateRoomKey = null;
   walkieJoinedSeat = null;
@@ -971,23 +949,6 @@ async function setMutedHere(muted: boolean, opts?: { remember?: boolean }): Prom
     if (!muted) setCall({ micDenied: false });
   }
   pushFlags();
-}
-
-// Why did capture fail? livekit resolves null (no throw) when getUserMedia
-// yields nothing, and the OS permission state tells the cases apart: a
-// denial (System Settings on the desktop, a site setting in a browser)
-// versus a machine with no such device. The message is the fix, phrased for
-// the person holding the mouse; the notice that shows it carries the fix
-// button (`call.errorFix`).
-export async function mediaFailureReason(kind: "camera" | "microphone", err?: any): Promise<string> {
-  const label = kind === "camera" ? "Camera" : "Microphone";
-  if (err?.name === "NotFoundError" || err?.name === "OverconstrainedError") {
-    return `No ${kind} found`;
-  }
-  await refreshOsPermissions().catch(() => {});
-  const hint = permissionHint(kind, peekOsPermissions()[kind]);
-  if (hint) return hint;
-  return err?.name === "NotAllowedError" ? `${label} permission denied` : `${label} unavailable`;
 }
 
 /**
@@ -1118,40 +1079,6 @@ export function __attachAudioForTest(track: RemoteTrack, participantId: string):
   attachAudio(track, participantId);
 }
 
-/**
- * `prompt: false` lists without asking the browser for permission. LiveKit's
- * default asks, which is right inside a call (the device is already open) and
- * wrong in a settings panel, where opening the page must never raise a
- * permission dialog. Without permission Chrome still lists the devices, only
- * without names — DeviceRows offers the one-time grant that names them.
- */
-export async function listDevices(kind: MediaDeviceKind, opts?: { prompt?: boolean }): Promise<MediaDeviceInfo[]> {
-  try {
-    return await Room.getLocalDevices(kind, opts?.prompt !== false);
-  } catch {
-    return [];
-  }
-}
-
-/** Ask once for the microphone and camera so `enumerateDevices` can name them,
- *  then release both at once. Nothing is published and nothing stays open. */
-export async function grantDeviceNames(): Promise<boolean> {
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
-    for (const t of stream.getTracks()) t.stop();
-    return true;
-  } catch {
-    // Video may be the only refusal (no camera); audio alone still names the mics.
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      for (const t of stream.getTracks()) t.stop();
-      return true;
-    } catch {
-      return false;
-    }
-  }
-}
-
 export async function switchDevice(
   kind: "audioinput" | "audiooutput" | "videoinput",
   deviceId: string,
@@ -1196,11 +1123,19 @@ async function startHuddleHere(opts: {
   if (huddleInOtherWindow() && await focusExistingHuddle()) return;
   if (!convex) return;
   setCall({ phase: "ringing_out" as const, roomKey: opts.roomKey, error: null, errorFix: null, muted: !readJoinPrefs().micOn });
+  // The ring is on the row from the press: the join takes a second, and the
+  // invite goes out only after it, so the stub rings stand from here until
+  // ringInto settles them (or the join fails and they are taken back).
+  ringStubs(opts.roomKey, opts.toUserIds, true);
   try {
     await joinCall(opts.roomKey, { intent: "deliberate" });
-    if (useInboxStore.getState().call.phase !== "connected") return;
+    if (useInboxStore.getState().call.phase !== "connected") {
+      ringStubs(opts.roomKey, opts.toUserIds, false);
+      return;
+    }
     await ringInto(opts.roomKey, opts.toUserIds, opts.anchorTitle, { ringChannel: opts.ringChannel });
   } catch (err: any) {
+    ringStubs(opts.roomKey, opts.toUserIds, false);
     setCall({ phase: "error", error: humanizeConvexError(err, "Could not start the huddle") });
   }
 }
@@ -1226,6 +1161,14 @@ export async function ringInto(
   opts?: { failMessage?: string; ringChannel?: boolean },
 ): Promise<RingOutcome[]> {
   if (!convex || (toUserIds.length === 0 && !opts?.ringChannel)) return [];
+  // The ring is on the row from the press. startHuddle seats the caller
+  // first, so until the invite's round trip lands the row would read a live
+  // call with nobody on it: an End that turns into a Cancel. A stub ring per
+  // person fills that window. A rung person's stub stays until the server's
+  // own list replaces it (the push lands a tick after the mutation resolves,
+  // and taking the stub back first reads online in between); a person the
+  // server did not ring loses theirs when the answer comes.
+  ringStubs(roomKey, toUserIds, true);
   try {
     const res = await convex.mutation(api.calls.invite, {
       room_key: roomKey,
@@ -1234,12 +1177,53 @@ export async function ringInto(
       ring_channel: opts?.ringChannel,
     });
     const results: RingOutcome[] = res?.results ?? [];
+    const rung = new Set(results.filter((r) => !(r.in_room || r.cooldown || r.refused)).map((r) => String(r.to_user)));
+    ringStubs(roomKey, toUserIds.filter((id) => !rung.has(id)), false);
     reportRingOutcomes(results);
     return results;
   } catch (err: any) {
+    ringStubs(roomKey, toUserIds, false);
     toast.error(humanizeConvexError(err, opts?.failMessage ?? "Could not ring them"));
     return [];
   }
+}
+
+/** Put up (or withdraw) a stub ring per person in myCalls.outgoing while the
+ *  invite is in flight (lib/calls/ringStubs). A person the server's own list
+ *  already shows ringing gets no stub. A person with a stub gets it again
+ *  with a fresh clock: startHuddle stubs at the press and ringInto stubs
+ *  again once the join lands, and a join that outlived the first clock would
+ *  otherwise leave the stub to expire inside the invite's round trip (the
+ *  face reads online, then ringing again when the row lands). A withdrawal
+ *  expires the stub's clock, and the list's merge drops it. */
+function ringStubs(roomKey: string, toUserIds: string[], on: boolean): void {
+  const st = useInboxStore.getState();
+  const cur = st.myCalls ?? { incoming: [], outgoing: [], membership: null };
+  const outgoing: any[] = cur.outgoing ?? [];
+  const now = Date.now();
+  let next: any[];
+  if (on) {
+    const members = st.teamMembers ?? [];
+    const listed = (id: string) =>
+      outgoing.some((r) => !isRingStub(r) && String(r.to_user) === id && r.room_key === roomKey && (r.status ?? "ringing") === "ringing");
+    const stubs: RingStub[] = toUserIds.filter((id) => !listed(id)).map((id) => ({
+      _id: ringStubId(roomKey, id),
+      room_key: roomKey,
+      to_user: id,
+      to_name: memberDisplayName(members.find((m: any) => String(m._id) === id), "Teammate"),
+      status: "ringing",
+      created_at: now,
+      until: now + RING_STUB_MS,
+    }));
+    if (!stubs.length) return;
+    const ids = new Set(stubs.map((s) => s._id));
+    next = [...outgoing.filter((r) => !ids.has(String(r._id))), ...stubs];
+  } else {
+    const ids = new Set(toUserIds.map((id) => ringStubId(roomKey, id)));
+    if (!outgoing.some((r) => ids.has(String(r._id)))) return;
+    next = outgoing.map((r) => (ids.has(String(r._id)) ? { ...r, until: 0 } : r));
+  }
+  st.syncTable("myCalls", { ...cur, outgoing: next });
 }
 
 // The outcomes worth a sentence. Busy rings quietly and shows as ringing;
@@ -1328,19 +1312,15 @@ export async function declineInvite(inviteId: string): Promise<void> {
 }
 
 export async function cancelOutgoing(inviteId: string): Promise<void> {
-  if (!convex) return;
+  // A stub (the invite still in flight) has nothing to cancel yet.
+  if (!convex || inviteId.startsWith(RING_STUB)) return;
   await convex.mutation(api.calls.cancelInvite, { invite_id: inviteId }).catch(() => {});
 }
 
 // ── The locked door ───────────────────────────────────────────────────────
 // A huddle is an open room by default; a lock is the exception, and knocking
 // is how someone outside asks for it to be lifted for them. Admitting is not
-// new machinery — someone inside rings the knocker with the ordinary invite,
-// and the accepted ring is their grant (see ringInto).
 
-// Lock or unlock the room I'm in. Local-first: the glyph flips in this tick
-// and callLockPending protects it until getLiveRooms echoes the same state.
-// ── Transcription entry points ────────────────────────────────────────────
 // Every huddle transcribes; the server decides which seated client scribes
 // (transcripts.start). Three ways in, one engine: the auto path a connected
 // window takes on its own, the manual toggle, and "stop" — which is written
@@ -1427,9 +1407,6 @@ export async function admitKnock(roomKey: string, userId: string): Promise<void>
   });
 }
 
-// Best-effort row cleanup when the tab dies mid-call; the 45s lease is the
-// real guarantee, this just makes the common case instant.
-//
 /**
  * Host: carry out a call gesture another window sent (lib/calls/walkie's
  * `runVoiceCommand` hands the ones it does not own here). The same functions
@@ -1455,7 +1432,7 @@ export async function runCallCommand(cmd: string, args: unknown[]): Promise<void
       return joinCallHere(roomKey, opts);
     }
     case "leaveCall":
-      return leaveCallHere();
+      return leaveCallHere(typeof a[0] === "string" ? a[0] : undefined);
     case "setMuted":
       return setMutedHere(!!a[0], a[1] && typeof a[1] === "object" ? a[1] : undefined);
     case "setCamera":
@@ -1512,3 +1489,10 @@ if (typeof window !== "undefined" && import.meta.env.DEV) {
     ringInto,
   };
 }
+
+// Editing this file mid call reloads the window on purpose. The room lives in
+// this module's state, and a hot swap hands every caller a fresh instance
+// with no room while the old one stays connected: End then did nothing and
+// the float stayed up over the founder's screen (2026-09-23). A reload drops
+// the call honestly instead of leaving a call nobody can end.
+if (import.meta.hot) import.meta.hot.accept(() => window.location.reload());

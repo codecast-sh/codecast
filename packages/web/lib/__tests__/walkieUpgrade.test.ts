@@ -150,7 +150,7 @@ describe("walkie: the sender's claim about the other person", () => {
     // into it. A roster of exactly me is nobody listening.
     const out = senderHearing([seat(ME)], ME, them());
     expect(out.state).toBe("away");
-    expect(out.text).toBe("Jordan is away — they get the message");
+    expect(out.text).toBe("Jordan is away, so they get the message");
   });
 
   it("says away when the room is empty, and never calls it a failure", () => {
@@ -167,7 +167,7 @@ describe("walkie: the sender's claim about the other person", () => {
     for (const shut of [{ status: "busy" }, { pref: "off" }, { snoozed: true }]) {
       const out = senderHearing([seat(ME)], ME, them(shut));
       expect(out.state).toBe("busy");
-      expect(out.text).toBe("Jordan is busy — they get the message");
+      expect(out.text).toBe("Jordan is busy, so they get the message");
     }
   });
 
@@ -205,7 +205,7 @@ describe("walkie: the dock's title when somebody joins", () => {
   const T0 = 1_700_000_000_000;
   const ann = (over: Record<string, unknown> = {}) => ({
     roomKey: ROOM,
-    text: "Jordan joined — it's a call now",
+    text: "Jordan joined, it's a call now",
     at: T0,
     ...over,
   });
@@ -215,9 +215,9 @@ describe("walkie: the dock's title when somebody joins", () => {
   });
 
   it("says who joined, for four seconds, and then stops", () => {
-    expect(joinTitle(ann(), ROOM, T0, "Jordan Lee")).toBe("Jordan joined — it's a call now");
+    expect(joinTitle(ann(), ROOM, T0, "Jordan Lee")).toBe("Jordan joined, it's a call now");
     expect(joinTitle(ann(), ROOM, T0 + JOIN_TITLE_MS - 1, "Jordan Lee")).toBe(
-      "Jordan joined — it's a call now",
+      "Jordan joined, it's a call now",
     );
     // A title is never allowed to outlive its moment: a tab that slept through
     // the timer must not come back still announcing somebody walking in.
@@ -232,10 +232,10 @@ describe("walkie: the dock's title when somebody joins", () => {
   });
 
   it("names both sides of the same moment", () => {
-    expect(theyJoinedText("Jordan")).toBe("Jordan joined — it's a call now");
+    expect(theyJoinedText("Jordan")).toBe("Jordan joined, it's a call now");
     expect(youJoinedText("Jordan")).toBe("You joined Jordan");
     // A name that never resolved still gets a sentence rather than a blank.
-    expect(theyJoinedText("")).toBe("Somebody joined — it's a call now");
+    expect(theyJoinedText("")).toBe("Somebody joined, it's a call now");
     expect(youJoinedText(null)).toBe("You joined the call");
   });
 });
@@ -273,7 +273,7 @@ describe("walkie: the far side's join, applied exactly once", () => {
     } finally {
       unsubscribe();
     }
-    expect(seen).toEqual(["Jordan joined — it's a call now"]);
+    expect(seen).toEqual(["Jordan joined, it's a call now"]);
     expect(getJoinAnnouncement()?.roomKey).toBe(ROOM);
     // And the engine knows the room is a call, which is what keeps the mic open
     // and hands the surface to the ordinary dock.
@@ -337,7 +337,7 @@ describe("walkie: the sender's claim, derived from the store", () => {
 
   it("renames live: the sentence follows the roster, not the burst", () => {
     const renamed = store({ teamMembers: [{ _id: THEM, name: "Jordan L." }] });
-    expect(senderHearingFrom(renamed, ROOM, NOW).text).toBe("Jordan L. is away — they get the message");
+    expect(senderHearingFrom(renamed, ROOM, NOW).text).toBe("Jordan L. is away, so they get the message");
   });
 });
 

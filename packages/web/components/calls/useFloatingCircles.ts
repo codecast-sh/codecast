@@ -43,12 +43,26 @@ export function useFloatingCircles(opts: {
 }) {
   const { shapeSig, bridge, hideDelayMs = 1500 } = opts;
   const [hovered, setHovered] = useState(false);
+  // Declared up here because the size effect and the click-through test read
+  // it: a drag in progress is the one state in which the window must keep
+  // taking the mouse, and must not be resized.
+  const dragging = useRef(false);
 
   const sizeForRef = useRef(opts.sizeFor);
   sizeForRef.current = opts.sizeFor;
 
   // ── The window is exactly as big as its circles ─────────────────────────
+  //
+  // Never mid-drag: the shell lifts and restores the window's resizable flag
+  // around a resize, and macOS ends the mouse tracking with it, so the drag
+  // died a beat after it started whenever a hover grew the window under the
+  // held button. The size is applied when the button comes up.
+  const pendingSize = useRef(false);
   useWatchEffect(() => {
+    if (dragging.current) {
+      pendingSize.current = true;
+      return;
+    }
     bridge.setContentSize(sizeForRef.current(hovered));
   }, [shapeSig, hovered]);
 
@@ -61,9 +75,6 @@ export function useFloatingCircles(opts: {
   // pointer's rate on the one window that must stay cheap.
   const rootRef = useRef<HTMLDivElement | null>(null);
   const regionsRef = useRef<HitRegion[]>([]);
-  // Declared up here because the click-through test below reads it: a drag in
-  // progress is the one state in which the window must keep taking the mouse.
-  const dragging = useRef(false);
   const interactiveRef = useRef(false);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -132,12 +143,13 @@ export function useFloatingCircles(opts: {
       bridge.setInteractive(hit);
     }
     setHovered(true);
+    // Anywhere in the window keeps the chrome: the window is exactly its
+    // circles and their card, so a pointer inside it is a pointer on them.
+    // The document's mouseleave is what says the pointer left; a timer that
+    // ran while the pointer rested on the glass hid and reshowed the card
+    // every 1.5s under a still hand.
     if (hideTimer.current) clearTimeout(hideTimer.current);
-    // Over a circle, the chrome stays. Anywhere else in the window it is on its
-    // way out — including when the pointer leaves through the transparent
-    // margin, which is the last event this window ever sees of that gesture.
-    if (hit) hideTimer.current = null;
-    else hideLater();
+    hideTimer.current = null;
   });
   useEventListener("mouseleave", hide, document);
 
@@ -160,6 +172,10 @@ export function useFloatingCircles(opts: {
     if (!dragging.current) return;
     dragging.current = false;
     bridge.setDragging(false);
+    if (pendingSize.current) {
+      pendingSize.current = false;
+      bridge.setContentSize(sizeForRef.current(true));
+    }
     // The pointer may be off the glass by now, and no mousemove will come to
     // say so: the chrome goes on its way out the same as after any hover.
     hideLater();

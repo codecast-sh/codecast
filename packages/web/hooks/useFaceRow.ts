@@ -14,17 +14,26 @@ import { useFleetSummaries } from "../components/presence/useMemberActivity";
 
 export type { FaceRow, FaceEntry, FaceCard, FaceState, FaceTier, Link, LinkKind } from "../lib/faces/faceRow";
 
+/** The asks the row's faces would show, as one string, so a fleet change
+ *  that moves no face's count keeps the row's identity. My own face carries
+ *  no mark: the model leaves it at zero on purpose (my sessions waiting on
+ *  me are not news on my own picture), and the overlay never puts it back. */
+export function askSigOf(row: FaceRow, fleets: ReadonlyMap<string, { needsYou: number }>): string {
+  return row.entries.map((e) => (e.me ? 0 : (fleets.get(e.id)?.needsYou ?? 0))).join(",");
+}
+
+/** The row with the asks written on; the same row when nobody has one. */
+export function overlayAsks(row: FaceRow, askSig: string): FaceRow {
+  if (!/[1-9]/.test(askSig)) return row;
+  const asks = askSig.split(",").map(Number);
+  return { ...row, entries: row.entries.map((e, i) => (e.ask === asks[i] ? e : { ...e, ask: asks[i] })) };
+}
+
 export function useFaceRow(): FaceRow {
   const row = useSyncExternalStore(subscribeFaceRow, readFaceRow, readFaceRow);
   const fleets = useFleetSummaries();
-  // A string of the asks the row's faces would show, so a fleet change that
-  // moves no face's count keeps the row's identity.
-  const askSig = row.entries.map((e) => fleets.get(e.id)?.needsYou ?? 0).join(",");
-  return useMemo(() => {
-    if (!/[1-9]/.test(askSig)) return row;
-    const asks = askSig.split(",").map(Number);
-    return { ...row, entries: row.entries.map((e, i) => (e.ask === asks[i] ? e : { ...e, ask: asks[i] })) };
-  }, [row, askSig]);
+  const askSig = askSigOf(row, fleets);
+  return useMemo(() => overlayAsks(row, askSig), [row, askSig]);
 }
 
 /**

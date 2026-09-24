@@ -7,7 +7,7 @@ import { closeDomWindow } from "../../test-helpers/domGlobals";
 import { useInboxStore } from "../../store/inboxStore";
 import { announceJoin, clearJoinAnnouncement } from "../../lib/calls/joinAnnounce";
 import { resetFaceRow, type FaceRow } from "../../lib/faces/faceRow";
-import { useFaceRow } from "../useFaceRow";
+import { askSigOf, overlayAsks, useFaceRow } from "../useFaceRow";
 
 // THE ROW'S WAKE DISCIPLINE (pl-756 F1). The header bar is mounted for the
 // life of the app and the roster re-pushes every few seconds on heartbeat
@@ -102,4 +102,24 @@ test("a join announcement wakes the row through its own subscription", async () 
   expect(renders).toBe(mounted + 1);
   expect(latest.card).toMatchObject({ kind: "joined-notice", text: "Ann joined" });
   expect(latest.entries.map((e) => e.state)).toEqual(["in-call", "joining"]);
+});
+
+test("the ask overlay marks teammates and never my own face", async () => {
+  const room = `dm:${ANN}:${ME}`;
+  useInboxStore.setState({
+    call: { ...useInboxStore.getState().call, phase: "connected", roomKey: room, muted: false },
+    callOccupancy: { [room]: [{ user_id: ME }, { user_id: ANN }] },
+  } as any);
+  await mount();
+  expect(latest.entries.map((e) => e.me)).toEqual([true, false]);
+  const fleets = new Map([
+    [ME, { needsYou: 9 }],
+    [ANN, { needsYou: 2 }],
+  ]);
+  const sig = askSigOf(latest, fleets);
+  expect(sig).toBe("0,2");
+  const marked = overlayAsks(latest, sig);
+  expect(marked.entries.map((e) => e.ask)).toEqual([0, 2]);
+  // Nobody to mark: the same row object, so the caller keeps its identity.
+  expect(overlayAsks(latest, askSigOf(latest, new Map([[ME, { needsYou: 9 }]])))).toBe(latest);
 });

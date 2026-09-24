@@ -101,6 +101,7 @@ function CallListRow({ call, selected }: { call: any; selected: boolean }) {
   // the same thing as a huddle.
   const recording = isRecRoomKey(call.room_key);
   const people: any[] = call.participants || [];
+  const silent = !recording && !live && people.length === 0;
   return (
     <Link
       href={`/calls/${call._id}`}
@@ -119,8 +120,15 @@ function CallListRow({ call, selected }: { call: any; selected: boolean }) {
         ) : (
           <Phone className="h-3 w-3 shrink-0 text-sol-text-dim" />
         )}
-        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-sol-text">
-          {call.title || (recording ? "Untitled recording" : "Untitled huddle")}
+        {/* An ended huddle nobody spoke in (a test, a silent join) says so in
+            its title, quietly, so the eye passes it and lands on the calls
+            with a name. */}
+        <span
+          className={`min-w-0 flex-1 truncate text-[13px] ${
+            silent ? "font-normal text-sol-text-muted" : "font-medium text-sol-text"
+          }`}
+        >
+          {call.title || (recording ? "Untitled recording" : silent ? "Silent huddle" : "Untitled huddle")}
         </span>
         <span className={`shrink-0 text-[11px] ${live ? "text-sol-green" : "text-sol-text-dim"}`}>
           {fmtLength(call.started_at, call.ended_at)}
@@ -141,9 +149,9 @@ function CallListRow({ call, selected }: { call: any; selected: boolean }) {
                   ? "transcribing…"
                   : "nothing was said"}
           </span>
-        ) : people.length === 0 ? (
-          <span className="text-[11px] italic text-sol-text-dim">{live ? "no one spoke yet" : "no one spoke"}</span>
-        ) : (
+        ) : live && people.length === 0 ? (
+          <span className="text-[11px] italic text-sol-text-dim">no one spoke yet</span>
+        ) : silent ? null : (
           <span className="min-w-0 truncate text-[11px]">
             {people.map((p: any, i: number) => (
               <span key={p.id} className={speakerColor(p.id)}>
@@ -347,7 +355,7 @@ function CallDetail({ id }: { id: string }) {
       <div className="shrink-0 border-b border-sol-border/20 px-6 py-4">
         <div className="flex items-center gap-2.5">
           {recording && <Mic className="h-4 w-4 shrink-0 text-sol-text-dim" />}
-          <h1 className="min-w-0 truncate text-[17px] font-medium text-sol-text">
+          <h1 className="min-w-0 line-clamp-2 text-[17px] font-medium leading-snug text-sol-text">
             {call.title || (recording ? "Untitled recording" : "Untitled huddle")}
           </h1>
           {live && (

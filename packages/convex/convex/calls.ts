@@ -210,10 +210,12 @@ export const getMyCalls = query({
         q.eq("from_user", userId).eq("status", "ringing"),
       )
       .collect();
-    // Recently-settled rows so the caller's dock can finish the sentence:
-    // "declined" for a decline, "no answer" for a ring that hit its TTL.
+    // Recently-settled rows so the caller's row can finish the sentence:
+    // "declined" for a decline, "no answer" for a ring that hit its TTL, and
+    // "accepted" so a face that was ringing stays ringing until its seat
+    // lands a round trip later, instead of reading online in between.
     const settled = await Promise.all(
-      (["declined", "expired"] as const).map((status) =>
+      (["declined", "expired", "accepted"] as const).map((status) =>
         ctx.db
           .query("call_invites")
           .withIndex("by_from_status", (q) =>

@@ -337,7 +337,7 @@ function openCacheDb(): Promise<any> | null {
   } catch {
     cacheDb = null;
   }
-  return cacheDb;
+  return cacheDb ?? null;
 }
 
 let cacheDbSync: any | null | undefined;

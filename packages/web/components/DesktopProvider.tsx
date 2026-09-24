@@ -1,3 +1,4 @@
+import { inHuddle } from "../lib/calls/huddlePresence";
 import { withInboxView } from "../lib/inboxViewHistory";
 import { useRef, useState } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -28,8 +29,7 @@ import {
   reportDesktopWindowState,
   isDetachedTabWindow,
   onCallPanelHandback,
-  onVoiceMirror,
-} from "../lib/desktop";
+  onVoiceMirror } from "../lib/desktop";
 import { runPlaced } from "../lib/desktopApps";
 import { inboxTabSessionId } from "../lib/pathLabel";
 import { cleanNotificationBody } from "../lib/notificationText";
@@ -61,13 +61,6 @@ const BANNER_FRESH_MS = 3 * 60_000;
 let walkie: typeof import("../lib/calls/walkie") | null = null;
 /** Exported for the call seam tests: a LiveKit reconnect must read as still
  *  in the huddle, which this answers from the store's `phase` alone. */
-export function inHuddle(st: any): boolean {
-  // `connected` holds through a LiveKit reconnect (callManager never demotes
-  // the phase for one), so the report never flickers to "not in a call".
-  if (st.call?.phase !== "connected") return false;
-  if (!walkie) return true;
-  return !walkie.walkieHoldsRoom(walkie.getWalkieStatus(), st.call.roomKey ?? null);
-}
 
 export function DesktopProvider() {
   const router = useRouter();
@@ -369,7 +362,7 @@ export function DesktopProvider() {
     const withSession = (p: string) =>
       inboxFamily(p) && st.currentSessionId ? `/conversation/${st.currentSessionId}` : p;
     if (isDetachedTabWindow() || st.tabs.length === 0 || !st.activeTabId) {
-      reportDesktopWindowState({ active: withSession(live), open: [], inCall: inHuddle(st) });
+      reportDesktopWindowState({ active: withSession(live), open: [], inCall: inHuddle(st, walkie) });
       return;
     }
     const open = st.tabs.map((t) => ({
@@ -380,7 +373,7 @@ export function DesktopProvider() {
     reportDesktopWindowState({
       active: activeTab?.path ?? withSession(live),
       open,
-      inCall: inHuddle(st),
+      inCall: inHuddle(st, walkie),
     });
   }, [surfaceSig, location.pathname, location.search]);
 

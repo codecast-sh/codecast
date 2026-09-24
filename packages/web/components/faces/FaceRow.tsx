@@ -1,3 +1,4 @@
+import { type FaceDensity, FACE_ROW_METRICS, LINK_PULL, faceRowWidth, faceRowSize, flipKeyframes, CARD_OPEN_MS, CARD_CLOSE_MS, STRIP_GAP, floatingRowSize } from "../../lib/faces/layout";
 // THE FACE ROW: presence, walkie, ringing and calls as the same faces in
 // different states (pl-756 F2).
 //
@@ -25,7 +26,7 @@
 // machinery (useFloatingCircles) sizes the window and lifts click through;
 // `FloatingFaceRow` is the row with that machinery attached.
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from "react";
-import { MicOff } from "lucide-react";
+import { GripHorizontal, Maximize2, MicOff, X } from "lucide-react";
 import type { FaceEntry, FaceRow as FaceRowModel, FaceState, LinkKind } from "../../lib/faces/faceRow";
 import { useCircleFace } from "../../hooks/useCircleFace";
 import { CircleFace } from "../calls/FaceCircle";
@@ -34,73 +35,19 @@ import { getCallTiles, subscribeCallTiles, type ParticipantTile } from "../../li
 import { useFaceKey, useWalkieFaces, type FaceKey } from "../presence/useFaceKey";
 import { FaceCard } from "./FaceCard";
 import { useWalkieLevelVar } from "../../hooks/useWalkie";
+import { useVideoFrame } from "../../lib/calls/videoFrames";
 import { useMicLevelVar } from "../../hooks/useMicLevelVar";
 import { useEventListener } from "../../hooks/useEventListener";
 import { PresenceBadge } from "../presence/PresenceBadge";
 import { presenceAvatarClass, type PresenceVisual } from "../presence/memberPresence";
 import { MORPH_EASING, MORPH_MS, canMorph } from "../calls/useSurfaceMorph";
 import { useFloatingCircles, type FloatingBridge } from "../calls/useFloatingCircles";
-import { FACES_PADDING, NAME_HEIGHT, ROW_GAP } from "../../lib/calls/faceCrop";
+
 import "../calls/faces.css";
 import "../calls/walkie.css";
 import "../people/people.css";
 import "../presence/presence.css";
 import "./faceRow.css";
-
-// ── layout ──────────────────────────────────────────────────────────────────
-
-export type FaceDensity = "bar" | "float";
-
-/** The row's measurements per density: the circle, the gap between seats,
- *  the bridge a link draws, and the margin around the row. Mirrored in
- *  faceRow.css (`--face`, `--face-gap`, `--link-w`, the float padding); the
- *  layout test holds the two together. */
-export const FACE_ROW_METRICS: Record<FaceDensity, { face: number; gap: number; link: number; pad: number }> = {
-  bar: { face: 32, gap: 6, link: 14, pad: 0 },
-  float: { face: 64, gap: 10, link: 26, pad: FACES_PADDING },
-};
-
-/** The linked pair pulls together: a bridge eats this share of the gap on
- *  each side (faceRow.css `.face-link` margin). */
-export const LINK_PULL = 0.35;
-
-/** How wide the row is: the seats, the gaps, and each bridge less the pull. */
-export function faceRowWidth(density: FaceDensity, faces: number, links: number): number {
-  const m = FACE_ROW_METRICS[density];
-  if (faces === 0) return m.pad * 2;
-  const bridges = Math.min(links, Math.max(0, faces - 1));
-  return m.pad * 2 + faces * m.face + (faces - 1) * m.gap + bridges * (m.link - 2 * LINK_PULL * m.gap);
-}
-
-/** The window a floating row needs: its circles and their margin, plus the
- *  name row while the pointer is on a face (the same band the call circles
- *  reserve, NAME_HEIGHT). */
-export function faceRowSize(
-  density: FaceDensity,
-  faces: number,
-  links: number,
-  hovered: boolean,
-): { width: number; height: number } {
-  const m = FACE_ROW_METRICS[density];
-  return {
-    width: faceRowWidth(density, faces, links),
-    height: m.pad * 2 + m.face + (hovered ? ROW_GAP + NAME_HEIGHT : 0),
-  };
-}
-
-// ── the FLIP ────────────────────────────────────────────────────────────────
-
-/** One face's travel: from where it was to where the layout put it. Null when
- *  it did not move, so a level tick or a mute never starts an animation. */
-export function flipKeyframes(
-  from: { left: number; top: number },
-  to: { left: number; top: number },
-): Keyframe[] | null {
-  const dx = from.left - to.left;
-  const dy = from.top - to.top;
-  if (dx === 0 && dy === 0) return null;
-  return [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: "none" }];
-}
 
 /**
  * Watch `orderSig` (who is on the row, in what order, with which bridges) and
@@ -183,6 +130,7 @@ function FaceSeat({
   cardOpen,
   onHover,
   onToggle,
+  onPress,
   registerKey,
   onPointerDown,
   onPointerUp,
@@ -196,6 +144,8 @@ function FaceSeat({
   cardOpen: boolean;
   onHover: (id: string | null) => void;
   onToggle: (id: string) => void;
+  /** A press on the face: whatever the dwell was about to open, it waits. */
+  onPress: () => void;
   /** The seat's key, for the card's Talk button: one key per person. */
   registerKey: (id: string, key: FaceKey | null) => void;
   onPointerDown?: (e: React.PointerEvent) => void;
@@ -203,6 +153,9 @@ function FaceSeat({
 }) {
   const diameter = FACE_ROW_METRICS[density].face;
   const { hostRef, videoRef, track } = useCircleFace({ tile, image: entry.image, diameter, active: true });
+  // No track in this window (the media is in the voice host): the host's
+  // relayed frame stands in, so the header still shows the person, not a photo.
+  const frame = useVideoFrame(entry.video && !track ? entry.id : null);
   // The face is the key: its card carries Talk, Ring and Message, the room
   // warmed on a dwell. My own face keys nothing; there is nobody to talk to.
   const key = useFaceKey({
@@ -257,17 +210,24 @@ function FaceSeat({
           e.stopPropagation();
           if (canOpen) onToggle(entry.id);
         }}
-        onPointerDown={onPointerDown}
+        onPointerDown={(e) => {
+          onPress();
+          onPointerDown?.(e);
+        }}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
       >
-        <CircleFace videoRef={videoRef} track={track} image={entry.image} name={entry.name} diameter={diameter} />
-        {entry.muted && (
-          <span className="face-mute">
-            <MicOff className="h-3 w-3" />
-          </span>
-        )}
+        <CircleFace videoRef={videoRef} track={track} frame={frame} image={entry.image} name={entry.name} diameter={diameter} />
       </button>
+      {/* The marks on the person sit on the circle's EDGE, outside its clip:
+          the presence badge, the mute badge, the unread count, the ask. The
+          mute badge inside the circle (the call circles' own spot) was cut
+          to a D by the circle's clip, and its icon with it. */}
+      {entry.muted && (
+        <span className="face-mute" aria-label="muted">
+          <MicOff className="h-3 w-3" />
+        </span>
+      )}
       {presence && <PresenceBadge state={presence} size={density === "bar" ? "sm" : "md"} className="face-pres" />}
       {entry.unread > 0 && (
         <span className="face-unread" aria-label={`${entry.unread} unread`}>
@@ -275,12 +235,9 @@ function FaceSeat({
         </span>
       )}
       {entry.ask > 0 && <span className="face-ask" aria-label={`${entry.ask} waiting on you`} />}
-      {/* "hey he joined", under the face it happened to, for the seconds the model says so. */}
-      {entry.state === "joining" && (
-        <span className="people-face-joined" role="status">
-          joined
-        </span>
-      )}
+      {/* No "joined" label under the chin: a face is `joining` only in my own
+          room, where the card under the row is the joined notice and says so
+          in words; a label there sat under the card that covered it. */}
       {/* The name under the chin, the floating circles' own hover. In the
           bar the card carries the name, so nothing hangs under a face there
           that a card could stack on. */}
@@ -289,15 +246,6 @@ function FaceSeat({
   );
 }
 
-// ── the row ─────────────────────────────────────────────────────────────────
-
-/** The dwell before a pointed at face opens its card: a drive by pointer
- *  never flashes one. */
-export const CARD_OPEN_MS = 150;
-/** The grace after the pointer leaves a face or its card: crossing from the
- *  face into the card, or between faces, never drops it. */
-export const CARD_CLOSE_MS = 220;
-
 export function FaceRow({
   row,
   density,
@@ -305,9 +253,12 @@ export function FaceRow({
   callsEnabled = true,
   rootRef,
   belowRef,
+  stripRef,
   onDragStart,
   onDragEnd,
   onOpenProfile,
+  chrome,
+  holdCard = false,
   className = "",
   children,
 }: {
@@ -317,16 +268,26 @@ export function FaceRow({
   callsEnabled?: boolean;
   /** The float machinery's root, when this row is the floating window's. */
   rootRef?: RefObject<HTMLDivElement | null>;
-  /** The band under the faces (the engagement card, the member card), for
-   *  whoever sizes a window from it. */
+  /** The band under the faces (the member card), for whoever sizes a
+   *  window from it. */
   belowRef?: (el: HTMLDivElement | null) => void;
+  /** The strip beside the faces (the engagement card), likewise. */
+  stripRef?: (el: HTMLDivElement | null) => void;
   /** Held on a circle, the floating window follows the cursor. */
   onDragStart?: (e: React.PointerEvent) => void;
   onDragEnd?: (e: React.PointerEvent) => void;
   /** The card's profile door. Absent: the card names the person, and that is all. */
   onOpenProfile?: (member: any) => void;
+  /** The float's controls: the footer of the card under the row, there
+   *  while the pointer is in the window. */
+  chrome?: ReactNode;
+  /** The float: the open card stays while the pointer is anywhere in the
+   *  window, and switches faces as the pointer moves. Leaving a face is not
+   *  leaving the card. */
+  holdCard?: boolean;
   className?: string;
-  /** The engagement card, hung under the row (position: relative here). */
+  /** The engagement card, in the row beside the faces: one line, faces
+   *  first, then what is happening and what you can do about it. */
   children?: ReactNode;
 }) {
   const ownRef = useRef<HTMLDivElement | null>(null);
@@ -371,10 +332,15 @@ export function FaceRow({
     }
     if (openTimer.current) clearTimeout(openTimer.current);
     openTimer.current = null;
-    if (pinned) return;
+    if (pinned || holdCard) return;
     if (closeTimer.current) clearTimeout(closeTimer.current);
     closeTimer.current = setTimeout(() => setOpenId(null), CARD_CLOSE_MS);
   };
+  // The hold let go (the pointer left the window): the card goes with it.
+  useLayoutEffect(() => {
+    if (!holdCard && openId && !pinned) close();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only the hold's edge
+  }, [holdCard]);
   const toggle = (id: string) => {
     if (openId === id && pinned) return close();
     clearTimers();
@@ -452,6 +418,7 @@ export function FaceRow({
             cardOpen={openId === entry.id}
             onHover={hover}
             onToggle={toggle}
+            onPress={clearTimers}
             registerKey={registerKey}
             onPointerDown={onDragStart}
             onPointerUp={onDragEnd}
@@ -461,9 +428,18 @@ export function FaceRow({
           ? [<span key={`link:${entry.id}`} className="face-link" data-link-kind={kind} aria-hidden="true" />, seat]
           : [seat];
       })}
-      {/* The band under the faces: the engagement card, and the one member
-          card while a face is pointed at or pinned. */}
-      {(children != null && children !== false) || openId ? (
+      {/* The strip: in the row, after the faces it is about. Never under
+          them, where a face's own card opens. */}
+      {children != null && children !== false && (
+        <div ref={stripRef} className="face-row-strip" data-chrome-hit>
+          {children}
+        </div>
+      )}
+      {/* The band under the faces: the one member card while a face is
+          pointed at or pinned. In the float it is the one card the pointer
+          brings: the pointed face's words, or a legend, over the window's
+          own controls as the footer. */}
+      {openId || chrome ? (
         <div
           ref={belowRef}
           className="face-row-below"
@@ -474,7 +450,11 @@ export function FaceRow({
           }}
           onMouseLeave={() => hover(null)}
         >
-          {children}
+          {!openId && chrome && (
+            <div className="face-row-legend" aria-hidden="true">
+              Point at a face for who; click for Talk, Huddle and Message
+            </div>
+          )}
           {openId && (
             <FaceCard
               memberId={openId}
@@ -487,6 +467,7 @@ export function FaceRow({
               onClose={close}
             />
           )}
+          {chrome}
         </div>
       ) : null}
     </div>
@@ -509,12 +490,20 @@ export function FloatingFaceRow({
   viewerId,
   callsEnabled = true,
   bridge,
+  onOpenProfile,
+  chrome,
   children,
 }: {
   row: FaceRowModel;
   viewerId: string;
   callsEnabled?: boolean;
   bridge: FloatingBridge;
+  /** The card's profile door; the float has no router, so its host hands
+   *  the path to the main window. */
+  onOpenProfile?: (member: any) => void;
+  /** The float's own controls: a grip to move it, the stage when a call is
+   *  up, and a way to put it away. Absent: no chrome (a rig, a test). */
+  chrome?: FloatChrome;
   /** The engagement card, in the band under the faces. */
   children?: ReactNode;
 }) {
@@ -527,28 +516,13 @@ export function FloatingFaceRow({
   );
   const faces = shown.entries.length;
   const links = shown.links.length;
-  const [card, setCard] = useState({ width: 0, height: 0 });
-  const observer = useRef<ResizeObserver | null>(null);
-  const belowRef = useCallback((el: HTMLDivElement | null) => {
-    observer.current?.disconnect();
-    observer.current = null;
-    if (!el) {
-      setCard({ width: 0, height: 0 });
-      return;
-    }
-    const measure = () => {
-      const r = el.getBoundingClientRect();
-      setCard({ width: Math.ceil(r.width), height: Math.ceil(r.height) });
-    };
-    measure();
-    if (typeof ResizeObserver !== "undefined") {
-      observer.current = new ResizeObserver(measure);
-      observer.current.observe(el);
-    }
-  }, []);
+  // Two measured boxes: the strip beside the faces and the member card's
+  // band under them. Each is its words, so each is read, not computed.
+  const [card, belowRef] = useMeasured();
+  const [strip, stripRef] = useMeasured();
   const { rootRef, hovered, startDrag, endDrag } = useFloatingCircles({
-    sizeFor: (hover) => floatingRowSize(faces, links, hover, card),
-    shapeSig: `${faces}|${links}|${card.width}x${card.height}`,
+    sizeFor: () => floatingRowSize(faces, links, card, strip),
+    shapeSig: `${faces}|${links}|${card.width}x${card.height}|${strip.width}x${strip.height}`,
     bridge,
   });
   return (
@@ -559,32 +533,79 @@ export function FloatingFaceRow({
       callsEnabled={callsEnabled}
       rootRef={rootRef}
       belowRef={belowRef}
+      stripRef={stripRef}
       onDragStart={startDrag}
       onDragEnd={endDrag}
-      className={hovered ? "face-row--hover" : ""}
+      onOpenProfile={onOpenProfile}
+      holdCard={hovered}
+      chrome={
+        chrome && hovered ? (
+          <div className="faces-chrome face-row-chrome" data-chrome-hit role="toolbar" aria-label="Floating faces">
+            {/* The grip: held, the window follows the cursor (a face drags
+                it too, but a grip says so). */}
+            <button
+              type="button"
+              className="faces-btn face-row-grip"
+              data-chrome-btn="move"
+              title="Hold to move"
+              onPointerDown={startDrag}
+              onPointerUp={endDrag}
+              onPointerCancel={endDrag}
+            >
+              <GripHorizontal className="h-4 w-4" />
+              <span className="faces-btn-word">Move</span>
+            </button>
+            {chrome.inCall && chrome.onExpand && (
+              <button type="button" className="faces-btn" data-chrome-btn="open" onClick={chrome.onExpand} title="Open the call window">
+                <Maximize2 className="h-4 w-4" />
+                <span className="faces-btn-word">Open</span>
+              </button>
+            )}
+            <button type="button" className="faces-btn" data-chrome-btn="close" onClick={chrome.onClose} title={chrome.closeTitle}>
+              <X className="h-4 w-4" />
+              <span className="faces-btn-word">{chrome.closeWord}</span>
+            </button>
+          </div>
+        ) : null
+      }
     >
       {children}
     </FaceRow>
   );
 }
 
-/** The gap between the faces and the band under them; while the pointer is
- *  on a face the name band takes its place (faceRow.css `.face-row-below`). */
-export const CARD_GAP = 8;
+/** What the float's chrome offers. `closeWord` is "Close" for a row the
+ *  person popped out (it goes back to the header) and "Hide" for one that
+ *  came out on its own for a ring or a call (it stays away until the next). */
+export type FloatChrome = {
+  inCall: boolean;
+  onExpand?: () => void;
+  onClose: () => void;
+  closeWord: string;
+  closeTitle: string;
+};
 
-/** The floating window with a card under the row: as wide as the wider of
- *  the two, as tall as both plus the gap between them. */
-export function floatingRowSize(
-  faces: number,
-  links: number,
-  hovered: boolean,
-  card: { width: number; height: number },
-): { width: number; height: number } {
-  const size = faceRowSize("float", faces, links, hovered);
-  if (card.height === 0) return size;
-  const pad = FACE_ROW_METRICS.float.pad;
-  return {
-    width: Math.max(size.width, card.width + pad * 2),
-    height: size.height + card.height + (hovered ? 0 : CARD_GAP),
-  };
+/** A box's size, read by a ResizeObserver: a ref to hand the element in,
+ *  and the latest size. Zero once the element is gone. */
+function useMeasured(): [{ width: number; height: number }, (el: HTMLDivElement | null) => void] {
+  const [size, setSize] = useState({ width: 0, height: 0 });
+  const observer = useRef<ResizeObserver | null>(null);
+  const ref = useCallback((el: HTMLDivElement | null) => {
+    observer.current?.disconnect();
+    observer.current = null;
+    if (!el) {
+      setSize({ width: 0, height: 0 });
+      return;
+    }
+    const measure = () => {
+      const r = el.getBoundingClientRect();
+      setSize({ width: Math.ceil(r.width), height: Math.ceil(r.height) });
+    };
+    measure();
+    if (typeof ResizeObserver !== "undefined") {
+      observer.current = new ResizeObserver(measure);
+      observer.current.observe(el);
+    }
+  }, []);
+  return [size, ref];
 }
