@@ -1,6 +1,7 @@
 "use client";
 
 import { copyToClipboard } from "../../lib/utils";
+import { ShortId } from "../../components/ShortId";
 import { useState, useCallback, useMemo, useRef, type MouseEvent } from "react";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useEventListener } from "../../hooks/useEventListener";
@@ -122,7 +123,7 @@ function SidebarPlanItem({
         </span>
       </div>
       <div className="flex items-center gap-2 mt-1 pl-[22px]">
-        <span className="text-[10px] font-mono text-sol-text-dim">{plan.short_id}</span>
+        <ShortId id={plan.short_id} className="text-[10px] text-sol-text-dim" />
         <MiniProgressBar progress={plan.progress} />
         {activeAgents > 0 && (
           <span className="flex items-center gap-0.5 text-[10px] text-emerald-400">
@@ -533,7 +534,7 @@ function MobileList({
                   {grouped[status].map((p: any) => (
                     <Link key={p._id} href={`/plans/${p._id}`} className="block px-4 py-3 border-b border-sol-border/15 hover:bg-sol-bg-alt/30">
                       <div className="text-sm text-sol-text">{p.title}</div>
-                      <div className="text-[10px] text-sol-text-dim font-mono mt-0.5">{p.short_id}</div>
+                      <ShortId id={p.short_id} className="block text-[10px] text-sol-text-dim mt-0.5" />
                     </Link>
                   ))}
                 </div>

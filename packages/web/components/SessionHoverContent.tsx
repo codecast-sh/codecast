@@ -1,4 +1,5 @@
 import { ArrowUpRight, FolderOpen, MessageSquare } from "lucide-react";
+import { ShortId } from "./ShortId";
 import {
   AuthorAvatar,
   SessionSummaryBlock,
@@ -72,7 +73,7 @@ export function SessionHoverContent({ session, identity = true }: { session: any
       )}
 
       <div className="flex items-center justify-between pt-1 border-t border-white/5">
-        <span className="text-[10px] text-gray-500 font-mono">{session.short_id}</span>
+        <ShortId id={session.short_id} className="text-[10px] text-gray-500" />
         <span className="text-[10px] text-gray-500 inline-flex items-center gap-0.5">
           Click to open <ArrowUpRight className="w-2.5 h-2.5" />
         </span>

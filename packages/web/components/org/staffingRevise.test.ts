@@ -55,8 +55,8 @@ describe("what a revise did", () => {
     const latest = latestOrgRevisionAt(rows);
     expect(revisedSince(rows, latest)).toEqual([]);
     const all = revisedSince(rows, 0);
-    expect(all.map((c) => c.revision!.kind)).toEqual(["added", "amended", "removed"]);
-    expect(revisedLine(all, "Chief of Staff")).toBe("Chief of Staff removed 1, changed 1 and added 1 since you last looked.");
+    expect(all.map((c) => c.revision!.kind)).toEqual(["added", "removed"] /* the amended row is a limit (S23.2): never read, so never in the strip */);
+    expect(revisedLine(all, "Chief of Staff")).toBe("Chief of Staff removed 1 and added 1 since you last looked.");
     expect(revisedLine(all.slice(0, 1), "Chief of Staff")).toBe("Chief of Staff added 1 since you last looked.");
     expect(revisedLine([], "x")).toBe("");
     expect(revisedLine(all.slice(0, 1), "the agent that wrote this")).toBe("The agent that wrote this added 1 since you last looked.");
