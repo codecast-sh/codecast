@@ -33,11 +33,13 @@ import type { RemoteHost } from "../remote/session-move.js";
 import { copyCredentialToRemote, ensureRemoteClaudeReady, shq } from "../remote/session-move.js";
 import { readInstalledClientVersions } from "../remote/agentAuth.js";
 import { cwdGitRoot } from "../cloud/hostGit.js";
+import { REMOTE_DEVICE_MARKER_REL } from "../remote/device.js";
 import { summarizeHostTools } from "../cloud/hostTools.js";
 import { agentCliInstallScript, parseAgentCliReport } from "./provisionAgents.js";
 import { remoteExec, scpTo } from "./remote.js";
 import { isDeviceBoundToken, secretFromStored } from "../bearerToken.js";
-import { convexClient } from "../remote/convexClient.js";
+import { presentToken } from "@platform/auth/tokenFormat";
+import { mintTokenForDevice } from "../remote/convexClient.js";
 import { readHostDeviceId } from "../cloud/prepare.js";
 import { defaultConfigDir } from "../config/configDir.js";
 import { cloudIdleProbeScript } from "../cloud/idleProbe.js";
@@ -274,6 +276,9 @@ if [ -n "$tmux_pids" ]; then
 fi
 if sudo systemctl cat codecast-daemon.service >/dev/null 2>&1; then sudo systemctl stop codecast-daemon.service; fi
 CODECAST_NO_AUTO_UPDATE=1 /usr/local/bin/cast stop
+# The marker makes the box a remote device for any daemon started here, not
+# only the one this unit starts (remote/device.ts).
+install -d -m 700 /home/ubuntu/.codecast && : > /home/ubuntu/${REMOTE_DEVICE_MARKER_REL}
 sudo tee /etc/systemd/system/codecast-daemon.service >/dev/null <<'UNIT'
 [Unit]
 Description=codecast daemon (remote device)
@@ -528,11 +533,7 @@ export interface PushCodecastConfigDeps {
 const defaultPushDeps: PushCodecastConfigDeps = {
   localConfig: () => JSON.parse(fs.readFileSync(path.join(defaultConfigDir(), "config.json"), "utf-8")),
   hostDeviceId: (host) => readHostDeviceId(host),
-  mintForHost: async (deviceId, label) => {
-    const { client, token, api } = await convexClient();
-    const minted = await client.mutation(api.apiTokens.mintForDevice, { api_token: token, device_id: deviceId, label });
-    return minted.token as string;
-  },
+  mintForHost: (deviceId, label) => mintTokenForDevice(deviceId, label),
   ship: (host, remoteCfg) => {
     execFileSync(
       "ssh",
@@ -555,9 +556,11 @@ const defaultPushDeps: PushCodecastConfigDeps = {
  * bound to this machine cannot be copied (the box would present its own
  * device id and be refused), so the box gets a token of its own: this
  * machine's credential mints one bound to the box's device, named after the
- * host so it is visible and revocable in the token list.
+ * host so it is visible and revocable in the token list. It ships with the
+ * device it was minted for, so the host reads it as bound to itself.
  */
-export async function pushCodecastConfig(host: RemoteHost, deps: PushCodecastConfigDeps = defaultPushDeps): Promise<void> {
+export async function pushCodecastConfig(host: RemoteHost, overrides: Partial<PushCodecastConfigDeps> = {}): Promise<void> {
+  const deps = { ...defaultPushDeps, ...overrides };
   const cfg = deps.localConfig();
   const secret = typeof cfg.auth_token === "string" ? secretFromStored(cfg.auth_token) : cfg.auth_token;
   let token = secret;
@@ -569,7 +572,7 @@ export async function pushCodecastConfig(host: RemoteHost, deps: PushCodecastCon
           `Sign the host in on its own: ssh ${host.user}@${host.address} cast auth`,
       );
     }
-    token = await deps.mintForHost(hostDevice, `${host.user}@${host.address}`);
+    token = presentToken(await deps.mintForHost(hostDevice, `${host.user}@${host.address}`), hostDevice);
   }
   const remoteCfg = {
     user_id: cfg.user_id,

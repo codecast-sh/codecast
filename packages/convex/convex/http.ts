@@ -635,7 +635,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, conversation_id, start_line, end_line, full_content, around_message_id, context, include_file_changes } = body;
+      const { api_token, conversation_id, start_line, end_line, full_content, around_message_id, context, include_file_changes, tail } = body;
 
       if (!api_token || !conversation_id) {
         return new Response(JSON.stringify({ error: "Missing api_token or conversation_id" }), {
@@ -645,8 +645,11 @@ http.route({
       }
 
       const result = await readConversationRange(
-        (pageArgs) => ctx.runQuery(api.conversations.readConversationMessages, pageArgs),
-        { api_token, conversation_id, start_line, end_line, full_content, around_message_id, context, include_file_changes },
+        {
+          scan: (stepArgs) => ctx.runQuery(internal.conversations.scanConversationLines, stepArgs),
+          fetch: (stepArgs) => ctx.runQuery(internal.conversations.readConversationLines, stepArgs),
+        },
+        { api_token, conversation_id, start_line, end_line, full_content, around_message_id, context, include_file_changes, tail: typeof tail === "number" ? tail : undefined },
       );
 
       if (result.error) {
@@ -2770,7 +2773,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, version, platform, pid, autostart_enabled, has_tmux, boot_id, local_project_roots, git_plane, git_pubkey, pending_sync_count, oldest_pending_ms, pending_sync_messages, pending_sync_conversations, sync_no_progress_ms, daemon_started_at, loop_freeze_ms, loop_freeze_1h_ms, loop_freeze_max_ms, loop_freeze_top, device_id, device_label, device_hostname, is_remote_device, input_idle_ms, cc_accounts, codex_usage, codex_accounts, provider_key_pubkey, managed_provider_ids, settings, model_inventory } = body;
+      const { api_token, version, platform, pid, autostart_enabled, has_tmux, boot_id, local_project_roots, git_plane, git_pubkey, pending_sync_count, oldest_pending_ms, pending_sync_messages, pending_sync_conversations, sync_no_progress_ms, daemon_started_at, loop_freeze_ms, loop_freeze_1h_ms, loop_freeze_max_ms, loop_freeze_top, device_id, device_label, device_hostname, is_remote_device, input_idle_ms, cc_accounts, codex_usage, codex_accounts, provider_key_pubkey, managed_provider_ids, settings, model_inventory, update_available } = body;
 
       if (!api_token || !version || !platform) {
         return new Response(JSON.stringify({ error: "Missing required fields" }), {
@@ -2812,6 +2815,7 @@ http.route({
         managed_provider_ids,
         settings,
         model_inventory,
+        update_available: typeof update_available === "string" ? update_available : undefined,
       });
 
       if (result.error) {
@@ -2840,6 +2844,21 @@ http.route({
           });
         } catch (err) {
           console.error("capability_state ingest failed:", err);
+        }
+      }
+
+      // What codecast changed in this machine's agent harness since the last
+      // accepted beat (harnessChanges.ts). Same fire-and-log rule: a failure
+      // here must not fail presence, and the daemon resends what was not taken.
+      if (Array.isArray(body.harness_changes) && body.harness_changes.length > 0 && body.device_id) {
+        try {
+          await ctx.runMutation(api.harnessChanges.report, {
+            api_token,
+            device_id: body.device_id,
+            changes: body.harness_changes,
+          });
+        } catch (err) {
+          console.error("harness_changes ingest failed:", err);
         }
       }
 
@@ -3935,6 +3954,33 @@ cliRoute("/cli/cap/toggle", async (ctx, body) => {
   // web can never disagree on which row a toggle lands on.
   return await ctx.runMutation(api.capabilities.bindCapability, body);
 });
+// ── Sync and sharing (cast sharing) ──
+//
+// Every route runs the function the Sync & Privacy settings page runs, with
+// the CLI token in place of the web sign-in, so an agent that changes a
+// setting takes the same path, checks and backfills as a person clicking.
+cliRoute("/cli/sharing/overview", async (ctx, body) => {
+  const auth = { api_token: body.api_token };
+  const [settings, teams, folders, rules] = await Promise.all([
+    ctx.runQuery(api.users.getSyncSettings, auth),
+    ctx.runQuery(api.teams.getUserTeams, auth),
+    ctx.runQuery(api.users.getRecentProjectsWithGitInfo, { ...auth, limit: body.limit ?? 200 }),
+    ctx.runQuery(api.users.getDirectoryTeamMappings, auth),
+  ]);
+  if (!settings) throw new Error("Unauthorized");
+  return { settings, teams, folders, rules };
+});
+cliRoute("/cli/sharing/impact", async (ctx, body) => ctx.runQuery(api.users.shareImpactForPaths, body));
+cliRoute("/cli/sharing/stats", async (ctx, body) => ctx.runMutation(api.pathStats.refreshPathStats, body));
+cliRoute("/cli/sharing/sessions", async (ctx, body) => ctx.runQuery(api.users.listConversationsForPath, body));
+cliRoute("/cli/sharing/sync", async (ctx, body) => ctx.runMutation(api.users.updateSyncSettings, body));
+cliRoute("/cli/sharing/rule", async (ctx, body) => ctx.runMutation(api.users.updateDirectoryTeamMapping, body));
+cliRoute("/cli/sharing/rule/remove", async (ctx, body) => ctx.runMutation(api.users.removeDirectoryTeamMapping, body));
+cliRoute("/cli/sharing/delete", async (ctx, body) => ctx.runMutation(api.users.deleteConversationsForPath, body));
+cliRoute("/cli/sharing/session", async (ctx, body) => ctx.runMutation(api.conversations.setPrivacy, body));
+cliRoute("/cli/sharing/session/level", async (ctx, body) => ctx.runMutation(api.conversations.setTeamVisibility, body));
+cliRoute("/cli/sharing/team", async (ctx, body) => ctx.runMutation(api.teams.setTeamVisibility, body));
+
 cliRoute("/cli/whoami", async (ctx, body) => {
   return await ctx.runQuery(api.capabilities.whoamiForToken, body);
 });
@@ -4765,6 +4811,8 @@ import {
   identity as artifactIdentity,
   view as artifactView,
   corsPreflight as artifactCors,
+  mediaSign as artifactMediaSign,
+  playerJs as artifactPlayerJs,
 } from "./artifactsHttp";
 
 const artifactPost = (path: string, handler: typeof artifactPublish) => {
@@ -4781,6 +4829,10 @@ artifactPost("/cli/artifacts/edit", artifactEdit);
 artifactPost("/cli/artifacts/comment", artifactComment);
 artifactPost("/cli/artifacts/identity", artifactIdentity);
 artifactPost("/cli/artifacts/view", artifactView);
+// Video and audio for published pages: presigned R2 uploads, and the player
+// script every page using <cast-player> loads (see lib/castPlayer.ts).
+artifactPost("/cli/media/sign", artifactMediaSign);
+http.route({ path: "/cli/player.js", method: "GET", handler: artifactPlayerJs });
 
 // Vault remote mirror — the daemon's push channel (packages/cli/src/vault/
 // vaultMirror.ts). Mirroring is opt-in per vault; a vault nobody turned on
