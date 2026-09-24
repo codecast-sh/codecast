@@ -9,7 +9,8 @@
     "./convex": "./src/convex/index.ts",
     "./web": "./src/web/index.ts",
     "./native": "./src/native/index.ts",
-    "./cli": "./src/cli/index.ts"
+    "./cli": "./src/cli/index.ts",
+    "./tokenFormat": "./src/tokenFormat.ts"
   },
   "files": [
     "src",

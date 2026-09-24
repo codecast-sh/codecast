@@ -13,8 +13,8 @@
 // remember is a step the newest caller forgets. The writers strip the device
 // back off, so nothing but the secret ever reaches the file.
 
-import { isDeviceBoundToken, presentToken, splitPresentedToken } from "@platform/auth/cli";
-export { isDeviceBoundToken } from "@platform/auth/cli";
+import { isDeviceBoundToken, presentToken, splitPresentedToken } from "@platform/auth/tokenFormat";
+export { isDeviceBoundToken } from "@platform/auth/tokenFormat";
 import { deviceId } from "./remote/device.js";
 import { decryptToken, encryptToken, isEncryptedToken } from "./tokenEncryption.js";
 
