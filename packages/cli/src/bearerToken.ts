@@ -18,6 +18,21 @@ export { isDeviceBoundToken } from "@platform/auth/cli";
 import { deviceId } from "./remote/device.js";
 import { decryptToken, encryptToken, isEncryptedToken } from "./tokenEncryption.js";
 
+/**
+ * Whether a mint (`cast auth`, `cast login`) asks the server to bind the new
+ * token to this machine. OFF until decision sd-242 settles how remote hosts
+ * get a token, because host provisioning copies this machine's token and a
+ * bound one cannot be copied. Everything else stays live: the server enforces
+ * the binding on any bound token, and a bound token already in a config is
+ * presented with its device. Flipping this is the whole rollout.
+ */
+export const REQUEST_DEVICE_BOUND_TOKENS = false;
+
+/** The device a mint names, or nothing while the switch above is off. */
+export function mintDeviceId(): string | undefined {
+  return REQUEST_DEVICE_BOUND_TOKENS ? deviceId() : undefined;
+}
+
 /** The plaintext secret behind what config.json stores, encrypted or not. Throws TokenDecryptError. */
 export function secretFromStored(stored: string): string {
   return isEncryptedToken(stored) ? decryptToken(stored) : stored;

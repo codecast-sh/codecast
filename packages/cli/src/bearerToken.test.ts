@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { DEVICE_BOUND_TOKEN_PREFIX, splitPresentedToken } from "@platform/auth/cli";
-import { bearerFromStored, secretFromStored, storedFromBearer } from "./bearerToken.js";
+import { REQUEST_DEVICE_BOUND_TOKENS, bearerFromStored, mintDeviceId, secretFromStored, storedFromBearer } from "./bearerToken.js";
 import { deviceId } from "./remote/device.js";
 import { encryptToken, isEncryptedToken } from "./tokenEncryption.js";
 
@@ -41,5 +41,14 @@ describe("what goes back into the file", () => {
     let stored = encryptToken(BOUND);
     for (let i = 0; i < 3; i++) stored = storedFromBearer(bearerFromStored(stored));
     expect(bearerFromStored(stored)).toBe(bearerFromStored(encryptToken(BOUND)));
+  });
+});
+
+describe("asking for bound tokens at mint", () => {
+  test("is OFF until sd-242 settles how remote hosts get a token", () => {
+    // Host provisioning copies this machine's token, and a bound token cannot
+    // be copied. Enforcement and presentation stay live regardless.
+    expect(REQUEST_DEVICE_BOUND_TOKENS).toBe(false);
+    expect(mintDeviceId()).toBeUndefined();
   });
 });

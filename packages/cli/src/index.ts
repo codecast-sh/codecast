@@ -119,7 +119,7 @@ import { checkForDesktopUpdate } from "./desktopUpdate.js";
 import { glob } from "glob";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
-import { bearerFromStored, storedFromBearer } from "./bearerToken.js";
+import { bearerFromStored, mintDeviceId, storedFromBearer } from "./bearerToken.js";
 import { getAllSyncRecords, findUnsyncedFiles } from "./syncLedger.js";
 import {
   getLastReconciliation,
@@ -1885,8 +1885,9 @@ async function runLogin(setupToken: string): Promise<void> {
     const response = await cliFetch(`${CONVEX_URL.replace(".cloud", ".site")}/cli/exchange-token`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      // device_id binds the long lived token the exchange hands back to this machine.
-      body: JSON.stringify({ token: setupToken, device_id: deviceId() }),
+      // device_id, when the switch in bearerToken.ts is on, binds the long
+      // lived token the exchange hands back to this machine.
+      body: JSON.stringify({ token: setupToken, device_id: mintDeviceId() }),
     });
 
     if (!response.ok) {
@@ -1979,9 +1980,10 @@ async function runAuth(): Promise<void> {
     process.exit(1);
   }
 
-  // device_id binds the minted token to this machine (bearerToken.ts explains
-  // what the CLI does with a bound token from then on).
-  const cliUrl = `${WEB_URL}/auth/cli?nonce=${nonce}&port=${port}&device=${deviceName}&device_id=${deviceId()}`;
+  // device_id, when the switch in bearerToken.ts is on, binds the minted token
+  // to this machine.
+  const mintDevice = mintDeviceId();
+  const cliUrl = `${WEB_URL}/auth/cli?nonce=${nonce}&port=${port}&device=${deviceName}${mintDevice ? `&device_id=${mintDevice}` : ""}`;
 
   // Over SSH there is no browser to open here — the user signs in on another
   // machine, and the server relay (below) carries the token back to us.
