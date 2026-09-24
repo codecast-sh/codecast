@@ -198,3 +198,26 @@ await program.parseAsync(["node", "fixture", "browser", ...args]);
   }
   // Two child processes each import the whole CLI; on a loaded machine one import alone took 18 s.
 }, 120_000);
+
+test("only a socket that asks with raise=1 may raise the human's Chrome", async () => {
+  const agent = await connect("env-a-real");
+  const { targetId } = await agent.send("Target.createTarget", { url: "https://a.example/", background: false });
+  expect(extension.seen.find(m => m.op === "tabs.create")?.background).toBe(true);
+  await agent.send("Target.activateTarget", { targetId });
+  const { sessionId } = await agent.send("Target.attachToTarget", { targetId, flatten: true });
+  await agent.send("Page.bringToFront", {}, sessionId);
+
+  // An agent's own raw CDP script connects with no session at all.
+  const script = await CdpConnection.fromPort(endpoint());
+  connections.push(script);
+  await script.send("Target.activateTarget", { targetId });
+  const { sessionId: scriptSession } = await script.send("Target.attachToTarget", { targetId, flatten: true });
+  await script.send("Page.bringToFront", {}, scriptSession);
+  expect(extension.seen.filter(m => m.op === "tabs.activate")).toEqual([]);
+  expect(extension.seen.filter(m => m.op === "cdp" && m.method === "Page.bringToFront")).toEqual([]);
+
+  const focus = await CdpConnection.fromPort({ ...endpoint(), raise: true });
+  connections.push(focus);
+  await focus.send("Target.activateTarget", { targetId });
+  expect(extension.seen.filter(m => m.op === "tabs.activate")).toHaveLength(1);
+});

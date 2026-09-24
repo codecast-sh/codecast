@@ -98,10 +98,11 @@ export function takeStamp(kind: "launchedAt", withinMs: number, now = Date.now()
 export const LAUNCH_ONCE_MS = 60_000;
 
 /**
- * One automatic wake per outage. A wake puts a tab in the human's Chrome,
- * and when the extension system itself is wedged (the case that leaves the
- * worker dead for minutes) the worker never answers to close it; a wake
- * that did not work will not work ten minutes later either. An outage is
+ * One automatic wake per outage. A wake puts a tab in the human's Chrome.
+ * When Chrome refuses to start the worker at all, the page reloads the
+ * extension (status.js reviveIfRefused), which is the one thing that brings
+ * such a worker back; a second wake for the same outage would find the
+ * reload already spent and change nothing. An outage is
  * named by the last time the extension proved itself (bridge.json
  * extensionSeenAt): the same value means the same outage and no second
  * wake; a reconnect writes a new one and the next outage gets its wake.
@@ -183,7 +184,9 @@ export function discardPairingPage(): void {
  * Wake the extension's service worker from outside: open its options page
  * with `#wake` (protocol.ts bridgeWakeUrl). The page's message starts a
  * worker Chrome ended and makes a live one drop a stuck socket; the worker
- * closes the page again, and the page closes itself when no worker answers.
+ * closes the page again. A worker Chrome refuses to start for 10 s is
+ * revived by the page reloading the extension, which closes the page; one
+ * that neither answers nor refuses is waited on, then the page closes itself.
  * This is the last rung: it puts a tab in front of the human, so it is sent
  * only by a verb that needs a page, only after the worker's own alarm has
  * had its chance, and once per outage across every session (takeWake).
