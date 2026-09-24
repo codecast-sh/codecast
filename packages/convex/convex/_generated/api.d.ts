@@ -127,6 +127,8 @@ import type * as lib_accessKeys from "../lib/accessKeys.js";
 import type * as lib_actor from "../lib/actor.js";
 import type * as lib_artifactGates from "../lib/artifactGates.js";
 import type * as lib_auth from "../lib/auth.js";
+import type * as lib_awsSigV4 from "../lib/awsSigV4.js";
+import type * as lib_castPlayer from "../lib/castPlayer.js";
 import type * as lib_charterBudget from "../lib/charterBudget.js";
 import type * as lib_chatQuota from "../lib/chatQuota.js";
 import type * as lib_commentSessionInfo from "../lib/commentSessionInfo.js";
@@ -398,6 +400,8 @@ declare const fullApi: ApiFromModules<{
   "lib/actor": typeof lib_actor;
   "lib/artifactGates": typeof lib_artifactGates;
   "lib/auth": typeof lib_auth;
+  "lib/awsSigV4": typeof lib_awsSigV4;
+  "lib/castPlayer": typeof lib_castPlayer;
   "lib/charterBudget": typeof lib_charterBudget;
   "lib/chatQuota": typeof lib_chatQuota;
   "lib/commentSessionInfo": typeof lib_commentSessionInfo;
