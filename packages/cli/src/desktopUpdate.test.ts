@@ -1,5 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { macosMeetsMinimum, shouldApplyWhileRunning, shouldAttemptDesktopUpdate, wantsReinstall } from "./desktopUpdate";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { spawn } from "node:child_process";
+import { macosMeetsMinimum, shouldApplyWhileRunning, shouldAttemptDesktopUpdate, stagingPaths, swapInBundle, waitForAppSwap, wantsReinstall } from "./desktopUpdate";
 
 // Gate at the very top of checkForDesktopUpdate. The dev-mode skip exists so a
 // developer's source checkout (cast/daemon under `bun src/…`) doesn't auto-swap
@@ -89,5 +93,67 @@ describe("wantsReinstall", () => {
   it("a routine run never reinstalls", () => {
     expect(wantsReinstall({})).toBe(false);
     expect(wantsReinstall({ reinstall: true })).toBe(false);
+  });
+});
+
+// The app's quit helper (electron main.js spawnUpdateSwap) and the daemon's
+// forced swap both run the moment the app exits. They shared one staging
+// folder, and a helper rename during the daemon's copy installed a half-copied
+// bundle: "Codecast is damaged" (2026-09-24).
+describe("swap beside the app's own quit helper", () => {
+  const bundle = (dir: string, name: string, tag: string) => {
+    const app = path.join(dir, name);
+    for (let i = 0; i < 400; i++) {
+      const f = path.join(app, "Contents", "Resources", `f${i % 20}`, `file${i}.txt`);
+      fs.mkdirSync(path.dirname(f), { recursive: true });
+      fs.writeFileSync(f, `${tag}:${i}:`.padEnd(4096, "x"));
+    }
+    return app;
+  };
+  const complete = (app: string, tag: string) => {
+    for (let i = 0; i < 400; i++) {
+      const f = path.join(app, "Contents", "Resources", `f${i % 20}`, `file${i}.txt`);
+      if (!fs.existsSync(f) || !fs.readFileSync(f, "utf8").startsWith(`${tag}:${i}:`)) return false;
+    }
+    return true;
+  };
+  // The helper script from main.js, verbatim apart from its pid wait.
+  const appHelper = (appPath: string, delayS: number) => {
+    const { appIncoming, appOld } = stagingPaths(appPath);
+    const q = (p: string) => `'${p}'`;
+    const script = [`sleep ${delayS}`, `rm -rf ${q(appOld)}`,
+      `mv ${q(appPath)} ${q(appOld)} && mv ${q(appIncoming)} ${q(appPath)} || { mv ${q(appOld)} ${q(appPath)} 2>/dev/null; exit 1; }`,
+      `rm -rf ${q(appOld)}`].join("\n");
+    return new Promise<void>((resolve) => spawn("/bin/sh", ["-c", script], { stdio: "ignore" }).on("exit", () => resolve()));
+  };
+
+  it("stages under names the app's updater never uses", () => {
+    const p = stagingPaths("/Applications/Codecast.app");
+    expect(new Set([p.incoming, p.old, p.appIncoming, p.appOld]).size).toBe(4);
+  });
+
+  it.if(process.platform === "darwin")("ends with a whole bundle whenever the helper lands", async () => {
+    for (const delay of [0, 0.05, 0.15, 0.3]) {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "desk-swap-"));
+      const appPath = bundle(dir, "Codecast.app", "old");
+      bundle(dir, ".Codecast.app.incoming", "new"); // the app staged it
+      const fresh = bundle(dir, "fresh.app", "new"); // the daemon's verified copy
+      const helper = appHelper(appPath, delay);
+      await waitForAppSwap(appPath, { pollMs: 20 });
+      if (!complete(appPath, "new")) swapInBundle(fresh, appPath);
+      await helper;
+      expect(complete(appPath, "new")).toBe(true);
+      expect(fs.readdirSync(dir).sort()).toEqual(["Codecast.app", "fresh.app"]);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it("clears a staged bundle no helper will ever move", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "desk-swap-"));
+    const appPath = bundle(dir, "Codecast.app", "old");
+    bundle(dir, ".Codecast.app.incoming", "new");
+    expect(await waitForAppSwap(appPath, { timeoutMs: 100, pollMs: 20 })).toBe(false);
+    expect(fs.existsSync(stagingPaths(appPath).appIncoming)).toBe(false);
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 });
