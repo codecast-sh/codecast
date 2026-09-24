@@ -94,7 +94,7 @@ cast task verdict ct-4102 approve|changes|reject --note -
 
 `handoff` writes `execution_status`, `verification_evidence` and `files_changed`, attaches the named [published pages](/documentation/publish) to the task at its current station, and moves the task to `in_review`. `verdict` writes `review_verdict`: approve closes the task, changes reopens it to `in_progress`, reject reopens it as blocked.
 
-**A task worked by a role needs an independent review to close.** `enforceIndependentReview` in `convex/tasks.ts` runs on the CLI update and on the board update. When any session bound to the task belongs to a role, a move to done needs an approve verdict from a session that is not doing the work and is not of the same role. Otherwise the write fails with "Independent review required". A second rule holds a task in place: a pending blocking decision bound to the task at its current station refuses a status change from any session, and a person on the web may move past it.
+**A verdict is a record, never a gate.** Who closes a task does not decide whether the close is allowed; a role closes the tasks in its own scope like anyone else. One rule holds a task in place: a pending blocking decision bound to the task at its current station refuses a status change from any session, and a person on the web may move past it.
 
 `orgLine.sweep` runs every two minutes. For each active role at `direct` trust, it starts a run for each open, unblocked task in scope whose assignee is `agent:<handle>` and that has no run yet, while today's hands are under `hands_per_day`. One sweep starts at most 10 runs. A task leaves `open` when its run exists, so it never starts twice.
 

@@ -361,7 +361,7 @@ the three fields; `changeLine`, the row, the log and the tooltip all use it.
 
 Accepting a plan_status of done or abandoned closes the plan's still open
 tasks in the same apply, through the one task path (`setTaskStatus`: the
-team's status vocabulary, the independent review rule, bound sessions
+team's status vocabulary, bound sessions
 released, plan progress reconciled); they are dropped, never done, and the
 applied note lists them. The analyzer therefore proposes one change per plan
 and names a task on its own only when its evidence differs from its plan's.
