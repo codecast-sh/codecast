@@ -173,3 +173,26 @@ test("an already cached file opens without waiting for a local connection", asyn
   expect(requests).toHaveLength(0);
   expect(view.routes).toEqual(["/files?f=README.md&l=23"]);
 });
+
+test("a file the scan leaves out opens from the daemon's own row for it", async () => {
+  const rel = "videos/out/clip.mp4";
+  const row = { path: rel, mtime: 3, size: 104_000_000, ignored: true as const };
+  await update({ endpoint, connection: "connected" });
+  const view = await mount(`${known.root}/${rel}`);
+  expect(requests).toHaveLength(1);
+  expect(new URL(requests[0].url).searchParams.get("path")).toBe(`${known.root}/${rel}`);
+  expect(useVaultStore.getState().opError).toBeNull();
+  await answer(0, { vault: known, rel, entry: row });
+  expect(view.routes).toEqual([`/files?f=${encodeURIComponent(rel)}&l=23`]);
+  expect(useVaultStore.getState().files[rel]).toEqual(row);
+  expect(useVaultStore.getState().linkedFiles[rel]).toEqual(row);
+  expect(useVaultStore.getState().opError).toBeNull();
+});
+
+test("a daemon without the row still reports the file as outside the vault", async () => {
+  await update({ endpoint, connection: "connected" });
+  const view = await mount(`${known.root}/gone.txt`);
+  await answer(0, { vault: known, rel: "gone.txt" });
+  expect(useVaultStore.getState().opError).toBe(`${known.root}/gone.txt isn't in this vault.`);
+  expect(view.routes).toEqual(["/files"]);
+});

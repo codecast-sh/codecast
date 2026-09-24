@@ -287,7 +287,7 @@ describe("locateVault", () => {
     addVault(configDir, base, "Base");
     const notes = addVault(configDir, notesDir, "Notes");
     fs.writeFileSync(path.join(notesDir, "a.md"), "a\n");
-    expect(locateVault(configDir, path.join(notesDir, "a.md"))).toEqual({ vault: notes, rel: "a.md" });
+    expect(locateVault(configDir, path.join(notesDir, "a.md"))).toMatchObject({ vault: notes, rel: "a.md", entry: { path: "a.md", size: 2 } });
     expect(locateVault(configDir, notesDir)).toEqual({ vault: notes, rel: "" });
     expect(locateVault(configDir, path.join(base, "x.md"))).toBeNull(); // does not exist
   });
@@ -311,6 +311,16 @@ describe("locateVault", () => {
     fs.writeFileSync(path.join(repo, "deep", "er", "note.md"), "n\n");
     const located = locateVault(configDir, path.join(repo, "deep", "er", "note.md"));
     expect(located).toMatchObject({ vault: { root: repo }, rel: "deep/er/note.md" });
+  });
+
+  test("carries the path's own row, flagged when the repo rules hide it", () => {
+    const repo = path.join(base, "repo");
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(repo, "videos", "out"), { recursive: true });
+    fs.writeFileSync(path.join(repo, ".gitignore"), "videos/\n");
+    fs.writeFileSync(path.join(repo, "videos", "out", "clip.mp4"), "mp4");
+    const located = locateVault(configDir, path.join(repo, "videos", "out", "clip.mp4"));
+    expect(located?.entry).toMatchObject({ path: "videos/out/clip.mp4", size: 3, ignored: true });
   });
 
   test("refuses a path directly under the filesystem root", () => {

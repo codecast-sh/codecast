@@ -67,11 +67,15 @@ export function useVaultLocalPath(
     }
     const isDir = !rel || !!entry?.dir || Object.keys(files).some((p) => p.startsWith(`${rel}/`));
     store.setLeftPaneTab("files");
+    const openFile = (path: string) => {
+      const st = useVaultStore.getState();
+      if (!st.showAllFiles && !isVaultMarkdownPath(path) && !isVaultAssetPath(path)) st.setShowAllFiles(true);
+      st.noteOpened(path);
+      st.requestReveal(path);
+      router.replace(filesHref({ path, line: targetLine }));
+    };
     if (entry && !entry.dir) {
-      if (!store.showAllFiles && !isVaultMarkdownPath(rel) && !isVaultAssetPath(rel)) store.setShowAllFiles(true);
-      store.noteOpened(rel);
-      store.requestReveal(rel);
-      router.replace(filesHref({ path: rel, line: targetLine }));
+      openFile(rel);
       return;
     }
     if (isDir) {
@@ -81,8 +85,29 @@ export function useVaultLocalPath(
     }
     const existing = ancestorDirs(rel).filter((d) => files[d]?.dir || Object.keys(files).some((p) => p.startsWith(`${d}/`)));
     if (existing.length) store.setDirsExpanded(existing, true);
-    useVaultStore.setState({ opError: `${target.abs} isn't in this vault.` });
-    store.openQuickSwitch(rel.slice(rel.lastIndexOf("/") + 1));
-    router.replace(filesHref());
+    const notInVault = () => {
+      useVaultStore.setState({ opError: `${target.abs} isn't in this vault.` });
+      useVaultStore.getState().openQuickSwitch(rel.slice(rel.lastIndexOf("/") + 1));
+      router.replace(filesHref());
+    };
+    // The scan leaves out what the repo rules hide (renders, build output) and
+    // stops at its entry cap, so a missing row is not a missing file: ask the
+    // daemon for this one path before saying so.
+    const ep = store.endpoint;
+    if (!ep) {
+      notInVault();
+      return;
+    }
+    let cancelled = false;
+    void locateVault(ep, target.abs).then((located) => {
+      if (cancelled) return;
+      const row = located?.vault.id === activeVaultId ? located.entry : undefined;
+      if (!row || row.dir) return notInVault();
+      useVaultStore.getState().adoptLinkedFile(row);
+      openFile(row.path);
+    }).catch(() => {
+      if (!cancelled) notInVault();
+    });
+    return () => { cancelled = true; };
   }, [target, connection, activeVaultId, scannedAt, router, targetLine]);
 }
