@@ -36,11 +36,11 @@ import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
 import { LivePulseDot } from "./SessionActivityLine";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
-import { AUTO_CONTINUE_WINDOW_MS, actedBlockedConversations, skippedBlockedWorkers, blockedHeadlineCause, isBlockedConversation, isSubagentConversation, nestParentIdOf, usageStanding, standingLabel, isUsageExhausted, LOGIN_FLOW_STALE_MS, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
+import { AUTO_CONTINUE_WINDOW_MS, fleetAccount, actedBlockedConversations, skippedBlockedWorkers, blockedHeadlineCause, isBlockedConversation, isSubagentConversation, nestParentIdOf, usageStanding, standingLabel, isUsageExhausted, LOGIN_FLOW_STALE_MS, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
 import { contextShareOf, formatIdle, formatShare, formatTokens, restartPlan, restartReloadsContext } from "@codecast/convex/convex/wakeCost";
 import { withSafetyBlock } from "@codecast/shared/contracts";
 import { contextWindowTokens, restartShareOfRemaining, formatCountdown } from "@codecast/shared/contracts";
-import { rankByHeadroom, isStashHidden, USER_RESTS, describeDecision, pendingProposal, type UserRest } from "@codecast/shared/contracts";
+import { fallbackProfiles, rankByHeadroom, isStashHidden, USER_RESTS, describeDecision, pendingProposal, type UserRest } from "@codecast/shared/contracts";
 import { sessionIdleAt, sessionLiveAt } from "../lib/liveness";
 import { TooltipProvider } from "./ui/tooltip";
 import { cleanTitle, msgCountColor, formatModel } from "../lib/conversationProcessor";
@@ -633,17 +633,19 @@ function BlockedSessionsBanner({
     return owner && owner.online && !owner.is_remote ? owner : loginDevice;
   };
   const executors = [...new Map(acted.map((sess) => executorFor(sess)).filter((d) => !!d).map((d) => [d!.device_id, d!])).values()];
-  const activeEmails = [...new Set(executors.map((d) => d.active_email).filter((e): e is string => !!e))];
+  // The account each machine's sessions run on: the launch profile after a
+  // token switch, else the keychain login (fleetAccount).
+  const fleetEmailOf = (d: (typeof executors)[number]) => fleetAccount(d, now).email;
+  const activeEmails = [...new Set(executors.map(fleetEmailOf).filter((e): e is string => !!e))];
   const activeEmail = activeEmails.length === 1 ? activeEmails[0] : undefined;
   type AccountOption = { key: string; name: string; email?: string; usage?: CcUsage; missingOn: string[] };
   const accountOptions: AccountOption[] = [];
   for (const device of executors) {
-    for (const p of device.profiles) {
-      // The account a machine is signed into now is "this account", not a switch.
-      // A dead login and a pegged window are not offers: suggesting one is how
-      // the banner named an account whose week was already full.
-      if (p.email && device.active_email === p.email) continue;
-      if (p.login_expired_at || isUsageExhausted(p.usage, now)) continue;
+    // The account a machine runs now is "this account", not a switch. A dead
+    // login without a live token and a pegged window are not offers (the same
+    // fallbackProfiles rule auto-switch uses): suggesting one is how the
+    // banner named an account whose week was already full.
+    for (const p of fallbackProfiles(device.profiles, fleetEmailOf(device), now)) {
       const key = p.email ? `email:${p.email}` : `name:${p.name}`;
       const existing = accountOptions.find((t) => t.key === key);
       if (!existing) accountOptions.push({ key, name: p.name, email: p.email, usage: p.usage, missingOn: [] });
@@ -659,7 +661,7 @@ function BlockedSessionsBanner({
   // Usage of what the executing machines run now — the account that parked
   // these sessions, not whatever the machine at the desk is signed into.
   const activeUsage = executors
-    .flatMap((d) => d.profiles.filter((p) => p.email && p.email === d.active_email))
+    .flatMap((d) => d.profiles.filter((p) => p.email && p.email === fleetEmailOf(d)))
     .map((p) => p.usage)
     .find((u) => !!u);
   // The proposed account is the default pick, so the primary button approves
