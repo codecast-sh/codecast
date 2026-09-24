@@ -71,7 +71,10 @@ function splitRepository(repository: string): [string, string] {
   return [owner, repo];
 }
 
-export const postPRComment = action({
+// Wire-callable until 2026-09-23, when anyone could drive these with a GitHub
+// token of their choosing and write the results into our tables. Every caller
+// is server side (webhooks, commit sync, reviews), so they are internal.
+export const postPRComment = internalAction({
   args: {
     repository: v.string(),
     pr_number: v.number(),
@@ -126,7 +129,7 @@ const reviewCommentValidator = v.object({
  * review, which is how a reviewer expects to read them, rather than as a
  * trickle of separate comments.
  */
-export const submitPRReview = action({
+export const submitPRReview = internalAction({
   args: {
     repository: v.string(),
     pr_number: v.number(),
@@ -437,7 +440,7 @@ export const postCommentToGitHub = internalAction({
   },
 });
 
-export const syncRepositoryCommits = action({
+export const syncRepositoryCommits = internalAction({
   args: {
     repository: v.string(),
     github_access_token: v.string(),
@@ -548,7 +551,7 @@ export const syncRepositoryCommits = action({
   },
 });
 
-export const getUserRepositories = action({
+export const getUserRepositories = internalAction({
   args: {
     github_access_token: v.string(),
     per_page: v.optional(v.number()),

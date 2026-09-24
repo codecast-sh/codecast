@@ -1,3 +1,5 @@
+import "fake-indexeddb/auto";
+import { stampCacheOwner } from "./fixtures/signedInPrincipal";
 import { indexedDB, IDBKeyRange } from "fake-indexeddb";
 import { beforeEach, describe, expect, it } from "bun:test";
 import { useInboxStore } from "../inboxStore";
@@ -6,6 +8,9 @@ import Dexie from "dexie";
 import { _reopenForTests, flushConversationMessages, loadConversationMessages, setHydrating } from "../idbCache";
 
 await _reopenForTests({ indexedDB, IDBKeyRange });
+Dexie.dependencies.indexedDB = indexedDB;
+Dexie.dependencies.IDBKeyRange = IDBKeyRange;
+await stampCacheOwner();
 setHydrating(false);
 
 // The cache keeps one page of messages per conversation, the newest. A phone

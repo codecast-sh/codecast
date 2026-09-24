@@ -1,3 +1,5 @@
+import "fake-indexeddb/auto";
+import { stampCacheOwner } from "./fixtures/signedInPrincipal";
 import { describe, expect, it } from "bun:test";
 import Dexie from "dexie";
 import { indexedDB, IDBKeyRange } from "fake-indexeddb";
@@ -10,6 +12,9 @@ import {
 } from "../idbCache";
 
 await _reopenForTests({ indexedDB, IDBKeyRange });
+Dexie.dependencies.indexedDB = indexedDB;
+Dexie.dependencies.IDBKeyRange = IDBKeyRange;
+await stampCacheOwner();
 setHydrating(false);
 
 async function waitFor(check: () => Promise<boolean> | boolean) {

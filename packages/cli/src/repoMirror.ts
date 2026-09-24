@@ -22,7 +22,7 @@ import { execFile } from "./proc.js";
 import { promisify } from "node:util";
 import { createHash } from "node:crypto";
 import * as path from "node:path";
-import { extractRepoFromRemoteUrl, normalizeGitOrigin } from "@codecast/shared/contracts";
+import { extractRepoFromRemoteUrl, repositoryKeyOfRemote } from "@codecast/shared/contracts";
 
 const execFileAsync = promisify(execFile);
 
@@ -96,14 +96,7 @@ export async function runGit(cwd: string, args: string[]): Promise<string> {
  * remote at all, `local/<folder>`.
  */
 export function repositoryKeyFor(root: string, originUrl: string | undefined | null): string {
-  const github = extractRepoFromRemoteUrl(originUrl);
-  if (github) return github;
-  const normalized = originUrl ? normalizeGitOrigin(originUrl) : null;
-  if (normalized) {
-    const parts = normalized.split("/").filter(Boolean);
-    if (parts.length >= 3) return `${parts[parts.length - 2]}/${parts[parts.length - 1]}`;
-  }
-  return `local/${path.basename(root).toLowerCase()}`;
+  return extractRepoFromRemoteUrl(originUrl) ?? repositoryKeyOfRemote(originUrl) ?? `local/${path.basename(root).toLowerCase()}`;
 }
 
 /** A GitHub origin's web URL, for the meta row; empty for anything else. */

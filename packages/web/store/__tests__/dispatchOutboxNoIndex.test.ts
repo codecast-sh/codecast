@@ -1,3 +1,4 @@
+import "./fixtures/signedInPrincipal";
 import { indexedDB, IDBKeyRange } from "fake-indexeddb";
 import { describe, it, expect } from "bun:test";
 import { enqueueDispatch, removeDispatch, loadOutbox, _reopenForTests } from "../idbCache";

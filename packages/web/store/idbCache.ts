@@ -13,6 +13,7 @@ import {
 } from "./clientSyncRegistry";
 import { diffCollection, durableDeletes } from "./idbCollectionDiff";
 import { partitionSessionRetention, partitionDocDetailRetention, expireExcludeTombstones, persistedMessageTail } from "./cacheRetention";
+import { authPrincipal } from "../lib/authPrincipal";
 
 export type OutboxEntry = {
   id: string;
@@ -235,8 +236,72 @@ async function loadPendingInput(ownerId?: string): Promise<PendingMessages> {
   });
 }
 
+// -- Cache ownership --
+//
+// The cache belongs to ONE account: the one whose server-confirmed user row it
+// holds (meta.currentUser is only ever written from getCurrentUser results).
+// Hydration serves it to a window only when the stored JWT names that same
+// principal; a cache someone else owns, or nobody does (a legacy cache with no
+// user row, rows a sibling re-persisted after a sign-out), is purged before
+// any reader sees it. Writes are bound to the principal that resolved here and
+// refuse the moment the stored JWT names someone else, which closes the gap
+// between a sibling's sign-out and this window's storage event.
+let ownership: Promise<string | null> | null = null;
+let boundOwner: string | null = null;
+
+// Rows on disk that are not the principal's own pending input. Pending input
+// is keyed by its owner (pendingInputKey), so a principal's typed-but-unsent
+// messages are theirs whoever the rest of the cache belongs to, and a cache
+// holding nothing else is a fresh cache with their journal in it.
+async function foreignRowCount(principal: string | null): Promise<number> {
+  try {
+    const [meta, sessions, own] = await Promise.all([
+      db.meta.count(),
+      COLLECTION_TABLES.sessions?.count() ?? Promise.resolve(0),
+      principal ? db.meta.where("key").startsWith(`${PENDING_INPUT_PREFIX}${principal}:`).count() : Promise.resolve(0),
+    ]);
+    return meta - own + sessions;
+  } catch {
+    return 0;
+  }
+}
+
+async function resolveCacheOwnership(): Promise<string | null> {
+  const principal = await authPrincipal.resolve();
+  let owner: string | null = null;
+  try {
+    const id = (await db.meta.get("currentUser"))?.value?._id;
+    owner = typeof id === "string" ? id : null;
+  } catch {
+    owner = null;
+  }
+  boundOwner = principal;
+  if (principal !== null && owner === principal) return principal;
+  if ((await foreignRowCount(principal)) > 0) await purgeLocalCache({ keepPendingInputFor: principal });
+  return null;
+}
+
+/** The principal the disk cache may be served to, or null when it must not be
+ *  read. Resolved per read (two cheap lookups); concurrent reads share one. */
+export function ensureCacheOwnership(): Promise<string | null> {
+  if (!ownership) ownership = resolveCacheOwnership().finally(() => { ownership = null; });
+  return ownership;
+}
+
+/** Writes land only for the account the stored JWT names, and, once hydration
+ *  resolved the cache's owner, only while that is still the same account. */
+function persistenceOwned(): boolean {
+  const principal = authPrincipal.current();
+  return principal !== null && (boundOwner === null || boundOwner === principal);
+}
+
+// Test hook: the account a fresh process resolves for, without a full boot.
+export function _cacheOwnerForTests(): string | null {
+  return boundOwner;
+}
+
 export function writePatchesToIDB(patches: Patch[], state: any) {
-  if (_hydrating) return;
+  if (_hydrating || !persistenceOwned()) return;
 
   const affectedKeys = new Set<string>();
   for (const patch of patches) {
@@ -298,6 +363,7 @@ export async function loadCache(
   context: Record<string, any> = {},
 ): Promise<Record<string, any> | null> {
   try {
+    if ((await ensureCacheOwnership()) === null) return null;
     const result: Record<string, any> = {};
     let hasData = false;
 
@@ -604,13 +670,13 @@ export async function loadConversationMessages(convId: string): Promise<CachedCo
 // Small row, written straight through: the store already dedups no-op ticks
 // (setUserMessages), so every call here is a real change.
 export function writeConversationUserMessages(convId: string, userMessages: any[]) {
-  if (_hydrating) return;
+  if (_hydrating || !persistenceOwned()) return;
   _touchedAt.set(convId, Date.now());
   db.conversationUserMessages.put({ convId, userMessages }).catch(() => {});
 }
 
 export function writeConversationMessages(convId: string, messages: any[], pagination: any) {
-  if (_hydrating) return;
+  if (_hydrating || !persistenceOwned()) return;
   _touchedAt.set(convId, Date.now());
   _pendingMsgWrites.set(convId, { messages, pagination });
   if (!_inFlightMsgWrites.has(convId)) _scheduleMessageWrites();
@@ -622,6 +688,10 @@ export function writeConversationMessages(convId: string, messages: any[], pagin
 // retirement need to observe commit/failure. Swallowing errors here would
 // report a wedged IndexedDB as healthy.
 export function enqueueDispatch(entry: OutboxEntry): Promise<void> {
+  // A write for an account this window no longer acts for parks nowhere: the
+  // clear that follows the boundary unbinds the outbox, and this covers the
+  // gap before that clear. Resolved, not rejected: it is not a storage fault.
+  if (!persistenceOwned()) return Promise.resolve();
   return db.dispatchOutbox.put(entry).then(() => {});
 }
 
@@ -716,15 +786,33 @@ function deleteDatabaseWithTimeout(name: string): Promise<void> {
  *  back. The native engine schedules whole-blob writes and drains them here. */
 export async function flushPersistence(): Promise<void> {}
 
-export async function purgeLocalCache(): Promise<void> {
+// Every window purges at an account boundary, and the signing-out window
+// purges once more, awaited; concurrent callers share one delete.
+let purging: Promise<void> | null = null;
+
+export function purgeLocalCache(opts?: { keepPendingInputFor: string | null }): Promise<void> {
+  if (purging) return purging;
+  purging = purgeLocalCacheNow(opts?.keepPendingInputFor ?? null).finally(() => { purging = null; });
+  return purging;
+}
+
+async function purgeLocalCacheNow(keepPendingInputFor: string | null): Promise<void> {
   pendingJournalEpoch++;
   clearPendingMessageJournal(localStorage);
   await pendingJournalFlush;
   _pendingMsgWrites.clear();
   lastPersisted.clear();
+  // A cache purged from under a signed-in principal (someone else's rows were
+  // on disk) keeps that principal's own pending input: keyed by owner, it was
+  // never the other account's, and a typed message must not vanish.
+  let kept: Array<{ key: string; value: any }> = [];
+  if (keepPendingInputFor) {
+    try { kept = await db.meta.where("key").startsWith(`${PENDING_INPUT_PREFIX}${keepPendingInputFor}:`).toArray(); } catch { kept = []; }
+  }
   try {
     await db.delete();
   } finally {
     // Dexie reopens lazily on next access; a signed-out page navigates away.
   }
+  if (kept.length) await db.meta.bulkPut(kept);
 }

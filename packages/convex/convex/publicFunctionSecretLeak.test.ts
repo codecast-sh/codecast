@@ -51,6 +51,7 @@ function tables(extra: Record<string, any[]> = {}): Record<string, any[]> {
         username: "victim",
         github_username: "victim-gh",
         github_id: "12345",
+        public_profile_enabled: true,
         github_avatar_url: "https://example.invalid/a.png",
         // The secrets that share the row:
         github_access_token: "gho_REAL_TOKEN_VALUE",

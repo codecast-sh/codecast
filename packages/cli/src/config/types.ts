@@ -32,6 +32,9 @@ export type AgentDefaultParams = Partial<Record<AgentClientId, Record<string, st
 export interface Config {
   daemon_workers?: boolean;
   // --- Identity / auth (all three writers) ---
+  // On disk: the secret, encrypted for this machine. In memory: the wire
+  // credential, which for a device bound token carries this machine's device
+  // id (bearerToken.ts). Send it as api_token; never write it anywhere else.
   auth_token?: string;
   user_id?: string;
   team_id?: string;

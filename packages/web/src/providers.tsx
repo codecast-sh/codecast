@@ -1,6 +1,5 @@
 import { ConvexReactClient } from "convex/react";
 import { recoveringWebSocket } from "@codecast/shared/network";
-import { ConvexAuthProvider } from "@convex-dev/auth/react";
 import { ReactNode, useRef } from "react";
 import { toast } from "sonner";
 import { useInboxStore } from "../store/inboxStore";
@@ -17,7 +16,7 @@ import { useLocalStorageMigration } from "@/hooks/useLocalStorageMigration";
 import { useMountEffect } from "@/hooks/useMountEffect";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { identifyUser, resetUser } from "@/lib/analytics";
-import { durableAuthStorage } from "@/lib/durableAuthStorage";
+import { CodecastAuthRoot } from "@/lib/authRoot";
 import { CONVEX_URL } from "@/lib/localAuth";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -138,7 +137,7 @@ if (import.meta.env.DEV && typeof window !== "undefined") {
 
 export function Providers({ children }: { children: ReactNode }) {
   return (
-    <ConvexAuthProvider client={convex} storage={durableAuthStorage}>
+    <CodecastAuthRoot client={convex}>
       <ThemeProvider>
         <ShortcutProvider>
         <TipProvider>
@@ -158,6 +157,6 @@ export function Providers({ children }: { children: ReactNode }) {
         </TipProvider>
         </ShortcutProvider>
       </ThemeProvider>
-    </ConvexAuthProvider>
+    </CodecastAuthRoot>
   );
 }

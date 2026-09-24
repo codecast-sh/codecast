@@ -18,7 +18,7 @@
 // The pointer is fetched once per process (short TTL, so a long-lived daemon
 // notices a team switch) and shared by every subcommand.
 
-import { teamFeatureEnabled, type TeamFeatureKey, type TeamFeatures } from "@codecast/shared/contracts";
+import { workspaceFeatureEnabled, type TeamFeatureKey, type TeamFeatures } from "@codecast/shared/contracts";
 
 export type Workspace =
   | { kind: "team"; teamId: string; name?: string }
@@ -182,11 +182,11 @@ export function workspaceLabel(ws: Workspace): string {
 }
 
 /**
- * Is `key` on for the workspace's team? Personal = off (team features have
- * no meaning there). Unknown team in the roster = off, never everything.
+ * Is `key` on for the workspace? A team reads its own flag; the personal
+ * workspace is off unless the catalog marks the feature `personal`, in which
+ * case any of the person's teams having it on counts (shared rule:
+ * workspaceFeatureEnabled). Unknown team in the roster = off, never everything.
  */
 export function workspaceHasFeature(roster: WorkspaceRoster, ws: Workspace, key: TeamFeatureKey): boolean {
-  if (ws.kind !== "team") return false;
-  const team = roster.teams.find((t) => t._id === ws.teamId);
-  return teamFeatureEnabled(team, key);
+  return workspaceFeatureEnabled(roster.teams, ws.kind === "team" ? ws.teamId : null, key);
 }

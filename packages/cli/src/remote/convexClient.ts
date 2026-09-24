@@ -11,12 +11,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { defaultConfigDir } from "../config/configDir.js";
-import { decryptToken } from "../tokenEncryption.js";
+import { bearerFromStored } from "../bearerToken.js";
 
 export async function convexClient(): Promise<{ client: any; token: string; api: any }> {
   const cfgPath = path.join(defaultConfigDir(), "config.json");
   const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
-  const token = cfg.auth_token?.startsWith("enc:") ? decryptToken(cfg.auth_token) : cfg.auth_token;
+  const token = cfg.auth_token ? bearerFromStored(cfg.auth_token) : cfg.auth_token;
   const { ConvexHttpClient } = await import("convex/browser");
   const apiMod: any = await import("../../../convex/convex/_generated/api.js" as any);
   return { client: new ConvexHttpClient(cfg.convex_url), token, api: apiMod.api };

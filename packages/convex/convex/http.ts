@@ -69,8 +69,11 @@ http.route({
         });
       }
 
+      // The redeeming machine's device id binds the long lived token it gets
+      // back. An older CLI sends none and gets an unbound token, as before.
       const result = await ctx.runMutation(internal.apiTokens.exchangeSetupToken, {
         setupToken,
+        device_id: typeof body.device_id === "string" ? body.device_id : undefined,
       });
 
       if (!result) {
@@ -3812,13 +3815,11 @@ function cliRoute(
   path: string,
   handler: (ctx: any, body: any) => Promise<any>,
   // forwardDeviceId: this route's own function takes device_id as a real
-  // argument (cast pull's destination, a terminal pane's machine, …), so after
-  // the binding check the field must survive into the body instead of being
-  // consumed. Note for the binding rollout: on these routes the one device_id
-  // field is BOTH the binding presentation and the argument, so a bound token
-  // can only ever name its own machine here — a route whose argument may
-  // legitimately be a DIFFERENT device (terminal watch of another machine)
-  // will need a separate presentation channel before its tokens are bound.
+  // argument (cast pull's destination, a terminal pane's machine, …), so the
+  // field must survive into the body instead of being stripped. It is only
+  // ever an argument: the device a token is presented FROM rides inside
+  // api_token itself (@platform/auth tokenFormat), so a route whose argument
+  // names a different machine than the caller's is fine.
   opts?: { forwardDeviceId?: boolean },
 ) {
   const corsHeaders = {
@@ -3832,14 +3833,14 @@ function cliRoute(
     handler: httpAction(async (ctx, request) => {
       try {
         const body = await request.json();
-        // Device binding, enforced once for every CLI endpoint rather than in
-        // each of the ~100 handlers. A token that names a device may only act
-        // from that device; a token that names none is unbound and behaves
-        // exactly as it always has, which is what makes this migration-free.
+        // Device binding, asked here ahead of the handler so a request from the
+        // wrong machine gets a 403 that names the fix. The handler's own
+        // verifyApiToken enforces the same rule on api_token as it arrived, so
+        // this is the better error, not the only check: a direct Convex call
+        // that never passes through here is refused just the same.
         if (typeof body?.api_token === "string") {
           const allowed = await ctx.runQuery(internal.apiTokens.deviceBindingAllows, {
             api_token: body.api_token,
-            device_id: typeof body.device_id === "string" ? body.device_id : undefined,
           });
           if (!allowed) {
             return new Response(
@@ -3852,8 +3853,8 @@ function cliRoute(
             );
           }
         }
-        // device_id is consumed HERE and only forwarded on routes that declare
-        // it (forwardDeviceId). Most cliRoute handlers pass the body straight
+        // A device_id body field is only forwarded on routes that declare it
+        // (forwardDeviceId). Most cliRoute handlers pass the body straight
         // into a mutation whose validator is a closed `v.object`, so an
         // unrecognised field is a hard rejection — but for routes whose own
         // function REQUIRES device_id, deleting it is an equally hard rejection

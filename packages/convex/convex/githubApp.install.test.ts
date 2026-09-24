@@ -23,6 +23,7 @@ import {
   consumeInstallIntent,
   storeInstallation,
   getInstallUrl,
+  linkedInstallationScope,
 } from "./githubApp";
 
 const VICTIM = "u_victim";
@@ -47,6 +48,7 @@ const registry: Record<string, any> = {
   "githubApp:createInstallIntent": createInstallIntent,
   "githubApp:consumeInstallIntent": consumeInstallIntent,
   "githubApp:storeInstallation": storeInstallation,
+  "githubApp:linkedInstallationScope": linkedInstallationScope,
 };
 
 /** The installation GitHub reports for INSTALLATION_ID — an account the caller
@@ -58,6 +60,7 @@ const INSTALLATION_DETAILS = {
   account_id: 7,
   repository_selection: "all" as const,
   repositories: undefined,
+  created_at: undefined as number | undefined,
 };
 
 function actionCtx(t: Record<string, any[]>) {
@@ -210,15 +213,75 @@ describe("install callback: the caller must control the installation", () => {
     expect(t.github_app_installations).toHaveLength(0);
   });
 
-  test("with no client pair configured the install refuses rather than binding unproven", async () => {
+});
+
+// With no client pair configured there is no user token to ask GitHub with, so
+// the single use intent is the only proof (a product decision, sd-234). The
+// installation_id in the callback URL is still the caller's to write, so the
+// intent may claim only an installation created after it was minted, or update
+// one already linked to the same owner.
+describe("with no client pair configured, the intent alone binds a fresh install", () => {
+  beforeEach(() => {
     delete process.env.GITHUB_APP_CLIENT_ID;
+    delete process.env.GITHUB_APP_CLIENT_SECRET;
+    stubGitHub({ controls: [] });
+  });
+  afterEach(() => { INSTALLATION_DETAILS.created_at = undefined; });
+
+  test("an installation created after the intent binds to the intent's owner", async () => {
     const t = tables();
     const ctx = actionCtx(t);
-    stubGitHub({ controls: [INSTALLATION_ID] });
     const nonce = await mintIntent(ctx);
-    const res = await callback(ctx, { installation_id: String(INSTALLATION_ID), setup_action: "install", state: nonce, code: "c" });
-    expect(errorOf(res)).toBe("install_verification_unconfigured");
+    INSTALLATION_DETAILS.created_at = Date.now() + 1_000;
+    const res = await callback(ctx, { installation_id: String(INSTALLATION_ID), setup_action: "install", state: nonce });
+    expect(successOf(res)).toBe("true");
+    expect(t.github_app_installations[0]).toMatchObject({ team_id: VICTIM_TEAM, installed_by_user_id: VICTIM });
+  });
+
+  test("an older unlinked installation is refused, and writes nothing", async () => {
+    const t = tables();
+    const ctx = actionCtx(t);
+    // The attacker's own intent, and an installation that predates it.
+    const nonce = await mintIntent(ctx, { user_id: ATTACKER, scope: "personal", team_id: undefined });
+    INSTALLATION_DETAILS.created_at = Date.now() - 24 * 3600_000;
+    const res = await callback(ctx, { installation_id: String(INSTALLATION_ID), setup_action: "install", state: nonce });
+    expect(errorOf(res)).toBe("install_not_fresh");
     expect(t.github_app_installations).toHaveLength(0);
+  });
+
+  test("an installation with no creation time is refused", async () => {
+    const t = tables();
+    const ctx = actionCtx(t);
+    const nonce = await mintIntent(ctx);
+    const res = await callback(ctx, { installation_id: String(INSTALLATION_ID), setup_action: "install", state: nonce });
+    expect(errorOf(res)).toBe("install_not_fresh");
+    expect(t.github_app_installations).toHaveLength(0);
+  });
+
+  test("an update to an installation already linked to the same owner goes through", async () => {
+    const t = tables();
+    const ctx = actionCtx(t);
+    const first = await mintIntent(ctx);
+    INSTALLATION_DETAILS.created_at = Date.now() + 1_000;
+    expect(successOf(await callback(ctx, { installation_id: String(INSTALLATION_ID), setup_action: "install", state: first }))).toBe("true");
+    const second = await mintIntent(ctx);
+    INSTALLATION_DETAILS.created_at = Date.now() - 24 * 3600_000;
+    const res = await callback(ctx, { installation_id: String(INSTALLATION_ID), setup_action: "update", state: second });
+    expect(successOf(res)).toBe("true");
+    expect(t.github_app_installations).toHaveLength(1);
+  });
+
+  test("an old installation linked to someone else is still refused", async () => {
+    const t = tables();
+    const ctx = actionCtx(t);
+    const victim = await mintIntent(ctx);
+    INSTALLATION_DETAILS.created_at = Date.now() + 1_000;
+    expect(successOf(await callback(ctx, { installation_id: String(INSTALLATION_ID), setup_action: "install", state: victim }))).toBe("true");
+    const attacker = await mintIntent(ctx, { user_id: ATTACKER, scope: "personal", team_id: undefined });
+    INSTALLATION_DETAILS.created_at = Date.now() - 24 * 3600_000;
+    const res = await callback(ctx, { installation_id: String(INSTALLATION_ID), setup_action: "update", state: attacker });
+    expect(errorOf(res)).toBe("install_not_fresh");
+    expect(t.github_app_installations[0]).toMatchObject({ team_id: VICTIM_TEAM });
   });
 });
 

@@ -11,6 +11,7 @@ const dom = new JSDOM("<!doctype html><div id='root'></div>", { url: "http://loc
 const restore = replaceGlobals({ window: dom.window, document: dom.window.document,
   navigator: dom.window.navigator, HTMLElement: dom.window.HTMLElement, localStorage: dom.window.localStorage,
   IS_REACT_ACT_ENVIRONMENT: true });
+const { stampCacheOwner } = await import("../../../store/__tests__/fixtures/signedInPrincipal");
 const { useInboxStore } = await import("../../../store/inboxStore");
 const { flushSyncPublishes } = await import("../../../store/syncTransaction");
 const { usePullRequest } = await import("../../useSyncTimeline");
@@ -19,6 +20,7 @@ const { usePRLookup } = await import("../../usePRLookup");
 const cache = await import("../../../store/idbCache");
 for (let i = 0; i < 1000 && !useInboxStore.getState().clientStateInitialized; i++) await new Promise(resolve => setTimeout(resolve, 1));
 expect(useInboxStore.getState().clientStateInitialized).toBe(true);
+await stampCacheOwner();
 cache.setHydrating(false);
 const store = () => useInboxStore.getState();
 store()._setIDBWrite(cache.writePatchesToIDB);
