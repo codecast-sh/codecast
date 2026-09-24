@@ -1,7 +1,7 @@
 // Session faces on the phone (docs/architecture/session-characters.md S3).
 // Rendered rather than asserted on JSX, because what matters is what reaches
-// the screen: every avatar key draws its own file, a role wears the violet
-// ring, a session nobody personified keeps the mark the surface drew before,
+// the screen: every avatar key draws its own file, a session nobody
+// personified keeps the mark the surface drew before,
 // and none of it brings a native library of its own into the bundle.
 import { beforeAll, expect, mock, test } from 'bun:test';
 import fs from 'node:fs';
@@ -62,14 +62,13 @@ test('every avatar key draws its own file', () => {
   expect(sources.size).toBe(AVATAR_KEYS.length);
 });
 
-test("a role's standing session wears the role's face and the violet ring", () => {
+test("a role's standing session wears the role's face, with no ring", () => {
   const tree = render(<identity.MobileSessionFace row={{ _id: ID, standing_role_id: 'r1', role: ROLE }} size={22} />);
   expect(tree.root.findByProps({ testID: 'session-face-role-owl' }).props.accessibilityLabel).toBe('Growth');
-  const ring = tree.root.findAllByType('View' as never).find((v) => v.props.style?.borderColor);
-  expect(ring?.props.style.borderColor).toBe('#6c71c4');
+  expect(tree.root.findAllByType('View' as never).some((v) => v.props.style?.borderColor)).toBe(false);
 });
 
-test('a character has no ring, and a badge is skipped under 16 px', () => {
+test('a badge is skipped under 16 px', () => {
   const small = render(<identity.MobileSessionFace row={{ _id: ID, character_avatar: 'fox' }} size={12} badge={<identity.MobileSessionFace row={{ _id: ID }} size={4} />} />);
   expect(small.root.findAllByType('Image' as never).length).toBe(1);
   const big = render(<identity.MobileSessionFace row={{ _id: ID, character_avatar: 'fox' }} size={18} badge={<identity.MobileSessionFace row={{ _id: ID }} size={4} />} />);
