@@ -895,53 +895,6 @@ async function roleTakingTask(ctx: any, task: any, conv: any, boundary: Assignee
   return role && !roleAssigneeRefusal(role, boundary) ? role : null;
 }
 
-/**
- * Independent review (docs/architecture/the-line.md L3). When the task's
- * work belongs to an org role (a session bound to the task, or the caller's
- * session, is a hand of the role or its standing session) the task moves to
- * done only on an approve verdict from outside: not a session bound to the
- * task, not a hand of the role, not the role's standing session. People and
- * sessions with no role are unaffected. A verdict a person wrote (no
- * conversation behind it) counts as outside every role.
- *
- * The verdict's author and the closer are judged apart. When the caller is
- * writing the verdict in this call (the review station approving and
- * closing at once), the caller is the reviewer: it is held to the reviewer
- * checks, not counted among the sessions doing the work. A session the spawn
- * route stamped review_of_task_id carries no role, so its approve passes; a
- * hand of the role approving its own role's work still fails the role check.
- */
-export async function enforceIndependentReview(
-  ctx: any,
-  task: any,
-  actor: any,
-  nextStatus: string | undefined,
-  pendingVerdict?: { verdict: ReviewVerdict; by_conversation_id?: Id<"conversations"> },
-): Promise<void> {
-  if (nextStatus !== "done" || task.status === "done") return;
-  const bound = await boundConversations(ctx, task);
-  const actorIsAuthor = !!actor && !!pendingVerdict && String(pendingVerdict.by_conversation_id ?? "") === String(actor._id);
-  // The reviewer is not among the sessions doing the work; a closer that is
-  // not the reviewer is.
-  const inside = actorIsAuthor || !actor ? bound : [...bound, actor];
-  const roleIds = new Set(inside.map(roleOf).filter((r): r is string => !!r));
-  if (roleIds.size === 0) return;
-  const roleList = [...roleIds].join(", ");
-  const refuse = (why: string): never => {
-    throw new Error(
-      `Independent review required (the-line.md L3): a session of role ${roleList} cannot move ` +
-      `${task.short_id} to done ${why}. A session outside the role must run: cast task verdict ${task.short_id} approve`,
-    );
-  };
-  const verdict = pendingVerdict ?? task.review_verdict;
-  if (!verdict || verdict.verdict !== "approve") refuse("without an approve verdict");
-  if (!verdict.by_conversation_id) return;
-  const byId = String(verdict.by_conversation_id);
-  if (inside.some((c) => String(c._id) === byId)) refuse("on a verdict from a session doing the work");
-  const reviewer = actorIsAuthor ? actor : await ctx.db.get(verdict.by_conversation_id);
-  const reviewerRole = roleOf(reviewer);
-  if (reviewerRole && roleIds.has(reviewerRole)) refuse("on a verdict from a session of the same role");
-}
 
 /**
  * The hold (docs/architecture/the-line.md L5). A pending, blocking decision
@@ -2033,9 +1986,6 @@ export const update = mutation({
         ...(args.review_note ? { note: args.review_note } : {}),
       };
     }
-    // Refuses before any write, like the close-guard below. Runs before the
-    // linking block so the bound sessions are read as they stand.
-    await enforceIndependentReview(ctx, task, conv, nextStatus, updates.review_verdict);
     // The hold (the-line.md L5): a session is refused; a person moves past it
     // and the note below names the decision.
     const hold = await holdingDecisionFor(ctx, task, nextStatus, statusWrite.statusId);
@@ -2108,12 +2058,6 @@ export const update = mutation({
     // Close-guard: refuses done/dropped on a parent with open subtasks unless
     // resolved; returns the subtree to cascade-close. Runs before any write.
     const cascadeIds = await guardParentClose(ctx, task, nextStatus, args.subtask_resolution);
-    // A cascade closes each child under the same review rule as the parent:
-    // a role cannot close its own subtasks through --cascade either.
-    for (const id of cascadeIds) {
-      const child = await ctx.db.get(id);
-      if (child) await enforceIndependentReview(ctx, child, conv, nextStatus, undefined);
-    }
 
     // Did the parent actually change? (Reparent/detach need history + plan reconcile.)
     const parentChanged = "parent_id" in updates && String(updates.parent_id ?? "") !== String(task.parent_id ?? "");
@@ -3486,16 +3430,9 @@ export const webUpdate = mutation({
     // Close-guard: refuses done/dropped on a parent with open subtasks unless
     // resolved; returns the subtree to cascade-close. Runs before any write.
     const cascadeIds = await guardParentClose(ctx, task, nextStatus, args.subtask_resolution);
-    // The board is held to the same independent review rule as the CLI
-    // (the-line.md L3); the caller is a person, so its verdict is outside.
-    await enforceIndependentReview(ctx, task, null, nextStatus, updates.review_verdict);
     // A person on the board moves past a hold (the-line.md L5); the note
     // after the write names the decision it moved past.
     const hold = await holdingDecisionFor(ctx, task, nextStatus, statusWrite.statusId);
-    for (const id of cascadeIds) {
-      const child = await ctx.db.get(id);
-      if (child) await enforceIndependentReview(ctx, child, null, nextStatus, undefined);
-    }
 
     const resolvedAssignee = updates.assignee || args.assignee;
     // Record history for changed fields

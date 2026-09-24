@@ -2,8 +2,7 @@
 // with review_for_task, the new session is stamped review_of_task_id and
 // filed under no role, while the role doing the task's work pays for it
 // from its hand cap. Spawned with spawner_session instead, the same role's
-// session would make it a hand (org_role_id), which the independence rule
-// then refuses as the role's own verdict.
+// session would make it a hand (org_role_id).
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { createSessionFromCli } from "./spawn";

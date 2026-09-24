@@ -57,9 +57,8 @@ Handoff (`cast task handoff <ct> --status done|blocked|needs_context
 named pages (L6), posts a `review` comment and moves the task to `in_review`.
 Verdict (`cast task verdict <ct> approve|changes|reject --note -`) writes
 `review_verdict`; approve closes, changes reopens to `in_progress`, reject
-reopens as blocked. Independent review (`enforceIndependentReview`,
-`tasks.ts`): a session of a role cannot move its task to done without an
-approve verdict from a session outside the role.
+reopens as blocked. A verdict is a recorded fact about the task; who wrote
+it never decides whether a close is allowed.
 
 ## L4. A gate is a decision
 
