@@ -9,8 +9,8 @@
 // logs line up), and every face node is tagged at the start so the end can
 // prove nobody was remounted across a state change.
 //
-// The drivers click the real elements: the face (which opens Talk, Ring and
-// Message), a face action, a card action. `.click()` reaches React's
+// The drivers click the real elements: the face (which pins the card that
+// holds Talk, Ring and Message), a card's action, an engagement card action. `.click()` reaches React's
 // onClick; nothing here calls the engine directly, except the two fault
 // injections (a LiveKit reconnect, a dead browser) that no button offers.
 export const PAGE_LIB = String.raw`
@@ -98,20 +98,29 @@ export const PAGE_LIB = String.raw`
   // React renders the popover after the click's event, on its own tick, so
   // the drivers wait a frame or two for the buttons rather than reading the
   // DOM the click just left.
+  // The one card under a face (F8): a click on the face pins it, and Talk,
+  // Ring and Message live in it, in the band under the row. Escape closes it
+  // again, so a leg's screenshots show the row and the engagement card alone.
+  const cardOf = (id) => (seatOf(id)?.dataset.card === "1" ? row()?.querySelector(".face-row-below .face-card[data-member-card]") : null);
   R.openFace = async (id) => {
     const seat = seatOf(id);
     const hit = seat?.querySelector("[data-face-hit]");
     if (!hit) throw new Error("no face " + id);
     if (hit.getAttribute("aria-expanded") !== "true") hit.click();
-    return settle(() => seat.querySelector(".people-face-actions")).catch(() => { throw new Error("the actions never opened on " + id); });
+    return settle(() => cardOf(id)?.querySelector(".face-actions")).catch(() => { throw new Error("the card never opened on " + id); });
+  };
+  R.closeCard = async () => {
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await settle(() => !row()?.querySelector(".face-card[data-member-card]")).catch(() => {});
   };
   R.action = async (id, which) => {
-    await R.openFace(id);
-    const seat = seatOf(id);
-    const b = await settle(() => seat.querySelector(".face-action-" + which)).catch(() => { throw new Error(which + " is not offered on " + id); });
-    if (b.disabled) throw new Error(which + " is disabled: " + (seat.querySelector(".face-actions-reason")?.textContent || b.title));
+    const actions = await R.openFace(id);
+    const b = await settle(() => actions.querySelector(".face-action-" + which)).catch(() => { throw new Error(which + " is not offered on " + id); });
+    if (b.disabled) throw new Error(which + " is disabled: " + (actions.querySelector(".face-actions-reason")?.textContent || b.title));
+    const word = b.querySelector(".face-action-word")?.textContent ?? which;
     b.click();
-    return b.querySelector(".face-action-word")?.textContent ?? which;
+    await R.closeCard();
+    return word;
   };
   R.card = (action) => {
     const b = document.querySelector('.people-bar [data-card-action="' + action + '"]');

@@ -42,8 +42,16 @@ export async function connectTarget(t) {
       for (const l of listeners) l(m);
     }
   };
+  // A page that dies (a killed browser, a navigation that drops the target)
+  // answers nothing: every call still in flight fails at once, so a leg
+  // reports the death instead of the whole run hanging on a promise.
+  ws.onclose = () => {
+    for (const { rej } of pending.values()) rej(new Error(`page gone: ${t.url}`));
+    pending.clear();
+  };
   const send = (method, params = {}) =>
     new Promise((res, rej) => {
+      if (ws.readyState !== WebSocket.OPEN) return rej(new Error(`page gone: ${t.url}`));
       const i = ++id;
       pending.set(i, { res, rej });
       ws.send(JSON.stringify({ id: i, method, params }));
@@ -76,12 +84,13 @@ export async function connectTarget(t) {
   };
   /** A script that runs in every new document before the app does. */
   const addInitScript = (source) => send("Page.addScriptToEvaluateOnNewDocument", { source });
-  /** Screenshot the viewport, or one element (a CSS selector), to a PNG file. */
+  /** Screenshot the viewport, or the box around everything a CSS selector
+   *  list matches (a bar and the card hanging under it), to a PNG file. */
   const screenshot = async (file, selector) => {
     let clip;
     if (selector) {
       const rect = await evaluate(
-        `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; })()`,
+        `(() => { const els = [...document.querySelectorAll(${JSON.stringify(selector)})].map((el) => el.getBoundingClientRect()).filter((r) => r.width > 0 && r.height > 0); if (!els.length) return null; const x = Math.min(...els.map((r) => r.left)), y = Math.min(...els.map((r) => r.top)); return { x, y, width: Math.max(...els.map((r) => r.right)) - x, height: Math.max(...els.map((r) => r.bottom)) - y }; })()`,
       );
       if (!rect) throw new Error(`screenshot: nothing matches ${selector}`);
       const pad = 12;
