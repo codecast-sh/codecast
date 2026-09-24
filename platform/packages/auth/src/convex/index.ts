@@ -6,3 +6,4 @@ export * from "./authHttpConfig";
 export * from "./providers";
 export * from "./callbacks";
 export * from "./createAuthConfig";
+export * from "../tokenFormat";
