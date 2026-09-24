@@ -40,6 +40,7 @@
     "./chat/dm": "./chat/dm.ts",
     "./comments": "./comments/index.ts",
     "./blame": "./blame/index.ts",
+    "./diff": "./diff/index.ts",
     "./ratchet": "./ratchet/index.ts",
     "./analytics": "./analytics/index.ts",
     "./agents": "./agents/index.ts",

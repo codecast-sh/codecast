@@ -90,6 +90,7 @@ import type * as executionBindings from "../executionBindings.js";
 import type * as externalEvents from "../externalEvents.js";
 import type * as favoriteViewWrites from "../favoriteViewWrites.js";
 import type * as feedPagination from "../feedPagination.js";
+import type * as fileChangeBodies from "../fileChangeBodies.js";
 import type * as fileChanges_applyPatchParser from "../fileChanges/applyPatchParser.js";
 import type * as fileChanges_embeddedPatch from "../fileChanges/embeddedPatch.js";
 import type * as fileChanges_extractor from "../fileChanges/extractor.js";
@@ -355,6 +356,7 @@ declare const fullApi: ApiFromModules<{
   externalEvents: typeof externalEvents;
   favoriteViewWrites: typeof favoriteViewWrites;
   feedPagination: typeof feedPagination;
+  fileChangeBodies: typeof fileChangeBodies;
   "fileChanges/applyPatchParser": typeof fileChanges_applyPatchParser;
   "fileChanges/embeddedPatch": typeof fileChanges_embeddedPatch;
   "fileChanges/extractor": typeof fileChanges_extractor;

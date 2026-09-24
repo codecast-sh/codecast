@@ -2873,9 +2873,21 @@ export default defineSchema({
     tool_call_id: v.optional(v.string()),
     seq: v.number(),
     file_path: v.string(),
-    change_type: v.union(v.literal("write"), v.literal("edit"), v.literal("commit")),
+    // "write" replaces the whole file (old_content = the file before, when it
+    // existed), "edit" is one string replacement, "delete" removes the file,
+    // "commit" is a git commit the session made.
+    change_type: v.union(v.literal("write"), v.literal("edit"), v.literal("delete"), v.literal("commit")),
+    // The change's text lives in file_change_bodies (same conversation_id +
+    // change_key), so a whale session's index stays readable under the 16 MiB
+    // per-function read cap: whole-file writes carried inline pushed one
+    // conversation's rows to 26 MiB. These two hold only the sizes; the fold
+    // uses old_bytes === undefined as "the file did not exist before".
+    old_bytes: v.optional(v.number()),
+    new_bytes: v.optional(v.number()),
+    // Legacy inline text, present only on rows fileChangeBodies.migrate has
+    // not reached. Readers accept either place; writers fill the body table.
     old_content: v.optional(v.string()),
-    new_content: v.string(),
+    new_content: v.optional(v.string()),
     commit_message: v.optional(v.string()),
     commit_hash: v.optional(v.string()),
     timestamp: v.number(),
@@ -2892,6 +2904,17 @@ export default defineSchema({
     .index("by_type_timestamp", ["change_type", "timestamp"])
     // cast blame: attribute uncommitted lines to the newest edit of the file.
     .index("by_file_path", ["file_path"]),
+
+  // The before/after text of one file change, split from its file_changes row
+  // (fileChangeBodies.ts). Read by change_key on demand: the web asks for the
+  // few changes a fold needs, never a conversation's whole history.
+  file_change_bodies: defineTable({
+    conversation_id: v.id("conversations"),
+    change_key: v.string(),
+    old_content: v.optional(v.string()),
+    new_content: v.string(),
+  })
+    .index("by_conversation_change_key", ["conversation_id", "change_key"]),
 
   // Every image in a conversation, materialized at message ingest
   // (materializeConversationImages in messages.ts). The header gallery reads

@@ -92,6 +92,7 @@ import { buildUsageReport, loadLocalUsageProfiles, renderUsageReport } from "./u
 import type { RecoveryMode } from "@codecast/shared/contracts";
 import { ensureLimitsGuidanceForMultiAccount } from "./limitsGuidance.js";
 import { CODECAST_STATUS_HOOK } from "./statusHook.js";
+import type { CumulativeChange } from "@codecast/shared/diff";
 import { THREAD_STATE_HOOK } from "./threadStateHook.js";
 import { SESSION_REGISTER_HOOK } from "./sessionRegisterHook.js";
 import { TASK_PULSE_HOOK } from "./taskPulseHook.js";
@@ -790,6 +791,10 @@ interface FullReadResult {
     tool_calls?: Array<{ name?: string; input?: unknown }>;
     tool_results?: Array<{ content?: string; isError?: boolean }>;
   }>;
+  // Materialized file changes, when include_file_changes was asked for, and
+  // whether the server's byte budget cut some of them.
+  fileChanges?: CumulativeChange[];
+  fileChangesTruncated?: boolean;
 }
 
 async function fetchAllMessages(
@@ -797,7 +802,10 @@ async function fetchAllMessages(
   apiToken: string,
   conversationId: string,
   maxMessages: number = 500,
-  fullContent: boolean = false
+  fullContent: boolean = false,
+  // Also fetch the server's materialized file changes (one extra read on the
+  // first page); `cast diff` folds them into its file tree.
+  includeFileChanges: boolean = false,
 ): Promise<FullReadResult | { error: string }> {
   const firstResponse = await cliFetchRead(`${siteUrl}/cli/read`, {
     method: "POST",
@@ -808,6 +816,7 @@ async function fetchAllMessages(
       start_line: 1,
       end_line: 25,
       full_content: fullContent || undefined,
+      include_file_changes: includeFileChanges || undefined,
     }),
   });
 
@@ -844,6 +853,8 @@ async function fetchAllMessages(
   return {
     conversation: firstResult.conversation,
     messages: allMessages,
+    fileChanges: firstResult.file_changes,
+    fileChangesTruncated: firstResult.file_changes_truncated,
   };
 }
 
@@ -915,7 +926,9 @@ function readTaskPulse(): { task?: string; plan?: string } | null {
 // user (or another tool) put there. Idempotent — a hook already registered for
 // an event is left alone, so re-running an install never duplicates it.
 // Errors are swallowed: hooks are an enhancement, never a reason to fail setup.
-function installHookScript(fileName: string, script: string, events: readonly string[]): void {
+// `matcher` scopes the registration to one tool ("Bash"); the default empty
+// matcher runs the script on every tool the event covers.
+function installHookScript(fileName: string, script: string, events: readonly string[], matcher = ""): void {
   const home = process.env.HOME || "";
   const hooksDir = path.join(home, ".claude", "hooks");
   const hookFile = path.join(hooksDir, fileName);
@@ -955,11 +968,16 @@ function installHookScript(fileName: string, script: string, events: readonly st
         }
       }
       if (alreadyPresent) continue;
-      if (hookArray.length > 0 && hookArray[0].matcher === "") {
-        hookArray[0].hooks = hookArray[0].hooks || [];
-        hookArray[0].hooks.push(hookEntry);
+      const group = matcher === ""
+        ? (hookArray.length > 0 && hookArray[0].matcher === "" ? hookArray[0] : undefined)
+        : hookArray.find((m) => m.matcher === matcher);
+      if (group) {
+        group.hooks = group.hooks || [];
+        group.hooks.push(hookEntry);
+      } else if (matcher === "") {
+        hookArray.unshift({ matcher, hooks: [hookEntry] });
       } else {
-        hookArray.unshift({ matcher: "", hooks: [hookEntry] });
+        hookArray.push({ matcher, hooks: [hookEntry] });
       }
     }
 
@@ -1004,6 +1022,13 @@ function installStatusHook(): void {
 
 function installSessionRegisterHook(): void {
   installHookScript("session-register.sh", SESSION_REGISTER_HOOK, ["SessionStart"]);
+}
+
+function removeShellChangesHook(): void {
+  installHookScript("codecast-shell-changes.sh", "#!/bin/sh\nexit 0\n", []);
+  for (const event of ["PreToolUse", "PostToolUse", "PostToolUseFailure"]) {
+    removeHookFromEvent("codecast-shell-changes.sh", event);
+  }
 }
 
 function installThreadStateHook(): void {
@@ -1760,6 +1785,7 @@ async function runOnboarding(config: Config): Promise<void> {
   installSlashCommand();
   installSessionRegisterHook();
   installStatusHook();
+  removeShellChangesHook();
   await installStatusLineHook();
   installTaskPulseHook();
   installThreadStateHook();
@@ -2441,6 +2467,7 @@ async function refreshEnabledSnippets(config: Record<string, any>): Promise<void
   if (config.skills_enabled) await installSkillsSnippet(true);
   installSessionRegisterHook();
   installStatusHook();
+  removeShellChangesHook();
   await installStatusLineHook();
   installTaskPulseHook();
   installThreadStateHook();
@@ -9526,6 +9553,7 @@ program
     const { removeOwnedStatusLine } = await import("./capabilities/hooks.js");
     const hookFiles = [
       "codecast-status.sh",
+      "codecast-shell-changes.sh",
       USER_PROMPT_HOOK_FILE,
       "session-register.sh",
       "thread-state.sh",
@@ -9897,11 +9925,13 @@ program
         id: string;
         title: string;
         messages: Array<{ tool_calls?: Array<{ name?: string; input?: unknown }>; timestamp?: string }>;
+        fileChanges?: CumulativeChange[];
+        fileChangesTruncated?: boolean;
       }> = [];
 
       const needFullContent = options.full || options.patch;
       for (const conv of feedResult.conversations) {
-        const result = await fetchAllMessages(siteUrl, config.auth_token, conv.id, 200, needFullContent);
+        const result = await fetchAllMessages(siteUrl, config.auth_token, conv.id, 200, needFullContent, true);
         if ("error" in result) {
           console.error(`Error: ${result.error}`);
           continue;
@@ -9910,6 +9940,8 @@ program
           id: conv.id,
           title: conv.title,
           messages: result.messages,
+          fileChanges: result.fileChanges,
+          fileChangesTruncated: result.fileChangesTruncated,
         });
       }
 
@@ -9957,7 +9989,7 @@ program
       }
 
       const needFullContent = options.full || options.patch;
-      const result = await fetchAllMessages(siteUrl, config.auth_token, sessionId, 500, needFullContent);
+      const result = await fetchAllMessages(siteUrl, config.auth_token, sessionId, 500, needFullContent, true);
       if ("error" in result) {
         console.error(`Error: ${result.error}`);
         process.exit(1);
@@ -9969,6 +10001,8 @@ program
           id: result.conversation.id,
           title: result.conversation.title,
           messages: result.messages,
+          fileChanges: result.fileChanges,
+          fileChangesTruncated: result.fileChangesTruncated,
         }],
         aggregated: false,
         mode: options.patch ? "patch" : options.full ? "full" : "summary",
@@ -20645,6 +20679,7 @@ if (!isStableContextFastPath && !isCredentialHelperFastPath(process.argv) && !pr
     if (config?.orch_enabled) await installOrchestration(true);
     installSessionRegisterHook();
     installStatusHook();
+    removeShellChangesHook();
     await installStatusLineHook();
     installTaskPulseHook();
     installThreadStateHook();
