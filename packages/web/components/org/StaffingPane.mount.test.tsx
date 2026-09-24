@@ -87,7 +87,9 @@ async function verifyStaffingPane() {
   assert.match(card(1).querySelector("[data-ask-why]")!.textContent!, /^The Platform project has 14 open tasks and no owner role/);
   assert.match(card(1).querySelector("[data-ask-effect]")!.textContent!, /^If you accept: Platform decisions get a recommendation/);
   assert.deepEqual([...card(1).querySelectorAll("[data-ask-controls] button")].map((b) => b.textContent?.trim()), ["Accept", "Skip", "Ask about this"]);
-  assert.deepEqual(qa("[data-ask-fold]").map((el) => el.textContent?.trim()), ["2 records", "1 change", "1 change", "4 changes"]);
+  // The fourth ask holds four rows and folds as three: the limit among them is never a row (S23.2).
+  assert.deepEqual(qa("[data-ask-fold]").map((el) => el.textContent?.trim()), ["2 records", "1 change", "1 change", "3 changes"]);
+  assert.ok(!/tokens|800,000|800k|wakes/.test(document.body.textContent ?? ""), "no limit number reaches the pane");
   assert.equal(qa("[data-change-row]").length, 0, "no row on the first screen");
   // The half decided ask says so under its title and keeps its controls.
   assert.equal(card(3).querySelector("[data-ask-verdict]")!.textContent, "2 of 4 changes decided");
@@ -117,13 +119,15 @@ async function verifyStaffingPane() {
   await act(async () => (card(3).querySelector("[data-ask-fold]") as HTMLButtonElement).click());
   assert.equal(card(3).getAttribute("data-ask-state"), "open");
   assert.equal(qa("[data-ask-rows]").length, 1, "one fold open at a time");
-  assert.deepEqual(qa("[data-ask-rows] [data-change-row]").map((el) => el.getAttribute("data-change-row")), ["fixture-change-3", "fixture-change-6", "fixture-change-4", "fixture-change-5"]);
-  assert.equal(qa('[data-ask-rows] [data-change-status="proposed"] button[aria-label="Accept"]').length, 2);
+  assert.deepEqual(qa("[data-ask-rows] [data-change-row]").map((el) => el.getAttribute("data-change-row")), ["fixture-change-3", "fixture-change-6", "fixture-change-5"]);
+  // The limit (fixture-change-4) is never a row (S23.2); the charter row is the one proposed row left.
+  assert.equal(q('[data-change-row="fixture-change-4"]'), null, "a limit is never a row");
+  assert.equal(qa('[data-ask-rows] [data-change-status="proposed"] button[aria-label="Accept"]').length, 1);
   assert.equal(qa('[data-ask-rows] [data-change-status="accepted"] button[aria-label="Accept"]').length, 0);
-  await act(async () => qa('[data-change-row="fixture-change-4"] button[aria-label="Skip"]')[0].click());
-  assert.equal(calls.pop(), "decide:fixture-change-4:skip");
-  await act(async () => qa('[data-change-row="fixture-change-4"] button[aria-pressed]')[0].click());
-  assert.equal(calls.pop(), "select:fixture-change-4");
+  await act(async () => qa('[data-change-row="fixture-change-6"] button[aria-label="Skip"]')[0].click());
+  assert.equal(calls.pop(), "decide:fixture-change-6:skip");
+  await act(async () => qa('[data-change-row="fixture-change-6"] button[aria-pressed]')[0].click());
+  assert.equal(calls.pop(), "select:fixture-change-6");
   // Opening another fold closes this one; a change focused from the chart
   // opens the card that holds it, and the row shows its rationale inline.
   await act(async () => (card(1).querySelector("[data-ask-fold]") as HTMLButtonElement).click());
@@ -131,27 +135,27 @@ async function verifyStaffingPane() {
   await act(async () => qa('[data-change-row="fixture-change-1"] button[aria-label="Edit"]')[0].click());
   assert.equal(calls.pop(), "editRole:fixture-change-1");
   assert.equal(q('[data-change-row="fixture-change-1"] [data-tenure]')!.getAttribute("data-tenure"), "standing");
-  await render({ proposal: ORG_STAFFING_FIXTURE_PROPOSAL, selectedChangeId: "fixture-change-4" });
-  assert.ok(q('[data-ask="3"] [data-change-row="fixture-change-4"] [data-rationale]'), "the focused change's card opens with the rationale under the row");
-  assert.match(q("[data-rationale]")!.textContent!, /hit its token cap on four of the last seven days/);
+  await render({ proposal: ORG_STAFFING_FIXTURE_PROPOSAL, selectedChangeId: "fixture-change-6" });
+  assert.ok(q('[data-ask="3"] [data-change-row="fixture-change-6"] [data-rationale]'), "the focused change's card opens with the rationale under the row");
+  assert.match(q("[data-rationale]")!.textContent!, /The Growth project has no goal on record/);
   assert.deepEqual(qa("[data-rationale] [data-verdicts] button").map((b) => b.textContent?.trim()), ["Accept", "Edit", "Skip", "Ask about this"]);
   await act(async () => qa("[data-rationale] [data-verdicts] button")[3].click());
-  assert.equal(calls.pop(), "about:fixture-change-4");
+  assert.equal(calls.pop(), "about:fixture-change-6");
   // Closing the card lets go of the focused change.
   await act(async () => (card(3).querySelector("[data-ask-fold]") as HTMLButtonElement).click());
   assert.equal(calls.pop(), "select:null");
-  // Edit on a budget change is the inline form; accept with edits carries them.
-  await render({ proposal: ORG_STAFFING_FIXTURE_PROPOSAL, selectedChangeId: "fixture-change-4" });
-  await act(async () => qa('[data-change-row="fixture-change-4"] button[aria-label="Edit"]')[0].click());
-  assert.equal(calls.pop(), "select:fixture-change-4");
-  const input = q<HTMLInputElement>('[data-edit-form] input[type="number"]');
-  assert.ok(input, "budget edit form");
+  // Edit on a charter change is the inline form; accept with edits carries them.
+  await render({ proposal: ORG_STAFFING_FIXTURE_PROPOSAL, selectedChangeId: "fixture-change-6" });
+  await act(async () => qa('[data-change-row="fixture-change-6"] button[aria-label="Edit"]')[0].click());
+  assert.equal(calls.pop(), "select:fixture-change-6");
+  const input = q<HTMLInputElement>('[data-edit-form] label[title="goal"] input');
+  assert.ok(input, "charter edit form");
   await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "600000");
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "Triple organic signups by December");
     input!.dispatchEvent(new Event("input", { bubbles: true }));
   });
   await act(async () => q("[data-edit-form]")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
-  assert.equal(calls.pop(), 'decide:fixture-change-4:accept:{"caps":{"tokens_per_day":600000}}');
+  assert.equal(calls.pop(), 'decide:fixture-change-6:accept:{"goal":"Triple organic signups by December"}');
   // A record row inside the records ask: the evidence on the row, the status a closed set.
   await render({ proposal: ORG_STAFFING_FIXTURE_PROPOSAL, selectedChangeId: "fixture-change-7" });
   assert.match(q('[data-change-row="fixture-change-7"] [data-sync-evidence]')!.textContent!, /evidenceEvery task closed 19 days ago/);
@@ -186,7 +190,7 @@ async function verifyStaffingPane() {
   assert.equal(qa('[data-ask="0"] [data-change-status="applied"]').length, 2);
 
   // ── the author revised rows since the reader last looked (S18): the card says so ──
-  const amendedRow = { ...ORG_STAFFING_FIXTURE_PROPOSAL.changes[3], revision: { kind: "amended" as const, note: "Raised on your note.", at: Date.now(), before: ORG_STAFFING_FIXTURE_PROPOSAL.changes[3].change } };
+  const amendedRow = { ...ORG_STAFFING_FIXTURE_PROPOSAL.changes[5], revision: { kind: "amended" as const, note: "Raised on your note.", at: Date.now(), before: ORG_STAFFING_FIXTURE_PROPOSAL.changes[5].change } };
   const revisedProposal = { ...ORG_STAFFING_FIXTURE_PROPOSAL, changes: ORG_STAFFING_FIXTURE_PROPOSAL.changes.map((c) => c._id === amendedRow._id ? amendedRow : c) };
   await render({ proposal: revisedProposal, proposals: [revisedProposal], selectedChangeId: null, revised: { rows: [amendedRow], who: "Chief of Staff", onSeen: () => calls.push("seen") } });
   assert.equal(qa("[data-ask-revised]").length, 1);
@@ -205,11 +209,11 @@ async function verifyStaffingPane() {
   await act(async () => (card(3).querySelector("[data-revised-seen]") as HTMLButtonElement).click());
   assert.equal(calls.pop(), "seen");
   await act(async () => (card(3).querySelector("[data-ask-fold]") as HTMLButtonElement).click());
-  assert.equal(q('[data-change-row="fixture-change-4"]')!.getAttribute("data-revised-new"), "true");
-  assert.match(q('[data-change-row="fixture-change-4"] [data-revision]')!.textContent!, /Changed.*Raised on your note/);
+  assert.equal(q('[data-change-row="fixture-change-6"]')!.getAttribute("data-revised-new"), "true");
+  assert.match(q('[data-change-row="fixture-change-6"] [data-revision]')!.textContent!, /Changed.*Raised on your note/);
   // A verdict on one row inside the fold says the same read.
-  await act(async () => qa('[data-change-row="fixture-change-4"] button[aria-label="Skip"]')[0].click());
-  assert.equal(calls.pop(), "decide:fixture-change-4:skip");
+  await act(async () => qa('[data-change-row="fixture-change-6"] button[aria-label="Skip"]')[0].click());
+  assert.equal(calls.pop(), "decide:fixture-change-6:skip");
   assert.deepEqual(seens.pop(), { revised_at: amendedRow.revision.at });
 
   // ── a records ask at scale (S9 inside S19): one card, the rows paged inside the fold ──

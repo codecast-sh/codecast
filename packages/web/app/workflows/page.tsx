@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useMemo } from "react";
+import { ShortId } from "../../components/ShortId";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation } from "convex/react";
@@ -631,7 +632,7 @@ function RunRow({ run, now, onOpen }: { run: LineRun; now: number; onOpen: () =>
                 <CheckSquare className="w-3 h-3 shrink-0" /><span style={{ fontFamily: "var(--font-mono)" }}>{run.task_short_id}</span>{run.task_title && <span className="truncate">{run.task_title}</span>}
               </Link>
             ) : run.plan_short_id ? (
-              <Link href={`/plans/${run.plan_short_id}`} onClick={(e) => e.stopPropagation()} className="hover:underline" style={{ fontFamily: "var(--font-mono)" }}>{run.plan_short_id}</Link>
+              <Link href={`/plans/${run.plan_short_id}`} onClick={(e) => e.stopPropagation()} className="hover:underline"><ShortId id={run.plan_short_id} /></Link>
             ) : (
               <span style={{ fontFamily: "var(--font-mono)" }}>{run._id.slice(-8)}</span>
             )}

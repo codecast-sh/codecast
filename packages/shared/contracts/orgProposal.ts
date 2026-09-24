@@ -179,6 +179,17 @@ export const ORG_CHANGE_KINDS = [...ORG_PROPOSAL_KINDS, "file", "scope", "budget
 export const ORG_SYNC_KINDS: readonly OrgChangeKind[] = ["plan_status", "task_status", "project_status"];
 /** The kinds that set, extend or staff a goal; one ask holds them (I1, revised). */
 export const ORG_GOAL_KINDS: readonly OrgChangeKind[] = ["initiative", "initiative_projects", "initiative_owner"];
+/** Kinds a person never sees drawn (org-staffing.md S23.2): a limit is a safety
+ *  net the person does not read about, so a card draws no chip and no row for
+ *  it. A proposal holding nothing else says what changes in plain words, with
+ *  no unit named (quietChangeSentence). */
+export const ORG_QUIET_KINDS: readonly OrgChangeKind[] = ["budget"];
+export const isOrgQuietChange = (c: { kind: string }): boolean => (ORG_QUIET_KINDS as readonly string[]).includes(c.kind);
+/** The plain sentence for a quiet change: what changes, never how much. */
+export function quietChangeSentence(c: OrgChange, name?: string): string {
+  const who = name ?? ("handle" in c && typeof (c as { handle?: unknown }).handle === "string" ? `@${(c as { handle: string }).handle.replace(/^@/, "")}` : "the role");
+  return `${who} keeps a safety net on its daily work.`;
+}
 export const isOrgGoalChange = (c: { kind: string }): c is OrgGoalChange => (ORG_GOAL_KINDS as readonly string[]).includes(c.kind);
 export type OrgChangeKind = OrgChange["kind"];
 
@@ -458,6 +469,14 @@ export function aboutAskHeader(proposalShortId: string, index: number, title: st
 export function withAboutAsk(content: string, proposalShortId: string, index: number, title: string): string {
   return `${aboutAskHeader(proposalShortId, index, title)}\n\n${content}`;
 }
+/** The same header for a reply about the proposal as a whole: what a
+ *  conversation's card puts in the composer on Ask (org-staffing.md S24). */
+export function aboutProposalHeader(proposalShortId: string, title: string): string {
+  return `About ${proposalShortId} ("${title.replace(/"/g, "'")}"):`;
+}
+export function withAboutProposal(content: string, proposalShortId: string, title: string): string {
+  return `${aboutProposalHeader(proposalShortId, title)}\n\n${content}`;
+}
 const ABOUT_RE = /^About (op-\d+) change (\d+) \("([^\n]*)"\):\n\n?/;
 /** The change a message names, and the words after the header; null when it names none. */
 export function parseAboutChange(content: string): { proposal: string; seq: number; line: string; body: string } | null {
@@ -687,7 +706,8 @@ function askWords(names?: OrgAskNames) {
   /** What rides with a new agent: its limit, its routine, the session that becomes it. */
   const rider = (c: OrgChange): string => {
     switch (c.kind) {
-      case "budget": return " It gets a daily limit of its own.";
+      // A limit is a safety net the person does not read about (S23.2, ORG_QUIET_KINDS).
+      case "budget": return "";
       case "routine": return ` It runs ${c.title} ${everyWords(c.every)}.`;
       case "trust": return autonomyOn(c.trust) ? " It starts work in its area on its own." : " It reads and recommends; you start the work.";
       case "adopt": return ` The session ${c.conversation} becomes it.`;

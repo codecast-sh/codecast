@@ -20,7 +20,8 @@ describe("proposalAsks", () => {
     expect(asks.map((a) => a.title)).toEqual(["Close the paperwork", "Everything else"]);
     expect(asks[0].changes.map((c) => c.seq)).toEqual([8, 7], "tasks close before the plan that holds them");
     expect(asks[0].foldLabel).toBe("2 records");
-    expect(asks[1].foldLabel).toBe("6 changes");
+    // Six rows in the ask; the fold counts five, because the limit among them is never a row (S23.2).
+    expect(asks[1].foldLabel).toBe("5 changes");
   });
 
   test("state and verdict line: open while anything waits, then accepted or skipped", () => {

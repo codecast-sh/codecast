@@ -12,6 +12,7 @@ const ID_TYPE_TABLES = [
   ["conversations", "session"],
   ["projects", "project"],
   ["initiatives", "initiative"],
+  ["org_proposals", "proposal"],
   ["agent_tasks", "trigger"],
   ["pull_requests", "pr"],
   ["commits", "commit"],

@@ -4,6 +4,7 @@
 // inbox's: needs input amber (THREAD_STATE_STATUS_META.blocked), working green,
 // done cyan, dormant blue, idle dim.
 import { memo, type ReactNode } from "react";
+import { ShortId } from "../ShortId";
 import { ProjectLeadMark } from "../charter/ProjectLeadChip";
 import Link from "next/link";
 import { Handle, Position, useStore, type NodeProps, type Node } from "@xyflow/react";
@@ -17,6 +18,7 @@ import type { OrgPerson, OrgRole, OrgSession, StateCounts, OrgParentRef } from "
 import { ORG_STATE_ORDER } from "./orgTypes";
 import { CHANGE_KIND_WORD, GHOST, ORG_STATE_META, SEVERITY_META, standingLineOf } from "./orgMeta";
 import { RoleFace } from "./RoleFace";
+import { CHIP_STATUS, GhostTag, ghostFrameStyle } from "./ghostChrome";
 import { RoleHoverCard, SessionGlyph } from "../identity";
 import type { OrgStandingState } from "./orgTypes";
 import type { HealthFlag, OrgChangeStatus } from "./orgStaffingTypes";
@@ -121,25 +123,6 @@ function FlagDots({ flags }: { flags?: HealthFlag[] }) {
           />
         );
       })}
-    </span>
-  );
-}
-
-const CHIP_STATUS: Record<OrgChangeStatus, { border: string; color: string }> = {
-  proposed: { border: GHOST.border, color: GHOST.color },
-  accepted: { border: "1.5px solid color-mix(in srgb, var(--sol-cyan) 60%, transparent)", color: "var(--sol-cyan)" },
-  applied: { border: "1.5px solid color-mix(in srgb, var(--sol-green) 60%, transparent)", color: "var(--sol-green)" },
-  skipped: { border: "1.5px dashed color-mix(in srgb, var(--sol-border) 60%, transparent)", color: "var(--sol-text-dim)" },
-  failed: { border: "1.5px dashed color-mix(in srgb, var(--sol-red) 70%, transparent)", color: "var(--sol-red)" },
-  removed: { border: "1.5px dashed color-mix(in srgb, var(--sol-border) 60%, transparent)", color: "var(--sol-text-dim)" },
-};
-
-/** A small dashed tag: "proposed", "retire", "this session", "accepted". */
-function GhostTag({ label, status = "proposed", tone, className }: { label: string; status?: OrgChangeStatus; /** A colour of its own (a retire reads red, not the proposal violet). */ tone?: string; className?: string }) {
-  const m = tone && status === "proposed" ? { border: `1.5px dashed color-mix(in srgb, ${tone} 70%, transparent)`, color: tone } : CHIP_STATUS[status];
-  return (
-    <span className={cn("inline-flex items-center h-[16px] px-1 rounded-sm text-[9.5px] font-medium uppercase tracking-[0.06em] whitespace-nowrap", className)} style={{ border: m.border, color: m.color }} data-ghost-tag={label}>
-      {label}
     </span>
   );
 }
@@ -263,13 +246,6 @@ function actionOf(data: CardData): { meta: OrgGhostMeta; word: string } | null {
   if (data.move?.change_id === id) return { meta: data.move, word: CHANGE_KIND_WORD.move };
   const chip = data.chips?.find((c) => c.change_id === id);
   return chip ? { meta: chip, word: CHANGE_KIND_WORD[chip.kind] ?? String(chip.kind) } : null;
-}
-
-/** The frame styling of a ghost stub: dashed violet, no plate, 55% content. */
-function ghostFrameStyle(stub: OrgGhostStub): React.CSSProperties {
-  return stub.solid
-    ? { borderTopWidth: 3, borderTopColor: "var(--sol-cyan)", background: "var(--sol-card)" }
-    : { border: GHOST.border, borderTopWidth: 1.5, background: GHOST.fill };
 }
 
 function Ports() {
@@ -623,7 +599,7 @@ export const SessionCard = memo(function SessionCard({ data }: NodeProps<Node<Se
         <div className="min-w-0 flex-1" title={ghost.line}>
           <div className="flex items-baseline gap-1.5 whitespace-nowrap overflow-hidden">
             <span className="truncate text-[13px] leading-[1.25] font-medium" style={{ color: "var(--sol-text)", opacity: dim ? GHOST.opacity : 1 }}>{s.title}</span>
-            <span className="shrink-0 text-[9.5px]" style={{ color: "var(--sol-text-dim)", fontFamily: "var(--font-mono)" }}>{s.short_id}</span>
+            <ShortId id={s.short_id} className="text-[9.5px]" style={{ color: "var(--sol-text-dim)" }} />
           </div>
           <div className="truncate text-[10.5px] leading-tight mt-[2px]" style={{ color: GHOST.color }} data-adopt-line>
             becomes {ghost.role_handle ? `@${ghost.role_handle}'s` : "the role's"} standing session
@@ -657,7 +633,7 @@ export const SessionCard = memo(function SessionCard({ data }: NodeProps<Node<Se
           {s.title || "Untitled"}
         </div>
         <div className="flex items-center gap-1.5 text-[9.5px] leading-tight mt-[1px]" style={{ color: "var(--sol-text-dim)", fontFamily: "var(--font-mono)" }}>
-          <span>{s.short_id}</span>
+          <ShortId id={s.short_id} />
           {s.git_branch && (
             <>
               <span aria-hidden>·</span>

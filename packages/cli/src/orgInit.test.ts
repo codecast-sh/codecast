@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { CHIEF_OF_STAFF_HANDLE, ORG_ADOPT_RULE, ORG_ASKS_RULE, ORG_ASK_RULES, ORG_COVERAGE_RULE, ORG_INITIATIVES_RULE, ORG_LETTER_RULE, ORG_GROUNDING_RULES, ORG_INIT_HONESTY_RULES, ORG_TENURE_RULE, ORG_UNNAMED_ROLES_RULE, ORG_ASKED_FOR_RULES, registerOrgInitCommands } from "./orgInit";
+import { CHIEF_OF_STAFF_HANDLE, ORG_ADOPT_RULE, ORG_CONVERSATION_RULES, ORG_COVERAGE_RULE, ORG_INITIATIVES_RULE, ORG_GROUNDING_RULES, ORG_INIT_HONESTY_RULES, ORG_TENURE_RULE, ORG_UNNAMED_ROLES_RULE, ORG_ASKED_FOR_RULES, registerOrgInitCommands } from "./orgInit";
 import { Command } from "commander";
 import { COMPANY_MODEL, apply, applyStack, buildOrgAnalyzerPrompt, buildReviseOps, coverageLine, findOpenOrgProposal, listProposals, orderForApply, proposalUrl, propose, revise, runAnalyzer, staff, summarizeInputs } from "./orgInitRun";
 import { PERSON_SPAN, ROLE_CAPACITY, ROLE_LEDGER, STABILITY, renderCapacityModel } from "@codecast/shared/contracts/orgCapacity";
@@ -101,21 +101,25 @@ describe("buildOrgAnalyzerPrompt", () => {
       expect(p).toContain("Coverage today: 2 active initiatives, 1 with no owner; 9 of 12 projects with work have a lead; outside any project: 3 plans and 4 areas of commits and sessions in 2 repositories.");
       expect(p).toContain("An initiative is a goal the company is trying to reach");
     }
-    // The letter's shape and its lead both make room for the goals paragraph, at their own sites.
-    expect(ORG_LETTER_RULE).toContain("then one short paragraph on how the company's goals are going, which the initiatives rule shapes; then one short paragraph per ask");
-    expect(ORG_ASK_RULES.decision_first).toStartWith("Once the letter has said how the goals are going, lead with the decision");
-    expect(ORG_INITIATIVES_RULE).toContain("that is the first finding of the review, ahead of every record and every role");
+    // The goals come right after the reporting structure (S24), as sentences, and each goal change is its own small proposal.
+    expect(ORG_INITIATIVES_RULE).toContain("Early in the conversation, right after the reporting structure, say how the goals are going");
+    expect(ORG_INITIATIVES_RULE).toContain("A goal change is its own small proposal");
+    expect(ORG_INITIATIVES_RULE).toContain("that is the first thing you say about the goals, ahead of every record and every role");
     // I1, revised: the reviewer proposes goals as changes and applies none.
     expect(ORG_INITIATIVES_RULE).toContain("The goals are yours to propose, as changes a person accepts, and never yours to apply.");
     expect(ORG_INITIATIVES_RULE).toContain("When the evidence shows one shared goal that no initiative holds, propose it");
     expect(ORG_INITIATIVES_RULE).toContain("propose `initiative_owner` naming who drives it");
-    expect(ORG_INITIATIVES_RULE).toContain("A shared goal you only suspect is a finding, not a change");
+    expect(ORG_INITIATIVES_RULE).toContain("A shared goal you only suspect is something to ask about, not a change");
     for (const kind of ["initiative:", "initiative_projects:", "initiative_owner:"]) expect(buildOrgAnalyzerPrompt({ mode: "review", workspace: "Acme", summary })).toContain(`- ${kind}`);
     expect(ORG_COVERAGE_RULE).toContain("Wrap the project that exists");
     expect(ORG_COVERAGE_RULE).toContain("show to be its business gets a project first");
     expect(ORG_COVERAGE_RULE).toContain("a paused lead is not one");
+    // Resuming a paused role is a person's act on the role's page (OrgScopePanel "Resume role"); no change kind does it, so the rule asks rather than proposing a move.
+    expect(ORG_COVERAGE_RULE).toContain("resuming the role is their own act on its page, which no proposal carries");
+    expect(ORG_COVERAGE_RULE).not.toContain("a move that resumes it");
     expect(ORG_COVERAGE_RULE).toContain("Aim at about one role per project, and depart from that only with a reason the change states");
-    expect(ORG_COVERAGE_RULE).toContain("says before and after in counts");
+    expect(ORG_COVERAGE_RULE).toContain("Say where coverage stands before and after in counts");
+    expect(ORG_COVERAGE_RULE).not.toMatch(/letter|in this form|costs/);
     // The old advice argued against a complete chart; it now says what complete means.
     expect(buildOrgAnalyzerPrompt({ mode: "init", workspace: "Acme", summary })).not.toContain("beat a complete chart");
     expect(buildOrgAnalyzerPrompt({ mode: "review", workspace: "Acme", summary })).toContain("are gaps the review closes whether or not a flag names them");
@@ -149,7 +153,7 @@ describe("buildOrgAnalyzerPrompt", () => {
     expect(review).toContain("skip the offer and say so");
     // An unfiled plan is a file change, filed ahead of the role that needs it.
     expect(review).toContain("- file: { plan: ref, project: ref }");
-    expect(review).toContain("A plan with open work and no project is a file change, not a finding");
+    expect(review).toContain("A plan with open work and no project is a file change, not a remark");
     expect(review).toContain("propose their file changes first in the same proposal");
     expect(review).toContain("Work moves between roles by moving the plan");
     // The review findings: every seat is sized in its rationale, budgets are
@@ -163,8 +167,7 @@ describe("buildOrgAnalyzerPrompt", () => {
       expect(p).toContain("A role does not do its scope's tasks; hands and people do.");
       expect(p).not.toContain("`company.caps_total`");
       expect(p).toContain("never propose a limit, never state one");
-      expect(p).toContain("lead with the decision you are asking for");
-      expect(p).toContain("The ask stays under two hundred words, in short paragraphs; a seat's load against the model and its evidence live in the change, not here");
+      expect(p).toContain("What a role may do in a day never comes up");
       expect(p).not.toContain("allocated from the person's total");
     }
     // The split rules read from health: the streak for the ordinary case, the
@@ -218,8 +221,7 @@ describe("buildOrgAnalyzerPrompt", () => {
       expect(p).toContain("propose one change per plan");
       expect(p).toContain("report the rest as could not verify, never as work on the root");
       expect(p).toContain('- project_status: { project: ref, status: "paused" | "done" | "active", reason, title }');
-      expect(p).toContain("the status changes that bring records in line come first, as their own group");
-      expect(p).toContain('"Bring records in line"');
+      expect(p).toContain("a status change that brings a record in line comes before what rests on it");
       // Loads are sized without the stale records.
       expect(p).toContain("the loads you size for a seat exclude it");
     }
@@ -231,92 +233,45 @@ describe("buildOrgAnalyzerPrompt", () => {
     const review = buildOrgAnalyzerPrompt({ mode: "review", workspace: "Acme", summary });
     expect(review).toContain("turn each stale record into its status change before you read anything as a bottleneck");
   });
-  // S17: the ask is a letter to a reader who has never seen the feature. The
-  // rules are named, the decision leads, every invented word is explained or
-  // dropped, numbers carry their meaning, the cost is in plain words, the
-  // bound holds, and the old packing instruction (one line of records, one
-  // sentence per seat, a budget as bare numbers) is gone.
-  test("writes the ask for a reader who has never seen the feature: the rules, the decision first, the bound, no packing", () => {
+  // S24: the review is a conversation. The rules are named, the structure
+  // leads, evidence stays behind the words, proposals are small and render as
+  // cards, the spec is the same one the server parses (asks optional), and
+  // nothing asks for one large letter or a list of asks.
+  test("holds the review as a conversation: the rules, small proposals as cards, the spec, and no letter", () => {
     for (const mode of ["init", "review"] as const) {
-      const p = buildOrgAnalyzerPrompt({ mode, workspace: "Acme", summary });
-      expect(p).toContain("The summary is the ask.");
-      for (const rule of Object.values(ORG_ASK_RULES)) expect(p).toContain(rule);
-      expect(p).toContain("has never heard of a role, a scope, a charter, a hand or a wake");
-      expect(p).toContain("explained in plain words the first time it appears, or not used at all");
-      expect(p).toContain("A signal from the health report is told as what is happening, never by its name");
-      expect(p).toContain("A short id never stands in for a name");
-      expect(p).toContain("Counts joined by commas are a defect");
-      // The cost rule is gone with the limits (S23.2): nothing on the page states one.
-      expect(p).not.toContain("is not a cost");
-      expect(p).toContain("no limit, no count of what it may spend, no cost");
-      expect(p).toContain("A sentence they would have to reread or decode is a defect in the summary");
-      // Run 1 on the Codecast workspace showed these gaps: a cost counted in
-      // wake ups nobody defined, a new agent named by its title after being
-      // introduced as "one new agent", project names as bare lowercase words,
-      // and "seats" leaking through the lines after the ask.
-      expect(p).toContain("introduced once with what it is and what it will do, and called by those same words after that");
-      expect(p).toContain("A project's or a plan's name appears as it is filed, capitalized or quoted");
-      expect(p).toContain("read the whole summary once more as that person, the lines after the ask included");
-      // Run 2 showed "a standing agent" spending an invented word in the
-      // sentence that introduces the thing, and the inputs' own names
-      // ("the activity block credits", "the seat should end with it")
-      // leaking into the lines below the ask.
-      expect(p).toContain("a role that stays is said as staying, not as standing");
-      expect(p).toContain("that holds for every line of the summary, the asks, the evidence, what could not be verified and the findings, not the ask alone");
-      expect(p).toContain("The names of the inputs you read (an activity block, a health flag, a ledger, a frame) never reach the reader");
-      // Run 3 wrote "may wake 120 times a day" with no word on what a wake
-      // is, while it explained a token; the rule now asks for both.
-      expect(p).toContain("A count of wakes never stands alone: wherever the number appears, say in your own words what one wake is");
-      // Run 4 handed in a project_meta for one project twice (its charter list
-      // and its owner list); the prompt says one row per subject and what
-      // the post does with a repeat.
-      expect(p).toContain("A proposal names each subject once: one status per plan or task, one project_meta carrying every field you set for a project");
-      expect(p).toContain("two rows that agree about one subject are folded into one at the post and named, and two that disagree are refused");
-      // The decision leads, and the ask rules sit inside the writing section.
-      const at = (s: string) => { const i = p.indexOf(s); expect(i).toBeGreaterThanOrEqual(0); return i; };
-      expect(at("## How to write")).toBeLessThan(at("The summary is the ask."));
-      expect(at("The summary is the ask.")).toBeLessThan(at("## What not to invent"));
-      expect(at(ORG_ASK_RULES.reader)).toBeLessThan(at(ORG_ASK_RULES.decision_first));
-      expect(at(ORG_ASK_RULES.decision_first)).toBeLessThan(at(ORG_ASK_RULES.invented_words));
-      // S19: the analyzer writes the asks, a partition of the changes, in
-      // the words its summary already uses; the spec example carries one and
-      // parses with it.
-      expect(p).toContain(ORG_ASKS_RULE);
-      expect(p).toContain("every change is in exactly one ask; the post refuses a spec that leaves a change out or names one twice");
-      expect(p).toContain("when the summary says one, two, three, those are the asks");
-      // The first run of the rule wrote titles of 30, 25 and 17 words, each
-      // carrying its own reason; a title is the head of a card.
-      expect(p).toContain("A title is the head of a card: a short line, about ten words, that names the act the person is agreeing to");
-      expect(p).toContain("The reason does not go in the title, it goes in why");
-      expect(at("## How to write")).toBeLessThan(at(ORG_ASKS_RULE));
-      expect(at(ORG_ASKS_RULE)).toBeLessThan(at("The summary is the ask."));
-      // S19, the letter shape: the page shows the words the propose step
-      // wrote, so the first screen is decided in the prompt. A live letter
-      // opened with one 1,088 character paragraph; the shape is an opening,
-      // one short paragraph per ask, then the rest behind a heading.
-      expect(p).toContain(ORG_LETTER_RULE);
-      expect(p).toContain("one short paragraph that says what you are, what you looked at and that they decide; then one short paragraph on how the company's goals are going, which the initiatives rule shapes; then one short paragraph per ask, in the asks' order, each ending in what accepting changes for the reader; then nothing");
-      expect(p).toContain("a person reads them in ten seconds and can say what is asked of them");
-      expect(p).toContain("An ask's why is one sentence and its effect is one sentence");
-      // The live cards said "standing agents", "business line", "daily
-      // allowance" and "seat", and one effect was an inventory of 100 rows:
-      // the first screen carries the page's words, and the effect names what
-      // the person will notice.
-      expect(p).toContain("a role is the thing you add, retire or move (say once that a role is an agent that keeps watching one area of work, and call it a role from then on, in the letter and in every ask)");
-      expect(p).toContain("and a role that stays is said as staying, not as standing");
-      expect(p).toContain("The first screen carries the page's word and nothing else");
-      expect(p).toContain("the effect names what the person will notice once they accept, never what the machine will do row by row");
-      expect(at(ORG_ASKS_RULE)).toBeLessThan(at(ORG_LETTER_RULE));
-      expect(at(ORG_LETTER_RULE)).toBeLessThan(at("The summary is the ask."));
+      const p = buildOrgAnalyzerPrompt({ mode, workspace: "Acme", teamFlag: "acme", summary });
+      expect(p).toContain("## The conversation");
+      for (const rule of Object.values(ORG_CONVERSATION_RULES)) expect(p).toContain(rule);
+      expect(p).toContain("You do it as a conversation with the person you report to, in this thread.");
+      expect(p).toContain("The heart of the conversation is the reporting structure: who reports to whom, what each role looks after, and where the person's own sessions go.");
+      expect(p).toContain("A message never cites an id, never talks about you");
+      expect(p).toContain("The opening is no exception: it carries the reporting structure, how the goals are going and the first thing to settle");
+      expect(p).toContain("put its short id on its own line in your message, where it renders as a card the person accepts, skips or asks on");
+      expect(p).toContain("never to one large document, and a change they have not accepted changes nothing");
+      expect(p).toContain("a role is an agent that keeps watching one area of work, said once and then called a role");
+      expect(p).toContain("The names of the inputs you read, the health signals and short ids never reach the person");
+      // Posting: the same verb and spec, a small proposal being an ordinary spec with few changes; asks optional.
+      expect(p).toContain("## Posting a proposal");
+      expect(p).toContain("A small proposal is an ordinary spec with few changes");
+      expect(p).toContain("`asks` is optional");
+      expect(p).toContain("with every change in exactly one ask");
+      expect(p).toContain("a change one of them already carries is not posted again, and withdrawing one is the person's act");
       const example = parseOrgProposalSpec(JSON.parse(p.split("```json\n")[1].split("\n```")[0]));
       expect(example.errors).toEqual([]);
-      expect(example.spec!.asks).toEqual([{ title: "What the person is agreeing to, readable on its own", why: "One sentence of why.", effect: "One line of what changes for them when they accept.", seqs: [1] }]);
-      // What comes after the ask is written for the same reader.
-      expect(p).toContain("each line is written for the same reader, so the ask stays on top and nothing below it asks them to learn a word");
-      // The packing instruction that produced an inventory is gone.
-      expect(p).not.toContain("one sentence per seat");
-      expect(p).not.toContain("the records to bring in line in one line");
-      expect(p).not.toContain("the company budget before and after");
+      expect(example.spec!.asks).toBeUndefined();
+      // Order: the rules sit inside the conversation section, ahead of the spec and the honesty section.
+      const at = (s: string) => { const i = p.indexOf(s); expect(i).toBeGreaterThanOrEqual(0); return i; };
+      expect(at("## The conversation")).toBeLessThan(at(ORG_CONVERSATION_RULES.structure_first));
+      expect(at(ORG_CONVERSATION_RULES.structure_first)).toBeLessThan(at("## Posting a proposal"));
+      expect(at("## Posting a proposal")).toBeLessThan(at("## What not to invent"));
+      // The turn ends with the message, the state says who acts next, and the page stays the only door.
+      expect(p).toContain("## Ending a turn");
+      expect(p).toContain("A turn ends with the message the person reads");
+      expect(p).toContain("cast state --status blocked");
+      // Nothing demands one letter, a first screen, a word budget or a list of asks.
+      expect(p).not.toMatch(/\bletter\b|first screen|two hundred words|1,800 characters|The summary is the ask|The proposal is a few asks|say it as a finding|in a finding, name|is a finding, not a change/);
+      // Who does what is said to the person before it is proposed, never escalated as a decision from a summary.
+      expect(p).toContain("is said to the person before it is proposed, and is theirs to decide");
     }
   });
   // org-roles-run-work.md R2: a long running session is a role nobody has
@@ -331,9 +286,9 @@ describe("buildOrgAnalyzerPrompt", () => {
       expect(p.indexOf("## Sessions that already are roles")).toBeLessThan(p.indexOf("## The capacity model"));
     }
     expect(ORG_UNNAMED_ROLES_RULE).toContain("A session older than a week with a standing purpose is a role that has not been named");
-    expect(ORG_UNNAMED_ROLES_RULE).toContain("name every row of `sessions.long_running` you did not propose");
+    expect(ORG_UNNAMED_ROLES_RULE).toContain("For every row of `sessions.long_running` you did not propose, know why in a few words");
     expect(ORG_UNNAMED_ROLES_RULE).toContain("Naming keeps the reporting line the session has today");
-    expect(ORG_UNNAMED_ROLES_RULE).toContain("a separate move change in the same ask");
+    expect(ORG_UNNAMED_ROLES_RULE).toContain("a separate move change in the same proposal");
   });
   // The two role shapes people asked for on the 2026-09-18 huddle (R6).
   test("an agent quality role runs cast-lessons weekly over one agent; a role a person reports to is a goal tracker, not a gatekeeper", () => {
@@ -427,7 +382,8 @@ describe("runAnalyzer", () => {
     expect(p).toContain("# Review the company: Acme");
     expect(p).toContain("## A proposal is still open");
     expect(p).toContain('op-7 "Company review: Acme" waits on a person: 1 of 6 changes decided, at https://codecast.sh/org?proposal=op-7');
-    expect(p).toContain("Do not post a second proposal while it is open, and do not withdraw it");
+    expect(p).toContain("Its changes are not posted again, and it is not withdrawn by you: a person decides or withdraws it.");
+    expect(p).toContain("the conversation carries on from it");
     expect(p).not.toContain("cast org proposals --withdraw");
   });
   test("with no open proposal it prints the prompt for the mode, naming the calling session", async () => {
