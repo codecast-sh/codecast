@@ -253,7 +253,7 @@ import {
   performReconciliation,
   repairDiscrepancies,
 } from "./reconciliation.js";
-import { TEST_SCRATCH_DIRNAME, isTestArtifactPath, isPathExcluded, isProjectAllowedToSync, watchDirFilter } from "./syncScope.js";
+import { TEST_SCRATCH_DIRNAME, isTestArtifactPath, isPathExcluded, isProjectAllowedToSync, watchDirFilter, watchFilter } from "./syncScope.js";
 import { parseOrphanProcessIdentity } from "./orphanProcessIdentity.js";
 import { TaskScheduler, triggerRunTaskId } from "./taskScheduler.js";
 import { hasTmux, isTmuxSessionMissingError } from "./tmux.js";
@@ -19394,7 +19394,7 @@ function ensureHeartbeatFlushLoop(): void {
 // a fleet-wide pass doesn't fire N tmux/network calls at once.
 // One item's failure is logged and the pool moves on: a fleet pass must not
 // stop at its first bad session.
-async function runBounded<T>(items: T[], concurrency: number, fn: (item: T) => Promise<void>, label = "bounded worker"): Promise<void> {
+export async function runBounded<T>(items: T[], concurrency: number, fn: (item: T) => Promise<void>, label = "bounded worker"): Promise<void> {
   let idx = 0;
   const describe = (item: T): string => (typeof item === "string" ? item : JSON.stringify(item)?.slice(0, 200) ?? String(item));
   const worker = async () => {
@@ -25809,13 +25809,12 @@ async function findStaleFiles(
   return stale.map((f) => f.path);
 }
 
-// Top-level <project>/<session>.jsonl only.
 export function findStaleSessionFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): Promise<string[]> {
   return findStaleFiles(
     path.join(process.env.HOME || "", ".claude", "projects"),
-    { policy: { files: "jsonl" }, maxDepth: 2, fileFilter: (rel) => rel.endsWith(".jsonl") },
+    { policy: { dirs: "claudeWatch", files: "jsonl" }, maxDepth: 6, dirFilter: watchDirFilter, fileFilter: (rel) => rel.endsWith(".jsonl") },
     maxAgeMs,
-    (f) => shouldTreatClaudeFileAsStale(f.stat, getSyncRecord(f.path)),
+    (f) => watchFilter(f.rel) && shouldTreatClaudeFileAsStale(f.stat, getSyncRecord(f.path)),
   );
 }
 
@@ -26911,7 +26910,9 @@ function startWatchdog(
     await runBounded(staleClaudeFiles, WATCHDOG_CONCURRENCY, async (filePath) => {
       const parts = filePath.split(path.sep);
       const sessionId = resolveSessionId(filePath);
-      const projectDirName = parts[parts.length - 2];
+      const subagentsIndex = parts.lastIndexOf("subagents");
+      const projectDirName = parts[subagentsIndex >= 2 ? subagentsIndex - 2 : parts.length - 2];
+      const parentConversationId = subagentsIndex >= 1 ? deps.conversationCache[parts[subagentsIndex - 1]] : undefined;
       const projectPath = resolveTranscriptProjectPath(filePath, projectDirName);
 
       if (deps.config.excluded_paths && isPathExcluded(projectPath, deps.config.excluded_paths)) {
@@ -26935,7 +26936,8 @@ function startWatchdog(
         deps.retryQueue,
         deps.pendingMessages,
         deps.titleCache,
-        deps.updateState
+        deps.updateState,
+        parentConversationId,
       );
     }, "Watchdog worker");
 
@@ -28628,7 +28630,7 @@ async function main(): Promise<void> {
     if (unsyncedFiles.length > 0) {
       log(`${reason}: Found ${unsyncedFiles.length} files needing sync`);
 
-      for (const filePath of unsyncedFiles) {
+      await runBounded(unsyncedFiles, 4, async (filePath) => {
         // Yield between files: processSessionFile's read+parse is synchronous CPU
         // work, and a backlog sweep runs dozens of files. Without this the sweep
         // monopolizes the loop for minutes and heartbeats/deliveries starve.
@@ -28647,11 +28649,11 @@ async function main(): Promise<void> {
         const projectPath = resolveTranscriptProjectPath(filePath, projectDirName);
 
         if (config.excluded_paths && isPathExcluded(projectPath, config.excluded_paths)) {
-          continue;
+          return;
         }
 
         if (!isProjectAllowedToSync(projectPath, config)) {
-          continue;
+          return;
         }
 
         let parentConversationId: string | undefined;
@@ -28686,7 +28688,7 @@ async function main(): Promise<void> {
           updateState,
           parentConversationId,
         );
-      }
+      }, reason);
 
       // Resolve any remaining pending subagent parents after all files processed
       for (const [childSessionId, parentSessionId] of pendingSubagentParents) {
