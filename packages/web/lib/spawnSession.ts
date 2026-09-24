@@ -15,6 +15,9 @@ export type SpawnSessionInput = {
   projectPath?: string;
   /** Logged when the send is lost (not parked). */
   failureLabel?: string;
+  /** Keep the session from every team whatever its folder's rule says: for a
+   *  conversation about the person's own settings. */
+  private?: boolean;
 };
 
 /** The stub id, usable at once for optimistic reads; the real id arrives
@@ -33,6 +36,7 @@ export function spawnSessionWithPrompt(input: SpawnSessionInput): { stubId: stri
   void store
     .awaitConvexId(stubId)
     .then((convexId) => {
+      if (input.private) store.setPrivacy(String(convexId), true);
       store.sendMessage(convexId, input.prompt, undefined, clientId);
     })
     .catch((error) => {

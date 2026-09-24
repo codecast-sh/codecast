@@ -209,7 +209,7 @@ A remote daemon only manages sessions it explicitly owns (safety gate in
 
 4. **Transfer codecast source**: `git archive HEAD | gzip | scp` + `bun install --linker hoisted`.
 
-5. **Auth codecast daemon**: copy your decrypted token to the Mac's `~/.codecast/config.json`.
+5. **Auth codecast daemon**: `cast hosts provision <id>` (or `scripts/mac-full-setup.sh`) writes the Mac's `~/.codecast/config.json`. A token bound to your laptop is never copied: the Mac gets its own, minted for its device. Without provisioning, run `cast auth` on the Mac. Never copy a token by hand.
 
 6. **Bootstrap**: `bash scripts/mac-daemon-bootstrap.sh` (overlays CLI source, removes `daemon.js` shadow, starts daemon).
 

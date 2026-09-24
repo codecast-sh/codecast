@@ -720,7 +720,7 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
         await inReal(async (bridge, conn) => {
           const target = resolveRealTarget(await listRealTargets(bridge), id, me());
           rememberRealTab(me(), target.targetId);
-          await conn.send("Target.activateTarget", { targetId: target.targetId });
+          if (o.show) await conn.send("Target.activateTarget", { targetId: target.targetId });
           console.log(`${OK} active real tab: ${target.title || target.url}`);
         });
         return;
