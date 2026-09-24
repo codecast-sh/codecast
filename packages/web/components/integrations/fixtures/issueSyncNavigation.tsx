@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spyOn } from "bun:test";
 import "fake-indexeddb/auto";
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
@@ -16,9 +17,21 @@ const restore = replaceGlobals({
   window: dom.window,
   document: dom.window.document,
   navigator: dom.window.navigator,
+  localStorage: dom.window.localStorage,
+  sessionStorage: dom.window.sessionStorage,
   IS_REACT_ACT_ENVIRONMENT: true,
 });
+const cache = await import("../../../store/idbCache");
+const setHydrating = cache.setHydrating;
+let finishHydration!: () => void;
+const hydrated = new Promise<void>((resolve) => { finishHydration = resolve; });
+const hydrationSpy = spyOn(cache, "setHydrating").mockImplementation((value) => {
+  setHydrating(value);
+  if (!value) finishHydration();
+});
 const { useInboxStore } = await import("../../../store/inboxStore");
+await hydrated;
+hydrationSpy.mockRestore();
 useInboxStore.getState()._setDispatch(async () => null);
 const { IssueSyncSources } = await import("../IssueSyncSources");
 const client = new ConvexReactClient("https://unused.convex.cloud");
