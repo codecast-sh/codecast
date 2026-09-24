@@ -118,6 +118,7 @@ test("size repair reads all row heights before changing geometry", async () => {
     const parentHeights: string[] = [];
     for (const row of rows) sizes.set(row, height(row) + 8);
     onHeightRead = el => { if (tracked.has(el)) parentHeights.push(container.style.height); };
+    await act(async () => { feed.dispatchEvent(new dom.window.Event("scrollend")); await new Promise(resolve => setTimeout(resolve, 200)); });
     await act(async () => {
       for (const tick of ticks) tick();
       onHeightRead = undefined;

@@ -93,6 +93,26 @@ export type Message = {
 // length stay fixed while content/thinking/tools grow. Keep the cheap structural
 // guard, but include the full live tail so partial and final same-id updates are
 // never mistaken for an unchanged page.
+/**
+ * The rendered list: every row the session has taken, in transcript order,
+ * then every row it has not taken yet, in send order. A pending row NEVER
+ * sorts among confirmed rows by timestamp: it carries the local send time
+ * while a confirmed row carries the transcript time, and a paste the agent
+ * picks up late is echoed after a newer send left this window. The session
+ * has not read a pending row, so nothing it has read can come after it.
+ */
+export function mergeUnconfirmedMessages(storeMessages: Message[], storePending: Message[]): Message[] {
+  if (storePending.length === 0) return storeMessages;
+  // Dedup by both _id (optimistic messages now live in messages[]) and client_id (server-confirmed)
+  const storeIds = new Set(storeMessages.map((m) => m._id));
+  const serverClientIds = new Set(storeMessages.filter((m) => m.client_id).map((m) => m.client_id));
+  const unconfirmed = storePending.filter((m) =>
+    !m._isLocalQueue && !storeIds.has(m._id) && (!m._clientId || !serverClientIds.has(m._clientId))
+  );
+  if (unconfirmed.length === 0) return storeMessages;
+  return [...storeMessages, ...unconfirmed.sort((a, b) => a.timestamp - b.timestamp)];
+}
+
 export function messagePageSyncKey(conversationId: string, messages: Message[]): string {
   return JSON.stringify([
     conversationId,
@@ -542,19 +562,10 @@ export function useConversationMessages(
   const storePagination = s.pagination[conversationId];
 
   // Merge server messages with unconfirmed pending messages (local-first)
-  const mergedMessages: Message[] = useMemo(() => {
-    if (storePending.length === 0) return storeMessages;
-    // Dedup by both _id (optimistic messages now live in messages[]) and client_id (server-confirmed)
-    const storeIds = new Set(storeMessages.map((m: Message) => m._id));
-    const serverClientIds = new Set(
-      storeMessages.filter((m: Message) => m.client_id).map((m: Message) => m.client_id)
-    );
-    const unconfirmed = storePending.filter((m: Message) =>
-      !m._isLocalQueue && !storeIds.has(m._id) && (!m._clientId || !serverClientIds.has(m._clientId))
-    );
-    if (unconfirmed.length === 0) return storeMessages;
-    return [...storeMessages, ...unconfirmed].sort((a: Message, b: Message) => a.timestamp - b.timestamp);
-  }, [storeMessages, storePending]);
+  const mergedMessages: Message[] = useMemo(
+    () => mergeUnconfirmedMessages(storeMessages, storePending),
+    [storeMessages, storePending],
+  );
 
   // Long-visit re-anchor: the tail range grows as messages land; past ~300
   // rows every push re-ships the whole range again, so bump the anchor to just

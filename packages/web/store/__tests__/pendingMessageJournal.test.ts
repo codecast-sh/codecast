@@ -18,6 +18,13 @@ test("two windows sending to one conversation retain both messages", () => {
   expect(pendingMessagesFromRecords(apply([...a, ...b])).c.map(m => m._id)).toEqual(["a", "b"]);
 });
 
+test("a row journaled under the old settled-control flag hydrates as settled", () => {
+  const a = pendingMessageWrites({}, { c: [{ ...message("a"), content: "[Request interrupted by user]", _isSettledControl: true }] });
+  const [row] = pendingMessagesFromRecords(apply(a)).c;
+  expect(row._isSettled).toBe(true);
+  expect("_isSettledControl" in row).toBe(false);
+});
+
 test("a reload before IndexedDB commits recovers the exact input", () => {
   const disk = storage();
   const pending = { c: [{ ...message("a"), content: "hello\n\nworld", images: [{ storage_id: "image-1" }] }] };

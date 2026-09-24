@@ -80,11 +80,20 @@ export function applyPendingMessageWrite(
   return row;
 }
 
+// Rows journaled before 2026-09-23 carry `_isSettledControl`; the flag is now
+// `_isSettled` for every kind of send. Read the old name once, on hydrate, so
+// a settled control line is not redriven as a fresh send.
+function normalizeSettledFlag(message: PendingMessage): PendingMessage {
+  if (!("_isSettledControl" in message)) return message;
+  const { _isSettledControl, ...rest } = message;
+  return _isSettledControl ? { ...rest, _isSettled: true } : rest;
+}
+
 export function pendingMessagesFromRecords(records: PendingMessageRecord[]): PendingMessages {
   const pending: PendingMessages = {};
   for (const row of records) {
     if (row.removed) continue;
-    (pending[row.conversationId] ??= []).push(row.message);
+    (pending[row.conversationId] ??= []).push(normalizeSettledFlag(row.message));
   }
   for (const rows of Object.values(pending)) rows.sort((a, b) => (a._isLocalQueue && b._isLocalQueue ? (a._queuePosition ?? 0) - (b._queuePosition ?? 0) : 0) || a.timestamp - b.timestamp || a._id.localeCompare(b._id));
   return pending;
