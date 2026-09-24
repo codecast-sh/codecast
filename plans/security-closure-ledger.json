@@ -192,13 +192,14 @@
     "id": "PARENT-07",
     "priority_severity": "P1 / High conditional",
     "finding": "Updater interpolates unsigned-manifest URL into a shell; installer/updater lack independent manifest authenticity",
-    "status": "implemented_pending_review",
+    "status": "shipped_pending_release",
     "workstream": "008",
     "verification": [
       "canonical ~/src/platform/packages/cli-kit/src/update: checkBinaryEntry (https, release origin, plain path, hex digest, size bound), bounded manifest fetch, fetchBounded (same-origin https redirects, 3 hops, byte cap, partial download refused), swap restores the old binary on failure; bun test 115 pass, tsc --noEmit clean (2026-09-23)",
       "packages/cli/src/update.ts: execFileSync argv curl with --proto =https --proto-redir =https --max-redirs 3 --max-filesize, url_effective origin check, darwin codesign gate for signed clients; packages/cli/src/update.test.ts 18 pass against the canonical package (tsconfig path override; vendored mirror stale until scripts/vendor-platform.sh)",
       "packages/web/public/install.sh reads latest.json, binary only from dl.codecast.sh, sha256 verified before install; packages/cli/src/installerTerminal.test.ts 14 pass incl. wrong digest, foreign host, missing platform",
-      "signed manifest path: cli-kit signing.ts + release/sign-manifest.ts (keygen/sign/append/verify), finalize workflow signs when RELEASE_MANIFEST_SIGNING_KEY exists, client policy RELEASE_MANIFEST_SIGNING = { keys: {}, required: false } (no behaviour change); rollout and custody in docs/architecture/release-signing.md; no key created"
+      "signed manifest path: cli-kit signing.ts + release/sign-manifest.ts (keygen/sign/append/verify), finalize workflow signs when RELEASE_MANIFEST_SIGNING_KEY exists, client policy RELEASE_MANIFEST_SIGNING = { keys: {}, required: false } (no behaviour change); rollout and custody in docs/architecture/release-signing.md; no key created",
+      "2026-09-23: Update path hardened (argv curl, origin/path/digest/size checks, darwin team signature gate, install.sh SHA-256), reviewed PASS against the live latest.json v1.1.153. Manifest signing key created 2026-09-23 (sd-240, repo secret + Keychain escrow, key id cli-release-2026); client pin follows the first verified signed release."
     ],
     "review": null,
     "release": null
@@ -207,11 +208,12 @@
     "id": "PARENT-08",
     "priority_severity": "P1 / High availability potential",
     "finding": "Vulnerable ws parser accepts unauthenticated extension first messages up to 256 MiB; opaque Origin is admitted",
-    "status": "implemented_pending_review",
+    "status": "shipped_pending_release",
     "workstream": "004/008",
     "verification": [
       "packages/cli/package.json ws 8.21.3; bun.lock root ws@8.21.3 with convex's exact 8.18.0 pin nested (client role only); resolved import asserted by packages/cli/src/browser/bridge/wsVersion.test.ts (pass after install)",
-      "pre-auth bounds (origin allow list incl. null refusal, 256 KiB hello cap, 4 concurrent handshakes, hello timeout) already in tree from plan 004 (30a74b510); host/protocol/hostState/wsVersion/installer suites 68 pass (2026-09-23)"
+      "pre-auth bounds (origin allow list incl. null refusal, 256 KiB hello cap, 4 concurrent handshakes, hello timeout) already in tree from plan 004 (30a74b510); host/protocol/hostState/wsVersion/installer suites 68 pass (2026-09-23)",
+      "2026-09-23: ws 8.21.3 in the CLI with a resolved import test; bridge pre auth bounds shipped in v1.1.153."
     ],
     "review": null,
     "release": null
@@ -230,10 +232,11 @@
     "id": "BACKEND-09",
     "priority_severity": "P2 / Medium",
     "finding": "Device-bound bearer restriction exists at HTTP wrapper but direct public Convex calls bypass it; attacker already holds valid token",
-    "status": "in_progress",
+    "status": "shipped_pending_release",
     "workstream": "002",
     "verification": [
-      "2026-09-23 prod read: 291 api_tokens, 49 named setup-, none live, none used as a bearer; setup tokens refused as bearers and renames across the setup- prefix blocked (platform apiTokens.deviceBinding.test.ts, 11 pass; fails without the guard)"
+      "2026-09-23 prod read: 291 api_tokens, 49 named setup-, none live, none used as a bearer; setup tokens refused as bearers and renames across the setup- prefix blocked (platform apiTokens.deviceBinding.test.ts, 11 pass; fails without the guard)",
+      "2026-09-23 review PASS: enforcement in verifyApiToken on both doors; REQUEST_DEVICE_BOUND_TOKENS=false until the host mint (sd-242) ships"
     ],
     "review": {
       "decision": "human 2026-09-23: no token rotation and no grace window. Existing unbound tokens keep working. Order: close the direct path for bound tokens, make the CLI send device_id, then bind newly minted tokens.",
@@ -329,11 +332,12 @@
     "id": "PARENT-09",
     "priority_severity": "P2 / mixed, triage",
     "finding": "Dependency audit has 96 high/critical advisory/version match rows across 25 package names; these are not 96 exploitable app bugs",
-    "status": "implemented_pending_review",
+    "status": "shipped_pending_release",
     "workstream": "008",
     "verification": [
       "scripts/security/dependency-triage.ts writes plans/security-dependency-triage.{json,md} from bun audit --json + bun why: 40 packages / 195 advisories; 1 fixed (ws), 27 not reachable, 5 accepted risk, 7 fix planned (dompurify, markdown-it, linkify-it, mermaid, @tiptap/core with the content worker; @auth/core with the identity worker; react-router bump by the release owner); every row carries resolved versions, modes, evidence, owner and a review expiry; --check fails on untriaged or expired rows",
-      "raw audit kept in plans/security-dependency-audit.json (not a clean bill)"
+      "raw audit kept in plans/security-dependency-audit.json (not a clean bill)",
+      "2026-09-23: Dependency triage ledger: 195 rows, each with a decision and review expiry. react-router bumped to 7.18.4 (GHSA-wrjc-x8rr-h8h6 open redirect). The remaining planned fixes are tracked under ct-53054 and ct-53052."
     ],
     "review": null,
     "release": null
@@ -342,9 +346,14 @@
     "id": "PARENT-10",
     "priority_severity": "P2 / hardening",
     "finding": "Main web responses lack CSP/frame-ancestors and several browser isolation headers",
-    "status": "implementation_pending",
+    "status": "implemented_pending_review",
     "workstream": "003/008",
-    "verification": [],
+    "verification": [
+      "2026-09-24 (ct-54096): packages/web/server/responsePolicy.ts. LIVE on the next web deploy: Strict-Transport-Security max-age=86400 (no includeSubDomains, no preload; http://codecast.sh 301s to https, checked 2026-09-23). REPORT-ONLY: the full draft document policy (DOCUMENT_POLICY; sources and reasons in plans/security-csp-draft.md), reporting to Sentry's CSP security endpoint derived from VITE_SENTRY_DSN (a Railway runtime variable), only on Railway, for 10% of HTML documents, capped at 120 reporting documents per hour per process, via report-uri plus report-to and Reporting-Endpoints. Nothing is enforced: no Content-Security-Policy header is sent.",
+      "Tests: packages/web/server/responsePolicy.test.ts 8 pass through the Hono middleware (DSN to endpoint, sampling, hourly cap, no DSN, HSTS, draft sources, no enforcing header); server shareMeta and staticAssets suites pass; cast check web clean.",
+      "Browser: the local server on the built dist (port 3977) boots and renders in Chrome with the headers; every loaded origin is in the draft. The signed-in prod app (read-only check in the founder's Chrome) loaded 12 origins, all covered: Convex img/fetch/iframe, GitHub, Slack and Gravatar avatars, Google Fonts. Not exercised with a signed-in local origin (no real accounts): calls, OAuth return, desktop windows. The header is report-only, so it cannot block them.",
+      "REVIEW on or after 2026-10-08: read the Sentry CSP reports, then fix inline scripts (hash or nonce) and decide on enforcement, and whether to raise HSTS to one year."
+    ],
     "review": null,
     "release": null
   },
