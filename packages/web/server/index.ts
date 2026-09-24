@@ -61,7 +61,7 @@ const BINARIES: Record<string, string> = {
 // constant bumped by the release lagged every release by a commit and a
 // Railway build (1.1.119 downloaded as 1.1.118, 2026-09-24). The constant is
 // only the fallback when the feed cannot be read.
-const MAC_DMG_VERSION = "1.1.119";
+const MAC_DMG_VERSION = "1.1.120";
 const DESKTOP_FEED = "https://dl.codecast.sh/desktop/latest-mac.yml";
 let desktopLatest = { version: MAC_DMG_VERSION, at: 0 };
 async function latestDesktopVersion(): Promise<string> {
