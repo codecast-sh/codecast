@@ -2,6 +2,7 @@ import { ConvexHttpClient } from "convex/browser";
 import { api } from "../../convex/convex/_generated/api.js";
 import { cleanNotificationBody } from "../lib/notificationText";
 import type { ShareKind } from "@codecast/shared/entities";
+import { CONVEX_URL } from "./convexUrl";
 
 /**
  * The server's view of shared objects: one Convex client, one query per share
@@ -13,8 +14,7 @@ import type { ShareKind } from "@codecast/shared/entities";
  * query is not cached and returns null, so callers can fall back and retry.
  */
 
-const convexUrl = process.env.VITE_CONVEX_URL || "https://convex.codecast.sh";
-export const convex = new ConvexHttpClient(convexUrl);
+export const convex = new ConvexHttpClient(CONVEX_URL);
 
 const TTL_MS = 60_000;
 const MAX_ENTRIES = 500;

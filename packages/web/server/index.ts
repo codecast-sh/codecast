@@ -8,13 +8,19 @@ import { createRequire } from "module";
 import { botMetaMiddleware, prerenderedRouteCount } from "./bot-meta";
 import { registerShareRoutes, getShellHtml, shareSsrReady } from "./share";
 import { registerHashedAssets, registerMissingArtifactGuard, registerStableEntryPoints } from "./staticAssets";
-import { responsePolicy } from "./responsePolicy";
+import { createResponsePolicy } from "./responsePolicy";
 
 const require = createRequire(import.meta.url);
 const pkg = require("../package.json");
 
 const app = new Hono();
-app.use("*", responsePolicy);
+// CSP violation reports go to Sentry only from a Railway deploy; a local server
+// sets the same headers and reports nothing.
+app.use("*", createResponsePolicy({
+  sentryDsn: process.env.RAILWAY_ENVIRONMENT_NAME ? process.env.VITE_SENTRY_DSN : undefined,
+  environment: process.env.RAILWAY_ENVIRONMENT_NAME,
+  release: pkg.version,
+}));
 
 const DIST_DIR = join(import.meta.dirname, "../dist");
 
