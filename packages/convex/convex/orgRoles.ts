@@ -1003,16 +1003,6 @@ function normalizeBackend(raw: string | undefined): string | undefined {
   return b === "claude_code" ? "claude" : b;
 }
 
-// The line's review station must run on a backend other than the role's own
-// (the-line.md L3). One rule, one message; the CLI prints it when it refuses.
-export function reviewBackendConflict(role: { review_backend?: string | null }, ownAgent: string | undefined): string | null {
-  const review = role.review_backend ?? null;
-  if (!review) return null;
-  const own = (ownAgent ?? "claude_code") === "claude_code" ? "claude" : (ownAgent ?? "claude");
-  return review === own
-    ? `Review backend "${review}" is this role's own agent; the line's review station must run on a different backend for an independent review (the-line.md L3). Set one with cast role update @handle --review-backend <agent>.`
-    : null;
-}
 
 export const TRUST_STAGES = ["understand", "decide", "direct"] as const;
 
@@ -1801,7 +1791,6 @@ export async function roleForSession(ctx: Ctx, userId: Id<"users">, sessionRef: 
     line_workflow_slug: lineSlugOf(role),
     own_agent: conv.agent_type,
     is_standing: String(conv.standing_role_id ?? "") === String(role._id),
-    review_conflict: reviewBackendConflict(role, conv.agent_type),
     counters: countersFor(role, Date.now()),
     caps: capsFor(role),
   };

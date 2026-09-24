@@ -231,8 +231,10 @@ export interface CdpTarget {
  */
 /** A port, or a bridge host with its token — and, for a socket opened on a
  *  session's behalf, the session the host should scope that socket to
- *  (bridge/host.ts Client.session). */
-export type CdpEndpoint = number | { port: number; token?: string; session?: string };
+ *  (bridge/host.ts Client.session). `raise` marks a socket that brings tabs
+ *  to the front on purpose (the focus route, `tab --show`); the host lets no
+ *  other socket raise the human's Chrome. */
+export type CdpEndpoint = number | { port: number; token?: string; session?: string; raise?: boolean };
 
 /** Longer than the host's own tab listing budget (host.ts listTabs, 40 s), so the host answers before the reader gives up. */
 export const BRIDGE_HTTP_TIMEOUT_MS = 45_000;
@@ -291,11 +293,13 @@ export async function browserSocketUrl(ep: CdpEndpoint, timeoutMs = 10_000): Pro
   return withSession(body.webSocketDebuggerUrl, ep);
 }
 
-/** The bridge scopes a socket to the session named on its URL; Chrome ignores the query. */
+/** The bridge scopes a socket to the session named on its URL, and lets it
+ *  raise tabs only with `raise=1`; Chrome ignores the query. */
 export function withSession(wsUrl: string, ep: CdpEndpoint): string {
-  if (typeof ep === "number" || !ep.session) return wsUrl;
+  if (typeof ep === "number" || (!ep.session && !ep.raise)) return wsUrl;
   const u = new URL(wsUrl);
-  u.searchParams.set("session", ep.session);
+  if (ep.session) u.searchParams.set("session", ep.session);
+  if (ep.raise) u.searchParams.set("raise", "1");
   return u.toString();
 }
 

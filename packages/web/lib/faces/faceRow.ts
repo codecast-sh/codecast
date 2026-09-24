@@ -98,6 +98,8 @@ export type FaceEntry = {
   unread: number;
   /** Their sessions waiting on the viewer. */
   ask: number;
+  /** An agent, not a person: drawn as one, and offers no call or message. */
+  bot?: boolean;
 };
 
 export type FaceCard =
@@ -164,6 +166,8 @@ export type FaceMember = {
   walkie_joined_at?: number;
   walkie_pref?: string;
   walkie_snoozed_until?: number;
+  is_bot?: boolean;
+  bot_kind?: "anchor" | "slack";
 };
 
 /** A seat (calls.getRoomOccupancy / getLiveRooms members). */
@@ -483,6 +487,9 @@ export function deriveFaceRow(input: FaceRowInput, prev: FaceRow | null): FaceRo
   for (const m of input.roster) {
     const id = idOf(m._id);
     if (!id || id === meId) continue;
+    // A Slack person is a shadow identity for chat mentions: nobody to call,
+    // ring or message from here, so no face (founder, 2026-09-24).
+    if (m.is_bot && m.bot_kind === "slack") continue;
     const prevEntry = prevById.get(id);
     // In my room by any of three reports: the occupancy feed, the live rooms
     // list, or their own roster row naming my room. Three sources so a face
@@ -515,12 +522,17 @@ export function deriveFaceRow(input: FaceRowInput, prev: FaceRow | null): FaceRo
       joinedAgo: inMyRoom && stamp ? Math.max(0, input.now - stamp) : null,
       unread: input.unread.get(id) ?? 0,
       ask: input.ask.get(id) ?? 0,
+      ...(m.is_bot ? { bot: true } : {}),
     };
     rows.push({ entry, member: m, linked });
   }
 
   const rank = new Map(FACE_TIERS.map((t, i) => [t, i]));
   rows.sort((a, b) => {
+    // People before agents, whatever their presence: an agent is always "on",
+    // and four of them took four of the header's six seats from teammates.
+    // A linked agent (one I am engaged with) keeps its place at the head.
+    if (!a.linked && !b.linked && !!a.entry.bot !== !!b.entry.bot) return a.entry.bot ? 1 : -1;
     const ta = rank.get(a.entry.tier)!;
     const tb = rank.get(b.entry.tier)!;
     if (ta !== tb) return ta - tb;
@@ -603,7 +615,7 @@ function rosterFaceSig(members: FaceMember[] | undefined): string {
   let extra = "";
   for (const m of members ?? []) {
     if (!m?._id) continue;
-    extra += `${m.seat ?? ""}|${m.walkie_joined_at ?? ""}|${m.walkie_pref ?? ""}|${m.walkie_snoozed_until ?? ""}\n`;
+    extra += `${m.seat ?? ""}|${m.walkie_joined_at ?? ""}|${m.walkie_pref ?? ""}|${m.walkie_snoozed_until ?? ""}|${m.is_bot ? m.bot_kind ?? "bot" : ""}\n`;
   }
   return teamBarSig((members ?? []) as any[]) + extra;
 }

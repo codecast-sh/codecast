@@ -28,6 +28,7 @@ import { AGENT_LAUNCH_OPTIONS, AGENT_MODEL_CONFIG, modelAgentKey, dynamicModelOp
 import { useDynamicModels } from "../hooks/useDynamicModels";
 import { useDevices, deviceDisplayName, deviceWakesOnUse } from "./DeviceBadge";
 import { useBulkMoveSessions } from "../hooks/useBulkMoveSessions";
+import { useInboxSelection } from "../lib/inboxSelection";
 import { useVaultStore } from "../store/vaultStore";
 import { filesHref } from "../lib/vault/vaultHref";
 import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, placeInboxRows, filterInboxScopeFromState, convBucketMap, sortLabels, computeChipCounts, getProjectName, RecentVisit, selectSessionRailOpen, sessionRowFromSummary } from "../store/inboxStore";
@@ -2112,7 +2113,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     if (!targets.length) return;
     const target = targets[0] as any;
 
-    if (["device", "snooze", "status", "priority", "labels", "assign", "type", "plan_status", "agent_run", "agent_switch", "agent_fork", "agent_handoff", "rename", "project", "project_status", "deadline", "trigger_cancel", "trigger_delete", "bucket", "model", "parent"].includes(actionKey)) {
+    if (["device", "snooze", "status", "priority", "labels", "assign", "type", "plan_status", "agent_run", "agent_switch", "agent_fork", "agent_handoff", "rename", "project", "project_status", "deadline", "trigger_cancel", "trigger_delete", "bucket", "model", "parent", "character"].includes(actionKey)) {
       setActionSearch("");
       setEnteredViaRoot(true);
       setActionMode(actionKey as ActionMode);
@@ -2122,7 +2123,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     const state = useInboxStore.getState();
     if (!targetType) return;
     const path = paletteObjectPath(targetType, target);
-    const viewCommand = targetType === "session" ? getPaletteSessionCommands(target._id).find(command => command.key === actionKey) : undefined;
+    const viewCommand = targetType === "session" && targets.length === 1 ? getPaletteSessionCommands(target._id).find(command => command.key === actionKey) : undefined;
     if (viewCommand) { closePalette(); viewCommand.run(); return; }
     if (actionKey === "open") {
       if (targetType === "session") navigateToSession(target);
@@ -2188,47 +2189,37 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       return;
     }
 
-    // Session actions
+    // Session actions. The single row verbs read targets[0]; every other verb
+    // runs once per target, so a ticked selection acts as one gesture.
     if (targetType === "session") {
       const session = target as InboxSession;
-      if (actionKey === "session_restore") { state.restoreSession(session._id); closePalette(); }
-      else if (actionKey === "session_parent") navigate(`/conversation/${session.parent_conversation_id}`);
-      else if (actionKey === "session_branch") { void copyToClipboard(session.git_branch || "").then(() => toast.success("Branch copied")); closePalette(); }
-      else if (actionKey === "session_files") navigate(filesHref({ localPath: session.project_path || session.git_root }));
-      else if (actionKey === "session_pin") {
-        useInboxStore.getState().pinSession(session._id);
-        toast.success(session.is_pinned ? "Unpinned" : "Pinned");
-        closePalette();
-      } else if (actionKey === "session_favorite") {
-        useInboxStore.getState().toggleFavorite(session._id);
-        toast.success(session.is_favorite ? "Removed from favorites" : "Added to favorites");
-        closePalette();
-      } else if (actionKey === "session_kill") {
-        // The teardown rides the hide transition server-side (dispatch.applyPatches);
+      if (actionKey === "session_parent") { navigate(`/conversation/${session.parent_conversation_id}`); return; }
+      if (actionKey === "session_branch") { void copyToClipboard(session.git_branch || "").then(() => toast.success("Branch copied")); closePalette(); return; }
+      if (actionKey === "session_files") { navigate(filesHref({ localPath: session.project_path || session.git_root })); return; }
+      const each: Record<string, (id: string) => void> = {
+        session_restore: (id) => state.restoreSession(id),
+        // Pin and favorite follow the first row's state, so a mixed selection
+        // ends all pinned (or all unpinned) instead of flipping each row.
+        session_pin: (id) => { if (!!state.sessions[id]?.is_pinned === !!session.is_pinned) state.pinSession(id); },
+        session_favorite: (id) => { if (!!state.sessions[id]?.is_favorite === !!session.is_favorite) state.toggleFavorite(id); },
+        // The teardown rides the hide transition server side (dispatch.applyPatches);
         // the notice hook names any schedules the kill cancels.
-        killWithNotice(session._id);
-        closePalette();
-      } else if (actionKey === "session_stash") {
-        undoableHideSession(session._id, "stash");
-        closePalette();
-      } else if (actionKey === "session_stash_hide") {
-        undoableHideSession(session._id, "stash", { hidden: true });
-        closePalette();
-      } else if (actionKey === "session_unsnooze") {
-        useInboxStore.getState().wakeSnoozedSession(session._id);
-        closePalette();
-      } else if (actionKey === "session_defer") {
-        undoableDeferSession(session._id);
-        closePalette();
-      } else if (actionKey === "session_dormant") {
-        undoableSetSessionRest(session._id, "dormant");
-      } else if (actionKey === "session_done") {
-        undoableSetSessionRest(session._id, "done");
-      } else if (actionKey === "session_needs_input") {
-        undoableSetSessionRest(session._id, "needs_input");
-        closePalette();
-
-      }
+        session_kill: (id) => killWithNotice(id),
+        session_stash: (id) => undoableHideSession(id, "stash"),
+        session_stash_hide: (id) => undoableHideSession(id, "stash", { hidden: true }),
+        session_unsnooze: (id) => state.wakeSnoozedSession(id),
+        session_defer: (id) => undoableDeferSession(id),
+        session_dormant: (id) => undoableSetSessionRest(id, "dormant"),
+        session_done: (id) => undoableSetSessionRest(id, "done"),
+        session_needs_input: (id) => undoableSetSessionRest(id, "needs_input"),
+      };
+      const run = each[actionKey];
+      if (!run) return;
+      for (const t of targets) run(t._id);
+      if (actionKey === "session_pin") toast.success(`${session.is_pinned ? "Unpinned" : "Pinned"}${targets.length > 1 ? ` ${targets.length} sessions` : ""}`);
+      if (actionKey === "session_favorite") toast.success(session.is_favorite ? "Removed from favorites" : "Added to favorites");
+      if (targets.length > 1) useInboxSelection.getState().clear();
+      if (!["session_dormant", "session_done"].includes(actionKey)) closePalette();
       return;
     }
   }, [targets, targetType, closePalette, pinDoc, router, navigate, navigateToSession, killWithNotice, openCreateModal]);
@@ -2249,7 +2240,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     return `${targets.length} ${targetType}s selected`;
   }, [targets, target, targetType, hasTargets]);
 
-  const actions = [...paletteActions(targetType, targets, currentUser?._id, chatOn), ...(targetType === "session" && target ? getPaletteSessionCommands(target._id) : [])];
+  const actions = [...paletteActions(targetType, targets, currentUser?._id, chatOn), ...(targetType === "session" && target && targets.length === 1 ? getPaletteSessionCommands(target._id) : [])];
 
   const rootTaskStatuses = useTeamTaskStatusList(target?.team_id);
   const nestedMatches = query.trim().length < 2 ? [] : actions.flatMap(action => {

@@ -192,8 +192,10 @@ export function isScheduledTaskMessage(rawContent: string | null | undefined): b
 
 // The prompt convex/chat.ts buildAnchorWake hands the anchor session when a
 // teammate mentions it in team chat. Plain text, no wrapper tag — the header
-// line is the wire format.
-export const CHAT_WAKE_HEADER = /^\[codecast team chat — #([^\]\n]+)\]\n/;
+// line is the wire format: `[codecast team chat — #<channel> · team <name>]`,
+// or `— a direct message · team <name>]` in a DM. Older wakes carry no team.
+// Groups: 1 = channel name, 2 = the DM phrase, 3 = team name.
+export const CHAT_WAKE_HEADER = /^\[codecast team chat — (?:#([^\]\n]+?)|(a direct message))(?: · team ([^\]\n]+))?\]\n/;
 
 export function isChatWakePrompt(rawContent: string | null | undefined): boolean {
   return !!rawContent && CHAT_WAKE_HEADER.test(stripInjectionNoise(rawContent));
