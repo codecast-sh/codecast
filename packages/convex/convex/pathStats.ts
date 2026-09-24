@@ -16,6 +16,7 @@
 // in two parallel arrays (Convex caps an object at 1,024 fields and an array
 // at 8,192 values; 180 x 24 + ten years of days stays under it).
 
+import { getUserOrToken } from "./lib/auth";
 import { v } from "convex/values";
 import { internalMutation, mutation } from "./functions";
 import { internal } from "./_generated/api";
@@ -198,9 +199,9 @@ export async function requestPathStats(ctx: any, userId: Id<"users">, paths: str
 }
 
 export const refreshPathStats = mutation({
-  args: { paths: v.array(v.string()), force: v.optional(v.boolean()) },
+  args: { paths: v.array(v.string()), force: v.optional(v.boolean()), api_token: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
+    const userId = await getUserOrToken(ctx, args.api_token);
     if (!userId) return { queued: 0 };
     return { queued: await requestPathStats(ctx, userId, args.paths, !!args.force) };
   },

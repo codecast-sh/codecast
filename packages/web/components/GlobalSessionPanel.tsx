@@ -1970,8 +1970,7 @@ export const SessionCard = memo(function SessionCard({
   // the trigger's own row. The ↳ arrow goes schedule-amber there (child of a
   // trigger, not of a parent session).
   // "role": one of a role's sessions under the role's card (org-roles-run-work
-  // .md R1). The role looks after it, so it is a small row with one gesture of
-  // its own: Put in my inbox.
+  // .md R1): a subagent row whose arrow names the role.
   subRow?: "trigger" | "role";
   /** On a role's own card: how many of its sessions it has put in front of the person directly. */
   escalatedCount?: number;
@@ -2067,10 +2066,6 @@ export const SessionCard = memo(function SessionCard({
   // role's line on a card it escalated. Both read through lib/sessionIdentity.
   const roleAbove = subRow === "role" ? roleLookingAfter(session) : null;
   const escalation = escalationOf(session);
-  const putInMyInbox = () => {
-    const me = useInboxStore.getState().currentUser as { name?: string | null } | null;
-    useInboxStore.getState().putSessionInMyInbox(session._id, `${me?.name?.trim() || "Someone"} put this in their inbox`, Date.now());
-  };
   // Local-first "pending working": a message has been sent but the daemon
   // hasn't confirmed delivery yet (status not active). Reading the durable
   // pendingMessages map directly returns a stable boolean, so only this card
@@ -2441,19 +2436,8 @@ export const SessionCard = memo(function SessionCard({
             </div>
           )}
         </div>
-        {!isForeignSession && (onDismiss || onDefer || onPin || roleAbove) && (
+        {!isForeignSession && (onDismiss || onDefer || onPin) && (
           <div data-sv-fade className={`absolute top-0 bottom-0 right-0 flex items-center gap-1 py-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity pl-8 pr-2 bg-gradient-to-r from-transparent to-sol-bg-alt`}>
-            {roleAbove && (
-              <button
-                type="button"
-                data-role-gesture="put-in-my-inbox"
-                onClick={(e) => { e.stopPropagation(); putInMyInbox(); }}
-                title={`Take this out from under @${roleAbove.handle} and make it a card in your needs input`}
-                className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-sol-violet/15 text-sol-violet border border-sol-violet/35 hover:bg-sol-violet/25 transition-colors whitespace-nowrap"
-              >
-                Put in my inbox
-              </button>
-            )}
             {onDismiss && (
               <button
                 onClick={(e) => { e.stopPropagation(); onDismiss(session._id); }}
@@ -4423,7 +4407,7 @@ function SessionListPanelImpl({
                   onOpen={handleSelect}
                   onOpenSchedule={openScheduleTarget}
                 />
-                {(subMap.get(session._id) ?? []).filter((sub) => showSubagents || sub._id === activeSessionId || !!roleLookingAfter(sub)).map((sub) => (
+                {(subMap.get(session._id) ?? []).filter((sub) => showSubagents || sub._id === activeSessionId).map((sub) => (
                   <SessionCard
                     key={sub._id}
                     session={sub}
@@ -4580,9 +4564,7 @@ function SessionListPanelImpl({
             // The selected subagent always renders — even when subagents are
             // globally hidden or fall past the "+N more" cutoff. The row being
             // viewed must never vanish from the list.
-            // A role's sessions are not helpers of one turn: they are the work
-            // the role looks after, so the subagent toggle never hides them.
-            const subs = showSubagents ? allSubs : allSubs.filter((sub) => sub._id === activeSessionId || !!roleLookingAfter(sub));
+            const subs = showSubagents ? allSubs : allSubs.filter((sub) => sub._id === activeSessionId);
             const subsExpanded = !!expandedSubSessions[session._id];
             let visibleSubs = subs.length <= 2 || subsExpanded ? subs : subs.slice(0, 2);
             if (visibleSubs.length < subs.length && !visibleSubs.some((sub) => sub._id === activeSessionId)) {

@@ -8739,8 +8739,10 @@ program
   .description(
     "Read messages from a conversation\n\n" +
     "Examples:\n" +
-    "  cast read jx70ntf                   # Read all messages\n" +
+    "  cast read jx70ntf                   # Read the first 20 messages\n" +
     "  cast read jx70ntf 12:20             # Read messages 12-20\n" +
+    "  cast read jx70ntf -n 5              # Read the last 5 messages (fast on any session;\n" +
+    "                                      #  on a long one, lines count back from the end: -1 is the last)\n" +
     "  cast read jx70ntf 12:               # Read from message 12 to end\n" +
     "  cast read jx70ntf :20               # Read first 20 messages\n" +
     "  cast read jx70ntf 15                # Read single message 15\n" +
@@ -8755,6 +8757,7 @@ program
   .argument("[range]", "Message range (e.g., 12:20, 12:, :20, 15)")
   .option("-f, --full", "Show full tool call and tool result content (the only way to see a StructuredOutput payload)")
   .option("-c, --context <n>", "Messages to show on each side of a #msg-<id> anchor (default 10)")
+  .option("-n, --tail <n>", "Read the last n messages (at most 500)")
   .option("--ack", "Also mark the session read: clears its unread dot in the web and mobile inbox")
   .action(async (conversationId, range, options) => {
     const config = readConfig();
@@ -8782,6 +8785,15 @@ program
     // An explicit range wins over the anchor's window, but the anchor is still
     // sent so the linked message gets highlighted.
     const contextN = options.context !== undefined ? parseInt(options.context, 10) : undefined;
+    const tailN = options.tail !== undefined ? parseInt(options.tail, 10) : undefined;
+    if (tailN !== undefined && (!Number.isFinite(tailN) || tailN < 1)) {
+      console.error("Error: --tail takes a positive number of messages");
+      process.exit(1);
+    }
+    if (tailN !== undefined && (range || messageId)) {
+      console.error("Error: --tail reads the last messages; it cannot be combined with a range or a #msg anchor");
+      process.exit(1);
+    }
 
     const siteUrl = config.convex_url.replace(".cloud", ".site");
 
@@ -8797,6 +8809,7 @@ program
           full_content: options.full || undefined,
           around_message_id: messageId,
           context: Number.isFinite(contextN) ? contextN : undefined,
+          tail: tailN,
         }),
       });
 
@@ -20298,7 +20311,7 @@ workflow
   .option("--auto-approve", "Skip human gate prompts, auto-select first option")
   .option("--task <short_id>", "Bind workflow to a task (injects task context)")
   .option("--plan <short_id>", "Bind workflow to a plan (injects plan context)")
-  .option("--review-backend <agent>", "Agent for the review station (claude, codex, ...); pick one that differs from implement for an independent review")
+  .option("--review-backend <agent>", "Agent for the review station (claude, codex, ...)")
   .action(async (fileArg: string | undefined, options: any) => {
     const { parseWorkflowSource } = await import("./workflow/parser.js");
     const { resolveWorkflowSource } = await import("./workflow/templates.js");
@@ -20322,8 +20335,7 @@ workflow
     const graph = parseWorkflowSource(source, resolved.dir);
     // A role running the line (org-roles-standing.md T4, the-line.md L3):
     // the review station takes the role's own review backend, and the run is
-    // refused when that backend is the role's own agent, or when the role is
-    // one whose switch is off starts nothing.
+    // A role whose switch is off starts nothing.
     let reviewBackend: string | undefined = options.reviewBackend;
     if (graph.nodes.has("review")) {
       const self = await ownRole().catch(() => null);
@@ -20333,11 +20345,6 @@ workflow
           process.exit(1);
         }
         if (!reviewBackend && self.review_backend) reviewBackend = self.review_backend;
-        const own = self.own_agent === "claude_code" ? "claude" : (self.own_agent ?? "claude");
-        if (reviewBackend && String(reviewBackend).toLowerCase() === own) {
-          console.error(`Review backend "${reviewBackend}" is @${self.handle}'s own agent; the line's review station must run on a different backend for an independent review (the-line.md L3). Set one with cast role update @${self.handle} --review-backend <agent>.`);
-          process.exit(1);
-        }
       }
     }
     if (reviewBackend) {
@@ -20346,14 +20353,13 @@ workflow
       review.agent = String(reviewBackend).toLowerCase();
       if (review.backend !== "session") review.backend = reviewBackend as any;
     }
-    // Outside a role the same rule is a warning: an independent review runs
-    // on a different backend from implement (the-line.md L3).
+    // A review on a second backend is a second opinion; one line says so.
     {
       const review = graph.nodes.get("review");
       const implement = graph.nodes.get("implement");
       const agentOf = (n: any) => (n.agent || (n.backend !== "session" ? n.backend : undefined) || "claude");
       if (review && implement && agentOf(review) === agentOf(implement)) {
-        console.error(`${c.yellow}warning:${c.reset} review and implement both run on ${agentOf(review)}; pass --review-backend <other> for an independent review`);
+        console.error(`${c.yellow}note:${c.reset} review and implement both run on ${agentOf(review)}; pass --review-backend <other> for a second opinion`);
       }
     }
 

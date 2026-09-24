@@ -21,3 +21,15 @@ export async function convexClient(): Promise<{ client: any; token: string; api:
   const apiMod: any = await import("../../../convex/convex/_generated/api.js" as any);
   return { client: new ConvexHttpClient(cfg.convex_url), token, api: apiMod.api };
 }
+
+/**
+ * A new token bound to `deviceId`, minted by a bound credential: this
+ * machine's own unless `apiToken` (a presentation, `<secret>.<its device>`)
+ * names another. Host provisioning mints the host's token this way, and a
+ * machine whose device id moved mints its own with the token it carried over.
+ */
+export async function mintTokenForDevice(deviceId: string, label: string, apiToken?: string): Promise<string> {
+  const { client, token, api } = await convexClient();
+  const minted = await client.mutation(api.apiTokens.mintForDevice, { api_token: apiToken ?? token, device_id: deviceId, label });
+  return minted.token as string;
+}
