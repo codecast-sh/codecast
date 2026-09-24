@@ -100,7 +100,7 @@ export async function provisionMacHost(host: RemoteHost, opts: { skipDaemon?: bo
   if (!agents.includes("AGENT-CLIS-OK")) throw new Error(`Agent setup did not complete: ${agents.slice(-600)}`);
   log(parseAgentCliReport(agents));
   log("connecting Codecast and syncing agent configuration…");
-  pushCodecastConfig(host);
+  await pushCodecastConfig(host);
   const localGitRoot = cwdGitRoot();
   await readyHostHome(host, { onProgress: log, force: true, localGitRoot, repoPath: localGitRoot ? remoteRepoPath(host, localGitRoot) : undefined, gitIdentity: opts.gitIdentity });
   if (!opts.skipDaemon) {

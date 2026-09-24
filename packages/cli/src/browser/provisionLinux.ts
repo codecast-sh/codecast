@@ -37,6 +37,8 @@ import { summarizeHostTools } from "../cloud/hostTools.js";
 import { agentCliInstallScript, parseAgentCliReport } from "./provisionAgents.js";
 import { remoteExec, scpTo } from "./remote.js";
 import { isDeviceBoundToken, secretFromStored } from "../bearerToken.js";
+import { convexClient } from "../remote/convexClient.js";
+import { readHostDeviceId } from "../cloud/prepare.js";
 import { defaultConfigDir } from "../config/configDir.js";
 import { cloudIdleProbeScript } from "../cloud/idleProbe.js";
 
@@ -511,25 +513,63 @@ export function restartHostDaemon(host: RemoteHost, opts: { force?: boolean } = 
   return { pid: out[1] ?? "?" };
 }
 
-/**
- * The box's codecast identity: the same account as this machine, with the
- * auth token DECRYPTED — `enc:` tokens are bound to this machine's hardware
- * key and would be unreadable there. The file is written 0600 over ssh stdin
- * so the secret never sits in argv or a local temp file.
- *
- * A token the server bound to this machine cannot be copied: the box would
- * present its own device id and every call from it would be refused. The box
- * must mint its own, so this refuses with the command that does that.
- */
-export function pushCodecastConfig(host: RemoteHost): void {
-  const cfgPath = path.join(defaultConfigDir(), "config.json");
-  const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
-  const token = typeof cfg.auth_token === "string" ? secretFromStored(cfg.auth_token) : cfg.auth_token;
-  if (typeof token === "string" && isDeviceBoundToken(token)) {
-    throw new Error(
-      "This machine's Codecast token is bound to this machine and cannot be copied to the host. " +
-        `Sign the host in on its own: ssh ${host.user}@${host.address} cast auth`,
+/** The seams `pushCodecastConfig` reaches the world through, injectable for tests. */
+export interface PushCodecastConfigDeps {
+  /** This machine's parsed config.json. */
+  localConfig: () => Record<string, any>;
+  /** The host's own codecast device id, read over SSH (its machine key exists once cast is installed). */
+  hostDeviceId: (host: RemoteHost) => string | undefined;
+  /** Mint a token bound to the host's device, authenticated by this machine's own credential. */
+  mintForHost: (deviceId: string, label: string) => Promise<string>;
+  /** Write the config file on the host. */
+  ship: (host: RemoteHost, remoteCfg: Record<string, unknown>) => void;
+}
+
+const defaultPushDeps: PushCodecastConfigDeps = {
+  localConfig: () => JSON.parse(fs.readFileSync(path.join(defaultConfigDir(), "config.json"), "utf-8")),
+  hostDeviceId: (host) => readHostDeviceId(host),
+  mintForHost: async (deviceId, label) => {
+    const { client, token, api } = await convexClient();
+    const minted = await client.mutation(api.apiTokens.mintForDevice, { api_token: token, device_id: deviceId, label });
+    return minted.token as string;
+  },
+  ship: (host, remoteCfg) => {
+    execFileSync(
+      "ssh",
+      ["-i", host.keyPath, "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=accept-new",
+       "-o", "BatchMode=yes", `${host.user}@${host.address}`,
+       "umask 077; mkdir -p ~/.codecast; cat > ~/.codecast/config.json"],
+      { input: JSON.stringify(remoteCfg, null, 2), timeout: 30_000 },
     );
+  },
+};
+
+/**
+ * The box's codecast identity: the same account as this machine. The file is
+ * written 0600 over ssh stdin so the secret never sits in argv or a local
+ * temp file.
+ *
+ * Which secret goes in depends on this machine's token. An unbound token is
+ * copied DECRYPTED, exactly as always: `enc:` tokens are sealed to this
+ * machine's hardware key and would be unreadable there. A token the server
+ * bound to this machine cannot be copied (the box would present its own
+ * device id and be refused), so the box gets a token of its own: this
+ * machine's credential mints one bound to the box's device, named after the
+ * host so it is visible and revocable in the token list.
+ */
+export async function pushCodecastConfig(host: RemoteHost, deps: PushCodecastConfigDeps = defaultPushDeps): Promise<void> {
+  const cfg = deps.localConfig();
+  const secret = typeof cfg.auth_token === "string" ? secretFromStored(cfg.auth_token) : cfg.auth_token;
+  let token = secret;
+  if (typeof secret === "string" && isDeviceBoundToken(secret)) {
+    const hostDevice = deps.hostDeviceId(host);
+    if (!hostDevice) {
+      throw new Error(
+        "This machine's Codecast token is bound to this machine, and the host did not report a device id to mint one for. " +
+          `Sign the host in on its own: ssh ${host.user}@${host.address} cast auth`,
+      );
+    }
+    token = await deps.mintForHost(hostDevice, `${host.user}@${host.address}`);
   }
   const remoteCfg = {
     user_id: cfg.user_id,
@@ -541,13 +581,7 @@ export function pushCodecastConfig(host: RemoteHost): void {
     created_at: cfg.created_at,
     updated_at: new Date().toISOString(),
   };
-  execFileSync(
-    "ssh",
-    ["-i", host.keyPath, "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=accept-new",
-     "-o", "BatchMode=yes", `${host.user}@${host.address}`,
-     "umask 077; mkdir -p ~/.codecast; cat > ~/.codecast/config.json"],
-    { input: JSON.stringify(remoteCfg, null, 2), timeout: 30_000 },
-  );
+  deps.ship(host, remoteCfg);
 }
 
 export interface ProvisionReport {
@@ -605,7 +639,7 @@ export async function provisionLinuxHost(
   onProgress(`  ${agents}`);
 
   onProgress("pushing codecast identity + claude credential…");
-  pushCodecastConfig(host);
+  await pushCodecastConfig(host);
   const cred = copyCredentialToRemote(host);
   if (!cred.pushed) onProgress(`  (claude credential not pushed: ${cred.reason} — sessions there will need a healthy local login)`);
 

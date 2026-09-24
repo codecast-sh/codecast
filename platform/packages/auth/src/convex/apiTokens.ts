@@ -346,6 +346,38 @@ export function createApiTokenDefinitions<Extras extends Record<string, unknown>
   // anyone; the second was a bearer credential oracle. Every real path goes
   // through the authenticated mutations above or `verifyApiToken` in process.
 
+  // A token for another machine, minted by the account's own bearer. This is
+  // how a remote host (a cloud Mac, a Linux agent box) gets a credential of
+  // its own instead of a copy of the laptop's: the laptop authenticates with
+  // its token, names the host's device, and hands the host what comes back.
+  // The result is bound to that device, so it works from the host and from
+  // nowhere else, and it is named so it shows in the token list and can be
+  // revoked there like any other. `verifyApiToken` decides who may mint: a
+  // setup token, an expired token, or a bound token presented without its own
+  // device is refused before anything is written.
+  const mintForDevice = {
+    args: {
+      api_token: v.string(),
+      device_id: v.string(),
+      label: v.string(),
+    },
+    handler: async (
+      ctx: any,
+      args: { api_token: string; device_id: string; label: string },
+    ): Promise<{ token: string }> => {
+      const auth = await verifyApiToken(ctx, args.api_token, false, tables);
+      if (!auth) {
+        throw new Error("Unauthorized: invalid or expired token");
+      }
+      if (!args.device_id.trim()) {
+        throw new Error("device_id is required");
+      }
+      const name = `Host - ${args.label} - ${new Date().toISOString().split("T")[0]}`;
+      const token = await mintBearerToken(ctx, auth.userId, name, args.device_id, tables);
+      return { token };
+    },
+  };
+
   const listTokens = {
     args: {},
     handler: async (ctx: any): Promise<ApiTokenSummary[]> => {
@@ -445,7 +477,7 @@ export function createApiTokenDefinitions<Extras extends Record<string, unknown>
   };
 
   return {
-    mutations: { createToken, createSetupToken, revokeToken, renameToken },
+    mutations: { createToken, createSetupToken, revokeToken, renameToken, mintForDevice },
     queries: { listTokens },
     internalMutations: { exchangeSetupToken },
     internalQueries: { deviceBindingAllows: deviceBindingAllowsQuery },
@@ -461,7 +493,7 @@ export function createApiTokenDefinitions<Extras extends Record<string, unknown>
  * exist. Prefer `createApiTokenDefinitions` above.
  *
  *   export const { createToken, createSetupToken, listTokens, revokeToken,
- *     renameToken, exchangeSetupToken, deviceBindingAllows } = makeApiTokenFunctions({...});
+ *     renameToken, mintForDevice, exchangeSetupToken, deviceBindingAllows } = makeApiTokenFunctions({...});
  */
 export function makeApiTokenFunctions<Extras extends Record<string, unknown> = Record<string, unknown>>(
   params: ApiTokenFunctionsParams<Extras>,
@@ -475,6 +507,7 @@ export function makeApiTokenFunctions<Extras extends Record<string, unknown> = R
     listTokens: query(defs.queries.listTokens),
     revokeToken: mutation(defs.mutations.revokeToken),
     renameToken: mutation(defs.mutations.renameToken),
+    mintForDevice: mutation(defs.mutations.mintForDevice),
     exchangeSetupToken: internalMutation(defs.internalMutations.exchangeSetupToken),
     deviceBindingAllows: internalQuery(defs.internalQueries.deviceBindingAllows),
   };

@@ -234,6 +234,57 @@ describe("minting binds only when the machine names itself", () => {
   });
 });
 
+describe("minting a token for another machine (a remote host)", () => {
+  const HOST_DEVICE = "device-host";
+  const mint = (t: Record<string, any[]>, api_token: string, device_id = HOST_DEVICE, label = "m1@10.0.0.7") =>
+    createApiTokenDefinitions().mutations.mintForDevice.handler(ctx(t), { api_token, device_id, label });
+
+  test("a bound laptop token presented from its machine mints a token bound to the host", async () => {
+    const t = await tables();
+    const { token } = await mint(t, from(BOUND, THIS_DEVICE));
+    expect(isDeviceBoundToken(token)).toBe(true);
+    const row = t.api_tokens.find((r: any) => r.device_id === HOST_DEVICE);
+    expect(row).toMatchObject({ user_id: USER, device_id: HOST_DEVICE });
+    expect(row.name).toMatch(/^Host - m1@10\.0\.0\.7 - \d{4}-\d{2}-\d{2}$/);
+    // The host's token works from the host and from nowhere else, the laptop included.
+    expect(await direct(t, from(token, HOST_DEVICE))).toEqual({ status: 200, userId: USER });
+    expect(await direct(t, from(token, THIS_DEVICE))).toEqual({ status: 401 });
+    expect(await direct(t, token)).toEqual({ status: 401 });
+  });
+
+  test("an unbound laptop token may mint too", async () => {
+    const t = await tables();
+    const { token } = await mint(t, LEGACY);
+    expect(await direct(t, from(token, HOST_DEVICE))).toEqual({ status: 200, userId: USER });
+  });
+
+  test("a bound laptop token without its device, or from another machine, is refused and writes nothing", async () => {
+    for (const presented of [BOUND, from(BOUND, OTHER_DEVICE)]) {
+      const t = await tables();
+      const c = ctx(t);
+      await expect(
+        createApiTokenDefinitions().mutations.mintForDevice.handler(c, { api_token: presented, device_id: HOST_DEVICE, label: "x" }),
+      ).rejects.toThrow("Unauthorized");
+      expect(c.db._inserted).toEqual([]);
+    }
+  });
+
+  test("an expired token and a setup token are refused", async () => {
+    await expect(mint(await tables(), from(EXPIRED, THIS_DEVICE))).rejects.toThrow("Unauthorized");
+    const SETUP = "setup-voucher";
+    const t = {
+      users: [{ _id: USER }],
+      api_tokens: [{ _id: "tok_setup", user_id: USER, token_hash: await hashToken(SETUP), name: "setup-1", created_at: 1, last_used_at: 1, expires_at: Date.now() + 60_000 }] as any[],
+    };
+    await expect(mint(t, SETUP)).rejects.toThrow("Unauthorized");
+    expect(t.api_tokens.length).toBe(1);
+  });
+
+  test("a blank device is refused", async () => {
+    await expect(mint(await tables(), LEGACY, "  ")).rejects.toThrow("device_id");
+  });
+});
+
 describe("the wire grammar", () => {
   test("a presentation splits back into its secret and device", () => {
     expect(splitPresentedToken(presentToken("bound_abc", "dev1"))).toEqual({ secret: "bound_abc", deviceId: "dev1" });
