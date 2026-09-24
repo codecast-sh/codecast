@@ -7,10 +7,12 @@ REPO_ROOT="$(pwd)"
 PREVIEW_ONLY=false
 FORCE_CLI=false
 SKIP_CLI_CHECKS=false
+FORCE_DESKTOP=false
 for arg in "$@"; do
   case "$arg" in
     --preview) PREVIEW_ONLY=true ;;
     --force) FORCE_CLI=true ;;
+    --desktop) FORCE_DESKTOP=true ;;
     # Forward the CLI release's pre-deploy typecheck+test override (see
     # packages/cli/scripts/deploy.sh --skip-checks). Discouraged: only when the
     # only failures are known-unrelated/flaky and verified out-of-band.
@@ -68,64 +70,88 @@ echo ""
 echo "   ✓ Railway build simulation passed"
 echo ""
 
-# 1. Deploy Convex functions
-# THE deploy path (CLAUDE.md): raw `npx convex deploy` is banned. The repo-root
-# .env.local carries CONVEX_DEPLOYMENT=anonymous, which the convex CLI picks up
-# and uses INSTEAD of self-hosted prod, so a "successful" deploy here reached
-# nothing. deploy.sh moves that file aside and refuses a tree behind origin/main
-# (whole-tree snapshots delete newer prod functions).
+# One release, in the order that keeps every part working with every other:
+#   1. Convex, before anything that calls new functions ships
+#   2. push: Railway builds web from main
+#   3. CLI, cut in CI; with --force, the fleet floor, then wait for Macs to run it
+#   4. mobile OTA
+#   5. desktop, published without a floor; the floor goes up only once the
+#      fleet runs a CLI that installs the app safely. A desktop floor ahead of
+#      the CLI made old daemons do the install and left apps "damaged"
+#      (2026-09-24).
+#   6. wait until Railway serves the final commit
+# Flags: --force forces the new CLI on every daemon; --desktop releases the
+# desktop app even with no change under packages/electron; --preview sends
+# the mobile OTA to the preview branch; --skip-checks is accepted for
+# compatibility (CI runs the checks).
+
+# 1. Convex. THE deploy path (CLAUDE.md): it refuses a tree behind origin/main,
+# whose whole-tree snapshot would delete newer prod functions.
 echo "1. Deploying Convex functions..."
 ./packages/convex/deploy.sh
 echo "   ✓ Convex deployed"
 echo ""
 
-# 2. Check if CLI needs release
-echo "2. Checking CLI for changes..."
-cd packages/cli
+# 2. Push: web follows main on Railway.
+echo "2. Pushing main..."
+git push origin main
+echo ""
 
-CURRENT_VERSION=$(grep '"version"' package.json | head -1 | sed 's/.*"version": "\(.*\)".*/\1/')
-echo "   Current CLI version: $CURRENT_VERSION"
-
-REMOTE_VERSION=$(curl -s https://dl.codecast.sh/latest.json | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' 2>/dev/null || echo "")
-echo "   Deployed CLI version: ${REMOTE_VERSION:-unknown}"
-
-LAST_CLI_MARKER="../../.last-cli-deploy"
-LAST_CLI_HASH=$(git log -1 --format=%H -- .)
-PREV_CLI_HASH=""
-[[ -f "$LAST_CLI_MARKER" ]] && PREV_CLI_HASH=$(cat "$LAST_CLI_MARKER")
-
-CLI_NEEDS_DEPLOY=false
-if $FORCE_CLI; then
-  echo "   --force passed - deploying CLI unconditionally..."
-  CLI_NEEDS_DEPLOY=true
-elif [[ -n "$REMOTE_VERSION" && "$CURRENT_VERSION" != "$REMOTE_VERSION" ]]; then
-  echo "   Version mismatch ($CURRENT_VERSION local vs $REMOTE_VERSION remote) - deploying..."
-  CLI_NEEDS_DEPLOY=true
-elif [[ "$LAST_CLI_HASH" != "$PREV_CLI_HASH" ]]; then
-  echo "   Code changed since last deploy - deploying..."
-  CLI_NEEDS_DEPLOY=true
+# 3. CLI. The published build names its source commit; a change under the
+# CLI's inputs since then needs a release. The finalize job's version bump
+# touches only package.json, so that file is left out of the comparison.
+echo "3. Checking CLI for changes..."
+PUBLISHED_SRC=$(curl -fsS https://dl.codecast.sh/latest.json | sed -n 's/.*"sourceCommit"[[:space:]]*:[[:space:]]*"\([0-9a-f]*\)".*/\1/p')
+CLI_NEEDS_RELEASE=true
+if [[ -n "$PUBLISHED_SRC" ]] && git cat-file -e "$PUBLISHED_SRC^{commit}" 2>/dev/null \
+  && git diff --quiet "$PUBLISHED_SRC" HEAD -- packages/cli ':!packages/cli/package.json' packages/shared platform; then
+  CLI_NEEDS_RELEASE=false
 fi
-
-if $CLI_NEEDS_DEPLOY; then
+CLI_VERSION=""
+if $CLI_NEEDS_RELEASE; then
+  HEAD_SHA=$(git rev-parse HEAD)
+  echo "   Cutting the CLI release in CI from ${HEAD_SHA:0:9}..."
+  gh workflow run cut-cli-release.yml -R codecast-sh/codecast
+  # The finalize job publishes latest.json with this commit as its source.
+  for _ in $(seq 1 120); do
+    sleep 30
+    LATEST=$(curl -fsS https://dl.codecast.sh/latest.json || true)
+    if echo "$LATEST" | grep -q "\"sourceCommit\": *\"$HEAD_SHA\""; then
+      CLI_VERSION=$(echo "$LATEST" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+      break
+    fi
+    FAILED=$(gh run list -R codecast-sh/codecast --workflow cut-cli-release.yml -L 1 --json conclusion -q '.[0].conclusion')
+    [[ "$FAILED" == "failure" ]] && { echo "   ✗ CLI release failed in CI: gh run list --workflow cut-cli-release.yml"; exit 1; }
+  done
+  [[ -z "$CLI_VERSION" ]] && { echo "   ✗ CLI release did not publish within an hour"; exit 1; }
+  echo "   ✓ CLI v$CLI_VERSION published"
+  git pull --rebase --autostash origin main  # the finalize job's version bump
   if $FORCE_CLI; then
-    ./scripts/deploy.sh --force $SKIP_CHECKS_FLAG
-  else
-    ./scripts/deploy.sh $SKIP_CHECKS_FLAG
+    cast force-update "$CLI_VERSION"
   fi
-  CURRENT_VERSION=$(grep '"version"' package.json | head -1 | sed 's/.*"version": "\(.*\)".*/\1/')
-  # Re-read hash AFTER deploy.sh (which may have committed a version bump)
-  echo "$(git log -1 --format=%H -- .)" > "$LAST_CLI_MARKER"
-  echo "   ✓ CLI v$CURRENT_VERSION deployed"
 else
-  echo "   CLI v$CURRENT_VERSION already deployed, no code changes - skipping"
+  echo "   CLI unchanged since the published build - skipping"
 fi
-cd ../..
 echo ""
 
-# 3. Push to git (triggers Railway deploy)
-echo "3. Pushing to git (triggers Railway auto-deploy)..."
-git push origin main 2>/dev/null && echo "   ✓ Pushed to main" || echo "   Already up to date"
-echo ""
+# Wait until most Macs seen in the last 30 minutes run at least $1, for up to
+# $2 minutes. True when they do.
+await_fleet() {
+  local version="$1" minutes="$2" out total current
+  for _ in $(seq 1 "$minutes"); do
+    out=$(./packages/convex/run.sh devices:fleetAdoption "{\"version\":\"$version\"}" 2>/dev/null | tr -d "\n")
+    total=$(echo "$out" | sed -n 's/.*"total": *\([0-9]*\).*/\1/p')
+    current=$(echo "$out" | sed -n 's/.*"current": *\([0-9]*\).*/\1/p')
+    if [[ -n "$total" && "$total" -gt 0 && $((current * 10)) -ge $((total * 9)) ]]; then
+      echo "   ✓ $current of $total Macs run CLI v$version"
+      return 0
+    fi
+    echo "   ${current:-?} of ${total:-?} Macs run CLI v$version; waiting..."
+    sleep 60
+  done
+  echo "   Behind: $out"
+  return 1
+}
 
 # 4. Mobile OTA update
 echo "4. Pushing mobile OTA update..."
@@ -162,108 +188,40 @@ else
 fi
 echo ""
 
-# 5. Desktop app (Electron) - auto-bump, build, sign, and deploy when changed
+
+# 5. Desktop. A change under packages/electron since the last version bump
+# needs a release. release.sh builds, notarizes and publishes; the floor waits
+# for the fleet's CLI (see the top of this file).
 echo "5. Checking desktop app for changes..."
-LAST_DESKTOP_UPDATE=$(git log -1 --format=%H -- packages/electron/)
-LAST_DESKTOP_MARKER=".last-desktop-deploy"
-
-if [[ -f "$LAST_DESKTOP_MARKER" ]] && [[ "$(cat "$LAST_DESKTOP_MARKER")" == "$LAST_DESKTOP_UPDATE" ]]; then
-  echo "   No desktop changes since last deploy - skipping"
-else
-  cd packages/electron
-  CURRENT_DESKTOP_VERSION=$(node -p "require('./package.json').version")
-  echo "   Desktop changes detected (current: v$CURRENT_DESKTOP_VERSION)"
-
-  # Auto-bump patch version so electron-updater detects the new release
-  IFS='.' read -r D_MAJOR D_MINOR D_PATCH <<< "$CURRENT_DESKTOP_VERSION"
-  NEW_D_PATCH=$((D_PATCH + 1))
-  NEW_DESKTOP_VERSION="$D_MAJOR.$D_MINOR.$NEW_D_PATCH"
-  echo "   Auto-bumping version: $CURRENT_DESKTOP_VERSION -> $NEW_DESKTOP_VERSION"
-  sed -i '' "s/\"version\": \"$CURRENT_DESKTOP_VERSION\"/\"version\": \"$NEW_DESKTOP_VERSION\"/" package.json
-  git add package.json
-  git commit -m "chore(electron): bump version to $NEW_DESKTOP_VERSION"
-  git push origin main 2>/dev/null || true
-
-  echo "   Building signed desktop app..."
-  # DMG-step environment hardening (python shim, stale mounts, PATH order)
-  # lives in the shared helper — release.sh sources the same one.
-  source "$REPO_ROOT/scripts/dmg-build-env.sh"
-  # Invoke electron-builder directly (same `electron-builder -m` the build
-  # script runs) to keep this PATH exactly as set.
-  PATH="$DMG_BUILD_PATH" NOTARIZE_KEYCHAIN_PROFILE=codecast ./node_modules/.bin/electron-builder -m
-
-  ELECTRON_VERSION=$(node -p "require('./package.json').version")
-  DMG_FILE=$(find dist -name "*.dmg" -maxdepth 1 -newer dist/mac-arm64 | head -1)
-  if [ -z "$DMG_FILE" ]; then
-    echo "   ERROR: No DMG found in dist/"
-    cd ../..
-    exit 1
-  fi
-  DMG_NAME="Codecast-${ELECTRON_VERSION}-arm64.dmg"
-
-  echo "   Uploading to R2..."
-  # Versioned filenames never change content, so cache them hard at the Cloudflare edge.
-  IMMUTABLE_CC="public, max-age=31536000, immutable"
-
-  # desktop/ prefix, matching where the zip + blockmap + latest-mac.yml go below.
-  # This used to write to the bucket ROOT while latest-mac.yml (which resolves
-  # its file list relative to the manifest) expected desktop/ -- so the DMG the
-  # site linked to at root never existed and /download/mac 404'd for every
-  # release, invisibly, because auto-update reads the manifest instead.
-  npx wrangler r2 object put "codecast/desktop/$DMG_NAME" --file "$DMG_FILE" --remote \
-    --content-type "application/x-apple-diskimage" --cache-control "$IMMUTABLE_CC"
-
-  ZIP_FILE=$(find dist -name "*-mac.zip" -maxdepth 1 -newer dist/mac-arm64 | head -1)
-  YML_FILE="dist/latest-mac.yml"
-  if [ -n "$ZIP_FILE" ] && [ -f "$YML_FILE" ]; then
-    ZIP_NAME=$(basename "$ZIP_FILE")
-    npx wrangler r2 object put "codecast/desktop/$ZIP_NAME" --file "$ZIP_FILE" --remote \
-      --content-type "application/zip" --cache-control "$IMMUTABLE_CC"
-
-    # The zip blockmap is what lets electron-updater do differential (delta) downloads --
-    # without it every update pulls the full zip instead of just the changed blocks.
-    ZIP_BLOCKMAP="$ZIP_FILE.blockmap"
-    if [ -f "$ZIP_BLOCKMAP" ]; then
-      npx wrangler r2 object put "codecast/desktop/$(basename "$ZIP_BLOCKMAP")" --file "$ZIP_BLOCKMAP" --remote \
-        --content-type "application/octet-stream" --cache-control "$IMMUTABLE_CC"
-    else
-      echo "   WARNING: $ZIP_BLOCKMAP not found -- delta updates disabled for this release"
-    fi
-
-    # The manifest changes every release and is polled to detect updates, so it must never
-    # be edge-cached or clients would keep seeing the old version.
-    npx wrangler r2 object put "codecast/desktop/latest-mac.yml" --file "$YML_FILE" --remote \
-      --content-type "text/yaml" --cache-control "no-cache"
-    echo "   ✓ Auto-update artifacts uploaded (desktop/$ZIP_NAME + blockmap + latest-mac.yml)"
+DESKTOP_BASE=$(git log -1 --format=%H -G'"version":' -- packages/electron/package.json)
+if $FORCE_DESKTOP || ! git diff --quiet "$DESKTOP_BASE" HEAD -- packages/electron ':!packages/electron/package.json'; then
+  ./packages/electron/scripts/release.sh patch --no-git --no-floor
+  DESKTOP_VERSION=$(node -p "require('./packages/electron/package.json').version")
+  git add packages/electron/package.json packages/web/server/index.ts
+  git commit -m "chore(electron): release desktop $DESKTOP_VERSION"
+  git push origin main
+  FLOOR_CLI="${CLI_VERSION:-$(curl -fsS https://dl.codecast.sh/latest.json | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)}"
+  if await_fleet "$FLOOR_CLI" 30; then
+    cast desktop-force-update "$DESKTOP_VERSION"
+    echo "   ✓ Desktop v$DESKTOP_VERSION published; fleet floor set"
   else
-    echo "   WARNING: Auto-update artifacts not found, uploading manual zip fallback"
-    ditto -c -k --keepParent dist/mac-arm64/Codecast.app /tmp/Codecast-mac-arm64.zip
-    npx wrangler r2 object put codecast/Codecast-mac-arm64.zip --file /tmp/Codecast-mac-arm64.zip --remote \
-      --content-type "application/zip" --cache-control "$IMMUTABLE_CC"
+    echo "   ! Desktop v$DESKTOP_VERSION published, floor NOT set: too few Macs run CLI v$FLOOR_CLI."
+    echo "     Set it once they do: cast desktop-force-update $DESKTOP_VERSION"
   fi
-  cd ../..
-  echo "$LAST_DESKTOP_UPDATE" > "$LAST_DESKTOP_MARKER"
-
-  SERVER_FILE="packages/web/server/index.ts"
-  if [ -f "$SERVER_FILE" ]; then
-    sed -i '' "s/const LATEST_DESKTOP_VERSION = \".*\"/const LATEST_DESKTOP_VERSION = \"$ELECTRON_VERSION\"/" "$SERVER_FILE"
-    sed -i '' "s|const MAC_DMG_URL = \"https://dl.codecast.sh/\(desktop/\)\{0,1\}Codecast-.*-arm64.dmg\"|const MAC_DMG_URL = \"https://dl.codecast.sh/desktop/Codecast-${ELECTRON_VERSION}-arm64.dmg\"|" "$SERVER_FILE"
-    sed -i '' "s/const MAC_DMG_VERSION = \".*\"/const MAC_DMG_VERSION = \"$ELECTRON_VERSION\"/" "$SERVER_FILE"
-  fi
-  echo "   ✓ Desktop app v$ELECTRON_VERSION deployed to dl.codecast.sh/$DMG_NAME"
+else
+  echo "   Desktop unchanged since v$(node -p "require('./packages/electron/package.json').version") - skipping"
 fi
 echo ""
 
+# 6. Railway serves main once its deploy of the final commit succeeds.
+echo "6. Waiting for Railway to serve $(git rev-parse --short HEAD)..."
+FINAL_SHA=$(git rev-parse HEAD)
+for _ in $(seq 1 40); do
+  STATE=$(gh api "repos/codecast-sh/codecast/deployments?sha=$FINAL_SHA" --jq '.[0].id' 2>/dev/null \
+    | xargs -I{} gh api "repos/codecast-sh/codecast/deployments/{}/statuses" --jq '.[0].state' 2>/dev/null)
+  [[ "$STATE" == "success" ]] && { echo "   ✓ Web live"; break; }
+  [[ "$STATE" == "failure" || "$STATE" == "error" ]] && { echo "   ✗ Railway deploy $STATE"; exit 1; }
+  sleep 30
+done
+echo ""
 echo "=== Deployment Complete ==="
-echo ""
-CONVEX_DISPLAY_URL="${CONVEX_SELF_HOSTED_URL:-self-hosted}"
-echo "Deployed:"
-echo "  - Convex:  $CONVEX_DISPLAY_URL"
-echo "  - CLI:     https://dl.codecast.sh/latest.json"
-echo "  - Web:     https://codecast.sh (Railway auto-deploys on push)"
-echo "  - Mobile:  OTA via EAS Update"
-echo "  - Desktop: dl.codecast.sh/Codecast-<version>-arm64.dmg (if deployed)"
-echo ""
-echo "Tailing Railway build logs (Ctrl+C to stop)..."
-echo ""
-exec railway logs --build --lines 50

@@ -23,13 +23,17 @@ R2_BUCKET="codecast"
 # the web download pointer uncommitted. For a shared checkout where the web
 # server file carries someone else's in-flight edits, or a worktree whose
 # push must be one controlled step: the caller commits and pushes by hand.
+# --no-floor: publish without raising the fleet floor. scripts/deploy-all.sh
+# sets it itself once the fleet runs the CLI that installs the app safely.
 BUMP_TYPE="patch"
 NO_GIT=0
+NO_FLOOR=0
 for arg in "$@"; do
   case "$arg" in
     patch|minor|major) BUMP_TYPE="$arg" ;;
     --no-git) NO_GIT=1 ;;
-    *) echo "Usage: ./scripts/release.sh [patch|minor|major] [--no-git]"; exit 1 ;;
+    --no-floor) NO_FLOOR=1 ;;
+    *) echo "Usage: ./scripts/release.sh [patch|minor|major] [--no-git] [--no-floor]"; exit 1 ;;
   esac
 done
 
@@ -146,8 +150,12 @@ done
 # within five minutes, quitting and relaunching an open app (the same lever
 # as `cast desktop-force-update`). Non-fatal — the artifacts are already
 # live, and a missed floor is set by hand.
-echo "  Setting the fleet floor to $NEW_VERSION..."
-cast desktop-force-update "$NEW_VERSION" || echo "    floor not set (non-fatal): run cast desktop-force-update $NEW_VERSION"
+if [ "$NO_FLOOR" = "1" ]; then
+  echo "  --no-floor: fleet floor left as is (set it with cast desktop-force-update $NEW_VERSION)"
+else
+  echo "  Setting the fleet floor to $NEW_VERSION..."
+  cast desktop-force-update "$NEW_VERSION" || echo "    floor not set (non-fatal): run cast desktop-force-update $NEW_VERSION"
+fi
 
 echo ""
 echo "[4/4] Updating web download URL and committing..."
