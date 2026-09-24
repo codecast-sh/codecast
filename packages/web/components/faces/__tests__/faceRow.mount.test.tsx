@@ -362,6 +362,29 @@ describe("a face opens one card", () => {
     expect(h.all(".face-action-word").map((w) => w.textContent)).toEqual(["Message"]);
   });
 
+  test("the card closes from its own close button", async () => {
+    const h = await mount(bar(rowOf([entry(ANN, "Ann")])));
+    await h.click(h.circle(ANN));
+    expect(h.q("[data-member-card]")).not.toBeNull();
+    await h.click(h.q(".face-card-close")!);
+    expect(h.q("[data-member-card]")).toBeNull();
+    expect(h.circle(ANN).getAttribute("aria-expanded")).toBe("false");
+  });
+
+  test("an agent's face is marked and its card offers no call or message", async () => {
+    useInboxStore.setState({
+      teamMembers: [...useInboxStore.getState().teamMembers, { _id: "u-chief", name: "Chief", is_bot: true, bot_kind: "anchor" }],
+    } as any);
+    const h = await mount(bar(rowOf([entry("u-chief", "Chief", { bot: true })])));
+    expect(h.circle("u-chief").getAttribute("data-bot")).toBe("1");
+    expect(h.q(".face-bot")!.getAttribute("aria-label")).toBe("agent");
+    // Its face is its animal, not a letter.
+    expect(h.q(`[data-face-id="u-chief"] img`)?.getAttribute("src") ?? "").toMatch(/\.webp|avatars/);
+    await h.click(h.circle("u-chief"));
+    expect(h.q("[data-member-card] .face-card-agent")).not.toBeNull();
+    expect(h.q("[data-member-card] .face-action")).toBeNull();
+  });
+
   test("my own face opens my card: the status switch, no actions on myself", async () => {
     const h = await mount(bar(rowOf([me()])));
     await h.click(h.circle(ME));
@@ -523,7 +546,9 @@ describe("the engagement card renders the model's card", () => {
     expect(h.q(".walkie-stage-with")!.textContent).toBe(" with Ann");
     // The roster's fact rides the same line after the stage: one sentence,
     // "Talking with Ann · Ann hears you", and no caption plate under it.
-    expect(h.q(".walkie-stage")!.textContent).toBe("Talking with Ann · Ann hears you");
+    expect(h.q(".walkie-stage")!.textContent).toBe("Talking with Ann · hears you");
+    // The whole verdict is the tooltip.
+    expect(h.q(".engagement-card-hearing")!.getAttribute("title")).toBe("Ann hears you");
     expect(h.q(".walkie-strip-hint")).toBeNull();
     expect(h.q('[data-card-action="mute"]')).toBeNull();
     await h.click(h.q('[data-card-action="end"]')!);

@@ -65,6 +65,8 @@ export interface Config {
   excluded_paths?: string;
   sync_mode?: "all" | "selected";
   sync_projects?: string[];
+  /** Mirrored from the server: with sync_mode "all", folders that never upload. */
+  sync_excluded?: string[];
 
   // --- Stable-context mode ---
   stable_mode?: "solo" | "team";
@@ -102,8 +104,17 @@ export interface Config {
   // index.ts wrote `auto_update`; daemon.ts wrote `desktop_auto_update` (opt out of
   // the daemon updating the desktop app out-of-band, default: on). Both are real
   // writers of this same file, so both fields live here.
+  // Off stops every update nobody asked for at that moment: the check any
+  // cast command runs, the daemon's minimum version floor, and the watchdog's
+  // upgrade. `cast update` and the web's Update button still work.
   auto_update?: boolean;
   desktop_auto_update?: boolean;
+
+  // --- Harness ---
+  // Codecast's Claude Code hooks (HARNESS_HOOKS in @codecast/shared/contracts).
+  // Unset means on. False removes them and keeps every refresh from putting
+  // them back (harnessHooksInstall.ts).
+  hooks_enabled?: boolean;
 
   // --- Feature toggles + installed versions (written by index.ts onboarding) ---
   memory_enabled?: boolean;

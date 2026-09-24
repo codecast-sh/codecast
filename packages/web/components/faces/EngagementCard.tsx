@@ -21,6 +21,7 @@ import { MicOff, Mic, PhoneOff, Video, VideoOff } from "lucide-react";
 import type { FaceCard } from "../../lib/faces/faceRow";
 import type { FaceDensity } from "../../lib/faces/layout";
 import { WalkiePttButton } from "../calls/WalkiePtt";
+import { firstName } from "../calls/speakers";
 import "../calls/walkie.css";
 import "../calls/ringCard.css";
 import "./faceRow.css";
@@ -70,14 +71,28 @@ function Line({
       <span className="engagement-card-words">
         {children}
         {hearing && (
-          <span className="engagement-card-hearing" data-hearing={hearing.state}>
+          <span className="engagement-card-hearing" data-hearing={hearing.state} title={hearing.text}>
             {" · "}
-            {hearing.text}
+            {HEARING_SHORT[hearing.state]}
           </span>
         )}
       </span>
     </div>
   );
+}
+
+/** What the roster says about who hears me, in the strip's few words: the
+ *  line already names the person, so the verdict drops the name (the whole
+ *  sentence is the tooltip). */
+const HEARING_SHORT: Record<"hears" | "away" | "busy", string> = {
+  hears: "hears you",
+  away: "away, gets it later",
+  busy: "busy, gets it later",
+};
+
+/** A person's first name for the strip; a room's name ("#design") whole. */
+function shortName(name: string): string {
+  return name.startsWith("#") ? name : firstName(name) || name;
 }
 
 /** The stage's own words: "Talking with Ann", "On the line · muted with Ann";
@@ -100,11 +115,11 @@ function Stage({
   return (
     <Line stage={words.stage} hearing={hearing}>
       {bare ? (
-        <span className="walkie-strip-hint">{words.stage === "incoming" ? `${name} is talking to you` : words.hint}</span>
+        <span className="walkie-strip-hint">{words.stage === "incoming" ? `${shortName(name)} is talking to you` : words.hint}</span>
       ) : (
         <>
           <span className="walkie-stage-badge">{badge}</span>
-          <span className="walkie-stage-with">{` with ${name}`}</span>
+          <span className="walkie-stage-with">{` with ${shortName(name)}`}</span>
         </>
       )}
     </Line>
@@ -211,7 +226,7 @@ export function EngagementCard({
             <Stage words={card.words} name={card.title} hearing={card.hearing} muteButton={card.mute} />
           ) : (
             <Line stage="locked" hearing={card.hearing}>
-              <span className="engagement-card-title">{card.title}</span>
+              <span className="engagement-card-title">{shortName(card.title)}</span>
             </Line>
           )}
           <LiveControls card={card} actions={actions} />
@@ -236,7 +251,7 @@ export function EngagementCard({
           <div className="ring-card-line" role="status" aria-live="polite">
             <span className="ring-card-dot" aria-hidden="true" />
             <span className="engagement-card-words">
-              <span className="engagement-card-title">{card.name}</span> is calling
+              <span className="engagement-card-title">{shortName(card.name)}</span> is calling
             </span>
           </div>
           <div className="ring-card-actions">
@@ -257,7 +272,7 @@ export function EngagementCard({
           <div className="ring-card-line" role="status" aria-live="polite">
             <span className="ring-card-dot" aria-hidden="true" />
             <span className="engagement-card-words">
-              {card.status === "ringing" ? "Ringing" : sentence(card.status)} <span className="engagement-card-title">{card.name}</span>
+              {card.status === "ringing" ? "Ringing" : sentence(card.status)} <span className="engagement-card-title">{shortName(card.name)}</span>
             </span>
           </div>
           <div className="ring-card-actions">

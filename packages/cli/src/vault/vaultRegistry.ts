@@ -26,9 +26,9 @@
 import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
-import type { VaultInfo } from "@codecast/shared/contracts";
+import type { VaultFileEntry, VaultInfo } from "@codecast/shared/contracts";
 import { enumerateProjectRoots } from "../projectRoots.js";
-import { probeProjectVault } from "./vaultScope.js";
+import { isVaultPathRepoIgnored, probeProjectVault, resolveVaultPath } from "./vaultScope.js";
 import { readSharedConfig as readConfig, writeSharedConfig as writeConfig } from "../config/sharedConfig.js";
 
 /** Stable vault id: 12-hex sha256 prefix of the absolute root path. Derived, not
@@ -201,6 +201,7 @@ function materializeProjectVault(configDir: string, vault: VaultInfo): VaultInfo
 export interface VaultLocation {
   vault: VaultInfo;
   rel: string;
+  entry?: VaultFileEntry;
 }
 
 /**
@@ -227,6 +228,17 @@ export function locateVault(configDir: string, localPath: string): VaultLocation
     return null;
   }
   const relTo = (root: string): string => (abs === root ? "" : path.relative(root, abs).split(path.sep).join("/"));
+  // The row a scan would give this path, so the browser can open it even when
+  // the scan leaves it out. Only for a path the file route would serve.
+  const located = (vault: VaultInfo): VaultLocation => {
+    const rel = relTo(vault.root);
+    if (!rel || !resolveVaultPath(vault.root, rel, { allowIgnored: true })) return { vault, rel };
+    const ignored = isVaultPathRepoIgnored(vault.root, rel);
+    const entry: VaultFileEntry = stat.isDirectory()
+      ? { path: rel, mtime: Math.round(stat.mtimeMs), size: 0, dir: true }
+      : { path: rel, mtime: Math.round(stat.mtimeMs), size: stat.size };
+    return { vault, rel, entry: ignored ? { ...entry, ignored: true } : entry };
+  };
 
   let best: VaultInfo | null = null;
   for (const v of listVaults(configDir)) {
@@ -235,8 +247,7 @@ export function locateVault(configDir: string, localPath: string): VaultLocation
     if (!best || root.length > best.root.length) best = v;
   }
   if (best) {
-    const vault = findVault(configDir, best.id) ?? best;
-    return { vault, rel: relTo(vault.root) };
+    return located(findVault(configDir, best.id) ?? best);
   }
 
   const dir = stat.isDirectory() ? abs : path.dirname(abs);
@@ -244,8 +255,7 @@ export function locateVault(configDir: string, localPath: string): VaultLocation
   // A vault at the filesystem root would scan the whole disk; nothing anyone
   // links to legitimately lives directly under it.
   if (root === path.parse(root).root) return null;
-  const vault = addVault(configDir, root);
-  return { vault, rel: relTo(vault.root) };
+  return located(addVault(configDir, root));
 }
 
 /** The nearest ancestor (inclusive) holding a `.git`, or null outside any checkout. */

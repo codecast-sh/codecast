@@ -19,6 +19,7 @@
 // startup, so memory-enabled daemons distribute it onto their machine's
 // CLAUDE.md autonomously after a self-update — without a `cast` command running.
 
+import { writeHarnessFile } from "./harness.js";
 import * as os from "os";
 import { readFileSync as fsReadFileSync } from "node:fs";
 import {
@@ -137,6 +138,19 @@ export function getSnippetTargets(): SnippetTarget[] {
  * group-readable keeps its mode across every refresh: we own a section, not the
  * file.
  */
+// Every section write goes through the harness writer, so it lands in the
+// change history with the action that caused it (harness.ts). Reads and the
+// directory check stay on the plain adapter.
+function sectionFs(spec: SectionSpec): typeof nodeFs {
+  const what = `section:${snippetByEndMarker(spec.endMarker)?.slug ?? "references"}`;
+  return {
+    readFile: (p) => nodeFs.readFile(p),
+    exists: (p) => nodeFs.exists(p),
+    mkdir: (p) => nodeFs.mkdir(p),
+    writeFile: (p, text) => { writeHarnessFile(p, text, what); },
+  };
+}
+
 export function installSectionToFile(
   filePath: string,
   dirPath: string,
@@ -144,7 +158,7 @@ export function installSectionToFile(
   snippet: string,
   update: boolean,
 ): SnippetInstallResult {
-  return installSectionToFileWith(nodeFs, { filePath, dirPath }, spec, renderSection(spec, snippet), update);
+  return installSectionToFileWith(sectionFs(spec), { filePath, dirPath }, spec, renderSection(spec, snippet), update);
 }
 
 /** Write `spec`'s section into every agent instruction file on this machine.
@@ -155,7 +169,7 @@ export function installSectionToTargets(
   snippet: string,
   update: boolean,
 ): SnippetInstallResult {
-  return installSectionToTargetsWith(nodeFs, getSnippetTargets(), spec, renderSection(spec, snippet), update);
+  return installSectionToTargetsWith(sectionFs(spec), getSnippetTargets(), spec, renderSection(spec, snippet), update);
 }
 
 // ------------------------------------------------------- what actually lands

@@ -227,6 +227,9 @@ export default defineSchema({
     encryption_master_key: v.optional(v.string()),
     sync_mode: v.optional(v.union(v.literal("all"), v.literal("selected"))),
     sync_projects: v.optional(v.array(v.string())),
+    // With sync_mode "all": folders that never upload, the folders inside
+    // them and their checkouts' worktrees included.
+    sync_excluded: v.optional(v.array(v.string())),
     team_share_paths: v.optional(v.array(v.string())),
     muted_members: v.optional(v.array(v.id("users"))),
     team_conversations_last_seen: v.optional(v.number()),

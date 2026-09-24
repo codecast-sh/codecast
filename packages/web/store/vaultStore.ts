@@ -139,6 +139,10 @@ interface VaultState {
    *  list at once, so the ?path= flow resolves against it without a second
    *  roots round-trip. */
   adoptVault: (vault: VaultInfo) => void;
+  /** Rows a file link opened that the scan does not list (ignored, or past
+   *  the entry cap). Kept in `files` across rescans until the vault changes. */
+  linkedFiles: Record<string, VaultFileEntry>;
+  adoptLinkedFile: (entry: VaultFileEntry) => void;
   /** What the last rename did to the vault's links, for a dismissible strip.
    *  Transient: never persisted, cleared when the next rename starts. */
   lastRenameReport: RenameReport | null;
@@ -704,6 +708,7 @@ async function syncActiveVault(ep: VaultEndpoint, vaultId: string): Promise<void
   // The toggle may have gone off while the scan was in flight; honor the
   // current value rather than the one the request was built from.
   for (const f of scan.files) if (!f.ignored || s.showIgnoredFiles) files[f.path] = f;
+  for (const f of Object.values(s.linkedFiles)) files[f.path] ??= f;
 
   // Diff against what we have (from IDB or a previous scan): fetch new/changed
   // markdown, drop entries that no longer exist. Ignored markdown is never
@@ -771,6 +776,12 @@ export const useVaultStore = create<VaultState>((set, get) => ({
   lastRenameReport: null,
 
   clearOpError: () => set({ opError: null }),
+  linkedFiles: {},
+  adoptLinkedFile: (entry) =>
+    set((s) => ({
+      linkedFiles: { ...s.linkedFiles, [entry.path]: entry },
+      files: { ...s.files, [entry.path]: s.files[entry.path] ?? entry },
+    })),
   adoptVault: (vault) =>
     set((s) => {
       if (s.vaults.some((v) => v.id === vault.id)) return {};
@@ -864,7 +875,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       return;
     }
     // Off is local: drop the flagged rows now rather than after a round trip.
-    set((s) => ({ showIgnoredFiles: false, files: withoutIgnored(s.files) }));
+    set((s) => ({ showIgnoredFiles: false, files: { ...withoutIgnored(s.files), ...s.linkedFiles } }));
   },
 
   loadTextBody: async (path) => {
@@ -1027,6 +1038,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       set({
         activeVaultId: vaultId,
         files: {},
+        linkedFiles: {},
         bodies: {},
         scannedAt: null,
         isRepo: false,
@@ -1117,6 +1129,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       showIgnoredFiles: false,
       isRepo: false,
       files: {},
+      linkedFiles: {},
       bodies: {},
       conflicts: {},
       loadingPaths: {},
