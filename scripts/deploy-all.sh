@@ -200,7 +200,10 @@ if $FORCE_DESKTOP || ! git diff --quiet "$DESKTOP_BASE" HEAD -- packages/electro
   git add packages/electron/package.json packages/web/server/index.ts
   git commit -m "chore(electron): release desktop $DESKTOP_VERSION"
   git push origin main
-  FLOOR_CLI="${CLI_VERSION:-$(curl -fsS https://dl.codecast.sh/latest.json | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)}"
+  # The first CLI whose daemon installs the app beside the app's own quit
+  # helper without sharing its staging folder. Any CLI from here on is safe,
+  # so the gate waits on this one, not on the release just cut.
+  FLOOR_CLI="1.1.155"
   if await_fleet "$FLOOR_CLI" 30; then
     cast desktop-force-update "$DESKTOP_VERSION"
     echo "   ✓ Desktop v$DESKTOP_VERSION published; fleet floor set"
