@@ -78,6 +78,15 @@ describe("buildPublishPayload", () => {
     expect(() => buildPublishPayload(dir)).toThrow(/huge\.bin/);
   });
 
+  it("sends video and audio to media hosting instead of the bundle, outside the size cap", () => {
+    write("index.html", "<title>Film</title><cast-player><cast-chapter src='c00.mp4'></cast-chapter></cast-player>");
+    write("c00.mp4", Buffer.alloc(20 * 1024 * 1024));
+    write("theme.m4a", Buffer.alloc(1024));
+    const p = buildPublishPayload(dir);
+    expect(p.files!.map((f) => f.path)).toEqual(["index.html"]);
+    expect(p.media!.map((m) => [m.path, m.size])).toEqual([["c00.mp4", 20 * 1024 * 1024], ["theme.m4a", 1024]]);
+  });
+
   it("rejects unsupported file types", () => {
     write("data.csv", "a,b");
     expect(() => buildPublishPayload(path.join(dir, "data.csv"))).toThrow(/\.html or \.md/);

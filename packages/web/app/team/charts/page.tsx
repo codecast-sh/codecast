@@ -37,7 +37,7 @@ const sum = (a: number[]) => a.reduce((s, v) => s + v, 0);
 function TeamChartsContent() {
   const currentUser = useQuery(api.users.getCurrentUser);
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
-  const myTeams = useQuery(api.teams.getUserTeams);
+  const myTeams = useQuery(api.teams.getUserTeams, {});
   const defaultTeamId = activeTeamId || currentUser?.active_team_id || currentUser?.team_id;
   const [pickedTeam, setPickedTeam] = useState<string | null>(null);
   const teamId = (pickedTeam ?? (defaultTeamId ? String(defaultTeamId) : null)) as Id<"teams"> | null;

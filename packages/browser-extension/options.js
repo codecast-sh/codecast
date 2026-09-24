@@ -53,9 +53,11 @@ async function pairFromFragment() {
     while (!answered && Date.now() < deadline) {
       let timer;
       answered = await Promise.race([
-        chrome.runtime.sendMessage({ op: "wake" }).then((r) => !!(r && r.ok), () => false),
+        askWorker({ op: "wake" }).then((r) => !!(r && r.ok)),
         new Promise((resolve) => { timer = setTimeout(() => resolve(false), WAKE_ASK_MS); }),
       ]).finally(() => clearTimeout(timer));
+      // A worker Chrome refuses to start comes back only with a reload, which closes this page.
+      if (!answered && reviveIfRefused()) return false;
       if (!answered) await new Promise((r) => setTimeout(r, WAKE_ASK_MS));
     }
     // The worker closes this tab itself when it answers a wake; this is the
@@ -150,7 +152,7 @@ $("save").addEventListener("click", () => {
   save($("token").value.trim(), parseInt($("port").value, 10) || CAST_DEFAULT_PORT);
 });
 $("reconnect").addEventListener("click", async () => {
-  await chrome.runtime.sendMessage({ op: "reconnect" }).catch(() => {});
+  await reconnectWorker();
   setTimeout(refreshStatus, 600);
 });
 $("version").textContent = `v${chrome.runtime.getManifest().version}`;

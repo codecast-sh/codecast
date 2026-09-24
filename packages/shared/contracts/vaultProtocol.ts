@@ -48,6 +48,10 @@ export interface VaultRootsResponse {
 export interface VaultLocateResponse {
   vault: VaultInfo;
   rel: string;
+  /** The located path's own row, so a link opens a file the scan leaves out
+   *  (ignored, or past the entry cap). Absent from older daemons and for a
+   *  path the vault would refuse to read. */
+  entry?: VaultFileEntry;
 }
 
 /** One file entry from GET /vault/scan. Paths are vault-relative, "/"-separated. */

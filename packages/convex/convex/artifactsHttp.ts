@@ -25,6 +25,8 @@ import {
   editorPage,
 } from "./artifactPages";
 import { renderMarkdownDocument, restyleMarkdownDocument } from "./artifactMarkdown";
+import { presignUrl } from "./lib/awsSigV4";
+import { CAST_PLAYER_JS } from "./lib/castPlayer";
 import { sha256Hex, passwordHash, kTokenFor, eTokenFor } from "./lib/artifactGates";
 
 // ---------------------------------------------------------------------------
@@ -149,7 +151,11 @@ const CONTENT_TYPES: Record<string, string> = {
   otf: "font/otf",
   mp4: "video/mp4",
   webm: "video/webm",
+  mov: "video/quicktime",
+  m4v: "video/mp4",
   mp3: "audio/mpeg",
+  m4a: "audio/mp4",
+  ogg: "audio/ogg",
   wav: "audio/wav",
   pdf: "application/pdf",
   wasm: "application/wasm",
@@ -225,6 +231,70 @@ async function buildAccessSet(
 // POST /cli/artifacts/publish
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Media: video and audio live on R2, not in the bundle. The CLI uploads each
+// file through a presigned URL keyed by its content hash, then publishes a
+// small pointer asset at the file's bundle path; serving that path redirects
+// to the R2 copy, which answers range requests. Keys are content hashes, so
+// the public URL is only known to someone who has the file or the page.
+// ---------------------------------------------------------------------------
+
+export const MEDIA_POINTER_TYPE = "application/vnd.cast.media+json";
+const MEDIA_EXT = /^(mp4|webm|mov|m4v|mp3|m4a|ogg|wav)$/;
+const MEDIA_MAX_BYTES = 2 * 1024 * 1024 * 1024;
+
+function mediaConfig() {
+  const endpoint = process.env.R2_ENDPOINT, accessKeyId = process.env.R2_ACCESS_KEY_ID, secretAccessKey = process.env.R2_SECRET_ACCESS_KEY;
+  if (!endpoint || !accessKeyId || !secretAccessKey) return null;
+  return { endpoint, accessKeyId, secretAccessKey, bucket: process.env.R2_BUCKET || "codecast", publicBase: (process.env.MEDIA_PUBLIC_BASE || "https://dl.codecast.sh").replace(/\/$/, "") };
+}
+
+/** A media URL this deployment minted (so a pointer can never redirect elsewhere). */
+function isOwnMediaUrl(url: unknown): url is string {
+  const cfg = mediaConfig();
+  if (typeof url !== "string" || !cfg) return false;
+  const prefix = `${cfg.publicBase}/media/`;
+  return url.startsWith(prefix) && /^[a-f0-9]{64}\.[a-z0-9]{2,4}$/.test(url.slice(prefix.length));
+}
+
+export const mediaSign = httpAction(async (ctx, request) => {
+  try {
+    const { api_token, sha256, size, ext } = await request.json();
+    const who = api_token ? await ctx.runQuery(internal.artifacts.verify, { api_token }) : null;
+    if (!who) return json({ error: "Unauthorized" }, 401);
+    if (typeof sha256 !== "string" || !/^[a-f0-9]{64}$/.test(sha256)) return json({ error: "Bad sha256" }, 400);
+    if (typeof ext !== "string" || !MEDIA_EXT.test(ext)) return json({ error: `Unsupported media type .${ext}` }, 400);
+    if (typeof size !== "number" || size <= 0 || size > MEDIA_MAX_BYTES) return json({ error: "Media files must be under 2GB" }, 413);
+    const cfg = mediaConfig();
+    if (!cfg) return json({ error: "Media hosting is not configured on this server" }, 501);
+    const key = `media/${sha256}.${ext}`;
+    const sign = (method: string, expiresSeconds: number) =>
+      presignUrl({ method, endpoint: cfg.endpoint, path: `/${cfg.bucket}/${key}`, region: "auto", service: "s3", accessKeyId: cfg.accessKeyId, secretAccessKey: cfg.secretAccessKey, expiresSeconds });
+    const url = `${cfg.publicBase}/${key}`;
+    // Same bytes already stored: nothing to upload.
+    const head = await fetch(await sign("HEAD", 60), { method: "HEAD" });
+    if (head.ok && Number(head.headers.get("content-length")) === size) return json({ url, exists: true });
+    return json({ url, exists: false, upload_url: await sign("PUT", 3600), content_type: contentTypeFor(`x.${ext}`) });
+  } catch (error) {
+    return json({ error: error instanceof Error ? error.message : "Internal error" }, 500);
+  }
+});
+
+export const playerJs = httpAction(async () =>
+  new Response(CAST_PLAYER_JS, {
+    status: 200,
+    headers: { "Content-Type": "text/javascript; charset=utf-8", "Cache-Control": "public, max-age=300", "Access-Control-Allow-Origin": "*" },
+  }),
+);
+
+/** Pages that use <cast-player> get its script, from the host that served them. */
+function injectPlayer(html: string, apiBase: string): string {
+  if (!/<cast-player[\s>]/i.test(html) || /\/cli\/player\.js/.test(html)) return html;
+  const tag = `<script src="${apiBase}/cli/player.js" defer></script>`;
+  const head = html.match(/<\/head>/i);
+  return head ? html.replace(/<\/head>/i, `${tag}</head>`) : tag + html;
+}
+
 export const publish = httpAction(async (ctx, request) => {
   try {
     const body = await request.json();
@@ -272,6 +342,12 @@ export const publish = httpAction(async (ctx, request) => {
         if (!path) return json({ error: `Invalid bundle path: ${JSON.stringify(f?.path ?? null)}` }, 400);
         if (seen.has(path)) return json({ error: `Duplicate bundle path: ${path}` }, 400);
         seen.add(path);
+        if (f.media_url !== undefined) {
+          if (!isOwnMediaUrl(f.media_url)) return json({ error: `Bad media URL for ${path}` }, 400);
+          const pointer = JSON.stringify({ url: f.media_url, size: typeof f.size === "number" ? f.size : null, type: contentTypeFor(path) });
+          assetInputs.push({ path, bytes: new TextEncoder().encode(pointer), content_type: MEDIA_POINTER_TYPE });
+          continue;
+        }
         if (typeof f.content_b64 !== "string") return json({ error: `Missing content for ${path}` }, 400);
         const bytes = b64ToBytes(f.content_b64);
         total += bytes.byteLength;
@@ -952,6 +1028,11 @@ export const serve = httpAction(async (ctx, request) => {
     if (!asset) return notFound("Not found");
     const blob = await ctx.storage.get(asset.storage_id);
     if (!blob) return notFound("Not found");
+    if (asset.content_type === MEDIA_POINTER_TYPE) {
+      const { url: mediaUrl } = JSON.parse(await blob.text()) as { url: string };
+      if (!isOwnMediaUrl(mediaUrl)) return notFound("Not found");
+      return new Response(null, { status: 302, headers: { Location: mediaUrl, "Cache-Control": cachePolicy(artifact), "Access-Control-Allow-Origin": "*" } });
+    }
     return new Response(blob, {
       status: 200,
       headers: {
@@ -1081,6 +1162,7 @@ export const serve = httpAction(async (ctx, request) => {
   if (kind === "bundle") {
     html = injectBase(html, doc.version < artifact.version ? `_v/${doc.version}/` : "./");
   }
+  html = injectPlayer(html, apiBase);
   // Bake the validated gate tokens into the meta URL so the bar's polling
   // clears the same gates the document did.
   const metaTokens = `${kToken ? `&k=${kToken}` : ""}${artifact.email_gate && q.get("e") ? `&e=${q.get("e")}` : ""}`;
