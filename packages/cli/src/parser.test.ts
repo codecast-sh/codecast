@@ -1,5 +1,6 @@
 import { describe, test, expect, mock } from "bun:test";
 import { parseSessionLine, parseLine, parseCodexLine, extractMessages, parseSessionFile, parseCodexSessionFile, extractCodexForkRoot, extractCodexSessionMetadata, isCompletedStandaloneCodexReview, isCompletedNativeCodexReviewChild, extractTeamInfo, claudeBannerText, type ClaudeSessionEntry } from "./parser.js";
+import { classifyApiErrorBanner } from "@codecast/shared/contracts";
 
 describe("Parser malformed JSON handling", () => {
   test("parseSessionLine logs warning and returns null for malformed JSON", () => {
@@ -951,6 +952,15 @@ describe("API-error banner rewrite (burst throttle vs quota park)", () => {
     expect(plain.content).toBe("You've reached your Fable limit. Run /usage-credits to continue or switch models with /model.");
     const [quota] = extractMessages([banner({ apiErrorStatus: 429, errorDetails: `429 {"type":"error","error":{"type":"exceeded_limit"}}` })]);
     expect(quota.content).toBe("You've reached your Fable limit. Run /usage-credits to continue or switch models with /model.");
+  });
+
+  test("a 429 Claude Code marks model_requires_usage_credits is a quota park, not a burst", () => {
+    // Real 2.1.281 entry (2026-09-24): transient wording in errorDetails, but
+    // the CLI's own apiError says the Fable window is spent. Rewritten as a
+    // throttle, the session retried on the spent account and never switched.
+    const [msg] = extractMessages([banner({ apiErrorStatus: 429, errorDetails: transient, apiError: "model_requires_usage_credits" })]);
+    expect(msg.content).toBe("You've reached your Fable limit. Run /usage-credits to continue or switch models with /model.");
+    expect(classifyApiErrorBanner(msg.content)).toBe("limit");
   });
 
   test("claudeBannerText leaves ordinary assistant text alone", () => {

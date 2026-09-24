@@ -4,7 +4,7 @@
 // the primary, so they never win the pick.
 
 import type { CcUsage } from "@codecast/convex/convex/ccAccountsShared";
-import { profileIsCurrentLogin } from "./machineAccountSwitch";
+import { profileIsCurrentLogin, profileIsFleetAccount } from "./machineAccountSwitch";
 
 export type AccountChipProfile = {
   name: string;
@@ -17,6 +17,7 @@ export type AccountChipDevice = {
   is_remote: boolean;
   online?: boolean;
   active_email?: string;
+  launch_profile?: string;
   profiles: AccountChipProfile[];
   codex_accounts?: {
     active_email?: string;
@@ -89,7 +90,11 @@ export function resolveAccountChip<T extends AccountChipDevice>(opts: {
   const device = pickAccountChipDevice(opts.devices, opts.localDeviceId);
   if (!device) return null;
   const profiles = device.profiles ?? [];
-  const active = matchProfile(profiles, device.active_email);
+  // The row that is "on": the account sessions run on, which after a token
+  // switch is the launch profile rather than the keychain login.
+  const active = profiles.find((p) =>
+    profileIsFleetAccount(p, { activeEmail: device.active_email, launchProfile: device.launch_profile }),
+  );
   const codexProfiles = device.codex_accounts?.profiles ?? [];
   const activeCodex =
     matchProfile(codexProfiles, device.codex_accounts?.active_email) ?? codexProfiles[0];

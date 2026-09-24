@@ -284,3 +284,17 @@ describe("pendingProposal — the ask the banner and the card surface", () => {
     ).toBeNull();
   });
 })
+
+describe("fallbackProfiles with minted tokens", () => {
+  const now = 1_000_000;
+  const room = { fetched_at: now, session: { percent: 10 }, weekly: { percent: 20 } };
+  test("a dead saved login is a target again while its setup-token is live", () => {
+    const profiles = [
+      { name: "active", email: "a@x.com", usage: room },
+      { name: "dead", email: "d@x.com", usage: room, login_expired_at: 5 },
+      { name: "minted", email: "m@x.com", usage: room, login_expired_at: 5, setup_token: { expires_at: now + 1 } },
+      { name: "lapsed", email: "l@x.com", usage: room, login_expired_at: 5, setup_token: { expires_at: now } },
+    ];
+    expect(fallbackProfiles(profiles, "a@x.com", now).map((p) => p.name)).toEqual(["minted"]);
+  });
+});

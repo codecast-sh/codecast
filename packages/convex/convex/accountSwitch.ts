@@ -53,6 +53,7 @@ import {
   PACED_CONTINUE_KINDS,
   tokenBackedProfile,
   activeTokenProfile,
+  fleetAccount,
   continueTargetPin,
   continueNeedsRestart,
   parkedOnActiveAccount,
@@ -580,7 +581,7 @@ export async function insertSwitchCommands(
         ? tokenBackedProfile(device?.cc_accounts, { profile: localProfile }, opts.now)
         : continueTargetPin(device, opts.now);
       for (const c of restart) {
-        if ((c.cc_account ?? undefined) !== pin) await ctx.db.patch(c._id, { cc_account: pin });
+        if ((c.cc_account ?? undefined) !== pin) await ctx.db.patch(c._id, { cc_account: pin, cc_account_auto: true });
       }
     }
     if (restart.length === 0 && !(switchRequested && !isRemote)) continue;
@@ -1578,6 +1579,7 @@ export const autoSwitchCheck = internalMutation({
       authParks,
       primary,
       attempts,
+      now,
     );
     const activeDead = authDead.length > 0;
     const authSwitch = allowSwitch && activeDead ? authParks : [];
@@ -1634,7 +1636,9 @@ export const autoSwitchCheck = internalMutation({
     // move — the reason every switch/proposal is recorded with, so the park
     // card can explain the account change instead of it happening silently.
     const activeProfiles = primary.cc_accounts?.profiles ?? [];
-    const activeEmail = primary.cc_accounts?.active_email;
+    // The account the fleet runs on: the keychain login, or the launch profile
+    // after a token switch (fleetAccount). Every "active" read below means this.
+    const activeEmail = fleetAccount(primary.cc_accounts, now).email;
     const activeUsage = activeProfiles.find((p) => p.email && p.email === activeEmail)?.usage;
     const buildDecision = (
       kind: "switch" | "propose" | "continue" | "exhausted",
@@ -1816,7 +1820,7 @@ export const autoSwitchCheck = internalMutation({
     // token. Only the former can wait on the active account's windows.
     const onlineById = new Map(online.map((d) => [d.device_id, d]));
     const parksOnActive = targets.filter((c) =>
-      parkedOnActiveAccount(c, (c.owner_device_id && onlineById.get(c.owner_device_id)) || primary),
+      parkedOnActiveAccount(c, (c.owner_device_id && onlineById.get(c.owner_device_id)) || primary, now),
     );
     const decision = decideAutoSwitch({
       now,
@@ -1826,7 +1830,7 @@ export const autoSwitchCheck = internalMutation({
       // construction rather than by a filter that could be dropped.
       parkedAt: Math.max(...targets.map((c) => c.pending_api_error_at ?? c.updated_at ?? 0)),
       activeParkedAt: parksOnActive.length ? Math.max(...parksOnActive.map((c) => c.pending_api_error_at ?? c.updated_at ?? 0)) : null,
-      activeEmail: primary.cc_accounts?.active_email,
+      activeEmail,
       activeSince: primary.cc_accounts?.active_since,
       profiles: primary.cc_accounts?.profiles ?? [],
       attempts,
@@ -1997,6 +2001,23 @@ export const autoSwitchCheck = internalMutation({
   },
 });
 
+// Repair for rows pinned by the machine before `cc_account_auto` existed:
+// mark the named rows' pins automatic, so their next resume follows the
+// machine's account. Owner only; run with packages/convex/run.sh.
+export const markAccountPinsAuto = internalMutation({
+  args: { conversation_ids: v.array(v.id("conversations")) },
+  handler: async (ctx, args) => {
+    let marked = 0;
+    for (const id of args.conversation_ids) {
+      const conv = await ctx.db.get(id);
+      if (!conv?.cc_account || conv.cc_account_auto === true) continue;
+      await ctx.db.patch(id, { cc_account_auto: true });
+      marked++;
+    }
+    return { marked };
+  },
+});
+
 // The pin a daemon sources when it resumes a conversation. The daemon used
 // to read the row's `cc_account` raw, so a session parked on a limit while
 // pinned to a spent account re-sourced that account's token on every resume
@@ -2023,7 +2044,7 @@ export const pinForResume = mutation({
       .first();
     const pin = resumePinFor(conv, device ?? undefined, Date.now());
     if ((conv.cc_account ?? undefined) !== pin) {
-      await ctx.db.patch(conv._id, { cc_account: pin });
+      await ctx.db.patch(conv._id, { cc_account: pin, cc_account_auto: true });
       console.log(
         `pinForResume: ${conv._id} parked (${conv.pending_api_error_kind}) on pin "${conv.cc_account}" — resuming under ${pin ? `"${pin}"` : "the keychain login"}`,
       );
@@ -2381,6 +2402,9 @@ export const listAccountProfiles = query({
           // When the current login took over: a session whose last call predates
           // it restarts on a cache that belongs to another account.
           active_since: d.cc_accounts?.active_since,
+          // The profile sessions launch on when a token switch moved the fleet
+          // off the keychain login (fleetAccount); absent = the login.
+          launch_profile: d.cc_accounts?.launch_profile,
           login_flow: d.cc_login_flow,
           session_tokens: true,
           mint_flow: d.cc_mint_flow,

@@ -21,6 +21,11 @@ import {
   credentialHealth,
   saveProfile,
   useProfile,
+  switchProfile,
+  switchModeFor,
+  launchProfileName,
+  readLaunchRecord,
+  clearLaunchProfile,
   deleteProfile,
   listProfiles,
   parseUsageResponse,
@@ -1543,6 +1548,101 @@ describe("refreshUsageSnapshots (sandboxed $HOME, injected fetch)", () => {
     expect(retry.tokenPosts).toEqual(["rt-at-c"]);
   });
 
+  it("reads a dead login's windows through its setup token, including a spent Fable window", async () => {
+    // 2026-09-23: claude@'s login was dead, so only its running sessions fed
+    // its meter, and they never carry the Fable window. It read 55% from a
+    // poll 30 hours old while Fable refused every request on it.
+    const index = readIndex();
+    index.profiles.c.login_expired_at = NOW - 30 * 3600_000;
+    fs.writeFileSync(path.join(home, ".codecast", "cc-accounts.json"), JSON.stringify(index));
+    writeAccountToken("c", `sk-ant-oat01-${"x".repeat(60)}`);
+    const FABLE_RESET = NOW + 5 * 24 * 3600_000;
+    fs.writeFileSync(path.join(home, ".codecast", "cc-usage.json"), JSON.stringify({
+      accounts: {
+        "uuid-c": {
+          fetched_at: NOW - 10_000,
+          source: "live-session",
+          polled_at: NOW - 30 * 3600_000,
+          weekly: { percent: 53, resets_at: FABLE_RESET },
+          weekly_scoped: { percent: 55, resets_at: FABLE_RESET, label: "Fable" },
+        },
+      },
+    }));
+    invalidateAccountsCache();
+    const models: string[] = [];
+    let fableStatus = 429;
+    const fetchImpl = (async (url: any, init: any) => {
+      if (String(url).includes("/v1/messages")) {
+        const model = JSON.parse(init.body).model;
+        models.push(model);
+        if (model.includes("fable")) return new Response(`{"type":"error"}`, { status: fableStatus });
+        return new Response("{}", {
+          status: 200,
+          headers: {
+            "anthropic-ratelimit-unified-5h-utilization": "0.05",
+            "anthropic-ratelimit-unified-5h-reset": String(SESSION_RESET_S),
+            "anthropic-ratelimit-unified-7d-utilization": "0.53",
+            "anthropic-ratelimit-unified-7d-reset": String(FABLE_RESET / 1000),
+          },
+        });
+      }
+      return usageFetch([])(url, init);
+    }) as any;
+    const res = await refreshUsageSnapshots({ now: NOW, fetchImpl });
+    expect(res.probed).toContain("c");
+    expect(models.sort()).toEqual(["claude-fable-5-1", "claude-haiku-4-5-20251001"]);
+    const c = readUsageCache().accounts["uuid-c"];
+    expect(c.weekly_scoped).toEqual({ percent: 100, resets_at: FABLE_RESET, label: "Fable" });
+    expect(c.session).toEqual({ percent: 5, resets_at: SESSION_RESET_S * 1000 });
+    expect(c.weekly?.percent).toBe(53);
+    expect(c.polled_at).toBe(NOW);
+    // Once Fable answers again the pegged reading is dropped, not kept.
+    fableStatus = 200;
+    await refreshUsageSnapshots({ now: NOW + 10 * 60_000, fetchImpl });
+    expect(readUsageCache().accounts["uuid-c"].weekly_scoped).toBeUndefined();
+  });
+
+  it("reads a held store's account through its setup token once the live feed is overdue", async () => {
+    // 2026-09-23: jamesapeterson955's sessions held its store, so every pass
+    // skipped it and its Fable meter sat 133 minutes old under a live feed.
+    writeAccountToken("c", `sk-ant-oat01-${"y".repeat(60)}`);
+    fs.writeFileSync(path.join(home, ".codecast", "cc-usage.json"), JSON.stringify({
+      accounts: {
+        "uuid-c": {
+          fetched_at: NOW - 10_000,
+          source: "live-session",
+          polled_at: NOW - 133 * 60_000,
+          weekly_scoped: { percent: 49, label: "Fable" },
+        },
+      },
+    }));
+    invalidateAccountsCache();
+    const models: string[] = [];
+    const fetchImpl = (async (url: any, init: any) => {
+      if (!String(url).includes("/v1/messages")) return usageFetch([])(url, init);
+      const model = JSON.parse(init.body).model;
+      models.push(model);
+      if (model.includes("fable")) return new Response(`{"type":"error"}`, { status: 429 });
+      return new Response("{}", {
+        status: 200,
+        headers: {
+          "anthropic-ratelimit-unified-5h-utilization": "0.2",
+          "anthropic-ratelimit-unified-5h-reset": String(SESSION_RESET_S),
+          "anthropic-ratelimit-unified-7d-utilization": "0.3",
+          "anthropic-ratelimit-unified-7d-reset": String(WEEKLY_RESET_S.c),
+        },
+      });
+    }) as any;
+    const res = await refreshUsageSnapshots({ now: NOW, fetchImpl, heldProfiles: new Set(["c"]) });
+    expect(res.probed).toContain("c");
+    expect(models).toContain("claude-fable-5-1");
+    expect(readUsageCache().accounts["uuid-c"].weekly_scoped?.percent).toBe(100);
+    // Not overdue: the live feed holds the poll off and nothing is sent.
+    models.length = 0;
+    await refreshUsageSnapshots({ now: NOW + 60_000, fetchImpl, heldProfiles: new Set(["c"]) });
+    expect(models).toEqual([]);
+  });
+
   it("marks an index entry with no secret behind it login-expired instead of skipping it silently", async () => {
     // 2026-09-03: two profiles had index rows but no keychain item; the loop
     // stepped over them and their meters read as live readings 22h old.
@@ -2218,5 +2318,131 @@ describe("refreshUsageSnapshots backoff (isolated CODECAST_DIR, injected fetch)"
     const forced = await refreshUsageSnapshots({ now: NOW + 1000, minIntervalMs: 0, fetchImpl: s.fetchImpl });
     expect(forced.probed).toEqual(["active"]);
     expect(s.served()).toBe(2);
+  });
+});
+
+// A token switch: the target's saved login is dead, its minted setup-token is
+// live, so the switch records a launch profile and leaves the keychain alone.
+describe("switchProfile: keychain vs token (sandboxed $HOME)", () => {
+  let home: string;
+  const savedEnv: Record<string, string | undefined> = {};
+  const credPath = () => path.join(home, ".claude", ".credentials.json");
+  const TOKEN = "sk-ant-oat01-" + "x".repeat(40);
+  const TOK_ACCOUNT = { accountUuid: "22bbd477-94d6-4412-ac36-518cc5f10353", emailAddress: "tok@example.com" };
+
+  // A saved profile of ANOTHER account whose login is dead: an empty credential
+  // pair on disk (nothing to refresh) plus the daemon's login-expired mark.
+  const seedDeadProfile = (name: string) => {
+    fs.mkdirSync(path.join(home, ".codecast", "cc-accounts"), { recursive: true });
+    fs.writeFileSync(
+      path.join(home, ".codecast", "cc-accounts", `${name}.json`),
+      JSON.stringify({ credentials: JSON.parse(LOGGED_OUT_STUB), oauthAccount: TOK_ACCOUNT, saved_at: 1 }),
+    );
+    const indexFile = path.join(home, ".codecast", "cc-accounts.json");
+    const index = fs.existsSync(indexFile) ? JSON.parse(fs.readFileSync(indexFile, "utf-8")) : { profiles: {} };
+    index.profiles[name] = { email: TOK_ACCOUNT.emailAddress, uuid: TOK_ACCOUNT.accountUuid, saved_at: 1, login_expired_at: 1000 };
+    fs.writeFileSync(indexFile, JSON.stringify(index));
+    invalidateAccountsCache();
+  };
+
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), "cc-switch-test-"));
+    for (const k of ["HOME", "PATH", "CC_ACCOUNTS_FORCE_FILE"]) savedEnv[k] = process.env[k];
+    process.env.HOME = home;
+    process.env.PATH = path.join(home, "empty-path");
+    process.env.CC_ACCOUNTS_FORCE_FILE = "1";
+    fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+    fs.mkdirSync(path.join(home, ".codecast"), { recursive: true });
+    fs.writeFileSync(credPath(), CRED);
+    fs.writeFileSync(path.join(home, ".claude.json"), JSON.stringify({ oauthAccount: OAUTH_ACCOUNT }));
+    invalidateAccountsCache();
+    saveProfile("footage");
+    seedDeadProfile("tok");
+  });
+
+  afterEach(() => {
+    for (const [k, v] of Object.entries(savedEnv)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    fs.rmSync(home, { recursive: true, force: true });
+    invalidateAccountsCache();
+  });
+
+  it("a dead login with no token can carry nothing; a live token makes it a token switch", () => {
+    expect(switchModeFor("tok")).toBeNull();
+    expect(() => switchProfile("tok")).toThrow(/unusable|logged-out/);
+    expect(readLaunchRecord()).toBeNull();
+    writeAccountToken("tok", TOKEN);
+    expect(switchModeFor("tok")).toBe("token");
+    expect(switchModeFor("footage")).toBe("keychain");
+  });
+
+  it("a token switch records the launch profile and leaves the keychain login untouched", () => {
+    writeAccountToken("tok", TOKEN);
+    const result = switchProfile("tok", 5_000_000);
+    expect(result).toMatchObject({ mode: "token", to: "tok", toEmail: "tok@example.com", from: null });
+    expect(JSON.parse(fs.readFileSync(credPath(), "utf-8")).claudeAiOauth.accessToken).toBe("at-123");
+    // The keychain identity here is only ~/.claude.json's label, never proved
+    // by the credential, so the record carries no key to lapse on.
+    expect(readLaunchRecord()).toEqual({ profile: "tok", since: 5_000_000 });
+    expect(launchProfileName()).toBe("tok");
+    // The inventory the daemon publishes names the launch profile and dates
+    // the fleet change from the switch, not from the keychain stamp.
+    const payload = getAccountsHeartbeatPayload()!;
+    expect(payload.active_email).toBe(OAUTH_ACCOUNT.emailAddress);
+    expect(payload.launch_profile).toBe("tok");
+    expect(payload.active_since).toBe(5_000_000);
+    // A launch with no account asked for sources the token file.
+    expect(accountSourcePrefix(launchProfileName())).toContain("cc-token-tok.env");
+    expect(accountSourcePrefix(launchProfileName())).toContain("CODECAST_CC_ACCOUNT=tok");
+  });
+
+  it("a usable login wins even when a token exists: the switch goes through the keychain and clears the record", () => {
+    writeAccountToken("tok", TOKEN);
+    switchProfile("tok");
+    expect(launchProfileName()).toBe("tok");
+    // footage is the current login: a keychain switch (kept live), record gone.
+    expect(switchProfile("footage").mode).toBe("keychain");
+    expect(readLaunchRecord()).toBeNull();
+    expect(getAccountsHeartbeatPayload()!.launch_profile).toBeUndefined();
+  });
+
+  it("the record lapses when the token goes, the profile goes, or the keychain login changes", () => {
+    writeAccountToken("tok", TOKEN);
+    switchProfile("tok");
+    removeAccountToken("tok");
+    expect(readLaunchRecord()).toBeNull();
+
+    writeAccountToken("tok", TOKEN);
+    switchProfile("tok");
+    deleteProfile("tok");
+    expect(readLaunchRecord()).toBeNull();
+
+    seedDeadProfile("tok");
+    writeAccountToken("tok", TOKEN);
+    switchProfile("tok");
+    // A relabeled ~/.claude.json is not a change: the label can name another
+    // account (2026-09-23: the file said ashot@ while the credential was
+    // jamesapeterson955@), and a rotated token is unverified until asked.
+    fs.writeFileSync(path.join(home, ".claude.json"), JSON.stringify({ oauthAccount: { ...OAUTH_ACCOUNT, accountUuid: "33bbd477-94d6-4412-ac36-518cc5f10353", emailAddress: "new@example.com" } }));
+    invalidateAccountsCache();
+    expect(readLaunchRecord()?.keychain_key).toBeUndefined();
+    expect(getAccountsHeartbeatPayload()!.launch_profile).toBe("tok");
+    // A VERIFIED identity is proof. Prove the credential is the original
+    // account, switch (the record now carries that key), then prove a new one.
+    const cacheFile = path.join(home, ".codecast", "cc-identity.json");
+    const seedIdentity = (uuid: string, email: string) =>
+      fs.writeFileSync(cacheFile, JSON.stringify({ tokens: { [tokenKey("at-123")]: { uuid, email, verified_at: 1 } } }));
+    seedIdentity(OAUTH_ACCOUNT.accountUuid, OAUTH_ACCOUNT.emailAddress);
+    invalidateAccountsCache();
+    switchProfile("tok");
+    expect(readLaunchRecord()?.keychain_key).toBe(OAUTH_ACCOUNT.accountUuid);
+    expect(getAccountsHeartbeatPayload()!.launch_profile).toBe("tok");
+    seedIdentity("33bbd477-94d6-4412-ac36-518cc5f10353", "new@example.com");
+    invalidateAccountsCache();
+    expect(getAccountsHeartbeatPayload()!.launch_profile).toBeUndefined();
+    expect(readLaunchRecord()).toBeNull();
+    expect(clearLaunchProfile()).toBe(false);
   });
 });

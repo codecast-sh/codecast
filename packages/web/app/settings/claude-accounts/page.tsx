@@ -34,15 +34,19 @@ import {
   type ProfileLoginFlow,
 } from "../../../components/AccountUsageMeter";
 import { MintTokenButton, SetupTokenBadge, type MintFlow } from "../../../components/MintTokenDialog";
+import { profileHasSetupToken } from "@codecast/convex/convex/ccAccountsShared";
 import { formatAgo, rankByHeadroom, type RecoveryDecision } from "@codecast/shared/contracts";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import { useAccountRecoveryToggles } from "../../../hooks/useAccountRecoveryToggles";
 import { RecoveryModeSelect, RecoveryDecisionNote } from "../../../components/RecoveryModeSelect";
 import { useMachineAccountSwitch } from "../../../hooks/useMachineAccountSwitch";
-import { machineSwitchBlock, profileIsCurrentLogin } from "../../../lib/machineAccountSwitch";
+import { machineSwitchBlock, profileIsCurrentLogin, profileIsFleetAccount } from "../../../lib/machineAccountSwitch";
 
 type DeviceAccounts = {
   device_id: string;
+  // The profile sessions launch on after a token switch (its saved login is
+  // dead, its minted token carries the fleet); absent = the keychain login.
+  launch_profile?: string;
   label: string;
   is_remote: boolean;
   /** Absent on servers that predate the field — those only return online devices. */
@@ -258,7 +262,8 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
   const now = useCoarseNow(30_000);
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
-  const sw = useMachineAccountSwitch({ deviceId: device.device_id, activeEmail: device.active_email });
+  const fleet = { activeEmail: device.active_email, launchProfile: device.launch_profile };
+  const sw = useMachineAccountSwitch({ deviceId: device.device_id, ...fleet });
 
   const online = device.online !== false;
   const activeProfile = device.profiles.find((p) => profileIsCurrentLogin(p, device.active_email));
@@ -267,8 +272,8 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
   // see what is on now beside what comes next.
   const ranked = rankByHeadroom(device.profiles, now);
   const orderedProfiles = [
-    ...ranked.filter((p) => profileIsCurrentLogin(p, device.active_email)),
-    ...ranked.filter((p) => !profileIsCurrentLogin(p, device.active_email)),
+    ...ranked.filter((p) => profileIsFleetAccount(p, fleet)),
+    ...ranked.filter((p) => !profileIsFleetAccount(p, fleet)),
   ];
   // Suggest the email's local part as the profile name (claude2@almostcandid.com -> claude2).
   const suggested = (device.active_email?.split("@")[0] ?? "work").toLowerCase();
@@ -318,7 +323,11 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
       )}
 
       {orderedProfiles.map((p) => {
-          const isActive = profileIsCurrentLogin(p, device.active_email);
+          // The lit row is the account sessions run on: the launch profile
+          // after a token switch, else the keychain login.
+          const isActive = profileIsFleetAccount(p, fleet);
+          const viaToken = isActive && !!device.launch_profile;
+          const keychainLoginAside = !!device.launch_profile && !isActive && profileIsCurrentLogin(p, device.active_email);
           const plan = planLabel(p);
           return (
             <div
@@ -332,6 +341,22 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
                 {plan && (
                   <span className="shrink-0 rounded bg-sol-cyan/10 px-1.5 py-0.5 text-[10px] text-sol-cyan">
                     {plan}
+                  </span>
+                )}
+                {viaToken && (
+                  <span
+                    className="shrink-0 rounded bg-sol-green/10 px-1.5 py-0.5 text-[10px] text-sol-green"
+                    title="Sessions codecast starts or resumes run on this account's minted token. The machine's own login is another account until you sign in again here."
+                  >
+                    sessions run here · token
+                  </span>
+                )}
+                {keychainLoginAside && (
+                  <span
+                    className="shrink-0 rounded bg-sol-bg-alt px-1.5 py-0.5 text-[10px] text-sol-text-dim"
+                    title="This is the machine's keychain login: what a `claude` typed in a terminal runs on. Codecast sessions run on the token account above."
+                  >
+                    machine login
                   </span>
                 )}
                 <LoginExpiredBadge profile={p} />
@@ -386,11 +411,13 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
                 ) : (
                   <>
                     {(() => {
+                      const tokenSwitch = !!p.login_expired_at && profileHasSetupToken(p, now);
                       const blocked = machineSwitchBlock({
                         isActive: false,
                         online,
                         isRemote: device.is_remote,
                         loginExpired: !!p.login_expired_at,
+                        tokenLive: profileHasSetupToken(p, now),
                         thisProfile: p.name,
                       });
                       if (blocked?.block === "login_expired") return null;
@@ -402,7 +429,9 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
                           onClick={() => void sw.switchTo(p.name, p.email)}
                           title={
                             blocked?.label ??
-                            `Switch this machine to "${p.name}". Running sessions keep the account they started on.`
+                            (tokenSwitch
+                              ? `Move this machine's sessions to "${p.name}" on its minted token. The saved login stays expired and the machine's own login stays put; running sessions keep the account they started on.`
+                              : `Switch this machine to "${p.name}". Running sessions keep the account they started on.`)
                           }
                           className="h-6 px-2 text-[11px]"
                         >

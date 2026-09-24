@@ -17,14 +17,14 @@ import { toast } from "sonner";
 import { Hourglass, TimerReset, Zap } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { exhaustionBannerCopy, isExhaustionCurrent, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
-import { describeDecision, pendingProposal, formatAgo, formatCountdown, isUsageExhausted, rankByHeadroom, standingLabel } from "@codecast/shared/contracts";
+import { exhaustionBannerCopy, fleetAccount, isExhaustionCurrent, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
+import { describeDecision, pendingProposal, fallbackProfiles, formatAgo, formatCountdown, standingLabel } from "@codecast/shared/contracts";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useInboxStore } from "../store/inboxStore";
 import { formatResetLocal, limitResetAsPrinted, limitWindowLabel, parseLimitResetAt } from "../lib/limitReset";
 
-type Profile = { name: string; email?: string; usage?: CcUsage; login_expired_at?: number };
+type Profile = { name: string; email?: string; usage?: CcUsage; login_expired_at?: number; setup_token?: { stored_at: number; expires_at: number } };
 
 export function LimitParkCard({
   message,
@@ -57,25 +57,27 @@ export function LimitParkCard({
   const devices = data?.devices ?? [];
   const device = devices.find((d) => d.device_id === ownerDeviceId) ?? devices.find((d) => !d.is_remote && d.online);
   const profiles: Profile[] = device?.profiles ?? [];
-  const active = profiles.find((p) => p.email && p.email === device?.active_email);
-  const accountLabel = active?.name ?? device?.active_email;
+  // The account the parked sessions ran on: the launch profile after a token
+  // switch, else the keychain login (fleetAccount).
+  const fleetEmail = fleetAccount(device, now).email;
+  const active = profiles.find((p) => p.email && p.email === fleetEmail);
+  const accountLabel = active?.name ?? fleetEmail;
   const exhausted = isExhaustionCurrent(device?.auto_switch_state?.exhausted_at, profiles, now);
   // A switch the machine recommended and is waiting on. Only while this park
   // is still live — a settled session's old proposal is history, not an ask.
   const proposal = live && device ? pendingProposal([device], now) : null;
   // The freshest OTHER saved account with room left — the one manual recovery
-  // worth a button. Expired logins and pegged accounts are not offers. When the
-  // machine has PROPOSED a target, the button is that proposal's approval, so
-  // it offers the proposed account itself: the sentence the card just read out
+  // worth a button, by the same rule auto-switch chooses from (fallbackProfiles:
+  // no dead login without a live token, no pegged window). When the machine
+  // has PROPOSED a target, the button is that proposal's approval, so it
+  // offers the proposed account itself: the sentence the card just read out
   // and the account the click switches to are one value, never two rankings
   // that could disagree.
-  const eligible = profiles.filter(
-    (p) => p.email && p.email !== device?.active_email && !p.login_expired_at && !isUsageExhausted(p.usage, now),
-  );
+  const eligible = fallbackProfiles(profiles, fleetEmail, now);
   const proposed = proposal?.target_email
     ? eligible.find((p) => p.email === proposal.target_email)
     : undefined;
-  const best = proposed ?? rankByHeadroom(eligible, now)[0];
+  const best = proposed ?? eligible[0];
   // The standing shown on the button matches the meters: "stale" when a rolled
   // window is unmeasured, never a confident green percent the switcher distrusts.
   const bestNote = best ? standingLabel(best.usage, now) : null;

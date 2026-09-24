@@ -13,6 +13,9 @@ export function machineSwitchBlock(opts: {
   online?: boolean;
   isRemote?: boolean;
   loginExpired?: boolean;
+  // A live minted setup-token lets a dead login switch anyway: sessions move
+  // onto the token and the machine's login stays (a token switch).
+  tokenLive?: boolean;
   thisProfile: string;
 }): { block: SwitchBlock; label: string } | null {
   if (opts.isActive) return { block: "active", label: "This machine is already on this account" };
@@ -20,7 +23,7 @@ export function machineSwitchBlock(opts: {
     return { block: "remote", label: "Remote machines mirror the primary — switch there" };
   }
   if (opts.online === false) return { block: "offline", label: "The daemon on this machine is offline" };
-  if (opts.loginExpired) {
+  if (opts.loginExpired && !opts.tokenLive) {
     return {
       block: "login_expired",
       label: "Sign in again first — this saved login no longer works",
@@ -44,6 +47,17 @@ export function profileIsCurrentLogin(
   return false;
 }
 
+/** True when this profile is the account the machine's sessions run on: the
+ *  launch profile after a token switch, else the keychain login (the web twin
+ *  of the server's fleetAccount). */
+export function profileIsFleetAccount(
+  profile: { name: string; email?: string },
+  fleet: { activeEmail?: string | null; launchProfile?: string | null },
+): boolean {
+  if (fleet.launchProfile) return profile.name === fleet.launchProfile;
+  return profileIsCurrentLogin(profile, fleet.activeEmail);
+}
+
 export type MachineSwitchPhase = "idle" | "waiting" | "confirming" | "slow" | "succeeded" | "failed";
 
 export type MachineSwitchCommand = {
@@ -54,6 +68,7 @@ export type MachineSwitchCommand = {
 export function resolveMachineSwitch(opts: {
   pending: { profile: string; email?: string; startedAt: number } | null;
   activeEmail?: string | null;
+  launchProfile?: string | null;
   command?: MachineSwitchCommand | null;
   now: number;
   timeoutMs?: number;
@@ -67,9 +82,9 @@ export function resolveMachineSwitch(opts: {
     return { phase: "failed", error: humanizeSwitchError(opts.command.error) };
   }
   if (
-    profileIsCurrentLogin(
+    profileIsFleetAccount(
       { name: opts.pending.profile, email: opts.pending.email },
-      opts.activeEmail,
+      { activeEmail: opts.activeEmail, launchProfile: opts.launchProfile },
     )
   ) {
     return { phase: "succeeded" };
@@ -106,7 +121,14 @@ export function machineSwitchPendingCopy(phase: MachineSwitchPhase, profile: str
   return `Switching this machine to "${profile}"…`;
 }
 
-export function machineSwitchSuccessCopy(profile: string): { title: string; description: string } {
+export function machineSwitchSuccessCopy(profile: string, viaToken = false): { title: string; description: string } {
+  if (viaToken) {
+    return {
+      title: `Sessions now run on "${profile}"`,
+      description:
+        "On its minted token: new and resumed sessions use it, running ones keep the account they started on. The machine's login stays until you sign in again on this account.",
+    };
+  }
   return {
     title: `This machine is now "${profile}"`,
     description: "New and resumed sessions will use it. Running sessions keep the account they started on.",

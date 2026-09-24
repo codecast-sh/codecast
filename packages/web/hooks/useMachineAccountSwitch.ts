@@ -15,7 +15,7 @@ import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import {
   machineSwitchPendingCopy,
   machineSwitchSuccessCopy,
-  profileIsCurrentLogin,
+  profileIsFleetAccount,
   resolveMachineSwitch,
   type MachineSwitchPhase,
 } from "../lib/machineAccountSwitch";
@@ -44,7 +44,7 @@ type SwitchState = { pending: PendingSwitch | null; outcome: MachineSwitchOutcom
 const idle: SwitchState = { pending: null, outcome: null };
 const useSwitchState = create<Record<string, SwitchState>>(() => ({}));
 
-export function useMachineAccountSwitch(opts: { deviceId?: string; activeEmail?: string }): {
+export function useMachineAccountSwitch(opts: { deviceId?: string; activeEmail?: string; launchProfile?: string }): {
   switchTo: (profile: string, email?: string) => Promise<void>;
   switching: string | null;
   phase: MachineSwitchPhase;
@@ -55,8 +55,9 @@ export function useMachineAccountSwitch(opts: { deviceId?: string; activeEmail?:
   const deviceId = opts.deviceId ?? "";
   const state = useSwitchState((s) => s[deviceId] ?? idle);
   const { pending } = state;
+  const fleet = { activeEmail: opts.activeEmail, launchProfile: opts.launchProfile };
   const outcome = state.outcome?.kind === "success" &&
-    !profileIsCurrentLogin({ name: state.outcome.profile, email: state.outcome.email }, opts.activeEmail)
+    !profileIsFleetAccount({ name: state.outcome.profile, email: state.outcome.email }, fleet)
     ? null : state.outcome;
   const { data: cmd } = useQueryNoThrow(
     api.users.getCommandResult,
@@ -66,6 +67,7 @@ export function useMachineAccountSwitch(opts: { deviceId?: string; activeEmail?:
   const resolved = resolveMachineSwitch({
     pending,
     activeEmail: opts.activeEmail,
+    launchProfile: opts.launchProfile,
     command: cmd ?? undefined,
     now,
   });
@@ -83,7 +85,7 @@ export function useMachineAccountSwitch(opts: { deviceId?: string; activeEmail?:
         pending: null,
         outcome: { kind: "success", profile: pending.profile, email: pending.email, message: `Now using ${pending.profile}` },
       } });
-      const copy = machineSwitchSuccessCopy(pending.profile);
+      const copy = machineSwitchSuccessCopy(pending.profile, opts.launchProfile === pending.profile);
       toast.success(copy.title, { id: pending.toastId, description: copy.description });
       return;
     }
@@ -103,7 +105,7 @@ export function useMachineAccountSwitch(opts: { deviceId?: string; activeEmail?:
       return;
     }
     if (useSwitchState.getState()[deviceId]?.pending) return;
-    if (profileIsCurrentLogin({ name: profile, email }, opts.activeEmail)) {
+    if (profileIsFleetAccount({ name: profile, email }, fleet)) {
       toast.success(`Already on "${profile}"`);
       useSwitchState.setState({ [deviceId]: { pending: null, outcome: { kind: "success", profile, email, message: `Already using ${profile}` } } });
       return;

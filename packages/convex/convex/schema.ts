@@ -476,6 +476,11 @@ export default defineSchema({
     // create; the daemon re-reads it on every resume so a restart never
     // silently falls back to the machine's keychain login.
     cc_account: v.optional(v.string()),
+    // True when the machine chose `cc_account` (the account its sessions ran
+    // on at launch or at a switch), absent when a person named it
+    // (`--account`). An automatic pin follows the machine's account on the
+    // next resume (resumePinFor); a chosen one never moves.
+    cc_account_auto: v.optional(v.boolean()),
     // The Codex account profile this session's PROCESS is running on, recorded
     // by the daemon that launched it. Not a pin like cc_account: Codex reads
     // ~/.codex/auth.json once at start and holds that grant for life, so a

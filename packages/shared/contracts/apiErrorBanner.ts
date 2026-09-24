@@ -180,13 +180,25 @@ const THROTTLE_BANNER_RE = /^rate limited ·/i;
 // exceeded_limit payload instead (see EXCEEDED_LIMIT_BODY_RE) and stays "limit".
 const TRANSIENT_RATE_LIMIT_RE = /would exceed your account['’]s rate limit/i;
 
+// Claude Code's own verdict on a 429, written on the entry as `apiError` since
+// 2.1.274. "model_requires_usage_credits" means the model's window is spent and
+// only usage credits (or another account) continue it. Its errorDetails carry
+// the same transient wording as a burst, so this field is what tells them
+// apart: every such 429 on this machine from 2.1.274 to 2.1.281 (2,318 entries)
+// carried it, and not one carried the transient wording without it. Read as a
+// burst, a spent Fable window was retried on the same account forever and the
+// switch loop never moved the session (2026-09-23).
+const QUOTA_API_ERRORS: ReadonlySet<string> = new Set(["model_requires_usage_credits"]);
+
 /** Is this API-error banner entry a burst throttle rather than a quota park?
  * Judged from the JSONL entry's own fields, never the rendered words. */
 export function isTransientRateLimit429(
   status: number | null | undefined,
   errorDetails: string | null | undefined,
+  apiError?: string | null,
 ): boolean {
   if (status !== 429 || !errorDetails) return false;
+  if (apiError && QUOTA_API_ERRORS.has(apiError)) return false;
   if (EXCEEDED_LIMIT_BODY_RE.test(errorDetails)) return false;
   return TRANSIENT_RATE_LIMIT_RE.test(errorDetails);
 }

@@ -46,6 +46,7 @@ export interface ClaudeSessionEntry {
   isApiErrorMessage?: boolean;
   apiErrorStatus?: number;
   errorDetails?: string;
+  apiError?: string;
   // A message the user queues with Ctrl+Enter (or that codecast's daemon injects
   // while the agent is mid-turn) is written as type:"attachment" with this shape —
   // the prompt lives in `attachment.prompt`, NOT in `message.content`. A text-only
@@ -170,17 +171,17 @@ function stripControlPrefix(text: unknown): string {
 
 // The banner text to sync for a Claude Code API-error entry. The CLI renders a
 // transient burst 429 with the same words as a weekly quota exhaustion ("You've
-// reached your Fable limit …"); the entry's own errorDetails tells them apart,
+// reached your Fable limit …"); the entry's own fields tell them apart,
 // and this is the only place that sees it — so the throttle is rewritten into
 // the shared classifier's marked form here, once, for every reader (sync,
 // tail probes, the web card). Exception: the short "/model to switch models."
 // form is a spent model window whose 429 payload is identical to a burst's,
 // so the words alone decide and it keeps the CLI's own text (kind "limit").
 export function claudeBannerText(
-  entry: Pick<ClaudeSessionEntry, "isApiErrorMessage" | "apiErrorStatus" | "errorDetails">,
+  entry: Pick<ClaudeSessionEntry, "isApiErrorMessage" | "apiErrorStatus" | "errorDetails" | "apiError">,
   text: string,
 ): string {
-  if (entry.isApiErrorMessage && !isModelSwitchLimitBanner(text) && isTransientRateLimit429(entry.apiErrorStatus, entry.errorDetails)) {
+  if (entry.isApiErrorMessage && !isModelSwitchLimitBanner(text) && isTransientRateLimit429(entry.apiErrorStatus, entry.errorDetails, entry.apiError)) {
     return throttleBannerContent(text);
   }
   return text;

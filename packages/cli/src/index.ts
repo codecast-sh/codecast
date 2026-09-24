@@ -87,7 +87,7 @@ import {
   WorkspaceUnresolved,
   type Workspace,
 } from "./resolveWorkspace.js";
-import { listProfiles, saveProfile, useProfile, deleteProfile, getAccountsHeartbeatPayload, CcAccountError, accountLaunchInfo, accountTokenInfo, writeAccountToken, removeAccountToken, ensureProfileStore, profileStoreDir, adoptProfileStoreCredential, auditProfileIdentities, repairProfileIdentities, type ProfileAudit } from "./ccAccounts.js";
+import { listProfiles, saveProfile, switchProfile, launchProfileName, deleteProfile, getAccountsHeartbeatPayload, CcAccountError, accountLaunchInfo, accountTokenInfo, writeAccountToken, removeAccountToken, ensureProfileStore, profileStoreDir, adoptProfileStoreCredential, auditProfileIdentities, repairProfileIdentities, type ProfileAudit } from "./ccAccounts.js";
 import { buildUsageReport, loadLocalUsageProfiles, renderUsageReport } from "./usageCommand.js";
 import type { RecoveryMode } from "@codecast/shared/contracts";
 import { ensureLimitsGuidanceForMultiAccount } from "./limitsGuidance.js";
@@ -4424,8 +4424,21 @@ accountsCmd
         console.log(`${c.dim}No saved profiles. Save the current login with:${c.reset} cast accounts save <name>`);
         return;
       }
+      // After a token switch the fleet runs on the launch profile while the
+      // keychain login stays: the lit row is where sessions run.
+      const launchProfile = launchProfileName();
       for (const p of profiles) {
-        const mark = p.active ? `${c.green}●${c.reset}` : `${c.dim}○${c.reset}`;
+        const onFleet = launchProfile ? p.name === launchProfile : p.active;
+        const mark = onFleet ? `${c.green}●${c.reset}` : `${c.dim}○${c.reset}`;
+        const roleNote = launchProfile
+          ? p.name === launchProfile
+            ? ` ${c.green}— sessions run here (token)${c.reset}`
+            : p.active
+              ? ` ${c.dim}— machine login${c.reset}`
+              : ""
+          : p.active
+            ? ` ${c.dim}— active${c.reset}`
+            : "";
         const tier = p.subscription ? ` ${c.dim}(${p.subscription}${p.tier?.includes("20x") ? " 20x" : ""})${c.reset}` : "";
         const launch = accountLaunchInfo(p.name);
         const setup = accountTokenInfo(p.name);
@@ -4440,7 +4453,7 @@ accountsCmd
             : launch
               ? (launch.expires_at <= Date.now() ? ` ${c.yellow}· refresh lifetime over — cast accounts signin ${p.name}${c.reset}` : ` ${c.dim}· sessions${c.reset}`)
               : "";
-        console.log(`${mark} ${c.cyan}${p.name}${c.reset} ${p.email ?? ""}${tier}${tokenNote}${p.active ? ` ${c.dim}— active${c.reset}` : ""}`);
+        console.log(`${mark} ${c.cyan}${p.name}${c.reset} ${p.email ?? ""}${tier}${tokenNote}${roleNote}`);
       }
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err));
@@ -4603,9 +4616,10 @@ accountsCmd
       return;
     }
     try {
-      const result = useProfile(name);
-      console.log(`${c.green}✓${c.reset} switched to ${c.cyan}${name}${c.reset}${result.toEmail ? ` (${result.toEmail})` : ""}`);
+      const result = switchProfile(name);
+      console.log(`${c.green}✓${c.reset} switched to ${c.cyan}${name}${c.reset}${result.toEmail ? ` (${result.toEmail})` : ""}${result.mode === "token" ? " on its setup-token" : ""}`);
       if (result.from) console.log(`${c.dim}  outgoing account re-saved as "${result.from}"${c.reset}`);
+      if (result.mode === "token") console.log(`${c.dim}  the saved login is dead, so the keychain login stays; sessions codecast starts or resumes run on the token${c.reset}`);
       console.log(`${c.dim}  running sessions keep the old account until restarted — new/resumed ones use ${name}${c.reset}`);
     } catch (err) {
       console.error(err instanceof CcAccountError ? err.message : String(err));

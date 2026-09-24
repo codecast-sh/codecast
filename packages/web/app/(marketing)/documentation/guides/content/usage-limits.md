@@ -35,6 +35,8 @@ Log into each Claude account once with `claude /login`, then run `cast accounts 
 
 One session can run on a saved account while the machine stays on another. `cast spawn --account <name>` starts the session with that profile's credential. It needs `cast accounts token <name>`, which stores a `claude setup-token`: a fixed sign in that lasts one year and needs no refresh. If the token is past that year, the launch warns and names the command that removes it.
 
+A token also makes a switch possible when the saved login has expired. `cast accounts use <name>`, the Switch button and the automatic switch all land on the keychain when the profile's login works, and on the token when it does not. A token switch moves the fleet without touching the machine's login: every session codecast starts or resumes runs on the token, the parked sessions restart on it, and the meters and the switch candidates read that account as the one in use. The accounts page marks the row "sessions run here · token" and the old login "machine login". A `claude` typed in a terminal still runs on the keychain login. The choice holds until the next switch, until the token or the profile is removed, or until the machine signs into a different account.
+
 ## How a parked session recovers
 
 The daemon classifies the banner text. A usage limit is kind `limit`. A rate limit from too many requests in a minute is kind `throttle` and takes a separate path. The conversation row gets `pending_api_error`, `pending_api_error_kind` and `pending_api_error_at`, and the write schedules the recovery check. What the check does depends on the machine's recovery mode, set on the Claude accounts page in Settings:
@@ -46,7 +48,7 @@ The daemon classifies the banner text. A usage limit is kind `limit`. A rate lim
 | `resume` | Resume at reset only | Never changes accounts. Continues the sessions when the window resets. |
 | `off` | Do nothing | Sessions stay parked until a person continues them. |
 
-The candidates for a switch are the saved profiles that are not the active login, have no window at 100%, and have a login that still works. They rank by the highest percent across their windows, lowest first. An account that was already tried since the newest park is left out. An account at its plan limit with usage credits on stays eligible, but ranks last.
+The candidates for a switch are the saved profiles that are not the account in use, have no window at 100%, and can carry a session: a login that still works, or a stored token. They rank by the highest percent across their windows, lowest first. An account that was already tried since the newest park is left out. An account at its plan limit with usage credits on stays eligible, but ranks last.
 
 When every saved account is spent, the check records that and runs again 2 minutes after the earliest reset. A trigger run that parks on a limit follows the same rule: it resumes its own session after the reset and spends none of its retries ([triggers](/documentation/triggers)).
 

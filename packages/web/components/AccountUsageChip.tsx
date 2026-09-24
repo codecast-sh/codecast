@@ -26,10 +26,10 @@ import { useAccountRecoveryToggles } from "../hooks/useAccountRecoveryToggles";
 import { RecoveryModeSelect, RecoveryDecisionNote } from "./RecoveryModeSelect";
 import { useMachineAccountSwitch } from "../hooks/useMachineAccountSwitch";
 import { useTrackedStore } from "../store/inboxStore";
-import { exhaustionBannerCopy, isExhaustionCurrent, worstUsagePercent, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
+import { exhaustionBannerCopy, isExhaustionCurrent, profileHasSetupToken, worstUsagePercent, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
 import { formatAgo, headroomScore, describeDecision } from "@codecast/shared/contracts";
 import { resolveAccountChip } from "../lib/accountUsageChip";
-import { machineSwitchBlock, machineSwitchPendingCopy } from "../lib/machineAccountSwitch";
+import { machineSwitchBlock, machineSwitchPendingCopy, profileIsCurrentLogin } from "../lib/machineAccountSwitch";
 import { usageTone } from "../lib/usageTone";
 import { AccountUsageBars, LoginExpiredBadge, ProfileSignInButton, UsageRefreshButton } from "./AccountUsageMeter";
 import { MintTokenButton, SetupTokenBadge } from "./MintTokenDialog";
@@ -49,6 +49,7 @@ function ClaudeSwitchControl({
   profile,
   email,
   loginExpired,
+  tokenLive,
   online,
   isRemote,
   switching,
@@ -57,6 +58,7 @@ function ClaudeSwitchControl({
   profile: string;
   email?: string;
   loginExpired: boolean;
+  tokenLive: boolean;
   online?: boolean;
   isRemote?: boolean;
   switching: boolean;
@@ -67,6 +69,7 @@ function ClaudeSwitchControl({
     online,
     isRemote,
     loginExpired,
+    tokenLive,
     thisProfile: profile,
   });
   if (blocked?.block === "login_expired") {
@@ -195,6 +198,7 @@ export function AccountUsageChip() {
   const sw = useMachineAccountSwitch({
     deviceId: device?.device_id,
     activeEmail: device?.active_email,
+    launchProfile: device?.launch_profile,
   });
   const closeSoon = () => {
     pointerInside.current = false;
@@ -322,7 +326,16 @@ export function AccountUsageChip() {
                   switching…
                 </span>
               ) : e.isActive ? (
-                <span className="shrink-0 text-[10px] font-medium text-sol-green">active</span>
+                <span
+                  className="shrink-0 text-[10px] font-medium text-sol-green"
+                  title={
+                    e.provider === "claude" && device.launch_profile === e.p.name
+                      ? "Sessions run on this account's minted token; the machine's own login is another account"
+                      : undefined
+                  }
+                >
+                  {e.provider === "claude" && device.launch_profile === e.p.name ? "active · token" : "active"}
+                </span>
               ) : e.provider === "claude" ? (
                 // Codex rows are display-only for now — switching the
                 // machine's Codex account is the follow-up (auth.json swap).
@@ -330,6 +343,7 @@ export function AccountUsageChip() {
                   profile={e.p.name}
                   email={e.p.email}
                   loginExpired={!!e.p.login_expired_at}
+                  tokenLive={profileHasSetupToken(e.p, now)}
                   online={device.online}
                   isRemote={device.is_remote}
                   switching={sw.switching !== null}
@@ -342,6 +356,14 @@ export function AccountUsageChip() {
                 nothing to say, so the line collapses when all are absent. */}
             <div className="mb-1 flex flex-wrap items-center gap-1 empty:hidden">
               <LoginExpiredBadge profile={e.p} />
+              {e.provider === "claude" && !!device.launch_profile && !e.isActive && profileIsCurrentLogin(e.p, device.active_email) && (
+                <span
+                  className="rounded bg-sol-bg-alt px-1 py-px text-[9px] text-sol-text-dim"
+                  title="The machine's keychain login: what a `claude` typed in a terminal runs on"
+                >
+                  machine login
+                </span>
+              )}
               {e.provider === "claude" && device && (
                 <ProfileSignInButton
                   device={device}
@@ -502,7 +524,8 @@ export function AccountUsageChip() {
               </div>
               <p className="px-0.5 text-[10px] leading-snug text-sol-text-dim">
                 Switch changes the default login on this machine. Sessions already running keep the
-                account they started on.
+                account they started on. An account whose login expired but holds a minted token
+                switches on the token: sessions move, the machine's login stays.
               </p>
               {otherGroups.map((g) => renderGroup(g, false))}
             </>
