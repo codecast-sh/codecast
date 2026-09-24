@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { probeEndpoint } from "./endpoint";
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
@@ -11,8 +11,14 @@ test("cold snapshot retries a temporary 503 and restores the eventual sessions",
 });
 test("expired snapshot remains unavailable instead of proving an empty session list", async () => {
   let calls = 0;
-  globalThis.fetch = (async () => { calls++; return Response.json({ unavailable: true }, { status: 503 }); }) as typeof fetch;
-  expect(await probeEndpoint(endpoint, 100)).toBeNull(); expect(calls).toBe(1);
+  let now = 0;
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  globalThis.fetch = (async () => { calls++; now = 100; return Response.json({ unavailable: true }, { status: 503 }); }) as typeof fetch;
+  try {
+    expect(await probeEndpoint(endpoint, 100)).toBeNull(); expect(calls).toBe(1);
+  } finally {
+    clock.mockRestore();
+  }
 });
 test("permanent refusal and ordinary 503 are not retried", async () => {
   for (const status of [403, 503]) {
