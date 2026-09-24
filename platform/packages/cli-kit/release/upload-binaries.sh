@@ -54,6 +54,9 @@ MANIFEST=$(jq -n --arg v "$VERSION" --arg released "$(date -u +%Y-%m-%dT%H:%M:%S
      ($k2):{url:($base+"/"+$a2),sha256:$s2}, ($k3):{url:($base+"/"+$a3),sha256:$s3},
      ($k4):{url:($base+"/"+$a4),sha256:$s4}}}')
 echo "$MANIFEST" > /tmp/$MANIFEST_NAME
+# This publishes unsigned: drop any signature a signed release left, because a
+# client that pins the key refuses a signature that no longer matches.
+aws s3 rm "s3://$R2_BUCKET/$MANIFEST_NAME.sig" --endpoint-url "$R2_ENDPOINT" --only-show-errors || true
 aws s3 cp /tmp/$MANIFEST_NAME "s3://$R2_BUCKET/$MANIFEST_NAME" --endpoint-url "$R2_ENDPOINT" \
   --content-type "application/json" --cache-control "no-cache, no-store, must-revalidate" --quiet
 echo "  $RELEASE_BASE_URL/$MANIFEST_NAME"

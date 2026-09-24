@@ -170,6 +170,9 @@ EOF
 )
 
 echo "$LATEST_JSON" > /tmp/latest.json
+# This path publishes unsigned. A signature left from a CI release would no
+# longer match, and a client that pins the key refuses a mismatch, so drop it.
+aws s3 rm "s3://$R2_BUCKET/latest.json.sig" --endpoint-url "$R2_ENDPOINT" --only-show-errors || true
 aws s3 cp /tmp/latest.json "s3://$R2_BUCKET/latest.json" \
   --endpoint-url "$R2_ENDPOINT" \
   --content-type "application/json" \

@@ -237,7 +237,11 @@ describe("darwin code signature gate", () => {
   it("refuses the swap through the real updater when the gate says no", async () => {
     const { fs, files } = memFs({ "/opt/codecast/codecast": "OLD" });
     const sha = await sha256Hex(NEW);
-    const fetch = (async () => new Response(JSON.stringify({ version: "9.9.9", released: "", binaries: { "darwin-arm64": { url: `${RELEASE_BASE_URL}/codecast-darwin-arm64`, sha256: sha } } }))) as unknown as typeof globalThis.fetch;
+    // An unsigned release: the pinned key is optional, so a 404 signature is accepted.
+    const fetch = (async (url: string) =>
+      String(url).endsWith(".sig")
+        ? new Response("", { status: 404 })
+        : new Response(JSON.stringify({ version: "9.9.9", released: "", binaries: { "darwin-arm64": { url: `${RELEASE_BASE_URL}/codecast-darwin-arm64`, sha256: sha } } }))) as unknown as typeof globalThis.fetch;
     const updater = createCodecastUpdater({
       currentVersion: "1.0.0", stateDir: "/s", fetch, fs, execPath: "/opt/codecast/codecast", platform: "darwin", arch: "arm64", log: () => {},
       download: async (_u, dest) => void files.set(dest, NEW),

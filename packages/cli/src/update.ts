@@ -33,13 +33,15 @@ export const RELEASE_BASE_URL = "https://dl.codecast.sh";
 export const DARWIN_SIGNING_TEAM = "WRG9THCK9Q";
 
 /**
- * Public keys that may vouch for latest.json, by key id. Empty until a release
- * signing key exists: with no keys the updater checks nothing and asks for
- * nothing, which is exactly how every client in the field behaves today. The
- * rollout (pin a key here, then sign in CI, then flip `required`) is written
- * up in docs/architecture/release-signing.md.
+ * Public keys that may vouch for latest.json, by key id. CI signs every
+ * release with cli-release-2026 (custody in docs/architecture/release-signing.md).
+ * While `required` is false a missing signature is still accepted, so an
+ * unsigned publish keeps working; a signature that does not match is refused.
  */
-export const RELEASE_MANIFEST_SIGNING: ManifestSigningPolicy = { keys: {}, required: false };
+export const RELEASE_MANIFEST_SIGNING: ManifestSigningPolicy = {
+  keys: { "cli-release-2026": "4f1kzY89/uJGGB+hvoONtVag56qy1gOkVxhMzLdEc5M=" },
+  required: false,
+};
 
 type ExecFileSync = typeof execFileSync;
 type SpawnSync = typeof spawnSync;
