@@ -27,11 +27,15 @@ export type CueTone = {
 export type CueNoise = {
   start: number;
   dur: number;
-  /** Envelope peak. Noise starts at full and decays; it has no attack. */
+  /** Envelope peak. */
   gain: number;
+  /** Seconds to reach `gain`. Default 0: noise opens at full, as a squelch tail does. */
+  attack?: number;
   /** Bandpass centre and its Q. */
   band: number;
   q?: number;
+  /** Glide the bandpass centre to this frequency across `dur`. A moving band is what makes noise a swoosh. */
+  sweepTo?: number;
 };
 
 export type CueSpec = {
@@ -130,4 +134,13 @@ export const WALKIE_AWAY: CueSpec = {
     // it a tick rather than a note.
     { freq: 220, start: 0, dur: 0.09, gain: 0.3, type: "sine", attack: 0.004 },
   ],
+};
+
+/** Stash: a swoosh that rises and fades, the card flying off the screen. A
+ *  wide band (Q 1.1) keeps it airy; the narrow Q 2 sweep before it whistled.
+ *  It swells in over 90 ms rather than opening at full, so it reads as motion
+ *  and not as a hit. */
+export const STASH_AWAY: CueSpec = {
+  master: 0.083,
+  noise: [{ start: 0, dur: 0.22, attack: 0.09, gain: 0.7, band: 500, sweepTo: 2800, q: 1.1 }],
 };

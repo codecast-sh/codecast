@@ -16,7 +16,6 @@ import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useRoleScope } from "../../hooks/useRoleScope";
 import { RoleAvatar } from "../org/avatars";
 import { HoverCard } from "../ui/HoverCard";
-import { roleRingStyle } from "../../lib/roleRingStyle";
 import { RoleScopeView } from "./RoleScopeView";
 import { isAvatarKey, defaultAvatarFor } from "@codecast/shared/contracts/orgAvatars";
 import { relativeTime } from "../../lib/entityDisplay";
@@ -42,7 +41,7 @@ export function RoleHoverContent({ role }: { role: RoleRef }) {
     // here so opening the role never also selects the row under it.
     <Link href={`/org/${r.short_id}`} onClick={(e) => e.stopPropagation()} className="block p-3 space-y-2.5 text-xs no-underline rounded-[inherit] hover:bg-sol-bg-highlight/30 transition-colors" data-role-card={r.short_id}>
       <div className="flex items-start gap-2.5">
-        <span className="inline-block rounded-full flex-shrink-0 mt-0.5" style={{ width: 36, height: 36, lineHeight: 0, ...roleRingStyle(36) }}>
+        <span className="inline-block rounded-full flex-shrink-0 mt-0.5" style={{ width: 36, height: 36, lineHeight: 0 }}>
           <RoleAvatar avatar={avatar} size={36} title={r.name} />
         </span>
         <div className="min-w-0 flex-1">

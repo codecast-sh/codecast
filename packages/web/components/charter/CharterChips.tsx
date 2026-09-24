@@ -12,7 +12,6 @@ import type { OrgRole } from "../org/orgTypes";
 import { watchersLabel, type ProjectLead } from "@codecast/shared/contracts/orgLead";
 import { RoleAvatar } from "../org/avatars";
 import { RoleHoverCard } from "../identity";
-import { roleRingStyle } from "../../lib/roleRingStyle";
 import { CHARTER_PRIORITIES, PRIORITY_META, ownerCandidates, ownerRoleOf, roleHref, type CharterPriority, type OrgRoles } from "./charterMeta";
 
 /** A chip with a menu under it. The trigger is the chip; the list floats
@@ -123,10 +122,10 @@ export function PriorityPill({ priority, onChange, size = "sm", className }: {
   );
 }
 
-/** A role's face at chip size, ringed the way every role face is. */
+/** A role's face at chip size. */
 export function ChipFace({ role, px }: { role: OrgRole; px: number }) {
   return (
-    <span className="inline-block rounded-full shrink-0" style={{ width: px, height: px, lineHeight: 0, ...roleRingStyle(px) }}>
+    <span className="inline-block rounded-full shrink-0" style={{ width: px, height: px, lineHeight: 0 }}>
       <RoleAvatar avatar={role.avatar ?? role.handle} size={px} title={role.name} />
     </span>
   );

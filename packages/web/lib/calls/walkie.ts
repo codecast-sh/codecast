@@ -1462,10 +1462,14 @@ export async function endWalkie(): Promise<void> {
 
 async function endWalkieHere(): Promise<void> {
   if (burst) await endBurst();
-  const held = status.liveRoom;
   if (status.incoming) emit({ incoming: null });
+  // END IS A DECISION, so the row lets go the moment it is pressed. The room
+  // was held until the leave resolved, and the leave waits on the leave
+  // mutation and the transcript flush: the founder watched the call sit on
+  // the row "not ended" for seconds after End (2026-09-24). Nothing below
+  // reads the claim, and a burst in flight has already been ended above.
+  leaveLiveRoom();
   await leaveCall();
-  if (held) releaseRoom(held.key);
   refresh();
 }
 

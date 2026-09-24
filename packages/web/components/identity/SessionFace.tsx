@@ -1,13 +1,11 @@
 // The face a session wears (session-characters.md S3): its character's
-// avatar, or its role's when the row is a role's standing session. A role's
-// face carries the org page's violet as a thin ring so a role reads as a role
-// at every size; a character has no ring. Sizing and the art live in
-// org/avatars; this is the one place a SESSION ROW turns into a face.
+// avatar, or its role's when the row is a role's standing session. Sizing
+// and the art live in org/avatars; this is the one place a SESSION ROW turns
+// into a face.
 import type { ReactNode } from "react";
 import { RoleAvatar } from "../org/avatars";
 import { avatarLength } from "../../lib/orgAvatars";
 import { faceBadgeSize, faceIdentity, type IdentityRow } from "../../lib/sessionIdentity";
-import { roleRingStyle } from "../../lib/roleRingStyle";
 
 export function SessionFace({ row, size = 18, className, title, badge }: {
   row: IdentityRow;
@@ -32,7 +30,7 @@ export function SessionFace({ row, size = 18, className, title, badge }: {
     <span className={`relative inline-block flex-shrink-0 ${className ?? ""}`} style={{ width: box, height: box, lineHeight: 0 }}>
       <span
         className="block rounded-full"
-        style={{ width: box, height: box, lineHeight: 0, ...(id.kind === "role" ? roleRingStyle(size) : null) }}
+        style={{ width: box, height: box, lineHeight: 0,  }}
         data-identity={id.kind}
       >
         <RoleAvatar avatar={id.avatar} size={size} title={title ?? ("name" in id ? id.name : undefined)} />

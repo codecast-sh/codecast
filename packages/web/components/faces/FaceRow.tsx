@@ -26,7 +26,10 @@ import { type FaceDensity, FACE_ROW_METRICS, LINK_PULL, faceRowWidth, faceRowSiz
 // machinery (useFloatingCircles) sizes the window and lifts click through;
 // `FloatingFaceRow` is the row with that machinery attached.
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from "react";
-import { GripHorizontal, Maximize2, MicOff, X } from "lucide-react";
+import { GripHorizontal, Maximize2, MicOff, Sparkle, X } from "lucide-react";
+import { defaultAvatarFor, isAvatarKey } from "@codecast/shared/contracts/orgAvatars";
+import { AVATAR_URLS } from "../../lib/orgAvatars";
+import { useInboxStore } from "../../store/inboxStore";
 import type { FaceEntry, FaceRow as FaceRowModel, FaceState, LinkKind } from "../../lib/faces/faceRow";
 import { useCircleFace } from "../../hooks/useCircleFace";
 import { CircleFace } from "../calls/FaceCircle";
@@ -121,6 +124,14 @@ function bothRefs<T extends HTMLElement>(
   };
 }
 
+/** The avatar key an agent's anchor picked, found by the agent's user id. */
+function anchorAvatarOf(anchors: Record<string, any> | undefined, botUserId: string): string | null {
+  for (const a of Object.values(anchors ?? {})) {
+    if (a && String(a.bot_user_id) === botUserId) return a.bot_avatar ?? null;
+  }
+  return null;
+}
+
 function FaceSeat({
   entry,
   tile,
@@ -152,7 +163,11 @@ function FaceSeat({
   onPointerUp?: (e: React.PointerEvent) => void;
 }) {
   const diameter = FACE_ROW_METRICS[density].face;
-  const { hostRef, videoRef, track } = useCircleFace({ tile, image: entry.image, diameter, active: true });
+  // An agent's face is its animal, the portrait the org chart and the inbox
+  // draw for it: its anchor's own pick, else the animal its name maps to.
+  const botAvatar = useInboxStore((s: any) => (entry.bot ? anchorAvatarOf(s.anchors, entry.id) : null));
+  const image = entry.bot ? AVATAR_URLS[isAvatarKey(botAvatar) ? botAvatar : defaultAvatarFor(entry.name)] : entry.image;
+  const { hostRef, videoRef, track } = useCircleFace({ tile, image, diameter, active: true });
   // No track in this window (the media is in the voice host): the host's
   // relayed frame stands in, so the header still shows the person, not a photo.
   const frame = useVideoFrame(entry.video && !track ? entry.id : null);
@@ -197,6 +212,7 @@ function FaceSeat({
         data-face-hit
         data-state={entry.state}
         data-me={entry.me ? "1" : undefined}
+        data-bot={entry.bot ? "1" : undefined}
         data-level={entry.level ?? undefined}
         data-speaking={entry.state === "speaking" ? "true" : undefined}
         data-followed={entry.followed ? "true" : undefined}
@@ -217,7 +233,7 @@ function FaceSeat({
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
       >
-        <CircleFace videoRef={videoRef} track={track} frame={frame} image={entry.image} name={entry.name} diameter={diameter} />
+        <CircleFace videoRef={videoRef} track={track} frame={frame} image={image} name={entry.name} diameter={diameter} />
       </button>
       {/* The marks on the person sit on the circle's EDGE, outside its clip:
           the presence badge, the mute badge, the unread count, the ask. The
@@ -228,7 +244,15 @@ function FaceSeat({
           <MicOff className="h-3 w-3" />
         </span>
       )}
-      {presence && <PresenceBadge state={presence} size={density === "bar" ? "sm" : "md"} className="face-pres" />}
+      {/* An agent wears its tag where a person wears presence: it is always
+          there and never away, so the dot would say nothing. */}
+      {entry.bot ? (
+        <span className="face-bot" aria-label="agent" title="Agent">
+          <Sparkle className="face-bot-glyph" aria-hidden="true" />
+        </span>
+      ) : (
+        presence && <PresenceBadge state={presence} size={density === "bar" ? "sm" : "md"} className="face-pres" />
+      )}
       {entry.unread > 0 && (
         <span className="face-unread" aria-label={`${entry.unread} unread`}>
           {entry.unread > 99 ? "99+" : entry.unread}

@@ -11,7 +11,7 @@ import { FACE_CARD_WIDTH } from "../../lib/faces/layout";
 // Reads by member id and subscribes only while mounted: the row itself never
 // subscribes to session churn for the sake of a card nobody is looking at.
 import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowRight, ChevronRight } from "lucide-react";
+import { ArrowRight, ChevronRight, X } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useOpenSession } from "../../hooks/useOpenSession";
@@ -154,6 +154,12 @@ function FaceCardBody({
         }
       }}
     >
+      {/* The way out, always in the same corner. In the float the card stays
+          while the pointer is in the window, so without it the only close on
+          screen closed the whole float. */}
+      <button type="button" className="face-card-close" aria-label="Close" title="Close" onClick={onClose}>
+        <X className="h-3.5 w-3.5" />
+      </button>
       {/* The identity block is the door to the profile: one large target. */}
       <Who door={!!onOpenProfile} onClick={() => onOpenProfile?.(member)}>
         {/* No presence dot before the name: the face the pointer is on
@@ -224,6 +230,11 @@ function FaceCardBody({
         </div>
       )}
 
+      {member.is_bot ? (
+        // An agent: nothing here calls or messages it (the server refuses a
+        // DM to a bot). Its profile is the door above.
+        <div className="face-card-agent">Agent: talk to it in its session or a channel</div>
+      ) : (
       <div className="face-card-actions" data-switch={isSelf ? "1" : undefined}>
         {isSelf ? (
           // Your own card is the status switch: the one action that makes
@@ -257,6 +268,7 @@ function FaceCardBody({
           />
         )}
       </div>
+      )}
     </div>
   );
 }

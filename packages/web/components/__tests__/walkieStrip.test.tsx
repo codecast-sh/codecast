@@ -55,7 +55,8 @@ describe("a teammate is talking to me", () => {
     // One line under the faces: the founder's "this is too much" was the loud
     // word, the caption plate and the stacked buttons of the corner strip.
     expect(html).toContain("walkie-stage-incoming");
-    expect(html).toContain(`${NAME} is talking to you`);
+    // The faces say who; the strip names them once, by first name.
+    expect(html).toContain("Riley is talking to you");
     expect(html).not.toContain("INCOMING");
     expect(html).not.toContain("TALK to answer");
   });
@@ -248,14 +249,14 @@ describe("on the line, the card is the seats' violet", () => {
 describe("a ring", () => {
   test("in: who, the word, and the two answers in the ring card's own buttons", () => {
     const html = render({ kind: "ring-in", roomKey: ROOM, from: "u-ann", name: NAME, answer: true, decline: true });
-    expect(html).toContain(`${NAME}</span> is calling`);
+    expect(html).toContain("Riley</span> is calling");
     expect(html).toContain("ring-card-join");
     expect(html).toContain("ring-card-decline");
   });
 
   test("out: who, the status, and a cancel in the ring card's own button", () => {
     const html = render({ kind: "ring-out", roomKey: ROOM, to: "u-ann", name: NAME, cancel: true, status: "ringing" });
-    expect(html).toContain(NAME);
+    expect(html).toContain("Ringing <span class=\"engagement-card-title\">Riley</span>");
     expect(html).toContain("Ringing");
     expect(html).toContain(">Cancel<".replace(">", ""));
     expect(html).toContain('data-card-action="cancel"');
