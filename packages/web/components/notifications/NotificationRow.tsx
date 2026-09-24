@@ -187,10 +187,15 @@ export function NotificationGroupRow({
             {faces.map((r, i) => (
               <span
                 key={r._id}
+                data-group-face
                 className="w-7 h-7 rounded-full bg-sol-bg border border-sol-border flex items-center justify-center"
                 style={{ zIndex: faces.length - i }}
               >
-                <SessionGlyph row={r.conversation} size={14} />
+                <SessionGlyph
+                  row={r.conversation}
+                  size={14}
+                  fallback={<AgentIcon agentType={r.conversation?.agent_type || "claude_code"} className="w-full h-full" />}
+                />
               </span>
             ))}
           </div>
