@@ -661,10 +661,11 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   updateOrgRole: async (ctx, _userId, [roleId, fields, opts]: [string, any, { leave_sessions?: boolean } | undefined]) => {
     // A pause or resume is the standing agent's (org-roles-standing.md T4):
     // hands get their interrupt and held wakes flush, which a bare status
-    // patch would skip. Trust and caps have their own human-only mutations.
+    // patch would skip. The switch and the limits have their own human-only mutations.
     if (fields.status === "paused") await ctx.runMutation!((api as any).orgRoles.pause, { role_id: roleId });
     else if (fields.status === "active") await ctx.runMutation!((api as any).orgRoles.resume, { role_id: roleId });
-    if (fields.trust !== undefined) await ctx.runMutation!((api as any).orgRoles.setTrust, { role_id: roleId, trust: fields.trust });
+    if (fields.starts_on_its_own !== undefined) await ctx.runMutation!((api as any).orgRoles.setTrust, { role_id: roleId, on: !!fields.starts_on_its_own });
+    else if (fields.trust !== undefined) await ctx.runMutation!((api as any).orgRoles.setTrust, { role_id: roleId, trust: fields.trust });
     if (fields.caps !== undefined) {
       await ctx.runMutation!((api as any).orgRoles.setCaps, { role_id: roleId, hands: fields.caps.hands_per_day, wakes: fields.caps.wakes_per_day, tokens: fields.caps.tokens_per_day });
     }
@@ -672,7 +673,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     // whole list, and the mutation takes the difference against its own row.
     if (fields.reports_user_ids !== undefined) await ctx.runMutation!((api as any).orgRoles.setReports, { role_id: roleId, set: fields.reports_user_ids });
     const rest: Record<string, any> = { ...fields };
-    delete rest.trust; delete rest.caps; delete rest.reports_user_ids;
+    delete rest.trust; delete rest.starts_on_its_own; delete rest.caps; delete rest.reports_user_ids;
     if (rest.status === "paused" || rest.status === "active") delete rest.status;
     // tenure (S10) and avatar (S13) go through the plain update.
     if (!["name", "handle", "scope", "charter", "status", "tenure", "avatar"].some((k) => rest[k] !== undefined)) return null;

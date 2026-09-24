@@ -370,6 +370,8 @@ export interface CreateConversationParams {
   // conversation isn't resolvable yet, so the server never treats the row as
   // a human-started session (teammate start notifications).
   isSubagent?: boolean;
+  // The trigger this transcript is a spawned run of (taskScheduler.triggerRunTaskId).
+  agentTaskId?: string;
   // Agent-team stamps from a teammate's JSONL (see parser.extractTeamInfo).
   agentTeamName?: string;
   agentName?: string;
@@ -1037,6 +1039,7 @@ export class SyncService {
           worktree_status: gitInfo?.worktreeName ? "active" : undefined,
           subagent_description: params.subagentDescription,
           is_subagent: params.isSubagent || undefined,
+          agent_task_id: params.agentTaskId,
           agent_team_name: params.agentTeamName,
           agent_name: params.agentName,
           // The transcript this conversation is created from lives on THIS

@@ -48,7 +48,7 @@ function fixtures(o: Overrides = {}) {
       { _id: "m1", user_id: HOST, team_id: TEAM, role: "admin", joined_at: 1 },
       { _id: "m2", user_id: MATE, team_id: TEAM, role: "member", joined_at: 1 },
     ],
-    teams: [{ _id: TEAM, name: "Acme" }],
+    teams: [{ _id: TEAM, name: "Acme", features: { org: true } }],
     projects: [{ _id: PROJECT, title: "Growth", user_id: HOST, team_id: TEAM, workspace: `team:${TEAM}`, created_at: 1, updated_at: 1 }],
     plans: [],
     tasks: [task(o.task)],
@@ -168,8 +168,12 @@ describe("orgLine.sweep (L9)", () => {
     expect(tables.org_roles[0].counters).toEqual({ day: TODAY, hands: 1, wakes: 0, tokens: 0 });
   });
 
-  test("skips a paused role and a role below direct trust", async () => {
-    for (const role of [{ status: "paused" }, { trust: "decide" }, { trust: undefined }]) {
+  test("skips a paused role and a role whose switch is off; decide reads as on (S23.1)", async () => {
+    {
+      const { ctx } = fixtures({ role: { trust: "decide" } });
+      expect((await sweepCore(ctx, NOW)).started).toHaveLength(1);
+    }
+    for (const role of [{ status: "paused" }, { trust: "understand" }, { trust: undefined }]) {
       const { ctx, tables } = fixtures({ role });
       const res = await sweepCore(ctx, NOW);
       expect(res.started).toHaveLength(0);

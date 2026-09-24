@@ -255,7 +255,7 @@ import {
 } from "./reconciliation.js";
 import { TEST_SCRATCH_DIRNAME, isTestArtifactPath, isPathExcluded, isProjectAllowedToSync, watchDirFilter } from "./syncScope.js";
 import { parseOrphanProcessIdentity } from "./orphanProcessIdentity.js";
-import { TaskScheduler } from "./taskScheduler.js";
+import { TaskScheduler, triggerRunTaskId } from "./taskScheduler.js";
 import { hasTmux, isTmuxSessionMissingError } from "./tmux.js";
 import { configureDaemonWorkers, closeDaemonWorkers, daemonWorkersEnabled } from "./workers/bridge.js";
 import { collectScan, visitScan, scanCanFallback } from "./workers/scanClient.js";
@@ -10217,6 +10217,7 @@ async function processSessionFilePass(
           // Path-derived: true even when the parent conversation isn't cached
           // yet, so the server never briefly sees this as a top-level session.
           isSubagent: isSubagent || undefined,
+          agentTaskId: triggerRunTaskId(sessionId),
           agentTeamName: teamInfo?.teamName,
           agentName: teamInfo?.agentName,
         };

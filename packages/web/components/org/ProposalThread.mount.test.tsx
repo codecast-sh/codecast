@@ -85,9 +85,10 @@ async function verifyProposalThread() {
   assert.equal(calls.pop(), "open:fixture-chief-conv");
   // Nothing is about anything yet: no line above the box.
   assert.equal(q("[data-about-line]"), null);
-  // The letter's last visible line is cut by the composer: a fade above the
-  // box says there is more to scroll, on every layout.
-  assert.ok(q("[data-thread] [data-letter-fade]"), "a fade sits over the cut, above the composer");
+  // The letter's last visible line is cut by the composer. The fade over
+  // that cut is the conversation view's own (ComposerFade in MessageInput),
+  // so the thread hands the composer no second one.
+  assert.equal(q("[data-thread] [data-composer-fade]"), null, "the live composer draws the fade itself");
   await embed.onSendOverride!("why is growth in there");
   assert.equal(said.pop(), "fixture-chief-conv|op-9|null|null|why is growth in there");
   // Not the first time: no introduction.
@@ -149,7 +150,6 @@ async function verifyProposalThread() {
   assert.match(q("[data-asks-bar]")!.textContent!, /^3 to decide2 updatedOpen the asks$/);
   assert.equal(q("[data-asks-bar-action]")!.textContent, "Open the asks");
   assert.equal(q("[data-asks-bar]")!.getAttribute("aria-label"), "3 to decide. Open the asks");
-  assert.ok(q("[data-letter-fade]"), "the fade over the letter's cut is above the bar too");
   await click(q("[data-asks-bar]"));
   assert.equal(calls.pop(), "asks");
   await renderThread({ layout: "phone", asksBar: { toDecide: 0, total: 3, updated: 0, onOpen: () => {} } });
@@ -165,7 +165,10 @@ async function verifyProposalThread() {
   await renderThread({ preview: true });
   assert.ok(q("[data-thread-preview]"));
   assert.ok(q("[data-thread-preview] [data-proposal-letter]"));
-  assert.ok(q("[data-thread-preview] [data-letter-fade]"), "the preview frame fades the cut the same way");
+  // The frame stands in for the live composer, so it draws the composer's
+  // own fade over the letter's cut (the same element, ComposerFade).
+  assert.ok(q("[data-thread-preview] [data-composer-fade]"), "the preview frame fades the cut with the composer's fade");
+  assert.ok(q("[data-thread-preview] [data-composer-fade]")!.className.includes("-mt-16"), "the fade reaches up over the letter's scroller");
   assert.equal(q("[data-thread]"), null);
 
   await act(async () => root.unmount());

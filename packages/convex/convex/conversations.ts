@@ -59,7 +59,7 @@ import { internal } from "./_generated/api";
 import { resetConversationPendingMessages, cancelQueuedMessagesOnKill, enqueuePendingMessage } from "./pendingMessages";
 import { latestImagePreviewUrl, listConversationFileChanges } from "./messages";
 import { inboxVisibilityFields, INBOX_PINNED_CAP, pinCapExceeded, PIN_CAP_ERROR } from "./inboxProjection";
-import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill } from "./agentTasks";
+import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill, stampRunConversation } from "./agentTasks";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId, enqueueResumeSession, enqueueHibernateSession, requireSessionCommandTarget } from "./daemonCommandUtils";
 import { normalizePaneUrl } from "@codecast/shared/contracts/browserPaneOffer";
@@ -1004,6 +1004,10 @@ export const createConversation = mutation({
     // cache), so without this the row is born looking like a normal session
     // and teammates get a "started coding" push for it.
     is_subagent: v.optional(v.boolean()),
+    // The trigger this transcript is a spawned run of (the daemon's scheduler
+    // started it), so the row is born nested (stampRunConversation) instead
+    // of being a loose inbox card until the run is linked.
+    agent_task_id: v.optional(v.id("agent_tasks")),
     agent_team_name: v.optional(v.string()),
     agent_name: v.optional(v.string()),
     // Device id of the daemon syncing this transcript. The transcript (and any
@@ -1147,6 +1151,10 @@ export const createConversation = mutation({
     // Terminal-started sessions: the SessionStart hook usually reports the
     // injected stable context before this registration — attach the parked record.
     await consumeStableContextSpool(ctx, args.user_id, args.session_id, conversationId);
+    if (args.agent_task_id) {
+      const task = await ctx.db.get(args.agent_task_id);
+      if (task && task.user_id === args.user_id) await stampRunConversation(ctx, args.user_id, task, args.session_id);
+    }
 
     // Auto-dismiss parent only for plan handoffs (clear context -> implementation session)
     if (parentConversationId && args.parent_message_uuid === "plan-handoff") {

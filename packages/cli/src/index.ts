@@ -18,6 +18,7 @@ import { describeHangMarker, latestHang, noRestartReason, type HangMarker } from
 import { buildTaskStartBody, groupTasksByAssignee, startedLines } from "./taskClaim.js";
 import { ASSIGNEE_MEANS } from "@codecast/shared/contracts/orgAssignee";
 import { chatSendOrigin, sessionIdFromEnv, workOriginStamp } from "./sessionIdentity.js";
+import { AUTONOMY_LABEL, autonomyOn, autonomySentence, autonomyWords, switchFromStageWord } from "@codecast/shared/contracts/roleAutonomy";
 import open from "open";
 import * as fs from "fs";
 import { selfExecInfo } from "./selfExec.js";
@@ -12912,7 +12913,8 @@ const noAgentLine = (scopeType: "team" | "user") => `${scopeType === "team" ? "T
 const anchor = program
   .command("anchor")
   .description("The workspace's standing agent (alias of its root role, cast role …)")
-  .showHelpAfterError(true);
+  .showHelpAfterError(true)
+  .hook("preAction", requireOrgFeatureHook);
 
 anchor
   .command("create")
@@ -13249,7 +13251,7 @@ anchor
 // The `role` group may already exist (the org roles CLI registers it); these
 // verbs join it either way.
 const roleGroup = program.commands.find((cmd) => cmd.name() === "role")
-  ?? program.command("role").description("Org roles: named seats in the reporting structure");
+  ?? program.command("role").description("Org roles: named seats in the reporting structure").hook("preAction", requireOrgFeatureHook);
 
 async function roleFollowAction(path: "/cli/role/follow" | "/cli/role/unfollow", handle: string, channel: string, options: any) {
   const result = await cliPost(path, { role: handle, channel });
@@ -13351,7 +13353,7 @@ roleGroup
 
 // ── Standing roles (docs/architecture/org-roles-standing.md T5) ─────────────
 // A role as a live agent: create + provision, wake, pause/resume, restart,
-// trust, caps, the wake log, and the brief. Every verb resolves @handle, or-N
+// the switch, the limits, the wake log, and the brief. Every verb resolves @handle, or-N
 // or a raw id through the org tree, then calls /cli/role/* or /cli/brief/*.
 const callingSession = (): string | undefined =>
   process.env.CODECAST_SESSION_ID || process.env.CODECAST_MANAGED_SESSION || ownSessionId(getRealCwd()) || undefined;
@@ -13387,15 +13389,10 @@ async function resolvePlanId(ref: string): Promise<string> {
   return plan._id;
 }
 
-const TRUST_HINT: Record<string, string> = {
-  understand: "reads and reports; may not start hands or answer decisions",
-  decide: "answers decisions inside its grants",
-  direct: "starts hands within its caps",
-};
-
+// The switch (org-staffing.md S23.1), read through the shared mapping: the
+// row's stored word never reaches the person.
 function printRoleLine(r: any) {
-  const trust = r.trust ?? "understand";
-  console.log(`${c.bold}${r.name}${c.reset} ${c.dim}@${r.handle} · ${r.short_id} · ${r.status} · trust ${trust}${r.review_backend ? ` · review on ${r.review_backend}` : ""}${c.reset}`);
+  console.log(`${c.bold}${r.name}${c.reset} ${c.dim}@${r.handle} · ${r.short_id} · ${r.status} · ${autonomyWords(autonomyOn(r.trust))}${r.review_backend ? ` · review on ${r.review_backend}` : ""}${c.reset}`);
 }
 
 // `--tenure standing` or `--tenure program:<pl-N|project:ref|YYYY-MM-DD>[:review]`
@@ -13508,7 +13505,7 @@ roleGroup
 
 roleGroup
   .command("show")
-  .description("One role: seat, trust, caps, today's counters, hands")
+  .description("One role: its seat, whether it starts work on its own, today's use against its limits, and its hands")
   .argument("<handle>", "@handle, or-N, or id")
   .option("--team <name|id>", "Team workspace")
   .option("--json", "Machine-readable output")
@@ -13519,10 +13516,10 @@ roleGroup
     if (options.json) { console.log(JSON.stringify(brief, null, 2)); return; }
     printRoleLine(brief.role);
     const u = brief.facts.usage;
-    console.log(`  ${c.dim}trust ${brief.role.trust}: ${TRUST_HINT[brief.role.trust] ?? ""}${c.reset}`);
+    console.log(`  ${c.dim}${AUTONOMY_LABEL.toLowerCase()}: ${autonomyOn(brief.role.trust) ? "on" : "off"} (${autonomySentence(autonomyOn(brief.role.trust)).replace(/^It /, "it ").replace(/\.$/, "")})${c.reset}`);
     const held = (brief.role.authority ?? []).filter((g: any) => !g.expires_at || g.expires_at > Date.now());
     console.log(`  ${c.dim}authority outside codecast: ${held.length ? held.map((g: any) => `${g.kind} (${g.label}${g.expires_at ? `, until ${formatDateSmart(g.expires_at)}` : ""})`).join("; ") : "none granted"}${c.reset}`);
-    console.log(`  ${c.dim}today: ${u.wakes}/${u.caps.wakes_per_day} wakes · ${u.hands}/${u.caps.hands_per_day} hands · ${u.tokens}/${u.caps.tokens_per_day} tokens${u.uncounted_sessions ? ` · tokens not counted for ${u.uncounted_sessions} session${u.uncounted_sessions === 1 ? "" : "s"}` : ""}${c.reset}`);
+    console.log(`  ${c.dim}used today, of its limits: ${u.wakes} of ${u.caps.wakes_per_day} wakes · ${u.hands} of ${u.caps.hands_per_day} hands · ${u.tokens} of ${u.caps.tokens_per_day} tokens${u.uncounted_sessions ? ` · tokens not counted for ${u.uncounted_sessions} session${u.uncounted_sessions === 1 ? "" : "s"}` : ""}${c.reset}`);
     console.log(`  ${c.dim}standing session: ${brief.role.standing_short_id ?? "none"}${brief.role.last_wake_at ? ` · last wake ${formatDateSmart(brief.role.last_wake_at)}` : ""}${c.reset}`);
     const { briefHandLine } = await import("./briefLines.js");
     for (const h of brief.facts.hands) console.log(briefHandLine(h));
@@ -13564,19 +13561,39 @@ for (const verb of ["pause", "resume", "retire", "restart"] as const) {
     });
 }
 
+// The one switch a role has (org-staffing.md S23.1): on, it starts work in
+// its scope and answers decisions there on its own; off, it reads, answers
+// questions and recommends, and a person starts the work. A person's act.
+// `cast role trust <handle> <word>` stays one release as an alias: understand
+// is off, decide and direct are on.
+async function setRoleAutonomy(handle: string, word: string, options: any, alias: boolean) {
+  const on = switchFromStageWord(word);
+  if (on === null) { console.error(`Say on or off: cast role autonomy ${handle} on|off`); process.exit(1); }
+  const role_id = await resolveRoleId(handle, options.team);
+  const result = await cliPost("/cli/role/autonomy", { role_id, on, from_session: callingSession() });
+  if (options.json) { console.log(JSON.stringify(result, null, 2)); return; }
+  const was = result.previous_on === on ? ` ${c.dim}(already ${on ? "on" : "off"})${c.reset}` : "";
+  console.log(`${c.green}✓${c.reset} @${result.handle} ${AUTONOMY_LABEL.toLowerCase()}: ${c.bold}${on ? "on" : "off"}${c.reset}${was} ${c.dim}${autonomySentence(on)}${c.reset}`);
+  if (alias) console.log(`${c.dim}cast role trust is now cast role autonomy <handle> on|off; the old verb goes away next release.${c.reset}`);
+}
+
 roleGroup
-  .command("trust")
-  .description("Set a role's trust stage (a person's act): understand | decide | direct")
+  .command("autonomy")
+  .description(`${AUTONOMY_LABEL} (a person's act): on | off. Off, the role reads, answers questions and recommends; you start the work.`)
   .argument("<handle>", "@handle, or-N, or id")
-  .argument("<stage>", "understand | decide | direct")
+  .argument("<on|off>", "on | off")
   .option("--team <name|id>", "Team workspace")
   .option("--json", "Machine-readable output")
-  .action(async (handle: string, stage: string, options: any) => {
-    const role_id = await resolveRoleId(handle, options.team);
-    const result = await cliPost("/cli/role/trust", { role_id, trust: stage, from_session: callingSession() });
-    if (options.json) { console.log(JSON.stringify(result, null, 2)); return; }
-    console.log(`${c.green}✓${c.reset} @${result.handle} trust ${result.previous_trust} → ${c.bold}${result.trust}${c.reset} ${c.dim}(${TRUST_HINT[result.trust] ?? ""})${c.reset}`);
-  });
+  .action(async (handle: string, word: string, options: any) => setRoleAutonomy(handle, word, options, false));
+
+roleGroup
+  .command("trust", { hidden: true })
+  .description("Alias of cast role autonomy for one release")
+  .argument("<handle>", "@handle, or-N, or id")
+  .argument("<word>", "on | off (understand is off; decide and direct are on)")
+  .option("--team <name|id>", "Team workspace")
+  .option("--json", "Machine-readable output")
+  .action(async (handle: string, word: string, options: any) => setRoleAutonomy(handle, word, options, true));
 
 roleGroup
   .command("authority")
@@ -13597,20 +13614,25 @@ roleGroup
     console.log(`${c.green}✓${c.reset} @${result.handle} may ${held.length ? held.map((g) => `${g.kind} (${g.label})`).join("; ") : "do nothing outside codecast"}`);
   });
 
+// The limits (org-staffing.md S23.2): a safety net with defaults filled in,
+// the most a role may do in one day. A role that reaches one waits for
+// tomorrow and says so in its brief; nothing reaches a person. `cast role
+// caps` stays one release as an alias.
 roleGroup
-  .command("caps")
-  .description("Set a role's daily caps")
+  .command("limits")
+  .alias("caps")
+  .description("Set a role's daily limits, the most it may do in one day (a safety net with defaults filled in)")
   .argument("<handle>", "@handle, or-N, or id")
-  .option("--hands <n>", "Hands per day", parseInt)
-  .option("--wakes <n>", "Wakes per day", parseInt)
-  .option("--tokens <n>", "Tokens per day", parseInt)
+  .option("--hands <n>", "Hands it may start in a day", parseInt)
+  .option("--wakes <n>", "Wakes it may take in a day", parseInt)
+  .option("--tokens <n>", "Tokens it may read and write in a day", parseInt)
   .option("--team <name|id>", "Team workspace")
   .option("--json", "Machine-readable output")
   .action(async (handle: string, options: any) => {
     const role_id = await resolveRoleId(handle, options.team);
-    const result = await cliPost("/cli/role/caps", { role_id, hands: options.hands, wakes: options.wakes, tokens: options.tokens, from_session: callingSession() });
+    const result = await cliPost("/cli/role/limits", { role_id, hands: options.hands, wakes: options.wakes, tokens: options.tokens, from_session: callingSession() });
     if (options.json) { console.log(JSON.stringify(result, null, 2)); return; }
-    console.log(`${c.green}✓${c.reset} @${result.handle} caps: ${result.caps.hands_per_day} hands · ${result.caps.wakes_per_day} wakes · ${result.caps.tokens_per_day} tokens per day`);
+    console.log(`${c.green}✓${c.reset} @${result.handle} limits: ${result.caps.hands_per_day} hands · ${result.caps.wakes_per_day} wakes · ${result.caps.tokens_per_day} tokens a day`);
   });
 
 // Who reports to a role (org-roles-run-work.md R6): a person who wants the
@@ -13755,7 +13777,8 @@ briefCmd
 const org = program
   .command("org")
   .description("The workspace's reporting structure: people, roles, and the sessions under them")
-  .showHelpAfterError(true);
+  .showHelpAfterError(true)
+  .hook("preAction", requireOrgFeatureHook);
 
 const ORG_STATE_ORDER = ["needs_input", "working", "dormant", "done", "idle"] as const;
 function orgTally(counts: Record<string, number>): string {
@@ -15620,6 +15643,16 @@ function getCliEndpoint(): { siteUrl: string; apiToken: string } {
 // resolveWorkspace.ts for why: reads may default, writes must be explicit.
 async function workspaceRoster() {
   return loadWorkspaceRoster(async () => await cliPost("/cli/teams", {}));
+}
+
+/** The org feature (roles, seats, the workspace agent) is per team, default
+ *  off, and seated in the personal workspace only through a team that has it
+ *  on. Every `cast org`, `cast role` and `cast anchor` verb runs this first:
+ *  the workspace is the subcommand's --team when it names one, else the
+ *  active one, and an off feature stops with the shared refusal. */
+async function requireOrgFeatureHook(_group: Command, actionCommand: Command): Promise<void> {
+  const team = actionCommand.opts().team;
+  await requireWorkspaceFeature(await readWorkspace(typeof team === "string" ? team : undefined), "org");
 }
 
 /** Workspace for a READ. Defaults through the canonical pointer. */
@@ -20204,13 +20237,13 @@ workflow
     // A role running the line (org-roles-standing.md T4, the-line.md L3):
     // the review station takes the role's own review backend, and the run is
     // refused when that backend is the role's own agent, or when the role is
-    // not yet trusted to direct hands.
+    // one whose switch is off starts nothing.
     let reviewBackend: string | undefined = options.reviewBackend;
     if (graph.nodes.has("review")) {
       const self = await ownRole().catch(() => null);
       if (self) {
-        if (self.trust !== "direct") {
-          console.error(`${self.name} (@${self.handle}) is at the ${self.trust} stage and may not run the line; a person can raise its trust with cast role trust @${self.handle} direct`);
+        if (!(self.starts_on_its_own ?? autonomyOn(self.trust))) {
+          console.error(`${self.name} (@${self.handle}) does not start work on its own, so it does not run the line; say in one line that this needs running and recommend it`);
           process.exit(1);
         }
         if (!reviewBackend && self.review_backend) reviewBackend = self.review_backend;

@@ -73,7 +73,7 @@ async function verifyRoleWakeCard() {
     assert.ok(text().includes("woke on 9 changes, 2 held"));
     assert.ok(text().includes("held backlog"));
     assert.ok(text().includes("5m"), "age from the frame's at");
-    assert.ok(text().includes("trust understand · 1/40 wakes"));
+    assert.ok(!text().includes("trust understand"));
 
     // Sections: Why open, the rest folded, each with its count.
     const groups = $$("[data-section]");
@@ -114,7 +114,7 @@ async function verifyRoleWakeCard() {
     // Footer: open role, pause (an editor), caps, the wake log.
     const footerLinks = $$("a").map((a) => [a.textContent?.trim(), a.getAttribute("href")]);
     assert.ok(footerLinks.some(([t, h]) => t === "Open role" && h === "/org/or-8"));
-    assert.ok(footerLinks.some(([t, h]) => t === "Caps" && h === "/org/or-8?tab=settings"));
+    assert.ok(footerLinks.some(([t, h]) => t === "Limits" && h === "/org/or-8?tab=settings"));
     assert.ok(footerLinks.some(([t, h]) => t === "Why did this wake me" && h === "/org/or-8?tab=wakes&wake=rw-12"));
     const pause = $$("button").find((b) => b.textContent?.trim() === "Pause");
     assert.ok(pause, "an editor sees Pause");

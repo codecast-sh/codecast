@@ -18,7 +18,7 @@ test("authenticated history API applies, previews, undoes, redoes, and enforces 
     const member = await ctx.db.insert("users", { name: "Member" });
     const outsider = await ctx.db.insert("users", { name: "Outsider" });
     const bot = await ctx.db.insert("users", { name: "Bot", is_bot: true });
-    const team = await ctx.db.insert("teams", { name: "History", invite_code: "history-test", created_at: Date.now() });
+    const team = await ctx.db.insert("teams", { name: "History", features: { org: true }, invite_code: "history-test", created_at: Date.now() });
     await ctx.db.insert("team_memberships", { team_id: team, user_id: user, role: "admin", joined_at: Date.now() });
     await ctx.db.insert("team_memberships", { team_id: team, user_id: member, role: "member", joined_at: Date.now() });
     await ctx.db.insert("team_memberships", { team_id: team, user_id: bot, role: "admin", joined_at: Date.now() });

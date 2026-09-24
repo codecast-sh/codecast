@@ -4,6 +4,7 @@ import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
 import { wakeDevicesFor } from "./cloud";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
+import { teamFeatureEnabled } from "@codecast/shared/contracts";
 import { paginationOptsValidator } from "convex/server";
 import type { PaginationOptions, PaginationResult, RegisteredQuery } from "convex/server";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -2383,8 +2384,12 @@ export const getTeamMembers = query({
       .query("users")
       .filter((q) => q.eq(q.field("team_id"), args.team_id))
       .collect();
+    // Role bot users carry the team's id too. The org feature is per team,
+    // default off: with it off a role bot is on no roster (teams.getTeamMembers
+    // applies the same rule).
+    const orgOn = teamFeatureEnabled(await ctx.db.get(args.team_id), "org");
 
-    return teamMembers.map((member) => ({
+    return teamMembers.filter((member) => orgOn || !(member.is_bot && member.bot_kind !== "slack")).map((member) => ({
       _id: member._id,
       name: member.name,
       github_username: member.github_username,

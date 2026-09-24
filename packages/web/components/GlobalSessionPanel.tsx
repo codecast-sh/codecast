@@ -1937,6 +1937,7 @@ export const SessionCard = memo(function SessionCard({
   subRow,
   escalatedCount = 0,
   escalations,
+  roleSessions = 0,
   isSelected = false,
 }: {
   session: InboxSession;
@@ -1972,6 +1973,8 @@ export const SessionCard = memo(function SessionCard({
   escalatedCount?: number;
   /** On a role's own card: the escalations that reach the person through it, newest first (R1, revised). */
   escalations?: RoleEscalation[];
+  /** On a role's own card: how many of its sessions ride it (org-staffing.md S23.3); the pill opens the role's page. */
+  roleSessions?: number;
   // Label + favorite state are derived ONCE in the parent (SessionListPanel) and
   // passed as scalar props, so a card does O(1) work per render instead of the two
   // selectors scanning the whole bucketAssignments / favorites collection on every
@@ -2604,6 +2607,19 @@ export const SessionCard = memo(function SessionCard({
           {/* The role's one number (R1): how many of its sessions it has put
               in front of the person. Silent at zero: a role with nothing
               escalated asks nothing of them. */}
+          {/* A role's sessions are the role's (S23.3): never rows under its
+              card, one count that opens the role's page. */}
+          {roleSessions > 0 && session.role?.short_id && (
+            <Link
+              href={`/org/${session.role.short_id}`}
+              data-role-sessions={roleSessions}
+              onClick={(e) => e.stopPropagation()}
+              className="flex-shrink-0 px-1 rounded border border-sol-border/50 bg-sol-bg-alt text-[10px] font-medium text-sol-text-muted tabular-nums whitespace-nowrap hover:text-sol-text"
+              title={`${roleSessions} ${roleSessions === 1 ? "session" : "sessions"} under this role; its page lists them`}
+            >
+              {roleSessions} {roleSessions === 1 ? "session" : "sessions"}
+            </Link>
+          )}
           {escalatedCount > 0 && (
             <span
               data-role-escalated-count
@@ -3501,7 +3517,7 @@ function SessionListPanelImpl({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [sessionsWakeSig(s.sessions), inboxScope, meId, s.teamInboxIds, showAllSessions, focusedId, s.sessionsWithQueuedMessages, pendingSendIds, blankOpts, placementDecisionsSig(s.sessionDecisions), s.questionResolutions, s.killedShelf.ids, coarseNow],
   );
-  const { visibleSessions, oldCount, sorted: sortedSessions, pinned, newSessions, needsInput, done, dormant, working, snoozed: snoozedList, stashed: stashedList, dismissed: dismissedList, subsByParent: globalSubByParent, forksByParent: globalForksByParent, questions: placedQuestions, isQuestion, escalatedByRole, escalationsByLead } = placed;
+  const { visibleSessions, oldCount, sorted: sortedSessions, pinned, newSessions, needsInput, done, dormant, working, snoozed: snoozedList, stashed: stashedList, dismissed: dismissedList, subsByParent: globalSubByParent, forksByParent: globalForksByParent, questions: placedQuestions, isQuestion, escalatedByRole, escalationsByLead, roleSessionsByLead } = placed;
 
   // -- Schedules in the inbox (status view) --
   // The same per-user webList the badges/strip/schedules page subscribe to
@@ -4617,6 +4633,7 @@ function SessionListPanelImpl({
                   forkColorKey={forkColorKeyOf(session)}
                   escalatedCount={escalatedByRole.get(standingRoleIdOf(session) ?? "") ?? 0}
                   escalations={escalationsByLead.get(session._id)}
+                  roleSessions={roleSessionsByLead.get(session._id)}
                   subRow={flatNestParentOf && roleLookingAfter(session) && flatNestParentOf(session) ? "role" : undefined}
                   sessionLabel={labelByConv[session._id] ?? null}
                   isUnread={!!unreadByConv[session._id]}

@@ -13,7 +13,7 @@ function fixture() {
   const db = makeFakeDb({
     users: [{ _id: ME, name: "Me", email: "me@x.ai" }],
     team_memberships: [{ _id: "m1", user_id: ME, team_id: TEAM, role: "admin", joined_at: 1 }],
-    teams: [{ _id: TEAM, name: "Acme" }],
+    teams: [{ _id: TEAM, name: "Acme", features: { org: true } }],
     counters: [], org_roles: [], org_role_history: [], org_changes: [], role_wake_outbox: [], anchors: [], session_owners: [], managed_sessions: [], tasks: [], projects: [], plans: [], docs: [],
     conversations: [{ _id: "conversations_s", short_id: "jx7ssss", user_id: ME, team_id: TEAM, status: "active", title: "CMO", agent_type: "claude_code", updated_at: 1 }],
   });
