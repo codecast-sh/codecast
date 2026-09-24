@@ -1,3 +1,5 @@
+import type { FaceState } from "./faceState";
+export type { FaceState } from "./faceState";
 // THE FACE ROW: presence, walkie, ringing and calls as the same faces in
 // different states (pl-756).
 //
@@ -60,28 +62,7 @@ import { subscribeCoarseTick } from "../../hooks/useCoarseNow";
 // ── vocabulary ──────────────────────────────────────────────────────────────
 
 /** The ONE state vocabulary every surface draws from. */
-export type FaceState =
-  | "offline"
-  | "away"
-  | "idle"
-  | "online"
-  | "busy"
-  /** Seated in a call the viewer is not in. */
-  | "in-call"
-  /** Their voice is active in the call the viewer is in (or the viewer's own). */
-  | "speaking"
-  /** The viewer is ringing them. */
-  | "ringing-them"
-  /** They are ringing the viewer. */
-  | "ringing-me"
-  /** Their walkie burst is playing on this machine right now. */
-  | "talking-to-me"
-  /** The viewer's burst is going out and they are seated to hear it. */
-  | "hearing-me"
-  /** Seated in the room the viewer holds, no voice going either way right now. */
-  | "live-with-me"
-  /** They stepped into the viewer's burst on purpose in the last few seconds. */
-  | "joining";
+
 
 /** Display bands, in row order. `linked` is every face joined to the viewer's. */
 export const FACE_TIERS = ["me", "linked", "call", "online", "idle", "away", "offline"] as const;
@@ -142,12 +123,15 @@ export type FaceCard =
       end: true;
       mute: boolean;
       muted: boolean;
+      /** The camera toggle is offered, and where it stands (the call slice). */
+      camera: boolean;
+      cameraOn: boolean;
       words: WalkieStageWords | null;
       hearing: SenderHearing | null;
     }
   /** Somebody stepped in: the live card, with the join said in words for a
    *  few seconds. Same controls as `live`, so nothing disappears under the notice. */
-  | { kind: "joined-notice"; roomKey: string; text: string; end: true; mute: boolean; muted: boolean }
+  | { kind: "joined-notice"; roomKey: string; text: string; end: true; mute: boolean; muted: boolean; camera: boolean; cameraOn: boolean }
   | { kind: "ring-in"; roomKey: string; from: string; name: string; answer: true; decline: true }
   | { kind: "ring-out"; roomKey: string; to: string; name: string; cancel: true; status: string };
 
@@ -320,6 +304,19 @@ function stateOf(
   if (input.rings.outgoing.some((r) => idOf(r.to_user) === id && (r.status ?? "ringing") === "ringing")) {
     return "ringing-them";
   }
+  // They answered. The ring settles a round trip before their seat lands, so
+  // a face that was ringing stays ringing until it is seated in my call (the
+  // server keeps the accepted ring in view for that window); it never reads
+  // online in between. A cancelled, declined or expired ring is not held.
+  if (
+    prev?.state === "ringing-them" &&
+    room &&
+    mode === "call" &&
+    !inMyRoom &&
+    input.rings.outgoing.some((r) => idOf(r.to_user) === id && r.room_key === room && r.status === "accepted")
+  ) {
+    return "ringing-them";
+  }
   if (input.walkie.incoming?.fromUserId === id) return "talking-to-me";
   if (room && mode) {
     if (inMyRoom) {
@@ -403,13 +400,22 @@ function cardOf(
       words: stageWordsFor(input, "listen", name),
     };
   }
+  // Ringing from inside the room: startHuddle seats the caller before the
+  // ring goes out, so until somebody else is seated the card is the ring out
+  // (ringing, declined, no answer), not a live call with nobody on it.
+  const ringOutHere = other ? undefined : input.rings.outgoing.find((r) => r.room_key === room && r.status !== "accepted");
+  if (room && mode === "call" && ringOutHere) return ringOutCard(ringOutHere);
   if (room && mode) {
     const end = true as const;
     const mute = mode === "call";
     const muted = input.call.muted;
+    // The camera is offered on every live room: a burst opens one too, and a
+    // person who would rather be a photo says so here.
+    const camera = true;
+    const cameraOn = !!input.call.camera;
     const ann = input.announcement;
     if (ann && ann.roomKey === room && input.now - ann.at < JOIN_TITLE_MS) {
-      return { kind: "joined-notice", roomKey: room, text: ann.text, end, mute, muted };
+      return { kind: "joined-notice", roomKey: room, text: ann.text, end, mute, muted, camera, cameraOn };
     }
     const walkieHeld = walkie.liveRoom?.key === room;
     let hearing: SenderHearing | null = null;
@@ -430,22 +436,27 @@ function cardOf(
       end,
       mute,
       muted,
+      camera,
+      cameraOn,
       words: walkieHeld ? stageWordsFor(input, mode, name) : null,
       hearing,
     };
   }
-  const ringOut = input.rings.outgoing.find((r) => (r.status ?? "ringing") === "ringing") ?? input.rings.outgoing[0];
-  if (ringOut) {
-    return {
-      kind: "ring-out",
-      roomKey: ringOut.room_key,
-      to: idOf(ringOut.to_user),
-      name: ringOut.to_name ?? "Teammate",
-      cancel: true,
-      status: ringOut.status ?? "ringing",
-    };
-  }
+  const ringOut =
+    input.rings.outgoing.find((r) => (r.status ?? "ringing") === "ringing") ?? input.rings.outgoing.find((r) => r.status !== "accepted");
+  if (ringOut) return ringOutCard(ringOut);
   return { kind: "none" };
+}
+
+function ringOutCard(r: FaceRowInput["rings"]["outgoing"][number]): FaceCard {
+  return {
+    kind: "ring-out",
+    roomKey: r.room_key,
+    to: idOf(r.to_user),
+    name: r.to_name ?? "Teammate",
+    cancel: true,
+    status: r.status ?? "ringing",
+  };
 }
 
 /**
@@ -658,7 +669,6 @@ export function faceRowInputSig(
   now: number,
 ): string {
   const call = walkieCallState();
-  const c = st.call ?? {};
   return [
     idOf(st.currentUser?._id),
     st.currentUser?.name ?? "",
@@ -667,7 +677,7 @@ export function faceRowInputSig(
     occupancySig(st.callOccupancy),
     liveRoomsSig(st.liveRooms),
     walkieRowSig(walkie),
-    `${call.phase}|${call.roomKey ?? ""}|${call.muted ? 1 : 0}|${call.micDenied ? 1 : 0}|${c.camera ? 1 : 0}|${(c.speaking ?? []).join(",")}`,
+    `${call.phase}|${call.roomKey ?? ""}|${call.muted ? 1 : 0}|${call.micDenied ? 1 : 0}|${call.camera ? 1 : 0}|${call.speaking.join(",")}`,
     tilesSig(tiles),
     st.followLeaderId ?? "",
     ringsSig(st.myCalls),
@@ -688,8 +698,10 @@ export function faceRowInputFrom(
   tiles: { identity: string; isLocal: boolean; kind: string }[],
   now: number,
 ): FaceRowInput {
+  // The call as the host holds it: in a remote window this window's own
+  // slice is idle for as long as the host has the microphone, so the phase,
+  // the camera and the speakers all come from the mirror or from nowhere.
   const call = walkieCallState();
-  const c = st.call ?? {};
   const u = st.currentUser;
   const room = walkie.liveRoom?.key ?? (call.phase !== "idle" ? call.roomKey : null);
   return {
@@ -710,8 +722,8 @@ export function faceRowInputFrom(
       roomKey: call.roomKey,
       muted: call.muted,
       micDenied: call.micDenied,
-      camera: !!c.camera,
-      speaking: c.speaking ?? [],
+      camera: call.camera,
+      speaking: call.speaking,
     },
     tiles,
     followLeaderId: st.followLeaderId ?? null,

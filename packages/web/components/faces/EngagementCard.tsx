@@ -1,3 +1,5 @@
+import { useInboxStore } from "../../store/inboxStore";
+import { ENGINE_CARD_ACTIONS, sentence, type CardActions, type Incoming, type Live, type RingIn, type RingOut } from "../../lib/faces/cardActions";
 // THE ENGAGEMENT CARD: the one transient control card the row needs (pl-756 F2).
 //
 // The model (lib/faces/faceRow) decides WHICH card is up and what it says:
@@ -9,93 +11,32 @@
 // buttons hand the card back to an action so a test can watch what a press
 // asks for without an engine under it.
 //
-// It wears the walkie strip's skin (calls/walkie.css) and the ring card's
-// buttons (calls/ringCard.css), because it replaces both and the person must
-// not learn a second look for the same moment.
-import { MicOff, Mic, PhoneOff, X } from "lucide-react";
+// It is ONE LINE under the faces: a dot in the moment's tone, a plain
+// sentence, and the buttons beside it. The strip it replaced shouted in a
+// corner; a card that hangs from the header has the faces to say who, so it
+// says what in one breath. The tones and button names are the strip's
+// (calls/walkie.css) and the ring card's (calls/ringCard.css), compacted in
+// faceRow.css, so a colour still means what it meant.
+import { MicOff, Mic, PhoneOff, Video, VideoOff } from "lucide-react";
 import type { FaceCard } from "../../lib/faces/faceRow";
-import type { FaceDensity } from "./FaceRow";
+import type { FaceDensity } from "../../lib/faces/layout";
 import { WalkiePttButton } from "../calls/WalkiePtt";
-import { acceptInvite, cancelOutgoing, declineInvite, leaveCall, setMuted } from "../../lib/calls/callManager";
-import { endWalkie, getWalkieStatus, joinWalkieLive, shutWalkieDoor } from "../../lib/calls/walkie";
-import { useInboxStore } from "../../store/inboxStore";
 import "../calls/walkie.css";
 import "../calls/ringCard.css";
 import "./faceRow.css";
 
-type Incoming = Extract<FaceCard, { kind: "incoming" }>;
-type Live = Extract<FaceCard, { kind: "live" | "joined-notice" }>;
-type RingIn = Extract<FaceCard, { kind: "ring-in" }>;
-type RingOut = Extract<FaceCard, { kind: "ring-out" }>;
-
-/** What each button asks for. The engine's answers are `ENGINE_CARD_ACTIONS`;
- *  a test hands in its own and reads what was pressed. */
-export type CardActions = {
-  join: (card: Incoming) => void;
-  snooze: (card: Incoming) => void;
-  end: (card: Live) => void;
-  /** Toggles: the card says whether it is muted now. */
-  mute: (card: Live) => void;
-  answer: (card: RingIn) => void;
-  decline: (card: RingIn) => void;
-  cancel: (card: RingOut) => void;
-};
-
-/** An hour: the walkie's snooze, the same number the strip's Snooze wrote. */
-export const WALKIE_SNOOZE_MS = 60 * 60 * 1000;
-
-/** The buttons, wired to the engine. A ring's invite row is looked up by the
- *  room and the person the model named, because the model carries no ids. */
-export const ENGINE_CARD_ACTIONS: CardActions = {
-  join: (c) => void joinWalkieLive(c.roomKey, { name: c.name }),
-  // SNOOZE: the mic closes, the seat goes back (which is what stops the
-  // voice), and the hour is written so the door stays shut everywhere.
-  snooze: () => {
-    useInboxStore.getState().snoozeWalkie(Date.now() + WALKIE_SNOOZE_MS);
-    void setMuted(true, { remember: false });
-    shutWalkieDoor();
-  },
-  // END: the walkie's own End while it holds the room (no linger after a hang
-  // up); an ordinary leave for a huddle.
-  end: (c) => {
-    if (getWalkieStatus().liveRoom?.key === c.roomKey) void endWalkie();
-    else void leaveCall();
-  },
-  mute: (c) => void setMuted(!c.muted),
-  answer: (c) => {
-    const inv = inviteIn(c);
-    if (inv) void acceptInvite(String(inv._id), c.roomKey);
-  },
-  decline: (c) => {
-    const inv = inviteIn(c);
-    if (inv) void declineInvite(String(inv._id));
-  },
-  cancel: (c) => {
-    const inv = inviteOut(c);
-    if (inv) void cancelOutgoing(String(inv._id));
-  },
-};
-
-function inviteIn(c: RingIn): { _id: unknown } | undefined {
-  const rows: any[] = useInboxStore.getState().myCalls?.incoming ?? [];
-  return rows.find((r) => r.room_key === c.roomKey && String(r.from_user) === c.from);
-}
-
-function inviteOut(c: RingOut): { _id: unknown } | undefined {
-  const rows: any[] = useInboxStore.getState().myCalls?.outgoing ?? [];
-  return rows.find((r) => r.room_key === c.roomKey && String(r.to_user) === c.to);
-}
-
 /** The strip's edge for a stage: warm while my voice goes out, cool while
- *  theirs comes in, both for both. */
+ *  theirs comes in, both for both, and the call's violet for a line held
+ *  open (ON THE LINE), the colour of the seats above it. */
 function edgeOf(stage: string | undefined): string {
   switch (stage) {
     case "recording":
     case "live":
-    case "locked":
     case "opening":
     case "dropped":
       return "walkie-strip-live walkie-strip-tx";
+    case "locked":
+      return "walkie-strip-live walkie-strip-call";
     case "incoming":
       return "walkie-strip-live walkie-strip-rx";
     case "both":
@@ -107,38 +48,107 @@ function edgeOf(stage: string | undefined): string {
   }
 }
 
-/** The loud word and the sentence under it, from walkieStageWords. */
-function Stage({ words, name }: { words: { stage: string; badge: string; hint: string }; name: string }) {
-  const bare = words.stage === "open" || words.stage === "incoming";
+/** "ON THE LINE · MUTED" as a sentence: "On the line · muted". The words
+ *  module shouts for the retired corner strip; the row's card is one quiet
+ *  line under the faces. */
+
+/** The one line: a dot in the stage's tone, the stage as a sentence, who
+ *  with, and what the roster says about who hears me. Nothing under it: the
+ *  buttons beside it are the instruction. */
+function Line({
+  stage,
+  children,
+  hearing,
+}: {
+  stage: string;
+  children: React.ReactNode;
+  hearing?: Extract<FaceCard, { kind: "live" }>["hearing"];
+}) {
   return (
-    <>
-      <div className={`walkie-stage walkie-stage-${words.stage}`} role="status" aria-live="polite">
-        <span className="walkie-stage-dot" aria-hidden="true" />
-        <span className="walkie-stage-badge">{words.badge}</span>
-        <span className="walkie-stage-with">{bare ? "" : `with ${name}`}</span>
-      </div>
-      <div className="walkie-strip-hint">{words.hint}</div>
-    </>
+    <div className={`walkie-stage walkie-stage-${stage}`} role="status" aria-live="polite">
+      <span className="walkie-stage-dot" aria-hidden="true" />
+      <span className="engagement-card-words">
+        {children}
+        {hearing && (
+          <span className="engagement-card-hearing" data-hearing={hearing.state}>
+            {" · "}
+            {hearing.text}
+          </span>
+        )}
+      </span>
+    </div>
   );
 }
 
+/** The stage's own words: "Talking with Ann", "On the line · muted with Ann";
+ *  a bare stage (open, incoming) names the person in its hint instead. */
+function Stage({
+  words,
+  name,
+  hearing,
+  muteButton = false,
+}: {
+  words: { stage: string; badge: string; hint: string };
+  name: string;
+  hearing?: Extract<FaceCard, { kind: "live" }>["hearing"];
+  /** A mute button beside the line already says "muted" in red: the badge
+   *  does not say it twice, and the name keeps its room. */
+  muteButton?: boolean;
+}) {
+  const bare = words.stage === "open" || words.stage === "incoming";
+  const badge = muteButton ? sentence(words.badge).replace(/ · muted$/, "") : sentence(words.badge);
+  return (
+    <Line stage={words.stage} hearing={hearing}>
+      {bare ? (
+        <span className="walkie-strip-hint">{words.stage === "incoming" ? `${name} is talking to you` : words.hint}</span>
+      ) : (
+        <>
+          <span className="walkie-stage-badge">{badge}</span>
+          <span className="walkie-stage-with">{` with ${name}`}</span>
+        </>
+      )}
+    </Line>
+  );
+}
+
+/** The mic and the camera as two switches on one small plate, then End. A
+ *  switch is its icon: struck through and dimmed when off, lit when on, with
+ *  its word in the tooltip and for a reader. */
 function LiveControls({ card, actions }: { card: Live; actions: CardActions }) {
   return (
     <div className="walkie-strip-actions">
-      {card.mute && (
-        <button
-          type="button"
-          className={`walkie-strip-mute${card.muted ? " walkie-strip-mute-on" : ""}`}
-          data-card-action="mute"
-          aria-pressed={card.muted}
-          onClick={() => actions.mute(card)}
-        >
-          {card.muted ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
-          {card.muted ? "Unmute" : "Mute"}
-        </button>
+      {(card.mute || card.camera) && (
+        <span className="engagement-card-toggles" role="group" aria-label="Microphone and camera">
+          {card.mute && (
+            <button
+              type="button"
+              className={`engagement-card-toggle walkie-strip-mute${card.muted ? " walkie-strip-mute-on is-off" : ""}`}
+              data-card-action="mute"
+              aria-pressed={!card.muted}
+              aria-label={card.muted ? "Unmute" : "Mute"}
+              title={card.muted ? "Unmute: they hear you again" : "Mute: they stop hearing you"}
+              onClick={() => actions.mute(card)}
+            >
+              {card.muted ? <MicOff className="h-3.5 w-3.5" /> : <Mic className="h-3.5 w-3.5" />}
+            </button>
+          )}
+          {card.camera && (
+            <button
+              type="button"
+              className={`engagement-card-toggle walkie-strip-camera${card.cameraOn ? "" : " is-off"}`}
+              data-card-action="camera"
+              aria-pressed={card.cameraOn}
+              aria-label={card.cameraOn ? "Turn the camera off" : "Turn the camera on"}
+              title={card.cameraOn ? "Camera off: they see your picture" : "Camera on: they see you"}
+              onClick={() => actions.camera(card)}
+            >
+              {card.cameraOn ? <Video className="h-3.5 w-3.5" /> : <VideoOff className="h-3.5 w-3.5" />}
+            </button>
+          )}
+        </span>
       )}
       <button type="button" className="walkie-strip-end" data-card-action="end" onClick={() => actions.end(card)}>
-        <PhoneOff className="h-4 w-4" />
+        <PhoneOff className="h-3.5 w-3.5" />
         End
       </button>
     </div>
@@ -174,8 +184,8 @@ export function EngagementCard({
                 // At press time, never at render: the DM is opened only when a
                 // burst is about to land in it.
                 resolveChannelId={() => useInboxStore.getState().openDmChannel([card.from])}
-                size="lg"
-                label="Talk back"
+                size="sm"
+                label="Talk"
                 title="Talk back: click to start, click again to stop"
               />
             )}
@@ -185,8 +195,8 @@ export function EngagementCard({
               </button>
             )}
             {card.snooze && (
-              <button type="button" className="walkie-strip-snooze" data-card-action="snooze" onClick={() => actions.snooze(card)}>
-                Snooze for an hour
+              <button type="button" className="walkie-strip-snooze" data-card-action="snooze" onClick={() => actions.snooze(card)} title="Snooze the walkie for an hour">
+                Snooze
               </button>
             )}
           </div>
@@ -198,14 +208,11 @@ export function EngagementCard({
         card.words ? edgeOf(card.words.stage) : "walkie-strip-live",
         <>
           {card.words ? (
-            <Stage words={card.words} name={card.title} />
+            <Stage words={card.words} name={card.title} hearing={card.hearing} muteButton={card.mute} />
           ) : (
-            <div className="engagement-card-title">{card.title}</div>
-          )}
-          {card.hearing && (
-            <div className="engagement-card-hearing" data-hearing={card.hearing.state} role="status" aria-live="polite">
-              {card.hearing.text}
-            </div>
+            <Line stage="locked" hearing={card.hearing}>
+              <span className="engagement-card-title">{card.title}</span>
+            </Line>
           )}
           <LiveControls card={card} actions={actions} />
         </>,
@@ -215,9 +222,9 @@ export function EngagementCard({
       return shell(
         "walkie-strip-joined",
         <>
-          <div className="walkie-strip-headline walkie-strip-headline-lead" role="status" aria-live="polite">
-            {card.text}
-          </div>
+          <Line stage="locked">
+            <span className="walkie-strip-headline-lead">{card.text}</span>
+          </Line>
           <LiveControls card={card} actions={actions} />
         </>,
       );
@@ -226,10 +233,11 @@ export function EngagementCard({
       return shell(
         "walkie-strip-live",
         <>
-          <div className="engagement-card-title">{card.name}</div>
-          <div className="ring-card-line">
+          <div className="ring-card-line" role="status" aria-live="polite">
             <span className="ring-card-dot" aria-hidden="true" />
-            Incoming huddle
+            <span className="engagement-card-words">
+              <span className="engagement-card-title">{card.name}</span> is calling
+            </span>
           </div>
           <div className="ring-card-actions">
             <button type="button" className="ring-card-decline" data-card-action="decline" onClick={() => actions.decline(card)}>
@@ -246,14 +254,14 @@ export function EngagementCard({
       return shell(
         "walkie-strip-live",
         <>
-          <div className="engagement-card-title">{card.name}</div>
           <div className="ring-card-line" role="status" aria-live="polite">
             <span className="ring-card-dot" aria-hidden="true" />
-            {card.status === "ringing" ? "Ringing" : card.status}
+            <span className="engagement-card-words">
+              {card.status === "ringing" ? "Ringing" : sentence(card.status)} <span className="engagement-card-title">{card.name}</span>
+            </span>
           </div>
-          <div className="walkie-strip-actions">
-            <button type="button" className="walkie-strip-snooze" data-card-action="cancel" onClick={() => actions.cancel(card)}>
-              <X className="h-4 w-4" />
+          <div className="ring-card-actions">
+            <button type="button" className="ring-card-decline" data-card-action="cancel" onClick={() => actions.cancel(card)}>
               Cancel
             </button>
           </div>

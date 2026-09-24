@@ -656,8 +656,8 @@ export function senderHearing(
   // the other is a person who is not there.
   const busy = other.status === "busy" || other.pref === "off" || !!other.snoozed;
   return busy
-    ? { state: "busy", text: `${other.name} is busy — they get the message` }
-    : { state: "away", text: `${other.name} is away — they get the message` };
+    ? { state: "busy", text: `${other.name} is busy, so they get the message` }
+    : { state: "away", text: `${other.name} is away, so they get the message` };
 }
 
 /**
@@ -742,13 +742,16 @@ export function walkieStageWords(input: {
   name: string;
 }): WalkieStageWords {
   const { sending, incoming, locked, muted, dropped, micDenied, name } = input;
-  const stopHint = "Click STOP when you are done.";
+  // END is the word on the card's button (EngagementCard), so the hint names it.
+  const stopHint = "Click END when you are done.";
   if (sending) {
     if (dropped) return { stage: "dropped", badge: "NOT HEARD", hint: `Still recording. ${name} gets it as a message. ${stopHint}` };
     if (!sending.live) return { stage: "opening", badge: "OPENING MIC", hint: "One moment. Do not talk yet." };
     if (incoming) return { stage: "both", badge: "BOTH TALKING", hint: stopHint };
+    // The card prints the roster's own verdict ("Riley hears you", senderHearing)
+    // right above this hint, so the hint does not say it again.
     if (sending.heardLive) {
-      return { stage: "live", badge: "TALKING", hint: `${name} sees you and hears you. You will not hear them until they JOIN. ${stopHint}` };
+      return { stage: "live", badge: "TALKING", hint: `You will not hear them until they JOIN. ${stopHint}` };
     }
     return { stage: "recording", badge: "RECORDING", hint: `Opening the line to ${name}. If they are away they get this as a message. ${stopHint}` };
   }

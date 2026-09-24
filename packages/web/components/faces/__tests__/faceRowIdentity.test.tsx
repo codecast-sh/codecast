@@ -76,7 +76,8 @@ const restoreGlobals = replaceGlobals({
   IS_REACT_ACT_ENVIRONMENT: true,
 });
 const { createRoot } = await import("react-dom/client");
-const { FaceRow, flipKeyframes } = await import("../FaceRow");
+const { FaceRow } = await import("../FaceRow");
+const { flipKeyframes } = await import("../../../lib/faces/layout");
 afterAll(() => {
   closeDomWindow(dom);
   restoreGlobals();
