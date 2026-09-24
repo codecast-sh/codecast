@@ -11,6 +11,7 @@
  */
 
 import { useCallback, useMemo, useState } from "react";
+import { ShortId } from "../../../components/ShortId";
 import { useMutation } from "convex/react";
 import { useShallow } from "zustand/react/shallow";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -227,7 +228,7 @@ function CandidateRow({
       <span className="min-w-0 flex-1">
         <span className="flex items-center gap-2 min-w-0">
           <span className="truncate text-sm text-sol-text">{shortName(c)}</span>
-          {c.short_id && <span className="shrink-0 font-mono text-[10px] text-sol-text-dim">{c.short_id}</span>}
+          <ShortId id={c.short_id} className="text-[10px] text-sol-text-dim" />
           {c.has_pending_messages && <span className="shrink-0 rounded bg-sol-yellow/15 px-1 text-[9px] text-sol-yellow">message waiting</span>}
         </span>
         <span className="flex items-center gap-2 text-[11px] text-sol-text-muted min-w-0">
@@ -342,7 +343,7 @@ function BatchCard({ b, devices, now, expandedDefault }: { b: Batch; devices: Ma
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 min-w-0">
                     <span className="truncate text-sm text-sol-text">{shortName(r)}</span>
-                    {r.short_id && <span className="shrink-0 font-mono text-[10px] text-sol-text-dim">{r.short_id}</span>}
+                    <ShortId id={r.short_id} className="text-[10px] text-sol-text-dim" />
                     <span className="ml-auto shrink-0 text-[10px] text-sol-text-dim">
                       {duration(r.started_at, isRowTerminal(r.status) ? r.finished_at : null, now)}
                     </span>

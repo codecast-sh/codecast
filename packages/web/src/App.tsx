@@ -30,6 +30,7 @@ const BlogTriggers = lazy(() => import("@/app/(marketing)/blog/this-post-wrote-i
 const BlogPublish = lazy(() => import("@/app/(marketing)/blog/a-url-for-everything-your-agent-makes/page"));
 const BlogAgentsTalk = lazy(() => import("@/app/(marketing)/blog/agents-that-talk-to-each-other/page"));
 const BlogPullRequests = lazy(() => import("@/app/(marketing)/blog/the-pull-request-that-knows-its-sessions/page"));
+const BlogTeamSees = lazy(() => import("@/app/(marketing)/blog/what-your-team-sees/page"));
 const CompareIndex = lazy(() => import("@/app/(marketing)/compare/page"));
 const Compare = lazy(() => import("@/app/(marketing)/compare/ComparePage"));
 
@@ -184,6 +185,7 @@ export function App() {
               <Route path="blog/a-url-for-everything-your-agent-makes" element={<E name="BlogPublish"><BlogPublish /></E>} />
               <Route path="blog/agents-that-talk-to-each-other" element={<E name="BlogAgentsTalk"><BlogAgentsTalk /></E>} />
               <Route path="blog/the-pull-request-that-knows-its-sessions" element={<E name="BlogPullRequests"><BlogPullRequests /></E>} />
+              <Route path="blog/what-your-team-sees" element={<E name="BlogTeamSees"><BlogTeamSees /></E>} />
               <Route path="compare" element={<E name="CompareIndex"><CompareIndex /></E>} />
               <Route path="compare/:slug" element={<E name="Compare"><Compare /></E>} />
             </Route>

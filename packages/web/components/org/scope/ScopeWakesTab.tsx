@@ -4,6 +4,7 @@
 // conversation view's wake card links here ("Why did this wake me") with the
 // wake's short id, which lands highlighted.
 import { useEffect, useRef } from "react";
+import { ShortId } from "../../ShortId";
 import ReactMarkdown from "react-markdown";
 import { entityRemarkPlugins } from "../../../lib/remarkEntityIds";
 import { MESSAGE_MD_COMPONENTS, MESSAGE_MD_REHYPE } from "../../messageMarkdown";
@@ -39,7 +40,7 @@ export function ScopeWakesTab({ role, highlight, now }: { role: OrgRole; highlig
           <div key={w._id} ref={hit ? target : undefined} className="rounded-xl border px-4 py-3" data-wake={w.short_id}
             style={{ borderColor: hit ? "var(--sol-violet)" : "color-mix(in srgb, var(--sol-border) 28%, transparent)", background: hit ? "color-mix(in srgb, var(--sol-violet) 6%, var(--sol-card))" : "var(--sol-card)" }}>
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-[12px] font-medium tabular-nums" style={{ color: "var(--sol-violet)", fontFamily: "var(--font-mono)" }}>{w.short_id}</span>
+              <ShortId id={w.short_id} className="text-[12px] font-medium tabular-nums" style={{ color: "var(--sol-violet)" }} />
               <span className="inline-flex items-center h-[18px] px-1.5 rounded-md text-[10px] font-medium" title={meta.hint} style={{ color: meta.color, background: `color-mix(in srgb, ${meta.color} 14%, transparent)` }}>{meta.label}</span>
               <span className="text-[11px] tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{w.causes.length} {w.causes.length === 1 ? "cause" : "causes"}{w.frame_chars > 0 ? ` · ${w.frame_chars.toLocaleString()} chars` : ""}</span>
               <span className="ml-auto text-[10px] tabular-nums" style={{ color: "var(--sol-text-dim)" }} title={new Date(w.created_at).toLocaleString()}>{compactAge(Math.max(0, now - w.created_at))}</span>

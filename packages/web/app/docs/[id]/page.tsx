@@ -1,5 +1,6 @@
 "use client";
 import { useCallback, useMemo, useState } from "react";
+import { ShortId } from "../../../components/ShortId";
 import { useParams, useRouter } from "next/navigation";
 import { useInboxStore, DocDetail, type DocItem } from "../../../store/inboxStore";
 import { useWorkspaceCollection } from "../../../hooks/useWorkspaceCollection";
@@ -386,9 +387,7 @@ function DocDetailContent() {
                           className="flex items-center gap-3 px-4 py-3 hover:bg-sol-bg-alt/50 transition-colors"
                         >
                           <StatusIcon className={`w-4 h-4 flex-shrink-0 ${status.color}`} />
-                          <span className="text-xs font-mono text-sol-text-dim w-16 flex-shrink-0">
-                            {task.short_id}
-                          </span>
+                          <ShortId id={task.short_id} className="text-xs text-sol-text-dim w-16" />
                           <span className="flex-1 text-sm text-sol-text truncate">
                             {task.title}
                           </span>

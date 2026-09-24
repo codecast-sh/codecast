@@ -8,6 +8,7 @@
 // decisions; no query per card. The hold, run and node rules are the task
 // page's (lib/taskLine.ts), so the board and the strip agree.
 import { useMemo } from "react";
+import { ShortId } from "../../ShortId";
 import Link from "next/link";
 import { Lock, Workflow } from "lucide-react";
 import { classifySession, useTrackedStore, type SessionDecisionItem, type TaskItem } from "../../../store/inboxStore";
@@ -125,7 +126,7 @@ function LineCard({ task, run, held, evidence }: { task: TaskItem; run: LineRun 
       <Link href={`/tasks/${task.short_id}`} className="block px-2.5 pt-2 pb-2">
         <span className="block text-[12.5px] font-medium leading-snug line-clamp-2" style={{ color: "var(--sol-text)" }}>{task.title}</span>
         <span className="mt-1 flex items-center gap-1.5 text-[10.5px] min-w-0" style={{ color: "var(--sol-text-dim)" }}>
-          <span style={{ fontFamily: "var(--font-mono)" }}>{task.short_id}</span>
+          <ShortId id={task.short_id} />
           {assignee && (
             <span className="inline-flex items-center gap-1 min-w-0 truncate" title={assignee.name}>
               <AssigneeFace info={assignee} size={16} />

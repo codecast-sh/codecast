@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { CHIEF_OF_STAFF_CHARTER, CHIEF_OF_STAFF_HANDLE, COMPANY_REVIEW_TITLE, performBackfillSeatedChiefs, performCreateRole, performProvisionRole, performRetireRole, performSetTrust, performStaff, performUpdateRole, seatingNote } from "./orgRoles";
+import { CHIEF_OF_STAFF_CHARTER, CHIEF_OF_STAFF_HANDLE, COMPANY_REVIEW_PROMPT, COMPANY_REVIEW_TITLE, performBackfillSeatedChiefs, performCreateRole, performProvisionRole, performRetireRole, performSetTrust, performStaff, performUpdateRole, seatingNote } from "./orgRoles";
 import { canAccessProject } from "./lib/access";
 import { webUpdate as planWebUpdate } from "./plans";
 import { webUpdate as projectWebUpdate } from "./projects";
@@ -550,7 +550,15 @@ describe("orgRoles.staff", () => {
     expect(CHIEF_OF_STAFF_CHARTER).toContain("The executives decide; you propose");
     expect(CHIEF_OF_STAFF_CHARTER).toContain("smallest change");
     expect(CHIEF_OF_STAFF_CHARTER).toContain("never apply");
-    expect(CHIEF_OF_STAFF_CHARTER).toContain("phone");
+    // S24: the review is a conversation led by the reporting structure, with small proposals as cards.
+    expect(CHIEF_OF_STAFF_CHARTER).toContain("The review is a conversation with the person you report to");
+    expect(CHIEF_OF_STAFF_CHARTER).toContain("Lead with the reporting structure: who reports to whom, what each role looks after, and where the person's own sessions go");
+    expect(CHIEF_OF_STAFF_CHARTER).toContain("post it as a small proposal and put its short id on its own line");
+    expect(CHIEF_OF_STAFF_CHARTER).toContain("never one large document");
+    expect(CHIEF_OF_STAFF_CHARTER).toContain("A message never cites an id, never talks about you");
+    expect(CHIEF_OF_STAFF_CHARTER).not.toMatch(/phone|summary first/);
+    expect(COMPANY_REVIEW_PROMPT).toContain("open the conversation with the person you report to");
+    expect(COMPANY_REVIEW_PROMPT).toContain("as a small proposal with its short id on its own line");
     expect(CHIEF_OF_STAFF_CHARTER).toContain("open_tasks");
   });
 });

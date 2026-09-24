@@ -3,7 +3,7 @@
 // contract's (`resolveOrgAsks`, the same function the server runs); this file
 // joins each ask to its change rows and says, in words, where each ask and
 // the whole proposal stand. Pure; the cards render what it returns.
-import { resolveOrgAsks, type OrgAskNames } from "@codecast/shared/contracts/orgProposal";
+import { resolveOrgAsks, type OrgAskNames, isOrgQuietChange } from "@codecast/shared/contracts/orgProposal";
 import type { OrgProposalChange, OrgProposalRow } from "./orgStaffingTypes";
 import type { OrgTree } from "./orgTypes";
 import { isDecidable, isSyncChange, orderChanges, recordsInLine, splitAsk } from "./staffingModel";
@@ -66,7 +66,10 @@ export function proposalAsks(p: Pick<OrgProposalRow, "asks" | "changes">, names?
       : decided > 0 ? `${decided} of ${changes.length} changes decided`
       : null;
     const records = changes.every((c) => isSyncChange(c.change));
-    const foldLabel = records ? plural(recordsInLine(changes), "record", "records") : plural(changes.length, "change", "changes");
+    // A quiet kind (a limit, S23.2) is not a row in the fold; an ask of quiet
+    // changes alone reads as sentences, one per change, so it counts them all.
+    const drawn = changes.filter((c) => !isOrgQuietChange(c.change)).length;
+    const foldLabel = records ? plural(recordsInLine(changes), "record", "records") : plural(drawn || changes.length, "change", "changes");
     return { index, title: a.title, why: a.why, effect: a.effect, changes, remaining, failed, skipped, state, foldLabel, verdictLine };
   });
 }

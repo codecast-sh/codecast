@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { ShortId } from "../../ShortId";
 import { useInboxStore, type TaskDetail } from "../../../store/inboxStore";
 import { useSyncTaskDetail } from "../../../hooks/useSyncTasks";
 import { useTaskRow } from "../../../hooks/useThreadPreviews";
@@ -54,8 +55,8 @@ export function TaskMeta({ card }: { card: ThreadCardModel }) {
         </span>
       )}
       {task.plan?.short_id && (
-        <Link href={`/plans/${task.plan._id}`} className="th-task-meta font-mono" title={task.plan.title}>
-          {task.plan.short_id}
+        <Link href={`/plans/${task.plan._id}`} className="th-task-meta" title={task.plan.title}>
+          <ShortId id={task.plan.short_id} />
         </Link>
       )}
       <span className="th-task-meta th-task-meta-age">

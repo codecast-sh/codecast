@@ -2289,6 +2289,7 @@ const ConversationViewInner = (
     const populate = (t: string, o?: { append?: boolean }) => populateInputRef.current?.(t, o);
     return {
       quote: (text: string) => quoteToComposer(text, populate),
+      populate,
       submit: () => submitReview(conversation?._id ?? "", populate),
       ...reviewNavigation,
     };

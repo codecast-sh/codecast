@@ -23,8 +23,6 @@ import {
   hasBrowserNotificationPermission,
   installDesktopInputTracker,
   planDeepLinkArrival,
-  conversationIdFromPath,
-  shareTokenInPath,
   installWindowRoleTracker,
   reportDesktopWindowState,
   isDetachedTabWindow,
@@ -33,7 +31,7 @@ import {
   onCallPanelHandback,
   onVoiceMirror } from "../lib/desktop";
 import { runPlaced } from "../lib/desktopApps";
-import { inboxTabSessionId } from "../lib/pathLabel";
+import { deepLinkSessionId } from "../lib/pathLabel";
 import { cleanNotificationBody } from "../lib/notificationText";
 import { notificationActor, notificationRoute } from "../lib/notificationTypes";
 import { recordNotificationMiss } from "../lib/notificationNudge";
@@ -293,15 +291,13 @@ export function DesktopProvider() {
       if (isSatelliteWindow()) return navigateFromHere(path, (p) => router.push(p));
       if (tabId) useInboxStore.getState().switchTab(tabId);
 
-      // A share link never takes the in-place shortcut: its token must be
-      // presented and redeemed first (shareTokenInPath), and the conversation
-      // route is the one path that does that before the inbox reads by id.
       // Both spellings of "this session": the universal /conversation/<id>,
       // and the inbox carrying one as /inbox?s=<id> — what a session opened
       // from the Chat or Work window arrives as (lib/openIntent). A mounted
       // inbox does not adopt a new ?s= from the URL alone, so without this
-      // the path landed and the session on screen never changed.
-      const convId = shareTokenInPath(path) ? null : conversationIdFromPath(path) ?? inboxTabSessionId(path);
+      // the path landed and the session on screen never changed. A share
+      // link or a short id navigates instead (deepLinkSessionId).
+      const convId = deepLinkSessionId(path);
       if (convId) {
         useInboxStore.getState().navigateToSession(convId, "deeplink");
 

@@ -246,6 +246,16 @@ describe("orgWakes.buildFrame", () => {
     expect(section.indexOf("Where it stands")).toBeLessThan(section.indexOf("Tasks:"));
   });
 
+  test("the scope line names a project's plans by the project and names a few loose plans at most", () => {
+    const inside = Array.from({ length: 200 }, (_, i) => ({ id: `in${i}`, short_id: `pl-${i}`, title: `Inside ${i}`, project_id: "p1" }));
+    const loose = Array.from({ length: 8 }, (_, i) => ({ id: `lo${i}`, short_id: `pl-9${i}`, title: `Loose ${i}` }));
+    const f = buildFrame(base([{ kind: "fold", cause: "x" }], {
+      facts: { ...facts, scope: { ...facts.scope, projects: [{ id: "p1", title: "Infrastructure" }], plans: [...inside, ...loose] } },
+    }));
+    const line = f.text.split("\n").find((l) => l.startsWith("Scope: "))!;
+    expect(line).toBe("Scope: project Infrastructure, plan pl-90 Loose 0, plan pl-91 Loose 1, plan pl-92 Loose 2, plan pl-93 Loose 3, plan pl-94 Loose 4, and 3 more plans");
+  });
+
   test("a restart frame carries the charter and brief in full; channel lines get their section", () => {
     const f = buildFrame(base([{ kind: "immediate", cause: "restart: session restarted" }], {
       restart: true,

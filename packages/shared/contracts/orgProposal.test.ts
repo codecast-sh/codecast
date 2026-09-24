@@ -390,7 +390,8 @@ describe("asks partition a proposal's changes", () => {
       ["Bring 2 records up to date", [1, 2]],
       ["Add an agent: Head of Quality", [4, 5]],
       ["Retire test-lead", [6]],
-      ["3 smaller changes: filing, goals and settings", [3, 7, 8]],
+      // Three rows ride in the ask; the words count two, because the limit (seq 8) is never a row a person reads (S23.2).
+      ["2 smaller changes: filing, goals and settings", [3, 7, 8]],
     ]);
     expect(asks[1].why).toBe("Nobody watches the quality line.");
     expect(asks[1].effect).toBe("One daily list of fixes waiting on you.");
@@ -407,7 +408,7 @@ describe("asks partition a proposal's changes", () => {
       { seq: 6, change: { kind: "scope", handle: "product", add: ["Calls"] } },
     ] as any[]);
     expect(bare.map((a) => [a.title, a.why, a.effect])).toEqual([
-      ["Add an agent: Head of Platform", "Owns the sync layer.", "A new agent, Head of Platform, reporting to you and looking after the Platform project. It stays until you retire it. It gets a daily limit of its own. It runs Release check every day."],
+      ["Add an agent: Head of Platform", "Owns the sync layer.", "A new agent, Head of Platform, reporting to you and looking after the Platform project. It stays until you retire it. It runs Release check every day." /* the limit rider says nothing (S23.2) */],
       ["Add an agent: Content Lead", "The author did not say why. Ask about this.", "A new agent, Content Lead, reporting to growth and looking after the pl-88 plan. It ends with the pl-88 plan, then comes up for review."],
       ["Move ops", "The author did not say why. Ask about this.", "ops reports to growth from now on, takes on pr-1 and hands off pr-2."],
       ["Change what product looks after", "The author did not say why. Ask about this.", "product takes on Calls."],
@@ -429,7 +430,7 @@ describe("asks partition a proposal's changes", () => {
     const stored = [{ title: "Records", why: "w", effect: "e", seqs: [1, 2, 9] }, { title: "The agent", why: "w", effect: "e", seqs: [4, 5] }];
     const resolved = resolveOrgAsks(stored, rows);
     expect(resolved.slice(0, 2).map((a) => a.seqs)).toEqual([[1, 2], [4, 5]]);
-    expect(resolved.slice(2).map((a) => [a.title, a.seqs])).toEqual([["Retire test-lead", [6]], ["3 smaller changes: filing, goals and settings", [3, 7, 8]]]);
+    expect(resolved.slice(2).map((a) => [a.title, a.seqs])).toEqual([["Retire test-lead", [6]], ["2 smaller changes: filing, goals and settings", [3, 7, 8]]]);
     expect(resolveOrgAsks(undefined, rows)).toEqual(asks);
   });
 });

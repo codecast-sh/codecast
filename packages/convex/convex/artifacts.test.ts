@@ -746,6 +746,15 @@ describe("brandArtifactHtml", () => {
     expect(hidden).not.toContain('class="__cc_sess"');
   });
 
+  test("session chip links the full conversation id, never the colliding short id", () => {
+    const full = "jx7etg8nap9wz7zt0npak20tax8f3k33";
+    const out = brandArtifactHtml("<body></body>", { ...opts, sessionShortId: "jx7etg8", sessionConversationId: full, sessionTitle: "T" });
+    expect(out).toContain(`href="https://codecast.sh/conversation/${full}"`);
+    // A row published before the id was stored still links something.
+    const legacy = brandArtifactHtml("<body></body>", { ...opts, sessionShortId: "jx7etg8", sessionTitle: "T" });
+    expect(legacy).toContain('href="https://codecast.sh/conversation/jx7etg8"');
+  });
+
   test("accessSummary reports the session-link toggle", () => {
     const base = { password_hash: undefined, email_gate: undefined, expires_at: undefined, edit_mode: undefined };
     expect(accessSummary({ ...base } as never).show_session).toBe(true);
