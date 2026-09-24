@@ -1108,3 +1108,17 @@ export const teamBoardProbe = internalQuery({
     return { truncated: [...scan.truncated], candidates: scan.conversations.length, byRunner };
   },
 });
+
+export const teamsForUserPath = internalQuery({
+  args: { user_id: v.id("users"), path_prefix: v.string() },
+  handler: async (ctx, args) => {
+    const counts: Record<string, number> = {};
+    for await (const c of ctx.db.query("conversations").withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))) {
+      const p = c.git_root || c.project_path || "";
+      if (!p.startsWith(args.path_prefix)) continue;
+      const key = `${c.team_id ?? "none"}|private=${c.is_private}|auto=${c.auto_shared}`;
+      counts[key] = (counts[key] ?? 0) + 1;
+    }
+    return counts;
+  },
+});

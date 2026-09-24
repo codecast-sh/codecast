@@ -194,14 +194,13 @@
   /* The edge every state ring is drawn OUTSIDE of: nothing in the header,
      the paper ring in the float (below). A state's colour goes around the
      paper instead of replacing it, so the circle keeps its shape. */
-  /* THE PAPER RING: every face wears it, 2px here and 5px in the float, and
-     every state ring is drawn outside it, so a state's colour goes around
-     the paper instead of replacing it. It is what keeps a dark avatar from
-     dissolving into a dark header or a dark editor. */
-  --ring-paper: #fcfbf7;
-  --edge-w: 2px;
-  --edge: 0 0 0 var(--edge-w) var(--ring-paper);
-  box-shadow: var(--edge);
+  /* The edge every state ring is drawn OUTSIDE of. None in the header,
+     which sits on the app's own background the way the old bar did (a
+     white ring there was far too bright on a dark header); the float's
+     paper ring below, which keeps a dark avatar from dissolving into a dark
+     editor. */
+  --edge-w: 0px;
+  --edge: 0 0 0 0 transparent;
   /* The presence weight (`--drain-opacity`, presence.css): the call circles'
      `.face` base sets opacity 1 for its crossfade and ties the presence rule
      on specificity, so an offline face in the header sat at full weight
@@ -340,14 +339,11 @@
  * faces.css, keyed on `data-speaking` and `data-followed`; the row writes
  * both attributes so one stylesheet answers for every surface. */
 
-/* ── Holding the key ────────────────────────────────────────────────────────
+/* ── Talking ────────────────────────────────────────────────────────────────
  *
- * While my key is down the other faces step back, so the one I am talking to
- * is the only face at full weight. The same rule the people wall and the bar
- * already apply (people.css), on this row's own seats. */
-.face-row[data-holding] .face-seat:not([data-hold]) {
-  opacity: 0.34;
-}
+ * Nothing on the row fades while I talk. The link and the rings already say
+ * who I am talking to; fading everyone else (a hold to talk gesture's old
+ * focus) read as the row breaking (founder, 2026-09-24). */
 
 /* ── The link ───────────────────────────────────────────────────────────────
  *
@@ -523,8 +519,11 @@
   position: absolute;
   right: -1px;
   bottom: -1px;
-  /* The badge's cut is the ring's paper, so badge and ring merge into one
-     edge instead of the badge biting a dark notch out of the ring. */
+}
+/* In the float the badge's cut is the ring's paper, so badge and ring merge
+   into one edge instead of the badge biting a dark notch out of the ring. In
+   the header it is the header's own background, as the old bar drew it. */
+.face-row[data-density="float"] .face-seat .face-pres {
   --sol-bg: #fcfbf7;
 }
 
@@ -1220,4 +1219,75 @@
 }
 .face-row-grip:active {
   cursor: grabbing;
+}
+
+/* ── Agents ─────────────────────────────────────────────────────────────────
+ *
+ * An agent is marked, quietly: the same round face as a person, and in the
+ * corner where a person's presence dot sits, a dot of the same size holding
+ * a small neutral spark instead of a colour. Nothing louder: a violet "AI"
+ * tag on every agent turned the header into a row of labels (founder,
+ * 2026-09-24). Its card offers no call and no message. */
+.face-bot {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: var(--sol-bg-alt);
+  box-shadow: 0 0 0 2px var(--sol-bg);
+  color: var(--sol-text-dim);
+  pointer-events: none;
+}
+.face-row[data-density="float"] .face-bot {
+  box-shadow: 0 0 0 2px #fcfbf7;
+}
+.face-bot-glyph {
+  width: 8px;
+  height: 8px;
+  stroke-width: 2.5;
+}
+.face-row[data-density="float"] .face-bot {
+  width: 18px;
+  height: 18px;
+}
+.face-row[data-density="float"] .face-bot-glyph {
+  width: 11px;
+  height: 11px;
+}
+.face-card-agent {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--sol-border) 60%, transparent);
+  font-size: 11px;
+  line-height: 15px;
+  color: var(--sol-text-dim);
+}
+
+/* The card's own close, in its top right corner; the profile chevron moves
+   in from it so the two never touch. */
+.face-card-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  color: var(--sol-text-dim);
+  transition: background 120ms ease, color 120ms ease;
+}
+.face-card-close:hover {
+  background: color-mix(in srgb, var(--sol-text) 8%, transparent);
+  color: var(--sol-text);
+}
+[data-member-card] .face-card-name {
+  padding-right: 22px;
 }

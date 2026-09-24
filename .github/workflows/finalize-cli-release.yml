@@ -808,6 +808,12 @@ jobs:
               }
             }' > /tmp/cli-release/latest.json
 
+          # The previous signature goes first. A pinned client refuses a
+          # signature that does not match the manifest, but accepts a missing
+          # one while signing is optional, so the only gap a client can see
+          # is "unsigned", never "mismatched". The sign step below uploads
+          # the new signature.
+          aws s3 rm "s3://$R2_BUCKET/latest.json.sig" --endpoint-url "$R2_ENDPOINT" --only-show-errors || true
           aws s3 cp /tmp/cli-release/latest.json "s3://$R2_BUCKET/latest.json" \
             --endpoint-url "$R2_ENDPOINT" \
             --content-type application/json \
