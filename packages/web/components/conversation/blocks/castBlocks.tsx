@@ -896,8 +896,9 @@ function CastChatSendBlock({ send, isReply, isError }: { send: ChatSendArgs; isR
   useEnsureChatMessage(lookupId);
   const row = useChatMessageRow(lookupId);
   const channelId = send.channelId ?? wake?.channelId ?? row?.channel_id;
-  const storeName = useInboxStore((s) => (channelId ? s.chatChannels[channelId]?.name : undefined));
-  const channelName = wake?.channelName ?? storeName;
+  const storeChannel = useInboxStore((s) => (channelId ? s.chatChannels[channelId] : undefined));
+  const direct = wake?.direct ?? storeChannel?.kind === "dm";
+  const channelName = wake?.channelName || storeChannel?.name;
   const href = chatHref(channelId, isReply ? send.messageId : send.threadRootId);
   const declinedByFlag = send.status === "error";
   // The server's own verdict on the reply outranks the command's flag.
@@ -909,8 +910,8 @@ function CastChatSendBlock({ send, isReply, isError }: { send: ChatSendArgs; isR
       <div className="flex items-center gap-2 px-3 pt-2 pb-1 flex-wrap">
         <CornerUpRight className="w-3.5 h-3.5 text-sol-magenta/70 shrink-0" />
         <span className="text-[11px] font-medium tracking-wide uppercase text-sol-magenta/70 shrink-0">{isReply ? "Reply in chat" : "Message to chat"}</span>
-        {channelName ? (
-          <ChatChannelPill name={channelName} href={href} />
+        {channelName || direct ? (
+          <ChatChannelPill name={channelName ?? ""} href={href} direct={direct} />
         ) : href ? (
           <Link href={href} className="text-[11px] font-mono text-sol-magenta hover:underline underline-offset-2">open thread</Link>
         ) : null}

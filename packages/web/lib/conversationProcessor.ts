@@ -14,7 +14,7 @@ export type MessageAlternate = {
 
 import { SYSTEM_MESSAGE_PREFIXES } from "./sessionFilters";
 import { isAgentContextMessage, isAgentSwitchNotice, isMachineSwitchNotice } from "@codecast/shared/contracts";
-import { stripTeammateFraming, parseSpawnedTaskPrompt, parseChatWakePrompt } from "../components/sessionMessage";
+import { stripTeammateFraming, parseSpawnedTaskPrompt, parseChatWakePrompt, chatWakePlace } from "../components/sessionMessage";
 
 const COMMAND_PATTERNS = [
   /^<command-name>([^<]*)<\/command-name>/,
@@ -361,7 +361,7 @@ export function classifyFeedMessage(content: string | null | undefined): FeedDis
   const chatWake = parseChatWakePrompt(raw);
   if (chatWake) {
     const lines = chatWake.entries.map((e) => `${e.name}: ${e.content}`).join("\n");
-    return { kind: "text", text: `#${chatWake.channelName} — ${lines}` };
+    return { kind: "text", text: `${chatWakePlace(chatWake)} — ${lines}` };
   }
   const text = stripTeammateFraming(stripSystemTags(raw)
     .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "")

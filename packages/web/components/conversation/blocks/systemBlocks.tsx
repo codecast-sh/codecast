@@ -22,13 +22,13 @@ import { FormattedSummary } from "../../FormattedSummary";
 import { entityRemarkPlugins } from "../../../lib/remarkEntityIds";
 import { MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS } from "../../messageMarkdown";
 import { useJumpToSendingMessage } from "../../../hooks/useJumpToSendingMessage";
-import { isTeammateFramingOnly, parseSpawnedTaskPrompt, type ChatWakePrompt, type HuddleSummaryTag } from "../../sessionMessage";
+import { isTeammateFramingOnly, parseSpawnedTaskPrompt, chatWakeAction, type ChatWakeEntry, type ChatWakePrompt, type HuddleSummaryTag } from "../../sessionMessage";
 import { sessionEscalationCaption, type SessionEscalationMessage } from "@codecast/shared/contracts";
 import { RoleFace } from "../../org/RoleFace";
 import { CallTranscriptDisclosure } from "../../calls/TranscriptTurns";
 import { useInboxStore, useTrackedStore } from "../../../store/inboxStore";
 import { DecisionCompactCard } from "../../decisions/DecisionCompactCard";
-import { MessageSquare, Users, Hash, ChevronDown, ChevronRight, Clock, CornerDownRight, Workflow, Zap, Radar, Bot, PhoneCall, ArrowUpRight } from "lucide-react";
+import { MessageSquare, Users, Hash, AtSign, ChevronDown, ChevronRight, Clock, CornerDownRight, Workflow, Zap, Radar, Bot, PhoneCall, ArrowUpRight } from "lucide-react";
 import { sessionMessageQueueLabel } from "../../../lib/pendingBanner";
 import { PlanBlock } from "./planBlock";
 import { UserIcon } from "./shared";
@@ -852,9 +852,11 @@ export function SessionMessageBlock({ from, name, body, timestamp, pendingStatus
 // the way chat does — a channel pill, the thread's lines by speaker — and hides
 // the framing that exists only to brief the agent.
 
-export function ChatChannelPill({ name, href }: { name: string; href: string | null }) {
+export function ChatChannelPill({ name, href, direct }: { name: string; href: string | null; direct?: boolean }) {
   const cls = "inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded border border-sol-magenta/30 bg-sol-magenta/10 text-sol-magenta text-[11px] font-mono shrink-0";
-  const inner = <><Hash className="w-3 h-3" />{name}</>;
+  const inner = direct
+    ? <><AtSign className="w-3 h-3" />direct message</>
+    : <><Hash className="w-3 h-3" />{name}</>;
   return href ? (
     <Link href={href} className={`${cls} hover:bg-sol-magenta/20 hover:underline underline-offset-2`} title="Open in team chat">{inner}</Link>
   ) : (
@@ -896,6 +898,21 @@ export function HuddleSummaryBlock({ huddle, timestamp }: { huddle: HuddleSummar
   );
 }
 
+function ChatWakeLine({ entry, dim }: { entry: ChatWakeEntry; dim?: boolean }) {
+  return (
+    <div className={`flex gap-2 text-sm ${dim ? "opacity-60" : ""}`}>
+      <span className={`shrink-0 font-medium ${entry.self ? "text-sol-magenta/80" : "text-sol-text"}`}>
+        {entry.self ? "You" : entry.name}
+      </span>
+      <div className="min-w-0 text-sol-text prose prose-invert prose-sm max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+        <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE}
+          components={MESSAGE_MD_COMPONENTS}
+        >{entry.content}</ReactMarkdown>
+      </div>
+    </div>
+  );
+}
+
 export function ChatWakeBlock({ wake, timestamp }: { wake: ChatWakePrompt; timestamp?: number }) {
   // Land on the thread. A permalink to a REPLY opens the thread panel; the root
   // alone would only scroll the channel — so prefer the anchor's placeholder,
@@ -906,10 +923,10 @@ export function ChatWakeBlock({ wake, timestamp }: { wake: ChatWakePrompt; times
       <div className="flex items-center gap-2 px-3 pt-2 pb-1 flex-wrap">
         <MessageSquare className="w-3.5 h-3.5 shrink-0 text-sol-magenta/70" />
         <span className="text-[11px] font-medium tracking-wide uppercase shrink-0 text-sol-magenta/70">Team chat</span>
-        <ChatChannelPill name={wake.channelName} href={href} />
+        <ChatChannelPill name={wake.channelName} href={href} direct={wake.direct} />
         <span className="text-xs text-sol-text-muted truncate">
           <span className="text-sol-text font-medium">{wake.askerName}</span>
-          {wake.addressed ? " mentioned you" : " replied in a thread"}
+          {` ${chatWakeAction(wake)}`}
         </span>
         {timestamp != null && timestamp > 0 && (
           <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
@@ -917,18 +934,13 @@ export function ChatWakeBlock({ wake, timestamp }: { wake: ChatWakePrompt; times
       </div>
       <CollapsibleBody className="px-3 pb-2" toggleClassName="mt-1">
         <div className="space-y-1.5">
-          {wake.entries.map((entry, i) => (
-            <div key={i} className="flex gap-2 text-sm">
-              <span className={`shrink-0 font-medium ${entry.self ? "text-sol-magenta/80" : "text-sol-text"}`}>
-                {entry.self ? "You" : entry.name}
-              </span>
-              <div className="min-w-0 text-sol-text prose prose-invert prose-sm max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
-                <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE}
-                  components={MESSAGE_MD_COMPONENTS}
-                >{entry.content}</ReactMarkdown>
-              </div>
+          {wake.context.length > 0 && (
+            <div className="space-y-1.5 pb-1.5 mb-1.5 border-b border-sol-magenta/15">
+              <div className="text-[10px] text-sol-text-dim">Earlier in {wake.direct ? "the conversation" : `#${wake.channelName}`}</div>
+              {wake.context.map((entry, i) => <ChatWakeLine key={i} entry={entry} dim />)}
             </div>
-          ))}
+          )}
+          {wake.entries.map((entry, i) => <ChatWakeLine key={i} entry={entry} />)}
           {wake.entries.length === 0 && (
             <span className="text-xs text-sol-text-dim italic">thread excerpt not available</span>
           )}
