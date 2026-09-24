@@ -16,12 +16,27 @@ export type DurableAuthStorage = {
    * copy before navigation so an old session cannot unlock a principal store.
    */
   purgeDurableAuthValues: (keys: readonly string[]) => Promise<void>;
+  /**
+   * Observe this window's own writes through the wrapper. The browser fires
+   * a storage event only in OTHER windows, so the window that signs out or
+   * signs in learns about its own token boundary from here.
+   */
+  subscribeWrites: (listener: AuthStorageWriteListener) => () => void;
 };
+
+export type AuthStorageWriteListener = (key: string | null, value: string | null) => void;
 
 export function createDurableAuthStorage(params: { dbName: string }): DurableAuthStorage {
   const DB_NAME = params.dbName;
   let cachedDB: IDBDatabase | null = null;
   let dbOpenPromise: Promise<IDBDatabase> | null = null;
+  const writeListeners = new Set<AuthStorageWriteListener>();
+  // `key === null` mirrors a native storage event for clear(): every key gone.
+  function notifyWrite(key: string | null, value: string | null): void {
+    for (const listener of writeListeners) {
+      try { listener(key, value); } catch (error) { console.error("[auth storage] write listener failed", error); }
+    }
+  }
 
   function openDB(): Promise<IDBDatabase> {
     if (cachedDB) return Promise.resolve(cachedDB);
@@ -123,6 +138,7 @@ export function createDurableAuthStorage(params: { dbName: string }): DurableAut
     const errors: unknown[] = [];
     for (const key of keys) {
       try { localStorage.removeItem(key); } catch (error) { errors.push(error); }
+      notifyWrite(key, null);
     }
     try { await idbRemoveMany(keys); } catch (error) { errors.push(error); }
     if (errors.length > 0) {
@@ -155,6 +171,7 @@ export function createDurableAuthStorage(params: { dbName: string }): DurableAut
       return idbGet(key).then((v) => {
         if (v !== null) {
           try { localStorage.setItem(key, v); } catch {}
+          notifyWrite(key, v);
         }
         return v;
       });
@@ -162,9 +179,11 @@ export function createDurableAuthStorage(params: { dbName: string }): DurableAut
     setItem(key: string, value: string): void {
       try { localStorage.setItem(key, value); } catch {}
       idbSet(key, value);
+      notifyWrite(key, value);
     },
     removeItem(key: string): void {
       try { localStorage.removeItem(key); } catch {}
+      notifyWrite(key, null);
       // The auth library removes the refresh token from storage BEFORE making
       // the server call. If that call fails (network blip), the token is lost
       // forever. Keep the IDB copy as a safety net; it gets overwritten on
@@ -175,8 +194,14 @@ export function createDurableAuthStorage(params: { dbName: string }): DurableAut
     },
     clear(): void {
       localStorage.clear();
+      notifyWrite(null, null);
     },
   };
 
-  return { storage, readDurableAuthValue, purgeDurableAuthValues };
+  function subscribeWrites(listener: AuthStorageWriteListener): () => void {
+    writeListeners.add(listener);
+    return () => { writeListeners.delete(listener); };
+  }
+
+  return { storage, readDurableAuthValue, purgeDurableAuthValues, subscribeWrites };
 }

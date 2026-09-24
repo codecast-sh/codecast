@@ -3,19 +3,24 @@ import { useAuthActions } from "@convex-dev/auth/react";
 
 /**
  * The only supported explicit logout path for a web app on this stack.
- * `beforeSignOut` purges the app's local cache and in-memory state before the
- * caller is allowed to navigate; failure stops logout rather than leaving a
- * supposedly signed-out browser with a readable local copy of the account's
- * data. `purge` removes every copy of the four auth keys, because
- * @convex-dev/auth rotation intentionally leaves a refresh token IDB backup.
+ * `beforeSignOut` drops the app's in-memory state before the token goes, so
+ * nothing of the account renders again. The token removal is the boundary
+ * every window observes (see authPrincipal); `purge` then removes every copy
+ * of the four auth keys, because @convex-dev/auth rotation intentionally
+ * leaves a refresh token IDB backup. `afterSignOut` purges the app's disk
+ * cache last: it runs once the account is already signed out everywhere, and
+ * its failure still stops the caller from navigating, so a supposedly
+ * signed-out browser never quietly keeps a readable copy of the account's
+ * data.
  */
 export function useDurableSignOut(params: {
   keys: readonly string[];
   purge: (keys: readonly string[]) => Promise<void>;
   beforeSignOut?: () => Promise<void> | void;
+  afterSignOut?: () => Promise<void> | void;
 }): () => Promise<void> {
   const { signOut } = useAuthActions();
-  const { keys, purge, beforeSignOut } = params;
+  const { keys, purge, beforeSignOut, afterSignOut } = params;
   return useCallback(async () => {
     await beforeSignOut?.();
     try {
@@ -23,5 +28,6 @@ export function useDurableSignOut(params: {
     } finally {
       await purge(keys);
     }
-  }, [signOut, keys, purge, beforeSignOut]);
+    await afterSignOut?.();
+  }, [signOut, keys, purge, beforeSignOut, afterSignOut]);
 }
