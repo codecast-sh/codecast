@@ -51,7 +51,7 @@ async function verifyGhostCards() {
 
   const calls: string[] = [];
   const handlers = {
-    focusChangeId: "c-budget",
+    focusChangeId: "c-routine",
     onFocusChange: (id: string) => calls.push(`focus:${id}`),
     onDecideChange: (id: string, v: string) => calls.push(`decide:${id}:${v}`),
     onEditChange: (id: string) => calls.push(`edit:${id}`),
@@ -103,14 +103,16 @@ async function verifyGhostCards() {
   const growth = q("[data-card='growth']")!;
   assert.ok(growth.querySelector("[data-ghost-retire='c-retire']"), "retire hatch");
   assert.ok(growth.querySelector("[data-ghost-tag='retire']"), "retire tag");
-  assert.equal(growth.querySelector("[data-ghost-chips]")?.getAttribute("data-ghost-chips"), "2");
-  assert.ok(growth.querySelector("[data-ghost-actions='c-budget']"), "the focused chip's action row");
-  assert.equal(growth.querySelector("[data-ghost-actions='c-budget'] [data-ghost-word]")?.getAttribute("data-ghost-word"), "limit");
-  assert.ok(growth.querySelector("[data-ghost-chip='c-budget']")?.getAttribute("aria-pressed") === "true");
+  // The limit (c-budget) draws nothing (S23.2): one chip, the routine.
+  assert.equal(growth.querySelector("[data-ghost-chips]")?.getAttribute("data-ghost-chips"), "1");
+  assert.equal(growth.querySelector("[data-ghost-chip='c-budget']"), null, "a limit is never a chip");
+  assert.ok(!/800k|tokens/.test(growth.textContent ?? ""), "no number of a limit on the card");
+  assert.ok(growth.querySelector("[data-ghost-actions='c-routine']"), "the focused chip's action row");
+  assert.equal(growth.querySelector("[data-ghost-actions='c-routine'] [data-ghost-word]")?.getAttribute("data-ghost-word"), "routine");
+  assert.ok(growth.querySelector("[data-ghost-chip='c-routine']")?.getAttribute("aria-pressed") === "true");
   // A chip carries the delta, not the sentence; the sentence is its title.
-  assert.equal(growth.querySelector("[data-ghost-chip='c-budget']")?.textContent?.trim(), "tokens 800k");
-  assert.ok(growth.querySelector("[data-ghost-chip='c-budget']")?.getAttribute("title")?.startsWith("@growth may use up to"));
   assert.equal(growth.querySelector("[data-ghost-chip='c-routine']")?.textContent?.trim(), "every 7d · Weekly review");
+  assert.ok(growth.querySelector("[data-ghost-chip='c-routine']")?.getAttribute("title")?.startsWith("@growth runs"));
   // Health dots on growth: its two warnings as rings; the info flag draws
   // none (the pane lists it).
   assert.equal(growth.querySelector("[data-flags]")?.getAttribute("data-flags"), "overloaded,cap_hit");
@@ -140,10 +142,10 @@ async function verifyGhostCards() {
 
   // Clicks reach the handlers.
   await act(async () => { (ghostRole.querySelector("button[aria-label='Accept role']") as HTMLElement).click(); });
-  await act(async () => { (growth.querySelector("[data-ghost-actions='c-budget'] button[aria-label='Edit limit']") as HTMLElement).click(); });
+  await act(async () => { (growth.querySelector("[data-ghost-actions='c-routine'] button[aria-label='Edit routine']") as HTMLElement).click(); });
   await act(async () => { (ghostRole.querySelector("button[aria-label='Skip role']") as HTMLElement).click(); });
   await act(async () => { (growth.querySelector("[data-ghost-chip='c-routine']") as HTMLElement).click(); });
-  assert.deepEqual(calls, ["decide:c-role:accept", "edit:c-budget", "decide:c-role:skip", "focus:c-routine"]);
+  assert.deepEqual(calls, ["decide:c-role:accept", "edit:c-routine", "decide:c-role:skip", "focus:c-routine"]);
 
   await act(async () => { root.unmount(); });
   console.log("OrgGhosts mount: ok");

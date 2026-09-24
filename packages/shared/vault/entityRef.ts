@@ -97,6 +97,8 @@ const HANDLE_SHAPE: Record<EntityRefType, RegExp | null> = {
   // `in` is an English word, so initiatives take digits only (in-7, never
   // in-app) — the same rule as inferEntityTypeFromShortId's DIGITS_ONLY_PREFIX.
   initiative: /^in-\d+$/i,
+  // `op` too (op-3, never op-ed): a staffing proposal.
+  proposal: /^op-\d+$/i,
   // Repository objects: `owner/repo#482`, `owner/repo@sha`.
   pr: new RegExp(`^${PR_REF_SOURCE}$`, "i"),
   commit: new RegExp(`^${COMMIT_REF_SOURCE}$`, "i"),
@@ -301,4 +303,5 @@ export const ENTITY_REF_ACCENT: Record<EntityRefType, string> = {
   commit: "--sol-yellow",
   person: "--sol-blue",
   initiative: "--sol-magenta",
+  proposal: "--sol-violet",
 };

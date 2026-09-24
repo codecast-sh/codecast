@@ -165,6 +165,15 @@ export function isAppOrigin(url: string): boolean {
   return APP_HOSTS.has(u.hostname.toLowerCase());
 }
 
+/** The in-app path an absolute codecast URL names (path, query and hash), or
+ *  null for any other address. A prod link read on a local checkout or in the
+ *  desktop app is still a place in this app, not a page to leave for. */
+export function appPathOf(url: string): string | null {
+  if (!/^https?:\/\//i.test(url) || !isAppOrigin(url)) return null;
+  const u = new URL(url);
+  return u.pathname + u.search + u.hash;
+}
+
 const RELATIVE_BASE = "https://pane.invalid";
 
 /** Edit a URL's query without touching anything else about it, and without
