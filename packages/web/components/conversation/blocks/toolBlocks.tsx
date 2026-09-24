@@ -28,6 +28,7 @@ import { EntityIdPill } from "../../EntityIdPill";
 import { entityRemarkPlugins } from "../../../lib/remarkEntityIds";
 import { MESSAGE_MD_REHYPE } from "../../messageMarkdown";
 import { FilePathLink } from "../../FilePathLink";
+import { ObservedChanges } from "./ObservedChanges";
 import { unwrapShellCommand, browserTabOf, type BrowserRowState } from "../../castCommand";
 import { useInboxStore } from "../../../store/inboxStore";
 import { getToolPatchInputs, parseApplyPatchSections } from "../../../lib/applyPatchParser";
@@ -1066,6 +1067,7 @@ export function ToolBlock({ tool, result, changeIndex, changeRange, shareSelecti
               ) : (
                 <div className="p-2 text-xs text-sol-text-dim">No output</div>
               )}
+              <ObservedChanges toolId={tool.id} />
             </div>
           ) : isRead && language && processedContent && processedContent.trim() ? (
             <>

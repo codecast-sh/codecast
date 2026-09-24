@@ -31,7 +31,7 @@ const RAW_USE_QUERY = /(?<![A-Za-z0-9_$])useQuery\s*\(/;
  * useSyncCollection after a plain useQuery there latched the avatar bar's
  * ErrorBoundary for hours behind a one-minute prod outage.
  */
-const PIN = 46;
+const PIN = 45;
 
 const result = checkRatchet({
   name: "raw useQuery outside hooks",

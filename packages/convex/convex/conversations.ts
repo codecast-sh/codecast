@@ -57,7 +57,7 @@ import { checkRateLimit } from "./rateLimit";
 import { verifyApiToken } from "./apiTokens";
 import { internal } from "./_generated/api";
 import { resetConversationPendingMessages, cancelQueuedMessagesOnKill, enqueuePendingMessage } from "./pendingMessages";
-import { latestImagePreviewUrl } from "./messages";
+import { latestImagePreviewUrl, listConversationFileChanges } from "./messages";
 import { inboxVisibilityFields, INBOX_PINNED_CAP, pinCapExceeded, PIN_CAP_ERROR } from "./inboxProjection";
 import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill } from "./agentTasks";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
@@ -4557,6 +4557,7 @@ type ReadRangeArgs = {
   full_content?: boolean;
   around_message_id?: string;
   context?: number;
+  include_file_changes?: boolean;
 };
 
 /**
@@ -4574,12 +4575,20 @@ export async function readConversationRange(
   const messages = [...first.messages];
   let next: number | undefined = first.next_line;
   while (next !== undefined) {
-    const page = await runPage({ ...args, start_line: next });
+    // The first page already carried the file changes; later pages skip the read.
+    const page = await runPage({ ...args, start_line: next, include_file_changes: undefined });
     if (page?.error) return page;
     messages.push(...page.messages);
     next = page.next_line;
   }
   return { ...first, messages, next_line: undefined };
+}
+
+/** `cast diff`'s tree input: the changes a fold reads, with text, under a
+ *  byte budget. `file_changes_truncated` names a tree missing files. */
+async function foldChangesPayload(ctx: QueryCtx, conversationId: Id<"conversations">) {
+  const { changes, truncated } = await listConversationFileChanges(ctx, conversationId);
+  return { file_changes: changes, file_changes_truncated: truncated || undefined };
 }
 
 export const readConversationMessages = query({
@@ -4594,6 +4603,10 @@ export const readConversationMessages = query({
     // is a window of `context` messages on each side of the anchor.
     around_message_id: v.optional(v.string()),
     context: v.optional(v.number()),
+    // Also return the conversation's materialized file changes (Edit/Write
+    // calls plus disk-observed Bash changes) as `file_changes`; `cast diff`
+    // folds them into its file tree.
+    include_file_changes: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserIdReadOnly(ctx, args.api_token);
@@ -4726,6 +4739,7 @@ export const readConversationMessages = query({
         updated_at: new Date(conv.updated_at).toISOString(),
       },
       messages,
+      ...(args.include_file_changes ? await foldChangesPayload(ctx, conv._id) : {}),
       // Line of the anchored message (1-based) so callers can highlight it.
       target_line: targetLine,
       target_message_id: targetLine !== undefined ? args.around_message_id : undefined,

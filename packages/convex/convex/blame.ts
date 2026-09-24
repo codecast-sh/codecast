@@ -10,6 +10,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
 import { contentLinesToMatch, MAX_CONTENT_LINES } from "@codecast/shared/blame";
 import { checkConversationAccess } from "./privacy";
+import { bodyBytes, readFileChangeBody, writeFileChange } from "./fileChangeBodies";
 import {
   extractCommitHashFromContent,
   extractFileChanges,
@@ -29,11 +30,12 @@ import {
 
 const MAX_SHAS = 500;
 const MAX_UNCOMMITTED_LINES = MAX_CONTENT_LINES;
-// Row budget for the uncommitted-line content match. new_content can be a
-// whole file (Write rows), so reading too many recent edits risks the query
-// byte limit; uncommitted code is recent by definition, so a small window of
-// the newest edits to the file is enough.
+// Budget for the uncommitted-line content match: the newest edits to the file
+// (uncommitted code is recent by definition) and the text bytes read for
+// them, since a write row's text can be a whole file and the query has a byte
+// limit.
 const MAX_FILE_EDIT_ROWS = 80;
+const MAX_FILE_EDIT_BYTES = 8 * 1024 * 1024;
 
 export type SessionRef = {
   conversation_id: Id<"conversations">;
@@ -231,6 +233,7 @@ export async function matchFileLines(
   if (wanted.length === 0 || filePaths.length === 0) return matches;
 
   const editRows: (EditRowLite & { message_id: Id<"messages"> })[] = [];
+  let bytes = 0;
   for (const filePath of filePaths) {
     const recentEdits = await ctx.db
       .query("file_changes")
@@ -239,8 +242,12 @@ export async function matchFileLines(
       .take(MAX_FILE_EDIT_ROWS);
     for (const row of recentEdits) {
       if (row.change_type !== "edit" && row.change_type !== "write") continue;
-      if (await accessibleConversation(ctx, viewer, caches.conversations, row.conversation_id))
-        editRows.push(row);
+      if (bytes >= MAX_FILE_EDIT_BYTES) break;
+      if (!(await accessibleConversation(ctx, viewer, caches.conversations, row.conversation_id))) continue;
+      const body = await readFileChangeBody(ctx, row.conversation_id, row.change_key, row);
+      if (!body) continue;
+      bytes += bodyBytes(body);
+      editRows.push({ ...row, new_content: body.newContent });
     }
   }
 
@@ -381,7 +388,7 @@ async function materializeMessagePage(
           }
           continue;
         }
-        await ctx.db.insert("file_changes", {
+        await writeFileChange(ctx, null, {
           conversation_id: m.conversation_id,
           change_key: fc.id,
           message_id: m._id,
@@ -389,12 +396,10 @@ async function materializeMessagePage(
           seq: fc.sequenceIndex,
           file_path: fc.filePath,
           change_type: fc.changeType,
-          old_content: fc.oldContent,
-          new_content: fc.newContent,
           commit_message: fc.commitMessage,
           commit_hash: fc.commitHash,
           timestamp: fc.timestamp,
-        });
+        }, { oldContent: fc.oldContent, newContent: fc.newContent });
         inserted++;
       }
     } catch {
@@ -475,7 +480,7 @@ export const materializeOneConversation = internalMutation({
           }
           continue;
         }
-        await ctx.db.insert("file_changes", {
+        await writeFileChange(ctx, null, {
           conversation_id: conv._id,
           change_key: fc.id,
           message_id: m._id,
@@ -483,12 +488,10 @@ export const materializeOneConversation = internalMutation({
           seq: fc.sequenceIndex,
           file_path: fc.filePath,
           change_type: fc.changeType,
-          old_content: fc.oldContent,
-          new_content: fc.newContent,
           commit_message: fc.commitMessage,
           commit_hash: hash,
           timestamp: fc.timestamp,
-        });
+        }, { oldContent: fc.oldContent, newContent: fc.newContent });
         inserted++;
         if (samples.length < 6)
           samples.push({ type: fc.changeType, path: fc.filePath.slice(-40), hash: hash ?? null });

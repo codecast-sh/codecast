@@ -635,7 +635,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, conversation_id, start_line, end_line, full_content, around_message_id, context } = body;
+      const { api_token, conversation_id, start_line, end_line, full_content, around_message_id, context, include_file_changes } = body;
 
       if (!api_token || !conversation_id) {
         return new Response(JSON.stringify({ error: "Missing api_token or conversation_id" }), {
@@ -646,7 +646,7 @@ http.route({
 
       const result = await readConversationRange(
         (pageArgs) => ctx.runQuery(api.conversations.readConversationMessages, pageArgs),
-        { api_token, conversation_id, start_line, end_line, full_content, around_message_id, context },
+        { api_token, conversation_id, start_line, end_line, full_content, around_message_id, context, include_file_changes },
       );
 
       if (result.error) {

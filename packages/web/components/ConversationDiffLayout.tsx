@@ -11,10 +11,12 @@ import { extractFileChanges, mergeFileChanges } from "../lib/fileChangeExtractor
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { FileDiffLayout } from "./FileDiffLayout";
-import { computeCumulativeFiles } from "../lib/conversationDiffFiles";
-import type { FileChange } from "../store/diffViewerStore";
+import { foldReadyFiles } from "../lib/conversationDiffFiles";
+import type { FileChangeEntry } from "../store/diffViewerStore";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
-import { useQuery } from "convex/react";
+import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
+import { useFileChangeBodies } from "../hooks/useFileChangeBodies";
+import { selectFoldInputs } from "@codecast/shared/diff";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { getRelativePath } from "@codecast/shared/render";
 import { shareTokenArg } from "../lib/shareTokenScope";
@@ -140,11 +142,14 @@ export function ConversationDiffLayout({
     diffPanelOpen,
   } = useDiffViewerStore();
 
-  // Complete set of changes, materialized server-side at ingest — independent of
-  // how many message pages are currently loaded. Undefined while loading; empty
-  // for conversations whose edits predate materialization (no backfill was run).
-  const serverFileChanges = useQuery(
-    api.messages.getConversationFileChanges,
+  // Every change of the session, materialized server-side at ingest and
+  // independent of how many message pages are loaded. References only: the
+  // text of a change arrives separately, for the few changes a fold reads
+  // (useFileChangeBodies), so a session with hundreds of whole-file snapshots
+  // costs the same to open as a short one. Undefined while loading; empty for
+  // conversations whose edits predate materialization.
+  const { data: serverFileChanges } = useQueryNoThrow(
+    api.messages.getConversationFileChangeIndex,
     conversation?._id && isConvexId(conversation._id)
       ? { conversation_id: conversation._id, ...shareTokenArg(conversation._id) }
       : "skip",
@@ -153,10 +158,11 @@ export function ConversationDiffLayout({
   useWatchEffect(() => {
     // Merge the authoritative server set with the client window extraction: server
     // gives completeness without scrolling; the client backfills un-materialized
-    // (pre-feature) conversations so nothing regresses to "scroll up to see it".
-    const clientChanges = conversation?.messages ? extractFileChanges(conversation.messages as any) : [];
-    setChanges(mergeFileChanges(serverFileChanges ?? [], clientChanges));
-  }, [conversation?.messages, serverFileChanges, setChanges]);
+    // (pre-feature) conversations so nothing regresses to "scroll up to see it",
+    // and its changes carry their text, which seeds the body cache.
+    const clientChanges: FileChangeEntry[] = conversation?.messages ? extractFileChanges(conversation.messages as any) : [];
+    setChanges(conversation?._id ?? null, mergeFileChanges<FileChangeEntry>(serverFileChanges ?? [], clientChanges));
+  }, [conversation?._id, conversation?.messages, serverFileChanges, setChanges]);
 
   useMountEffect(() => {
     setIsMobile(window.innerWidth < MOBILE_BREAKPOINT);
@@ -332,11 +338,16 @@ export function ConversationDiffLayout({
 }
 
 function DiffPane({ conversationId }: { conversationId?: string }) {
-  const { selectedChangeIndex, changes, selectedFile } = useDiffViewerStore();
+  const { selectedChangeIndex, changes, selectedFile, bodies, missingBodies } = useDiffViewerStore();
 
-  const diffFiles = useMemo(() => {
-    return computeCumulativeFiles(changes, selectedChangeIndex);
-  }, [changes, selectedChangeIndex]);
+  // The changes the fold reads at this position, then their text, then the
+  // tree. Files whose text is still on its way join the tree as it lands.
+  const foldInputs = useMemo(() => selectFoldInputs(changes, selectedChangeIndex), [changes, selectedChangeIndex]);
+  useFileChangeBodies(conversationId, foldInputs);
+  const { files: diffFiles, pending: pendingFiles } = useMemo(
+    () => foldReadyFiles(foldInputs, bodies, missingBodies),
+    [foldInputs, bodies, missingBodies],
+  );
 
   // Line comments in the panel share anchors with the transcript's inline diffs:
   // the same conversation + getRelativePath(file) identity, so a durable thread
@@ -376,9 +387,10 @@ function DiffPane({ conversationId }: { conversationId?: string }) {
     );
   }
 
-  const positionLabel = selectedChangeIndex !== null
+  const positionLabel = (selectedChangeIndex !== null
     ? `Up to change ${selectedChangeIndex + 1} of ${changes.length}`
-    : `All ${changes.length} changes`;
+    : `All ${changes.length} changes`)
+    + (pendingFiles > 0 ? ` · loading ${pendingFiles} ${pendingFiles === 1 ? "file" : "files"}` : "");
 
   return (
     <div className="h-full w-full flex flex-col bg-background">
@@ -397,7 +409,7 @@ function DiffPane({ conversationId }: { conversationId?: string }) {
   );
 }
 
-function ChangesBar({ changes }: { changes: FileChange[] }) {
+function ChangesBar({ changes }: { changes: FileChangeEntry[] }) {
   const setDiffPanelOpen = useDiffViewerStore((state) => state.setDiffPanelOpen);
 
   const uniqueFiles = useMemo(() => {

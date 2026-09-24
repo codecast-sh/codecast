@@ -4,6 +4,36 @@ import type { FileChange } from '../../store/diffViewerStore';
 
 describe('cumulativeDiff', () => {
   describe('computeCumulativeDiff', () => {
+    it('a write carrying the text it replaced keeps that text as the original', () => {
+      const changes: FileChange[] = [
+        { id: 'w', sequenceIndex: 0, messageId: 'm', filePath: 'a.ts', changeType: 'write', oldContent: 'before', newContent: 'after', timestamp: 1 },
+      ];
+      expect(computeCumulativeDiff(changes)).toEqual([
+        { filePath: 'a.ts', oldContent: 'before', newContent: 'after', changeCount: 1 },
+      ]);
+    });
+
+    it('a delete empties the file and marks it deleted', () => {
+      const changes: FileChange[] = [
+        { id: 'e', sequenceIndex: 0, messageId: 'm', filePath: 'a.ts', changeType: 'edit', oldContent: 'x', newContent: 'y', timestamp: 1 },
+        { id: 'd', sequenceIndex: 1, messageId: 'm', filePath: 'a.ts', changeType: 'delete', oldContent: 'a y b', newContent: '', timestamp: 2 },
+      ];
+      expect(computeCumulativeDiff(changes)).toEqual([
+        { filePath: 'a.ts', oldContent: 'a x b', newContent: '', changeCount: 2, deleted: true },
+      ]);
+    });
+
+    it('a whole-file write after string edits undoes them to recover the original', () => {
+      const changes: FileChange[] = [
+        { id: 'e1', sequenceIndex: 0, messageId: 'm', filePath: 'a.ts', changeType: 'edit', oldContent: 'one', newContent: '1', timestamp: 1 },
+        { id: 'e2', sequenceIndex: 1, messageId: 'm', filePath: 'a.ts', changeType: 'edit', oldContent: 'two', newContent: '2', timestamp: 2 },
+        { id: 'w', sequenceIndex: 2, messageId: 'm', filePath: 'a.ts', changeType: 'write', oldContent: '1 2 three', newContent: '1 2 3', timestamp: 3 },
+      ];
+      expect(computeCumulativeDiff(changes)).toEqual([
+        { filePath: 'a.ts', oldContent: 'one two three', newContent: '1 2 3', changeCount: 3 },
+      ]);
+    });
+
     it('handles empty changes array', () => {
       const result = computeCumulativeDiff([]);
       expect(result).toEqual([]);

@@ -22,7 +22,7 @@ describe("mergeTimelineMessages", () => {
     const interruption = {
       ...msg("old-interrupt", latest - 6 * 24 * 60 * 60 * 1000),
       content: "[Request interrupted by user]",
-      _isSettledControl: true,
+      _isSettled: true,
     };
     const reply = { ...msg("latest-reply", latest), role: "assistant" };
     const base = buildCompositeTimeline([reply], [], []);

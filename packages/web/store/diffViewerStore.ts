@@ -1,31 +1,19 @@
 import { create } from 'zustand';
-import { computeCumulativeDiff, type CumulativeDiff } from '../lib/cumulativeDiff';
-import { LRUCache } from '../lib/lruCache';
 import { useInboxStore } from './inboxStore';
 
-// FileChange is defined once in the shared extractor (@codecast/convex) so the
-// server materializer and the client viewer can't drift. Re-exported here to
-// preserve the many `import type { FileChange } from '../store/diffViewerStore'` sites.
-import type { FileChange } from '../lib/fileChangeExtractor';
-export type { FileChange };
+// FileChange and its text-free twin FileChangeRef are defined once in the
+// shared extractor (@codecast/convex) so the server materializer and the
+// client viewer can't drift. Re-exported here to preserve the many
+// `import type { FileChange } from '../store/diffViewerStore'` sites.
+import type { FileChange, FileChangeBody, FileChangeRef } from '../lib/fileChangeExtractor';
+export type { FileChange, FileChangeBody, FileChangeRef };
 
-interface DiffCacheKey {
-  rangeStart: number;
-  rangeEnd: number;
-  diffMode: 'cumulative' | 'single';
-  changesHash: string;
-}
-
-const diffCache = new LRUCache<DiffCacheKey, CumulativeDiff[]>(50);
-
-function hashChanges(changes: FileChange[]): string {
-  if (changes.length === 0) return 'empty';
-  return `${changes.length}-${changes[0]?.id}-${changes[changes.length - 1]?.id}`;
-}
-
-export function clearDiffCache() {
-  diffCache.clear();
-}
+/** What the timeline holds: the server's references (sizes, no text) merged
+ *  with the loaded window's own extraction (text known). A fold reads the
+ *  text from `bodies`, keyed by change id, filled by useFileChangeBodies. */
+export type FileChangeEntry = Omit<FileChangeRef, "oldBytes" | "newBytes"> &
+  Partial<Pick<FileChangeRef, "oldBytes" | "newBytes">> &
+  Partial<FileChangeBody>;
 
 const getInitialDiffPanelOpen = () => {
   return useInboxStore.getState().clientState.ui?.diff_panel_open ?? false;
@@ -38,7 +26,15 @@ interface DiffViewerState {
   diffMode: 'cumulative' | 'single';
   syncScroll: boolean;
   showFileTree: boolean;
-  changes: FileChange[];
+  changes: FileChangeEntry[];
+  /** The conversation `changes` and `bodies` describe. */
+  conversationId: string | null;
+  /** Text of the changes fetched so far, by change id. Lives only as long as
+   *  the conversation is open: a whale session's bodies never persist. */
+  bodies: Record<string, FileChangeBody>;
+  /** Changes the server has no text for (asked and not answered): their
+   *  files cannot fold and are not waited on. */
+  missingBodies: Record<string, true>;
   selectedFile: string | null;
   diffPanelOpen: boolean;
 
@@ -48,16 +44,16 @@ interface DiffViewerState {
   toggleDiffMode: () => void;
   toggleSyncScroll: () => void;
   toggleFileTree: () => void;
-  setChanges: (changes: FileChange[]) => void;
+  setChanges: (conversationId: string | null, changes: FileChangeEntry[]) => void;
+  addBodies: (conversationId: string, bodies: Array<FileChangeBody & { id: string }>, missing?: string[]) => void;
   selectFile: (filePath: string | null) => void;
   nextChange: () => void;
   prevChange: () => void;
   toggleDiffPanel: () => void;
   setDiffPanelOpen: (open: boolean) => void;
 
-  getSelectedChanges: () => FileChange[];
+  getSelectedChanges: () => FileChangeEntry[];
   getFilesList: () => string[];
-  getCurrentDiffContent: () => { filePath: string; oldContent?: string; newContent: string } | null;
 }
 
 export const useDiffViewerStore = create<DiffViewerState>((set, get) => ({
@@ -68,6 +64,9 @@ export const useDiffViewerStore = create<DiffViewerState>((set, get) => ({
   syncScroll: true,
   showFileTree: true,
   changes: [],
+  conversationId: null,
+  bodies: {},
+  missingBodies: {},
   selectedFile: null,
   diffPanelOpen: getInitialDiffPanelOpen(),
 
@@ -115,10 +114,35 @@ export const useDiffViewerStore = create<DiffViewerState>((set, get) => ({
     set({ diffPanelOpen: open });
   },
 
-  setChanges: (changes) => {
-    diffCache.clear();
-    set({ changes });
-  },
+  setChanges: (conversationId, changes) =>
+    set((state) => {
+      // The window's own extraction already knows its text: seed the bodies so
+      // those changes never round-trip. A new conversation starts empty.
+      const bodies: Record<string, FileChangeBody> =
+        conversationId === state.conversationId ? { ...state.bodies } : {};
+      for (const change of changes) {
+        if (change.newContent !== undefined && !bodies[change.id]) {
+          bodies[change.id] = { oldContent: change.oldContent, newContent: change.newContent };
+        }
+      }
+      return {
+        conversationId,
+        changes,
+        bodies,
+        missingBodies: conversationId === state.conversationId ? state.missingBodies : {},
+      };
+    }),
+
+  addBodies: (conversationId, incoming, missing = []) =>
+    set((state) => {
+      // A late answer for a conversation the viewer already left.
+      if (conversationId !== state.conversationId) return {};
+      const bodies = { ...state.bodies };
+      for (const { id, ...body } of incoming) bodies[id] = body;
+      const missingBodies = { ...state.missingBodies };
+      for (const id of missing) if (!bodies[id]) missingBodies[id] = true;
+      return { bodies, missingBodies };
+    }),
 
   selectFile: (filePath) => set({ selectedFile: filePath }),
 
@@ -176,59 +200,5 @@ export const useDiffViewerStore = create<DiffViewerState>((set, get) => ({
     const selectedChanges = get().getSelectedChanges();
     const uniqueFiles = new Set(selectedChanges.map((c) => c.filePath));
     return Array.from(uniqueFiles).sort();
-  },
-
-  getCurrentDiffContent: () => {
-    const { selectedChangeIndex, rangeStart, rangeEnd, changes, diffMode, selectedFile } = get();
-
-    if (selectedChangeIndex === null || changes.length === 0) {
-      return null;
-    }
-
-    const change = changes[selectedChangeIndex];
-    if (!change) return null;
-
-    if (diffMode === 'single') {
-      return {
-        filePath: change.filePath,
-        oldContent: change.oldContent,
-        newContent: change.newContent,
-      };
-    }
-
-    const actualRangeStart = rangeStart ?? 0;
-    const actualRangeEnd = rangeEnd ?? selectedChangeIndex;
-
-    const cacheKey: DiffCacheKey = {
-      rangeStart: actualRangeStart,
-      rangeEnd: actualRangeEnd,
-      diffMode,
-      changesHash: hashChanges(changes),
-    };
-
-    let cumulativeDiffs = diffCache.get(cacheKey);
-
-    if (!cumulativeDiffs) {
-      const relevantChanges = changes.slice(actualRangeStart, actualRangeEnd + 1);
-      cumulativeDiffs = computeCumulativeDiff(relevantChanges);
-      diffCache.set(cacheKey, cumulativeDiffs);
-    }
-
-    const targetFile = selectedFile || change.filePath;
-    const cumulativeDiff = cumulativeDiffs.find(d => d.filePath === targetFile);
-
-    if (!cumulativeDiff) {
-      return {
-        filePath: change.filePath,
-        oldContent: change.oldContent,
-        newContent: change.newContent,
-      };
-    }
-
-    return {
-      filePath: cumulativeDiff.filePath,
-      oldContent: cumulativeDiff.oldContent,
-      newContent: cumulativeDiff.newContent,
-    };
   },
 }));
