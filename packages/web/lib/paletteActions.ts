@@ -41,33 +41,39 @@ export function paletteActions(type: PaletteTargetType | null, targets: any[], u
   if (type === "session") {
     const own = !target.authorName && !!userId && !isForeignSession(target, target, userId);
     if (!own) return common;
+    // Verbs that read one conversation (agent, model, rename, parent, branch,
+    // files) only show for one row; the rest act on every target.
+    const n = targets.length;
+    const many = (one: string, several: string) => (single ? one : several.replace("#", String(n)));
     return [
-      row("agent_switch", "Switch agent…", Bot, "a"),
-      row("agent_fork", "Fork session as…", GitBranch, "f"),
-      row("agent_handoff", "Hand off to…", ArrowRightLeft, "t"),
-      ...(canControlModel(target.agent_type, (target.message_count ?? 0) === 0) ? [row("model", "Change model & effort…", Cpu, "m")] : []),
-      row("rename", "Rename session…", Pencil, "r", "session.rename"),
+      ...(single ? [
+        row("agent_switch", "Switch agent…", Bot, "a"),
+        row("agent_fork", "Fork session as…", GitBranch, "f"),
+        row("agent_handoff", "Hand off to…", ArrowRightLeft, "t"),
+        ...(canControlModel(target.agent_type, (target.message_count ?? 0) === 0) ? [row("model", "Change model & effort…", Cpu, "m")] : []),
+        row("rename", "Rename session…", Pencil, "r", "session.rename"),
+      ] : []),
       // Personifying is opt in, so the verb names what it does for a row that
       // has no character yet (session-characters.md S2).
-      row("character", isPersonified(target) ? (single ? "Change character…" : `Change character for ${targets.length} sessions…`) : (single ? "Give it a character…" : `Give ${targets.length} sessions characters…`), Smile, "y"),
-      row("session_pin", target.is_pinned ? "Unpin session" : "Pin session", target.is_pinned ? PinOff : Pin, "p", "session.pin"),
-      row("session_favorite", target.is_favorite ? "Remove from favorites" : "Add to favorites", Star, "v", "conv.favorite"),
-      row("bucket", "Label session…", Tag, "l", "session.moveToBucket"),
-      row("device", single ? "Move to machine…" : `Move ${targets.length} sessions to machine…`, ArrowRightLeft, "w"),
-      ...(!target.inbox_killed_at ? [row("snooze", "Snooze session…", Clock, "z", "session.snooze")] : []),
+      row("character", isPersonified(target) ? many("Change character…", "Change character for # sessions…") : many("Give it a character…", "Give # sessions characters…"), Smile, "y"),
+      row("session_pin", target.is_pinned ? many("Unpin session", "Unpin # sessions") : many("Pin session", "Pin # sessions"), target.is_pinned ? PinOff : Pin, "p", "session.pin"),
+      row("session_favorite", target.is_favorite ? many("Remove from favorites", "Remove # from favorites") : many("Add to favorites", "Add # to favorites"), Star, "v", "conv.favorite"),
+      row("bucket", many("Label session…", "Label # sessions…"), Tag, "l", "session.moveToBucket"),
+      row("device", many("Move to machine…", "Move # sessions to machine…"), ArrowRightLeft, "w"),
+      ...(!target.inbox_killed_at ? [row("snooze", many("Snooze session…", "Snooze # sessions…"), Clock, "z", "session.snooze")] : []),
       ...(target.inbox_snoozed_until ? [row("session_unsnooze", "Move to Needs Input now", RefreshCw, "u")] : []),
-      ...((target.dismissed || target.inbox_stashed_at || target.inbox_killed_at || target.inbox_dismissed_at) ? [row("session_restore", "Restore session to inbox", RefreshCw, "u")] : [
-        row("session_stash", "Stash session", Archive, "s", "session.stash"),
-        row("session_stash_hide", "Stash and hide session", EyeOff, "b", "session.stashHide"),
-        row("session_defer", "Defer session", Clock, "d", "session.deferAdvance"),
+      ...((target.dismissed || target.inbox_stashed_at || target.inbox_killed_at || target.inbox_dismissed_at) ? [row("session_restore", many("Restore session to inbox", "Restore # sessions to inbox"), RefreshCw, "u")] : [
+        row("session_stash", many("Stash session", "Stash # sessions"), Archive, "s", "session.stash"),
+        row("session_stash_hide", many("Stash and hide session", "Stash and hide # sessions"), EyeOff, "b", "session.stashHide"),
+        row("session_defer", many("Defer session", "Defer # sessions"), Clock, "d", "session.deferAdvance"),
         row("session_dormant", "Dormant — a machine wakes it", Moon, "z", "session.dormantAdvance"),
         row("session_done", "Mark done", CheckCircle2, "e"),
         row("session_needs_input", "Mark needs input", CircleDot, "g"),
       ]),
-      ...(!target.inbox_killed_at ? [row("session_kill", "Kill session", Square, "k", "session.kill")] : []),
-      ...(target.parent_conversation_id ? [row("session_parent", "View parent conversation", GitBranch)] : []),
-      ...(target.git_branch ? [row("session_branch", "Copy branch name", GitBranch)] : []),
-      ...(target.project_path || target.git_root ? [row("session_files", "Open project files", Folder)] : []),
+      ...(!target.inbox_killed_at ? [row("session_kill", many("Kill session", "Kill # sessions"), Square, "k", "session.kill")] : []),
+      ...(single && target.parent_conversation_id ? [row("session_parent", "View parent conversation", GitBranch)] : []),
+      ...(single && target.git_branch ? [row("session_branch", "Copy branch name", GitBranch)] : []),
+      ...(single && (target.project_path || target.git_root) ? [row("session_files", "Open project files", Folder)] : []),
       ...common,
     ];
   }

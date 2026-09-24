@@ -201,7 +201,7 @@ function fixture(transport = "tmux", cached = true) {
       "parsePollMessage", "pollDeclineText", "pollMenuSteps", "extractTmuxLiveRegion", "newestPaintedFrame", "isCodexTrustDialog", "isCodexUpdateDialog",
       "classifyTmuxLiveState", "livenessFromTmuxState", "isResumeCwdPicker", "turnStartedAtFor", "paneTextAfterLastMatch",
       "assertPromptAbsent", "inputGuard", "captureTmuxLiveState", "ensureTmuxReady", "withTmuxLock", "drainTmuxComposer", "tmuxComposerText", "tmuxComposerDraft",
-      "tmuxWatchablePrefix", "tmuxComposerPayloadMatcher", "tmuxComposerHoldsPayload", "awaitTmuxComposerPayload", "normalizePromptText",
+      "tmuxWatchablePrefix", "tmuxComposerPayloadMatcher", "tmuxComposerHoldsPayload", "composerShowsOnlyPayloadTail", "matchAtFullWindowSize", "awaitTmuxComposerPayload", "normalizePromptText",
       "captureTmuxComposerPane", "stripAnsi", "stripTmuxFaintText", "tmuxComposerRegion", "tmuxPromptStillHasInput", "tmuxPromptShowsPastePlaceholder", "pasteChipLines", "pasteChipContradicts",
       "tmuxPaneShowsBlockingPrompt", "takeTmuxSubmitVerdict", "recordTmuxSubmitVerdict", "verifyTmuxSubmitAfterPaste", "runTmuxSubmitVerify",
       "deliverIntoPane", "paneInteractiveQuestion", "paneInteractivePrompt", "injectViaTmux", "injectViaTmuxInner",
@@ -212,7 +212,7 @@ function fixture(transport = "tmux", cached = true) {
       "deliverMessage", "autoResumeSessionInner", "probeStartedPane", "classifyStartedPane", "paneContentAfterLaunchEcho",
     ];
     const constants = [
-      "RESUME_CWD_PICKER_RE", "DRAIN_MAX_CYCLES", "stripComposerChrome", "TMUX_ONLY_TERMINALS", "DELIVERY_TIMEOUT_MS", "TRUST_PROMPT_RE",
+      "RESUME_CWD_PICKER_RE", "DRAIN_MAX_CYCLES", "stripComposerChrome", "TMUX_WINDOW_WIDTH", "TMUX_WINDOW_HEIGHT", "TMUX_SIZE_ARGS", "TMUX_ONLY_TERMINALS", "DELIVERY_TIMEOUT_MS", "TRUST_PROMPT_RE",
       "PANE_TITLE_WORKING", "SUBMIT_VERDICT_TTL_MS", "submitVerdicts",
       "ANSI_ESCAPE_RE",
     ].map(name => {
@@ -532,6 +532,18 @@ describe("machine prompt delivery safety", () => {
     await f.scan([{ _id: "held", content }]);
     expect(f.bodies).toEqual([content]);
   });
+
+  // Claude Code clears the screen as it boots, so a capture can land on a blank
+  // pane. That is a redraw, not a dialog: it held 29 of 39 launches for 45s
+  // behind "waiting for a human answer" (2026-09-24).
+  test("a blank capture is a short retry, never a hold for a human answer", async () => {
+    const f = fixture();
+    f.state.menu = "";
+    f.hooks.capture = () => { if (f.state.captures >= 1) f.state.menu = null; };
+    await f.scan([{ _id: "blank", content: "please continue" }]);
+    expect(f.events.filter((e: string) => e.startsWith("hold:"))).toEqual([]);
+    expect(promptHoldRemainingMs("conv")).toBe(0);
+  }, 30_000);
 
   // Claude Code 2.1.270's effort recommendation: an unnumbered select list
   // with no key hint footer (real capture, 2026-09-14). Its ❯ read as an idle
