@@ -100,7 +100,7 @@ const restoreGlobals = replaceGlobals({
 });
 const { createRoot } = await import("react-dom/client");
 const { FaceRow, FloatingFaceRow } = await import("../FaceRow");
-const { faceRowSize } = await import("../../../lib/faces/layout");
+const { faceRowSize, floatingRowSize } = await import("../../../lib/faces/layout");
 const { EngagementCard } = await import("../EngagementCard");
 const { walkieStageWords } = await import("../../../hooks/useWalkie");
 const { useInboxStore } = await import("../../../store/inboxStore");
@@ -382,7 +382,7 @@ describe("two densities, one row", () => {
     const row = rowOf([me(), entry(ANN, "Ann", { state: "live-with-me", tier: "linked" })], [link(ANN, "call")]);
     const h = await mount(<FloatingFaceRow row={row} viewerId={ME} bridge={bridge} />);
     expect(h.q(".face-row")!.getAttribute("data-density")).toBe("float");
-    expect(sizes[0]).toEqual(faceRowSize("float", 2, 1));
+    expect(sizes[0]).toEqual(floatingRowSize(2, 1, { width: 0, height: 0 }));
     // Every circle is a hit region the window lifts click through for.
     expect(h.all("[data-face-hit]").length).toBe(2);
     await h.draw(bar(row));

@@ -85,8 +85,8 @@
   top: calc(100% + 28px);
   padding-top: 0;
   gap: 0;
-  width: max-content;
-  min-width: 290px;
+  /* The card's own width (FACE_CARD_WIDTH), which the window always holds. */
+  width: 320px;
   border-radius: 14px;
   overflow: hidden;
   background: linear-gradient(180deg, var(--paper) 0%, var(--paper-deep) 100%);
@@ -139,6 +139,26 @@
   white-space: nowrap;
 }
 
+/* In the float the strip is paper too, the card's own surface: one material
+   for everything the float says beyond the circles, never a dark pill beside
+   a paper card. */
+.face-row[data-density="float"] .face-row-strip {
+  --sol-bg: var(--paper);
+  --sol-bg-alt: var(--paper);
+  --sol-bg-highlight: var(--wash);
+  --sol-text: var(--ink);
+  --sol-text-muted: var(--ink-soft);
+  --sol-text-dim: var(--ink-faint);
+  --sol-border: var(--hairline-strong);
+}
+.face-row[data-density="float"] .face-row-strip > .walkie-strip {
+  background: linear-gradient(180deg, var(--paper) 0%, var(--paper-deep) 100%);
+  box-shadow:
+    0 0 0 1px var(--hairline-strong),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 2px 6px rgba(20, 18, 14, 0.2);
+}
+
 /* The strip: in the row after the faces, one line with them (STRIP_GAP). */
 .face-row-strip {
   display: flex;
@@ -174,8 +194,14 @@
   /* The edge every state ring is drawn OUTSIDE of: nothing in the header,
      the paper ring in the float (below). A state's colour goes around the
      paper instead of replacing it, so the circle keeps its shape. */
-  --edge-w: 0px;
-  --edge: 0 0 0 0 transparent;
+  /* THE PAPER RING: every face wears it, 2px here and 5px in the float, and
+     every state ring is drawn outside it, so a state's colour goes around
+     the paper instead of replacing it. It is what keeps a dark avatar from
+     dissolving into a dark header or a dark editor. */
+  --ring-paper: #fcfbf7;
+  --edge-w: 2px;
+  --edge: 0 0 0 var(--edge-w) var(--ring-paper);
+  box-shadow: var(--edge);
   /* The presence weight (`--drain-opacity`, presence.css): the call circles'
      `.face` base sets opacity 1 for its crossfade and ties the presence rule
      on specificity, so an offline face in the header sat at full weight
@@ -497,6 +523,9 @@
   position: absolute;
   right: -1px;
   bottom: -1px;
+  /* The badge's cut is the ring's paper, so badge and ring merge into one
+     edge instead of the badge biting a dark notch out of the ring. */
+  --sol-bg: #fcfbf7;
 }
 
 /* A face with its card open stays lit while the pointer is on the card. The
