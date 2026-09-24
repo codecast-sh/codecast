@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { hashToken, verifyApiToken, deviceBindingAllows } from "./apiTokens";
+import { hashToken, verifyApiToken, deviceBindingAllows, mintForDevice } from "./apiTokens";
 import { listDevices } from "./devices";
 import { DEVICE_BOUND_TOKEN_PREFIX, presentToken } from "@platform/auth/convex";
 
@@ -99,5 +99,23 @@ describe("an unbound token is unchanged on both doors", () => {
     expect(c.db._patched).toEqual([]);
     expect(c.db._inserted).toEqual([]);
     expect(c.db._deleted).toEqual([]);
+  });
+});
+
+describe("minting a host token through the registered mutation", () => {
+  const HOST_DEVICE = "device-host";
+  const mint = (t: Record<string, any[]>, api_token: string) =>
+    (mintForDevice as any)._handler(ctx(t), { api_token, device_id: HOST_DEVICE, label: "ubuntu@10.0.0.9" }) as Promise<{ token: string }>;
+
+  test("a bound laptop token from its own machine mints a token that works only from the host", async () => {
+    const t = await tables();
+    const { token } = await mint(t, from(BOUND, THIS_DEVICE));
+    expect((await direct(t, from(token, HOST_DEVICE))).length).toBe(1);
+    expect(await direct(t, from(token, THIS_DEVICE))).toEqual([]);
+    expect(t.api_tokens.find((r: any) => r.device_id === HOST_DEVICE)?.name).toMatch(/^Host - ubuntu@10\.0\.0\.9 - /);
+  });
+
+  test("a bound laptop token without its device cannot mint", async () => {
+    await expect(mint(await tables(), BOUND)).rejects.toThrow("Unauthorized");
   });
 });

@@ -74,6 +74,15 @@ type ApiTokenFunctions = {
     { token_id: Id<"api_tokens">; name: string },
     Promise<void>
   >;
+  // A token for a remote host, bound to the host's device, minted by the
+  // caller's own bearer (the laptop's token, presented with its device when
+  // bound). Named "Host - <label> - <date>" so it is visible and revocable in
+  // the token list.
+  mintForDevice: RegisteredMutation<
+    "public",
+    { api_token: string; device_id: string; label: string },
+    Promise<{ token: string }>
+  >;
   exchangeSetupToken: RegisteredMutation<
     "internal",
     { setupToken: string; device_id?: string },
@@ -97,6 +106,7 @@ export const {
   listTokens,
   revokeToken,
   renameToken,
+  mintForDevice,
   exchangeSetupToken,
   deviceBindingAllows,
 }: ApiTokenFunctions = makeApiTokenFunctions({

@@ -3,7 +3,9 @@ import * as childProcess from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { baseProvisionScript, buildLinuxCast, uploadLinuxCast, installLinuxCast, restartHostDaemon, DAEMON_CGROUP_TMUX_SCRIPT, daemonUnitScript, IDLE_WATCHDOG_VERSION, RTSP_PORT, HLS_PORT, SCREEN_DISPLAY, SCREEN_SIZE, type ProvisionReport, idleWatchdogScript } from "./provisionLinux.js";
+import { baseProvisionScript, buildLinuxCast, uploadLinuxCast, installLinuxCast, restartHostDaemon, pushCodecastConfig, DAEMON_CGROUP_TMUX_SCRIPT, daemonUnitScript, IDLE_WATCHDOG_VERSION, RTSP_PORT, HLS_PORT, SCREEN_DISPLAY, SCREEN_SIZE, type ProvisionReport, type PushCodecastConfigDeps, idleWatchdogScript } from "./provisionLinux.js";
+import { encryptToken } from "../tokenEncryption.js";
+import { DEVICE_BOUND_TOKEN_PREFIX } from "@platform/auth/cli";
 import * as remote from "./remote.js";
 import { AGENT_BRIDGE_MIN_WATCHDOG } from "../cloud/agentBridge.js";
 import { listCloudRemoteHosts, toRemoteHost, writeHosts, type CloudHost } from "./cloudHost.js";
@@ -418,5 +420,60 @@ describe("which builds embed the macOS helpers", () => {
     expect(needsMacHelper("node", "linux", undefined)).toBe(false);
     // Provisioning on a Mac for a Linux host.
     expect(needsMacHelper("node", "darwin", "linux")).toBe(false);
+  });
+});
+
+// The identity a provisioned host receives. Both host kinds (the cloud Mac via
+// provisionMacHost, the Linux agent box via provisionLinuxHost) go through this
+// one function, so both are driven here with their own host shape.
+describe("pushCodecastConfig", () => {
+  const macHost: RemoteHost = { address: "10.0.0.7", user: "m1", keyPath: "/k", remoteBaseDir: "/Users/m1/work" };
+  const linuxHost: RemoteHost = { address: "10.0.0.9", user: "ubuntu", keyPath: "/k", remoteBaseDir: "/home/ubuntu/work", homeDir: "/home/ubuntu" };
+  const UNBOUND = "0123abcd";
+  const BOUND = `${DEVICE_BOUND_TOKEN_PREFIX}0123abcd`;
+  const HOST_TOKEN = `${DEVICE_BOUND_TOKEN_PREFIX}forthehost`;
+
+  function harness(storedToken: string, hostDevice: string | undefined) {
+    const shipped: Array<{ host: RemoteHost; cfg: Record<string, unknown> }> = [];
+    const minted: Array<{ deviceId: string; label: string }> = [];
+    const deps: PushCodecastConfigDeps = {
+      localConfig: () => ({ user_id: "u1", auth_token: storedToken, convex_url: "https://x.convex.cloud", web_url: "https://w", team_id: "t1", created_at: "c" }),
+      hostDeviceId: () => hostDevice,
+      mintForHost: async (deviceId, label) => { minted.push({ deviceId, label }); return HOST_TOKEN; },
+      ship: (host, cfg) => { shipped.push({ host, cfg }); },
+    };
+    return { deps, shipped, minted };
+  }
+
+  for (const [kind, host] of [["mac", macHost], ["linux", linuxHost]] as const) {
+    test(`${kind}: an unbound laptop token is copied decrypted, the way it always was`, async () => {
+      const { deps, shipped, minted } = harness(encryptToken(UNBOUND), "hostdevice1234");
+      await pushCodecastConfig(host, deps);
+      expect(minted).toEqual([]);
+      expect(shipped[0].host).toBe(host);
+      expect(shipped[0].cfg).toMatchObject({ user_id: "u1", auth_token: UNBOUND, convex_url: "https://x.convex.cloud", team_id: "t1", sync_mode: "all" });
+    });
+
+    test(`${kind}: a bound laptop token is never copied; the host gets a token minted for its device`, async () => {
+      const { deps, shipped, minted } = harness(encryptToken(BOUND), "hostdevice1234");
+      await pushCodecastConfig(host, deps);
+      expect(minted).toEqual([{ deviceId: "hostdevice1234", label: `${host.user}@${host.address}` }]);
+      expect(shipped[0].cfg.auth_token).toBe(HOST_TOKEN);
+      expect(JSON.stringify(shipped[0].cfg)).not.toContain(BOUND);
+    });
+  }
+
+  test("a bound laptop token with no host device id to mint for refuses and ships nothing", async () => {
+    const { deps, shipped, minted } = harness(BOUND, undefined);
+    await expect(pushCodecastConfig(linuxHost, deps)).rejects.toThrow("cast auth");
+    expect(minted).toEqual([]);
+    expect(shipped).toEqual([]);
+  });
+
+  test("a mint failure ships nothing", async () => {
+    const { deps, shipped } = harness(BOUND, "hostdevice1234");
+    deps.mintForHost = async () => { throw new Error("Unauthorized"); };
+    await expect(pushCodecastConfig(macHost, deps)).rejects.toThrow("Unauthorized");
+    expect(shipped).toEqual([]);
   });
 });
