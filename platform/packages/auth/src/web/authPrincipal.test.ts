@@ -182,3 +182,79 @@ describe("unparsable token", () => {
     expect(await h.tracker.resolve()).toBe("userA");
   });
 });
+
+// A durable read that throws (IndexedDB failing to open: quota, a blocked
+// upgrade, private mode) says nothing about whether a token exists. That is
+// not "absent": nothing may be purged on it.
+describe("unreadable durable tier", () => {
+  test("a rejected durable read is unreadable, not absent, and stays silent", async () => {
+    const local = new Map<string, string>();
+    const changes: AuthPrincipalChange[] = [];
+    let fail = true;
+    const tracker = createAuthPrincipalTracker({
+      jwtKey: JWT_KEY,
+      subscribeWrites: () => () => {},
+      readDurable: async () => { if (fail) throw new Error("IndexedDB open failed"); return null; },
+      localStorage: { getItem: (k) => local.get(k) ?? null },
+      eventTarget: null,
+    });
+    tracker.subscribe((c) => changes.push(c));
+    expect(tracker.tokenState()).toBe("absent");
+    expect(await tracker.resolve()).toBeNull();
+    expect(tracker.tokenState()).toBe("unreadable");
+    expect(changes).toEqual([]);
+    // Once the durable tier answers, the state is what it says.
+    fail = false;
+    expect(await tracker.resolve()).toBeNull();
+    expect(tracker.tokenState()).toBe("absent");
+  });
+
+  test("a token in localStorage outranks an earlier unreadable durable tier", async () => {
+    const local = new Map<string, string>();
+    const tracker = createAuthPrincipalTracker({
+      jwtKey: JWT_KEY,
+      subscribeWrites: () => () => {},
+      readDurable: async () => { throw new Error("IndexedDB open failed"); },
+      localStorage: { getItem: (k) => local.get(k) ?? null },
+      eventTarget: null,
+    });
+    await tracker.resolve();
+    expect(tracker.tokenState()).toBe("unreadable");
+    local.set(JWT_KEY, fakeToken("userA"));
+    tracker.check();
+    expect(tracker.tokenState()).toBe("named");
+    expect(tracker.current()).toBe("userA");
+  });
+});
+
+// The durable tier can hold a token that does not parse (an old format, a
+// truncated write) while localStorage is empty. Like an unparsable local
+// token, that is not "absent": nothing may be purged on it.
+describe("unparsable durable token", () => {
+  test("is reported as unparsable and stays silent", async () => {
+    const local = new Map<string, string>();
+    const changes: AuthPrincipalChange[] = [];
+    let durable: string | null = "not.a.jwt";
+    const tracker = createAuthPrincipalTracker({
+      jwtKey: JWT_KEY,
+      subscribeWrites: () => () => {},
+      readDurable: async () => durable,
+      localStorage: { getItem: (k) => local.get(k) ?? null },
+      eventTarget: null,
+    });
+    tracker.subscribe((c) => changes.push(c));
+    const warn = console.warn;
+    console.warn = () => {};
+    try {
+      expect(await tracker.resolve()).toBeNull();
+    } finally {
+      console.warn = warn;
+    }
+    expect(tracker.tokenState()).toBe("unparsable");
+    expect(changes).toEqual([]);
+    // Once the durable tier holds nothing, the state is absent.
+    durable = null;
+    expect(await tracker.resolve()).toBeNull();
+    expect(tracker.tokenState()).toBe("absent");
+  });
+});
