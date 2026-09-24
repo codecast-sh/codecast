@@ -18,7 +18,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { requireUser } from "./lib/auth";
 import { canAccessConversation } from "./lib/access";
 import { normalizeRepository } from "./lib/gitRefs";
-import { repositoryFromRemote } from "@codecast/shared/contracts";
+import { repositoryFromRemote, SESSION_ACTIVITY_FRESH_MS } from "@codecast/shared/contracts";
 import { profilePublicSessionVisible } from "./privacy";
 import { blameSessionsFor, cacheKeyFor, cacheRowByKey, canBrowseRepository, localSourcesFor } from "./repos";
 import { type BlameViewer, type ResolvedSession } from "./blame";
@@ -131,21 +131,20 @@ const MAX_FILES_SHOWN = 12;
 const MAX_ROWS = 80;
 
 /**
- * Every session that touched a repository, as the viewer may see it.
+ * The sessions that may have touched a repository, before any viewer rule.
  *
  * Two sources name a session: the commits it made (the commits table, by
  * repository), and the checkouts teammates publish (repo_sources), under which
- * each publisher's sessions in that root are listed. A reader with no account
- * gets only the sessions their owners made public; everyone else gets the
- * sessions they may open. Files come from what the session denormalizes as it
- * edits (recent_files) and from the commits it made, never from the edit rows
- * themselves, whose bodies are whole files.
+ * each publisher's sessions in that root are listed. The session list and the
+ * pulse both start from this set; what each may say about a session is
+ * decided after.
  */
-export async function gatherRepoSessions(ctx: { db: any }, viewer: BlameViewer, repository: string): Promise<RepoSessionRow[]> {
+export async function repoSessionCandidates(ctx: { db: any }, repository: string): Promise<{
+  repo: string;
+  candidates: Map<string, Doc<"conversations">>;
+  commitsBySession: Map<string, Doc<"commits">[]>;
+}> {
   const repo = normalizeRepository(repository);
-  const now = Date.now();
-  const owners: OwnerCache = new Map();
-
   const commits: Doc<"commits">[] = await ctx.db
     .query("commits")
     .withIndex("by_repository_timestamp", (q: any) => q.eq("repository", repo))
@@ -190,6 +189,22 @@ export async function gatherRepoSessions(ctx: { db: any }, viewer: BlameViewer, 
       .take(MAX_SESSIONS_PER_CHECKOUT);
     for (const conv of pinned) if (sessionInRepository(conv, repo, roots)) consider(conv);
   }
+
+  return { repo, candidates, commitsBySession };
+}
+
+/**
+ * Every session that touched a repository, as the viewer may see it.
+ *
+ * A reader with no account gets only the sessions their owners made public;
+ * everyone else gets the sessions they may open. Files come from what the
+ * session denormalizes as it edits (recent_files) and from the commits it
+ * made, never from the edit rows themselves, whose bodies are whole files.
+ */
+export async function gatherRepoSessions(ctx: { db: any }, viewer: BlameViewer, repository: string): Promise<RepoSessionRow[]> {
+  const now = Date.now();
+  const owners: OwnerCache = new Map();
+  const { repo, candidates, commitsBySession } = await repoSessionCandidates(ctx, repository);
 
   const rows: RepoSessionRow[] = [];
   for (const conv of candidates.values()) {
@@ -271,6 +286,32 @@ export const publicSessions = internalQuery({
   args: { repository: v.string() },
   handler: async (ctx, args): Promise<RepoSessionRow[]> => {
     return await gatherRepoSessions(ctx, null, args.repository);
+  },
+});
+
+/**
+ * How many sessions are on the repository right now: a bare count for the
+ * marketing site's GitHub chip. A count names no session, so it may include
+ * the ones a stranger cannot open; the list above cannot. "Now" is the rule a
+ * row uses to show what its agent is doing: a tool call stamped within the
+ * last few minutes, on a session nobody tore down.
+ */
+export function isSessionOnRepoNow(
+  conv: Pick<Doc<"conversations">, "activity" | "status" | "inbox_killed_at" | "parent_conversation_id">,
+  now: number,
+): boolean {
+  if (conv.parent_conversation_id || conv.inbox_killed_at || conv.status !== "active") return false;
+  return !!conv.activity && now - conv.activity.at <= SESSION_ACTIVITY_FRESH_MS;
+}
+
+export const publicPulse = internalQuery({
+  args: { repository: v.string() },
+  handler: async (ctx, args): Promise<{ live: number }> => {
+    const now = Date.now();
+    const { candidates } = await repoSessionCandidates(ctx, args.repository);
+    let live = 0;
+    for (const conv of candidates.values()) if (isSessionOnRepoNow(conv, now)) live++;
+    return { live };
   },
 });
 

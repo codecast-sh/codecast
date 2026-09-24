@@ -1,26 +1,34 @@
 // Three asks with their Accept and Skip fit the first desktop screen at
-// 1440 by 900 (org eval round 3: the third ask's buttons sat below the fold).
+// 1440 by 900 (org eval round 3: the third ask's buttons sat below the fold;
+// round 12: they sat at it again, with the asks the analyzer writes now).
 // jsdom lays nothing out, so this is a height budget: the spacing and line
 // heights are read from the classes the pane renders, the line counts from a
 // greedy wrap of the words at the column's measured width, and the sum is
-// held under the screen. The shapes are the round 3 Union proposal's: a two
-// line title on every card, one card with three lines of why and four of
-// effect. Change the card's spacing and this test moves with it; change the
-// words the analyzer may write (orgInit ORG_ASKS_RULE) and it says so.
+// held under the screen. The chrome above the cards and the column's width
+// were measured on the real page in Chrome at 1440 by 900 on 2026-09-23
+// (getBoundingClientRect on the round 12 proposal), where this model landed
+// within 7px of the browser on every card. The shapes are the round 12 Union
+// proposal's, the longest the analyzer has written: a two line title on
+// every card, three to four lines of why, two to four of effect. Change the
+// card's spacing and this test moves with it; change the words the analyzer
+// may write (orgInit ORG_ASKS_RULE) and it says so.
 // Run: bun components/org/StaffingPane.fit.test.tsx
+// FIT_PROPOSAL=<an org eval run's proposal.json> measures a real proposal.
 import assert from "node:assert/strict";
 
 import { closeDomWindow } from "../../test-helpers/domGlobals";
 
 /** The desktop capture's geometry (desktop.png, 1440 by 900). */
 const SCREEN_H = 900;
-/** Where the pane's first content pixel sits: under the app's top bar, the
- *  tab strip and the org page's header. Measured on the capture. */
-const PANE_TOP = 140;
-/** The width the words wrap in: the panel (OrgPage PANEL_W 380) less its
- *  gutters (38), the card's own padding (2 x 14), the number badge (24) and
- *  its gap (12). Measured on the capture as well: 278. */
-const TEXT_W = 278;
+/** Where the first card's top pixel sits: under the app's top bar and tab
+ *  strip (79), the org page's one line header (40) and the column's top
+ *  padding (16). The page header names the proposal (titleInPageHeader), so
+ *  nothing else is above the cards. Measured in Chrome: 135. */
+const PANE_TOP = 135;
+/** The width the words wrap in: the asks column (STAFFING_ASKS_W 380) less
+ *  its gutters (32), the card's border and padding (2 x 15), the number
+ *  badge (24) and its gap (12). Measured in Chrome: 282. */
+const TEXT_W = 282;
 /** JetBrains Mono's advance is 0.6 em. */
 const CHAR_W = (px: number) => px * 0.6;
 
@@ -77,29 +85,37 @@ async function verifyFit() {
   const { ORG_STAFFING_FIXTURE_HEALTH, ORG_STAFFING_FIXTURE_PROPOSAL } = await import("./orgStaffingFixture");
   const { findChiefOfStaff } = await import("./staffingModel");
 
-  // The round 3 shapes, in words of the same length: card 1 a two line
-  // title over 88 and 59 characters, card 2 the long one (103 and 111),
-  // card 3 short. The wrap below turns them into the capture's line counts.
-  const asks = [
-    { title: "Close 14 plans and tasks the work already passed", why: "Most have their change on main and stayed open, so the board shows work that is not happening.", effect: "You will see the board list only work that is still open.", seqs: [7, 8] },
-    { title: "Name three running sessions as roles", why: "They already run daily routines and manage an area, so they should show on the org page with a limit.", effect: "Three roles appear with daily limits, and market growth reports under the Matching lead if you accept the move.", seqs: [1, 2, 3, 4] },
-    { title: "Give the Agent Quality lead more room to check in", why: "It used its whole daily allowance four days running.", effect: "It stops going quiet mid day.", seqs: [5, 6] },
+  // The round 12 shapes, the analyzer's own words (~/.cache/org-eval/union/
+  // round-12/s1/proposal.json): every title two lines; why 100, 110 and 125
+  // characters; effect 50, 113 and 86. The wrap below turns them into the
+  // capture's line counts: why 3, 3, 4 and effect 2, 4, 3.
+  const round12 = [
+    { title: "Correct 17 plans and tasks that no longer match the work", why: "Their status disagrees with the code history and the sessions, so your lists overstate what is open.", effect: "Your task lists show only work that is still open.", seqs: [7, 8] },
+    { title: "Resume the Infrastructure lead and add a Public Launch lead", why: "Infrastructure has the most open work and a paused lead, and Public Launch & Fundraise has real work and none.", effect: "Eight of ten projects with work have a lead, and the plan for Claude Code accounts is filed where it can be seen.", seqs: [1, 2, 3, 4] },
+    { title: "Name two long running sessions as roles", why: "The Market growth mandate and Cold email reply rate optimization sessions each run a daily job that has no name on the chart.", effect: "Both keep running as they do; you may skip the steps that put each under an area lead.", seqs: [5, 6] },
   ];
-  const proposal = { ...ORG_STAFFING_FIXTURE_PROPOSAL, title: "Company review: Fixture", asks };
+  // FIT_PROPOSAL=<proposal.json> measures a real proposal instead (an org
+  // eval run's spec), read the way the page's preview reads it.
+  const { orgProposalRowFromSpec } = await import("./orgPreviewSpec");
+  const real = process.env.FIT_PROPOSAL ? orgProposalRowFromSpec(JSON.parse(await Bun.file(process.env.FIT_PROPOSAL).text())) : null;
+  assert.ok(!process.env.FIT_PROPOSAL || real, `${process.env.FIT_PROPOSAL} is not a proposal spec`);
+  const proposal = real ?? { ...ORG_STAFFING_FIXTURE_PROPOSAL, title: "Company review: Fixture", asks: round12 };
+  const asks = proposal.asks!;
   const chiefTree = { ...ORG_FIXTURE, roles: [...ORG_FIXTURE.roles, { ...ORG_FIXTURE.roles[0], _id: "fixture-role-chief", short_id: "or-9", handle: "chief-of-staff", name: "Chief of Staff", standing: { conversation_id: "fixture-chief-conv", short_id: "jx7ch1f" } }] };
   const noop = () => {};
   const root = createRoot(document.getElementById("root")!);
   await act(async () => root.render(React.createElement(StaffingPane, {
-    tree: chiefTree, health: ORG_STAFFING_FIXTURE_HEALTH, proposals: [proposal], proposal, chief: findChiefOfStaff(chiefTree), reviewing: false, now: Date.now(), hasThread: true, selectedChangeId: null,
-    onSelectChange: noop, onDecide: noop, onDecideAsk: noop, onEditRole: noop, onSelectNode: noop, onOpenSession: noop, onPickProposal: noop, onHireChief: noop, onProposeNow: noop, onAskAbout: noop, onAskAboutAsk: noop, onClose: noop,
+    tree: chiefTree, health: ORG_STAFFING_FIXTURE_HEALTH, proposals: [proposal], proposal, chief: findChiefOfStaff(chiefTree), reviewing: false, now: Date.now(), hasThread: true, selectedChangeId: null, titleInPageHeader: true,
+    onSelectChange: noop, onDecide: noop, onDecideAsk: noop, onEditRole: noop, onSelectNode: noop, onOpenSession: noop, onPickProposal: noop, onHireChief: noop, onProposeNow: noop, onAskAbout: noop, onAskAboutAsk: noop,
   } as any)));
   const q = (sel: string, from: ParentNode = document) => { const el = from.querySelector(sel); assert.ok(el, `missing ${sel}`); return el!; };
 
-  // The header row is as tall as its close button (the title is one line).
-  const header = q("[data-asks-header]");
-  const headerH = Math.max(lineHeight(q("h2", header)), util(q("[data-asks-close]", header), "h"));
+  // The page header names the proposal: the column carries no header of its
+  // own, and the list sits on the column's first pixel.
+  assert.equal(document.querySelector("[data-asks-header]"), null, "the column has no header of its own on a desktop");
   const list = q("[data-asks]");
-  let y = PANE_TOP + headerH + util(list, "mt");
+  assert.equal(util(list, "mt"), 0, "nothing above the first card");
+  let y = PANE_TOP;
   const gap = util(list, "gap");
   const cards = [...document.querySelectorAll<HTMLElement>("[data-ask]")];
   assert.equal(cards.length, 3);
@@ -123,9 +139,11 @@ async function verifyFit() {
   console.log(report.join("\n"));
   console.log(`three cards end at ${Math.round(y)} of ${SCREEN_H}`);
   // The line counts are the capture's: without them the budget measures nothing.
-  assert.equal(wrappedLines(asks[1].why, 12.5), 3);
-  assert.equal(wrappedLines(`If you accept: ${asks[1].effect}`, 12.5), 4);
-  assert.equal(wrappedLines(asks[0].title, 14.5), 2);
+  if (!real) {
+    assert.deepEqual(asks.map((a) => wrappedLines(a.title, 14.5)), [2, 2, 2]);
+    assert.deepEqual(asks.map((a) => wrappedLines(a.why, 12.5)), [3, 3, 4]);
+    assert.deepEqual(asks.map((a) => wrappedLines(`If you accept: ${a.effect}`, 12.5)), [2, 4, 3]);
+  }
   // The third ask's Accept and Skip are on the first screen, with room for a
   // one line difference between the wrap model and the browser.
   assert.ok(lastControlsBottom + 18.75 <= SCREEN_H, `the third ask's buttons end at ${Math.round(lastControlsBottom)}; the screen ends at ${SCREEN_H}`);

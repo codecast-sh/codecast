@@ -2,7 +2,7 @@
 import { VersionedObservationSet } from "./versionedObservationSet.js";
 import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission.js";
 import { pendingMessageFinished, prepareTmuxDelivery, receiptSettled, TmuxDeliveryUncertainError, type TmuxDeliveryIdentity, type TmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
-import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_GLOBAL, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, classifyApiErrorBanner, confineToOwningDevice, findModelOption, fromConvexAgentType, isCodexSafetyError, isMachineDeliveredMessage, isUsageLimitDialog, isValidPaneTarget, snippetBySlug, verdictFromProbe } from "@codecast/shared/contracts";
+import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_GLOBAL, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, classifyApiErrorBanner, confineToOwningDevice, findModelOption, fromConvexAgentType, isCodexSafetyError, isMachineDeliveredMessage, isUsageLimitDialog, isValidPaneTarget, snippetBySlug, verdictFromProbe, worktreeOfPath } from "@codecast/shared/contracts";
 import { holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, setPendingRedrive } from "./pendingPromptHold.js";
 import { codexTurnErrorMessage } from "./codexTurnError.js";
 import { INGEST_WINDOW_ROWS } from "./workers/ingestTypes.js";
@@ -253,9 +253,9 @@ import {
   performReconciliation,
   repairDiscrepancies,
 } from "./reconciliation.js";
-import { TEST_SCRATCH_DIRNAME, isTestArtifactPath, isPathExcluded, isProjectAllowedToSync, watchDirFilter } from "./syncScope.js";
+import { TEST_SCRATCH_DIRNAME, isTestArtifactPath, isPathExcluded, isProjectAllowedToSync, watchDirFilter, watchFilter } from "./syncScope.js";
 import { parseOrphanProcessIdentity } from "./orphanProcessIdentity.js";
-import { TaskScheduler } from "./taskScheduler.js";
+import { TaskScheduler, triggerRunTaskId } from "./taskScheduler.js";
 import { hasTmux, isTmuxSessionMissingError } from "./tmux.js";
 import { configureDaemonWorkers, closeDaemonWorkers, daemonWorkersEnabled } from "./workers/bridge.js";
 import { collectScan, visitScan, scanCanFallback } from "./workers/scanClient.js";
@@ -2617,13 +2617,13 @@ function logConvexFailure(err: unknown): void {
 // not found" while message sync (keyed by conversation _id) stayed healthy, so
 // nothing surfaced the break (union-mobile fleet, 2026-08-29). Ride the durable
 // retry queue instead: never rejects, so callers may await it or drop it.
-async function pushSessionIdBinding(conversationId: string, sessionId: string, projectPath?: string, gitRoot?: string): Promise<void> {
+async function pushSessionIdBinding(conversationId: string, sessionId: string, projectPath?: string, gitRoot?: string, gitRemoteUrl?: string): Promise<void> {
   try {
-    await syncServiceRef?.updateSessionId(conversationId, sessionId, projectPath, gitRoot);
+    await syncServiceRef?.updateSessionId(conversationId, sessionId, projectPath, gitRoot, gitRemoteUrl);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log(`updateSessionId failed for ${conversationId.slice(0, 12)} <- ${sessionId.slice(0, 8)}: ${msg}; queuing for retry`, "warn");
-    retryQueueRef?.add("updateSessionId", { conversationId, sessionId, projectPath, gitRoot }, msg);
+    retryQueueRef?.add("updateSessionId", { conversationId, sessionId, projectPath, gitRoot, gitRemoteUrl }, msg);
   }
 }
 
@@ -4625,6 +4625,11 @@ async function sendHeartbeat(): Promise<void> {
           activeConfig.sync_mode = serverMode;
           activeConfig.sync_projects = serverProjects;
         }
+        // A folder just chosen already holds sessions nobody touched since;
+        // the sweep uploads them now instead of at the next reconciliation.
+        const widened = (serverMode === "all" && localMode !== "all")
+          || (serverMode === "selected" && serverProjects.some((p) => !localProjects.includes(p)));
+        if (widened) void pushUnsyncedFilesHandler?.("Sync scope widened").catch(() => {});
       }
     }
 
@@ -6879,7 +6884,7 @@ async function executeRemoteCommand(
                 if (conversationCacheRef) conversationCacheRef[realForkId] = conversationId;
                 seedOpencodeForkSyncBaseline(realForkId);
                 const forkGitInfo = projectPath ? await getGitInfo(projectPath) : undefined;
-                void pushSessionIdBinding(conversationId, realForkId, projectPath || undefined, forkGitInfo?.repoRoot || forkGitInfo?.root);
+                void pushSessionIdBinding(conversationId, realForkId, projectPath || undefined, forkGitInfo?.repoRoot || forkGitInfo?.root, forkGitInfo?.remoteUrl);
                 log(`[REMOTE] opencode fork: ${parsed.parent_session_id.slice(0, 12)} → ${realForkId.slice(0, 12)} for conv ${conversationId.slice(0, 12)}`);
               } catch (forkErr) {
                 log(`[REMOTE] opencode fork failed for conv ${conversationId.slice(0, 12)}: ${forkErr instanceof Error ? forkErr.message : String(forkErr)} — falling back to blank spawn`);
@@ -7016,7 +7021,7 @@ async function executeRemoteCommand(
               setPosition(forked.thread.path, fs.statSync(forked.thread.path).size);
             }
             const forkGitInfo = await getGitInfo(cwd);
-            await pushSessionIdBinding(conversationId, realThreadId, cwd, forkGitInfo?.repoRoot || forkGitInfo?.root);
+            await pushSessionIdBinding(conversationId, realThreadId, cwd, forkGitInfo?.repoRoot || forkGitInfo?.root, forkGitInfo?.remoteUrl);
             syncServiceRef?.claimSession(conversationId).catch(logConvexFailure);
             syncServiceRef?.markSessionActive(conversationId).catch(logConvexFailure);
             syncServiceRef?.registerManagedSession(realThreadId, process.pid, undefined, conversationId).catch(logConvexFailure);
@@ -8158,8 +8163,7 @@ async function getGitInfo(projectPath: string): Promise<GitInfo | undefined> {
   const commonDir = await execGit("rev-parse --path-format=absolute --git-common-dir");
   const repoRoot = commonDir?.endsWith("/.git") ? commonDir.slice(0, -5) : root;
 
-  const worktreeMatch = projectPath.match(/(?:\.codecast\/worktrees|\.conductor|\.claude-worktrees\/[^/]+)\/([^/]+)/);
-  const worktreeName = worktreeMatch ? worktreeMatch[1] : undefined;
+  const worktreeName = managedWorktreeName(projectPath);
 
   return {
     commitHash,
@@ -8177,6 +8181,18 @@ async function getGitInfo(projectPath: string): Promise<GitInfo | undefined> {
 }
 
 const CODECAST_WORKTREE_DIR = ".codecast/worktrees";
+
+// The name of the managed worktree a cwd sits in, or undefined for a plain
+// checkout. Codex keeps its worktrees OUTSIDE the checkout as
+// ~/.codex/worktrees/<hash>/<repo>, and every one of them repeats the repo
+// folder, so the hash is the name there; every other layout names the
+// worktree by its own folder.
+export function managedWorktreeName(projectPath: string): string | undefined {
+  const codex = projectPath.match(/\.codex\/worktrees\/([^/]+)\/[^/]+/);
+  if (codex) return codex[1];
+  const named = projectPath.match(/(?:\.codecast\/worktrees|\.claude\/worktrees|\.conductor|\.claude-worktrees\/[^/]+)\/([^/]+)/);
+  return named ? named[1] : undefined;
+}
 
 // --------------------------------------------------------------------------
 // Warm worktree pools
@@ -10145,7 +10161,7 @@ async function processSessionFilePass(
           // Reconcile project_path/git_root to the real session cwd: the stub
           // was created (e.g. from the web) before this session existed, so its
           // stored path is a guess that may not match where the session runs.
-          void pushSessionIdBinding(conversationId, sessionId, actualProjectPath || undefined, gitInfo?.repoRoot || gitInfo?.root);
+          void pushSessionIdBinding(conversationId, sessionId, actualProjectPath || undefined, gitInfo?.repoRoot || gitInfo?.root, gitInfo?.remoteUrl);
           if (tmuxEntry) {
           registerManagedStartedSession(conversationId, sessionId, tmuxEntry.tmuxSession);
           if (tmuxEntry.sessionId && tmuxEntry.sessionId !== sessionId) {
@@ -10217,6 +10233,7 @@ async function processSessionFilePass(
           // Path-derived: true even when the parent conversation isn't cached
           // yet, so the server never briefly sees this as a top-level session.
           isSubagent: isSubagent || undefined,
+          agentTaskId: triggerRunTaskId(sessionId),
           agentTeamName: teamInfo?.teamName,
           agentName: teamInfo?.agentName,
         };
@@ -11225,7 +11242,7 @@ async function processCodexSessionPass(
           // match branch): the stub's stored path was a guess made before the
           // session existed and may not match where it actually runs.
           const codexGitInfo = projectPath ? await getGitInfo(projectPath) : undefined;
-          void pushSessionIdBinding(conversationId, sessionId, projectPath || undefined, codexGitInfo?.repoRoot || codexGitInfo?.root);
+          void pushSessionIdBinding(conversationId, sessionId, projectPath || undefined, codexGitInfo?.repoRoot || codexGitInfo?.root, codexGitInfo?.remoteUrl);
           if (tmuxEntry) {
             registerManagedStartedSession(conversationId, sessionId, tmuxEntry.tmuxSession);
             if (tmuxEntry.sessionId && tmuxEntry.sessionId !== sessionId) {
@@ -11279,7 +11296,11 @@ async function processCodexSessionPass(
             parentMessageUuid: undefined,
             parentConversationId,
             isSubagent: !!nativeParentSessionId || !!parentConversationId || undefined,
-            gitInfo: undefined,
+            // Same stamp as the claude path: without it every codex session
+            // keys on its cwd, so a linked worktree under ~/.codex/worktrees
+            // never folds into its checkout and the sharing page lists one row
+            // per worktree.
+            gitInfo: projectPath ? await getGitInfo(projectPath) : undefined,
           };
           conversationId = await syncService.createConversation(createParams);
           conversationId = finishCreate(conversationId);
@@ -11735,7 +11756,7 @@ async function processOpencodeSessionPass(
         conversationCache[sessionId] = conversationId;
         saveConversationCache(conversationCache);
         const gitInfo = cwd ? await getGitInfo(cwd) : undefined;
-        void pushSessionIdBinding(conversationId, sessionId, cwd || undefined, gitInfo?.repoRoot || gitInfo?.root);
+        void pushSessionIdBinding(conversationId, sessionId, cwd || undefined, gitInfo?.repoRoot || gitInfo?.root, gitInfo?.remoteUrl);
         if (tmuxEntry) {
           registerManagedStartedSession(conversationId, sessionId, tmuxEntry.tmuxSession);
           if (tmuxEntry.sessionId && tmuxEntry.sessionId !== sessionId) {
@@ -12072,7 +12093,7 @@ async function processTranscriptDeltaSessionPass(
           conversationCache[sessionId] = conversationId;
           saveConversationCache(conversationCache);
           const piGitInfo = projectPath ? await getGitInfo(projectPath) : undefined;
-          void pushSessionIdBinding(conversationId, sessionId, projectPath || undefined, piGitInfo?.repoRoot || piGitInfo?.root);
+          void pushSessionIdBinding(conversationId, sessionId, projectPath || undefined, piGitInfo?.repoRoot || piGitInfo?.root, piGitInfo?.remoteUrl);
           if (tmuxEntry) {
             registerManagedStartedSession(conversationId, sessionId, tmuxEntry.tmuxSession);
             if (tmuxEntry.sessionId && tmuxEntry.sessionId !== sessionId) {
@@ -12095,7 +12116,7 @@ async function processTranscriptDeltaSessionPass(
             title,
             startedAt: allMessages[0]?.timestamp,
             parentMessageUuid: undefined,
-            gitInfo: undefined,
+            gitInfo: projectPath ? await getGitInfo(projectPath) : undefined,
           });
           conversationId = finishCreate(conversationId);
           conversationCache[sessionId] = conversationId;
@@ -19393,7 +19414,7 @@ function ensureHeartbeatFlushLoop(): void {
 // a fleet-wide pass doesn't fire N tmux/network calls at once.
 // One item's failure is logged and the pool moves on: a fleet pass must not
 // stop at its first bad session.
-async function runBounded<T>(items: T[], concurrency: number, fn: (item: T) => Promise<void>, label = "bounded worker"): Promise<void> {
+export async function runBounded<T>(items: T[], concurrency: number, fn: (item: T) => Promise<void>, label = "bounded worker"): Promise<void> {
   let idx = 0;
   const describe = (item: T): string => (typeof item === "string" ? item : JSON.stringify(item)?.slice(0, 200) ?? String(item));
   const worker = async () => {
@@ -21941,7 +21962,7 @@ async function discoverAndLinkSession(
       // Reconcile project_path/git_root to the real session cwd (see Claude
       // match branch). `cwd` is authoritative here: the pane was launched in it.
       const discoveryGitInfo = await getGitInfo(cwd);
-      void pushSessionIdBinding(conversationId, linkedSessionId, cwd, discoveryGitInfo?.repoRoot || discoveryGitInfo?.root);
+      void pushSessionIdBinding(conversationId, linkedSessionId, cwd, discoveryGitInfo?.repoRoot || discoveryGitInfo?.root, discoveryGitInfo?.remoteUrl);
       registerManagedStartedSession(conversationId, linkedSessionId, tmuxSession);
       if (startedEntry?.sessionId && startedEntry.sessionId !== linkedSessionId) {
         stopManagedSessionHeartbeat(startedEntry.sessionId);
@@ -24866,8 +24887,8 @@ function isSyncPaused(): boolean {
 // given (session, path, git root), so remember what it confirmed and send only
 // what changed: a new transcript, a moved checkout, or a row the earlier boot
 // never reached.
-export function projectPathRepairKey(projectPath: string, gitRoot?: string): string {
-  return `${projectPath}\n${gitRoot ?? ""}`;
+export function projectPathRepairKey(projectPath: string, gitRoot?: string, gitRemoteUrl?: string): string {
+  return `${projectPath}\n${gitRoot ?? ""}\n${gitRemoteUrl ?? ""}`;
 }
 
 // Decide whether a transcript's path still needs to go to the server.
@@ -24878,8 +24899,9 @@ export function projectPathRepairNeeded(
   sessionId: string,
   projectPath: string,
   gitRoot?: string,
+  gitRemoteUrl?: string,
 ): { key: string; send: boolean } {
-  const key = projectPathRepairKey(projectPath, gitRoot);
+  const key = projectPathRepairKey(projectPath, gitRoot, gitRemoteUrl);
   return { key, send: confirmed[sessionId] !== key };
 }
 
@@ -24929,17 +24951,45 @@ async function repairProjectPaths(syncService: SyncService): Promise<void> {
   // mid-boot as "wedged". One cheap subprocess per unique project path instead.
   // Async: git on a contended disk answered in 2s at boot (2026-09-02), and
   // this runs before the hook server listens.
-  const repoRootCache = new Map<string, string | undefined>();
+  type RepoIdentity = { root?: string; remote?: string };
+  const repoRootCache = new Map<string, RepoIdentity>();
   const gitOut = (cmd: string, cwd: string): Promise<string | undefined> =>
     execAsync(`git ${cmd}`, { cwd }).then(({ stdout }) => stdout.trim() || undefined, () => undefined);
-  const resolveRepoRoot = async (projectPath: string): Promise<string | undefined> => {
-    if (repoRootCache.has(projectPath)) return repoRootCache.get(projectPath);
-    const commonDir = await gitOut("rev-parse --path-format=absolute --git-common-dir", projectPath);
+  const resolveRepoRoot = async (projectPath: string): Promise<RepoIdentity> => {
+    const cached = repoRootCache.get(projectPath);
+    if (cached) return cached;
+    // A torn-down worktree still names the checkout it hung off; asking git in
+    // a folder that is gone answers nothing, so ask the checkout instead.
+    const cwd = fs.existsSync(projectPath) ? projectPath : worktreeOfPath(projectPath)?.root;
+    if (!cwd || !fs.existsSync(cwd)) {
+      repoRootCache.set(projectPath, {});
+      return {};
+    }
+    const commonDir = await gitOut("rev-parse --path-format=absolute --git-common-dir", cwd);
     const root = commonDir?.endsWith("/.git")
       ? commonDir.slice(0, -5)
-      : await gitOut("rev-parse --show-toplevel", projectPath);
-    repoRootCache.set(projectPath, root);
-    return root;
+      : await gitOut("rev-parse --show-toplevel", cwd);
+    const identity: RepoIdentity = root ? { root, remote: await gitOut("remote get-url origin", cwd) } : {};
+    repoRootCache.set(projectPath, identity);
+    return identity;
+  };
+  // One transcript, one send decision, shared by every store below.
+  const repairOne = async (sessionId: string, projectPath: string): Promise<void> => {
+    checked++;
+    const { root: gitRoot, remote } = await resolveRepoRoot(projectPath);
+    const plan = projectPathRepairNeeded(confirmed, sessionId, projectPath, gitRoot, remote);
+    if (!plan.send) {
+      skipped++;
+      nextConfirmed[sessionId] = plan.key;
+      return;
+    }
+    sent++;
+    const result = await syncService.updateProjectPath(sessionId, projectPath, gitRoot, remote);
+    if (result && knownConversations[sessionId]) nextConfirmed[sessionId] = plan.key;
+    if (result?.updated) {
+      repaired++;
+      log(`Repaired path for ${sessionId.slice(0, 8)}: ${projectPath}`);
+    }
   };
 
   for (const dir of projectDirs) {
@@ -24966,32 +25016,37 @@ async function repairProjectPaths(syncService: SyncService): Promise<void> {
       const sessionId = resolveSessionId(filePath);
 
       try {
-        checked++;
-
         // Trust the transcript's recorded cwd over the (lossy, copyable) folder
         // slug; a transcript resumed/copied into a foreign or $HOME dir would
         // otherwise re-clobber project_path to e.g. "/Users/m1" on every startup.
         const projectPath = resolveTranscriptProjectPath(filePath, dir);
         if (!projectPath) continue;
-
-        const gitRoot = await resolveRepoRoot(projectPath);
-        const plan = projectPathRepairNeeded(confirmed, sessionId, projectPath, gitRoot);
-        if (!plan.send) {
-          skipped++;
-          nextConfirmed[sessionId] = plan.key;
-          continue;
-        }
-        sent++;
-        const result = await syncService.updateProjectPath(sessionId, projectPath, gitRoot);
-        if (result && knownConversations[sessionId]) nextConfirmed[sessionId] = plan.key;
-        if (result?.updated) {
-          repaired++;
-          log(`Repaired path for ${sessionId.slice(0, 8)}: ${projectPath}`);
-        }
+        await repairOne(sessionId, projectPath);
       } catch {
         // Skip files we can't read or sessions that don't exist in Convex
       }
     }
+  }
+
+  // Codex rollouts were created without git info until 2026-09 (the create
+  // path passed none), so every session in a codex worktree keys on its cwd.
+  // The rollout head names the cwd; the same sweep stamps the checkout root.
+  const codexStore = sessionFileIndexStores(process.env.HOME || "").find(store => store.agentType === "codex");
+  if (codexStore && fs.existsSync(codexStore.root)) {
+    await walkEntryBatches(codexStore.root, codexStore.walk, async (files) => {
+      for (const file of files) {
+        const sessionId = codexStore.idOf(file);
+        if (!sessionId) continue;
+        try {
+          await new Promise(resolve => setImmediate(resolve));
+          const projectPath = extractCodexCwd(await readCodexSessionMetaHeadAsync(file.path));
+          if (!projectPath || isTestArtifactPath(projectPath)) continue;
+          await repairOne(sessionId, projectPath);
+        } catch {
+          // Unreadable rollout or a session the server does not know
+        }
+      }
+    });
   }
 
   persistProjectPathRepairs(nextConfirmed);
@@ -25808,13 +25863,12 @@ async function findStaleFiles(
   return stale.map((f) => f.path);
 }
 
-// Top-level <project>/<session>.jsonl only.
 export function findStaleSessionFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): Promise<string[]> {
   return findStaleFiles(
     path.join(process.env.HOME || "", ".claude", "projects"),
-    { policy: { files: "jsonl" }, maxDepth: 2, fileFilter: (rel) => rel.endsWith(".jsonl") },
+    { policy: { dirs: "claudeWatch", files: "jsonl" }, maxDepth: 6, dirFilter: watchDirFilter, fileFilter: (rel) => rel.endsWith(".jsonl") },
     maxAgeMs,
-    (f) => shouldTreatClaudeFileAsStale(f.stat, getSyncRecord(f.path)),
+    (f) => watchFilter(f.rel) && shouldTreatClaudeFileAsStale(f.stat, getSyncRecord(f.path)),
   );
 }
 
@@ -26910,7 +26964,9 @@ function startWatchdog(
     await runBounded(staleClaudeFiles, WATCHDOG_CONCURRENCY, async (filePath) => {
       const parts = filePath.split(path.sep);
       const sessionId = resolveSessionId(filePath);
-      const projectDirName = parts[parts.length - 2];
+      const subagentsIndex = parts.lastIndexOf("subagents");
+      const projectDirName = parts[subagentsIndex >= 2 ? subagentsIndex - 2 : parts.length - 2];
+      const parentConversationId = subagentsIndex >= 1 ? deps.conversationCache[parts[subagentsIndex - 1]] : undefined;
       const projectPath = resolveTranscriptProjectPath(filePath, projectDirName);
 
       if (deps.config.excluded_paths && isPathExcluded(projectPath, deps.config.excluded_paths)) {
@@ -26934,7 +26990,8 @@ function startWatchdog(
         deps.retryQueue,
         deps.pendingMessages,
         deps.titleCache,
-        deps.updateState
+        deps.updateState,
+        parentConversationId,
       );
     }, "Watchdog worker");
 
@@ -27726,7 +27783,7 @@ async function main(): Promise<void> {
     }
 
     if (op.type === "updateSessionId") {
-      const params = op.params as { conversationId: string; sessionId: string; projectPath?: string; gitRoot?: string };
+      const params = op.params as { conversationId: string; sessionId: string; projectPath?: string; gitRoot?: string; gitRemoteUrl?: string };
       // Superseded while queued: the session resumed under a fresh uuid (or the
       // local mapping was pruned). Executing anyway would clobber the newer
       // binding, so discard — the newer link enqueued its own op.
@@ -27736,7 +27793,7 @@ async function main(): Promise<void> {
         updateState();
         return true;
       }
-      await syncService.updateSessionId(params.conversationId, params.sessionId, params.projectPath, params.gitRoot);
+      await syncService.updateSessionId(params.conversationId, params.sessionId, params.projectPath, params.gitRoot, params.gitRemoteUrl);
       log(`Retry: Rebound session ${params.sessionId.slice(0, 8)} -> conversation ${params.conversationId.slice(0, 12)}`);
       updateState();
       return true;
@@ -28627,7 +28684,7 @@ async function main(): Promise<void> {
     if (unsyncedFiles.length > 0) {
       log(`${reason}: Found ${unsyncedFiles.length} files needing sync`);
 
-      for (const filePath of unsyncedFiles) {
+      await runBounded(unsyncedFiles, 4, async (filePath) => {
         // Yield between files: processSessionFile's read+parse is synchronous CPU
         // work, and a backlog sweep runs dozens of files. Without this the sweep
         // monopolizes the loop for minutes and heartbeats/deliveries starve.
@@ -28646,11 +28703,11 @@ async function main(): Promise<void> {
         const projectPath = resolveTranscriptProjectPath(filePath, projectDirName);
 
         if (config.excluded_paths && isPathExcluded(projectPath, config.excluded_paths)) {
-          continue;
+          return;
         }
 
         if (!isProjectAllowedToSync(projectPath, config)) {
-          continue;
+          return;
         }
 
         let parentConversationId: string | undefined;
@@ -28685,7 +28742,7 @@ async function main(): Promise<void> {
           updateState,
           parentConversationId,
         );
-      }
+      }, reason);
 
       // Resolve any remaining pending subagent parents after all files processed
       for (const [childSessionId, parentSessionId] of pendingSubagentParents) {

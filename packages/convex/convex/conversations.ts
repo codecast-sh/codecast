@@ -59,7 +59,7 @@ import { internal } from "./_generated/api";
 import { resetConversationPendingMessages, cancelQueuedMessagesOnKill, enqueuePendingMessage } from "./pendingMessages";
 import { latestImagePreviewUrl, listConversationFileChanges } from "./messages";
 import { inboxVisibilityFields, INBOX_PINNED_CAP, pinCapExceeded, PIN_CAP_ERROR } from "./inboxProjection";
-import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill } from "./agentTasks";
+import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill, stampRunConversation } from "./agentTasks";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId, enqueueResumeSession, enqueueHibernateSession, requireSessionCommandTarget } from "./daemonCommandUtils";
 import { normalizePaneUrl } from "@codecast/shared/contracts/browserPaneOffer";
@@ -69,6 +69,7 @@ import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
 import { armedTriggerHomeLoader, isArmedTriggerHome, isArmedTriggerHomeOfKind, isArmedLoopHome } from "./dormancy";
 import { subagentLinkFields } from "./ccAccountsShared";
 import { isSessionOwner } from "./sessionOwners";
+import { hideConversationForViewer, unhideConversationForViewer, viewerHiddenConversationIds } from "./inboxHides";
 import { approxMessageBytes, filterUserMessages, isImportNotice, isNavigableUserMessage, toNavigatorRow, type FilteredUserMessage } from "./userMessagesFilter";
 import {
   isTeamMember,
@@ -83,6 +84,7 @@ import {
   buildShareUpdate,
   buildPathRestampUpdate,
   type AccessLevel,
+  matchDirectoryMapping,
 } from "./privacy";
 import { effectiveMembershipVisibility } from "./teamVisibility";
 import { patchConversationVisibility } from "./lib/access";
@@ -944,19 +946,9 @@ export const resolveTeamFromDirectory = query({
       .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
       .collect();
 
-    let bestMatch: { teamId: Id<"teams">; pathLength: number } | null = null;
-    for (const mapping of mappings) {
-      if (args.project_path === mapping.path_prefix || args.project_path.startsWith(mapping.path_prefix + "/")) {
-        if (!bestMatch || mapping.path_prefix.length > bestMatch.pathLength) {
-          bestMatch = {
-            teamId: mapping.team_id,
-            pathLength: mapping.path_prefix.length,
-          };
-        }
-      }
-    }
-
-    return bestMatch?.teamId || null;
+    // The same rule creation uses: longest path rule wins, and a lock is a
+    // rule with no team.
+    return matchDirectoryMapping(mappings, args.project_path)?.team_id ?? null;
   },
 });
 
@@ -1004,6 +996,10 @@ export const createConversation = mutation({
     // cache), so without this the row is born looking like a normal session
     // and teammates get a "started coding" push for it.
     is_subagent: v.optional(v.boolean()),
+    // The trigger this transcript is a spawned run of (the daemon's scheduler
+    // started it), so the row is born nested (stampRunConversation) instead
+    // of being a loose inbox card until the run is linked.
+    agent_task_id: v.optional(v.id("agent_tasks")),
     agent_team_name: v.optional(v.string()),
     agent_name: v.optional(v.string()),
     // Device id of the daemon syncing this transcript. The transcript (and any
@@ -1078,8 +1074,11 @@ export const createConversation = mutation({
     const startedAt = args.started_at ?? now;
 
     const conversationPath = args.git_root || args.project_path;
+    // The daemon syncs old transcripts with their real start time: a session
+    // that predates a repo's share start stays private (privacy.ts
+    // mappingCoversStart), so a share made today never exposes yesterday.
     const { team_id: resolvedTeamId, is_private: isPrivate, auto_shared: autoShared } =
-      await resolveCreationPrivacy(ctx, args.user_id, conversationPath, args.team_id as Id<"teams"> | undefined);
+      await resolveCreationPrivacy(ctx, args.user_id, conversationPath, args.team_id as Id<"teams"> | undefined, startedAt, args.git_remote_url);
 
     let parentConversationId: Id<"conversations"> | undefined;
     if (args.parent_conversation_id) {
@@ -1147,6 +1146,10 @@ export const createConversation = mutation({
     // Terminal-started sessions: the SessionStart hook usually reports the
     // injected stable context before this registration — attach the parked record.
     await consumeStableContextSpool(ctx, args.user_id, args.session_id, conversationId);
+    if (args.agent_task_id) {
+      const task = await ctx.db.get(args.agent_task_id);
+      if (task && task.user_id === args.user_id) await stampRunConversation(ctx, args.user_id, task, args.session_id);
+    }
 
     // Auto-dismiss parent only for plan handoffs (clear context -> implementation session)
     if (parentConversationId && args.parent_message_uuid === "plan-handoff") {
@@ -4026,15 +4029,7 @@ export const searchForCLI = query({
         .query("directory_team_mappings")
         .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
         .collect();
-      let bestMatch: { teamId: Id<"teams">; pathLength: number } | null = null;
-      for (const mapping of mappings) {
-        if (args.project_path === mapping.path_prefix || args.project_path.startsWith(mapping.path_prefix + "/")) {
-          if (!bestMatch || mapping.path_prefix.length > bestMatch.pathLength) {
-            bestMatch = { teamId: mapping.team_id, pathLength: mapping.path_prefix.length };
-          }
-        }
-      }
-      resolvedTeamId = bestMatch?.teamId;
+      resolvedTeamId = matchDirectoryMapping(mappings, args.project_path)?.team_id;
     }
     const effectiveTeamIds = resolvedTeamId ? [resolvedTeamId] : userTeamIds;
 
@@ -4960,6 +4955,10 @@ export const updateProjectPath = mutation({
     session_id: v.string(),
     project_path: v.string(),
     git_root: v.optional(v.string()),
+    // The checkout's origin, stamped with the root so a session created
+    // without git info (codex rollouts before 2026-09) gains its repository
+    // identity in the same sweep. Older daemons omit it.
+    git_remote_url: v.optional(v.string()),
     api_token: v.string(),
   },
   handler: async (ctx, args) => {
@@ -4978,7 +4977,11 @@ export const updateProjectPath = mutation({
       return { updated: false };
     }
 
-    if (conversation.project_path === args.project_path && (!args.git_root || conversation.git_root === args.git_root)) {
+    if (
+      conversation.project_path === args.project_path &&
+      (!args.git_root || conversation.git_root === args.git_root) &&
+      (!args.git_remote_url || conversation.git_remote_url === args.git_remote_url)
+    ) {
       return { updated: false };
     }
 
@@ -4986,19 +4989,28 @@ export const updateProjectPath = mutation({
     if (args.git_root) {
       patch.git_root = args.git_root;
     }
+    if (args.git_remote_url) {
+      patch.git_remote_url = args.git_remote_url;
+    }
 
     // The path is being stamped after creation (pre-warmed/stub conversations
     // are born pathless → private+teamless), so re-resolve team/privacy the
     // way creation would have. Explicit user choices win inside the helper.
-    const mappings = await ctx.db
-      .query("directory_team_mappings")
-      .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
-      .collect();
-    const restamp = buildPathRestampUpdate(
-      conversation,
-      mappings,
-      args.git_root || args.project_path
-    );
+    // Only a changed PATH re-resolves. Learning the checkout root of a path
+    // the row already had (the boot sweep backfilling codex worktrees that
+    // were created without git info) stamps identity and nothing else: a
+    // mapping on that checkout then reaches these rows when the owner sets
+    // or re-saves it, never as a side effect of a daemon upgrade.
+    const restamp = conversation.project_path === args.project_path
+      ? null
+      : buildPathRestampUpdate(
+          { ...conversation, git_remote_url: args.git_remote_url ?? conversation.git_remote_url },
+          await ctx.db
+            .query("directory_team_mappings")
+            .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
+            .collect(),
+          args.git_root || args.project_path
+        );
     if (restamp) Object.assign(patch, restamp);
 
     // A restamp can flip visibility (born-blank → team-shared), so linked
@@ -5352,6 +5364,9 @@ export const forkConversation = mutation({
       ctx,
       authUserId,
       original.git_root || original.project_path,
+      undefined,
+      undefined,
+      original.git_remote_url,
     );
 
     // Trust the denormalized message_count for display; the actual copy is
@@ -6649,15 +6664,7 @@ export const feedForCLI = query({
         .query("directory_team_mappings")
         .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
         .collect();
-      let bestMatch: { teamId: Id<"teams">; pathLength: number } | null = null;
-      for (const mapping of mappings) {
-        if (args.project_path === mapping.path_prefix || args.project_path.startsWith(mapping.path_prefix + "/")) {
-          if (!bestMatch || mapping.path_prefix.length > bestMatch.pathLength) {
-            bestMatch = { teamId: mapping.team_id, pathLength: mapping.path_prefix.length };
-          }
-        }
-      }
-      resolvedTeamId = bestMatch?.teamId;
+      resolvedTeamId = matchDirectoryMapping(mappings, args.project_path)?.team_id;
     }
     const effectiveTeamIds = resolvedTeamId ? [resolvedTeamId] : userTeamIds;
 
@@ -8724,7 +8731,13 @@ export async function scanInboxConversations(
 
   // Recent window is bounded by both the row cap AND the 30d activity window:
   // the index range stops the scan at the cutoff so old sessions are never read.
-  // Pinned/dismissed have their own (separate) queries below and stay exempt.
+  // Pinned, dismissed, stashed and snoozed rows have their own queries below
+  // and are excluded here AT THE INDEX (the four stamps pinned to absent): a
+  // filed row is not recent material (shared inWorkingSet), and a stashed
+  // agent keeps heartbeating, so on a busy account those fresh stamps filled
+  // the 200 recent seats and cut every settled plain row older than two days
+  // out of the set — dropped, not folded, so the show-old toggle had nothing
+  // to show (2026-09-23).
   //
   // Subagent rows are excluded AT THE INDEX for every window. shouldShowInInbox
   // drops them anyway, but a busy account has more subagents than sessions in
@@ -8746,11 +8759,17 @@ export async function scanInboxConversations(
       return merged.slice(0, INBOX_WINDOW_CAP);
     });
 
+  const plainRange = (q: any, isSubagent: boolean | undefined) => q
+    .eq("user_id", userId)
+    .eq("is_subagent", isSubagent)
+    .eq("inbox_pinned_at", undefined)
+    .eq("inbox_dismissed_at", undefined)
+    .eq("inbox_stashed_at", undefined)
+    .eq("inbox_snoozed_until", undefined)
+    .gte("updated_at", sessionWindowCutoff);
   const recentConversationsQ = topLevelWindow((isSubagent) => ctx.db
     .query("conversations")
-    .withIndex("by_user_subagent_updated", (q: any) =>
-      q.eq("user_id", userId).eq("is_subagent", isSubagent).gte("updated_at", sessionWindowCutoff)
-    )
+    .withIndex("by_user_plain_updated", (q: any) => plainRange(q, isSubagent))
     .order("desc")
     .filter((q: any) => q.or(
       q.eq(q.field("status"), "active"),
@@ -8828,13 +8847,13 @@ export async function scanInboxConversations(
   // timeout: "Your request timed out performing too many system operations").
   // The subagent window is a sibling range of the same index the recent
   // window reads (is_subagent: true). Children never crowd the top-level caps:
-  // they are returned on their own, not merged into the candidate set.
+  // they are returned on their own, not merged into the candidate set. The
+  // index pins the filing stamps to absent, so a parked parent's children
+  // (stamped by the hide cascade, discarded by every caller) are never read.
   const recentSubagentsQ: Promise<any[]> = opts.subagentWindow && !opts.teamScope
     ? ctx.db
       .query("conversations")
-      .withIndex("by_user_subagent_updated", (q: any) =>
-        q.eq("user_id", userId).eq("is_subagent", true).gte("updated_at", sessionWindowCutoff)
-      )
+      .withIndex("by_user_plain_updated", (q: any) => plainRange(q, true))
       .order("desc")
       .filter((q: any) => q.or(
         q.eq(q.field("status"), "active"),
@@ -8889,28 +8908,57 @@ export async function scanInboxConversations(
   // also cover the caller's PRIVATE sessions, correctly visible to themselves).
   if (opts.teamScope) {
     const teamFilter = await createTeamFeedFilter(ctx, opts.teamScope);
+    // The caller's own triage of teammates' rows (inbox_hides): a stash or
+    // dismiss on a row they neither run nor own cannot live on the row, so it
+    // lives here, and the board skips it the same way it skips the owner's.
+    const viewerHidden = await viewerHiddenConversationIds(ctx, userId);
     const otherMemberIds = teamFilter.memberships
       .map((m) => m.user_id)
       .filter((id) => id.toString() !== userId.toString());
     if (otherMemberIds.length > TEAM_INBOX_MEMBER_CAP) truncated.add("members");
     const memberIds = otherMemberIds.slice(0, TEAM_INBOX_MEMBER_CAP);
-    const memberScans = await Promise.all(memberIds.map((memberId) => ctx.db
-      .query("conversations")
-      .withIndex("by_team_user_updated", (q: any) =>
-        q.eq("team_id", opts.teamScope).eq("user_id", memberId).gte("updated_at", sessionWindowCutoff)
-      )
-      .order("desc")
-      .filter((q: any) => q.or(
-        q.eq(q.field("status"), "active"),
-        q.eq(q.field("status"), "completed")
-      ))
-      .take(TEAM_INBOX_PER_MEMBER_CAP + 1)));
-    for (const memberScan of memberScans) {
-      if (memberScan.length > TEAM_INBOX_PER_MEMBER_CAP) truncated.add("member_rows");
-      const memberRecent = memberScan.slice(0, TEAM_INBOX_PER_MEMBER_CAP);
+    // A teammate's rows come through the same plain index as the caller's
+    // recent window, keyed by the runner and filtered to this team: the
+    // team index ranks by activity alone, and a teammate's stashed agents
+    // keep heartbeating, so on a busy member those fresh stamps took every
+    // per-member seat and the board dropped their settled sessions. The
+    // filed windows a teammate's triage decides (dismissed, stashed,
+    // snoozed) stay off the board; a teammate's pin is a session like any
+    // other, so the pinned rows in this team are read on their own.
+    const inTeamAndLive = (q: any) => q.and(
+      q.eq(q.field("team_id"), opts.teamScope),
+      q.or(q.eq(q.field("status"), "active"), q.eq(q.field("status"), "completed")),
+    );
+    const memberScans = await Promise.all(memberIds.map((memberId) => Promise.all([
+      ...([undefined, false] as const).map((isSubagent) => ctx.db
+        .query("conversations")
+        .withIndex("by_user_plain_updated", (q: any) => q
+          .eq("user_id", memberId)
+          .eq("is_subagent", isSubagent)
+          .eq("inbox_pinned_at", undefined)
+          .eq("inbox_dismissed_at", undefined)
+          .eq("inbox_stashed_at", undefined)
+          .eq("inbox_snoozed_until", undefined)
+          .gte("updated_at", sessionWindowCutoff))
+        .order("desc")
+        .filter(inTeamAndLive)
+        .take(TEAM_INBOX_PER_MEMBER_CAP + 1)),
+      ctx.db
+        .query("conversations")
+        .withIndex("by_user_pinned", (q: any) => q.eq("user_id", memberId).gt("inbox_pinned_at", 0))
+        .order("desc")
+        .filter((q: any) => q.and(inTeamAndLive(q), q.gte(q.field("updated_at"), sessionWindowCutoff)))
+        .take(TEAM_INBOX_PER_MEMBER_CAP + 1),
+    ]).then((ranges: any[][]) => {
+      const merged = ranges.flat().sort((x, y) => y.updated_at - x.updated_at);
+      if (merged.length > TEAM_INBOX_PER_MEMBER_CAP) truncated.add("member_rows");
+      return merged.slice(0, TEAM_INBOX_PER_MEMBER_CAP);
+    })));
+    for (const memberRecent of memberScans) {
       for (const c of memberRecent) {
         if (byId.has(c._id.toString())) continue;
-        if (c.inbox_dismissed_at || c.inbox_stashed_at) continue; // teammate's own triage
+        if (c.is_subagent || !shouldShowInInbox(c)) continue; // a pinned killed row, a child
+        if (viewerHidden.has(c._id.toString())) continue; // the caller's triage of it
         if (!teamFilter.isVisible(c)) continue;
         byId.set(c._id.toString(), c);
       }
@@ -10954,13 +11002,34 @@ export const cliSetSessionVisibility = mutation({
       c.owner_user_id?.toString() === userId.toString()
     );
     if (!conv) {
-      throw new Error(
-        `No session found for "${args.session}" (you can only manage sessions you run or own)`
-      );
+      // Not the runner or an owner: a teammate's session on the team board.
+      // The row's own stamps are the owner's, so the caller's gesture is a
+      // viewer hide (inbox_hides) — out of THEIR board only, the agent untouched.
+      const seen = await findConversationByAnyRefWhere(ctx, args.session, () => true);
+      if (!seen) {
+        throw new Error(
+          `No session found for "${args.session}" (you can only manage sessions you run or own)`
+        );
+      }
+      const seenShortId = seen.short_id ?? seen._id.toString().slice(0, 7);
+      if (args.action === "undismiss") {
+        const wasHidden = await unhideConversationForViewer(ctx, userId, seen._id);
+        return { ok: true as const, short_id: seenShortId, action: args.action, was_hidden: wasHidden, rearmed_schedules: 0, outcome: "viewer_hide" as const };
+      }
+      const hid = await hideConversationForViewer(ctx, userId, seen, args.action === "kill" ? "dismiss" : "stash");
+      if (!hid) {
+        throw new Error(
+          `No session found for "${args.session}" (you can only manage sessions you run or own, or hide a teammate's you can see)`
+        );
+      }
+      return { ok: true as const, short_id: seenShortId, action: args.action, outcome: "viewer_hide" as const, was_hidden: false };
     }
     const shortId = conv.short_id ?? conv._id.toString().slice(0, 7);
 
     if (args.action === "undismiss") {
+      // A restore clears the caller's viewer hide too, in case the row was hidden
+      // before they became an owner of it.
+      await unhideConversationForViewer(ctx, userId, conv._id);
       const { wasHidden, rearmed } = await resurfaceHiddenSession(ctx, conv, userId);
       return { ok: true as const, short_id: shortId, action: args.action, was_hidden: wasHidden, rearmed_schedules: rearmed };
     }
@@ -12251,6 +12320,7 @@ export const updateSessionId = mutation({
     // from where the session is really running.
     project_path: v.optional(v.string()),
     git_root: v.optional(v.string()),
+    git_remote_url: v.optional(v.string()),
     api_token: v.string(),
   },
   handler: async (ctx, args) => {
@@ -12265,6 +12335,7 @@ export const updateSessionId = mutation({
     const patch: Record<string, any> = { session_id: args.session_id };
     if (args.project_path) patch.project_path = args.project_path;
     if (args.git_root) patch.git_root = args.git_root;
+    if (args.git_remote_url) patch.git_remote_url = args.git_remote_url;
 
     // Stubs are created before their real path exists, so their team/privacy
     // resolved against nothing (→ private, teamless). Re-resolve against the
@@ -12275,7 +12346,7 @@ export const updateSessionId = mutation({
         .query("directory_team_mappings")
         .withIndex("by_user_id", (q) => q.eq("user_id", userId))
         .collect();
-      const restamp = buildPathRestampUpdate(conv, mappings, stampedPath);
+      const restamp = buildPathRestampUpdate({ ...conv, git_remote_url: args.git_remote_url ?? conv.git_remote_url }, mappings, stampedPath);
       if (restamp) Object.assign(patch, restamp);
     }
 

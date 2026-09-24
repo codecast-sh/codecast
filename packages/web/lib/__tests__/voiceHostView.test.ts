@@ -32,6 +32,13 @@ describe("the voice window's shape", () => {
     expect(voiceHostView({ ...base, engaged: true, wallWanted: true })).toBe("wall");
   });
 
+  it("stays hidden for this engagement once the person hides it, and never when popped out", () => {
+    expect(voiceHostView({ ...base, engaged: true, appFocused: false, dismissed: true })).toBe("idle");
+    expect(voiceHostView({ ...base, engaged: true, inCall: true, appFocused: false, dismissed: true })).toBe("idle");
+    expect(voiceHostView({ ...base, engaged: true, appFocused: false, dismissed: true, wallWanted: true })).toBe("wall");
+    expect(voiceHostView({ ...base, engaged: true, appFocused: false, dismissed: true, floating: true })).toBe("float");
+  });
+
   it("hides again after the engagement ends, unless popped out", () => {
     expect(voiceHostView({ ...base, engaged: false, appFocused: false })).toBe("idle");
     expect(voiceHostView({ ...base, engaged: false, appFocused: false, floating: true })).toBe("float");

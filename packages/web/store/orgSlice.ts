@@ -378,10 +378,9 @@ function liveChief(tree: OrgTree): OrgRole | undefined {
   return tree.roles.find((r) => r.handle === CHIEF_OF_STAFF_HANDLE && r.status !== "retired");
 }
 
-/** The optimistic chief of staff row (S6): under the hirer, whole company
- *  scope, trust understand. One factory for the action and the replay. */
 /** The optimistic row a hand-written hire shows until the server's own arrives.
- *  One factory for the action and the replay, like chiefStub. */
+ *  One factory for the action and the replay, like chiefStub (the root, whose
+ *  switch stays off). */
 function roleStub(tree: OrgTree, input: OrgCreateRoleInput, now: number): OrgRole {
   const team = tree.workspace.kind === "team";
   return {
@@ -399,7 +398,8 @@ function roleStub(tree: OrgTree, input: OrgCreateRoleInput, now: number): OrgRol
     ...(input.caps ? { caps: { ...input.caps } } : {}),
     ...(input.tenure ? { tenure: input.tenure } : {}),
     ...(input.avatar ? { avatar: input.avatar } : {}),
-    trust: "understand",
+    // A hired role starts work on its own (org-staffing.md S23.1).
+    trust: "direct",
     created_by: input.host_user_id,
     created_at: now,
     updated_at: now,

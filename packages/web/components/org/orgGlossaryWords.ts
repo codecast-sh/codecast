@@ -29,18 +29,18 @@ export const GLOSSARY_TERM: Record<GlossaryWord, string> = {
   charter: "Charter",
   hand: "Hand",
   wake: "Wake",
-  budget: "Budget, a daily limit",
+  budget: "Limit, the most in a day",
   proposal: "Proposal",
   chief_of_staff: "Chief of staff",
 };
 
 const DEFINITION: Record<GlossaryWord, string> = {
-  role: "A standing agent with a name, an area of work to look after, and a daily limit; it watches that area and leaves the rest alone.",
+  role: "A standing agent with a name and an area of work to look after; it watches that area and leaves the rest alone.",
   scope: "The projects and plans a standing agent looks after: what lands in front of it, and what it never sees.",
   charter: "A short written statement of what a project or a standing agent is for, so an agent can tell its own work from someone else's.",
   hand: "One session doing one piece of work under a standing agent, gone when that work is done.",
   wake: "One turn a standing agent takes when something calls it: a message, a schedule, or a change inside its area of work.",
-  budget: "The most a standing agent may do in one day, counted in hands, wakes and tokens, the units of text a model reads and writes.",
+  budget: "The most a standing agent may do in one day, with defaults filled in; a role that reaches its limit waits for tomorrow.",
   proposal: "A list of changes to the org that an agent wrote; you accept, edit or skip each one, and nothing moves until you do.",
   chief_of_staff: "The standing agent that reads how work moves through the company and writes a proposal on a schedule.",
 };

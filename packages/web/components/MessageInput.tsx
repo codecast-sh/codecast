@@ -10,7 +10,7 @@ import { uploadBlobToStorage } from "../lib/uploadBlob";
 import { textareaCaretRect } from "../lib/textareaCaret";
 import { classifyApiErrorBanner, ACTIVE_AGENT_STATUSES, type AgentStatus } from "@codecast/shared/contracts";
 import { useNowWhen } from "../hooks/useCoarseNow";
-import { formatCountdown } from "@codecast/shared/contracts";
+import { formatCountdown, HIBERNATED_COPY } from "@codecast/shared/contracts";
 import { parseLimitResetAt } from "../lib/limitReset";
 import { pendingImageUploads, persistDraftImages, restoreDraftImages, settleDraftImageUpload } from "../lib/draftImages";
 import { isResentCopyOfSentMessage } from "../lib/staleDraft";
@@ -22,6 +22,7 @@ import { imagePlaceholderToken, insertImagePlaceholder, dropImagePlaceholder } f
 import { attachReviewToMessage } from "../lib/reviewActions";
 import { enterReviewFromComposer } from "../lib/reviewNav";
 import { ReviewBar } from "./ReviewBar";
+import { ComposerFade } from "./ComposerFade";
 import { ComposerSuggestion, ComposerSuggestionHandle } from "./ComposerSuggestion";
 import { useMutation, useQuery, useConvex } from "convex/react";
 import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
@@ -2121,7 +2122,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
 
   return (
     <div ref={composerRootRef} data-sv-composer className={`shrink-0 pointer-events-none sticky bottom-0 ${lightboxImageIndex !== null ? "z-[10002]" : "z-10"}`}>
-      {lightboxImageIndex === null && <div className="h-16 bg-gradient-to-t from-sol-bg via-[color-mix(in_srgb,var(--sol-bg)_80%,transparent)] to-transparent -mt-16 relative" />}
+      {lightboxImageIndex === null && <ComposerFade />}
       <div className={`${bareComposer ? "pb-4" : "pb-3"} pointer-events-auto ${lightboxImageIndex === null ? "bg-sol-bg" : ""}`}>
         <div className="relative">
           {serverDeleted && !isRestarting && (
@@ -2214,6 +2215,13 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                         Cancel
                       </button>
                     )}
+                  </span>
+                ) : agentStatus === "hibernated" ? (
+                  /* The parked session's one home in the conversation: the
+                     header and the inbox row stay quiet about it. */
+                  <span data-hibernated-marker className="flex items-center gap-1.5 text-sol-blue">
+                    <span className="w-2 h-2 rounded-full bg-sol-blue/70" />
+                    {HIBERNATED_COPY}
                   </span>
                 ) : agentStatus === "thinking" ? (
                   <span className="flex items-center gap-1.5">

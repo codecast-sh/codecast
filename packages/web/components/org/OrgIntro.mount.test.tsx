@@ -26,7 +26,7 @@ let card: typeof import("./OrgIntroCard") & typeof import("./OrgIntroAnywhere") 
 // The fakes the card's mount reads through: the store, the router, the toast.
 type Ui = { org_intro_seen?: boolean; org_upsell_seen?: boolean };
 const fake = {
-  state: { clientStateInitialized: true, currentUser: { _id: "u1" } as { _id: string } | null, clientState: { ui: {} as Ui }, call: { phase: "idle" }, updateClientUI(p: Ui) { Object.assign(fake.state.clientState.ui, p); fake.writes.push({ ...p }); } },
+  state: { clientStateInitialized: true, teams: [{ _id: "t1", features: { org: true } }], currentUser: { _id: "u1" } as { _id: string } | null, clientState: { ui: {} as Ui }, call: { phase: "idle" }, updateClientUI(p: Ui) { Object.assign(fake.state.clientState.ui, p); fake.writes.push({ ...p }); } },
   writes: [] as Ui[],
   pathname: "/inbox",
   pushes: [] as string[],

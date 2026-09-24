@@ -2505,7 +2505,8 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, path_prefix, team_id, auto_share } = body;
+      const { api_token, path_prefix, team_id, auto_share, include_past } = body;
+      const lock = body.private === true;
 
       if (!api_token || !path_prefix) {
         return new Response(JSON.stringify({ error: "Missing api_token or path_prefix" }), {
@@ -2518,10 +2519,12 @@ http.route({
         api_token,
         path_prefix,
         team_id,
+        private: lock || undefined,
         auto_share,
+        include_past: typeof include_past === "boolean" ? include_past : undefined,
       });
 
-      if (result.error) {
+      if ("error" in result) {
         return new Response(JSON.stringify({ error: result.error }), {
           status: result.error === "Unauthorized" ? 401 : 400,
           headers: { "Content-Type": "application/json", ...corsHeaders },
@@ -4081,7 +4084,11 @@ cliRoute("/cli/role/pause", async (ctx, body) => ctx.runMutation(api.orgRoles.pa
 cliRoute("/cli/role/resume", async (ctx, body) => ctx.runMutation(api.orgRoles.resume, body));
 cliRoute("/cli/role/retire", async (ctx, body) => ctx.runMutation(api.orgRoles.retire, body));
 cliRoute("/cli/role/restart", async (ctx, body) => ctx.runMutation(api.orgRoles.restart, body));
+// The switch (org-staffing.md S23.1) and the limits. /trust and /caps stay one
+// release for older CLIs; both pairs run the same mutation.
+cliRoute("/cli/role/autonomy", async (ctx, body) => ctx.runMutation(api.orgRoles.setTrust, body));
 cliRoute("/cli/role/trust", async (ctx, body) => ctx.runMutation(api.orgRoles.setTrust, body));
+cliRoute("/cli/role/limits", async (ctx, body) => ctx.runMutation(api.orgRoles.setCaps, body));
 cliRoute("/cli/role/caps", async (ctx, body) => ctx.runMutation(api.orgRoles.setCaps, body));
 cliRoute("/cli/role/authority", async (ctx, body) => ctx.runMutation((api as any).orgRoles.setAuthority, body));
 cliRoute("/cli/role/reports", async (ctx, body) => ctx.runMutation(api.orgRoles.setReports, body));

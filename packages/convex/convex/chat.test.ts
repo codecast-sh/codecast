@@ -87,7 +87,7 @@ function users() {
 // gate tests below lean on.
 function teams() {
   return [
-    { _id: TEAM, name: "Main", invite_code: "MAIN", created_at: 1, features: { chat: true } },
+    { _id: TEAM, name: "Main", invite_code: "MAIN", created_at: 1, features: { chat: true, org: true } },
     { _id: OTHER_TEAM, name: "Other", invite_code: "OTHER", created_at: 1 },
   ];
 }
@@ -3603,7 +3603,7 @@ describe("community channels", () => {
       ],
       teams: [
         ...teams(),
-        { _id: COMMUNITY_TEAM, name: "Codecast Community", invite_code: "COMM", created_at: 1, features: { chat: true }, community: true },
+        { _id: COMMUNITY_TEAM, name: "Codecast Community", invite_code: "COMM", created_at: 1, features: { chat: true, org: true }, community: true },
       ],
       team_memberships: [
         ...memberships(),

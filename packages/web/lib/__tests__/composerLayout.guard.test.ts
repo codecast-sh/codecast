@@ -40,3 +40,15 @@ test("the dock grows to the viewport and measures the cap from what its max leav
   expect(composeView).toContain('root.querySelector<HTMLElement>("[data-composer-field]")');
   expect(composeView).toContain('root.style.setProperty("--composer-max-h"');
 });
+
+// A field must paint exactly the characters it holds. JetBrains Mono's
+// contextual alternates draw ?? and !! as a spacer plus a pair glyph, and
+// Chrome's keystroke-by-keystroke reshaping of a textarea left the spacers
+// without the pair: "?????" typed by key painted as three blanks and two
+// marks while the value held all five. Ligatures stay off in every editable
+// surface, app wide, so no composer or input can regress into it.
+const globalsCss = readFileSync(join(import.meta.dir, "..", "..", "app", "globals.css"), "utf8");
+
+test("editable fields render without ligatures", () => {
+  expect(globalsCss).toMatch(/input,\s*textarea,\s*\[contenteditable="true"\]\s*\{\s*font-variant-ligatures:\s*none;\s*\}/);
+});

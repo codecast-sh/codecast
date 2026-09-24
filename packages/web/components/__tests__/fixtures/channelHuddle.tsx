@@ -17,6 +17,8 @@ const state = { callOccupancy: {} as Record<string, any[]>, call: { roomKey: nul
 mock.module("../../../lib/teamFeatures", () => ({ useCallsAvailable: () => true }));
 mock.module("../../../store/inboxStore", () => ({ useInboxStore: (select: any) => select(state), useTrackedStore: () => state }));
 mock.module("../../../lib/calls/actions", () => ({ startHuddle: async (opts: any) => { starts.push(opts); }, joinCall: async (room: string) => { joins.push(room); } }));
+mock.module("../../../lib/faces/faceRow", () => ({ roomHeldAsBurst: () => false }));
+mock.module("../../../hooks/useFaceRow", () => ({ useFaceRowSelect: () => false }));
 mock.module("../../../hooks/useWalkie", () => ({ useWalkieStatus: () => null }));
 mock.module("../../../lib/calls/walkie", () => ({ walkieHoldsRoom: () => false }));
 mock.module("../../../lib/avatarCache", () => ({ AvatarImg: () => null }));

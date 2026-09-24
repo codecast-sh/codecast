@@ -1,3 +1,31 @@
 {
-  "ignore_dirs": [".git", ".conductor", ".codecast", "dist", ".next"]
+  "ignore_dirs": [
+    ".claude/worktrees",
+    ".codecast",
+    ".conductor",
+    ".git",
+    "packages/web/dist",
+    "packages/desktop/src-tauri/target",
+    "packages/mobile/ios/build",
+    "packages/mobile/dist",
+    "dist",
+    "dist-ssr",
+    "dist-perf",
+    ".next",
+    ".turbo",
+    "coverage",
+    "test-results",
+    "packages/web/.next",
+    "packages/web/dist-ssr",
+    "packages/web/dist-perf",
+    "packages/cli/dist",
+    "packages/browser-extension/dist",
+    "packages/vscode-extension/dist",
+    "packages/electron/dist",
+    "packages/convex/.conductor",
+    "packages/mobile/.conductor",
+    "packages/mobile/android/.gradle",
+    "packages/mobile/android/build",
+    "packages/mobile/android/app/build"
+  ]
 }

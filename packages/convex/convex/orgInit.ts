@@ -13,10 +13,12 @@ import { collectOrgSessions, requireWorkspaceCaller, resolveScope, sessionsInSco
 import { performRehomeSessions, type RehomeResult } from "./sessionOwnership";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { activitySessionsFromScan, latestEventAnywhere, readActivityCommits, readWorkTasks, reposFromScan, roleActivity } from "./orgHealth";
-import { activityPlanOf, computeOrgActivity } from "./lib/orgActivity";
+import { activityPlanOf, computeOrgActivity, isLandedCommit, landingFor, namedTextOf, namesRecord, recordWords, type OrgActivity, type RecordRef } from "./lib/orgActivity";
+import { canAccessChannel } from "./chatAccess";
+import { canReadCall } from "./transcripts";
 import { computeCoverage } from "./lib/orgCoverage";
 import { isActiveTask } from "@codecast/shared/tasks";
-import { capacity } from "@codecast/shared/contracts/orgCapacity";
+import { capacity, type LandedCommit } from "@codecast/shared/contracts/orgCapacity";
 import {
   overlapsAmong,
   performCreateRole,
@@ -29,9 +31,10 @@ import {
   resolveScopeRef,
   rolesInBoundary, performSetAuthority, performSetProjectLead } from "./orgRoles";
 import { performAcceptUpgrade, performUpsertInstance } from "./orgTemplates";
-import { capsFor, countersFor, trustOf } from "./orgEvents";
+import { capsFor, countersFor, roleStartsOnItsOwn, trustOf } from "./orgEvents";
+import { autonomyChangeWords } from "@codecast/shared/contracts/roleAutonomy";
 import { findDecision } from "./sessionDecisions";
-import { extractRepoFromRemoteUrl, threadStateHeadline } from "@codecast/shared/contracts";
+import { extractRepoFromRemoteUrl, isRecRoomKey, threadStateHeadline } from "@codecast/shared/contracts";
 import {
   applyProposalChanges,
   extractOrgProposal,
@@ -51,7 +54,10 @@ import {
   type OrgRoutineChange,
   type OrgScopeChange,
   type OrgTaskStatusChange,
-  type OrgTrustChange, authorityWords, type OrgAuthorityChange, type OrgHireChange, type OrgUpgradeChange } from "@codecast/shared/contracts/orgProposal";
+  type OrgTrustChange, authorityWords, type OrgAuthorityChange, type OrgHireChange, type OrgUpgradeChange,
+  type OrgInitiativeChange, type OrgInitiativeOwnerChange, type OrgInitiativeProjectsChange } from "@codecast/shared/contracts/orgProposal";
+import { performAddProjects, performCreateInitiative, performUpdateInitiative } from "./initiatives";
+import { findInitiative } from "./lib/initiativeRef";
 import { performSetTrust, standingConversationOf } from "./orgRoles";
 import { insertTask } from "./agentTasks";
 import { charterPatch } from "./lib/orgCharter";
@@ -92,7 +98,25 @@ export const ANALYSIS_CAPS = {
   tasks_filed_per_session: 300,
   use_messages_per_session: 400,
   first_message_chars: 600,
+  /** A long running session's commits in the window, for its work share by project. */
+  commits_per_session: 200,
+  /** The chars of one session message scanned for a project's name. */
+  message_scan_chars: 4000,
+  /** What people said: the team's ended calls in the window, and the chat threads with a decision, an ask or a name in them, under one byte budget. */
+  calls: 40,
+  said_bytes: 40_000,
+  said_line_chars: 400,
+  said_reply_chars: 240,
+  said_replies_per_thread: 3,
+  call_summary_chars: 1200,
+  call_action_items: 10,
+  /** The landing read (readLanding): commits per repository over its own window, newest first; at the cap the search says so. */
+  landing_commits_per_repo: 1200,
 } as const;
+/** A flagged record's landing is searched over three months, not the activity
+ *  window: on Union a 30 day read found a landing for 4 of 44 stale records
+ *  while the ground truth's landings sat 30 to 160 days back (2026-09-23). */
+export const LANDING_WINDOW_MS = 90 * 24 * 60 * 60 * 1000;
 /** A session this old that still runs may be a role nobody has named (org-roles-run-work.md R2). */
 export const LONG_RUNNING_MIN_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -304,6 +328,7 @@ export async function computeAnalysisOrg(ctx: Ctx, userId: Id<"users">, teamId: 
       status: role.status,
       seat: seatRow ? { session: seatRow.short_id ?? String(seatRow._id), title: seatRow.title ?? "" } : undefined,
       trust: trustOf(role),
+      starts_on_its_own: roleStartsOnItsOwn(role),
       caps,
       counters: countersFor(role, now),
       reports_to: parent,
@@ -380,16 +405,74 @@ export function sessionUseOf(rows: UsageMessage[], startedAt: number, now: numbe
   const days = Math.max(1, Math.min(SESSION_USE_DAYS, Math.ceil(covered / D)));
   return { days, tokens, calls, per_day: { tokens: Math.round(tokens / days), calls: Math.round((calls / days) * 10) / 10 }, counted: calls > 0, messages_read: rows.length, truncated };
 }
-export async function readSessionUse(ctx: Ctx, conversationId: Id<"conversations">, startedAt: number, now: number): Promise<SessionUse> {
+/** A project as the per session read names it: the handoff's rows. */
+export type ProjectRef = { id: string; short_id?: string | null; title: string };
+export type SessionProjectCounts = { id: string; commits_30d: number; messages_7d: number };
+export type SessionEvidence = { use_7d: SessionUse; projects: SessionProjectCounts[] };
+/** One session's measured use and its work share by project, from the reads
+ *  the session's own query makes: its messages of the week (the same rows the
+ *  use is measured on; a user or assistant line that names a project counts
+ *  for it) and its commits of the window (a commit names a project by its
+ *  short id or two of its title words, or through a task it carries filed
+ *  under that project). Counted over every project of the workspace, so a
+ *  project the session never filed a task in still shows where its commits
+ *  went; the row keeps the projects with a count. */
+export async function readSessionEvidence(ctx: Ctx, conversationId: Id<"conversations">, startedAt: number, now: number, projects: ProjectRef[] = []): Promise<SessionEvidence> {
   const since = now - SESSION_USE_DAYS * 24 * 60 * 60 * 1000;
   const rows: any[] = await ctx.db.query("messages").withIndex("by_conversation_timestamp", (q: any) => q.eq("conversation_id", conversationId).gte("timestamp", since)).order("desc").take(ANALYSIS_CAPS.use_messages_per_session);
-  return sessionUseOf(rows, startedAt, now);
+  const use_7d = sessionUseOf(rows, startedAt, now);
+  const refs = projects.map((p) => ({ p, words: recordWords(p.title) }));
+  const messages = new Map<string, number>();
+  const commits = new Map<string, number>();
+  for (const m of rows) {
+    if ((m.role !== "user" && m.role !== "assistant") || typeof m.content !== "string" || !m.content) continue;
+    const named = namedTextOf(m.content.slice(0, ANALYSIS_CAPS.message_scan_chars));
+    for (const { p, words } of refs) if (namesRecord(named, p, words)) bump(messages, p.id);
+  }
+  const windowSince = now - ANALYSIS_WINDOW_MS;
+  const commitRows: any[] = await ctx.db.query("commits").withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conversationId)).order("desc").take(ANALYSIS_CAPS.commits_per_session);
+  const projectOfTask = new Map<string, string | null>();
+  for (const c of commitRows) {
+    if ((c.timestamp ?? 0) < windowSince) continue;
+    const hit = new Set<string>();
+    const named = namedTextOf(c.message);
+    for (const { p, words } of refs) if (namesRecord(named, p, words)) hit.add(p.id);
+    for (const tid of c.task_ids ?? []) {
+      const k = String(tid);
+      if (!projectOfTask.has(k)) { const t: any = await ctx.db.get(tid); projectOfTask.set(k, t?.project_id ? String(t.project_id) : null); }
+      const pid = projectOfTask.get(k);
+      if (pid) hit.add(pid);
+    }
+    for (const id of hit) bump(commits, id);
+  }
+  return { use_7d, projects: projects.map((p) => ({ id: p.id, commits_30d: commits.get(p.id) ?? 0, messages_7d: messages.get(p.id) ?? 0 })).filter((p) => p.commits_30d || p.messages_7d) };
 }
-/** The long running rows with each session's measured use on them and the
- *  internal id off them: the id exists only so the use can be read in its own
- *  query, and the analyzer names a seat by its short id. */
-export function withSessionUse(rows: any[], uses: Array<SessionUse | null | undefined>) {
-  return rows.map(({ id: _id, ...row }, i) => ({ ...row, ...(uses[i] ? { use_7d: uses[i] } : {}) }));
+/** The long running rows with each session's evidence folded in and the
+ *  internal ids off them: the ids exist only so the evidence can be read in
+ *  its own query, and the analyzer names a seat and a project by short id.
+ *  The projects list is the union of what the org slice counted (tasks,
+ *  bound) and what the session's own read counted (commits, messages),
+ *  biggest share first; a project with nothing counted and no binding leaves
+ *  the row. */
+export function withSessionEvidence(rows: any[], evidence: Array<SessionEvidence | null | undefined>, projects: ProjectRef[] = []) {
+  const refById = new Map(projects.map((p) => [p.id, p]));
+  return rows.map(({ id: _id, ...row }, i) => {
+    const ev = evidence[i];
+    const byId = new Map<string, any>((row.projects ?? []).map((p: any) => [p.id, { ...p }]));
+    for (const c of ev?.projects ?? []) {
+      const ref = refById.get(c.id);
+      const cur = byId.get(c.id) ?? (ref ? { id: c.id, short_id: ref.short_id ?? undefined, title: ref.title, tasks: 0, commits_30d: 0, messages_7d: 0, bound: false } : null);
+      if (!cur) continue;
+      cur.commits_30d = c.commits_30d;
+      cur.messages_7d = c.messages_7d;
+      byId.set(c.id, cur);
+    }
+    const list = Array.from(byId.values())
+      .filter((p) => p.tasks || p.commits_30d || p.messages_7d || p.bound)
+      .sort((a, b) => (b.tasks + b.commits_30d + b.messages_7d) - (a.tasks + a.commits_30d + a.messages_7d) || Number(b.bound) - Number(a.bound))
+      .map(({ id: _pid, ...p }) => p);
+    return { ...row, projects: list, ...(ev ? { use_7d: ev.use_7d } : {}) };
+  });
 }
 
 type OrgScanResult = Awaited<ReturnType<typeof collectOrgSessions>>;
@@ -445,18 +528,20 @@ async function longRunningSessions(ctx: Ctx, scan: OrgScanResult, now: number, w
     const routines: any[] = routinesBySession.get(String(raw._id)) ?? [];
     const opening: any[] = await ctx.db.query("messages").withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", raw._id)).order("asc").take(8);
     const first = opening.find((m) => m.role === "user" && typeof m.content === "string" && m.content.trim());
-    // The projects it touched, strongest evidence first: the tasks it filed,
-    // the task and plans it is bound to, and last its working directory, which
-    // on a single repository company names one project for every session and
-    // is marked as such so the analyzer weighs it as a hint.
+    // Its work share by project (org-eval, 2026-09-23): the tasks it touched
+    // in each (filed there, or bound to), joined below with the commits and
+    // messages the per session read counts (readSessionEvidence), so a row
+    // with one task in each of four projects and every commit in one reads
+    // as one area, not four. A working directory that names a project is a
+    // candidate only: it enters the list when the counts give it something.
     const task = raw.active_task_id ? await ctx.db.get(raw.active_task_id) : null;
-    const touched = new Map<string, { tasks_filed: number; bound: boolean; by_path: boolean }>();
-    const touch = (id: unknown) => { const k = String(id); const t = touched.get(k) ?? { tasks_filed: 0, bound: false, by_path: false }; touched.set(k, t); return t; };
+    const touched = new Map<string, { tasks: Set<string>; bound: boolean }>();
+    const touch = (id: unknown) => { const k = String(id); const t = touched.get(k) ?? { tasks: new Set<string>(), bound: false }; touched.set(k, t); return t; };
     const filed: any[] = await ctx.db.query("tasks").withIndex("by_created_from_conversation", (q: any) => q.eq("created_from_conversation", raw._id)).take(ANALYSIS_CAPS.tasks_filed_per_session);
-    for (const t of filed) if (t.project_id) touch(t.project_id).tasks_filed++;
-    if (task?.project_id) touch(task.project_id).bound = true;
+    for (const t of filed) if (t.project_id) touch(t.project_id).tasks.add(String(t._id));
+    if (task?.project_id) { const t = touch(task.project_id); t.tasks.add(String(task._id)); t.bound = true; }
     for (const planId of new Set([raw.active_plan_id, task?.plan_id, ...(raw.plan_ids ?? [])].filter(Boolean).map(String))) { const plan = await ctx.db.get(planId as Id<"plans">); if (plan?.project_id) touch(plan.project_id).bound = true; }
-    if (raw.project_path && projectByPath.has(raw.project_path)) touch(projectByPath.get(raw.project_path)!.id).by_path = true;
+    if (raw.project_path && projectByPath.has(raw.project_path)) touch(projectByPath.get(raw.project_path)!.id);
     const state = raw.thread_state ? threadStateHeadline(String(raw.thread_state)) : "";
     rows.push({
       id: String(raw._id),
@@ -476,8 +561,7 @@ async function longRunningSessions(ctx: Ctx, scan: OrgScanResult, now: number, w
       first_message: first ? String(first.content).trim().slice(0, ANALYSIS_CAPS.first_message_chars) : undefined,
       project_path: session.project_path ?? undefined,
       git_root: raw.git_root ?? undefined,
-      projects: Array.from(touched).filter(([id]) => projectById.has(id)).map(([id, how]) => ({ short_id: projectById.get(id)!.short_id, title: projectById.get(id)!.title, tasks_filed: how.tasks_filed, bound: how.bound, by_path_only: how.by_path && !how.bound && !how.tasks_filed }))
-        .sort((a, b) => b.tasks_filed - a.tasks_filed || Number(b.bound) - Number(a.bound)),
+      projects: Array.from(touched).filter(([id]) => projectById.has(id)).map(([id, how]) => ({ id, short_id: projectById.get(id)!.short_id, title: projectById.get(id)!.title, tasks: how.tasks.size, commits_30d: 0, messages_7d: 0, bound: how.bound })),
       tasks_filed: filed.length,
       reports_to_role: raw.org_role_id ? `@${roleHandle.get(String(raw.org_role_id)) ?? "?"}` : undefined,
       private: raw.is_private !== false,
@@ -541,11 +625,38 @@ export async function computeAnalysisActivity(ctx: Ctx, userId: Id<"users">, tea
   const userNames: Record<string, string> = {};
   for (const i of initiatives) if (i.owner?.kind === "user") userNames[String(i.owner.user_id)] ??= (await ctx.db.get(i.owner.user_id))?.name ?? "";
   const coverage = computeCoverage({ projects, plans, tasks, roles: scan.roles, areas: activity.areas, initiatives, userNames });
-  return { activity, coverage };
+  return { activity, coverage, repos: reposFromScan(scan) };
+}
+
+// ── Landing over three months, its own read (org-eval, 2026-09-23) ─────────
+// The activity slice reads 30 days of commits for its areas and its stale
+// clocks; a landing for a stale record usually sits further back. This part
+// reads the same repositories over LANDING_WINDOW_MS under its own cap, keeps
+// the commits on main, and answers only the matched lines per record, so the
+// heavy rows never leave the query. `truncated` says a repository hit the cap,
+// so an empty landing there is "not found in what was read", not "none".
+export type LandingSearch = { window_days: number; commits_searched: number; truncated: boolean; by_record: Record<string, LandedCommit[]> };
+export async function readLanding(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"> | undefined, now: number, repos: string[], records: RecordRef[], perRepoCap: number = ANALYSIS_CAPS.landing_commits_per_repo): Promise<LandingSearch> {
+  const stats = { truncated: [] as string[] };
+  const commits = await readActivityCommits(ctx, repos, now - LANDING_WINDOW_MS, { teamId, userId, sessionIds: new Set() }, perRepoCap, stats);
+  const landed = commits.filter((c) => c.sha && isLandedCommit(c));
+  const by_record: Record<string, LandedCommit[]> = {};
+  for (const r of records) if (r.short_id) by_record[r.short_id] = landingFor(landed, r);
+  return { window_days: LANDING_WINDOW_MS / 86_400_000, commits_searched: landed.length, truncated: stats.truncated.length > 0, by_record };
+}
+/** The records whose landing is searched: every stale plan and task, and every open record a session is bound to. */
+export function landingRecordsOf(activity: OrgActivity): RecordRef[] {
+  return [...activity.stale.plans, ...activity.stale.tasks, ...activity.bound.tasks, ...activity.bound.plans].map((r) => ({ short_id: r.short_id, title: r.title }));
+}
+/** The activity block with the three month landing on its records, and the search described beside them. */
+export function withLanding(activity: OrgActivity, search: LandingSearch): OrgActivity & { landing: Omit<LandingSearch, "by_record"> } {
+  for (const r of [...activity.stale.plans, ...activity.stale.tasks, ...activity.bound.tasks, ...activity.bound.plans]) r.landing = search.by_record[r.short_id] ?? r.landing ?? [];
+  const { by_record: _by, ...landing } = search;
+  return { ...activity, landing };
 }
 
 // ── Insights, chat channels, open decisions ───────────────────────────────
-export async function computeAnalysisSignals(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"> | undefined, now: number) {
+export async function computeAnalysisSignals(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"> | undefined, now: number, handoff?: Pick<AnalysisHandoff, "projects">) {
   const cutoff = now - ANALYSIS_WINDOW_MS;
   const insightRows: any[] = teamId
     ? await ctx.db.query("session_insights").withIndex("by_team_generated_at", (q: any) => q.eq("team_id", teamId).gte("generated_at", cutoff)).order("desc").take(ANALYSIS_CAPS.insights)
@@ -559,17 +670,24 @@ export async function computeAnalysisSignals(ctx: Ctx, userId: Id<"users">, team
     if (headlines.length < 20 && (i.headline || i.goal)) headlines.push({ headline: i.headline ?? i.goal, outcome: i.outcome_type, at: i.generated_at });
   }
 
-  // Chat channels with activity (team only). messages_30d is a floor at the
-  // per channel cap.
+  // Chat channels with activity (team only), the ones the caller may read
+  // (chatAccess: a private channel needs a member row; a personal workspace
+  // has no team chat). messages_30d is a floor at the per channel cap. The
+  // same rows feed `said`: the threads where a person decided, asked or
+  // named a role or project (saidChatFrom), so chat is read once.
   const channels: Array<{ id: string; name: string; messages_30d: number; last_at?: number }> = [];
+  const chatRead: Array<{ channel: any; msgs: any[] }> = [];
   if (teamId) {
     const rows: any[] = await ctx.db.query("chat_channels").withIndex("by_team_name", (q: any) => q.eq("team_id", teamId)).take(ANALYSIS_CAPS.channels);
     for (const ch of rows) {
       if (!ch.name || ch.archived_at) continue;
-      const msgs: any[] = await ctx.db.query("chat_messages").withIndex("by_channel_created", (q: any) => q.eq("channel_id", ch._id).gte("created_at", cutoff)).order("desc").take(ANALYSIS_CAPS.messages_per_channel);
+      if (!(await canAccessChannel(ctx as any, userId, ch))) continue;
+      const msgs: any[] = (await ctx.db.query("chat_messages").withIndex("by_channel_created", (q: any) => q.eq("channel_id", ch._id).gte("created_at", cutoff)).order("desc").take(ANALYSIS_CAPS.messages_per_channel)).filter((m: any) => (m.created_at ?? 0) >= cutoff);
       channels.push({ id: String(ch._id), name: ch.name, messages_30d: msgs.length, last_at: msgs[0]?.created_at });
+      if (ch.kind !== "dm") chatRead.push({ channel: ch, msgs });
     }
   }
+  const said = teamId ? await readSaid(ctx, userId, teamId, now, chatRead, handoff?.projects ?? []) : { calls: [], chat: [], truncated: false };
 
   // Open decisions by category: one read per member (the asker's account),
   // never the deployment's newest rows; the cap applies per member.
@@ -585,8 +703,110 @@ export async function computeAnalysisSignals(ctx: Ctx, userId: Id<"users">, team
     insights: { total: insightRows.length, themes: topOf(themes, 30), outcomes: objOf(outcomes), headlines },
     insights_truncated: insightRows.length >= ANALYSIS_CAPS.insights,
     channels,
+    said,
     decisions_open_by_category: objOf(decisionsByCategory),
   };
+}
+
+// ── What people said: calls and chat (org-eval, 2026-09-23) ────────────────
+// The reviewer never read a word a person wrote: it judged the company from
+// records and commits. `said` hands it the team's calls of the window (the
+// generated summary and action items, never the transcript) and the chat
+// threads where a person decided something, asked for something, or named a
+// role or a project, each as its root line, who wrote it, the channel, and
+// up to three replies that carry a decision or an ask. One byte budget over
+// both, calls first, newest first, with `truncated` when threads were left
+// out. Access is the caller's: a call the caller may not read (a private
+// channel's huddle, a recording its creator never shared) is not here, and
+// the chat rows came through the channel access check above.
+const DECIDED_RE = /\b(decid(?:e|ed|es|ing|sion|sions)|agreed?|approv(?:e|ed|es|al)|go(?:ing)? with|let'?s (?:go|do|use|ship|keep|drop|make|move|start|stop|try|not)|we(?:'ll| will| should| are going to| won'?t| decided| agreed)|from now on|instead of|settled|ship it|the plan is|final(?:ly|ized|ised)?|no longer|not going to)\b/i;
+const ASKED_RE = /\?|\b(?:can|could|would|will) (?:you|someone|anyone|we)\b|\bplease\b|\bneed(?:s|ed)? (?:a|an|to|you|someone|help)\b|\bshould we\b|\bwho (?:owns|has|can)\b|\b(?:thoughts|wdyt|eta)\b/i;
+export type SaidWhy = "decided" | "asked" | "named";
+export type SaidLine = { at: number; by: string; line: string };
+export type SaidThread = SaidLine & { channel: string; why: SaidWhy[]; replies: SaidLine[] };
+export type SaidCall = { title: string | null; started_at: number; ended_at: number | null; participants: string[]; summary: string | null; action_items: string[] };
+export type Said = { calls: SaidCall[]; chat: SaidThread[]; truncated: boolean };
+/** Why a line matters: what it decides, asks, or names (a role by handle or
+ *  mention, a project by short id or two title words). Empty when nothing. */
+export function saidWhyOf(m: { content?: string; mentions?: any[] }, roles: string[], projects: Array<{ ref: ProjectRef; words: string[] }>): SaidWhy[] {
+  const text = m.content ?? "";
+  const why: SaidWhy[] = [];
+  if (DECIDED_RE.test(text)) why.push("decided");
+  if (ASKED_RE.test(text)) why.push("asked");
+  const lower = text.toLowerCase();
+  const named = namedTextOf(text);
+  const namesRole = (m.mentions ?? []).some((x: any) => x && typeof x === "object" && x.kind === "role") || roles.some((h) => lower.includes(`@${h.toLowerCase()}`));
+  if (namesRole || projects.some(({ ref, words }) => namesRecord(named, ref, words))) why.push("named");
+  return why;
+}
+/** The threads worth the reviewer's eye from the rows the channel loop read.
+ *  A thread is its root (in the read, or fetched when only its replies are)
+ *  and the person written replies that decide or ask, newest three in time
+ *  order; it qualifies when the root or such a reply carries a signal. An
+ *  agent's line is context, never a signal. */
+export async function saidChatFrom(ctx: Ctx, read: Array<{ channel: any; msgs: any[] }>, roles: string[], projects: ProjectRef[]): Promise<SaidThread[]> {
+  const refs = projects.map((ref) => ({ ref, words: recordWords(ref.title) }));
+  const users = new Map<string, any>();
+  const userOf = async (id: any) => { const k = String(id); if (!users.has(k)) users.set(k, await ctx.db.get(id)); return users.get(k); };
+  const nameOf = async (m: any) => { const u = await userOf(m.user_id); return (u?.name ?? u?.email ?? "?") as string; };
+  const isPerson = async (m: any) => m.author_kind !== "agent" && !(await userOf(m.user_id))?.is_bot;
+  const usable = (m: any) => m && !m.deleted_at && typeof m.content === "string" && m.content.trim();
+  const out: SaidThread[] = [];
+  for (const { channel, msgs } of read) {
+    const roots = new Map<string, any>();
+    const replies = new Map<string, any[]>();
+    for (const m of msgs) {
+      if (!usable(m)) continue;
+      if (m.thread_root_id) replies.set(String(m.thread_root_id), [...(replies.get(String(m.thread_root_id)) ?? []), m]);
+      else roots.set(String(m._id), m);
+    }
+    for (const rootId of replies.keys()) if (!roots.has(rootId)) { const root = await ctx.db.get(rootId as Id<"chat_messages">); if (usable(root)) roots.set(rootId, root); }
+    for (const [rootId, root] of roots) {
+      const rootWhy = (await isPerson(root)) ? saidWhyOf(root, roles, refs) : [];
+      const picked: SaidLine[] = [];
+      const why = new Set<SaidWhy>(rootWhy);
+      const inThread = (replies.get(rootId) ?? []).sort((a, b) => b.created_at - a.created_at);
+      for (const r of inThread) {
+        if (picked.length >= ANALYSIS_CAPS.said_replies_per_thread) break;
+        if (!(await isPerson(r))) continue;
+        const w = saidWhyOf(r, roles, refs).filter((x) => x !== "named");
+        if (!w.length) continue;
+        for (const x of w) why.add(x);
+        picked.push({ at: r.created_at, by: await nameOf(r), line: r.content.trim().slice(0, ANALYSIS_CAPS.said_reply_chars) });
+      }
+      if (!why.size) continue;
+      out.push({ channel: `#${channel.name}`, at: root.created_at, by: await nameOf(root), line: root.content.trim().slice(0, ANALYSIS_CAPS.said_line_chars), why: Array.from(why), replies: picked.reverse() });
+    }
+  }
+  const newest = (t: SaidThread) => Math.max(t.at, ...t.replies.map((r) => r.at));
+  return out.sort((a, b) => newest(b) - newest(a));
+}
+export async function readSaid(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams">, now: number, chatRead: Array<{ channel: any; msgs: any[] }>, projects: ProjectRef[]): Promise<Said> {
+  const cutoff = now - ANALYSIS_WINDOW_MS;
+  const calls: SaidCall[] = [];
+  const callRows: any[] = await ctx.db.query("transcripts").withIndex("by_team_started", (q: any) => q.eq("team_id", teamId).gte("started_at", cutoff)).order("desc").take(ANALYSIS_CAPS.calls);
+  for (const t of callRows) {
+    if ((t.started_at ?? 0) < cutoff || t.status !== "ended") continue;
+    if (isRecRoomKey(t.room_key) && !t.rec_shared) continue;
+    // A call nobody spoke in and nothing was written about (a huddle that
+    // ended before words) is not something said: Union had 30 such rows.
+    if (!t.summary && !(t.action_items ?? []).length && !(t.participants ?? []).length) continue;
+    if (!(await canReadCall(ctx as any, userId, t))) continue;
+    calls.push({ title: t.title ?? null, started_at: t.started_at, ended_at: t.ended_at ?? null, participants: (t.participants ?? []).map((p: any) => p.name), summary: t.summary ? String(t.summary).slice(0, ANALYSIS_CAPS.call_summary_chars) : null, action_items: (t.action_items ?? []).slice(0, ANALYSIS_CAPS.call_action_items).map((a: any) => String(a).slice(0, 200)) });
+  }
+  const roleRows: any[] = await ctx.db.query("org_roles").withIndex("by_team", (q: any) => q.eq("team_id", teamId)).collect();
+  const threads = await saidChatFrom(ctx, chatRead, roleRows.map((r) => r.handle).filter(Boolean), projects);
+  // One budget over both: the calls are few and dated, the threads fill the rest newest first.
+  let bytes = JSON.stringify(calls).length;
+  const chat: SaidThread[] = [];
+  let truncated = false;
+  for (const t of threads) {
+    const size = JSON.stringify(t).length;
+    if (bytes + size > ANALYSIS_CAPS.said_bytes) { truncated = true; break; }
+    bytes += size;
+    chat.push(t);
+  }
+  return { calls, chat, truncated };
 }
 
 export function mergeAnalysisInputs(
@@ -612,6 +832,8 @@ export function mergeAnalysisInputs(
     ...org,
     insights: signals.insights,
     channels: signals.channels,
+    // What people said (calls and chat), read for the reviewer's eye.
+    said: signals.said,
     decisions_open_by_category: signals.decisions_open_by_category,
     // Ground in what is happening (S9): where code lands, who is in it, and
     // which records the evidence says are done.
@@ -632,13 +854,14 @@ export async function computeAnalysisInputs(ctx: Ctx, userId: Id<"users">, teamI
   const work = await computeAnalysisWork(ctx, userId, teamId);
   const [org, signals, label, activity] = await Promise.all([
     computeAnalysisOrg(ctx, userId, teamId, now, work.handoff),
-    computeAnalysisSignals(ctx, userId, teamId, now),
+    computeAnalysisSignals(ctx, userId, teamId, now, work.handoff),
     workspaceLabelOf(ctx, userId, teamId),
     computeAnalysisActivity(ctx, userId, teamId, now),
   ]);
-  const uses = await Promise.all(org.sessions.long_running.rows.map((r: any) => readSessionUse(ctx, r.id, r.started_at, now)));
-  org.sessions.long_running.rows = withSessionUse(org.sessions.long_running.rows, uses);
-  return mergeAnalysisInputs(userId, teamId, label, work, org, signals, now, activity.activity, activity.coverage);
+  const evidence = await Promise.all(org.sessions.long_running.rows.map((r: any) => readSessionEvidence(ctx, r.id, r.started_at, now, work.handoff.projects)));
+  org.sessions.long_running.rows = withSessionEvidence(org.sessions.long_running.rows, evidence, work.handoff.projects);
+  const landing = await readLanding(ctx, userId, teamId, now, activity.repos, landingRecordsOf(activity.activity));
+  return mergeAnalysisInputs(userId, teamId, label, work, org, signals, now, withLanding(activity.activity, landing), activity.coverage);
 }
 
 // One slice per call, so each read stays inside the execution limit on a
@@ -647,11 +870,14 @@ export const analysisPart = query({
   args: {
     api_token: v.optional(v.string()),
     team_id: v.optional(v.id("teams")),
-    part: v.union(v.literal("work"), v.literal("org"), v.literal("signals"), v.literal("activity"), v.literal("use")),
+    part: v.union(v.literal("work"), v.literal("org"), v.literal("signals"), v.literal("activity"), v.literal("use"), v.literal("landing")),
     work: v.optional(v.any()),
     now: v.optional(v.number()),
     session: v.optional(v.id("conversations")),
     started_at: v.optional(v.number()),
+    projects: v.optional(v.any()),
+    repos: v.optional(v.array(v.string())),
+    records: v.optional(v.any()),
   },
   handler: async (ctx, args): Promise<any> => {
     const userId = await requireWorkspaceCaller(ctx, args.api_token, args.team_id);
@@ -665,11 +891,12 @@ export const analysisPart = query({
       if (!args.session) return null;
       const conv: any = await ctx.db.get(args.session);
       const ours = !!conv && (args.team_id ? String(conv.team_id ?? "") === String(args.team_id) : !conv.team_id && String(conv.user_id) === String(userId));
-      return ours ? readSessionUse(ctx, args.session, args.started_at ?? conv.started_at ?? conv._creationTime, now) : null;
+      return ours ? readSessionEvidence(ctx, args.session, args.started_at ?? conv.started_at ?? conv._creationTime, now, (args.projects as ProjectRef[] | undefined) ?? []) : null;
     }
     if (args.part === "work") return computeAnalysisWork(ctx, userId, args.team_id);
-    if (args.part === "signals") return { ...(await computeAnalysisSignals(ctx, userId, args.team_id, now)), label: await workspaceLabelOf(ctx, userId, args.team_id), user_id: userId };
+    if (args.part === "signals") return { ...(await computeAnalysisSignals(ctx, userId, args.team_id, now, args.work as AnalysisHandoff | undefined)), label: await workspaceLabelOf(ctx, userId, args.team_id), user_id: userId };
     if (args.part === "activity") return computeAnalysisActivity(ctx, userId, args.team_id, now);
+    if (args.part === "landing") return readLanding(ctx, userId, args.team_id, now, args.repos ?? [], (args.records as RecordRef[] | undefined) ?? []);
     if (!args.work) throw new Error("the org slice needs the work slice's handoff");
     return computeAnalysisOrg(ctx, userId, args.team_id, now, args.work as AnalysisHandoff);
   },
@@ -680,18 +907,25 @@ export const analysisInputs = action({
   handler: async (ctx, args): Promise<any> => {
     const now = Date.now();
     const part = (api as any).orgInit.analysisPart;
-    const [work, signals, activity] = await Promise.all([
+    // The work slice first: the org and signals slices read its handoff (the
+    // projects, for the chat threads that name one and a session's work share).
+    const [work, activity] = await Promise.all([
       ctx.runQuery(part, { ...args, part: "work", now }),
-      ctx.runQuery(part, { ...args, part: "signals", now }),
       ctx.runQuery(part, { ...args, part: "activity", now }),
     ]);
-    if (!work || !signals) return null;
-    const org = await ctx.runQuery(part, { ...args, part: "org", now, work: work.handoff });
-    if (!org) return null;
-    const uses = await Promise.all(org.sessions.long_running.rows.map((r: any) => ctx.runQuery(part, { ...args, part: "use", now, session: r.id, started_at: r.started_at })));
-    org.sessions.long_running.rows = withSessionUse(org.sessions.long_running.rows, uses);
+    if (!work) return null;
+    const [org, signals] = await Promise.all([
+      ctx.runQuery(part, { ...args, part: "org", now, work: work.handoff }),
+      ctx.runQuery(part, { ...args, part: "signals", now, work: work.handoff }),
+    ]);
+    if (!org || !signals) return null;
+    const [evidence, landing] = await Promise.all([
+      Promise.all(org.sessions.long_running.rows.map((r: any) => ctx.runQuery(part, { ...args, part: "use", now, session: r.id, started_at: r.started_at, projects: work.handoff.projects }))),
+      activity ? ctx.runQuery(part, { ...args, part: "landing", now, repos: activity.repos, records: landingRecordsOf(activity.activity) }) : null,
+    ]);
+    org.sessions.long_running.rows = withSessionEvidence(org.sessions.long_running.rows, evidence, work.handoff.projects);
     const { label, user_id, ...rest } = signals;
-    return mergeAnalysisInputs(user_id, args.team_id, label, work, org, rest, now, activity?.activity, activity?.coverage);
+    return mergeAnalysisInputs(user_id, args.team_id, label, work, org, rest, now, activity && landing ? withLanding(activity.activity, landing) : activity?.activity, activity?.coverage);
   },
 });
 
@@ -972,7 +1206,7 @@ export async function applyBudget(ctx: Ctx, userId: Id<"users">, boundary: Bound
 export async function applyTrust(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgTrustChange, opts: ApplyOpts): Promise<ApplyResult> {
   const role = await liveRole(ctx, boundary, p.handle);
   const r = await performSetTrust(ctx, userId, { role_id: String(role._id), trust: p.trust, human_decision: opts.human_decision });
-  return { status: "applied", note: `@${role.handle}: trust ${r.previous_trust} → ${p.trust}`, role: roleRef(role) };
+  return { status: "applied", note: `@${role.handle}: ${autonomyChangeWords(!!r.on)}`, role: roleRef(role) };
 }
 
 // Hiring from a template (docs/architecture/org-hire.md). Authority is the
@@ -1209,6 +1443,64 @@ export async function applyTaskStatus(ctx: Ctx, userId: Id<"users">, boundary: B
   return { status: "applied", note: `${task.short_id} "${task.title}": ${task.status} → ${p.status}` };
 }
 
+// ── The company's goals (initiatives-projects-role-page.md "I1, revised") ──
+// Three changes, each a thin call into the initiatives module's own cores, so
+// a goal a review proposes is made the way a goal set on the page is made and
+// logged the same way (S21). Refs resolve inside the boundary: a project by
+// short id, id or title through the scope resolver; an initiative by in-N,
+// id or its title; an owner the way a role's parent resolves ("@handle",
+// "me", a member's name). The core reports the log row and grows the owner
+// role's scope; nothing here writes an initiative itself.
+
+async function initiativeByRef(ctx: Ctx, userId: Id<"users">, boundary: Boundary, ref: string): Promise<any> {
+  const key = workspaceKey(boundary.team_id ? { type: "team", teamId: boundary.team_id } : { type: "personal", userId });
+  const trimmed = ref.trim();
+  const direct = /^in-\d+$/i.test(trimmed) || ctx.db.normalizeId("initiatives", trimmed) ? await findInitiative(ctx, userId, trimmed) : null;
+  if (direct && direct.workspace === key) return direct;
+  const rows: any[] = await ctx.db.query("initiatives").withIndex("by_workspace", (q: any) => q.eq("workspace", key)).collect();
+  const lc = trimmed.toLowerCase();
+  const hits = rows.filter((r) => r.status !== "cancelled" && r.title.trim().toLowerCase() === lc);
+  if (hits.length > 1) throw new Error(`"${trimmed}" names ${hits.length} initiatives in this workspace; use the short id (${hits.map((r) => r.short_id).join(", ")})`);
+  if (!hits.length) throw new Error(`No initiative "${trimmed}" in this workspace`);
+  return hits[0];
+}
+const initiativeWorkspace = (boundary: Boundary): { workspace: "personal" | "team"; team_id?: Id<"teams"> } => boundary.team_id ? { workspace: "team", team_id: boundary.team_id } : { workspace: "personal" };
+async function projectIdsOf(ctx: Ctx, boundary: Boundary, refs: string[]): Promise<string[]> {
+  const out: string[] = [];
+  for (const ref of refs) { const r = await resolveScopeRef(ctx, boundary, `project:${ref}`); if (r.kind === "project") out.push(String(r.id)); }
+  return out;
+}
+
+export async function applyInitiative(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgInitiativeChange, _opts: ApplyOpts): Promise<ApplyResult> {
+  // Idempotent by title: a re-run after a crash must not set the goal twice.
+  const existing = await initiativeByRef(ctx, userId, boundary, p.title).catch(() => null);
+  if (existing) return { status: "applied", note: `the goal "${existing.title}" already exists (${existing.short_id})` };
+  const project_ids = await projectIdsOf(ctx, boundary, p.projects);
+  const owner = p.owner?.trim() ? await resolveReportsTo(ctx, userId, boundary, p.owner) : undefined;
+  const r = await performCreateInitiative(ctx, userId, initiativeWorkspace(boundary), { title: p.title, description: p.description, project_ids, ...(owner ? { owner: { ...owner, ...(owner.kind === "role" ? { role_id: String(owner.role_id) } : { user_id: String(owner.user_id) }) } as any } : {}), ...(p.target_date ? { target_date: p.target_date } : {}) });
+  return { status: "applied", note: `set the goal "${r.row.title}" (${r.short_id}) with ${project_ids.length} project${project_ids.length === 1 ? "" : "s"}${owner ? `, owned by ${p.owner}` : ""}${coverNote(r.scope)}` };
+}
+
+export async function applyInitiativeProjects(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgInitiativeProjectsChange, _opts: ApplyOpts): Promise<ApplyResult> {
+  const initiative = await initiativeByRef(ctx, userId, boundary, p.initiative);
+  const project_ids = await projectIdsOf(ctx, boundary, p.projects);
+  const r = await performAddProjects(ctx, userId, initiative, project_ids);
+  if (!r.added) return { status: "applied", note: `${initiative.short_id} "${initiative.title}" already carries ${andListOf(p.projects)}` };
+  return { status: "applied", note: `added ${andListOf(p.projects)} to the goal "${initiative.title}" (${initiative.short_id})${coverNote(r.scope)}` };
+}
+
+export async function applyInitiativeOwner(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgInitiativeOwnerChange, _opts: ApplyOpts): Promise<ApplyResult> {
+  const initiative = await initiativeByRef(ctx, userId, boundary, p.initiative);
+  const owner = await resolveReportsTo(ctx, userId, boundary, p.owner);
+  const same = initiative.owner && initiative.owner.kind === owner.kind && String(owner.kind === "role" ? initiative.owner.role_id : initiative.owner.user_id) === String(owner.kind === "role" ? owner.role_id : owner.user_id);
+  if (same) return { status: "applied", note: `${p.owner} already owns ${initiative.short_id} "${initiative.title}"` };
+  const r = await performUpdateInitiative(ctx, userId, initiative, { owner: { ...owner, ...(owner.kind === "role" ? { role_id: String(owner.role_id) } : { user_id: String(owner.user_id) }) } as any });
+  return { status: "applied", note: `${p.owner} now owns the goal "${initiative.title}" (${initiative.short_id})${coverNote(r.scope)}` };
+}
+/** What the owner role's area gained, and the sessions it took over with it, as the core reported them. */
+const coverNote = (scope: { added: string[]; took_over?: string } | null | undefined) => `${scope?.added.length ? `; the owner now looks after ${scope.added.length} more project${scope.added.length === 1 ? "" : "s"}` : ""}${scope?.took_over ? `; ${scope.took_over}` : ""}`;
+const andListOf = (xs: string[]) => xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`;
+
 /** One change of any kind, applied. Throws on a refusal; the caller records it. */
 export async function applyOrgChange(ctx: Ctx, userId: Id<"users">, boundary: Boundary, change: OrgChange, opts: ApplyOpts, note?: string): Promise<ApplyResult> {
   if (change.kind === "projects") return applyProjects(ctx, userId, boundary, change.changes, note);
@@ -1234,6 +1526,9 @@ async function applyOrgChangeCore(ctx: Ctx, userId: Id<"users">, boundary: Bound
     case "plan_status": return applyPlanStatus(ctx, userId, boundary, change, opts);
     case "task_status": return applyTaskStatus(ctx, userId, boundary, change, opts);
     case "project_status": return applyProjectStatus(ctx, userId, boundary, change, opts);
+    case "initiative": return applyInitiative(ctx, userId, boundary, change, opts);
+    case "initiative_projects": return applyInitiativeProjects(ctx, userId, boundary, change, opts);
+    case "initiative_owner": return applyInitiativeOwner(ctx, userId, boundary, change, opts);
   }
 }
 
