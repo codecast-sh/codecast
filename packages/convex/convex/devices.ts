@@ -1,4 +1,4 @@
-import { mutation, query, internalMutation } from "./functions";
+import { mutation, query, internalMutation, internalQuery } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { AgentClientId, AgentDefinitionSpec } from "@codecast/shared/contracts";
@@ -1844,6 +1844,29 @@ export const ownerDeviceDisplay = query({
       online: Date.now() - row.last_seen < DEVICE_ONLINE_MS,
       is_mine: row.user_id.toString() === userId.toString(),
       runner,
+    };
+  },
+});
+
+/**
+ * The release's adoption gate (scripts/deploy-all.sh): how many Macs seen
+ * in the last `window_ms` run at least `version`. A desktop floor set before
+ * the fleet runs the CLI that installs it safely makes old daemons do the
+ * install (the "Codecast is damaged" race, 2026-09-24), so the release waits
+ * on this. Internal: run it through packages/convex/run.sh.
+ */
+export const fleetAdoption = internalQuery({
+  args: { version: v.string(), window_ms: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const since = Date.now() - (args.window_ms ?? 30 * 60_000);
+    const macs = (await ctx.db.query("devices").collect()).filter(
+      (d) => d.platform === "darwin" && (d.last_seen ?? 0) >= since && d.cli_version,
+    );
+    const behind = macs.filter((d) => isBelowMinimum(d.cli_version!, args.version));
+    return {
+      total: macs.length,
+      current: macs.length - behind.length,
+      behind: behind.map((d) => ({ hostname: d.hostname ?? null, cli_version: d.cli_version ?? null })),
     };
   },
 });
