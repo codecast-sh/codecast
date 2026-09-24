@@ -15,6 +15,7 @@ import * as path from "node:path";
 import { readAvailableSkills } from "./daemon.js";
 
 const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "skills-invocable-"));
+const defaultSkill = `${path.basename(projectRoot)}-default`;
 
 function writeSkill(name: string, frontmatter: string, manifest = "SKILL.md"): void {
   const dir = path.join(projectRoot, ".claude", "skills", name);
@@ -23,7 +24,7 @@ function writeSkill(name: string, frontmatter: string, manifest = "SKILL.md"): v
 }
 
 // Default: name + description only, no invocable flag (the mac-remote shape).
-writeSkill("mac-remote", "name: mac-remote\ndescription: Connect to the remote Mac");
+writeSkill(defaultSkill, `name: ${defaultSkill}\ndescription: Connect to the remote Mac`);
 // Lowercase manifest filename — works on a case-insensitive FS but must also be
 // found case-sensitively (the user's mac-remote/skill.md was lowercase).
 writeSkill("lower-case", "name: lower-case\ndescription: Lowercase manifest", "skill.md");
@@ -44,8 +45,8 @@ describe("readAvailableSkills user-invocable default", () => {
 
   test("a skill with no invocable flag surfaces by default (matches Claude Code)", async () => {
     const skills = await byName(projectRoot);
-    expect(skills.has("mac-remote")).toBe(true);
-    expect(skills.get("mac-remote")).toBe("Connect to the remote Mac");
+    expect(skills.has(defaultSkill)).toBe(true);
+    expect(skills.get(defaultSkill)).toBe("Connect to the remote Mac");
   });
 
   test("a lowercase skill.md manifest is still discovered (case-insensitive)", async () => {
@@ -68,6 +69,6 @@ describe("readAvailableSkills user-invocable default", () => {
 
   test("without a project path, project-only skills are not surfaced", async () => {
     // Global scan (~/.claude) must not see the throwaway project's skills.
-    expect((await byName(undefined)).has("mac-remote")).toBe(false);
+    expect((await byName(undefined)).has(defaultSkill)).toBe(false);
   });
 });
