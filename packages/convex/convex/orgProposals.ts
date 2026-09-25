@@ -15,7 +15,7 @@ import { requireWorkspaceCaller } from "./org";
 import { applyOrgChange, type ApplyResult, type Boundary } from "./orgInit";
 import { STABILITY } from "@codecast/shared/contracts/orgCapacity";
 import { performProvisionRole, rolesInBoundary } from "./orgRoles";
-import { askCore, setInboxStatus } from "./sessionDecisions";
+import { setInboxStatus } from "./sessionDecisions";
 import {
   describeOrgChange, orgChangeDependencies, orgChangeTakesOver,
   editedOrgChange,
@@ -208,38 +208,9 @@ export async function performCreateProposal(
     changes.push({ id, seq: i + 1, change, status: "proposed", line: describeOrgChange(change), depends: orgChangeDependencies(spec.changes.map((x, j) => ({ seq: j + 1, change: x.change })))[i + 1] });
   }
 
-  // The queue: one advisory decision for the person the author reports to,
-  // through the ask core so it rides the ladder and the inbox like any other.
-  // A person proposing for themself gets no card.
-  let decision: { id: string; short_id?: string } | undefined;
-  let decision_error: string | undefined;
-  if (conversation) {
-    const who = actor.kind === "role" ? actor.role?.name ?? "A role" : conversation.title || "A session";
-    const n = spec.changes.length;
-    const asked = await askCore(ctx as any, { userId }, {
-      session_id: conversation.session_id,
-      question: `${who} proposes ${n} change${n === 1 ? "" : "s"}: ${spec.title}`,
-      options: [
-        // An acknowledgement, worded as one: answering clears the card and
-        // opens nothing, so the label must not read as an action that will.
-        { label: "Got it, I will review it on the org page", description: `${short_id} stays open there: accept, edit or skip each change. The link is in the card.` },
-        { label: "Not now", description: "Leave the proposal open; the org page keeps it" },
-      ],
-      context_md: `${spec.summary_md}\n\n[Open ${short_id} on the org page](${PROPOSAL_LINK(short_id)})\n\n${spec.changes.map((c) => `- ${describeOrgChange(c.change)}`).join("\n")}`,
-      blocking: false,
-      default_option: 0,
-      category: "allocation",
-      // S4: answering does nothing but clear the card. The link in the
-      // context is the way in; no "Decision: …" message wakes the author.
-      silent: true,
-    });
-    if (asked?.error) decision_error = asked.error;
-    else if (asked?.id) {
-      decision = { id: String(asked.id), short_id: asked.short_id };
-      await ctx.db.patch(proposalId, { decision_id: asked.id });
-    }
-  }
-  return { id: proposalId, short_id, status: "open", author, changes, link: PROPOSAL_LINK(short_id), decision, decision_error, ...(older ? { supersedes: { id: String(older._id), short_id: older.short_id, status: "open", created_at: older.created_at } } : {}) };
+  // No queue card: the proposal lives as a card in the author's conversation
+  // (org-staffing.md S24), where the person reads and decides it.
+  return { id: proposalId, short_id, status: "open", author, changes, link: PROPOSAL_LINK(short_id), ...(older ? { supersedes: { id: String(older._id), short_id: older.short_id, status: "open", created_at: older.created_at } } : {}) };
 }
 
 /**
@@ -377,8 +348,8 @@ async function resolveIfDone(ctx: Ctx, proposal: ProposalRow, now: number): Prom
   return true;
 }
 
-// The queue card exists to point at the org page; once the proposal is
-// settled there, the card leaves the queue.
+// Proposals posted before S24 carry a queue card; once the proposal is
+// settled, that card leaves the queue.
 async function clearDecision(ctx: Ctx, proposal: ProposalRow, now: number): Promise<void> {
   if (!proposal.decision_id) return;
   const d = await ctx.db.get(proposal.decision_id);
@@ -780,7 +751,6 @@ export async function performReviseProposal(ctx: Ctx, userId: Id<"users">, args:
   for (const w of writes) await w();
   await ctx.db.patch(proposal._id, { revisions: [...(proposal.revisions ?? []), ...journal], updated_at: now });
   const after = await changesOf(ctx, proposal._id);
-  await refreshDecisionCard(ctx, proposal, after);
   const depends = orgChangeDependencies(after.filter((c) => c.status !== "removed").map((c) => ({ seq: c.seq, change: c.change })));
   return {
     proposal: proposal.short_id,
@@ -792,20 +762,6 @@ export async function performReviseProposal(ctx: Ctx, userId: Id<"users">, args:
   };
 }
 
-/** The queue card names the count and lists the changes; after a revise it
- *  says what the proposal now carries. A card already answered is left. */
-async function refreshDecisionCard(ctx: Ctx, proposal: ProposalRow, all: ChangeRow[]): Promise<void> {
-  if (!proposal.decision_id) return;
-  const d = await ctx.db.get(proposal.decision_id);
-  if (d?.status !== "pending") return;
-  const live = all.filter((c) => c.status !== "removed");
-  const n = live.length;
-  const who = String(d.question ?? "").split(" proposes ")[0] || "The author";
-  await ctx.db.patch(d._id, {
-    question: `${who} proposes ${n} change${n === 1 ? "" : "s"}: ${proposal.title}`,
-    context_md: `${proposal.summary_md}\n\n[Open ${proposal.short_id} on the org page](${PROPOSAL_LINK(proposal.short_id)})\n\n${live.map((c) => `- ${describeOrgChange(c.change)}`).join("\n")}`,
-  });
-}
 
 // ── The thread (S18) ────────────────────────────────────────────────────────
 
@@ -1041,4 +997,22 @@ export const revise = mutation({
 export const say = mutation({
   args: { api_token: v.optional(v.string()), proposal: v.string(), change: v.optional(v.number()), ask: v.optional(v.number()), body: v.string(), client_id: v.optional(v.string()) },
   handler: async (ctx, { api_token, ...args }) => performSayInThread(ctx, await requireCaller(ctx, api_token, undefined), args),
+});
+
+/** One sweep for S24: withdraw the queue cards proposals filed before
+ *  proposals stopped filing them. Idempotent; a settled card is left. */
+export const clearProposalQueueCards = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    let cleared = 0;
+    for (const p of await ctx.db.query("org_proposals").collect()) {
+      if (!p.decision_id) continue;
+      const d = await ctx.db.get(p.decision_id);
+      if (d?.status !== "pending") continue;
+      await clearDecision(ctx as any, p as any, now);
+      cleared++;
+    }
+    return { cleared };
+  },
 });

@@ -13,7 +13,7 @@ import {
   performReviseProposal, performSayInThread, formatProposalMessage, callerIsAuthor, performDecideAsk } from "./orgProposals";
 
 // Staffing proposals (docs/architecture/org-staffing.md S4): create from a
-// session or a person, one advisory decision for the addressed person, decide
+// session or a person (no queue card: the proposal is a card in its thread), decide
 // change by change with an apply at once through the one apply core, accept
 // all in the contract's order, a session caller refused, withdraw.
 
@@ -63,30 +63,22 @@ const change = (c: any, rationale = "because") => ({ change: c, rationale, evide
 const spec = (changes: any[], over: Record<string, any> = {}) => ({ title: "Reshape growth", summary_md: "Two moves.", mode: "review", changes, ...over });
 
 describe("orgProposals.create", () => {
-  test("a session's proposal stores its changes in order and queues one advisory decision for the person", async () => {
+  test("a session's proposal stores its changes in order and files nothing in the person's queue", async () => {
     const db = fixtures();
     const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: spec([change({ kind: "budget", handle: "growth", caps: { wakes_per_day: 12 } }), change({ kind: "retire", handle: "growth" })]) });
     expect(r).toMatchObject({ short_id: "op-1", status: "open", author: { kind: "session", id: S1 }, link: "/org?proposal=op-1" });
     expect(r.changes.map((c: any) => [c.seq, c.line])).toEqual([[1, "budget @growth wakes 12/day"], [2, "retire @growth"]]);
-    expect(r.decision_error).toBeUndefined();
-    const d = await db.get(r.decision.id);
-    expect(d).toMatchObject({ status: "pending", blocking: false, default_option: 0, conversation_id: S1, category: "allocation" });
-    expect(d.question).toBe("Org analyzer proposes 2 changes: Reshape growth");
-    expect(d.options.map((o: any) => o.label)).toEqual(["Got it, I will review it on the org page", "Not now"]);
-    // A pointer, not a question (S4): answering clears the card and delivers nothing.
-    expect(d.silent).toBe(true);
-    expect(d.context_md).toContain("/org?proposal=op-1");
-    expect((await db.query("decision_inbox").collect()).map((x: any) => [x.user_id, x.status])).toEqual([[ME, "pending"]]);
-    expect((await db.get(r.id)).decision_id).toBe(r.decision.id);
+    // The proposal is a card in the author's thread (S24); the queue stays clear.
+    expect(await db.query("session_decisions").collect()).toEqual([]);
+    expect(await db.query("decision_inbox").collect()).toEqual([]);
   });
 
-  test("a role's standing session authors as the role; a person authors as a user and gets no card", async () => {
+  test("a role's standing session authors as the role; a person authors as a user", async () => {
     const db = fixtures();
     const asRole = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s_growth", spec: spec([change({ kind: "trust", handle: "growth", trust: "decide" })]) });
     expect(asRole.author).toEqual({ kind: "role", id: GROWTH });
-    expect(asRole.decision).toBeDefined();
     const asUser = await performCreateProposal(ctxOf(db), ME as any, { spec: spec([change({ kind: "projects", changes: [{ op: "create", title: "Platform" }] })]) });
-    expect(asUser).toMatchObject({ short_id: "op-2", author: { kind: "user", id: ME }, decision: undefined });
+    expect(asUser).toMatchObject({ short_id: "op-2", author: { kind: "user", id: ME } });
     expect((await db.get(asUser.id))).toMatchObject({ scope_user_id: ME, team_id: undefined });
   });
 
@@ -130,7 +122,7 @@ describe("orgProposals.decide", () => {
     expect(added.change.title).toBe("Second plan");
   });
 
-  test("each change kind applies at once through the apply core; skip and edits are honored; the proposal resolves and its card clears", async () => {
+  test("each change kind applies at once through the apply core; skip and edits are honored; the proposal resolves", async () => {
     const db = fixtures();
     const p = await propose(db, [
       change({ kind: "projects", changes: [{ op: "create", title: "Platform", project_path: "/repo/platform" }] }),
@@ -180,8 +172,6 @@ describe("orgProposals.decide", () => {
     const proposal = await db.get(p.id);
     expect(proposal).toMatchObject({ status: "resolved" });
     expect(proposal.resolved_at).toBeGreaterThan(0);
-    expect((await db.get(p.decision.id)).status).toBe("withdrawn");
-    expect((await db.query("decision_inbox").collect())[0].status).toBe("done");
     const read = await readProposal(ctx, ME as any, "op-1");
     expect(read.counts).toEqual({ total: 10, decided: 10, applied: 8, failed: 0, skipped: 2 });
     // A decided change cannot be decided twice.
@@ -212,11 +202,9 @@ describe("orgProposals.decide", () => {
     expect(first).toMatchObject({ status: "failed", note: expect.stringContaining("@growth is already or-1"), resolved: false });
     expect(await performDecideChange(ctx, ME as any, { change_id: p.ids[1], verdict: "skip" })).toMatchObject({ status: "skipped", resolved: false });
     expect((await db.get(p.id)).status).toBe("open");
-    expect((await db.get(p.decision.id)).status).toBe("pending");
     // Retry with edits: the failed row is decided again, and only then does the proposal resolve.
     const retry = await performDecideChange(ctx, ME as any, { change_id: p.ids[0], verdict: "accept", edits: { handle: "growth-2" }, provision: false });
     expect(retry).toMatchObject({ status: "applied", role: { handle: "growth-2" }, resolved: true });
-    expect((await db.get(p.decision.id)).status).toBe("withdrawn");
   });
 
   test("edits must leave a valid change; an edit to one cap keeps the others", () => {
@@ -366,7 +354,6 @@ describe("orgProposals.withdraw and list", () => {
     const b = await performCreateProposal(ctx, ME as any, { team_id: TEAM, from_session: "s1", spec: spec([change({ kind: "retire", handle: "growth" })], { title: "B" }) });
     await expect(performWithdrawProposal(ctx, MATE as any, { proposal: a.short_id })).rejects.toThrow("author or a team admin");
     expect(await performWithdrawProposal(ctx, ME as any, { proposal: a.short_id })).toEqual({ proposal: "op-1", status: "withdrawn" });
-    expect((await db.get(a.decision.id)).status).toBe("withdrawn");
     await expect(performWithdrawProposal(ctx, ME as any, { proposal: a.short_id })).rejects.toThrow("already withdrawn");
     await expect(performDecideChange(ctx, ME as any, { change_id: `${a.short_id}#1`, verdict: "skip" })).rejects.toThrow("is withdrawn");
     const listed = await listProposals(ctx, ME as any, { team_id: TEAM });
@@ -782,11 +769,6 @@ describe("orgProposals.revise", () => {
     expect(read.status).toBe("open");
     expect(read.revisions.length).toBe(3);
     expect(read.counts.total).toBe(3);
-    // The queue card now says three changes and lists what is left.
-    const d = await db.get(r.decision.id);
-    expect(d.question).toBe("Org analyzer proposes 3 changes: Reshape growth");
-    expect(d.context_md).toContain("- scope @growth +pr-2");
-    expect(d.context_md).not.toContain("- retire @growth");
   });
 
   test("a default note names what happened when the author gives none", async () => {
