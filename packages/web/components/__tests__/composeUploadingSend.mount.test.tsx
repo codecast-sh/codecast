@@ -285,10 +285,12 @@ test("a refused commit keeps the popup open with the text instead of dismissing"
   container.remove();
 }, 30_000);
 
-// Clicking a thumbnail selects it while the caret stays in the textarea, and a
-// bare Backspace then removes it. ⌥/⌘/Ctrl+Backspace are text edits, and a
-// click back into the text ends the selection, so neither may take the image.
-async function mountWithSelectedImage() {
+// Clicking a thumbnail selects it (and opens the preview) while the caret stays
+// in the textarea. No key removes an image, since a Backspace meant for words
+// would lose it; only the thumbnail's × does. Typing or clicking back into the
+// text ends the selection so keys go to the text, but the preview stays up so
+// the image can be read while writing about it.
+async function mountWithSelectedImage({ keepPreview = false } = {}) {
   const { client, restore } = fakeConvex(deferred<void>());
   fakeDispatch(deferred<void>());
   const { MessageInput } = await import("../MessageInput");
@@ -307,24 +309,26 @@ async function mountWithSelectedImage() {
   await act(() => { setNativeValue(textarea, textarea.value + "hello world"); });
   await flush();
   const images = () => container.querySelectorAll('img[alt="Pasted"]').length;
-  const selected = () => (container.textContent ?? "").includes("remove");
+  const selected = () => (container.textContent ?? "").includes("navigate");
+  const previewOpen = () => !!w.document.querySelector('img[alt="Image preview"]');
   const key = (init: KeyboardEventInit) => act(() => { textarea.dispatchEvent(new w.KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init })); });
   await act(() => { (container.querySelector('img[alt="Pasted"]')!.closest(".group") as HTMLElement).click(); });
-  await key({ key: "Escape" }); // closes the preview, keeps the selection
+  expect(previewOpen()).toBe(true);
+  if (!keepPreview) await key({ key: "Escape" }); // closes the preview, keeps the selection
   expect(images()).toBe(1);
   expect(selected()).toBe(true);
   const cleanup = async () => { await act(() => root.unmount()); restore(); container.remove(); };
-  return { textarea, images, selected, key, cleanup };
+  return { textarea, images, selected, previewOpen, key, cleanup };
 }
 
-test("modified Backspace on a selected image edits text, not the image", async () => {
+test("no Backspace or Delete removes a selected image", async () => {
   const c = await mountWithSelectedImage();
-  for (const mod of [{ altKey: true }, { metaKey: true }, { ctrlKey: true }]) {
-    await c.key({ key: "Backspace", ...mod });
-    expect(c.images()).toBe(1);
+  for (const k of ["Backspace", "Delete"]) {
+    for (const mod of [{}, { altKey: true }, { metaKey: true }, { ctrlKey: true }]) {
+      await c.key({ key: k, ...mod });
+      expect(c.images()).toBe(1);
+    }
   }
-  await c.key({ key: "Backspace" });
-  expect(c.images()).toBe(0);
   await c.cleanup();
 }, 30_000);
 
@@ -332,16 +336,18 @@ test("clicking back into the text ends the image selection", async () => {
   const c = await mountWithSelectedImage();
   await act(() => { c.textarea.dispatchEvent(new w.MouseEvent("mousedown", { bubbles: true })); });
   expect(c.selected()).toBe(false);
-  await c.key({ key: "Backspace" });
   expect(c.images()).toBe(1);
   await c.cleanup();
 }, 30_000);
 
-test("editing the text ends the image selection", async () => {
-  const c = await mountWithSelectedImage();
+test("typing with the preview open keeps it open; Escape then closes it", async () => {
+  const c = await mountWithSelectedImage({ keepPreview: true });
   await act(() => { setNativeValue(c.textarea, c.textarea.value + "!"); });
   expect(c.selected()).toBe(false);
-  await c.key({ key: "Backspace" });
+  expect(c.previewOpen()).toBe(true);
   expect(c.images()).toBe(1);
+  await c.key({ key: "Escape" });
+  expect(c.previewOpen()).toBe(false);
+  expect(c.textarea.value.endsWith("hello world!")).toBe(true);
   await c.cleanup();
 }, 30_000);

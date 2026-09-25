@@ -1778,10 +1778,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const acScrollRef = useRef(false);
   // The image strip and the queue take keys while the caret stays in the
   // textarea, so any sign the user is back on the text (a click in it, an
-  // edit) ends that selection before a Backspace meant for words reaches it.
+  // edit) ends that selection before a key meant for words reaches it. The
+  // lightbox stays up so the image can be read while typing about it.
   const leaveStripSelection = () => {
     setSelectedImageIndex(null);
-    setLightboxImageIndex(null);
     setSelectedQueueIndex(null);
   };
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -1854,10 +1854,13 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     const climbIntoTranscript = () => {
       if (!enterReviewFromComposer()) return false;
       leaveStripSelection();
+      setLightboxImageIndex(null);
       return true;
     };
-    // Only a bare Backspace/Delete removes a strip item. ⌥/⌘/Ctrl+Backspace
-    // are word and line deletes in the text, so they leave the strip alone.
+    // Only a bare Backspace/Delete removes a queue item. ⌥/⌘/Ctrl+Backspace
+    // are word and line deletes in the text, so they leave the queue alone.
+    // Images have no delete key: a Backspace meant for words would lose one,
+    // so only the thumbnail's × removes an image.
     const isStripDelete = (e.key === "Backspace" || e.key === "Delete") && !e.altKey && !e.metaKey && !e.ctrlKey;
     if (altChordDirection(e.nativeEvent) === "up" && climbIntoTranscript()) {
       e.preventDefault();
@@ -1882,14 +1885,6 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
           setSelectedImageIndex(null);
           setLightboxImageIndex(null);
         }
-        return;
-      }
-      if (isStripDelete) {
-        e.preventDefault();
-        const nextIdx = pastedImages.length <= 1 ? null : Math.min(selectedImageIndex, pastedImages.length - 2);
-        clearImage(selectedImageIndex);
-        setSelectedImageIndex(nextIdx);
-        if (lightboxImageIndex === selectedImageIndex) setLightboxImageIndex(nextIdx);
         return;
       }
       if (e.key === "Enter" || e.key === " ") {
@@ -2005,6 +2000,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     if (e.key === "Escape") {
       e.preventDefault();
       e.stopPropagation();
+      if (lightboxImageIndex !== null) {
+        setLightboxImageIndex(null);
+        return;
+      }
       const hasText = messageRef.current.trim().length > 0;
       if (escapeTimerRef.current) {
         clearTimeout(escapeTimerRef.current);
@@ -2503,7 +2502,6 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     <span className="text-[10px] text-sol-text-dim ml-1 flex items-center gap-2">
                       <span className="inline-flex items-center gap-1"><KeyCap size="xs">←</KeyCap><KeyCap size="xs">→</KeyCap> navigate</span>
                       <span className="inline-flex items-center gap-1"><KeyCap size="xs">Space</KeyCap> preview</span>
-                      <span className="inline-flex items-center gap-1"><KeyCap size="xs">Del</KeyCap> remove</span>
                       <span className="inline-flex items-center gap-1"><KeyCap size="xs">Esc</KeyCap> exit</span>
                     </span>
                   )}
