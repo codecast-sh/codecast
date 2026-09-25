@@ -11,6 +11,7 @@
 import rehypeHighlight from "rehype-highlight";
 import remarkBreaks from "remark-breaks";
 import { entityRemarkPlugins } from "../lib/remarkEntityIds";
+import { remarkEntityCards, type EntityCardsOptions } from "../lib/remarkEntityCards";
 import { CollapsibleImage, ImageRowParagraph } from "./tools/MarkdownImages";
 import { EntityAwareCode, EntityAwareLink } from "./EntityIdPill";
 import { CodeBlock } from "./CodeBlock";
@@ -76,3 +77,10 @@ function remarkUserHtmlAsText() {
   return (tree: any) => walk(tree, true);
 }
 export const USER_MD_REMARK = [...entityRemarkPlugins, remarkBreaks, remarkUserHtmlAsText];
+// An agent's body: entity pills, and a staffing proposal alone on its line
+// drawn live as a card (org-staffing.md S24: the chief of staff posts a small
+// proposal and writes its `op-N` on its own line). Only that type is promoted
+// here, so a lone task id in a transcript keeps the inline pill it always
+// had; team chat (ChatMessage) promotes every shared reference to a card.
+const ASSISTANT_CARDS: EntityCardsOptions = { types: ["proposal"] };
+export const ASSISTANT_MD_REMARK = [...entityRemarkPlugins, [remarkEntityCards, ASSISTANT_CARDS] as [typeof remarkEntityCards, EntityCardsOptions]];

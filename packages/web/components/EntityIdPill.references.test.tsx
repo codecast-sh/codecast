@@ -647,3 +647,21 @@ describe("page-load bar", () => {
     expect(html).toContain('href="/tasks/' + TASK_CONVEX_ID + '"');
   });
 });
+
+// A codecast URL for a route with no entity pill (/org?proposal=…) is still a
+// place in this app. As a new tab it left the desktop app for the system browser.
+describe("codecast route links", () => {
+  test("an app route opens in this window at its path", () => {
+    const html = render("See https://codecast.sh/org?proposal=op-19 for the change.");
+    expect(html).toContain('href="/org?proposal=op-19"');
+    expect(html).not.toContain('target="_blank"');
+  });
+
+  test("a marketing page and a foreign site stay ordinary external links", () => {
+    for (const url of ["https://codecast.sh/pricing", "https://example.com/org"]) {
+      const html = render(`Read ${url} first.`);
+      expect(html).toContain(`href="${url}"`);
+      expect(html).toContain('target="_blank"');
+    }
+  });
+});

@@ -578,3 +578,33 @@ describe("initiatives (in-N)", () => {
     expect(normalizeEntityType("initiatives")).toBe("initiative");
   });
 });
+
+describe("proposals (op-N)", () => {
+  // `op` is an English word too (op-ed), so a proposal takes digits only, and
+  // its page is the org page with the proposal open: addressed by query.
+  test("op-N resolves to the proposal type, whatever its case", () => {
+    expect(inferEntityTypeFromShortId("op-3")).toBe("proposal");
+    expect(entityTypeFromId("OP-12")).toBe("proposal");
+    expect(isEntityId("op-3")).toBe(true);
+  });
+
+  test("prose that starts with op- is never a proposal", () => {
+    for (const word of ["op-ed", "op-amp", "op-3rd", "op-"]) {
+      expect(inferEntityTypeFromShortId(word)).toBeNull();
+      expect(isEntityId(word)).toBe(false);
+    }
+    const prose = "The op-ed names op-3 and OP-12 (see ct-4102) by the op-3rd draft.";
+    expect(prose.match(bareEntityIdRegex())).toEqual(["op-3", "OP-12", "ct-4102"]);
+  });
+
+  test("a proposal routes to the org page by query and its url parses back", () => {
+    expect(entityRoute("proposal", "op-3")).toBe("/org?proposal=op-3");
+    expect(buildEntityUrl("proposal", "op-3")).toBe("https://codecast.sh/org?proposal=op-3");
+    expect(parseEntityUrl("https://codecast.sh/org?proposal=op-3")).toEqual({ type: "proposal", id: "op-3" });
+    expect(parseEntityUrl("/org?proposal=op-3")).toEqual({ type: "proposal", id: "op-3" });
+    // The org page alone, or a role's page under it, names no proposal.
+    expect(parseEntityUrl("/org")).toBeNull();
+    expect(parseEntityUrl("https://codecast.sh/org/or-7")).toBeNull();
+    expect(normalizeEntityType("org")).toBe("proposal");
+  });
+});

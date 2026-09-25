@@ -13,7 +13,7 @@
  * 32-char ids: their table was simply never registered here.
  */
 
-export type EntityType = "task" | "plan" | "session" | "doc" | "project" | "initiative" | "trigger" | "pr" | "commit";
+export type EntityType = "task" | "plan" | "session" | "doc" | "project" | "initiative" | "proposal" | "trigger" | "pr" | "commit";
 
 /** The public web origin that serves codecast object pages. */
 export const CODECAST_BASE_URL = "https://codecast.sh";
@@ -37,6 +37,10 @@ export const ENTITY_ROUTE: Record<EntityType, string> = {
   doc: "/docs",
   project: "/projects",
   initiative: "/initiatives",
+  // A staffing proposal lives on the org page, beside the chart that draws
+  // its ghosts: addressed by query (`/org?proposal=op-N`, see QUERY_PARAM),
+  // because `/org/<or-N>` is a role's page.
+  proposal: "/org",
   trigger: "/triggers",
   // Repository objects are addressed by repository plus number or sha, so
   // these prefixes are completed by `entityRoute` (see repoObjectRoute), not by
@@ -57,14 +61,16 @@ export const SHORT_ID_PREFIX: Record<string, EntityType> = {
   pl: "plan",
   tr: "trigger",
   in: "initiative",
+  op: "proposal",
 };
 
 /**
  * A prefix that is also an English word takes digits only: `in-7` is an
- * initiative, while "in-app" and "in-house" are prose. Every matcher below
- * derives from this, so the rule holds on every surface at once.
+ * initiative and `op-3` a proposal, while "in-app", "in-house" and "op-ed"
+ * are prose. Every matcher below derives from this, so the rule holds on
+ * every surface at once.
  */
-const DIGITS_ONLY_PREFIX: ReadonlySet<string> = new Set(["in"]);
+const DIGITS_ONLY_PREFIX: ReadonlySet<string> = new Set(["in", "op"]);
 
 /**
  * URL path segment → entity type. Several segments alias to one type
@@ -86,6 +92,7 @@ const SEGMENT_TYPE: Record<string, EntityType> = {
   project: "project",
   initiatives: "initiative",
   initiative: "initiative",
+  org: "proposal",
   triggers: "trigger",
   trigger: "trigger",
   // Pre-rename alias, still live in old links.
@@ -93,12 +100,17 @@ const SEGMENT_TYPE: Record<string, EntityType> = {
 };
 
 /**
- * Legacy query-param addressing, kept for PARSING old links only. Triggers
- * used to have no detail page — the list page opened one row via `?task=<id>`
- * — so those links are still live in old messages. New links always use the
- * path route (`/triggers/<id>`).
+ * Query-param addressing. A proposal is addressed by query in both directions
+ * (`/org?proposal=op-N` is its canonical page: the org page with that
+ * proposal open). A trigger's entry is kept for PARSING old links only —
+ * triggers used to have no detail page, the list page opened one row via
+ * `?task=<id>`, and those links are still live in old messages — so new
+ * trigger links always use the path route (`/triggers/<id>`).
  */
-const LEGACY_QUERY_PARAM: Partial<Record<EntityType, string>> = { trigger: "task" };
+const QUERY_PARAM: Partial<Record<EntityType, string>> = { trigger: "task", proposal: "proposal" };
+/** Types whose page is the query form alone: a path under their route is
+ *  another object's page (`/org/<or-N>` is a role), never one of theirs. */
+const QUERY_ONLY: ReadonlySet<EntityType> = new Set(["proposal"]);
 
 /** Normalize a canonical type or a url-segment alias to a canonical EntityType. */
 export function normalizeEntityType(type: string): EntityType | null {
@@ -116,6 +128,7 @@ export function entityRoute(type: string, id: string): string | null {
   const norm = normalizeEntityType(type);
   if (!norm) return null;
   if (norm === "pr" || norm === "commit") return repoObjectRoute(id);
+  if (QUERY_ONLY.has(norm)) return `${ENTITY_ROUTE[norm]}?${QUERY_PARAM[norm]}=${encodeURIComponent(id)}`;
   return `${ENTITY_ROUTE[norm]}/${id}`;
 }
 
@@ -631,10 +644,13 @@ export function parseEntityUrl(
   const type = SEGMENT_TYPE[segs[0].toLowerCase()];
   if (!type) return null;
 
-  // Legacy query-addressed links (old /triggers?task=<id>) still resolve; the
-  // path segment wins when both are present.
-  const param = LEGACY_QUERY_PARAM[type];
-  if (param && segs.length < 2) {
+  // Query-addressed links (/org?proposal=op-N, old /triggers?task=<id>). For
+  // a query-only type a deeper path is another object's page (/org/<or-N> is
+  // a role), so it resolves to nothing here; otherwise the path segment wins
+  // when both are present.
+  const param = QUERY_PARAM[type];
+  if (param && (segs.length < 2 || QUERY_ONLY.has(type))) {
+    if (segs.length >= 2) return null;
     const qId = search ? new URLSearchParams(search).get(param)?.trim() : null;
     return qId ? { type, id: qId } : null;
   }

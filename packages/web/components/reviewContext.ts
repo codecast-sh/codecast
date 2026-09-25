@@ -8,6 +8,7 @@ import type { PendingComment } from "../lib/quoteFormat";
 // selection toolbar consume it.
 export type ReviewComposer = {
   quote: (text: string) => void; // append a blockquote of `text` to the composer now
+  populate?: (text: string, opts?: { append?: boolean }) => void; // put `text` in the composer as the next message
   submit: () => void; // compile the pending-comment batch into the composer
   jumpToComment?: (comment: PendingComment) => void;
   scrollToBlock?: (block: HTMLElement, align: "center" | "nearest") => void;

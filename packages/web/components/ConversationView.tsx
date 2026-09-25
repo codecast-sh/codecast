@@ -1615,8 +1615,9 @@ const ConversationViewInner = (
     if (msg.role === "system") return 8;
     if (msg.role === "user") {
       const kind = userMsgKindMap.get(msg._id);
-      if (foldWorkingTurns && !FOLD_KEPT_USER_KINDS.has(kind?.kind ?? 'normal')) return kind?.kind === 'role_wake' ? 40 : 0;
+      if (foldWorkingTurns && !FOLD_KEPT_USER_KINDS.has(kind?.kind ?? 'normal')) return 0;
       switch (kind?.kind) {
+        case 'role_wake': return 36;
         case 'command': return 120;
         case 'bash_input': return 130;
         case 'bash_output': return commandExpansionMap.consumed.has(msg._id) ? 0 : 110;
@@ -2289,6 +2290,7 @@ const ConversationViewInner = (
     const populate = (t: string, o?: { append?: boolean }) => populateInputRef.current?.(t, o);
     return {
       quote: (text: string) => quoteToComposer(text, populate),
+      populate,
       submit: () => submitReview(conversation?._id ?? "", populate),
       ...reviewNavigation,
     };
@@ -3302,14 +3304,10 @@ const ConversationViewInner = (
 
     if (msg.role === "user") {
       const kind = userMsgKindMap.get(msg._id) ?? { kind: 'normal' as const };
-      if (foldWorkingTurns && !FOLD_KEPT_USER_KINDS.has(kind.kind)) {
-        // A machine sent this. A wake frame still says where the turn's
-        // message went (F4.2): the hands it started, the sessions it wrote to.
-        if (kind.kind === 'role_wake') {
-          return <RoleWakeBlock key={msg._id} frame={kind.frame} timestamp={msg.timestamp} conversationId={conversation?._id} until={turnAggregates.routingOf.get(msg._id)?.until ?? null} sentTo={turnAggregates.routingOf.get(msg._id)?.sentTo} routingOnly />;
-        }
-        return null;
-      }
+      // A machine sent this; fold mode drops it. A role's wake frame is kept
+      // (FOLD_KEPT_USER_KINDS): it rests as one line saying the role woke and
+      // why, and where the turn's message went (F4.2).
+      if (foldWorkingTurns && !FOLD_KEPT_USER_KINDS.has(kind.kind)) return null;
       switch (kind.kind) {
         case 'session_handoff':
           return <SessionHandoffCard key={msg._id} handoff={kind.handoff} source={handedOffFrom} timestamp={msg.timestamp} convLink={convLink} navigateToSession={navigateToSession} />;

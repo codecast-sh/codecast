@@ -6,7 +6,7 @@ import { splitMarkdownBlocks } from "../../lib/markdownBlocks";
 import { RevealHost } from "../ObjectReveal";
 import { tryRenderHtmlMessage } from "../HtmlSnippet";
 import { entityRemarkPlugins } from "../../lib/remarkEntityIds";
-import { MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS, USER_MD_REMARK } from "../messageMarkdown";
+import { MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS, USER_MD_REMARK, ASSISTANT_MD_REMARK } from "../messageMarkdown";
 import { HighlightContext } from "../HighlightContext";
 import { MD_COMPONENTS_NO_IMG } from "../../lib/conversationMarkdown";
 import { compactionProgressMessage } from "../../lib/compactionProgress";
@@ -103,7 +103,7 @@ function renderMessageMarkdownCached(content: string, userText?: boolean): React
   }
   const el = ReactMarkdownBase({
     children: content,
-    remarkPlugins: userText ? USER_MD_REMARK : entityRemarkPlugins,
+    remarkPlugins: userText ? USER_MD_REMARK : ASSISTANT_MD_REMARK,
     rehypePlugins: MESSAGE_MD_REHYPE,
     components: MESSAGE_MD_COMPONENTS,
   });
@@ -139,7 +139,7 @@ export const MessageMarkdown = memo(function MessageMarkdown({ content, userText
   if (query) {
     return (
       <RevealHost persistKey={content}>
-        <ReactMarkdown remarkPlugins={userText ? USER_MD_REMARK : entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MESSAGE_MD_COMPONENTS}>
+        <ReactMarkdown remarkPlugins={userText ? USER_MD_REMARK : ASSISTANT_MD_REMARK} rehypePlugins={MESSAGE_MD_REHYPE} components={MESSAGE_MD_COMPONENTS}>
           {content}
         </ReactMarkdown>
       </RevealHost>

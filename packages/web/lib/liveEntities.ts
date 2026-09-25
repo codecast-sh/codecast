@@ -481,6 +481,9 @@ export function findEntityInStore(
       // The workspace's initiatives are one snapshot, so `in-N` names a row
       // the client already holds.
       return lookup(state.initiatives, rawId);
+    case "proposal":
+      // The workspace's proposals (list rows, and any the org page opened).
+      return lookup(state.orgProposals, rawId);
     case "trigger":
       // The viewer's own triggers (agentTasks) resolve locally by Convex id or
       // short id; a foreign (bot-owned) trigger waits for webGet.

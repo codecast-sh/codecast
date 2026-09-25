@@ -420,3 +420,29 @@ describe("pull request references in chat", () => {
     expect(html).toContain("union-ai/union-mobile#3263");
   });
 });
+
+describe("a transcript promotes a staffing proposal alone", () => {
+  // An agent's message body (messageMarkdown ASSISTANT_MD_REMARK) registers
+  // the plugin with `types: ["proposal"]`: an `op-N` on its own line draws
+  // the proposal live (org-staffing.md S24), while a lone task id keeps the
+  // inline pill a transcript always gave it.
+  const TRANSCRIPT = [...entityRemarkPlugins, [remarkEntityCards, { types: ["proposal"] }]] as any[];
+  const renderTranscript = (markdown: string) => renderToStaticMarkup(
+    <MemoryRouter>
+      <ReactMarkdown remarkPlugins={TRANSCRIPT} components={MD_COMPONENTS as any}>{markdown}</ReactMarkdown>
+    </MemoryRouter>,
+  );
+
+  test("op-N on its own line is a card row", () => {
+    const html = renderTranscript("Here is the change.\n\nop-5\n\nSay the word.");
+    expect(html).toContain('class="entity-card-row"');
+    expect(html).toContain("Here is the change.");
+  });
+
+  test("a lone task id stays the inline pill", () => {
+    const html = renderTranscript("Filed it.\n\nct-46943");
+    expect(html).not.toContain("entity-card-row");
+    expect(html).toContain("entity-ref");
+    expect(html).toContain("Rich object preview cards in chat");
+  });
+});
