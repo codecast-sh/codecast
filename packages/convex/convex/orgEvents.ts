@@ -112,10 +112,16 @@ export async function roleReportsTo(ctx: { db: any }, role: any, ancestorId: str
   return false;
 }
 
+// The NEWEST waiting rows. A flush decides from this window alone, so the row
+// that just arrived (a person's mention) must always be in it; oldest-first let
+// a backlog past the cap hide every new row, and nothing ever woke the role
+// again. Rows older than the window are drained by the flush that fills it
+// (orgWakes.drainOverflow).
 export async function unflushedRowsFor(ctx: { db: any }, roleId: Id<"org_roles">): Promise<any[]> {
   return await ctx.db
     .query("role_wake_outbox")
     .withIndex("by_role_flushed", (q: any) => q.eq("role_id", roleId).eq("flushed_at", undefined))
+    .order("desc")
     .take(OUTBOX_READ_CAP);
 }
 

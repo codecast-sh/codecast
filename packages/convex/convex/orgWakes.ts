@@ -17,6 +17,7 @@ import { internalMutation, internalQuery } from "./functions";
 import { charterLine } from "./lib/orgCharter";
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
+import { internal } from "./_generated/api";
 import { ACTIVE_AGENT_STATUSES } from "@codecast/shared/contracts";
 import { nextShortId } from "./counters";
 import { enqueuePendingMessage } from "./pendingMessages";
@@ -172,15 +173,22 @@ export function standingFrameLines(projects: Array<{ title: string; short_id?: s
   });
 }
 
+const SCOPE_PLANS_NAMED = 5;
+
 export function buildFrame(input: FrameInput): Frame {
   const { role, rows, facts, now } = input;
   const since = role.last_frame_seq ?? 0;
   const budget = { left: FRAME_FACT_BUDGET };
   const sections: string[] = [];
 
+  // A plan inside a listed project is named by its project; only plans that
+  // stand outside every listed project are named, a few of them at most.
+  const scopeProjectIds = new Set(facts.scope.projects.map((p) => String(p.id)));
+  const loosePlans = facts.scope.plans.filter((p) => !p.project_id || !scopeProjectIds.has(p.project_id));
   const scopeNames = [
     ...facts.scope.projects.map((p) => `project ${p.title}`),
-    ...facts.scope.plans.map((p) => `plan ${p.short_id} ${p.title}`),
+    ...loosePlans.slice(0, SCOPE_PLANS_NAMED).map((p) => `plan ${p.short_id} ${p.title}`),
+    ...(loosePlans.length > SCOPE_PLANS_NAMED ? [`and ${loosePlans.length - SCOPE_PLANS_NAMED} more plans`] : []),
   ];
   sections.push([
     `## You`,
@@ -369,7 +377,42 @@ async function logWake(
 
 async function markFlushed(ctx: Ctx, rows: any[], wakeId: Id<"role_wakes">, now: number): Promise<void> {
   for (const r of rows) await ctx.db.patch(r._id, { flushed_at: now, wake_id: wakeId });
+  // A full window means older rows wait behind it. This frame already told
+  // the role what changed, so they close under the same wake.
+  if (rows.length >= OUTBOX_READ_CAP && ctx.scheduler) {
+    const before = Math.min(...rows.map((r) => r._creationTime));
+    await ctx.scheduler.runAfter(0, internal.orgWakes.drainOverflow, { role_id: rows[0].role_id, wake_id: wakeId, before });
+  }
 }
+
+const DRAIN_PAGE = 500;
+
+// Close the rows older than a flushed window, a page per run. An immediate row
+// is someone waiting on the role (a mention, a decision), so it is never closed
+// silently: it stays, and one flush after the drain carries it.
+export const drainOverflow = internalMutation({
+  args: { role_id: v.id("org_roles"), wake_id: v.id("role_wakes"), before: v.number(), after: v.optional(v.number()), immediate: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const page = await ctx.db
+      .query("role_wake_outbox")
+      .withIndex("by_role_flushed", (q: any) => {
+        const scoped = q.eq("role_id", args.role_id).eq("flushed_at", undefined);
+        return args.after === undefined ? scoped.lt("_creationTime", args.before) : scoped.gt("_creationTime", args.after).lt("_creationTime", args.before);
+      })
+      .take(DRAIN_PAGE);
+    const now = Date.now();
+    let immediate = !!args.immediate;
+    for (const r of page) {
+      if (r.kind === "immediate") { immediate = true; continue; }
+      await ctx.db.patch(r._id, { flushed_at: now, wake_id: args.wake_id });
+    }
+    if (page.length === DRAIN_PAGE) {
+      await ctx.scheduler.runAfter(0, internal.orgWakes.drainOverflow, { ...args, after: page[page.length - 1]._creationTime, immediate });
+    } else if (immediate) {
+      await scheduleFlush(ctx, args.role_id, 0);
+    }
+  },
+});
 
 // Rows a gate kept waiting carry the first hold's time; the next frame marks
 // their group "(held)" so the backlog reads apart from the cause of the wake.
