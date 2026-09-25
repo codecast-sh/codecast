@@ -3141,23 +3141,30 @@ describe("agent channels: roles and sessions in chat", () => {
   const ROLE = "org_roles_growth" as any;
   const CONV = "conv-anchor" as any;
 
-  // A team role @growth whose standing session is the anchor's conversation
-  // (hosted by Bob), Alice's session jx7alic, and Bob's team-visible session
-  // jx7bobb. Alice owns hers and, as a teammate, may send into Bob's.
+  const GROWTH_SEAT = "anchor-growth" as any;
+
+  // The workspace anchor, and a team role @growth seated on its own anchor row
+  // whose standing session is CONV (hosted by Bob), Alice's session jx7alic,
+  // and Bob's team-visible session jx7bobb. Alice owns hers and, as a
+  // teammate, may send into Bob's.
   function seed(extra: Record<string, any[]> = {}) {
     return {
       anchors: [{
         _id: ANCHOR, team_id: TEAM, bot_user_id: BOT, host_user_id: BOB,
-        status: "active", name: "Anchor", conversation_id: CONV,
+        status: "active", name: "Anchor", conversation_id: "conv-workspace",
+      }, {
+        _id: GROWTH_SEAT, team_id: TEAM, bot_user_id: "user-growth-bot", host_user_id: BOB,
+        status: "active", name: "Head of Growth", conversation_id: CONV, org_role_id: ROLE,
       }],
       org_roles: [{
         _id: ROLE, short_id: "or-7", scope_type: "team", team_id: TEAM, host_user_id: BOB,
         name: "Head of Growth", handle: "growth", scope: { project_ids: [], plan_ids: [] },
-        reports_to: { kind: "user", user_id: BOB }, status: "active", anchor_id: ANCHOR,
+        reports_to: { kind: "user", user_id: BOB }, status: "active", anchor_id: GROWTH_SEAT,
         created_by: BOB, created_at: 1, updated_at: 1,
       }],
       conversations: [
-        { _id: CONV, user_id: BOB, title: "Anchor", status: "active", updated_at: 1 },
+        { _id: "conv-workspace", user_id: BOB, title: "Anchor", status: "active", updated_at: 1 },
+        { _id: CONV, user_id: BOB, title: "Head of Growth", status: "active", updated_at: 1 },
         { _id: "conv-alice", short_id: "jx7alic", user_id: ALICE, session_id: "sess-alice", title: "Alice's session", agent_type: "codex", status: "active", updated_at: 1, is_private: true },
         { _id: "conv-bob", short_id: "jx7bobb", user_id: BOB, session_id: "sess-bob", title: "Bob's session", agent_type: "claude_code", status: "active", updated_at: 1, team_id: TEAM, is_private: false },
         { _id: "conv-carol", short_id: "jx7caro", user_id: CAROL, session_id: "sess-carol", title: "Carol's private spike", status: "active", updated_at: 1, is_private: true },
@@ -3462,6 +3469,38 @@ describe("agent channels: roles and sessions in chat", () => {
 
   // ── Review wave 1 ─────────────────────────────────────────────────────────
 
+  test("@anchor and @chief-of-staff name the chief, whose seat is the workspace anchor: a thinking placeholder, not the wake rail", async () => {
+    const CHIEF = "org_roles_chief" as any;
+    const base = seed();
+    const ctx = context(ALICE, {
+      ...base,
+      anchors: [{ ...base.anchors[0], org_role_id: CHIEF }, base.anchors[1]],
+      org_roles: [...base.org_roles, {
+        ...base.org_roles[0], _id: CHIEF, short_id: "or-10", name: "Chief of Staff", handle: "chief-of-staff", anchor_id: ANCHOR,
+      }],
+      teams: teams().map((t: any) => ({ ...t, features: { ...(t.features ?? {}), org: true } })),
+    });
+    for (const line of ["@anchor make these into tasks", "@chief-of-staff make these into tasks"]) {
+      const root = await call(sendMessage, ctx, { channel_id: CHANNEL, content: `call notes ${line.length}` });
+      const sent = await call(sendMessage, ctx, { channel_id: CHANNEL, content: line, thread_root_id: root.message_id });
+      expect(row(ctx, sent.message_id).mentions).toEqual([
+        { kind: "role", role_id: CHIEF, short_id: "or-10", handle: "chief-of-staff" },
+      ]);
+      expect(sent.anchor_wake_skipped).toBe(null);
+      expect(sent.mention_wakes).toEqual({ roles: 0, sessions: 0, folded: 0, skipped: [] });
+      const placeholder = row(ctx, sent.anchor_thinking_message_id);
+      expect(placeholder.user_id).toBe(BOT);
+      expect(placeholder.thread_root_id).toBe(root.message_id);
+      expect(placeholder.agent_status).toBe("thinking");
+    }
+    expect(ctx.db._tables.role_wake_outbox.length).toBe(0);
+    expect(pending(ctx).map((p: any) => p.conversation_id)).toEqual(["conv-workspace", "conv-workspace"]);
+    // A lead seated on its own anchor still goes through the rail.
+    const growth = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "@growth and the funnel?" });
+    expect(growth.mention_wakes.roles).toBe(1);
+    expect(growth.anchor_thinking_message_id).toBe(null);
+  });
+
   test("a role outranks the bot user that wears its name; a human login still outranks both", async () => {
     // The role's standing agent is a bot named after the role, so "@growth"
     // matches that bot on the roster. The role must win, or the mention is a
@@ -3504,9 +3543,12 @@ describe("agent channels: roles and sessions in chat", () => {
   });
 
   test("an anchor's own post wakes the sessions it names and never its own role", async () => {
-    const ctx = context(BOB, seed());
+    const ctx = context(BOB, seed({
+      users: [...users(), { _id: "user-growth-bot", name: "Head of Growth", is_bot: true, bot_kind: "anchor" }],
+      team_memberships: [...memberships(), { _id: "m-growth-bot", user_id: "user-growth-bot", team_id: TEAM, role: "member" }],
+    }));
     const posted = await call(sendAsAnchor, ctx, {
-      anchor_id: ANCHOR, channel_id: CHANNEL, content: "@jx7bobb please check the deploy; @growth fyi",
+      anchor_id: GROWTH_SEAT, channel_id: CHANNEL, content: "@jx7bobb please check the deploy; @growth fyi",
     });
     expect(posted.mention_wakes).toEqual({ roles: 0, sessions: 1, folded: 0, skipped: [] });
     expect(row(ctx, posted.message_id).mentions).toEqual([
