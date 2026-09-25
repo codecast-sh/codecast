@@ -182,6 +182,7 @@ import { isConvexId } from "../lib/entityLinks";
 import { pathOnMyMachines, wakesOnUse, type MachineCandidate } from "../lib/machinePicker";
 import { cloudPlacementFor } from "@codecast/shared/contracts";
 import { conversationTabPath, urlSessionId } from "../lib/pathLabel";
+import { directConversationId } from "../lib/desktopHandoff";
 import { healTabPaths, isNonTabRoute, shellTabPath } from "../lib/tabRoutes";
 import {
   countLeaves,
@@ -1957,8 +1958,8 @@ export function stampedTabPath(tab: AppTab): string {
   // actual API (a bare `typeof window` check sails through and then throws).
   if (typeof window === "undefined" || !window.location) return tab.path;
   const live = window.location.pathname + window.location.search;
-  const conv = window.location.pathname.match(/^\/conversation\/([^/?#]+)$/);
-  if (conv && tab.path.split("?")[0] === "/inbox") return `/inbox?s=${conv[1]}`;
+  const conv = directConversationId(window.location.pathname);
+  if (conv && tab.path.split("?")[0] === "/inbox") return `/inbox?s=${conv}`;
   // A live URL outside the shell (the app root during boot, a marketing page,
   // the palette window) is not this tab's content: keep what the tab held, or
   // the stamp pins the tab to a path the shell cannot render (lib/tabRoutes).

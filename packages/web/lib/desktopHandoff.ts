@@ -703,6 +703,20 @@ export function conversationIdFromPath(path: string): string | null {
   return path.match(/^\/conversation\/([^/?#]+)/)?.[1] ?? null;
 }
 
+// The conversation a path opens IN PLACE, or null when the path must reach the
+// conversation route instead. Every shortcut past that route (a tab's
+// /inbox?s= spelling, the stage's session pane, a desktop deep link selecting
+// the session) reads the conversation by its Convex id and can interpret
+// nothing else, so it takes only the exact spelling `/conversation/<full id>`.
+// A short id (it collides across users), a session UUID, a restored id, a
+// share token, a highlight or a message anchor all need the route's resolver
+// (resolveConversation) and its entry work; a shortcut that took them opened
+// nothing, and the inbox then adopted whichever session was on top.
+export function directConversationId(path: string): string | null {
+  const id = path.match(/^\/conversation\/([^/?#]+)$/)?.[1];
+  return id && /^[a-z0-9]{32}$/.test(id) ? id : null;
+}
+
 // The token a share link carries (`/conversation/<id>?share=<token>`). Access
 // through a link requires PRESENTING the token on every read (issue #27), and
 // only the conversation route knows how to present and redeem it, so a path

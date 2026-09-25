@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { conversationTabPath, pathLabel, inboxTabSessionId, poppedTabPath, urlSessionId, tabNeedsUrlRestore } from "../pathLabel";
+import { conversationTabPath, deepLinkSessionId, pathLabel, inboxTabSessionId, poppedTabPath, urlSessionId, tabNeedsUrlRestore } from "../pathLabel";
 
 // A tab is labeled by its ROUTE, never its query string. The regression here:
 // stampedTabPath normalizes a conversation tab to /inbox?s=<id>, and the raw
@@ -49,6 +49,15 @@ describe("conversationTabPath", () => {
     );
   });
 
+  it("keeps a reference that is not a full id on the route, whose resolver finds the session", () => {
+    // The inbox reads ?s= as a Convex id: a short id there selected nothing and
+    // the view fell to the top session (the published-page session chip).
+    expect(conversationTabPath("/conversation/jx7etg8")).toBe("/conversation/jx7etg8");
+    expect(conversationTabPath("/conversation/3f2c9a1e-7b1d-4c55-9a0e-1c2d3e4f5a6b")).toBe(
+      "/conversation/3f2c9a1e-7b1d-4c55-9a0e-1c2d3e4f5a6b",
+    );
+  });
+
   it("preserves conversation URLs whose query must be resolved by the route", () => {
     expect(conversationTabPath("/conversation/id?share=token")).toBe("/conversation/id?share=token");
     expect(conversationTabPath("/conversation/id?prefill=hello")).toBe("/conversation/id?prefill=hello");
@@ -91,36 +100,42 @@ describe("inboxTabSessionId — the session a stamped inbox tab is pinned to", (
 // overwrote its own history entry and Back jumped straight to the boot session.
 describe("urlSessionId — the session a live URL shows, either spelling", () => {
   it("reads the canonical conversation path", () => {
-    expect(urlSessionId("/conversation/jx7abc", "")).toBe("jx7abc");
+    expect(urlSessionId("/conversation/jx77e151jzzb8jnk1234567890abcdef", "")).toBe("jx77e151jzzb8jnk1234567890abcdef");
+  });
+
+  it("shows no session for a reference the route has not resolved yet", () => {
+    // A short id or a session UUID names no row until resolveConversation
+    // answers, so the URL shows no session the inbox could have selected.
+    expect(urlSessionId("/conversation/jx7etg8", "")).toBeNull();
   });
 
   it("reads the inbox deep-link param", () => {
-    expect(urlSessionId("/inbox", "?s=jx7abc")).toBe("jx7abc");
+    expect(urlSessionId("/inbox", "?s=jx77e151jzzb8jnk1234567890abcdef")).toBe("jx77e151jzzb8jnk1234567890abcdef");
   });
 
   it("shows no session on the bare inbox or other routes", () => {
     expect(urlSessionId("/inbox", "")).toBeNull();
-    expect(urlSessionId("/tasks", "?s=jx7abc")).toBeNull();
+    expect(urlSessionId("/tasks", "?s=jx77e151jzzb8jnk1234567890abcdef")).toBeNull();
   });
 });
 
 describe("tabNeedsUrlRestore — inbox/conversation spellings are the same content", () => {
   it("stands down when the live URL is the tab's session in canonical spelling", () => {
-    expect(tabNeedsUrlRestore("/conversation/jx7abc", "/inbox?s=jx7abc")).toBe(false);
+    expect(tabNeedsUrlRestore("/conversation/jx77e151jzzb8jnk1234567890abcdef", "/inbox?s=jx77e151jzzb8jnk1234567890abcdef")).toBe(false);
   });
 
   it("stands down when the live URL already matches the tab's route", () => {
-    expect(tabNeedsUrlRestore("/inbox", "/inbox?s=jx7abc")).toBe(false);
+    expect(tabNeedsUrlRestore("/inbox", "/inbox?s=jx77e151jzzb8jnk1234567890abcdef")).toBe(false);
     expect(tabNeedsUrlRestore("/tasks", "/tasks?focus=1")).toBe(false);
   });
 
   it("restores when the live URL shows a different session than the tab holds", () => {
-    expect(tabNeedsUrlRestore("/conversation/jx7abc", "/inbox?s=jx7zzz")).toBe(true);
+    expect(tabNeedsUrlRestore("/conversation/jx77e151jzzb8jnk1234567890abcdef", "/inbox?s=jx7zzz51jzzb8jnk1234567890abcdef")).toBe(true);
   });
 
   it("restores when the live URL belongs to another surface entirely", () => {
-    expect(tabNeedsUrlRestore("/tasks", "/inbox?s=jx7abc")).toBe(true);
-    expect(tabNeedsUrlRestore("/conversation/jx7abc", "/tasks")).toBe(true);
+    expect(tabNeedsUrlRestore("/tasks", "/inbox?s=jx77e151jzzb8jnk1234567890abcdef")).toBe(true);
+    expect(tabNeedsUrlRestore("/conversation/jx77e151jzzb8jnk1234567890abcdef", "/tasks")).toBe(true);
   });
 });
 
@@ -190,5 +205,22 @@ describe("poppedTabPath — traversing onto a session entry from another page", 
   it("mirrors a tab navigation entry as-is", () => {
     expect(poppedTabPath({ tabNav: true } as any, "/tasks/ct-1", "", ["/inbox?s=" + A])).toBe("/tasks/ct-1");
     expect(poppedTabPath(null, "/files", "?f=a.md", ["/tasks"])).toBe("/files?f=a.md");
+  });
+});
+
+describe("deepLinkSessionId — what a desktop deep link selects in place", () => {
+  const id = "jx7etg8nap9wz7zt0npak20tax8f3k33";
+  it("selects a full id in either spelling, anchors and all", () => {
+    expect(deepLinkSessionId(`/conversation/${id}`)).toBe(id);
+    expect(deepLinkSessionId(`/conversation/${id}#msg-1`)).toBe(id);
+    expect(deepLinkSessionId(`/inbox?s=${id}`)).toBe(id);
+  });
+  it("sends a short id, a session UUID or a share link to the route instead", () => {
+    // A browser handed /conversation/jx7etg8 to the desktop app, which selected
+    // "jx7etg8" as an id: nothing, and the view stayed wherever it was.
+    expect(deepLinkSessionId("/conversation/jx7etg8")).toBeNull();
+    expect(deepLinkSessionId("/inbox?s=jx7etg8")).toBeNull();
+    expect(deepLinkSessionId("/conversation/3f2c9a1e-7b1d-4c55-9a0e-1c2d3e4f5a6b")).toBeNull();
+    expect(deepLinkSessionId(`/conversation/${id}?share=tok`)).toBeNull();
   });
 });

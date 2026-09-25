@@ -1,4 +1,5 @@
 import { test, expect, describe } from "bun:test";
+import { directConversationId } from "./desktopHandoff";
 import {
   buildDesktopDeepLink,
   parseDesktopDeepLinkPath,
@@ -334,6 +335,24 @@ describe("conversationIdFromPath", () => {
     expect(conversationIdFromPath("/tasks/ct-1")).toBeNull();
     expect(conversationIdFromPath("/conversation/")).toBeNull();
     expect(conversationIdFromPath("/")).toBeNull();
+  });
+});
+
+describe("directConversationId — the one spelling an in-place shortcut may take", () => {
+  const id = "jx7etg8nap9wz7zt0npak20tax8f3k33";
+  test("a bare path naming the full Convex id", () => {
+    expect(directConversationId(`/conversation/${id}`)).toBe(id);
+  });
+
+  test("anything the route must resolve or interpret is not direct", () => {
+    // The published-page chip linked /conversation/jx7etg8: the shell read the
+    // short id as an id, selected nothing, and the inbox adopted its top session.
+    expect(directConversationId("/conversation/jx7etg8")).toBeNull();
+    expect(directConversationId("/conversation/3f2c9a1e-7b1d-4c55-9a0e-1c2d3e4f5a6b")).toBeNull();
+    expect(directConversationId(`/conversation/${id}?share=tok`)).toBeNull();
+    expect(directConversationId(`/conversation/${id}#msg-1`)).toBeNull();
+    expect(directConversationId(`/conversation/${id}/diff`)).toBeNull();
+    expect(directConversationId(`/inbox?s=${id}`)).toBeNull();
   });
 });
 

@@ -26,6 +26,7 @@ import { tabNavigate } from "../src/compat/tabRouting";
 import { DEFAULT_TAB_PATH, isNonTabRoute } from "./tabRoutes";
 import { inboxTabSessionId, pathLabel, tabNeedsUrlRestore } from "./pathLabel";
 import { borrowsTabShell } from "./desktop";
+import { directConversationId } from "./desktopHandoff";
 import { routeElsewhere, routeOwner } from "./desktopApps";
 import { browserRoutePath, hasPaneHost, postToPaneHost, type BrowserSource } from "./browserPane";
 import { registerSplitOpener } from "./openIntent";
@@ -118,16 +119,16 @@ export function sessionPanePath(sessionId: string): string {
 }
 
 /** The session a pane path names, or null when the path is not the bare pane
- *  spelling. A /conversation URL that carries a query is a PAGE entry, not a
- *  pane: a share link (`?share=<token>`), a highlight, a prefill. The
- *  conversation page owns those — it presents the token, redeems it for the
- *  signed-in viewer, and only then redirects into the inbox. Painting a
- *  SessionPane for the id instead drops the token, and every id-only read
- *  denies: the viewer sees "This session is no longer available" on a link
- *  that works logged out. */
+ *  spelling (directConversationId). A /conversation URL that carries a query,
+ *  or names the session by anything but its full id, is a PAGE entry, not a
+ *  pane: a share link (`?share=<token>`), a highlight, a prefill, a short id.
+ *  The conversation page owns those — it resolves the reference, presents the
+ *  token, redeems it for the signed-in viewer, and only then redirects into
+ *  the inbox. Painting a SessionPane instead drops the token (every id-only
+ *  read denies: "This session is no longer available" on a link that works
+ *  logged out) or reads a short id as an id and finds nothing. */
 export function paneSessionId(path: string): string | null {
-  const m = path.match(/^\/conversation\/([^/?#]+)$/);
-  return m ? m[1] : null;
+  return directConversationId(path);
 }
 
 /** The spelling a route takes as a pane. A session link may arrive in the

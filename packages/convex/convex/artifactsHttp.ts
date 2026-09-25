@@ -1178,6 +1178,7 @@ export const serve = httpAction(async (ctx, request) => {
     slug: artifact.slug,
     kind,
     sessionShortId: artifact.hide_session ? null : (artifact.session_short_id ?? null),
+    sessionConversationId: artifact.hide_session ? null : (artifact.session_conversation_id ?? null),
     sessionTitle: artifact.hide_session ? null : artifact.session_title,
     views: artifact.views,
     commentCount: artifact.comments_disabled ? 0 : artifact.comment_count,

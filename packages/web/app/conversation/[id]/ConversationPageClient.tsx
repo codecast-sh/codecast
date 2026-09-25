@@ -177,6 +177,19 @@ function ConversationLoadingSkeleton({ id }: { id?: string }) {
   );
 }
 
+/** A guest on a conversation they cannot read signs in and comes back to it.
+ *  The return address is captured on the first render, before any redirect:
+ *  read after one (a later render, a second effect run) it saw /login's own
+ *  `?return_to=` as this page's query and nested it inside itself. */
+function RedirectToLogin({ id }: { id: string }) {
+  const router = useRouter();
+  const [returnTo] = useState(() => `/conversation/${id}${window.location.search}${window.location.hash}`);
+  useMountEffect(() => {
+    router.replace(`/login?return_to=${encodeURIComponent(returnTo)}`);
+  });
+  return <ConversationLoadingSkeleton id={id} />;
+}
+
 function DeniedView() {
   return (
     <DashboardLayout>
@@ -216,7 +229,6 @@ function NotFoundView() {
 export default function ConversationPage() {
   const params = useParams();
   const searchParams = useSearchParams();
-  const router = useRouter();
   const authGate = useAuthGate(useLocalAuth);
   const treatAsAuthed = authGate === "children";
   const id = params.id as string;
@@ -274,11 +286,7 @@ export default function ConversationPage() {
     return <ConversationLoadingSkeleton id={id} />;
   }
   if (effective.access_level === "denied") {
-    if (authGate === "guest") {
-      const returnTo = `/conversation/${id}${window.location.search}${window.location.hash}`;
-      router.replace(`/login?return_to=${encodeURIComponent(returnTo)}`);
-      return <ConversationLoadingSkeleton id={id} />;
-    }
+    if (authGate === "guest") return <RedirectToLogin id={id} />;
     return <DeniedView />;
   }
   if (effective.access_level === "not_found" || !effective.conversation_id) return <NotFoundView />;

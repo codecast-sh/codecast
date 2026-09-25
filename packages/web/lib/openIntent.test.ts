@@ -94,11 +94,11 @@ describe("divertNavigation", () => {
 
   it("holds a session tab on the inbox deep-link form, with its session id", async () => {
     beginClickIntent("tab");
-    expect(divertNavigation("/conversation/jx7abc")).toBe(true);
+    expect(divertNavigation("/conversation/jx7abc00nvbf8jnk1234567890abcdef")).toBe(true);
     await flush();
     const tab = useInboxStore.getState().tabs[1];
-    expect(tab.path).toBe("/inbox?s=jx7abc");
-    expect(tab.sessionId).toBe("jx7abc");
+    expect(tab.path).toBe("/inbox?s=jx7abc00nvbf8jnk1234567890abcdef");
+    expect(tab.sessionId).toBe("jx7abc00nvbf8jnk1234567890abcdef");
   });
 
   it("Cmd-Shift opens a window (browser tab where there is no desktop bridge)", async () => {

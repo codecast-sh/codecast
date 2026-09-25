@@ -79,18 +79,18 @@ describe("stageCloseLeaf", () => {
   });
 
   it("a tab collapsing onto a conversation leaf lands on the /inbox?s= spelling, never the redirect route", () => {
-    state().stageInsertLeaf("root", "right", "/conversation/abc123");
+    state().stageInsertLeaf("root", "right", "/conversation/jx7abc00nvbf8jnk1234567890abcdef");
     const first = leavesOf(activeTab().layout!)[0];
     state().stageCloseLeaf(first.id);
     const t = activeTab();
     expect(t.layout).toBeUndefined();
-    expect(t.path).toBe("/inbox?s=abc123");
+    expect(t.path).toBe("/inbox?s=jx7abc00nvbf8jnk1234567890abcdef");
   });
 
   it("stageExpandLeaf applies the same spelling rule", () => {
-    const id = state().stageInsertLeaf("root", "right", "/conversation/abc123")!;
+    const id = state().stageInsertLeaf("root", "right", "/conversation/jx7abc00nvbf8jnk1234567890abcdef")!;
     state().stageExpandLeaf(id);
-    expect(activeTab().path).toBe("/inbox?s=abc123");
+    expect(activeTab().path).toBe("/inbox?s=jx7abc00nvbf8jnk1234567890abcdef");
     expect(activeTab().layout).toBeUndefined();
   });
 
@@ -99,16 +99,16 @@ describe("stageCloseLeaf", () => {
   // reads rows already in the store: a teammate's session showed "This session
   // is no longer available" instead of loading through the inbox.
   it("a plain tab navigated to a conversation takes the /inbox?s= spelling", () => {
-    state().updateTab("t1", { path: "/conversation/abc123" });
-    expect(activeTab().path).toBe("/inbox?s=abc123");
+    state().updateTab("t1", { path: "/conversation/jx7abc00nvbf8jnk1234567890abcdef" });
+    expect(activeTab().path).toBe("/inbox?s=jx7abc00nvbf8jnk1234567890abcdef");
     expect(activeTab().layout).toBeUndefined();
   });
 
   it("a split tab's focused leaf keeps the pane spelling", () => {
     state().stageInsertLeaf("root", "right", "/docs");
-    state().updateTab("t1", { path: "/conversation/abc123" });
+    state().updateTab("t1", { path: "/conversation/jx7abc00nvbf8jnk1234567890abcdef" });
     const t = activeTab();
-    expect(findLeaf(t.layout!, t.focusedLeafId!)!.path).toBe("/conversation/abc123");
+    expect(findLeaf(t.layout!, t.focusedLeafId!)!.path).toBe("/conversation/jx7abc00nvbf8jnk1234567890abcdef");
   });
 });
 

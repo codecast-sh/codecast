@@ -163,9 +163,14 @@ describe("split-tab path invariants under shell writers", () => {
   });
 
   it("openTab never seats a tab on the /conversation redirect route", () => {
-    const id = state().openTab({ path: "/conversation/xyz", title: "S", makeActive: false });
+    const id = state().openTab({ path: "/conversation/jx7xyz00nvbf8jnk1234567890abcdef", title: "S", makeActive: false });
     const opened = state().tabs.find((t) => t.id === id)!;
-    expect(opened.path).toBe("/inbox?s=xyz");
+    expect(opened.path).toBe("/inbox?s=jx7xyz00nvbf8jnk1234567890abcdef");
+  });
+
+  it("a tab opened on a short id stays on the route until its resolver redirects", () => {
+    const id = state().openTab({ path: "/conversation/jx7etg8", title: "S", makeActive: false });
+    expect(state().tabs.find((t) => t.id === id)!.path).toBe("/conversation/jx7etg8");
   });
 });
 
@@ -312,5 +317,11 @@ describe("paneSessionId", () => {
   });
   it("a message hash is the reveal band's business, not a pane match", () => {
     expect(paneSessionId(`/conversation/${id}#msg-abc`)).toBeNull();
+  });
+  it("a short id or a session UUID is a page entry: only the route's resolver can find the row", () => {
+    // SessionPane reads its id as a Convex id; handed a short id it showed
+    // "no longer available" for a session the viewer could open.
+    expect(paneSessionId("/conversation/jx7etg8")).toBeNull();
+    expect(paneSessionId("/conversation/3f2c9a1e-7b1d-4c55-9a0e-1c2d3e4f5a6b")).toBeNull();
   });
 });

@@ -35,15 +35,15 @@ describe("stampedTabPath", () => {
   it("keeps an inbox tab on the inbox route when the URL canonicalized to /conversation/<id>", () => {
     // The inbox rewrites window.location to /conversation/<id> while a session is
     // open; the tab must stay /inbox so its pane doesn't re-match <Conversation>.
-    withLocation("/conversation/conv123", "", () => {
-      expect(stampedTabPath(tab("/inbox?s=oldconv"))).toBe("/inbox?s=conv123");
-      expect(stampedTabPath(tab("/inbox"))).toBe("/inbox?s=conv123");
+    withLocation("/conversation/jx7c0123nvbf8jnk1234567890abcdef", "", () => {
+      expect(stampedTabPath(tab("/inbox?s=jx7o1dcvnvbf8jnk1234567890abcdef"))).toBe("/inbox?s=jx7c0123nvbf8jnk1234567890abcdef");
+      expect(stampedTabPath(tab("/inbox"))).toBe("/inbox?s=jx7c0123nvbf8jnk1234567890abcdef");
     });
   });
 
   it("leaves a standalone /conversation tab on its conversation route", () => {
-    withLocation("/conversation/conv123", "", () => {
-      expect(stampedTabPath(tab("/conversation/conv123"))).toBe("/conversation/conv123");
+    withLocation("/conversation/jx7c0123nvbf8jnk1234567890abcdef", "", () => {
+      expect(stampedTabPath(tab("/conversation/jx7c0123nvbf8jnk1234567890abcdef"))).toBe("/conversation/jx7c0123nvbf8jnk1234567890abcdef");
     });
   });
 

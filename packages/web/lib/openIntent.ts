@@ -32,6 +32,7 @@
 import { useInboxStore } from "../store/inboxStore";
 import { bridge, isDesktop, isDetachedTabWindow } from "./desktop";
 import { routeElsewhere } from "./desktopApps";
+import { appPathOf } from "./browserPane";
 import { pathLabel, conversationTabPath, inboxTabSessionId } from "./pathLabel";
 import { interceptSettingsNav, isNonTabRoute, shouldUseTabRouting, tabNavigate } from "../src/compat/tabRouting";
 
@@ -247,14 +248,8 @@ export function anchorAppPath(a: HTMLAnchorElement): string | null {
   if (a.target && a.target !== "_self") return null;
   if (a.hasAttribute("download")) return null;
   if (href.startsWith("/")) return href;
-  // Absolute URL on our own origin (entity links are sometimes rendered full).
-  try {
-    const u = new URL(href, window.location.href);
-    if (u.origin !== window.location.origin) return null;
-    return u.pathname + u.search + u.hash;
-  } catch {
-    return null;
-  }
+  // Absolute URL on this app (entity links are sometimes rendered full).
+  return appPathOf(href);
 }
 
 /** Marks a subtree whose modifier clicks are its own gesture (a filter chip's
