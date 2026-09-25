@@ -63,6 +63,10 @@ export interface BrandOpts {
   slug?: string;
   kind?: string;
   sessionShortId?: string | null;
+  // The link target. Short ids collide across users and the web resolver
+  // ranks the VIEWER's own match first, so a short-id link opened by anyone
+  // holding a colliding session landed on theirs; the full id cannot collide.
+  sessionConversationId?: string | null;
   sessionTitle?: string | null;
   views?: number;
   commentCount?: number;
@@ -102,7 +106,7 @@ function barHtml(o: BrandOpts): string {
   // The chip reads as the session's TITLE (a short id means nothing to a
   // viewer); the id stays in the tooltip and the href.
   const sessionLink = o.sessionShortId
-    ? `<a class="__cc_sess" href="https://codecast.sh/conversation/${escAttr(o.sessionShortId)}" target="_blank" rel="noopener noreferrer" title="Open the session that published this (${escAttr(o.sessionShortId)})">${escAttr(o.sessionTitle || `by ${o.sessionShortId}`)}</a>`
+    ? `<a class="__cc_sess" href="https://codecast.sh/conversation/${escAttr(o.sessionConversationId || o.sessionShortId)}" target="_blank" rel="noopener noreferrer" title="Open the session that published this (${escAttr(o.sessionShortId)})">${escAttr(o.sessionTitle || `by ${o.sessionShortId}`)}</a>`
     : "";
   const commentsBtn = interactive && o.commentsEnabled !== false
     ? `<button id="__cc_cbtn" type="button" title="Discuss this page">${bubbleSvg}<span id="__cc_ccount">${o.commentCount || ""}</span></button>`

@@ -5,7 +5,7 @@ import { useEventListener } from "../../hooks/useEventListener";
 import { useMutation } from "convex/react";
 import { useMissingSessionRow } from "../../hooks/useMissingSessionRow";
 import { SessionPrewarm } from "../../components/SessionPrewarm";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useTabActive } from "../../hooks/usePagePresence";
 import { urlSessionId } from "../../lib/pathLabel";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -409,6 +409,7 @@ export function QueuePageClient() {
 
   // Select session from URL param -- only when the param actually changes
   const paramSessionId = searchParams.get("s") || null;
+  const router = useRouter();
   // Whether this tab's `?s=` target is already in the local cache. Used as the
   // re-assert effect's dependency INSTEAD of the whole `sessions` object: that
   // object gets a fresh reference on every daemon heartbeat (~4s, the only inbox
@@ -425,6 +426,14 @@ export function QueuePageClient() {
   // this tab's session even if its param itself didn't change.
   useWatchEffect(() => {
     if (!isActiveTab || !paramSessionId) return;
+    // Only a full id selects in place. Any other reference (a short id, a
+    // session UUID) belongs to the conversation route's resolver, which
+    // redirects back here with the id it found; selecting it as an id
+    // selected nothing, and the view fell to whatever session was on top.
+    if (!isConvexId(paramSessionId)) {
+      router.replace(`/conversation/${encodeURIComponent(paramSessionId)}`);
+      return;
+    }
     const store = useInboxStore.getState();
     const paramChanged = paramSessionId !== lastAppliedParamId.current;
     if (!paramChanged && store.currentSessionId === paramSessionId) return;
@@ -450,7 +459,7 @@ export function QueuePageClient() {
     } else {
       setPendingInjectId(paramSessionId);
     }
-  }, [paramSessionId, paramSessionLoaded, navigateToSession, clientStateInitialized, isActiveTab, setShowMySessions]);
+  }, [paramSessionId, paramSessionLoaded, navigateToSession, clientStateInitialized, isActiveTab, setShowMySessions, router]);
 
   // The activation handler's other half: a home tab (no ?s=) brought forward
   // must restore the home surface. A sibling conversation tab's re-assert

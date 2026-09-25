@@ -5,6 +5,8 @@
 // tabRouting → TabBar) that made vite full-reload every window instead of hot
 // updating whenever anything in that loop changed.
 import { browserPathLabel, isBrowserRoutePath } from "./browserPane";
+import { isConvexId } from "@codecast/shared/entities";
+import { conversationIdFromPath, directConversationId, shareTokenInPath } from "./desktopHandoff";
 
 const REPO_SECTION_LABEL: Record<string, string> = {
   commits: "Commits",
@@ -130,18 +132,31 @@ export function inboxTabSessionId(path: string): string | null {
 /** The path an in-app TAB holds for a conversation. Tabs never sit on
  *  /conversation/<id>: that route is a one-shot redirect into the inbox (see
  *  RedirectToInbox), and a hidden pane on it would fire the redirect against
- *  global view state. Everything else passes through unchanged. */
+ *  global view state. Only a full id takes the inbox spelling
+ *  (directConversationId): any other reference stays on the route until its
+ *  resolver redirects to the id. Everything else passes through unchanged. */
 export function conversationTabPath(path: string): string {
-  const conv = path.match(/^\/conversation\/([^/?#]+)$/);
-  return conv ? `/inbox?s=${conv[1]}` : path;
+  const id = directConversationId(path);
+  return id ? `/inbox?s=${id}` : path;
 }
 
 /** The session id a live URL shows, in either spelling: the inbox canonical
  *  `/conversation/<id>` or the tab deep-link `/inbox?s=<id>`. Null when the
  *  URL shows no session (bare /inbox, any other route). */
 export function urlSessionId(pathname: string, search: string): string | null {
-  const conv = pathname.match(/^\/conversation\/([^/?#]+)$/);
-  return conv ? conv[1] : inboxTabSessionId(pathname + search);
+  return directConversationId(pathname) ?? inboxTabSessionId(pathname + search);
+}
+
+/** The session a desktop deep link selects in place, in either spelling
+ *  (/conversation/<id>, with its query or anchor, or /inbox?s=<id>), or null
+ *  when the link must navigate to the conversation route instead: a share
+ *  link, whose token that route presents and redeems, or a reference that is
+ *  not a full id, which only its resolver can find (selected as an id, it
+ *  selected nothing). */
+export function deepLinkSessionId(path: string): string | null {
+  if (shareTokenInPath(path)) return null;
+  const ref = conversationIdFromPath(path) ?? inboxTabSessionId(path);
+  return ref && isConvexId(ref) ? ref : null;
 }
 
 /** Whether an active tab must rewrite the address bar to its own stored path.
