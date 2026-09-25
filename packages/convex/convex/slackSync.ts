@@ -2211,17 +2211,19 @@ export const applyInboundMessage = internalMutation({
     if (args.live) {
       const message = await ctx.db.get(posted.messageId);
       if (message) {
+        let answeredBySeat: Id<"org_roles"> | null = null;
         try {
-          await maybeWakeAnchor(ctx, {
-            channel, message, root, senderId: authorId, senderName: posted.actorName, mentions: posted.mentions,
+          const woke = await maybeWakeAnchor(ctx, {
+            channel, message, root, senderId: authorId, senderName: posted.actorName, mentions: posted.mentions, roles: posted.roles,
           });
+          answeredBySeat = woke.seat_role_id;
         } catch (error) {
           console.warn("[slackSync] workspace agent wake skipped", error instanceof Error ? error.message : error);
         }
         if (posted.roles.length > 0 || posted.sessions.length > 0) {
           try {
             await wakeMentionedParties(ctx, {
-              channel, message, root, senderId: authorId, senderName: posted.actorName, roles: posted.roles, sessions: posted.sessions,
+              channel, message, root, senderId: authorId, senderName: posted.actorName, roles: posted.roles, sessions: posted.sessions, answeredBySeat,
             });
           } catch (error) {
             console.warn("[slackSync] mention wake skipped", error instanceof Error ? error.message : error);

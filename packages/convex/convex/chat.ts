@@ -49,7 +49,7 @@ import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 // `userCanAccessAnchor` is the WAKE permission (any member of a team anchor's
 // team may spend a turn on it). It is used on the wake path and NOT on
 // `replyAsAnchor`, which gates on the host — see the comment there.
-import { deliverToAnchor, userCanAccessAnchor } from "./anchors";
+import { deliverToAnchor, userCanAccessAnchor, workspaceAnchorFor } from "./anchors";
 import { actorIsExcluded, enqueueRoleEvent } from "./orgEvents";
 import { resolveActor } from "./lib/actor";
 import { queueSlackOutbound, slackLinkForChannel, slackLinksWithSendAuth } from "./lib/slackOutbound";
@@ -2235,6 +2235,7 @@ export const sendMessage = mutation({
     let anchor: Id<"chat_messages"> | null = null;
     let wakeSkipped: string | null = null;
     let listening = false;
+    let answeredBySeat: Id<"org_roles"> | null = null;
     if (message) {
       try {
         const woke = await maybeWakeAnchor(ctx, {
@@ -2244,10 +2245,12 @@ export const sendMessage = mutation({
           senderId: userId,
           senderName: actorName,
           mentions,
+          roles,
         });
         anchor = woke.placeholder_id;
         wakeSkipped = woke.skipped;
         listening = !!woke.listening;
+        answeredBySeat = woke.seat_role_id;
       } catch (error) {
         wakeSkipped = error instanceof ConvexError
           ? String((error.data as any)?.code ?? "error")
@@ -2283,6 +2286,7 @@ export const sendMessage = mutation({
           // The thread relay above already handed this line to that session:
           // naming the thread's own session must not cost it a second turn.
           alreadyDelivered: relay.delivered ? relay.conversation_id : null,
+          answeredBySeat,
         });
       } catch (error) {
         mentionWakes.skipped.push(
@@ -3490,14 +3494,15 @@ export async function resolveChannelAnchor(
     if (linked && linked.team_id?.toString() === channel.team_id.toString()) return linked;
     return null;
   }
-  const anchors = await ctx.db
-    .query("anchors")
-    .withIndex("by_team", (q: any) => q.eq("team_id", channel.team_id))
-    .collect();
+  // The workspace anchor, by the one rule that names it (the plain anchor, else
+  // the chief of staff's seat). Every role's standing agent is an anchor row
+  // too, so "the team's first active anchor" would hand the channel to
+  // whichever lead happened to be oldest.
+  const anchor = await workspaceAnchorFor(ctx, { team_id: channel.team_id });
   // "active", not "anything but decommissioned". The schema declares four states
   // and an admin who PAUSES an anchor (the host is on a plane) means it must not
   // run a turn — a paused anchor that still wakes makes pause a decoration.
-  return anchors.find((a) => a.status === "active") ?? null;
+  return anchor?.status === "active" ? anchor : null;
 }
 
 // The anchor that is a member of a DM room, if any. Shared by wake routing and
@@ -3918,15 +3923,20 @@ export async function maybeWakeAnchor(
     senderId: Id<"users">;
     senderName: string;
     mentions: Id<"users">[];
+    /** Roles the line named. A role whose standing seat IS this channel's
+     *  anchor (`@anchor`, `@chief-of-staff`) addresses the anchor. */
+    roles?: Doc<"org_roles">[];
   },
-): Promise<{ placeholder_id: Id<"chat_messages"> | null; skipped: string | null; listening?: boolean }> {
-  const no = (skipped: string | null) => ({ placeholder_id: null, skipped });
+): Promise<AnchorWake & { seat_role_id: Id<"org_roles"> | null }> {
+  const no = (skipped: string | null) => ({ placeholder_id: null, skipped, seat_role_id: null });
 
   const anchor = await resolveChannelAnchor(ctx, opts.channel);
   if (!anchor) return no(null);
-  // Addressed: named in the line, or spoken to in a DM room it is a member of
-  // (every line in a DM is for the people in it).
-  const addressed = opts.channel.kind === "dm" || opts.mentions.some(
+  const seatRole = opts.roles?.find((r) => String(r.anchor_id ?? "") === String(anchor._id)) ?? null;
+  // Addressed: named in the line (by its bot or by the role it seats), or
+  // spoken to in a DM room it is a member of (every line in a DM is for the
+  // people in it).
+  const addressed = opts.channel.kind === "dm" || !!seatRole || opts.mentions.some(
     (id) => id.toString() === anchor.bot_user_id.toString(),
   );
   // (6) A thread the anchor follows wakes on a plain reply too — silently. It
@@ -3946,6 +3956,22 @@ export async function maybeWakeAnchor(
   // team must not carry this team's chat any further. Membership is verified
   // once, at provisioning, and never again.
   if (!(await userCanAccessAnchor(ctx, opts.senderId, anchor))) return no(null);
+
+  // From here the anchor answers for its seat, whatever the turn's outcome: the
+  // role's wake rail must not spend a second turn on the same line.
+  const woke = await wakeAnchorTurn(ctx, opts, anchor, addressed);
+  return { ...woke, seat_role_id: seatRole?._id ?? null };
+}
+
+type AnchorWake = { placeholder_id: Id<"chat_messages"> | null; skipped: string | null; listening?: boolean };
+
+async function wakeAnchorTurn(
+  ctx: MutationCtx,
+  opts: Parameters<typeof maybeWakeAnchor>[1],
+  anchor: Doc<"anchors">,
+  addressed: boolean,
+): Promise<AnchorWake> {
+  const no = (skipped: string | null) => ({ placeholder_id: null, skipped });
 
   // (2) Idempotency, keyed on the authoritative message id — the client can
   // neither supply nor poison it.
@@ -4201,6 +4227,9 @@ export async function wakeMentionedParties(
     /** A conversation this same line already reached by another rail (the
      *  thread relay); a mention of it wakes nothing more. */
     alreadyDelivered?: string | null;
+    /** The role whose seat the channel's anchor already answered this line
+     *  for (maybeWakeAnchor's `seat_role_id`); the rail skips it. */
+    answeredBySeat?: Id<"org_roles"> | null;
     /** The session that wrote the line when it is not stamped on the row: an
      *  anchor's post or reply names its own standing session here. */
     selfConversationId?: string | null;
@@ -4249,6 +4278,7 @@ export async function wakeMentionedParties(
   ];
 
   for (const role of opts.roles) {
+    if (opts.answeredBySeat && String(role._id) === String(opts.answeredBySeat)) continue;
     // A role's own standing session naming its own role is not a request.
     const anchor = role.anchor_id ? await ctx.db.get(role.anchor_id) : null;
     if (anchor?.conversation_id && selfSession && String(anchor.conversation_id) === selfSession) continue;
