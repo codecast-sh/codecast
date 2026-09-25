@@ -17,15 +17,13 @@ every line. Three delivery modes and a small set of noise rules.
 
 ## C2. Delivery modes
 
-1. Pull. A role's wake frame includes a `Channels` section: lines posted in
-   followed channels since the role's last delivered frame, newest last, at
-   most 20 lines and 1200 characters, with thread roots marked. Nothing about
-   a plain post wakes a role; the lines ride the next wake. `cast chat read
-   --channel <id> --since <ts>` gives the same view on demand.
+1. Pull. Nothing about a plain post wakes a role; it reads the channels it
+   follows on its own turn with `cast chat read --channel <id> --since <ts>`
+   (at most 20 lines, thread roots marked).
 2. Mention. `resolveMentions` (chat.ts) also resolves `@<role handle>` and
-   `@<session short id>`. A mention of a role inserts an immediate outbox row
-   (cause `chat_mention`, ref the message) even when the line was typed by
-   another session: this is the one exception to "an agent line never wakes
+   `@<session short id>`. A mention of a role is one plain line into its
+   standing session even when the line was typed by another session: this is
+   the one exception to "an agent line never wakes
    anyone", and it is rate limited per sender (10 per hour) and per target
    (30 per hour); over the limit the mention folds instead. A mention of a
    session enqueues one pending message wrapped as
@@ -109,11 +107,8 @@ relay already carried the line to that session), `excluded_actor:<handle>`
 `delivery_failed:<handle>`. The caps are taken after every free skip, so a
 mention that cannot wake anyone spends no credit.
 
-A role mention is one immediate `role_wake_outbox` row (`enqueueRoleEvent`,
-kind `immediate`, `ref: { table: "chat_messages", id }`, `actor_conversation_id`
-the writing session when known). Its `cause` carries the fenced quote of the
-line and the reply command; the flush folds it into the role's next frame
-with the `Channels` section. A session mention is one pending message:
+A role mention and a session mention are each one pending message
+(`pendingMessages.tellRole` for a role, keyed `chat-mention:<message>:<target>`):
 
 ```
 <chat-mention channel="#name" thread="<root id>" from="<sender name>">
@@ -131,11 +126,9 @@ with the anchor's standing session as the self identity.
 
 `chat.linesSince({ channel_ids, since, limit = 20 })` (route
 `/cli/chat/lines-since`, `cast chat read --channel <id> --since <ts|2h>`;
-`collectLinesSince` is the same reader for the wake frame) returns
-`{ lines, truncated }`, oldest first, channels the caller cannot read
-omitted. `truncated` is also set when more than 20 channel ids were passed.
-The frame reads as the role's bot user, never as the host, and a role may not
-follow a private channel or a DM.
+`collectLinesSince`) returns `{ lines, truncated }`, oldest first, channels
+the caller cannot read omitted. `truncated` is also set when more than 20
+channel ids were passed. A role may not follow a private channel or a DM.
 
 ```
 { message_id, channel_id, channel_name, author_name, is_bot, is_agent,

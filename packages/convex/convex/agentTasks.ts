@@ -16,7 +16,6 @@ import { armedTriggerKindFor } from "./dormancy";
 import { restoreToInbox } from "./inboxFilters";
 import { configuredCloudWakeHosts, getCloudWakeHostForConversation } from "./cloudWake";
 import { enqueuePendingMessage } from "./pendingMessages";
-import { enqueueRoleEvent } from "./orgEvents";
 import { triggerFiringSource, normalizeThreadState, runOwnerWakeOf, runParentOf, runResultThreadOf, triggerLifecycleInstructions, type RunOutcome } from "@codecast/shared/contracts";
 import { earliestUsageResetAt, listOnlineDevices } from "./ccAccountsShared";
 import { performSetThreadState } from "./conversations";
@@ -81,13 +80,13 @@ export async function getManageableTask(
   return task;
 }
 
-async function applyPause(ctx: TaskCtx, task: Doc<"agent_tasks">) {
+export async function applyPause(ctx: TaskCtx, task: Doc<"agent_tasks">) {
   if (task.status !== "scheduled" && task.status !== "running") return false;
   await patchTask(ctx, task, { status: "paused" });
   return true;
 }
 
-async function applyResume(ctx: TaskCtx, task: Doc<"agent_tasks">) {
+export async function applyResume(ctx: TaskCtx, task: Doc<"agent_tasks">) {
   if (task.status !== "paused") return false;
   await patchTask(ctx, task, {
     status: "scheduled",
@@ -126,7 +125,7 @@ export function claimRunSourceFields(task: { schedule_type?: string; requested_r
   };
 }
 
-async function applyCancel(ctx: TaskCtx, task: Doc<"agent_tasks">) {
+export async function applyCancel(ctx: TaskCtx, task: Doc<"agent_tasks">) {
   await patchTask(ctx, task, { status: "completed" });
   return true;
 }
@@ -539,6 +538,14 @@ export async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTas
 }
 
 // Single-task action exposed under both auth schemes.
+// A verb that moves a trigger's status is written to its history.
+export async function logVerb(ctx: TaskCtx, task: Doc<"agent_tasks">, actor: { userId: Id<"users">; source: "cli" | "web" }, apply: (ctx: TaskCtx, task: Doc<"agent_tasks">) => Promise<boolean>): Promise<boolean> {
+  const ok = await apply(ctx, task);
+  const after = await ctx.db.get(task._id);
+  if (after && after.status !== task.status) await appendRevision(ctx, task, actor, ["status"]);
+  return ok;
+}
+
 const cliTaskAction = (apply: (ctx: TaskCtx, task: Doc<"agent_tasks">) => Promise<boolean>) =>
   mutation({
     args: { api_token: v.string(), task_id: v.id("agent_tasks") },
@@ -547,7 +554,7 @@ const cliTaskAction = (apply: (ctx: TaskCtx, task: Doc<"agent_tasks">) => Promis
       if (!auth) throw new Error("Unauthorized");
       const task = await getManageableTask(ctx, args.task_id, auth.userId);
       if (!task) return false;
-      return apply(ctx, task);
+      return logVerb(ctx, task, { userId: auth.userId, source: "cli" }, apply);
     },
   });
 
@@ -559,7 +566,7 @@ const webTaskAction = (apply: (ctx: TaskCtx, task: Doc<"agent_tasks">) => Promis
       if (!userId) throw new Error("Unauthorized");
       const task = await getManageableTask(ctx, args.task_id, userId);
       if (!task) return false;
-      return apply(ctx, task);
+      return logVerb(ctx, task, { userId, source: "web" }, apply);
     },
   });
 
@@ -830,19 +837,7 @@ export const dispatchCloudTriggers = internalMutation({
       const clientId = `cloud-trigger:${task._id}:${task.run_count}`;
       const prompt = `${task.prompt}\n\n${triggerLifecycleInstructions(task)}`;
       const updates: Record<string, any> = { ...completedTaskRunFields(task, now, { conversation_id: conversation._id }), ...claimRunSourceFields(task) };
-      // A routine on a role's standing session rides the wake rail: an
-      // immediate outbox row with the prompt as cause, so the frame carries
-      // it alongside everything else the role owes a look (T3).
-      // The rail returns null when the role cannot be woken (retired, no
-      // anchor); the prompt then rides the plain rail rather than being lost.
-      const outboxRowId = conversation.standing_role_id
-        ? await enqueueRoleEvent(ctx, conversation.standing_role_id, {
-          kind: "immediate",
-          cause: `routine "${task.title}" (${task.short_id ?? task._id}) fired:\n${prompt}`,
-          ref: { table: "agent_tasks", id: String(task._id), short_id: task.short_id ?? undefined },
-        })
-        : null;
-      const pendingMessageId = outboxRowId ?? await enqueuePendingMessage(ctx, conversation, task.user_id, {
+      const pendingMessageId = await enqueuePendingMessage(ctx, conversation, task.user_id, {
         content: `<scheduled-task title="${safeTitle}" task-id="${task._id}">${prompt}${filingNote}</scheduled-task>`,
         origin: "scheduler",
         client_id: clientId,
@@ -1967,6 +1962,7 @@ function snapshotEditable(task: Doc<"agent_tasks">) {
     model: task.model,
     agent_definition: task.agent_definition,
     project_path: task.project_path,
+    status: task.status,
     max_runtime_ms: task.max_runtime_ms,
     precheck: task.precheck,
     originating_conversation_id: task.originating_conversation_id,
@@ -2055,20 +2051,7 @@ export async function applyTaskUpdate(
   );
   if (changed.length === 0) return { ok: true, changed };
 
-  const prior = await ctx.db
-    .query("agent_task_revisions")
-    .withIndex("by_task", (q: any) => q.eq("task_id", task._id))
-    .collect();
-  const revision = prior.reduce((max: number, r: any) => Math.max(max, r.revision), 0) + 1;
-  await ctx.db.insert("agent_task_revisions", {
-    task_id: task._id,
-    revision,
-    actor_user_id: actor.userId,
-    source: actor.source,
-    changed_fields: changed,
-    before: snapshotEditable(task),
-    created_at: Date.now(),
-  });
+  await appendRevision(ctx, task, actor, changed);
 
   await patchTask(ctx, task, patch);
   const newHome = patch.originating_conversation_id as Id<"conversations"> | undefined;
@@ -2522,3 +2505,24 @@ export const backfillDisplaySummaries = internalMutation({
     return { scheduled };
   },
 });
+
+// One history row: who changed which fields of the trigger, from where, with
+// the editable surface as it stood before. Edits and the verbs (pause,
+// resume, run now, cancel) both write it, so a trigger never changes state
+// without the history saying who did it.
+async function appendRevision(ctx: TaskCtx, task: Doc<"agent_tasks">, actor: { userId: Id<"users">; source: "cli" | "web" }, changed: string[]) {
+  const prior = await ctx.db
+    .query("agent_task_revisions")
+    .withIndex("by_task", (q: any) => q.eq("task_id", task._id))
+    .collect();
+  const revision = prior.reduce((max: number, r: any) => Math.max(max, r.revision), 0) + 1;
+  await ctx.db.insert("agent_task_revisions", {
+    task_id: task._id,
+    revision,
+    actor_user_id: actor.userId,
+    source: actor.source,
+    changed_fields: changed,
+    before: snapshotEditable(task),
+    created_at: Date.now(),
+  });
+}

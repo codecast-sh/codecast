@@ -557,7 +557,7 @@ describe("orgProposals.acceptAll seats a role through its adopt, never beside it
   ];
 
   test("role then adopt then routine: one standing session, the adopted one", async () => {
-    const db = fixtures({ bot_users: [], managed_sessions: [], daemon_commands: [], devices: [], messages: [], pending_messages: [], role_wakes: [], role_wake_outbox: [] });
+    const db = fixtures({ bot_users: [], managed_sessions: [], daemon_commands: [], devices: [], messages: [], pending_messages: [] });
     const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: spec(group()) });
     const out = await performAcceptAll(ctxOf(db), ME as any, { proposal: r.short_id, provision: true });
     expect(out.results.map((x: any) => [x.line.split(" ")[0], x.status])).toEqual([["create", "applied"], ["adopt", "applied"], ["routine", "applied"]]);
@@ -571,7 +571,7 @@ describe("orgProposals.acceptAll seats a role through its adopt, never beside it
   });
 
   test("skipping the adopt of a role created awaiting it provisions that seat then and says so; the rows name the dependency", async () => {
-    const db = fixtures({ bot_users: [], managed_sessions: [], daemon_commands: [], devices: [], messages: [], pending_messages: [], role_wakes: [], role_wake_outbox: [] });
+    const db = fixtures({ bot_users: [], managed_sessions: [], daemon_commands: [], devices: [], messages: [], pending_messages: [] });
     const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: spec(group()) });
     expect(r.changes.map((c: any) => c.depends)).toEqual([
       "created without a standing session; #3 seats it",
@@ -599,7 +599,7 @@ describe("orgProposals.acceptAll seats a role through its adopt, never beside it
   });
 
   test("an adopt onto a role that already has a standing session fails, stays decidable, and says why", async () => {
-    const db = fixtures({ bot_users: [], managed_sessions: [], daemon_commands: [], devices: [], messages: [], pending_messages: [], role_wakes: [], role_wake_outbox: [] });
+    const db = fixtures({ bot_users: [], managed_sessions: [], daemon_commands: [], devices: [], messages: [], pending_messages: [] });
     const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: spec([change({ kind: "adopt", handle: "growth", conversation: "jxanaly" })]) });
     const res = await performDecideChange(ctxOf(db), ME as any, { change_id: String(r.changes[0].id), verdict: "accept", provision: true });
     expect(res.status).toBe("failed");
@@ -610,7 +610,7 @@ describe("orgProposals.acceptAll seats a role through its adopt, never beside it
   // org-roles-run-work.md R2: a long running session proposed as a role is one
   // change. Accepting it names the session; there is no adopt to skip.
   test("a role that names its session is seated on it in the same apply, with or without provision, and its routine runs there", async () => {
-    const db = fixtures({ bot_users: [], managed_sessions: [], daemon_commands: [], devices: [], messages: [], pending_messages: [], role_wakes: [], role_wake_outbox: [] });
+    const db = fixtures({ bot_users: [], managed_sessions: [], daemon_commands: [], devices: [], messages: [], pending_messages: [] });
     const named = [
       change({ kind: "role", name: "Market growth mandate", handle: "market-growth", seat: { existing: "jxanaly", title: "Market growth mandate", helpers: 391 }, tenure: { kind: "standing" }, reports_to: "me" }),
       change({ kind: "routine", handle: "market-growth", title: "Daily run", prompt: "Run the daily pass", every: "1d" }),
@@ -626,7 +626,7 @@ describe("orgProposals.acceptAll seats a role through its adopt, never beside it
   });
 
   test("a role that names its session and no parent reports to the person who runs the session, not to whoever accepts", async () => {
-    const db = fixtures({ bot_users: [], managed_sessions: [], daemon_commands: [], devices: [], messages: [], pending_messages: [], role_wakes: [], role_wake_outbox: [] });
+    const db = fixtures({ bot_users: [], managed_sessions: [], daemon_commands: [], devices: [], messages: [], pending_messages: [] });
     await db.patch(S1 as any, { owner_user_id: MATE });
     const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: spec([change({ kind: "role", name: "Market growth mandate", handle: "market-growth", seat: { existing: "jxanaly" } })]) });
     const res = await performDecideChange(ctxOf(db), ME as any, { change_id: String(r.changes[0].id), verdict: "accept", provision: false });
@@ -636,7 +636,7 @@ describe("orgProposals.acceptAll seats a role through its adopt, never beside it
   });
 
   test("a role that names a session nobody can find fails with the reason, and no fresh session is started for it", async () => {
-    const db = fixtures({ bot_users: [], managed_sessions: [], daemon_commands: [], devices: [], messages: [], pending_messages: [], role_wakes: [], role_wake_outbox: [] });
+    const db = fixtures({ bot_users: [], managed_sessions: [], daemon_commands: [], devices: [], messages: [], pending_messages: [] });
     const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: spec([change({ kind: "role", name: "Ghost", handle: "ghost-role", seat: { existing: "jxnosuch" }, reports_to: "me" })]) });
     await expect(performDecideChange(ctxOf(db), ME as any, { change_id: String(r.changes[0].id), verdict: "accept", provision: true })).rejects.toThrow("Session not found");
     expect((db as any)._tables.conversations.filter((c: any) => c.standing_role_id).map((c: any) => c.short_id)).toEqual(["jxgrowt"]);
@@ -1089,7 +1089,7 @@ describe("a verdict the author revised under the reader is refused (S18)", () =>
 describe("accept all chunks by cost: one takeover change a transaction", () => {
   const own = (n: number, path: string) => ({ _id: `conversations_w${n}`, short_id: `jx7w00${n}`, user_id: ME, team_id: TEAM, status: "active", agent_type: "claude_code", title: `Work ${n}`, project_path: path, message_count: 3, last_message_role: "assistant", updated_at: Date.now() - 60_000, created_at: 1 });
   const extra = () => ({
-    role_wakes: [], role_wake_outbox: [], managed_sessions: [], messages: [], user_presence: [], pending_messages: [], devices: [],
+    managed_sessions: [], messages: [], user_presence: [], pending_messages: [], devices: [],
     projects: [
       { _id: P, user_id: ME, team_id: TEAM, workspace: WS, short_id: "pr-1", title: "Growth", status: "active", project_path: "/repo/growth", created_at: 1, updated_at: 1 },
       { _id: Q, user_id: ME, team_id: TEAM, workspace: WS, short_id: "pr-2", title: "Billing", status: "active", project_path: "/repo/billing", created_at: 1, updated_at: 1 },

@@ -7,7 +7,6 @@ import { resolveActor } from "./lib/actor";
 import { allRolesInBoundary, liveRoleByHandle, roleByHandleForRead } from "./lib/orgAccess";
 import { matchHandle, teamRoster } from "./lib/mentionResolve";
 import { chainAssignees, roleAssigneeInfo, type AssigneeInfo } from "@codecast/shared/contracts/orgAssignee";
-import { noteOrgAssignment } from "./orgEvents";
 import { enqueueStartSession } from "./devices";
 import { fromConvexAgentType, inlineForeignText, toConvexAgentType } from "@codecast/shared/contracts";
 import { docRelatesToTask } from "@codecast/shared/tasks";
@@ -39,7 +38,7 @@ import { projectTasks } from "./lib/projectWork";
 import { attachCommentSessionInfo } from "./lib/commentSessionInfo";
 import { pickInheritedGitMeta, type GitMetaSource } from "./projectPaths";
 import { bucketTs } from "./presenceState";
-import { enqueuePendingMessage } from "./pendingMessages";
+import { enqueuePendingMessage, tellRole } from "./pendingMessages";
 import { addConversationToWorkItem, linkConversationToEntityBestEffort, linkedEntityIdsForConversation } from "./conversationLinks";
 import { agentCommentLevelOf, dropThreadRead, taskCommentIsNews, taskThreadParticipants, touchThread, type TaskCommentAuthorKind } from "./threadReads";
 import { extractMentionHandles } from "@codecast/shared/chat";
@@ -534,9 +533,10 @@ async function announceAssignment(
   const role = await roleAssigneeOf(ctx, o.assignee);
   if (role) {
     const by = o.actorName || (await ctx.db.get(o.actorUserId))?.name || "Someone";
-    await noteOrgAssignment(ctx, o.task, {
-      role_id: String(role._id),
-      cause: `${by} assigned you ${o.task.short_id} "${(o.task.title ?? "").slice(0, 80)}"`,
+    await tellRole(ctx, role._id, {
+      content: `${by} assigned you ${o.task.short_id} "${(o.task.title ?? "").slice(0, 80)}"`,
+      client_id: `assigned:${o.task._id}:${role._id}`,
+      from_user_id: o.actorUserId,
     });
     return;
   }

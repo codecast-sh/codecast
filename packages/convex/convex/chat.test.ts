@@ -3176,7 +3176,6 @@ describe("agent channels: roles and sessions in chat", () => {
       ],
       chat_agent_quota: [],
       managed_sessions: [],
-      role_wake_outbox: [],
       ...extra,
     };
   }
@@ -3192,17 +3191,14 @@ describe("agent channels: roles and sessions in chat", () => {
       { kind: "role", role_id: ROLE, short_id: "or-7", handle: "growth" },
     ]);
     // The anchor was not addressed by name, so no placeholder; the role got
-    // exactly one immediate outbox row (org-roles-standing.md T3), keyed on
-    // the message, and nothing landed on the pending rail directly: the
-    // flush folds the row into the role's next frame.
+    // exactly one plain line into its standing session (org-staffing.md S25),
+    // keyed on the message.
     expect(messagesIn(ctx).filter((m: any) => m.author_kind === "agent").length).toBe(0);
-    expect(pending(ctx).length).toBe(0);
-    const outbox = ctx.db._tables.role_wake_outbox;
-    expect(outbox.length).toBe(1);
-    expect(outbox[0].role_id).toBe(ROLE);
-    expect(outbox[0].kind).toBe("immediate");
-    expect(outbox[0].ref).toEqual({ table: "chat_messages", id: sent.message_id });
-    const wake = outbox[0].cause;
+    expect(pending(ctx).length).toBe(1);
+    expect(pending(ctx)[0].conversation_id).toBe(CONV);
+    expect(pending(ctx)[0].client_id).toBe(`chat-mention:${sent.message_id}:${ROLE}`);
+    expect(pending(ctx)[0].status).toBe("pending");
+    const wake = pending(ctx)[0].content;
     expect(wake).toContain("Alice mentioned @growth in #general.");
     expect(wake).toContain("please review the funnel");
     expect(wake).toContain(`cast chat send --channel ${CHANNEL} --thread ${sent.message_id}`);
@@ -3212,7 +3208,7 @@ describe("agent channels: roles and sessions in chat", () => {
     // A retried send wakes nobody twice.
     await call(sendMessage, ctx, { channel_id: CHANNEL, content: "@growth again", client_id: "c1" });
     await call(sendMessage, ctx, { channel_id: CHANNEL, content: "@growth again", client_id: "c1" });
-    expect(outbox.length).toBe(2);
+    expect(pending(ctx).length).toBe(2);
   });
 
   test("an agent-typed line still wakes the role it names, and a person's handle outranks a role handle", async () => {
@@ -3319,15 +3315,13 @@ describe("agent channels: roles and sessions in chat", () => {
     expect(pending(ctx).length).toBe(0);
   });
 
-  test("a paused role keeps the line for its next wake and is reported held, never woken", async () => {
+  test("a paused role still hears its line: pause holds its triggers, not what people say to it", async () => {
     const seeded = seed();
     seeded.org_roles[0] = { ...seeded.org_roles[0], status: "paused" };
     const ctx = context(ALICE, seeded);
     const sent = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "@growth status?" });
-    expect(sent.mention_wakes).toEqual({ roles: 0, sessions: 0, folded: 0, skipped: ["role_paused:growth"] });
-    // The outbox row waits; orgWakes gate 1 holds it until someone resumes the role.
-    const rows = ctx.db._tables.role_wake_outbox;
-    expect(rows.filter((r: any) => String(r.role_id) === String(ROLE)).length).toBe(1);
+    expect(sent.mention_wakes).toEqual({ roles: 1, sessions: 0, folded: 0, skipped: [] });
+    expect(pending(ctx).map((p: any) => p.conversation_id)).toEqual([CONV]);
   });
 
   test("an agent may start 5 threads and post 30 lines per channel per day; a person is uncapped", async () => {
@@ -3493,9 +3487,8 @@ describe("agent channels: roles and sessions in chat", () => {
       expect(placeholder.thread_root_id).toBe(root.message_id);
       expect(placeholder.agent_status).toBe("thinking");
     }
-    expect(ctx.db._tables.role_wake_outbox.length).toBe(0);
     expect(pending(ctx).map((p: any) => p.conversation_id)).toEqual(["conv-workspace", "conv-workspace"]);
-    // A lead seated on its own anchor still goes through the rail.
+    // A lead seated on its own anchor is told the same way.
     const growth = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "@growth and the funnel?" });
     expect(growth.mention_wakes.roles).toBe(1);
     expect(growth.anchor_thinking_message_id).toBe(null);
@@ -3514,7 +3507,7 @@ describe("agent channels: roles and sessions in chat", () => {
       { kind: "role", role_id: ROLE, short_id: "or-7", handle: "growth" },
     ]);
     expect(sent.mention_wakes).toEqual({ roles: 1, sessions: 0, folded: 0, skipped: [] });
-    expect(ctx.db._tables.role_wake_outbox.length).toBe(1);
+    expect(pending(ctx).map((p: any) => p.conversation_id)).toEqual([CONV]);
     // The bot did not become a user mention on the side.
     expect(ctx.db._tables.notifications.filter((n: any) => n.recipient_user_id === "user-growth-bot").length).toBe(0);
     // A bot with no role behind its name is still a plain bot mention.
@@ -3559,7 +3552,6 @@ describe("agent channels: roles and sessions in chat", () => {
     expect(pending(ctx)[0].conversation_id).toBe("conv-bob");
     expect(pending(ctx)[0].client_id).toBe(`chat-mention:${posted.message_id}:conv-bob`);
     // The anchor IS the role's standing session: naming @growth is itself.
-    expect(ctx.db._tables.role_wake_outbox.length).toBe(0);
   });
 
   test("an anchor's landed reply stores its mentions, wakes them, and never pushes a phone", async () => {
@@ -3604,9 +3596,9 @@ describe("agent channels: roles and sessions in chat", () => {
     const sent = await call(sendMessage, ctx, {
       channel_id: CHANNEL, content: "@growth report filed", origin: "agent", origin_session_id: "sess-hand",
     });
-    expect(sent.mention_wakes).toEqual({ roles: 0, sessions: 0, folded: 0, skipped: ["excluded_actor:growth"] });
-    expect(ctx.db._tables.role_wake_outbox.length).toBe(0);
-    expect(ctx.db._tables.chat_agent_quota.filter((q: any) => q.key.startsWith("mention_")).length).toBe(0);
+    // A hand's line reaches its role like anyone's: a plain message, no loop rule.
+    expect(sent.mention_wakes).toEqual({ roles: 1, sessions: 0, folded: 0, skipped: [] });
+    expect(pending(ctx).map((p: any) => p.conversation_id)).toEqual([CONV]);
   });
 
   test("a retried send returns the same shape, zeroed; more than 20 channels is reported as truncated", async () => {

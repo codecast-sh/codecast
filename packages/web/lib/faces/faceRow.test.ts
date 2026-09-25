@@ -18,6 +18,7 @@ import {
   type FaceRowInput,
   isInHuddle,
   roomHeldAsBurst,
+  callRoomOf,
 } from "./faceRow";
 
 const NOW = 1_700_000_000_000;
@@ -641,6 +642,17 @@ describe("selectors", () => {
     );
     expect(roomHeldAsBurst(DM_ANN, joined)).toBe(false);
     expect(roomHeldAsBurst(DM_ANN, deriveFaceRow(input(), null))).toBe(false);
+  });
+
+  test("callRoomOf is the call I am on: never a burst, never no room", () => {
+    const talking = deriveFaceRow(input({ walkie: walkie(burstRoom(DM_ANN), { sending: sendingTo(DM_ANN) }) }), null);
+    expect(callRoomOf(talking)).toBeNull();
+    const joined = deriveFaceRow(
+      input({ walkie: walkie(burstRoom(DM_ANN, "call")), occupancy: { [DM_ANN]: [seat(ME), seat(ANN)] }, call: call(DM_ANN) }),
+      talking,
+    );
+    expect(callRoomOf(joined)).toBe(DM_ANN);
+    expect(callRoomOf(deriveFaceRow(input(), null))).toBeNull();
   });
 
   test("engagementOf answers offline for a stranger", () => {

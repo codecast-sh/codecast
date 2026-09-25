@@ -54,7 +54,6 @@ function fixtures(conversations: any[], extra: Record<string, any[]> = {}) {
     pending_messages: [],
     devices: [],
     anchors: [],
-    role_wake_outbox: [],
     ...extra,
   });
 }
@@ -205,9 +204,10 @@ describe("an escalation reaches the person through the role (R1, revised)", () =
     expect(statusOf("s")).toEqual(["held"]);
     expect(statusOf("a")).toEqual(["pending"]);
     // A person's hand back from the web is not the role's own line: the role
-    // hears it as a turn, the child too.
+    // hears it as a turn, the child too, and the held note rides that turn
+    // the way any deferred note does.
     await performEscalateSession(ctx, ME as any, { session_id: "jx7aaaa", clear: true });
-    expect(statusOf("s")).toEqual(["held", "pending"]);
+    expect(statusOf("s")).toEqual(["pending", "pending"]);
   });
 
   test("a session the team can no longer see leaves the role in the same patch, and both threads say so", async () => {

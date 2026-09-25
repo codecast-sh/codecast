@@ -184,7 +184,7 @@ export const ORG_STAFFING_FIXTURE_HEALTH: OrgHealth = {
       ledger: { open_tasks: 19, in_flight: 11, active_plans: 2 },
       counted: { rule: "scope", projects: 1, plans: 3, tasks: 31, complete: true, note: "1 projects and 3 plans in scope and every task filed under either: 31 tasks, read by index" },
       spend: { wakes_today: 22, wakes_7d_avg: 27, wakes_cap: 40, tokens_today: 390_000, tokens_7d_avg: 372_000, tokens_cap: 400_000, cap_hits_7d: 4 },
-      flow: { decisions_7d: 9, median_recommend_min: 3, escalations_7d: 2, frames_dropped_7d: 1, done_7d: 12, handoffs_7d: { done: 10, blocked: 1, needs_context: 1 }, review_stalls: 1, sends_7d: { to: [], from: [] } },
+      flow: { decisions_7d: 9, median_recommend_min: 3, escalations_7d: 2, done_7d: 12, handoffs_7d: { done: 10, blocked: 1, needs_context: 1 }, review_stalls: 1, sends_7d: { to: [], from: [] } },
       last_move_at: T0 - 86_400_000 * 12, idle_days: 0,
       flags: [
         { code: "overloaded", severity: "warn", detail: "4 cap hit days this week against a model of 1; ledger 19 open, 11 in flight, 2 active plans" },

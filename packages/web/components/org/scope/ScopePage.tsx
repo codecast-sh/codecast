@@ -255,7 +255,6 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
       counters={counters}
       armRetire={retireArmed}
       now={now}
-      wakeHighlight={searchParams.get("wake")}
       backHref={backHref}
       onUpdate={update}
       onReparent={reparent}
@@ -275,7 +274,7 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
       <div className="shrink-0 h-[3px] w-full" style={{ background: stateMeta ? `linear-gradient(90deg, ${stateMeta.color}, color-mix(in srgb, ${stateMeta.color} 30%, transparent) 70%, transparent)` : "color-mix(in srgb, var(--sol-violet) 55%, transparent)" }} aria-hidden />
 
       {/* header: the face, the name, who it reports to, the state; the composer below is Talk */}
-      <header className={cn("shrink-0 border-b", phone ? "px-3 pt-2 pb-2" : "px-5 pt-3 pb-2.5")} style={{ borderColor: "color-mix(in srgb, var(--sol-border) 22%, transparent)", background: stateMeta ? `linear-gradient(180deg, color-mix(in srgb, ${stateMeta.color} 5%, var(--sol-bg)) 0%, var(--sol-bg) 100%)` : undefined }}>
+      <header className={cn("scope-head-cq shrink-0 border-b", phone ? "px-3 pt-2 pb-2" : "px-5 pt-3 pb-2.5")} style={{ borderColor: "color-mix(in srgb, var(--sol-border) 22%, transparent)", background: stateMeta ? `linear-gradient(180deg, color-mix(in srgb, ${stateMeta.color} 5%, var(--sol-bg)) 0%, var(--sol-bg) 100%)` : undefined }}>
         <div className="flex items-start gap-3">
           {session?.onBack ? (
             <button type="button" onClick={session.onBack} className="shrink-0 mt-[3px] inline-flex items-center justify-center w-7 h-7 rounded-lg hover:bg-sol-bg-highlight/70" style={{ color: "var(--sol-text-muted)" }} aria-label="Back to the inbox" data-scope-back="inbox">
@@ -290,16 +289,16 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
           {role && <RoleFace role={role} size={phone ? 34 : 40} className="shrink-0 mt-[2px]" />}
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 flex-wrap min-w-0">
-              <h1 className={cn("font-semibold tracking-tight leading-none truncate", phone ? "text-[18px]" : "text-[22px]")} style={{ fontFamily: "var(--font-serif)" }}>{name}</h1>
-              <span className="inline-flex items-center h-[20px] px-1.5 rounded-md text-[10.5px] font-medium" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)", fontFamily: "var(--font-mono)" }}>@{handle}</span>
+              <h1 className={cn("shrink-0 max-w-full font-semibold tracking-tight leading-none truncate", phone ? "text-[18px]" : "text-[22px]")} style={{ fontFamily: "var(--font-serif)" }}>{name}</h1>
+              <span className="shrink-0 whitespace-nowrap inline-flex items-center h-[20px] px-1.5 rounded-md text-[10.5px] font-medium" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)", fontFamily: "var(--font-mono)" }}>@{handle}</span>
               {!role && <span className="inline-flex items-center gap-1 text-[10.5px]" style={{ color: "var(--sol-text-dim)" }}><Network className="w-3 h-3" /> the whole workspace</span>}
               {stateMeta && (
-                <span className="inline-flex items-center gap-1.5 h-[20px] px-1.5 rounded-md text-[10.5px] font-medium border" style={{ borderColor: `color-mix(in srgb, ${stateMeta.color} 45%, transparent)`, color: stateMeta.color }} data-scope-state={stateMeta.label}>
+                <span className="shrink-0 whitespace-nowrap inline-flex items-center gap-1.5 h-[20px] px-1.5 rounded-md text-[10.5px] font-medium border" style={{ borderColor: `color-mix(in srgb, ${stateMeta.color} 45%, transparent)`, color: stateMeta.color }} data-scope-state={stateMeta.label}>
                   <span className={cn("w-[6px] h-[6px] rounded-full", stateMeta.pulse && "animate-pulse")} style={{ background: stateMeta.color }} />
                   {stateMeta.label}
                 </span>
               )}
-              {paused && <span className="text-[10px] px-1.5 h-[18px] inline-flex items-center rounded-md" style={{ background: "color-mix(in srgb, var(--sol-yellow) 14%, transparent)", color: "var(--sol-yellow)" }}>paused</span>}
+              {paused && <span className="shrink-0 whitespace-nowrap text-[10px] px-1.5 h-[18px] inline-flex items-center rounded-md" style={{ background: "color-mix(in srgb, var(--sol-yellow) 14%, transparent)", color: "var(--sol-yellow)" }}>paused</span>}
             </div>
             {/* Line two: the state line (the brief's first line, else the standing
                 session's own) and who the role reports to. Trust, host, model and
@@ -311,7 +310,7 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
                 <p className="min-w-0 flex-1 truncate italic" style={{ color: "var(--sol-text-dim)" }} data-scope-stripe>{role ? (noStanding ? "Not online yet." : "No brief line yet.") : "Everything in the workspace, as one scope."}</p>
               )}
               {role && !phone && (
-                <span className="shrink-0 inline-flex items-center gap-1.5" style={{ color: "var(--sol-text-muted)" }} data-scope-reports-to>
+                <span className="scope-head-wide shrink-0 inline-flex items-center gap-1.5 whitespace-nowrap" style={{ color: "var(--sol-text-muted)" }} data-scope-reports-to>
                   <span style={{ color: "var(--sol-text-dim)" }}>reports to</span>
                   {role.reports_to.kind === "role"
                     ? <Link href={`/org/${tree.roles.find((r) => r._id === (role.reports_to as any).role_id)?.short_id ?? ""}`} className="font-medium hover:underline" style={{ color: "var(--sol-text)" }}>{parentName(tree, role.reports_to)}</Link>
@@ -322,7 +321,7 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
           </div>
           <div className="shrink-0 flex items-center gap-1.5">
             {!phone && role && canEdit && (
-              <ActionButton icon={paused ? Play : Pause} label={paused ? "Resume" : "Pause"} tip={paused ? "Held wakes ship as one frame" : "Hands stop at a safe point; wakes hold"} onClick={() => update({ status: paused ? "active" : "paused" })} />
+              <ActionButton icon={paused ? Play : Pause} label={paused ? "Resume" : "Pause"} tip={paused ? "Its triggers resume" : "Hands stop at a safe point; its triggers pause"} onClick={() => update({ status: paused ? "active" : "paused" })} />
             )}
             {!phone && role && canEdit && <ActionButton icon={Archive} label="Retire" danger tip="Retire this seat; you confirm on Settings" onClick={() => { setRetireArmed(true); openTab("settings"); }} />}
             <PanelToggle open={panelOpen} needsYou={needsYou} compact={phone} onClick={() => setPanelOpen((v) => !v)} />
@@ -385,12 +384,12 @@ function PanelToggle({ open, needsYou, compact, onClick }: { open: boolean; need
         className={cn("relative h-[32px] inline-flex items-center justify-center gap-1.5 rounded-lg text-[12.5px] font-medium transition-colors hover:bg-sol-bg-highlight/70", compact ? "w-[32px]" : "px-3", open && "bg-sol-bg-highlight/60")}
         style={{ border: "1px solid color-mix(in srgb, var(--sol-border) 40%, transparent)", color: open ? "var(--sol-text)" : "var(--sol-text-muted)" }}
         aria-pressed={open}
-        aria-label={compact ? tip : undefined}
+        aria-label={tip}
         data-scope-panel-toggle={open ? "open" : "closed"}
         data-scope-needs-you={needsYou}
       >
         <Icon className="w-3.5 h-3.5" />
-        {!compact && "Board"}
+        {!compact && <span className="scope-head-wide">Board</span>}
         {needsYou > 0 && <span className="absolute -top-[3px] -right-[3px] w-[8px] h-[8px] rounded-full ring-2" style={{ background: "var(--sol-yellow)", ["--tw-ring-color" as any]: "var(--sol-bg)" }} aria-hidden data-scope-panel-dot />}
       </button>
     </ShortcutTooltip>
@@ -437,12 +436,13 @@ function ActionButton({ icon: Icon, label, onClick, disabled, tip, primary, dang
       type="button"
       onClick={onClick}
       disabled={disabled}
+      aria-label={label}
       className={cn("h-[32px] inline-flex items-center justify-center gap-1.5 px-3 rounded-lg text-[12.5px] font-medium transition-colors disabled:opacity-45 disabled:cursor-not-allowed", grow && "flex-1", !primary && !disabled && "hover:bg-sol-bg-highlight/70", primary && !disabled && "hover:brightness-110")}
       style={primary
         ? { background: "var(--sol-violet)", color: "var(--sol-bg)" }
         : { border: "1px solid color-mix(in srgb, var(--sol-border) 40%, transparent)", color: danger ? "var(--sol-red)" : "var(--sol-text-muted)" }}
     >
-      <Icon className="w-3.5 h-3.5" /> {label}
+      <Icon className="w-3.5 h-3.5" /><span className="scope-head-wide">{label}</span>
     </button>
   );
   if (!tip) return btn;

@@ -1,12 +1,23 @@
 import { useMemo, useCallback } from "react";
 import { isCommandMessage, isHiddenSystemNotice, initialSubagentPromptId } from "../lib/conversationProcessor";
 import { isModelSwitchStdout } from "@codecast/shared/contracts";
-import { sentToRef } from "../components/roleWake";
 import { isToolResultCarrier, foldNudgeRuns, nudgeLabel, type NudgeRow } from "../components/sessionMessage";
 import { sameMessageAuthor } from "../lib/messageAuthors";
 import { FOLD_KEPT_USER_KINDS, classifyUserMessage, isAlwaysVisibleToolCall, isHiddenStubMessage, parseCastCommand, stripSystemTags } from "../components/conversation/classify";
 import type { Message, ReceiptEntry, TimelineItem, UserMessageKind } from "../components/conversation/types";
 import type { ConversationData } from "../components/conversation/types";
+
+/** The session a `cast send` reached: the first bare word after the verb
+ *  (flags such as --wake may come first). Null for any other cast command. */
+export function sentToRef(cmd: { category: string; subcommand: string; args: string } | null | undefined): string | null {
+  if (!cmd || cmd.category !== "send") return null;
+  const words = [cmd.subcommand, ...cmd.args.split(/\s+/)].filter(Boolean);
+  for (const w of words) {
+    if (w.startsWith("-")) continue;
+    return /^[A-Za-z0-9]{5,}$/.test(w) ? w : null;
+  }
+  return null;
+}
 
 export function useTimelineTurns({ messages, conversation, hasMoreAbove, timeline, messageAuthors, hasMoreBelow, foldWorkingTurns }: {
   messages: Message[];
@@ -66,14 +77,14 @@ export function useTimelineTurns({ messages, conversation, hasMoreAbove, timelin
   // COMPACT works at TURN granularity (one collapsed card per assistant run), so
   // we also track each message's turn key, first/last message, and stats.
   const turnAggregates = useMemo(() => {
-    const TURN_BOUNDARY_KINDS = new Set(['normal', 'direct_user', 'command', 'plan', 'session_handoff', 'session_message', 'chat_wake', 'role_wake', 'agent_switch', 'machine_move', 'session_escalation']);
+    const TURN_BOUNDARY_KINDS = new Set(['normal', 'direct_user', 'command', 'plan', 'session_handoff', 'session_message', 'chat_wake', 'agent_switch', 'machine_move', 'session_escalation']);
     const turnKeyOf = new Map<string, string>();      // msgId -> turn key
     const firstAssistOf = new Map<string, string>();  // turn key -> first assistant msgId
     const lastTextOf = new Map<string, string>();     // turn key -> last text-bearing msgId
     const statsOf = new Map<string, { messages: number; tools: number; preview: string }>();
     const receiptOf = new Map<string, ReceiptEntry[]>(); // owner msgId -> folded hideable tools, per source message
     const absorbed = new Set<string>();                // msgId folded into an earlier receipt
-    // Where a turn's message went (roleWake.ts, scopes-and-feed.md F4.2), keyed
+    // Where a turn's message went (sentToRef above, scopes-and-feed.md F4.2), keyed
     // by the boundary user message that opened the turn: when the next turn
     // began (so a wake card claims only the hands started inside its window),
     // and the sessions the agent ran `cast send` to. A window that runs off

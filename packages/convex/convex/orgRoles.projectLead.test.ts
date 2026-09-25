@@ -24,7 +24,6 @@ function fixtures() {
     counters: [],
     org_roles: [],
     org_role_history: [],
-    role_wake_outbox: [],
     conversations: [],
     session_owners: [],
     managed_sessions: [],
@@ -42,21 +41,16 @@ const ctxOf = (db: any, who = ME) => ({ db, auth: { getUserIdentity: async () =>
 const role = (db: any, handle: string, project_ids: string[], reports_to?: any) =>
   performCreateRole(ctxOf(db), ME as any, { name: handle, handle, team_id: TEAM, scope: { project_ids: project_ids as any, plan_ids: [] }, reports_to });
 const scopeOf = async (db: any, id: any) => ((await db.get(id)).scope.project_ids as any[]).map(String);
-const causesFor = (db: any, id: any) => db._tables.role_wake_outbox.filter((r: any) => String(r.role_id) === String(id)).map((r: any) => r.cause as string);
 
 describe("performSetProjectLead", () => {
-  test("names the owner and adds the project to a scope that does not list it; the role hears both", async () => {
+  test("names the owner and adds the project to a scope that does not list it", async () => {
     const db = fixtures();
     const billing = await role(db, "billing", [Q]);
-    // A role hears nothing until it has a standing agent to wake.
     await db.patch(billing._id, { anchor_id: "anchors_billing" });
     const out = await performSetProjectLead(ctxOf(db), ME as any, { project_id: P as any, role_id: String(billing._id) });
     expect(out).toMatchObject({ owner_role_id: String(billing._id), scope: "added" });
     expect(String((await db.get(P)).owner_role_id)).toBe(String(billing._id));
     expect(await scopeOf(db, billing._id)).toEqual([Q, P]);
-    const causes = causesFor(db, billing._id);
-    expect(causes.some((c) => c.startsWith("you now lead the project Growth"))).toBe(true);
-    expect(causes.some((c) => c.startsWith("scope changed"))).toBe(true);
   });
 
   test("a scope that already lists the project is left alone", async () => {
@@ -121,7 +115,7 @@ describe("naming a lead takes over the project's sessions, with the person's one
     const db: any = fixtures();
     Object.assign(db._tables.projects.find((p: any) => p._id === P), { project_path: "/repo/growth" });
     db._tables.conversations.push(conv(1), conv(2));
-    for (const t of ["anchors", "role_wakes", "session_decisions", "messages", "user_presence", "pending_messages", "devices", "docs"]) db._tables[t] ??= [];
+    for (const t of ["anchors", "session_decisions", "messages", "user_presence", "pending_messages", "devices", "docs"]) db._tables[t] ??= [];
     return db;
   }
   const roleOfSession = (db: any, n: number) => db._tables.conversations.find((c: any) => c._id === `conversations_s${n}`).org_role_id;
@@ -167,7 +161,6 @@ describe("performCoverProjects", () => {
     const out = await performCoverProjects(ctxOf(db), ME as any, growth._id, [P, Q, Q] as any);
     expect(out).toMatchObject({ added: [Q], listed: [P], skipped: [] });
     expect(await scopeOf(db, growth._id)).toEqual([P, Q]);
-    expect(causesFor(db, growth._id).filter((c) => c.startsWith("scope changed"))).toHaveLength(1);
     // Calling it again is safe: nothing is written twice.
     expect(await performCoverProjects(ctxOf(db), ME as any, growth._id, [P, Q] as any)).toMatchObject({ added: [], listed: [P, Q] });
     expect(await scopeOf(db, growth._id)).toEqual([P, Q]);

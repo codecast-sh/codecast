@@ -1,6 +1,5 @@
 import { v } from "convex/values";
 import { resolveActor } from "./lib/actor";
-import { enqueueForScopeChange, markOrgActor } from "./orgEvents";
 import type { Id } from "./_generated/dataModel";
 import { mutation, query } from "./functions";
 import { verifyApiToken } from "./apiTokens";
@@ -521,7 +520,6 @@ export const post = mutation({
     const fromAgent = !!conversation_id;
     const conversation = conversation_id ? await ctx.db.get(conversation_id) : null;
     const actor = await resolveActor(ctx, auth.userId, conversation);
-    markOrgActor(ctx, conversation);
     const kind = args.kind ?? "update";
     const result = await insertUpdate(ctx, project, {
       user_id: actor.kind === "role" ? actor.user_id : auth.userId,
@@ -533,15 +531,6 @@ export const post = mutation({
       body: args.body,
       conversation_id,
     });
-    // A subordinate's digest is a fold row for every role whose scope holds
-    // the project (org-roles-standing.md T3); the loop rules drop the
-    // poster's own role and its parent.
-    if (kind === "digest" && fromAgent) {
-      await enqueueForScopeChange(ctx, "tasks", { _id: project._id, project_id: project._id, team_id: project.team_id, user_id: project.user_id, title: args.title ?? "digest", status: "posted", short_id: result.short_id }, {
-        actorConversationId: conversation_id,
-        cause: `digest ${result.short_id} posted on project ${project.title}: ${(args.title ?? args.body).slice(0, 120)}`,
-      });
-    }
     return result;
   },
 });

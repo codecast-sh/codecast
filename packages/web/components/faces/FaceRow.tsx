@@ -26,11 +26,11 @@ import { type FaceDensity, FACE_ROW_METRICS, LINK_PULL, faceRowWidth, faceRowSiz
 // machinery (useFloatingCircles) sizes the window and lifts click through;
 // `FloatingFaceRow` is the row with that machinery attached.
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from "react";
-import { GripHorizontal, Maximize2, MicOff, Sparkle, X } from "lucide-react";
+import { ChevronLeft, GripHorizontal, Maximize2, MicOff, Sparkle, X } from "lucide-react";
 import { defaultAvatarFor, isAvatarKey } from "@codecast/shared/contracts/orgAvatars";
 import { AVATAR_URLS } from "../../lib/orgAvatars";
 import { useInboxStore } from "../../store/inboxStore";
-import type { FaceEntry, FaceRow as FaceRowModel, FaceState, LinkKind } from "../../lib/faces/faceRow";
+import { callRoomOf, type FaceEntry, type FaceRow as FaceRowModel, type FaceState, type LinkKind } from "../../lib/faces/faceRow";
 import { useCircleFace } from "../../hooks/useCircleFace";
 import { CircleFace } from "../calls/FaceCircle";
 import { firstName } from "../calls/speakers";
@@ -132,6 +132,9 @@ function anchorAvatarOf(anchors: Record<string, any> | undefined, botUserId: str
   return null;
 }
 
+/** On the call's track: me, and everyone linked to me. */
+const onTheCall = (e: FaceEntry): boolean => e.tier === "me" || e.tier === "linked";
+
 function FaceSeat({
   entry,
   tile,
@@ -143,6 +146,9 @@ function FaceSeat({
   onToggle,
   onPress,
   registerKey,
+  stacked,
+  stackDepth = 0,
+  onExpand,
   onPointerDown,
   onPointerUp,
 }: {
@@ -159,6 +165,12 @@ function FaceSeat({
   onPress: () => void;
   /** The seat's key, for the card's Talk button: one key per person. */
   registerKey: (id: string, key: FaceKey | null) => void;
+  /** Folded into the stack beside a call: the face is part of one control
+   *  that spreads the team back out, with no card and no marks of its own. */
+  stacked: boolean;
+  /** Its place in the stack, from the front: the first face sits on top. */
+  stackDepth?: number;
+  onExpand: () => void;
   onPointerDown?: (e: React.PointerEvent) => void;
   onPointerUp?: (e: React.PointerEvent) => void;
 }) {
@@ -202,8 +214,10 @@ function FaceSeat({
       data-card={cardOpen ? "1" : undefined}
       data-hold={key.holding ? "1" : undefined}
       data-ask={entry.ask > 0 ? entry.ask : undefined}
-      {...key.warmProps}
-      onMouseEnter={() => onHover(entry.id)}
+      data-stacked={stacked ? "1" : undefined}
+      style={stacked ? { zIndex: 10 - Math.min(stackDepth, 9) } : undefined}
+      {...(stacked ? {} : key.warmProps)}
+      onMouseEnter={() => onHover(stacked ? null : entry.id)}
       onMouseLeave={() => onHover(null)}
     >
       <button
@@ -218,13 +232,15 @@ function FaceSeat({
         data-followed={entry.followed ? "true" : undefined}
         data-walkie-state={entry.me ? undefined : key.state}
         className={`face ${presence ? presenceAvatarClass(presence) : ""}`.trim()}
-        aria-label={entry.me ? `${entry.name} (you)` : entry.name}
-        aria-expanded={canOpen ? cardOpen : undefined}
-        aria-haspopup={canOpen ? "dialog" : undefined}
+        aria-label={stacked ? "Show the rest of the team" : entry.me ? `${entry.name} (you)` : entry.name}
+        title={stacked ? "Show the rest of the team" : undefined}
+        aria-expanded={stacked ? false : canOpen ? cardOpen : undefined}
+        aria-haspopup={canOpen && !stacked ? "dialog" : undefined}
         onClick={(e) => {
           e.preventDefault();
           e.stopPropagation();
-          if (canOpen) onToggle(entry.id);
+          if (stacked) onExpand();
+          else if (canOpen) onToggle(entry.id);
         }}
         onPointerDown={(e) => {
           onPress();
@@ -322,6 +338,28 @@ export function FaceRow({
   const orderSig = row.entries.map((e) => `${e.id}${linkTo.has(e.id) ? "+" : ""}`).join(",");
   useFlipRow(ownRef, orderSig);
 
+  // THE CALL. Me and everyone linked to me (a call, a ring, a voice either
+  // way) sit at the head of the row. The strip, the moment's controls, sits
+  // right after the last of them, and its plate runs back behind their faces
+  // as one track, so the people on the call read as one object with its
+  // controls and the rest of the team sits off it. The track is drawn, not a
+  // wrapper: a seat moved into a new parent would remount, and a person is
+  // one DOM node for as long as they are on the row.
+  const hasStrip = children != null && children !== false;
+  const callIds = row.entries.filter(onTheCall).map((e) => e.id);
+  const lastCallId = hasStrip ? callIds[callIds.length - 1] : undefined;
+  // THE STACK. On a call, everyone off it folds into one overlapped stack
+  // after the track: the call is what the row is about now. A press on the
+  // stack spreads the team back out as ordinary faces (their cards carry
+  // Add to call); the fold closes it again, and so does the next call.
+  const callRoom = callRoomOf(row);
+  const outsiders = row.entries.length - callIds.length;
+  const stackable = !!callRoom && callIds.length > 0 && outsiders >= 2;
+  const [spread, setSpread] = useState(false);
+  useLayoutEffect(() => setSpread(false), [callRoom]);
+  const stacked = stackable && !spread;
+  const lastId = row.entries[row.entries.length - 1]?.id;
+
   const cameraOf = (id: string): ParticipantTile | undefined =>
     tiles.find((t) => t.kind === "camera" && t.identity === id);
 
@@ -378,8 +416,8 @@ export function FaceRow({
   useEventListener("keydown", (e: Event) => {
     if (openId && (e as KeyboardEvent).key === "Escape") close();
   });
-  // The card is gone when its person leaves the row.
-  const onRow = !openId || row.entries.some((e) => e.id === openId);
+  // The card is gone when its person leaves the row, or folds into the stack.
+  const onRow = !openId || row.entries.some((e) => e.id === openId && !(stacked && !onTheCall(e)));
   useLayoutEffect(() => {
     if (!onRow) close();
   }, [onRow, close]);
@@ -413,16 +451,6 @@ export function FaceRow({
     [onOpenProfile, close],
   );
 
-  // THE CALL. Me and everyone linked to me (a call, a ring, a voice either
-  // way) sit at the head of the row. The strip, the moment's controls, sits
-  // right after the last of them, and its plate runs back behind their faces
-  // as one track, so the people on the call read as one object with its
-  // controls and the rest of the team sits off it. The track is drawn, not a
-  // wrapper: a seat moved into a new parent would remount, and a person is
-  // one DOM node for as long as they are on the row.
-  const hasStrip = children != null && children !== false;
-  const callIds = row.entries.filter((e) => e.tier === "me" || e.tier === "linked").map((e) => e.id);
-  const lastCallId = hasStrip ? callIds[callIds.length - 1] : undefined;
   const trackKind = row.links.some((l) => l.kind === "ring") ? "ring" : row.links[0]?.kind;
   const trackRef = useRef<HTMLSpanElement | null>(null);
   const stripEl = useRef<HTMLDivElement | null>(null);
@@ -469,6 +497,7 @@ export function FaceRow({
       className={`face-row ${className}`.trim()}
       data-density={density}
       data-holding={faces.sendingRoomKey ? "1" : undefined}
+      data-stacked={stacked ? "1" : undefined}
       role="group"
       aria-label="Team"
     >
@@ -492,6 +521,9 @@ export function FaceRow({
             onToggle={toggle}
             onPress={clearTimers}
             registerKey={registerKey}
+            stacked={stacked && !onTheCall(entry)}
+            stackDepth={i - callIds.length}
+            onExpand={() => setSpread(true)}
             onPointerDown={onDragStart}
             onPointerUp={onDragEnd}
           />
@@ -499,7 +531,46 @@ export function FaceRow({
         const out = kind
           ? [<span key={`link:${entry.id}`} className="face-link" data-link-kind={kind} aria-hidden="true" />, seat]
           : [seat];
-        return entry.id === lastCallId ? [...out, strip] : out;
+        if (entry.id === lastCallId) out.push(strip!);
+        // How many the stack holds, and a second way in.
+        if (entry.id === lastId && stacked) {
+          out.push(
+            <button
+              key="stack-count"
+              type="button"
+              className="face-row-stack-count"
+              data-chrome-hit
+              title="Show the rest of the team"
+              aria-label={`Show the rest of the team (${outsiders})`}
+              onClick={(e) => {
+                e.stopPropagation();
+                setSpread(true);
+              }}
+            >
+              {outsiders}
+            </button>,
+          );
+        }
+        // The fold, after the spread team: the way back to the stack.
+        if (entry.id === lastId && stackable && spread) {
+          out.push(
+            <button
+              key="fold"
+              type="button"
+              className="face-row-fold"
+              data-chrome-hit
+              title="Fold the team back beside the call"
+              aria-label="Fold the team back beside the call"
+              onClick={(e) => {
+                e.stopPropagation();
+                setSpread(false);
+              }}
+            >
+              <ChevronLeft aria-hidden="true" />
+            </button>,
+          );
+        }
+        return out;
       })}
       {/* The strip: in the row, after the faces it is about (the call's, when
           there is one). Never under them, where a face's own card opens. */}

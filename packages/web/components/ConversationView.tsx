@@ -53,8 +53,6 @@ import { useConversationCommentsSync } from "../hooks/useConversationComments";
 import { useSyncConversationExternalEvents, useExternalEvents, externalEventsOldestFirst } from "../hooks/useSyncExternalEvents";
 import { ExternalEventRow } from "./feed/ExternalEventRow";
 import { externalEventRowToExternalEvent, isQuietExternalEvent, type ExternalEventRecord } from "../lib/externalEvents";
-import { RoleWakeBlock } from "./RoleWakeBlock";
-import { sentToRef } from "./roleWake";
 import { extractFileChanges } from "../lib/fileChangeExtractor";
 import { CommitCard } from "./CommitCard";
 import { PRCard } from "./PRCard";
@@ -1617,7 +1615,6 @@ const ConversationViewInner = (
       const kind = userMsgKindMap.get(msg._id);
       if (foldWorkingTurns && !FOLD_KEPT_USER_KINDS.has(kind?.kind ?? 'normal')) return 0;
       switch (kind?.kind) {
-        case 'role_wake': return 36;
         case 'command': return 120;
         case 'bash_input': return 130;
         case 'bash_output': return commandExpansionMap.consumed.has(msg._id) ? 0 : 110;
@@ -3358,8 +3355,6 @@ const ConversationViewInner = (
           return <HuddleSummaryBlock key={msg._id} huddle={kind.huddle} timestamp={msg.timestamp} />;
         case 'chat_wake':
           return <ChatWakeBlock key={msg._id} wake={kind.wake} timestamp={msg.timestamp} />;
-        case 'role_wake':
-          return <RoleWakeBlock key={msg._id} frame={kind.frame} timestamp={msg.timestamp} conversationId={conversation?._id} until={turnAggregates.routingOf.get(msg._id)?.until ?? null} sentTo={turnAggregates.routingOf.get(msg._id)?.sentTo} />;
         case 'task_prompt':
           return null;
         case 'compaction_summary':

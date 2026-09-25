@@ -31,7 +31,7 @@ import {
   resolveScopeRef,
   rolesInBoundary, performSetAuthority, performSetProjectLead } from "./orgRoles";
 import { performAcceptUpgrade, performUpsertInstance } from "./orgTemplates";
-import { capsFor, countersFor, roleStartsOnItsOwn, trustOf } from "./orgEvents";
+import { capsFor, countersFor, roleStartsOnItsOwn, trustOf } from "./lib/orgCaps";
 import { autonomyChangeWords } from "@codecast/shared/contracts/roleAutonomy";
 import { findDecision } from "./sessionDecisions";
 import { extractRepoFromRemoteUrl, isRecRoomKey, threadStateHeadline } from "@codecast/shared/contracts";
@@ -336,7 +336,7 @@ export async function computeAnalysisOrg(ctx: Ctx, userId: Id<"users">, teamId: 
       whole_workspace: isWholeWorkspace(ids),
       charter: (role.charter ?? "").slice(0, 400) || undefined,
       standing: !!role.anchor_id,
-      last_wake_at: role.last_wake_at ?? null,
+      checked_at: role.checked_at ?? null,
       hands,
       last_scope_event_at: activity.last_scope_event_at,
       idle_days: activity.idle_days,

@@ -139,7 +139,7 @@ export function bootstrapMessage(opts: {
       `  can read. No number stands in for it: a project with no line shows as "no word from you`,
       `  yet". One list line per project, the project's name before the colon and the day you`,
       `  wrote it in parentheses at the end. Keep the lines current at the end of any turn that`,
-      `  changed what a project is doing; your frame reads them back to you with their age.`,
+      `  changed what a project is doing; \`cast brief\` reads them back to you with their age.`,
       `- **Remembering is something a person says.** When someone tells you to remember a decision,`,
       `  a requirement or a pitfall, it goes into the brief in that same turn, in your own words, and`,
       `  your reply says so. When they tell you to forget one, it comes out of the brief; forgetting`,
@@ -178,16 +178,17 @@ export function bootstrapMessage(opts: {
       `  day's limit, a switch that is off, a failed spawn) is said as that, never as started.`,
       `- **The person can redirect you in plain words** ("answer that here", "put this in the pricing`,
       `  thread", "ask me before you start one"), and you keep to it from then on: write the`,
-      `  preference into the brief so it survives your next wake.`,
+      `  preference into the brief so it survives your next turn.`,
       ``,
       `## The rules of a role`,
-      `- **Wake, read, act, brief.** Every turn starts with a frame: why you are awake, your scope`,
-      `  now, your sessions. Read your charter and brief before acting, and end by updating`,
-      `  the brief. Understand first; a role that does not start work on its own reports and`,
-      `  recommends, it does not start hands or answer decisions.`,
+      `- **Read, act, brief.** You wake on your own schedule, a trigger a person sees and changes`,
+      `  on your page, and whenever someone writes to you. Start every turn with \`cast brief\`: your`,
+      `  scope now, what changed since you last looked, your sessions, your charter. Read before`,
+      `  acting, and end by updating the brief. Understand first; a role that does not start work`,
+      `  on its own reports and recommends, it does not start hands or answer decisions.`,
       `- **Your sessions are yours to triage.** The sessions that report to you stay out of a`,
       `  person's inbox, so a person sees only what you put in front of them, and a wait you neither`,
-      `  answered nor escalated is a wait nobody can see. At every wake, read which of your sessions`,
+      `  answered nor escalated is a wait nobody can see. Every time you run, read which of your sessions`,
       `  are waiting on a person. Answer what your switch and your grants let you answer. Put`,
       `  the rest in front of the person with \`cast escalate <session> "<line>"\`: that puts YOUR card`,
       `  in their inbox with the line and the session, the session stays under you, and the person`,
@@ -202,9 +203,9 @@ export function bootstrapMessage(opts: {
       `  to five goals and to notice when one is dropped. Their goals live in your brief under a`,
       `  heading \`## Goals: <their name>\`, one goal per line in their own words, \`(high)\` on the`,
       `  ones that matter most, and the sessions, tasks and plans you have matched to a goal written`,
-      `  on its line as short ids; your frame reads those ids back to you with what moved and what`,
+      `  on its line as short ids; \`cast brief\` reads those ids back to you with what moved and what`,
       `  stalled. When they tell you their goals, or change one, that is a brief write in the same`,
-      `  turn. At every wake, read their sessions that changed against their goals: say in your own`,
+      `  turn. Every time you run, read their sessions that changed against their goals: say in your own`,
       `  words which goal each session serves and which goals nothing served, and update the matches`,
       `  in the brief. A stalled goal is yours to name to them; a stalled high priority goal reaches`,
       `  them once a day on its own, so add to that only when you can say what would move it.`,
@@ -349,8 +350,7 @@ export function seatTitlePatch(adopt: any, roleName: string): Record<string, any
   return { title: roleName, title_is_custom: true, seat_previous: adopt.seat_previous ?? { title: adopt.title ?? undefined, title_is_custom: adopt.title_is_custom ?? undefined } };
 }
 
-// The seating note lands as a plain turn, never a held wake: it must read
-// before the bootstrap, and a held row would only surface inside a frame.
+// The seating note lands as a plain turn ahead of the bootstrap.
 export async function announceSeating(ctx: any, conversationId: Id<"conversations">, hostUserId: Id<"users">, announce: string | undefined): Promise<void> {
   if (!announce) return;
   const host = await ctx.db.get(hostUserId);

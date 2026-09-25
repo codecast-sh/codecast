@@ -18,7 +18,6 @@ import { RoleAvatar } from "../org/avatars";
 import { HoverCard } from "../ui/HoverCard";
 import { RoleScopeView } from "./RoleScopeView";
 import { isAvatarKey, defaultAvatarFor } from "@codecast/shared/contracts/orgAvatars";
-import { relativeTime } from "../../lib/entityDisplay";
 import type { RoleCardAnswer } from "../../lib/roleScope";
 import type { SessionRoleSnapshot } from "../../store/inboxStore";
 
@@ -59,7 +58,7 @@ export function RoleHoverContent({ role }: { role: RoleRef }) {
       </div>
       {model && <RoleScopeView model={model} escalated={escalated} density="card" />}
       <div className="flex items-center justify-between pt-1.5 border-t border-sol-border/30 text-[10px] text-sol-text-dim">
-        <span className="font-mono">{r.short_id}{card?.last_wake_at ? ` · woke ${relativeTime(card.last_wake_at)}` : ""}</span>
+        <span className="font-mono">{r.short_id}</span>
         <span className="inline-flex items-center gap-0.5 text-sol-text-muted">Open role <ArrowUpRight className="w-2.5 h-2.5" /></span>
       </div>
     </Link>

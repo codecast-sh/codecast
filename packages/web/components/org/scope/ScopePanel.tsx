@@ -31,7 +31,7 @@ import type { RoleEscalation } from "@codecast/shared/contracts";
 import { noWordYet, parseStandingSection, standingLineAgeDays, standingLineFor, standingLineStale } from "@codecast/shared/contracts/briefStanding";
 import { ScopeSettings } from "./ScopeSettings";
 import { ScopeLineTab } from "./ScopeLineTab";
-import { ScopeWakesTab } from "./ScopeWakesTab";
+import { ScopeTriggersTab } from "./ScopeTriggersTab";
 import type { BriefPerson, RoleBrief, RoleCounters, ScopeSummary } from "./scopeTypes";
 import { PersonGoals } from "./PersonGoals";
 import { OrgHistory } from "../history/OrgHistory";
@@ -69,7 +69,6 @@ export type ScopePanelProps = {
   counters: RoleCounters | null;
   armRetire: boolean;
   now: number;
-  wakeHighlight: string | null;
   backHref: string;
   onUpdate: (fields: OrgUpdateRoleInput, opts?: { leave_sessions?: boolean }) => void;
   onReparent: (target: OrgParentRef) => void;
@@ -154,7 +153,7 @@ export function ScopePanel(p: ScopePanelProps) {
               template={<TemplateSections roleId={role._id} canEdit={p.canEdit} />}
             />
           )}
-          {tab === "wakes" && role && <ScopeWakesTab role={role} highlight={p.wakeHighlight} now={p.now} />}
+          {tab === "triggers" && role && <ScopeTriggersTab standingConversationId={p.brief?.role.standing_conversation_id ?? null} />}
           {tab === "charter" && role && <ScopeCharterTab role={role} charter={p.brief?.charter ?? role.charter ?? ""} canEdit={p.canEdit} backHref={p.backHref} onUpdateCharter={(v) => p.onUpdate({ charter: v })} />}
           {tab === "settings" && role && (
             <ScopeSettings tree={tree} role={role} canEdit={p.canEdit} overlaps={p.summary?.overlaps ?? []} hostName={p.hostName} model={p.model} standingId={p.standingId} counters={p.counters} armRetire={p.armRetire} onUpdate={p.onUpdate} onReparent={p.onReparent} onRetire={p.onRetire} history={<RoleHistory roleId={role._id} />} />

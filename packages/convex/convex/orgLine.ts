@@ -1,7 +1,7 @@
 import { internalMutation } from "./functions";
 import type { Id } from "./_generated/dataModel";
 import { resolveScope } from "./org";
-import { capsFor, countersFor, roleStartsOnItsOwn } from "./orgEvents";
+import { capsFor, countersFor, roleStartsOnItsOwn } from "./lib/orgCaps";
 import { recordHandStart } from "./spawn";
 import { insertTaskComment } from "./tasks";
 import { createRunCore } from "./workflow_runs";

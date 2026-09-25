@@ -4,7 +4,7 @@ import { useInboxStore } from "../../store/inboxStore";
 //
 // The founder's report was "no sound that i started recording", and it was a
 // level problem: every walkie cue peaked around 0.011 while the ring sat at
-// 0.046 and the kill thud at 0.080. Nobody on this team is allowed to play
+// 0.046. Nobody on this team is allowed to play
 // these out loud, so a claim that a cue is now audible is worth nothing on its
 // own. `cueRender` builds the same graph `sounds.ts` builds and hands back the
 // samples, so these tests assert the numbers a speaker would actually get.
@@ -50,9 +50,8 @@ const CALL_RING: CueSpec = {
   ],
 };
 
-/** soundKill's noise thud: master 0.1 on an envelope that opens at 0.8. The
- *  loud end of the app, reserved for an alarm. No cue here may reach it. */
-const KILL_PEAK = 0.08;
+/** The ceiling no cue may reach: the level of an alarm. */
+const ALARM_CEILING = 0.08;
 
 const CUES: Array<{ name: string; spec: CueSpec; ms: number }> = [
   { name: "joined", spec: WALKIE_JOINED, ms: 310 },
@@ -100,15 +99,15 @@ describe("the renderer measures what it is given", () => {
 
 describe("every walkie cue is in the app's band", () => {
   // The floor is soundCallJoin, the quietest cue anybody has complained about
-  // being too loud rather than too quiet. The ceiling is soundKill, which is
-  // an alarm. A walkie cue belongs strictly between them.
+  // being too loud rather than too quiet. The ceiling is the level of an
+  // alarm. A walkie cue belongs strictly between them.
   const floor = cuePeak(CALL_JOIN);
 
   for (const { name, spec } of CUES) {
-    test(`${name} sits above soundCallJoin and below soundKill`, () => {
+    test(`${name} sits above soundCallJoin and below an alarm`, () => {
       const peak = cuePeak(spec);
       expect(peak).toBeGreaterThan(floor);
-      expect(peak).toBeLessThan(KILL_PEAK);
+      expect(peak).toBeLessThan(ALARM_CEILING);
     });
   }
 

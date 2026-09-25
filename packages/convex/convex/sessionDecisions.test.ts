@@ -806,7 +806,7 @@ describe("review wave 1 regressions", () => {
 describe("edit, withdraw and option pages (the-line.md L6, L10)", () => {
   const TOKEN = "decide-hygiene-token";
   async function seedWithToken(extra: Record<string, any[]> = {}) {
-    const out = seed({ api_tokens: [{ _id: "api_tokens_1", user_id: HOST, token_hash: await hashToken(TOKEN) }], role_wake_outbox: [], ...extra });
+    const out = seed({ api_tokens: [{ _id: "api_tokens_1", user_id: HOST, token_hash: await hashToken(TOKEN) }], ...extra });
     return out;
   }
   const editCall = (ctx: any, decision_id: string, fields: Record<string, any>) =>
@@ -898,20 +898,16 @@ describe("edit, withdraw and option pages (the-line.md L6, L10)", () => {
     expect((await editCall(ctx, first.short_id, { stack: stack.short_id })).error).toMatch(/is done/);
   });
 
-  test("withdraw settles: inbox rows close, the stack closes, and ladder roles receive the passive fact", async () => {
+  test("withdraw settles: inbox rows close and the stack closes", async () => {
     const { ctx, tables } = await seedWithToken({ anchors: [{ _id: "anchors_1", bot_user_id: HOST }] });
-    // The lead has an anchor, so a role event can be queued for it.
     tables.org_roles.find((r: any) => r._id === "org_roles_lead").anchor_id = "anchors_1";
     const stack = await createStackCore(ctx, HOST, { title: "S", session_id: "sess-ask" });
     const first = await askCore(ctx, { userId: HOST }, { session_id: "sess-ask", question: "Q?", options: twoOptions, context_md: "ctx", category: "approach", stack: stack.short_id });
-    tables.role_wake_outbox.length = 0;
     const r = await (withdraw as any)._handler(ctx, { api_token: TOKEN, decision_id: first.short_id });
     expect(r.status).toBe("withdrawn");
     expect(tables.session_decisions[0].status).toBe("withdrawn");
     expect(tables.decision_inbox.every((i: any) => i.status === "done")).toBe(true);
     expect(tables.decision_stacks[0].status).toBe("done");
-    const fact = tables.role_wake_outbox.find((e: any) => e.role_id === "org_roles_lead" && e.kind === "passive");
-    expect(fact?.cause).toContain("withdrawn");
     // A withdrawal is not an override: no grant is scored.
     expect(tables.decision_grants).toHaveLength(0);
   });

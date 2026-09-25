@@ -10,7 +10,11 @@
 // confirm step (chosen target, optional note, confirm button) and completes
 // from there. Open it with `useInboxStore.getState().openPalette({ pick })`.
 
-export type PalettePickKind = "session" | "doc" | "task" | "plan" | "channel";
+// "person" lists teammates and "role" the org roles that have a standing
+// agent; a role row's id is that agent's session.
+import { matchScore } from "./mentionRanking";
+
+export type PalettePickKind = "session" | "doc" | "task" | "plan" | "channel" | "person" | "role";
 
 export type PalettePickTarget =
   | { kind: PalettePickKind; id: string; label: string }
@@ -52,6 +56,8 @@ export type PalettePick = {
   title: string;
   preview?: { title: string; text?: string; url: string };
   kinds: PalettePickKind[];
+  // Ids of people and role sessions to leave out (already there).
+  exclude?: string[];
   extras?: PalettePickExtra[];
   // Collect an optional note. With this set, picking becomes two steps:
   // choose a target from the list, then a confirm view shows the chosen
@@ -62,3 +68,26 @@ export type PalettePick = {
   confirmLabel?: string;
   onPick: (target: PalettePickTarget, result: PalettePickResult) => void;
 };
+
+type WhoOption = { key: string; label: string; hint?: string };
+export type PickWhoRow<O extends WhoOption> = { kind: "person" | "role"; id: string; o: O };
+
+/** The person and role rows of a pick: teammates by user id, roles by their
+ *  standing agent's session (a role with none has no row), less the viewer
+ *  and the caller's exclusions, matched against the query. */
+export function pickWhoRows<O extends WhoOption>(opts: {
+  people: readonly O[] | null;
+  roles: readonly O[] | null;
+  standing: ReadonlyMap<string, string | undefined>;
+  skip: ReadonlySet<string>;
+  query: string;
+}): PickWhoRow<O>[] {
+  const q = opts.query.trim().toLowerCase();
+  const rows: PickWhoRow<O>[] = [
+    ...(opts.people ?? []).map((o) => ({ kind: "person" as const, id: String(o.key), o })),
+    ...(opts.roles ?? []).map((o) => ({ kind: "role" as const, id: opts.standing.get(String(o.key)) ?? "", o })),
+  ];
+  return rows
+    .filter((r) => r.id && !opts.skip.has(r.id) && matchScore(`${r.o.label} ${r.o.hint ?? ""}`, q) !== Infinity)
+    .slice(0, 12);
+}

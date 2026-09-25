@@ -60,12 +60,12 @@ function fixtures(extra: Record<string, any[]> = {}) {
       { _id: "anchors_growth", name: "Growth lead", scope_type: "team", team_id: TEAM, host_user_id: ME, bot_user_id: MATE, org_role_id: GROWTH, conversation_id: S_GROWTH, status: "active" },
       { _id: "anchors_billing", name: "Billing lead", scope_type: "team", team_id: TEAM, host_user_id: ME, bot_user_id: MATE, org_role_id: BILLING, conversation_id: S_BILLING, status: "active" },
     ],
-    // Four wakes today (the cap) and one held yesterday: two cap hit days. One dropped frame.
-    role_wakes: [
-      ...Array.from({ length: 4 }, (_, i) => ({ _id: `rw${i}`, role_id: GROWTH, short_id: `rw-${i}`, causes: [], status: "delivered", frame_chars: 1, created_at: NOW - i * 1000 })),
-      { _id: "rw_held", role_id: GROWTH, short_id: "rw-9", causes: [], status: "held", frame_chars: 0, created_at: NOW - D },
-      { _id: "rw_drop", role_id: GROWTH, short_id: "rw-8", causes: [], status: "dropped", frame_chars: 0, created_at: NOW - 2 * D },
-      { _id: "rw_old", role_id: GROWTH, short_id: "rw-7", causes: [], status: "delivered", frame_chars: 1, created_at: NOW - 10 * D },
+    // Eight turns of the standing session this week, four today and four
+    // yesterday (both at the cap of 4): two cap hit days. One old turn.
+    messages: [
+      ...Array.from({ length: 4 }, (_, i) => ({ _id: `mw${i}`, conversation_id: S_GROWTH, role: "user", content: "hi", timestamp: NOW - i * 1000 })),
+      ...Array.from({ length: 4 }, (_, i) => ({ _id: `my${i}`, conversation_id: S_GROWTH, role: "user", content: "hi", timestamp: NOW - D - i * 1000 })),
+      { _id: "m_old", conversation_id: S_GROWTH, role: "user", content: "hi", timestamp: NOW - 10 * D },
     ],
     projects: [
       { _id: P, user_id: ME, team_id: TEAM, workspace: WS, short_id: "pr-1", title: "Growth", goal: "Bring users in", status: "active", project_path: "/repo/growth", created_at: 1, updated_at: NOW - 10 * H },
@@ -127,15 +127,7 @@ function fixtures(extra: Record<string, any[]> = {}) {
       { _id: "cm2", team_id: TEAM, channel_id: "chat_channels_1", user_id: ME, content: "@growth again", mentions: [{ kind: "role", role_id: GROWTH, short_id: "or-1", handle: "growth" }, MATE], created_at: NOW - 2 * H },
       { _id: "cm_old", team_id: TEAM, channel_id: "chat_channels_1", user_id: ME, content: "@growth old", mentions: [{ kind: "role", role_id: GROWTH, short_id: "or-1", handle: "growth" }], created_at: NOW - 10 * D },
     ],
-    // What reached growth's frames this week: five outbox rows over four work
-    // items (one task moved twice), one still waiting; one row from last month.
-    role_wake_outbox: [
-      ...["ct-p0", "ct-p1", "ct-r0"].map((id, i) => ({ _id: `wo${i}`, role_id: GROWTH, kind: "fold", cause: "task moved", ref: { table: "tasks", id }, created_at: NOW - (i + 1) * H, due_at: NOW, flushed_at: NOW - i * H })),
-      { _id: "wo_again", role_id: GROWTH, kind: "passive", cause: "task moved", ref: { table: "tasks", id: "ct-p0" }, created_at: NOW - 3 * H, due_at: NOW, flushed_at: NOW - 2 * H },
-      { _id: "wo_wait", role_id: GROWTH, kind: "passive", cause: "plan moved", ref: { table: "plans", id: "plans_launch" }, created_at: NOW - H, due_at: NOW },
-      { _id: "wo_old", role_id: GROWTH, kind: "fold", cause: "old", ref: { table: "tasks", id: "ct-old" }, created_at: NOW - 20 * D, due_at: NOW - 20 * D, flushed_at: NOW - 20 * D },
-    ],
-    session_owners: [], managed_sessions: [], messages: [], user_presence: [], project_updates: [], commits: [], artifacts: [], conversation_images: [], counters: [],
+    session_owners: [], managed_sessions: [], user_presence: [], project_updates: [], commits: [], artifacts: [], conversation_images: [], counters: [],
     ...extra,
   });
 }
@@ -158,14 +150,14 @@ describe("org.health", () => {
     expect(r.workspace).toEqual({ kind: "team", id: TEAM });
     const growth = r.roles.find((x) => x.handle === "growth")!;
     // The ledger is what the scope holds; the load is what reached the seat
-    // this week: 4 distinct work items in its frames (its wake outbox; the
-    // scope's churn of 31 changed rows is flow, not load), 6 decisions, 6 live
-    // hands against its own cap of 6, 4 stalls (3 in review past the window,
-    // 1 hand blocked on a task still open), 2 cap hit days.
+    // this week: 8 turns of its standing session (the scope's churn of 31
+    // changed rows is flow, not load), 6 decisions, 6 live hands against its
+    // own cap of 6, 4 stalls (3 in review past the window, 1 hand blocked on
+    // a task still open), 2 cap hit days.
     expect(growth.ledger).toEqual({ open_tasks: 27, in_flight: 9, active_plans: 1 });
-    expect(growth.load).toEqual({ items_per_day: 4 / 7, decisions_per_day: 6 / 7, live_hands: 6, hands_cap: 6, direct_reports: 0, open_stalls: 4, cap_hit_days: 2 });
+    expect(growth.load).toEqual({ items_per_day: 8 / 7, decisions_per_day: 6 / 7, live_hands: 6, hands_cap: 6, direct_reports: 0, open_stalls: 4, cap_hit_days: 2 });
     expect(growth.spend.wakes_by_day).toEqual(expect.any(Object));
-    expect(Object.values(growth.spend.wakes_by_day as Record<string, number>).reduce((a, b) => a + b, 0)).toBe(4);
+    expect(Object.values(growth.spend.wakes_by_day as Record<string, number>).reduce((a, b) => a + b, 0)).toBe(8);
     // 27 open rows plus the two closes of the week; the close 20 days ago is
     // outside the window and not read at all.
     expect(growth.counted).toMatchObject({ rule: "scope", projects: 1, plans: 2, tasks: 29, complete: true });
@@ -173,12 +165,11 @@ describe("org.health", () => {
     // Volume axes only: hands sit exactly at the line, so the ratio is 1 and
     // the stalls and cap hits breach without making a structural split.
     expect(growth.overload_ratio).toBeCloseTo(1);
-    expect(growth.spend).toMatchObject({ wakes_today: 4, wakes_cap: 4, tokens_today: 1000, tokens_7d_avg: null, cap_hits_7d: 2 });
-    // Delivered wakes only: the dropped frame spent nothing against the cap.
-    expect(growth.spend.wakes_7d_avg).toBeCloseTo(4 / 7);
+    expect(growth.spend).toMatchObject({ wakes_today: 4, wakes_cap: 4, tokens_today: 1000, tokens_7d_avg: null, cap_hits_7d: 2, last_wake_at: NOW });
+    expect(growth.spend.wakes_7d_avg).toBeCloseTo(8 / 7);
     // Samples: 4, 12, 20 (recommended), 30 (silent past the deadline), 40 (never answered before the person did); the 2 minute one is too young.
     expect(growth.flow).toMatchObject({
-      decisions_7d: 6, items_reached_7d: 4, items_changed_7d: 31, hands_window: 7, median_recommend_min: 20, escalations_7d: 0, frames_dropped_7d: 1, done_7d: 2,
+      decisions_7d: 6, items_reached_7d: 8, items_changed_7d: 31, hands_window: 7, median_recommend_min: 20, escalations_7d: 0, done_7d: 2,
       handoffs_7d: { done: 2, blocked: 1, needs_context: 0 }, review_stalls: 3, mentions_7d: 2,
     });
     expect(growth.flow.sends_7d).toEqual({ to: [], from: [{ role_id: BILLING, handle: "billing", n: 6 }] });
@@ -273,11 +264,11 @@ describe("org.health", () => {
     expect(r.roles.find((x) => x.handle === "growth")!.flags.some((f) => f.code === "program_ended")).toBe(false);
   });
 
-  test("roleActivity reads the wake log the way the analyzer inputs do", async () => {
+  test("roleActivity reads the standing session's turns the way the analyzer inputs do", async () => {
     const db = fixtures();
     const growth = await db.get(GROWTH as any);
     const a = await roleActivity(ctxOf(db), ME as any, growth, NOW, { wholeWorkspaceLatest: null });
-    expect(a.wakes_7d).toMatchObject({ total: 4, delivered: 4, dropped: 1, held: 1, days_at_cap: 1, cap_hit_days: 2 });
+    expect(a.wakes_7d).toMatchObject({ total: 8, days_at_cap: 2, cap_hit_days: 2 });
     expect(a).toMatchObject({ idle: false, age_days: 30 });
     // A whole workspace role reads the clock it is handed; with no event anywhere its age decides.
     const cos = { _id: "x", scope: { project_ids: [], plan_ids: [] }, created_at: NOW - 20 * D };

@@ -29,7 +29,7 @@ import {
 } from "@codecast/shared/contracts/orgChange";
 import { personName } from "../sessionOwnership";
 import { computeWorkspaceKey } from "./access";
-import { capsFor, trustOf } from "../orgEvents";
+import { capsFor, trustOf } from "./orgCaps";
 import { listSessionOwnerIds } from "../sessionOwners";
 
 type Ctx = { db: any };

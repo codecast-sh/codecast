@@ -10,6 +10,7 @@ import {
   ImagePlus,
   ListChecks,
   Sparkles,
+  UserPlus,
   type LucideIcon,
 } from "lucide-react";
 import { useMutation } from "convex/react";
@@ -18,11 +19,10 @@ import { toast } from "sonner";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import {
-  humanizeConvexError,
   isRecRoomKey,
   sessionRoomConversationId,
 } from "@codecast/shared/contracts";
-import { SessionCreatePendingError, useInboxStore } from "../../store/inboxStore";
+import { useInboxStore } from "../../store/inboxStore";
 import { navigateMainWindow } from "../../lib/desktop";
 import { settleComposerAttachments } from "../../lib/draftImages";
 import { getRoom, startTranscribing } from "../../lib/calls/callManager";
@@ -45,7 +45,7 @@ import { FeedChip } from "./FeedChip";
 import { SessionFace } from "../identity";
 import { TranscribeSwitch } from "./TranscribePanel";
 import { TranscriptTurnList } from "./TranscriptTurns";
-import { openFeedTargetPicker, useAddLiveFeed, useAgentsInRoom, useRemoveLiveFeed, type FeedTarget } from "./useCallFeed";
+import { useAddToCall, useAgentsInRoom, useRemoveLiveFeed } from "./useCallFeed";
 import { firstName, fmtClock, speakerColor } from "./speakers";
 import {
   buildPassages,
@@ -287,37 +287,15 @@ export function RoomThread({
   // "new agent", which is nobody: the card says "this session's agent".
   const ownAgent = useAgentsInRoom(ownRoomId && routes.length === 0 ? [{ kind: "session", target: ownRoomId, added_by: "" }] : [])[0];
   const ownName = ownAgent?.row ? ownAgent.name : "this session's agent";
-  // In an own room the header's button adds a second agent beside the
-  // room's own; the words say so, so the header and the empty card agree.
+  // In an own room the empty card's button adds a second agent beside the
+  // room's own; the words say so.
   const addLabel = ownRoomId ? "Add another agent" : "Add an agent";
-  const addTitle = `${addLabel}: it ${HEARS}`;
-  // The rail's header fits the button beside the words control and the
-  // switch only in the short form; the title keeps the long one.
-  const headAddLabel = surface === "stage" && !ownRoomId ? "Add agent" : addLabel;
+  const addTitle = "Ring a teammate in, or bring in a role or an agent that hears the room";
 
-  const addFeed = useAddLiveFeed({ roomKey, liveTranscriptId, routes, getRoom });
+  // The header's button and the empty card's open the call's one add list
+  // (AddPeople.tsx): teammates, roles and agents.
+  const { open: openAddAgent, adding } = useAddToCall({ roomKey, liveTranscriptId, routes });
   const removeFeed = useRemoveLiveFeed(liveTranscriptId);
-  // addRoute/startScribe can refuse (room authorization, ended transcript);
-  // a silent close-and-nothing is the one wrong outcome.
-  // From the pick to the route landing there is a wait (a new session's
-  // create can park for minutes on a slow link): the header shows the agent
-  // on its way and the Add button rests, so a second click cannot spawn a
-  // second session.
-  const [adding, setAdding] = useState<FeedTarget | null>(null);
-  const onPickFeed = (t: FeedTarget) => {
-    setAdding(t);
-    void addFeed(t)
-      .catch((err: any) =>
-        toast.error(
-          err instanceof SessionCreatePendingError
-            ? "The agent's session is still starting. It joins the room when it lands."
-            : humanizeConvexError(err, "Could not add the agent"),
-        ),
-      )
-      .finally(() => setAdding(null));
-  };
-  const openAddAgent = () =>
-    openFeedTargetPicker({ title: "Add an agent to the room", gesture: "feed", showSlack: true, onPick: onPickFeed });
   // What an agent did is in the past once the call ended or nothing is live
   // (the stage after the switch went off): "was in the room", and none of
   // the present tense promise about what it does here.
@@ -579,8 +557,8 @@ export function RoomThread({
               disabled={!!adding}
               title={adding ? "An agent is joining the room" : addTitle}
             >
-              <Sparkles className="h-3 w-3" />
-              {headAddLabel}
+              <UserPlus className="h-3 w-3" />
+              {surface === "stage" ? "Add" : "Add to the call"}
             </button>
           )}
           <span className="rt-head-right">

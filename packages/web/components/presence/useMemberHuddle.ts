@@ -1,6 +1,8 @@
 import { useMemo } from "react";
 import { dmRoomKey } from "@codecast/shared/contracts";
-import { joinCall, knockRoom, startHuddle } from "../../lib/calls/actions";
+import { joinCall, knockRoom, ringInto, startHuddle } from "../../lib/calls/actions";
+import { callRoomOf } from "../../lib/faces/faceRow";
+import { useFaceRowSelect } from "../../hooks/useFaceRow";
 import type { LiveRoomRow } from "../../hooks/useLiveRooms";
 import { useDesktopWindowRole } from "../../hooks/useDesktopWindowRole";
 import { showCallPanel } from "../../lib/desktop";
@@ -17,6 +19,10 @@ export interface MemberHuddle {
 
 /**
  * One gesture for "get into a huddle with this person", wherever their face is.
+ *
+ * On a call of the viewer's own, the control adds them to it: a ring into
+ * the room the viewer is already in. A fresh DM huddle there would pull the
+ * viewer off their call.
  *
  * In a huddle the viewer may join (`in_room_key` is only sent when they may):
  * the control becomes "join them" — ringing someone out of the room they are
@@ -40,9 +46,14 @@ export function useMemberHuddle(
   const lockedRoom = !inRoomKey && room?.locked ? room : null;
   const knocked = !!lockedRoom?.knocked;
   const lockedRoomKey = lockedRoom?.roomKey;
+  // Their own huddle wins: ringing someone out of the room they sit in is the
+  // one wrong gesture, and "Join huddle" is already the way to them.
+  const myCall = useFaceRowSelect(callRoomOf);
+  const addTo = myCall && !inRoomKey && !elsewhere ? myCall : null;
 
   return useMemo(() => {
     if (elsewhere) return { label: "Open huddle", title: "Show the huddle window", waiting: false, go: () => { void showCallPanel(); } };
+    if (addTo) return { label: "Add to call", title: `Ring ${displayName} into your call`, waiting: false, go: () => { void ringInto(addTo, [memberId]); } };
     const label = inRoomKey
       ? "Join huddle"
       : !lockedRoomKey
@@ -75,5 +86,5 @@ export function useMemberHuddle(
         });
     };
     return { label, title, waiting: knocked, go };
-  }, [inRoomKey, lockedRoomKey, knocked, displayName, viewerId, memberId, elsewhere]);
+  }, [inRoomKey, lockedRoomKey, knocked, displayName, viewerId, memberId, elsewhere, addTo]);
 }

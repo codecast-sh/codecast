@@ -31,7 +31,7 @@ import type { WorkState } from "@codecast/shared/contracts";
 import { sessionStartupState } from "../lib/sessionLifecycle";
 import { compressImage } from "../lib/compressImage";
 import { useConversationMessages } from "../hooks/useConversationMessages";
-import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, placeInboxRows, placementDecisionsSig, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, freshReviveRequestIds, isSessionHidden, resolveSessionAuthor, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipProjectFilters, passesFilterTerms, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, placeInboxRows, placementDecisionsSig, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, freshReviveRequestIds, isSessionHidden, resolveSessionAuthor, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipProjectFilters, passesFilterTerms, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, resolveFavorite, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
 import { useTeamShareActions } from "../hooks/useTeamShareActions";
 import { sessionsWakeSig, resolveShowOld, showsBlockedBadge, sectionHeaderCount, classifySession, inboxNestParentOf } from "../store/inboxStore";
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
@@ -1212,6 +1212,7 @@ const CardBarStrip = memo(function CardBarStrip({ session, rows, activeSessionId
   const now = useCoarseNow(30_000);
   const watching = useLiveWatchRows(session, now);
   const workflow = workflowBarVisible(session);
+  const openWorkflow = useOpenWorkflowRun(session);
   if (rows.length === 0 && !workflow && watching.length === 0) return null;
   const primary = rows.length > 0 ? primaryTriggerRow(rows) : null;
   const isActive = session._id === activeSessionId;
@@ -1230,7 +1231,7 @@ const CardBarStrip = memo(function CardBarStrip({ session, rows, activeSessionId
   return (
     <button
       data-schedstrip={primary ? session._id : undefined}
-      onClick={() => (primary ? onOpen(primary) : onOpenSession(session))}
+      onClick={() => (primary ? onOpen(primary) : workflow ? openWorkflow.open() : onOpenSession(session))}
       className={`w-full flex items-center gap-1.5 text-left cursor-pointer pl-2 pr-3 py-[3px] transition-[background-color,opacity] hover:bg-sol-amber/[0.05] ${
         isActive ? "bg-sol-cyan/[0.10]" : ""
       } ${paused ? "opacity-55 hover:opacity-90" : ""}`}
@@ -1315,9 +1316,23 @@ function workflowBarVisible(session: InboxSession): boolean {
   return session.workflow_run_status === "running" || session.workflow_run_status === "pending";
 }
 
-function WorkflowBar({ session, isActive }: { session: InboxSession; isActive: boolean }) {
+// Opens the conversation at the run's launch, or the run page when the row
+// carries no start time to find it by. Shared by the full bar and the strip.
+function useOpenWorkflowRun(session: InboxSession) {
   const router = useRouter();
+  const { openWorkflowMessage, openingKey } = useOpenWatchMessage(session._id);
+  const open = () => {
+    const runId = session.workflow_run_id;
+    if (!runId) return;
+    if (session.workflow_run_started_at) void openWorkflowMessage(runId, session.workflow_run_started_at);
+    else router.push(`/workflows/runs/${runId}`);
+  };
+  return { open, opening: openingKey !== null };
+}
+
+function WorkflowBar({ session, isActive }: { session: InboxSession; isActive: boolean }) {
   const now = useCoarseNow(30_000);
+  const { open, opening } = useOpenWorkflowRun(session);
   if (!workflowBarVisible(session)) return null;
   const done = session.workflow_run_agents_done ?? 0;
   const total = session.workflow_run_agents_total ?? 0;
@@ -1326,8 +1341,10 @@ function WorkflowBar({ session, isActive }: { session: InboxSession; isActive: b
     <div className={`group/wfrow relative transition-colors ${isActive ? "bg-sol-cyan/[0.10]" : ""}`}>
       <button
         className="w-full text-left cursor-pointer pr-3 pl-2 py-1 hover:bg-sol-cyan/[0.05] transition-colors"
-        onClick={() => router.push(`/workflows/runs/${session.workflow_run_id}`)}
-        title="Open the live run — phases, agents, results"
+        disabled={opening}
+        aria-busy={opening}
+        onClick={open}
+        title="Jump to where this workflow started in the conversation"
       >
         <div className="flex gap-1.5 min-w-0">
           <span className="flex items-center mt-[2px] shrink-0 text-sol-cyan/70" role="img" aria-label={ariaLabel}>
@@ -1373,7 +1390,7 @@ export function MonitorBars({ session, isActive }: {
   const now = useCoarseNow(30_000);
   const [expanded, setExpanded] = useState(false);
   const watching = useLiveWatchRows(session, now);
-  const { openWatchMessage, openingToolId } = useOpenWatchMessage(session._id);
+  const { openWatchMessage, openingKey } = useOpenWatchMessage(session._id);
   if (watching.length === 0) return null;
   const shown = expanded ? watching : watching.slice(0, MAX_MONITOR_BARS);
   const hiddenCount = watching.length - shown.length;
@@ -1389,8 +1406,8 @@ export function MonitorBars({ session, isActive }: {
         <div key={row.toolUseId} className={`group/monrow relative transition-colors ${isActive ? "bg-sol-cyan/[0.10]" : ""}`}>
           <button
             className="w-full text-left cursor-pointer pr-3 pl-2 py-1 hover:bg-sol-blue/[0.05] transition-colors"
-            disabled={openingToolId !== null}
-            aria-busy={openingToolId === row.toolUseId}
+            disabled={openingKey !== null}
+            aria-busy={openingKey === row.toolUseId}
             title="Jump to this task in the conversation"
             onClick={() => { void openWatchMessage(row); }}
           >
@@ -3580,10 +3597,10 @@ function SessionListPanelImpl({
     () => new Set((s.favorites as { _id: string }[]).map((f) => f._id)),
     [s.favorites],
   );
-  // Favorited if the row carries the flag OR it's in the favorites list (both are
-  // maintained by toggleFavorite); resolved to a scalar so each card memoizes on it.
+  // The star reads the rule toggleFavorite flips (resolveFavorite), resolved to a
+  // scalar so each card memoizes on it.
   const cardIsFavorite = useCallback(
-    (sess: InboxSession) => (sess as { is_favorite?: boolean }).is_favorite === true || favoriteIds.has(sess._id),
+    (sess: InboxSession) => resolveFavorite([sess], () => favoriteIds.has(sess._id)),
     [favoriteIds],
   );
   const { bucketCounts, projectCounts, projectPathByName } = useMemo(

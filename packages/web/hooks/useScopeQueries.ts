@@ -22,13 +22,6 @@ export function useScopeSummary(args: ScopeRef | "skip"): { data: ScopeSummary |
   return { data: data as ScopeSummary | null | undefined, error, missing: isMissingFunctionError(error) };
 }
 
-/** A role's wake log (org-roles-standing.md T3 role_wakes), newest first;
- *  the same rows `cast role wakes` prints. */
-export type RoleWakeRow = { _id: string; short_id: string; causes: string[]; status: "delivered" | "dropped" | "held"; frame_chars: number; pending_message_id?: string; created_at: number };
-export function useRoleWakes(roleId: string | null, limit = 50): { data: RoleWakeRow[] | undefined; error?: Error; missing: boolean } {
-  const { data, error } = useQueryNoThrow(api.orgRoles.wakes, roleId ? { role_id: roleId, limit } : "skip");
-  return { data: data as RoleWakeRow[] | undefined, error, missing: isMissingFunctionError(error) };
-}
 
 export function useRoleBrief(roleId: string | null): { data: RoleBrief | null | undefined; error?: Error; missing: boolean } {
   const { data, error } = useQueryNoThrow(api.org.brief, roleId ? { role_id: roleId } : "skip");

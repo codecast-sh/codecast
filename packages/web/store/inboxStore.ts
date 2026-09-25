@@ -4199,6 +4199,49 @@ function synthesizeFavoriteRow(fav: any): InboxSession {
   } as InboxSession;
 }
 
+// Whether a conversation is favorited, read one way by every star and by the
+// toggle that flips it: the first row carrying the flag wins, and list
+// membership answers for rows without one. The session row is live; the
+// conversations row is a stub or the last page visit's copy, so it only
+// answers when there is no session row.
+export function resolveFavorite(
+  rows: readonly ({ is_favorite?: boolean } | undefined)[],
+  inList: () => boolean,
+): boolean {
+  for (const row of rows) if (typeof row?.is_favorite === "boolean") return row.is_favorite;
+  return inList();
+}
+
+export function isFavoriteInStore(
+  state: { conversations: Record<string, any>; sessions: Record<string, any>; favorites?: any[] },
+  id: string,
+): boolean {
+  return resolveFavorite(
+    [state.sessions[id], state.conversations[id]],
+    () => (state.favorites ?? []).some((f) => f?._id === id),
+  );
+}
+
+// The favorites list with `id` in or out of it; the same list when it already agrees.
+function withFavoriteMembership(list: any[], id: string, on: boolean, entry: any): any[] {
+  const idx = list.findIndex((f) => f?._id === id);
+  if (on === (idx !== -1)) return list;
+  return on ? [...list, { ...entry, _id: id }] : list.filter((_, i) => i !== idx);
+}
+
+// A favorites push that predates an in-flight toggle would undo it (the list
+// replaces wholesale). The toggle's own field lock on conversations.is_favorite
+// says what membership should be until the server echoes it.
+function reconcileFavoritesWithLocks(list: any[], state: any): any[] {
+  let out = list;
+  for (const [key, lock] of Object.entries(state.pending ?? {}) as [string, any][]) {
+    if (lock?.type !== "field" || !key.startsWith("conversations:") || !key.endsWith(":is_favorite")) continue;
+    const id = key.slice("conversations:".length, -":is_favorite".length);
+    out = withFavoriteMembership(out, id, !!lock.value, state.conversations?.[id]);
+  }
+  return out;
+}
+
 // The Favorites set, driven off the authoritative `favorites` membership list
 // (listFavorites) — NOT the per-row `is_favorite` flag. Two reasons:
 //   • The flag arrives on cache rows via whichever channel synced them; web and
@@ -6637,7 +6680,7 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
     },
   },
   teamUnreadCount: { kind: "scalar" },
-  favorites: { kind: "list" },
+  favorites: { kind: "list", normalize: (list: any, state: any) => reconcileFavoritesWithLocks(list ?? [], state) },
   bookmarks: {
     kind: "list",
     // Local-first reconciliation: a list-kind sync wholesale-replaces the store,
@@ -9218,15 +9261,11 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // favorites list in sync optimistically so the sidebar updates without a
   // round-trip; the server re-derives it on the next sync.
   toggleFavorite: action(function (this: Draft, id: string) {
-    const cur = this.conversations[id] ?? this.sessions[id];
-    const next = !(cur as any)?.is_favorite;
+    const next = !isFavoriteInStore(this as any, id);
     if (this.sessions[id]) (this.sessions[id] as any).is_favorite = next;
     if (!this.conversations[id]) this.conversations[id] = { _id: id } as any;
     (this.conversations[id] as any).is_favorite = next;
-    const list = this.favorites as any[];
-    const idx = list.findIndex((f) => f._id === id);
-    if (next && idx === -1) list.push({ ...(this.conversations[id] as any) });
-    else if (!next && idx !== -1) list.splice(idx, 1);
+    this.favorites = withFavoriteMembership(this.favorites as any[], id, next, this.conversations[id]);
   }),
 
   // The reader opened or dismissed an agent's pane offer. Same split as

@@ -17,7 +17,12 @@ import { replaceGlobals } from "../../../test-helpers/globals";
 import { closeDomWindow } from "../../../test-helpers/domGlobals";
 
 const realCallManager = { ...(await import("../../../lib/calls/callManager")) };
-mock.module("../../../lib/calls/callManager", () => ({ ...realCallManager, getRoom: () => null }));
+const rung: Array<[string, string[]]> = [];
+mock.module("../../../lib/calls/callManager", () => ({
+  ...realCallManager,
+  getRoom: () => null,
+  ringInto: async (room: string, ids: string[]) => void rung.push([room, ids]),
+}));
 const realConvexReact = { ...(await import("convex/react")) };
 mock.module("convex/react", () => ({
   ...realConvexReact,
@@ -404,6 +409,31 @@ test("the composer names the one agent in the room", async () => {
   // With an agent in and no words yet, the room is listening, not empty.
   expect(r.container.querySelector(".rt-empty")).toBeNull();
   expect(r.container.querySelector(".rt-note")?.textContent).toBe("Listening. Words show up here.");
+  await r.unmount();
+});
+
+test("the header's Add opens the call's one list: teammates, roles and agents, less who is already in", async () => {
+  let pick: any = null;
+  useInboxStore.setState({
+    currentUser: { _id: "u-me" },
+    liveRooms: [],
+    sessions: {},
+    callOccupancy: { [ROOM]: [{ user_id: "u-in" }] },
+    myCalls: { incoming: [], outgoing: [{ room_key: ROOM, status: "ringing", to_user: "u-ringing" }] },
+    openPalette: (o: any) => void (pick = o.pick),
+  } as any);
+  const routes = [{ kind: "session", target: "conv_other", mode: "live", added_by: "u-me" }];
+  const r = await render(
+    <RoomThread roomKey={ROOM} call={call({ routes })} rows={[]} liveTranscriptId="t1" surface="stage" seated />,
+  );
+  const add = r.container.querySelector<HTMLButtonElement>(".rt-add")!;
+  expect(add.textContent?.trim()).toBe("Add");
+  await act(() => add.click());
+  expect(pick.kinds).toEqual(["person", "role", "session", "doc"]);
+  expect(pick.exclude).toEqual(["u-in", "u-ringing", "conv_other"]);
+  // A teammate is rung into this room; nothing is routed for them.
+  pick.onPick({ kind: "person", id: "u-ann", label: "Ann" }, { query: "" });
+  expect(rung).toEqual([[ROOM, ["u-ann"]]]);
   await r.unmount();
 });
 

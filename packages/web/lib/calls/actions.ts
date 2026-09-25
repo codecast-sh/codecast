@@ -9,5 +9,8 @@ export const knockRoom = async (...args: Parameters<CallManager["knockRoom"]>) =
 export const setRoomLock = async (...args: Parameters<CallManager["setRoomLock"]>) =>
   (await import("./callManager")).setRoomLock(...args);
 
+export const ringInto = async (...args: Parameters<CallManager["ringInto"]>) =>
+  (await import("./callManager")).ringInto(...args);
+
 export const startHuddle = async (...args: Parameters<CallManager["startHuddle"]>) =>
   (await import("./callManager")).startHuddle(...args);

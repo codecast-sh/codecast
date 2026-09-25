@@ -79,7 +79,6 @@ function world() {
       useScopeSummary: () => ({ data: env.summary, missing: false }),
       useRoleBrief: () => ({ data: env.brief, missing: false }),
       useScopeFeedPage: () => ({ data: undefined, missing: false }),
-      useRoleWakes: () => ({ data: undefined, missing: false }),
     }));
     mock.module("../../../hooks/useOpenLinkedSession", () => ({ useOpenLinkedSession: () => (s: any) => calls.push(`open:${s._id}`) }));
     mock.module("next/navigation", () => ({
@@ -103,7 +102,7 @@ function world() {
     mock.module("../../../app/tasks/page", () => ({ TaskListContent: () => React.createElement("div", { "data-task-list": true }, "tasks") }));
     mock.module("./ScopeSettings", () => ({ ScopeSettings: (props: any) => React.createElement("div", { "data-scope-settings": props.armRetire ? "armed" : "idle" }, "settings") }));
     mock.module("./ScopeLineTab", () => ({ ScopeLineTab: () => React.createElement("div", { "data-scope-line": true }) }));
-    mock.module("./ScopeWakesTab", () => ({ ScopeWakesTab: () => React.createElement("div", { "data-scope-wakes": true }) }));
+    mock.module("./ScopeTriggersTab", () => ({ ScopeTriggersTab: () => React.createElement("div", { "data-scope-triggers": true }) }));
     mock.module("../../KeyboardShortcutsHelp", () => ({ ShortcutTooltip: ({ children }: any) => children, KeyCap: ({ children }: any) => React.createElement("kbd", null, children) }));
     mock.module("../../tasks/TaskCommentStream", () => ({ Avatar: ({ name }: any) => React.createElement("span", { "data-avatar": name }), TimeAgo: () => null, UserBadge: () => null, TaskCommentComposer: () => null, TaskCommentItem: () => null }));
     mock.module("../RoleFace", () => ({ RoleFace: ({ role }: any) => React.createElement("span", { "data-role-face": role.handle }) }));
@@ -302,7 +301,7 @@ async function verifyScopePage() {
   // ── paused: the note above the composer, resume in one click ──
   env.tree = { ...withStanding, roles: [{ ...withStanding.roles[0], status: "paused" }] };
   await mount("or-1");
-  assert.match(q("[data-chief-paused]")!.textContent!, /Head of Growth is paused: what you send waits until you resume it/);
+  assert.match(q("[data-chief-paused]")!.textContent!, /Head of Growth is paused: its scheduled checks hold until you resume it/);
   await click(qa("[data-chief-paused] button")[0]);
   assert.equal(calls.pop(), `update:${growth._id}:{"status":"active"}`);
   env.tree = withStanding;

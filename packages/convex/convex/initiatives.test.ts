@@ -41,7 +41,6 @@ function fixtures() {
     initiative_updates: [],
     org_roles: [],
     org_role_history: [],
-    role_wake_outbox: [],
     anchors: [],
     conversations: [],
     session_owners: [],

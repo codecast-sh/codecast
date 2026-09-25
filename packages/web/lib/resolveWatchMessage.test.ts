@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import { liveWatchRowsFor } from "../components/monitorRows";
-import { resolveWatchMessage } from "./resolveWatchMessage";
+import { resolveWatchMessage, resolveWorkflowMessage } from "./resolveWatchMessage";
 
 const START = 1_000;
 const call = {
@@ -63,5 +63,39 @@ describe("background task message jumps", () => {
   test("unrelated messages and denied access never become a false jump target", async () => {
     expect(await resolveWatchMessage(reportRow(), [], async () => ({ messages: [{ ...call, tool_calls: [{ id: "other-tool" }] }] }))).toBeNull();
     expect(await resolveWatchMessage(reportRow(), [], async () => null)).toBeNull();
+  });
+});
+
+describe("workflow run message jumps", () => {
+  const RUN = 50_000_000;
+  const msg = (id: string, timestamp: number, tool?: { name: string; input: unknown }) => ({
+    _id: id,
+    timestamp,
+    tool_calls: tool ? [{ id: `${id}-tool`, ...tool }] : undefined,
+  });
+  const olderRun = msg("older-launch", RUN - 60 * 60_000, { name: "Workflow", input: "{}" });
+  const launch = msg("launch", RUN - 2_000, { name: "Workflow", input: "{}" });
+  const chatter = msg("chatter", RUN + 5_000);
+
+  test("lands on the Workflow call that launched the run, not an earlier run's", async () => {
+    const loadAround = mock(async () => null);
+    expect(await resolveWorkflowMessage(RUN, [olderRun, launch, chatter], loadAround)).toEqual({ messageId: "launch", timestamp: RUN - 2_000 });
+    expect(loadAround).not.toHaveBeenCalled();
+  });
+
+  test("a shell cast workflow run counts as the launch", async () => {
+    const shell = msg("shell", RUN - 1_000, { name: "Bash", input: JSON.stringify({ command: "cd /x && cast workflow run flow.cast --task ct-1" }) });
+    expect(await resolveWorkflowMessage(RUN, [shell], async () => null)).toEqual({ messageId: "shell", timestamp: RUN - 1_000 });
+  });
+
+  test("pages in around the run start when the launch is not loaded", async () => {
+    const loadAround = mock(async () => ({ messages: [launch, chatter] }));
+    expect(await resolveWorkflowMessage(RUN, [olderRun], loadAround)).toEqual({ messageId: "launch", timestamp: RUN - 2_000 });
+    expect(loadAround).toHaveBeenCalledWith(RUN);
+  });
+
+  test("a run started from outside the session lands where it began", async () => {
+    const before = msg("before", RUN - 10_000);
+    expect(await resolveWorkflowMessage(RUN, [], async () => ({ messages: [before, chatter] }))).toEqual({ messageId: "chatter", timestamp: RUN + 5_000 });
   });
 });
