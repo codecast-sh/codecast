@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { causeLines, dedupeTitles, describeWake, isRoleWakeFrame, parseRoleWakeFrame } from "./roleWake";
+import { causeLines, dedupeTitles, describeWake, isRoleWakeFrame, parseRoleWakeFrame, wakeLine } from "./roleWake";
 import { cleanUserMessage } from "./sessionMessage";
 import { ROLE_WAKE_FIXTURE, ROLE_WAKE_FIXTURE_LEGACY } from "./roleWakeFixture";
 
@@ -56,6 +56,13 @@ describe("parseRoleWakeFrame", () => {
     expect(empty.causes).toBe(0);
     expect(empty.at).toBeNull();
     expect(describeWake(empty)).toBe("woke on nothing queued");
+  });
+
+  test("wakeLine is the first cause in a few words, its marks and quoted title dropped, then the rest as a count", () => {
+    expect(wakeLine(parseRoleWakeFrame(ROLE_WAKE_FIXTURE)!)).toBe("task ct-51321 is done, and 8 more");
+    const held = parseRoleWakeFrame(`<role-wake or-2 at="x">\n## Why you are awake\n- (held) (passive) decision sd-2 "Pick a host" answered\n</role-wake>`)!;
+    expect(wakeLine(held)).toBe("decision sd-2 answered");
+    expect(wakeLine(parseRoleWakeFrame(`<role-wake or-2 at="x">\n## Why you are awake\n- (nothing queued)\n</role-wake>`)!)).toBe("nothing queued");
   });
 
   test("dedupeTitles drops the quoted title a pill already shows", () => {

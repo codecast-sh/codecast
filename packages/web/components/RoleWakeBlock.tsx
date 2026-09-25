@@ -28,13 +28,11 @@ export type RoleWakeBlockProps = {
   until?: number | null;
   /** Sessions the role ran `cast send` to in this turn. */
   sentTo?: string[];
-  /** Only where the message went (RoleWakeCard routingOnly). */
-  routingOnly?: boolean;
 };
 
 const NO_SENT_TO: string[] = [];
 
-export function RoleWakeBlock({ frame, timestamp, conversationId, until = null, sentTo = NO_SENT_TO, routingOnly }: RoleWakeBlockProps) {
+export function RoleWakeBlock({ frame, timestamp, conversationId, until = null, sentTo = NO_SENT_TO }: RoleWakeBlockProps) {
   const { tree } = useSyncOrgTree();
   const now = useCoarseNow(30_000);
   const s = useTrackedStore([(st) => st.currentUser?._id]);
@@ -49,5 +47,5 @@ export function RoleWakeBlock({ frame, timestamp, conversationId, until = null, 
   const hands = useHandsStartedBy(conversationId);
   const at = frame.at ?? (timestamp && timestamp > 0 ? timestamp : null);
   const routing = useMemo<RoleWakeRouting>(() => ({ hands: handsStartedInTurn(hands, at, until), sentTo }), [hands, at, until, sentTo]);
-  return <RoleWakeCard frame={frame} timestamp={timestamp} now={now} role={role} canEdit={canEdit} onSetPaused={setPaused} routing={routing} routingOnly={routingOnly} />;
+  return <RoleWakeCard frame={frame} timestamp={timestamp} now={now} role={role} canEdit={canEdit} onSetPaused={setPaused} routing={routing} />;
 }

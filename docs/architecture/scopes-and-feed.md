@@ -120,8 +120,9 @@ reads the hands the standing session spawned (`by_spawned_by`, `org_role_id`
 set) with their live state, the view cuts them to the turn's window (this wake
 until the next turn boundary) and reads `cast send <id>` targets off the turn's
 tool calls (`roleWake.ts` `handsStartedInTurn`, `sentToRef`), and `RoleWakeCard`
-renders the strip under the frame. A hand the role claims but never started
-renders nothing.
+renders it under the wake's line: at rest one wrapping line of hands, each its
+pill and state word; open, a row per hand with its pinned line, task and age.
+A hand the role claims but never started renders nothing.
 
 ### F4.3 The panel answers who acts next
 
