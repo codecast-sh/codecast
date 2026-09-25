@@ -1,4 +1,5 @@
 import { RepositoryLinks } from "./repo/RepositoryLinks";
+import { ShortId } from "./ShortId";
 import { useState, useCallback, useRef, useMemo } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import Link from "next/link";
@@ -500,7 +501,7 @@ export function OrchestrationHeader({ tasks, sessions }: { tasks: any[]; session
                 className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-500/10 hover:bg-emerald-500/20 transition-colors group/agent"
               >
                 <LivenessDot state="active" size="xs" />
-                <span className="text-xs font-mono text-sol-text-dim">{t.short_id}</span>
+                <ShortId id={t.short_id} className="text-xs text-sol-text-dim" />
                 <span className="text-xs text-emerald-700 dark:text-emerald-300/80 truncate max-w-[200px] group-hover/agent:text-emerald-800 dark:group-hover/agent:text-emerald-200 transition-colors">
                   {t.title}
                 </span>
@@ -743,7 +744,7 @@ export function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId:
                   <TaskIcon className={`w-3.5 h-3.5 ${tc.color}`} />
                 </button>
                 <div className="flex-1 min-w-0 flex items-center gap-2">
-                  <span className="text-xs font-mono text-sol-text-dim flex-shrink-0">{task.short_id}</span>
+                  <ShortId id={task.short_id} className="text-xs text-sol-text-dim" />
                   <InlineEditTitle
                     value={task.title}
                     onSave={(newVal) => updateTitle(task.short_id, newVal)}
@@ -812,7 +813,7 @@ export function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId:
                     >
                       <TaskIcon className={`w-3.5 h-3.5 ${tc.color}`} />
                     </button>
-                    <span className="text-xs font-mono text-sol-text-dim">{task.short_id}</span>
+                    <ShortId id={task.short_id} className="text-xs text-sol-text-dim" />
                     <span className="text-sm text-sol-text-muted line-through truncate">{task.title}</span>
                     {taskSessions.length > 0 && (
                       <span className="text-[10px] text-gray-400 dark:text-gray-500 flex-shrink-0 font-mono ml-auto">
@@ -934,7 +935,7 @@ export function OrchestrationTab({ tasks, sessions }: { tasks: any[]; sessions: 
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 min-w-0">
-                        <span className="text-xs font-mono text-sol-text-dim flex-shrink-0">{task.short_id}</span>
+                        <ShortId id={task.short_id} className="text-xs text-sol-text-dim" />
                         <span className={`text-sm truncate ${task.status === "done" || task.status === "dropped" ? "text-sol-text-muted line-through" : "text-sol-text"}`}>
                           {task.title}
                         </span>
@@ -1126,7 +1127,7 @@ export function PlanDetailPanel({ planId }: { planId: string }) {
             <AvatarImg src={plan.author.image} className="w-4 h-4 rounded-full" alt="" />
           )}
           {plan.author?.name && <span>{plan.author.name}</span>}
-          <span className="font-mono">{plan.short_id}</span>
+          <ShortId id={plan.short_id} />
           <span>Created {formatTimestamp(plan.created_at)}</span>
           <span>Updated {formatTimestamp(plan.updated_at)}</span>
           {plan.drive_state && plan.drive_state.total_rounds > 0 && (

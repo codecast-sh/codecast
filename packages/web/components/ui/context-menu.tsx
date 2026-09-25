@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { ShortId } from "../ShortId";
 import { createPortal } from "react-dom";
 import { Popover, PopoverAnchor, PopoverContent } from "./popover";
 import {
@@ -247,7 +248,7 @@ export function CtxHeader({ title, id }: { title: React.ReactNode; id?: string }
   return (
     <div className="px-2.5 pt-2 pb-1.5 flex items-baseline gap-2 select-none border-b border-[color-mix(in_srgb,var(--sol-border)_28%,transparent)] mb-1">
       <span className="text-[12px] font-medium text-sol-text truncate">{title}</span>
-      {id && <span className="ml-auto text-[10px] font-mono text-sol-text-dim shrink-0">{id}</span>}
+      <ShortId id={id} className="ml-auto text-[10px] text-sol-text-dim" />
     </div>
   );
 }

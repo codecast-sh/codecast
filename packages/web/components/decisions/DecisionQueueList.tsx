@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
+import { ShortId } from "../ShortId";
 import Link from "next/link";
 import { toast } from "sonner";
 import { decisionAnswerLabel } from "@codecast/shared/contracts";
@@ -204,7 +205,7 @@ function QueueGroup({ group, selecting, selected, onToggle, keys }: { group: Dec
           right={
             <span className="flex items-center gap-2 text-[11px]">
               {due && <span data-stack-due={due.overdue ? "overdue" : "due"} className={due.overdue ? "text-sol-red" : "text-sol-text-dim"}>{due.text}</span>}
-              <span className="font-mono text-sol-text-dim">{group.stack.short_id}</span>
+              <ShortId id={group.stack.short_id} className="text-sol-text-dim" />
             </span>
           }
         />

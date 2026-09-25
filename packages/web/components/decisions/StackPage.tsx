@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { ShortId } from "../ShortId";
 import Link from "next/link";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
@@ -249,7 +250,7 @@ function StackRow({ stack, now }: { stack: DecisionStackItem; now: number }) {
     <li data-stack-row={stack.short_id ?? stack._id}>
       <Link href={`/decisions/stacks/${stack.short_id ?? stack._id}`} className={`block rounded-lg border px-4 py-3 no-underline transition-colors ${doneRow ? "border-sol-border/40 hover:border-sol-border/70" : "border-sol-border/70 hover:border-sol-border bg-sol-card/40"}`}>
         <div className="flex items-center gap-2 flex-wrap text-[11px] text-sol-text-dim min-w-0">
-          <span className="font-mono">{stack.short_id}</span>
+          <ShortId id={stack.short_id} />
           <span className={`px-1.5 py-0.5 rounded border ${doneRow ? "border-sol-green/40 text-sol-green" : "border-sol-cyan/40 text-sol-cyan"}`}>{doneRow ? "done" : "open"}</span>
           {due && <span data-stack-due={due.overdue ? "overdue" : "due"} className={due.overdue ? "text-sol-red" : ""}>{due.text}</span>}
           {stack.policy.delegate_role_id && <span className="inline-flex items-center gap-1 text-sol-green"><ShieldCheck className="w-3 h-3" />{delegate.name}</span>}

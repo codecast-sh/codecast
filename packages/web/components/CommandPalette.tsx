@@ -1,4 +1,5 @@
 import { FolderGit2 } from "lucide-react";
+import { ShortId } from "./ShortId";
 import { AVATAR_KEYS } from "@codecast/shared/contracts/orgAvatars";
 import { characterNameFor } from "@codecast/shared/contracts/sessionCharacter";
 import { AVATAR_LABELS } from "../lib/orgAvatars";
@@ -2913,7 +2914,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                   <ListTodo className="w-4 h-4 flex-shrink-0 text-sol-cyan" />
                   <span className="truncate flex-1">{t.title || "Untitled"}</span>
                   {st && <span className={`text-[10px] flex-shrink-0 ${st.color}`}>{st.label}</span>}
-                  <span className="text-[10px] text-sol-text-dim font-mono tabular-nums flex-shrink-0">{t.short_id}</span>
+                  <ShortId id={t.short_id} className="text-[10px] text-sol-text-dim tabular-nums" />
                   <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{timeAgo(t.updated_at)}</span>
                 </CommandPrimitive.Item>
               );
@@ -2958,7 +2959,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                   <MapIcon className="w-4 h-4 flex-shrink-0 text-sol-yellow" />
                   <span className="truncate flex-1">{p.title || "Untitled"}</span>
                   {st && <span className={`text-[10px] flex-shrink-0 ${st.color}`}>{st.label}</span>}
-                  <span className="text-[10px] text-sol-text-dim font-mono tabular-nums flex-shrink-0">{p.short_id}</span>
+                  <ShortId id={p.short_id} className="text-[10px] text-sol-text-dim tabular-nums" />
                   <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{timeAgo(p.updated_at)}</span>
                 </CommandPrimitive.Item>
               );
@@ -3015,7 +3016,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                   <span className="text-[10px] text-sol-yellow flex-shrink-0">paused</span>
                 )}
                 {t.short_id && (
-                  <span className="text-[10px] text-sol-text-dim font-mono tabular-nums flex-shrink-0">{t.short_id}</span>
+                  <ShortId id={t.short_id} className="text-[10px] text-sol-text-dim tabular-nums" />
                 )}
               </CommandPrimitive.Item>
             ))}

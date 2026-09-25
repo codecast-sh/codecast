@@ -1,5 +1,6 @@
 "use client";
 import { useQuery } from "convex/react";
+import { ShortId } from "../../../../components/ShortId";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useParams } from "next/navigation";
 import { MarkdownRenderer } from "../../../../components/tools/MarkdownRenderer";
@@ -78,7 +79,7 @@ export default function SharedPlanClient() {
             <span className={`text-xs font-medium px-2 py-0.5 rounded ${status.color} ${status.bg}`}>
               {status.label}
             </span>
-            <span className="text-xs text-sol-text-dim font-mono">{plan.short_id}</span>
+            <ShortId id={plan.short_id} className="text-xs text-sol-text-dim" />
           </div>
           <h1 className="text-2xl font-semibold text-sol-text mb-3">{plan.title}</h1>
           <div className="flex items-center gap-3 text-xs text-sol-text-dim">
@@ -148,7 +149,7 @@ export default function SharedPlanClient() {
                   </span>
                   <span className="text-sol-text-muted flex-1">{t.title}</span>
                   {t.short_id && (
-                    <span className="text-xs text-sol-text-dim font-mono">{t.short_id}</span>
+                    <ShortId id={t.short_id} className="text-xs text-sol-text-dim" />
                   )}
                 </div>
               ))}

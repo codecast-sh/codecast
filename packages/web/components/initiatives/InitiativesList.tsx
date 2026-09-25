@@ -5,6 +5,7 @@
 // person compares initiatives, so health and progress each run down a column.
 // Paints from the store; progress derives at render from the tasks collection.
 import { useMemo, useState } from "react";
+import { ShortId } from "../ShortId";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Flag, Plus } from "lucide-react";
@@ -96,7 +97,7 @@ function Row({ row, index, now, phone, progress, partial, nested }: { row: Initi
         <div className={cn("min-w-0 flex items-center gap-2.5", nested && "pl-5")}>
           {nested ? <span className="w-3 h-px shrink-0" style={{ background: "var(--sol-text-dim)" }} aria-hidden /> : <Flag className="w-3.5 h-3.5 shrink-0" style={{ color: ended(row) ? "var(--sol-text-dim)" : INITIATIVE_ACCENT }} />}
           <span className="min-w-0 truncate text-[13.5px] font-medium" style={{ color: "var(--sol-text)" }}>{row.title}</span>
-          {row.short_id && <span className="shrink-0 text-[10.5px]" style={{ color: "var(--sol-text-dim)", fontFamily: "var(--font-mono)" }}>{row.short_id}</span>}
+          <ShortId id={row.short_id} className="text-[10.5px]" style={{ color: "var(--sol-text-dim)" }} />
           {!nested && <span className="shrink-0 text-[11px]" style={{ color: "var(--sol-text-dim)" }}>{projects === 0 ? "no projects" : `${projects} ${projects === 1 ? "project" : "projects"}`}</span>}
         </div>
         {phone ? (

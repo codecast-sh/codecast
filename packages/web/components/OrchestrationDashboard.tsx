@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { ShortId } from "./ShortId";
 import Link from "next/link";
 import { useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -76,7 +77,7 @@ function PlanCard({ plan }: { plan: any }) {
       <div className="flex items-center gap-2 mb-1.5">
         <CircleDot className={`w-3.5 h-3.5 flex-shrink-0 ${isActive ? "text-sol-cyan" : "text-sol-text-dim"}`} />
         <span className="text-sm text-sol-text font-medium truncate">{plan.title}</span>
-        <span className="text-[10px] font-mono text-sol-text-dim ml-auto flex-shrink-0">{plan.short_id}</span>
+        <ShortId id={plan.short_id} className="text-[10px] text-sol-text-dim ml-auto" />
       </div>
 
       {hasProgress && <ProgressBar progress={progress} />}
@@ -111,7 +112,7 @@ function ActiveAgentCard({ task }: { task: any }) {
       className="flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-500/8 border border-emerald-500/20 hover:bg-emerald-500/15 transition-colors group"
     >
       <LivenessDot state="active" size="sm" />
-      <span className="text-xs font-mono text-sol-text-dim flex-shrink-0">{task.short_id}</span>
+      <ShortId id={task.short_id} className="text-xs text-sol-text-dim" />
       <span className="text-xs text-emerald-300/80 truncate group-hover:text-emerald-200 transition-colors">
         {task.title}
       </span>
@@ -259,7 +260,7 @@ export function OrchestrationDashboard({ className }: OrchestrationDashboardProp
             {stats.blockedTasks.map((t: any) => (
               <div key={t._id} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-sol-red/5 border border-sol-red/15">
                 <TaskStatusBadge status={t.execution_status} type="execution" />
-                <span className="text-xs font-mono text-sol-text-dim">{t.short_id}</span>
+                <ShortId id={t.short_id} className="text-xs text-sol-text-dim" />
                 <span className="text-xs text-sol-text truncate">{t.title}</span>
               </div>
             ))}

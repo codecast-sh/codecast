@@ -5,6 +5,7 @@
 // project_id or plan_id is in scope, newest first. A person shows counts and
 // their sessions. A session shows what it is, its parent, and an open link.
 import { useMemo, useState } from "react";
+import { ShortId } from "../ShortId";
 import Link from "next/link";
 import { X, ExternalLink, Trash2, ArrowRightLeft, CheckSquare, FileText, Users, Pencil, Check, Crown, Shield } from "lucide-react";
 import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
@@ -406,7 +407,7 @@ function RolePanel({ tree, role, sessions, canEdit, onOpenSession, onMove, onUpd
     <>
       <div className="flex items-center gap-2">
         <span className="inline-flex items-center h-[20px] px-1.5 rounded-md text-[10.5px] font-medium" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)", fontFamily: "var(--font-mono)" }}>@{role.handle}</span>
-        <Link href={`/org/${role.short_id}`} className="text-[10.5px] hover:underline" style={{ color: "var(--sol-text-dim)", fontFamily: "var(--font-mono)" }} title="Open the scope page">{role.short_id}</Link>
+        <Link href={`/org/${role.short_id}`} className="text-[10.5px] hover:underline" style={{ color: "var(--sol-text-dim)" }} title="Open the scope page"><ShortId id={role.short_id} /></Link>
         <Link href={`/org/${role.short_id}`} className="ml-auto inline-flex items-center gap-1 text-[11px] px-1.5 h-[20px] rounded-md hover:bg-sol-bg-highlight" style={{ color: "var(--sol-violet)" }}>
           Open page <ExternalLink className="w-3 h-3" />
         </Link>
@@ -515,7 +516,7 @@ function SessionPanel({ tree, session, parent, canEdit, onOpenSession, onMove, o
         <div className="min-w-0 flex-1">
           <div className="text-[17px] leading-snug font-semibold tracking-tight" style={{ fontFamily: "var(--font-serif)", color: "var(--sol-text)" }}>{session.title || "Untitled"}</div>
           <div className="mt-1 flex items-center gap-2 flex-wrap text-[11px]" style={{ color: "var(--sol-text-dim)", fontFamily: "var(--font-mono)" }}>
-            <span>{session.short_id}</span>
+            <ShortId id={session.short_id} />
             <StateChip state={session.state} />
             <span>{agoOf(now - session.updated_at)}</span>
           </div>

@@ -3,6 +3,7 @@
 // plans, pages, sessions and decisions in scope, painted from the local store
 // and the org tree, plus the brief and charter documents.
 import { useCallback, useMemo, useState } from "react";
+import { ShortId } from "../../ShortId";
 import Link from "next/link";
 import { CheckSquare, ExternalLink, Layers, MessageCircleQuestionMark } from "lucide-react";
 import { useWorkspaceCollection } from "../../../hooks/useWorkspaceCollection";
@@ -313,7 +314,7 @@ export function ScopeDecisionsTab({ ids, roleId }: { ids: ScopeIds; roleId?: str
           <span className="min-w-0 flex-1">
             <span className="block text-[13px] font-medium leading-snug line-clamp-2" style={{ color: "var(--sol-text)" }}>{d.question}</span>
             <span className="mt-[3px] flex items-center gap-1.5 text-[10.5px] min-w-0" style={{ color: "var(--sol-text-dim)" }}>
-              {d.short_id && <span style={{ fontFamily: "var(--font-mono)" }}>{d.short_id}</span>}
+              <ShortId id={d.short_id} />
               <span className="px-1.5 h-[16px] inline-flex items-center rounded-md border" style={{ borderColor: `color-mix(in srgb, ${tone} 45%, transparent)`, color: tone }}>{d.status}</span>
               {d.blocking && d.status === "pending" && <span style={{ color: "var(--sol-yellow)" }}>blocking</span>}
               {task && <span className="truncate inline-flex items-center gap-1"><CheckSquare className="w-3 h-3" />{task.short_id} {task.title}</span>}

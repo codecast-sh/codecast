@@ -1,4 +1,5 @@
 import { useState, useCallback, DragEvent } from "react";
+import { ShortId } from "./ShortId";
 import { useRouter } from "next/navigation";
 import { useInboxStore } from "../store/inboxStore";
 import { closeTaskWithGuard } from "../lib/taskActions";
@@ -137,7 +138,7 @@ export function PlanBoardView({ tasks, planShortId }: { tasks: any[]; planShortI
                     }`}
                   >
                     <div className="flex items-center gap-1.5 mb-1">
-                      <span className="text-[10px] font-mono text-sol-text-dim">{task.short_id}</span>
+                      <ShortId id={task.short_id} className="text-[10px] text-sol-text-dim" />
                       {PriorityIcon && pc && (
                         <PriorityIcon className={`w-3 h-3 ${pc.color}`} />
                       )}

@@ -1,5 +1,6 @@
 "use client";
 import { useState, useCallback, useMemo } from "react";
+import { ShortId } from "../../components/ShortId";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useRouter, useSearchParams, useParams, usePathname } from "next/navigation";
@@ -186,7 +187,7 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
           <StatusIcon className={`w-4 h-4 ${status.color}`} />
         )}
       </button>
-      <span className="text-xs font-mono text-sol-text-dim w-16 flex-shrink-0 cq-hide-compact">{task.short_id}</span>
+      <ShortId id={task.short_id} className="text-xs text-sol-text-dim w-16 cq-hide-compact" />
       {task.external && <IssueLink external={task.external} className="cq-hide-compact" />}
       <TaskDecisionChip taskId={task._id} />
       <TaskLineChip task={task as any} />
@@ -390,7 +391,7 @@ function TaskMiniCard({ task }: { task: TaskItem }) {
   return (
     <div className="flex items-center gap-2 rounded-md border border-sol-border/40 bg-sol-bg-alt/40 px-2.5 py-1.5 min-w-0">
       <StatusIcon className={`w-3.5 h-3.5 flex-shrink-0 ${status.color}`} />
-      <span className="text-xs font-mono text-sol-text-dim flex-shrink-0">{task.short_id}</span>
+      <ShortId id={task.short_id} className="text-xs text-sol-text-dim" />
       {task.external && <IssueLink external={task.external} />}
       <span className="text-xs text-sol-text truncate">{task.title}</span>
     </div>
@@ -523,9 +524,7 @@ function KanbanCard({
     >
       <div className="flex items-start justify-between gap-2 mb-2">
         <span className="flex items-center gap-1.5 min-w-0 text-[10px] font-mono text-sol-text-dim leading-none mt-0.5">
-          {/* The id never breaks: a long provider identifier next to it would
-              otherwise wrap "ct-45202" onto two lines on a narrow card. */}
-          <span className="flex-shrink-0">{task.short_id}</span>
+          <ShortId id={task.short_id} />
           {task.external && <IssueLink external={task.external} className="max-w-[9rem]" />}
           {parentChip && (
             <span className="flex items-center gap-0.5 min-w-0 opacity-80" title={`Subtask of ${parentChip.short_id}: ${parentChip.title}`}>

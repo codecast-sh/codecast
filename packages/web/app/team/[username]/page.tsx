@@ -1,5 +1,6 @@
 "use client";
 import { useMemo, useState } from "react";
+import { ShortId } from "../../../components/ShortId";
 import { useQuery, usePaginatedQuery } from "convex/react";
 import { AppLoader } from "../../../components/AppLoader";
 import { AvatarImg } from "../../../lib/avatarCache";
@@ -354,7 +355,7 @@ function TaskWorkRow({ task }: { task: any }) {
   return (
     <Link href={`/tasks/${task.short_id || task._id}`} className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-sol-bg-alt/50 transition-colors group">
       <Icon className={`w-3.5 h-3.5 flex-shrink-0 ${cfg.color}`} />
-      <span className="text-[10px] font-mono text-sol-base01/35 w-14 flex-shrink-0">{task.short_id}</span>
+      <ShortId id={task.short_id} className="text-[10px] text-sol-base01/35 w-14" />
       <span className="flex-1 text-[12px] text-sol-text/80 truncate group-hover:text-sol-text transition-colors">{task.title}</span>
       {task.labels?.slice(0, 2).map((l: string) => {
         const lc = getLabelColor(l);
@@ -549,7 +550,7 @@ function EventRow({ item, router }: { item: any; router: ReturnType<typeof useRo
         {isDoc && <FileText className="w-3 h-3 flex-shrink-0 self-center text-sol-cyan/30" />}
         <span className={`text-[9.5px] font-medium flex-shrink-0 ${verbColor}`}>{item.verb}</span>
         <span className="text-[11.5px] text-sol-text/65 truncate flex-1 group-hover:text-sol-text/90 transition-colors leading-tight">
-          {isTask && item.entity_short_id && <span className="font-mono text-[9px] text-sol-base01/25 mr-1">{item.entity_short_id}</span>}
+          {isTask && item.entity_short_id && <ShortId id={item.entity_short_id} className="text-[9px] text-sol-base01/25 mr-1" />}
           {item.entity_title || item.verb}
         </span>
         {item.meta?.priority === "high" && item.meta?.status !== "done" && <span className="w-1.5 h-1.5 rounded-full bg-sol-red/40 flex-shrink-0 self-center" />}
