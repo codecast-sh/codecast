@@ -8,6 +8,9 @@ import {
   accessSummary,
   submitComments,
   deliverPendingComments,
+  saveDraft,
+  draftsFor,
+  MAX_DRAFT_CHARS,
   historyBySlug,
   ownerPanel,
   MAX_COMMENTS_PER_MINUTE,
@@ -855,5 +858,117 @@ describe("brandArtifactHtml", () => {
     expect(out).toContain('var gateE=qs.get("e")||"";');
     // The view beacon and both comment paths (new batch, threaded reply).
     expect([...out.matchAll(/k:gateK\|\|undefined,e:gateE\|\|undefined/g)]).toHaveLength(3);
+  });
+});
+
+describe("viewer drafts", () => {
+  const artRow = { ...existingRow, owner_key: "sekrit", session_conversation_id: "conv1" };
+  const save = (ctx: any, args: Record<string, any>) => (saveDraft as any)._handler(ctx, args);
+  const list = (ctx: any, args: Record<string, any>) => (draftsFor as any)._handler(ctx, args);
+
+  test("a first save inserts one row keyed by artifact, author and key", async () => {
+    const { ctx, inserts } = makeCtx([{ ...artRow }]);
+    const result = await save(ctx, { slug: artRow.slug, key: "prompt:self-respect", author: "Cameron", text: "new wording" });
+    expect(result.ok).toBe(true);
+    expect(typeof result.updated_at).toBe("number");
+    expect(inserts).toHaveLength(1);
+    expect(inserts[0]).toMatchObject({
+      table: "artifact_drafts",
+      artifact_id: "a1",
+      key: "prompt:self-respect",
+      author: "Cameron",
+      text: "new wording",
+    });
+  });
+
+  test("saving the same key again patches in place instead of adding a row", async () => {
+    const { ctx, inserts, patches } = makeCtx([{ ...artRow }]);
+    await save(ctx, { slug: artRow.slug, key: "k1", author: "Cameron", text: "first" });
+    await save(ctx, { slug: artRow.slug, key: "k1", author: "Cameron", text: "second" });
+    expect(inserts).toHaveLength(1);
+    expect(patches).toHaveLength(1);
+    expect(patches[0].patch.text).toBe("second");
+  });
+
+  test("a different author on the same key gets their own row", async () => {
+    const { ctx, inserts } = makeCtx([{ ...artRow }]);
+    await save(ctx, { slug: artRow.slug, key: "k1", author: "Cameron", text: "mine" });
+    await save(ctx, { slug: artRow.slug, key: "k1", author: "Ashot", text: "also mine" });
+    expect(inserts).toHaveLength(2);
+    expect(inserts.map((r) => r.author)).toEqual(["Cameron", "Ashot"]);
+  });
+
+  test("empty text deletes the draft — how a page clears one after sending", async () => {
+    const { ctx, deletes } = makeCtx([{ ...artRow }]);
+    await save(ctx, { slug: artRow.slug, key: "k1", author: "Cameron", text: "typed" });
+    const cleared = await save(ctx, { slug: artRow.slug, key: "k1", author: "Cameron", text: "" });
+    expect(cleared).toMatchObject({ ok: true, cleared: true });
+    expect(deletes).toHaveLength(1);
+  });
+
+  test("clearing a draft that was never saved is a no-op, not an error", async () => {
+    const { ctx, deletes, inserts } = makeCtx([{ ...artRow }]);
+    const cleared = await save(ctx, { slug: artRow.slug, key: "k1", author: "Cameron", text: "   " });
+    expect(cleared).toMatchObject({ ok: true, cleared: true });
+    expect(deletes).toEqual([]);
+    expect(inserts).toEqual([]);
+  });
+
+  test("a missing name saves under anonymous rather than dropping the draft", async () => {
+    const { ctx, inserts } = makeCtx([{ ...artRow }]);
+    await save(ctx, { slug: artRow.slug, key: "k1", author: "  ", text: "typed" });
+    expect(inserts[0].author).toBe("anonymous");
+    const back = await list(ctx, { slug: artRow.slug });
+    expect(back.drafts).toEqual([{ key: "k1", text: "typed", updated_at: inserts[0].updated_at }]);
+  });
+
+  test("text is truncated at the cap", async () => {
+    const { ctx, inserts } = makeCtx([{ ...artRow }]);
+    await save(ctx, { slug: artRow.slug, key: "k1", author: "C", text: "x".repeat(MAX_DRAFT_CHARS + 500) });
+    expect(inserts[0].text).toHaveLength(MAX_DRAFT_CHARS);
+  });
+
+  test("an empty key is rejected", async () => {
+    const { ctx, inserts } = makeCtx([{ ...artRow }]);
+    const result = await save(ctx, { slug: artRow.slug, key: "   ", author: "C", text: "typed" });
+    expect(result.error).toContain("Missing key");
+    expect(inserts).toEqual([]);
+  });
+
+  test("comments off blocks drafts too — the same gate as posting", async () => {
+    const { ctx, inserts } = makeCtx([{ ...artRow, comments_disabled: true }]);
+    const result = await save(ctx, { slug: artRow.slug, key: "k1", author: "C", text: "typed" });
+    expect(result.error).toContain("Comments are off");
+    expect(inserts).toEqual([]);
+    const back = await list(ctx, { slug: artRow.slug, author: "C" });
+    expect(back.error).toContain("Comments are off");
+  });
+
+  test("an unknown slug is Not found on both routes", async () => {
+    const { ctx, inserts } = makeCtx([{ ...artRow }]);
+    expect((await save(ctx, { slug: "nosuchslug12", key: "k1", author: "C", text: "t" })).error).toBe("Not found");
+    expect((await list(ctx, { slug: "nosuchslug12", author: "C" })).error).toBe("Not found");
+    expect(inserts).toEqual([]);
+  });
+
+  test("a draft never becomes a comment, and never notifies the owner", async () => {
+    const { ctx, inserts, mutations } = makeCtx([{ ...artRow }]);
+    await save(ctx, { slug: artRow.slug, key: "k1", author: "Cameron", text: "typed" });
+    expect(inserts.every((r) => r.table === "artifact_drafts")).toBe(true);
+    expect(mutations).toEqual([]);
+  });
+
+  test("the list returns only this author's drafts, newest first", async () => {
+    const { ctx } = makeCtx([
+      { ...artRow },
+      { _table: "artifact_drafts", _id: "d1", artifact_id: "a1", author: "Cameron", key: "k1", text: "older", updated_at: 10 },
+      { _table: "artifact_drafts", _id: "d2", artifact_id: "a1", author: "Cameron", key: "k2", text: "newer", updated_at: 20 },
+      { _table: "artifact_drafts", _id: "d3", artifact_id: "a1", author: "Ashot", key: "k1", text: "theirs", updated_at: 30 },
+    ]);
+    const back = await list(ctx, { slug: artRow.slug, author: "Cameron" });
+    expect(back.drafts).toEqual([
+      { key: "k2", text: "newer", updated_at: 20 },
+      { key: "k1", text: "older", updated_at: 10 },
+    ]);
   });
 });

@@ -859,6 +859,69 @@ export const view = httpAction(async (ctx, request) => {
 });
 
 // ---------------------------------------------------------------------------
+// Viewer drafts (public mutations behind CORS)
+// ---------------------------------------------------------------------------
+//
+// A published page that contains an editor cannot keep the viewer's unsent
+// text on its own: the sandbox CSP gives it an opaque origin, so localStorage,
+// IndexedDB and OPFS all throw SecurityError, and a reload or a browser crash
+// loses whatever they had typed. These two routes are the server-side store
+// that fixes it — the page autosaves into POST /cli/artifacts/draft as the
+// viewer types and restores from POST /cli/artifacts/drafts on open.
+//
+// Drafts are deliberately NOT comments: they never enter the comment feed,
+// never notify the owner, and never reach the publishing session.
+
+// Refuse an oversized body before parsing it. The mutation truncates too, but
+// a megabyte of JSON has no business reaching the parser on an autosave path.
+const MAX_DRAFT_BODY_BYTES = 128 * 1024;
+
+function bodyTooLarge(request: Request): Response | null {
+  const len = Number(request.headers.get("content-length") ?? 0);
+  return Number.isFinite(len) && len > MAX_DRAFT_BODY_BYTES ? json({ error: "Draft too large" }, 413) : null;
+}
+
+export const draftSave = httpAction(async (ctx, request) => {
+  try {
+    const oversize = bodyTooLarge(request);
+    if (oversize) return oversize;
+    const body = await request.json();
+    // Autosave is debounced at ~1.5s per field, so one viewer typing steadily
+    // is well under a write a second. The ceiling is per PAGE and sized to
+    // hold several viewers editing at once; the real bound on what this can
+    // cost is MAX_ARTIFACT_DRAFTS (row ceiling per artifact), not this.
+    const limited = await slugRateLimited(ctx, String(body.slug ?? ""), "artifact-draft", 240, 60_000);
+    if (limited) return limited;
+    const result = await ctx.runMutation(api.artifacts.saveDraft, {
+      slug: String(body.slug ?? ""),
+      key: String(body.key ?? ""),
+      author: typeof body.author === "string" ? body.author : undefined,
+      text: String(body.text ?? ""),
+    });
+    return json(result);
+  } catch (error) {
+    return json({ error: error instanceof Error ? error.message : "Bad request" }, 400);
+  }
+});
+
+// POST, not GET: symmetrical with the other artifact routes, and it keeps the
+// response off every cache between the page and here.
+export const draftList = httpAction(async (ctx, request) => {
+  try {
+    const body = await request.json();
+    const limited = await slugRateLimited(ctx, String(body.slug ?? ""), "artifact-drafts-read", 120, 60_000);
+    if (limited) return limited;
+    const result = await ctx.runQuery(api.artifacts.draftsFor, {
+      slug: String(body.slug ?? ""),
+      author: typeof body.author === "string" ? body.author : undefined,
+    });
+    return json(result);
+  } catch (error) {
+    return json({ error: error instanceof Error ? error.message : "Bad request" }, 400);
+  }
+});
+
+// ---------------------------------------------------------------------------
 // GET /cli/a/<slug>[/<asset>] — the serve route with gates and modes
 // ---------------------------------------------------------------------------
 
