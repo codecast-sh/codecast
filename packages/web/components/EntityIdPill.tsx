@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect, useContext, useMemo } from "react";
+import { ShortId } from "./ShortId";
 import Link from "next/link";
 import { RoleFace } from "./org/RoleFace";
 import { RoleHoverCard, SessionFace } from "./identity";
@@ -12,6 +13,7 @@ import {
   FileText,
   Folder,
   Flag,
+  Network,
   Zap,
   GitPullRequest,
   GitCommitHorizontal,
@@ -53,6 +55,8 @@ import {
 import { prState, repoObjectRefOf } from "../lib/repoObjects";
 import { githubLocationHref } from "../lib/repoNavigation";
 import { loopbackLinkUrl } from "../lib/browserPaneLinks";
+import { appPathOf } from "../lib/browserPane";
+import { isNonTabRoute } from "../src/compat/tabRouting";
 import { LoopbackUrlPill } from "./LoopbackUrlPill";
 import { EntityObjectCard } from "./EntityObjectCard";
 import { DocEmbed } from "./DocEmbed";
@@ -184,7 +188,7 @@ function TaskHoverContent({ task }: { task: any }) {
 
       <div className="flex items-center justify-between gap-2 pt-1 border-t border-white/5">
         <span className="flex items-center gap-1.5 min-w-0 whitespace-nowrap text-[10px] text-gray-500">
-          <span className="font-mono">{task.short_id}</span>
+          <ShortId id={task.short_id} />
           {commentCount > 0 && (
             <span className="inline-flex items-center gap-0.5">
               <span className="text-gray-600">·</span>
@@ -268,7 +272,7 @@ function PlanHoverContent({ plan }: { plan: any }) {
       )}
 
       <div className="flex items-center justify-between pt-1 border-t border-white/5">
-        <span className="text-[10px] text-gray-500 font-mono">{plan.short_id}</span>
+        <ShortId id={plan.short_id} className="text-[10px] text-gray-500" />
         <span className="text-[10px] text-gray-500 inline-flex items-center gap-0.5">
           Click to open <ArrowUpRight className="w-2.5 h-2.5" />
         </span>
@@ -324,7 +328,7 @@ function TriggerHoverContent({ trigger }: { trigger: any }) {
       )}
 
       <div className="flex items-center justify-between pt-1 border-t border-white/5">
-        <span className="text-[10px] text-gray-500 font-mono">{trigger.short_id}</span>
+        <ShortId id={trigger.short_id} className="text-[10px] text-gray-500" />
         <span className="text-[10px] text-gray-500 inline-flex items-center gap-0.5">
           Click to open <ArrowUpRight className="w-2.5 h-2.5" />
         </span>
@@ -807,10 +811,17 @@ export function EntityAwareLink({ href, children, ...allProps }: any) {
     return withRoleHover(href, roleHandle, pill);
   }
   // A relative href names one of our own routes (a role pill's /org/<or-N>):
-  // it navigates in this window, never a new tab. A link to a role opens the
-  // role's card on hover, the way its mention does.
-  if (typeof href === "string" && href.startsWith("/") && !href.startsWith("//")) {
-    return withRoleHover(href, "", <Link href={href} {...props}>{children}</Link>);
+  // it navigates in this window, never a new tab. So does a full codecast URL
+  // for a route inside the app (https://codecast.sh/org?proposal=op-19); a
+  // new tab there is the system browser on desktop. Marketing and public
+  // pages stay ordinary links. A link to a role opens the role's card on
+  // hover, the way its mention does.
+  const appPath = typeof href === "string" ? appPathOf(href) : null;
+  const ownPath = typeof href === "string" && href.startsWith("/") && !href.startsWith("//")
+    ? href
+    : appPath && !isNonTabRoute(appPath) ? appPath : null;
+  if (ownPath) {
+    return withRoleHover(ownPath, "", <Link href={ownPath} {...props}>{children}</Link>);
   }
   // A dev server an agent printed: the one external link people want to LOOK
   // at rather than leave for, so it opens as a pane (lib/browserPaneLinks).
@@ -1002,6 +1013,8 @@ export function EntityIdPill({
             ? Folder
             : type === "initiative"
               ? Flag
+            : type === "proposal"
+              ? Network
             : isPr
               ? GitPullRequest
               : isCommit
@@ -1021,6 +1034,9 @@ export function EntityIdPill({
             // Health owns green, yellow and red, so an initiative is magenta.
             : type === "initiative"
               ? "bg-sol-magenta/[0.08] text-sol-magenta hover:bg-sol-magenta/[0.16]"
+            // A proposal is the org page's violet, the colour of the ghosts it draws.
+            : type === "proposal"
+              ? "bg-sol-violet/[0.08] text-sol-violet hover:bg-sol-violet/[0.16]"
             : isPr
               ? "bg-sol-green/[0.08] text-sol-green hover:bg-sol-green/[0.16]"
               : isCommit
