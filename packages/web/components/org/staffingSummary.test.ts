@@ -5,7 +5,7 @@
 import { describe, expect, test } from "bun:test";
 import { ORG_FIXTURE } from "./orgFixture";
 import { ORG_STAFFING_FIXTURE_HEALTH, ORG_STAFFING_FIXTURE_PROPOSAL } from "./orgStaffingFixture";
-import { budgetArithmetic, capsLine, hasAcceptedBefore, splitAsk } from "./staffingModel";
+import { capsLine, hasAcceptedBefore, splitAsk } from "./staffingModel";
 import { CHANGE_KIND_META, changeLine, kindDescription, kindLabel } from "./orgMeta";
 import { GLOSSARY_ORDER, HOW_THIS_WORKS, glossaryEntries } from "./orgGlossaryWords";
 import { ORG_CHANGE_KINDS } from "@codecast/shared/contracts/orgProposal";
@@ -26,30 +26,9 @@ describe("the ask", () => {
 
 });
 
-describe("the budget arithmetic", () => {
-  test("today sums the active seats; after adds a new seat, swaps a changed limit, drops a retired seat; paused seats stay outside", () => {
-    const tree = {
-      ...ORG_FIXTURE,
-      roles: [
-        { ...ORG_FIXTURE.roles[0], handle: "growth", status: "active" as const, caps: { hands_per_day: 2, wakes_per_day: 8, tokens_per_day: 400_000 } },
-        { ...ORG_FIXTURE.roles[0], _id: "r2", handle: "ops", status: "active" as const, caps: { hands_per_day: 1, wakes_per_day: 4, tokens_per_day: 100_000 } },
-        { ...ORG_FIXTURE.roles[0], _id: "r3", handle: "paused", status: "paused" as const, caps: { hands_per_day: 9, wakes_per_day: 9, tokens_per_day: 9 } },
-      ],
-    };
-    const changes = [
-      { ...P.changes[0], status: "proposed" as const, change: { kind: "role" as const, name: "Chief of Staff", handle: "chief-of-staff", reports_to: "me", caps: { hands_per_day: 0, wakes_per_day: 8, tokens_per_day: 200_000 } } },
-      { ...P.changes[0], _id: "b", status: "proposed" as const, change: { kind: "budget" as const, handle: "growth", caps: { tokens_per_day: 800_000 } } },
-      { ...P.changes[0], _id: "r", status: "proposed" as const, change: { kind: "retire" as const, handle: "ops" } },
-      // Decided rows do not move the total: applied ones are in the tree, skipped ones never will be.
-      { ...P.changes[0], _id: "s", status: "skipped" as const, change: { kind: "budget" as const, handle: "growth", caps: { hands_per_day: 50 } } },
-    ];
-    const b = budgetArithmetic(tree, changes);
-    expect(b.today).toEqual({ hands_per_day: 3, wakes_per_day: 12, tokens_per_day: 500_000 });
-    expect(b.after).toEqual({ hands_per_day: 2, wakes_per_day: 16, tokens_per_day: 1_000_000 });
-    expect(b.seats).toBe(2);
-    expect(b.paused).toBe(1);
-    expect(b.lines.map((l) => `${l.handle}:${l.note}`)).toEqual(["chief-of-staff:new seat", "growth:changed limit", "ops:seat closed"]);
-    expect(capsLine(b.today)).toBe("3 hands, 12 wakes, 500,000 tokens");
+describe("the limits line", () => {
+  test("capsLine reads the three limits in one line, for the glossary alone", () => {
+    expect(capsLine({ hands_per_day: 3, wakes_per_day: 12, tokens_per_day: 500_000 })).toBe("3 hands, 12 wakes, 500,000 tokens");
     expect(capsLine({ wakes_per_day: 1 })).toBe("1 wake");
     expect(capsLine(null)).toBe("no limit set");
   });

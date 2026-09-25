@@ -186,12 +186,18 @@ unlock sentence, caps, model, host, reports to, retire). The org page node
 gets a "Talk" action that opens the standing session in the conversation view.
 
 In the conversation view a frame renders as the wake card
-(`components/RoleWakeCard.tsx`, parsed by `components/roleWake.ts`): the role
-and handle linking to its page, the wake id, "woke on N changes, M held" with
-a held backlog tag, each section folded behind its line count (Why open), task
-and plan ids as live pills, and the role's controls (open, pause or resume
-through `updateOrgRole`, caps, the wake log). A raw frame in the transcript is
-a regression.
+(`components/RoleWakeCard.tsx`, parsed by `components/roleWake.ts`). At rest it
+is one line, because a frame is the role's input and a person reading the
+thread needs only that the role woke and why: the role's face and name linking
+to its page, the first cause in a few words with the rest as "and N more"
+(`wakeLine`), the age, and under it where the turn's message went
+(scopes-and-feed.md F4.2). No counts, no limits, no scope lists until asked.
+One click opens the whole frame: the handle, the wake id, "woke on N changes,
+M held" with a held backlog tag, the day's counts, each section folded behind
+its line count (Why open), task and plan ids as live pills, and the role's
+controls (open, pause or resume through `updateOrgRole`, caps, the wake log).
+The fold mode a role's page uses keeps the frame (`FOLD_KEPT_USER_KINDS`) for
+the same line. A raw frame in the transcript is a regression.
 
 ## Wake sources (as shipped, W1)
 

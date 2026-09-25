@@ -1,3 +1,4 @@
+import { isOrgQuietChange } from "@codecast/shared/contracts/orgProposal";
 // The conversation is part of the proposal (docs/architecture/org-staffing.md
 // S18): the pane reads the author's thread off the proposal, and reads what
 // the author's revise did to each change so the list shows it under the
@@ -89,7 +90,9 @@ export function revisionWord(r: OrgChangeRevision): string {
 /** Changes the author revised after `since`: what landed under the reader
  *  since they last looked, newest first. */
 export function revisedSince(changes: OrgProposalChange[], since: number): OrgProposalChange[] {
-  return changes.filter((c) => c.revision && c.revision.at > since).sort((a, b) => b.revision!.at - a.revision!.at);
+  // A quiet kind (a limit, S23.2) is never read, revised or not; the seen
+  // stamp still carries its revision (latestOrgRevisionAt reads every row).
+  return changes.filter((c) => c.revision && c.revision.at > since && !isOrgQuietChange(c.change)).sort((a, b) => b.revision!.at - a.revision!.at);
 }
 
 /** "Chief of Staff removed 1, changed 2 and added 1 since you last looked."

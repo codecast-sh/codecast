@@ -4,7 +4,7 @@
 // a person's inbox.
 //
 //   bun packages/cli/scripts/prompt-dry-run.ts --run <dir> --prompt <file>
-//        [--max-turns 80] [--tools Bash,Read,Write,Edit] [--guard <dir>] [--serve <dir>]
+//        [--max-turns 80] [--tools Bash,Read,Write,Edit] [--guard <dir>] [--serve <dir>] [--then <file>]
 //
 // Why a harness at all. The codecast daemon syncs EVERY transcript under
 // ~/.claude/projects as a session, whether or not the SessionStart hook ran
@@ -32,10 +32,19 @@
 //     the launching session's identity (CODECAST_SESSION_ID and friends).
 //
 // Output, in the run directory: out.json (the claude result), reply.txt (its
-// final message and cost), exit.txt, took.txt, calls.log (every cast call the
-// guard saw). The prompt file is read by the agent itself, so a prompt of any
+// final message and cost), said.txt (every assistant message of the turn, in
+// order: a run that keeps working after the message it meant to send ends on
+// a correction, and the result alone loses the message; two samples did on
+// 2026-09-24), stream.jsonl (the raw stream), exit.txt, took.txt, calls.log
+// (every cast call the guard saw). The prompt file is read by the agent itself, so a prompt of any
 // size works; the harness note (what to write instead of posting) belongs in
 // that file, not here.
+//
+// `--then <file>` is a second turn: once the first result is in, the file's
+// text is sent as the person's reply into the same session (claude --resume,
+// same private config dir), and out2.json / reply2.txt hold that turn. It is
+// how a conversational prompt is graded past its opening, since a dry run
+// cannot hear a person. The config dir is removed after the last turn.
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
@@ -50,13 +59,15 @@ function arg(name: string, fallback?: string): string | undefined {
 const runDir = path.resolve(arg("run") ?? "");
 const promptFile = path.resolve(arg("prompt") ?? "");
 if (!arg("run") || !arg("prompt") || !fs.existsSync(promptFile)) {
-  console.error("usage: prompt-dry-run.ts --run <dir> --prompt <file> [--max-turns N] [--tools A,B] [--guard <dir>] [--serve <dir>] [--account <profile>]");
+  console.error("usage: prompt-dry-run.ts --run <dir> --prompt <file> [--max-turns N] [--tools A,B] [--guard <dir>] [--serve <dir>] [--account <profile>] [--then <reply file>]");
   process.exit(2);
 }
 const maxTurns = arg("max-turns", "80")!;
 const tools = (arg("tools", "Bash,Read,Write,Edit") ?? "").split(",").filter(Boolean);
 const guardDir = path.resolve(arg("guard") ?? path.join(import.meta.dir, "prompt-dry-run-bin"));
 const serveDir = arg("serve") ? path.resolve(arg("serve")!) : undefined;
+const thenFile = arg("then") ? path.resolve(arg("then")!) : undefined;
+if (thenFile && !fs.existsSync(thenFile)) { console.error(`--then: no such file ${thenFile}`); process.exit(2); }
 
 /** A saved profile's setup token (`cast accounts token <name>`): a fixed sign-in
  *  in a 0600 env file, so a run can spend that account's window while the
@@ -101,30 +112,65 @@ if (serveDir) env.DRY_RUN_SERVE_DIR = serveDir;
 env.PATH = `${guardDir}:${env.PATH ?? ""}`;
 
 const started = Date.now();
-const out = fs.openSync(path.join(runDir, "out.json"), "w");
-const err = fs.openSync(path.join(runDir, "err.txt"), "w");
-const child = spawn("claude", [
-  "--setting-sources", "project",
-  "-p", `Your entire briefing is the file ${promptFile}. Read it in full first, then do what it says.`,
-  "--allowedTools", ...tools,
-  "--dangerously-skip-permissions",
-  "--max-turns", maxTurns,
-  "--output-format", "json",
-], { cwd: runDir, env, stdio: ["ignore", out, err], detached: true });
 
-child.on("exit", (code) => {
-  fs.closeSync(out); fs.closeSync(err);
-  fs.writeFileSync(path.join(runDir, "exit.txt"), `${code ?? 1}\n`);
-  fs.writeFileSync(path.join(runDir, "took.txt"), `${Math.round((Date.now() - started) / 1000)}s\n`);
-  let reply = "(no result)";
-  try {
-    const d = JSON.parse(fs.readFileSync(path.join(runDir, "out.json"), "utf8"));
-    reply = `${d.result ?? ""}\n\n[cost_usd=${d.total_cost_usd} turns=${d.num_turns} is_error=${d.is_error}]`;
-  } catch { /* claude wrote no json: err.txt says why */ }
-  fs.writeFileSync(path.join(runDir, "reply.txt"), reply + "\n");
-  // The transcript and everything else claude wrote for this run go with the
-  // private config dir; nothing of it ever sat under ~/.claude/projects.
-  fs.rmSync(configDir, { recursive: true, force: true });
-  console.log(`done ${path.basename(runDir)} (${Math.round((Date.now() - started) / 1000)}s, exit ${code})`);
-  process.exit(code ?? 1);
-});
+/** One turn of the run: the opening (the briefing file), or a reply resumed
+ *  into the same session. Writes <name>.json and <name>.txt; resolves with
+ *  the exit code and the session id the result names. */
+function runTurn(name: string, promptText: string, resume?: string): Promise<{ code: number; sessionId?: string }> {
+  return new Promise((resolve) => {
+    const streamPath = path.join(runDir, name === "out" ? "stream.jsonl" : `${name.replace(/^out/, "stream")}.jsonl`);
+    const out = fs.openSync(streamPath, "w");
+    const err = fs.openSync(path.join(runDir, name === "out" ? "err.txt" : `${name}.err.txt`), "w");
+    const child = spawn("claude", [
+      "--setting-sources", "project",
+      ...(resume ? ["--resume", resume] : []),
+      "-p", promptText,
+      "--allowedTools", ...tools,
+      "--dangerously-skip-permissions",
+      "--max-turns", maxTurns,
+      "--output-format", "stream-json", "--verbose",
+    ], { cwd: runDir, env, stdio: ["ignore", out, err], detached: true });
+    child.on("exit", (code) => {
+      fs.closeSync(out); fs.closeSync(err);
+      let reply = "(no result)";
+      let sessionId: string | undefined;
+      const said: string[] = [];
+      try {
+        // The stream is one JSON object per line: assistant messages as they
+        // are produced, then the result. out.json keeps the result alone, the
+        // shape every reader of these runs already parses.
+        let result: any = null;
+        for (const line of fs.readFileSync(streamPath, "utf8").split("\n")) {
+          if (!line.trim()) continue;
+          let d: any; try { d = JSON.parse(line); } catch { continue; }
+          if (d.type === "result") result = d;
+          else if (d.type === "assistant") for (const c of d.message?.content ?? []) if (c.type === "text" && c.text?.trim()) said.push(c.text.trim());
+        }
+        if (result) {
+          fs.writeFileSync(path.join(runDir, `${name}.json`), JSON.stringify(result, null, 1));
+          reply = `${result.result ?? ""}\n\n[cost_usd=${result.total_cost_usd} turns=${result.num_turns} is_error=${result.is_error}]`;
+          sessionId = result.session_id;
+        }
+      } catch { /* claude wrote no stream: the err file says why */ }
+      fs.writeFileSync(path.join(runDir, name === "out" ? "reply.txt" : name.replace(/^out/, "reply") + ".txt"), reply + "\n");
+      fs.writeFileSync(path.join(runDir, name === "out" ? "said.txt" : name.replace(/^out/, "said") + ".txt"), said.join("\n\n────────\n\n") + "\n");
+      resolve({ code: code ?? 1, sessionId });
+    });
+  });
+}
+
+const first = await runTurn("out", `Your entire briefing is the file ${promptFile}. Read it in full first, then do what it says.`);
+let code = first.code;
+if (thenFile && first.code === 0 && first.sessionId) {
+  const second = await runTurn("out2", fs.readFileSync(thenFile, "utf8").trim(), first.sessionId);
+  code = second.code;
+} else if (thenFile) {
+  fs.writeFileSync(path.join(runDir, "reply2.txt"), `(no second turn: first turn exit ${first.code}, session ${first.sessionId ?? "unknown"})\n`);
+}
+fs.writeFileSync(path.join(runDir, "exit.txt"), `${code}\n`);
+fs.writeFileSync(path.join(runDir, "took.txt"), `${Math.round((Date.now() - started) / 1000)}s\n`);
+// The transcript and everything else claude wrote for this run go with the
+// private config dir; nothing of it ever sat under ~/.claude/projects.
+fs.rmSync(configDir, { recursive: true, force: true });
+console.log(`done ${path.basename(runDir)} (${Math.round((Date.now() - started) / 1000)}s, exit ${code})`);
+process.exit(code);

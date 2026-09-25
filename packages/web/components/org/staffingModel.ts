@@ -4,7 +4,7 @@
 // with the node each one points at, span of control per person, and the roles
 // that are bottlenecks. The pane renders these; it computes nothing itself.
 import { PERSON_SPAN } from "@codecast/shared/contracts/orgCapacity";
-import { ORG_SYNC_KINDS, PLAN_STATUS_CHANGES, PROJECT_STATUS_CHANGES, TASK_STATUS_CHANGES, describeTenure, editedOrgChange, isOrgChangeDecidable, orderOrgChanges, type OrgTenureSpec } from "@codecast/shared/contracts/orgProposal";
+import { ORG_SYNC_KINDS, PLAN_STATUS_CHANGES, PROJECT_STATUS_CHANGES, TASK_STATUS_CHANGES, describeTenure, editedOrgChange, isOrgChangeDecidable, isOrgQuietChange, orderOrgChanges, type OrgTenureSpec } from "@codecast/shared/contracts/orgProposal";
 import { avatarOf } from "@codecast/shared/contracts/orgAvatars";
 import type { OrgParentRef, OrgRole, OrgTree } from "./orgTypes";
 import { parentNodeId, resolveOrgParentRef } from "./orgLayout";
@@ -466,11 +466,13 @@ function fieldOptions(kind: OrgChange["kind"], key: string): readonly string[] |
   return undefined;
 }
 
-/** The editable fields of a change, flattened one level ("caps.tokens_per_day")
+/** The editable fields of a change, flattened one level ("config.region")
  *  so the inline form (S5: Edit on anything but a role) is one input per field.
- *  `kind` is not editable; a change stays what it is. */
+ *  `kind` is not editable; a change stays what it is. A quiet kind (a limit,
+ *  S23.2) has no fields: a person never reads it, so never edits it. */
 export function changeFields(change: OrgChange): ChangeField[] {
   const out: ChangeField[] = [];
+  if (isOrgQuietChange(change)) return out;
   const push = (key: string, v: unknown) => {
     if (v === undefined || v === null) return;
     if (Array.isArray(v)) out.push({ key, label: key.replace(/[._]/g, " "), kind: "list", value: v.map((x) => typeof x === "string" ? x : JSON.stringify(x)).join(", ") });
@@ -717,64 +719,6 @@ export function splitAsk(summaryMd: string | null | undefined): { ask: string; t
 }
 
 export type BudgetCaps = { hands_per_day: number; wakes_per_day: number; tokens_per_day: number };
-export type BudgetLine = { handle: string; name?: string; before: Partial<BudgetCaps> | null; after: Partial<BudgetCaps> | null; note: string };
-export type BudgetArithmetic = {
-  /** Active seats' daily limits summed, today. */
-  today: BudgetCaps;
-  /** The same sum if every remaining change is accepted as proposed. */
-  after: BudgetCaps;
-  /** Seats that count today (active, with a limit). */
-  seats: number;
-  /** Paused seats, which stay outside both totals. */
-  paused: number;
-  /** One line per change that moves the total. */
-  lines: BudgetLine[];
-};
-
-const ZERO_CAPS: BudgetCaps = { hands_per_day: 0, wakes_per_day: 0, tokens_per_day: 0 };
-const addCaps = (a: BudgetCaps, b: Partial<BudgetCaps> | undefined | null, sign = 1): BudgetCaps => ({
-  hands_per_day: a.hands_per_day + sign * (b?.hands_per_day ?? 0),
-  wakes_per_day: a.wakes_per_day + sign * (b?.wakes_per_day ?? 0),
-  tokens_per_day: a.tokens_per_day + sign * (b?.tokens_per_day ?? 0),
-});
-
-/**
- * The budget arithmetic behind the pane's Budget control, computed from the
- * tree and the proposal rather than quoted from the analyzer's prose: today's
- * total across active seats, the total if every open change lands, and the
- * lines that move it (a new seat's limit, a changed limit, a retired seat).
- * Skipped and already applied rows are left out: applied ones are in the
- * tree already, skipped ones never will be.
- */
-export function budgetArithmetic(tree: OrgTree | null, changes: OrgProposalChange[]): BudgetArithmetic {
-  const roles = tree?.roles ?? [];
-  const active = roles.filter((r) => r.status === "active");
-  const paused = roles.filter((r) => r.status === "paused").length;
-  let today = ZERO_CAPS;
-  for (const r of active) today = addCaps(today, r.caps);
-  const capsOf = (h: string) => active.find((r) => r.handle === h.replace(/^@/, ""))?.caps ?? null;
-  const nameOf = (h: string) => roles.find((r) => r.handle === h.replace(/^@/, ""))?.name;
-  let after = today;
-  const lines: BudgetLine[] = [];
-  for (const c of changes) {
-    if (!isDecidable(c.status)) continue;
-    const ch = editedOrgChange(c.change, c.edits);
-    if (ch.kind === "role" && ch.caps) {
-      after = addCaps(after, ch.caps);
-      lines.push({ handle: ch.handle, name: ch.name, before: null, after: ch.caps, note: "new seat" });
-    } else if (ch.kind === "budget") {
-      const before = capsOf(ch.handle);
-      const next = { ...(before ?? {}), ...ch.caps };
-      after = addCaps(addCaps(after, before, -1), next);
-      lines.push({ handle: ch.handle, name: nameOf(ch.handle), before, after: next, note: before ? "changed limit" : "limit on a seat this proposal adds" });
-    } else if (ch.kind === "retire") {
-      const before = capsOf(ch.handle);
-      if (before) { after = addCaps(after, before, -1); lines.push({ handle: ch.handle, name: nameOf(ch.handle), before, after: null, note: "seat closed" }); }
-    }
-  }
-  return { today, after, seats: active.filter((r) => r.caps).length, paused, lines };
-}
-
 /** "6 hands, 40 wakes, 400,000 tokens": the three limits in one line, in the
  *  order they always read. */
 export function capsLine(caps: Partial<BudgetCaps> | null | undefined): string {

@@ -36,8 +36,7 @@ import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { ConversationWithPanel } from "../org/scope/ConversationWithPanel";
 import { usePanelLayout } from "../../hooks/usePanelLayout";
 import { useSeat } from "../org/scope/useSeat";
-import { RoleFace } from "../org/RoleFace";
-import type { OrgRole } from "../org/orgTypes";
+import { SeatLead } from "../org/scope/SeatLead";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { HEALTH_COLOR, INITIATIVE_ACCENT } from "../../lib/initiativeColors";
 import { HealthChip, OwnerChip, ProgressBar, StatusGlyph, TargetDate } from "./InitiativeAtoms";
@@ -89,8 +88,8 @@ export function InitiativePageInner({ id }: { id: string }) {
     ? canEditRole(tree, seatOf.role, meId) || (seatOf.role.reports_to.kind === "user" && seatOf.role.reports_to.user_id === meId)
     : initiative?.owner?.kind === "user" && initiative.owner.user_id === meId;
   const lead = useMemo(
-    () => (initiative && seatOf.speaker && progress ? <InitiativeLead initiative={initiative} role={seatOf.role} speaker={seatOf.speaker} done={progress.done} total={progress.total} counted={counted} /> : null),
-    [initiative, seatOf.role, seatOf.speaker, progress?.done, progress?.total, counted], // eslint-disable-line react-hooks/exhaustive-deps
+    () => (initiative && seatOf.speaker && progress ? <InitiativeLead initiative={initiative} done={progress.done} total={progress.total} counted={counted} /> : null),
+    [initiative, seatOf.speaker, progress?.done, progress?.total, counted], // eslint-disable-line react-hooks/exhaustive-deps
   );
   const seat = useSeat({ conversationId, speaker: seatOf.speaker ?? "the owner", lead, canTalk: !!canTalk, hideDiff: panelOpen });
 
@@ -121,7 +120,7 @@ export function InitiativePageInner({ id }: { id: string }) {
             <div className="flex items-center gap-2 min-w-0">
               <Flag className="w-4 h-4 shrink-0" style={{ color: INITIATIVE_ACCENT }} />
               <Title initiative={initiative} phone={phone} />
-              {initiative.short_id && <span className="shrink-0 inline-flex items-center h-[20px] px-1.5 rounded-md text-[10.5px] font-medium" style={{ background: INITIATIVE_ACCENT, color: "var(--sol-bg)", fontFamily: "var(--font-mono)" }}>{initiative.short_id}</span>}
+              {initiative.short_id && <span className="shrink-0 whitespace-nowrap inline-flex items-center h-[20px] px-1.5 rounded-md text-[10.5px] font-medium" style={{ background: INITIATIVE_ACCENT, color: "var(--sol-bg)", fontFamily: "var(--font-mono)" }}>{initiative.short_id}</span>}
             </div>
             {/* Line two: status, who drives it, how it is going, when it is due, how far along. */}
             <div className={cn("mt-2 flex items-center gap-x-4 gap-y-1.5 flex-wrap", phone ? "text-[12px]" : "text-[12.5px]")}>
@@ -180,22 +179,16 @@ export function InitiativePageInner({ id }: { id: string }) {
   );
 }
 
-/** The owner's opening bubble: what this is and how it stands, said from the
+/** The owner's opening line: what this is and how it stands, said from the
  *  rows, in the frame a scope's lead uses. */
-function InitiativeLead({ initiative, role, speaker, done, total, counted }: { initiative: InitiativeRow; role: OrgRole | null; speaker: string; done: number; total: number; counted: boolean }) {
+function InitiativeLead({ initiative, done, total, counted }: { initiative: InitiativeRow; done: number; total: number; counted: boolean }) {
   const projects = initiative.project_ids.length;
   // The opening line says a number only once the task store holds them all.
   const carried = projects === 0 ? "No project carries it yet" : `${projects} ${projects === 1 ? "project carries" : "projects carry"} it${counted && total > 0 ? `, with ${done} of ${total} tasks done` : ""}`;
   return (
-    <div className="conv-col mx-auto px-2 sm:px-3 md:px-4 pt-4 pb-2" data-initiative-lead>
-      <div className="flex items-center gap-2 mb-2">
-        {role ? <RoleFace role={role} size={24} /> : <span className="w-6 h-6 rounded-full inline-flex items-center justify-center shrink-0" style={{ background: `color-mix(in srgb, ${INITIATIVE_ACCENT} 16%, transparent)`, color: INITIATIVE_ACCENT }}><Flag className="w-3.5 h-3.5" /></span>}
-        <span className="text-xs font-medium" style={{ color: "var(--sol-text-secondary)" }}>{speaker}</span>
-      </div>
-      <div className="pl-8 text-[13.5px] leading-relaxed" style={{ color: "var(--sol-text)" }}>
-        <p>I drive {initiative.title}. {carried}. Ask me how it is going, or tell me what changed.</p>
-      </div>
-    </div>
+    <SeatLead data-initiative-lead>
+      I drive {initiative.title}. {carried}. Ask me how it is going, or tell me what changed.
+    </SeatLead>
   );
 }
 
