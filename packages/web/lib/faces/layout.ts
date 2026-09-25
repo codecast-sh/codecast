@@ -17,12 +17,13 @@ export const FACE_ROW_METRICS: Record<FaceDensity, { face: number; gap: number; 
  *  each side (faceRow.css `.face-link` margin). */
 export const LINK_PULL = 0.35;
 
-/** How wide the row is: the seats, the gaps, and each bridge less the pull. */
+/** How wide the row is: the seats, the gaps, and each bridge less the pull.
+ *  A bridge is a flex item of its own, so it brings one more gap with it. */
 export function faceRowWidth(density: FaceDensity, faces: number, links: number): number {
   const m = FACE_ROW_METRICS[density];
   if (faces === 0) return m.pad * 2;
   const bridges = Math.min(links, Math.max(0, faces - 1));
-  return m.pad * 2 + faces * m.face + (faces - 1) * m.gap + bridges * (m.link - 2 * LINK_PULL * m.gap);
+  return m.pad * 2 + faces * m.face + (faces - 1) * m.gap + bridges * (m.gap + m.link - 2 * LINK_PULL * m.gap);
 }
 
 /** The window a floating row needs: its circles and their margin, plus the
@@ -67,15 +68,18 @@ export const CARD_CLOSE_MS = 220;
 /** The floating window with a card under the row: as wide as the wider of
  *  the two, as tall as both with the name band between them. Nothing here
  *  reads the pointer: the window changes size only when what it holds
- *  changes (a face arrives, the strip appears, the card opens). */
-/** The gap between the last face and the strip beside it (faceRow.css `.face-row-strip`). */
-export const STRIP_GAP = 10;
-
+ *  changes (a face arrives, the strip appears, the card opens).
+ *
+ *  THE ROW IS MEASURED. `measured` is the row element's own box, faces,
+ *  bridges, the strip and the call's track included; the arithmetic is only
+ *  the floor for the frame before the first measure. A width summed from
+ *  constants beside a stylesheet that drew something wider clipped End and
+ *  Join off the window's right edge. */
 export function floatingRowSize(
   faces: number,
   links: number,
   card: { width: number; height: number },
-  strip: { width: number; height: number } = { width: 0, height: 0 },
+  measured: { width: number; height: number } = { width: 0, height: 0 },
 ): { width: number; height: number } {
   const m = FACE_ROW_METRICS.float;
   const row = faceRowSize("float", faces, links);
@@ -86,9 +90,8 @@ export function floatingRowSize(
   // "jumping around like crazy", 2026-09-23). The old overlay held
   // max(row, CHROME_WIDTH) for the same reason. Only the height follows the
   // card, and it grows down, away from the faces.
-  const rowWidth = row.width + (strip.width > 0 ? STRIP_GAP + strip.width : 0);
-  const width = Math.max(rowWidth, FACE_CARD_WIDTH + m.pad * 2);
-  const height = Math.max(row.height, strip.height + m.pad * 2);
+  const width = Math.max(row.width, Math.ceil(measured.width), FACE_CARD_WIDTH + m.pad * 2);
+  const height = Math.max(row.height, Math.ceil(measured.height) + ROW_GAP + NAME_HEIGHT);
   if (card.height === 0) return { width, height };
   // The card's band is under the name band (faceRow.css `.face-row-below`).
   return { width, height: height + card.height };

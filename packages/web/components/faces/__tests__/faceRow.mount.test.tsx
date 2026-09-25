@@ -613,4 +613,35 @@ describe("the engagement card renders the model's card", () => {
     // Beside the faces, never under them: under a face is that face's card.
     expect(h.q(".face-row-below")).toBeNull();
   });
+
+  test("the controls sit on the call: right after the linked faces, on one track, with the rest of the team after", async () => {
+    const card: FaceCard = { kind: "ring-in", roomKey: ROOM, from: ANN, name: "Ann", answer: true, decline: true };
+    const row = rowOf(
+      [
+        me({ state: "ringing-me" }),
+        entry(ANN, "Ann", { state: "ringing-me", tier: "linked" }),
+        entry("u-bob", "Bob", { state: "online", tier: "online" }),
+      ],
+      [link(ANN, "ring")],
+    );
+    const h = await mount(
+      <FaceRow row={row} density="float" viewerId={ME}>
+        <EngagementCard card={card} density="float" />
+      </FaceRow>,
+    );
+    const order = Array.from(h.q(".face-row")!.children).map(
+      (el) => (el as HTMLElement).dataset.faceId ?? el.className.split(" ")[0],
+    );
+    expect(order).toEqual(["face-row-track", ME, "face-link", ANN, "face-row-strip", "u-bob"]);
+    expect(h.q(".face-row-track")!.getAttribute("data-link-kind")).toBe("ring");
+    expect(h.q(".face-row-strip")!.getAttribute("data-track")).toBe("1");
+    // Nobody linked: no track, and the strip goes back to the row's end.
+    await h.draw(
+      <FaceRow row={rowOf([entry("u-bob", "Bob", { state: "online", tier: "online" })])} density="float" viewerId={ME}>
+        <EngagementCard card={card} density="float" />
+      </FaceRow>,
+    );
+    expect(h.q(".face-row-track")).toBeNull();
+    expect(h.q(".face-row")!.lastElementChild!.className).toBe("face-row-strip");
+  });
 });

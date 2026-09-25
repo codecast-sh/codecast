@@ -23,8 +23,9 @@ describe("the bar", () => {
     expect(faceRowWidth("bar", 0, 0)).toBe(0);
     expect(faceRowWidth("bar", 1, 0)).toBe(32);
     expect(faceRowWidth("bar", 3, 0)).toBe(3 * 32 + 2 * 6);
-    // One bridge: its own width, less the share of the gap it eats each side.
-    expect(faceRowWidth("bar", 3, 1)).toBeCloseTo(3 * 32 + 2 * 6 + (14 - 2 * LINK_PULL * 6));
+    // One bridge: a flex item of its own, so one more gap, plus its width,
+    // less the share of the gap it eats each side.
+    expect(faceRowWidth("bar", 3, 1)).toBeCloseTo(3 * 32 + 2 * 6 + (6 + 14 - 2 * LINK_PULL * 6));
     // A link with nobody to bridge to draws nothing.
     expect(faceRowWidth("bar", 1, 1)).toBe(32);
   });
@@ -34,7 +35,7 @@ describe("the float", () => {
   test("64px faces inside the call circles' margin, and the name row on hover", () => {
     expect(FACE_ROW_METRICS.float).toEqual({ face: 64, gap: 10, link: 26, pad: FACES_PADDING });
     expect(faceRowSize("float", 2, 1)).toEqual({
-      width: 2 * FACES_PADDING + 2 * 64 + 10 + (26 - 2 * LINK_PULL * 10),
+      width: 2 * FACES_PADDING + 2 * 64 + 10 + (10 + 26 - 2 * LINK_PULL * 10),
       height: 2 * FACES_PADDING + 64 + ROW_GAP + NAME_HEIGHT,
     });
     // The name band is reserved whether or not the pointer is in: hover never resizes the window.
@@ -62,6 +63,12 @@ describe("the float", () => {
     const wide = floatingRowSize(6, 0, { width: 0, height: 0 });
     expect(wide.width).toBe(faceRowSize("float", 6, 0).width);
     expect(floatingRowSize(6, 0, card).width).toBe(wide.width);
+    // The row as drawn wins over the arithmetic: a strip beside the faces
+    // widens the window to the measured row, and its height carries the
+    // name band under it. The sum alone clipped End and Join off the edge.
+    const drawn = floatingRowSize(6, 1, { width: 0, height: 0 }, { width: 900, height: 80 });
+    expect(drawn.width).toBe(900);
+    expect(drawn.height).toBe(80 + ROW_GAP + NAME_HEIGHT);
     expect(cssVar('.face-row[data-density="float"] .face-row-below {', "top")).toBe(`calc(100% + ${ROW_GAP + NAME_HEIGHT - FACES_PADDING}px)`);
     expect(css).not.toContain(".face-row--hover");
   });
