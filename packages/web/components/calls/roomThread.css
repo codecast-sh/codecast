@@ -679,21 +679,23 @@ button.rt-event-agent:hover {
 .rt .ch-composer [contenteditable="true"] {
   font-size: var(--rt-body);
   line-height: var(--rt-body-lh);
-  padding-left: 30px;
+  padding-left: 26px;
 }
 /* The attach button used to have a 36px row of its own under the input, so
    the composer was 94px and a 380px window left the list 18px. It sits in
    the input's box instead, at the left of the last line, the size of the
-   send button (24px) and centred on it: the input's row ends 18px above the
-   composer's edge (MessageInput's bare composer keeps 16px below its box and
-   2px inside it). The input's text starts after it. */
+   send button (24px) and level with it: the input's row ends 2px above the
+   composer's edge (chat.css's frame drops MessageInput's bottom padding, and
+   the field keeps 2px inside its box). Its icon is as far from the left edge
+   as the send arrow is from the right (8px frame, 10px field, 4px in the
+   button), and the input's text starts after it. */
 .rt .ch-composer {
   position: relative;
 }
 .rt .ch-composer-foot {
   position: absolute;
-  left: 6px;
-  bottom: 18px;
+  left: 17px;
+  bottom: 2px;
   min-height: 0;
   padding: 0;
 }

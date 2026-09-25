@@ -1,4 +1,4 @@
-import { type FaceDensity, FACE_ROW_METRICS, LINK_PULL, faceRowWidth, faceRowSize, flipKeyframes, CARD_OPEN_MS, CARD_CLOSE_MS, STRIP_GAP, floatingRowSize } from "../../lib/faces/layout";
+import { type FaceDensity, FACE_ROW_METRICS, LINK_PULL, faceRowWidth, faceRowSize, flipKeyframes, CARD_OPEN_MS, CARD_CLOSE_MS, floatingRowSize } from "../../lib/faces/layout";
 // THE FACE ROW: presence, walkie, ringing and calls as the same faces in
 // different states (pl-756 F2).
 //
@@ -277,7 +277,7 @@ export function FaceRow({
   callsEnabled = true,
   rootRef,
   belowRef,
-  stripRef,
+  boxRef,
   onDragStart,
   onDragEnd,
   onOpenProfile,
@@ -295,8 +295,8 @@ export function FaceRow({
   /** The band under the faces (the member card), for whoever sizes a
    *  window from it. */
   belowRef?: (el: HTMLDivElement | null) => void;
-  /** The strip beside the faces (the engagement card), likewise. */
-  stripRef?: (el: HTMLDivElement | null) => void;
+  /** The row's own box, for whoever sizes a window from it. */
+  boxRef?: (el: HTMLDivElement | null) => void;
   /** Held on a circle, the floating window follows the cursor. */
   onDragStart?: (e: React.PointerEvent) => void;
   onDragEnd?: (e: React.PointerEvent) => void;
@@ -413,12 +413,59 @@ export function FaceRow({
     [onOpenProfile, close],
   );
 
+  // THE CALL. Me and everyone linked to me (a call, a ring, a voice either
+  // way) sit at the head of the row. The strip, the moment's controls, sits
+  // right after the last of them, and its plate runs back behind their faces
+  // as one track, so the people on the call read as one object with its
+  // controls and the rest of the team sits off it. The track is drawn, not a
+  // wrapper: a seat moved into a new parent would remount, and a person is
+  // one DOM node for as long as they are on the row.
+  const hasStrip = children != null && children !== false;
+  const callIds = row.entries.filter((e) => e.tier === "me" || e.tier === "linked").map((e) => e.id);
+  const lastCallId = hasStrip ? callIds[callIds.length - 1] : undefined;
+  const trackKind = row.links.some((l) => l.kind === "ring") ? "ring" : row.links[0]?.kind;
+  const trackRef = useRef<HTMLSpanElement | null>(null);
+  const stripEl = useRef<HTMLDivElement | null>(null);
+  // Every commit: the strip's width follows its words (a ring becoming a
+  // call), and seats arrive and leave. Written straight onto the track, so a
+  // measure never costs a render.
+  useLayoutEffect(() => {
+    const track = trackRef.current;
+    const strip = stripEl.current;
+    const first = callIds[0] ? ownRef.current?.querySelector<HTMLElement>(`[data-face-id="${callIds[0]}"]`) : null;
+    if (!track || !strip || !first) return;
+    const h = strip.offsetHeight;
+    const left = first.offsetLeft + first.offsetWidth / 2 - h / 2;
+    track.style.left = `${left}px`;
+    track.style.top = `${strip.offsetTop}px`;
+    track.style.height = `${h}px`;
+    track.style.width = `${strip.offsetLeft + strip.offsetWidth - left}px`;
+  });
+
+  const setRoot = useCallback(
+    (el: HTMLDivElement | null) => {
+      ownRef.current = el;
+      if (rootRef) rootRef.current = el;
+      boxRef?.(el);
+    },
+    [rootRef, boxRef],
+  );
+
+  const strip = hasStrip ? (
+    <div
+      key="strip"
+      ref={stripEl}
+      className="face-row-strip"
+      data-chrome-hit
+      data-track={lastCallId ? "1" : undefined}
+    >
+      {children}
+    </div>
+  ) : null;
+
   return (
     <div
-      ref={(el) => {
-        ownRef.current = el;
-        if (rootRef) rootRef.current = el;
-      }}
+      ref={setRoot}
       className={`face-row ${className}`.trim()}
       data-density={density}
       data-holding={faces.sendingRoomKey ? "1" : undefined}
@@ -429,6 +476,7 @@ export function FaceRow({
           scope each seat's key to its own fragment, and React cannot move a
           keyed element between fragments: the person would remount the
           moment a bridge appeared before them. */}
+      {lastCallId && <span ref={trackRef} className="face-row-track" data-link-kind={trackKind} aria-hidden="true" />}
       {row.entries.flatMap((entry, i) => {
         const kind = i > 0 ? linkTo.get(entry.id) : undefined;
         const seat = (
@@ -448,17 +496,14 @@ export function FaceRow({
             onPointerUp={onDragEnd}
           />
         );
-        return kind
+        const out = kind
           ? [<span key={`link:${entry.id}`} className="face-link" data-link-kind={kind} aria-hidden="true" />, seat]
           : [seat];
+        return entry.id === lastCallId ? [...out, strip] : out;
       })}
-      {/* The strip: in the row, after the faces it is about. Never under
-          them, where a face's own card opens. */}
-      {children != null && children !== false && (
-        <div ref={stripRef} className="face-row-strip" data-chrome-hit>
-          {children}
-        </div>
-      )}
+      {/* The strip: in the row, after the faces it is about (the call's, when
+          there is one). Never under them, where a face's own card opens. */}
+      {!lastCallId && strip}
       {/* The band under the faces: the one member card while a face is
           pointed at or pinned. In the float it is the one card the pointer
           brings: the pointed face's words, or a legend, over the window's
@@ -540,13 +585,14 @@ export function FloatingFaceRow({
   );
   const faces = shown.entries.length;
   const links = shown.links.length;
-  // Two measured boxes: the strip beside the faces and the member card's
-  // band under them. Each is its words, so each is read, not computed.
+  // Two measured boxes: the row itself (faces, bridges, the strip and the
+  // call's track) and the member card's band under it. Each is what the
+  // stylesheet drew, so each is read, not computed.
   const [card, belowRef] = useMeasured();
-  const [strip, stripRef] = useMeasured();
+  const [box, boxRef] = useMeasured();
   const { rootRef, hovered, startDrag, endDrag } = useFloatingCircles({
-    sizeFor: () => floatingRowSize(faces, links, card, strip),
-    shapeSig: `${faces}|${links}|${card.width}x${card.height}|${strip.width}x${strip.height}`,
+    sizeFor: () => floatingRowSize(faces, links, card, box),
+    shapeSig: `${faces}|${links}|${card.width}x${card.height}|${box.width}x${box.height}`,
     bridge,
   });
   return (
@@ -557,7 +603,7 @@ export function FloatingFaceRow({
       callsEnabled={callsEnabled}
       rootRef={rootRef}
       belowRef={belowRef}
-      stripRef={stripRef}
+      boxRef={boxRef}
       onDragStart={startDrag}
       onDragEnd={endDrag}
       onOpenProfile={onOpenProfile}

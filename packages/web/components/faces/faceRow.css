@@ -159,12 +159,61 @@
     0 2px 6px rgba(20, 18, 14, 0.2);
 }
 
-/* The strip: in the row after the faces, one line with them (STRIP_GAP). */
+/* The strip: in the row after the faces, one line with them. Positioned so
+   it paints over the call's track, which is drawn before it. */
 .face-row-strip {
+  position: relative;
   display: flex;
   align-items: center;
   flex: none;
   margin-left: 4px;
+}
+
+/* ── The call's track ───────────────────────────────────────────────────────
+ *
+ * While a call, a ring or a voice links me to somebody, the strip sits right
+ * after the last linked face and its plate runs back behind every linked
+ * face (FaceRow measures the span): the people on the call are one object
+ * with the call's controls, in the call's tone, and the rest of the team
+ * sits off the track, a step apart. The round end is concentric with the
+ * first face. In the strip the engagement card gives its own plate up to the
+ * track, so there is one surface, not a pill beside a pill. */
+.face-row-track {
+  --track-tone: var(--sol-violet);
+  position: absolute;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--track-tone) 10%, var(--sol-bg-alt));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--track-tone) 50%, transparent);
+  pointer-events: none;
+  transition: left 240ms cubic-bezier(0.2, 0.8, 0.2, 1), width 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.face-row-track[data-link-kind="ring"] { --track-tone: var(--sol-cyan); }
+.face-row-track[data-link-kind="tx"] { --track-tone: var(--walkie-tx); }
+.face-row-track[data-link-kind="rx"],
+.face-row-track[data-link-kind="both"] { --track-tone: var(--walkie-rx); }
+.face-row[data-density="float"] .face-row-track {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--track-tone) 9%, var(--paper)) 0%,
+    color-mix(in srgb, var(--track-tone) 9%, var(--paper-deep)) 100%
+  );
+  box-shadow:
+    0 0 0 1.5px color-mix(in srgb, var(--track-tone) 60%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 2px 6px rgba(20, 18, 14, 0.2);
+}
+.face-row .face-row-strip[data-track] > .engagement-card,
+.face-row[data-density="float"] .face-row-strip[data-track] > .walkie-strip {
+  background: none;
+  border-color: transparent;
+  box-shadow: none;
+}
+/* Off the track: the first face past the call keeps its distance. */
+.face-row-strip[data-track] + .face-seat {
+  margin-left: 8px;
+}
+.face-row[data-density="float"] .face-row-strip[data-track] + .face-seat {
+  margin-left: 16px;
 }
 
 /* ── The seat ───────────────────────────────────────────────────────────────
@@ -284,10 +333,10 @@
 .face-row .face[data-state="in-call"],
 .face-row .face[data-state="live-with-me"],
 .face-row .face[data-state="joining"] {
-  --band: color-mix(in srgb, var(--sol-violet) 70%, transparent);
+  --band: color-mix(in srgb, var(--sol-violet) 88%, transparent);
   box-shadow:
     var(--edge),
-    0 0 0 calc(var(--edge-w) + 2px) var(--band);
+    0 0 0 calc(var(--edge-w) + 3px) var(--band);
 }
 
 /* Somebody stepped in on purpose: the pop the walkie strip already plays. */
@@ -780,7 +829,8 @@
 
 @media (prefers-reduced-motion: reduce) {
   .face-row .face,
-  .face-seat {
+  .face-seat,
+  .face-row-track {
     transition: none;
   }
   /* Every selector here matches the specificity of the rule it silences:
@@ -1052,15 +1102,18 @@
 }
 .face-card-actions .face-actions {
   width: 100%;
-  flex-wrap: nowrap;
 }
 .face-card-actions .face-action {
   justify-content: center;
   padding-left: 6px;
   padding-right: 6px;
 }
+/* Why Talk cannot start, on its own line under the three cells: kept in
+   the plate's one row it was squeezed to a letter a line beside Message. */
 .face-card-actions .face-actions-reason {
   flex-basis: 100%;
+  padding: 5px 4px 2px;
+  line-height: 13px;
 }
 .face-card-actions[data-switch] {
   gap: 0;

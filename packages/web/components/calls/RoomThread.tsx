@@ -291,6 +291,9 @@ export function RoomThread({
   // room's own; the words say so, so the header and the empty card agree.
   const addLabel = ownRoomId ? "Add another agent" : "Add an agent";
   const addTitle = `${addLabel}: it ${HEARS}`;
+  // The rail's header fits the button beside the words control and the
+  // switch only in the short form; the title keeps the long one.
+  const headAddLabel = surface === "stage" && !ownRoomId ? "Add agent" : addLabel;
 
   const addFeed = useAddLiveFeed({ roomKey, liveTranscriptId, routes, getRoom });
   const removeFeed = useRemoveLiveFeed(liveTranscriptId);
@@ -577,7 +580,7 @@ export function RoomThread({
               title={adding ? "An agent is joining the room" : addTitle}
             >
               <Sparkles className="h-3 w-3" />
-              {addLabel}
+              {headAddLabel}
             </button>
           )}
           <span className="rt-head-right">

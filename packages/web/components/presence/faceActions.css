@@ -89,6 +89,7 @@
 .face-actions-fill {
   flex: 1 1 0;
   display: flex;
+  flex-wrap: wrap;
   min-width: 0;
   gap: 0;
   padding: 3px;
