@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { enqueueRoleEvent, actorIsExcluded, countersFor, DEFAULT_CAPS } from "./orgEvents";
-import { buildFrame, performFlush, type FrameInput } from "./orgWakes";
+import { enqueueRoleEvent, actorIsExcluded, countersFor, DEFAULT_CAPS, OUTBOX_READ_CAP } from "./orgEvents";
+import { buildFrame, drainOverflow, performFlush, type FrameInput } from "./orgWakes";
 import { gateHandStart } from "./spawn";
 import { answerCore } from "./sessionDecisions";
 import type { BriefFacts } from "./org";
@@ -244,6 +244,16 @@ describe("orgWakes.buildFrame", () => {
     expect(section).toContain("- Docs: no line yet");
     // The sentences sit beside the counts, above them.
     expect(section.indexOf("Where it stands")).toBeLessThan(section.indexOf("Tasks:"));
+  });
+
+  test("the scope line names a project's plans by the project and names a few loose plans at most", () => {
+    const inside = Array.from({ length: 200 }, (_, i) => ({ id: `in${i}`, short_id: `pl-${i}`, title: `Inside ${i}`, project_id: "p1" }));
+    const loose = Array.from({ length: 8 }, (_, i) => ({ id: `lo${i}`, short_id: `pl-9${i}`, title: `Loose ${i}` }));
+    const f = buildFrame(base([{ kind: "fold", cause: "x" }], {
+      facts: { ...facts, scope: { ...facts.scope, projects: [{ id: "p1", title: "Infrastructure" }], plans: [...inside, ...loose] } },
+    }));
+    const line = f.text.split("\n").find((l) => l.startsWith("Scope: "))!;
+    expect(line).toBe("Scope: project Infrastructure, plan pl-90 Loose 0, plan pl-91 Loose 1, plan pl-92 Loose 2, plan pl-93 Loose 3, plan pl-94 Loose 4, and 3 more plans");
   });
 
   test("a restart frame carries the charter and brief in full; channel lines get their section", () => {
@@ -895,5 +905,38 @@ describe("the frame collapses a backlog by ref and caps each section (ct-51592)"
     const lines = section(buildFrame(input([{ kind: "fold", cause: "x" }], { changed })).text, "Changed since your last frame:");
     expect(lines).toHaveLength(FRAME_CHANGED_LINES + 1);
     expect(lines[FRAME_CHANGED_LINES]).toBe("- and 3 more changes");
+  });
+});
+
+describe("a backlog past the read window (a mention behind 1,695 fold rows, 2026-09-25)", () => {
+  const row = (i: number, kind: string, cause: string) =>
+    ({ _id: `ob${i}`, _creationTime: i, role_id: "role1", kind, cause, created_at: i, due_at: i });
+
+  test("the newest immediate row is in the flush's window, and the overflow closes under the same wake", async () => {
+    const { ctx, tables, scheduled } = world();
+    const backlog = OUTBOX_READ_CAP + 50;
+    tables.role_wake_outbox.push(row(0, "immediate", "an old mention nobody answered"));
+    for (let i = 1; i <= backlog; i++) tables.role_wake_outbox.push(row(i, "fold", `task ${i} moved`));
+    tables.role_wake_outbox.push(row(backlog + 1, "immediate", "Ashot mentioned @chief-of-staff: make these into tasks"));
+    const realNow = Date.now; Date.now = () => NOW;
+    try {
+      const out = await performFlush(ctx, "role1" as any);
+      expect(out.outcome).toBe("delivered");
+      expect(tables.pending_messages[0].content).toContain("make these into tasks");
+
+      const drain = scheduled.find((s) => s.args?.before !== undefined);
+      expect(drain).toBeDefined();
+      scheduled.length = 0;
+      await (drainOverflow as any)._handler(ctx, drain!.args);
+      // Every fold row is closed; the old mention stays for its own flush.
+      const open = tables.role_wake_outbox.filter((r: any) => r.flushed_at === undefined);
+      expect(open.map((r: any) => r._id)).toEqual(["ob0"]);
+      expect(scheduled).toEqual([{ delay: 0, args: { role_id: "role1", attempt: 0 } }]);
+
+      const next = await performFlush(ctx, "role1" as any);
+      expect(next.outcome).toBe("delivered");
+      expect(tables.pending_messages.at(-1).content).toContain("an old mention nobody answered");
+      expect(tables.role_wake_outbox.every((r: any) => r.flushed_at !== undefined)).toBe(true);
+    } finally { Date.now = realNow; }
   });
 });
