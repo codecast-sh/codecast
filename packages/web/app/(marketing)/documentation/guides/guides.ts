@@ -54,6 +54,12 @@ export const GUIDES: Guide[] = [
     installSlug: "memory",
   },
   {
+    slug: "search-sessions-across-machines",
+    title: "How to search your Claude Code history across every machine",
+    dek: "Claude Code keeps sessions on the machine that ran them. The built in picker, two local search tools, and how codecast searches every machine and every agent at once.",
+    category: "Recall",
+  },
+  {
     slug: "which-session-wrote-this-line",
     title: "How to find which AI agent session wrote a line of code",
     dek: "git blame names whoever committed a line. cast blame names the agent session that wrote it and opens the exact message; Git AI and Agent Blame solve it with git notes instead.",
