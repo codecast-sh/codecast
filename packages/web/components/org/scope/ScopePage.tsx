@@ -31,12 +31,12 @@ import { canEditRole, queryProblem, roleStanding, scopeQueryRef, scopeSeatOf } f
 import { AnchorOnboarding } from "../../anchor/AnchorConversation";
 import { InboxConversation, type SeatSession } from "../../../app/inbox/QueuePageClient";
 import { useSeat } from "./useSeat";
+import { SeatLead } from "./SeatLead";
 import { useDiffViewerStore } from "../../../store/diffViewerStore";
 import { RoleFace } from "../RoleFace";
 import { RolePausedNote } from "../RolePausedNote";
 import { parentName } from "../orgMeta";
 import type { OrgParentRef, OrgRole, OrgTree } from "../orgTypes";
-import type { WorkState } from "@codecast/shared/contracts";
 import { useScopeIds } from "../../../hooks/useScopeIds";
 import { ScopePanel } from "./ScopePanel";
 import { useRoleEscalations } from "../../../hooks/useRoleEscalations";
@@ -187,9 +187,9 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
   // seat's provisioning prompt and its working turns fold away under it.
   const lead = useMemo(() => (
     tree && (role || anchor)
-      ? <ScopeLead role={role} anchorName={anchor?.name ?? null} tree={tree} needsYou={needsYou} standingState={standingState} />
+      ? <ScopeLead role={role} needsYou={needsYou} />
       : null
-  ), [tree, role, anchor?.name, needsYou, standingState]);
+  ), [tree, role, anchor, needsYou]);
 
   // -------- the conversation is the session page (I3)
   // The same pane the inbox mounts, so its banners, share control, context
@@ -357,30 +357,18 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
   );
 }
 
-/** The agent's opening bubble (F4.1): what this area is and what waits on
- *  the person, said from the rows (the role, its scope, the hands' states),
- *  not from the transcript; the header's stripe says what it is watching.
- *  Same frame as the proposal letter, so a lead reads the same everywhere. */
-export function ScopeLead({ role, anchorName, tree, needsYou, standingState }: { role: OrgRole | null; anchorName: string | null; tree: OrgTree; needsYou: number; standingState: WorkState | undefined }) {
-  const name = role ? role.name : anchorName ?? "The workspace agent";
+/** The agent's opening line (F4.1): what this area is and what the role put
+ *  in front of the person, said from the rows, not from the transcript. The
+ *  header already names the seat, its state and its parent. */
+export function ScopeLead({ role, needsYou }: { role: OrgRole | null; needsYou: number }) {
   const owns = role ? [...role.scope_names.projects.map((p) => p.title), ...role.scope_names.plans.map((p) => p.title)] : [];
-  const area = !role ? "the whole workspace" : owns.length > 0 ? owns.join(", ") : "the whole workspace";
-  const parent = role ? parentName(tree, role.reports_to) : null;
+  const area = owns.length > 0 ? owns.join(", ") : "the whole workspace";
   // F5.1: what needs the person is what the role put in front of them.
-  const ask = needsYou > 0
-    ? `${needsYou === 1 ? "One thing needs" : `${needsYou} things need`} you: the board says what.`
-    : standingState === "needs_input" ? "I am waiting on you, below." : "Nothing needs you.";
+  const ask = needsYou > 0 ? `${needsYou === 1 ? "One thing needs" : `${needsYou} things need`} you: the board says what.` : undefined;
   return (
-    <div className="conv-col mx-auto px-2 sm:px-3 md:px-4 pt-4 pb-2" data-scope-lead>
-      <div className="flex items-center gap-2 mb-2">
-        {role ? <RoleFace role={role} size={24} /> : <span className="w-6 h-6 rounded-full inline-flex items-center justify-center shrink-0" style={{ background: "color-mix(in srgb, var(--sol-violet) 16%, transparent)", color: "var(--sol-violet)" }}><Network className="w-3.5 h-3.5" /></span>}
-        <span className="text-xs font-medium" style={{ color: "var(--sol-text-secondary)" }}>{name}</span>
-      </div>
-      <div className="pl-8 text-[13.5px] leading-relaxed" style={{ color: "var(--sol-text)" }}>
-        <p>I look after {area}{parent ? ` and report to ${parent}` : ""}. Ask me for anything here: I answer, or start a session for the work and tell you which.</p>
-        <p className="mt-1.5" style={{ color: needsYou > 0 || standingState === "needs_input" ? "var(--sol-yellow)" : "var(--sol-text-muted)" }} data-scope-lead-ask>{ask}</p>
-      </div>
-    </div>
+    <SeatLead ask={ask} data-scope-lead>
+      I look after {area}. Ask me for anything here: I answer, or start a session for the work and tell you which.
+    </SeatLead>
   );
 }
 

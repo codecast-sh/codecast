@@ -17,7 +17,7 @@ import { cn } from "../../lib/utils";
 import { AnchorConversation } from "../anchor/AnchorConversation";
 import { OrgButton } from "./OrgButton";
 import { amendedMoves, revisedLine, revisionWord } from "./staffingRevise";
-import { isOrgGoalChange, latestOrgRevisionAt, recordChangeParts, type OrgChange, type OrgGoalChange, type OrgVerdictSeen } from "@codecast/shared/contracts/orgProposal";
+import { isOrgGoalChange, isOrgQuietChange, latestOrgRevisionAt, recordChangeParts, type OrgChange, type OrgGoalChange, type OrgVerdictSeen } from "@codecast/shared/contracts/orgProposal";
 import { RoleFace } from "./RoleFace";
 import { AssigneeFace } from "../identity/AssigneeFace";
 import type { TakeoverPreview } from "../../hooks/useTakeoverPreviews";
@@ -25,6 +25,8 @@ import { TakeoverEdit } from "./TakeoverEdit";
 import { askNames, askOfChange, asksProgress, proposalAsks, type AskView } from "./staffingAsks";
 import { SectionLabel } from "./OrgScopePanel";
 import { SEVERITY_META } from "./orgMeta";
+import { QuietLines, StatusPill } from "./ghostChrome";
+export { StatusPill };
 import type { OrgRole, OrgTree } from "./orgTypes";
 import type { HealthFlag, OrgChangeStatus, OrgHealth, OrgProposalChange, OrgProposalRow } from "./orgStaffingTypes";
 import {
@@ -292,10 +294,13 @@ function AskCard({ ask, number, tree, open, onToggle, selectedChangeId, revisedI
   const tone = ask.state === "accepted" ? "var(--sol-green)" : ask.state === "skipped" ? "var(--sol-text-dim)" : "var(--sol-violet)";
   // A plan change that closes its tasks carries them under its own row (S9).
   const sync = useMemo(() => ask.changes.some((c) => isSyncChange(c.change)) ? syncGroupSummary(ask.changes) : null, [ask.changes]);
+  // A quiet kind (a limit, S23.2) is never a row: the ask still carries it,
+  // so the ask's verdict decides it with the rest.
   const rows = useMemo(() => {
-    if (!sync) return ask.changes;
+    const drawn = ask.changes.filter((c) => !isOrgQuietChange(c.change));
+    if (!sync) return drawn;
     const nested = new Set(Object.values(sync.nested).flat().map((c) => c._id));
-    return ask.changes.filter((c) => !nested.has(c._id));
+    return drawn.filter((c) => !nested.has(c._id));
   }, [ask.changes, sync]);
   const revisedHere = revised ? revised.rows.filter((r) => ask.changes.some((c) => c._id === r._id)) : [];
   const selectedAt = rows.findIndex((c) => c._id === selectedChangeId);
@@ -352,6 +357,7 @@ function AskCard({ ask, number, tree, open, onToggle, selectedChangeId, revisedI
       </button>
       {open && (
         <div className="px-1.5 pb-2 flex flex-col gap-1" data-ask-rows>
+          {rows.length === 0 && <QuietLines tree={tree} changes={ask.changes} className="px-2 py-1" />}
           {shown.map((c) => (
             <ChangeRow
               key={c._id}
@@ -390,15 +396,6 @@ function Fact({ k, v, tone }: { k: string; v: string; tone?: string }) {
   );
 }
 
-export function StatusPill({ status }: { status: OrgChangeStatus }) {
-  const m = CHANGE_STATUS_META[status];
-  return (
-    <span className="inline-flex items-center gap-1 h-[18px] px-1.5 rounded-md text-[10px] font-medium shrink-0" style={{ background: `color-mix(in srgb, ${m.color} 14%, transparent)`, color: m.color }} data-status={status}>
-      <span className="w-1.5 h-1.5 rounded-full" style={{ background: m.color }} />
-      {m.label}
-    </span>
-  );
-}
 
 /**
  * A change's line as the row shows it. A record change that carries its

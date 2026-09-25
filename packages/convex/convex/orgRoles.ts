@@ -1204,9 +1204,11 @@ export const CHIEF_OF_STAFF_CHARTER = [
   ``,
   `Propose the smallest change that removes a bottleneck, and say what you expect it to change and how you will know. Staffing is budgeting: a change that moves scope or people moves budget with it, and the budgets under a person must add up to what that person allowed.`,
   ``,
-  `Every change carries evidence a person can click: counts, session and task short ids, commits. You never apply a change yourself; a person accepts, edits or skips each one on the org page or at a shell. Anything about budget or people goes to the person you report to, with your recommendation attached.`,
+  `The review is a conversation with the person you report to, in your own thread. Read everything first, then talk in short plain messages, each moving the conversation forward. Lead with the reporting structure: who reports to whom, what each role looks after, and where the person's own sessions go. Ask when the records cannot settle something, take the answer, and move on; the person can steer at any point, and you follow.`,
   ``,
-  `Write for a founder reading on a phone: the summary first, one idea per sentence, no jargon of your own making.`,
+  `When something is ready to agree to, post it as a small proposal and put its short id on its own line, where it renders as a card the person accepts, skips or asks on. Many small things over the conversation, never one large document. You never apply a change yourself, and a change the person has not accepted changes nothing. Anything about budget or people is theirs to decide, with your recommendation attached.`,
+  ``,
+  `Knowledge stays behind the words: hold the evidence (counts, sessions, commits) and give it when asked. A message never cites an id, never talks about you, and never names the thread it is written in. No jargon of your own making.`,
   ``,
   `## The capacity model`,
   renderCapacityModel(),
@@ -1228,9 +1230,9 @@ export function seatingNote(role: { short_id: string; handle: string; name: stri
 // The routine's prompt: the standing session runs the review and proposes only
 // when the stability rules warrant it.
 export const COMPANY_REVIEW_PROMPT = [
-  `Company review. Run \`cast org review\` (it reads \`cast org health --json\` and the inputs) and read each role's brief.`,
-  `Propose changes only when the stability rules in your charter warrant them: a bottleneck the flags show more than once, a role idle past the retire window while the company works, a project with no owner or no charter. A program role whose end has arrived (health flags it \`program_ended\`) is due rather than a judgement call: propose the retirement or the review its tenure names. When nothing warrants a change, say so in one line in your brief and end the turn; a quiet review is a good review.`,
-  `Every proposed change carries evidence a person can click. You apply nothing.`,
+  `Company review. Run \`cast org review\` (it reads \`cast org health --json\` and the inputs) and read each role's brief, then open the conversation with the person you report to: the reporting structure as it stands and as you would change it, in short plain messages, asking what the records cannot settle, and posting each thing that is ready to agree to as a small proposal with its short id on its own line.`,
+  `Propose changes only when the stability rules in your charter warrant them: a bottleneck the flags show more than once, a role idle past the retire window while the company works, a project with no owner or no charter. A program role whose end has arrived (health flags it \`program_ended\`) is due rather than a judgement call: propose the retirement or the review its tenure names. When nothing warrants a change, say so in one line and end the turn; a quiet review is a good review.`,
+  `Hold the evidence behind every change and give it when asked. You apply nothing.`,
 ].join("\n");
 
 // The seat's live review routine, brought up to the current prompt. The
@@ -1270,7 +1272,7 @@ export type SeatChoice = "existing" | "fresh";
 export async function performStaff(
   ctx: any,
   userId: Id<"users">,
-  args: { team_id?: Id<"teams">; reports_to?: Id<"users">; adopt_conversation_id?: string; every_ms?: number; project_path?: string; seat?: SeatChoice },
+  args: { team_id?: Id<"teams">; reports_to?: Id<"users">; adopt_conversation_id?: string; every_ms?: number; project_path?: string; seat?: SeatChoice; model?: string },
 ): Promise<{
   role: { _id: Id<"org_roles">; short_id: string; handle: string; name: string };
   standing: { conversation_id: Id<"conversations">; short_id?: string } | null;
@@ -1349,6 +1351,7 @@ export async function performStaff(
       role_id: String(role._id),
       adopt_conversation_id: adoptId,
       project_path: args.project_path ?? anchor?.project_path ?? undefined,
+      model: args.model,
       announce: seatingNote(role, workspaceName),
     });
   const fresh = await ctx.db.get(role._id);
@@ -1456,6 +1459,7 @@ export const staff = mutation({
     every_ms: v.optional(v.number()),
     project_path: v.optional(v.string()),
     seat: v.optional(v.union(v.literal("existing"), v.literal("fresh"))),
+    model: v.optional(v.string()),
     from_session: v.optional(v.string()),
     // The workspace by kind (org-staffing.md S22), the shape `cast anchor
     // create` posts. A write names its workspace outright: a team scope

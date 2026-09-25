@@ -170,7 +170,7 @@ async function verifyScopePage() {
   assert.equal(q("[data-thread]")!.getAttribute("data-thread-fold"), "1", "the seat's provisioning prompt folds away");
   assert.equal(q("[data-thread]")!.getAttribute("data-thread-fold-working"), "1", "working turns and machine prompts fold away (F4.1)");
   assert.equal(q("[data-thread]")!.getAttribute("data-thread-density"), "condensed", "working turns fold to receipts");
-  assert.match(q("[data-scope-lead]")!.textContent!, /I look after Growth, SEO and AI citations and report to Ashot Petrosian/, "the agent opens by saying what this area is");
+  assert.match(q("[data-scope-lead]")!.textContent!, /I look after Growth, SEO and AI citations\./, "the agent opens by saying what this area is");
   assert.match(q("[data-scope-stripe]")!.textContent!, /Rewriting the weekly growth review/, "the header says what it is watching");
   assert.match(q("[data-scope-lead-ask]")!.textContent!, /2 things need you/, "and what the role put in front of them, never a count of sessions waiting");
   for (const word of ["trust", "model", "today", "wakes", "tokens", "host"]) assert.ok(!qa("header *").some((el) => el.children.length === 0 && el.textContent?.trim().toLowerCase() === word), `the header no longer says ${word}`);
@@ -220,7 +220,7 @@ async function verifyScopePage() {
   state.sessions = { "fixture-growth-conv": { _id: "fixture-growth-conv", standing_role_id: growth._id }, [growth.sessions[2]._id]: { _id: growth.sessions[2]._id, org_role_id: growth._id, state: "needs_input" } };
   await rerender("or-1");
   assert.equal(q("[data-scope-panel-dot]"), null);
-  assert.match(q("[data-scope-lead-ask]")!.textContent!, /Nothing needs you\./);
+  assert.equal(q("[data-scope-lead-ask]"), null, "nothing to say when nothing needs the person");
   state.sessions = roleRows();
 
   // ── narrow: the panel overlays the conversation ──

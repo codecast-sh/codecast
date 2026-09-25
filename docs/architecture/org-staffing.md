@@ -989,3 +989,15 @@ release) and `cast role limits` (`caps` as its alias); `cast role ls` and
 `show` say whether a role starts work on its own and read today's use
 against its limits. The phone's org page and role rows carried none of the
 words; its inbox card gained the same count.
+
+## S24. The review is a conversation
+
+The Chief of Staff reviews the company the way a good chief of staff talks to a founder. It reads everything first: activity, records, sessions, calls, chat and health. Then it talks. Its messages are short and in plain words, and each one moves the conversation forward. It asks when it cannot settle something from the records. It takes the answer and moves on. The person can steer it at any point, and it follows.
+
+The heart of the conversation is the reporting structure: who reports to whom, what each role looks after, and where the person's sessions go. The chief says that plainly and early. Everything else serves it, such as closing records that are already done, or proposing a goal.
+
+Knowledge stays behind the words. The chief holds the evidence and gives it when asked. A message never cites IDs, never talks about itself, and never names the thread it is written in.
+
+A picture renders inline where a picture beats prose. When the chief has something the person can agree to, it posts a small proposal and puts its short ID on its own line. The message then draws a live card: the change as a small tree, what moves, and Accept, Skip and Ask. The chart on the org page shows the same change as ghosts. The person agrees to many small things as the conversation goes, never to one large document. A change the person has not accepted changes nothing.
+
+The same conversation runs on the org page, beside the chart, and from `/cast-org` in any session.

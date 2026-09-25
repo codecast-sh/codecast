@@ -1,6 +1,7 @@
 // Ghosts on the chart (docs/architecture/org-staffing.md S5): ghostsFor merges
 // an open proposal into the tree, the layout carries the decoration. One test
 // per change kind, then the accept stub, supersession, skip and focus.
+import { isOrgQuietChange } from "@codecast/shared/contracts/orgProposal";
 import { describe, expect, it } from "bun:test";
 import { focusTargetNodeId, ghostNodeIdFor, ghostsFor, layoutOrgTree, personNodeId, rectsOverlap, refResolves, resolveOrgParentRef, roleNodeId, sessionNodeId, ORG_SIZES, type OrgLayoutNode } from "./orgLayout";
 import { ORG_FIXTURE } from "./orgFixture";
@@ -147,7 +148,7 @@ describe("ghostsFor", () => {
     expect(acc.edges.find((e) => e.target === roleNodeId(child._id))?.source).toBe(ME);
   });
 
-  it("scope, budget, trust, routine: a dashed chip carrying describeOrgChange's line on the handle's node", () => {
+  it("scope, trust, routine: a dashed chip carrying describeOrgChange's line on the handle's node; a limit draws nothing (S23.2)", () => {
     const cs = [
       change({ kind: "scope", handle: "growth", add: ["Platform"] }),
       change({ kind: "budget", handle: "growth", caps: { tokens_per_day: 800_000 } }),
@@ -156,24 +157,26 @@ describe("ghostsFor", () => {
     ];
     const { nodes, ghosts } = lay(cs);
     const chips = ghosts.chips[GROWTH]!;
-    expect(chips.map((c) => c.kind)).toEqual(["scope", "budget", "trust", "routine"]);
+    expect(chips.map((c) => c.kind)).toEqual(["scope", "trust", "routine"]);
     expect(chips.map((c) => c.line)).toEqual([
       "@growth also looks after Platform",
-      "@growth may use up to 800,000 tokens a day",
       "@growth starts work on its own",
       '@growth runs "Weekly growth review" every week',
     ]);
+    expect(JSON.stringify(ghosts.chips)).not.toMatch(/800|tokens/);
     // The card grows by one chip row (on top of its standing line's row) so the layout never overlaps.
     const role = byId(nodes).get(GROWTH)!;
     expect(role.h).toBe(ORG_SIZES.role.h + ORG_SIZES.standingRow + ORG_SIZES.chipRow);
     for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) expect(rectsOverlap(nodes[i], nodes[j])).toBe(false);
     // Accepted stays as a solid chip; applied drops.
-    expect(lay([{ ...cs[1], status: "accepted" }]).ghosts.chips[GROWTH]?.[0].status).toBe("accepted");
-    expect(lay([{ ...cs[1], status: "applied" }]).ghosts.chips[GROWTH]).toBeUndefined();
+    expect(lay([{ ...cs[2], status: "accepted" }]).ghosts.chips[GROWTH]?.[0].status).toBe("accepted");
+    expect(lay([{ ...cs[2], status: "applied" }]).ghosts.chips[GROWTH]).toBeUndefined();
+    // A limit on a handle nobody has draws no warning either: the pane's ask carries it.
+    expect(lay([change({ kind: "budget", handle: "nobody", caps: { wakes_per_day: 3 } })]).ghosts.chips[ME]).toBeUndefined();
   });
 
   it("a chip on a handle nobody has lands on the viewer's own card", () => {
-    const c = change({ kind: "budget", handle: "nobody", caps: { wakes_per_day: 3 } });
+    const c = change({ kind: "trust", handle: "nobody", trust: "decide" });
     const { ghosts, nodes } = lay([c]);
     expect(ghosts.chips[ME]?.[0].change_id).toBe(c._id);
     expect(byId(nodes).get(ME)!.h).toBe(ORG_SIZES.person.h + ORG_SIZES.chipRow);
@@ -236,6 +239,8 @@ describe("ghostsFor", () => {
       // A skipped change has no place by design; a project charter with no
       // owning role lives on the scope panel's project row, not the canvas.
       if (c.status === "skipped") continue;
+      // A limit draws nothing (S23.2): the pane's ask carries it.
+      if (isOrgQuietChange(c.change)) continue;
       if (c.change.kind === "project_meta" && !ghostNodeIdFor(ghosts, c._id)) continue;
       expect(ghostNodeIdFor(ghosts, c._id)).not.toBeNull();
     }
@@ -253,7 +258,6 @@ describe("ghostsFor", () => {
     expect(ghosts.chips[GROWTH]!.map((c) => c.chip)).toEqual([
       "under Samvit Jain",
       "+ Platform \u2212 pl-3",
-      "hands 4 \u00b7 tokens 800k",
       "starts work on its own",
       "every 7d \u00b7 Weekly growth review",
     ]);
@@ -307,9 +311,9 @@ describe("ghostsFor", () => {
     // The edited handle is what org.tree will echo: a proposal for "growth" edited to a live handle is superseded.
     const dup = { ...change({ kind: "role", name: "G", handle: "g2" }, "accepted"), edits: { handle: "growth" } };
     expect(Object.keys(lay([dup]).ghosts.stubs)).toEqual([]);
-    // A budget edit merges one level deep on the chip too.
+    // A limit, edited or not, is never a chip (S23.2).
     const budget = { ...change({ kind: "budget", handle: "growth", caps: { hands_per_day: 4, tokens_per_day: 400_000 } }), edits: { caps: { tokens_per_day: 800_000 } } };
-    expect(lay([budget]).ghosts.chips[GROWTH]?.[0].chip).toBe("hands 4 \u00b7 tokens 800k");
+    expect(lay([budget]).ghosts.chips[GROWTH]).toBeUndefined();
     void ghosts;
   });
 
@@ -328,7 +332,7 @@ describe("ghostsFor", () => {
 
 describe("focus target", () => {
   it("the last ask wins: a node asked after a change pans to the node, and vice versa; a repeat ask carries a new seq", () => {
-    const c = change({ kind: "budget", handle: "growth", caps: { wakes_per_day: 3 } });
+    const c = change({ kind: "scope", handle: "growth", add: ["Platform"] });
     const { ghosts } = lay([c]);
     expect(focusTargetNodeId(ghosts, { kind: "change", id: c._id, seq: 1 })).toBe(GROWTH);
     expect(focusTargetNodeId(ghosts, { kind: "node", id: SAM, seq: 2 })).toBe(SAM);
