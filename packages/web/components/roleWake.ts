@@ -160,7 +160,18 @@ export function dedupeTitles(line: string): string {
   return line.replace(/\b((?:ct|pl|or|rw|sd)-\d+) "[^"\n]*"/g, "$1");
 }
 
-/** "woke on 9 changes, 2 held" — the header's one-line account of the wake. */
+/** What a person reads of the wake at rest: the first cause as written, its
+ *  quoted title dropped (the pill says it) and its held/passive marks dropped
+ *  (they are the role's reading, not the person's), then "and N more" for the
+ *  rest. An empty queue says so. */
+export function wakeLine(frame: Pick<RoleWakeFrame, "sections" | "causes">): string {
+  const first = causeLines(frame.sections.find((s) => s.key === "why"))[0]?.replace(/^- (?:\(held\) )?(?:\(passive\) )?/, "");
+  if (!first) return "nothing queued";
+  const more = frame.causes - 1;
+  return more > 0 ? `${dedupeTitles(first)}, and ${more} more` : dedupeTitles(first);
+}
+
+/** "woke on 9 changes, 2 held" — the open card's one-line account of the wake. */
 export function describeWake(frame: Pick<RoleWakeFrame, "causes" | "held">): string {
   const n = frame.causes;
   const head = n === 0 ? "woke on nothing queued" : `woke on ${n} ${n === 1 ? "change" : "changes"}`;

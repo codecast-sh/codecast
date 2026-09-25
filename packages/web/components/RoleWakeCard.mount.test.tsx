@@ -1,8 +1,11 @@
 // Mounts the wake card in jsdom against the fixture frame and checks what the
-// reader sees: the role's name and handle linking to its page, the wake id and
-// the cause count, the held tag, Why open and every other section folded with
-// its line count, "show all N lines" past the cap, and the footer controls
-// (pause only for an editor, resume when paused, the caps and wake log links).
+// reader sees. At rest: one line, the role's name linking to its page, why it
+// woke in a few words, its age, and where the turn's message went as one line
+// of hands; none of the frame's counts, sections or controls. One click opens
+// the whole frame: the wake id and the cause count, the held tag, Why open and
+// every other section folded with its line count, "show all N lines" past the
+// cap, the routing as full rows, and the footer controls (pause only for an
+// editor, resume when paused, the caps and wake log links).
 // Run: bun components/RoleWakeCard.mount.test.tsx
 import assert from "node:assert/strict";
 import { test } from "bun:test";
@@ -63,16 +66,50 @@ async function mountCard() {
 async function verifyRoleWakeCard() {
     const { act, render, frame, role, calls, $, $$, text, ROLE_WAKE_LINE_CAP, root, dom } = await mountCard();
 
-    // Header: who, which wake, why, when.
+    // At rest: one line. Who woke and why, with the age; nothing of the
+    // frame's counts, sections or controls until the reader asks.
     const roleLink = $$("a").find((a) => a.getAttribute("href") === "/org/or-8" && a.textContent?.includes("Reliability lead"));
     assert.ok(roleLink, "the role name links to its page");
-    assert.ok(roleLink.textContent?.includes("@reliability"));
+    const line = $("[data-role-wake-why]")!;
+    assert.ok(line.textContent?.startsWith("woke:"), line.textContent);
+    assert.ok(line.textContent?.includes("task ct-51321 is done, and 8 more"), line.textContent);
+    assert.ok(!text().includes('"Investigate repeated iOS crashes'), "the pill carries the title");
+    assert.ok(text().includes("5m"), "age from the frame's at");
+    for (const gone of ["woke on 9 changes", "held backlog", "1/40 wakes", "rw-12", "@reliability", "Open role", "Limits", "Why did this wake me", "Where it went"]) {
+      assert.ok(!text().includes(gone), `${gone} waits behind the fold`);
+    }
+    assert.equal($$("[data-section]").length, 0);
+    const toggle = () => $("[data-role-wake-line] button[aria-expanded]")!;
+    assert.equal(toggle().getAttribute("aria-expanded"), "false");
+
+    // Where it went at rest (F4.2): one wrapping line under the wake's own,
+    // each hand as its pill and the state word every org surface uses; a
+    // follow up reads "sent to". Nothing of it while the routing is empty.
+    assert.ok(!$("[data-routing]"));
+    const hand = { _id: "conversations_h1", short_id: "jx7h101", title: "Get codecast main CI green", state: "working", started_at: frame.at! + 60_000, updated_at: frame.at! + 60_000, task_short_id: "ct-52058", state_line: "bisecting the five red jobs", state_status: null, state_at: null };
+    await render({ routing: { hands: [hand as any], sentTo: ["jx7h102"] } });
+    const restRow = $("[data-hand='conversations_h1']");
+    assert.ok(restRow, "the hand renders on the line");
+    assert.ok(restRow.textContent?.includes("started"));
+    assert.ok(restRow.textContent?.includes("Get codecast main CI green"), "the hand's title reads as a pill");
+    assert.equal(restRow.querySelector("[data-hand-state]")?.getAttribute("data-hand-state"), "working");
+    assert.ok(!restRow.textContent?.includes("bisecting"), "the pinned line waits behind the fold");
+    assert.ok(!restRow.textContent?.includes("ct-52058"), "the task waits behind the fold");
+    assert.ok($("[data-sent-to='jx7h102']")?.textContent?.includes("sent to"));
+    assert.ok(!text().includes("Where it went"));
+    await render();
+    assert.ok(!$("[data-routing]"));
+
+    // One click opens the whole frame: who, which wake, how many, when.
+    await act(() => { toggle().click(); });
+    assert.equal(toggle().getAttribute("aria-expanded"), "true");
+    assert.ok(text().includes("@reliability"));
     const wakeLink = $$("a").find((a) => a.textContent?.trim() === "rw-12");
     assert.ok(wakeLink, "the wake id is shown");
     assert.equal(wakeLink.getAttribute("href"), "/org/or-8?tab=wakes&wake=rw-12");
     assert.ok(text().includes("woke on 9 changes, 2 held"));
     assert.ok(text().includes("held backlog"));
-    assert.ok(text().includes("5m"), "age from the frame's at");
+    assert.ok(text().includes("1/40 wakes"), "the day's counts, open only");
     assert.ok(!text().includes("trust understand"));
 
     // Sections: Why open, the rest folded, each with its count.
@@ -104,11 +141,11 @@ async function verifyRoleWakeCard() {
     // The line cap: a long section shows the cap then "show all N lines".
     const long = { ...frame, sections: [{ key: "why" as const, title: "Why you are awake", lines: Array.from({ length: 30 }, (_, i) => `- task ct-${i} is open`) }] };
     await render({ frame: long });
-    assert.equal($$("p").length, ROLE_WAKE_LINE_CAP);
+    assert.equal($$("[data-section] p").length, ROLE_WAKE_LINE_CAP);
     const more = $$("button").find((b) => b.textContent === "show all 30 lines");
     assert.ok(more);
     await act(() => { more.click(); });
-    assert.equal($$("p").length, 30);
+    assert.equal($$("[data-section] p").length, 30);
     await render();
 
     // Footer: open role, pause (an editor), caps, the wake log.
@@ -139,12 +176,11 @@ async function verifyRoleWakeCard() {
     assert.ok(!$$("button").some((b) => /^(Pause|Resume)$/.test(b.textContent?.trim() ?? "")));
     assert.ok($("[data-role-wake='or-8']"));
 
-    // Where it went (F4.2): a hand the role started in this turn renders under
-    // the frame as its pill, the state word every org surface uses, its pinned
-    // line, its task and its age; a follow up it sent reads "sent to". Nothing
-    // of it while the routing is empty.
+    // Where it went, open (F4.2): each hand the role started in this turn as
+    // a row with its pill, the state word, its pinned line, its task and its
+    // age; a follow up it sent reads "sent to". Nothing of it while the
+    // routing is empty.
     assert.ok(!text().includes("Where it went"));
-    const hand = { _id: "conversations_h1", short_id: "jx7h101", title: "Get codecast main CI green", state: "working", started_at: frame.at! + 60_000, updated_at: frame.at! + 60_000, task_short_id: "ct-52058", state_line: "bisecting the five red jobs", state_status: null, state_at: null };
     await render({ routing: { hands: [hand as any], sentTo: [] } });
     assert.ok(text().includes("Where it went"));
     const row = $("[data-hand='conversations_h1']");

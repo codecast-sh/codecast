@@ -270,10 +270,11 @@ function extractPlanContent(text: string): string | null {
 
 const STICKY_NOISE_PREFIXES = ["[Request interrupted", "<task-notification>", "Your task is to create a detailed summary", "Full transcript available at:", "[Codecast import]"];
 
-// The user rows fold mode keeps: what a person said to the agent, and a chat
-// line that woke it. Everything else on the user rail was sent by a machine
-// (a wake frame, a poll answer, an interrupt, a notice, a session's report).
-export const FOLD_KEPT_USER_KINDS = new Set<UserMessageKind["kind"]>(['normal', 'direct_user', 'decision_answer', 'plan', 'chat_wake', 'session_handoff']);
+// The user rows fold mode keeps: what a person said to the agent, a chat
+// line that woke it, and a role's wake frame (one line at rest: the role woke
+// and why). Everything else on the user rail was sent by a machine (a poll
+// answer, an interrupt, a notice, a session's report).
+export const FOLD_KEPT_USER_KINDS = new Set<UserMessageKind["kind"]>(['normal', 'direct_user', 'decision_answer', 'plan', 'chat_wake', 'role_wake', 'session_handoff']);
 
 // Dedup key for matching a still-pending message against its eventual JSONL echo.
 // The daemon collapses newlines to spaces on inject (injectViaTmux) and a few control
