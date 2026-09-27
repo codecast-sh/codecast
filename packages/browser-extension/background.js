@@ -514,7 +514,11 @@ async function handle(m) {
       const t = await createTab({ url: m.url || "about:blank", active: !m.background, ...(windowId !== undefined ? { windowId } : {}) });
       ownedTabs.add(t.id);
       persistOwned();
-      await placeInGroup(t, group);
+      // The tab exists from here on. A grouping failure must not become a
+      // failed create: the caller never learns the tab's id, cannot close it,
+      // and each retry leaves one more tab behind. The tab stays ours and
+      // joins the group on its next attach.
+      await placeInGroup(t, group).catch((err) => note(`tab ${t.id} left ungrouped: ${String((err && err.message) || err)}`));
       return { tabId: t.id };
     }
 
@@ -687,7 +691,7 @@ async function attachDebugger(debuggee) {
 async function attachTab(tabId) {
   await loadOwnership();
   const t = await chrome.tabs.get(tabId).catch(() => null);
-  if (ownedTabs.has(tabId) && t?.groupId === NO_GROUP) await placeInGroup(t, DEFAULT_CAST_GROUP);
+  if (ownedTabs.has(tabId) && t?.groupId === NO_GROUP) await placeInGroup(t, DEFAULT_CAST_GROUP).catch((err) => note(`tab ${tabId} still ungrouped: ${String((err && err.message) || err)}`));
   if (!attached.has(tabId)) {
     if (t && t.discarded) throw new Error("this tab was discarded by Chrome's memory saver; activate it once to wake it");
     await attachDebugger({ tabId });

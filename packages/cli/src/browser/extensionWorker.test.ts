@@ -6,7 +6,7 @@ import { webcrypto } from 'node:crypto';
 const source = readFileSync(new URL('../../../browser-extension/background.js', import.meta.url), 'utf8');
 const statusSource = readFileSync(new URL('../../../browser-extension/status.js', import.meta.url), 'utf8');
 
-function worker(opts: { ownedTabs?: number[]; hungCleanup?: boolean; humanTabDuringCreate?: boolean; coldRenderer?: boolean; hungGroupQuery?: boolean; hungTabQuery?: boolean; firstOwnershipReadStalls?: boolean; selfAlreadyAttached?: boolean; lateTabQueryMs?: number; castGroupWithTabs?: number[]; keeperAlreadyOpen?: boolean; noOffscreenApi?: boolean; slowOverlay?: boolean; appWindowFocused?: boolean } = {}) {
+function worker(opts: { ownedTabs?: number[]; hungCleanup?: boolean; humanTabDuringCreate?: boolean; coldRenderer?: boolean; hungGroupQuery?: boolean; hungTabQuery?: boolean; firstOwnershipReadStalls?: boolean; selfAlreadyAttached?: boolean; lateTabQueryMs?: number; castGroupWithTabs?: number[]; keeperAlreadyOpen?: boolean; noOffscreenApi?: boolean; slowOverlay?: boolean; appWindowFocused?: boolean; groupFails?: boolean } = {}) {
   const grouped: unknown[] = [];
   const detached: number[] = [];
   const created: unknown[] = [];
@@ -49,7 +49,11 @@ function worker(opts: { ownedTabs?: number[]; hungCleanup?: boolean; humanTabDur
         chrome.tabs.onCreated.emit(tab);
         return { ...tab };
       },
-      group: async (p: object) => { grouped.push(p); return 42; },
+      group: async (p: object) => {
+        grouped.push(p);
+        if (opts.groupFails) throw new Error('Grouping is not supported by tabs in this window.');
+        return 42;
+      },
       onCreated: event(), onUpdated: event(), onRemoved: event(),
     },
     tabGroups: {
@@ -200,6 +204,17 @@ describe('extension tab lifecycle', () => {
     const w = worker({ appWindowFocused: true });
     await w.context.handle({ op: 'tabs.create', url: 'https://example.com', background: true });
     expect(w.created).toEqual([{ url: 'https://example.com', active: false, windowId: 1 }]);
+  });
+
+  test('a tab Chrome refuses to group is still returned, owned, and attachable', async () => {
+    // The create used to throw after the tab existed: the caller never learned its id,
+    // and every retry of `cast browser open` left one more tab behind.
+    const w = worker({ groupFails: true });
+    expect(await w.context.handle({ op: 'tabs.create', url: 'https://example.com', background: true })).toEqual({ tabId: 7 });
+    expect(vm.runInContext('ownedTabs.has(7)', w.context)).toBe(true);
+    await w.context.attachTab(7);
+    expect(vm.runInContext('attached.has(7)', w.context)).toBe(true);
+    expect(w.grouped).toEqual([{ tabIds: [7] }, { tabIds: [7] }]);
   });
 
   test('an owned ungrouped tab is repaired when reattached', async () => {

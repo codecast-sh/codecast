@@ -495,7 +495,9 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
         // the bridge maps it to `tabs.create {active: false}`, and without it
         // every `open` pulls their window in front of what they were doing
         // (focusRaise.guard.test.ts now fails a create without it — ct-49625).
-        targetId = (await narrated("opening a tab in Chrome", conn.send<{ targetId: string }>("Target.createTarget", { url, background: true }))).targetId;
+        // Outwait the host's 40 s tabs.create budget: giving up first leaves a
+        // tab this session never learns about, and the next `open` makes another.
+        targetId = (await narrated("opening a tab in Chrome", conn.send<{ targetId: string }>("Target.createTarget", { url, background: true }, undefined, 45_000))).targetId;
         created = true;
       }
       rememberRealTab(sessionKey, targetId);
