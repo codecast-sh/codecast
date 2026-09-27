@@ -31,7 +31,7 @@ import type { WorkState } from "@codecast/shared/contracts";
 import { sessionStartupState } from "../lib/sessionLifecycle";
 import { compressImage } from "../lib/compressImage";
 import { useConversationMessages } from "../hooks/useConversationMessages";
-import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, placeInboxRows, placementDecisionsSig, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, freshReviveRequestIds, isSessionHidden, resolveSessionAuthor, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipProjectFilters, passesFilterTerms, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, placeInboxRows, placementDecisionsSig, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, freshReviveRequestIds, isSessionHidden, resolveSessionAuthor, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipProjectFilters, passesFilterTerms, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, resolveFavorite, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
 import { useTeamShareActions } from "../hooks/useTeamShareActions";
 import { sessionsWakeSig, resolveShowOld, showsBlockedBadge, sectionHeaderCount, classifySession, inboxNestParentOf } from "../store/inboxStore";
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
@@ -3580,10 +3580,10 @@ function SessionListPanelImpl({
     () => new Set((s.favorites as { _id: string }[]).map((f) => f._id)),
     [s.favorites],
   );
-  // Favorited if the row carries the flag OR it's in the favorites list (both are
-  // maintained by toggleFavorite); resolved to a scalar so each card memoizes on it.
+  // The star reads the rule toggleFavorite flips (resolveFavorite), resolved to a
+  // scalar so each card memoizes on it.
   const cardIsFavorite = useCallback(
-    (sess: InboxSession) => (sess as { is_favorite?: boolean }).is_favorite === true || favoriteIds.has(sess._id),
+    (sess: InboxSession) => resolveFavorite([sess], () => favoriteIds.has(sess._id)),
     [favoriteIds],
   );
   const { bucketCounts, projectCounts, projectPathByName } = useMemo(
