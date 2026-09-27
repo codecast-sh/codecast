@@ -55,10 +55,8 @@ export type CueSpec = {
 //   soundNewSession  0.0247
 //   soundCallJoin    0.0196
 //
-// soundKill is the loud end and is not in that list: its lowpass sweeps, so it
-// is not a CueSpec and cannot be rendered here. Its own two numbers are a
-// master of 0.1 on an envelope opening at 0.8, and it is an alarm. Nothing
-// below goes near it.
+// Nothing in the app goes near 0.08; that is the ceiling the tests hold every
+// cue under.
 //
 // The measured peak of each cue below is on its `soundWalkie*` export in
 // `sounds.ts` and asserted in `walkieCues.test.ts`.
@@ -143,4 +141,16 @@ export const WALKIE_AWAY: CueSpec = {
 export const STASH_AWAY: CueSpec = {
   master: 0.083,
   noise: [{ start: 0, dur: 0.22, attack: 0.09, gain: 0.7, band: 500, sweepTo: 2800, q: 1.1 }],
+};
+
+/** Kill: a door that closes. A soft push of air, then a low thud and a small
+ *  latch click. It sits with the stash swoosh, just above the plain noise
+ *  thud it replaced: ending a session is final, not an alarm. */
+export const KILL_DOOR: CueSpec = {
+  master: 0.0278,
+  noise: [
+    { start: 0, dur: 0.1, attack: 0.05, gain: 0.35, band: 600, sweepTo: 250, q: 0.8 },
+    { start: 0.14, dur: 0.02, gain: 0.35, band: 2400, q: 2 },
+  ],
+  tones: [{ freq: 95, sweepTo: 70, start: 0.09, dur: 0.18, gain: 0.9, attack: 0.003, type: "triangle", lowpass: 400 }],
 };
