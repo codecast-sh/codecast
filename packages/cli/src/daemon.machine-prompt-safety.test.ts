@@ -11,6 +11,7 @@ import { clearPromptHolds, holdConversationForPrompt, promptHoldRemainingMs, rel
 import { clientAcceptsBracketedPaste, deliverTextIntoPane, pasteAndSubmitText, prepareInjectedContent, PASTE_START, PASTE_END } from "./tmuxPaste";
 import { blockAt, functionBlock } from "./test-helpers/sourceRegion";
 import { TmuxDeliveryUncertainError } from "./tmuxDeliveryJournal";
+import { typedPollAnswer } from "./typedPollAnswer";
 
 const source = fs.readFileSync(new URL("./daemon.ts", import.meta.url), "utf8");
 const scratch: string[] = [];
@@ -133,7 +134,7 @@ function fixture(transport = "tmux", cached = true) {
   const deps = {
     fs, os, path, randomUUID, CONFIG_DIR: directory, EXEC_TIMEOUT_MS: 1000,
     isMachineDeliveredMessage, AGENT_CLIENTS, authorizesTeardown, PendingDeliveryHeldError, createDeliveryAdmission,
-    holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold,
+    holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, typedPollAnswer,
     clientAcceptsBracketedPaste, deliverTextIntoPane, pasteAndSubmitText, prepareInjectedContent, PASTE_START, PASTE_END,
     tmuxExec, execAsync,
     _execFileAsync: async (binary: string, args: string[]) => {
