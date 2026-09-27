@@ -3,7 +3,7 @@ import { useCallsAvailable } from "../lib/teamFeatures";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMemo } from "react";
 import { toast } from "sonner";
-import { UserRound, Filter, Link2, Headphones, Maximize2, PictureInPicture2 } from "lucide-react";
+import { UserRound, Filter, Link2, Headphones, Maximize2, PanelTop, PictureInPicture2 } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { useSyncCollection } from "../hooks/useSyncCollection";
@@ -13,6 +13,8 @@ import { POP_OUT_PEOPLE_TITLE, canPopOutCall, useFacesFloating } from "../lib/de
 import { focusExistingHuddle } from "../lib/calls/huddleWindow";
 import { popOutCall } from "../lib/calls/popOutCall";
 import { openCallStage } from "../lib/calls/callStage";
+import { useRoomThreadUnread } from "../hooks/useRoomThreadUnread";
+import { UnreadCount } from "./calls/UnreadCount";
 import { ContextMenu, useContextMenu, CtxItem, CtxHeader } from "./ui/context-menu";
 import { memberDisplayName } from "./presence/memberPresence";
 import { popOutPeople } from "./people/popOutPeople";
@@ -125,19 +127,22 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
     ? useInboxStore.getState().teamMembers.find((m: any) => String(m?._id) === memberFilter)
     : null;
 
-  // The row is floating over the work: one chip, and the pump.
+  // The row is floating over the work: one chip, and the pump. The chip
+  // says what a click does, not what the state is: "Faces are floating" read
+  // as a status line, and nothing about it said it would bring them home.
   if (floating.floating) {
     return (
       <div className="people-bar flex items-center gap-1 px-2" data-floating="1">
         <TeamMembersPump teamId={effectiveTeamId} />
         <button
           type="button"
+          data-dock-faces
           onClick={() => floating.setFloating(false)}
           className="flex h-7 items-center gap-1.5 rounded-full border border-sol-cyan/40 bg-sol-cyan/10 px-2.5 text-[11px] text-sol-cyan transition-colors hover:bg-sol-cyan/20"
-          title="The faces are floating over your work. Click to bring them back here."
+          title="The faces are floating over your work. Click to dock them back in the header."
         >
-          <PictureInPicture2 className="h-3 w-3" />
-          Faces are floating
+          <PanelTop className="h-3.5 w-3.5" />
+          Bring faces back
         </button>
       </div>
     );
@@ -197,17 +202,7 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
           transcript) opens only when asked. On the desktop the call already
           has a window, so this raises it, or gives it one. */}
       {inCall && (
-        <ShortcutTooltip label="Open the call">
-          <button
-            type="button"
-            onClick={openTheCall}
-            data-open-call
-            className="ml-1 flex h-8 w-8 items-center justify-center rounded-full text-sol-text-muted transition-colors hover:bg-sol-bg-highlight hover:text-sol-text"
-            aria-label="Open the call"
-          >
-            <Maximize2 className="h-3.5 w-3.5" />
-          </button>
-        </ShortcutTooltip>
+        <OpenCallButton onClick={openTheCall} />
       )}
       {/* Group huddle: the row is where the people are, so the "ring several
           of them" gesture starts here (the new-huddle field, which also
@@ -276,5 +271,28 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
         )}
       </ContextMenu>
     </div>
+  );
+}
+
+/** The door to the stage, wearing the count of what was typed in the call's
+ *  chat while it sat collapsed here: the same count the stage's own thread
+ *  button wears. Its own component so the chat subscription lives only as
+ *  long as the call does. */
+function OpenCallButton({ onClick }: { onClick: () => void }) {
+  const roomKey = useInboxStore((s) => s.call.roomKey ?? null);
+  const { unread } = useRoomThreadUnread(roomKey);
+  return (
+    <ShortcutTooltip label="Open the call">
+      <button
+        type="button"
+        onClick={onClick}
+        data-open-call
+        className="relative ml-1 flex h-8 w-8 items-center justify-center rounded-full text-sol-text-muted transition-colors hover:bg-sol-bg-highlight hover:text-sol-text"
+        aria-label={unread > 0 ? `Open the call, ${unread} new in its chat` : "Open the call"}
+      >
+        <Maximize2 className="h-3.5 w-3.5" />
+        <UnreadCount count={unread} className="absolute -right-1 -top-0.5" />
+      </button>
+    </ShortcutTooltip>
   );
 }

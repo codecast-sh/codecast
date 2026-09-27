@@ -4,6 +4,7 @@ import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeli
 import { pendingMessageFinished, prepareTmuxDelivery, receiptSettled, TmuxDeliveryUncertainError, type TmuxDeliveryIdentity, type TmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
 import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_GLOBAL, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, classifyApiErrorBanner, confineToOwningDevice, findModelOption, fromConvexAgentType, modelOptionKey, isCodexSafetyError, isMachineDeliveredMessage, isUsageLimitDialog, isValidPaneTarget, snippetBySlug, verdictFromProbe, worktreeOfPath } from "@codecast/shared/contracts";
 import { holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, setPendingRedrive } from "./pendingPromptHold.js";
+import { typedPollAnswer } from "./typedPollAnswer.js";
 import { codexTurnErrorMessage } from "./codexTurnError.js";
 import { INGEST_WINDOW_ROWS } from "./workers/ingestTypes.js";
 import { TranscriptRetryOwner } from "./workers/ingestRetryOwner.js";
@@ -85,6 +86,7 @@ import {
   reconcileLiveClaudeSessions,
   seedLiveClaudeSessions,
   setActiveProfileResolver,
+  unstampedClaudeHolders,
   type LiveClaudeSession,
 } from "./ccLiveGate.js";
 import {
@@ -335,6 +337,7 @@ import {
   isForkArtifactSessionId,
   isWorkflowAgentTranscriptPath,
   isManagedTmuxName,
+  isCodecastCreatedTmuxName,
   isValidResumeSessionId,
   removeForkArtifactJsonl,
   resolveResumeAgentType,
@@ -883,8 +886,18 @@ const reapPidTree = (rootPid: number): Promise<number> => reapPidTrees([rootPid]
 // claude/MCP/caffeinate survives), THEN kill the session. Order matters — once
 // the session is gone we can't enumerate its pane pids. All panes go into one
 // reap so the whole session costs one `ps` and one grace window.
+//
+// Only a session codecast created is destroyed. An agent the user started by
+// hand inside their own tmux resolves to that session too (findTmuxPaneForTty),
+// and an auth restart once took the user's whole terminal down with it
+// (2026-09-28). Callers that hold the agent's pid reap its tree separately, so
+// the agent still stops and the user's shell and other windows survive.
 export async function killTmuxSessionAndTree(tmuxSession: string): Promise<void> {
   if (!validateTmuxTarget(tmuxSession)) return;
+  if (!isCodecastCreatedTmuxName(tmuxSession)) {
+    log(`[REAP] Left tmux ${tmuxSession} standing: codecast did not create it`);
+    return;
+  }
   try {
     const { stdout } = await tmuxExec(
       ["list-panes", "-t", tmuxSession, "-F", "#{pane_pid}"],
@@ -4134,16 +4147,34 @@ export function parseLiveClaudeSessions(stdout: string): LiveClaudeSession[] {
  *  A tmux that could not be reached is not evidence of an empty machine, so the
  *  gate is left as it stands — except when tmux says it has no server at all,
  *  which IS that evidence and is what opens the gate after a reboot. */
+//
+//  A claude started by hand holds the keychain login without any stamp, so the
+//  process table is read too (unstampedClaudeHolders). A `ps` that failed is
+//  not evidence either: the hand-started holders already in the gate stay.
 async function reconcileLiveClaudeGate(): Promise<void> {
   let stdout: string;
   try {
-    ({ stdout } = await tmuxExec(["list-sessions", "-F", ccGateListFormat()], { timeout: 5000 }));
+    ({ stdout } = await tmuxExec(["list-panes", "-a", "-F", `#{pane_pid}${REAP_FIELD_SEP}${ccGateListFormat()}`], { timeout: 5000 }));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (!/no server running|no such file or directory/i.test(msg)) return;
     stdout = "";
   }
-  reconcileLiveClaudeSessions(parseLiveClaudeSessions(stdout));
+  const alive: LiveClaudeSession[] = [];
+  const stampedPanePids = new Set<number>();
+  for (const row of stdout.split("\n")) {
+    const [pid, ...rest] = row.split(REAP_FIELD_SEP);
+    const stamped = parseLiveClaudeSessions(rest.join(REAP_FIELD_SEP));
+    if (stamped.length === 0) continue;
+    stampedPanePids.add(Number(pid));
+    alive.push(...stamped);
+  }
+  try {
+    alive.push(...unstampedClaudeHolders(await snapshotProcessTableAsync({ timeout: 5000 }), stampedPanePids));
+  } catch {
+    alive.push(...liveClaudeSessions().filter((s) => s.id.startsWith("pid:")));
+  }
+  reconcileLiveClaudeSessions(alive);
 }
 
 // Per-account usage snapshots: probe the OAuth usage API for the active login
@@ -4287,9 +4318,11 @@ async function maintainCcUsageSnapshotsInner(reason: string, opts: { force?: boo
           `${readOauthAccount()?.emailAddress ?? "unknown"}; using the verified identity`,
       );
     }
+    await reconcileLiveClaudeGate();
     const res = await refreshUsageSnapshots({
       ...(opts.force ? { minIntervalMs: 0 } : {}),
       heldProfiles: liveClaudeProfiles(),
+      activeHeld: hasLiveClaudeOnActiveCredential(),
     });
     if (res.probed.length > 0 || res.failed.length > 0 || res.expired.length > 0) {
       const failNote = res.failed.length
@@ -24594,34 +24627,10 @@ async function deliverMessage(
     // If there's an active poll and the message is plain text (not already a poll response),
     // check if it matches one of the poll options and convert to a poll response
     if (pendingPrompt && !parsePollMessage(content)) {
-      const normalized = content.replace(/\s+/g, " ").trim().toLowerCase();
-      if (normalized && pendingPrompt.options.length > 0) {
-        if (pendingPrompt.isConfirmation) {
-          const isConfirm = /^(continue|enter|yes|ok|confirm|proceed|accept|y)$/i.test(normalized) ||
-            (pendingPrompt.options[0] && normalized.includes(pendingPrompt.options[0].label.toLowerCase().split(" (")[0]));
-          const isCancel = /^(cancel|escape|esc|no|quit|n)$/i.test(normalized) ||
-            (pendingPrompt.options[1] && normalized.includes(pendingPrompt.options[1].label.toLowerCase().split(" (")[0]));
-          if (isConfirm) {
-            content = JSON.stringify({ __cc_poll: true, keys: ["Enter"], display: "Continue" });
-            logDelivery(`Converted plain text to confirmation Enter for session=${(sessionId || conversationId).slice(0, 8)}`);
-          } else if (isCancel) {
-            content = JSON.stringify({ __cc_poll: true, keys: ["Escape"], display: "Cancel" });
-            logDelivery(`Converted plain text to confirmation Escape for session=${(sessionId || conversationId).slice(0, 8)}`);
-          }
-        } else {
-          const matchIdx = pendingPrompt.options.findIndex(opt => {
-            const optNorm = opt.label.replace(/\s+/g, " ").trim().toLowerCase();
-            return optNorm === normalized || normalized.includes(optNorm) || optNorm.includes(normalized);
-          });
-          if (matchIdx >= 0) {
-            const display = pendingPrompt.options[matchIdx].label;
-            const steps: Array<{ key: string }> = [];
-            for (let i = 0; i < matchIdx; i++) steps.push({ key: "Down" });
-            steps.push({ key: "Enter" });
-            content = JSON.stringify({ __cc_poll: true, steps, display });
-            logDelivery(`Converted plain text "${display}" to poll arrows=${matchIdx}+Enter for session=${(sessionId || conversationId).slice(0, 8)}`);
-          }
-        }
+      const answer = typedPollAnswer(pendingPrompt, content);
+      if (answer) {
+        content = answer;
+        logDelivery(`Converted plain text to poll ${answer} for session=${(sessionId || conversationId).slice(0, 8)}`);
       }
     }
 

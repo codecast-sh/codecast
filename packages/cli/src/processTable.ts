@@ -12,7 +12,7 @@
 // teammates / 5GB plus 267 idle login shells pushing `ps aux` past 20s).
 
 import { execFileAsync, execFileSync } from "./proc.js";
-import { isRecognizedAgentComm } from "./sessionProcessMatcher.js";
+import { agentBinaryFromPsRow, isRecognizedAgentComm } from "./sessionProcessMatcher.js";
 import { tmuxRunAsync } from "./tmux.js";
 import { CLAUDE_VERSIONED_BINARY_RE } from "./stableClaudeBinary.js";
 
@@ -199,6 +199,13 @@ export function isAgentCommand(command: string): boolean {
   // interpreters (node/bun) are too generic for a whole-tree count
   if (/^(node|bun|deno)$/.test(base)) return false;
   return isRecognizedAgentComm(base);
+}
+
+/** Is this command line a Claude Code process: the launcher's versioned binary,
+ *  a `claude` binary, or the CLI script under an interpreter? */
+export function isClaudeCommand(command: string): boolean {
+  const argv0 = command.trim().split(/\s+/)[0] ?? "";
+  return CLAUDE_VERSIONED_BINARY_RE.test(argv0) || agentBinaryFromPsRow("", command) === "claude";
 }
 
 /** Program names that can be argv0 of a daemon. Anything else naming `_daemon`

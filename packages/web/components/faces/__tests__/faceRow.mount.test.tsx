@@ -463,6 +463,49 @@ describe("two densities, one row", () => {
     await h.draw(<FloatingFaceRow row={rowOf([entry(ANN, "Ann")])} viewerId={ME} bridge={bridge} chrome={{ ...chrome, inCall: false, closeWord: "Close" }} />);
     expect(h.all(".face-row-chrome .faces-btn-word").map((w) => w.textContent)).toEqual(["Move", "Close"]);
   });
+
+  test("the float's faces come in the row's size and the call circles' two bigger ones, remembered per device", async () => {
+    const sizes: { width: number; height: number }[] = [];
+    const bridge = { setInteractive() {}, setContentSize: (s: { width: number; height: number }) => sizes.push(s), setDragging() {} };
+    const chrome = { inCall: false, onClose() {}, closeWord: "Dock", closeTitle: "Dock", docks: true };
+    const ui = () => (useInboxStore.getState() as any).clientState?.ui ?? {};
+    useInboxStore.getState().updateClientUI({ float_face_size: undefined } as any);
+    const row = rowOf([entry(ANN, "Ann"), entry(BO, "Bo")]);
+    const h = await mount(<FloatingFaceRow row={row} viewerId={ME} bridge={bridge} chrome={chrome} />);
+    await act(async () => {
+      dom.window.document.dispatchEvent(new dom.window.MouseEvent("mousemove", { bubbles: true, clientX: 10, clientY: 10 }));
+    });
+    const smaller = h.q('[data-chrome-btn="smaller"]') as HTMLButtonElement;
+    const larger = h.q('[data-chrome-btn="larger"]') as HTMLButtonElement;
+    // The row's own size to start: nothing smaller.
+    expect(smaller.disabled).toBe(true);
+    expect((h.q(".face-row") as HTMLElement).style.getPropertyValue("--face")).toBe("64px");
+    await h.click(larger);
+    expect(ui().float_face_size).toBe(96);
+    await h.click(larger);
+    expect(ui().float_face_size).toBe(128);
+    expect((h.q(".face-row") as HTMLElement).style.getPropertyValue("--face")).toBe("128px");
+    // The biggest: nothing larger; and the window was told the bigger row.
+    expect(larger.disabled).toBe(true);
+    expect(sizes.at(-1)!.height).toBeGreaterThanOrEqual(floatingRowSize(2, 0, { width: 0, height: 0 }, undefined, 128).height);
+    // The dock reads as docking: its own word and icon, not a bare X.
+    expect(h.q('[data-chrome-btn="close"] .faces-btn-word')!.textContent).toBe("Dock");
+    await h.click(smaller);
+    expect(ui().float_face_size).toBe(96);
+    useInboxStore.getState().updateClientUI({ float_face_size: undefined } as any);
+  });
+
+  test("the float's card hangs from the pointed face by a notch, and nothing hangs under a chin", async () => {
+    const bridge = { setInteractive() {}, setContentSize() {}, setDragging() {} };
+    const h = await mount(<FloatingFaceRow row={rowOf([entry(ANN, "Ann"), entry(BO, "Bo")])} viewerId={ME} bridge={bridge} />);
+    expect(h.q(".face-name")).toBeNull();
+    await h.click(h.circle(BO));
+    const band = h.q(".face-row-below") as HTMLElement;
+    expect(band.getAttribute("data-notch")).toBe("1");
+    expect(band.style.left).toMatch(/px$/);
+    expect(band.style.getPropertyValue("--notch-x")).toMatch(/px$/);
+    expect(band.querySelector("[data-member-card]")).not.toBeNull();
+  });
 });
 
 // ── the card ────────────────────────────────────────────────────────────────

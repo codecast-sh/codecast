@@ -217,6 +217,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
   const subHeaderContent = useMemo(() => <>
     {isOwnSession && (
       <TriggerContextPanel
+        key={convId}
         conversationId={convId}
         sessionId={convSessionId}
         agentTaskId={agentTaskId}

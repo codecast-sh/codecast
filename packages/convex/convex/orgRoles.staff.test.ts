@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { CHIEF_OF_STAFF_CHARTER, CHIEF_OF_STAFF_HANDLE, COMPANY_REVIEW_PROMPT, COMPANY_REVIEW_TITLE, performBackfillSeatedChiefs, performCreateRole, performProvisionRole, performRetireRole, performSetTrust, performStaff, performUpdateRole, seatingNote } from "./orgRoles";
+import { chiefOfStaffOpening } from "@codecast/shared/contracts/chiefOfStaffPrompt";
+import { CHIEF_OF_STAFF_HANDLE, COMPANY_REVIEW_PROMPT, chiefOfStaffCharter, COMPANY_REVIEW_TITLE, performBackfillSeatedChiefs, performCreateRole, performProvisionRole, performRetireRole, performSetTrust, performStaff, performUpdateRole, seatingNote } from "./orgRoles";
 import { canAccessProject } from "./lib/access";
 import { webUpdate as planWebUpdate } from "./plans";
 import { webUpdate as projectWebUpdate } from "./projects";
@@ -69,7 +70,7 @@ describe("orgRoles.staff", () => {
     expect(role.scope).toEqual({ project_ids: [], plan_ids: [] });
     expect(role.trust).toBe("understand");
     expect(role.reports_to).toEqual({ kind: "user", user_id: ME });
-    expect(role.charter).toBe(CHIEF_OF_STAFF_CHARTER);
+    expect(role.charter).toBe(chiefOfStaffCharter("Me"));
     expect(role.anchor_id).toBeDefined();
     // The adopted row IS the standing session: identity, anchor, persistence.
     const mine = tables.conversations.find((c) => c._id === "mine")!;
@@ -142,7 +143,7 @@ describe("orgRoles.staff", () => {
     expect(turns[0].content).toContain("I have seated you as the Chief of Staff of Acme (@chief-of-staff, or-1): https://codecast.sh/org/or-1.");
     expect(turns[0].content).toContain("Nothing else changed: your memory, your handle, your chat and Slack bindings and this thread are as they were.");
     expect(turns[0].status).not.toBe("held");
-    expect(turns[1].content).toContain("@chief-of-staff");
+    expect(turns[1].content).toBe(`${chiefOfStaffOpening({ workspace: "Acme", person: "Me" })}\n\nRead \`cast brief\` now, post a one-line hello, then stand by.`);
 
     // The aliases keep working: the workspace anchor lookup still answers with
     // this row, and `@anchor` in chat now names the chief, never the bare bot.
@@ -525,37 +526,32 @@ describe("orgRoles.staff", () => {
     expect(row.persistent).toBe(true);
   });
 
-  test("the review's own briefing names an ended program, and a seat hired earlier takes the new text", async () => {
-    const { COMPANY_REVIEW_PROMPT } = await import("./orgRoles");
-    expect(COMPANY_REVIEW_PROMPT).toContain("program_ended");
-    expect(COMPANY_REVIEW_PROMPT).toContain("the retirement or the review its tenure names");
+  test("the review routine runs the review in the seat's own thread, carries its role, and a seat hired earlier takes the new text", async () => {
+    // Reviewing the structure is one job (org-staffing.md S26), run in the
+    // seat's own thread: it starts no session, so a seat that does not start
+    // work on its own still reviews.
+    expect(COMPANY_REVIEW_PROMPT).not.toContain("cast spawn");
+    expect(COMPANY_REVIEW_PROMPT).toContain("Run `cast org review`");
+    expect(COMPANY_REVIEW_PROMPT).toContain("in your own thread");
     const { ctx, tables } = world({ agent_task_revisions: [] });
     await performStaff(ctx, ME as any, { team_id: TEAM, adopt_conversation_id: "mine" });
     const routine = tables.agent_tasks[0];
+    expect(String(routine.role_id)).toBe(String(tables.org_roles[0]._id));
     routine.prompt = "Company review. The old text.";
+    delete routine.role_id;
     // The backfill refreshes a live routine and never creates one.
     await performBackfillSeatedChiefs(ctx, false);
     expect(routine.prompt).toBe(COMPANY_REVIEW_PROMPT);
+    expect(String(routine.role_id)).toBe(String(tables.org_roles[0]._id));
     expect(tables.agent_tasks).toHaveLength(1);
     routine.status = "cancelled";
     await performBackfillSeatedChiefs(ctx, false);
     expect(tables.agent_tasks).toHaveLength(1);
   });
 
-  test("the charter is written at principle level and carries the capacity model", () => {
-    expect(CHIEF_OF_STAFF_CHARTER).toContain("The executives decide; you propose");
-    expect(CHIEF_OF_STAFF_CHARTER).toContain("smallest change");
-    expect(CHIEF_OF_STAFF_CHARTER).toContain("never apply");
-    // S24: the review is a conversation led by the reporting structure, with small proposals as cards.
-    expect(CHIEF_OF_STAFF_CHARTER).toContain("The review is a conversation with the person you report to");
-    expect(CHIEF_OF_STAFF_CHARTER).toContain("Lead with the reporting structure: who reports to whom, what each role looks after, and where the person's own sessions go");
-    expect(CHIEF_OF_STAFF_CHARTER).toContain("post it as a small proposal and put its short id on its own line");
-    expect(CHIEF_OF_STAFF_CHARTER).toContain("never one large document");
-    expect(CHIEF_OF_STAFF_CHARTER).toContain("A message never cites an id, never talks about you");
-    expect(CHIEF_OF_STAFF_CHARTER).not.toMatch(/phone|summary first/);
-    expect(COMPANY_REVIEW_PROMPT).toContain("open the conversation with the person you report to");
-    expect(COMPANY_REVIEW_PROMPT).toContain("as a small proposal with its short id on its own line");
-    expect(CHIEF_OF_STAFF_CHARTER).toContain("open_tasks");
+  test("the charter is the right hand's job its opening states, for the person it reports to", () => {
+    expect(chiefOfStaffCharter("Ada").startsWith("Your job is to keep Ada's goals in view and the company moving toward them.")).toBe(true);
+    expect(chiefOfStaffCharter("Ada")).not.toContain("{person}");
   });
 });
 

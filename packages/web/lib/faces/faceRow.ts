@@ -198,8 +198,11 @@ export type FaceRowInput = {
     micDenied: boolean;
     camera: boolean;
     speaking: string[];
+    /** Who has a camera up in the call, by identity. The same list in every
+     *  window: the tracks' own in the window holding them, the host's mirror
+     *  everywhere else, so the header draws video exactly where the float does. */
+    cameras: string[];
   };
-  tiles: { identity: string; isLocal: boolean; kind: string }[];
   followLeaderId: string | null;
   rings: {
     incoming: { from_user: unknown; room_key: string; from_name?: string }[];
@@ -479,8 +482,7 @@ export function deriveFaceRow(input: FaceRowInput, prev: FaceRow | null): FaceRo
   const namedIds = new Set(parsed?.kind === "dm" ? parsed.users.map(String) : []);
   const prevById = new Map((prev?.entries ?? []).map((e) => [e.id, e]));
   const prevOrder = new Map((prev?.entries ?? []).map((e, i) => [e.id, i]));
-  const cameraOf = new Map<string, boolean>();
-  for (const t of input.tiles) if (t.kind === "camera") cameraOf.set(t.identity, true);
+  const cameraOf = new Set(input.call.cameras);
 
   const rows: { entry: FaceEntry; member: FaceMember; linked: boolean }[] = [];
   const links: Link[] = [];
@@ -516,7 +518,7 @@ export function deriveFaceRow(input: FaceRowInput, prev: FaceRow | null): FaceRo
       tier: tierOf(state, linked, m),
       state,
       level: state === "talking-to-me" || state === "speaking" ? "voice" : null,
-      video: inMyRoom && cameraOf.get(id) ? "remote" : null,
+      video: inMyRoom && cameraOf.has(id) ? "remote" : null,
       muted: inMyRoom ? seat?.muted === true : false,
       followed: input.followLeaderId === id,
       joinedAgo: inMyRoom && stamp ? Math.max(0, input.now - stamp) : null,
@@ -568,7 +570,7 @@ export function deriveFaceRow(input: FaceRowInput, prev: FaceRow | null): FaceRo
       tier: "me",
       state,
       level: micOpen ? "mic" : null,
-      video: inCall && (input.call.camera || cameraOf.get(meId)) ? "self" : null,
+      video: inCall && (input.call.camera || cameraOf.has(meId)) ? "self" : null,
       muted: inCall && mode === "call" ? input.call.muted : false,
       followed: false,
       joinedAgo: null,
@@ -633,11 +635,6 @@ function walkieRowSig(w: WalkieStatus): string {
   return `${live?.key ?? ""}|${live?.mode ?? ""}|${s ? `${s.roomKey}:${s.live ? 1 : 0}:${s.heardLive ? 1 : 0}` : ""}|${w.incoming?.fromUserId ?? ""}:${w.incoming?.roomKey ?? ""}|${w.canReply ? 1 : 0}|${walkieJoinedRoom(w) ?? ""}|${walkieHoldsRoom(w, null) ? 1 : 0}`;
 }
 
-function tilesSig(tiles: { identity: string; isLocal: boolean; kind: string }[]): string {
-  let s = "";
-  for (const t of tiles) if (t.kind === "camera") s += `${t.identity}:${t.isLocal ? 1 : 0},`;
-  return s;
-}
 
 /** The clock the row needs: `joinedAgo` and a snooze running out move on
  *  this, the join notice on its own timer (JOIN_TITLE_MS is under one tick,
@@ -647,6 +644,12 @@ export const FACE_ROW_TICK_MS = 15_000;
 /** Unread DM messages per teammate, from the store's rail rows. Only rooms
  *  with exactly one other person, the same rule the people window uses. */
 export function dmUnreadByMember(st: any): ReadonlyMap<string, number> {
+  const out = new Map<string, number>();
+  for (const [id, badge] of dmBadgesOf(st)) out.set(id, badge.unread);
+  return out;
+}
+
+function dmBadgesOf(st: any) {
   const me = idOf(st.currentUser?._id);
   const rail: any[] = st.chatRail ?? [];
   const views = rail.map((r) => {
@@ -660,9 +663,25 @@ export function dmUnreadByMember(st: any): ReadonlyMap<string, number> {
       muted: r.notify_level === "muted",
     };
   });
-  const out = new Map<string, number>();
-  for (const [id, badge] of dmBadgesByMember(views as any)) out.set(id, badge.unread);
-  return out;
+  return dmBadgesByMember(views as any);
+}
+
+/** What is waiting for the viewer in their DM with one teammate: the count
+ *  the face wears, and their newest line when it is theirs. Null when
+ *  nothing is unread, so the card only speaks when the face is badged. */
+export type DmUnread = { channelId: string; unread: number; preview: string | null; at: number | null };
+
+export function dmUnreadOf(st: any, memberId: string): DmUnread | null {
+  const badge = dmBadgesOf(st).get(memberId);
+  if (!badge || badge.unread <= 0) return null;
+  const last = (st.chatRail ?? []).find((r: any) => String(r.channel_id) === badge.channelId)?.last_message;
+  const theirs = last && idOf(last.user_id) === memberId && !last.call;
+  return {
+    channelId: badge.channelId,
+    unread: badge.unread,
+    preview: theirs ? last.preview || null : null,
+    at: theirs ? last.created_at ?? null : null,
+  };
 }
 
 function railUnreadSig(st: any): string {
@@ -677,7 +696,6 @@ export function faceRowInputSig(
   st: any,
   walkie: WalkieStatus,
   announcement: JoinAnnouncement | null,
-  tiles: { identity: string; isLocal: boolean; kind: string }[],
   now: number,
 ): string {
   const call = walkieCallState();
@@ -689,8 +707,7 @@ export function faceRowInputSig(
     occupancySig(st.callOccupancy),
     liveRoomsSig(st.liveRooms),
     walkieRowSig(walkie),
-    `${call.phase}|${call.roomKey ?? ""}|${call.muted ? 1 : 0}|${call.micDenied ? 1 : 0}|${call.camera ? 1 : 0}|${call.speaking.join(",")}`,
-    tilesSig(tiles),
+    `${call.phase}|${call.roomKey ?? ""}|${call.muted ? 1 : 0}|${call.micDenied ? 1 : 0}|${call.camera ? 1 : 0}|${call.speaking.join(",")}|${call.cameras.join(",")}`,
     st.followLeaderId ?? "",
     ringsSig(st.myCalls),
     announcement ? `${announcement.roomKey}|${announcement.at}` : "",
@@ -707,7 +724,6 @@ export function faceRowInputFrom(
   st: any,
   walkie: WalkieStatus,
   announcement: JoinAnnouncement | null,
-  tiles: { identity: string; isLocal: boolean; kind: string }[],
   now: number,
 ): FaceRowInput {
   // The call as the host holds it: in a remote window this window's own
@@ -736,8 +752,8 @@ export function faceRowInputFrom(
       micDenied: call.micDenied,
       camera: call.camera,
       speaking: call.speaking,
+      cameras: call.cameras,
     },
-    tiles,
     followLeaderId: st.followLeaderId ?? null,
     rings: { incoming: st.myCalls?.incoming ?? [], outgoing: st.myCalls?.outgoing ?? [] },
     announcement,
@@ -758,8 +774,8 @@ let lastRow: FaceRow = EMPTY_ROW;
 // of faces, each with its own subscription, costs one signature per write.
 let lastInputs: { st: unknown; walkie: unknown; announcement: unknown; tiles: unknown; tick: number } | null = null;
 
-/** A stand in for the engine, from the console: the walkie's status, the
- *  join announcement and the camera tiles as a demo wants them, so every
+/** A stand in for the engine, from the console: the walkie's status and the
+ *  join announcement as a demo wants them (cameras ride `input.call`), so every
  *  state of the row can be looked at without a second person on the line.
  *  `window.__faceRow.fake({ walkie: {...} })` sets it, `fake(null)` clears it;
  *  the store half of the input (the roster, the seats, the rings, the call
@@ -767,10 +783,9 @@ let lastInputs: { st: unknown; walkie: unknown; announcement: unknown; tiles: un
 type FaceRowFake = {
   walkie?: Partial<WalkieStatus>;
   announcement?: JoinAnnouncement | null;
-  tiles?: { identity: string; isLocal: boolean; kind: string }[];
   /** Laid over the gathered input last: seats, rings and the call plane as
    *  the demo wants them, with no store write and so no engine reacting. */
-  input?: Partial<Omit<FaceRowInput, "walkie" | "announcement" | "tiles">>;
+  input?: Partial<Omit<FaceRowInput, "walkie" | "announcement">>;
 };
 let fake: FaceRowFake | null = null;
 let fakeSeq = 0;
@@ -788,7 +803,9 @@ export function readFaceRow(): FaceRow {
   const st = useInboxStore.getState();
   const walkie = fake?.walkie ? { ...getWalkieStatus(), ...fake.walkie } : getWalkieStatus();
   const announcement = fake && "announcement" in fake ? (fake.announcement ?? null) : getJoinAnnouncement();
-  const tiles = fake?.tiles ?? getCallTiles();
+  // The tiles are read for their identity only: a camera coming or going in
+  // this window is a new array, and the call state below reads who from it.
+  const tiles = getCallTiles();
   const now = Date.now();
   const tick = Math.floor(now / FACE_ROW_TICK_MS);
   const li = lastInputs;
@@ -796,10 +813,10 @@ export function readFaceRow(): FaceRow {
     return lastRow;
   }
   lastInputs = { st, walkie, announcement, tiles, tick };
-  const sig = faceRowInputSig(st, walkie, announcement, tiles, now) + (fake ? `\u0001fake${fakeSeq}` : "");
+  const sig = faceRowInputSig(st, walkie, announcement, now) + (fake ? `\u0001fake${fakeSeq}` : "");
   if (sig === lastSig) return lastRow;
   lastSig = sig;
-  const gathered = faceRowInputFrom(st, walkie, announcement, tiles, now);
+  const gathered = faceRowInputFrom(st, walkie, announcement, now);
   lastRow = deriveFaceRow(fake?.input ? { ...gathered, ...fake.input } : gathered, lastRow);
   return lastRow;
 }

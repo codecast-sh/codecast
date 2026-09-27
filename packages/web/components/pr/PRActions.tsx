@@ -35,8 +35,8 @@ import { sharePageUrl } from "../../lib/utils";
 import { useInboxStore } from "../../store/inboxStore";
 import { accentVar } from "../../lib/externalEvents";
 import { mergeStateMeta, notePlace, prStateKey, type CodeCommentRow } from "../../lib/prView";
-import { prPageHref } from "../../lib/repoView";
-import { useRepoFamily } from "../repo/useRepoFamily";
+import { prPageHref, toStandaloneHref } from "../../lib/repoView";
+import { useRepoFamily, useRepoLocation } from "../repo/useRepoFamily";
 
 // The verbs of a pull request, in codecast, reaching GitHub. Every one calls
 // the same server function `cast pr` calls (prCli), so the page and the CLI
@@ -78,6 +78,7 @@ export function ReviewMenu({
   sessionChoices = [],
   openThreads = 0,
   onWalk,
+  placement = "header",
 }: {
   pr: any;
   notes: CodeCommentRow[];
@@ -91,6 +92,9 @@ export function ReviewMenu({
   /** Open threads on the pull request, and the jump to the first: where a review starts. */
   openThreads?: number;
   onWalk?: () => void;
+  /** "bar" is the review bar pinned to the bottom of the page: a plain
+   *  button that opens the review upward, above itself. */
+  placement?: "header" | "bar";
 }) {
   const submit = useAction(api.reviews.submitPending);
   const hand = useMutation(api.reviews.handPendingToSession);
@@ -133,17 +137,34 @@ export function ReviewMenu({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button
-          type="button"
-          className={`pr-verb inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[12px] font-medium transition-colors ${count ? "" : "opacity-90"}`}
-          title="Review this pull request (r)"
-        >
-          <CircleDot className="w-3.5 h-3.5" />
-          {count ? `Review · ${count}` : "Review"}
-          <ChevronDown className="w-3 h-3 opacity-70" />
-        </button>
+        {placement === "bar" ? (
+          <button
+            type="button"
+            className="pr-verb inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors"
+            title="Choose a verdict and send your notes (r)"
+          >
+            <Send className="w-3.5 h-3.5" />
+            Finish review
+            <KeyCap size="xs">r</KeyCap>
+          </button>
+        ) : (
+          <button
+            type="button"
+            className={`pr-verb inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[12px] font-medium transition-colors ${count ? "" : "opacity-90"}`}
+            title={count ? `${count} ${count === 1 ? "note" : "notes"} waiting in your review (r)` : "Review this pull request (r)"}
+          >
+            <CircleDot className="w-3.5 h-3.5" />
+            {count ? `Review · ${count}` : "Review"}
+            <ChevronDown className="w-3 h-3 opacity-70" />
+          </button>
+        )}
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-[380px] p-0 bg-sol-bg border-sol-border">
+      <PopoverContent
+        align="end"
+        side={placement === "bar" ? "top" : "bottom"}
+        sideOffset={8}
+        className="w-[400px] p-0 bg-sol-bg border-sol-border"
+      >
         <div className="px-3.5 pt-3 pb-2 border-b border-sol-border/50">
           <div className="text-[10px] uppercase tracking-wider text-sol-text-dim">Your review</div>
           {count === 0 ? (
@@ -163,7 +184,7 @@ export function ReviewMenu({
               )}
             </div>
           ) : (
-            <ul className="mt-1.5 max-h-40 overflow-y-auto space-y-1">
+            <ul className="mt-1.5 max-h-60 overflow-y-auto space-y-1">
               {notes.map((note) => (
                 <li key={note._id}>
                   <button
@@ -177,6 +198,12 @@ export function ReviewMenu({
                 </li>
               ))}
             </ul>
+          )}
+          {count > 0 && (
+            <p className="mt-2 text-[11px] leading-relaxed text-sol-text-dim">
+              Only you can see {count === 1 ? "this note" : "these notes"} until you submit. Submitting posts
+              one review on GitHub under your account, with {count === 1 ? "the note" : "every note"} on {count === 1 ? "its line" : "their lines"}.
+            </p>
           )}
         </div>
 
@@ -235,10 +262,10 @@ export function ReviewMenu({
                 disabled={busy !== null}
                 onClick={() => (shepherd ? run("hand") : setPicking((v) => !v))}
                 className="inline-flex items-center gap-1.5 rounded-md border border-sol-border/60 px-3 py-1.5 text-[12px] text-sol-text-muted hover:text-sol-text hover:border-sol-cyan/50 transition-colors"
-                title={shepherd ? "The notes go to the shepherd session as one message and stay pending here" : "Pick a linked session to send the notes to"}
+                title={shepherd ? "The agent session watching this pull request gets the notes as one message; nothing goes to GitHub, and the notes stay here" : "Pick a linked session to send the notes to; nothing goes to GitHub"}
               >
                 <Radio className="w-3.5 h-3.5" />
-                {busy === "hand" ? "Sending" : shepherd ? "Send to shepherd" : "Send to session"}
+                {busy === "hand" ? "Sending" : "Send to the session"}
               </button>
             )}
             {picking && !shepherd && (
@@ -387,7 +414,11 @@ export function MoreMenu({
   const [login, setLogin] = useState("");
   const locator = { repository: pr.repository, number: pr.number };
   const state = prStateKey(pr);
-  const pageUrl = sharePageUrl(prPageHref(pr.repository, pr.number, family));
+  // The link is to where the reader is (the view, the file, the lines), in
+  // the public form that opens for anyone, in a browser or in the app.
+  const loc = useRepoLocation();
+  const here = loc.pathname.includes(`/${pr.number}`) ? `${loc.pathname}${loc.hash}` : prPageHref(pr.repository, pr.number, family);
+  const pageUrl = sharePageUrl(toStandaloneHref(here));
   const githubUrl = `https://github.com/${pr.repository}/pull/${pr.number}`;
   const branch = pr.head_ref && pr.base_ref ? `${pr.head_ref} -> ${pr.base_ref}` : "";
   const openish = state === "open" || state === "draft";

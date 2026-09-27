@@ -48,7 +48,10 @@ function createShellAuthority({ ipcMain, origins, openExternal }) {
   return { register, ipc, admits, isShell, permission, frameOwner };
 }
 
-function installShellCapabilities({ authority, session, desktopCapturer, permissions }) {
+// `onDisplaySource(owner, source)` hears which source a shell renderer's
+// capture actually got (its own pick, or the fallback screen), so the shell can
+// put things over what is being shared: teammates' cursors (shareCursors.js).
+function installShellCapabilities({ authority, session, desktopCapturer, permissions, onDisplaySource }) {
   session.setPermissionRequestHandler((wc, permission, callback, details) => {
     callback(permissions().has(permission) && authority.permission(wc, details));
   });
@@ -62,13 +65,14 @@ function installShellCapabilities({ authority, session, desktopCapturer, permiss
     const sources = await desktopCapturer.getSources({
       types,
       thumbnailSize: { width: 320, height: 200 },
-      fetchWindowIcons: false,
+      fetchWindowIcons: true,
     });
     return sources.map((src) => ({
       id: src.id,
       name: src.name,
       kind: src.id.startsWith("screen:") ? "screen" : "window",
       thumbnail: src.thumbnail.toDataURL(),
+      appIcon: src.appIcon && !src.appIcon.isEmpty() ? src.appIcon.toDataURL() : undefined,
     }));
   });
   authority.ipc.handle("select-display-source", (e, id) => {
@@ -90,7 +94,10 @@ function installShellCapabilities({ authority, session, desktopCapturer, permiss
       .then((sources) => {
         if (authority.frameOwner(frame) !== owner || frame.url !== requestingUrl) return callback({});
         const pick = (wanted && sources.find((s) => s.id === wanted)) || sources.find((s) => s.id.startsWith("screen:")) || sources[0];
-        if (pick) callback({ video: pick, audio: request.audioRequested ? "loopback" : undefined });
+        if (pick) {
+          onDisplaySource?.(owner, { id: pick.id, displayId: pick.display_id || null });
+          callback({ video: pick, audio: request.audioRequested ? "loopback" : undefined });
+        }
         else callback({});
       })
       .catch(() => callback({}));

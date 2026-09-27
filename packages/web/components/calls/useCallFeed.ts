@@ -98,7 +98,10 @@ export function openFeedTargetPicker(opts: {
 }
 
 export type TranscriptExcerpt = {
-  segments: Array<{ speaker_name: string; text: string }>;
+  segments: Array<{ speaker_name: string; text: string; seq?: number }>;
+  /** The call it came from: a send to a session records the link
+   *  (call_session_links), so each side can reach the other. */
+  transcriptId?: string;
   title?: string | null;
   startedAt: number;
   live: boolean;
@@ -228,16 +231,32 @@ const DEFAULT_ASK =
 // One-shot: hand an excerpt to a target. Returns the conversation id for
 // session targets (so callers can follow up), null otherwise.
 export function useSendExcerpt() {
+  const convex = useConvex();
   return useCallback(async (target: FeedTarget, excerpt: TranscriptExcerpt, note?: string) => {
     const store = useInboxStore.getState() as any;
+    const link = (conversation: string) => {
+      const seqs = excerpt.segments.map((s) => s.seq).filter((n): n is number => typeof n === "number");
+      if (!excerpt.transcriptId || seqs.length === 0) return;
+      void convex
+        .mutation(api.transcripts.linkExcerpt, {
+          transcript_id: excerpt.transcriptId as any,
+          conversation,
+          from_seq: Math.min(...seqs),
+          to_seq: Math.max(...seqs),
+        })
+        .catch(() => {});
+    };
     if (target.kind === "session") {
       store.sendMessage(target.id, excerptBody(excerpt, note));
       store.openSidePanel(target.id);
+      link(target.id);
       return target.id;
     }
     if (target.kind === "new-session") {
       const body = excerptBody(excerpt, note) + ((note ?? "").trim() ? "" : `\n\n${DEFAULT_ASK}`);
-      return await spawnSessionWithMessage(body);
+      const convexId = await spawnSessionWithMessage(body);
+      link(convexId);
+      return convexId;
     }
     if (target.kind === "new-doc") {
       const when = new Date(excerpt.startedAt).toLocaleDateString([], {
@@ -251,7 +270,7 @@ export function useSendExcerpt() {
       return null;
     }
     return null;
-  }, []);
+  }, [convex]);
 }
 
 // Live feed: point the flowing words at a target. If nobody is scribing yet,

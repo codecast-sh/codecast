@@ -92,6 +92,10 @@ describe("syncAgentFeeds", () => {
         { _id: "f1", conversation_id: "conv1", transcript_id: "t1", room_key: "session:conv1", added_by: "ua" },
         { _id: "f2", conversation_id: "conv2", transcript_id: "t1", room_key: "session:conv1", added_by: "ua" },
       ],
+      // Written when conv1's feed was first added; the link outlives it.
+      call_session_links: [
+        { _id: "l1", transcript_id: "t1", conversation_id: "conv1", added_by: "ua", created_at: 1, updated_at: 1, live: true },
+      ],
       messages: [],
     });
     await syncAgentFeeds(ctx, transcript() as any);
@@ -235,6 +239,23 @@ describe("mirrorAgentTurn", () => {
     const again = await call(mirrorAgentTurn, ctx, { conversation_id: "conv1", attempt: 1 });
     expect(again.mirrored).toBe(false);
     expect(ctx._scheduled).toHaveLength(1);
+  });
+
+  test("a turn that passed posts nothing and moves the watermark past it", async () => {
+    const ctx = ctxWith({
+      call_agent_feeds: [feed()],
+      transcripts: [transcript()],
+      messages: [
+        { _id: "m1", conversation_id: "conv1", role: "assistant", content: "earlier", timestamp: 1 },
+        { _id: "m2", conversation_id: "conv1", role: "assistant", content: " [PASS]\n", timestamp: 2 },
+      ],
+      call_chat_messages: [],
+    });
+    const out = await call(mirrorAgentTurn, ctx, { conversation_id: "conv1", attempt: 0 });
+    expect(out).toEqual({ mirrored: false, reason: "passed" });
+    expect(ctx.db._tables.call_chat_messages).toHaveLength(0);
+    expect(ctx.db._patched).toEqual([{ _id: "f1", patch: { last_mirrored_message_id: "m2" } }]);
+    expect(ctx._scheduled).toHaveLength(0);
   });
 
   test("a session nobody is feeding is left alone", async () => {
