@@ -11,6 +11,11 @@ mock.module("convex/react", () => ({ useAction: () => () => {} }));
 mock.module("next/link", () => ({ default: ({ children, ...props }: any) => <a {...props}>{children}</a> }));
 mock.module("../../repo/RepoWindowControl", () => ({ RepoWindowControl: () => null }));
 mock.module("../../comments/CommentAvatar", () => ({ CommentAvatar: () => null }));
+// The session pill resolves titles from the live store; here it is the link
+// it becomes, named by the title the header hands it.
+mock.module("../../EntityIdPill", () => ({
+  EntityIdPill: ({ id, fallback }: any) => <a href={`/conversation/${id}`}>{fallback}</a>,
+}));
 const { act } = await import("react");
 const { createRoot } = await import("react-dom/client");
 const { PRHeader } = await import("../../pr/PRHeader");

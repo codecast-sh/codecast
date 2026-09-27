@@ -30,11 +30,15 @@ test("the built addon answers from inside an app bundle and never throws outside
   } catch {
     return;
   }
-  assert.deepEqual(Object.keys(addon).sort(), ["authorizationStatus", "onActivate", "post", "requestAuthorization"]);
+  assert.deepEqual(Object.keys(addon).sort(), ["authorizationStatus", "onActivate", "post", "requestAuthorization", "windowFrame"]);
   assert.equal(addon.authorizationStatus(), -1);
   assert.equal(addon.requestAuthorization(), undefined);
   assert.equal(addon.post("title", "body"), null);
   assert.equal(addon.onActivate(() => {}), undefined);
+  // A window that does not exist, or no id at all, is null rather than a throw.
+  assert.equal(addon.windowFrame(0), null);
+  assert.equal(addon.windowFrame(2 ** 31 - 2), null);
+  assert.equal(addon.windowFrame(), null);
 });
 
 // Every notification the app shows goes through the modern API once the

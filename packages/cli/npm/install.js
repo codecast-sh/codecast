@@ -16,21 +16,27 @@ const checksums = require("./checksums.json");
 
 const REPO = "codecast-sh/codecast";
 
+// codecast runs inside WSL on Windows. A global npm install on Windows
+// writes a POSIX `cast` launcher next to cast.cmd, and WSL puts the Windows
+// PATH on its own, so that launcher shadows the real Linux install and fails
+// with "node: not found". The refusal runs in preinstall: npm writes the
+// launchers before postinstall, and a failed postinstall leaves them behind
+// pointing at nothing.
+const WINDOWS_MESSAGE =
+  "codecast does not install through npm on Windows. It runs inside WSL.\n" +
+  "In PowerShell, run:\n" +
+  "  irm codecast.sh/install.ps1 | iex\n" +
+  "That sets up WSL if needed and installs codecast inside it.";
+
 function platformKey() {
-  const platform = { darwin: "darwin", linux: "linux", win32: "windows" }[process.platform];
-  // Windows on ARM runs x64 binaries under emulation; no native arm64 build.
-  const arch = process.platform === "win32" ? "x64" : { arm64: "arm64", x64: "x64" }[process.arch];
+  const platform = { darwin: "darwin", linux: "linux" }[process.platform];
+  const arch = { arm64: "arm64", x64: "x64" }[process.arch];
   if (!platform || !arch) return null;
   return `${platform}-${arch}`;
 }
 
-function assetName(key) {
-  return key.startsWith("windows") ? `codecast-${key}.exe` : `codecast-${key}`;
-}
-
 function binaryPath() {
-  const ext = process.platform === "win32" ? ".exe" : "";
-  return path.join(__dirname, "vendor", `codecast${ext}`);
+  return path.join(__dirname, "vendor", "codecast");
 }
 
 function download(url, dest, redirects = 0) {
@@ -74,7 +80,7 @@ async function install() {
   const dest = binaryPath();
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   const tmp = `${dest}.download`;
-  const url = `https://github.com/${REPO}/releases/download/v${pkg.version}/${assetName(key)}`;
+  const url = `https://github.com/${REPO}/releases/download/v${pkg.version}/codecast-${key}`;
 
   await download(url, tmp);
 
@@ -94,6 +100,11 @@ async function install() {
 }
 
 if (require.main === module) {
+  if (process.platform === "win32") {
+    console.error(WINDOWS_MESSAGE);
+    process.exit(1);
+  }
+  if (process.argv.includes("--check-platform")) process.exit(0);
   install().catch((err) => {
     // Network trouble at install time is survivable — the launcher retries
     // the download on first run. Don't fail the whole `npm install` for it.
@@ -102,4 +113,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { install, binaryPath };
+module.exports = { install, binaryPath, WINDOWS_MESSAGE };

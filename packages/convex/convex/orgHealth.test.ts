@@ -237,6 +237,11 @@ describe("org.health", () => {
     expect(cos.flags).toEqual([]);
     // Growth's own numbers are untouched by the root seat.
     expect(whole.roles.find((x) => x.handle === "growth")!.ledger.open_tasks).toBe(27);
+    // Retire the lead and its area falls back to the root seat (S26).
+    db._tables.org_roles.find((r: any) => r._id === GROWTH).status = "retired";
+    const after = (await computeOrgHealth(ctxOf(db), ME as any, TEAM, NOW)).roles.find((x) => x.handle === "chief-of-staff")!;
+    expect(after.counted).toMatchObject({ rule: "remainder", projects: 2, plans: 4 });
+    expect(after.ledger.open_tasks).toBe(3 + 27);
   });
 
   test("a non member sees nothing of the team; a personal workspace reads the caller's roles", async () => {

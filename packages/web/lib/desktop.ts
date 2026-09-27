@@ -282,6 +282,37 @@ export function meetingOfferOpenCall(transcriptId: string): void {
   bridge("meetingOfferOpenCall")?.(transcriptId);
 }
 
+// ── Share cursors ─────────────────────────────────────────────────────────
+//
+// Teammates' pointers over MY screen share, drawn on my real screen by the
+// shell (electron shareCursors.js), which knows what the capture covers.
+// Rides the generic app IPC, so a shell without the handler just rejects:
+// the first rejection turns the forwarder off for this renderer.
+
+export type ShareCursor = { id: string; name: string; nx: number; ny: number };
+
+let shareCursorsUnsupported = false;
+
+/** The cursors pointing at my share right now; an empty list clears them. */
+export function sendShareCursors(cursors: ShareCursor[]): void {
+  if (shareCursorsUnsupported || !isElectron()) return;
+  const call = bridge("call");
+  if (!call) {
+    shareCursorsUnsupported = true;
+    return;
+  }
+  call("share-cursors", cursors).catch(() => {
+    shareCursorsUnsupported = true;
+  });
+}
+
+/** The glass window's side: what the shell asks it to draw. */
+export function onShareCursors(cb: (cursors: ShareCursor[]) => void): () => void {
+  const subscribe = bridge("subscribe");
+  if (!subscribe) return () => {};
+  return subscribe("share-cursors", (payload) => cb(Array.isArray(payload) ? (payload as ShareCursor[]) : []));
+}
+
 // ── The ring window ───────────────────────────────────────────────────────
 //
 // An incoming huddle, as a card in a window of its own. A ring is the one
@@ -423,8 +454,19 @@ export type VoiceOpenPayload = {
 export type VoiceMirror = {
   walkie: unknown;
   /** `speaking` is the host's active speaker list: a remote's face row draws
-   *  the speaking ring from it, and my own camera face from `camera`. */
-  call: { roomKey: string | null; phase: string; muted: boolean; micDenied: boolean; camera: boolean; speaking: string[] };
+   *  the speaking ring from it, and my own camera face from `camera`.
+   *  `cameras` is who has a camera up in the host's room, by identity: the
+   *  header's circles draw those people as video (the relayed frames), the
+   *  same as the float does from the tracks. Absent from an older host. */
+  call: {
+    roomKey: string | null;
+    phase: string;
+    muted: boolean;
+    micDenied: boolean;
+    camera: boolean;
+    speaking: string[];
+    cameras?: string[];
+  };
 };
 
 export type DesktopDisplaySource = {
@@ -433,6 +475,8 @@ export type DesktopDisplaySource = {
   kind: "screen" | "window";
   /** data: URL thumbnail, ~320px wide. */
   thumbnail: string;
+  /** data: URL of the owning app's icon, windows only. Absent on older shells. */
+  appIcon?: string;
 };
 
 export function isElectron(): boolean {

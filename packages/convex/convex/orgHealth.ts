@@ -7,7 +7,7 @@ import { collectOrgSessions, computeScopeFeed, requireWorkspaceCaller, resolveSc
 import { planProjectsOf } from "./orgRoles";
 import { capsFor, countersFor, utcDay } from "./lib/orgCaps";
 import { isWholeWorkspace, scopeIds } from "./lib/orgScope";
-import { projectsWithoutAnOwnerAmongWatchers } from "@codecast/shared/contracts/orgLead";
+import { ownsWork, projectsWithoutAnOwnerAmongWatchers } from "@codecast/shared/contracts/orgLead";
 import { capacity, capacityFlags, type HealthFlag, isOverloaded, overloadRatio, type RoleLedger, type RoleLoad } from "@codecast/shared/contracts/orgCapacity";
 import { computeReportingPeople } from "./orgGoals";
 import { extractRepoFromRemoteUrl } from "@codecast/shared/contracts";
@@ -366,19 +366,16 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
     members: [],
   });
 
-  // What the narrower roles cover, once: a scope's projects (a named plan
-  // covers its project too) and its plans (a covered project's plans too).
-  // Ownership of a project is a role naming it, never a whole workspace
-  // scope: that is the root's view (the chief of staff, a role created with
-  // no scope), so it leaves the unowned signal alone.
+  // The projects a narrower role covers, once: its scope names them directly
+  // or through one of their plans. A whole workspace scope is the root's view
+  // (the chief of staff, a role created with no scope), so it leaves the
+  // unowned signal alone: the remainder it holds is what needs an owner.
   const coveredProjects = new Set<string>();
-  const coveredPlans = new Set<string>();
   for (const r of roles) {
     const ids = scopeIds(r.scope ?? { project_ids: [], plan_ids: [] });
     for (const id of ids.project_ids) coveredProjects.add(id);
-    for (const id of ids.plan_ids) { coveredPlans.add(id); const pr = planProjectOf.get(id); if (pr) coveredProjects.add(pr); }
+    for (const id of ids.plan_ids) { const pr = planProjectOf.get(id); if (pr) coveredProjects.add(pr); }
   }
-  for (const pid of coveredProjects) for (const p of plansByProject.get(pid) ?? []) coveredPlans.add(String(p._id));
   const inScope = (projectIds: Set<string>, planIds: Set<string>) => ({
     tasks: tasks.filter((t) => (t.project_id && projectIds.has(String(t.project_id))) || (t.plan_id && planIds.has(String(t.plan_id)))),
     plans: plans.filter((p) => planIds.has(String(p._id))),
@@ -391,16 +388,22 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
   // under either. Evaluated here over the workspace's complete open set
   // (readWorkTasks) rather than by a second index read per role, which is
   // the same rows at a fraction of the read budget. A whole workspace role
-  // holds the remainder: what no narrower role covers, which is the work it
-  // exists to find an owner for. `counted` says which rule a row used.
+  // holds the remainder: the work it owns by the one ownership rule
+  // (contracts/orgLead ownerOf, org-staffing.md S26), which is what no
+  // narrower role covers. `counted` says which rule a row used.
   const tasksTruncated = work.any_truncated;
+  const planProject = (planId: any) => planById.get(String(planId))?.project_id ?? planProjectOf.get(String(planId)) ?? undefined;
   const itemsOf = async (role: any) => {
     const ids = scopeIds(role.scope ?? { project_ids: [], plan_ids: [] });
     if (isWholeWorkspace(ids)) {
-      const projectIds = new Set(projects.map((p) => String(p._id)).filter((id) => !coveredProjects.has(id)));
-      const planIds = new Set(plans.map((p) => String(p._id)).filter((id) => !coveredPlans.has(id)));
-      const rest = inScope(projectIds, planIds);
-      const items = { ...rest, tasks: [...rest.tasks, ...tasks.filter((t) => !t.project_id && !t.plan_id)] };
+      const owns = (w: { project_id?: unknown; plan_id?: unknown }) => ownsWork(role, w, roles);
+      const projectIds = new Set(projects.filter((p) => owns({ project_id: p._id })).map((p) => String(p._id)));
+      const planIds = new Set(plans.filter((p) => owns({ plan_id: p._id, project_id: p.project_id })).map((p) => String(p._id)));
+      const items = {
+        tasks: tasks.filter((t) => owns({ plan_id: t.plan_id, project_id: t.project_id ?? (t.plan_id ? planProject(t.plan_id) : undefined) })),
+        plans: plans.filter((p) => planIds.has(String(p._id))),
+        projectIds,
+      };
       return {
         ...items,
         resolved: null as ResolvedScope | null,

@@ -15,7 +15,7 @@
 
 import { useTeamFeature } from "../../lib/teamFeatures";
 import { useMemo, useRef, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -23,7 +23,7 @@ import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { toast } from "sonner";
-import { humanizeConvexError, isRecRoomKey } from "@codecast/shared/contracts";
+import { callLinkHow, humanizeConvexError, isRecRoomKey } from "@codecast/shared/contracts";
 import { joinCall } from "../../lib/calls/callManager";
 import { isConvexId, useInboxStore } from "../../store/inboxStore";
 import { Facepile } from "../../components/calls/OccupancyChip";
@@ -38,6 +38,7 @@ import {
   type TranscriptExcerpt,
 } from "../../components/calls/useCallFeed";
 import { firstName, speakerColor } from "../../components/calls/speakers";
+import { FeedChip } from "../../components/calls/FeedChip";
 import { useMutation } from "convex/react";
 import {
   DropdownMenu,
@@ -283,6 +284,27 @@ function CallDetail({ id }: { id: string }) {
   // Selection resets when the viewer moves to another call.
   useWatchEffect(() => clearSelection(), [id]);
 
+  // A link from a session (?turns=<from seq>-<to seq>) opens on the excerpt
+  // that session was sent: those turns selected and in view.
+  const turnsParam = useSearchParams()?.get("turns") ?? null;
+  const landed = useRef<string | null>(null);
+  useWatchEffect(() => {
+    const key = `${id}:${turnsParam}`;
+    if (!turnsParam || turns.length === 0 || landed.current === key) return;
+    const [from, to] = turnsParam.split("-").map(Number);
+    if (!Number.isFinite(from) || !Number.isFinite(to)) return;
+    const hit = turns
+      .map((t, i) => (t.segments.some((sg: any) => sg.seq >= from && sg.seq <= to) ? i : -1))
+      .filter((i) => i >= 0);
+    if (hit.length === 0) return;
+    landed.current = key;
+    setAnchor(hit[0]);
+    setEnd(hit[hit.length - 1]);
+    queueMicrotask(() =>
+      document.querySelector(`[data-turn="${turns[hit[0]].index}"]`)?.scrollIntoView({ block: "center" }),
+    );
+  }, [id, turnsParam, turns]);
+
   const live = isLive;
 
   if (call === undefined) {
@@ -301,6 +323,7 @@ function CallDetail({ id }: { id: string }) {
         : (call.segments ?? []);
     return {
       segments: chosen,
+      transcriptId: String(call._id),
       title: call.title,
       startedAt: call.started_at,
       live,
@@ -381,6 +404,22 @@ function CallDetail({ id }: { id: string }) {
                 >
                   {firstName(p.name)}
                 </span>
+              ))}
+            </span>
+          )}
+          {/* The sessions this call reached (fed live or sent an excerpt):
+              the way from the call to its agents. */}
+          {(call.sessions || []).length > 0 && (
+            <span className="flex flex-wrap items-center gap-1.5">
+              {(call.sessions || []).map((s: any) => (
+                <FeedChip
+                  key={s.conversation_id}
+                  route={{ kind: "session", target: s.conversation_id, mode: "live" }}
+                  fallback={s.name}
+                  removable={false}
+                  onOpen={() => useInboxStore.getState().openSidePanel(s.conversation_id)}
+                  title={`${s.title} · ${callLinkHow(s)}`}
+                />
               ))}
             </span>
           )}

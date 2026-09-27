@@ -20,6 +20,7 @@ import { MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS } from "../../messageMarkdown"
 import { extractSendBody, extractChatSendArgs, normalizeCastCategory, extractCastBodyParts, extractStateArgs, extractBrowserDoSteps, splitBrowserDoOutput, extractDecideArgs, browserTabOf, type CastBodyPart, type ChatSendArgs, type DecideArgs } from "../../castCommand";
 import { useInboxStore, useTrackedStore, type SessionDecisionItem } from "../../../store/inboxStore";
 import { DocDates } from "../../DocDates";
+import { DecisionAnswerControls } from "../../decisions/DecisionAnswerControls";
 import { FileText, CornerUpRight, BookOpen, Check, Split, Pin } from "lucide-react";
 import { ImageBlock } from "./interactiveBlocks";
 import { CastBrowserRowContext, ChatWakeContext } from "../../../lib/conversationBlockContexts";
@@ -448,7 +449,10 @@ function CastDecideBlock({ decide, rawCmd, output, isError, conversationId }: { 
     : undefined;
   const muted = statusKey === "dismissed" || statusKey === "withdrawn";
   const verbLabel = decide.verb === "edit" ? "decision edited" : decide.verb === "cancel" ? "decision withdrawn" : "decision";
-
+  // An open ask is answerable right here, through the same controls the
+  // queue card uses; every other state is the record of what happened.
+  const answerDecision = useInboxStore((st) => st.answerDecision);
+  const answerable = !isEdit && !withdrawnHere && row?.status === "pending";
 
   return (
     <div data-cc-decide className="my-1">
@@ -490,7 +494,15 @@ function CastDecideBlock({ decide, rawCmd, output, isError, conversationId }: { 
               )}
             </CollapsibleBody>
           )}
-          {!withdrawnHere && options.length > 0 && (
+          {answerable && row && (
+            <DecisionAnswerControls
+              decision={row}
+              size="compact"
+              onAnswer={(input) => answerDecision(row._id, input)}
+              onDismiss={() => answerDecision(row._id, { dismiss: true })}
+            />
+          )}
+          {!answerable && !withdrawnHere && options.length > 0 && (
             <div className="flex flex-col gap-1">
               {options.map((o, i) => {
                 const chosen = row?.status === "answered" && row.answer_index === i;

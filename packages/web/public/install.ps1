@@ -46,6 +46,21 @@ if (Test-Path (Join-Path $legacyDir "codecast.exe")) {
     }
 }
 
+# The npm package on Windows leaves a POSIX `cast` launcher in npm's global
+# folder. WSL appends the Windows PATH to its own, so a WSL shell that has not
+# picked up ~/.local/bin runs that launcher and fails with "node: not found".
+$npm = Get-Command npm -ErrorAction SilentlyContinue
+if ($npm) {
+    & cmd.exe /c "npm ls -g --depth=0 @codecast-sh/cli >nul 2>&1"
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "Removing the npm install of codecast from Windows (it runs inside WSL instead)..."
+        & cmd.exe /c "npm uninstall -g @codecast-sh/cli >nul 2>&1"
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Could not remove it. Run this yourself:  npm uninstall -g @codecast-sh/cli" -ForegroundColor Yellow
+        }
+    }
+}
+
 # --- 2. Make sure WSL has a working distro ---
 
 $wsl = Get-Command wsl.exe -ErrorAction SilentlyContinue
@@ -118,9 +133,20 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
+# Link cast into /usr/local/bin. Every WSL shell searches it ahead of the
+# Windows folders WSL appends, including a shell opened before this install and
+# `wsl -- cast`, which never read the profile line install.sh wrote. An entry
+# already there is replaced only when it is ours. Passed with --exec and no
+# double quotes, so neither PowerShell nor a login shell re-parses the script.
+$wslHome = (& wsl.exe -e printenv HOME | Out-String).Trim()
+if ($wslHome -match '^/[A-Za-z0-9._/-]+$') {
+    $linkScript = 'T=$1/.local/bin/codecast; [ -x $T ] || exit 0; for n in cast codecast; do L=/usr/local/bin/$n; case $(readlink $L 2>/dev/null) in */.local/bin/codecast) ln -sfn $T $L; continue;; esac; [ -e $L ] || [ -L $L ] || ln -s $T $L; done'
+    & wsl.exe -u root -e sh -c $linkScript sh $wslHome
+}
+
 Write-Host ""
 Write-Host "codecast is installed inside WSL." -ForegroundColor Green
-Write-Host "Open a WSL terminal (run: wsl) and use 'cast' from there."
+Write-Host "Open a new WSL terminal (run: wsl) and use 'cast' from there."
 if (-not $setupToken) {
     Write-Host "Then run 'cast auth' to authenticate and start syncing."
 }

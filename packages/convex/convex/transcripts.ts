@@ -66,10 +66,10 @@ import {
   unionTranscribeLanguages,
 } from "@codecast/shared/contracts";
 import { characterOf } from "@codecast/shared/contracts/sessionCharacter";
-import { requireAccessibleDoc } from "./lib/access";
+import { canAccessConversation, requireAccessibleDoc } from "./lib/access";
 import { verifyApiToken } from "./apiTokens";
 import { enqueuePush } from "./pushRouter";
-import { postEvent } from "./callChat";
+import { agentIdentity, postEvent } from "./callChat";
 
 export { asrTranscriptionSession };
 
@@ -157,13 +157,15 @@ export async function syncAgentFeeds(ctx: any, t: Doc<"transcripts">): Promise<v
   const wanted = new Map<string, { conversationId: Id<"conversations">; addedBy: Id<"users"> }>();
   if (t.status === "live") {
     for (const r of t.routes) {
-      if (r.kind !== "session" || r.mode !== "live") continue;
+      if (r.kind !== "session") continue;
       const conv = await findConversationByAnyRefWhere(ctx, r.target, () => true);
       if (!conv) continue;
-      wanted.set(String(conv._id), {
-        conversationId: conv._id as Id<"conversations">,
-        addedBy: (r.added_by ?? t.started_by) as Id<"users">,
-      });
+      const addedBy = (r.added_by ?? t.started_by) as Id<"users">;
+      // Every session route is a lasting link, whatever its mode; only a live
+      // one makes the session a participant in the room.
+      await linkCallSession(ctx, t._id, conv._id as Id<"conversations">, addedBy, { live: true });
+      if (r.mode !== "live") continue;
+      wanted.set(String(conv._id), { conversationId: conv._id as Id<"conversations">, addedBy });
     }
   }
   for (const row of existing) {
@@ -207,6 +209,72 @@ export async function syncAgentFeeds(ctx: any, t: Doc<"transcripts">): Promise<v
     });
   }
 }
+
+const MAX_LINK_EXCERPTS = 20;
+
+/** Record that a call's words reached a session (call_session_links): once
+ *  per pair, so the call page lists its agents and the session names its
+ *  call long after any feed ended. `live` marks a feed; an excerpt appends
+ *  the seq range a one-shot send carried. */
+export async function linkCallSession(
+  ctx: any,
+  transcriptId: Id<"transcripts">,
+  conversationId: Id<"conversations">,
+  addedBy: Id<"users">,
+  how: { live: true } | { from_seq: number; to_seq: number },
+): Promise<void> {
+  const now = Date.now();
+  const existing: Doc<"call_session_links"> | null = (
+    await ctx.db
+      .query("call_session_links")
+      .withIndex("by_conversation", (q: any) => q.eq("conversation_id", conversationId))
+      .collect()
+  ).find((l: Doc<"call_session_links">) => String(l.transcript_id) === String(transcriptId)) ?? null;
+  const excerpt = "live" in how ? null : { from_seq: how.from_seq, to_seq: how.to_seq, at: now };
+  if (!existing) {
+    await ctx.db.insert("call_session_links", {
+      transcript_id: transcriptId,
+      conversation_id: conversationId,
+      added_by: addedBy,
+      created_at: now,
+      updated_at: now,
+      ...(excerpt ? { excerpts: [excerpt] } : { live: true }),
+    });
+    return;
+  }
+  if (!excerpt) {
+    if (!existing.live) await ctx.db.patch(existing._id, { live: true, updated_at: now });
+    return;
+  }
+  await ctx.db.patch(existing._id, {
+    excerpts: [...(existing.excerpts ?? []), excerpt].slice(-MAX_LINK_EXCERPTS),
+    updated_at: now,
+  });
+}
+
+/** One-time fill of call_session_links from the session routes past calls
+ *  still carry (a route stays on the transcript after the call ends). Pages
+ *  itself; run with no args. */
+export const backfillCallSessionLinks = internalMutation({
+  args: { cursor: v.optional(v.union(v.string(), v.null())) },
+  handler: async (ctx, args) => {
+    const page = await ctx.db.query("transcripts").paginate({ cursor: args.cursor ?? null, numItems: 100 });
+    let linked = 0;
+    for (const t of page.page) {
+      for (const r of t.routes ?? []) {
+        if (r.kind !== "session") continue;
+        const conv = await findConversationByAnyRefWhere(ctx, r.target, () => true);
+        if (!conv) continue;
+        await linkCallSession(ctx, t._id, conv._id as Id<"conversations">, (r.added_by ?? t.started_by) as Id<"users">, { live: true });
+        linked++;
+      }
+    }
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.transcripts.backfillCallSessionLinks, { cursor: page.continueCursor });
+    }
+    return { linked, done: page.isDone };
+  },
+});
 
 // A transcript the caller may write to: they started it and it is live.
 async function requireOwnLiveTranscript(
@@ -1338,6 +1406,8 @@ export const getLive = query({
       transcript_id: t._id,
       started_by: t.started_by,
       started_at: t.started_at,
+      // The room's team, so an agent spawned into it starts in that team's repo.
+      team_id: String(t.team_id),
       routes: t.routes.map((r: any) => ({
         kind: r.kind,
         target: r.target,
@@ -1489,6 +1559,7 @@ async function getCallCore(
       mode: r.mode,
       added_by: r.added_by ? String(r.added_by) : String(t.started_by),
     })),
+    sessions: await linkedSessions(ctx, userId, t._id),
     segments: segs.map((s: Doc<"transcript_segments">) => ({
       seq: s.seq,
       speaker_id: s.speaker_id,
@@ -1499,6 +1570,24 @@ async function getCallCore(
       at: s._creationTime,
     })),
   };
+}
+
+/** The sessions a call reached that the viewer may open, newest first. */
+async function linkedSessions(ctx: any, userId: Id<"users">, transcriptId: Id<"transcripts">) {
+  const links: Doc<"call_session_links">[] = await ctx.db
+    .query("call_session_links")
+    .withIndex("by_transcript", (q: any) => q.eq("transcript_id", transcriptId))
+    .collect();
+  links.sort((a, b) => b.updated_at - a.updated_at);
+  const out = [];
+  for (const l of links) {
+    const conv = await ctx.db.get(l.conversation_id);
+    if (!conv || !(await canAccessConversation(ctx, userId, conv))) continue;
+    const who = await agentIdentity(ctx, l.conversation_id);
+    if (!who) continue;
+    out.push({ ...who, live: !!l.live, excerpts: l.excerpts ?? [], added_by: String(l.added_by), at: l.updated_at });
+  }
+  return out;
 }
 
 export const webListCalls = query({
@@ -1516,6 +1605,64 @@ export const webGetCall = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) return null;
     return getCallCore(ctx, userId, args.transcript_id);
+  },
+});
+
+// A session's calls: every call whose words reached it (a live feed or a sent
+// excerpt) that the viewer may read. The header pill's way back to the call.
+export const webCallsForConversation = query({
+  args: { conversation_id: v.id("conversations") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv || !(await canAccessConversation(ctx, userId, conv))) return [];
+    const links = await ctx.db
+      .query("call_session_links")
+      .withIndex("by_conversation", (q) => q.eq("conversation_id", args.conversation_id))
+      .collect();
+    links.sort((a, b) => b.updated_at - a.updated_at);
+    const out = [];
+    for (const l of links) {
+      const t = await ctx.db.get(l.transcript_id);
+      if (!t || !(await canReadCall(ctx, userId, t))) continue;
+      out.push({
+        _id: t._id,
+        title: t.title ?? null,
+        room_key: t.room_key,
+        status: t.status,
+        started_at: t.started_at,
+        live: !!l.live,
+        excerpts: l.excerpts ?? [],
+      });
+    }
+    return out;
+  },
+});
+
+// A one-shot send of a call (or a range of its turns) to a session: the
+// message itself rides the store's send path; this records where it came
+// from. The sender must be able to read the call and open the session.
+export const linkExcerpt = mutation({
+  args: {
+    transcript_id: v.id("transcripts"),
+    conversation: v.string(),
+    from_seq: v.number(),
+    to_seq: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    const t = await ctx.db.get(args.transcript_id);
+    if (!t || !(await canReadCall(ctx, userId, t))) throw new Error("Call not found");
+    const conv = await findConversationByAnyRefWhere(ctx, args.conversation, (c: any) =>
+      canAccessConversation(ctx, userId, c),
+    );
+    if (!conv) throw new Error("Session not found");
+    await linkCallSession(ctx, t._id, conv._id as Id<"conversations">, userId, {
+      from_seq: Math.min(args.from_seq, args.to_seq),
+      to_seq: Math.max(args.from_seq, args.to_seq),
+    });
   },
 });
 

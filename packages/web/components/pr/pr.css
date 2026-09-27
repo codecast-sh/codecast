@@ -116,18 +116,6 @@
   }
 }
 
-/* The right rail carries context, not content: it goes away before the diff
- * does. 900px is the width below which two columns stop being readable. */
-.pr-rail {
-  display: none;
-}
-
-@container (min-width: 900px) {
-  .pr-rail {
-    display: block;
-  }
-}
-
 /* A day divider that stays put while its day scrolls past. */
 .pr-day {
   position: sticky;
@@ -174,4 +162,23 @@
 .pr-thread-landed {
   animation: pr-land 1.2s ease-out both;
   border-radius: 6px;
+}
+
+/* A narrow page (a phone, or a thin pane of the app) keeps every tab in view
+ * rather than scrolling the strip sideways: the icons and the key hints go,
+ * the words stay. The review bar keeps its count and its button. */
+@container (max-width: 560px) {
+  .pr-tabs .pr-tab-icon,
+  .pr-tabs .pr-tab-key,
+  .pr-tabs .pr-mini-title {
+    display: none;
+  }
+  .pr-tabs a {
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+  }
+  .pr-review-hint,
+  .pr-head .repo-github-label {
+    display: none;
+  }
 }
