@@ -1,4 +1,5 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
+import { toast } from "sonner";
 import { useConvex } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import {
@@ -6,12 +7,14 @@ import {
   formatTranscriptChunk,
   huddleFeedBriefing,
   isRecRoomKey,
+  humanizeConvexError,
   transcriptChunkHeader,
 } from "@codecast/shared/contracts";
 import { AVATAR_KEYS } from "@codecast/shared/contracts/orgAvatars";
 import { characterNameFor, defaultCharacterFor, type Character } from "@codecast/shared/contracts/sessionCharacter";
 import { SessionCreatePendingError, useInboxStore, useTrackedStore } from "../../store/inboxStore";
-import { startTranscribing } from "../../lib/calls/callManager";
+import { getRoom, ringInto, startTranscribing } from "../../lib/calls/callManager";
+import { describeRoomLive } from "../../lib/calls/roomLabels";
 import { agentRoomName, findSessionRow } from "../../lib/calls/findSessionRow";
 import { characterFor, identitySig } from "../../lib/sessionIdentity";
 import type { PalettePickTarget, PalettePickResult } from "../../lib/palettePick";
@@ -46,13 +49,17 @@ export function openFeedTargetPicker(opts: {
   withNote?: boolean;
   // Offer a Slack channel id typed into the search box.
   showSlack?: boolean;
+  // Also offer teammates and roles (the call's one "add" list): a role joins
+  // as its standing agent's session, a teammate goes to `onPerson`.
+  who?: { exclude: string[]; onPerson: (id: string) => void };
   onPick: (t: FeedTarget, note?: string) => void;
 }) {
   const feed = opts.gesture === "feed";
   useInboxStore.getState().openPalette({
     pick: {
       title: opts.title,
-      kinds: ["session", "doc"],
+      kinds: opts.who ? ["person", "role", "session", "doc"] : ["session", "doc"],
+      exclude: opts.who?.exclude,
       notePlaceholder: opts.withNote ? "Tell the agent what to do with it (optional)" : undefined,
       confirmLabel: feed ? "Add" : "Send",
       extras: [
@@ -73,8 +80,11 @@ export function openFeedTargetPicker(opts: {
           : []),
       ],
       onPick: (t: PalettePickTarget, r: PalettePickResult) => {
+        if (t.kind === "person") return opts.who?.onPerson(t.id);
         const target: FeedTarget | null =
-          t.kind === "session" || t.kind === "doc"
+          t.kind === "role"
+            ? { kind: "session", id: t.id, label: t.label }
+            : t.kind === "session" || t.kind === "doc"
             ? { kind: t.kind, id: t.id, label: t.label }
             : t.kind === "extra" && t.key === "slack"
               ? r.query ? { kind: "slack", id: r.query } : null
@@ -412,4 +422,58 @@ export function useAgentsInRoom(routes: Array<{ kind: string; target: string; ad
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sig stands in for the routes list
     [sig, s],
   );
+}
+
+// The call's one "add" list: teammates, roles and agents in the palette's
+// pick mode. A teammate is rung into THIS room (the ring is their grant, so
+// someone outside the room's anchor can answer while the huddle runs); a
+// role joins as its standing agent; a session, a new agent or a Slack
+// channel joins as a live feed of the room's words. Whoever is already in
+// the room, already ringing, or already routed is left out of the list.
+export function useAddToCall(opts: {
+  roomKey: string;
+  liveTranscriptId: string | null;
+  routes: Array<{ kind: string; target: string }>;
+}) {
+  const { roomKey, liveTranscriptId, routes } = opts;
+  const addFeed = useAddLiveFeed({ roomKey, liveTranscriptId, routes, getRoom });
+  // From the pick to the route landing there is a wait (a new session's
+  // create can park for minutes on a slow link): the caller shows the agent
+  // on its way and rests its button, so a second click cannot spawn a
+  // second session.
+  const [adding, setAdding] = useState<FeedTarget | null>(null);
+
+  const ring = (id: string) => {
+    // describeRoomLive, not describeRoom: a caller sitting in a redacted
+    // session room may not read its name, so they must not be the one to
+    // publish it. Outcome toasts live in ringInto.
+    const { anchorTitle } = describeRoomLive(roomKey, useInboxStore.getState() as any);
+    void ringInto(roomKey, [id], anchorTitle);
+  };
+  const feed = (t: FeedTarget) => {
+    setAdding(t);
+    // addRoute/startScribe can refuse (room authorization, ended transcript);
+    // a silent close-and-nothing is the one wrong outcome.
+    void addFeed(t)
+      .catch((err: any) =>
+        toast.error(
+          err instanceof SessionCreatePendingError
+            ? "The agent's session is still starting. It joins the room when it lands."
+            : humanizeConvexError(err, "Could not add the agent"),
+        ),
+      )
+      .finally(() => setAdding(null));
+  };
+  const open = () => {
+    const st = useInboxStore.getState() as any;
+    const exclude = [
+      ...(st.callOccupancy[roomKey] ?? []).map((m: any) => String(m.user_id)),
+      ...st.myCalls.outgoing
+        .filter((o: any) => o.room_key === roomKey && o.status === "ringing")
+        .map((o: any) => String(o.to_user)),
+      ...routes.map((r) => r.target),
+    ];
+    openFeedTargetPicker({ title: "Add to the call", gesture: "feed", showSlack: true, who: { exclude, onPerson: ring }, onPick: feed });
+  };
+  return { open, adding };
 }

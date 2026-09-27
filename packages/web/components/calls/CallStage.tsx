@@ -555,7 +555,7 @@ export function CallStage({
           </div>
         </div>
         {call.error && <CallErrorNotice error={call.error} fix={call.errorFix} />}
-        <ControlBar call={call} transcribing={!!live} />
+        <ControlBar call={call} live={live ?? null} />
       </div>
     </div>,
     document.body,
@@ -1214,7 +1214,8 @@ function CaptionsLane({
 // muted), never by outline.
 const STAGE_CTL = "rounded-full p-2 transition-colors";
 const STAGE_CTL_IDLE = "text-sol-text-muted hover:bg-white/10 hover:text-sol-text";
-function ControlBar({ call, transcribing }: { call: any; transcribing: boolean }) {
+function ControlBar({ call, live }: { call: any; live: { transcript_id: string; routes?: Array<{ kind: string; target: string }> } | null }) {
+  const transcribing = !!live;
   const [devicesOpen, setDevicesOpen] = useState(false);
 
   return (
@@ -1234,9 +1235,9 @@ function ControlBar({ call, transcribing }: { call: any; transcribing: boolean }
         {call.roomKey && call.phase === "connected" && (
           <AddPeopleButton
             roomKey={call.roomKey}
+            live={live}
             className={`${STAGE_CTL} ${STAGE_CTL_IDLE}`}
             iconClassName="h-[18px] w-[18px]"
-            align="center"
           />
         )}
         <TranscribeControls live={transcribing} />

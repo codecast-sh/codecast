@@ -164,7 +164,7 @@ import { typedAddress } from "../lib/browserPaneLinks";
 import { openBeside, openBrowserPane } from "../lib/stage";
 import { isTriageBarCompact } from "./triage/graduation";
 import { setTaskParent, closeTaskWithGuard } from "../lib/taskActions";
-import type { PalettePickKind, PalettePickTarget } from "../lib/palettePick";
+import { pickWhoRows, type PalettePickKind, type PalettePickTarget } from "../lib/palettePick";
 
 const api = _api as any;
 import { SESSION_SNOOZE_CHOICES, sessionSnoozeUntil, type SessionSnoozeKey } from "@codecast/shared/contracts";
@@ -1717,7 +1717,17 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // Pre-filter the local cache ourselves so cmdk only ever mounts the matches
   // (RECENT_RENDER_CAP), never the whole cache. With no query we show the most
   // recent few; with a query we scan up to RECENT_SEARCH_CAP and collect matches.
+  // A pick's exclusions (a session already in the call) leave the recents
+  // too, and so does a role's standing agent while the role has its own row.
+  const { roles: orgRoles } = useOrgRoles();
+  const { people: pickPeople, roles: pickRoles } = useRolesAndPeopleOptions(teamMembers ?? NO_MEMBERS);
+  const recentPool = useMemo(() => {
+    const skip = new Set(pick?.exclude ?? []);
+    if (picking && pickAllows("role")) for (const r of orgRoles) if (r.standing?.conversation_id) skip.add(r.standing.conversation_id);
+    return skip.size ? recentSessions.filter((c: any) => !skip.has(String(c._id))) : recentSessions;
+  }, [recentSessions, pick, picking, pickAllows, orgRoles]);
   const recentMatches = useMemo(() => {
+    const recentSessions = recentPool;
     if (!query.trim()) return recentSessions.slice(0, 8);
     const q = query.toLowerCase();
     const scan = recentSessions.length > RECENT_SEARCH_CAP
@@ -1732,7 +1742,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       if (sessionMatchesQuery(conv, q)) out.push(conv);
     }
     return out;
-  }, [recentSessions, query]);
+  }, [recentPool, query]);
 
   // Search tasks / docs / plans over the mention index. Only when there's a
   // query — the empty palette stays session-focused. Plan-type docs are excluded
@@ -1837,6 +1847,23 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     }
     return rows.sort((a, b) => a.s - b.s || b.t - a.t).slice(0, pickingChannels ? 12 : 5);
   }, [open, query, activeTeamId, chatOn, picking, pick]);
+
+  // Person and role pick (e.g. "add to the call"): the one people and roles
+  // list every assignee picker shares, less the caller's exclusions. A role
+  // is offered only when it has a standing agent, and its row's id is that
+  // agent's session.
+  const whoRows = useMemo(() => {
+    const allow = (k: PalettePickKind) => picking && pickAllows(k);
+    if (!open || (!allow("person") && !allow("role"))) return [];
+    const viewerId = String((useInboxStore.getState() as any).currentUser?._id ?? "");
+    return pickWhoRows({
+      people: allow("person") ? pickPeople : null,
+      roles: allow("role") ? pickRoles : null,
+      standing: new Map(orgRoles.map((r) => [String(r._id), r.standing?.conversation_id])),
+      skip: new Set([viewerId, ...(pick?.exclude ?? [])]),
+      query,
+    });
+  }, [open, query, picking, pick, pickAllows, pickPeople, pickRoles, orgRoles]);
 
   // Where each teammate is, from the roster SNAPSHOT (getState): the roster
   // re-pushes on every teammate heartbeat and the palette must not re-render
@@ -2489,7 +2516,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         <CommandPrimitive.Input
           value={query}
           onValueChange={setQuery}
-          placeholder={pick ? "Search sessions, docs..." : hasTargets ? "Action or jump to..." : "Jump to..."}
+          placeholder={pick ? (pick.kinds.includes("person") ? "Search people, roles, sessions..." : "Search sessions, docs...") : hasTargets ? "Action or jump to..." : "Jump to..."}
           className="flex-1 bg-transparent text-[15px] text-sol-text placeholder:text-sol-text-dim/60 outline-none"
           autoFocus
           onKeyDown={(e) => {
@@ -2526,8 +2553,28 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           </CommandPrimitive.Empty>
         )}
 
+        {(["person", "role"] as const).map((kind) => {
+          const rows = whoRows.filter((r) => r.kind === kind);
+          return rows.length > 0 && (
+            <CommandPrimitive.Group key={kind} heading={kind === "person" ? "People" : "Roles"} className={groupClass}>
+              {rows.map((r) => (
+                <CommandPrimitive.Item
+                  key={`pickwho-${r.kind}-${r.id}`}
+                  value={`__pick__ ${r.o.label}|||${r.kind}:${r.id}`}
+                  onSelect={() => finishPick({ kind: r.kind, id: r.id, label: r.o.label })}
+                  className={itemClass}
+                >
+                  <span className="flex w-4 flex-shrink-0 justify-center">{r.o.face}</span>
+                  <span className="truncate flex-1">{r.o.label}</span>
+                  {r.o.hint && <span className="text-[10px] text-sol-text-dim flex-shrink-0">{r.o.hint}</span>}
+                </CommandPrimitive.Item>
+              ))}
+            </CommandPrimitive.Group>
+          );
+        })}
+
         {pick && (pick.extras ?? []).some((x) => !x.needsQuery || query.trim()) && (
-          <CommandPrimitive.Group className={groupClass}>
+          <CommandPrimitive.Group heading={whoRows.length ? "Agents" : undefined} className={groupClass}>
             {(pick.extras ?? []).filter((x) => !x.needsQuery || query.trim()).map((x) => (
               <CommandPrimitive.Item
                 key={`pick-${x.key}`}
