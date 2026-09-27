@@ -3100,6 +3100,32 @@ describe("postCallDigest", () => {
     expect(messagesIn(ctx)[0].channel_id).toBe(DM);
   });
 
+  // A huddle started from a 1:1 keeps that pair's key when others are rung in.
+  // The digest belongs to everyone who was in it, so it lands in the group
+  // message of that whole set, made on the spot when it does not exist yet.
+  test("a people room that others joined posts to the group of everyone in the call", async () => {
+    const pair = `dm:${[ALICE, BOB].sort().join(":")}`;
+    const transcript = {
+      _id: "transcripts_1",
+      room_key: pair,
+      team_id: TEAM,
+      started_by: ALICE,
+      participants: [
+        { id: ALICE, name: "Alice" },
+        { id: CAROL, name: "Carol" },
+        { id: OUTSIDER, name: "Outsider" },
+        { id: "not-a-user", name: "Mic" },
+      ],
+    };
+    const ctx = context(null, { chat_channels: [...channels(), dmRoom()], transcripts: [transcript] });
+    const out = await call(postCallDigest, ctx, digest(pair));
+    expect(out.posted).toBe(true);
+    const channelId = messagesIn(ctx)[0].channel_id;
+    expect(channelId).not.toBe(DM);
+    const room = await ctx.db.get(channelId);
+    expect(room.dm_key).toBe(dmKeyFor(String(TEAM), [ALICE, BOB, CAROL]));
+  });
+
   test("one transcript, one row — a retried schedule finds the row it wrote", async () => {
     const ctx = context(null);
     const first = await call(postCallDigest, ctx, digest(`channel:${CHANNEL}`));

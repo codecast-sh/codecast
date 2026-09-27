@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { leadScopeChange, projectLeadOf, projectsWithoutAnOwnerAmongWatchers, scopeListsProject, watchersLabel, type LeadRole } from "./orgLead";
+import { leadScopeChange, ownerOf, ownsWork, projectLeadOf, projectsWithoutAnOwnerAmongWatchers, scopeListsProject, watchersLabel, type LeadRole } from "./orgLead";
 
 type Role = LeadRole & { _id: string; handle: string };
 
@@ -79,9 +79,22 @@ describe("projectLeadOf", () => {
     expect(projectLeadOf(platform, [eng])).toEqual({ kind: "lead", role: eng, by: "scope" });
   });
 
-  test("a whole workspace scope is the root's view, never a claim on a project", () => {
+  test("a whole workspace role leads only what no narrower role covers (S26)", () => {
     const chief = role("chief-of-staff", []);
-    expect(projectLeadOf(platform, [chief])).toEqual({ kind: "none" });
+    const eng = role("eng", ["proj_platform"]);
+    expect(projectLeadOf(platform, [chief])).toEqual({ kind: "lead", role: chief, by: "workspace" });
+    expect(projectLeadOf(platform, [chief, eng])).toEqual({ kind: "lead", role: eng, by: "scope" });
+    expect(projectLeadOf({ _id: "proj_site" }, [chief, eng])).toEqual({ kind: "lead", role: chief, by: "workspace" });
+  });
+
+  test("the area falls back to the whole workspace role when its lead retires", () => {
+    const chief = role("chief-of-staff", []);
+    const eng = role("eng", ["proj_platform"], { status: "retired" });
+    expect(projectLeadOf(platform, [chief, eng])).toEqual({ kind: "lead", role: chief, by: "workspace" });
+  });
+
+  test("two whole workspace roles on separate lines claim no project: nobody leads it", () => {
+    expect(projectLeadOf(platform, [role("chief-of-staff", []), role("ops", [])])).toEqual({ kind: "none" });
   });
 
   test("a scope that names only one of the project's plans does not lead the project", () => {
@@ -155,5 +168,46 @@ describe("the words and the analyzer's list", () => {
       [eng, growth],
     );
     expect(rows.map((r) => [r.project._id, r.roles.map((x) => x.handle)])).toEqual([["proj_platform", ["eng", "growth"]]]);
+  });
+});
+
+describe("ownerOf: work belongs to the most specific role that covers it (S26)", () => {
+  const chief = role("chief-of-staff", []);
+  const growth = role("growth", ["proj_site"]);
+  const launch = role("launch", [], { scope: { project_ids: [], plan_ids: ["plan_launch"] } });
+
+  test("a chief plus one lead: the lead's project is the lead's, the rest the chief's", () => {
+    const roles = [chief, growth];
+    expect(ownerOf({ project_id: "proj_site" }, roles)).toEqual({ kind: "owner", role: growth });
+    expect(ownerOf({ project_id: "proj_platform" }, roles)).toEqual({ kind: "owner", role: chief });
+    expect(ownerOf({}, roles)).toEqual({ kind: "owner", role: chief });
+    expect(ownsWork(chief, { project_id: "proj_site" }, roles)).toBe(false);
+  });
+
+  test("remove the lead and its work falls back to the chief", () => {
+    const roles = [chief, { ...growth, status: "retired" }];
+    expect(ownerOf({ project_id: "proj_site" }, roles)).toEqual({ kind: "owner", role: chief });
+  });
+
+  test("a role naming the plan is more specific than one naming the plan's project", () => {
+    const roles = [chief, growth, launch];
+    expect(ownerOf({ project_id: "proj_site", plan_id: "plan_launch" }, roles)).toEqual({ kind: "owner", role: launch });
+    expect(ownerOf({ project_id: "proj_site", plan_id: "plan_other" }, roles)).toEqual({ kind: "owner", role: growth });
+  });
+
+  test("a lead reporting to the chief still owns its area: the chief, above it, steps aside", () => {
+    const lead = role("growth", ["proj_site"], under(chief));
+    expect(ownerOf({ project_id: "proj_site" }, [chief, lead])).toEqual({ kind: "owner", role: lead });
+  });
+
+  test("among roles with no scope the root owns the remainder, never a role under it", () => {
+    const unscoped = role("ops", [], under(chief));
+    expect(ownerOf({}, [chief, unscoped])).toEqual({ kind: "owner", role: chief });
+    expect(ownerOf({}, [chief, role("ops", [])]).kind).toBe("watchers");
+  });
+
+  test("work nobody covers, with no whole workspace role, has no owner", () => {
+    expect(ownerOf({ project_id: "proj_platform" }, [growth])).toEqual({ kind: "none" });
+    expect(ownerOf({}, null)).toEqual({ kind: "none" });
   });
 });

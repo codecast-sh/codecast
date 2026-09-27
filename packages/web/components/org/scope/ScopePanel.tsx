@@ -28,7 +28,7 @@ import { useOpenLinkedSession } from "../../../hooks/useOpenLinkedSession";
 import { RoleEscalationLines } from "../../RoleEscalationLines";
 import { EntityIdPill } from "../../EntityIdPill";
 import type { RoleEscalation } from "@codecast/shared/contracts";
-import { noWordYet, parseStandingSection, standingLineAgeDays, standingLineFor, standingLineStale } from "@codecast/shared/contracts/briefStanding";
+import { parseStandingSection, projectsWithLines, standingLineAgeDays, standingLineFor, standingLineStale } from "@codecast/shared/contracts/briefStanding";
 import { ScopeSettings } from "./ScopeSettings";
 import { ScopeLineTab } from "./ScopeLineTab";
 import { ScopeTriggersTab } from "./ScopeTriggersTab";
@@ -197,6 +197,7 @@ export function ScopeOverviewTab({ role, now, canEdit, escalations, narrative, b
   };
   const standing = useMemo(() => parseStandingSection(narrative), [narrative]);
   const projects = model?.projects ?? role.scope_names.projects.map((p) => ({ id: p.id, ref: p.short_id ?? p.id, title: p.title }));
+  const written = projectsWithLines(standing, projects.map((p) => ({ ...p, short_id: p.ref })));
   // What it is doing: the sessions at work under it, and the one it moved
   // most recently, from the tree's own rows.
   const active = role.counts.working ?? 0;
@@ -204,42 +205,33 @@ export function ScopeOverviewTab({ role, now, canEdit, escalations, narrative, b
     ?? [...role.sessions].sort((a, b) => b.updated_at - a.updated_at)[0];
   return (
     <div className="space-y-6" data-scope-briefing>
-      <section data-scope-section="needs-you">
-        <h3 className={BLOCK_LABEL} style={{ color: "var(--sol-text-dim)" }}>Needs you</h3>
-        {escalations.length > 0 ? (
+      {escalations.length > 0 && (
+        <section data-scope-section="needs-you">
+          <h3 className={BLOCK_LABEL} style={{ color: "var(--sol-text-dim)" }}>Needs you</h3>
           <div className="px-1"><RoleEscalationLines escalations={escalations} coarseNow={now} canHandBack={canEdit} onOpen={openId} /></div>
-        ) : (
-          <p className="px-2.5 text-[13px]" style={{ color: "var(--sol-text-muted)" }} data-scope-needs-nothing>Nothing needs you.</p>
-        )}
-      </section>
+        </section>
+      )}
 
-      <section data-scope-section="stands">
-        <h3 className={BLOCK_LABEL} style={{ color: "var(--sol-text-dim)" }}>Where it stands</h3>
-        {projects.length === 0 ? (
-          <p className="px-2.5 text-[12.5px]" style={{ color: "var(--sol-text-dim)" }}>No project in its scope yet.</p>
-        ) : (
+      {written.length > 0 && (
+        <section data-scope-section="stands">
+          <h3 className={BLOCK_LABEL} style={{ color: "var(--sol-text-dim)" }}>Where it stands</h3>
           <ul className="space-y-2">
-            {projects.map((p) => {
-              const line = standingLineFor(standing, { title: p.title, short_id: p.ref });
-              const stale = line && standingLineStale(line, now);
-              const days = line ? standingLineAgeDays(line, now) : null;
+            {written.map(({ project: p, line }) => {
+              const stale = standingLineStale(line, now);
+              const days = standingLineAgeDays(line, now);
               return (
                 <li key={p.id} className="px-2.5" data-scope-stands={p.ref}>
                   <Link href={`/projects/${p.ref}`} className="text-[12.5px] font-semibold text-sol-text no-underline hover:underline underline-offset-2">{p.title}</Link>
-                  {line ? (
-                    <p className="text-[13px] leading-relaxed" style={{ color: "var(--sol-text-secondary)" }} data-scope-stands-line>
-                      {line.text}
-                      {stale && days !== null && <span className="ml-1.5 text-[11px]" style={{ color: "var(--sol-yellow)" }} data-scope-stands-age={days}>written {days} days ago</span>}
-                    </p>
-                  ) : (
-                    <p className="text-[13px] italic" style={{ color: "var(--sol-text-dim)" }} data-scope-stands-line="">{briefLoaded ? noWordYet(role.handle) : "\u2007"}</p>
-                  )}
+                  <p className="text-[13px] leading-relaxed" style={{ color: "var(--sol-text-secondary)" }} data-scope-stands-line>
+                    {line.text}
+                    {stale && days !== null && <span className="ml-1.5 text-[11px]" style={{ color: "var(--sol-yellow)" }} data-scope-stands-age={days}>written {days} days ago</span>}
+                  </p>
                 </li>
               );
             })}
           </ul>
-        )}
-      </section>
+        </section>
+      )}
 
       <section data-scope-section="doing">
         <h3 className={BLOCK_LABEL} style={{ color: "var(--sol-text-dim)" }}>What it is doing</h3>

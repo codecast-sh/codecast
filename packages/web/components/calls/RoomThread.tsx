@@ -92,6 +92,7 @@ export type RoomThreadCall = {
   action_items: string[];
   summary_status?: string | null;
   routes: RoomThreadRoute[];
+  team_id?: string;
 };
 
 export type RoomThreadSelection = {
@@ -294,7 +295,7 @@ export function RoomThread({
 
   // The header's button and the empty card's open the call's one add list
   // (AddPeople.tsx): teammates, roles and agents.
-  const { open: openAddAgent, adding } = useAddToCall({ roomKey, liveTranscriptId, routes });
+  const { open: openAddAgent, adding } = useAddToCall({ roomKey, liveTranscriptId, routes, teamId: call?.team_id });
   const removeFeed = useRemoveLiveFeed(liveTranscriptId);
   // What an agent did is in the past once the call ended or nothing is live
   // (the stage after the switch went off): "was in the room", and none of

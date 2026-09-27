@@ -95,6 +95,7 @@ export const APP_SURFACE_EXCLUDED_PATHS = new Set<string>([
   "faces",
   "meeting-offer",
   "call-ring",
+  "share-cursors",
   // Multi-step flows that need state from a previous page.
   "settings/accounts/link-github",
   "settings/team/create",

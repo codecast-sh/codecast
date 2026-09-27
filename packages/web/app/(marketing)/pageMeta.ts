@@ -1,6 +1,6 @@
 "use client";
 
-import { useMountEffect } from "@/hooks/useMountEffect";
+import { useWatchEffect } from "@/hooks/useWatchEffect";
 import { seoFor, DEFAULT_TITLE, DEFAULT_DESCRIPTION } from "@/lib/seoRoutes";
 
 /**
@@ -9,8 +9,12 @@ import { seoFor, DEFAULT_TITLE, DEFAULT_DESCRIPTION } from "@/lib/seoRoutes";
  * a Next.js `metadata` export in this Vite build. Restores both on unmount so
  * navigating away doesn't leave a stale title behind.
  */
-export function usePageMeta(title: string, description: string) {
-  useMountEffect(() => {
+export function usePageMeta(title: string | null, description: string) {
+  // Follows its arguments, so a page whose title arrives with its data (a
+  // pull request) titles itself once it knows. Null leaves the title to
+  // whoever owns it (the dashboard titles its own window).
+  useWatchEffect(() => {
+    if (title === null) return;
     const prevTitle = document.title;
     const meta = document.querySelector('meta[name="description"]');
     const prevDesc = meta?.getAttribute("content") ?? null;
@@ -22,7 +26,7 @@ export function usePageMeta(title: string, description: string) {
       document.title = prevTitle;
       if (meta && prevDesc !== null) meta.setAttribute("content", prevDesc);
     };
-  });
+  }, [title, description]);
 }
 
 /**

@@ -5,9 +5,14 @@
 
 const fs = require("fs");
 const { spawnSync } = require("child_process");
-const { install, binaryPath } = require("../install.js");
+const { install, binaryPath, WINDOWS_MESSAGE } = require("../install.js");
 
 async function main() {
+  // Reached only when the postinstall was skipped (--ignore-scripts).
+  if (process.platform === "win32") {
+    console.error(WINDOWS_MESSAGE);
+    process.exit(1);
+  }
   let bin = binaryPath();
   if (!fs.existsSync(bin)) {
     console.error("codecast: downloading binary (first run)...");

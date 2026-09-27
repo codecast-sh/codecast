@@ -12,11 +12,13 @@ import { ghostsFor, roleNodeId, type OrgGhostOptions, type OrgGhostPlan, type Or
 import { CHANGE_KIND_WORD } from "./orgMeta";
 
 /** One face on a row: a person, a role (live or a stub), an offered session,
- *  or a handle nothing in the workspace answers to. */
+ *  a task, plan or project whose status the change sets, or a handle nothing
+ *  in the workspace answers to. */
 export type ProposalTreeFace =
   | { kind: "person"; id: string; name: string; image?: string; me: boolean }
   | { kind: "role"; id: string; name: string; handle: string; avatar?: string; stub?: OrgGhostStub }
   | { kind: "session"; id: string; name: string; short_id: string; stub?: OrgGhostStub }
+  | { kind: "record"; id: string; name: string; record: "task" | "plan" | "project" }
   | { kind: "unknown"; id: string; name: string };
 
 export type ProposalTreeRow = {
@@ -39,6 +41,10 @@ export type ProposalTreeRow = {
   chip: string | null;
   /** The subject's handle answers to nothing live: drawn as a warning. */
   unresolved: boolean;
+  /** The line under the row, so the card says what a message would
+   *  otherwise spell out beside it: a new role's scope and seat, a record's
+   *  reason for its new status. */
+  detail: string | null;
 };
 
 const strip = (h: string) => h.replace(/^@/, "").trim().toLowerCase();
@@ -54,6 +60,19 @@ const faceOfRef = (plan: OrgGhostPlan, ref: OrgParentRef | null | undefined): Pr
     ? { kind: "role", id: r._id, name: r.name, handle: r.handle, avatar: r.avatar, stub: plan.stubs[roleNodeId(r._id)] }
     : { kind: "unknown", id: ref.role_id, name: "a role" };
 };
+
+/** "Matching Engine & Funnel · from Market growth mandate": the scope by
+ *  name (a ref the tree already knows reads as its title), then the seat. */
+function roleDetail(tree: OrgTree | null, ch: { scope?: { projects?: string[]; plans?: string[] }; seat?: { title?: string } }): string {
+  const known = new Map<string, string>();
+  for (const r of tree?.roles ?? []) for (const x of [...r.scope_names.projects, ...r.scope_names.plans]) {
+    known.set(x.id, x.title);
+    if (x.short_id) known.set(x.short_id, x.title);
+  }
+  const scope = [...(ch.scope?.projects ?? []), ...(ch.scope?.plans ?? [])].map((ref) => known.get(ref) ?? ref);
+  const seat = ch.seat ? `from ${ch.seat.title ?? "an existing session"}` : "new session";
+  return [scope.length ? scope.join(", ") : "the whole workspace", seat].join(" · ");
+}
 
 /** The rows of a proposal, in seq order. Removed changes are history and
  *  draw nothing; skipped ones keep a row so the card can say what happened;
@@ -77,7 +96,7 @@ export function proposalTreeRows(tree: OrgTree | null, changes: readonly OrgProp
 
   return ordered.map((c): ProposalTreeRow => {
     const ch = editedOrgChange(c.change, c.edits);
-    const base = { change_id: c._id, seq: c.seq, kind: ch.kind, status: c.status, line: describeOrgChange(ch), from: null, chip: null, unresolved: false } as const;
+    const base = { change_id: c._id, seq: c.seq, kind: ch.kind, status: c.status, line: describeOrgChange(ch), from: null, chip: null, unresolved: false, detail: null } as const;
     switch (ch.kind) {
       case "role": {
         // The stub ghostsFor pushed (keyed by the change id), else the live
@@ -86,7 +105,7 @@ export function proposalTreeRows(tree: OrgTree | null, changes: readonly OrgProp
         const node: ProposalTreeFace = stub && plan
           ? { kind: "role", id: stub._id, name: stub.name, handle: stub.handle, avatar: stub.avatar, stub: plan.stubs[roleNodeId(stub._id)] }
           : { kind: "role", id: c._id, name: ch.name, handle: strip(ch.handle), avatar: ch.avatar };
-        return { ...base, tag: "new role", node, parent: stub && plan ? faceOfRef(plan, stub.reports_to) : null };
+        return { ...base, tag: "new role", node, parent: stub && plan ? faceOfRef(plan, stub.reports_to) : null, detail: roleDetail(tree, ch) };
       }
       case "move": {
         const { face, unresolved } = roleFace(ch.handle);
@@ -100,6 +119,11 @@ export function proposalTreeRows(tree: OrgTree | null, changes: readonly OrgProp
         const from = move ? move.from : before;
         const moved = !!to && !!from && !(to.kind === from.kind && (to.kind === "user" ? to.user_id === (from as any).user_id : to.role_id === (from as any).role_id));
         return { ...base, tag: CHANGE_KIND_WORD.move, node: face, parent: faceOfRef(plan, to), from: moved ? faceOfRef(plan, from) : null, unresolved: unresolved || (!!ch.reports_to && !to) };
+      }
+      case "task_status": case "plan_status": case "project_status": {
+        const record = ch.kind === "task_status" ? "task" : ch.kind === "plan_status" ? "plan" : "project";
+        const ref = ch.kind === "task_status" ? ch.task : ch.kind === "plan_status" ? ch.plan : ch.project;
+        return { ...base, tag: ch.status, node: { kind: "record", id: ref, name: ch.title ?? ref, record }, parent: null, detail: ch.reason };
       }
       case "retire": {
         const { face, unresolved } = roleFace(ch.handle);

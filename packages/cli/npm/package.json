@@ -27,6 +27,7 @@
     "cast": "bin/codecast.js"
   },
   "scripts": {
+    "preinstall": "node install.js --check-platform",
     "postinstall": "node install.js"
   },
   "files": [

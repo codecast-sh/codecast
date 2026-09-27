@@ -49,3 +49,29 @@ export function briefCharterLines(charter: string): string[] {
   const body = charter.trim() ? charter.split("\n").map((l) => `  ${l}`) : ["  (no charter yet: a person writes it on the role page)"];
   return ["", `  ${c.bold}## Charter${c.reset}`, ...body];
 }
+
+const SCOPE_PLANS_NAMED = 5;
+const PLANS_LISTED = 8;
+
+/** A role's scope in one line: its projects by name, the few plans that sit
+ *  outside them, and a count for the rest. A plan inside a listed project is
+ *  named by its project. */
+export function briefScopeLine(scope: { projects: Array<{ id: string; title: string }>; plans: Array<{ short_id: string; title: string; project_id?: string }> }): string {
+  const projectIds = new Set(scope.projects.map((p) => String(p.id)));
+  const loose = scope.plans.filter((p) => !p.project_id || !projectIds.has(String(p.project_id)));
+  const names = [
+    ...scope.projects.map((p) => `project ${p.title}`),
+    ...loose.slice(0, SCOPE_PLANS_NAMED).map((p) => `plan ${p.short_id} ${p.title}`),
+    ...(loose.length > SCOPE_PLANS_NAMED ? [`and ${loose.length - SCOPE_PLANS_NAMED} more plans`] : []),
+  ];
+  return names.length ? names.join(", ") : "whole workspace";
+}
+
+/** The plans worth a line: active ones that hold tasks, newest first, a few
+ *  at most, then a count. A draft, finished or empty plan is not listed. */
+export function briefPlanLines(plans: Array<{ short_id: string; title: string; status: string; updated_at?: number; progress: { total: number; done: number; in_progress: number } }>): string[] {
+  const active = plans.filter((p) => p.status === "active" && p.progress.total > 0).sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
+  const lines = active.slice(0, PLANS_LISTED).map((p) => `  plan ${p.short_id} ${p.title}: ${p.progress.done}/${p.progress.total} done, ${p.progress.in_progress} in progress`);
+  if (active.length > PLANS_LISTED) lines.push(`  ${c.dim}and ${active.length - PLANS_LISTED} more active plans${c.reset}`);
+  return lines;
+}

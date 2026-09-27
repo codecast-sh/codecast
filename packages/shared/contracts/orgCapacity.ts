@@ -82,69 +82,11 @@ export function capacity<K extends RoleCapacityKey>(key: K): number { return ROL
 export function ledgerLine<K extends RoleLedgerKey>(key: K): number { return ROLE_LEDGER[key].value; }
 
 // Health flags (S3). The codes are the vocabulary the health query emits, the
-// org page renders as badges, and the analyzer prompt teaches; one list.
+// org page renders as badges; one list.
 export const FLAG_CODES = ["overloaded", "bypassed", "wide_ledger", "wide_span", "idle", "slow_to_recommend", "review_stall", "cap_hit", "unowned", "no_charter", "chatter", "unfiled_plan", "stale_plan", "stale_task", "stale_project", "program_ended"] as const;
 export type FlagCode = (typeof FLAG_CODES)[number];
 export type FlagSeverity = "info" | "warn" | "blocker";
 export type HealthFlag = { code: FlagCode; severity: FlagSeverity; detail: string };
-
-/** What each flag means, in the words every surface uses. */
-export const FLAG_MEANING: Record<FlagCode, string> = {
-  overloaded: "the load reaching a role (items changing a day, decisions a day, live hands, stalls, cap hit days) is past one or more lines of the model",
-  bypassed: "work in a role's scope that never reaches it: tasks close and sit in flight in the scope while no hand is filed under the seat and no decision is routed to it; the seat is neither idle nor loaded, it is worked around",
-  wide_ledger: "a role's scope holds more open tasks, tasks in flight or active plans than the frame lists individually; context on size, and a records or filing question before it is a seat question",
-  wide_span: "a person or role has more direct reports than the model allows",
-  idle: "a role's scope had no event for the idle window",
-  slow_to_recommend: "a role's median time from ask to recommendation is past the hop deadline",
-  review_stall: "a task in the role's scope has sat in review past the stall window",
-  cap_hit: "a role hit its wake or token cap on recent days",
-  unowned: "a project has no owner role",
-  no_charter: "a project or plan has no goal, or a role has no charter",
-  chatter: "two roles exchanged at least the peer sends line in a week, and more sends than tasks were done in the scope",
-  unfiled_plan: "a plan with open work is filed under no project, so no role's scope can see it",
-  stale_plan: "a plan still open whose evidence says it is finished or abandoned: every task closed, or its open tasks untouched for the stale window with no live session on it",
-  stale_task: "a task still open whose evidence says it is finished or never started: in progress with no session bound and no write for the stale window, in progress with every session done for that window, or commits carrying its id already landed",
-  stale_project: "a project nothing has touched for the activity window: no task, plan, session or commit",
-  program_ended: "a program role's end condition is met (its plan or project is done, or its date is past); the next review proposes the retire or the review its tenure names",
-};
-
-function line(name: string, t: CapacityThreshold): string {
-  const shown = t.value < 1 ? `${Math.round(t.value * 100)}%` : String(t.value);
-  return `- ${name}: ${shown} ${t.unit}. ${t.reason}.`;
-}
-
-/** The capacity model as markdown for a prompt. The analyzer reads it here and
- *  nowhere else, so a changed threshold, a changed axis or a changed way of
- *  reading the numbers reaches the prompt without a rewrite. */
-export function renderCapacityModel(): string {
-  const roles = Object.entries(ROLE_CAPACITY).map(([k, t]) => line(k, t)).join("\n");
-  const ledger = Object.entries(ROLE_LEDGER).map(([k, t]) => line(k, t)).join("\n");
-  const span = Object.entries(PERSON_SPAN).map(([k, t]) => line(k, t)).join("\n");
-  const stability = Object.entries(STABILITY).map(([k, t]) => line(k, t)).join("\n");
-  const flags = FLAG_CODES.map((c) => `- ${c}: ${FLAG_MEANING[c]}`).join("\n");
-  return [
-    "One role holds one context window. Its frame carries at most 3000 characters of facts and its brief is short, so what flows into a seat has to fit in what one agent can keep in its head between wakes. A role does not do its scope's tasks; hands and people do. What loads a role is what reaches it and asks for its attention; what its scope holds is context. These are the defaults; each has a reason, and you may argue for an exception in a change's rationale.",
-    "",
-    "What loads a role (the overloaded flag reads the first five; the rest raise their own flags):",
-    roles,
-    "",
-    "What a role's scope holds (context, reported next to the load; never a reason to split on its own):",
-    ledger,
-    "",
-    "What one person can answer for:",
-    span,
-    "",
-    "How often the chart may move:",
-    stability,
-    "",
-    "The flags org.health raises against this model:",
-    flags,
-    "",
-    "How to read the numbers. `cast org health` is the model's own reading: `load` is what reached the seat over the last seven days (work items in its frames a day, decisions a day, live hands against its own cap, open stalls, cap hit days; `flow.items_changed_7d` is the scope's churn, which is not load), `ledger` is what its scope holds today (open tasks, in flight, active plans), `overload_ratio` is the busiest volume axis divided by its line, and `counted` says which projects, plans and tasks the row read and by what rule, so you can cite the same rows. A role's brief counts more (every plan under its projects, whatever its status) and a wake log shows single days; cite the health numbers as the breach and the brief's as context, and say which is which.",
-    "",
-    "How to size with it. A seat is right when the flow into it fits: count, from the inputs and the health rows, the items that will change in its scope each day, the decisions that will route to it, the hands it will read and the stalls it will chase, after the record changes in the same proposal have taken the stale rows out. Every role and every scope change states, in its rationale, the seat's resulting load against the model and its ledger as context, counted from the projects and plans it will own after the file changes in the same proposal; when a load axis is over the model, the rationale argues the exception or the change is split along a seam so each seat's flow fits. A wide ledger with a quiet flow is not a seat problem: bring the records in line, file the plans where they belong, and read the load again. A role needs a report when its own scope holds a seam (a repo, a package, a project with its own plans) whose flow would fit one agent and is past the lines when held together. A person needs a layer when the roles reporting straight to them pass the span. A role should be split when its load has breached the model in consecutive reviews, or at once when a volume axis is at twice the model, along a seam its own work shows; it should be merged with a sibling when both are idle or both watch the same scope and talk to each other more than they ship. A project needs an owner when it has sessions, tasks or plans and no role's scope covers it. What a role may do in a day is a safety net with defaults filled in, not something a proposal sizes or asks about (org-staffing.md S23.2): never propose a limit, never state one, and never ask the person to allow or trim a total.",
-  ].join("\n");
-}
 
 // ── Flags from signals (S3) ──────────────────────────────────────────────────
 //

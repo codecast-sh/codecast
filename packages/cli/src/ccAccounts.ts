@@ -2745,6 +2745,9 @@ export async function refreshUsageSnapshots(
     // Profiles a live claude runs on (their store, ccLiveGate): the session
     // rotates those itself, and a second rotation here would strand it.
     heldProfiles?: ReadonlySet<string>;
+    // A live claude runs on the keychain login (ccLiveGate): it rotates that
+    // login itself, so an expired active token is read back later, not rotated.
+    activeHeld?: boolean;
   } = {},
 ): Promise<UsageRefreshSummary> {
   const now = opts.now ?? Date.now();
@@ -2774,6 +2777,9 @@ export async function refreshUsageSnapshots(
         activeKeySettled = true;
       }
     } catch {}
+  } else if (activeKey && activeCred && activeHealth?.usable && opts.activeHeld) {
+    activeKeySettled = true;
+    summary.skipped.push("active");
   } else if (activeKey && activeCred && activeHealth?.usable) {
     activeKeySettled = true;
     const rotated = await refreshActiveCredential({ fetchImpl: opts.fetchImpl, now });

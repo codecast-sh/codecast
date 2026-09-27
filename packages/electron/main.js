@@ -77,10 +77,11 @@ const {
   startedApps,
   decideOffer,
 } = require("./meetingDetector");
-const { createOsPermissions } = require("./osPermissions");
+const { createOsPermissions, loadNotificationsAddon } = require("./osPermissions");
 const { createComputerPermissions } = require("./computerPermissions");
 const { createShellAuthority, originOf, installShellCapabilities } = require("./shellAuthority");
 const { createBrowserPanes, defaultRegistryPath: defaultPaneRegistryPath } = require("./browserPanes");
+const { createShareCursors } = require("./shareCursors");
 
 let notificationRefs = [];
 
@@ -1510,6 +1511,9 @@ function registerSeeThroughIpc(prefix, resolveSender, opts = {}) {
   const anchor = opts.anchor || (() => "top-left");
   const getWindow = opts.getWindow;
   let dragTimer = null;
+  // The renderer's pin, last time it gave one: the point (window pixels from
+  // the top) that holds still on screen across a resize. The float's faces.
+  let lastPinY = null;
   const stopDrag = () => {
     if (dragTimer) clearInterval(dragTimer);
     dragTimer = null;
@@ -1540,13 +1544,13 @@ function registerSeeThroughIpc(prefix, resolveSender, opts = {}) {
     // sized to 112 would clip its own faces.
     const zoom = win.webContents.getZoomFactor();
     const [w, h] = [Math.round(width * zoom), Math.round(height * zoom)];
+    const pin = Number.isFinite(Number(size.pinY)) ? Math.round(Number(size.pinY) * zoom) : null;
     const [curW, curH] = win.getContentSize();
-    if (curW === w && curH === h) return;
-    // A non-resizable window refuses setContentSize; lift the flag for the
-    // call and put it straight back, so the person still cannot drag an edge.
-    win.setResizable(true);
-    win.setContentSize(w, h);
-    win.setResizable(false);
+    const pinMoved = pin !== null && lastPinY !== null && pin !== lastPinY;
+    if (curW === w && curH === h && !pinMoved) {
+      if (pin !== null) lastPinY = pin;
+      return;
+    }
     // Growth goes AWAY from the anchored corner, and that corner stays put:
     // a row anchored top right grows down and to the left, one anchored
     // bottom right grows up and to the left. The faces nearest the anchor
@@ -1559,14 +1563,27 @@ function registerSeeThroughIpc(prefix, resolveSender, opts = {}) {
     // Position wins over size when the display is smaller than the row: the
     // near edge stays reachable and the far side overflows, same rule as
     // clampCorner on the web side.
+    //
+    // A renderer that names a pin overrides the vertical corner rule: the
+    // pinned point (its faces) holds still, and the window grows or moves
+    // around it. That is what keeps the faces put when the float's card
+    // switches from below them to above them where a drag lands.
     const [x, y] = win.getPosition();
     const [av, ah] = anchor().split("-");
     const cx = ah === "right" ? x + (curW - w) : x;
-    const cy = av === "bottom" ? y + (curH - h) : y;
+    const cy = pin !== null && lastPinY !== null ? y + (lastPinY - pin) : av === "bottom" ? y + (curH - h) : y;
+    if (pin !== null) lastPinY = pin;
     const area = screen.getDisplayMatching({ x: cx, y: cy, width: w, height: h }).workArea;
     const nx = Math.max(area.x, Math.min(cx, area.x + area.width - w));
     const ny = Math.max(area.y, Math.min(cy, area.y + area.height - h));
-    if (nx !== x || ny !== y) win.setPosition(nx, ny);
+    // One setBounds, not a resize and then a move: between the two the old
+    // frame was drawn at the new size's origin, and a row hung from a bottom
+    // corner flashed a window's height away for a frame. A non-resizable
+    // window refuses a new size; lift the flag for the call and put it
+    // straight back, so the person still cannot drag an edge.
+    win.setResizable(true);
+    win.setBounds({ x: nx, y: ny, width: w, height: h });
+    win.setResizable(false);
   });
 
   // Held on a circle, the window follows the cursor. Not a
@@ -2239,6 +2256,57 @@ shellIpc.on("meeting-offer-hide", (e) => {
   const win = meetingOfferWindow;
   if (!win || win.isDestroyed() || e.sender !== win.webContents) return;
   win.hide();
+});
+
+// ---------------------------------------------------------------------------
+// The share cursors glass: teammates' pointers drawn on the sharer's own
+// screen, over the display or window being captured (shareCursors.js, route
+// /share-cursors). Pure glass: never focused, never hit by the mouse, and
+// content protected so the capture it sits over leaves it out; otherwise
+// every viewer would get the sharer's copy of their arrow back in the video.
+// Built on the first cursor, not at launch.
+// ---------------------------------------------------------------------------
+function createShareCursorsWindow() {
+  const win = createShellWindow({
+    width: 400,
+    height: 300,
+    frame: false,
+    transparent: true,
+    backgroundColor: "#00000000",
+    resizable: true,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    show: false,
+    hasShadow: false,
+    focusable: false,
+    // It covers a whole display, menu bar included: macOS would otherwise
+    // push the frame below the menu bar and every arrow would land low.
+    enableLargerThanScreen: true,
+    webPreferences: {
+      ...preloadPrefs(),
+      // One CSS pixel per point, so a normalized point is plain arithmetic.
+      zoomFactor: 1,
+      additionalArguments: ["--share-cursors-window"],
+      backgroundThrottling: false,
+    },
+  });
+  pinWindowTitle(win, "Codecast Cursors");
+  win.setContentProtection(true);
+  win.setIgnoreMouseEvents(true);
+  win.setAlwaysOnTop(true, "screen-saver");
+  win.setVisibleOnAllWorkspaces(true, WORKSPACES_OPTS);
+  win.loadURL(`${currentBaseUrl}/share-cursors`);
+  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  return win;
+}
+
+const shareCursors = createShareCursors({
+  createGlass: createShareCursorsWindow,
+  screen,
+  addon: loadNotificationsAddon(),
 });
 
 // ---------------------------------------------------------------------------
@@ -3216,7 +3284,11 @@ app.whenReady().then(() => {
   ];
   const trustedPermissions = () =>
     new Set([...BASELINE_PERMISSIONS, ...(loadFullSettings().hostPolicy?.permissions ?? [])]);
-  installShellCapabilities({ authority: shellAuthority, session: session.defaultSession, desktopCapturer, permissions: trustedPermissions });
+  installShellCapabilities({
+    authority: shellAuthority, session: session.defaultSession, desktopCapturer, permissions: trustedPermissions,
+    onDisplaySource: shareCursors.setSource,
+  });
+  shareCursors.install(shellIpc);
   // Browser panes: the native half of the web app's /browser route
   // (browserPanes.js). It manages its own views, its own session and its own
   // lifecycle — the shell hands it the pieces of Electron it needs and the

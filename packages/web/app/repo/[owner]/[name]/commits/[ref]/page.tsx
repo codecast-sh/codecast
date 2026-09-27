@@ -45,28 +45,24 @@ function HistoryRail({ repository, branch }: { repository: string; branch: strin
     useCallback((e: any) => e.repository === repository, [repository]),
   );
 
+  // Nothing to say is no rail at all: the width goes to the history.
+  if (events.length === 0) return null;
   return (
-    <aside className="repo-rail w-[320px] shrink-0 border-l border-sol-border/50 bg-sol-bg-alt/20 overflow-y-auto">
+    <aside className="repo-rail w-[320px] shrink-0 self-stretch border-l border-sol-border/50 bg-sol-bg-alt/20">
       <div className="px-4 py-3 border-b border-sol-border/30">
         <h2 className="text-[10px] uppercase tracking-wider text-sol-text-dim">Recent activity</h2>
         <p className="mt-0.5 text-[11px] text-sol-text-dim">{branch}</p>
       </div>
-      {events.length === 0 ? (
-        <p className="px-4 py-6 text-[12px] text-sol-text-dim leading-relaxed">
-          Pushes, reviews and check results on this repository appear here as they arrive.
-        </p>
-      ) : (
-        <div className="px-2 py-2 space-y-0.5">
-          {events.map((event: any) => (
-            <ExternalEventRow
-              key={event._id}
-              event={externalEventRowToExternalEvent(event)}
-              density="compact"
-              showActor
-            />
-          ))}
-        </div>
-      )}
+      <div className="px-2 py-2 space-y-0.5">
+        {events.map((event: any) => (
+          <ExternalEventRow
+            key={event._id}
+            event={externalEventRowToExternalEvent(event)}
+            density="compact"
+            showActor
+          />
+        ))}
+      </div>
     </aside>
   );
 }
@@ -102,7 +98,7 @@ function CommitsContent({
     date: new Date(commit.timestamp).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" }) })), [log.commits]);
 
   return (
-    <div className="repo-page h-full flex flex-col" style={{ ["--repo-accent" as string]: "var(--sol-cyan)" }}>
+    <div className="repo-page h-full overflow-y-auto" data-main-scroll style={{ ["--repo-accent" as string]: "var(--sol-cyan)" }}>
       <RepoHeader
         headRef={headRef}
         repository={repository}
@@ -154,8 +150,8 @@ function CommitsContent({
         </div>
       )}
 
-      <div className="flex-1 min-h-0 flex">
-        <div className="flex-1 min-w-0 overflow-y-auto">
+      <div className="flex items-start">
+        <div className="flex-1 min-w-0">
           {branches.error && (
             <p className="px-4 py-3 text-[12px] text-sol-red">
               Branches could not be read: {serverErrorText(branches.error)}

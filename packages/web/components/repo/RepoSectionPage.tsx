@@ -33,7 +33,8 @@ export function RepoSectionPage({
 
   return (
     <RepoPageShell repository={repository}>
-      <div className="repo-page h-full flex flex-col" style={{ ["--repo-accent" as string]: accent }}>
+      {/* One scroller, like a web page: the header goes up with the content. */}
+      <div className="repo-page h-full overflow-y-auto flex flex-col" data-main-scroll style={{ ["--repo-accent" as string]: accent }}>
         <RepoHeader
           headRef={titlebarRef}
           repository={repository}
@@ -41,7 +42,7 @@ export function RepoSectionPage({
           refName={refName}
           family={family}
         />
-        <div className={`flex-1 min-h-0 text-[13px] text-sol-text-muted ${flush ? "" : "overflow-y-auto px-4 py-6"}`}>
+        <div className={`flex-1 text-[13px] text-sol-text-muted ${flush ? "" : "px-4 py-6"}`}>
           {children}
         </div>
       </div>

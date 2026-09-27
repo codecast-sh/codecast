@@ -9,11 +9,11 @@ export function AddPeopleButton({
   iconClassName = "h-4 w-4",
 }: {
   roomKey: string;
-  live: { transcript_id: string; routes?: Array<{ kind: string; target: string }> } | null;
+  live: { transcript_id: string; team_id?: string; routes?: Array<{ kind: string; target: string }> } | null;
   className?: string;
   iconClassName?: string;
 }) {
-  const { open, adding } = useAddToCall({ roomKey, liveTranscriptId: live?.transcript_id ?? null, routes: live?.routes ?? [] });
+  const { open, adding } = useAddToCall({ roomKey, liveTranscriptId: live?.transcript_id ?? null, routes: live?.routes ?? [], teamId: live?.team_id });
   return (
     <button
       className={className || "rounded-md p-1.5 text-sol-text-muted transition-colors hover:bg-sol-base02"}

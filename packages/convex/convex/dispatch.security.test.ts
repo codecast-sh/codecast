@@ -110,3 +110,16 @@ test("every current client action has an admitted dispatch contract", () => {
   expect(actions.size).toBeGreaterThan(100);
   expect([...actions].filter(name => !isDispatchAction(name))).toEqual([]);
 });
+
+describe("signed-out dispatch", () => {
+  // A write made while signed out must wait in the outbox for auth to return,
+  // not be read as a permanent refusal that drops it and toasts.
+  // The client engine reads data.retryable === true as "keep it" (isPermanentDispatchError).
+  test("refuses with a retryable error the client outbox keeps", async () => {
+    const signedOut = { getUserIdentity: async () => null };
+    const error = await (dispatch as any)._handler({ db: makeFakeDb({}), auth: signedOut }, {
+      action: "patchConversation", args: [], patches: {},
+    }).catch((e: unknown) => e);
+    expect(error?.data).toMatchObject({ code: "UNAUTHENTICATED", retryable: true });
+  });
+});

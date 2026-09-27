@@ -18,14 +18,16 @@
 import { useCallback, useRef, useState } from "react";
 import { useEventListener } from "../../hooks/useEventListener";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { hitsInteractive, type HitRegion } from "../../lib/calls/faceCrop";
+import { faceAt, hitsInteractive, type HitRegion } from "../../lib/calls/faceCrop";
 
 /** The three runtime switches a see-through window asks of its shell. */
 export type FloatingBridge = {
   /** Lift or restore click-through while the pointer is over a circle. */
   setInteractive: (on: boolean) => void;
-  /** Keep the window the size of its circles. */
-  setContentSize: (size: { width: number; height: number }) => void;
+  /** Keep the window the size of its circles. `pinY`, when given, is the
+   *  point (CSS px from the window's top) that must not move on screen: the
+   *  faces. A shell that predates it anchors by its corner instead. */
+  setContentSize: (size: { width: number; height: number; pinY?: number }) => void;
   /** Held on a circle, the window follows the cursor. */
   setDragging: (on: boolean) => void;
 };
@@ -33,16 +35,30 @@ export type FloatingBridge = {
 export function useFloatingCircles(opts: {
   /** How big the window has to be, given whether the pointer is in it. Read
    *  through a ref, so only `shapeSig` and the hover decide when to re-ask. */
-  sizeFor: (hovered: boolean) => { width: number; height: number };
+  sizeFor: (hovered: boolean) => { width: number; height: number; pinY?: number };
   /** A signature of everything that moves the circles: mode, count, tier. When
    *  it changes the window is resized and the hit regions are re-measured. */
   shapeSig: string;
   bridge: FloatingBridge;
   /** How long the chrome outlives a pointer that left the circles. */
   hideDelayMs?: number;
+  /** Hovered means the pointer is ON the content (a circle, a card, the
+   *  row's own box), not merely somewhere on the window's glass. For a window
+   *  that keeps room for its card at all times, most of it is glass. */
+  hoverContent?: boolean;
+  /** A drag landed: the window is somewhere new. */
+  onMoved?: () => void;
 }) {
-  const { shapeSig, bridge, hideDelayMs = 1500 } = opts;
+  const { shapeSig, bridge, hideDelayMs = 1500, hoverContent = false } = opts;
   const [hovered, setHovered] = useState(false);
+  // The face under the pointer, from the same hit test that lifts
+  // click-through. DOM mouseenter is not a reliable signal on a see-through
+  // window: the shell forwards moves while it ignores the mouse, and the
+  // enter that should follow when it stops ignoring it did not always come,
+  // so a face opened its card on hover only some of the time.
+  const [pointed, setPointed] = useState<string | null>(null);
+  const onMovedRef = useRef(opts.onMoved);
+  onMovedRef.current = opts.onMoved;
   // Declared up here because the size effect and the click-through test read
   // it: a drag in progress is the one state in which the window must keep
   // taking the mouse, and must not be resized.
@@ -84,7 +100,8 @@ export function useFloatingCircles(opts: {
     const regions: HitRegion[] = [];
     for (const el of Array.from(root.querySelectorAll<HTMLElement>("[data-face-hit]"))) {
       const r = el.getBoundingClientRect();
-      if (r.width > 0) regions.push({ kind: "circle", cx: r.left + r.width / 2, cy: r.top + r.height / 2, r: r.width / 2 });
+      const id = el.closest<HTMLElement>("[data-face-id]")?.dataset.faceId;
+      if (r.width > 0) regions.push({ kind: "circle", cx: r.left + r.width / 2, cy: r.top + r.height / 2, r: r.width / 2, id });
     }
     // EVERY chrome region, not the first: the overlay draws its card and its
     // controls as separate hit rects, and a toolbar left out of this list is
@@ -110,6 +127,17 @@ export function useFloatingCircles(opts: {
   // more then. The resize backstop cannot cover this: two faces swapping tiers
   // leave the window size unchanged, so no resize ever fires.
   useEventListener("animationend", measure);
+  // The card's band slides under whichever face it is about (a transition on
+  // `left`), and a pinned card moves it without any resize: measure where it
+  // came to rest, or its old rect keeps taking the clicks.
+  useEventListener("transitionend", measure);
+  const measureSoon = useCallback(() => {
+    requestAnimationFrame(measure);
+  }, [measure]);
+  useEventListener("click", measureSoon);
+  useWatchEffect(() => {
+    measureSoon();
+  }, [pointed]);
 
   const hide = useCallback(() => {
     if (hideTimer.current) clearTimeout(hideTimer.current);
@@ -142,16 +170,33 @@ export function useFloatingCircles(opts: {
       interactiveRef.current = hit;
       bridge.setInteractive(hit);
     }
+    setPointed(faceAt(regionsRef.current, e.clientX, e.clientY));
+    // On the content keeps the chrome. A window that is exactly its circles
+    // and their card counts all of itself; one that keeps room for its card
+    // counts only what is drawn (a circle, a card, the row's box). While the
+    // pointer rests on it, no timer runs: a timer under a still hand hid and
+    // reshowed the card every 1.5s.
+    const box = hoverContent ? rootRef.current?.getBoundingClientRect() : null;
+    const on =
+      !hoverContent ||
+      hit ||
+      (!!box && e.clientX >= box.left && e.clientX <= box.right && e.clientY >= box.top && e.clientY <= box.bottom);
+    if (!on) {
+      if (!hideTimer.current && hovered) hideLater();
+      return;
+    }
     setHovered(true);
-    // Anywhere in the window keeps the chrome: the window is exactly its
-    // circles and their card, so a pointer inside it is a pointer on them.
-    // The document's mouseleave is what says the pointer left; a timer that
-    // ran while the pointer rested on the glass hid and reshowed the card
-    // every 1.5s under a still hand.
     if (hideTimer.current) clearTimeout(hideTimer.current);
     hideTimer.current = null;
   });
-  useEventListener("mouseleave", hide, document);
+  useEventListener(
+    "mouseleave",
+    () => {
+      setPointed(null);
+      hide();
+    },
+    document,
+  );
 
   // ── Dragging a circle moves the window ──────────────────────────────────
   const startDrag = useCallback((e: React.PointerEvent) => {
@@ -179,6 +224,7 @@ export function useFloatingCircles(opts: {
     // The pointer may be off the glass by now, and no mousemove will come to
     // say so: the chrome goes on its way out the same as after any hover.
     hideLater();
+    onMovedRef.current?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the bridge is a per-window constant
   }, [hideLater]);
   const endDrag = useCallback(
@@ -192,5 +238,5 @@ export function useFloatingCircles(opts: {
   useEventListener("pointercancel", finishDrag, document);
   useEventListener("lostpointercapture", finishDrag, document);
 
-  return { rootRef, hovered, startDrag, endDrag };
+  return { rootRef, hovered, pointed, startDrag, endDrag };
 }
