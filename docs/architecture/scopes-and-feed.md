@@ -119,10 +119,9 @@ The card is derived from rows, never from the prose: `org.handsStartedBy`
 reads the hands the standing session spawned (`by_spawned_by`, `org_role_id`
 set) with their live state, the view cuts them to the turn's window (this wake
 until the next turn boundary) and reads `cast send <id>` targets off the turn's
-tool calls (`roleWake.ts` `handsStartedInTurn`, `sentToRef`), and `RoleWakeCard`
-renders it under the wake's line: at rest one wrapping line of hands, each its
-pill and state word; open, a row per hand with its pinned line, task and age.
-A hand the role claims but never started renders nothing.
+tool calls (`useTimelineTurns.ts` `sentToRef`). The wake card that rendered
+this went with the wake rail (org-staffing.md S25); a message to a role is a
+plain message, and where its turn went reads off the turn itself.
 
 ### F4.3 The panel answers who acts next
 
@@ -197,12 +196,10 @@ line per project, the project before the colon (matched by title or short
 id), the day the role wrote it in parentheses at the end of the line or
 right after the project's name (the dry runs wrote both), and the words a
 surface shows for a project with no line (`noWordYet`). A line's age comes
-only from that date; a line with no date has no age. The frame
-(`orgWakes.buildFrame`, `standingFrameLines`) reads the lines back under
-"Your scope now" above the counts, each with "written N days ago" and "older
-than a week" when it is, or "no line yet"; it never fills a line in. The
-standing text carries the principle as one bullet of `bootstrapMessage`
-(`anchors.ts`) and rule 8 of `ROLE_RULES`, so it rides every restart frame.
+only from that date; a line with no date has no age. `cast brief` reads the
+lines back beside the counts; it never fills a line in. The standing text
+carries the principle as one bullet of `bootstrapMessage` (`anchors.ts`) and
+rule 8 of `ROLE_RULES`.
 On the web the Scope tab is `ScopeOverviewTab` (`ScopePanel.tsx`): needs you
 from `useRoleEscalations` (`hooks/useRoleEscalations.ts`, the inbox card's
 `roleEscalationsOf` over the store's rows, the tree's standing pointer
@@ -220,7 +217,7 @@ feed stays under it, because on the phone the feed is the page (F3). Proof:
 `ScopePage.mount.test.tsx` (the Calling lead fixture: two escalation lines
 newest first with their pills, two sentences, one activity line, no digit
 outside them; then "Nothing needs you." and "no word from @calling yet"),
-`briefStanding.test.ts`, `orgWakes.test.ts` (the frame's lines and ages), and
+`briefStanding.test.ts`, and
 three dry runs on a saved restart frame (`~/.cache/f5-standing`, profile
 claude4, 87 to 114 seconds, about 40 cents each) in which every sample ended
 its turn with one dated line per project in plain words; the parser reads

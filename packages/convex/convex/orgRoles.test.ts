@@ -38,7 +38,6 @@ function fixtures(extra: Record<string, any[]> = {}) {
     pending_messages: [],
     devices: [],
     anchors: [],
-    role_wake_outbox: [],
     ...extra,
   });
 }
@@ -369,17 +368,12 @@ describe("orgRoles.reparentSession + retire", () => {
     const scheduled: any[] = [];
     const ctx: any = { db, scheduler: { runAfter: async (delay: number, _fn: any, args: any) => { scheduled.push({ delay, args }); } } };
     const moved = await performReparentRole(ctx, ME as any, { role_id: "or-1", reports_to: { kind: "role", role_id: "role-o" as any }, note: "Ops owns growth now." });
-    expect(moved.told).toEqual({ sessions: 1, roles: 1 });
-    const rows = db._tables.role_wake_outbox.filter((r: any) => r.role_id === "role-g");
-    expect(rows.map((r: any) => r.kind)).toEqual(["immediate", "passive"]);
-    expect(rows[0].cause).toBe("reporting line: You now report to Ops (@ops). Ops owns growth now. (Me moved the role)");
-    expect(rows[1].cause).toBe("hand jxhand1: You now report to Ops (@ops). Ops owns growth now.");
-    expect(rows[1].ref).toEqual({ table: "conversations", id: "hand-1", short_id: "jxhand1" });
-    expect(scheduled).toHaveLength(1);
-    // A no-op move logs nothing and tells nobody.
-    const same = await performReparentRole(ctx, ME as any, { role_id: "or-1", reports_to: { kind: "role", role_id: "role-o" as any } });
-    expect(same.told).toEqual({ sessions: 0, roles: 0 });
-    expect(db._tables.role_wake_outbox).toHaveLength(2);
+    expect(moved.reports_to).toEqual({ kind: "role", role_id: "role-o" });
+    expect(db._tables.org_role_history.filter((h: any) => h.action === "move")).toHaveLength(1);
+    expect(scheduled).toHaveLength(0);
+    // A no-op move logs nothing.
+    await performReparentRole(ctx, ME as any, { role_id: "or-1", reports_to: { kind: "role", role_id: "role-o" as any } });
+    expect(db._tables.org_role_history.filter((h: any) => h.action === "move")).toHaveLength(1);
   });
 });
 

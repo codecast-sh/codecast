@@ -1,5 +1,5 @@
 import { mutation, query, internalAction, internalMutation } from "./functions";
-import { enqueueRoleEvent } from "./orgEvents";
+import { tellRole } from "./pendingMessages";
 import {
   openTasksVouchForWaiting,
   isAssignedAwayFromOwnerSet,
@@ -854,10 +854,10 @@ export async function performNeedsInputCheck(
   // recheck in messages.ts) can still land on one.
   if (boundary) return { notified: false, reason: "session_boundary" };
 
-  // A hand (a session that reports to a role) that is HARD blocked wakes its
-  // role at once (org-roles-standing.md T3): the role, not the person, is the
-  // first reader of a stalled hand. Dedupe on the waiting episode the same
-  // way the chime does, through the outbox row's client-side cause.
+  // A hand (a session that reports to a role) that is HARD blocked tells its
+  // role at once (org-staffing.md S25): the role, not the person, is the
+  // first reader of a stalled hand. Deduped on the waiting episode the same
+  // way the chime is.
   if (conv.org_role_id && state === "needs_input") {
     const kind = needsInputKind({ awaitingInput, agentStatus, isUnresponsive: activity.isUnresponsive });
     const hard = awaitingInput || kind === "permission_blocked" || kind === "stopped" || kind === "unresponsive";
@@ -867,10 +867,9 @@ export async function performNeedsInputCheck(
     // wakes its role).
     const episode = `${conv.message_count}:${kind ?? "waiting"}`;
     if (hard && conv.hand_wake_notified_key !== episode) {
-      const id = await enqueueRoleEvent(ctx, conv.org_role_id, {
-        kind: "immediate",
-        cause: `hand ${conv.short_id ?? String(conv._id).slice(0, 7)} "${(conv.title ?? "").slice(0, 60)}" needs input (${kind ?? "waiting"})`,
-        ref: { table: "conversations", id: String(conv._id), short_id: conv.short_id },
+      const id = await tellRole(ctx, conv.org_role_id, {
+        content: `hand ${conv.short_id ?? String(conv._id).slice(0, 7)} "${(conv.title ?? "").slice(0, 60)}" needs input (${kind ?? "waiting"})`,
+        client_id: `hand-wait:${conv._id}:${episode}`,
       });
       if (id) await ctx.db.patch(conv._id, { hand_wake_notified_key: episode });
     }

@@ -1,6 +1,7 @@
 import { internalMutation, mutation, query } from "./functions";
 import { internalQuery } from "./_generated/server";
-import { applyTaskUpdate, cancelTasksOriginatingFrom, insertTask } from "./agentTasks";
+import { internal } from "./_generated/api";
+import { applyPause, applyResume, applyRunNow, applyTaskUpdate, cancelTasksOriginatingFrom, insertTask } from "./agentTasks";
 import { renderCapacityModel } from "@codecast/shared/contracts/orgCapacity";
 import { defaultAvatarFor, isAvatarKey } from "@codecast/shared/contracts/orgAvatars";
 import { ORG_AUTHORITY_KINDS, authorityWords, orgTenureError, type OrgAuthorityGrant } from "@codecast/shared/contracts/orgProposal";
@@ -24,13 +25,14 @@ import { takeOverSessions, takeoverPhrase } from "./orgInit";
 import { handOpenTasksUpChain } from "./tasks";
 import { EMPTY_SCOPE, isWholeWorkspace, normalizeScope, sameScope, scopeIds, scopeOutside, scopeOverlap, type PlanProjectOf, type Scope } from "./lib/orgScope";
 import { announceSeating, decommissionAnchorRow, provisionStandingAgent, seatTitlePatch, userCanAdminAnchor, workspaceAnchorFor, type RoleBootstrap } from "./anchors";
-import { enqueuePendingMessage } from "./pendingMessages";
+import { enqueuePendingMessage, tellRole } from "./pendingMessages";
 import { enqueueKillAndResume, performSetThreadState } from "./conversations";
 import { ACTIVE_AGENT_STATUSES, normalizeThreadState, parseThreadStateStatus } from "@codecast/shared/contracts";
 import { siteUrl } from "./lib/siteUrl";
 import { movedFields, type OrgLogFields } from "@codecast/shared/contracts/orgChange";
 import { labelsOf, noteOrgChange, noteRoleChange, recordSubject, roleSubject, whereOfRecord, whereOfRole, withOrgChange } from "./lib/orgChangeLog";
-import { DEFAULT_CAPS, RESTART_CAUSE, capsFor, countersFor, enqueueRoleEvent, roleStartsOnItsOwn, scheduleFlush, trustOf, unflushedRowsFor } from "./orgEvents";
+import { DEFAULT_CAPS, capsFor, countersFor, roleStartsOnItsOwn, trustOf } from "./lib/orgCaps";
+import { COMPANY_REVIEW_EVERY_MS, COMPANY_REVIEW_PROMPT, COMPANY_REVIEW_TITLE, ROLE_CHECK_EVERY_MS, ROLE_CHECK_PROMPT, liveRoutinesOf, roleRoutineFor } from "./lib/orgRoutine";
 import { autonomyChangeWords, switchFromStageWord, trustForSwitch } from "@codecast/shared/contracts/roleAutonomy";
 
 // Org roles: named seats in the reporting structure (docs/architecture/
@@ -434,9 +436,6 @@ async function updateRole(
       new_value: JSON.stringify(scopeIds(patch.scope)),
       created_at: patch.updated_at,
     });
-    // The role's world just changed shape: an immediate wake so its next
-    // frame reads the new scope (org-roles-standing.md T3).
-    await enqueueRoleEvent(ctx, role._id, { kind: "immediate", cause: "scope changed: your projects and plans were edited by a person; re-read cast brief" });
   }
   const updated = await ctx.db.get(role._id);
   await noteRoleChange(ctx, userId, patch.scope ? "scope" : "role_edit", role, updated);
@@ -501,7 +500,6 @@ async function performReparentRoleCore(
   const same = before?.kind === reports_to.kind
     && String(reports_to.kind === "role" ? before.role_id : before.user_id) === String(reports_to.kind === "role" ? reports_to.role_id : reports_to.user_id);
   await ctx.db.patch(role._id, { reports_to, updated_at: now });
-  const told = { sessions: 0, roles: 0 };
   if (!same) {
     await ctx.db.insert("org_role_history", {
       role_id: role._id,
@@ -513,39 +511,10 @@ async function performReparentRoleCore(
       new_value: JSON.stringify(reports_to),
       created_at: now,
     });
-    Object.assign(told, await tellRoleMoved(ctx, userId, await ctx.db.get(role._id), args.note));
   }
   const moved = await ctx.db.get(role._id);
   await noteRoleChange(ctx, userId, "move", role, moved, { door: args.from_session ? "cli" : "chart", gesture: args.from_session ? "command" : "drag" });
-  return { ...moved, told };
-}
-
-// The agents hear about a role move (org-staffing.md S11): the role gets an
-// immediate wake carrying the same line a moved session receives, and each
-// live hand rides that frame as a passive fact (one row per hand, so the
-// role sees which of its hands now report through it to the new parent).
-// A role with no standing session has nobody to tell; the rail returns null
-// and the counts say so.
-async function tellRoleMoved(ctx: Ctx, userId: Id<"users">, role: any, note?: string): Promise<{ sessions: number; roles: number }> {
-  const actor = await ctx.db.get(userId);
-  const line = reportsToLine(await parentNameOf(ctx, role), note);
-  const told = { sessions: 0, roles: 0 };
-  const woke = await enqueueRoleEvent(ctx, role._id, {
-    kind: "immediate",
-    cause: `reporting line: ${line} (${personName(actor)} moved the role)`,
-    ref: { table: "org_roles", id: String(role._id), short_id: role.short_id },
-  });
-  if (!woke) return told;
-  told.roles = 1;
-  for (const hand of await handsOf(ctx, role)) {
-    const row = await enqueueRoleEvent(ctx, role._id, {
-      kind: "passive",
-      cause: `hand ${hand.short_id ?? String(hand._id).slice(0, 7)}: ${line}`,
-      ref: { table: "conversations", id: String(hand._id), short_id: hand.short_id },
-    });
-    if (row) told.sessions++;
-  }
-  return told;
+  return moved;
 }
 
 export type UnseatChoice = "keep" | "retire";
@@ -570,12 +539,10 @@ async function performRetireRoleCore(ctx: any, userId: Id<"users">, args: { role
   // The standing session goes down with the seat: its routines are cancelled
   // (or they would fire into a dead role and spend the host's account), its
   // held and pending turns dropped, its anchor decommissioned (kill command,
-  // status completed, bot off the team roster). Outbox rows that never
-  // flushed are dropped too.
+  // status completed, bot off the team roster).
   // Kept (S16), the thread is the assistant the person had before the hire:
   // only the seat's own routine goes, every trigger they armed on it stays,
-  // and a message waiting for a wake is delivered as written, since the wake
-  // that would have carried it is dropped below.
+  // and a held note is delivered as written.
   let cancelledTriggers = 0;
   const standing = await standingConversationOf(ctx, role);
   // What the org log needs to put this back (org-staffing.md S21), read
@@ -584,7 +551,7 @@ async function performRetireRoleCore(ctx: any, userId: Id<"users">, args: { role
   const liveRoutines: any[] = standing ? (await ctx.db.query("agent_tasks").withIndex("by_originating_conversation", (q: any) => q.eq("originating_conversation_id", standing._id)).collect()).filter((t: any) => !["cancelled", "completed", "failed"].includes(t.status)) : [];
   const heldTasks: any[] = (await ctx.db.query("tasks").withIndex("by_assignee_updated", (q: any) => q.eq("assignee", String(role._id))).collect()).filter((t: any) => t.status !== "done" && t.status !== "dropped");
   if (standing) {
-    cancelledTriggers += await cancelTasksOriginatingFrom(ctx, standing._id, now, keepStanding ? (t) => t.title === COMPANY_REVIEW_TITLE : undefined);
+    cancelledTriggers += await cancelTasksOriginatingFrom(ctx, standing._id, now, keepStanding ? (t) => t.title === roleRoutineFor(role).title : undefined);
     const held: any[] = await ctx.db.query("pending_messages")
       .withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", standing._id).eq("status", "held")).collect();
     for (const p of held) await ctx.db.patch(p._id, keepStanding ? { status: "pending" } : { status: "cancelled", cancelled_at: now });
@@ -614,7 +581,6 @@ async function performRetireRoleCore(ctx: any, userId: Id<"users">, args: { role
     // stays "another role's standing session" forever (org-staffing.md S6).
     if (standing) await ctx.db.patch(standing._id, { standing_role_id: undefined, anchor_id: undefined, acting_user_id: undefined, updated_at: now });
   }
-  for (const row of await unflushedRowsFor(ctx, role._id)) await ctx.db.delete(row._id);
   const filed: any[] = await ctx.db
     .query("conversations")
     .withIndex("by_org_role", (q: any) => q.eq("org_role_id", role._id))
@@ -813,8 +779,6 @@ async function applyProjectLead(
   }
   if (!patch.owner_role_id) return { owner_role_id: null, scope: "cleared" };
   const role = await ctx.db.get(patch.owner_role_id as Id<"org_roles">);
-  // The role hears it in its own words whatever happens to its scope.
-  await enqueueRoleEvent(ctx, role._id, { kind: "immediate", cause: `you now lead the project ${project.title}: a person named you its lead`, ref: { table: "projects", id: String(project._id) } });
   const cover = await performCoverProjects(ctx, userId, role._id, [project._id], { leave_sessions: args.leave_sessions });
   return { owner_role_id: String(role._id), scope: cover.added.length ? "added" : cover.listed.length ? "listed" : cover.skipped[0].reason, took_over: cover.took_over };
 }
@@ -926,7 +890,6 @@ export async function performSetLine(
       new_value: slug,
       created_at: now,
     });
-    await enqueueRoleEvent(ctx, role._id, { kind: "immediate", cause: `line changed: your scope's tasks now run on the "${slug}" workflow (was "${previous}"); re-read cast brief` });
   }
   const updated = await ctx.db.get(role._id);
   return { ...updated, line_workflow_slug: lineSlugOf(updated), previous_line_workflow_slug: previous };
@@ -1159,8 +1122,11 @@ async function performProvisionRoleCore(
   });
   patch.anchor_id = provisioned.anchor_id;
   await ctx.db.patch(role._id, patch);
+  const standing = await standingConversationOf(ctx, { ...role, ...patch });
+  // The role's one scheduled wake (org-staffing.md S25): a recurring trigger
+  // on its standing session, the same row a person arms with `cast trigger`.
+  if (standing) await ensureRoleRoutine(ctx, { ...role, ...patch }, standing);
   if (!provisioned.already_existed) {
-    const standing = await standingConversationOf(ctx, { ...role, ...patch });
     if (standing) await noteOrgChange(ctx, userId, whereOfRole(role), {
       kind: "adopt", subject: roleSubject(role),
       before: { standing_session: null },
@@ -1189,11 +1155,10 @@ export const provision = mutation({
 // its switch off and never on: it reads how work flows, proposes the
 // chart, and applies nothing. `performStaff` creates it, provisions or adopts
 // its standing session, arms the weekly company review on that session and
-// queues the first review as an immediate wake. Idempotent per company.
+// runs the first review at once. Idempotent per company.
 
 export const CHIEF_OF_STAFF_NAME = "Chief of Staff";
-export const COMPANY_REVIEW_TITLE = "Company review";
-export const COMPANY_REVIEW_EVERY_MS = 7 * 24 * 60 * 60 * 1000;
+export { COMPANY_REVIEW_TITLE, COMPANY_REVIEW_EVERY_MS, COMPANY_REVIEW_PROMPT, ROLE_CHECK_EVERY_MS, ROLE_CHECK_PROMPT, roleRoutineFor };
 
 export const CHIEF_OF_STAFF_CHARTER = [
   `You are the chief of staff of this company. The executives decide; you propose. Your job is to see how work actually flows, between people, roles and hands, and to propose the organization that lets it flow better.`,
@@ -1227,36 +1192,29 @@ export function seatingNote(role: { short_id: string; handle: string; name: stri
   ].join("\n");
 }
 
-// The routine's prompt: the standing session runs the review and proposes only
-// when the stability rules warrant it.
-export const COMPANY_REVIEW_PROMPT = [
-  `Company review. Run \`cast org review\` (it reads \`cast org health --json\` and the inputs) and read each role's brief, then open the conversation with the person you report to: the reporting structure as it stands and as you would change it, in short plain messages, asking what the records cannot settle, and posting each thing that is ready to agree to as a small proposal with its short id on its own line.`,
-  `Propose changes only when the stability rules in your charter warrant them: a bottleneck the flags show more than once, a role idle past the retire window while the company works, a project with no owner or no charter. A program role whose end has arrived (health flags it \`program_ended\`) is due rather than a judgement call: propose the retirement or the review its tenure names. When nothing warrants a change, say so in one line and end the turn; a quiet review is a good review.`,
-  `Hold the evidence behind every change and give it when asked. You apply nothing.`,
-].join("\n");
-
-// The seat's live review routine, brought up to the current prompt. The
-// routine holds its own copy of the text, so a prompt change reaches a seat
-// already hired only through here: the one audited writer for routine edits.
-async function liveCompanyReview(ctx: any, standing: any): Promise<any | null> {
-  const rows: any[] = await ctx.db
-    .query("agent_tasks")
-    .withIndex("by_originating_conversation", (q: any) => q.eq("originating_conversation_id", standing._id))
-    .collect();
-  const live = rows.find((t) => t.title === COMPANY_REVIEW_TITLE && (t.status === "scheduled" || t.status === "running"));
-  if (live) await applyTaskUpdate(ctx, live, { prompt: COMPANY_REVIEW_PROMPT }, { userId: standing.user_id, source: "cli" });
-  return live ?? null;
+// The role's routine, brought up to the current prompt: the routine holds
+// its own copy of the text, so a prompt change reaches a seat already hired
+// only through here. Keyed on its title, so a repeat staff call or a
+// re-provision never arms a second one. Null when the seat has none yet.
+export async function roleRoutineOf(ctx: Ctx, role: any, standing: any): Promise<any | null> {
+  const spec = roleRoutineFor(role);
+  const live = (await liveRoutinesOf(ctx, standing)).find((t) => t.title === spec.title) ?? null;
+  if (live && live.prompt !== spec.prompt) await applyTaskUpdate(ctx, live, { prompt: spec.prompt }, { userId: standing.user_id, source: "cli" });
+  return live;
 }
 
-// The review routine on the standing session, once. Keyed on its title so a
-// repeat staff call, or a re-provision, never arms a second one.
-async function ensureCompanyReview(ctx: any, standing: any, everyMs: number): Promise<{ id: Id<"agent_tasks">; short_id?: string; created: boolean }> {
-  const live = await liveCompanyReview(ctx, standing);
-  if (live) return { id: live._id, short_id: live.short_id, created: false };
-  const interval = Math.max(60_000, Math.round(everyMs || COMPANY_REVIEW_EVERY_MS));
+export async function ensureRoleRoutine(ctx: Ctx, role: any, standing: any, everyMs?: number): Promise<{ id: Id<"agent_tasks">; short_id?: string; created: boolean }> {
+  const spec = roleRoutineFor(role);
+  const interval = Math.max(60_000, Math.round(everyMs || spec.every_ms));
+  const live = await roleRoutineOf(ctx, role, standing);
+  if (live) {
+    // A cadence the caller named reaches a routine already armed.
+    if (everyMs && live.interval_ms !== interval) await applyTaskUpdate(ctx, live, { interval_ms: interval }, { userId: standing.user_id, source: "cli" });
+    return { id: live._id, short_id: live.short_id, created: false };
+  }
   const created = await insertTask(ctx, standing.user_id, {
-    title: COMPANY_REVIEW_TITLE,
-    prompt: COMPANY_REVIEW_PROMPT,
+    title: spec.title,
+    prompt: spec.prompt,
     originating_conversation_id: String(standing._id),
     project_path: standing.project_path ?? undefined,
     schedule_type: "recurring",
@@ -1358,11 +1316,10 @@ export async function performStaff(
   const standing = await standingConversationOf(ctx, fresh);
   let routine: { id: Id<"agent_tasks">; short_id?: string } | null = null;
   if (standing) {
-    const ensured = await ensureCompanyReview(ctx, standing, args.every_ms ?? COMPANY_REVIEW_EVERY_MS);
+    const ensured = await ensureRoleRoutine(ctx, fresh, standing, args.every_ms);
     routine = { id: ensured.id, short_id: ensured.short_id };
-    // The first review runs at once: an immediate wake carrying the prompt,
-    // the same rail a fired routine rides (org-roles-standing.md T3).
-    if (provisioned) await enqueueRoleEvent(ctx, fresh._id, { kind: "immediate", cause: `first ${COMPANY_REVIEW_TITLE.toLowerCase()}:\n${COMPANY_REVIEW_PROMPT}` });
+    // The first review runs at once, through the trigger itself.
+    if (provisioned) await applyRunNow(ctx, (await ctx.db.get(ensured.id))!);
   }
   return {
     role: { _id: fresh._id, short_id: fresh.short_id, handle: fresh.handle, name: fresh.name },
@@ -1394,7 +1351,7 @@ export async function performBackfillSeatedChiefs(ctx: any, dryRun: boolean): Pr
     if (role.handle !== CHIEF_OF_STAFF_HANDLE || role.status === "retired" || !role.anchor_id) continue;
     const standing = await standingConversationOf(ctx, role);
     // Refresh only: a routine a person cancelled stays cancelled.
-    if (standing && !dryRun) await liveCompanyReview(ctx, standing);
+    if (standing && !dryRun) await roleRoutineOf(ctx, role, standing);
     // Nothing to explain: already explained (seat_previous is the mark), a
     // thread born as the role (a fresh seat was never anyone's assistant, and
     // its title is the role's from its first row), or a note already waiting.
@@ -1501,6 +1458,10 @@ async function performPauseRoleCore(ctx: any, userId: Id<"users">, args: { role_
   if (role.status === "paused") return { ...role, interrupted: 0 };
   await ctx.db.patch(role._id, { status: "paused", updated_at: Date.now() });
   await noteRoleChange(ctx, userId, "role_edit", role, await ctx.db.get(role._id));
+  // Pausing a role pauses its triggers (org-staffing.md S25); resume brings
+  // every paused trigger on the seat back.
+  const standing = await standingConversationOf(ctx, role);
+  for (const t of standing ? await liveRoutinesOf(ctx, standing) : []) await applyPause(ctx, t);
   const interrupted = await interruptHands(ctx, role, userId, "role-paused",
     `Your role ${role.name} (@${role.handle}) was paused. Stop at a safe point: finish the step in flight, pin your state with cast state, and end your turn.`);
   return { ...(await ctx.db.get(role._id)), interrupted };
@@ -1531,19 +1492,18 @@ async function performResumeRoleCore(ctx: any, userId: Id<"users">, args: { role
   const role = await requireRole(ctx, userId, args.role_id, "admin");
   if (role.status !== "paused") return await ctx.db.get(role._id);
   await ctx.db.patch(role._id, { status: "active", updated_at: Date.now() });
-  await scheduleFlush(ctx, role._id, 0);
+  const standing = await standingConversationOf(ctx, role);
+  for (const t of standing ? await liveRoutinesOf(ctx, standing) : []) await applyResume(ctx, t);
   await noteRoleChange(ctx, userId, "role_edit", role, await ctx.db.get(role._id));
   return await ctx.db.get(role._id);
 }
 
-// restart — kill and resume the standing session; the next frame carries the
-// charter and the brief in full.
+// restart — kill and resume the standing session.
 export async function performRestartRole(ctx: any, userId: Id<"users">, args: { role_id: string }): Promise<any> {
   const role = await requireRole(ctx, userId, args.role_id, "admin");
   const conv = await standingConversationOf(ctx, role);
   if (!conv) throw new Error("This role has no standing session yet (cast role create provisions one, or run cast role provision)");
   await enqueueKillAndResume(ctx, conv.user_id, conv);
-  await enqueueRoleEvent(ctx, role._id, { kind: "immediate", cause: `${RESTART_CAUSE} your session was restarted; the charter and brief follow in full` });
   return { role_id: role._id, conversation_id: conv._id, short_id: conv.short_id };
 }
 
@@ -1648,15 +1608,11 @@ async function performSetAuthorityCore(ctx: any, userId: Id<"users">, args: { ro
   }
   const after = await ctx.db.get(role._id);
   await noteRoleChange(ctx, userId, "authority", role, after);
-  // The role learns at once what it may now do (an immediate wake, like a charter change).
-  await enqueueRoleEvent(ctx, role._id, { kind: "immediate", cause: authority.length ? `authority changed: may ${authorityWords(authority as any)}` : "authority changed: none granted", ref: undefined });
-  await scheduleFlush(ctx, role._id, 0);
   return { ...after, authority };
 }
 
-// wake — a person (or their session) pokes the role. The message rides the
-// standing session's rail; enqueuePendingMessage turns it into an immediate
-// outbox row, so the frame carries it.
+// wake — a person (or their session) writes to the role: a plain message
+// into its standing session (org-staffing.md S25).
 export async function performWakeRole(ctx: any, userId: Id<"users">, args: { role_id: string; message: string; from_session?: string }): Promise<any> {
   const role = await requireRole(ctx, userId, args.role_id, "access");
   const conv = await standingConversationOf(ctx, role);
@@ -1667,25 +1623,21 @@ export async function performWakeRole(ctx: any, userId: Id<"users">, args: { rol
     from_conversation_id: from?._id,
     human: !from,
   });
-  // The flush holds every row while the role is paused (orgWakes gate 1), so
-  // the caller learns the line waits for a resume rather than a wake.
-  return { role_id: role._id, conversation_id: conv._id, short_id: conv.short_id, pending_message_id: pendingId, held: wakeIsHeld(role) };
+  return { role_id: role._id, conversation_id: conv._id, short_id: conv.short_id, pending_message_id: pendingId };
 }
 
-/** A paused role reads its lines when someone resumes it (orgWakes gate 1). */
-export function wakeIsHeld(role: { status: string }): boolean {
-  return role.status === "paused";
-}
-
-export async function listWakes(ctx: Ctx, userId: Id<"users">, args: { role_id: string; limit?: number }): Promise<any[]> {
-  const role = await requireRole(ctx, userId, args.role_id, "access");
-  const rows: any[] = await ctx.db
-    .query("role_wakes")
-    .withIndex("by_role_created", (q: any) => q.eq("role_id", role._id))
-    .order("desc")
-    .take(Math.min(Math.max(args.limit ?? 20, 1), 200));
-  return rows;
-}
+// The role read its brief from its own session: the clock `cast brief` diffs
+// against moves to now, so the next read shows what changed since this one.
+export const markBriefRead = internalMutation({
+  args: { role_id: v.id("org_roles"), session: v.string() },
+  handler: async (ctx, args) => {
+    const role = await ctx.db.get(args.role_id);
+    const standing = role ? await standingConversationOf(ctx, role) : null;
+    if (!role || !standing || (standing.session_id !== args.session && String(standing._id) !== args.session)) return false;
+    await ctx.db.patch(role._id, { checked_at: Date.now() });
+    return true;
+  },
+});
 
 // brief edit — the narrative from stdin; its first line mirrors into the
 // standing session's thread state (the same four fields stateCommand writes).
@@ -1735,26 +1687,12 @@ async function rolesOwningDoc(ctx: Ctx, doc: any, field: "brief_doc_id" | "chart
   return rows.filter((role) => String(role[field] ?? "") === String(doc._id));
 }
 
-// A charter edit wakes its role at once (T3): the rules just changed.
-export async function wakeRolesOfCharter(ctx: Ctx, doc: any): Promise<void> {
-  for (const role of await rolesOwningDoc(ctx, doc, "charter_doc_id")) {
-    await enqueueRoleEvent(ctx, role._id, {
-      kind: "immediate",
-      cause: `your charter changed; re-read it (cast brief) before acting`,
-      ref: { table: "docs", id: String(doc._id) },
-    });
-  }
-}
-
-// After any write to a role document's content, whichever path wrote it: a
-// brief mirrors its first line into the standing session's state (T2); a
-// charter wakes the role (T3). Other doc types are untouched.
+// After any write to a brief's content, whichever path wrote it: its first
+// line mirrors into the standing session's state (T2). Other doc types are
+// untouched; a charter is read at the role's next run.
 export async function afterRoleDocWrite(ctx: Ctx, doc: any, content: string): Promise<void> {
-  if (doc?.doc_type === "brief") {
-    for (const role of await rolesOwningDoc(ctx, doc, "brief_doc_id")) await mirrorBriefState(ctx, role, content);
-  } else if (doc?.doc_type === "charter") {
-    await wakeRolesOfCharter(ctx, doc);
-  }
+  if (doc?.doc_type !== "brief") return;
+  for (const role of await rolesOwningDoc(ctx, doc, "brief_doc_id")) await mirrorBriefState(ctx, role, content);
 }
 
 // The session the caller RUNS (lib/actor: identity follows the token). A row
@@ -1833,13 +1771,8 @@ export const wake = mutation({
   args: { api_token: v.optional(v.string()), role_id: v.string(), message: v.string(), from_session: v.optional(v.string()) },
   handler: async (ctx, { api_token, ...args }) => performWakeRole(ctx, await requireCaller(ctx, api_token), args),
 });
-export const wakes = query({
-  args: { api_token: v.optional(v.string()), role_id: v.string(), limit: v.optional(v.number()) },
-  handler: async (ctx, { api_token, ...args }) => listWakes(ctx, await requireCaller(ctx, api_token), args),
-});
 // Who reports to a role (org-roles-run-work.md R6). A person may add or
-// remove themself; an admin of the role may name anyone in its boundary. A
-// new report wakes the role at once so it asks for their goals.
+// remove themself; an admin of the role may name anyone in its boundary.
 export async function performSetReports(
   ctx: Ctx,
   userId: Id<"users">,
@@ -1876,14 +1809,6 @@ export async function performSetReports(
     role_id: role._id, user_id: userId, actor_type: "user", action: "reports", field: "reports_user_ids",
     old_value: JSON.stringify((role.reports_user_ids ?? []).map(String)), new_value: JSON.stringify(Array.from(current)), created_at: now,
   });
-  for (const uid of added) {
-    const name = names.get(String(uid))!;
-    await enqueueRoleEvent(ctx, role._id, {
-      kind: "immediate",
-      cause: `${name} now reports to you: ask them for their three to five goals and keep them in your brief under "## Goals: ${name}"`,
-      ref: { table: "users", id: String(uid) },
-    });
-  }
   return await ctx.db.get(role._id);
 }
 
@@ -1899,4 +1824,21 @@ export const briefEdit = mutation({
 export const selfForSession = query({
   args: { api_token: v.optional(v.string()), session: v.string() },
   handler: async (ctx, { api_token, session }) => roleForSession(ctx, await requireCaller(ctx, api_token), session),
+});
+
+/** Arm the recurring check (S25) on every active role that lacks one. A role
+ *  already armed is left as it is; a paused or retired role gets nothing. */
+export const armRoleRoutines = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const armed: string[] = [];
+    for (const role of await ctx.db.query("org_roles").collect()) {
+      if (role.status !== "active") continue;
+      const standing = await standingConversationOf(ctx as any, role);
+      if (!standing) continue;
+      const r = await ensureRoleRoutine(ctx as any, role, standing);
+      if (r.created) armed.push(`${role.short_id} ${r.short_id ?? ""}`.trim());
+    }
+    return { armed };
+  },
 });

@@ -41,8 +41,6 @@ function fixtures() {
     counters: [],
     org_roles: [],
     org_role_history: [],
-    role_wakes: [],
-    role_wake_outbox: [],
     anchors: [],
     projects: [
       { _id: P, user_id: ME, team_id: TEAM, workspace: WS, short_id: "pr-1", title: "Growth", status: "active", project_path: "/repo/growth", created_at: 1, updated_at: NOW },

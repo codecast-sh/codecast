@@ -13,7 +13,7 @@ import { findConversationByAnyRef } from "./conversationSessionLookup";
 import { listAgentBoxDevices, retainSessionCreator, sessionLaunchRunner } from "./sessionLaunch";
 import { roleOfConversation } from "./lib/actor";
 import { canAccessTask } from "./lib/access";
-import { capsFor, countersFor, roleStartsOnItsOwn } from "./orgEvents";
+import { capsFor, countersFor, roleStartsOnItsOwn } from "./lib/orgCaps";
 import { charterLine, type CharterRow } from "./lib/orgCharter";
 import { applyHandoffLink, findHandoffSource, handoffChildFields } from "./handoff";
 

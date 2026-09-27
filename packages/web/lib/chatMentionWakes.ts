@@ -35,11 +35,9 @@ function skippedTargets(skipped: string[] | undefined): Set<string> {
   return out;
 }
 
-// A role that did not wake because of its own state, and what the sender can
-// do about it. The words for a paused role are RolePausedNote's. Every other
-// skip reason (a relay, a loop rule) is the system working and stays silent.
+// A role that could not be reached, and what the sender can do about it.
+// Every other skip reason (a relay) is the system working and stays silent.
 const HOLD_LINES: Record<string, (handle: string) => string> = {
-  role_paused: (h) => `@${h} is paused: your line waits until someone resumes it`,
   role_has_no_session: (h) => `@${h} has no agent yet: bring it online from its page`,
 };
 

@@ -2,11 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { performCreateRole, performSetReports } from "./orgRoles";
 import { computeReportingPeople, goalKey, noticeGoalStalls, stampGoalsSeen } from "./orgGoals";
-import { buildFrame } from "./orgWakes";
 
 // A person who reports to a role (docs/architecture/org-roles-run-work.md R6):
 // who may report, the goals read against the live rows, what counts as a
-// stall, the one notice a day, and the frame's block.
+// stall, and the one notice a day.
 
 const ME = "u".repeat(31) + "m"; // team admin
 const MATE = "u".repeat(31) + "t"; // plain member
@@ -29,7 +28,7 @@ function fixtures(extra: Record<string, any[]> = {}) {
     ],
     teams: [{ _id: TEAM, name: "Acme" }],
     counters: [], org_roles: [], org_role_history: [], org_role_events: [], conversations: [], session_owners: [], managed_sessions: [],
-    messages: [], user_presence: [], pending_messages: [], devices: [], anchors: [], role_wake_outbox: [],
+    messages: [], user_presence: [], pending_messages: [], devices: [], anchors: [],
     tasks: [], plans: [], docs: [],
     ...extra,
   });
@@ -137,32 +136,3 @@ describe("the stall notice", () => {
   });
 });
 
-describe("the frame", () => {
-  test("Your sessions carries each reporting person's goals and their sessions that changed", () => {
-    const facts: any = {
-      role: { id: "r1", short_id: "or-1", name: "Chief", handle: "chief", trust: "decide", status: "active" },
-      scope: { projects: [], plans: [], whole_workspace: true },
-      tasks: { total: 0, open: 0, by_status: {}, by_priority: {} }, plans: [], hands: [], changed: [],
-      people: [{
-        user_id: MATE, name: "Mate", has_section: true, sessions_total: 3, stalled_high: 1,
-        goals: [{ text: "Close the round", priority: "high", raw: "", refs: [], unresolved: [], moved_at: null, stalled: true, unmatched: false }],
-        sessions_changed: [{ _id: "c2", short_id: "jx7deck", title: "Investor update", state: "needs_input", state_line: "drafted", updated_at: NOW - H }],
-      }],
-      decisions: { open: 0, answered_today: 0 },
-      usage: { day: "2026-09-19", wakes: 0, hands: 0, tokens: 0, caps: { wakes_per_day: 40, hands_per_day: 6, tokens_per_day: 400000 }, uncounted_sessions: 0 },
-      generated_at: NOW,
-    };
-    const text = buildFrame({
-      role: { _id: "r1", short_id: "or-1", name: "Chief", handle: "chief", trust: "decide", last_frame_seq: NOW - 8 * H },
-      anchor: null, rows: [{ kind: "scheduled", cause: "the morning wake" }], facts,
-      charter: { content: "# Chief" }, brief: { content: "Chief: steady" }, channelLines: [], parentName: "Me", restart: false, now: NOW,
-    } as any).text;
-    const block = text.slice(text.indexOf("## Your sessions"));
-    expect(block).toContain("People who report to you:");
-    expect(block).toContain("1. Close the round (high) — nothing matched · stalled");
-    expect(block).toContain("- jx7deck Investor update: needs_input — drafted");
-    // A person with no section is a prompt to ask, never an empty list.
-    facts.people[0] = { ...facts.people[0], has_section: false, goals: [] };
-    expect(buildFrame({ role: { _id: "r1", short_id: "or-1", name: "Chief", handle: "chief", trust: "decide" }, anchor: null, rows: [], facts, charter: { content: "" }, brief: { content: "" }, channelLines: [], parentName: "Me", restart: false, now: NOW } as any).text).toContain("no goals yet: ask Mate");
-  });
-});

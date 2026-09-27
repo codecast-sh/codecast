@@ -14,11 +14,7 @@ describe("mentionWakeLine", () => {
     expect(
       mentionWakeLine("@infra-lead @growth", { roles: 1, sessions: 0, folded: 0, skipped: ["role_has_no_session:growth"] }, roles),
     ).toBe("woke @infra-lead · @growth has no agent yet: bring it online from its page");
-    // A paused role woke nothing, and the sender still hears what became of the line.
-    expect(
-      mentionWakeLine("@infra-lead status?", { roles: 0, sessions: 0, folded: 0, skipped: ["role_paused:infra-lead"] }, roles),
-    ).toBe("@infra-lead is paused: your line waits until someone resumes it");
-    // A skip that is the system working (a relay, a loop rule) stays silent.
+    // A skip that is the system working (a relay) stays silent.
     expect(
       mentionWakeLine("@infra-lead", { roles: 0, sessions: 0, folded: 0, skipped: ["relayed:infra-lead"] }, roles),
     ).toBeNull();

@@ -81,7 +81,6 @@ function fixtures(o: Overrides = {}) {
     messages: [],
     task_comments: [],
     org_role_history: [],
-    role_wake_outbox: [],
     directory_team_mappings: [],
     thread_reads: [],
     entity_subscriptions: [],
@@ -233,7 +232,7 @@ describe("orgLine.sweep (L9)", () => {
 });
 
 describe("orgRoles.setLine (L2)", () => {
-  test("a person sets the slug: logged to org_role_history and the role wakes at once", async () => {
+  test("a person sets the slug: logged to org_role_history", async () => {
     const { ctx, tables } = fixtures();
     const updated = await performSetLine(ctx, HOST as any, { role_id: "or-1", slug: "Feature", human_decision: "yes" });
     expect(updated.line_workflow_slug).toBe("feature");
@@ -241,17 +240,12 @@ describe("orgRoles.setLine (L2)", () => {
     expect(tables.org_roles[0].line_workflow_slug).toBe("feature");
     expect(tables.org_role_history).toHaveLength(1);
     expect(tables.org_role_history[0]).toMatchObject({ role_id: ROLE, user_id: HOST, actor_type: "user", action: "line", field: "line_workflow_slug", old_value: "line", new_value: "feature" });
-    expect(tables.role_wake_outbox).toHaveLength(1);
-    expect(tables.role_wake_outbox[0].role_id).toBe(ROLE);
-    expect(tables.role_wake_outbox[0].kind).toBe("immediate");
-    expect(tables.role_wake_outbox[0].cause).toContain("feature");
   });
 
-  test("the same slug again logs nothing and wakes nobody", async () => {
+  test("the same slug again logs nothing", async () => {
     const { ctx, tables } = fixtures({ role: { line_workflow_slug: "feature" } });
     await performSetLine(ctx, HOST as any, { role_id: "or-1", slug: "feature.cast", human_decision: "yes" });
     expect(tables.org_role_history).toHaveLength(0);
-    expect(tables.role_wake_outbox).toHaveLength(0);
   });
 
   test("an agent session may not change the line; a plain member may not either", async () => {

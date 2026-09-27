@@ -47,14 +47,11 @@ describe("afterRoleDocWrite", () => {
     expect(conv!.patch.thread_state_status).toBe("dormant");
   });
 
-  test("a charter edit queues an immediate wake for its role", async () => {
+  test("a charter edit touches nothing: the role reads it at its next run", async () => {
     const { ctx, inserts, patches } = fakeCtx();
     await afterRoleDocWrite(ctx, { _id: "charter1", doc_type: "charter", team_id: "team1" }, "# Charter\nnew rules");
-    const wake = inserts.find((i) => i.table === "role_wake_outbox");
-    expect(wake).toBeDefined();
-    expect(wake!.row.role_id).toBe("role1");
-    expect(wake!.row.kind).toBe("immediate");
-    expect(patches.find((p) => p.id === "conv1")).toBeUndefined();
+    expect(inserts).toHaveLength(0);
+    expect(patches).toHaveLength(0);
   });
 
   test("any other document is left alone", async () => {

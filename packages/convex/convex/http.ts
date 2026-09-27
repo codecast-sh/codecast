@@ -4138,12 +4138,17 @@ cliRoute("/cli/role/limits", async (ctx, body) => ctx.runMutation(api.orgRoles.s
 cliRoute("/cli/role/caps", async (ctx, body) => ctx.runMutation(api.orgRoles.setCaps, body));
 cliRoute("/cli/role/authority", async (ctx, body) => ctx.runMutation((api as any).orgRoles.setAuthority, body));
 cliRoute("/cli/role/reports", async (ctx, body) => ctx.runMutation(api.orgRoles.setReports, body));
-cliRoute("/cli/role/wakes", async (ctx, body) => ctx.runQuery(api.orgRoles.wakes, body));
 cliRoute("/cli/role/self", async (ctx, body) => ctx.runQuery(api.orgRoles.selfForSession, body));
 // The scope's line (the-line.md L2): `cast role line <handle> [--set <slug>]`.
 cliRoute("/cli/role/line", async (ctx, body) => ctx.runQuery(api.orgRoles.line, body));
 cliRoute("/cli/role/line/set", async (ctx, body) => ctx.runMutation(api.orgRoles.setLine, body));
-cliRoute("/cli/brief/get", async (ctx, body) => ctx.runQuery(api.org.brief, body));
+cliRoute("/cli/brief/get", async (ctx, { from_session, ...body }) => {
+  const brief = await ctx.runQuery(api.org.brief, body);
+  // Read from the role's own session, the brief's "changed since" clock moves
+  // to now (org-staffing.md S25); a person reading it moves nothing.
+  if (brief && from_session) await ctx.runMutation(internal.orgRoles.markBriefRead, { role_id: brief.role._id, session: from_session });
+  return brief;
+});
 cliRoute("/cli/brief/edit", async (ctx, body) => ctx.runMutation(api.orgRoles.briefEdit, body));
 // Scopes and the scope feed (docs/architecture/scopes-and-feed.md F1, F2).
 cliRoute("/cli/org/scope", async (ctx, body) => {

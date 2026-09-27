@@ -44,6 +44,7 @@ const ROLES = [
 const CONVERSATIONS = [
   { _id: "conversations_hand", session_id: "hand-growth", user_id: OWNER, team_id: TEAM, status: "active", org_role_id: GROWTH },
   { _id: "conversations_standing", session_id: "standing-growth", user_id: OWNER, team_id: TEAM, status: "active", standing_role_id: GROWTH },
+  { _id: "conversations_standing_ads", session_id: "standing-ads", user_id: OWNER, team_id: TEAM, status: "active", standing_role_id: ADS },
   { _id: "conversations_hand_ads", session_id: "hand-ads", user_id: OWNER, team_id: TEAM, status: "active", org_role_id: ADS },
   { _id: "conversations_free", session_id: "free", user_id: OWNER, team_id: TEAM, status: "active" },
   // A fork of the growth hand: the hand's history under a new id.
@@ -68,13 +69,16 @@ async function makeCtx(tasks: any[], opts: { withBot?: boolean } = {}) {
       { _id: "tm_2", user_id: JASON, team_id: TEAM, role: "member" },
       ...(opts.withBot ? [{ _id: "tm_3", user_id: BOT, team_id: TEAM, role: "member" }] : []),
     ],
-    anchors: opts.withBot ? [{ _id: "anchors_growth", bot_user_id: BOT, org_role_id: GROWTH, team_id: TEAM, status: "active" }] : [],
+    anchors: [
+      { _id: "anchors_growth", bot_user_id: BOT, org_role_id: GROWTH, team_id: TEAM, status: "active", conversation_id: "conversations_standing" },
+      { _id: "anchors_ads", bot_user_id: "users_bot_ads", org_role_id: ADS, team_id: TEAM, status: "active", conversation_id: "conversations_standing_ads" },
+    ],
     api_tokens: [{ _id: "token_1", user_id: OWNER, token_hash: await hashToken(TOKEN) }],
     org_roles: ROLES.map((r) => ({ ...r })),
     tasks,
     task_history: [],
     entity_subscriptions: [],
-    role_wake_outbox: [],
+    pending_messages: [],
     conversations: CONVERSATIONS.map((c) => ({ ...c })),
   };
   const db = makeFakeDb(tables);
@@ -133,13 +137,13 @@ describe("a role is an assignee", () => {
 
   // The role's seat is a bot user named after the role, on the team roster.
   // A handle names the role, never that bot: the task must sit under the
-  // role so it is woken, so `--chain` finds the task, and so the board shows
+  // role so it is told, so `--chain` finds the task, and so the board shows
   // one Growth and not two (lib/mentionResolve: a role outranks its bot).
   test("@handle stores the role, not the bot user named after it", async () => {
     const { ctx, tables } = await makeCtx([task(1)], { withBot: true });
     await cliUpdate(ctx, { short_id: "ct-1", assignee: "@growth" });
     expect(tables.tasks[0].assignee).toBe(GROWTH);
-    expect(tables.role_wake_outbox).toHaveLength(1);
+    expect(tables.pending_messages).toHaveLength(1);
   });
 
   test("the bare name resolves to the role, never to its bot user", async () => {
@@ -158,14 +162,14 @@ describe("a role is an assignee", () => {
 
   // Access is the row's workspace stamp, never team_id, which is routing
   // (CLAUDE.md). A task routed to the team but readable by its owner only
-  // cannot go to a team role: the role's wake row and its standing session
-  // are the team's to read, and the title would leak through them.
+  // cannot go to a team role: its standing session is the team's to read,
+  // and the title would leak through it.
   test("a task readable by its owner only is refused to a team role, in words that say why", async () => {
     const { ctx, tables } = await makeCtx([task(1, { workspace: `user:${OWNER}` })]);
     await expect(cliUpdate(ctx, { short_id: "ct-1", assignee: "@growth" })).rejects.toThrow(/readable by its owner only/);
     await expect((webUpdate as any)._handler(ctx, { short_id: "ct-1", assignee: GROWTH })).rejects.toThrow(/readable by its owner only/);
     expect(tables.tasks[0].assignee).toBeUndefined();
-    expect(tables.role_wake_outbox).toEqual([]);
+    expect(tables.pending_messages).toEqual([]);
     // A person can still take it.
     await cliUpdate(ctx, { short_id: "ct-1", assignee: "@jbenn" });
     expect(tables.tasks[0].assignee).toBe(JASON);
@@ -248,10 +252,10 @@ describe("a session that takes a task assigns it to its role", () => {
     expect(result.assigned_role).toBeUndefined();
   });
 
-  test("taking a task never wakes the role that took it", async () => {
+  test("taking a task never tells the role that took it", async () => {
     const { ctx, tables } = await makeCtx([task(1)]);
     await start(ctx, "ct-1", "hand-growth");
-    expect(tables.role_wake_outbox).toEqual([]);
+    expect(tables.pending_messages).toEqual([]);
   });
 
   // The role assignment is decided apart from the session binding. A handoff
@@ -273,7 +277,7 @@ describe("a session that takes a task assigns it to its role", () => {
     expect(tables.tasks[0]).toMatchObject({ status: "in_progress" });
     expect(tables.tasks[0].assignee).toBeUndefined();
     expect(result.assigned_role).toBeUndefined();
-    expect(tables.role_wake_outbox).toEqual([]);
+    expect(tables.pending_messages).toEqual([]);
   });
 
   // A fork carries the filing session's history under a new conversation id:
@@ -356,42 +360,36 @@ describe("batch assign", () => {
   });
 });
 
-describe("a person assigning a task to a role wakes it", () => {
-  test("one fold row with the task in it, for a task outside the role's scope", async () => {
-    const { ctx, tables, scheduled } = await makeCtx([task(7, { title: "Fix the pricing copy" })]);
+describe("a person assigning a task to a role tells it", () => {
+  test("one plain line into the role's standing session, for a task outside the role's scope", async () => {
+    const { ctx, tables } = await makeCtx([task(7, { title: "Fix the pricing copy" })]);
     await cliUpdate(ctx, { short_id: "ct-7", assignee: "@ads" });
-    expect(tables.role_wake_outbox).toHaveLength(1);
-    expect(tables.role_wake_outbox[0]).toMatchObject({
-      role_id: ADS,
-      kind: "fold",
-      cause: 'Ashot assigned you ct-7 "Fix the pricing copy"',
-      ref: { table: "tasks", id: "tasks_7", short_id: "ct-7" },
+    expect(tables.pending_messages).toHaveLength(1);
+    expect(tables.pending_messages[0]).toMatchObject({
+      conversation_id: "conversations_standing_ads",
+      content: 'Ashot assigned you ct-7 "Fix the pricing copy"',
+      status: "pending",
     });
-    expect(scheduled).toHaveLength(1);
   });
 
-  test("the board's assign wakes it the same way", async () => {
+  test("the board's assign tells it the same way", async () => {
     const { ctx, tables } = await makeCtx([task(7)]);
     await (webUpdate as any)._handler(ctx, { short_id: "ct-7", assignee: ADS });
-    expect(tables.role_wake_outbox.map((r: any) => [r.role_id, r.kind])).toEqual([[ADS, "fold"]]);
+    expect(tables.pending_messages.map((r: any) => r.conversation_id)).toEqual(["conversations_standing_ads"]);
   });
 
-  // `_handler` is the handler functions.ts wrapped, so the post write hook
-  // runs here as it does in production: it sees the same task write and would
-  // fold "task ct-7 is open" over the assignment if the two were separate rows.
-  test("a task inside the role's scope is still ONE row, and it says assigned", async () => {
+  test("a task inside the role's scope is one line, and it says assigned", async () => {
     const { ctx, tables } = await makeCtx([task(7, { project_id: PROJECT, title: "Fix the pricing copy" })]);
     await cliUpdate(ctx, { short_id: "ct-7", assignee: "@growth" });
-    const rows = tables.role_wake_outbox.filter((r: any) => r.role_id === GROWTH);
+    const rows = tables.pending_messages.filter((r: any) => r.conversation_id === "conversations_standing");
     expect(rows).toHaveLength(1);
-    expect(rows[0].cause).toBe('Ashot assigned you ct-7 "Fix the pricing copy"');
-    expect(rows[0].count ?? 1).toBe(1);
+    expect(rows[0].content).toBe('Ashot assigned you ct-7 "Fix the pricing copy"');
   });
 
-  test("assigning to a person wakes no role", async () => {
+  test("assigning to a person tells no role", async () => {
     const { ctx, tables } = await makeCtx([task(7)]);
     await cliUpdate(ctx, { short_id: "ct-7", assignee: JASON });
-    expect(tables.role_wake_outbox).toEqual([]);
+    expect(tables.pending_messages).toEqual([]);
   });
 });
 

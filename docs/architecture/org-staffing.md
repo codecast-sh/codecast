@@ -45,8 +45,8 @@ information flag (`wide_ledger`) and never drives a split.
 ```
 ROLE_CAPACITY = {
   // the five load axes the overloaded flag reads
-  items_per_day: 30,       // distinct work items that reached the role's frames (its wake outbox), per day over 7 days; the scope's churn is flow.items_changed_7d, not load
-  decisions_per_day: 4,    // decisions routed to the role, per day over 7 days: an immediate wake each
+  items_per_day: 30,       // turns of the standing session (what was said to it), per day over 7 days; the scope's churn is flow.items_changed_7d, not load
+  decisions_per_day: 4,    // decisions routed to the role, per day over 7 days: one line into its session each
   live_hands: 6,           // read against the role's OWN hands cap; this default when it has none
   open_stalls: 3,          // review stalls + hands that reported blocked or needs context this week
   cap_hit_days: 1,         // days in the last 7 at the wake or token cap; more than one is a pattern
@@ -88,7 +88,7 @@ reading the evidence concluded, and the case a founder most needs named.
 
 `org.health({ team_id? })` returns, per role, per person and for the company,
 the signals the capacity model needs and a list of flags. Computed on read
-from the same scan org.tree uses plus: role_wakes and org_roles.counters
+from the same scan org.tree uses plus: the standing session's user turns and org_roles.counters
 (spend), session_decisions hops (latency, escalations), tasks by status and
 updated_at (in flight, review stalls, throughput), the pending_messages ledger
 between standing sessions (who talks to whom; sessionThreads parses it), chat
@@ -103,7 +103,7 @@ org.health → {
             counted: { rule: "scope" | "remainder", projects, plans, tasks, complete, note },                 // which rows, by what rule
             overload_ratio, breaches, overloaded_now,
             spend: { wakes_today, wakes_7d_avg, wakes_cap, tokens_today, tokens_7d_avg, tokens_cap, cap_hits_7d },
-            flow: { decisions_7d, items_changed_7d, median_recommend_min, escalations_7d, frames_dropped_7d, done_7d, handoffs_7d: { done, blocked, needs_context }, review_stalls, sends_7d: { to: [{ role_id, n }], from: [...] } },
+            flow: { decisions_7d, items_changed_7d, median_recommend_min, escalations_7d, done_7d, handoffs_7d: { done, blocked, needs_context }, review_stalls, sends_7d: { to: [{ role_id, n }], from: [...] } },
             last_move_at, idle_days, flags: Flag[] }],
   people: [{ user_id, direct_roles, decisions_waiting: { n, oldest_min }, flags }],
   company: { unowned_projects: [{ id, title }], unfiled_tasks, plans_without_goal: [...], projects_without_charter: [...], flags },
@@ -1001,3 +1001,12 @@ Knowledge stays behind the words. The chief holds the evidence and gives it when
 A picture renders inline where a picture beats prose. When the chief has something the person can agree to, it posts a small proposal and puts its short ID on its own line. The message then draws a live card: the change as a small tree, what moves, and Accept, Skip and Ask. The chart on the org page shows the same change as ghosts. The person agrees to many small things as the conversation goes, never to one large document. A change the person has not accepted changes nothing.
 
 The same conversation runs on the org page, beside the chart, and from `/cast-org` in any session.
+
+## S25. A role wakes through triggers and messages, nothing else
+
+A role is a session. It wakes the way any session wakes, and nothing else wakes it.
+
+- Its own recurring trigger ("Check <area>"), created with the role, daily by default. The person sees it on the Triggers page and on the role's page, with its next run, and changes or pauses it there. Pausing a role pauses its triggers.
+- An ordinary message: a person writing to it, a chat mention, a question routed to it, an escalation. It arrives as a plain message, never wrapped, never held.
+
+A change in the role's area wakes nothing. When its trigger fires, the role reads what changed since its last run with `cast brief`. A trigger run carries its short prompt and nothing else: the role knows who it is from its first turn, and its brief is its memory, so no message repeats its name, scope or charter.

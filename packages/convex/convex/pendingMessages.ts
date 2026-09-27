@@ -25,7 +25,8 @@ import {
 } from "./executionBindings";
 import { requestRemoteWake } from "./cloud";
 import { isConversationSafetyBlocked, type ConversationSafetyState } from "./conversationSafety";
-import { enqueueRoleEvent } from "./orgEvents";
+import { workspaceHasFeature } from "./lib/teamFeatureGuard";
+import { countersFor } from "./lib/orgCaps";
 import { liveRolesByHandle } from "./lib/orgAccess";
 
 export {
@@ -343,8 +344,6 @@ export async function enqueuePendingMessage(
     // (account-switch "continue", undeliverable receipts, model/effort slash
     // commands) that leave `origin` unset.
     human?: boolean;
-    // The wake rail's own frame (orgWakes.deliver): never re-enters the rail.
-    role_wake?: boolean;
     // A note the session reads on its NEXT turn, never a turn of its own: the
     // row is parked as "held" (the daemon and the retry cron read "pending"
     // only) and nothing about the conversation moves, so a session whose
@@ -353,10 +352,9 @@ export async function enqueuePendingMessage(
     // it delivers first because it is older.
     defer?: boolean;
     // A note for the session's own record, never a turn of its own, on ANY
-    // session: parked as "held" like `defer`, a standing session included
-    // (its wake flush folds it into the next frame). For a line the session
-    // itself caused, such as a role's own escalation divider, so the role is
-    // not woken to read what it just wrote.
+    // session: parked as "held" like `defer`. For a line the session itself
+    // caused, such as a role's own escalation divider, so the role is not
+    // woken to read what it just wrote.
     hold?: boolean;
   }
 ): Promise<Id<"pending_messages">> {
@@ -370,7 +368,7 @@ export async function enqueuePendingMessage(
     if (existing) return existing._id;
   }
 
-  if (fields.origin === "scheduler" && !fields.client_id && !fields.role_wake
+  if (fields.origin === "scheduler" && !fields.client_id
     && !conversation.execution_protocol_state && !fields.image_storage_id && !fields.image_storage_ids?.length) {
     for (const status of ["pending", "injected", "failed", "undeliverable", "held"]) {
       const queued = await ctx.db.query("pending_messages")
@@ -410,14 +408,6 @@ export async function enqueuePendingMessage(
   // server sequence/epoch here, and use that same id as delivery_id end-to-end.
   const fenced = await allocateFencedDeliveryMetadata(ctx, conversation, fields.client_id);
 
-  // A person's message, another session's send, or a routine firing into a
-  // role's standing session is a wake (org-roles-standing.md T3): the row is
-  // parked as "held" so the daemon cannot deliver it raw on its own clock,
-  // and the flush folds the frame into it and releases it. The rail's own
-  // frame (role_wake) is never held.
-  const roleWake = !!conversation.standing_role_id && !fields.role_wake &&
-    (fields.human === true || !!fields.from_conversation_id || fields.origin === "scheduler");
-
   const messageId = await insertEnqueuedPendingMessage(ctx, {
     conversationId: conversation._id,
     fromUserId,
@@ -431,16 +421,12 @@ export async function enqueuePendingMessage(
     origin: fields.origin,
     createdAt: Date.now(),
     delivery: fenced ?? undefined,
-    held: roleWake,
   });
 
-  // Deferred notes ride this turn (see `defer`). A standing session's held
-  // rows are the wake flush's to release, never ours.
-  if (!conversation.standing_role_id) {
-    const deferred: any[] = await ctx.db.query("pending_messages")
-      .withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", conversation._id).eq("status", "held")).collect();
-    for (const row of deferred) await ctx.db.patch(row._id, { status: "pending" });
-  }
+  // Deferred notes ride this turn (see `defer`).
+  const deferred: any[] = await ctx.db.query("pending_messages")
+    .withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", conversation._id).eq("status", "held")).collect();
+  for (const row of deferred) await ctx.db.patch(row._id, { status: "pending" });
 
   // Work for a cloud host that is asleep: ask a local daemon to boot it.
   if (!isConversationSafetyBlocked(conversation)) await requestRemoteWake(ctx, conversation);
@@ -478,32 +464,37 @@ export async function enqueuePendingMessage(
     ...(answersThreadState ? clearedThreadStateFields() : {}),
   });
 
-  // A standing role's session (org-roles-standing.md T3): a person's message,
-  // another session's send, or a routine firing is an immediate wake. The row
-  // stays queued as written; the flush folds its frame into it.
-  if (roleWake) {
-    const sender = await ctx.db.get(fromUserId);
-    const who = sender?.name || sender?.github_username || sender?.email?.split("@")[0] || "someone";
-    const from = fields.from_conversation_id ? await ctx.db.get(fields.from_conversation_id) : null;
-    const label = fields.origin === "scheduler"
-      ? "a routine fired"
-      : from
-        ? `session ${from.short_id ?? String(from._id).slice(0, 7)} (${who}) sent instructions`
-        : `${who} wrote`;
-    const rowId = await enqueueRoleEvent(ctx, conversation.standing_role_id, {
-      kind: "immediate",
-      cause: `${label}:\n${fields.content}`,
-      ref: { table: "pending_messages", id: String(messageId) },
-      actorConversationId: fields.from_conversation_id ?? null,
-      pendingMessageId: messageId,
-    });
-    // No outbox row (the role is retired, has no anchor, or the sender is
-    // one of its own hands): nothing will release the held row, so it goes
-    // out on the normal rail as written.
-    if (!rowId) await ctx.db.patch(messageId, { status: "pending" });
+  // A line into a standing session is one of the role's wakes today (the
+  // number `cast brief` and org.health show against its cap).
+  if (conversation.standing_role_id) {
+    const role = await ctx.db.get(conversation.standing_role_id);
+    if (role) {
+      const counters = countersFor(role, Date.now());
+      await ctx.db.patch(role._id, { counters: { ...counters, wakes: counters.wakes + 1 } });
+    }
   }
 
   return messageId;
+}
+
+// A line into a role's standing session (docs/architecture/org-staffing.md
+// S25): a role hears about its world the way any session does, as a plain
+// message. Null when the role cannot be reached: retired, no live session, or
+// its workspace has the org feature off (nothing shows the role, so nothing
+// runs under its name). The sender defaults to the session's host.
+export async function tellRole(
+  ctx: any,
+  roleId: Id<"org_roles">,
+  fields: { content: string; client_id?: string; from_user_id?: Id<"users">; from_conversation_id?: Id<"conversations">; human?: boolean },
+): Promise<Id<"pending_messages"> | null> {
+  const role = await ctx.db.get(roleId);
+  if (!role || role.status === "retired" || !role.anchor_id) return null;
+  if (!(await workspaceHasFeature(ctx, { team_id: role.team_id, user_id: role.scope_user_id }, "org"))) return null;
+  const anchor = await ctx.db.get(role.anchor_id);
+  const conversation = anchor?.conversation_id && anchor.status !== "decommissioned" ? await ctx.db.get(anchor.conversation_id) : null;
+  if (!conversation) return null;
+  const { from_user_id, ...rest } = fields;
+  return await enqueuePendingMessage(ctx, conversation, from_user_id ?? conversation.user_id, rest);
 }
 
 export const sendMessageToSession = mutation({

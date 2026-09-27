@@ -22,8 +22,8 @@ import { teamVisibleConvTeam } from "./privacy";
 import { pickAnsweredDecision, formatDecisionAnswer, decisionAnswerLabel } from "@codecast/shared/contracts";
 import type { Doc, Id } from "./_generated/dataModel";
 import { nextShortId } from "./counters";
-import { enqueuePendingMessage } from "./pendingMessages";
-import { enqueueRoleEvent, roleStartsOnItsOwn } from "./orgEvents";
+import { enqueuePendingMessage, tellRole } from "./pendingMessages";
+import { roleStartsOnItsOwn } from "./lib/orgCaps";
 import { roleOfConversation } from "./lib/actor";
 import { roleGrants, userCanAccessRole, userCanAdminRole } from "./lib/orgAccess";
 import { assignCategory, isHumanOnlyCategory } from "./lib/decisionCategory";
@@ -404,9 +404,9 @@ export async function refreshHolder(
   await ctx.db.patch(row._id, { holder: resolved.holder, holder_key: resolved.holder_key });
 }
 
-// Wake each active ladder role once, through the wake rail (an immediate
-// outbox row, cause "decision"; org-roles-standing.md T3). A role without a
-// standing session gets the hop recorded and nothing else.
+// Tell each active ladder role once, as a plain line into its standing
+// session (org-staffing.md S25). A role without a standing session gets the
+// hop recorded and nothing else.
 async function wakeLadder(
   ctx: Ctx,
   roles: Doc<"org_roles">[],
@@ -416,11 +416,10 @@ async function wakeLadder(
   const sd = row.short_id ?? row._id;
   for (const role of roles) {
     if (!role.anchor_id) continue;
-    const id = await enqueueRoleEvent(ctx as any, role._id, {
-      kind: "immediate",
-      cause: `decision ${sd} on your ladder: ${row.question.slice(0, 300)}\nRead it with \`cast decide show ${sd}\`, then \`cast decide recommend ${sd} <n>\` within 5 minutes, or \`cast decide escalate ${sd}\`.`,
-      ref: { table: "session_decisions", id: String(row._id), short_id: row.short_id },
-      actorConversationId: row.conversation_id ?? null,
+    const id = await tellRole(ctx as any, role._id, {
+      content: `decision ${sd} on your ladder: ${row.question.slice(0, 300)}\nRead it with \`cast decide show ${sd}\`, then \`cast decide recommend ${sd} <n>\` within 5 minutes, or \`cast decide escalate ${sd}\`.`,
+      client_id: `decision:${row._id}:${role._id}`,
+      from_conversation_id: row.conversation_id ?? undefined,
     });
     if (id) woken.push(role._id);
   }
@@ -580,21 +579,7 @@ async function settleResolution(ctx: Ctx, row: DecisionRow, verdict: Verdict, by
   await setInboxStatus(ctx, row._id, "done");
   await scoreOverride(ctx, row, verdict, by, now);
   await closeStackIfDone(ctx, row.stack_id, row._id, now);
-  const consumed = await settleGateRun(ctx, row, verdict, now);
-  // Every role on the ladder, and the role the asking hand reports to, learns
-  // the answer as a passive fact in its next frame (org-roles-standing.md T3).
-  const asker = await ctx.db.get(row.conversation_id);
-  const roleIds = new Set<string>((row.hops ?? []).map((h) => String(h.role_id)));
-  if (asker?.org_role_id) roleIds.add(String(asker.org_role_id));
-  const label = answerLabel(row, verdict) ?? verdict.status;
-  for (const roleId of roleIds) {
-    await enqueueRoleEvent(ctx as any, roleId as Id<"org_roles">, {
-      kind: "passive",
-      cause: `decision ${row.short_id ?? row._id} ${verdict.status}: ${label.slice(0, 200)}`,
-      ref: { table: "session_decisions", id: String(row._id), short_id: row.short_id },
-    });
-  }
-  return consumed;
+  return await settleGateRun(ctx, row, verdict, now);
 }
 
 // A web client resolved the row through the dispatch collection patch (the

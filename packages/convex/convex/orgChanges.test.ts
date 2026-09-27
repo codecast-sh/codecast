@@ -163,10 +163,11 @@ describe("org history lifecycle and partial changes", () => {
   test("a routine cancels and rearms the same trigger without duplicating it", async () => {
     const f = fixture(); await f.apply({ kind: "role", name: "Growth", handle: "growth", seat: { existing: "jx70001" } });
     await f.apply({ kind: "routine", handle: "growth", title: "Review", prompt: "Review progress", every: "1d" }); const batch = f.last();
-    const trigger = f.db._tables.agent_tasks[0];
+    // The seat carries its own check (S25) beside the routine the change armed.
+    const trigger = f.db._tables.agent_tasks.find((t: any) => t.title === "Review");
     await f.undo(batch); expect((await f.db.get(trigger._id)).status).toBe("cancelled");
     await f.redo(batch); expect((await f.db.get(trigger._id)).status).toBe("scheduled");
-    expect(f.db._tables.agent_tasks).toHaveLength(1);
+    expect(f.db._tables.agent_tasks.map((t: any) => t.title).sort()).toEqual(["Check Growth's area", "Review"]);
   });
   test("an untouched task reopens while a later change to its sibling stays", async () => {
     const f = fixture();

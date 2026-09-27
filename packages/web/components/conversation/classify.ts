@@ -2,7 +2,6 @@ import { isCommandMessage, isStrippedCommand, isSkillExpansion, isBackgroundAgen
 import { isPollResponsePayload } from "@codecast/shared/contracts";
 import { classifyApiErrorBanner, isNoResponseStub, CLIENT_ERROR_BANNER_PREFIX, parseDecisionAnswer, isSessionEscalationMessage, parseSessionEscalation, isAgentSwitchNotice, parseAgentSwitchNotice, isMachineSwitchNotice, parseMachineSwitchNotice, isModelSwitchCommandName, isModelSwitchStdout, modelSwitchStdoutLabel } from "@codecast/shared/contracts";
 import { isAskTool, isPlanWriteToolCall, isShellTool } from "@codecast/shared/render";
-import { isRoleWakeFrame, parseRoleWakeFrame } from "../roleWake";
 import { isBackgroundBashToolCall, parseTaskNotificationBlock } from "../monitorRows";
 import { stripPastedContent } from "@codecast/shared/contracts";
 import { parseInboundSessionMessage, isSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUnwrappedSessionReport, parseUserMessage, parseProposalMessage, isTeammateFramingOnly, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, parseChatWakePrompt, parseHuddleSummaryTag, isToolResultCarrier } from "../sessionMessage";
@@ -274,7 +273,7 @@ const STICKY_NOISE_PREFIXES = ["[Request interrupted", "<task-notification>", "Y
 // line that woke it, and a role's wake frame (one line at rest: the role woke
 // and why). Everything else on the user rail was sent by a machine (a poll
 // answer, an interrupt, a notice, a session's report).
-export const FOLD_KEPT_USER_KINDS = new Set<UserMessageKind["kind"]>(['normal', 'direct_user', 'decision_answer', 'plan', 'chat_wake', 'role_wake', 'session_handoff']);
+export const FOLD_KEPT_USER_KINDS = new Set<UserMessageKind["kind"]>(['normal', 'direct_user', 'decision_answer', 'plan', 'chat_wake', 'session_handoff']);
 
 // Dedup key for matching a still-pending message against its eventual JSONL echo.
 // The daemon collapses newlines to spaces on inject (injectViaTmux) and a few control
@@ -328,10 +327,6 @@ export function classifyUserMessage(
   // note the wrapper carries for the agent stays out of the bubble.
   const proposalMsg = parseProposalMessage(t);
   if (proposalMsg) return { kind: 'direct_user', from: proposalMsg.from, body: proposalMsg.about ? `> ${proposalMsg.about}\n\n${proposalMsg.body}` : proposalMsg.body };
-  if (isRoleWakeFrame(tNoReminders)) {
-    const frame = parseRoleWakeFrame(tNoReminders);
-    if (frame) return { kind: 'role_wake', frame };
-  }
   if (isSessionEscalationMessage(tNoReminders)) {
     const escalation = parseSessionEscalation(tNoReminders);
     if (escalation) return { kind: 'session_escalation', escalation };

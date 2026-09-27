@@ -201,22 +201,6 @@ export function isChatWakePrompt(rawContent: string | null | undefined): boolean
   return !!rawContent && CHAT_WAKE_HEADER.test(stripInjectionNoise(rawContent));
 }
 
-// A standing role's wake frame (convex/orgWakes.ts buildFrame; docs/architecture/
-// org-roles-standing.md T3): the opening tag names the role and the time, and
-// once delivered the wake's short id and the cause counts.
-//
-//   <role-wake or-8 wake="rw-12" at="2026-09-15T04:01:55.078Z" causes="9" held="2">
-//   ## You
-//   …
-//   </role-wake>
-export const ROLE_WAKE_OPEN_RE = /^<role-wake\s+(or-\d+)((?:\s+[a-z_]+="[^"]*")*)\s*>/;
-
-// Keys off the tag's start only: a preview slice (getUserMessages cuts content
-// at 500 chars) can tear the tag itself, and it must still stay off the human rail.
-export function isRoleWakeFrame(rawContent: string | null | undefined): boolean {
-  return !!rawContent && /^<role-wake\s+or-\d+\b/.test(stripInjectionNoise(rawContent).trim());
-}
-
 // A harness <task-notification> — a background task / Monitor / Workflow
 // completion the harness injected as a user turn. Keys off the opening tag
 // only, same truncated-preview rule as isSessionMessage.
@@ -279,7 +263,7 @@ export function isBootstrapPrompt(rawContent: string | null | undefined): boolea
 // report that lost its session wrapper, or the prompt that seated a standing
 // agent.
 export function isMachineDeliveredMessage(rawContent: string | null | undefined): boolean {
-  return isAgentContextMessage(rawContent) || isSessionMessage(rawContent) || isAgentMessage(rawContent) || isTeammateMessage(rawContent) || isScheduledTaskMessage(rawContent) || isTaskNotificationMessage(rawContent) || isChatWakePrompt(rawContent) || isRoleWakeFrame(rawContent) || isUnwrappedSessionReport(rawContent) || isBootstrapPrompt(rawContent) || isSessionEscalationMessage(rawContent);
+  return isAgentContextMessage(rawContent) || isSessionMessage(rawContent) || isAgentMessage(rawContent) || isTeammateMessage(rawContent) || isScheduledTaskMessage(rawContent) || isTaskNotificationMessage(rawContent) || isChatWakePrompt(rawContent) || isUnwrappedSessionReport(rawContent) || isBootstrapPrompt(rawContent) || isSessionEscalationMessage(rawContent);
 }
 
 // --- A session moving between a role and a person (org-roles-run-work.md R1, revised) ---

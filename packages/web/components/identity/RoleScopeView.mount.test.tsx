@@ -172,7 +172,7 @@ async function verifyRoleScopeView() {
     _id: growth._id, short_id: "or-1", name: "Head of Growth", handle: "growth", avatar: "fox", status: "active", trust: "decide", tenure: { kind: "standing" },
     charter: "Owns organic search.", reports_to: { kind: "user", name: "Ashot Petrosian" },
     scope: { projects: [{ id: "fixture-project-growth", title: "Growth", short_id: "pr-4" }], plans: [] },
-    caps: null, counters: null, last_wake_at: null,
+    caps: null, counters: null,
   };
   await mount(<RoleHoverContent role={snapshot} />);
   assert.match(q('[data-scope-project="pr-4"]')!.textContent!, /^Growth · 1 open task/, "the card names the project; the store still counts its tasks");

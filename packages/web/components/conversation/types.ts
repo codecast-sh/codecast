@@ -1,5 +1,4 @@
 import type { ThreadStateFields, DecisionAnswerMessage, SessionEscalationMessage } from "@codecast/shared/contracts";
-import type { RoleWakeFrame } from "../roleWake";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import type { SentFileData } from "../tools/SentFileBlock";
 import type { ChatWakePrompt, HuddleSummaryTag } from "../sessionMessage";
@@ -402,9 +401,6 @@ export type UserMessageKind =
   | { kind: 'direct_user'; from: string; body: string }
   | { kind: 'huddle_summary'; huddle: HuddleSummaryTag }
   | { kind: 'chat_wake'; wake: ChatWakePrompt }
-  // A standing role's wake frame (<role-wake or-N …>): the rail's own words,
-  // rendered as the wake card with the role's controls.
-  | { kind: 'role_wake'; frame: RoleWakeFrame }
   // The human's answer to a `cast decide` question (store answerDecision).
   | { kind: 'decision_answer'; decision: DecisionAnswerMessage }
   // A session moving between its role and the person (<session-escalation …>,

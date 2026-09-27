@@ -5,7 +5,7 @@ import { Id } from "./_generated/dataModel";
 import { scopedFetch } from "./data";
 import { collectOrgSessions, computeScopeFeed, requireWorkspaceCaller, resolveScope, sessionsInScope, waitingSinceOf, type OrgScan, type ResolvedScope } from "./org";
 import { planProjectsOf } from "./orgRoles";
-import { capsFor, countersFor, utcDay } from "./orgEvents";
+import { capsFor, countersFor, utcDay } from "./lib/orgCaps";
 import { isWholeWorkspace, scopeIds } from "./lib/orgScope";
 import { projectsWithoutAnOwnerAmongWatchers } from "@codecast/shared/contracts/orgLead";
 import { capacity, capacityFlags, type HealthFlag, isOverloaded, overloadRatio, type RoleLedger, type RoleLoad } from "@codecast/shared/contracts/orgCapacity";
@@ -52,7 +52,8 @@ export type RoleActivity = {
   // total and by_day count DELIVERED wakes only, the count the flush gate
   // spends against the cap; a dropped frame bumps nothing and a held one
   // marks its day as a cap hit.
-  wakes_7d: { total: number; delivered: number; dropped: number; held: number; days_at_cap: number; cap_hit_days: number; by_day: Record<string, number> };
+  /** Turns of the standing session this week: the count, when (newest first), and the days at the wake cap. */
+  wakes_7d: { total: number; turns: number[]; days_at_cap: number; cap_hit_days: number; by_day: Record<string, number> };
 };
 
 /** The newest event in a workspace: the idle clock of a whole workspace role,
@@ -85,20 +86,14 @@ export async function roleActivity(ctx: Ctx, userId: Id<"users">, role: any, now
       lastScopeEventAt = feed.rows[0]?.updated_at ?? null;
     }
   }
-  const wakes: any[] = await ctx.db.query("role_wakes").withIndex("by_role_created", (q: any) => q.eq("role_id", role._id).gte("created_at", now - HEALTH_WINDOW_7D_MS)).collect();
+  // A wake is a turn of the standing session (org-staffing.md S25): a
+  // person's line, a mention, a decision, a hand's stall, a routine firing.
+  // Each is one user message in its thread.
+  const wakes = await readTurnsSince(ctx, role, now - HEALTH_WINDOW_7D_MS);
   const byDay = new Map<string, number>();
-  const heldDays = new Set<string>();
-  let held = 0, dropped = 0, delivered = 0;
-  for (const w of wakes) {
-    if (w.status === "held") { held++; heldDays.add(utcDay(w.created_at)); continue; }
-    if (w.status === "dropped") { dropped++; continue; }
-    delivered++;
-    const day = utcDay(w.created_at);
-    byDay.set(day, (byDay.get(day) ?? 0) + 1);
-  }
+  for (const at of wakes) byDay.set(utcDay(at), (byDay.get(utcDay(at)) ?? 0) + 1);
   const caps = capsFor(role);
   const daysAtCap = Array.from(byDay.values()).filter((n) => n >= caps.wakes_per_day).length;
-  const capHitDays = new Set([...heldDays, ...Array.from(byDay.entries()).filter(([, n]) => n >= caps.wakes_per_day).map(([d]) => d)]).size;
   // A row stamped a moment after `now` (a write racing the read) is today, not a negative day.
   const idle_days = lastScopeEventAt ? Math.max(0, Math.floor((now - lastScopeEventAt) / D)) : null;
   const age_days = Math.floor((now - (role.created_at ?? now)) / D);
@@ -107,7 +102,7 @@ export async function roleActivity(ctx: Ctx, userId: Id<"users">, role: any, now
     idle_days,
     age_days,
     idle: (idle_days ?? age_days) >= capacity("idle_days"),
-    wakes_7d: { total: delivered, delivered, dropped, held, days_at_cap: daysAtCap, cap_hit_days: capHitDays, by_day: Object.fromEntries(byDay) },
+    wakes_7d: { total: wakes.length, turns: wakes, days_at_cap: daysAtCap, cap_hit_days: daysAtCap, by_day: Object.fromEntries(byDay) },
   };
 }
 
@@ -124,20 +119,19 @@ const bump = (m: Map<string, number>, k: string) => m.set(k, (m.get(k) ?? 0) + 1
 
 export const ACTIVITY_COMMITS_PER_REPO = 500;
 
-/** The distinct work items that reached a role's frames inside the window:
- *  its wake outbox rows (one per (table, id) per coalesce window), flushed in
- *  the window or still waiting. This is what the load model means by an item
- *  reaching a seat; the scope's churn (tasks changed) is a different number. */
-export const OUTBOX_LOAD_CAP = 1500;
-export async function readReachedItems(ctx: Ctx, roleId: Id<"org_roles">, since: number): Promise<{ items: number; truncated: boolean }> {
-  const flushed: any[] = await ctx.db.query("role_wake_outbox").withIndex("by_role_flushed", (q: any) => q.eq("role_id", roleId).gte("flushed_at", since)).take(OUTBOX_LOAD_CAP);
-  const waiting: any[] = await ctx.db.query("role_wake_outbox").withIndex("by_role_flushed", (q: any) => q.eq("role_id", roleId).eq("flushed_at", undefined)).take(OUTBOX_LOAD_CAP);
-  const refs = new Set<string>();
-  for (const row of [...flushed, ...waiting]) {
-    if ((row.created_at ?? 0) < since && !(row.flushed_at >= since)) continue;
-    if (row.ref) refs.add(`${row.ref.table}:${row.ref.id}`);
-  }
-  return { items: refs.size, truncated: flushed.length >= OUTBOX_LOAD_CAP || waiting.length >= OUTBOX_LOAD_CAP };
+/** When the standing session was told something inside the window: the
+ *  timestamps of its user turns, newest first, capped. This is what the load
+ *  model means by an item reaching a seat; the scope's churn (tasks changed)
+ *  is a different number. */
+export const TURNS_LOAD_CAP = 1500;
+export async function readTurnsSince(ctx: Ctx, role: any, since: number): Promise<number[]> {
+  const anchor = role.anchor_id ? await ctx.db.get(role.anchor_id) : null;
+  if (!anchor?.conversation_id) return [];
+  const rows: any[] = await ctx.db.query("messages")
+    .withIndex("by_conversation_role_timestamp", (q: any) => q.eq("conversation_id", anchor.conversation_id).eq("role", "user").gte("timestamp", since))
+    .order("desc")
+    .take(TURNS_LOAD_CAP);
+  return rows.map((m) => m.timestamp);
 }
 
 /** The statuses a task is still open under (shared/tasks TASK_STATUS_CATEGORIES minus done and dropped). */
@@ -538,7 +532,6 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
     const decisions7 = dec.decisionsOf[rid] ?? 0;
     // The load: what reached the seat this week and asked for its attention.
     const caps = capsFor(role);
-    const reached = await readReachedItems(ctx, role._id, cut7);
     const hands = scan.byParent.get(`role:${rid}`) ?? [];
     // A session of the role that has waited on a person past the window with
     // no escalation (org-roles-run-work.md R1): it is out of the person's
@@ -556,7 +549,7 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
     const people = await computeReportingPeople(ctx, userId, role, briefDoc ? { content: briefDoc.content ?? "", updated_at: briefDoc.updated_at ?? briefDoc._creationTime ?? 0 } : null, null, now, now);
     const goalStalls = people.reduce((n, p) => n + p.goals.filter((g) => g.stalled || g.unmatched).length, 0);
     const load: RoleLoad = {
-      items_per_day: reached.items / 7,
+      items_per_day: activity.wakes_7d.total / 7,
       decisions_per_day: decisions7 / 7,
       live_hands: hands.filter((s) => s.state === "working" || s.state === "needs_input" || s.state === "dormant").length,
       hands_cap: caps.hands_per_day,
@@ -577,21 +570,20 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
       cap_hits_7d: activity.wakes_7d.cap_hit_days,
       // A 7 day average of one burst reads as a daily rate; the days say which.
       wakes_by_day: activity.wakes_7d.by_day,
-      last_wake_at: role.last_wake_at ?? null,
+      last_wake_at: activity.wakes_7d.turns[0] ?? null,
     };
     const toRows = Array.from(sends.get(rid)?.entries() ?? []).map(([to, n]) => ({ role_id: to, handle: roleById.get(to)?.handle ?? "?", n }));
     const fromRows = Array.from(sends.entries()).filter(([, m]) => m.has(rid)).map(([from, m]) => ({ role_id: from, handle: roleById.get(from)?.handle ?? "?", n: m.get(rid)! }));
     const flow = {
       decisions_7d: decisions7,
       /** Distinct work items that reached the seat's frames this week (load.items_per_day × 7). */
-      items_reached_7d: reached.items,
+      items_reached_7d: activity.wakes_7d.total,
       /** Tasks and plans in scope that changed this week: the scope's churn, which is not load. */
       items_changed_7d: changed7,
       /** Sessions filed under the seat inside the scan window, in any state. */
       hands_window: hands.length,
       median_recommend_min: median(dec.latency[rid] ?? []),
       escalations_7d: dec.escalations[rid] ?? 0,
-      frames_dropped_7d: activity.wakes_7d.dropped,
       done_7d: done7,
       handoffs_7d: handoffs,
       review_stalls: stalls,

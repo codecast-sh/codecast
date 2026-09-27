@@ -1,8 +1,8 @@
 A session is one conversation with one agent. It starts, does a piece of work, and ends. That makes a session a poor address for work that lasts. A message sent to a session is lost when the session closes, and nothing says which of forty live sessions answers for the billing code.
 
-Codecast models the agents and people around a body of work as an organization. A **role** is a named seat in a reporting tree. It has a **scope** (the projects and plans it owns), a charter that people write, a brief that the role writes, and one standing session that the server wakes when something in the scope needs attention. The role is a row in `org_roles`. The session is replaceable: restart it or seat a different session, and the role keeps its scope, its brief, its tasks and its place in the tree.
+Codecast models the agents and people around a body of work as an organization. A **role** is a named seat in a reporting tree. It has a **scope** (the projects and plans it owns), a charter that people write, a brief that the role writes, and one standing session that checks the scope on a schedule and answers what people send it. The role is a row in `org_roles`. The session is replaceable: restart it or seat a different session, and the role keeps its scope, its brief, its tasks and its place in the tree.
 
-So work routes to the responsibility instead of to whichever session is running. Assign a task to `@growth`, mention `@growth` in team chat, or send it a message, and the server delivers one wake to the session that holds the seat today.
+So work routes to the responsibility instead of to whichever session is running. Assign a task to `@growth`, mention `@growth` in team chat, or send it a message, and the message reaches the session that holds the seat today.
 
 ```bash
 cast org ls                          # people, roles with their scopes, the sessions under each
@@ -10,9 +10,8 @@ cast org feed @growth                # everything in the scope, newest first
 cast org health                      # load, flags and stale records for each role and person
 cast role show @growth               # seat, trust, caps, today's counters, hands
 cast role wake @growth "The pricing page is live; check the funnel"
-cast role wakes @growth              # the wake log: delivered, held or dropped
-cast brief @growth                   # live facts about the scope plus the role's narrative
-cast role pause @growth              # wakes hold, hands stop at a safe point (resume, restart)
+cast brief @growth                   # live facts about the scope, what changed, the role's narrative
+cast role pause @growth              # its triggers pause, hands stop at a safe point (resume, restart)
 cast task ls --assignee @growth      # the tasks the role answers for
 cast task ls --chain me              # everything in your reporting chain
 ```
@@ -33,7 +32,7 @@ Three trust stages gate what a role may do, and the server checks them. At `unde
 
 ## The tree and scopes
 
-A role reports to a person or to another role (`reports_to`). A move that would make a cycle is refused. `cast org reparent <session> --to @handle` files a session under a role; moving a role is a staffing change, made on the org page. Each move tells the agent once: a session receives "You now report to <name>", and a role receives an immediate wake with the same line.
+A role reports to a person or to another role (`reports_to`). A move that would make a cycle is refused. `cast org reparent <session> --to @handle` files a session under a role; moving a role is a staffing change, made on the org page. Each move tells a moved session once: it receives "You now report to <name>". A moved role reads its new line in `cast brief`.
 
 A scope is `{ project_ids, plan_ids }`. Two empty lists mean the whole workspace. A task is in scope when its project is listed, its plan is listed, or its plan's project is listed. A session is in scope when it is bound to such a task or plan, when its project path equals a scope project's path, or when it reports to the role. A child's scope must fit inside its parent's unless the parent looks after the whole workspace; the server refuses the edit and names what falls outside. Two sibling roles may watch the same project, and the pages show that as a warning.
 
@@ -41,25 +40,21 @@ When a role gains scope, the host's sessions in that scope that report to no rol
 
 ## How a role is woken
 
-Events do not reach the standing session directly. Each one inserts a row in `role_wake_outbox`, and a flush turns the waiting rows into one message, the frame. An `immediate` row flushes at once. A `fold` row waits for the coalesce window, two minutes by default, so a task moved seven times is one line in one frame. A `passive` row never schedules a flush and rides the next frame.
+A role is a session, and it wakes the way any session wakes: on its own trigger, and when someone writes to it.
 
-| Source | Kind |
-|--------|------|
-| A person messages the role: `cast role wake`, `cast send @handle`, the composer on the role page | immediate |
-| `@<role handle>` in team chat, from a person or from a session | immediate |
-| A task is assigned to the role, in its scope or outside it | fold |
-| A task or plan in scope changed | fold |
-| A hand needs input, or pinned `--status blocked` | immediate |
-| A hand pinned `--status done`, or a decision a hand raised was answered | passive |
-| A decision was routed to the role | immediate |
-| A [trigger](/documentation/triggers) on the standing session fired | immediate |
-| The charter, the scope or the line changed; a restart | immediate |
+Every role has one recurring [trigger](/documentation/triggers) on its standing session, armed when the role is brought online: a daily check for a role, the weekly company review for the chief of staff. It appears on the Triggers page and on the role page's Triggers tab with its next run, and you change or pause it there like any trigger. Pausing the role pauses every trigger on its seat; resuming brings them back. The check's prompt is short: run `cast brief`, act on what your switch and grants allow, put in front of the person what needs them.
 
-The flush applies gates in order. A paused or retired role holds its rows. A role over its wake or token cap holds system rows until the next UTC day, and an immediate row still passes. A session that is busy reschedules the flush in 30 seconds, up to 20 times. A frame with no new fact and no immediate row is logged as dropped. `cast role wakes` prints every outcome.
+Everything else reaches the role as a plain message into its standing session, never wrapped or held:
 
-Loop rules keep the org from waking itself. A role's own writes, and those of its hands, insert no rows for that role. A subordinate role's writes insert no rows for its parent.
+| Event | Arrives as |
+|-------|-----------|
+| A person messages the role: `cast role wake`, `cast send @handle`, the composer on the role page | the message, as written |
+| `@<role handle>` in team chat, from a person or from a session | the same chat mention line a session gets |
+| A decision was routed to the role | one line naming the decision |
+| A hand needs input, or pinned `--status blocked` | one line naming the hand |
+| A task is assigned to the role | one line naming the task |
 
-The frame lists who the role is, why it is awake, its scope now (3,000 characters of facts at most), its sessions with the ones waiting on a person first, the channels it follows (`cast role follow`), and a hash of the charter. After a restart the frame carries the charter and the brief in full. A person's message is stored as `held` until the frame is built, so the raw message never arrives ahead of it. The web renders a frame as a wake card.
+A change in the role's area wakes nothing. A task or plan in scope moving, a hand settling done, a decision being answered, an edit to the charter, the scope, the line or the reporting tree: the role reads all of it at its next run. `cast brief` carries a "changed since" section clocked on the last time the role read its brief from its own session, so each run sees what moved since the one before.
 
 ## Hiring and proposals
 
@@ -108,6 +103,6 @@ A session node that passes its timeout (30 minutes by default) is killed and the
 
 `/org` draws people, roles and sessions as one tree. Each session card carries its inbox work state, and a wide cluster folds into a "+N sessions" card. Drag a session or a role onto a person or a role to reparent it; a popover confirms the move. The staffing pane lists the company's flags, the changes of the open proposal, and a composer that talks to the chief of staff.
 
-`/org/<or-id>` is the scope page. The role's standing conversation fills the left side, so there is one place to type, and a line sent there is the same pending message `cast role wake` enqueues. The panel beside it has the tabs Scope, Feed, Tasks, Line, Plans, Docs, Sessions, Decisions, Brief, Charter, Wakes and Settings. Line shows one column for each station. Sessions groups hands by who acts next. Settings holds the scope editor, trust, caps and the line picker.
+`/org/<or-id>` is the scope page. The role's standing conversation fills the left side, so there is one place to type, and a line sent there is the same pending message `cast role wake` enqueues. The panel beside it has the tabs Scope, Feed, Tasks, Line, Plans, Docs, Sessions, Decisions, Brief, Charter, Triggers and Settings. Line shows one column for each station. Sessions groups hands by who acts next. Settings holds the scope editor, trust, caps and the line picker.
 
-Roles build on [tasks and plans](/documentation/tasks-and-plans), wake through the delivery path of [messaging](/documentation/messaging), and keep their routines as [triggers](/documentation/triggers). For a plan driven once by a conductor instead of a standing seat, see [orchestration](/documentation/orchestration).
+Roles build on [tasks and plans](/documentation/tasks-and-plans), hear from people through [messaging](/documentation/messaging), and wake on their own through [triggers](/documentation/triggers). For a plan driven once by a conductor instead of a standing seat, see [orchestration](/documentation/orchestration).

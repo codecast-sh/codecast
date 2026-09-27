@@ -1,6 +1,5 @@
 import { wakeFieldsOf, wakeCost } from "./wakeCost";
 import { mutation, query, internalMutation, internalQuery, type QueryCtx, type MutationCtx } from "./functions";
-import { enqueueRoleEvent } from "./orgEvents";
 import { v } from "convex/values";
 import { enqueueStartSession, resolveOwnerDevice } from "./devices";
 import { parkOnCloudHost, resolveCloudDevice, supersedeCloudSpawns } from "./cloudPlacement";
@@ -56,7 +55,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { checkRateLimit } from "./rateLimit";
 import { verifyApiToken } from "./apiTokens";
 import { internal } from "./_generated/api";
-import { resetConversationPendingMessages, cancelQueuedMessagesOnKill, enqueuePendingMessage } from "./pendingMessages";
+import { resetConversationPendingMessages, cancelQueuedMessagesOnKill, enqueuePendingMessage, tellRole } from "./pendingMessages";
 import { latestImagePreviewUrl, listConversationFileChanges } from "./messages";
 import { inboxVisibilityFields, INBOX_PINNED_CAP, pinCapExceeded, PIN_CAP_ERROR } from "./inboxProjection";
 import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill, stampRunConversation } from "./agentTasks";
@@ -11351,16 +11350,12 @@ export async function performSetThreadState(
   // the row between Lock Screen statuses: those refresh at once, a reworded
   // working line rides the next routine push.
   await scheduleLiveActivityRefresh(ctx, conv.user_id, { urgent: status !== "working" });
-  // A hand declaring blocked wakes its role now; a hand settling done is a
-  // fact for the role's next frame (org-roles-standing.md T3). The hand is the
-  // SUBJECT of the event, not an actor writing into another role's scope, so
-  // it is passed as no actor on purpose: the loop rule that drops a role's
-  // own writes must not drop its hand's declaration.
-  if (conv.org_role_id && (status === "blocked" || status === "done")) {
-    await enqueueRoleEvent(ctx, conv.org_role_id, {
-      kind: status === "blocked" ? "immediate" : "passive",
-      cause: `hand ${shortId} "${(conv.title ?? "").slice(0, 60)}" declared ${status}: ${text.split("\n")[0].slice(0, 200)}`,
-      ref: { table: "conversations", id: String(conv._id), short_id: shortId },
+  // A hand declaring blocked tells its role now (org-staffing.md S25); a hand
+  // settling done is a fact the role reads with `cast brief` at its next run.
+  if (conv.org_role_id && status === "blocked") {
+    await tellRole(ctx, conv.org_role_id, {
+      content: `hand ${shortId} "${(conv.title ?? "").slice(0, 60)}" declared blocked: ${text.split("\n")[0].slice(0, 200)}`,
+      client_id: `hand-blocked:${conv._id}:${at}`,
     });
   }
   return { at, resurfaced };
