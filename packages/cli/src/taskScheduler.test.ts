@@ -299,6 +299,15 @@ describe("trigger run lifecycle guidance", () => {
       .toBe(spawnedPrompt.slice(spawnedPrompt.indexOf(start), spawnedPrompt.indexOf('\n- To set a follow-up trigger:')));
   });
 
+  // A role's routine wakes a session whose opening message already says how it
+  // works, so it carries its own prompt and nothing else.
+  it("injects a role's routine with no lifecycle defaults", async () => {
+    const input = task({ originating_conversation_id: "conv123", role_id: "role1" });
+    const { scheduler, calls } = makeScheduler([input], { claimResult: t => t });
+    await scheduler.poll();
+    expect(calls.prompts[0]).toBe(`<scheduled-task title="${input.title}" task-id="${input._id}">${input.prompt}</scheduled-task>`);
+  });
+
   // The briefing and the server post by ONE rule (runResultThreadOf): a run is
   // told its summary lands in a thread exactly when it does.
   it("tells a run its summary is posted to a thread only when the server will post it", () => {

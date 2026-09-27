@@ -21,6 +21,22 @@ describe("the voice window's float", () => {
     // until the next one, and the view reads that flag.
     expect(src).toContain("floating.setFloating(false)");
     expect(src).toContain("setDismissed(true)");
-    expect(src).toMatch(/voiceHostView\(\{[\s\S]*?dismissed,[\s\S]*?\}\)/);
+    expect(src).toMatch(/voiceHostView\(\{[\s\S]*?dismissed: dismissed \|\| docking,[\s\S]*?\}\)/);
+  });
+
+  test("docking holds the float down until the app has focus, from either window", () => {
+    // The Dock click focuses the voice window, not the app, so a call in
+    // progress read as "happening while the app is behind" and the float
+    // stayed up under the pointer that had just docked it (founder,
+    // 2026-09-28: "i can't minimize it back into the header"). The host
+    // watches the pop out flag fall, so the header's chip docks the same way.
+    // Only until the app has focus: after that, leaving the app mid-call
+    // brings the float back as it always did.
+    const dock = src.slice(src.indexOf("const [docking"), src.indexOf("const closeFloat"));
+    expect(dock).toContain("setDocking(true)");
+    expect(dock).toMatch(/role\.appFocused && docking\) setDocking\(false\)/);
+    expect(src).toContain("dismissed: dismissed || docking");
+    const float = src.slice(src.indexOf("<FloatingFaceRow"), src.indexOf("</FloatingFaceRow>"));
+    expect(float).toContain("docks: floating.floating");
   });
 });

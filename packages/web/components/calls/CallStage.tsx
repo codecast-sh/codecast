@@ -14,7 +14,6 @@ import {
   Minimize2,
   MonitorUp,
   Radio,
-  Settings2,
   Unlock,
   User,
   Users,
@@ -44,7 +43,7 @@ import { RoomThread, SegmentedRadio, type RoomThreadCall } from "./RoomThread";
 import { Avatar } from "./Avatar";
 export { Avatar };
 import type { ThreadRow } from "./roomThreadModel";
-import { DeviceRows } from "./DeviceRows";
+import { DeviceChips } from "./DeviceRows";
 import { faceTrackingNote } from "./useFaceCrop";
 import { firstName } from "./speakers";
 import { ScreenCursors } from "./ScreenCursors";
@@ -1216,10 +1215,9 @@ const STAGE_CTL = "rounded-full p-2 transition-colors";
 const STAGE_CTL_IDLE = "text-sol-text-muted hover:bg-white/10 hover:text-sol-text";
 function ControlBar({ call, live }: { call: any; live: { transcript_id: string; routes?: Array<{ kind: string; target: string }> } | null }) {
   const transcribing = !!live;
-  const [devicesOpen, setDevicesOpen] = useState(false);
 
   return (
-    <div className="flex items-center justify-center px-5 py-2.5">
+    <div className="flex flex-col items-center gap-1 px-5 pb-1.5 pt-2.5">
       <div className="flex items-center gap-1 rounded-full bg-white/[0.05] px-2 py-1.5 ring-1 ring-white/[0.06]">
         <MicButton muted={call.muted} />
         <button
@@ -1241,19 +1239,14 @@ function ControlBar({ call, live }: { call: any; live: { transcript_id: string; 
           />
         )}
         <TranscribeControls live={transcribing} />
-        <span className="relative">
-          <button
-            onClick={() => setDevicesOpen((o) => !o)}
-            className={`${STAGE_CTL} ${STAGE_CTL_IDLE}`}
-            title="Devices"
-          >
-            <Settings2 className="h-[18px] w-[18px]" />
-          </button>
-          {devicesOpen && <DevicesPopover onClose={() => setDevicesOpen(false)} />}
-        </span>
         <div className="mx-1.5 h-5 w-px bg-white/10" />
         <HangUpButton />
       </div>
+      {/* Not a setting, a fact: the floating circles either follow a face or
+          show the middle of the frame, and only this build knows which. */}
+      <DeviceChips
+        footer={<p className="px-2 pb-1 text-[10px] leading-snug text-sol-text-dim">{faceTrackingNote()}</p>}
+      />
     </div>
   );
 }
@@ -1288,59 +1281,138 @@ function StageShareButton({ sharing }: { sharing: boolean }) {
         <MonitorUp className="h-[18px] w-[18px]" />
       </button>
       {open && (
-        <div
-          className="absolute bottom-full left-1/2 z-10 mb-3 w-[380px] -translate-x-1/2 rounded-xl bg-sol-bg-alt p-2 shadow-2xl ring-1 ring-white/5"
-          onMouseLeave={() => setOpen(false)}
-        >
-          <div className="mb-1.5 px-1 text-[11px] font-medium text-sol-text-muted">
-            Share a screen or window
-          </div>
-          {sources === null ? (
-            <div className="px-1 py-3 text-center text-[11px] text-sol-text-muted">Looking…</div>
-          ) : sources.length === 0 ? (
-            <div className="px-1 py-3 text-center text-[11px] text-sol-text-muted">
-              Nothing to share. Check Screen Recording permission in System Settings
-            </div>
-          ) : (
-            <div className="grid max-h-[240px] grid-cols-2 gap-1.5 overflow-y-auto">
-              {sources.map((src) => (
-                <button
-                  key={src.id}
-                  onClick={() => {
-                    setOpen(false);
-                    void setScreenShare(true, src.id);
-                  }}
-                  className="group flex flex-col gap-1 rounded-md border border-transparent p-1 text-left transition-colors hover:border-sol-violet/50 hover:bg-sol-violet/10"
-                  title={src.name}
-                >
-                  <img
-                    src={src.thumbnail}
-                    alt=""
-                    className="aspect-video w-full rounded-md object-cover"
-                  />
-                  <span className="truncate text-[10px] text-sol-text-muted group-hover:text-sol-text">
-                    {src.name}
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+        <SharePicker
+          sources={sources}
+          onClose={() => setOpen(false)}
+          onPick={(id) => {
+            setOpen(false);
+            void setScreenShare(true, id);
+          }}
+        />
       )}
     </span>
   );
 }
 
-function DevicesPopover({ onClose }: { onClose: () => void }) {
+/** Screens and windows are different choices, so they get different shapes:
+ *  whole screens as a row of large previews, windows as a scannable list with
+ *  the app's icon and full title, filtered by typing. The shell lists windows
+ *  front to back, so the one you were just in is already near the top. */
+function SharePicker({
+  sources,
+  onClose,
+  onPick,
+}: {
+  sources: DesktopDisplaySource[] | null;
+  onClose: () => void;
+  onPick: (id: string) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const rootRef = useRef<HTMLDivElement>(null);
+  useWatchEffect(() => {
+    const onDown = (e: PointerEvent) => {
+      if (!rootRef.current?.contains(e.target as Node)) onClose();
+    };
+    document.addEventListener("pointerdown", onDown, true);
+    return () => document.removeEventListener("pointerdown", onDown, true);
+  }, [onClose]);
+
+  const screens = sources?.filter((s) => s.kind === "screen") ?? [];
+  const q = query.trim().toLowerCase();
+  const windows = (sources ?? []).filter((s) => s.kind === "window" && (!q || s.name.toLowerCase().includes(q)));
+  const windowCount = sources?.filter((s) => s.kind === "window").length ?? 0;
+
   return (
     <div
-      className="absolute bottom-full left-1/2 z-10 mb-3 w-[240px] -translate-x-1/2 space-y-2 rounded-xl bg-sol-bg-alt p-2.5 shadow-2xl ring-1 ring-white/5"
-      onMouseLeave={onClose}
+      ref={rootRef}
+      onKeyDown={(e) => {
+        if (e.key !== "Escape") return;
+        e.stopPropagation();
+        onClose();
+      }}
+      className="absolute bottom-full left-1/2 z-10 mb-3 w-[440px] -translate-x-1/2 rounded-xl bg-sol-bg-alt p-2.5 shadow-2xl ring-1 ring-white/5"
     >
-      <DeviceRows compact />
-      {/* Not a setting — a fact. The floating circles either follow a face or
-          show the middle of the frame, and only this build knows which. */}
-      <p className="pt-0.5 text-[10px] leading-snug text-sol-text-muted">{faceTrackingNote()}</p>
+      {sources === null ? (
+        <div className="px-1 py-6 text-center text-[11px] text-sol-text-muted">Looking…</div>
+      ) : sources.length === 0 ? (
+        <div className="px-1 py-6 text-center text-[11px] text-sol-text-muted">
+          Nothing to share. Check Screen Recording permission in System Settings
+        </div>
+      ) : (
+        <>
+          {screens.length > 0 && (
+            <section>
+              <div className="mb-1.5 px-1 text-[11px] font-medium text-sol-text-muted">Entire screen</div>
+              <div className={`grid gap-2 ${screens.length === 1 ? "grid-cols-1" : "grid-cols-2"}`}>
+                {screens.map((src, i) => (
+                  <button
+                    key={src.id}
+                    onClick={() => onPick(src.id)}
+                    className="group flex flex-col gap-1.5 rounded-lg border border-white/5 p-1.5 text-left transition-colors hover:border-sol-violet/60 hover:bg-sol-violet/10"
+                    title={src.name}
+                  >
+                    <img
+                      src={src.thumbnail}
+                      alt=""
+                      className={`w-full rounded-md object-cover ${screens.length === 1 ? "aspect-[16/7]" : "aspect-video"}`}
+                    />
+                    <span className="flex items-center gap-1.5 px-0.5 text-[11px] text-sol-text-muted group-hover:text-sol-text">
+                      <MonitorUp className="h-3 w-3 shrink-0" />
+                      <span className="truncate">{screens.length === 1 ? "Your entire screen" : `Screen ${i + 1}`}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
+          {windowCount > 0 && (
+            <section className={screens.length > 0 ? "mt-3 border-t border-white/5 pt-2.5" : ""}>
+              <div className="mb-1.5 flex items-center gap-2 px-1">
+                <span className="text-[11px] font-medium text-sol-text-muted">
+                  Windows <span className="text-sol-text-dim">· {windowCount}</span>
+                </span>
+                <input
+                  autoFocus
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && windows[0]) onPick(windows[0].id);
+                  }}
+                  placeholder="Find a window…"
+                  className="ml-auto h-6 w-40 rounded-md bg-white/5 px-2 text-[11px] text-sol-text outline-none ring-1 ring-white/5 placeholder:text-sol-text-dim focus:ring-sol-violet/50"
+                  style={{ fontVariantLigatures: "none" }}
+                />
+              </div>
+              <div className="max-h-[260px] space-y-0.5 overflow-y-auto">
+                {windows.length === 0 ? (
+                  <div className="px-1 py-3 text-center text-[11px] text-sol-text-muted">No window matches "{query}"</div>
+                ) : (
+                  windows.map((src, i) => (
+                    <button
+                      key={src.id}
+                      onClick={() => onPick(src.id)}
+                      className={`group flex w-full items-center gap-2.5 rounded-md p-1 text-left transition-colors hover:bg-sol-violet/10 ${
+                        q && i === 0 ? "bg-sol-violet/10" : ""
+                      }`}
+                      title={src.name}
+                    >
+                      <img src={src.thumbnail} alt="" className="h-9 w-16 shrink-0 rounded object-cover ring-1 ring-white/5" />
+                      {src.appIcon ? (
+                        <img src={src.appIcon} alt="" className="h-4 w-4 shrink-0" />
+                      ) : (
+                        <AppWindow className="h-4 w-4 shrink-0 text-sol-text-dim" />
+                      )}
+                      <span className="line-clamp-2 min-w-0 text-[11px] leading-snug text-sol-text-muted group-hover:text-sol-text">
+                        {src.name || "Untitled window"}
+                      </span>
+                    </button>
+                  ))
+                )}
+              </div>
+            </section>
+          )}
+        </>
+      )}
     </div>
   );
 }

@@ -24,7 +24,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { internalMutation, mutation, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { huddleChatLineHeader, isRecRoomKey } from "@codecast/shared/contracts";
+import { huddleChatLineHeader, isHuddlePass, isRecRoomKey } from "@codecast/shared/contracts";
 import { characterOf } from "@codecast/shared/contracts/sessionCharacter";
 import { authorizeRoom } from "./callRooms";
 import { MAX_ATTACHMENTS } from "./chatText";
@@ -229,7 +229,7 @@ export function agentLineText(m: { content?: string; is_encrypted?: boolean } | 
  *
  *  Reads the session's newest assistant message and posts it unless the feed
  *  already mirrored it (the watermark), so a settle republished for the same
- *  turn, or a turn that ended without words, posts nothing. The huddle may
+ *  turn, a turn that ended without words, or a turn that passed, posts nothing. The huddle may
  *  have ended between the settle and now; then the feed row is already gone
  *  and there is nothing to do. */
 export const mirrorAgentTurn = internalMutation({
@@ -273,6 +273,11 @@ export const mirrorAgentTurn = internalMutation({
       if (seen && (seen.timestamp ?? 0) >= (newest.timestamp ?? 0)) {
         return { mirrored: false, reason: "already_mirrored" };
       }
+    }
+    // The agent passed: the turn is seen, and the room gets nothing.
+    if (isHuddlePass(newest.content)) {
+      await ctx.db.patch(feed._id, { last_mirrored_message_id: newest._id });
+      return { mirrored: false, reason: "passed" };
     }
     await ctx.db.insert("call_chat_messages", {
       room_key: feed.room_key,

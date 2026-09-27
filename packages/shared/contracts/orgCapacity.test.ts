@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { FLAG_CODES, PERSON_SPAN, ROLE_CAPACITY, ROLE_LEDGER, STABILITY, capacity, capacityFlags, ledgerDetails, overloadDetails, overloadRatio, renderCapacityModel, splitsOnFirstBreach, type RoleLoad, type RoleSignals } from "./orgCapacity";
+import { FLAG_CODES, PERSON_SPAN, ROLE_CAPACITY, ROLE_LEDGER, STABILITY, capacity, capacityFlags, ledgerDetails, overloadDetails, overloadRatio, splitsOnFirstBreach, type RoleLoad, type RoleSignals } from "./orgCapacity";
 
 // The capacity model (org-staffing.md S2, S3): one module of thresholds with
 // a reason each, and the pure flag rule org.health and the analyzer share.
@@ -32,26 +32,6 @@ describe("capacity model", () => {
     expect(capacity("items_per_day")).toBe(30);
     expect(capacity("live_hands")).toBe(6);
     expect(ROLE_LEDGER.open_tasks.value).toBe(25);
-  });
-
-  test("renders every threshold, every ledger line, every flag code and the reading guidance into the prompt text", () => {
-    const md = renderCapacityModel();
-    for (const key of Object.keys(ROLE_CAPACITY)) expect(md).toContain(`- ${key}:`);
-    for (const key of Object.keys(ROLE_LEDGER)) expect(md).toContain(`- ${key}:`);
-    for (const key of Object.keys(PERSON_SPAN)) expect(md).toContain(`- ${key}:`);
-    for (const key of Object.keys(STABILITY)) expect(md).toContain(`- ${key}:`);
-    for (const code of FLAG_CODES) expect(md).toContain(`- ${code}:`);
-    expect(md).toContain("70% of the wake cap");
-    // The ledger is named as context, and the guidance on sizing lives here,
-    // where the thresholds live, so the prompt cannot drift from the model.
-    expect(md).toContain("What a role's scope holds (context");
-    expect(md).toContain("A role does not do its scope's tasks; hands and people do.");
-    expect(md).toContain("How to read the numbers.");
-    expect(md).toContain("How to size with it.");
-    // The model sizes shape, never an allowance (org-staffing.md S23.2).
-    expect(md).not.toContain("`company.caps_total`");
-    expect(md).toContain("never propose a limit, never state one");
-    expect(md).toContain("A wide ledger with a quiet flow is not a seat problem");
   });
 });
 

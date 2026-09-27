@@ -129,6 +129,7 @@ const People = lazy(() => import("@/app/people/page"));
 const CallPanel = lazy(() => import("@/app/call-panel/page"));
 const MeetingOffer = lazy(() => import("@/app/meeting-offer/page"));
 const CallRing = lazy(() => import("@/app/call-ring/page"));
+const ShareCursors = lazy(() => import("@/app/share-cursors/page"));
 
 const Settings = lazy(() => import("@/app/settings/page"));
 const SettingsCli = lazy(() => import("@/app/settings/cli/page"));
@@ -326,10 +327,12 @@ export function App() {
             <Route path="r/:owner/:name/search" element={<E name="RepoSearch"><RepoSearch /></E>} />
             <Route path="r/:owner/:repo/commit/:sha" element={<E name="CommitView"><CommitView /></E>} />
             <Route path="r/:owner/:repo/pull/:number" element={<E name="PrView"><PrView /></E>} />
+            <Route path="r/:owner/:repo/pull/:number/:view" element={<E name="PrView"><PrView /></E>} />
 
             {/* Code review */}
             <Route path="commit/:owner/:repo/:sha" element={<E name="CommitView"><CommitView /></E>} />
             <Route path="pr/:owner/:repo/:number" element={<E name="PrView"><PrView /></E>} />
+            <Route path="pr/:owner/:repo/:number/:view" element={<E name="PrView"><PrView /></E>} />
             <Route path="review/:id" element={<E name="ReviewView"><ReviewView /></E>} />
             <Route path="review/batch" element={<E name="ReviewBatch"><ReviewBatch /></E>} />
 
@@ -346,6 +349,7 @@ export function App() {
               <Route path="call-panel" element={<E name="CallPanel"><CallPanel /></E>} />
               <Route path="meeting-offer" element={<E name="MeetingOffer"><MeetingOffer /></E>} />
               <Route path="call-ring" element={<E name="CallRing"><CallRing /></E>} />
+              <Route path="share-cursors" element={<E name="ShareCursors"><ShareCursors /></E>} />
             </Route>
 
             {/* The people window (AIM buddy list): the roster, calling and the

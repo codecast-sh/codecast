@@ -7,13 +7,11 @@ import { CHIEF_OF_STAFF_HANDLE } from "./orgAccess";
 export const COMPANY_REVIEW_TITLE = "Company review";
 export const COMPANY_REVIEW_EVERY_MS = 7 * 24 * 60 * 60 * 1000;
 
-// The routine's prompt: the standing session runs the review and proposes only
-// when the stability rules warrant it.
-export const COMPANY_REVIEW_PROMPT = [
-  `Company review. Run \`cast org review\` (it reads \`cast org health --json\` and the inputs) and read each role's brief, then open the conversation with the person you report to: the reporting structure as it stands and as you would change it, in short plain messages, asking what the records cannot settle, and posting each thing that is ready to agree to as a small proposal with its short id on its own line.`,
-  `Propose changes only when the stability rules in your charter warrant them: a bottleneck the flags show more than once, a role idle past the retire window while the company works, a project with no owner or no charter. A program role whose end has arrived (health flags it \`program_ended\`) is due rather than a judgement call: propose the retirement or the review its tenure names. When nothing warrants a change, say so in one line and end the turn; a quiet review is a good review.`,
-  `Hold the evidence behind every change and give it when asked. You apply nothing.`,
-].join("\n");
+// The routine's prompt (org-staffing.md S26): reviewing the structure is one
+// of the Chief of Staff's jobs, run in a short lived helper session under it
+// whose brief is `cast org review` (it prints the review prompt with what it
+// needs to act), and the Chief of Staff brings the answer to the person.
+export const COMPANY_REVIEW_PROMPT = "Company review. Start a helper session under you with `cast spawn --subagent --` and a brief that says to run `cast org review`, do the review it describes, and send its answer back to this session with `cast send`. When the answer arrives, bring it to the person you report to here, in your own thread, with each proposal's short id alone on its line, and carry the conversation on from there.";
 
 // A role wakes on a schedule through one ordinary recurring trigger on its
 // standing session: daily for a role, the weekly company review for the chief

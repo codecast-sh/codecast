@@ -1090,6 +1090,27 @@ describe("refreshUsageSnapshots (sandboxed $HOME, injected fetch)", () => {
       );
     }) as any;
 
+  // A refresh token is single use. A claude running on the keychain login holds
+  // the current pair, so spending it here strands that claude on "run /login"
+  // (2026-09-28, a hand-started session parked ten minutes after launch).
+  it("leaves an expired active login alone while a live claude holds it", async () => {
+    const credPath = path.join(home, ".claude", ".credentials.json");
+    fs.writeFileSync(credPath, credFor("at-active", NOW - 1000));
+    const spent: string[] = [];
+    const fetchImpl = (async (url: any, init: any) => {
+      if (String(url).includes("/oauth/token")) spent.push(new URLSearchParams(String(init?.body)).get("refresh_token") ?? "");
+      return usageFetch([])(url, init);
+    }) as typeof fetch;
+    const held = await refreshUsageSnapshots({ now: NOW, fetchImpl, activeHeld: true });
+    expect(spent).not.toContain("rt-at-active");
+    expect(held.skipped).toContain("active");
+    expect(held.rotated).not.toContain("active");
+    expect(fs.readFileSync(credPath, "utf-8")).toBe(credFor("at-active", NOW - 1000));
+    const free = await refreshUsageSnapshots({ now: NOW, fetchImpl, activeHeld: false, minIntervalMs: 0 });
+    expect(spent).toContain("rt-at-active");
+    expect(free.rotated).toContain("active");
+  });
+
   it("probes the active token + live dormant tokens, rotates lapsed ones first, keys by uuid", async () => {
     const calls: string[] = [];
     const res = await refreshUsageSnapshots({ now: NOW, fetchImpl: usageFetch(calls) });

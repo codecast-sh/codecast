@@ -5,6 +5,8 @@ import { verifyApiToken } from "./apiTokens";
 import { patchTask } from "./lib/taskWrite";
 import { resolveActor } from "./lib/actor";
 import { allRolesInBoundary, liveRoleByHandle, roleByHandleForRead } from "./lib/orgAccess";
+import { taskWork } from "./lib/orgOwnership";
+import { ownerOf } from "@codecast/shared/contracts/orgLead";
 import { matchHandle, teamRoster } from "./lib/mentionResolve";
 import { chainAssignees, roleAssigneeInfo, type AssigneeInfo } from "@codecast/shared/contracts/orgAssignee";
 import { enqueueStartSession } from "./devices";
@@ -555,15 +557,18 @@ async function announceAssignment(
 }
 
 /**
- * At retire, a role's open tasks go up the chain to whoever it reported to
- * (org-roles-run-work.md R5): the work is still the company's, and the person
- * or role above answers for it now, told the way any assignment is. Closed
- * tasks keep the retired role's name; the chain still reads them under the
- * same person (contracts/orgAssignee). Called by orgRoles.performRetireRole.
+ * At retire, a role's open tasks go to the role that owns their work now, by
+ * the one ownership rule (org-staffing.md S26: the area falls back to the
+ * wider role), else up the chain to whoever it reported to
+ * (org-roles-run-work.md R5): the work is still the company's, and whoever
+ * takes it answers for it now, told the way any assignment is. Closed tasks
+ * keep the retired role's name; the chain still reads them under the same
+ * person (contracts/orgAssignee). Called by orgRoles.performRetireRole.
  */
 export async function handOpenTasksUpChain(ctx: any, role: any, actorUserId: Id<"users">): Promise<number> {
   const up = role.reports_to;
-  const to = up?.kind === "user" ? String(up.user_id) : up?.kind === "role" ? String(up.role_id) : String(role.host_user_id);
+  const chain = up?.kind === "user" ? String(up.user_id) : up?.kind === "role" ? String(up.role_id) : String(role.host_user_id);
+  const remaining = (await allRolesInBoundary(ctx, role)).filter((r) => String(r._id) !== String(role._id));
   const held: any[] = await ctx.db
     .query("tasks")
     .withIndex("by_assignee_updated", (q: any) => q.eq("assignee", String(role._id)))
@@ -572,21 +577,30 @@ export async function handOpenTasksUpChain(ctx: any, role: any, actorUserId: Id<
   let moved = 0;
   for (const task of held) {
     if (task.status === "done" || task.status === "dropped") continue;
-    await ctx.db.insert("task_history", {
-      task_id: task._id,
-      user_id: actorUserId,
-      actor_type: "user",
-      action: "updated",
-      field: "assignee",
-      old_value: String(role._id),
-      new_value: to,
-      created_at: now,
-    });
-    await patchTask(ctx, task, { assignee: to, updated_at: now });
-    await announceAssignment(ctx, { task, assignee: to, actorUserId, actorName: `${role.name} (retired)`, via: "human" });
+    const owner = ownerOf(await taskWork(ctx, task), remaining);
+    await handTask(ctx, task, owner.kind === "owner" ? String(owner.role._id) : chain, actorUserId, `${role.name} (retired)`, now);
     moved++;
   }
   return moved;
+}
+
+/** One task changes hands between the roles and people of the org: a history
+ *  row, the patch, and the assignment told the way any assignment is. A
+ *  retire's hand back and a takeover's hand over (orgInit.takeOverSessions)
+ *  both go through here. */
+export async function handTask(ctx: any, task: any, to: string, actorUserId: Id<"users">, actorName: string, now = Date.now()): Promise<void> {
+  await ctx.db.insert("task_history", {
+    task_id: task._id,
+    user_id: actorUserId,
+    actor_type: "user",
+    action: "updated",
+    field: "assignee",
+    old_value: String(task.assignee ?? ""),
+    new_value: to,
+    created_at: now,
+  });
+  await patchTask(ctx, task, { assignee: to, updated_at: now });
+  await announceAssignment(ctx, { task, assignee: to, actorUserId, actorName, via: "human" });
 }
 
 export async function recalcPlanProgress(ctx: any, planId: Id<"plans">, updatedTaskId: Id<"tasks">, newStatus: string) {

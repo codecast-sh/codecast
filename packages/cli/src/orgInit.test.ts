@@ -1,13 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { CHIEF_OF_STAFF_HANDLE, ORG_ADOPT_RULE, ORG_CONVERSATION_RULES, ORG_COVERAGE_RULE, ORG_INITIATIVES_RULE, ORG_GROUNDING_RULES, ORG_INIT_HONESTY_RULES, ORG_TENURE_RULE, ORG_UNNAMED_ROLES_RULE, ORG_ASKED_FOR_RULES, registerOrgInitCommands } from "./orgInit";
+import { CHIEF_OF_STAFF_HANDLE, registerOrgInitCommands } from "./orgInit";
 import { Command } from "commander";
-import { COMPANY_MODEL, apply, applyStack, buildOrgAnalyzerPrompt, buildReviseOps, coverageLine, findOpenOrgProposal, listProposals, orderForApply, proposalUrl, propose, revise, runAnalyzer, staff, summarizeInputs } from "./orgInitRun";
-import { PERSON_SPAN, ROLE_CAPACITY, ROLE_LEDGER, STABILITY, renderCapacityModel } from "@codecast/shared/contracts/orgCapacity";
-import { ORG_CHANGE_KINDS, orgProposalBlock, parseOrgProposalSpec } from "@codecast/shared/contracts/orgProposal";
+import { apply, applyStack, buildOrgAnalyzerPrompt, buildReviseOps, coverageLine, findOpenOrgProposal, listProposals, orderForApply, proposalUrl, propose, revise, runAnalyzer, staff, summarizeInputs } from "./orgInitRun";
+import { chiefOfStaffPrompt } from "@codecast/shared/contracts/chiefOfStaffPrompt";
+import { orgProposalBlock } from "@codecast/shared/contracts/orgProposal";
 
-// The analyzer prompt (docs/architecture/org-staffing.md S8): principle level,
-// built from the shared capacity model, with the three honesty rules, the
-// stability rules, the adopt offer, and the spec `cast org propose` parses.
+// The review prompt is the Chief of Staff's own text
+// (docs/architecture/chief-of-staff-prompt.md), filled in for the workspace.
 
 const summary = { projects: 2, plans: 1, tasks_open: 5, members: 3, sessions_30d: 40, roles: 0, git_roots: ["/Users/me/src/app"], chief_of_staff: false, stale: { plans: 0, tasks: 0, projects: 0 } };
 const deps = (over: Partial<Parameters<typeof runAnalyzer>[0]> = {}) => ({
@@ -36,311 +35,24 @@ function trapExit(): { code: () => number | undefined; restore: () => void } {
 }
 
 describe("buildOrgAnalyzerPrompt", () => {
-  test("carries the capacity model rendered from the shared module, in both modes", () => {
-    for (const mode of ["init", "review"] as const) {
-      const p = buildOrgAnalyzerPrompt({ mode, workspace: "Acme", summary });
-      expect(p).toContain(renderCapacityModel());
-      for (const t of Object.values(ROLE_CAPACITY)) expect(p).toContain(t.reason);
-      for (const t of Object.values(PERSON_SPAN)) expect(p).toContain(t.reason);
-      expect(p).toContain(`items_per_day: ${ROLE_CAPACITY.items_per_day.value}`);
-      expect(p).toContain(`open_tasks: ${ROLE_LEDGER.open_tasks.value}`);
-    }
+  test("is the Chief of Staff's own text, with the workspace, the person and the --team flag filled in", () => {
+    const p = buildOrgAnalyzerPrompt({ mode: "review", workspace: "Acme", teamFlag: "Acme", summary: { ...summary, person: "Ada" } });
+    expect(p).toBe(chiefOfStaffPrompt({ workspace: "Acme", person: "Ada", mode: "review", team: "Acme" }));
+    expect(p.startsWith("You are the Chief of Staff for Acme. You report to Ada.")).toBe(true);
+    expect(p).toContain('`cast org propose --team "Acme" --spec <file>`');
   });
-  test("carries the three honesty rules, the stability rules and the adopt rule", () => {
-    for (const mode of ["init", "review"] as const) {
-      const p = buildOrgAnalyzerPrompt({ mode, workspace: "Acme", summary });
-      for (const rule of Object.values(ORG_INIT_HONESTY_RULES)) expect(p).toContain(rule);
-      expect(p).toContain("could not verify");
-      expect(p).toContain("intake draft");
-      for (const t of Object.values(STABILITY)) expect(p).toContain(t.reason);
-      expect(p).toContain(ORG_ADOPT_RULE);
-      // The size line counts the company the proposal leaves behind, so a
-      // proposal that creates the third project offers the seat.
-      expect(ORG_ADOPT_RULE).toContain("counted after the changes in this proposal");
-      expect(p).toContain(COMPANY_MODEL);
-      // S23.2: a proposal moves scope and people, never what a role may do in a day.
-      expect(p).toContain("A proposal moves scope and people together, and nothing else about how a role operates");
-      expect(p).not.toMatch(/budget|allowance|what each may spend/);
-    }
-  });
-  test("names what to read, the git roots, the propose command and the end state; never an apply by the analyzer", () => {
-    const p = buildOrgAnalyzerPrompt({ mode: "init", workspace: "Acme", teamFlag: "acme", summary });
-    expect(p).toContain('cast org inputs --team "acme" --json');
-    expect(p).toContain('cast org health --team "acme" --json');
-    expect(p).toContain("/Users/me/src/app");
-    expect(p).toContain('cast org propose --team "acme" --spec proposal.json');
-    // Every verb the prompt names takes the flag, so a run from another
-    // workspace's shell reads the right company (a real run failed here once).
-    expect(p).toContain('cast project show <ref> --team "acme"');
-    expect(p).toContain('cast brief @handle --team "acme"');
-    expect(p).toContain('cast role wakes @handle --team "acme"');
-    // A review that replaces its own earlier proposal names it (S4 supersession).
-    expect(p).toContain("--supersedes op-N");
-    expect(p).toContain('cast org proposals --team "acme"');
-    expect(p).toContain("cast state --status done");
-    expect(p).toContain("that page is the only door, and nothing you run applies a change");
-    expect(p).not.toContain("cast org apply");
-    expect(p).not.toContain("cast stack create");
-    expect(p).not.toContain("cast decide ");
-    expect(p).toContain("2 projects, 1 plans, 5 open tasks, 3 members, 40 sessions in 30 days, 0 existing roles, no chief of staff");
-  });
-  // initiatives-projects-role-page.md I1, I2: the tree is read from the top,
-  // the letter says how the goals are going before it asks, and every project
-  // with work ends with a lead.
-  test("reads initiatives as the top of the tree and carries the coverage rule, in both modes", () => {
-    const coverage = { initiatives_active: 2, initiatives_without_owner: 1, with_work: 12, with_lead: 9, outside_plans: 3, outside_areas: 4, outside_repositories: 2 };
-    for (const mode of ["init", "review"] as const) {
-      const p = buildOrgAnalyzerPrompt({ mode, workspace: "Acme", summary: { ...summary, coverage } });
-      expect(p).toContain(ORG_INITIATIVES_RULE);
-      expect(p).toContain(ORG_COVERAGE_RULE);
-      // Read from the top: coverage before activity, and the section before any sizing.
-      expect(p.indexOf("Its `coverage` block first")).toBeGreaterThan(-1);
-      expect(p.indexOf("Its `coverage` block first")).toBeLessThan(p.indexOf("Then its `activity` block"));
-      expect(p.indexOf("## Initiatives, and a lead for every piece of work")).toBeLessThan(p.indexOf("## The capacity model"));
-      // The glance states the before count the coverage line starts from.
-      expect(p).toContain("Coverage today: 2 active initiatives, 1 with no owner; 9 of 12 projects with work have a lead; outside any project: 3 plans and 4 areas of commits and sessions in 2 repositories.");
-      expect(p).toContain("An initiative is a goal the company is trying to reach");
-    }
-    // The goals come right after the reporting structure (S24), as sentences, and each goal change is its own small proposal.
-    expect(ORG_INITIATIVES_RULE).toContain("When the conversation reaches the goals, or the person asks, say how they are going");
-    expect(ORG_INITIATIVES_RULE).toContain("A goal change is its own small proposal");
-    expect(ORG_INITIATIVES_RULE).toContain("that is the first thing you say about the goals, ahead of every record and every role");
-    // I1, revised: the reviewer proposes goals as changes and applies none.
-    expect(ORG_INITIATIVES_RULE).toContain("The goals are yours to propose, as changes a person accepts, and never yours to apply.");
-    expect(ORG_INITIATIVES_RULE).toContain("When the evidence shows one shared goal that no initiative holds, propose it");
-    expect(ORG_INITIATIVES_RULE).toContain("propose `initiative_owner` naming who drives it");
-    expect(ORG_INITIATIVES_RULE).toContain("A shared goal you only suspect is something to ask about, not a change");
-    for (const kind of ["initiative:", "initiative_projects:", "initiative_owner:"]) expect(buildOrgAnalyzerPrompt({ mode: "review", workspace: "Acme", summary })).toContain(`- ${kind}`);
-    expect(ORG_COVERAGE_RULE).toContain("Wrap the project that exists");
-    expect(ORG_COVERAGE_RULE).toContain("show to be its business gets a project first");
-    expect(ORG_COVERAGE_RULE).toContain("a paused lead is not one");
-    // Resuming a paused role is a person's act on the role's page (OrgScopePanel "Resume role"); no change kind does it, so the rule asks rather than proposing a move.
-    expect(ORG_COVERAGE_RULE).toContain("resuming the role is their own act on its page, which no proposal carries");
-    expect(ORG_COVERAGE_RULE).not.toContain("a move that resumes it");
-    expect(ORG_COVERAGE_RULE).toContain("Aim at about one role per project, and depart from that only with a reason the change states");
-    expect(ORG_COVERAGE_RULE).toContain("When the conversation reaches coverage, say where it stands before and after in counts");
-    expect(ORG_COVERAGE_RULE).not.toMatch(/letter|in this form|costs/);
-    // The old advice argued against a complete chart; it now says what complete means.
-    expect(buildOrgAnalyzerPrompt({ mode: "init", workspace: "Acme", summary })).not.toContain("beat a complete chart");
-    expect(buildOrgAnalyzerPrompt({ mode: "review", workspace: "Acme", summary })).toContain("are gaps the review closes whether or not a flag names them");
-  });
-  test("the coverage glance reads the inputs' coverage block, and says nothing for a server without one", () => {
-    expect(summarizeInputs({}).coverage).toBeUndefined();
-    expect(buildOrgAnalyzerPrompt({ mode: "review", workspace: "Acme", summary })).not.toContain("Coverage today");
-    const s = summarizeInputs({ coverage: { active_initiatives: 0, active_without_owner: 0, with_work: 1, with_lead: 1, outside: { plans: [], areas: [] } } });
-    expect(s.coverage).toEqual({ initiatives_active: 0, initiatives_without_owner: 0, with_work: 1, with_lead: 1, with_lead_paused: 0, outside_plans: 0, outside_areas: 0, outside_repositories: 0 });
-    expect(coverageLine(s.coverage)).toBe("no active initiatives; 1 of 1 project with work has a lead");
-  });
-  test("the spec example parses with the reader cast org propose uses, and every change kind is described", () => {
-    const p = buildOrgAnalyzerPrompt({ mode: "review", workspace: "Acme", summary });
-    const json = p.split("```json\n")[1].split("\n```")[0];
-    const parsed = parseOrgProposalSpec(JSON.parse(json));
-    expect(parsed.errors).toEqual([]);
-    expect(parsed.spec!.changes[0].change.kind).toBe("role");
-    // The prompt spells the switch as `autonomy` and never offers a limit (S23.1, S23.2).
-    for (const kind of ORG_CHANGE_KINDS) { if (kind === "budget") expect(p).not.toContain(`- ${kind}: {`); else if (kind === "trust") expect(p).toContain("- autonomy: { handle, on: true | false }"); else expect(p).toContain(`- ${kind}: {`); }
-  });
-  test("init designs from business lines; review reads flags and respects stability; the offer names the session or says it cannot", () => {
-    const init = buildOrgAnalyzerPrompt({ mode: "init", workspace: "Acme", summary, session: "abc-123" });
-    expect(init).toContain("## How to design from scratch");
-    expect(init).toContain("Start from the initiatives, then the business lines");
-    expect(init).not.toContain("## How to review");
-    expect(init).toContain("This session is `abc-123`");
-    const review = buildOrgAnalyzerPrompt({ mode: "review", workspace: "Acme", summary: { ...summary, roles: 3, chief_of_staff: true } });
-    expect(review).toContain("## How to review");
-    expect(review).toContain("smallest change that removes it");
-    expect(review).not.toContain("## How to design from scratch");
-    expect(review).toContain("skip the offer and say so");
-    // An unfiled plan is a file change, filed ahead of the role that needs it.
-    expect(review).toContain("- file: { plan: ref, project: ref }");
-    expect(review).toContain("A plan with open work and no project is a file change, not a remark");
-    expect(review).toContain("propose their file changes first in the same proposal");
-    expect(review).toContain("Work moves between roles by moving the plan");
-    // The review findings: every seat is sized in its rationale, budgets are
-    // stated against the company total health reports, the summary leads
-    // with the decision, and a split reads the breach count.
-    for (const p of [init, review]) {
-      expect(p).toContain("states, in its rationale, the seat's resulting load against the model and its ledger as context");
-      // The sizing guidance lives in the shared module, so the prompt's
-      // capacity section carries nothing about thresholds of its own.
-      expect(p).toContain("A wide ledger with a quiet flow is not a seat problem");
-      expect(p).toContain("A role does not do its scope's tasks; hands and people do.");
-      expect(p).not.toContain("`company.caps_total`");
-      expect(p).toContain("never propose a limit, never state one");
-      expect(p).toContain("What a role may do in a day never comes up");
-      expect(p).not.toContain("allocated from the person's total");
-    }
-    // The split rules read from health: the streak for the ordinary case, the
-    // ratio for a scope that is structurally too big, and each resulting seat
-    // sized against the model.
-    expect(review).toContain("`breaches` counts the consecutive earlier reviews that flagged the role");
-    expect(review).toContain("a first breach on record is not a split");
-    expect(review).toContain("at or above the split_on_first_breach_ratio the overloaded flag says \"split now\" and the split goes in this proposal");
-    expect(review).toContain("shows each resulting seat's load against the model with its ledger as context");
-    expect(review).toContain("A `wide_ledger` flag on its own is never a split");
-    expect(review).toContain("busiest volume axis of the load (items a day, decisions a day, live hands)");
-    expect(review).toContain(`split_on_first_breach_ratio: ${STABILITY.split_on_first_breach_ratio.value} `);
-    expect(review).toContain(STABILITY.split_on_first_breach_ratio.reason);
-    expect(review).toContain("3 existing roles, a chief of staff");
-  });
-  // S9: activity before records. The rules are named, the section stands
-  // between what to read and the capacity model, the activity block is the
-  // first thing read, the stale flags are answered first, and the three
-  // status kinds are the first group of a proposal.
-  test("grounds in activity before records: the rules, the read order, the status kinds and the record group first", () => {
-    for (const mode of ["init", "review"] as const) {
-      const p = buildOrgAnalyzerPrompt({ mode, workspace: "Acme", summary });
-      expect(p).toContain("## Ground in what is happening, not in what was filed");
-      for (const rule of Object.values(ORG_GROUNDING_RULES)) expect(p).toContain(rule);
-      expect(p).toContain("never staff around a stale record");
-      expect(p).toContain("is a sync change, not a bottleneck");
-      expect(p).toContain("A project whose path nobody touches is not a seat");
-      // The activity block is read before every record (coverage, the top of
-      // the tree, comes just ahead of it; I1), and the section
-      // sits after the reading list and before the capacity model.
-      const at = (s: string) => { const i = p.indexOf(s); expect(i).toBeGreaterThanOrEqual(0); return i; };
-      expect(at("Then its `activity` block")).toBeLessThan(at("cast org health --json"));
-      expect(at("## What to read")).toBeLessThan(at("## Ground in what is happening"));
-      expect(at("## Ground in what is happening")).toBeLessThan(at("## The capacity model"));
-      expect(p).toContain("`stale_plan`, `stale_task`, `stale_project`");
-      // The status kinds, with a reason each, and the group they form.
-      expect(p).toContain('- plan_status: { plan: ref, status: "done" | "abandoned" | "active", reason, title }');
-      expect(p).toContain('- task_status: { task: ref, status: "done" | "dropped" | "open" | "backlog", reason, title }');
-      // Sync before sizing, one change per plan, the cascade named, and the
-      // file list coverage reported as could not verify.
-      expect(p).toContain("Bring the records in line first, then size");
-      // Review findings: done needs its own evidence, an average needs its
-      // days, and a bypassed seat is named, not restructured on first sight.
-      expect(p).toContain("A row you did not read gets no status change");
-      expect(p).toContain("A finished session is not evidence that the work landed; a plan already marked done is not either");
-      expect(p).toContain("as abandoned when nothing under it finished");
-      expect(p).not.toContain("0 hands, 8 wakes and 200,000 tokens a day is the default");
-      expect(p).toContain("`spend.wakes_by_day`");
-      expect(p).toContain("A seat flagged `bypassed` is neither idle nor loaded");
-      expect(p).toContain("Closing a plan closes its still open tasks in the same accept");
-      expect(p).toContain("propose one change per plan");
-      expect(p).toContain("report the rest as could not verify, never as work on the root");
-      expect(p).toContain('- project_status: { project: ref, status: "paused" | "done" | "active", reason, title }');
-      expect(p).toContain("a status change that brings a record in line comes before what rests on it");
-      // Loads are sized without the stale records.
-      expect(p).toContain("the loads you size for a seat exclude it");
-    }
-    // The glance names the stale counts, so the reader expects sync changes.
-    const stale = buildOrgAnalyzerPrompt({ mode: "review", workspace: "Acme", summary: { ...summary, stale: { plans: 3, tasks: 12, projects: 0 } } });
-    expect(stale).toContain("The activity block marks 3 plans, 12 tasks as stale: those are sync changes, and they come first.");
-    expect(buildOrgAnalyzerPrompt({ mode: "review", workspace: "Acme", summary })).toContain("The activity block marks no record as stale.");
-    // The review reads the stale flags before any bottleneck.
-    const review = buildOrgAnalyzerPrompt({ mode: "review", workspace: "Acme", summary });
-    expect(review).toContain("turn each stale record into its status change before you read anything as a bottleneck");
-  });
-  // S24: the review is a conversation. The rules are named, the structure
-  // leads, evidence stays behind the words, proposals are small and render as
-  // cards, the spec is the same one the server parses (asks optional), and
-  // nothing asks for one large letter or a list of asks.
-  test("holds the review as a conversation: the rules, small proposals as cards, the spec, and no letter", () => {
-    for (const mode of ["init", "review"] as const) {
-      const p = buildOrgAnalyzerPrompt({ mode, workspace: "Acme", teamFlag: "acme", summary });
-      expect(p).toContain("## The conversation");
-      for (const rule of Object.values(ORG_CONVERSATION_RULES)) expect(p).toContain(rule);
-      expect(p).toContain("You do it as a conversation with the person you report to, in this thread.");
-      // Round 22: the person's own sessions were placed in 1 of 3 openings; the structure now includes them by definition.
-      expect(p).toContain("every session of the person's own, each placed under one of those roles or kept by the person");
-      expect(p).toContain("where each of the person's own sessions goes, under a role or kept by them, with its proposal");
-      expect(p).toContain("Read and check as much as the records need, and hold all of it");
-      expect(p).toContain("never the story of what you read, checked or did to find it out");
-      expect(p).toContain("No em dashes.");
-      expect(p).toContain("it never cites an id, never talks about you, and never names the thread it is written in");
-      // The opening is one short turn (the product call of 2026-09-24): what is done with its card, the structure with the person's sessions placed and its card, one question; the rest waits.
-      expect(p).toContain("The opening is one short turn, not the review. It carries two things and one question.");
-      expect(p).toContain("waits for a later turn or for the person to ask");
-      expect(p).toContain("put its short id on its own line in your message, where it renders as a card the person accepts, skips or asks on");
-      expect(p).toContain("never to one large document, and a change they have not accepted changes nothing");
-      expect(p).toContain("a role is an agent that keeps watching one area of work, said once and then called a role");
-      expect(p).toContain("The names of the inputs you read, the health signals and short ids never reach the person");
-      // Posting: the same verb and spec, a small proposal being an ordinary spec with few changes; asks optional.
-      expect(p).toContain("## Posting a proposal");
-      expect(p).toContain("A small proposal is an ordinary spec with few changes");
-      expect(p).toContain("`asks` is optional");
-      expect(p).toContain("with every change in exactly one ask");
-      expect(p).toContain("a change one of them already carries is not posted again, and withdrawing one is the person's act");
-      const example = parseOrgProposalSpec(JSON.parse(p.split("```json\n")[1].split("\n```")[0]));
-      expect(example.errors).toEqual([]);
-      expect(example.spec!.asks).toBeUndefined();
-      // Order: the rules sit inside the conversation section, ahead of the spec and the honesty section.
-      const at = (s: string) => { const i = p.indexOf(s); expect(i).toBeGreaterThanOrEqual(0); return i; };
-      expect(at("## The conversation")).toBeLessThan(at(ORG_CONVERSATION_RULES.structure_first));
-      expect(at(ORG_CONVERSATION_RULES.structure_first)).toBeLessThan(at("## Posting a proposal"));
-      expect(at("## Posting a proposal")).toBeLessThan(at("## What not to invent"));
-      // The turn ends with the message, the state says who acts next, and the page stays the only door.
-      expect(p).toContain("## Ending a turn");
-      expect(p).toContain("A turn ends with the message the person reads");
-      expect(p).toContain("cast state --status blocked");
-      // Nothing demands one letter, a first screen, a word budget or a list of asks.
-      expect(p).not.toMatch(/\bletter\b|first screen|two hundred words|1,800 characters|The summary is the ask|The proposal is a few asks|say it as a finding|in a finding, name|is a finding, not a change/);
-      // Who does what is said to the person before it is proposed, never escalated as a decision from a summary.
-      expect(p).toContain("is said to the person before it is proposed, and is theirs to decide");
-    }
-  });
-  // org-roles-run-work.md R2: a long running session is a role nobody has
-  // named; the analyzer proposes it on its own session and says what it left out.
-  test("names the long running sessions that already are roles, with the seat in the role change, and says which it left out", () => {
-    for (const mode of ["init", "review"] as const) {
-      const p = buildOrgAnalyzerPrompt({ mode, workspace: "Acme", summary });
-      expect(p).toContain("## Sessions that already are roles");
-      expect(p).toContain(ORG_UNNAMED_ROLES_RULE);
-      expect(p).toContain("`sessions.long_running`: the sessions older than a week that still run");
-      expect(p).toContain("seat?: { existing: a session's short id, title, started_at, helpers }");
-      expect(p.indexOf("## Sessions that already are roles")).toBeLessThan(p.indexOf("## The capacity model"));
-    }
-    expect(ORG_UNNAMED_ROLES_RULE).toContain("A session older than a week with a standing purpose is a role that has not been named");
-    expect(ORG_UNNAMED_ROLES_RULE).toContain("For every row of `sessions.long_running` you did not propose, know why in a few words");
-    expect(ORG_UNNAMED_ROLES_RULE).toContain("Naming keeps the reporting line the session has today");
-    expect(ORG_UNNAMED_ROLES_RULE).toContain("a separate move change in the same proposal");
-  });
-  // The two role shapes people asked for on the 2026-09-18 huddle (R6).
-  test("an agent quality role runs cast-lessons weekly over one agent; a role a person reports to is a goal tracker, not a gatekeeper", () => {
-    const p = buildOrgAnalyzerPrompt({ mode: "review", workspace: "Acme", summary });
-    expect(p).toContain("## Two roles people asked for");
-    expect(p).toContain(ORG_ASKED_FOR_RULES.agent_quality);
-    expect(p).toContain(ORG_ASKED_FOR_RULES.goal_tracker);
-    expect(ORG_ASKED_FOR_RULES.agent_quality).toContain("cast-lessons harvest every week");
-    expect(ORG_ASKED_FOR_RULES.goal_tracker).toContain("a goal tracker, not a gatekeeper");
-  });
-  // S10: every proposed role is standing or a program, says which, and names
-  // its end; tenure rides on the role change and the spec example carries it.
-  test("decides standing versus program for every role, with the end condition, and puts tenure in the role change", () => {
-    for (const mode of ["init", "review"] as const) {
-      const p = buildOrgAnalyzerPrompt({ mode, workspace: "Acme", summary });
-      expect(p).toContain("## Standing and program roles");
-      expect(p).toContain(ORG_TENURE_RULE);
-      expect(p).toContain("When in doubt, a program");
-      expect(p).toContain('tenure: { kind: "standing" } | { kind: "program", ends: { plan: ref } | { project: ref } | { date: unix ms }, then: "retire" | "review" }');
-      expect(p).toContain("Every role change carries its tenure, and its rationale says why standing or why a program and what ends it");
-      expect(p).toContain("`program_ended`");
-      expect(p).toContain('horizon?: "ongoing" | "bounded"');
-      const json = p.split("```json\n")[1].split("\n```")[0];
-      const parsed = parseOrgProposalSpec(JSON.parse(json));
-      expect(parsed.errors).toEqual([]);
-      expect((parsed.spec!.changes[0].change as any).tenure).toEqual({ kind: "standing" });
-    }
-    expect(buildOrgAnalyzerPrompt({ mode: "init", workspace: "Acme", summary })).toContain("say whether the seat is standing or a program");
-    // S12 and S22: the chief of staff is the workspace's standing agent; the
-    // analyzer's own session is the adopt target only where none exists.
-    const offer = buildOrgAnalyzerPrompt({ mode: "review", workspace: "Acme", summary, session: "abc-123" });
-    expect(offer).toContain("`cast anchor ls --json`");
-    expect(offer).toContain("Only a workspace with no standing agent adopts this session");
-    expect(offer).toContain("This session is `abc-123`; that is the adopt change's conversation only when the workspace has no standing agent");
-    expect(buildOrgAnalyzerPrompt({ mode: "review", workspace: "Acme", summary })).toContain("program roles whose end has come");
+  test("with no chief of staff seated, the person is whoever asked for the review", () => {
+    expect(buildOrgAnalyzerPrompt({ mode: "init", workspace: "Acme", summary })).toContain("You report to the person who asked for this review.");
   });
 });
 
 describe("summarizeInputs", () => {
-  test("counts open tasks, lists git roots, sees a chief of staff and counts the stale records", () => {
+  test("counts open tasks, lists git roots, sees a chief of staff and whom it reports to, and counts the stale records", () => {
     expect(summarizeInputs({
       projects: [{}, {}], plans: [{}], tasks: { by_status: { open: 3, done: 9, in_progress: 1, dropped: 2 } },
-      members: [{}], sessions: { total: 7 }, org: { roles: [{ handle: "growth" }, { handle: CHIEF_OF_STAFF_HANDLE }] }, git_roots: [{ git_root: "/a" }, { git_root: "/b" }],
+      members: [{}], sessions: { total: 7 }, org: { roles: [{ handle: "growth", reports_to: "@chief-of-staff" }, { handle: CHIEF_OF_STAFF_HANDLE, reports_to: "Ada" }] }, git_roots: [{ git_root: "/a" }, { git_root: "/b" }],
       activity: { areas: [], people: [], stale: { plans: [{ short_id: "pl-1" }], tasks: [{}, {}], projects: [] } },
-    })).toEqual({ projects: 2, plans: 1, tasks_open: 4, members: 1, sessions_30d: 7, roles: 2, git_roots: ["/a", "/b"], chief_of_staff: true, stale: { plans: 1, tasks: 2, projects: 0 } });
+    })).toEqual({ projects: 2, plans: 1, tasks_open: 4, members: 1, sessions_30d: 7, roles: 2, git_roots: ["/a", "/b"], chief_of_staff: true, person: "Ada", stale: { plans: 1, tasks: 2, projects: 0 } });
     // Inputs from a backend without the activity block count nothing stale.
     expect(summarizeInputs(null)).toEqual({ projects: 0, plans: 0, tasks_open: 0, members: 0, sessions_30d: 0, roles: 0, git_roots: [], chief_of_staff: false, stale: { plans: 0, tasks: 0, projects: 0 } });
   });
@@ -376,31 +88,26 @@ describe("runAnalyzer", () => {
     expect(cap.said()).toContain("https://codecast.sh/org?proposal=op-7");
     expect(cap.said()).not.toContain("cast org apply");
     expect(cap.said()).not.toContain("withdraw");
-    expect(cap.said()).not.toContain("# Propose");
+    expect(cap.said()).not.toContain("You are the Chief of Staff");
     expect(calls.filter(([p]) => p === "/cli/org/proposals").map(([, b]) => b)).toEqual([{ team_id: "teams_a", status: "open" }]);
   });
-  // The weekly routine's ordinary Monday: last week's proposal is still open.
-  // The review runs, reads, and adds nothing; it never withdraws.
-  test("a review with an open proposal prints a standing review that reads and does not repost or withdraw", async () => {
+  // The weekly routine's ordinary Monday: last week's proposal is still open,
+  // and the reference says so as a fact.
+  test("a review with an open proposal states it and never tells the reviewer to withdraw", async () => {
     const { deps: d } = fake([{ short_id: "op-7", title: "Company review: Acme", mode: "review", status: "open", counts: { decided: 1, total: 6 } }]);
     const cap = capture();
     try { await runAnalyzer(d, "review", {}); } finally { cap.restore(); }
     const p = cap.said();
-    expect(p).toContain("# Review the company: Acme");
-    expect(p).toContain("## A proposal is still open");
-    expect(p).toContain('op-7 "Company review: Acme" waits on a person: 1 of 6 changes decided, at https://codecast.sh/org?proposal=op-7');
-    expect(p).toContain("Its changes are not posted again, and it is not withdrawn by you: a person decides or withdraws it.");
-    expect(p).toContain("the conversation carries on from it");
-    expect(p).not.toContain("cast org proposals --withdraw");
+    expect(p).toContain("You are the Chief of Staff for Acme.");
+    expect(p).toContain('Still open: op-7 "Company review: Acme", 1 of 6 changes decided.');
+    expect(p).not.toContain("--withdraw");
   });
-  test("with no open proposal it prints the prompt for the mode, naming the calling session", async () => {
+  test("with no open proposal it prints the prompt", async () => {
     const { deps: d } = fake([]);
     const cap = capture();
-    try {
-      await runAnalyzer({ ...d, callingSession: () => "sess-1" }, "review", {});
-    } finally { cap.restore(); }
-    expect(cap.said()).toContain("# Review the company: Acme");
-    expect(cap.said()).toContain("This session is `sess-1`");
+    try { await runAnalyzer(d, "review", {}); } finally { cap.restore(); }
+    expect(cap.said()).toContain("You are the Chief of Staff for Acme.");
+    expect(cap.said()).not.toContain("Still open:");
   });
 });
 

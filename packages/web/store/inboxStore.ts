@@ -1773,12 +1773,16 @@ export type ClientUI = {
   // the sidebar and zen mode — the window is a different size on every machine,
   // and which view fits is a fact about the window, not about the person.
   people_view?: "wall" | "list";
+  // The floating faces' circle size (lib/faces/layout FLOAT_FACE_SIZES).
+  // Unstamped: the size that suits a laptop is a stamp on an ultrawide.
+  float_face_size?: number;
   // Which microphone and camera a deliberate join opens (lib/calls/joinPrefs).
   // Unstamped on purpose: a device id names hardware attached to THIS machine,
   // so the newest choice must not travel — the laptop's headset id is noise on
   // the desktop, and switchActiveDevice would simply fail on it.
   call_mic_device_id?: string;
   call_camera_device_id?: string;
+  call_speaker_device_id?: string;
   // Whether a deliberate join turns the camera on, and whether it opens the
   // microphone. Stamped LWW, because these ARE about the person: somebody who
   // joins with video joins with video wherever they are signed in. Absent
@@ -6326,8 +6330,9 @@ export const PER_DEVICE_UI_KEYS = new Set([
   "visual_style",
   "sidebar_collapsed", "zen_mode", "nav_sections", "workspace",
   "sticky_headers_disabled", "diff_panel_open",
-  "trigger_prompt_height", "thread_state_collapsed", "people_view",
+  "trigger_prompt_height", "thread_state_collapsed", "people_view", "float_face_size",
   "last_picked_device_id", "call_mic_device_id", "call_camera_device_id",
+  "call_speaker_device_id",
 ]);
 
 export function isStampedUiKey(key: string): boolean {

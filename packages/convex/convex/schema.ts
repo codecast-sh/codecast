@@ -4264,6 +4264,10 @@ export default defineSchema({
     // the session that armed it (runOwnerWakeOf) instead of only posting
     // there. Failures, deaths and --needs-attention wake it regardless.
     wake_creator: v.optional(v.boolean()),
+    // The org role whose routine this is (org-staffing.md S25). A role's
+    // session already knows how it works from its opening message, so its
+    // routine carries no generic trigger lifecycle text.
+    role_id: v.optional(v.id("org_roles")),
 
     status: v.union(
       v.literal("scheduled"),

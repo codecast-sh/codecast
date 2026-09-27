@@ -13482,7 +13482,7 @@ for (const verb of ["pause", "resume", "retire", "restart"] as const) {
     .description({
       pause: "Pause a role: wakes hold, hands stop at a safe point, no new hands",
       resume: "Resume a paused role; held wakes ship as one frame",
-      retire: "Retire a role; its sessions fall back to their owners",
+      retire: "Retire a role; its area falls back to the role that covers it, else its sessions to their owners",
       restart: "Restart the standing session; the next frame carries the charter and brief in full",
     }[verb])
     .argument("<handle>", "@handle, or-N, or id")
@@ -13825,7 +13825,7 @@ org
 
 org
   .command("retire")
-  .description("Retire a role; its sessions fall back to their owners")
+  .description("Retire a role; its area falls back to the role that covers it, else its sessions to their owners")
   .argument("<role>", "Role short id (or-N), id, or @handle")
   .option("--standing <keep|retire>", "The standing session: keep it running as a plain agent (default for the chief of staff) or retire it with the seat")
   .option("--team <name|id>", "Team workspace (default: the active workspace)")

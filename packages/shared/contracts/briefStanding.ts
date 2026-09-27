@@ -94,9 +94,14 @@ export function standingLineFor(lines: StandingLine[], project: { title: string;
   }) ?? null;
 }
 
-/** The words a surface shows for a project the role has not written about. */
-export function noWordYet(handle: string): string {
-  return `no word from @${handle} yet`;
+/** The projects the role has written a line about, each with its line, in
+ *  the scope's order. A project with no line is left out: an empty line tells
+ *  a reader nothing. */
+export function projectsWithLines<P extends { title: string; short_id?: string | null }>(lines: StandingLine[], projects: P[]): Array<{ project: P; line: StandingLine }> {
+  return projects.flatMap((project) => {
+    const line = standingLineFor(lines, project);
+    return line ? [{ project, line }] : [];
+  });
 }
 
 /** A line's age in whole days, or null when the line carries no date. */

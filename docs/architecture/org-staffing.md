@@ -1010,3 +1010,13 @@ A role is a session. It wakes the way any session wakes, and nothing else wakes 
 - An ordinary message: a person writing to it, a chat mention, a question routed to it, an escalation. It arrives as a plain message, never wrapped, never held.
 
 A change in the role's area wakes nothing. When its trigger fires, the role reads what changed since its last run with `cast brief`. A trigger run carries its short prompt and nothing else: the role knows who it is from its first turn, and its brief is its memory, so no message repeats its name, scope or charter.
+
+## S26. Work belongs to the most specific role that covers it
+
+A role that covers the whole workspace owns what no narrower role has claimed. When a lead takes an area, that area leaves the wider role; when the lead goes, the area falls back. Two roles never answer for the same work.
+
+One entity for everything is a Chief of Staff and nothing else: it covers the workspace and owns all of it. Leads are added one area at a time, each taking its area from the chief, and the chief keeps the rest. Moving between the two is adding or removing a lead; nothing is reconfigured.
+
+Reporting and ownership are separate. Leads report to the person by default; the Chief of Staff is the person's right hand beside them. Its opening message says so: it keeps the person's goals in view, answers anything, routes a request to the owner, and brings decisions with a recommendation. Reviewing the structure is one of its jobs, run in a short lived helper session under it that reports back the proposed structure and one question.
+
+The rule has one home, `ownerOf` in `packages/shared/contracts/orgLead.ts`: a role naming the work's plan beats one naming its project, which beats a whole workspace role; on a named area the role closest to the work wins, and among whole workspace roles the root does. `projectLeadOf`, the takeover and its preview (`convex/lib/orgOwnership.ts sessionsOwnedBy`), the line's pick, a retired role's tasks and sessions, and org health's remainder all read it. Reading is unchanged: a whole workspace role's scope feed still shows everything.

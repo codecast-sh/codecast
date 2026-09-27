@@ -212,6 +212,7 @@ const People = lazy(() => import("@/app/people/page"));
 const CallPanel = lazy(() => import("@/app/call-panel/page"));
 const MeetingOffer = lazy(() => import("@/app/meeting-offer/page"));
 const CallRing = lazy(() => import("@/app/call-ring/page"));
+const ShareCursors = lazy(() => import("@/app/share-cursors/page"));
 
 // Settings
 const Settings = lazy(() => import("@/app/settings/page"));
@@ -390,10 +391,12 @@ export const ROUTES: RouteEntry[] = [
   { path: "r/:owner/:name/search", component: cast(RepoSearch), layout: "standalone", guestOk: true, guestKind: "public" },
   { path: "r/:owner/:repo/commit/:sha", component: cast(CommitView), layout: "standalone", guestOk: true, guestKind: "public" },
   { path: "r/:owner/:repo/pull/:number", component: cast(PrView), layout: "standalone", guestOk: true, guestKind: "public" },
+  { path: "r/:owner/:repo/pull/:number/:view", component: cast(PrView), layout: "standalone", guestOk: true, guestKind: "public" },
 
   // -- Code review --
   { path: "commit/:owner/:repo/:sha", component: cast(CommitView), layout: "codeReview", tab: "/commit/:owner/:repo/:sha", fullWidth: true },
   { path: "pr/:owner/:repo/:number", component: cast(PrView), layout: "codeReview", tab: "/pr/:owner/:repo/:number", fullWidth: true },
+  { path: "pr/:owner/:repo/:number/:view", component: cast(PrView), layout: "codeReview", tab: "/pr/:owner/:repo/:number/:view", fullWidth: true },
   { path: "review/:id", component: cast(ReviewView), layout: "codeReview" },
   { path: "review/batch", component: cast(ReviewBatch), layout: "codeReview" },
 
@@ -419,6 +422,10 @@ export const ROUTES: RouteEntry[] = [
   //    for the same reason: a ring must reach somebody who is in another app
   //    entirely, which a card inside an app window cannot do. --
   { path: "call-ring", component: cast(CallRing), layout: "palette" },
+
+  // -- The share cursors glass (TransparentWindowLayout): teammates' pointers
+  //    drawn on the sharer's own screen, over what the share captures. --
+  { path: "share-cursors", component: cast(ShareCursors), layout: "palette" },
 
   // -- Settings (SettingsLayout; index = /settings) --
   { path: "settings", component: cast(Settings), layout: "settings" },

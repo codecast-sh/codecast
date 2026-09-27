@@ -29,7 +29,7 @@ import { parentName, standingLineOf } from '@codecast/web/components/org/orgMeta
 import { FEED_KINDS, FEED_KIND_META, type FeedKind, type FeedRow } from '@codecast/web/components/org/scope/scopeTypes';
 import type { OrgRole, OrgTree } from '@codecast/web/components/org/orgTypes';
 import { escalationFirstLine } from '@codecast/shared/contracts';
-import { noWordYet, parseStandingSection, standingLineAgeDays, standingLineFor, standingLineStale } from '@codecast/shared/contracts/briefStanding';
+import { parseStandingSection, projectsWithLines, standingLineAgeDays, standingLineFor, standingLineStale } from '@codecast/shared/contracts/briefStanding';
 import { EntityPill } from '@/components/EntityPill';
 
 const KIND_ICON: Record<FeedKind, React.ComponentProps<typeof FontAwesome>['name']> = {
@@ -151,17 +151,17 @@ function Briefing({ role, tree, projects }: { role: OrgRole; tree: OrgTree; proj
   const escalations = useRoleEscalations(role._id, role.standing?.conversation_id ?? null);
   const { data: brief } = useRoleBrief(role._id);
   const standing = useMemo(() => parseStandingSection(brief?.narrative), [brief?.narrative]);
+  const written = projectsWithLines(standing, projects);
   const active = role.counts.working ?? 0;
   const current = [...role.sessions].filter((s) => s.state === 'working').sort((a, b) => b.updated_at - a.updated_at)[0]
     ?? [...role.sessions].sort((a, b) => b.updated_at - a.updated_at)[0];
   void tree;
   return (
     <RNView style={styles.briefing} testID="scope-briefing">
-      <RNView>
-        <RNText style={styles.blockLabel}>Needs you</RNText>
-        {escalations.length === 0 ? (
-          <RNText style={styles.calm} testID="scope-needs-nothing">Nothing needs you.</RNText>
-        ) : escalations.map((e) => (
+      {escalations.length > 0 ? (
+        <RNView>
+          <RNText style={styles.blockLabel}>Needs you</RNText>
+          {escalations.map((e) => (
           <TouchableOpacity key={e.conversation_id} style={styles.escalation} activeOpacity={0.7} onPress={() => router.push(`/session/${e.conversation_id}` as never)} testID={`scope-escalation-${e.conversation_id}`}>
             <FontAwesome name="arrow-up" size={10} color={Theme.violet} style={{ marginTop: 3 }} />
             <RNView style={{ flex: 1, minWidth: 0 }}>
@@ -173,28 +173,26 @@ function Briefing({ role, tree, projects }: { role: OrgRole; tree: OrgTree; proj
             </RNView>
           </TouchableOpacity>
         ))}
-      </RNView>
-      <RNView>
-        <RNText style={styles.blockLabel}>Where it stands</RNText>
-        {projects.length === 0 ? <RNText style={styles.calm}>No project in its scope yet.</RNText> : projects.map((p) => {
-          const line = standingLineFor(standing, { title: p.title, short_id: p.short_id });
-          const days = line ? standingLineAgeDays(line, now) : null;
-          const stale = !!line && standingLineStale(line, now);
-          return (
-            <RNView key={p.id} style={{ marginBottom: 6 }} testID={`scope-stands-${p.short_id ?? p.id}`}>
-              <RNText style={styles.projectTitle}>{p.title}</RNText>
-              {line ? (
+        </RNView>
+      ) : null}
+      {written.length > 0 ? (
+        <RNView>
+          <RNText style={styles.blockLabel}>Where it stands</RNText>
+          {written.map(({ project: p, line }) => {
+            const days = standingLineAgeDays(line, now);
+            const stale = standingLineStale(line, now);
+            return (
+              <RNView key={p.id} style={{ marginBottom: 6 }} testID={`scope-stands-${p.short_id ?? p.id}`}>
+                <RNText style={styles.projectTitle}>{p.title}</RNText>
                 <RNText style={styles.standsLine}>
                   {line.text}
                   {stale && days !== null ? <RNText style={{ color: Theme.yellow, fontSize: 11 }}>{`  written ${days} days ago`}</RNText> : null}
                 </RNText>
-              ) : (
-                <RNText style={[styles.standsLine, { color: Theme.textDim, fontStyle: 'italic' }]}>{brief === undefined ? ' ' : noWordYet(role.handle)}</RNText>
-              )}
-            </RNView>
-          );
-        })}
-      </RNView>
+              </RNView>
+            );
+          })}
+        </RNView>
+      ) : null}
       <RNView>
         <RNText style={styles.blockLabel}>What it is doing</RNText>
         <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }} testID={`scope-doing-${active}`}>

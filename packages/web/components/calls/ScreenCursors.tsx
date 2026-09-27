@@ -78,17 +78,23 @@ export function ScreenCursors({
       {shown.map((c) => {
         const p = mapFromFrame(c.nx, c.ny, box, natural);
         if (!p) return null;
-        return (
-          <div
-            key={c.identity}
-            data-sv-screen-cursor={c.identity}
-            className="absolute left-0 top-0 w-7 h-9 will-change-transform"
-            style={{ transform: `translate(${p.x}px, ${p.y}px)`, transition: TRANSITION }}
-          >
-            <CursorArrow color={hueFor(c.name)} label={firstName(c.name)} />
-          </div>
-        );
+        return <TeammateCursor key={c.identity} identity={c.identity} name={c.name} x={p.x} y={p.y} />;
       })}
+    </div>
+  );
+}
+
+/** One teammate's arrow at (x, y) of its positioned parent: over a share tile
+ *  here, and over the sharer's real screen in the shell's glass window
+ *  (app/share-cursors). */
+export function TeammateCursor({ identity, name, x, y }: { identity: string; name: string; x: number; y: number }) {
+  return (
+    <div
+      data-sv-screen-cursor={identity}
+      className="absolute left-0 top-0 w-7 h-9 will-change-transform"
+      style={{ transform: `translate(${x}px, ${y}px)`, transition: TRANSITION }}
+    >
+      <CursorArrow color={hueFor(name)} label={firstName(name)} />
     </div>
   );
 }

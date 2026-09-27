@@ -808,11 +808,13 @@ export async function performEscalateSession(
 }
 
 // A role that gains scope takes over the sessions in it (R1): every session
-// the caller passes that reports to the role's host and to no role is filed
-// under the role through the one reparent core, so each is told once and its
-// open questions follow the new line. The caller reads the scope (org.ts
-// sessionsInScope) and passes the rows, which keeps this module free of the
-// scope reader. `dry` counts without writing, for the change's note before it
+// the caller passes that reports to the role's host is filed under the role
+// through the one reparent core, so each is told once and its open questions
+// follow the new line. The caller reads the scope (org.ts sessionsInScope)
+// and, with `by_rule`, passes only the sessions the role owns by the one
+// ownership rule (lib/orgOwnership sessionsOwnedBy), which may take a session
+// from a wider role; without it a session another role holds never moves.
+// That keeps this module free of the scope reader and of the rule. `dry` counts without writing, for the change's note before it
 // is accepted.
 export const REHOME_CAP = 100;
 
@@ -830,7 +832,7 @@ export type RehomeResult = {
 // One takeover is one row of the org log (org-staffing.md S21): each session
 // the loop moves folds into the row of the change that caused it, and the
 // counts land beside them. On its own, the takeover is the row.
-export async function performRehomeSessions(ctx: { db: any }, authUserId: Id<"users">, role: any, candidates: Array<{ raw: any }>, opts: { note?: string; dry?: boolean; from_session?: string } = {}): Promise<RehomeResult> {
+export async function performRehomeSessions(ctx: { db: any }, authUserId: Id<"users">, role: any, candidates: Array<{ raw: any }>, opts: { note?: string; dry?: boolean; from_session?: string; by_rule?: boolean } = {}): Promise<RehomeResult> {
   if (opts.dry) return rehomeSessions(ctx, authUserId, role, candidates, opts);
   return withOrgChange(ctx, authUserId, { kind: "scope", subject: roleSubject(role) }, async () => {
     const result = await rehomeSessions(ctx, authUserId, role, candidates, opts);
@@ -850,12 +852,12 @@ async function rehomeSessions(
   authUserId: Id<"users">,
   role: any,
   candidates: Array<{ raw: any }>,
-  opts: { note?: string; dry?: boolean; from_session?: string } = {},
+  opts: { note?: string; dry?: boolean; from_session?: string; by_rule?: boolean } = {},
 ): Promise<RehomeResult> {
   const result: RehomeResult = { sessions: [], kept_in_front: [], over_cap: 0, told: { sessions: 0, roles: 0, deferred: 0 } };
   const eligible: any[] = [];
   for (const { raw: c } of candidates) {
-    if (!c.org_role_id && !c.standing_role_id && !c.anchor_id
+    if ((opts.by_rule ? String(c.org_role_id ?? "") !== String(role._id ?? "") : !c.org_role_id) && !c.standing_role_id && !c.anchor_id
       && String(c.owner_user_id ?? c.user_id) === String(role.host_user_id)
       && await roleMayHoldSession(ctx, role, c)) eligible.push(c);
   }

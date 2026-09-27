@@ -169,6 +169,12 @@ describe("teammate broadcasts", () => {
   test("cleanUserMessage drops the CLI's injected session-move notice", () => {
     expect(cleanUserMessage("[codecast] This session just moved to a different machine. It now runs on jb-m5-max.")).toBeNull();
   });
+
+  test("cleanUserMessage previews a skill body as the command that invoked it", () => {
+    // The stored preview is the first 200 chars of the expanded skill turn.
+    const preview = "Base directory for this skill: /Users/ashot/.claude/skills/commit\n\n## Task\n\nAnalyze ALL uncommitted changes".slice(0, 200);
+    expect(cleanUserMessage(preview)).toBe("/commit");
+  });
 });
 
 describe("parseInboundSessionMessage", () => {

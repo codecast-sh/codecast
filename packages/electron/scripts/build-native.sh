@@ -27,6 +27,6 @@ fi
 
 clang++ -std=c++17 -ObjC++ -fobjc-arc -O2 -shared -undefined dynamic_lookup \
   -DNAPI_VERSION=8 -I"$NODE_INCLUDE" \
-  -framework Foundation -framework UserNotifications \
+  -framework Foundation -framework UserNotifications -framework CoreGraphics \
   -o "$OUT" "$SRC"
 echo "build-native: built $OUT"

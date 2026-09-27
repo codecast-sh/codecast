@@ -10,6 +10,7 @@ import { workspaceForResource, workspaceKey } from "./lib/access";
 import { userCanAdminRole } from "./lib/orgAccess";
 import { isWholeWorkspace, scopeIds } from "./lib/orgScope";
 import { collectOrgSessions, requireWorkspaceCaller, resolveScope, sessionsInScope } from "./org";
+import { sessionsOwnedBy, tasksOwnedBy } from "./lib/orgOwnership";
 import { performRehomeSessions, type RehomeResult } from "./sessionOwnership";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { activitySessionsFromScan, latestEventAnywhere, readActivityCommits, readWorkTasks, reposFromScan, roleActivity } from "./orgHealth";
@@ -61,7 +62,7 @@ import { findInitiative } from "./lib/initiativeRef";
 import { performSetTrust, standingConversationOf } from "./orgRoles";
 import { insertTask } from "./agentTasks";
 import { charterPatch } from "./lib/orgCharter";
-import { recalcPlanProgress, resolveStatusWrite } from "./tasks";
+import { handTask, recalcPlanProgress, resolveStatusWrite } from "./tasks";
 
 // Org init and update (docs/architecture/org-init.md O1, O2): the evidence an
 // analyzer reads before proposing a chart, and the apply path that turns an
@@ -966,9 +967,13 @@ async function resolveProposalScope(ctx: Ctx, boundary: Boundary, scope: OrgRole
 // sessions in the role's scope that report to its host and to no role are
 // filed under the role through the one reparent core, in the same apply that
 // gave the role the scope. `dry` counts without writing, for the note a
-// person reads before accepting; `leave` is their one edit on the row. A role
-// that looks after the whole workspace takes over nothing: it would empty a
-// person's inbox into one seat, which is not what gaining a scope means.
+// person reads before accepting; `leave` is their one edit on the row. Which
+// sessions move is the one ownership rule (org-staffing.md S26, org.ts
+// sessionsOwnedBy): the ones the role now owns, from the person or from a
+// wider role, so a lead that gains an area takes it from the chief of staff.
+// A role that looks after the whole workspace takes over nothing: it would
+// empty a person's inbox into one seat, which is not what gaining a scope
+// means.
 const TAKEOVER_NOTE = "It looks after the area you work in. It reads what you need first and decides what reaches a person.";
 
 export async function takeOverSessions(ctx: Ctx, userId: Id<"users">, roleId: Id<"org_roles">, opts: { leave?: boolean; dry?: boolean } = {}): Promise<RehomeResult | null> {
@@ -977,8 +982,13 @@ export async function takeOverSessions(ctx: Ctx, userId: Id<"users">, roleId: Id
   if (!role || role.status === "retired" || isWholeWorkspace(role.scope)) return null;
   const resolved = await resolveScope(ctx, userId, { role_id: String(role._id) });
   if (!resolved) return null;
-  const candidates = await sessionsInScope(ctx, resolved, Date.now());
-  return performRehomeSessions(ctx, userId, role, candidates, { dry: opts.dry, note: TAKEOVER_NOTE });
+  const roles = await rolesInBoundary(ctx, role);
+  const candidates = await sessionsOwnedBy(ctx, role, roles, await sessionsInScope(ctx, resolved, Date.now()));
+  const took = await performRehomeSessions(ctx, userId, role, candidates, { dry: opts.dry, note: TAKEOVER_NOTE, by_rule: true });
+  // The open tasks in the area that the wider role held move with it, by the
+  // same rule (tasksOwnedBy), each with a history row.
+  if (!opts.dry) for (const { task, from } of await tasksOwnedBy(ctx, role, roles, resolved.tasks)) await handTask(ctx, task, String(role._id), userId, from.name);
+  return took;
 }
 
 // A bare ref in a change ("pr-1", "pl-7", a project title) in the form the
@@ -1005,11 +1015,15 @@ export async function previewTakeover(ctx: Ctx, userId: Id<"users">, boundary: B
   // The session the role will be seated on (R2) is its standing session by
   // the time the takeover runs, so it is not one of the sessions that move.
   const seat = p.seat?.trim();
-  const candidates = (await sessionsInScope(ctx, resolved, Date.now(), shared.scan)).filter(({ raw }) => !seat || ![raw.short_id, String(raw._id), raw.session_id].includes(seat));
-  const subject = live ?? { host_user_id: userId, team_id: boundary.team_id };
-  // A live role's own sessions are already its; the filter drops them (they
-  // carry a role), so only sessions that would newly move are counted.
-  return performRehomeSessions(ctx, userId, subject, candidates, { dry: true });
+  const inScope = (await sessionsInScope(ctx, resolved, Date.now(), shared.scan)).filter(({ raw }) => !seat || ![raw.short_id, String(raw._id), raw.session_id].includes(seat));
+  // The rule reads the boundary as the change would leave it: the live role
+  // with its wider scope, or the proposed one beside the roles that stand.
+  const subject = live ? { ...live, scope } : { _id: "proposed", status: "active", scope, host_user_id: userId, team_id: boundary.team_id };
+  const roles = (shared.roles ?? await rolesInBoundary(ctx, boundary)).filter((r) => !live || String(r._id) !== String(live._id));
+  const candidates = await sessionsOwnedBy(ctx, subject, [...roles, subject], inScope);
+  // A live role's own sessions are already its; sessionsOwnedBy drops them,
+  // so only sessions that would newly move are counted.
+  return performRehomeSessions(ctx, userId, subject, candidates, { dry: true, by_rule: true });
 }
 
 // One page asks for every row it shows in ONE call (a proposal's role, scope

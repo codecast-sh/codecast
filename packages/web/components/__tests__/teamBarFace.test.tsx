@@ -396,8 +396,9 @@ describe("the pop out", () => {
     floating.floating = true;
     const h = await mount();
     expect(h.q("[data-face-id]")).toBeNull();
-    const chip = h.q(".people-bar button")!;
-    expect(chip.textContent).toContain("Faces are floating");
+    const chip = h.q("[data-dock-faces]")!;
+    // It says what a click does: bring them back.
+    expect(chip.textContent).toContain("Bring faces back");
     await h.fire(chip, "click");
     expect(floating.set).toEqual([false]);
   });

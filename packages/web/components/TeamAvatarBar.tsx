@@ -3,7 +3,7 @@ import { useCallsAvailable } from "../lib/teamFeatures";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMemo } from "react";
 import { toast } from "sonner";
-import { UserRound, Filter, Link2, Headphones, Maximize2, PictureInPicture2 } from "lucide-react";
+import { UserRound, Filter, Link2, Headphones, Maximize2, PanelTop, PictureInPicture2 } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { useSyncCollection } from "../hooks/useSyncCollection";
@@ -125,19 +125,22 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
     ? useInboxStore.getState().teamMembers.find((m: any) => String(m?._id) === memberFilter)
     : null;
 
-  // The row is floating over the work: one chip, and the pump.
+  // The row is floating over the work: one chip, and the pump. The chip
+  // says what a click does, not what the state is: "Faces are floating" read
+  // as a status line, and nothing about it said it would bring them home.
   if (floating.floating) {
     return (
       <div className="people-bar flex items-center gap-1 px-2" data-floating="1">
         <TeamMembersPump teamId={effectiveTeamId} />
         <button
           type="button"
+          data-dock-faces
           onClick={() => floating.setFloating(false)}
           className="flex h-7 items-center gap-1.5 rounded-full border border-sol-cyan/40 bg-sol-cyan/10 px-2.5 text-[11px] text-sol-cyan transition-colors hover:bg-sol-cyan/20"
-          title="The faces are floating over your work. Click to bring them back here."
+          title="The faces are floating over your work. Click to dock them back in the header."
         >
-          <PictureInPicture2 className="h-3 w-3" />
-          Faces are floating
+          <PanelTop className="h-3.5 w-3.5" />
+          Bring faces back
         </button>
       </div>
     );

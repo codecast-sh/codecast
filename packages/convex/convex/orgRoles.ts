@@ -2,7 +2,7 @@ import { internalMutation, mutation, query } from "./functions";
 import { internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { applyPause, applyResume, applyRunNow, applyTaskUpdate, cancelTasksOriginatingFrom, insertTask } from "./agentTasks";
-import { renderCapacityModel } from "@codecast/shared/contracts/orgCapacity";
+import { CHIEF_OF_STAFF_JOB } from "@codecast/shared/contracts/chiefOfStaffPrompt";
 import { defaultAvatarFor, isAvatarKey } from "@codecast/shared/contracts/orgAvatars";
 import { ORG_AUTHORITY_KINDS, authorityWords, orgTenureError, type OrgAuthorityGrant } from "@codecast/shared/contracts/orgProposal";
 import { intervalMs } from "@codecast/shared/contracts/orgTemplateManifest";
@@ -13,7 +13,8 @@ import { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { nextShortId } from "./counters";
 import { CHIEF_OF_STAFF_HANDLE, chiefOfStaffIn, liveRolesByHandle, requireRole, resolveRoleRef, rolesInBoundary, userCanAccessRole, userCanAdminRole } from "./lib/orgAccess";
-import { performReparentSession, personName, reportsToLine, roleMayHoldSession } from "./sessionOwnership";
+import { performRehomeSessions, performReparentSession, personName, reportsToLine, roleMayHoldSession } from "./sessionOwnership";
+import { sessionsOwnedBy } from "./lib/orgOwnership";
 import { notifySessionAssigned, notifySessionOwnershipChanged } from "./sessionAssignmentNotifications";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { checkConversationAccess } from "./privacy";
@@ -380,7 +381,7 @@ async function updateRole(
 ): Promise<any> {
   const role = await requireRole(ctx, userId, args.role_id, "admin");
   // A retired seat is closed: its handle may already belong to a live role
-  // and its sessions have fallen back to their owners. Create a new one.
+  // and its area has fallen back (org-staffing.md S26). Create a new one.
   if (role.status === "retired") throw new Error("That role is retired");
   // Scope and charter edits are human only (F1, T2): a call carrying the
   // session it runs in is an agent's, and an agent may not widen or narrow
@@ -519,6 +520,8 @@ async function performReparentRoleCore(
 
 export type UnseatChoice = "keep" | "retire";
 
+const RETIRE_FALLBACK_NOTE = "The role that looked after this area was retired. This role looks after it now.";
+
 export async function performRetireRole(ctx: any, userId: Id<"users">, args: { role_id: string; standing_session?: UnseatChoice }): Promise<any> {
   return withOrgChange(ctx, userId, { kind: "retire" }, () => performRetireRoleCore(ctx, userId, args));
 }
@@ -535,7 +538,7 @@ async function performRetireRoleCore(ctx: any, userId: Id<"users">, args: { role
   // Live hands hear it first (before org_role_id is cleared, or handsOf finds
   // nothing): stop at a safe point; the session now reports to its owner.
   const interrupted = await interruptHands(ctx, role, userId, "role-retired",
-    `Your role ${role.name} (@${role.handle}) was retired. Stop at a safe point, pin your state with cast state, and end your turn. This session now reports to its owner.`);
+    `Your role ${role.name} (@${role.handle}) was retired. Stop at a safe point, pin your state with cast state, and end your turn. This session now reports to the role that looks after its area, or to its owner.`);
   // The standing session goes down with the seat: its routines are cancelled
   // (or they would fire into a dead role and spend the host's account), its
   // held and pending turns dropped, its anchor decommissioned (kill command,
@@ -601,6 +604,19 @@ async function performRetireRoleCore(ctx: any, userId: Id<"users">, args: { role
   const tasksHanded = await handOpenTasksUpChain(ctx, role, userId);
   await ctx.db.patch(role._id, { status: "retired", updated_at: now });
   const retired = await ctx.db.get(role._id);
+  // The area falls back (org-staffing.md S26): a released session whose work
+  // another live role now owns by the one rule goes to it, the chief of staff
+  // for what no narrower role covers, the way a lead's gain took it; the rest
+  // stay with their owners.
+  const remaining = await rolesInBoundary(ctx, role);
+  let pool: Array<{ raw: any }> = (await Promise.all(filed.map((c: any) => ctx.db.get(c._id)))).filter(Boolean).map((raw: any) => ({ raw }));
+  for (const heir of remaining) {
+    if (!pool.length) break;
+    const owned = await sessionsOwnedBy(ctx, heir, remaining, pool);
+    if (!owned.length) continue;
+    await performRehomeSessions(ctx, userId, heir, owned, { note: RETIRE_FALLBACK_NOTE, by_rule: true });
+    pool = pool.filter((e) => !owned.includes(e));
+  }
   const stopped: any[] = [];
   for (const t of liveRoutines) if ((await ctx.db.get(t._id))?.status === "cancelled") stopped.push({ agent_task_id: String(t._id), title: t.title });
   const handed: any[] = [];
@@ -1002,21 +1018,6 @@ async function parentNameOf(ctx: Ctx, role: any): Promise<string> {
   return user?.name || user?.email?.split("@")[0] || "a person";
 }
 
-// The rules of a role, as the charter carries them. The charter rides every
-// restart frame in full, so a rule here survives compaction where the
-// bootstrap message does not (anchors.ts bootstrapMessage says the same rules
-// at length).
-export const ROLE_RULES = [
-  "1. Wake, read, act, brief: every turn starts from the frame and ends by updating the brief.",
-  "2. Stay inside the scope; what falls outside goes up the reporting line.",
-  "3. Escalate with a recommendation attached, never as a bare question.",
-  "4. A day's limit that holds you is said in one line in the brief and in your pinned state, then waited out; it is never worked around and never put in front of a person.",
-  "5. A person's message is answered here or handed on to a hand, and the reply says which; a request to remember or forget is a brief write in the same turn.",
-  "6. Your sessions stay out of a person's inbox, so at every wake you read which of them wait on a person, answer what you may, and escalate the rest through your own card with a line saying what the person will decide and why; --direct only when they must act inside the session (a permission prompt, an interactive question, a review of its transcript), and the line says which.",
-  "7. The people who report to you keep their goals in your brief, one section each; at every wake you read their sessions against those goals, update the matches, and name what stalled.",
-  "8. Where it stands is one sentence per project in your scope under `## Where it stands` in your brief, in plain words a person outside the work can read, dated at the end of the line; keep it current at the end of any turn that changed what a project is doing. A person reads those sentences on your page in place of counts.",
-];
-
 export function charterTemplate(role: { name: string; handle: string; charter?: string | null }, scopeNames: string[], parentName: string): string {
   return [
     `# Charter: ${role.name} (@${role.handle})`,
@@ -1025,9 +1026,6 @@ export function charterTemplate(role: { name: string; handle: string; charter?: 
     ``,
     `## Scope`,
     scopeNames.length ? scopeNames.map((n) => `- ${n}`).join("\n") : `- the whole workspace`,
-    ``,
-    `## Rules`,
-    ...ROLE_RULES,
   ].join("\n");
 }
 
@@ -1160,24 +1158,10 @@ export const provision = mutation({
 export const CHIEF_OF_STAFF_NAME = "Chief of Staff";
 export { COMPANY_REVIEW_TITLE, COMPANY_REVIEW_EVERY_MS, COMPANY_REVIEW_PROMPT, ROLE_CHECK_EVERY_MS, ROLE_CHECK_PROMPT, roleRoutineFor };
 
-export const CHIEF_OF_STAFF_CHARTER = [
-  `You are the chief of staff of this company. The executives decide; you propose. Your job is to see how work actually flows, between people, roles and hands, and to propose the organization that lets it flow better.`,
-  ``,
-  `Read before you touch the chart. Every proposal rests on what \`cast org health\`, \`cast org inputs\` and the roles' briefs show: who is overloaded, who is idle, where decisions wait, where reviews stall, which projects have no owner and which work has no home. What you cannot verify you say you could not verify; you never invent tasks to justify a role.`,
-  ``,
-  `Size every scope against the capacity model: one role holds one context window, and a person answers for only so many roles. Respect the stability rules: a chart that moves every review never settles, so a recent move gets time to work, an overload is a pattern before it is a split, and an idle role is retired only when the company around it is busy.`,
-  ``,
-  `Propose the smallest change that removes a bottleneck, and say what you expect it to change and how you will know. Staffing is budgeting: a change that moves scope or people moves budget with it, and the budgets under a person must add up to what that person allowed.`,
-  ``,
-  `The review is a conversation with the person you report to, in your own thread. Read everything first, then talk in short plain messages, each moving the conversation forward. Lead with the reporting structure: who reports to whom, what each role looks after, and where the person's own sessions go. Ask when the records cannot settle something, take the answer, and move on; the person can steer at any point, and you follow.`,
-  ``,
-  `When something is ready to agree to, post it as a small proposal and put its short id on its own line, where it renders as a card the person accepts, skips or asks on. Many small things over the conversation, never one large document. You never apply a change yourself, and a change the person has not accepted changes nothing. Anything about budget or people is theirs to decide, with your recommendation attached.`,
-  ``,
-  `Knowledge stays behind the words: hold the evidence (counts, sessions, commits) and give it when asked. A message never cites an id, never talks about you, and never names the thread it is written in. No jargon of your own making.`,
-  ``,
-  `## The capacity model`,
-  renderCapacityModel(),
-].join("\n");
+/** The chief of staff's charter: its job, in the words of its own prompt. */
+export function chiefOfStaffCharter(person: string): string {
+  return CHIEF_OF_STAFF_JOB.split("{person}").join(person);
+}
 
 // The seating note (org-staffing.md S16): one message from the person who
 // seated the agent, read before the briefing. It names the new job in a
@@ -1200,6 +1184,7 @@ export async function roleRoutineOf(ctx: Ctx, role: any, standing: any): Promise
   const spec = roleRoutineFor(role);
   const live = (await liveRoutinesOf(ctx, standing)).find((t) => t.title === spec.title) ?? null;
   if (live && live.prompt !== spec.prompt) await applyTaskUpdate(ctx, live, { prompt: spec.prompt }, { userId: standing.user_id, source: "cli" });
+  if (live && String(live.role_id ?? "") !== String(role._id)) await ctx.db.patch(live._id, { role_id: role._id });
   return live;
 }
 
@@ -1221,6 +1206,7 @@ export async function ensureRoleRoutine(ctx: Ctx, role: any, standing: any, ever
     interval_ms: interval,
     run_at: Date.now() + interval,
     mode: "apply",
+    role_id: role._id,
   });
   return { ...created, created: true };
 }
@@ -1253,7 +1239,7 @@ export async function performStaff(
     handle: CHIEF_OF_STAFF_HANDLE,
     team_id: args.team_id,
     reports_to: { kind: "user", user_id: args.reports_to ?? userId },
-    charter: CHIEF_OF_STAFF_CHARTER,
+    charter: chiefOfStaffCharter(personName(await ctx.db.get(args.reports_to ?? userId))),
   });
   const created = !existing;
   // A seat that already stands is left as it is: the standing session, its
