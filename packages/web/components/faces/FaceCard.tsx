@@ -11,13 +11,15 @@ import { FACE_CARD_WIDTH } from "../../lib/faces/layout";
 // Reads by member id and subscribes only while mounted: the row itself never
 // subscribes to session churn for the sake of a card nobody is looking at.
 import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowRight, ChevronRight, X } from "lucide-react";
+import { ArrowRight, ChevronRight, MessageSquare, X } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useOpenSession } from "../../hooks/useOpenSession";
 import { useMissingSessionRow } from "../../hooks/useMissingSessionRow";
 import { useOpenDm } from "../../hooks/useChatSync";
 import { cleanTitle } from "../../lib/conversationProcessor";
+import { dmUnreadOf } from "../../lib/faces/faceRow";
+import { formatRelative } from "../../lib/utils";
 import { PRESENCE_META, localTimeLine, memberDisplayName, presenceLine, teammateWhereabouts } from "../presence/memberPresence";
 import { useMemberActivity } from "../presence/useMemberActivity";
 import { useMemberHuddle } from "../presence/useMemberHuddle";
@@ -107,6 +109,22 @@ function FaceCardBody({
 
   const huddle = useMemberHuddle(member, viewerId, liveRoom, displayName);
   const openDm = useOpenDm();
+  const messageThem = () => {
+    onClose();
+    openDm([memberId]);
+  };
+
+  // The unread count their face wears, said in words with the line itself,
+  // so the badge on the row has an obvious way through to the message.
+  // Subscribed by signature: the rail row is a fresh object on every push.
+  const dmSig = useInboxStore((s) => {
+    const d = isSelf ? null : dmUnreadOf(s, memberId);
+    return d ? `${d.channelId}|${d.unread}|${d.at ?? ""}` : "";
+  });
+  const dm = useMemo(
+    () => (dmSig ? dmUnreadOf(useInboxStore.getState(), memberId) : null),
+    [dmSig, memberId],
+  );
 
   // Where they are: the session they have open, by the palette's own rule
   // (teammateWhereabouts). Only the title is subscribed, never the row.
@@ -182,6 +200,28 @@ function FaceCardBody({
           </span>
         )}
       </Who>
+
+      {dm && (
+        <button
+          type="button"
+          className="face-card-dm"
+          title={`Open your conversation with ${displayName}`}
+          onClick={messageThem}
+        >
+          <span className="face-card-dm-head">
+            <MessageSquare className="face-card-dm-icon" />
+            <span className="face-card-dm-count">
+              {dm.unread > 99 ? "99+" : dm.unread} new message{dm.unread === 1 ? "" : "s"}
+            </span>
+            {dm.at && <span className="face-card-dm-at">{formatRelative(dm.at, now)}</span>}
+            <span className="face-card-dm-go">
+              Reply
+              <ArrowRight className="face-card-dm-arrow" />
+            </span>
+          </span>
+          {dm.preview && <span className="face-card-dm-preview">{dm.preview}</span>}
+        </button>
+      )}
 
       {/* Where they are, and the one gesture that goes there with them. */}
       {!isSelf && (where || followingThem) && (
@@ -259,10 +299,7 @@ function FaceCardBody({
             ringIds={[memberId]}
             huddle={callsEnabled ? huddle : undefined}
             show={callsEnabled ? ["talk", "ring", "message"] : ["message"]}
-            onMessage={() => {
-              onClose();
-              openDm([memberId]);
-            }}
+            onMessage={messageThem}
             size="sm"
             className="face-actions-fill"
           />

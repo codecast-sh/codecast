@@ -189,6 +189,7 @@ export function ProposalTreeView({ rows, className }: { rows: ProposalTreeRow[];
                 {g.parent && <span aria-hidden className="mt-[3px] h-[13px] w-[9px] shrink-0 rounded-bl-[4px] border-b border-l border-dashed" style={{ borderColor: row.status === "proposed" || row.status === "failed" ? `color-mix(in srgb, ${GHOST.color} 70%, transparent)` : "color-mix(in srgb, var(--sol-border) 80%, transparent)" }} />}
                 <div className="min-w-0 flex-1">
                   <NodeLine row={row} />
+                  {row.detail && <span className="mt-0.5 block truncate pl-1 text-[10.5px] text-sol-text-dim" data-tree-detail>{row.detail}</span>}
                   {row.from && (
                     <span className="mt-0.5 flex items-center gap-1 pl-1 text-[10.5px]" style={{ color: "var(--sol-text-dim)", opacity: 0.8 }} data-tree-from={row.from.id}>
                       <span>was under</span>

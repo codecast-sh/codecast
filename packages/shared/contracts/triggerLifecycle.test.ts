@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { runOwnerOf, runOwnerWakeOf, runParentOf, runResultThreadOf } from "./triggerLifecycle";
+import { runOwnerOf, runOwnerWakeOf, runParentOf, runResultThreadOf, triggerLifecycleInstructions } from "./triggerLifecycle";
 
 // A fresh run's owner is the session that armed a once trigger; every other
 // shape has none. The owner is woken for outcomes it must act on, and for a
@@ -76,5 +76,12 @@ describe("runResultThreadOf", () => {
     expect(runResultThreadOf({ ...onceSpawn, target_conversation_id: "thread" })).toBe("thread");
     expect(runResultThreadOf(onceSpawn)).toBe("creator");
     expect(runResultThreadOf({ ...onceSpawn, schedule_type: "recurring" })).toBeUndefined();
+  });
+});
+
+describe("triggerLifecycleInstructions", () => {
+  test("every trigger gets the defaults except a role's routine", () => {
+    expect(triggerLifecycleInstructions({ _id: "t1", short_id: "tr-1" })).toContain("cast trigger complete tr-1");
+    expect(triggerLifecycleInstructions({ _id: "t1", short_id: "tr-1", role_id: "role1" })).toBeNull();
   });
 });

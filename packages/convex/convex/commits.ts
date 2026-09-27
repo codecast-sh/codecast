@@ -538,6 +538,16 @@ export const getUserById = internalQuery({
 // commit ingested that way has no diff to show. repos.ensureCommitFiles is the
 // read-through that fetches it; these two are its halves.
 
+/**
+ * Whether a commit row holds its files' diffs, rather than only their names.
+ * A push names files with no patch field at all; a fetch writes a patch on
+ * every file, empty where the diff is (applyCommitFilesTo). Counted lines are
+ * a diff too, for rows written before that rule.
+ */
+export function commitCarriesDiffs(files: Array<{ patch?: string; additions?: number; deletions?: number }> | undefined): boolean {
+  return (files ?? []).some((f) => f.patch !== undefined || (f.additions ?? 0) > 0 || (f.deletions ?? 0) > 0);
+}
+
 export const commitFilesState = internalQuery({
   args: { repository: v.string(), sha: v.string() },
   handler: async (ctx, args) => {
@@ -555,7 +565,10 @@ export const commitFilesState = internalQuery({
 
     return {
       commit_id: commit._id,
-      has_files: (commit.files?.length ?? 0) > 0,
+      // A row that names its files but carries none of their diffs (a
+      // commit recorded from a session transcript knows the paths, not the
+      // patches) still needs the fetch; only a diff counts as having files.
+      has_files: commitCarriesDiffs(commit.files),
       needs_repository: !commit.repository,
     };
   },
@@ -610,7 +623,11 @@ export async function applyCommitFilesTo(
   // commit endpoint replace them. Author identity is only filled in when the
   // row is missing it, since the ingest path may know better.
   const patch: Record<string, any> = {
-    files: args.files,
+    // A file the fetch found no diff for (a binary, a pure rename, a mode
+    // change) keeps an empty patch rather than none: that is how a fetched
+    // row tells itself apart from a push row, which names files and nothing
+    // else (commitCarriesDiffs).
+    files: args.files.map((f) => ({ ...f, patch: f.patch ?? "" })),
     files_changed: args.files.length,
     insertions: args.additions,
     deletions: args.deletions,

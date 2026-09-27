@@ -550,7 +550,10 @@ export function applyOrgIntent(tree: OrgTree, intent: OrgIntent, row?: OrgSessio
       if (i < 0) return;
       const [role] = tree.roles.splice(i, 1);
       // Its sessions fall back to their owners; roles under it fall back to
-      // whatever it reported to (the server does the same walk).
+      // whatever it reported to (the server does the same walk). The server
+      // files a session whose area a wider role now owns under that role
+      // instead (org-staffing.md S26); the tree carries no session's task or
+      // plan to read the rule here, so the echo places those.
       let rehomed = 0;
       for (const s of role.sessions) {
         delete s.org_role_id;

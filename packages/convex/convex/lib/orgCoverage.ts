@@ -14,7 +14,7 @@
 // the list, the scope cards and the server all read): an agent's suggestion
 // or an unpromoted insight is not work to cover, so the counts here are the
 // counts a person sees when they click through. Whether to wrap, share or
-// split a lead is the analyzer's reading (ORG_COVERAGE_RULE).
+// split a lead is the Chief of Staff's reading.
 
 import { projectLeadOf, type LeadRole } from "@codecast/shared/contracts/orgLead";
 import type { InitiativeRow } from "@codecast/shared/contracts/initiative";
@@ -96,9 +96,15 @@ export function computeCoverage(input: CoverageInputs): OrgCoverage {
   const openPlansByProject = new Map<string, number>();
   for (const p of input.plans) if (p.project_id && !isClosedPlan(p.status)) bump(openPlansByProject, String(p.project_id));
 
+  // A project the whole workspace role holds as the remainder (the rule's
+  // `workspace` lead) is the list a lead is still missing for, so coverage
+  // reads it as without one.
   const leadFacts = (project: CoverageProject): LeadFacts => {
     const lead = projectLeadOf(project, input.roles);
-    if (lead.kind === "lead") return (lead.role as any).status === "paused" ? { lead_paused: `@${lead.role.handle}`, lead_by: lead.by } : { lead: `@${lead.role.handle}`, lead_by: lead.by };
+    if (lead.kind === "lead") {
+      if (lead.by === "workspace") return {};
+      return (lead.role as any).status === "paused" ? { lead_paused: `@${lead.role.handle}`, lead_by: lead.by } : { lead: `@${lead.role.handle}`, lead_by: lead.by };
+    }
     return lead.kind === "watchers" ? { watchers: lead.roles.map((r) => `@${r.handle}`) } : {};
   };
   const hasWork = (p: CoverageProject) => p.status === "active" && ((openByProject.get(String(p._id)) ?? 0) > 0 || (openPlansByProject.get(String(p._id)) ?? 0) > 0);

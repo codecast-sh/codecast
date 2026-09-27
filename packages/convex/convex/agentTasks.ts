@@ -466,6 +466,8 @@ interface NewTaskArgs {
   max_retries?: number;
   precheck?: string;
   wake_creator?: boolean;
+  /** The org role whose routine this is. */
+  role_id?: Id<"org_roles">;
   /** Created paused (org-hire.md H8): a routine a person activates later. Never for event triggers. */
   status?: "scheduled" | "paused";
 }
@@ -522,6 +524,7 @@ export async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTas
     max_runtime_ms: args.max_runtime_ms || DEFAULT_MAX_RUNTIME_MS,
     precheck: args.precheck?.trim() || undefined,
     wake_creator: args.wake_creator || undefined,
+    role_id: args.role_id,
     status: paused ? ("paused" as const) : ("scheduled" as const),
     retry_count: 0,
     max_retries: args.max_retries ?? DEFAULT_MAX_RETRIES,
@@ -835,7 +838,7 @@ export const dispatchCloudTriggers = internalMutation({
         ? `\n\nThis session is STASHED: the user will not see this run or its output. End your turn with cast state --status done|dormant to stay quietly out of their inbox; declare --status blocked ONLY if a human must act — that returns the session to their inbox.`
         : "";
       const clientId = `cloud-trigger:${task._id}:${task.run_count}`;
-      const prompt = `${task.prompt}\n\n${triggerLifecycleInstructions(task)}`;
+      const prompt = [task.prompt, triggerLifecycleInstructions(task)].filter(Boolean).join("\n\n");
       const updates: Record<string, any> = { ...completedTaskRunFields(task, now, { conversation_id: conversation._id }), ...claimRunSourceFields(task) };
       const pendingMessageId = await enqueuePendingMessage(ctx, conversation, task.user_id, {
         content: `<scheduled-task title="${safeTitle}" task-id="${task._id}">${prompt}${filingNote}</scheduled-task>`,

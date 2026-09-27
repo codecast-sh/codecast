@@ -7,7 +7,16 @@
 // the same shape as not-found, and the inbox shows its "unavailable" note.
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { getConversation } from "./conversations";
+import {
+  getConversation,
+  getConversationWithMeta,
+  getMessagesAroundTimestamp,
+  getNewMessages,
+  getTranscriptWatermark,
+  getUserMessages,
+  listMessages,
+  listMessagesTail,
+} from "./conversations";
 
 const OWNER = "u_owner";
 
@@ -58,5 +67,38 @@ describe("getConversation with a non-conversation id", () => {
     const result = await run(OWNER, tables(), "conv");
     expect(result).not.toBeNull();
     expect(result.title).toBe("My session");
+  });
+});
+
+// Every read the transcript hook subscribes to with the same raw id. The
+// deep-link prewarm mounts that hook on an unverified `?s=` target, so one
+// v.id validator among them was enough to crash the inbox.
+describe("transcript reads with a message id", () => {
+  const cases: [string, any, Record<string, unknown>, unknown][] = [
+    ["getTranscriptWatermark", getTranscriptWatermark, {}, null],
+    ["getConversationWithMeta", getConversationWithMeta, {}, null],
+    ["listMessagesTail", listMessagesTail, { after_timestamp: 0 }, null],
+    ["getNewMessages", getNewMessages, { after_timestamp: 0 }, null],
+    ["getMessagesAroundTimestamp", getMessagesAroundTimestamp, { center_timestamp: 1 }, null],
+    ["getUserMessages", getUserMessages, {}, []],
+    ["listMessages", listMessages, { paginationOpts: { numItems: 10, cursor: null } }, { page: [], isDone: true, continueCursor: "" }],
+  ];
+  for (const [name, fn, extra, empty] of cases) {
+    // The fake db runs no validators; a v.id("conversations") arg is what
+    // threw in prod, so the exported schema is the regression check.
+    test(`${name} accepts any string as conversation_id`, () => {
+      const args = JSON.parse(fn.exportArgs());
+      expect(args.value.conversation_id.fieldType).toEqual({ type: "string" });
+    });
+
+    test(`${name} reads a message id as not found`, async () => {
+      const result = await fn._handler(ctx(OWNER, tables()), { conversation_id: "msg", ...extra });
+      expect(result).toEqual(empty);
+    });
+  }
+
+  test("the watermark still resolves a real conversation", async () => {
+    const result = await (getTranscriptWatermark as any)._handler(ctx(OWNER, tables()), { conversation_id: "conv" });
+    expect(result).toEqual({ message_count: 1, transcript_revision: 0 });
   });
 });

@@ -62,6 +62,7 @@ import {
   inlineForeignText,
   fenceForeignText,
   FOREIGN_TEXT_CAPS,
+  callLinkHow,
 } from "@codecast/shared/contracts";
 import type { SessionPresence } from "./formatter.js";
 import {
@@ -10203,6 +10204,12 @@ program
       console.log(`\n${c.bold}Action items${c.reset}`);
       for (const a of call.action_items) console.log(`  - ${a}`);
     }
+    if ((call.sessions || []).length > 0) {
+      console.log(`\n${c.bold}Sessions${c.reset}`);
+      for (const s of call.sessions) {
+        console.log(`  ${c.cyan}${s.short_id ?? s.conversation_id}${c.reset} ${s.title} ${c.dim}(${callLinkHow(s)})${c.reset}`);
+      }
+    }
     if (options.transcript) {
       console.log(`\n${c.bold}Transcript${c.reset}`);
       let lastSpeaker = "";
@@ -13482,7 +13489,7 @@ for (const verb of ["pause", "resume", "retire", "restart"] as const) {
     .description({
       pause: "Pause a role: wakes hold, hands stop at a safe point, no new hands",
       resume: "Resume a paused role; held wakes ship as one frame",
-      retire: "Retire a role; its sessions fall back to their owners",
+      retire: "Retire a role; its area falls back to the role that covers it, else its sessions to their owners",
       restart: "Restart the standing session; the next frame carries the charter and brief in full",
     }[verb])
     .argument("<handle>", "@handle, or-N, or id")
@@ -13644,15 +13651,15 @@ const briefCmd = program
     if (options.json) { console.log(JSON.stringify(brief, null, 2)); return; }
     const f = brief.facts;
     printRoleLine(brief.role);
-    const scope = [...f.scope.projects.map((p: any) => `project ${p.title}`), ...f.scope.plans.map((p: any) => `plan ${p.short_id} ${p.title}`)];
-    console.log(`  ${c.dim}scope: ${scope.length ? scope.join(", ") : "whole workspace"}${c.reset}`);
+    const { briefScopeLine, briefPlanLines } = await import("./briefLines.js");
+    console.log(`  ${c.dim}scope: ${briefScopeLine(f.scope)}${c.reset}`);
     const held = (brief.role.authority ?? []).filter((g: any) => !g.expires_at || g.expires_at > Date.now());
     console.log(`  ${c.dim}authority outside codecast: ${held.length ? held.map((g: any) => `${g.kind} (${g.label}${g.expires_at ? `, until ${formatDateSmart(g.expires_at)}` : ""})`).join("; ") : "none granted"}${c.reset}`);
     console.log(`  ${c.dim}standing session: ${brief.role.standing_short_id ?? "none"}${routineLine(brief.role.routine)}${c.reset}`);
     const st = Object.entries(f.tasks.by_status).filter(([, n]) => (n as number) > 0).map(([k, n]) => `${n} ${k}`).join(", ");
     const pr = Object.entries(f.tasks.by_priority).filter(([, n]) => (n as number) > 0).map(([k, n]) => `${n} ${k}`).join(", ");
     console.log(`  tasks: ${f.tasks.total} in scope, ${f.tasks.open} open${st ? ` · ${st}` : ""}${pr ? ` · priority ${pr}` : ""}`);
-    for (const p of f.plans) console.log(`  plan ${p.short_id} ${p.title}: ${p.progress.done}/${p.progress.total} done, ${p.progress.in_progress} in progress ${c.dim}(${p.status})${c.reset}`);
+    for (const line of briefPlanLines(f.plans)) console.log(line);
     console.log(`  decisions: ${f.decisions.open} open, ${f.decisions.answered_today} answered today`);
     // What moved since the role last read this (S25): the section its
     // scheduled check acts on.
@@ -13780,8 +13787,8 @@ org
     if (options.json) { console.log(JSON.stringify({ ...role, sessions: page.sessions }, null, 2)); return; }
     console.log(`${c.bold}${role.name}${c.reset} ${c.dim}@${role.handle} · ${role.short_id} · ${role.status}${c.reset}`);
     if (role.charter) console.log(`  ${role.charter}`);
-    const scope = [...role.scope_names.projects.map((p: any) => `project ${p.title}`), ...role.scope_names.plans.map((p: any) => `plan ${p.short_id} ${p.title}`)];
-    console.log(`  ${c.dim}scope: ${scope.length ? scope.join(", ") : "whole workspace"}${c.reset}`);
+    const { briefScopeLine, briefPlanLines } = await import("./briefLines.js");
+    console.log(`  ${c.dim}scope: ${briefScopeLine(role.scope_names)}${c.reset}`);
     console.log(`  ${c.dim}${orgTally(role.counts)}${c.reset}`);
     for (const s of page.sessions) console.log(orgSessionLine(s));
   });
@@ -13825,7 +13832,7 @@ org
 
 org
   .command("retire")
-  .description("Retire a role; its sessions fall back to their owners")
+  .description("Retire a role; its area falls back to the role that covers it, else its sessions to their owners")
   .argument("<role>", "Role short id (or-N), id, or @handle")
   .option("--standing <keep|retire>", "The standing session: keep it running as a plain agent (default for the chief of staff) or retire it with the seat")
   .option("--team <name|id>", "Team workspace (default: the active workspace)")

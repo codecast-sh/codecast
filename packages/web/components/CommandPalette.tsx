@@ -4,7 +4,7 @@ import { AVATAR_KEYS } from "@codecast/shared/contracts/orgAvatars";
 import { characterNameFor } from "@codecast/shared/contracts/sessionCharacter";
 import { AVATAR_LABELS } from "../lib/orgAvatars";
 import { RoleAvatar } from "./org/avatars";
-import { SessionGlyph } from "./identity";
+import { SessionGlyph, SessionIdentityLine } from "./identity";
 import { identityRowOf } from "../lib/sessionIdentity";
 import { RepositoryPaletteItems } from "./repo/RepositoryPaletteItems";
 import { getPaletteSessionCommands } from "../lib/paletteSessionCommands";
@@ -39,7 +39,7 @@ import { RecentVisitGlyph } from "./RecentVisitRow";
 import { useOpenRecentVisit } from "../hooks/useOpenRecentVisit";
 import { isNonTabRoute } from "../src/compat/tabRouting";
 import { score, matchScore } from "../hooks/useMentionQuery";
-import { sessionMatchesQuery, mergeSearchRows } from "../lib/instantSessionSearch";
+import { sessionMatchesQuery, sessionSearchHaystack, mergeSearchRows } from "../lib/instantSessionSearch";
 import { agentAccent } from "../lib/agentColors";
 import { startHandoff, HANDOFF_EXPLAINER } from "../lib/handoffWeb";
 import { dmOtherIds } from "@codecast/shared/chat";
@@ -2778,7 +2778,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
               <CommandPrimitive.Item
                 key={`fav-${fav._id}`}
                 data-palette-type="session" data-palette-id={fav._id} data-palette-title={fav.title} data-palette-short-id={fav.short_id}
-                value={`favorite ${cleanTitle(fav.title || fav.session_id || "")}|||${fav._id}`}
+                value={`favorite ${sessionSearchHaystack(fav)} ${fav.session_id || ""}|||${fav._id}`}
                 onSelect={() => chooseSession(fav)}
                 className={itemClass}
               >
@@ -2787,7 +2787,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                   className="flex-shrink-0"
                   fallback={<span className="text-amber-400 flex-shrink-0"><NavIcon type="star" /></span>}
                 />
-                <span className="truncate flex-1">{cleanTitle(fav.title || "New Session")}</span>
+                <SessionIdentityLine row={identityRowOf(fav)} title={cleanTitle(fav.title || "New Session")} className="flex-1" />
                 <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{fav.message_count} msgs</span>
                 <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{timeAgo(fav.updated_at)}</span>
               </CommandPrimitive.Item>
@@ -2855,7 +2855,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                     </span>
                   )}
                 />
-                <span className="truncate flex-1">{cleanTitle(conv.title || "Untitled")}</span>
+                <SessionIdentityLine row={identityRowOf(conv)} title={cleanTitle(conv.title || "Untitled")} className="flex-1" />
                 {(() => {
                   const bucket = labelForConv(conv._id);
                   const project = getProjectName(conv.git_root, conv.project_path);
@@ -3410,7 +3410,10 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 />
                 <div className="flex-1 min-w-0">
                   <div className="truncate text-sm flex items-center gap-1.5">
-                    <span className="truncate">{cleanTitle(result.title || "Untitled")}</span>
+                    <SessionIdentityLine
+                      row={identityRowOf({ _id: result.conversationId, title: result.title, ...(result.identity ?? {}) })}
+                      title={cleanTitle(result.title || "Untitled")}
+                    />
                     {!result.isOwn && (
                       <span className="text-[10px] text-sol-text-dim flex-shrink-0">· {result.authorName}</span>
                     )}

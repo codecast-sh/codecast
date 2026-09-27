@@ -1089,7 +1089,7 @@ export async function switchDevice(
   // written BEFORE the switch and whether or not a call is live, because the
   // call settings panel offers the same picker with no room to switch: the
   // choice is the person's either way, and the next join reads it.
-  if (kind !== "audiooutput") rememberDevice(kind, deviceId);
+  rememberDevice(kind, deviceId);
   if (!room) return;
   try {
     await room.switchActiveDevice(kind, deviceId);

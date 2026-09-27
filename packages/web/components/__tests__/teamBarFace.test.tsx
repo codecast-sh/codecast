@@ -66,6 +66,14 @@ mock.module("../../lib/teamFeatures", () => ({ ...realTeamFeatures, useCallsAvai
 const realSyncCollection = await import("../../hooks/useSyncCollection");
 mock.module("../../hooks/useSyncCollection", () => ({ ...realSyncCollection, useSyncCollection: () => {} }));
 
+// The door's chat count would subscribe to the room's thread; tests set it.
+let threadUnread = 0;
+const realThreadUnread = await import("../../hooks/useRoomThreadUnread");
+mock.module("../../hooks/useRoomThreadUnread", () => ({
+  ...realThreadUnread,
+  useRoomThreadUnread: () => ({ rows: [], unread: threadUnread }),
+}));
+
 // The hover card's session lookups: a router context and a server query.
 const realOpenSession = await import("../../hooks/useOpenSession");
 mock.module("../../hooks/useOpenSession", () => ({ ...realOpenSession, useOpenSession: () => () => {} }));
@@ -134,6 +142,7 @@ afterAll(() => {
   mock.module("../ui/context-menu", () => realCtx);
   mock.module("../../lib/desktop", () => realDesktop);
   mock.module("../../hooks/useFaceRow", () => realFaceRowHooks);
+  mock.module("../../hooks/useRoomThreadUnread", () => realThreadUnread);
   closeDomWindow(dom);
   restoreGlobals();
 });
@@ -273,6 +282,19 @@ describe("the header draws the model's row", () => {
     expect(getCallStageOpen()).toBe(true);
   });
 
+  test("the door wears the count of what was typed in the call's chat", async () => {
+    fakeRow = rowOf([me(), entry(ANN, "Ann", { tier: "linked", state: "live-with-me" })], [link(ANN, "call")], liveCard);
+    threadUnread = 0;
+    let h = await mount();
+    expect(h.q("[data-open-call]")!.textContent).toBe("");
+    expect(h.q("[data-open-call]")!.getAttribute("aria-label")).toBe("Open the call");
+    threadUnread = 3;
+    h = await mount();
+    expect(h.q("[data-open-call]")!.textContent).toBe("3");
+    expect(h.q("[data-open-call]")!.getAttribute("aria-label")).toBe("Open the call, 3 new in its chat");
+    threadUnread = 0;
+  });
+
   test("the header caps the row and counts the rest; me and the linked faces are never cut", async () => {
     const crowd = Array.from({ length: BAR_FACES + 3 }, (_, i) => entry(`u-${i}`, `Person ${i}`));
     fakeRow = rowOf([me(), entry(ANN, "Ann", { tier: "linked", state: "live-with-me" }), ...crowd], [link(ANN, "call")], liveCard);
@@ -396,8 +418,9 @@ describe("the pop out", () => {
     floating.floating = true;
     const h = await mount();
     expect(h.q("[data-face-id]")).toBeNull();
-    const chip = h.q(".people-bar button")!;
-    expect(chip.textContent).toContain("Faces are floating");
+    const chip = h.q("[data-dock-faces]")!;
+    // It says what a click does: bring them back.
+    expect(chip.textContent).toContain("Bring faces back");
     await h.fire(chip, "click");
     expect(floating.set).toEqual([false]);
   });

@@ -2,15 +2,13 @@
 
 import { useMemo, useRef, useState } from "react";
 import { useConvex } from "convex/react";
-import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
-import { api } from "@codecast/convex/convex/_generated/api";
 import { Folder, FolderPlus, X } from "lucide-react";
 import { TeamIcon } from "./TeamIcon";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { effectiveMembershipVisibility, isVisibilityShareable, teamVisibilityFor } from "../lib/teamVisibility";
 import { toast } from "sonner";
 import { useInboxStore } from "../store/inboxStore";
-import { useConvexSync } from "../hooks/useConvexSync";
+import { useRecentProjectsFeed } from "../hooks/useRecentProjectsFeed";
 import { createProjectFolder, useDirListing } from "../lib/fsBrowse";
 import {
   buildProjectPathOptions,
@@ -77,10 +75,8 @@ export function ProjectPathPicker({
   className?: string;
 }) {
   // No-throw: `cached` below is the honest render when the query fails.
-  const { data: fresh } = useQueryNoThrow(api.users.getRecentProjectPaths, { limit: 50 });
+  const fresh = useRecentProjectsFeed();
   const cached = useInboxStore((s) => s.recentProjects);
-  const setRecentProjects = useInboxStore((s) => s.setRecentProjects);
-  useConvexSync(fresh, setRecentProjects);
   const recents = fresh ?? cached;
   const convex = useConvex();
   // The team a session in each recent folder will be shared with, so the

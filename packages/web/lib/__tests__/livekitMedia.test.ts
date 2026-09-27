@@ -26,10 +26,12 @@ describe("huddle LiveKit media", () => {
     expect(SCREEN_SHARE_CAPTURE.audio).toBe(false);
   });
 
-  test("the person's last mic and camera ride into the room options", () => {
-    const opts = huddleRoomOptions({ micDeviceId: "mic-1", cameraDeviceId: "cam-2" });
+  test("the person's last mic, camera and speaker ride into the room options", () => {
+    const opts = huddleRoomOptions({ micDeviceId: "mic-1", cameraDeviceId: "cam-2", speakerDeviceId: "out-3" });
     expect(opts.audioCaptureDefaults).toMatchObject({ deviceId: { ideal: "mic-1" } });
     expect(opts.videoCaptureDefaults).toEqual({ deviceId: { ideal: "cam-2" } });
+    expect(opts.audioOutput).toEqual({ deviceId: "out-3" });
+    expect(huddleRoomOptions({}).audioOutput).toBeUndefined();
   });
 
   test("join and prewarm both build the room through huddleRoomOptions", () => {

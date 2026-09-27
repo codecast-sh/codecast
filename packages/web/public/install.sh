@@ -3,6 +3,9 @@ set -e
 
 DOWNLOAD_HOST="https://dl.codecast.sh"
 TOKEN="${1:-}"
+ORIGINAL_PATH="${PATH}"
+# Where WSL mounts the Windows drives. Tests point it at a temp dir.
+WINDOWS_MOUNT="${CAST_INSTALLER_WINDOWS_MOUNT:-/mnt}"
 
 echo "Installing cast..."
 
@@ -205,14 +208,48 @@ case ":${PATH}:" in
     ;;
 esac
 
-# Check for stale installs that might shadow the new binary
-for CMD_NAME in codecast cast; do
-  RESOLVED="$(command -v ${CMD_NAME} 2>/dev/null || true)"
-  if [ -n "${RESOLVED}" ] && [ "${RESOLVED}" != "${INSTALL_DIR}/${CMD_NAME}" ]; then
-    echo "Warning: found another ${CMD_NAME} at ${RESOLVED}"
-    echo "Removing stale install to avoid conflicts..."
-    rm -f "${RESOLVED}" 2>/dev/null || echo "  Could not remove ${RESOLVED} (permission denied). Please remove it manually."
+# A command under WINDOWS_MOUNT is a Windows program seen from WSL, which appends the
+# Windows PATH to its own. It is never ours to delete: name it and say how to
+# remove it from Windows instead.
+warn_windows_shadow() {
+  echo ""
+  echo "Warning: Windows has its own cast in ${1%/*}."
+  echo "A WSL shell that has not picked up ~/.local/bin (one opened before this"
+  echo "install, or 'wsl -- cast') runs that Windows copy instead of this one."
+  if grep -qs '@codecast-sh/cli' "${1}"; then
+    echo "It is the npm package, which does not work on Windows. In PowerShell, run:"
+    echo "  npm uninstall -g @codecast-sh/cli"
+  else
+    echo "Remove it from Windows, or open a new WSL terminal before using cast."
   fi
+  echo ""
+}
+
+# Check for stale installs that might shadow the new binary: the PATH a new
+# shell gets (the profile line puts INSTALL_DIR first), and the PATH this
+# install started with, which is what a shell that never reads the profile
+# still searches.
+for CMD_NAME in codecast cast; do
+  for SEARCH_PATH in "${PATH}" "${ORIGINAL_PATH}"; do
+    RESOLVED="$(PATH="${SEARCH_PATH}" command -v ${CMD_NAME} 2>/dev/null || true)"
+    [ -n "${RESOLVED}" ] || continue
+    [ "${RESOLVED}" -ef "${INSTALL_DIR}/codecast" ] && continue
+    case "${RESOLVED}" in
+      "${WINDOWS_MOUNT}"/*)
+        # npm writes both names into one folder: one warning per folder.
+        [ "${RESOLVED%/*}" = "${WARNED_WINDOWS:-}" ] && continue
+        WARNED_WINDOWS="${RESOLVED%/*}"
+        warn_windows_shadow "${RESOLVED}"
+        ;;
+      *)
+        # Only a copy that beats INSTALL_DIR in a new shell is stale.
+        [ "${SEARCH_PATH}" = "${PATH}" ] || continue
+        echo "Warning: found another ${CMD_NAME} at ${RESOLVED}"
+        echo "Removing stale install to avoid conflicts..."
+        rm -f "${RESOLVED}" 2>/dev/null || echo "  Could not remove ${RESOLVED} (permission denied). Please remove it manually."
+        ;;
+    esac
+  done
 done
 
 if ! command -v cast >/dev/null 2>&1 && ! command -v codecast >/dev/null 2>&1; then

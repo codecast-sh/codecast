@@ -39,6 +39,9 @@ export type ProposalTreeRow = {
   chip: string | null;
   /** The subject's handle answers to nothing live: drawn as a warning. */
   unresolved: boolean;
+  /** A new role: what it looks after and where its seat comes from, so the
+   *  card says what a message would otherwise spell out beside it. */
+  detail: string | null;
 };
 
 const strip = (h: string) => h.replace(/^@/, "").trim().toLowerCase();
@@ -54,6 +57,19 @@ const faceOfRef = (plan: OrgGhostPlan, ref: OrgParentRef | null | undefined): Pr
     ? { kind: "role", id: r._id, name: r.name, handle: r.handle, avatar: r.avatar, stub: plan.stubs[roleNodeId(r._id)] }
     : { kind: "unknown", id: ref.role_id, name: "a role" };
 };
+
+/** "Matching Engine & Funnel · from Market growth mandate": the scope by
+ *  name (a ref the tree already knows reads as its title), then the seat. */
+function roleDetail(tree: OrgTree | null, ch: { scope?: { projects?: string[]; plans?: string[] }; seat?: { title?: string } }): string {
+  const known = new Map<string, string>();
+  for (const r of tree?.roles ?? []) for (const x of [...r.scope_names.projects, ...r.scope_names.plans]) {
+    known.set(x.id, x.title);
+    if (x.short_id) known.set(x.short_id, x.title);
+  }
+  const scope = [...(ch.scope?.projects ?? []), ...(ch.scope?.plans ?? [])].map((ref) => known.get(ref) ?? ref);
+  const seat = ch.seat ? `from ${ch.seat.title ?? "an existing session"}` : "new session";
+  return [scope.length ? scope.join(", ") : "the whole workspace", seat].join(" · ");
+}
 
 /** The rows of a proposal, in seq order. Removed changes are history and
  *  draw nothing; skipped ones keep a row so the card can say what happened;
@@ -77,7 +93,7 @@ export function proposalTreeRows(tree: OrgTree | null, changes: readonly OrgProp
 
   return ordered.map((c): ProposalTreeRow => {
     const ch = editedOrgChange(c.change, c.edits);
-    const base = { change_id: c._id, seq: c.seq, kind: ch.kind, status: c.status, line: describeOrgChange(ch), from: null, chip: null, unresolved: false } as const;
+    const base = { change_id: c._id, seq: c.seq, kind: ch.kind, status: c.status, line: describeOrgChange(ch), from: null, chip: null, unresolved: false, detail: null } as const;
     switch (ch.kind) {
       case "role": {
         // The stub ghostsFor pushed (keyed by the change id), else the live
@@ -86,7 +102,7 @@ export function proposalTreeRows(tree: OrgTree | null, changes: readonly OrgProp
         const node: ProposalTreeFace = stub && plan
           ? { kind: "role", id: stub._id, name: stub.name, handle: stub.handle, avatar: stub.avatar, stub: plan.stubs[roleNodeId(stub._id)] }
           : { kind: "role", id: c._id, name: ch.name, handle: strip(ch.handle), avatar: ch.avatar };
-        return { ...base, tag: "new role", node, parent: stub && plan ? faceOfRef(plan, stub.reports_to) : null };
+        return { ...base, tag: "new role", node, parent: stub && plan ? faceOfRef(plan, stub.reports_to) : null, detail: roleDetail(tree, ch) };
       }
       case "move": {
         const { face, unresolved } = roleFace(ch.handle);

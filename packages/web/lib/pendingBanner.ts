@@ -105,6 +105,16 @@ export function serverPendingBubbleVisible(
   return window.atLiveTail && window.newestServerTs < pending.created_at;
 }
 
+// The conversation's pending row as the composer's delivery tracker sees it.
+// getConversationPendingMessage falls back to the newest SETTLED row
+// (delivered/cancelled) so a lagging transcript keeps its bubble; to the
+// tracker that row is nothing in flight. Reading it as in flight raised
+// "Disconnected · Cancel" (and an auto-resume) after every delivered message.
+export function inFlightPending<T extends { status: string }>(pending: T | null | undefined): T | null {
+  if (!pending || pending.status === "delivered" || pending.status === "cancelled") return null;
+  return pending;
+}
+
 export function pendingMessageReachedSession(messageId: string, pending?: { message_id: string; client_id?: string; status: string } | null): boolean {
   return !!pending && (pending.status === "injected" || pending.status === "delivered")
     && (messageId === `serverpending_${pending.message_id}` || messageId === pending.client_id);

@@ -77,10 +77,11 @@ const {
   startedApps,
   decideOffer,
 } = require("./meetingDetector");
-const { createOsPermissions } = require("./osPermissions");
+const { createOsPermissions, loadNotificationsAddon } = require("./osPermissions");
 const { createComputerPermissions } = require("./computerPermissions");
 const { createShellAuthority, originOf, installShellCapabilities } = require("./shellAuthority");
 const { createBrowserPanes, defaultRegistryPath: defaultPaneRegistryPath } = require("./browserPanes");
+const { createShareCursors } = require("./shareCursors");
 
 let notificationRefs = [];
 
@@ -2242,6 +2243,57 @@ shellIpc.on("meeting-offer-hide", (e) => {
 });
 
 // ---------------------------------------------------------------------------
+// The share cursors glass: teammates' pointers drawn on the sharer's own
+// screen, over the display or window being captured (shareCursors.js, route
+// /share-cursors). Pure glass: never focused, never hit by the mouse, and
+// content protected so the capture it sits over leaves it out; otherwise
+// every viewer would get the sharer's copy of their arrow back in the video.
+// Built on the first cursor, not at launch.
+// ---------------------------------------------------------------------------
+function createShareCursorsWindow() {
+  const win = createShellWindow({
+    width: 400,
+    height: 300,
+    frame: false,
+    transparent: true,
+    backgroundColor: "#00000000",
+    resizable: true,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    show: false,
+    hasShadow: false,
+    focusable: false,
+    // It covers a whole display, menu bar included: macOS would otherwise
+    // push the frame below the menu bar and every arrow would land low.
+    enableLargerThanScreen: true,
+    webPreferences: {
+      ...preloadPrefs(),
+      // One CSS pixel per point, so a normalized point is plain arithmetic.
+      zoomFactor: 1,
+      additionalArguments: ["--share-cursors-window"],
+      backgroundThrottling: false,
+    },
+  });
+  pinWindowTitle(win, "Codecast Cursors");
+  win.setContentProtection(true);
+  win.setIgnoreMouseEvents(true);
+  win.setAlwaysOnTop(true, "screen-saver");
+  win.setVisibleOnAllWorkspaces(true, WORKSPACES_OPTS);
+  win.loadURL(`${currentBaseUrl}/share-cursors`);
+  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  return win;
+}
+
+const shareCursors = createShareCursors({
+  createGlass: createShareCursorsWindow,
+  screen,
+  addon: loadNotificationsAddon(),
+});
+
+// ---------------------------------------------------------------------------
 // The ring window: an incoming huddle as a small chromeless corner card
 // (route /call-ring).
 //
@@ -3216,7 +3268,11 @@ app.whenReady().then(() => {
   ];
   const trustedPermissions = () =>
     new Set([...BASELINE_PERMISSIONS, ...(loadFullSettings().hostPolicy?.permissions ?? [])]);
-  installShellCapabilities({ authority: shellAuthority, session: session.defaultSession, desktopCapturer, permissions: trustedPermissions });
+  installShellCapabilities({
+    authority: shellAuthority, session: session.defaultSession, desktopCapturer, permissions: trustedPermissions,
+    onDisplaySource: shareCursors.setSource,
+  });
+  shareCursors.install(shellIpc);
   // Browser panes: the native half of the web app's /browser route
   // (browserPanes.js). It manages its own views, its own session and its own
   // lifecycle — the shell hands it the pieces of Electron it needs and the

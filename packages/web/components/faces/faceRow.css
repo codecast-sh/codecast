@@ -14,7 +14,8 @@
  * because a face is the same element whether it shows a photo or video.
  *
  * Two densities, one stylesheet: the header bar at 32px and the floating
- * window at 64px. The numbers below are mirrored in FACE_ROW_METRICS
+ * window at 64px, or the bigger size the person picked (FaceRow writes
+ * `--face` on the row; every size below is a share of it). The numbers below are mirrored in FACE_ROW_METRICS
  * (FaceRow.tsx), which the layout test holds against this file.
  */
 
@@ -56,14 +57,11 @@
 
 /* The band under the faces: the engagement card and the member card, out of
  * the seats' line so the row never wraps. In the bar it is a zero height
- * anchor the cards hang from; in the float it hangs under the name band
- * (ROW_GAP + NAME_HEIGHT below the faces, less the row's own padding) and the
- * window is measured from it (FloatingFaceRow). The name band is reserved
- * whether or not the pointer is in the window: the band used to drop by 28px
- * while the pointer was in and rise again 1.5s after it left, so the card
- * under a call moved every time the hand came near it, and at rest it sat
- * 8px under the faces with a speaking ring's glow touching it. A card holds
- * one spot; only the names come and go. */
+ * anchor the cards hang from; in the float it hangs right under the faces
+ * (FLOAT_BAND_GAP below the row's box), slid across to sit under the pointed
+ * face with a notch on it (floatBandPlacement, written by FaceRow), and the
+ * window is measured from it (FloatingFaceRow). Nothing else hangs under a
+ * face, so the card is the one thing there and reads as the face's own. */
 .face-row-below {
   /* The lift both cards in the band share: the engagement card and the
      member card are one column, so they throw one shadow. */
@@ -82,13 +80,14 @@
 }
 .face-row[data-density="float"] .face-row-below {
   left: 8px;
-  top: calc(100% + 28px);
+  top: calc(100% + 6px);
   padding-top: 0;
   gap: 0;
   /* The card's own width (FACE_CARD_WIDTH), which the window always holds. */
   width: 320px;
   border-radius: 14px;
-  overflow: hidden;
+  /* Sliding from face to face, the band glides rather than jumps. */
+  transition: left 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
   background: linear-gradient(180deg, var(--paper) 0%, var(--paper-deep) 100%);
   /* A hairline, a hair of light along the top edge, and a shadow short
      enough to stay inside the window's 8px margin: on a transparent window
@@ -110,6 +109,32 @@
   --sol-text-dim: var(--ink-faint);
   --sol-border: var(--hairline-strong);
   --card-shadow: none;
+}
+/* The notch: the band's own paper, pointing up at the face it is about. A
+   square turned 45 degrees, two of its edges in the band's hairline, half of
+   it poking above the band's top edge. The band draws no clip, so the notch
+   is not cut; the children round their own corners instead. */
+.face-row[data-density="float"] .face-row-below[data-notch]::before {
+  content: "";
+  position: absolute;
+  top: -6px;
+  left: var(--notch-x);
+  width: 11px;
+  height: 11px;
+  margin-left: -5.5px;
+  transform: rotate(45deg);
+  border-top-left-radius: 2px;
+  background: var(--paper);
+  box-shadow: -1px -1px 0 0 var(--hairline-strong);
+  transition: left 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.face-row[data-density="float"] .face-row-below > :first-child {
+  border-top-left-radius: 14px;
+  border-top-right-radius: 14px;
+}
+.face-row[data-density="float"] .face-row-below > :last-child {
+  border-bottom-left-radius: 14px;
+  border-bottom-right-radius: 14px;
 }
 /* The member card is the head of the paper card, not a card of its own. */
 .face-row[data-density="float"] .face-row-below [data-member-card] {
@@ -599,7 +624,11 @@
   font-weight: 700;
   line-height: 12px;
   text-align: center;
-  pointer-events: none;
+  cursor: pointer;
+  transition: transform 120ms ease;
+}
+.face-unread:hover {
+  transform: scale(1.15);
 }
 
 .face-ask {
@@ -908,7 +937,9 @@
 @media (prefers-reduced-motion: reduce) {
   .face-row .face,
   .face-seat,
-  .face-row-track {
+  .face-row-track,
+  .face-row[data-density="float"] .face-row-below,
+  .face-row[data-density="float"] .face-row-below[data-notch]::before {
     transition: none;
   }
   /* Every selector here matches the specificity of the rule it silences:
@@ -957,7 +988,7 @@
  * pins it. It never repeats the face; a notch points back at the circle the
  * pointer is on. In the bar it hangs from the header, centred on the face
  * and pushed in from a viewport edge by --shift (measured); in the float it
- * sits in the band under the row, and the notch travels to the face. */
+ * is the head of the band, and the band carries the notch to the face. */
 .face-card {
   --card-w: 320px;
   --notch: 8px;
@@ -996,21 +1027,10 @@
   border-left: 1px solid var(--sol-border);
   border-top: 1px solid var(--sol-border);
 }
-.face-card[data-density="float"] {
-  /* The band starts 8px in; the anchor is in the row's coordinates. Here
-     the window IS the viewport and is sized to hold the card from the band's
-     edge (floatingRowSize), so the floor is the viewport clamp: a face near
-     the window's edge gets the notch, not a card outside the window. */
-  --lead: max(0px, calc(var(--anchor) - 8px - var(--card-w) / 2));
-}
-.face-card[data-density="float"]::before {
-  left: clamp(14px, calc(var(--anchor) - 8px - var(--lead)), calc(var(--card-w) - 14px));
-}
 /* Stacked under the engagement card, the member card is the second card of
  * one column: the same left edge, and no notch, which would point at the
  * card above it rather than at a face. */
-.engagement-card + .face-card,
-.engagement-card + .face-card[data-density="float"] {
+.engagement-card + .face-card {
   --lead: 0px;
 }
 .engagement-card + .face-card::before {
@@ -1136,6 +1156,74 @@
   font-size: 11px;
   line-height: 14px;
   color: var(--sol-text-dim);
+}
+
+/* Unread messages from them: the face's cyan count, said in words, with
+ * their newest line under it. The whole block opens the conversation. */
+.face-card-dm {
+  display: block;
+  width: 100%;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--sol-cyan) 45%, transparent);
+  background: color-mix(in srgb, var(--sol-cyan) 12%, transparent);
+  text-align: left;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.face-card-dm:hover {
+  border-color: var(--sol-cyan);
+  background: color-mix(in srgb, var(--sol-cyan) 20%, transparent);
+}
+.face-card-dm-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 15px;
+}
+.face-card-dm-icon {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--sol-cyan);
+}
+.face-card-dm-count {
+  font-weight: 600;
+  color: var(--sol-cyan);
+  white-space: nowrap;
+}
+.face-card-dm-at {
+  color: var(--sol-text-dim);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.face-card-dm-go {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: auto;
+  font-weight: 500;
+  color: var(--sol-cyan);
+}
+.face-card-dm-arrow {
+  width: 13px;
+  height: 13px;
+  transition: transform 120ms ease;
+}
+.face-card-dm:hover .face-card-dm-arrow {
+  transform: translateX(2px);
+}
+.face-card-dm-preview {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--sol-text);
+  overflow-wrap: anywhere;
 }
 
 /* Their fleet, one line, and the agent's own words when it has any. */
@@ -1343,6 +1431,30 @@
 }
 .face-row-below .faces-btn:active {
   background: var(--wash-strong);
+}
+/* The faces' size, one step at a time: two small buttons around a word. */
+.face-row-size {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+}
+.face-row-below .face-row-size .faces-btn {
+  width: 26px;
+  min-width: 0;
+  padding: 0;
+  justify-content: center;
+}
+.face-row-below .face-row-size .faces-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+  background: none;
+}
+.face-row-size-word {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  padding: 0 2px;
 }
 .face-row-grip {
   cursor: grab;

@@ -71,12 +71,21 @@ export function addressesAgent(text: string, names: readonly string[]): boolean 
   return false;
 }
 
+// A turn always ends on some words, and those words are mirrored into the
+// room. Ending on exactly this is how a fed session says it has nothing for
+// the room: the mirror posts nothing for it (callChat.mirrorAgentTurn).
+export const HUDDLE_PASS = "[pass]";
+
+export function isHuddlePass(text: string | null | undefined): boolean {
+  return (text ?? "").trim().toLowerCase() === HUDDLE_PASS;
+}
+
 // What every session fed a live huddle is told about where its words go: the
 // reply it ends its turn with is shown in the huddle's chat, beside the people
-// talking. Said in one place so the briefing, the own-room header and the
-// generic feed header cannot drift apart on this.
+// talking, unless it passes. Said in one place so the briefing, the own-room
+// header and the generic feed header cannot drift apart on this.
 export const HUDDLE_REPLY_NOTE =
-  "Your reply at the end of this turn is shown in the huddle's chat, next to the people talking, and anything they type in that chat reaches you here. Keep it short and conversational, the way you would speak in a room; put long output in a doc or a file and say where it is.";
+  `Your reply at the end of this turn is shown in the huddle's chat, next to the people talking, and anything they type in that chat reaches you here. Keep it short and conversational, the way you would speak in a room; put long output in a doc or a file and say where it is. When you have nothing the room needs, end the turn with exactly ${HUDDLE_PASS} and nothing else: the room sees nothing. Never post a line only to say you are listening or following along.`;
 
 // How an agent asks the room for time. The words keep flowing into the
 // transcript; they arrive together when the hold ends, and a line that names
@@ -87,7 +96,7 @@ export const HUDDLE_HOLD_NOTE =
 const LANE_NOTE: Record<ChunkLane, string> = {
   ask: "They named you, so answer here as you would answer anything typed to you. Wait for a complete thought before acting on it; speech arrives in pieces.",
   context:
-    "Nobody named you, so no reply is owed: this is what the room is saying, for context. Carry on with what you were doing unless something here is for you or you can add something the room needs. Anything you do write is shown in the room's chat, so end the turn quietly when there is nothing to add.",
+    "Nobody named you, so no reply is owed: this is what the room is saying, for context. Carry on with what you were doing unless something here is for you or you can add something the room needs. When there is nothing to add, pass.",
 };
 
 const HELD_NOTE = "These words waited while you worked and arrive together as one catch up.";

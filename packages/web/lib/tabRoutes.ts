@@ -52,6 +52,9 @@ const NON_TAB_EXACT = new Set([
   // Same rule again — the tab shell intercepting it would rewrite the
   // window's own URL and blank the card somebody is trying to answer.
   "/call-ring",
+  // The share cursors glass: teammates' pointers over the sharer's screen.
+  // Same rule again; the tab shell would rewrite the glass window's URL.
+  "/share-cursors",
 ]);
 // "/documentation" is a prefix (not exact) so the guide pages under
 // /documentation/<slug> stay outside the tab shell too.
