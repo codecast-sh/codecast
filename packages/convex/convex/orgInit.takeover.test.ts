@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { applyRole, applyScope, previewTakeover, previewTakeovers, takeOverSessions, takeoverPhrase } from "./orgInit";
-import { performCreateRole, performHireRole, performUpdateRole } from "./orgRoles";
+import { performCreateRole, performHireRole, performRetireRole, performUpdateRole } from "./orgRoles";
+import { lineCandidates } from "./orgLine";
+import { projectLeadOf } from "@codecast/shared/contracts/orgLead";
 
 // Taking over a scope takes over its sessions (org-roles-run-work.md R1): the
 // apply that gives a role a scope files the host's unowned sessions in it
@@ -242,5 +244,87 @@ describe("the read budget of a takeover", () => {
     expect(out[0]?.phrase).toContain("100 sessions now report to @growth");
     expect(many.reads.by.conversations).toBe(one.reads.by.conversations);
     expect(many.reads.by.org_roles).toBe(one.reads.by.org_roles);
+  });
+});
+
+// Work belongs to the most specific role that covers it (org-staffing.md S26).
+// A chief of staff over the whole workspace plus one lead over Growth: the
+// lead's sessions, tasks and project are the lead's, the rest the chief's;
+// retire the lead and they fall back.
+describe("a chief plus one lead: ownership by specificity", () => {
+  async function chiefWithWork() {
+    const db = fixtures();
+    const ctx = ctxOf(db);
+    const chief = await performCreateRole(ctx, ME as any, { name: "Chief of Staff", handle: "chief-of-staff", team_id: TEAM });
+    // Two of the chief's sessions, one in Growth and one in Billing, beside the
+    // host's own Growth sessions (s1, s2) and Billing one (s4).
+    db._tables.conversations.push(
+      conv(5, { org_role_id: chief._id }),
+      conv(6, { org_role_id: chief._id, project_path: "/repo/billing" }),
+    );
+    const task = (id: string, over: Record<string, any>) => ({ _id: id, short_id: id, title: id, user_id: ME, team_id: TEAM, workspace: WS, status: "open", assignee: String(chief._id), created_at: 1, updated_at: NOW, ...over });
+    db._tables.tasks.push(task("tasks_growth", { project_id: P }), task("tasks_billing", { project_id: "projects_q" }), task("tasks_loose", {}));
+    db._tables.workflows = [];
+    db._tables.task_history = [];
+    db._tables.entity_subscriptions = [];
+    return { db, ctx, chief };
+  }
+  const hireGrowth = (ctx: any) => performHireRole(ctx, ME as any, { name: "Growth", handle: "growth", team_id: TEAM, scope: { project_ids: [P as any], plan_ids: [] } }, { provision: false });
+
+  test("the lead takes its area from the chief and from the person; the chief keeps the rest and takes nothing itself", async () => {
+    const { db, ctx, chief } = await chiefWithWork();
+    // A whole workspace role takes over nothing on its own.
+    expect(await takeOverSessions(ctx, ME as any, chief._id)).toBeNull();
+    const dry = await previewTakeover(ctx, ME as any, BOUNDARY, { handle: "@growth", add: ["pr-1"] });
+    expect([...(dry?.sessions ?? [])].sort()).toEqual(["jx70001", "jx70002", "jx70005"]);
+    const growth = await hireGrowth(ctx);
+    expect([...growth.took_over.sessions].sort()).toEqual(["jx70001", "jx70002", "jx70005"]);
+    expect(roleOf(db, 5)).toBe(growth._id);
+    expect(roleOf(db, 6)).toBe(chief._id);
+    expect(roleOf(db, 4)).toBeUndefined();
+  });
+
+  test("the project, the line's pick and a retire all follow the rule, and the area falls back", async () => {
+    const { db, ctx, chief } = await chiefWithWork();
+    const growth = await hireGrowth(ctx);
+    const roles = () => db._tables.org_roles;
+    const project = (id: string) => db._tables.projects.find((p: any) => p._id === id);
+    expect(projectLeadOf(project(P), roles())).toMatchObject({ kind: "lead", role: { _id: growth._id }, by: "scope" });
+    expect(projectLeadOf(project("projects_q"), roles())).toMatchObject({ kind: "lead", role: { _id: chief._id }, by: "workspace" });
+    // The chief's line never starts what the lead owns.
+    expect((await lineCandidates(ctx, await db.get(chief._id))).map((t: any) => t._id).sort()).toEqual(["tasks_billing", "tasks_loose"]);
+    // The chief's open task in Growth moved to the lead in the same takeover, with a history row.
+    const growthTask = () => db._tables.tasks.find((t: any) => t._id === "tasks_growth");
+    expect(growthTask().assignee).toBe(String(growth._id));
+    expect(db._tables.task_history.filter((h: any) => h.task_id === "tasks_growth")).toEqual([expect.objectContaining({ field: "assignee", old_value: String(chief._id), new_value: String(growth._id) })]);
+    expect(db._tables.tasks.find((t: any) => t._id === "tasks_billing").assignee).toBe(String(chief._id));
+    expect((await lineCandidates(ctx, await db.get(growth._id))).map((t: any) => t._id)).toEqual(["tasks_growth"]);
+    // The lead's task and sessions fall back to the chief, not to the person it reports to.
+    await performRetireRole(ctx, ME as any, { role_id: growth._id });
+    expect(projectLeadOf(project(P), roles())).toMatchObject({ kind: "lead", role: { _id: chief._id }, by: "workspace" });
+    expect(db._tables.tasks.find((t: any) => t._id === "tasks_growth").assignee).toBe(String(chief._id));
+    expect(roleOf(db, 1)).toBe(chief._id);
+    expect(roleOf(db, 5)).toBe(chief._id);
+    expect(roleOf(db, 6)).toBe(chief._id);
+    expect((await lineCandidates(ctx, await db.get(chief._id))).map((t: any) => t._id).sort()).toEqual(["tasks_billing", "tasks_growth", "tasks_loose"]);
+  });
+
+  test("with no wider role a retired lead's sessions go back to their owner and its tasks up the chain", async () => {
+    const db = fixtures();
+    const ctx = ctxOf(db);
+    const growth = await hireGrowth(ctx);
+    expect(roleOf(db, 1)).toBe(growth._id);
+    await performRetireRole(ctx, ME as any, { role_id: growth._id });
+    expect(roleOf(db, 1)).toBeUndefined();
+  });
+
+  test("a lead that reports to the person is not held inside the chief's scope, nor is one under the chief", async () => {
+    const { ctx, chief } = await chiefWithWork();
+    const growth = await hireGrowth(ctx);
+    expect(growth.reports_to).toEqual({ kind: "user", user_id: ME });
+    const widened = await performUpdateRole(ctx, ME as any, { role_id: growth._id, scope: { project_ids: [P as any, "projects_q" as any], plan_ids: [] }, leave_sessions: true, human_decision: "sd-1" }).catch((e: any) => e.message);
+    expect(widened.scope?.project_ids ?? widened).toEqual([P, "projects_q"]);
+    const billing = await performCreateRole(ctx, ME as any, { name: "Billing", handle: "billing", team_id: TEAM, reports_to: { kind: "role", role_id: chief._id }, scope: { project_ids: ["projects_q" as any], plan_ids: [] } });
+    expect(billing.scope.project_ids).toEqual(["projects_q"]);
   });
 });

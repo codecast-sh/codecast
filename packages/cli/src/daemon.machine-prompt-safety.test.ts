@@ -11,6 +11,7 @@ import { clearPromptHolds, holdConversationForPrompt, promptHoldRemainingMs, rel
 import { clientAcceptsBracketedPaste, deliverTextIntoPane, pasteAndSubmitText, prepareInjectedContent, PASTE_START, PASTE_END } from "./tmuxPaste";
 import { blockAt, functionBlock } from "./test-helpers/sourceRegion";
 import { TmuxDeliveryUncertainError } from "./tmuxDeliveryJournal";
+import { typedPollAnswer } from "./typedPollAnswer";
 
 const source = fs.readFileSync(new URL("./daemon.ts", import.meta.url), "utf8");
 const scratch: string[] = [];
@@ -65,6 +66,8 @@ function fixture(transport = "tmux", cached = true) {
         state.busy = true;
       }
     }
+    // A number key on a numbered menu submits that row, as Claude Code's does.
+    if (/^\d$/.test(event) && state.menu) state.menu = null;
     if (["C-k", "C-u"].includes(event)) state.composer = "";
     hooks.input(event);
   };
@@ -133,7 +136,7 @@ function fixture(transport = "tmux", cached = true) {
   const deps = {
     fs, os, path, randomUUID, CONFIG_DIR: directory, EXEC_TIMEOUT_MS: 1000,
     isMachineDeliveredMessage, AGENT_CLIENTS, authorizesTeardown, PendingDeliveryHeldError, createDeliveryAdmission,
-    holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold,
+    holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, typedPollAnswer,
     clientAcceptsBracketedPaste, deliverTextIntoPane, pasteAndSubmitText, prepareInjectedContent, PASTE_START, PASTE_END,
     tmuxExec, execAsync,
     _execFileAsync: async (binary: string, args: string[]) => {
@@ -437,11 +440,12 @@ describe("machine prompt delivery safety", () => {
     expect(f.parseInteractivePrompt(`${menu}\n${box()}`, true)).toBeNull();
   });
 
-  test("human typed option and explicit poll still reach the same menu", async () => {
-    for (const answer of ["Deploy", poll]) {
+  test("human typed option and a card click press the same key", async () => {
+    const cardClick = JSON.stringify({ __cc_poll: true, keys: ["1"], display: "Deploy" });
+    for (const answer of ["Deploy", "1", cardClick]) {
       const f = fixture();
       await expect(f.deliver(answer, "answer")).resolves.toBe(true);
-      expect(f.events).toEqual(["Enter"]);
+      expect(f.events).toEqual(["1"]);
       expect(f.state.menu).toBeNull();
       expect(f.pendingInteractivePrompts.has("sid")).toBe(false);
       expect(f.closed).toHaveLength(1);

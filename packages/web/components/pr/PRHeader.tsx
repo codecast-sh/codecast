@@ -19,8 +19,9 @@ import {
 } from "lucide-react";
 import { RepoWindowControl } from "../repo/RepoWindowControl";
 import { CommentAvatar } from "../comments/CommentAvatar";
-import { Switch } from "../ui/switch";
-import { copyToClipboard } from "../../lib/utils";
+import { EntityIdPill } from "../EntityIdPill";
+import { PRLinked, PRReviewers } from "./PRLinked";
+import { copyToClipboard, relTimeShort } from "../../lib/utils";
 import {
   accentSoft,
   accentVar,
@@ -33,6 +34,7 @@ import {
   mergeStateMeta,
   prStateKey,
   reviewDecisionMeta,
+  type PrReviewRow,
   type PrStateKey,
 } from "../../lib/prView";
 
@@ -178,13 +180,25 @@ function CopyRef({ text }: { text: string }) {
   );
 }
 
-function Figure({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex flex-col gap-1">
-      <span className="text-[10px] uppercase tracking-wider text-sol-text-dim">{label}</span>
+/** One status figure. With `href` or `onClick` it is the way into its detail
+ *  (the checks view, the diff, the first open thread). */
+function Figure({ label, children, href, onClick, title }: {
+  label: string;
+  children: React.ReactNode;
+  href?: string;
+  onClick?: () => void;
+  title?: string;
+}) {
+  const body = (
+    <>
+      <span className="text-[10px] uppercase tracking-wider text-sol-text-dim group-hover/fig:text-sol-text-muted transition-colors">{label}</span>
       <span className="text-[12px] text-sol-text flex items-center gap-2">{children}</span>
-    </div>
+    </>
   );
+  const cls = "group/fig flex flex-col gap-1 rounded-md -mx-1.5 -my-1 px-1.5 py-1 hover:bg-sol-bg-alt/60 transition-colors";
+  if (href) return <Link href={href} className={cls} title={title}>{body}</Link>;
+  if (onClick) return <button type="button" onClick={onClick} className={`${cls} text-left`} title={title}>{body}</button>;
+  return <div className="flex flex-col gap-1">{body}</div>;
 }
 
 /** The checks bar: one segment per outcome, widths animated in on load. */
@@ -209,7 +223,13 @@ function ChecksBar({ checks }: { checks: any[] | undefined }) {
   );
 }
 
-/** Shepherd: the session that owns this PR until it merges. */
+const SHEPHERD_EXPLAINED =
+  "The shepherd is the agent session that owns this pull request until it merges. It is woken when a review, a check or the base branch changes, and acts on it.";
+
+/**
+ * Shepherd: the session that owns this PR until it merges. One labeled line:
+ * which session, what it is working toward, and whether changes wake it.
+ */
 function ShepherdControl({
   pr,
   sessionChoices,
@@ -222,22 +242,26 @@ function ShepherdControl({
   const [picking, setPicking] = useState(false);
   const bound = pr.shepherd_conversation_id as string | undefined;
   const style = shepherdStyle(pr.shepherd_state);
+  const awake = pr.shepherd_enabled === true;
+  const open = prStateKey(pr) === "open" || prStateKey(pr) === "draft";
 
   if (!bound) {
+    if (!open) return null;
     return (
       <div className="flex items-center gap-2 flex-wrap max-w-full">
         <button
           type="button"
-          className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-sol-border px-2.5 py-1 text-[11px] text-sol-text-muted hover:text-sol-text hover:border-sol-cyan/50 transition-colors"
+          className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-sol-border px-2.5 py-0.5 text-[11px] text-sol-text-muted hover:text-sol-text hover:border-sol-cyan/50 transition-colors"
+          title={SHEPHERD_EXPLAINED}
           onClick={() => setPicking((v) => !v)}
         >
           <Radio className="w-3 h-3" />
-          Shepherd with a session
+          Assign a shepherd session
         </button>
         {picking && (
           <div className="flex items-center gap-1.5 flex-wrap">
             {sessionChoices.length === 0 ? (
-              <span className="text-[11px] text-sol-text-dim">No session is linked to this PR yet</span>
+              <span className="text-[11px] text-sol-text-dim">No session has worked on this pull request yet</span>
             ) : (
               sessionChoices.map((session) => (
                 <button
@@ -260,22 +284,35 @@ function ShepherdControl({
   }
 
   return (
-    <div className="flex items-center gap-2 flex-wrap max-w-full">
-      <Chip accent={style.accent} title="What the shepherd is waiting on">
-        <Radio className="w-3 h-3" />
-        {style.label}
-      </Chip>
-      <Link
-        href={`/conversation/${bound}`}
-        className="max-w-[12rem] truncate rounded-full border border-sol-border/50 px-2 py-0.5 font-mono text-[11px] text-sol-text-muted hover:text-sol-cyan hover:border-sol-cyan/40 transition-colors"
-      >
-        {sessionChoices.find((s) => s.id === bound)?.title ?? "session"}
-      </Link>
-      <Switch
-        checked={pr.shepherd_enabled === true}
-        onCheckedChange={(on) => onSetShepherd(bound, on)}
-        aria-label="Wake the shepherd session when this PR changes"
-      />
+    <div
+      className="inline-flex items-center gap-2 max-w-full rounded-full border border-sol-border/50 bg-sol-bg-alt/40 pl-2.5 pr-1 py-0.5 text-[11px] flex-wrap"
+      title={pr.shepherd_last_wake_at
+        ? `${SHEPHERD_EXPLAINED}\n\nLast woke ${relTimeShort(pr.shepherd_last_wake_at)} ago${pr.shepherd_last_wake_reason ? `: ${pr.shepherd_last_wake_reason}` : ""} (${pr.shepherd_wake_count ?? 1} in all).`
+        : SHEPHERD_EXPLAINED}
+    >
+      <span className="inline-flex items-center gap-1.5 text-sol-text-dim">
+        <Radio className="w-3 h-3" style={{ color: accentVar(style.accent) }} />
+        Shepherd
+      </span>
+      <span className="min-w-0 max-w-[16rem] truncate">
+        <EntityIdPill type="session" id={bound} fallback={sessionChoices.find((c) => c.id === bound)?.title ?? "Agent session"} />
+      </span>
+      {open && <span style={{ color: accentVar(style.accent) }}>{style.phrase}</span>}
+      {open && (
+        <button
+          type="button"
+          role="switch"
+          aria-checked={awake}
+          onClick={() => onSetShepherd(bound, !awake)}
+          className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 transition-colors ${
+            awake ? "bg-sol-green/10 text-sol-green hover:bg-sol-green/20" : "bg-sol-bg-alt text-sol-text-dim hover:text-sol-text"
+          }`}
+          title={awake ? "Changes to this pull request wake the session. Click to pause." : "Paused: changes do not wake the session. Click to resume."}
+        >
+          <span className={`h-1.5 w-1.5 rounded-full ${awake ? "bg-sol-green" : "bg-sol-text-dim"}`} />
+          {awake ? "Wakes on changes" : "Paused"}
+        </button>
+      )}
     </div>
   );
 }
@@ -288,11 +325,22 @@ export function PRHeader({
   sessionChoices,
   onSetShepherd,
   actions,
+  reviews = [],
+  linkedSessionIds = [],
+  checksHref,
+  filesHref,
+  onOpenComments,
 }: {
+  /** Where the figures lead: the checks view, the diff, the first open thread. */
+  checksHref?: string;
+  filesHref?: string;
+  onOpenComments?: () => void;
   pr: any;
   repository: string;
   number: number;
   openComments: number;
+  reviews?: PrReviewRow[];
+  linkedSessionIds?: string[];
   sessionChoices: { id: string; title: string }[];
   onSetShepherd: (conversationId: string | undefined, enabled: boolean) => void;
   /** The verbs: review, merge, and the rest. A function receives the way to
@@ -329,13 +377,6 @@ export function PRHeader({
           </a>
         </span>
         <div className="pr-head-actions">
-          <Chip accent={state.accent}>
-            <StateIcon className="w-3.5 h-3.5" />
-            {state.label}
-          </Chip>
-          {merge && <Chip accent={merge.accent}>{merge.label}</Chip>}
-          {decision && <Chip accent={decision.accent}>{decision.label}</Chip>}
-          <ShepherdControl pr={pr} sessionChoices={sessionChoices} onSetShepherd={onSetShepherd} />
           {verbs && <span className="flex items-center gap-1.5 flex-wrap">{verbs}</span>}
           <RepoWindowControl />
         </div>
@@ -346,6 +387,11 @@ export function PRHeader({
       </div>
 
       <div className="pr-rise mt-2.5 flex items-center gap-3 flex-wrap" style={{ ["--d" as string]: "120ms" }}>
+        {/* Where it stands, first: a status, read before who and where. */}
+        <Chip accent={state.accent}>
+          <StateIcon className="w-3.5 h-3.5" />
+          {state.label}
+        </Chip>
         <span className="flex items-center gap-1.5 text-[12px] text-sol-text-muted">
           <CommentAvatar
             name={pr.author_github_username ?? "?"}
@@ -356,21 +402,20 @@ export function PRHeader({
         </span>
         {pr.head_ref && pr.base_ref && <CopyRef text={`${pr.head_ref} -> ${pr.base_ref}`} />}
         <MetaChips pr={pr} />
+        <ShepherdControl pr={pr} sessionChoices={sessionChoices} onSetShepherd={onSetShepherd} />
+        <PRLinked pr={pr} sessionIds={linkedSessionIds} />
       </div>
 
       <div
         className="pr-rise pr-figures mt-3 flex items-start flex-wrap gap-x-8 gap-y-3 text-[12px]"
         style={{ ["--d" as string]: "180ms" }}
       >
-        <Figure label="Checks">
+        <Figure label="Checks" href={checksHref} title="Open the checks">
           <ChecksBar checks={pr.checks} />
         </Figure>
         <Figure label="Review">
-          {decision ? (
-            <span style={{ color: accentVar(decision.accent) }}>{decision.label}</span>
-          ) : (
-            <span className="text-sol-text-dim">Nobody has reviewed yet</span>
-          )}
+          {decision && <span style={{ color: accentVar(decision.accent) }}>{decision.label}</span>}
+          {PRReviewers({ pr, reviews }) ?? (!decision && <span className="text-sol-text-dim">Nobody has reviewed yet</span>)}
         </Figure>
         <Figure label="Merge">
           {merge ? (
@@ -381,13 +426,13 @@ export function PRHeader({
             <span className="text-sol-text-dim">GitHub has not said yet</span>
           )}
         </Figure>
-        <Figure label="Open comments">
+        <Figure label="Open comments" onClick={openComments > 0 ? onOpenComments : undefined} title="Go to the first open thread (n)">
           <span className={openComments > 0 ? "text-sol-yellow" : "text-sol-text-muted"}>
             <CircleDot className="w-3 h-3 inline mr-1 -mt-px" />
             {openComments}
           </span>
         </Figure>
-        <Figure label="Diff">
+        <Figure label="Diff" href={filesHref} title="Open the changed files">
           <span className="font-mono">
             <span className="text-sol-green">+{pr.additions ?? 0}</span>
             <span className="mx-1 text-sol-text-dim/40">/</span>

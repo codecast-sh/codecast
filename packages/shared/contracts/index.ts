@@ -52,6 +52,7 @@ export * from "./recordingAudio";
 export * from "./transcribeLanguage";
 export * from "./callPush";
 export * from "./transcriptChunk";
+export * from "./callLinks";
 // The row a finished huddle leaves in its chat room or session: one formatter
 // for the digest markdown and the <huddle-summary> wire tag, one parser back.
 export * from "./huddleDigest";

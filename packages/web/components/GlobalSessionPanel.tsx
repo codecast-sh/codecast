@@ -1179,8 +1179,9 @@ function BlockedSessionsBanner({
 // trigger part speaks for the most urgent row (running > flagged > next to
 // fire > paused); the other families append compact segments in their own
 // accent so the strip still says what kind of machinery the card runs.
-// Clicking opens the primary trigger's row the way its full row would, or the
-// session itself when the card has no triggers. The pill's ⚡ toggle unfolds
+// Clicking opens the one trigger's row the way its full row would; with several
+// triggers it opens the session on its whole trigger set (the header strip
+// arrives expanded on all of them), and with none, the session itself. The pill's ⚡ toggle unfolds
 // every strip into full rows (or hides them); nothing here is a second way to
 // expand.
 type CardBarsMode = "strip" | "full" | "hidden";
@@ -1231,7 +1232,14 @@ const CardBarStrip = memo(function CardBarStrip({ session, rows, activeSessionId
   return (
     <button
       data-schedstrip={primary ? session._id : undefined}
-      onClick={() => (primary ? onOpen(primary) : workflow ? openWorkflow.open() : onOpenSession(session))}
+      onClick={() => {
+        if (rows.length > 1) {
+          onOpenSession(session);
+          useInboxStore.getState().setTriggerStripRequest({ convId: session._id, taskId: null, expand: true, nonce: Date.now() });
+        } else if (primary) onOpen(primary);
+        else if (workflow) openWorkflow.open();
+        else onOpenSession(session);
+      }}
       className={`w-full flex items-center gap-1.5 text-left cursor-pointer pl-2 pr-3 py-[3px] transition-[background-color,opacity] hover:bg-sol-amber/[0.05] ${
         isActive ? "bg-sol-cyan/[0.10]" : ""
       } ${paused ? "opacity-55 hover:opacity-90" : ""}`}
@@ -3465,6 +3473,9 @@ function SessionListPanelImpl({
     if (onSessionSelect) {
       onSessionSelect(session._id);
     }
+    // A card is the conversation as a whole: its trigger strip shows every
+    // trigger rather than whichever one a row click last focused.
+    useInboxStore.getState().setTriggerStripRequest({ convId: session._id, taskId: null, expand: false, nonce: Date.now() });
   }, [onSessionSelect]);
 
   // The multi-selection (lib/inboxSelection): ids that still have a row here.
@@ -3703,7 +3714,10 @@ function SessionListPanelImpl({
       router.push(`/triggers/${row.task._id}`);
       return;
     }
-    st.setScheduleStripExpand({ convId: sess._id, nonce: Date.now() });
+    // Set after any select below (a card select resets the strip to all
+    // triggers): this click means "show me THIS trigger".
+    const focusStrip = () =>
+      st.setTriggerStripRequest({ convId: sess._id, taskId: row.task._id, expand: true, nonce: Date.now() });
     // Pseudo rows (loops/subagents) have no agent_tasks runs to land on — the
     // fake task id must never reach webListRuns.
     const hasRun = !row.kind && (row.task.run_count > 0 || row.task.last_run_at !== undefined);
@@ -3716,6 +3730,7 @@ function SessionListPanelImpl({
         scrollToMessageId: local.messageId,
         scrollToMessageTimestamp: local.timestamp,
       });
+      focusStrip();
       return;
     }
     // Captured BEFORE the select: the query below often answers before the
@@ -3724,6 +3739,7 @@ function SessionListPanelImpl({
     // NEW (neither the destination nor where we stood) means the user left.
     const beforeIds = new Set([st.currentSessionId, st.viewingDismissedId].filter(Boolean));
     handleSelect(sess);
+    focusStrip();
     if (!hasRun) return;
     fetchTriggerRuns(convex, row.task._id)
       .then((runs: TriggerRun[]) => {

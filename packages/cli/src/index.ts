@@ -62,6 +62,7 @@ import {
   inlineForeignText,
   fenceForeignText,
   FOREIGN_TEXT_CAPS,
+  callLinkHow,
 } from "@codecast/shared/contracts";
 import type { SessionPresence } from "./formatter.js";
 import {
@@ -10203,6 +10204,12 @@ program
       console.log(`\n${c.bold}Action items${c.reset}`);
       for (const a of call.action_items) console.log(`  - ${a}`);
     }
+    if ((call.sessions || []).length > 0) {
+      console.log(`\n${c.bold}Sessions${c.reset}`);
+      for (const s of call.sessions) {
+        console.log(`  ${c.cyan}${s.short_id ?? s.conversation_id}${c.reset} ${s.title} ${c.dim}(${callLinkHow(s)})${c.reset}`);
+      }
+    }
     if (options.transcript) {
       console.log(`\n${c.bold}Transcript${c.reset}`);
       let lastSpeaker = "";
@@ -13482,7 +13489,7 @@ for (const verb of ["pause", "resume", "retire", "restart"] as const) {
     .description({
       pause: "Pause a role: wakes hold, hands stop at a safe point, no new hands",
       resume: "Resume a paused role; held wakes ship as one frame",
-      retire: "Retire a role; its sessions fall back to their owners",
+      retire: "Retire a role; its area falls back to the role that covers it, else its sessions to their owners",
       restart: "Restart the standing session; the next frame carries the charter and brief in full",
     }[verb])
     .argument("<handle>", "@handle, or-N, or id")
@@ -13825,7 +13832,7 @@ org
 
 org
   .command("retire")
-  .description("Retire a role; its sessions fall back to their owners")
+  .description("Retire a role; its area falls back to the role that covers it, else its sessions to their owners")
   .argument("<role>", "Role short id (or-N), id, or @handle")
   .option("--standing <keep|retire>", "The standing session: keep it running as a plain agent (default for the chief of staff) or retire it with the seat")
   .option("--team <name|id>", "Team workspace (default: the active workspace)")

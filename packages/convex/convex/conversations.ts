@@ -1487,23 +1487,29 @@ export const webGet = query({
   },
 });
 
+// The conversation reads a transcript view subscribes to take their id as
+// v.string, not v.id: it arrives raw from a URL (the inbox `?s=` deep link, a
+// pane path) and the client's isConvexId guard is format-only. A 32-char id
+// from another table (a message id, seen in prod) must read as not found
+// instead of an ArgumentValidationError thrown into the subscriber's render.
+async function getConversationByRawId(ctx: QueryCtx, raw: string) {
+  const id = ctx.db.normalizeId("conversations", raw);
+  return id ? await ctx.db.get(id) : null;
+}
+
 export const getConversation = query({
   args: {
-    // v.string, not v.id: this id arrives raw from the inbox `?s=` deep-link
-    // param, and a 32-char id from another table must resolve to null (the
-    // not-found path) instead of an ArgumentValidationError that throws into
-    // the subscribing component's render.
     conversation_id: v.string(),
     limit: v.optional(v.number()),
     share_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
-    const conversationId = ctx.db.normalizeId("conversations", args.conversation_id);
-    const conversation = conversationId ? await ctx.db.get(conversationId) : null;
-    if (!conversation || !conversationId) {
+    const conversation = await getConversationByRawId(ctx, args.conversation_id);
+    if (!conversation) {
       return null;
     }
+    const conversationId = conversation._id;
     const accessLevel = await checkConversationAccess(ctx, authUserId, conversation, args.share_token);
     if (accessLevel === "denied") {
       return null;
@@ -1716,7 +1722,7 @@ export const getProjectInfo = query({
 
 export const getMessagesAroundTimestamp = query({
   args: {
-    conversation_id: v.id("conversations"),
+    conversation_id: v.string(),
     center_timestamp: v.number(),
     limit_before: v.optional(v.number()),
     limit_after: v.optional(v.number()),
@@ -1724,7 +1730,7 @@ export const getMessagesAroundTimestamp = query({
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
-    const conversation = await ctx.db.get(args.conversation_id);
+    const conversation = await getConversationByRawId(ctx, args.conversation_id);
     if (!conversation) {
       return null;
     }
@@ -1734,14 +1740,14 @@ export const getMessagesAroundTimestamp = query({
       return null;
     }
 
-    const before = await pageConversationMessages(ctx.db, args.conversation_id, {
+    const before = await pageConversationMessages(ctx.db, conversation._id, {
       before: args.center_timestamp,
       order: "desc",
       limit: args.limit_before ?? 50,
     });
     before.messages.reverse();
 
-    const after = await pageConversationMessages(ctx.db, args.conversation_id, {
+    const after = await pageConversationMessages(ctx.db, conversation._id, {
       from: args.center_timestamp,
       order: "asc",
       limit: args.limit_after ?? 50,
@@ -1766,7 +1772,7 @@ export const getMessagesAroundTimestamp = query({
 
 export const getNewMessages = query({
   args: {
-    conversation_id: v.id("conversations"),
+    conversation_id: v.string(),
     after_timestamp: v.number(),
   },
   handler: async (ctx, args) => {
@@ -1774,7 +1780,7 @@ export const getNewMessages = query({
     if (!authUserId) {
       return null;
     }
-    const conversation = await ctx.db.get(args.conversation_id);
+    const conversation = await getConversationByRawId(ctx, args.conversation_id);
     if (!conversation) {
       return null;
     }
@@ -1786,7 +1792,7 @@ export const getNewMessages = query({
     const messages = await ctx.db
       .query("messages")
       .withIndex("by_conversation_timestamp", (q) =>
-        q.eq("conversation_id", args.conversation_id).gt("timestamp", args.after_timestamp)
+        q.eq("conversation_id", conversation._id).gt("timestamp", args.after_timestamp)
       )
       .order("asc")
       .take(PAGE_LIMIT + 1);
@@ -1824,13 +1830,13 @@ export const getNewMessages = query({
 //   but the result stays byte-identical and Convex skips the push.
 export const listMessagesTail = query({
   args: {
-    conversation_id: v.id("conversations"),
+    conversation_id: v.string(),
     after_timestamp: v.number(),
     share_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
-    const conversation = await ctx.db.get(args.conversation_id);
+    const conversation = await getConversationByRawId(ctx, args.conversation_id);
     if (!conversation) return null;
     if ((await checkConversationAccess(ctx, authUserId, conversation, args.share_token)) === "denied") {
       return null;
@@ -1840,7 +1846,7 @@ export const listMessagesTail = query({
     const messages = await ctx.db
       .query("messages")
       .withIndex("by_conversation_timestamp", (q) =>
-        q.eq("conversation_id", args.conversation_id).gt("timestamp", args.after_timestamp)
+        q.eq("conversation_id", conversation._id).gt("timestamp", args.after_timestamp)
       )
       .order("asc")
       .take(TAIL_LIMIT + 1);
@@ -1864,12 +1870,12 @@ export const listMessagesTail = query({
 // these actually moves.
 export const getTranscriptWatermark = query({
   args: {
-    conversation_id: v.id("conversations"),
+    conversation_id: v.string(),
     share_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
-    const conversation = await ctx.db.get(args.conversation_id);
+    const conversation = await getConversationByRawId(ctx, args.conversation_id);
     if (!conversation) return null;
     if ((await checkConversationAccess(ctx, authUserId, conversation, args.share_token)) === "denied") {
       return null;
@@ -1964,13 +1970,13 @@ export async function attachSenderIdentities<T extends { role?: string; from_use
 
 export const listMessages = query({
   args: {
-    conversation_id: v.id("conversations"),
+    conversation_id: v.string(),
     paginationOpts: paginationOptsValidator,
     share_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
-    const conversation = await ctx.db.get(args.conversation_id);
+    const conversation = await getConversationByRawId(ctx, args.conversation_id);
     // Missing conversation must return the empty-page shape, not throw — a
     // client can hold a stale conversation_id (deleted row, lost access) in
     // local state, and throwing crashes the React tree via usePaginatedQuery.
@@ -1987,7 +1993,7 @@ export const listMessages = query({
     const result = await ctx.db
       .query("messages")
       .withIndex("by_conversation_timestamp", (q) =>
-        q.eq("conversation_id", args.conversation_id)
+        q.eq("conversation_id", conversation._id)
       )
       .order("desc")
       .paginate(args.paginationOpts);
@@ -1998,7 +2004,7 @@ export const listMessages = query({
 
 export const getConversationWithMeta = query({
   args: {
-    conversation_id: v.id("conversations"),
+    conversation_id: v.string(),
     share_token: v.optional(v.string()),
     // Opt-in: omit the churny per-flush fields from the returned doc. The
     // client merge (syncRecord) keeps its prior values for omitted keys, and
@@ -2009,7 +2015,7 @@ export const getConversationWithMeta = query({
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
-    const conversation = await ctx.db.get(args.conversation_id);
+    const conversation = await getConversationByRawId(ctx, args.conversation_id);
     if (!conversation) {
       return null;
     }
@@ -2027,7 +2033,7 @@ export const getConversationWithMeta = query({
       || "New Session";
 
     const { children: childConversations, map: childByParentUuid, agentNameEntries } =
-      await findChildConversations(ctx, args.conversation_id, []);
+      await findChildConversations(ctx, conversation._id, []);
 
     let forkedFromDetails = null;
     if (conversation.forked_from) {
@@ -2053,7 +2059,7 @@ export const getConversationWithMeta = query({
     const handedOffFromDetails = await handoffLinkDetails(getDocOnce, conversation.handed_off_from_conversation_id);
     const handedOffToDetails = await handoffLinkDetails(getDocOnce, await handedOffToId(ctx, conversation));
 
-    const forkChildrenDetails = await getAccessibleForkChildren(ctx, authUserId, args.conversation_id);
+    const forkChildrenDetails = await getAccessibleForkChildren(ctx, authUserId, conversation._id);
 
     let forkSiblings: typeof forkChildrenDetails = [];
     if (conversation.forked_from) {
@@ -2107,7 +2113,7 @@ export const getConversationWithMeta = query({
     // conversationForAccess applies to the legacy field.
     const sideStableContext =
       access === "owner" || access === "team"
-        ? await getConvStableContext(ctx, args.conversation_id)
+        ? await getConvStableContext(ctx, conversation._id)
         : null;
 
     return sanitizeConvexObjectKeys({
@@ -13331,15 +13337,15 @@ export async function collectNavigableUserMessages(
 }
 
 export const getUserMessages = query({
-  args: { conversation_id: v.id("conversations"), share_token: v.optional(v.string()) },
+  args: { conversation_id: v.string(), share_token: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
-    const conv = await ctx.db.get(args.conversation_id);
+    const conv = await getConversationByRawId(ctx, args.conversation_id);
     if (!conv) return [];
     // Same admission as listMessages: owner, team, or share link. The message
     // browser must serve every viewer the transcript itself serves — including
     // unauthenticated visitors presenting a public share token.
     if ((await checkConversationAccess(ctx, userId, conv, args.share_token)) === "denied") return [];
-    return collectNavigableUserMessages(ctx.db, args.conversation_id);
+    return collectNavigableUserMessages(ctx.db, conv._id);
   },
 });

@@ -82,7 +82,7 @@ export const CHANGE_KIND_META: Record<OrgChange["kind"], { label: string; descri
   routine: { label: "Scheduled routines", describe: "Gives an agent a job it runs on a schedule." },
   project_meta: { label: "Project charters", describe: "Writes down what a project is for, who owns it, and how urgent it is." },
   adopt: { label: "Sessions adopted as standing agents", describe: "Makes an existing session the standing session of an agent." },
-  retire: { label: "Agents retired", describe: "Closes a seat; its sessions fall back to their owners." },
+  retire: { label: "Agents retired", describe: "Closes a seat; its area falls back to the role that covers it, else its sessions to their owners." },
   authority: { label: "Authority outside codecast", describe: "Lets an agent spend, publish, write or connect outside codecast, inside limits you set." },
   hire: { label: "Hires from a template", describe: "Hires an agent from a template: its answers, its release and the project it will lead." },
   upgrade: { label: "Template updates", describe: "Moves a hired agent to a newer release of its template." },

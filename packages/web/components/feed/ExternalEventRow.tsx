@@ -39,6 +39,8 @@ export type ExternalEventRowProps = {
   onNavigate?: (path: string) => void;
   /** Refs the surface already IS — a task page does not need a task pill. */
   omitRefs?: Array<keyof ExternalEventRef>;
+  /** The branch the surrounding page already names: not repeated per row. */
+  omitBranch?: string;
   className?: string;
 };
 
@@ -133,6 +135,7 @@ export function ExternalEventRow({
   showActor = true,
   onNavigate,
   omitRefs,
+  omitBranch,
   className = "",
 }: ExternalEventRowProps) {
   const now = useCoarseNow(60_000);
@@ -188,9 +191,12 @@ export function ExternalEventRow({
   }, [meta, title]);
 
   const branchValue = typeof meta.branch === "string" ? meta.branch : undefined;
-  const branch = branchValue && !title.toLowerCase().includes(branchValue.toLowerCase())
+  const branch = branchValue && !title.toLowerCase().includes(branchValue.toLowerCase()) && branchValue !== omitBranch
     ? branchValue
     : undefined;
+  // The same rule for the commit pill: a title that names the sha already
+  // ("updated to 8f7eb2d") has said it.
+  const commitSaid = !!event.refs.commit && title.toLowerCase().includes(shortSha(event.refs.commit.sha).toLowerCase());
 
   return (
     <div
@@ -287,7 +293,7 @@ export function ExternalEventRow({
                 #{event.refs.pr!.number}
               </Pill>
             ) : null}
-            {has("commit") ? (
+            {has("commit") && !commitSaid ? (
               <Pill
                 href={commitPath(event.refs.commit)}
                 onNavigate={onNavigate}

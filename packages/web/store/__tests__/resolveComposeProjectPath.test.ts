@@ -152,3 +152,41 @@ describe("bucketProjectPath", () => {
     ).toBe("/Users/j/code/old");
   });
 });
+
+describe("resolveComposeProjectPath with a room's team", () => {
+  // Ranked by use, as the server returns them: the first entry shared into a
+  // team is that team's most used repo.
+  const ranked = [
+    { path: "/Users/j/src/products", team_id: null },
+    { path: "/Users/j/src/codecast", team_id: "codecast-team" },
+    { path: "/Users/j/src/union-mobile", team_id: "union" },
+    { path: "/Users/j/src/union-web", team_id: "union" },
+  ];
+
+  it("starts a huddle agent in the team's most used shared repo, over the open conversation", () => {
+    expect(
+      resolveComposeProjectPath({
+        conversation: { projectPath: "/Users/j/src/products" },
+        recentProjects: ranked,
+        teamId: "union",
+      }),
+    ).toBe("/Users/j/src/union-mobile");
+  });
+
+  it("skips a team repo none of my machines have", () => {
+    expect(
+      resolveComposeProjectPath({
+        conversation: {},
+        recentProjects: ranked,
+        teamId: "union",
+        machineRoster: [{ local_project_roots: ["/Users/j/src/union-web"] }],
+      }),
+    ).toBe("/Users/j/src/union-web");
+  });
+
+  it("falls back to the ordinary default when the team has no shared repo", () => {
+    expect(
+      resolveComposeProjectPath({ conversation: { projectPath: "/Users/j/src/products" }, recentProjects: ranked, teamId: "other" }),
+    ).toBe("/Users/j/src/products");
+  });
+});

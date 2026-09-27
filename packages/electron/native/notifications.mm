@@ -33,8 +33,18 @@
 //                           Installs this addon as the center's delegate, which
 //                           also lets a notification show while the app is in
 //                           front (the default is to swallow those).
+//
+// It is also the app's one native addon, so the one window question Electron
+// cannot answer lives here too:
+//   windowFrame(windowId) → { x, y, width, height, onscreen } for any app's
+//                           window by CGWindowID (a "window:<id>:0" capture
+//                           source), in global points with a top-left origin,
+//                           the same space as Electron's screen module. null
+//                           when the window is gone. Bounds need no Screen
+//                           Recording grant; only titles do.
 #import <Foundation/Foundation.h>
 #import <UserNotifications/UserNotifications.h>
+#import <CoreGraphics/CoreGraphics.h>
 #include <node_api.h>
 #include <string>
 
@@ -200,12 +210,49 @@ static napi_value Post(napi_env env, napi_callback_info info) {
   return out;
 }
 
+static void SetNumber(napi_env env, napi_value obj, const char *key, double value) {
+  napi_value v;
+  napi_create_double(env, value, &v);
+  napi_set_named_property(env, obj, key, v);
+}
+
+static napi_value WindowFrame(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  if (argc < 1) return Null(env);
+  int64_t id = 0;
+  if (napi_get_value_int64(env, argv[0], &id) != napi_ok || id <= 0) return Null(env);
+
+  CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow, (CGWindowID)id);
+  if (!list) return Null(env);
+  napi_value out = Null(env);
+  if (CFArrayGetCount(list) > 0) {
+    NSDictionary *info = (__bridge NSDictionary *)CFArrayGetValueAtIndex(list, 0);
+    CGRect rect;
+    CFDictionaryRef bounds = (__bridge CFDictionaryRef)info[(__bridge NSString *)kCGWindowBounds];
+    if (bounds && CGRectMakeWithDictionaryRepresentation(bounds, &rect)) {
+      napi_create_object(env, &out);
+      SetNumber(env, out, "x", rect.origin.x);
+      SetNumber(env, out, "y", rect.origin.y);
+      SetNumber(env, out, "width", rect.size.width);
+      SetNumber(env, out, "height", rect.size.height);
+      napi_value onscreen;
+      napi_get_boolean(env, [info[(__bridge NSString *)kCGWindowIsOnscreen] boolValue], &onscreen);
+      napi_set_named_property(env, out, "onscreen", onscreen);
+    }
+  }
+  CFRelease(list);
+  return out;
+}
+
 static napi_value Init(napi_env env, napi_value exports) {
   napi_property_descriptor props[] = {
       {"authorizationStatus", nullptr, AuthorizationStatus, nullptr, nullptr, nullptr, napi_enumerable, nullptr},
       {"requestAuthorization", nullptr, RequestAuthorization, nullptr, nullptr, nullptr, napi_enumerable, nullptr},
       {"post", nullptr, Post, nullptr, nullptr, nullptr, napi_enumerable, nullptr},
       {"onActivate", nullptr, OnActivate, nullptr, nullptr, nullptr, napi_enumerable, nullptr},
+      {"windowFrame", nullptr, WindowFrame, nullptr, nullptr, nullptr, napi_enumerable, nullptr},
   };
   napi_define_properties(env, exports, sizeof(props) / sizeof(props[0]), props);
   return exports;

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { describe, it, test, expect, beforeEach, afterEach } from "bun:test";
 import * as fs from "fs";
 import * as path from "path";
 import { isolateCodecastDir, type IsolatedCodecastDir } from "./test-helpers/codecastDir.js";
@@ -10,6 +10,7 @@ import {
   markClaudeSessionEnded,
   markClaudeSessionLive,
   onLiveClaudeDrained,
+  unstampedClaudeHolders,
   reconcileLiveClaudeSessions,
   resetLiveClaudeGate,
   seedLiveClaudeSessions,
@@ -137,5 +138,27 @@ describe("live claude gate on the OAuth refresh", () => {
     expect(await seedLiveClaudeSessions()).toEqual([]);
     fs.writeFileSync(gateFile(), JSON.stringify({ sessions: [{ nope: 1 }, { id: "" }, { id: "ok" }] }));
     expect(await seedLiveClaudeSessions()).toEqual([{ id: "ok" }]);
+  });
+});
+
+describe("unstampedClaudeHolders", () => {
+  const row = (pid: number, ppid: number, command: string, uid = 501) => ({ pid, ppid, uid, command });
+  const procs = [
+    row(100, 1, "tmux new -s work"),
+    row(101, 100, "-zsh"),
+    row(102, 101, "claude"),
+    row(103, 102, "/Users/d/.local/share/claude/versions/2.1.240 -p summarize"),
+    row(200, 100, "-zsh"),
+    row(201, 200, "/Users/d/.codecast/bin/claude --resume abc --permission-mode bypassPermissions"),
+    row(300, 1, "node /opt/homebrew/bin/claude", 502),
+    row(400, 1, "vim claude.md"),
+  ];
+
+  test("counts a claude started by hand and nothing a stamped pane already covers", () => {
+    expect(unstampedClaudeHolders(procs, new Set([200]), 501)).toEqual([{ id: "pid:102" }]);
+  });
+
+  test("counts the codecast claude too when its pane is not stamped", () => {
+    expect(unstampedClaudeHolders(procs, new Set(), 501).map((s) => s.id)).toEqual(["pid:102", "pid:201"]);
   });
 });

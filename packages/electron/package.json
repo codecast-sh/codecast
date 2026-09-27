@@ -42,6 +42,7 @@
       "osPermissions.js",
       "computerPermissions.js",
       "browserPanes.js",
+      "shareCursors.js",
       "shortcutSettings.js",
       "updaterNet.js",
       "preload.js",

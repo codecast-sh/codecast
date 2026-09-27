@@ -404,6 +404,17 @@ export function isManagedTmuxName(name: string): boolean {
 }
 
 /**
+ * True when codecast created this tmux session and may destroy it whole: the
+ * managed agent panes, workflow panes (`wf-`), and the wrapper's `codecast-`
+ * session. Anything else is a terminal the user made, which can still host an
+ * agent codecast tracks (a `claude` started by hand inside the user's own
+ * tmux) — that agent's process tree is ours to stop, the session is not.
+ */
+export function isCodecastCreatedTmuxName(name: string): boolean {
+  return isManagedTmuxName(name) || name.startsWith("wf-") || name.startsWith("codecast-");
+}
+
+/**
  * Pick the auto-trim message count for reconstituting a Claude session from an
  * export. Returns undefined when the export already fits comfortably in
  * Claude's context window.

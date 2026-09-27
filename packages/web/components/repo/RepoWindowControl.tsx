@@ -38,8 +38,12 @@ export function RepoWindowControl() {
   }
 
   return (
-    <button type="button" onClick={() => openAsPage(here)} className={CONTROL} title="Open as a page in your browser">
+    // Named, like its twin: the page as it stands (the view, the file, the
+    // lines) opened in the person's browser, where it can be bookmarked or
+    // handed on.
+    <button type="button" onClick={() => openAsPage(here)} className={CONTROL} title="Open this exact page in your browser">
       <ExternalLink className="w-3 h-3" />
+      <span className="repo-github-label">Open in browser</span>
     </button>
   );
 }

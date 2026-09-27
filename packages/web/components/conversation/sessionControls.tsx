@@ -5,6 +5,7 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { isMac, hasOpenModal, altChordDirection } from "../../shortcuts";
 import { useConvexSync } from "../../hooks/useConvexSync";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
+import { useRecentProjectsFeed } from "../../hooks/useRecentProjectsFeed";
 import { useShallow } from "zustand/react/shallow";
 import { createPortal } from "react-dom";
 import { AGENT_LAUNCH_OPTIONS, type ConvexAgentType } from "@codecast/shared/contracts";
@@ -100,9 +101,8 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
   // backend timeout (the 15 s db-wait cap under saturation) degrades to the
   // last answer instead of dropping the whole new-session header into its
   // ErrorBoundary.
-  const { data: freshProjects } = useQueryNoThrow(api.users.getRecentProjectPaths, { limit: 50 });
+  const freshProjects = useRecentProjectsFeed();
   const cachedProjects = useInboxStore((s) => s.recentProjects);
-  const setRecentProjects = useInboxStore((s) => s.setRecentProjects);
   const { user: currentUser } = useCurrentUser();
   // Select stable primitive keys—not session objects, which are replaced on
   // heartbeats. This avoids both the useSyncExternalStore allocation loop and
@@ -294,7 +294,6 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
     [recentProjects],
   );
 
-  useConvexSync(freshProjects, setRecentProjects);
 
   const dedupedRecents = useMemo(
     () => dedupeProjectsByRepoName(recentProjects, routedDevice, currentPath),
