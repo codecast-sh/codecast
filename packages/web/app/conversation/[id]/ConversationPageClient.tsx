@@ -263,7 +263,7 @@ export default function ConversationPage() {
   // snapshots with Object.is, and a fresh object per read never matches, which
   // re-renders on every commit until React throws "Maximum update depth".
   const cached = useInboxStore((s): "own" | "foreign" | null => {
-    if (!treatAsAuthed || shareToken || !isConvexId(id)) return null;
+    if (!treatAsAuthed || shareToken) return null;
     const sess = s.sessions[id];
     if (!sess) return null;
     const me = s.currentUser?._id as string | undefined;
@@ -271,7 +271,11 @@ export default function ConversationPage() {
   });
 
   if (!id) return <NotFoundView />;
-  if (effective === undefined) {
+  // A local stub (a new session not yet created on the server) is only this
+  // store's to answer: the server resolves it to not_found, so its cached row
+  // wins whatever the server said.
+  const localStub = cached !== null && !isConvexId(id);
+  if (effective === undefined || localStub) {
     if (cached) {
       return (
         <RedirectToInbox
