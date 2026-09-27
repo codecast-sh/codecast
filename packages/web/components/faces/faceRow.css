@@ -208,6 +208,84 @@
   border-color: transparent;
   box-shadow: none;
 }
+/* ── The stack ──────────────────────────────────────────────────────────────
+ *
+ * On a call, the faces off it fold into one overlapped stack past the track:
+ * each tucks 60% under the one before, wears no marks, and a press on any of
+ * them spreads the team back out (FaceRow). Spread, the fold after the last
+ * face puts them back. The float's paper ring already parts one stacked
+ * circle from the next; the header draws its own background as the ring. */
+.face-row .face-seat[data-stacked] + .face-seat[data-stacked] {
+  margin-left: calc(var(--face) * -0.6 - var(--face-gap));
+}
+.face-row[data-density="bar"] .face-seat {
+  transition: opacity 180ms ease, margin-left 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.face-row[data-density="bar"] .face-seat[data-stacked] .face {
+  box-shadow: 0 0 0 2px var(--sol-bg);
+}
+.face-seat[data-stacked] :is(.face-pres, .face-bot, .face-unread, .face-ask, .face-mute, .face-name) {
+  display: none;
+}
+.face-row[data-stacked]:has(.face-seat[data-stacked]:hover) .face-seat[data-stacked] .face {
+  transform: translateY(-2px);
+}
+.face-row-stack-count {
+  flex: none;
+  min-width: calc(var(--face) * 0.6);
+  height: calc(var(--face) * 0.6);
+  margin-left: calc(var(--face) * -0.2 - var(--face-gap));
+  padding: 0 6px;
+  position: relative;
+  z-index: 11;
+  border: 0;
+  border-radius: 999px;
+  background: var(--sol-bg-alt);
+  box-shadow: 0 0 0 2px var(--sol-bg), 0 0 0 3px color-mix(in srgb, var(--sol-text) 18%, transparent);
+  color: var(--sol-text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.face-row[data-density="float"] .face-row-stack-count {
+  font-size: 13px;
+  background: linear-gradient(180deg, var(--paper) 0%, var(--paper-deep) 100%);
+  box-shadow: 0 0 0 1px var(--hairline-strong), 0 2px 6px rgba(20, 18, 14, 0.2);
+  color: var(--ink);
+}
+.face-row-fold {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(var(--face) * 0.6);
+  height: calc(var(--face) * 0.6);
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--sol-text) 8%, transparent);
+  color: var(--sol-text-muted);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.face-row-fold:hover {
+  background: color-mix(in srgb, var(--sol-text) 14%, transparent);
+  color: var(--sol-text);
+}
+.face-row-fold svg {
+  width: 55%;
+  height: 55%;
+}
+.face-row[data-density="float"] .face-row-fold {
+  background: linear-gradient(180deg, var(--paper) 0%, var(--paper-deep) 100%);
+  box-shadow: 0 0 0 1px var(--hairline-strong), 0 2px 6px rgba(20, 18, 14, 0.2);
+  color: var(--ink-soft);
+}
+.face-row[data-density="float"] .face-row-fold:hover {
+  color: var(--ink);
+}
+
 /* Off the track: the first face past the call keeps its distance. */
 .face-row-strip[data-track] + .face-seat {
   margin-left: 8px;
