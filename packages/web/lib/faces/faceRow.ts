@@ -890,3 +890,10 @@ export function isInHuddle(memberId: string, row: FaceRow = readFaceRow()): bool
 export function roomHeldAsBurst(roomKey: string, row: FaceRow = readFaceRow()): boolean {
   return row.room === roomKey && row.links.some((l) => BURST_LINKS.has(l.kind));
 }
+
+/** The call the viewer is on, when the engaged room is a call and not a
+ *  burst: the room an "Add to call" rings people into, and the row folds the
+ *  rest of the team away while it lasts. */
+export function callRoomOf(row: FaceRow = readFaceRow()): string | null {
+  return row.room && !roomHeldAsBurst(row.room, row) ? row.room : null;
+}

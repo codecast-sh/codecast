@@ -71,8 +71,8 @@ export const CARD_CLOSE_MS = 220;
  *  changes (a face arrives, the strip appears, the card opens).
  *
  *  THE ROW IS MEASURED. `measured` is the row element's own box, faces,
- *  bridges, the strip and the call's track included; the arithmetic is only
- *  the floor for the frame before the first measure. A width summed from
+ *  bridges, the strip, the call's track and the stack included; the
+ *  arithmetic stands in only for the frame before the first measure. A width summed from
  *  constants beside a stylesheet that drew something wider clipped End and
  *  Join off the window's right edge. */
 export function floatingRowSize(
@@ -90,7 +90,9 @@ export function floatingRowSize(
   // "jumping around like crazy", 2026-09-23). The old overlay held
   // max(row, CHROME_WIDTH) for the same reason. Only the height follows the
   // card, and it grows down, away from the faces.
-  const width = Math.max(row.width, Math.ceil(measured.width), FACE_CARD_WIDTH + m.pad * 2);
+  // Once measured, the measure alone: a stacked row is narrower than its sum.
+  const drawn = measured.width > 0 ? Math.ceil(measured.width) : row.width;
+  const width = Math.max(drawn, FACE_CARD_WIDTH + m.pad * 2);
   const height = Math.max(row.height, Math.ceil(measured.height) + ROW_GAP + NAME_HEIGHT);
   if (card.height === 0) return { width, height };
   // The card's band is under the name band (faceRow.css `.face-row-below`).

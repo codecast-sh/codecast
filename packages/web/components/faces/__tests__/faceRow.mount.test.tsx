@@ -51,6 +51,7 @@ mock.module("../../../hooks/useChatSync", () => ({
 // the same subscribe/snapshot pair, fed by the test instead of LiveKit.
 const realCallManager = { ...(await import("../../../lib/calls/callManager")) };
 let tiles: any[] = [];
+const rungInto: Array<[string, string[]]> = [];
 const tileSubs = new Set<() => void>();
 function setTiles(next: any[]) {
   tiles = next;
@@ -58,6 +59,10 @@ function setTiles(next: any[]) {
 }
 mock.module("../../../lib/calls/callManager", () => ({
   ...realCallManager,
+  ringInto: async (roomKey: string, ids: string[]) => {
+    rungInto.push([roomKey, ids]);
+    return [];
+  },
   getCallTiles: () => tiles,
   subscribeCallTiles: (cb: () => void) => {
     tileSubs.add(cb);
@@ -612,6 +617,67 @@ describe("the engagement card renders the model's card", () => {
     expect(h.q(".face-row > .face-row-strip > .engagement-card")).not.toBeNull();
     // Beside the faces, never under them: under a face is that face's card.
     expect(h.q(".face-row-below")).toBeNull();
+  });
+
+  test("on a call the rest of the team folds into a stack that spreads and folds back", async () => {
+    const card: FaceCard = { kind: "live", roomKey: ROOM, title: "Huddle", end: true, mute: true, muted: false, camera: false, cameraOn: false, words: null, hearing: null };
+    const row = rowOf(
+      [
+        me(),
+        entry(ANN, "Ann", { state: "live-with-me", tier: "linked" }),
+        entry(BO, "Bo"),
+        entry("u-cy", "Cy", { state: "idle", tier: "idle" }),
+      ],
+      [link(ANN, "call")],
+    );
+    const h = await mount(
+      <FaceRow row={row} density="bar" viewerId={ME}>
+        <EngagementCard card={card} density="bar" />
+      </FaceRow>,
+    );
+    const stackedIds = () => h.all(".face-seat[data-stacked]").map((el) => (el as HTMLElement).dataset.faceId);
+    expect(h.q(".face-row")!.getAttribute("data-stacked")).toBe("1");
+    expect(stackedIds()).toEqual([BO, "u-cy"]);
+    // A press on the stack spreads it; it opens no card.
+    await h.click(h.circle(BO));
+    expect(stackedIds()).toEqual([]);
+    expect(h.q("[data-member-card]")).toBeNull();
+    // Spread, each face is an ordinary face again, and the fold closes it.
+    await h.click(h.circle(BO));
+    expect(h.q("[data-member-card]")).not.toBeNull();
+    await h.click(h.q(".face-row-fold")!);
+    expect(stackedIds()).toEqual([BO, "u-cy"]);
+    expect(h.q("[data-member-card]")).toBeNull();
+    // One face off the call is not a stack.
+    await h.draw(
+      <FaceRow row={rowOf(row.entries.slice(0, 3), row.links)} density="bar" viewerId={ME}>
+        <EngagementCard card={card} density="bar" />
+      </FaceRow>,
+    );
+    expect(stackedIds()).toEqual([]);
+  });
+
+  test("on a call, a teammate's card adds them to it", async () => {
+    const { fakeFaceRowInput } = await import("../../../lib/faces/faceRow");
+    const room = "dm:u-ann:u-me";
+    fakeFaceRowInput({
+      input: {
+        call: { phase: "connected", roomKey: room, muted: false, micDenied: false, camera: false, speaking: [] },
+        occupancy: { [room]: [{ user_id: ME }, { user_id: ANN }] },
+      } as any,
+    });
+    try {
+      const h = await mount(bar(rowOf([me(), entry(ANN, "Ann", { state: "live-with-me", tier: "linked" }), entry(BO, "Bo")], [link(ANN, "call")])));
+      await h.click(h.circle(BO));
+      const add = h.q("[data-member-card] .face-action-ring")!;
+      expect(add.textContent).toBe("Add to call");
+      rungInto.length = 0;
+      await h.click(add);
+      await new Promise((r) => setTimeout(r, 0));
+      expect(rungInto).toEqual([[room, [BO]]]);
+    } finally {
+      fakeFaceRowInput(null);
+    }
   });
 
   test("the controls sit on the call: right after the linked faces, on one track, with the rest of the team after", async () => {
