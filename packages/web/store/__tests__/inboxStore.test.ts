@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { awaitTrackedSessionCreateResult, computeInboxVisible, computeNewDividerIndex, dropLatchedFeedHasMore, feedPagePersistence, findReusableBlankSession, getSessionRenderKey, hydrateMergeValue, isConvexId, isSessionDismissed, isSessionStashed, orchestrationGroupLabelOf, PENDING_SEND_PRUNE_GRACE_MS, pendingSendConsumed, reconcilePendingSendForSession, resolveAssigneeInfo, resolveSessionAuthor, resolveShowOld, seedLiveInboxIdsFromCache, seedTeamInboxIdsFromCache, selectNavCollapsed, selectSessionRailOpen, SessionCreatePendingError, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
+import { awaitTrackedSessionCreateResult, computeInboxVisible, isFavoriteInStore, computeNewDividerIndex, dropLatchedFeedHasMore, feedPagePersistence, findReusableBlankSession, getSessionRenderKey, hydrateMergeValue, isConvexId, isSessionDismissed, isSessionStashed, orchestrationGroupLabelOf, PENDING_SEND_PRUNE_GRACE_MS, pendingSendConsumed, reconcilePendingSendForSession, resolveAssigneeInfo, resolveSessionAuthor, resolveShowOld, seedLiveInboxIdsFromCache, seedTeamInboxIdsFromCache, selectNavCollapsed, selectSessionRailOpen, SessionCreatePendingError, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
 import { convHasPendingSend, pendingRowsUnsettled } from "../inboxOverlays";
 import { _resetSnapshotLedger } from "../idbCollectionDiff";
 import { isPersistedStoreKey } from "../idbCache";
@@ -3346,6 +3346,51 @@ describe("inboxStore local-first state mutations", () => {
     s = useInboxStore.getState();
     expect(s.conversations[CID]?.is_favorite).toBe(false);
     expect((s.favorites as any[]).some((f) => f._id === CID)).toBe(false);
+  });
+
+  it("toggleFavorite unfavorites when the conversation row is an opened-page stub without the flag", () => {
+    // Opening a conversation seeds conversations[id] as { _id, is_own }; the star
+    // is lit from the session row and the favorites list.
+    useInboxStore.setState({
+      sessions: { [CID]: { ...baseSession, _id: CID, is_favorite: true } as any },
+      conversations: { [CID]: { _id: CID, is_own: true } as any },
+      favorites: [{ _id: CID }],
+    });
+    useInboxStore.getState().toggleFavorite(CID);
+    const s = useInboxStore.getState();
+    expect(isFavoriteInStore(s, CID)).toBe(false);
+    expect((s.favorites as any[]).some((f) => f._id === CID)).toBe(false);
+  });
+
+  it("toggleFavorite follows the live session row over a stale page-visit copy", () => {
+    // Opened while unfavorited, then favorited on another device: the session
+    // row is live, the conversations row still holds the old visit.
+    useInboxStore.setState({
+      sessions: { [CID]: { ...baseSession, _id: CID, is_favorite: true } as any },
+      conversations: { [CID]: { _id: CID, is_favorite: false } as any },
+      favorites: [{ _id: CID }],
+    });
+    useInboxStore.getState().toggleFavorite(CID);
+    expect(isFavoriteInStore(useInboxStore.getState(), CID)).toBe(false);
+  });
+
+  it("a favorites push that predates an in-flight unfavorite cannot relight the star", () => {
+    useInboxStore.setState({
+      sessions: { [CID]: { ...baseSession, _id: CID, is_favorite: true } as any },
+      conversations: { [CID]: { _id: CID, is_favorite: true } as any },
+      favorites: [{ _id: CID }],
+    });
+    useInboxStore.getState().toggleFavorite(CID);
+    // listFavorites re-runs on a heartbeat before the patch commits.
+    useInboxStore.getState().syncTable("favorites", [{ _id: CID }]);
+    let s = useInboxStore.getState();
+    expect((s.favorites as any[]).some((f) => f._id === CID)).toBe(false);
+    expect(isFavoriteInStore(s, CID)).toBe(false);
+    // And an in-flight favorite shows before the server lists it.
+    useInboxStore.getState().toggleFavorite(CID);
+    useInboxStore.getState().syncTable("favorites", []);
+    s = useInboxStore.getState();
+    expect((s.favorites as any[]).some((f) => f._id === CID)).toBe(true);
   });
 
   it("setPrivacy updates local privacy and dispatches the setPrivacy side-effect", () => {
