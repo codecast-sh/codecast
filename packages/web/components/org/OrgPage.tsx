@@ -568,8 +568,8 @@ export function OrgPageInner() {
     else if (changeId) askFocus("change", changeId);
     else setGraphFocus(null);
   }, [proposal, tree, setFocusChangeId, focusNode, askFocus]);
-  /** A paused chief holds every line sent to it until resumed (orgRoles
-   *  wakeIsHeld); the composer says so and this is its Resume. */
+  /** A paused chief's triggers hold until resumed; the composer says so and
+   *  this is its Resume. */
   const resumeChief = useCallback((roleId: string) => updateRole(roleId, { status: "active" }), [updateRole]);
   // Staff the chief (S16). `seat` says what to do with the workspace's existing
   // standing agent: seat it (default, nothing restarts) or start fresh and

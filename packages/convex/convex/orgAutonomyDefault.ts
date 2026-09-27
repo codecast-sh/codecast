@@ -2,7 +2,7 @@ import { v } from "convex/values";
 import { internalMutation, internalQuery } from "./functions";
 import type { Id } from "./_generated/dataModel";
 import { CHIEF_OF_STAFF_HANDLE } from "./lib/orgAccess";
-import { roleStartsOnItsOwn } from "./orgEvents";
+import { roleStartsOnItsOwn } from "./lib/orgCaps";
 import { trustForSwitch } from "@codecast/shared/contracts/roleAutonomy";
 
 // One switch instead of trust stages (docs/architecture/org-staffing.md

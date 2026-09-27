@@ -1353,8 +1353,9 @@ export default defineSchema({
       wakes: v.number(),
       tokens: v.number(),
     })),
-    // How long fold-kind outbox rows wait for company before a wake ships.
-    coalesce_ms: v.optional(v.number()),
+    // When the role last read its brief from its own session (orgRoles
+    // .markBriefRead): `cast brief` shows what changed since (org-staffing.md S25).
+    checked_at: v.optional(v.number()),
     // The standing agent retired when this seat was filled with a fresh
     // session (org-staffing.md S16): its thread is kept and linked from the
     // role page, so a workspace never ends with two root agents.
@@ -1365,10 +1366,6 @@ export default defineSchema({
     // The workflow this scope's tasks run on (the-line.md L2); absent = the
     // shipped "line" template. Human only, logged like a scope edit.
     line_workflow_slug: v.optional(v.string()),
-    last_wake_at: v.optional(v.number()),
-    // The fact horizon the last delivered frame covered (a change_log seq,
-    // i.e. a timestamp); the next frame diffs against it.
-    last_frame_seq: v.optional(v.number()),
     // People who report to the role (org-roles-run-work.md R6): the role keeps
     // their goals in its brief, reads their sessions against those goals at
     // every wake, and tells them once a day at most when a high goal stalls.
@@ -3722,51 +3719,6 @@ export default defineSchema({
   // notifications aggregates instead of buzzing the phone N times. Rows whose
   // notification is read (or superseded away) before the flush are dropped.
   // Rows are deleted on send; the table only ever holds in-flight pushes.
-  // ── Role wake rail (org-roles-standing.md T3) ──
-  // Every event a standing role should hear about lands here first; a per
-  // role flush folds the due rows into ONE frame (a pending message into the
-  // role's session). Modeled on push_outbox: rows accumulate, a scheduled
-  // flush ships them together, and the log below records what shipped.
-  role_wake_outbox: defineTable({
-    role_id: v.id("org_roles"),
-    // immediate: flush now. fold: wait coalesce_ms for company. passive: a
-    // fact for the next frame, never a wake on its own.
-    kind: v.union(v.literal("immediate"), v.literal("fold"), v.literal("passive")),
-    // One line for the frame's "Why you are awake" section.
-    cause: v.string(),
-    ref: v.optional(v.object({ table: v.string(), id: v.string(), short_id: v.optional(v.string()) })),
-    // How many events folded into this row: a fold or passive row is one per
-    // (table, id) per window (orgEvents.enqueueRoleEvent), and a work item
-    // moved seven times shows once, with this count. Absent means one.
-    count: v.optional(v.number()),
-    // The session whose write produced the row (loop rules key on it).
-    actor_conversation_id: v.optional(v.id("conversations")),
-    // A person's message already enqueued into the standing session: the
-    // flush folds the frame into that row instead of adding a second turn.
-    pending_message_id: v.optional(v.id("pending_messages")),
-    created_at: v.number(),
-    due_at: v.number(),
-    flushed_at: v.optional(v.number()),
-    // Set by the first flush a gate (cap, pause) turned away; the frame that
-    // finally carries the row marks it "(held)".
-    held_at: v.optional(v.number()),
-    wake_id: v.optional(v.id("role_wakes")),
-  })
-    .index("by_role_flushed", ["role_id", "flushed_at"])
-    .index("by_due", ["flushed_at", "due_at"]),
-
-  role_wakes: defineTable({
-    role_id: v.id("org_roles"),
-    short_id: v.string(), // "rw-N"
-    causes: v.array(v.string()),
-    // delivered: a frame went out. dropped: nothing new, rows cleared. held:
-    // a cap or a pause kept the rows waiting.
-    status: v.union(v.literal("delivered"), v.literal("dropped"), v.literal("held")),
-    frame_chars: v.number(),
-    pending_message_id: v.optional(v.id("pending_messages")),
-    created_at: v.number(),
-  }).index("by_role_created", ["role_id", "created_at"]),
-
   push_outbox: defineTable({
     user_id: v.id("users"),
     notification_id: v.optional(v.id("notifications")),
@@ -4396,6 +4348,8 @@ export default defineSchema({
     before: v.object({
       title: v.string(),
       prompt: v.string(),
+      // The status as it stood: a verb (pause, resume, run now, cancel) changes only this.
+      status: v.optional(v.string()),
       schedule_type: v.union(v.literal("once"), v.literal("recurring"), v.literal("event")),
       run_at: v.optional(v.number()),
       interval_ms: v.optional(v.number()),

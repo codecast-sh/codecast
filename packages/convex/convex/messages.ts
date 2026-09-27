@@ -1,6 +1,6 @@
 import { stripPastedContent } from "@codecast/shared/contracts";
 import { mutation, query, internalMutation, type MutationCtx, type QueryCtx } from "./functions";
-import { countersFor } from "./orgEvents";
+import { countersFor } from "./lib/orgCaps";
 import { calibrationSlot } from "./usageCalibration";
 import { weightedTokens } from "@codecast/shared/contracts";
 import { linkLocalCommitToConversation } from "./gitActivity";

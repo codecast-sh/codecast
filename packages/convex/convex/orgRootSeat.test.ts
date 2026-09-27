@@ -43,8 +43,6 @@ function world() {
       { _id: "conv-d", user_id: ME, acting_user_id: BOT_T, anchor_id: "anchor-d", session_id: "s-d", short_id: "jxancd1", status: "completed", agent_type: "claude_code", updated_at: NOW, message_count: 1, team_id: TEAM },
     ],
     agent_tasks: [],
-    role_wake_outbox: [],
-    role_wakes: [],
     pending_messages: [],
     managed_sessions: [],
     session_owners: [],

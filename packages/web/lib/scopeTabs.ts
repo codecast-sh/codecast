@@ -1,6 +1,6 @@
-import { BellRing, CheckSquare, Compass, FileText, Layers, ListChecks, MessageCircleQuestionMark, Rss, ScrollText, Settings2, Terminal, Workflow } from "lucide-react";
+import { AlarmClock, CheckSquare, Compass, FileText, Layers, ListChecks, MessageCircleQuestionMark, Rss, ScrollText, Settings2, Terminal, Workflow } from "lucide-react";
 
-export type ScopeTabKey = "scope" | "feed" | "tasks" | "line" | "plans" | "docs" | "sessions" | "decisions" | "brief" | "charter" | "wakes" | "settings";
+export type ScopeTabKey = "scope" | "feed" | "tasks" | "line" | "plans" | "docs" | "sessions" | "decisions" | "brief" | "charter" | "triggers" | "settings";
 
 export const SCOPE_TABS: { key: ScopeTabKey; label: string; icon: any; roleOnly?: boolean }[] = [
   { key: "scope", label: "Scope", icon: Compass, roleOnly: true },
@@ -14,7 +14,8 @@ export const SCOPE_TABS: { key: ScopeTabKey; label: string; icon: any; roleOnly?
   { key: "decisions", label: "Decisions", icon: MessageCircleQuestionMark },
   { key: "brief", label: "Brief", icon: ScrollText, roleOnly: true },
   { key: "charter", label: "Charter", icon: CheckSquare, roleOnly: true },
-  { key: "wakes", label: "Wakes", icon: BellRing, roleOnly: true },
+  // The role's triggers (org-staffing.md S25): its scheduled check and anything else armed on its seat.
+  { key: "triggers", label: "Triggers", icon: AlarmClock, roleOnly: true },
   { key: "settings", label: "Settings", icon: Settings2, roleOnly: true },
 ];
 

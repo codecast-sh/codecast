@@ -3280,6 +3280,13 @@ pre[class*="language-"] {
   border-radius: 4px;
   margin: 4px 0;
 }
+/* Scope page header: in a narrow pane the buttons drop to icons and the
+   reports-to line (also on the Settings tab) steps aside, so the name keeps
+   its width. */
+.scope-head-cq { container-type: inline-size; }
+@container (max-width: 560px) {
+  .scope-head-cq .scope-head-wide { display: none; }
+}
 /* Right-panel tabs: drop labels to icons when the pane is narrow. */
 .vault-panel-cq { container-type: inline-size; }
 @container (max-width: 320px) {

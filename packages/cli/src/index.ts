@@ -72,7 +72,7 @@ import {
   renderFencedPlanRecord,
   renderFencedPlanTasks,
 } from "@codecast/shared/tasks";
-import { describeDates, describeDatesFull, formatDateSmart, wasEdited } from "@codecast/shared/time";
+import { describeDates, describeDatesFull, formatDateSmart, relTimeShort, wasEdited } from "@codecast/shared/time";
 import { describeShareSpan, formatDateRange, formatSessionCount, summarizeShareImpact, type PathShareSummary } from "@codecast/shared/team";
 import { cliFetch, cliFetchRead, cliSearchRequest } from "./cliHttp.js";
 import type { OrgTarget } from "./orgTarget.js";
@@ -13448,14 +13448,23 @@ roleGroup
     const held = (brief.role.authority ?? []).filter((g: any) => !g.expires_at || g.expires_at > Date.now());
     console.log(`  ${c.dim}authority outside codecast: ${held.length ? held.map((g: any) => `${g.kind} (${g.label}${g.expires_at ? `, until ${formatDateSmart(g.expires_at)}` : ""})`).join("; ") : "none granted"}${c.reset}`);
     console.log(`  ${c.dim}used today, of its limits: ${u.wakes} of ${u.caps.wakes_per_day} wakes · ${u.hands} of ${u.caps.hands_per_day} hands · ${u.tokens} of ${u.caps.tokens_per_day} tokens${u.uncounted_sessions ? ` · tokens not counted for ${u.uncounted_sessions} session${u.uncounted_sessions === 1 ? "" : "s"}` : ""}${c.reset}`);
-    console.log(`  ${c.dim}standing session: ${brief.role.standing_short_id ?? "none"}${brief.role.last_wake_at ? ` · last wake ${formatDateSmart(brief.role.last_wake_at)}` : ""}${c.reset}`);
+    console.log(`  ${c.dim}standing session: ${brief.role.standing_short_id ?? "none"}${routineLine(brief.role.routine)}${c.reset}`);
     const { briefHandLine } = await import("./briefLines.js");
     for (const h of brief.facts.hands) console.log(briefHandLine(h));
   });
 
+// The role's routine (org-staffing.md S25): when it checks its area next.
+function routineLine(r: { short_id: string | null; status: string; run_at: number | null } | null | undefined): string {
+  if (!r) return " · no trigger yet";
+  if (r.status === "paused") return ` · check paused (${r.short_id ?? "trigger"})`;
+  if (!r.run_at) return "";
+  const ms = r.run_at - Date.now();
+  return ` · next check ${ms > 60_000 ? `in ${relTimeShort(Date.now() - ms)}` : "due now"} (${r.short_id ?? "trigger"})`;
+}
+
 roleGroup
   .command("wake")
-  .description("Send a message to a role's standing session (an immediate wake)")
+  .description("Send a message to a role's standing session")
   .argument("<handle>", "@handle, or-N, or id")
   .argument("<message>", stdinText("What to say"))
   .option("--team <name|id>", "Team workspace")
@@ -13613,25 +13622,6 @@ roleGroup
     printRoleLine(result);
   });
 
-roleGroup
-  .command("wakes")
-  .description("The wake log: what woke the role, what was delivered, held or dropped")
-  .argument("<handle>", "@handle, or-N, or id")
-  .option("-n <count>", "How many (default 20)", parseInt)
-  .option("--team <name|id>", "Team workspace")
-  .option("--json", "Machine-readable output")
-  .action(async (handle: string, options: any) => {
-    const role_id = await resolveRoleId(handle, options.team);
-    const rows = await cliPost("/cli/role/wakes", { role_id, limit: options.n ?? 20 });
-    if (options.json) { console.log(JSON.stringify(rows, null, 2)); return; }
-    if (!rows.length) { console.log(`${c.dim}No wakes yet.${c.reset}`); return; }
-    const color: Record<string, string> = { delivered: c.green, dropped: c.dim, held: c.yellow };
-    for (const w of rows) {
-      console.log(`  ${c.dim}${formatDateSmart(w.created_at)}${c.reset} ${w.short_id} ${color[w.status] ?? ""}${w.status}${c.reset} ${c.dim}· ${w.frame_chars} chars${c.reset}`);
-      for (const cause of w.causes) console.log(`      ${cause}`);
-    }
-  });
-
 // cast brief [<handle>] — facts + narrative. Inside a role's session, its own.
 const briefCmd = program
   .command("brief")
@@ -13647,18 +13637,27 @@ const briefCmd = program
       if (!self) { console.error("Not inside a role's session: pass a handle (cast brief @handle)"); process.exit(1); }
       role_id = self.role_id;
     }
-    const brief = await cliPost("/cli/brief/get", { role_id });
+    // From the role's own session the read moves the brief's clock (S25):
+    // the next read shows what changed since this one.
+    const brief = await cliPost("/cli/brief/get", { role_id, from_session: callingSession() });
     if (!brief) { console.error("Role not found"); process.exit(1); }
     if (options.json) { console.log(JSON.stringify(brief, null, 2)); return; }
     const f = brief.facts;
     printRoleLine(brief.role);
     const scope = [...f.scope.projects.map((p: any) => `project ${p.title}`), ...f.scope.plans.map((p: any) => `plan ${p.short_id} ${p.title}`)];
     console.log(`  ${c.dim}scope: ${scope.length ? scope.join(", ") : "whole workspace"}${c.reset}`);
+    const held = (brief.role.authority ?? []).filter((g: any) => !g.expires_at || g.expires_at > Date.now());
+    console.log(`  ${c.dim}authority outside codecast: ${held.length ? held.map((g: any) => `${g.kind} (${g.label}${g.expires_at ? `, until ${formatDateSmart(g.expires_at)}` : ""})`).join("; ") : "none granted"}${c.reset}`);
+    console.log(`  ${c.dim}standing session: ${brief.role.standing_short_id ?? "none"}${routineLine(brief.role.routine)}${c.reset}`);
     const st = Object.entries(f.tasks.by_status).filter(([, n]) => (n as number) > 0).map(([k, n]) => `${n} ${k}`).join(", ");
     const pr = Object.entries(f.tasks.by_priority).filter(([, n]) => (n as number) > 0).map(([k, n]) => `${n} ${k}`).join(", ");
     console.log(`  tasks: ${f.tasks.total} in scope, ${f.tasks.open} open${st ? ` · ${st}` : ""}${pr ? ` · priority ${pr}` : ""}`);
     for (const p of f.plans) console.log(`  plan ${p.short_id} ${p.title}: ${p.progress.done}/${p.progress.total} done, ${p.progress.in_progress} in progress ${c.dim}(${p.status})${c.reset}`);
     console.log(`  decisions: ${f.decisions.open} open, ${f.decisions.answered_today} answered today`);
+    // What moved since the role last read this (S25): the section its
+    // scheduled check acts on.
+    console.log(`  changed since ${formatDateSmart(f.changed_since)}:${f.changed.length ? "" : " nothing in scope"}`);
+    for (const ch of f.changed) console.log(`    ${ch.kind} ${ch.short_id ?? ""} ${ch.title} → ${ch.status}`);
     const u = f.usage;
     console.log(`  today: ${u.wakes}/${u.caps.wakes_per_day} wakes · ${u.hands}/${u.caps.hands_per_day} hands · ${u.tokens}/${u.caps.tokens_per_day} tokens${u.uncounted_sessions ? ` ${c.dim}(tokens not counted for ${u.uncounted_sessions} session${u.uncounted_sessions === 1 ? "" : "s"})${c.reset}` : ""}`);
     if (f.hands.length) {

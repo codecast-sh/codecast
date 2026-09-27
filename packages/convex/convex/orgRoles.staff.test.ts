@@ -5,7 +5,6 @@ import { canAccessProject } from "./lib/access";
 import { webUpdate as planWebUpdate } from "./plans";
 import { webUpdate as projectWebUpdate } from "./projects";
 import { charterPatch, charterLine } from "./lib/orgCharter";
-import { buildFrame, type FrameInput } from "./orgWakes";
 import { computeBriefFacts } from "./org";
 import { handBriefing } from "./spawn";
 import { workspaceAnchorFor } from "./anchors";
@@ -39,8 +38,6 @@ function world(extra: Record<string, any[]> = {}) {
       { _id: "standing-other", user_id: ME, standing_role_id: "role-other", anchor_id: "anchor-other", session_id: "s-so", short_id: "jxstand", status: "active", agent_type: "claude_code", updated_at: NOW, message_count: 1, team_id: TEAM, persistent: true },
     ],
     agent_tasks: [],
-    role_wake_outbox: [],
-    role_wakes: [],
     pending_messages: [],
     managed_sessions: [],
     session_owners: [],
@@ -424,10 +421,9 @@ describe("orgRoles.staff", () => {
     expect(routine.interval_ms).toBe(3 * 86_400_000);
     expect(routine.prompt).toContain("cast org review");
     expect(routine.status).toBe("scheduled");
-    // The first review: an immediate wake for the role carrying the prompt.
-    const wake = tables.role_wake_outbox.find((r) => String(r.role_id) === String(out.role._id));
-    expect(wake?.kind).toBe("immediate");
-    expect(wake?.cause).toContain("cast org review");
+    // The first review runs at once, through the trigger itself.
+    expect(routine.run_at).toBeLessThanOrEqual(Date.now());
+    expect(routine.requested_run_source).toBe("manual");
   });
 
   test("the default cadence is seven days", async () => {
@@ -618,22 +614,6 @@ describe("project and plan charters", () => {
     await expect((projectWebUpdate as any)._handler(ctx, { id: "p-private", goal: "Grow" })).rejects.toThrow("Project not found");
   });
 
-  test("the frame's scope section leads with each project's goal, priority and metrics", async () => {
-    const chartered = { ...project, goal: "Double weekly signups", priority: "p1", success_metrics: ["signups/week"] };
-    const { ctx, tables } = world({ projects: [chartered] });
-    const role = await performCreateRole(ctx, ME as any, { name: "Head of Growth", handle: "growth", team_id: TEAM, scope: { project_ids: ["p1" as any], plan_ids: [] } });
-    const facts = await computeBriefFacts(ctx, ME as any, tables.org_roles[0], NOW);
-    expect(facts.scope.projects[0]).toMatchObject({ id: "p1", goal: "Double weekly signups", priority: "p1", success_metrics: ["signups/week"] });
-    const input: FrameInput = {
-      role: { ...role, last_frame_seq: 0 }, anchor: null, rows: [{ kind: "immediate", cause: "hello" }], facts,
-      charter: null, brief: null, channelLines: [], parentName: "Me", restart: false, now: NOW,
-    };
-    const frame = buildFrame(input).text;
-    const scope = frame.slice(frame.indexOf("## Your scope now"), frame.indexOf("## Your sessions"));
-    expect(scope.split("\n")[1]).toBe("Direction:");
-    expect(scope.split("\n")[2]).toBe("- project Growth [p1] · goal: Double weekly signups · metrics: signups/week");
-    expect(scope.indexOf("Direction:")).toBeLessThan(scope.indexOf("Tasks:"));
-  });
 
   test("a whole-company role reads every project's charter", async () => {
     const chartered = { ...project, goal: "Double weekly signups", priority: "p0" };

@@ -27,7 +27,7 @@ function fixtures() {
     projects: [{ _id: P, user_id: ME, team_id: ACME, workspace: WS, short_id: "pr-1", title: "Growth", status: "active", created_at: 1, updated_at: 1 }],
     org_roles: [{ _id: "role-1", short_id: "or-1", handle: "acme-growth-cmo", name: "CMO", status: "active", trust: "understand", scope_type: "team", team_id: ACME, host_user_id: ME, reports_to: { kind: "user", user_id: ME }, scope: { project_ids: [P], plan_ids: [] }, created_at: 1, updated_at: 1 }],
     org_templates: [], org_template_instances: [], org_template_lessons: [],
-    counters: [], org_changes: [], org_role_history: [], role_wake_outbox: [], anchors: [], conversations: [], session_owners: [], managed_sessions: [], tasks: [], plans: [], docs: [],
+    counters: [], org_changes: [], org_role_history: [], anchors: [], conversations: [], session_owners: [], managed_sessions: [], tasks: [], plans: [], docs: [],
   });
 }
 const manifest = (version = "2.0.0"): any => ({

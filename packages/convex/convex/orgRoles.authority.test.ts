@@ -1,11 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { performCreateRole, performSetAuthority } from "./orgRoles";
-import { authorityLine } from "./orgWakes";
 
 // Authority outside codecast (org-hire.md H4): a person grants and revokes it,
-// the list replaces whole, expiry comes from the grant's cadence, and the role
-// is woken with what it may now do. Same human only gate as trust and caps.
+// the list replaces whole, and expiry comes from the grant's cadence. Same
+// human only gate as trust and caps.
 
 const ME = ("u".repeat(31) + "m") as any;
 const TEAM = "teams_acme" as any;
@@ -14,7 +13,7 @@ function fixture() {
     users: [{ _id: ME, name: "Me", email: "me@x.ai" }],
     team_memberships: [{ _id: "m1", user_id: ME, team_id: TEAM, role: "admin", joined_at: 1 }],
     teams: [{ _id: TEAM, name: "Acme", features: { org: true } }],
-    counters: [], org_roles: [], org_role_history: [], org_changes: [], role_wake_outbox: [], anchors: [], session_owners: [], managed_sessions: [], tasks: [], projects: [], plans: [], docs: [],
+    counters: [], org_roles: [], org_role_history: [], org_changes: [], anchors: [], session_owners: [], managed_sessions: [], tasks: [], projects: [], plans: [], docs: [],
     conversations: [{ _id: "conversations_s", short_id: "jx7ssss", user_id: ME, team_id: TEAM, status: "active", title: "CMO", agent_type: "claude_code", updated_at: 1 }],
   });
   // A signed in person: the human only gate reads a browser identity (refuseUnlessHuman).
@@ -46,12 +45,6 @@ describe("role authority", () => {
     const again = await performSetAuthority(ctx, ME, { role_id: role._id, authority: [{ id: "ads-spend", kind: "spend", label: "Paid search", limit: { usd_per_month: 500 } }], revoke: ["site-write"] });
     expect(again.authority).toHaveLength(1);
     expect(again.authority[0]).toMatchObject({ id: "ads-spend", limit: { usd_per_month: 500 }, granted_at: granted.authority[0].granted_at });
-    // The role is woken with what it may now do; the frame's line reads it.
-    const outbox = db._tables.role_wake_outbox.filter((r: any) => String(r.role_id) === String(role._id));
-    expect(outbox.length).toBeGreaterThanOrEqual(2);
-    expect(outbox[outbox.length - 1].cause).toContain("authority changed: may spend (Paid search, up to $500 a month)");
-    expect(authorityLine(again.authority, Date.now())).toBe("spend (Paid search, up to $500 a month)");
-    expect(authorityLine([{ id: "x", kind: "publish", label: "Post", expires_at: Date.now() - 1 }], Date.now())).toBe("none granted");
     // Bad grants are refused before any write.
     await expect(performSetAuthority(ctx, ME, { role_id: role._id, authority: [{ id: "Bad Id", kind: "spend", label: "x" }] })).rejects.toThrow(/not a slug/);
     await expect(performSetAuthority(ctx, ME, { role_id: role._id, authority: [{ id: "x", kind: "delete" as any, label: "x" }] })).rejects.toThrow(/one of spend, publish, write, connect/);

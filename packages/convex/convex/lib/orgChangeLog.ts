@@ -8,7 +8,7 @@
 // (`noteOrgChange`) folds into it (contracts/orgChange `mergeFact`). A core
 // called on its own, with no row open, writes a row of its own, so no door
 // can forget the log. The open row and the open batch ride the mutation's
-// ctx under a symbol, the way the org wake rail's actor does (orgEvents).
+// ctx under a symbol.
 
 import type { Id } from "../_generated/dataModel";
 import {
@@ -29,7 +29,7 @@ import {
 } from "@codecast/shared/contracts/orgChange";
 import { personName } from "../sessionOwnership";
 import { computeWorkspaceKey } from "./access";
-import { capsFor, trustOf } from "../orgEvents";
+import { capsFor, trustOf } from "./orgCaps";
 import { listSessionOwnerIds } from "../sessionOwners";
 
 type Ctx = { db: any };

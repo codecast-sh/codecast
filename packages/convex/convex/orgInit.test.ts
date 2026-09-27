@@ -36,7 +36,6 @@ function fixtures(extra: Record<string, any[]> = {}) {
     counters: [],
     org_roles: [],
     org_role_history: [],
-    role_wakes: [],
     anchors: [],
     initiatives: [],
     inbox_buckets: [{ _id: "inbox_buckets_1", user_id: ME, name: "growth", sort_order: 0 }],
@@ -484,20 +483,20 @@ describe("org.analysisInputs", () => {
   test("role health: idle when its scope had no event in 14 days, overlaps and wakes at the cap", async () => {
     const db = fixtures({
       org_roles: [
-        { _id: "org_roles_1", short_id: "or-1", scope_type: "team", team_id: TEAM, host_user_id: ME, name: "Growth lead", handle: "growth", scope: { project_ids: [P], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, status: "active", caps: { hands_per_day: 6, wakes_per_day: 2, tokens_per_day: 1 }, created_by: ME, created_at: 1, updated_at: 1 },
+        { _id: "org_roles_1", short_id: "or-1", scope_type: "team", team_id: TEAM, host_user_id: ME, name: "Growth lead", handle: "growth", scope: { project_ids: [P], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, status: "active", anchor_id: "anchors_g", caps: { hands_per_day: 6, wakes_per_day: 2, tokens_per_day: 1 }, created_by: ME, created_at: 1, updated_at: 1 },
         { _id: "org_roles_2", short_id: "or-2", scope_type: "team", team_id: TEAM, host_user_id: ME, name: "Also growth", handle: "growth2", scope: { project_ids: [P], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, status: "active", created_by: ME, created_at: 1, updated_at: 1 },
         { _id: "org_roles_3", short_id: "or-3", scope_type: "team", team_id: TEAM, host_user_id: ME, name: "Billing lead", handle: "billing", scope: { project_ids: [Q], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, status: "active", created_by: ME, created_at: 1, updated_at: 1 },
       ],
-      role_wakes: [
-        { _id: "rw1", role_id: "org_roles_1", short_id: "rw-1", causes: [], status: "delivered", frame_chars: 1, created_at: NOW - H },
-        { _id: "rw2", role_id: "org_roles_1", short_id: "rw-2", causes: [], status: "delivered", frame_chars: 1, created_at: NOW - 2 * H },
-        { _id: "rw3", role_id: "org_roles_1", short_id: "rw-3", causes: [], status: "held", frame_chars: 0, created_at: NOW - 3 * H },
+      anchors: [{ _id: "anchors_g", team_id: TEAM, host_user_id: ME, bot_user_id: ME, org_role_id: "org_roles_1", conversation_id: "conv_g", status: "active" }],
+      messages: [
+        { _id: "mw1", conversation_id: "conv_g", role: "user", content: "hi", timestamp: NOW - H },
+        { _id: "mw2", conversation_id: "conv_g", role: "user", content: "hi", timestamp: NOW - 2 * H },
       ],
     });
     const r = await computeAnalysisInputs(ctxOf(db), ME as any, TEAM, NOW);
     const growth = r.org.roles.find((x) => x.handle === "growth")!;
     expect(growth.idle).toBe(false);
-    expect(growth.wakes_7d).toMatchObject({ total: 2, held: 1, days_at_cap: 1 });
+    expect(growth.wakes_7d).toMatchObject({ total: 2, days_at_cap: 1 });
     expect(growth.overlaps).toEqual([{ handle: "growth2", projects: 1, plans: 0 }]);
     // Billing owns a project with no task, plan, doc or visible session: the
     // scope feed has no row for it, so the role reads idle.

@@ -12,7 +12,6 @@ import { patchTask } from "./agentTasks";
 import { recalcPlanProgress } from "./tasks";
 import { setTaskStatus } from "./orgInit";
 import { scopeOutside, scopeIds } from "./lib/orgScope";
-import { enqueueRoleEvent } from "./orgEvents";
 import { noteOrgChange, openOrgBatch, openBatchId, sessionParent, withOrgChange, type OrgWrite } from "./lib/orgChangeLog";
 import { canonical, dependentBatches, invertRow, type OrgLogEntry, type OrgLogRow, type OrgUndoPreview } from "@codecast/shared/contracts/orgChange";
 
@@ -262,12 +261,6 @@ export async function planUndo(ctx: Ctx, userId: Id<"users">, ref: string, inclu
   }
   const refusal = await validateRestoredRoles(ctx, steps.flatMap((s) => s.writes), read) ?? await refuseOrphans(ctx, steps.flatMap((s) => s.writes), read);
   if (refusal) preview.refused = refusal;
-  let wakeCount = 0;
-  for (const id of new Set(steps.flatMap((s) => s.row.role_ids))) {
-    const wakes = await ctx.db.query("role_wakes").withIndex("by_role_created", (q: any) => q.eq("role_id", id).gte("created_at", target.created_at)).take(CAP);
-    wakeCount += wakes.filter((w: any) => w.status === "delivered").length;
-  }
-  if (wakeCount) preview.cannot_take_back.push({ kind: "wake_ran", count: wakeCount });
   if (messageCount) preview.cannot_take_back.push({ kind: "message_sent", count: messageCount });
   let worked = 0;
   for (const id of sessions) if ((await ctx.db.get(id))?.message_count) worked++;
@@ -302,7 +295,6 @@ async function restoreWrite(ctx: Ctx, userId: Id<"users">, w: OrgWrite) {
   if (w.table === "agent_tasks") await patchTask(ctx, current, { ...patch, ...(patch.status === "scheduled" && current.interval_ms ? { run_at: Date.now() + current.interval_ms } : {}) });
   else await ctx.db.patch(w.id, patch);
   if (w.table === "tasks" && current.plan_id) await recalcPlanProgress(ctx, current.plan_id, current._id, patch.status ?? current.status);
-  if (w.table === "org_roles" && patch.status !== "retired") await enqueueRoleEvent(ctx, current._id, { kind: "immediate", cause: "A person restored an earlier organization change; re-read your scope and brief" });
 }
 
 export async function performUndo(ctx: Ctx, userId: Id<"users">, args: { batch: string; with?: string[]; api_token?: string; from_session?: string }, redo = false) {

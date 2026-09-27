@@ -96,6 +96,7 @@ export type BriefFacts = {
   /** The people who report to the role; empty when nobody does. */
   people?: BriefPerson[];
   changed: { kind: "task" | "plan"; short_id?: string; title: string; status: string; updated_at: number }[];
+  changed_since: number;
   decisions: { open: number; answered_today: number };
   usage: { day: string; wakes: number; hands: number; tokens: number; caps: RoleCaps; uncounted_sessions: number };
   generated_at: number;
@@ -105,8 +106,11 @@ export type RoleBrief = {
   role: {
     _id: string; short_id: string; name: string; handle: string; status: string;
     trust: TrustStage; reports_to: OrgReportsTo; review_backend: string | null;
+    authority: unknown[];
     standing_short_id: string | null; standing_conversation_id: string | null;
-    last_wake_at: number | null;
+    checked_at: number | null;
+    /** The role's routine (org-staffing.md S25), or null before provision. */
+    routine: { _id: string; short_id: string | null; title: string; status: string; run_at: number | null; last_run_at: number | null; interval_ms: number | null } | null;
   };
   facts: BriefFacts;
   narrative: string;

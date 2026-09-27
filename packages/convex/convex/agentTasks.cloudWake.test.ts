@@ -5,8 +5,6 @@ import { claimTask, completeTaskRun, dispatchCloudTriggers, getDueTasks, matchTa
 import { hashToken } from "./apiTokens";
 import crons from "./crons";
 import { makeFakeDb } from "./testDb";
-import { enqueueRoleEvent, MAX_CAUSE_CHARS } from "./orgEvents";
-import { performFlush } from "./orgWakes";
 
 const NOW = 1_800_000_000_000;
 const USER = "users_cloud";
@@ -118,23 +116,16 @@ describe("dispatchCloudTriggers", () => {
           name: "Release checker", handle: "release-checker", scope: { project_ids: [], plan_ids: [] },
           reports_to: { kind: "user", user_id: USER } }],
         anchors: [{ _id: "anchors_cloud", conversation_id: CONV, status: "active" }],
-        role_wake_outbox: [],
         agent_tasks: [task({ short_id: "tr-42", mode: "propose", schedule_type: "recurring", interval_ms: 60_000, prompt })],
       });
       if (route !== "inline") tables.conversations[0].standing_role_id = "role_cloud";
       const lifecycle = triggerLifecycleInstructions(tables.agent_tasks[0]);
       expect(prompt).toHaveLength(length);
       await dispatch(ctx);
-      if (route === "role") {
-        expect(tables.pending_messages).toHaveLength(0);
-        expect(tables.role_wake_outbox[0].cause.length).toBeGreaterThan(MAX_CAUSE_CHARS);
-        expect((await performFlush(ctx as any, "role_cloud" as any)).outcome).toBe("delivered");
-      } else {
-        expect(tables.role_wake_outbox).toHaveLength(0);
-      }
+      // A routine on a role's standing session is the same plain message every session gets.
       expect(tables.pending_messages).toHaveLength(1);
       const delivered = tables.pending_messages[0].content;
-      expect(delivered).toStartWith(route === "role" ? "<role-wake " : "<scheduled-task ");
+      expect(delivered).toStartWith("<scheduled-task ");
       expect(delivered).toContain(`${prompt}\n\n${lifecycle}`);
       expect(delivered).toContain(sentinel);
       expect(delivered).toContain("if cancellation is outside this run's authority");
@@ -142,31 +133,17 @@ describe("dispatchCloudTriggers", () => {
     });
   }
 
-  test.each([undefined, "tasks"])("ordinary role causes still obey the display limit with reference %s", async (table) => {
-    const { ctx, tables } = await world({
-      org_roles: [{ _id: "role_cloud", status: "paused", anchor_id: CONV, scope_type: "personal", scope_user_id: USER, host_user_id: USER }],
-      role_wake_outbox: [],
-    });
-    await enqueueRoleEvent(ctx, "role_cloud" as any, {
-      kind: "immediate", cause: "x".repeat(MAX_CAUSE_CHARS + 100),
-      ...(table ? { ref: { table, id: "tasks_example" } } : {}),
-    });
-    expect(tables.role_wake_outbox[0].cause).toBe("x".repeat(MAX_CAUSE_CHARS - 1) + "…");
-  });
-
   test("a role routine receives the same lifecycle defaults without changing its mandate or mode", async () => {
     const { ctx, tables } = await world({
       org_roles: [{ _id: "role_cloud", status: "paused", anchor_id: CONV, scope_type: "personal", scope_user_id: USER, host_user_id: USER }],
-      role_wake_outbox: [],
       agent_tasks: [task({ short_id: "tr-42", mode: "propose", schedule_type: "recurring", interval_ms: 60_000,
         prompt: "Ongoing mandate: keep checking until explicitly ended." })],
     });
     tables.conversations[0].standing_role_id = "role_cloud";
     const original = tables.agent_tasks[0].prompt;
     await dispatch(ctx);
-    expect(tables.pending_messages).toHaveLength(0);
-    expect(tables.role_wake_outbox).toHaveLength(1);
-    const cause = tables.role_wake_outbox[0].cause;
+    expect(tables.pending_messages).toHaveLength(1);
+    const cause = tables.pending_messages[0].content;
     expect(cause).toContain(original);
     expect(cause).toContain("cast trigger complete tr-42 --summary");
     expect(cause).toContain("save the outcome first, then cancel only this trigger with cast trigger cancel tr-42");

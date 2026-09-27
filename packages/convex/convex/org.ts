@@ -15,7 +15,8 @@ import { avatarOf } from "@codecast/shared/contracts/orgAvatars";
 import { overlapsAmong, planProjectsOf, resolveRoleRef, rolesInBoundary, type ScopeOverlap } from "./orgRoles";
 import { pendingOnLadder } from "./sessionDecisions";
 import { isWholeWorkspace, type Scope } from "./lib/orgScope";
-import { capsFor, countersFor } from "./orgEvents";
+import { capsFor, countersFor } from "./lib/orgCaps";
+import { findRoleRoutine } from "./lib/orgRoutine";
 import { extractPlanTitleForWeb } from "./docs";
 import { computeReportingPeople, type BriefPerson } from "./orgGoals";
 
@@ -1038,8 +1039,8 @@ export const scopeSummary = query({
 //
 // Never stored: computed from the same membership as the tree plus the scope's
 // tasks and plans (resolveScope / computeScopeSummary), the role's hands, the
-// decisions on its ladder, and today's spend against the caps. The wake frame
-// (orgWakes.buildFrame) and `cast brief` read the same shape.
+// decisions on its ladder, and today's spend against the caps: what `cast
+// brief` prints.
 
 /** Since when a session has waited on a person, else null. The pin is when the
  *  session said it was blocked; without one, its last write is when its turn
@@ -1077,7 +1078,10 @@ export type BriefFacts = {
   // from the brief read against the live rows, and their sessions that changed
   // since the last frame. Empty when nobody reports to it.
   people: BriefPerson[];
+  // Tasks and plans in scope that moved since the role last read its brief
+  // (org-staffing.md S25), newest first.
   changed: BriefChange[];
+  changed_since: number;
   decisions: { open: number; answered_today: number };
   usage: { day: string; wakes: number; hands: number; tokens: number; caps: { hands_per_day: number; wakes_per_day: number; tokens_per_day: number }; uncounted_sessions: number };
   generated_at: number;
@@ -1143,10 +1147,13 @@ export async function computeBriefFacts(ctx: Ctx, viewerId: Id<"users">, role: a
     });
   }
 
+  // Since the role last read its brief from its own session (orgRoles
+  // .markBriefRead); a day, for a role that never has.
+  const since = role.checked_at ?? now - 24 * 3600_000;
   const changed: BriefChange[] = [
     ...resolved.tasks.map((t): BriefChange => ({ kind: "task", short_id: t.short_id, title: t.title, status: t.status, updated_at: t.updated_at })),
     ...resolved.plans.map((p): BriefChange => ({ kind: "plan", short_id: p.short_id, title: p.title, status: p.status, updated_at: p.updated_at })),
-  ].sort((a, b) => b.updated_at - a.updated_at).slice(0, BRIEF_CHANGES_MAX);
+  ].filter((c) => c.updated_at > since).sort((a, b) => b.updated_at - a.updated_at).slice(0, BRIEF_CHANGES_MAX);
 
   // Decisions: the summary's one open count, and the ladder's answers today.
   const dayStart = now - (now % 86_400_000);
@@ -1160,12 +1167,12 @@ export async function computeBriefFacts(ctx: Ctx, viewerId: Id<"users">, role: a
   const uncounted = [standing, ...hands.map((h) => scan.sessions.get(h._id.toString())?.raw)].filter((c) => c && c.agent_type !== "claude_code").length;
 
   // The people who report to the role, read with the same grants and the same
-  // scan as the hands; "changed" is since the last frame the role read.
+  // scan as the hands; "changed" is since the role last read its brief.
   const briefDoc = role.brief_doc_id ? await ctx.db.get(role.brief_doc_id) : null;
   const people = await computeReportingPeople(
     ctx, viewerId, role,
     briefDoc ? { content: briefDoc.content ?? "", updated_at: briefDoc.updated_at ?? briefDoc._creationTime ?? 0 } : null,
-    scan, role.last_frame_seq ?? now - 24 * 3600_000, now,
+    scan, since, now,
   );
 
   return {
@@ -1175,6 +1182,7 @@ export async function computeBriefFacts(ctx: Ctx, viewerId: Id<"users">, role: a
     hands,
     people,
     changed,
+    changed_since: since,
     decisions,
     usage: { ...counters, caps: capsFor(role), uncounted_sessions: uncounted },
     generated_at: now,
@@ -1221,7 +1229,7 @@ export const roleCard = query({
         projects: projects.filter(Boolean).map((p: any) => ({ id: p._id.toString(), title: p.title, short_id: p.short_id ?? null })),
         plans: plans.filter(Boolean).map((p: any) => ({ id: p._id.toString(), title: p.title, short_id: p.short_id })),
       },
-      caps: role.caps ?? null, counters: role.counters ?? null, last_wake_at: role.last_wake_at ?? null,
+      caps: role.caps ?? null, counters: role.counters ?? null,
       standing_short_id: standing?.short_id ?? null, standing_conversation_id: standing?._id?.toString() ?? null,
       standing_state: standing ? { line: standing.thread_state ?? null, status: standing.thread_state_status ?? null } : null,
     };
@@ -1243,12 +1251,16 @@ export const brief = query({
     const charterDoc: any = role.charter_doc_id ? await ctx.db.get(role.charter_doc_id) : null;
     const anchor: any = role.anchor_id ? await ctx.db.get(role.anchor_id) : null;
     const standing: any = anchor?.conversation_id ? await ctx.db.get(anchor.conversation_id) : null;
+    // The role's routine (org-staffing.md S25): when it last ran and runs next.
+    const routine: any = await findRoleRoutine(ctx, role, standing);
     return {
       role: {
         _id: role._id, short_id: role.short_id, name: role.name, handle: role.handle, status: role.status,
         trust: role.trust ?? "understand", reports_to: role.reports_to, review_backend: role.review_backend ?? null,
+        authority: role.authority ?? [],
         standing_short_id: standing?.short_id ?? null, standing_conversation_id: standing?._id ?? null,
-        last_wake_at: role.last_wake_at ?? null,
+        checked_at: role.checked_at ?? null,
+        routine: routine ? { _id: routine._id, short_id: routine.short_id ?? null, title: routine.title, status: routine.status, run_at: routine.run_at ?? null, last_run_at: routine.last_run_at ?? null, interval_ms: routine.interval_ms ?? null } : null,
       },
       facts,
       narrative: briefDoc?.content ?? "",

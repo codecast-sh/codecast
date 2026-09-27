@@ -8,7 +8,6 @@ const modules = {
   "./_generated/server.ts": () => import("./_generated/server"),
   "./orgChanges.ts": () => import("./orgChanges"),
   "./orgRoles.ts": () => import("./orgRoles"),
-  "./orgEvents.ts": () => import("./orgEvents"),
 };
 
 test("authenticated history API applies, previews, undoes, redoes, and enforces workspace and human gates", async () => {

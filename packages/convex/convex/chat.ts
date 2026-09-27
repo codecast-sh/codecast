@@ -25,7 +25,7 @@ import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { api, internal } from "./_generated/api";
-import { canSendProductMessage, enqueuePendingMessage, getAuthenticatedUserId } from "./pendingMessages";
+import { canSendProductMessage, enqueuePendingMessage, getAuthenticatedUserId, tellRole } from "./pendingMessages";
 import { isConversationOwner, isTeamAdmin, isTeamMember } from "./privacy";
 import { requireTeamFeature, teamHasFeature } from "./teamFeatures";
 import { canAccessChannel, canReadChannelAnonymously, channelMemberIds, isChannelMember, isCommunity, isRestricted } from "./chatAccess";
@@ -50,7 +50,6 @@ import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 // team may spend a turn on it). It is used on the wake path and NOT on
 // `replyAsAnchor`, which gates on the host — see the comment there.
 import { deliverToAnchor, userCanAccessAnchor, workspaceAnchorFor } from "./anchors";
-import { actorIsExcluded, enqueueRoleEvent } from "./orgEvents";
 import { resolveActor } from "./lib/actor";
 import { queueSlackOutbound, slackLinkForChannel, slackLinksWithSendAuth } from "./lib/slackOutbound";
 import { isDesktopActivePresence } from "./pushRouter";
@@ -4284,33 +4283,21 @@ export async function wakeMentionedParties(
     if (anchor?.conversation_id && selfSession && String(anchor.conversation_id) === selfSession) continue;
     if (!anchor) { out.skipped.push(`role_has_no_session:${role.handle}`); continue; }
     if (anchor.conversation_id && delivered(anchor.conversation_id)) { out.skipped.push(`relayed:${role.handle}`); continue; }
-    // The loop rules (T3): a role's own hands and its subordinate roles never
-    // wake it. Reported as an exclusion, not as a failed delivery.
-    if (selfConversation && (await actorIsExcluded(ctx, String(role._id), selfConversation))) {
-      out.skipped.push(`excluded_actor:${role.handle}`);
-      continue;
-    }
     if (!(await underCaps(String(role._id)))) { out.folded++; continue; }
     const text = quoted(
       `${opts.senderName} mentioned @${role.handle} in ${opts.channel.kind === "dm" ? "a direct message" : `#${opts.channel.name}`}.`,
       replyTail,
     );
-    // Through the wake rail (org-roles-standing.md T3): an immediate outbox
-    // row whose cause carries the quoted line and the reply instructions; the
-    // flush folds it into one frame with everything else the role owes a
-    // look. A human mention is immediate; the loop rules drop a line the
-    // role's own session or one of its hands wrote.
-    const rowId = await enqueueRoleEvent(ctx, role._id, {
-      kind: "immediate",
-      cause: `chat mention: ${text}`,
-      ref: { table: "chat_messages", id: String(opts.message._id) },
-      actorConversationId: selfConversation?._id ?? null,
+    // A plain line into the standing session (org-staffing.md S25), the same
+    // shape a mentioned session gets.
+    const where = opts.channel.kind === "dm" ? "dm" : `#${opts.channel.name}`;
+    const rowId = await tellRole(ctx, role._id, {
+      content: `<chat-mention channel="${where.replace(/"/g, "'")}" thread="${threadRootId}" from="${opts.senderName.replace(/"/g, "'")}">\n${text}\n</chat-mention>`,
+      client_id: `chat-mention:${opts.message._id}:${role._id}`,
+      from_user_id: opts.senderId,
+      from_conversation_id: selfConversation?._id ?? undefined,
     });
-    // The row is kept either way; a paused role's flush holds it (orgWakes
-    // gate 1) and it rides the wake after someone resumes the role. The sender
-    // hears that, never "woke".
     if (!rowId) out.skipped.push(`delivery_failed:${role.handle}`);
-    else if (role.status === "paused") out.skipped.push(`role_paused:${role.handle}`);
     else out.roles++;
   }
 
@@ -4399,13 +4386,10 @@ async function mentioningSessionIn(
   return null;
 }
 
-// The compact view a role's wake frame embeds (agent-channels.md C2 pull mode)
-// and `cast chat read --since` prints: what landed in these channels after
-// `since`, oldest first, one short line each. Channels the caller cannot read
-// are silently absent — a frame must never leak a room to a role outside it.
-// The lines the channels carried since `since`, oldest first, channels the
-// caller cannot read omitted. Shared by the query below and the role wake
-// frame (orgWakes.frameInputsFor), which reads the channels a role follows.
+// What `cast chat read --since` prints (agent-channels.md C2 pull mode): the
+// lines these channels carried after `since`, oldest first, one short line
+// each. Channels the caller cannot read are silently absent, so a read never
+// leaks a room to a role outside it.
 export async function collectLinesSince(
   ctx: { db: any },
   userId: Id<"users">,
