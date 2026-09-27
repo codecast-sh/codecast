@@ -3,6 +3,7 @@ import { isNotificationLeader, isVoiceHost } from "./desktop";
 import { agentAlertsSuppressed, deliverAlert, reportAlertError } from "./notificationDelivery";
 import type { CueSpec } from "./cueSpec";
 import {
+  KILL_DOOR,
   STASH_AWAY,
   WALKIE_AWAY,
   WALKIE_JOINED,
@@ -207,37 +208,8 @@ export function soundDismiss() {
 }
 
 export function soundKill() {
-  if (!isEnabled("ui") || !isSupported()) return;
-  try {
-    const ac = getCtx();
-    const master = ac.createGain();
-    master.gain.value = 0.1 * volumeFactor();
-    master.connect(ac.destination);
-
-    // Short noise burst through a lowpass — a dry "thud"
-    const bufferSize = ac.sampleRate * 0.15;
-    const buffer = ac.createBuffer(1, bufferSize, ac.sampleRate);
-    const data = buffer.getChannelData(0);
-    for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
-    const noise = ac.createBufferSource();
-    noise.buffer = buffer;
-
-    const filter = ac.createBiquadFilter();
-    filter.type = "lowpass";
-    filter.frequency.setValueAtTime(800, ac.currentTime);
-    filter.frequency.exponentialRampToValueAtTime(120, ac.currentTime + 0.08);
-    filter.Q.value = 1;
-
-    const env = ac.createGain();
-    env.gain.setValueAtTime(0.8, ac.currentTime);
-    env.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.1);
-
-    noise.connect(filter);
-    filter.connect(env);
-    env.connect(master);
-    noise.start(ac.currentTime);
-    noise.stop(ac.currentTime + 0.12);
-  } catch {}
+  if (!isEnabled("ui")) return;
+  playCue(KILL_DOOR);
 }
 
 // A chat message that raised a toast. One sound for every chat toast, quiet
@@ -451,8 +423,7 @@ export function soundCallLeave() {
 //
 // For scale: soundCallJoin peaks at 0.0196, soundChatMessage at 0.0316, and
 // soundCallRing at 0.0458 — which keyUp now matches to the fourth decimal, by
-// arithmetic rather than by aim. soundKill stays the app's alarm and nothing
-// here approaches it.
+// arithmetic rather than by aim. Nothing here approaches the 0.08 ceiling.
 //
 // The order is the point. The two moments that carry news — your mic opening,
 // and someone stepping into your burst — are the two loudest. The two that are
