@@ -430,14 +430,17 @@ export function QueuePageClient() {
     // session UUID) belongs to the conversation route's resolver, which
     // redirects back here with the id it found; selecting it as an id
     // selected nothing, and the view fell to whatever session was on top.
-    if (!isConvexId(paramSessionId)) {
+    // A local stub is the exception: its id is a key in this store and
+    // nowhere else, so the resolver can only answer Not Found for it (and
+    // before hydration there is no telling a stub from a short id yet).
+    const store = useInboxStore.getState();
+    if (Object.keys(store.sessions).length === 0 && !clientStateInitialized) return;
+    if (!isConvexId(paramSessionId) && !store.sessions[paramSessionId]) {
       router.replace(`/conversation/${encodeURIComponent(paramSessionId)}`);
       return;
     }
-    const store = useInboxStore.getState();
     const paramChanged = paramSessionId !== lastAppliedParamId.current;
     if (!paramChanged && store.currentSessionId === paramSessionId) return;
-    if (Object.keys(store.sessions).length === 0 && !clientStateInitialized) return;
     lastAppliedParamId.current = paramSessionId;
     if (paramChanged) {
       // Consume any pending highlight/scroll from the store (set by ConversationPageClient redirect)
@@ -654,7 +657,13 @@ export function QueuePageClient() {
     const targetId = viewingDismissedId
       ? undefined
       : useInboxStore.getState().getCurrentSession()?._id;
-    if (!targetId) return;
+    // A local stub (a blank new session not yet created on the server) never
+    // reaches the address bar: a reload hands the URL to the conversation
+    // route, whose resolver has never heard of it and answers Not Found, and
+    // the stub sweep may have dropped the row by then anyway. The URL keeps
+    // the previous session until the stub rekeys to its real id, and this
+    // effect re-runs on that id change.
+    if (!targetId || !isConvexId(targetId)) return;
     const targetPath = `/conversation/${targetId}`;
     if (window.location.pathname !== targetPath) {
       // Switching from one session to another (URL already shows a DIFFERENT
