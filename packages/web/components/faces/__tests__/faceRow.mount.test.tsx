@@ -669,6 +669,13 @@ describe("the engagement card renders the model's card", () => {
     expect(log.at(-1)).toMatchObject({ action: "mute", card: huddle });
   });
 
+  test("a call's card carries the host's accessory first in its controls", async () => {
+    const huddle: FaceCard = { kind: "live", roomKey: ROOM, title: "Ann", end: true, mute: true, muted: false, camera: false, cameraOn: false, words: null, hearing: null };
+    const h = await mount(<EngagementCard card={huddle} density="float" accessory={<button data-card-action="chat">3</button>} />);
+    const controls = h.all(".walkie-strip-actions [data-card-action]").map((el) => el.getAttribute("data-card-action"));
+    expect(controls).toEqual(["chat", "mute", "end"]);
+  });
+
   test("joined notice: the sentence, with the live controls under it", async () => {
     const log: Pressed[] = [];
     const card: FaceCard = { kind: "joined-notice", roomKey: ROOM, text: "Ann joined", end: true, mute: true, muted: false };

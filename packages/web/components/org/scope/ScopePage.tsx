@@ -39,7 +39,6 @@ import { parentName } from "../orgMeta";
 import type { OrgParentRef, OrgRole, OrgTree } from "../orgTypes";
 import { useScopeIds } from "../../../hooks/useScopeIds";
 import { ScopePanel } from "./ScopePanel";
-import { useRoleEscalations } from "../../../hooks/useRoleEscalations";
 import { scopeDefaultTab, scopeTabFromParam, type ScopeTabKey } from "../../../lib/scopeTabs";
 import { ConversationWithPanel } from "./ConversationWithPanel";
 import { usePanelLayout } from "../../../hooks/usePanelLayout";
@@ -178,18 +177,15 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
   // moves with the session), then the brief's first line, which a seat that
   // never wrote a brief still carries from the provisioning template.
   const stripeLine = standingStateLine || treeStateLine || boardLine;
-  // What needs the person (F5.1): the role's escalations, never a count of
-  // sessions waiting on a person; those wait on the role.
-  const escalations = useRoleEscalations(role?._id ?? null, role?.standing?.conversation_id ?? null);
-  const needsYou = escalations.length;
-  // The first thing on the page is the agent saying what this area is, what it
-  // is watching and what waits on the person, from the rows themselves; the
-  // seat's provisioning prompt and its working turns fold away under it.
+  // The first thing on the page is the agent saying what this area is and
+  // what it is watching, from the rows themselves; the seat's provisioning
+  // prompt and its working turns fold away under it. What the role needs from
+  // the person is in its own thread: its pinned state and its decide cards.
   const lead = useMemo(() => (
     tree && (role || anchor)
-      ? <ScopeLead role={role} needsYou={needsYou} />
+      ? <ScopeLead role={role} />
       : null
-  ), [tree, role, anchor, needsYou]);
+  ), [tree, role, anchor]);
 
   // -------- the conversation is the session page (I3)
   // The same pane the inbox mounts, so its banners, share control, context
@@ -240,7 +236,6 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
       onTab={setTab}
       onClose={() => setPanelOpen(false)}
       layout={panelLayout}
-      escalations={escalations}
       scopeRef={scopeRef}
       scopeIds={scopeIds}
       summary={summary}
@@ -324,7 +319,7 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
               <ActionButton icon={paused ? Play : Pause} label={paused ? "Resume" : "Pause"} tip={paused ? "Its triggers resume" : "Hands stop at a safe point; its triggers pause"} onClick={() => update({ status: paused ? "active" : "paused" })} />
             )}
             {!phone && role && canEdit && <ActionButton icon={Archive} label="Retire" danger tip="Retire this seat; you confirm on Settings" onClick={() => { setRetireArmed(true); openTab("settings"); }} />}
-            <PanelToggle open={panelOpen} needsYou={needsYou} compact={phone} onClick={() => setPanelOpen((v) => !v)} />
+            <PanelToggle open={panelOpen} compact={phone} onClick={() => setPanelOpen((v) => !v)} />
           </div>
         </div>
       </header>
@@ -356,26 +351,23 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
   );
 }
 
-/** The agent's opening line (F4.1): what this area is and what the role put
- *  in front of the person, said from the rows, not from the transcript. The
- *  header already names the seat, its state and its parent. */
-export function ScopeLead({ role, needsYou }: { role: OrgRole | null; needsYou: number }) {
+/** The agent's opening line (F4.1): what this area is, said from the rows,
+ *  not from the transcript. The header already names the seat, its state and
+ *  its parent. */
+export function ScopeLead({ role }: { role: OrgRole | null }) {
   const owns = role ? [...role.scope_names.projects.map((p) => p.title), ...role.scope_names.plans.map((p) => p.title)] : [];
   const area = owns.length > 0 ? owns.join(", ") : "the whole workspace";
-  // F5.1: what needs the person is what the role put in front of them.
-  const ask = needsYou > 0 ? `${needsYou === 1 ? "One thing needs" : `${needsYou} things need`} you: the board says what.` : undefined;
   return (
-    <SeatLead ask={ask} data-scope-lead>
+    <SeatLead data-scope-lead>
       I look after {area}. Ask me for anything here: I answer, or start a session for the work and tell you which.
     </SeatLead>
   );
 }
 
-/** The header's control for the board (F4.1). Closed, it still tells you
- *  the one thing that matters: the role put something in front of you. */
-function PanelToggle({ open, needsYou, compact, onClick }: { open: boolean; needsYou: number; compact: boolean; onClick: () => void }) {
+/** The header's control for the board (F4.1). */
+function PanelToggle({ open, compact, onClick }: { open: boolean; compact: boolean; onClick: () => void }) {
   const Icon = open ? PanelRightClose : PanelRightOpen;
-  const tip = open ? "Close the board" : needsYou > 0 ? `Open the board: ${needsYou === 1 ? "one thing needs" : `${needsYou} things need`} you` : "Open the board: feed, tasks, plans, pages, sessions, decisions";
+  const tip = open ? "Close the board" : "Open the board: feed, tasks, plans, pages, sessions, decisions";
   return (
     <ShortcutTooltip label={tip} side="bottom">
       <button
@@ -386,11 +378,9 @@ function PanelToggle({ open, needsYou, compact, onClick }: { open: boolean; need
         aria-pressed={open}
         aria-label={tip}
         data-scope-panel-toggle={open ? "open" : "closed"}
-        data-scope-needs-you={needsYou}
       >
         <Icon className="w-3.5 h-3.5" />
         {!compact && <span className="scope-head-wide">Board</span>}
-        {needsYou > 0 && <span className="absolute -top-[3px] -right-[3px] w-[8px] h-[8px] rounded-full ring-2" style={{ background: "var(--sol-yellow)", ["--tw-ring-color" as any]: "var(--sol-bg)" }} aria-hidden data-scope-panel-dot />}
       </button>
     </ShortcutTooltip>
   );

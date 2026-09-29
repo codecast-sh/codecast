@@ -233,6 +233,9 @@ export async function resolveScopeRef(ctx: Ctx, role: any, ref: string): Promise
       : await ctx.db.query("projects").withIndex("by_user_id", (q: any) => q.eq("user_id", role.scope_user_id)).collect();
     const lc = needle.toLowerCase();
     const hits = rows.filter((r) => inBoundary(r) && r.title.toLowerCase().includes(lc));
+    // A title named in full wins over titles that merely contain it: "test" is the "test" project, not also "issue-sync-test".
+    const exact = hits.filter((r) => r.title.trim().toLowerCase() === lc);
+    if (exact.length === 1) return { kind, id: exact[0]._id };
     if (hits.length === 1) return { kind, id: hits[0]._id };
     if (hits.length > 1) throw new Error(`"${needle}" matches ${hits.length} projects: ${hits.map((h) => h.short_id ?? h.title).join(", ")}`);
   }
@@ -588,9 +591,7 @@ async function performRetireRoleCore(ctx: any, userId: Id<"users">, args: { role
     .query("conversations")
     .withIndex("by_org_role", (q: any) => q.eq("org_role_id", role._id))
     .collect();
-  // The escalation goes with the pointer, as a reparent to a person drops it:
-  // a retired role's line must never pin a card in a person's needs input.
-  for (const conv of filed) await ctx.db.patch(conv._id, { org_role_id: undefined, escalated_by_role: undefined });
+  for (const conv of filed) await ctx.db.patch(conv._id, { org_role_id: undefined });
   // Child roles re-home to the retired role's own parent, the way its sessions
   // fall back to their owners: the tree hides retired roles, so a child left
   // pointing here would draw with no parent. No cycle is possible: the parent

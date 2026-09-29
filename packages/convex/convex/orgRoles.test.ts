@@ -6,6 +6,7 @@ import {
   performReparentSession,
   performRetireRole,
   performUpdateRole,
+  resolveScopeRef,
 } from "./orgRoles";
 import { computeOrgTree, stateOf } from "./org";
 
@@ -54,6 +55,15 @@ describe("orgRoles.create", () => {
     expect(role.host_user_id).toBe(ME);
     expect(role.reports_to).toEqual({ kind: "user", user_id: ME });
     expect(role.scope).toEqual({ project_ids: [], plan_ids: [] });
+  });
+
+  test("a project named by its full title resolves even when another title contains it", async () => {
+    const row = (id: string, short: string, title: string) => ({ _id: id, user_id: ME, team_id: TEAM, workspace: `team:${TEAM}`, short_id: short, title, status: "active", created_at: 1, updated_at: 1 });
+    const db = fixtures({ projects: [row("projects_test", "pj-a", "test"), row("projects_sync", "pj-b", "issue-sync-test"), row("projects_x", "pj-c", "sync x")] });
+    const role = { team_id: TEAM, scope_type: "team" };
+    expect(await resolveScopeRef(ctxOf(db), role, "project:test")).toEqual({ kind: "project", id: "projects_test" });
+    // A partial name that fits several titles is still ambiguous.
+    await expect(resolveScopeRef(ctxOf(db), role, "project:sync")).rejects.toThrow('"sync" matches 2 projects');
   });
 
   test("tenure and avatar (S10, S13): standing/program resolve refs, and the face defaults from the handle", async () => {

@@ -21,6 +21,16 @@ const theirs = {
 };
 
 describe("attachCommand", () => {
+  test("a pane in WSL, viewed from Windows: a command PowerShell and cmd can run", () => {
+    const wsl = { ...mine(null), wsl_distro: "Ubuntu" };
+    expect(attachCommand("cc-x", wsl, true)).toBe("wsl.exe -d Ubuntu -e tmux attach -t cc-x");
+    expect(attachCopy("cc-x", wsl).message).not.toContain("PowerShell"); // test runner is no Windows browser
+    // Viewed from inside a Linux shell (or any non-Windows browser) the plain form stays right.
+    expect(attachCommand("cc-x", wsl, false)).toBe("tmux attach -t 'cc-x'");
+    // An ssh target the user set still wins: they chose how to reach that machine.
+    expect(attachCommand("cc-x", { ...mine("box"), wsl_distro: "Ubuntu" }, true)).toContain("ssh box -t ");
+  });
+
   test("your machine with an ssh host: wraps the attach for a remote shell", () => {
     expect(attachCommand("cc-resume-7ea05201", mine("nose"))).toBe(
       `ssh nose -t "PATH=${REMOTE_TMUX_PATH} tmux attach -t 'cc-resume-7ea05201'"`,

@@ -199,9 +199,13 @@ describe("placeInboxRow — bucket precedence", () => {
     expect(placeInboxRow(input({ stashed: true, asking: true, pinned: true })).bucket).toBe("stashed");
   });
 
-  test("an anchor is hidden unless hard blocked", () => {
+  test("an anchor is hidden unless hard blocked or asking", () => {
     expect(placeInboxRow(input({ isAnchor: true })).bucket).toBe("hidden");
-    expect(placeInboxRow(input({ isAnchor: true, pinned: true, asking: true })).bucket).toBe("hidden");
+    expect(placeInboxRow(input({ isAnchor: true, pinned: true })).bucket).toBe("hidden");
+    // A `cast decide` in a standing session's own thread is how a lead raises
+    // a choice (org-staffing.md S28): it files as a question like any row.
+    expect(placeInboxRow(input({ isAnchor: true, asking: true })).bucket).toBe("questions");
+    expect(placeInboxRow(input({ isAnchor: true, pinned: true, asking: true })).bucket).toBe("questions");
     expect(placeInboxRow(input({ isAnchor: true, awaitingInput: true, asking: true })).bucket).toBe("questions");
     expect(placeInboxRow(input({ isAnchor: true, agentStatus: "permission_blocked" })).bucket).toBe("needs_input");
     expect(placeInboxRow(input({ isAnchor: true, pendingApiError: true })).bucket).toBe("needs_input");
@@ -660,7 +664,7 @@ describe("field ownership constants", () => {
 
   test("the caps are the single source and the version is 13", () => {
     expect(INBOX_WINDOW_CAPS).toEqual({ recent: 200, pinned: 100, dismissed: 200, stashed: 200, snoozed: 200, owned: 200 });
-    expect(INBOX_PROJECTION_VERSION).toBe(13);
+    expect(INBOX_PROJECTION_VERSION).toBe(14);
   });
 });
 

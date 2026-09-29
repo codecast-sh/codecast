@@ -4,29 +4,44 @@ import { broadcastGesture } from "./gestureBridge";
 import { pushUndo, showUndoToast } from "./undoStack";
 import { declareViewNav } from "./viewNav";
 
-/** Mark a session card to play the enter animation after it appears in the DOM. */
+// How long a restored row may take to mount before its entrance is dropped.
+const ENTER_WAIT_MS = 1000;
+
+/**
+ * Play the enter animation on a session's row when it next mounts. Call it
+ * BEFORE the store write that brings the row back.
+ *
+ * A MutationObserver callback runs as a microtask right after React inserts
+ * the node and before the browser paints, so the first frame of the row is
+ * already the first frame of the animation. Adding the class any later (a
+ * timer, a rAF) paints the row at full size first, and the keyframe then
+ * snaps it to zero height and grows it back: the flash this replaces.
+ */
 export function animateSessionEnter(id: string) {
-  if (typeof document === "undefined") return;
-  // Use setTimeout with escalating delays to wait for React to commit the render
-  const delays = [0, 20, 50, 100, 200];
-  const tryApply = (attempt: number) => {
-    const card = document.querySelector(`[data-session-id="${id}"]`);
-    const target = (card?.parentElement ?? card) as HTMLElement | null;
-    if (target) {
-      // Drive the collapse off the row's real rendered height (it may hold a
-      // parent card plus subagent cards) so the keyframe never coasts on a short
-      // row or clips a tall one — what the old hardcoded 80px cap did.
-      target.style.setProperty('--row-h', `${target.offsetHeight}px`);
-      target.classList.add('session-entering');
-      target.addEventListener('animationend', () => {
-        target.classList.remove('session-entering');
-        target.style.removeProperty('--row-h');
-      }, { once: true });
-    } else if (attempt < delays.length - 1) {
-      setTimeout(() => tryApply(attempt + 1), delays[attempt + 1]);
-    }
-  };
-  setTimeout(() => tryApply(0), delays[0]);
+  if (typeof document === "undefined" || typeof MutationObserver === "undefined") return;
+  const selector = `[data-session-id="${id}"]`;
+  // Already on screen: nothing is entering, and animating it would blink it.
+  if (document.querySelector(selector)) return;
+  const observer = new MutationObserver(() => {
+    const card = document.querySelector(selector);
+    if (!card) return;
+    stop();
+    const target = (card.parentElement ?? card) as HTMLElement;
+    // Drive the keyframe off the row's real height (it may hold a parent card
+    // plus subagent cards) so it never coasts on a short row or clips a tall one.
+    target.style.setProperty("--row-h", `${target.offsetHeight}px`);
+    target.classList.add("session-entering");
+    target.addEventListener("animationend", () => {
+      target.classList.remove("session-entering");
+      target.style.removeProperty("--row-h");
+    }, { once: true });
+  });
+  const timer = setTimeout(() => stop(), ENTER_WAIT_MS);
+  function stop() {
+    observer.disconnect();
+    clearTimeout(timer);
+  }
+  observer.observe(document.body, { childList: true, subtree: true });
 }
 
 export type HideSessionMode = "stash" | "kill";
@@ -117,6 +132,29 @@ export function undoableHideSession(id: string, mode: HideSessionMode, opts?: Hi
         restoredPending[key] = val;
       }
 
+      // Push the SNAPSHOT flags, not blanket nulls: undoing a dismiss of a
+      // session that was stashed at the time must land it back in Stashed.
+      // The pin and snooze the hide cleared travel too, or the server keeps
+      // them cleared and the row loses them on the next push.
+      const restoredFlags = Object.fromEntries(
+        snap.allIds.map((sid) => {
+          const prev = snap.sessions[sid] ?? (snap.conversations[sid] as any);
+          return [sid, {
+            inbox_dismissed_at: prev?.inbox_dismissed_at ?? null,
+            inbox_stashed_at: prev?.inbox_stashed_at ?? null,
+            inbox_stash_hidden: prev?.inbox_stash_hidden ?? null,
+            ...(prev?.inbox_pinned_at ? { inbox_pinned_at: prev.inbox_pinned_at } : {}),
+            ...(prev?.inbox_snoozed_until ? { inbox_snoozed_until: prev.inbox_snoozed_until } : {}),
+          }];
+        })
+      );
+      // ONE timestamp for the whole gesture: the locks and the sibling
+      // broadcast below all key off it.
+      const ts = Date.now();
+
+      // Before the row comes back, so the enter animation is on it in the
+      // first frame it paints.
+      animateSessionEnter(id);
       // User-invoked undo putting them back where they were at snapshot time.
       declareViewNav("undo");
       useInboxStore.setState({
@@ -126,19 +164,14 @@ export function undoableHideSession(id: string, mode: HideSessionMode, opts?: Hi
         currentSessionId: snap.currentSessionId,
         clientState: snap.clientState,
       });
-      animateSessionEnter(id);
-      // Push the SNAPSHOT flags, not blanket nulls: undoing a dismiss of a
-      // session that was stashed at the time must land it back in Stashed.
-      const restoredFlags = Object.fromEntries(
-        snap.allIds.map((sid) => {
-          const prev = snap.sessions[sid] ?? (snap.conversations[sid] as any);
-          return [sid, {
-            inbox_dismissed_at: prev?.inbox_dismissed_at ?? null,
-            inbox_stashed_at: prev?.inbox_stashed_at ?? null,
-            inbox_stash_hidden: prev?.inbox_stash_hidden ?? null,
-          }];
-        })
-      );
+      // Lock the restored flags until the server echoes them, exactly as a
+      // sibling window applies this undo. The server has usually applied the
+      // hide by now, so every push until the undo lands still carries it;
+      // without the locks the first one hides the row again.
+      store.applyReplicatedFields("conversations", restoredFlags, ts);
+      store.applyReplicatedFields("sessions", Object.fromEntries(
+        Object.entries(restoredFlags).map(([sid, f]) => [sid, f.inbox_pinned_at ? { ...f, is_pinned: true } : f]),
+      ), ts);
       store.applyUndoPatches({
         conversations: restoredFlags,
         client_state: { _: { current_conversation_id: snap.currentSessionId } },
@@ -153,7 +186,6 @@ export function undoableHideSession(id: string, mode: HideSessionMode, opts?: Hi
       // lock retire on the server echo. ONE timestamp for the whole gesture, so
       // the sibling's locks all key off the single undo. redo() re-hides
       // through kill/stashSession, which broadcast on their own.
-      const ts = Date.now();
       for (const [sid, fields] of Object.entries(restoredFlags)) {
         broadcastGesture({ kind: "fields", id: sid, fields, ts }, bridgeUserId(store));
       }

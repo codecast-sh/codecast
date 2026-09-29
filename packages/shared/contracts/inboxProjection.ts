@@ -93,7 +93,13 @@ export type InboxTruncation = (typeof INBOX_TRUNCATION_KINDS)[number];
 // recent window's 200 seats went to stashed rows: every plain settled row
 // older than two days was cut from the set instead of folded, and the show
 // old toggle had nothing to show.
-export const INBOX_PROJECTION_VERSION = 13 as const;
+// v14: escalation is gone (org-staffing.md S28). A request travels up the
+// reporting line as ordinary messages and the role that reports to a person
+// raises it in its own standing thread, so a role's card files by its own
+// facts like any session: blocked or waiting in needs input, asking in
+// questions. A standing session that asks (a `cast decide` in its thread) is
+// no longer hidden by the anchor rule. Nothing lifts a lead for its hands.
+export const INBOX_PROJECTION_VERSION = 14 as const;
 
 export type InboxProjection = {
   v: typeof INBOX_PROJECTION_VERSION;
@@ -135,8 +141,6 @@ export interface WorkStateInput {
   killed?: boolean;
   /** The user's own rest verdict (inbox_rest, current per userRestOf): the row is filed where the user put it until the next activity. */
   userRest?: UserRest | null;
-  /** conversations.escalated_by_role set: the role this session reports to put it in front of the person (org-roles-run-work.md R1). */
-  escalated?: boolean;
   snoozed?: boolean;
   snoozeDue?: boolean;
   /** The home of an armed recurring/event trigger that injects into it (and whose last run did not fail or flag attention). */
@@ -282,11 +286,6 @@ export function classifyWorkState(input: WorkStateInput): WorkState {
   // Actively producing, or carrying deliverable queued work on a live daemon.
   if (agentStatus && ACTIVE_AGENT_STATUSES.has(agentStatus)) return "working";
   if (canDeliver && hasPending) return "working";
-  // Its role put it in front of the person (org-roles-run-work.md R1): the
-  // person acts next, whatever rest the session declared, until the role or
-  // the person hands it back. A session that is producing right now reads
-  // working above, so answering an escalated session shows the answer landed.
-  if (input.escalated && hasMsgs) return "needs_input";
   if (agentStatus === "hibernated" && !hasPending) return "dormant";
 
   // Dead or unresponsive with output → a human needs to read/restart it. A
@@ -379,7 +378,10 @@ export function placeInboxRow(input: InboxPlacementInput): InboxPlacement {
   else if (input.stashed) bucket = "stashed";
   else if (input.snoozed) bucket = "snoozed";
   else if (input.snoozeDue && !input.killed) bucket = "needs_input";
-  else if (input.isAnchor && !isHardBlocked(input)) bucket = "hidden";
+  // A standing session is hidden until it needs a person: hard blocked, or
+  // asking (a `cast decide` in its own thread is how a lead raises a choice,
+  // org-staffing.md S28).
+  else if (input.isAnchor && !isHardBlocked(input) && !input.asking) bucket = "hidden";
   // A killed row is triaged: its prompt or pending decide has nobody to answer
   // it, so it never files as a question (the replica's asking derivation and
   // the web decision queue already skip killed rows; the two-replica
@@ -675,7 +677,6 @@ export interface RollupRow extends InboxRowIdentity {
   /** Set when the row IS a role's standing session. */
   standing_role_id?: unknown;
   /** The role put this session in front of the person; it stands alone again. */
-  escalated_by_role?: unknown;
 }
 
 export function rollupParentIdOf(row: RollupRow): string | null {
@@ -740,54 +741,17 @@ export function settleRiders(
 // A session that reports to a role is the role's to triage: it rides the
 // role's standing session the way a teammate rides its lead, so it files in
 // the role's section, nests under the role's card and never counts toward the
-// person's needs input. Two things end the ride. The role escalates it
-// (escalated_by_role), which makes it a card of its own again; or the role's
-// standing session is not on the list, which leaves nobody triaging it, so it
-// stands where its own facts put it.
+// person's needs input. One thing ends the ride: the role's standing session
+// is not on the list, which leaves nobody triaging it, so it stands where its
+// own facts put it. What the session needs from a person travels up the
+// reporting line as messages (org-staffing.md S28); nothing on the row lifts
+// it out from under the role.
 //
 // This is a RIDE rule only, deliberately absent from rollupParentIdOf: a
 // child's open ask lifts its parent into QUESTIONS, and a role's session
 // asking a question must not reach the person until the role says so.
 export function isUnderRole(row: RollupRow): boolean {
-  return !!row.org_role_id && !row.standing_role_id && !isDirectEscalation(row.escalated_by_role);
-}
-
-// The shape of conversations.escalated_by_role as every channel reads it.
-export type RoleEscalationStamp = { role_id: string; line: string; at: number; direct?: boolean };
-
-// A direct escalation puts the CHILD in front of the person (`cast escalate
-// --direct`, or the person's own Put in my inbox): it stands alone as a card.
-// Any other stamp reaches the person through the role's card. A stamp written
-// before the flag existed is the role's ordinary escalation, so absent = not
-// direct.
-export function isDirectEscalation(stamp: unknown): boolean {
-  return !!stamp && typeof stamp === "object" && (stamp as RoleEscalationStamp).direct === true;
-}
-
-// One line a role's card carries: which of its sessions it put in front of
-// the person, and why. Derived from the children on every channel, never
-// stored on the role's row, so the card and the child's strip cannot disagree.
-export type RoleEscalation = { conversation_id: string; line: string; at: number };
-
-// lead id (the role's standing session) → the open escalations of the
-// sessions under it that reach the person through the role, newest first.
-// A direct escalation is the child's own card and is not on the role's.
-export function roleEscalationsOf(ids: Iterable<string>, rowOf: (id: string) => RollupRow | undefined): Map<string, RoleEscalation[]> {
-  const all = [...ids];
-  const leads = roleLeadIdsOf(all, rowOf);
-  const out = new Map<string, RoleEscalation[]>();
-  for (const id of all) {
-    const row = rowOf(id);
-    if (!row || !isUnderRole(row) || !row.escalated_by_role) continue;
-    const lead = leads.get(String(row.org_role_id));
-    if (!lead) continue;
-    const stamp = row.escalated_by_role as RoleEscalationStamp;
-    const list = out.get(lead) ?? [];
-    list.push({ conversation_id: id, line: stamp.line, at: stamp.at });
-    out.set(lead, list);
-  }
-  for (const list of out.values()) list.sort((a, b) => b.at - a.at || (a.conversation_id < b.conversation_id ? -1 : 1));
-  return out;
+  return !!row.org_role_id && !row.standing_role_id;
 }
 
 // role id → the id of the row that is that role's standing session, over the
@@ -816,19 +780,6 @@ export function rideLeadPlacements<P extends { bucket: InboxBucket }>(
   rowOf: (id: string) => RollupRow | undefined,
   copy: (rider: P, lead: P) => void = () => {},
 ): void {
-  // A role's escalation reaches the person through the role's card (R1,
-  // revised): a session under the role with an open escalation lifts the
-  // role's standing session into needs input BEFORE anything rides it, so
-  // every session under the role files in that one section with it. The
-  // role's own placement wins only where the person put it themselves
-  // (RIDE_KEEPS_OWN) or the role is retired (dismissed).
-  const present = (id: string) => (placements.has(id) ? rowOf(id) : undefined);
-  for (const leadId of roleEscalationsOf(placements.keys(), present).keys()) {
-    const lead = placements.get(leadId)!;
-    if (RIDE_KEEPS_OWN.has(lead.bucket) || lead.bucket === "dismissed") continue;
-    lead.bucket = "needs_input";
-    (lead as { work_state?: WorkState }).work_state = "needs_input";
-  }
   settleRiders(
     placements.keys(),
     (id) => (placements.has(id) ? rowOf(id) : undefined),
@@ -1432,7 +1383,6 @@ export function placeProjectableRow(
     stashed: !!row.inbox_stashed_at,
     pinned: !!row.inbox_pinned_at,
     isAnchor: !!row.anchor_id,
-    escalated: !!row.escalated_by_role,
     asking,
   });
 }

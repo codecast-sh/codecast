@@ -677,12 +677,11 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     // TranscriptDirWatcher — so this home-relative root is not consumed today.
     transcriptRoots: ["~/.cursor/chats"],
     watcherKind: "sqlite",
-    // Provisional: cursor has NO dedicated readiness pattern in the daemon. At the
-    // fresh-launch site (daemon.ts:11989) it falls through the else branch and
-    // reuses claude's /❯|⏵/; the shared readiness path uses /[❯›]/. Recorded here
-    // as the fresh-launch else value — ct-39077 should confirm cursor's real glyph
-    // when it wires readiness.
-    promptReadyPattern: /❯|⏵/,
+    // cursor-agent's empty composer: an arrow over a placeholder, "Plan,
+    // search, build anything" before the first turn and "Add a follow-up"
+    // after (v2026.09.28). Classified whole-pane (GLYPHLESS_PROMPT_CLIENTS):
+    // its composer stays painted mid-turn, so the busy spinner is checked first.
+    promptReadyPattern: /→ (?:Plan, search, build anything|Add a follow-up)/,
     // cursor resume panes get their own `cu-` prefix (the ct-39074 fix) so they
     // never collide with claude's `cc-`. Consumed by resumeTmuxPrefix.
     tmuxPrefix: "cu",

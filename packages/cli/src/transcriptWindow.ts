@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { isCursorRoleHeaderLine } from "./parser.js";
+import { isCursorJsonlTranscript, isCursorRoleHeaderLine } from "./parser.js";
 const SYNC_BYTES_PER_PASS = 1024 * 1024;
 
 /**
@@ -141,10 +141,11 @@ export async function readIngestWindow(
  * parseCursorTranscriptFile buffers lines until the next header, so a newline
  * cut inside a message would sync the first half and drop the rest. At EOF
  * the cut is the last newline, which is what a whole tail read did before.
+ * A JSONL transcript holds one whole record per line, so any newline is a cut.
  */
 export const cursorPassBoundary: PassBoundary = (buf, len, atEof, from = 0) => {
   // At EOF the whole window is consumed, so this is the one full search.
-  if (atEof) return newlineBoundary(buf, len, atEof, 0);
+  if (atEof || isCursorJsonlWindow(buf, len)) return newlineBoundary(buf, len, atEof, 0);
   const end = newlineBoundary(buf, len, atEof, from);
   if (end < 0) return -1; // the tail added no complete line, so no new header
   // Only a line the window holds whole can be a header: past the last
@@ -164,6 +165,11 @@ export const cursorPassBoundary: PassBoundary = (buf, len, atEof, from = 0) => {
   return headerAt < 0 ? -1 : headerAt - 1;
 };
 
+
+/** A window starts at a record boundary, so its opening bytes name the format. */
+export function isCursorJsonlWindow(buf: Buffer, len: number): boolean {
+  return isCursorJsonlTranscript(buf.toString("utf8", 0, Math.min(len, 64)));
+}
 
 const CODEX_META_HEAD_CHUNK = 256 * 1024;
 const CODEX_META_HEAD_MAX = 16 * 1024 * 1024;

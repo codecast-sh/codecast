@@ -95,7 +95,7 @@ describe("orgProposals.decide", () => {
     return { ...r, ids: r.changes.map((c: any) => String(c.id)) };
   }
 
-  test("a record change carries its record's title: filled from the record at post when the spec left it out, only inside the workspace, never over the analyzer's own", async () => {
+  test("a record change carries its record's title: filled from the record at post when the spec left it out, never over the analyzer's own; another workspace's record is refused", async () => {
     const db = fixtures({
       tasks: [
         { _id: "tasks_ct-1", user_id: ME, team_id: TEAM, workspace: WS, project_id: P, short_id: "ct-1", title: "Fix the auth race", task_type: "task", status: "open", priority: "medium", created_at: 1, updated_at: 1 },
@@ -108,12 +108,12 @@ describe("orgProposals.decide", () => {
     });
     const r = await propose(db, [
       change({ kind: "task_status", task: "ct-1", status: "done", reason: "its commit landed" }),
-      change({ kind: "task_status", task: "ct-2", status: "done", reason: "its commit landed" }),
       change({ kind: "plan_status", plan: "pl-1", status: "done", reason: "every task closed", title: "What the analyzer called it" }),
       change({ kind: "project_status", project: "Billing", status: "paused", reason: "no commits in 30 days" }),
     ]);
     const stored = await Promise.all(r.ids.map((id: string) => db.get(id as any)));
-    expect(stored.map((c: any) => c.change.title)).toEqual(["Fix the auth race", undefined, "What the analyzer called it", undefined]);
+    expect(stored.map((c: any) => c.change.title)).toEqual(["Fix the auth race", "What the analyzer called it", undefined]);
+    await expect(propose(db, [change({ kind: "task_status", task: "ct-2", status: "done", reason: "its commit landed", title: "Another team's task" })])).rejects.toThrow("ct-2 belongs to another workspace");
     // The line the CLI prints keeps the id; the page's line is the contract's changeLine.
     expect(r.changes[0].line).toBe("mark task ct-1 done");
     // A revise's add is filled the same way.

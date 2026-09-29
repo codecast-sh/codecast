@@ -229,7 +229,7 @@ export async function mirrorForPrepare(
   } catch (err) {
     const line = `config mirror failed: ${err instanceof Error ? err.message : String(err)}`;
     log(line);
-    throw new Error(line);
+    throw new Error(line, { cause: err });
   }
 }
 

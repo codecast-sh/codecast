@@ -35,8 +35,6 @@ function oracle(input: LaunchArgsInput): { binaryArgs: string[]; notifyCodexBypa
       args.push(...permFlags.split(/\s+/).filter(Boolean));
       if (!extraArgs && !input.hasCodexPermissionMode) notifyCodexBypass = true;
     }
-  } else if (agentType === "cursor") {
-    // binary only
   } else if (agentType === "gemini") {
     // binary only
   } else if (agentType === "opencode") {
@@ -52,8 +50,8 @@ function oracle(input: LaunchArgsInput): { binaryArgs: string[]; notifyCodexBypa
     const extraArgs = configuredArgs;
     if (extraArgs) args.push(...extraArgs.split(/\s+/).filter(Boolean));
     if (permFlags) args.push(...permFlags.split(/\s+/).filter(Boolean));
-  } else if (agentType === "muse") {
-    // muse: same grok/codex shape.
+  } else if (agentType === "muse" || agentType === "cursor") {
+    // muse and cursor: same grok/codex shape.
     const extraArgs = configuredArgs;
     if (extraArgs) args.push(...extraArgs.split(/\s+/).filter(Boolean));
     if (permFlags) args.push(...permFlags.split(/\s+/).filter(Boolean));
@@ -82,6 +80,8 @@ function oracle(input: LaunchArgsInput): { binaryArgs: string[]; notifyCodexBypa
   } else if (agentType === "grok") {
     if (input.modelAlias) args.push("-m", input.modelAlias);
     if (input.requestedEffort && (GROK_EFFORTS as readonly string[]).includes(input.requestedEffort)) args.push("--reasoning-effort", input.requestedEffort);
+  } else if (agentType === "cursor") {
+    if (input.modelAlias) args.push("--model", input.modelAlias);
   } else if (agentType === "muse") {
     if (input.modelAlias) args.push("--model", input.modelAlias);
     if (input.requestedEffort && (MUSE_EFFORTS as readonly string[]).includes(input.requestedEffort)) args.push("--reasoning-effort", input.requestedEffort);
@@ -196,10 +196,16 @@ describe("buildLaunchArgs — targeted per-client behavior", () => {
     expect(buildLaunchArgs({ agentType: "claude", configuredArgs: "", permFlags: null, defaultFlags: null, modelAlias: "opus", requestedEffort: "bogus" }).binaryArgs).toEqual(["--model", "opus"]);
   });
 
-  test("cursor/gemini contribute only default-param flags (no model/effort/perm)", () => {
-    for (const agentType of ["cursor", "gemini"] as AgentClientId[]) {
-      expect(buildLaunchArgs({ agentType, configuredArgs: "", permFlags: "--ignored", defaultFlags: "--verbose", modelAlias: "opus", requestedEffort: "high" }).binaryArgs).toEqual(["--verbose"]);
-    }
+  test("gemini contributes only default-param flags (no model/effort/perm)", () => {
+    expect(buildLaunchArgs({ agentType: "gemini", configuredArgs: "", permFlags: "--ignored", defaultFlags: "--verbose", modelAlias: "opus", requestedEffort: "high" }).binaryArgs).toEqual(["--verbose"]);
+  });
+
+  test("cursor: configured args, --force, then the picker's --model (no effort flag)", () => {
+    expect(buildLaunchArgs({ agentType: "cursor", configuredArgs: "--sandbox disabled", permFlags: "--force", defaultFlags: null, modelAlias: "gpt-5", requestedEffort: "high" }).binaryArgs)
+      .toEqual(["--sandbox", "disabled", "--force", "--model", "gpt-5"]);
+    expect(getPermissionFlags("cursor", null)).toBe("--force");
+    expect(getPermissionFlags("cursor", { agent_permission_modes: { cursor: "default" } } as any)).toBeNull();
+    expect(getPermissionFlags("cursor", { agent_args: { cursor: "--yolo" } } as any)).toBeNull();
   });
 
   test("opencode: launches auto-approved with the picker's -m model (no effort flag)", () => {
@@ -368,7 +374,7 @@ describe("buildPrintArgs maps unified flags onto each client's native print mode
       agentType: "cursor",
       autoApprove: false,
     });
-    expect(binaryArgs).toEqual(["-p", "do the thing"]);
+    expect(binaryArgs).toEqual(["--trust", "-p", "do the thing"]);
   });
 
   test("pi: -p positional, --mode json, --thinking from effort", () => {

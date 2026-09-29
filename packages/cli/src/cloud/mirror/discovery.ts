@@ -25,7 +25,28 @@ export const HOST_OWNED_LOCAL_BIN: readonly string[] = [
   GH_WRAPPER_REL, ".local/bin/cast", ".local/bin/codecast",
   ...[...INSTALLABLE_CLIENTS, "uv", "uvx", "bun", "bunx", "node", "npm", "npx"].map((name) => `${LOCAL_BIN_ROOT}/${name}`),
 ];
-export const CONTEXT_SIZE_CAP = 256 * 1024 * 1024;
+export const CONTEXT_SIZE_CAP = 768 * 1024 * 1024;
+
+/**
+ * The project context is over the cap, and leaving `files` out brings it
+ * under: the largest files the walk or a prose reference picked up (never a
+ * file an active config requires). Paths are home-relative, the form
+ * `cloud_mirror_exclude` takes, so the answer "leave them out" is those paths
+ * appended to that setting.
+ */
+export class ContextTooLargeError extends Error {
+  constructor(readonly totalBytes: number, readonly capBytes: number, readonly files: Array<{ path: string; bytes: number }>) {
+    const mib = (n: number) => `${Math.ceil(n / 1048576)} MiB`;
+    super(`project context is ${mib(totalBytes)}, over the ${mib(capBytes)} cap; leaving out ${files.length} file${files.length === 1 ? "" : "s"} would fit: ${files.slice(0, 3).map((f) => `${f.path} (${mib(f.bytes)})`).join(", ")}${files.length > 3 ? `, and ${files.length - 3} more` : ""}`);
+    this.name = "ContextTooLargeError";
+  }
+}
+
+/** The ContextTooLargeError behind `err`, through any wrapper that kept it as `cause`. */
+export function findContextTooLarge(err: unknown): ContextTooLargeError | null {
+  for (let e: any = err, depth = 0; e && depth < 8; e = e.cause, depth++) if (e instanceof ContextTooLargeError) return e;
+  return null;
+}
 export const INSTRUCTION_FILE_RE = /^(?:AGENTS(?:\.override)?|CLAUDE(?:\.local)?|GEMINI|GROK|OPENCODE)\.md$/i;
 export const CLAUDE_RUNTIME_ROOTS: readonly string[] = [
   ".claude/plugins/marketplaces", ".claude/plugins/installed_plugins.json", ".claude/plugins/known_marketplaces.json",
@@ -327,6 +348,9 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
   const scannedReferences = new Set<string>();
   const credentialPaths = new Set<string>();
   const securityPaths = new Set<string>();
+  const cap = opts.maxBytes ?? CONTEXT_SIZE_CAP;
+  const candidates: Array<{ path: string; bytes: number }> = [];
+  let overflowBytes = 0;
   const excludes = configPatterns(opts.config?.cloud_mirror_exclude);
   const includes = configPatterns(opts.config?.cloud_mirror_include);
   const tracked = new Set<string>();
@@ -381,7 +405,16 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
     if (!includeAll && !isContextFile(rel)) return;
     const prefix: Buffer = yield { op: "prefix", path: real };
     if (isNativeBinary(prefix)) { result.skipped.push({ path: logical, reason: "native binary" }); return; }
-    if (actual.size + result.totalBytes > (opts.maxBytes ?? CONTEXT_SIZE_CAP)) throw new Error(`project context exceeds ${(opts.maxBytes ?? CONTEXT_SIZE_CAP) / 1048576} MiB at ${logical}`);
+    // Past the cap a file that could be left out is only sized, never read,
+    // so the walk can still name what to leave out; a required one fails here.
+    const droppable = !includeAll || optionalReference;
+    if (actual.size + result.totalBytes + overflowBytes > cap) {
+      if (!droppable) throw new Error(`project context exceeds ${cap / 1048576} MiB at ${logical}`);
+      scanned.add(logical);
+      overflowBytes += actual.size;
+      candidates.push({ path: homeRelative(logical, home) ?? logical, bytes: actual.size });
+      return;
+    }
     let bytes: Buffer = yield { op: "bytes", path: real };
     scanned.add(logical);
     const kind = kindForPath(rel);
@@ -394,6 +427,7 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
     if (emit) {
       files.set(`${scope}:${rel}`, { sourcePath: logical, relativePath: rel, scope, kind, mode: actual.mode & 0o100 ? "0700" : "0600", bytes });
       result.totalBytes += bytes.length;
+      if (droppable) candidates.push({ path: homeRelative(logical, home) ?? logical, bytes: bytes.length });
     }
     const text = portableText(bytes);
     if (text !== null) {
@@ -436,6 +470,18 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
     }
   }
   for (const extra of includes) yield* visit(path.resolve(home, extra), new Set(), true);
+  if (overflowBytes > 0) {
+    const total = result.totalBytes + overflowBytes;
+    const leaveOut: typeof candidates = [];
+    let freed = 0;
+    for (const file of candidates.sort((a, b) => b.bytes - a.bytes)) {
+      if (total - freed <= cap) break;
+      leaveOut.push(file);
+      freed += file.bytes;
+    }
+    if (total - freed > cap) throw new Error(`project context exceeds ${cap / 1048576} MiB even without the files it could leave out`);
+    throw new ContextTooLargeError(total, cap, leaveOut);
+  }
   result.files = [...files.values()].sort((a, b) => a.scope.localeCompare(b.scope) || (a.relativePath < b.relativePath ? -1 : a.relativePath > b.relativePath ? 1 : 0));
   result.warnings = [...new Set(result.warnings)];
   return result;

@@ -111,7 +111,7 @@ describe("un-flagged listInboxSessions payload — golden shape", () => {
       "_id", "acting_user_id", "active_plan", "active_task", "activity", "agent_name", "agent_started_at",
       "agent_status", "agent_status_boundary", "agent_status_updated_at", "agent_task_id", "agent_team_name", "agent_type",
       "anchor_id", "armed_trigger_kind", "auq_open", "author_avatar", "author_name",
-      "awaiting_input", "browser_pane_offer", "character_avatar", "character_name", "cloud_placement", "cloud_seed", "cloud_workspace", "context_tokens", "daemon_alive_until", "effort", "escalated_by_role", "forked_from", "git_branch", "git_remote_url", "git_root",
+      "awaiting_input", "browser_pane_offer", "character_avatar", "character_name", "cloud_placement", "cloud_seed", "cloud_workspace", "context_tokens", "daemon_alive_until", "effort", "forked_from", "git_branch", "git_remote_url", "git_root",
       "handed_off_from_conversation_id", "handed_off_from_details", "handed_off_to_conversation_id", "handed_off_to_details",
       "has_pending", "hibernated_at", "icon", "icon_color", "idle_summary", "image_preview_url",
       "implementation_session", "inbox_dismissed_at", "inbox_killed_at",
@@ -253,30 +253,24 @@ describe("session identity on the row (session-characters.md S1, S6)", () => {
     expect(hand.org_role_id).toBe("org_roles_infra");
     expect(hand.standing_role_id).toBeNull();
     expect(hand.role?.handle).toBe("infra");
-    expect(hand.escalated_by_role).toBeNull();
   });
 
-  // org-roles-run-work.md R1 (revised), on rows through the server's own
-  // overlay: a role's session files with the role and leaves needs input; an
-  // escalation reaches the person through the ROLE's card, which files in
-  // needs input carrying the line, its sessions nested under it; a direct
-  // escalation is the child's own card.
-  test("a role's sessions ride its standing session; an escalation lifts the role's card into needs input; direct stands alone", async () => {
-    const escalation = { role_id: "org_roles_infra", line: "the pricing copy is ready and needs your eye", at: EPOCH - 5 * MIN };
-    const older = { role_id: "org_roles_infra", line: "the launch date is yours to call", at: EPOCH - 9 * MIN };
-    const direct = { role_id: "org_roles_infra", line: "a permission prompt is open in here", at: EPOCH - 4 * MIN, direct: true };
+  // org-roles-run-work.md R1 and org-staffing.md S28, on rows through the
+  // server's own overlay: a role's session files with the role and leaves
+  // needs input, whatever it waits on; the role's card files by its own facts
+  // (blocked or waiting: needs input; asking: questions), and nothing under it
+  // lifts it.
+  test("a role's sessions ride its standing session; the role's card files by its own facts", async () => {
     const tables = {
       org_roles: [{ _id: "org_roles_infra", short_id: "or-7", name: "Infra lead", handle: "infra", avatar: "stag", status: "active" }],
-      // The role finished its wake and said so: its own state is done.
       managed_sessions: [
-        { _id: "ms_standing", user_id: ME, conversation_id: "conversations_standing", last_heartbeat: EPOCH - 1000, agent_status: "done", agent_status_updated_at: EPOCH - MIN, tmux_session: "cc-2", permission_mode: "default" },
+        { _id: "ms_standing", user_id: ME, conversation_id: "conversations_standing", last_heartbeat: EPOCH - 1000, agent_status: "idle", agent_status_updated_at: EPOCH - MIN, tmux_session: "cc-2", permission_mode: "default" },
       ],
       conversations: [
-        conv("standing", { updated_at: EPOCH - MIN, anchor_id: "anchors_infra", standing_role_id: "org_roles_infra", thread_state_status: "done" }),
+        // The lead raised something in its own thread: it declared blocked.
+        conv("standing", { updated_at: EPOCH - MIN, anchor_id: "anchors_infra", standing_role_id: "org_roles_infra", thread_state_status: "blocked", thread_state: "Which price band for Texas?" }),
         conv("waiting", { updated_at: EPOCH - 2 * MIN, org_role_id: "org_roles_infra" }),
-        conv("escalated", { updated_at: EPOCH - 3 * MIN, org_role_id: "org_roles_infra", thread_state_status: "done", escalated_by_role: escalation }),
-        conv("older", { updated_at: EPOCH - 6 * MIN, org_role_id: "org_roles_infra", thread_state_status: "done", escalated_by_role: older }),
-        conv("direct", { updated_at: EPOCH - 3 * MIN, org_role_id: "org_roles_infra", thread_state_status: "done", escalated_by_role: direct }),
+        conv("blocked_hand", { updated_at: EPOCH - 3 * MIN, org_role_id: "org_roles_infra", thread_state_status: "blocked", thread_state: "needs a key" }),
         conv("mine", { updated_at: EPOCH - 4 * MIN }),
         conv("quiet", { updated_at: EPOCH - MIN, anchor_id: "anchors_quiet", standing_role_id: "org_roles_quiet" }),
       ],
@@ -284,29 +278,18 @@ describe("session identity on the row (session-characters.md S1, S6)", () => {
     const { liveness } = await computeSessionsLiveness({ db: db(tables) }, ME as any);
     const bucketOf = (id: string) => (liveness as any)[`conversations_${id}`]?.bucket;
     expect(bucketOf("mine")).toBe("needs_input");
-    // The role's own facts say done; the escalations under it put its card
-    // in needs input, and everything under it files there with it.
+    // The lead's own declaration puts its card in needs input; everything
+    // under it files there with it, and a blocked hand is still the role's.
     expect(bucketOf("standing")).toBe("needs_input");
     expect(bucketOf("waiting")).toBe("needs_input");
-    expect(bucketOf("escalated")).toBe("needs_input");
-    // The standing session surfaced because something rides it; one with
-    // nothing under it stays out of the inbox.
+    expect(bucketOf("blocked_hand")).toBe("needs_input");
+    // A standing session with nothing under it and nothing to raise stays out.
     expect(bucketOf("quiet")).toBe("hidden");
-    // The direct one is a card of its own.
-    expect(bucketOf("direct")).toBe("needs_input");
 
     const { sessions } = await computeInboxSessions({ db: db(tables) }, ME as any, {});
-    const row = sessions.find((s: any) => s._id === "conversations_escalated");
-    // Key order is the store draft's, so a web gesture's field lock retires on the echo.
-    expect(JSON.stringify(row.escalated_by_role)).toBe(JSON.stringify(escalation));
-    expect(row.role?.handle).toBe("infra");
-    expect(JSON.stringify(sessions.find((s: any) => s._id === "conversations_direct").escalated_by_role)).toBe(JSON.stringify(direct));
-    // One card, two lines, newest first, derived from the children; the
-    // direct one is not on it.
-    const standing = sessions.find((s: any) => s._id === "conversations_standing");
-    expect(standing.escalations).toEqual([
-      { conversation_id: "conversations_escalated", line: escalation.line, at: escalation.at },
-      { conversation_id: "conversations_older", line: older.line, at: older.at },
-    ]);
+    const hand = sessions.find((s: any) => s._id === "conversations_blocked_hand");
+    expect(hand.role?.handle).toBe("infra");
+    expect("escalated_by_role" in hand).toBe(false);
+    expect("escalations" in sessions.find((s: any) => s._id === "conversations_standing")).toBe(false);
   });
 });

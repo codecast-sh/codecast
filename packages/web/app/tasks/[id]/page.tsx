@@ -36,7 +36,7 @@ import { DashboardLayout } from "../../../components/DashboardLayout";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { ContextChatInput } from "../../../components/ContextChatInput";
 import { TaskCommentComposer, UserBadge } from "../../../components/tasks/TaskCommentStream";
-import { TaskTimeline } from "../../../components/tasks/TaskTimeline";
+import { TaskSessionLink, TaskTimeline } from "../../../components/tasks/TaskTimeline";
 import { AssigneeFace } from "../../../components/identity/AssigneeFace";
 import { useOrgRoles } from "../../../hooks/useOrgRoles";
 import { useSyncOrgTreeFeeder } from "../../../hooks/useSyncOrgTree";
@@ -551,6 +551,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
     const s = useInboxStore.getState();
     return resolveTaskLinkedConversations(data, s.sessions, s.taskOriginBadges);
   }, [data?.linked_conversations, linkedIds, linkedSig]);
+  const originSession = linkedConversations.find((c: any) => c._id === data?.created_from_conversation);
   // External events for this task are their own synced collection: mount the task
   // feeder and read the store, never the query. The route id may be the short
   // id, so match on both it and the convex id.
@@ -919,7 +920,12 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
               <span className="flex items-center gap-1.5 text-xs text-sol-text-muted" title={formatDateFull(data.created_at)}>
                 <Clock className="w-3 h-3 text-sol-text-dim" />
                 {formatDate(data.created_at)}
-                {data.creator && (
+                {originSession ? (
+                  <>
+                    <span className="text-sol-text-dim">by</span>
+                    <TaskSessionLink session={originSession} onOpen={openLinkedSession} />
+                  </>
+                ) : data.creator && (
                   <>
                     <span className="text-sol-text-dim">by</span>
                     <UserBadge name={data.creator.name} image={data.creator.image} username={(data.creator as any).github_username} />

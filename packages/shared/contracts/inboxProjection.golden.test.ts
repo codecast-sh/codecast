@@ -73,6 +73,9 @@ const GOLDEN_HASH_BY_VERSION: Record<number, string> = {
   // moved.
   12: "cc7dfd659f0c1501",
   13: "9d3297f417ee3752",
+  // v14: escalation removed (org-staffing.md S28); a role's card files by its
+  // own facts, and an asking standing session is not hidden.
+  14: "d036ac035b87a1bb",
 };
 
 type Expected = {

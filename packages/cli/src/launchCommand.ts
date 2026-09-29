@@ -136,6 +136,14 @@ export function getPermissionFlags(agentType: AgentClientId, config?: Config | n
     if (existing.includes("--disable-approval") || existing.includes("--approval-mode") || existing.includes("--yolo")) return null;
     if (modes?.muse === "default") return null;
     return "--yolo";
+  } else if (agentType === "cursor") {
+    // A managed cursor-agent is driven from the web, and its "Run this
+    // command?" menu is invisible there (no pane prompt monitoring), so it
+    // launches with Run Everything unless the user pinned a mode.
+    const existing = getAgentArgs(config, "cursor") || "";
+    if (/(?:^|\s)(?:--force|-f|--yolo|--mode|--plan)\b/.test(existing)) return null;
+    if (modes?.cursor === "default") return null;
+    return "--force";
   } else if (agentType === "gemini") {
     // gemini flags TBD for TUI launch; print mode adds --yolo separately.
   }
@@ -276,13 +284,14 @@ export function buildLaunchArgs(input: LaunchArgsInput): LaunchArgsResult {
     // pins a permission mode, so concatenating can't double up (codex shape).
     if (configuredArgs) args.push(...configuredArgs.split(/\s+/).filter(Boolean));
     if (permFlags) args.push(...permFlags.split(/\s+/).filter(Boolean));
-  } else if (agentType === "muse") {
-    // Same grok/codex shape: configured args + `--disable-approval`, with
-    // getPermissionFlags yielding null when agent_args.muse pins a mode.
+  } else if (agentType === "muse" || agentType === "cursor") {
+    // Same grok/codex shape: configured args + the permission flag
+    // (`--disable-approval` / `--force`), with getPermissionFlags yielding
+    // null when agent_args pins a mode.
     if (configuredArgs) args.push(...configuredArgs.split(/\s+/).filter(Boolean));
     if (permFlags) args.push(...permFlags.split(/\s+/).filter(Boolean));
   }
-  // cursor / gemini: no configured args or permission flags today.
+  // gemini: no configured args or permission flags today.
 
   if (defaultFlags) args.push(...defaultFlags.split(/\s+/).filter(Boolean));
 
@@ -329,6 +338,10 @@ export function appendModelEffortFlags(
     if (input.requestedEffort && (GROK_EFFORT_LEVELS as readonly string[]).includes(input.requestedEffort)) {
       args.push("--reasoning-effort", input.requestedEffort);
     }
+  } else if (agentType === "cursor") {
+    // cursor-agent selects a model with `--model <id>` (e.g. gpt-5, sonnet-4);
+    // it has no reasoning-effort flag, effort rides the model id.
+    if (input.modelAlias) args.push("--model", input.modelAlias);
   } else if (agentType === "muse") {
     // muse selects a model with `--model <model-id>` (bare id, e.g.
     // muse-spark-1.3-contributor) and takes reasoning effort as
@@ -450,14 +463,18 @@ export function buildPrintArgs(input: PrintArgsInput): PrintArgsResult {
   } else if (input.autoApprove !== false && !input.configuredArgs) {
     // TUI launch has no permission flags for cursor/gemini; print mode
     // still auto-approves so a script does not hang on a prompt.
-    if (agentType === "cursor") args.push("--force", "--trust");
+    if (agentType === "cursor") args.push("--force");
     else if (agentType === "gemini") args.push("--yolo");
   }
 
   if (input.defaultFlags) args.push(...splitFlags(input.defaultFlags));
 
+  // Headless cursor-agent refuses an untrusted workspace unless told; the TUI
+  // asks instead (answered by acceptTrustPrompt).
+  if (agentType === "cursor" && !args.includes("--trust")) args.push("--trust");
+
   appendModelEffortFlags(args, input);
-  if ((agentType === "cursor" || agentType === "gemini") && input.modelAlias) {
+  if (agentType === "gemini" && input.modelAlias) {
     args.push("--model", input.modelAlias);
   }
 

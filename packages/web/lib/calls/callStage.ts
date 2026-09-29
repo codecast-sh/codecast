@@ -32,6 +32,21 @@ export function openCallStage(): void {
   emit();
 }
 
+// A door that was showing unread chat opens the stage with its thread open:
+// the count is why the person clicked. The stage takes the request once, as
+// it mounts, in this window.
+let threadWanted = false;
+
+export function requestCallThread(): void {
+  threadWanted = true;
+}
+
+export function takeCallThreadRequest(): boolean {
+  const wanted = threadWanted;
+  threadWanted = false;
+  return wanted;
+}
+
 export function closeCallStage(): void {
   if (!open) return;
   open = false;

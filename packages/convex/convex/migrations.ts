@@ -634,3 +634,23 @@ export const stampMappingRepositories = internalMutation({
     return { dryRun, scanned: rows.length, stamped, skipped };
   },
 });
+
+// One-time cleanup (org-staffing.md S28): `cast escalate` is gone, and with it
+// the `escalated_by_role` stamp it wrote on a role's session. Nothing reads
+// the field any more; this clears it from every row that still carries it, so
+// the schema can drop the field afterwards (Convex refuses a schema the rows
+// do not fit). Dry by default.
+//   npx convex run migrations:clearEscalationStamps '{"dryRun":false}'
+export const clearEscalationStamps = internalMutation({
+  args: { dryRun: v.optional(v.boolean()), cursor: v.optional(v.string()), numItems: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const dryRun = args.dryRun ?? true;
+    const page = await ctx.db.query("conversations").paginate({ cursor: args.cursor ?? null, numItems: args.numItems ?? 200 });
+    const stamped = page.page.filter((c: any) => c.escalated_by_role !== undefined);
+    if (!dryRun) for (const c of stamped) await ctx.db.patch(c._id, { escalated_by_role: undefined });
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.migrations.clearEscalationStamps, { dryRun, cursor: page.continueCursor, numItems: args.numItems });
+    }
+    return { dryRun, scanned: page.page.length, cleared: stamped.length, done: page.isDone };
+  },
+});

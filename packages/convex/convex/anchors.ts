@@ -119,7 +119,9 @@ function roleOpeningMessage(name: string, workspace: string, role: RoleBootstrap
     ``,
     `You wake on your routine, a trigger a person can see and change on your page, and whenever someone writes to you. Start every turn with \`cast brief\`: what changed in your area, your sessions, and how the people who report to you are doing against their goals.`,
     ``,
-    `The sessions that report to you stay out of the person's inbox, so nobody sees one that waits on them unless you say so. Answer what you can. When one needs a person, put it in front of them with \`cast escalate <session> "<what they will decide and why>"\`.`,
+    `The sessions that report to you stay out of the person's inbox; what they need reaches you as messages, and you answer what you can. What you cannot answer goes up to ${role.parentName}. ${role.parentName.startsWith("@")
+      ? `Write to them with \`cast role wake ${role.parentName} "<what they will decide and why>"\`.`
+      : `Raise it in this thread: say what they will decide and why in your pinned state (\`cast state --status blocked\`), and post a real choice between options as a \`cast decide\` card here, with your recommendation.`}`,
     ``,
     `Answer people here, in plain words, and say where each piece of work went.`,
     ``,

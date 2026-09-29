@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { parsePermissionModeFooter, stepPermissionMode, classifyBypassBlock, classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, clearUnresolvablePane, extractTmuxLiveRegion, GROK_TRUST_PANE_CAPTURE_LINES, isGrokTrustDialog, isPhantomBypassPermissionBlock, noteUnresolvablePane, paneContentAfterLaunchEcho, parseInteractivePrompt, planHighlightStep, planTrustPromptStep, selectRowHasLabel } from "./daemon.js";
+import { classifyStartedPane, parsePermissionModeFooter, stepPermissionMode, classifyBypassBlock, classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, clearUnresolvablePane, extractTmuxLiveRegion, GROK_TRUST_PANE_CAPTURE_LINES, isGrokTrustDialog, isPhantomBypassPermissionBlock, noteUnresolvablePane, paneContentAfterLaunchEcho, parseInteractivePrompt, planHighlightStep, planTrustPromptStep, selectRowHasLabel } from "./daemon.js";
 import { AGENT_CLIENTS } from "@codecast/shared/contracts";
-import { CODEX_TRUST_PANE, GROK_TRUST_PANE } from "./test-helpers/trustDialogFrames.js";
+import { CLAUDE_BYPASS_WARNING_PANE, CODEX_TRUST_PANE, GROK_TRUST_PANE } from "./test-helpers/trustDialogFrames.js";
 
 describe("isPhantomBypassPermissionBlock", () => {
   test("suppresses auto-approved tool permission_blocked in bypass mode", () => {
@@ -998,5 +998,22 @@ describe("safeguards Session paused interstitial", () => {
     const scrolled = SESSION_PAUSED_PANE.replace(/\n✻ Waiting for API response[^\n]*/, "\n✶ Perambulating… (50s · ↓ 161 tokens)");
     expect(parseInteractivePrompt(scrolled)).toBeNull();
     expect(classifyTmuxLiveState(extractTmuxLiveRegion(scrolled))).toBe("busy");
+  });
+});
+
+describe("Claude Code's bypass-permissions warning (ct-55193)", () => {
+  test("reads as a confirmation to accept, never as the Rewind modal Escape would cancel", () => {
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(CLAUDE_BYPASS_WARNING_PANE))).toBe("trust");
+  });
+
+  test("a freshly launched pane showing it is answered, not left booting", () => {
+    expect(classifyStartedPane(CLAUDE_BYPASS_WARNING_PANE, /❯/)).toBe("trust");
+  });
+
+  test("the answer moves the highlight off the default No, exit onto Yes, I accept", () => {
+    const lines = CLAUDE_BYPASS_WARNING_PANE.split("\n");
+    expect(planTrustPromptStep(lines)).toEqual({ action: "move", key: "Down", times: 1 });
+    const moved = lines.map((l) => l.replace("❯ No, exit", "  No, exit").replace("  Yes, I accept", "❯ Yes, I accept"));
+    expect(planTrustPromptStep(moved)).toEqual({ action: "confirm", option: expect.stringContaining("Yes, I accept") });
   });
 });

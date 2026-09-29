@@ -5,7 +5,7 @@ import { generateTitleFromMessage } from "./ingestMetadata.js";
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { readCompleteLines, cursorPassBoundary, readCodexSessionMetaHeadAsync } from '../transcriptWindow.js';
+import { readCompleteLines, cursorPassBoundary, isCursorJsonlWindow, readCodexSessionMetaHeadAsync } from '../transcriptWindow.js';
 import { readCodexModelBeforeOffset } from '../codexTranscriptModel.js';
 import { isCursorRoleHeaderLine, parseTranscriptFor, parseCodexSessionFile, parseSessionFile, extractSlug, extractParentUuid, extractCwd, extractCodexCwd, extractSummaryTitle, extractTeamInfo, detectCliFlags, extractCodexSessionMetadata, extractCodexForkRoot, isCompletedStandaloneCodexReview, isCompletedNativeCodexReviewChild, extractPiCwd, extractGrokCwd, isGrokInternalSession, extractMuseCwd } from '../parser.js';
 import { recoverImagesFromBackup, classifyOpencodeTranscriptTail, classifyPiTranscriptTail, classifyGrokTranscriptTail, classifyMuseTranscriptTail } from './ingestMetadata.js';
@@ -131,7 +131,7 @@ async function windowFor(job: IngestJob, before: IngestIdentity) {
       for (let start=0;start<=cut;) {
         const end=buf.indexOf(0x0a,start);
         if (end<0 || end>cut) break;
-        if (job.client === 'cursor') {
+        if (job.client === 'cursor' && !isCursorJsonlWindow(buf,len)) {
           if (isCursorRoleHeaderLine(buf.toString('utf8',start,end)) && ++records > INGEST_WINDOW_ROWS) return start-1;
         } else if (++records >= INGEST_WINDOW_ROWS) return end;
         start=end+1;

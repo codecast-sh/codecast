@@ -149,15 +149,14 @@ async function verifyScopePage() {
   const growth = ORG_FIXTURE.roles[0];
   const withStanding: OrgTree = { ...ORG_FIXTURE, roles: [{ ...growth, counts: { ...growth.counts, needs_input: 2 } }] };
   env.tree = withStanding;
-  // Two hands the role put in front of the person (R1, revised), read off
-  // the store's rows by the inbox's own helper; a third waits unescalated
-  // and must never reach the first screen.
-  const escalated = (id: string, line: string, at: number, extra: Record<string, any> = {}) => ({ _id: id, org_role_id: growth._id, state: "needs_input", escalated_by_role: { role_id: growth._id, line, at }, ...extra });
+  // Three hands under the role wait on a person; they wait on the ROLE, and
+  // none of them reaches the first screen or the header.
+  const roleHand = (id: string) => ({ _id: id, org_role_id: growth._id, state: "needs_input" });
   const roleRows = () => ({
     "fixture-growth-conv": { _id: "fixture-growth-conv", standing_role_id: growth._id },
-    [growth.sessions[0]._id]: escalated(growth.sessions[0]._id, "Pick the pricing page's headline: A reads safer, B tests better", T0 - 3_600_000),
-    [growth.sessions[1]._id]: escalated(growth.sessions[1]._id, "The ads budget needs a yes before Monday", T0 - 600_000),
-    [growth.sessions[2]._id]: { _id: growth.sessions[2]._id, org_role_id: growth._id, state: "needs_input" },
+    [growth.sessions[0]._id]: roleHand(growth.sessions[0]._id),
+    [growth.sessions[1]._id]: roleHand(growth.sessions[1]._id),
+    [growth.sessions[2]._id]: roleHand(growth.sessions[2]._id),
   });
   state.sessions = roleRows();
 
@@ -171,7 +170,7 @@ async function verifyScopePage() {
   assert.equal(q("[data-thread]")!.getAttribute("data-thread-density"), "condensed", "working turns fold to receipts");
   assert.match(q("[data-scope-lead]")!.textContent!, /I look after Growth, SEO and AI citations\./, "the agent opens by saying what this area is");
   assert.match(q("[data-scope-stripe]")!.textContent!, /Rewriting the weekly growth review/, "the header says what it is watching");
-  assert.match(q("[data-scope-lead-ask]")!.textContent!, /2 things need you/, "and what the role put in front of them, never a count of sessions waiting");
+  assert.equal(q("[data-scope-lead-ask]"), null, "the lead never counts sessions waiting on a person: those wait on the role, which raises what it cannot answer in its own thread");
   for (const word of ["trust", "model", "today", "wakes", "tokens", "host"]) assert.ok(!qa("header *").some((el) => el.children.length === 0 && el.textContent?.trim().toLowerCase() === word), `the header no longer says ${word}`);
   assert.equal(q("[data-thread]")!.getAttribute("data-thread-autofocus"), "1", "the composer comes to hand on a desktop");
   assert.ok(q("[data-composer]"), "the composer is Talk");
@@ -185,19 +184,15 @@ async function verifyScopePage() {
   assert.equal(qa("[data-scope-tab]")[0].getAttribute("data-scope-tab"), "scope", "and Scope is the first tab");
   assert.ok(q("[data-scope-briefing]"), "the Scope tab is the briefing (F5.1)");
   assert.equal(q("[data-scope-feed]"), null, "the feed waits behind its tab");
-  assert.deepEqual(qa("[data-scope-briefing] [data-scope-section]").map((el) => el.getAttribute("data-scope-section")), ["needs-you", "doing"], "the sections with something to say, in order; this role has written no line yet");
-  assert.equal(qa("[data-scope-briefing] [data-role-escalation]").length, 2, "what needs you: the two escalations, never the third hand that only waits");
+  assert.deepEqual(qa("[data-scope-briefing] [data-scope-section]").map((el) => el.getAttribute("data-scope-section")), ["doing"], "the sections with something to say, in order; this role has written no line yet, and hands waiting on the role are not a section");
   assert.equal(q('[data-role-scope="page"]'), null, "the project cards, the hand groups and the counts left the first screen");
   assert.equal(qa("[data-scope-tab]").length, 12, "every tab survives");
   assert.equal(qa("[data-scope-tab-count]").length, 0, "and the tab strip carries no number");
-  // The dot: the role put two things in front of the person.
-  assert.equal(q("[data-scope-panel-toggle]")!.getAttribute("data-scope-needs-you"), "2");
-  assert.ok(q("[data-scope-panel-dot]"), "the toggle carries the dot");
+  assert.equal(q("[data-scope-panel-dot]"), null, "the toggle carries no dot: what the role needs from the person is in its own thread");
   // Close and reopen from the header.
   await click(q("[data-scope-panel-toggle]"));
   assert.equal(q("[data-scope-aside]"), null, "closed");
   assert.equal(q("[data-scope-panel-toggle]")!.getAttribute("data-scope-panel-toggle"), "closed");
-  assert.ok(q("[data-scope-panel-dot]"), "a closed panel still tells you a hand waits");
   assert.ok(q("[data-thread]"), "the conversation stays");
   await click(q("[data-scope-panel-toggle]"));
   assert.equal(q("[data-scope-aside]")!.getAttribute("data-scope-aside"), "side");
@@ -214,14 +209,6 @@ async function verifyScopePage() {
   await click(q('[data-scope-tab="scope"]'));
   assert.equal(calls.pop(), "replace:/org/or-1");
 
-  // No dot when the role put nothing in front of the person, however many
-  // of its hands wait on it.
-  state.sessions = { "fixture-growth-conv": { _id: "fixture-growth-conv", standing_role_id: growth._id }, [growth.sessions[2]._id]: { _id: growth.sessions[2]._id, org_role_id: growth._id, state: "needs_input" } };
-  await rerender("or-1");
-  assert.equal(q("[data-scope-panel-dot]"), null);
-  assert.equal(q("[data-scope-lead-ask]"), null, "nothing to say when nothing needs the person");
-  state.sessions = roleRows();
-
   // ── narrow: the panel overlays the conversation ──
   env.wide = false;
   await mount("or-1");
@@ -237,7 +224,6 @@ async function verifyScopePage() {
   assert.equal(q("[data-scope-layout]")!.getAttribute("data-scope-layout"), "sheet");
   assert.equal(q("[data-scope-aside]"), null, "the conversation leads on the phone");
   assert.equal(q("[data-thread]")!.getAttribute("data-thread-autofocus"), "0", "no keyboard pop on the phone");
-  assert.ok(q("[data-scope-panel-dot]"), "the dot rides the compact toggle");
   await click(q("[data-scope-panel-toggle]"));
   assert.equal(q("[data-scope-aside]")!.getAttribute("data-scope-aside"), "sheet");
   assert.equal(q("[data-scope-panel-close]")!.getAttribute("aria-label"), "Back to the conversation");
@@ -369,14 +355,14 @@ test("the scope page mounts as a conversation in its three widths", verifyScopeP
 
 // F5.4: the first screen holds exactly what the person reads, and nothing
 // the board holds. The Calling lead's shape: two projects, six plans, 83
-// tasks, 33 hands waiting on a person, two escalations.
+// tasks, 33 hands waiting on a person.
 async function verifyFirstScreen() {
   const { React, act, env, state, collections, ORG_FIXTURE, T0 } = await world();
   const DAY = 86_400_000;
   const growth = ORG_FIXTURE.roles[0];
   const ROLE = "fixture-role-calling";
   const STANDING = "fixture-calling-conv";
-  // 33 hands waiting on a person, 4 at work, 2 of the waiting ones escalated.
+  // 33 hands waiting on a person, 4 at work.
   const hands = Array.from({ length: 37 }, (_, i) => ({ _id: `calling-h${i}`, short_id: `jx7c${String(i).padStart(3, "0")}`, title: `Hand ${i}`, agent_type: "claude", state: i < 33 ? "needs_input" : "working", updated_at: T0 - (i + 1) * 60_000, subagent_count: 0, is_anchor: false, org_role_id: ROLE })) as any[];
   const calling = {
     ...growth,
@@ -396,19 +382,15 @@ async function verifyFirstScreen() {
     [STANDING]: { _id: STANDING, standing_role_id: ROLE },
     ...Object.fromEntries(hands.map((h) => [h._id, { _id: h._id, org_role_id: ROLE, state: h.state }])),
   };
-  state.sessions["calling-h5"].escalated_by_role = { role_id: ROLE, line: "Which lawyer signs the third market: ours is slow, theirs is dear", at: T0 - 2 * 3_600_000 };
-  state.sessions["calling-h9"].escalated_by_role = { role_id: ROLE, line: "The Union goals page needs your read before it ships", at: T0 - 20 * 60_000 };
   collections.projects = projects; collections.plans = plans; collections.tasks = tasks;
 
   const { createRoot } = await import("react-dom/client");
   const { ScopeOverviewTab } = await import("./ScopePanel");
-  const { useRoleEscalations } = await import("../../../hooks/useRoleEscalations");
   const root = createRoot(document.getElementById("root")!);
   const q = (sel: string) => document.querySelector<HTMLElement>(sel);
   const qa = (sel: string) => [...document.querySelectorAll<HTMLElement>(sel)];
   function Screen({ brief }: { brief: string | null }) {
-    const escalations = useRoleEscalations(ROLE, STANDING);
-    return React.createElement(ScopeOverviewTab, { role: calling as any, now: T0, canEdit: true, escalations, narrative: brief, briefLoaded: true });
+    return React.createElement(ScopeOverviewTab, { role: calling as any, now: T0, narrative: brief, briefLoaded: true });
   }
   const render = (brief: string | null) => act(async () => root.render(React.createElement(Screen, { brief })));
 
@@ -416,12 +398,9 @@ async function verifyFirstScreen() {
   const old = new Date(T0 - 12 * DAY).toISOString().slice(0, 10);
   await render(`Calling: two markets filled\n\n## Where it stands\n- Union goals: the page is written and waits on your read; nothing else moves until it ships. (${today})\n- pj-market: two markets are filled and the third waits on a lawyer. (${old})\n\n## Goals: Ashot\n1. A goal`);
 
-  // Exactly: two escalation lines, two project sentences, one activity line.
-  const lines = qa("[data-scope-briefing] [data-role-escalation]");
-  assert.equal(lines.length, 2, "two escalation lines");
-  assert.deepEqual(lines.map((l) => l.getAttribute("data-role-escalation")), ["calling-h9", "calling-h5"], "newest first");
-  assert.match(lines[0].textContent!, /The Union goals page needs your read before it ships/);
-  assert.ok(lines[0].querySelector('[data-pill="calling-h9"]'), "each with its session pill");
+  // Exactly: two project sentences, one activity line. The 33 hands waiting
+  // on a person wait on the role and are nowhere on the first screen.
+  assert.equal(q('[data-scope-section="needs-you"]'), null, "no needs-you block: the role raises what it cannot answer in its own thread");
   const stands = qa("[data-scope-briefing] [data-scope-stands]");
   assert.equal(stands.length, 2, "two project sentences");
   const union = q('[data-scope-stands="pj-union"]')!, market = q('[data-scope-stands="pj-market"]')!;
@@ -435,15 +414,13 @@ async function verifyFirstScreen() {
   // No digit outside those lines: no count of hands waiting, no task count,
   // no plan fraction, no progress bar.
   const briefing = q("[data-scope-briefing]")!.cloneNode(true) as HTMLElement;
-  for (const el of [...briefing.querySelectorAll("[data-role-escalation], [data-scope-stands-line], [data-scope-doing]")]) el.remove();
+  for (const el of [...briefing.querySelectorAll("[data-scope-stands-line], [data-scope-doing]")]) el.remove();
   assert.doesNotMatch(briefing.textContent!, /\d/, `no digit outside the lines: ${briefing.textContent}`);
   for (const word of ["waiting on a person", "plan", "task", "open", "done"]) assert.ok(!briefing.textContent!.toLowerCase().includes(word), `the first screen never says ${JSON.stringify(word)}`);
 
-  // A role with no escalations and no brief lines.
-  for (const id of ["calling-h5", "calling-h9"]) delete state.sessions[id].escalated_by_role;
+  // A role with no brief lines.
   await render(null);
   // Nothing to say is said by saying nothing: no empty sections, no placeholder lines.
-  assert.equal(q('[data-scope-section="needs-you"]'), null);
   assert.equal(q('[data-scope-section="stands"]'), null);
   assert.equal(qa("[data-scope-briefing] [data-scope-stands-line]").length, 0);
 
@@ -451,4 +428,4 @@ async function verifyFirstScreen() {
   console.log("first screen: ok");
 }
 
-test("F5.4: the first screen holds two escalation lines, two project sentences and one activity line, and no digit outside them", verifyFirstScreen, 120_000);
+test("F5.4: the first screen holds two project sentences and one activity line, and no digit outside them", verifyFirstScreen, 120_000);
