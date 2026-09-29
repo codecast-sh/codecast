@@ -8,7 +8,7 @@
 // anything a surface already handled (a file link's own menu, defaultPrevented)
 // keep the browser's menu; Shift+right-click always does.
 
-import { Columns2, Copy, ExternalLink, PanelTop, AppWindow } from "lucide-react";
+import { Columns2, Copy, ExternalLink, PanelTop, AppWindow, History } from "lucide-react";
 import { toast } from "sonner";
 import { ContextMenu, CtxItem, CtxSeparator, useContextMenu } from "./ui/context-menu";
 import { useEventListener } from "../hooks/useEventListener";
@@ -16,6 +16,19 @@ import { anchorAppPath, navigateHere, openIn } from "../lib/openIntent";
 import { canOpenBeside } from "../lib/stage";
 import { isDesktop } from "../lib/desktop";
 import { copyToClipboard, shareOrigin } from "../lib/utils";
+import { sessionsLinkForAppPath, type SessionsLink } from "../lib/sessionSearchLinks";
+
+/** "Sessions that touched this" for a file, commit or pull request: the one
+ *  cross-link into /search, offered by both link menus. */
+export function SessionsLinkItem({ link }: { link: SessionsLink | null }) {
+  if (!link) return null;
+  return (
+    <>
+      <CtxSeparator />
+      <CtxItem icon={History} onSelect={() => navigateHere(link.href)}>{link.label}</CtxItem>
+    </>
+  );
+}
 
 /** The open destinations for one in-app path — shared by this host and the
  *  file link menu, so the two menus can never offer different verbs. */
@@ -38,6 +51,7 @@ export function OpenLinkItems({ href, openLabel = "Open" }: { href: string; open
       >
         Copy link
       </CtxItem>
+      <SessionsLinkItem link={sessionsLinkForAppPath(href)} />
     </>
   );
 }

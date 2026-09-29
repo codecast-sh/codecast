@@ -10,7 +10,7 @@ import { UNATTENDED_MANDATE, checkoutInUseMessage, deviceDisplayName, fromConvex
 import { resolveDefinitionFor } from "./agentDefinitions";
 import { cloudSeedArg, cloudWorkspaceValidator, findSharedCheckoutOccupant, resolveCloudDevice } from "./cloudPlacement";
 import { findConversationByAnyRef } from "./conversationSessionLookup";
-import { listAgentBoxDevices, retainSessionCreator, sessionLaunchRunner } from "./sessionLaunch";
+import { listTeamMachines, retainSessionCreator, sessionLaunchRunner } from "./sessionLaunch";
 import { roleOfConversation } from "./lib/actor";
 import { canAccessTask } from "./lib/access";
 import { capsFor, countersFor, roleStartsOnItsOwn } from "./lib/orgCaps";
@@ -354,7 +354,7 @@ export const createSessionFromCli = mutation({
         .query("devices")
         .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
         .collect();
-      const boxes = await listAgentBoxDevices(ctx, userId);
+      const boxes = await listTeamMachines(ctx, userId);
       targetDeviceId = resolveDeviceSelector(devices, args.device, boxes.map(({ device }) => device));
     }
 

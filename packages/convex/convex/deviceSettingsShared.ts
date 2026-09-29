@@ -10,6 +10,7 @@
 // migration to start reporting.
 
 import { v } from "convex/values";
+import { CLOUD_AGENT_SETUP_KINDS } from "@codecast/shared/contracts";
 
 export const deviceSettingsValidator = v.object({
   snippets: v.optional(v.record(v.string(), v.boolean())),
@@ -26,6 +27,8 @@ export const deviceSettingsValidator = v.object({
   // config.json, on unless turned off), and whether it may update itself.
   hooks_enabled: v.optional(v.boolean()),
   auto_update: v.optional(v.boolean()),
+  // Does the session trailer hook add Codecast-Session to commits here?
+  session_trailer: v.optional(v.boolean()),
 });
 
 // Daemon-reported model inventory for dynamic clients (opencode/pi): each
@@ -33,6 +36,15 @@ export const deviceSettingsValidator = v.object({
 // Hash-gated on both ends — the daemon resends only on change, the heartbeat
 // mutation rewrites only on a hash mismatch — so the ~10KB list never churns.
 // Keys are v.record so a future dynamic client needs no schema migration.
+// What keeps a machine from reading each cloud agent provider, as its daemon's
+// heartbeat reports it (CloudAgentSetupBlock): the provider, the kind of
+// setup problem, and the provider's reason. Never a credential.
+export const cloudAgentBlocksValidator = v.array(v.object({
+  provider: v.string(),
+  kind: v.union(...CLOUD_AGENT_SETUP_KINDS.map((k) => v.literal(k))),
+  reason: v.optional(v.string()),
+}));
+
 export const modelInventoryValidator = v.object({
   hash: v.string(),
   collected_at: v.number(),
