@@ -6,9 +6,12 @@
 // so the encrypt + mutation logic (and the codegen casts) live exactly once. The key
 // only ever leaves the browser as ciphertext, via encryptProviderKey.
 
-import { useMemo } from "react";
-import { useMutation } from "convex/react";
+import { useMemo, useState } from "react";
+import { useMutation, useQuery } from "convex/react";
+import { captureException } from "@sentry/react";
 import { api } from "@codecast/convex/convex/_generated/api";
+import type { Id } from "@codecast/convex/convex/_generated/dataModel";
+import { getProviderKeySpec } from "@codecast/shared/contracts";
 import { encryptProviderKey } from "./providerKeyCrypto";
 import type { Device } from "../components/DeviceBadge";
 
@@ -53,4 +56,51 @@ export function useProviderKeyCommand() {
     }),
     [enqueue],
   );
+}
+
+/**
+ * A key typed into a guided setup, sent to one machine, and that machine's
+ * verdict on it: it checks the key with the provider before storing it, so a
+ * refused key is never kept. `looksRight` gates the submit on the provider's
+ * key prefix; `sent` is true once a key went out (the field then clears).
+ */
+export function useVerifiedKeySubmit(keyProvider: string, device: Device | null, pubkey: string | undefined) {
+  const { setKey } = useProviderKeyCommand();
+  const [key, setKeyText] = useState("");
+  const [commandId, setCommandId] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const outcome = useQuery(api.devices.providerKeyCommandOutcome, commandId ? { command_id: commandId as Id<"daemon_commands"> } : "skip");
+
+  const trimmed = key.trim();
+  const looksRight = trimmed.startsWith(getProviderKeySpec(keyProvider)?.keyPrefix ?? "") && trimmed.length > 20;
+
+  const submit = async () => {
+    if (!device || !pubkey || !looksRight) return;
+    setSending(true);
+    setSendError(null);
+    setCommandId(null);
+    try {
+      const id = await setKey(device.device_id, pubkey, keyProvider, trimmed);
+      setCommandId(id ?? null);
+      setKeyText("");
+    } catch (err) {
+      captureException(err);
+      setSendError(err instanceof Error ? err.message : "Couldn't send the key");
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return {
+    key,
+    setKey: setKeyText,
+    looksRight,
+    submit,
+    sent: !!commandId,
+    checking: sending || (!!commandId && (outcome === undefined || outcome?.state === "pending")),
+    done: outcome?.state === "done",
+    account: outcome?.state === "done" ? outcome.account : undefined,
+    failed: outcome?.state === "failed" ? outcome.error : sendError,
+  };
 }

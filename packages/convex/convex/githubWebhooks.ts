@@ -36,6 +36,7 @@ import {
   type CheckEntry,
   GITHUB_ACTIONS_APP,
   commitUrl,
+  conversationFromSessionTrailer,
   extractTaskShortIds,
   prUrl,
   resolveTaskLinks,
@@ -1378,17 +1379,21 @@ export const processPushEvent = internalMutation({
       const files = pushCommitFiles(commit);
 
       const links = await resolveTaskLinksFromText(ctx, message, branch);
-      // GitHub marks a commit it has already seen on another ref `distinct:
-      // false`: it arrived on this branch by a merge (usually main merged in),
-      // so the session sitting on the branch did not write it. Only its own
-      // edit row may claim it.
-      const conversationId = await conversationForCommit(ctx, sha, commit.distinct === false ? undefined : branch);
-      if (!firstConversation) firstConversation = conversationId;
-
+      // A Codecast-Session trailer is the session's own word on which session
+      // made the commit, so it beats every guess below. A push carries no
+      // proof of who wrote the trailer, so it links only a session the team
+      // may read, and replaces a link already on the row only when both name
+      // the same person (conversationFromSessionTrailer). Otherwise: GitHub marks a commit it has already
+      // seen on another ref `distinct: false`: it arrived on this branch by a
+      // merge (usually main merged in), so the session sitting on the branch
+      // did not write it. Only its own edit row may claim it.
       const existing = await ctx.db
         .query("commits")
         .withIndex("by_sha", (q: any) => q.eq("sha", sha))
         .first();
+      const fromTrailer = await conversationFromSessionTrailer(ctx, message, { teamId, current: existing?.conversation_id });
+      const conversationId = fromTrailer ?? await conversationForCommit(ctx, sha, commit.distinct === false ? undefined : branch);
+      if (!firstConversation) firstConversation = conversationId;
 
       let commitId: Id<"commits">;
       if (existing) {
@@ -1398,7 +1403,7 @@ export const processPushEvent = internalMutation({
           branch: existing.branch ?? branch,
           author_login: existing.author_login ?? commit.author?.username,
           author_avatar_url: existing.author_avatar_url ?? pusherAvatar,
-          conversation_id: existing.conversation_id ?? conversationId,
+          conversation_id: fromTrailer ?? existing.conversation_id ?? conversationId,
           task_ids: existing.task_ids?.length ? existing.task_ids : links.task_ids,
           files: existing.files?.length ? existing.files : files.length ? files : undefined,
         });

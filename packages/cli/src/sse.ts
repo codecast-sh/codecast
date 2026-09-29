@@ -37,3 +37,23 @@ export function parseSseStream(buffer: string): { frames: SseFrame[]; rest: stri
   }
   return { frames, rest: normalized.slice(lastBreak + 2) };
 }
+
+/** The frames of an SSE response body, as they arrive, until the stream ends. */
+export async function* readSse(body: ReadableStream<Uint8Array>): AsyncGenerator<SseFrame> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) return;
+      buffer += decoder.decode(value, { stream: true });
+      const { frames, rest } = parseSseStream(buffer);
+      buffer = rest;
+      yield* frames;
+    }
+  } finally {
+    // A caller that stops early (a `done` frame) releases the connection.
+    reader.cancel().catch(() => {});
+  }
+}

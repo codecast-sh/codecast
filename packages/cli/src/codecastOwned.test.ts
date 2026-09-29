@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { HARNESS_HOOKS } from "@codecast/shared/contracts";
 import { BUNDLED_SKILLS } from "./bundledSkills";
 import {
   CODECAST_HOOK_SCRIPTS, CODECAST_OWNED_HOME_PATHS, CODECAST_SKILL_NAMES, ORCH_AGENT_FILES, ORCH_MARKER, ORCH_SKILL_REL,
@@ -11,14 +12,13 @@ const indexSrc = fs.readFileSync(path.join(import.meta.dir, "index.ts"), "utf-8"
 const stableSrc = fs.readFileSync(path.join(import.meta.dir, "stableContext.ts"), "utf-8");
 
 describe("CODECAST_HOOK_SCRIPTS is the set the installers actually write", () => {
-  test("every installHookScript(\"…\") name in index.ts is listed, and nothing else is", () => {
-    const written = new Set<string>();
-    for (const m of indexSrc.matchAll(/installHookScript\("([^"]+)"/g)) written.add(m[1]!);
-    expect(written.size).toBeGreaterThan(0);
+  test("every hook HARNESS_HOOKS registers is listed, and nothing else is but the retired one", () => {
+    const registered = new Set<string>(HARNESS_HOOKS.filter((h) => h.kind === "hook").map((h) => h.file));
+    expect(registered.size).toBeGreaterThan(0);
     const listed = new Set<string>(CODECAST_HOOK_SCRIPTS);
-    for (const name of written) expect(listed.has(name)).toBe(true);
-    // The only listed script index.ts does not install is the stable feed.
-    for (const name of listed) expect(written.has(name) || name === STABLE_FEED_HOOK_FILE).toBe(true);
+    for (const name of registered) expect(listed.has(name)).toBe(true);
+    // The retired Bash edit capture stays owned: settings.json copies elsewhere may still name it.
+    for (const name of listed) expect(registered.has(name) || name === "codecast-shell-changes.sh").toBe(true);
   });
 
   test("stableContext.ts derives its hook file name from the shared list", () => {
@@ -87,11 +87,11 @@ describe("isCodecastOwnedHomePath", () => {
     expect(isCodecastOwnedHomePath(".claude/skills/codecast-orchestrate-fork/SKILL.md")).toBe(false);
   });
 
-  test("the table covers the seven hooks plus the statusline hook, the skill, the three agents and .codecast", () => {
+  test("the table covers the hook scripts plus the statusline hook, the skill, the three agents and .codecast", () => {
     expect(CODECAST_OWNED_HOME_PATHS).toContain(".codecast");
     expect(CODECAST_OWNED_HOME_PATHS).toContain(".claude/hooks/codecast-statusline.sh");
     expect(CODECAST_OWNED_HOME_PATHS).toContain(".claude/hooks/codecast-shell-changes.sh");
-    expect(CODECAST_OWNED_HOME_PATHS.filter((p) => p.startsWith(".claude/hooks/"))).toHaveLength(8);
+    expect(CODECAST_OWNED_HOME_PATHS.filter((p) => p.startsWith(".claude/hooks/"))).toHaveLength(9);
     expect(CODECAST_OWNED_HOME_PATHS.filter((p) => p.startsWith(".claude/agents/"))).toHaveLength(3);
   });
 });

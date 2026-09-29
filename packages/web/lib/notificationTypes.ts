@@ -85,6 +85,7 @@ export const typeLabels: Record<string, string> = {
   daemon_overloaded: "daemon under load",
   sessions_need_input: "waiting for you",
   goal_stall: "goal stalled",
+  device_shared: "shared a machine",
 };
 
 export const typeColors: Record<string, string> = {
@@ -115,6 +116,7 @@ export const typeColors: Record<string, string> = {
   daemon_overloaded: "text-sol-orange",
   sessions_need_input: "text-sol-green",
   goal_stall: "text-sol-yellow",
+  device_shared: "text-sol-cyan",
 };
 
 /** Who a notification is FROM. A snapshot on the row (Slack person, anonymous

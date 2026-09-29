@@ -1,5 +1,5 @@
 import { HandoffLinkChip, HandoffSessionLink, SessionHandoffCard, SessionHandoffNotice } from "./conversation/SessionHandoff";
-import { CursorCloudLink } from "./ConnectCursorDialog";
+import { CloudAgentLink } from "./cloudAgents";
 import { sessionRepository } from "../lib/repoNavigation";
 import { repoTreeHref, repoCommitsHref } from "../lib/repoView";
 import { madeInTranscript, transcriptGitOutcomes } from "../lib/gitToolOutcome";
@@ -66,6 +66,7 @@ import { useMutation, useQuery, useConvex } from "convex/react";
 import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { ConversationAssignmentBadge } from "./AssignmentBadge";
+import { LocalMirrorChip } from "./LocalMirror";
 import { AssignedToYouBanner, useOwnersFromStore, type HandoffInfo } from "./OwnersBadge";
 import { TmuxAttachPill } from "./TmuxAttachPill";
 import { useAttachCopy } from "../hooks/useAttachCopy";
@@ -3116,6 +3117,9 @@ const ConversationViewInner = (
   // session that hosted a band used to follow the reader to the next one.
   const hostingReveal = useHostsReveal(headerRef, "[data-cc-conversation]", effectiveConversationId);
   const compactChrome = inRevealBand || hostingReveal;
+  // The pinned prompt floats over the top of the transcript; while a band is
+  // open here it would cover the band's close strip, so it steps aside.
+  const showSticky = stickyMsgVisible && !!activeStickyMsg && !hostingReveal;
   const { browserRowMap, lastBrowserPage, browserSession, chatWakeMap } = useBrowserAndWakeRows({ conversation, globalToolResultMap, managedSession, userMsgKindMap });
   const { sessionGalleryImages } = useSessionImages({ deferredQueriesEnabled, conversation });
   const { taskSubjectMap, taskRecordMap } = useConversationTaskMaps({ conversation, deferredQueriesEnabled });
@@ -3762,7 +3766,7 @@ const ConversationViewInner = (
                   onControlOpenChange={setSessionControlOpen}
                 />
                 <BranchCodeLink session={conversation} />
-                <CursorCloudLink conversationId={conversation._id} />
+                <CloudAgentLink conversationId={conversation._id} />
                 <SessionWorktreePills session={conversation} repository={codeRepository} className="text-[10px] max-w-[180px]" />
             {(conversation as any)?.active_task && (
               <span data-simple-hide className="contents">
@@ -3870,6 +3874,8 @@ const ConversationViewInner = (
                   <TmuxAttachPill tmuxSession={managedSession?.tmux_session} agentType={conversation?.agent_type} isLive={isSessionLive} conversationKey={conversation?._id.toString()} />
                 </span>
                 </span>
+                {/* Where a cloud session's edits land on a laptop, when mirrored (LocalMirror.tsx). */}
+                {conversation?._id && !guest && <LocalMirrorChip conversationId={String(conversation._id)} compact={simpleViewPref} />}
 
                 {/* Who has this session open right now: teammates' faces off
                     the roster's viewing field. A solo session shows nothing. */}
@@ -4298,7 +4304,7 @@ const ConversationViewInner = (
         )}
       </header>
 
-      {stickyMsgVisible && activeStickyMsg && (
+      {showSticky && activeStickyMsg && (
         <div
           ref={stickyElRef}
           className="absolute left-0 right-0 z-[15] px-2 sm:px-3 md:px-4 pt-1 cursor-pointer"
@@ -4400,7 +4406,7 @@ const ConversationViewInner = (
         <div
           className="absolute inset-x-0 z-20 flex justify-center pt-3 sm:pt-4 pointer-events-none"
           style={{
-            top: stickyMsgVisible && activeStickyMsg ? (stickyElRef.current?.offsetHeight ?? 0) + 4 : 0,
+            top: showSticky ? (stickyElRef.current?.offsetHeight ?? 0) + 4 : 0,
             animation: "fadeIn 150ms ease-out",
           }}
         >
@@ -4419,7 +4425,7 @@ const ConversationViewInner = (
           scrollRef={containerRef}
           messageIds={timelineMessageIds}
           virtualizer={virtualizer}
-          topInset={stickyMsgVisible && activeStickyMsg ? stickyElRef.current?.offsetHeight ?? 0 : 0}
+          topInset={showSticky ? stickyElRef.current?.offsetHeight ?? 0 : 0}
         />
       )}
       <div ref={containerRef} data-sv-feed data-cc-density={feedDensity} className="flex-1 min-h-0 overflow-y-auto" style={{ overflowAnchor: "none" }}>

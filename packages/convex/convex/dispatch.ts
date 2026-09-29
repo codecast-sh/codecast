@@ -6,7 +6,7 @@ import type { ThreadKind } from "./threadReads";
 import { ConvexError, v } from "convex/values";
 import { resolveSpawnDefinition } from "./spawn";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { enqueueStartSession, performRemoveDevices } from "./devices";
+import { enqueueStartSession, performRemoveDevices, performSetDeviceShares } from "./devices";
 import { upsertBinding } from "./capabilityBindings";
 import { Id } from "./_generated/dataModel";
 import { checkRateLimit } from "./rateLimit";
@@ -26,7 +26,8 @@ import { stampBrowserPaneOfferHandled } from "./conversations";
 import { reactivateTasksCanceledOnKill } from "./agentTasks";
 import { canAccessDoc } from "./docs";
 import { canSendProductMessage, enqueuePendingMessage, retryPendingMessageForUser, cancelPendingMessageForUser } from "./pendingMessages";
-import { enqueueCloudSpawn } from "./cloud";
+import { enqueueCloudSpawn, performCloudHostAction, performSetLocalMirror } from "./cloud";
+import type { CloudHostAction } from "@codecast/shared/contracts";
 import { effectiveStartFrom, parkOnCloudHost, resolveCloudDevice } from "./cloudPlacement";
 import { findSharedCheckoutOccupant } from "./cloudPlacement";
 import { findConversationBySessionReference } from "./conversationSessionLookup";
@@ -1254,9 +1255,24 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     return { command_id: commandId, source, dest: dest.device_id };
   },
 
+  // A cloud session's live mirror into a laptop worktree: the web stamps
+  // local_mirror starting/stopping on the draft; this queues the laptop job.
+  setLocalMirror: async (ctx, userId, [convId, enable, deviceId, overwrite]: [string, boolean, string | undefined, boolean | undefined]) =>
+    performSetLocalMirror(ctx as any, userId, convId as Id<"conversations">, { enable, deviceId, overwrite }),
+
+  // Settings > Machines: wake, sleep, apply setup, save or delete an image on a
+  // cloud host. The web marks the action running on the roster draft.
+  cloudHostAction: async (ctx, userId, [hostDeviceId, action, imageId]: [string, CloudHostAction, string | undefined]) =>
+    performCloudHostAction(ctx as any, userId, hostDeviceId, action, imageId),
+
   // Settings > Machines. The web drops the rows from `machineRoster` on the
   // draft; that list is not a dispatch table, so this is the only server write.
   removeMachines: async (ctx, userId, [deviceIds]: [string[]]) => performRemoveDevices(ctx as any, userId, deviceIds),
+
+  // Settings > Machines' share control: the web writes the device's team set
+  // on the roster draft; device_shares is the server home of that fact.
+  setDeviceShares: async (ctx, userId, [deviceId, teamIds]: [string, string[]]) =>
+    performSetDeviceShares(ctx as any, userId, deviceId, teamIds),
 
   linkConversation: async (ctx, userId, [objectType, objectId, conversationId]: [string, string, string]) => {
     await linkConversationToObject(

@@ -18,6 +18,7 @@ import { THREAD_STATE_HOOK } from "./threadStateHook.js";
 import { TASK_PULSE_HOOK } from "./taskPulseHook.js";
 import { USER_PROMPT_HOOK, USER_PROMPT_HOOK_FILE } from "./userPromptHook.js";
 import { CODECAST_STATUSLINE_HOOK, STATUSLINE_HOOK_FILE } from "./statuslineHook.js";
+import { SESSION_TRAILER_HOOK, SESSION_TRAILER_HOOK_FILE } from "./sessionTrailerHook.js";
 
 const SCRIPTS: Record<string, string> = {
   "codecast-status.sh": CODECAST_STATUS_HOOK,
@@ -26,6 +27,7 @@ const SCRIPTS: Record<string, string> = {
   "task-pulse.sh": TASK_PULSE_HOOK,
   [USER_PROMPT_HOOK_FILE]: USER_PROMPT_HOOK,
   [STATUSLINE_HOOK_FILE]: CODECAST_STATUSLINE_HOOK,
+  [SESSION_TRAILER_HOOK_FILE]: SESSION_TRAILER_HOOK,
 };
 
 // Retired: its Bash edit capture moved into the daemon. The entries come out
