@@ -22,7 +22,9 @@ import { scheduleCloudWake, serverOwnsCloudWake } from "./cloudWake";
 import { enqueueStartSession } from "./devices";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { releasePreviousOwner } from "./sessionRelease";
-import { checkoutInUseMessage, fromConvexAgentType, isHttpOrigin, parseOwnerRepo, type CloudWorkspaceMode } from "@codecast/shared/contracts";
+import { checkoutInUseMessage, CLOUD_HOST_ACTIONS, fromConvexAgentType, isHttpOrigin, LOCAL_MIRROR_MODES, LOCAL_MIRROR_STATUSES, mirrorLaptops, parseOwnerRepo, type CloudHostAction, type CloudWorkspaceMode, type LocalMirrorMode, type MirrorResolve } from "@codecast/shared/contracts";
+import { resolveConversationRefRanked } from "./conversationSessionLookup";
+import { cloudHostReportValidator, hostReadinessValidator, localMirrorFields } from "./lib/cloudHostValidators";
 import { cloudSeedArg, cloudWorkspaceValidator, findSharedCheckoutOccupant } from "./cloudPlacement";
 
 // The park/prepare logic moved to cloudPlacement.ts (a leaf every creator can
@@ -522,7 +524,7 @@ export const commandOutcome = query({
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) return null;
     const cmd = await ctx.db.get(args.command_id);
-    if (!cmd || cmd.user_id.toString() !== userId.toString() || cmd.command !== "cloud_browser_sync") return null;
+    if (!cmd || cmd.user_id.toString() !== userId.toString() || (cmd.command !== "cloud_browser_sync" && cmd.command !== "cloud_live_sync")) return null;
     return {
       executed_at: cmd.executed_at ?? null,
       result: cmd.result ?? null,
@@ -756,3 +758,271 @@ export const hostGitCredential = action({
     };
   },
 });
+
+// ---------------------------------------------------------------------------
+// Live mirror of a cloud session into a laptop worktree (conversations.local_mirror)
+// ---------------------------------------------------------------------------
+
+/**
+ * Start or stop mirroring a cloud session's tree to a laptop. Picks the laptop
+ * with mirrorLaptops (the same choice the web menu labels), or the one the
+ * caller named; queues cloud_live_sync on it and stamps the row so the web
+ * shows starting or stopping at once. `overwrite` resumes a mirror that
+ * stopped on a local edit, saving that edit to a backup ref first.
+ */
+/** Where a session's sync runs: the laptop and checkout that hold its copy, and the host it pairs with. */
+async function syncTarget(ctx: any, userId: Id<"users">, conversationId: Id<"conversations">, prefer?: string) {
+  const conv = await ctx.db.get(conversationId);
+  if (!conv || conv.user_id.toString() !== userId.toString()) throw new Error("Unauthorized");
+  const devices = await ctx.db.query("devices").withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).collect();
+  const host = devices.find((d: any) => d.device_id === conv.owner_device_id);
+  if (!host?.is_remote) throw new Error("This session does not run on a cloud host");
+  if (!conv.project_path) throw new Error("The session has no working directory on the host yet");
+  const now = Date.now();
+  const laptops = mirrorLaptops(devices, conv, now, DEVICE_ONLINE_MS);
+  // A running sync lives on its laptop; otherwise the named laptop, then the best one.
+  const running = conv.local_mirror ? laptops.find((l) => l.device_id === conv.local_mirror.device_id) ?? { device_id: conv.local_mirror.device_id, root: "", online: false } : undefined;
+  const target = running ?? (prefer ? laptops.find((l) => l.device_id === prefer) : undefined) ?? laptops[0];
+  return { conv, devices, now, target, args: target ? { conversation_id: conversationId, host_device_id: conv.owner_device_id, remote_cwd: conv.project_path, local_root: target.root } : null };
+}
+
+export async function performSetLocalMirror(
+  ctx: any,
+  userId: Id<"users">,
+  conversationId: Id<"conversations">,
+  opts: { enable: boolean; deviceId?: string; overwrite?: boolean; mode?: LocalMirrorMode; resolve?: MirrorResolve },
+): Promise<{ device_id: string; command_id: Id<"daemon_commands"> }> {
+  if (opts.mode && !LOCAL_MIRROR_MODES.includes(opts.mode)) throw new Error(`unknown mirror mode ${opts.mode}`);
+  if (opts.resolve && (!["laptop", "cloud"].includes(opts.resolve.keep) || (opts.resolve.paths && !Array.isArray(opts.resolve.paths)))) throw new Error("resolve names keep: laptop or cloud, and optional paths");
+  const { conv, devices, now, target: found, args } = await syncTarget(ctx, userId, conversationId, opts.deviceId);
+  // Starting on a named laptop moves the sync there; stopping always goes to the one running it.
+  const target = opts.enable && opts.deviceId && found?.device_id !== opts.deviceId && !conv.local_mirror
+    ? undefined
+    : found;
+  if (!target || !args) throw new Error("No laptop of yours has a checkout of this repository to sync with");
+  const commandId = await ctx.db.insert("daemon_commands", {
+    user_id: userId,
+    command: "cloud_live_sync" as const,
+    args: JSON.stringify({
+      ...args,
+      enable: opts.enable,
+      ...(opts.overwrite ? { overwrite: true } : {}),
+      ...(opts.mode ? { mode: opts.mode } : {}),
+      ...(opts.resolve ? { resolve: { keep: opts.resolve.keep, ...(opts.resolve.paths ? { paths: opts.resolve.paths.slice(0, 200).map(String) } : {}) } } : {}),
+    }),
+    created_at: now,
+    target_device_id: target.device_id,
+  });
+  // A stop the laptop cannot answer now (offline) or was already asked for clears the row at
+  // once; the queued command still tidies the laptop's job when it comes back.
+  const laptop = devices.find((d: any) => d.device_id === target.device_id);
+  const clearNow = !opts.enable && (!laptop || now - laptop.last_seen >= DEVICE_ONLINE_MS || conv.local_mirror?.status === "stopping");
+  // A mode change or a conflict pick on a running mirror keeps its state until the laptop reports.
+  const adjusting = opts.enable && !opts.overwrite && (opts.mode || opts.resolve) && conv.local_mirror?.device_id === target.device_id && conv.local_mirror.status !== "stopping";
+  await ctx.db.patch(conversationId, {
+    local_mirror: adjusting
+      ? { ...conv.local_mirror, ...(opts.mode ? { mode: opts.mode } : {}), at: now }
+      : opts.enable
+      ? { ...(conv.local_mirror?.device_id === target.device_id ? conv.local_mirror : {}), device_id: target.device_id, status: "starting" as const, ...(opts.mode ? { mode: opts.mode } : {}), files: undefined, conflicts: undefined, error: undefined, at: now }
+      : conv.local_mirror && !clearNow ? { ...conv.local_mirror, status: "stopping" as const, at: now } : undefined,
+  });
+  return { device_id: target.device_id, command_id: commandId };
+}
+
+export const SYNC_REQUEST_OPS = ["status", "pull", "push", "diff"] as const;
+
+/**
+ * `cast sync status|pull|push|diff` from an agent, on the host or a laptop:
+ * the laptop that holds the session's copy (or, with none running, the best
+ * laptop with its repo) does the work and answers on the command row. The
+ * laptop checkout's state when the session started (its seed tree) is the
+ * base a pull merges from when no sync runs.
+ */
+export async function performSyncRequest(
+  ctx: any,
+  userId: Id<"users">,
+  conversationId: Id<"conversations">,
+  req: { op: (typeof SYNC_REQUEST_OPS)[number]; paths?: string[]; ref?: string; callerDevice?: string },
+) {
+  if (!SYNC_REQUEST_OPS.includes(req.op)) throw new Error(`unknown sync op ${req.op}`);
+  if (req.ref !== undefined && !/^[A-Za-z0-9._/-]{1,200}$/.test(req.ref)) throw new Error(`${req.ref} is not a branch or commit name`);
+  const { conv, devices, now, target, args } = await syncTarget(ctx, userId, conversationId, req.callerDevice);
+  if (!target || !args) throw new Error("No laptop of yours has a checkout of this repository");
+  const laptop = devices.find((d: any) => d.device_id === target.device_id);
+  if (!laptop || now - laptop.last_seen >= DEVICE_ONLINE_MS) throw new Error(`${laptop?.label ?? "Your laptop"} is offline; the sync runs through it`);
+  const commandId = await ctx.db.insert("daemon_commands", {
+    user_id: userId,
+    command: "cloud_live_sync" as const,
+    args: JSON.stringify({
+      ...args,
+      op: req.op,
+      ...(req.paths?.length ? { paths: req.paths.slice(0, 200).map(String) } : {}),
+      ...(req.ref ? { ref: req.ref } : {}),
+      ...(conv.cloud_seed?.tree && conv.cloud_seed.device_id === target.device_id ? { seed_tree: conv.cloud_seed.tree } : {}),
+    }),
+    created_at: now,
+    target_device_id: target.device_id,
+  });
+  return { command_id: commandId, device_id: target.device_id, label: laptop.label ?? null };
+}
+
+/** The CLI's door to the two calls above: an agent's verb, or a person's start, stop, mode or pick. */
+export const requestSync = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    /** A full id or a short one (its first seven characters), as people and agents name sessions. */
+    conversation_id: v.string(),
+    op: v.union(...SYNC_REQUEST_OPS.map((o) => v.literal(o)), v.literal("start"), v.literal("stop"), v.literal("keep")),
+    paths: v.optional(v.array(v.string())),
+    ref: v.optional(v.string()),
+    keep: v.optional(v.union(v.literal("laptop"), v.literal("cloud"))),
+    mode: v.optional(v.union(...LOCAL_MIRROR_MODES.map((m) => v.literal(m)))),
+    caller_device_id: v.optional(v.string()),
+  },
+  handler: async (ctx, a) => {
+    const userId = await getAuthenticatedUserId(ctx, a.api_token);
+    if (!userId) throw new Error("Authentication required");
+    const found = await resolveConversationRefRanked(ctx, a.conversation_id, userId, (c: any) => c.user_id?.toString() === userId.toString());
+    if (!found || found.user_id?.toString() !== userId.toString()) throw new Error(`${a.conversation_id} is not one of your sessions`);
+    const conversationId = found._id as Id<"conversations">;
+    if (a.op === "start" || a.op === "stop" || a.op === "keep") {
+      if (a.op === "keep" && !a.keep) throw new Error("keep names laptop or cloud");
+      const r = await performSetLocalMirror(ctx, userId, conversationId, {
+        enable: a.op !== "stop",
+        ...(a.op === "start" && a.caller_device_id ? { deviceId: a.caller_device_id } : {}),
+        ...(a.mode ? { mode: a.mode } : {}),
+        ...(a.op === "keep" ? { resolve: { keep: a.keep!, ...(a.paths?.length ? { paths: a.paths } : {}) } } : {}),
+      });
+      const laptop = await ctx.db.query("devices").withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).filter((q: any) => q.eq(q.field("device_id"), r.device_id)).first();
+      return { ...r, label: laptop?.label ?? null, conversation_id: conversationId };
+    }
+    return performSyncRequest(ctx, userId, conversationId, { op: a.op, paths: a.paths, ref: a.ref, callerDevice: a.caller_device_id });
+  },
+});
+
+/**
+ * The laptop running a mirror reports its state: on landing and on state
+ * change only. `status: "off"` clears the field. A report from a laptop that
+ * no longer owns the row's mirror is ignored.
+ */
+export const reportLocalMirror = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    conversation_id: v.id("conversations"),
+    device_id: v.string(),
+    status: v.union(...LOCAL_MIRROR_STATUSES.map((s) => v.literal(s)), v.literal("off")),
+    ...localMirrorFields,
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication required");
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv || conv.user_id.toString() !== userId.toString()) return { recorded: false as const };
+    if ((conv as any).local_mirror && (conv as any).local_mirror.device_id !== args.device_id) return { recorded: false as const };
+    const { api_token: _, conversation_id: __, status, ...rest } = args;
+    const prev = (conv as any).local_mirror ?? {};
+    // A report carries what changed. What describes the sync (path, mode, what
+    // stayed behind, the last landing) keeps its last value until a report
+    // names it; what describes a state (its conflicts, the edited files, the
+    // error) lasts while the status still says that state.
+    const given = Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined));
+    const holds = (field: "conflicts" | "files" | "error", state: string) => rest[field] ?? (status === state ? prev[field] : undefined);
+    await ctx.db.patch(args.conversation_id, {
+      local_mirror: status === "off" ? undefined : {
+        ...prev, ...given, status,
+        conflicts: holds("conflicts", "conflict")?.slice(0, 50),
+        files: holds("files", "local_edit")?.slice(0, 50),
+        error: holds("error", "error")?.slice(0, 500),
+        ...(rest.skipped ? { skipped: rest.skipped.slice(0, 40) } : {}),
+        at: Date.now(),
+      },
+    });
+    return { recorded: true as const };
+  },
+});
+
+/** What a mirroring laptop polls to tell a working session from an idle one, without touching the host. */
+export const localMirrorActivity = query({
+  args: { api_token: v.optional(v.string()), conversation_ids: v.array(v.id("conversations")) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) return [];
+    const out: Array<{ conversation_id: string; message_count: number; status: string; mirror: string | null; owner_device_id: string | null; host_online: boolean }> = [];
+    const devices = await ctx.db.query("devices").withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).collect();
+    const now = Date.now();
+    for (const id of args.conversation_ids.slice(0, 50)) {
+      const c: any = await ctx.db.get(id);
+      if (!c || c.user_id.toString() !== userId.toString()) continue;
+      const host = devices.find((d: any) => d.device_id === c.owner_device_id);
+      out.push({
+        conversation_id: id, message_count: c.message_count ?? 0, status: c.status, mirror: c.local_mirror?.status ?? null, owner_device_id: c.owner_device_id ?? null,
+        // Awake is what lets the laptop send its own edits without waking the host up for them.
+        host_online: !!host && now - host.last_seen < DEVICE_ONLINE_MS,
+      });
+    }
+    return out;
+  },
+});
+
+// ---------------------------------------------------------------------------
+// A cloud host as the app shows it: the managing laptop's report and the web's actions
+// ---------------------------------------------------------------------------
+
+/**
+ * A cloud host's own readiness (cloud/hostReadiness.ts), forwarded by the
+ * heartbeat route in its own call: a shape this server does not know fails
+ * here, never the heartbeat that keeps the host online.
+ */
+export const reportHostReadiness = mutation({
+  args: { api_token: v.string(), device_id: v.string(), readiness: hostReadinessValidator },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication required");
+    const device = await ctx.db.query("devices").withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).filter((q: any) => q.eq(q.field("device_id"), args.device_id)).first();
+    if (!device?.is_remote) return { recorded: false as const };
+    await ctx.db.patch(device._id, { host_readiness: args.readiness });
+    return { recorded: true as const };
+  },
+});
+
+/** The managing laptop writes what only it knows about a host (AWS state, cost, images, held logins, last action). */
+export const reportCloudHost = mutation({
+  args: { api_token: v.optional(v.string()), host_device_id: v.string(), report: cloudHostReportValidator },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication required");
+    const host = await ctx.db.query("devices").withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).filter((q: any) => q.eq(q.field("device_id"), args.host_device_id)).first();
+    if (!host) return { recorded: false as const };
+    const prev = (host as any).cloud_host;
+    // An action the web just asked for stays "running" until its own outcome arrives.
+    const lastAction = prev?.last_action?.status === "running" && (!args.report.last_action || args.report.last_action.at < prev.last_action.at) ? prev.last_action : args.report.last_action;
+    await ctx.db.patch(host._id, { cloud_host: { ...args.report, images: args.report.images.slice(0, 20), logins_held: args.report.logins_held.slice(0, 30), ...(lastAction ? { last_action: lastAction } : {}) } });
+    return { recorded: true as const };
+  },
+});
+
+/**
+ * The web's action on a cloud host: queued on the laptop that manages it (its
+ * cloud_host report names it), else the most recently seen online laptop.
+ * The host's row shows it as running at once; the laptop's next report
+ * carries the outcome.
+ */
+export async function performCloudHostAction(ctx: any, userId: Id<"users">, hostDeviceId: string, action: CloudHostAction, imageId?: string) {
+  if (!CLOUD_HOST_ACTIONS.includes(action)) throw new Error(`unknown action ${action}`);
+  const devices = await ctx.db.query("devices").withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).collect();
+  const host = devices.find((d: any) => d.device_id === hostDeviceId);
+  if (!host?.is_remote) throw new Error("Not a cloud host of yours");
+  const now = Date.now();
+  const online = devices.filter((d: any) => !d.is_remote && now - d.last_seen < DEVICE_ONLINE_MS).sort((a: any, b: any) => b.last_seen - a.last_seen);
+  const manager = online.find((d: any) => d.device_id === host.cloud_host?.managed_by) ?? online[0];
+  if (!manager) throw new Error("No laptop of yours is online to act on the host");
+  const commandId = await ctx.db.insert("daemon_commands", {
+    user_id: userId,
+    command: "cloud_host_action" as const,
+    args: JSON.stringify({ host_device_id: hostDeviceId, action, ...(imageId ? { image_id: imageId } : {}) }),
+    created_at: now,
+    target_device_id: manager.device_id,
+  });
+  if (host.cloud_host) await ctx.db.patch(host._id, { cloud_host: { ...host.cloud_host, last_action: { action, status: "running" as const, at: now } } });
+  return { command_id: commandId, managed_by: manager.device_id };
+}

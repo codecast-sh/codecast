@@ -91,11 +91,6 @@ export function authRemedy(agentType?: string): { command: string; where: string
   return { command: "/login", where: "in its terminal", inPane: true };
 }
 
-/** A Cursor Cloud turn stopped for want of a usable Cursor API key (the daemon's setup card). */
-export function isCursorCloudKeyError(agentType: string | undefined, message: string): boolean {
-  return agentType === "cursor" && /Cursor API key|Cursor rejected the API key/i.test(message);
-}
-
 export function parseApiErrorContent(content?: string | null): ParsedApiError | null {
   if (!content) return null;
   const trimmed = content.trim();

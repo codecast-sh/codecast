@@ -68,3 +68,12 @@ bootcmd:
   - [cloud-init-per, instance, codecast-clone-reset, sh, -c, ${JSON.stringify(script)}]
 `;
 }
+
+/** Deregister a codecast image and delete its snapshots (refuses an image that is not codecast's). */
+export function deleteImage(opts: { region: string; profile?: string }, imageId: string): void {
+  const img = aws(opts, ["ec2", "describe-images", "--image-ids", imageId]).Images?.[0];
+  if (!img) throw new Error(`no image ${imageId}`);
+  if (!img.Tags?.some((t: { Key: string; Value: string }) => t.Key === IMAGE_TAG.Key && t.Value === IMAGE_TAG.Value)) throw new Error(`${imageId} is not a codecast image`);
+  aws(opts, ["ec2", "deregister-image", "--image-id", imageId]);
+  for (const m of img.BlockDeviceMappings ?? []) if (m.Ebs?.SnapshotId) aws(opts, ["ec2", "delete-snapshot", "--snapshot-id", m.Ebs.SnapshotId]);
+}

@@ -26,7 +26,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
 import { requireUser } from "./lib/auth";
 import { canAccessCommit, canAccessConversation, canAccessPullRequest, canAccessTask, isTeamMember } from "./lib/access";
-import { normalizeRepository, repositoryOwner } from "./lib/gitRefs";
+import { conversationFromSessionTrailer, extractSessionTrailer, normalizeRepository, repositoryOwner } from "./lib/gitRefs";
 import { installationCoversRepo, routingTeamForInstallation } from "./githubApp";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { resolveCreationPrivacy } from "./privacy";
@@ -688,7 +688,12 @@ export type LocalCommitFields = {
 /**
  * One commit from a checkout into the commits table, once. The publish pass and
  * the activity tailer both land here, so a commit reported twice (or by a
- * webhook first) stays one row. A session claimed by the daemon is written only
+ * webhook first) stays one row.
+ *
+ * The session comes from the commit's own Codecast-Session trailer first: the
+ * session wrote it at commit time, so it replaces an earlier guess on the row
+ * when conversationFromSessionTrailer allows (the caller may link it, and the
+ * row's current session is the same person's). Without one, a session claimed by the daemon is written only
  * when it belongs to the caller; a row that had no session learns one, a row
  * that has one keeps it.
  */
@@ -700,24 +705,29 @@ export async function upsertLocalCommit(
   // numstat carries no status; the commits row wants GitHub's file shape.
   const { files: numstat, ...commit } = args.commit;
   const files = numstat?.map((f) => ({ ...f, status: "modified", changes: f.additions + f.deletions }));
-  let conversationId: Id<"conversations"> | undefined;
-  if (args.claimedConversationId) {
-    const id = ctx.db.normalizeId("conversations", args.claimedConversationId);
-    const conv = id ? await ctx.db.get(id) : null;
-    if (conv && conv.user_id === args.userId) conversationId = id;
-  }
   const dup = await ctx.db
     .query("commits")
     .withIndex("by_sha", (q: any) => q.eq("sha", args.commit.sha))
     .first();
+  const fromTrailer = await conversationFromSessionTrailer(ctx, args.commit.message, {
+    userId: args.userId,
+    teamId: args.teamId,
+    current: dup?.conversation_id,
+  });
+  let conversationId: Id<"conversations"> | undefined = fromTrailer;
+  if (!conversationId && args.claimedConversationId) {
+    const id = ctx.db.normalizeId("conversations", args.claimedConversationId);
+    const conv = id ? await ctx.db.get(id) : null;
+    if (conv && conv.user_id === args.userId) conversationId = id;
+  }
   if (dup) {
     // A row that had no session learns one; a row that had no file list
     // (a push webhook from before file lists were stored) learns the checkout's.
     const patch: Record<string, any> = {};
-    if (conversationId && !dup.conversation_id) patch.conversation_id = conversationId;
+    if (fromTrailer ? dup.conversation_id !== fromTrailer : conversationId && !dup.conversation_id) patch.conversation_id = conversationId;
     if (!dup.files?.length && files?.length) patch.files = files;
     if (Object.keys(patch).length) await ctx.db.patch(dup._id, patch);
-    return { commit_id: dup._id, created: false, conversation_id: dup.conversation_id ?? conversationId };
+    return { commit_id: dup._id, created: false, conversation_id: fromTrailer ?? dup.conversation_id ?? conversationId };
   }
   const commit_id = await ctx.db.insert("commits", {
     ...commit,
@@ -1381,13 +1391,15 @@ export async function blameSessionsFor(
   repository: string,
   ref: string,
   path: string,
-  blame: { ranges?: { start_line: number; end_line: number; sha: string; message?: string; committed_at?: number }[] },
+  blame: { ranges?: { start_line: number; end_line: number; sha: string; message?: string; committed_at?: number; session?: string }[] },
 ) {
   const caches = newResolveCaches();
   const ranges = blame.ranges ?? [];
-  const bySha = new Map<string, { sha: string; summary?: string; author_time?: number }>();
+  const bySha = new Map<string, { sha: string; summary?: string; author_time?: number; session?: string }>();
   for (const r of ranges) {
-    if (!bySha.has(r.sha)) bySha.set(r.sha, { sha: r.sha, summary: r.message?.split("\n")[0], author_time: r.committed_at || undefined });
+    // The commit's own Codecast-Session trailer (the blame reader keeps it on the
+    // range; the message is only a subject), when it has one, outranks every guess.
+    if (!bySha.has(r.sha)) bySha.set(r.sha, { sha: r.sha, summary: r.message?.split("\n")[0], author_time: r.committed_at || undefined, session: r.session ?? extractSessionTrailer(r.message) ?? undefined });
   }
   const resolved = await resolveCommitSessions(ctx, viewer, [...bySha.values()], caches);
 

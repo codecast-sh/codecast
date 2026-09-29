@@ -62,6 +62,7 @@ import {
 } from "../../../../../lib/repoView";
 import { cn, copyToClipboard, relTimeShort, sharePageUrl } from "../../../../../lib/utils";
 import "../../../../../components/repo/repo.css";
+import { useSessionTrailer } from "../../../../../components/SessionTrailer";
 
 // `api` is a proxy, so naming a function prod has not deployed yet still
 // produces a reference; useQueryNoThrow then reports the miss as an error
@@ -151,7 +152,11 @@ function CommitHeader({
 }) {
   const now = useCoarseNow(60_000);
   const family = useRepoFamily();
-  const { subject, body } = splitCommitMessage(commit.message);
+  // The Codecast-Session trailer leaves the body and shows as the session pill
+  // below, standing in for the commits table's link when ingest has none yet.
+  const { message: shownMessage, session: trailerSession } = useSessionTrailer(commit.message);
+  const { subject, body } = splitCommitMessage(shownMessage);
+  const joins = trailerSession && !commit.conversation_id ? { ...commit, conversation_id: trailerSession } : commit;
   const [owner, name] = repository.split("/");
 
   const pageUrl = sharePageUrl(commitPageHref(repository, commit.sha, family));
@@ -228,7 +233,7 @@ function CommitHeader({
           </div>
 
           <div className="repo-rise mt-2" style={{ ["--d" as string]: "160ms" }}>
-            <CommitLinks repository={repository} joins={commit} />
+            <CommitLinks repository={repository} joins={joins} />
           </div>
         </div>
         </div>
