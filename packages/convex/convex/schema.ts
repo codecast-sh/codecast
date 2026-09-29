@@ -1493,6 +1493,9 @@ export default defineSchema({
   // created_by is the host. Resolves when every change is applied or skipped.
   org_proposals: defineTable({
     short_id: v.string(), // "op-N" from counters.nextShortId
+    // Set by an org reset: the proposal belongs to an org that was cleared,
+    // so no list returns it and a fresh review starts without it.
+    archived_at: v.optional(v.number()),
     team_id: v.optional(v.id("teams")),
     scope_user_id: v.optional(v.id("users")),
     // Who proposed: a role's standing session, an ordinary session, or a
@@ -4264,6 +4267,10 @@ export default defineSchema({
     // the session that armed it (runOwnerWakeOf) instead of only posting
     // there. Failures, deaths and --needs-attention wake it regardless.
     wake_creator: v.optional(v.boolean()),
+    // The org role whose routine this is (org-staffing.md S25). A role's
+    // session already knows how it works from its opening message, so its
+    // routine carries no generic trigger lifecycle text.
+    role_id: v.optional(v.id("org_roles")),
 
     status: v.union(
       v.literal("scheduled"),

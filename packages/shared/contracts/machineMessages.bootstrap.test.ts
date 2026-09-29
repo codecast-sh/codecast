@@ -7,10 +7,11 @@ import { isBootstrapPrompt, isMachineDeliveredMessage } from "./machineMessages"
 const rolePrompt = "You are **Gate test**, the standing agent for the **Gate test** role (@gate-test) in the Union workspace. You report to Ashot Petrosian.";
 const teamAnchor = "You are **Anchor**, the **team** anchor for Union — every member of that team can reach you";
 const personalAnchor = "You are **Anchor**, the **personal** anchor for Ashot — private to them";
+const chiefOfStaff = "You are the Chief of Staff for Union. You report to Ashot Petrosian.";
 
 describe("the seat's provisioning prompt is a machine message", () => {
-  test("known by its first line, for a role and for both anchors", () => {
-    for (const prompt of [rolePrompt, teamAnchor, personalAnchor]) {
+  test("known by its first line, for a role, the chief of staff and both anchors", () => {
+    for (const prompt of [rolePrompt, chiefOfStaff, teamAnchor, personalAnchor]) {
       expect(isBootstrapPrompt(prompt)).toBe(true);
       expect(isMachineDeliveredMessage(prompt)).toBe(true);
     }
@@ -19,6 +20,7 @@ describe("the seat's provisioning prompt is a machine message", () => {
   test("tolerates injection noise and the inbox's truncated preview", () => {
     expect(isBootstrapPrompt(`\x01<system-reminder>x</system-reminder>${rolePrompt}`)).toBe(true);
     expect(isBootstrapPrompt(rolePrompt.slice(0, 60))).toBe(true);
+    expect(isBootstrapPrompt(chiefOfStaff.slice(0, 40))).toBe(true);
   });
 
   test("a person mentioning the words is not the prompt", () => {
