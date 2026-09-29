@@ -8,7 +8,7 @@ import { encryptToken } from "../tokenEncryption.js";
 import { DEVICE_BOUND_TOKEN_PREFIX } from "@platform/auth/cli";
 import * as remote from "./remote.js";
 import { AGENT_BRIDGE_MIN_WATCHDOG } from "../cloud/agentBridge.js";
-import { listCloudRemoteHosts, toRemoteHost, writeHosts, type CloudHost } from "./cloudHost.js";
+import { reachableRemoteHosts, toRemoteHost, writeHosts, type CloudHost } from "./cloudHost.js";
 import { remoteHome, type RemoteHost } from "../remote/session-move.js";
 import { needsMacHelper } from "../../scripts/build-with-native.js";
 
@@ -387,7 +387,7 @@ describe("cloud host registry", () => {
     expect(r.remoteBaseDir).toBe("/home/ubuntu/work");
   });
 
-  test("listCloudRemoteHosts skips hosts with no known address", () => {
+  test("reachableRemoteHosts skips hosts with no known address and ones that do not answer", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cast-hosts-"));
     const prev = process.env.CODECAST_DIR;
     process.env.CODECAST_DIR = dir;
@@ -396,8 +396,10 @@ describe("cloud host registry", () => {
         { id: "i-a", provider: "aws", region: "us-west-2", user: "ubuntu", keyPath: "/k", address: "1.2.3.4" },
         { id: "i-b", provider: "aws", region: "us-west-2", user: "ubuntu", keyPath: "/k" },
       ]);
-      const hosts = listCloudRemoteHosts();
-      expect(hosts.map((h) => h.address)).toEqual(["1.2.3.4"]);
+      const extra = { address: "5.6.7.8", user: "m1", keyPath: "/k", remoteBaseDir: "/Users/m1/work" };
+      const down = { ...extra, address: "9.9.9.9" };
+      const hosts = await reachableRemoteHosts([extra, down], async (h) => h.address !== "9.9.9.9");
+      expect(hosts.map((h) => h.address)).toEqual(["1.2.3.4", "5.6.7.8"]);
     } finally {
       if (prev === undefined) delete process.env.CODECAST_DIR; else process.env.CODECAST_DIR = prev;
       fs.rmSync(dir, { recursive: true, force: true });

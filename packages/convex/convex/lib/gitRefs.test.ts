@@ -9,6 +9,7 @@ import {
   prUrl,
   commitUrl,
   shortSha,
+  conversationFromSessionTrailer,
 } from "./gitRefs";
 
 describe("extractTaskShortIds", () => {
@@ -58,6 +59,77 @@ describe("resolveTaskLinks", () => {
   test("reads several pieces of git text at once", async () => {
     const links = await resolveTaskLinksFromText({ db: db() }, "closes ct-1", null, "ct-2-branch");
     expect(links.task_ids).toEqual(["task_a", "task_b"] as any);
+  });
+});
+
+describe("conversationFromSessionTrailer", () => {
+  // Full-length ids: the trailer refuses anything but a full conversation id.
+  const MINE = "a".repeat(32);
+  const MATE_SHARED = "b".repeat(32);
+  const STRANGER = "c".repeat(32);
+  const MATE_PRIVATE = "e".repeat(32);
+  const MATE_REVEALED = "f".repeat(32);
+  const HIDER_SHARED = "g".repeat(32);
+  const MINE_OTHER = "h".repeat(32);
+  const db = () =>
+    makeFakeDb({
+      conversations: [
+        { _id: MINE, user_id: "user_me", team_id: "team_a", is_private: true },
+        { _id: MINE_OTHER, user_id: "user_me", team_id: "team_a", is_private: true },
+        { _id: MATE_SHARED, user_id: "user_mate", team_id: "team_a", is_private: false },
+        { _id: MATE_PRIVATE, user_id: "user_mate", team_id: "team_a", is_private: true },
+        { _id: MATE_REVEALED, user_id: "user_mate", team_id: "team_a", is_private: true, team_visibility: "full" },
+        { _id: HIDER_SHARED, user_id: "user_hider", team_id: "team_a", is_private: false },
+        { _id: STRANGER, user_id: "user_x", team_id: "team_b", is_private: false },
+      ],
+      team_memberships: [
+        { _id: "m1", user_id: "user_me", team_id: "team_a" },
+        { _id: "m2", user_id: "user_mate", team_id: "team_a" },
+        { _id: "m3", user_id: "user_hider", team_id: "team_a", visibility: "hidden" },
+      ],
+    });
+  const msg = (id: string) => `fix: a thing\n\nCodecast-Session: https://codecast.sh/conversation/${id}`;
+  const link = (id: string, scope: any) => conversationFromSessionTrailer({ db: db() }, msg(id), scope);
+
+  test("links a session the reporting user owns, private or not", async () => {
+    expect(await link(MINE, { userId: "user_me", teamId: "team_a" })).toBe(MINE as any);
+  });
+
+  test("links a teammate's session only when the team may read it", async () => {
+    expect(await link(MATE_SHARED, { teamId: "team_a" })).toBe(MATE_SHARED as any);
+    expect(await link(MATE_REVEALED, { teamId: "team_a" })).toBe(MATE_REVEALED as any);
+    expect(await link(MATE_SHARED, { userId: "user_me", teamId: "team_a" })).toBe(MATE_SHARED as any);
+  });
+
+  test("a private session routed to the team is not the team's to link", async () => {
+    // team_id is routing: a private session carries it too.
+    expect(await link(MATE_PRIVATE, { teamId: "team_a" })).toBeUndefined();
+    expect(await link(MATE_PRIVATE, { userId: "user_me", teamId: "team_a" })).toBeUndefined();
+    expect(await link(MINE, { teamId: "team_a" })).toBeUndefined();
+  });
+
+  test("an owner who hides from the team keeps even a shared session out", async () => {
+    expect(await link(HIDER_SHARED, { teamId: "team_a" })).toBeUndefined();
+  });
+
+  test("a trailer naming another workspace's session links nothing", async () => {
+    expect(await link(STRANGER, { userId: "user_me", teamId: "team_a" })).toBeUndefined();
+    expect(await link(STRANGER, { teamId: "team_a" })).toBeUndefined();
+  });
+
+  test("a trailer replaces a link only from the same owner", async () => {
+    expect(await link(MINE, { userId: "user_me", teamId: "team_a", current: MINE_OTHER })).toBe(MINE as any);
+    expect(await link(MINE, { userId: "user_me", teamId: "team_a", current: MINE })).toBe(MINE as any);
+    expect(await link(MATE_SHARED, { teamId: "team_a", current: MINE })).toBeUndefined();
+    expect(await link(MINE, { userId: "user_me", teamId: "team_a", current: MATE_SHARED })).toBeUndefined();
+    // A link to a row that no longer exists holds nothing back.
+    expect(await link(MINE, { userId: "user_me", current: "z".repeat(32) })).toBe(MINE as any);
+  });
+
+  test("a missing session, a missing trailer and a quoted trailer link nothing", async () => {
+    expect(await link("d".repeat(32), { teamId: "team_a" })).toBeUndefined();
+    expect(await conversationFromSessionTrailer({ db: db() }, "fix: plain", { teamId: "team_a" as any })).toBeUndefined();
+    expect(await conversationFromSessionTrailer({ db: db() }, `${msg(MINE)}\n\nprose after`, { userId: "user_me" as any })).toBeUndefined();
   });
 });
 

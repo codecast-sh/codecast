@@ -1,16 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { CloudApiError } from "./cloudAgents/http.js";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import {
   CODEX_BACKEND_USAGE_URL,
-  CodexUsageHttpError,
   codexBackendAuthHeaders,
   fetchCodexBackendUsage,
   mergeCodexUsage,
-  nextUsageRetry,
   parseBackendUsageResponse,
-  parseRetryAfter,
 } from "./codexBackendUsage";
 
 const NOW = Date.parse("2026-09-07T12:00:00Z");
@@ -21,14 +19,8 @@ function fixture(name: string): any {
 
 /** A Response stand-in: bun's fetch types want the whole surface, and these
  *  tests only ever read ok/status/headers/json. */
-function response(opts: { status?: number; body?: any; headers?: Record<string, string> }): any {
-  const status = opts.status ?? 200;
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    headers: new Headers(opts.headers ?? {}),
-    json: async () => opts.body,
-  };
+function response(opts: { status?: number; body?: any; headers?: Record<string, string> }): Response {
+  return new Response(opts.body === undefined ? null : JSON.stringify(opts.body), { status: opts.status ?? 200, headers: opts.headers ?? {} });
 }
 
 describe("codexBackendAuthHeaders", () => {
@@ -201,7 +193,7 @@ describe("fetchCodexBackendUsage", () => {
       now: NOW,
       fetchImpl: (async () => response({ status: 429, headers: { "retry-after": "120" } })) as any,
     }).catch((e) => e);
-    expect(err).toBeInstanceOf(CodexUsageHttpError);
+    expect(err).toBeInstanceOf(CloudApiError);
     expect(err.status).toBe(429);
     expect(err.retryAfterMs).toBe(120_000);
   });
@@ -213,55 +205,6 @@ describe("fetchCodexBackendUsage", () => {
     }).catch((e) => e);
     expect(err.status).toBe(500);
     expect(err.retryAfterMs).toBeUndefined();
-  });
-});
-
-describe("parseRetryAfter", () => {
-  it("reads delta-seconds and HTTP dates", () => {
-    expect(parseRetryAfter("30", NOW)).toBe(30_000);
-    expect(parseRetryAfter(new Date(NOW + 90_000).toUTCString(), NOW)).toBe(90_000);
-  });
-
-  it("ignores what it cannot use: absent, garbage, or already past", () => {
-    expect(parseRetryAfter(null, NOW)).toBeUndefined();
-    expect(parseRetryAfter("  ", NOW)).toBeUndefined();
-    expect(parseRetryAfter("soon", NOW)).toBeUndefined();
-    expect(parseRetryAfter("0", NOW)).toBeUndefined();
-    expect(parseRetryAfter(new Date(NOW - 1000).toUTCString(), NOW)).toBeUndefined();
-  });
-
-  it("caps a hostile wait at a day", () => {
-    expect(parseRetryAfter("99999999", NOW)).toBe(24 * 60 * 60 * 1000);
-  });
-});
-
-describe("nextUsageRetry", () => {
-  it("doubles the wait per consecutive failure, capped at 15 minutes", () => {
-    let state = nextUsageRetry(undefined, new Error("boom"), NOW);
-    expect(state.retry_at - NOW).toBe(30_000);
-    expect(state.failures).toBe(1);
-    state = nextUsageRetry(state, new Error("boom"), NOW);
-    expect(state.retry_at - NOW).toBe(60_000);
-    for (let i = 0; i < 10; i++) state = nextUsageRetry(state, new Error("boom"), NOW);
-    expect(state.retry_at - NOW).toBe(15 * 60 * 1000);
-  });
-
-  it("prefers the wait the server named over its own backoff", () => {
-    const state = nextUsageRetry(
-      { retry_at: 0, failures: 4, reason: "x", failed_at: 0 },
-      new CodexUsageHttpError(429, 5_000),
-      NOW,
-    );
-    expect(state.retry_at).toBe(NOW + 5_000);
-    expect(state.retry_after).toBe(true);
-    expect(state.status).toBe(429);
-  });
-
-  it("records the status of a refusal that named no wait", () => {
-    const state = nextUsageRetry(undefined, new CodexUsageHttpError(503), NOW);
-    expect(state.retry_at).toBe(NOW + 30_000);
-    expect(state.status).toBe(503);
-    expect(state.retry_after).toBeUndefined();
   });
 });
 

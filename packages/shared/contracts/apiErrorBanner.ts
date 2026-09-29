@@ -12,6 +12,8 @@
 // (e.g. "You've hit your usage limit on the free plan, so video generation is
 // paused…") from being mistaken for a banner.
 
+import { isCloudAgentCredentialCard } from "./cloudAgents";
+
 export type ApiErrorBannerKind = "auth" | "limit" | "throttle" | "error" | "connection" | "fatal" | "safety" | "context";
 
 export const SAFETY_BANNER_PREFIX = "Safety stop:";
@@ -384,7 +386,7 @@ export function classifyApiErrorBanner(
   if (trimmed.startsWith(CLIENT_ERROR_BANNER_PREFIX)) {
     const body = trimmed.slice(CLIENT_ERROR_BANNER_PREFIX.length);
     if (CODEX_PLAN_WINDOW_BODY_RE.test(body)) return "limit";
-    return CLIENT_AUTH_ERROR_RE.test(body) ? "auth" : "error";
+    return CLIENT_AUTH_ERROR_RE.test(body) || isCloudAgentCredentialCard(body) ? "auth" : "error";
   }
   if (THROTTLE_BANNER_RE.test(trimmed) && !trimmed.includes("\n")) {
     // A marked throttle quoting the short model-quota form is the quota park

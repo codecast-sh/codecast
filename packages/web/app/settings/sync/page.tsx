@@ -10,7 +10,7 @@ import { Button } from "../../../components/ui/button";
 import { Switch } from "../../../components/ui/switch";
 import { Fragment, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { CLOUD_SESSION_SOURCES, cloudSessionSyncSettings, type CloudSessionSource } from "@codecast/shared/contracts";
+import { CLOUD_AGENT_PROVIDERS, CLOUD_SESSION_SOURCES, cloudSessionSyncSettings, type CloudSessionSource } from "@codecast/shared/contracts";
 import {
   GitBranch, Folder, FolderGit2, Search, AlertTriangle, RefreshCw, Terminal,
 } from "lucide-react";
@@ -29,6 +29,7 @@ import { TeamVisibilityControl } from "../../../components/settings/TeamVisibili
 import Link from "next/link";
 import { SharePanel, ShareTrigger, type ShareChoice, type ShareCurrent } from "../../../components/settings/SharePanel";
 import { SharingAgentCard } from "../../../components/settings/SharingAgentCard";
+import { CloudAgentSyncConnect, CloudAgentSyncNote } from "../../../components/cloudAgents";
 import { isFolderSyncing, planSyncChange, type SyncChange, type SyncSettings } from "@codecast/shared/team/syncPlan";
 import { useShareSummaries } from "../../../hooks/useShareSummaries";
 import {
@@ -96,6 +97,13 @@ const CLOUD_SYNC_COPY: Record<CloudSessionSource, { on: string; off: string }> =
   cursor: {
     on: "Cloud agents you run on cursor.com, in Slack or from Cursor sync here like local ones, and you can message them from codecast. Your daemon reads them with the Cursor API key on your machine (Settings → Provider keys).",
     off: "Only the Cursor Cloud sessions you start from codecast sync here. The rest stay on cursor.com.",
+  },
+  codex: {
+    on: "Tasks you run on chatgpt.com/codex, in Slack, Linear or from GitHub sync here like local ones, and you can message them from codecast. Your daemon reads them with the Codex sign-in on your machine.",
+    // Until codecast can start Codex Cloud tasks, none of them sync with this off.
+    off: CLOUD_AGENT_PROVIDERS.codex.composer
+      ? "Only the Codex Cloud tasks you start from codecast sync here. The rest stay on chatgpt.com/codex."
+      : "Codex Cloud tasks stay on chatgpt.com/codex until you turn this on.",
   },
 };
 
@@ -623,8 +631,11 @@ export default function SyncPage() {
           const { field, label } = CLOUD_SESSION_SOURCES[source];
           const on = cloudSync[field];
           return (
-            <SettingsRow key={source} label={`Sync ${label}`} description={on ? CLOUD_SYNC_COPY[source].on : CLOUD_SYNC_COPY[source].off}>
-              <Switch checked={on} onCheckedChange={(v) => setCloudSessionSync(source, v)} aria-label={`Sync ${label}`} />
+            <SettingsRow key={source} label={`Sync ${label}`} className="flex-wrap gap-y-2 sm:flex-nowrap" description={<>{on ? CLOUD_SYNC_COPY[source].on : CLOUD_SYNC_COPY[source].off}<CloudAgentSyncNote source={source} on={on} /></>}>
+              <div className="flex items-center gap-2.5">
+                <CloudAgentSyncConnect source={source} />
+                <Switch checked={on} onCheckedChange={(v) => setCloudSessionSync(source, v)} aria-label={`Sync ${label}`} />
+              </div>
             </SettingsRow>
           );
         })}

@@ -2,11 +2,12 @@ import { defineSchema, defineTable } from "convex/server";
 import { authTables } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { AGENT_STATUSES, DAEMON_COMMANDS } from "@codecast/shared/contracts";
+import { cloudHostReportValidator, hostReadinessValidator, localMirrorValidator } from "./lib/cloudHostValidators";
 import { openTaskValidator } from "./lib/openTasksValidator";
 import { TASK_STATUS_CATEGORIES, TASK_STATUS_COLORS } from "@codecast/shared/tasks";
 import { DOC_TYPES } from "@codecast/shared/docs";
 import { ccAccountsValidator, ccAutoSwitchStateValidator, ccLoginFlowValidator, ccMintFlowValidator } from "./ccAccountsShared";
-import { deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
+import { cloudAgentBlocksValidator, deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
 import { capabilityTables } from "./capabilitiesSchema";
 import { externalAuthorValidator } from "./lib/externalAuthor";
 import { googleOAuthTables } from "./googleOAuthSchema";
@@ -23,6 +24,7 @@ const agentStatusFieldValidator = v.union(
 const daemonCommandValidator = v.union(
   ...DAEMON_COMMANDS.map((c) => v.literal(c)),
 );
+
 const taskStatusCategoryValidator = v.union(
   ...TASK_STATUS_CATEGORIES.map((s) => v.literal(s)),
 );
@@ -235,6 +237,9 @@ export default defineSchema({
     // daemons, read with their Claude login. Unset = on.
     claude_cloud_sync: v.optional(v.boolean()),
     cursor_cloud_sync: v.optional(v.boolean()),
+    // Codex Cloud tasks (chatgpt.com/codex), read with the daemon's Codex
+    // login. Unset = off: the source's default (CLOUD_SESSION_SOURCES).
+    codex_cloud_sync: v.optional(v.boolean()),
     team_share_paths: v.optional(v.array(v.string())),
     muted_members: v.optional(v.array(v.id("users"))),
     team_conversations_last_seen: v.optional(v.number()),
@@ -844,6 +849,12 @@ export default defineSchema({
       cap_bytes: v.number(),
       files: v.array(v.object({ path: v.string(), bytes: v.number() })),
     })),
+    // A cloud session's working tree mirrored live into a worktree on one of
+    // the owner's laptops (`cast remote sync` as a daemon job). The laptop
+    // running it writes the state (cloud.reportLocalMirror) on landing and on
+    // state change only; the web asks for start and stop (dispatch
+    // setLocalMirror). Absent = no mirror.
+    local_mirror: v.optional(localMirrorValidator),
     // Where a cloud session runs on the host: its own worktree (absent =
     // isolated) or the host's main checkout (shared). Stamped at create
     // (createQuickSession / dispatch.createSession / the CLI spawn) and by
@@ -873,6 +884,7 @@ export default defineSchema({
       laptop_root: v.optional(v.string()),
       device_id: v.optional(v.string()),
       reason: v.optional(v.string()),
+      tree: v.optional(v.string()),
       at: v.number(),
     })),
     // A bulk migration (sessionMigrations.ts) is moving this row between
@@ -2771,6 +2783,10 @@ export default defineSchema({
     // it exists precisely to be pasted into GitHub/GitLab to grant this machine
     // repo access. The private half never leaves the device.
     git_pubkey: v.optional(v.string()),
+    // A cloud host's readiness from its own disk (heartbeat, only when it
+    // changed), and its managing laptop's report (cloud.reportCloudHost).
+    host_readiness: v.optional(hostReadinessValidator),
+    cloud_host: v.optional(cloudHostReportValidator),
     // Saved CC account profiles on this machine (names/emails/tiers only,
     // never tokens) — heartbeat-reported, drives the web account switcher.
     cc_accounts: v.optional(ccAccountsValidator),
@@ -2789,6 +2805,10 @@ export default defineSchema({
     // status, mirroring how cc_accounts reports names-not-tokens.
     provider_key_pubkey: v.optional(v.string()),
     managed_provider_ids: v.optional(v.array(v.string())),
+    // What keeps this machine from reading each cloud agent provider (no
+    // sign-in, expired, turned off for the account: CloudAgentSetupBlock),
+    // heartbeat-reported, so Settings does not call it connected.
+    cloud_agent_blocks: v.optional(cloudAgentBlocksValidator),
     // Auto-switch on usage limits: when on, limit-parked sessions trigger a
     // server-side check that switches this machine to the best saved profile
     // and revives them, retrying until unblocked or every account is spent.
@@ -2847,6 +2867,20 @@ export default defineSchema({
     bytes_before: v.number(),
     bytes_after: v.number(),
   }).index("by_user_device_at", ["user_id", "device_id", "at"]),
+
+  // A person's machine opened to one of their teams (Settings → Devices). A
+  // teammate may start sessions there, which run under the owner's daemon and
+  // account exactly like a team agent box's run under the bot's. One row per
+  // device per team; its presence is the whole fact. A share only counts
+  // while the owner is still on the team (sessionLaunch.listTeamMachines).
+  device_shares: defineTable({
+    user_id: v.id("users"),
+    device_id: v.string(),
+    team_id: v.id("teams"),
+    shared_at: v.number(),
+  })
+    .index("by_team", ["team_id"])
+    .index("by_user_device", ["user_id", "device_id"]),
 
   managed_sessions: defineTable({
     session_id: v.string(),
@@ -3146,6 +3180,15 @@ export default defineSchema({
     .index("by_shepherd_conversation", ["shepherd_conversation_id"])
     .index("by_updated_at", ["updated_at"]),
 
+  // linked_session_ids as an index (lib/prSessions.ts): written only by
+  // syncPullRequestSessions, read to find the pull requests a session links.
+  pull_request_sessions: defineTable({
+    pull_request_id: v.id("pull_requests"),
+    conversation_id: v.id("conversations"),
+  })
+    .index("by_pull_request", ["pull_request_id"])
+    .index("by_conversation", ["conversation_id"]),
+
   reviews: defineTable({
     pull_request_id: v.id("pull_requests"),
     // Optional since reviews now also arrive by webhook from reviewers who
@@ -3160,15 +3203,6 @@ export default defineSchema({
       v.literal("approved"),
       v.literal("changes_requested"),
       v.literal("commented"),
-  // linked_session_ids as an index (lib/prSessions.ts): written only by
-  // syncPullRequestSessions, read to find the pull requests a session links.
-  pull_request_sessions: defineTable({
-    pull_request_id: v.id("pull_requests"),
-    conversation_id: v.id("conversations"),
-  })
-    .index("by_pull_request", ["pull_request_id"])
-    .index("by_conversation", ["conversation_id"]),
-
       // Withdrawn on GitHub: kept in the history, counted by nothing.
       v.literal("dismissed")
     ),
@@ -3659,7 +3693,10 @@ export default defineSchema({
       // The needs-input digest: one row naming every session that started
       // waiting inside the window. Names no conversation on purpose — it
       // points at the inbox, not at one session out of several.
-      v.literal("sessions_need_input")
+      v.literal("sessions_need_input"),
+      // A teammate opened one of their machines to a team you are on, so you
+      // can now start sessions there (devices.performSetDeviceShares).
+      v.literal("device_shared")
     ),
     actor_user_id: v.optional(v.id("users")),
     // Display identity for actors without an account (an anonymous artifact

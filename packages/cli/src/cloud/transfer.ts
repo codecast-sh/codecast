@@ -10,7 +10,8 @@ import { buildMirrorBundle } from "./mirror/bundle.js";
 import { kindForPath, transformForHost } from "./mirror/transform.js";
 import { collectProjectContext } from "./mirror/discovery.js";
 import { readLocalConfig } from "../config/readLocalConfig.js";
-import { CLOUD_SEED_EXCLUDES, createWipSnapshotStrict } from "../wipSnapshot.js";
+import { runSide, type Skipped, type SnapshotResult } from "./syncSide.js";
+import { readSyncScope } from "./syncScope.js";
 
 function checked(result: SpawnSyncReturns<string>, operation: string): string {
   if (result.error || result.status !== 0) {
@@ -237,6 +238,8 @@ export interface CloudSeed {
   snapshot?: string;
   /** The snapshot's tree. */
   tree?: string;
+  /** What stayed on the laptop, and why (cloud/syncSide.ts). */
+  skipped?: Skipped[];
 }
 
 /**
@@ -264,23 +267,27 @@ const SHA_RE = /^[0-9a-f]{40}$/;
 export async function planLaptopSeed(seedCwd: string): Promise<CloudSeed> {
   const head = spawnSync("git", ["-C", seedCwd, "rev-parse", "--verify", "HEAD"], { encoding: "utf-8", stdio: "pipe" });
   if (head.error || head.status !== 0) throw new CloudSeedUnavailable(`${seedCwd} is not a git checkout with commits`);
-  let snap;
+  // The whole working folder travels, gitignored files included: the same
+  // program and rules as a live sync (cloud/syncSide.ts), so the session
+  // starts with what a sync would have carried. The seed goes only to the
+  // person's own host over ssh, never to a shared remote.
+  let snap: SnapshotResult;
   try {
-    snap = await createWipSnapshotStrict(seedCwd, { exclude: CLOUD_SEED_EXCLUDES });
+    snap = await runSide<SnapshotResult>({ op: "snapshot", cwd: seedCwd, commit: true, scope: readSyncScope(seedCwd) });
   } catch (e) {
-    const err = e as { stderr?: string | Buffer; message?: string };
-    const detail = (err.stderr?.toString() || err.message || String(e)).trim().split("\n").find(Boolean) ?? "unknown git failure";
+    const detail = ((e as Error).message ?? String(e)).trim().split("\n").find(Boolean) ?? "unknown git failure";
     throw new Error(`seed snapshot failed: ${detail}`);
   }
-  if (!snap) throw new CloudSeedUnavailable(`${seedCwd} is not a git checkout with commits`);
+  const headTree = spawnSync("git", ["-C", seedCwd, "rev-parse", `${snap.head}^{tree}`], { encoding: "utf-8", stdio: "pipe" }).stdout.trim();
   return {
     source: "checkout",
-    base: snap.base,
+    base: snap.head,
     ...(snap.branch !== "HEAD" ? { branch: snap.branch } : {}),
-    dirty: snap.dirty,
+    dirty: snap.tree !== headTree,
     laptopRoot: seedCwd,
     snapshot: snap.sha,
     tree: snap.tree,
+    ...(snap.skippedCount ? { skipped: snap.skipped } : {}),
   };
 }
 

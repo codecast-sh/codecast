@@ -52,6 +52,9 @@ test("the script applies once per spec, re-applies when forced, and reports the 
   expect(failed.out?.step).toBe("install bad");
   expect(failed.out?.error).toContain("Unable to locate package bad");
   expect(JSON.parse(fs.readFileSync(path.join(dir, "home/.codecast/host-setup.json"), "utf-8")).hash).toBe("h1");
+  const last = JSON.parse(fs.readFileSync(path.join(dir, "home/.codecast/host-setup-last.json"), "utf-8"));
+  expect(last).toMatchObject({ ok: false, step: "install bad", packages: ["bad"], services: [], commands: 0 });
+  expect(last.at).toMatch(/^\d{4}-\d\d-\d\dT/);
 });
 
 test("every login shell on a host names the host and keeps the host's tool directories", () => {
