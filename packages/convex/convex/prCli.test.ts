@@ -201,6 +201,22 @@ describe("show", () => {
     expect(result.pull_request).toBeNull();
   });
 
+  test("lists only the linked sessions the caller may open", async () => {
+    const base = await tables();
+    const testCtx = await ctx({
+      conversations: [
+        ...base.conversations,
+        { _id: "conv_mate_shared", user_id: "user_mate", title: "Shared work", team_id: TEAM, is_private: false },
+        { _id: "conv_mate_private", user_id: "user_mate", title: "Private work", team_id: TEAM, is_private: true },
+      ],
+      team_memberships: [...base.team_memberships, { _id: "tm_3", user_id: "user_mate", team_id: TEAM, role: "member", joined_at: 1 }],
+      pull_requests: base.pull_requests.map((pr: any) =>
+        pr._id === "pr_1" ? { ...pr, linked_session_ids: ["conv_mine", "conv_mate_shared", "conv_mate_private"] } : pr),
+    });
+    const result = await call(show, testCtx, { api_token: TOKEN, number: 42 });
+    expect(result.sessions.map((s: any) => s.id)).toEqual(["conv_mine", "conv_mate_shared"]);
+  });
+
   // An agent commenting through `cast pr comment` has no GitHub username, so
   // the author falls back to the session that wrote it rather than going blank.
   test("a comment an agent wrote names the session behind it", async () => {

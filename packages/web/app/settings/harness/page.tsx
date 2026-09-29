@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { FileClock, MessageSquareText, Unplug } from "lucide-react";
-import type { HarnessHook } from "@codecast/shared/contracts";
+import { MACHINE_SETTINGS, type HarnessHook, type MachineSetting } from "@codecast/shared/contracts";
 import { useInboxStore } from "../../../store/inboxStore";
 import { AGENT_HOOKS, FUNCTIONAL_HOOKS, deviceHookInstalled, hookFeatureName } from "../../../lib/harnessHooksView";
 import { Switch } from "../../../components/ui/switch";
@@ -124,7 +124,12 @@ function HooksSection({ d, panel }: { d: Device; panel: ReturnType<typeof useDev
       )}
 
       {FUNCTIONAL_HOOKS.map((h) => (
-        <HookRow key={h.file} hook={h} installed={deviceHookInstalled(d, h)} />
+        <HookRow
+          key={h.file}
+          hook={h}
+          installed={deviceHookInstalled(d, h)}
+          control={h.setting && <HookSettingSwitch d={d} panel={panel} hook={h} setting={h.setting} />}
+        />
       ))}
     </SettingsSection>
   );
@@ -154,7 +159,39 @@ function AgentHooksSection({ d }: { d: Device }) {
   );
 }
 
-function HookRow({ hook: h, installed, owner }: { hook: HarnessHook; installed: boolean; owner?: string | null }) {
+/**
+ * A machine setting that turns what an installed hook does on or off (the
+ * session trailer), sent over the same device command as the hooks switch.
+ * A daemon that does not report the setting cannot take it either, so the
+ * switch waits for an update.
+ */
+function HookSettingSwitch({
+  d,
+  panel,
+  hook,
+  setting,
+}: {
+  d: Device;
+  panel: ReturnType<typeof useDeviceSettingsPanel>;
+  hook: HarnessHook;
+  setting: MachineSetting;
+}) {
+  const { pending, run, setSnippet } = panel;
+  const value = d.settings?.[MACHINE_SETTINGS[setting]];
+  const busy = pending.has(setting);
+  return (
+    <span title={value === undefined ? `This machine's CLI does not report this setting yet. Update it with cast update, or run cast config ${MACHINE_SETTINGS[setting]} false there.` : undefined}>
+      <Switch
+        checked={value !== false}
+        disabled={value === undefined || !d.online || busy || !deviceHookInstalled(d, hook)}
+        onCheckedChange={(enabled) => void run(setting, () => setSnippet({ device_id: d.device_id, snippet: setting, enabled }))}
+        aria-label={hook.name}
+      />
+    </span>
+  );
+}
+
+function HookRow({ hook: h, installed, owner, control }: { hook: HarnessHook; installed: boolean; owner?: string | null; control?: ReactNode }) {
   return (
     <SettingsRow
       alignTop
@@ -187,7 +224,7 @@ function HookRow({ hook: h, installed, owner }: { hook: HarnessHook; installed: 
         </>
       }
     >
-      <span />
+      {control || <span />}
     </SettingsRow>
   );
 }

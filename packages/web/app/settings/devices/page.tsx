@@ -17,7 +17,9 @@ import { ConfirmButton } from "../../../components/integrations/parts";
 import { canRemoveMachine, splitStaleMachines } from "../../../lib/staleMachines";
 import { describeDeviceFreeze } from "../../../lib/daemonHealthCopy";
 import { useSettingsData } from "../../../hooks/useSyncSettings";
-import { Bot } from "lucide-react";
+import { Bot, Users } from "lucide-react";
+import { DeviceShareControl, useSharedWithLabel } from "../../../components/settings/DeviceShareControl";
+import { CloudHostPanel } from "../../../components/settings/CloudHostPanel";
 
 type RepoPlane = NonNullable<Device["git_plane"]>[number];
 
@@ -281,6 +283,7 @@ function RemoveMachineButton({ d }: { d: Device }) {
  */
 function InactiveDeviceRow({ d }: { d: Device }) {
   const [open, setOpen] = useState(false);
+  const sharedWith = useSharedWithLabel(d);
   return (
     <div className="px-4 py-2.5 sm:px-5">
       <div className="flex items-center gap-4">
@@ -298,13 +301,14 @@ function InactiveDeviceRow({ d }: { d: Device }) {
             <ChevronRight className={`h-3 w-3 shrink-0 text-sol-text-dim transition-transform ${open ? "rotate-90" : ""}`} />
           </div>
           <div className="truncate font-mono text-[11px] text-sol-text-dim">
-            {deviceKindLabel(d)} · last seen {relativeSeen(d.last_seen)} · {d.device_id.slice(0, 8)}
+            {deviceKindLabel(d)} · last seen {relativeSeen(d.last_seen)}{sharedWith ? ` · ${sharedWith}` : ""} · {d.device_id.slice(0, 8)}
           </div>
         </button>
         <RemoveMachineButton d={d} />
       </div>
       {open && (
         <div className="pb-1.5 pl-9">
+          <DeviceShareControl d={d} />
           <DeviceDetails d={d} />
         </div>
       )}
@@ -326,6 +330,7 @@ function DeviceDetails({ d }: { d: Device }) {
         <span className="font-mono opacity-60">{d.device_id.slice(0, 12)}</span>
       </div>
       <DeviceFreezeLine d={d} />
+      {d.is_remote && <CloudHostPanel d={d} />}
       {(d.git_plane?.length ?? 0) > 0 && (
         <ul className="mt-2 space-y-1">
           {d.git_plane!.map((r) => (
@@ -363,6 +368,7 @@ function DeviceRow({ d }: { d: Device }) {
         </div>
         <div className="min-w-0 flex-1">
           <DevicePanelHeader selected={d} note="seen" />
+          <DeviceShareControl d={d} />
           <DeviceDetails d={d} />
           <div className="mt-3 flex justify-end empty:hidden">
             <RemoveMachineButton d={d} />
@@ -374,14 +380,19 @@ function DeviceRow({ d }: { d: Device }) {
 }
 
 /**
- * An agent box: a machine whose daemon signs in as a bot account on one of the
- * viewer's teams. It has no settings page of its own, so the SSH host that
- * makes its sessions' attach command remote-ready is set here, by a team admin.
+ * A team machine you can start sessions on: an agent box, whose daemon signs
+ * in as a bot on one of your teams, or a teammate's machine they shared with
+ * you (devices.listAgentBoxes). An agent box has no settings page of its own,
+ * so its SSH host is set here by a team admin; a teammate's machine is theirs
+ * to configure.
  */
-type AgentBox = {
+type TeamMachine = {
   device_id: string;
   owner_user_id: string;
   bot_name: string | null;
+  runner_name?: string | null;
+  is_bot?: boolean;
+  team_id: string;
   can_edit: boolean;
   label: string;
   hostname?: string;
@@ -391,12 +402,13 @@ type AgentBox = {
   online: boolean;
 };
 
-function AgentBoxRow({ box }: { box: AgentBox }) {
+function TeamMachineRow({ box }: { box: TeamMachine }) {
+  const person = box.is_bot === false;
   return (
     <div className="px-4 py-4 sm:px-5">
       <div className="flex items-start gap-4">
-        <div className="mt-0.5 text-sol-magenta">
-          <Bot className="w-4 h-4" />
+        <div className={`mt-0.5 ${person ? "text-sol-cyan" : "text-sol-magenta"}`}>
+          {person ? <PlatformGlyph d={box as any} /> : <Bot className="w-4 h-4" />}
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 text-sm text-sol-text">
@@ -404,11 +416,22 @@ function AgentBoxRow({ box }: { box: AgentBox }) {
             <DeviceDot online={box.online} />
           </div>
           <div className="mt-1 text-[11px] text-sol-text-dim font-mono truncate">
-            {box.label} · runs as {box.bot_name ?? "a bot"}
+            {person
+              ? `${box.runner_name ?? "A teammate"}'s machine · sessions you start here run as them`
+              : `${box.label} · runs as ${box.bot_name ?? "a bot"}`}
           </div>
-          <SshHostField d={box} ownerUserId={box.owner_user_id} readOnly={!box.can_edit} />
-          {!box.can_edit && (
-            <p className="mt-1 text-[11px] text-sol-text-dim">Only an admin of the bot's team can change this.</p>
+          {person ? (
+            <p className="mt-2 text-[11px] text-sol-text-dim">
+              Pick it in the composer&apos;s machine row, or{" "}
+              <code className="font-mono text-sol-text-muted">cast spawn --device &quot;{box.label}&quot;</code>.
+            </p>
+          ) : (
+            <>
+              <SshHostField d={box} ownerUserId={box.owner_user_id} readOnly={!box.can_edit} />
+              {!box.can_edit && (
+                <p className="mt-1 text-[11px] text-sol-text-dim">Only an admin of the bot's team can change this.</p>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -416,23 +439,23 @@ function AgentBoxRow({ box }: { box: AgentBox }) {
   );
 }
 
-function AgentBoxesSection() {
-  const boxes = (useSettingsData("agentBoxes").data ?? []) as AgentBox[];
+function TeamMachinesSection() {
+  const boxes = (useSettingsData("agentBoxes").data ?? []) as TeamMachine[];
   if (boxes.length === 0) return null;
   return (
     <SettingsSection
-      title="Agent boxes"
-      icon={Bot}
+      title="Team machines"
+      icon={Users}
       description={
         <>
-          Machines whose daemon runs as a bot on your team. A session you own there shows in the header pill
-          as reachable: watch its terminal, and copy an attach command — an SSH host here makes that command
-          ready to paste from anywhere.
+          Machines your team opened to you: teammates&apos; computers they shared, and agent boxes whose daemon
+          runs as a bot. Start a session on one and you own it: watch its terminal and copy an attach command
+          from the header pill.
         </>
       }
     >
       {boxes.map((b) => (
-        <AgentBoxRow key={`${b.owner_user_id}:${b.device_id}`} box={b} />
+        <TeamMachineRow key={`${b.owner_user_id}:${b.device_id}`} box={b} />
       ))}
     </SettingsSection>
   );
@@ -451,6 +474,7 @@ export default function DevicesSettingsPage() {
     [devices],
   );
   const onlineCount = sorted.filter((d) => d.online).length;
+  const sharedCount = sorted.filter((d) => (d.shared_team_ids?.length ?? 0) > 0).length;
   const { current, stale } = useMemo(() => splitStaleMachines(sorted, Date.now()), [sorted]);
 
   return (
@@ -463,7 +487,8 @@ export default function DevicesSettingsPage() {
             Machines running the codecast daemon. A session runs on exactly one device. New sessions and
             messages from your phone route to your most-recently-active laptop or desktop — a{" "}
             <span className="text-sol-violet">cloud box</span> only runs a session you explicitly move there,
-            and wakes from sleep when you do. A machine can be removed once it is offline; stop its daemon with{" "}
+            and wakes from sleep when you do. Share a machine with a team and teammates can start sessions on
+            it too. A machine can be removed once it is offline; stop its daemon with{" "}
             <code className="font-mono text-sol-text">cast stop</code> first, or it lists itself again.
           </>
         }
@@ -471,6 +496,7 @@ export default function DevicesSettingsPage() {
           sorted.length > 0 ? (
             <span className="text-[11px] text-sol-text-muted">
               {onlineCount} of {sorted.length} online
+              {sharedCount > 0 && <span className="text-sol-cyan"> · {sharedCount} shared</span>}
             </span>
           ) : undefined
         }
@@ -526,7 +552,7 @@ export default function DevicesSettingsPage() {
           ))}
         </SettingsSection>
       )}
-      <AgentBoxesSection />
+      <TeamMachinesSection />
       <RemoteMachineSetup open={remoteSetupOpen} onOpenChange={setRemoteSetupOpen} />
     </SettingsPanel>
   );
