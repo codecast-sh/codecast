@@ -4,7 +4,7 @@
 # back and prove it's still responsive locally.
 set -uo pipefail
 
-source /Users/ashot/src/codecast/packages/cli/.env.cloud-test
+source /home/ubuntu/work/codecast/.codecast/worktrees/cloud-d79fb8/packages/cli/.env.cloud-test
 IP=51.159.120.28; MUSER=m1; KEY=~/.codecast/scaleway/d7_id_ed25519
 SSH="ssh -i $KEY -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 $MUSER@$IP"
 RSYNC_E="ssh -i $KEY -o StrictHostKeyChecking=accept-new"

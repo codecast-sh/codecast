@@ -8,9 +8,9 @@ Task: ct-53052. Plan: pl-734. Reviewer session: jx7c0ed. Date: 2026-09-21.
 
 ## Scope and evidence
 
-Reviewed the uncommitted canonical auth changes in `/Users/ashot/src/platform/packages/auth/src/convex/{providers.ts,callbacks.ts,createAuthConfig.ts,createAuthConfig.test.ts,identity.security.test.ts}` and Codecast changes in `packages/convex/convex/{users.ts,slackSync.ts,slackSync.test.ts,users.aliasVerification.test.ts}`. Canonical platform HEAD: `33f2761772fa708b2857166a7197f2ef7c93fbb4`; Codecast HEAD: `07a081b853ca9bad1a1872eb757eb69a5c1acd34`. The Codecast auth mirror was not refreshed at review time.
+Reviewed the uncommitted canonical auth changes in `/home/ubuntu/src/platform/packages/auth/src/convex/{providers.ts,callbacks.ts,createAuthConfig.ts,createAuthConfig.test.ts,identity.security.test.ts}` and Codecast changes in `packages/convex/convex/{users.ts,slackSync.ts,slackSync.test.ts,users.aliasVerification.test.ts}`. Canonical platform HEAD: `33f2761772fa708b2857166a7197f2ef7c93fbb4`; Codecast HEAD: `07a081b853ca9bad1a1872eb757eb69a5c1acd34`. The Codecast auth mirror was not refreshed at review time.
 
-Traced installed `@convex-dev/auth` **0.0.79**, including `Password`, `Email`, OAuth callback handling, `auth.store`, `createAccountFromCredentials`, `createVerificationCode`, `verifyCodeAndSignIn`, and `upsertUserAndAccount`. Dependency citations below refer to its `src/` tree under `/Users/ashot/src/platform/packages/auth/node_modules/@convex-dev/auth/`; reproduction imports use the distributed JS entry points, matching package exports.
+Traced installed `@convex-dev/auth` **0.0.79**, including `Password`, `Email`, OAuth callback handling, `auth.store`, `createAccountFromCredentials`, `createVerificationCode`, `verifyCodeAndSignIn`, and `upsertUserAndAccount`. Dependency citations below refer to its `src/` tree under `/home/ubuntu/src/platform/packages/auth/node_modules/@convex-dev/auth/`; reproduction imports use the distributed JS entry points, matching package exports.
 
 Independently executed, in tmux:
 

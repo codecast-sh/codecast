@@ -10,7 +10,7 @@ IP=${MAC_IP:-51.159.120.28}; MUSER=${MAC_USER:-m1}
 KEY=~/.codecast/scaleway/d7_id_ed25519
 SSH="ssh -i $KEY -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 $MUSER@$IP"
 RSYNC_E="ssh -i $KEY -o StrictHostKeyChecking=accept-new"
-SRC=/Users/ashot/src/codecast/packages/cli/src
+SRC=/home/ubuntu/work/codecast/.codecast/worktrees/cloud-d79fb8/packages/cli/src
 DEST=/Users/m1/work/codecast/packages/cli/src
 
 echo "[1] overlay CLI source"

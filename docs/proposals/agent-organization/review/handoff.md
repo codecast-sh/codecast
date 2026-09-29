@@ -18,7 +18,7 @@ ct-48815 (draft) and ct-48816 (review) were marked done. No feature was deployed
 
 The environment changed to workspace-write with no escalation. All subsequent cast writes failed before reaching their requested action:
 
-`EPERM: operation not permitted, unlink '/Users/ashot/.codecast/daemon.pid'`
+`EPERM: operation not permitted, unlink '/home/ubuntu/.codecast/daemon.pid'`
 
 The same error blocked completion messages, status updates, and publication of one final accessibility metadata correction (remove unnecessary aria-label on generic pre elements; retain tabindex=0). That correction is saved in the source and index.html, with strict HTML validation passing. The live version 2 remains intact and already verified.
 
