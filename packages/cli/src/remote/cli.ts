@@ -10,6 +10,7 @@
  * Registered via registerRemoteCommand(program) from index.ts.
  */
 
+import { execFileSync } from "../proc.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -391,5 +392,47 @@ export function registerRemoteCommand(program: Command): void {
         verification: backLine,
       }));
       console.log("  done — session is local again");
+    });
+
+  // cast remote sync <session> — mirror a cloud session's working tree here, live
+  remote
+    .command("sync <session>")
+    .description("Mirror a cloud session's working tree into a worktree here, live: its commits and uncommitted edits, as it makes them")
+    .option("--dir <path>", "Where to mirror (default: <this repo>/.codecast/worktrees/sync-<session>)")
+    .option("--interval <seconds>", "How often to look", "3")
+    .option("--once", "Mirror once and exit")
+    .action(async (ref: string, opts: { dir?: string; interval: string; once?: boolean }) => {
+      const { ensureSyncWorktree, sshSyncDeps, syncTick } = await import("../cloud/liveSync.js");
+      const { client, token, api } = await convexClient();
+      let found: { host: ReturnType<typeof readCloudHosts>[number]; row: any } | undefined;
+      for (const h of readCloudHosts().filter((x) => x.deviceId)) {
+        const rows: any[] = await client.query(api.cloud.hostSessions, { api_token: token, device_id: h.deviceId }).catch(() => []);
+        const row = rows.find((r) => r.short_id === ref || r.conversation_id === ref || r.conversation_id.startsWith(ref));
+        if (row) { found = { host: h, row }; break; }
+      }
+      if (!found) { console.error(`${ref} is not a session on a registered cloud host (cast hosts ls lists them)`); process.exit(1); }
+      const remoteCwd: string | null = found.row.project_path;
+      if (!remoteCwd) { console.error(`${ref} has no working directory on ${found.host.id} yet`); process.exit(1); }
+      const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf-8" }).trim();
+      const dir = opts.dir ? path.resolve(opts.dir) : await ensureSyncWorktree(repoRoot, `sync-${found.row.short_id}`);
+      const up = await ensureUp(found.host, (m) => console.error(`  ${m}`));
+      const deps = sshSyncDeps(toRemoteHost(up), remoteCwd, found.row.conversation_id, dir);
+      console.log(`mirroring ${found.row.short_id} (${remoteCwd} on ${up.id}) into ${dir}${opts.once ? "" : "; Ctrl-C stops"}`);
+      const state = {};
+      const intervalMs = Math.max(1, Number(opts.interval) || 3) * 1000;
+      for (;;) {
+        try {
+          const r = await syncTick(dir, state, deps);
+          if (r.landed) console.log(`${new Date().toLocaleTimeString()}  ${r.sha.slice(0, 8)}  ${r.first ? "mirrored the host's tree" : `${r.changed.length} changed: ${r.changed.slice(0, 5).join(", ")}${r.changed.length > 5 ? ", …" : ""}`}`);
+          else if (r.reason === "local-edit") {
+            console.error(`stopped: ${dir} was edited here since the last sync (${r.files.slice(0, 5).join(", ")}${r.files.length > 5 ? ", …" : ""}); keep or discard those edits, then run this again`);
+            process.exit(2);
+          }
+        } catch (err) {
+          console.error(`${new Date().toLocaleTimeString()}  sync failed, retrying: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}`);
+        }
+        if (opts.once) return;
+        await new Promise((r) => setTimeout(r, intervalMs));
+      }
     });
 }
