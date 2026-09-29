@@ -68,6 +68,7 @@ sudo tee /Library/LaunchDaemons/${label}.plist >/dev/null <<PLIST
 <key>HOME</key><string>${home}</string>
 <key>PATH</key><string>${home}/.local/bin:${home}/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
 <key>CODECAST_REMOTE_DEVICE</key><string>1</string>
+<key>CODECAST_CLOUD</key><string>1</string>
 </dict>
 <key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>10</integer>
 <key>StandardOutPath</key><string>${home}/.codecast/logs/remote-service.log</string>

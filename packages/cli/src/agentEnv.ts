@@ -2,6 +2,7 @@ import { writeHarnessFile } from "./harness.js";
 import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
+import { isRemoteDevice } from "./remote/device.js";
 
 // Env a daemon-launched agent must NOT inherit from whatever started it.
 //
@@ -38,12 +39,20 @@ export const FORCE_PERSISTENCE_VAR = "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE";
 // inherit a laptop's leaked session markers.
 export const MIRROR_EXCLUDED_ENV_VARS: readonly string[] = [FORCE_PERSISTENCE_VAR, ...AGENT_SCRUBBED_ENV_VARS];
 
+// Set to 1 in every agent a cloud host launches: the one test a hook, a skill
+// or a script needs to tell a cloud host from the laptop, the way Claude's own
+// cloud sessions carry CLAUDE_CODE_REMOTE.
+export const CLOUD_ENV_VAR = "CODECAST_CLOUD";
+
 // Launch prefix typed into every agent pane. Besides dropping the markers it
 // pins transcript persistence ON, so no marker that slips past the scrub can
-// silence a daemon-launched claude. Pane-content detection keys off the
-// literal "env -u CLAUDECODE" head (daemon.ts findLaunchLine) — keep it first.
-export const AGENT_ENV_SCRUB =
-  `env ${AGENT_SCRUBBED_ENV_VARS.map((v) => `-u ${v}`).join(" ")} ${FORCE_PERSISTENCE_VAR}=1`;
+// silence a daemon-launched claude, and on a cloud host it names the host.
+// Pane-content detection keys off the literal "env -u CLAUDECODE" head
+// (daemon.ts findLaunchLine) — keep it first.
+export function agentEnvScrub(remote = isRemoteDevice()): string {
+  return `env ${AGENT_SCRUBBED_ENV_VARS.map((v) => `-u ${v}`).join(" ")} ${FORCE_PERSISTENCE_VAR}=1${remote ? ` ${CLOUD_ENV_VAR}=1` : ""}`;
+}
+export const AGENT_ENV_SCRUB = agentEnvScrub();
 
 // Same scrub as a POSIX sh line, for generated shell scripts.
 export const AGENT_ENV_UNSET_SH = `unset ${AGENT_SCRUBBED_ENV_VARS.join(" ")}`;

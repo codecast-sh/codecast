@@ -4,6 +4,7 @@ import * as os from "os";
 import * as path from "path";
 import {
   AGENT_ENV_SCRUB,
+  agentEnvScrub,
   AGENT_ENV_UNSET_SH,
   ensureClaudeSettingsPersistence,
   leakedTmuxGlobalMarkers,
@@ -95,4 +96,10 @@ describe("claude settings persistence pin", () => {
       fs.rmSync(home, { recursive: true, force: true });
     }
   });
+});
+
+test("a cloud host names itself in every agent launch; the laptop's launch line is unchanged", () => {
+  expect(agentEnvScrub(true)).toBe(`${agentEnvScrub(false)} CODECAST_CLOUD=1`);
+  expect(agentEnvScrub(true).startsWith("env -u CLAUDECODE")).toBe(true);
+  expect(agentEnvScrub(false)).not.toContain("CODECAST_CLOUD");
 });
