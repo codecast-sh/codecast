@@ -229,13 +229,25 @@ function Chip({
       type="button"
       onClick={onClick}
       title={`${KIND_WORD[kind]}: ${name}. Click to change.`}
-      className={`flex max-w-[190px] items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] transition-colors ${
-        active ? "bg-white/10 text-sol-text" : "text-sol-text-dim hover:bg-white/[0.06] hover:text-sol-text-muted"
+      className={`flex items-center rounded-full px-1.5 py-0.5 text-[11px] transition-[color,background-color,opacity] duration-200 ${
+        active
+          ? "bg-white/10 text-sol-text"
+          : "text-sol-text-dim opacity-50 hover:bg-white/[0.06] hover:text-sol-text-muted group-hover/ctl:opacity-100 group-focus-within/ctl:opacity-100"
       }`}
     >
       <Icon className="h-3 w-3 shrink-0" />
-      <span className="min-w-0 truncate">{name}</span>
-      <ChevronUp className={`h-3 w-3 shrink-0 transition-transform ${active ? "" : "rotate-180"}`} />
+      {/* Folded to the glyph until the pointer reaches the controls, so the
+          bar at rest is the call, not its plumbing. */}
+      <span
+        className={`min-w-0 truncate transition-[max-width,opacity,margin] duration-200 ease-out ${
+          active
+            ? "ml-1.5 max-w-[150px] opacity-100"
+            : "ml-0 max-w-0 opacity-0 group-hover/ctl:ml-1.5 group-hover/ctl:max-w-[150px] group-hover/ctl:opacity-100 group-focus-within/ctl:ml-1.5 group-focus-within/ctl:max-w-[150px] group-focus-within/ctl:opacity-100"
+        }`}
+      >
+        {name}
+      </span>
+      <ChevronUp className={`ml-0.5 h-3 w-3 shrink-0 transition-transform ${active ? "" : "rotate-180"}`} />
     </button>
   );
 }

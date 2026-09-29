@@ -19,6 +19,15 @@
  * (FaceRow.tsx), which the layout test holds against this file.
  */
 
+/* Registered so a seat's circle can glide between sizes: the stack's
+   faces shrink into it and grow back out by transitioning `--face` itself,
+   and everything drawn from it (the seat, the circle, the overlap) follows. */
+@property --face {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 32px;
+}
+
 .face-row {
   --face: 32px;
   --face-gap: 6px;
@@ -232,43 +241,115 @@
  * them spreads the team back out (FaceRow). Spread, the fold after the last
  * face puts them back. The float's paper ring already parts one stacked
  * circle from the next; the header draws its own background as the ring. */
-.face-row .face-seat[data-stacked] + .face-seat[data-stacked] {
-  margin-left: calc(var(--face) * -0.6 - var(--face-gap));
+.face-row {
+  /* A stacked face's size, resolved here against the row's own --face (a
+     seat cannot scale its own --face without a cycle). */
+  --face-stacked: calc(var(--face) * 0.56);
+  --settle: cubic-bezier(0.22, 1, 0.36, 1);
 }
-.face-row[data-density="bar"] .face-seat {
-  transition: opacity 180ms ease, margin-left 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+/* Folding in, each face shrinks, dims and tucks under the one before, a
+   beat after its neighbour (`--stack-i`, written by FaceRow); spreading or
+   the call ending plays the same thing back out. The size is the seat's
+   real layout size, so the row closes up around the stack as it goes. */
+.face-row .face-seat {
+  transition:
+    opacity 180ms ease,
+    --face 480ms var(--settle) calc(var(--stack-i, 0) * 32ms),
+    margin-left 480ms var(--settle) calc(var(--stack-i, 0) * 32ms);
+}
+.face-row .face-seat[data-stacked] {
+  --face: var(--face-stacked);
+}
+.face-row .face-seat[data-stacked] + .face-seat[data-stacked] {
+  margin-left: calc(var(--face) * -0.42 - var(--face-gap));
+}
+/* Subdued by a veil, not by opacity: see-through circles tucked under one
+   another showed each other's letters through the overlap. The veil is the
+   surface behind the row (the header's background, the float's paper), laid
+   over the photo inside the circle's clip, so a stacked face fades toward
+   whatever it sits on in either theme and still hides the one beneath. */
+.face-row .face::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+  background: var(--veil, var(--sol-bg));
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 360ms ease;
+}
+.face-row[data-density="float"] .face {
+  --veil: var(--paper);
+}
+.face-row .face-seat[data-stacked] .face {
+  filter: var(--drain,) grayscale(0.6);
+}
+.face-row .face-seat[data-stacked] .face::after {
+  opacity: 0.5;
+}
+/* The header's circles are 32px: at the float's share they read as dots,
+   so the bar's stack keeps more of its size and less of the veil. */
+.face-row[data-density="bar"] {
+  --face-stacked: calc(var(--face) * 0.72);
+}
+.face-row[data-density="bar"] .face-seat[data-stacked] .face::after {
+  opacity: 0.35;
 }
 .face-row[data-density="bar"] .face-seat[data-stacked] .face {
   box-shadow: 0 0 0 2px var(--sol-bg);
 }
+.face-row[data-density="float"] .face-seat[data-stacked] .face {
+  --edge-w: 3px;
+}
 .face-seat[data-stacked] :is(.face-pres, .face-bot, .face-unread, .face-ask, .face-mute, .face-name) {
   display: none;
 }
+/* Pointed at, the stack wakes up: it is the way back to the team. */
 .face-row[data-stacked]:has(.face-seat[data-stacked]:hover) .face-seat[data-stacked] .face {
+  filter: var(--drain,) grayscale(0);
   transform: translateY(-2px);
+}
+.face-row[data-stacked]:has(.face-seat[data-stacked]:hover) .face-seat[data-stacked] .face::after {
+  opacity: 0.12;
 }
 .face-row-stack-count {
   flex: none;
-  min-width: calc(var(--face) * 0.6);
-  height: calc(var(--face) * 0.6);
-  margin-left: calc(var(--face) * -0.2 - var(--face-gap));
-  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: calc(var(--face-stacked) * 0.7);
+  height: calc(var(--face-stacked) * 0.7);
+  margin-left: calc(var(--face-stacked) * -0.22 - var(--face-gap));
+  padding: 0 calc(var(--face-stacked) * 0.14);
   position: relative;
   z-index: 11;
   border: 0;
   border-radius: 999px;
   background: var(--sol-bg-alt);
   box-shadow: 0 0 0 2px var(--sol-bg), 0 0 0 3px color-mix(in srgb, var(--sol-text) 18%, transparent);
-  color: var(--sol-text);
+  color: var(--sol-text-muted);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: max(10px, calc(var(--face-stacked) * 0.28));
   font-weight: 600;
+  line-height: 1;
   cursor: pointer;
+  animation: face-stack-count-in 420ms var(--settle) calc(var(--stack-i-last, 0) * 32ms + 120ms) both;
+  transition: color 120ms ease;
+}
+.face-row-stack-count:hover {
+  color: var(--sol-text);
+}
+@keyframes face-stack-count-in {
+  from { opacity: 0; transform: scale(0.4); }
+  to   { opacity: 1; transform: none; }
 }
 .face-row[data-density="float"] .face-row-stack-count {
-  font-size: 13px;
   background: linear-gradient(180deg, var(--paper) 0%, var(--paper-deep) 100%);
   box-shadow: 0 0 0 1px var(--hairline-strong), 0 2px 6px rgba(20, 18, 14, 0.2);
+  color: var(--ink-soft);
+}
+.face-row[data-density="float"] .face-row-stack-count:hover {
   color: var(--ink);
 }
 .face-row-fold {
@@ -319,6 +400,8 @@
  * hold one ref object. */
 .face-seat {
   --level: 0;
+  /* Where every mark sits: the circle's 45 degree edge point (see the marks). */
+  --mark-at: calc(var(--face) * 0.1464);
   position: relative;
   flex: none;
   width: var(--face);
@@ -351,7 +434,7 @@
      (measured opacity 1 against the wall's 0.45) and only the moon told an
      away letter avatar from an offline one. */
   opacity: var(--drain-opacity, 1);
-  transition: opacity 220ms ease, box-shadow 400ms ease, transform 160ms ease;
+  transition: opacity 320ms ease, box-shadow 400ms ease, transform 160ms ease, filter 320ms ease;
 }
 
 .face-row[data-density="float"] .face {
@@ -600,10 +683,18 @@
  * Unread messages in our DM: a count, top right, outside the circle's clip.
  * Their sessions waiting on me: an orange dot, top left. Small, because they
  * are facts about the person and not controls. */
+/* Every mark sits ON THE CIRCLE'S EDGE, at 45 degrees, whatever the size:
+ * `--mark-at` is how far that point is in from the seat's square corner
+ * (r - r/sqrt(2), 0.1464 of the diameter), and each mark centres itself on it
+ * with a translate. A fixed px offset from the corner was right at 32px and
+ * left the count floating off the face at 128. The marks also grow with the
+ * circle (`--mark-k`, written by FaceRow for the float's sizes). The
+ * point itself, `--mark-at`, is declared on the seat. */
 .face-unread {
   position: absolute;
-  top: -4px;
-  right: -4px;
+  top: var(--mark-at);
+  right: var(--mark-at);
+  transform: translate(50%, -50%) scale(var(--mark-k, 1));
   min-width: 15px;
   height: 15px;
   padding: 0 4px;
@@ -620,13 +711,14 @@
   transition: transform 120ms ease;
 }
 .face-unread:hover {
-  transform: scale(1.15);
+  transform: translate(50%, -50%) scale(calc(var(--mark-k, 1) * 1.15));
 }
 
 .face-ask {
   position: absolute;
-  top: -2px;
-  left: -2px;
+  top: var(--mark-at);
+  left: var(--mark-at);
+  transform: translate(-50%, -50%) scale(var(--mark-k, 1));
   width: 9px;
   height: 9px;
   border-radius: 50%;
@@ -644,8 +736,9 @@
  * glyph, the way the count is filled cyan: a black plate on a cream header
  * was the one dark thing on the light theme. */
 .face-row .face-mute {
-  right: -1px;
-  bottom: -1px;
+  right: var(--mark-at);
+  bottom: var(--mark-at);
+  transform: translate(50%, 50%) scale(var(--mark-k, 1));
   background: var(--sol-red);
   color: var(--sol-bg);
   box-shadow: 0 0 0 2px var(--sol-bg);
@@ -665,8 +758,9 @@
  * is plain presence: an engaged face's ring already says more than a dot. */
 .face-seat .face-pres {
   position: absolute;
-  right: -1px;
-  bottom: -1px;
+  right: var(--mark-at);
+  bottom: var(--mark-at);
+  transform: translate(50%, 50%) scale(var(--mark-k, 1));
 }
 /* In the float the badge's cut is the ring's paper, so badge and ring merge
    into one edge instead of the badge biting a dark notch out of the ring. In
@@ -805,7 +899,7 @@
   gap: 4px;
   margin: 0;
 }
-.engagement-card :is(.walkie-strip-end, .walkie-strip-mute, .walkie-strip-join, .walkie-strip-snooze, .ring-card-join, .ring-card-decline) {
+.engagement-card :is(.walkie-strip-end, .walkie-strip-mute, .walkie-strip-join, .walkie-strip-snooze, .ring-card-join, .ring-card-decline, .engagement-card-chat) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -956,7 +1050,9 @@
     animation: none;
   }
   .face-row .face,
+  .face-row .face::after,
   .face-seat,
+  .face-row .face-seat,
   .face-row-track,
   .face-row[data-density="float"] .face-row-below,
   .face-row[data-density="float"] .face-row-below[data-notch]::before {
@@ -968,6 +1064,7 @@
   .face-row .face[data-state="joining"],
   .face-row .face[data-state="ringing-them"],
   .face-row .face[data-state="ringing-me"],
+  .face-row-stack-count,
   .face-link[data-link-kind],
   .face-link[data-link-kind]::before,
   .face-link[data-link-kind]::after {
@@ -1493,8 +1590,9 @@
  * 2026-09-24). Its card offers no call and no message. */
 .face-bot {
   position: absolute;
-  right: -1px;
-  bottom: -1px;
+  right: var(--mark-at);
+  bottom: var(--mark-at);
+  transform: translate(50%, 50%) scale(var(--mark-k, 1));
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1553,4 +1651,17 @@
 }
 [data-member-card] .face-card-name {
   padding-right: 22px;
+}
+
+/* The call's unread chat, on the card: the one hue among the ink pills,
+   the thread's cyan, because it is news rather than a control. */
+.engagement-card .engagement-card-chat {
+  color: var(--sol-bg);
+  background: var(--sol-cyan);
+  border: 1px solid var(--sol-cyan);
+  padding: 0 9px;
+  font-variant-numeric: tabular-nums;
+}
+.engagement-card .engagement-card-chat:hover {
+  filter: brightness(1.1);
 }

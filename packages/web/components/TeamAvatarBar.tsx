@@ -12,7 +12,7 @@ import { copyToClipboard, shareOrigin } from "../lib/utils";
 import { POP_OUT_PEOPLE_TITLE, canPopOutCall, useFacesFloating } from "../lib/desktop";
 import { focusExistingHuddle } from "../lib/calls/huddleWindow";
 import { popOutCall } from "../lib/calls/popOutCall";
-import { openCallStage } from "../lib/calls/callStage";
+import { openCallStage, requestCallThread } from "../lib/calls/callStage";
 import { useRoomThreadUnread } from "../hooks/useRoomThreadUnread";
 import { UnreadCount } from "./calls/UnreadCount";
 import { ContextMenu, useContextMenu, CtxItem, CtxHeader } from "./ui/context-menu";
@@ -285,7 +285,10 @@ function OpenCallButton({ onClick }: { onClick: () => void }) {
     <ShortcutTooltip label="Open the call">
       <button
         type="button"
-        onClick={onClick}
+        onClick={() => {
+          if (unread > 0) requestCallThread();
+          onClick();
+        }}
         data-open-call
         className="relative ml-1 flex h-8 w-8 items-center justify-center rounded-full text-sol-text-muted transition-colors hover:bg-sol-bg-highlight hover:text-sol-text"
         aria-label={unread > 0 ? `Open the call, ${unread} new in its chat` : "Open the call"}
