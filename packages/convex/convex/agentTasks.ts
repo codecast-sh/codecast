@@ -15,8 +15,10 @@ import { canAccessConversation } from "./lib/access";
 import { armedTriggerKindFor } from "./dormancy";
 import { restoreToInbox } from "./inboxFilters";
 import { configuredCloudWakeHosts, getCloudWakeHostForConversation } from "./cloudWake";
-import { enqueuePendingMessage } from "./pendingMessages";
-import { triggerFiringSource, normalizeThreadState, runOwnerWakeOf, runParentOf, runResultThreadOf, triggerLifecycleInstructions, type RunOutcome } from "@codecast/shared/contracts";
+import { enqueuePendingMessage, reachableRole } from "./pendingMessages";
+import { triggerFiringSource, normalizeThreadState, runOwnerWakeOf, runParentOf, runResultThreadOf, triggerLifecycleInstructions, formatScheduledTask, type RunOutcome, type WaitingSession } from "@codecast/shared/contracts";
+import { SESSION_NEEDS_INPUT_EVENT } from "@codecast/shared/contracts";
+import { findRoleNeedsInputTrigger, ROLE_NEEDS_INPUT_PROMPT, ROLE_NEEDS_INPUT_TITLE } from "./lib/orgRoutine";
 import { earliestUsageResetAt, listOnlineDevices } from "./ccAccountsShared";
 import { performSetThreadState } from "./conversations";
 
@@ -88,9 +90,11 @@ export async function applyPause(ctx: TaskCtx, task: Doc<"agent_tasks">) {
 
 export async function applyResume(ctx: TaskCtx, task: Doc<"agent_tasks">) {
   if (task.status !== "paused") return false;
+  // An event trigger stays disarmed until its event: a run_at here would
+  // fire it once on resume with nothing behind it.
   await patchTask(ctx, task, {
     status: "scheduled",
-    run_at: task.run_at || Date.now(),
+    run_at: task.schedule_type === "event" ? task.run_at : task.run_at || Date.now(),
   });
   return true;
 }
@@ -360,9 +364,8 @@ async function wakeRunOwner(
           : `${run} finished:\n\n${detail ?? ""}`;
   const label =
     outcome === "failed" ? "failed" : outcome === "unreported_exit" ? "ended without reporting" : outcome === "attention" ? "needs attention" : "finished";
-  const safeTitle = `${handle} run ${label}`.replace(/"/g, "&quot;");
   await enqueuePendingMessage(ctx, owner, task.user_id, {
-    content: `<scheduled-task title="${safeTitle}" task-id="${task._id}">${body}</scheduled-task>`,
+    content: formatScheduledTask({ title: `${handle} run ${label}`, task_id: String(task._id), body }),
     origin: "scheduler",
     client_id: `run-outcome:${task._id}:${task.run_count}:${outcome}:${now}`,
   });
@@ -819,6 +822,84 @@ async function cloudTriggerConversation(ctx: TaskCtx, task: Doc<"agent_tasks">) 
   return await getCloudWakeHostForConversation(ctx, conversation) ? conversation : null;
 }
 
+// The route up (org-staffing.md S28): a session that reports to a role needs
+// input, and the role's own event trigger fires for it. The run is written
+// here rather than armed for the daemon to claim, because an event's run_at
+// carries no payload and two sessions that block together would share one
+// claim: each firing is its own frame, naming the session that waits. Null
+// when nothing fired: the role cannot be reached (reachableRole), or the
+// person paused or cancelled the trigger, which is their control over it.
+export async function fireRoleNeedsInput(
+  ctx: TaskCtx,
+  roleId: Id<"org_roles">,
+  waiting: WaitingSession,
+  clientId: string,
+): Promise<Id<"pending_messages"> | null> {
+  const reached = await reachableRole(ctx, roleId);
+  if (!reached) return null;
+  const { role, standing } = reached;
+  // A seat from before the trigger existed is armed on its first event.
+  const task = (await findRoleNeedsInputTrigger(ctx, standing)) ?? (await ctx.db.get((await ensureRoleNeedsInputTrigger(ctx, role, standing)).id));
+  if (!task || task.status !== "scheduled") return null;
+  const now = Date.now();
+  const id = await enqueuePendingMessage(ctx as any, standing, task.user_id, {
+    content: formatScheduledTask({ title: task.title, task_id: String(task._id), trigger: task.short_id, event: task.event_filter?.event_type, waiting, body: task.prompt }),
+    origin: "scheduler",
+    client_id: clientId,
+  });
+  await patchTask(ctx, task, { ...completedTaskRunFields(task, now, { conversation_id: String(standing._id) }), ...claimRunSourceFields(task) });
+  return id;
+}
+
+// A session under a role waits: fire the trigger of the role that hears for
+// it, once per waiting episode. A hand tells its role. A role's own standing
+// session tells the role it reports to and speaks as the role; one that
+// reports to a person is that person's own card and tells nobody. The
+// episode is the message count the session settled at, stamped on the row:
+// the needs-input check runs up to three times per settle, and the reason a
+// session waits can change while it waits (it declares blocked, then its
+// process stops) without that being a second request.
+export async function routeUpWaitingSession(
+  ctx: TaskCtx,
+  conv: Doc<"conversations">,
+  wait: { why: string; since: number },
+): Promise<Id<"pending_messages"> | null> {
+  const episode = String(conv.message_count ?? 0);
+  if (conv.hand_wake_notified_key === episode) return null;
+  const standingRole = conv.standing_role_id ? await ctx.db.get(conv.standing_role_id) : null;
+  const target = standingRole ? (standingRole.reports_to?.kind === "role" ? standingRole.reports_to.role_id : null) : conv.org_role_id ?? null;
+  if (!target) return null;
+  const id = await fireRoleNeedsInput(ctx, target, {
+    short_id: conv.short_id ?? String(conv._id).slice(0, 7),
+    title: (conv.title ?? "").slice(0, 80),
+    why: wait.why,
+    since: wait.since,
+    ...(standingRole ? { role: standingRole.handle } : {}),
+    state: String(conv.thread_state ?? "").split("\n")[0].slice(0, 200),
+  }, `session-waits:${conv._id}:${episode}`);
+  if (id) await ctx.db.patch(conv._id, { hand_wake_notified_key: episode });
+  return id;
+}
+
+/** Arm the role's needs-input trigger on its standing session, once. A
+ *  trigger that exists in any status is left exactly as the person has it:
+ *  their prompt, their pause, their cancel. */
+export async function ensureRoleNeedsInputTrigger(ctx: TaskCtx, role: { _id: Id<"org_roles"> }, standing: Doc<"conversations">): Promise<{ id: Id<"agent_tasks">; short_id?: string; created: boolean }> {
+  const found = await findRoleNeedsInputTrigger(ctx, standing);
+  if (found) return { id: found._id, short_id: found.short_id, created: false };
+  const created = await insertTask(ctx, standing.user_id, {
+    title: ROLE_NEEDS_INPUT_TITLE,
+    prompt: ROLE_NEEDS_INPUT_PROMPT,
+    originating_conversation_id: String(standing._id),
+    project_path: standing.project_path ?? undefined,
+    schedule_type: "event",
+    event_filter: { event_type: SESSION_NEEDS_INPUT_EVENT },
+    mode: "apply",
+    role_id: role._id,
+  });
+  return { ...created, created: true };
+}
+
 export const dispatchCloudTriggers = internalMutation({
   args: { cursor: v.optional(v.string()) },
   handler: async (ctx, args): Promise<{ scanned: number; dispatched: number; done: boolean }> => {
@@ -833,7 +914,6 @@ export const dispatchCloudTriggers = internalMutation({
     for (const task of page.page) {
       const conversation = await cloudTriggerConversation(ctx, task);
       if (!conversation) continue;
-      const safeTitle = (task.title || "").replace(/"/g, "&quot;");
       const filingNote = !conversation.inbox_killed_at && conversation.inbox_stashed_at
         ? `\n\nThis session is STASHED: the user will not see this run or its output. End your turn with cast state --status done|dormant to stay quietly out of their inbox; declare --status blocked ONLY if a human must act — that returns the session to their inbox.`
         : "";
@@ -841,7 +921,7 @@ export const dispatchCloudTriggers = internalMutation({
       const prompt = [task.prompt, triggerLifecycleInstructions(task)].filter(Boolean).join("\n\n");
       const updates: Record<string, any> = { ...completedTaskRunFields(task, now, { conversation_id: conversation._id }), ...claimRunSourceFields(task) };
       const pendingMessageId = await enqueuePendingMessage(ctx, conversation, task.user_id, {
-        content: `<scheduled-task title="${safeTitle}" task-id="${task._id}">${prompt}${filingNote}</scheduled-task>`,
+        content: formatScheduledTask({ title: task.title || "", task_id: String(task._id), body: `${prompt}${filingNote}` }),
         origin: "scheduler",
         client_id: clientId,
       });

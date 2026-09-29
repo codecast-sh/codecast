@@ -24,6 +24,7 @@ import "./decisions/decisions.css";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { DecisionProposalOrigin } from "./org/ProposalAuthorPill";
+import { RoleFace } from "./org/RoleFace";
 // The decision card lives INSIDE the conversation — it is how a session asks
 // its human something, so it renders wherever the session renders (inbox,
 // queue, a deep link). It has two sizes:
@@ -303,6 +304,10 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
   const tier = queueTier(item);
   const session = item.session;
   const project = session?.project_path ? getProjectName(session.project_path) : undefined;
+  // A decision posted from a role's own standing thread is the role's ask
+  // (org-staffing.md S28): the header reads as that role, its face and
+  // handle, the way the inbox card draws it.
+  const askingRole = session?.standing_role_id && session.role && String(session.role._id) === String(session.standing_role_id) ? session.role : null;
 
   // In one column the options come after the reasoning, so a long context
   // pushes them below the fold. A strip at the sheet's foot then names them
@@ -363,7 +368,16 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
     </a>
   );
 
-  const whoIsAsking = (
+  const whoIsAsking = askingRole ? (
+    <div className="flex items-center gap-2 min-w-0 flex-1" data-decision-asker={askingRole.handle}>
+      {dot}
+      <RoleFace role={askingRole} size={18} className="shrink-0" />
+      <button onClick={stepper ? openSession : undefined} className={`text-sm text-sol-text truncate ${stepper ? "hover:text-sol-blue transition-colors" : "cursor-default"}`}>
+        <span className="text-sol-violet">@{askingRole.handle}</span> asks
+      </button>
+      {badges}
+    </div>
+  ) : (
     <div className="flex items-center gap-2 min-w-0 flex-1">
       {dot}
       {stepper ? (
@@ -597,7 +611,8 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
         }`}
       >
         {dot}
-        <span className="truncate max-w-[16rem]">{stepper ? (session?.title || "Session") : item.blocking ? "Waiting on your decision" : "Asked for your steer"}</span>
+        {askingRole && <RoleFace role={askingRole} size={14} className="shrink-0" />}
+        <span className="truncate max-w-[16rem]">{askingRole ? `@${askingRole.handle} asks` : stepper ? (session?.title || "Session") : item.blocking ? "Waiting on your decision" : "Asked for your steer"}</span>
         <span className="opacity-70">{stepper ? `· ${stepper.position} of ${stepper.total}` : "· answer"}</span>
         <ChevronUp className="w-3.5 h-3.5" />
       </button>

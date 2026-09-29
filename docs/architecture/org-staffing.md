@@ -923,11 +923,11 @@ Hands, wakes and tokens per day stay as the bound that keeps a runaway role from
 
 ### S23.3 A role's sessions are the role's
 
-A role's sessions are subagent rows under the role's card: the same small row a Task subagent gets, hidden and shown by the same subagent toggle, with no gesture of their own. The card also carries a count, **3 sessions**, that opens the role's page, where the sessions are the panel's business (F4). What reaches the person from under a role is the role's own line on its card (R1, revised), and nothing else. (Revised 2026-09-24: the first cut drew no rows at all, and the founder read the count alone as hiding the reports.)
+A role's sessions are subagent rows under the role's card: the same small row a Task subagent gets, hidden and shown by the same subagent toggle, with no gesture of their own. The card also carries a count, **3 sessions**, that opens the role's page, where the sessions are the panel's business (F4). What reaches the person from under a role is what the role raises in its own thread (S28), and nothing else. (Revised 2026-09-24: the first cut drew no rows at all, and the founder read the count alone as hiding the reports.)
 
 ### S23.4 The line a person reads names who did it
 
-An escalation line always says who put the session in front of the person and why. A person's own gesture reads as their own; a role's reads as the role's, with its reason. The Calling lead's case read "Ashot Petrosian put this in their inbox" because the actor resolved to the host person when the caller's session was not named; the server resolves the caller from the session the command runs in, so a role's command is the role's whatever the CLI passed, and a line with no reason from a role is refused rather than filled in with a person's name.
+(Written for `cast escalate`, which S28 removed. The principle stands for every line a role writes into a person's view: it says who asks and why, in the role's own name, never with a person's name filled in.)
 
 ### What this changes
 
@@ -1007,7 +1007,7 @@ The same conversation runs on the org page, beside the chart, and from `/cast-or
 A role is a session. It wakes the way any session wakes, and nothing else wakes it.
 
 - Its own recurring trigger ("Check <area>"), created with the role, daily by default. The person sees it on the Triggers page and on the role's page, with its next run, and changes or pauses it there. Pausing a role pauses its triggers.
-- An ordinary message: a person writing to it, a chat mention, a question routed to it, an escalation. It arrives as a plain message, never wrapped, never held.
+- An ordinary message: a person writing to it, a chat mention, a question routed to it, a request from a session under it or from a role that reports to it (S28). It arrives as a plain message, never wrapped, never held.
 
 A change in the role's area wakes nothing. When its trigger fires, the role reads what changed since its last run with `cast brief`. A trigger run carries its short prompt and nothing else: the role knows who it is from its first turn, and its brief is its memory, so no message repeats its name, scope or charter.
 
@@ -1024,3 +1024,17 @@ The rule has one home, `ownerOf` in `packages/shared/contracts/orgLead.ts`: a ro
 ## S27. A reset clears the org
 
 Resetting a workspace's org retires every role with its standing session and triggers, withdraws open proposals, and archives every proposal so no list returns it. A review after a reset starts from the work alone: projects, sessions, commits, chat and calls. Nothing an earlier org proposed or decided reaches it.
+
+## S28. A request goes up the reporting line
+
+Written 2026-09-29, replacing escalation (`cast escalate`, org-roles-run-work.md R1 and R1 revised). The founder's reading of the escalation card was that a role's line, crammed into the inbox card with its own buttons and a hand-back gesture, was a surface nobody wanted. The fix is not a better surface. The org already has a way for a request to travel: messages, up the line, with the person at the top of the tree.
+
+**The route.** A session under a role that needs something tells its role: a blocked hand (an open prompt, a dead process, a declared blocked state) reaches its role's standing session as one plain line per waiting episode (`notifications.performNeedsInputCheck`, the hand-wait line, dedupe key `hand_wake_notified_key`), and any agent can write to a role with `cast role wake @handle "<the request>"`. The role answers when it can. A role that cannot answer tells the role it reports to, the same way: its own blocked state reaches the parent role's thread as one line (`@calling needs input (blocked): <the first line of its state>`). The role that reports to a person raises it in its own standing thread and nowhere else: its pinned state says what the person will decide and why (`cast state --status blocked`), and a real choice between options is a `cast decide` card posted in that thread, with the role's recommendation.
+
+**What the person sees.** One card per lead that needs them, filed the way any session that needs input is: the standing session's own facts put it in needs input (a blocked declaration, an open prompt) or in questions (a pending decision in its thread; projection v14 stopped the anchor rule from hiding an asking standing session). Never the sessions under it, never a special block. The sessions under a role stay subagent rows under its card with no gesture of their own, and their settles ring nobody (`under_role`).
+
+**What is gone.** `cast escalate` and `/cli/sessions/escalate`; `conversations.escalated_by_role` and every reader (the inbox projection's lift of a role's card, the `escalations` lines on the role's card and the phone's, the "with you" tag, Hand back and Put in my inbox, the role page's "Needs you" section, the digest's "In front of you", the CLI's escalation rows); `performEscalateSession` and its dividers. The `<session-escalation>` machine message keeps a reader only, so threads written before this still draw their dividers; the schema keeps the field optional until `migrations:clearEscalationStamps` has run in prod, then drops it. A session that moves under a role with a question to a person open no longer carries a stamp: the role hears about it as a line.
+
+**A sub-lead rides its parent lead.** A role's standing session reports to what the role reports to. Under a role, the row carries that role's id in `org_role_id` (`lib/standingSeat.standingReportsToFields`, stamped on provisioning, on a role move and when a retire re-homes children; `migrations:stampStandingSeats` backfills seats from before the rule), so `isUnderRole` holds for it and it rides the parent lead's card exactly as a hand does: a sub row under the parent, never a card of its own in the host's inbox, whatever it declares; its settle rings nobody (`under_role`). Under a person the field is clear and the row is that person's own card. So the only card a person ever sees for their org is a role that reports to them, and what a sub-lead cannot answer reaches that top lead as a line in its thread. The org scan and `handsOf` leave standing sessions out of a role's hands, so a sub-lead is a child role on the page and the tree, not a hand.
+
+**The decide sheet names who asks.** A decision posted from a role's standing thread reads as that role on the sheet and on the fold: its face and handle (`SessionDecisionCard`, the same `RoleFace` the inbox card draws), never "Waiting on your decision".

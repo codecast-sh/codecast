@@ -14,6 +14,7 @@ import { requireUser } from "./lib/auth";
 import { runLocalCommand } from "./localFirstCommands";
 import { insertEnqueuedPendingMessage, reviveConversationOnDelivery } from "./pendingMessageWrites";
 import { clearedThreadStateFields, formatUserMessage, hasThreadState, HEARTBEAT_ALIVE_MS, isStashHidden, SETTLE_VERDICT_STATUSES } from "@codecast/shared/contracts";
+import { resolveOwnerDeviceView } from "./devices";
 import {
   messagesCommandCoverageTarget,
 } from "./messageViewContracts";
@@ -477,21 +478,28 @@ export async function enqueuePendingMessage(
   return messageId;
 }
 
+// A role and the standing session that hears for it, or null when the role
+// cannot be reached: retired, no live session, or its workspace has the org
+// feature off (nothing shows the role, so nothing runs under its name).
+export async function reachableRole(ctx: any, roleId: Id<"org_roles">): Promise<{ role: any; standing: any } | null> {
+  const role = await ctx.db.get(roleId);
+  if (!role || role.status === "retired" || !role.anchor_id) return null;
+  if (!(await workspaceHasFeature(ctx, { team_id: role.team_id, user_id: role.scope_user_id }, "org"))) return null;
+  const anchor = await ctx.db.get(role.anchor_id);
+  const standing = anchor?.conversation_id && anchor.status !== "decommissioned" ? await ctx.db.get(anchor.conversation_id) : null;
+  return standing ? { role, standing } : null;
+}
+
 // A line into a role's standing session (docs/architecture/org-staffing.md
 // S25): a role hears about its world the way any session does, as a plain
-// message. Null when the role cannot be reached: retired, no live session, or
-// its workspace has the org feature off (nothing shows the role, so nothing
-// runs under its name). The sender defaults to the session's host.
+// message. Null when the role cannot be reached (reachableRole). The sender
+// defaults to the session's host.
 export async function tellRole(
   ctx: any,
   roleId: Id<"org_roles">,
   fields: { content: string; client_id?: string; from_user_id?: Id<"users">; from_conversation_id?: Id<"conversations">; human?: boolean },
 ): Promise<Id<"pending_messages"> | null> {
-  const role = await ctx.db.get(roleId);
-  if (!role || role.status === "retired" || !role.anchor_id) return null;
-  if (!(await workspaceHasFeature(ctx, { team_id: role.team_id, user_id: role.scope_user_id }, "org"))) return null;
-  const anchor = await ctx.db.get(role.anchor_id);
-  const conversation = anchor?.conversation_id && anchor.status !== "decommissioned" ? await ctx.db.get(anchor.conversation_id) : null;
+  const conversation = (await reachableRole(ctx, roleId))?.standing;
   if (!conversation) return null;
   const { from_user_id, ...rest } = fields;
   return await enqueuePendingMessage(ctx, conversation, from_user_id ?? conversation.user_id, rest);
@@ -845,8 +853,13 @@ export async function performSessionSend(
   });
 
   // Immediate liveness signal so the CLI can warn "the session looks offline" right away,
-  // rather than the sender only finding out via the cron's delayed notice.
-  const targetLive = await conversationHasLiveSession(ctx, target._id, Date.now());
+  // rather than the sender only finding out via the cron's delayed notice. The
+  // daemon that owns the session delivers it, and an idle session's own
+  // heartbeat goes quiet while that daemon is still online and resumes it.
+  const now = Date.now();
+  const targetLive =
+    (await conversationHasLiveSession(ctx, target._id, now)) ||
+    (await resolveOwnerDeviceView(ctx, target as any, now)).owner_online;
 
   return {
     message_id: messageId,

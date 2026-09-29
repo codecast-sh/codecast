@@ -1,7 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
-import { formatSessionEscalation } from "@codecast/shared/contracts";
 
 // The session pill asks Convex for the row it names; only the transport is
 // faked, the pill and the divider are real.
@@ -17,19 +16,17 @@ mock.module("convex/react", () => ({
 const { classifyUserMessage, FOLD_KEPT_USER_KINDS, isStickyWorthy } = await import("../conversation/classify");
 const { EscalationDivider } = await import("../conversation/blocks/systemBlocks");
 
-// A session moving between its role and the person (org-roles-run-work.md R1,
-// revised) renders as an inline divider in both threads: the role's face, the
-// move, the whole line as markdown, the time. Never a bubble, never a sticky
-// human prompt.
-const wire = formatSessionEscalation({
-  move: "handed",
-  by: "role",
-  role: { short_id: "or-8", handle: "calling", name: "Calling", avatar: "fox" },
-  session: { short_id: "jx7abcd", title: "Market growth mandate" },
-  to: "Ashot",
-  at: 1_790_000_000_000,
-  line: "how a market is **filled** is yours to call\n\n- 40 seats now\n- or 80 after the pilot",
-});
+// A session that moved between its role and the person while `cast escalate`
+// existed (retired, org-staffing.md S28) left one machine message in both
+// threads; it still renders as an inline divider: the role's face, the move,
+// the whole line as markdown, the time. Never a bubble, never a sticky human
+// prompt. The wire is a literal: nothing writes it any more.
+const wire = [
+  '<session-escalation move="handed" by="role" role="or-8" handle="calling" name="Calling" avatar="fox" session="jx7abcd" title="Market growth mandate" to="Ashot" at="1790000000000">',
+  "how a market is **filled** is yours to call\n\n- 40 seats now\n- or 80 after the pilot",
+  "</session-escalation>",
+].join("\n");
+const backWire = '<session-escalation move="back" by="person" role="or-8" handle="calling" name="Calling" session="jx7abcd" to="Ashot" at="1">\n\n</session-escalation>';
 const render = (node: React.ReactNode) => renderToStaticMarkup(<MemoryRouter>{node}</MemoryRouter>);
 
 describe("escalation divider", () => {
@@ -62,7 +59,7 @@ describe("escalation divider", () => {
     const html = render(<EscalationDivider escalation={kind.escalation} conversationShortId="jx7rolee" timestamp={1_790_000_000_000} />);
     expect(html).toContain("@calling handed jx7abcd to Ashot");
     expect(html).toContain("jx7abcd");
-    const back = classifyUserMessage({ _id: "m2", role: "user", content: formatSessionEscalation({ move: "back", by: "person", role: { short_id: "or-8", handle: "calling", name: "Calling" }, session: { short_id: "jx7abcd" }, to: "Ashot", at: 1, line: "" }), timestamp: 2 });
+    const back = classifyUserMessage({ _id: "m2", role: "user", content: backWire, timestamp: 2 });
     if (back.kind !== "session_escalation") throw new Error("kind");
     const backHtml = render(<EscalationDivider escalation={back.escalation} conversationShortId="jx7abcd" timestamp={2} />);
     expect(backHtml).toContain("this session is back with @calling");

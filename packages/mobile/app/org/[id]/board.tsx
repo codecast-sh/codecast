@@ -22,13 +22,11 @@ import { solColor } from '@/lib/solColor';
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import { useScopeFeedStream } from '@codecast/web/hooks/useScopeFeedStream';
 import { useRoleBrief, type ScopeRef } from '@codecast/web/hooks/useScopeQueries';
-import { useRoleEscalations } from '@codecast/web/hooks/useRoleEscalations';
 import { compactAge } from '@codecast/web/lib/threadState';
 import { FEED_NEUTRAL_TONE, feedStateTone, roleStanding, scopeQueryRef, scopeSeatOf } from '@codecast/web/lib/scopePage';
 import { parentName, standingLineOf } from '@codecast/web/components/org/orgMeta';
 import { FEED_KINDS, FEED_KIND_META, type FeedKind, type FeedRow } from '@codecast/web/components/org/scope/scopeTypes';
 import type { OrgRole, OrgTree } from '@codecast/web/components/org/orgTypes';
-import { escalationFirstLine } from '@codecast/shared/contracts';
 import { parseStandingSection, projectsWithLines, standingLineAgeDays, standingLineFor, standingLineStale } from '@codecast/shared/contracts/briefStanding';
 import { EntityPill } from '@/components/EntityPill';
 
@@ -141,14 +139,12 @@ function SeatLine({ seat }: { seat: Parameters<typeof standingLineOf>[0] }) {
   );
 }
 
-/** The briefing (F5.1), the same three blocks as the web's first screen: what
- *  the role put in front of the person, one sentence per project from the
- *  role's brief, and what it is doing. No counts, no lists of hands. */
+/** The briefing (F5.1), the same two blocks as the web's first screen: one
+ *  sentence per project from the role's brief, and what it is doing. No
+ *  counts, no lists of hands. */
 function Briefing({ role, tree, projects }: { role: OrgRole; tree: OrgTree; projects: Array<{ id: string; title: string; short_id?: string }> }) {
   const Theme = useTheme();
-  const router = useRouter();
   const now = useCoarseNow(60_000);
-  const escalations = useRoleEscalations(role._id, role.standing?.conversation_id ?? null);
   const { data: brief } = useRoleBrief(role._id);
   const standing = useMemo(() => parseStandingSection(brief?.narrative), [brief?.narrative]);
   const written = projectsWithLines(standing, projects);
@@ -158,23 +154,6 @@ function Briefing({ role, tree, projects }: { role: OrgRole; tree: OrgTree; proj
   void tree;
   return (
     <RNView style={styles.briefing} testID="scope-briefing">
-      {escalations.length > 0 ? (
-        <RNView>
-          <RNText style={styles.blockLabel}>Needs you</RNText>
-          {escalations.map((e) => (
-          <TouchableOpacity key={e.conversation_id} style={styles.escalation} activeOpacity={0.7} onPress={() => router.push(`/session/${e.conversation_id}` as never)} testID={`scope-escalation-${e.conversation_id}`}>
-            <FontAwesome name="arrow-up" size={10} color={Theme.violet} style={{ marginTop: 3 }} />
-            <RNView style={{ flex: 1, minWidth: 0 }}>
-              <RNText style={styles.escalationLine}>{escalationFirstLine(e.line)}</RNText>
-              <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 3 }}>
-                <EntityPill id={e.conversation_id} type="session" />
-                <RNText style={styles.dim}>{compactAge(now - e.at)}</RNText>
-              </RNView>
-            </RNView>
-          </TouchableOpacity>
-        ))}
-        </RNView>
-      ) : null}
       {written.length > 0 ? (
         <RNView>
           <RNText style={styles.blockLabel}>Where it stands</RNText>
@@ -314,8 +293,6 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   briefing: { gap: Spacing.md, borderWidth: StyleSheet.hairlineWidth, borderColor: Theme.borderLight, borderRadius: 10, backgroundColor: Theme.bgAlt, paddingHorizontal: Spacing.md, paddingVertical: Spacing.md },
   blockLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 0.8, textTransform: 'uppercase', color: Theme.textDim, marginBottom: 4 },
   calm: { fontSize: 13, color: Theme.textMuted },
-  escalation: { flexDirection: 'row', gap: 8, paddingVertical: 4 },
-  escalationLine: { fontSize: 12.5, lineHeight: 17, color: Theme.text },
   projectTitle: { fontSize: 12.5, fontWeight: '700', color: Theme.text },
   standsLine: { fontSize: 13, lineHeight: 18, color: Theme.textSecondary },
   kinds: { paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md, gap: 6 },

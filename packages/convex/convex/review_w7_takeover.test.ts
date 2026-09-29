@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { applyScope, takeOverSessions } from "./orgInit";
 import { performCreateRole, performRetireRole } from "./orgRoles";
-import { performEscalateSession } from "./sessionOwnership";
 
 // REVIEW (W7, org-roles-run-work.md R1). Left untracked by the adversarial
 // reviewer. Each test states the behaviour the contract asks for and fails on
@@ -79,33 +78,6 @@ describe("review: the takeover moves a session it should not", () => {
     expect(row(db, 1).org_role_id).toBe(role._id);
     expect(took?.sessions).not.toContain("jx70002");
     expect(row(db, 2).org_role_id).toBeUndefined();
-  });
-});
-
-describe("review: an escalation a person cannot clear", () => {
-  test("retiring the role drops the escalation with the pointer, as a reparent to a person does", async () => {
-    const db = fixtures([conv(1)]);
-    const ctx = ctxOf(db);
-    const role = await performCreateRole(ctx, ME as any, { name: "Growth", handle: "growth", team_id: TEAM });
-    await applyScope(ctx, ME as any, { team_id: TEAM }, { kind: "scope", handle: "@growth", add: ["pr-1"] } as any, { provision: false, human_decision: "sd-1" });
-    expect(row(db, 1).org_role_id).toBe(role._id);
-    await performEscalateSession(ctx, ME as any, { session_id: "jx70001", line: "needs your eye" });
-    await performRetireRole(ctx, ME as any, { role_id: String(role._id) });
-    expect(row(db, 1).org_role_id).toBeUndefined();
-    // inboxProjection classifies `escalated && hasMsgs` as needs_input, so the
-    // card is pinned in needs input with a retired role's line on it...
-    expect(row(db, 1).escalated_by_role).toBeUndefined();
-  });
-
-  test("...and the person's clear is refused, so nothing in the product removes it", async () => {
-    const db = fixtures([conv(1)]);
-    const ctx = ctxOf(db);
-    const role = await performCreateRole(ctx, ME as any, { name: "Growth", handle: "growth", team_id: TEAM });
-    await applyScope(ctx, ME as any, { team_id: TEAM }, { kind: "scope", handle: "@growth", add: ["pr-1"] } as any, { provision: false, human_decision: "sd-1" });
-    await performEscalateSession(ctx, ME as any, { session_id: "jx70001", line: "needs your eye" });
-    await performRetireRole(ctx, ME as any, { role_id: String(role._id) });
-    const cleared = await performEscalateSession(ctx, ME as any, { session_id: "jx70001", clear: true }).catch((e: any) => e);
-    expect(cleared instanceof Error ? cleared.message : "ok").toBe("ok");
   });
 });
 
