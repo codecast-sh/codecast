@@ -9,6 +9,7 @@ import { collectCopyFiles, manifestCopyEntries, sourceStat, validateRelativePath
 import { buildMirrorBundle } from "./mirror/bundle.js";
 import { kindForPath, transformForHost } from "./mirror/transform.js";
 import { collectProjectContext } from "./mirror/discovery.js";
+import { readLocalConfig } from "../config/readLocalConfig.js";
 import { CLOUD_SEED_EXCLUDES, createWipSnapshotStrict } from "../wipSnapshot.js";
 
 function checked(result: SpawnSyncReturns<string>, operation: string): string {
@@ -357,7 +358,7 @@ export function cloudCopyFiles(localGitRoot: string): string[] {
   sourceStat(root, ".wt-setup-files");
   const candidates = manifestCopyEntries(root, "invalid workspace manifest; fix .codecast/workspace.toml before cloud acquire");
   const known = new Set(
-    collectProjectContext({ root, includeTracked: false, includeAncestors: false })
+    collectProjectContext({ root, includeTracked: false, includeAncestors: false, config: readLocalConfig() })
       .files.filter((f) => f.scope === "project")
       .map((f) => f.relativePath),
   );
@@ -477,7 +478,7 @@ export function copyCloudFiles(
   const root = fs.realpathSync(localGitRoot);
   const ctx = { fromHome: process.env.HOME || os.homedir(), toHome: remoteHome(host) };
   const staged: Array<{ rel: string; bytes: Buffer; mode: number }> = [];
-  const context = new Map(collectProjectContext({ root, includeTracked: false, includeAncestors: false }).files.filter((f) => f.scope === "project").map((f) => [f.relativePath, f]));
+  const context = new Map(collectProjectContext({ root, includeTracked: false, includeAncestors: false, config: readLocalConfig() }).files.filter((f) => f.scope === "project").map((f) => [f.relativePath, f]));
   for (const rel of files) {
     validateRelativePath(rel);
     const discovered = context.get(rel);

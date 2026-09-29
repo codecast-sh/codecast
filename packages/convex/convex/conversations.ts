@@ -31,7 +31,6 @@ import {
   isBelowFoldAt,
   rollupParentIdOf,
   rideLeadPlacements,
-  roleEscalationsOf,
   selectWorkingSet,
   WORKING_SET_RECENCY_MS,
   BLOCKED_BANNER_KINDS,
@@ -55,7 +54,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { checkRateLimit } from "./rateLimit";
 import { verifyApiToken } from "./apiTokens";
 import { internal } from "./_generated/api";
-import { resetConversationPendingMessages, cancelQueuedMessagesOnKill, enqueuePendingMessage, tellRole } from "./pendingMessages";
+import { resetConversationPendingMessages, cancelQueuedMessagesOnKill, enqueuePendingMessage } from "./pendingMessages";
 import { latestImagePreviewUrl, listConversationFileChanges } from "./messages";
 import { inboxVisibilityFields, INBOX_PINNED_CAP, pinCapExceeded, PIN_CAP_ERROR } from "./inboxProjection";
 import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill, stampRunConversation } from "./agentTasks";
@@ -8502,6 +8501,7 @@ async function enrichInboxSessionRow(
     cloud_placement: (conv as any).cloud_placement ?? null,
     cloud_workspace: (conv as any).cloud_workspace ?? null,
     cloud_seed: (conv as any).cloud_seed ?? null,
+    cloud_context_too_large: (conv as any).cloud_context_too_large ?? null,
     migration_batch_id: (conv as any).migration?.batch_id ?? null,
     workflow_run_id: conv.workflow_run_id || null,
     // Read by the web's isSub (inboxStore) via isAgentSpawnedConversation so
@@ -8554,6 +8554,10 @@ async function enrichInboxSessionRow(
     team_id: conv.team_id ?? null,
     is_private: conv.is_private ?? false,
     owner_device_id: (conv as any).owner_device_id ?? null,
+    // The saved Claude account this session is pinned to (its setup-token),
+    // null when it runs on the machine's login. The park card names the
+    // account that actually hit the limit from it.
+    cc_account: conv.cc_account ?? null,
     // Second-party owner (the member responsible for steering; see schema).
     // author/owner display names are stamped by computeInboxSessions, which
     // caches the user docs across rows.
@@ -8660,6 +8664,7 @@ async function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: nu
     cloud_placement: child.cloud_placement ?? null,
     cloud_workspace: child.cloud_workspace ?? null,
     cloud_seed: child.cloud_seed ?? null,
+    cloud_context_too_large: child.cloud_context_too_large ?? null,
     migration_batch_id: child.migration?.batch_id ?? null,
     worktree_name: child.worktree_name,
     worktree_branch: child.worktree_branch,
@@ -8695,12 +8700,6 @@ export async function identityFieldsOf(conv: any, getDoc: (id: any) => Promise<a
     character_name: conv.character_name ?? null,
     org_role_id: conv.org_role_id?.toString() ?? null,
     standing_role_id: conv.standing_role_id?.toString() ?? null,
-    // The role's line on a session it put in front of the person (R1). Key
-    // order is the store draft's, so a web gesture's field lock retires on
-    // this echo; null when absent, the spelling a hand back writes.
-    escalated_by_role: conv.escalated_by_role
-      ? { role_id: conv.escalated_by_role.role_id.toString(), line: conv.escalated_by_role.line, at: conv.escalated_by_role.at, ...(conv.escalated_by_role.direct ? { direct: true } : {}) }
-      : null,
     role: role
       ? { _id: role._id.toString(), short_id: role.short_id, name: role.name, handle: role.handle, avatar: avatarOf(role), status: role.status, tenure_kind: role.tenure?.kind ?? "standing" }
       : null,
@@ -9314,17 +9313,6 @@ export async function computeInboxSessions(
       // fold on its own account.
       row.below_fold = false;
     };
-  }
-  // The role's card carries the escalations that reach the person through it
-  // (org-roles-run-work.md R1, revised), derived from the sessions under it on
-  // this list by the same helper the web and the phone read, so no channel
-  // stores the line twice.
-  {
-    const rowsById = new Map(enrichedRows.map((r) => [r.conv._id.toString(), r]));
-    for (const [leadId, list] of roleEscalationsOf(rowsById.keys(), (id) => rowsById.get(id)?.conv)) {
-      const lead = rowsById.get(leadId);
-      if (lead) (lead.row as { escalations?: typeof list }).escalations = list;
-    }
   }
   for (const r of enrichedRows) {
     if (r.hidden) {
@@ -10239,8 +10227,6 @@ export function tallyInboxRows(
     // Second-party ownership: run_by = the member whose account runs the
     // session when that isn't the caller; owner = the assigned owner if any.
     run_by: string | null;
-    escalations: Array<{ conversation_id: string; line: string; at: number }> | null;
-    escalated_by_role: { role_id: string; line: string; at: number; direct?: boolean } | null;
     role: { handle: string; name: string } | null;
     owner: { name: string | null; email: string | null } | null;
     owned_by_me: boolean;
@@ -10340,11 +10326,6 @@ export function tallyInboxRows(
       active_plan: s.active_plan ? { short_id: s.active_plan.short_id, title: s.active_plan.title } : null,
       active_task: s.active_task ? { short_id: s.active_task.short_id, title: s.active_task.title } : null,
       run_by: s.author_name ?? null,
-      // A role's triage on the row (org-roles-run-work.md R1, revised): the
-      // lines the role's card carries, or the stamp on a child put in front
-      // of the person directly, with the role that did it.
-      escalations: s.escalations ?? null,
-      escalated_by_role: s.escalated_by_role ?? null,
       role: s.role ? { handle: s.role.handle, name: s.role.name } : null,
       owner: s.owner_user_id ? { name: s.owner_name ?? null, email: s.owner_email ?? null } : null,
       owned_by_me: !!s.owned_by_me,
@@ -11329,7 +11310,6 @@ export async function performSetThreadState(
   status: ThreadStateStatus,
 ): Promise<{ at: number; resurfaced: boolean }> {
   const at = Date.now();
-  const shortId = conv.short_id ?? conv._id.toString().slice(0, 7);
   await ctx.db.patch(conv._id, {
     thread_state: text,
     thread_state_at: at,
@@ -11356,13 +11336,12 @@ export async function performSetThreadState(
   // the row between Lock Screen statuses: those refresh at once, a reworded
   // working line rides the next routine push.
   await scheduleLiveActivityRefresh(ctx, conv.user_id, { urgent: status !== "working" });
-  // A hand declaring blocked tells its role now (org-staffing.md S25); a hand
-  // settling done is a fact the role reads with `cast brief` at its next run.
-  if (conv.org_role_id && status === "blocked") {
-    await tellRole(ctx, conv.org_role_id, {
-      content: `hand ${shortId} "${(conv.title ?? "").slice(0, 60)}" declared blocked: ${text.split("\n")[0].slice(0, 200)}`,
-      client_id: `hand-blocked:${conv._id}:${at}`,
-    });
+  // A session under a role that declares blocked reaches its role through
+  // the needs-input check (org-staffing.md S28), the one door for a waiting
+  // episode: a declaration made mid-turn is heard when the turn settles, and
+  // one made by a session already at rest is heard now.
+  if ((conv.org_role_id || conv.standing_role_id) && status === "blocked") {
+    await ctx.scheduler?.runAfter(0, internal.notifications.checkNeedsInput, { conversation_id: conv._id });
   }
   return { at, resurfaced };
 }
@@ -13085,8 +13064,9 @@ export async function killConversation(ctx: any, userId: Id<"users">, args: { co
       patch.status = "completed";
     }
     await ctx.db.patch(args.conversation_id, patch);
-    // A retired row leaves the Lock Screen strip with the next push.
-    await scheduleLiveActivityRefresh(ctx, conv.user_id, { urgent: true });
+    // A retired row leaves the Lock Screen strip with the next push. The org
+    // cores that retire a seat run without a scheduler in their pure form.
+    if (ctx.scheduler) await scheduleLiveActivityRefresh(ctx, conv.user_id, { urgent: true });
     // Kill must stick: cancel any armed schedule that injects into this
     // conversation, or its next fire would resurrect the session the user
     // just killed (see cancelTasksBoundToConversation). Scan the RUNNER's

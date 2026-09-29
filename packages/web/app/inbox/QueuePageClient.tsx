@@ -128,9 +128,10 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
     return () => clearTimeout(timeout);
   }, [resumeState, sessionId, convCommand]);
 
-  const handleManualResume = useCallback(() => {
+  // `leave_out` answers a cloud placement whose context was over the cap.
+  const handleManualResume = useCallback((extra?: { leave_out?: string[] }) => {
     setResumeState("resuming");
-    convCommand(sessionId, "resumeSession")
+    convCommand(sessionId, "resumeSession", extra?.leave_out ? { leave_out: extra.leave_out } : undefined)
       .then(() => setResumeState("sent"))
       .catch((err) => {
         if (isParkedDispatchError(err)) {
@@ -246,6 +247,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
           // two sessions can fail with the identical message.
           key={conversation._id}
           error={sessionError}
+          sessionId={sessionId}
           projectPath={conversation.project_path || conversation.git_root}
           ownerDeviceId={(conversation as any).owner_device_id}
           onResume={handleManualResume}

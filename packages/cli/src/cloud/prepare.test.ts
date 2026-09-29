@@ -198,6 +198,8 @@ describe("shared checkout helpers (ct-49428)", () => {
     expect(cloudStartArgs({ conversation_id: "c1" })).toEqual(["cloud", "start", "c1"]);
     expect(cloudStartArgs({ conversation_id: "c1", cloud_device_id: "box", workspace: "shared" })).toEqual(["cloud", "start", "c1", "--device", "box", "--workspace", "shared"]);
     expect(cloudStartArgs({ conversation_id: "c1", workspace: "isolated" })).toEqual(["cloud", "start", "c1", "--workspace", "isolated"]);
+    expect(cloudStartArgs({ conversation_id: "c1", leave_out: ["src/app/a.mp4", "src/app/b.mp4"] })).toEqual(["cloud", "start", "c1", "--leave-out", "src/app/a.mp4,src/app/b.mp4"]);
+    expect(cloudStartArgs({ conversation_id: "c1", leave_out: [] })).toEqual(["cloud", "start", "c1"]);
     expect(cloudStartArgs({ conversation_id: "c1", cloud_device_id: null, workspace: "garbage" })).toEqual(["cloud", "start", "c1"]);
   });
 

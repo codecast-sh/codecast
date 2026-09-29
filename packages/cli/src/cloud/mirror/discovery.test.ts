@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
-import { collectProjectContext, collectProjectContextAsync, contextReferences } from "./discovery.js";
+import { collectProjectContext, collectProjectContextAsync, ContextTooLargeError, contextReferences, findContextTooLarge } from "./discovery.js";
 import { collectMirrorFiles } from "./inventory.js";
 import { parseJsonLoose, renderGitconfig, transformForHost } from "./transform.js";
 
@@ -155,6 +155,38 @@ test("a doc naming a build directory does not ship it; a hook that requires a fi
   write("src/repo/.claude/settings.json", JSON.stringify({ statusLine: { command: `bash '${root}/packages/cli/dist/status.sh'` } }));
   write("src/repo/packages/cli/dist/status.sh", "#!/bin/sh\n");
   expect(collectProjectContext({ root, home }).files.map((f) => f.relativePath).sort()).toEqual([".claude/settings.json", "docs/guide.md", "packages/cli/dist/status.sh"]);
+});
+
+test("over the cap, the error names the largest files it could leave out; excluding them fits; a required file over the cap fails outright", () => {
+  const MiB = 1024 * 1024;
+  const renders = [5, 1, 4].map((size, i) => ({ path: `${root}/videos/renders/c0${i}.png`, size }));
+  write("src/repo/videos/renders/list.txt", renders.map((r) => `file '${r.path}'`).join("\n"));
+  for (const r of renders) { fs.writeFileSync(r.path, ""); fs.truncateSync(r.path, r.size * MiB); }
+  write("src/repo/docs/guide.md", "guide");
+  let err: any;
+  try { collectProjectContext({ root, home, maxBytes: 7 * MiB }); } catch (e) { err = e; }
+  expect(err).toBeInstanceOf(ContextTooLargeError);
+  expect(err.files.map((f: any) => f.path)).toEqual(["src/repo/videos/renders/c00.png"]);
+  expect(err.totalBytes).toBeGreaterThan(10 * MiB);
+  expect(findContextTooLarge(new Error("config mirror failed: …", { cause: err }))).toBe(err);
+  expect(findContextTooLarge(new Error("other"))).toBeNull();
+  const exclude = err.files.map((f: any) => f.path).join(",");
+  const ctx = collectProjectContext({ root, home, maxBytes: 7 * MiB, config: { cloud_mirror_exclude: exclude } });
+  expect(ctx.files.map((f) => f.relativePath).sort()).toEqual(["docs/guide.md", "videos/renders/c01.png", "videos/renders/c02.png", "videos/renders/list.txt"]);
+  write("src/repo/.claude/settings.json", JSON.stringify({ statusLine: { command: `bash '${renders[0]!.path}'` } }));
+  expect(() => collectProjectContext({ root, home, maxBytes: 2 * MiB })).toThrow(/context exceeds 2 MiB at/);
+});
+
+test("audio and video a doc links to stay home; an active config that requires one still carries it", () => {
+  write("src/repo/videos/README.md", `Renders: ${root}/videos/renders/c00.mp4 and ${root}/videos/assets/music.mp3; poster ${root}/videos/renders/poster.png`);
+  for (const f of ["videos/renders/c00.mp4", "videos/assets/music.mp3", "videos/renders/poster.png"]) write(`src/repo/${f}`, "bytes");
+  const ctx = collectProjectContext({ root, home });
+  expect(ctx.files.map((f) => f.relativePath).sort()).toEqual(["videos/README.md", "videos/renders/poster.png"]);
+  expect(ctx.skipped.filter((s) => s.reason === "audio or video").map((s) => path.basename(s.path)).sort()).toEqual(["c00.mp4", "music.mp3"]);
+  write("src/repo/.claude/settings.json", JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: `afplay ${root}/videos/assets/music.mp3` }] }] } }));
+  const required = collectProjectContext({ root, home });
+  expect(required.files.map((f) => f.relativePath)).toContain("videos/assets/music.mp3");
+  expect(required.files.map((f) => f.relativePath)).not.toContain("videos/renders/c00.mp4");
 });
 
 test("marketplace clones, bundled skills, install staging and trashed skills stay home; installed plugins and live skills travel", async () => {

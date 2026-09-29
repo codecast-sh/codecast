@@ -438,7 +438,7 @@ describe("the change ledger between ticks", () => {
 });
 
 describe("mirrorForPrepare", () => {
-  test("disabled mirror attempts nothing; a throwing or partial push blocks prepare and logs", async () => {
+  test("disabled mirror attempts nothing; a throwing push or a failed write blocks prepare and logs; host edits do not", async () => {
     const calls: string[] = [];
     const lines: string[] = [];
     const mirror = (async () => { calls.push("push"); throw new Error("ssh down"); }) as any;
@@ -449,8 +449,11 @@ describe("mirrorForPrepare", () => {
     expect(calls).toEqual([]);
     await expect(mirrorForPrepare(host, "i-1", (m) => lines.push(m), { config: { user_id: "u" }, mirror })).rejects.toThrow("config mirror failed: ssh down");
     expect(lines).toEqual(["config mirror failed: ssh down"]);
-    const incomplete = (async () => ({ pushed: true, hash: "abcdef0123", changed: 3, result: { hash: "abcdef0123", applied: ["a"], unchanged: 0, host_edited: ["h"], pruned: [], errors: [] } })) as any;
-    await expect(mirrorForPrepare(host, "i-1", () => {}, { config: { user_id: "u" }, mirror: incomplete })).rejects.toThrow("h: remote edit conflict");
+    // A file the host edited is newer there: the host keeps it and the session starts; a file that failed to write stops it.
+    const hostEdited = (async () => ({ pushed: false, hash: "abcdef0123", changed: 0, reason: "h: remote edit conflict", result: { hash: "", applied: ["a"], unchanged: 0, host_edited: ["h"], pruned: [], errors: [] } })) as any;
+    expect(await mirrorForPrepare(host, "i-1", () => {}, { config: { user_id: "u" }, mirror: hostEdited })).toContain("1 host-edited kept (h)");
+    const failed = (async () => ({ pushed: false, hash: "abcdef0123", changed: 0, reason: "e: EACCES", result: { hash: "", applied: [], unchanged: 0, host_edited: ["h"], pruned: [], errors: [{ path: "e", error: "EACCES" }] } })) as any;
+    await expect(mirrorForPrepare(host, "i-1", () => {}, { config: { user_id: "u" }, mirror: failed })).rejects.toThrow("e: EACCES");
     const unprov = (async () => ({ pushed: false, reason: "unprovisioned", changed: 0 })) as any;
     await expect(mirrorForPrepare(host, "i-1", () => {}, { config: { user_id: "u" }, mirror: unprov })).rejects.toThrow("cast hosts provision i-1");
     const inStep = (async () => ({ pushed: false, skipped: "in step", changed: 0, hash: "abcdef0123" })) as any;
