@@ -5,8 +5,9 @@ import {
   summarizeIdleDigest,
   IDLE_DIGEST_WINDOW_MS,
 } from "./notifications";
-import { applyPause, applyResume, settleRunConversation } from "./agentTasks";
+import { applyPause, applyResume, ensureRoleNeedsInputTrigger, settleRunConversation } from "./agentTasks";
 import { parseScheduledTask, runResultThreadOf } from "@codecast/shared/contracts";
+import { performSetIdleSummary } from "./idleSummary";
 import { performPushFlush } from "./pushRouter";
 
 // ── In-memory Convex-ish ctx ─────────────────────────────────────────────────
@@ -499,9 +500,6 @@ describe("needs-input push — exclusions (mirrors the idle sound's guards)", ()
     ["agent_spawned", { agent_name: "researcher" }],
     // …and spawned schedule-run conversations.
     ["schedule_run", { agent_task_id: "task1" }],
-    // A session a role looks after reaches the person through the role
-    // (org-staffing.md S28): its own settle rings nobody.
-    ["under_role", { org_role_id: "role1" }],
   ] as Array<[string, Rec]>)("%s sessions never push", async (reason, convOverride) => {
     const { ctx, tables } = settledIdleWorld({ conv: convOverride });
     const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
@@ -1100,6 +1098,8 @@ describe("the route up", () => {
       trigger: trigger.short_id,
       event: "session_needs_input",
       waiting: { short_id: "jx7hand", title: "Fix the parser", why: "blocked", since: now - 30_000, state: "Which price band for Texas?" },
+      // The run reminds the role who it is, read fresh at firing.
+      role: { handle: "calling", name: "Calling lead", reports_to: "@growth", scope: [], goals: [] },
       body: trigger.prompt,
     }]);
     // A machine run, never a person's message.
@@ -1135,8 +1135,11 @@ describe("the route up", () => {
     await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
     const trigger = triggerOn(tables, "standing_sub")!;
     await applyPause(ctx as any, trigger as any);
+    tables.conversations[0].message_count = 9;
     tables.conversations[0].thread_state = "Which price band for Ohio?";
-    await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    // The role cannot be told, so the wait is the person's: their own notify.
+    const paused = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    expect(paused.notified).toBe(true);
     expect(told(tables, "standing_sub").length).toBe(1);
     // Resumed, it stays disarmed until an event, and the episode that was
     // held back is heard on the next check.
@@ -1146,6 +1149,7 @@ describe("the route up", () => {
     await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
     expect(told(tables, "standing_sub").map((f) => f?.body)).toEqual([expect.any(String), "Answer it yourself when you can."]);
     trigger.status = "completed";
+    tables.conversations[0].message_count = 12;
     tables.conversations[0].thread_state = "Which price band for Utah?";
     await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
     expect(told(tables, "standing_sub").length).toBe(2);
@@ -1177,5 +1181,91 @@ describe("the route up", () => {
     top.tables.conversations.push(standing("standing_sub", "role_sub"));
     await performNeedsInputCheck(top.ctx as any, { conversation_id: "standing_top" });
     expect(top.tables.pending_messages ?? []).toEqual([]);
+  });
+
+  // Nothing waiting on the person is lost (ct-55574). The role is the first
+  // reader only while it can be told: with its trigger paused or cancelled,
+  // no standing session, or the org off, the settle is the person's own.
+  test("a role that cannot be told never swallows the wait: the person's own notify runs", async () => {
+    const unheard: Array<[string, (t: Record<string, Rec[]>, ctx: any) => Promise<void> | void]> = [
+      ["trigger cancelled", async (t, ctx) => { (await ctx.db.get((await ensureRoleNeedsInputTrigger(ctx, t.org_roles[1] as any, t.conversations[2] as any)).id)).status = "completed"; }],
+      ["no standing session", (t) => { t.org_roles[1].anchor_id = undefined; }],
+      ["org off", (t) => { t.teams[0].features = {}; }],
+    ];
+    for (const [name, arrange] of unheard) {
+      const { ctx, tables } = blockedHand();
+      await arrange(tables, ctx);
+      const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+      expect([name, res.notified, res.reason]).toEqual([name, true, undefined]);
+      expect(told(tables, "standing_sub")).toEqual([]);
+      expect(tables.notifications.length).toBe(1);
+    }
+  });
+
+  test("a role seated in a session an earlier role stood in gets its own trigger: the earlier role's cancelled one is not its", async () => {
+    const { ctx, tables } = blockedHand();
+    // The earlier role's trigger, cancelled when that role retired.
+    const old = await ctx.db.get((await ensureRoleNeedsInputTrigger(ctx as any, { _id: "role_old" } as any, tables.conversations[2] as any)).id);
+    old.status = "completed";
+    const armed = await ensureRoleNeedsInputTrigger(ctx as any, tables.org_roles[1] as any, tables.conversations[2] as any);
+    expect([armed.created, armed.id === old._id]).toEqual([true, false]);
+    const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    expect(res.reason).toBe("under_role");
+    expect(told(tables, "standing_sub").map((f) => f?.task_id)).toEqual([armed.id]);
+    // The role's own, cancelled by the person, stays cancelled.
+    (await ctx.db.get(armed.id)).status = "completed";
+    expect(await ensureRoleNeedsInputTrigger(ctx as any, tables.org_roles[1] as any, tables.conversations[2] as any)).toMatchObject({ id: armed.id, created: false });
+    expect(tables.agent_tasks.length).toBe(2);
+  });
+
+  test("a question asked in prose tells the role once the settle classifier says it needs input; a finished turn tells nobody", async () => {
+    const { ctx, tables } = blockedHand();
+    Object.assign(tables.conversations[0], { thread_state_status: undefined, thread_state: undefined, thread_state_at: undefined });
+    // At settle a plain turn could still be a finished one: nothing fires yet.
+    const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    expect(res.reason).toBe("under_role");
+    expect(told(tables, "standing_sub")).toEqual([]);
+    // A done verdict wakes nobody.
+    await performSetIdleSummary(ctx as any, { conversation_id: "conv1", settle_verdict: "done" });
+    expect(told(tables, "standing_sub")).toEqual([]);
+    // A needs-input verdict tells the role, once per settle.
+    await performSetIdleSummary(ctx as any, { conversation_id: "conv1", settle_verdict: "needs_input" });
+    await performSetIdleSummary(ctx as any, { conversation_id: "conv1", settle_verdict: "needs_input" });
+    expect(told(tables, "standing_sub").map((f) => f?.waiting)).toEqual([
+      expect.objectContaining({ short_id: "jx7hand", why: "waiting", state: "" }),
+    ]);
+    // The next turn that ends needing input is a new one.
+    tables.conversations[0].message_count = 8;
+    await performSetIdleSummary(ctx as any, { conversation_id: "conv1", settle_verdict: "needs_input" });
+    expect(told(tables, "standing_sub").length).toBe(2);
+  });
+
+  test("a plain turn under a role that cannot hear goes to the person at settle", async () => {
+    const { ctx, tables } = blockedHand();
+    Object.assign(tables.conversations[0], { thread_state_status: undefined, thread_state: undefined, thread_state_at: undefined });
+    await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    const trigger = triggerOn(tables, "standing_sub")!;
+    await applyPause(ctx as any, trigger as any);
+    tables.conversations[0].message_count = 9;
+    const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    expect(res.reason).not.toBe("under_role");
+  });
+
+  test("a hard stall is one ask per settle: a second permission prompt under the same pinned line still tells the role", async () => {
+    const { ctx, tables } = blockedHand();
+    Object.assign(tables.conversations[0], { thread_state_status: "working", thread_state: "Migrating the parser" });
+    tables.managed_sessions[0].agent_status = "permission_blocked";
+    await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    expect(told(tables, "standing_sub").map((f) => f?.waiting?.why)).toEqual(["permission_blocked"]);
+    // Approved, it works on and stalls again with the same line pinned.
+    tables.conversations[0].message_count = 9;
+    await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    expect(told(tables, "standing_sub").length).toBe(2);
+    // The same holds under a declared block: the declaration is one ask per
+    // line, a stall after it resumed is its own.
+    Object.assign(tables.conversations[0], { thread_state_status: "blocked", message_count: 14 });
+    await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    expect(told(tables, "standing_sub").length).toBe(3);
   });
 });

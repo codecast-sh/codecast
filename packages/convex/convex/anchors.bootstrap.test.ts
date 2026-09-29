@@ -3,18 +3,19 @@ import { bootstrapMessage } from "./anchors";
 import { isBootstrapPrompt } from "@codecast/shared/contracts";
 
 // A role's opening message (org-roles-standing.md T1): who it is and whom it
-// reports to, what it owns, how it wakes, that its sessions stay out of the
+// reports to, what it looks after, how it wakes, that its sessions stay out of the
 // person's inbox, and that its brief is its memory, in about 200 plain words.
 const opening = (startsOnItsOwn: boolean) => bootstrapMessage({
   name: "Calling", scopeType: "team", scopeLabel: "the Union workspace", teamName: "Union",
-  role: { handle: "calling", scopeNames: ["project Callers & Call Management"], parentName: "Chief of Staff (@chief-of-staff)", startsOnItsOwn },
+  role: { handle: "calling", scopeNames: ["project Callers & Call Management"], parentName: "Chief of Staff (@chief-of-staff)", parentHandle: "chief-of-staff", startsOnItsOwn },
 });
 
 describe("a role's opening message", () => {
-  test("says who it is, whom it reports to, what it owns, how it wakes, how it passes a request up and where it remembers", () => {
+  test("says who it is, whom it reports to, what it looks after, how it wakes, how it passes a request up and where it remembers", () => {
     const m = opening(true);
-    expect(m.startsWith("You are **Calling**, the standing agent for the **Calling** role (@calling) in Union. You report to Chief of Staff (@chief-of-staff).")).toBe(true);
-    expect(m).toContain("You own project Callers & Call Management");
+    expect(m.startsWith("You are the **Calling** (@calling) in Union. You report to Chief of Staff (@chief-of-staff).")).toBe(true);
+    expect(m).toContain("You look after project Callers & Call Management");
+    expect(m).toContain('cast role wake @chief-of-staff "<what they will decide and why>"');
     expect(m).toContain("Start every turn with `cast brief`");
     expect(m).toContain("stay out of the person's inbox");
     expect(m).not.toContain("cast escalate");
@@ -24,6 +25,15 @@ describe("a role's opening message", () => {
     expect(m).toContain("`cast spawn`");
     expect(opening(false)).toContain("You do not start work on your own");
     expect(m.split(/\s+/).length).toBeLessThan(260);
+    expect(isBootstrapPrompt(m)).toBe(true);
+  });
+
+  // Scope is opt in (org-staffing.md S26).
+  test("a role with no scope is told it looks after no area, never that the workspace is its own", () => {
+    const m = bootstrapMessage({ name: "Release", scopeType: "team", scopeLabel: "the Union workspace", teamName: "Union", role: { handle: "release", scopeNames: [], parentName: "Ashot", startsOnItsOwn: true } });
+    expect(m).toContain("You look after no area of your own: you run your routine and answer what you are asked.");
+    expect(m).not.toMatch(/whole workspace|You own/);
+    expect(m).toContain("Raise it in this thread");
     expect(isBootstrapPrompt(m)).toBe(true);
   });
 

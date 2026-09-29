@@ -22,7 +22,7 @@ import { teamVisibleConvTeam } from "./privacy";
 import { pickAnsweredDecision, formatDecisionAnswer, decisionAnswerLabel } from "@codecast/shared/contracts";
 import type { Doc, Id } from "./_generated/dataModel";
 import { nextShortId } from "./counters";
-import { enqueuePendingMessage, tellRole } from "./pendingMessages";
+import { enqueuePendingMessage, reachableRole, tellRole } from "./pendingMessages";
 import { roleStartsOnItsOwn } from "./lib/orgCaps";
 import { roleOfConversation } from "./lib/actor";
 import { roleGrants, userCanAccessRole, userCanAdminRole } from "./lib/orgAccess";
@@ -172,7 +172,7 @@ type Hop = { role_id: Id<"org_roles">; recommendation?: number; note?: string; a
 
 // The ladder (D2): the roles from the asker up to the first person. A paused
 // or retired role is recorded as a skipped hop so the card can show the gap;
-// only active roles are woken and may recommend.
+// only active roles may recommend, and only the first is told (routeFor).
 export async function buildLadder(
   ctx: Ctx,
   startRole: Doc<"org_roles"> | null,
@@ -205,11 +205,10 @@ export async function buildLadder(
 // is how a question moves; including the runner kept it on the previous
 // person's stack after they handed the session over.
 //
-// A hand session (org_role_id) also includes the first person above the
-// role, so a manager sees questions from work that reports to them. A
-// standing session's people are its owners alone: the parent chain still
-// forms the recommendation ladder, but assigning the seat away takes the
-// questions with it.
+// `firstPersonId` is the person the reporting line ends at, when the caller
+// wants them in (routeFor): the first person above a hand's role, so a
+// manager sees questions from work that reports to them, and the person a
+// lead's role reports to, who may not be the host its seat runs on.
 export async function peopleFor(ctx: Ctx, conversation: any, firstPersonId?: Id<"users">): Promise<Id<"users">[]> {
   const owners = await listSessionOwnerIds(ctx, conversation._id);
   // The join table is canonical. A stale owner_user_id cache (the runner
@@ -219,19 +218,42 @@ export async function peopleFor(ctx: Ctx, conversation: any, firstPersonId?: Id<
     const implicit = conversation.owner_user_id ?? conversation.user_id;
     if (implicit) ids.push(implicit);
   }
-  if (firstPersonId && !conversation.standing_role_id) ids.push(firstPersonId);
+  if (firstPersonId) ids.push(firstPersonId);
   return Array.from(new Set(ids.map(String))) as Id<"users">[];
+}
+
+// Where a session's decision goes (org-staffing.md S28). A hand's ladder
+// starts at its role. A standing session's starts at its parent, never at the
+// role that asked: a lead that reports to a person has no role above it and
+// its people are its owners and that person; a sub-lead's people are its
+// owners alone, and its parent role reads it first. `hears` is the one role
+// told about the decision, the first on the ladder, when it can be told
+// (reachableRole). While a role hears, the decision enters no person's queue:
+// the role answers, recommends, or raises it in its own thread, and the
+// person's queue holds only what a lead that reports to them asks. With no
+// role to hear, the people's queue is where it lands, so it is never lost.
+export async function routeFor(ctx: Ctx, conversation: any, now: number) {
+  const role = await roleOfConversation(ctx, conversation);
+  const parent = conversation.standing_role_id ? role?.reports_to : undefined;
+  const first = parent ? (parent.kind === "role" ? await ctx.db.get(parent.role_id) : null) : role;
+  const ladder = await buildLadder(ctx, first, now);
+  const people = await peopleFor(ctx, conversation, parent ? (parent.kind === "user" ? parent.user_id : undefined) : ladder.firstPersonId);
+  const hears = first && (await reachableRole(ctx, first._id)) ? first : null;
+  return { role, ladder, people, hears };
 }
 
 // Keep decision_inbox in lockstep with asked_user_ids: insert missing pending
 // rows, delete rows for people who are no longer in the set. Deleting is
 // required — a done inbox row for a still-pending decision still lists in
 // listForUserCore, so marking it done would leave the card on their stack.
+// `queue: false` (a role hears the decision, routeFor) inserts nothing: a
+// row already in front of a person stays there, and no new one is made.
 export async function syncDecisionInbox(
   ctx: Ctx,
   decisionId: Id<"session_decisions">,
   people: Id<"users">[],
   now: number,
+  queue = true,
 ): Promise<void> {
   const wanted = new Set(people.map(String));
   const existing = await ctx.db
@@ -248,7 +270,7 @@ export async function syncDecisionInbox(
       await ctx.db.delete(row._id);
     }
   }
-  for (const userId of people) {
+  for (const userId of queue ? people : []) {
     if (have.has(String(userId))) continue;
     await ctx.db.insert("decision_inbox", { decision_id: decisionId, user_id: userId, status: "pending", created_at: now });
   }
@@ -272,12 +294,10 @@ export async function reroutePendingDecisionsForConversation(
   if (openRows.length === 0) return { moved: 0 };
   const conversation = await ctx.db.get(conversationId);
   if (!conversation) return { moved: 0 };
-  const role = await roleOfConversation(ctx, conversation);
-  const ladder = await buildLadder(ctx, role, now);
-  const people = await peopleFor(ctx, conversation, ladder.firstPersonId);
+  const { people, hears } = await routeFor(ctx, conversation, now);
   for (const row of openRows) {
     await ctx.db.patch(row._id, { asked_user_ids: people });
-    await syncDecisionInbox(ctx, row._id, people, now);
+    await syncDecisionInbox(ctx, row._id, people, now, !hears);
     const updated = await ctx.db.get(row._id);
     if (updated) await refreshHolder(ctx, updated, now);
   }
@@ -389,6 +409,8 @@ export async function refreshHolder(
 ): Promise<void> {
   const excluded = new Set((opts.excludeRoleIds ?? []).map(String));
   const roleIds = (row.hops ?? [])
+    // "escalated" is a note only rows from before S28 carry: a role that
+    // passed the question up without a recommendation gave up its hold.
     .filter((h) => !h.note?.startsWith("skipped") && !h.note?.startsWith("escalated"))
     .map((h) => h.role_id)
     .filter((id) => !excluded.has(String(id)));
@@ -404,26 +426,22 @@ export async function refreshHolder(
   await ctx.db.patch(row._id, { holder: resolved.holder, holder_key: resolved.holder_key });
 }
 
-// Tell each active ladder role once, as a plain line into its standing
-// session (org-staffing.md S25). A role without a standing session gets the
-// hop recorded and nothing else.
-async function wakeLadder(
+// Tell the role that hears a decision (routeFor), once, as a plain line into
+// its standing session (org-staffing.md S25). Only that role: the ones above
+// it hear when it raises the question itself, up its own reporting line.
+async function tellHearingRole(
   ctx: Ctx,
-  roles: Doc<"org_roles">[],
+  role: Doc<"org_roles"> | null,
   row: { _id: Id<"session_decisions">; short_id?: string; question: string; conversation_id?: Id<"conversations"> },
 ) {
-  const woken: Id<"org_roles">[] = [];
+  if (!role) return [];
   const sd = row.short_id ?? row._id;
-  for (const role of roles) {
-    if (!role.anchor_id) continue;
-    const id = await tellRole(ctx as any, role._id, {
-      content: `decision ${sd} on your ladder: ${row.question.slice(0, 300)}\nRead it with \`cast decide show ${sd}\`, then \`cast decide recommend ${sd} <n>\` within 5 minutes, or \`cast decide escalate ${sd}\`.`,
-      client_id: `decision:${row._id}:${role._id}`,
-      from_conversation_id: row.conversation_id ?? undefined,
-    });
-    if (id) woken.push(role._id);
-  }
-  return woken;
+  const id = await tellRole(ctx as any, role._id, {
+    content: `decision ${sd} from a session under you: ${row.question.slice(0, 300)}\nRead it with \`cast decide show ${sd}\`. It is yours to read first and sits in no person's queue: answer it if you hold the grant, or recommend an option with \`cast decide recommend ${sd} <n>\`. What it needs from someone above you, raise yourself, the way you raise anything.`,
+    client_id: `decision:${row._id}:${role._id}`,
+    from_conversation_id: row.conversation_id ?? undefined,
+  });
+  return id ? [role._id] : [];
 }
 
 // ── Answers ───────────────────────────────────────────────────────────────────
@@ -804,9 +822,7 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
 
   const existing = openRows.find((r) => r.question === args.question);
   const docId = args.doc_md ? await upsertDecisionDoc(ctx, conversation, args.question, args.doc_md, now, existing?.doc_id) : undefined;
-  const role = await roleOfConversation(ctx, conversation);
-  const ladder = await buildLadder(ctx, role, now);
-  const people = await peopleFor(ctx, conversation, ladder.firstPersonId);
+  const { role, ladder, people, hears } = await routeFor(ctx, conversation, now);
   if (existing) {
     // The re-ask lands on the open row: text, category and task move with it,
     // a --stack appends it (once), and the holder is recomputed because the
@@ -832,7 +848,7 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
       session_title: conversation.title,
       project_path: conversation.project_path,
     });
-    await syncDecisionInbox(ctx, existing._id, people, now);
+    await syncDecisionInbox(ctx, existing._id, people, now, !hears);
     const updated = await ctx.db.get(existing._id);
     if (updated) await refreshHolder(ctx, updated, now);
     return {
@@ -888,9 +904,9 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
     session_title: conversation.title,
     project_path: conversation.project_path,
   });
-  await syncDecisionInbox(ctx, id, people, now);
+  await syncDecisionInbox(ctx, id, people, now, !hears);
   if (stack) await joinStack(ctx, stack, { _id: id, stack_id: stack._id, scope_keys: scopeKeys }, now);
-  const woken = await wakeLadder(ctx, ladder.activeRoles, { _id: id, short_id, question: args.question, conversation_id: conversation._id });
+  const woken = await tellHearingRole(ctx, hears, { _id: id, short_id, question: args.question, conversation_id: conversation._id });
 
   return {
     id,
@@ -1219,7 +1235,7 @@ export const listForSession = mutation({
   },
 });
 
-// ── The race: recommend, escalate, answer ─────────────────────────────────────
+// ── The race: recommend, answer ───────────────────────────────────────────────
 
 // The role the calling session speaks as, and its hop on this decision's
 // ladder. A session with no role, or a role not on the ladder, may not act
@@ -1238,7 +1254,7 @@ async function callerHop(
   if (!conversation) return { error: "Session not found" };
   if (conversation.user_id.toString() !== auth.userId.toString()) return { error: "Unauthorized: not your session" };
   const role = await roleOfConversation(ctx, conversation);
-  if (!role) return { error: "This session speaks for no role; only a role on the ladder may recommend or escalate" };
+  if (!role) return { error: "This session speaks for no role; only a role on the ladder may recommend" };
   const hopIndex = (row.hops ?? []).findIndex((h) => h.role_id === role._id);
   if (hopIndex === -1) return { error: `${role.name} is not on this decision's ladder` };
   return { role, hopIndex };
@@ -1282,42 +1298,6 @@ export const recommend = mutation({
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) return { error: "Unauthorized" };
     return recommendCore(ctx, auth, args);
-  },
-});
-
-// A role passes the question upward without a recommendation. The hop keeps
-// the note so the card shows the role looked and declined to pick.
-export async function escalateCore(
-  ctx: Ctx,
-  auth: { userId: Id<"users"> },
-  args: { decision_id: string; session_id?: string; note?: string },
-): Promise<any> {
-  const row = await findDecision(ctx, args.decision_id);
-  if (!row) return { error: "Decision not found" };
-  if (row.status !== "pending") return { error: `Decision is already ${row.status}`, ...resolvedSummary(row) };
-  const found = await callerHop(ctx, auth, row, args.session_id);
-  if ("error" in found) return found;
-  const now = Date.now();
-  const hops = [...(row.hops ?? [])];
-  hops[found.hopIndex] = { role_id: found.role._id, note: `escalated${args.note ? `: ${args.note}` : ""}`, at: now };
-  // A role that escalates gives up its hold: the next eligible role on the
-  // ladder (or the stack's delegate) holds it, else the people.
-  await ctx.db.patch(row._id, { hops, updated_at: now });
-  await refreshHolder(ctx, { ...row, hops }, now, { excludeRoleIds: [found.role._id] });
-  return { id: row._id, short_id: row.short_id, role: { id: found.role._id, name: found.role.name }, escalated: true };
-}
-
-export const escalate = mutation({
-  args: {
-    api_token: v.string(),
-    decision_id: v.string(),
-    session_id: v.optional(v.string()),
-    note: v.optional(v.string()),
-  },
-  handler: async (ctx, args) => {
-    const auth = await verifyApiToken(ctx, args.api_token);
-    if (!auth) return { error: "Unauthorized" };
-    return escalateCore(ctx, auth, args);
   },
 });
 

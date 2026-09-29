@@ -59,6 +59,8 @@ export const cloudSeedArg = v.object({
   laptop_root: v.optional(v.string()),
   device_id: v.optional(v.string()),
   reason: v.optional(v.string()),
+  /** The laptop tree the session started from: what a later pull merges from. */
+  tree: v.optional(v.string()),
 });
 
 /**

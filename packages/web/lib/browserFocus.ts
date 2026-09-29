@@ -1,7 +1,8 @@
 // Focus the REAL driven Chrome tab behind a `cast browser` command row, and
 // bring it back when it is gone.
 //
-// The daemon's loopback hook server exposes POST /browser/focus?tab=<id> and
+// The daemon's loopback hook server exposes POST /browser/focus?tab=<id> (or
+// ?session_uuid=<uuid> for the tab that session drives) and
 // POST /browser/reopen (packages/cli/src/browser/focusHttp.ts). We reach it
 // through the same discovery the integrated terminal uses — getTerminalEndpoint
 // — so this works exactly when the viewer is on the machine whose daemon drove
@@ -124,10 +125,19 @@ function failureOf(sent: Sent | "no-daemon"): { reason: BrowserTabFailure; detai
   return { reason: "unreachable" };
 }
 
-/** Ask the daemon to raise the tab. Never throws. */
-export async function focusBrowserTab(convex: ConvexReactClient, tabId: string, deps?: Partial<FocusTabDeps>): Promise<FocusOutcome> {
+/**
+ * Ask the daemon to raise the tab: the one a row named, or, when its output
+ * named none, the one the session drives now (the tab "watch live" shows).
+ * Never throws.
+ */
+export async function focusBrowserTab(convex: ConvexReactClient, target: string | BrowserSessionRef, deps?: Partial<FocusTabDeps>): Promise<FocusOutcome> {
   const d = realDeps(convex, deps);
-  const sent = await sendToDaemon(d, `/browser/focus?tab=${encodeURIComponent(tabId)}`, { method: "POST" }, FOCUS_REQUEST_TIMEOUT_MS);
+  const query = new URLSearchParams(
+    typeof target === "string"
+      ? { tab: target }
+      : { ...(target.sessionUuid ? { session_uuid: target.sessionUuid } : {}), ...(target.tmuxSession ? { tmux_session: target.tmuxSession } : {}) },
+  );
+  const sent = await sendToDaemon(d, `/browser/focus?${query}`, { method: "POST" }, FOCUS_REQUEST_TIMEOUT_MS);
   if (sent !== "no-daemon" && !("transport" in sent) && sent.res.ok) return { ok: true };
   return { ok: false, ...failureOf(sent) };
 }

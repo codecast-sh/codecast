@@ -2,8 +2,12 @@
 // as pure functions over ids so the mutation, the feed and the tests share one
 // reading of "inside" and "overlapping".
 //
-// A scope is a set of projects and a set of plans. Empty sets mean the whole
-// workspace. A plan belongs to a project (`plans.project_id`), so a plan is
+// A scope is a set of projects and a set of plans. Scope is opt in
+// (org-staffing.md S26): empty sets name no area, and a role with no area owns
+// no work. Only the Chief of Staff with no scope stands for the whole
+// workspace, and that rule lives in shared/contracts/orgLead.ts
+// (isWholeWorkspaceRole), never here: these functions read ids alone and say
+// nothing about who owns what. A plan belongs to a project (`plans.project_id`), so a plan is
 // inside a scope that names its project even when the plan itself is not
 // listed; `planProjectOf` carries that edge for every plan the caller touches.
 
@@ -15,9 +19,12 @@ export type PlanProjectOf = Map<string, string | null>;
 
 export const EMPTY_SCOPE: Scope = { project_ids: [], plan_ids: [] };
 
-export function isWholeWorkspace(scope: ScopeIds | Scope): boolean {
+/** The scope names no projects and no plans. */
+export function isScopeless(scope: ScopeIds | Scope): boolean {
   return scope.project_ids.length === 0 && scope.plan_ids.length === 0;
 }
+// The old name, which read as a claim on the workspace. It stays only until
+// orgInit.ts and org.ts import the new one.
 
 const uniq = <T>(ids: T[]): T[] => Array.from(new Set(ids.map((x) => String(x)))) as unknown as T[];
 
@@ -39,10 +46,11 @@ function planInside(plan: string, scope: ScopeIds, planProjectOf: PlanProjectOf)
 }
 
 // Containment: every project and plan of `child` sits inside `parent`. A
-// whole-workspace parent contains everything. Returns what falls outside so
-// the refusal can name it.
+// parent that names no area sets no limit on a child, which is not a claim
+// that it owns the child's work. Returns what falls outside so the refusal
+// can name it.
 export function scopeOutside(parent: ScopeIds, child: ScopeIds, planProjectOf: PlanProjectOf): ScopeIds {
-  if (isWholeWorkspace(parent)) return { project_ids: [], plan_ids: [] };
+  if (isScopeless(parent)) return { project_ids: [], plan_ids: [] };
   return {
     project_ids: child.project_ids.filter((p) => !parent.project_ids.includes(p)),
     plan_ids: child.plan_ids.filter((p) => !planInside(p, parent, planProjectOf)),
@@ -50,10 +58,10 @@ export function scopeOutside(parent: ScopeIds, child: ScopeIds, planProjectOf: P
 }
 
 // Overlap: what two scopes both watch. Shared projects, shared plans, and a
-// plan one side lists whose project the other side owns. A whole-workspace
-// scope overlaps with nothing in particular (it is the root's view).
+// plan one side lists whose project the other side names. A scope that names
+// no area overlaps with nothing.
 export function scopeOverlap(a: ScopeIds, b: ScopeIds, planProjectOf: PlanProjectOf): ScopeIds {
-  if (isWholeWorkspace(a) || isWholeWorkspace(b)) return { project_ids: [], plan_ids: [] };
+  if (isScopeless(a) || isScopeless(b)) return { project_ids: [], plan_ids: [] };
   const project_ids = a.project_ids.filter((p) => b.project_ids.includes(p));
   const plans = new Set<string>();
   for (const p of a.plan_ids) if (planInside(p, b, planProjectOf)) plans.add(p);

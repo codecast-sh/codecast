@@ -1019,24 +1019,29 @@ export const clearProposalQueueCards = internalMutation({
 });
 
 /** An org reset (org-staffing.md S27): every proposal of the workspace leaves
- *  every list, and an open one is withdrawn first so no card stays behind. */
+ *  every list, and an open one is withdrawn first so no card stays behind.
+ *  Called by orgRoles.performResetOrg, which owns the gate. `dry` counts what
+ *  would go and writes nothing. */
+export async function performArchiveAll(ctx: { db: any }, boundary: { team_id?: Id<"teams">; scope_user_id?: Id<"users"> }, opts: { dry?: boolean } = {}): Promise<{ archived: number }> {
+  const now = Date.now();
+  const rows: any[] = boundary.team_id
+    ? await ctx.db.query("org_proposals").withIndex("by_team", (q: any) => q.eq("team_id", boundary.team_id)).collect()
+    : await ctx.db.query("org_proposals").withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", boundary.scope_user_id)).collect();
+  let archived = 0;
+  for (const p of rows) {
+    if (p.archived_at) continue;
+    archived++;
+    if (opts.dry) continue;
+    if (p.status === "open") {
+      await ctx.db.patch(p._id, { status: "withdrawn", resolved_at: now, updated_at: now });
+      await clearDecision(ctx as any, p, now);
+    }
+    await ctx.db.patch(p._id, { archived_at: now });
+  }
+  return { archived };
+}
+
 export const archiveAll = internalMutation({
   args: { team_id: v.optional(v.id("teams")), scope_user_id: v.optional(v.id("users")) },
-  handler: async (ctx, args) => {
-    const now = Date.now();
-    const rows: any[] = args.team_id
-      ? await ctx.db.query("org_proposals").withIndex("by_team", (q: any) => q.eq("team_id", args.team_id)).collect()
-      : await ctx.db.query("org_proposals").withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", args.scope_user_id)).collect();
-    let archived = 0;
-    for (const p of rows) {
-      if (p.archived_at) continue;
-      if (p.status === "open") {
-        await ctx.db.patch(p._id, { status: "withdrawn", resolved_at: now, updated_at: now });
-        await clearDecision(ctx as any, p, now);
-      }
-      await ctx.db.patch(p._id, { archived_at: now });
-      archived++;
-    }
-    return { archived };
-  },
+  handler: async (ctx, args) => performArchiveAll(ctx, args),
 });

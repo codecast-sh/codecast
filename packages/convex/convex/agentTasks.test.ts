@@ -10,10 +10,11 @@ import { applyTaskUpdate, cancelTasksBoundToConversation, reactivateTasksCancele
 // withIndex(...).collect(), patch(id, fields) and get(id). The home
 // conversation is a row too, so the armed_trigger_kind stamp every lifecycle
 // transition writes (refreshArmedTriggerKind) is observable.
-function fakeDb(rows: any[]) {
+function fakeDb(rows: any[], indexes: string[] = []) {
   const db = {
     query: (_table: string) => ({
-      withIndex: (_name: string, cb: (q: any) => any) => {
+      withIndex: (name: string, cb: (q: any) => any) => {
+        indexes.push(name);
         const eqs: Array<[string, any]> = [];
         const q = { eq(field: string, val: any) { eqs.push([field, val]); return q; } };
         cb(q);
@@ -110,6 +111,26 @@ describe("reactivateTasksCanceledOnKill", () => {
     expect(loop.status).toBe("scheduled");
 
     expect(await reactivateTasksCanceledOnKill(ctx as any, USER as any, CONV as any)).toBe(0);
+  });
+});
+
+// A kill and its undo run these once per session in the tree. Scanning the
+// runner's tasks by status read their whole trigger history each time: undoing
+// the kill of a session with seven subagents read 19 MB in one mutation.
+describe("kill and restore read only the conversation's own tasks", () => {
+  test("both go through the originating conversation index and skip another runner's task", async () => {
+    const indexes: string[] = [];
+    const mine = taskRow({ _id: "mine" });
+    const teammates = taskRow({ _id: "teammates", user_id: "user2" });
+    const ctx = fakeDb([mine, teammates, home()], indexes);
+
+    expect(await cancelTasksBoundToConversation(ctx as any, USER as any, CONV as any)).toBe(1);
+    expect(await reactivateTasksCanceledOnKill(ctx as any, USER as any, CONV as any)).toBe(1);
+
+    expect(new Set(indexes)).toEqual(new Set(["by_originating_conversation"]));
+    expect(mine.status).toBe("scheduled");
+    expect(teammates.status).toBe("scheduled");
+    expect((teammates as any).canceled_on_kill_at).toBeUndefined();
   });
 });
 

@@ -14,7 +14,7 @@ import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
 import { Archive, ArrowLeft, MoreHorizontal, Network, PanelRightClose, PanelRightOpen, Pause, Play } from "lucide-react";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../../ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../ui/dropdown-menu";
 import { useInboxStore, useTrackedStore, type PlanItem, type ProjectItem } from "../../../store/inboxStore";
 import { useSyncOrgTree } from "../../../hooks/useSyncOrgTree";
 import { useSyncProjects } from "../../../hooks/useSyncProjects";
@@ -40,7 +40,10 @@ import { parentName } from "../orgMeta";
 import type { OrgParentRef, OrgRole, OrgTree } from "../orgTypes";
 import { useScopeIds } from "../../../hooks/useScopeIds";
 import { ScopePanel } from "./ScopePanel";
-import { scopeDefaultTab, scopeTabFromParam, type ScopeTabKey } from "../../../lib/scopeTabs";
+import { scopeDefaultTab, scopeTabFromParam, scopeWorkViewFromParam, type ScopeTabKey } from "../../../lib/scopeTabs";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../ui/dialog";
+import { RetireRoleConfirm } from "../RetireRoleConfirm";
+import { CHIEF_OF_STAFF_HANDLE } from "../orgStaffingTypes";
 import { ConversationWithPanel } from "./ConversationWithPanel";
 import { usePanelLayout } from "../../../hooks/usePanelLayout";
 import { briefFirstLine } from "./scopeTypes";
@@ -82,8 +85,9 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
   }, [role, tree, projects]);
   const { data: summary, error: summaryError, missing: summaryMissing } = useScopeSummary(scopeRef ?? "skip");
   const { data: brief, error: briefError, missing: briefMissing } = useRoleBrief(role?._id ?? null);
-  const summaryProblem = queryProblem(summaryError, summaryMissing, "The board counts");
-  const briefProblem = queryProblem(briefError, briefMissing, "The brief");
+  // A read this server does not answer yet is nothing a person can act on: it shows as empty.
+  const summaryProblem = summaryMissing ? null : queryProblem(summaryError, false, "The counts");
+  const briefProblem = briefMissing ? null : queryProblem(briefError, false, "The role's notes");
 
   // -------- the panel's tab in the URL, like the project page
   const [paneTab, setPaneTab] = useState<ScopeTabKey | null>(null);
@@ -93,7 +97,7 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
   const setTab = useCallback((next: ScopeTabKey) => {
     if (inPane) { setPaneTab(next === scopeDefaultTab(!!role) ? null : next); return; }
     const params = new URLSearchParams(searchParams.toString());
-    // The tab a scope opens on is its bare URL: a role's Scope, the root's feed.
+    // The tab a scope opens on is its bare URL: a role's Overview, the root's activity.
     if (next === scopeDefaultTab(!!role)) params.delete("tab"); else params.set("tab", next);
     const qs = params.toString();
     router.replace(qs ? `${base}?${qs}` : base);
@@ -106,7 +110,6 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
   // A page too narrow for the panel's column (a split pane) opens on the
   // conversation; the board would otherwise cover it as an overlay.
   useWatchEffect(() => { if (panelLayout === "overlay" && !tabParam) setPanelOpen(false); }, [panelLayout]);
-  const openTab = useCallback((next: ScopeTabKey) => { setTab(next); setPanelOpen(true); }, [setTab]);
 
   // -------- permissions: admins and the host reshape; the parent also edits the brief
   const me = tree?.people.find((p) => p.is_me) ?? (meId ? tree?.people.find((p) => p.user_id === meId) : undefined);
@@ -118,9 +121,9 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
   const store = useInboxStore.getState;
   const update = useCallback((fields: Parameters<ReturnType<typeof store>["updateOrgRole"]>[1], opts?: { leave_sessions?: boolean }) => { if (role) store().updateOrgRole(role._id, fields, opts); }, [role, store]);
   const reparent = useCallback((target: OrgParentRef) => { if (role) store().reparentOrgRole(role._id, target); }, [role, store]);
-  // The header's Retire lands on Settings with the confirmation already open.
-  const [retireArmed, setRetireArmed] = useState(false);
-  useWatchEffect(() => { if (tab !== "settings") setRetireArmed(false); }, [tab]);
+  // Pause and retire live in the header's menu and nowhere else; retire asks
+  // first, in one dialog.
+  const [retireOpen, setRetireOpen] = useState(false);
   // S16: the chief's confirm says what becomes of its standing agent; keeping
   // it restores its old title, so the person is never left without the
   // assistant they had.
@@ -139,9 +142,9 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
     setProvisioning(true);
     try {
       await provisionMutation({ role_id: role._id });
-      toast.success(`@${role.handle} is coming online`);
+      toast.success(`${role.name} is starting`);
     } catch (e: any) {
-      toast.error(e?.message?.replace(/^\[Request ID: [^\]]+\] Server Error\s*/i, "").split("\n")[0] ?? "Could not bring the role online");
+      toast.error(e?.message?.replace(/^\[Request ID: [^\]]+\] Server Error\s*/i, "").split("\n")[0] ?? "Could not start the role");
       setProvisioning(false);
     }
   }, [role, provisionMutation]);
@@ -213,7 +216,7 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
   if (!tree) {
     return (
       <div className="h-full flex items-center justify-center" style={{ background: "var(--sol-bg)", color: "var(--sol-text-dim)" }}>
-        <div className="text-[12.5px]">{ready ? "No org tree for this workspace." : "Loading the org…"}</div>
+        <div className="text-[12.5px]">{ready ? "This workspace has no org yet." : "Loading the org…"}</div>
       </div>
     );
   }
@@ -221,7 +224,7 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
     return (
       <div className="h-full flex flex-col items-center justify-center gap-3 px-6 text-center" style={{ background: "var(--sol-bg)" }}>
         <Network className="w-8 h-8" style={{ color: "var(--sol-text-dim)" }} />
-        <p className="text-[14px]" style={{ color: "var(--sol-text)" }}>No role <span style={{ fontFamily: "var(--font-mono)" }}>{id}</span> in this workspace.</p>
+        <p className="text-[14px]" style={{ color: "var(--sol-text)" }}>That role is not in this workspace.</p>
         <p className="text-[12px]" style={{ color: "var(--sol-text-muted)" }}>It may be retired, or belong to another team. Switch the workspace or go back to the org.</p>
         <Link href="/org" className="mt-1 inline-flex items-center gap-1.5 h-8 px-3 rounded-lg text-[12.5px] font-medium" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }}><ArrowLeft className="w-3.5 h-3.5" /> Org</Link>
       </div>
@@ -239,6 +242,7 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
       role={role}
       tab={tab}
       onTab={setTab}
+      initialWorkView={scopeWorkViewFromParam(tabParam)}
       onClose={() => setPanelOpen(false)}
       layout={panelLayout}
       scopeRef={scopeRef}
@@ -253,12 +257,10 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
       model={model}
       standingId={standingId ?? null}
       counters={counters}
-      armRetire={retireArmed}
       now={now}
       backHref={backHref}
       onUpdate={update}
       onReparent={reparent}
-      onRetire={retire}
     />
   );
 
@@ -298,12 +300,11 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
             </span>
           )}
           {paused && <span className="shrink-0 whitespace-nowrap text-[10px] px-1.5 h-[18px] inline-flex items-center rounded-md" style={{ background: "color-mix(in srgb, var(--sol-yellow) 14%, transparent)", color: "var(--sol-yellow)" }}>paused</span>}
-          {/* The state line: the seat's pinned line, else the brief's first line.
-              Trust, host, model and the day's counters live in the panel. */}
+          {/* The state line: the role's pinned line, else the first line of its notes. */}
           {headLine ? (
             <p className={cn("min-w-0 flex-1 truncate", phone ? "text-[12px]" : "text-[12.5px]")} style={{ color: "var(--sol-text-muted)" }} title={stripeLine ?? undefined} data-scope-stripe>{headLine}</p>
           ) : (
-            <p className={cn("min-w-0 flex-1 truncate italic", phone ? "text-[12px]" : "text-[12.5px]")} style={{ color: "var(--sol-text-dim)" }} data-scope-stripe>{role ? (noStanding ? "Not online yet." : "") : "Everything in the workspace, as one scope."}</p>
+            <p className={cn("min-w-0 flex-1 truncate italic", phone ? "text-[12px]" : "text-[12.5px]")} style={{ color: "var(--sol-text-dim)" }} data-scope-stripe>{role ? (noStanding ? "Not started yet." : "") : "Everything in the workspace."}</p>
           )}
           {role && !phone && (
             <ShortcutTooltip label={`Reports to ${parentName(tree, role.reports_to)}`} side="bottom">
@@ -318,26 +319,39 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
           {role && canEdit && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button type="button" className={HEAD_ICON} style={{ color: "var(--sol-text-muted)" }} aria-label="Seat actions" data-scope-actions>
+                <button type="button" className={HEAD_ICON} style={{ color: "var(--sol-text-muted)" }} aria-label="Pause or retire this role" data-scope-actions>
                   <MoreHorizontal className="w-4 h-4" />
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="min-w-[200px]">
                 <DropdownMenuItem onSelect={() => update({ status: paused ? "active" : "paused" })} data-scope-action="pause">
                   {paused ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
-                  <span>{paused ? "Resume" : "Pause"}</span>
+                  <span>{paused ? "Resume role" : "Pause role"}</span>
                 </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={() => { setRetireArmed(true); openTab("settings"); }} style={{ color: "var(--sol-red)" }} data-scope-action="retire">
+                <DropdownMenuItem onSelect={() => setRetireOpen(true)} style={{ color: "var(--sol-red)" }} data-scope-action="retire">
                   <Archive className="w-3.5 h-3.5" />
-                  <span>Retire…</span>
+                  <span>Retire role…</span>
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           )}
-          <PanelToggle open={panelOpen} onClick={() => setPanelOpen((v) => !v)} />
+          <PanelToggle open={panelOpen} root={!role} onClick={() => setPanelOpen((v) => !v)} />
         </div>
       </header>
+
+      {role && (
+        <Dialog open={retireOpen} onOpenChange={setRetireOpen}>
+          <DialogContent className="max-w-[440px] grid-cols-1" style={{ background: "var(--sol-card)", borderColor: "color-mix(in srgb, var(--sol-red) 35%, transparent)" }} data-retire-dialog>
+            <DialogHeader>
+              <DialogTitle className="text-[17px]" style={{ fontFamily: "var(--font-serif)" }}>Retire {role.name}?</DialogTitle>
+              <DialogDescription className="text-[12.5px] leading-relaxed" style={{ color: "var(--sol-text-muted)" }}>
+                {retireSentence(role, parentName(tree, role.reports_to))}
+              </DialogDescription>
+            </DialogHeader>
+            <RetireRoleConfirm role={role} onRetire={(choice) => { setRetireOpen(false); retire(choice); }} onCancel={() => setRetireOpen(false)} />
+          </DialogContent>
+        </Dialog>
+      )}
 
       {/* body: the conversation, the panel beside it */}
       <ConversationWithPanel open={panelOpen} layout={panelLayout} panel={panelNode} conversation={
@@ -366,23 +380,36 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
   );
 }
 
-/** The agent's opening line (F4.1): what this area is, said from the rows,
- *  not from the transcript. The header already names the seat, its state and
- *  its parent. */
+/** What a role looks after, in words (org-staffing.md S26): its projects and
+ *  plans; the whole workspace for the Chief of Staff while it names none; and
+ *  for any other role with none, no area of its own. */
+function areaOf(role: OrgRole | null): { names: string[]; whole: boolean } {
+  const names = role ? [...role.scope_names.projects.map((p) => p.title), ...role.scope_names.plans.map((p) => p.title)] : [];
+  return { names, whole: names.length === 0 && (!role || role.handle === CHIEF_OF_STAFF_HANDLE) };
+}
+
+/** What retiring does, said once, where the person confirms it. */
+function retireSentence(role: OrgRole, parent: string): string {
+  const sessions = role.total === 0 ? "" : `Its ${role.total === 1 ? "session goes" : `${role.total} sessions go`} to the role that covers ${role.total === 1 ? "its" : "their"} area, or back to ${role.total === 1 ? "its owner" : "their owners"}. `;
+  return `${sessions}Roles under it report to ${parent}. Its triggers are cancelled and its thread is kept.`;
+}
+
+/** The role's opening line (F4.1): what it looks after, said from the rows,
+ *  not from the transcript. The header already names the role, its state and
+ *  who it reports to. */
 export function ScopeLead({ role }: { role: OrgRole | null }) {
-  const owns = role ? [...role.scope_names.projects.map((p) => p.title), ...role.scope_names.plans.map((p) => p.title)] : [];
-  const area = owns.length > 0 ? owns.join(", ") : "the whole workspace";
+  const { names, whole } = areaOf(role);
   return (
     <SeatLead data-scope-lead>
-      I look after {area}. Ask me for anything here: I answer, or start a session for the work and tell you which.
+      {names.length > 0 ? `I look after ${names.join(", ")}.` : whole ? "I look after the whole workspace." : "I have no area of my own: I run my check and answer what I am asked."} Ask me for anything here: I answer, or start a session for the work and tell you which.
     </SeatLead>
   );
 }
 
-/** The header's control for the board (F4.1). */
-function PanelToggle({ open, onClick }: { open: boolean; onClick: () => void }) {
+/** The header's control for the panel beside the conversation (F4.1). */
+function PanelToggle({ open, root, onClick }: { open: boolean; root: boolean; onClick: () => void }) {
   const Icon = open ? PanelRightClose : PanelRightOpen;
-  const tip = open ? "Close the board" : "Open the board: feed, tasks, plans, pages, sessions, decisions";
+  const tip = open ? "Close the panel" : root ? "Open the panel: activity, work, sessions, decisions" : "Open the panel: overview, work, sessions, decisions, triggers, settings";
   return (
     <ShortcutTooltip label={tip} side="bottom">
       <button
@@ -402,35 +429,35 @@ function PanelToggle({ open, onClick }: { open: boolean; onClick: () => void }) 
 
 const HEAD_ICON = "shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-md transition-colors hover:bg-sol-bg-highlight/70";
 
-/** A seat with no standing agent yet (F4.1): say what this area is, and
+/** A role that has not started yet (F4.1): say what it looks after, and
  *  offer the one gesture that makes sense. An empty composer would go nowhere. */
 function ScopeUnseated({ role, tree, canEdit, hostName, busy, onProvision, onOpenBoard }: { role: OrgRole; tree: OrgTree; canEdit: boolean; hostName: string; busy: boolean; onProvision: () => void; onOpenBoard: () => void }) {
-  const owns = [...role.scope_names.projects.map((p) => p.title), ...role.scope_names.plans.map((p) => p.title)];
+  const { names: owns, whole } = areaOf(role);
   const charter = (role.charter ?? "").split("\n").map((l) => l.trim()).find(Boolean);
   const retired = role.status === "retired";
   return (
     <div className="flex-1 min-h-0 flex items-center justify-center px-6" data-scope-unseated={role.short_id}>
       <div className="max-w-md w-full text-center">
         <RoleFace role={role} size={56} className="mx-auto mb-4" />
-        <h2 className="text-[17px] font-semibold tracking-tight" style={{ fontFamily: "var(--font-serif)" }}>{role.name} is not online yet</h2>
+        <h2 className="text-[17px] font-semibold tracking-tight" style={{ fontFamily: "var(--font-serif)" }}>{retired ? `${role.name} is retired` : `${role.name} has not started yet`}</h2>
         <p className="mt-2 text-[13px] leading-relaxed" style={{ color: "var(--sol-text-muted)" }}>
-          {charter ? charter : owns.length > 0 ? `This seat owns ${owns.join(", ")}.` : "This seat owns the whole workspace."}
-          {charter && owns.length > 0 && <> It covers {owns.join(", ")}.</>}
+          {charter ? charter : owns.length > 0 ? `This role looks after ${owns.join(", ")}.` : whole ? "This role looks after the whole workspace." : "This role has no area of its own: it runs its check and answers what it is asked."}
+          {charter && owns.length > 0 && <> It looks after {owns.join(", ")}.</>}
           {" "}It reports to <span style={{ color: "var(--sol-text)" }}>{parentName(tree, role.reports_to)}</span>.
         </p>
         {retired ? (
-          <p className="mt-3 text-[12.5px]" style={{ color: "var(--sol-text-dim)" }}>This seat is retired. Its board is still here.</p>
+          <p className="mt-3 text-[12.5px]" style={{ color: "var(--sol-text-dim)" }}>Its work is still in the panel beside this page.</p>
         ) : canEdit ? (
           <>
-            <p className="mt-3 text-[12.5px]" style={{ color: "var(--sol-text-dim)" }}>Bring it online and this page becomes a conversation with it: ask for something here and it answers or starts a session for the work.</p>
+            <p className="mt-3 text-[12.5px]" style={{ color: "var(--sol-text-dim)" }}>Start it and this page becomes a conversation with it: ask for something here and it answers or starts a session for the work.</p>
             <button type="button" onClick={onProvision} disabled={busy} className="mt-4 h-9 px-4 rounded-lg text-[13px] font-semibold disabled:opacity-60 hover:brightness-110 transition-colors" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }} data-scope-provision>
-              {busy ? "Bringing it online…" : `Bring @${role.handle} online`}
+              {busy ? "Starting…" : `Start ${role.name}`}
             </button>
           </>
         ) : (
-          <p className="mt-3 text-[12.5px]" style={{ color: "var(--sol-text-dim)" }} data-scope-ask-host>Ask {hostName} to bring it online; until then the board beside this page is what there is.</p>
+          <p className="mt-3 text-[12.5px]" style={{ color: "var(--sol-text-dim)" }} data-scope-ask-host>Ask {hostName} to start it; until then its work is in the panel beside this page.</p>
         )}
-        <button type="button" onClick={onOpenBoard} className="mt-3 text-[12px] underline-offset-2 hover:underline" style={{ color: "var(--sol-violet)" }}>Open the board</button>
+        <button type="button" onClick={onOpenBoard} className="mt-3 text-[12px] underline-offset-2 hover:underline" style={{ color: "var(--sol-violet)" }}>Open the panel</button>
       </div>
     </div>
   );

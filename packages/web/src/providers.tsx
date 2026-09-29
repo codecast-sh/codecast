@@ -2,6 +2,7 @@ import { ConvexReactClient } from "convex/react";
 import { recoveringWebSocket } from "@codecast/shared/network";
 import { ReactNode, useRef } from "react";
 import { toast } from "sonner";
+import { captureException } from "@sentry/react";
 import { useInboxStore } from "../store/inboxStore";
 import { subscribeGestures } from "../store/gestureBridge";
 import { ThemeProvider } from "@/components/ThemeProvider";
@@ -92,7 +93,11 @@ function DispatchFailureToast() {
   useWatchEffect(() => {
     if (!failure || failure.at === lastShownAt.current) return;
     lastShownAt.current = failure.at;
-    toast.error(describeDispatchFailure(failure));
+    const text = describeDispatchFailure(failure);
+    toast.error(text);
+    // The server's reason reaches no log it can be read back from later, so
+    // record it. The action name only: args can carry what the person typed.
+    captureException(new Error(text), { tags: { source: "dispatch-failure", dispatch_action: failure.action } });
   }, [failure]);
   return null;
 }

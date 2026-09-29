@@ -31,13 +31,13 @@ function slugify(s: string): string {
  *  only while the person has not typed their own. */
 function proposeCharter(name: string, projects: Array<{ title: string; description?: string }>, summary: { plans: Array<{ title: string }>; tasks: { open: number; total: number }; sessions: { total: number } } | null | undefined): string {
   const who = name.trim() || "This role";
-  if (projects.length === 0) return `${who} owns the whole workspace: it keeps its plans and tasks moving, reports what changed and why, and raises what needs a person with a recommendation.`;
+  if (projects.length === 0) return `${who} has no area of its own: it runs its check, answers what it is asked, and raises what needs a person with a recommendation.`;
   const named = projects.map((p) => (p.description?.trim() ? `${p.title} (${p.description.trim().split(/\.\s|\n/)[0].slice(0, 120)})` : p.title));
   const owns = named.length === 1 ? named[0] : `${named.slice(0, -1).join(", ")} and ${named[named.length - 1]}`;
   const activity = summary
     ? ` Right now that is ${summary.tasks.open} open of ${summary.tasks.total} tasks across ${summary.plans.length} plan${summary.plans.length === 1 ? "" : "s"}${summary.plans[0] ? `, the newest being ${summary.plans[0].title}` : ""}, with ${summary.sessions.total} recent session${summary.sessions.total === 1 ? "" : "s"}.`
     : "";
-  return `${who} owns ${owns}.${activity} It keeps the scope's plans and tasks moving, reports what changed and why, and raises what needs a person with a recommendation.`;
+  return `${who} owns ${owns}.${activity} It keeps the plans and tasks in its area moving, reports what changed and why, and raises what needs a person with a recommendation.`;
 }
 
 /** Prefill for "Edit" on a proposed role (org-staffing.md S5): the analyzer's
@@ -173,7 +173,7 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
   };
   const toggle = (list: string[], set: (v: string[]) => void, id: string) => set(list.includes(id) ? list.filter((x) => x !== id) : [...list, id]);
   const scopeHint = wholeWorkspace
-    ? "nothing picked = the whole workspace"
+    ? "optional: with nothing picked it has no area of its own"
     : summary
       ? `reads ${summary.plans.length} plan${summary.plans.length === 1 ? "" : "s"}, ${summary.tasks.total} task${summary.tasks.total === 1 ? "" : "s"}, ${summary.sessions.total} session${summary.sessions.total === 1 ? "" : "s"}${cannotRead ? ` · ${cannotRead} it cannot` : ""}`
       : `${projectIds.length} project${projectIds.length === 1 ? "" : "s"}, ${planIds.length} plan${planIds.length === 1 ? "" : "s"} · reading…`;
@@ -183,7 +183,7 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
       <DialogContent className="max-w-[520px] grid-cols-1 max-h-[92vh] overflow-y-auto" style={{ background: "var(--sol-card)", borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)" }}>
         <DialogHeader>
           <DialogTitle className="text-[17px]" style={{ fontFamily: "var(--font-serif)" }}>{title}</DialogTitle>
-          <DialogDescription className="text-[12px]" style={{ color: "var(--sol-text-muted)" }}>{seat ? seatSentence(seat) : mode === "manual" ? "A standing seat: a scope it reads, a person it answers to, a charter it runs from. It starts reading and reporting the moment it exists." : "Bring a complete job template into one project, with your approval before setup."}</DialogDescription>
+          <DialogDescription className="text-[12px]" style={{ color: "var(--sol-text-muted)" }}>{seat ? seatSentence(seat) : mode === "manual" ? "A role has an area it looks after, someone it reports to, and a charter that says what it is for. It starts as soon as you create it." : "Hire a ready-made role for one project. Nothing is set up until you approve it."}</DialogDescription>
         </DialogHeader>
         <div className={seat ? "hidden" : "grid grid-cols-2 gap-1 rounded-lg bg-sol-bg-alt p-1"} role="group" aria-label="Role setup">
           {([["manual", "Write a role"], ["template", "From a template"]] as const).map(([value, label]) => (
@@ -226,17 +226,17 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
             )}
           </Field>
 
-          <Field label="Scope" hint={scopeHint}>
+          <Field label="Area" hint={scopeHint}>
             <div className="max-h-[132px] overflow-y-auto rounded-lg border p-1" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)" }}>
               {projects.length === 0 && plans.length === 0 && <p className="px-2 py-1.5 text-[11.5px]" style={{ color: "var(--sol-text-dim)" }}>No projects or plans in this workspace yet.</p>}
               {projects.map((p) => <ScopeOption key={p._id} checked={projectIds.includes(p._id)} onToggle={() => toggle(projectIds, setProjectIds, p._id)} tone="blue" label={p.title} sub="project" />)}
-              {plans.map((p) => <ScopeOption key={p._id} checked={planIds.includes(p._id)} onToggle={() => toggle(planIds, setPlanIds, p._id)} tone="magenta" label={p.title} sub={p.short_id} />)}
+              {plans.map((p) => <ScopeOption key={p._id} checked={planIds.includes(p._id)} onToggle={() => toggle(planIds, setPlanIds, p._id)} tone="magenta" label={p.title} sub="plan" />)}
             </div>
             {takeover && <TakeoverEdit className="mt-1.5" phrase={takeover.phrase} leave={leaveSessions} onLeave={setLeaveSessions} />}
           </Field>
 
           <div className="grid sm:grid-cols-2 gap-3">
-            <Field label="Responsible person" hint="who it reports to">
+            <Field label="Reports to" hint="a person or another role">
               <SelectBox value={reportsTo} onChange={(e) => setReportsTo(e.target.value)} className="text-[13px]">
                 <optgroup label="People">
                   {tree.people.map((p) => <option key={p.user_id} value={parentNodeId({ kind: "user", user_id: p.user_id })}>{p.name}{p.is_me ? " (you)" : ""}</option>)}
@@ -248,21 +248,21 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
                 )}
               </SelectBox>
             </Field>
-            <Field label="Host and payer" hint="runs on your machine and account">
+            <Field label="Runs on" hint="your machine and your account">
               <div className="h-9 px-2.5 rounded-lg border inline-flex items-center text-[13px]" style={{ ...INPUT_STYLE, color: "var(--sol-text-muted)" }}>{me?.name ?? "you"}</div>
             </Field>
           </div>
 
-          <Field label="Charter" hint={charterTouched ? "edited" : "proposed from the scope; edit freely"}>
+          <Field label="Charter" hint={charterTouched ? "edited" : "written from its area; edit freely"}>
             <textarea value={charter} onChange={(e) => { setCharterTouched(true); setCharter(e.target.value); }} rows={4} className={INPUT} style={{ ...INPUT_STYLE, height: "auto", padding: "8px 10px", lineHeight: 1.45 }} />
             {charterTouched && charter !== proposed && (
               <button type="button" onClick={() => { setCharterTouched(false); setCharter(proposed); }} className="self-start text-[10.5px] underline-offset-2 hover:underline" style={{ color: "var(--sol-text-dim)" }}>Use the proposed text</button>
             )}
           </Field>
 
-          <Field label="Tenure" hint={tenureKind === "standing" ? "an area that outlives any plan" : "a bounded effort with an end"}>
+          <Field label="How long" hint={tenureKind === "standing" ? "it stays until you retire it" : "it ends when a plan, a project or a date does"}>
             <div className="grid grid-cols-2 gap-1 rounded-lg bg-sol-bg-alt p-1">
-              {([["standing", "Standing"], ["program", "Program"]] as const).map(([value, label]) => (
+              {([["standing", "Ongoing"], ["program", "Until something ends"]] as const).map(([value, label]) => (
                 <button key={value} type="button" aria-pressed={tenureKind === value} onClick={() => setTenureKind(value)} className="rounded-md px-3 py-1.5 text-[12px] font-semibold transition-colors" style={{ background: tenureKind === value ? "var(--sol-card)" : undefined, color: tenureKind === value ? "var(--sol-text)" : "var(--sol-text-muted)" }}>{label}</button>
               ))}
             </div>
@@ -278,12 +278,12 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
                   {endKind === "plan" && (
                     <SelectBox value={endPlan} onChange={(e) => setEndPlan(e.target.value)} className="text-[12.5px] flex-1" style={{ minWidth: 150 }}>
                       <option value="">Pick a plan…</option>
-                      {plans.map((p) => <option key={p._id} value={p._id}>{p.short_id ? `${p.short_id} · ` : ""}{p.title}</option>)}
+                      {plans.map((p) => <option key={p._id} value={p._id}>{p.title}{p.short_id ? ` (${p.short_id})` : ""}</option>)}
                     </SelectBox>
                   )}
                   {endKind === "project" && (
                     <SelectBox value={endProject} onChange={(e) => setEndProject(e.target.value)} className="text-[12.5px] flex-1" style={{ minWidth: 150 }}>
-                      <option value="">Pick a folder…</option>
+                      <option value="">Pick a project…</option>
                       {projects.map((p) => <option key={p._id} value={p._id}>{p.title}</option>)}
                     </SelectBox>
                   )}
@@ -342,7 +342,7 @@ function ScopeOption({ checked, onToggle, tone, label, sub }: { checked: boolean
         {checked && <span className="w-1.5 h-1.5 rounded-[1px]" style={{ background: "var(--sol-bg)" }} />}
       </span>
       <span className="flex-1 min-w-0 truncate text-[12.5px]" style={{ color: "var(--sol-text)" }}>{label}</span>
-      <span className="text-[10.5px] shrink-0" style={{ color, fontFamily: tone === "magenta" ? "var(--font-mono)" : undefined }}>{sub}</span>
+      <span className="text-[10.5px] shrink-0" style={{ color }}>{sub}</span>
     </button>
   );
 }

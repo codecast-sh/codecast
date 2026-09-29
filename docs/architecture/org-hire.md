@@ -1,5 +1,7 @@
 # Hiring a role from a template (W8)
 
+> Current rules for how a role wakes, what it owns and how a request reaches a person are org-staffing.md S25 to S28. Where this record describes escalation (`cast escalate`, escalation lines, handing a session back) or a scopeless role owning the whole workspace, it is history: escalation was removed and scope made opt in on 2026-09-29.
+
 Written 2026-09-18 from the founder's ask after the growth pack reached its
 second release on Codecast: the CMO built there must become a role anyone can
 hire on any project, and everything the pilot learned must have a place in the

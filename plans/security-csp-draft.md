@@ -10,7 +10,7 @@ The policy lives in `packages/web/server/responsePolicy.ts` as `DOCUMENT_POLICY`
 | style-src | 'self' 'unsafe-inline' fonts.googleapis.com | the inline boot style; runtime style tags from mermaid, cytoscape, tiptap and xterm; style attributes in sanitized canvas HTML; Google Fonts |
 | font-src | 'self' data: fonts.gstatic.com | KaTeX fonts, data fonts in CSS, Google Fonts |
 | img-src | 'self' data: blob: https: | Convex storage, avatars, repo READMEs, markdown images the user clicks to load |
-| media-src | 'self' blob: Convex, loopback | call recordings, voice messages, sent files, vault media served by the daemon |
+| media-src | 'self' blob: Convex, media.codecast.sh, loopback | call recordings, voice messages, sent files, vault media served by the daemon; the landing page tour film |
 | connect-src | 'self', Convex https and wss, PostHog, Sentry ingest, loopback http and ws, wss://api.openai.com, *.livekit.cloud, avatar hosts, Google Ads | sync websocket and uploads; analytics; errors; CLI auth callback, terminal, browser watch, vault; call transcription; calls; the avatar byte cache |
 | frame-src | 'self' https: loopback | published pages from Convex, codecast routes in browser panes, any https page the user opens in a browser pane, vault assets |
 | worker-src | 'self' | the graph layout worker and /sw.js |

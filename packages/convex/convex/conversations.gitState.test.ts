@@ -32,6 +32,14 @@ describe("conversations.updateGitState", () => {
     expect(typeof conv.git_state_at).toBe("number");
     expect(await (updateGitState as any)._handler(ctx, { conversation_id: "conv", git_commit_hash: "bbbbbbb", git_ahead: 2, git_dirty: true })).toEqual({ updated: false });
   });
+  test("clears the fields asked for, unless the same call sets them", async () => {
+    const ctx = context("owner");
+    expect(await (updateGitState as any)._handler(ctx, { conversation_id: "conv", git_branch: "codex/fix", clear: ["git_branch", "git_commit_hash", "git_dirty"] })).toEqual({ updated: true });
+    const conv = ctx.db._tables.conversations[0];
+    expect(conv.git_branch).toBe("codex/fix");
+    expect(conv.git_commit_hash).toBeUndefined();
+    expect(await (updateGitState as any)._handler(ctx, { conversation_id: "conv", git_branch: "codex/fix", clear: ["git_commit_hash"] })).toEqual({ updated: false });
+  });
   test("another user's session is left alone", async () => {
     const ctx = context("other");
     expect(await (updateGitState as any)._handler(ctx, { conversation_id: "conv", git_commit_hash: "ccccccc" })).toEqual({ updated: false });

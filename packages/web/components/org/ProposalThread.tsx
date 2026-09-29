@@ -159,7 +159,7 @@ export function ProposalLetter({ proposal, thread, firstTime, now, onOpenSession
         {thread.role
           ? <RoleAvatar avatar={thread.role.avatar ?? thread.role.handle} size={24} />
           : <span className="w-6 h-6 rounded-full inline-flex items-center justify-center shrink-0" style={{ background: "color-mix(in srgb, var(--sol-violet) 16%, transparent)", color: "var(--sol-violet)" }}><MessageSquareText className="w-3.5 h-3.5" /></span>}
-        <span className="text-xs font-medium" style={{ color: "var(--sol-text-secondary)" }} data-letter-author>{thread.named ? thread.name : "The agent that wrote this"}</span>
+        <span className="text-xs font-medium" style={{ color: "var(--sol-text-secondary)" }} data-letter-author>{thread.named ? thread.name : "The author of this proposal"}</span>
         <span className="text-xs tabular-nums" style={{ color: "var(--sol-text-dim)" }} title={new Date(proposal.created_at).toLocaleString()}>{agoOf(Math.max(0, now - proposal.created_at))}</span>
         <button type="button" onClick={() => onOpenSession(thread.conversationId)} className="ml-auto w-6 h-6 inline-flex items-center justify-center rounded-md hover:bg-sol-bg-highlight" style={{ color: "var(--sol-text-dim)" }} aria-label="Open the full session" title="Open the full session, with every step the author took" data-thread-open>
           <ExternalLink className="w-3.5 h-3.5" />
@@ -174,7 +174,7 @@ export function ProposalLetter({ proposal, thread, firstTime, now, onOpenSession
             {rest && (
               <button type="button" onClick={() => setRestOpen((v) => !v)} aria-expanded={restOpen} className="inline-flex items-center gap-1 h-6 hover:underline underline-offset-2" style={{ color: "var(--sol-violet)" }} data-letter-toggle>
                 {restOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-                {restOpen ? "Fold the letter" : "Read the rest of the letter"}
+                {restOpen ? "Show less" : "Read the rest"}
               </button>
             )}
             {evidenceHref && (restOpen || !rest) && (
@@ -233,9 +233,9 @@ function AsksBar({ toDecide, total, updated, onOpen }: { toDecide: number; total
 export function AsksSheet({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
   return (
     <div className="absolute inset-0 z-10 flex flex-col justify-end" data-asks-sheet>
-      <button type="button" aria-label="Close the asks" onClick={onClose} className="absolute inset-0" style={{ background: "color-mix(in srgb, var(--sol-bg) 55%, transparent)" }} data-asks-scrim />
+      <button type="button" aria-label="Close" onClick={onClose} className="absolute inset-0" style={{ background: "color-mix(in srgb, var(--sol-bg) 55%, transparent)" }} data-asks-scrim />
       <div className="relative max-h-[88%] rounded-t-2xl border-t flex flex-col org-sheet-in shadow-[0_-12px_40px_-12px_rgba(0,0,0,0.45)]" style={{ background: "var(--sol-bg)", borderColor: "color-mix(in srgb, var(--sol-border) 35%, transparent)" }}>
-        <button type="button" onClick={onClose} aria-label="Close the asks" className="shrink-0 flex justify-center pt-2 pb-1"><span className="w-10 h-1 rounded-full" style={{ background: "color-mix(in srgb, var(--sol-border) 60%, transparent)" }} /></button>
+        <button type="button" onClick={onClose} aria-label="Close" className="shrink-0 flex justify-center pt-2 pb-1"><span className="w-10 h-1 rounded-full" style={{ background: "color-mix(in srgb, var(--sol-border) 60%, transparent)" }} /></button>
         <div className="min-h-0 flex-1 overflow-y-auto px-4 pt-1 pb-8">{children}</div>
       </div>
     </div>

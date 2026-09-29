@@ -20,15 +20,15 @@ import { EntityIdPill, TextWithMentions } from "../../EntityIdPill";
 import { EstablishedRefsProvider } from "../../../hooks/entityMentionScope";
 import { FormattedSummary } from "../../FormattedSummary";
 import { entityRemarkPlugins } from "../../../lib/remarkEntityIds";
-import { MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS } from "../../messageMarkdown";
+import { ASSISTANT_MD_REMARK, MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS } from "../../messageMarkdown";
 import { useJumpToSendingMessage } from "../../../hooks/useJumpToSendingMessage";
 import { isTeammateFramingOnly, parseSpawnedTaskPrompt, chatWakeAction, type ChatWakeEntry, type ChatWakePrompt, type HuddleSummaryTag } from "../../sessionMessage";
-import { parseScheduledTask, sessionEscalationCaption, type SessionEscalationMessage, type WaitingSession } from "@codecast/shared/contracts";
+import { CLOUD_AGENT_ACTION_SUBTYPE, parseScheduledTask, sessionEscalationCaption, type ScheduledTaskFrame, type SessionEscalationMessage, type WaitingSession } from "@codecast/shared/contracts";
 import { RoleFace } from "../../org/RoleFace";
 import { CallTranscriptDisclosure } from "../../calls/TranscriptTurns";
 import { useInboxStore, useTrackedStore } from "../../../store/inboxStore";
 import { DecisionCompactCard } from "../../decisions/DecisionCompactCard";
-import { MessageSquare, Users, Hash, AtSign, ChevronDown, ChevronRight, Clock, CornerDownRight, Workflow, Zap, Radar, Bot, PhoneCall, ArrowUpRight, RefreshCw } from "lucide-react";
+import { MessageSquare, Users, Hash, AtSign, ChevronDown, ChevronRight, Clock, CornerDownRight, Workflow, Zap, Radar, Bot, PhoneCall, ArrowUpRight, RefreshCw, Cloud } from "lucide-react";
 import { sessionMessageQueueLabel } from "../../../lib/pendingBanner";
 import { PlanBlock } from "./planBlock";
 import { UserIcon } from "./shared";
@@ -605,109 +605,7 @@ export function TaskNotificationLine({ content, timestamp, agentNameToChildMap }
   );
 }
 
-// Renders BOTH scheduled-run delivery formats: the `<scheduled-task>` wrapper an
-// inject-type schedule drops into an existing conversation, and the plain-text
-// prompt header (taskScheduler.buildPrompt) that opens a spawned run's transcript.
-// Same block so the two paths read identically; the spawned format additionally
-// carries mode, prior-run outcome, and completion-protocol boilerplate (collapsed —
-// it's machine plumbing, not something the user should wade through).
-function FoldToggle({ label, open, onToggle }: { label: string; open: boolean; onToggle: () => void }) {
-  return (
-    <button onClick={onToggle} className="flex items-center gap-1 text-[10px] text-sol-text-dim hover:text-sol-text-muted transition-colors">
-      {open ? <ChevronDown className="w-2.5 h-2.5" /> : <ChevronRight className="w-2.5 h-2.5" />}
-      {label}
-    </button>
-  );
-}
-
-/** The session a trigger fired for (org-staffing.md S28): which one waits,
- *  why, since when, and the first line of what it pinned. */
-function WaitingSessionLine({ waiting: w, firedAt }: { waiting: WaitingSession; firedAt: number }) {
-  const why = w.why === "blocked" ? "is blocked" : `waits on ${w.why.replace(/_/g, " ")}`;
-  return (
-    <div className="mx-3 mb-1.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[12px]" data-waiting-session={w.short_id}>
-      <EntityIdPill shortId={w.short_id} compact />
-      {w.role && <span className="text-sol-text-dim">@{w.role}</span>}
-      <span className="text-sol-text-muted">{why}</span>
-      {w.since > 0 && firedAt > w.since && <span className="text-sol-text-dim" title={formatFullTimestamp(w.since)}>for {fmtDuration(firedAt - w.since)}</span>}
-      {w.state && <span className="basis-full truncate text-sol-text" title={w.state}>{w.state}</span>}
-    </div>
-  );
-}
-
-export function ScheduledTaskBlock({ content: rawContent, timestamp }: { content: string; timestamp: number }) {
-  const [showPlumbing, setShowPlumbing] = useState(false);
-  const [showPrompt, setShowPrompt] = useState(false);
-  const content = rawContent.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
-  const spawned = parseSpawnedTaskPrompt(content);
-  const frame = spawned ? null : parseScheduledTask(content);
-  const title = spawned?.title || frame?.title || "Trigger Run";
-  const prompt = spawned?.prompt ?? (frame?.body || cleanStickyContent(content));
-  const prevFailed = !!spawned?.previousRun && /^Failed/i.test(spawned.previousRun.summary);
-
-  return (
-    <div className="mb-2 mx-1 rounded border-l-2 border-sol-violet/60 bg-sol-violet/5">
-      <div className="flex items-center gap-2 px-3 pt-2 pb-1">
-        <Zap className="w-3.5 h-3.5 text-sol-violet/70 shrink-0" />
-        <span className="text-[11px] font-medium tracking-wide uppercase text-sol-violet/70 shrink-0">{spawned ? "Trigger run" : "Trigger"}</span>
-        {/* Apply is the norm and unmarked; read-only runs get the chip. */}
-        {spawned && spawned.mode !== "apply" && (
-          <ShortcutTooltip label="Read-only run — investigates and reports, changes nothing" hint="file-editing tools are disabled">
-            <span className="px-1 py-0 rounded border text-[9px] font-semibold shrink-0 border-sol-cyan/40 text-sol-cyan/90 bg-sol-cyan/10">
-              read-only
-            </span>
-          </ShortcutTooltip>
-        )}
-        {/* The trigger's pill carries its title and opens it, where the person
-            edits, pauses or cancels it; a run without one names itself. */}
-        {frame?.trigger ? <span className="min-w-0 truncate"><EntityIdPill shortId={frame.trigger} /></span> : <span className="text-xs text-sol-text-muted truncate">{title}</span>}
-        <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
-      </div>
-      {frame?.waiting && <WaitingSessionLine waiting={frame.waiting} firedAt={timestamp} />}
-      {/* The prompt is authored markdown in both wire formats (spawn header
-          and <scheduled-task> inject) — render it as prose either way. A trigger
-          briefing is often long, so it starts clipped behind an Expand. */}
-      {/* A run that names a waiting session leads with that session; the
-          trigger's standing prompt is the same every firing, so it folds. */}
-      {frame?.waiting ? (
-        <div className="px-3 pb-2">
-          <FoldToggle label="trigger prompt" open={showPrompt} onToggle={() => setShowPrompt(!showPrompt)} />
-          {showPrompt && (
-            <div className="mt-1 text-sm text-sol-text prose prose-invert prose-sm max-w-none">
-              <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MD_COMPONENTS_NO_IMG}>{prompt}</ReactMarkdown>
-            </div>
-          )}
-        </div>
-      ) : (
-        <CollapsibleBody className="px-3 pb-2" toggleClassName="mt-1">
-          <div className="text-sm text-sol-text prose prose-invert prose-sm max-w-none">
-            <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MD_COMPONENTS_NO_IMG}>{prompt}</ReactMarkdown>
-          </div>
-        </CollapsibleBody>
-      )}
-      {spawned?.contextSummary && (
-        <div className="mx-3 mb-2 rounded border border-sol-border/30 bg-sol-bg/40 px-2 py-1.5 text-[11px] leading-relaxed text-sol-text-muted">
-          <span className="font-medium text-sol-text-dim">Context from originating session: </span>
-          {spawned.contextSummary}
-        </div>
-      )}
-      {spawned?.previousRun && (
-        <div className={`mx-3 mb-2 rounded border px-2 py-1.5 text-[11px] leading-relaxed ${prevFailed ? "border-sol-red/30 bg-sol-red/5 text-sol-red/90" : "border-sol-border/30 bg-sol-bg/40 text-sol-text-muted"}`}>
-          <span className={`font-medium ${prevFailed ? "text-sol-red" : "text-sol-text-dim"}`}>Previous run ({spawned.previousRun.ago}): </span>
-          {spawned.previousRun.summary}
-        </div>
-      )}
-      {spawned?.instructions && (
-        <div className="px-3 pb-2">
-          <FoldToggle label="run instructions" open={showPlumbing} onToggle={() => setShowPlumbing(!showPlumbing)} />
-          {showPlumbing && (
-            <pre className="mt-1 whitespace-pre-wrap break-words rounded border border-sol-border/30 bg-sol-bg/60 p-2 text-[10px] leading-relaxed text-sol-text-dim font-mono">{spawned.instructions}</pre>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
+export { ScheduledTaskBlock } from "./triggerRunBlock";
 
 // The /loop heartbeat, in the trigger family's visual language. A
 // ScheduleWakeup call is the agent arming its own next fire — standing intent,
@@ -1127,6 +1025,19 @@ function SystemBlockImpl({ content, subtype, timestamp, messageUuid, messageId, 
           <span className="text-xs text-amber-500 font-medium">Context compacted</span>
         </div>
         <div className="flex-1 h-px bg-gradient-to-r from-transparent via-amber-500/40 to-transparent" />
+      </div>
+    );
+  }
+
+  // A cloud agent action's result (Create PR, Apply, Archive): codecast says it, not the agent.
+  if (subtype === CLOUD_AGENT_ACTION_SUBTYPE && content) {
+    return (
+      <div className="mb-3 flex items-start gap-2 px-3 py-2 bg-sol-violet/5 border-l-2 border-sol-violet/40 text-xs text-sol-text-muted">
+        <Cloud className="w-3.5 h-3.5 mt-px text-sol-violet/70 shrink-0" />
+        <div className="min-w-0 flex-1 break-words [&_p]:m-0">
+          <ReactMarkdown remarkPlugins={ASSISTANT_MD_REMARK} rehypePlugins={MESSAGE_MD_REHYPE} components={MESSAGE_MD_COMPONENTS}>{content}</ReactMarkdown>
+        </div>
+        {timestamp && <span className="text-[10px] text-sol-text-dim shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>}
       </div>
     );
   }

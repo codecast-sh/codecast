@@ -53,9 +53,9 @@ export function evidenceCount(task: LineTaskLike, artifacts: Array<{ task_id?: s
  *  The web has no copy of the sources; it needs only the names a role's line
  *  may resolve to when the host has pushed no workflow of that slug. */
 export const SHIPPED_LINE_TEMPLATES: ReadonlyArray<{ slug: string; name: string }> = [
-  { slug: "line", name: "line" },
-  { slug: "feature", name: "feature" },
-  { slug: "plan-autopilot", name: "plan-autopilot" },
+  { slug: "line", name: "Standard" },
+  { slug: "feature", name: "Feature" },
+  { slug: "plan-autopilot", name: "Plan autopilot" },
 ];
 
 export type LineOption = { slug: string; label: string; shipped: boolean };
@@ -70,10 +70,10 @@ export function lineOptions(workflows: Array<{ slug: string; name?: string }>, c
   const out: LineOption[] = [];
   for (const t of SHIPPED_LINE_TEMPLATES) {
     const mine = own.get(t.slug);
-    out.push({ slug: t.slug, label: mine ? `${mine} (yours)` : `${t.name} (shipped)`, shipped: !mine });
+    out.push({ slug: t.slug, label: mine ? `${mine} (yours)` : t.name, shipped: !mine });
     own.delete(t.slug);
   }
   for (const [slug, name] of own) out.push({ slug, label: name === slug ? slug : `${name} (${slug})`, shipped: false });
-  if (current && !out.some((o) => o.slug === current)) out.push({ slug: current, label: `${current} (not pushed)`, shipped: false });
+  if (current && !out.some((o) => o.slug === current)) out.push({ slug: current, label: `${current} (not found)`, shipped: false });
   return out;
 }

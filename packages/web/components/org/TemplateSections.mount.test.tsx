@@ -45,11 +45,11 @@ async function verifyTemplateSections() {
   await act(async () => root.render(<TemplateSections roleId="role-1" canEdit />));
   const text = document.body.textContent!;
   assert.match(text, /Waiting on you: Verify the domain \(unlocks seo-weekly\)/);
-  assert.match(text, /Authority outside codecast: write \(Ship pages\)/);
+  assert.match(text, /Allowed outside codecast: write \(Ship pages\)/);
   assert.doesNotMatch(text, /Expired/);
   assert.match(text, /Update available: 2\.1\.0/);
   assert.match(text, /Google Ads credentials: missing/);
-  assert.match(text, /Publora key: bound/);
+  assert.match(text, /Publora key: set/);
   assert.match(text, /Primary events7/);
   const states = [...document.querySelectorAll<HTMLElement>("[data-template-routine]")].map((el) => [el.dataset.templateRoutine, el.dataset.state]);
   assert.deepEqual(states, [["cmo-weekly", "paused, ready"], ["seo-weekly", "paused, not ready"], ["ads-daily", "active"]]);

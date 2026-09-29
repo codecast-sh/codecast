@@ -13,7 +13,7 @@ import { appendModelEffortFlags, resolvePrintModelAlias } from "./launchCommand.
 import { SAFE_MODE_DENY_RULES, SAFE_MODE_MANDATE, definitionLaunchFlags } from "./agentLaunch.js";
 import { resolveAgentLaunch, type AgentDefinitionSpec } from "@codecast/shared/contracts";
 import { runTriggerPrecheck } from "./precheckRunner.js";
-import { describeTriggerPrecheckFailure, triggerPrecheckPassed, triggerFiringSource, triggerPrecheckApplies, triggerLifecycleInstructions, runResultThreadOf } from "@codecast/shared/contracts";
+import { describeTriggerPrecheckFailure, triggerPrecheckPassed, triggerFiringSource, triggerPrecheckApplies, triggerLifecycleInstructions, runResultThreadOf, STASHED_RUN_NOTE } from "@codecast/shared/contracts";
 
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 const _execAsync = promisify(exec);
@@ -327,11 +327,16 @@ export class TaskScheduler {
         // since the last run); machine wakes only — an interactive turn means
         // the human is looking, and stale state is worse than none. Fails
         // open: unreadable filing → say nothing.
-        const filing = await this.syncService.getSessionFiling(task.originating_conversation_id.toString());
+        // The server builds the frame every trigger path delivers (the role's
+        // card, the trigger pill, the stashed note); the local wrap below
+        // stands in only when it cannot answer (an older server).
+        const serverFrame = await this.syncService.getInjectFrame?.(task._id.toString());
+        const filing = serverFrame ? null : await this.syncService.getSessionFiling(task.originating_conversation_id.toString());
         const filingNote = filing === "stashed"
-          ? `\n\nThis session is STASHED: the user will not see this run or its output. End your turn with cast state --status done|dormant to stay quietly out of their inbox; declare --status blocked ONLY if a human must act — that returns the session to their inbox.`
+          ? STASHED_RUN_NOTE
           : "";
-        const wrappedPrompt = `<scheduled-task title="${safeTitle}" task-id="${task._id}">${[task.prompt, triggerLifecycleInstructions(task)].filter(Boolean).join("\n\n")}${filingNote}</scheduled-task>`;
+        const wrappedPrompt = serverFrame
+          ?? `<scheduled-task title="${safeTitle}" task-id="${task._id}">${[task.prompt, triggerLifecycleInstructions(task)].filter(Boolean).join("\n\n")}${filingNote}</scheduled-task>`;
         // The injected message becomes a user-row in the messages table once
         // the agent's JSONL is parsed. The UI detects the <scheduled-task>
         // wrapper and renders it as a ScheduledTaskBlock, so we must not

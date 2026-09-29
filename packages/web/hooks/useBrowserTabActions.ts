@@ -43,7 +43,8 @@ function noteFor(reason: BrowserTabFailure, detail?: string): string {
 }
 
 /**
- * Focus / reopen for one driven tab. `tabId` is the tab the row named; after
+ * Focus / reopen for one driven tab. `tabId` is the tab the row named (null
+ * when its output named none: focus then asks for the session's tab); after
  * a reopen the hook follows the new tab, so the next click raises that one.
  * `url` is what a reopen brings back; without it the offer is not made.
  */
@@ -67,14 +68,14 @@ export function useBrowserTabActions(
     if (noteTimer.current) clearTimeout(noteTimer.current);
     noteTimer.current = setTimeout(() => setState((s) => (s.kind === "note" ? { kind: "idle" } : s)), NOTE_MS);
   };
-  const canReopen = !!tab.url && !!(session.sessionUuid || session.tmuxSession);
 
+  const bySession = !!(session.sessionUuid || session.tmuxSession);
   const focus = () => {
-    if (!tabId || state.kind === "busy") return;
+    if ((!tabId && !bySession) || state.kind === "busy") return;
     setState({ kind: "busy", verb: "focusing" });
-    void focusBrowserTab(convex, tabId).then((out) => {
+    void focusBrowserTab(convex, tabId ?? session).then((out) => {
       if (out.ok) return setState({ kind: "idle" });
-      if ((out.reason === "tab-gone" || out.reason === "browser-stopped") && canReopen) return setState({ kind: "offer", reason: out.reason });
+      if ((out.reason === "tab-gone" || out.reason === "browser-stopped") && tab.url && bySession) return setState({ kind: "offer", reason: out.reason });
       note(out.reason === "tab-gone" ? "tab is gone" : out.reason === "browser-stopped" ? "browser is not running" : noteFor(out.reason, out.detail));
     });
   };

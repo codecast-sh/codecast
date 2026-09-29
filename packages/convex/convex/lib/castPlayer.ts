@@ -15,9 +15,12 @@
 // "timeupdate"; properties currentTime, duration, chapters, chapterIndex;
 // methods play(), pause(), seek(seconds), goTo(index).
 //
-// Plain ES5-style string building on purpose: this source sits inside a
-// String.raw template, so it must never contain a backtick or a dollar brace.
-export const CAST_PLAYER_JS = String.raw`(function () {
+// Kept as source text, not a function: a bundler rewrites a function (helpers
+// hoisted outside its body), so its toString() does not run on its own. Plain
+// ES5 inside a String.raw template, so it must never contain a backtick or a
+// dollar brace. Published pages get it as /cli/player.js; the web app emits it
+// as /cast-player.js for the landing page film (plugins/castPlayerScript.ts).
+const DEFINE_CAST_PLAYER = String.raw`function (opts) {
   if (window.customElements.get("cast-player")) return;
   var ICON = {
     play: '<path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.4-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z"/>',
@@ -575,7 +578,13 @@ export const CAST_PLAYER_JS = String.raw`(function () {
     v.replaceWith(p);
   }
   function upgradeAll() { Array.prototype.forEach.call(document.querySelectorAll("video"), upgrade); }
+  if (!opts || !opts.upgradeVideos) return;
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", upgradeAll, { once: true });
   else upgradeAll();
-})();
-`;
+}`;
+
+/** The player as a script. Published pages also upgrade their plain videos into it. */
+export function castPlayerScript(opts: { upgradeVideos: boolean }): string {
+  return "(" + DEFINE_CAST_PLAYER + ")(" + JSON.stringify(opts) + ");\n";
+}
+export const CAST_PLAYER_JS = castPlayerScript({ upgradeVideos: true });

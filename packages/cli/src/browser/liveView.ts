@@ -19,7 +19,7 @@ import * as path from "node:path";
 import { spawn } from "../proc.js";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { RemoteHost } from "../remote/session-move.js";
-import { HLS_PORT, NOVNC_PORT, RTSP_PORT, VNC_PORT } from "./provisionLinux.js";
+import { HLS_PORT, NOVNC_PORT, RTSP_PORT, SCREEN_DISPLAY } from "./hostScreen.js";
 import { SHOT_TEMP_KIND } from "./shotFile.js";
 import { agentTempPath } from "../tempFiles.js";
 
@@ -114,7 +114,7 @@ export async function ensureViewTunnel(host: RemoteHost): Promise<ViewUrls> {
  * ffmpeg (already there from provisioning) and copied back — no stream, no
  * tunnel, just a still of whatever the screen shows right now.
  */
-export function machineShot(host: RemoteHost, display = ":99"): string {
+export function machineShot(host: RemoteHost, display = SCREEN_DISPLAY): string {
   execFileSync(
     "ssh",
     ["-i", host.keyPath, "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=accept-new",

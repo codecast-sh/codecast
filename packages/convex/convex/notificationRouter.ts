@@ -59,7 +59,9 @@ export const NOTIFICATION_TYPE = v.union(
   // stalled (org-roles-run-work.md R6): one line, once a day at most.
   v.literal("goal_stall"),
   // The hourly fold-up of "sessions are waiting for you" (notifications.ts).
-  v.literal("sessions_need_input")
+  v.literal("sessions_need_input"),
+  // A teammate shared a machine with a team the recipient is on.
+  v.literal("device_shared")
 );
 
 export const PREFERENCE_MAP: Record<string, string> = {
@@ -101,6 +103,8 @@ export const PREFERENCE_MAP: Record<string, string> = {
   // The role is addressing the person by name about their own goals: the
   // same class as a mention, under the switch a person already has.
   goal_stall: "mention",
+  // News about what the team can do, like a teammate starting a session.
+  device_shared: "team_session_start",
 };
 
 function isNotificationEnabled(

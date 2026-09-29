@@ -1,6 +1,6 @@
 /**
  * Loopback routes for the driven browser: POST /browser/focus?tab=<id> raises
- * a tab, POST /browser/reopen brings a closed one back (reopenTab.ts).
+ * a tab (or ?session_uuid=… raises the tab that session drives), POST /browser/reopen brings a closed one back (reopenTab.ts).
  *
  * Mounted on the daemon's hook server next to the terminal and vault routes,
  * behind the same envelope of an allowed origin and the daemon's persisted
@@ -37,6 +37,7 @@ import {
 } from "../terminal/terminalServer.js";
 import { readBody } from "../vault/vaultServer.js";
 import { ownerCandidates, tmuxPaneId } from "./watchServer.js";
+import { cdpWatchEngine } from "./watchSource.js";
 import type { ReopenDeps } from "./reopenTab.js";
 
 /** Why a focus request could not be honored; the web treats them all the same
@@ -216,9 +217,28 @@ export interface FocusDeps {
   log?: (line: string) => void;
   /** How /browser/reopen runs the open; injectable for tests. */
   reopen?: ReopenDeps;
+  /** The tab a session drives, from its owner keys: the watch stream's own
+   *  resolution, so "open tab" raises exactly the tab "watch live" shows. */
+  resolveSessionTab?: (candidates: string[]) => string | null;
 }
 
-const defaultDeps = (raiseApp = raiseAppByPid): FocusDeps => ({ engines, raiseApp });
+const sessionTabOf = (candidates: string[]): string | null => {
+  const resolved = cdpWatchEngine().resolveTab(candidates);
+  return "tabId" in resolved ? resolved.tabId : null;
+};
+
+const defaultDeps = (raiseApp = raiseAppByPid): FocusDeps => ({ engines, raiseApp, resolveSessionTab: sessionTabOf });
+
+/** The session a request names, the way the watch stream's hello does. */
+function ownerOf(fields: { session_uuid?: unknown; tmux_session?: unknown }): Promise<string[]> {
+  return ownerCandidates(
+    {
+      session_uuid: typeof fields.session_uuid === "string" ? fields.session_uuid : undefined,
+      tmux_session: typeof fields.tmux_session === "string" ? fields.tmux_session : undefined,
+    },
+    tmuxPaneId,
+  );
+}
 
 /**
  * The same raise for a CLI that keeps working afterwards (`cast browser
@@ -305,6 +325,22 @@ export async function focusBrowserTab(query: string, deps: FocusDeps = defaultDe
 }
 
 /**
+ * The focus route's request: `tab` names the tab a row printed. A row whose
+ * output lost that footer (piped through grep or tail) names the session
+ * instead, and the tab is the one the session drives now.
+ */
+export async function focusRequestedTab(
+  params: URLSearchParams,
+  deps: FocusDeps,
+): Promise<{ tab: string; result: FocusResult }> {
+  const tab =
+    params.get("tab") ||
+    (deps.resolveSessionTab?.(await ownerOf({ session_uuid: params.get("session_uuid"), tmux_session: params.get("tmux_session") })) ?? "");
+  if (!tab) return { tab, result: { ok: false, reason: "tab-not-found" } };
+  return { tab, result: await focusBrowserTab(tab, deps) };
+}
+
+/**
  * HTTP endpoint for tab focus, mounted on the daemon's loopback hook server.
  * Returns true when the request was handled.
  */
@@ -331,11 +367,12 @@ export function handleBrowserFocusHttp(
   }
 
   if (req.method === "POST" && url.startsWith("/browser/focus")) {
-    const tab = new URL(url, "http://localhost").searchParams.get("tab") ?? "";
-    void focusBrowserTab(tab, { ...deps, log: deps.log ?? opts.log }).then((result) => {
+    const params = new URL(url, "http://localhost").searchParams;
+    void focusRequestedTab(params, { ...deps, log: deps.log ?? opts.log }).then(({ tab, result }) => {
       // Both outcomes are logged: a click that did nothing is otherwise
       // invisible from every side (the web stays quiet by design).
-      opts.log(result.ok ? `[BROWSER] Focused tab ${tab}` : `[BROWSER] Could not focus tab ${tab}: ${result.reason}`);
+      const label = tab || "for the session";
+      opts.log(result.ok ? `[BROWSER] Focused tab ${label}` : `[BROWSER] Could not focus tab ${label}: ${result.reason}`);
       res.writeHead(result.ok ? 200 : 404, headers);
       res.end(JSON.stringify(result));
     });
@@ -355,13 +392,7 @@ export function handleBrowserFocusHttp(
         /* handled below as a bad request */
       }
       const pageUrl = typeof body.url === "string" ? body.url : "";
-      const candidates = await ownerCandidates(
-        {
-          session_uuid: typeof body.session_uuid === "string" ? body.session_uuid : undefined,
-          tmux_session: typeof body.tmux_session === "string" ? body.tmux_session : undefined,
-        },
-        tmuxPaneId,
-      );
+      const candidates = await ownerOf(body);
       // Loaded on the reopen route only (boot graph guard).
       const { reopenBrowserTab } = await import("./reopenTab.js");
       const result = await reopenBrowserTab({ url: pageUrl, candidates }, deps.reopen);

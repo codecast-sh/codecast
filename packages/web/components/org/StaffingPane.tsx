@@ -24,7 +24,7 @@ import type { TakeoverPreview } from "../../hooks/useTakeoverPreviews";
 import { TakeoverEdit } from "./TakeoverEdit";
 import { askNames, askOfChange, asksProgress, proposalAsks, type AskView } from "./staffingAsks";
 import { SectionLabel } from "./OrgScopePanel";
-import { SEVERITY_META } from "./orgMeta";
+import { rolePausedSentence, SEVERITY_META } from "./orgMeta";
 import { QuietLines, StatusPill } from "./ghostChrome";
 export { StatusPill };
 import type { OrgRole, OrgTree } from "./orgTypes";
@@ -222,8 +222,8 @@ function ProposalBody(props: StaffingPaneProps & { proposal: OrgProposalRow }) {
       )}
 
       <div className={cn("flex flex-col gap-2", !props.titleInPageHeader && "mt-2.5")} data-asks>
-        {loading && <p className="text-[12.5px]" style={{ color: "var(--sol-text-dim)" }} data-changes-loading>Loading what this proposal asks…</p>}
-        {!loading && asks.length === 0 && <p className="text-[12.5px]" style={{ color: "var(--sol-text-dim)" }}>This proposal asks for nothing.</p>}
+        {loading && <p className="text-[12.5px]" style={{ color: "var(--sol-text-dim)" }} data-changes-loading>Loading the proposal…</p>}
+        {!loading && asks.length === 0 && <p className="text-[12.5px]" style={{ color: "var(--sol-text-dim)" }}>This proposal changes nothing.</p>}
         {asks.map((ask) => (
           <AskCard
             key={ask.index}
@@ -664,12 +664,13 @@ function SeverityDot({ severity }: { severity: HealthFlag["severity"] }) {
 
 function FlagList({ rows, missing, error, hasHealth, onRetry, onSelectNode, limit = 5 }: { rows: HealthFlagRow[]; missing?: boolean; error?: string; hasHealth?: boolean; onRetry?: () => void; onSelectNode: (nodeId: string) => void; limit?: number }) {
   const [all, setAll] = useState(false);
-  if (missing) return <p className="text-[12px] px-1" style={{ color: "var(--sol-text-dim)" }}>Health is not deployed on this backend yet.</p>;
+  // A read this server does not answer yet is nothing a person can act on.
+  if (missing) return <p className="text-[12px] px-1" style={{ color: "var(--sol-text-dim)" }}>Nothing to show yet.</p>;
   const retry = onRetry ? <button type="button" onClick={onRetry} className="ml-1.5 underline underline-offset-2" style={{ color: "var(--sol-blue)" }}>Retry</button> : null;
   // A read that failed with nothing cached says so; it never reads as a clean company.
   if (error && !hasHealth) return <p className="text-[12px] px-1" style={{ color: "var(--sol-red)" }} data-health-error>Health could not be read: {error}{retry}</p>;
   const stale = error ? <p className="text-[11px] px-1" style={{ color: "var(--sol-yellow)" }} data-health-stale>Showing the last copy; the latest read failed: {error}{retry}</p> : null;
-  if (rows.length === 0) return <>{stale}<p className="text-[12px] px-1" style={{ color: "var(--sol-text-dim)" }}>Nothing is flagged. Every standing agent is inside its limits.</p></>;
+  if (rows.length === 0) return <>{stale}<p className="text-[12px] px-1" style={{ color: "var(--sol-text-dim)" }}>Nothing is flagged.</p></>;
   const shown = all ? rows : rows.slice(0, limit);
   return (
     <div className="flex flex-col gap-1" data-flags>
@@ -718,14 +719,14 @@ function HealthBody(props: StaffingPaneProps) {
     <>
       <h2 className="text-[19px] leading-tight font-semibold tracking-tight" style={{ fontFamily: "var(--font-serif)", color: "var(--sol-text)" }}>Company health</h2>
       <p className="mt-1 text-[12px]" style={{ color: "var(--sol-text-muted)" }}>
-        {props.reviewing ? "A review of the company is running; a proposal appears here when it lands." : "No open proposal. What the last review sees right now."}
+        {props.reviewing ? "A review of the company is running; a proposal appears here when it lands." : "No open proposal. This is how the company looks right now."}
       </p>
       {props.reviewing && props.reviewSessionId && <ReviewSessionLink id={props.reviewSessionId} onOpenSession={props.onOpenSession} />}
       {props.reviewEnded && <ReviewEndedLine sessionId={props.reviewSessionId} onOpenSession={props.onOpenSession} />}
       <SectionLabel right={flags.length > 0 ? <span className="text-[10.5px] tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{flags.length}</span> : undefined}>Findings</SectionLabel>
       <FlagList rows={flags} missing={props.healthMissing} error={props.healthError} hasHealth={!!props.health} onRetry={props.onRetryHealth} onSelectNode={props.onSelectNode} />
 
-      <SectionLabel>Standing agents per person</SectionLabel>
+      <SectionLabel>Roles per person</SectionLabel>
       {span.length === 0 ? <p className="text-[12px] px-1" style={{ color: "var(--sol-text-dim)" }}>Nobody here yet.</p> : (
         <div className="flex flex-col gap-1" data-span>
           {span.map((s) => (
@@ -740,8 +741,8 @@ function HealthBody(props: StaffingPaneProps) {
         </div>
       )}
 
-      <SectionLabel>Standing agents under strain</SectionLabel>
-      {bottlenecks.length === 0 ? <p className="text-[12px] px-1" style={{ color: "var(--sol-text-dim)" }}>None. Every standing agent is inside its limits.</p> : (
+      <SectionLabel>Roles under strain</SectionLabel>
+      {bottlenecks.length === 0 ? <p className="text-[12px] px-1" style={{ color: "var(--sol-text-dim)" }}>None.</p> : (
         <div className="flex flex-col gap-1" data-bottlenecks>
           {bottlenecks.map((b) => (
             <button key={b.role_id} type="button" onClick={() => props.onSelectNode(b.nodeId)} className="flex items-center gap-2 px-1.5 py-1.5 rounded-md text-left hover:bg-sol-bg-highlight/70 transition-colors">
@@ -791,7 +792,7 @@ function NoChiefBody(props: StaffingPaneProps) {
           <OrgButton onClick={props.onProposeNow} className="justify-center h-9">
             <Sparkles className="w-3.5 h-3.5" /> Propose an org now
           </OrgButton>
-          <p className="text-[11px] leading-snug px-1" style={{ color: "var(--sol-text-dim)" }}>Hiring provisions a standing session and a weekly review. Proposing runs one review from a fresh session without a hire.</p>
+          <p className="text-[11px] leading-snug px-1" style={{ color: "var(--sol-text-dim)" }}>Hiring gives you a chief of staff that stays and reviews the company every week. Proposing runs one review and hires nobody.</p>
         </div>
       )}
       <FlagsPreview {...props} />
@@ -804,7 +805,7 @@ function NoChiefBody(props: StaffingPaneProps) {
 function ReviewEndedLine({ sessionId, onOpenSession }: { sessionId?: string | null; onOpenSession: (id: string) => void }) {
   return (
     <div className="rounded-lg border px-3 py-2 text-[12px] flex items-center gap-2 flex-wrap" data-review-ended style={{ borderColor: "color-mix(in srgb, var(--sol-orange) 45%, transparent)", background: "color-mix(in srgb, var(--sol-orange) 8%, transparent)", color: "var(--sol-text-secondary)" }}>
-      <span className="min-w-0 flex-1">The review session stopped without posting a proposal.</span>
+      <span className="min-w-0 flex-1">The review stopped without making a proposal.</span>
       {sessionId && <button type="button" onClick={() => onOpenSession(sessionId)} className="shrink-0 inline-flex items-center gap-1 hover:underline" style={{ color: "var(--sol-violet)" }}>See why <ExternalLink className="w-3 h-3" /></button>}
     </div>
   );
@@ -815,7 +816,7 @@ function ReviewEndedLine({ sessionId, onOpenSession }: { sessionId?: string | nu
 function ReviewSessionLink({ id, onOpenSession }: { id: string; onOpenSession: (id: string) => void }) {
   return (
     <button type="button" onClick={() => onOpenSession(id)} className="mt-2 inline-flex items-center gap-1 text-[11.5px] px-1.5 h-6 rounded-md hover:bg-sol-bg-highlight" style={{ color: "var(--sol-violet)" }} data-review-session>
-      Open the review session <ExternalLink className="w-3 h-3" />
+      Open the review <ExternalLink className="w-3 h-3" />
     </button>
   );
 }
@@ -846,24 +847,24 @@ function Composer({ chief, onOpenSession, onResume }: { chief: OrgRole | null; o
   return (
     <div className="mt-6 pt-4 border-t" style={{ borderColor: BORDER }} data-composer>
       <div className="flex items-center justify-between mb-2">
-        <span className="text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Talk to the chief of staff</span>
+        <span className="text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Chief of staff</span>
         {conv && (
           <button type="button" onClick={() => onOpenSession(conv)} className="inline-flex items-center gap-1 text-[11px] px-1.5 h-[20px] rounded-md hover:bg-sol-bg-highlight" style={{ color: "var(--sol-violet)" }}>
-            Open session <ExternalLink className="w-3 h-3" />
+            Open its thread <ExternalLink className="w-3 h-3" />
           </button>
         )}
       </div>
       {paused && chief && (
         <div className="mb-2 rounded-lg border px-3 py-2 flex items-center gap-2 text-[12px]" data-chief-paused style={{ borderColor: "color-mix(in srgb, var(--sol-yellow) 45%, transparent)", background: "color-mix(in srgb, var(--sol-yellow) 8%, transparent)", color: "var(--sol-text-secondary)" }}>
           <Pause className="w-3.5 h-3.5 shrink-0" style={{ color: "var(--sol-yellow)" }} />
-          <span className="min-w-0 flex-1">Paused: what you send waits until you resume.</span>
+          <span className="min-w-0 flex-1">{rolePausedSentence(chief.name)}</span>
           {onResume && <OrgButton size="sm" onClick={() => onResume(chief._id)}><Play className="w-3 h-3" /> Resume</OrgButton>}
         </div>
       )}
       {!chief ? (
         <p className="text-[12px] px-1" style={{ color: "var(--sol-text-dim)" }}>No chief of staff hired yet.</p>
       ) : !conv ? (
-        <p className="text-[12px] px-1" style={{ color: "var(--sol-text-dim)" }}>The chief of staff has no standing session yet. It appears here once provisioned.</p>
+        <p className="text-[12px] px-1" style={{ color: "var(--sol-text-dim)" }}>The chief of staff has not started yet. Its conversation appears here when it does.</p>
       ) : (
         <div className="rounded-xl border overflow-hidden" style={{ borderColor: BORDER, height: "min(420px, 45dvh)" }}>
           <AnchorConversation conversationId={conv} hideHeader seedOwnership={false} />

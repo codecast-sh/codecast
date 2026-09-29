@@ -192,6 +192,11 @@ async function probeWithPatience(ep: TerminalEndpoint): Promise<TerminalSessionI
   return second;
 }
 
+// The last reply a targeted lookup got whose loopback probe missed: the
+// machine answered, it just is not this one. hostForwardedEndpoint may still
+// reach it through this machine's daemon.
+const missedReplies = new Map<string, TerminalEndpoint>();
+
 async function discover(convex: ConvexReactClient, deviceId?: string): Promise<TerminalEndpoint | null> {
   const { commands } = await convex.mutation(api.users.requestTerminalEndpoints, {
     ...(deviceId ? { device_id: deviceId } : {}),
@@ -229,6 +234,7 @@ async function discover(convex: ConvexReactClient, deviceId?: string): Promise<T
           lastFailure = "none";
           return ep;
         }
+        if (deviceId && ep.port > 0 && ep.deviceId === deviceId) missedReplies.set(deviceId, ep);
         if (lastProbeMiss === "timeout") sawTimeout = true;
       } catch {}
     }
@@ -252,6 +258,56 @@ async function discover(convex: ConvexReactClient, deviceId?: string): Promise<T
  * and returns fast rather than waiting out the broadcast budget.
  */
 export async function getTerminalEndpoint(
+  convex: ConvexReactClient,
+  opts?: { force?: boolean; deviceId?: string; trustCache?: boolean },
+): Promise<TerminalEndpoint | null> {
+  const direct = await directTerminalEndpoint(convex, opts);
+  if (direct || !opts?.deviceId || lastFailure !== "other-device" || readOverride() || forceRelay()) return direct;
+  const forwarded = await hostForwardedEndpoint(convex, opts.deviceId);
+  lastFailure = forwarded ? "none" : "other-device";
+  return forwarded;
+}
+
+// Forwards already opened, by host device: revalidated by probe on reuse.
+const forwardedByDevice = new Map<string, TerminalEndpoint>();
+
+/**
+ * A machine the browser is not on, reached through the daemon it IS on. A
+ * cloud host's daemon serves the same loopback server as this one; this
+ * machine's daemon listens on a loopback port whose connections ride SSH to
+ * the host's port (packages/cli/src/cloud/hostForward.ts), so the endpoint
+ * is the host's own token at a local port. Only a laptop that holds the
+ * host in its registry can forward; everything else answers 404 and the
+ * caller keeps its relay path.
+ */
+async function hostForwardedEndpoint(convex: ConvexReactClient, deviceId: string): Promise<TerminalEndpoint | null> {
+  const known = forwardedByDevice.get(deviceId);
+  if (known && (await probeEndpoint(known)) !== null) return known;
+  forwardedByDevice.delete(deviceId);
+  // A cached local endpoint settles "not this machine" without asking the
+  // target, so its reply may not be in hand yet.
+  if (!missedReplies.has(deviceId)) await discover(convex, deviceId);
+  const reply = missedReplies.get(deviceId);
+  if (!reply) return null;
+  const local = await directTerminalEndpoint(convex);
+  if (!local || local.deviceId === deviceId) return null;
+  try {
+    const res = await fetch(
+      `${termHttpBase(local)}/term/forward?device=${encodeURIComponent(deviceId)}&port=${reply.port}`,
+      { method: "POST", headers: { Authorization: `Bearer ${local.token}` }, signal: AbortSignal.timeout(PROBE_RETRY_TIMEOUT_MS) },
+    );
+    if (!res.ok) return null;
+    const { port } = (await res.json()) as { port: number };
+    const ep: TerminalEndpoint = { ...reply, port };
+    if ((await probeWithPatience(ep)) === null) return null;
+    forwardedByDevice.set(deviceId, ep);
+    return ep;
+  } catch {
+    return null;
+  }
+}
+
+async function directTerminalEndpoint(
   convex: ConvexReactClient,
   opts?: { force?: boolean; deviceId?: string; trustCache?: boolean },
 ): Promise<TerminalEndpoint | null> {

@@ -10,7 +10,7 @@ import { Button } from "../../../components/ui/button";
 import { Switch } from "../../../components/ui/switch";
 import { Fragment, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { CLOUD_SESSION_SOURCES, cloudSessionSyncSettings, type CloudSessionSource } from "@codecast/shared/contracts";
+import { CLOUD_AGENT_PROVIDERS, CLOUD_SESSION_SOURCES, cloudSessionSyncSettings, type CloudSessionSource } from "@codecast/shared/contracts";
 import {
   GitBranch, Folder, FolderGit2, Search, AlertTriangle, RefreshCw, Terminal,
 } from "lucide-react";
@@ -29,6 +29,7 @@ import { TeamVisibilityControl } from "../../../components/settings/TeamVisibili
 import Link from "next/link";
 import { SharePanel, ShareTrigger, type ShareChoice, type ShareCurrent } from "../../../components/settings/SharePanel";
 import { SharingAgentCard } from "../../../components/settings/SharingAgentCard";
+import { CloudAgentSyncConnect, CloudAgentSyncNote } from "../../../components/cloudAgents";
 import { isFolderSyncing, planSyncChange, type SyncChange, type SyncSettings } from "@codecast/shared/team/syncPlan";
 import { useShareSummaries } from "../../../hooks/useShareSummaries";
 import {
@@ -96,6 +97,13 @@ const CLOUD_SYNC_COPY: Record<CloudSessionSource, { on: string; off: string }> =
   cursor: {
     on: "Cloud agents you run on cursor.com, in Slack or from Cursor sync here like local ones, and you can message them from codecast. Your daemon reads them with the Cursor API key on your machine (Settings → Provider keys).",
     off: "Only the Cursor Cloud sessions you start from codecast sync here. The rest stay on cursor.com.",
+  },
+  codex: {
+    on: "Tasks you run on chatgpt.com/codex, in Slack, Linear or from GitHub sync here like local ones, and you can message them from codecast. Your daemon reads them with the Codex sign-in on your machine.",
+    // Until codecast can start Codex Cloud tasks, none of them sync with this off.
+    off: CLOUD_AGENT_PROVIDERS.codex.composer
+      ? "Only the Codex Cloud tasks you start from codecast sync here. The rest stay on chatgpt.com/codex."
+      : "Codex Cloud tasks stay on chatgpt.com/codex until you turn this on.",
   },
 };
 
@@ -456,12 +464,21 @@ export default function SyncPage() {
       toast.error("Type the full path", { description: "Like /Users/you/src/app. Rules match full paths, so ~ does not work here." });
       return;
     }
-    setNewProject("");
     if (syncProjects.includes(projectPath) || recentProjects.some((p) => p.path === projectPath)) {
+      setNewProject("");
       toast.info(`${getProjectName(projectPath)} is already listed`);
       return;
     }
-    await updateSyncSettings({ sync_projects: [...syncProjects, projectPath] });
+    // The typed path stays in the field until the write lands, so a failed
+    // save leaves it there to try again instead of vanishing with no word.
+    try {
+      await updateSyncSettings({ sync_projects: [...syncProjects, projectPath] });
+    } catch (err) {
+      console.error("Failed to add folder:", err);
+      toast.error(`Could not add ${getProjectName(projectPath)}`, { description: "Nothing changed. Try again in a moment." });
+      return;
+    }
+    setNewProject("");
     toast.success(`${getProjectName(projectPath)} added`, { description: "Pick who can open it from its row." });
   };
 
@@ -623,8 +640,11 @@ export default function SyncPage() {
           const { field, label } = CLOUD_SESSION_SOURCES[source];
           const on = cloudSync[field];
           return (
-            <SettingsRow key={source} label={`Sync ${label}`} description={on ? CLOUD_SYNC_COPY[source].on : CLOUD_SYNC_COPY[source].off}>
-              <Switch checked={on} onCheckedChange={(v) => setCloudSessionSync(source, v)} aria-label={`Sync ${label}`} />
+            <SettingsRow key={source} label={`Sync ${label}`} className="flex-wrap gap-y-2 sm:flex-nowrap" description={<>{on ? CLOUD_SYNC_COPY[source].on : CLOUD_SYNC_COPY[source].off}<CloudAgentSyncNote source={source} on={on} /></>}>
+              <div className="flex items-center gap-2.5">
+                <CloudAgentSyncConnect source={source} />
+                <Switch checked={on} onCheckedChange={(v) => setCloudSessionSync(source, v)} aria-label={`Sync ${label}`} />
+              </div>
             </SettingsRow>
           );
         })}
@@ -670,7 +690,9 @@ export default function SyncPage() {
               placeholder="Full path of a folder, like /Users/you/src/app"
               className="flex-1 bg-sol-bg border-sol-border text-sol-text"
             />
-            <Button onClick={handleAddProject} variant="cyan">
+            {/* Nothing to add until a path is typed: an enabled button that
+                ignores the click reads as broken. */}
+            <Button onClick={handleAddProject} variant="cyan" disabled={!newProject.trim()}>
               Add
             </Button>
           </div>

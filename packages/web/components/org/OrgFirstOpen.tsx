@@ -42,18 +42,18 @@ export function OrgEmptyCanvas({ me, reviewing, reviewEnded, onOpenReview, onHir
     <div className="absolute inset-x-0 flex justify-center px-4 pointer-events-none" style={{ bottom }} data-org-empty>
       <div className="pointer-events-auto w-full max-w-[500px] rounded-2xl border p-4 org-pop-in" style={{ background: "color-mix(in srgb, var(--sol-card) 92%, transparent)", borderColor: "color-mix(in srgb, var(--sol-violet) 30%, transparent)", boxShadow: "0 24px 60px -30px rgba(0,0,0,0.55)", backdropFilter: "blur(6px)" }}>
         <p className="text-[13px] leading-relaxed" style={{ color: "var(--sol-text-secondary)" }}>
-          Right now every session reports to {name}. A chief of staff reads how the work flows and proposes the seats that would take some of it, as dashed ghosts on this canvas; you accept, edit or skip each one, and it applies nothing on its own.
+          Right now every session reports to {name}. A chief of staff reads how the work flows and proposes the roles that would take some of it, drawn as dashed cards on this chart. You accept, edit or skip each one; nothing changes until you do.
         </p>
         {reviewEnded && !reviewing && (
           <p className="mt-2 text-[12px]" style={{ color: "var(--sol-orange)" }} data-review-ended>
-            The review session stopped without posting a proposal.{onOpenReview && <> <button type="button" onClick={onOpenReview} className="underline underline-offset-2">See why</button></>}
+            The review stopped without making a proposal.{onOpenReview && <> <button type="button" onClick={onOpenReview} className="underline underline-offset-2">See why</button></>}
           </p>
         )}
         {reviewing ? (
           <div className="mt-3 flex items-center gap-2 text-[12.5px]" style={{ color: "var(--sol-text-secondary)" }} data-reviewing>
             <Sparkles className="w-4 h-4 animate-pulse shrink-0" style={{ color: "var(--sol-violet)" }} />
             <span className="min-w-0 flex-1">Reviewing the company. The proposal appears here when it lands.</span>
-            {onOpenReview && <button type="button" onClick={onOpenReview} className="shrink-0 underline underline-offset-2" style={{ color: "var(--sol-violet)" }}>Open the session</button>}
+            {onOpenReview && <button type="button" onClick={onOpenReview} className="shrink-0 underline underline-offset-2" style={{ color: "var(--sol-violet)" }}>Open the review</button>}
           </div>
         ) : (
           <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2" data-org-guide="start">

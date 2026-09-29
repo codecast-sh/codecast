@@ -880,7 +880,12 @@ describe("browserTabOf", () => {
     const tool = bash("t2", "cast browser find 'Sign in'");
     const carried = { t2: { tabId: "4A2CDC7E", url: "https://example.com/x" } };
     expect(browserTabOf(tool, cast("cast browser find 'Sign in'"), "found #e3", carried)).toEqual({ kind: "cast", tabId: "4A2CDC7E", url: "https://example.com/x" });
-    expect(browserTabOf(tool, cast("cast browser find 'Sign in'"), "found #e3", {})).toBeNull();
+    expect(browserTabOf(tool, cast("cast browser find 'Sign in'"), "found #e3", {})).toEqual({ kind: "cast", tabId: null, url: null });
+  });
+
+  test("a piped row that lost its tab footer still offers the session's tab, with the page it opened", () => {
+    const command = `cd ~/src/family && timeout 110 cast browser open "https://www.amazon.com/dp/0399167900" 2>&1 | grep -oE "error: [^(]*" | head -1`;
+    expect(browserTabOf(bash("t5", command), cast(command), "", {})).toEqual({ kind: "cast", tabId: null, url: "https://www.amazon.com/dp/0399167900" });
   });
 
   test("ignores cast rows outside the browser, and plain shell", () => {
