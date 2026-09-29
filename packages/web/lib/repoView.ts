@@ -92,7 +92,7 @@ export function startsBlameRange(range: RepoBlameRange | undefined, line: number
 // per sha and per line text; folding that back onto the file's lines is pure
 // and happens here.
 
-export type BlameVia = "commit" | "hash" | "subject" | "edit" | "nearby";
+export type BlameVia = "trailer" | "commit" | "hash" | "subject" | "edit" | "nearby";
 
 /**
  * A session as the reader may see it. Signed in, every session named here is
@@ -168,8 +168,12 @@ export function foldSessionBlame(
   for (let i = 0; i < lines.length; i++) {
     const number = i + 1;
     const git = gitAt(number);
+    const committed = git ? bySha[git.sha] : undefined;
+    // A line's own edit wins; then the commit's trailer, which names its
+    // session for certain, ahead of the nearby inference; then the other guesses.
     const session =
       byLine.get(lines[i].trim()) ??
+      (committed?.via === "trailer" ? committed : undefined) ??
       (git ? nearby.get(git) : undefined) ??
       (git ? bySha[git.sha] : undefined) ??
       null;
@@ -303,6 +307,7 @@ export function sessionHref(session: BlameSessionRef): string | null {
 export function blameViaLabel(via: BlameVia): string {
   switch (via) {
     case "edit": return "wrote this line";
+    case "trailer": return "made this commit (named in its Codecast-Session trailer)";
     case "nearby": return "wrote the lines around this one";
     case "commit": return "made this commit";
     case "hash": return "ran this commit";

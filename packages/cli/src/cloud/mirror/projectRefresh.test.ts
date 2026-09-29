@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { applyMirrorBundle, cleanTrackedFiles, matchesGitBlob, readStamp, verifyMirrorStamp, withMirrorLock } from "./apply";
+import { applyMirrorBundle, readStamp, verifyMirrorStamp, withMirrorLock } from "./apply";
 import { buildMirrorBundle, parseMirrorBundle } from "./bundle";
 import { AGENT_RUNTIME_ROOTS } from "./discovery";
 import { buildHomeMirror, mirrorHomeToHost, runMirrorTick, type LocalMirrorStamps, type MirrorDeps } from "./push";
@@ -195,7 +195,7 @@ test("temp HOME end-to-end refresh covers edits, deletions, drift, conflicts, pi
   expect(pushes).toBe(6);
 });
 
-test("first ownership updates clean tracked context and preserves dirty tracked and untracked context", async () => {
+test("in a repo, only agent context travels; other files, gitignored ones too, are the seed's and the sync's, and host edits stay", async () => {
   const local = temp();
   const remote = temp();
   const sourceRoot = path.join(local, "src", "app");
@@ -203,29 +203,111 @@ test("first ownership updates clean tracked context and preserves dirty tracked 
   for (const root of [sourceRoot, targetRoot]) {
     write(root, "AGENTS.md", "older instructions\n");
     write(root, "docs/clean.md", "older clean\n");
-    write(root, "docs/dirty.md", "older dirty\n");
+    write(root, ".gitignore", "*.local.md\n");
     execFileSync("git", ["init", "-q", root]);
     execFileSync("git", ["-C", root, "add", "."]);
     execFileSync("git", ["-C", root, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "initial"]);
   }
   write(sourceRoot, "AGENTS.md", "new instructions\n");
   write(sourceRoot, "docs/clean.md", "new clean\n");
-  write(sourceRoot, "docs/dirty.md", "new local dirty\n");
-  write(targetRoot, "docs/dirty.md", "uncommitted cloud edit\n");
-  write(sourceRoot, "docs/untracked.md", "local untracked\n");
-  write(targetRoot, "docs/untracked.md", "cloud untracked\n");
-  const tracked = await cleanTrackedFiles(targetRoot);
-  expect([...tracked.keys()]).toContain("AGENTS.md");
-  expect(matchesGitBlob(fs.readFileSync(path.join(targetRoot, "AGENTS.md")), fs.statSync(path.join(targetRoot, "AGENTS.md")).mode, tracked.get("AGENTS.md"))).toBe(true);
-  const built = await buildHomeMirror({ config: { user_id: "u" }, home: local, hostHome: remote, deviceId: "d", projects: [{ host: "u@h", sourceRoot, targetRoot }] });
+  write(sourceRoot, "docs/plan-in-progress.md", "another session's unfinished plan\n");
+  write(sourceRoot, "docs/private.local.md", "gitignored notes\n");
+  write(targetRoot, "docs/clean.md", "the cloud session's edit\n");
+  const built = await buildHomeMirror({ config: { user_id: "u" }, home: local, hostHome: remote, deviceId: "d", projects: [{ host: "u@h", sourceRoot, targetRoot }], narrowProjects: true });
   const parsed = await parseMirrorBundle(built.bytes);
   const result = await applyMirrorBundle(parsed, { home: remote, configUserId: "u", previousStamp: null, refresh: () => {} });
   expect(result.errors).toEqual([]);
   expect(read(targetRoot, "AGENTS.md")).toBe("new instructions\n");
-  expect(read(targetRoot, "docs/clean.md")).toBe("new clean\n");
-  expect(read(targetRoot, "docs/dirty.md")).toBe("uncommitted cloud edit\n");
-  expect(read(targetRoot, "docs/untracked.md")).toBe("cloud untracked\n");
-  expect(result.host_edited).toEqual(["work/app/docs/dirty.md", "work/app/docs/untracked.md"]);
+  expect(fs.existsSync(path.join(targetRoot, "docs/private.local.md"))).toBe(false);
+  expect(read(targetRoot, "docs/clean.md")).toBe("the cloud session's edit\n");
+  expect(fs.existsSync(path.join(targetRoot, "docs/plan-in-progress.md"))).toBe(false);
+  expect(result.host_edited).toEqual([]);
+});
+
+test("a project file the bundle stops carrying is released when git tracks it, and pruned only when the mirror made it", async () => {
+  const local = temp();
+  const remote = temp();
+  const sourceRoot = path.join(local, "src", "app");
+  const targetRoot = path.join(remote, "work", "app");
+  for (const root of [sourceRoot, targetRoot]) {
+    write(root, "README.md", "readme\n");
+    execFileSync("git", ["init", "-q", root]);
+    execFileSync("git", ["-C", root, "add", "."]);
+    execFileSync("git", ["-C", root, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "initial"]);
+  }
+  write(sourceRoot, "README.md", "laptop readme edit\n");
+  write(sourceRoot, "docs/plan.md", "a laptop-only plan\n");
+  const projects = [{ host: "u@h", sourceRoot, targetRoot }];
+  const apply = async (narrowProjects: boolean) => {
+    const built = await buildHomeMirror({ config: { user_id: "u" }, home: local, hostHome: remote, deviceId: "d", projects, narrowProjects });
+    return applyMirrorBundle(await parseMirrorBundle(built.bytes), { home: remote, configUserId: "u", previousStamp: readStamp(remote), refresh: () => {} });
+  };
+  const wide = await apply(false);
+  expect(wide.capabilities).toContain("keeps-tracked");
+  expect(read(targetRoot, "README.md")).toBe("laptop readme edit\n");
+  expect(read(targetRoot, "docs/plan.md")).toBe("a laptop-only plan\n");
+  // The host edits the tracked file after the mirror wrote it: still released, no conflict.
+  write(targetRoot, "README.md", "the cloud session's own edit\n");
+  const narrow = await apply(true);
+  expect(narrow.errors).toEqual([]);
+  // Tracked: released as it is. Mirror-made and untracked: pruned.
+  expect(read(targetRoot, "README.md")).toBe("the cloud session's own edit\n");
+  expect(narrow.host_edited).toEqual([]);
+  expect(narrow.released).toEqual(["work/app/README.md"]);
+  expect(fs.existsSync(path.join(targetRoot, "docs/plan.md"))).toBe(false);
+  expect(narrow.pruned).toEqual(["work/app/docs/plan.md"]);
+  // The stamp forgets the released file: a later apply never calls it a conflict, even after a person rewrites it.
+  write(targetRoot, "README.md", "restored by hand\n");
+  const again = await apply(true);
+  expect(again.host_edited).toEqual([]);
+  expect(again.errors).toEqual([]);
+  expect(read(targetRoot, "README.md")).toBe("restored by hand\n");
+});
+
+test("an entry an older push marked removed is forgotten when the file is back and git tracks it", async () => {
+  const local = temp();
+  const remote = temp();
+  const sourceRoot = path.join(local, "src", "app");
+  const targetRoot = path.join(remote, "work", "app");
+  for (const root of [sourceRoot, targetRoot]) {
+    write(root, "README.md", "readme\n");
+    execFileSync("git", ["init", "-q", root]);
+    execFileSync("git", ["-C", root, "add", "."]);
+    execFileSync("git", ["-C", root, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "initial"]);
+  }
+  const projects = [{ host: "u@h", sourceRoot, targetRoot }];
+  const built = await buildHomeMirror({ config: { user_id: "u" }, home: local, hostHome: remote, deviceId: "d", projects, narrowProjects: true });
+  await applyMirrorBundle(await parseMirrorBundle(built.bytes), { home: remote, configUserId: "u", previousStamp: null, refresh: () => {} });
+  // What the 2026-09-29 incident left: a stamp that says the mirror removed a tracked file a person then restored.
+  const stamp = readStamp(remote)!;
+  stamp.files["work/app/README.md"] = { sha: "x", written: "y", mode: "0600", kind: "verbatim", removed: true } as any;
+  stamp.project_roots = ["work/app"];
+  fs.writeFileSync(path.join(remote, ".codecast/mirror.json"), JSON.stringify(stamp));
+  const r = await applyMirrorBundle(await parseMirrorBundle(built.bytes), { home: remote, configUserId: "u", previousStamp: readStamp(remote), refresh: () => {} });
+  expect(r.host_edited).toEqual([]);
+  expect(r.errors).toEqual([]);
+  expect(readStamp(remote)!.files["work/app/README.md"]).toBeUndefined();
+  expect(read(targetRoot, "README.md")).toBe("readme\n");
+
+  // And an entry recorded through a symlinked folder is forgotten, not an error on every push.
+  fs.mkdirSync(path.join(targetRoot, "packages/real"), { recursive: true });
+  fs.symlinkSync("packages/real", path.join(targetRoot, "linked"));
+  const s2 = readStamp(remote)!;
+  s2.files["work/app/linked/notes.txt"] = { sha: "x", written: "y", mode: "0600", kind: "verbatim" } as any;
+  fs.writeFileSync(path.join(remote, ".codecast/mirror.json"), JSON.stringify(s2));
+  const r2 = await applyMirrorBundle(await parseMirrorBundle(built.bytes), { home: remote, configUserId: "u", previousStamp: readStamp(remote), refresh: () => {} });
+  expect(r2.errors).toEqual([]);
+  expect(readStamp(remote)!.files["work/app/linked/notes.txt"]).toBeUndefined();
+
+  // An untracked entry held as a conflict, no longer carried: forgotten, the file left as it is.
+  write(targetRoot, "renders/list.txt", "the session's own list\n");
+  const s3 = readStamp(remote)!;
+  s3.files["work/app/renders/list.txt"] = { sha: "x", written: "y", mode: "0600", kind: "verbatim", host_edited: true } as any;
+  fs.writeFileSync(path.join(remote, ".codecast/mirror.json"), JSON.stringify(s3));
+  const r3 = await applyMirrorBundle(await parseMirrorBundle(built.bytes), { home: remote, configUserId: "u", previousStamp: readStamp(remote), refresh: () => {} });
+  expect(r3.host_edited).toEqual([]);
+  expect(read(targetRoot, "renders/list.txt")).toBe("the session's own list\n");
+  expect(readStamp(remote)!.files["work/app/renders/list.txt"]).toBeUndefined();
 });
 
 test("registrations follow stable host identity and retirement never recreates a deleted target", async () => {

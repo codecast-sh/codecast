@@ -26,6 +26,8 @@ export const deviceSettingsValidator = v.object({
   // config.json, on unless turned off), and whether it may update itself.
   hooks_enabled: v.optional(v.boolean()),
   auto_update: v.optional(v.boolean()),
+  // Does the session trailer hook add Codecast-Session to commits here?
+  session_trailer: v.optional(v.boolean()),
 });
 
 // Daemon-reported model inventory for dynamic clients (opencode/pi): each

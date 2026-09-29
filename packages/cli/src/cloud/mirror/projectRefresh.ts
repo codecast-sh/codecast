@@ -20,7 +20,7 @@ export interface ProjectRegistration {
 export const projectRegistrationsFile = () => path.join(defaultConfigDir(), "browser", "mirror-projects.json");
 
 function registeredHostId(host: RemoteHost): string | undefined {
-  return readHosts().find((r) => r.user === host.user && r.address === host.address)?.id;
+  return readHosts().find((r) => r.user === host.user && (r.address === host.address || r.tailnet?.ip === host.address))?.id;
 }
 
 export function readProjectRegistrations(host?: RemoteHost, file = projectRegistrationsFile(), hostId?: string): ProjectRegistration[] {

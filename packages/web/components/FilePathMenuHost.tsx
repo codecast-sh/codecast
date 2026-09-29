@@ -7,7 +7,8 @@
 
 import { Folder, FolderOpen } from "lucide-react";
 import { ContextMenu, CtxItem, CtxSeparator, useContextMenu } from "./ui/context-menu";
-import { OpenLinkItems } from "./LinkMenuHost";
+import { OpenLinkItems, SessionsLinkItem } from "./LinkMenuHost";
+import { fileSessionsLink } from "../lib/sessionSearchLinks";
 import { filePathHref } from "../lib/filePathLinks";
 import { setFilePathMenuListener, type FilePathMenuPayload } from "../lib/filePathMenu";
 import { resolveCustomPath, parentDir } from "../lib/utils";
@@ -46,6 +47,7 @@ export function FilePathMenuHost() {
                 {`Reveal in ${fileManagerName()}`}
               </CtxItem>
             )}
+            <SessionsLinkItem link={fileSessionsLink(abs, p.ctx?.gitRoot)} />
           </>
         );
       }}

@@ -8,6 +8,7 @@ import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { setGuestImageScope } from "../../../hooks/useStorageImageUrl";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { ConversationPlaceholder } from "../../../components/ConversationPlaceholder";
+import { ConversationUnavailable } from "../../../components/ConversationUnavailable";
 import { ConversationDiffLayout } from "../../../components/ConversationDiffLayout";
 import type { ConversationData } from "../../../components/conversation/types";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
@@ -190,38 +191,11 @@ function RedirectToLogin({ id }: { id: string }) {
   return <ConversationLoadingSkeleton id={id} />;
 }
 
-function DeniedView() {
+/** Deleted, private to someone else, or never existed: one honest note. */
+function UnavailableView() {
   return (
     <DashboardLayout>
-      <div className="flex-1 flex items-center justify-center">
-        <div className="text-center max-w-md px-4">
-          <svg className="w-16 h-16 mx-auto mb-4 text-sol-base01" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-          </svg>
-          <h1 className="text-xl text-sol-base0 mb-2">No Permission</h1>
-          <p className="text-sol-base00 text-sm">
-            This conversation is private. You don't have permission to view it.
-          </p>
-        </div>
-      </div>
-    </DashboardLayout>
-  );
-}
-
-function NotFoundView() {
-  return (
-    <DashboardLayout>
-      <div className="flex-1 flex items-center justify-center">
-        <div className="text-center max-w-md px-4">
-          <svg className="w-16 h-16 mx-auto mb-4 text-sol-base01" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-          <h1 className="text-xl text-sol-base0 mb-2">Not Found</h1>
-          <p className="text-sol-base00 text-sm">
-            This conversation doesn't exist or has been deleted.
-          </p>
-        </div>
-      </div>
+      <ConversationUnavailable />
     </DashboardLayout>
   );
 }
@@ -270,7 +244,7 @@ export default function ConversationPage() {
     return isForeignSession(sess, s.conversations[id], me) ? "foreign" : "own";
   });
 
-  if (!id) return <NotFoundView />;
+  if (!id) return <UnavailableView />;
   // A local stub (a new session not yet created on the server) is only this
   // store's to answer: the server resolves it to not_found, so its cached row
   // wins whatever the server said.
@@ -291,9 +265,9 @@ export default function ConversationPage() {
   }
   if (effective.access_level === "denied") {
     if (authGate === "guest") return <RedirectToLogin id={id} />;
-    return <DeniedView />;
+    return <UnavailableView />;
   }
-  if (effective.access_level === "not_found" || !effective.conversation_id) return <NotFoundView />;
+  if (effective.access_level === "not_found" || !effective.conversation_id) return <UnavailableView />;
 
   // Register the presented token under the RESOLVED id before any child
   // mounts, so every id-keyed query in the tree re-presents it.
