@@ -225,8 +225,30 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
     onExit?.();
   }, [navigateToSession, item.conversationId, onExit]);
 
-  const shrink = useCallback(() => setSize("line"), []);
+  // A fold by scrolling is undone by scrolling: wheel up at the top of the
+  // sheet hands the pane to the thread, so wheel down at the bottom of the
+  // thread hands it back. A fold by a button or a key stays folded.
+  const foldedByScroll = useRef(false);
+  const shrink = useCallback(() => { foldedByScroll.current = false; setSize("line"); }, []);
+  const shrinkByScroll = useCallback(() => { foldedByScroll.current = true; setSize("line"); }, []);
   const grow = useCallback(() => setSize("full"), []);
+
+  useWatchEffect(() => {
+    if (full || !foldedByScroll.current) return;
+    const feed = rootRef.current?.parentElement?.querySelector<HTMLElement>("[data-sv-feed]");
+    if (!feed) return;
+    let pushed = 0;
+    const onWheel = (e: WheelEvent) => {
+      const atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 2;
+      if (e.deltaY <= 0 || !atBottom) { pushed = 0; return; }
+      // A little past the end, so the last notch of a scroll down the thread
+      // does not raise the sheet by itself.
+      pushed += e.deltaY;
+      if (pushed > 60) grow();
+    };
+    feed.addEventListener("wheel", onWheel, { passive: true });
+    return () => feed.removeEventListener("wheel", onWheel);
+  }, [full, grow]);
 
   const onSkip = stepper?.onSkip;
   useWatchEffect(() => {
@@ -501,7 +523,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
         className="decision-doc decision-sheet absolute inset-0 z-40 flex flex-col bg-sol-bg outline-none"
         onWheel={(e) => {
           // Scrolling up at the top of the question hands the pane to the thread.
-          if (e.deltaY < 0 && (bodyRef.current?.scrollTop ?? 0) <= 0) shrink();
+          if (e.deltaY < 0 && (bodyRef.current?.scrollTop ?? 0) <= 0) shrinkByScroll();
         }}
       >
         {/* One row of chrome, kept while the rest scrolls: who is asking,
