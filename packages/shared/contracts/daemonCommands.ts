@@ -54,6 +54,19 @@ export const DAEMON_COMMANDS = [
   // cookie. Never parked on an offline laptop (cloud.requestBrowserSync
   // refuses instead). Old daemons: "Unknown command".
   "cloud_browser_sync",
+  // Mirror a cloud session's working tree into a worktree on THIS laptop, live
+  // (cloud/liveSyncJobs.ts), or stop. Targeted at the laptop that holds the
+  // repo (localMirror.ts mirrorLaptopFor). args: { conversation_id, enable,
+  // host_device_id, remote_cwd, local_root, overwrite? }. The laptop reports
+  // state to conversations.local_mirror (cloud.reportLocalMirror). Old
+  // daemons: "Unknown command".
+  "cloud_live_sync",
+  // The web's actions on a cloud host (Settings → Machines): wake, sleep,
+  // apply the declared setup, save an image, delete an image. Targeted at the
+  // laptop that manages the host (devices.cloud_host.managed_by), which runs
+  // the matching `cast hosts` command in a child and reports the outcome in
+  // its next cloud_host report. args: { host_device_id, action, image_id? }.
+  "cloud_host_action",
   // Fork fast path: resume a fork by copying the parent's local JSONL. A
   // SEPARATE command (not resume_session) so daemons that predate it report
   // "Unknown command" and do nothing — falling into their resume_session path
@@ -85,6 +98,13 @@ export const DAEMON_COMMANDS = [
   // sees plaintext; the daemon decrypts, updates its 0600 store, and fans out to
   // remotes. Old daemons: "Unknown command" (the key just doesn't take there).
   "set_provider_key",
+  // The web's Connect dialog for a sign-in based cloud agent provider (Codex
+  // Cloud) on THIS device. args: { provider, op: "check" | "start" }. check
+  // answers with the machine's login state ({state, account?, plan?,
+  // detail?}); start runs the provider's own sign-in (`codex login`) in a
+  // utility tmux pane and answers {state: "started"} at once. Old daemons:
+  // "Unknown command" (the dialog says to update codecast there).
+  "cloud_agent_login",
   // Web sign-in CTA: run `claude auth login` in a utility tmux pane (opens the
   // browser OAuth flow on this machine), watch the keychain for the outcome,
   // and report it via accountSwitch.completeLoginFlow. args: { email? } — the

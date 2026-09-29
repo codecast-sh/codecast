@@ -155,8 +155,16 @@ export function urlSessionId(pathname: string, search: string): string | null {
  *  selected nothing). */
 export function deepLinkSessionId(path: string): string | null {
   if (shareTokenInPath(path)) return null;
-  const ref = conversationIdFromPath(path) ?? inboxTabSessionId(path);
+  const ref = conversationRefInPath(path);
   return ref && isConvexId(ref) ? ref : null;
+}
+
+/** The conversation a path asks for, in any spelling and any form (a full id,
+ *  a short id, a session UUID): /conversation/<ref>, with its query or anchor,
+ *  or /inbox?s=<ref>. A path that names one owns the view: boot must not land
+ *  on any other session while it resolves, or when it turns out unavailable. */
+export function conversationRefInPath(path: string): string | null {
+  return conversationIdFromPath(path) ?? inboxTabSessionId(path);
 }
 
 /** Whether an active tab must rewrite the address bar to its own stored path.

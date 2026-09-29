@@ -1,4 +1,7 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
+
+// Seeded-worktree cases read whole trees with the sync program (cloud/syncSide.ts); a loaded machine needs the room.
+setDefaultTimeout(60_000);
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";

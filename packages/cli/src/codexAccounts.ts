@@ -530,6 +530,8 @@ export async function refreshCodexUsageSnapshots(
 export interface CodexAccountsHeartbeatPayload {
   active_email?: string;
   active_uuid?: string; // account_id — same field name as the Claude payload
+  /** When the active login's access token runs out: past it, this machine cannot read Codex Cloud until it signs in again. */
+  active_expires_at?: number;
   profiles: Array<{
     name: string;
     email?: string;
@@ -561,7 +563,7 @@ const payloadCache = createMtimeGatedCache<CodexAccountsHeartbeatPayload | null>
         })
         .sort((a, b) => a.name.localeCompare(b.name));
       if (active.email || active.account_id || profiles.length > 0) {
-        value = { active_email: active.email, active_uuid: active.account_id, profiles };
+        value = { active_email: active.email, active_uuid: active.account_id, ...(active.access_expires_at ? { active_expires_at: active.access_expires_at } : {}), profiles };
       }
     } catch {
       value = null;

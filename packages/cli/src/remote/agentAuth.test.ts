@@ -4,10 +4,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   AGENT_AUTH_SOURCES, AGENT_AUTH_WATCH_FILES, agentAuthHostKey, agentAuthWatchDirs, assertNoLaptopPaths, bundleHash, codexAuthHealth,
-  collectAgentAuthBundle, describeBundle, filterProviderAuthMap, geminiAuthHealth, grokAuthHealth, jwtPayload, mirrorEnvSkipReason,
+  collectAgentAuthBundle, describeBundle, filterProviderAuthMap, geminiAuthHealth, grokAuthHealth, mirrorEnvSkipReason,
   parseClientVersion, planAgentAuthPush, readClaudeSettingsEnvForMirror, readInstalledClientVersions, trustOnlyBundle, type AgentAuthBundle,
 } from "./agentAuth";
 import { parseAgentAuthReceiverOutput, type RemoteHost } from "./session-move";
+import { jwtClaims } from "../codexAuthDecode";
 
 const NOW = Date.parse("2026-09-07T12:00:00Z");
 
@@ -77,10 +78,10 @@ describe("codexAuthHealth — the live-JWT gate", () => {
   test("tokens present but the access token is not a JWT with exp → malformed, never shipped", () => {
     expect(codexAuthHealth(JSON.stringify({ tokens: { access_token: "opaque", refresh_token: "r" } }), NOW).reason).toBe("malformed");
   });
-  test("jwtPayload pads base64url like decodeCodexAuth", () => {
-    expect(jwtPayload(jwt({ exp: 1, a: "b" }))).toEqual({ exp: 1, a: "b" });
-    expect(jwtPayload("nope")).toBeUndefined();
-    expect(jwtPayload(42)).toBeUndefined();
+  test("jwtClaims pads base64url", () => {
+    expect(jwtClaims(jwt({ exp: 1, a: "b" }))).toEqual({ exp: 1, a: "b" });
+    expect(jwtClaims("nope")).toBeNull();
+    expect(jwtClaims(42)).toBeNull();
   });
 });
 

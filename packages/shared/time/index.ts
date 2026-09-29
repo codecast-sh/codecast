@@ -103,3 +103,34 @@ export function describeDatesFull(row: DatedRow): string {
   if (!wasEdited(row)) return created;
   return `${created}\nUpdated ${formatDateFull(row.updated_at!)}`;
 }
+
+// A time a person types on a filter: "today", "yesterday", "7d", "2w ago",
+// "24h", or anything Date.parse reads ("2026-09-01"). One reader for the CLI's
+// -s/-e flags and the after:/before: operators of a session query, so both
+// spellings of a window mean the same instant. null when it cannot be read.
+export function parseRelativeDate(input: string, now: number = Date.now()): number | null {
+  const lowered = input.toLowerCase().trim();
+
+  if (lowered === "today") return new Date(now).setHours(0, 0, 0, 0);
+  if (lowered === "yesterday") return now - DAY;
+
+  const relMatch = lowered.match(/^(\d+)\s*(d|day|days|h|hour|hours|w|week|weeks)(\s*ago)?$/);
+  if (relMatch) {
+    const num = parseInt(relMatch[1]);
+    const unit = relMatch[2][0];
+    return now - num * (unit === "d" ? DAY : unit === "h" ? HOUR : 7 * DAY);
+  }
+
+  const parsed = Date.parse(input);
+  return isNaN(parsed) ? null : parsed;
+}
+
+// End bounds read a date-only input as the END of that day, so a start and end
+// of 2026-06-05 mean the whole day instead of an empty window (a bare date
+// otherwise parses to the midnight that starts it).
+export function parseEndDate(input: string, now: number = Date.now()): number | null {
+  const parsed = parseRelativeDate(input, now);
+  if (parsed === null) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(input.trim())) return parsed + DAY - 1;
+  return parsed;
+}

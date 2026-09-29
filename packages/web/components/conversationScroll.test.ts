@@ -236,6 +236,22 @@ describe("jumpRowForMessage", () => {
     expect(jumpRowForMessage("absorbed", "compact", aggregates)).toEqual({ scrollToId: "absorbed", expandKey: "turn-1" });
   });
 
+  test("a folded working turn opens first, then the density's own rule applies", () => {
+    const lastTextOf = new Map([["turn-1", "reply"]]);
+    const closed = { expanded: new Set<string>(), lastTextOf };
+    expect(jumpRowForMessage("absorbed", "condensed", aggregates, closed)).toEqual({ scrollToId: "owner", expandKey: "turn-1" });
+    expect(jumpRowForMessage("absorbed", "full", aggregates, closed)).toEqual({ scrollToId: "absorbed", expandKey: "turn-1" });
+    const open = { expanded: new Set(["turn-1"]), lastTextOf };
+    expect(jumpRowForMessage("absorbed", "condensed", aggregates, open)).toEqual({ scrollToId: "owner", expandKey: "owner" });
+    expect(jumpRowForMessage("absorbed", "full", aggregates, open)).toEqual({ scrollToId: "absorbed", expandKey: null });
+  });
+
+  test("a folded turn's visible reply needs no opening", () => {
+    const withReply = { ...aggregates, turnKeyOf: new Map([...aggregates.turnKeyOf, ["reply", "turn-1"]]) };
+    const fold = { expanded: new Set<string>(), lastTextOf: new Map([["turn-1", "reply"]]) };
+    expect(jumpRowForMessage("reply", "full", withReply, fold)).toEqual({ scrollToId: "reply", expandKey: null });
+  });
+
   test("a folded nudge jumps to the run head in every density", () => {
     const withNudges = {
       ...aggregates,
