@@ -2,13 +2,15 @@ import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { CursorCloudApi, CursorCloudWatcher, buildCursorCloudTranscript, forkedWorkers, githubHttpsUrl, mergeEventLog, type CursorCloudRun, type CursorRunEvent } from "./cursorCloud.js";
-import { parseCursorTranscriptFile } from "./parser.js";
-import { classifyCursorTranscriptTail } from "./workers/ingestMetadata.js";
-import { CLIENT_ERROR_BANNER_PREFIX } from "@codecast/shared/contracts";
+import { CursorCloudAdapter, CursorCloudApi, CursorCloudApiError, buildCursorCloudTranscript, forkedWorkers, mergeEventLog, type CursorCloudRun, type CursorRunEvent } from "./cursor.js";
+import { CloudAgentWatcher, type CloudAgentWatcherOptions } from "./watcher.js";
+import { parseCursorTranscriptFile } from "../parser.js";
+import { classifyCursorTranscriptTail } from "../workers/ingestMetadata.js";
+import { CLIENT_ERROR_BANNER_PREFIX, classifyApiErrorBanner, cloudAgentCredentialError } from "@codecast/shared/contracts";
+import { CloudAgentSetupError } from "./types.js";
 
 // A real run's stream (api.cursor.com, 2026-09-29), deltas stripped.
-const SSE = fs.readFileSync(path.join(import.meta.dir, "__fixtures__", "cursorCloudRun.sse"), "utf8");
+const SSE = fs.readFileSync(path.join(import.meta.dir, "..", "__fixtures__", "cursorCloudRun.sse"), "utf8");
 const AGENT = "bc-f778d439-1bd2-4f6a-ae1e-26ae7c4bdac5";
 const RUN: CursorCloudRun = { id: "run-5e77f9d7-e1e5-4213-b30f-6d6051ec98e8", agentId: AGENT, status: "FINISHED", createdAt: "2026-09-29T07:53:41.213Z", updatedAt: "2026-09-29T07:54:11.515Z", result: "pong" };
 const CONVERSATION = [
@@ -38,9 +40,14 @@ async function streamEvents(agent = AGENT, run = RUN.id, sse = SSE): Promise<Cur
 // of its own. The stream read here is its FIRST run's, which carries every
 // later turn too.
 const MT_AGENT = "bc-f4091919-2051-4906-b735-74f6340e2124";
-const MT_SSE = fs.readFileSync(path.join(import.meta.dir, "__fixtures__", "cursorCloudMultitask.sse"), "utf8");
-const MT_CONVERSATION = JSON.parse(fs.readFileSync(path.join(import.meta.dir, "__fixtures__", "cursorCloudMultitask.conversation.json"), "utf8"));
+const MT_SSE = fs.readFileSync(path.join(import.meta.dir, "..", "__fixtures__", "cursorCloudMultitask.sse"), "utf8");
+const MT_CONVERSATION = JSON.parse(fs.readFileSync(path.join(import.meta.dir, "..", "__fixtures__", "cursorCloudMultitask.conversation.json"), "utf8"));
 const MT_RUN: CursorCloudRun = { id: "run-107a6675-4dd4-4f05-981b-b167d74a82e9", agentId: MT_AGENT, status: "FINISHED", createdAt: "2026-09-29T06:18:58.686Z", updatedAt: "2026-09-29T06:19:10.000Z" };
+
+/** The Cursor mirror as the daemon builds it: the core watcher over the Cursor adapter. */
+function cursorWatcher(opts: CloudAgentWatcherOptions & { readKey: () => string | null; fetchImpl?: typeof fetch }): CloudAgentWatcher<CursorCloudAdapter> {
+  return new CloudAgentWatcher(new CursorCloudAdapter({ readKey: opts.readKey, fetchImpl: opts.fetchImpl }), opts);
+}
 
 const cleanups: (() => void)[] = [];
 afterEach(() => { for (const fn of cleanups.splice(0)) try { fn(); } catch {} });
@@ -123,10 +130,14 @@ describe("Cursor Cloud transcript", () => {
     expect(mergeEventLog(events, events)).toHaveLength(events.filter((e) => e.id).length);
   });
 
-  test("GitHub remotes normalize to the https form the API takes", () => {
-    expect(githubHttpsUrl("git@github.com:ashot/codecast.git")).toBe("https://github.com/ashot/codecast");
-    expect(githubHttpsUrl("https://github.com/ashot/codecast")).toBe("https://github.com/ashot/codecast");
-    expect(githubHttpsUrl("git@gitlab.com:a/b.git")).toBeNull();
+  test("the credential cards the adapter posts are the ones the web offers Connect on", () => {
+    const adapter = new CursorCloudAdapter({ readKey: () => null });
+    const rejected = adapter.setupErrorOf(new CursorCloudApiError(401, "error", "Invalid User API Key"), { model: "" })!;
+    for (const err of [CloudAgentSetupError.credentialsMissing(adapter), rejected]) {
+      expect(cloudAgentCredentialError("cursor", err.message)?.id).toBe("cursor");
+      expect(classifyApiErrorBanner(`${CLIENT_ERROR_BANNER_PREFIX} ${err.message}`)).toBe("auth");
+    }
+    expect(rejected.message).toBe("Cursor rejected the API key on this machine (Invalid User API Key).");
   });
 });
 
@@ -136,7 +147,7 @@ describe("CursorCloudWatcher import setting", () => {
     cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
     const agent = (id: string) => ({ id, name: id, status: "IDLE", createdAt: RUN.createdAt, updatedAt: RUN.updatedAt });
     const json = (body: unknown) => () => new Response(JSON.stringify(body));
-    const watcher = new CursorCloudWatcher({
+    const watcher = cursorWatcher({
       rootDir: root,
       readKey: () => "crsr_test",
       importAll: () => false,
@@ -164,7 +175,7 @@ describe("CursorCloudWatcher", () => {
     const agent = { id: AGENT, name: "codecast probe", status: "IDLE", repos: [{ url: "https://github.com/ashot/codecast" }], url: `https://cursor.com/agents/${AGENT}`, createdAt: RUN.createdAt, updatedAt: RUN.updatedAt, latestRunId: RUN.id };
     const json = (body: unknown) => () => new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
     const EMPTY_RUN: CursorCloudRun = { ...RUN, id: "run-empty", createdAt: "2026-09-29T07:53:00.000Z" };
-    const watcher = new CursorCloudWatcher({
+    const watcher = cursorWatcher({
       rootDir: root,
       readKey: () => "crsr_test",
       resolveRepoDir: async (repo) => (repo.name === "codecast" ? "/Users/me/src/codecast" : null),
@@ -190,7 +201,7 @@ describe("CursorCloudWatcher", () => {
     await watcher.poll();
     expect(sessions.length).toBe(1);
     // A restarted watcher announces what is already on disk before any poll.
-    const restarted = new CursorCloudWatcher({ rootDir: root, readKey: () => null, pollMs: 3_600_000 });
+    const restarted = cursorWatcher({ rootDir: root, readKey: () => null, pollMs: 3_600_000 });
     const primed: Array<{ sessionId: string }> = [];
     restarted.on("session", (e) => primed.push(e));
     restarted.start();

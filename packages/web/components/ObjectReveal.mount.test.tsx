@@ -92,6 +92,10 @@ test("the band portals into a slot right under the reference's paragraph and the
   click(band.querySelector(".object-reveal__strip")!);
   expect(content.querySelector("[data-reveal-slot]")).toBeNull();
   expect(content.querySelector("button")?.getAttribute("aria-pressed")).toBe("false");
+  // The top bar's X closes it too.
+  click(content.querySelector("button")!);
+  click(content.querySelector(".object-reveal__open [data-reveal-close]")!);
+  expect(content.querySelector(".object-reveal")).toBeNull();
   React.act(() => root!.render(null));
 });
 

@@ -2826,6 +2826,16 @@ http.route({
         });
       }
 
+      // A cloud host's readiness (Settings > Machines), in its own call so a
+      // shape this server does not know never fails the heartbeat.
+      if (body.host_readiness && typeof body.host_readiness === "object" && typeof device_id === "string") {
+        try {
+          await ctx.runMutation(api.cloud.reportHostReadiness, { api_token, device_id, readiness: body.host_readiness });
+        } catch (err) {
+          console.warn(`[heartbeat] host readiness from ${device_id.slice(0, 8)} refused: ${err instanceof Error ? err.message.slice(0, 200) : String(err)}`);
+        }
+      }
+
       // Capability inventory, when the daemon attached one. Deviation from
       // ct-42826's literal wording (an arg on daemonHeartbeat): forwarding to
       // reportInventory reuses its whole pipeline — sanitizer, scope cap, hash
@@ -4610,6 +4620,14 @@ cliRoute("/cli/spawn", async (ctx, body) => ctx.runMutation((api as any).spawn.c
 // `cast handoff --to <agent>`: brief + compose + spawn + link, one action
 // (handoff.start), the same one the web calls signed in.
 cliRoute("/cli/handoff", async (ctx, body) => ctx.runAction((api as any).handoff.start, body));
+
+// `cast read <id> --ask "<question>"`: answer from one session, with line
+// citations, on the server's model key. body: { api_token, conversation_id, question }.
+cliRoute("/cli/read/ask", async (ctx, body) => ctx.runAction(internal.sessionAsk.ask, {
+  api_token: body.api_token,
+  conversation_id: body.conversation_id,
+  question: body.question,
+}));
 
 // Session OWNERS (cast own / disown / owners, or scripts routing an agent-run
 // session into a human's inbox). A session has a SET of owners — it can sit in

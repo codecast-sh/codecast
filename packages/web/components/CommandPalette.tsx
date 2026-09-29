@@ -2969,7 +2969,10 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">
                   {result.titleMatch
                     ? "title"
-                    : `${result.matches?.length || 0} match${(result.matches?.length || 0) !== 1 ? "es" : ""}`}
+                    : result.matches?.length
+                    ? `${result.matches.length} match${result.matches.length !== 1 ? "es" : ""}`
+                    // An operator-only query (file:, pr:, ...) matches the session, not a message.
+                    : "filter"}
                 </span>
                 <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{timeAgo(result.updatedAt)}</span>
               </CommandPrimitive.Item>
