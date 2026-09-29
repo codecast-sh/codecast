@@ -2,6 +2,7 @@ import { mutation, query, internalMutation, internalQuery } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { AgentClientId, AgentDefinitionSpec } from "@codecast/shared/contracts";
+import { MACHINE_SETTINGS, isCloudAgentLoginState, isMachineSetting, type CloudAgentLoginStateName } from "@codecast/shared/contracts";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
@@ -23,7 +24,7 @@ import { fromConvexAgentType, findModelOption, deviceDisplayName, formatMachineS
   deviceWakesOnUse,
   posixRepoBasename,
 } from "@codecast/shared/contracts";
-import { listAgentBoxDevices, resolveSessionLaunchDevice } from "./sessionLaunch";
+import { isTeamMachineFor, listTeamMachines, resolveSessionLaunchDevice } from "./sessionLaunch";
 import { notifySessionExecutionTaken } from "./sessionAssignmentNotifications";
 import { releasePreviousOwner } from "./sessionRelease";
 import { cloudPlacementNeeded, findSharedCheckoutOccupant, parkOnCloudHost } from "./cloudPlacement";
@@ -1166,6 +1167,12 @@ export const listDevices = query({
     // The fleet floor below which a daemon updates itself. A device below it
     // with automatic update off waits for its Update button (Settings > Daemon).
     const minCliVersion = await getSystemConfig(ctx, "min_cli_version");
+    const shares = await ctx.db
+      .query("device_shares")
+      .withIndex("by_user_device", (q: any) => q.eq("user_id", userId))
+      .collect();
+    const sharedTeams = (deviceId: string) =>
+      shares.filter((sh: any) => sh.device_id === deviceId).map((sh: any) => sh.team_id.toString()).sort();
     return rows
       .map((d: any) => ({
         device_id: d.device_id,
@@ -1173,6 +1180,9 @@ export const listDevices = query({
         platform: d.platform,
         hostname: d.hostname ?? undefined,
         ssh_host: d.ssh_host ?? undefined,
+        // The teams this machine is open to (device_shares), sorted so the
+        // roster signature holds still.
+        shared_team_ids: sharedTeams(d.device_id),
         // Bucketed to the minute: every device beats every 30s, and the raw
         // value re-pushed this whole roster — each row carrying a model
         // inventory of several KB. The clients render it as a relative age and
@@ -1191,9 +1201,14 @@ export const listDevices = query({
         // to, and which providers have a key on this device (ids only).
         provider_key_pubkey: d.provider_key_pubkey ?? undefined,
         managed_provider_ids: d.managed_provider_ids ?? [],
+        // What keeps it from reading a cloud agent provider (Settings: not "connected").
+        cloud_agent_blocks: d.cloud_agent_blocks ?? undefined,
         // Git-plane health + the device's public git key (grant-access flow).
         git_plane: d.git_plane ?? undefined,
         git_pubkey: d.git_pubkey ?? undefined,
+        // A cloud host's readiness and its laptop's report: each changes only when its content does.
+        host_readiness: d.host_readiness ?? undefined,
+        cloud_host: d.cloud_host ?? undefined,
         // Per-device daemon health (web: useDaemonHealth).
         daemon_started_at: d.daemon_started_at ?? undefined,
         loop_freeze_ms: d.loop_freeze_ms ?? undefined,
@@ -1271,6 +1286,9 @@ export async function performRemoveDevices(
       result.skipped.push({ device_id: deviceId, reason: "online" });
       continue;
     }
+    // A machine that lists itself again comes back private: a share was
+    // consent for that machine as it was, not for whatever returns under its id.
+    await performSetDeviceShares(ctx, userId, deviceId, []);
     await ctx.db.delete(device._id);
     await ctx.scheduler.runAfter(0, internal.capabilityState.deleteDeviceState, {
       user_id: userId,
@@ -1347,14 +1365,16 @@ async function runnerDeviceOf(ctx: { db: any }, conv: any) {
  * the attach command, the terminal split and the pane relay? Two ways in:
  *
  *   - the viewer runs the session (conv.user_id), so the device is theirs;
- *   - the session runs under a BOT account's daemon — an agent box, like the
- *     team's Mac mini that Mr Bot signs into — and the viewer owns the session
- *     and belongs to the bot's team.
+ *   - the viewer owns the session and it runs on one of their team machines:
+ *     an agent box (a bot's daemon, like the team's Mac mini that Mr Bot signs
+ *     into) or a teammate's machine shared with a team the viewer is on
+ *     (isTeamMachineFor, the same rule that let them start it there).
  *
- * A teammate's machine stays out of reach: relaying a pane means writing into
- * the device owner's daemon queue, which for a person is a real boundary. A bot
- * has no person behind it; its daemon exists to run the team's sessions, and
- * the owner of one of those sessions is exactly who it runs them for.
+ * Any other teammate's machine stays out of reach: relaying a pane means
+ * writing into the device owner's daemon queue, which for a person is a real
+ * boundary until they share the machine. Sharing it is exactly the consent to
+ * run sessions for its owners there. `via_bot` means the pane answers under
+ * another account's daemon, bot or person.
  *
  * Returns the device row and the account whose daemon queue and frame rows the
  * device answers under (the runner), or null when the machine is genuinely
@@ -1371,13 +1391,11 @@ export async function resolveReachableRunnerDevice(
   if (conv.user_id.toString() === userId.toString()) {
     return { device, runnerUserId: userId, via_bot: false };
   }
-  const runner = await ctx.db.get(conv.user_id);
-  if (!runner?.is_bot || !runner.team_id) return null;
   const owns =
     conv.owner_user_id?.toString() === userId.toString() ||
     (await isSessionOwner(ctx, conv._id, userId));
   if (!owns) return null;
-  if (!(await isTeamMember(ctx, userId, runner.team_id))) return null;
+  if (!(await isTeamMachineFor(ctx, userId, device))) return null;
   return { device, runnerUserId: conv.user_id, via_bot: true };
 }
 
@@ -1443,10 +1461,14 @@ export function sanitizeSshHost(raw: string | undefined | null): string | null {
 }
 
 /**
- * The agent boxes the viewer can reach: devices whose daemon signs in as a bot
- * account on one of the viewer's teams (Settings → Devices lists them under
- * their own heading, with the SSH host editable by a team admin). Display
- * fields only — the same projection getConversationMachine hands out.
+ * The team machines the viewer can start sessions on (listTeamMachines): agent
+ * boxes, whose daemon signs in as a bot on one of the viewer's teams, and
+ * teammates' machines shared with one of those teams. Settings → Devices lists
+ * them under their own heading and the composer offers them as machines.
+ * Display fields only — the same projection getConversationMachine hands out.
+ * `bot_name` is set for an agent box only (null otherwise), which is what the
+ * clients key "not your own machine" and "agent box" on; `runner_name` names
+ * whoever the daemon runs as either way.
  */
 export const listAgentBoxes = query({
   args: { api_token: v.optional(v.string()) },
@@ -1458,6 +1480,8 @@ export const listAgentBoxes = query({
       device_id: string;
       owner_user_id: Id<"users">;
       bot_name: string | null;
+      runner_name: string | null;
+      is_bot: boolean;
       team_id: Id<"teams">;
       can_edit: boolean;
       label: string;
@@ -1469,11 +1493,13 @@ export const listAgentBoxes = query({
       last_seen: number;
       local_project_roots: string[];
     }> = [];
-    for (const { device: d, bot, teamId, canEdit } of await listAgentBoxDevices(ctx, userId)) {
+    for (const { device: d, runner, teamId, canEdit } of await listTeamMachines(ctx, userId)) {
       out.push({
         device_id: d.device_id,
-        owner_user_id: bot._id,
-        bot_name: bot.name ?? null,
+        owner_user_id: runner._id,
+        bot_name: runner.is_bot ? runner.name ?? null : null,
+        runner_name: runner.name ?? null,
+        is_bot: !!runner.is_bot,
         team_id: teamId,
         can_edit: canEdit,
         label: d.label,
@@ -1536,6 +1562,76 @@ export const setDeviceSshHost = mutation({
   },
 });
 
+/**
+ * Tell the team a machine just opened to them: one bell row each, no phone
+ * push (news, not an interruption). The device entity routes to Settings →
+ * Devices, where Team machines lists it. A re-share of a machine already open
+ * to the team never reaches here, so a toggle cannot spam.
+ */
+async function announceDeviceShare(ctx: any, userId: Id<"users">, device: any, teamId: Id<"teams">) {
+  const team = await ctx.db.get(teamId);
+  const members = await ctx.db
+    .query("team_memberships")
+    .withIndex("by_team_id", (q: any) => q.eq("team_id", teamId))
+    .collect();
+  const machine = deviceDisplayName({ label: device.label, platform: device.platform, is_remote: device.is_remote });
+  for (const m of members) {
+    if (m.user_id === userId) continue;
+    await ctx.scheduler.runAfter(0, internal.notificationRouter.emit, {
+      event_type: "device_shared" as const,
+      actor_user_id: userId,
+      entity_type: "device" as const,
+      entity_id: device._id,
+      direct_recipient_id: m.user_id,
+      message: `${machine} is now shared with ${team?.name ?? "your team"}. Pick it as the machine for a new session.`,
+      push: false,
+    });
+  }
+}
+
+/**
+ * Open one of the caller's machines to exactly `teamIds` (empty closes it).
+ * Settings → Devices writes the whole set, so a toggle is idempotent and a
+ * retried dispatch lands the same state. Teammates then see it as a team
+ * machine and may start sessions on it, which run under the caller's daemon
+ * and account. Only the caller's own device, only teams the caller is on.
+ */
+export async function performSetDeviceShares(
+  ctx: any,
+  userId: Id<"users">,
+  deviceId: string,
+  teamIds: string[],
+) {
+  const device = await ctx.db
+    .query("devices")
+    .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", deviceId))
+    .first();
+  if (!device) throw new Error("Unknown device");
+  const wanted = new Set(teamIds);
+  for (const teamId of wanted) {
+    if (!(await isTeamMember(ctx, userId, teamId as Id<"teams">))) {
+      throw new Error("You can only share a machine with a team you are on");
+    }
+  }
+  const existing = await ctx.db
+    .query("device_shares")
+    .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", deviceId))
+    .collect();
+  const have = new Set<string>();
+  for (const row of existing) {
+    const key = row.team_id.toString();
+    if (!wanted.has(key) || have.has(key)) await ctx.db.delete(row._id);
+    else have.add(key);
+  }
+  const now = Date.now();
+  for (const teamId of wanted) {
+    if (have.has(teamId)) continue;
+    await ctx.db.insert("device_shares", { user_id: userId, device_id: deviceId, team_id: teamId as Id<"teams">, shared_at: now });
+    await announceDeviceShare(ctx, userId, device, teamId as Id<"teams">);
+  }
+  return { shared_team_ids: [...wanted].sort() };
+}
+
 /** The caller's own device row, or a thrown error: every device-targeted
  *  command below is for a machine the caller owns. */
 async function requireOwnDevice(ctx: any, apiToken: string | undefined, deviceId: string) {
@@ -1584,9 +1680,9 @@ export const setDeviceSnippet = mutation({
     const { userId, device } = await requireOwnDevice(ctx, args.api_token, args.device_id);
 
     const isStable = args.snippet === "stable";
-    // Two machine settings ride the same command (the daemon handles them in
-    // apply_snippet): codecast's hooks and automatic update.
-    const settingKey = args.snippet === "hooks" ? "hooks_enabled" : args.snippet === "auto_update" ? "auto_update" : null;
+    // Machine settings ride the same command (the daemon handles them in
+    // apply_snippet): codecast's hooks, automatic update, the session trailer.
+    const settingKey = isMachineSetting(args.snippet) ? MACHINE_SETTINGS[args.snippet] : null;
     const mode = args.mode ?? (args.enabled ? "solo" : "off");
 
     const commandId = await ctx.db.insert("daemon_commands", {
@@ -1671,6 +1767,63 @@ export const enqueueProviderKeyCommand = mutation({
 });
 
 /**
+ * The web's Connect dialog for a sign-in based cloud agent provider (Codex
+ * Cloud) asks one machine where its sign-in stands ("check"), or has it run
+ * the provider's own sign-in ("start"). The daemon answers through the
+ * command's result (watchedCommandOutcome below); no credential ever reaches here.
+ */
+export const enqueueCloudAgentLoginCommand = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    device_id: v.string(),
+    provider: v.string(),
+    op: v.union(v.literal("check"), v.literal("start")),
+  },
+  handler: async (ctx, args) => {
+    const { userId } = await requireOwnDevice(ctx, args.api_token, args.device_id);
+    const commandId = await ctx.db.insert("daemon_commands", {
+      user_id: userId,
+      command: "cloud_agent_login" as const,
+      args: JSON.stringify({ provider: args.provider, op: args.op }),
+      created_at: Date.now(),
+      target_device_id: args.device_id,
+    });
+    return { command_id: commandId };
+  },
+});
+
+/** Commands whose page watches the daemon's verdict: a provider key set, a cloud agent sign-in. */
+const WATCHED_COMMANDS: ReadonlySet<string> = new Set(["set_provider_key", "cloud_agent_login"]);
+
+/**
+ * How a watched command went, for the page that sent it: still waiting, or
+ * the daemon's verdict. A key set carries the account the provider named, a
+ * refusal the provider's reason; a sign-in check carries the machine's
+ * login state (`login`) with its account, plan and reason. Owner only.
+ */
+export const watchedCommandOutcome = query({
+  args: { command_id: v.id("daemon_commands") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    const row = await ctx.db.get(args.command_id);
+    if (!row || row.user_id !== userId || !WATCHED_COMMANDS.has(row.command)) return null;
+    if (!row.executed_at) return { state: "pending" as const };
+    if (row.error) return { state: "failed" as const, error: row.error };
+    let result: Record<string, unknown> = {};
+    try { result = JSON.parse(row.result ?? "{}") ?? {}; } catch {}
+    const text = (k: string) => (typeof result[k] === "string" && result[k] ? { [k]: result[k] as string } : {});
+    const login = row.command === "cloud_agent_login" && isCloudAgentLoginState(result.state) ? { login: result.state } : {};
+    return { state: "done" as const, ...text("account"), ...text("plan"), ...text("detail"), ...login } as {
+      state: "done"; account?: string; plan?: string; detail?: string; login?: CloudAgentLoginStateName;
+    };
+  },
+});
+
+/** watchedCommandOutcome under the name the web on origin/main still calls; remove once no deployed web calls it. */
+export const providerKeyCommandOutcome = watchedCommandOutcome;
+
+/**
  * Claim a conversation for this device on a successful session start: stamp
  * owner_device_id and clear any stale session_error in one write. This is the
  * first real enforcement of the single-owner invariant — the device that can
@@ -1733,26 +1886,6 @@ export const claimConversationForStart = mutation({
       // A live LOCAL owner blocks the claim. A remote owner does not: a local
       // daemon that resolved a checkout is the rightful owner over a remote that
       // can't serve the session (mirrors registerManagedSession's reclaim rule).
-/**
- * How a provider key command went, for the page that sent it: still waiting,
- * or the daemon's verdict (a set carries the account the provider named, a
- * refusal carries the provider's reason). Owner only.
- */
-export const providerKeyCommandOutcome = query({
-  args: { command_id: v.id("daemon_commands") },
-  handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) return null;
-    const row = await ctx.db.get(args.command_id);
-    if (!row || row.user_id !== userId || row.command !== "set_provider_key") return null;
-    if (!row.executed_at) return { state: "pending" as const };
-    if (row.error) return { state: "failed" as const, error: row.error };
-    let account: string | undefined;
-    try { account = JSON.parse(row.result ?? "{}").account; } catch {}
-    return { state: "done" as const, ...(account ? { account } : {}) };
-  },
-});
-
       const ownerOnline =
         ownerDevice && !ownerDevice.is_remote && Date.now() - ownerDevice.last_seen < DEVICE_ONLINE_MS;
       if (ownerOnline) return { won: false as const, owner }; // another live daemon owns it

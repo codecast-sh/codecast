@@ -2,11 +2,11 @@
 import { VersionedObservationSet } from "./versionedObservationSet.js";
 import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission.js";
 import { pendingMessageFinished, prepareTmuxDelivery, receiptSettled, TmuxDeliveryUncertainError, type TmuxDeliveryIdentity, type TmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
-import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_GLOBAL, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, CLIENT_ERROR_BANNER_PREFIX, CLOUD_SESSION_SOURCES, classifyApiErrorBanner, confineToOwningDevice, cursorCloudModel, findModelOption, fromConvexAgentType, modelOptionKey, isCodexSafetyError, isMachineDeliveredMessage, isUsageLimitDialog, isValidPaneTarget, snippetBySlug, verdictFromProbe, worktreeOfPath } from "@codecast/shared/contracts";
+import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_GLOBAL, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, CLIENT_ERROR_BANNER_PREFIX, CLOUD_SESSION_SOURCES, cloudSessionSyncOn, classifyApiErrorBanner, confineToOwningDevice, findModelOption, fromConvexAgentType, modelOptionKey, isCodexSafetyError, isMachineDeliveredMessage, isUsageLimitDialog, isValidPaneTarget, isMachineSetting, MACHINE_SETTINGS, machineSettingValues, snippetBySlug, verdictFromProbe, worktreeOfPath } from "@codecast/shared/contracts";
 import { holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, setPendingRedrive } from "./pendingPromptHold.js";
 import { typedPollAnswer } from "./typedPollAnswer.js";
 import { codexTurnErrorMessage } from "./codexTurnError.js";
-import { INGEST_WINDOW_ROWS } from "./workers/ingestTypes.js";
+import { INGEST_CLIENTS, INGEST_WINDOW_ROWS, type IngestJob } from "./workers/ingestTypes.js";
 import { TranscriptRetryOwner } from "./workers/ingestRetryOwner.js";
 import { ingestRetainedWeight } from "./workers/ingestTransport.js";
 import { computeIngestSyncDelta, provenSyncedPrefix, samePersistedFile, transcriptSignatureWatermark, ingestIdentity, ingestMessageTitle, ingestRecord, ingestSource, readTranscriptIngest, sameIngestFile, sameIngestSnapshot, serializeTranscript, validateTranscriptIngest } from "./workers/ingestClient.js";
@@ -59,10 +59,10 @@ import {
 import { readInputIdleMs } from "./inputIdle.js";
 import { copyAgentAuthToRemoteAsync, copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, listScalewayHosts, readPushableCredentialAsync, remoteHome, type RemoteHost } from "./remote/session-move.js";
 import { AGENT_AUTH_WATCH_FILES, agentAuthHostKey, agentAuthWatchDirs, assertNoLaptopPaths, bundleHash, collectAgentAuthBundle, describeBundle, laptopHome, planAgentAuthPush } from "./remote/agentAuth.js";
-import { hostForDevice, listCloudRemoteHosts, readHosts, sshReachable, toRemoteHost } from "./browser/cloudHost.js";
+import { hostForDevice, reachableRemoteHost, reachableRemoteHosts, readHosts, sshReachable, toRemoteHost } from "./browser/cloudHost.js";
 import {
   AGENT_BRIDGE_REFUSED_EXIT, AGENT_BRIDGE_TICK_MS, HOST_AGENT_SOCK, agentBridgeArgs, hostAgentSocketEnv, nextBridgeBackoff,
-  shouldRunBridge, type BridgeBackoff,
+  bridgeAddressStale, shouldRunBridge, type BridgeBackoff,
 } from "./cloud/agentBridge.js";
 import { worktreeEnvPrefix } from "./worktreeEnv.js";
 import { hasActiveCloudWork } from "./cloud/activity.js";
@@ -348,11 +348,11 @@ import {
   grokStableRulesFragment,
 } from "./resumeCommand.js";
 import { ClaudeCloudWatcher, cloudEventUuid } from "./claudeCloud.js";
-import { CursorCloudWatcher, verifyCursorKey } from "./cursorCloud.js";
-import { CursorCloudSessions, CursorCloudSetupError } from "./cursorCloudSessions.js";
+import { CloudAgentRegistry, CloudAgentSetupError, cloudAgentAdapters, logTag as cloudAgentLogTag, readMetaJson, type CloudAgentGit, type CloudAgentLoginCommand } from "./cloudAgents/index.js";
+import { cloudMirrorRepoFacts } from "./cloudAgents/poll.js";
 import { conventionSeed, resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, isResumableCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
 import { blankCodexRecoveryParams, buildLaunchArgs, getConfiguredAgentArgs, getDefaultParamFlags, getPermissionFlags, codexPermissionsFromArgs, launchBinary } from "./launchCommand.js";
-import type { AgentClientId, AgentDefinitionSpec, CloudSessionSource, AgentPaneReadiness, AgentStatus, DeviceSnippetSettings, LivenessVerdict, OpenTaskKind, OpenTaskReport, PaneTerminalModes, StableLaunchPrefs } from "@codecast/shared/contracts";
+import type { AgentClientId, AgentDefinitionSpec, CloudSessionSource, AgentPaneReadiness, AgentStatus, DeviceSnippetSettings, LivenessVerdict, MachineSettingValues, OpenTaskKind, OpenTaskReport, PaneTerminalModes, StableLaunchPrefs } from "@codecast/shared/contracts";
 import { planGatedSnippets } from "./gatedSnippets";
 import { readThreadStateStamp } from "./threadStateStamp.js";
 import { type Config, getAgentArgs, isCloudMirrorEnabled, isOpencodeServerEnabled, opencodeServerPort } from "./config/types.js";
@@ -1277,18 +1277,9 @@ function applyClaudeCloudSync(enabled: boolean): void {
 }
 let conversationCacheRef: ConversationCache | null = null;
 
-// Cursor Cloud Agents (cursorCloud.ts): the mirror watcher, started with the
-// Cursor transcript watcher, and the conversations that run on a cloud agent.
-let cursorCloudWatcher: CursorCloudWatcher | null = null;
-/** Providers that can check a key before it is stored (Settings → Provider keys). */
-const verifyProviderKey: ProviderKeyVerifier = async (provider, apiKey) => provider === "cursor" ? verifyCursorKey(apiKey) : { ok: true };
-/** When each Cursor Cloud setup card was last posted, so a held retry does not repost it. */
-const cursorSetupCardsPosted = new Map<string, number>();
-function cursorApiKey(): string | null {
-  return readProviderKeyStore(CONFIG_DIR).cursor || process.env.CURSOR_API_KEY || null;
-}
-const cursorCloudSessions = new CursorCloudSessions({
-  watcher: () => cursorCloudWatcher,
+// Cloud agent providers (cloudAgents/): each one's mirror watcher, started
+// with the transcript watchers, and the conversations that run on its agents.
+const cloudAgents = new CloudAgentRegistry(cloudAgentAdapters(CONFIG_DIR, { runLogin: runCloudAgentLogin }), {
   bindSession: (conversationId, agentId, projectPath, repoUrl) => {
     if (conversationCacheRef) {
       conversationCacheRef[agentId] = conversationId;
@@ -1298,8 +1289,43 @@ const cursorCloudSessions = new CursorCloudSessions({
   },
   agentForConversation: (conversationId) => buildReverseConversationCache(conversationCacheRef ?? readConversationCache())[conversationId],
   setStatus: (conversationId, status) => { syncServiceRef?.updateSessionAgentStatus(conversationId, status).catch(logConvexFailure); },
+  postSetupCard: async (conversationId, card) => {
+    await syncServiceRef?.addMessages({
+      conversationId,
+      messages: [{ messageUuid: card.key, role: "assistant" as const, content: `${CLIENT_ERROR_BANNER_PREFIX} ${card.message}`, timestamp: Date.now() }],
+    }).catch(logConvexFailure);
+  },
+  enqueueMessage: async (conversationId, content) => {
+    if (!syncServiceRef) throw new Error("not connected");
+    await syncServiceRef.enqueueUserMessage(conversationId, content, undefined, { human: true });
+  },
+  // A cloud agent has no local process: the daemon that mirrors and drives it
+  // hosts it (registered, heartbeat), the way it hosts a Codex app-server
+  // thread, unless another live device already does.
+  hostSession: async (sessionId, conversationId) => {
+    if (!syncServiceRef) return "failed";
+    const res = await syncServiceRef.registerManagedSession(sessionId, process.pid, undefined, conversationId);
+    if (!res) return "failed";
+    if (res.notOwner) return "not_owner";
+    ensureManagedSessionHeartbeat(sessionId);
+    return "hosted";
+  },
+  releaseSession: (sessionId) => stopManagedSessionHeartbeat(sessionId),
+  // The placement is the checkout's root itself (the watcher's resolveRepoDir).
+  placeSession: async (sessionId, cwd) => !!syncServiceRef && !!await syncServiceRef.updateProjectPath(sessionId, cwd, cwd),
+  retitleSession: async (conversationId, title, replaces) => {
+    try {
+      await syncServiceRef?.updateTitle(conversationId, title, { replaces });
+      return !!syncServiceRef;
+    } catch (err) {
+      logConvexFailure(err);
+      return false;
+    }
+  },
   log: (msg) => log(msg),
 });
+/** Providers that can check a key before it is stored (Settings → Provider keys). */
+const verifyProviderKey: ProviderKeyVerifier = (provider, apiKey) => cloudAgents.verifyKey(provider, apiKey);
 let daemonVersion: string | undefined;
 let activeConfig: Config | null = null;
 const platform = process.platform;
@@ -3348,10 +3374,7 @@ async function wakeCloudDevice(deviceId: string, label?: string): Promise<void> 
 }
 
 async function reachableTransferHosts(): Promise<RemoteHost[]> {
-  const candidates = [...listScalewayHosts(), ...listCloudRemoteHosts()];
-  if (!candidates.length) return [];
-  const probes = await Promise.all(candidates.map((h) => sshReachable(h)));
-  return candidates.filter((_, i) => probes[i]);
+  return reachableRemoteHosts(listScalewayHosts());
 }
 
 async function pushCredentialToRemoteHosts(
@@ -3449,6 +3472,47 @@ async function pushProviderKeysToRemoteHosts(reason: string, opts: { onlyIfChang
 // box awake); an exit-3 refusal (another user's logins on the box) is logged
 // once per host. Codex's own `last_refresh` field moves the hash on every
 // rotation, so a laptop re-login lands within a minute.
+let liveSyncJobsInstance: import("./cloud/liveSyncJobs.js").LiveSyncJobs | null = null;
+/** The one mirror job manager (cloud_live_sync), made on first use. */
+async function liveSyncJobs(): Promise<import("./cloud/liveSyncJobs.js").LiveSyncJobs> {
+  if (liveSyncJobsInstance) return liveSyncJobsInstance;
+  const [{ LiveSyncJobs }, { readSyncScope }] = await Promise.all([import("./cloud/liveSyncJobs.js"), import("./cloud/syncScope.js")]);
+  liveSyncJobsInstance = new LiveSyncJobs({
+    report: async (conversationId, report) => { await syncServiceRef?.reportLocalMirror(conversationId, deviceId(), report); },
+    activity: async (ids) => (syncServiceRef ? syncServiceRef.localMirrorActivity(ids) : []),
+    hostFor: (hostDeviceId) => { const h = hostForDevice(hostDeviceId); return h?.address ? toRemoteHost(h) : null; },
+    scopeFor: (spec) => readSyncScope(spec.local_root),
+    log,
+    jobsFile: path.join(defaultConfigDir(), "live-syncs.json"),
+  });
+  return liveSyncJobsInstance;
+}
+
+let hostReportsInstance: import("./cloud/hostReports.js").HostReports | null = null;
+/** The laptop's reports on the cloud hosts it manages, and the web's actions on them (cloud_host_action). */
+async function hostReports(): Promise<import("./cloud/hostReports.js").HostReports> {
+  if (hostReportsInstance) return hostReportsInstance;
+  const { HostReports } = await import("./cloud/hostReports.js");
+  hostReportsInstance = new HostReports({
+    runCast: runCastCommand,
+    report: async (hostDeviceId, report) => { await syncServiceRef?.reportCloudHost(hostDeviceId, report); },
+    hostIdForDevice: (hostDeviceId) => hostForDevice(hostDeviceId)?.id ?? null,
+    log,
+  });
+  return hostReportsInstance;
+}
+const HOST_REPORT_INTERVAL_MS = 15 * 60_000;
+let hostReadinessReporter: import("./cloud/hostReadiness.js").HostReadinessReporter | null = null;
+async function hostReadinessNext(): Promise<import("@codecast/shared/contracts").HostReadiness | undefined> {
+  try {
+    if (!hostReadinessReporter) hostReadinessReporter = new (await import("./cloud/hostReadiness.js")).HostReadinessReporter(CONFIG_DIR, getVersion());
+    return hostReadinessReporter.next();
+  } catch (err) {
+    log(`[HOSTS] readiness read failed: ${err instanceof Error ? err.message : String(err)}`);
+    return undefined;
+  }
+}
+
 let remoteAgentAuthPushInFlight = false;
 const lastPushedAgentAuthHashByHost = new Map<string, string>();
 const agentAuthRefusalLogged = new Set<string>();
@@ -3555,7 +3619,7 @@ async function maintainAgentBridges(): Promise<void> {
     for (const [hostId, b] of agentBridges) {
       const h = hosts.find((x) => x.id === hostId);
       if (!h || h.forwardAgent !== true) { closeAgentBridge(hostId, h ? "forward-agent is off" : "host was removed"); agentBridgeRefused.delete(hostId); }
-      else if (h.address && h.address !== b.address) closeAgentBridge(hostId, `its address changed ${b.address} -> ${h.address}`);
+      else if (h.address && bridgeAddressStale(h, b.address, toRemoteHost(h).address)) closeAgentBridge(hostId, `its address changed ${b.address} -> ${h.address}`);
     }
     for (const h of hosts) {
       if (h.forwardAgent !== true) { agentBridgeRefused.delete(h.id); agentBridgeBackoff.delete(h.id); continue; }
@@ -3567,11 +3631,10 @@ async function maintainAgentBridges(): Promise<void> {
       }
       const backoff = agentBridgeBackoff.get(h.id);
       if (backoff && Date.now() < backoff.notBefore) continue;
-      const remote = toRemoteHost(h);
-      const reachable = await sshReachable(remote);
-      if (!shouldRunBridge(h, reachable, laptopAgent)) continue;
+      const remote = await reachableRemoteHost(h, { toRemoteHost, sshReachable });
+      if (!shouldRunBridge(h, remote !== null, laptopAgent) || !remote) continue;
       const child = spawn("ssh", agentBridgeArgs(remote), { stdio: ["pipe", "ignore", "pipe"], env: process.env });
-      const bridge: AgentBridge = { child, address: h.address, startedAt: Date.now() };
+      const bridge: AgentBridge = { child, address: remote.address, startedAt: Date.now() };
       agentBridges.set(h.id, bridge);
       let stderr = "";
       child.stderr?.on("data", (d: Buffer) => { stderr = (stderr + d.toString()).slice(-2000); });
@@ -3739,17 +3802,47 @@ export function summarizeLoginPaneTail(pane: string): string | null {
   return tail ? tail.slice(0, 160) : null;
 }
 
-// The pane inherits the daemon's launchd PATH (no ~/.local/bin, where the
-// claude binary lives), so the command must carry a full PATH itself. The
-// trailing sleep keeps a dead CLI's pane alive past the watcher's next 2s
-// poll — an instantly-dying pane vanishes before the first capture and
-// reduces the failure report to the generic fallback.
+// A sign-in pane's command (`command` is shell text, its inputs already
+// escaped; `env` is set for that process only). The pane inherits the
+// daemon's launchd PATH (no ~/.local/bin, where the claude binary lives), so
+// the command must carry a full PATH itself. The trailing sleep keeps a dead
+// CLI's pane alive past the watcher's next 2s poll — an instantly-dying pane
+// vanishes before the first capture and reduces the failure report to the
+// generic fallback.
+export function agentLoginPaneCommand(command: string, env: Record<string, string> = {}): string {
+  const vars = Object.entries(env).map(([k, v]) => `${k}=${shellEscapeForSh(v)} `).join("");
+  return `PATH=${shellEscapeForSh(agentSpawnPath())} ${vars}${command}; sleep 4`;
+}
+
 export function buildLoginFlowCommand(email: string | undefined, storeDir?: string): string {
   // A profile sign-in lands in that profile's own credential store, so the
   // machine's keychain login is untouched by it.
-  const store = storeDir ? `CLAUDE_SECURESTORAGE_CONFIG_DIR=${shellEscapeForSh(storeDir)} ` : "";
-  const login = `PATH=${shellEscapeForSh(agentSpawnPath())} ${store}claude auth login --claudeai${email ? ` --email ${shellEscapeForSh(email)}` : ""}`;
-  return `${login}; sleep 4`;
+  return agentLoginPaneCommand(`claude auth login --claudeai${email ? ` --email ${shellEscapeForSh(email)}` : ""}`, storeDir ? { CLAUDE_SECURESTORAGE_CONFIG_DIR: storeDir } : {});
+}
+
+/** A utility tmux pane running one command (a sign-in the CLI wants a TTY for); a pane of that name is replaced. */
+async function startUtilityPane(name: string, command: string): Promise<void> {
+  await killTmuxSessionAndTree(name).catch(() => {});
+  await tmuxExec(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", name, command], { timeout: 5000 });
+}
+
+/**
+ * A cloud agent provider's own sign-in (`codex login` for Codex Cloud), run
+ * like the Claude one above: in a utility pane with the agents' PATH, where
+ * it opens this machine's browser. Nothing watches the pane: the web's
+ * Connect dialog checks the login until it lands (cloud_agent_login). A
+ * machine with no browser of its own (a cloud host) cannot finish that sign-in,
+ * so the dialog says how to sign in there instead.
+ */
+async function runCloudAgentLogin({ argv, headlessArgv, missing }: CloudAgentLoginCommand): Promise<void> {
+  // A CLI that is not there would die in the pane, and the dialog would wait out its whole sign-in for nothing.
+  if (!whichBin(argv[0], agentSpawnPath())) throw new Error(missing);
+  if (isRemoteDevice()) {
+    throw new Error(`${deviceLabel()} has no browser to finish the sign-in. In a terminal there, run \`${(headlessArgv ?? argv).join(" ")}\` and open the link it prints on any device.`);
+  }
+  const pane = `${argv[0]}-login-flow`;
+  await startUtilityPane(pane, agentLoginPaneCommand(argv.map(shellEscapeForSh).join(" ")));
+  log(`[LOGIN-FLOW] started \`${argv.join(" ")}\` (tmux ${pane})`);
 }
 
 async function startLoginFlow(email: string | undefined, force = false, profile?: string): Promise<string> {
@@ -3774,9 +3867,7 @@ async function startLoginFlow(email: string | undefined, force = false, profile?
   try {
     const readCredential = profile ? () => readProfileStoreCredentialsAsync(profile) : readActiveCredentialAsync;
     const baselineHash = credentialHashOf(await readCredential());
-    await killTmuxSessionAndTree(LOGIN_FLOW_TMUX).catch(() => {});
-    const cmd = buildLoginFlowCommand(email, profile ? profileStoreDir(profile) : undefined);
-    await tmuxExec(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", LOGIN_FLOW_TMUX, cmd], { timeout: 5000 });
+    await startUtilityPane(LOGIN_FLOW_TMUX, buildLoginFlowCommand(email, profile ? profileStoreDir(profile) : undefined));
     log(`[LOGIN-FLOW] started browser sign-in${email ? ` for ${email}` : ""}${profile ? ` into profile "${profile}"` : ""} (tmux ${LOGIN_FLOW_TMUX})${force ? " [forced relaunch]" : ""}`);
     void watchLoginFlow(baselineHash, email, gen, profile)
       .catch((err) => log(`[LOGIN-FLOW] watcher failed: ${err instanceof Error ? err.message : String(err)}`))
@@ -3918,7 +4009,7 @@ function writeMintBrowserHook(): string {
 // Same PATH rule as the login flow (the pane inherits launchd's PATH); the
 // trailing sleep keeps a dying CLI's last words capturable.
 export function buildMintFlowCommand(hookPath: string): string {
-  return `PATH=${shellEscapeForSh(agentSpawnPath())} BROWSER=${shellEscapeForSh(hookPath)} claude setup-token; sleep 4`;
+  return agentLoginPaneCommand("claude setup-token", { BROWSER: hookPath });
 }
 
 function openInDefaultBrowser(url: string): void {
@@ -3937,8 +4028,7 @@ async function startMintFlow(profile: string, force = false, startedAt?: number)
       if (!meta) throw new Error(`no saved profile "${profile}" on this machine`);
       fs.rmSync(mintUrlPath(), { force: true });
       const hook = writeMintBrowserHook();
-      await killTmuxSessionAndTree(MINT_FLOW_TMUX).catch(() => {});
-      tmuxExecSync(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", MINT_FLOW_TMUX, buildMintFlowCommand(hook)], { timeout: 5000 });
+      await startUtilityPane(MINT_FLOW_TMUX, buildMintFlowCommand(hook));
       log(`[MINT-FLOW] started setup-token mint for "${profile}"${meta.email ? ` (${meta.email})` : ""}${force ? " [forced relaunch]" : ""}`);
       void watchMintFlow(profile, meta.email, gen, startedAt)
         .catch((err) => log(`[MINT-FLOW] watcher failed: ${err instanceof Error ? err.message : String(err)}`))
@@ -4400,7 +4490,7 @@ async function maintainCcUsageSnapshotsInner(reason: string, opts: { force?: boo
 // local config, keyed by canonical slug (the web never sees the slug→config-key
 // mapping). Reported on every heartbeat so the Settings page mirrors what each
 // device actually has — and reflects a `cast install`/`--disable` within ~30s.
-function buildDeviceSettingsPayload(config: Config | null): DeviceSnippetSettings | undefined {
+function buildDeviceSettingsPayload(config: Config | null): (DeviceSnippetSettings & MachineSettingValues) | undefined {
   if (!config) return undefined;
   const snippets: Record<string, boolean> = {};
   for (const s of SNIPPET_CATALOG) {
@@ -4419,8 +4509,8 @@ function buildDeviceSettingsPayload(config: Config | null): DeviceSnippetSetting
     // credit is even on the table (ct-49529). It only ever proposes: the redeem
     // handler re-reads the config before spending anything.
     codex_reset_credit_auto: config.codex_reset_credit_auto === true,
-    hooks_enabled: config.hooks_enabled !== false,
-    auto_update: config.auto_update !== false,
+    // hooks_enabled, auto_update, session_trailer: on unless turned off.
+    ...machineSettingValues(config as unknown as Record<string, unknown>),
   };
 }
 
@@ -4642,6 +4732,9 @@ async function sendHeartbeat(): Promise<void> {
         // an attach command that works from PowerShell (wsl.exe -d <distro>).
         wsl_distro: wslDistroName(),
         is_remote_device: isRemoteDevice(),
+        // A cloud host's own readiness (mirror, tools, [host] setup, logins on
+        // disk) for the Machines page, sent only when it changes (cloud/hostReadiness.ts).
+        host_readiness: isRemoteDevice() ? await hostReadinessNext() : undefined,
         // Time since the last keyboard/mouse event anywhere on this machine
         // (macOS only; omitted elsewhere). Sent as a DURATION so the server can
         // anchor it to its own clock — daemon clock skew can't fake presence.
@@ -4662,6 +4755,10 @@ async function sendHeartbeat(): Promise<void> {
         // and seal a new key so Convex never sees plaintext.
         provider_key_pubkey: getProviderKeyPublicKey(CONFIG_DIR),
         managed_provider_ids: Object.keys(readProviderKeyStore(CONFIG_DIR)).sort(),
+        // What keeps this machine from reading each cloud agent provider (no
+        // sign-in, expired, turned off for the account), so Settings does not
+        // call it connected. Empty clears it.
+        cloud_agent_blocks: cloudAgents.setupBlocks(),
         // Installed agent-feature snippets + stable mode, so the web Settings
         // page mirrors (and can toggle) this device's setup.
         settings: buildDeviceSettingsPayload(config) ?? undefined,
@@ -4744,11 +4841,12 @@ async function sendHeartbeat(): Promise<void> {
 
     for (const [source, { field }] of Object.entries(CLOUD_SESSION_SOURCES) as [CloudSessionSource, (typeof CLOUD_SESSION_SOURCES)[CloudSessionSource]][]) {
       const wanted = data[field];
-      if (typeof wanted !== "boolean" || wanted === ((activeConfig?.[field] ?? true) !== false)) continue;
+      if (typeof wanted !== "boolean" || wanted === cloudSessionSyncOn(field, activeConfig?.[field])) continue;
       log(`${CLOUD_SESSION_SOURCES[source].label} sync ${wanted ? "on" : "off"} (account setting)`);
       patchConfig({ [field]: wanted });
       if (activeConfig) activeConfig[field] = wanted;
       if (source === "claude") applyClaudeCloudSync(wanted);
+      else if (wanted) cloudAgents.syncTurnedOn(source);
     }
 
     if (data.sync_mode !== undefined) {
@@ -5760,13 +5858,12 @@ async function executeRemoteCommand(
           }
         }
 
-        // A Cursor Cloud choice runs on Cursor's VM, not in a pane here: record
-        // it, and the first delivered message creates the agent.
-        if (agentType === "cursor" && conversationId && requestedModelKey && cursorCloudModel(requestedModelKey) !== null) {
-          await cursorCloudSessions.start(conversationId, parsed.project_path, requestedModelKey);
-          if (typeof parsed.prompt === "string" && parsed.prompt.trim()) {
-            await cursorCloudSessions.deliver(conversationId, parsed.prompt).catch((err) => log(`cursor cloud: first prompt failed: ${err instanceof Error ? err.message : String(err)}`));
-          }
+        // A cloud agent choice (a provider's cloud model key) runs on the
+        // provider's machines, not in a pane here: record it, and the first
+        // delivered message creates the agent.
+        const cloudStart = conversationId ? await cloudAgents.start(agentType, conversationId, parsed.project_path, requestedModelKey, parsed.prompt) : null;
+        if (cloudStart) {
+          if (cloudStart.error) error = cloudStart.error;
           break;
         }
 
@@ -6201,13 +6298,15 @@ async function executeRemoteCommand(
           log(`[REMOTE] Escape skipped for ${conversationId.slice(0, 12)} (${where}): ${verdict.reason}${pressedAt ? ` pressed ${Date.now() - pressedAt}ms ago` : ""}${lastInjectedAt ? `, last injection ${Date.now() - lastInjectedAt}ms ago` : ""}`);
         };
 
-        // A Cursor Cloud agent: Escape cancels its active run.
-        if (cursorCloudSessions.get(conversationId)) {
-          try {
-            result = await cursorCloudSessions.interrupt(conversationId) ? "escape_sent" : "escape_no_active_turn";
-          } catch (err) {
-            error = `cursor cloud cancel failed: ${err instanceof Error ? err.message : String(err)}`;
+        // A cloud agent: Escape cancels its running turn.
+        try {
+          const cloudEscape = await cloudAgents.interrupt(conversationId);
+          if (cloudEscape) {
+            result = cloudEscape === "sent" ? "escape_sent" : "escape_no_active_turn";
+            break;
           }
+        } catch (err) {
+          error = err instanceof Error ? err.message : String(err);
           break;
         }
 
@@ -7827,6 +7926,46 @@ async function executeRemoteCommand(
         }
         break;
       }
+      case "cloud_live_sync": {
+        // Mirror a cloud session's tree into a worktree here, live (the web's
+        // "Mirror edits to this laptop"), or stop. The jobs run in-process,
+        // poll the host only while the session works, and report to
+        // conversations.local_mirror (cloud/liveSyncJobs.ts).
+        if (isRemoteDevice()) { error = "a cloud host does not mirror sessions"; break; }
+        let mirrorArgs: any = null;
+        try {
+          mirrorArgs = typeof commandArgs === "string" ? JSON.parse(commandArgs) : commandArgs;
+          if (mirrorArgs?.op) {
+            // An agent's or a person's `cast sync status|pull|push|diff` (cloud/syncRequests.ts).
+            const [{ handleSyncRequest }, { readSyncScope }] = await Promise.all([import("./cloud/syncRequests.js"), import("./cloud/syncScope.js")]);
+            const answer = await handleSyncRequest(mirrorArgs, {
+              jobs: await liveSyncJobs(),
+              hostFor: (id) => { const h = hostForDevice(id); return h?.address ? toRemoteHost(h) : null; },
+              scopeFor: (root) => readSyncScope(root),
+            });
+            result = JSON.stringify(answer);
+          } else {
+            result = await (await liveSyncJobs()).handleCommand(mirrorArgs);
+          }
+        } catch (err) {
+          error = err instanceof Error ? err.message : String(err);
+          if (mirrorArgs?.conversation_id && !mirrorArgs.op) await syncServiceRef?.reportLocalMirror(mirrorArgs.conversation_id, deviceId(), { status: "error", error: error.slice(0, 300) });
+        }
+        break;
+      }
+      case "cloud_host_action": {
+        // Wake, sleep, apply setup, save or delete an image, from the app's
+        // Machines page. Each runs as a child `cast hosts ...` (AWS calls
+        // block) and its outcome rides the host's next report (cloud/hostReports.ts).
+        if (isRemoteDevice()) { error = "a cloud host does not manage hosts"; break; }
+        try {
+          const a = typeof commandArgs === "string" ? JSON.parse(commandArgs) : commandArgs;
+          result = await (await hostReports()).act(a);
+        } catch (err) {
+          error = err instanceof Error ? err.message : String(err);
+        }
+        break;
+      }
       case "cloud_browser_sync": {
         // A cloud session asked for this laptop's browser login for one site.
         // Laptop only, command-driven (no timer, no retry), one tunnel per
@@ -7926,17 +8065,18 @@ async function executeRemoteCommand(
         const snippet = parsed.snippet;
         // Match aliases too: the web sends pre-rename slugs (e.g. "scheduling"
         // for triggers) so its toggles also work on daemons that predate a rename.
-        // Two machine settings ride the same command: "hooks" (codecast's Claude
-        // Code hooks, harnessHooksInstall.ts) and "auto_update".
-        const known = snippet === "stable" || snippet === "hooks" || snippet === "auto_update" || !!snippetBySlug(snippet);
+        // Machine settings ride the same command (MACHINE_SETTINGS): "hooks"
+        // (codecast's Claude Code hooks, harnessHooksInstall.ts) runs its
+        // installer; the rest are config flags only.
+        const known = snippet === "stable" || isMachineSetting(snippet) || !!snippetBySlug(snippet);
         if (typeof snippet !== "string" || !known) {
           error = `apply_snippet: unknown snippet ${JSON.stringify(snippet)}`;
           break;
         }
-        if (snippet === "auto_update") {
-          // A config flag only: `cast update --auto` would also run an update.
-          patchConfig({ auto_update: parsed.enabled === true });
-          log(`[UPDATE] automatic update ${parsed.enabled ? "on" : "off"} (web toggle)`);
+        if (isMachineSetting(snippet) && snippet !== "hooks") {
+          // A config flag only (`cast update --auto` would also run an update).
+          patchConfig({ [MACHINE_SETTINGS[snippet]]: parsed.enabled === true });
+          log(`[SETTING] ${MACHINE_SETTINGS[snippet]} ${parsed.enabled ? "on" : "off"} (web toggle)`);
           result = JSON.stringify({ snippet, enabled: parsed.enabled === true });
           await sendHeartbeat().catch(() => {});
           break;
@@ -7979,6 +8119,22 @@ async function executeRemoteCommand(
         result = JSON.stringify({ op: applied.op, provider: applied.provider, ...(applied.account ? { account: applied.account } : {}) });
         pushProviderKeysToRemoteHosts("web set").catch(() => {});
         await sendHeartbeat().catch(() => {});
+        break;
+      }
+      case "cloud_agent_login": {
+        // The web's Connect dialog for a sign-in based cloud agent provider
+        // (Codex Cloud): "check" reads this machine's login and asks the
+        // provider whose it is; "start" runs the provider's own sign-in in a
+        // utility pane (it opens the browser here) and returns at once, and
+        // the dialog checks until it lands. No token leaves the machine.
+        const { provider, op } = (commandArgs ? JSON.parse(commandArgs) : {}) as { provider?: string; op?: string };
+        if (!provider || (op !== "check" && op !== "start")) { error = "cloud_agent_login needs a provider and op check|start"; break; }
+        if (op === "start") {
+          await cloudAgents.startLogin(provider);
+          result = JSON.stringify({ state: "started" });
+        } else {
+          result = JSON.stringify(await cloudAgents.checkLogin(provider));
+        }
         break;
       }
       default:
@@ -9046,7 +9202,10 @@ function transcriptCountReplaced(result: object, count: number): boolean {
 async function commitTranscriptIngest(result: {messages: RawMessage[]}, sessionId: string, conversationId: string | undefined, cache: ConversationCache, commit: () => void, keys: readonly string[] = [sessionId], signatureState?: ReadonlyMap<string,string>, consumedMessages: RawMessage[] = result.messages): Promise<void> {
   const source = ingestSource(result);
   if (!source) throw new Error("unknown transcript source commit");
-  const unit = ["claude","cursor","codex"].includes(source.client) ? "bytes" : ["pi","grok","muse"].includes(source.client) ? "signatures" : "count";
+  // A whole-file delta pass (pi, grok, muse, a cursor .jsonl, every cloud
+  // agent mirror) hands its synced signatures in, and its ledger keeps their
+  // watermark so a restarted daemon can prove what it synced (restoreSyncedSignatures).
+  const unit = signatureState ? "signatures" : ["claude","cursor","codex"].includes(source.client) ? "bytes" : "count";
   const currentWatermark = () => source.client === "gemini" ? geminiSyncedCounts.get(source.file) ?? 0 : source.client === "opencode" ? opencodeSyncedCounts.get(sessionId) ?? 0 : getPosition(source.file);
   const priorSignatures = piSyncedSigs.get(source.file) ?? new Map<string,string>();
   const before = unit === "signatures" ? await transcriptSignatureWatermark(priorSignatures) : currentWatermark();
@@ -12234,8 +12393,11 @@ export async function processTranscriptDeltaSession(...args: Parameters<typeof p
   return runTranscriptPass(args[2], path.resolve(args[1]), () => processTranscriptDeltaSessionPass(...args));
 }
 
+/** A cloud agent's mirror (cloudAgents/): synced as a session of the agent type its provider runs under. Claude is spelled claude_code on the server and has no cloud provider. */
+type CloudMirrorSource = { mirror: Exclude<Extract<AgentClientId, IngestJob["client"]>, "claude"> };
+
 async function processTranscriptDeltaSessionPass(
-  client: Extract<AgentClientId, "pi" | "grok" | "muse" | "cursor">,
+  source: Extract<AgentClientId, "pi" | "grok" | "muse" | "cursor"> | CloudMirrorSource,
   filePath: string,
   sessionId: string,
   syncService: SyncService,
@@ -12246,11 +12408,13 @@ async function processTranscriptDeltaSessionPass(
   pendingMessages: PendingMessages,
   updateStateCallback: () => void
 ): Promise<void> {
+  const client = typeof source === "string" ? source : source.mirror;
+  const mirror = typeof source !== "string";
   try {
     // grok-internal children (subagents, hidden sessions) sync through their
     // parent's transcript; ingesting them here would mint a top-level codecast
     // conversation per subagent.
-    const ingest = await readTranscriptIngest({client,file:filePath,sessionId,offset:0});
+    const ingest = await readTranscriptIngest({client,file:filePath,sessionId,offset:0,...(mirror ? {mirror} : {})});
     if (client === "grok" && ingest.metadata.internal) return;
     const allMessages = ingest.messages;
     // A transient empty/corrupt parse must be a no-op, never a signal to delete the
@@ -12259,6 +12423,9 @@ async function processTranscriptDeltaSessionPass(
     if (allMessages.length === 0) return;
     const syncedSigs = piSyncedSigs.get(filePath) ?? await restoreSyncedSignatures(ingest, sessionId, conversationCache) ?? new Map<string, string>();
     const { newMessages, orphanUuids, nextSynced } = await computeIngestSyncDelta(allMessages, ingest.signatures!, syncedSigs);
+    // A mirror a restart re-announces, or one whose title alone moved, has
+    // nothing new to sync and still needs its session kept.
+    if (mirror && conversationCache[sessionId]) await cloudAgents.keepSession(sessionId, conversationCache[sessionId], ingest.metadata);
     if (newMessages.length === 0 && orphanUuids.length === 0) {
       markExamined(ingestSource(ingest)?.file ?? filePath);
       return;
@@ -12272,16 +12439,20 @@ async function processTranscriptDeltaSessionPass(
         // (pi: the session header; grok: the sibling summary.json); the containing
         // slug dir decodes back to it only lossily (see decodePiCwdSlug — and
         // grok's long-path hash dirs don't decode at all).
-        const projectPath = client === "pi"
+        const projectPath = client === "pi" && !mirror
           ? ingest.metadata.cwd ?? decodePiCwdSlug(path.basename(path.dirname(filePath)))
-          : client === "muse" || client === "cursor"
+          : mirror || client === "muse" || client === "cursor"
             // muse's date-sharded dirs carry no cwd — only the log's own
             // route_facts record (ingest metadata) can place the session.
-            // cursor's projects/<slug> dir is lossy; its chat meta.json is not.
+            // cursor's projects/<slug> dir is lossy; its chat meta.json is not,
+            // and neither is a cloud mirror's.
             ? ingest.metadata.cwd ?? undefined
           : ingest.metadata.cwd ?? decodeGrokCwdSlug(path.basename(path.dirname(path.dirname(filePath)))) ?? undefined;
 
-        const matchedStartedConversation = (await matchStartedStub(client, sessionId, projectPath))?.conversationId ?? null;
+        // A cloud agent codecast started is bound when it is created (the
+        // registry's bindSession); any other is not a pane codecast launched,
+        // so it never takes over a local session started in the same folder.
+        const matchedStartedConversation = mirror ? null : (await matchStartedStub(client, sessionId, projectPath))?.conversationId ?? null;
         if (matchedStartedConversation) {
           conversationId = await adoptStartedStub(client, matchedStartedConversation, sessionId, projectPath, conversationCache);
         } else {
@@ -12293,8 +12464,6 @@ async function processTranscriptDeltaSessionPass(
             transcriptRetryOwners.defer(path.resolve(filePath), sessionId);
             return;
           }
-          const firstUserMessage = allMessages.find((msg) => msg.role === "user");
-          const title = parentConversationId ? ingest.metadata.agentName : firstUserMessage ? ingestMessageTitle(firstUserMessage) : undefined;
           const finishCreate = captureTranscriptMapping(sessionId,conversationCache);
           conversationId = await syncService.createConversation({
             userId,
@@ -12303,10 +12472,12 @@ async function processTranscriptDeltaSessionPass(
             agentType: client,
             projectPath,
             slug: undefined,
-            title,
+            ...(parentConversationId ? { title: ingest.metadata.agentName } : deltaSessionTitle(ingest.metadata, allMessages, mirror)),
             startedAt: allMessages[0]?.timestamp,
             parentMessageUuid: undefined,
-            gitInfo: projectPath ? await getGitInfo(projectPath) : undefined,
+            // A cloud agent placed in this machine's checkout takes only which
+            // repository it is from it: the branch is the agent's (onGit).
+            gitInfo: projectPath ? (mirror ? cloudMirrorRepoFacts : (g: GitInfo | undefined) => g)(await getGitInfo(projectPath)) : undefined,
             ...(parentConversationId ? { parentConversationId, isSubagent: true, subagentDescription: ingest.metadata.agentName } : {}),
           });
           conversationId = finishCreate(conversationId);
@@ -12332,10 +12503,8 @@ async function processTranscriptDeltaSessionPass(
         log(`Failed to create ${client} conversation, queueing for retry: ${errMsg}`);
 
         await retainPendingTranscript(pendingMessages, sessionId, newMessages, filePath, ingest.fileSize);
-        const firstUserMessage = allMessages.find((msg) => msg.role === "user");
-        const title = firstUserMessage ? ingestMessageTitle(firstUserMessage) : undefined;
         queueTranscriptConversation(retryQueue, {
-          userId, teamId, sessionId, agentType: client, title, startedAt: allMessages[0]?.timestamp,
+          userId, teamId, sessionId, agentType: client, ...deltaSessionTitle(ingest.metadata, allMessages, mirror), startedAt: allMessages[0]?.timestamp,
         }, errMsg);
         return;
       }
@@ -12358,12 +12527,10 @@ async function processTranscriptDeltaSessionPass(
         delete conversationCache[sessionId];
         saveConversationCache(conversationCache);
 
-        const firstUserMessage = allMessages.find((msg) => msg.role === "user");
-        const title = firstUserMessage ? ingestMessageTitle(firstUserMessage) : undefined;
         try {
           const finishCreate = captureTranscriptMapping(sessionId,conversationCache);
           conversationId = await syncService.createConversation({
-            userId, teamId, sessionId, agentType: client, title, startedAt: allMessages[0]?.timestamp,
+            userId, teamId, sessionId, agentType: client, ...deltaSessionTitle(ingest.metadata, allMessages, mirror), startedAt: allMessages[0]?.timestamp,
           });
           conversationId = finishCreate(conversationId);
           conversationCache[sessionId] = conversationId;
@@ -12387,11 +12554,11 @@ async function processTranscriptDeltaSessionPass(
     // failure keep the orphans in the synced set so the next pass retries rather than
     // stranding them permanently.
     let finalSynced = nextSynced;
-    // Cursor truncates and rewrites its whole transcript on every save, so a
-    // read can land mid-rewrite and miss the tail. Only a file that has held
-    // still since the read may retract messages; otherwise keep them for the
-    // next pass.
-    const orphansSettled = client !== "cursor" || await transcriptHeldStill(filePath, ingest.fileSize);
+    // Cursor (and a cloud mirror) truncates and rewrites its whole transcript
+    // on every save, so a read can land mid-rewrite and miss the tail. Only a
+    // file that has held still since the read may retract messages; otherwise
+    // keep them for the next pass.
+    const orphansSettled = client !== "cursor" && !mirror || await transcriptHeldStill(filePath, ingest.fileSize);
     if (orphanUuids.length > 0 && !conversationRecreated && !orphansSettled) {
       finalSynced = new Map(nextSynced);
       for (const uuid of orphanUuids) finalSynced.set(uuid, syncedSigs.get(uuid) ?? "");
@@ -12413,9 +12580,15 @@ async function processTranscriptDeltaSessionPass(
     log(`Synced ${newMessages.length} ${client} messages for session ${sessionId}`);
     syncStats.messagesSynced += newMessages.length;
     syncStats.sessionsActive.add(sessionId);
-    tryRegisterSessionProcess(sessionId, client);
+    // A cloud agent has no local process to find: the registry hosts it below.
+    if (!mirror) tryRegisterSessionProcess(sessionId, client);
 
     if (conversationId) {
+      // A cloud agent's session is hosted by this daemon (keepSession). Its row
+      // must exist before the status below, which the server drops for a
+      // session it does not know (a task is mirrored once running and once
+      // done, so a dropped "working" is never sent again).
+      if (mirror) await cloudAgents.keepSession(sessionId, conversationId, ingest.metadata);
       // Status is transcript-driven, like opencode's (8347): these clients'
       // panes are excluded from reconcileStatusFromPane (grok's ❯ composer
       // stays visible mid-turn and lies "idle"; pi/opencode have no glyph), so
@@ -12518,6 +12691,16 @@ function detectSessionAgentType(sessionId: string): AgentClientId {
   // index is fine (the type of an id never changes once its file exists).
   const sessionFile = findSessionFile(sessionId, { staleOk: true });
   return sessionFile?.agentType ?? "claude";
+}
+
+/**
+ * A delta-synced session's title at creation: a cloud agent's own name for
+ * it (its task title) kept over codecast's generated one, else its first prompt's.
+ */
+function deltaSessionTitle(metadata: { title?: string }, messages: RawMessage[], mirror: boolean): { title?: string; titleIsCustom?: true } {
+  if (mirror && metadata.title) return { title: metadata.title, titleIsCustom: true };
+  const firstUserMessage = messages.find((msg) => msg.role === "user");
+  return { title: firstUserMessage ? ingestMessageTitle(firstUserMessage) : undefined };
 }
 
 function tryRegisterSessionProcess(sessionId: string, agentType: AgentClientId): void {
@@ -18847,10 +19030,8 @@ function teardownConversationBackendsLive(
   conversationId: string,
   opts: { interruptActiveTurn?: boolean } = {},
 ): Promise<{ killedAppServer: boolean; killedTmux: boolean; appServerThreadId?: string }> {
-  // A Cursor Cloud agent has no pane to kill; stopping it cancels its run.
-  if (opts.interruptActiveTurn && cursorCloudSessions.get(conversationId)) {
-    void cursorCloudSessions.interrupt(conversationId).catch((err) => log(`cursor cloud: cancel on teardown failed: ${err instanceof Error ? err.message : String(err)}`));
-  }
+  // A cloud agent has no pane to kill; stopping it cancels its running turn.
+  if (opts.interruptActiveTurn) cloudAgents.interruptInBackground(conversationId);
   const persisted = persistedAppServerThreads.get(conversationId);
   return teardownConversationBackends(conversationId, {
     appServerConversations,
@@ -24816,28 +24997,16 @@ async function deliverMessage(
     return false;
   };
 
-  // Backends that are not a pane: a codex app-server thread, a Cursor Cloud agent.
+  // Backends that are not a pane: a codex app-server thread, a cloud agent.
   const tryBackendDelivery = async (): Promise<boolean> => {
-    if (await tryAppServerDelivery()) return true;
-    let delivered: boolean;
-    try {
-      delivered = await cursorCloudSessions.deliver(conversationId, content);
-    } catch (err) {
-      // A setup problem shows where the person is looking: as the turn-stopped
-      // card (an auth one carries the key form), once per kind.
-      const cardKey = err instanceof CursorCloudSetupError ? `cursor-cloud-setup:${conversationId}:${err.kind}` : "";
-      if (err instanceof CursorCloudSetupError && Date.now() - (cursorSetupCardsPosted.get(cardKey) ?? 0) > 60_000) {
-        cursorSetupCardsPosted.set(cardKey, Date.now());
-        await syncService.addMessages({
-          conversationId,
-          messages: [{ messageUuid: cardKey, role: "assistant" as const, content: `${CLIENT_ERROR_BANNER_PREFIX} ${err.message}`, timestamp: Date.now() }],
-        }).catch(logConvexFailure);
-      }
-      throw err;
-    }
-    if (!delivered) return false;
+    // A cloud agent first: a Codex Cloud task is a codex conversation, and
+    // must not start the local app-server on its way. A setup problem throws
+    // after its card is posted (the turn-stopped card; a credential one
+    // carries the connect control), and the message is held.
+    const delivered = await cloudAgents.deliver(conversationId, content);
+    if (!delivered) return tryAppServerDelivery();
     await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
-    logDelivery(`[cursor-cloud] delivered msg=${messageId.slice(0, 8)} to the cloud agent of conv=${conversationId.slice(0, 12)}`);
+    logDelivery(`${cloudAgentLogTag(delivered.adapter)} delivered msg=${messageId.slice(0, 8)} to the cloud agent of conv=${conversationId.slice(0, 12)}`);
     return true;
   };
 
@@ -27846,6 +28015,14 @@ async function main(): Promise<void> {
   // watch on each source directory filtered to the exact filenames (the
   // whole ~/.codex would fire on codex's SQLite WAL churn).
   setTimeout(() => { pushAgentAuthToRemoteHosts("daemon start").catch(() => {}); }, 64_000);
+  // What the Machines page shows about each cloud host this laptop manages.
+  if (!isRemoteDevice()) {
+    const refreshHosts = () => { if (readHosts().some((h) => h.deviceId)) hostReports().then((r) => r.refresh()).catch((err) => log(`[HOSTS] report failed: ${err instanceof Error ? err.message : String(err)}`)); };
+    setTimeout(refreshHosts, 45_000);
+    setInterval(refreshHosts, HOST_REPORT_INTERVAL_MS);
+  }
+  // Live mirrors the web started before this daemon last stopped.
+  if (!isRemoteDevice()) setTimeout(() => { liveSyncJobs().then((j) => j.resumeAll()).catch((err) => log(`[MIRROR] resume failed: ${err instanceof Error ? err.message : String(err)}`)); }, 20_000);
   setInterval(() => { pushAgentAuthToRemoteHosts("periodic").catch(() => {}); }, REMOTE_CRED_REFRESH_INTERVAL_MS);
   setInterval(() => { pushAgentAuthToRemoteHosts("login_changed", { onlyIfChanged: true }).catch(() => {}); }, REMOTE_CRED_CHANGE_TICK_MS);
   if (!isRemoteDevice()) {
@@ -29396,10 +29573,30 @@ async function main(): Promise<void> {
   });
 
   cursorTranscriptWatcher.on("session", (event: CursorTranscriptEvent) => {
-    void handleCursorTranscriptEvent(event).catch(error => logError("Cursor transcript event failed", error));
+    void handleTranscriptFileEvent(event, "Cursor", cursorTranscriptSyncs, "cursor", () => findWorkspacePathForCursorConversation(event.sessionId), () => processCursorTranscriptFile(
+      event.filePath,
+      event.sessionId,
+      syncService,
+      config.user_id!,
+      config.team_id,
+      conversationCache,
+      retryQueue,
+      pendingMessages,
+      updateState
+    )).catch(error => logError(`Cursor transcript event failed (${event.filePath})`, error));
   });
 
-  async function handleCursorTranscriptEvent(event: CursorTranscriptEvent): Promise<void> {
+  // A transcript file's event: gated on auth, pause and the project's sync
+  // selection (`workspacePath` places the session), then synced through the
+  // file's retry owner. Cursor's transcripts and every cloud agent mirror.
+  async function handleTranscriptFileEvent(
+    event: { sessionId: string; filePath: string },
+    label: string,
+    syncs: Map<string, InvalidateSync>,
+    client: string,
+    findWorkspacePath: () => Promise<string | null>,
+    process: () => Promise<void>,
+  ): Promise<void> {
     const filePath = event.filePath;
     lastWatcherEventTime = Date.now();
 
@@ -29409,11 +29606,11 @@ async function main(): Promise<void> {
     }
 
     if (isSyncPaused()) {
-      log(`Sync paused, skipping Cursor transcript: ${event.sessionId}`);
+      log(`Sync paused, skipping ${label} transcript: ${event.sessionId}`);
       return;
     }
 
-    const workspacePath = await findWorkspacePathForCursorConversation(event.sessionId);
+    const workspacePath = await findWorkspacePath();
     if (workspacePath) {
       if (isPathExcluded(workspacePath, config.excluded_paths)) {
         log(`Skipping sync for excluded path: ${workspacePath}`);
@@ -29425,26 +29622,14 @@ async function main(): Promise<void> {
         return;
       }
     } else if (config.sync_mode === "selected") {
-      log(`Skipping Cursor transcript with unknown workspace path: ${event.sessionId}`);
+      log(`Skipping ${label} transcript with unknown workspace path: ${event.sessionId}`);
       return;
     }
 
-    let sync = cursorTranscriptSyncs.get(filePath);
+    let sync = syncs.get(filePath);
     if (!sync) {
-      sync = transcriptRetryOwners.create(cursorTranscriptSyncs, filePath, {client:"cursor",file:path.resolve(filePath),sessionId:event.sessionId}, async () => {
-        await processCursorTranscriptFile(
-          filePath,
-          event.sessionId,
-          syncService,
-          config.user_id!,
-          config.team_id,
-          conversationCache,
-          retryQueue,
-          pendingMessages,
-          updateState
-        );
-      }, MESSAGE_SYNC_DEBOUNCE);
-      cursorTranscriptSyncs.set(filePath, sync);
+      sync = transcriptRetryOwners.create(syncs, filePath, {client,file:path.resolve(filePath),sessionId:event.sessionId}, process, MESSAGE_SYNC_DEBOUNCE);
+      syncs.set(filePath, sync);
     }
 
     sync.invalidate();
@@ -29460,28 +29645,55 @@ async function main(): Promise<void> {
     cursorTranscriptWatcher.start();
   }
 
-  // Cursor Cloud Agents: mirrored into Cursor JSONL transcripts and fed
-  // through the same handler as local ones. Idle until a Cursor API key is set.
-  // The watcher always runs (sessions started from codecast need their
-  // mirror); the account's cursor_cloud_sync decides whether it also imports
-  // the account's other cloud agents, read on every poll.
-  cursorCloudWatcher = new CursorCloudWatcher({
-    readKey: cursorApiKey,
-    importAll: () => activeConfig?.cursor_cloud_sync !== false,
-    isOwnAgent: (agentId) => cursorCloudSessions.ownsAgent(agentId),
+  // Cloud agents (cloudAgents/): each provider's agents are mirrored into
+  // transcripts in one format (cloudAgents/transcript.ts), gated like
+  // Cursor's own and synced as sessions of the provider's agent type. Idle
+  // until the provider has credentials on this machine. A mirror always runs
+  // (sessions started from codecast need it); the account's sync setting for
+  // the provider, read on every poll, decides whether it also imports the
+  // account's other agents.
+  const cloudMirrorSyncs = new Map<string, InvalidateSync>();
+  // A branch an agent pushed, held until its session exists: the first
+  // mirror pass reports it before the transcript sync creates the conversation.
+  const pendingCloudGit = new Map<string, CloudAgentGit>();
+  const applyCloudGit = (agentId: string) => {
+    const git = pendingCloudGit.get(agentId);
+    const conversationId = conversationCache[agentId];
+    if (!git || !conversationId) return;
+    pendingCloudGit.delete(agentId);
+    if (!git.branch) return;
+    void syncService.updateGitState({ conversation_id: conversationId, git_branch: git.branch, ...(git.repoUrl ? { git_remote_url: git.repoUrl } : {}) }).catch(() => {});
+  };
+  cloudAgents.startWatchers({
+    syncSetting: (field) => {
+      const value = (activeConfig as Record<string, unknown> | null)?.[field];
+      return typeof value === "boolean" ? value : undefined;
+    },
     resolveRepoDir: resolveLocalRepoFor,
     log,
+    onTranscript: (spec, event) => {
+      const client = spec.agentType !== "claude" && (INGEST_CLIENTS as readonly string[]).includes(spec.agentType) ? spec.agentType as CloudMirrorSource["mirror"] : null;
+      if (!client) { log(`${cloudAgentLogTag({ spec })} no ingest for agent type ${spec.agentType}: its mirror is written but never synced`); return; }
+      void handleTranscriptFileEvent(event, spec.label, cloudMirrorSyncs, client, async () => (await readMetaJson(path.dirname(event.filePath)))?.cwd ?? null, async () => { await processTranscriptDeltaSession(
+        { mirror: client },
+        event.filePath,
+        event.sessionId,
+        syncService,
+        config.user_id!,
+        config.team_id,
+        conversationCache,
+        retryQueue,
+        pendingMessages,
+        updateState
+      ); applyCloudGit(event.sessionId); }).catch(error => logError(`${spec.label} mirror event failed (${event.filePath})`, error));
+    },
+    // The branch the agent pushed is the session's branch: the header's branch
+    // link and codecast's pull request linking both read git_branch.
+    onGit: (git) => {
+      pendingCloudGit.set(git.agentId, git);
+      applyCloudGit(git.agentId);
+    },
   });
-  cursorCloudWatcher.on("session", (event) => cursorTranscriptWatcher.emit("session", event));
-  cursorCloudWatcher.on("error", (error: Error) => log(`Cursor cloud poll failed: ${error.message}`));
-  // The branch the agent pushed is the session's branch: the header's branch
-  // link and codecast's pull request linking both read git_branch.
-  cursorCloudWatcher.on("git", (git) => {
-    const conversationId = conversationCache[git.agentId];
-    if (!conversationId || !git.branch) return;
-    void syncService.updateGitState({ conversation_id: conversationId, git_branch: git.branch, ...(git.repoUrl ? { git_remote_url: git.repoUrl } : {}) }).catch(() => {});
-  });
-  cursorCloudWatcher.start();
 
   codexAppServerInstance = new CodexAppServer({
     log,
@@ -30222,13 +30434,12 @@ async function main(): Promise<void> {
             logDelivery(`HELD: msg=${msg._id.slice(0, 8)} waiting for a human answer in conv=${msg.conversation_id.slice(0, 12)}; retrying when the prompt closes`);
             holdConversationForPrompt(msg.conversation_id);
             syncService.retryMessage(msg._id, { holdReason: err instanceof InputBlockedError ? err.holdReason : "waiting for a human answer in the terminal" }).catch(logConvexFailure);
-          } else if (err instanceof CursorCloudSetupError) {
-            // A missing or rejected key is held and rechecked every few
-            // seconds, so the message goes out as soon as a key lands; an
-            // unreachable repo backs off (each try is a Cursor API call).
-            const keyProblem = err.kind !== "repo";
-            logDelivery(`HELD: msg=${msg._id.slice(0, 8)} Cursor Cloud setup (${err.kind}): ${errMsg}`);
-            scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content, keyProblem ? "waiting for a Cursor API key on this machine" : undefined);
+          } else if (err instanceof CloudAgentSetupError) {
+            // Missing or rejected credentials are held and rechecked every few
+            // seconds, so the message goes out as soon as they land; an
+            // unreachable repo backs off (each try is a provider API call).
+            logDelivery(`HELD: msg=${msg._id.slice(0, 8)} ${err.adapter.spec.label} setup (${err.kind}): ${errMsg}`);
+            scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content, err.holdReason);
           } else if (err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(errMsg)) {
             logDelivery(`HELD: msg=${msg._id.slice(0, 8)} awaiting terminal input confirmation: ${errMsg}`);
             scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content, "waiting for terminal input confirmation");

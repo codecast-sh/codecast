@@ -512,6 +512,7 @@ http.route({
         title: result.title,
         slug: result.slug,
         started_at: result.started_at,
+        team_visible: result.team_visible,
       }), {
         status: 200,
         headers: { "Content-Type": "application/json", ...corsHeaders },
@@ -2773,7 +2774,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, version, platform, pid, autostart_enabled, has_tmux, boot_id, local_project_roots, git_plane, git_pubkey, pending_sync_count, oldest_pending_ms, pending_sync_messages, pending_sync_conversations, sync_no_progress_ms, daemon_started_at, loop_freeze_ms, loop_freeze_1h_ms, loop_freeze_max_ms, loop_freeze_top, device_id, device_label, device_hostname, wsl_distro, is_remote_device, input_idle_ms, cc_accounts, codex_usage, codex_accounts, provider_key_pubkey, managed_provider_ids, settings, model_inventory, update_available } = body;
+      const { api_token, version, platform, pid, autostart_enabled, has_tmux, boot_id, local_project_roots, git_plane, git_pubkey, pending_sync_count, oldest_pending_ms, pending_sync_messages, pending_sync_conversations, sync_no_progress_ms, daemon_started_at, loop_freeze_ms, loop_freeze_1h_ms, loop_freeze_max_ms, loop_freeze_top, device_id, device_label, device_hostname, wsl_distro, is_remote_device, input_idle_ms, cc_accounts, codex_usage, codex_accounts, provider_key_pubkey, managed_provider_ids, cloud_agent_blocks, settings, model_inventory, update_available } = body;
 
       if (!api_token || !version || !platform) {
         return new Response(JSON.stringify({ error: "Missing required fields" }), {
@@ -2814,6 +2815,7 @@ http.route({
         codex_accounts,
         provider_key_pubkey,
         managed_provider_ids,
+        cloud_agent_blocks: Array.isArray(cloud_agent_blocks) ? cloud_agent_blocks : undefined,
         settings,
         model_inventory,
         update_available: typeof update_available === "string" ? update_available : undefined,
@@ -2824,6 +2826,16 @@ http.route({
           status: result.error === "Unauthorized" ? 401 : 400,
           headers: { "Content-Type": "application/json", ...corsHeaders },
         });
+      }
+
+      // A cloud host's readiness (Settings > Machines), in its own call so a
+      // shape this server does not know never fails the heartbeat.
+      if (body.host_readiness && typeof body.host_readiness === "object" && typeof device_id === "string") {
+        try {
+          await ctx.runMutation(api.cloud.reportHostReadiness, { api_token, device_id, readiness: body.host_readiness });
+        } catch (err) {
+          console.warn(`[heartbeat] host readiness from ${device_id.slice(0, 8)} refused: ${err instanceof Error ? err.message.slice(0, 200) : String(err)}`);
+        }
       }
 
       // Capability inventory, when the daemon attached one. Deviation from
@@ -4610,6 +4622,14 @@ cliRoute("/cli/spawn", async (ctx, body) => ctx.runMutation((api as any).spawn.c
 // `cast handoff --to <agent>`: brief + compose + spawn + link, one action
 // (handoff.start), the same one the web calls signed in.
 cliRoute("/cli/handoff", async (ctx, body) => ctx.runAction((api as any).handoff.start, body));
+
+// `cast read <id> --ask "<question>"`: answer from one session, with line
+// citations, on the server's model key. body: { api_token, conversation_id, question }.
+cliRoute("/cli/read/ask", async (ctx, body) => ctx.runAction(internal.sessionAsk.ask, {
+  api_token: body.api_token,
+  conversation_id: body.conversation_id,
+  question: body.question,
+}));
 
 // Session OWNERS (cast own / disown / owners, or scripts routing an agent-run
 // session into a human's inbox). A session has a SET of owners — it can sit in

@@ -1,7 +1,8 @@
 // Line-level `cast blame`: a drop-in `git blame` whose author column shows the
 // codecast session that wrote each line. git does the hard part locally
 // (line-history tracking via `git blame --porcelain`); the server resolves the
-// unique SHAs to sessions via file_changes commit rows, and uncommitted lines
+// unique SHAs to sessions, first by each commit's Codecast-Session trailer
+// (read here from git), then via file_changes commit rows, and uncommitted lines
 // by content match against the caller's recent edits. Output mirrors git
 // blame's default and porcelain formats byte-for-byte so editor integrations
 // keep parsing it; porcelain mode carries the attribution as extra
@@ -12,7 +13,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import open from "open";
 import { cliFetchRead } from "./cliHttp.js";
-import { contentLinesToMatch as selectContentLines, MAX_CONTENT_LINES, type ContentLine } from "@codecast/shared/blame";
+import { contentLinesToMatch as selectContentLines, extractSessionTrailer, MAX_CONTENT_LINES, type ContentLine } from "@codecast/shared/blame";
 import { defaultConfigDir } from "./config/configDir.js";
 
 const WEB_BASE = process.env.CODE_CHAT_SYNC_WEB_URL || "https://codecast.sh";
@@ -273,6 +274,52 @@ export interface CommitDescriptor {
   // parseable hash (compound commands, -q, custom helpers).
   summary?: string;
   author_time?: number;
+  // The conversation id the commit's Codecast-Session trailer names: the
+  // session's own record of the commit, which the server checks first.
+  session?: string;
+}
+
+// sha → the conversation its Codecast-Session trailer names, read from the
+// commit objects in one `git cat-file --batch`. The shas go in on stdin, so a
+// file with any number of blamed commits fits, and a commit git cannot read (a
+// shallow clone missing it) answers "missing" and costs only itself.
+export async function readSessionTrailers(shas: string[], cwd: string): Promise<Map<string, string>> {
+  const found = new Map<string, string>();
+  const wanted = [...new Set(shas)].filter((sha) => /^[0-9a-f]{4,64}$/i.test(sha));
+  if (wanted.length === 0) return found;
+  let out: Buffer;
+  try {
+    out = await execGitBuffer(["cat-file", "--batch"], cwd, `${wanted.join("\n")}\n`);
+  } catch {
+    return found; // Attribution falls back to the server's other evidence.
+  }
+  // Each answer is "<sha> <type> <size>\n<size bytes>\n", or "<name> missing\n".
+  let at = 0;
+  while (at < out.length) {
+    const eol = out.indexOf(0x0a, at);
+    if (eol < 0) break;
+    const [sha, type, size] = out.toString("utf-8", at, eol).split(" ");
+    at = eol + 1;
+    if (size === undefined) continue;
+    const body = out.subarray(at, at + Number(size));
+    at += Number(size) + 1;
+    if (type !== "commit") continue;
+    const text = body.toString("utf-8");
+    const headerEnd = text.indexOf("\n\n");
+    const session = extractSessionTrailer(headerEnd < 0 ? "" : text.slice(headerEnd + 2));
+    if (session) found.set(sha, session);
+  }
+  return found;
+}
+
+function execGitBuffer(args: string[], cwd: string, input: string): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const child = execFile("git", args, { cwd, maxBuffer: 256 * 1024 * 1024, encoding: "buffer" }, (error, stdout, stderr) => {
+      if (error) reject(new Error(String(stderr).trim() || error.message));
+      else resolve(stdout as Buffer);
+    });
+    child.stdin?.end(input);
+  });
 }
 
 async function resolveSessions(
@@ -314,7 +361,8 @@ async function resolveSessions(
 }
 
 // Turn parsed blame porcelain into a session resolution. Builds the commit
-// descriptors (sha + summary + author-time, for the 3-tier server match) and
+// descriptors (sha + trailer session + summary + author-time, for the tiered
+// server match) and
 // the content-line list (for authoring-session attribution), then calls the
 // resolve endpoint. Degrades to no attribution on any failure — a blame must
 // stay a faithful git blame even when the network blinks.
@@ -324,16 +372,17 @@ async function resolveFromParsed(
   config: { auth_token?: string; convex_url?: string },
 ): Promise<BlameResolution> {
   if (!config.auth_token || !config.convex_url) return EMPTY_RESOLUTION;
-  const commits: CommitDescriptor[] = [...new Set(parsed.lines.map((l) => l.sha))]
-    .filter((s) => s !== ZERO_SHA)
-    .map((sha) => {
-      const meta = parsed.commits.get(sha);
-      return {
-        sha,
-        summary: meta?.summary || undefined,
-        author_time: meta?.authorTime ? meta.authorTime * 1000 : undefined,
-      };
-    });
+  const shas = [...new Set(parsed.lines.map((l) => l.sha))].filter((s) => s !== ZERO_SHA);
+  const trailers = await readSessionTrailers(shas, path.dirname(absFilePath));
+  const commits: CommitDescriptor[] = shas.map((sha) => {
+    const meta = parsed.commits.get(sha);
+    return {
+      sha,
+      summary: meta?.summary || undefined,
+      author_time: meta?.authorTime ? meta.authorTime * 1000 : undefined,
+      session: trailers.get(sha),
+    };
+  });
   const contentLines = contentLinesToMatch(parsed, Date.now());
   const siteUrl = config.convex_url.replace(".cloud", ".site");
   try {

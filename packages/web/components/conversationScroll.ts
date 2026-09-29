@@ -184,7 +184,25 @@ export type JumpReceiptAggregates = {
 // condensed receipts fold tools into an owner, compact hides a turn until
 // opened, and a run of identical nudges keeps only its first row. Resolve
 // the visible row, then expand whatever group still hides it.
+//
+// `fold` is the inbox's folded working turns: at any density a turn shows
+// only its last reply until opened. A jump into the rest of a folded turn
+// opens the turn first; once it is open the density's own rule applies, so a
+// caller that loops (expand, recompute) lands in two steps.
 export function jumpRowForMessage(
+  messageId: string,
+  density: FeedJumpDensity,
+  aggregates: JumpReceiptAggregates,
+  fold?: { expanded: ReadonlySet<string>; lastTextOf: ReadonlyMap<string, string> },
+): { scrollToId: string; expandKey: string | null } {
+  const row = densityJumpRow(messageId, density, aggregates);
+  if (!fold || density === "compact") return row;
+  const turnKey = aggregates.turnKeyOf.get(row.scrollToId);
+  if (!turnKey || fold.expanded.has(turnKey) || fold.lastTextOf.get(turnKey) === row.scrollToId) return row;
+  return { scrollToId: row.scrollToId, expandKey: turnKey };
+}
+
+function densityJumpRow(
   messageId: string,
   density: FeedJumpDensity,
   aggregates: JumpReceiptAggregates,

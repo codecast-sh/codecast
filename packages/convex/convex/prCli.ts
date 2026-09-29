@@ -29,6 +29,7 @@ import { withoutOthersPending } from "./codeComments";
 import { foldShepherdState, normalizeRepository, prUrl, PASSING_CONCLUSIONS, type CheckEntry } from "./lib/gitRefs";
 import { parsePrRef, codecastPrUrl } from "@codecast/shared/contracts";
 import { pullRequestsLinkedToConversation } from "./lib/prSessions";
+import { canAccessConversation } from "./lib/access";
 
 const EVENT_LIMIT = 10;
 const LIST_LIMIT = 20;
@@ -373,7 +374,9 @@ export const show = query({
       if (seen.has(String(id))) continue;
       seen.add(String(id));
       const conversation = await ctx.db.get(id);
-      if (!conversation) continue;
+      // Reading the pull request is team membership; a linked session keeps its
+      // own rule, so a private one never shows its title here.
+      if (!conversation || !(await canAccessConversation(ctx, userId, conversation))) continue;
       sessions.push({
         id: String(conversation._id),
         short_id: conversation.short_id ?? null,
