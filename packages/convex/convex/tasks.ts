@@ -3,7 +3,7 @@ import { paginationOptsValidator } from "convex/server";
 import { internalMutation, mutation, query } from "./functions";
 import { verifyApiToken } from "./apiTokens";
 import { patchTask } from "./lib/taskWrite";
-import { resolveActor } from "./lib/actor";
+import { resolveActor, roleOfConversation } from "./lib/actor";
 import { allRolesInBoundary, liveRoleByHandle, roleByHandleForRead } from "./lib/orgAccess";
 import { taskWork } from "./lib/orgOwnership";
 import { ownerOf } from "@codecast/shared/contracts/orgLead";
@@ -1055,6 +1055,26 @@ async function schedulePushNewTask(ctx: any, projectId: Id<"projects"> | undefin
   }
 }
 
+/**
+ * Who answers for a task a session files for people to see (a person's ask, a
+ * meeting's decision, or `--human`) without naming an assignee: the role that
+ * session works for (its standing seat, or the role it reports to), else the
+ * person running it. A role this workspace cannot hold falls back to the
+ * person. A session's own bookkeeping stays unowned, because an assignee puts
+ * a task on the person's board (isOnHumanBoard).
+ */
+async function defaultSessionOwner(
+  ctx: any,
+  conv: any,
+  forPeople: boolean,
+  userId: Id<"users">,
+  boundary: AssigneeBoundary,
+): Promise<string | undefined> {
+  if (!conv || !forPeople) return undefined;
+  const role = await roleOfConversation(ctx, conv);
+  return role && !roleAssigneeRefusal(role, boundary) ? String(role._id) : String(userId);
+}
+
 export const create = mutation({
   args: {
     api_token: v.string(),
@@ -1106,10 +1126,12 @@ export const create = mutation({
     let conversation_ids: Id<"conversations">[] | undefined;
     let created_from_conversation: Id<"conversations"> | undefined;
     let convTeamId: Id<"teams"> | undefined;
+    let originConv: any = null;
     if (args.conversation_id) {
       // Unresolvable session ref = create the task without the link, never
       // reject the create (see resolveSessionConversation).
       const conv = await resolveSessionConversation(ctx, auth.userId, args.conversation_id);
+      originConv = conv;
       if (conv) {
         conversation_ids = [conv._id];
         created_from_conversation = conv._id;
@@ -1168,7 +1190,14 @@ export const create = mutation({
       if (!project_id && parent.project_id) project_id = parent.project_id;
     }
 
-    const resolvedAssignee = await resolveAssigneeStr(ctx, args.assignee, auth.userId, boundaryOfWorkspace(db.workspace));
+    // Creator enrollment is human only when a person decided the task: human
+    // or meeting origin, or an explicit promotion to the human board. An
+    // agent's own work task enrolls its owner as an agent act.
+    const createdHuman = isHumanOrigin({ source: args.source || "human" }) || !!args.promoted;
+    const boundary = boundaryOfWorkspace(db.workspace);
+    const resolvedAssignee = args.assignee
+      ? await resolveAssigneeStr(ctx, args.assignee, auth.userId, boundary)
+      : await defaultSessionOwner(ctx, originConv, createdHuman && !parent_id, auth.userId, boundary);
 
     if (args.client_key) {
       const existing = await ctx.db
@@ -1251,17 +1280,14 @@ export const create = mutation({
       }
     }
 
-    // Creator enrollment is human only when a person decided the task: human
-    // or meeting origin, or an explicit promotion to the human board. An
-    // agent's own work task enrolls its owner as an agent act.
-    const createdHuman = isHumanOrigin({ source: args.source || "human" }) || !!args.promoted;
     await subscribeUser(ctx, auth.userId, id, "creator", createdHuman ? "human" : "agent");
     // A subtask created directly in progress flips its parent chain, same as a
     // later start would — the parent must never sit "open" under running work.
     if (parent_id) {
       await rollUpParentStart(ctx, { parent_id, user_id: auth.userId }, statusWrite.status);
     }
-    if (resolvedAssignee) {
+    // A defaulted owner filed the task itself: nobody assigned it to them.
+    if (resolvedAssignee && args.assignee) {
       const createdTask = await ctx.db.get(id) as any;
       await announceAssignment(ctx, { task: createdTask, assignee: resolvedAssignee, actorUserId: auth.userId, via: cliVia(args) });
     }
@@ -3311,6 +3337,24 @@ export const webGet = query({
   },
 });
 
+export const isBlockedExecution = (s: string | undefined) => s === "blocked" || s === "needs_context";
+
+// Clearing a block is a retry (the-line.md L9). The line starts only tasks
+// with no workflow_run_id, so a run that has ended is let go with the flag;
+// otherwise the task sits open and the line never starts it again. A live run
+// keeps its binding. The reason and the retry budget reset with it.
+export async function releaseBlockFields(ctx: { db: any }, task: any): Promise<Record<string, any>> {
+  const fields: Record<string, any> = { execution_concerns: undefined, retry_count: 0 };
+  if (task.workflow_run_id) {
+    const run = await ctx.db.get(task.workflow_run_id);
+    if (!run || run.status === "failed" || run.status === "completed") {
+      fields.workflow_run_id = undefined;
+      fields.workflow_node_id = undefined;
+    }
+  }
+  return fields;
+}
+
 export const webUpdate = mutation({
   args: {
     short_id: v.string(),
@@ -3400,6 +3444,9 @@ export const webUpdate = mutation({
     }
     if (args.project_path !== undefined) updates.project_path = args.project_path || undefined;
     if (args.execution_status !== undefined) updates.execution_status = args.execution_status || undefined;
+    if (args.execution_status === "" && isBlockedExecution(task.execution_status)) {
+      Object.assign(updates, await releaseBlockFields(ctx, task));
+    }
     if (args.sort_order !== undefined) updates.sort_order = args.sort_order;
     if (args.duplicate_of !== undefined) {
       if (!args.duplicate_of) {

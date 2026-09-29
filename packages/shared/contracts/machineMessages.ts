@@ -190,6 +190,80 @@ export function isScheduledTaskMessage(rawContent: string | null | undefined): b
   return !!rawContent && /^<scheduled-task[\s>]/.test(stripInjectionNoise(rawContent));
 }
 
+// A session that waits, as the trigger that fired for it names it
+// (org-staffing.md S28): the facts at the moment it fired. `role` is set when
+// the waiting session is a role's own standing session, which speaks as the
+// role.
+export interface WaitingSession {
+  short_id: string;
+  title: string;
+  /** Why it waits: a needs-input kind, or "blocked" when it declared so. */
+  why: string;
+  /** When the wait began (ms). */
+  since: number;
+  role?: string;
+  /** The first line of its pinned state; empty when it pinned none. */
+  state: string;
+}
+
+export interface ScheduledTaskFrame {
+  title: string;
+  task_id?: string;
+  /** The trigger's short id (tr-42), so the block links what fired it. */
+  trigger?: string;
+  /** The event that fired it; absent on a scheduled or manual run. */
+  event?: string;
+  waiting?: WaitingSession | null;
+  /** The trigger's prompt, and whatever the writer appended for the agent. */
+  body: string;
+}
+
+const tagAttrs = (pairs: Array<[string, string | undefined]>) =>
+  pairs.filter(([, v]) => v != null && v !== "").map(([k, v]) => `${k}="${escapeTagAttr(v!)}"`).join(" ");
+const tagAttr = (head: string, k: string) => {
+  const a = head.match(new RegExp(`(?:^|\\s)${k}="([^"]*)"`));
+  return a ? unescapeTagAttr(a[1]) : "";
+};
+
+/** The one writer of the frame a trigger run arrives in. */
+export function formatScheduledTask(f: ScheduledTaskFrame): string {
+  const head = tagAttrs([["title", f.title], ["task-id", f.task_id], ["trigger", f.trigger], ["event", f.event]]);
+  const w = f.waiting;
+  const waiting = w
+    ? `\n<waiting-session ${tagAttrs([["id", w.short_id], ["title", w.title], ["why", w.why], ["since", String(w.since)], ["role", w.role]])}>${w.state.trim()}</waiting-session>\n\n`
+    : "";
+  return `<scheduled-task ${head}>${waiting}${f.body}</scheduled-task>`;
+}
+
+/** The one reader. Tolerates a missing closing tag: a preview slice can cut the body. */
+export function parseScheduledTask(rawContent: string | null | undefined): ScheduledTaskFrame | null {
+  if (!rawContent) return null;
+  const m = stripInjectionNoise(rawContent).match(/^<scheduled-task((?:\s+[a-z-]+="[^"]*")*)\s*>([\s\S]*?)(?:<\/scheduled-task>|$)/);
+  if (!m) return null;
+  let body = m[2];
+  let waiting: WaitingSession | null = null;
+  const w = body.match(/^\s*<waiting-session((?:\s+[a-z-]+="[^"]*")*)\s*>([\s\S]*?)<\/waiting-session>\s*/);
+  if (w) {
+    body = body.slice(w[0].length);
+    waiting = {
+      short_id: tagAttr(w[1], "id"),
+      title: tagAttr(w[1], "title"),
+      why: tagAttr(w[1], "why"),
+      since: Number(tagAttr(w[1], "since")) || 0,
+      ...(tagAttr(w[1], "role") ? { role: tagAttr(w[1], "role") } : {}),
+      state: w[2].trim(),
+    };
+  }
+  return {
+    title: tagAttr(m[1], "title"),
+    ...(tagAttr(m[1], "task-id") ? { task_id: tagAttr(m[1], "task-id") } : {}),
+    ...(tagAttr(m[1], "trigger") ? { trigger: tagAttr(m[1], "trigger") } : {}),
+    ...(tagAttr(m[1], "event") ? { event: tagAttr(m[1], "event") } : {}),
+    waiting,
+    body: body.trim(),
+  };
+}
+
 // The prompt convex/chat.ts buildAnchorWake hands the anchor session when a
 // teammate mentions it in team chat. Plain text, no wrapper tag — the header
 // line is the wire format: `[codecast team chat — #<channel> · team <name>]`,
@@ -268,12 +342,15 @@ export function isMachineDeliveredMessage(rawContent: string | null | undefined)
 }
 
 // --- A session moving between a role and a person (org-roles-run-work.md R1, revised) ---
-// Every move of a session between the role that looks after it and the
-// person is written into BOTH threads as one machine message
-// (sessionOwnership.performEscalateSession, through the ordinary pending
-// message rail so it syncs like any message), and each thread renders it as
+// Every move of a session between the role that looked after it and the
+// person was written into BOTH threads as one machine message (through the
+// ordinary pending message rail, so it synced like any message), and each
+// thread renders it as
 // an inline divider, never a bubble: the role's face, what moved where, the
-// whole line as markdown, the time. One tag, three moves:
+// whole line as markdown, the time. LEGACY: the verb that wrote it (`cast
+// escalate`) is gone (org-staffing.md S28); threads written before that still
+// carry the tag, so only the reader and the caption remain. One tag, three
+// moves:
 //
 //   handed   the role put the session in front of the person through its own
 //            card (the default); the child stays nested under the role
@@ -307,25 +384,6 @@ export interface SessionEscalationMessage {
   line: string;
 }
 
-export function formatSessionEscalation(m: SessionEscalationMessage): string {
-  const attrs: Array<[string, string | undefined]> = [
-    ["move", m.move],
-    ["by", m.by],
-    ["left", m.left ? "1" : undefined],
-    ["role", m.role.short_id],
-    ["handle", m.role.handle],
-    ["name", m.role.name],
-    ["avatar", m.role.avatar],
-    ["session", m.session.short_id],
-    ["title", m.session.title],
-    ["to", m.to],
-    ["at", String(m.at)],
-  ];
-  const head = attrs.filter(([, v]) => v != null && v !== "").map(([k, v]) => `${k}="${escapeTagAttr(v!)}"`).join(" ");
-  const body = m.line.trim();
-  return `<session-escalation ${head}>\n${body}\n</session-escalation>`;
-}
-
 export function isSessionEscalationMessage(rawContent: string | null | undefined): boolean {
   return !!rawContent && /^<session-escalation\s/.test(stripInjectionNoise(rawContent));
 }
@@ -352,15 +410,6 @@ export function parseSessionEscalation(rawContent: string | null | undefined): S
     at: Number(attr("at")) || 0,
     line: (m[2] ?? "").trim(),
   };
-}
-
-// The line a role writes can run to paragraphs (the divider renders all of it
-// as markdown). Every strip, chip, chime and CLI row shows its FIRST line and
-// leaves the rest to the divider: one rule, so no surface cuts it differently.
-export const ESCALATION_LINE_MAX = 4000;
-
-export function escalationFirstLine(line: string): string {
-  return (line.split("\n").find((l) => l.trim()) ?? "").trim();
 }
 
 /** The caption a divider draws for a move, from the reader's side: the child's

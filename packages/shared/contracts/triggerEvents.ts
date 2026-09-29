@@ -60,6 +60,14 @@ export const TRIGGER_EVENT_SHORTHANDS: Record<string, TriggerEventFilter> = {
   issue_commented: { event_type: "issue_comment", action: "created" },
 };
 
+/**
+ * Fired by the backend for a role, never armed by hand: a session that reports
+ * to the role needs input (docs/architecture/org-staffing.md S28). It is not a
+ * shorthand, because `--on` arms a trigger on any session and only a role's
+ * own trigger is ever fired with it.
+ */
+export const SESSION_NEEDS_INPUT_EVENT = "session_needs_input";
+
 export type TriggerEventName = keyof typeof TRIGGER_EVENT_SHORTHANDS;
 
 /** Every name, in the order above, for help text and pickers. */
@@ -90,6 +98,7 @@ export const TRIGGER_EVENT_LABELS: Record<string, string> = {
   issue_labeled: "issue labeled",
   issue_closed: "issue closed",
   issue_commented: "issue comment",
+  [SESSION_NEEDS_INPUT_EVENT]: "a session under the role needs input",
 };
 
 /**

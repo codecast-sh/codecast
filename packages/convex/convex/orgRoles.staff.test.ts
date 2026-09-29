@@ -92,7 +92,10 @@ describe("orgRoles.staff", () => {
     expect(again.already_existed).toBe(true);
     expect(String(again.role._id)).toBe(String(role._id));
     expect(tables.org_roles).toHaveLength(1);
-    expect(tables.agent_tasks).toHaveLength(1);
+    // The seat's two triggers: the routine, and the route up (S28).
+    expect(tables.agent_tasks.map((t) => t.schedule_type)).toEqual(["recurring", "event"]);
+    expect(tables.agent_tasks[1].event_filter).toEqual({ event_type: "session_needs_input" });
+    expect(String(tables.agent_tasks[1].role_id)).toBe(String(role._id));
   });
 
   // org-staffing.md S12: the chief of staff IS the workspace's standing agent.
@@ -373,7 +376,9 @@ describe("orgRoles.staff", () => {
     tables.pending_messages.push({ _id: "waiting", conversation_id: "anchor-conv", from_user_id: ME, owner_user_id: ME, content: "what changed?", status: "held", created_at: NOW });
     const retired = await performRetireRole(ctx, ME as any, { role_id: String(out.role._id) });
     expect(retired.standing_session).toBe("kept");
-    expect(retired.cancelled_triggers).toBe(1);
+    // The seat's own two go, the routine and the route up.
+    expect(retired.cancelled_triggers).toBe(2);
+    expect(tables.agent_tasks.find((t) => t.event_filter?.event_type === "session_needs_input")!.status).toBe("cancelled");
     expect(tables.agent_tasks.find((t) => t._id === "digest")!.status).toBe("scheduled");
     expect(tables.agent_tasks.find((t) => t.title === COMPANY_REVIEW_TITLE)!.status).toBe("cancelled");
     expect(tables.pending_messages.find((p) => p._id === "waiting")!.status).toBe("pending");
@@ -452,6 +457,20 @@ describe("orgRoles.staff", () => {
     expect(out.adopted).toBe(true);
     expect(out.conversation_id).toBe("mine");
     expect(String(tables.conversations.find((c) => c._id === "mine")!.standing_role_id)).toBe(String(role._id));
+  });
+
+  // A seat under a role carries the parent role on its standing session
+  // (org-staffing.md S28) so it rides the parent lead's card; a seat under a
+  // person carries none.
+  test("provisioning stamps the standing session with the role's parent role", async () => {
+    const { ctx, tables } = world();
+    const top = await performCreateRole(ctx, ME as any, { name: "Growth", handle: "growth", team_id: TEAM });
+    const sub = await performCreateRole(ctx, ME as any, { name: "Calling", handle: "calling", team_id: TEAM, reports_to: { kind: "role", role_id: top._id } });
+    await performProvisionRole(ctx, ME as any, { role_id: String(sub._id), adopt_conversation_id: "mine" });
+    expect(String(tables.conversations.find((c) => c._id === "mine")!.org_role_id)).toBe(String(top._id));
+    await performProvisionRole(ctx, ME as any, { role_id: String(top._id) });
+    const topSeat = tables.conversations.find((c) => String(c.standing_role_id ?? "") === String(top._id))!;
+    expect(topSeat.org_role_id).toBeUndefined();
   });
 
   test("the root role's switch cannot be turned on (S12, S23.1)", async () => {
@@ -546,10 +565,10 @@ describe("orgRoles.staff", () => {
     await performBackfillSeatedChiefs(ctx, false);
     expect(routine.prompt).toBe(COMPANY_REVIEW_PROMPT);
     expect(String(routine.role_id)).toBe(String(tables.org_roles[0]._id));
-    expect(tables.agent_tasks).toHaveLength(1);
+    expect(tables.agent_tasks).toHaveLength(2);
     routine.status = "cancelled";
     await performBackfillSeatedChiefs(ctx, false);
-    expect(tables.agent_tasks).toHaveLength(1);
+    expect(tables.agent_tasks).toHaveLength(2);
   });
 
   test("the charter is the right hand's job its opening states, for the person it reports to", () => {

@@ -8,6 +8,7 @@ import { fromConvexAgentType, workspaceFeatureEnabled } from "@codecast/shared/c
 import { killConversation } from "./conversations";
 import { enqueuePendingMessage, formatSessionMessage, getAuthenticatedUserId } from "./pendingMessages";
 import { CHIEF_OF_STAFF_HANDLE, roleGrants } from "./lib/orgAccess";
+import { standingReportsToFields } from "./lib/standingSeat";
 import { chiefOfStaffOpening } from "@codecast/shared/contracts/chiefOfStaffPrompt";
 
 // An Anchor is codecast's standing agent member: one per team (shared) and one
@@ -119,7 +120,9 @@ function roleOpeningMessage(name: string, workspace: string, role: RoleBootstrap
     ``,
     `You wake on your routine, a trigger a person can see and change on your page, and whenever someone writes to you. Start every turn with \`cast brief\`: what changed in your area, your sessions, and how the people who report to you are doing against their goals.`,
     ``,
-    `The sessions that report to you stay out of the person's inbox, so nobody sees one that waits on them unless you say so. Answer what you can. When one needs a person, put it in front of them with \`cast escalate <session> "<what they will decide and why>"\`.`,
+    `The sessions that report to you stay out of the person's inbox; what they need reaches you as messages, and you answer what you can. What you cannot answer goes up to ${role.parentName}. ${role.parentName.startsWith("@")
+      ? `Write to them with \`cast role wake ${role.parentName} "<what they will decide and why>"\`.`
+      : `Raise it in this thread: say what they will decide and why in your pinned state (\`cast state --status blocked\`), and post a real choice between options as a \`cast decide\` card here, with your recommendation.`}`,
     ``,
     `Answer people here, in plain words, and say where each piece of work went.`,
     ``,
@@ -351,12 +354,16 @@ export async function provisionStandingAgent(
   // Seating the workspace anchor itself (org-staffing.md S12): its session
   // already has a bot, an anchors row and a machine. The row gains the role
   // pointer, the session gains the standing marker, and nothing restarts.
+  // A role's standing session reports to what the role reports to (S28):
+  // under a role it carries that role's id and rides its card.
+  const seatRole = args.role ? await ctx.db.get(args.role._id) : null;
+  const seat = seatRole ? standingReportsToFields(seatRole) : {};
   const adoptedAnchor = args.role?.adopt?.anchor_id && !args.role.adopt.standing_role_id ? await ctx.db.get(args.role.adopt.anchor_id) : null;
   if (adoptedAnchor && adoptedAnchor.status !== "decommissioned" && !adoptedAnchor.org_role_id
     && String(adoptedAnchor.team_id ?? "") === String(teamId ?? "") && String(adoptedAnchor.scope_user_id ?? "") === String(scopeUserId ?? "")) {
     await ctx.db.patch(adoptedAnchor._id, { org_role_id: args.role!._id, updated_at: now });
     await ctx.db.patch(adoptedAnchor.bot_user_id, { bot_kind: "role" });
-    await ctx.db.patch(args.role!.adopt._id, { standing_role_id: args.role!._id, persistent: true, updated_at: now, ...seatTitlePatch(args.role!.adopt, name) });
+    await ctx.db.patch(args.role!.adopt._id, { standing_role_id: args.role!._id, ...seat, persistent: true, updated_at: now, ...seatTitlePatch(args.role!.adopt, name) });
     await announceSeating(ctx, args.role!.adopt._id, hostUserId, args.role!.announce);
     if (args.bootstrap !== false) {
       await enqueuePendingMessage(ctx, await ctx.db.get(args.role!.adopt._id), hostUserId, {
@@ -428,8 +435,9 @@ export async function provisionStandingAgent(
       acting_user_id: botUserId,
       anchor_id: anchorId,
       // The row IS the role's session (T1); inbox placement treats it as an
-      // anchor's. org_role_id stays unset: a standing session reports to no seat.
+      // anchor's. org_role_id is the role's parent role when it has one (S28).
       standing_role_id: args.role?._id,
+      ...seat,
       agent_type: agentType,
       session_id: sessionId,
       title: name,
@@ -468,7 +476,7 @@ export async function provisionStandingAgent(
   // the anchor with no session for everyone but the hirer. Visibility goes
   // through the chokepoint so linked work items get their key recomputed.
   if (adopt) {
-    const markers = { acting_user_id: botUserId, anchor_id: anchorId, standing_role_id: args.role!._id, persistent: true, updated_at: now, ...seatTitlePatch(adopt, name) };
+    const markers = { acting_user_id: botUserId, anchor_id: anchorId, standing_role_id: args.role!._id, ...seat, persistent: true, updated_at: now, ...seatTitlePatch(adopt, name) };
     if (args.scope_type === "team" && adopt.is_private !== false) {
       await patchConversationVisibility(ctx, adopt, { ...(await buildShareUpdate(ctx, adopt, adopt.user_id)), ...markers });
     } else {

@@ -536,13 +536,14 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
     // The load: what reached the seat this week and asked for its attention.
     const caps = capsFor(role);
     const hands = scan.byParent.get(`role:${rid}`) ?? [];
-    // A session of the role that has waited on a person past the window with
-    // no escalation (org-roles-run-work.md R1): it is out of the person's
-    // inbox, so nobody sees the wait but the role.
+    // A session of the role that has waited on a person past the window
+    // (org-roles-run-work.md R1, org-staffing.md S28): it is out of the
+    // person's inbox, so nobody sees the wait but the role, which should have
+    // answered it or passed it up by now.
     const waitMs = capacity("session_wait_hours") * 3_600_000;
     const unseenWaits = hands.filter((h) => {
       const raw = scan.sessions.get(String(h._id))?.raw;
-      const since = raw && !raw.escalated_by_role ? waitingSinceOf(h.state, raw) : null;
+      const since = raw ? waitingSinceOf(h.state, raw) : null;
       return since !== null && now - since > waitMs;
     }).length;
     // A goal of a person who reports to the role that stalled or has had

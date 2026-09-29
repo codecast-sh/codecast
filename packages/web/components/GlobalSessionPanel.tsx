@@ -71,10 +71,10 @@ import { AnchorScopePill, ChiefOfStaffFace } from "./anchor/AnchorIdentity";
 import { IdentityFace, RoleHoverCard, SessionIdentityLine } from "./identity";
 import { RoleFace } from "./org/RoleFace";
 import { CharacterPicker } from "./identity/CharacterPicker";
-import { escalationOf, roleLookingAfter, sessionIdentity, standingRoleIdOf } from "../lib/sessionIdentity";
-import { escalationFirstLine, type RoleEscalation } from "@codecast/shared/contracts";
+import { roleLookingAfter, sessionIdentity, standingRoleIdOf } from "../lib/sessionIdentity";
+import { isUnderRole } from "@codecast/shared/contracts";
+import type { SessionRoleSnapshot } from "../store/inboxStore";
 import { AuthErrorBadge } from "./AuthErrorBadge";
-import { RoleEscalationLines } from "./RoleEscalationLines";
 import { anchorIdentitySig, anchorIdentityFromSig } from "../hooks/useSyncAnchors";
 import { SharePopover } from "./SharePopover";
 import { PrStatusChip } from "./PrStatusChip";
@@ -83,7 +83,7 @@ import { shareOrigin } from "../lib/utils";
 import { PlanContextPanel } from "./PlanContextPanel";
 import { WorkflowContextPanel } from "./WorkflowContextPanel";
 import { toast } from "sonner";
-import { animatedHideSession, undoableSetSessionRest, USER_REST_LABEL } from "../store/undoActions";
+import { animatedHideSession, fileSessionsAsRest } from "../store/undoActions";
 
 // What the card says under a user-filed row: the next activity re-files it.
 const USER_REST_CARD_LINE: Record<UserRest, string> = {
@@ -97,6 +97,8 @@ import { X, ChevronsRight, ChevronRight, ChevronDown, Clock, Tag, GitFork, Histo
 import { InboxViewMenu } from "./InboxViewMenu";
 import { LabelChipsRow } from "./LabelChipsRow";
 import { TaskStatusBadge } from "./TaskStatusBadge";
+import { TaskDecisionChip } from "./decisions/TaskDecisions";
+import { TaskSessionBadge } from "./tasks/TaskSessionBadge";
 import { useTipActions, checkMilestone } from "../tips";
 import { liveRestartStartedAt } from "../hooks/useSessionRestart";
 import { isParkedDispatchError } from "../store/mutativeMiddleware";
@@ -200,9 +202,10 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
     return () => clearTimeout(timeout);
   }, [resumeState]);
 
-  const handleManualResume = useCallback(() => {
+  // `leave_out` answers a cloud placement whose context was over the cap.
+  const handleManualResume = useCallback((extra?: { leave_out?: string[] }) => {
     setResumeState("resuming");
-    convCommand(sessionId, "resumeSession")
+    convCommand(sessionId, "resumeSession", extra?.leave_out ? { leave_out: extra.leave_out } : undefined)
       .then(() => setResumeState("sent"))
       .catch((err) => {
         if (isParkedDispatchError(err)) {
@@ -263,6 +266,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
           // two sessions can fail with the identical message.
           key={conversation._id}
           error={sessionError}
+          sessionId={sessionId}
           projectPath={conversation.project_path || conversation.git_root}
           ownerDeviceId={(conversation as any).owner_device_id}
           onResume={handleManualResume}
@@ -1964,8 +1968,6 @@ export const SessionCard = memo(function SessionCard({
   isFavorite,
   isUnread,
   subRow,
-  escalatedCount = 0,
-  escalations,
   roleSessions = 0,
   isSelected = false,
 }: {
@@ -1997,10 +1999,6 @@ export const SessionCard = memo(function SessionCard({
   // "role": one of a role's sessions under the role's card (org-roles-run-work
   // .md R1): a subagent row whose arrow names the role.
   subRow?: "trigger" | "role";
-  /** On a role's own card: how many of its sessions it has put in front of the person directly. */
-  escalatedCount?: number;
-  /** On a role's own card: the escalations that reach the person through it, newest first (R1, revised). */
-  escalations?: RoleEscalation[];
   /** On a role's own card: how many of its sessions ride it (org-staffing.md S23.3); the pill opens the role's page. */
   roleSessions?: number;
   // Label + favorite state are derived ONCE in the parent (SessionListPanel) and
@@ -2087,10 +2085,11 @@ export const SessionCard = memo(function SessionCard({
   // agent-team teammate (via nestParentIdOf). A worktree is only where the
   // session runs — it does not make a first-class card look like a child.
   const isSubagent = !!subRow || !!session.is_subagent || !!nestParentIdOf(session);
-  // A role's triage on this row (R1): the role above a nested row, and the
-  // role's line on a card it escalated. Both read through lib/sessionIdentity.
-  const roleAbove = subRow === "role" ? roleLookingAfter(session) : null;
-  const escalation = escalationOf(session);
+  // The role above a nested row (R1), read through lib/sessionIdentity.
+  // The role this row rides: its own pointer's snapshot for a hand; for a
+  // role's standing session under a role (org-staffing.md S28) the parent's
+  // snapshot lives on the parent's standing row, so it is read from there.
+  const roleAbove = subRow === "role" ? roleLookingAfter(session) ?? leadRoleOf(session) : null;
   // Local-first "pending working": a message has been sent but the daemon
   // hasn't confirmed delivery yet (status not active). Reading the durable
   // pendingMessages map directly returns a stable boolean, so only this card
@@ -2399,14 +2398,6 @@ export const SessionCard = memo(function SessionCard({
             }`}>
               {isSlashCommand ? <span className="font-mono text-violet-400/80">{displayTitle}</span> : displayTitle}
             </span>
-            {roleAbove && escalation && (
-              /* The role put this one in front of the person through its own
-                 card (R1, revised): the line is on the card above; the row
-                 only says so. */
-              <span data-role-handed className="flex-shrink-0 px-1 rounded text-[9px] font-medium text-sol-violet bg-sol-violet/10 border border-sol-violet/30 whitespace-nowrap" title={escalation.line}>
-                with you
-              </span>
-            )}
             <div className="flex items-center gap-1 flex-shrink-0">
               {showBlockedBadge && <AuthErrorBadge kind={session.pending_api_error_kind} agentType={session.agent_type} />}
               {session.session_error && session.pending_api_error_kind !== "safety" && (
@@ -2620,11 +2611,8 @@ export const SessionCard = memo(function SessionCard({
             }
           />
           {session.is_anchor && anchorIdentity && <AnchorScopePill anchor={anchorIdentity} className="flex-shrink-0" />}
-          {/* The role's one number (R1): how many of its sessions it has put
-              in front of the person. Silent at zero: a role with nothing
-              escalated asks nothing of them. */}
           {/* A role's sessions are the role's (S23.3): never rows under its
-              card, one count that opens the role's page. */}
+              card, one count that opens the role's page. Silent at zero. */}
           {roleSessions > 0 && session.role?.short_id && (
             <Link
               href={`/org/${session.role.short_id}`}
@@ -2636,53 +2624,7 @@ export const SessionCard = memo(function SessionCard({
               {roleSessions} {roleSessions === 1 ? "session" : "sessions"}
             </Link>
           )}
-          {escalatedCount > 0 && (
-            <span
-              data-role-escalated-count
-              className="flex-shrink-0 px-1 rounded border border-sol-yellow/35 bg-sol-yellow/10 text-[10px] font-medium text-sol-yellow tabular-nums whitespace-nowrap"
-              title={`This role put ${escalatedCount} of its sessions in your needs input`}
-            >
-              {escalatedCount} in your inbox
-            </span>
-          )}
         </div>
-        {escalations && escalations.length > 0 && (
-          /* The role's card carries the escalations that reach the person
-             through it (R1, revised): one line each, newest first, the
-             session as a pill, the whole text on hover or expand, and Hand
-             back per line. */
-          <RoleEscalationLines escalations={escalations} coarseNow={coarseNow} canHandBack={!isForeignSession} onOpen={onNavigateToSession} />
-        )}
-        {escalation && !roleAbove && (
-          /* The role's face and its one line: why this card is in front of the
-             person (R1). Same strip anatomy as the assignment below, and the
-             same mr-5 that keeps its button clear of the hover toolbar. */
-          <div data-escalation className="flex items-start gap-1.5 mt-1 mr-5 px-1.5 py-1 rounded-md bg-sol-violet/10 border border-sol-violet/30">
-            {escalation.role && (
-              <RoleHoverCard role={escalation.role} side="left" triggerClassName="flex-shrink-0 mt-px">
-                <RoleFace role={escalation.role} size={16} />
-              </RoleHoverCard>
-            )}
-            <div className="min-w-0 flex-1 text-[11px] leading-snug">
-              {escalation.role && <span className="font-semibold text-sol-violet">@{escalation.role.handle}: </span>}
-              <span className="text-sol-text break-words" title={escalation.line}>{escalationFirstLine(escalation.line)}</span>
-              <span className="text-sol-text-dim whitespace-nowrap" title={formatDateFull(escalation.at)}>
-                {" · "}{formatRelative(escalation.at, coarseNow)}
-              </span>
-            </div>
-            {!isForeignSession && (
-              <button
-                type="button"
-                data-role-gesture="hand-back"
-                onClick={(e) => { e.stopPropagation(); useInboxStore.getState().handSessionBackToRole(session._id); }}
-                title="Take it out of your needs input. The role looks after it again and decides if it comes back."
-                className="flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium bg-sol-violet/20 text-sol-violet border border-sol-violet/40 hover:bg-sol-violet/30 transition-colors whitespace-nowrap"
-              >
-                Hand back{escalation.role ? ` to @${escalation.role.handle}` : ""}
-              </button>
-            )}
-          </div>
-        )}
         {session.assigned_ping && (
           /* mr-5 keeps the strip — and its "Got it" button — clear of the
              hover toolbar's column on the right, whose gradient would
@@ -3152,7 +3094,7 @@ const needsAttention = (t: any) =>
   t.execution_status === "blocked" || t.execution_status === "needs_context";
 const needsAttentionRowSig = (t: any) =>
   needsAttention(t)
-    ? `${t.short_id}|${t.title}|${t.execution_status}|${t.status}|${t.triage_status ?? ""}|${String(t.user_id)}|${t.assignee ?? ""}|${t.plan?.title ?? ""}`
+    ? `${t.short_id}|${t.title}|${t.execution_status}|${t.execution_concerns ?? ""}|${t.status}|${t.triage_status ?? ""}|${String(t.user_id)}|${t.assignee ?? ""}|${t.plan?.title ?? ""}|${t.origin_session?.conversation_id ?? ""}`
     : "";
 
 // Structural signature for the decision rows the Questions section branches on.
@@ -3166,6 +3108,7 @@ function NeedsAttentionSection() {
   const wsTasks = useWorkspaceCollection<any>("tasks", needsAttentionRowSig);
   const s = useTrackedStore([(st) => st.currentUser?._id]);
   const updateTask = s.updateTask;
+  const router = useRouter();
   const [collapsed, setCollapsed] = useState(false);
 
   const me = s.currentUser?._id?.toString?.() ?? null;
@@ -3182,9 +3125,11 @@ function NeedsAttentionSection() {
 
   if (tasks.length === 0) return null;
 
+  // Clearing the flag is the retry: the server lets go of an ended run with
+  // it, so a task on the line gets a fresh run from the next sweep.
   const handleRetry = (shortId: string) => {
     updateTask(shortId, { execution_status: "", status: "open" });
-    toast.success("Task reset for retry");
+    toast.success(`Reopened ${shortId} for another attempt`);
   };
 
   return (
@@ -3206,14 +3151,26 @@ function NeedsAttentionSection() {
       {!collapsed && tasks.map((task: any) => (
         <div
           key={task.short_id}
-          className="group px-3 py-2 border-b border-sol-border/20 bg-sol-red/[0.03] hover:bg-sol-red/[0.06] transition-colors"
+          role="link"
+          tabIndex={0}
+          onClick={() => router.push(`/tasks/${task.short_id}`)}
+          onKeyDown={(e) => { if (e.key === "Enter") router.push(`/tasks/${task.short_id}`); }}
+          title={`Open ${task.short_id}`}
+          className="group px-3 py-2 border-b border-sol-border/20 bg-sol-red/[0.03] hover:bg-sol-red/[0.06] transition-colors cursor-pointer"
         >
           <div className="flex items-start gap-2">
             <div className="flex-1 min-w-0">
               <div className="text-sm text-sol-text truncate leading-tight">{task.title}</div>
-              <div className="flex items-center gap-1.5 mt-1">
+              {task.execution_concerns && (
+                <div className="mt-1 text-[11px] leading-snug text-sol-text-muted line-clamp-2" title={task.execution_concerns}>
+                  {task.execution_concerns}
+                </div>
+              )}
+              <div className="flex items-center gap-1.5 mt-1 min-w-0">
                 <ShortId id={task.short_id} className="text-[10px] text-sol-text-dim" />
                 <TaskStatusBadge status={task.execution_status || "blocked"} type="execution" size="sm" />
+                <TaskDecisionChip taskId={task._id} />
+                <TaskSessionBadge task={task} compact />
                 {task.plan && (
                   <span className="text-[10px] text-sol-cyan/70 truncate max-w-[100px]" title={task.plan.title}>
                     {task.plan.title}
@@ -3222,8 +3179,9 @@ function NeedsAttentionSection() {
               </div>
             </div>
             <button
-              onClick={() => handleRetry(task.short_id)}
-              className="flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium text-sol-orange border border-sol-orange/30 bg-sol-orange/10 hover:bg-sol-orange/20 transition-colors opacity-0 group-hover:opacity-100"
+              onClick={(e) => { e.stopPropagation(); handleRetry(task.short_id); }}
+              title="Clear the block and reopen the task for another attempt"
+              className="flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium text-sol-orange border border-sol-orange/30 bg-sol-orange/10 hover:bg-sol-orange/20 transition-opacity opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
             >
               Retry
             </button>
@@ -3535,7 +3493,7 @@ function SessionListPanelImpl({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [sessionsWakeSig(s.sessions), inboxScope, meId, s.teamInboxIds, showAllSessions, focusedId, s.sessionsWithQueuedMessages, pendingSendIds, blankOpts, placementDecisionsSig(s.sessionDecisions), s.questionResolutions, s.killedShelf.ids, coarseNow],
   );
-  const { visibleSessions, oldCount, sorted: sortedSessions, pinned, newSessions, needsInput, done, dormant, working, snoozed: snoozedList, stashed: stashedList, dismissed: dismissedList, subsByParent: globalSubByParent, forksByParent: globalForksByParent, questions: placedQuestions, isQuestion, escalatedByRole, escalationsByLead, roleSessionsByLead } = placed;
+  const { visibleSessions, oldCount, sorted: sortedSessions, pinned, newSessions, needsInput, done, dormant, working, snoozed: snoozedList, stashed: stashedList, dismissed: dismissedList, subsByParent: globalSubByParent, forksByParent: globalForksByParent, questions: placedQuestions, isQuestion, roleSessionsByLead } = placed;
 
   // -- Schedules in the inbox (status view) --
   // The same per-user webList the badges/strip/schedules page subscribe to
@@ -4105,18 +4063,17 @@ function SessionListPanelImpl({
   // Dropping a card on a status section files it there: the user's rest
   // verdict, undoable like the menu gesture. One stable handler per verdict.
   const dropSessionOnRest = useMemo(() => Object.fromEntries(
-    USER_RESTS.map((rest) => [rest, (draggedId: string) => {
-      const store = useInboxStore.getState();
-      const rows = selectionIdsFor(draggedId).map((id) => store.sessions[id]).filter((row): row is InboxSession => !!row);
-      const live = rows.filter((row) => !row.inbox_killed_at);
-      if (live.length === 0) { if (rows.length) toast.error("A killed session can't be filed — restore it first"); return; }
-      for (const row of live) undoableSetSessionRest(row._id, rest);
-      toast.success(live.length > 1 ? `${live.length} sessions: ${USER_REST_LABEL[rest]}` : USER_REST_LABEL[rest]);
-    }]),
+    USER_RESTS.map((rest) => [rest, (draggedId: string) => fileSessionsAsRest(selectionIdsFor(draggedId), rest)]),
   ) as Record<UserRest, (draggedId: string) => void>, []);
 
   // Section drop targets: whole group is droppable.
   const [dragOverSectionKey, setDragOverSectionKey] = useState<string | null>(null);
+  // While a card is in flight, an empty drop section still renders its header,
+  // so "drag onto Done" works when nothing is filed there yet.
+  const [sessionDragActive, setSessionDragActive] = useState(false);
+  useEventListener("dragstart", (e) => { if (e.dataTransfer?.types.includes("codecast/session-id")) setSessionDragActive(true); });
+  useEventListener("dragend", () => setSessionDragActive(false));
+  useEventListener("drop", () => setSessionDragActive(false));
 
   // Drag-to-reorder in the "time" view. There's no separate grip handle — the
   // whole card is already draggable (the card→label "file it" drag, tagged
@@ -4447,7 +4404,7 @@ function SessionListPanelImpl({
                     onRestore={variant === "snoozed" ? s.wakeSnoozedSession : restoreWithNotice}
                     onKill={onKill}
                     variant={variant}
-                    subRow={roleLookingAfter(sub) ? "role" : undefined}
+                    subRow={isUnderRole(sub) ? "role" : undefined}
                     sessionLabel={labelByConv[sub._id] ?? null}
                     isUnread={!!unreadByConv[sub._id]}
                     isFavorite={cardIsFavorite(sub)}
@@ -4501,10 +4458,10 @@ function SessionListPanelImpl({
       onSelect?: (session: InboxSession) => void;
     },
   ) => {
-    if (items.length === 0) return null;
+    const isDropTarget = !!opts?.onDropSession;
+    if (items.length === 0 && !(isDropTarget && sessionDragActive)) return null;
     const key = opts?.key ?? label.toLowerCase().replace(/\s+/g, "_");
     const collapsed = !!s.collapsedSections[key];
-    const isDropTarget = !!opts?.onDropSession;
     const isDragOverSection = dragOverSectionKey === key;
     const dropProps = isDropTarget
       ? {
@@ -4643,10 +4600,8 @@ function SessionListPanelImpl({
                   onPin={s.pinSession}
                   variant={sectionVariant || "default"}
                   forkColorKey={forkColorKeyOf(session)}
-                  escalatedCount={escalatedByRole.get(standingRoleIdOf(session) ?? "") ?? 0}
-                  escalations={escalationsByLead.get(session._id)}
                   roleSessions={roleSessionsByLead.get(session._id)}
-                  subRow={flatNestParentOf && roleLookingAfter(session) && flatNestParentOf(session) ? "role" : undefined}
+                  subRow={flatNestParentOf && isUnderRole(session) && flatNestParentOf(session) ? "role" : undefined}
                   sessionLabel={labelByConv[session._id] ?? null}
                   isUnread={!!unreadByConv[session._id]}
                   isFavorite={cardIsFavorite(session)}
@@ -4685,7 +4640,7 @@ function SessionListPanelImpl({
                     onDismiss={handleAnimatedDismiss}
                     onStash={handleAnimatedStash}
                     variant={sectionVariant || "default"}
-                    subRow={roleLookingAfter(sub) ? "role" : undefined}
+                    subRow={isUnderRole(sub) ? "role" : undefined}
                     sessionLabel={labelByConv[sub._id] ?? null}
                     isUnread={!!unreadByConv[sub._id]}
                     isFavorite={cardIsFavorite(sub)}
@@ -5228,3 +5183,16 @@ function SessionListPanelImpl({
 
 export const SessionListPanel = memo(SessionListPanelImpl);
 SessionListPanel.displayName = "SessionListPanel";
+
+// The role a standing session rides (S28): the snapshot on the parent's own
+// standing row, found by the pointer the row carries. Read once per render
+// from the store; the aria text is all it feeds.
+function leadRoleOf(session: { org_role_id?: string | null; standing_role_id?: string | null }): SessionRoleSnapshot | null {
+  if (!session.standing_role_id || !session.org_role_id) return null;
+  const rows = useInboxStore.getState().sessions;
+  for (const id in rows) {
+    const r = rows[id];
+    if (r.standing_role_id && String(r.standing_role_id) === String(session.org_role_id) && r.role) return r.role;
+  }
+  return null;
+}
