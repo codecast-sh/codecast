@@ -21,8 +21,7 @@ import { routingTeamForInstallation } from "./githubApp";
 import { internalMutation, internalAction, internalQuery } from "./functions";
 import { internal, api } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
-import { teamVisibleConvTeam } from "./privacy";
-import { recordPRMergedActivity } from "./pull_requests";
+import { recordPRMergedActivity, resolveActorUserIdForTeam } from "./pull_requests";
 import { recordExternalEvent } from "./externalEvents";
 import { checkLabel, repositoryOwner } from "@codecast/shared/contracts";
 import {
@@ -36,6 +35,9 @@ import {
   type CheckEntry,
   GITHUB_ACTIONS_APP,
   commitUrl,
+  conversationFromSessionTrailer,
+  linkableSessionsOnBranch,
+  type LinkScope,
   extractTaskShortIds,
   prUrl,
   resolveTaskLinks,
@@ -1299,22 +1301,20 @@ export async function commitRecordedBy(ctx: { db: any }, sha: string): Promise<I
  * session stores a short hash there. Stored hashes are prefixes, so every stored
  * prefix of a full sha sorts inside [first seven chars, full sha] — the same
  * range scan `cast blame` uses. When no edit row names the sha, a branch that
- * exactly one session is sitting on is good enough evidence; two sessions on the
- * same branch is not, so the commit stays unattributed.
+ * exactly one linkable session (lib/gitRefs.isConversationLinkable) is sitting
+ * on is good enough evidence; two is not, so the commit stays unattributed.
  */
 export async function conversationForCommit(
   ctx: { db: any },
   sha: string,
   branch: string | undefined,
+  scope: LinkScope,
 ): Promise<Id<"conversations"> | undefined> {
   const recordedBy = await commitRecordedBy(ctx, sha);
   if (recordedBy) return recordedBy;
 
   if (!branch) return undefined;
-  const onBranch = await ctx.db
-    .query("conversations")
-    .withIndex("by_git_branch", (q: any) => q.eq("git_branch", branch))
-    .take(5);
+  const onBranch = await linkableSessionsOnBranch(ctx, branch, scope, 5);
   return onBranch.length === 1 ? onBranch[0]._id : undefined;
 }
 
@@ -1361,6 +1361,7 @@ export const processPushEvent = internalMutation({
     if (!teamId) return { success: true, reason: "No installation for this repository", commits_created: 0 };
 
     const pusher: string | undefined = payload.pusher?.name ?? payload.sender?.login;
+    const pusherId = pusher ? await resolveActorUserIdForTeam(ctx, teamId, pusher) : null;
     const pusherAvatar: string | undefined = payload.sender?.avatar_url;
     const branchLinks = await resolveTaskLinks(ctx, extractTaskShortIds(branch));
 
@@ -1378,17 +1379,21 @@ export const processPushEvent = internalMutation({
       const files = pushCommitFiles(commit);
 
       const links = await resolveTaskLinksFromText(ctx, message, branch);
-      // GitHub marks a commit it has already seen on another ref `distinct:
-      // false`: it arrived on this branch by a merge (usually main merged in),
-      // so the session sitting on the branch did not write it. Only its own
-      // edit row may claim it.
-      const conversationId = await conversationForCommit(ctx, sha, commit.distinct === false ? undefined : branch);
-      if (!firstConversation) firstConversation = conversationId;
-
+      // A Codecast-Session trailer is the session's own word on which session
+      // made the commit, so it beats every guess below. A push carries no
+      // proof of who wrote the trailer, so it links only a session the team
+      // may read, and replaces a link already on the row only when both name
+      // the same person (conversationFromSessionTrailer). Otherwise: GitHub marks a commit it has already
+      // seen on another ref `distinct: false`: it arrived on this branch by a
+      // merge (usually main merged in), so the session sitting on the branch
+      // did not write it. Only its own edit row may claim it.
       const existing = await ctx.db
         .query("commits")
         .withIndex("by_sha", (q: any) => q.eq("sha", sha))
         .first();
+      const fromTrailer = await conversationFromSessionTrailer(ctx, message, { teamId, current: existing?.conversation_id });
+      const conversationId = fromTrailer ?? await conversationForCommit(ctx, sha, commit.distinct === false ? undefined : branch, { userId: pusherId, teamId });
+      if (!firstConversation) firstConversation = conversationId;
 
       let commitId: Id<"commits">;
       if (existing) {
@@ -1398,7 +1403,7 @@ export const processPushEvent = internalMutation({
           branch: existing.branch ?? branch,
           author_login: existing.author_login ?? commit.author?.username,
           author_avatar_url: existing.author_avatar_url ?? pusherAvatar,
-          conversation_id: existing.conversation_id ?? conversationId,
+          conversation_id: fromTrailer ?? existing.conversation_id ?? conversationId,
           task_ids: existing.task_ids?.length ? existing.task_ids : links.task_ids,
           files: existing.files?.length ? existing.files : files.length ? files : undefined,
         });
@@ -1632,29 +1637,20 @@ export const matchPRToConversation = internalMutation({
     updated_at: v.number(),
   },
   handler: async (ctx, args) => {
-    const conversations = await ctx.db
-      .query("conversations")
-      .withIndex("by_git_branch", (q) => q.eq("git_branch", args.head_ref))
-      .take(50);
-
-    // This is a GLOBAL branch-name scan, so conversations[0] could be any user's
-    // private session that happens to sit on a branch like `main`. Its ROUTING
-    // team_id must not become the PR's team — only a team-visible session may
-    // donate one. The repo installation (below) is the authoritative fallback.
-    let teamId: Id<"teams"> | undefined;
-    for (const conv of conversations) {
-      const visibleTeam = teamVisibleConvTeam(conv);
-      if (visibleTeam) { teamId = visibleTeam; break; }
-    }
-
-    if (!teamId) {
-      teamId = (await resolveTeamForRepository(ctx, args.repository)) ?? undefined;
-    }
-
+    // The installation decides the team, as it does for pushes. A session on
+    // the same branch name cannot: branch names repeat across every user and
+    // repository, so a stranger's team would take the pull request.
+    const teamId = await resolveTeamForRepository(ctx, args.repository);
     if (!teamId) {
       await ctx.db.patch(args.event_id, { processed: true });
       return { matched_conversation_id: null, pr_id: null, github_access_token: null, team_id: null };
     }
+
+    // Only sessions the author owns or the team may read. Linked sessions are
+    // shown on the pull request and one is named in a public GitHub comment
+    // posted with its owner's token.
+    const authorId = await resolveActorUserIdForTeam(ctx, teamId, args.author_username);
+    const conversations = await linkableSessionsOnBranch(ctx, args.head_ref, { userId: authorId, teamId }, 50);
 
     let githubAccessToken: string | null = null;
     for (const conversation of conversations) {
@@ -1768,7 +1764,7 @@ export const matchPRToConversation = internalMutation({
     await ctx.db.patch(args.event_id, { processed: true });
 
     return {
-      matched_conversation_id: shepherd?._id ?? conversations[0]?._id ?? null,
+      matched_conversation_id: shepherd?._id ?? null,
       pr_id: prId,
       github_access_token: githubAccessToken,
       team_id: teamId,

@@ -1151,7 +1151,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // them (attachReviewToMessage), so a bare Enter with an empty input is a valid send.
   const reviewCount = useInboxStore((s) => (s.reviewComments[conversationId] ?? []).length);
   const hasContent = (composeMode ? composeHasContent : message.trim().length > 0) || pastedImages.length > 0 || queuedMessages.length > 0;
-  const isExpanded = composeMode || !!onSubmitWithIntent || !!onSendAndAdvance || isFocused || message.length > 0 || pastedImages.length > 0 || queuedMessages.length > 0 || reviewCount > 0 || !!branchMapNode;
+  // A showing ghost suggestion is content too: it can run several lines, and
+  // the collapsed pill (narrow, fully rounded) bends that into an ellipse.
+  const isExpanded = composeMode || !!onSubmitWithIntent || !!onSendAndAdvance || isFocused || message.length > 0 || ghostVisible || pastedImages.length > 0 || queuedMessages.length > 0 || reviewCount > 0 || !!branchMapNode;
 
   const toggleCompose = useCallback(() => {
     if (composeMode) {

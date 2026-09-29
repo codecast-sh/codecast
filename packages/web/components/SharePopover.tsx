@@ -1,12 +1,12 @@
 import { useState } from "react";
-import { Forward } from "lucide-react";
+import { Check, Forward, Link as LinkIcon } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
 import { copyToClipboard } from "../lib/utils";
 import { openForwardToChat } from "../lib/forwardToChat";
 import { useTeamFeature } from "../lib/teamFeatures";
 import { toast } from "sonner";
-import { TeamShareModePicker } from "./TeamShareModePicker";
+import { SegmentedChoice, TeamShareModePicker, type SegmentedOption } from "./TeamShareModePicker";
 
 interface SharePopoverProps {
   isPrivate?: boolean;
@@ -19,8 +19,11 @@ interface SharePopoverProps {
   onSetPrivate?: () => void | Promise<void>;
   onSetTeamVisibility?: (mode: "summary" | "full") => void | Promise<void>;
   onGenerateShareLink: () => Promise<string>;
+  /** Turns "anyone with the link" off; every copy of the tokened link dies. */
+  onRevokeShareLink?: () => Promise<unknown>;
+  /** The link that works for anyone: the page link carrying its token. */
   shareUrl: string | null;
-  /** Internal, auth-required page URL. When provided, a "Page link" row is shown above the public link. */
+  /** The page link, for signed-in people who can already see it. */
   pageUrl?: string;
   /** Link a forward-to-chat sends; defaults to pageUrl. */
   forwardUrl?: string;
@@ -55,6 +58,23 @@ function getShareStatus(isPrivate: boolean, teamVisibility: string | null | unde
   return { label: "Team + Link", color: "text-sol-cyan" };
 }
 
+type LinkAccess = "restricted" | "anyone";
+
+const LINK_ACCESS: SegmentedOption<LinkAccess>[] = [
+  {
+    value: "restricted",
+    label: "Restricted",
+    selected: "bg-sol-bg text-sol-text",
+    icon: "M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z",
+  },
+  {
+    value: "anyone",
+    label: "Anyone",
+    selected: "bg-sol-cyan/15 text-sol-cyan",
+    icon: "M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 013 12c0-1.605.42-3.113 1.157-4.418",
+  },
+];
+
 export function SharePopover({
   isPrivate = false,
   teamVisibility,
@@ -64,6 +84,7 @@ export function SharePopover({
   onSetPrivate,
   onSetTeamVisibility,
   onGenerateShareLink,
+  onRevokeShareLink,
   shareUrl,
   pageUrl,
   forwardUrl,
@@ -73,48 +94,37 @@ export function SharePopover({
 }: SharePopoverProps) {
   const chatOn = useTeamFeature("chat");
   const [isOpen, setIsOpen] = useState(false);
-  const [isGeneratingLink, setIsGeneratingLink] = useState(false);
+  const [isUpdatingLink, setIsUpdatingLink] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [pageCopied, setPageCopied] = useState(false);
 
   const currentMode: VisibilityMode = isPrivate ? "private" : (teamVisibility as VisibilityMode || "summary");
   const status = getShareStatus(isPrivate, teamVisibility, hasShareToken, hasTeam);
 
-  const handleCopyLink = async () => {
-    let url = shareUrl;
-    if (!url) {
-      setIsGeneratingLink(true);
-      try {
-        url = await onGenerateShareLink();
-      } finally {
-        setIsGeneratingLink(false);
-      }
-    }
-    if (url) {
-      await copyToClipboard(url);
-      setCopied(true);
-      toast.success("Link copied");
-      setTimeout(() => setCopied(false), 2000);
-    }
-  };
+  // One link. Restricted, it is the page link: it opens for signed-in people
+  // who can already see this. Open to anyone, it is the same page link
+  // carrying the token, because an id alone grants nothing (issue #27).
+  const linkAccess: LinkAccess = hasShareToken ? "anyone" : "restricted";
+  const link = (canManage && hasShareToken && shareUrl) || pageUrl || null;
 
-  const handleCreateLink = async () => {
-    setIsGeneratingLink(true);
+  const setLinkAccess = async (next: LinkAccess) => {
+    if (next === linkAccess) return;
+    setIsUpdatingLink(true);
     try {
-      const url = await onGenerateShareLink();
-      await copyToClipboard(url);
-      toast.success("Link copied");
+      if (next === "anyone") await onGenerateShareLink();
+      else await onRevokeShareLink?.();
+    } catch {
+      toast.error("Couldn't change who can open the link");
     } finally {
-      setIsGeneratingLink(false);
+      setIsUpdatingLink(false);
     }
   };
 
-  const handleCopyPageLink = async () => {
-    if (!pageUrl) return;
-    await copyToClipboard(pageUrl);
-    setPageCopied(true);
+  const handleCopyLink = async () => {
+    if (!link) return;
+    await copyToClipboard(link);
+    setCopied(true);
     toast.success("Link copied");
-    setTimeout(() => setPageCopied(false), 2000);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   const tooltipLabel = canManage ? (status.label || "Share settings") : "Share";
@@ -145,13 +155,17 @@ export function SharePopover({
       </TooltipProvider>
       <PopoverContent
         align="end"
-        className="w-72 bg-sol-bg border-sol-border p-0"
+        className="w-80 bg-sol-bg border-sol-border p-0 overflow-hidden"
+        // Radix focuses the first control on open, which paints a focus ring on
+        // "Hidden" beside the real selection. Focus the panel itself instead.
+        onOpenAutoFocus={(e) => { e.preventDefault(); (e.currentTarget as HTMLElement | null)?.focus?.(); }}
+        tabIndex={-1}
       >
-        <div className="p-3 border-b border-sol-border">
-          <h3 className="text-sm font-medium text-sol-text">Sharing</h3>
+        <div className="px-3.5 pt-3 pb-1">
+          <h3 className="text-sm font-semibold text-sol-text">Share{forwardLabel ? ` ${forwardLabel}` : ""}</h3>
         </div>
 
-        <div className="p-3 space-y-3">
+        <div className="px-3.5 pb-3.5 pt-2 space-y-3.5 [&>*+*]:border-t [&>*+*]:border-sol-border/60 [&>*+*]:pt-3.5">
           {canManage && hasTeam && (
             <TeamShareModePicker
               mode={currentMode}
@@ -162,77 +176,54 @@ export function SharePopover({
             />
           )}
 
-          {pageUrl && (
-            <div className="space-y-1.5">
-              <span className="text-xs font-medium text-sol-text-dim uppercase tracking-wide">Page link</span>
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  value={pageUrl}
-                  readOnly
-                  className="flex-1 text-xs bg-sol-bg-alt border border-sol-border rounded px-2 py-1.5 text-sol-text-dim truncate"
-                />
-                <button
-                  onClick={handleCopyPageLink}
-                  className="shrink-0 px-2 py-1.5 text-xs bg-sol-cyan/20 hover:bg-sol-cyan/30 text-sol-cyan rounded transition-colors"
-                >
-                  {pageCopied ? "Copied" : "Copy"}
-                </button>
+          {canManage && (
+            <div className="space-y-2">
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="text-xs font-medium text-sol-text-muted">Link access</span>
+                {isUpdatingLink && <span className="text-[11px] text-sol-text-dim">Saving…</span>}
               </div>
-              <p className="text-[11px] text-sol-text-dim">Teammates with access can open</p>
+              <SegmentedChoice
+                label="Who can open the link"
+                options={LINK_ACCESS}
+                value={linkAccess}
+                onPick={setLinkAccess}
+                disabled={isUpdatingLink || (linkAccess === "anyone" && !onRevokeShareLink)}
+              />
+              <p className="text-xs leading-snug text-sol-text-muted">
+                {linkAccess === "anyone"
+                  ? "Anyone with the link can view it, no sign in needed."
+                  : "Only people who can already see it can open the link."}
+              </p>
             </div>
           )}
+        </div>
 
-          {canManage && (
-          <div className="space-y-2">
-            <span className="text-xs font-medium text-sol-text-dim uppercase tracking-wide">{pageUrl ? "Public link" : "Link"}</span>
-
-            {hasShareToken && shareUrl ? (
-              <div className="space-y-1.5">
-                <div className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    value={shareUrl}
-                    readOnly
-                    className="flex-1 text-xs bg-sol-bg-alt border border-sol-border rounded px-2 py-1.5 text-sol-text-dim truncate"
-                  />
-                  <button
-                    onClick={handleCopyLink}
-                    className="shrink-0 px-2 py-1.5 text-xs bg-sol-cyan/20 hover:bg-sol-cyan/30 text-sol-cyan rounded transition-colors"
-                  >
-                    {copied ? "Copied" : "Copy"}
-                  </button>
-                </div>
-                <p className="text-[11px] text-sol-text-dim">Anyone with this link can view</p>
-              </div>
-            ) : (
-              <div className="space-y-1.5">
-                <p className="text-[11px] text-sol-text-dim">Create a link anyone can open without signing in</p>
-                <button
-                  onClick={handleCreateLink}
-                  disabled={isGeneratingLink}
-                  className="px-3 py-1.5 text-xs bg-sol-bg-alt hover:bg-sol-border text-sol-text-secondary rounded transition-colors disabled:opacity-50"
-                >
-                  {isGeneratingLink ? "Creating..." : "Create & copy link"}
-                </button>
-              </div>
+        {(link || (chatOn && (forwardUrl || pageUrl))) && (
+          <div className="flex gap-2 border-t border-sol-border bg-sol-bg-alt/40 px-3.5 py-2.5">
+            {link && (
+              <button
+                onClick={handleCopyLink}
+                title={link}
+                className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-md bg-sol-cyan px-3 py-1.5 text-xs font-semibold text-sol-base03 hover:brightness-110 transition-colors"
+              >
+                {copied ? <Check className="w-3.5 h-3.5" /> : <LinkIcon className="w-3.5 h-3.5" />}
+                {copied ? "Copied" : "Copy link"}
+              </button>
+            )}
+            {chatOn && (forwardUrl || pageUrl) && (
+              <button
+                onClick={() => {
+                  setIsOpen(false);
+                  openForwardToChat({ url: (forwardUrl || pageUrl)!, label: forwardLabel });
+                }}
+                className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-md border border-sol-border px-3 py-1.5 text-xs font-medium text-sol-text-secondary hover:bg-sol-bg-alt hover:text-sol-text transition-colors"
+              >
+                <Forward className="w-3.5 h-3.5" />
+                Send to chat
+              </button>
             )}
           </div>
-          )}
-
-          {chatOn && (forwardUrl || pageUrl) && (
-            <button
-              onClick={() => {
-                setIsOpen(false);
-                openForwardToChat({ url: (forwardUrl || pageUrl)!, label: forwardLabel });
-              }}
-              className="w-full flex items-center gap-2 px-3 py-1.5 text-xs bg-sol-bg-alt hover:bg-sol-border text-sol-text-secondary rounded transition-colors"
-            >
-              <Forward className="w-3.5 h-3.5" />
-              Send to chat…
-            </button>
-          )}
-        </div>
+        )}
       </PopoverContent>
     </Popover>
   );

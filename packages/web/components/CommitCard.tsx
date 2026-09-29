@@ -2,6 +2,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { FileDiffList, type DiffFile } from "./FileDiffView";
 import { commitPageHref } from "../lib/repoView";
+import { SessionTrailerLine, useSessionTrailer } from "./SessionTrailer";
 
 type CommitCardProps = {
   sha: string;
@@ -54,6 +55,7 @@ function GitIcon() {
 
 export function CommitCard({ sha, message, timestamp, filesChanged, insertions, deletions, authorName, authorEmail, repository, files }: CommitCardProps) {
   const [expanded, setExpanded] = useState(false);
+  const { message: shownMessage, session: trailerSession } = useSessionTrailer(message);
   const shortSha = sha.slice(0, 7);
   const commitMessage = message.split('\n')[0];
   const githubUrl = repository ? `https://github.com/${repository}/commit/${sha}` : null;
@@ -115,11 +117,14 @@ export function CommitCard({ sha, message, timestamp, filesChanged, insertions, 
 
       {expanded && (
         <div className="border-t border-sol-border/50">
-          {message.includes('\n') && (
+          {(shownMessage.includes('\n') || trailerSession) && (
             <div className="px-3 py-2 bg-sol-bg/30 border-b border-sol-border/30">
-              <div className="text-xs text-sol-text-muted whitespace-pre-wrap font-mono">
-                {message}
-              </div>
+              {shownMessage.includes('\n') && (
+                <div className="text-xs text-sol-text-muted whitespace-pre-wrap font-mono">
+                  {shownMessage}
+                </div>
+              )}
+              {trailerSession && <SessionTrailerLine session={trailerSession} className={shownMessage.includes('\n') ? "mt-1.5" : ""} />}
             </div>
           )}
 
