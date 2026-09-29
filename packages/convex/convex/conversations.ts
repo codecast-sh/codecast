@@ -1487,23 +1487,29 @@ export const webGet = query({
   },
 });
 
+// The conversation reads a transcript view subscribes to take their id as
+// v.string, not v.id: it arrives raw from a URL (the inbox `?s=` deep link, a
+// pane path) and the client's isConvexId guard is format-only. A 32-char id
+// from another table (a message id, seen in prod) must read as not found
+// instead of an ArgumentValidationError thrown into the subscriber's render.
+async function getConversationByRawId(ctx: QueryCtx, raw: string) {
+  const id = ctx.db.normalizeId("conversations", raw);
+  return id ? await ctx.db.get(id) : null;
+}
+
 export const getConversation = query({
   args: {
-    // v.string, not v.id: this id arrives raw from the inbox `?s=` deep-link
-    // param, and a 32-char id from another table must resolve to null (the
-    // not-found path) instead of an ArgumentValidationError that throws into
-    // the subscribing component's render.
     conversation_id: v.string(),
     limit: v.optional(v.number()),
     share_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
-    const conversationId = ctx.db.normalizeId("conversations", args.conversation_id);
-    const conversation = conversationId ? await ctx.db.get(conversationId) : null;
-    if (!conversation || !conversationId) {
+    const conversation = await getConversationByRawId(ctx, args.conversation_id);
+    if (!conversation) {
       return null;
     }
+    const conversationId = conversation._id;
     const accessLevel = await checkConversationAccess(ctx, authUserId, conversation, args.share_token);
     if (accessLevel === "denied") {
       return null;
@@ -1716,7 +1722,7 @@ export const getProjectInfo = query({
 
 export const getMessagesAroundTimestamp = query({
   args: {
-    conversation_id: v.id("conversations"),
+    conversation_id: v.string(),
     center_timestamp: v.number(),
     limit_before: v.optional(v.number()),
     limit_after: v.optional(v.number()),
@@ -1724,7 +1730,7 @@ export const getMessagesAroundTimestamp = query({
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
-    const conversation = await ctx.db.get(args.conversation_id);
+    const conversation = await getConversationByRawId(ctx, args.conversation_id);
     if (!conversation) {
       return null;
     }
@@ -1734,14 +1740,14 @@ export const getMessagesAroundTimestamp = query({
       return null;
     }
 
-    const before = await pageConversationMessages(ctx.db, args.conversation_id, {
+    const before = await pageConversationMessages(ctx.db, conversation._id, {
       before: args.center_timestamp,
       order: "desc",
       limit: args.limit_before ?? 50,
     });
     before.messages.reverse();
 
-    const after = await pageConversationMessages(ctx.db, args.conversation_id, {
+    const after = await pageConversationMessages(ctx.db, conversation._id, {
       from: args.center_timestamp,
       order: "asc",
       limit: args.limit_after ?? 50,
@@ -1766,7 +1772,7 @@ export const getMessagesAroundTimestamp = query({
 
 export const getNewMessages = query({
   args: {
-    conversation_id: v.id("conversations"),
+    conversation_id: v.string(),
     after_timestamp: v.number(),
   },
   handler: async (ctx, args) => {
@@ -1774,7 +1780,7 @@ export const getNewMessages = query({
     if (!authUserId) {
       return null;
     }
-    const conversation = await ctx.db.get(args.conversation_id);
+    const conversation = await getConversationByRawId(ctx, args.conversation_id);
     if (!conversation) {
       return null;
     }
@@ -1786,7 +1792,7 @@ export const getNewMessages = query({
     const messages = await ctx.db
       .query("messages")
       .withIndex("by_conversation_timestamp", (q) =>
-        q.eq("conversation_id", args.conversation_id).gt("timestamp", args.after_timestamp)
+        q.eq("conversation_id", conversation._id).gt("timestamp", args.after_timestamp)
       )
       .order("asc")
       .take(PAGE_LIMIT + 1);
@@ -1824,13 +1830,13 @@ export const getNewMessages = query({
 //   but the result stays byte-identical and Convex skips the push.
 export const listMessagesTail = query({
   args: {
-    conversation_id: v.id("conversations"),
+    conversation_id: v.string(),
     after_timestamp: v.number(),
     share_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
-    const conversation = await ctx.db.get(args.conversation_id);
+    const conversation = await getConversationByRawId(ctx, args.conversation_id);
     if (!conversation) return null;
     if ((await checkConversationAccess(ctx, authUserId, conversation, args.share_token)) === "denied") {
       return null;
@@ -1840,7 +1846,7 @@ export const listMessagesTail = query({
     const messages = await ctx.db
       .query("messages")
       .withIndex("by_conversation_timestamp", (q) =>
-        q.eq("conversation_id", args.conversation_id).gt("timestamp", args.after_timestamp)
+        q.eq("conversation_id", conversation._id).gt("timestamp", args.after_timestamp)
       )
       .order("asc")
       .take(TAIL_LIMIT + 1);
@@ -1864,12 +1870,12 @@ export const listMessagesTail = query({
 // these actually moves.
 export const getTranscriptWatermark = query({
   args: {
-    conversation_id: v.id("conversations"),
+    conversation_id: v.string(),
     share_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
-    const conversation = await ctx.db.get(args.conversation_id);
+    const conversation = await getConversationByRawId(ctx, args.conversation_id);
     if (!conversation) return null;
     if ((await checkConversationAccess(ctx, authUserId, conversation, args.share_token)) === "denied") {
       return null;
@@ -1964,13 +1970,13 @@ export async function attachSenderIdentities<T extends { role?: string; from_use
 
 export const listMessages = query({
   args: {
-    conversation_id: v.id("conversations"),
+    conversation_id: v.string(),
     paginationOpts: paginationOptsValidator,
     share_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
-    const conversation = await ctx.db.get(args.conversation_id);
+    const conversation = await getConversationByRawId(ctx, args.conversation_id);
     // Missing conversation must return the empty-page shape, not throw — a
     // client can hold a stale conversation_id (deleted row, lost access) in
     // local state, and throwing crashes the React tree via usePaginatedQuery.
@@ -1987,7 +1993,7 @@ export const listMessages = query({
     const result = await ctx.db
       .query("messages")
       .withIndex("by_conversation_timestamp", (q) =>
-        q.eq("conversation_id", args.conversation_id)
+        q.eq("conversation_id", conversation._id)
       )
       .order("desc")
       .paginate(args.paginationOpts);
@@ -1998,7 +2004,7 @@ export const listMessages = query({
 
 export const getConversationWithMeta = query({
   args: {
-    conversation_id: v.id("conversations"),
+    conversation_id: v.string(),
     share_token: v.optional(v.string()),
     // Opt-in: omit the churny per-flush fields from the returned doc. The
     // client merge (syncRecord) keeps its prior values for omitted keys, and
@@ -2009,7 +2015,7 @@ export const getConversationWithMeta = query({
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
-    const conversation = await ctx.db.get(args.conversation_id);
+    const conversation = await getConversationByRawId(ctx, args.conversation_id);
     if (!conversation) {
       return null;
     }
@@ -2027,7 +2033,7 @@ export const getConversationWithMeta = query({
       || "New Session";
 
     const { children: childConversations, map: childByParentUuid, agentNameEntries } =
-      await findChildConversations(ctx, args.conversation_id, []);
+      await findChildConversations(ctx, conversation._id, []);
 
     let forkedFromDetails = null;
     if (conversation.forked_from) {
@@ -2053,7 +2059,7 @@ export const getConversationWithMeta = query({
     const handedOffFromDetails = await handoffLinkDetails(getDocOnce, conversation.handed_off_from_conversation_id);
     const handedOffToDetails = await handoffLinkDetails(getDocOnce, await handedOffToId(ctx, conversation));
 
-    const forkChildrenDetails = await getAccessibleForkChildren(ctx, authUserId, args.conversation_id);
+    const forkChildrenDetails = await getAccessibleForkChildren(ctx, authUserId, conversation._id);
 
     let forkSiblings: typeof forkChildrenDetails = [];
     if (conversation.forked_from) {
@@ -2107,7 +2113,7 @@ export const getConversationWithMeta = query({
     // conversationForAccess applies to the legacy field.
     const sideStableContext =
       access === "owner" || access === "team"
-        ? await getConvStableContext(ctx, args.conversation_id)
+        ? await getConvStableContext(ctx, conversation._id)
         : null;
 
     return sanitizeConvexObjectKeys({
@@ -13041,6 +13047,77 @@ export async function enqueueKillAndResume(
   return { deduplicated: false };
 }
 
+/** The kill itself, for every caller that has already authenticated: the
+ *  daemon teardown, the completed stamp, and the sweeps that keep it dead. */
+export async function killConversation(ctx: any, userId: Id<"users">, args: { conversation_id: Id<"conversations">; mark_completed?: boolean; session_id?: string }) {
+  const conv = await ctx.db.get(args.conversation_id);
+  // The runner, or the session's second-party owner — same rule as
+  // restartSession/dispatch.sendMessage. An owned session kills from the
+  // owner's inbox exactly like their own.
+  if (conv && conv.user_id !== userId && conv.owner_user_id !== userId) throw new Error("Not authorized");
+
+  // Enqueue even when the row is gone: the daemon tears backends down from the
+  // conversation id alone (derived tmux names, local caches) plus the cached
+  // session_id the client passes along. Address the command to the RUNNER's
+  // daemon (conv.user_id) — an owner's kill must reach the machine actually
+  // running the session; ghost rows fall back to the caller.
+  await ctx.db.insert("daemon_commands", {
+    user_id: conv?.user_id ?? userId,
+    command: "kill_session",
+    args: JSON.stringify({
+      conversation_id: args.conversation_id,
+      session_id: args.session_id ?? conv?.session_id,
+    }),
+    created_at: Date.now(),
+  });
+
+  let canceledSchedules = 0;
+  let canceledMessages = 0;
+  if (conv) {
+    // First-kill time, preserved across re-kills (same rule as
+    // applyHideTransition): a repeat kill re-runs teardown, it doesn't
+    // rewrite when the session was retired.
+    const patch: Record<string, any> = conv.inbox_killed_at ? {} : { inbox_killed_at: Date.now() };
+    // A persistent anchor session never auto-completes — a dismiss/kill gesture
+    // on its pinned card puts it to sleep, it isn't retired. Only an explicit
+    // decommissionAnchor (which clears `persistent` first) may complete it.
+    if (args.mark_completed && !conv.persistent) {
+      patch.status = "completed";
+    }
+    await ctx.db.patch(args.conversation_id, patch);
+    // A retired row leaves the Lock Screen strip with the next push.
+    await scheduleLiveActivityRefresh(ctx, conv.user_id, { urgent: true });
+    // Kill must stick: cancel any armed schedule that injects into this
+    // conversation, or its next fire would resurrect the session the user
+    // just killed (see cancelTasksBoundToConversation). Scan the RUNNER's
+    // schedules (theirs are the ones bound to their session), plus the
+    // caller's when a second-party owner is killing.
+    // Both sweeps are RETIREMENT effects, so a persistent anchor is exempt
+    // from both — killing an anchor is dormancy, not death. Same guard as
+    // applyHideTransition: the two kill surfaces must agree about anchors, or
+    // the web button and `cast kill` leave the same session in different
+    // states (its queue survives one and not the other).
+    if (!conv.persistent) {
+      canceledSchedules = await cancelTasksBoundToConversation(ctx, conv.user_id, args.conversation_id);
+      if (conv.user_id !== userId) {
+        canceledSchedules += await cancelTasksBoundToConversation(ctx, userId, args.conversation_id);
+      }
+      // Kill is terminal for messages already queued too — same reason the
+      // schedules die: a retained message that lands later revives the session
+      // the user just killed. Only the pre-kill queue; a later send re-enqueues.
+      canceledMessages = await cancelQueuedMessagesOnKill(ctx, args.conversation_id);
+    }
+    // Take the nested group (Task subagents + agent-team teammates) down
+    // with the card. The web store also sweeps optimistically for its own
+    // gesture; this server twin covers every other caller. Forced, like the
+    // unconditional enqueue above: this mutation IS an explicit kill gesture,
+    // so an already-hidden child whose worker came back gets torn down again
+    // rather than skipped — the group comes down as one unit.
+    await cascadeHideToNestedChildren(ctx, conv, { inbox_dismissed_at: Date.now() }, { forceKill: true });
+  }
+  return { existed: !!conv, canceled_schedules: canceledSchedules, canceled_messages: canceledMessages };
+}
+
 export const killSession = mutation({
   args: {
     conversation_id: v.id("conversations"),
@@ -13051,72 +13128,7 @@ export const killSession = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const conv = await ctx.db.get(args.conversation_id);
-    // The runner, or the session's second-party owner — same rule as
-    // restartSession/dispatch.sendMessage. An owned session kills from the
-    // owner's inbox exactly like their own.
-    if (conv && conv.user_id !== userId && conv.owner_user_id !== userId) throw new Error("Not authorized");
-
-    // Enqueue even when the row is gone: the daemon tears backends down from the
-    // conversation id alone (derived tmux names, local caches) plus the cached
-    // session_id the client passes along. Address the command to the RUNNER's
-    // daemon (conv.user_id) — an owner's kill must reach the machine actually
-    // running the session; ghost rows fall back to the caller.
-    await ctx.db.insert("daemon_commands", {
-      user_id: conv?.user_id ?? userId,
-      command: "kill_session",
-      args: JSON.stringify({
-        conversation_id: args.conversation_id,
-        session_id: args.session_id ?? conv?.session_id,
-      }),
-      created_at: Date.now(),
-    });
-
-    let canceledSchedules = 0;
-    let canceledMessages = 0;
-    if (conv) {
-      // First-kill time, preserved across re-kills (same rule as
-      // applyHideTransition): a repeat kill re-runs teardown, it doesn't
-      // rewrite when the session was retired.
-      const patch: Record<string, any> = conv.inbox_killed_at ? {} : { inbox_killed_at: Date.now() };
-      // A persistent anchor session never auto-completes — a dismiss/kill gesture
-      // on its pinned card puts it to sleep, it isn't retired. Only an explicit
-      // decommissionAnchor (which clears `persistent` first) may complete it.
-      if (args.mark_completed && !conv.persistent) {
-        patch.status = "completed";
-      }
-      await ctx.db.patch(args.conversation_id, patch);
-      // A retired row leaves the Lock Screen strip with the next push.
-      await scheduleLiveActivityRefresh(ctx, conv.user_id, { urgent: true });
-      // Kill must stick: cancel any armed schedule that injects into this
-      // conversation, or its next fire would resurrect the session the user
-      // just killed (see cancelTasksBoundToConversation). Scan the RUNNER's
-      // schedules (theirs are the ones bound to their session), plus the
-      // caller's when a second-party owner is killing.
-      // Both sweeps are RETIREMENT effects, so a persistent anchor is exempt
-      // from both — killing an anchor is dormancy, not death. Same guard as
-      // applyHideTransition: the two kill surfaces must agree about anchors, or
-      // the web button and `cast kill` leave the same session in different
-      // states (its queue survives one and not the other).
-      if (!conv.persistent) {
-        canceledSchedules = await cancelTasksBoundToConversation(ctx, conv.user_id, args.conversation_id);
-        if (conv.user_id !== userId) {
-          canceledSchedules += await cancelTasksBoundToConversation(ctx, userId, args.conversation_id);
-        }
-        // Kill is terminal for messages already queued too — same reason the
-        // schedules die: a retained message that lands later revives the session
-        // the user just killed. Only the pre-kill queue; a later send re-enqueues.
-        canceledMessages = await cancelQueuedMessagesOnKill(ctx, args.conversation_id);
-      }
-      // Take the nested group (Task subagents + agent-team teammates) down
-      // with the card. The web store also sweeps optimistically for its own
-      // gesture; this server twin covers every other caller. Forced, like the
-      // unconditional enqueue above: this mutation IS an explicit kill gesture,
-      // so an already-hidden child whose worker came back gets torn down again
-      // rather than skipped — the group comes down as one unit.
-      await cascadeHideToNestedChildren(ctx, conv, { inbox_dismissed_at: Date.now() }, { forceKill: true });
-    }
-    return { existed: !!conv, canceled_schedules: canceledSchedules, canceled_messages: canceledMessages };
+    return killConversation(ctx, userId, args);
   },
 });
 
@@ -13331,15 +13343,15 @@ export async function collectNavigableUserMessages(
 }
 
 export const getUserMessages = query({
-  args: { conversation_id: v.id("conversations"), share_token: v.optional(v.string()) },
+  args: { conversation_id: v.string(), share_token: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
-    const conv = await ctx.db.get(args.conversation_id);
+    const conv = await getConversationByRawId(ctx, args.conversation_id);
     if (!conv) return [];
     // Same admission as listMessages: owner, team, or share link. The message
     // browser must serve every viewer the transcript itself serves — including
     // unauthenticated visitors presenting a public share token.
     if ((await checkConversationAccess(ctx, userId, conv, args.share_token)) === "denied") return [];
-    return collectNavigableUserMessages(ctx.db, args.conversation_id);
+    return collectNavigableUserMessages(ctx.db, conv._id);
   },
 });
