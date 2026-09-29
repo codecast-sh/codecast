@@ -341,17 +341,19 @@ per-client reality as merged; ✓ = supported, — = not available.
 | Codex CLI | `~/.codex/sessions/**/*.jsonl` | ✓ | ✓ | ✓ | ✓ | ✓ (+ app-server) | ✓⁸ | ✓ (at launch) | ✓ |
 | OpenCode | `~/.local/share/opencode/opencode.db` (SQLite) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓¹ | ✓ (at launch) | auto² |
 | pi | `~/.pi/agent/sessions/**/*.jsonl` | ✓ | ✓ | ✓ | ✓ | ✓ | —³ | tracked⁴ | — |
-| Cursor | Cursor app SQLite (workspace storage) | —⁵ | ✓ | —⁵ | —⁶ | ✓ | — | — | — |
+| Cursor | `~/.cursor/projects/**/agent-transcripts/*.jsonl` (CLI and IDE), IDE SQLite for older chats | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ (at launch) | auto⁵ |
+| Cursor Cloud | Cloud Agents API (api.cursor.com), mirrored to `~/.codecast/cursor-cloud/` | ✓⁹ | ✓ | ✓ | ✓ | ✓ | — | ✓ (at launch) | cloud |
 | Gemini CLI | `~/.gemini/tmp/**/*.jsonl` | ✓ | ✓ | ✓ | —⁶ | ✓⁷ | — | — | — |
 
 1. OpenCode forks through an `opencode serve` sidecar (`POST /session/:id/fork`, ct-39079/ct-39150): a fork at the conversation tip copies the full session, a mid-history fork truncates to the fork point to match the copied transcript. If the sidecar is unreachable the fork degrades to a fresh session rather than fabricated context.
 2. OpenCode launches auto-approved (`--auto`): the daemon reads its turn state from the SQLite store and can't answer the TUI's permission prompts, so there is no per-session permission control.
 3. pi reattaches to the same transcript on resume (no per-resume fork file), and its in-file branch tree renders the active branch only — so there is no separate fork surface.
 4. pi is multi-provider and switches models in its own UI; codecast tracks the active model from the transcript rather than driving a picker.
-5. Cursor is an IDE: its sessions are ingested from Cursor's store and can be resumed, but codecast cannot launch one or inject a message into it.
-6. Cursor and Gemini have no transcript-tail classifier, so their working/idle state is not read from the transcript. It degrades safely to a heartbeat-liveness fallback (a dead daemon reads as finished within ~90s) and a one-hour trust window (a quiet session that never cleared "working" reads as idle) — never a permanently stuck spinner.
+5. A managed `cursor-agent` launches with `--force` (Run Everything): the web cannot see its "Run this command?" menu. `agent_permission_modes.cursor: "default"` opts back into the menu, which then holds delivery until someone answers it in the terminal.
+6. Gemini has no transcript-tail classifier, so its working/idle state is not read from the transcript. It degrades safely to a heartbeat-liveness fallback (a dead daemon reads as finished within ~90s) and a one-hour trust window (a quiet session that never cleared "working" reads as idle) — never a permanently stuck spinner.
 7. Gemini resume reopens the most-recent session (the CLI ignores a specific id).
 8. Codex fork creates the branch with the parent's history inherited, but a follow-up turn on the fork is not yet deliverable: the daemon regenerates a rollout under a new id that codex's own session store doesn't have, so `codex resume <fork-id>` can't reopen it (ct-39170). The branch is a readable dead end until that fork resumes through the app-server the way the parent does.
+9. Pick a `Cloud · …` model under Cursor (or `cast spawn --agent cursor --model cloud`). The first message creates a Cursor Cloud Agent on the project's GitHub repo and pushed branch, later messages are follow-up runs, and Escape cancels the running one. It needs a Cursor API key on the machine that drives it (`cast keys set cursor`). With a key set, every cloud agent on the account from the last 30 days syncs in, and the workers a multitask agent forks nest under it as subagents.
 
 ### Tech Stack
 
