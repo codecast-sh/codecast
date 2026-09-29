@@ -73,7 +73,8 @@ import {
   renderFencedPlanRecord,
   renderFencedPlanTasks,
 } from "@codecast/shared/tasks";
-import { describeDates, describeDatesFull, formatDateSmart, relTimeShort, wasEdited } from "@codecast/shared/time";
+import { describeDates, describeDatesFull, formatDateSmart, parseEndDate, parseRelativeDate, relTimeShort, wasEdited } from "@codecast/shared/time";
+import { SESSION_QUERY_OPERATORS } from "@codecast/shared/search";
 import { describeShareSpan, formatDateRange, formatSessionCount, summarizeShareImpact, type PathShareSummary } from "@codecast/shared/team";
 import { cliFetch, cliFetchRead, cliSearchRequest } from "./cliHttp.js";
 import type { OrgTarget } from "./orgTarget.js";
@@ -5786,7 +5787,7 @@ program
     "  cast config excluded_paths     # View specific setting\n" +
     "  cast config excluded_paths \"**/node_modules/**\"  # Set value"
   )
-  .argument("[key]", "Configuration key (auth_token, web_url, user_id, convex_url, team_id, excluded_paths, cloud_mirror_enabled, cloud_mirror_exclude, cloud_mirror_include)")
+  .argument("[key]", "Configuration key (auth_token, web_url, user_id, convex_url, team_id, excluded_paths, cloud_mirror_enabled, cloud_mirror_exclude, cloud_mirror_include, session_trailer)")
   .argument("[value]", "Value to set for the key")
   .allowUnknownOption()
   .action(async (key, value) => {
@@ -5806,6 +5807,7 @@ program
         console.log(`  cloud_mirror_enabled: ${isCloudMirrorEnabled(config)}`);
         if (config.cloud_mirror_exclude) console.log(`  cloud_mirror_exclude: ${config.cloud_mirror_exclude}`);
         if (config.cloud_mirror_include) console.log(`  cloud_mirror_include: ${config.cloud_mirror_include}`);
+        console.log(`  session_trailer: ${config.session_trailer !== false}`);
         if (config.claude_args) console.log(`  claude_args: ${config.claude_args}`);
         if (config.codex_args) console.log(`  codex_args: ${config.codex_args}`);
         if (config.agent_args) {
@@ -5935,10 +5937,10 @@ program
       return;
     }
 
-    const settableKeys = ["auth_token", "web_url", "user_id", "convex_url", "team_id", "excluded_paths", "claude_args", "codex_args", "browser_capture", "cloud_mirror_enabled", "cloud_mirror_exclude", "cloud_mirror_include"] as const;
+    const settableKeys = ["auth_token", "web_url", "user_id", "convex_url", "team_id", "excluded_paths", "claude_args", "codex_args", "browser_capture", "cloud_mirror_enabled", "cloud_mirror_exclude", "cloud_mirror_include", "session_trailer"] as const;
     const sensitiveKeys = ["auth_token"];
     // Keys stored as booleans: the setter takes true/false/1/0 and rejects the rest.
-    const BOOLEAN_CONFIG_KEYS = new Set<string>(["cloud_mirror_enabled"]);
+    const BOOLEAN_CONFIG_KEYS = new Set<string>(["cloud_mirror_enabled", "session_trailer"]);
     type SettableKey = (typeof settableKeys)[number];
 
     if (!settableKeys.includes(key as SettableKey)) {
@@ -6623,39 +6625,6 @@ program
     }
   });
 
-function parseRelativeDate(input: string): number | null {
-  const now = Date.now();
-  const lowered = input.toLowerCase().trim();
-
-  if (lowered === "today") return new Date().setHours(0, 0, 0, 0);
-  if (lowered === "yesterday") return now - 24 * 60 * 60 * 1000;
-
-  const relMatch = lowered.match(/^(\d+)\s*(d|day|days|h|hour|hours|w|week|weeks)(\s*ago)?$/);
-  if (relMatch) {
-    const num = parseInt(relMatch[1]);
-    const unit = relMatch[2][0];
-    const ms = unit === "d" ? num * 24 * 60 * 60 * 1000
-             : unit === "h" ? num * 60 * 60 * 1000
-             : unit === "w" ? num * 7 * 24 * 60 * 60 * 1000 : 0;
-    return now - ms;
-  }
-
-  const parsed = Date.parse(input);
-  return isNaN(parsed) ? null : parsed;
-}
-
-// End bounds parse date-only inputs to the END of that day, so
-// `-s 2026-06-05 -e 2026-06-05` means the whole day instead of an empty
-// window (a bare date otherwise parses to midnight starting the day).
-function parseEndDate(input: string): number | null {
-  const parsed = parseRelativeDate(input);
-  if (parsed === null) return null;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(input.trim())) {
-    return parsed + 24 * 60 * 60 * 1000 - 1;
-  }
-  return parsed;
-}
-
 program
   .command("search")
   .description(
@@ -6667,15 +6636,22 @@ program
     "Use -g to search across all teams.\n" +
     "Use -u to search only user messages.\n" +
     "Use --keyword for keyword-only, --semantic for semantic-only.\n\n" +
+    "Operators narrow which sessions the text is searched in; with no text they list the\n" +
+    "matching sessions, newest matching change first. The web /search page reads the same query.\n" +
+    SESSION_QUERY_OPERATORS.map((o) => `  ${o.example.padEnd(22)} ${o.hint}`).join("\n") + "\n" +
+    "--label, --mine, -m, -s and -e are the same as label:, author:me, author:, after: and before:.\n\n" +
     "Time formats: 2024-01-15, yesterday, 7d, 2w, 24h\n\n" +
     "Examples:\n" +
     "  cast search auth                 # team-wide search\n" +
     "  cast search auth --mine          # only my sessions\n" +
     "  cast search auth -m samvit       # specific member\n" +
     "  cast search auth -g -s 7d        # all teams, last 7 days\n" +
-    "  cast search auth --label api     # only sessions I filed under a label"
+    "  cast search auth --label api     # only sessions I filed under a label\n" +
+    "  cast search file:src/auth.ts     # which sessions edited this file\n" +
+    "  cast search commit:3f2a91c       # the session behind a commit\n" +
+    "  cast search \"pr:482 retry after:7d\"  # text inside a pull request's sessions"
   )
-  .argument("<query>", "Search query (min 2 characters)")
+  .argument("<query>", "Search text and operators (min 2 characters)")
   .option("-u, --user-only", "Search only user messages (excludes assistant responses)")
   .option("-g, --global", "Search all sessions (not just current team)")
   .option("--mine", "Show only my sessions")
@@ -8525,18 +8501,45 @@ program
     "                                      #  without it they collapse to a one-line summary)\n" +
     "  cast read 'https://codecast.sh/conversation/<id>#msg-<msgId>'\n" +
     "                                      # Read a window around a linked message\n" +
-    "  cast read '<url-with-#msg>' -c 5    # …with 5 messages of context each side"
+    "  cast read '<url-with-#msg>' -c 5    # …with 5 messages of context each side\n\n" +
+    "Ask instead of paging:\n" +
+    "  cast read jx70ntf --ask \"did we keep the retry cap?\"\n" +
+    "                                      # Answer from that one session, citing its lines;\n" +
+    "                                      #  reads the whole session and says when a later\n" +
+    "                                      #  message revised or reverted the first answer\n" +
+    "  cast read --ask \"what did the user ask for first?\"\n" +
+    "                                      # …about THIS session, past its own compactions"
   )
-  .argument("<conversation-id>", "Conversation ID, or a share URL (a #msg-<id> anchor reads around that message)")
+  .argument("[conversation-id]", "Conversation ID, or a share URL (a #msg-<id> anchor reads around that message); with --ask, omit it or pass `self` for this session")
   .argument("[range]", "Message range (e.g., 12:20, 12:, :20, 15)")
   .option("-f, --full", "Show full tool call and tool result content (the only way to see a StructuredOutput payload)")
   .option("-c, --context <n>", "Messages to show on each side of a #msg-<id> anchor (default 10)")
   .option("-n, --tail <n>", "Read the last n messages (at most 500)")
   .option("--ack", "Also mark the session read: clears its unread dot in the web and mobile inbox")
+  .option("--ask <question>", "Answer a question from this session, with line citations, checking whether later messages changed the answer")
+  .option("--json", "With --ask: machine-readable output")
   .action(async (conversationId, range, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
       console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+
+    if (options.ask !== undefined) {
+      if (range || options.tail !== undefined || options.context !== undefined || options.full || options.ack) {
+        console.error("Error: --ask reads the whole session; it takes no range, -n, -c, --full or --ack");
+        process.exit(1);
+      }
+      const ref = conversationId === undefined || conversationId === "self"
+        ? await resolveConversationFullId(config, undefined)
+        : parseConversationRef(conversationId).conversationId;
+      const result = await cliPost("/cli/read/ask", { conversation_id: ref, question: options.ask }, { timeoutMs: 300_000 });
+      const { formatAskResult } = await import("./formatter.js");
+      console.log(options.json ? JSON.stringify(result, null, 2) : formatAskResult(result));
+      return;
+    }
+    if (conversationId === undefined) {
+      console.error("Error: pass a conversation id (from `cast sessions`), or use --ask to question this session");
       process.exit(1);
     }
 
@@ -15596,7 +15599,7 @@ async function resolveChatChannelId(ref: string, teamId?: string): Promise<strin
   return String(match._id);
 }
 
-async function cliPost(urlPath: string, body: Record<string, any>): Promise<any> {
+async function cliPost(urlPath: string, body: Record<string, any>, opts?: { timeoutMs?: number }): Promise<any> {
   try {
     rejectBareDash(body);
   } catch (err) {
@@ -15611,7 +15614,7 @@ async function cliPost(urlPath: string, body: Record<string, any>): Promise<any>
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ api_token: apiToken, ...body }),
-  });
+  }, opts);
   const text = await response.text();
   let result: any;
   try {

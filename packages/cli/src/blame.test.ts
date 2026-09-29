@@ -9,6 +9,7 @@ import {
   formatGitDate,
   groupBlameBySession,
   parseBlamePorcelain,
+  readSessionTrailers,
   rewriteFugitiveBlame,
   sessionLabel,
   type BlameResolution,
@@ -357,5 +358,32 @@ describe("augmentPorcelain", () => {
     expect(lines[i + 3]).toBe("codecast-title Organize commits");
     expect(lines[i + 4]).toBe("codecast-author Samvit Ramadurgam");
     expect(lines[i + 5]).toBe("codecast-url https://codecast.sh/conversation/jx7bcdsm572w8abpms5vanx0ms88dvxv");
+  });
+});
+
+describe("readSessionTrailers", () => {
+  test("reads each blamed commit's Codecast-Session trailer from git", async () => {
+    const { execFileSync } = await import("node:child_process");
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cast-trailer-"));
+    const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@t", ...args], { cwd: dir, encoding: "utf-8" }).trim();
+    try {
+      git("init", "-q");
+      const id = "jx7bq5kz13a2eypp4a6vdqznas7zvrw2";
+      fs.writeFileSync(path.join(dir, "a.txt"), "one\n");
+      git("add", ".");
+      git("commit", "-q", "-m", "plain");
+      const plain = git("rev-parse", "HEAD");
+      fs.writeFileSync(path.join(dir, "a.txt"), "two\n");
+      git("commit", "-q", "-am", "trailed", "--trailer", `Codecast-Session: https://codecast.sh/conversation/${id}`);
+      const trailed = git("rev-parse", "HEAD");
+      const found = await readSessionTrailers([plain, trailed], dir);
+      expect([...found]).toEqual([[trailed, id]]);
+      expect((await readSessionTrailers(["f".repeat(40)], dir)).size).toBe(0);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

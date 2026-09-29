@@ -5954,6 +5954,26 @@ pre[class*="language-"] {
 }
 .object-reveal__strip:hover .object-reveal__hint,
 .object-reveal__strip:focus-visible .object-reveal__hint { opacity: 1; }
+/* The same strip, pinned to the top of the scrolling surface while the
+   band's own top is scrolled out of view, so close is always at the top.
+   Portalled beside the scroller (components/ObjectReveal usePinnedClose). */
+.object-reveal__pin {
+  --reveal-accent: var(--sol-cyan);
+  position: absolute;
+  z-index: 25;
+  box-sizing: border-box;
+  padding: 0 12px;
+  pointer-events: none;
+}
+.object-reveal__pin .object-reveal__strip {
+  pointer-events: auto;
+  border: 1px solid color-mix(in srgb, var(--reveal-accent) 28%, var(--sol-border));
+  border-top: 0;
+  border-left: 3px solid var(--reveal-accent);
+  border-radius: 0 0 10px 10px;
+  box-shadow: 0 8px 18px -12px color-mix(in srgb, var(--sol-text) 45%, transparent);
+}
+.object-reveal__hint--on { opacity: 1; }
 .object-reveal__body {
   position: relative;
   flex: 1;

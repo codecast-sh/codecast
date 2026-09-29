@@ -298,6 +298,35 @@ describe("push", () => {
     expect(commitEvent.conversation_id).toBe(CONV);
   });
 
+  test("a Codecast-Session trailer names the session, over every guess and an existing link", async () => {
+    const TRAILED = "t".repeat(32);
+    const FOREIGN = "f".repeat(32);
+    const sha = "1111111111111111111111111111111111111111";
+    const trailed = (id: string) => pushPayload({
+      commits: [{ ...pushPayload().commits[0], message: `fix: a thing\n\nCodecast-Session: https://codecast.sh/conversation/${id}` }],
+    });
+    const conversations = [
+      { _id: CONV, user_id: "user_1", is_private: true, title: "Git backend", git_branch: "ct-48301-linking" },
+      { _id: TRAILED, user_id: "user_2", team_id: TEAM, title: "Trailed" },
+      { _id: FOREIGN, user_id: "user_3", team_id: "team_other", title: "Elsewhere" },
+    ];
+    // The row exists, linked by an earlier guess (the one session on the branch).
+    const seeded = () => ({
+      conversations,
+      commits: [{ _id: "commit_1", sha, message: "fix: a thing", timestamp: 1, repository: "codecast-sh/codecast", author_name: "A", author_email: "", conversation_id: CONV }],
+    });
+
+    const ctx = context(trailed(TRAILED), undefined, "push", seeded());
+    await (processPushEvent as any)._handler(ctx, { event_id: "event_1" });
+    expect(ctx.db._tables.commits[0].conversation_id).toBe(TRAILED);
+    expect(ctx.db._tables.external_events.find((e: any) => e.kind === "commit").conversation_id).toBe(TRAILED);
+
+    // A trailer naming a session outside the repository's team is ignored.
+    const spoofed = context(trailed(FOREIGN), undefined, "push", seeded());
+    await (processPushEvent as any)._handler(spoofed, { event_id: "event_1" });
+    expect(spoofed.db._tables.commits[0].conversation_id).toBe(CONV);
+  });
+
   test("with no edit row naming the sha, one session on the branch is enough", async () => {
     const ctx = context(pushPayload({ ref: "refs/heads/ct-48298-git-backend" }), undefined, "push");
     await (processPushEvent as any)._handler(ctx, { event_id: "event_1" });

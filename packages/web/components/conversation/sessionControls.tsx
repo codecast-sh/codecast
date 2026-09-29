@@ -656,6 +656,7 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
       open={machinesOpen}
       onOpen={() => setMachinesOpen(true)}
       onPick={(d) => { handleMachinePick(d); setMachinesOpen(false); }}
+      onShare={() => useInboxStore.getState().openSettingsModal("devices")}
     />
   );
 

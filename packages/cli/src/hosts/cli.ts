@@ -340,6 +340,15 @@ export interface HostReport {
   /** The host's last tools check (~/.codecast/host-tools.json), when it is awake and has one. */
   tools?: HostToolsReport | null;
   toolsNote?: string;
+  /** The declared setup the host last applied (~/.codecast/host-setup.json) against what this repo declares now. */
+  setup?: { applied: { hash: string; at: string } | null; want: string; declared: boolean };
+}
+
+/** One line for the host's declared setup: applied and current, pending, or nothing declared. */
+export function hostSetupStatusLine(setup: NonNullable<HostReport["setup"]>): string {
+  const what = setup.declared ? "[host] from workspace.toml and ~/.codecast/host.toml" : "nothing declared beyond the tools step";
+  if (setup.applied?.hash === setup.want) return `in step: ${what} (applied ${setup.applied.at})`;
+  return `${setup.applied ? "changed since it was applied" : "not applied yet"}: ${what}; the next wake applies it, or cast hosts setup`;
 }
 
 export interface HostGitReport {
@@ -635,6 +644,7 @@ async function collectHostReport(host: CloudHost, convex: Convex, convexError?: 
   let mirrorNote: string | undefined;
   let tools: HostToolsReport | null | undefined;
   let toolsNote: string | undefined;
+  let setup: HostReport["setup"];
   if (live && address) {
     // The mirror stamp comes back verified against the disk (mirror/push.ts).
     const { readRemoteMirrorStamp } = await import("../cloud/mirror/push.js");
@@ -643,10 +653,20 @@ async function collectHostReport(host: CloudHost, convex: Convex, convexError?: 
     else mirror = stamp.value ?? null;
     // A short cap: a hung sshd must not stall the whole listing. One ssh for
     // both stamps, split on a marker line.
-    const stamps = await guard(() => ssh(toRemoteHost(current), "cat ~/.codecast/host-tools.json 2>/dev/null; echo; echo __CAST_MCP__; cat ~/.codecast/host-mcp-overrides.json 2>/dev/null", 5_000));
+    const stamps = await guard(() => ssh(toRemoteHost(current), "cat ~/.codecast/host-tools.json 2>/dev/null; echo; echo __CAST_MCP__; cat ~/.codecast/host-mcp-overrides.json 2>/dev/null; echo; echo __CAST_SETUP__; cat ~/.codecast/host-setup.json 2>/dev/null", 5_000));
     if (stamps.error) toolsNote = stamps.error;
     else {
-      const [toolsOut, mcpOut] = (stamps.value ?? "").split("__CAST_MCP__\n");
+      const [toolsAndMcp, setupOut] = (stamps.value ?? "").split("__CAST_SETUP__\n");
+      const [toolsOut, mcpOut] = (toolsAndMcp ?? "").split("__CAST_MCP__\n");
+      setup = await guard(async () => {
+        const { hostSpecHash, resolveHostSpec } = await import("../cloud/hostSetup.js");
+        const { remoteRepoPath } = await import("../remote/session-move.js");
+        const root = cwdGitRoot();
+        const spec = resolveHostSpec({ repoRoot: root });
+        let applied: { hash: string; at: string } | null = null;
+        try { applied = JSON.parse((setupOut ?? "").trim() || "null"); } catch { /* none */ }
+        return { applied, want: hostSpecHash(spec, root ? remoteRepoPath(toRemoteHost(current), root) : undefined), declared: spec.packages.length + spec.services.length + spec.run.length > 0 };
+      }).then((r) => r.value);
       tools = parseHostToolsStamp(toolsOut ?? "");
       // The MCP manifest rides beside the tools stamp: the summary line names the pinned servers.
       if (tools && (mcpOut ?? "").trim()) tools.mcpOverrides = parseHostMcpOverrides(mcpOut!);
@@ -681,6 +701,7 @@ async function collectHostReport(host: CloudHost, convex: Convex, convexError?: 
     ...(mirrorNote ? { mirrorNote } : {}),
     ...(tools !== undefined ? { tools } : {}),
     ...(toolsNote ? { toolsNote } : {}),
+    ...(setup ? { setup } : {}),
     git: hostGitReport(host),
     cost: {
       ...cost,
@@ -778,6 +799,10 @@ function printHostReport(r: HostReport, opts: { verbose?: boolean } = {}): void 
   const toolsBad = !!r.tools && (r.tools.missing.length > 0 || r.tools.unsupported.length > 0);
   console.log(`  tools      ${!r.tools ? fmt.muted(toolsLine) : toolsBad ? fmt.warning(toolsLine) : toolsLine}`);
   if (opts.verbose && r.tools) for (const l of hostToolsDetailLines(r.tools)) console.log(`    ${fmt.muted(l)}`);
+  if (r.setup) {
+    const line = hostSetupStatusLine(r.setup);
+    console.log(`  setup      ${r.setup.applied?.hash === r.setup.want ? line : fmt.warning(line)}`);
+  }
   console.log(`  cost       ${r.cost.line}`);
 }
 

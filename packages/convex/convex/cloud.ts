@@ -22,7 +22,7 @@ import { scheduleCloudWake, serverOwnsCloudWake } from "./cloudWake";
 import { enqueueStartSession } from "./devices";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { releasePreviousOwner } from "./sessionRelease";
-import { checkoutInUseMessage, fromConvexAgentType, isHttpOrigin, parseOwnerRepo, type CloudWorkspaceMode } from "@codecast/shared/contracts";
+import { checkoutInUseMessage, fromConvexAgentType, isHttpOrigin, LOCAL_MIRROR_STATUSES, mirrorLaptops, parseOwnerRepo, type CloudWorkspaceMode } from "@codecast/shared/contracts";
 import { cloudSeedArg, cloudWorkspaceValidator, findSharedCheckoutOccupant } from "./cloudPlacement";
 
 // The park/prepare logic moved to cloudPlacement.ts (a leaf every creator can
@@ -754,5 +754,109 @@ export const hostGitCredential = action({
       expires_at: minted.expires_at,
       installation_id: resolved.installation_id,
     };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Live mirror of a cloud session into a laptop worktree (conversations.local_mirror)
+// ---------------------------------------------------------------------------
+
+/**
+ * Start or stop mirroring a cloud session's tree to a laptop. Picks the laptop
+ * with mirrorLaptops (the same choice the web menu labels), or the one the
+ * caller named; queues cloud_live_sync on it and stamps the row so the web
+ * shows starting or stopping at once. `overwrite` resumes a mirror that
+ * stopped on a local edit, saving that edit to a backup ref first.
+ */
+export async function performSetLocalMirror(
+  ctx: any,
+  userId: Id<"users">,
+  conversationId: Id<"conversations">,
+  opts: { enable: boolean; deviceId?: string; overwrite?: boolean },
+): Promise<{ device_id: string; command_id: Id<"daemon_commands"> }> {
+  const conv = await ctx.db.get(conversationId);
+  if (!conv || conv.user_id.toString() !== userId.toString()) throw new Error("Unauthorized");
+  const devices = await ctx.db.query("devices").withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).collect();
+  const host = devices.find((d: any) => d.device_id === conv.owner_device_id);
+  if (!host?.is_remote) throw new Error("This session does not run on a cloud host");
+  if (!conv.project_path) throw new Error("The session has no working directory on the host yet");
+  const now = Date.now();
+  let target: { device_id: string; root: string } | undefined;
+  if (!opts.enable && conv.local_mirror) {
+    const running = mirrorLaptops(devices, conv, now, DEVICE_ONLINE_MS).find((l) => l.device_id === conv.local_mirror.device_id);
+    target = running ?? { device_id: conv.local_mirror.device_id, root: "" };
+  } else {
+    const laptops = mirrorLaptops(devices, conv, now, DEVICE_ONLINE_MS);
+    target = opts.deviceId ? laptops.find((l) => l.device_id === opts.deviceId) : laptops[0];
+    if (!target) throw new Error("No laptop of yours has a checkout of this repository to mirror into");
+  }
+  const commandId = await ctx.db.insert("daemon_commands", {
+    user_id: userId,
+    command: "cloud_live_sync" as const,
+    args: JSON.stringify({
+      conversation_id: conversationId,
+      enable: opts.enable,
+      host_device_id: conv.owner_device_id,
+      remote_cwd: conv.project_path,
+      local_root: target.root,
+      ...(opts.overwrite ? { overwrite: true } : {}),
+    }),
+    created_at: now,
+    target_device_id: target.device_id,
+  });
+  await ctx.db.patch(conversationId, {
+    local_mirror: opts.enable
+      ? { ...(conv.local_mirror?.device_id === target.device_id ? conv.local_mirror : {}), device_id: target.device_id, status: "starting" as const, files: undefined, error: undefined, at: now }
+      : conv.local_mirror ? { ...conv.local_mirror, status: "stopping" as const, at: now } : undefined,
+  });
+  return { device_id: target.device_id, command_id: commandId };
+}
+
+/**
+ * The laptop running a mirror reports its state: on landing and on state
+ * change only. `status: "off"` clears the field. A report from a laptop that
+ * no longer owns the row's mirror is ignored.
+ */
+export const reportLocalMirror = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    conversation_id: v.id("conversations"),
+    device_id: v.string(),
+    status: v.union(...LOCAL_MIRROR_STATUSES.map((s) => v.literal(s)), v.literal("off")),
+    path: v.optional(v.string()),
+    last_sha: v.optional(v.string()),
+    last_landed_at: v.optional(v.number()),
+    changed: v.optional(v.number()),
+    files: v.optional(v.array(v.string())),
+    error: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication required");
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv || conv.user_id.toString() !== userId.toString()) return { recorded: false as const };
+    if ((conv as any).local_mirror && (conv as any).local_mirror.device_id !== args.device_id) return { recorded: false as const };
+    const { api_token: _, conversation_id: __, status, ...rest } = args;
+    const prev = (conv as any).local_mirror ?? {};
+    await ctx.db.patch(args.conversation_id, {
+      local_mirror: status === "off" ? undefined : { ...prev, ...rest, status, files: rest.files?.slice(0, 50), error: rest.error?.slice(0, 500), at: Date.now() },
+    });
+    return { recorded: true as const };
+  },
+});
+
+/** What a mirroring laptop polls to tell a working session from an idle one, without touching the host. */
+export const localMirrorActivity = query({
+  args: { api_token: v.optional(v.string()), conversation_ids: v.array(v.id("conversations")) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) return [];
+    const out: Array<{ conversation_id: string; message_count: number; status: string; mirror: string | null; owner_device_id: string | null }> = [];
+    for (const id of args.conversation_ids.slice(0, 50)) {
+      const c: any = await ctx.db.get(id);
+      if (!c || c.user_id.toString() !== userId.toString()) continue;
+      out.push({ conversation_id: id, message_count: c.message_count ?? 0, status: c.status, mirror: c.local_mirror?.status ?? null, owner_device_id: c.owner_device_id ?? null });
+    }
+    return out;
   },
 });

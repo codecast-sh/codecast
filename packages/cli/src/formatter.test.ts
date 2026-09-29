@@ -421,3 +421,32 @@ describe("session presence on search, context, and feed", () => {
     expect(out).toContain("● working | just now");
   });
 });
+
+describe("cast read --ask output", () => {
+  test("cited lines collapse to the ranges cast read takes", async () => {
+    const { lineRanges } = await import("./formatter");
+    expect(lineRanges([9, 3, 4, 5, 5, 12])).toEqual(["3:5", "9", "12"]);
+    expect(lineRanges([])).toEqual([]);
+  });
+
+  test("the answer leads, then the read commands, then the cost line", async () => {
+    const { formatAskResult } = await import("./formatter");
+    const out = strip(formatAskResult({
+      conversation: { id: "x", short_id: "jx77tbn", title: "Study", lines: 118 },
+      question: "is idea 4 a gap?",
+      answer: "Mostly not: collab_grants covers it (L493).",
+      cited_lines: [493, 494],
+      scanned_lines: 118,
+      scan_complete: true,
+      shown_lines: 118,
+      matched_lines: 20,
+      model: "claude-haiku-4-5-20251001",
+      usage: { input_tokens: 23_456, output_tokens: 312, cost_usd: 0.025 },
+      took_ms: 8400,
+    }));
+    const lines = out.split("\n");
+    expect(lines[3]).toBe("Mostly not: collab_grants covers it (L493).");
+    expect(out).toContain("read: cast read jx77tbn 493:494");
+    expect(out).toContain("claude-haiku-4-5 · read 118 lines, 20 matched, showed 118 · 23.5k in / 312 out, $0.025 · 8.4s");
+  });
+});
