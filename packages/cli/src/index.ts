@@ -4800,6 +4800,9 @@ program
   .action(async (options: any) => {
     const startedAt = Date.now();
     startDaemon();
+    // startDaemon only explains the refusal; a script asking for the daemon
+    // on native Windows must see it did not start.
+    if (!daemonSupportedOnPlatform()) process.exit(1);
     // Ensure autostart is configured so daemon restarts on reboot/crash
     ensureAutostart();
     if (options.wait) {
@@ -20727,7 +20730,9 @@ if (runFastPath(process.argv)) {
   // A verb with no group (`cast send`), `cast --help` and a typo resolve to
   // nothing here and pay for no group at all. ct-49546.
   activateGroup(program, groupTokenInArgv(process.argv), groupDeps())
-    .then(() => program.parse())
+    // parseAsync, so an action's own refusal (a thrown Error) lands in the
+    // catch below as one line instead of an unhandled rejection's source dump.
+    .then(() => program.parseAsync())
     .catch((err) => {
       console.error(err instanceof Error ? err.message : String(err));
       process.exit(1);

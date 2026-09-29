@@ -71,6 +71,7 @@ import { prefersReducedMotion } from "../../hooks/useBottomAnchoredList";
 import { useAgentsInRoom } from "./useCallFeed";
 import { useRoomThreadUnread } from "../../hooks/useRoomThreadUnread";
 import { UnreadCount } from "./UnreadCount";
+import { takeCallThreadRequest } from "../../lib/calls/callStage";
 
 // The media notice, with the fix in reach: when the error is a device the OS
 // refused, the button is the one gesture that changes that (the OS prompt,
@@ -224,7 +225,7 @@ export function CallStage({
     | undefined;
 
   const [view, setView] = useState<StageView>("auto");
-  const [threadOpen, setThreadOpen] = useState(false);
+  const [threadOpen, setThreadOpen] = useState(takeCallThreadRequest);
   // The rail leaves with motion: it stays mounted through a 150ms exit and
   // goes on the animation's end. Exits are shorter than entrances (200ms in).
   const [railClosing, setRailClosing] = useState(false);
@@ -1188,7 +1189,7 @@ function ControlBar({ call, live }: { call: any; live: { transcript_id: string; 
   const transcribing = !!live;
 
   return (
-    <div className="flex flex-col items-center gap-1 px-5 pb-1.5 pt-2.5">
+    <div className="group/ctl flex flex-col items-center gap-1 px-5 pb-1.5 pt-2.5">
       <div className="flex items-center gap-1 rounded-full bg-white/[0.05] px-2 py-1.5 ring-1 ring-white/[0.06]">
         <MicButton muted={call.muted} />
         <button
@@ -1265,6 +1266,21 @@ function StageShareButton({ sharing }: { sharing: boolean }) {
   );
 }
 
+/** A capture preview, or the source's icon on a quiet tile when the shell
+ *  sent none: an empty image serializes as a bare `data:image/png;base64,`,
+ *  which Chromium draws as a broken image. */
+function ShareThumb({ src, icon: Icon, className }: { src: string; icon: typeof MonitorUp; className: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed || !src || src.endsWith("base64,")) {
+    return (
+      <span className={`flex items-center justify-center bg-white/[0.04] ${className}`}>
+        <Icon className="h-5 w-5 text-sol-text-dim" />
+      </span>
+    );
+  }
+  return <img src={src} alt="" onError={() => setFailed(true)} className={`object-cover ${className}`} />;
+}
+
 /** Screens and windows are different choices, so they get different shapes:
  *  whole screens as a row of large previews, windows as a scannable list with
  *  the app's icon and full title, filtered by typing. The shell lists windows
@@ -1322,10 +1338,10 @@ function SharePicker({
                     className="group flex flex-col gap-1.5 rounded-lg border border-white/5 p-1.5 text-left transition-colors hover:border-sol-violet/60 hover:bg-sol-violet/10"
                     title={src.name}
                   >
-                    <img
+                    <ShareThumb
                       src={src.thumbnail}
-                      alt=""
-                      className={`w-full rounded-md object-cover ${screens.length === 1 ? "aspect-[16/7]" : "aspect-video"}`}
+                      icon={MonitorUp}
+                      className={`w-full rounded-md ${screens.length === 1 ? "aspect-[16/7]" : "aspect-video"}`}
                     />
                     <span className="flex items-center gap-1.5 px-0.5 text-[11px] text-sol-text-muted group-hover:text-sol-text">
                       <MonitorUp className="h-3 w-3 shrink-0" />
@@ -1367,7 +1383,7 @@ function SharePicker({
                       }`}
                       title={src.name}
                     >
-                      <img src={src.thumbnail} alt="" className="h-9 w-16 shrink-0 rounded object-cover ring-1 ring-white/5" />
+                      <ShareThumb src={src.thumbnail} icon={AppWindow} className="h-9 w-16 shrink-0 rounded ring-1 ring-white/5" />
                       {src.appIcon ? (
                         <img src={src.appIcon} alt="" className="h-4 w-4 shrink-0" />
                       ) : (

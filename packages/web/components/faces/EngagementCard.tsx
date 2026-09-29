@@ -129,9 +129,10 @@ function Stage({
 /** The mic and the camera as two switches on one small plate, then End. A
  *  switch is its icon: struck through and dimmed when off, lit when on, with
  *  its word in the tooltip and for a reader. */
-function LiveControls({ card, actions }: { card: Live; actions: CardActions }) {
+function LiveControls({ card, actions, accessory }: { card: Live; actions: CardActions; accessory?: React.ReactNode }) {
   return (
     <div className="walkie-strip-actions">
+      {accessory}
       {(card.mute || card.camera) && (
         <span className="engagement-card-toggles" role="group" aria-label="Microphone and camera">
           {card.mute && (
@@ -174,10 +175,14 @@ export function EngagementCard({
   card,
   density,
   actions = ENGINE_CARD_ACTIONS,
+  accessory,
 }: {
   card: FaceCard;
   density: FaceDensity;
   actions?: CardActions;
+  /** The host's own control on a call's card, first in its row (the float's
+   *  chat count). The card draws it; the host decides what it is. */
+  accessory?: React.ReactNode;
 }) {
   if (card.kind === "none") return null;
   const shell = (edge: string, body: React.ReactNode) => (
@@ -229,7 +234,7 @@ export function EngagementCard({
               <span className="engagement-card-title">{shortName(card.title)}</span>
             </Line>
           )}
-          <LiveControls card={card} actions={actions} />
+          <LiveControls card={card} actions={actions} accessory={accessory} />
         </>,
       );
 
@@ -240,7 +245,7 @@ export function EngagementCard({
           <Line stage="locked">
             <span className="walkie-strip-headline-lead">{card.text}</span>
           </Line>
-          <LiveControls card={card} actions={actions} />
+          <LiveControls card={card} actions={actions} accessory={accessory} />
         </>,
       );
 

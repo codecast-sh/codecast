@@ -183,6 +183,7 @@ export const placeConversation = mutation({
       cloud_placement: undefined,
       cloud_placement_token: undefined,
       cloud_placement_failed_at: undefined,
+      cloud_context_too_large: undefined,
       session_error: undefined,
       updated_at: Date.now(),
     });
@@ -300,6 +301,12 @@ export const reportPlacementFailure = mutation({
     /** The park token the child read from its command args. */
     placement_token: v.optional(v.string()),
     error: v.string(),
+    /** The child's context_too_large line: what would have to stay behind. */
+    context_too_large: v.optional(v.object({
+      total_bytes: v.number(),
+      cap_bytes: v.number(),
+      files: v.array(v.object({ path: v.string(), bytes: v.number() })),
+    })),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -311,6 +318,7 @@ export const reportPlacementFailure = mutation({
     await ctx.db.patch(args.conversation_id, {
       session_error: args.error,
       cloud_placement_failed_at: Date.now(),
+      cloud_context_too_large: args.context_too_large?.files.length ? { ...args.context_too_large, files: args.context_too_large.files.slice(0, 200) } : undefined,
       updated_at: Date.now(),
     });
     return { recorded: true as const };

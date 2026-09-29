@@ -233,6 +233,9 @@ export async function resolveScopeRef(ctx: Ctx, role: any, ref: string): Promise
       : await ctx.db.query("projects").withIndex("by_user_id", (q: any) => q.eq("user_id", role.scope_user_id)).collect();
     const lc = needle.toLowerCase();
     const hits = rows.filter((r) => inBoundary(r) && r.title.toLowerCase().includes(lc));
+    // A title named in full wins over titles that merely contain it: "test" is the "test" project, not also "issue-sync-test".
+    const exact = hits.filter((r) => r.title.trim().toLowerCase() === lc);
+    if (exact.length === 1) return { kind, id: exact[0]._id };
     if (hits.length === 1) return { kind, id: hits[0]._id };
     if (hits.length > 1) throw new Error(`"${needle}" matches ${hits.length} projects: ${hits.map((h) => h.short_id ?? h.title).join(", ")}`);
   }

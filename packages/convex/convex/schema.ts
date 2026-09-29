@@ -830,6 +830,16 @@ export default defineSchema({
     // prepared is not woken again by every laptop that comes online. Cleared
     // by a fresh pick (parkOnCloudHost) and by placeConversation.
     cloud_placement_failed_at: v.optional(v.number()),
+    // The failure above was a project context over the cap: the files that
+    // would have to stay behind for it to fit (home-relative, largest first).
+    // The session banner asks whether to leave them out; the answer re-parks
+    // with them as leave_out, which the laptop adds to cloud_mirror_exclude.
+    // Cleared with cloud_placement_failed_at.
+    cloud_context_too_large: v.optional(v.object({
+      total_bytes: v.number(),
+      cap_bytes: v.number(),
+      files: v.array(v.object({ path: v.string(), bytes: v.number() })),
+    })),
     // Where a cloud session runs on the host: its own worktree (absent =
     // isolated) or the host's main checkout (shared). Stamped at create
     // (createQuickSession / dispatch.createSession / the CLI spawn) and by
@@ -2668,6 +2678,8 @@ export default defineSchema({
     // Only ever a SUGGESTION for ssh_host — never interpolated into a command
     // on its own, because a hostname is not necessarily a reachable ssh target.
     hostname: v.optional(v.string()),
+    // The WSL distro the daemon runs in, heartbeat-reported; absent off WSL.
+    wsl_distro: v.optional(v.string()),
     // How to reach this machine over SSH from elsewhere, e.g. "nose" or
     // "m1@1.2.3.4". User-set in Settings → Devices (never heartbeat-written):
     // an ssh alias resolves against the VIEWER's ~/.ssh/config, which no daemon

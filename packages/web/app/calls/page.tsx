@@ -23,7 +23,7 @@ import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { toast } from "sonner";
-import { callLinkHow, humanizeConvexError, isRecRoomKey } from "@codecast/shared/contracts";
+import { humanizeConvexError, isRecRoomKey } from "@codecast/shared/contracts";
 import { joinCall } from "../../lib/calls/callManager";
 import { isConvexId, useInboxStore } from "../../store/inboxStore";
 import { Facepile } from "../../components/calls/OccupancyChip";
@@ -38,7 +38,7 @@ import {
   type TranscriptExcerpt,
 } from "../../components/calls/useCallFeed";
 import { firstName, speakerColor } from "../../components/calls/speakers";
-import { FeedChip } from "../../components/calls/FeedChip";
+import { CallSessionChips } from "../../components/calls/CallSessionChips";
 import { useMutation } from "convex/react";
 import {
   DropdownMenu,
@@ -407,22 +407,7 @@ function CallDetail({ id }: { id: string }) {
               ))}
             </span>
           )}
-          {/* The sessions this call reached (fed live or sent an excerpt):
-              the way from the call to its agents. */}
-          {(call.sessions || []).length > 0 && (
-            <span className="flex flex-wrap items-center gap-1.5">
-              {(call.sessions || []).map((s: any) => (
-                <FeedChip
-                  key={s.conversation_id}
-                  route={{ kind: "session", target: s.conversation_id, mode: "live" }}
-                  fallback={s.name}
-                  removable={false}
-                  onOpen={() => useInboxStore.getState().openSidePanel(s.conversation_id)}
-                  title={`${s.title} · ${callLinkHow(s)}`}
-                />
-              ))}
-            </span>
-          )}
+          <CallSessionChips callId={String(call._id)} sessions={call.sessions || []} />
           {sentTick && <span className="text-sol-green">{sentTick}</span>}
           <span className="flex-1" />
           {live && !recording && !inThisRoom && (

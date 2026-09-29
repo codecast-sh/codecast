@@ -27,7 +27,7 @@ Write-Host ""
 # PowerShell 5.1 (what `irm | iex` usually runs in), a PS-level 2> redirect of
 # native stderr creates error records, and $ErrorActionPreference = "Stop"
 # turns them into a script-killing throw (e.g. schtasks complaining the task
-# doesn't exist — the normal case for a fresh install).
+# doesn't exist: the normal case for a fresh install).
 & cmd.exe /c "schtasks /Delete /TN CodecastDaemon /F >nul 2>&1"
 Get-Process codecast -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 
@@ -42,7 +42,7 @@ if (Test-Path (Join-Path $legacyDir "codecast.exe")) {
             [Environment]::SetEnvironmentVariable("Path", $cleaned, "User")
         }
     } catch {
-        Write-Host "Could not fully remove $legacyDir — you can delete it manually."
+        Write-Host "Could not fully remove $legacyDir. You can delete it manually."
     }
 }
 
@@ -74,41 +74,60 @@ if (-not $wsl) {
 # no distro is installed yet (or WSL itself needs the one-time install).
 # cmd /c handles the output redirection (see the 5.1 stderr note above), and
 # $LASTEXITCODE propagates through cmd.
-& cmd.exe /c "wsl true >nul 2>&1"
-$hasDistro = ($LASTEXITCODE -eq 0)
+function Test-WslDistro {
+    & cmd.exe /c "wsl true >nul 2>&1"
+    return ($LASTEXITCODE -eq 0)
+}
 
-if (-not $hasDistro) {
+if (-not (Test-WslDistro)) {
     $isAdmin = ([Security.Principal.WindowsPrincipal] `
         [Security.Principal.WindowsIdentity]::GetCurrent()
     ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 
+    $installExit = $null
     if ($isAdmin) {
         Write-Host "Installing WSL with Ubuntu (one time; this can take a few minutes)..."
+        # With WSL already enabled this finishes in place: Ubuntu asks for a
+        # Linux user right here, and no restart is needed.
         & wsl.exe --install -d Ubuntu
+        $installExit = $LASTEXITCODE
         Write-Host ""
-        Write-Host "WSL install started." -ForegroundColor Green
-        Write-Host "Restart Windows to finish WSL setup, open Ubuntu once to create your"
-        Write-Host "Linux user, then run this installer again:"
+    }
+
+    if ($installExit -eq 0 -and (Test-WslDistro)) {
+        Write-Host "WSL is ready." -ForegroundColor Green
     } else {
-        Write-Host "WSL is not set up yet. One manual step (needs Administrator):" -ForegroundColor Yellow
+        if ($installExit -eq 0) {
+            Write-Host "WSL install started." -ForegroundColor Green
+            Write-Host "Restart Windows to finish WSL setup, open Ubuntu once to create your"
+            Write-Host "Linux user, then run this installer again:"
+        } elseif ($isAdmin) {
+            Write-Host "WSL could not be installed automatically (exit $installExit)." -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "  1. In this Administrator PowerShell, run:  wsl --install"
+            Write-Host "  2. Restart Windows if it asks, then open Ubuntu once to create your Linux user."
+            Write-Host "  3. Run this installer again:"
+        } else {
+            Write-Host "WSL is not set up yet. One manual step (needs Administrator):" -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "  1. Open PowerShell as Administrator and run:  wsl --install"
+            Write-Host "  2. Restart Windows, then open Ubuntu once to create your Linux user."
+            Write-Host "  3. Run this installer again:"
+        }
         Write-Host ""
-        Write-Host "  1. Open PowerShell as Administrator and run:  wsl --install"
-        Write-Host "  2. Restart Windows, then open Ubuntu once to create your Linux user."
-        Write-Host "  3. Run this installer again:"
+        if ($setupToken) {
+            Write-Host '     $env:CODECAST_SETUP_TOKEN="<token>"; irm codecast.sh/install.ps1 | iex'
+        } else {
+            Write-Host "     irm codecast.sh/install.ps1 | iex"
+        }
+        exit 1
     }
-    Write-Host ""
-    if ($setupToken) {
-        Write-Host '     $env:CODECAST_SETUP_TOKEN="<token>"; irm codecast.sh/install.ps1 | iex'
-    } else {
-        Write-Host "     irm codecast.sh/install.ps1 | iex"
-    }
-    exit 1
 }
 
 # --- 3. Run the Linux installer inside WSL ---
 
 # Ubuntu ships curl; for a minimal distro without curl or wget, try to add
-# curl via apt as root. Best effort — install.sh gives a clear error if a
+# curl via apt as root. Best effort: install.sh gives a clear error if a
 # download tool is still missing. All quieting happens inside sh, never as a
 # PS-level redirect (see the 5.1 stderr note above).
 & wsl.exe -- sh -c "command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1"
@@ -147,6 +166,7 @@ if ($wslHome -match '^/[A-Za-z0-9._/-]+$') {
 Write-Host ""
 Write-Host "codecast is installed inside WSL." -ForegroundColor Green
 Write-Host "Open a new WSL terminal (run: wsl) and use 'cast' from there."
-if (-not $setupToken) {
+& wsl.exe -e sh -c 'test -f ~/.codecast/config.json'
+if (-not $setupToken -and $LASTEXITCODE -ne 0) {
     Write-Host "Then run 'cast auth' to authenticate and start syncing."
 }

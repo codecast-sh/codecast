@@ -302,6 +302,7 @@ export async function parkOnCloudHost(
       cloud_placement: "pending" as const,
       cloud_placement_token: undefined,
       cloud_placement_failed_at: undefined,
+      cloud_context_too_large: undefined,
       ...(opts.startFrom ? { cloud_start_from: startFrom } : {}),
       session_error: undefined,
       updated_at: Date.now(),
@@ -335,6 +336,7 @@ export async function parkOnCloudHost(
     cloud_placement_token: token,
     // A fresh pick is the retry: whatever the last park failed at is history.
     cloud_placement_failed_at: undefined,
+    cloud_context_too_large: undefined,
     ...(workspace ? { cloud_workspace: workspace } : {}),
     cloud_start_from: startFrom,
     // An isolated park never holds the root: drop a claim a failed shared

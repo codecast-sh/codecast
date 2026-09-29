@@ -190,10 +190,10 @@
     "truncated": [],
     "tally": {
       "shown": {
-        "questions": 0,
+        "questions": 7,
         "pinned": 1,
         "new": 0,
-        "needs_input": 11,
+        "needs_input": 4,
         "done": 0,
         "dormant": 0,
         "working": 0,
@@ -218,7 +218,7 @@
         "hidden": 0
       }
     },
-    "set_digest": "6a94bb0c917942ee",
+    "set_digest": "4458ef2dbc8a67d7",
     "placements": {
       "absentrolewaitingz17000000000000": [
         "needs_input",
@@ -236,22 +236,22 @@
         false
       ],
       "growthaskingz1200000000000000000": [
-        "needs_input",
+        "questions",
         "needs_input",
         false
       ],
       "growthdirectz1200000000000000000": [
-        "needs_input",
+        "questions",
         "needs_input",
         false
       ],
       "growthescalatedworkingz220000000": [
-        "needs_input",
+        "questions",
         "working",
         false
       ],
       "growthescalatedz1500000000000000": [
-        "needs_input",
+        "questions",
         "needs_input",
         false
       ],
@@ -261,17 +261,17 @@
         false
       ],
       "growthrolez100000000000000000000": [
-        "needs_input",
+        "questions",
         "needs_input",
         false
       ],
       "growthwaitingz130000000000000000": [
-        "needs_input",
+        "questions",
         "needs_input",
         false
       ],
       "growthworkingz130000000000000000": [
-        "needs_input",
+        "questions",
         "working",
         false
       ],
@@ -327,17 +327,19 @@
     },
     "sort_order": {
       "needs_input": [
+        "absentrolewaitingz17000000000000",
+        "retiredrolewaitingz1800000000000",
+        "blockedrolez11000000000000000000",
+        "blockedroledonez1500000000000000"
+      ],
+      "questions": [
         "growthrolez100000000000000000000",
         "growthwaitingz130000000000000000",
         "growthworkingz130000000000000000",
         "growthaskingz1200000000000000000",
         "growthescalatedz1500000000000000",
         "growthdirectz1200000000000000000",
-        "growthescalatedworkingz220000000",
-        "absentrolewaitingz17000000000000",
-        "retiredrolewaitingz1800000000000",
-        "blockedrolez11000000000000000000",
-        "blockedroledonez1500000000000000"
+        "growthescalatedworkingz220000000"
       ],
       "stashed": [
         "stashedroleescalatedz20000000000",

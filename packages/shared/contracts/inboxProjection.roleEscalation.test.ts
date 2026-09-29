@@ -2,9 +2,11 @@ import { describe, expect, test } from "bun:test";
 import { inboxEpoch, isDirectEscalation, isUnderRole, projectInbox, roleEscalationsOf, type ProjectableInboxRow } from "./inboxProjection";
 
 // An escalation reaches the person through the role (org-roles-run-work.md
-// R1, revised): the role's standing session is the card in needs input, its
+// R1, revised): the role's standing session is the card that carries it, its
 // sessions stay nested under it, and the role's card carries the lines of the
 // escalations under it, derived from the children. `direct` is the exception.
+// An escalation is an ask (v14): the card files in QUESTIONS, where the
+// decision queue answers it, with the work_state of any asking row.
 
 const EPOCH = inboxEpoch(1_800_000_000_000);
 const MIN = 60_000;
@@ -19,7 +21,7 @@ const stamp = (at: number, line: string, direct?: boolean) => ({ role_id: "growt
 const bucketOf = (p: ReturnType<typeof projectInbox>, id: string) => p.placements.get(id)?.bucket;
 
 describe("an escalation reaches the person through the role", () => {
-  test("by default the role's card files in needs input and the child stays nested; direct puts the child", () => {
+  test("by default the role's card files in questions and the child stays nested; direct puts the child", () => {
     const rows = [
       standing("role", "growth"),
       hand("plain", "growth"),
@@ -27,16 +29,17 @@ describe("an escalation reaches the person through the role", () => {
       hand("direct", "growth", { agent_status: "done", thread_state_status: "done", escalated_by_role: stamp(EPOCH - 4 * MIN, "a permission prompt is open", true) }),
     ];
     const p = projectInbox(rows, EPOCH);
-    // The role's own facts say dormant; the escalation under it says needs input.
-    expect(bucketOf(p, "role")).toBe("needs_input");
+    // The role's own facts say dormant; the escalation under it is an ask.
+    expect(bucketOf(p, "role")).toBe("questions");
     expect(p.placements.get("role")?.work_state).toBe("needs_input");
     // Every session under the role files with it, the escalated one included.
-    expect(bucketOf(p, "handed")).toBe("needs_input");
-    expect(bucketOf(p, "plain")).toBe("needs_input");
+    expect(bucketOf(p, "handed")).toBe("questions");
+    expect(bucketOf(p, "plain")).toBe("questions");
     expect(isUnderRole(rows[2] as any)).toBe(true);
     // The direct one is a card of its own.
     expect(isUnderRole(rows[3] as any)).toBe(false);
-    expect(bucketOf(p, "direct")).toBe("needs_input");
+    expect(bucketOf(p, "direct")).toBe("questions");
+    expect(p.placements.get("direct")?.work_state).toBe("needs_input");
     // The role's card carries the one line that reaches the person through it.
     const byId = new Map(rows.map((r) => [r._id, r]));
     const lines = roleEscalationsOf(byId.keys(), (id) => byId.get(id) as any);
@@ -50,14 +53,14 @@ describe("an escalation reaches the person through the role", () => {
       hand("newer", "growth", { escalated_by_role: stamp(EPOCH - 3 * MIN, "newer ask") }),
     ];
     const p = projectInbox(rows, EPOCH);
-    expect(p.tally.shown.needs_input).toBe(3);
+    expect(p.tally.shown.questions).toBe(3);
     const byId = new Map(rows.map((r) => [r._id, r]));
     expect(roleEscalationsOf(byId.keys(), (id) => byId.get(id) as any).get("role")!.map((e) => e.conversation_id)).toEqual(["newer", "older"]);
   });
 
   test("hand back clears the lift; a stamp from before the flag is the role's ordinary escalation", () => {
     const rows = [standing("role", "growth"), hand("child", "growth", { escalated_by_role: stamp(EPOCH - MIN, "needs you") })];
-    expect(bucketOf(projectInbox(rows, EPOCH), "role")).toBe("needs_input");
+    expect(bucketOf(projectInbox(rows, EPOCH), "role")).toBe("questions");
     delete (rows[1] as any).escalated_by_role;
     expect(bucketOf(projectInbox(rows, EPOCH), "role")).toBe("dormant");
     expect(isDirectEscalation({ role_id: "growth", line: "x", at: 1 })).toBe(false);
@@ -77,7 +80,7 @@ describe("an escalation reaches the person through the role", () => {
     expect(bucketOf(p, "stashed")).toBe("stashed");
     expect(bucketOf(p, "under_stashed")).toBe("stashed");
     expect(bucketOf(p, "retired")).toBe("dismissed");
-    expect(bucketOf(p, "under_retired")).toBe("needs_input");
-    expect(bucketOf(p, "orphan")).toBe("needs_input");
+    expect(bucketOf(p, "under_retired")).toBe("questions");
+    expect(bucketOf(p, "orphan")).toBe("questions");
   });
 });

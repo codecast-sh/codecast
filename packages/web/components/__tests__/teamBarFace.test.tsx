@@ -136,7 +136,7 @@ const { createRoot } = await import("react-dom/client");
 const { useInboxStore } = await import("../../store/inboxStore");
 const { TeamAvatarBar } = await import("../TeamAvatarBar");
 const { BAR_FACES } = await import("../../lib/faces/layout");
-const { getCallStageOpen, closeCallStage } = await import("../../lib/calls/callStage");
+const { getCallStageOpen, closeCallStage, takeCallThreadRequest } = await import("../../lib/calls/callStage");
 
 afterAll(() => {
   mock.module("../ui/context-menu", () => realCtx);
@@ -292,6 +292,10 @@ describe("the header draws the model's row", () => {
     h = await mount();
     expect(h.q("[data-open-call]")!.textContent).toBe("3");
     expect(h.q("[data-open-call]")!.getAttribute("aria-label")).toBe("Open the call, 3 new in its chat");
+    // The count is why they clicked: the stage opens on its thread.
+    await h.fire(h.q("[data-open-call]")!, "click");
+    expect(takeCallThreadRequest()).toBe(true);
+    closeCallStage();
     threadUnread = 0;
   });
 

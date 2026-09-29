@@ -24,6 +24,11 @@ import "./decisions/decisions.css";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { DecisionProposalOrigin } from "./org/ProposalAuthorPill";
+import { RoleFace } from "./org/RoleFace";
+import { EntityIdPill } from "./EntityIdPill";
+import { escalationOf } from "../lib/sessionIdentity";
+import { splitEscalationLine } from "../lib/escalationText";
+import { useReplyToEscalation } from "../hooks/useReplyToEscalation";
 // The decision card lives INSIDE the conversation — it is how a session asks
 // its human something, so it renders wherever the session renders (inbox,
 // queue, a deep link). It has two sizes:
@@ -70,11 +75,21 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
   const addOptimisticMessage = useInboxStore((s) => s.addOptimisticMessage);
   const sendMessage = useInboxStore((s) => s.sendMessage);
   const resolveSessionQuestion = useInboxStore((s) => s.resolveSessionQuestion);
+  const handSessionBackToRole = useInboxStore((s) => s.handSessionBackToRole);
   const navigateToSession = useInboxStore((s) => s.navigateToSession);
+
+  // A role's escalation (source "escalation"): no options, the answer is a
+  // reply in words to the card's session (the role's standing session, or the
+  // child when direct), and the escalated session goes back under the role
+  // with it. The reply box is the answer surface, so it is open from the start.
+  const esc = item.source === "escalation" ? item.escalation! : null;
+  const escText = useMemo(() => (esc ? splitEscalationLine(esc.line) : null), [esc]);
+  const escChildTitle = useInboxStore((s) => (esc ? s.sessions[esc.childId]?.title : undefined));
+  const replyToEscalation = useReplyToEscalation();
 
   const [size, setSize] = useState<Size>(() => (item.blocking || stepper ? "full" : "line"));
   const full = size === "full";
-  const [otherOpen, setOtherOpen] = useState(false);
+  const [otherOpen, setOtherOpen] = useState(!!esc);
   const [otherText, setOtherText] = useState("");
   const otherRef = useRef<HTMLTextAreaElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -102,7 +117,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
 
   // A poll card has no authored payload, so its question and options come from
   // the conversation itself — already in the store (useConversationMessages).
-  const needsMessages = item.source !== "decide";
+  const needsMessages = item.source === "ask" || item.source === "permission";
   const messages = useInboxStore((s) => s.messages[item.conversationId]);
 
   // A permission-blocked session carries a tool name and an argument preview,
@@ -135,7 +150,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
   // An authored row's created_at is the ask time; a poll's honest timestamp is
   // its tool call's message. A permission prompt has neither (the client-side
   // first-seen stamp resets on reload), so it shows no age.
-  const askedAt = item.source === "decide" ? item.createdAt : poll?.createdAt;
+  const askedAt = item.source === "decide" || esc ? item.createdAt : poll?.createdAt;
   const now = useCoarseNow(30_000);
   const askedRel = askedAt !== undefined ? formatTimeAgo(askedAt, now) : null;
   const askedLabel = askedRel === null ? null : askedRel === "now" ? "asked just now" : /^\d+[mhd]$/.test(askedRel) ? `asked ${askedRel} ago` : `asked ${askedRel}`;
@@ -157,7 +172,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
   // renders no question text until the poll payload is readable from the
   // transcript — showing the title as the question and swapping it out a beat
   // later is exactly the "question changed under me" report.
-  const question = poll?.question.question ?? (item.source === "decide" ? item.question : "");
+  const question = poll?.question.question ?? (item.source === "decide" ? item.question : escText?.head ?? "");
   const options = useMemo(() => {
     if (item.source === "decide") return item.options.map((o, index) => ({ label: o.label, description: o.description, index }));
     return poll ? visibleOptions(poll.question) : [];
@@ -198,6 +213,9 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
     if (!trimmed) return;
     if (item.source === "decide" && item.decisionId) {
       answerDecision(item.decisionId, { text: trimmed });
+    } else if (esc) {
+      // Answered means the session is the role's again (useReplyToEscalation).
+      replyToEscalation(item, trimmed);
     } else {
       // No parsed poll needed: the free-text payload is the decline-then-type
       // form, which the daemon can drive at any AskUserQuestion menu — this is
@@ -207,23 +225,28 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
       sendMessage(item.conversationId, content, undefined, clientId);
     }
     onDone?.();
-  }, [item, answerDecision, addOptimisticMessage, sendMessage, onDone]);
+  }, [item, esc, replyToEscalation, answerDecision, addOptimisticMessage, sendMessage, onDone]);
 
   // "I am not going to answer this." A `cast decide` row resolves as dismissed
   // (the agent is not told); a poll/permission card is marked resolved in the
   // store — it leaves the queue AND the rail's QUESTIONS section together, and
   // returns only if the agent speaks again (the session itself keeps waiting).
+  // An escalation is handed back: the role looks after the session again and
+  // decides whether it comes back; nothing is said.
   const dismiss = useCallback(() => {
     if (item.source === "decide" && item.decisionId) answerDecision(item.decisionId, { dismiss: true });
+    else if (esc) handSessionBackToRole(esc.childId);
     else resolveSessionQuestion(item.conversationId);
     onDone?.();
-  }, [item, answerDecision, resolveSessionQuestion, onDone]);
+  }, [item, esc, answerDecision, resolveSessionQuestion, handSessionBackToRole, onDone]);
 
   const onExit = stepper?.onExit;
+  // "Open the session" on an escalation opens the session the ask is ABOUT:
+  // the role's thread is where the card already is.
   const openSession = useCallback(() => {
-    navigateToSession(item.conversationId);
+    navigateToSession(esc?.childId ?? item.conversationId);
     onExit?.();
-  }, [navigateToSession, item.conversationId, onExit]);
+  }, [navigateToSession, esc?.childId, item.conversationId, onExit]);
 
   // A fold by scrolling is undone by scrolling: wheel up at the top of the
   // sheet hands the pane to the thread, so wheel down at the bottom of the
@@ -274,9 +297,9 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
       e.stopPropagation();
       switch (action.kind) {
         case "commit-free-text": answerFreeText(otherText); break;
-        case "close-free-text": setOtherOpen(false); break;
+        case "close-free-text": if (esc) otherRef.current?.blur(); else setOtherOpen(false); break;
         case "answer": { const opt = options[action.option]; if (opt) answer(opt.index); break; }
-        case "open-session": if (stepper) openSession(); break;
+        case "open-session": if (stepper || esc) openSession(); break;
         case "skip": onSkip?.(); break;
         case "dismiss": dismiss(); break;
         case "open-free-text": if (!isPermissionCard && !isInfraDialog && !richControls) { setOtherOpen(true); setTimeout(() => otherRef.current?.focus(), 0); } break;
@@ -292,7 +315,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
     // list navigation and would eat them first.
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [options, answer, answerFreeText, otherText, openSession, onSkip, dismiss, onExit, full, stepper, isPermissionCard, isInfraDialog, richControls, shrink, grow]);
+  }, [options, answer, answerFreeText, otherText, openSession, onSkip, dismiss, onExit, full, stepper, esc, isPermissionCard, isInfraDialog, richControls, shrink, grow]);
 
   const answerRich = useCallback((input: Parameters<typeof answerDecision>[1]) => {
     if (!item.decisionId) return;
@@ -363,7 +386,19 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
     </a>
   );
 
-  const whoIsAsking = (
+  const whoIsAsking = esc ? (
+    <div className="flex items-center gap-2 min-w-0 flex-1" data-escalation-asker={esc.roleId}>
+      {dot}
+      {esc.role && <RoleFace role={esc.role} size={18} className="shrink-0" />}
+      <span className="text-sm text-sol-text truncate">
+        {esc.role ? <span className="text-sol-violet">@{esc.role.handle}</span> : "A lead"} asks you
+      </span>
+      {esc.childId !== item.conversationId && (
+        <span className="min-w-0 truncate" onClick={openSession}><EntityIdPill id={esc.childId} type="session" compact /></span>
+      )}
+      {badges}
+    </div>
+  ) : (
     <div className="flex items-center gap-2 min-w-0 flex-1">
       {dot}
       {stepper ? (
@@ -380,24 +415,27 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
 
   const escapeHatch = (
     <div className="flex items-center flex-wrap gap-4 text-[11px] text-sol-text-dim mt-4">
+      {(stepper || esc) && (
+        <button onClick={openSession} className="flex items-center gap-1.5 hover:text-sol-text transition-colors" title={esc ? "Open the session the ask is about" : undefined}>
+          <KeyCap size="xs">o</KeyCap><span>{esc && esc.childId !== item.conversationId ? `open ${escChildTitle || "the session"}` : "open the session"}</span>
+        </button>
+      )}
       {stepper && (
-        <>
-          <button onClick={openSession} className="flex items-center gap-1.5 hover:text-sol-text transition-colors">
-            <KeyCap size="xs">o</KeyCap><span>open the session</span>
-          </button>
-          <button onClick={stepper.onSkip} className="flex items-center gap-1.5 hover:text-sol-text transition-colors">
-            <KeyCap size="xs">s</KeyCap><span>skip for now</span>
-          </button>
-        </>
+        <button onClick={stepper.onSkip} className="flex items-center gap-1.5 hover:text-sol-text transition-colors">
+          <KeyCap size="xs">s</KeyCap><span>skip for now</span>
+        </button>
       )}
       <button
         onClick={dismiss}
+        data-role-gesture={esc ? "hand-back" : undefined}
         className="flex items-center gap-1.5 hover:text-sol-red transition-colors"
-        title={item.source === "decide"
-          ? "Dismiss without answering — the agent is not told, and the question leaves your queue"
-          : "Set this aside — it leaves your questions until the agent speaks again; the session keeps waiting"}
+        title={esc
+          ? `Hand it back${esc.role ? ` to @${esc.role.handle}` : ""} without answering. The role looks after it again and decides if it comes back.`
+          : item.source === "decide"
+            ? "Dismiss without answering — the agent is not told, and the question leaves your queue"
+            : "Set this aside — it leaves your questions until the agent speaks again; the session keeps waiting"}
       >
-        <KeyCap size="xs">x</KeyCap><span>dismiss</span>
+        <KeyCap size="xs">x</KeyCap><span>{esc ? "hand back" : "dismiss"}</span>
       </button>
       {stepper?.onExit && (
         <button onClick={stepper.onExit} className="flex items-center gap-1.5 hover:text-sol-text transition-colors">
@@ -409,17 +447,31 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
 
   // The reasoning, in the page's body type: the authored context of a
   // `cast decide`, or the detail an AskUserQuestion carries.
-  const reasoning = item.contextMd
+  // A role's line on a session that carries its own prompt (a direct
+  // escalation of a permission-blocked child): the prompt is the card, the
+  // line rides along so the person knows why the lead sent them in.
+  const escNote = !esc && session ? escalationOf(session as any) : null;
+  const reasoning = esc
+    ? (escText?.body ? <MarkdownRenderer content={escText.body} /> : null)
+    : item.contextMd
     ? <MarkdownRenderer content={item.contextMd} />
     : poll?.question.detail
       ? <span className="whitespace-pre-line">{poll.question.detail}</span>
       : null;
 
-  const showRecent = !item.contextMd && !!recentText;
-  const showThreadState = !item.contextMd && !recentText && !!session?.thread_state;
+  const showRecent = !esc && !item.contextMd && !!recentText;
+  const showThreadState = !esc && !item.contextMd && !recentText && !!session?.thread_state;
   const showUnreadable = needsMessages && !poll && !isPermissionCard && !isInfraDialog;
-  const contextBlock = (reasoning || showRecent || showThreadState || item.reportSlug || showUnreadable) ? (
+  const contextBlock = (reasoning || escNote || showRecent || showThreadState || item.reportSlug || showUnreadable) ? (
     <div className="decision-sheet-context min-w-0 space-y-4">
+      {escNote && (
+        <div className="flex items-start gap-2 text-[12px] text-sol-text-muted" data-escalation-note>
+          {escNote.role && <RoleFace role={escNote.role} size={16} className="shrink-0 mt-px" />}
+          <span className="min-w-0">
+            {escNote.role ? <span className="text-sol-violet">@{escNote.role.handle}</span> : "A lead"} put this in front of you: <span className="text-sol-text whitespace-pre-line">{escNote.line}</span>
+          </span>
+        </div>
+      )}
       {reasoning && (
         <div className="decision-body text-sm text-sol-text-muted border-l-2 border-sol-border pl-4" data-decision-context>
           {reasoning}
@@ -472,7 +524,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
       {richControls && decisionRow && (
         <DecisionAnswerControls decision={decisionRow} onAnswer={answerRich} keys />
       )}
-      {!isInfraDialog && !richControls && (
+      {!isInfraDialog && !richControls && !esc && (
         <div className="space-y-2">
           {options.length > 0 && <DecisionOptionList
             options={options}
@@ -491,18 +543,22 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
         </div>
       )}
       {otherOpen && (
-        <div className="mt-3">
+        <div className={esc ? "" : "mt-3"} data-escalation-reply={esc ? esc.childId : undefined}>
+          {esc && <div className="text-[10px] uppercase tracking-wide text-sol-text-dim mb-1">your answer{esc.role ? `, to @${esc.role.handle}` : ""}</div>}
           <textarea
             ref={otherRef}
             value={otherText}
             onChange={(e) => setOtherText(e.target.value)}
-            rows={3}
-            placeholder="Answer in your own words — this goes to the agent as a message."
+            rows={esc ? 4 : 3}
+            onKeyDown={esc ? (e) => { if (e.key === "Escape") { e.stopPropagation(); (e.target as HTMLTextAreaElement).blur(); } } : undefined}
+            placeholder={esc
+              ? `Reply in your own words. It goes to ${esc.role ? `@${esc.role.handle}` : "the lead"} as a message, and the session is theirs again.`
+              : "Answer in your own words — this goes to the agent as a message."}
             className="w-full bg-sol-card border border-sol-border rounded px-2 py-1.5 text-sm text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-blue/50"
           />
           <div className="flex items-center gap-2 mt-1 text-[11px] text-sol-text-dim">
-            <KeyCap size="xs">return</KeyCap><span>send</span>
-            <KeyCap size="xs">esc</KeyCap><span>cancel</span>
+            <KeyCap size="xs">return</KeyCap><span>{esc ? "reply and hand back" : "send"}</span>
+            {!esc && <><KeyCap size="xs">esc</KeyCap><span>cancel</span></>}
           </div>
         </div>
       )}
@@ -597,7 +653,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
         }`}
       >
         {dot}
-        <span className="truncate max-w-[16rem]">{stepper ? (session?.title || "Session") : item.blocking ? "Waiting on your decision" : "Asked for your steer"}</span>
+        <span className="truncate max-w-[16rem]">{esc ? `${esc.role ? `@${esc.role.handle}` : "A lead"} asks you` : stepper ? (session?.title || "Session") : item.blocking ? "Waiting on your decision" : "Asked for your steer"}</span>
         <span className="opacity-70">{stepper ? `· ${stepper.position} of ${stepper.total}` : "· answer"}</span>
         <ChevronUp className="w-3.5 h-3.5" />
       </button>

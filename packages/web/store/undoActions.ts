@@ -1,5 +1,5 @@
 import { bridgeUserId, useInboxStore, type InboxSession, type ConversationMeta } from "./inboxStore";
-import type { UserRest } from "@codecast/shared/contracts";
+import { CONVERSATION_FIELD_TWINS, type UserRest } from "@codecast/shared/contracts";
 import { broadcastGesture } from "./gestureBridge";
 import { pushUndo, showUndoToast } from "./undoStack";
 import { declareViewNav } from "./viewNav";
@@ -57,6 +57,14 @@ export function animatedHideSession(id: string, mode: HideSessionMode, opts?: Hi
 
 type StoreState = ReturnType<typeof useInboxStore.getState>;
 
+// Every field hideSessionInDraft writes (the stash/kill stamps, the pin and
+// snooze it clears) plus their enriched twins: the locks a hide can leave.
+const HIDE_STAMPS = ["inbox_dismissed_at", "inbox_stashed_at", "inbox_stash_hidden", "inbox_pinned_at", "inbox_snoozed_until"];
+const HIDE_LOCK_FIELDS = new Set([
+  ...HIDE_STAMPS,
+  ...HIDE_STAMPS.flatMap((f) => (CONVERSATION_FIELD_TWINS[f] ? [CONVERSATION_FIELD_TWINS[f]] : [])),
+]);
+
 function snapshotSession(state: StoreState, id: string) {
   const sessionValues = Object.values(state.sessions) as InboxSession[];
   const childIds = sessionValues
@@ -107,11 +115,28 @@ export function undoableHideSession(id: string, mode: HideSessionMode, opts?: Hi
       const restoredSessions = { ...store.sessions };
       const restoredConvos = { ...store.conversations };
       const restoredPending = { ...store.pending };
+      // ONE timestamp for the whole gesture: the locks below and the sibling
+      // broadcast all key off it.
+      const ts = Date.now();
 
       for (const sid of snap.allIds) {
         if (snap.sessions[sid]) restoredSessions[sid] = snap.sessions[sid];
         if (snap.conversations[sid]) restoredConvos[sid] = snap.conversations[sid];
         delete restoredPending[`sessions:${sid}`];
+        // The hide locked every field it wrote until the server echoed it. The
+        // server usually has the hide by now, so its next push still carries
+        // it; left in place, those locks (or no lock at all) let that push
+        // re-hide the row until the undo's own echo brings it back. Re-point
+        // each of the hide's locks at the restored value instead, so the row
+        // holds still and the lock retires on the undo's echo.
+        for (const [storeKey, rows] of [["sessions", snap.sessions], ["conversations", snap.conversations]] as const) {
+          const prefix = `${storeKey}:${sid}:`;
+          for (const key of Object.keys(restoredPending)) {
+            if (!key.startsWith(prefix) || !HIDE_LOCK_FIELDS.has(key.slice(prefix.length))) continue;
+            const value = (rows[sid] as any)?.[key.slice(prefix.length)] ?? null;
+            restoredPending[key] = { type: "field", value, ts };
+          }
+        }
       }
       for (const [key, val] of Object.entries(snap.pending)) {
         restoredPending[key] = val;
@@ -129,6 +154,8 @@ export function undoableHideSession(id: string, mode: HideSessionMode, opts?: Hi
       animateSessionEnter(id);
       // Push the SNAPSHOT flags, not blanket nulls: undoing a dismiss of a
       // session that was stashed at the time must land it back in Stashed.
+      // The pin and snooze the hide cleared travel too, or the server keeps
+      // them cleared and the row loses them on the next push.
       const restoredFlags = Object.fromEntries(
         snap.allIds.map((sid) => {
           const prev = snap.sessions[sid] ?? (snap.conversations[sid] as any);
@@ -136,6 +163,8 @@ export function undoableHideSession(id: string, mode: HideSessionMode, opts?: Hi
             inbox_dismissed_at: prev?.inbox_dismissed_at ?? null,
             inbox_stashed_at: prev?.inbox_stashed_at ?? null,
             inbox_stash_hidden: prev?.inbox_stash_hidden ?? null,
+            ...(prev?.inbox_pinned_at ? { inbox_pinned_at: prev.inbox_pinned_at } : {}),
+            ...(prev?.inbox_snoozed_until ? { inbox_snoozed_until: prev.inbox_snoozed_until } : {}),
           }];
         })
       );
@@ -153,7 +182,6 @@ export function undoableHideSession(id: string, mode: HideSessionMode, opts?: Hi
       // lock retire on the server echo. ONE timestamp for the whole gesture, so
       // the sibling's locks all key off the single undo. redo() re-hides
       // through kill/stashSession, which broadcast on their own.
-      const ts = Date.now();
       for (const [sid, fields] of Object.entries(restoredFlags)) {
         broadcastGesture({ kind: "fields", id: sid, fields, ts }, bridgeUserId(store));
       }

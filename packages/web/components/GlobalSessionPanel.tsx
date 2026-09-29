@@ -73,8 +73,8 @@ import { RoleFace } from "./org/RoleFace";
 import { CharacterPicker } from "./identity/CharacterPicker";
 import { escalationOf, roleLookingAfter, sessionIdentity, standingRoleIdOf } from "../lib/sessionIdentity";
 import { escalationFirstLine, type RoleEscalation } from "@codecast/shared/contracts";
+import type { SessionRoleSnapshot } from "../store/inboxStore";
 import { AuthErrorBadge } from "./AuthErrorBadge";
-import { RoleEscalationLines } from "./RoleEscalationLines";
 import { anchorIdentitySig, anchorIdentityFromSig } from "../hooks/useSyncAnchors";
 import { SharePopover } from "./SharePopover";
 import { PrStatusChip } from "./PrStatusChip";
@@ -2640,49 +2640,26 @@ export const SessionCard = memo(function SessionCard({
             <span
               data-role-escalated-count
               className="flex-shrink-0 px-1 rounded border border-sol-yellow/35 bg-sol-yellow/10 text-[10px] font-medium text-sol-yellow tabular-nums whitespace-nowrap"
-              title={`This role put ${escalatedCount} of its sessions in your needs input`}
+              title={`This role put ${escalatedCount} of its sessions in your questions on their own`}
             >
-              {escalatedCount} in your inbox
+              {escalatedCount} in your questions
             </span>
           )}
         </div>
-        {escalations && escalations.length > 0 && (
-          /* The role's card carries the escalations that reach the person
-             through it (R1, revised): one line each, newest first, the
-             session as a pill, the whole text on hover or expand, and Hand
-             back per line. */
-          <RoleEscalationLines escalations={escalations} coarseNow={coarseNow} canHandBack={!isForeignSession} onOpen={onNavigateToSession} />
-        )}
-        {escalation && !roleAbove && (
-          /* The role's face and its one line: why this card is in front of the
-             person (R1). Same strip anatomy as the assignment below, and the
-             same mr-5 that keeps its button clear of the hover toolbar. */
-          <div data-escalation className="flex items-start gap-1.5 mt-1 mr-5 px-1.5 py-1 rounded-md bg-sol-violet/10 border border-sol-violet/30">
-            {escalation.role && (
-              <RoleHoverCard role={escalation.role} side="left" triggerClassName="flex-shrink-0 mt-px">
-                <RoleFace role={escalation.role} size={16} />
-              </RoleHoverCard>
-            )}
-            <div className="min-w-0 flex-1 text-[11px] leading-snug">
-              {escalation.role && <span className="font-semibold text-sol-violet">@{escalation.role.handle}: </span>}
-              <span className="text-sol-text break-words" title={escalation.line}>{escalationFirstLine(escalation.line)}</span>
-              <span className="text-sol-text-dim whitespace-nowrap" title={formatDateFull(escalation.at)}>
-                {" · "}{formatRelative(escalation.at, coarseNow)}
-              </span>
-            </div>
-            {!isForeignSession && (
-              <button
-                type="button"
-                data-role-gesture="hand-back"
-                onClick={(e) => { e.stopPropagation(); useInboxStore.getState().handSessionBackToRole(session._id); }}
-                title="Take it out of your needs input. The role looks after it again and decides if it comes back."
-                className="flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium bg-sol-violet/20 text-sol-violet border border-sol-violet/40 hover:bg-sol-violet/30 transition-colors whitespace-nowrap"
-              >
-                Hand back{escalation.role ? ` to @${escalation.role.handle}` : ""}
-              </button>
-            )}
-          </div>
-        )}
+        {(escalations && escalations.length > 0) || (escalation && !roleAbove) ? (
+          /* An escalation is a question (R1, revised; projection v14): the
+             card files in QUESTIONS and says only that a lead asks, and what
+             about, in one line. The whole ask, the reply box, the session
+             and Hand back live in the decision sheet the card opens
+             (SessionDecisionCard) and in the queue's card (EscalationCard);
+             a list row carries none of them. */
+          <EscalationLine
+            asks={escalations && escalations.length > 0 ? escalations : escalation ? [{ conversation_id: session._id, line: escalation.line, at: escalation.at }] : []}
+            role={escalations && escalations.length > 0 ? session.role ?? null : escalation?.role ?? null}
+            ownCard={!(escalations && escalations.length > 0)}
+            coarseNow={coarseNow}
+          />
+        ) : null}
         {session.assigned_ping && (
           /* mr-5 keeps the strip — and its "Got it" button — clear of the
              hover toolbar's column on the right, whose gradient would
@@ -5228,3 +5205,25 @@ function SessionListPanelImpl({
 
 export const SessionListPanel = memo(SessionListPanelImpl);
 SessionListPanel.displayName = "SessionListPanel";
+
+// The one line a card spends on a lead's ask: who asks, how many, and the
+// newest ask's first line. Clicking the card opens the sheet (the Questions
+// section's onSelect); nothing here is a gesture of its own.
+function EscalationLine({ asks, role, ownCard, coarseNow }: { asks: RoleEscalation[]; role: SessionRoleSnapshot | null; ownCard: boolean; coarseNow: number }) {
+  if (asks.length === 0) return null;
+  const newest = asks[0];
+  const who = role ? `@${role.handle}` : "a lead";
+  return (
+    <div data-role-escalations={asks.length} className="mt-1 mr-5 flex items-center gap-1.5 min-w-0" title={asks.map((a) => escalationFirstLine(a.line)).join("\n")}>
+      <span
+        data-role-ask-count
+        className="flex-shrink-0 inline-flex items-center gap-1 px-1 rounded border border-sol-violet/40 bg-sol-violet/10 text-[9px] font-semibold uppercase tracking-wide text-sol-violet whitespace-nowrap"
+      >
+        {ownCard && role && <RoleFace role={role} size={11} />}
+        {asks.length > 1 ? `${asks.length} asks` : ownCard ? `${who} asks` : "asks you"}
+      </span>
+      <span className="min-w-0 flex-1 truncate text-[11px] leading-snug text-sol-text-secondary">{escalationFirstLine(newest.line)}</span>
+      <span className="flex-shrink-0 text-[10px] text-sol-text-dim" title={formatDateFull(newest.at)}>{formatRelative(newest.at, coarseNow)}</span>
+    </div>
+  );
+}

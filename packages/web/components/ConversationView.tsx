@@ -1011,7 +1011,10 @@ const ConversationViewInner = (
   // supplies a stepper — and, for a poll/permission card, the item itself.
   const decisionStepper = useContext(DecisionStepperContext);
   const pendingDecision = usePendingDecisionItem(conversation?._id && isConvexId(conversation._id) ? conversation._id : null);
-  const decisionItem = pendingDecision ?? decisionStepper?.item ?? null;
+  // The queue steps through a role's escalations one at a time on the role's
+  // own pane, so the stepper's item wins there: the pane's own lookup would
+  // hand back the oldest of them for every step.
+  const decisionItem = decisionStepper?.item?.source === "escalation" ? decisionStepper.item : pendingDecision ?? decisionStepper?.item ?? null;
   const forkSetSelectedIndex = useForkNavigationStore((s) => s.setSelectedIndex);
   // Branch map open-state. One surface: a command-palette-style popover anchored
   // above the message input. Ctrl+B / the header icon open it at the branch
@@ -1086,6 +1089,7 @@ const ConversationViewInner = (
       allCommits,
       allPullRequests,
       conversationExternalEvents,
+      { hasMoreAbove, hasMoreBelow },
     ) as TimelineItem[];
     // Guaranteed render: append any pending messages not already in the timeline.
     // This is the ONLY merge point — the store never mixes pending into messages[].
@@ -1136,7 +1140,7 @@ const ConversationViewInner = (
       }
     }
     return mergeTimelineMessages(base, toAdd) as TimelineItem[];
-  }, [messages, allCommits, allPullRequests, conversationExternalEvents, pendingMsgs, serverPending, pendingConvId, hasMoreBelow]);
+  }, [messages, allCommits, allPullRequests, conversationExternalEvents, pendingMsgs, serverPending, pendingConvId, hasMoreAbove, hasMoreBelow]);
   timelineRef.current = timeline;
   scrollCtxRef.current = { messageCount: conversation?.message_count || messages.length, messagesLen: messages.length, timelineLen: timeline.length, loadedStartIndex: conversation?.loaded_start_index ?? 0 };
 
