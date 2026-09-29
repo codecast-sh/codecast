@@ -2852,7 +2852,10 @@ export const pushReaction = internalAction({
     if (!c) return;
     const name = emojiToShortcode(args.emoji);
     if (!name) return;
-    const resp = await slackApi(c.install.bot_token, args.add ? "reactions.add" : "reactions.remove", {
+    // Always the app's token. The context swaps in the message AUTHOR's own
+    // token when they connected Slack, which is right for posting their line
+    // but would put someone else's reaction under the author's name.
+    const resp = await slackApi(c.app_token ?? c.install.bot_token, args.add ? "reactions.add" : "reactions.remove", {
       channel: c.link.slack_channel_id, timestamp: c.message.external!.ts, name,
     });
     if (!resp.ok && resp.error !== "already_reacted" && resp.error !== "no_reaction" && resp.error !== "invalid_name") {

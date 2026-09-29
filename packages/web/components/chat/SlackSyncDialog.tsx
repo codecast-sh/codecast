@@ -45,7 +45,7 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { compactAge } from "../../lib/threadState";
 import "./chat.css";
-import { slackDeepLink } from "../../lib/slackChannelLink";
+import { slackChannelUrl } from "../../lib/slackChannelLink";
 import { useChannelSlackLink } from "../../hooks/useChannelSlackLink";
 
 type Direction = ChatSlackLinkRow["direction"];
@@ -451,7 +451,9 @@ function LinkedBody({ link, workspaceName, onClose }: { link: ChatSlackLinkRow; 
           </button>
           <a
             className="ch-slack-open ch-slack-open-next"
-            href={slackDeepLink(link.workspace_id, link.slack_channel_id)}
+            href={slackChannelUrl(link.workspace_id, link.slack_channel_id)}
+            target="_blank"
+            rel="noreferrer"
             title="Open the Slack channel"
           >
             Open in Slack <ExternalLink className="w-3 h-3" />

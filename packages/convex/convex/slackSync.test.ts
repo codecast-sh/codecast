@@ -8,6 +8,7 @@ import {
   applyInboundReaction,
   commitLink,
   pushContext,
+  pushReaction,
   setDmSync,
   commitDmLink,
   retargetPersonRooms,
@@ -612,6 +613,28 @@ describe("direct messages", () => {
     } as any);
     expect((await call(pushContext, ctx, { message_id: typed }))?.as_person).toBe(true);
     expect((await call(pushContext, ctx, { message_id: byAgent }))?.as_person).toBeUndefined();
+  });
+  test("a reaction goes out as the app, never on the message author's own Slack account", async () => {
+    const ctx = context(ALICE, {
+      slack_user_tokens: [{ _id: "slack_user_tokens_9" as any, installation_id: INSTALL, workspace_id: WS, user_id: ALICE, slack_user_id: "UALICE", token: "xoxp-alice", scopes: "chat:write,im:read,im:history,mpim:read,mpim:history", created_at: 1, updated_at: 1 }],
+    });
+    const msg = await ctx.db.insert("chat_messages", {
+      channel_id: CHANNEL, user_id: ALICE, content: "said in Slack", created_at: 7_000, updated_at: 7_000,
+      external: { provider: "slack", direction: "inbound", workspace: WS, channel: SLACK_CH, ts: "7000.000001", synced_at: 7_000 },
+    } as any);
+    ctx.runQuery = (_ref: unknown, args: any) => call(pushContext, ctx, args);
+    const auths: string[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (_url: any, init: any) => {
+      auths.push(init.headers.Authorization);
+      return new Response(JSON.stringify({ ok: true }));
+    }) as any;
+    try {
+      await call(pushReaction, ctx, { message_id: msg, emoji: "👍", add: true });
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    expect(auths).toEqual(["Bearer xoxb-test"]);
   });
   test("a line codecast posted into a DM as the person is not imported twice when Slack hands it back", async () => {
     const ctx = context(ALICE);

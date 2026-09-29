@@ -13,7 +13,7 @@ import type { QueryCtx } from "./_generated/server";
 import { enqueueStartSession, getDeviceLocalRoots, getOnlineLocalRoots } from "./devices";
 import { DEVICE_ONLINE_MS } from "./deviceRouting";
 import { reissueStrandedCloudSpawns } from "./cloudPlacement";
-import { fromConvexAgentType, AGENT_CLIENTS, findModelOption } from "@codecast/shared/contracts";
+import { fromConvexAgentType, AGENT_CLIENTS, findModelOption, CLOUD_SESSION_SOURCES, cloudSessionSyncSettings } from "@codecast/shared/contracts";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { startedBefore } from "./pathStats";
 import { verifyApiToken } from "./apiTokens";
@@ -744,7 +744,7 @@ export const daemonHeartbeat = mutation({
       sync_mode: user?.sync_mode ?? "all",
       sync_projects: user?.sync_projects ?? [],
       sync_excluded: user?.sync_excluded ?? [],
-      claude_cloud_sync: user?.claude_cloud_sync ?? true,
+      ...cloudSessionSyncSettings(user),
       // Older daemons still gate token minting on this wire field. Always true
       // now that per-session account tokens are the default behavior.
       cc_session_tokens: true,
@@ -2455,6 +2455,7 @@ export const updateSyncSettings = mutation({
     sync_projects: v.optional(v.array(v.string())),
     sync_excluded: v.optional(v.array(v.string())),
     claude_cloud_sync: v.optional(v.boolean()),
+    cursor_cloud_sync: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await getUserOrToken(ctx, args.api_token);
@@ -2471,8 +2472,8 @@ export const updateSyncSettings = mutation({
     if (args.sync_excluded !== undefined) {
       updateData.sync_excluded = [...new Set(args.sync_excluded)];
     }
-    if (args.claude_cloud_sync !== undefined) {
-      updateData.claude_cloud_sync = args.claude_cloud_sync;
+    for (const { field } of Object.values(CLOUD_SESSION_SOURCES)) {
+      if (args[field] !== undefined) updateData[field] = args[field];
     }
     await ctx.db.patch(userId, updateData);
     return userId;
@@ -2494,7 +2495,7 @@ export const getSyncSettings = query({
       sync_mode: user.sync_mode ?? "all",
       sync_projects: user.sync_projects ?? [],
       sync_excluded: user.sync_excluded ?? [],
-      claude_cloud_sync: user.claude_cloud_sync ?? true,
+      ...cloudSessionSyncSettings(user),
     };
   },
 });

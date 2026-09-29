@@ -119,7 +119,7 @@ function chiefOfStaffReference(facts: ChiefOfStaffPromptFacts): string {
     `- plan_status: { plan, status: "done" | "abandoned" | "active", reason, title }`,
     `- task_status: { task, status: "done" | "dropped" | "open" | "backlog", reason, title }`,
     `- project_status: { project, status: "paused" | "done" | "active", reason, title }`,
-    `- role: { name, handle, seat?: { existing: a session's short id, title }, scope?: { projects?: [ref], plans?: [ref] }, reports_to?: "@handle" | "me" | a member's name, charter? }; a role without a scope looks after the whole workspace`,
+    `- role: { name, handle, seat?: { existing: a session's short id, title }, scope?: { projects?: [ref], plans?: [ref] }, reports_to?: "@handle" | "me" | a member's name, charter? }; a scope is optional, and a role without one owns no work: it runs its routine and answers what it is asked`,
     `- move: { handle, reports_to?, scope_add?: [ref], scope_remove?: [ref], reason? }`,
     `- scope: { handle, add?: [ref], remove?: [ref] }`,
     `- file: { plan, project }`,

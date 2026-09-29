@@ -118,7 +118,7 @@ export function MintTokenButton({ device, profile, className }: { device: MintDe
   );
 }
 
-function Step({ n, state, children }: { n: number; state: "todo" | "active" | "done"; children: React.ReactNode }) {
+export function Step({ n, state, children }: { n: number; state: "todo" | "active" | "done"; children: React.ReactNode }) {
   const ring =
     state === "done"
       ? "border-sol-green bg-sol-green/15 text-sol-green"

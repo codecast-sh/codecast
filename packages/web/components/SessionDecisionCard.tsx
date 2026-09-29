@@ -542,17 +542,22 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
       >
         {/* One row of chrome, kept while the rest scrolls: who is asking,
             where this sits in the queue, and the way back to the thread. */}
-        <div className="shrink-0 border-b border-sol-border/70">
+        <div className="decision-sheet-head-cq shrink-0 border-b border-sol-border/70">
           <div className="decision-sheet-col mx-auto w-full px-6 h-10 flex items-center gap-3 min-w-0">
             {whoIsAsking}
-            {stepper && <span className="shrink-0 text-[11px] text-sol-text-dim">decision {stepper.position} of {stepper.total}</span>}
+            {stepper && (
+              <span className="shrink-0 text-[11px] text-sol-text-dim tabular-nums">
+                <span className="decision-head-wide">decision {stepper.position} of {stepper.total}</span>
+                <span className="decision-head-short">{stepper.position}/{stepper.total}</span>
+              </span>
+            )}
             <button
               onClick={shrink}
               className="shrink-0 flex items-center gap-1 pl-2 pr-3 py-0.5 rounded-full border border-sol-border text-[11px] text-sol-text-muted hover:text-sol-text hover:bg-sol-card transition-colors"
               title="Fold the question away and read the thread"
             >
               <ChevronDown className="w-3.5 h-3.5" />
-              <span>Read the thread</span>
+              <span className="decision-head-wide">Read the thread</span>
             </button>
           </div>
         </div>

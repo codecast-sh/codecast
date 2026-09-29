@@ -852,19 +852,21 @@ export async function fireRoleNeedsInput(
 }
 
 // A session under a role waits: fire the trigger of the role that hears for
-// it, once per waiting episode. A hand tells its role. A role's own standing
-// session tells the role it reports to and speaks as the role; one that
-// reports to a person is that person's own card and tells nobody. The
-// episode is the message count the session settled at, stamped on the row:
-// the needs-input check runs up to three times per settle, and the reason a
-// session waits can change while it waits (it declares blocked, then its
-// process stops) without that being a second request.
+// it, once per ask. A hand tells its role. A role's own standing session tells
+// the role it reports to and speaks as the role; one that reports to a person
+// is that person's own card and tells nobody. The ask is what the session
+// pinned (its state's first line), else the message count it settled at when
+// it pinned nothing, stamped on the row: the needs-input check runs up to
+// three times per settle, the reason a session waits can change while it
+// waits (it declares blocked, then its process stops), and a session that
+// works on and declares the same block again has not asked anything new.
 export async function routeUpWaitingSession(
   ctx: TaskCtx,
   conv: Doc<"conversations">,
   wait: { why: string; since: number },
 ): Promise<Id<"pending_messages"> | null> {
-  const episode = String(conv.message_count ?? 0);
+  const state = String(conv.thread_state ?? "").split("\n")[0].slice(0, 200);
+  const episode = state ? `state:${state}` : String(conv.message_count ?? 0);
   if (conv.hand_wake_notified_key === episode) return null;
   const standingRole = conv.standing_role_id ? await ctx.db.get(conv.standing_role_id) : null;
   const target = standingRole ? (standingRole.reports_to?.kind === "role" ? standingRole.reports_to.role_id : null) : conv.org_role_id ?? null;
@@ -875,7 +877,7 @@ export async function routeUpWaitingSession(
     why: wait.why,
     since: wait.since,
     ...(standingRole ? { role: standingRole.handle } : {}),
-    state: String(conv.thread_state ?? "").split("\n")[0].slice(0, 200),
+    state,
   }, `session-waits:${conv._id}:${episode}`);
   if (id) await ctx.db.patch(conv._id, { hand_wake_notified_key: episode });
   return id;

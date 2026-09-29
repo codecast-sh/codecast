@@ -8,6 +8,7 @@ import { insertTask, patchTask } from "./agentTasks";
 import { recordExternalEvent } from "./externalEvents";
 import { foldChecksState, foldShepherdState, prUrl, shortSha } from "./lib/gitRefs";
 import { checkLabel, inlineForeignText } from "@codecast/shared/contracts";
+import { syncPullRequestSessions } from "./lib/prSessions";
 
 const SHEPHERD_MAX_RUNTIME_MS = 30 * 60 * 1000;
 const WAKE_RETRY_MS = 20 * 1000;
@@ -80,6 +81,7 @@ export async function patchPullRequest(
 
   await ctx.db.patch(prId, patch);
   const after = (await ctx.db.get(prId)) as PR;
+  await syncPullRequestSessions(ctx, after);
 
   if (after.shepherd_conversation_id) {
     await refreshConversationPrStatus(ctx, after.shepherd_conversation_id);

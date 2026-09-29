@@ -38,10 +38,13 @@ export function useProviderKeyCommand() {
 
   return useMemo(
     () => ({
-      /** Seal `apiKey` to the device's public key and enqueue a "set" command. */
-      async setKey(deviceId: string, pubkey: string, provider: string, apiKey: string) {
+      /** Seal `apiKey` to the device's public key and enqueue a "set" command.
+       *  Resolves to the command's id, so a caller can watch the daemon's verdict
+       *  (devices.providerKeyCommandOutcome). */
+      async setKey(deviceId: string, pubkey: string, provider: string, apiKey: string): Promise<string | undefined> {
         const payload = await encryptProviderKey(pubkey, provider, apiKey);
-        await enqueue({ device_id: deviceId, op: "set", provider, payload });
+        const res = await enqueue({ device_id: deviceId, op: "set", provider, payload });
+        return (res as { command_id?: string } | undefined)?.command_id;
       },
       /** Remove a managed key — no encryption, just the provider id. */
       async removeKey(deviceId: string, provider: string) {

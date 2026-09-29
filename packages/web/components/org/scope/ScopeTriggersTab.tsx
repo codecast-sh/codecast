@@ -37,7 +37,7 @@ export function ScopeTriggersTab({ standingConversationId }: { standingConversat
   return (
     <div className="space-y-2" data-triggers-tab>
       <p className="text-[11.5px]" style={{ color: "var(--sol-text-dim)" }}>
-        When this role wakes on its own. Its scheduled check runs <code>cast brief</code> and acts on what changed; pausing the role pauses every trigger here.
+        When this role wakes on its own: its scheduled check, and the trigger that fires when a session under it needs input. Edit, pause or cancel either one here; pausing the role pauses them all.
       </p>
       {!standingConversationId && <p className="text-[12px]" style={{ color: "var(--sol-text-muted)" }}>No standing session yet: bring the role online and its check is armed with it.</p>}
       {standingConversationId && rows.length === 0 && <p className="text-[12px]" style={{ color: "var(--sol-text-muted)" }}>No triggers on this seat.</p>}

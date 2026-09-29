@@ -902,6 +902,20 @@ div.ch-reaction-tip {
   color: var(--sol-text);
 }
 
+.ch-tool-emoji {
+  font-size: 13px;
+  line-height: 1;
+  transition: background 100ms ease, transform 100ms ease;
+}
+
+.ch-tool-emoji:hover {
+  transform: translateY(-1px);
+}
+
+.ch-tool-emoji-mine {
+  background: color-mix(in srgb, var(--sol-blue) 16%, transparent);
+}
+
 /* ── Huddle digest rows ──────────────────────────────────────────────────── */
 
 /* A system row about a call, not a person's message: the gutter wears a call
@@ -1269,8 +1283,8 @@ div.ch-reaction-tip {
 
 .ch-thread {
   position: relative;
-  width: 384px;
-  flex: 0 0 384px;
+  width: var(--ch-thread-w, 384px);
+  flex: 0 0 var(--ch-thread-w, 384px);
   /* No CSS cap: the drag handle (ChatThreadPanel) bounds the width against the
    * shell so the transcript keeps a readable column, and a saved width wider
    * than this window is clamped the moment it is dragged. A percentage here
@@ -1324,9 +1338,31 @@ div.ch-reaction-tip {
 .ch-thread-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 6px;
   padding: 9px 10px 9px 14px;
   border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 30%, transparent);
+}
+
+.ch-thread-heading {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Only the full-surface thread (narrow shell) goes BACK; the side panel closes. */
+.ch-thread-back {
+  display: none;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin-left: -6px;
+  border-radius: 5px;
+  color: var(--sol-text-muted);
+  transition: background 100ms ease, color 100ms ease;
+}
+
+.ch-thread-back:hover {
+  background: color-mix(in srgb, var(--sol-text) 8%, transparent);
+  color: var(--sol-text);
 }
 
 .ch-thread-title {
@@ -1499,9 +1535,9 @@ div.ch-reaction-tip {
  * Three fixed columns is a 1500px design. A 13" laptop, or any split window, is
  * the common case — so once the surface itself is under 940px the rail collapses
  * to an icon strip (the channels are still one click away, and unread still
- * shows), and under 860px the thread panel stops being a column and becomes an
- * overlay over the transcript, which is the only one of the three that must stay
- * readable. Container queries, so the app sidebar's 240px is already subtracted:
+ * shows), and under 860px the thread panel stops being a column and takes the
+ * whole surface, with a back button to the channel: two columns at that width
+ * left neither readable. Container queries, so the app sidebar's 240px is already subtracted:
  * a 1180px window with the sidebar open is a 940px surface. */
 
 @container ch-shell (max-width: 940px) {
@@ -1675,15 +1711,28 @@ div.ch-reaction-tip {
 @container ch-shell (max-width: 860px) {
   .ch-thread {
     position: absolute;
-    top: 0;
-    right: 0;
-    bottom: 0;
+    inset: 0;
     z-index: 6;
-    width: min(384px, 82%);
+    width: auto;
     flex: none;
-    max-width: none;
+    border-left: 0;
     background: var(--sol-bg);
-    box-shadow: -8px 0 24px color-mix(in srgb, var(--sol-text) 16%, transparent);
+  }
+
+  .ch-thread-resize,
+  .ch-thread-close {
+    display: none;
+  }
+
+  .ch-thread-back {
+    display: grid;
+  }
+
+  /* The channel column under a full-surface thread keeps its own z-indexes to
+   * itself: its composer is sticky at z-10, above the thread's 6, and its
+   * placeholder painted through the reply box. */
+  .ch-shell:has(> .ch-thread) .ch-main {
+    isolation: isolate;
   }
 }
 

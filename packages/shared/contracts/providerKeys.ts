@@ -30,6 +30,8 @@ export interface ProviderKeySpec {
 // Ordered by how commonly codecast users reach for them. OpenRouter first: it is a
 // single key that fronts every model, the usual answer to "the model won't run".
 export const PROVIDER_KEYS: ProviderKeySpec[] = [
+  // Drives Cursor Cloud Agents (api.cursor.com) from the daemon; a User API Key.
+  { id: "cursor", label: "Cursor", envVars: ["CURSOR_API_KEY"], keyPrefix: "crsr_", consoleUrl: "https://cursor.com/dashboard/api" },
   { id: "openrouter", label: "OpenRouter", envVars: ["OPENROUTER_API_KEY"], keyPrefix: "sk-or-", consoleUrl: "https://openrouter.ai/keys" },
   { id: "anthropic", label: "Anthropic", envVars: ["ANTHROPIC_API_KEY"], keyPrefix: "sk-ant-", consoleUrl: "https://console.anthropic.com/settings/keys" },
   { id: "openai", label: "OpenAI", envVars: ["OPENAI_API_KEY"], keyPrefix: "sk-", consoleUrl: "https://platform.openai.com/api-keys" },
@@ -40,8 +42,6 @@ export const PROVIDER_KEYS: ProviderKeySpec[] = [
   { id: "xai", label: "xAI", envVars: ["XAI_API_KEY"], keyPrefix: "xai-", consoleUrl: "https://console.x.ai" },
   { id: "deepseek", label: "DeepSeek", envVars: ["DEEPSEEK_API_KEY"], keyPrefix: "sk-", consoleUrl: "https://platform.deepseek.com/api_keys" },
   { id: "mistral", label: "Mistral", envVars: ["MISTRAL_API_KEY"], consoleUrl: "https://console.mistral.ai/api-keys" },
-  // Drives Cursor Cloud Agents (api.cursor.com) from the daemon; a User API Key.
-  { id: "cursor", label: "Cursor", envVars: ["CURSOR_API_KEY"], keyPrefix: "crsr_", consoleUrl: "https://cursor.com/dashboard/api" },
 ];
 
 const BY_ID = new Map(PROVIDER_KEYS.map((p) => [p.id, p]));

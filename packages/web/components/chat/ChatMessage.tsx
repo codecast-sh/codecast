@@ -123,9 +123,12 @@ export function relativeReplyTime(ts: number, now: number): string {
   return age === "just now" ? age : `${age} ago`;
 }
 
-/** The one-tap reactions the toolbar offers. Small on purpose: a full picker is
- *  a different surface, and six covers what people actually press. */
-export const QUICK_REACTIONS = ["👍", "🎉", "❤️", "👀", "🚀", "😄"];
+/** Reactions the toolbar shows directly, one tap each, no picker. */
+export const TOOLBAR_REACTIONS = ["👍", "👎", "❤️"];
+
+/** The rest of the one-tap set, behind the toolbar's picker. Small on purpose:
+ *  a full picker is a different surface. */
+export const QUICK_REACTIONS = ["🎉", "👀", "🚀", "😄"];
 
 /** "Maya" / "Maya and Sam" / "Maya, Sam and Ada" — the reaction tooltip's
  *  who-list. */
@@ -588,11 +591,23 @@ export const ChatMessage = memo(function ChatMessage({
 
       {!message.deletedAt && !editing && (
         <div className={`ch-tools ${menuOpen || pickerOpen ? "ch-tools-open" : ""}`}>
+          {onReact &&
+            TOOLBAR_REACTIONS.map((emoji) => (
+              <button
+                key={emoji}
+                type="button"
+                className={`ch-tool ch-tool-emoji ${message.reactions?.some((r) => r.emoji === emoji && r.mine) ? "ch-tool-emoji-mine" : ""}`}
+                title={`React ${emoji}`}
+                onClick={() => react(emoji)}
+              >
+                {emoji}
+              </button>
+            ))}
           {onReact && (
             <button
               type="button"
               className="ch-tool"
-              title="React"
+              title="More reactions"
               aria-haspopup="true"
               aria-expanded={pickerOpen}
               onClick={() => {

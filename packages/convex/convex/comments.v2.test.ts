@@ -17,6 +17,7 @@ import { applyPatches } from "./dispatch";
 import { mergeDuplicateUser } from "./admin_mergeUser";
 import { deleteAccount } from "./users";
 import { runCommentViewTransition } from "./commentViewWrites";
+import { backfillPullRequestSessions } from "./pull_requests";
 
 const OWNER = "user-owner" as any;
 const MEMBER = "user-member" as any;
@@ -1160,5 +1161,37 @@ describe("comments write-choke coverage", () => {
     expect(result).toMatchObject({ completed: true });
     expect(ctx.db._tables.comments).toHaveLength(0);
     expect(heads(ctx)[0]).toMatchObject({ principal_id: OWNER, revision: 1 });
+  });
+
+  test("a comment finds its session's pull request by index, never by reading every pull request", async () => {
+    // Prod's pull_requests table outgrew the 64 MB mutation cap (rows carry
+    // files and patches), so a scan made every comment fail.
+    const ctx = context(OWNER, {
+      users: [user(OWNER, "Owner", { github_access_token: "token" })],
+      conversations: [sharedConversation()],
+      team_memberships: memberships(),
+      pull_requests: [
+        { _id: "pr-other", team_id: TEAM, linked_session_ids: ["conversation-other"], repository: "org/repo", number: 1 },
+        { _id: "pr-linked", team_id: TEAM, linked_session_ids: [CONVERSATION], repository: "org/repo", number: 2 },
+      ],
+      pull_request_sessions: [],
+    });
+    await (backfillPullRequestSessions as any)._handler(ctx, {});
+    expect(ctx.db._tables.pull_request_sessions).toHaveLength(2);
+
+    const query = ctx.db.query.bind(ctx.db);
+    ctx.db.query = (table: string) => {
+      if (table === "pull_requests") throw new Error("scanned pull_requests");
+      return query(table);
+    };
+    const result = await (addCommentV2 as any)._handler(ctx, {
+      command_id: "comment-on-pr-session",
+      conversation_id: CONVERSATION,
+      content: "looks good",
+      client_id: "client-comment-on-pr-session",
+    });
+    expect(result).toMatchObject({ status: "acknowledged" });
+    const posted = ctx._scheduledCalls.map((call: any) => call.args).filter((args: any) => args?.pr_number);
+    expect(posted).toEqual([expect.objectContaining({ repository: "org/repo", pr_number: 2 })]);
   });
 });

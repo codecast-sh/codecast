@@ -23,7 +23,7 @@ import { entityRemarkPlugins } from "../../../lib/remarkEntityIds";
 import { MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS } from "../../messageMarkdown";
 import { useJumpToSendingMessage } from "../../../hooks/useJumpToSendingMessage";
 import { isTeammateFramingOnly, parseSpawnedTaskPrompt, chatWakeAction, type ChatWakeEntry, type ChatWakePrompt, type HuddleSummaryTag } from "../../sessionMessage";
-import { sessionEscalationCaption, type SessionEscalationMessage } from "@codecast/shared/contracts";
+import { parseScheduledTask, sessionEscalationCaption, type SessionEscalationMessage, type WaitingSession } from "@codecast/shared/contracts";
 import { RoleFace } from "../../org/RoleFace";
 import { CallTranscriptDisclosure } from "../../calls/TranscriptTurns";
 import { useInboxStore, useTrackedStore } from "../../../store/inboxStore";
@@ -611,13 +611,38 @@ export function TaskNotificationLine({ content, timestamp, agentNameToChildMap }
 // Same block so the two paths read identically; the spawned format additionally
 // carries mode, prior-run outcome, and completion-protocol boilerplate (collapsed —
 // it's machine plumbing, not something the user should wade through).
+function FoldToggle({ label, open, onToggle }: { label: string; open: boolean; onToggle: () => void }) {
+  return (
+    <button onClick={onToggle} className="flex items-center gap-1 text-[10px] text-sol-text-dim hover:text-sol-text-muted transition-colors">
+      {open ? <ChevronDown className="w-2.5 h-2.5" /> : <ChevronRight className="w-2.5 h-2.5" />}
+      {label}
+    </button>
+  );
+}
+
+/** The session a trigger fired for (org-staffing.md S28): which one waits,
+ *  why, since when, and the first line of what it pinned. */
+function WaitingSessionLine({ waiting: w, firedAt }: { waiting: WaitingSession; firedAt: number }) {
+  const why = w.why === "blocked" ? "is blocked" : `waits on ${w.why.replace(/_/g, " ")}`;
+  return (
+    <div className="mx-3 mb-1.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[12px]" data-waiting-session={w.short_id}>
+      <EntityIdPill shortId={w.short_id} compact />
+      {w.role && <span className="text-sol-text-dim">@{w.role}</span>}
+      <span className="text-sol-text-muted">{why}</span>
+      {w.since > 0 && firedAt > w.since && <span className="text-sol-text-dim" title={formatFullTimestamp(w.since)}>for {fmtDuration(firedAt - w.since)}</span>}
+      {w.state && <span className="basis-full truncate text-sol-text" title={w.state}>{w.state}</span>}
+    </div>
+  );
+}
+
 export function ScheduledTaskBlock({ content: rawContent, timestamp }: { content: string; timestamp: number }) {
   const [showPlumbing, setShowPlumbing] = useState(false);
+  const [showPrompt, setShowPrompt] = useState(false);
   const content = rawContent.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
   const spawned = parseSpawnedTaskPrompt(content);
-  const match = spawned ? null : content.match(/<scheduled-task\s+title="([^"]*)"(?:\s+task-id="([^"]*)")?[^>]*>([\s\S]*?)<\/scheduled-task>/);
-  const title = spawned?.title || match?.[1]?.replace(/&quot;/g, '"') || "Trigger Run";
-  const prompt = spawned?.prompt ?? (match?.[3]?.trim() || cleanStickyContent(content));
+  const frame = spawned ? null : parseScheduledTask(content);
+  const title = spawned?.title || frame?.title || "Trigger Run";
+  const prompt = spawned?.prompt ?? (frame?.body || cleanStickyContent(content));
   const prevFailed = !!spawned?.previousRun && /^Failed/i.test(spawned.previousRun.summary);
 
   return (
@@ -633,17 +658,33 @@ export function ScheduledTaskBlock({ content: rawContent, timestamp }: { content
             </span>
           </ShortcutTooltip>
         )}
-        <span className="text-xs text-sol-text-muted truncate">{title}</span>
+        {/* The trigger's pill carries its title and opens it, where the person
+            edits, pauses or cancels it; a run without one names itself. */}
+        {frame?.trigger ? <span className="min-w-0 truncate"><EntityIdPill shortId={frame.trigger} /></span> : <span className="text-xs text-sol-text-muted truncate">{title}</span>}
         <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
       </div>
+      {frame?.waiting && <WaitingSessionLine waiting={frame.waiting} firedAt={timestamp} />}
       {/* The prompt is authored markdown in both wire formats (spawn header
           and <scheduled-task> inject) — render it as prose either way. A trigger
           briefing is often long, so it starts clipped behind an Expand. */}
-      <CollapsibleBody className="px-3 pb-2" toggleClassName="mt-1">
-        <div className="text-sm text-sol-text prose prose-invert prose-sm max-w-none">
-          <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MD_COMPONENTS_NO_IMG}>{prompt}</ReactMarkdown>
+      {/* A run that names a waiting session leads with that session; the
+          trigger's standing prompt is the same every firing, so it folds. */}
+      {frame?.waiting ? (
+        <div className="px-3 pb-2">
+          <FoldToggle label="trigger prompt" open={showPrompt} onToggle={() => setShowPrompt(!showPrompt)} />
+          {showPrompt && (
+            <div className="mt-1 text-sm text-sol-text prose prose-invert prose-sm max-w-none">
+              <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MD_COMPONENTS_NO_IMG}>{prompt}</ReactMarkdown>
+            </div>
+          )}
         </div>
-      </CollapsibleBody>
+      ) : (
+        <CollapsibleBody className="px-3 pb-2" toggleClassName="mt-1">
+          <div className="text-sm text-sol-text prose prose-invert prose-sm max-w-none">
+            <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MD_COMPONENTS_NO_IMG}>{prompt}</ReactMarkdown>
+          </div>
+        </CollapsibleBody>
+      )}
       {spawned?.contextSummary && (
         <div className="mx-3 mb-2 rounded border border-sol-border/30 bg-sol-bg/40 px-2 py-1.5 text-[11px] leading-relaxed text-sol-text-muted">
           <span className="font-medium text-sol-text-dim">Context from originating session: </span>
@@ -658,13 +699,7 @@ export function ScheduledTaskBlock({ content: rawContent, timestamp }: { content
       )}
       {spawned?.instructions && (
         <div className="px-3 pb-2">
-          <button
-            onClick={() => setShowPlumbing(!showPlumbing)}
-            className="flex items-center gap-1 text-[10px] text-sol-text-dim hover:text-sol-text-muted transition-colors"
-          >
-            {showPlumbing ? <ChevronDown className="w-2.5 h-2.5" /> : <ChevronRight className="w-2.5 h-2.5" />}
-            run instructions
-          </button>
+          <FoldToggle label="run instructions" open={showPlumbing} onToggle={() => setShowPlumbing(!showPlumbing)} />
           {showPlumbing && (
             <pre className="mt-1 whitespace-pre-wrap break-words rounded border border-sol-border/30 bg-sol-bg/60 p-2 text-[10px] leading-relaxed text-sol-text-dim font-mono">{spawned.instructions}</pre>
           )}

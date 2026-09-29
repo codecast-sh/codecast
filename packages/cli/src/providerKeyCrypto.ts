@@ -97,10 +97,14 @@ export function encryptProviderKeyForTest(devicePublicKeyB64: string, provider: 
  *  "remove" drop the provider. The daemon calls this, then fans out to remotes and
  *  heartbeats. Extracted (and pure w.r.t. the store dir) so the full web→daemon path
  *  — encrypt, command args, decrypt, store — is unit-tested end to end. */
-export function applyProviderKeyCommand(
+/** A provider's own check of a key before it is stored: who it belongs to, or why it was refused. */
+export type ProviderKeyVerifier = (provider: string, apiKey: string) => Promise<{ ok: true; account?: string } | { ok: false; error: string }>;
+
+export async function applyProviderKeyCommand(
   configDir: string,
   argsJson: string | undefined,
-): { ok: true; op: "set" | "remove"; provider: string } | { ok: false; error: string } {
+  verify?: ProviderKeyVerifier,
+): Promise<{ ok: true; op: "set" | "remove"; provider: string; account?: string } | { ok: false; error: string }> {
   let parsed: any;
   try { parsed = argsJson ? JSON.parse(argsJson) : {}; } catch { return { ok: false, error: "bad JSON args" }; }
   const store = readProviderKeyStore(configDir);
@@ -116,9 +120,12 @@ export function applyProviderKeyCommand(
     catch (err) { return { ok: false, error: `decrypt failed: ${err instanceof Error ? err.message : String(err)}` }; }
     const provider = String(parsed.payload.provider ?? "");
     if (!provider || !apiKey) return { ok: false, error: "empty provider or key after decrypt" };
+    // A key the provider refuses is never stored, so it cannot shadow a good one.
+    const verdict = verify ? await verify(provider, apiKey) : undefined;
+    if (verdict && !verdict.ok) return { ok: false, error: verdict.error };
     store[provider] = apiKey;
     writeProviderKeyStore(configDir, store);
-    return { ok: true, op: "set", provider };
+    return { ok: true, op: "set", provider, ...(verdict?.ok && verdict.account ? { account: verdict.account } : {}) };
   }
   return { ok: false, error: `bad args: ${JSON.stringify(parsed).slice(0, 80)}` };
 }

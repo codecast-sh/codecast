@@ -13,7 +13,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
-import { Archive, ArrowLeft, Network, PanelRightClose, PanelRightOpen, Pause, Play } from "lucide-react";
+import { Archive, ArrowLeft, MoreHorizontal, Network, PanelRightClose, PanelRightOpen, Pause, Play } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../../ui/dropdown-menu";
 import { useInboxStore, useTrackedStore, type PlanItem, type ProjectItem } from "../../../store/inboxStore";
 import { useSyncOrgTree } from "../../../hooks/useSyncOrgTree";
 import { useSyncProjects } from "../../../hooks/useSyncProjects";
@@ -27,7 +28,7 @@ import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { cn } from "../../../lib/utils";
 import { Avatar } from "../../tasks/TaskCommentStream";
 import { ShortcutTooltip } from "../../KeyboardShortcutsHelp";
-import { canEditRole, queryProblem, roleStanding, scopeQueryRef, scopeSeatOf } from "../../../lib/scopePage";
+import { canEditRole, queryProblem, roleStanding, scopeQueryRef, scopeSeatOf, stateLineBesideName } from "../../../lib/scopePage";
 import { AnchorOnboarding } from "../../anchor/AnchorConversation";
 import { InboxConversation, type SeatSession } from "../../../app/inbox/QueuePageClient";
 import { useSeat } from "./useSeat";
@@ -61,7 +62,7 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
   useSyncProjects(); useSyncTasks(); useSyncPlans(); useSyncDocs();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { layout: panelLayout, phone } = usePanelLayout();
+  const { layout: panelLayout, phone, measureRef } = usePanelLayout();
   const now = useCoarseNow(30_000);
   const s = useTrackedStore([(st) => st.currentUser?._id]);
   const meId = s.currentUser?._id ? String(s.currentUser._id) : null;
@@ -102,6 +103,9 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
   // to a tab opens the panel on it, whatever the width.
   const [panelOpen, setPanelOpen] = useState<boolean>(() => !phone || !!tabParam);
   useWatchEffect(() => { if (tabParam) setPanelOpen(true); }, [tabParam]);
+  // A page too narrow for the panel's column (a split pane) opens on the
+  // conversation; the board would otherwise cover it as an overlay.
+  useWatchEffect(() => { if (panelLayout === "overlay" && !tabParam) setPanelOpen(false); }, [panelLayout]);
   const openTab = useCallback((next: ScopeTabKey) => { setTab(next); setPanelOpen(true); }, [setTab]);
 
   // -------- permissions: admins and the host reshape; the parent also edits the brief
@@ -177,6 +181,7 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
   // moves with the session), then the brief's first line, which a seat that
   // never wrote a brief still carries from the provisioning template.
   const stripeLine = standingStateLine || treeStateLine || boardLine;
+  const headLine = stripeLine ? stateLineBesideName(stripeLine, role?.name ?? "") : null;
   // The first thing on the page is the agent saying what this area is and
   // what it is watching, from the rows themselves; the seat's provisioning
   // prompt and its working turns fold away under it. What the role needs from
@@ -258,7 +263,7 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
   );
 
   return (
-    <div className="h-full flex flex-col overflow-hidden" style={{ background: "var(--sol-bg)", color: "var(--sol-text)" }} data-scope-page={id} data-scope-layout={panelLayout} data-scope-panel-open={panelOpen ? "1" : "0"}>
+    <div ref={measureRef} className="h-full flex flex-col overflow-hidden" style={{ background: "var(--sol-bg)", color: "var(--sol-text)" }} data-scope-page={id} data-scope-layout={panelLayout} data-scope-panel-open={panelOpen ? "1" : "0"}>
       <style>{`
         @keyframes scope-rise { from { opacity: 0; transform: translateY(6px); } }
         .scope-feed-row { animation: scope-rise .28s cubic-bezier(.2,.7,.2,1) backwards; }
@@ -268,59 +273,69 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
       {/* state stripe: the standing session's work state, as a hairline the whole width */}
       <div className="shrink-0 h-[3px] w-full" style={{ background: stateMeta ? `linear-gradient(90deg, ${stateMeta.color}, color-mix(in srgb, ${stateMeta.color} 30%, transparent) 70%, transparent)` : "color-mix(in srgb, var(--sol-violet) 55%, transparent)" }} aria-hidden />
 
-      {/* header: the face, the name, who it reports to, the state; the composer below is Talk */}
-      <header className={cn("scope-head-cq shrink-0 border-b", phone ? "px-3 pt-2 pb-2" : "px-5 pt-3 pb-2.5")} style={{ borderColor: "color-mix(in srgb, var(--sol-border) 22%, transparent)", background: stateMeta ? `linear-gradient(180deg, color-mix(in srgb, ${stateMeta.color} 5%, var(--sol-bg)) 0%, var(--sol-bg) 100%)` : undefined }}>
-        <div className="flex items-start gap-3">
+      {/* header: one row. The face, the name, its state line, who it reports
+          to; the rare controls (pause, retire) sit behind the menu, and the
+          board is an icon. The composer below is Talk. */}
+      <header className={cn("scope-head-cq shrink-0 border-b", phone ? "px-2.5 py-1.5" : "px-4 py-2")} style={{ borderColor: "color-mix(in srgb, var(--sol-border) 22%, transparent)", background: stateMeta ? `linear-gradient(180deg, color-mix(in srgb, ${stateMeta.color} 5%, var(--sol-bg)) 0%, var(--sol-bg) 100%)` : undefined }}>
+        <div className="flex items-center gap-2 min-w-0">
           {session?.onBack ? (
-            <button type="button" onClick={session.onBack} className="shrink-0 mt-[3px] inline-flex items-center justify-center w-7 h-7 rounded-lg hover:bg-sol-bg-highlight/70" style={{ color: "var(--sol-text-muted)" }} aria-label="Back to the inbox" data-scope-back="inbox">
+            <button type="button" onClick={session.onBack} className={HEAD_ICON} style={{ color: "var(--sol-text-muted)" }} aria-label="Back to the inbox" data-scope-back="inbox">
               <ArrowLeft className="w-4 h-4" />
             </button>
           ) : (
-            <Link href="/org" className="shrink-0 mt-[3px] inline-flex items-center justify-center w-7 h-7 rounded-lg hover:bg-sol-bg-highlight/70" style={{ color: "var(--sol-text-muted)" }} aria-label="Back to the org" data-scope-back="org">
+            <Link href="/org" className={HEAD_ICON} style={{ color: "var(--sol-text-muted)" }} aria-label="Back to the org" data-scope-back="org">
               <ArrowLeft className="w-4 h-4" />
             </Link>
           )}
           {/* The role's face (S13); the root workspace has none. */}
-          {role && <RoleFace role={role} size={phone ? 34 : 40} className="shrink-0 mt-[2px]" />}
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2 flex-wrap min-w-0">
-              <h1 className={cn("shrink-0 max-w-full font-semibold tracking-tight leading-none truncate", phone ? "text-[18px]" : "text-[22px]")} style={{ fontFamily: "var(--font-serif)" }}>{name}</h1>
-              <span className="shrink-0 whitespace-nowrap inline-flex items-center h-[20px] px-1.5 rounded-md text-[10.5px] font-medium" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)", fontFamily: "var(--font-mono)" }}>@{handle}</span>
-              {!role && <span className="inline-flex items-center gap-1 text-[10.5px]" style={{ color: "var(--sol-text-dim)" }}><Network className="w-3 h-3" /> the whole workspace</span>}
-              {stateMeta && (
-                <span className="shrink-0 whitespace-nowrap inline-flex items-center gap-1.5 h-[20px] px-1.5 rounded-md text-[10.5px] font-medium border" style={{ borderColor: `color-mix(in srgb, ${stateMeta.color} 45%, transparent)`, color: stateMeta.color }} data-scope-state={stateMeta.label}>
-                  <span className={cn("w-[6px] h-[6px] rounded-full", stateMeta.pulse && "animate-pulse")} style={{ background: stateMeta.color }} />
-                  {stateMeta.label}
-                </span>
-              )}
-              {paused && <span className="shrink-0 whitespace-nowrap text-[10px] px-1.5 h-[18px] inline-flex items-center rounded-md" style={{ background: "color-mix(in srgb, var(--sol-yellow) 14%, transparent)", color: "var(--sol-yellow)" }}>paused</span>}
-            </div>
-            {/* Line two: the state line (the brief's first line, else the standing
-                session's own) and who the role reports to. Trust, host, model and
-                the day's counters live in the panel's Settings and Brief tabs. */}
-            <div className={cn("mt-1 flex items-center gap-x-3 min-w-0", phone ? "text-[12px]" : "text-[12.5px]")}>
-              {stripeLine ? (
-                <p className="min-w-0 flex-1 truncate" style={{ color: "var(--sol-text-secondary)" }} title={stripeLine} data-scope-stripe>{stripeLine}</p>
-              ) : (
-                <p className="min-w-0 flex-1 truncate italic" style={{ color: "var(--sol-text-dim)" }} data-scope-stripe>{role ? (noStanding ? "Not online yet." : "No brief line yet.") : "Everything in the workspace, as one scope."}</p>
-              )}
-              {role && !phone && (
-                <span className="scope-head-wide shrink-0 inline-flex items-center gap-1.5 whitespace-nowrap" style={{ color: "var(--sol-text-muted)" }} data-scope-reports-to>
-                  <span style={{ color: "var(--sol-text-dim)" }}>reports to</span>
-                  {role.reports_to.kind === "role"
-                    ? <Link href={`/org/${tree.roles.find((r) => r._id === (role.reports_to as any).role_id)?.short_id ?? ""}`} className="font-medium hover:underline" style={{ color: "var(--sol-text)" }}>{parentName(tree, role.reports_to)}</Link>
-                    : <Link href="/org" className="font-medium hover:underline inline-flex items-center gap-1" style={{ color: "var(--sol-text)" }}><Avatar name={parentName(tree, role.reports_to)} image={tree.people.find((p) => p.user_id === (role.reports_to as any).user_id)?.image} size="sm" />{parentName(tree, role.reports_to)}</Link>}
-                </span>
-              )}
-            </div>
-          </div>
-          <div className="shrink-0 flex items-center gap-1.5">
-            {!phone && role && canEdit && (
-              <ActionButton icon={paused ? Play : Pause} label={paused ? "Resume" : "Pause"} tip={paused ? "Its triggers resume" : "Hands stop at a safe point; its triggers pause"} onClick={() => update({ status: paused ? "active" : "paused" })} />
-            )}
-            {!phone && role && canEdit && <ActionButton icon={Archive} label="Retire" danger tip="Retire this seat; you confirm on Settings" onClick={() => { setRetireArmed(true); openTab("settings"); }} />}
-            <PanelToggle open={panelOpen} compact={phone} onClick={() => setPanelOpen((v) => !v)} />
-          </div>
+          {role && <RoleFace role={role} size={phone ? 24 : 28} className="shrink-0" />}
+          <h1 className={cn("shrink-0 max-w-[40%] font-semibold tracking-tight leading-none truncate", phone ? "text-[15px]" : "text-[17px]")} style={{ fontFamily: "var(--font-serif)" }} title={`@${handle}`}>{name}</h1>
+          {!role && <span className="shrink-0 inline-flex items-center gap-1 text-[11px]" style={{ color: "var(--sol-text-dim)" }}><Network className="w-3 h-3" /> whole workspace</span>}
+          {stateMeta?.label && (
+            <span className="shrink-0 whitespace-nowrap inline-flex items-center gap-1.5 h-[18px] px-1.5 rounded-md text-[10.5px] font-medium border" style={{ borderColor: `color-mix(in srgb, ${stateMeta.color} 45%, transparent)`, color: stateMeta.color }} data-scope-state={stateMeta.label}>
+              <span className={cn("w-[6px] h-[6px] rounded-full", stateMeta.pulse && "animate-pulse")} style={{ background: stateMeta.color }} />
+              {stateMeta.label}
+            </span>
+          )}
+          {paused && <span className="shrink-0 whitespace-nowrap text-[10px] px-1.5 h-[18px] inline-flex items-center rounded-md" style={{ background: "color-mix(in srgb, var(--sol-yellow) 14%, transparent)", color: "var(--sol-yellow)" }}>paused</span>}
+          {/* The state line: the seat's pinned line, else the brief's first line.
+              Trust, host, model and the day's counters live in the panel. */}
+          {headLine ? (
+            <p className={cn("min-w-0 flex-1 truncate", phone ? "text-[12px]" : "text-[12.5px]")} style={{ color: "var(--sol-text-muted)" }} title={stripeLine ?? undefined} data-scope-stripe>{headLine}</p>
+          ) : (
+            <p className={cn("min-w-0 flex-1 truncate italic", phone ? "text-[12px]" : "text-[12.5px]")} style={{ color: "var(--sol-text-dim)" }} data-scope-stripe>{role ? (noStanding ? "Not online yet." : "") : "Everything in the workspace, as one scope."}</p>
+          )}
+          {role && !phone && (
+            <ShortcutTooltip label={`Reports to ${parentName(tree, role.reports_to)}`} side="bottom">
+              <span className="scope-head-wide shrink-0 inline-flex items-center gap-1 text-[11.5px] whitespace-nowrap" style={{ color: "var(--sol-text-dim)" }} data-scope-reports-to>
+                <span aria-hidden>↑</span>
+                {role.reports_to.kind === "role"
+                  ? <Link href={`/org/${tree.roles.find((r) => r._id === (role.reports_to as any).role_id)?.short_id ?? ""}`} className="hover:underline" style={{ color: "var(--sol-text-muted)" }}>{parentName(tree, role.reports_to)}</Link>
+                  : <Link href="/org" className="hover:underline inline-flex items-center gap-1" style={{ color: "var(--sol-text-muted)" }}><Avatar name={parentName(tree, role.reports_to)} image={tree.people.find((p) => p.user_id === (role.reports_to as any).user_id)?.image} size="sm" />{parentName(tree, role.reports_to)}</Link>}
+              </span>
+            </ShortcutTooltip>
+          )}
+          {role && canEdit && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button type="button" className={HEAD_ICON} style={{ color: "var(--sol-text-muted)" }} aria-label="Seat actions" data-scope-actions>
+                  <MoreHorizontal className="w-4 h-4" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-[200px]">
+                <DropdownMenuItem onSelect={() => update({ status: paused ? "active" : "paused" })} data-scope-action="pause">
+                  {paused ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
+                  <span>{paused ? "Resume" : "Pause"}</span>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={() => { setRetireArmed(true); openTab("settings"); }} style={{ color: "var(--sol-red)" }} data-scope-action="retire">
+                  <Archive className="w-3.5 h-3.5" />
+                  <span>Retire…</span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+          <PanelToggle open={panelOpen} onClick={() => setPanelOpen((v) => !v)} />
         </div>
       </header>
 
@@ -365,7 +380,7 @@ export function ScopeLead({ role }: { role: OrgRole | null }) {
 }
 
 /** The header's control for the board (F4.1). */
-function PanelToggle({ open, compact, onClick }: { open: boolean; compact: boolean; onClick: () => void }) {
+function PanelToggle({ open, onClick }: { open: boolean; onClick: () => void }) {
   const Icon = open ? PanelRightClose : PanelRightOpen;
   const tip = open ? "Close the board" : "Open the board: feed, tasks, plans, pages, sessions, decisions";
   return (
@@ -373,18 +388,19 @@ function PanelToggle({ open, compact, onClick }: { open: boolean; compact: boole
       <button
         type="button"
         onClick={onClick}
-        className={cn("relative h-[32px] inline-flex items-center justify-center gap-1.5 rounded-lg text-[12.5px] font-medium transition-colors hover:bg-sol-bg-highlight/70", compact ? "w-[32px]" : "px-3", open && "bg-sol-bg-highlight/60")}
-        style={{ border: "1px solid color-mix(in srgb, var(--sol-border) 40%, transparent)", color: open ? "var(--sol-text)" : "var(--sol-text-muted)" }}
+        className={cn(HEAD_ICON, open && "bg-sol-bg-highlight/60")}
+        style={{ color: open ? "var(--sol-text)" : "var(--sol-text-muted)" }}
         aria-pressed={open}
         aria-label={tip}
         data-scope-panel-toggle={open ? "open" : "closed"}
       >
-        <Icon className="w-3.5 h-3.5" />
-        {!compact && <span className="scope-head-wide">Board</span>}
+        <Icon className="w-4 h-4" />
       </button>
     </ShortcutTooltip>
   );
 }
+
+const HEAD_ICON = "shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-md transition-colors hover:bg-sol-bg-highlight/70";
 
 /** A seat with no standing agent yet (F4.1): say what this area is, and
  *  offer the one gesture that makes sense. An empty composer would go nowhere. */
@@ -418,24 +434,4 @@ function ScopeUnseated({ role, tree, canEdit, hostName, busy, onProvision, onOpe
       </div>
     </div>
   );
-}
-
-function ActionButton({ icon: Icon, label, onClick, disabled, tip, primary, danger, grow }: { icon: any; label: string; onClick: () => void; disabled?: boolean; tip: string; primary?: boolean; danger?: boolean; grow?: boolean }) {
-  const btn = (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      aria-label={label}
-      className={cn("h-[32px] inline-flex items-center justify-center gap-1.5 px-3 rounded-lg text-[12.5px] font-medium transition-colors disabled:opacity-45 disabled:cursor-not-allowed", grow && "flex-1", !primary && !disabled && "hover:bg-sol-bg-highlight/70", primary && !disabled && "hover:brightness-110")}
-      style={primary
-        ? { background: "var(--sol-violet)", color: "var(--sol-bg)" }
-        : { border: "1px solid color-mix(in srgb, var(--sol-border) 40%, transparent)", color: danger ? "var(--sol-red)" : "var(--sol-text-muted)" }}
-    >
-      <Icon className="w-3.5 h-3.5" /><span className="scope-head-wide">{label}</span>
-    </button>
-  );
-  if (!tip) return btn;
-  // A disabled button swallows pointer events; the span carries the tooltip.
-  return <ShortcutTooltip label={tip} side="bottom"><span className={cn("inline-flex", grow && "flex-1")}>{btn}</span></ShortcutTooltip>;
 }
