@@ -31,6 +31,7 @@ const TYPE_LABEL: Record<EntityType, string> = {
   initiative: 'Initiative',
   proposal: 'Proposal',
   trigger: 'Trigger',
+  decision: 'Decision',
   pr: 'Pull request',
   commit: 'Commit',
 };
@@ -46,6 +47,7 @@ const TYPE_COLOR: Record<EntityType, string> = {
   initiative: Theme.textMuted,
   proposal: Theme.violet,
   trigger: Theme.orange,
+  decision: Theme.yellow,
   pr: Theme.green,
   commit: Theme.yellow,
 };
@@ -59,6 +61,7 @@ const TYPE_ICON: Record<EntityType, React.ComponentProps<typeof Feather>['name']
   initiative: 'flag',
   proposal: 'share-2',
   trigger: 'zap',
+  decision: 'help-circle',
   pr: 'git-pull-request',
   commit: 'git-commit',
 };

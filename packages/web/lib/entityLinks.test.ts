@@ -608,3 +608,23 @@ describe("proposals (op-N)", () => {
     expect(normalizeEntityType("org")).toBe("proposal");
   });
 });
+
+describe("decisions (sd-N)", () => {
+  // A decision takes digits only, so "sd-card" in prose stays prose, and its
+  // page is /decisions/<sd-N>.
+  test("sd-N resolves to the decision type, and sd- prose does not", () => {
+    expect(entityTypeFromId("sd-289")).toBe("decision");
+    expect(isEntityId("SD-12")).toBe(true);
+    for (const word of ["sd-card", "sd-xl", "sd-"]) expect(isEntityId(word)).toBe(false);
+    const prose = "Wait on the sign up (decision sd-289). The sd-card is fine.";
+    expect(prose.match(bareEntityIdRegex())).toEqual(["sd-289"]);
+  });
+
+  test("a decision routes to its page and its url parses back", () => {
+    expect(entityRoute("decision", "sd-289")).toBe("/decisions/sd-289");
+    expect(parseEntityUrl("https://codecast.sh/decisions/sd-289")).toEqual({ type: "decision", id: "sd-289" });
+    // A stack's page is not a decision.
+    expect(parseEntityUrl("/decisions/stacks/ds-3")?.type).not.toBe("decision");
+    expect(parseEntityUrl("/decisions/stacks")?.type).not.toBe("decision");
+  });
+});
