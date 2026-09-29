@@ -209,11 +209,13 @@ async function verifyScopePage() {
   await click(q('[data-scope-tab="scope"]'));
   assert.equal(calls.pop(), "replace:/org/or-1");
 
-  // ── narrow: the panel overlays the conversation ──
+  // ── narrow: the conversation leads; the board overlays it on demand ──
   env.wide = false;
   await mount("or-1");
   assert.equal(q("[data-scope-layout]")!.getAttribute("data-scope-layout"), "overlay");
-  assert.equal(q("[data-scope-aside]")!.getAttribute("data-scope-aside"), "overlay", "open by default on a narrow desktop too");
+  assert.equal(q("[data-scope-aside]"), null, "a narrow page opens on the conversation, not covered by the board");
+  await click(q("[data-scope-panel-toggle]"));
+  assert.equal(q("[data-scope-aside]")!.getAttribute("data-scope-aside"), "overlay");
   assert.ok(q("[data-thread]"), "the conversation is still there under it");
   await click(q("[data-scope-panel-close]"));
   assert.equal(q("[data-scope-aside]"), null);
@@ -295,7 +297,9 @@ async function verifyScopePage() {
   // ── Retire from the header lands on Settings, armed, with the panel open ──
   await mount("or-1");
   await click(q("[data-scope-panel-close]"));
-  await click(qa("button").find((b) => b.textContent?.trim() === "Retire")!);
+  // Retire is a rare control: it sits behind the header's seat menu.
+  await act(async () => { q("[data-scope-actions]")!.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+  await click(q('[data-scope-action="retire"]'));
   assert.equal(calls.pop(), "replace:/org/or-1?tab=settings");
   env.qs = "tab=settings";
   await rerender("or-1");
