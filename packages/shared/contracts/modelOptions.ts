@@ -106,7 +106,7 @@ export const GROK_MODEL_OPTIONS: ModelOption[] = [
 // local launch, and Cursor Cloud Agents for a remote one. Cloud keys are
 // `cloud` (the account's default model) or `cloud:<id>` with an id from the
 // Cloud Agents API's GET /v1/models; the two catalogs differ, so a cloud
-// option never reaches the local `--model` flag (see cursorCloudModel).
+// option never reaches the local `--model` flag (cloudAgentModel in cloudAgents.ts).
 export const CURSOR_MODEL_OPTIONS: ModelOption[] = [
   { key: "default", label: "Auto", hint: "Cursor picks the model, on this machine" },
   { key: "composer-2.5", label: "Composer 2.5", hint: "Cursor's own coding model", cliAlias: "composer-2.5" },
@@ -117,13 +117,6 @@ export const CURSOR_MODEL_OPTIONS: ModelOption[] = [
   { key: "cloud:claude-opus-5-5", label: "Cloud · Opus 5.5", hint: "Cursor Cloud Agent", cliAlias: "cloud:claude-opus-5-5" },
   { key: "cloud:gpt-5.6-sol", label: "Cloud · GPT-5.6 Sol", hint: "Cursor Cloud Agent", cliAlias: "cloud:gpt-5.6-sol" },
 ];
-
-/** A cursor model choice that runs on Cursor Cloud: "" for the account
- *  default, else the cloud model id; null for a local launch. */
-export function cursorCloudModel(model: string | undefined | null): string | null {
-  if (model === "cloud") return "";
-  return model?.startsWith("cloud:") ? model.slice("cloud:".length) : null;
-}
 
 // `--reasoning-effort` (alias `--effort`) accepts none|minimal|low|medium|high|
 // xhigh|max as a serde enum, but the per-model menus offer only the model's own

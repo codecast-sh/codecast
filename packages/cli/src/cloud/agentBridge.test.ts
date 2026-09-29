@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { CloudHost } from "../browser/cloudHost";
 import {
+  bridgeAddressStale,
   AGENT_BRIDGE_ARGV0, AGENT_BRIDGE_HEALTHY_MS, AGENT_BRIDGE_MAX_BACKOFF_MS, AGENT_BRIDGE_REFUSED_EXIT, AGENT_BRIDGE_REMOTE,
   AGENT_BRIDGE_TICK_MS, HOST_AGENT_SOCK, agentBridgeArgs, hostAgentSocketEnv, nextBridgeBackoff, shouldRunBridge,
 } from "./agentBridge";
@@ -122,5 +123,19 @@ describe("hostAgentSocketEnv — the launch-prefix token on the host", () => {
     fs.writeFileSync(path.join(dir, "file"), "");
     expect(hostAgentSocketEnv(path.join(dir, "file"))).toBe("");
     expect(HOST_AGENT_SOCK).toBe(path.join(os.homedir(), ".codecast", "ssh-agent.sock"));
+  });
+});
+
+describe("bridgeAddressStale", () => {
+  const h = { id: "i-1", provider: "aws", region: "r", user: "ubuntu", keyPath: "/k", address: "54.1.1.1" } as CloudHost;
+  test("a bridge on the public or the dial address is current", () => {
+    expect(bridgeAddressStale(h, "54.1.1.1", "54.1.1.1")).toBe(false);
+    expect(bridgeAddressStale(h, "100.64.1.1", "100.64.1.1")).toBe(false);
+    // tailnet claims the node but the bridge fell back to public: no flapping
+    expect(bridgeAddressStale(h, "54.1.1.1", "100.64.1.1")).toBe(false);
+  });
+  test("a bridge on neither (the host got a new public IP) is stale", () => {
+    expect(bridgeAddressStale(h, "54.9.9.9", "54.1.1.1")).toBe(true);
+    expect(bridgeAddressStale(h, "100.64.9.9", "54.1.1.1")).toBe(true);
   });
 });

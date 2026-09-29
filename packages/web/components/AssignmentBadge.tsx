@@ -38,6 +38,7 @@ import {
 } from "./DeviceBadge";
 import { useOwnersFromStore, OwnerAvatar, OwnerMenuItems } from "./OwnersBadge";
 import { MakeRoleDialog } from "./org/MakeRoleDialog";
+import { MirrorMenuItems } from "./LocalMirror";
 import { cloudSeedTitle } from "@codecast/shared/contracts";
 
 type Runner = { id?: string; name: string; image?: string | null };
@@ -260,6 +261,12 @@ export function AssignmentBadge({
         {runner && <div className="px-2 py-1.5 text-xs text-sol-text-muted">Runs under {runner.name}’s account</div>}
         {!isRunner && <div className="px-2 pb-1.5 text-[10px] text-sol-text-dim">Moving to your machine uses your account and billing.</div>}
         <RunOnDeviceItems conversationId={conversationId} ownerDeviceId={ownerDeviceId} allowRemoteMove={isRunner} />
+        {cloudHost && isRunner && !preparing && (
+          <>
+            <DropdownMenuSeparator />
+            <MirrorMenuItems conversationId={conversationId} />
+          </>
+        )}
         <DropdownMenuSeparator />
         <OwnerMenuItems owners={owners} conversationId={conversationId} onMakeRole={orgOn ? () => setMakingRole(true) : undefined} />
       </DropdownMenuContent>
