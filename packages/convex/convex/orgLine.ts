@@ -1,4 +1,5 @@
 import { internalMutation } from "./functions";
+import { isWholeWorkspaceRole } from "@codecast/shared/contracts/orgLead";
 import type { Id } from "./_generated/dataModel";
 import { resolveScope } from "./org";
 import { capsFor, countersFor, roleStartsOnItsOwn } from "./lib/orgCaps";
@@ -8,7 +9,6 @@ import { createRunCore } from "./workflow_runs";
 import { lineSlugOf } from "./orgRoles";
 import { allRolesInBoundary } from "./lib/orgAccess";
 import { taskWork } from "./lib/orgOwnership";
-import { EMPTY_SCOPE, isWholeWorkspace } from "./lib/orgScope";
 import { ownsWork } from "@codecast/shared/contracts/orgLead";
 
 // The line (docs/architecture/the-line.md L2, L9). A scope owns one workflow,
@@ -51,7 +51,7 @@ export async function lineCandidates(ctx: Ctx, role: any): Promise<any[]> {
 }
 
 async function linePool(ctx: Ctx, role: any, assignees: Set<string>): Promise<any[]> {
-  if (!isWholeWorkspace(role.scope ?? EMPTY_SCOPE)) return (await resolveScope(ctx, role.host_user_id, { role_id: String(role._id) }))?.tasks ?? [];
+  if (!isWholeWorkspaceRole(role)) return (await resolveScope(ctx, role.host_user_id, { role_id: String(role._id) }))?.tasks ?? [];
   const key = role.team_id ? `team:${role.team_id}` : `user:${role.scope_user_id}`;
   const rows: any[] = [];
   for (const a of assignees) rows.push(...await ctx.db.query("tasks").withIndex("by_assignee_updated", (q: any) => q.eq("assignee", a)).collect());

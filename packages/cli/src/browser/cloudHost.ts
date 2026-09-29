@@ -422,7 +422,9 @@ export async function ensureUp(
       timeout: 5_000, stdio: "ignore",
     });
   } catch { /* no master to evict */ }
-  const sshDeadline = Date.now() + (host.platform === "darwin" ? 25 * 60_000 : 150_000);
+  // A host's first boot from a machine image streams its disk in from the
+  // snapshot: cloud-init finished at 140s on 2026-09-29, past the old 150s.
+  const sshDeadline = Date.now() + (host.platform === "darwin" ? 25 * 60_000 : 6 * 60_000);
   for (;;) {
     try {
       execFileSync(

@@ -336,7 +336,9 @@ export const TriggerRowItem = memo(function TriggerRowItem({
                 {/* Cadence text stays off attached rows (the countdown is
                     enough under a card; the cadence rides its tooltip). */}
                 {(row.kind === "loop" || !attached) && (
-                  <span className="ml-auto shrink-0 text-[10px] font-medium text-sol-text-muted">
+                  // Capped and truncating: a long cadence ("on pull request
+                  // comment") must never take the title's width in the sidebar.
+                  <span className="ml-auto min-w-0 max-w-[40%] truncate text-[10px] font-medium text-sol-text-muted">
                     {row.kind === "loop" ? "loop" : describeTaskCadence(task)}
                   </span>
                 )}

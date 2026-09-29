@@ -217,14 +217,14 @@ export function SharePanel({ name, paths, isRepository = false, local, syncsOnSh
             </p>
           )}
           {(!list || list.rows.length > 0) && <div className="rounded-md border border-sol-border/50">
-            <div className="flex items-center justify-between gap-3 border-b border-sol-border/40 px-3 py-1.5 text-[11px] text-sol-text-dim">
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-sol-border/40 px-3 py-1.5 text-[11px] text-sol-text-dim">
               <span className="shrink-0">Untick a session to keep it private</span>
               <input
                 value={filter}
                 onChange={(e) => setFilter(e.target.value)}
                 placeholder="Filter by title"
                 aria-label="Filter sessions by title"
-                className="min-w-0 flex-1 bg-transparent text-right text-[11px] text-sol-text placeholder:text-sol-text-dim focus:outline-none"
+                className="min-w-0 flex-1 basis-[8rem] bg-transparent text-right text-[11px] text-sol-text placeholder:text-sol-text-dim focus:outline-none"
               />
               <span className="shrink-0 tabular-nums">
                 {list ? (impact.exact && impact.sessions > list.rows.length ? `newest ${list.rows.length} of ${formatSessionCount(impact.sessions)}` : formatSessionCount(list.rows.length)) : "loading"}
