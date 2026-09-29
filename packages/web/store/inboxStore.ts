@@ -176,6 +176,10 @@ export async function awaitTrackedSessionCreateResult(
 // collapsed (the field, the opener's parameter, and the action).
 export type CreateModalKind = 'task' | 'plan' | 'doc' | 'chat' | 'huddle';
 
+// A trigger strip request (see triggerStripRequest): taskId null means the
+// conversation's all-triggers view; expand asks the strip to open.
+export type TriggerStripRequest = { convId: string; taskId: string | null; expand: boolean; nonce: number };
+
 // Imported for internal use AND re-exported so the many call sites that import
 // `isConvexId` from the store keep working.
 import { isConvexId } from "../lib/entityLinks";
@@ -1773,12 +1777,16 @@ export type ClientUI = {
   // the sidebar and zen mode — the window is a different size on every machine,
   // and which view fits is a fact about the window, not about the person.
   people_view?: "wall" | "list";
+  // The floating faces' circle size (lib/faces/layout FLOAT_FACE_SIZES).
+  // Unstamped: the size that suits a laptop is a stamp on an ultrawide.
+  float_face_size?: number;
   // Which microphone and camera a deliberate join opens (lib/calls/joinPrefs).
   // Unstamped on purpose: a device id names hardware attached to THIS machine,
   // so the newest choice must not travel — the laptop's headset id is noise on
   // the desktop, and switchActiveDevice would simply fail on it.
   call_mic_device_id?: string;
   call_camera_device_id?: string;
+  call_speaker_device_id?: string;
   // Whether a deliberate join turns the camera on, and whether it opens the
   // microphone. Stamped LWW, because these ARE about the person: somebody who
   // joins with video joins with video wherever they are signed in. Absent
@@ -3942,7 +3950,10 @@ export function computeChipCounts(
 
 // Default project for a brand-new session seeded from the compose popup. A
 // caller-supplied context (doc review passes the doc's own project) wins — it's
-// the explicit target. Otherwise the current conversation's project — except
+// the explicit target. A session started for a team's room (a huddle agent)
+// then takes that team's most used shared repo: recentProjects is already
+// ranked by use, limited to my machines, and tagged with the team each folder
+// shares into, so it is the first entry shared with that team. Otherwise the current conversation's project — except
 // that an active project-filter chip is an explicit "I'm working in this
 // project" (same rule as Ctrl+N's resolveNewSessionContext in DashboardLayout):
 // the conversation only seeds the default when it lives inside the filtered
@@ -3963,10 +3974,14 @@ export function resolveComposeProjectPath(opts: {
   // for where a NEW session should live, so the filter neither vetoes the
   // conversation's path nor seeds its own.
   chipFilterExclude?: boolean;
-  recentProjects?: Array<{ path: string }>;
+  recentProjects?: Array<{ path: string; team_id?: string | null }>;
   machineRoster?: Array<Pick<MachineCandidate, "local_project_roots">>;
+  teamId?: string | null;
 }): string | undefined {
-  const { context, conversation, recentProjects, machineRoster } = opts;
+  const { context, conversation, recentProjects, machineRoster, teamId } = opts;
+  const teamPath = teamId
+    ? recentProjects?.find((p) => p.team_id != null && String(p.team_id) === teamId && (!machineRoster || pathOnMyMachines(machineRoster, p.path)))?.path
+    : undefined;
   const activeProjectFilter = opts.chipFilterExclude ? null : opts.activeProjectFilter;
   const activeProjectPath = opts.chipFilterExclude ? null : opts.activeProjectPath;
   const rawConvPath =
@@ -3975,7 +3990,7 @@ export function resolveComposeProjectPath(opts: {
       : undefined;
   const convPath =
     rawConvPath && (!machineRoster || pathOnMyMachines(machineRoster, rawConvPath)) ? rawConvPath : undefined;
-  return context?.projectPath || context?.gitRoot || convPath || activeProjectPath || recentProjects?.[0]?.path || undefined;
+  return context?.projectPath || context?.gitRoot || teamPath || convPath || activeProjectPath || recentProjects?.[0]?.path || undefined;
 }
 
 /** Where a session the web starts on its own lands when the caller has no
@@ -3985,10 +4000,11 @@ export function defaultNewSessionPath(st: {
   activeProjectFilter?: string | null;
   activeProjectPath?: string | null;
   chipFilterExclude?: boolean;
-  recentProjects?: Array<{ path: string }>;
+  recentProjects?: Array<{ path: string; team_id?: string | null }>;
   machineRoster?: Array<Pick<MachineCandidate, "local_project_roots">>;
-}): string | undefined {
+}, teamId?: string | null): string | undefined {
   return resolveComposeProjectPath({
+    teamId,
     conversation: st.currentConversation,
     activeProjectFilter: st.activeProjectFilter,
     activeProjectPath: st.activeProjectPath,
@@ -4912,11 +4928,14 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // by GlobalSessionPanel from its agentTasks.webList subscription. Ephemeral:
   // never persisted or synced.
   scheduleNavSets: ScheduleNavSets | null;
-  // One-shot request to open the schedule strip above a conversation, published
-  // by schedule-surface clicks (dock rows, bars under cards) so navigating FROM
-  // a schedule lands with the prompt already visible. Nonce-keyed: the strip
-  // consumes each nonce at most once, so a stale request is inert. Ephemeral.
-  scheduleStripExpand: { convId: string; nonce: number } | null;
+  // One-shot request aimed at the trigger strip above a conversation. A
+  // trigger row click (dock row, bar under a card) names its trigger and asks
+  // for it expanded, so navigating FROM a trigger lands on that trigger's
+  // detail even when the conversation carries several; a card click names no
+  // trigger and returns the strip to its all-triggers view. Nonce-keyed: the
+  // strip consumes each nonce at most once, so a stale request is inert.
+  // Ephemeral.
+  triggerStripRequest: TriggerStripRequest | null;
   // One-shot composer seed from a `?prefill=` deep link, published by the
   // /conversation/<id> page before it redirects to the inbox. It cannot ride the
   // URL: that redirect drops the query, and the inbox canonicalizes the address
@@ -5391,7 +5410,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // schedule row) for keyboard nav. Ephemeral raw-set state — the schedule data
   // itself lives in the agentTasks.webList Convex subscription, never the store.
   setScheduleNavSets: (sets: ScheduleNavSets | null) => void;
-  setScheduleStripExpand: (req: { convId: string; nonce: number } | null) => void;
+  setTriggerStripRequest: (req: TriggerStripRequest | null) => void;
   setComposerPrefill: (req: { convId: string; text: string } | null) => void;
   setViewingDismissedId: (id: string | null) => void;
   getCurrentSession: () => InboxSession | null;
@@ -5537,8 +5556,8 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   stageSetSizes: (branchId: string, sizes: number[]) => void;
 
   // -- Recent projects cache --
-  recentProjects: Array<{ path: string; count: number; lastActive: number }>;
-  setRecentProjects: (projects: Array<{ path: string; count: number; lastActive: number }>) => void;
+  recentProjects: Array<{ path: string; count: number; lastActive: number; team_id?: string | null }>;
+  setRecentProjects: (projects: Array<{ path: string; count: number; lastActive: number; team_id?: string | null }>) => void;
 
   // Per-machine folder lists (the device-scoped getRecentProjectPaths results),
   // so the new-session picker paints a machine's folders from cache instantly
@@ -6326,8 +6345,9 @@ export const PER_DEVICE_UI_KEYS = new Set([
   "visual_style",
   "sidebar_collapsed", "zen_mode", "nav_sections", "workspace",
   "sticky_headers_disabled", "diff_panel_open",
-  "trigger_prompt_height", "thread_state_collapsed", "people_view",
+  "trigger_prompt_height", "thread_state_collapsed", "people_view", "float_face_size",
   "last_picked_device_id", "call_mic_device_id", "call_camera_device_id",
+  "call_speaker_device_id",
 ]);
 
 export function isStampedUiKey(key: string): boolean {
@@ -7856,7 +7876,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   showDismissed: false,
   collapsedSections: {},
   scheduleNavSets: null,
-  scheduleStripExpand: null,
+  triggerStripRequest: null,
   composerPrefill: null,
   recentFreezeOrder: null,
   viewingDismissedId: null,
@@ -8191,7 +8211,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   optimisticForkChildren: [],
   recentProjects: [],
-  setRecentProjects: action(function (this: Draft, projects: Array<{ path: string; count: number; lastActive: number }>) {
+  // Fed by the recent-projects query, so sync(): an action() would dispatch
+  // the server's own answer back to it on every push.
+  setRecentProjects: sync(function (this: Draft, projects: Array<{ path: string; count: number; lastActive: number }>) {
     this.recentProjects = projects;
   }),
   recentProjectsByDevice: {},
@@ -10372,9 +10394,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
   setScheduleNavSets: (sets: ScheduleNavSets | null) =>
     set({ scheduleNavSets: sets }),
 
-  // Raw set: one-shot strip-expand request (see the state field's comment).
-  setScheduleStripExpand: (req: { convId: string; nonce: number } | null) =>
-    set({ scheduleStripExpand: req }),
+  // Raw set: one-shot trigger strip request (see the state field's comment).
+  setTriggerStripRequest: (req: TriggerStripRequest | null) =>
+    set({ triggerStripRequest: req }),
 
   // Raw set: one-shot composer seed (see the state field's comment).
   setComposerPrefill: (req: { convId: string; text: string } | null) =>
