@@ -1,5 +1,6 @@
 import { useMemo, useCallback } from "react";
 import { isCommandMessage, isHiddenSystemNotice, initialSubagentPromptId } from "../lib/conversationProcessor";
+import { isRecoveryContinueClientId } from "@codecast/shared/contracts";
 import { isModelSwitchStdout } from "@codecast/shared/contracts";
 import { isToolResultCarrier, foldNudgeRuns, nudgeLabel, type NudgeRow } from "../components/sessionMessage";
 import { sameMessageAuthor } from "../lib/messageAuthors";
@@ -251,7 +252,8 @@ export function useTimelineTurns({ messages, conversation, hasMoreAbove, timelin
       if (msg.role === 'system') return { id: msg._id, nudge: null, invisible: isHiddenSystemNotice(msg.content, msg.subtype) };
       if (msg.role === 'user') {
         const kind = userMsgKindMap.get(msg._id)?.kind ?? 'normal';
-        const isNudge = kind === 'normal' && !msg._isOptimistic && !msg._isQueued && !msg.images?.length;
+        // A recovery's continue renders as its own line and never folds with the person's.
+        const isNudge = kind === 'normal' && !msg._isOptimistic && !msg._isQueued && !msg.images?.length && !isRecoveryContinueClientId(msg.client_id);
         return {
           id: msg._id,
           nudge: isNudge ? nudgeLabel(msg.content) : null,

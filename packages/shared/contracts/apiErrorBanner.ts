@@ -455,6 +455,17 @@ export function blockedContinueClientId(conversationId: string, at: number): str
   return `continue-blocked-${conversationId}-${Math.floor(at / 60_000)}`;
 }
 
+// A "continue" that account recovery sent on the person's behalf, read off its
+// client_id: the auto-switch loop's (auto-switch-continue-*), the daemon's
+// post-switch revive when no caller painted one (acct-switch-*), and the
+// shared un-park id above. A revive the person clicked in the web
+// (acct-revive-*) is theirs and reads as their own message.
+const RECOVERY_CONTINUE_ID_RE = /^(?:auto-switch-continue-|acct-switch-|continue-blocked-)/;
+
+export function isRecoveryContinueClientId(clientId: string | null | undefined): boolean {
+  return !!clientId && RECOVERY_CONTINUE_ID_RE.test(clientId);
+}
+
 // Claude Code's no-op assistant row. When a prompt reaches the CLI and no
 // model call follows — the resume hook's "Continue from where you left off."
 // landing on a session still parked at a limit, or a turn the model declined

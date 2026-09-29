@@ -25,8 +25,8 @@ import { shareTokenArg } from "../lib/shareTokenScope";
 import { BrowserPaneOfferChip } from "./browser/BrowserPaneOfferChip";
 import { BrowserSessionContext } from "../hooks/useBrowserTabActions";
 import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
-import { isCommandMessage, cleanContent, cleanTitle, extractFilePaths, isHiddenSystemNotice, isContextOnlyUserMessage, initialSubagentPromptId } from "../lib/conversationProcessor";
-import { agentSupportsFork, agentForksFromAnyMessage, isModelSwitchStdout, isForkSeedClientId } from "@codecast/shared/contracts";
+import { isCommandMessage, cleanContent, cleanTitle, extractFilePaths, isHiddenSystemNotice, isLimitNoticeSuperseded, isContextOnlyUserMessage, initialSubagentPromptId } from "../lib/conversationProcessor";
+import { agentSupportsFork, agentForksFromAnyMessage, isModelSwitchStdout, isForkSeedClientId, isRecoveryContinueClientId } from "@codecast/shared/contracts";
 import { GROUP_WINDOW_MS } from "@codecast/shared/chat";
 import { useNowWhen } from "../hooks/useCoarseNow";
 import { isAskTool } from "@codecast/shared/render";
@@ -1086,6 +1086,7 @@ const ConversationViewInner = (
       allCommits,
       allPullRequests,
       conversationExternalEvents,
+      { hasMoreAbove, hasMoreBelow },
     ) as TimelineItem[];
     // Guaranteed render: append any pending messages not already in the timeline.
     // This is the ONLY merge point — the store never mixes pending into messages[].
@@ -1132,11 +1133,12 @@ const ConversationViewInner = (
           ...(serverPending.status === 'delivered' ? {} : { _isOptimistic: true }),
           _serverPendingStatus: serverPending.status,
           _serverPendingReason: serverPending.hold_reason,
+          _recoveryContinue: isRecoveryContinueClientId(serverPending.client_id),
         });
       }
     }
     return mergeTimelineMessages(base, toAdd) as TimelineItem[];
-  }, [messages, allCommits, allPullRequests, conversationExternalEvents, pendingMsgs, serverPending, pendingConvId, hasMoreBelow]);
+  }, [messages, allCommits, allPullRequests, conversationExternalEvents, pendingMsgs, serverPending, pendingConvId, hasMoreAbove, hasMoreBelow]);
   timelineRef.current = timeline;
   scrollCtxRef.current = { messageCount: conversation?.message_count || messages.length, messagesLen: messages.length, timelineLen: timeline.length, loadedStartIndex: conversation?.loaded_start_index ?? 0 };
 
@@ -3131,6 +3133,16 @@ const ConversationViewInner = (
     return null;
   };
 
+  const nextMessage = (index: number): Message | null => {
+    for (let i = index + 1; i < timeline.length; i++) {
+      if (timeline[i]?.type === "message") return timeline[i].data as Message;
+    }
+    return null;
+  };
+  // A "continue" account recovery sent after a usage limit (not the person).
+  const isRecoveryContinue = (m: Message | null | undefined): boolean =>
+    !!m && m.role === "user" && (isRecoveryContinueClientId(m.client_id) || !!(m as any)._recoveryContinue);
+
   // Caches for renderItem's per-row derived props (see the assistant branch).
   // Keyed by the message row object, which the store keeps identity-stable
   // until the message itself changes; entries validate against the inputs
@@ -3297,6 +3309,7 @@ const ConversationViewInner = (
 
     const msg = item.data as Message;
     if (msg.role === "system") {
+      if (isLimitNoticeSuperseded(msg.content, msg.subtype, getPreviousNonToolResultMessage(index), isRecoveryContinue(nextMessage(index)))) return null;
       return <SystemBlock key={msg._id} content={msg.content || ""} subtype={msg.subtype} timestamp={msg.timestamp} messageUuid={msg.message_uuid} messageId={msg._id} conversationId={conversation?._id} onStartShareSelection={handleStartShareSelection} />;
     }
 
@@ -3370,6 +3383,11 @@ const ConversationViewInner = (
           if (!msg.content?.trim() && !msg.images?.some(img => !img.tool_use_id)) return null;
           if (nudgeRuns.folded.has(msg._id)) return null;
           const msgSender = resolveMsgSender(msg);
+          // A "continue" account recovery sent after a usage limit is part of
+          // that recovery, not something the person said.
+          if (kind.kind === 'normal' && isRecoveryContinue(msg)) {
+            return <NudgeLine key={msg._id} messageId={msg._id} text={nudgeLabel(msg.content) ?? (msg.content || "")} count={1} timestamp={msg.timestamp} recovery pending={!!msg._isOptimistic || !!msg._isQueued} />;
+          }
           const nudgeRun = kind.kind === 'normal' ? nudgeRuns.runs.get(msg._id) : undefined;
           if (nudgeRun) {
             return <NudgeLine key={msg._id} messageId={msg._id} text={nudgeRun.text} count={nudgeRun.count} timestamp={msg.timestamp} userName={msgSender?.name || conversation?.user?.name || conversation?.user?.email?.split("@")[0]} avatarUrl={msgSender ? msgSender.avatar_url : conversation?.user?.avatar_url} />;

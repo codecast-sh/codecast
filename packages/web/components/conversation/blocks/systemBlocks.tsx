@@ -28,7 +28,7 @@ import { RoleFace } from "../../org/RoleFace";
 import { CallTranscriptDisclosure } from "../../calls/TranscriptTurns";
 import { useInboxStore, useTrackedStore } from "../../../store/inboxStore";
 import { DecisionCompactCard } from "../../decisions/DecisionCompactCard";
-import { MessageSquare, Users, Hash, AtSign, ChevronDown, ChevronRight, Clock, CornerDownRight, Workflow, Zap, Radar, Bot, PhoneCall, ArrowUpRight } from "lucide-react";
+import { MessageSquare, Users, Hash, AtSign, ChevronDown, ChevronRight, Clock, CornerDownRight, Workflow, Zap, Radar, Bot, PhoneCall, ArrowUpRight, RefreshCw } from "lucide-react";
 import { sessionMessageQueueLabel } from "../../../lib/pendingBanner";
 import { PlanBlock } from "./planBlock";
 import { UserIcon } from "./shared";
@@ -315,21 +315,31 @@ export function InterruptStatusLine({ label = "user interrupted", tone = "sky" }
 // A bare nudge ("continue") the human typed to keep the agent moving. It carries
 // no ask, so it renders as one slim line instead of a full prompt bubble, and a
 // run of the same nudge shows once with its count.
-export function NudgeLine({ messageId, text, count, timestamp, userName, avatarUrl }: { messageId: string; text: string; count: number; timestamp: number; userName?: string; avatarUrl?: string | null }) {
-  const title = count > 1 ? `${userName ?? "You"} sent "${text}" ${count} times in a row · last at ${formatFullTimestamp(timestamp)}` : `${userName ?? "You"} · ${formatFullTimestamp(timestamp)}`;
+// A bare nudge ("continue") as one compact line. `recovery` marks the one
+// account recovery sent after a usage limit: it carries the recovery's mark
+// instead of the person's face, because they did not type it.
+export function NudgeLine({ messageId, text, count, timestamp, userName, avatarUrl, recovery = false, pending = false }: { messageId: string; text: string; count: number; timestamp: number; userName?: string; avatarUrl?: string | null; recovery?: boolean; pending?: boolean }) {
+  const title = recovery
+    ? `Sent by account recovery after the usage limit · ${formatFullTimestamp(timestamp)}`
+    : count > 1 ? `${userName ?? "You"} sent "${text}" ${count} times in a row · last at ${formatFullTimestamp(timestamp)}` : `${userName ?? "You"} · ${formatFullTimestamp(timestamp)}`;
   return (
-    <div data-cc-message="user" id={`msg-${messageId}`} className="my-3 flex items-center gap-3 scroll-mt-20" title={title}>
-      <span className="inline-flex items-center gap-2 pl-1 pr-2.5 py-1 rounded-full border border-sol-border/70 bg-sol-bg-alt/60 text-xs text-sol-text-muted">
-        <UserIcon avatarUrl={avatarUrl} size="w-4 h-4" />
-        <svg className="w-3 h-3 text-sol-text-dim" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14m0 0l-5-5m5 5l-5 5" />
-        </svg>
+    <div data-cc-message="user" data-recovery-continue={recovery || undefined} id={`msg-${messageId}`} className="my-3 flex items-center gap-3 scroll-mt-20" title={title}>
+      <span className={`inline-flex items-center gap-2 pl-1 pr-2.5 py-1 rounded-full border text-xs ${recovery ? "border-sol-cyan/30 bg-sol-cyan/[0.06] text-sol-text-muted" : "border-sol-border/70 bg-sol-bg-alt/60 text-sol-text-muted"}`}>
+        {recovery
+          ? <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-sol-cyan/20 text-sol-cyan"><RefreshCw className="w-2.5 h-2.5" strokeWidth={2.5} /></span>
+          : <UserIcon avatarUrl={avatarUrl} size="w-4 h-4" />}
+        {!recovery && (
+          <svg className="w-3 h-3 text-sol-text-dim" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14m0 0l-5-5m5 5l-5 5" />
+          </svg>
+        )}
         <span className="font-medium">{text}</span>
         {count > 1 && (
           <span className="ml-0.5 px-1.5 rounded-full bg-sol-blue/15 text-sol-blue text-[11px] font-semibold tabular-nums">×{count}</span>
         )}
+        {recovery && <span className="text-sol-text-dim">· sent by account recovery after the usage limit</span>}
       </span>
-      <span className="text-[11px] text-sol-text-dim">{formatRelativeTime(timestamp)}</span>
+      <span className="text-[11px] text-sol-text-dim">{pending ? "sending…" : formatRelativeTime(timestamp)}</span>
     </div>
   );
 }
@@ -393,6 +403,8 @@ function SwitchDivider({
 // R1, revised): the role's face, who moved what where, the whole line as
 // markdown, the time. The same divider in the child's thread and the role's;
 // `conversationShortId` says which side the reader is on.
+// The verb that wrote these machine messages (cast escalate) is gone; the
+// divider renders the old threads that still carry them.
 export function EscalationDivider({ escalation, conversationShortId, timestamp }: { escalation: SessionEscalationMessage; conversationShortId?: string; timestamp: number }) {
   const inChild = !!conversationShortId && conversationShortId === escalation.session.short_id;
   const caption = sessionEscalationCaption(escalation, { inChild });

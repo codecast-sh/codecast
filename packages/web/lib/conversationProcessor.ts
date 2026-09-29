@@ -13,7 +13,7 @@ export type MessageAlternate = {
 };
 
 import { SYSTEM_MESSAGE_PREFIXES } from "./sessionFilters";
-import { isAgentContextMessage, isAgentSwitchNotice, isMachineSwitchNotice } from "@codecast/shared/contracts";
+import { classifyApiErrorBanner, isAgentContextMessage, isAgentSwitchNotice, isMachineSwitchNotice } from "@codecast/shared/contracts";
 import { stripTeammateFraming, parseSpawnedTaskPrompt, parseChatWakePrompt, chatWakePlace, isSkillExpansion, extractSkillInfo } from "../components/sessionMessage";
 export { isSkillExpansion, extractSkillInfo };
 
@@ -55,6 +55,24 @@ const LIMIT_NOTICE_RE =
 
 export function isWarningSystemNotice(content: string | null | undefined, subtype?: string | null): boolean {
   return subtype === "informational" && !!content && LIMIT_NOTICE_RE.test(content.trim());
+}
+
+// Claude Code's own limit notice restates the park with the CLI's retry plan
+// ("continuing automatically at 6am"), which account recovery overrides by
+// restarting the session. While the limit banner stands, its park card is the
+// one account of what happens next; once recovery continued the session (the
+// server then retracts the banner) the recovery's "continue" line records it.
+// Either way the notice renders nothing; elsewhere it is the only word on the
+// pause and stays.
+export function isLimitNoticeSuperseded(
+  content: string | null | undefined,
+  subtype: string | null | undefined,
+  previous: { role: string; content?: string | null } | null | undefined,
+  nextIsRecoveryContinue: boolean,
+): boolean {
+  if (!isWarningSystemNotice(content, subtype)) return false;
+  return nextIsRecoveryContinue ||
+    (previous?.role === "assistant" && classifyApiErrorBanner((previous.content ?? "").trim()) === "limit");
 }
 
 /** Synthetic truncation notice the CLI injects into imported sessions for the

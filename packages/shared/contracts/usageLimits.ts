@@ -232,7 +232,9 @@ export function describeDecision(d: RecoveryDecision | undefined | null): string
     case "propose":
       return `${cause}, parking ${sessions}. Recommended: ${target ?? "another account"}${standing} — waiting for you to approve the switch.`;
     case "continue":
-      return `${sessions} parked, then the window reopened — continued them on the same account, no switch.`;
+      // The machine's login had room: sessions that parked on it, or on
+      // another account's token, continued there without moving the machine.
+      return `${sessions} parked — continued them on ${target ?? d.from_email ?? "the active account"}, which had room.`;
     case "exhausted":
       return `${cause}, parking ${sessions} — every saved account is spent, waiting for the earliest window to reset.`;
   }

@@ -128,6 +128,20 @@ describe("buildCompositeTimeline", () => {
     expect(second).toHaveLength(3);
   });
 
+  it("holds back git items past an edge of the loaded window while more pages lie beyond it", () => {
+    const messages = [msg("m1", 100), msg("m2", 200)];
+    const commits = [commit("c0", "a", 50), commit("c1", "b", 150), commit("c2", "c", 250)];
+    const prs = [{ _id: "p9", number: 9, title: "late", state: "open", created_at: 300 }];
+    const events = [event("e0", 10), event("e9", 400)];
+    const ids = (items: TimelineItem[]) => items.map((i) => i.data._id);
+    expect(ids(buildCompositeTimeline(messages, commits, prs, events, { hasMoreAbove: true, hasMoreBelow: true })))
+      .toEqual(["m1", "c1", "m2"]);
+    expect(ids(buildCompositeTimeline(messages, commits, prs, events, { hasMoreBelow: true })))
+      .toEqual(["e0", "c0", "m1", "c1", "m2"]);
+    expect(ids(buildCompositeTimeline(messages, commits, prs, events)))
+      .toEqual(["e0", "c0", "m1", "c1", "m2", "c2", "p9", "e9"]);
+  });
+
   it("still works for callers that pass no events", () => {
     const items = buildCompositeTimeline([msg("m1", 100)], [commit("c1", "abc", 150)], []);
     expect(typesOf(items)).toEqual(["message", "commit"]);
