@@ -10,7 +10,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import type { ProviderKeyStore } from "@codecast/shared/contracts";
+import { getProviderKeySpec, type ProviderKeyStore } from "@codecast/shared/contracts";
 import { atomicWriteFile } from "./atomicWrite.js";
 import { readJsonForUpdate } from "./readForUpdate.js";
 
@@ -18,6 +18,12 @@ export const PROVIDER_KEY_STORE_FILE = "provider-keys.json";
 
 export function providerKeyStorePath(configDir: string): string {
   return path.join(configDir, PROVIDER_KEY_STORE_FILE);
+}
+
+/** A provider's API key on this machine: the one codecast manages, else the provider's env var. */
+export function providerApiKey(id: string, configDir: string): string | null {
+  const spec = getProviderKeySpec(id);
+  return readProviderKeyStore(configDir)[id] || (spec ? process.env[spec.envVars[0]] : undefined) || null;
 }
 
 /** The managed keys on this device, or `{}` when nothing is managed (the default).

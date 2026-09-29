@@ -5,6 +5,8 @@ import { relTimeShort } from "../../lib/utils";
 import type { PrCommitRow } from "../../lib/prView";
 import type { PRDetailsRead } from "../../hooks/usePRDetails";
 import { PRDetailsFrame } from "./PRDetailsFrame";
+import { EntityIdPill } from "../EntityIdPill";
+import { splitSessionTrailer } from "@codecast/shared/blame";
 
 // The Commits tab: the head branch, oldest first, as GitHub lists it. Each row
 // is a commit page away; the sha is monospace because that is what a person
@@ -29,7 +31,9 @@ function CommitRows({ repository, commits, total }: { repository: string; commit
       {total !== undefined && total > rows.length && <p className="mb-3 text-[11px] text-sol-text-dim">Showing {rows.length} of {total} commits</p>}
       <ol className="divide-y divide-sol-border/40 rounded-xl border border-sol-border/50 bg-sol-card">
         {rows.map((commit, index) => {
-          const [subject, ...rest] = commit.message.split("\n");
+          // The Codecast-Session trailer reads as the session's pill, not a URL in the body.
+          const { message, session } = splitSessionTrailer(commit.message);
+          const [subject, ...rest] = message.split("\n");
           const body = rest.join("\n").trim();
           return (
             <li key={commit.sha} className="pr-rise flex items-start gap-3 px-4 py-2.5" style={{ ["--d" as string]: `${Math.min(index, 12) * 30}ms` }}>
@@ -47,6 +51,7 @@ function CommitRows({ repository, commits, total }: { repository: string; commit
                 <div className="mt-0.5 flex items-center gap-2 text-[11px] text-sol-text-dim">
                   <span>{commit.author_login ?? commit.author_name}</span>
                   <Link href={`/commit/${repository}/${commit.sha}`} className="font-mono hover:text-sol-cyan transition-colors">{commit.sha.slice(0, 7)}</Link>
+                  {session && <EntityIdPill type="session" id={session} />}
                 </div>
               </div>
             </li>

@@ -150,6 +150,11 @@ export function paletteActionForKey(event: KeyboardEvent, actions: PaletteAction
 
 const PALETTE_MATCH = 1;
 const PALETTE_COMPOSE = 0.1;
+// Session filter completions: a value for a typed operator (`file:` → paths)
+// leads, since the operator alone searches nothing; an operator name for a
+// word that may just be text (`au` → author:) trails the real matches.
+const PALETTE_FILTER_VALUE = 2;
+const PALETTE_FILTER_NAME = 0.5;
 
 /** cmdk filter score: 0 hides, higher ranks first. cmdk then sorts groups by
  *  their best item, so a row that creates from the typed query (`__compose__`)
@@ -158,6 +163,8 @@ const PALETTE_COMPOSE = 0.1;
  *  the hit. */
 export function paletteItemScore(value: string, search: string): number {
   if (value.startsWith("__compose__")) return PALETTE_COMPOSE;
+  if (value.startsWith("__filter__v")) return PALETTE_FILTER_VALUE;
+  if (value.startsWith("__filter__o")) return PALETTE_FILTER_NAME;
   if (
     value.startsWith("__search__") ||
     value.startsWith("__recent__") ||

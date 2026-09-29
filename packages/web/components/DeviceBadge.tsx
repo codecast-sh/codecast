@@ -36,6 +36,9 @@ export type Device = {
   last_seen: number;
   is_remote: boolean;
   local_project_roots: string[];
+  /** Teams this machine is open to (Settings > Machines); teammates there may
+   *  start sessions on it. Empty or absent = private. */
+  shared_team_ids?: string[];
   /** Installed agent-feature snippets (by slug) + stable mode, heartbeat-reported. */
   settings?: {
     snippets?: Record<string, boolean>;
@@ -46,6 +49,9 @@ export type Device = {
     hooks_enabled?: boolean;
     /** May this machine update codecast without being asked each time? */
     auto_update?: boolean;
+    /** Does the session trailer hook add Codecast-Session to commits here?
+     *  Absent from daemons that predate the setting. */
+    session_trailer?: boolean;
   };
   /** The cast version the daemon runs, a newer release it could take, and
    *  whether it is below the fleet minimum (Settings > Daemon). */
@@ -76,6 +82,9 @@ export type Device = {
   loop_freeze_1h_ms?: number;
   loop_freeze_max_ms?: number;
   loop_freeze_top?: string;
+  /** A cloud host's own readiness (its heartbeat) and its managing laptop's report (Settings > Machines). */
+  host_readiness?: import("@codecast/shared/contracts").HostReadiness;
+  cloud_host?: import("@codecast/shared/contracts").CloudHostReport;
   online: boolean;
 };
 

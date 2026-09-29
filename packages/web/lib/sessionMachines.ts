@@ -2,13 +2,13 @@ import type { Device } from "../components/DeviceBadge";
 import { cloudPlacementFor, deviceDisplayName, platformCanOpenPath, type CloudStartFrom } from "@codecast/shared/contracts";
 import { defaultMachineId, deviceSeesPath, wakesOnUse, type MachineCandidate } from "./machinePicker";
 
-export type SessionMachine = Device & { bot_name?: string | null };
+export type SessionMachine = Device & { bot_name?: string | null; runner_name?: string | null };
 
 type Candidate = MachineCandidate & { bot_name?: string | null };
 
 export function sessionMachineChoices(
   devices: Device[],
-  boxes: Array<Omit<Device, "local_project_roots"> & { local_project_roots?: string[]; bot_name: string | null }>,
+  boxes: Array<Omit<Device, "local_project_roots"> & { local_project_roots?: string[]; bot_name: string | null; runner_name?: string | null }>,
 ): SessionMachine[] {
   const ids = new Set(devices.map((d) => d.device_id));
   return [...devices, ...boxes.filter((b) => !ids.has(b.device_id)).map((b) => ({

@@ -23,6 +23,7 @@ import {
 } from "./ui/dropdown-menu";
 import type { AgentOption, MoveVerb } from "../lib/sessionControl";
 import { MOVE_VERBS, moveAgentOptions } from "../lib/sessionControl";
+import { useCloudAgentOfConversation } from "./cloudAgents";
 
 // The unified session control: one panel behind the conversation-header badge
 // holding everything that moves a session between rails — model and effort
@@ -248,12 +249,18 @@ export function SessionControlPanel({
   // configuration once its agent is chosen.
   const [view, setView] = useState<{ step: "main" } | { step: "pick"; verb: MoveVerb } | { step: "handoff"; agent: ConvexAgentType }>({ step: "main" });
   const blank = (messageCount ?? 0) === 0;
-  const controllable = canControlModel(agentType, blank);
+  // A cloud agent runs on the provider's machines: its model is the
+  // provider's, and it cannot become another agent in place.
+  const cloud = useCloudAgentOfConversation(conversationId)?.spec;
+  const controllable = !cloud && canControlModel(agentType, blank);
   const agentLabel = formatAgentType(agentType);
   const glyph = effortGlyph(effort);
   const options = moveAgentOptions(agentType, messageCount);
+  const verbs = (Object.keys(MOVE_VERBS) as MoveVerb[]).filter((verb) => !cloud || verb !== "switch");
 
-  const stateLine = !controllable
+  const stateLine = cloud
+    ? `Runs on ${cloud.label}, which picks the model`
+    : !controllable
     ? `${agentLabel} keeps the model it launched with`
     : blank
       ? "Blank session · picks apply at launch"
@@ -335,7 +342,7 @@ export function SessionControlPanel({
       <DropdownMenuSeparator className={controllable ? "" : "hidden"} />
       <div className={SECTION_LABEL}>Move this session</div>
       <div className="pb-1">
-        {(Object.keys(MOVE_VERBS) as MoveVerb[]).map((verb) => {
+        {verbs.map((verb) => {
           const meta = MOVE_VERBS[verb];
           const Icon = meta.icon;
           return (

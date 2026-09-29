@@ -37,6 +37,7 @@ import { agentSpawnPath } from "../agentSpawnPath.js";
 import type { RemoteHost } from "../remote/session-move.js";
 import { codecastPath } from "../codecastDir.js";
 import { defaultConfigDir } from "../config/configDir.js";
+import { HOST_TAILNET_COMMAND, localTailnet, readHostTailnet, tailnetDialAddress, type TailnetRecord } from "../cloud/tailnet.js";
 
 export type HostState = "running" | "stopped" | "pending" | "missing";
 
@@ -52,6 +53,10 @@ export interface CloudHost {
   keyPath: string;
   /** Last known address. Re-read on every boot: a stopped instance loses it. */
   address?: string;
+  /** The host's node on the laptop's tailnet, learned over SSH by ensureUp.
+   * Dialed instead of `address` only while this laptop sees that node online
+   * (cloud/tailnet.ts); absent when the host is not on a tailnet. */
+  tailnet?: TailnetRecord;
   /** Stop the machine after this long with nothing using it. 0 disables. */
   idleStopMinutes?: number;
   /** The codecast device id of the daemon on the box, learned over SSH the
@@ -411,7 +416,12 @@ export async function ensureUp(
   // once and parking it in a control socket also means the transfer commands
   // that follow reuse the authenticated connection instead of re-rolling the
   // same dice.
-  const socket = path.join(os.tmpdir(), `cast-ssh-${host.user}-${address.replace(/[^\w.]/g, "_")}`);
+  // The tailnet when this laptop sees the host's node online there, else the
+  // public address. A tailnet dial that fails once drops to public for the
+  // rest of this wait: the tailnet is an optimisation, never the only way in.
+  let dial = tailnetDialAddress(host.tailnet) ?? address;
+  const socketFor = (a: string) => path.join(os.tmpdir(), `cast-ssh-${host.user}-${a.replace(/[^\w.]/g, "_")}`);
+  let socket = socketFor(dial);
   // Evict a wedged master first. A master whose link died silently (mobile
   // network flap) still owns the socket, and every client that attaches to
   // it hangs — measured: a fresh ssh took 2.6s while the multiplexed probe
@@ -419,10 +429,10 @@ export async function ensureUp(
   // round trip is evicted: `-O exit` ends a HEALTHY master too, and with it
   // every transfer riding it (the daemon's mirror push died with a silent
   // exit 255 each time a spawn woke the same host, 2026-09-29).
-  const masterRunning = spawnSync("ssh", ["-o", `ControlPath=${socket}`, "-O", "check", `${host.user}@${address}`], { timeout: 5_000, stdio: "ignore" }).status === 0;
+  const masterRunning = spawnSync("ssh", ["-o", `ControlPath=${socket}`, "-O", "check", `${host.user}@${dial}`], { timeout: 5_000, stdio: "ignore" }).status === 0;
   if (masterRunning) {
-    const answered = spawnSync("ssh", ["-o", `ControlPath=${socket}`, "-o", "ControlMaster=no", "-o", "BatchMode=yes", `${host.user}@${address}`, "true"], { timeout: 10_000, stdio: "ignore" }).status === 0;
-    if (!answered) spawnSync("ssh", ["-o", `ControlPath=${socket}`, "-O", "exit", `${host.user}@${address}`], { timeout: 5_000, stdio: "ignore" });
+    const answered = spawnSync("ssh", ["-o", `ControlPath=${socket}`, "-o", "ControlMaster=no", "-o", "BatchMode=yes", `${host.user}@${dial}`, "true"], { timeout: 10_000, stdio: "ignore" }).status === 0;
+    if (!answered) spawnSync("ssh", ["-o", `ControlPath=${socket}`, "-O", "exit", `${host.user}@${dial}`], { timeout: 5_000, stdio: "ignore" });
   }
   // A host's first boot from a machine image streams its disk in from the
   // snapshot: cloud-init finished at 140s on 2026-09-29, past the old 150s.
@@ -437,21 +447,44 @@ export async function ensureUp(
          // noticed and the socket stays wedged for ControlPersist's lifetime.
          "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",
          "-o", "ControlMaster=auto", "-o", `ControlPath=${socket}`, "-o", "ControlPersist=120",
-         `${host.user}@${address}`, "true"],
+         `${host.user}@${dial}`, "true"],
         { timeout: 60_000, stdio: "ignore" },
       );
       break;
     } catch {
+      if (dial !== address) {
+        onProgress(`tailnet address ${dial} did not answer; using ${address}`);
+        dial = address;
+        socket = socketFor(dial);
+        continue;
+      }
       if (Date.now() > sshDeadline) throw new Error(`${host.id} is running but never accepted SSH at ${address}`);
       onProgress("waiting for it to accept connections…");
       await new Promise((r) => setTimeout(r, 5000));
     }
   }
 
-  // Only the address: a field-level patch under the registry lock, so a
+  // Learn the host's tailnet node over the connection just made, so the next
+  // dial can prefer it (or stop preferring it, once the host leaves). A laptop
+  // with no tailnet of its own could not use the answer, so it does not ask.
+  const tailnet = localTailnet() ? learnHostTailnet(host, dial, socket) : host.tailnet;
+
+  // Only these fields: a field-level patch under the registry lock, so a
   // toggle or a git-access record written during the boot wait survives.
-  patchHost(host.id, { address });
-  return { ...host, address };
+  patchHost(host.id, { address, tailnet });
+  return { ...host, address, tailnet };
+}
+
+/**
+ * The host's own tailnet record, read over the control socket ensureUp just
+ * opened. An ssh that fails keeps what was recorded: a hiccup is not proof
+ * the host left the tailnet.
+ */
+function learnHostTailnet(host: CloudHost, dial: string, socket: string): TailnetRecord | undefined {
+  const r = spawnSync("ssh", ["-i", host.keyPath, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+    "-o", "ControlMaster=auto", "-o", `ControlPath=${socket}`, "-o", "ControlPersist=120",
+    `${host.user}@${dial}`, HOST_TAILNET_COMMAND], { encoding: "utf-8", timeout: 15_000, stdio: ["ignore", "pipe", "ignore"] });
+  return r.status === 0 ? readHostTailnet(r.stdout) : host.tailnet;
 }
 
 /** Put a host to sleep. This is what makes idle cost nothing. */
@@ -466,15 +499,36 @@ export function stopHost(host: CloudHost): void {
 }
 
 /**
- * The cloud hosts as RemoteHosts, using their last-known addresses — for
- * flows that must NEVER wake a sleeping box (the daemon's credential push).
- * A stopped instance has released its IP, so a quick TCP probe of port 22
- * (sshReachable) is both the liveness check and the staleness filter.
+ * The hosts answering SSH right now, as RemoteHosts at the address that
+ * answered: every registered cloud host with a last-known address (through
+ * reachableRemoteHost, so the tailnet then public), plus `also` (the Scaleway
+ * Macs, public only). For flows that must NEVER wake a sleeping box: a
+ * stopped instance has released its IP, so the probe is both the liveness
+ * check and the staleness filter.
  */
-export function listCloudRemoteHosts(): RemoteHost[] {
-  return readHosts()
-    .filter((h) => h.address)
-    .map((h) => toRemoteHost(h));
+export async function reachableRemoteHosts(also: RemoteHost[] = [], reach = sshReachable): Promise<RemoteHost[]> {
+  const [cloud, extra] = await Promise.all([
+    Promise.all(readHosts().filter((h) => h.address).map((h) => reachableRemoteHost(h, { toRemoteHost, sshReachable: reach }))),
+    Promise.all(also.map(async (h) => ((await reach(h)) ? h : null))),
+  ]);
+  return [...cloud, ...extra].filter((h): h is RemoteHost => h !== null);
+}
+
+/**
+ * The first address of a host that answers SSH: its tailnet IP when the
+ * laptop sees the node online there, then its public address. A tailnet that
+ * claims the node but does not carry the connection costs one probe, never
+ * the connection.
+ */
+export async function reachableRemoteHost(
+  host: CloudHost,
+  deps: { toRemoteHost: (h: CloudHost) => RemoteHost; sshReachable: (h: RemoteHost) => Promise<boolean> },
+): Promise<RemoteHost | null> {
+  const first = deps.toRemoteHost(host);
+  if (await deps.sshReachable(first)) return first;
+  if (!host.address || first.address === host.address) return null;
+  const pub = deps.toRemoteHost({ ...host, tailnet: undefined });
+  return (await deps.sshReachable(pub)) ? pub : null;
 }
 
 /** Does anything answer SSH there right now? Cheap, no AWS API call. */
@@ -488,12 +542,16 @@ export function sshReachable(host: RemoteHost, timeoutMs = 4000): Promise<boolea
   });
 }
 
-/** The RemoteHost shape the SSH helpers already speak. */
+/**
+ * The RemoteHost shape the SSH helpers already speak, at the address to dial:
+ * the host's tailnet IP while this laptop sees its node online there
+ * (cloud/tailnet.ts), else its public address.
+ */
 export function toRemoteHost(host: CloudHost): RemoteHost {
   if (!host.address) throw new Error(`host ${host.id} has no address — start it first`);
   const home = host.platform === "darwin" || host.provider === "scaleway-mac" ? `/Users/${host.user}` : `/home/${host.user}`;
   return {
-    address: host.address,
+    address: tailnetDialAddress(host.tailnet) ?? host.address,
     user: host.user,
     keyPath: host.keyPath,
     remoteBaseDir: `${home}/work`,

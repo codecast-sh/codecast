@@ -24,7 +24,9 @@ import {
   type CodexUsageSnapshot,
 } from "./codexUsage.js";
 
-export const CODEX_BACKEND_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
+/** The ChatGPT backend's Codex API (usage here, Codex Cloud's tasks in cloudAgents/codex.ts). */
+export const CODEX_BACKEND_BASE = "https://chatgpt.com/backend-api/wham";
+export const CODEX_BACKEND_USAGE_URL = `${CODEX_BACKEND_BASE}/usage`;
 
 /** A refusal from the ChatGPT backend, carrying what the response said about
  *  coming back. `retryAfterMs` is set only when the server named a wait (429
@@ -109,9 +111,20 @@ export function nextUsageRetry(
  * no access token (logged out, or an API-key-only login).
  */
 export function codexBackendAuthHeaders(codexHomeDir: string): Record<string, string> | null {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(path.join(codexHomeDir, "auth.json"), "utf-8");
+  } catch {
+    return null;
+  }
+  return codexBackendHeadersFromAuth(raw);
+}
+
+/** The same headers from an auth.json blob already read (null without an access token). */
+export function codexBackendHeadersFromAuth(raw: string): Record<string, string> | null {
   let tokens: any;
   try {
-    tokens = JSON.parse(fs.readFileSync(path.join(codexHomeDir, "auth.json"), "utf-8"))?.tokens;
+    tokens = JSON.parse(raw)?.tokens;
   } catch {
     return null;
   }
