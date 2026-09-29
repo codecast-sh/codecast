@@ -48,6 +48,8 @@ export interface MirrorStamp {
   complete?: boolean;
   desired_hash?: string;
   mcp_overrides_hash?: string;
+  /** The project roots the last bundle named: a root a later bundle leaves out is released, never pruned. */
+  project_roots?: string[];
 }
 
 export type RefusedReason = "other_user" | "unprovisioned" | "other_device" | "other_home";
@@ -133,11 +135,11 @@ function pidAlive(pid: number): boolean {
  * pid is dead is broken immediately; an unreadable file older than 5s too;
  * otherwise wait up to 60s in 250ms polls, then give up with the holder's pid.
  */
-export async function withMirrorLock<T>(home: string, fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+export async function withMirrorLock<T>(home: string, fn: () => Promise<T>, signal?: AbortSignal, waitMs = LOCK_WAIT_MS): Promise<T> {
   const file = path.join(home, MIRROR_LOCK_REL);
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const token = randomUUID();
-  const deadline = Date.now() + LOCK_WAIT_MS;
+  const deadline = Date.now() + waitMs;
   for (;;) {
     signal?.throwIfAborted();
     try {
@@ -416,14 +418,27 @@ function destinationRelative(home: string, rel: string, kind?: MirrorKind): stri
   return target;
 }
 
+/** The path resolves elsewhere: it, or the directory it sits in, is a link. */
+function behindProjectLink(home: string, rel: string): boolean {
+  const abs = path.join(home, rel);
+  if (fs.existsSync(abs)) return fs.realpathSync(abs) !== abs;
+  const dir = path.dirname(abs);
+  return fs.existsSync(dir) && fs.realpathSync(dir) !== dir;
+}
+
 function projectAliasDestination(home: string, rel: string, project: string, expectedTarget?: string): string {
   assertSafePath(rel);
   assertSafePath(project);
   if (!rel.startsWith(`${project}/`)) throw new Error("alias is outside its registered project");
   const file = path.join(home, rel);
-  const entry = fs.lstatSync(file);
+  const entry = fs.lstatSync(file, { throwIfNoEntry: false });
   let target: string;
-  if (entry.isSymbolicLink()) {
+  if (!entry) {
+    // Missing behind a symlinked directory (`convex -> packages/convex/convex`): the same file, at the link's real path.
+    const parent = fs.realpathSync(path.dirname(file));
+    if (parent === path.dirname(file)) throw new Error("project alias is missing or replaced");
+    target = path.relative(home, path.join(parent, path.basename(file)));
+  } else if (entry.isSymbolicLink()) {
     checkDestination(home, path.dirname(rel));
     target = path.relative(home, path.resolve(path.dirname(file), fs.readlinkSync(file)));
   } else {
@@ -803,7 +818,7 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
       assertMirrorFileContent(file);
       let before = prev?.files[file.path]?.removed ? undefined : prev?.files[file.path];
       const project = projectRoots.find((root) => file.path.startsWith(`${root}/`));
-      if (file.kind === "verbatim" && project && (before?.satisfied_alias || (fs.existsSync(path.join(home, file.path)) && fs.realpathSync(path.join(home, file.path)) !== path.join(home, file.path)))) {
+      if (file.kind === "verbatim" && project && (before?.satisfied_alias || behindProjectLink(home, file.path))) {
         const target = projectAliasDestination(home, file.path, project, before?.satisfied_alias?.target);
         if (manifest.has(target) && !stampFiles[target] && !deferred.has(file.path)) {
           deferred.add(file.path);
@@ -879,9 +894,19 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
 
   if (prev) {
     const roots = [...new Set([...bundle.header.managed_roots, ...prev.managed_roots])];
+    const under = (rel: string, roots: readonly string[]) => roots.some((root) => rel === root || rel.startsWith(`${root}/`));
+    // A project checkout the laptop no longer names (its registration gone, or a
+    // host cloned from another's image, which carries the other host's stamp)
+    // is released: its files stay and the mirror stops owning them. Pruning them
+    // deleted 716 files, 290 of them tracked, from a clone's checkout on 2026-09-29.
+    // Stamps older than project_roots mark home files by a leading dot; a
+    // project file is anything deeper that is not.
+    const releasedProject = (rel: string) => !under(rel, projectRoots)
+      && (prev.project_roots ? under(rel, prev.project_roots) : !rel.startsWith(".") && rel.includes("/"));
     for (const [rel, info] of Object.entries(prev.files)) {
       if (manifest.has(rel) || isCodecastOwnedHomePath(rel) || isAgentRuntimePath(rel)) continue;
       if (bundle.header.unmanaged_roots?.some((root) => rel === root || rel.startsWith(`${root}/`))) continue;
+      if (releasedProject(rel)) continue;
       const kind = info.kind ?? "verbatim";
       let dest = rel;
       let abs = path.join(home, rel);
@@ -1039,6 +1064,7 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
     applied_at: now().toISOString(),
     files: stampFiles,
     managed_roots: [...new Set([...bundle.header.managed_roots, ...(prev?.managed_roots ?? [])])],
+    project_roots: projectRoots,
   };
   writeMirroredFile(home, MIRROR_STAMP_REL, Buffer.from(JSON.stringify(stamp, null, 2) + "\n"), "0600");
   return result;
