@@ -195,7 +195,6 @@ const TASK_STATUS_META: Record<string, { label: string; color: string }> =
 const PLAN_STATUS_META: Record<string, { label: string; color: string }> =
   Object.fromEntries(PLAN_STATUS_OPTIONS.map((o) => [o.key, { label: o.label, color: o.color ?? "" }]));
 
-
 const AGENT_OPTIONS = AGENT_LAUNCH_OPTIONS.map((agent) => ({
   key: `agent:${agent.convexType}`,
   agentType: agent.convexType,
@@ -2889,6 +2888,113 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           </CommandPrimitive.Group>
         )}
 
+        {/* Async conversation search results */}
+        {debouncedQuery.length >= 2 && pickAllows("session") && (
+          <CommandPrimitive.Group
+            heading={searchData || titleData ? `Search Results (${searchRows.length})` : searchError ? "Search Results" : "Searching..."}
+            className={groupClass}
+          >
+            {!searchData && !searchError && searchRows.length === 0 && (
+              <CommandPrimitive.Item
+                value="__search__ loading"
+                disabled
+                className="px-4 py-3 text-center text-xs text-sol-text-dim animate-pulse cursor-default"
+              >
+                Searching conversations...
+              </CommandPrimitive.Item>
+            )}
+            {searchError && (
+              <CommandPrimitive.Item
+                value="__search__ error"
+                disabled
+                className="px-4 py-3 text-center text-xs text-sol-text-dim cursor-default"
+              >
+                {searchRows.length > 0
+                  ? "Content search timed out — showing title matches only."
+                  : "Search timed out — broad terms scan your whole history. Try a more specific word or a quoted phrase."}
+              </CommandPrimitive.Item>
+            )}
+            {searchRows.map((result: any) => (
+              <CommandPrimitive.Item
+                key={`search-${result.conversationId}`}
+                data-palette-type="session" data-palette-id={result.conversationId} data-palette-title={result.title}
+                value={`__search__ ${result.title} ${result.matches?.[0]?.content?.slice(0, 100) || ""}|||${result.conversationId}`}
+                onSelect={() => chooseSession(
+                  {
+                    _id: result.conversationId,
+                    title: result.title,
+                    updated_at: result.updatedAt,
+                    message_count: result.messageCount,
+                  },
+                  { messageId: result.matches?.[0]?.messageId }
+                )}
+                className={itemClass}
+              >
+                <SessionGlyph
+                  row={identityRowOf({ _id: result.conversationId, title: result.title, ...(result.identity ?? {}) })}
+                  className="flex-shrink-0"
+                  fallback={!result.isOwn && (result.authorAvatar || result.authorName) ? (
+                  <AvatarImg
+                    src={result.authorAvatar}
+                    alt={result.authorName}
+                    className="w-4 h-4 rounded-full flex-shrink-0"
+                    fallback={
+                      <div className="w-4 h-4 rounded-full flex-shrink-0 bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-[8px] font-medium text-sol-text-muted">
+                        {(result.authorName || "?").split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase()}
+                      </div>
+                    }
+                  />
+                ) : (
+                  <span className="text-sol-text-dim flex-shrink-0">
+                    <NavIcon type="session" />
+                  </span>
+                )}
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="truncate text-sm flex items-center gap-1.5">
+                    <SessionIdentityLine
+                      row={identityRowOf({ _id: result.conversationId, title: result.title, ...(result.identity ?? {}) })}
+                      title={cleanTitle(result.title || "Untitled")}
+                    />
+                    {!result.isOwn && (
+                      <span className="text-[10px] text-sol-text-dim flex-shrink-0">· {result.authorName}</span>
+                    )}
+                  </div>
+                  {result.matches?.[0]?.content && (
+                    <div className="truncate text-[11px] text-sol-text-dim mt-0.5">
+                      {result.matches[0].content.slice(0, 80)}
+                    </div>
+                  )}
+                </div>
+                <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">
+                  {result.titleMatch
+                    ? "title"
+                    : `${result.matches?.length || 0} match${(result.matches?.length || 0) !== 1 ? "es" : ""}`}
+                </span>
+                <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{timeAgo(result.updatedAt)}</span>
+              </CommandPrimitive.Item>
+            ))}
+            {!searchData && !searchError && searchRows.length > 0 && (
+              <CommandPrimitive.Item
+                value="__search__ content-loading"
+                disabled
+                className="px-4 py-2 text-center text-[11px] text-sol-text-dim animate-pulse cursor-default"
+              >
+                Searching message content...
+              </CommandPrimitive.Item>
+            )}
+            {searchData && searchRows.length === 0 && (
+              <CommandPrimitive.Item
+                value="__search__ empty"
+                disabled
+                className="px-4 py-3 text-center text-xs text-sol-text-dim cursor-default"
+              >
+                No conversations matched
+              </CommandPrimitive.Item>
+            )}
+          </CommandPrimitive.Group>
+        )}
+
         {(!picking || pickAllows("channel")) && chatChannelRows.length > 0 && (
           <CommandPrimitive.Group heading="Chat" className={groupClass}>
             {chatChannelRows.map((c) => (
@@ -3326,113 +3432,6 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 <span className="text-[10px] text-sol-text-dim truncate ml-auto max-w-[200px]">{dir}</span>
               </CommandPrimitive.Item>
             ))}
-          </CommandPrimitive.Group>
-        )}
-
-        {/* Async conversation search results */}
-        {debouncedQuery.length >= 2 && pickAllows("session") && (
-          <CommandPrimitive.Group
-            heading={searchData || titleData ? `Search Results (${searchRows.length})` : searchError ? "Search Results" : "Searching..."}
-            className={groupClass}
-          >
-            {!searchData && !searchError && searchRows.length === 0 && (
-              <CommandPrimitive.Item
-                value="__search__ loading"
-                disabled
-                className="px-4 py-3 text-center text-xs text-sol-text-dim animate-pulse cursor-default"
-              >
-                Searching conversations...
-              </CommandPrimitive.Item>
-            )}
-            {searchError && (
-              <CommandPrimitive.Item
-                value="__search__ error"
-                disabled
-                className="px-4 py-3 text-center text-xs text-sol-text-dim cursor-default"
-              >
-                {searchRows.length > 0
-                  ? "Content search timed out — showing title matches only."
-                  : "Search timed out — broad terms scan your whole history. Try a more specific word or a quoted phrase."}
-              </CommandPrimitive.Item>
-            )}
-            {searchRows.map((result: any) => (
-              <CommandPrimitive.Item
-                key={`search-${result.conversationId}`}
-                data-palette-type="session" data-palette-id={result.conversationId} data-palette-title={result.title}
-                value={`__search__ ${result.title} ${result.matches?.[0]?.content?.slice(0, 100) || ""}|||${result.conversationId}`}
-                onSelect={() => chooseSession(
-                  {
-                    _id: result.conversationId,
-                    title: result.title,
-                    updated_at: result.updatedAt,
-                    message_count: result.messageCount,
-                  },
-                  { messageId: result.matches?.[0]?.messageId }
-                )}
-                className={itemClass}
-              >
-                <SessionGlyph
-                  row={identityRowOf({ _id: result.conversationId, title: result.title, ...(result.identity ?? {}) })}
-                  className="flex-shrink-0"
-                  fallback={!result.isOwn && (result.authorAvatar || result.authorName) ? (
-                  <AvatarImg
-                    src={result.authorAvatar}
-                    alt={result.authorName}
-                    className="w-4 h-4 rounded-full flex-shrink-0"
-                    fallback={
-                      <div className="w-4 h-4 rounded-full flex-shrink-0 bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-[8px] font-medium text-sol-text-muted">
-                        {(result.authorName || "?").split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase()}
-                      </div>
-                    }
-                  />
-                ) : (
-                  <span className="text-sol-text-dim flex-shrink-0">
-                    <NavIcon type="session" />
-                  </span>
-                )}
-                />
-                <div className="flex-1 min-w-0">
-                  <div className="truncate text-sm flex items-center gap-1.5">
-                    <SessionIdentityLine
-                      row={identityRowOf({ _id: result.conversationId, title: result.title, ...(result.identity ?? {}) })}
-                      title={cleanTitle(result.title || "Untitled")}
-                    />
-                    {!result.isOwn && (
-                      <span className="text-[10px] text-sol-text-dim flex-shrink-0">· {result.authorName}</span>
-                    )}
-                  </div>
-                  {result.matches?.[0]?.content && (
-                    <div className="truncate text-[11px] text-sol-text-dim mt-0.5">
-                      {result.matches[0].content.slice(0, 80)}
-                    </div>
-                  )}
-                </div>
-                <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">
-                  {result.titleMatch
-                    ? "title"
-                    : `${result.matches?.length || 0} match${(result.matches?.length || 0) !== 1 ? "es" : ""}`}
-                </span>
-                <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{timeAgo(result.updatedAt)}</span>
-              </CommandPrimitive.Item>
-            ))}
-            {!searchData && !searchError && searchRows.length > 0 && (
-              <CommandPrimitive.Item
-                value="__search__ content-loading"
-                disabled
-                className="px-4 py-2 text-center text-[11px] text-sol-text-dim animate-pulse cursor-default"
-              >
-                Searching message content...
-              </CommandPrimitive.Item>
-            )}
-            {searchData && searchRows.length === 0 && (
-              <CommandPrimitive.Item
-                value="__search__ empty"
-                disabled
-                className="px-4 py-3 text-center text-xs text-sol-text-dim cursor-default"
-              >
-                No conversations matched
-              </CommandPrimitive.Item>
-            )}
           </CommandPrimitive.Group>
         )}
 
