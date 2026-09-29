@@ -22,6 +22,13 @@ interface ManifestFault {
   missingPlatform?: boolean;
 }
 
+interface PathSetup {
+  /** A Windows-side `cast` WSL sees on the PATH it appends: the npm launcher, or another program. */
+  windowsCast?: "npm" | "other";
+  /** An unrelated `cast` later on the PATH, which no new shell reaches before ours. */
+  laterCast?: boolean;
+}
+
 const RELEASE_HOST = "https://dl.codecast.sh";
 
 /** The platform key install.sh will compute on this machine. */
@@ -31,7 +38,7 @@ function platformKey() {
   return `${os}-${arch}`;
 }
 
-function install(mode: string, token = "", existingLogin = false, fault: ManifestFault = {}) {
+function install(mode: string, token = "", existingLogin = false, fault: ManifestFault = {}, paths: PathSetup = {}) {
   const home = mkdtempSync(join(tmpdir(), "cast installer "));
   homes.push(home);
   const bin = join(home, "bin");
@@ -82,9 +89,27 @@ while [ "$#" -gt 0 ]; do
 done
 exit 1
 `, { mode: 0o755 });
+  const extraPath: string[] = [];
+  const windowsCast = join(home, "mnt/c/nvm4w/nodejs/cast");
+  if (paths.windowsCast) {
+    mkdirSync(join(home, "mnt/c/nvm4w/nodejs"), { recursive: true });
+    // The POSIX launcher npm writes on Windows next to cast.cmd.
+    const target = paths.windowsCast === "npm" ? "node_modules/@codecast-sh/cli/bin/codecast.js" : "node_modules/other-cast/cli.js";
+    for (const name of ["cast", "codecast"]) {
+      writeFileSync(join(home, "mnt/c/nvm4w/nodejs", name), `#!/bin/sh\nexec node  "$basedir/${target}" "$@"\n`, { mode: 0o755 });
+    }
+    extraPath.push(join(home, "mnt/c/nvm4w/nodejs"));
+  }
+  const laterCast = join(home, "later/cast");
+  if (paths.laterCast) {
+    mkdirSync(join(home, "later"));
+    writeFileSync(laterCast, "#!/bin/sh\n", { mode: 0o755 });
+    extraPath.push(join(home, "later"));
+  }
   const env = {
     HOME: home,
-    PATH: `${bin}:/usr/bin:/bin`,
+    PATH: [bin, "/usr/bin", "/bin", ...extraPath].join(":"),
+    CAST_INSTALLER_WINDOWS_MOUNT: join(home, "mnt"),
     SHELL: "/bin/sh",
     TERM: "xterm-256color",
     TMPDIR: home,
@@ -104,6 +129,8 @@ exit 1
   return {
     ...terminal,
     installed: existsSync(join(home, ".local/bin/cast")),
+    windowsCastKept: existsSync(windowsCast),
+    laterCastKept: existsSync(laterCast),
     result: existsSync(resultPath) ? JSON.parse(readFileSync(resultPath, "utf8")) : null,
   };
 }
@@ -151,6 +178,28 @@ describe.skipIf(process.platform === "win32" || !Bun.which("python3"))("installe
     const result = install("headless", "", false, { foreignUrl: true });
     expect(result.installed).toBe(false);
     expect(result.output).toContain("outside https://dl.codecast.sh");
+  }, 30_000);
+
+  test("a Windows npm cast seen from WSL is named with its uninstall command, never deleted", () => {
+    const result = install("headless", "", false, {}, { windowsCast: "npm" });
+    expect(result.installed).toBe(true);
+    expect(result.windowsCastKept).toBe(true);
+    expect(result.output).toContain("Windows has its own cast in");
+    expect(result.output).toContain("npm uninstall -g @codecast-sh/cli");
+    expect(result.output.match(/Windows has its own/g)?.length).toBe(1);
+  }, 30_000);
+
+  test("another Windows cast gets the warning without the npm command", () => {
+    const result = install("headless", "", false, {}, { windowsCast: "other" });
+    expect(result.windowsCastKept).toBe(true);
+    expect(result.output).toContain("Windows has its own cast in");
+    expect(result.output).not.toContain("npm uninstall");
+  }, 30_000);
+
+  test("a cast that no new shell reaches before ours is left alone", () => {
+    const result = install("headless", "", false, {}, { laterCast: true });
+    expect(result.laterCastKept).toBe(true);
+    expect(result.output).not.toContain("Removing stale install");
   }, 30_000);
 
   test("a manifest without this platform is refused", () => {
