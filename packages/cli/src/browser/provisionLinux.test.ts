@@ -135,7 +135,7 @@ describe("Linux split bundle transfer", () => {
         .replaceAll("sudo ", "")
         .replaceAll("/usr/local/lib/codecast", install)
         .replaceAll("/usr/local/bin/cast", launcher)
-        .replaceAll("/home/ubuntu/.bun/bin/bun", process.execPath)], { cwd: dir, encoding: "utf8", timeout: 20_000 }).trim();
+        .replaceAll("/home/ubuntu/.bun/bin/bun", process.execPath)], { cwd: dir, encoding: "utf8", timeout: 20_000, env: { ...process.env, HOME: path.join(dir, "home") } }).trim();
     });
     const copy = spyOn(remote, "scpTo").mockImplementation((_host, local, destination) => {
       uploads.push(local);
@@ -162,6 +162,9 @@ describe("Linux split bundle transfer", () => {
     expect(fs.readFileSync(path.join(target.install, "idle-probe.py"), "utf8")).toBe("preserve probe");
     expect(fs.readFileSync(path.join(target.install, "unrelated.txt"), "utf8")).toBe("preserve unrelated");
     expect(fs.statSync(target.install).mode & 0o555).toBe(0o555);
+    // ~/.local/bin/cast, first on every agent's PATH, is this install and not a stale release binary.
+    expect(fs.readlinkSync(path.join(dir, "home/.local/bin/cast"))).toBe(target.launcher);
+    expect(fs.readlinkSync(path.join(dir, "home/.local/bin/codecast"))).toBe("cast");
     uploadLinuxCast(host, dist);
     expect(new Set(target.stages).size).toBe(2);
     expect(new Set(target.uploads).size).toBe(2);

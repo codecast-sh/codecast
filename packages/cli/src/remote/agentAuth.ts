@@ -29,6 +29,7 @@ import { PROVIDER_KEYS, type AgentClientId } from "@codecast/shared/contracts";
 import { MIRROR_EXCLUDED_ENV_VARS } from "../agentEnv.js";
 import { agentSpawnPath } from "../agentSpawnPath.js";
 import { decodeCodexAuth } from "../codexAuthDecode.js";
+import { remapHome } from "../cloud/mirror/transform.js";
 import type { RemoteHost } from "./session-move.js";
 
 // ---------------------------------------------------------------------------
@@ -42,6 +43,8 @@ export interface AgentAuthFile {
   mode: number;
   /** codex only: epoch ms of the blob's `last_refresh`, for the host-fresher rule. */
   last_refresh?: number;
+  /** `content` is base64 of the bytes (a login store that is a database, gcloud's). */
+  encoding?: "base64";
 }
 
 export interface AgentAuthBundle {
@@ -189,7 +192,8 @@ export function filterProviderAuthMap(raw: string | null, now = Date.now()): Aut
 
 export interface AgentAuthSource {
   id: string;
-  client: AgentClientId;
+  /** The agent this login belongs to; absent for a tool login (gh, a cloud or deploy CLI). */
+  client?: AgentClientId;
   /** Where the file lives on THIS machine (honours the harness's own env overrides). */
   localPath: (home: string, env: NodeJS.ProcessEnv) => string;
   /** Where it lives on the host, `~/`-relative (the harness's default there). */
@@ -197,6 +201,10 @@ export interface AgentAuthSource {
   gate: (raw: string | null, now: number) => AuthGate;
   /** Ships only alongside this source (google_accounts.json beside live gemini creds). */
   requires?: string;
+  /** The login's text when it is not simply the file's (gh keeps its token in the keychain). */
+  read?: (home: string, env: NodeJS.ProcessEnv) => string | null;
+  /** The file names laptop paths (a CLI that links directories): rewrite the home to the host's. */
+  remapHome?: boolean;
 }
 
 const xdgData = (home: string, env: NodeJS.ProcessEnv) => env.XDG_DATA_HOME || path.join(home, ".local", "share");
@@ -209,6 +217,123 @@ export const AGENT_AUTH_SOURCES: readonly AgentAuthSource[] = [
   { id: "opencode", client: "opencode", localPath: (h, e) => path.join(xdgData(h, e), "opencode", "auth.json"), remotePath: "~/.local/share/opencode/auth.json", gate: filterProviderAuthMap },
   { id: "pi", client: "pi", localPath: (h) => path.join(h, ".pi", "agent", "auth.json"), remotePath: "~/.pi/agent/auth.json", gate: filterProviderAuthMap },
 ];
+
+// ---------------------------------------------------------------------------
+// Tool logins: the other CLIs a session drives (GitHub, cloud and deploy CLIs)
+// ---------------------------------------------------------------------------
+
+/** A login file that is its own gate: present and non-empty ships as is. */
+export function presentLogin(raw: string | null): AuthGate {
+  if (raw === null) return { ship: null, reason: "no login" };
+  return raw.trim() ? { ship: raw } : { ship: null, reason: "empty" };
+}
+
+/**
+ * An OAuth login whose refresh may rotate: ship only while its access token
+ * is live, the codex rule, so the host never refreshes the laptop's grant
+ * away. `expiresField` names the expiry (an ISO date or epoch seconds/ms).
+ */
+export function liveOAuthLogin(expiresField: string, format: "json" | "toml" = "json") {
+  return (raw: string | null, now: number): AuthGate => {
+    if (raw === null) return { ship: null, reason: "no login" };
+    let expiry: unknown;
+    if (format === "json") {
+      const parsed = parseJson(raw);
+      if (!isObject(parsed)) return { ship: null, reason: "malformed" };
+      expiry = parsed[expiresField];
+    } else {
+      expiry = new RegExp(`^\\s*${expiresField}\\s*=\\s*"?([^"\\n]+)"?`, "m").exec(raw)?.[1];
+    }
+    const ms = typeof expiry === "string" && !/^\d+(\.\d+)?$/.test(expiry) ? Date.parse(expiry) : expiryMs(expiry);
+    if (ms === undefined || Number.isNaN(ms)) return { ship: raw };
+    return ms > now ? { ship: raw } : { ship: null, reason: "access token expired" };
+  };
+}
+
+/** Where a CLI keeps its config on this OS: macOS's Library folder, else its dotfile path. */
+function platformPath(darwin: string, other: string) {
+  return (home: string) => path.join(home, process.platform === "darwin" ? darwin : other);
+}
+
+/**
+ * gh's hosts.yml as the host must hold it. On a Mac gh keeps the token in the
+ * keychain and hosts.yml only names the user, so the token comes from
+ * `gh auth token` and the file is written with it inline, gh's own format when
+ * no keyring is present (the host has none).
+ */
+export function readGhLogin(home: string, env: NodeJS.ProcessEnv): string | null {
+  const dir = env.GH_CONFIG_DIR || path.join(env.XDG_CONFIG_HOME || path.join(home, ".config"), "gh");
+  let hosts = "";
+  try { hosts = fs.readFileSync(path.join(dir, "hosts.yml"), "utf-8"); } catch { return null; }
+  if (/^\s+oauth_token:\s*\S/m.test(hosts)) return hosts;
+  const r = spawnSync("gh", ["auth", "token", "--hostname", "github.com"], {
+    encoding: "utf-8", timeout: 10_000, env: { ...env, PATH: agentSpawnPath() },
+  });
+  const token = r.status === 0 ? (r.stdout ?? "").trim() : "";
+  if (!token) return null;
+  const user = /^github\.com:[\s\S]*?^\s+user:\s*(\S+)/m.exec(hosts)?.[1];
+  const protocol = /^github\.com:[\s\S]*?^\s+git_protocol:\s*(\S+)/m.exec(hosts)?.[1] ?? "https";
+  return [
+    "github.com:",
+    ...(user ? ["    users:", `        ${user}:`, `            oauth_token: ${token}`] : []),
+    `    git_protocol: ${protocol}`,
+    `    oauth_token: ${token}`,
+    ...(user ? [`    user: ${user}`] : []),
+    "",
+  ].join("\n");
+}
+
+const homeFile = (rel: string) => (home: string) => path.join(home, rel);
+
+export const TOOL_AUTH_SOURCES: readonly AgentAuthSource[] = [
+  { id: "gh", localPath: (h, e) => path.join(e.GH_CONFIG_DIR || path.join(e.XDG_CONFIG_HOME || path.join(h, ".config"), "gh"), "hosts.yml"), remotePath: "~/.config/gh/hosts.yml", gate: presentLogin, read: readGhLogin },
+  { id: "cloudflare", localPath: platformPath("Library/Preferences/cloudflare/config/default.json", ".config/cloudflare/config/default.json"), remotePath: "~/.config/cloudflare/config/default.json", gate: liveOAuthLogin("expiration_time") },
+  { id: "wrangler", localPath: (h, e) => fs.existsSync(path.join(h, ".wrangler/config/default.toml")) ? path.join(h, ".wrangler/config/default.toml") : platformPath("Library/Preferences/.wrangler/config/default.toml", ".config/.wrangler/config/default.toml")(h, e), remotePath: "~/.wrangler/config/default.toml", gate: liveOAuthLogin("expiration_time", "toml") },
+  { id: "convex", localPath: homeFile(".convex/config.json"), remotePath: "~/.convex/config.json", gate: presentLogin },
+  { id: "aws-config", localPath: (h, e) => e.AWS_CONFIG_FILE || path.join(h, ".aws/config"), remotePath: "~/.aws/config", gate: presentLogin, remapHome: true },
+  { id: "aws-credentials", localPath: (h, e) => e.AWS_SHARED_CREDENTIALS_FILE || path.join(h, ".aws/credentials"), remotePath: "~/.aws/credentials", gate: presentLogin },
+  { id: "railway", localPath: homeFile(".railway/config.json"), remotePath: "~/.railway/config.json", gate: presentLogin, remapHome: true },
+  { id: "fly", localPath: homeFile(".fly/config.yml"), remotePath: "~/.fly/config.yml", gate: presentLogin, remapHome: true },
+  { id: "vercel", localPath: platformPath("Library/Application Support/com.vercel.cli/auth.json", ".local/share/com.vercel.cli/auth.json"), remotePath: "~/.local/share/com.vercel.cli/auth.json", gate: presentLogin },
+  { id: "netlify", localPath: platformPath("Library/Preferences/netlify/config.json", ".config/netlify/config.json"), remotePath: "~/.config/netlify/config.json", gate: presentLogin },
+  { id: "supabase", localPath: homeFile(".supabase/access-token"), remotePath: "~/.supabase/access-token", gate: presentLogin },
+  { id: "stripe", localPath: (h, e) => path.join(e.XDG_CONFIG_HOME || path.join(h, ".config"), "stripe/config.toml"), remotePath: "~/.config/stripe/config.toml", gate: presentLogin, remapHome: true },
+  { id: "expo", localPath: homeFile(".expo/state.json"), remotePath: "~/.expo/state.json", gate: presentLogin },
+  { id: "kube", localPath: homeFile(".kube/config"), remotePath: "~/.kube/config", gate: presentLogin, remapHome: true },
+  { id: "npm", localPath: homeFile(".npmrc"), remotePath: "~/.npmrc", gate: presentLogin, remapHome: true },
+  { id: "netrc", localPath: homeFile(".netrc"), remotePath: "~/.netrc", gate: presentLogin },
+  { id: "pgpass", localPath: homeFile(".pgpass"), remotePath: "~/.pgpass", gate: presentLogin },
+  { id: "git-credentials", localPath: homeFile(".git-credentials"), remotePath: "~/.git-credentials", gate: presentLogin },
+];
+
+/**
+ * gcloud keeps its login in a directory of small databases and JSON files; the
+ * whole directory is the login, minus its logs and caches. The same path on
+ * every OS.
+ */
+export const GCLOUD_LOGIN_DIR = ".config/gcloud";
+const GCLOUD_SKIP = /^(?:logs|cache|surface_data|virtenv)(?:\/|$)|\.lock$|(?:^|\/)\.last_[^/]*$/;
+
+export function collectGcloudLogin(home: string, env: NodeJS.ProcessEnv): AgentAuthFile[] {
+  const root = env.CLOUDSDK_CONFIG || path.join(home, GCLOUD_LOGIN_DIR);
+  const out: AgentAuthFile[] = [];
+  const walk = (rel: string) => {
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(path.join(root, rel), { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const child = rel ? `${rel}/${e.name}` : e.name;
+      if (GCLOUD_SKIP.test(child)) continue;
+      if (e.isDirectory()) walk(child);
+      else if (e.isFile()) {
+        const bytes = fs.readFileSync(path.join(root, child));
+        if (bytes.length > 4 * 1024 * 1024) continue;
+        out.push({ path: `~/${GCLOUD_LOGIN_DIR}/${child}`, content: bytes.toString("base64"), mode: 0o600, encoding: "base64" });
+      }
+    }
+  };
+  walk("");
+  return out.some((f) => /(?:^|\/)(?:credentials\.db|application_default_credentials\.json)$/.test(f.path)) ? out : [];
+}
 
 /** The exact filenames the daemon's fs.watch reacts to, per source directory. */
 export const AGENT_AUTH_WATCH_FILES: ReadonlySet<string> = new Set(["auth.json", "oauth_creds.json", "google_accounts.json", "settings.json"]);
@@ -287,6 +412,10 @@ export interface CollectOptions {
   codexTrustPaths?: string[];
   /** Leave the settings.json env out (a trust-only bundle). */
   withClaudeEnv?: boolean;
+  /** Leave the tool logins (gh, cloud and deploy CLIs) out. */
+  withToolLogins?: boolean;
+  /** The host's home: a tool login that names laptop paths is rewritten to it; without it those logins ship as they are. */
+  hostHome?: string;
 }
 
 export interface CollectedBundle {
@@ -324,17 +453,21 @@ export function collectAgentAuthBundle(opts: CollectOptions): CollectedBundle {
   const absent: string[] = [];
   const skipped: Array<{ id: string; reason: string }> = [];
   const shipped = new Set<string>();
-  for (const source of AGENT_AUTH_SOURCES) {
+  for (const source of [...AGENT_AUTH_SOURCES, ...(opts.withToolLogins === false ? [] : TOOL_AUTH_SOURCES)]) {
     const read = readIfFile(source.localPath(opts.home, env));
     if (read === "missing") { absent.push(source.remotePath); continue; }
     if (typeof read === "string") { skipped.push({ id: source.id, reason: read }); continue; }
-    const raw = read.text;
+    const text = source.read ? source.read(opts.home, env) : read.text;
+    if (text === null) { skipped.push({ id: source.id, reason: "no login" }); continue; }
+    if (source.remapHome && !opts.hostHome && text.includes(opts.home)) { skipped.push({ id: source.id, reason: "names laptop paths and no host home was given" }); continue; }
+    const raw = source.remapHome && opts.hostHome ? remapHome(text, opts.home, opts.hostHome) : text;
     if (source.requires && !shipped.has(source.requires)) { skipped.push({ id: source.id, reason: `${source.requires} not shipped` }); continue; }
     const gate = source.gate(raw, now);
     if (gate.ship === null) { skipped.push({ id: source.id, reason: gate.reason ?? "not pushable" }); continue; }
     shipped.add(source.id);
     files.push({ path: source.remotePath, content: gate.ship, mode: 0o600, ...(gate.lastRefresh !== undefined ? { last_refresh: gate.lastRefresh } : {}) });
   }
+  if (opts.withToolLogins !== false) files.push(...collectGcloudLogin(opts.home, env));
   const bundle: AgentAuthBundle = {
     origin: { user_id: opts.userId, device_id: opts.deviceId, pushed_at: new Date(now).toISOString() },
     files,
@@ -386,7 +519,7 @@ export function assertNoLaptopPaths(bundle: AgentAuthBundle, home: string): void
 
 /** The bundle's one-line description for logs: which harnesses ship. */
 export function describeBundle(bundle: AgentAuthBundle): string {
-  const ids = bundle.files.map((f) => AGENT_AUTH_SOURCES.find((s) => s.remotePath === f.path)?.id ?? f.path).filter((id) => id !== "gemini-accounts");
+  const ids = [...new Set(bundle.files.map((f) => [...AGENT_AUTH_SOURCES, ...TOOL_AUTH_SOURCES].find((s) => s.remotePath === f.path)?.id ?? (f.path.startsWith(`~/${GCLOUD_LOGIN_DIR}/`) ? "gcloud" : f.path)))].filter((id) => id !== "gemini-accounts");
   const env = bundle.claudeEnv ? Object.keys(bundle.claudeEnv).length : 0;
   return `${ids.length ? ids.join(", ") : "no logins"}${env ? `, ${env} env key${env === 1 ? "" : "s"}` : ""}${bundle.codexTrustPaths.length ? `, trust ${bundle.codexTrustPaths.length}` : ""}`;
 }

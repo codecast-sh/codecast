@@ -278,6 +278,7 @@ export function agentLoginsBundleFor(host: RemoteHost, localGitRoot: string | un
     userId: sources.userId,
     deviceId: sources.deviceId,
     codexTrustPaths: localGitRoot ? [remoteRepoPath(host, localGitRoot)] : [],
+    hostHome: remoteHome(host),
   });
 }
 

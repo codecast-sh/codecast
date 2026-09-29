@@ -42,7 +42,7 @@
  */
 
 export const AGENT_AUTH_RECEIVER = `
-import json, os, sys, time, re, shutil, calendar, errno
+import json, os, sys, time, re, shutil, calendar, errno, base64
 
 HOME = os.path.expanduser("~")
 CODECAST = os.path.join(HOME, ".codecast")
@@ -100,8 +100,8 @@ def write_atomic(dest, data, mode=0o600):
     tmp = os.path.join(d, ".cast-auth-%d" % os.getpid())
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
     try:
-        with os.fdopen(fd, "w") as f:
-            f.write(data)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data if isinstance(data, bytes) else data.encode("utf-8"))
             f.flush()
             os.fsync(f.fileno())
         os.chmod(tmp, mode)
@@ -274,6 +274,8 @@ def main():
                 content = f.get("content")
                 if not isinstance(content, str):
                     raise ValueError("content is not a string")
+                if f.get("encoding") == "base64":
+                    content = base64.b64decode(content, validate=True)
                 if rel == "~/.codex/auth.json":
                     cur = read_json(dest) if os.path.isfile(dest) and not os.path.islink(dest) else None
                     host_ms = iso_ms(cur.get("last_refresh")) if isinstance(cur, dict) else None

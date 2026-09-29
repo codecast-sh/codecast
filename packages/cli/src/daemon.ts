@@ -57,7 +57,7 @@ import {
   writeDeviceAccountStamp,
 } from "./deviceAccount.js";
 import { readInputIdleMs } from "./inputIdle.js";
-import { copyAgentAuthToRemoteAsync, copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, listScalewayHosts, readPushableCredentialAsync, type RemoteHost } from "./remote/session-move.js";
+import { copyAgentAuthToRemoteAsync, copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, listScalewayHosts, readPushableCredentialAsync, remoteHome, type RemoteHost } from "./remote/session-move.js";
 import { AGENT_AUTH_WATCH_FILES, agentAuthHostKey, agentAuthWatchDirs, assertNoLaptopPaths, bundleHash, collectAgentAuthBundle, describeBundle, laptopHome, planAgentAuthPush } from "./remote/agentAuth.js";
 import { hostForDevice, listCloudRemoteHosts, readHosts, sshReachable, toRemoteHost } from "./browser/cloudHost.js";
 import {
@@ -3449,7 +3449,10 @@ async function pushAgentAuthToRemoteHosts(reason: string, opts: { onlyIfChanged?
     const config = readConfig();
     if (!config?.user_id) return;
     const home = laptopHome();
-    const { bundle, skipped, envSkipped } = collectAgentAuthBundle({ home, now: Date.now(), userId: config.user_id, deviceId: deviceId() });
+    const reachable = await reachableTransferHosts();
+    // One bundle per host home: a tool login that names laptop paths is rewritten to the home it lands in.
+    for (const hostHome of new Set(reachable.map((h) => remoteHome(h)))) {
+    const { bundle, skipped, envSkipped } = collectAgentAuthBundle({ home, now: Date.now(), userId: config.user_id, deviceId: deviceId(), hostHome });
     assertNoLaptopPaths(bundle, home);
     // Skipped sources once per distinct set, not every tick: the state is
     // what matters ("codex is logged out here"), not the polling.
@@ -3460,7 +3463,7 @@ async function pushAgentAuthToRemoteHosts(reason: string, opts: { onlyIfChanged?
       if (envSkipped.length) log(`[REMOTE-AUTH] settings.json env keys not mirrored: ${envSkipped.map((e) => `${e.key} (${e.reason})`).join(", ")}`);
     }
     const hash = bundleHash(bundle);
-    const hosts = planAgentAuthPush(await reachableTransferHosts(), hash, lastPushedAgentAuthHashByHost, opts);
+    const hosts = planAgentAuthPush(reachable.filter((h) => remoteHome(h) === hostHome), hash, lastPushedAgentAuthHashByHost, opts);
     for (const host of hosts) {
       const key = agentAuthHostKey(host);
       const res = await copyAgentAuthToRemoteAsync(host, bundle);
@@ -3480,6 +3483,7 @@ async function pushAgentAuthToRemoteHosts(reason: string, opts: { onlyIfChanged?
       if (!res.kept.length) for (const kk of [...agentAuthKeptLogged]) if (kk.startsWith(`${key}:`)) agentAuthKeptLogged.delete(kk);
       for (const e of res.errors ?? []) log(`[REMOTE-AUTH] ${key}: ${e}`, "warn");
       if (changed) log(`[REMOTE-AUTH] pushed agent logins (${describeBundle(bundle)}) to ${key} (${reason})`);
+    }
     }
   } catch (err) {
     log(`[REMOTE-AUTH] agent logins push failed (${reason}): ${err instanceof Error ? err.message : String(err)}`);
