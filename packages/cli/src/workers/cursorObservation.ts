@@ -97,7 +97,7 @@ async function observeComposers(file: string, home: string): Promise<ComposerObs
  *  its cwd and title. The chat id is the agent-transcripts id and the id
  *  `cursor-agent --resume` takes. */
 export async function findCursorCliChat(home: string, chatId: string): Promise<{ dir: string; cwd?: string; title?: string; parentAgentId?: string; description?: string } | null> {
-  // A Cursor Cloud agent's mirror (cursorCloud.ts) keeps the same meta.json.
+  // A Cursor Cloud agent's mirror (cloudAgents/watcher.ts) keeps the same meta.json.
   const dirs = [codecastPath('cursor-cloud', path.basename(chatId))];
   const root = path.join(home, '.cursor', 'chats');
   try { for (const bucket of await fs.promises.readdir(root)) dirs.push(path.join(root, bucket, chatId)); }

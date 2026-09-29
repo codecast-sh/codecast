@@ -298,6 +298,52 @@ describe("push", () => {
     expect(commitEvent.conversation_id).toBe(CONV);
   });
 
+  test("a Codecast-Session trailer links only a team-readable session, and never takes a commit from another person", async () => {
+    const TRAILED = "t".repeat(32);
+    const ROUTED_PRIVATE = "p".repeat(32);
+    const MATE = "m".repeat(32);
+    const FOREIGN = "f".repeat(32);
+    const sha = "1111111111111111111111111111111111111111";
+    const trailed = (id: string) => pushPayload({
+      commits: [{ ...pushPayload().commits[0], message: `fix: a thing\n\nCodecast-Session: https://codecast.sh/conversation/${id}` }],
+    });
+    const conversations = [
+      { _id: CONV, user_id: "user_1", is_private: true, title: "Git backend", git_branch: "ct-48301-linking" },
+      // Same person as CONV, shared with the team.
+      { _id: TRAILED, user_id: "user_1", team_id: TEAM, is_private: false, title: "Trailed" },
+      // Routed to the team but private: routing grants nothing.
+      { _id: ROUTED_PRIVATE, user_id: "user_1", team_id: TEAM, is_private: true, title: "Private" },
+      // Shared with the team, but somebody else's.
+      { _id: MATE, user_id: "user_2", team_id: TEAM, is_private: false, title: "Mate" },
+      { _id: FOREIGN, user_id: "user_3", team_id: "team_other", is_private: false, title: "Elsewhere" },
+    ];
+    // The row exists, linked by an earlier guess (the one session on the branch).
+    const seeded = (conversation_id?: string) => ({
+      conversations,
+      commits: [{ _id: "commit_1", sha, message: "fix: a thing", timestamp: 1, repository: "codecast-sh/codecast", author_name: "A", author_email: "", conversation_id }],
+    });
+    const run = async (id: string, linked?: string) => {
+      const ctx = context(trailed(id), undefined, "push", seeded(linked));
+      await (processPushEvent as any)._handler(ctx, { event_id: "event_1" });
+      return ctx;
+    };
+
+    // Same owner as the guess, team-readable: the trailer corrects the guess.
+    const ctx = await run(TRAILED, CONV);
+    expect(ctx.db._tables.commits[0].conversation_id).toBe(TRAILED);
+    expect(ctx.db._tables.external_events.find((e: any) => e.kind === "commit").conversation_id).toBe(TRAILED);
+
+    // A private session routed to the team is not linked, even on an empty row
+    // (the branch guess fills that row instead).
+    expect((await run(ROUTED_PRIVATE)).db._tables.commits[0].conversation_id).not.toBe(ROUTED_PRIVATE);
+    expect((await run(ROUTED_PRIVATE, CONV)).db._tables.commits[0].conversation_id).toBe(CONV);
+    // Another person's session links an empty row but never replaces a link.
+    expect((await run(MATE)).db._tables.commits[0].conversation_id).toBe(MATE);
+    expect((await run(MATE, CONV)).db._tables.commits[0].conversation_id).toBe(CONV);
+    // A trailer naming a session outside the repository's team is ignored.
+    expect((await run(FOREIGN, CONV)).db._tables.commits[0].conversation_id).toBe(CONV);
+  });
+
   test("with no edit row naming the sha, one session on the branch is enough", async () => {
     const ctx = context(pushPayload({ ref: "refs/heads/ct-48298-git-backend" }), undefined, "push");
     await (processPushEvent as any)._handler(ctx, { event_id: "event_1" });

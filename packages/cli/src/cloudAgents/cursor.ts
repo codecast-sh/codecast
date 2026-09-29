@@ -1,34 +1,27 @@
 /**
- * Cursor Cloud Agents (cursor.com/agents) as a codecast session.
+ * Cursor Cloud Agents (cursor.com/agents): the cloud agent adapter.
  *
- * A cloud agent runs in Cursor's VM against a GitHub repo, so no transcript
- * lands on this machine. The Cloud Agents API (api.cursor.com, v1) splits one
- * agent into sequential runs, one per prompt: GET /v1/agents lists them, each
- * run's SSE stream replays its assistant text and tool calls (kept 24h), and
- * the v0 conversation endpoint keeps every prompt and reply as text for good.
+ * The Cloud Agents API (api.cursor.com, v1) splits one agent into sequential
+ * runs, one per prompt: GET /v1/agents lists them, each run's SSE stream
+ * replays its assistant text and tool calls (kept 24h), and the v0
+ * conversation endpoint keeps every prompt and reply as text for good. The
+ * adapter merges the streams into one agent-wide log (kept in the mirror's
+ * events.json, so it outlives the stream), follows a running run live, and
+ * renders the transcript from the conversation and the log.
  *
- * The watcher mirrors each agent into a Cursor-format JSONL transcript under
- * ~/.codecast/cursor-cloud/<agent id>/, the same shape cursor-agent writes, and
- * emits the event the Cursor transcript watcher does, so the whole Cursor
- * pipeline (per-record delta sync, stub binding, status from turn_ended) runs
- * unchanged. Like cursor-agent it rewrites the file whole on each change.
- *
- * The write side (create an agent, follow-up runs, cancel) is CursorCloudApi,
- * driven by the daemon's start/deliver/escape paths. The key is the user's
+ * The core (watcher.ts, sessions.ts) does the rest: the mirror under
+ * ~/.codecast/cursor-cloud/<agent id>/, which the Cursor transcript pipeline
+ * syncs, and the create / follow-up / cancel paths. The key is the user's
  * Cursor API key from the provider key store (`cast keys set cursor`).
  */
-import { EventEmitter } from "events";
-import * as fs from "fs";
-import * as path from "path";
-import { CLIENT_ERROR_BANNER_PREFIX } from "@codecast/shared/contracts";
-import { codecastPath } from "./codecastDir.js";
-import { repoFromSourceUrl } from "./claudeCloud.js";
-import { parseSseStream } from "./sse.js";
-import type { CursorTranscriptEvent } from "./cursorTranscriptWatcher.js";
+import { CLOUD_AGENT_PROVIDERS } from "@codecast/shared/contracts";
+import { parseSseStream } from "../sse.js";
+import { MirrorTranscript } from "./transcript.js";
+import { CloudAgentBusyError, CloudAgentSetupError, type CloudAgentAdapter, type CloudAgentGit, type CloudAgentHandle, type CloudAgentListItem, type CloudAgentMirror } from "./types.js";
+import type { CloudAgentSession } from "./sessions.js";
 
+const CURSOR = CLOUD_AGENT_PROVIDERS.cursor;
 export const CURSOR_API_BASE = "https://api.cursor.com";
-/** How far back the first sight of a cloud agent reaches. */
-const BACKFILL_MS = 30 * 24 * 3600_000;
 const MAX_LIST_PAGES = 5;
 const RESULT_TEXT_MAX = 8_000;
 /** Bump when the rendered transcript changes shape: every mirror re-renders once. */
@@ -335,76 +328,52 @@ export function buildCursorCloudTranscript(input: CursorCloudTranscriptInput): s
   if (lastReply && fromLog.length > 1 && !turnText(fromLog[fromLog.length - 1]).includes(lastReply) && turnText(fromLog[fromLog.length - 2]).includes(lastReply)) offset++;
   const count = Math.max(turns.length, offset + fromLog.length);
 
-  const lines: string[] = [];
-  const push = (rec: Record<string, unknown>) => lines.push(JSON.stringify(rec));
   // Cursor links an agent by its bare id (`[Name](bc-…)`), which only its own app resolves.
-  const text = (t: string) => ({ type: "text", text: t.replace(/\]\((bc-[0-9a-f-]{8,})\)/g, "](https://cursor.com/agents/$1)") });
-  let clock = input.createdAt;
-  // Calls already shown. A call can complete turns after it started (a forked
-  // worker's `task` completes when the worker reports back): its result then
-  // lands where it happened, under the call's one row.
-  const opened = new Set<string>();
+  const tx = new MirrorTranscript(input.createdAt, (t) => t.replace(/\]\((bc-[0-9a-f-]{8,})\)/g, `](${CURSOR.agentUrl("$1")})`));
 
   for (let i = 0; i < count; i++) {
     const turn = turns[i];
     const logged = i >= offset ? fromLog[i - offset] : undefined;
-    if (logged?.start) clock = Math.max(clock, logged.start);
-    // Every record names a stable id (what it renders from), so a row keeps
-    // its identity when a turn switches from the conversation's text to the
-    // log's, or an earlier turn gains detail; ids never move between roles.
-    if (turn?.prompt !== undefined) push({ role: "user", id: turn.promptId, timestamp: clock, message: { content: [text(turn.prompt)] } });
-    if (i === 0 && input.notice) push({ role: "assistant", id: "notice-start", timestamp: clock, message: { content: [text(`ℹ ${input.notice}`)] } });
+    tx.advanceTo(logged?.start);
+    // Ids name what a row renders from (a conversation message, a stream
+    // event, a call), so a row keeps its identity when a turn switches from
+    // the conversation's text to the log's, or an earlier turn gains detail.
+    if (turn?.prompt !== undefined) tx.user(turn.promptId, turn.prompt);
+    if (i === 0 && input.notice) tx.notice(input.notice);
 
     if (logged && logged.events.some((e) => e.event === "assistant" || e.event === "tool_call")) {
-      let pending = "";
-      let pendingId: string | undefined;
-      // A record is dated by its first event, never by when it was flushed: a
-      // row's timestamp is fixed at its first sync, and a turn's trailing step
-      // marker already belongs to the next turn.
-      let pendingAt = clock;
-      const flush = (extra: unknown[] = [], id?: string) => {
-        const content = [...(pending.trim() ? [text(pending.trim())] : []), ...extra];
-        const recordId = id ?? (pendingId ? `seg-${pendingId}` : undefined);
-        const at = pendingId ? pendingAt : clock;
-        pending = "";
-        pendingId = undefined;
-        if (content.length) push({ role: "assistant", id: recordId, timestamp: at, message: { content } });
-      };
       for (const e of logged.events) {
-        if (e.event === "step") { flush(); continue; }
+        if (e.event === "step") { tx.breakSegment(); continue; }
         if (e.event !== "assistant" && e.event !== "tool_call") continue;
-        clock = eventClock(e, clock);
+        tx.clock = eventClock(e, tx.clock);
         if (e.event === "assistant" && typeof e.data.text === "string") {
-          if (!pendingId) { pendingId = e.id; pendingAt = clock; }
-          pending += e.data.text;
+          tx.appendText(e.id, e.data.text);
         } else if (e.event === "tool_call") {
+          // A call can complete turns after it started (a forked worker's
+          // `task` completes when the worker reports back): its result then
+          // lands where it happened, under the call's one row.
           const use = cloudToolUse(e.data);
-          if (!opened.has(use.id)) {
-            opened.add(use.id);
-            flush([{ type: "tool_use", ...use }], `use-${use.id}`);
-          } else {
-            flush();
-          }
+          tx.toolUse(use);
           if (e.data.status === "completed") {
             const res = cloudToolResult(e.data);
-            push({ role: "user", id: `result-${use.id}`, timestamp: clock, message: { content: [{ type: "tool_result", tool_use_id: use.id, content: res.content, ...(res.isError ? { is_error: true } : {}) }] } });
+            tx.toolResult(use.id, res.content, res.isError);
           }
         }
       }
-      flush();
+      tx.breakSegment();
     } else {
-      for (const reply of turn?.replies ?? []) push({ role: "assistant", id: reply.id, timestamp: clock, message: { content: [text(reply.text)] } });
+      for (const reply of turn?.replies ?? []) tx.assistant(reply.id, reply.text);
     }
 
     const isLast = i === count - 1;
     const run = input.latestRun;
     if (isLast && run && (run.status === "ERROR" || run.status === "EXPIRED")) {
-      push({ role: "assistant", id: `error-${run.id}`, timestamp: Date.parse(run.updatedAt) || clock, message: { content: [text(`${CLIENT_ERROR_BANNER_PREFIX} Cursor Cloud run ${run.status.toLowerCase()}`)] } });
+      tx.error(`error-${run.id}`, `Cursor Cloud run ${run.status.toLowerCase()}`, Date.parse(run.updatedAt));
     }
     // Only the last turn can still be going: until its log closes it, or its run ends.
-    if (!isLast || logged?.ended || !run || TERMINAL_RUN_STATUSES.has(run.status)) push({ type: "turn_ended", status: "success" });
+    if (!isLast || logged?.ended || !run || TERMINAL_RUN_STATUSES.has(run.status)) tx.turnEnded();
   }
-  return lines.length ? `${lines.join("\n")}\n` : "";
+  return tx.toString();
 }
 
 /** Forked workers a transcript's `task` calls started: their agent ids and descriptions. */
@@ -417,46 +386,13 @@ export function forkedWorkers(log: CursorRunEvent[]): Array<{ agentId: string; d
   return [...out].map(([agentId, description]) => ({ agentId, description }));
 }
 
-/** `https://github.com/o/r` from any GitHub remote form, or null. */
-export function githubHttpsUrl(remote: string | undefined): string | null {
-  const repo = repoFromSourceUrl(remote?.trim());
-  return repo ? `https://github.com/${repo.owner}/${repo.name}` : null;
-}
+// ── Adapter ──────────────────────────────────────────────────────────────────
 
-// ── Mirror watcher ───────────────────────────────────────────────────────────
-
-export interface CursorCloudWatcherOptions {
-  pollMs?: number;
-  rootDir?: string;
-  readKey: () => string | null;
-  /** Import every cloud agent on the account (the account's cursor_cloud_sync
-   *  setting). Off, only the agents codecast started (and their forked
-   *  workers) are mirrored. */
-  importAll?: () => boolean;
-  /** Whether codecast started this agent. */
-  isOwnAgent?: (agentId: string) => boolean;
-  resolveRepoDir?: (repo: { owner: string; name: string }) => Promise<string | null>;
-  fetchImpl?: typeof fetch;
-  now?: () => number;
-  log?: (msg: string) => void;
-}
-
-interface AgentState {
-  /** The agent's updatedAt when it was last mirrored with every run settled. */
-  updatedAt?: string;
-  /** A forked worker's parent agent, and what the parent's task call called it. */
-  parent?: string;
-  description?: string;
-}
-
-/** What a mirror keeps per agent on disk: its merged stream log and the runs already read to the end. */
-interface AgentLog { events: CursorRunEvent[]; readRuns: string[] }
-
-/** The branch (and pull request) the agent last pushed, from its runs. */
-export interface CursorCloudGit { agentId: string; repoUrl?: string; branch?: string; prUrl?: string }
+/** What the mirror keeps per agent (events.json): its merged stream log and the runs already read to the end. */
+export interface CursorAgentLog { events: CursorRunEvent[]; readRuns: string[] }
 
 /** The agent's newest pushed branch: its runs' `git` (per agent, not per run) or a `result` event's. */
-export function latestCursorGit(agentId: string, runs: Array<CursorCloudRun & { git?: { branches?: Array<{ repoUrl?: string; branch?: string; prUrl?: string }> } }>, log: CursorRunEvent[]): CursorCloudGit | null {
+export function latestCursorGit(agentId: string, runs: Array<CursorCloudRun & { git?: { branches?: Array<{ repoUrl?: string; branch?: string; prUrl?: string }> } }>, log: CursorRunEvent[]): CloudAgentGit | null {
   const fromLog = [...log].reverse().find((e) => e.event === "result" && e.data.git?.branches?.length)?.data.git.branches;
   const fromRuns = [...runs].reverse().find((r) => r.git?.branches?.length)?.git?.branches;
   const b = (fromLog ?? fromRuns)?.at(-1);
@@ -464,184 +400,95 @@ export function latestCursorGit(agentId: string, runs: Array<CursorCloudRun & { 
   return { agentId, ...(b.repoUrl ? { repoUrl: b.repoUrl.startsWith("http") ? b.repoUrl : `https://${b.repoUrl}` } : {}), ...(b.branch ? { branch: b.branch } : {}), ...(b.prUrl ? { prUrl: b.prUrl } : {}) };
 }
 
-export declare interface CursorCloudWatcher {
-  on(event: "session", listener: (e: CursorTranscriptEvent) => void): this;
-  on(event: "git", listener: (g: CursorCloudGit) => void): this;
-  on(event: "error", listener: (err: Error) => void): this;
-  on(event: "ready", listener: () => void): this;
+export interface CursorCloudAdapterOptions {
+  /** The Cursor API key on this machine, or null. */
+  readKey: () => string | null;
+  fetchImpl?: typeof fetch;
 }
 
-export class CursorCloudWatcher extends EventEmitter {
-  private timer: NodeJS.Timeout | null = null;
-  private inFlight = false;
-  private readonly pollMs: number;
-  readonly rootDir: string;
-  private readonly statePath: string;
-  private readonly readKey: () => string | null;
-  private readonly importAll: () => boolean;
-  private readonly isOwnAgent: (agentId: string) => boolean;
-  private readonly resolveRepoDir: (repo: { owner: string; name: string }) => Promise<string | null>;
-  private readonly fetchImpl: typeof fetch;
-  private readonly now: () => number;
-  private readonly log: (msg: string) => void;
-  private state: { format?: number; agents: Record<string, AgentState> } = { format: MIRROR_FORMAT, agents: {} };
+export class CursorCloudAdapter implements CloudAgentAdapter<CursorCloudApi, CursorCloudAgent, CursorAgentLog> {
+  readonly spec = CURSOR;
+  readonly dir = "cursor-cloud";
+  readonly mirrorFormat = MIRROR_FORMAT;
+  readonly credentialsMissing = "Cursor Cloud needs a Cursor API key on this machine.";
+  readonly credentialHoldReason = "waiting for a Cursor API key on this machine";
   /** Live runs being followed, by run id. */
   private readonly followers = new Map<string, AbortController>();
-  private readonly logs = new Map<string, AgentLog>();
-  private readonly renderTimers = new Map<string, NodeJS.Timeout>();
-  private readonly mirroring = new Map<string, Promise<void>>();
-  private readonly lastGit = new Map<string, string>();
+  private readonly fetchImpl: typeof fetch;
 
-  constructor(opts: CursorCloudWatcherOptions) {
-    super();
-    this.pollMs = opts.pollMs ?? 30_000;
-    this.rootDir = opts.rootDir ?? codecastPath("cursor-cloud");
-    this.statePath = path.join(this.rootDir, "state.json");
-    this.readKey = opts.readKey;
-    this.importAll = opts.importAll ?? (() => true);
-    this.isOwnAgent = opts.isOwnAgent ?? (() => false);
-    this.resolveRepoDir = opts.resolveRepoDir ?? (async () => null);
+  constructor(private readonly opts: CursorCloudAdapterOptions) {
     this.fetchImpl = opts.fetchImpl ?? fetch;
-    this.now = opts.now ?? Date.now;
-    this.log = opts.log ?? (() => {});
   }
 
-  api(): CursorCloudApi | null {
-    const key = this.readKey();
+  client(): CursorCloudApi | null {
+    const key = this.opts.readKey();
     return key ? new CursorCloudApi(key, this.fetchImpl) : null;
   }
 
-  transcriptPath(agentId: string): string {
-    return path.join(this.rootDir, agentId, `${agentId}.jsonl`);
+  isAgentId(id: string): boolean {
+    return id.startsWith(CURSOR.sessionIdPrefix);
   }
 
-  start(): void {
-    if (this.timer) return;
-    try {
-      const parsed = JSON.parse(fs.readFileSync(this.statePath, "utf-8"));
-      if (parsed?.agents) this.state = parsed;
-    } catch {}
-    // Rendered by an older format: forget which agents are settled so each
-    // re-renders, and announce nothing stale (a row's timestamp is set once).
-    const staleFormat = this.state.format !== MIRROR_FORMAT;
-    if (staleFormat) {
-      for (const st of Object.values(this.state.agents)) delete st.updatedAt;
-      this.state.format = MIRROR_FORMAT;
-    }
-    this.emit("ready");
-    // The priming pass every transcript watcher makes: announce what is on
-    // disk, since a file written just before a restart may never have synced
-    // (the sync pipeline skips what it already has).
-    for (const agentId of staleFormat || !fs.existsSync(this.rootDir) ? [] : fs.readdirSync(this.rootDir)) {
-      const file = this.transcriptPath(agentId);
-      if (agentId.startsWith("bc-") && fs.existsSync(file)) this.emit("session", { sessionId: agentId, filePath: file, eventType: "add" });
-    }
-    this.timer = setInterval(() => { void this.poll(); }, this.pollMs);
-    setImmediate(() => { void this.poll(); });
+  loadData(raw: any): CursorAgentLog {
+    return { events: Array.isArray(raw?.events) ? raw.events : [], readRuns: Array.isArray(raw?.readRuns) ? raw.readRuns : [] };
   }
 
-  stop(): void {
-    if (this.timer) clearInterval(this.timer);
-    this.timer = null;
-    for (const c of this.followers.values()) c.abort();
-    this.followers.clear();
-    for (const t of this.renderTimers.values()) clearTimeout(t);
-    this.renderTimers.clear();
+  async listAgents(api: CursorCloudApi, cursor?: string): Promise<{ items: CloudAgentListItem<CursorCloudAgent>[]; nextCursor?: string }> {
+    const data = await api.listAgents(100, cursor);
+    return { items: (data.items ?? []).map((agent) => ({ id: agent.id, updatedAt: agent.updatedAt, active: agent.status === "ACTIVE", agent })), nextCursor: data.nextCursor };
   }
 
-  /** One pass: list agents, mirror the ones that moved. Never throws. */
-  async poll(): Promise<void> {
-    if (this.inFlight) return;
-    const api = this.api();
-    if (!api) return;
-    this.inFlight = true;
-    try {
-      const horizon = this.now() - BACKFILL_MS;
-      let cursor: string | undefined;
-      for (let page = 0; page < MAX_LIST_PAGES; page++) {
-        const data = await api.listAgents(100, cursor);
-        let reachedHorizon = false;
-        for (const agent of data.items ?? []) {
-          if (Date.parse(agent.updatedAt) < horizon) { reachedHorizon = true; continue; }
-          if (!this.importAll() && !this.isOwnAgent(agent.id)) continue;
-          if (this.state.agents[agent.id]?.updatedAt === agent.updatedAt && agent.status !== "ACTIVE") continue;
-          await this.mirror(agent.id, agent);
-        }
-        if (reachedHorizon || !data.nextCursor) break;
-        cursor = data.nextCursor;
-      }
-      // Forked workers are not listed; they are found through their parent and revisited here.
-      for (const [id, st] of Object.entries(this.state.agents)) {
-        if (!st.parent || st.updatedAt) continue;
-        await this.mirror(id);
-      }
-    } catch (err) {
-      this.emit("error", err instanceof Error ? err : new Error(String(err)));
-    } finally {
-      this.inFlight = false;
-    }
-  }
-
-  /** Mirror one agent now (after codecast created it or sent it a run). */
-  follow(agentId: string): Promise<void> {
-    return this.mirror(agentId).catch((err) => { this.emit("error", err instanceof Error ? err : new Error(String(err))); });
-  }
-
-  private mirror(agentId: string, known?: CursorCloudAgent): Promise<void> {
-    // One mirror per agent at a time; a request during one waits for it and runs after.
-    const prior = this.mirroring.get(agentId) ?? Promise.resolve();
-    const next = prior.catch(() => {}).then(() => this.mirrorOnce(agentId, known));
-    this.mirroring.set(agentId, next);
-    return next.finally(() => { if (this.mirroring.get(agentId) === next) this.mirroring.delete(agentId); });
-  }
-
-  private async mirrorOnce(agentId: string, known?: CursorCloudAgent): Promise<void> {
-    const api = this.api();
-    if (!api) return;
+  async mirror(api: CursorCloudApi, handle: CloudAgentHandle<CursorAgentLog>, known: CursorCloudAgent | undefined): Promise<CloudAgentMirror> {
+    const agentId = handle.agentId;
     const agent = known ?? await api.getAgent(agentId);
     const runs = (await api.listRuns(agentId)).sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
-    const log = this.agentLog(agentId);
+    const log = handle.data();
     // Each finished run's stream is read once, to its end. Streams overlap (a
     // run's stream runs on through later turns) and merge by event id; an
     // early run's stream can also be empty, so none stands in for another.
     for (const run of runs) {
       if (!TERMINAL_RUN_STATUSES.has(run.status) || log.readRuns.includes(run.id)) continue;
-      await this.readStream(api, agentId, run);
+      await this.readStream(api, handle, run);
       log.readRuns.push(run.id);
     }
     const active = runs.filter((r) => !TERMINAL_RUN_STATUSES.has(r.status));
-    for (const run of active) this.startFollower(api, agent, run);
-    this.saveLog(agentId);
+    for (const run of active) this.startFollower(api, handle, run);
+    handle.save();
 
-    await this.render(agent, runs[runs.length - 1], api);
-    const git = latestCursorGit(agentId, runs, log.events);
-    if (git && JSON.stringify(git) !== this.lastGit.get(agentId)) {
-      this.lastGit.set(agentId, JSON.stringify(git));
-      this.emit("git", git);
-    }
-    for (const worker of forkedWorkers(log.events)) {
-      if (this.state.agents[worker.agentId]?.parent) continue;
-      this.state.agents[worker.agentId] = { parent: agentId, description: worker.description };
-      void this.follow(worker.agentId);
-    }
-    this.state.agents[agentId] = { ...this.state.agents[agentId], updatedAt: active.length ? undefined : agent.updatedAt };
-    await this.saveState();
+    const conversation = await api.conversation(agentId).catch(() => [] as CursorConversationMessage[]);
+    const transcript = buildCursorCloudTranscript({ conversation, log: log.events, latestRun: runs[runs.length - 1], createdAt: Date.parse(agent.createdAt) || 0, notice: await handle.notice() });
+    return {
+      transcript,
+      title: agent.name,
+      url: agent.url,
+      createdAtMs: Date.parse(agent.createdAt),
+      repoUrl: agent.repos?.[0]?.url,
+      updatedAt: agent.updatedAt,
+      running: active.length > 0,
+      git: latestCursorGit(agentId, runs, log.events),
+      children: forkedWorkers(log.events),
+    };
+  }
+
+  stop(): void {
+    for (const c of this.followers.values()) c.abort();
+    this.followers.clear();
   }
 
   /** Read a finished run's stream to its end into the agent's log. An expired one adds nothing. */
-  private async readStream(api: CursorCloudApi, agentId: string, run: CursorCloudRun): Promise<void> {
+  private async readStream(api: CursorCloudApi, handle: CloudAgentHandle<CursorAgentLog>, run: CursorCloudRun): Promise<void> {
     const events: CursorRunEvent[] = [];
     try {
-      await api.streamRun(agentId, run.id, (e) => events.push(e), { signal: AbortSignal.timeout(120_000) });
+      await api.streamRun(handle.agentId, run.id, (e) => events.push(e), { signal: AbortSignal.timeout(120_000) });
     } catch (err) {
       if (err instanceof CursorCloudApiError && (err.status === 410 || err.status === 404)) return;
       throw err;
     }
-    const log = this.agentLog(agentId);
+    const log = handle.data();
     log.events = mergeEventLog(log.events, events);
   }
 
-  private startFollower(api: CursorCloudApi, agent: CursorCloudAgent, run: CursorCloudRun): void {
+  private startFollower(api: CursorCloudApi, handle: CloudAgentHandle<CursorAgentLog>, run: CursorCloudRun): void {
     if (this.followers.has(run.id)) return;
     const controller = new AbortController();
     this.followers.set(run.id, controller);
@@ -649,99 +496,62 @@ export class CursorCloudWatcher extends EventEmitter {
       let lastEventId: string | undefined;
       for (let attempt = 0; attempt < 20 && !controller.signal.aborted; attempt++) {
         try {
-          const ended = await api.streamRun(agent.id, run.id, (e) => {
+          const ended = await api.streamRun(handle.agentId, run.id, (e) => {
             if (e.id) lastEventId = e.id;
-            const log = this.agentLog(agent.id);
+            const log = handle.data();
             log.events = mergeEventLog(log.events, [e]);
-            this.scheduleRender(agent.id);
+            handle.scheduleRender();
           }, { signal: controller.signal, lastEventId });
           if (ended) break;
         } catch (err) {
           if (controller.signal.aborted) return;
           if (err instanceof CursorCloudApiError && (err.status === 410 || err.status === 404)) break;
-          this.log(`cursor cloud ${agent.id} run ${run.id} stream dropped: ${err instanceof Error ? err.message : String(err)}`);
+          handle.log(`cursor cloud ${handle.agentId} run ${run.id} stream dropped: ${err instanceof Error ? err.message : String(err)}`);
         }
         await new Promise((r) => setTimeout(r, Math.min(30_000, 1_000 * 2 ** attempt)));
       }
       this.followers.delete(run.id);
-      if (!controller.signal.aborted) await this.follow(agent.id);
+      if (!controller.signal.aborted) await handle.follow();
     })();
   }
 
-  private scheduleRender(agentId: string): void {
-    if (this.renderTimers.has(agentId)) return;
-    this.renderTimers.set(agentId, setTimeout(() => {
-      this.renderTimers.delete(agentId);
-      void this.follow(agentId);
-    }, 750));
+  async create(api: CursorCloudApi, session: CloudAgentSession, content: string): Promise<{ agentId: string; url?: string }> {
+    const { agent } = await api.createAgent({
+      prompt: { text: content },
+      ...(session.model ? { model: { id: session.model } } : {}),
+      ...(session.repoUrl ? { repos: [{ url: session.repoUrl, ...(session.startingRef ? { startingRef: session.startingRef } : {}) }] } : {}),
+    });
+    return { agentId: agent.id, url: agent.url };
   }
 
-  private async render(agent: CursorCloudAgent, latestRun: CursorCloudRun | undefined, api: CursorCloudApi): Promise<void> {
-    const conversation = await api.conversation(agent.id).catch(() => [] as CursorConversationMessage[]);
-    const notice = await fs.promises.readFile(this.noticePath(agent.id), "utf8").catch(() => undefined);
-    const content = buildCursorCloudTranscript({ conversation, log: this.agentLog(agent.id).events, latestRun, createdAt: Date.parse(agent.createdAt) || 0, notice });
-    if (!content) return;
-    const file = this.transcriptPath(agent.id);
-    await fs.promises.mkdir(path.dirname(file), { recursive: true });
-    const st = this.state.agents[agent.id];
-    const cwd = await this.placement(agent);
-    const meta = JSON.stringify({ cwd, title: agent.name, url: agent.url, createdAtMs: Date.parse(agent.createdAt) || undefined, cloud: true, ...(st?.parent ? { parentAgentId: st.parent, description: st.description } : {}) });
-    const metaPath = path.join(path.dirname(file), "meta.json");
-    if ((await fs.promises.readFile(metaPath, "utf8").catch(() => "")) !== meta) await fs.promises.writeFile(metaPath, meta);
-    const existed = fs.existsSync(file);
-    if (existed && (await fs.promises.readFile(file, "utf8").catch(() => "")) === content) return;
-    await fs.promises.writeFile(file, content);
-    this.emit("session", { sessionId: agent.id, filePath: file, eventType: existed ? "change" : "add" });
-  }
-
-  /** Where the agent's session belongs locally: the checkout of its repo, else a stable placeholder. */
-  private async placement(agent: CursorCloudAgent): Promise<string> {
-    const repo = repoFromSourceUrl(agent.repos?.[0]?.url);
-    const local = repo ? await this.resolveRepoDir(repo).catch(() => null) : null;
-    if (local) return local;
-    return repo ? `/cursor-cloud/${repo.owner}/${repo.name}` : "/cursor-cloud";
-  }
-
-  private noticePath(agentId: string): string {
-    return path.join(this.rootDir, agentId, "notice.txt");
-  }
-  /** Record the line the agent's transcript opens with (see CursorCloudTranscriptInput.notice). */
-  setNotice(agentId: string, notice: string): void {
+  async followUp(api: CursorCloudApi, agentId: string, content: string): Promise<void> {
     try {
-      fs.mkdirSync(path.dirname(this.noticePath(agentId)), { recursive: true });
-      fs.writeFileSync(this.noticePath(agentId), notice);
-    } catch {}
-  }
-
-  private logPath(agentId: string): string {
-    return path.join(this.rootDir, agentId, "events.json");
-  }
-  private agentLog(agentId: string): AgentLog {
-    let log = this.logs.get(agentId);
-    if (!log) {
-      try {
-        const parsed = JSON.parse(fs.readFileSync(this.logPath(agentId), "utf8"));
-        log = { events: Array.isArray(parsed?.events) ? parsed.events : [], readRuns: Array.isArray(parsed?.readRuns) ? parsed.readRuns : [] };
-      } catch {
-        log = { events: [], readRuns: [] };
-      }
-      this.logs.set(agentId, log);
+      await api.createRun(agentId, content);
+    } catch (err) {
+      if (err instanceof CursorCloudApiError && err.status === 409) throw new CloudAgentBusyError(CURSOR.label);
+      throw err;
     }
-    return log;
-  }
-  /** The stream expires after a day; the log kept here is what outlives it. */
-  private saveLog(agentId: string): void {
-    try {
-      fs.mkdirSync(path.dirname(this.logPath(agentId)), { recursive: true });
-      fs.writeFileSync(this.logPath(agentId), JSON.stringify(this.agentLog(agentId)));
-    } catch {}
   }
 
-  /** Write-then-rename, so a crash mid-write never leaves a torn state file. */
-  private async saveState(): Promise<void> {
-    await fs.promises.mkdir(this.rootDir, { recursive: true });
-    const tmp = `${this.statePath}.${process.pid}.tmp`;
-    await fs.promises.writeFile(tmp, JSON.stringify(this.state), { mode: 0o600 });
-    await fs.promises.rename(tmp, this.statePath);
+  async cancel(api: CursorCloudApi, agentId: string): Promise<string | null> {
+    const runs = await api.listRuns(agentId);
+    const active = runs.find((r) => !TERMINAL_RUN_STATUSES.has(r.status));
+    if (!active) return null;
+    await api.cancelRun(agentId, active.id);
+    return `run ${active.id}`;
+  }
+
+  setupErrorOf(err: unknown, session: CloudAgentSession): CloudAgentSetupError | null {
+    if (!(err instanceof CursorCloudApiError)) return null;
+    if (err.status === 401 || err.status === 403) return new CloudAgentSetupError(this, "key_invalid", `Cursor rejected the API key on this machine (${err.message}).`);
+    if (err.status === 400 && err.code === "validation_error" && /repositor|branch/i.test(err.message)) {
+      const repo = session.repoUrl?.replace("https://github.com/", "") ?? "this repository";
+      return new CloudAgentSetupError(this, "repo", `Cursor Cloud can't reach ${repo}: ${err.message} Give Cursor's GitHub app access to the repository (cursor.com/dashboard/integrations); the message retries on its own.`);
+    }
+    return null;
+  }
+
+  verifyKey(key: string) {
+    return verifyCursorKey(key, this.fetchImpl);
   }
 }
