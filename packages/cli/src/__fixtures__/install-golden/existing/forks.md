@@ -16,7 +16,7 @@ A user's own section sitting BETWEEN two codecast blocks. Nothing may move it.
 
 ## Referencing objects
 
-Every codecast object has a short ID. Write one into your prose and it renders as a live reference: the object's title, its current state, and a link that opens it. This works anywhere you write — messages, summaries, task comments, doc bodies, trigger prompts.
+Every codecast object has a short ID. Written anywhere (messages, summaries, task comments, doc bodies, trigger prompts), it renders as a live reference: title, current state, and a link.
 
 | Object  | Short ID  | Where to find it |
 |---------|-----------|------------------|
@@ -26,9 +26,7 @@ Every codecast object has a short ID. Write one into your prose and it renders a
 | Trigger | `tr-42`   | `cast trigger ls` |
 | Doc     | `doc:<id>` | `cast doc ls`, `cast doc search` |
 
-There are two forms. Write the bare ID by default — `Filed under ct-4102.` — it reads as a normal sentence and still renders the full reference. Write `@[Title id]` — `@[Fix the auth race ct-4102]` — when the reader needs the name in the sentence itself.
-
-Never paste an object's 32-character internal ID into prose. It renders as an unreadable blob, and every command that accepts an ID accepts the short one.
+Write the bare ID by default (`Filed under ct-4102.`); it reads as a normal sentence and still renders in full. Write `@[Title id]` (`@[Fix the auth race ct-4102]`) when the sentence needs the name. Never paste a 32-character internal ID: it renders as an unreadable blob, and every command accepts the short one.
 <!-- cast @VERSION@ -->
 <!-- /codecast-references -->
 
@@ -39,23 +37,23 @@ block by "everything to end of file" destroys this paragraph.
 
 ## Forks & Sessions
 
-Choose by who owns the result. **For work you delegate and report back on, use `cast spawn --subagent`.** This includes implementers, reviewers, parallel audits, and workers under a plan you are driving. They nest under this session; you manage them and deliver the combined result. A request to build a feature or run work in parallel does not by itself ask for separate inbox threads.
+Choose by who owns the result. **Work you delegate and report back on goes to `cast spawn --subagent`**: implementers, reviewers, parallel audits, workers under a plan you drive. They nest under this session; you manage them and deliver the combined result. A request to build a feature or run work in parallel does not by itself ask for separate inbox threads.
 
-Plain `cast spawn` and `cast fork` create independent threads in the human's inbox, for the human to steer separately. Use them when the human explicitly asks for those independent threads; if that handoff is your idea, propose it first. Parallelism, a fresh context, a different agent, a label, and an isolated worktree do not decide ownership. If the brief says "report back to me", the session is your worker: include `--subagent`.
+Plain `cast spawn` and `cast fork` create independent threads in the human's inbox for the human to steer separately. Use them only when the human asks; if the handoff is your idea, propose it first. Parallelism, a fresh context, another agent, a label or a worktree do not decide ownership. A brief that says "report back to me" describes a worker: use `--subagent`.
 
 ```bash
-cast spawn --subagent -- "<task>"             # worker under THIS session; -- keeps the prompt out of [parent]
-cast spawn --subagent --agent codex "<task>"  # worker on a different backend, still yours to manage
+cast spawn --subagent -- "<task>"             # worker under THIS session; -- keeps the prompt from being read as [parent]
+cast spawn --subagent --agent codex "<task>"  # worker on another backend, still yours to manage
 cast spawn "<independent thread>"             # only for a human-requested inbox handoff
 cast fork "<direction>" ["<direction>" ...]   # human-requested branches; you take the first direction
 cast exec --agent grok "review this diff"     # run now, print the result, exit (no inbox card)
-cast switch --agent codex                     # continue THIS session under a different agent
-cast spawn --subagent -- - <<'EOF'            # multi-line worker briefing via stdin
-…goal, numbered steps, constraints — exact newlines preserved…
+cast switch --agent codex                     # continue THIS session under another agent
+cast spawn --subagent -- - <<'EOF'            # multi-line brief via stdin
+…goal, numbered steps, constraints, exact newlines…
 EOF
 ```
 
-For multi-line prompts, pass `-` and feed the body via heredoc — never `"$(cat file)"`, which mangles formatting. Several `-` args split one heredoc into one prompt per `-`, separated by lines containing only `---` — so a whole fan-out of multi-line briefs fits in one invocation:
+Multi-line prompts go through `-` and a heredoc, never `"$(cat file)"`, which mangles formatting. Several `-` args split one heredoc into one prompt each at lines containing only `---`, so a whole fan-out fits in one call:
 
 ```bash
 cast fork - - <<'EOF'
@@ -65,17 +63,17 @@ cast fork - - <<'EOF'
 EOF
 ```
 
-`cast fork` branches the current conversation — each branch keeps the full history up to the fork point (just before the latest user message by default, so the fork request itself never enters a branch; `--at <line>` picks another spot, `-s <id>` forks a different session), then pursues its own direction. Use it when the thread splits into distinct paths worth exploring in parallel. When forking is your own idea rather than the human's request, pass `--tip` — there is no fork request to strip, and the default would drop the human's real latest message.
+**Spawned sessions** start fresh, with no shared history, in this project (`-C <dir>` for elsewhere). Plain `cast spawn` makes an inbox card even when an agent calls it. A label or a task/plan binding does not nest it; `--subagent` does. A subagent is a full session on any backend: brief it, `cast send <id>` follow-ups, `cast read <id>` its results, and fold them into your work. Bare `--subagent` nests under the session running the command and `--subagent <session>` under another; a prompt right after the bare flag needs `--`. Watch the returned IDs with `cast sessions <id> [<id>…] -w --json`: `done` means delivered, `needs_input` means read it to learn whether it finished or is blocked. Workers are omitted from top-level lists and label filters but answer when named. Tell the human what you delegated, and report the results yourself.
 
-With two or more directions, THIS thread is one of them: you take the first direction and continue with it in place, and each remaining direction becomes a branch. When the human asks for work in N forks, issue ONE `cast fork` with all N directions, then carry on with the first as your own work — do not end the turn to report a roster. One direction spins off a single branch while you continue whatever you were doing. `--all-branches` keeps you out of the fan-out when the human wants this thread left as is.
+**Forks** branch this conversation. Each branch keeps the history up to the fork point (by default just before the latest user message, so the fork request never enters a branch; `--at <line>` picks another spot, `-s <id>` forks another session). When forking is your own idea, pass `--tip`: there is no fork request to strip, and the default would drop the human's real latest message. With two or more directions you take the first in place and each other becomes a branch, so issue ONE `cast fork` with all N directions and carry on with the first instead of ending the turn to report a roster. One direction spins off a single branch while you continue. `--all-branches` leaves this thread out of the fan-out. A branch receives its direction as its human's next message: it doesn't know it is a fork and reports to nobody. Never message, monitor, wait on or coordinate branches; write each direction as a complete instruction for a thread reading it cold.
 
-A branch receives its direction as its human's next message, exactly as if the person had typed it there. It does not know it is a fork, it has nobody to report back to, and it must not be treated as a worker: do not message, monitor, or wait on a branch, and do not build coordination between branches. Write each direction as a complete, self-contained instruction for a thread that will read it cold. The branches run independently and the human steers them from the inbox.
+**Cloud hosts.** `--cloud` on `cast spawn` or `cast fork` runs the session on the person's cloud host, starting from this checkout as it stands, uncommitted work included; the host carries their agent config, shell, logins and CLIs. `cast remote sync <id>` mirrors a cloud session's working tree into a worktree here, live, so its edits can be read and run on this machine. On a host `$CODECAST_CLOUD` is `1`. What a repo needs on a host beyond that (system packages, services, setup commands) belongs in the `[host]` table of `.codecast/workspace.toml`.
 
-Both spawn modes start fresh sessions with no shared history, in the current project (`-C <dir>` for elsewhere). Plain `cast spawn` defaults to an inbox card even when called by an agent. A label or a task/plan binding does not nest it; `--subagent` does.
+Every launch starts working immediately and knows only what you give it (plus, for a fork, the history up to the fork point), so seed each with a sharp, self-contained prompt. When you launch several, tell the human in one line what runs where, then continue.
 
-`cast spawn --subagent` creates a full session on any agent backend, nested under its parent. Brief it, watch it, `cast send <id>` it follow-ups, `cast read <id>` its results, and fold what it finds back into your own work. Bare `--subagent` uses the session running the command; pass `--subagent <session>` to name a parent explicitly. When the prompt comes immediately after the bare flag, separate it with `--`: `cast spawn --subagent -- "<task>"`. Watch the returned IDs with `cast sessions <id> [<id>…] -w --json`, then read their results. Workers are omitted from top-level lists, including label filters, but always answer when named. A `done` transition means delivered; `needs_input` requires reading whether the worker finished or is blocked. Tell the human what you delegated, and report the results yourself.
+Labels: a fork inherits the parent's label; `--label <name>` overrides it, or labels a spawn, and is created if new: `cast spawn --subagent --label rollout "<task>" "<task>"`. A label groups work without changing inbox visibility: `cast sessions --label rollout` lists independent sessions, while nested workers are watched by ID.
 
-`cast exec` runs a prompt on any harness, prints the result, and exits. There is no inbox card: the process is the session. Use it when you need a result directly from the command; use `spawn --subagent` for a worker you will manage across turns.
+**`cast exec`** runs a prompt on any harness, prints the result and exits; the process is the session, with no inbox card. Use it for a result you need now, and `spawn --subagent` for a worker you manage across turns.
 
 ```bash
 cast exec "summarize this repo"
@@ -83,33 +81,29 @@ cast exec --agent grok --model grok-4.6 --effort high "review the diff"
 git diff | cast exec --agent claude --model sonnet "write a commit message"
 ```
 
-Every launch starts working immediately. Nested workers stay under their parent; independent spawns and fork branches appear in the human's inbox. A session only knows what you give it — for forks, plus the history up to the fork point — so seed each with a sharp, self-contained prompt. When you launch several, tell the human in one line what runs where, then continue your work.
-
-Labels carry across a fork by default: a branch inherits the label you'd filed the parent under. Pass `--label <name>` to override it, or to label a spawn, which starts with no label. The label is created if it doesn't exist: `cast spawn --subagent --label rollout "<task>" "<task>"`. A label groups work; it does not change inbox visibility. Watch nested workers by their returned IDs; `cast sessions --label rollout` lists independent sessions with that label.
-
-Stay on THIS session when you need a different agent or model. Do not fork unless you want a parallel branch the human will steer separately.
+**`cast switch`** keeps THIS session when you need a different agent or model; don't fork for that.
 
 ```bash
 cast switch --agent codex              # continue here under Codex
 cast switch --model opus               # same agent, different model
 cast switch --agent claude --model sonnet
-cast switch --agent codex --fork       # optional: a new session instead
+cast switch --agent codex --fork       # a new session instead
 ```
 
-A divider lands in the thread ("now using Codex"). The conversation id does not change. A provider switch replaces this process — do not keep talking as if you are still the old agent. A model switch on the same provider usually does not.
+A divider ("now using Codex") lands in the thread and the conversation id stays. A provider switch replaces this process, so stop talking as the old agent; a model switch on the same provider usually doesn't.
 
 ### Moving sessions between machines
 
-Sessions run on one machine each — a laptop or a cloud host — and `cast migrate` moves MANY of them at once, in either direction, without losing anything: a session mid-turn finishes its turn first, messages sent during the move wait and arrive on the destination, and the agent gets a note saying which machine it is on now. Use it when the human asks to move work ("send everything labeled x to the linux box", "bring my sessions back to the laptop"); when moving is your own idea, propose it first — it interrupts nothing, but it changes where the human's terminals are.
+`cast migrate` moves many sessions at once between a laptop and a cloud host, either way, losing nothing: a mid-turn session finishes its turn first, messages sent during the move arrive on the destination, and the agent is told which machine it is on now. Use it when the human asks; when it's your idea, propose it first, since it changes where their terminals are.
 
 ```bash
 cast migrate start --to linux --label rollout            # every session filed under "rollout" → the cloud host
 cast migrate start --to macbook --from linux             # everything on the cloud host → the laptop
 cast migrate start --to linux jx7c6zk jx7dhfh            # named sessions (short ids)
-cast migrate start --to linux --project platform --dry-run   # preview: what would move, what would not, and why
+cast migrate start --to linux --project platform --dry-run   # preview what would move, what would not, and why
 cast migrate ls | show <batch> | cancel <batch> | retry <batch>
 ```
 
-`--to` and `--from` take a device id prefix or a label substring (`cast remote hosts` lists them). Selectors combine: `--label`, `--from`, `--project <path or name>`, `--all`, plus explicit short ids. Always `--dry-run` first when the selector is broad — the preview names each session it would skip and why (already there, not a Claude Code session, its machine is offline). `--wait <minutes>` bounds how long a mid-turn session may finish before it is interrupted (default 10; 0 interrupts at once). A batch runs on the machine that holds the files and reports per session; `cast migrate show <batch>` is how you tell the human what moved.
+`--to` and `--from` take a device id prefix or a label substring (`cast remote hosts` lists them). Selectors combine: `--label`, `--from`, `--project <path or name>`, `--all`, and short ids. `--dry-run` first when the selector is broad: it names each skip and why (already there, not a Claude Code session, machine offline). `--wait <minutes>` caps how long a mid-turn session may finish before it is interrupted (default 10; 0 interrupts at once). A batch runs on the machine holding the files and reports per session; tell the human what moved from `cast migrate show <batch>`.
 <!-- cast @VERSION@ -->
 <!-- /codecast-forks -->

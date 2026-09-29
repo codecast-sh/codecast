@@ -1,26 +1,15 @@
 
 ## Asking for a decision
 
-A queued decision is not an interruption. Asking inline stops your human mid-thought and is
-expensive, which is why the standing rule is to decide for yourself. `cast decide` is a
-different channel: it lands in a queue they clear in one sitting, in their own time, so the
-cost of asking is close to zero. The bar is therefore LOWER here than for interrupting — if
-you would have picked a direction and mentioned it in passing, queue it instead.
+A queued decision is not an interruption. Asking inline stops the human mid-thought, which is why you normally decide for yourself; `cast decide` lands in a queue they clear in one sitting, so the bar here is LOWER. If you would have picked a direction and mentioned it in passing, queue it instead. Queue one before you:
 
-Queue one when you are about to:
-
-- pick between approaches that are hard to reverse later (a schema, a data model, a protocol),
+- pick between approaches that are hard to reverse (a schema, a data model, a protocol),
 - spend real money or their quota, or touch billing, auth, or anything user-facing in prod,
-- delete or migrate data, or drop something that would need a backup to recover,
-- resolve a tradeoff by taste rather than evidence — speed vs correctness, breadth vs depth,
-- proceed on a guess about what they actually want the product to do.
+- delete or migrate data, or drop something recoverable only from a backup,
+- settle a tradeoff by taste rather than evidence (speed vs correctness, breadth vs depth),
+- proceed on a guess about what they want the product to do.
 
-Do NOT queue what you can answer by reading more code, and never queue a status update.
-Never post a decision as a probe, a test or a layout sample: every ask reaches the human's
-real queue and phone the moment it is posted, and a withdraw comes after they have read it.
-To see how a card renders, mount the component on a fixture row or open one already answered.
-
-The answer arrives back here as a message.
+Never queue what reading more code answers, a status update, or a probe, test or layout sample: every ask reaches the human's real queue and phone at once, and a withdraw arrives after they have read it. To see how a card renders, mount the component on a fixture row or open an answered one.
 
 ```bash
 cast decide "<one question>" \
@@ -34,41 +23,12 @@ cast decide "<q>" -o … -o … --option-page 2=alt.html   # an option with its 
 cast stack remove ds-N sd-N | reorder ds-N sd-a,sd-b | policy ds-N --due tomorrow   # tend a stack; overdue sorts first
 ```
 
-**The decision is the whole message.** It renders as a card — in the queue and inline in this
-conversation, right where you ran the command — so everything the reader needs must be inside
-it: what you found, what each option costs, why you cannot pick, and what you will do
-meanwhile. Then say nothing more about it in prose. No summary of the options, no "I have
-queued a decision about X", no restating the reasoning after the card: the reader sees the
-card, and a second telling of the same thing is the noise this channel exists to remove. If
-your reply after the command would only repeat the card, end your turn instead.
+**The card is the whole message.** It renders in the queue and inline right here, so it must carry everything: what you found, what each option costs, why you cannot pick, and what you will do meanwhile. A bare question is useless; the queue shows nothing else unless they open the session. For a decision that deserves evidence (a migration, an audit, a design), attach an HTML report with `--report report.html`; it renders embedded with the question. After posting, say nothing more about it: no summary of the options, no "I have queued…". If your reply would only repeat the card, end your turn.
 
-The bar: a bare question is useless. The context carries your reasoning, the tradeoff, and the
-consequence of each option — the queue shows nothing else unless they open the session. For a
-decision that deserves evidence (a migration, an audit, a design), write an HTML report and
-attach it with `--report report.html`; it publishes like any page and renders embedded with
-the question.
+**Keep your decisions correct.** When facts change, `cast decide edit` rewrites the open decision's question, options, context or report in place, keeping its spot in the queue; `cast decide cancel` withdraws one that no longer applies. Both act on this session's open decision. `cast decide ls` lists every decision you posted with its id, answer, age and messages since it was asked (the id also comes back when you post). An answered decision cannot be edited; act on the answer. Before ending a long turn and whenever you post, cancel open asks the work has moved past: an answer to a question that stopped mattering costs attention and earns nothing.
 
-**A posted decision is yours to keep correct.** When the facts change, change the open
-decision in place rather than posting a second one: `cast decide edit` rewrites its
-question, options, context, or report and keeps its place in the queue. When the question no
-longer applies, `cast decide cancel` withdraws it. Both act on this session's open decision;
-`cast decide ls` lists every decision you posted with its id and how it was answered, and the
-id also comes back when you post. An already answered decision cannot be edited — the answer is
-in the conversation; act on it.
+**Blocking is the default**: post, then END YOUR TURN; the answer arrives as a user message. `--advisory --default <n>` keeps you working on option n while the answer can still override it. Use it ONLY when the default is cheap to undo: answers often land an hour later and disagree, and everything built on the default is then work to unwind. If reversing would cost more than waiting, block.
 
-Stale asks are yours to sweep. `cast decide ls` shows each open decision's age and how many
-messages the session has produced since it was asked — when the work has visibly moved past
-one, cancel it rather than leaving it in the queue. Before ending a long turn, and whenever
-you post a new decision, check for older ones the thread has outgrown: a question your human
-answers after it stopped mattering costs their attention and earns nothing.
-
-Blocking is the default: post it, then END YOUR TURN — the answer arrives as a user message.
-`--advisory --default <n>` keeps you working with option n while the answer can override you
-later. Use it ONLY when the default is cheap to undo: answers tend to land an hour later and
-often disagree, and everything you build on the default in between is then work to unwind. If
-reversing the default would cost more than waiting, block.
-
-Ask sparingly. Every decision spends your human's attention; a question you could have resolved
-by reading more code is noise in their queue.
+Ask sparingly: a question you could have answered by reading more code is noise in their queue.
 <!-- cast @VERSION@ -->
 <!-- /codecast-decide -->
