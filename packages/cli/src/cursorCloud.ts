@@ -32,7 +32,7 @@ const BACKFILL_MS = 30 * 24 * 3600_000;
 const MAX_LIST_PAGES = 5;
 const RESULT_TEXT_MAX = 8_000;
 /** Bump when the rendered transcript changes shape: every mirror re-renders once. */
-const MIRROR_FORMAT = 3;
+const MIRROR_FORMAT = 4;
 
 export type CursorRunStatus = "CREATING" | "RUNNING" | "FINISHED" | "ERROR" | "CANCELLED" | "EXPIRED";
 export const TERMINAL_RUN_STATUSES: ReadonlySet<string> = new Set(["FINISHED", "ERROR", "CANCELLED", "EXPIRED"]);
@@ -338,24 +338,32 @@ export function buildCursorCloudTranscript(input: CursorCloudTranscriptInput): s
     if (logged && logged.events.some((e) => e.event === "assistant" || e.event === "tool_call")) {
       let pending = "";
       let pendingId: string | undefined;
+      // A record is dated by its first event, never by when it was flushed: a
+      // row's timestamp is fixed at its first sync, and a turn's trailing step
+      // marker already belongs to the next turn.
+      let pendingAt = clock;
       const flush = (extra: unknown[] = [], id?: string) => {
         const content = [...(pending.trim() ? [text(pending.trim())] : []), ...extra];
         const recordId = id ?? (pendingId ? `seg-${pendingId}` : undefined);
+        const at = pendingId ? pendingAt : clock;
         pending = "";
         pendingId = undefined;
-        if (content.length) push({ role: "assistant", id: recordId, timestamp: clock, message: { content } });
+        if (content.length) push({ role: "assistant", id: recordId, timestamp: at, message: { content } });
       };
       for (const e of logged.events) {
+        if (e.event === "step") { flush(); continue; }
+        if (e.event !== "assistant" && e.event !== "tool_call") continue;
         clock = eventClock(e, clock);
-        if (e.event === "step") flush();
-        else if (e.event === "assistant" && typeof e.data.text === "string") {
-          pendingId ??= e.id;
+        if (e.event === "assistant" && typeof e.data.text === "string") {
+          if (!pendingId) { pendingId = e.id; pendingAt = clock; }
           pending += e.data.text;
         } else if (e.event === "tool_call") {
           const use = cloudToolUse(e.data);
           if (!opened.has(use.id)) {
             opened.add(use.id);
             flush([{ type: "tool_use", ...use }], `use-${use.id}`);
+          } else {
+            flush();
           }
           if (e.data.status === "completed") {
             const res = cloudToolResult(e.data);

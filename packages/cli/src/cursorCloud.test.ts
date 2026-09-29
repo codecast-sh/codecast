@@ -86,6 +86,9 @@ describe("Cursor Cloud transcript", () => {
     expect(notice).toContain("<task-id>bc-7574adff-bfe8-505b-86e2-671066bb0716</task-id>");
     expect(notice).toContain("There is no coding task to continue.");
     expect(notice).not.toContain("Perform any necessary follow-up");
+    // Rows in time order: nothing is dated ahead of a later turn's prompt.
+    const stamps = msgs.map((m) => m.timestamp);
+    expect(stamps).toEqual([...stamps].sort((a, b) => a - b));
     // One row per id: the fork's call completes two turns later without a second row.
     const ids = msgs.map((m) => m.uuid);
     expect(new Set(ids).size).toBe(ids.length);
