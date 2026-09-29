@@ -28,6 +28,7 @@ import { submitReviewWithNotes } from "./reviews";
 import { withoutOthersPending } from "./codeComments";
 import { foldShepherdState, normalizeRepository, prUrl, PASSING_CONCLUSIONS, type CheckEntry } from "./lib/gitRefs";
 import { parsePrRef, codecastPrUrl } from "@codecast/shared/contracts";
+import { pullRequestsLinkedToConversation } from "./lib/prSessions";
 
 const EVENT_LIMIT = 10;
 const LIST_LIMIT = 20;
@@ -145,8 +146,7 @@ export async function resolvePullRequest(
       const bound = shepherded.filter(mine).sort(openFirst)[0];
       if (bound) return bound;
 
-      const linked = (await pullRequestsForCaller(ctx, teams)).filter((pr) =>
-        (pr.linked_session_ids ?? []).some((id: any) => String(id) === String(conversation._id)));
+      const linked = (await pullRequestsLinkedToConversation(ctx, conversation._id)).filter(mine);
       const hit = linked.sort(openFirst)[0];
       if (hit) return hit;
     }

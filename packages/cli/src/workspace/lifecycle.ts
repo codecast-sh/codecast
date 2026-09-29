@@ -268,8 +268,10 @@ async function acquireWorkspaceUnlocked(repoRoot: string, name: string, opts: Ac
         manifest,
         portAlloc.resourceIndex,
       );
-      initialEnv.CDP_PORT = String(chrome.cdpPort);
-      initialEnv.CODECAST_CDP_PORT = String(chrome.cdpPort);
+      if (chrome) {
+        initialEnv.CDP_PORT = String(chrome.cdpPort);
+        initialEnv.CODECAST_CDP_PORT = String(chrome.cdpPort);
+      }
     }
 
     if (!opts.skipHooks) {
@@ -710,7 +712,28 @@ function describePortExhaustion(
  * if the computed port is occupied. user-data-dir lives inside the worktree's
  * state directory.
  */
+/**
+ * The workspace's own headless Chrome, or undefined with a warning when it
+ * will not start: the browser is an extra the manifest asked for, and a
+ * worktree without it is still a worktree a session can run in (a cloud host
+ * cloned from an image took over 20s for its first Chrome, and the whole
+ * placement failed on it, 2026-09-29).
+ */
 async function launchWorkspaceChrome(
+  repoRoot: string,
+  workspaceName: string,
+  manifest: WorkspaceManifest,
+  resourceIndex: number,
+): Promise<ChromeBinding | undefined> {
+  try {
+    return await startWorkspaceChrome(repoRoot, workspaceName, manifest, resourceIndex);
+  } catch (err) {
+    process.stderr.write(`workspace ${workspaceName}: no browser (${err instanceof Error ? err.message : String(err)}); continuing without it\n`);
+    return undefined;
+  }
+}
+
+async function startWorkspaceChrome(
   repoRoot: string,
   workspaceName: string,
   manifest: WorkspaceManifest,
@@ -742,6 +765,7 @@ async function launchWorkspaceChrome(
     cdpPort: chosenPort,
     userDataDir,
     headless: manifest.browser.headless,
+    readyTimeoutSec: 60,
   });
   return {
     pid: inst.pid,

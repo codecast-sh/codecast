@@ -47,7 +47,7 @@ import { canAccessConversation, requireTeamMembership, patchConversationVisibili
 import { patchConversationThroughFavoriteView } from "./favoriteViewWrites";
 import { pinCapExceeded, PIN_CAP_ERROR } from "./inboxProjection";
 import { addConversationToWorkItem } from "./conversationLinks";
-import { DISPATCHABLE_CONVERSATION_FIELDS } from "@codecast/shared/contracts";
+import { DISPATCHABLE_CONVERSATION_FIELDS, CLOUD_SESSION_SOURCES, type CloudSessionSource } from "@codecast/shared/contracts";
 
 type TableConfig =
   | {
@@ -1649,9 +1649,15 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     await (ctx as any).runMutation(api.users.updateProfile, { walkie_pref: pref });
   },
 
-  // Claude Code cloud session sync, from the sync settings page (store
-  // setClaudeCloudSync). The client already flipped its own copy; this is the
+  // Cloud session sync (Claude Code, Cursor Cloud), from the sync settings
+  // page (store setCloudSessionSync). The client already flipped its own copy; this is the
   // authoritative write, and every daemon picks it up on its next heartbeat.
+  setCloudSessionSync: async (ctx, userId, [source, enabled]: [CloudSessionSource, boolean]) => {
+    const spec = CLOUD_SESSION_SOURCES[source];
+    if (!spec) throw new Error(`Unknown cloud session source: ${source}`);
+    await (ctx as any).runMutation(api.users.updateSyncSettings, { [spec.field]: enabled });
+  },
+  // Web builds from before setCloudSessionSync still send this.
   setClaudeCloudSync: async (ctx, userId, [enabled]: [boolean]) => {
     await (ctx as any).runMutation(api.users.updateSyncSettings, { claude_cloud_sync: enabled });
   },

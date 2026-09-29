@@ -1,4 +1,5 @@
 import { labelsOf, noteOrgChange, recordSubject, roleSubject, whereOfRecord, whereOfRole, withOrgChange } from "./lib/orgChangeLog";
+import { isWholeWorkspaceRole } from "@codecast/shared/contracts/orgLead";
 import { movedFields } from "@codecast/shared/contracts/orgChange";
 import { action, mutation, query } from "./functions";
 import { api } from "./_generated/api";
@@ -301,7 +302,7 @@ export async function computeAnalysisOrg(ctx: Ctx, userId: Id<"users">, teamId: 
   const roles = [];
   for (const role of roleRows) {
     const ids = scopeIds(role.scope);
-    if (isWholeWorkspace(ids)) wholeWorkspaceRoles++;
+    if (isWholeWorkspaceRole(role)) wholeWorkspaceRoles++;
     for (const id of ids.project_ids) coveredProjects.add(id);
     for (const id of ids.plan_ids) { const pr = planProjectOf.get(id); if (pr) coveredProjects.add(pr); }
     const scopeNames = {
@@ -334,7 +335,7 @@ export async function computeAnalysisOrg(ctx: Ctx, userId: Id<"users">, teamId: 
       counters: countersFor(role, now),
       reports_to: parent,
       scope: scopeNames,
-      whole_workspace: isWholeWorkspace(ids),
+      whole_workspace: isWholeWorkspaceRole(role),
       charter: (role.charter ?? "").slice(0, 400) || undefined,
       standing: !!role.anchor_id,
       checked_at: role.checked_at ?? null,

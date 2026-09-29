@@ -7,14 +7,14 @@
 // Work belongs to the most specific live role that covers it (ownerOf):
 // - a role whose scope names the work's plan, over
 // - a role whose scope names the work's project, over
-// - a role whose scope is the whole workspace (no projects, no plans), which
-//   owns only what no narrower role covers.
+// - the Chief of Staff, which looks after whatever no narrower role covers.
+// Scope is opt in: any other role with no projects and no plans owns no work.
+// It is a standing role that runs its routine and answers what it is asked.
 // A child's scope sits inside its parent's (scopes-and-feed.md F1), so a head
 // of engineering and the platform lead under it both list Platform. Among
 // roles at the same depth the one closest to the work owns it: a role that
 // another match reports up to, at any depth, steps aside. Only roles on
-// separate lines can tie, and then they watch the work together. Among roles
-// with no scope the root owns the remainder, never a role under it.
+// separate lines can tie, and then they watch the work together.
 //
 // A project's lead (projectLeadOf) is the role the project names
 // (`owner_role_id`), else the owner of the project by the rule above. A
@@ -29,6 +29,7 @@ export type LeadProject = { _id: unknown; owner_role_id?: unknown };
 
 export type LeadRole = {
   _id: unknown;
+  handle?: string;
   status?: string;
   scope?: { project_ids?: readonly unknown[]; plan_ids?: readonly unknown[] } | null;
   reports_to?: { kind: string; role_id?: unknown } | null;
@@ -53,7 +54,14 @@ export function scopeListsProject(role: LeadRole, projectId: unknown): boolean {
 
 const scopeListsPlan = (role: LeadRole, planId: unknown) => (role.scope?.plan_ids ?? []).some((p) => String(p) === String(planId));
 
-export const isWholeWorkspaceRole = (r: LeadRole) => (r.scope?.project_ids ?? []).length === 0 && (r.scope?.plan_ids ?? []).length === 0;
+export const CHIEF_OF_STAFF_HANDLE = "chief-of-staff";
+
+/** The role names projects or plans it looks after. */
+export const hasScope = (r: LeadRole) => (r.scope?.project_ids ?? []).length > 0 || (r.scope?.plan_ids ?? []).length > 0;
+
+/** The one role that looks after what no narrower role covers: the Chief of
+ *  Staff, while it names no scope. Any other role without a scope owns nothing. */
+export const isWholeWorkspaceRole = (r: LeadRole) => !hasScope(r) && r.handle === CHIEF_OF_STAFF_HANDLE;
 
 /** A piece of work as the rule reads it: the plan it is filed under and the
  *  project it belongs to (a plan's own project when the work names none).
@@ -85,14 +93,10 @@ export function ownerOf<R extends LeadRole>(work: OwnedWork, roles: readonly R[]
   if (matches.length <= 1) return matches[0] ? { kind: "owner", role: matches[0] } : { kind: "none" };
 
   // Walk each match's chain once. On a named area the role closest to the
-  // work owns it: every match another one reports up to steps aside. On the
-  // whole workspace it is the other way round: the root's view is the
-  // company's, so a role with no scope under another one with no scope owns
-  // nothing of the remainder.
+  // work owns it: every match another one reports up to steps aside.
   const byId = new Map(roles.map((r) => [String(r._id), r]));
   const ids = new Set(matches.map((r) => String(r._id)));
   const above = new Set<string>();
-  const under = new Set<string>();
   for (const r of matches) {
     let cur: LeadRole | undefined = r;
     const seen = new Set<string>();
@@ -100,11 +104,11 @@ export function ownerOf<R extends LeadRole>(work: OwnedWork, roles: readonly R[]
       const parentId: string | null = cur.reports_to?.kind === "role" && cur.reports_to.role_id ? String(cur.reports_to.role_id) : null;
       if (!parentId || seen.has(parentId)) break;
       seen.add(parentId);
-      if (ids.has(parentId) && parentId !== String(r._id)) { above.add(parentId); under.add(String(r._id)); }
+      if (ids.has(parentId) && parentId !== String(r._id)) above.add(parentId);
       cur = byId.get(parentId);
     }
   }
-  const closest = matches.filter((r) => !(best === 0 ? under : above).has(String(r._id)));
+  const closest = matches.filter((r) => !above.has(String(r._id)));
   // A cycle in a corrupt chain could put every match above another; fall
   // back to the matches as they stand rather than naming no one.
   const watchers = closest.length ? closest : matches;
@@ -148,7 +152,7 @@ export function leadScopeChange<R extends LeadRole>(projectId: unknown, role: R,
   if (scopeListsProject(role, projectId)) return { kind: "listed" };
   const parentId = role.reports_to?.kind === "role" && role.reports_to.role_id ? String(role.reports_to.role_id) : null;
   const parent = parentId ? roles.find((r) => String(r._id) === parentId) : undefined;
-  if (parent && !isWholeWorkspaceRole(parent) && !scopeListsProject(parent, projectId)) return { kind: "outside_parent", parent };
+  if (parent && hasScope(parent) && !scopeListsProject(parent, projectId)) return { kind: "outside_parent", parent };
   return { kind: "add" };
 }
 

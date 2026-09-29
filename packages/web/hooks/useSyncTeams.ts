@@ -5,6 +5,7 @@ import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
 import { useSwitchWorkspace } from "./useSwitchWorkspace";
 import { useIsSyncHost } from "./useSyncRole";
+import { useServerAuthState } from "./useServerAuthSettled";
 
 import { useWatchEffect } from "./useWatchEffect";
 /**
@@ -22,7 +23,12 @@ import { useWatchEffect } from "./useWatchEffect";
 export function useSyncTeams(): any[] | undefined {
   // Follower windows receive `teams` over replication; only a host feeds it.
   const isSyncHost = useIsSyncHost();
-  const teamsQuery = useQuery(api.teams.getUserTeams, isSyncHost ? {} : "skip");
+  // getUserTeams answers an anonymous caller with `[]`, which this collection
+  // would read as "no teams": held until the server confirms the caller, and
+  // blind while it has lost them (useServerAuthSettled).
+  const { settled, identityLost } = useServerAuthState();
+  const liveQuery = useQuery(api.teams.getUserTeams, isSyncHost && settled ? {} : "skip");
+  const teamsQuery = identityLost ? undefined : liveQuery;
   useConvexSync(
     teamsQuery,
     useCallback((d: any) => useInboxStore.getState().syncTable("teams", d), []),

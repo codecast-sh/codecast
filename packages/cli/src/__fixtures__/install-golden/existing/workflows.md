@@ -16,7 +16,7 @@ A user's own section sitting BETWEEN two codecast blocks. Nothing may move it.
 
 ## Referencing objects
 
-Every codecast object has a short ID. Write one into your prose and it renders as a live reference: the object's title, its current state, and a link that opens it. This works anywhere you write — messages, summaries, task comments, doc bodies, trigger prompts.
+Every codecast object has a short ID. Written anywhere (messages, summaries, task comments, doc bodies, trigger prompts), it renders as a live reference: title, current state, and a link.
 
 | Object  | Short ID  | Where to find it |
 |---------|-----------|------------------|
@@ -26,9 +26,7 @@ Every codecast object has a short ID. Write one into your prose and it renders a
 | Trigger | `tr-42`   | `cast trigger ls` |
 | Doc     | `doc:<id>` | `cast doc ls`, `cast doc search` |
 
-There are two forms. Write the bare ID by default — `Filed under ct-4102.` — it reads as a normal sentence and still renders the full reference. Write `@[Title id]` — `@[Fix the auth race ct-4102]` — when the reader needs the name in the sentence itself.
-
-Never paste an object's 32-character internal ID into prose. It renders as an unreadable blob, and every command that accepts an ID accepts the short one.
+Write the bare ID by default (`Filed under ct-4102.`); it reads as a normal sentence and still renders in full. Write `@[Title id]` (`@[Fix the auth race ct-4102]`) when the sentence needs the name. Never paste a 32-character internal ID: it renders as an unreadable blob, and every command accepts the short one.
 <!-- cast @VERSION@ -->
 <!-- /codecast-references -->
 
@@ -39,20 +37,16 @@ block by "everything to end of file" destroys this paragraph.
 
 ## Workflows
 
-Workflows are execution graphs (DOT syntax) that define multi-step processes with loops, conditions, and human approval gates. They bind to tasks or plans.
+Workflows are DOT execution graphs with loops, conditions and human approval gates, bound to a task or plan. Nodes are agent sessions (`backend=claude`), shell commands, approval gates or conditionals; the dashboard shows progress and gate buttons.
 
 ```bash
-cast workflow run flow.cast --task ct-xxxx  # Execute workflow for a task
-cast workflow run flow.cast --plan pl-xxxx  # Execute workflow for a plan
-cast workflow list                          # Available templates
-cast workflow push                          # Push workflow to web UI
-cast workflow runs [--task ct-N|--plan pl-N] # Runs across workflows: status, task, current node, gate
-cast role line @handle [--set <slug>]       # Read or set the workflow a role's tasks run on (default: line)
+cast workflow run flow.cast --task ct-N     # or --plan pl-N
+cast workflow list                          # available templates
+cast workflow push                          # push a workflow to the web UI
+cast workflow runs [--task ct-N|--plan pl-N] # status, task, current node, gate
+cast role line @handle [--set <slug>]       # read or set the workflow a role's tasks run on (default: line)
 ```
 
-Workflow nodes can be: agent sessions (`backend=claude`), shell commands, human approval gates, or conditionals. The web dashboard shows workflow progress and gate buttons.
-
-When collaborating on workflow creation, use DOT syntax:
 ```dot
 digraph my_flow {
   graph [goal="$task_title"]

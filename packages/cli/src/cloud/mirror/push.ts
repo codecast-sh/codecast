@@ -607,7 +607,10 @@ export function defaultDeps(signal?: AbortSignal): MirrorDeps {
     log: () => {},
     now: () => new Date(),
     loggedFailures: moduleLoggedFailures,
-    lock: (key, fn) => withMirrorLock(path.join(defaultConfigDir(), "mirror-locks", sha256(key)), fn, signal),
+    // The holder is another push to the same host (the background runner, a
+    // placement): wait out a whole push rather than fail a placement that
+    // needed exactly the work the holder is doing.
+    lock: (key, fn) => withMirrorLock(path.join(defaultConfigDir(), "mirror-locks", sha256(key)), fn, signal, MIRROR_PUSH_TIMEOUT_MS + 60_000),
     readProjects: (host) => readProjectRegistrations(host),
     retireProjects: async (host, roots) => { for (const root of roots) await unregisterProjectContext(host, root); },
   };

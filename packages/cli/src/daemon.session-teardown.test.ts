@@ -15,7 +15,7 @@ import {
   registerManagedStartedSession,
   resumeOwnerVerdict,
   sessionKillTrackingSnapshot,
-  stampedPaneReapEligibility,
+  reapPaneEligibility,
   summarizeReapSkips,
   tmuxSessionIsSinglePane,
   transcriptIdleMs,
@@ -41,7 +41,7 @@ const STRICT = { trustStatusFallback: false };    // every other resurrection pa
 //   D1 — the health sweep reconstituted killed conversations (isConversationRetired)
 //   D3 — resume ignored ownership on local devices (resumeOwnerVerdict)
 //   D4 — only cc-resume-* panes were reap candidates (parseReapCandidateRow +
-//        stampedPaneReapEligibility)
+//        reapPaneEligibility)
 
 describe("isConversationRetired", () => {
   test("a killed conversation must never be reconstituted", () => {
@@ -252,27 +252,27 @@ describe("parseReapCandidateRow", () => {
   });
 });
 
-describe("stampedPaneReapEligibility", () => {
+describe("reapPaneEligibility", () => {
   test("hidden from the inbox → eligible", () => {
     for (const field of ["inboxKilledAt", "inboxStashedAt", "inboxDismissedAt"] as const) {
-      expect(stampedPaneReapEligibility(authoritative({ [field]: 1_700_000_000_000 })).eligible).toBe(true);
+      expect(reapPaneEligibility("stamped", authoritative({ [field]: 1_700_000_000_000 })).eligible).toBe(true);
     }
   });
 
   test("visible in the inbox → NEVER reaped, however idle", () => {
-    expect(stampedPaneReapEligibility(authoritative())).toEqual({ eligible: false, reason: "inbox-visible" });
+    expect(reapPaneEligibility("stamped", authoritative())).toEqual({ eligible: false, reason: "inbox-visible" });
   });
 
   test("a pinned card stays visible even when killed → never reaped", () => {
     // Mirrors shouldShowInInbox: `inbox_killed_at && !inbox_pinned_at` hides it,
     // so a pin keeps the card (and its agent) around.
-    expect(stampedPaneReapEligibility(authoritative({ inboxKilledAt: 1, inboxPinnedAt: 2 })))
+    expect(reapPaneEligibility("stamped", authoritative({ inboxKilledAt: 1, inboxPinnedAt: 2 })))
       .toEqual({ eligible: false, reason: "pinned" });
   });
 
   test("unknown hide state fails CLOSED (opposite of the resurrection gate)", () => {
-    expect(stampedPaneReapEligibility(null)).toEqual({ eligible: false, reason: "hide-state-unknown" });
-    expect(stampedPaneReapEligibility(undefined).eligible).toBe(false);
+    expect(reapPaneEligibility("stamped", null)).toEqual({ eligible: false, reason: "hide-state-unknown" });
+    expect(reapPaneEligibility("stamped", undefined).eligible).toBe(false);
   });
 
   // The lie this used to tell: the status-only fallback carries NO hide fields,
@@ -280,14 +280,14 @@ describe("stampedPaneReapEligibility", () => {
   // visible-and-skipped in the audit log while the stamped reaper quietly no-oped
   // against an undeployed backend. Absence must report as absence.
   test("a degraded lifecycle reports hide-state-unknown, NOT inbox-visible", () => {
-    expect(stampedPaneReapEligibility(degraded({ status: "active" })))
+    expect(reapPaneEligibility("stamped", degraded({ status: "active" })))
       .toEqual({ eligible: false, reason: "hide-state-unknown" });
     // Even when the degraded row happens to look killed, hide state is still unknown.
-    expect(stampedPaneReapEligibility(degraded({ status: "completed" })).reason).toBe("hide-state-unknown");
+    expect(reapPaneEligibility("stamped", degraded({ status: "completed" })).reason).toBe("hide-state-unknown");
   });
 });
 
-describe("stampedPaneReapEligibility: a hidden session that is waiting on something keeps its process", () => {
+describe("reapPaneEligibility: a hidden session that is waiting on something keeps its process", () => {
   const hidden = () => authoritative({ inboxStashedAt: 1_700_000_000_000 });
   const clear = () => ({
     agentStatus: "idle" as const,
@@ -299,31 +299,43 @@ describe("stampedPaneReapEligibility: a hidden session that is waiting on someth
   });
 
   test("nothing pending → eligible", () => {
-    expect(stampedPaneReapEligibility(hidden(), clear())).toEqual({ eligible: true, reason: null });
+    expect(reapPaneEligibility("stamped", hidden(), clear())).toEqual({ eligible: true, reason: null });
   });
 
   test("open background work lives inside the agent and dies with it", () => {
-    expect(stampedPaneReapEligibility(hidden(), { ...clear(), agentStatus: "waiting" }).reason).toBe("open-background-work");
+    expect(reapPaneEligibility("stamped", hidden(), { ...clear(), agentStatus: "waiting" }).reason).toBe("open-background-work");
   });
 
   test("a declared machine wake is a wait", () => {
-    expect(stampedPaneReapEligibility(hidden(), { ...clear(), agentStatus: "dormant" }).reason).toBe("dormant");
+    expect(reapPaneEligibility("stamped", hidden(), { ...clear(), agentStatus: "dormant" }).reason).toBe("dormant");
   });
 
   test("queued, landing or locked deliveries and live subagents all block", () => {
-    expect(stampedPaneReapEligibility(hidden(), { ...clear(), pendingMessages: true }).reason).toBe("pending-messages");
-    expect(stampedPaneReapEligibility(hidden(), { ...clear(), deliveryActive: true }).reason).toBe("delivery-active");
-    expect(stampedPaneReapEligibility(hidden(), { ...clear(), subagentsLive: true }).reason).toBe("live-subagents");
-    expect(stampedPaneReapEligibility(hidden(), { ...clear(), targetLocked: true }).reason).toBe("in-flight-messages");
+    expect(reapPaneEligibility("stamped", hidden(), { ...clear(), pendingMessages: true }).reason).toBe("pending-messages");
+    expect(reapPaneEligibility("stamped", hidden(), { ...clear(), deliveryActive: true }).reason).toBe("delivery-active");
+    expect(reapPaneEligibility("stamped", hidden(), { ...clear(), subagentsLive: true }).reason).toBe("live-subagents");
+    expect(reapPaneEligibility("stamped", hidden(), { ...clear(), targetLocked: true }).reason).toBe("in-flight-messages");
   });
 
   test("a resume still settling is not judged yet", () => {
-    expect(stampedPaneReapEligibility(hidden(), { ...clear(), resumedAgoMs: HIBERNATE_RESUME_GRACE_MS - 1 }).reason).toBe("recently-resumed");
-    expect(stampedPaneReapEligibility(hidden(), { ...clear(), resumedAgoMs: HIBERNATE_RESUME_GRACE_MS }).eligible).toBe(true);
+    expect(reapPaneEligibility("stamped", hidden(), { ...clear(), resumedAgoMs: HIBERNATE_RESUME_GRACE_MS - 1 }).reason).toBe("recently-resumed");
+    expect(reapPaneEligibility("stamped", hidden(), { ...clear(), resumedAgoMs: HIBERNATE_RESUME_GRACE_MS }).eligible).toBe(true);
   });
 
   test("the hide gates still come first", () => {
-    expect(stampedPaneReapEligibility(authoritative(), { ...clear(), agentStatus: "waiting" }).reason).toBe("inbox-visible");
+    expect(reapPaneEligibility("stamped", authoritative(), { ...clear(), agentStatus: "waiting" }).reason).toBe("inbox-visible");
+  });
+
+  // 2026-09-29: a resumed session waited 4.7h on a background build with the
+  // daemon reporting "waiting" the whole time, and the reaper killed its
+  // cc-resume-* pane on idle alone, twice. A resume pane has no inbox gate, but
+  // the wait lives inside its process just the same.
+  test("a resume pane keeps its process while it waits, with no hide state at all", () => {
+    expect(reapPaneEligibility("resume", null, { ...clear(), agentStatus: "waiting" }).reason).toBe("open-background-work");
+    expect(reapPaneEligibility("resume", null, { ...clear(), agentStatus: "dormant" }).reason).toBe("dormant");
+    expect(reapPaneEligibility("resume", null, { ...clear(), subagentsLive: true }).reason).toBe("live-subagents");
+    expect(reapPaneEligibility("resume", null, { ...clear(), pendingMessages: true }).reason).toBe("pending-messages");
+    expect(reapPaneEligibility("resume", authoritative(), clear())).toEqual({ eligible: true, reason: null });
   });
 });
 

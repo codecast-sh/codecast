@@ -1110,7 +1110,7 @@ describe("the route up", () => {
     expect(told(tables, "standing_top")).toEqual([]);
   });
 
-  test("one run per waiting episode: a second check, a reason that changes while it waits, and the declaration itself add nothing", async () => {
+  test("one run per ask: a second check, a reason that changes while it waits, the same block declared again after more work, and the declaration itself add nothing", async () => {
     const { ctx, tables } = blockedHand();
     await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
     await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
@@ -1118,9 +1118,14 @@ describe("the route up", () => {
     tables.managed_sessions[0].agent_status = "stopped";
     await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
     expect(told(tables, "standing_sub").length).toBe(1);
-    // The next turn that ends waiting is a new episode.
+    // More work that ends on the same pinned ask is the same request.
     tables.managed_sessions[0].agent_status = "idle";
     tables.conversations[0].message_count = 9;
+    await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    expect(told(tables, "standing_sub").length).toBe(1);
+    // A new ask is a new request.
+    tables.conversations[0].message_count = 12;
+    tables.conversations[0].thread_state = "Which price band for Ohio?";
     await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
     expect(told(tables, "standing_sub").length).toBe(2);
   });
@@ -1130,7 +1135,7 @@ describe("the route up", () => {
     await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
     const trigger = triggerOn(tables, "standing_sub")!;
     await applyPause(ctx as any, trigger as any);
-    tables.conversations[0].message_count = 9;
+    tables.conversations[0].thread_state = "Which price band for Ohio?";
     await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
     expect(told(tables, "standing_sub").length).toBe(1);
     // Resumed, it stays disarmed until an event, and the episode that was
@@ -1141,7 +1146,7 @@ describe("the route up", () => {
     await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
     expect(told(tables, "standing_sub").map((f) => f?.body)).toEqual([expect.any(String), "Answer it yourself when you can."]);
     trigger.status = "completed";
-    tables.conversations[0].message_count = 12;
+    tables.conversations[0].thread_state = "Which price band for Utah?";
     await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
     expect(told(tables, "standing_sub").length).toBe(2);
     expect((tables.agent_tasks ?? []).length).toBe(1);

@@ -139,7 +139,7 @@ export function RevealOpenLink({
         title={label}
       >
         <span className="object-reveal__open-label">
-          {label}
+          <span className="object-reveal__open-text">{label}</span>
           <ArrowUpRight className={variant === "bar" ? "h-4 w-4" : "h-3.5 w-3.5"} />
         </span>
       </Link>

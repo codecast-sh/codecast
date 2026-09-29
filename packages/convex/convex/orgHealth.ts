@@ -1,4 +1,5 @@
 import { action, query } from "./functions";
+import { isWholeWorkspaceRole } from "@codecast/shared/contracts/orgLead";
 import { api } from "./_generated/api";
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
@@ -6,7 +7,7 @@ import { scopedFetch } from "./data";
 import { collectOrgSessions, computeScopeFeed, requireWorkspaceCaller, resolveScope, sessionsInScope, waitingSinceOf, type OrgScan, type ResolvedScope } from "./org";
 import { planProjectsOf } from "./orgRoles";
 import { capsFor, countersFor, utcDay } from "./lib/orgCaps";
-import { isWholeWorkspace, scopeIds } from "./lib/orgScope";
+import { scopeIds } from "./lib/orgScope";
 import { ownsWork, projectsWithoutAnOwnerAmongWatchers } from "@codecast/shared/contracts/orgLead";
 import { capacity, capacityFlags, type HealthFlag, isOverloaded, overloadRatio, type RoleLedger, type RoleLoad } from "@codecast/shared/contracts/orgCapacity";
 import { computeReportingPeople } from "./orgGoals";
@@ -74,7 +75,7 @@ export function latestEventAnywhere(tasks: any[], plans: any[], scan: OrgScan): 
  *  read a whole workspace role as idle by mistake. */
 export async function roleActivity(ctx: Ctx, userId: Id<"users">, role: any, now: number, opts: { wholeWorkspaceLatest: number | null; resolved?: ResolvedScope | null; lastScopeEventAt?: number | null }): Promise<RoleActivity> {
   let lastScopeEventAt: number | null = null;
-  if (isWholeWorkspace(scopeIds(role.scope ?? { project_ids: [], plan_ids: [] }))) {
+  if (isWholeWorkspaceRole(role)) {
     lastScopeEventAt = opts.wholeWorkspaceLatest;
   } else if (opts.lastScopeEventAt !== undefined) {
     // The caller already holds the scope's rows (org.health): no second read.
@@ -395,7 +396,7 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
   const planProject = (planId: any) => planById.get(String(planId))?.project_id ?? planProjectOf.get(String(planId)) ?? undefined;
   const itemsOf = async (role: any) => {
     const ids = scopeIds(role.scope ?? { project_ids: [], plan_ids: [] });
-    if (isWholeWorkspace(ids)) {
+    if (isWholeWorkspaceRole(role)) {
       const owns = (w: { project_id?: unknown; plan_id?: unknown }) => ownsWork(role, w, roles);
       const projectIds = new Set(projects.filter((p) => owns({ project_id: p._id })).map((p) => String(p._id)));
       const planIds = new Set(plans.filter((p) => owns({ plan_id: p._id, project_id: p.project_id })).map((p) => String(p._id)));
@@ -514,7 +515,7 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
     // and the sessions in scope by the feed's session rule (org.sessionsInScope
     // over the scan), so no role costs a second read of its scope.
     let lastScopeEventAt: number | null | undefined = undefined;
-    if (!isWholeWorkspace(scopeIds(role.scope ?? { project_ids: [], plan_ids: [] }))) {
+    if (!isWholeWorkspaceRole(role)) {
       let latest: number | null = null;
       const see = (t: number | undefined | null) => { if (t && (latest === null || t > latest)) latest = t; };
       for (const t of items.tasks) see(t.updated_at);
@@ -602,7 +603,7 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
       load,
       ledger,
       spend,
-      reviews_only: isWholeWorkspace(scopeIds(role.scope ?? { project_ids: [], plan_ids: [] })),
+      reviews_only: isWholeWorkspaceRole(role),
       scope_empty: items.counted.rule === "scope" && items.counted.projects === 0 && items.counted.plans === 0,
       flow: { decisions_7d: flow.decisions_7d, median_recommend_min: flow.median_recommend_min, review_stalls: stalls, done_7d: done7, hands_window: hands.length, sends_7d: { to: toRows.map((r) => ({ handle: r.handle, n: r.n })), from: fromRows.map((r) => ({ handle: r.handle, n: r.n })) } },
       idle_days: activity.idle_days,

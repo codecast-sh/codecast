@@ -10,6 +10,7 @@ import { Button } from "../../../components/ui/button";
 import { Switch } from "../../../components/ui/switch";
 import { Fragment, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { CLOUD_SESSION_SOURCES, cloudSessionSyncSettings, type CloudSessionSource } from "@codecast/shared/contracts";
 import {
   GitBranch, Folder, FolderGit2, Search, AlertTriangle, RefreshCw, Terminal,
 } from "lucide-react";
@@ -87,6 +88,17 @@ type SyncProject = {
  */
 type ShareRow = SyncProject & { checkouts: SyncProject[] };
 
+const CLOUD_SYNC_COPY: Record<CloudSessionSource, { on: string; off: string }> = {
+  claude: {
+    on: "Sessions you run on claude.ai/code sync here like local ones, and you can message them from codecast. Your daemon reads them with the Claude login on your machine.",
+    off: "Sessions you run on claude.ai/code stay on claude.ai only.",
+  },
+  cursor: {
+    on: "Cloud agents you run on cursor.com, in Slack or from Cursor sync here like local ones, and you can message them from codecast. Your daemon reads them with the Cursor API key on your machine (Settings → Provider keys).",
+    off: "Only the Cursor Cloud sessions you start from codecast sync here. The rest stay on cursor.com.",
+  },
+};
+
 export default function SyncPage() {
   const { user } = useCurrentUser();
   const syncSettings: SyncSettings | null = user ? { sync_mode: user.sync_mode ?? "all", sync_projects: user.sync_projects ?? [], sync_excluded: user.sync_excluded ?? [] } : null;
@@ -94,8 +106,8 @@ export default function SyncPage() {
   const { data: projects } = useSettingsData("syncProjects");
   const { data: directoryMappings } = useSettingsData("directoryMappings");
   const updateSyncSettings = useMutation(api.users.updateSyncSettings);
-  const claudeCloudSync = (user as { claude_cloud_sync?: boolean } | null | undefined)?.claude_cloud_sync ?? true;
-  const setClaudeCloudSync = useInboxStore((s) => s.setClaudeCloudSync);
+  const cloudSync = cloudSessionSyncSettings(user as Parameters<typeof cloudSessionSyncSettings>[0]);
+  const setCloudSessionSync = useInboxStore((s) => s.setCloudSessionSync);
   const updateDirectoryMapping = useMutation(api.users.updateDirectoryTeamMapping);
   const removeDirectoryMapping = useMutation(api.users.removeDirectoryTeamMapping);
   const deleteConversationsForPath = useMutation(api.users.deleteConversationsForPath);
@@ -607,16 +619,15 @@ export default function SyncPage() {
         >
           <Switch checked={syncAll} onCheckedChange={handleToggleSyncAll} aria-label="Sync all folders" />
         </SettingsRow>
-        <SettingsRow
-          label="Sync Claude Code cloud sessions"
-          description={
-            claudeCloudSync
-              ? "Sessions you run on claude.ai/code sync here like local ones, and you can message them from codecast. Your daemon reads them with the Claude login on your machine."
-              : "Sessions you run on claude.ai/code stay on claude.ai only."
-          }
-        >
-          <Switch checked={claudeCloudSync} onCheckedChange={setClaudeCloudSync} aria-label="Sync Claude Code cloud sessions" />
-        </SettingsRow>
+        {(Object.keys(CLOUD_SESSION_SOURCES) as CloudSessionSource[]).map((source) => {
+          const { field, label } = CLOUD_SESSION_SOURCES[source];
+          const on = cloudSync[field];
+          return (
+            <SettingsRow key={source} label={`Sync ${label}`} description={on ? CLOUD_SYNC_COPY[source].on : CLOUD_SYNC_COPY[source].off}>
+              <Switch checked={on} onCheckedChange={(v) => setCloudSessionSync(source, v)} aria-label={`Sync ${label}`} />
+            </SettingsRow>
+          );
+        })}
       </SettingsSection>
 
       <SettingsSection

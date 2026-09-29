@@ -28,9 +28,7 @@ block by "everything to end of file" destroys this paragraph.
 
 ## Calls
 
-The team's huddles are transcribed with exact speaker attribution, and every call gets an
-auto-generated title, summary and action items once it ends. `cast calls` is how you read
-what was said without having been on the call — the decisions, the asks, who owns what.
+Team huddles are transcribed with exact speaker attribution, and each call gets a title, summary and action items when it ends. `cast calls` shows what was decided, asked and owned without having been there.
 
 ```bash
 cast calls                        # team call history, live calls first
@@ -40,7 +38,6 @@ cast call <id> --json             # machine-readable, segments too
 cast call hold 3m|off             # hold the room's words while you work
 ```
 
-Read the transcript when a task or thread refers to "what we said on the call", and quote
-the exact line rather than paraphrase it.
+When a task or thread refers to what was said on a call, read the transcript and quote the exact line rather than paraphrase it.
 <!-- cast @VERSION@ -->
 <!-- /codecast-calls -->

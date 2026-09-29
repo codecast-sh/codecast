@@ -2,7 +2,7 @@
 import { VersionedObservationSet } from "./versionedObservationSet.js";
 import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission.js";
 import { pendingMessageFinished, prepareTmuxDelivery, receiptSettled, TmuxDeliveryUncertainError, type TmuxDeliveryIdentity, type TmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
-import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_GLOBAL, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, classifyApiErrorBanner, confineToOwningDevice, cursorCloudModel, findModelOption, fromConvexAgentType, modelOptionKey, isCodexSafetyError, isMachineDeliveredMessage, isUsageLimitDialog, isValidPaneTarget, snippetBySlug, verdictFromProbe, worktreeOfPath } from "@codecast/shared/contracts";
+import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_GLOBAL, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, CLIENT_ERROR_BANNER_PREFIX, CLOUD_SESSION_SOURCES, classifyApiErrorBanner, confineToOwningDevice, cursorCloudModel, findModelOption, fromConvexAgentType, modelOptionKey, isCodexSafetyError, isMachineDeliveredMessage, isUsageLimitDialog, isValidPaneTarget, snippetBySlug, verdictFromProbe, worktreeOfPath } from "@codecast/shared/contracts";
 import { holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, setPendingRedrive } from "./pendingPromptHold.js";
 import { typedPollAnswer } from "./typedPollAnswer.js";
 import { codexTurnErrorMessage } from "./codexTurnError.js";
@@ -348,11 +348,11 @@ import {
   grokStableRulesFragment,
 } from "./resumeCommand.js";
 import { ClaudeCloudWatcher, cloudEventUuid } from "./claudeCloud.js";
-import { CursorCloudWatcher } from "./cursorCloud.js";
-import { CursorCloudSessions } from "./cursorCloudSessions.js";
+import { CursorCloudWatcher, verifyCursorKey } from "./cursorCloud.js";
+import { CursorCloudSessions, CursorCloudSetupError } from "./cursorCloudSessions.js";
 import { conventionSeed, resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, isResumableCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
 import { blankCodexRecoveryParams, buildLaunchArgs, getConfiguredAgentArgs, getDefaultParamFlags, getPermissionFlags, codexPermissionsFromArgs, launchBinary } from "./launchCommand.js";
-import type { AgentClientId, AgentDefinitionSpec, AgentPaneReadiness, AgentStatus, DeviceSnippetSettings, LivenessVerdict, OpenTaskKind, OpenTaskReport, PaneTerminalModes, StableLaunchPrefs } from "@codecast/shared/contracts";
+import type { AgentClientId, AgentDefinitionSpec, CloudSessionSource, AgentPaneReadiness, AgentStatus, DeviceSnippetSettings, LivenessVerdict, OpenTaskKind, OpenTaskReport, PaneTerminalModes, StableLaunchPrefs } from "@codecast/shared/contracts";
 import { planGatedSnippets } from "./gatedSnippets";
 import { readThreadStateStamp } from "./threadStateStamp.js";
 import { type Config, getAgentArgs, isCloudMirrorEnabled, isOpencodeServerEnabled, opencodeServerPort } from "./config/types.js";
@@ -369,7 +369,7 @@ import {
 import { providerKeySourcePrefix } from "./providerKeyLaunch.js";
 import { providerKeyStorePath, readProviderKeyStore } from "./providerKeyStore.js";
 import { MintFlowControl, submitMintApprovalCode } from "./mintFlowControl.js";
-import { getProviderKeyPublicKey, applyProviderKeyCommand, decryptProviderKeyPayload } from "./providerKeyCrypto.js";
+import { getProviderKeyPublicKey, applyProviderKeyCommand, decryptProviderKeyPayload, type ProviderKeyVerifier } from "./providerKeyCrypto.js";
 import type { LoopFreezeSummary, LoopFreezeState } from "./loopFreezeState.js";
 import { defaultConfigDir } from "./config/configDir.js";
 import { findTmuxSessionsById } from "./tmuxSessionLookup.js";
@@ -1280,6 +1280,10 @@ let conversationCacheRef: ConversationCache | null = null;
 // Cursor Cloud Agents (cursorCloud.ts): the mirror watcher, started with the
 // Cursor transcript watcher, and the conversations that run on a cloud agent.
 let cursorCloudWatcher: CursorCloudWatcher | null = null;
+/** Providers that can check a key before it is stored (Settings → Provider keys). */
+const verifyProviderKey: ProviderKeyVerifier = async (provider, apiKey) => provider === "cursor" ? verifyCursorKey(apiKey) : { ok: true };
+/** When each Cursor Cloud setup card was last posted, so a held retry does not repost it. */
+const cursorSetupCardsPosted = new Map<string, number>();
 function cursorApiKey(): string | null {
   return readProviderKeyStore(CONFIG_DIR).cursor || process.env.CURSOR_API_KEY || null;
 }
@@ -4729,11 +4733,13 @@ async function sendHeartbeat(): Promise<void> {
       }).catch((err) => log(`[capabilities] reconcile failed: ${String(err).slice(0, 160)}`));
     }
 
-    if (typeof data.claude_cloud_sync === "boolean" && data.claude_cloud_sync !== (activeConfig?.claude_cloud_sync ?? true)) {
-      log(`Claude cloud session sync ${data.claude_cloud_sync ? "on" : "off"} (account setting)`);
-      patchConfig({ claude_cloud_sync: data.claude_cloud_sync });
-      if (activeConfig) activeConfig.claude_cloud_sync = data.claude_cloud_sync;
-      applyClaudeCloudSync(data.claude_cloud_sync);
+    for (const [source, { field }] of Object.entries(CLOUD_SESSION_SOURCES) as [CloudSessionSource, (typeof CLOUD_SESSION_SOURCES)[CloudSessionSource]][]) {
+      const wanted = data[field];
+      if (typeof wanted !== "boolean" || wanted === ((activeConfig?.[field] ?? true) !== false)) continue;
+      log(`${CLOUD_SESSION_SOURCES[source].label} sync ${wanted ? "on" : "off"} (account setting)`);
+      patchConfig({ [field]: wanted });
+      if (activeConfig) activeConfig[field] = wanted;
+      if (source === "claude") applyClaudeCloudSync(wanted);
     }
 
     if (data.sync_mode !== undefined) {
@@ -7958,10 +7964,10 @@ async function executeRemoteCommand(
         // arrives SEALED to this device's ECDH public key — Convex never saw
         // plaintext. applyProviderKeyCommand decrypts + updates the 0600 store; we
         // then fan out to remotes and heartbeat so managed_provider_ids round-trips.
-        const applied = applyProviderKeyCommand(CONFIG_DIR, commandArgs);
-        if (!applied.ok) { error = `set_provider_key: ${applied.error}`; break; }
-        log(`[KEYS] ${applied.op} ${applied.provider} (web)`);
-        result = JSON.stringify({ op: applied.op, provider: applied.provider });
+        const applied = await applyProviderKeyCommand(CONFIG_DIR, commandArgs, verifyProviderKey);
+        if (!applied.ok) { error = applied.error; break; }
+        log(`[KEYS] ${applied.op} ${applied.provider} (web)${applied.account ? ` for ${applied.account}` : ""}`);
+        result = JSON.stringify({ op: applied.op, provider: applied.provider, ...(applied.account ? { account: applied.account } : {}) });
         pushProviderKeysToRemoteHosts("web set").catch(() => {});
         await sendHeartbeat().catch(() => {});
         break;
@@ -20450,7 +20456,8 @@ async function publishWorktreeMirrors(targets: Array<{ sessionId: string; conver
 //
 // Two candidate classes, differing ONLY in the extra hide-state gate:
 //   - cc-resume-* / cx-resume-*: a warm re-resume shell. Reaped on the idle
-//     signals alone — clicking the session cold-resumes it, so nothing is lost.
+//     signals once it waits on nothing (reapPaneEligibility) — clicking the
+//     session cold-resumes it, so nothing is lost.
 //   - any other codecast-stamped pane (@codecast_session_id /
 //     @codecast_conversation_id): the session's PRIMARY terminal. Reaped only
 //     when its conversation is already out of the inbox — stashed, dismissed or
@@ -20533,7 +20540,7 @@ export type ReapCandidate = {
   sessionId: string | null;
   /** From @codecast_conversation_id, when the pane carries it. */
   convId: string | null;
-  /** "resume" panes reap on idle alone; "stamped" panes also need a hide state. */
+  /** "stamped" panes also need a hide state; both kinds keep a session that is waiting on something. */
   kind: "resume" | "stamped";
   /** What tmux reports about the pane itself; null when a field did not parse. */
   pane?: ReapPaneFacts | null;
@@ -20638,12 +20645,13 @@ async function paneChildCount(pid: number): Promise<number | null> {
   }
 }
 
-// Whether a stamped (primary-terminal) pane's conversation is hidden enough to
-// reap. Killed, stashed and dismissed all mean the user has taken the card out
-// of their inbox; anything still visible there is off limits regardless of idle
-// time, and a PINNED card is visible even when killed (see shouldShowInInbox).
-// Unknown lifecycle fails CLOSED — the opposite of the resurrection gate,
-// because here the cautious move is to leave the agent running.
+// Whether an idle pane may be reaped. A stamped (primary-terminal) pane's
+// conversation must also be hidden: killed, stashed and dismissed all mean the
+// user has taken the card out of their inbox; anything still visible there is
+// off limits regardless of idle time, and a PINNED card is visible even when
+// killed (see shouldShowInInbox). Unknown lifecycle fails CLOSED — the opposite
+// of the resurrection gate, because here the cautious move is to leave the
+// agent running.
 export type StampedPaneReapFacts = {
   /** The daemon's last sent status: "waiting" = open background work, "dormant" = a machine wakes it. */
   agentStatus?: AgentStatus;
@@ -20659,27 +20667,26 @@ export type StampedPaneReapFacts = {
   resumedAgoMs: number;
 };
 
-// Out of the inbox is necessary, not sufficient. A parked session that is
-// WAITING on something keeps its process, because the wait lives inside it:
+// Out of the inbox is necessary, not sufficient, and a resume pane has no inbox
+// gate at all. A session of either kind that is WAITING on something keeps its
+// process, because the wait lives inside it:
 // open background work (a Monitor or a background task dies with the agent),
 // a declared machine wake, queued messages nobody has delivered, a delivery
 // landing this instant, a live subagent, a tmux target another path holds, or
 // a resume still settling. The same facts hibernation refuses on, read from
 // the same sources, so the two teardowns cannot disagree about what "waiting"
-// means.
-export function stampedPaneReapEligibility(
+// means. A resumed session waiting 5h on a background build is idle to every
+// signal above this gate, so skipping it for resume panes killed the build
+// (2026-09-29, twice in one day).
+export function reapPaneEligibility(
+  kind: ReapCandidate["kind"],
   lifecycle: ConversationLifecycle | null | undefined,
   facts?: StampedPaneReapFacts,
 ): { eligible: boolean; reason: string | null } {
-  // "Absent hide fields" is NOT "not hidden". The status-only fallback carries no
-  // hide state at all, and reading its silence as "inbox-visible" would put a lie
-  // in the audit log (killed conversations reported as visible-and-skipped) while
-  // the stamped reaper silently no-ops against an undeployed backend. Demand that
-  // the state was actually fetched.
-  if (!lifecycle || !lifecycle.hideStateKnown) return { eligible: false, reason: "hide-state-unknown" };
-  if (lifecycle.inboxPinnedAt) return { eligible: false, reason: "pinned" };
-  const hidden = !!(lifecycle.inboxKilledAt || lifecycle.inboxStashedAt || lifecycle.inboxDismissedAt);
-  if (!hidden) return { eligible: false, reason: "inbox-visible" };
+  if (kind === "stamped") {
+    const hide = stampedPaneHideReason(lifecycle);
+    if (hide) return { eligible: false, reason: hide };
+  }
   if (!facts) return { eligible: true, reason: null };
   if (facts.agentStatus === "waiting") return { eligible: false, reason: "open-background-work" };
   if (facts.agentStatus === "dormant") return { eligible: false, reason: "dormant" };
@@ -20689,6 +20696,18 @@ export function stampedPaneReapEligibility(
   if (facts.targetLocked) return { eligible: false, reason: "in-flight-messages" };
   if (facts.resumedAgoMs < HIBERNATE_RESUME_GRACE_MS) return { eligible: false, reason: "recently-resumed" };
   return { eligible: true, reason: null };
+}
+
+function stampedPaneHideReason(lifecycle: ConversationLifecycle | null | undefined): string | null {
+  // "Absent hide fields" is NOT "not hidden". The status-only fallback carries no
+  // hide state at all, and reading its silence as "inbox-visible" would put a lie
+  // in the audit log (killed conversations reported as visible-and-skipped) while
+  // the stamped reaper silently no-ops against an undeployed backend. Demand that
+  // the state was actually fetched.
+  if (!lifecycle || !lifecycle.hideStateKnown) return "hide-state-unknown";
+  if (lifecycle.inboxPinnedAt) return "pinned";
+  const hidden = !!(lifecycle.inboxKilledAt || lifecycle.inboxStashedAt || lifecycle.inboxDismissedAt);
+  return hidden ? null : "inbox-visible";
 }
 
 /**
@@ -20889,7 +20908,7 @@ export function tmuxSessionIsSinglePane(listPanesStdout: string): boolean {
 // message is the honest clock; mtime is only the fallback when no message
 // carries a timestamp (a codex transcript, a tail of meta lines). This measures
 // idleness, never liveness: whether the agent is mid-turn is the pane's and the
-// tail's call, and the delivery gates in stampedPaneReapEligibility cover the
+// tail's call, and the delivery gates in reapPaneEligibility cover the
 // instant between an injected message and the agent's first line about it.
 export function transcriptIdleMs(input: { mtimeMs: number; lastRealTimestampMs: number | null; now: number }): number {
   if (input.lastRealTimestampMs === null) return input.now - input.mtimeMs;
@@ -21073,32 +21092,28 @@ async function reapIdleOrphanTerminals(): Promise<void> {
     if (verdict.reason !== null) { skips.push(verdict.reason); continue; }
     const convId = cand.convId ?? convCache[sessionId];
     // A stamped pane is the session's PRIMARY terminal — the one a human may be
-    // attached to. Two extra gates, cheapest first: the whole tmux session must
-    // be the single pane we actually inspected, and its conversation must already
-    // be out of the inbox. (cc-resume-* shells skip both: nobody attaches to them.)
+    // attached to — so the whole tmux session must also be the single pane we
+    // actually inspected. (cc-resume-* shells skip it: nobody attaches to them.)
     if (cand.kind === "stamped") {
       let panes: string;
       try { ({ stdout: panes } = await tmuxExec(["list-panes", "-s", "-t", cand.tmux, "-F", "#{window_index}.#{pane_index}"], { timeout: 4000 })); }
       catch { skips.push("pane-list-failed"); continue; }
       if (!tmuxSessionIsSinglePane(panes)) { skips.push("multi-pane"); continue; }
-      const lifecycle = convId && syncServiceRef
-        ? await syncServiceRef.getConversationLifecycle(convId, sessionId).catch(() => null)
-        : null;
-      const eligibility = stampedPaneReapEligibility(lifecycle, {
-        agentStatus: lastSentAgentStatus.get(sessionId),
-        pendingMessages: !!lifecycle?.hasPendingMessages,
-        deliveryActive: productionHibernationIo.deliveryActive(sessionId, convId),
-        subagentsLive: subagentActiveAgoMs(sessionId) !== Infinity,
-        targetLocked: tmuxTargetLocks.has(cand.tmux) || tmuxTargetLocks.has(`=${cand.tmux}`),
-        resumedAgoMs: now - (lastResumeAt.get(sessionId) ?? -Infinity),
-      });
-      if (!eligibility.eligible) { skips.push(eligibility.reason!); continue; }
-      const gcWorktree = !!(lifecycle?.inboxKilledAt || lifecycle?.inboxDismissedAt);
-      if (await reapOneTerminal(sessionId, cand.tmux, convId, verdict.idleHours, { gcWorktree })) reaped++;
-      else skips.push("busy-at-kill");
-      continue;
     }
-    if (await reapOneTerminal(sessionId, cand.tmux, convId, verdict.idleHours)) reaped++;
+    const lifecycle = convId && syncServiceRef
+      ? await syncServiceRef.getConversationLifecycle(convId, sessionId).catch(() => null)
+      : null;
+    const eligibility = reapPaneEligibility(cand.kind, lifecycle, {
+      agentStatus: lastSentAgentStatus.get(sessionId),
+      pendingMessages: !!lifecycle?.hasPendingMessages,
+      deliveryActive: productionHibernationIo.deliveryActive(sessionId, convId),
+      subagentsLive: subagentActiveAgoMs(sessionId) !== Infinity,
+      targetLocked: tmuxTargetLocks.has(cand.tmux) || tmuxTargetLocks.has(`=${cand.tmux}`),
+      resumedAgoMs: now - (lastResumeAt.get(sessionId) ?? -Infinity),
+    });
+    if (!eligibility.eligible) { skips.push(eligibility.reason!); continue; }
+    const gcWorktree = cand.kind === "stamped" && !!(lifecycle?.inboxKilledAt || lifecycle?.inboxDismissedAt);
+    if (await reapOneTerminal(sessionId, cand.tmux, convId, verdict.idleHours, { gcWorktree })) reaped++;
     else skips.push("busy-at-kill");
   }
   // Every pass leaves a line: without it the skip reasons were invisible and a
@@ -24792,7 +24807,23 @@ async function deliverMessage(
   // Backends that are not a pane: a codex app-server thread, a Cursor Cloud agent.
   const tryBackendDelivery = async (): Promise<boolean> => {
     if (await tryAppServerDelivery()) return true;
-    if (!await cursorCloudSessions.deliver(conversationId, content)) return false;
+    let delivered: boolean;
+    try {
+      delivered = await cursorCloudSessions.deliver(conversationId, content);
+    } catch (err) {
+      // A setup problem shows where the person is looking: as the turn-stopped
+      // card (an auth one carries the key form), once per kind.
+      const cardKey = err instanceof CursorCloudSetupError ? `cursor-cloud-setup:${conversationId}:${err.kind}` : "";
+      if (err instanceof CursorCloudSetupError && Date.now() - (cursorSetupCardsPosted.get(cardKey) ?? 0) > 60_000) {
+        cursorSetupCardsPosted.set(cardKey, Date.now());
+        await syncService.addMessages({
+          conversationId,
+          messages: [{ messageUuid: cardKey, role: "assistant" as const, content: `${CLIENT_ERROR_BANNER_PREFIX} ${err.message}`, timestamp: Date.now() }],
+        }).catch(logConvexFailure);
+      }
+      throw err;
+    }
+    if (!delivered) return false;
     await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
     logDelivery(`[cursor-cloud] delivered msg=${messageId.slice(0, 8)} to the cloud agent of conv=${conversationId.slice(0, 12)}`);
     return true;
@@ -29412,12 +29443,26 @@ async function main(): Promise<void> {
 
   // Cursor Cloud Agents: mirrored into Cursor JSONL transcripts and fed
   // through the same handler as local ones. Idle until a Cursor API key is set.
-  if (config.cursor_cloud_sync !== false) {
-    cursorCloudWatcher = new CursorCloudWatcher({ readKey: cursorApiKey, resolveRepoDir: resolveLocalRepoFor, log });
-    cursorCloudWatcher.on("session", (event) => cursorTranscriptWatcher.emit("session", event));
-    cursorCloudWatcher.on("error", (error: Error) => log(`Cursor cloud poll failed: ${error.message}`));
-    cursorCloudWatcher.start();
-  }
+  // The watcher always runs (sessions started from codecast need their
+  // mirror); the account's cursor_cloud_sync decides whether it also imports
+  // the account's other cloud agents, read on every poll.
+  cursorCloudWatcher = new CursorCloudWatcher({
+    readKey: cursorApiKey,
+    importAll: () => activeConfig?.cursor_cloud_sync !== false,
+    isOwnAgent: (agentId) => cursorCloudSessions.ownsAgent(agentId),
+    resolveRepoDir: resolveLocalRepoFor,
+    log,
+  });
+  cursorCloudWatcher.on("session", (event) => cursorTranscriptWatcher.emit("session", event));
+  cursorCloudWatcher.on("error", (error: Error) => log(`Cursor cloud poll failed: ${error.message}`));
+  // The branch the agent pushed is the session's branch: the header's branch
+  // link and codecast's pull request linking both read git_branch.
+  cursorCloudWatcher.on("git", (git) => {
+    const conversationId = conversationCache[git.agentId];
+    if (!conversationId || !git.branch) return;
+    void syncService.updateGitState({ conversation_id: conversationId, git_branch: git.branch, ...(git.repoUrl ? { git_remote_url: git.repoUrl } : {}) }).catch(() => {});
+  });
+  cursorCloudWatcher.start();
 
   codexAppServerInstance = new CodexAppServer({
     log,
@@ -30158,6 +30203,13 @@ async function main(): Promise<void> {
             logDelivery(`HELD: msg=${msg._id.slice(0, 8)} waiting for a human answer in conv=${msg.conversation_id.slice(0, 12)}; retrying when the prompt closes`);
             holdConversationForPrompt(msg.conversation_id);
             syncService.retryMessage(msg._id, { holdReason: err instanceof InputBlockedError ? err.holdReason : "waiting for a human answer in the terminal" }).catch(logConvexFailure);
+          } else if (err instanceof CursorCloudSetupError) {
+            // A missing or rejected key is held and rechecked every few
+            // seconds, so the message goes out as soon as a key lands; an
+            // unreachable repo backs off (each try is a Cursor API call).
+            const keyProblem = err.kind !== "repo";
+            logDelivery(`HELD: msg=${msg._id.slice(0, 8)} Cursor Cloud setup (${err.kind}): ${errMsg}`);
+            scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content, keyProblem ? "waiting for a Cursor API key on this machine" : undefined);
           } else if (err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(errMsg)) {
             logDelivery(`HELD: msg=${msg._id.slice(0, 8)} awaiting terminal input confirmation: ${errMsg}`);
             scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content, "waiting for terminal input confirmation");
