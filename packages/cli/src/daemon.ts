@@ -14250,13 +14250,17 @@ export function extractTmuxLiveRegion(paneContent: string): string {
     const top = sepIdx[sepIdx.length - 2];
     // Claude Code v2.1.270 stopped printing "esc to interrupt" in that footer.
     // The running turn's only marker is now its own status line, rendered
-    // directly above the box ("✶ Perambulating… (50s · ↓ 161 tokens)"). Carry
-    // that one line in when it is the nearest text above the box; it cannot be
-    // scrollback, because the finished form of the line reads differently and
-    // nothing else renders between the transcript and a live box.
-    let above = top - 1;
-    while (above >= 0 && !tail[above].trim()) above--;
-    const status = above >= 0 && CLAUDE_TURN_STATUS_LINE.test(tail[above]) ? [tail[above]] : [];
+    // above the box ("✶ Perambulating… (50s · ↓ 161 tokens)"). Carry that line
+    // in from anywhere below the newest transcript item (⏺): Claude Code renders
+    // queued messages, a "⎿ Tip:" line and notices like "✔ Update installed"
+    // between the two, and reading only the nearest line classified a busy pane
+    // idle, which licensed a second write of a message the agent had queued
+    // (2026-09-29, jx74ek4). It cannot be scrollback: the finished form reads
+    // differently, and everything above the newest ⏺ is left out.
+    let status: string[] = [];
+    for (let i = top - 1; i >= 0 && !/^⏺/.test(tail[i]); i--) {
+      if (CLAUDE_TURN_STATUS_LINE.test(tail[i])) { status = [tail[i]]; break; }
+    }
     return [...status, ...tail.slice(top + 1)].join("\n");
   }
   if (sepIdx.length === 1) {
