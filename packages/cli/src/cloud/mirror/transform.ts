@@ -136,7 +136,8 @@ export function remapContextPaths(text: string, ctx: TransformContext): string {
     .map((m) => ({ from: m.from.replace(/\/+$/, ""), to: m.to.replace(/\/+$/, "") }))
     .sort((a, b) => b.from.length - a.from.length);
   if (!mappings.length) return text;
-  const re = new RegExp(`(?:${mappings.map((m) => escapeRe(m.from)).join("|")})(?=[/"'\\s):,\\]}]|$)`, "g");
+  // A backslash ends a path too: inside JSON text (a transcript line) it starts the escape after it, `\n` or `\"`.
+  const re = new RegExp(`(?:${mappings.map((m) => escapeRe(m.from)).join("|")})(?=[/"'\\s):,\\]}\\\\]|$)`, "g");
   return text.replace(re, (from) => mappings.find((m) => m.from === from)!.to);
 }
 

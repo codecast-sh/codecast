@@ -403,7 +403,12 @@ export function uploadLinuxCast(host: RemoteHost, distDir: string): void {
           "sudo install -m 644 /usr/local/lib/codecast/main.js /usr/local/lib/codecast/index.js && " +
           // A new file renamed over the wrapper: the daemon runs it, and writing into a running script fails "Text file busy".
           `printf '#!/usr/bin/env bash\\nexec /home/${host.user}/.bun/bin/bun /usr/local/lib/codecast/index.js "$@"\\n' > ${shq(`${remoteStage}/cast`)} && ` +
-          `sudo install -m 755 ${shq(`${remoteStage}/cast`)} /usr/local/bin/cast.new && sudo mv -f /usr/local/bin/cast.new /usr/local/bin/cast`,
+          `sudo install -m 755 ${shq(`${remoteStage}/cast`)} /usr/local/bin/cast.new && sudo mv -f /usr/local/bin/cast.new /usr/local/bin/cast && ` +
+          // ~/.local/bin comes first on every agent's PATH, and a release install
+          // (installRelease.ts) leaves its own binary there; point it at this one
+          // so the host runs one cast (2026-09-29: a 1.1.147 binary there ran every
+          // mirror apply while /usr/local/bin held 1.1.159).
+          `mkdir -p "$HOME/.local/bin" && ln -sfn /usr/local/bin/cast "$HOME/.local/bin/cast" && ln -sfn cast "$HOME/.local/bin/codecast"`,
         60_000,
       );
     } finally {

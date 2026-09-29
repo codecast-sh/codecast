@@ -25,13 +25,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { credentialHealth } from "../ccAccounts.js";
 import { collectCopyFiles, containedRemotePath, InvalidWorkspaceManifest, manifestCopyEntries } from "../workspace/copyFiles.js";
-import { trustOnlyBundle, type AgentAuthBundle } from "./agentAuth.js";
+import { laptopHome, trustOnlyBundle, type AgentAuthBundle } from "./agentAuth.js";
 import { AGENT_AUTH_RECEIVER } from "./agentAuthReceiver.py.js";
 import { deviceId as localDeviceId } from "./device.js";
 import { readLocalConfig } from "../config/readLocalConfig.js";
 import { applySnapshotFastForward, createWipSnapshot, remoteSnapshotScript } from "../wipSnapshot.js";
 import { defaultConfigDir } from "../config/configDir.js";
 import { ccKeychainReadArgs, ccKeychainReadItems } from "../ccKeychain.js";
+import { remapContextPaths } from "../cloud/mirror/transform.js";
 
 export interface RemoteHost {
   /** SSH host/IP. */
@@ -815,10 +816,39 @@ export async function pushSession(sessionId: string, host: RemoteHost, opts: { s
     ssh(host, `mkdir -p ${shq(remoteCwd)}`);
     rsyncUp(host, s.cwd, remoteCwd, { delete: true });
   }
-  // 4. transcript
-  rsyncFileInto(host, s.jsonlPath, remoteProjectDir);
+  // 4. transcript, its laptop paths rewritten to the host's
+  const relocated = relocatedTranscriptCopy(s.jsonlPath, { home: laptopHome(), cwd: s.cwd }, { home: remoteHome(host), cwd: remoteCwd });
+  try {
+    rsyncFileInto(host, relocated.file, remoteProjectDir);
+  } finally {
+    fs.rmSync(relocated.dir, { recursive: true, force: true });
+  }
 
   return { sessionId, localCwd: s.cwd, remoteCwd, remoteProjectDir, verification };
+}
+
+/**
+ * A transcript's text as the machine it lands on reads it: the checkout, the
+ * project's Claude directory and the home each rewritten from one machine's
+ * path to the other's (longest first), so a resumed agent's history names
+ * files that exist where it now runs. Only whole paths change: a path that
+ * merely starts with the checkout's name is left alone.
+ */
+export function relocateTranscript(text: string, from: { home: string; cwd: string }, to: { home: string; cwd: string }): string {
+  const projects = (m: { home: string; cwd: string }) => path.posix.join(m.home, ".claude", "projects", cwdToSlug(m.cwd));
+  return remapContextPaths(text, {
+    fromHome: from.home,
+    toHome: to.home,
+    pathMappings: [{ from: projects(from), to: projects(to) }, { from: from.cwd, to: to.cwd }],
+  });
+}
+
+/** The transcript relocated into a temp directory under its own name (rsyncFileInto keeps the basename); the caller removes the directory. */
+function relocatedTranscriptCopy(jsonlPath: string, from: { home: string; cwd: string }, to: { home: string; cwd: string }): { file: string; dir: string } {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cast-move-transcript-"));
+  const file = path.join(dir, path.basename(jsonlPath));
+  fs.writeFileSync(file, relocateTranscript(fs.readFileSync(jsonlPath, "utf-8"), from, to), { mode: 0o600 });
+  return { file, dir };
 }
 
 /** The top level of the checkout a session runs in — a linked worktree's OWN root, not the main repository's. */
@@ -836,6 +866,11 @@ export async function pullSession(sessionId: string, host: RemoteHost, move: Mov
   const remoteJsonl = path.posix.join(move.remoteProjectDir, `${sessionId}.jsonl`);
   const localProjectDir = path.join(CLAUDE_PROJECTS, cwdToSlug(move.localCwd));
   rsyncFileDownInto(host, remoteJsonl, localProjectDir);
+  // …and its host paths rewritten back to this machine's.
+  const localJsonl = path.join(localProjectDir, `${sessionId}.jsonl`);
+  const tmp = `${localJsonl}.cast-relocate`;
+  fs.writeFileSync(tmp, relocateTranscript(fs.readFileSync(localJsonl, "utf-8"), { home: remoteHome(host), cwd: move.remoteCwd }, { home: laptopHome(), cwd: move.localCwd }), { mode: 0o600 });
+  fs.renameSync(tmp, localJsonl);
   // working tree back
   if (isWorktree(move.localCwd)) {
     return await gitPullWorktree(host, move.localCwd, move.remoteCwd);
