@@ -212,3 +212,13 @@ describe("optimistic ids", () => {
     expect(newCommentClientId()).not.toBe(stub);
   });
 });
+
+describe("a review is said once", () => {
+  it("drops GitHub's review event once the review rows are in hand", () => {
+    const events = [{ _id: "e1", created_at: 10, kind: "pr_review" }, { _id: "e2", created_at: 11, kind: "pr_synchronize" }];
+    const withRows = buildPrTimeline({ events, reviews: [{ _id: "r1", state: "approved", submitted_at: 10 }], comments: [] });
+    expect(withRows.map((i) => i.key)).toEqual(["r:r1", "e:e2"]);
+    const withoutRows = buildPrTimeline({ events, reviews: [], comments: [] });
+    expect(withoutRows.map((i) => i.key)).toEqual(["e:e1", "e:e2"]);
+  });
+});

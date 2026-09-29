@@ -28,7 +28,7 @@ export function OrgGlossary({ open, onClose, tree, health, proposal }: {
   const entries = glossaryEntries(tree, health, proposal);
   return (
     <Dialog open={!!open} onOpenChange={(v) => { if (!v) onClose(); }}>
-      <DialogContent className="max-w-[440px] p-0 gap-0 overflow-hidden" style={{ background: "var(--sol-card)", borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)" }} data-org-glossary={cur}>
+      <DialogContent hideClose className="max-w-[440px] p-0 gap-0 overflow-hidden" style={{ background: "var(--sol-card)", borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)" }} data-org-glossary={cur}>
         <div className="flex items-center gap-2 px-4 pt-4 pb-3 border-b" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 25%, transparent)" }}>
           <BookOpen className="w-4 h-4 shrink-0" style={{ color: "var(--sol-violet)" }} />
           <DialogTitle className="text-[16px] font-semibold tracking-tight" style={{ fontFamily: "var(--font-serif)", color: "var(--sol-text)" }}>

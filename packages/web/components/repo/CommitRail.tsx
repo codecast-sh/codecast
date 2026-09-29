@@ -5,7 +5,7 @@
 // threads on lines of the diff, one row per thread, so a reader sees at a
 // glance where the conversation is and jumps to it. Both read the same
 // comments the diff reads; the rail only arranges them.
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { CheckCircle2, FileCode2, MessageSquare } from "lucide-react";
 import { codeThreadRootKey } from "@codecast/shared/comments";
 import { PRComposer, PRLineThread } from "../pr/PRThread";
@@ -39,7 +39,11 @@ export function CommitRail({
   lineComments,
   pullRequestId,
   onJump,
+  flow = false,
 }: {
+  /** In the page's flow (the commit page): no scroller of its own, and an
+   *  empty discussion is one line with the way to start it. */
+  flow?: boolean;
   repository: string;
   sha: string;
   comments: CodeCommentRow[];
@@ -68,10 +72,29 @@ export function CommitRail({
   }, [comments]);
   const prField = pullRequestId ? { pull_request_id: pullRequestId } : {};
   const generalKey = codeThreadRootKey(repository, sha, {});
+  const [starting, setStarting] = useState(false);
+
+  if (flow && threads.length === 0 && lineIndex.length === 0 && !starting) {
+    return (
+      <div className="flex items-center gap-3 text-[12px] text-sol-text-dim">
+        <MessageSquare className="w-3.5 h-3.5" />
+        <span>No discussion on this commit yet.</span>
+        {lineComments.authed && (
+          <button
+            type="button"
+            onClick={() => setStarting(true)}
+            className="rounded-md border border-sol-border/60 px-2 py-0.5 text-sol-text-muted hover:text-sol-text hover:border-sol-border transition-colors"
+          >
+            Comment on this commit
+          </button>
+        )}
+      </div>
+    );
+  }
 
   return (
-    <div className="h-full flex flex-col min-h-0">
-      <div className="flex-1 min-h-0 overflow-y-auto">
+    <div className={flow ? "rounded-lg border border-sol-border/60 bg-sol-bg" : "h-full flex flex-col min-h-0"}>
+      <div className={flow ? undefined : "flex-1 min-h-0 overflow-y-auto"}>
         <section className="px-4 pt-3 pb-4">
           <h2 className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-sol-text-dim mb-2">
             <MessageSquare className="w-3 h-3" />
@@ -151,7 +174,9 @@ export function CommitRail({
             repository={repository}
             threadKey={generalKey}
             placeholder="Comment on this commit"
+            autoFocus={flow && starting && threads.length === 0}
             onSubmit={(content) => lineComments.post({ content, ...prField })}
+            onCancel={flow ? () => setStarting(false) : undefined}
           />
         </div>
       )}

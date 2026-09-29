@@ -21,6 +21,18 @@ const CHANGES = [
 ];
 
 describe("proposalTreeRows", () => {
+  test("a status change draws the record itself, with its new status and reason", () => {
+    const [row] = proposalTreeRows(ORG_FIXTURE, [change("c-task", 1, { kind: "task_status", task: "ct-9", status: "done", reason: "shipped on main", title: "Remove the pilot" })]);
+    expect(row.node).toEqual({ kind: "record", id: "ct-9", name: "Remove the pilot", record: "task" });
+    expect(row.tag).toBe("done");
+    expect(row.detail).toBe("shipped on main");
+  });
+
+  test("a role that takes over a session names it; no scope reads as the whole workspace", () => {
+    const [row] = proposalTreeRows(ORG_FIXTURE, [change("c-seat", 1, { kind: "role", name: "Funnel lead", handle: "funnel", seat: { existing: "jx7b88a", title: "Market growth mandate" } })]);
+    expect(row.detail).toBe("the whole workspace · from Market growth mandate");
+  });
+
   test("against the tree: faces, parents, the move's origin, the unknown handle; a limit draws no row", () => {
     const rows = proposalTreeRows(ORG_FIXTURE, CHANGES);
     expect(rows.map((r) => r.change_id)).toEqual(["c-role", "c-move", "c-retire", "c-orphan"]);
@@ -30,6 +42,7 @@ describe("proposalTreeRows", () => {
     expect(role.node).toMatchObject({ kind: "role", name: "Head of Platform", handle: "platform" });
     expect((role.node as any).stub).toMatchObject({ kind: "role", solid: false, status: "proposed" });
     expect(role.parent).toMatchObject({ kind: "person", name: "Ashot Petrosian", me: true });
+    expect(role.detail).toBe("Platform · new session");
 
     const move = rows[1];
     expect(move.tag).toBe("move");

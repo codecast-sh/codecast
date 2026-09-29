@@ -16,7 +16,8 @@ import {
 import { makeCollectionSig } from "../store/wakeSig";
 import { cleanTitle } from "./conversationProcessor";
 import { matchScore } from "./mentionRanking";
-import { identityRowOf, type IdentityRow } from "./sessionIdentity";
+import { identityLine, identityRowOf, identitySig, type IdentityRow } from "./sessionIdentity";
+import { personifyAllNow } from "../hooks/usePersonifyAll";
 
 export type SessionSearchRow = {
   conversationId: string;
@@ -41,8 +42,10 @@ export type SessionSearchRow = {
   identity?: IdentityRow | null;
 };
 
-/** Everything about a cached session a typed query may reasonably name. */
-export function sessionSearchHaystack(conv: {
+/** Everything about a cached session a typed query may reasonably name,
+ *  including the name it wears (its character's or its role's), so a session
+ *  is findable by the name its card leads with. */
+export function sessionSearchHaystack(conv: Partial<IdentityRow> & {
   title?: string;
   subtitle?: string;
   idle_summary?: string;
@@ -51,7 +54,10 @@ export function sessionSearchHaystack(conv: {
   authorName?: string;
   author_name?: string | null;
 }): string {
+  const who = conv._id ? identityLine(identityRowOf(conv as IdentityRow), null, personifyAllNow()) : null;
   return [
+    who?.name || "",
+    who?.handle || "",
     cleanTitle(conv.title || ""),
     conv.subtitle || "",
     conv.idle_summary || "",
@@ -69,13 +75,13 @@ export function sessionMatchesQuery(conv: Parameters<typeof sessionSearchHaystac
   return sessionSearchHaystack(conv).includes(lowerQuery);
 }
 
-// Only the fields a match or a row's face reads. updated_at is deliberately
+// Only the fields a match or a row's face reads (identitySig covers the name). updated_at is deliberately
 // absent: it ticks with every heartbeat, and ordering a transient result list
 // by a value that is seconds stale is invisible, while re-running this over
 // thousands of rows on each tick is not.
 export const searchableSessionsSig = makeCollectionSig<InboxSession>(
   (s) =>
-    `${s.title ?? ""}|${s.subtitle ?? ""}|${s.idle_summary ?? ""}|${s.thread_state ?? ""}|${s.project_path ?? ""}|${s.author_name ?? ""}|${s.message_count ?? 0}`,
+    `${identitySig(s as any)}|${s.title ?? ""}|${s.subtitle ?? ""}|${s.idle_summary ?? ""}|${s.thread_state ?? ""}|${s.project_path ?? ""}|${s.author_name ?? ""}|${s.message_count ?? 0}`,
 );
 
 const INSTANT_SCAN_CAP = 1500;
@@ -115,7 +121,10 @@ export function instantSessionRows(
     // How directly the words name the session leads; recency breaks ties —
     // the same rule the @-mention list and the palette rank by.
     const titleRank = matchScore(title, q);
-    const rank = titleRank === Infinity ? 100 : titleRank;
+    const name = identityLine(identityRowOf(conv as any), null, personifyAllNow()).name;
+    const nameRank = name ? matchScore(name, q) : Infinity;
+    const best = Math.min(titleRank, nameRank);
+    const rank = best === Infinity ? 100 : best;
     ranked.push({
       rank,
       row: {
@@ -130,7 +139,7 @@ export function instantSessionRows(
         messageCount: conv.message_count || 0,
         projectPath: conv.project_path || null,
         agentType: conv.agent_type || null,
-        titleMatch: titleRank !== Infinity,
+        titleMatch: best !== Infinity,
         instant: true,
         instantSnippet: instantSnippetFor(conv, q),
         identity: identityRowOf(conv as any),

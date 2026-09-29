@@ -2,15 +2,14 @@
 //
 // Highlighted source, line numbers that are anchors, an optional blame gutter
 // (git's commit per line, or the codecast session that wrote it), and
-// comments written straight onto a line. The blob page mounts it as its
-// body; the commit page mounts it beside a diff. The two differ in one thing:
-// on its own page a selected line is written to the URL (a bookmark), while in
-// a panel the selection stays local and the toolbar offers the file's own page
-// instead of a permalink.
+// comments written straight onto a line. The blob page mounts it as its body,
+// in the page's one scroller: the toolbar stays in reach at the top, long lines
+// wrap, and a selected line is written to the URL (a bookmark).
+import { landOn } from "../../hooks/useDiffAddress";
 import { useCallback, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Download, ExternalLink, UserSquare2, X } from "lucide-react";
+import { Download, ExternalLink, UserSquare2 } from "lucide-react";
 import { codeThreadRootKey } from "@codecast/shared/comments";
 import { useRepoLocation } from "./useRepoFamily";
 import { LoadingSkeleton } from "../LoadingSkeleton";
@@ -82,24 +81,14 @@ function ToolbarButton({
   );
 }
 
-export type BlobPanel = {
-  /** Close the panel. */
-  onClose: () => void;
-  /** The line to land on when the panel opens. */
-  line?: number;
-};
-
 export function BlobContent({
   repository,
   refName,
   path,
-  panel,
 }: {
   repository: string;
   refName: string;
   path: string;
-  /** Mounted beside another surface rather than as a page of its own. */
-  panel?: BlobPanel;
 }) {
   const [blameMode, setBlameMode] = useState<BlameMode>("off");
   const [selection, setSelection] = useState<LineRange | null>(null);
@@ -138,46 +127,41 @@ export function BlobContent({
   const permalink = () => {
     if (anchorRef) router.replace(repoBlobHref(repository, anchorRef, path, family) + formatLineHash(selection));
   };
-  // The file's own page, carrying the selection, for a reader in a panel.
+  // The page with the selection, for the share menu.
   const pageHref = repoBlobHref(repository, refName, path, family) + formatLineHash(selection);
 
-  // On its own page the URL names the selection, and selecting rewrites it in
-  // place: a line anchor is a bookmark, not a step in the reader's history.
-  // In a panel the selection is the panel's own, so the host page's URL is
-  // left alone and the opening line is the first selection.
+  // The URL names the selection, and selecting rewrites it in place: a line
+  // anchor is a bookmark, not a step in the reader's history.
   //
   // Read on mount AND on every later hash change. Opening a second file in the
   // same tab keeps this component mounted, so a mount effect alone would leave
   // a `#L27-L31` link selecting nothing — which is what a shared link is FOR.
   useWatchEffect(() => {
-    if (panel) setSelection(panel.line ? { start: panel.line, end: panel.line } : null);
-    else setSelection(parseLineHash(hash));
-  }, [path, hash, panel?.line]);
+    setSelection(parseLineHash(hash));
+  }, [path, hash]);
 
   const selectLine = useCallback((line: number, extend: boolean) => {
     const next = extend ? extendLineRange(selection, line) : { start: line, end: line };
     setSelection(next);
-    if (!panel) router.replace(`${pathname}${search}${formatLineHash(next)}`, { scroll: false });
-  }, [selection, router, pathname, search, panel]);
+    router.replace(`${pathname}${search}${formatLineHash(next)}`, { scroll: false });
+  }, [selection, router, pathname, search]);
 
-  // A deep link lands on its line once the file is on screen.
-  //
-  // Scroll the CODE column by hand rather than calling scrollIntoView, which
-  // walks every scrollable ancestor: it dragged the shell's own scroller too
-  // and pushed the page header up under the tab bar.
+  // A deep link lands on its line once the file is on screen, a third of the
+  // way down the page's scroller (landOn scrolls that one element by hand;
+  // scrollIntoView would drag every scrollable ancestor, the shell's too).
   const ready = blob.ready && !!blob.data;
   useWatchEffect(() => {
     if (!ready || !selection) return;
-    const el = document.getElementById(`L${selection.start}`);
-    const column = el?.closest(".repo-code") as HTMLElement | null;
-    if (!el || !column) return;
-    const offset = el.getBoundingClientRect().top - column.getBoundingClientRect().top;
-    column.scrollTop += offset - column.clientHeight / 2;
+    return landOn(
+      () => rootRef.current?.closest<HTMLElement>("[data-main-scroll]"),
+      (root) => root.querySelector<HTMLElement>(`[id="L${selection.start}"]`),
+      (_el, root) => root.clientHeight / 3,
+    );
   }, [ready, selection?.start]);
 
   useEventListener("keydown", (event: KeyboardEvent) => {
     if (!repoShortcutAllowed(rootRef.current, event)) return;
-    if (event.key === "y" && anchorRef && !panel) { event.preventDefault(); permalink(); }
+    if (event.key === "y" && anchorRef) { event.preventDefault(); permalink(); }
     if (event.key === "b") { event.preventDefault(); setBlameMode(nextBlameMode); }
     if (event.key === "l") { event.preventDefault(); setJumpOpen(true); }
   });
@@ -209,35 +193,11 @@ export function BlobContent({
   const lineCount = blob.data.content.split("\n").length;
 
   return (
-    <div ref={rootRef} className="flex-1 min-h-0 flex flex-col relative">
-      {panel && (
-        <div className="flex items-center gap-2 px-3 py-1.5 border-b border-sol-border/30 shrink-0 min-w-0">
-          <Link
-            href={pageHref}
-            className="font-mono text-xs text-sol-text truncate hover:underline decoration-sol-border underline-offset-2"
-            title="Open this file on its own page"
-          >
-            {path}
-          </Link>
-          <span className="text-[11px] text-sol-text-dim tabular-nums shrink-0">
-            {lineCount} lines · {formatSize(blob.data.size)}
-          </span>
-          <button
-            type="button"
-            onClick={panel.onClose}
-            className="ml-auto p-1 rounded text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt/50 transition-colors shrink-0"
-            title="Close the file"
-          >
-            <X className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      )}
-      <div className="flex items-center gap-2 px-4 py-2 border-b border-sol-border/30 shrink-0 flex-wrap">
-        {!panel && (
-          <span className="text-[11px] text-sol-text-dim tabular-nums">
-            {lineCount} lines · {formatSize(blob.data.size)}
-          </span>
-        )}
+    <div ref={rootRef} className="relative">
+      <div className="sticky top-0 z-20 flex items-center gap-2 px-4 py-2 border-b border-sol-border/30 bg-sol-bg flex-wrap">
+        <span className="text-[11px] text-sol-text-dim tabular-nums">
+          {lineCount} lines · {formatSize(blob.data.size)}
+        </span>
         <div className="ml-auto flex items-center gap-2 flex-wrap max-w-full justify-end">
           <div className="flex items-center h-7 rounded-md border border-sol-border/60 overflow-hidden text-[12px]" role="radiogroup" aria-label="Blame" title="Who is behind each line: the commit, or the codecast session that wrote it">
             <span className="flex items-center gap-1 pl-2 pr-1.5 text-sol-text-dim"><UserSquare2 className="w-3.5 h-3.5" />Blame</span>
@@ -261,11 +221,7 @@ export function BlobContent({
           </div>
           <Link href={repoCommitsHref(repository, refName, { path, family })} className="text-xs text-sol-text-muted hover:text-sol-blue">History</Link>
           <ToolbarButton onClick={() => { void copyToClipboard(path).then(() => setCopied(true)); }}>{copied ? "Copied" : "Copy path"}</ToolbarButton>
-          {panel ? (
-            <Link href={pageHref} className="text-xs text-sol-text-muted hover:text-sol-blue">Open page</Link>
-          ) : (
-            anchorRef && <ToolbarButton onClick={permalink}>Permalink <KeyCap size="xs">y</KeyCap></ToolbarButton>
-          )}
+          {anchorRef && <ToolbarButton onClick={permalink}>Permalink <KeyCap size="xs">y</KeyCap></ToolbarButton>}
           <ToolbarButton onClick={() => setJumpOpen(true)}>Jump to line <KeyCap size="xs">l</KeyCap></ToolbarButton>
           {rawUrl && <><a href={rawUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-sol-text-muted hover:text-sol-blue">Raw</a>
             <a href={rawUrl} download={path.split("/").pop()} className="flex items-center gap-1 text-xs text-sol-text-muted hover:text-sol-blue"><Download className="size-3" />Download</a></>}
@@ -322,13 +278,13 @@ export function BlobContent({
         />
       )}
 
-      <div className="flex-1 min-h-0">
+      <div>
         {mode === "convex" && anchorRef ? <CommentedBlobView repository={repository} path={path} anchorRef={anchorRef} content={blob.data.content}
           selection={selection} selectLine={selectLine} blameRanges={blame.data?.ranges} blameMode={blameMode}
           sessionRanges={sessionRanges} sessionColors={sessionColors} focusSession={focusSession ?? pinnedSession} />
           : <BlobView repository={repository} path={path} content={blob.data.content} selection={selection} onSelectLine={selectLine} blameRanges={blame.data?.ranges} blameMode={blameMode}
           sessionRanges={sessionRanges} sessionColors={sessionColors} focusSession={focusSession ?? pinnedSession} />}
-        {jumpOpen && <div role="dialog" aria-modal="true" aria-label="Jump to line" className="absolute inset-0 z-50 flex items-start justify-center pt-20 bg-sol-bg/70" onClick={() => setJumpOpen(false)}>
+        {jumpOpen && <div role="dialog" aria-modal="true" aria-label="Jump to line" className="fixed inset-0 z-50 flex items-start justify-center pt-20 bg-sol-bg/70" onClick={() => setJumpOpen(false)}>
           <form className="rounded-lg border border-sol-border bg-sol-card p-4 shadow-xl flex gap-2" onClick={(e) => e.stopPropagation()} onSubmit={(event) => {
             event.preventDefault(); const line = Number(jumpLine);
             if (Number.isInteger(line) && line >= 1 && line <= lineCount) { selectLine(line, false); setJumpOpen(false); }

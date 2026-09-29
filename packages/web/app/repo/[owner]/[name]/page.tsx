@@ -41,7 +41,7 @@ function RepoHomeContent({
   }, [branchParam, repository, family]);
 
   return (
-    <div className="repo-page h-full flex flex-col" style={{ ["--repo-accent" as string]: "var(--sol-blue)" }}>
+    <div className="repo-page h-full overflow-y-auto" data-main-scroll style={{ ["--repo-accent" as string]: "var(--sol-blue)" }}>
       <RepoHeader
         headRef={headRef}
         repository={repository}

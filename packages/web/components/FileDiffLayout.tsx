@@ -21,12 +21,13 @@ import {
   PanelLeft,
   LayoutList,
   SplitSquareVertical,
-  PanelRightOpen,
+  Link2,
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { DiffView } from "./DiffView";
 import { parsePatch, getFileStatus, type DiffLineAnchor } from "../lib/patchParser";
 import { cn, copyToClipboard } from "../lib/utils";
+import { copyText } from "../lib/copyText";
 import { useTrackedStore } from "../store/inboxStore";
 
 export interface DiffFile {
@@ -89,10 +90,35 @@ export interface FileDiffLayoutProps {
   // a pull request at its head). The name in each file header becomes a link
   // there. Called with the file's ORIGINAL path.
   fileHref?: (filename: string) => string | undefined;
-  // Open the file beside the diff, in the surface's own viewer, without
-  // leaving the page. Adds a button to each file header. ORIGINAL path.
-  onOpenFile?: (filename: string) => void;
+  // Lay the diff into the page instead of filling a pane. See DiffFlow.
+  flow?: DiffFlow;
 }
+
+/**
+ * The page form of the diff. The files stack in the page's own flow and the
+ * page is the only scroller: no pane per column, no sideways scroll per file.
+ * Every file and every line has an address the surface owns (it keeps them in
+ * the URL), so a reader can link to anything they can see.
+ *
+ * Paths here are ORIGINAL paths, like every other callback on this layout.
+ */
+export type DiffFlow = {
+  /** Pixels of sticky chrome above the diff; file headers pin under it. */
+  stickyTop: number;
+  /** The DOM id of a file's card, and of a line's row: the fragment targets. */
+  fileId: (path: string) => string;
+  rowId: (path: string, anchor: DiffLineAnchor) => string;
+  /** The in-page address of a file and of a line or run of lines. */
+  fileAnchorHref: (path: string) => string;
+  lineHref: (path: string, anchor: DiffLineAnchor) => string;
+  /** An address as someone else would open it (a full URL, outside any app). */
+  shareUrl: (href: string) => string;
+  /** What the address names now, if it names a file of this diff. */
+  selected: { file: string; anchor?: DiffLineAnchor } | null;
+  /** The reader picked lines, or asked for a file. */
+  onSelectLines: (path: string, anchor: DiffLineAnchor) => void;
+  onJumpFile: (path: string) => void;
+};
 
 type Layout = { [key: string]: number };
 const DEFAULT_FILE_DIFF_LAYOUT = { tree: 25, content: 75 };
@@ -283,7 +309,35 @@ function buildFileTreeFromStripped(files: DiffFile[]): FileTreeNode[] {
     return sorted;
   };
 
-  return sortRecursive(root);
+  return compactChains(sortRecursive(root));
+}
+
+/** The files in the order the tree lists them, so the page reads top to
+ *  bottom the way the tree does. */
+function treeOrder(files: DiffFile[]): DiffFile[] {
+  const out: DiffFile[] = [];
+  const walk = (nodes: FileTreeNode[]) => {
+    for (const node of nodes) {
+      if (node.file) out.push(node.file);
+      walk(node.children);
+    }
+  };
+  walk(buildFileTreeFromStripped(files));
+  return out;
+}
+
+/** A folder holding nothing but one other folder reads as one row
+ *  (`backend/scripts/eval`), so a deep path costs one line, not one per level. */
+function compactChains(nodes: FileTreeNode[]): FileTreeNode[] {
+  return nodes.map((node) => {
+    if (!node.isDirectory) return node;
+    let merged = node;
+    while (merged.children.length === 1 && merged.children[0].isDirectory) {
+      const only = merged.children[0];
+      merged = { ...only, name: `${merged.name}/${only.name}` };
+    }
+    return { ...merged, children: compactChains(merged.children) };
+  });
 }
 
 function FileTreeItem({
@@ -400,6 +454,7 @@ function FileSidebar({
   selectedFileRef,
   commonPrefix,
   fileMarks,
+  flow = false,
 }: {
   files: DiffFile[];
   selectedFile: string | null;
@@ -408,6 +463,8 @@ function FileSidebar({
   selectedFileRef?: React.RefObject<HTMLButtonElement | null>;
   commonPrefix?: string;
   fileMarks?: FileDiffLayoutProps["fileMarks"];
+  /** In the page's flow: sized by its content, never a scroller of its own. */
+  flow?: boolean;
 }) {
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -460,10 +517,10 @@ function FileSidebar({
     : 0;
 
   return (
-    <div className="h-full flex flex-col bg-sol-bg border-r border-sol-border">
+    <div className={flow ? "flex flex-col bg-sol-bg rounded-lg border border-sol-border/70 overflow-clip" : "h-full flex flex-col bg-sol-bg border-r border-sol-border"}>
       {header}
-      <div className="px-3 py-2 border-b border-sol-border/50 bg-sol-bg-alt/30">
-        <div className="flex items-center justify-between">
+      <div className={cn("px-3 py-2 border-b border-sol-border/50 bg-sol-bg-alt/30", flow && files.length <= 5 && "hidden")}>
+        <div className={cn("flex items-center justify-between", flow && "hidden")}>
           <div>
             <div className="text-xs text-sol-text-muted">
               {filteredFiles.length === files.length
@@ -502,7 +559,7 @@ function FileSidebar({
           </div>
         </div>
         {files.length > 5 && (
-          <div className="mt-2 relative">
+          <div className={cn("relative", !flow && "mt-2")}>
             <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-sol-text-dim" />
             <input
               type="text"
@@ -522,7 +579,7 @@ function FileSidebar({
           </div>
         )}
       </div>
-      <div className="flex-1 overflow-y-auto py-1">
+      <div className={flow ? "py-1" : "flex-1 overflow-y-auto py-1"}>
         {fileTree.map((node) => (
           <FileTreeItem
             fileMarks={fileMarks}
@@ -546,18 +603,15 @@ function FileSidebar({
 }
 
 // The name in a file header: a link to the file's own page when the surface
-// has one, plain text otherwise, and beside it the way to open the file next
-// to the diff. Both diff layouts share it so a file is one click from its
-// source wherever it is shown.
+// has one, plain text otherwise. Every diff layout shares it so a file is one
+// click from its source wherever it is shown.
 function FileHeaderName({
   file,
   fileHref,
-  onOpenFile,
   className,
 }: {
   file: DiffFile;
   fileHref?: FileDiffLayoutProps["fileHref"];
-  onOpenFile?: FileDiffLayoutProps["onOpenFile"];
   className?: string;
 }) {
   const path = file.originalFilename ?? file.filename;
@@ -584,19 +638,6 @@ function FileHeaderName({
         <span className={cn("font-mono text-xs truncate min-w-0", className)}>{label}</span>
       )}
       <CopyButton text={path} />
-      {onOpenFile && (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onOpenFile(path);
-          }}
-          className="p-1 rounded text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt/50 transition-colors"
-          title="View the whole file beside the diff"
-        >
-          <PanelRightOpen className="w-3 h-3" />
-        </button>
-      )}
     </>
   );
 }
@@ -617,7 +658,6 @@ function FileDiffContent({
   commentContextFor,
   lineThreads,
   fileHref,
-  onOpenFile,
   fileMarks,
   onToggleViewed,
 }: {
@@ -631,7 +671,6 @@ function FileDiffContent({
   commentContextFor?: FileDiffLayoutProps["commentContextFor"];
   lineThreads?: FileLineThreads;
   fileHref?: FileDiffLayoutProps["fileHref"];
-  onOpenFile?: FileDiffLayoutProps["onOpenFile"];
   fileMarks?: FileDiffLayoutProps["fileMarks"];
   onToggleViewed?: FileDiffLayoutProps["onToggleViewed"];
 }) {
@@ -678,7 +717,7 @@ function FileDiffContent({
               >
                 {status.label}
               </span>
-              <FileHeaderName file={file} fileHref={fileHref} onOpenFile={onOpenFile} className="text-sm font-medium" />
+              <FileHeaderName file={file} fileHref={fileHref} className="text-sm font-medium" />
             </div>
             {showNav && (
               <div className="text-xs text-sol-text-dim shrink-0 ml-2">
@@ -728,7 +767,7 @@ function FileDiffContent({
           <span className={cn("text-[10px] font-bold shrink-0", status.color)}>
             {status.label}
           </span>
-          <FileHeaderName file={file} fileHref={fileHref} onOpenFile={onOpenFile} />
+          <FileHeaderName file={file} fileHref={fileHref} />
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <span className="text-[11px] text-sol-text-dim">
@@ -830,7 +869,6 @@ function UnifiedDiffView({
   commentContextFor,
   lineThreads,
   fileHref,
-  onOpenFile,
   fileMarks,
   onToggleViewed,
 }: {
@@ -840,7 +878,6 @@ function UnifiedDiffView({
   commentContextFor?: FileDiffLayoutProps["commentContextFor"];
   lineThreads?: FileLineThreads;
   fileHref?: FileDiffLayoutProps["fileHref"];
-  onOpenFile?: FileDiffLayoutProps["onOpenFile"];
   fileMarks?: FileDiffLayoutProps["fileMarks"];
   onToggleViewed?: FileDiffLayoutProps["onToggleViewed"];
 }) {
@@ -860,7 +897,7 @@ function UnifiedDiffView({
                 <span className={cn("text-[10px] font-bold shrink-0", status.color)}>
                   {status.label}
                 </span>
-                <FileHeaderName file={file} fileHref={fileHref} onOpenFile={onOpenFile} />
+                <FileHeaderName file={file} fileHref={fileHref} />
               </div>
               <span className="flex items-center gap-2 text-[11px] text-sol-text-dim shrink-0">
                 <span>
@@ -896,6 +933,358 @@ function UnifiedDiffView({
   );
 }
 
+
+/** The label for a run of lines, the way the gutter reads it. */
+function lineRunLabel(anchor: DiffLineAnchor): string {
+  const letter = anchor.side === "LEFT" ? "L" : "R";
+  return anchor.lineEnd !== undefined && anchor.lineEnd !== anchor.lineNumber
+    ? `${letter}${anchor.lineNumber}–${anchor.lineEnd}`
+    : `${letter}${anchor.lineNumber}`;
+}
+
+function CopyLinkButton({ url, label, children }: { url: string; label: string; children?: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        void copyText(url, "Link copied");
+      }}
+      className={cn(
+        "inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded transition-colors",
+        children
+          ? "border border-sol-cyan/40 bg-sol-cyan/10 px-1.5 py-0.5 text-[11px] text-sol-cyan hover:bg-sol-cyan/20"
+          : "p-1 text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt/60",
+      )}
+      title={label}
+      aria-label={label}
+    >
+      <Link2 className="w-3 h-3" />
+      {children}
+    </button>
+  );
+}
+
+/**
+ * The files as the page's own content: a tree beside them that stays in view
+ * while it fits the window (and scrolls with the page when it does not), and
+ * one card per file, its header pinned under the page's sticky chrome.
+ */
+function FlowDiffView({
+  commonPrefix,
+  flow,
+  sidebarHeader,
+  renderExtra,
+  commentContextFor,
+  lineThreads,
+  fileHref,
+  fileMarks,
+  onToggleViewed,
+  sidebarOpen: wideTreeOpen,
+  onToggleSidebar: toggleWideTree,
+  files: givenFiles,
+}: {
+  files: DiffFile[];
+  commonPrefix: string;
+  flow: DiffFlow;
+  sidebarHeader?: React.ReactNode;
+  renderExtra?: (file: DiffFile) => React.ReactNode;
+  commentContextFor?: FileDiffLayoutProps["commentContextFor"];
+  lineThreads?: FileLineThreads;
+  fileHref?: FileDiffLayoutProps["fileHref"];
+  fileMarks?: FileDiffLayoutProps["fileMarks"];
+  onToggleViewed?: FileDiffLayoutProps["onToggleViewed"];
+  sidebarOpen: boolean;
+  onToggleSidebar: () => void;
+}) {
+  const pathOf = (f: DiffFile) => f.originalFilename ?? f.filename;
+  const files = useMemo(() => treeOrder(givenFiles), [givenFiles]);
+
+  // Open or shut, per file. A viewed file folds by default, the way a reader
+  // puts a finished page face down; their own click wins either way.
+  const [folded, setFolded] = useState<Map<string, boolean>>(new Map());
+  const isFolded = (path: string) => folded.get(path) ?? !!fileMarks?.(path)?.viewed;
+  const setFold = (path: string, value: boolean) =>
+    setFolded((prev) => new Map(prev).set(path, value));
+  // An address that names a file opens it, even one the reader folded or
+  // marked viewed: a link lands on what it points at.
+  const selectedFile = flow.selected?.file;
+  useWatchEffect(() => {
+    if (selectedFile && (folded.get(selectedFile) ?? !!fileMarks?.(selectedFile)?.viewed)) setFold(selectedFile, false);
+  }, [selectedFile, flow.selected?.anchor?.lineNumber]);
+
+  // The file the reader is in: the topmost card under the sticky chrome.
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  // Narrow is the PAGE's width, not the window's: this page is often one
+  // pane of a wide window. A narrow page stacks the tree over the cards and
+  // keeps it folded until asked for; its own toggle, so a wide pane's choice
+  // is left alone.
+  const [narrow, setNarrow] = useState(false);
+  const [narrowTreeOpen, setNarrowTreeOpen] = useState(false);
+  useWatchEffect(() => {
+    const el = rootRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => setNarrow(el.clientWidth < 820));
+    observer.observe(el);
+    setNarrow(el.clientWidth < 820);
+    return () => observer.disconnect();
+  }, []);
+  const sidebarOpen = narrow ? narrowTreeOpen : wideTreeOpen;
+  const onToggleSidebar = narrow ? () => setNarrowTreeOpen((v) => !v) : toggleWideTree;
+  const [active, setActive] = useState<string | null>(null);
+  const stickyTop = flow.stickyTop;
+  const fileKey = files.map(pathOf).join("\n");
+  useWatchEffect(() => {
+    const root = rootRef.current;
+    const scroller = root?.closest<HTMLElement>("[data-main-scroll]");
+    if (!root || !scroller) return;
+    const measure = () => {
+      // The card being read is the last one whose top has gone under the
+      // sticky chrome; above the first card, it is the first.
+      const line = scroller.getBoundingClientRect().top + stickyTop + 48;
+      let current: string | null = null;
+      for (const el of root.querySelectorAll<HTMLElement>("[data-flow-file]")) {
+        if (el.getBoundingClientRect().top <= line) current = el.dataset.flowFile!;
+        else break;
+      }
+      setActive(current ?? (files[0] ? pathOf(files[0]) : null));
+    };
+    // Measured on the scroll itself: the walk stops at the first card below
+    // the line, so it is a handful of reads, and a frame callback would never
+    // run in a background tab.
+    scroller.addEventListener("scroll", measure, { passive: true });
+    measure();
+    // A landing moves the page by hand for a second or two (landOn); measure
+    // again across that window, for the tab whose scroll events arrive late
+    // or not at all.
+    const settles = [400, 1600, 3000].map((ms) => setTimeout(measure, ms));
+    return () => {
+      scroller.removeEventListener("scroll", measure);
+      settles.forEach(clearTimeout);
+    };
+  }, [fileKey, stickyTop, flow.selected?.file, flow.selected?.anchor?.lineNumber]);
+
+  // The tree stays in view only while it fits under the chrome; a tree taller
+  // than the window scrolls with the page, so every entry stays reachable
+  // without a scroller of its own.
+  const treeRef = useRef<HTMLDivElement | null>(null);
+  const [treeFits, setTreeFits] = useState(true);
+  useWatchEffect(() => {
+    const el = treeRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const measure = () => setTreeFits(el.offsetHeight <= window.innerHeight - stickyTop - 24);
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    window.addEventListener("resize", measure);
+    measure();
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [sidebarOpen, stickyTop]);
+
+  // j and k walk the files, m marks the one in hand viewed and moves on: the
+  // same keys as the pane form, moving the page instead of a selection.
+  useEventListener("keydown", (e: KeyboardEvent) => {
+    if (!rootRef.current?.offsetParent) return;
+    const el = e.target as HTMLElement | null;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+    const order = files.map(pathOf);
+    const at = Math.max(0, order.indexOf(active ?? flow.selected?.file ?? order[0]));
+    if (e.key === "j" || e.key === "]") {
+      e.preventDefault();
+      if (at < order.length - 1) flow.onJumpFile(order[at + 1]);
+    } else if (e.key === "k" || e.key === "[") {
+      e.preventDefault();
+      if (at > 0) flow.onJumpFile(order[at - 1]);
+    } else if (e.key === "m" && onToggleViewed) {
+      e.preventDefault();
+      const path = order[at];
+      const wasViewed = !!fileMarks?.(path)?.viewed;
+      setFolded((prev) => { const next = new Map(prev); next.delete(path); return next; });
+      onToggleViewed(path);
+      if (!wasViewed && at < order.length - 1) flow.onJumpFile(order[at + 1]);
+    }
+  });
+
+  const selectedTreePath = files.find((f) => pathOf(f) === (active ?? flow.selected?.file))?.filename ?? null;
+  const allFolded = files.every((f) => isFolded(pathOf(f)));
+
+  return (
+    <div ref={rootRef} className={cn("cc-flow flex gap-4 px-4 pt-4 pb-16", narrow ? "flex-col" : "items-start")}>
+      {sidebarOpen && (
+        <aside
+          ref={treeRef}
+          className={cn("cc-flow-tree shrink-0", narrow ? "w-full" : "w-[272px]")}
+          style={treeFits && !narrow ? { position: "sticky", top: stickyTop + 12 } : undefined}
+        >
+          <FileSidebar
+            flow
+            files={files}
+            selectedFile={selectedTreePath}
+            onSelectFile={(stripped) => {
+              const file = files.find((f) => f.filename === stripped);
+              if (!file) return;
+              // A narrow page has no room beside the cards: the tree stacks
+              // on top of them, and choosing from it puts it away.
+              if (narrow) onToggleSidebar();
+              setFold(pathOf(file), false);
+              flow.onJumpFile(pathOf(file));
+            }}
+            header={sidebarHeader}
+            commonPrefix={commonPrefix}
+            fileMarks={fileMarks}
+          />
+        </aside>
+      )}
+
+      <div className="flex-1 min-w-0">
+        <div className="mb-3 flex items-center gap-2 text-[12px] text-sol-text-muted">
+          <button
+            type="button"
+            onClick={onToggleSidebar}
+            className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-sol-border/60 px-2 py-1 hover:text-sol-text hover:border-sol-border transition-colors"
+            title={sidebarOpen ? "Hide the file tree (b)" : "Show the file tree (b)"}
+          >
+            {sidebarOpen ? <PanelLeftClose className="w-3.5 h-3.5" /> : <PanelLeft className="w-3.5 h-3.5" />}
+            Files
+          </button>
+          <span className="min-w-0 truncate">
+            {files.length} {files.length === 1 ? "file" : "files"} changed
+            {commonPrefix && (
+              <span className="ml-2 font-mono text-[11px] text-sol-text-dim" title={commonPrefix}>
+                in {shortenPrefix(commonPrefix)}/
+              </span>
+            )}
+          </span>
+          <button
+            type="button"
+            onClick={() => setFolded(new Map(files.map((f) => [pathOf(f), !allFolded])))}
+            className="ml-auto inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2 py-1 text-sol-text-dim hover:text-sol-text transition-colors"
+          >
+            {allFolded ? <ChevronsUpDown className="w-3.5 h-3.5" /> : <ChevronsDownUp className="w-3.5 h-3.5" />}
+            {allFolded ? "Expand all" : "Collapse all"}
+          </button>
+        </div>
+
+        <div className="space-y-5">
+          {files.map((file) => {
+            const path = pathOf(file);
+            const status = getFileStatus(file.status);
+            const language = getFileExtension(file.filename);
+            const shut = isFolded(path);
+            const target = flow.selected?.file === path ? flow.selected : null;
+            const selection = target?.anchor
+              ? { side: target.anchor.side, range: { start: target.anchor.lineNumber, end: target.anchor.lineEnd ?? target.anchor.lineNumber } }
+              : null;
+            return (
+              <section
+                key={path}
+                id={flow.fileId(path)}
+                data-flow-file={path}
+                className={cn(
+                  "cc-flow-file rounded-lg border bg-sol-bg overflow-clip",
+                  target ? "border-sol-cyan/60" : "border-sol-border/80",
+                )}
+                // Off screen a card is a placeholder of its last known height, which
+                // keeps a big pull request light. The card an address points into
+                // is always real, so the landing measures true geometry.
+                style={{ scrollMarginTop: stickyTop + 12, contentVisibility: shut || target ? undefined : "auto", containIntrinsicBlockSize: "auto 480px" }}
+              >
+                <header
+                  className={cn(
+                    "sticky z-10 flex items-center gap-2 bg-sol-bg-alt px-3 py-2 flex-wrap",
+                    shut ? "" : "border-b border-sol-border/60",
+                  )}
+                  style={{ top: stickyTop }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setFold(path, !shut)}
+                    className="p-0.5 -ml-1 rounded text-sol-text-dim hover:text-sol-text transition-colors"
+                    title={shut ? "Show this file" : "Fold this file"}
+                    aria-expanded={!shut}
+                  >
+                    {shut ? <ChevronRight className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                  </button>
+                  <span className={cn("text-[10px] font-bold shrink-0", status.color)} title={file.status}>
+                    {status.label}
+                  </span>
+                  <span className="flex items-center gap-1 min-w-0 flex-1 basis-[16rem]">
+                    <FileHeaderName file={file} fileHref={fileHref} />
+                    {target?.anchor ? (
+                      <CopyLinkButton url={flow.shareUrl(flow.lineHref(path, target.anchor))} label="Copy a link to the selected lines">
+                        {lineRunLabel(target.anchor)} · Copy link
+                      </CopyLinkButton>
+                    ) : (
+                      <CopyLinkButton url={flow.shareUrl(flow.fileAnchorHref(path))} label="Copy a link to this file" />
+                    )}
+                  </span>
+                  <span className="flex items-center gap-3 text-[11px] text-sol-text-dim shrink-0">
+                    <span>
+                      <span className="text-sol-green">+{file.additions}</span>
+                      <span className="mx-0.5 text-sol-text-dim/40">/</span>
+                      <span className="text-sol-red">-{file.deletions}</span>
+                    </span>
+                    <ViewedToggle
+                      file={file}
+                      fileMarks={fileMarks}
+                      onToggleViewed={onToggleViewed ? (p) => {
+                        // Marking a file viewed folds it; unmarking opens it.
+                        setFolded((prev) => { const next = new Map(prev); next.delete(p); return next; });
+                        onToggleViewed(p);
+                      } : undefined}
+                    />
+                  </span>
+                </header>
+                {!shut && (file.patch ? (
+                  <FilePatchDiff
+                    patch={file.patch}
+                    language={language}
+                    // A long file shows its first stretch and a "show more": a
+                    // big pull request stays light. The file an address points
+                    // into shows whole, so the linked line has a row to land on.
+                    maxLines={target ? 1_000_000 : 600}
+                    wrap
+                    // Every line has an address here, so every line shows its number.
+                    showLineNumbers
+                    selection={selection}
+                    onSelectionChange={(next) => {
+                      if (!next) return;
+                      flow.onSelectLines(path, {
+                        side: next.side,
+                        lineNumber: next.range.start,
+                        ...(next.range.end !== next.range.start ? { lineEnd: next.range.end } : {}),
+                      });
+                    }}
+                    lineHref={(anchor) => flow.lineHref(path, anchor)}
+                    rowId={(anchor) => flow.rowId(path, anchor)}
+                    commentContext={commentContextFor?.(path)}
+                    {...lineThreadProps(lineThreads, file)}
+                  />
+                ) : (
+                  <div className="text-sol-text-muted text-[13px] py-5 text-center">
+                    {file.status === "added"
+                      ? "A binary or empty file, so there is no diff to show"
+                      : file.status === "removed" || file.status === "deleted"
+                      ? "This file was deleted"
+                      : file.status === "renamed"
+                      ? "Renamed without changes"
+                      : "No changes to display"}
+                  </div>
+                ))}
+                {!shut && renderExtra && renderExtra(file)}
+              </section>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const MOBILE_BREAKPOINT = 768;
 
 type ViewMode = "split" | "unified";
@@ -913,9 +1302,9 @@ export function FileDiffLayout({
   lineThreads,
   focusFile,
   fileHref,
-  onOpenFile,
   fileMarks,
   onToggleViewed,
+  flow,
 }: FileDiffLayoutProps) {
   // Strip common prefix once for consistent comparisons
   const commonPrefix = useMemo(() => findCommonPrefix(files.map(f => f.filename)), [files]);
@@ -991,6 +1380,8 @@ export function FileDiffLayout({
       target.isContentEditable;
 
     if (isInput) return;
+    // The page form walks its files itself (FlowDiffView).
+    if (flow && e.key !== "b" && e.key !== "?") return;
 
     switch (e.key) {
       case "j":
@@ -1076,6 +1467,26 @@ export function FileDiffLayout({
 
   const toggleSidebar = () => setSidebarOpen((prev) => !prev);
 
+  if (flow) {
+    return (
+      <FlowDiffView
+        files={strippedFiles}
+        commonPrefix={commonPrefix}
+        flow={flow}
+        sidebarHeader={sidebarHeader}
+        renderExtra={renderFileExtra}
+        commentContextFor={commentContextFor}
+        lineThreads={lineThreads}
+        fileHref={fileHref}
+       
+        fileMarks={fileMarks}
+        onToggleViewed={onToggleViewed}
+        sidebarOpen={sidebarOpen}
+        onToggleSidebar={toggleSidebar}
+      />
+    );
+  }
+
   const diffContentProps = {
     file: selectedFileData,
     onComment: onFileComment,
@@ -1087,7 +1498,6 @@ export function FileDiffLayout({
     commentContextFor,
     lineThreads,
     fileHref,
-    onOpenFile,
     fileMarks,
     onToggleViewed,
   };
@@ -1165,7 +1575,7 @@ export function FileDiffLayout({
             commentContextFor={commentContextFor}
             lineThreads={lineThreads}
             fileHref={fileHref}
-            onOpenFile={onOpenFile}
+           
             fileMarks={fileMarks}
             onToggleViewed={onToggleViewed}
           />

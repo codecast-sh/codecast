@@ -3,7 +3,7 @@ import { normalizeCharacterFields } from "@codecast/shared/contracts/sessionChar
 import { guardClientResolution, personMayResolve, reopenCore, settleClientResolution } from "./sessionDecisions";
 import { createStackWithCore, removeFromStackCore, reorderStackCore } from "./decisionStacks";
 import type { ThreadKind } from "./threadReads";
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { resolveSpawnDefinition } from "./spawn";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { enqueueStartSession, performRemoveDevices } from "./devices";
@@ -151,7 +151,10 @@ export const dispatch = mutation({
   },
   handler: async (ctx, { action, args: actionArgs, patches, result, ack_positions }) => {
     const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    // Signed out is a state, not a verdict on the write: retryable keeps it in
+    // the client outbox to land once auth returns, instead of dropping it and
+    // toasting about an action the person may never have taken.
+    if (!userId) throw new ConvexError({ code: "UNAUTHENTICATED", message: "Not authenticated", retryable: true });
     const sideEffect = Object.prototype.hasOwnProperty.call(SIDE_EFFECTS, action) ? SIDE_EFFECTS[action] : undefined;
     if (!isDispatchAction(action)) throw new Error("Unknown dispatch action");
 

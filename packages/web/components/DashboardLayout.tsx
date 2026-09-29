@@ -2,7 +2,6 @@ import { ReactNode, useState, useCallback, useRef, useMemo, memo, createContext,
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useDragGatedLayoutPersist } from "../hooks/useDragGatedLayoutPersist";
 import { useWatchEffect } from "../hooks/useWatchEffect";
-import { useEventListener } from "../hooks/useEventListener";
 import { useIsPhone } from "../hooks/useIsPhone";
 import { installOpenIntent, detachCurrentView } from "../lib/openIntent";
 import { usePathname, useRouter } from "next/navigation";
@@ -454,31 +453,17 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
 
   const [desktopClass, setDesktopClass] = useState("");
   const [isDesktopApp, setIsDesktopApp] = useState(false);
-  const [zoomHeight, setZoomHeight] = useState("100vh");
-  const zoomRef = useRef(1);
   const headerRef = useRef<HTMLElement>(null);
   const prevWasInboxRef = useRef(false);
   const prevPathnameRef = useRef(pathname);
   const tipActions = useTipActions();
 
-  const recalcHeight = useCallback(() => {
-    if (typeof window === 'undefined') return;
-    const z = zoomRef.current;
-    // dvh follows a phone browser's collapsing toolbars; vh is the whole
-    // screen, which parks the bottom of the shell under the toolbar on iOS.
-    const vh = typeof CSS !== 'undefined' && CSS.supports('height', '100dvh') ? '100dvh' : '100vh';
-    setZoomHeight(z === 1 ? vh : `calc(${vh} / ${z})`);
-  }, []);
-
   useMountEffect(() => {
     setDesktopClass(desktopHeaderClass());
     setIsDesktopApp(isElectron());
-    recalcHeight();
     const timer = setTimeout(() => { setDesktopClass(desktopHeaderClass()); setIsDesktopApp(isElectron()); }, 500);
     return () => clearTimeout(timer);
   });
-
-  useEventListener('resize', recalcHeight);
 
   // Desktop: Cmd-click / middle-click on any in-app object opens it in a
   // background tab; Cmd-Shift-click in a detached window (lib/openIntent). One
@@ -871,26 +856,6 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   useShortcutAction('session.compose', openCompose);
   useShortcutAction('session.composeDock', useInboxStore.getState().toggleComposeDock);
 
-  useShortcutAction('zoom.in', useCallback(() => {
-    const r = Math.round(Math.min(zoomRef.current + 0.1, 2) * 10) / 10;
-    zoomRef.current = r;
-    document.documentElement.style.zoom = String(r);
-    requestAnimationFrame(recalcHeight);
-  }, [recalcHeight]));
-
-  useShortcutAction('zoom.out', useCallback(() => {
-    const r = Math.round(Math.max(zoomRef.current - 0.1, 0.5) * 10) / 10;
-    zoomRef.current = r;
-    document.documentElement.style.zoom = String(r);
-    requestAnimationFrame(recalcHeight);
-  }, [recalcHeight]));
-
-  useShortcutAction('zoom.reset', useCallback(() => {
-    zoomRef.current = 1;
-    document.documentElement.style.zoom = '1';
-    requestAnimationFrame(recalcHeight);
-  }, [recalcHeight]));
-
   // Persist user-driven resizes only, once, at drag end (useDragGatedLayoutPersist).
   // Imperative collapse and synced-in layout echoes fire onLayoutChange too —
   // ignoring those keeps a collapsed sidebar from sticking as a 0-size layout
@@ -1046,7 +1011,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // The sync effects stay: an embedded document still feeds its own store.
   if (PANE_EMBED) {
     return (
-      <div data-cc-shell data-cc-embed className={`bg-sol-bg overflow-hidden${shellModeClass}`} style={{ height: zoomHeight }}>
+      <div data-cc-shell data-cc-embed className={`bg-sol-bg h-dvh overflow-hidden${shellModeClass}`}>
         <ErrorBoundary name="DashboardSync" level="inline" fallback={null}>
           <DashboardSyncEffects />
         </ErrorBoundary>
@@ -1114,7 +1079,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   );
 
   return (
-    <div data-cc-shell className={`bg-sol-bg flex flex-col overflow-hidden${shellModeClass}`} style={{ height: zoomHeight }}>
+    <div data-cc-shell className={`bg-sol-bg h-dvh flex flex-col overflow-hidden${shellModeClass}`}>
       <ErrorBoundary name="DashboardSync" level="inline" fallback={null}>
         <DashboardSyncEffects />
       </ErrorBoundary>

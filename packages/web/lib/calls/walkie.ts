@@ -38,7 +38,7 @@ import { humanizeConvexError } from "@codecast/shared/contracts";
 import { useInboxStore } from "../../store/inboxStore";
 import { focusExistingHuddle, huddleInOtherWindow } from "./huddleWindow";
 import { CHAT_CHANNEL_STUB_PREFIX, dmOpenInFlight, newChatMessageClientId, resolveChannelStubId } from "../../store/chatSlice";
-import { bindWalkieUpgrade, joinCall, leaveCall, mediaFailureReason, setCamera, setMuted } from "./callManager";
+import { bindWalkieUpgrade, getCallTiles, joinCall, leaveCall, mediaFailureReason, setCamera, setMuted } from "./callManager";
 import {
   getDesktopWindowRole,
   isVoiceHost,
@@ -282,6 +282,7 @@ export function publishVoiceMirror(): void {
       micDenied: !!call?.micDenied,
       camera: !!call?.camera,
       speaking: call?.speaking ?? [],
+      cameras: cameraIdentities(),
     },
   });
 }
@@ -393,7 +394,7 @@ function callState(): CallState {
  * else — where the local slice is idle for as long as the host holds the
  * microphone, and a key reading it would call every burst "dropped".
  */
-export function walkieCallState(): CallState & { micDenied: boolean; camera: boolean; speaking: string[] } {
+export function walkieCallState(): CallState & { micDenied: boolean; camera: boolean; speaking: string[]; cameras: string[] } {
   if (voiceHostElsewhere() && mirroredCall) {
     return {
       roomKey: mirroredCall.roomKey,
@@ -402,6 +403,7 @@ export function walkieCallState(): CallState & { micDenied: boolean; camera: boo
       micDenied: mirroredCall.micDenied,
       camera: !!mirroredCall.camera,
       speaking: mirroredCall.speaking ?? EMPTY_SPEAKING,
+      cameras: mirroredCall.cameras ?? EMPTY_SPEAKING,
     };
   }
   const call = useInboxStore.getState().call as any;
@@ -412,10 +414,19 @@ export function walkieCallState(): CallState & { micDenied: boolean; camera: boo
     micDenied: !!call?.micDenied,
     camera: !!call?.camera,
     speaking: call?.speaking ?? EMPTY_SPEAKING,
+    cameras: cameraIdentities(),
   };
 }
 
 const EMPTY_SPEAKING: string[] = [];
+
+/** Who has a camera up in this window's room, by identity: the tracks are
+ *  here, so the tiles say. A remote reads the same list off the mirror. */
+function cameraIdentities(): string[] {
+  const out: string[] = [];
+  for (const t of getCallTiles()) if (t.kind === "camera" && !out.includes(t.identity)) out.push(t.identity);
+  return out.length ? out : EMPTY_SPEAKING;
+}
 
 function inRoom(roomKey: string): boolean {
   const call = callState();

@@ -1,4 +1,4 @@
-import { CheckCircle, MessageSquare, XCircle, Clock, Ban } from "lucide-react";
+import { CheckCircle, MessageSquare, XCircle, Clock, Ban, Link2 } from "lucide-react";
 import { ExternalEventRow } from "../feed/ExternalEventRow";
 import { CommentAvatar } from "../comments/CommentAvatar";
 import { CommentMarkdown } from "../comments/CommentMarkdown";
@@ -7,6 +7,7 @@ import { PRCommentCard, PRComposer } from "./PRThread";
 import { codeThreadRootKey } from "@codecast/shared/comments";
 import { accentSoft, accentVar, externalEventRowToExternalEvent, type ExternalEventRecord } from "../../lib/externalEvents";
 import { relTimeShort } from "../../lib/utils";
+import { copyText } from "../../lib/copyText";
 import {
   REVIEW_STATE_ACCENT,
   dayLabel,
@@ -44,10 +45,12 @@ function ReviewItem({
   review,
   comments,
   onJump,
+  linkUrl,
 }: {
   review: PrReviewRow;
   comments: CodeCommentRow[];
   onJump?: (comment: CodeCommentRow) => void;
+  linkUrl?: string;
 }) {
   const accent = REVIEW_STATE_ACCENT[review.state] ?? "muted";
   const Icon = REVIEW_ICON[review.state] ?? MessageSquare;
@@ -55,7 +58,8 @@ function ReviewItem({
   const notes = reviewLineComments(review, comments);
   return (
     <div
-      className="rounded-lg border px-3 py-2"
+      id={`review-${review._id}`}
+      className="group/review rounded-lg border px-3 py-2"
       style={{ borderColor: accentSoft(accent, 30), background: accentSoft(accent, 6) }}
     >
       <div className="flex items-center gap-2 text-[12px]">
@@ -64,6 +68,17 @@ function ReviewItem({
         <span className="font-medium text-sol-text">{review.author_github_username ?? "A reviewer"}</span>
         <span style={{ color: accentVar(accent) }}>{verb}</span>
         <span className="text-sol-text-dim">{relTimeShort(review.submitted_at)}</span>
+        {linkUrl && (
+          <button
+            type="button"
+            className="text-sol-text-dim opacity-0 group-hover/review:opacity-100 hover:text-sol-cyan transition-opacity"
+            title="Copy a link to this review"
+            aria-label="Copy a link to this review"
+            onClick={() => void copyText(linkUrl, "Link to the review copied")}
+          >
+            <Link2 className="w-3 h-3" />
+          </button>
+        )}
         {review.html_url && (
           <a
             href={review.html_url}
@@ -112,7 +127,11 @@ export function PRTimeline({
   onNavigate,
   onJumpToThread,
   lastSeenAt,
+  anchorLink,
 }: {
+  /** The shareable address of an item on this page, by its element id
+   *  (`comment-<id>`, `review-<id>`). */
+  anchorLink?: (anchor: string) => string;
   pr: any;
   items: PrTimelineItem[];
   /** Every comment on the pull request, for the notes under each review. */
@@ -128,20 +147,33 @@ export function PRTimeline({
   let lastDay = "";
   // The first item newer than the last visit gets the line; none when
   // nothing is new, or when this is the first visit.
-  const firstNew = lastSeenAt ? items.find((item) => item.at > lastSeenAt)?.key : undefined;
+  // The description card says who opened it and when, so the "opened" event
+  // would only repeat the description's first lines under it.
+  const opened = pr.body ? items.find((item) => item.kind === "event" && (item.event as any).kind === "pr_opened") : undefined;
+  const shown = items.filter((item) => item !== opened);
+  const firstNew = lastSeenAt ? shown.find((item) => item.at > lastSeenAt)?.key : undefined;
+  const openedAt = opened?.at ?? pr.github_created_at ?? pr.created_at;
 
   return (
     <div className="px-5 py-4">
       {pr.body ? (
-        <div className="pr-rise rounded-xl border border-sol-border/50 bg-sol-card px-4 py-3" style={{ ["--d" as string]: "220ms" }}>
-          <MarkdownRenderer content={pr.body} />
+        <div className="pr-rise min-w-0 rounded-xl border border-sol-border/50 bg-sol-card [overflow-wrap:anywhere]" style={{ ["--d" as string]: "220ms" }}>
+          <div className="flex items-center gap-2 border-b border-sol-border/40 px-4 py-2 text-[12px] text-sol-text-muted">
+            <CommentAvatar name={pr.author_github_username ?? "?"} image={pr.author_avatar_url} size={18} />
+            <span className="text-sol-text">{pr.author_github_username}</span>
+            <span className="text-sol-text-dim">opened this</span>
+            {openedAt ? <span className="ml-auto text-[11px] text-sol-text-dim" title={new Date(openedAt).toLocaleString()}>{relTimeShort(openedAt)}</span> : null}
+          </div>
+          <div className="px-4 py-3">
+            <MarkdownRenderer content={pr.body} />
+          </div>
         </div>
       ) : (
         <p className="text-[13px] text-sol-text-dim italic">This pull request has no description.</p>
       )}
 
       <div className="mt-4 space-y-2">
-        {items.map((item) => {
+        {shown.map((item) => {
           const day = dayLabel(item.at);
           const divider = day !== lastDay ? day : null;
           lastDay = day;
@@ -165,23 +197,27 @@ export function PRTimeline({
                   event={externalEventRowToExternalEvent(item.event as ExternalEventRecord)}
                   density="feed"
                   showActor
-                  omitRefs={["pr"]}
+                  // The page is the pull request, and its sessions are named in
+                  // the header and the rail: repeating them on every event is noise.
+                  omitRefs={["pr", "session_id"]}
+                  omitBranch={pr.head_ref}
                   onNavigate={onNavigate}
                 />
               )}
-              {item.kind === "review" && <ReviewItem review={item.review} comments={comments} onJump={onJumpToThread} />}
+              {item.kind === "review" && <ReviewItem review={item.review} comments={comments} onJump={onJumpToThread} linkUrl={anchorLink?.(`review-${item.review._id}`)} />}
               {item.kind === "comment" && (
                 <div
-                  className={`rounded-lg border px-3 py-2 space-y-2 ${
+                  id={`comment-${item.comment._id}`}
+                  className={`scroll-mt-16 rounded-lg border px-3 py-2 space-y-2 ${
                     threadResolved([item.comment, ...item.replies])
                       ? "border-sol-green/30 opacity-70"
                       : "border-sol-border/50"
                   }`}
                 >
-                  <PRCommentCard comment={item.comment} />
+                  <PRCommentCard comment={item.comment} linkUrl={anchorLink?.(`comment-${item.comment._id}`)} />
                   {item.replies.map((reply) => (
-                    <div key={reply._id} className="pl-6">
-                      <PRCommentCard comment={reply} />
+                    <div key={reply._id} id={`comment-${reply._id}`} className="pl-6">
+                      <PRCommentCard comment={reply} linkUrl={anchorLink?.(`comment-${reply._id}`)} />
                     </div>
                   ))}
                   {authed && (

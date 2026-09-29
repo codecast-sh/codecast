@@ -121,7 +121,11 @@ function TabStage({ tabs, storeActiveTabId }: { tabs: AppTab[]; storeActiveTabId
   const entryRef = useRef<string | null | undefined>(undefined);
   if (entryRef.current === undefined) {
     const entry = shellEntryPath(shellEntry.key, location.key, location.pathname, location.search);
-    entryRef.current = entry ? conversationTabPath(entry) : null;
+    const tabPath = entry ? conversationTabPath(entry) : null;
+    // The fragment is part of the address (a line in a pull request's diff),
+    // so it comes along. A conversation link is rewritten to its inbox form,
+    // and its #msg- anchor has its own landing, so that one is left as is.
+    entryRef.current = tabPath && tabPath === entry ? tabPath + location.hash : tabPath;
   }
   let renderTabs = tabs;
   const entryUrl = entryRef.current;

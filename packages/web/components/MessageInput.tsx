@@ -39,7 +39,7 @@ import { mergeMentionSuggestions, mentionViewTimes } from "../lib/mentionRanking
 import { Maximize2, Minimize2, Split, Archive, ArrowRightLeft } from "lucide-react";
 import type { ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, matchScore, mentionItemMatches } from "../hooks/useMentionQuery";
-import { isAliveIdleStatus, type LiveAgentStatus } from "../lib/pendingBanner";
+import { inFlightPending, isAliveIdleStatus, type LiveAgentStatus } from "../lib/pendingBanner";
 import { expandEntityMentions } from "../lib/mentionExpansion";
 import { identityLine } from "../lib/sessionIdentity";
 import { personifyAllNow } from "../hooks/usePersonifyAll";
@@ -521,7 +521,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   );
 
   const canQueryServer = isConvexId(conversationId);
-  const existingPending = usePendingMessageStatus(canQueryServer ? conversationId : null);
+  // In-flight only: the query's settled fallback row is for the transcript bubble.
+  const existingPending = inFlightPending(usePendingMessageStatus(canQueryServer ? conversationId : null));
 
   // The send is fire-and-forget through the store sync, so we no longer get the
   // message id back. Recover precise per-message status tracking from the
@@ -531,7 +532,6 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // per-conversation singleton); the pending_messages id lives in `message_id`.
   useWatchEffect(() => {
     if (pendingMessageId || !sentAt || !existingPending?.message_id) return;
-    if (existingPending.status === "delivered") return;
     setPendingMessageId(existingPending.message_id);
   }, [pendingMessageId, sentAt, existingPending]);
 

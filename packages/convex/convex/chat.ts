@@ -2082,13 +2082,39 @@ export async function channelForRoom(
   return null;
 }
 
-// The row a finished huddle leaves in its chat room: the summary as an
-// ordinary message from the scribe, carrying `call` so a reader can unfold the
-// transcript under it. Scheduled by transcripts.setSummary once the summary
-// lands. Idempotent on the transcript — the client_id is derived from it, so a
-// retried schedule finds the row it already wrote. The scribe is the author
-// because the transcript is theirs (they hold every audio track), the same way
-// a walkie burst belongs to whoever spoke it.
+// Where a huddle's digest lands. A channel room is its channel. A people room
+// keeps the key it started with when others are rung in, so its digest goes to
+// the group message of everyone in the call: the key's members plus every
+// teammate who spoke (the same cast the digest's "huddle with" line names),
+// made on the spot when that group has no room yet. Beyond the group cap it
+// stays in the room the key names.
+async function digestChannel(
+  ctx: MutationCtx,
+  args: { transcript_id: Id<"transcripts">; room_key: string; team_id: Id<"teams">; author: Id<"users"> },
+): Promise<Doc<"chat_channels"> | null> {
+  const parsed = parseRoomKey(args.room_key);
+  if (parsed?.kind !== "dm") return await channelForRoom(ctx, args.room_key, args.team_id);
+  const members = new Set(parsed.users);
+  const transcript = await ctx.db.get(args.transcript_id);
+  for (const p of transcript?.participants ?? []) {
+    if (members.has(p.id)) continue;
+    const id = ctx.db.normalizeId("users", p.id);
+    const user = id ? await ctx.db.get(id) : null;
+    if (user && !user.is_bot && (await isTeamMember(ctx as any, user._id, args.team_id))) members.add(p.id);
+  }
+  if (members.size === parsed.users.length || members.size > MAX_DM_MEMBERS) {
+    return await channelForRoom(ctx, args.room_key, args.team_id);
+  }
+  return (await ensureDmRoom(ctx, args.team_id, [...members] as Id<"users">[], args.author)).channel;
+}
+
+// The row a finished huddle leaves in its chat room (digestChannel): the
+// summary as an ordinary message from the scribe, carrying `call` so a reader
+// can unfold the transcript under it. Scheduled by transcripts.setSummary once
+// the summary lands. Idempotent on the transcript — the client_id is derived
+// from it, so a retried schedule finds the row it already wrote. The scribe is
+// the author because the transcript is theirs (they hold every audio track),
+// the same way a walkie burst belongs to whoever spoke it.
 export const postCallDigest = internalMutation({
   args: {
     transcript_id: v.id("transcripts"),
@@ -2098,7 +2124,7 @@ export const postCallDigest = internalMutation({
     content: v.string(),
   },
   handler: async (ctx, args): Promise<{ posted: boolean; message_id?: Id<"chat_messages"> }> => {
-    const channel = await channelForRoom(ctx, args.room_key, args.team_id);
+    const channel = await digestChannel(ctx, args);
     if (!channel || channel.archived_at) return { posted: false };
     const clientId = `${HUDDLE_DIGEST_CLIENT_ID_PREFIX}${args.transcript_id}`;
     const already = await findByClientId(ctx, channel._id, clientId);

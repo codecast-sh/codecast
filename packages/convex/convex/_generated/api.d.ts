@@ -153,6 +153,7 @@ import type * as lib_orgCaps from "../lib/orgCaps.js";
 import type * as lib_orgChangeLog from "../lib/orgChangeLog.js";
 import type * as lib_orgCharter from "../lib/orgCharter.js";
 import type * as lib_orgCoverage from "../lib/orgCoverage.js";
+import type * as lib_orgOwnership from "../lib/orgOwnership.js";
 import type * as lib_orgRoutine from "../lib/orgRoutine.js";
 import type * as lib_orgScope from "../lib/orgScope.js";
 import type * as lib_projectWork from "../lib/projectWork.js";
@@ -428,6 +429,7 @@ declare const fullApi: ApiFromModules<{
   "lib/orgChangeLog": typeof lib_orgChangeLog;
   "lib/orgCharter": typeof lib_orgCharter;
   "lib/orgCoverage": typeof lib_orgCoverage;
+  "lib/orgOwnership": typeof lib_orgOwnership;
   "lib/orgRoutine": typeof lib_orgRoutine;
   "lib/orgScope": typeof lib_orgScope;
   "lib/projectWork": typeof lib_projectWork;

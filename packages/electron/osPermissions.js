@@ -194,6 +194,7 @@ function createOsPermissions({ electron, bundleId, notifications = loadNotificat
 
 module.exports = {
   KINDS,
+  loadNotificationsAddon,
   authorizationStatusToReadiness,
   mediaStatusToReadiness,
   settingsUrl,

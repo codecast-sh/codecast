@@ -248,7 +248,7 @@ export function OwnerRoleChip({ roles, ownerRoleId, lead, noun = "owner", onChan
           </Link>
         )}
         {onChange && ordered.map((r: OrgRole) => (
-          <MenuItem key={r._id} active={r._id === role?._id} onClick={() => { setOpen(false); if (r._id !== role?._id || (lead?.kind === "lead" && lead.by === "scope")) onChange(r._id); }}>
+          <MenuItem key={r._id} active={r._id === role?._id} onClick={() => { setOpen(false); if (r._id !== role?._id || (lead?.kind === "lead" && lead.by !== "owner")) onChange(r._id); }}>
             <ChipFace role={r} px={14} />
             <span className="truncate">{r.name}</span>
             <span className="font-mono text-[11px] truncate" style={{ color: "var(--sol-text-dim)" }}>@{r.handle}{watching.has(r._id) ? " · watches it" : ""}</span>

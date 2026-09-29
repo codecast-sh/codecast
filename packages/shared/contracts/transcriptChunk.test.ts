@@ -3,7 +3,9 @@ import {
   addressesAgent,
   agentSpokenNames,
   formatTranscriptChunk,
+  HUDDLE_PASS,
   huddleFeedBriefing,
+  isHuddlePass,
   liveFeedChunkHeader,
   ownRoomChunkHeader,
 } from "./transcriptChunk";
@@ -70,6 +72,28 @@ describe("chunk headers", () => {
     expect(b).toContain("In the room you are Ember");
     expect(b).toContain("this huddle");
     expect(b).toContain("cast call hold");
+  });
+
+  test("every feed offers the pass, since a turn cannot end without words", () => {
+    for (const h of [
+      ownRoomChunkHeader({ name: "Ember", lane: "context", held: false }),
+      ownRoomChunkHeader({ name: "Ember", lane: "ask", held: false }),
+      liveFeedChunkHeader({ name: "Pip", lane: "context", held: false }),
+      huddleFeedBriefing({ name: "Ember", label: "this huddle" }),
+    ]) {
+      expect(h).toContain(`end the turn with exactly ${HUDDLE_PASS}`);
+    }
+  });
+});
+
+describe("isHuddlePass", () => {
+  test("the pass alone, however it is cased or padded, and nothing else", () => {
+    expect(isHuddlePass("[pass]")).toBe(true);
+    expect(isHuddlePass("  [PASS]\n")).toBe(true);
+    expect(isHuddlePass("Listening.")).toBe(false);
+    expect(isHuddlePass("[pass] but also, the build is red")).toBe(false);
+    expect(isHuddlePass("")).toBe(false);
+    expect(isHuddlePass(null)).toBe(false);
   });
 });
 
