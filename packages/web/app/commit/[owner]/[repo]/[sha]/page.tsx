@@ -7,10 +7,9 @@
 //
 // The page's accent is the commit itself: green when it mostly added, red when
 // it mostly removed, yellow when it rewrote about as much as it kept.
-import { useCallback, useMemo, useState, type RefCallback } from "react";
+import { useCallback, useMemo, useRef, useState, type RefCallback } from "react";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
-import { Group, Panel, Separator } from "react-resizable-panels";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { codeThreadRootKey } from "@codecast/shared/comments";
 import {
@@ -26,12 +25,12 @@ import {
 import { CommentAvatar } from "../../../../../components/comments/CommentAvatar";
 import { CodeMenuItem, CodeShareMenu } from "../../../../../components/menus/CodeShareItems";
 import { copyText } from "../../../../../lib/copyText";
-import { BlobContent } from "../../../../../components/repo/BlobContent";
 import { CommitRail } from "../../../../../components/repo/CommitRail";
 import { RepoPageShell } from "../../../../../components/repo/RepoPageShell";
 import { RepoWindowControl } from "../../../../../components/repo/RepoWindowControl";
 import { useRepoFamily } from "../../../../../components/repo/useRepoFamily";
 import { FileDiffLayout, type DiffFile, type FileLineThreads } from "../../../../../components/FileDiffLayout";
+import { useDiffAddress } from "../../../../../hooks/useDiffAddress";
 import { LoadingSkeleton } from "../../../../../components/LoadingSkeleton";
 import { PRLineThread } from "../../../../../components/pr/PRThread";
 import { CommitLinks } from "../../../../../components/repo/CommitLinks";
@@ -72,9 +71,6 @@ const api = _api as any;
 /** One commit beside this one: enough to link it and name it on hover. */
 type Neighbour = { sha: string; message?: string };
 type Neighbours = { older?: Neighbour; newer?: Neighbour };
-
-/** How wide the page must be before the discussion rail opens on its own. */
-const RAIL_AUTO_OPEN_WIDTH = 1180;
 
 function ShaCopy({ sha }: { sha: string }) {
   const [copied, setCopied] = useState(false);
@@ -191,7 +187,7 @@ function CommitHeader({
             {subject}
           </h1>
           {body && (
-            <pre className="repo-rise mt-2 max-h-32 overflow-y-auto whitespace-pre-wrap text-[12px] leading-relaxed text-sol-text-muted" style={{ ["--d" as string]: "80ms" }}>
+            <pre className="repo-rise mt-2 whitespace-pre-wrap [overflow-wrap:anywhere] text-[12px] leading-relaxed text-sol-text-muted" style={{ ["--d" as string]: "80ms" }}>
               {body}
             </pre>
           )}
@@ -319,7 +315,12 @@ function CommitNotFound({ repository, sha }: { repository: string; sha: string }
  * fetch replaces this whole component with the diff. Everything below is
  * therefore a reason the diff is not coming, said plainly.
  */
-function CommitWithoutFiles({ repository, sha }: { repository: string; sha: string }) {
+function CommitWithoutFiles({ repository, sha, named = false }: {
+  repository: string;
+  sha: string;
+  /** The row names the files it touched, just not their diffs. */
+  named?: boolean;
+}) {
   const fetchFiles = useEnsureCommitFiles(repository, sha, true);
 
   // `unknown_commit` means the backend found no commit row for this sha under
@@ -329,7 +330,9 @@ function CommitWithoutFiles({ repository, sha }: { repository: string; sha: stri
     ? serverErrorText(fetchFiles.error)
     : fetchFiles.reason === "unknown_commit"
       ? "This commit belongs to a different repository than the one in the address, so its diff is not here to fetch."
-      : "A merge commit with no combined diff looks like this, and so does a commit whose files GitHub no longer serves.";
+      : named
+        ? "A commit recorded from a session knows which files it touched before anyone has fetched their diffs. GitHub has the full change."
+        : "A merge commit with no combined diff looks like this, and so does a commit whose files GitHub no longer serves.";
 
   return (
     <div className="h-full flex flex-col items-center justify-center px-6 text-center text-sol-text-muted">
@@ -345,7 +348,9 @@ function CommitWithoutFiles({ repository, sha }: { repository: string; sha: stri
           <p className="text-[13px] mb-1">
             {fetchFiles.error
               ? "The diff for this commit could not be read."
-              : "No file changes to show for this commit."}
+              : named
+                ? "The files this commit touched are listed below, but not their diffs."
+                : "No file changes to show for this commit."}
           </p>
           <p className="text-[12px] text-sol-text-dim mb-4 max-w-md leading-relaxed">{explanation}</p>
           <a
@@ -406,19 +411,24 @@ function CommitContent({
   const searchParams = useSearchParams();
   const conversationId = useAttributedSession(searchParams.get("session"));
 
-  // The discussion rail opens on its own on a wide page and folds away on a
-  // narrow one; the button in the header overrides either. A link that names
-  // a file (`?file=`, from a Threads card) also opens the diff on that file.
-  const [railOpen, setRailOpen] = useState(
-    () => typeof window === "undefined" || window.innerWidth >= RAIL_AUTO_OPEN_WIDTH,
-  );
-  const [focusFile, setFocusFile] = useState<string | null>(() => searchParams.get("file"));
+  // The page is one scroller and the place in it is the address: a file or
+  // a run of lines in the fragment, the same as a pull request's Files view.
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const diffHref = useCallback((hash: string) => commitPageHref(repository, sha, family) + hash, [repository, sha, family]);
+  const { goTo, flow } = useDiffAddress({
+    diffHref,
+    here: true,
+    ready: !!commit?.files?.length,
+    rootRef,
+    stickyTop: 0,
+  });
+  // An older link names a file in the query (`?file=`, from a Threads card):
+  // it becomes the fragment, which is the address from here on.
+  const filesReady = !!commit?.files?.length;
   useWatchEffect(() => {
     const file = searchParams.get("file");
-    if (file) setFocusFile(file);
-  }, [searchParams]);
-  // The file open beside the diff, whole, at this commit.
-  const [openFile, setOpenFile] = useState<{ path: string; line?: number } | null>(null);
+    if (file && filesReady) goTo(file);
+  }, [searchParams, filesReady]);
 
   useSyncRefCodeComments(repository, sha);
   const comments = useCodeComments(
@@ -486,12 +496,10 @@ function CommitContent({
     (path: string) => repoBlobHref(repository, sha, path, family),
     [repository, sha, family],
   );
-  const openWholeFile = useCallback((path: string) => setOpenFile({ path }), []);
-  const jumpToThread = useCallback((path: string) => {
-    // A fresh value each time, so the same file can be jumped to twice.
-    setFocusFile(null);
-    requestAnimationFrame(() => setFocusFile(path));
-  }, []);
+  const jumpToThread = useCallback(
+    (path: string, line?: number) => goTo(path, line ? { side: "RIGHT", lineNumber: line } : undefined),
+    [goTo],
+  );
 
   if (!commit) {
     if (!feed.ready && !feed.error) return <LoadingSkeleton />;
@@ -509,7 +517,9 @@ function CommitContent({
 
   return (
     <div
-      className="repo-page h-full flex flex-col"
+      ref={rootRef}
+      className="repo-page h-full overflow-y-auto"
+      data-main-scroll
       style={{
         ["--repo-accent" as string]: commitBalanceAccent(
           commit.insertions ?? 0,
@@ -523,63 +533,43 @@ function CommitContent({
         neighbours={neighbours}
         headRef={headRef}
         threadCount={threadCount}
-        railOpen={railOpen}
-        onToggleRail={() => setRailOpen((v) => !v)}
+        railOpen={false}
+        onToggleRail={() => rootRef.current?.querySelector("#commit-discussion")?.scrollIntoView({ block: "start" })}
       />
-      <div className="flex-1 min-h-0 flex">
-        <div className="flex-1 min-w-0 min-h-0">
-          {files.length === 0 ? (
-            <CommitWithoutFiles repository={repository} sha={commit.sha} />
-          ) : (
-            <Group
-              // Re-keyed when the file panel comes or goes, so the group lays
-              // the two panels out afresh instead of squeezing the newcomer.
-              key={openFile ? "with-file" : "diff-only"}
-              orientation="horizontal"
-              className="h-full"
-              defaultLayout={openFile ? { "commit-diff": 54, "commit-file": 46 } : { "commit-diff": 100 }}
-            >
-              <Panel id="commit-diff" minSize={30}>
-                <FileDiffLayout
-                  files={files}
-                  lineThreads={lineThreads}
-                  focusFile={focusFile}
-                  fileHref={fileHref}
-                  onOpenFile={openWholeFile}
-                />
-              </Panel>
-              {openFile && (
-                <>
-                  <Separator className="cc-split" />
-                  <Panel id="commit-file" minSize={25}>
-                    <div className="h-full flex flex-col bg-sol-bg border-l border-sol-border/40">
-                      <BlobContent
-                        key={openFile.path}
-                        repository={repository}
-                        refName={commit.sha}
-                        path={openFile.path}
-                        panel={{ onClose: () => setOpenFile(null), line: openFile.line }}
-                      />
-                    </div>
-                  </Panel>
-                </>
-              )}
-            </Group>
-          )}
+      {/* The discussion reads before the diff, in the page, not in a column:
+          a commit nobody has said anything about costs one line. */}
+      <section id="commit-discussion" className="commit-rail max-w-[1080px] px-4 pt-4">
+        <CommitRail
+          flow
+          repository={repository}
+          sha={commit.sha}
+          comments={comments}
+          lineComments={lineComments}
+          pullRequestId={pr?.state === "open" ? pr._id : undefined}
+          onJump={jumpToThread}
+        />
+      </section>
+      {files.length === 0 ? (
+        <div className="py-16">
+          <CommitWithoutFiles repository={repository} sha={commit.sha} />
         </div>
-        {railOpen && (
-          <aside className="commit-rail w-[340px] shrink-0 border-l border-sol-border/50 bg-sol-bg-alt/20 min-h-0">
-            <CommitRail
-              repository={repository}
-              sha={commit.sha}
-              comments={comments}
-              lineComments={lineComments}
-              pullRequestId={pr?.state === "open" ? pr._id : undefined}
-              onJump={jumpToThread}
-            />
-          </aside>
-        )}
-      </div>
+      ) : (
+        <>
+          {/* A row that names its files but carries none of their diffs (a
+              commit recorded from a session transcript) asks for them, and
+              says so above the list rather than hiding it. */}
+          {/* The server's rule (commitCarriesDiffs): a push names files with
+              no patch field; a fetch writes one on every file, empty or not. */}
+          {files.every((f) => f.patch === undefined && !f.additions && !f.deletions) && (
+            <div className="px-4 pt-4">
+              <div className="rounded-lg border border-sol-border/60 py-6">
+                <CommitWithoutFiles repository={repository} sha={commit.sha} named />
+              </div>
+            </div>
+          )}
+          <FileDiffLayout files={files} flow={flow} lineThreads={lineThreads} fileHref={fileHref} />
+        </>
+      )}
     </div>
   );
 }

@@ -28,7 +28,8 @@ export default function RepoBlobPage() {
   return (
     <RepoPageShell repository={repository}>
       <div
-        className="repo-page h-full flex flex-col"
+        className="repo-page h-full overflow-y-auto"
+        data-main-scroll
         style={{ ["--repo-accent" as string]: "var(--sol-blue)" }}
       >
         <RepoHeader

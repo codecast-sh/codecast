@@ -14,6 +14,7 @@ import {
   type DiffLineAnchor,
   type DiffSide,
 } from "./patchParser";
+import { prPageHref, type RepoRouteFamily } from "./repoView";
 
 // -- Checks -------------------------------------------------------------------
 
@@ -398,7 +399,12 @@ export function buildPrTimeline(input: {
     // "Fell behind" is the header's job: it reads "Behind by N" from the live
     // row, always current, while a row per transition only says the PR was
     // once behind by something else. Same rule as the feed and the transcript.
-    ...collapseMergeStateEvents(input.events.filter((event) => !isQuietExternalEvent(event))).map<PrTimelineItem>((event) => ({
+    // A review arrives twice: as GitHub's event and as the review row. The
+    // row is the one with the verdict and the notes, so once rows are in hand
+    // the event is only an echo of it.
+    ...collapseMergeStateEvents(input.events.filter((event) =>
+      !isQuietExternalEvent(event) && !(event.kind === "pr_review" && input.reviews.length > 0),
+    )).map<PrTimelineItem>((event) => ({
       key: `e:${event._id}`,
       at: event.created_at,
       kind: "event",
@@ -441,4 +447,66 @@ export function dayLabel(ts: number, now: number = Date.now()): string {
     day: "numeric",
     ...(at.getFullYear() !== today.getFullYear() ? { year: "numeric" } : {}),
   });
+}
+
+// -- Addresses ----------------------------------------------------------------
+//
+// Every view of a pull request is a URL, so anything a reader can see they can
+// link to: the tab is the path, and a file or a run of lines in it is the
+// fragment. The fragment is readable on purpose (`#diff-src/a.ts:R12-R20`), in
+// GitHub's letters: R is the new side of the diff, L the old one.
+
+export type PrView = "conversation" | "files" | "commits" | "checks";
+
+export const PR_VIEWS: readonly PrView[] = ["conversation", "files", "commits", "checks"];
+
+/** The view a PR page path names: its last segment, or the conversation. */
+export function prViewOf(pathname: string): PrView {
+  const last = pathname.replace(/\/+$/, "").split("/").pop() ?? "";
+  return (PR_VIEWS as readonly string[]).includes(last) && last !== "conversation" ? (last as PrView) : "conversation";
+}
+
+/** The page for one view of a pull request, with an optional fragment. */
+export function prViewHref(
+  repository: string,
+  number: number | string,
+  view: PrView,
+  family: RepoRouteFamily = "app",
+  hash = "",
+): string {
+  const base = prPageHref(repository, number, family);
+  return `${view === "conversation" ? base : `${base}/${view}`}${hash}`;
+}
+
+/** Where a fragment points: a file, and maybe a run of its lines. */
+export type DiffTarget = { file: string; anchor?: DiffLineAnchor };
+
+const SIDE_LETTER: Record<DiffSide, string> = { RIGHT: "R", LEFT: "L" };
+
+/** The fragment for a file, or a line or run of lines in it. */
+export function formatDiffHash(target: DiffTarget): string {
+  const { file, anchor } = target;
+  if (!anchor) return `#diff-${file}`;
+  const letter = SIDE_LETTER[anchor.side];
+  const end = anchor.lineEnd !== undefined && anchor.lineEnd !== anchor.lineNumber ? `-${letter}${anchor.lineEnd}` : "";
+  return `#diff-${file}:${letter}${anchor.lineNumber}${end}`;
+}
+
+/** Read a fragment back. Anything that is not a diff address is null, and a
+ *  backwards run (`R20-R12`, a shift click up the file) reads as the same run. */
+export function parseDiffHash(hash: string | null | undefined): DiffTarget | null {
+  if (!hash) return null;
+  let raw = hash.replace(/^#/, "");
+  try { raw = decodeURIComponent(raw); } catch { /* keep it as written */ }
+  if (!raw.startsWith("diff-")) return null;
+  const body = raw.slice(5);
+  if (!body) return null;
+  const match = body.match(/^(.*):([LR])(\d+)(?:-[LR]?(\d+))?$/);
+  if (!match || !match[1]) return { file: body };
+  const first = Number(match[3]);
+  const second = match[4] === undefined ? first : Number(match[4]);
+  if (first < 1 || second < 1) return { file: match[1] };
+  const anchor: DiffLineAnchor = { side: match[2] === "L" ? "LEFT" : "RIGHT", lineNumber: Math.min(first, second) };
+  if (first !== second) anchor.lineEnd = Math.max(first, second);
+  return { file: match[1], anchor };
 }

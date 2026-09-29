@@ -71,10 +71,10 @@ export function BlobView({
 
   return (
     <div
-      className="repo-code h-full overflow-auto text-[12px] leading-[20px]"
+      className="repo-code text-[12px] leading-[20px]"
       data-focus-session={sessionsOn && focusSession ? focusSession : undefined}
     >
-      <div className="min-w-max pb-24">
+      <div className="pb-24">
         {lines.map((line, index) => {
           const number = index + 1;
           const range = blameOn ? blameAt(number) : undefined;
@@ -149,11 +149,11 @@ export function BlobView({
 
                 {html ? (
                   <code
-                    className="whitespace-pre pr-6"
+                    className="min-w-0 flex-1 whitespace-pre-wrap [overflow-wrap:anywhere] pr-6"
                     dangerouslySetInnerHTML={{ __html: html[index] ?? "" }}
                   />
                 ) : (
-                  <code className="whitespace-pre pr-6">{line}</code>
+                  <code className="min-w-0 flex-1 whitespace-pre-wrap [overflow-wrap:anywhere] pr-6">{line}</code>
                 )}
               </div>
 

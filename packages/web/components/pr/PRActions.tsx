@@ -35,8 +35,8 @@ import { sharePageUrl } from "../../lib/utils";
 import { useInboxStore } from "../../store/inboxStore";
 import { accentVar } from "../../lib/externalEvents";
 import { mergeStateMeta, notePlace, prStateKey, type CodeCommentRow } from "../../lib/prView";
-import { prPageHref } from "../../lib/repoView";
-import { useRepoFamily } from "../repo/useRepoFamily";
+import { prPageHref, toStandaloneHref } from "../../lib/repoView";
+import { useRepoFamily, useRepoLocation } from "../repo/useRepoFamily";
 
 // The verbs of a pull request, in codecast, reaching GitHub. Every one calls
 // the same server function `cast pr` calls (prCli), so the page and the CLI
@@ -51,6 +51,13 @@ const VERDICTS: { key: Verdict; label: string; hint: string; icon: typeof Check;
   { key: "APPROVE", label: "Approve", hint: "Good to merge", icon: Check, accent: "green" },
   { key: "REQUEST_CHANGES", label: "Request changes", hint: "Must change before it lands", icon: XCircle, accent: "red" },
 ];
+
+/** The submit button says what it will do. */
+const SUBMIT_LABEL: Record<Verdict, string> = {
+  COMMENT: "Submit review",
+  APPROVE: "Approve",
+  REQUEST_CHANGES: "Request changes",
+};
 
 /** What the server answered, or why it refused, as one toast. */
 function report(result: any, done: string): boolean {
@@ -78,6 +85,7 @@ export function ReviewMenu({
   sessionChoices = [],
   openThreads = 0,
   onWalk,
+  placement = "header",
 }: {
   pr: any;
   notes: CodeCommentRow[];
@@ -91,6 +99,9 @@ export function ReviewMenu({
   /** Open threads on the pull request, and the jump to the first: where a review starts. */
   openThreads?: number;
   onWalk?: () => void;
+  /** "bar" is the review bar pinned to the bottom of the page: a plain
+   *  button that opens the review upward, above itself. */
+  placement?: "header" | "bar";
 }) {
   const submit = useAction(api.reviews.submitPending);
   const hand = useMutation(api.reviews.handPendingToSession);
@@ -133,23 +144,48 @@ export function ReviewMenu({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button
-          type="button"
-          className={`pr-verb inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[12px] font-medium transition-colors ${count ? "" : "opacity-90"}`}
-          title="Review this pull request (r)"
-        >
-          <CircleDot className="w-3.5 h-3.5" />
-          {count ? `Review · ${count}` : "Review"}
-          <ChevronDown className="w-3 h-3 opacity-70" />
-        </button>
+        {placement === "bar" ? (
+          <button
+            type="button"
+            className="pr-verb inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors"
+            title="Choose a verdict and send your notes (r)"
+          >
+            <Send className="w-3.5 h-3.5" />
+            Finish review
+            <KeyCap size="xs">r</KeyCap>
+          </button>
+        ) : (
+          <button
+            type="button"
+            className={`pr-verb inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[12px] font-medium transition-colors ${count ? "" : "opacity-90"}`}
+            title={count ? `${count} ${count === 1 ? "note" : "notes"} waiting in your review (r)` : "Review this pull request (r)"}
+          >
+            <CircleDot className="w-3.5 h-3.5" />
+            {count ? `Review · ${count}` : "Review"}
+            <ChevronDown className="w-3 h-3 opacity-70" />
+          </button>
+        )}
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-[380px] p-0 bg-sol-bg border-sol-border">
-        <div className="px-3.5 pt-3 pb-2 border-b border-sol-border/50">
-          <div className="text-[10px] uppercase tracking-wider text-sol-text-dim">Your review</div>
+      <PopoverContent
+        align="end"
+        side={placement === "bar" ? "top" : "bottom"}
+        sideOffset={8}
+        className="w-[420px] p-0 overflow-hidden bg-sol-bg border-sol-border"
+      >
+        {/* What is waiting: the notes, each a way back to its line. */}
+        <div className="px-4 pt-3.5 pb-3 border-b border-sol-border/50">
+          <div className="flex items-baseline gap-2">
+            <h3 className="text-[13px] font-medium text-sol-text">{count ? "Finish your review" : "Review"}</h3>
+            {count > 0 && (
+              <span className="ml-auto text-[11px] text-sol-text-dim tabular-nums">
+                {count} {count === 1 ? "note" : "notes"}
+              </span>
+            )}
+          </div>
           {count === 0 ? (
-            <div className="mt-1 space-y-1.5">
+            <div className="mt-1.5 space-y-2">
               <p className="text-[12px] text-sol-text-muted leading-relaxed">
-                No notes yet. In Files, hover a line and press <span className="font-mono text-sol-blue">+</span> to write one with <em>Add to review</em> on. Or leave a verdict alone.
+                No notes yet. In Files, hover a line and press <span className="font-mono text-sol-blue">+</span> to write one, or give a verdict on its own.
               </p>
               {!!openThreads && onWalk && (
                 <button
@@ -163,16 +199,17 @@ export function ReviewMenu({
               )}
             </div>
           ) : (
-            <ul className="mt-1.5 max-h-40 overflow-y-auto space-y-1">
+            <ul className="mt-2 -mx-1.5 max-h-60 overflow-y-auto">
               {notes.map((note) => (
                 <li key={note._id}>
                   <button
                     type="button"
-                    className="w-full text-left flex items-baseline gap-2 rounded px-1 py-0.5 hover:bg-sol-bg-alt/60"
+                    className="w-full text-left flex items-baseline gap-2.5 rounded-md px-1.5 py-1 hover:bg-sol-bg-alt/60 transition-colors"
                     onClick={() => { setOpen(false); onNavigate(note); }}
+                    title="Show this note on its line"
                   >
-                    <span className="font-mono text-[11px] text-sol-yellow shrink-0">{notePlace(note)}</span>
-                    <span className="text-[12px] text-sol-text-muted truncate">{note.content}</span>
+                    <span className="font-mono text-[11px] text-sol-text-dim shrink-0">{notePlace(note)}</span>
+                    <span className="text-[12px] text-sol-text truncate">{note.content}</span>
                   </button>
                 </li>
               ))}
@@ -180,11 +217,13 @@ export function ReviewMenu({
           )}
         </div>
 
-        <div className="px-3.5 py-2.5 space-y-2.5">
-          <div className="grid grid-cols-3 gap-1" role="radiogroup" aria-label="Verdict">
+        {/* The verdict, one line each, and what to tell the author. */}
+        <div className="px-4 py-3 space-y-3">
+          <div className="space-y-0.5" role="radiogroup" aria-label="Verdict">
             {VERDICTS.map(({ key, label, hint, icon: Icon, accent }) => {
               const disabled = key !== "COMMENT" && !!own;
               const active = verdict === key;
+              const color = accentVar(accent as any);
               return (
                 <button
                   key={key}
@@ -192,34 +231,89 @@ export function ReviewMenu({
                   role="radio"
                   aria-checked={active}
                   disabled={disabled}
-                  title={disabled ? "GitHub does not let you judge your own pull request" : hint}
+                  title={disabled ? "GitHub does not let you judge your own pull request" : undefined}
                   onClick={() => setVerdict(key)}
-                  className={`flex flex-col items-start gap-0.5 rounded-md border px-2 py-1.5 text-left transition-colors disabled:opacity-40 ${
-                    active ? "border-current" : "border-sol-border/50 hover:border-sol-border"
+                  className={`w-full flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left whitespace-nowrap transition-colors disabled:opacity-40 ${
+                    active ? "" : "hover:bg-sol-bg-alt/60"
                   }`}
-                  style={active ? { color: accentVar(accent as any), background: `color-mix(in srgb, ${accentVar(accent as any)} 10%, transparent)` } : undefined}
+                  style={active ? { background: `color-mix(in srgb, ${color} 12%, transparent)` } : undefined}
                 >
-                  <span className="flex items-center gap-1 text-[12px] font-medium">
-                    <Icon className="w-3.5 h-3.5" />
+                  <span
+                    className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border"
+                    style={{ borderColor: active ? color : "var(--sol-border)" }}
+                  >
+                    {active && <span className="h-1.5 w-1.5 rounded-full" style={{ background: color }} />}
+                  </span>
+                  <Icon className="w-3.5 h-3.5 shrink-0" style={{ color: active ? color : "var(--sol-text-dim)" }} />
+                  <span className={`text-[12px] font-medium ${active ? "" : "text-sol-text-muted"}`} style={active ? { color } : undefined}>
                     {label}
                   </span>
+                  <span className="ml-auto min-w-0 truncate text-[11px] text-sol-text-dim">{hint}</span>
                 </button>
               );
             })}
+            {own && (
+              <p className="px-2.5 pt-1 text-[11px] text-sol-text-dim">
+                It is your pull request, so GitHub takes a comment from you, not a verdict.
+              </p>
+            )}
           </div>
           <textarea
             value={body}
             onChange={(e) => setBody(e.target.value)}
-            rows={3}
-            placeholder={verdict === "APPROVE" ? "Anything to add? (optional)" : "Summary for the author"}
+            rows={2}
+            placeholder={verdict === "COMMENT" && count === 0 ? "What do you want to say?" : "Summary for the author (optional)"}
             className="w-full resize-none rounded-md border border-sol-border/60 bg-sol-bg-alt/40 px-2.5 py-2 text-[13px] text-sol-text placeholder:text-sol-text-dim focus:border-sol-cyan focus:outline-none"
           />
-          <div className="flex items-center gap-2 flex-wrap">
+          {picking && !shepherd && (
+            <div className="flex flex-wrap gap-1.5">
+              <span className="text-[11px] text-sol-text-dim">Send the notes to</span>
+              {sessionChoices.map((session) => (
+                <button
+                  key={session.id}
+                  type="button"
+                  disabled={busy !== null}
+                  onClick={() => run("hand", session.id)}
+                  className="rounded-full border border-sol-border/50 px-2 py-0.5 text-[11px] text-sol-text-muted hover:text-sol-cyan hover:border-sol-cyan/40 transition-colors max-w-[220px] truncate"
+                >
+                  {session.title}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* The way out: the one primary action on the right, the rest quiet. */}
+        <div className="px-4 py-2.5 border-t border-sol-border/50 bg-sol-bg-alt/30">
+          <div className="flex items-center gap-2">
+            {count > 0 && (
+              <ConfirmButton
+                label="Discard"
+                question={`${count} ${count === 1 ? "note is" : "notes are"} thrown away.`}
+                onConfirm={() => {
+                  void discard({ pull_request_id: pr._id }).then(() => toast.success("Notes discarded"));
+                }}
+              />
+            )}
+            <span className="ml-auto" />
+            {count > 0 && (shepherd || sessionChoices.length > 0) && (
+              <button
+                type="button"
+                disabled={busy !== null}
+                onClick={() => (shepherd ? run("hand") : setPicking((v) => !v))}
+                className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-1.5 text-[12px] text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/60 transition-colors"
+                title={shepherd ? "The agent session watching this pull request gets the notes as one message; nothing goes to GitHub, and the notes stay here" : "Pick a linked session to send the notes to; nothing goes to GitHub"}
+              >
+                <Radio className="w-3.5 h-3.5" />
+                {busy === "hand" ? "Sending" : "Send to session"}
+              </button>
+            )}
             <button
               type="button"
               disabled={!openPr || busy !== null}
               onClick={() => run("submit")}
-              className="pr-verb inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] font-medium"
+              className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1.5 text-[12px] font-medium text-sol-bg transition-opacity hover:opacity-90 disabled:opacity-40"
+              style={{ background: accentVar((VERDICTS.find((v) => v.key === verdict)?.accent ?? "blue") as any) }}
               title={
                 !openPr ? "Only an open pull request takes a review"
                 : shepherd ? "One GitHub review under your account; the owning session hears it as a message"
@@ -227,47 +321,16 @@ export function ReviewMenu({
               }
             >
               <Send className="w-3.5 h-3.5" />
-              {busy === "submit" ? "Sending" : "Submit review"}
+              {busy === "submit" ? "Sending" : SUBMIT_LABEL[verdict]}
             </button>
-            {count > 0 && (shepherd || sessionChoices.length > 0) && (
-              <button
-                type="button"
-                disabled={busy !== null}
-                onClick={() => (shepherd ? run("hand") : setPicking((v) => !v))}
-                className="inline-flex items-center gap-1.5 rounded-md border border-sol-border/60 px-3 py-1.5 text-[12px] text-sol-text-muted hover:text-sol-text hover:border-sol-cyan/50 transition-colors"
-                title={shepherd ? "The notes go to the shepherd session as one message and stay pending here" : "Pick a linked session to send the notes to"}
-              >
-                <Radio className="w-3.5 h-3.5" />
-                {busy === "hand" ? "Sending" : shepherd ? "Send to shepherd" : "Send to session"}
-              </button>
-            )}
-            {picking && !shepherd && (
-              <div className="basis-full flex flex-wrap gap-1.5">
-                {sessionChoices.map((session) => (
-                  <button
-                    key={session.id}
-                    type="button"
-                    disabled={busy !== null}
-                    onClick={() => run("hand", session.id)}
-                    className="rounded-full border border-sol-border/50 px-2 py-0.5 text-[11px] text-sol-text-muted hover:text-sol-cyan hover:border-sol-cyan/40 transition-colors max-w-[220px] truncate"
-                  >
-                    {session.title}
-                  </button>
-                ))}
-              </div>
-            )}
-            {count > 0 && (
-              <span className="ml-auto">
-                <ConfirmButton
-                  label="Discard"
-                  question={`${count} ${count === 1 ? "note is" : "notes are"} thrown away.`}
-                  onConfirm={() => {
-                    void discard({ pull_request_id: pr._id }).then(() => toast.success("Notes discarded"));
-                  }}
-                />
-              </span>
-            )}
           </div>
+          <p className="mt-1.5 text-[11px] text-sol-text-dim">
+            {!openPr
+              ? `This pull request is ${pr.state === "merged" ? "merged" : "closed"}, so it takes no more reviews.${count > 0 ? " You can still send the notes to a session, or discard them." : ""}`
+              : count > 0
+              ? `Only you can see ${count === 1 ? "this note" : "these notes"} until you submit. It posts to GitHub as you.`
+              : "It posts to GitHub as you."}
+          </p>
         </div>
       </PopoverContent>
     </Popover>
@@ -387,7 +450,11 @@ export function MoreMenu({
   const [login, setLogin] = useState("");
   const locator = { repository: pr.repository, number: pr.number };
   const state = prStateKey(pr);
-  const pageUrl = sharePageUrl(prPageHref(pr.repository, pr.number, family));
+  // The link is to where the reader is (the view, the file, the lines), in
+  // the public form that opens for anyone, in a browser or in the app.
+  const loc = useRepoLocation();
+  const here = loc.pathname.includes(`/${pr.number}`) ? `${loc.pathname}${loc.hash}` : prPageHref(pr.repository, pr.number, family);
+  const pageUrl = sharePageUrl(toStandaloneHref(here));
   const githubUrl = `https://github.com/${pr.repository}/pull/${pr.number}`;
   const branch = pr.head_ref && pr.base_ref ? `${pr.head_ref} -> ${pr.base_ref}` : "";
   const openish = state === "open" || state === "draft";
