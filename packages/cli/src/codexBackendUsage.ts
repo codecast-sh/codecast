@@ -109,9 +109,20 @@ export function nextUsageRetry(
  * no access token (logged out, or an API-key-only login).
  */
 export function codexBackendAuthHeaders(codexHomeDir: string): Record<string, string> | null {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(path.join(codexHomeDir, "auth.json"), "utf-8");
+  } catch {
+    return null;
+  }
+  return codexBackendHeadersFromAuth(raw);
+}
+
+/** The same headers from an auth.json blob already read (null without an access token). */
+export function codexBackendHeadersFromAuth(raw: string): Record<string, string> | null {
   let tokens: any;
   try {
-    tokens = JSON.parse(fs.readFileSync(path.join(codexHomeDir, "auth.json"), "utf-8"))?.tokens;
+    tokens = JSON.parse(raw)?.tokens;
   } catch {
     return null;
   }

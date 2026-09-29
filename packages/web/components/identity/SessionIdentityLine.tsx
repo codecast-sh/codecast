@@ -32,19 +32,24 @@ export function SessionIdentityLine({
   const who = (
     <>
       {line.name && (
-        <span className={`flex-shrink-0 font-medium text-sol-text ${nameClassName ?? ""}`}>{line.name}</span>
+        <span data-sv-name className={`max-w-full flex-shrink-0 truncate font-medium text-sol-text ${nameClassName ?? ""}`}>{line.name}</span>
       )}
-      {line.handle && <span className="flex-shrink-0 text-sol-text-dim font-mono text-[0.85em]">@{line.handle}</span>}
+      {line.handle && <span className="min-w-0 truncate text-sol-text-dim font-mono text-[0.85em]">@{line.handle}</span>}
     </>
   );
+  // The name never shrinks while the title has room to give (any shrink, even
+  // a subpixel, shows the ellipsis), but a name longer than the whole line
+  // ellipsizes instead of painting under the chips after it, the handle giving
+  // way before the name. The cap leaves the colon room.
+  const whoClass = "inline-flex min-w-0 max-w-[calc(100%-1.5rem)] flex-shrink-0 items-center gap-1.5";
   return (
     // data-sv-title marks the row's title line for the minimal style's type
     // rule (globals.css). It sits on the whole line, not just the title text:
     // once personified the name leads the line, so the rule has to take both.
     <span data-sv-title className={`inline-flex min-w-0 items-center gap-1.5 ${className ?? ""}`}>
       {id.kind === "role"
-        ? <RoleHoverCard role={id.role} side="bottom" triggerClassName="inline-flex flex-shrink-0 items-center gap-1.5">{who}</RoleHoverCard>
-        : who}
+        ? <RoleHoverCard role={id.role} side="bottom" triggerClassName={whoClass}>{who}</RoleHoverCard>
+        : (line.name || line.handle) && <span className={whoClass}>{who}</span>}
       {line.name && line.title && <span aria-hidden className="flex-shrink-0 text-sol-text-dim/60">:</span>}
       {line.title && (
         <span className={`min-w-0 truncate ${line.name ? "text-sol-text-dim" : "text-sol-text"} ${titleClassName ?? ""}`}>

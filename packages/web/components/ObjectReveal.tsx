@@ -19,7 +19,7 @@
 import React, { useCallback, useContext, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
-import { ArrowUpRight, Columns2, PanelBottomClose, PanelBottomOpen } from "lucide-react";
+import { ArrowUpRight, Columns2, PanelBottomClose, PanelBottomOpen, X } from "lucide-react";
 import { RoutePane } from "./RoutePane";
 import { SessionPane } from "./stage/SessionPane";
 import { PaneControls } from "./stage/PaneControls";
@@ -113,17 +113,19 @@ export function RevealButton({
 }
 
 /** The big "open this page" hit. The label opens the object; the columns
- *  icon opens it beside, with a tooltip. `bar` sits above the framed page;
- *  `compact` is the card/pill. */
+ *  icon opens it beside, with a tooltip. `bar` sits above the framed page
+ *  and ends in the band's close; `compact` is the card/pill. */
 export function RevealOpenLink({
   href,
   label,
   onOpen,
+  onClose,
   variant = "bar",
 }: {
   href: string;
   label: string;
   onOpen?: (e: React.MouseEvent) => void;
+  onClose?: () => void;
   variant?: "bar" | "compact";
 }) {
   const beside = canOpenBeside();
@@ -156,6 +158,22 @@ export function RevealOpenLink({
           }}
         >
           <Columns2 className={variant === "bar" ? "h-4 w-4" : "h-3.5 w-3.5"} />
+        </button>
+      )}
+      {onClose && (
+        <button
+          type="button"
+          className="object-reveal__open-beside"
+          title="Close (Esc)"
+          aria-label="Close"
+          data-reveal-close
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onClose();
+          }}
+        >
+          <X className={variant === "bar" ? "h-4 w-4" : "h-3.5 w-3.5"} />
         </button>
       )}
     </div>
@@ -366,6 +384,57 @@ function useRevealWheel(ref: React.RefObject<HTMLDivElement | null>) {
   }, [ref]);
 }
 
+/**
+ * Where the pinned close bar goes while the band's top is scrolled out of
+ * the view: the top edge of the scrolling surface, in the coordinates of the
+ * surface's parent (the bar is portalled there, outside the transcript's
+ * translated rows, where sticky and fixed both misplace it). Null while the
+ * band's own top bar is in view or the band is out of view entirely.
+ */
+type PinSpot = { host: HTMLElement; top: number; left: number; width: number };
+function usePinnedClose(ref: React.RefObject<HTMLDivElement | null>): PinSpot | null {
+  const [spot, setSpot] = useState<PinSpot | null>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    const bounds = el && revealBounds(el);
+    const host = bounds?.parentElement;
+    if (!el || !bounds || !host) return;
+    let raf = 0;
+    const measure = () => {
+      raf = 0;
+      const zoom = cssZoomOf(bounds);
+      const b = bounds.getBoundingClientRect();
+      const r = el.getBoundingClientRect();
+      if (r.top >= b.top || r.bottom <= b.top + 80) {
+        setSpot((cur) => (cur ? null : cur));
+        return;
+      }
+      const h = host.getBoundingClientRect();
+      const next = {
+        host,
+        top: Math.round((b.top - h.top) / zoom + bounds.clientTop),
+        left: Math.round((b.left - h.left) / zoom + bounds.clientLeft),
+        width: bounds.clientWidth,
+      };
+      setSpot((cur) => (cur && cur.top === next.top && cur.left === next.left && cur.width === next.width ? cur : next));
+    };
+    const schedule = () => {
+      if (!raf) raf = requestAnimationFrame(measure);
+    };
+    measure();
+    bounds.addEventListener("scroll", schedule, { passive: true });
+    const ro = new ResizeObserver(schedule);
+    ro.observe(bounds);
+    ro.observe(el);
+    return () => {
+      bounds.removeEventListener("scroll", schedule);
+      ro.disconnect();
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [ref]);
+  return spot;
+}
+
 function RevealBand({ reveal }: { reveal: OpenReveal }) {
   const { target } = reveal;
   const ref = useRef<HTMLDivElement>(null);
@@ -373,6 +442,7 @@ function RevealBand({ reveal }: { reveal: OpenReveal }) {
   useScrollHold(ref, reveal);
   useOpenMotion(ref, reveal);
   useRevealWheel(ref);
+  const pin = usePinnedClose(ref);
   // Closing folds the band back into the line it grew from, then brings the
   // reference that opened it back into view if the read had scrolled past it
   // — so a toggle lands the reader where they started, not on whatever the
@@ -464,7 +534,33 @@ function RevealBand({ reveal }: { reveal: OpenReveal }) {
     >
       <div className="object-reveal__lane object-reveal__lane--left" title="Scroll the conversation" />
       <div className="object-reveal__lane object-reveal__lane--right" title="Scroll the conversation" />
-      <RevealOpenLink href={target.href} label={target.openLabel ?? "Open"} onOpen={target.onOpen} />
+      <RevealOpenLink href={target.href} label={target.openLabel ?? "Open"} onOpen={target.onOpen} onClose={requestClose} />
+      {pin && createPortal(
+        <div
+          className="object-reveal__pin"
+          style={{ top: pin.top, left: pin.left, width: pin.width, "--reveal-accent": pageAccent(path) } as React.CSSProperties}
+          data-reveal-pin
+        >
+          <div
+            className="object-reveal__strip"
+            onClick={requestClose}
+            onKeyDown={closeKeys}
+            role="button"
+            tabIndex={0}
+            aria-label="Close"
+            title="Close (Esc)"
+          >
+            <PageIcon path={path} className="object-reveal__icon h-3 w-3 flex-shrink-0" />
+            <span className="min-w-0 flex-1 truncate text-[11px] leading-none text-sol-text">{target.title}</span>
+            <span className="object-reveal__hint object-reveal__hint--on" aria-hidden>
+              <span className="object-reveal__hint-word">close</span>
+              <KeyCap size="xs">esc</KeyCap>
+            </span>
+            <X className="h-3.5 w-3.5 text-sol-text-muted" />
+          </div>
+        </div>,
+        pin.host,
+      )}
       <div className="object-reveal__frame">
       <div
         className="object-reveal__strip"

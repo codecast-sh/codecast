@@ -65,6 +65,7 @@ export type ShortcutAction =
   | 'conv.toggleDiff'
   | 'conv.toggleTree'
   | 'conv.toggleThinking'
+  | 'conv.ask'
   | 'conv.copyLink'
   | 'conv.cycleDensity'
   | 'conv.favorite'
@@ -296,6 +297,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   // app's other Ctrl chords.
   { key: 'ctrl+b', action: 'conv.toggleTree', when: 'conversation', skipInputCheck: true, description: 'Toggle branch map' },
   { key: 'h', action: 'conv.toggleThinking', when: 'conversation', description: 'Toggle thinking blocks' },
+  { key: 'a', action: 'conv.ask', when: 'conversation', description: 'Ask this session a question' },
   // Obsidian's search chord, sharing keys with conv.favorite below. Listed
   // FIRST on purpose: a background conversation tab keeps the 'conversation'
   // context active while the vault tab is visible, so favorite would otherwise
