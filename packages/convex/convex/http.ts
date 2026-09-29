@@ -2773,7 +2773,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, version, platform, pid, autostart_enabled, has_tmux, boot_id, local_project_roots, git_plane, git_pubkey, pending_sync_count, oldest_pending_ms, pending_sync_messages, pending_sync_conversations, sync_no_progress_ms, daemon_started_at, loop_freeze_ms, loop_freeze_1h_ms, loop_freeze_max_ms, loop_freeze_top, device_id, device_label, device_hostname, is_remote_device, input_idle_ms, cc_accounts, codex_usage, codex_accounts, provider_key_pubkey, managed_provider_ids, settings, model_inventory, update_available } = body;
+      const { api_token, version, platform, pid, autostart_enabled, has_tmux, boot_id, local_project_roots, git_plane, git_pubkey, pending_sync_count, oldest_pending_ms, pending_sync_messages, pending_sync_conversations, sync_no_progress_ms, daemon_started_at, loop_freeze_ms, loop_freeze_1h_ms, loop_freeze_max_ms, loop_freeze_top, device_id, device_label, device_hostname, wsl_distro, is_remote_device, input_idle_ms, cc_accounts, codex_usage, codex_accounts, provider_key_pubkey, managed_provider_ids, settings, model_inventory, update_available } = body;
 
       if (!api_token || !version || !platform) {
         return new Response(JSON.stringify({ error: "Missing required fields" }), {
@@ -2806,6 +2806,7 @@ http.route({
         device_id,
         device_label,
         device_hostname,
+        wsl_distro: typeof wsl_distro === "string" ? wsl_distro : undefined,
         is_remote_device,
         input_idle_ms,
         cc_accounts,
@@ -4764,9 +4765,6 @@ cliRoute("/cli/sessions/own", async (ctx, body) => ctx.runMutation(api.sessionOw
 cliRoute("/cli/sessions/disown", async (ctx, body) => ctx.runMutation(api.sessionOwnership.removeSessionOwner, body));
 cliRoute("/cli/sessions/owners/set", async (ctx, body) => ctx.runMutation(api.sessionOwnership.setSessionOwners, body));
 cliRoute("/cli/sessions/owners", async (ctx, body) => ctx.runQuery(api.sessionOwnership.listOwners, body));
-// A role puts one of its sessions in front of the person, or takes it back
-// (`cast escalate`, org-roles-run-work.md R1).
-cliRoute("/cli/sessions/escalate", async (ctx, body) => ctx.runMutation(api.sessionOwnership.escalateSession, body));
 
 // Cross-user device reparent (cast pull): pull a session you run or own — or a
 // team-visible one (see findPullableConversation) — onto the

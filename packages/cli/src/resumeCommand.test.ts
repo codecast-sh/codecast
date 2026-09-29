@@ -247,22 +247,18 @@ describe("buildNonClaudeResumeCommand", () => {
     expect(buildNonClaudeResumeCommand("codex", "sess1")).toBe("codex resume sess1");
     expect(
       buildNonClaudeResumeCommand("codex", "sess1", {
-        codexArgs: "--full-auto",
-        codexPermFlags: "--dangerously-bypass-approvals-and-sandbox",
+        args: "--full-auto",
+        permFlags: "--dangerously-bypass-approvals-and-sandbox",
       }),
     ).toBe("codex resume sess1 --full-auto --dangerously-bypass-approvals-and-sandbox");
     expect(
-      buildNonClaudeResumeCommand("codex", "sess1", { codexPermFlags: "--full-auto" }),
+      buildNonClaudeResumeCommand("codex", "sess1", { permFlags: "--full-auto" }),
     ).toBe("codex resume sess1 --full-auto");
   });
 
   test("grok resumes by UUID via the registry resumeCmd (never claude, never a title)", () => {
     const id = "01a04000-4d49-70f3-88b4-316e8f48a5fb";
-    const cmd = buildNonClaudeResumeCommand("grok", id, {
-      // codex-only options must be ignored for grok.
-      codexArgs: "--full-auto",
-      codexPermFlags: "--dangerously-bypass-approvals-and-sandbox",
-    });
+    const cmd = buildNonClaudeResumeCommand("grok", id);
     expect(cmd).toBe(`grok --resume ${id}`);
     expect(cmd).not.toContain("claude");
     expect(cmd).not.toContain("--full-auto");
@@ -271,9 +267,6 @@ describe("buildNonClaudeResumeCommand", () => {
   test("muse resumes by UUID via the registry resumeCmd (never claude, never a name)", () => {
     const id = "01a04000-4d49-70f3-88b4-316e8f48a5fb";
     const cmd = buildNonClaudeResumeCommand("muse", id, {
-      // codex/grok-only options must be ignored for muse.
-      codexArgs: "--full-auto",
-      grokPermFlags: "--permission-mode bypassPermissions",
     });
     expect(cmd).toBe(`muse resume ${id}`);
     expect(cmd).not.toContain("claude");
@@ -287,12 +280,12 @@ describe("buildNonClaudeResumeCommand", () => {
     const id = "01a04000-4d49-70f3-88b4-316e8f48a5fb";
     expect(
       buildNonClaudeResumeCommand("muse", id, {
-        museArgs: "--reasoning-effort high",
-        musePermFlags: "--disable-approval",
+        args: "--reasoning-effort high",
+        permFlags: "--disable-approval",
       }),
     ).toBe(`muse resume ${id} --reasoning-effort high --disable-approval`);
     expect(
-      buildNonClaudeResumeCommand("muse", id, { musePermFlags: "--disable-approval" }),
+      buildNonClaudeResumeCommand("muse", id, { permFlags: "--disable-approval" }),
     ).toBe(`muse resume ${id} --disable-approval`);
   });
 
@@ -303,12 +296,12 @@ describe("buildNonClaudeResumeCommand", () => {
     const id = "01a04000-4d49-70f3-88b4-316e8f48a5fb";
     expect(
       buildNonClaudeResumeCommand("grok", id, {
-        grokArgs: "--reasoning-effort high",
-        grokPermFlags: "--permission-mode bypassPermissions",
+        args: "--reasoning-effort high",
+        permFlags: "--permission-mode bypassPermissions",
       }),
     ).toBe(`grok --resume ${id} --reasoning-effort high --permission-mode bypassPermissions`);
     expect(
-      buildNonClaudeResumeCommand("grok", id, { grokPermFlags: "--permission-mode bypassPermissions" }),
+      buildNonClaudeResumeCommand("grok", id, { permFlags: "--permission-mode bypassPermissions" }),
     ).toBe(`grok --resume ${id} --permission-mode bypassPermissions`);
   });
 });
@@ -443,14 +436,12 @@ describe("cursor resume dispatch end to end", () => {
     const sessionId = "b1946ac9-2d0e-4f3a-9c11-000000000001";
     const agentType = resolveResumeAgentType("cursor", "claude");
     expect(agentType).toBe("cursor");
-    const cmd = buildNonClaudeResumeCommand(agentType, sessionId, {
-      // config that WOULD apply to a claude/codex resume — must be ignored for cursor.
-      codexArgs: "--full-auto",
-      codexPermFlags: "--dangerously-bypass-approvals-and-sandbox",
-    });
-    expect(cmd).toBe(`cursor-agent --resume ${sessionId}`);
+    // cursor's approval mode rides the command line, so a resume carries the
+    // launch's --force (a managed pane cannot answer "Run this command?").
+    const cmd = buildNonClaudeResumeCommand(agentType, sessionId, { permFlags: "--force" });
+    expect(cmd).toBe(`cursor-agent --resume ${sessionId} --force`);
     expect(cmd).not.toContain("claude");
-    expect(cmd).not.toContain("--full-auto");
+    expect(buildNonClaudeResumeCommand("gemini", sessionId, { permFlags: "--force" })).not.toContain("--force");
     expect(resumeTmuxPrefix(agentType)).toBe("cu");
   });
 });
@@ -588,8 +579,8 @@ describe("buildNonClaudeResumeCommand native fork", () => {
     expect(
       buildNonClaudeResumeCommand("grok", child, {
         forkFromSessionId: parent,
-        grokArgs: "--fullscreen",
-        grokPermFlags: "--permission-mode bypassPermissions",
+        args: "--fullscreen",
+        permFlags: "--permission-mode bypassPermissions",
       }),
     ).toBe(`grok --resume ${parent} --fork-session --session-id ${child} --fullscreen --permission-mode bypassPermissions`);
   });
@@ -613,7 +604,7 @@ describe("grok stable rules fragment", () => {
   });
   test("a grok resume carries the fragment after the permission flags; other clients never do", () => {
     const id = "01a04000-4d49-70f3-88b4-316e8f48a5fb";
-    expect(buildNonClaudeResumeCommand("grok", id, { grokPermFlags: "--permission-mode bypassPermissions", stableRulesFile: "/tmp/feed.md" }))
+    expect(buildNonClaudeResumeCommand("grok", id, { permFlags: "--permission-mode bypassPermissions", stableRulesFile: "/tmp/feed.md" }))
       .toBe(`grok --resume ${id} --permission-mode bypassPermissions --rules "$(cat /tmp/feed.md)"`);
     expect(buildNonClaudeResumeCommand("pi", id, { stableRulesFile: "/tmp/feed.md" })).toBe(`pi --session ${id}`);
   });

@@ -99,6 +99,8 @@ const HANDLE_SHAPE: Record<EntityRefType, RegExp | null> = {
   initiative: /^in-\d+$/i,
   // `op` too (op-3, never op-ed): a staffing proposal.
   proposal: /^op-\d+$/i,
+  // `sd` too (sd-289, never sd-card): a decision.
+  decision: /^sd-\d+$/i,
   // Repository objects: `owner/repo#482`, `owner/repo@sha`.
   pr: new RegExp(`^${PR_REF_SOURCE}$`, "i"),
   commit: new RegExp(`^${COMMIT_REF_SOURCE}$`, "i"),
@@ -304,4 +306,5 @@ export const ENTITY_REF_ACCENT: Record<EntityRefType, string> = {
   person: "--sol-blue",
   initiative: "--sol-magenta",
   proposal: "--sol-violet",
+  decision: "--sol-yellow",
 };

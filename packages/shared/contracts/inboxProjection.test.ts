@@ -1,5 +1,5 @@
 import { DORMANT_CLAIM_TTL_MS } from "./agentStatus";
-import { deriveLiveAt, rowLiveDeadlines, type LiveFactsRow } from "./inboxProjection";
+import { deriveLiveAt, isUnderRole, rowLiveDeadlines, type LiveFactsRow } from "./inboxProjection";
 import { describe, expect, test } from "bun:test";
 import {
   INBOX_BUCKETS,
@@ -199,9 +199,13 @@ describe("placeInboxRow — bucket precedence", () => {
     expect(placeInboxRow(input({ stashed: true, asking: true, pinned: true })).bucket).toBe("stashed");
   });
 
-  test("an anchor is hidden unless hard blocked", () => {
+  test("an anchor is hidden unless hard blocked or asking", () => {
     expect(placeInboxRow(input({ isAnchor: true })).bucket).toBe("hidden");
-    expect(placeInboxRow(input({ isAnchor: true, pinned: true, asking: true })).bucket).toBe("hidden");
+    expect(placeInboxRow(input({ isAnchor: true, pinned: true })).bucket).toBe("hidden");
+    // A `cast decide` in a standing session's own thread is how a lead raises
+    // a choice (org-staffing.md S28): it files as a question like any row.
+    expect(placeInboxRow(input({ isAnchor: true, asking: true })).bucket).toBe("questions");
+    expect(placeInboxRow(input({ isAnchor: true, pinned: true, asking: true })).bucket).toBe("questions");
     expect(placeInboxRow(input({ isAnchor: true, awaitingInput: true, asking: true })).bucket).toBe("questions");
     expect(placeInboxRow(input({ isAnchor: true, agentStatus: "permission_blocked" })).bucket).toBe("needs_input");
     expect(placeInboxRow(input({ isAnchor: true, pendingApiError: true })).bucket).toBe("needs_input");
@@ -660,7 +664,7 @@ describe("field ownership constants", () => {
 
   test("the caps are the single source and the version is 13", () => {
     expect(INBOX_WINDOW_CAPS).toEqual({ recent: 200, pinned: 100, dismissed: 200, stashed: 200, snoozed: 200, owned: 200 });
-    expect(INBOX_PROJECTION_VERSION).toBe(13);
+    expect(INBOX_PROJECTION_VERSION).toBe(14);
   });
 });
 
@@ -957,5 +961,37 @@ describe("inboxSortTimeOfRow — the replicated fields the sort reads", () => {
   test("a brand new row floors its key on started_at", () => {
     const r = row("n", { updated_at: EPOCH - 2 * DAY, started_at: EPOCH - 60_000 });
     expect(inboxSortTimeOfRow(r, "idle", EPOCH).key).toBe(-(EPOCH - 60_000 + INBOX_CREATE_GRACE_MS));
+  });
+});
+
+// A role's standing session that reports to a role carries that role's id
+// (org-staffing.md S28) and rides the parent lead's card like a hand: it
+// never surfaces on its own, whatever it declares, and a blocked parent is the
+// card. Only a role that reports to a person reaches that person.
+describe("a sub-lead rides its parent lead", () => {
+  const E = inboxEpoch(1_800_000_000_000);
+  const base = (id: string, over: Record<string, unknown> = {}) => ({ _id: id, status: "active", updated_at: E - 120_000, message_count: 12, is_idle: true, ...over }) as any;
+  const top = (over: Record<string, unknown> = {}) => base("top", { anchor_id: "a_top", standing_role_id: "role_top", agent_status: "dormant", thread_state_status: "dormant", ...over });
+  const sub = (over: Record<string, unknown> = {}) => base("sub", { anchor_id: "a_sub", standing_role_id: "role_sub", org_role_id: "role_top", agent_status: "idle", thread_state_status: "blocked", ...over });
+  const bucket = (p: ReturnType<typeof projectInbox>, id: string) => p.placements.get(id)?.bucket;
+
+  test("a blocked sub-lead files with its parent, which files by its own facts", () => {
+    const quiet = projectInbox([top(), sub()], E);
+    // The parent is dormant on its own facts; the blocked sub-lead is a row under it, not a card.
+    expect(bucket(quiet, "top")).toBe("dormant");
+    expect(bucket(quiet, "sub")).toBe("dormant");
+    expect(isUnderRole(sub())).toBe(true);
+    const raised = projectInbox([top({ thread_state_status: "blocked", agent_status: "idle" }), sub()], E);
+    expect(bucket(raised, "top")).toBe("needs_input");
+    expect(bucket(raised, "sub")).toBe("needs_input");
+  });
+
+  test("a top lead reaches the person on its own; a sub-lead whose parent is off the list stands on its facts", () => {
+    const alone = projectInbox([top({ thread_state_status: "blocked", agent_status: "idle" })], E);
+    expect(bucket(alone, "top")).toBe("needs_input");
+    const orphan = projectInbox([sub()], E);
+    expect(bucket(orphan, "sub")).toBe("needs_input");
+    const quietOrphan = projectInbox([sub({ thread_state_status: "dormant", agent_status: "dormant" })], E);
+    expect(bucket(quietOrphan, "sub")).toBe("hidden");
   });
 });

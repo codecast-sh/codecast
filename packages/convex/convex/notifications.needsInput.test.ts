@@ -497,10 +497,8 @@ describe("needs-input push — exclusions (mirrors the idle sound's guards)", ()
     // …and spawned schedule-run conversations.
     ["schedule_run", { agent_task_id: "task1" }],
     // A session a role looks after reaches the person through the role
-    // (org-roles-run-work.md R1, revised): its own settle rings nobody, and
-    // an escalation through the role's card is still the role's to carry.
+    // (org-staffing.md S28): its own settle rings nobody.
     ["under_role", { org_role_id: "role1" }],
-    ["under_role", { org_role_id: "role1", escalated_by_role: { role_id: "role1", line: "needs you", at: 1 } }],
   ] as Array<[string, Rec]>)("%s sessions never push", async (reason, convOverride) => {
     const { ctx, tables } = settledIdleWorld({ conv: convOverride });
     const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
@@ -513,17 +511,6 @@ describe("needs-input push — exclusions (mirrors the idle sound's guards)", ()
   // --isolated / cloud / path-stamped session is first-class and pushes like
   // any other card. Fan-out from INSIDE a session still stands down — those
   // workers carry a spawner (reason agent_spawned), not because of the tree.
-  // The exception: a DIRECT escalation made the child the person's own card,
-  // so its settles ring them like any other.
-  test("a child a role put in front of the person directly pushes", async () => {
-    const { ctx, tables } = settledIdleWorld({
-      conv: { org_role_id: "role1", escalated_by_role: { role_id: "role1", line: "a permission prompt is open", at: 1, direct: true } },
-    });
-    const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
-    expect(res.notified).toBe(true);
-    expect(tables.notifications[0].type).toBe("session_idle");
-  });
-
   test("a human-started worktree session pushes", async () => {
     const { ctx, tables } = settledIdleWorld({
       conv: { worktree_name: "cloud-d03aaa", worktree_branch: "codecast/cloud-d03aaa" },
@@ -995,31 +982,6 @@ describe("needs-input digest — one alert an hour", () => {
     expect(tables.push_outbox[1].title).toBe("2 sessions need your attention");
   });
 
-  // An escalation's chime rode the idle rail on the role's standing session
-  // with no settle episode of its own (R1, revised): the fold-up names it
-  // while the escalation under the role is open, and forgets it once handed
-  // back.
-  test("an escalation through the role's card stays in the fold-up while it is open", async () => {
-    const { ctx, tables } = fleetWorld();
-    const now = Date.now();
-    tables.conversations.push(
-      { _id: "standing", user_id: "u1", title: "Growth lead", status: "active", message_count: 40, updated_at: now - 60_000, last_message_role: "assistant", standing_role_id: "role1", anchor_id: "anchor1" },
-      { _id: "child", user_id: "u1", title: "Pricing copy", status: "active", message_count: 12, updated_at: now - 60_000, last_message_role: "assistant", org_role_id: "role1", escalated_by_role: { role_id: "role1", line: "needs your eye", at: now - 60_000 } },
-    );
-    tables.users[0].idle_digest_state = { last_alerted_at: now - 10_000 };
-    tables.notifications.push({ _id: "n_esc", recipient_user_id: "u1", type: "session_idle", conversation_id: "standing", message: "@growth: needs your eye", read: false, quiet: true, created_at: now - 5_000 });
-    tables.users[0].idle_digest_state.last_alerted_at = now - IDLE_DIGEST_WINDOW_MS - 1;
-    let res = await performIdleDigestFlush(ctx as any, "u1");
-    expect(res).toEqual({ notified: true, count: 1 });
-    expect(tables.notifications.find((n: Rec) => n.type === "sessions_need_input").message).toBe("Growth lead needs your attention");
-
-    // Handed back: the row is stale and the fold-up names nothing.
-    delete tables.conversations.find((c: Rec) => c._id === "child").escalated_by_role;
-    tables.notifications.push({ _id: "n_esc2", recipient_user_id: "u1", type: "session_idle", conversation_id: "standing", message: "@growth: needs your eye", read: false, quiet: true, created_at: now + 1 });
-    tables.users[0].idle_digest_state = { last_alerted_at: now - IDLE_DIGEST_WINDOW_MS - 1 };
-    res = await performIdleDigestFlush(ctx as any, "u1");
-    expect(res).toEqual({ notified: false, reason: "nothing_waiting" });
-  });
 
   test("a session the user already answered is not named", async () => {
     const { ctx, tables } = fleetWorld();
@@ -1088,5 +1050,68 @@ describe("needs-input digest — one alert an hour", () => {
     expect(summarizeIdleDigest(["A", "B"]).message).toBe("A and B need your attention");
     expect(summarizeIdleDigest(["A", "B", "C"]).message).toBe("A, B and 1 other need your attention");
     expect(summarizeIdleDigest(["A", "B", "C", "D"]).message).toBe("A, B and 2 others need your attention");
+  });
+});
+
+// The route up (org-staffing.md S28). A request for a person travels up the
+// reporting line as ordinary messages: a hand that is blocked tells its role,
+// a role's standing session that is blocked tells the role it reports to, and
+// the role that reports to a person is that person's own card (the anchor
+// rule), so it tells nobody. One line per waiting episode.
+describe("the route up", () => {
+  const now = Date.now();
+  const org = () => ({
+    teams: [{ _id: "team1", features: { org: true } }],
+    org_roles: [
+      { _id: "role_top", handle: "growth", name: "Growth lead", status: "active", team_id: "team1", anchor_id: "anchor_top", reports_to: { kind: "user", user_id: "u1" } },
+      { _id: "role_sub", handle: "calling", name: "Calling lead", status: "active", team_id: "team1", anchor_id: "anchor_sub", reports_to: { kind: "role", role_id: "role_top" } },
+    ],
+    anchors: [
+      { _id: "anchor_top", conversation_id: "standing_top", status: "active" },
+      { _id: "anchor_sub", conversation_id: "standing_sub", status: "active" },
+    ],
+    pending_messages: [],
+  });
+  const standing = (id: string, role: string, extra: Rec = {}) => ({ _id: id, user_id: "u1", title: `${role} lead`, status: "active", message_count: 40, updated_at: now - 60_000, last_message_role: "assistant", standing_role_id: role, anchor_id: `anchor_${id.replace("standing_", "")}`, persistent: true, ...extra });
+  const told = (tables: Record<string, Rec[]>, conv: string) => (tables.pending_messages ?? []).filter((m) => m.conversation_id === conv).map((m) => m.content);
+
+  test("a hand that declares itself blocked tells its role once, with the first line of its state", async () => {
+    const { ctx, tables } = settledIdleWorld({
+      conv: { org_role_id: "role_sub", thread_state_status: "blocked", thread_state: "Which price band for Texas?\nMore detail here." },
+      extra: org(),
+    });
+    tables.conversations.push(standing("standing_top", "role_top"), standing("standing_sub", "role_sub"));
+    let res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    expect(res.reason).toBe("under_role");
+    expect(told(tables, "standing_sub")).toEqual(['hand conv1 "Fix the parser" needs input (blocked): Which price band for Texas?']);
+    expect(told(tables, "standing_top")).toEqual([]);
+    // The same episode again: nothing new is said.
+    res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    expect(told(tables, "standing_sub").length).toBe(1);
+  });
+
+  test("a role's standing session that declares itself blocked tells the role it reports to; the top role tells nobody", async () => {
+    // The sub-lead's row carries its parent role (S28) and rides its card:
+    // it still speaks as the role, and its own settle rings nobody.
+    const sub = settledIdleWorld({
+      conv: { _id: "standing_sub", title: "Calling lead", standing_role_id: "role_sub", org_role_id: "role_top", anchor_id: "anchor_sub", persistent: true, message_count: 40, thread_state_status: "blocked", thread_state: "Seed Texas with 40 brokers, or wait for signups?" },
+      session: { conversation_id: "standing_sub" },
+      messages: [{ _id: "m1", conversation_id: "standing_sub", role: "assistant", content: "Standing by.", timestamp: now - 70_000 }],
+      extra: org(),
+    });
+    sub.tables.conversations.push(standing("standing_top", "role_top"));
+    const subRes = await performNeedsInputCheck(sub.ctx as any, { conversation_id: "standing_sub" });
+    expect(subRes.reason).toBe("under_role");
+    expect(told(sub.tables, "standing_top")).toEqual(["@calling needs input (blocked): Seed Texas with 40 brokers, or wait for signups?"]);
+
+    const top = settledIdleWorld({
+      conv: { _id: "standing_top", title: "Growth lead", standing_role_id: "role_top", anchor_id: "anchor_top", persistent: true, message_count: 40, thread_state_status: "blocked", thread_state: "Approve the Texas seed?" },
+      session: { conversation_id: "standing_top" },
+      messages: [{ _id: "m1", conversation_id: "standing_top", role: "assistant", content: "Standing by.", timestamp: now - 70_000 }],
+      extra: org(),
+    });
+    top.tables.conversations.push(standing("standing_sub", "role_sub"));
+    await performNeedsInputCheck(top.ctx as any, { conversation_id: "standing_top" });
+    expect(top.tables.pending_messages ?? []).toEqual([]);
   });
 });

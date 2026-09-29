@@ -1673,7 +1673,7 @@ pre[class*="language-"] {
 .simple-view [data-sv-composer] [data-chat-input] {
   font-size: 12.5px;
 }
-.simple-view [data-sv-composer] [class*="rounded-"] {
+.simple-view [data-sv-composer] [class*="rounded-"]:not(.rounded-full) {
   border-radius: 14px;
 }
 

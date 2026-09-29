@@ -112,26 +112,19 @@ async function verifyRoleScopeView() {
   await seed({ tasks: { ...useInboxStore.getState().tasks, t1: { ...(useInboxStore.getState().tasks as any).t1, conversation_ids: [bound._id], updated_at: 3 } } });
   assert.match(q('[data-scope-project="pr-4"] [data-scope-project-sessions]')!.textContent!, /^1 /, "the sessions at work in the project, by who acts next");
 
-  // ── a session the role put in front of the person leads the Sessions line ──
-  const first = growth.sessions[0];
-  await seed({ sessions: { ...useInboxStore.getState().sessions, [first._id]: { _id: first._id, session_id: first._id, updated_at: 1, escalated_by_role: { role_id: growth._id, line: "the pricing copy needs your eye", at: 1 } } } });
-  assert.equal(q("[data-scope-escalated]")!.textContent, "1 in front of you: the pricing copy needs your eye");
-
   // ── the page: the same view at full size ──
   const opened: string[] = [];
   function Page() {
-    const { model, escalated } = useRoleScope("or-1");
+    const { model } = useRoleScope("or-1");
     return model ? (
       <RoleScopeView
         model={model}
         density="page"
-        escalated={escalated}
         renderLead={(id) => <span data-test-lead={id} />}
         renderInitiative={(id) => <span data-test-initiative={id} />}
         onFilePlan={(planRef, projectId) => { opened.push(`file:${planRef}:${projectId}`); useInboxStore.getState().updatePlan(planRef, { project_id: projectId }); }}
         sessions={<div data-test-sessions />}
         onTab={(t) => opened.push(`tab:${t}`)}
-        onOpenSession={(s) => opened.push(`open:${s._id}`)}
       />
     ) : null;
   }
@@ -152,11 +145,8 @@ async function verifyRoleScopeView() {
   assert.ok(loose.querySelector('[data-scope-file-plan="pl-91"]'), "each offers File under a project");
   assert.ok(loose.compareDocumentPosition(projectCard) & 2, "and it comes after the projects");
   assert.equal(q("[data-scope-charter]")!.textContent, "Owns organic search and paid search. Writes the weekly growth review.", "the page reads the whole first paragraph");
-  // Escalated first, then the grouped sessions the page hands in.
-  const sessionsSection = q('[data-scope-section="sessions"]')!;
-  assert.ok(sessionsSection.querySelector("[data-scope-escalated]")!.compareDocumentPosition(sessionsSection.querySelector("[data-test-sessions]")!) & 4, "the escalated sessions come first");
-  await click(sessionsSection.querySelector("[data-scope-escalated] button"));
-  assert.equal(opened.pop(), `open:${first._id}`);
+  // The grouped sessions the page hands in.
+  assert.ok(q('[data-scope-section="sessions"] [data-test-sessions]'));
   await click(qa("button").find((b) => /^All \d+ sessions/.test(b.textContent ?? "")) ?? null);
   assert.equal(opened.pop(), "tab:sessions");
   await click(qa("button").find((b) => /Read the whole charter/.test(b.textContent ?? "")) ?? null);

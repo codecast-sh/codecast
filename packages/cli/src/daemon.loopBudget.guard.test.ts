@@ -122,7 +122,9 @@ const ROWS: Row[] = [
   { file: "statusSpool.ts", name: "sweepStatusSpools", kind: "function", minLines: 20, mustContain: "SPOOL_TTL_MS" },
   { file: D, name: "handlePlanFile", kind: "function", from: MAIN, minLines: 15, mustContain: "syncPlanFromPlanMode" },
   { file: D, name: "findMostRecentSessionId", kind: "function", from: MAIN, minLines: 5, mustContain: "listFilesByMtime" },
-  { file: D, name: 'watcher.on("session")', find: 'watcher.on("session"', kind: "call", from: MAIN, minLines: 40, mustContain: "chooseSessionTranscript" },
+  { file: D, name: "onClaudeTranscript", find: "const onClaudeTranscript", kind: "call", from: MAIN, minLines: 40, mustContain: "chooseSessionTranscript" },
+  { file: "claudeCloud.ts", name: "poll", kind: "method", minLines: 10, mustContain: "mirrorSession" },
+  { file: "claudeCloud.ts", name: "mirrorSession", kind: "method", minLines: 30, mustContain: "appendFile" },
   { file: D, name: "setHookStatusSink(", kind: "call", from: MAIN, minLines: 15, mustContain: "processSessionFile" },
   { file: D, name: "main setInterval", kind: "intervals", from: MAIN, minLines: 1, mustContain: "", minCount: 14 },
   { file: D, name: "module setInterval", kind: "intervals", from: "", to: MAIN, minLines: 1, mustContain: "", minCount: 1 },
@@ -179,7 +181,7 @@ const ALLOWLIST = new Map<string, string>([
       "Every other reader takes a one second memo, so a burst of watcher events pays this read once.",
   ],
   [
-    'daemon.ts:watcher.on("session"):statSync:projectExists',
+    'daemon.ts:onClaudeTranscript:statSync:projectExists',
     "One stat of a project directory, memoized per path. The handler must stay synchronous up to " +
       "chooseSessionTranscript so two events for one session cannot interleave and both register.",
   ],

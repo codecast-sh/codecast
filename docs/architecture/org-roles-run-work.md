@@ -17,6 +17,13 @@ under their own.
 
 ## R1. A role's sessions are the role's to triage
 
+> Superseded in part on 2026-09-29 by org-staffing.md S28: `cast escalate`,
+> the count on the role's card and the person's Put in my inbox / Hand back
+> gestures are gone. A request travels up the reporting line as messages and
+> the role that reports to a person raises it in its own thread. The ride
+> rule (a session under a role files with the role and never counts toward
+> the person's needs input) stands.
+
 **Where a session sits.** A session that reports to a role
 (`conversations.org_role_id`) is that role's. In its host's inbox it renders
 as a nested row under the role's card, the row a subagent already uses, and it
@@ -342,6 +349,10 @@ both), and what a person can do: move the session to another machine from its
 header chip, or add an account with `cast accounts save <name>`.
 
 ## R1, revised: an escalation reaches the person through the role
+
+> Retired on 2026-09-29 by org-staffing.md S28. Kept as the record of what
+> was built and why it went. The `<session-escalation>` divider keeps a
+> reader for threads written while this stood.
 
 Written 2026-09-21 from the founder's reading of the first real escalation
 (Market growth mandate, escalated by @calling with a line about how a market

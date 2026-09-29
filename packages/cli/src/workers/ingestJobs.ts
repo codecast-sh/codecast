@@ -7,10 +7,11 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { readCompleteLines, cursorPassBoundary, readCodexSessionMetaHeadAsync } from '../transcriptWindow.js';
 import { readCodexModelBeforeOffset } from '../codexTranscriptModel.js';
-import { isCursorRoleHeaderLine, parseTranscriptFor, parseCodexSessionFile, parseSessionFile, extractSlug, extractParentUuid, extractCwd, extractCodexCwd, extractSummaryTitle, extractTeamInfo, detectCliFlags, extractCodexSessionMetadata, extractCodexForkRoot, isCompletedStandaloneCodexReview, isCompletedNativeCodexReviewChild, extractPiCwd, extractGrokCwd, isGrokInternalSession, extractMuseCwd } from '../parser.js';
-import { recoverImagesFromBackup, classifyOpencodeTranscriptTail, classifyPiTranscriptTail, classifyGrokTranscriptTail, classifyMuseTranscriptTail } from './ingestMetadata.js';
-import { INGEST_WINDOW_ROWS, INGEST_MAX_BYTES, type IngestJob, type IngestIdentity, type IngestResult } from './ingestTypes.js';
+import { isCursorRoleHeaderLine, parseCursorTranscriptFile, parseTranscriptFor, parseCodexSessionFile, parseSessionFile, extractSlug, extractParentUuid, extractCwd, extractCodexCwd, extractSummaryTitle, extractTeamInfo, detectCliFlags, extractCodexSessionMetadata, extractCodexForkRoot, isCompletedStandaloneCodexReview, isCompletedNativeCodexReviewChild, extractPiCwd, extractGrokCwd, isGrokInternalSession, extractMuseCwd } from '../parser.js';
+import { recoverImagesFromBackup, classifyOpencodeTranscriptTail, classifyPiTranscriptTail, classifyGrokTranscriptTail, classifyMuseTranscriptTail, classifyCursorTranscriptTail } from './ingestMetadata.js';
+import { INGEST_WINDOW_ROWS, INGEST_MAX_BYTES, isWindowedIngest, type IngestJob, type IngestIdentity, type IngestResult } from './ingestTypes.js';
 import { validateIngestResult } from './ingestValidation.js';
+import { findCursorCliChat } from './cursorObservation.js';
 import { MetadataWindowExhausted, readCompleteMetadataHead, readCompleteMetadataTail } from './ingestMetadataWindow.js';
 const METADATA_MAX_BYTES = 64 * 1024;
 export function ingestIdentity(s: fs.Stats): IngestIdentity {
@@ -181,7 +182,8 @@ export async function readIngestJob(job: IngestJob, checkpoint: () => void = () 
       meta.turn = classifyOpencodeTranscriptTail(content);
     }
   } else {
-    if (['claude','cursor','codex'].includes(job.client)) {
+    const cursorJsonl = job.client === 'cursor' && !isWindowedIngest(job);
+    if (isWindowedIngest(job)) {
       const window = await windowFor(job,before);
       content = window.content; result.bytesConsumed = window.bytesConsumed;
     } else {
@@ -194,7 +196,15 @@ export async function readIngestJob(job: IngestJob, checkpoint: () => void = () 
       if (job.client === 'codex') {
         const state = {model:job.modelKnown ? job.model : await readCodexModelBeforeOffset(job.file,job.offset,INGEST_MAX_BYTES)};
         result.messages = parseCodexSessionFile(content,state); result.model = state.model;
-      } else result.messages = parseTranscriptFor(job.client,content,["claude","gemini"].includes(job.client) ? (message, source) => emissions.set(message,source) : undefined);
+      } else if (cursorJsonl) result.messages = parseCursorTranscriptFile(content,job.sessionId,job.identity.birthtimeMs);
+      else result.messages = parseTranscriptFor(job.client,content,["claude","gemini"].includes(job.client) ? (message, source) => emissions.set(message,source) : undefined);
+    }
+    if (cursorJsonl) {
+      meta.turn = classifyCursorTranscriptTail(content);
+      const chat = await optional(() => findCursorCliChat(process.env.HOME || '',job.sessionId),meta.warnings,'cursor chat');
+      if (chat?.cwd) meta.cwd = chat.cwd;
+      // A Cursor Cloud worker a parent agent forked (cursorCloud.ts writes the link).
+      if (chat?.parentAgentId) { meta.parentSessionId = chat.parentAgentId; meta.agentName = chat.description ?? chat.title; }
     }
     if (job.client === 'claude') {
       if (job.recoverBackup && fs.existsSync(job.file+'.bak')) {

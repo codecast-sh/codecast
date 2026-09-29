@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, spyOn } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { TaskScheduler, buildRunLaunch, runPaneFinished } from "./taskScheduler.js";
+import { TaskScheduler, buildRunLaunch, runPaneFinished, triggerRunTaskId } from "./taskScheduler.js";
 import { deviceId } from "./remote/device.js";
 import { runTriggerPrecheck } from "./precheckRunner.js";
 import { triggerPrecheckPassed } from "@codecast/shared/contracts";
@@ -87,6 +87,7 @@ function makeScheduler(
     syncService: syncService as any,
     config: {},
     log: () => {},
+    runsFile: path.join(dir, "trigger-runs.json"),
   });
   return { scheduler: scheduler as any, calls };
 }
@@ -96,6 +97,44 @@ const spawnTask = (id: string, projectPath?: string) => ({
   title: `task ${id}`,
   prompt: "do the thing",
   project_path: projectPath,
+});
+
+describe("TaskScheduler across a daemon restart", () => {
+  // tr-1162 (2026-09-29): the daemon restarted a minute into a run. The new
+  // process had a fresh lease identity and an empty run table, so the run's
+  // conversation was born unstamped (a loose Needs Input card), the lease
+  // lapsed, and the re-claim respawned into the same tmux name and killed it.
+  it("keeps its lease identity and adopts the runs the previous daemon left live", () => {
+    const first = makeScheduler([]).scheduler;
+    first.track({ taskId: "t1", tmuxSession: "ct-claude-abc123", startedAt: 1000, maxRuntimeMs: 600_000, runSessionUuid: "run-uuid-1" });
+    first.stop();
+
+    const second = makeScheduler([]).scheduler;
+    expect(second.daemonId).toBe(first.daemonId);
+    second.start();
+    try {
+      const adopted = second.running.get("t1");
+      expect(adopted).toMatchObject({ tmuxSession: "ct-claude-abc123", startedAt: 1000, maxRuntimeMs: 600_000 });
+      expect(triggerRunTaskId("run-uuid-1")).toBe("t1");
+    } finally {
+      second.stop();
+    }
+  });
+
+  it("forgets a run once it is cleaned up", () => {
+    const first = makeScheduler([]).scheduler;
+    first.track({ taskId: "t1", tmuxSession: "ct-claude-abc123", startedAt: 1000, maxRuntimeMs: 600_000 });
+    first.cleanupTask("t1");
+    first.stop();
+
+    const second = makeScheduler([]).scheduler;
+    second.start();
+    try {
+      expect(second.running.size).toBe(0);
+    } finally {
+      second.stop();
+    }
+  });
 });
 
 describe("TaskScheduler device affinity", () => {

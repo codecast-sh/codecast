@@ -1,6 +1,7 @@
 import type { Doc, Id } from "./_generated/dataModel";
 import { fromConvexAgentType } from "@codecast/shared/contracts";
 import { resetConversationPendingMessages } from "./pendingMessages";
+import { parkOnCloudHost } from "./cloudPlacement";
 
 /**
  * Just the database handle, which is all the writers below touch. Narrower than
@@ -176,12 +177,23 @@ export async function resumeConversationSession(
   ctx: DbCtx,
   userId: Id<"users">,
   conversationId: Id<"conversations">,
+  opts: { leaveOut?: string[] } = {},
 ): Promise<
   | { skipped: true; reason: "fresh_session_no_messages" }
+  | { reparked: true }
   | { deduplicated: true }
   | { command_id: Id<"daemon_commands"> }
 > {
   const conversation = await requireSessionCommandTarget(ctx, userId, conversationId);
+  // A cloud park whose `cast cloud start` failed has no agent to resume: the
+  // retry is a fresh park on the same host, carrying what the human chose to
+  // leave out of an over-cap context. Before the fresh-session skip, since a
+  // row that never started has no messages yet.
+  if (conversation.cloud_placement === "pending" && conversation.cloud_placement_failed_at && conversation.owner_device_id) {
+    await parkOnCloudHost(ctx, conversation.user_id, conversation, conversation.owner_device_id, { force: true, leaveOut: opts.leaveOut });
+    return { reparked: true };
+  }
+
   if (!conversation.session_id) {
     throw new Error("No session ID on this conversation");
   }

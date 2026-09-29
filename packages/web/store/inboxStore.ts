@@ -83,8 +83,6 @@ import {
   rideLeadPlacements,
   roleLeadIdsOf,
   isUnderRole,
-  roleEscalationsOf,
-  type RoleEscalation,
   isHardBlocked,
   DEAD_AGENT_STATUSES,
   fnv1a32Update,
@@ -494,6 +492,8 @@ export type PrStatus = {
 /** The role a session row belongs to, as the server snapshots it on the row. */
 export type SessionRoleSnapshot = { _id: string; short_id: string; name: string; handle: string; avatar: string; status: string; tenure_kind: "standing" | "program" };
 
+export type CloudContextTooLarge = { total_bytes: number; cap_bytes: number; files: Array<{ path: string; bytes: number }> };
+
 export type InboxSession = {
   _id: string;
   session_id: string;
@@ -713,6 +713,10 @@ export type InboxSession = {
   // origin/main with the reason for an automatic downgrade. The chip shows
   // `@<base7>`, the header tooltip the "Started from …" line.
   cloud_seed?: { source: "checkout" | "origin_main"; base: string; branch?: string | null; dirty?: boolean | null; laptop_root?: string | null; device_id?: string | null; reason?: string | null; at: number } | null;
+  // The last cloud placement failed because the project context was over the
+  // cap: the files that would have to stay behind (home-relative, largest
+  // first). The error banner asks whether to leave them out.
+  cloud_context_too_large?: CloudContextTooLarge | null;
   // A bulk migration (Settings → Migration) is moving this session between
   // machines: the row is fenced (messages queue) until the destination owns
   // it. The batch id links the card to its progress row.
@@ -776,16 +780,6 @@ export type InboxSession = {
   org_role_id?: string | null;
   standing_role_id?: string | null;
   role?: SessionRoleSnapshot | null;
-  // The role put this session in front of the person (org-roles-run-work.md
-  // R1, revised). By default it reaches them through the ROLE's card, which
-  // files in needs input carrying this line, and this row stays nested under
-  // it; `direct` makes this row a card of its own in needs input, wearing the
-  // line. Absent, a session under a role nests quietly under the role's card.
-  escalated_by_role?: { role_id: string; line: string; at: number; direct?: boolean } | null;
-  // On a role's standing session: the escalations that reach the person
-  // through its card, derived from its sessions by the projection (the server
-  // row carries it; the store derives its own from the rows it holds).
-  escalations?: RoleEscalation[] | null;
   // Kept-for-later flag. Drives the Favorites top-level view (a long-term set,
   // grouped by project) — the same session cache, filtered. Set optimistically
   // by toggleFavorite and carried on both the inbox and favorites server rows.
@@ -2096,7 +2090,6 @@ function workingSetRowOf(s: InboxSession): WorkingSetRow {
     // The role a session rides (isUnderRole): same shared computation.
     org_role_id: s.org_role_id ?? null,
     standing_role_id: s.standing_role_id ?? null,
-    escalated_by_role: s.escalated_by_role ?? null,
   };
 }
 
@@ -2877,12 +2870,11 @@ export function sessionStructuralSig(s: InboxSession): string {
     s.owner_user_id || "",
     s.owned_by_me ? 1 : 0,
     // WHICH ROLE LOOKS AFTER IT decides whether it is a card or a small row
-    // under the role's card, and an escalation makes it a card again with the
-    // role's line on it (isUnderRole). Written by a reparent or an escalate
-    // alone, never by a heartbeat.
+    // under the role's standing session (isUnderRole): a session under a role
+    // rides the role's card and never counts toward the person's needs input.
+    // Written by a reparent alone, never by a heartbeat.
     s.org_role_id || "",
     s.standing_role_id || "",
-    s.escalated_by_role ? `${s.escalated_by_role.at}:${s.escalated_by_role.direct ? "d" : ""}:${s.escalated_by_role.line}` : "",
     // Harness loop state decides trigger-set membership and absorption
     // (partitionTriggerInbox reads it off this same subscription). Distilled to
     // the fields that change rows; stamps once per turn end/wakeup, never on
@@ -3043,10 +3035,6 @@ export interface PlacedInbox {
   isQuestion: (s: InboxSession) => boolean;
   /** Rows placed in each section: flat cards plus members nested under a same-bucket lead — the header number. A role's nested sessions add to none. */
   counts: Record<InboxSectionKey, number>;
-  /** role id → how many of its sessions it has put in front of the person DIRECTLY (escalated cards on the list): the number on the role's card. */
-  escalatedByRole: Map<string, number>;
-  /** The role's standing session id → the escalations that reach the person through its card, newest first (the lines on the role's card). */
-  escalationsByLead: Map<string, RoleEscalation[]>;
   /** The role's standing session id → how many of its sessions ride its card (org-staffing.md S23.3): the count pill. The sessions themselves are never rows. */
   roleSessionsByLead: Map<string, number>;
 }
@@ -3380,17 +3368,6 @@ function samePlacements(a: Map<string, InboxRowPlacement>, b: Map<string, InboxR
   }
   return true;
 }
-function sameEscalations(a: Map<string, RoleEscalation[]>, b: Map<string, RoleEscalation[]>): boolean {
-  if (a.size !== b.size) return false;
-  for (const [k, list] of b) {
-    const prev = a.get(k);
-    if (!prev || prev.length !== list.length) return false;
-    for (let i = 0; i < list.length; i++) {
-      if (prev[i].conversation_id !== list[i].conversation_id || prev[i].at !== list[i].at || prev[i].line !== list[i].line) return false;
-    }
-  }
-  return true;
-}
 function sameCounts(a: Map<string, number>, b: Map<string, number>): boolean {
   if (a.size !== b.size) return false;
   for (const [k, n] of b) if (a.get(k) !== n) return false;
@@ -3581,10 +3558,8 @@ export function placeInboxRows(
   // A role's session is the role's (org-staffing.md S23.3): it rides its
   // role's standing session, which the shared ride already filed it with, but
   // it is never a row under the card. The card carries a count that opens the
-  // role's page, where the sessions are the panel's business. A directly
-  // escalated one is not under its role, so it stays a card of its own; a
-  // retired role (dismissed card) triages nothing, so its sessions stand on
-  // their own facts.
+  // role's page, where the sessions are the panel's business. A retired role
+  // (dismissed card) triages nothing, so its sessions stand on their own facts.
   const nestParentOf = inboxNestParentOf(sorted);
   const subsByParent = new Map<string, InboxSession[]>();
   const roleSessionsByLead = new Map<string, number>();
@@ -3706,8 +3681,9 @@ export function placeInboxRows(
     if (!askingOf(s)) continue;
     if (s.inbox_killed_at || s.inbox_dismissed_at || s.inbox_snoozed_until) continue;
     if (rollupParentIdOf(s)) continue;
-    // A role's session asks its role first; it reaches the person by an
-    // escalation, never by lifting itself from outside the list.
+    // A role's session asks its role first: it rides the role's standing
+    // session and never lifts itself in front of the person from outside the
+    // list. The role raises what it cannot answer in its own thread.
     if (isUnderRole(s)) continue;
     questionIds.add(s._id);
     questions.push(s);
@@ -3730,17 +3706,6 @@ export function placeInboxRows(
     const k = b ? SECTION_OF_BUCKET[b] : undefined;
     if (k) counts[k]++;
   }
-  // The one number a role's card carries: how many of its sessions it has put
-  // in front of the person DIRECTLY, over the cards actually on the list. The
-  // rest reach the person through the role's card as lines (escalationsByLead,
-  // the shared derivation off the sessions under the role).
-  const escalatedByRole = new Map<string, number>();
-  for (const s of sorted) {
-    const role = s.escalated_by_role?.role_id;
-    if (role && isFlat(s)) escalatedByRole.set(role, (escalatedByRole.get(role) ?? 0) + 1);
-  }
-  const sortedById = new Map(sorted.map((s) => [s._id, s]));
-  const escalationsByLead = roleEscalationsOf(sortedById.keys(), (id) => sortedById.get(id));
   // Pinning is manual curation: stable order by pin time, oldest first, so
   // existing pins keep their place when a new one lands.
   pinned.sort((a, b) => {
@@ -3798,8 +3763,6 @@ export function placeInboxRows(
     forksByParent: reuseArrayMap(prev?.forksByParent, forksByParent),
     isQuestion,
     counts,
-    escalatedByRole: prev && sameCounts(prev.escalatedByRole, escalatedByRole) ? prev.escalatedByRole : escalatedByRole,
-    escalationsByLead: prev && sameEscalations(prev.escalationsByLead, escalationsByLead) ? prev.escalationsByLead : escalationsByLead,
     roleSessionsByLead: prev && sameCounts(prev.roleSessionsByLead, roleSessionsByLead) ? prev.roleSessionsByLead : roleSessionsByLead,
   };
 
@@ -5249,12 +5212,6 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   toggleFavorite: (id: string) => void;
   setPrivacy: (id: string, isPrivate: boolean) => void;
   dismissBrowserPaneOffer: (id: string, at: number) => void;
-  /** The row's two triage gestures on a role's session (org-roles-run-work.md
-   *  R1). Put in my inbox makes it a card of its own in needs input, wearing
-   *  `line`; Hand back returns it under its role's card. `at` and `line` are
-   *  passed in so the server stores exactly what the draft holds. */
-  putSessionInMyInbox: (id: string, line: string, at: number) => void;
-  handSessionBackToRole: (id: string) => void;
   setTeamVisibility: (id: string, visibility: "summary" | "full" | null) => void;
   /** My level for a whole team. `mode` matters only when the level goes up:
    *  "going_forward" pins sessions started before now at the level they had. */
@@ -5262,6 +5219,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   toggleBookmark: (conversationId: string, messageId: string) => void;
   setMyStatus: (status: "available" | "busy" | "away") => void;
   setWalkiePref: (pref: "team" | "off") => void;
+  setClaudeCloudSync: (enabled: boolean) => void;
   snoozeWalkie: (until: number) => number;
   markNotificationRead: (id: string) => void;
   markAllNotificationsRead: () => void;
@@ -9306,31 +9264,6 @@ const inboxStoreConfig = (set: any, get: any) => ({
     apply(this.conversations[id]);
   }),
 
-  // A role's session, put in front of the person or handed back (R1). The
-  // field is server owned (sessionOwnership.performEscalateSession is its one
-  // writer), so the authoritative write is the escalateSession side effect
-  // and this patches local state; the placement reads the row, so the card
-  // moves in the same tick. The draft's object is key for key what the server
-  // stores, which is what lets the field lock retire on the echo.
-  // The person's own gesture is always direct (R1, revised): the session
-  // becomes their own card, not a line on the role's.
-  putSessionInMyInbox: action(function (this: Draft, id: string, line: string, at: number) {
-    const apply = (c: any) => {
-      if (!c?.org_role_id) return;
-      c.escalated_by_role = { role_id: c.org_role_id, line, at, direct: true };
-    };
-    apply(this.sessions[id]);
-    apply(this.conversations[id]);
-  }),
-
-  handSessionBackToRole: action(function (this: Draft, id: string) {
-    const apply = (c: any) => {
-      if (c?.escalated_by_role) c.escalated_by_role = null;
-    };
-    apply(this.sessions[id]);
-    apply(this.conversations[id]);
-  }),
-
   // Privacy/visibility live in the server's immutable applyPatches set because
   // flipping them re-resolves team sharing. So these actions optimistically
   // update local state, and the matching dispatch.ts SIDE_EFFECTS do the
@@ -9399,6 +9332,13 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // re-pushes only when the doc itself changes, by which time this IS the value.
   setWalkiePref: action(function (this: Draft, pref: "team" | "off") {
     if (this.currentUser) (this.currentUser as any).walkie_pref = pref;
+  }),
+
+  // Claude Code cloud session sync. Local-first like the walkie door: the sync
+  // page's switch reads it straight off currentUser, and the setClaudeCloudSync
+  // dispatch side effect runs the authoritative users.updateSyncSettings.
+  setClaudeCloudSync: action(function (this: Draft, enabled: boolean) {
+    if (this.currentUser) (this.currentUser as any).claude_cloud_sync = enabled;
   }),
 
   // Snooze: the shutter under that door. Same local-first reason again, and

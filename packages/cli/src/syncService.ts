@@ -1789,12 +1789,10 @@ export class SyncService {
     }>,
   ): Promise<{ updated: number } | undefined> {
     if (sessions.length === 0) return;
-    try {
-      return await this.mutate("managedSessions:heartbeatBatch" as any, {
-        api_token: this.apiToken,
-        sessions,
-      });
-    } catch {}
+    return await this.mutate("managedSessions:heartbeatBatch" as any, {
+      api_token: this.apiToken,
+      sessions,
+    });
   }
 
   async reportSessionMetrics(sessionId: string, cpu: number, memory: number, pidCount: number, agentPid?: number, awakeIdleMs?: number, agentStartedAt?: number): Promise<void> {
@@ -2002,7 +2000,7 @@ export class SyncService {
    * on the card, and stamped on the row so the heartbeat re-issue leaves it
    * alone until a human picks the host again (convex cloud.reportPlacementFailure).
    */
-  async reportCloudPlacementFailure(conversationId: string, placementToken: string | undefined, error: string): Promise<void> {
+  async reportCloudPlacementFailure(conversationId: string, placementToken: string | undefined, error: string, contextTooLarge?: { total_bytes: number; cap_bytes: number; files: Array<{ path: string; bytes: number }> }): Promise<void> {
     if (!this.apiToken) return;
     try {
       await this.mutate(
@@ -2011,6 +2009,7 @@ export class SyncService {
           conversation_id: conversationId,
           ...(placementToken ? { placement_token: placementToken } : {}),
           error,
+          ...(contextTooLarge ? { context_too_large: contextTooLarge } : {}),
           api_token: this.apiToken,
         }
       );

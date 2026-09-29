@@ -163,6 +163,7 @@ import type * as lib_siteUrl from "../lib/siteUrl.js";
 import type * as lib_slackMirror from "../lib/slackMirror.js";
 import type * as lib_slackOutbound from "../lib/slackOutbound.js";
 import type * as lib_slackText from "../lib/slackText.js";
+import type * as lib_standingSeat from "../lib/standingSeat.js";
 import type * as lib_taskWrite from "../lib/taskWrite.js";
 import type * as lib_teamFeatureGuard from "../lib/teamFeatureGuard.js";
 import type * as lib_tokenRefresh from "../lib/tokenRefresh.js";
@@ -439,6 +440,7 @@ declare const fullApi: ApiFromModules<{
   "lib/slackMirror": typeof lib_slackMirror;
   "lib/slackOutbound": typeof lib_slackOutbound;
   "lib/slackText": typeof lib_slackText;
+  "lib/standingSeat": typeof lib_standingSeat;
   "lib/taskWrite": typeof lib_taskWrite;
   "lib/teamFeatureGuard": typeof lib_teamFeatureGuard;
   "lib/tokenRefresh": typeof lib_tokenRefresh;

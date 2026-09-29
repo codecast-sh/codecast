@@ -13,7 +13,7 @@
  * 32-char ids: their table was simply never registered here.
  */
 
-export type EntityType = "task" | "plan" | "session" | "doc" | "project" | "initiative" | "proposal" | "trigger" | "pr" | "commit";
+export type EntityType = "task" | "plan" | "session" | "doc" | "project" | "initiative" | "proposal" | "trigger" | "decision" | "pr" | "commit";
 
 /** The public web origin that serves codecast object pages. */
 export const CODECAST_BASE_URL = "https://codecast.sh";
@@ -42,6 +42,7 @@ export const ENTITY_ROUTE: Record<EntityType, string> = {
   // because `/org/<or-N>` is a role's page.
   proposal: "/org",
   trigger: "/triggers",
+  decision: "/decisions",
   // Repository objects are addressed by repository plus number or sha, so
   // these prefixes are completed by `entityRoute` (see repoObjectRoute), not by
   // appending the id.
@@ -62,15 +63,16 @@ export const SHORT_ID_PREFIX: Record<string, EntityType> = {
   tr: "trigger",
   in: "initiative",
   op: "proposal",
+  sd: "decision",
 };
 
 /**
  * A prefix that is also an English word takes digits only: `in-7` is an
- * initiative and `op-3` a proposal, while "in-app", "in-house" and "op-ed"
- * are prose. Every matcher below derives from this, so the rule holds on
- * every surface at once.
+ * initiative, `op-3` a proposal and `sd-289` a decision, while "in-app",
+ * "in-house", "op-ed" and "sd-card" are prose. Every matcher below derives
+ * from this, so the rule holds on every surface at once.
  */
-const DIGITS_ONLY_PREFIX: ReadonlySet<string> = new Set(["in", "op"]);
+const DIGITS_ONLY_PREFIX: ReadonlySet<string> = new Set(["in", "op", "sd"]);
 
 /**
  * URL path segment → entity type. Several segments alias to one type
@@ -97,6 +99,8 @@ const SEGMENT_TYPE: Record<string, EntityType> = {
   trigger: "trigger",
   // Pre-rename alias, still live in old links.
   schedules: "trigger",
+  decisions: "decision",
+  decision: "decision",
 };
 
 /**
@@ -111,6 +115,9 @@ const QUERY_PARAM: Partial<Record<EntityType, string>> = { trigger: "task", prop
 /** Types whose page is the query form alone: a path under their route is
  *  another object's page (`/org/<or-N>` is a role), never one of theirs. */
 const QUERY_ONLY: ReadonlySet<EntityType> = new Set(["proposal"]);
+/** Path segments under a type's route that are other pages, never an id of
+ *  that type: `/decisions/stacks/<ds-N>` is a decision stack. */
+const NOT_AN_ID: Partial<Record<EntityType, ReadonlySet<string>>> = { decision: new Set(["stacks"]) };
 
 /** Normalize a canonical type or a url-segment alias to a canonical EntityType. */
 export function normalizeEntityType(type: string): EntityType | null {
@@ -662,7 +669,7 @@ export function parseEntityUrl(
   } catch {
     id = segs[1].trim();
   }
-  if (!id) return null;
+  if (!id || NOT_AN_ID[type]?.has(id.toLowerCase())) return null;
   return { type, id };
 }
 

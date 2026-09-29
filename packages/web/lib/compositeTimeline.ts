@@ -68,8 +68,12 @@ const timelineCache = new WeakMap<object, {
   commits: Commit[];
   pullRequests: PullRequest[];
   gitEvents: ExternalEventRecord[];
+  windowKey: string;
   result: TimelineItem[];
 }>();
+
+// Which edges of the loaded message window have more pages beyond them.
+export type TimelineWindow = { hasMoreAbove?: boolean; hasMoreBelow?: boolean };
 
 const NO_EXTERNAL_EVENTS: ExternalEventRecord[] = [];
 
@@ -78,10 +82,13 @@ export function buildCompositeTimeline(
   commits: Commit[],
   pullRequests: PullRequest[],
   gitEvents: ExternalEventRecord[] = NO_EXTERNAL_EVENTS,
+  window: TimelineWindow = {},
 ): TimelineItem[] {
+  const windowKey = `${!!window.hasMoreAbove}${!!window.hasMoreBelow}`;
   const cached = timelineCache.get(messages);
   if (
     cached &&
+    cached.windowKey === windowKey &&
     cached.commits === commits &&
     cached.pullRequests === pullRequests &&
     cached.gitEvents === gitEvents
@@ -94,6 +101,19 @@ export function buildCompositeTimeline(
   // git puts in the transcript.
   const gitEventShas = new Set<string>();
   for (const e of gitEvents) if (e.sha) gitEventShas.add(e.sha);
+  // The git lanes cover the whole conversation, the messages only the loaded
+  // window. Past an edge with unloaded pages beyond it, a git item belongs
+  // among messages that are not here yet: it waits for that page instead of
+  // piling up against the edge.
+  let minTs = Infinity;
+  let maxTs = -Infinity;
+  for (const m of messages) {
+    if (m.timestamp < minTs) minTs = m.timestamp;
+    if (m.timestamp > maxTs) maxTs = m.timestamp;
+  }
+  const inWindow = (item: TimelineItem) =>
+    item.type === 'message' ||
+    ((!window.hasMoreAbove || item.timestamp >= minTs) && (!window.hasMoreBelow || item.timestamp <= maxTs));
   const items: TimelineItem[] = [
     ...messages.map((msg) => ({
       type: 'message' as const,
@@ -117,7 +137,7 @@ export function buildCompositeTimeline(
       data: event,
       timestamp: event.created_at ?? 0,
     })),
-  ];
+  ].filter(inWindow);
 
   items.sort((a, b) => a.timestamp - b.timestamp);
 
@@ -154,6 +174,6 @@ export function buildCompositeTimeline(
     if (msg.role === 'user' && (!msg.content || !msg.content.trim()) && !(msg.images && msg.images.length > 0)) return false;
     return true;
   });
-  timelineCache.set(messages, { commits, pullRequests, gitEvents, result });
+  timelineCache.set(messages, { commits, pullRequests, gitEvents, windowKey, result });
   return result;
 }
