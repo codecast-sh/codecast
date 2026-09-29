@@ -266,6 +266,13 @@ export interface Config {
   // denylist (credentials, sessions, caches, ~/.ssh, …) still wins.
   cloud_mirror_include?: string;
 
+  // --- Codecast-Session trailer (sessionTrailer.ts) ---
+  // Default ON: the PreToolUse hook adds a Codecast-Session trailer to each
+  // git commit an agent runs. `cast config session_trailer false` turns it
+  // off on this machine; `git config codecast.sessionTrailer false` in one
+  // repository, CODECAST_SESSION_TRAILER=0 in one environment.
+  session_trailer?: boolean;
+
   // --- Server-stamped bookkeeping (index.ts) ---
   created_at?: string;
   updated_at?: string;

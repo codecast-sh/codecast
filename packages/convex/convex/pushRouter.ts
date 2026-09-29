@@ -123,6 +123,7 @@ const TYPE_LABELS: Record<string, [string, string]> = {
   chat_post: ["channel message", "channel messages"],
   daemon_overloaded: ["overloaded daemon", "overloaded daemons"],
   goal_stall: ["stalled goal", "stalled goals"],
+  device_shared: ["shared machine", "shared machines"],
 };
 
 export function summarizePushBatch(

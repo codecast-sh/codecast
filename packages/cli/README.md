@@ -25,6 +25,7 @@ cast search "auth"                # team-wide search
 cast search "bug" -g -s 7d        # global, last 7 days
 cast feed                         # browse recent conversations
 cast read <id> 15:25              # read messages 15-25
+cast read <id> --ask "<question>"  # answer from one session, with line citations
 ```
 
 ### Live Sessions

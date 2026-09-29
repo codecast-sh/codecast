@@ -984,10 +984,27 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
 // Compact feed: a whole collapsed assistant turn shown as one line — Claude
 // glyph, the first sentence of the reply, and a count of what's inside. Click
 // anywhere to expand the turn to full.
-export const CompactTurnCard = memo(function CompactTurnCard({ preview, messageCount, toolCount, onExpand }: { preview: string; messageCount: number; toolCount: number; onExpand: () => void }) {
+// `steps`: the turn's reply is shown right below, so the card is only the
+// work before it: a slim toggle, no preview that would read as a second reply.
+export const CompactTurnCard = memo(function CompactTurnCard({ preview, messageCount, toolCount, onExpand, variant = "card" }: { preview: string; messageCount: number; toolCount: number; onExpand: () => void; variant?: "card" | "steps" }) {
   const bits: string[] = [];
-  if (messageCount > 1) bits.push(`${messageCount} messages`);
+  if (variant === "steps") {
+    if (messageCount > 1) bits.push(`${messageCount - 1} earlier ${messageCount - 1 === 1 ? "message" : "messages"}`);
+  } else if (messageCount > 1) bits.push(`${messageCount} messages`);
   if (toolCount > 0) bits.push(`${toolCount} ${toolCount === 1 ? "tool" : "tools"}`);
+  if (variant === "steps") {
+    return (
+      <button
+        data-cc-compact-turn="steps"
+        onClick={onExpand}
+        className="group/turn not-prose mb-1.5 inline-flex items-center gap-1 rounded-md border border-dashed border-sol-border/70 px-2 py-0.5 text-[11px] text-sol-text-dim tabular-nums hover:border-sol-cyan/40 hover:text-sol-text-secondary transition-colors"
+        title="Show the work before this reply"
+      >
+        <ChevronRight className="w-3 h-3 shrink-0 opacity-70 group-hover/turn:text-sol-cyan" />
+        {bits.join(" · ")}
+      </button>
+    );
+  }
   return (
     <button
       data-cc-compact-turn
