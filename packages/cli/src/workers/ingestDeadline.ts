@@ -9,6 +9,12 @@ export class IngestDeadline {
   private timer: ReturnType<typeof setTimeout>;
   private end: number;
   private abort: () => void;
+  // Set when the transaction that owns this deadline has returned. Timers and
+  // detached promises armed inside the scope keep its AsyncLocalStorage
+  // context forever, so without this a loop first armed during an ingest
+  // (the fleet heartbeat flush) inherited a deadline that expired minutes
+  // later and failed every call it made from then on.
+  disposed = false;
   constructor(timeoutMs = MAX_DEADLINE_MS, private parentSignal?: AbortSignal, private clock = () => performance.now()) {
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_DEADLINE_MS) throw new Error('invalid ingest deadline');
     this.end = clock() + timeoutMs;
@@ -32,13 +38,21 @@ export class IngestDeadline {
     }
   }
   dispose(): void {
+    this.disposed = true;
     clearTimeout(this.timer);
     this.parentSignal?.removeEventListener('abort',this.abort);
   }
 }
 const transcriptDeadline = new AsyncLocalStorage<IngestDeadline>();
-export const currentTranscriptDeadline = () => transcriptDeadline.getStore();
-export const checkTranscriptDeadline = () => transcriptDeadline.getStore()?.check();
+export const currentTranscriptDeadline = (): IngestDeadline | undefined => {
+  const deadline = transcriptDeadline.getStore();
+  return deadline && !deadline.disposed ? deadline : undefined;
+};
+export const checkTranscriptDeadline = () => currentTranscriptDeadline()?.check();
+// Run fn with no transcript deadline in scope: for daemon-wide work (a fleet
+// timer, a standing loop) that may be armed from inside an ingest but must
+// never be bounded by that one transcript's budget.
+export const outsideTranscriptDeadline = <T>(fn: () => T): T => transcriptDeadline.exit(fn);
 export async function withTranscriptDeadline<T>(run: () => Promise<T>, options: {signal?: AbortSignal; timeoutMs?: number} = {}): Promise<T> {
   const previous = currentTranscriptDeadline();
   if (previous) { previous.check(); return run(); }
