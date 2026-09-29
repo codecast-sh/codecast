@@ -42,12 +42,16 @@ export function CommitLinks({
   if (!sessionId && tasks.length === 0 && prNumber === null) return null;
 
   return (
-    <div className={`flex items-center gap-1 flex-wrap ${className ?? ""}`}>
+    <div className={`flex items-center gap-1 flex-wrap text-[11px] ${className ?? ""}`}>
       {sessionId && (joins.session?.href === null ? (
         <span className={PILL} title="This session is not public">
           <Lock className="w-2.5 h-2.5 shrink-0 text-sol-text-dim" />
           <span className="truncate">{joins.session?.title || "Session"}</span>
         </span>
+      ) : !joins.session?.title && joins.session?.href === undefined ? (
+        // Only an id in hand (the single-commit row, a Codecast-Session
+        // trailer): the entity pill resolves the title and the viewer's access.
+        <EntityIdPill type="session" id={sessionId} />
       ) : (
         <Link href={joins.session?.href ?? `/conversation/${sessionId}`} className={PILL} title={joins.session?.title ?? "The session that wrote this"}>
           <MessagesSquare className="w-2.5 h-2.5 shrink-0 text-sol-yellow" />

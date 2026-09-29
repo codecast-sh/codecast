@@ -133,6 +133,7 @@ export default function PlanDetailPage() {
   useConvexSync(queryPlan, ingestPlanDetail);
   const webUpdate = useInboxStore((s) => s.updatePlan);
   const generateShareLink = useMutation(api.plans.generateShareLink);
+  const unshareLink = useMutation(api.plans.unsharePlan);
 
   // plan.tasks / plan.progress / plan.status are a server-query snapshot, so
   // optimistic edits (updateTask status/assignee, updatePlan status) wouldn't
@@ -274,6 +275,7 @@ export default function PlanDetailPage() {
               shareUrl={(plan as any).share_token ? `${shareOrigin()}/share/plan/${(plan as any).share_token}` : null}
               pageUrl={canonicalUrl()}
               forwardLabel="plan"
+              onRevokeShareLink={() => unshareLink({ short_id: plan.short_id })}
               onGenerateShareLink={async () => {
                 const result = await generateShareLink({ short_id: plan.short_id });
                 return `${shareOrigin()}/share/plan/${result.share_token}`;

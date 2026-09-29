@@ -21,6 +21,8 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { getRelativePath } from "@codecast/shared/render";
 import { shareTokenArg } from "../lib/shareTokenScope";
 import { devRenderCount } from "../lib/devRenderCount";
+import { requestFilePathMenu } from "../lib/filePathMenu";
+import { filePathHref } from "../lib/filePathLinks";
 
 const MOBILE_BREAKPOINT = 768;
 const DEFAULT_DIFF_LAYOUT = { content: 40, diff: 60 };
@@ -282,7 +284,7 @@ export function ConversationDiffLayout({
             <ConversationView {...conversationViewProps} />
           </TabsContent>
           <TabsContent value="diff" className="flex-1 overflow-auto m-0">
-            <DiffPane conversationId={conversation?._id} />
+            <DiffPane conversationId={conversation?._id} gitRoot={conversation?.git_root} />
           </TabsContent>
         </Tabs>
       </div>
@@ -327,7 +329,7 @@ export function ConversationDiffLayout({
             </div>
             {/* Diff Content */}
             <div className="flex-1 h-full min-w-0">
-              <DiffPane conversationId={conversation?._id} />
+              <DiffPane conversationId={conversation?._id} gitRoot={conversation?.git_root} />
             </div>
           </div>
         </Panel>
@@ -337,7 +339,7 @@ export function ConversationDiffLayout({
   );
 }
 
-function DiffPane({ conversationId }: { conversationId?: string }) {
+function DiffPane({ conversationId, gitRoot }: { conversationId?: string; gitRoot?: string | null }) {
   const { selectedChangeIndex, changes, selectedFile, bodies, missingBodies } = useDiffViewerStore();
 
   // The changes the fold reads at this position, then their text, then the
@@ -392,8 +394,18 @@ function DiffPane({ conversationId }: { conversationId?: string }) {
     : `All ${changes.length} changes`)
     + (pendingFiles > 0 ? ` · loading ${pendingFiles} ${pendingFiles === 1 ? "file" : "files"}` : "");
 
+  // A changed file's name (tree row or header) opens the same menu as a file
+  // link in the transcript: open it, its folder, the sessions that touched it.
+  const onFileContextMenu = (e: React.MouseEvent) => {
+    if (e.shiftKey) return;
+    const path = (e.target as HTMLElement).closest<HTMLElement>("[data-diff-file]")?.dataset.diffFile;
+    if (!path) return;
+    const ctx = { base: gitRoot ?? undefined, gitRoot };
+    requestFilePathMenu(e, { path, href: filePathHref(path, undefined, ctx), ctx });
+  };
+
   return (
-    <div className="h-full w-full flex flex-col bg-background">
+    <div className="h-full w-full flex flex-col bg-background" onContextMenu={onFileContextMenu}>
       <FileDiffLayout
         files={diffFiles}
         commentContextFor={commentContextFor}

@@ -68,6 +68,8 @@ export interface Config {
   claude_cloud_sync?: boolean;
   /** Mirror Cursor Cloud Agents (needs a Cursor API key); off only when false. */
   cursor_cloud_sync?: boolean;
+  /** Mirror every Codex Cloud task (needs a Codex sign-in); on only when true. */
+  codex_cloud_sync?: boolean;
   excluded_paths?: string;
   sync_mode?: "all" | "selected";
   sync_projects?: string[];
@@ -265,6 +267,19 @@ export interface Config {
   // Comma-separated extra $HOME-relative files/dirs to ship verbatim. The
   // denylist (credentials, sessions, caches, ~/.ssh, …) still wins.
   cloud_mirror_include?: string;
+  // Comma-separated repo-relative paths or globs for syncing a working folder
+  // with a cloud host (cloud/syncSide.ts), on top of each repo's [sync] table:
+  // `sync_always` travels even where a default would leave it (a large
+  // fixture), `sync_never` stays home (a local database).
+  sync_always?: string;
+  sync_never?: string;
+
+  // --- Codecast-Session trailer (sessionTrailer.ts) ---
+  // Default ON: the PreToolUse hook adds a Codecast-Session trailer to each
+  // git commit an agent runs. `cast config session_trailer false` turns it
+  // off on this machine; `git config codecast.sessionTrailer false` in one
+  // repository, CODECAST_SESSION_TRAILER=0 in one environment.
+  session_trailer?: boolean;
 
   // --- Server-stamped bookkeeping (index.ts) ---
   created_at?: string;

@@ -73,3 +73,20 @@ test("a single machine renders nothing", () => {
   expect(host.innerHTML).toBe("");
   unmount();
 });
+
+test("a teammate's shared machine is announced on the pill and grouped under team with its owner", () => {
+  const anas: SessionMachine = { ...laptop, device_id: "anas", label: "macOS - Ana", bot_name: null, runner_name: "Ana" };
+  const closed = mount(<MachineChips machines={[laptop, anas]} selectedDeviceId="laptop" open={false} onOpen={() => {}} onPick={() => {}} />);
+  expect(closed.host.querySelector("button")!.title).toContain("your team shared 1 more");
+  closed.unmount();
+  let shared = 0;
+  const { host, unmount } = mount(
+    <MachineChips machines={[laptop, anas]} selectedDeviceId="laptop" open onOpen={() => {}} onPick={() => {}} onShare={() => shared++} />,
+  );
+  expect(host.textContent).toContain("team");
+  expect(host.textContent).toContain("· Ana");
+  const link = Array.from(host.querySelectorAll("button")).find((b) => b.textContent === "share yours")!;
+  act(() => link.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })));
+  expect(shared).toBe(1);
+  unmount();
+});

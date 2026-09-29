@@ -1,6 +1,6 @@
 import { readLocalConfig } from "../../config/readLocalConfig.js";
 import { isCloudMirrorEnabled } from "../../config/types.js";
-import { listCloudRemoteHosts, sshReachable } from "../../browser/cloudHost.js";
+import { reachableRemoteHosts } from "../../browser/cloudHost.js";
 import { listScalewayHosts, type RemoteHost } from "../../remote/session-move.js";
 import { defaultDeps, pushMirrorToHostAsync, readRemoteMirrorStamp, runMirrorTick } from "./push.js";
 import { readProjectRegistrations, unregisterProjectContext } from "./projectRefresh.js";
@@ -28,10 +28,9 @@ export function startStandaloneMirror(opts: {
         ...defaultDeps(tick.signal),
         readConfig: () => config,
         listHosts: opts.listHosts ?? (async () => {
-          const hosts = [...listCloudRemoteHosts(), ...listScalewayHosts()];
-          const reachable = await Promise.all(hosts.map((host) => sshReachable(host)));
+          const hosts = await reachableRemoteHosts(listScalewayHosts());
           tick.signal?.throwIfAborted();
-          return hosts.filter((_, index) => reachable[index]);
+          return hosts;
         }),
         readProjects: (host) => readProjectRegistrations(host, opts.projectsFile),
         retireProjects: async (host, roots) => { for (const root of roots) await unregisterProjectContext(host, root, { file: opts.projectsFile }); },
