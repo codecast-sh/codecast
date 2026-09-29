@@ -16,6 +16,7 @@ import { copyText } from "../../../lib/copyText";
 import {
   AGENT_LAUNCH_OPTIONS,
   AGENT_MODEL_CONFIG,
+  listedModels,
   modelAgentKey,
   validateAgentChain,
   validateAgentDefinition,
@@ -114,7 +115,7 @@ function DefinitionEditor({
   const cfg = d.agent ? AGENT_MODEL_CONFIG[agentKey] : undefined;
   const { featured } = useDynamicModels(d.agent);
   const modelOptions = useMemo(() => {
-    const opts = (cfg?.models ?? []).filter((m) => m.key !== "default");
+    const opts = listedModels(cfg ?? { models: [] }).filter((m) => m.key !== "default");
     const seen = new Set(opts.map((m) => m.key));
     for (const m of featured) if (!seen.has(m.key)) opts.push(m);
     return opts;

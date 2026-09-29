@@ -2,25 +2,22 @@ import { withInboxView } from "../../lib/inboxViewHistory";
 import { useState, useCallback, useRef, memo, useMemo, useDeferredValue, lazy, Suspense, type ReactNode } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useEventListener } from "../../hooks/useEventListener";
-import { useMutation } from "convex/react";
 import { useMissingSessionRow } from "../../hooks/useMissingSessionRow";
 import { SessionPrewarm } from "../../components/SessionPrewarm";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTabActive } from "../../hooks/usePagePresence";
 import { urlSessionId } from "../../lib/pathLabel";
-import { api } from "@codecast/convex/convex/_generated/api";
+import { ConversationUnavailable } from "../../components/ConversationUnavailable";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { ConversationPlaceholder } from "../../components/ConversationPlaceholder";
 import { ConversationDiffLayout, type ConversationDiffLayoutProps } from "../../components/ConversationDiffLayout";
 import type { ConversationData } from "../../components/conversation/types";
-import { shareOrigin } from "../../lib/utils";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
 import { useInboxStore, useTrackedStore, isConvexId, sortSessions, sessionsWakeSig, isInterruptControlMessage, ensureHydrated, resolveInboxHome } from "../../store/inboxStore";
-import { useTeamShareActions } from "../../hooks/useTeamShareActions";
 import { FleetBoard, InboxHomeToggle } from "../../components/FleetBoard";
-import { SharePopover } from "../../components/SharePopover";
+import { ConversationSharePopover } from "../../components/ConversationSharePopover";
 import { SessionErrorBanner, SessionResumeBanner } from "../../components/SessionErrorBanner";
 import { ActivityFeed } from "../../components/ActivityFeed";
 import { EmptyState } from "../../components/EmptyState";
@@ -85,7 +82,6 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
   } = useConversationMessages(sessionId, targetMessageId, undefined, targetTimestamp, targetNonce);
 
   const convCommand = useInboxStore((s) => s.convCommand);
-  const generateShareLink = useMutation(api.conversations.generateShareLink);
   const [resumeState, setResumeState] = useState<"idle" | "resuming" | "sent" | "failed">("idle");
   const forceRestartAttemptedRef = useRef(false);
   const [_trackedSessionId, _setTrackedSessionId] = useState(sessionId);
@@ -143,7 +139,6 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
   }, [sessionId, convCommand]);
 
   const convId = (conversation?._id ?? sessionId) as Id<"conversations">;
-  const { setPrivate, shareWithTeam } = useTeamShareActions(convId);
   useSeedOwnership(sessionId, !!seat?.seedOwnership);
   const isOwnSession = !!conversation && (!!seat?.seedOwnership || (conversation as any).is_own !== false);
   // A seat opens on the agent talking to the person: its provisioning prompt
@@ -178,39 +173,12 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
     () => (onSessionView ? <><SeatHeadControls open={headOpen} onToggle={() => setHeadOpen((v) => !v)} onSessionView={onSessionView} />{headerEnd}</> : null),
     [onSessionView, headOpen, headerEnd],
   );
-  // The public link must PRESENT the token (?share=) — a bare conversation id
-  // grants nothing to anonymous viewers or link unfurlers (issue #27).
-  const shareToken = conversation?.share_token;
-  const shareUrl = shareToken
-    ? `${shareOrigin()}/conversation/${convId}?share=${encodeURIComponent(shareToken)}`
-    : null;
-  const isPrivate = conversation?.is_private !== false;
-  const teamVisibility = (conversation as any)?.team_visibility || (conversation as any)?.effective_team_visibility;
-  const hasTeam = !!(conversation as any)?.team_id;
-  const teamId = ((conversation as any)?.team_id ?? null) as string | null;
-  // The repo whose team mapping shared this session, so the popover can say why.
-  const sharedVia = (conversation as any)?.auto_shared
-    ? ((conversation as any)?.git_root || (conversation as any)?.project_path || null) as string | null
-    : null;
   // Element props for the memoized ConversationView: built once per input
   // change, not per render, or the memo below it never holds.
-  const shareControls = useMemo(() => conversation ? (
-    <SharePopover
-      canManage={isOwnSession}
-      isPrivate={isPrivate}
-      teamVisibility={teamVisibility}
-      hasShareToken={!!shareToken}
-      hasTeam={hasTeam}
-      teamId={teamId}
-      onSetPrivate={setPrivate}
-      onSetTeamVisibility={shareWithTeam}
-      onGenerateShareLink={async () => { const token = await generateShareLink({ conversation_id: convId }); return `${shareOrigin()}/conversation/${convId}?share=${encodeURIComponent(token)}`; }}
-      shareUrl={shareUrl}
-      pageUrl={`${shareOrigin()}/conversation/${convId}`}
-      forwardLabel="session"
-      sharedVia={sharedVia}
-    />
-  ) : null, [conversation, isOwnSession, isPrivate, teamVisibility, shareToken, hasTeam, teamId, convId, shareUrl, sharedVia, setPrivate, shareWithTeam, generateShareLink]);
+  const shareControls = useMemo(
+    () => conversation ? <ConversationSharePopover conversation={conversation} canManage={isOwnSession} /> : null,
+    [conversation, isOwnSession],
+  );
   const activePlanId = (conversation as any)?.active_plan_id;
   const workflowRunId = (conversation as any)?.workflow_run_id;
   const convSessionId = (conversation as any)?.session_id;
@@ -407,8 +375,10 @@ export function QueuePageClient() {
   const [scrollTarget, setScrollTarget] = useState<{ sessionId: string; messageId: string; timestamp?: number; nonce: number } | null>(null);
   const [activeHighlight, setActiveHighlight] = useState<string | undefined>(undefined);
 
-  // The row for a target the queue does not hold, fetched for injection.
-  const missingRow = useMissingSessionRow(pendingInjectId);
+  // The row for a target the queue does not hold, fetched for injection. An
+  // unavailable target stays subscribed: a session that syncs late, or is
+  // shared with the viewer afterwards, opens on its own.
+  const missingRow = useMissingSessionRow(pendingInjectId ?? unavailableId);
 
   // Select session from URL param -- only when the param actually changes
   const paramSessionId = searchParams.get("s") || null;
@@ -482,6 +452,12 @@ export function QueuePageClient() {
 
   // Once we have the conversation data, inject it into the queue
   useWatchEffect(() => {
+    if (unavailableId && !pendingInjectId) {
+      if (!missingRow) return;
+      setUnavailableId(null);
+      injectSession(missingRow);
+      return;
+    }
     if (!pendingInjectId) return;
     if (sessions[pendingInjectId]) {
       navigateToSession(pendingInjectId);
@@ -510,7 +486,13 @@ export function QueuePageClient() {
     injectSession(missingRow);
     setPendingInjectId(null);
     paramProcessedRef.current = true;
-  }, [pendingInjectId, missingRow, sessions, navigateToSession, injectSession]);
+  }, [pendingInjectId, unavailableId, missingRow, sessions, navigateToSession, injectSession]);
+
+  // The note answers the link, not the inbox: once the viewer opens any other
+  // session it steps aside.
+  useWatchEffect(() => {
+    setUnavailableId(null);
+  }, [currentSessionId, viewingDismissedId]);
 
   // Handle store-based navigation (from CommandPalette, bookmarks, etc.)
   const pendingNavigateId = useInboxStore((s) => s.pendingNavigateId);
@@ -592,16 +574,18 @@ export function QueuePageClient() {
     if (currentSessionId) animatedHideSession(currentSessionId, "stash");
   }, [currentSessionId]);
 
-  const viewingDismissedSession = viewingDismissedId
-    ? sessions[viewingDismissedId] ?? null
-    : null;
 
   const setCurrentConversation = useInboxStore((s) => s.setCurrentConversation);
 
   const rawCurrentSession = currentSessionId ? sessions[currentSessionId] : undefined;
-  const currentSession = pendingInjectId && rawCurrentSession && rawCurrentSession._id !== pendingInjectId
-    ? undefined
-    : rawCurrentSession;
+  // A linked target still loading, or one the server refused, holds the view:
+  // whatever was shown before (the current session or a stashed peek) must not
+  // paint in its place (that was the silent redirect to another session).
+  const heldTargetId = pendingInjectId ?? unavailableId;
+  const unlessHeld = <T extends { _id: string }>(row: T | null | undefined) =>
+    heldTargetId && row && row._id !== heldTargetId ? undefined : row;
+  const currentSession = unlessHeld(rawCurrentSession);
+  const viewingDismissedSession = unlessHeld(viewingDismissedId ? sessions[viewingDismissedId] : undefined) ?? null;
 
   // What THIS pane renders. The active tab follows live global view state; a
   // background tab freezes on its own ?s= param (its conversation, or the feed
@@ -657,9 +641,12 @@ export function QueuePageClient() {
       isPopstateRef.current = false;
       return;
     }
-    const targetId = viewingDismissedId
+    // A held target (a link still loading, or refused) owns the address bar:
+    // a reload or a copied URL must ask for it again, not for the session
+    // that happened to be open before.
+    const targetId = heldTargetId ?? (viewingDismissedId
       ? undefined
-      : useInboxStore.getState().getCurrentSession()?._id;
+      : useInboxStore.getState().getCurrentSession()?._id);
     // A local stub (a blank new session not yet created on the server) never
     // reaches the address bar: a reload hands the URL to the conversation
     // route, whose resolver has never heard of it and answers Not Found, and
@@ -680,7 +667,7 @@ export function QueuePageClient() {
       const switchingSessions = !!shownId && shownId !== targetId;
       window.history[switchingSessions ? "pushState" : "replaceState"](withInboxView({ inboxId: targetId }), "", targetPath);
     }
-  }, [currentSession?._id, viewingDismissedId, isActiveTab]);
+  }, [currentSession?._id, viewingDismissedId, isActiveTab, heldTargetId]);
 
   // Handle browser back/forward
   useEventListener("popstate", (e: PopStateEvent) => {
@@ -785,20 +772,10 @@ export function QueuePageClient() {
       ) : pendingInjectId ? (
         <ConversationPlaceholder id={pendingInjectId} />
       ) : unavailableId ? (
-        <div className="h-full flex items-center justify-center">
-          <div className="text-center max-w-sm px-4">
-            <div className="text-sm text-sol-text">This conversation isn't available</div>
-            <p className="mt-1 text-xs text-sol-text-dim">
-              It was deleted, or it belongs to someone who hasn't shared it.
-            </p>
-            <button
-              onClick={() => { setUnavailableId(null); handleBack(); }}
-              className="mt-4 px-3 py-1 rounded border border-sol-border text-xs text-sol-text-secondary hover:bg-sol-bg-alt transition-colors"
-            >
-              Back to inbox
-            </button>
-          </div>
-        </div>
+        <ConversationUnavailable
+          actionLabel="Back to inbox"
+          onAction={() => { setUnavailableId(null); handleBack(); }}
+        />
       ) : sortedSessions.length > 0 ? (
         <div className="h-full" />
       ) : (

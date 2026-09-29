@@ -46,6 +46,7 @@ describe("parseUnwrappedSessionReport", () => {
       ),
     ).toBe(false);
     expect(isUnwrappedSessionReport("continue")).toBe(false);
+    expect(isUnwrappedSessionReport("codecast spike follow-up: what does the README say about setup?")).toBe(false);
     expect(isMachineDeliveredMessage("continue")).toBe(false);
   });
 });

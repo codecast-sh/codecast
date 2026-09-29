@@ -1,0 +1,343 @@
+"use client";
+
+// The web's side of each cloud agent provider (CLOUD_AGENT_PROVIDERS in the
+// shared contracts): its connect wording and the dialog that connects it
+// (whether a machine is connected is credentials.ts). Everything else (the
+// header chip, the composer's cloud switch, the credential card, the Sync
+// switch) reads the shared registry, so a new provider is an entry here and
+// there, not new JSX.
+
+import { useState, type ComponentType } from "react";
+import { toast } from "sonner";
+import { Archive, ArchiveRestore, ChevronDown, Download, ExternalLink, GitPullRequest, KeyRound, Loader2 } from "lucide-react";
+import { CLOUD_AGENT_ACTIONS, CLOUD_AGENT_PROVIDERS, CLOUD_AGENT_RETRIED_SUFFIX, type CloudAgentActionName, type CloudAgentLaunch, cloudAgentLaunch, cloudAgentProviderForKey, cloudAgentProviderForSyncSource, cloudAgentProviderOfSession, cloudAgentSetupSentence, isCloudAgentCredentialKind, type CloudAgentProviderId, type CloudAgentProviderSpec, type CloudAgentSetupKind } from "@codecast/shared/contracts";
+import type { Device } from "../DeviceBadge";
+import { AgentTypeIcon } from "../AgentTypeIcon";
+import { ConnectCursorDialog } from "../ConnectCursorDialog";
+import { ConnectCodexDialog } from "./ConnectCodexDialog";
+import { useLiveSessionMeta } from "../../hooks/useLiveSessionMeta";
+import { useCloudAgentMachine } from "./CloudConnectDialog";
+import { cloudAgentBlockOf, useCloudAgentConnected, useCloudAgentExpiry } from "./credentials";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "../ui/dropdown-menu";
+import { useCloudAgentAction } from "../../lib/useProviderKeyCommand";
+import { useInboxStore } from "../../store/inboxStore";
+import { convHasPendingSend } from "../../store/inboxOverlays";
+
+interface CloudAgentUiEntry {
+  /** What the connect control names: "Cursor". */
+  connectName: string;
+  /** What a held message waits for, given the machine that runs the session: "the key is connected". */
+  heldUntil: (machine: string) => string;
+  Dialog: ComponentType<{ onClose: () => void; deviceId?: string | null }>;
+  /** A sign-in based provider's line among the Provider Keys: what it signs in with instead of a key. */
+  signIn?: string;
+}
+
+export interface CloudAgentUi extends CloudAgentUiEntry {
+  /** The connect control's words: "Connect Cursor". */
+  connectLabel: string;
+  /** The same inside a line of lowercase controls (the composer's switches). */
+  connectInlineLabel: string;
+}
+
+const ENTRIES: Record<CloudAgentProviderId, CloudAgentUiEntry> = {
+  cursor: { connectName: "Cursor", heldUntil: () => "the key is connected", Dialog: ConnectCursorDialog },
+  codex: {
+    connectName: "Codex",
+    heldUntil: (machine) => `${machine} is signed in to Codex`,
+    Dialog: ConnectCodexDialog,
+    signIn: "Codex Cloud runs with this machine's Codex sign-in (your ChatGPT plan), not a key.",
+  },
+};
+
+const CLOUD_AGENT_UI = Object.fromEntries(Object.entries(ENTRIES).map(([id, e]) => [id, {
+  ...e,
+  connectLabel: `Connect ${e.connectName}`,
+  connectInlineLabel: `connect ${e.connectName}`,
+}])) as Record<CloudAgentProviderId, CloudAgentUi>;
+
+export function cloudAgentUi(spec: CloudAgentProviderSpec): CloudAgentUi {
+  return CLOUD_AGENT_UI[spec.id as CloudAgentProviderId];
+}
+
+/** The guided setup for a Provider Keys entry that is a cloud agent's credential. */
+export function cloudAgentKeyDialog(keyProvider: string): CloudAgentUi["Dialog"] | undefined {
+  const spec = cloudAgentProviderForKey(keyProvider);
+  return spec ? cloudAgentUi(spec).Dialog : undefined;
+}
+
+/** What keeps a machine from reading a provider, in the sentence the daemon's card says (cloudAgentSetupSentence), and what it waits for. */
+export interface CloudAgentProblem {
+  kind: CloudAgentSetupKind;
+  sentence: string;
+  /** A new key or sign-in fixes it (isCloudAgentCredentialKind). */
+  credential: boolean;
+}
+
+/**
+ * The machine that drives a provider's session, whether it is connected
+ * (never, without a provider), and why not when it can say: its sign-in ran
+ * out, or what its daemon found in the provider's way.
+ */
+export function useCloudAgentStatus(spec: CloudAgentProviderSpec | undefined, deviceId?: string | null): { device: Device | null; connected: boolean; problem?: CloudAgentProblem } {
+  const status = useCloudAgentMachine(deviceId, useCloudAgentConnected(spec));
+  const expiry = useCloudAgentExpiry(spec);
+  if (!spec || !status.device) return status;
+  const expiredAt = expiry(status.device);
+  const block = expiredAt ? { kind: "key_invalid" as const, expiredAt } : cloudAgentBlockOf(spec, status.device);
+  if (!block) return status;
+  const sentence = cloudAgentSetupSentence(spec, block, status.device.label ?? "your computer");
+  return { ...status, problem: { kind: block.kind, sentence, credential: isCloudAgentCredentialKind(block.kind) } };
+}
+
+/** What waits on a setup problem that is not a credential. */
+const UNTIL_FIXED = "this is fixed";
+
+/**
+ * A setup card's sentence (cloudAgentSetupCard) without the retry clause the
+ * card's own line says, and the page it names where access is given as a link.
+ */
+export function CloudAgentSetupText({ spec, message }: { spec: CloudAgentProviderSpec; message: string }) {
+  const text = message.trim().replace(CLOUD_AGENT_RETRIED_SUFFIX, ".");
+  const at = text.indexOf(spec.repoAccessUrl);
+  if (at < 0) return <>{text}</>;
+  return (
+    <>
+      {text.slice(0, at)}
+      <a href={spec.repoAccessUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 underline decoration-dotted underline-offset-2 hover:opacity-80">
+        {new URL(spec.repoAccessUrl).host}{new URL(spec.repoAccessUrl).pathname} <ExternalLink className="h-3 w-3" aria-hidden />
+      </a>
+      {text.slice(at + spec.repoAccessUrl.length)}
+    </>
+  );
+}
+
+/**
+ * A setup card's line on the message it stopped (`credential`: a credential
+ * card), saying what it waits for on the machine that runs the session: held
+ * and going out on its own, or, once nothing is held (it was cancelled), to
+ * send again then.
+ */
+export function CloudAgentHeldNote({ spec, credential, conversationId }: { spec: CloudAgentProviderSpec; credential: boolean; conversationId?: string }) {
+  const { device } = useCloudAgentStatus(spec, useLiveSessionMeta(conversationId)?.ownerDeviceId);
+  const held = useInboxStore((s) => !!conversationId && convHasPendingSend(s.pendingMessages[conversationId]));
+  const until = credential ? cloudAgentUi(spec).heldUntil(device?.label ?? "your computer") : UNTIL_FIXED;
+  return held ? <>Your message is held and goes out on its own as soon as {until}.</> : <>Nothing is held now: send your message again once {until}.</>;
+}
+
+/** A small control that opens the provider's connect dialog. */
+export function ConnectCloudAgentButton({ spec, label, className, deviceId, conversationId }: { spec: CloudAgentProviderSpec; label?: string; className?: string; deviceId?: string | null; conversationId?: string }) {
+  const [open, setOpen] = useState(false);
+  // From a session: the credentials belong on the machine that runs it.
+  const ownerDeviceId = useLiveSessionMeta(conversationId)?.ownerDeviceId;
+  const { Dialog, connectLabel } = cloudAgentUi(spec);
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className={`inline-flex items-center gap-1 rounded border border-sol-violet/40 bg-sol-violet/10 px-1.5 py-0.5 text-[10px] font-medium text-sol-violet transition-colors hover:bg-sol-violet/20 ${className ?? ""}`}
+      >
+        <KeyRound className="h-3 w-3" aria-hidden />
+        {label ?? connectLabel}
+      </button>
+      {open && <Dialog deviceId={deviceId ?? ownerDeviceId} onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
+/** The sign-in based providers, listed with the Provider Keys: each one's state on the machine and its connect dialog. */
+export function CloudAgentSignInRows({ deviceId }: { deviceId: string }) {
+  return <>{Object.values(CLOUD_AGENT_PROVIDERS).filter((spec) => cloudAgentUi(spec).signIn).map((spec) => <CloudAgentSignInRow key={spec.id} spec={spec} deviceId={deviceId} />)}</>;
+}
+
+function CloudAgentSignInRow({ spec, deviceId }: { spec: CloudAgentProviderSpec; deviceId: string }) {
+  const { connected, problem } = useCloudAgentStatus(spec, deviceId);
+  const { connectName, signIn } = cloudAgentUi(spec);
+  return (
+    <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2 px-4 py-3.5 sm:flex-nowrap sm:px-5">
+      <div className="min-w-0">
+        <span className="text-sm text-sol-text">{spec.label}</span>
+        <p className="mt-0.5 text-xs text-sol-text-muted">{signIn}</p>
+        {/* No sign-in at all is what the Connect button says. */}
+        {problem && problem.kind !== "key_missing" && <p className="mt-0.5 text-xs text-amber-500">{problem.sentence}</p>}
+      </div>
+      <ConnectCloudAgentButton spec={spec} deviceId={deviceId} label={connected ? `${connectName} connected` : undefined} />
+    </div>
+  );
+}
+
+/**
+ * Under an account sync switch whose provider your computer cannot read: no
+ * sign-in (said only while the switch is on), a sign-in that ran out or is
+ * refused, or the provider refusing the account (Codex Cloud turned off for
+ * the workspace). Nothing syncs until that changes.
+ */
+export function CloudAgentSyncNote({ source, on }: { source: string; on: boolean }) {
+  const spec = cloudAgentProviderForSyncSource(source) ?? undefined;
+  const { problem } = useCloudAgentStatus(spec);
+  if (!spec || !problem || (problem.kind === "key_missing" && !on)) return null;
+  // Beside the connect control: a credential problem is fixed by using it.
+  return <span className="mt-1 block text-amber-500">{problem.sentence} Nothing syncs until {problem.credential ? `you ${cloudAgentUi(spec).connectInlineLabel}` : UNTIL_FIXED}.</span>;
+}
+
+/** Beside an account sync switch whose source is a cloud agent provider: its connect dialog, saying whether your computer is connected. */
+export function CloudAgentSyncConnect({ source }: { source: string }) {
+  const spec = cloudAgentProviderForSyncSource(source) ?? undefined;
+  const { connected } = useCloudAgentStatus(spec);
+  if (!spec) return null;
+  return <ConnectCloudAgentButton spec={spec} label={connected ? `${cloudAgentUi(spec).connectName} connected` : undefined} />;
+}
+
+/**
+ * The cloud agent a conversation runs as (its session id is the agent's id,
+ * or a branch's), or null for a local session: its provider, what its launch
+ * asked for (the model stamp; a task mirrored from the provider's site has
+ * none) and whether it is archived there.
+ */
+export function useCloudAgentOfConversation(conversationId: string | undefined): { spec: CloudAgentProviderSpec; sessionId: string; launch: CloudAgentLaunch | null; archived: boolean } | null {
+  const live = useLiveSessionMeta(conversationId);
+  const spec = cloudAgentProviderOfSession(live?.agentType, live?.sessionId);
+  return spec && live?.sessionId ? { spec, sessionId: live.sessionId, launch: cloudAgentLaunch(live.agentType, live.model), archived: !!live.cloudAgentArchived } : null;
+}
+
+const ACTION_ICONS: Record<CloudAgentActionName, ComponentType<{ className?: string }>> = {
+  create_pr: GitPullRequest,
+  apply: Download,
+  archive: Archive,
+  unarchive: ArchiveRestore,
+};
+
+/** Why an ask task has no Create PR or Apply: it answers without changing code. */
+const ASK_HAS_NO_CHANGES = "An ask task answers without changing code";
+
+/** One of the provider's actions as a surface lists it: shown only when it applies, disabled with the reason when it cannot run. */
+export interface CloudAgentActionItem {
+  action: CloudAgentActionName;
+  label: string;
+  title: string;
+  Icon: ComponentType<{ className?: string }>;
+  disabledReason?: string;
+}
+
+/**
+ * The provider's actions on a session's cloud agent (its spec lists which),
+ * as every surface offers them: the header chip, the session menu and the
+ * command palette. Archive or Unarchive, whichever the agent's state takes;
+ * Create PR and Apply disabled for an ask task. The owner only; the machine
+ * that hosts the session runs them, says the result in the thread, and a
+ * toast says it here (a pull request with a button that opens it).
+ */
+export function useCloudAgentActions(conversationId: string | undefined, canAct: boolean) {
+  const cloud = useCloudAgentOfConversation(conversationId);
+  const { run, pending } = useCloudAgentAction(conversationId ?? "", ({ ok, text, url }) => {
+    if (!ok) toast.error(text);
+    else if (url) toast.success(text, { action: { label: "Open PR", onClick: () => window.open(url, "_blank", "noopener") } });
+    else toast.success(text);
+  });
+  const items: CloudAgentActionItem[] = !cloud || !canAct ? [] : (cloud.spec.actions ?? [])
+    .filter((action) => action !== (cloud.archived ? "archive" : "unarchive"))
+    .map((action) => ({
+      action,
+      label: CLOUD_AGENT_ACTIONS[action].label,
+      title: CLOUD_AGENT_ACTIONS[action].title,
+      Icon: ACTION_ICONS[action],
+      ...((action === "create_pr" || action === "apply") && cloud.launch?.ask ? { disabledReason: ASK_HAS_NO_CHANGES } : {}),
+    }));
+  // The command palette's session actions: the ones that can run now.
+  const palette = items.filter((i) => !i.disabledReason).map((i) => ({
+    key: `cloud_${i.action}`,
+    label: `${cloud!.spec.label}: ${i.label}`,
+    icon: i.Icon,
+    available: !pending,
+    run: () => void run(i.action),
+  }));
+  return { cloud, items, run, pending, palette };
+}
+
+function ActionRows({ items, run, pending }: Pick<ReturnType<typeof useCloudAgentActions>, "items" | "run" | "pending">) {
+  return (
+    <>
+      {items.map(({ action, label, title, Icon, disabledReason }) => (
+        <DropdownMenuItem key={action} disabled={!!pending || !!disabledReason} onSelect={() => void run(action)} title={disabledReason ?? title} className="gap-2 text-xs">
+          {pending === action ? <Loader2 className="h-3.5 w-3.5 animate-spin text-sol-violet" /> : <Icon className="h-3.5 w-3.5 text-sol-violet" />}
+          {label}
+        </DropdownMenuItem>
+      ))}
+    </>
+  );
+}
+
+/** The provider's page for a session's agent, and where it opens. */
+function agentPage(spec: CloudAgentProviderSpec, sessionId: string): { href: string; host: string } {
+  const href = spec.agentUrl(sessionId);
+  return { href, host: new URL(href).host };
+}
+
+/**
+ * The session menu's rows for a cloud agent session: open it on the
+ * provider's site, and the owner's actions on it. Nothing for a local session.
+ */
+export function CloudAgentMenuItems({ conversationId, canAct }: { conversationId: string; canAct: boolean }) {
+  const { cloud, items, run, pending } = useCloudAgentActions(conversationId, canAct);
+  if (!cloud) return null;
+  const { href, host } = agentPage(cloud.spec, cloud.sessionId);
+  return (
+    <>
+      <DropdownMenuSeparator />
+      <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">{cloud.spec.label}</DropdownMenuLabel>
+      <DropdownMenuItem onSelect={() => window.open(href, "_blank", "noopener")} className="gap-2 text-xs">
+        <ExternalLink className="h-3.5 w-3.5 text-sol-violet" />
+        Open on {host}
+      </DropdownMenuItem>
+      <ActionRows items={items} run={run} pending={pending} />
+    </>
+  );
+}
+
+const CHIP = "inline-flex shrink-0 items-center gap-1 rounded border border-sol-violet/30 px-1.5 py-px text-[10px] text-sol-violet hover:bg-sol-violet/10";
+
+/**
+ * The cloud agent behind a session: a link to it on the provider's site, or
+ * for its owner, a menu with that link and the provider's actions on it.
+ */
+export function CloudAgentLink({ conversationId, canAct = false }: { conversationId: string; canAct?: boolean }) {
+  const { cloud, items, run, pending } = useCloudAgentActions(conversationId, canAct);
+  if (!cloud) return null;
+  const { spec } = cloud;
+  const { href, host } = agentPage(spec, cloud.sessionId);
+  const name = (
+    <>
+      {/* A phone's header strip is short: the provider's mark says which cloud. */}
+      <AgentTypeIcon agentType={spec.agentType} className="h-2.5 w-2.5 sm:hidden" />
+      <span className="sm:hidden">Cloud</span>
+      <span className="hidden sm:inline">{spec.label}</span>
+    </>
+  );
+  if (!items.length) {
+    return (
+      <a href={href} target="_blank" rel="noreferrer" title={`This session runs as a ${spec.label} agent: open it on ${host}`} className={CHIP}>
+        {name}
+        <ExternalLink className="h-2.5 w-2.5" aria-hidden />
+      </a>
+    );
+  }
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button type="button" title={pending ? `${CLOUD_AGENT_ACTIONS[pending].label}…` : `This session runs as a ${spec.label} agent: open it, or act on it`} className={CHIP}>
+          {name}
+          {pending ? <Loader2 className="h-2.5 w-2.5 animate-spin" aria-hidden /> : <ChevronDown className="h-2.5 w-2.5" aria-hidden />}
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="min-w-[12rem]">
+        <DropdownMenuItem onSelect={() => window.open(href, "_blank", "noopener")} className="gap-2 text-xs">
+          <ExternalLink className="h-3.5 w-3.5 text-sol-violet" />
+          Open on {host}
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <ActionRows items={items} run={run} pending={pending} />
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}

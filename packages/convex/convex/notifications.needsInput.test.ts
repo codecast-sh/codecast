@@ -1100,6 +1100,8 @@ describe("the route up", () => {
       trigger: trigger.short_id,
       event: "session_needs_input",
       waiting: { short_id: "jx7hand", title: "Fix the parser", why: "blocked", since: now - 30_000, state: "Which price band for Texas?" },
+      // The run reminds the role who it is, read fresh at firing.
+      role: { handle: "calling", name: "Calling lead", reports_to: "@growth", scope: [], goals: [] },
       body: trigger.prompt,
     }]);
     // A machine run, never a person's message.

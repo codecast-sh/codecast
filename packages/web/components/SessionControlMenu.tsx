@@ -2,7 +2,7 @@ import { useState, type ReactNode } from "react";
 import { useConvex } from "convex/react";
 import { toast } from "sonner";
 import { ArrowLeft, ArrowRight, ChevronRight } from "lucide-react";
-import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey, type ConvexAgentType } from "@codecast/shared/contracts";
+import { AGENT_MODEL_CONFIG, cloudAgentLaunch, cloudAgentLaunchWords, findModelOption, modelAgentKey, type ConvexAgentType } from "@codecast/shared/contracts";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useLiveSessionMeta } from "../hooks/useLiveSessionMeta";
 import { useInboxStore, type InboxSession } from "../store/inboxStore";
@@ -22,7 +22,8 @@ import {
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
 import type { AgentOption, MoveVerb } from "../lib/sessionControl";
-import { MOVE_VERBS, moveAgentOptions } from "../lib/sessionControl";
+import { MOVE_VERBS, moveAgentOptions, sessionMoveVerbs } from "../lib/sessionControl";
+import { useCloudAgentOfConversation } from "./cloudAgents";
 
 // The unified session control: one panel behind the conversation-header badge
 // holding everything that moves a session between rails — model and effort
@@ -234,6 +235,16 @@ export interface SessionControlPanelProps {
   onClose: () => void;
 }
 
+/**
+ * A model stamp as the header names it: a cloud launch by what it asked of
+ * the provider ("2 attempts", "ask"; the provider chip beside it names the
+ * provider), anything else by formatModel.
+ */
+function modelLabel(agentType: string | undefined, model: string): string {
+  const launch = cloudAgentLaunch(agentType, model);
+  return launch ? cloudAgentLaunchWords(launch).join(" · ") : formatModel(model);
+}
+
 export function SessionControlPanel({
   conversationId,
   agentType,
@@ -248,12 +259,18 @@ export function SessionControlPanel({
   // configuration once its agent is chosen.
   const [view, setView] = useState<{ step: "main" } | { step: "pick"; verb: MoveVerb } | { step: "handoff"; agent: ConvexAgentType }>({ step: "main" });
   const blank = (messageCount ?? 0) === 0;
-  const controllable = canControlModel(agentType, blank);
+  const sessionId = useLiveSessionMeta(conversationId)?.sessionId;
+  const controllable = canControlModel(agentType, sessionId);
+  // Only the wording: which rules apply to a cloud agent is canControlModel's and sessionMoveVerbs'.
+  const cloud = useCloudAgentOfConversation(conversationId)?.spec;
   const agentLabel = formatAgentType(agentType);
   const glyph = effortGlyph(effort);
   const options = moveAgentOptions(agentType, messageCount);
+  const verbs = sessionMoveVerbs(agentType, sessionId);
 
-  const stateLine = !controllable
+  const stateLine = cloud
+    ? `Runs on ${cloud.label}, which picks the model`
+    : !controllable
     ? `${agentLabel} keeps the model it launched with`
     : blank
       ? "Blank session · picks apply at launch"
@@ -335,7 +352,7 @@ export function SessionControlPanel({
       <DropdownMenuSeparator className={controllable ? "" : "hidden"} />
       <div className={SECTION_LABEL}>Move this session</div>
       <div className="pb-1">
-        {(Object.keys(MOVE_VERBS) as MoveVerb[]).map((verb) => {
+        {verbs.map((verb) => {
           const meta = MOVE_VERBS[verb];
           const Icon = meta.icon;
           return (
@@ -413,6 +430,8 @@ export function HeaderModelControl({
   useWatchEffect(() => { setPicked(null); }, [agentType]);
 
   const blank = (messageCount ?? 0) === 0;
+  // A cloud agent's model is the provider's: the trigger names no model and offers none.
+  const cloud = useCloudAgentOfConversation(conversationId)?.spec;
   const overlayModel = picked?.model !== undefined
     ? modelStampForPick(agentType, picked.model)
     : (modelFitsAgent(storeModel, agentType) ? storeModel : undefined);
@@ -425,12 +444,14 @@ export function HeaderModelControl({
   const interactive = !!(canEdit && conversationId);
   const glyph = effortGlyph(overlayEffort);
 
+  const label = overlayModel ? modelLabel(agentType, overlayModel) : "";
+
   if (!interactive) {
-    if (!overlayModel) return null;
+    if (!label) return null;
     return (
       <div className="hidden sm:flex items-center gap-1.5 flex-shrink-0">
         <span className="text-sol-text-dim">&middot;</span>
-        <span className="font-mono truncate max-w-none" title={overlayModel}>{formatModel(overlayModel)}</span>
+        <span className="font-mono truncate max-w-none" title={overlayModel}>{label}</span>
         {glyph && <span className="text-sol-text-dim/80" title={`${overlayEffort} effort`}>{glyph}</span>}
       </div>
     );
@@ -444,9 +465,12 @@ export function HeaderModelControl({
           <button
             data-session-control-trigger
             className="group flex items-center gap-1 font-mono rounded px-1 -mx-1 transition-colors hover:bg-sol-bg-alt hover:text-sol-text-secondary"
-            title={`Model: ${overlayModel ?? "default"}${overlayEffort ? ` · ${overlayEffort} effort` : ""} — model, agent, fork, hand off`}
+            title={cloud
+              ? `Runs on ${cloud.label}, which picks the model · fork, hand off`
+              : `Model: ${overlayModel ?? "default"}${overlayEffort ? ` · ${overlayEffort} effort` : ""} · model, agent, fork, hand off`}
           >
-            <span className="truncate max-w-none">{overlayModel ? formatModel(overlayModel) : "model"}</span>
+            {/* A cloud launch that asked for nothing more names what the panel does instead. */}
+            <span className="truncate max-w-none">{label || (cloud ? "move" : "model")}</span>
             {glyph && <span className="text-sol-text-dim/80">{glyph}</span>}
             <svg className="w-2.5 h-2.5 opacity-50 group-hover:opacity-80 transition-opacity" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />

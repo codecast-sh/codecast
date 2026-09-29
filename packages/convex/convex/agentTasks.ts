@@ -16,7 +16,7 @@ import { armedTriggerKindFor } from "./dormancy";
 import { restoreToInbox } from "./inboxFilters";
 import { configuredCloudWakeHosts, getCloudWakeHostForConversation } from "./cloudWake";
 import { enqueuePendingMessage, reachableRole } from "./pendingMessages";
-import { triggerFiringSource, normalizeThreadState, runOwnerWakeOf, runParentOf, runResultThreadOf, triggerLifecycleInstructions, formatScheduledTask, type RunOutcome, type WaitingSession } from "@codecast/shared/contracts";
+import { triggerFiringSource, normalizeThreadState, runOwnerWakeOf, runParentOf, runResultThreadOf, triggerLifecycleInstructions, formatScheduledTask, type RoleCard, type RunOutcome, type WaitingSession } from "@codecast/shared/contracts";
 import { SESSION_NEEDS_INPUT_EVENT } from "@codecast/shared/contracts";
 import { findRoleNeedsInputTrigger, ROLE_NEEDS_INPUT_PROMPT, ROLE_NEEDS_INPUT_TITLE } from "./lib/orgRoutine";
 import { earliestUsageResetAt, listOnlineDevices } from "./ccAccountsShared";
@@ -822,6 +822,46 @@ async function cloudTriggerConversation(ctx: TaskCtx, task: Doc<"agent_tasks">) 
   return await getCloudWakeHostForConversation(ctx, conversation) ? conversation : null;
 }
 
+// The frame a trigger run arrives in, built in one place for every writer (the
+// cloud dispatch, a role's needs-input firing, and the daemon's local inject
+// through injectFrame): the trigger's prompt with its lifecycle, the role's
+// card when the trigger belongs to a role, the waiting session when one fired
+// it, and a note when the session is stashed out of the person's sight.
+const STASHED_NOTE = `\n\nThis session is STASHED: the user will not see this run or its output. End your turn with cast state --status done|dormant to stay quietly out of their inbox; declare --status blocked ONLY if a human must act — that returns the session to their inbox.`;
+
+async function roleCardOf(ctx: TaskCtx, roleId: Id<"org_roles"> | undefined): Promise<RoleCard | null> {
+  const role: any = roleId ? await ctx.db.get(roleId) : null;
+  if (!role || role.status === "retired") return null;
+  const to = role.reports_to;
+  const parent: any = to?.kind === "role" ? await ctx.db.get(to.role_id) : to?.kind === "user" ? await ctx.db.get(to.user_id) : null;
+  const reports_to = to?.kind === "role" ? (parent ? `@${parent.handle}` : "") : (parent?.name ?? "");
+  const projects: any[] = (await Promise.all((role.scope?.project_ids ?? []).map((id: any) => ctx.db.get(id)))).filter(Boolean);
+  const plans: any[] = (await Promise.all((role.scope?.plan_ids ?? []).map((id: any) => ctx.db.get(id)))).filter(Boolean);
+  const firstLine = (t: unknown, n: number) => String(t ?? "").split("\n")[0].trim().slice(0, n);
+  return {
+    handle: role.handle,
+    name: role.name,
+    reports_to,
+    scope: [...projects, ...plans].map((r) => r.title).filter(Boolean),
+    ...(firstLine(role.charter, 240) ? { charter: firstLine(role.charter, 240) } : {}),
+    goals: projects.map((p) => firstLine(p.goal, 160)).filter(Boolean).slice(0, 3),
+  };
+}
+
+export async function triggerFrameFor(ctx: TaskCtx, task: Doc<"agent_tasks">, conversation: Doc<"conversations"> | null, waiting?: WaitingSession): Promise<string> {
+  const stashed = !!conversation && !conversation.inbox_killed_at && !!conversation.inbox_stashed_at;
+  const body = [task.prompt, triggerLifecycleInstructions(task)].filter(Boolean).join("\n\n") + (stashed ? STASHED_NOTE : "");
+  return formatScheduledTask({
+    title: task.title || "",
+    task_id: String(task._id),
+    trigger: task.short_id,
+    event: task.event_filter?.event_type,
+    role: await roleCardOf(ctx, task.role_id),
+    waiting: waiting ?? null,
+    body,
+  });
+}
+
 // The route up (org-staffing.md S28): a session that reports to a role needs
 // input, and the role's own event trigger fires for it. The run is written
 // here rather than armed for the daemon to claim, because an event's run_at
@@ -843,7 +883,7 @@ export async function fireRoleNeedsInput(
   if (!task || task.status !== "scheduled") return null;
   const now = Date.now();
   const id = await enqueuePendingMessage(ctx as any, standing, task.user_id, {
-    content: formatScheduledTask({ title: task.title, task_id: String(task._id), trigger: task.short_id, event: task.event_filter?.event_type, waiting, body: task.prompt }),
+    content: await triggerFrameFor(ctx, task, standing, waiting),
     origin: "scheduler",
     client_id: clientId,
   });
@@ -916,14 +956,10 @@ export const dispatchCloudTriggers = internalMutation({
     for (const task of page.page) {
       const conversation = await cloudTriggerConversation(ctx, task);
       if (!conversation) continue;
-      const filingNote = !conversation.inbox_killed_at && conversation.inbox_stashed_at
-        ? `\n\nThis session is STASHED: the user will not see this run or its output. End your turn with cast state --status done|dormant to stay quietly out of their inbox; declare --status blocked ONLY if a human must act — that returns the session to their inbox.`
-        : "";
       const clientId = `cloud-trigger:${task._id}:${task.run_count}`;
-      const prompt = [task.prompt, triggerLifecycleInstructions(task)].filter(Boolean).join("\n\n");
       const updates: Record<string, any> = { ...completedTaskRunFields(task, now, { conversation_id: conversation._id }), ...claimRunSourceFields(task) };
       const pendingMessageId = await enqueuePendingMessage(ctx, conversation, task.user_id, {
-        content: formatScheduledTask({ title: task.title || "", task_id: String(task._id), body: `${prompt}${filingNote}` }),
+        content: await triggerFrameFor(ctx, task, conversation),
         origin: "scheduler",
         client_id: clientId,
       });
@@ -941,6 +977,20 @@ export const dispatchCloudTriggers = internalMutation({
       await ctx.scheduler.runAfter(0, internal.agentTasks.dispatchCloudTriggers, { cursor: page.continueCursor });
     }
     return { scanned: page.page.length, dispatched, done: page.isDone };
+  },
+});
+
+// The frame a local inject run delivers, built by the one writer every path
+// shares (triggerFrameFor), so a daemon never assembles its own.
+export const injectFrame = query({
+  args: { api_token: v.string(), task_id: v.id("agent_tasks") },
+  handler: async (ctx, args): Promise<string | null> => {
+    const auth = await verifyApiToken(ctx, args.api_token, false);
+    if (!auth) throw new Error("Unauthorized");
+    const task = await ctx.db.get(args.task_id);
+    if (!task || task.user_id !== auth.userId) return null;
+    const conversation = task.originating_conversation_id ? await ctx.db.get(task.originating_conversation_id) : null;
+    return await triggerFrameFor(ctx, task, conversation);
   },
 });
 

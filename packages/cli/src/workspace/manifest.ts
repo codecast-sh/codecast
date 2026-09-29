@@ -11,6 +11,7 @@ import * as fs from "node:fs";
 import type {
   BrowserSpec,
   HostSpec,
+  SyncSpec,
   PortSpec,
   ServiceSpec,
   SetupSpec,
@@ -78,11 +79,12 @@ function validate(raw: Record<string, unknown>, file?: string): WorkspaceManifes
   const verify = validateVerify(raw["verify"], file);
   const browser = validateBrowser(raw["browser"], file);
   const host = validateHost(raw["host"], file);
+  const sync = validateSync(raw["sync"], file);
 
   // Reject unknown top-level keys so typos in manifest are surfaced loudly.
   const known = new Set([
     "setup", "ports", "services", "env", "teardown", "verify", "browser",
-    "backend", "detected", "host",
+    "backend", "detected", "host", "sync",
   ]);
   for (const key of Object.keys(raw)) {
     if (!known.has(key)) {
@@ -101,7 +103,7 @@ function validate(raw: Record<string, unknown>, file?: string): WorkspaceManifes
   }
   const backend = backendRaw ?? "local";
 
-  return { ...(host ? { host } : {}), setup, ports, services, env, teardown, ...(verify ? { verify } : {}), browser, backend, detected };
+  return { ...(host ? { host } : {}), ...(sync ? { sync } : {}), setup, ports, services, env, teardown, ...(verify ? { verify } : {}), browser, backend, detected };
 }
 
 /** An apt package or systemd unit name: nothing a shell would read as more than one word. */
@@ -122,6 +124,15 @@ function validateHost(raw: unknown, file?: string): HostSpec | undefined {
     });
   }
   return { packages, services, run: validateStringArray(raw["run"], "host.run", file) };
+}
+
+function validateSync(raw: unknown, file?: string): SyncSpec | undefined {
+  if (raw === undefined) return undefined;
+  if (!isPlainObject(raw)) throw new ManifestError("'sync' must be a table", file, "sync");
+  for (const key of Object.keys(raw)) {
+    if (key !== "always" && key !== "never") throw new ManifestError(`unknown key in [sync]: '${key}'`, file, `sync.${key}`);
+  }
+  return { always: validateStringArray(raw["always"], "sync.always", file), never: validateStringArray(raw["never"], "sync.never", file) };
 }
 
 function validateVerify(raw: unknown, file?: string): VerifySpec | undefined {

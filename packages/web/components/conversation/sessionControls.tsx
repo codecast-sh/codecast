@@ -8,10 +8,10 @@ import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useRecentProjectsFeed } from "../../hooks/useRecentProjectsFeed";
 import { useShallow } from "zustand/react/shallow";
 import { createPortal } from "react-dom";
-import { AGENT_LAUNCH_OPTIONS, cursorCloudModel, modelOptionKey, type ConvexAgentType } from "@codecast/shared/contracts";
+import { AGENT_LAUNCH_OPTIONS, cloudAgentLaunch, cloudAgentLaunchKey, cloudAgentProvidersFor, modelOptionKey, type CloudAgentLaunch, type ConvexAgentType } from "@codecast/shared/contracts";
 import { useLiveSessionMeta } from "../../hooks/useLiveSessionMeta";
 import { commitModelChange } from "../../lib/modelSwitchWeb";
-import { useCursorKeyStatus } from "../ConnectCursorDialog";
+import { useCloudAgentStatus } from "../cloudAgents";
 import { StableContextPicker } from "../StableContextCards";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { KeyCap } from "../KeyboardShortcutsHelp";
@@ -132,28 +132,35 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
     return { _id: sess._id, project_path: sess.project_path, git_root: sess.git_root, owner_device_id: sess.owner_device_id, target_device_id: sess.target_device_id, cloud_placement: sess.cloud_placement };
   }));
   const isolatedToggle = useInboxStore((s) => s.isolatedWorktreeMode);
-  // Cursor: "run in the cloud" is a Cursor Cloud Agent, carried as the launch
-  // model key (cloud / cloud:<id>) the daemon already honours.
+  // An agent type with a cloud agent provider (Cursor: Cursor Cloud Agents):
+  // "run in the cloud" is the provider's agent, carried as the launch model
+  // key (cloud / cloud:<id>) the daemon already honours.
   const liveMeta = useLiveSessionMeta(conversation._id);
+  const cloudSpec = cloudAgentProvidersFor(liveMeta?.agentType)[0];
   // The machine the session will run from: the picked target, else its owner.
-  const cursorDeviceId = storeSession?.target_device_id ?? storeSession?.owner_device_id ?? null;
-  const cursorKey = useCursorKeyStatus(cursorDeviceId);
-  const cursorCloud = useMemo(() => {
-    if (liveMeta?.agentType !== "cursor") return undefined;
-    const on = cursorCloudModel(modelOptionKey(liveMeta.model, "cursor")) !== null;
+  const cloudDeviceId = storeSession?.target_device_id ?? storeSession?.owner_device_id ?? null;
+  const cloudStatus = useCloudAgentStatus(cloudSpec, cloudDeviceId);
+  const cloudAgent = useMemo(() => {
+    if (!cloudSpec || !liveMeta?.agentType) return undefined;
+    const agentType = liveMeta.agentType;
+    // The launch (model, ask mode, attempts) rides the launch model key.
+    const launch = cloudAgentLaunch(agentType, modelOptionKey(liveMeta.model, agentType));
+    const pick = (model: string) => void commitModelChange({
+      conversationId: conversation._id,
+      agentType,
+      current: { model: liveMeta.model, effort: liveMeta.effort },
+      sel: { model },
+      blank: true,
+    });
     return {
-      on,
-      connected: cursorKey.connected,
-      deviceId: cursorKey.device?.device_id ?? null,
-      onToggle: () => void commitModelChange({
-        conversationId: conversation._id,
-        agentType: "cursor",
-        current: { model: liveMeta.model, effort: liveMeta.effort },
-        sel: { model: on ? "default" : "cloud" },
-        blank: true,
-      }),
+      spec: cloudSpec,
+      on: launch !== null,
+      connected: cloudStatus.connected,
+      deviceId: cloudStatus.device?.device_id ?? null,
+      onToggle: () => pick(launch ? "default" : cloudSpec.modelPrefix),
+      ...(launch ? { launch, onSetLaunch: (change: Partial<CloudAgentLaunch>) => pick(cloudAgentLaunchKey(cloudSpec, { ...launch, ...change })) } : {}),
     };
-  }, [liveMeta?.agentType, liveMeta?.model, liveMeta?.effort, cursorKey.connected, cursorKey.device?.device_id, conversation._id]);
+  }, [cloudSpec, liveMeta?.agentType, liveMeta?.model, liveMeta?.effort, cloudStatus.connected, cloudStatus.device?.device_id, conversation._id]);
   const convex = useConvex();
   const convCommand = useInboxStore((s) => s.convCommand);
 
@@ -656,6 +663,7 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
       open={machinesOpen}
       onOpen={() => setMachinesOpen(true)}
       onPick={(d) => { handleMachinePick(d); setMachinesOpen(false); }}
+      onShare={() => useInboxStore.getState().openSettingsModal("devices")}
     />
   );
 
@@ -816,7 +824,7 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
         <NewSessionBucketPill conversation={conversation} />
 
         <SessionModeToggles
-          cursorCloud={cursorCloud}
+          cloudAgent={cloudAgent}
           cloudHost={cloudHost}
           cloudMode={cloudMode}
           cloudToggleEnabled={cloudToggleAvailable(machineChips, cloudMode)}

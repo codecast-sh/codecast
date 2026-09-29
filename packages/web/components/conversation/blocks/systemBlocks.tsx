@@ -20,15 +20,15 @@ import { EntityIdPill, TextWithMentions } from "../../EntityIdPill";
 import { EstablishedRefsProvider } from "../../../hooks/entityMentionScope";
 import { FormattedSummary } from "../../FormattedSummary";
 import { entityRemarkPlugins } from "../../../lib/remarkEntityIds";
-import { MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS } from "../../messageMarkdown";
+import { ASSISTANT_MD_REMARK, MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS } from "../../messageMarkdown";
 import { useJumpToSendingMessage } from "../../../hooks/useJumpToSendingMessage";
 import { isTeammateFramingOnly, parseSpawnedTaskPrompt, chatWakeAction, type ChatWakeEntry, type ChatWakePrompt, type HuddleSummaryTag } from "../../sessionMessage";
-import { parseScheduledTask, sessionEscalationCaption, type SessionEscalationMessage, type WaitingSession } from "@codecast/shared/contracts";
+import { CLOUD_AGENT_ACTION_SUBTYPE, parseScheduledTask, sessionEscalationCaption, type SessionEscalationMessage, type WaitingSession } from "@codecast/shared/contracts";
 import { RoleFace } from "../../org/RoleFace";
 import { CallTranscriptDisclosure } from "../../calls/TranscriptTurns";
 import { useInboxStore, useTrackedStore } from "../../../store/inboxStore";
 import { DecisionCompactCard } from "../../decisions/DecisionCompactCard";
-import { MessageSquare, Users, Hash, AtSign, ChevronDown, ChevronRight, Clock, CornerDownRight, Workflow, Zap, Radar, Bot, PhoneCall, ArrowUpRight, RefreshCw } from "lucide-react";
+import { MessageSquare, Users, Hash, AtSign, ChevronDown, ChevronRight, Clock, CornerDownRight, Workflow, Zap, Radar, Bot, PhoneCall, ArrowUpRight, RefreshCw, Cloud } from "lucide-react";
 import { sessionMessageQueueLabel } from "../../../lib/pendingBanner";
 import { PlanBlock } from "./planBlock";
 import { UserIcon } from "./shared";
@@ -620,17 +620,63 @@ function FoldToggle({ label, open, onToggle }: { label: string; open: boolean; o
   );
 }
 
+/** Why a session waits and for how long, in words: "is blocked for 9m". */
+function waitingWords(w: WaitingSession, firedAt: number): string {
+  const why = w.why === "blocked" ? "is blocked" : `waits on ${w.why.replace(/_/g, " ")}`;
+  return w.since > 0 && firedAt > w.since ? `${why} for ${fmtDuration(firedAt - w.since)}` : why;
+}
+
 /** The session a trigger fired for (org-staffing.md S28): which one waits,
  *  why, since when, and the first line of what it pinned. */
 function WaitingSessionLine({ waiting: w, firedAt }: { waiting: WaitingSession; firedAt: number }) {
-  const why = w.why === "blocked" ? "is blocked" : `waits on ${w.why.replace(/_/g, " ")}`;
   return (
     <div className="mx-3 mb-1.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[12px]" data-waiting-session={w.short_id}>
       <EntityIdPill shortId={w.short_id} compact />
       {w.role && <span className="text-sol-text-dim">@{w.role}</span>}
-      <span className="text-sol-text-muted">{why}</span>
-      {w.since > 0 && firedAt > w.since && <span className="text-sol-text-dim" title={formatFullTimestamp(w.since)}>for {fmtDuration(firedAt - w.since)}</span>}
+      <span className="text-sol-text-muted" title={w.since ? formatFullTimestamp(w.since) : undefined}>{waitingWords(w, firedAt)}</span>
       {w.state && <span className="basis-full truncate text-sol-text" title={w.state}>{w.state}</span>}
+    </div>
+  );
+}
+
+/** A role's trigger run (org-staffing.md S25, S28): one line at rest (the
+ *  trigger, and the session that woke it when one did), opening inline to the
+ *  role card the run reminded the agent of, the waiting session's state and
+ *  the trigger's prompt. The trigger pill opens the trigger, where the person
+ *  edits, pauses or cancels it. */
+function RoleWakeBlock({ frame, timestamp }: { frame: ScheduledTaskFrame; timestamp: number }) {
+  const [open, setOpen] = useState(false);
+  const role = frame.role!;
+  const w = frame.waiting;
+  const stop = (e: React.MouseEvent) => e.stopPropagation();
+  return (
+    <div className="mb-3 rounded border-l-2 border-sol-violet/60 bg-sol-violet/5" data-role-wake={role.handle} data-open={open || undefined}>
+      <div role="button" tabIndex={0} onClick={() => setOpen(!open)} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpen(!open); } }} className="flex min-w-0 cursor-pointer items-center gap-2 px-3 py-1.5" title={open ? "Hide what woke it" : "Show what woke it"}>
+        <Zap className="w-3.5 h-3.5 shrink-0 text-sol-violet/70" />
+        <span className="min-w-0 shrink truncate" onClick={stop}>{frame.trigger ? <EntityIdPill shortId={frame.trigger} /> : <span className="text-xs text-sol-text-muted">{frame.title}</span>}</span>
+        {w && (
+          <span className="flex min-w-0 shrink items-center gap-1.5 text-[12px]" data-waiting-session={w.short_id}>
+            <span className="shrink-0" onClick={stop}><EntityIdPill shortId={w.short_id} compact /></span>
+            <span className="truncate text-sol-text-muted">{waitingWords(w, timestamp)}</span>
+          </span>
+        )}
+        <span className="ml-auto shrink-0 text-[10px] text-sol-text-dim" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+        {open ? <ChevronDown className="w-3 h-3 shrink-0 text-sol-text-dim" /> : <ChevronRight className="w-3 h-3 shrink-0 text-sol-text-dim" />}
+      </div>
+      {open && (
+        <div className="space-y-2 px-3 pb-2.5 pt-0.5 text-[12px]" data-role-wake-detail>
+          {w?.state && <p className="text-sol-text">{w.state}</p>}
+          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-sol-text-muted" data-role-card>
+            <dt className="text-sol-text-dim">Role</dt><dd>{role.name} <span className="text-sol-text-dim">@{role.handle}</span>{role.reports_to && <span className="text-sol-text-dim">, reports to {role.reports_to}</span>}</dd>
+            <dt className="text-sol-text-dim">Looks after</dt><dd>{role.scope.length ? role.scope.join(", ") : "no area of its own"}</dd>
+            {role.charter && <><dt className="text-sol-text-dim">Charter</dt><dd>{role.charter}</dd></>}
+            {role.goals.length > 0 && <><dt className="text-sol-text-dim">Goals</dt><dd>{role.goals.join("; ")}</dd></>}
+          </dl>
+          <div className="border-t border-sol-border/30 pt-1.5 text-sol-text-dim prose prose-invert prose-sm max-w-none">
+            <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MD_COMPONENTS_NO_IMG}>{frame.body}</ReactMarkdown>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -641,12 +687,13 @@ export function ScheduledTaskBlock({ content: rawContent, timestamp }: { content
   const content = rawContent.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
   const spawned = parseSpawnedTaskPrompt(content);
   const frame = spawned ? null : parseScheduledTask(content);
+  if (frame?.role) return <RoleWakeBlock frame={frame} timestamp={timestamp} />;
   const title = spawned?.title || frame?.title || "Trigger Run";
   const prompt = spawned?.prompt ?? (frame?.body || cleanStickyContent(content));
   const prevFailed = !!spawned?.previousRun && /^Failed/i.test(spawned.previousRun.summary);
 
   return (
-    <div className="mb-2 mx-1 rounded border-l-2 border-sol-violet/60 bg-sol-violet/5">
+    <div className="mb-3 rounded border-l-2 border-sol-violet/60 bg-sol-violet/5">
       <div className="flex items-center gap-2 px-3 pt-2 pb-1">
         <Zap className="w-3.5 h-3.5 text-sol-violet/70 shrink-0" />
         <span className="text-[11px] font-medium tracking-wide uppercase text-sol-violet/70 shrink-0">{spawned ? "Trigger run" : "Trigger"}</span>
@@ -1127,6 +1174,19 @@ function SystemBlockImpl({ content, subtype, timestamp, messageUuid, messageId, 
           <span className="text-xs text-amber-500 font-medium">Context compacted</span>
         </div>
         <div className="flex-1 h-px bg-gradient-to-r from-transparent via-amber-500/40 to-transparent" />
+      </div>
+    );
+  }
+
+  // A cloud agent action's result (Create PR, Apply, Archive): codecast says it, not the agent.
+  if (subtype === CLOUD_AGENT_ACTION_SUBTYPE && content) {
+    return (
+      <div className="mb-3 flex items-start gap-2 px-3 py-2 bg-sol-violet/5 border-l-2 border-sol-violet/40 text-xs text-sol-text-muted">
+        <Cloud className="w-3.5 h-3.5 mt-px text-sol-violet/70 shrink-0" />
+        <div className="min-w-0 flex-1 break-words [&_p]:m-0">
+          <ReactMarkdown remarkPlugins={ASSISTANT_MD_REMARK} rehypePlugins={MESSAGE_MD_REHYPE} components={MESSAGE_MD_COMPONENTS}>{content}</ReactMarkdown>
+        </div>
+        {timestamp && <span className="text-[10px] text-sol-text-dim shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>}
       </div>
     );
   }
