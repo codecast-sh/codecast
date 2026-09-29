@@ -28,7 +28,7 @@
  * same act whether the machine happens to be awake.
  */
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
@@ -415,14 +415,18 @@ export async function ensureUp(
   // Evict a wedged master first. A master whose link died silently (mobile
   // network flap) still owns the socket, and every client that attaches to
   // it hangs — measured: a fresh ssh took 2.6s while the multiplexed probe
-  // timed out at 60s against the same host. `-O exit` is a no-op when the
-  // master is healthy or absent.
-  try {
-    execFileSync("ssh", ["-o", `ControlPath=${socket}`, "-O", "exit", `${host.user}@${address}`], {
-      timeout: 5_000, stdio: "ignore",
-    });
-  } catch { /* no master to evict */ }
-  const sshDeadline = Date.now() + (host.platform === "darwin" ? 25 * 60_000 : 150_000);
+  // timed out at 60s against the same host. Only a master that fails a quick
+  // round trip is evicted: `-O exit` ends a HEALTHY master too, and with it
+  // every transfer riding it (the daemon's mirror push died with a silent
+  // exit 255 each time a spawn woke the same host, 2026-09-29).
+  const masterRunning = spawnSync("ssh", ["-o", `ControlPath=${socket}`, "-O", "check", `${host.user}@${address}`], { timeout: 5_000, stdio: "ignore" }).status === 0;
+  if (masterRunning) {
+    const answered = spawnSync("ssh", ["-o", `ControlPath=${socket}`, "-o", "ControlMaster=no", "-o", "BatchMode=yes", `${host.user}@${address}`, "true"], { timeout: 10_000, stdio: "ignore" }).status === 0;
+    if (!answered) spawnSync("ssh", ["-o", `ControlPath=${socket}`, "-O", "exit", `${host.user}@${address}`], { timeout: 5_000, stdio: "ignore" });
+  }
+  // A host's first boot from a machine image streams its disk in from the
+  // snapshot: cloud-init finished at 140s on 2026-09-29, past the old 150s.
+  const sshDeadline = Date.now() + (host.platform === "darwin" ? 25 * 60_000 : 6 * 60_000);
   for (;;) {
     try {
       execFileSync(

@@ -3,6 +3,7 @@ import { RepositoryLinks } from "../../../components/repo/RepositoryLinks";
 import { ShortId } from "../../../components/ShortId";
 import { taskRepository } from "../../../lib/repoNavigation";
 import { useState, useCallback, useMemo, useRef, type ReactNode } from "react";
+import { CopyLinkButton } from "../../../components/CopyLinkButton";
 import { copyToClipboard, canonicalUrl, formatDateFull, formatRelative } from "../../../lib/utils";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useTabActive } from "../../../hooks/usePagePresence";
@@ -784,15 +785,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
               {isInline && onOpen && (
                 <button onClick={onOpen} className="text-xs px-2 py-1 rounded-md text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors" title="Open full page">Open</button>
               )}
-              <button
-                onClick={() => { copyToClipboard(canonicalUrl()).then(() => toast.success("Link copied")).catch(() => toast.error("Failed to copy")); }}
-                className="p-1 rounded-md text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors"
-                title="Copy link"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                </svg>
-              </button>
+              <CopyLinkButton path={canonicalUrl} />
               {chatOn && (
                 <button
                   onClick={() => openForwardToChat({ url: canonicalUrl(), label: "task" })}

@@ -84,8 +84,16 @@ export function authRemedy(agentType?: string): { command: string; where: string
   if (agentType === "opencode") {
     return { command: "opencode auth login", where: "in a terminal", inPane: false };
   }
+  if (agentType === "cursor") {
+    return { command: "cursor-agent login", where: "in a terminal on that machine", inPane: false };
+  }
   // pi, claude_code, codex, and anything else re-auth with /login in the session.
   return { command: "/login", where: "in its terminal", inPane: true };
+}
+
+/** A Cursor Cloud turn stopped for want of a usable Cursor API key (the daemon's setup card). */
+export function isCursorCloudKeyError(agentType: string | undefined, message: string): boolean {
+  return agentType === "cursor" && /Cursor API key|Cursor rejected the API key/i.test(message);
 }
 
 export function parseApiErrorContent(content?: string | null): ParsedApiError | null {
@@ -270,10 +278,11 @@ function extractPlanContent(text: string): string | null {
 const STICKY_NOISE_PREFIXES = ["[Request interrupted", "<task-notification>", "Your task is to create a detailed summary", "Full transcript available at:", "[Codecast import]"];
 
 // The user rows fold mode keeps: what a person said to the agent, a chat
-// line that woke it, and a role's wake frame (one line at rest: the role woke
-// and why). Everything else on the user rail was sent by a machine (a poll
+// line that woke it, and a trigger run (a role's routine or a session under it
+// needing input: what woke the agent and why, so its reply never reads as
+// unprompted). Everything else on the user rail was sent by a machine (a poll
 // answer, an interrupt, a notice, a session's report).
-export const FOLD_KEPT_USER_KINDS = new Set<UserMessageKind["kind"]>(['normal', 'direct_user', 'decision_answer', 'plan', 'chat_wake', 'session_handoff']);
+export const FOLD_KEPT_USER_KINDS = new Set<UserMessageKind["kind"]>(['normal', 'direct_user', 'decision_answer', 'plan', 'chat_wake', 'session_handoff', 'scheduled_task']);
 
 // Dedup key for matching a still-pending message against its eventual JSONL echo.
 // The daemon collapses newlines to spaces on inject (injectViaTmux) and a few control

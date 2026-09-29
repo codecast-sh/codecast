@@ -9,8 +9,8 @@
  *
  * The bridge is its OWN connection (ControlMaster=no, ControlPath=none): the
  * shared control socket that sshBase() multiplexes transfers through is
- * evicted by ensureUp's `-O exit` on every prepare, so a bridge riding it
- * would die with every wake; and a dedicated connection is exactly one TCP
+ * evicted whenever ensureUp finds it wedged, so a bridge riding it would die
+ * with it; and a dedicated connection is exactly one TCP
  * session, which is what the host's idle watchdog subtracts per live bridge.
  *
  * The remote side checks the forwarded socket itself — ExitOnForwardFailure

@@ -121,7 +121,8 @@ describe("orgRootSeat", () => {
     expect(again.rows.filter((r) => r.action === "seat")).toEqual([]);
     expect(again.rows.map((r) => r.action)).toEqual(["seated", "seated", "no_session"]);
     expect(tables.org_roles).toHaveLength(2);
-    expect(tables.agent_tasks).toHaveLength(2);
+    // Each seat carries its routine and its needs-input trigger (S25, S28), once.
+    expect(tables.agent_tasks).toHaveLength(4);
   });
 
   test("a workspace whose root role already stands in another session is left for a person", async () => {

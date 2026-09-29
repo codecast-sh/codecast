@@ -664,6 +664,22 @@ describe("listWorkspaces", () => {
 });
 
 describe("acquireWorkspace — with browser enabled", () => {
+  test("a Chrome that will not start leaves a ready workspace without a browser", async () => {
+    fs.mkdirSync(path.join(repoRoot, ".codecast"), { recursive: true });
+    fs.writeFileSync(path.join(repoRoot, ".codecast/workspace.toml"), "[browser]\nenabled = true\n\n[browser.cdp_port]\nbase = 39800\nrange = 100\n");
+    const broken = path.join(repoRoot, "not-chrome");
+    fs.writeFileSync(broken, "not a program", { mode: 0o644 });
+    const saved = process.env.CODECAST_CHROMIUM;
+    process.env.CODECAST_CHROMIUM = broken;
+    try {
+      const r = await acquireWorkspace(repoRoot, "feat-no-browser");
+      expect(r.workspace.state).toBe("ready");
+      expect(r.workspace.chrome).toBeUndefined();
+    } finally {
+      if (saved === undefined) delete process.env.CODECAST_CHROMIUM; else process.env.CODECAST_CHROMIUM = saved;
+    }
+  });
+
   test("launches Chrome and exposes CDP port; releaseWorkspace stops it", async () => {
     fs.mkdirSync(path.join(repoRoot, ".codecast"), { recursive: true });
     fs.writeFileSync(

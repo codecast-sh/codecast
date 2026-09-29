@@ -571,7 +571,7 @@ function SetList({
               <span className="flex-1 min-w-0">
                 <span className="flex items-center gap-2 min-w-0">
                   <span className="truncate font-medium text-sol-text">{taskDisplayTitle(t)}</span>
-                  <span className="flex-shrink-0 text-[11px] text-sol-text-dim">
+                  <span className="min-w-0 max-w-[40%] truncate text-[11px] text-sol-text-dim">
                     {isLoop ? "self-paced loop" : describeTaskCadence(t)}
                   </span>
                   {isLoop && <Tag>loop</Tag>}

@@ -28,9 +28,7 @@ block by "everything to end of file" destroys this paragraph.
 
 ## Team chat
 
-`cast chat` is the team's shared channel space — where the humans talk, and where you can post
-progress they will actually see. A channel like #releases that sessions report into is one
-command; reading what the team said this morning is another.
+`cast chat` is the team's shared channels: where the humans talk, and where your posts get seen.
 
 ```bash
 cast chat channels                          # the team's channels, with unread counts
@@ -43,29 +41,10 @@ cast chat search "<query>"                  # full-text search across the team's
 cast chat react <message_id> <emoji>        # toggle a reaction
 ```
 
-Mentions use @handles (github username, or a bot's name) — `@samvit` notifies Samvit.
-Mentioning the workspace's agent (`@anchor …`, or its role handle) starts an agent turn that answers IN the thread —
-but only for lines a HUMAN typed: your sends are stamped as agent-written and never wake it, so
-post freely. Two mentions DO wake from your lines, because they ask for that party's action:
-`@<role handle>` wakes an org role's standing session and `@<session short id>` (`@jx7abcd`)
-delivers the line into that session; each replies in the thread, and a session's reply comes
-back to you as a session message. Mention a role or a session only when you need it to act.
+Mentions use @handles (GitHub username or a bot's name): `@samvit` notifies Samvit. Mentioning the workspace's agent (`@anchor …` or its role handle) starts a turn that answers in the thread, but only from lines a HUMAN typed; your sends are stamped agent-written and never wake it, so post freely. Two mentions do wake from your lines, because they ask for action: `@<role handle>` wakes that org role's standing session, and `@<session short id>` (`@jx7abcd`) delivers the line into that session. Each replies in the thread, and a session's reply also reaches you as a session message. Mention them only when you need them to act.
 
-An agent's lines are capped: 30 per channel per day, 5 new threads per channel per day, and
-they never buzz a phone. Post facts other roles need (a decision, a release, a blocker), one
-line per event, in a thread rather than a new root, and never an acknowledgment.
+An agent is capped at 30 lines and 5 new threads per channel per day, and never buzzes a phone. Post facts other roles need (a decision, a release, a blocker): one line per event, in a thread rather than a new root, never an acknowledgment. Use chat when the TEAM should see it and `cast send` for one session; routine narration trains people to mute the channel.
 
-If you ARE the workspace's agent and a wake asks you to answer a thread, reply with
-`cast chat reply <placeholder_id> "<your reply>"` — one concise answer, like a colleague in
-chat, not a report. If you cannot answer, say why with `--status error` instead of staying
-silent. Once named in a thread you follow it: every later reply wakes you silently, and most
-of those lines are people talking to each other — `cast chat reply <id> --pass` unless the
-line is clearly for you. You can also start conversations yourself: `cast anchor say --chat
-<channel|#name> [--thread <root>] "<text>"` posts as the agent, `cast anchor say --dm
-<handle>[,<handle>] "<text>"` messages people directly. Speak when it adds something, once.
-
-Post to chat when the TEAM should see it (a release landed, a deploy finished, a decision is
-needed); use `cast send` for a message to one specific session. Don't narrate routine work into
-a channel — a channel full of agent noise trains people to mute it.
+If you ARE the workspace's agent and a wake asks you to answer a thread, reply once with `cast chat reply <placeholder_id> "<your reply>"`, concise like a colleague, not a report. If you cannot answer, say why with `--status error` rather than staying silent. Once named in a thread you follow it and every later reply wakes you silently; most are people talking to each other, so `cast chat reply <id> --pass` unless the line is clearly for you. To start a conversation: `cast anchor say --chat <channel|#name> [--thread <root>] "<text>"` posts as the agent, and `cast anchor say --dm <handle>[,<handle>] "<text>"` messages people directly. Speak once, when it adds something.
 <!-- cast @VERSION@ -->
 <!-- /codecast-chat -->

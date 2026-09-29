@@ -56,7 +56,7 @@ export function InitiativePageInner({ id }: { id: string }) {
   useSyncProjects(); useSyncTasks(); useSyncPlans();
   const { initiative, all } = useInitiative(id);
   useSyncInitiativeUpdates(initiative?._id ?? null);
-  const { layout, phone } = usePanelLayout();
+  const { layout, phone, measureRef } = usePanelLayout();
   const now = useCoarseNow(30_000);
   const tasks = useBoardTasks();
   const counted = useTasksBackfilled();
@@ -107,7 +107,7 @@ export function InitiativePageInner({ id }: { id: string }) {
   );
 
   return (
-    <div className="h-full flex flex-col overflow-hidden" style={{ background: "var(--sol-bg)", color: "var(--sol-text)" }} data-initiative-page={initiative.short_id || initiative._id} data-scope-layout={layout} data-initiative-owner-kind={initiative.owner?.kind ?? "none"}>
+    <div ref={measureRef} className="h-full flex flex-col overflow-hidden" style={{ background: "var(--sol-bg)", color: "var(--sol-text)" }} data-initiative-page={initiative.short_id || initiative._id} data-scope-layout={layout} data-initiative-owner-kind={initiative.owner?.kind ?? "none"}>
       {/* the stripe says how it is going, in the colour of the owner's last word */}
       <div className="shrink-0 h-[3px] w-full" style={{ background: `linear-gradient(90deg, ${initiative.health === "none" ? INITIATIVE_ACCENT : tone}, color-mix(in srgb, ${initiative.health === "none" ? INITIATIVE_ACCENT : tone} 30%, transparent) 70%, transparent)` }} aria-hidden />
 

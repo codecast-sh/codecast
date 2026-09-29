@@ -10,6 +10,8 @@
 //   default  live: every missing item is posted now, as the anchor, the way a
 //            trigger run posts what it shipped
 //   --check  exit 0 when something is missing (a trigger precheck), 1 when not
+//   --say "<line>"  post one line now, as the anchor (what a publishing trigger
+//            runs after it shipped something the registries do not list)
 //
 // Data: app/(marketing)/changelog/changelogData.ts and app/(marketing)/blog/posts.ts.
 import { RELEASES } from "../packages/web/app/(marketing)/changelog/changelogData";
@@ -72,12 +74,27 @@ async function existingKeys(): Promise<Set<string>> {
   return keys;
 }
 
+// A live line: the team's agent speaks (cast anchor say), and when the team
+// has no seated agent (every Codecast anchor was decommissioned in the org
+// rework of September 2026), the same internal write the backdated seeds use
+// posts as the Anchor's bot user, dated now. Either way the room shows one
+// author for every announcement.
 async function say(content: string): Promise<void> {
   const proc = Bun.spawn(["cast", "anchor", "say", "--team", "Codecast", "--chat", ANNOUNCEMENTS, content], { stdout: "pipe", stderr: "pipe" });
   const err = await new Response(proc.stderr).text();
-  if ((await proc.exited) !== 0) throw new Error(`cast anchor say: ${err.trim()}`);
+  if ((await proc.exited) === 0) return;
+  if (!/No workspace agent/i.test(err)) throw new Error(`cast anchor say: ${err.trim()}`);
+  await convexRun("chat:seedCommunityPost", { channel_id: ANNOUNCEMENTS, anchor_id: ANCHOR, content, created_at: Date.now() });
 }
 
+const sayAt = process.argv.indexOf("--say");
+if (sayAt >= 0) {
+  const line = process.argv[sayAt + 1];
+  if (!line?.trim()) throw new Error("--say needs a line");
+  await say(line);
+  console.log("posted");
+  process.exit(0);
+}
 const mode = process.argv.includes("--seed") ? "seed" : process.argv.includes("--check") ? "check" : "live";
 const have = await existingKeys();
 const missing = items().filter((i) => !have.has(i.key));

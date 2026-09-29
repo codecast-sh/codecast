@@ -1,8 +1,11 @@
 import type { ChatSlackLinkRow } from "../store/chatSlice";
 import "../components/chat/chat.css";
 
-export function slackDeepLink(workspaceId: string, channelId: string, ts?: string): string {
-  return `slack://channel?team=${encodeURIComponent(workspaceId)}&id=${encodeURIComponent(channelId)}${ts ? `&message=${encodeURIComponent(ts)}` : ""}`;
+/** An https link, not slack://: the desktop app only hands http(s) to the OS,
+ *  and a browser without the Slack app does nothing with the custom scheme.
+ *  Slack's redirect opens the app when installed and the web client otherwise. */
+export function slackChannelUrl(workspaceId: string, channelId: string): string {
+  return `https://slack.com/app_redirect?team=${encodeURIComponent(workspaceId)}&channel=${encodeURIComponent(channelId)}`;
 }
 
 /** The mirror row for one channel, out of the store's whole link map. At most

@@ -1671,6 +1671,26 @@ export const enqueueProviderKeyCommand = mutation({
 });
 
 /**
+ * How a provider key command went, for the page that sent it: still waiting,
+ * or the daemon's verdict (a set carries the account the provider named, a
+ * refusal carries the provider's reason). Owner only.
+ */
+export const providerKeyCommandOutcome = query({
+  args: { command_id: v.id("daemon_commands") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    const row = await ctx.db.get(args.command_id);
+    if (!row || row.user_id !== userId || row.command !== "set_provider_key") return null;
+    if (!row.executed_at) return { state: "pending" as const };
+    if (row.error) return { state: "failed" as const, error: row.error };
+    let account: string | undefined;
+    try { account = JSON.parse(row.result ?? "{}").account; } catch {}
+    return { state: "done" as const, ...(account ? { account } : {}) };
+  },
+});
+
+/**
  * Claim a conversation for this device on a successful session start: stamp
  * owner_device_id and clear any stale session_error in one write. This is the
  * first real enforcement of the single-owner invariant — the device that can

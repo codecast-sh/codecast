@@ -5,6 +5,7 @@ import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { isConversationTeamVisible, teamVisibleConvTeam } from "./privacy";
 import { canAccessConversation } from "./lib/access";
+import { pullRequestsLinkedToConversation } from "./lib/prSessions";
 
 type OutcomeType = "shipped" | "progress" | "blocked" | "unknown";
 type InsightGenStatus = {
@@ -156,13 +157,8 @@ export const getConversationContextForInsight = internalQuery({
 
     let linkedPrs: Array<{ number: number; title: string; state: "open" | "closed" | "merged"; repository: string; updated_at: number }> = [];
     if (conversation.team_id) {
-      const teamPrs = await ctx.db
-        .query("pull_requests")
-        .withIndex("by_team_id", (q) => q.eq("team_id", conversation.team_id!))
-        .collect();
-
-      linkedPrs = teamPrs
-        .filter((pr) => pr.linked_session_ids.some((id) => id.toString() === args.conversation_id.toString()))
+      linkedPrs = (await pullRequestsLinkedToConversation(ctx, args.conversation_id))
+        .filter((pr) => String(pr.team_id) === String(conversation.team_id))
         .sort((a, b) => b.updated_at - a.updated_at)
         .slice(0, 10)
         .map((pr) => ({

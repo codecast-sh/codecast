@@ -234,6 +234,7 @@ export default defineSchema({
     // Claude Code cloud sessions (claude.ai/code) sync through the user's
     // daemons, read with their Claude login. Unset = on.
     claude_cloud_sync: v.optional(v.boolean()),
+    cursor_cloud_sync: v.optional(v.boolean()),
     team_share_paths: v.optional(v.array(v.string())),
     muted_members: v.optional(v.array(v.id("users"))),
     team_conversations_last_seen: v.optional(v.number()),
@@ -3144,6 +3145,15 @@ export default defineSchema({
     .index("by_repository_number", ["repository", "number"])
     .index("by_shepherd_conversation", ["shepherd_conversation_id"])
     .index("by_updated_at", ["updated_at"]),
+
+  // linked_session_ids as an index (lib/prSessions.ts): written only by
+  // syncPullRequestSessions, read to find the pull requests a session links.
+  pull_request_sessions: defineTable({
+    pull_request_id: v.id("pull_requests"),
+    conversation_id: v.id("conversations"),
+  })
+    .index("by_pull_request", ["pull_request_id"])
+    .index("by_conversation", ["conversation_id"]),
 
   reviews: defineTable({
     pull_request_id: v.id("pull_requests"),

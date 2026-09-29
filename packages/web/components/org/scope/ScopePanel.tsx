@@ -96,14 +96,15 @@ export function ScopePanel(p: ScopePanelProps) {
                 type="button"
                 onClick={() => p.onTab(t.key)}
                 data-scope-tab={t.key}
-                className={cn("relative shrink-0 inline-flex items-center gap-1.5 h-9 px-2.5 text-[12px] transition-colors rounded-t-md", active ? "font-semibold" : "hover:bg-sol-bg-highlight/60")}
+                className={cn("relative shrink-0 inline-flex items-center gap-1.5 h-8 text-[12px] transition-colors rounded-t-md", active ? "px-2 font-semibold" : "px-1.5 hover:bg-sol-bg-highlight/60")}
                 style={{ color: active ? "var(--sol-text)" : "var(--sol-text-muted)" }}
                 aria-current={active ? "page" : undefined}
                 title={t.label}
+                aria-label={t.label}
               >
                 <Icon className="w-3.5 h-3.5" style={{ color: active ? "var(--sol-violet)" : undefined }} />
-                {t.label}
-                {active && <span className="absolute left-2 right-2 -bottom-px h-[2px] rounded-full" style={{ background: "var(--sol-violet)" }} />}
+                {active && t.label}
+                {active && <span className="absolute left-1.5 right-1.5 -bottom-px h-[2px] rounded-full" style={{ background: "var(--sol-violet)" }} />}
               </button>
             );
           })}

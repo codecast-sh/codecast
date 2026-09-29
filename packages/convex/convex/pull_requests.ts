@@ -6,6 +6,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { requireUser } from "./lib/auth";
 import { normalizeRepository } from "./lib/gitRefs";
 import { patchPullRequest } from "./prShepherd";
+import { pullRequestsLinkedToConversation, syncPullRequestSessions } from "./lib/prSessions";
 import {
   canAccessConversation,
   canAccessPullRequest,
@@ -99,6 +100,7 @@ export const create = internalMutation({
       created_at: Date.now(),
       updated_at: Date.now(),
     });
+    await syncPullRequestSessions(ctx, (await ctx.db.get(prId))!);
     return prId;
   },
 });
@@ -221,6 +223,7 @@ export const linkPRToSession = internalMutation({
     await ctx.db.patch(args.pr_id, {
       linked_session_ids: Array.from(sessionIds),
     });
+    await syncPullRequestSessions(ctx, (await ctx.db.get(args.pr_id))!);
 
     return Array.from(sessionIds);
   },
@@ -432,6 +435,23 @@ export const updatePRState = internalMutation({
   },
 });
 
+/** Fills pull_request_sessions from every row's linked_session_ids, a page at a time. */
+export const backfillPullRequestSessions = internalMutation({
+  args: { cursor: v.optional(v.union(v.string(), v.null())) },
+  handler: async (ctx, args) => {
+    const page = await ctx.db
+      .query("pull_requests")
+      .paginate({ cursor: args.cursor ?? null, numItems: 25 });
+    for (const pr of page.page) await syncPullRequestSessions(ctx, pr);
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.pull_requests.backfillPullRequestSessions, {
+        cursor: page.continueCursor,
+      });
+    }
+    return { synced: page.page.length, done: page.isDone };
+  },
+});
+
 export const getPRsForConversation = query({
   args: {
     conversation_id: v.id("conversations"),
@@ -442,37 +462,9 @@ export const getPRsForConversation = query({
     if (!conversation) return [];
     if (!(await canAccessConversation(ctx, userId, conversation))) return [];
 
-    let prs;
-    if (conversation.team_id) {
-      prs = await ctx.db
-        .query("pull_requests")
-        .withIndex("by_team_id", (q) => q.eq("team_id", conversation.team_id!))
-        .collect();
-    } else {
-      // Teamless conversation: a PR is only accessible when the caller belongs
-      // to the PR's team (canAccessPullRequest), so scan just the caller's own
-      // teams via by_team_id instead of the whole pull_requests table.
-      const memberships = await ctx.db
-        .query("team_memberships")
-        .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
-        .collect();
-      prs = [];
-      for (const m of memberships) {
-        const teamPrs = await ctx.db
-          .query("pull_requests")
-          .withIndex("by_team_id", (q) => q.eq("team_id", m.team_id))
-          .collect();
-        prs.push(...teamPrs);
-      }
-    }
     const visible = [];
-    for (const pr of prs) {
-      if (
-        pr.linked_session_ids.includes(args.conversation_id)
-        && (await canAccessPullRequest(ctx, userId, pr))
-      ) {
-        visible.push(pr);
-      }
+    for (const pr of await pullRequestsLinkedToConversation(ctx, args.conversation_id)) {
+      if (await canAccessPullRequest(ctx, userId, pr)) visible.push(pr);
     }
     return visible;
   },

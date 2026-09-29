@@ -295,7 +295,9 @@ async function verifyScopePage() {
   // ── Retire from the header lands on Settings, armed, with the panel open ──
   await mount("or-1");
   await click(q("[data-scope-panel-close]"));
-  await click(qa("button").find((b) => b.textContent?.trim() === "Retire")!);
+  // Retire is a rare control: it sits behind the header's seat menu.
+  await act(async () => { q("[data-scope-actions]")!.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+  await click(q('[data-scope-action="retire"]'));
   assert.equal(calls.pop(), "replace:/org/or-1?tab=settings");
   env.qs = "tab=settings";
   await rerender("or-1");

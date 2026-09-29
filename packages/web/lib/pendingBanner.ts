@@ -115,6 +115,12 @@ export function inFlightPending<T extends { status: string }>(pending: T | null 
   return pending;
 }
 
+/** Why the daemon is holding this message back, when it said (retryMessage holdReason): a key to add, a dialog to answer. */
+export function pendingMessageHoldReason(messageId: string, pending?: { message_id: string; client_id?: string; status: string; hold_reason?: string } | null): string | undefined {
+  if (!pending || pending.status !== "pending" || !pending.hold_reason) return undefined;
+  return messageId === `serverpending_${pending.message_id}` || messageId === pending.client_id ? pending.hold_reason : undefined;
+}
+
 export function pendingMessageReachedSession(messageId: string, pending?: { message_id: string; client_id?: string; status: string } | null): boolean {
   return !!pending && (pending.status === "injected" || pending.status === "delivered")
     && (messageId === `serverpending_${pending.message_id}` || messageId === pending.client_id);
