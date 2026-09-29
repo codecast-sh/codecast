@@ -288,3 +288,18 @@ export function generateTitleFromMessage(content: string): string {
 
   return result.slice(0, 50) + "...";
 }
+
+/** Whether a cursor JSONL transcript's last turn has ended: `turn_ended`
+ *  closes a turn, and any role record after it opens the next. */
+export function classifyCursorTranscriptTail(content: string): TranscriptTurnState {
+  const lines = content.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    let d: { type?: string; role?: string };
+    try { d = JSON.parse(line); } catch { continue; }
+    if (d.type === "turn_ended") return "idle";
+    if (d.role === "user" || d.role === "assistant") return "active";
+  }
+  return "unknown";
+}

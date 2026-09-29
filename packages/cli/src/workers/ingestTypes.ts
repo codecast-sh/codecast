@@ -9,6 +9,12 @@ export const INGEST_MAX_BYTES = 128 * 1024 * 1024;
 export const INGEST_CLIENTS = ['claude','cursor','cursorDb','codex','gemini','opencode','pi','grok','muse'] as const;
 export type IngestIdentity = { dev: number; ino: number; birthtimeMs: number; mtimeMs: number; ctimeMs: number; size: number };
 export type IngestJob = { client: typeof INGEST_CLIENTS[number]; file: string; sessionId: string; generation: string; identity: IngestIdentity; walIdentity?: IngestIdentity | null; offset: number; model?: string; modelKnown?: boolean; recoverBackup?: boolean };
+/** Whether an ingest reads a byte window from `offset` (append-only logs)
+ *  rather than the whole file. A cursor .jsonl is rewritten whole on every
+ *  save, so it is read whole; its older .txt is append-only. */
+export function isWindowedIngest(job: Pick<IngestJob, 'client' | 'file'>): boolean {
+  return job.client === 'claude' || job.client === 'codex' || job.client === 'cursor' && !job.file.endsWith('.jsonl');
+}
 export type IngestPayload = { action: 'open'; job: IngestJob } | { action: 'next' | 'close'; cursor: string; generation: string; sequence: number };
 export type IngestToken = ['o' | 'a' | 's' | 'e' | 'z'] | ['t', string] | ['v', number | boolean | null];
 export type IngestPage = { cursor: string; generation: string; sequence: number; tokens: IngestToken[]; done: boolean };

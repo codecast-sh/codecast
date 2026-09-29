@@ -11,13 +11,14 @@ const opening = (startsOnItsOwn: boolean) => bootstrapMessage({
 });
 
 describe("a role's opening message", () => {
-  test("says who it is, whom it reports to, what it owns, how it wakes, how it escalates and where it remembers", () => {
+  test("says who it is, whom it reports to, what it owns, how it wakes, how it passes a request up and where it remembers", () => {
     const m = opening(true);
     expect(m.startsWith("You are **Calling**, the standing agent for the **Calling** role (@calling) in Union. You report to Chief of Staff (@chief-of-staff).")).toBe(true);
     expect(m).toContain("You own project Callers & Call Management");
     expect(m).toContain("Start every turn with `cast brief`");
     expect(m).toContain("stay out of the person's inbox");
-    expect(m).toContain("`cast escalate <session>");
+    expect(m).not.toContain("cast escalate");
+    expect(m).toContain("What you cannot answer goes up");
     expect(m).toContain("Your brief is your memory between turns");
     expect(m).toContain("`## Where it stands`");
     expect(m).toContain("`cast spawn`");

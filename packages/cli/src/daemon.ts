@@ -10,7 +10,7 @@ import { INGEST_WINDOW_ROWS } from "./workers/ingestTypes.js";
 import { TranscriptRetryOwner } from "./workers/ingestRetryOwner.js";
 import { ingestRetainedWeight } from "./workers/ingestTransport.js";
 import { computeIngestSyncDelta, provenSyncedPrefix, samePersistedFile, transcriptSignatureWatermark, ingestIdentity, ingestMessageTitle, ingestRecord, ingestSource, readTranscriptIngest, sameIngestFile, sameIngestSnapshot, serializeTranscript, validateTranscriptIngest } from "./workers/ingestClient.js";
-import { checkTranscriptDeadline } from "./workers/ingestDeadline.js";
+import { checkTranscriptDeadline, outsideTranscriptDeadline } from "./workers/ingestDeadline.js";
 import { selfExecInfo } from "./selfExec.js";
 import { cursorPassBoundary, readCodexSessionMetaHeadAsync, readCompleteLines, readCompleteLinesSync, readIngestWindow, sessionMetaHeadCut } from "./transcriptWindow.js";
 export { sessionMetaHeadCut, readCodexSessionMetaHeadAsync } from "./transcriptWindow.js";
@@ -40,7 +40,7 @@ import {
   type HibernationCandidate,
   type HibernationPolicy,
 } from "./hibernation.js";
-import { daemonSupportedOnPlatform, WINDOWS_DAEMON_UNSUPPORTED_MESSAGE } from "./windowsSupport.js";
+import { daemonSupportedOnPlatform, WINDOWS_DAEMON_UNSUPPORTED_MESSAGE, wslDistroName } from "./windowsSupport.js";
 import { RecursiveWatcher } from "./recursiveWatcher.js";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
 import { walkFiles, walkEntryBatches, walkDirsSync, listFilesByMtime, type WalkEntry, type WalkFile, type WalkOptions } from "./fsWalk.js";
@@ -135,7 +135,7 @@ import { bindConvexConnectionState } from "./convexConnectionState.js";
 import { CursorWatcher, type CursorSessionEvent, cursorWatcherDecision, probeCursorAccess, defaultCursorPath } from "./cursorWatcher.js";
 import { buildDisclaimShellPrefix } from "./disclaim.js";
 import { resolveCastInvocation } from "./castInvocation.js";
-import { CursorTranscriptWatcher, type CursorTranscriptEvent } from "./cursorTranscriptWatcher.js";
+import { CursorTranscriptWatcher, isCursorTranscriptPath, type CursorTranscriptEvent } from "./cursorTranscriptWatcher.js";
 import { isAppServerManagedCodexSessionHead } from "./codexWatcher.js";
 import { activeCodexProfileName, autoSaveActiveCodexProfile, getCodexAccountsHeartbeatPayload, migrateLegacyCodexProfileNames, refreshCodexUsageSnapshots, resolveCodexAccount } from "./codexAccounts.js";
 import { redeemCodexResetCredit } from "./codexResetCredit.js";
@@ -347,6 +347,7 @@ import {
   upgradedLegacyResumeTmuxName,
   grokStableRulesFragment,
 } from "./resumeCommand.js";
+import { ClaudeCloudWatcher } from "./claudeCloud.js";
 import { conventionSeed, resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, isResumableCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
 import { blankCodexRecoveryParams, buildLaunchArgs, getConfiguredAgentArgs, getDefaultParamFlags, getPermissionFlags, codexPermissionsFromArgs, launchBinary } from "./launchCommand.js";
 import type { AgentClientId, AgentDefinitionSpec, AgentPaneReadiness, AgentStatus, DeviceSnippetSettings, LivenessVerdict, OpenTaskKind, OpenTaskReport, PaneTerminalModes, StableLaunchPrefs } from "@codecast/shared/contracts";
@@ -474,6 +475,20 @@ function resolveLocalRepo(remotePath: string): string | null {
     log(`Resolved remote CWD ${remotePath} -> ${resolved}`);
   }
   return resolved;
+}
+
+// The local checkout of a GitHub repo, or null: resolveLocalRepo by name,
+// accepted only when the checkout's own config names the same owner/name, so
+// two unrelated repos that share a name never merge.
+function resolveLocalRepoFor(repo: { owner: string; name: string }): string | null {
+  const dir = resolveLocalRepo(`/home/${repo.name}`);
+  if (!dir) return null;
+  try {
+    const gitConfig = fs.readFileSync(path.join(dir, ".git", "config"), "utf-8").toLowerCase();
+    return gitConfig.includes(`${repo.owner}/${repo.name}`.toLowerCase()) ? dir : null;
+  } catch {
+    return null;
+  }
 }
 
 // Resolve the cwd a resume/reconstitute must run in, or null to REFUSE. Wires the
@@ -4581,6 +4596,9 @@ async function sendHeartbeat(): Promise<void> {
         // in Settings → Devices — the daemon can't know whether it's reachable,
         // so nothing builds an attach command out of it unaided.
         device_hostname: deviceHostname,
+        // The WSL distro this daemon runs in, so a Windows viewer can be handed
+        // an attach command that works from PowerShell (wsl.exe -d <distro>).
+        wsl_distro: wslDistroName(),
         is_remote_device: isRemoteDevice(),
         // Time since the last keyboard/mouse event anywhere on this machine
         // (macOS only; omitted elsewhere). Sent as a DURATION so the server can
@@ -7711,7 +7729,7 @@ async function executeRemoteCommand(
         const startFrom: string | undefined = parsed.start_from;
         log(`[CLOUD] placing ${conversationId.slice(0, 12)} on the cloud host (${workspace === "shared" ? "shared checkout" : `isolated worktree from ${startFrom === "origin_main" ? "origin/main" : "this checkout"}`}, async child)`);
         const child = runCastCommand(
-          cloudStartArgs({ conversation_id: conversationId, cloud_device_id: cloudDeviceId, workspace, start_from: startFrom }),
+          cloudStartArgs({ conversation_id: conversationId, cloud_device_id: cloudDeviceId, workspace, start_from: startFrom, leave_out: Array.isArray(parsed.leave_out) ? parsed.leave_out : undefined }),
           { timeoutMs: 25 * 60 * 1000 },
         );
         cloudSpawnInFlight.set(conversationId, child);
@@ -7731,7 +7749,10 @@ async function executeRemoteCommand(
           // Through the park's token: a child whose park was superseded (the
           // row re-parked, re-pointed, or placed by another laptop) must not
           // write its error onto the park that replaced it.
-          syncServiceRef?.reportCloudPlacementFailure(conversationId, parsed.placement_token, error).catch(() => {});
+          // A context over the cap names what would have to stay behind; the
+          // banner asks the human whether to leave it out.
+          const tooLarge = res.stdout.split("\n").map((l) => { try { return JSON.parse(l)?.context_too_large; } catch { return undefined; } }).find(Boolean);
+          syncServiceRef?.reportCloudPlacementFailure(conversationId, parsed.placement_token, error, tooLarge).catch(() => {});
         }
         break;
       }
@@ -8153,7 +8174,7 @@ export { generateTitleFromMessage } from "./workers/ingestMetadata.js";
 // Muse's tail classifier lives in the ingest worker module (the single home —
 // unlike the older pi/grok classifiers, which predate that seam and exist in
 // both places) and is wired into the daemon's classifier map below.
-import { classifyMuseTranscriptTail } from "./workers/ingestMetadata.js";
+import { classifyCursorTranscriptTail, classifyMuseTranscriptTail } from "./workers/ingestMetadata.js";
 
 // Every watcher event, the command poll and the sweeps read the state file
 // first; on a 200 session fleet that is one sync read per transcript append.
@@ -10974,7 +10995,14 @@ async function processCursorSessionPass(
   updateStateCallback();
 }
 
+// Cursor's `.jsonl` transcripts (2026 CLI and IDE) are rewritten whole on
+// every save, so they sync by per-record diff like pi/grok; the older `.txt`
+// ones are append-only and keep the byte-offset pass.
 export async function processCursorTranscriptFile(...args: Parameters<typeof processCursorTranscriptFilePass>): Promise<void> {
+  if (args[0].endsWith(".jsonl")) {
+    const [filePath, sessionId, syncService, userId, teamId, conversationCache, retryQueue, pendingMessages, updateStateCallback] = args;
+    return processTranscriptDeltaSession("cursor", filePath, sessionId, syncService, userId, teamId, conversationCache, retryQueue, pendingMessages, updateStateCallback);
+  }
   return runTranscriptPass(args[1], path.resolve(args[0]), () => processCursorTranscriptFilePass(...args));
 }
 
@@ -11297,38 +11325,7 @@ async function processCodexSessionPass(
       try {
         const projectPath = metadata.cwd;
         const firstMessageTimestamp = messages[0]?.timestamp;
-        let matchedStartedConversation: string | null = null;
-
-        if (startedSessionTmux.size > 0) {
-          const startedCodexEntries = Array.from(startedSessionTmux.entries())
-            .filter(([, entry]) => entry.agentType === "codex");
-          const proc = await findSessionProcess(sessionId, "codex").catch(() => null);
-          let tmuxSessionName: string | null = null;
-
-          if (proc) {
-            tmuxSessionName = sessionProcessCache.get(sessionId)?.tmuxTarget?.split(":")[0] ?? null;
-            if (!tmuxSessionName) {
-              const tmuxPane = await findTmuxPaneForTty(proc.tty);
-              if (tmuxPane) {
-                tmuxSessionName = tmuxPane.split(":")[0];
-                cacheSessionProcess(sessionId, proc, tmuxPane);
-              }
-            }
-          }
-
-          matchedStartedConversation = matchStartedConversation(startedCodexEntries, {
-            tmuxSessionName,
-            // Only allow the cwd fallback when the process wasn't found at all
-            // (see claude branch / matchStartedConversation).
-            projectPath: proc ? null : projectPath,
-          });
-
-          if (matchedStartedConversation && tmuxSessionName) {
-            log(`Matched codex session ${sessionId.slice(0, 8)} to conversation ${matchedStartedConversation.slice(0, 12)} via tmux ${tmuxSessionName}`);
-          } else if (matchedStartedConversation && projectPath) {
-            log(`Matched codex session ${sessionId.slice(0, 8)} to conversation ${matchedStartedConversation.slice(0, 12)} via projectPath fallback`);
-          }
-        }
+        const matchedStartedConversation = (await matchStartedStub("codex", sessionId, projectPath))?.conversationId ?? null;
 
         if (matchedStartedConversation) {
           conversationId = matchedStartedConversation;
@@ -12101,6 +12098,51 @@ export function isGrokInternalSessionDir(updatesPath: string): boolean {
   }
 }
 
+// Bind a daemon-launched agent's first transcript to its start_session stub:
+// find the live process's tmux pane and match it against the pending started
+// conversations; fall back to a unique cwd match only when no process is found
+// (a process in a tmux we did not start belongs to someone else).
+async function matchStartedStub(client: AgentClientId, sessionId: string, projectPath: string | undefined): Promise<{ conversationId: string } | null> {
+  if (startedSessionTmux.size === 0) return null;
+  const entries = Array.from(startedSessionTmux.entries()).filter(([, entry]) => entry.agentType === client);
+  if (entries.length === 0) return null;
+  const proc = await findSessionProcess(sessionId, client).catch(() => null);
+  let tmuxSessionName: string | null = null;
+  if (proc) {
+    tmuxSessionName = sessionProcessCache.get(sessionId)?.tmuxTarget?.split(":")[0] ?? null;
+    if (!tmuxSessionName) {
+      const tmuxPane = await findTmuxPaneForTty(proc.tty);
+      if (tmuxPane) {
+        tmuxSessionName = tmuxPane.split(":")[0];
+        cacheSessionProcess(sessionId, proc, tmuxPane);
+      }
+    }
+  }
+  const conversationId = matchStartedConversation(entries, { tmuxSessionName, projectPath: proc ? null : projectPath });
+  if (!conversationId) return null;
+  log(`Matched ${client} session ${sessionId.slice(0, 8)} to conversation ${conversationId.slice(0, 12)} via ${tmuxSessionName ? `tmux ${tmuxSessionName}` : "projectPath fallback"}`);
+  return { conversationId };
+}
+
+// Take over a matched started stub: map the session to it, tell the server
+// its real session id and cwd, and hand its pane's heartbeat to the session.
+async function adoptStartedStub(client: AgentClientId, conversationId: string, sessionId: string, projectPath: string | undefined, conversationCache: ConversationCache): Promise<string> {
+  const tmuxEntry = startedSessionTmux.get(conversationId);
+  conversationCache[sessionId] = conversationId;
+  saveConversationCache(conversationCache);
+  const gitInfo = projectPath ? await getGitInfo(projectPath) : undefined;
+  void pushSessionIdBinding(conversationId, sessionId, projectPath || undefined, gitInfo?.repoRoot || gitInfo?.root, gitInfo?.remoteUrl);
+  if (tmuxEntry) {
+    registerManagedStartedSession(conversationId, sessionId, tmuxEntry.tmuxSession);
+    if (tmuxEntry.sessionId && tmuxEntry.sessionId !== sessionId) {
+      stopManagedSessionHeartbeat(tmuxEntry.sessionId);
+    }
+  }
+  deleteStartedSession(conversationId);
+  log(`Linked ${client} session ${sessionId.slice(0, 8)} to started conversation ${conversationId.slice(0, 12)}`);
+  return conversationId;
+}
+
 // pi, grok, and muse share this whole-file delta sync pipeline: all are file-per-session
 // JSONL clients whose parser rebuilds the ACTIVE branch each pass (pi's parentId
 // chain, grok's rewind filter), so sync is the same computePiSyncDelta diff —
@@ -12112,7 +12154,7 @@ export async function processTranscriptDeltaSession(...args: Parameters<typeof p
 }
 
 async function processTranscriptDeltaSessionPass(
-  client: Extract<AgentClientId, "pi" | "grok" | "muse">,
+  client: Extract<AgentClientId, "pi" | "grok" | "muse" | "cursor">,
   filePath: string,
   sessionId: string,
   syncService: SyncService,
@@ -12121,7 +12163,6 @@ async function processTranscriptDeltaSessionPass(
   conversationCache: ConversationCache,
   retryQueue: RetryQueue,
   pendingMessages: PendingMessages,
-  titleCache: TitleCache,
   updateStateCallback: () => void
 ): Promise<void> {
   try {
@@ -12152,52 +12193,16 @@ async function processTranscriptDeltaSessionPass(
         // grok's long-path hash dirs don't decode at all).
         const projectPath = client === "pi"
           ? ingest.metadata.cwd ?? decodePiCwdSlug(path.basename(path.dirname(filePath)))
-          : client === "muse"
+          : client === "muse" || client === "cursor"
             // muse's date-sharded dirs carry no cwd — only the log's own
             // route_facts record (ingest metadata) can place the session.
+            // cursor's projects/<slug> dir is lossy; its chat meta.json is not.
             ? ingest.metadata.cwd ?? undefined
           : ingest.metadata.cwd ?? decodeGrokCwdSlug(path.basename(path.dirname(path.dirname(filePath)))) ?? undefined;
 
-        // Bind a daemon-launched agent to its start_session stub (codex pattern):
-        // find the live process's tmux pane and match it against the pending started
-        // conversations; fall back to a unique cwd match when the process isn't found.
-        let matchedStartedConversation: string | null = null;
-        if (startedSessionTmux.size > 0) {
-          const startedPiEntries = Array.from(startedSessionTmux.entries())
-            .filter(([, entry]) => entry.agentType === client);
-          const proc = await findSessionProcess(sessionId, client).catch(() => null);
-          let tmuxSessionName: string | null = null;
-          if (proc) {
-            tmuxSessionName = sessionProcessCache.get(sessionId)?.tmuxTarget?.split(":")[0] ?? null;
-            if (!tmuxSessionName) {
-              const tmuxPane = await findTmuxPaneForTty(proc.tty);
-              if (tmuxPane) {
-                tmuxSessionName = tmuxPane.split(":")[0];
-                cacheSessionProcess(sessionId, proc, tmuxPane);
-              }
-            }
-          }
-          matchedStartedConversation = matchStartedConversation(startedPiEntries, {
-            tmuxSessionName,
-            projectPath: proc ? null : projectPath,
-          });
-        }
-
+        const matchedStartedConversation = (await matchStartedStub(client, sessionId, projectPath))?.conversationId ?? null;
         if (matchedStartedConversation) {
-          conversationId = matchedStartedConversation;
-          const tmuxEntry = startedSessionTmux.get(matchedStartedConversation);
-          conversationCache[sessionId] = conversationId;
-          saveConversationCache(conversationCache);
-          const piGitInfo = projectPath ? await getGitInfo(projectPath) : undefined;
-          void pushSessionIdBinding(conversationId, sessionId, projectPath || undefined, piGitInfo?.repoRoot || piGitInfo?.root, piGitInfo?.remoteUrl);
-          if (tmuxEntry) {
-            registerManagedStartedSession(conversationId, sessionId, tmuxEntry.tmuxSession);
-            if (tmuxEntry.sessionId && tmuxEntry.sessionId !== sessionId) {
-              stopManagedSessionHeartbeat(tmuxEntry.sessionId);
-            }
-          }
-          deleteStartedSession(matchedStartedConversation);
-          log(`Linked ${client} session ${sessionId.slice(0, 8)} to started conversation ${conversationId.slice(0, 12)}`);
+          conversationId = await adoptStartedStub(client, matchedStartedConversation, sessionId, projectPath, conversationCache);
         } else {
           const firstUserMessage = allMessages.find((msg) => msg.role === "user");
           const title = firstUserMessage ? ingestMessageTitle(firstUserMessage) : undefined;
@@ -12292,7 +12297,15 @@ async function processTranscriptDeltaSessionPass(
     // failure keep the orphans in the synced set so the next pass retries rather than
     // stranding them permanently.
     let finalSynced = nextSynced;
-    if (orphanUuids.length > 0 && !conversationRecreated) {
+    // Cursor truncates and rewrites its whole transcript on every save, so a
+    // read can land mid-rewrite and miss the tail. Only a file that has held
+    // still since the read may retract messages; otherwise keep them for the
+    // next pass.
+    const orphansSettled = client !== "cursor" || await transcriptHeldStill(filePath, ingest.fileSize);
+    if (orphanUuids.length > 0 && !conversationRecreated && !orphansSettled) {
+      finalSynced = new Map(nextSynced);
+      for (const uuid of orphanUuids) finalSynced.set(uuid, syncedSigs.get(uuid) ?? "");
+    } else if (orphanUuids.length > 0 && !conversationRecreated) {
       try {
         await syncService.deleteMessagesByUuid(conversationId, orphanUuids);
         log(`Deleted ${orphanUuids.length} orphaned ${client} message(s) after branch switch for session ${sessionId}`);
@@ -12330,6 +12343,16 @@ async function processTranscriptDeltaSessionPass(
     const errMsg = err instanceof Error ? err.message : String(err);
     log(`Error processing ${client} session file ${filePath}: ${errMsg}`);
     throw err;
+  }
+}
+
+async function transcriptHeldStill(filePath: string, sizeAtRead: number, settleMs = 1500): Promise<boolean> {
+  await new Promise((resolve) => setTimeout(resolve, settleMs));
+  try {
+    const st = await fs.promises.stat(filePath);
+    return st.size === sizeAtRead && Date.now() - st.mtimeMs >= settleMs;
+  } catch {
+    return false;
   }
 }
 
@@ -12922,6 +12945,24 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
         return result;
       }
     } catch {}
+
+    // Strategy A1c: cursor-agent writes no registry, but the live process holds
+    // its chat's store.db open (~/.cursor/chats/<md5(cwd)>/<chatId>/store.db).
+    if (agentType === "cursor") {
+      const { findCursorCliChat } = await import("./workers/cursorObservation.js");
+      const chat = await findCursorCliChat(process.env.HOME || "", sessionId).catch(() => null);
+      if (!chat) return null;
+      for (const pid of await pidsWithFileOpen(path.join(chat.dir, "store.db"))) {
+        const tty = await ttyOfPid(pid);
+        if (!tty) continue;
+        const tmuxTarget = await findTmuxPaneForTty(tty).catch(() => null);
+        const result = { pid, tty, sessionId };
+        cacheSessionProcess(sessionId, result, tmuxTarget || undefined);
+        log(`Found cursor session ${shortId(sessionId)} via open chat store: pid=${pid}${tmuxTarget ? ` tmux=${tmuxTarget}` : ""}`);
+        return result;
+      }
+      return null;
+    }
 
     // Strategy A2: Codex live-session matching by open JSONL file (works for non-resume iTerm sessions)
     if (agentType === "codex") {
@@ -14353,6 +14394,23 @@ export function isCodexTrustDialog(text: string): boolean {
     && /^[^\S\n]*[›❯>]?[^\S\n]*\d+[.)][^\S\n]*No,\s*quit\b/im.test(text);
 }
 
+// Claude Code's one-time warning when it starts with
+// --dangerously-skip-permissions on a machine that never accepted it:
+//
+//   WARNING: Claude Code running in Bypass Permissions mode
+//   ❯ No, exit
+//     Yes, I accept
+//   Enter to confirm · Esc to cancel
+//
+// It is the trust dialog's shape: "No, exit" is the default highlight and
+// Escape is also "No, exit". Read as the Rewind modal its footer resembles, the
+// Escape we sent quit every session a fresh machine launched (ct-55193). The
+// launch already chose bypass mode, so accepting is what it asked for, and it is
+// answered the trust dialog's way: select "Yes, I accept", then confirm.
+export function isClaudeBypassWarning(text: string): boolean {
+  return /running in Bypass Permissions mode/i.test(text) && /^[^\S\n]*[❯›>]?[^\S\n]*(?:\d+[.)][^\S\n]*)?Yes,\s*I accept\b/im.test(text);
+}
+
 export function isCodexUpdateDialog(text: string): boolean {
   return /^[^\S\n]*[›❯>]?[^\S\n]*\d+[.)][^\S\n]*Update now\b/im.test(text)
     && /^[^\S\n]*[›❯>]?[^\S\n]*\d+[.)][^\S\n]*Skip[^\S\n]*$/im.test(text)
@@ -14383,6 +14441,24 @@ export function isGrokTrustDialog(text: string): boolean {
     && /No,\s*quit\b[^\n]*\bn\b/i.test(text);
 }
 
+// cursor-agent's first launch in a directory: "Workspace Trust Required" over
+// "[a] Trust this workspace" / "[q] Quit". The TUI names `a` as the grant key.
+// The answered box stays in the pane's history under the composer, so only a
+// dialog with nothing painted after its options is live.
+export function isCursorTrustDialog(text: string): boolean {
+  const at = text.search(/\[a\]\s*Trust this workspace/i);
+  if (at < 0 || !/Workspace Trust Required/i.test(text.slice(0, at))) return false;
+  const after = text.slice(at);
+  return !/Trusting workspace|Cursor Agent|→ /.test(after.slice(after.search(/\[q\]\s*Quit/i) + 1));
+}
+
+// cursor-agent's signed-out splash ("Press any key to log in..."). Any key
+// starts a browser login nobody at the web can finish, so the pane is held,
+// never typed into, until the machine's cursor-agent is logged in again.
+export function isCursorLoginScreen(text: string): boolean {
+  return /Press any key to log in/i.test(text);
+}
+
 // How many tmux history rows a grok classifier must see to reach the y/n
 // options above the footer. A 25-line capture of the live pane in jx702ea
 // held only padding + "Grok Build  1.0.30 [stable]".
@@ -14398,6 +14474,7 @@ export type TmuxLiveState =
   | "warning"       // dismissable banner — Enter to ack
   | "update_menu"   // agent's own "Update available" menu — Escape (Enter would RUN the update)
   | "cwd_picker"    // Codex resume "Choose working directory" picker — answered by answerResumeCwdPicker
+  | "signed_out"    // the agent's own login splash — hold, press nothing; the machine must log in
   | "menu"          // a select dialog (parseSelectDialog) or a numbered dialog with its cursor on an option — only a card answer moves it; press nothing, hold delivery
   | "exited"        // bare shell, agent has exited — abort
   | "unknown";      // anything we don't recognize — defer, do not guess
@@ -14470,6 +14547,7 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
   // "Press enter to continue" footer — and the corrective sent Escape, which is
   // this dialog's "No, quit" (ct-49609).
   if (isCodexTrustDialog(region)) return "trust";
+  if (isClaudeBypassWarning(region)) return "trust";
   if (/Esc to cancel|❯\s*\(current\)/i.test(region)) return "rewind";
   if (/What should Claude do instead\?/i.test(region)) return "interrupted";
   // Teammate panel: a lead session with in-process agents renders a chip list
@@ -14567,7 +14645,7 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
 //    turn (live pane capture, v1.0.5), so the glyph-whitelist path would read a
 //    mid-turn pane "idle" and the paste's leading Escape would cancel the running
 //    turn. grok needs the busy-first order this classifier guarantees.
-const GLYPHLESS_PROMPT_CLIENTS: ReadonlySet<AgentClientId> = new Set(["opencode", "pi", "grok"]);
+const GLYPHLESS_PROMPT_CLIENTS: ReadonlySet<AgentClientId> = new Set(["opencode", "pi", "grok", "cursor"]);
 
 // The registry promptReadyPattern for a client classified whole-pane (see
 // GLYPHLESS_PROMPT_CLIENTS above), null for the ❯/›-glyph clients. Every pane
@@ -14600,7 +14678,12 @@ export function classifyGlyphlessClientPaneState(
   // BEFORE any store/transcript exists (jx702ea). Without this rule the pane
   // classified "unknown" (no ❯ yet) and ensureTmuxReady's glyphless skip polled
   // until timeout, never sending the `y` the dialog asks for.
-  if (isGrokTrustDialog(paneContent)) return "trust";
+  if (isGrokTrustDialog(paneContent) || isCursorTrustDialog(paneContent)) return "trust";
+  if (isCursorLoginScreen(paneContent)) return "signed_out";
+  // cursor-agent's tool approval menu ("Run this command?" … "Skip & tell the
+  // agent what to do instead") when it runs without --force: only a person
+  // can answer it, and its "→ Run (once)" row is not the composer.
+  if (/Skip & tell the agent what to do instead/i.test(paneContent)) return "menu";
   // Busy before ready, always. Braille spinner frames + "esc to interrupt" cover
   // opencode/pi; `Esc:cancel` / `Waiting for response` / `[stop]` are grok's busy
   // chrome (live pane capture, v1.0.5 — the spinner sits in grok's HEADER, which a
@@ -14608,7 +14691,10 @@ export function classifyGlyphlessClientPaneState(
   // CAUTION: keep these markers literal — grok's IDLE states contain the words
   // "send a message to interrupt", so a generic /interrupt/ heuristic would read
   // an idle grok pane as busy forever.
+  // cursor-agent's spinner is a two-glyph braille pair before a verb
+  // ("⠰⠳ Working", "⠀⠞ Editing") while its composer stays painted.
   if (/⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|⬝⬝|esc (?:to )?interrupt|Esc:cancel|Waiting for response|\[stop\]/i.test(paneContent)) return "busy";
+  if (/^\s*[\u2800-\u28FF]{2} [A-Z][a-z]+\b/m.test(paneContent)) return "busy";
   if (readyPattern.test(paneContent)) return "idle";
   return "unknown";
 }
@@ -15536,6 +15622,7 @@ const CLASSIFY_TRANSCRIPT_TAIL_BY_CLIENT: Partial<
   pi: classifyPiTranscriptTail,
   grok: classifyGrokTranscriptTail,
   muse: classifyMuseTranscriptTail,
+  cursor: classifyCursorTranscriptTail,
 };
 
 export function classifyTranscriptTailFor(
@@ -16124,14 +16211,15 @@ export async function acceptTrustPrompt(target: string): Promise<boolean> {
   // grant key — send that, never Enter (there is no highlighted row).
   try {
     const { stdout } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${GROK_TRUST_PANE_CAPTURE_LINES}`]);
-    if (isGrokTrustDialog(stdout)) {
-      log(`Answering grok folder-trust dialog in ${target} (y)`);
-      await tmuxExec(["send-keys", "-t", target, "y"]);
+    const grantKey = isGrokTrustDialog(stdout) ? "y" : isCursorTrustDialog(stdout) ? "a" : null;
+    if (grantKey) {
+      log(`Answering folder-trust dialog in ${target} (${grantKey})`);
+      await tmuxExec(["send-keys", "-t", target, grantKey]);
       await new Promise(r => setTimeout(r, 1500));
       return true;
     }
   } catch {}
-  const accepted = await selectHighlightedOption(target, isTrustAffirmativeRow, "the workspace trust dialog");
+  const accepted = await selectHighlightedOption(target, isTrustAffirmativeRow, "the trust or bypass-permissions dialog");
   // The agent boots behind this dialog; give it a moment before the caller re-reads.
   if (accepted) await new Promise(r => setTimeout(r, 1500));
   return accepted;
@@ -16173,8 +16261,11 @@ export async function selectHighlightedOption(target: string, isTarget: (line: s
 }
 
 class InputBlockedError extends Error {
-  constructor(reason: string) {
+  // What the held message shows its sender; a dialog by default.
+  readonly holdReason: string;
+  constructor(reason: string, holdReason = "waiting for a human answer in the terminal") {
     super(`AGENT_STDIN_NOT_READY: ${reason}; message remains pending`);
+    this.holdReason = holdReason;
   }
 }
 
@@ -16267,6 +16358,7 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId,
     // lands in no composer. The delivery layer holds the message (see
     // pendingPromptHold) until the scraped card is answered.
     if (state === "menu") throw new Error("AGENT_STDIN_NOT_READY: terminal is waiting for a human answer");
+    if (state === "signed_out") throw new InputBlockedError(`${agentType ?? "the agent"} is signed out on this machine`, `${agentType === "cursor" ? "cursor-agent" : "the agent"} is signed out on this machine: run \`${agentType === "cursor" ? "cursor-agent login" : "its login"}\` there, then restart the session`);
 
     // Grok is glyphless, so the skip below would swallow this as "still booting"
     // and never send `y`. Answer it here, before that continue.
@@ -19562,9 +19654,13 @@ function ensureManagedSessionHeartbeat(sessionId: string): void {
   ensureHeartbeatFlushLoop();
 }
 
+// Armed lazily by whichever call site registers the first session, often from
+// inside a transcript ingest. A timer keeps the async context it was created
+// in, so it is armed outside any transcript deadline: the fleet's liveness
+// send and reconciles must never fail on one transcript's budget.
 function ensureHeartbeatFlushLoop(): void {
   if (heartbeatFlushTimer || !syncServiceRef) return;
-  heartbeatFlushTimer = setInterval(() => { void flushManagedHeartbeats(); }, HEARTBEAT_FLUSH_INTERVAL_MS);
+  heartbeatFlushTimer = outsideTranscriptDeadline(() => setInterval(() => { void flushManagedHeartbeats(); }, HEARTBEAT_FLUSH_INTERVAL_MS));
 }
 
 // Run an async op over items with bounded concurrency (a small worker pool), so
@@ -19659,7 +19755,11 @@ export async function runHeartbeatFlush(): Promise<void> {
     });
     try {
       await sync.heartbeatManagedSessionsBatch(payload);
-    } catch {}
+    } catch (err) {
+      // A failed send leaves every session in the batch reading as stopped on
+      // the server within the liveness window, so it must be visible here.
+      log(`[HEARTBEAT-FLUSH] batch of ${payload.length} failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
   // One line/tick to confirm the fleet flushes in a handful of transactions
   // (each = one inbox invalidation) rather than ~N. Pre-batch this was N/30s.
@@ -22008,7 +22108,7 @@ export function classifyStartedPane(
   // scrollback instead of clearing it: matched over the whole capture the
   // verdict stays "trust" after the corrective ran, and every 2s poll presses
   // Enter again at a composer that is already up.
-  if (TRUST_PROMPT_RE.test(paneContent) || isCodexTrustDialog(extractTmuxLiveRegion(paneContent)) || isGrokTrustDialog(paneContent)) return "trust";
+  if (TRUST_PROMPT_RE.test(paneContent) || isCodexTrustDialog(extractTmuxLiveRegion(paneContent)) || isGrokTrustDialog(paneContent) || isClaudeBypassWarning(paneContent)) return "trust";
 
   const belowPrompt = paneTextAfterLastMatch(agentPane, promptPattern);
   if (belowPrompt === null) return "booting";
@@ -23441,12 +23541,8 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     effort: opts?.effort,
     forkFromSessionId,
     stableRulesFile,
-    codexArgs: getAgentArgs(config, "codex"),
-    codexPermFlags: agentType === "codex" ? getPermissionFlags("codex", config) : null,
-    grokArgs: getAgentArgs(config, "grok"),
-    grokPermFlags: agentType === "grok" ? getPermissionFlags("grok", config) : null,
-    museArgs: getAgentArgs(config, "muse"),
-    musePermFlags: agentType === "muse" ? getPermissionFlags("muse", config) : null,
+    args: getAgentArgs(config, agentType),
+    permFlags: getPermissionFlags(agentType, config),
   });
   if (nonClaudeResumeCmd !== null) {
     // codex / gemini / cursor: a single self-contained resume invocation. The
@@ -26219,7 +26315,7 @@ export async function findStaleCursorSessions(maxAgeMs: number = 7 * 24 * 60 * 6
 export function findStaleCursorTranscriptFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): Promise<string[]> {
   return findStaleFiles(
     path.join(process.env.HOME || "", ".cursor", "projects"),
-    { policy: { files: "cursorStale" }, fileFilter: (rel) => rel.endsWith(".txt") && rel.includes(`${path.sep}agent-transcripts${path.sep}`) },
+    { policy: { files: "cursorStale" }, fileFilter: isCursorTranscriptPath },
     maxAgeMs,
     (f) => f.stat.size !== getPosition(f.path),
   );
@@ -28160,7 +28256,7 @@ async function main(): Promise<void> {
   // for one session interleave and both register; a project directory that
   // appears later is seen by the next daemon boot.
   const projectDirExists = new Map<string, boolean>();
-  watcher.on("session", (event: SessionEvent) => {
+  const onClaudeTranscript = (event: SessionEvent) => {
     selfHealIfTimersStalled("watcher");
     touchHostActivity();
     const filePath = event.filePath;
@@ -28250,13 +28346,23 @@ async function main(): Promise<void> {
     }
 
     sync.invalidate();
-  });
+  };
+  watcher.on("session", onClaudeTranscript);
 
   watcher.on("error", (error: Error) => {
     logError("Watcher error", error);
   });
 
   watcher.start();
+
+  // Claude Code cloud sessions (claude.ai/code): mirrored into Claude JSONL
+  // files and fed through the same handler as local transcripts.
+  if (config.claude_cloud_sync !== false) {
+    const cloudWatcher = new ClaudeCloudWatcher({ resolveRepoDir: resolveLocalRepoFor, log });
+    cloudWatcher.on("session", onClaudeTranscript);
+    cloudWatcher.on("error", (error: Error) => log(`Claude cloud poll failed: ${error.message}`));
+    cloudWatcher.start();
+  }
 
   // Agent status hook file watcher. One recursive watch on the directory,
   // not a watch per status file: under bun on macOS every fs.watch rebuilds
@@ -29656,7 +29762,6 @@ async function main(): Promise<void> {
       conversationCache,
       retryQueue,
       pendingMessages,
-      titleCache,
       updateState
     ),
   );
@@ -29673,7 +29778,6 @@ async function main(): Promise<void> {
       conversationCache,
       retryQueue,
       pendingMessages,
-      titleCache,
       updateState
     ),
   );
@@ -29690,7 +29794,6 @@ async function main(): Promise<void> {
       conversationCache,
       retryQueue,
       pendingMessages,
-      titleCache,
       updateState
     ),
   );
@@ -29940,7 +30043,7 @@ async function main(): Promise<void> {
             // hold, and re-drive when the prompt closes.
             logDelivery(`HELD: msg=${msg._id.slice(0, 8)} waiting for a human answer in conv=${msg.conversation_id.slice(0, 12)}; retrying when the prompt closes`);
             holdConversationForPrompt(msg.conversation_id);
-            syncService.retryMessage(msg._id, { holdReason: "waiting for a human answer in the terminal" }).catch(logConvexFailure);
+            syncService.retryMessage(msg._id, { holdReason: err instanceof InputBlockedError ? err.holdReason : "waiting for a human answer in the terminal" }).catch(logConvexFailure);
           } else if (err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(errMsg)) {
             logDelivery(`HELD: msg=${msg._id.slice(0, 8)} awaiting terminal input confirmation: ${errMsg}`);
             scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content, "waiting for terminal input confirmation");

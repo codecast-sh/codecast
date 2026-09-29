@@ -16,8 +16,10 @@ import { useInboxStore } from "../../store/inboxStore";
 import { DEFAULT_TERMINAL_HEIGHT } from "../../lib/terminal/panelPrefs";
 import {
   getTerminalEndpoint,
+  lastDiscoveryFailure,
   probeEndpoint,
   killTerminalSession,
+  type DiscoveryFailure,
   type TerminalEndpoint,
   type TerminalSessionInfo,
 } from "../../lib/terminal/endpoint";
@@ -36,6 +38,19 @@ import {
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "../ui/context-menu";
 import { SplitResizeHandle } from "../SplitResizeHandle";
 import "@xterm/xterm/css/xterm.css";
+
+// Why the terminal found no daemon, in the words of each cause: a browser that
+// blocked the loopback request needs a permission, not a restarted daemon.
+function unreachableReason(failure: DiscoveryFailure): string {
+  switch (failure) {
+    case "probe-failed":
+      return "A daemon answered, but this page's connection to it was refused. The browser may be blocking local connections: allow this site to access your local network (address-bar icon), then retry.";
+    case "daemon-slow":
+      return "The daemon is live but did not answer in time. If the browser is asking to allow local network access, allow it; otherwise retry in a moment.";
+    default:
+      return "No local daemon reachable. The terminal needs `cast` running on this machine.";
+  }
+}
 
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 const MIN_HEIGHT = 110;
@@ -95,10 +110,7 @@ export function TerminalPanel() {
       setEp({ phase: "resolving" });
       const endpoint = await getTerminalEndpoint(convex, { force });
       if (!endpoint) {
-        setEp({
-          phase: "unavailable",
-          reason: "No local daemon reachable. The terminal needs `cast` running on this machine.",
-        });
+        setEp({ phase: "unavailable", reason: unreachableReason(lastDiscoveryFailure()) });
         return;
       }
       setEp({ phase: "ready", endpoint });

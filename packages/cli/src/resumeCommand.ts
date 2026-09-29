@@ -225,22 +225,22 @@ export function combineClaudeResumeFlags(
  * resume that drops the flags restarts the session in grok's default Ask mode —
  * and a managed grok cannot answer TUI permission prompts (panePromptMonitoring:
  * false), so the first tool call would park it forever. gemini and cursor take
- * no configured flags today.
+ * no configured flags today; cursor carries --force like its launch.
  *
  * The base command per client is the single source of truth in the registry
  * (AGENT_CLIENTS[agentType].resumeCmd); this function only layers the
  * codex/grok/muse config flags on top and gates claude out.
  */
+const RESUME_CARRIES_LAUNCH_FLAGS: ReadonlySet<AgentClientId> = new Set(["codex", "grok", "muse", "cursor"]);
+
 export function buildNonClaudeResumeCommand(
   agentType: AgentClientId,
   sessionId: string,
   opts: {
-    codexArgs?: string | null;
-    codexPermFlags?: string | null;
-    grokArgs?: string | null;
-    grokPermFlags?: string | null;
-    museArgs?: string | null;
-    musePermFlags?: string | null;
+    /** The client's configured launch args (agent_args) and permission
+     *  flags; applied only for clients whose mode rides the command line. */
+    args?: string | null;
+    permFlags?: string | null;
     model?: string;
     effort?: string;
     /** Launch the client's NATIVE fork of this parent instead of a plain resume:
@@ -272,12 +272,10 @@ export function buildNonClaudeResumeCommand(
     if (permFlags) extra = extra ? extra + " " + permFlags : permFlags;
     return `${base}${extra ? " " + extra : ""}${modelFlags.length ? " " + modelFlags.join(" ") : ""}`;
   };
-  if (agentType === "codex") return withFlags(opts.codexArgs, opts.codexPermFlags);
-  if (agentType === "grok") return withFlags(opts.grokArgs, opts.grokPermFlags) + grokStableRulesFragment(opts.stableRulesFile);
-  // muse, like grok: its approval mode is a launch flag (never persisted in
-  // the session dir), so the resume carries the same flags as launch
-  // (`--yolo` unless the stored mode is explicitly "default").
-  if (agentType === "muse") return withFlags(opts.museArgs, opts.musePermFlags);
+  // These clients keep their approval mode on the command line, never in the
+  // session store, so a resume carries the same flags as launch.
+  if (agentType === "grok") return withFlags(opts.args, opts.permFlags) + grokStableRulesFragment(opts.stableRulesFile);
+  if (RESUME_CARRIES_LAUNCH_FLAGS.has(agentType)) return withFlags(opts.args, opts.permFlags);
   return withFlags();
 }
 

@@ -1147,7 +1147,73 @@ export function isCursorRoleHeaderLine(line: string): boolean {
   return trimmed === "user:" || trimmed === "assistant:" || trimmed === "system:";
 }
 
-export function parseCursorTranscriptFile(content: string): ParsedMessage[] {
+/**
+ * Cursor writes two transcript formats under agent-transcripts: the older
+ * `<id>.txt` role-header text and, since the 2026 CLI and IDE, `<id>.jsonl`
+ * with one `{role, message:{content:[…]}}` record per line. An ingest window
+ * always starts at a record boundary, so its first non-blank character tells
+ * the two apart; the window cut (cursorPassBoundary) asks the same question.
+ */
+export function isCursorJsonlTranscript(content: string): boolean {
+  return content.trimStart().startsWith("{");
+}
+
+// `<timestamp>Tuesday, Sep 29, 2026, 2:29 AM (UTC-4)</timestamp>`, which the
+// JSONL format prefixes to each user query; it is the only clock it records.
+function cursorQueryTimestamp(text: string): number | undefined {
+  const m = text.match(/<timestamp>\s*(?:\w+,\s*)?(\w+ \d{1,2}, \d{4}),?\s*(\d{1,2}:\d{2}(?::\d{2})?\s*[AP]M)\s*\(UTC([+-]\d{1,2})(?::?(\d{2}))?\)\s*<\/timestamp>/i);
+  if (!m) return undefined;
+  const local = Date.parse(`${m[1]} ${m[2]} UTC`);
+  if (Number.isNaN(local)) return undefined;
+  const offsetMin = parseInt(m[3], 10) * 60 + Math.sign(parseInt(m[3], 10) || 1) * parseInt(m[4] ?? "0", 10);
+  return local - offsetMin * 60_000;
+}
+
+// Cursor rewrites the whole file on every save but keeps its records in
+// order, so a record's ordinal is its identity: `<chatId>:<n>` over every
+// role record (counted even when it renders nothing, so a record that fills in
+// later never shifts the ones after it).
+function parseCursorJsonlTranscript(content: string, sessionId?: string, fallbackClock?: number): ParsedMessage[] {
+  const messages: ParsedMessage[] = [];
+  // The file's own birth time when a record precedes any dated query: a
+  // stable clock, so a rewrite never changes a message's signature.
+  let clock = fallbackClock || Date.now();
+  let record = -1;
+  for (const line of content.split("\n")) {
+    if (!line.trim()) continue;
+    let entry: { role?: string; message?: { content?: unknown } };
+    try { entry = JSON.parse(line); } catch { continue; }
+    const role = entry.role;
+    if (role !== "user" && role !== "assistant") continue; // turn_ended and other markers
+    record++;
+    const blocks = Array.isArray(entry.message?.content) ? entry.message!.content as Array<Record<string, unknown>> : [];
+    const text: string[] = [];
+    const toolCalls: ToolCall[] = [];
+    for (const block of blocks) {
+      if (block.type === "text" && typeof block.text === "string") text.push(block.text);
+      else if (block.type === "tool_use" && typeof block.name === "string") {
+        const input = block.input && typeof block.input === "object" ? block.input as Record<string, unknown> : {};
+        toolCalls.push({ id: typeof block.id === "string" ? block.id : `cursor-${messages.length}-${toolCalls.length}`, name: block.name, input });
+      }
+    }
+    // Control bytes the terminal paste left in the query (\v, \x01).
+    let body = text.join("\n\n").replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, "");
+    if (role === "user") {
+      clock = cursorQueryTimestamp(body) ?? clock;
+      const query = body.match(/<user_query>([\s\S]*?)<\/user_query>/i);
+      if (query) body = query[1];
+      body = body.replace(/<timestamp>[\s\S]*?<\/timestamp>/gi, "");
+    }
+    // Cursor redacts hidden reasoning in place; the marker carries nothing.
+    body = body.replace(/\n*\[REDACTED\]\s*$/, "").trim();
+    if (!body && toolCalls.length === 0) continue;
+    messages.push({ ...(sessionId ? { uuid: `${sessionId}:${record}` } : {}), role, content: body, timestamp: clock, ...(toolCalls.length ? { toolCalls } : {}) });
+  }
+  return messages;
+}
+
+export function parseCursorTranscriptFile(content: string, sessionId?: string, fallbackClock?: number): ParsedMessage[] {
+  if (isCursorJsonlTranscript(content)) return parseCursorJsonlTranscript(content, sessionId, fallbackClock);
   const messages: ParsedMessage[] = [];
   const lines = content.split("\n");
   let currentRole: "user" | "assistant" | "system" | null = null;

@@ -29,7 +29,7 @@ export function RoleHoverContent({ role }: { role: RoleRef }) {
   // Enrichment, never the whole surface: if the answer never arrives the card
   // still shows the face, the name, the handle and whatever the store holds.
   const { data: card } = useQueryNoThrow(api.org.roleCard, { role_id: role.short_id });
-  const { model, role: treeRole, escalated } = useRoleScope(role.short_id, card as RoleCardAnswer | null | undefined);
+  const { model, role: treeRole } = useRoleScope(role.short_id, card as RoleCardAnswer | null | undefined);
   const r = treeRole ?? card ?? role;
   const avatar = isAvatarKey(r.avatar) ? r.avatar : defaultAvatarFor(r.handle);
   const tenureKind = treeRole?.tenure?.kind ?? card?.tenure?.kind ?? role.tenure_kind ?? null;
@@ -56,7 +56,7 @@ export function RoleHoverContent({ role }: { role: RoleRef }) {
           </div>
         </div>
       </div>
-      {model && <RoleScopeView model={model} escalated={escalated} density="card" />}
+      {model && <RoleScopeView model={model} density="card" />}
       <div className="flex items-center justify-between pt-1.5 border-t border-sol-border/30 text-[10px] text-sol-text-dim">
         <span className="font-mono">{r.short_id}</span>
         <span className="inline-flex items-center gap-0.5 text-sol-text-muted">Open role <ArrowUpRight className="w-2.5 h-2.5" /></span>

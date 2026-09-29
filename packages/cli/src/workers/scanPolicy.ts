@@ -2,6 +2,12 @@ import path from 'node:path';
 import { watchDirFilter, watchFilter, CLAUDE_UUID_RE } from '../syncScope.js';
 import { isVaultPathIgnored, normalizeVaultPath } from '../vault/vaultScope.js';
 import type { ScanPolicy } from './scanTypes.js';
+/** A Cursor transcript: a .txt (older builds) or .jsonl (2026 CLI and IDE)
+ *  somewhere under an agent-transcripts dir. Relative to the projects root, so
+ *  the dir is never the first segment. */
+export function isCursorTranscriptPath(rel: string): boolean {
+  return (rel.endsWith('.txt') || rel.endsWith('.jsonl')) && (rel.includes(`agent-transcripts${path.sep}`) || rel.includes('agent-transcripts/'));
+}
 export function scanPredicates(root: string, policy: ScanPolicy) {
   const vault = (rel: string) => { const norm = normalizeVaultPath(rel); return norm !== null && !isVaultPathIgnored(root, norm); };
   const dirFilter = (rel: string): boolean => {
@@ -37,8 +43,7 @@ export function scanPredicates(root: string, policy: ScanPolicy) {
       case 'geminiWatch': return rel.endsWith('.json') && rel.split(/[\\/]/).includes('chats');
       case 'grokWatch': return /[\\/]updates\.jsonl$/.test(rel);
       case 'museWatch': return d.length === 5 && base === 'session.jsonl';
-      case 'cursor': return rel.endsWith('.txt') && (rel.includes(`agent-transcripts${path.sep}`) || rel.includes('agent-transcripts/'));
-      case 'cursorStale': return rel.endsWith('.txt') && rel.includes(`${path.sep}agent-transcripts${path.sep}`);
+      case 'cursor': case 'cursorStale': return isCursorTranscriptPath(rel);
       case 'cursorDb': return /state\.vscdb(-wal)?$/.test(rel);
       case 'reconciliation': return base.endsWith('.jsonl') && !base.startsWith('agent-');
       case 'plan': return rel.includes(path.sep) && rel.endsWith('.jsonl') && !rel.includes('sessions-index');

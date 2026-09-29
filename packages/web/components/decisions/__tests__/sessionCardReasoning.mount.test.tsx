@@ -138,3 +138,21 @@ test("a question with no reasoning keeps one column", async () => {
   expect(grid.children).toHaveLength(1);
   unmount();
 });
+
+// A decision posted from a role's own standing thread is the role's ask
+// (org-staffing.md S28): the chrome row reads as that role, its face and
+// handle, in the sheet and on the fold, never "Waiting on your decision".
+test("a decision from a role's standing thread names the role that asks", async () => {
+  const role = { _id: "org_roles_growth", short_id: "or-7", name: "Growth lead", handle: "growth", avatar: "stag", status: "active", tenure_kind: "standing" };
+  const session = { _id: "c1", title: "Growth lead", standing_role_id: "org_roles_growth", role, project_path: "/src/union" };
+  const sheet = await mount(<SessionDecisionCard item={{ ...item(true), session }} stepper={null} />);
+  const asker = sheet.pane.querySelector("[data-decision-asker]")!;
+  expect(asker.getAttribute("data-decision-asker")).toBe("growth");
+  expect(asker.textContent).toContain("@growth asks");
+  expect(sheet.pane.textContent).not.toContain("Waiting on your decision");
+  sheet.unmount();
+  const fold = await mount(<SessionDecisionCard item={{ ...item(false), session }} stepper={null} />);
+  expect(fold.pane.textContent).toContain("@growth asks");
+  expect(fold.pane.textContent).not.toContain("Asked for your steer");
+  fold.unmount();
+});

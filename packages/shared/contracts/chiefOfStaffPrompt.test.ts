@@ -57,7 +57,8 @@ describe("the Chief of Staff opening", () => {
     expect(o).toContain("What no lead owns is yours to look after");
     expect(o).toContain("your weekly Company review runs it");
     expect(o).toContain("Start every turn with `cast brief`");
-    expect(o).toContain("`cast escalate <session>");
+    expect(o).not.toContain("cast escalate");
+    expect(o).toContain("raise in this thread");
     expect(o).toContain("Your brief is your memory between turns");
     const words = o.split(/\s+/).length;
     expect(words).toBeGreaterThan(150);

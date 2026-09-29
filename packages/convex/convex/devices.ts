@@ -1408,6 +1408,7 @@ export const getConversationMachine = query({
       // discovering first.
       via_bot: reach?.via_bot ?? false,
       ssh_host: reach ? (device.ssh_host ?? null) : null,
+      wsl_distro: reach ? (device.wsl_distro ?? null) : null,
     };
   },
 });

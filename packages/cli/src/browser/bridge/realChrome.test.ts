@@ -13,15 +13,21 @@ let isolation: IsolatedCodecastDir;
 
 test("macOS launches Chrome through Launch Services with a fresh default-profile process", () => {
   const args = ["--disable-renderer-backgrounding", "--restore-last-session", "file:///private/tmp/pair.html"];
-  expect(chromeLaunchCommand("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", args, "darwin")).toEqual({
+  expect(chromeLaunchCommand("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", args, "darwin", false)).toEqual({
     command: "/usr/bin/open",
     args: ["-n", "-g", "-a", "/Applications/Google Chrome.app", "--args", ...args],
   });
 });
 
 test("non-bundle and non-macOS Chrome launches retain their executable and arguments", () => {
-  expect(chromeLaunchCommand("/usr/bin/chromium", ["--restore-last-session"], "linux")).toEqual({ command: "/usr/bin/chromium", args: ["--restore-last-session"] });
-  expect(chromeLaunchCommand("/tmp/chromium", [], "darwin")).toEqual({ command: "/tmp/chromium", args: [] });
+  expect(chromeLaunchCommand("/usr/bin/chromium", ["--restore-last-session"], "linux", false)).toEqual({ command: "/usr/bin/chromium", args: ["--restore-last-session"] });
+  expect(chromeLaunchCommand("/tmp/chromium", [], "darwin", false)).toEqual({ command: "/tmp/chromium", args: [] });
+  expect(chromeLaunchCommand(null, [], "linux", false)).toBeNull();
+});
+
+test("inside WSL the human's Chrome is the Windows one, started through cmd from a Windows directory", () => {
+  const page = "\\\\wsl.localhost\\Ubuntu\\home\\me\\.codecast\\browser\\pair.html";
+  expect(chromeLaunchCommand(null, [page], "linux", true)).toEqual({ command: "cmd.exe", args: ["/c", "start", "", "chrome", page], cwd: "/mnt/c" });
 });
 
 beforeEach(() => {
