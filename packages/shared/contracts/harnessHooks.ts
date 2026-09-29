@@ -90,6 +90,14 @@ export const HARNESS_HOOKS: readonly HarnessHook[] = [
     withoutIt: "New sessions start without the recent history of your other sessions.",
   },
   {
+    file: "codecast-session-trailer.sh",
+    events: ["PreToolUse"],
+    kind: "hook",
+    name: "Session trailer on commits",
+    purpose: "Adds a Codecast-Session trailer naming the session to each git commit an agent runs, so git log and cast blame lead back to the conversation. Turn it off in one repository with git config codecast.sessionTrailer false, or everywhere with cast config session_trailer false.",
+    withoutIt: "Commits are matched to sessions by guessing from the agent's output and the commit subject, which misses rebased and squashed commits and commits whose output printed no hash.",
+  },
+  {
     file: "codecast-statusline.sh",
     events: [],
     kind: "statusLine",

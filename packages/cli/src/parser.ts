@@ -1,5 +1,6 @@
 import type { AgentClientId } from "@codecast/shared/contracts";
 import { extractInlineImages } from "./inlineImage.js";
+import { parseMirrorTranscript, type MirrorTextRewrite } from "./cloudAgents/transcript.js";
 import { extractSentFiles, type SyncFile } from "./userFiles.js";
 import { codexTurnErrorMessage } from "./codexTurnError.js";
 import type { CodexTurnError } from "@codecast/shared/contracts";
@@ -1169,11 +1170,6 @@ function cursorQueryTimestamp(text: string): number | undefined {
   return local - offsetMin * 60_000;
 }
 
-// Cursor rewrites the whole file on every save but keeps its records in
-// order, so a record's ordinal is its identity: `<chatId>:<n>` over every
-// role record (counted even when it renders nothing, so a record that fills in
-// later never shifts the ones after it). A record that names its own `id`
-// (codecast's Cursor Cloud mirror) keeps that instead.
 /**
  * Cursor's notice that a background task finished (a multitask worker
  * reporting back) arrives as a user turn: `<system_notification>` holding one
@@ -1196,61 +1192,29 @@ export function cursorTaskNotification(text: string): string | null {
   return blocks.length ? blocks.join("\n") : null;
 }
 
-function parseCursorJsonlTranscript(content: string, sessionId?: string, fallbackClock?: number): ParsedMessage[] {
-  const messages: ParsedMessage[] = [];
-  // The file's own birth time when a record precedes any dated query: a
-  // stable clock, so a rewrite never changes a message's signature.
-  let clock = fallbackClock || Date.now();
-  let record = -1;
-  for (const line of content.split("\n")) {
-    if (!line.trim()) continue;
-    let entry: { role?: string; id?: unknown; timestamp?: unknown; message?: { content?: unknown } };
-    try { entry = JSON.parse(line); } catch { continue; }
-    const role = entry.role;
-    // turn_ended closes the turn on its last reply, as grok's turn_completed
-    // does: the stamp changes that message's signature, so the rewrite that
-    // only appends the marker still reaches the sync and settles the status.
-    if ((entry as { type?: string }).type === "turn_ended") {
-      const last = messages[messages.length - 1];
-      if (last) last.stopReason = "end_turn";
-      continue;
-    }
-    if (role !== "user" && role !== "assistant") continue;
-    record++;
-    // A record may carry its own clock (codecast's Cursor Cloud mirror does).
-    if (typeof entry.timestamp === "number" && Number.isFinite(entry.timestamp)) clock = entry.timestamp;
-    const blocks = Array.isArray(entry.message?.content) ? entry.message!.content as Array<Record<string, unknown>> : [];
-    const text: string[] = [];
-    const toolCalls: ToolCall[] = [];
-    const toolResults: ToolResult[] = [];
-    for (const block of blocks) {
-      if (block.type === "text" && typeof block.text === "string") text.push(block.text);
-      else if (block.type === "tool_use" && typeof block.name === "string") {
-        const input = block.input && typeof block.input === "object" ? block.input as Record<string, unknown> : {};
-        toolCalls.push({ id: typeof block.id === "string" ? block.id : `cursor-${messages.length}-${toolCalls.length}`, name: block.name, input });
-      } else if (block.type === "tool_result" && typeof block.tool_use_id === "string") {
-        toolResults.push({ toolUseId: block.tool_use_id, content: typeof block.content === "string" ? block.content : JSON.stringify(block.content ?? ""), ...(block.is_error === true ? { isError: true } : {}) });
-      }
-    }
-    // Control bytes the terminal paste left in the query (\v, \x01).
-    let body = text.join("\n\n").replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, "");
-    if (role === "user") {
-      clock = cursorQueryTimestamp(body) ?? clock;
-      const notice = cursorTaskNotification(body);
-      if (notice) {
-        messages.push({ ...(sessionId ? { uuid: `${sessionId}:${typeof entry.id === "string" && entry.id ? entry.id : record}` } : {}), role, content: notice, timestamp: clock });
-        continue;
-      }
-      const query = body.match(/<user_query>([\s\S]*?)<\/user_query>/i);
-      if (query) body = query[1];
-      body = body.replace(/<timestamp>[\s\S]*?<\/timestamp>/gi, "");
-    }
-    // Cursor redacts hidden reasoning in place; the marker carries nothing.
-    body = body.replace(/\n*\[REDACTED\]\s*$/, "").trim();
-    if (!body && toolCalls.length === 0 && toolResults.length === 0) continue;
-    messages.push({ ...(sessionId ? { uuid: `${sessionId}:${typeof entry.id === "string" && entry.id ? entry.id : record}` } : {}), role, content: body, timestamp: clock, ...(toolCalls.length ? { toolCalls } : {}), ...(toolResults.length ? { toolResults } : {}) });
+// Cursor rewrites the whole file on every save but keeps its records in
+// order, so a record's ordinal is its identity (`<chatId>:<n>`), unless it
+// names its own `id` as codecast's cloud agent mirror does. The record reader
+// is the mirror's (parseMirrorTranscript); Cursor adds its wrappers around the
+// text: the dated `<user_query>`, task notifications, and the `[REDACTED]`
+// reasoning marker.
+function cursorRecordText(role: "user" | "assistant", text: string): MirrorTextRewrite {
+  let body = text;
+  let clock: number | undefined;
+  if (role === "user") {
+    clock = cursorQueryTimestamp(body);
+    const notice = cursorTaskNotification(body);
+    if (notice) return { text: notice, clock, whole: true };
+    const query = body.match(/<user_query>([\s\S]*?)<\/user_query>/i);
+    if (query) body = query[1];
+    body = body.replace(/<timestamp>[\s\S]*?<\/timestamp>/gi, "");
   }
-  return messages;
+  // Cursor redacts hidden reasoning in place; the marker carries nothing.
+  return { text: body.replace(/\n*\[REDACTED\]\s*$/, ""), clock };
+}
+
+function parseCursorJsonlTranscript(content: string, sessionId?: string, fallbackClock?: number): ParsedMessage[] {
+  return parseMirrorTranscript(content, { sessionId, fallbackClock, rewrite: cursorRecordText, toolIdPrefix: "cursor" });
 }
 
 export function parseCursorTranscriptFile(content: string, sessionId?: string, fallbackClock?: number): ParsedMessage[] {

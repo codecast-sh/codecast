@@ -203,7 +203,7 @@ export async function readIngestJob(job: IngestJob, checkpoint: () => void = () 
       meta.turn = classifyCursorTranscriptTail(content);
       const chat = await optional(() => findCursorCliChat(process.env.HOME || '',job.sessionId),meta.warnings,'cursor chat');
       if (chat?.cwd) meta.cwd = chat.cwd;
-      // A Cursor Cloud worker a parent agent forked (cursorCloud.ts writes the link).
+      // A Cursor Cloud worker a parent agent forked (cloudAgents/watcher.ts writes the link).
       if (chat?.parentAgentId) { meta.parentSessionId = chat.parentAgentId; meta.agentName = chat.description ?? chat.title; }
     }
     if (job.client === 'claude') {

@@ -494,9 +494,10 @@ async function mirrorUnderLock(host: RemoteHost, opts: MirrorHomeOptions, deps: 
       }
       if (ledger) buildCache.set(cacheKey, { hash: built.hash, ledger, files }); else buildCache.delete(cacheKey);
       // Compatibility warnings describe the bundle, so they are worth a line when the bundle is new, not on every rebuild of the same one.
-      if (opts.onProgress || previous?.hash !== built.hash) for (const warning of summary?.warnings ?? []) {
-        (opts.onProgress ?? deps.log)(`context compatibility: ${warning}`);
-      }
+      // A wake shows one line for them (dozens of docs name a macOS path); the log and the dry run keep each.
+      const warnings = summary?.warnings ?? [];
+      if (opts.onProgress && warnings.length) opts.onProgress(`context compatibility: ${warnings.length} file(s) name macOS-only commands or paths; cast hosts sync --dry-run lists them`);
+      else if (previous?.hash !== built.hash) for (const warning of warnings) deps.log(`context compatibility: ${warning}`);
       return built;
     };
     const cached = opts.force ? undefined : buildCache.get(cacheKey);
