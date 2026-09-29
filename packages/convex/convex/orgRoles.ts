@@ -1,7 +1,7 @@
 import { internalMutation, mutation, query } from "./functions";
 import { internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { applyPause, applyResume, applyRunNow, applyTaskUpdate, cancelTasksOriginatingFrom, insertTask } from "./agentTasks";
+import { applyPause, applyResume, applyRunNow, applyTaskUpdate, cancelTasksOriginatingFrom, ensureRoleNeedsInputTrigger, insertTask } from "./agentTasks";
 import { CHIEF_OF_STAFF_JOB } from "@codecast/shared/contracts/chiefOfStaffPrompt";
 import { defaultAvatarFor, isAvatarKey } from "@codecast/shared/contracts/orgAvatars";
 import { ORG_AUTHORITY_KINDS, authorityWords, orgTenureError, type OrgAuthorityGrant } from "@codecast/shared/contracts/orgProposal";
@@ -27,13 +27,14 @@ import { handOpenTasksUpChain } from "./tasks";
 import { EMPTY_SCOPE, isWholeWorkspace, normalizeScope, sameScope, scopeIds, scopeOutside, scopeOverlap, type PlanProjectOf, type Scope } from "./lib/orgScope";
 import { announceSeating, decommissionAnchorRow, provisionStandingAgent, seatTitlePatch, userCanAdminAnchor, workspaceAnchorFor, type RoleBootstrap } from "./anchors";
 import { enqueuePendingMessage, tellRole } from "./pendingMessages";
+import { standingReportsToFields } from "./lib/standingSeat";
 import { enqueueKillAndResume, performSetThreadState } from "./conversations";
 import { ACTIVE_AGENT_STATUSES, normalizeThreadState, parseThreadStateStatus } from "@codecast/shared/contracts";
 import { siteUrl } from "./lib/siteUrl";
 import { movedFields, type OrgLogFields } from "@codecast/shared/contracts/orgChange";
 import { labelsOf, noteOrgChange, noteRoleChange, recordSubject, roleSubject, whereOfRecord, whereOfRole, withOrgChange } from "./lib/orgChangeLog";
 import { DEFAULT_CAPS, capsFor, countersFor, roleStartsOnItsOwn, trustOf } from "./lib/orgCaps";
-import { COMPANY_REVIEW_EVERY_MS, COMPANY_REVIEW_PROMPT, COMPANY_REVIEW_TITLE, ROLE_CHECK_EVERY_MS, ROLE_CHECK_PROMPT, liveRoutinesOf, roleRoutineFor } from "./lib/orgRoutine";
+import { COMPANY_REVIEW_EVERY_MS, COMPANY_REVIEW_PROMPT, COMPANY_REVIEW_TITLE, ROLE_CHECK_EVERY_MS, ROLE_CHECK_PROMPT, findRoleNeedsInputTrigger, liveRoutinesOf, roleRoutineFor } from "./lib/orgRoutine";
 import { autonomyChangeWords, switchFromStageWord, trustForSwitch } from "@codecast/shared/contracts/roleAutonomy";
 
 // Org roles: named seats in the reporting structure (docs/architecture/
@@ -233,6 +234,9 @@ export async function resolveScopeRef(ctx: Ctx, role: any, ref: string): Promise
       : await ctx.db.query("projects").withIndex("by_user_id", (q: any) => q.eq("user_id", role.scope_user_id)).collect();
     const lc = needle.toLowerCase();
     const hits = rows.filter((r) => inBoundary(r) && r.title.toLowerCase().includes(lc));
+    // A title named in full wins over titles that merely contain it: "test" is the "test" project, not also "issue-sync-test".
+    const exact = hits.filter((r) => r.title.trim().toLowerCase() === lc);
+    if (exact.length === 1) return { kind, id: exact[0]._id };
     if (hits.length === 1) return { kind, id: hits[0]._id };
     if (hits.length > 1) throw new Error(`"${needle}" matches ${hits.length} projects: ${hits.map((h) => h.short_id ?? h.title).join(", ")}`);
   }
@@ -514,6 +518,7 @@ async function performReparentRoleCore(
     });
   }
   const moved = await ctx.db.get(role._id);
+  await stampStandingReportsTo(ctx, moved);
   await noteRoleChange(ctx, userId, "move", role, moved, { door: args.from_session ? "cli" : "chart", gesture: args.from_session ? "command" : "drag" });
   return moved;
 }
@@ -554,7 +559,7 @@ async function performRetireRoleCore(ctx: any, userId: Id<"users">, args: { role
   const liveRoutines: any[] = standing ? (await ctx.db.query("agent_tasks").withIndex("by_originating_conversation", (q: any) => q.eq("originating_conversation_id", standing._id)).collect()).filter((t: any) => !["cancelled", "completed", "failed"].includes(t.status)) : [];
   const heldTasks: any[] = (await ctx.db.query("tasks").withIndex("by_assignee_updated", (q: any) => q.eq("assignee", String(role._id))).collect()).filter((t: any) => t.status !== "done" && t.status !== "dropped");
   if (standing) {
-    cancelledTriggers += await cancelTasksOriginatingFrom(ctx, standing._id, now, keepStanding ? (t) => t.title === roleRoutineFor(role).title : undefined);
+    cancelledTriggers += await cancelTasksOriginatingFrom(ctx, standing._id, now, keepStanding ? (t) => t.title === roleRoutineFor(role).title || String(t.role_id ?? "") === String(role._id) : undefined);
     const held: any[] = await ctx.db.query("pending_messages")
       .withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", standing._id).eq("status", "held")).collect();
     for (const p of held) await ctx.db.patch(p._id, keepStanding ? { status: "pending" } : { status: "cancelled", cancelled_at: now });
@@ -588,9 +593,7 @@ async function performRetireRoleCore(ctx: any, userId: Id<"users">, args: { role
     .query("conversations")
     .withIndex("by_org_role", (q: any) => q.eq("org_role_id", role._id))
     .collect();
-  // The escalation goes with the pointer, as a reparent to a person drops it:
-  // a retired role's line must never pin a card in a person's needs input.
-  for (const conv of filed) await ctx.db.patch(conv._id, { org_role_id: undefined, escalated_by_role: undefined });
+  for (const conv of filed) await ctx.db.patch(conv._id, { org_role_id: undefined });
   // Child roles re-home to the retired role's own parent, the way its sessions
   // fall back to their owners: the tree hides retired roles, so a child left
   // pointing here would draw with no parent. No cycle is possible: the parent
@@ -598,7 +601,10 @@ async function performRetireRoleCore(ctx: any, userId: Id<"users">, args: { role
   const children = (await rolesInBoundary(ctx, role)).filter(
     (r) => r.reports_to?.kind === "role" && r.reports_to.role_id.toString() === role._id.toString(),
   );
-  for (const child of children) await ctx.db.patch(child._id, { reports_to: role.reports_to, updated_at: now });
+  for (const child of children) {
+    await ctx.db.patch(child._id, { reports_to: role.reports_to, updated_at: now });
+    await stampStandingReportsTo(ctx, { ...child, reports_to: role.reports_to });
+  }
   // Its open tasks go the same way, up to whoever it reported to
   // (org-roles-run-work.md R5): the work is the company's, not the seat's.
   const tasksHanded = await handOpenTasksUpChain(ctx, role, userId);
@@ -1192,9 +1198,12 @@ export async function ensureRoleRoutine(ctx: Ctx, role: any, standing: any, ever
   const spec = roleRoutineFor(role);
   const interval = Math.max(60_000, Math.round(everyMs || spec.every_ms));
   const live = await roleRoutineOf(ctx, role, standing);
+  // The route up is armed with the routine (S28), so every door that arms
+  // one arms both.
   if (live) {
     // A cadence the caller named reaches a routine already armed.
     if (everyMs && live.interval_ms !== interval) await applyTaskUpdate(ctx, live, { interval_ms: interval }, { userId: standing.user_id, source: "cli" });
+    await ensureRoleNeedsInputTrigger(ctx, role, standing);
     return { id: live._id, short_id: live.short_id, created: false };
   }
   const created = await insertTask(ctx, standing.user_id, {
@@ -1208,6 +1217,7 @@ export async function ensureRoleRoutine(ctx: Ctx, role: any, standing: any, ever
     mode: "apply",
     role_id: role._id,
   });
+  await ensureRoleNeedsInputTrigger(ctx, role, standing);
   return { ...created, created: true };
 }
 
@@ -1426,9 +1436,29 @@ export async function standingConversationOf(ctx: Ctx, role: any): Promise<any |
   return anchor?.conversation_id ? await ctx.db.get(anchor.conversation_id) : null;
 }
 
+// The role's hands: its sessions, never a child role's standing session,
+// which carries the role's id only to ride its card (S28).
 async function handsOf(ctx: Ctx, role: any): Promise<any[]> {
+  return (await sessionsUnder(ctx, role)).filter((c) => !c.standing_role_id);
+}
+
+/** Every live session that reports to the role: its hands, and the standing
+ *  sessions of the roles that report to it. */
+async function sessionsUnder(ctx: Ctx, role: any): Promise<any[]> {
   const rows: any[] = await ctx.db.query("conversations").withIndex("by_org_role", (q: any) => q.eq("org_role_id", role._id)).collect();
   return rows.filter((c) => c.status === "active" && !c.inbox_killed_at);
+}
+
+// The standing session follows the role's parent (S28, lib/standingSeat):
+// stamped when the role moves, when a retire re-homes its children, and by
+// the backfill for roles seated before the rule.
+export async function stampStandingReportsTo(ctx: Ctx, role: any): Promise<boolean> {
+  const standing = await standingConversationOf(ctx, role);
+  if (!standing) return false;
+  const { org_role_id } = standingReportsToFields(role);
+  if (String(standing.org_role_id ?? "") === String(org_role_id ?? "")) return false;
+  await ctx.db.patch(standing._id, { org_role_id });
+  return true;
 }
 
 // pause — flush holds; hands get one interrupt; the spawn path refuses new
@@ -1480,6 +1510,9 @@ async function performResumeRoleCore(ctx: any, userId: Id<"users">, args: { role
   await ctx.db.patch(role._id, { status: "active", updated_at: Date.now() });
   const standing = await standingConversationOf(ctx, role);
   for (const t of standing ? await liveRoutinesOf(ctx, standing) : []) await applyResume(ctx, t);
+  // A session that began waiting while the role was paused fired nothing:
+  // its check runs again now that the trigger is armed.
+  for (const under of await sessionsUnder(ctx, role)) await ctx.scheduler?.runAfter(0, internal.notifications.checkNeedsInput, { conversation_id: under._id });
   await noteRoleChange(ctx, userId, "role_edit", role, await ctx.db.get(role._id));
   return await ctx.db.get(role._id);
 }
@@ -1812,8 +1845,10 @@ export const selfForSession = query({
   handler: async (ctx, { api_token, session }) => roleForSession(ctx, await requireCaller(ctx, api_token), session),
 });
 
-/** Arm the recurring check (S25) on every active role that lacks one. A role
- *  already armed is left as it is; a paused or retired role gets nothing. */
+/** Arm the recurring check (S25) and the needs-input trigger (S28) on every
+ *  active role that lacks one. A role already armed is left as it is; a
+ *  paused or retired role gets nothing. Run once after a deploy to backfill
+ *  the roles seated before a trigger existed. */
 export const armRoleRoutines = internalMutation({
   args: {},
   handler: async (ctx) => {
@@ -1822,8 +1857,11 @@ export const armRoleRoutines = internalMutation({
       if (role.status !== "active") continue;
       const standing = await standingConversationOf(ctx as any, role);
       if (!standing) continue;
+      const before = await findRoleNeedsInputTrigger(ctx, standing);
       const r = await ensureRoleRoutine(ctx as any, role, standing);
       if (r.created) armed.push(`${role.short_id} ${r.short_id ?? ""}`.trim());
+      const routeUp = before ? null : await findRoleNeedsInputTrigger(ctx, standing);
+      if (routeUp) armed.push(`${role.short_id} ${routeUp.short_id ?? ""}`.trim());
     }
     return { armed };
   },

@@ -4,7 +4,7 @@
 // a person's inbox.
 //
 //   bun packages/cli/scripts/prompt-dry-run.ts --run <dir> --prompt <file>
-//        [--max-turns 80] [--tools Bash,Read,Write,Edit] [--guard <dir>] [--serve <dir>] [--then <file>]
+//        [--max-turns 80] [--tools Bash,Read,Write,Edit] [--guard <dir>] [--serve <dir>] [--then <file>] [--model <id>]
 //
 // Why a harness at all. The codecast daemon syncs EVERY transcript under
 // ~/.claude/projects as a session, whether or not the SessionStart hook ran
@@ -59,10 +59,12 @@ function arg(name: string, fallback?: string): string | undefined {
 const runDir = path.resolve(arg("run") ?? "");
 const promptFile = path.resolve(arg("prompt") ?? "");
 if (!arg("run") || !arg("prompt") || !fs.existsSync(promptFile)) {
-  console.error("usage: prompt-dry-run.ts --run <dir> --prompt <file> [--max-turns N] [--tools A,B] [--guard <dir>] [--serve <dir>] [--account <profile>] [--then <reply file>]");
+  console.error("usage: prompt-dry-run.ts --run <dir> --prompt <file> [--max-turns N] [--tools A,B] [--guard <dir>] [--serve <dir>] [--account <profile>] [--then <reply file>] [--model <id>]");
   process.exit(2);
 }
 const maxTurns = arg("max-turns", "80")!;
+// Pin the model: without it a run takes whatever the account defaults to, and two rounds on different accounts are not comparable.
+const model = arg("model");
 const tools = (arg("tools", "Bash,Read,Write,Edit") ?? "").split(",").filter(Boolean);
 const guardDir = path.resolve(arg("guard") ?? path.join(import.meta.dir, "prompt-dry-run-bin"));
 const serveDir = arg("serve") ? path.resolve(arg("serve")!) : undefined;
@@ -128,6 +130,7 @@ function runTurn(name: string, promptText: string, resume?: string): Promise<{ c
       "--allowedTools", ...tools,
       "--dangerously-skip-permissions",
       "--max-turns", maxTurns,
+      ...(model ? ["--model", model] : []),
       "--output-format", "stream-json", "--verbose",
     ], { cwd: runDir, env, stdio: ["ignore", out, err], detached: true });
     child.on("exit", (code) => {
