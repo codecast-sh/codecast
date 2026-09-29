@@ -58,6 +58,7 @@ export const TYPE_LABEL: Record<EntityType, string> = {
   initiative: "Initiative",
   proposal: "Proposal",
   trigger: "Trigger",
+  decision: "Decision",
   pr: "Pull request",
   commit: "Commit",
 };
@@ -211,12 +212,15 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
   const proposalFeed = useSyncOrgProposal(type === "proposal" ? rawId : null);
   const proposalRow = useInboxStore((s) => (type === "proposal" ? findEntityInStore(s, "proposal", rawId) : undefined));
   const proposal = type === "proposal" ? (proposalFeed.ready ? proposalRow ?? null : undefined) : undefined;
+  // A decision (`sd-N` or Convex id) seeds from the viewer's queue in the
+  // store; the query keeps it live and covers rows the queue has dropped.
+  const { data: decision } = useQueryNoThrow(api.sessionDecisions.get, type === "decision" ? { decision_id: rawId } : "skip");
   // A pull request or commit reference resolves by repository and number/sha,
   // or by Convex id. No-throw for the same client/deploy-skew reason as
   // triggers: a `owner/repo#482` in prose must read as text, not crash.
   const repoObjectArgs = isRepoObject && queryArgs && (queryArgs.id || queryArgs.repository) ? queryArgs : null;
   const repoObject = useRepoObject(isRepoObject ? type : null, rawId, repoObjectArgs);
-  const served = isTask ? task : isPlan ? plan : isSession ? session : isTrigger ? trigger : type === "doc" ? doc : type === "project" ? project : type === "initiative" ? initiative : type === "proposal" ? proposal : undefined;
+  const served = isTask ? task : isPlan ? plan : isSession ? session : isTrigger ? trigger : type === "doc" ? doc : type === "project" ? project : type === "initiative" ? initiative : type === "proposal" ? proposal : type === "decision" ? decision : undefined;
 
   // Local-first: the client usually already holds this row, so paint the title
   // on the FIRST frame instead of flashing the raw id until the query answers.
@@ -234,7 +238,7 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
   // prefers its display_title — the generated short name, not the whole
   // prompt's first line.
   const resolvedTitle: string | undefined =
-    (isTrigger ? entity?.display_title : undefined) || (isRepoObject && type ? repoObjectTitle(type, entity) : undefined) || entity?.title || entity?.display_title || entity?.name;
+    (isTrigger ? entity?.display_title : undefined) || (type === "decision" ? entity?.question : undefined) || (isRepoObject && type ? repoObjectTitle(type, entity) : undefined) || entity?.title || entity?.display_title || entity?.name;
   const labelArgs = {
     title: resolvedTitle,
     shortId: entity?.short_id,
@@ -253,9 +257,9 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
   // Convex id (no such page), so the resolved row supplies the reference when
   // the raw id was a Convex id. The commit page matches the sha exactly, so
   // the route carries the full one.
-  // An initiative's page is addressed by its `in-N`, and a proposal's by its
-  // `op-N`: the form a person reads.
-  const routeId = isRepoObject && type ? repoObjectRefOf(type, entity, 40) ?? rawId : ((type === "initiative" || type === "proposal") && entity?.short_id) || (entity?._id ?? rawId);
+  // An initiative's page is addressed by its `in-N`, a proposal's by its
+  // `op-N` and a decision's by its `sd-N`: the form a person reads.
+  const routeId = isRepoObject && type ? repoObjectRefOf(type, entity, 40) ?? rawId : ((type === "initiative" || type === "proposal" || type === "decision") && entity?.short_id) || (entity?._id ?? rawId);
   const href = entityRoute(type ?? "session", routeId) ?? "#";
 
   return { rawId, type, entity, served: isRepoObject ? repoObject.ready : served !== undefined, status: entity?.status, label, shortLabel, href };

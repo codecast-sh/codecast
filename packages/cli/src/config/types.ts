@@ -62,6 +62,12 @@ export interface Config {
   // TCC grant — the daemon never triggers the "access data from other apps"
   // prompt at login on its own (see cursorWatcherDecision).
   cursor_sync?: "on" | "off";
+  /** Mirrored from the server: the account setting for Claude Code cloud
+   *  sessions (claude.ai/code), read with the local Claude login and mirrored
+   *  as Claude transcripts (claudeCloud.ts). Unset = on. */
+  claude_cloud_sync?: boolean;
+  /** Mirror Cursor Cloud Agents (needs a Cursor API key); off only when false. */
+  cursor_cloud_sync?: boolean;
   excluded_paths?: string;
   sync_mode?: "all" | "selected";
   sync_projects?: string[];

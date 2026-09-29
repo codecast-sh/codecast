@@ -14,6 +14,7 @@ import { requireUser } from "./lib/auth";
 import { runLocalCommand } from "./localFirstCommands";
 import { insertEnqueuedPendingMessage, reviveConversationOnDelivery } from "./pendingMessageWrites";
 import { clearedThreadStateFields, formatUserMessage, hasThreadState, HEARTBEAT_ALIVE_MS, isStashHidden, SETTLE_VERDICT_STATUSES } from "@codecast/shared/contracts";
+import { resolveOwnerDeviceView } from "./devices";
 import {
   messagesCommandCoverageTarget,
 } from "./messageViewContracts";
@@ -845,8 +846,13 @@ export async function performSessionSend(
   });
 
   // Immediate liveness signal so the CLI can warn "the session looks offline" right away,
-  // rather than the sender only finding out via the cron's delayed notice.
-  const targetLive = await conversationHasLiveSession(ctx, target._id, Date.now());
+  // rather than the sender only finding out via the cron's delayed notice. The
+  // daemon that owns the session delivers it, and an idle session's own
+  // heartbeat goes quiet while that daemon is still online and resumes it.
+  const now = Date.now();
+  const targetLive =
+    (await conversationHasLiveSession(ctx, target._id, now)) ||
+    (await resolveOwnerDeviceView(ctx, target as any, now)).owner_online;
 
   return {
     message_id: messageId,

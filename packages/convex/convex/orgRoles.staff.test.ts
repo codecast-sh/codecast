@@ -454,6 +454,20 @@ describe("orgRoles.staff", () => {
     expect(String(tables.conversations.find((c) => c._id === "mine")!.standing_role_id)).toBe(String(role._id));
   });
 
+  // A seat under a role carries the parent role on its standing session
+  // (org-staffing.md S28) so it rides the parent lead's card; a seat under a
+  // person carries none.
+  test("provisioning stamps the standing session with the role's parent role", async () => {
+    const { ctx, tables } = world();
+    const top = await performCreateRole(ctx, ME as any, { name: "Growth", handle: "growth", team_id: TEAM });
+    const sub = await performCreateRole(ctx, ME as any, { name: "Calling", handle: "calling", team_id: TEAM, reports_to: { kind: "role", role_id: top._id } });
+    await performProvisionRole(ctx, ME as any, { role_id: String(sub._id), adopt_conversation_id: "mine" });
+    expect(String(tables.conversations.find((c) => c._id === "mine")!.org_role_id)).toBe(String(top._id));
+    await performProvisionRole(ctx, ME as any, { role_id: String(top._id) });
+    const topSeat = tables.conversations.find((c) => String(c.standing_role_id ?? "") === String(top._id))!;
+    expect(topSeat.org_role_id).toBeUndefined();
+  });
+
   test("the root role's switch cannot be turned on (S12, S23.1)", async () => {
     const { ctx, tables } = world();
     const out = await performStaff(ctx, ME as any, { team_id: TEAM, adopt_conversation_id: "mine" });

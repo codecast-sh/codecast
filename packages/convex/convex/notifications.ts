@@ -7,7 +7,6 @@ import {
   summarizeIdleDigest,
 } from "@codecast/shared/contracts";
 import { v } from "convex/values";
-import { isDirectEscalation } from "@codecast/shared/contracts";
 import { internal } from "./_generated/api";
 import { enqueuePush, readMissedSince } from "./pushRouter";
 import { getAuthUserId } from "@convex-dev/auth/server";
@@ -854,23 +853,43 @@ export async function performNeedsInputCheck(
   // recheck in messages.ts) can still land on one.
   if (boundary) return { notified: false, reason: "session_boundary" };
 
-  // A hand (a session that reports to a role) that is HARD blocked tells its
-  // role at once (org-staffing.md S25): the role, not the person, is the
-  // first reader of a stalled hand. Deduped on the waiting episode the same
-  // way the chime is.
-  if (conv.org_role_id && state === "needs_input") {
+  // The route up (org-staffing.md S28). A hand (a session that reports to a
+  // role) that is HARD blocked, or declared itself blocked, tells its role at
+  // once: the role, not the person, is the first reader of a stalled hand. A
+  // role's standing session that is blocked the same way tells the role it
+  // reports to; one that reports to a person is its own card in that
+  // person's inbox (the anchor rule in placeInboxRow), so it tells nobody.
+  // Deduped on the waiting episode the same way the chime is.
+  if ((conv.org_role_id || conv.standing_role_id) && state === "needs_input") {
     const kind = needsInputKind({ awaitingInput, agentStatus, isUnresponsive: activity.isUnresponsive });
-    const hard = awaitingInput || kind === "permission_blocked" || kind === "stopped" || kind === "unresponsive";
+    const declared = conv.thread_state_status === "blocked";
+    const hard = awaitingInput || kind === "permission_blocked" || kind === "stopped" || kind === "unresponsive" || declared;
     // One wake per waiting episode: the check is scheduled up to three times
     // per settle, so the episode is stamped on the row with its own key (the
     // chime's key is not shared: a stashed hand chimes nobody but still
     // wakes its role).
-    const episode = `${conv.message_count}:${kind ?? "waiting"}`;
+    // The word the line carries: the machine's kind when the machine is
+    // stuck, else the session's own declaration.
+    const why = awaitingInput || kind === "permission_blocked" || kind === "stopped" || kind === "unresponsive" ? kind ?? "waiting" : declared ? "blocked" : kind ?? "waiting";
+    const episode = `${conv.message_count}:${why}`;
     if (hard && conv.hand_wake_notified_key !== episode) {
-      const id = await tellRole(ctx, conv.org_role_id, {
-        content: `hand ${conv.short_id ?? String(conv._id).slice(0, 7)} "${(conv.title ?? "").slice(0, 60)}" needs input (${kind ?? "waiting"})`,
-        client_id: `hand-wait:${conv._id}:${episode}`,
-      });
+      const short = conv.short_id ?? String(conv._id).slice(0, 7);
+      const what = declared && conv.thread_state ? `: ${String(conv.thread_state).split("\n")[0].slice(0, 200)}` : "";
+      let target: any = null;
+      let content = `hand ${short} "${(conv.title ?? "").slice(0, 60)}" needs input (${why})${what}`;
+      if (conv.standing_role_id) {
+        // A role's own standing session: the role it reports to hears, in
+        // the role's name; one that reports to a person is that person's
+        // own card and tells nobody.
+        const role = await ctx.db.get(conv.standing_role_id);
+        if (role?.reports_to?.kind === "role") {
+          target = role.reports_to.role_id;
+          content = `@${role.handle} needs input (${why})${what}`;
+        }
+      } else {
+        target = conv.org_role_id ?? null;
+      }
+      const id = target ? await tellRole(ctx, target, { content, client_id: `hand-wait:${conv._id}:${episode}` }) : null;
       if (id) await ctx.db.patch(conv._id, { hand_wake_notified_key: episode });
     }
   }
@@ -896,11 +915,12 @@ export async function performNeedsInputCheck(
     return { notified: false, reason: "hidden" };
   }
   // A session a role looks after reaches the person through the role
-  // (org-roles-run-work.md R1, revised): its own settle rings nobody. The
-  // role reads it first, and the escalation the role makes is what chimes,
-  // on the role's card. Only a DIRECT escalation makes the session the
-  // person's own card, and then its settles ring them like any other.
-  if (conv.org_role_id && !conv.standing_role_id && !isDirectEscalation(conv.escalated_by_role)) {
+  // (org-staffing.md S28): its own settle rings nobody. The role reads it
+  // first and raises what needs a person in its own thread, and that card
+  // chimes like any session waiting on them.
+  // A role's standing session that reports to a role rides that role's card
+  // the same way (S28), so it rings nobody either.
+  if (conv.org_role_id) {
     return { notified: false, reason: "under_role" };
   }
   // ── Push etiquette (chime only) ────────────────────────────────────────────
@@ -1010,21 +1030,6 @@ function isMachineStartedTurn(content: string | undefined | null): boolean {
   return c.startsWith("<session-message") || c.startsWith("<scheduled-task") || c.startsWith("<session-escalation");
 }
 
-// The escalation a row carries is still open, so the chime it earned still
-// stands (org-roles-run-work.md R1, revised): a child put in front of the
-// person directly, a standing session that escalated itself, or a role's
-// standing session with a session under it that reaches the person through
-// the role's card. Read off the rows, never off the notification.
-export async function escalationOpenFor(ctx: { db: any }, conv: any): Promise<boolean> {
-  if (conv?.escalated_by_role) return true;
-  if (!conv?.standing_role_id) return false;
-  const under = await ctx.db
-    .query("conversations")
-    .withIndex("by_org_role", (q: any) => q.eq("org_role_id", conv.standing_role_id))
-    .collect();
-  return under.some((c: any) => c.escalated_by_role && !isDirectEscalation(c.escalated_by_role));
-}
-
 export function notifPreview(text: string | undefined | null, max = 200): string | null {
   const cleaned = (text || "").replace(/\s+/g, " ").trim();
   if (!cleaned) return null;
@@ -1093,10 +1098,7 @@ export async function performIdleDigestFlush(
     // The episode this row announced, still current: the dedupe key names the
     // message count the session settled at, so a reply (which grows the count)
     // reads as answered.
-    // An escalation's chime rides this rail with no episode key of its own:
-    // it is current while the escalation is open (the role's card, or the
-    // child when direct).
-    if (!String(conv.needs_input_notified_key ?? "").startsWith(`${conv.message_count || 0}:`) && !(await escalationOpenFor(ctx, conv))) continue;
+    if (!String(conv.needs_input_notified_key ?? "").startsWith(`${conv.message_count || 0}:`)) continue;
     titles.push(sessionLabelOf(conv));
   }
 

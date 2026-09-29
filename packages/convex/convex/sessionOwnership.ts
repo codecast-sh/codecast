@@ -14,15 +14,12 @@ import {
   humanStarterUser,
 } from "./sessionOwners";
 import { notifySessionAssigned, notifySessionOwnershipChanged } from "./sessionAssignmentNotifications";
-import { enqueuePendingMessage, formatSessionMessage } from "./pendingMessages";
+import { enqueuePendingMessage, formatSessionMessage, tellRole } from "./pendingMessages";
 import { requireRole, userCanAdminRole } from "./lib/orgAccess";
 import { resolveActor } from "./lib/actor";
 import { wakeCost, wakeFieldsOf } from "./wakeCost";
 import { reroutePendingDecisionsForConversation } from "./sessionDecisions";
 import { movedFields } from "@codecast/shared/contracts/orgChange";
-import { ESCALATION_LINE_MAX, escalationFirstLine, formatSessionEscalation } from "@codecast/shared/contracts";
-import { avatarOf as roleAvatarOf } from "@codecast/shared/contracts/orgAvatars";
-import { deliverSessionNotificationToParties } from "./notifications";
 import { labelsOf, noteOrgChange, rememberOrgRecord, roleSubject, sessionParent, sessionSubject, whereOfRole, whereOfSession, withOrgChange } from "./lib/orgChangeLog";
 
 // Session OWNERS — the humans whose inboxes a session appears in and who may
@@ -325,7 +322,7 @@ export async function roleMayHoldSession(ctx: { db: any }, role: { team_id?: any
 const reportsToKey = (r: ReportsTo | null): string => !r ? "" : r.kind === "role" ? `role:${r.role_id}` : `user:${r.user_id}`;
 
 // Take the previous holder's triage off a row that is being put in front of
-// someone: a handoff to a new owner, or a role's escalation. Only a stamp that
+// someone: a handoff to a new owner. Only a stamp that
 // is set is cleared, so an untouched row takes no write. A kill is left alone:
 // that row is retired, and `cast restore` is the gesture that brings it back.
 async function unhide(ctx: { db: any }, conversation: any): Promise<void> {
@@ -479,8 +476,7 @@ async function reparentSessionCore(
     // A person is now the parent: the role pointer comes off (S11). A remove
     // is not a re-homing, so a session filed under a role stays there.
     if (mode !== "remove" && desired.length > 0 && roleId) {
-      // The escalation is the role's line (R1); with no role there is none.
-      await ctx.db.patch(conversation._id, { org_role_id: undefined, escalated_by_role: undefined });
+      await ctx.db.patch(conversation._id, { org_role_id: undefined });
       roleId = undefined;
     }
     owners = mode === "set" ? desired.map(toOwnerInfo) : await listOwnerInfos(ctx, conversation._id);
@@ -491,10 +487,7 @@ async function reparentSessionCore(
     if (targetRole.team_id && (conversation.team_id?.toString() ?? null) !== targetRole.team_id.toString()) {
       throw new Error("That session is not in the role's team");
     }
-    // Another role's escalation does not carry over: the new role has not
-    // said why this is in front of a person.
-    const staleEscalation = conversation.escalated_by_role && String(conversation.escalated_by_role.role_id) !== String(targetRole._id);
-    await ctx.db.patch(conversation._id, { org_role_id: targetRole._id, ...(staleEscalation ? { escalated_by_role: undefined } : {}) });
+    await ctx.db.patch(conversation._id, { org_role_id: targetRole._id });
     roleId = targetRole._id;
     owners = await listOwnerInfos(ctx, conversation._id);
   }
@@ -586,39 +579,13 @@ async function sayIntoSession(
   return defer || line.hold ? "deferred" : "told";
 }
 
-// ── A role's triage (org-roles-run-work.md R1) ───────────────────────────────
-// A session under a role stays out of its host's needs input. Escalation is
-// the one way back in: the role (or a person, with the same gesture on the
-// row) puts the session in front of the person with one line saying what they
-// will decide, and `clear` takes it back under the role.
+// ── A role's sessions (org-roles-run-work.md R1, org-staffing.md S28) ───────
+// A session under a role stays out of its host's needs input. What it needs
+// from a person travels up the reporting line as messages: the hand tells its
+// role, a role tells the role it reports to, and the role that reports to a
+// person raises it in its own standing thread. Nothing on the row lifts it.
 
-// The line's only cap stops abuse (contracts/machineMessages
-// ESCALATION_LINE_MAX); paragraphs and newlines survive, the divider renders
-// all of it and every strip shows the first line (escalationFirstLine).
-export { ESCALATION_LINE_MAX };
-
-export type EscalationStamp = { role_id: Id<"org_roles">; line: string; at: number; direct?: boolean };
-
-export type EscalateSessionResult = {
-  ok: true;
-  short_id: string;
-  conversation_id: Id<"conversations">;
-  changed: boolean;
-  escalated_by_role: EscalationStamp | null;
-  // Null only for a clear on a session whose role is gone (retired, or the
-  // pointer dropped): the stamp is removed and there is no role to name.
-  role: { short_id: string; handle: string; name: string } | null;
-  // Where the escalation reached the person (R1, revised): the role's standing
-  // session by default, the session itself when direct. Null on a clear, on a
-  // no-op, and when the role has no standing session to carry it.
-  reached: { conversation_id: Id<"conversations">; short_id: string; direct: boolean } | null;
-  // The chime for this move, for the mutation to deliver on the row it
-  // reached (the perform core runs without a scheduler in tests).
-  notify: { conversation_id: Id<"conversations">; title: string; message: string } | null;
-};
-
-// The role's standing session: the row the role speaks from, and the card an
-// escalation reaches the person through.
+// The role's standing session: the row the role speaks from.
 async function standingSessionOf(ctx: { db: any }, role: any): Promise<any | null> {
   return await ctx.db
     .query("conversations")
@@ -626,47 +593,11 @@ async function standingSessionOf(ctx: { db: any }, role: any): Promise<any | nul
     .first();
 }
 
-// Every move of a session between the role and the person is written into
-// BOTH threads as one machine message (the same rail a reparent's line rides),
-// and each thread renders it as an inline divider: the role's face, what
-// moved where, the whole line as markdown, the time. A session that IS the
-// standing session gets one line, not two. The copy that lands in the
-// caller's OWN thread is a note for its record, held until its next turn:
-// a role is not woken to read the divider it just wrote.
-async function writeEscalationDividers(
-  ctx: { db: any },
-  authUserId: Id<"users">,
-  opts: { conversation: any; standing: any | null; caller: any | null; role: any; person: any; move: "handed" | "direct" | "back"; by: "role" | "person"; left?: boolean; line: string; at: number },
-): Promise<void> {
-  const shortId = opts.conversation.short_id ?? opts.conversation._id.toString().slice(0, 7);
-  const content = formatSessionEscalation({
-    move: opts.move,
-    by: opts.by,
-    ...(opts.left ? { left: true } : {}),
-    role: { short_id: opts.role.short_id, handle: opts.role.handle, name: opts.role.name, avatar: roleAvatarOf(opts.role) },
-    session: { short_id: shortId, title: (opts.conversation.title ?? "").trim() || undefined },
-    to: personName(opts.person),
-    at: opts.at,
-    line: opts.line,
-  });
-  const targets = [opts.conversation];
-  if (opts.standing && String(opts.standing._id) !== String(opts.conversation._id)) targets.push(opts.standing);
-  for (const target of targets) {
-    await sayIntoSession(ctx, authUserId, target, {
-      content,
-      client_id: `escalation:${opts.conversation._id}:${opts.move}:${opts.at}`,
-      sender: opts.caller,
-      human: false,
-      hold: !!opts.caller && String(opts.caller._id) === String(target._id),
-    });
-  }
-}
-
 // A session's visibility changed (lib/access.patchConversationVisibility):
 // a team role may hold only a session its team can see (roleMayHoldSession),
-// so one the team can no longer see leaves the role, its escalation with it,
-// in the same patch, and both threads record the move. Returns the fields to
-// fold into that patch; `tell` writes the divider once the patch is in.
+// so one the team can no longer see leaves the role in the same patch, and
+// both threads record the move on the reparent rail. Returns the fields to
+// fold into that patch; `tell` writes the line once the patch is in.
 export async function roleDropForVisibility(
   ctx: { db: any },
   after: { _id: Id<"conversations">; user_id: Id<"users"> } & Record<string, any>,
@@ -675,136 +606,15 @@ export async function roleDropForVisibility(
   if (!row?.org_role_id) return null;
   const role = await ctx.db.get(row.org_role_id);
   if (!role || await roleMayHoldSession(ctx, role, { ...row, ...after })) return null;
-  const patch: Record<string, undefined> = { org_role_id: undefined, ...(row.escalated_by_role ? { escalated_by_role: undefined } : {}) };
+  const patch: Record<string, undefined> = { org_role_id: undefined };
   const tell = async () => {
+    const line = `This session is no longer visible to the team, so it left @${role.handle}.`;
+    const moveKey = `left:${role._id}`;
+    await tellSession(ctx, row.user_id, { ...row, ...after, ...patch }, line, undefined, moveKey);
     const standing = await standingSessionOf(ctx, role);
-    const person = role.host_user_id ? await ctx.db.get(role.host_user_id) : await ctx.db.get(row.user_id);
-    await writeEscalationDividers(ctx, row.user_id, {
-      conversation: { ...row, ...after, ...patch },
-      standing,
-      caller: null,
-      role,
-      person,
-      move: "back",
-      by: "person",
-      left: true,
-      line: `This session is no longer visible to the team, so it left @${role.handle}${row.escalated_by_role ? " and its escalation is cleared" : ""}.`,
-      at: Date.now(),
-    });
+    if (standing) await tellSession(ctx, row.user_id, standing, `${row.short_id ?? String(row._id).slice(0, 7)} "${(row.title ?? "").trim()}" is no longer visible to the team, so it left @${role.handle}.`, undefined, moveKey);
   };
   return { patch, tell };
-}
-
-export async function performEscalateSession(
-  ctx: { db: any },
-  authUserId: Id<"users">,
-  args: { session_id: string; line?: string; at?: number; clear?: boolean; direct?: boolean; from_session?: string; api_token?: string },
-): Promise<EscalateSessionResult> {
-  const fromRef = args.from_session?.trim();
-  const caller = fromRef ? await findConversationByAnyRefWhere(ctx, fromRef, async () => true) : null;
-  // Who did it (org-staffing.md S23.4). A browser call is the person's own
-  // gesture. A terminal call is the session the command ran in: the CLI names
-  // it, and the actor is what that session speaks as. A terminal call that
-  // names no session is a command the server cannot see the author of, and
-  // it is never read as the person: without a line it is refused, and with
-  // one it is recorded as the role's, so a person's name is never filled in
-  // for a role's escalation (the Calling lead's case, 2026-09-22).
-  const unnamedTerminal = !!args.api_token && !caller;
-  const actor = await resolveActor(ctx, authUserId, caller);
-  // A hand that could escalate itself would make the role's triage mean
-  // nothing: every session would put itself in front of the person.
-  if (actor.kind === "hand") {
-    throw new Error(`Your role decides what reaches a person. Tell it why this needs one: cast send @${actor.role?.handle ?? "your-role"} "<why>"`);
-  }
-  // Who may: the role the session reports to, or a person who could have
-  // filed it there (an owner, or a team viewer who may reshape the role).
-  // A template role may also put ITSELF in front of the person, with the one
-  // open setup item only it can clear (org-hire.md H5): its standing session
-  // (standing_role_id) is the role, not a session that reports to it.
-  const conversation = await findConversationByAnyRefWhere(ctx, args.session_id, async (c: any) => {
-    if (actor.kind === "role") return (!!c.org_role_id && String(c.org_role_id) === String(actor.role?._id)) || (!!c.standing_role_id && String(c.standing_role_id) === String(actor.role?._id));
-    // An unnamed terminal call reaches only the sessions the token's owner
-    // could file under a role: the role's own hands and its standing session.
-    if (unnamedTerminal && !c.org_role_id && !c.standing_role_id) return false;
-    const access = await checkConversationAccess(ctx, authUserId, c);
-    if (access === "owner") return true;
-    if (access !== "team" || !c.org_role_id) return false;
-    const role = await ctx.db.get(c.org_role_id);
-    return !!role && await userCanAdminRole(ctx, authUserId, role);
-  });
-  if (!conversation) throw new Error(actor.kind === "role" ? "Session not found among the sessions that report to you" : "Session not found, or you are not one of its owners");
-  const role = conversation.org_role_id ? await ctx.db.get(conversation.org_role_id) : conversation.standing_role_id ? await ctx.db.get(conversation.standing_role_id) : null;
-  // A stamp can outlive its role (an old row, a pointer dropped by hand): a
-  // clear always succeeds, or the card would sit in needs input for good.
-  if (!role && args.clear) {
-    if (conversation.escalated_by_role) await ctx.db.patch(conversation._id, { escalated_by_role: undefined });
-    return { ok: true as const, short_id: conversation.short_id ?? conversation._id.toString().slice(0, 7), conversation_id: conversation._id, role: null, changed: !!conversation.escalated_by_role, escalated_by_role: null, reached: null, notify: null };
-  }
-  if (!role) throw new Error("That session reports to no role, so it is already in its owner's inbox");
-
-  const shortId = conversation.short_id ?? conversation._id.toString().slice(0, 7);
-  const base = { ok: true as const, short_id: shortId, conversation_id: conversation._id, role: { short_id: role.short_id, handle: role.handle, name: role.name } };
-  const standing = await standingSessionOf(ctx, role);
-  const person = role.host_user_id ? await ctx.db.get(role.host_user_id) : await ctx.db.get(authUserId);
-  const by: "role" | "person" = actor.kind === "role" || unnamedTerminal ? "role" : "person";
-  if (args.clear) {
-    const had = conversation.escalated_by_role as EscalationStamp | undefined;
-    if (had) {
-      await ctx.db.patch(conversation._id, { escalated_by_role: undefined });
-      await writeEscalationDividers(ctx, authUserId, { conversation, standing, caller, role, person, move: "back", by, line: "", at: Date.now() });
-    }
-    return { ...base, changed: !!had, escalated_by_role: null, reached: null, notify: null };
-  }
-  // The role never escalates silently: its line is the reason on the card. A
-  // person's own gesture needs no reason, so it is recorded as theirs.
-  // The reason is as long as it needs to be: paragraphs survive, the divider
-  // renders all of it, the strips show the first line. Only abuse is refused.
-  const line = (args.line ?? "").replace(/\r\n?/g, "\n").replace(/[ \t]+\n/g, "\n").trim()
-    || (actor.kind === "user" && !unnamedTerminal ? `${personName(await ctx.db.get(authUserId))} put this in their inbox` : "");
-  if (!line) {
-    throw new Error(unnamedTerminal
-      ? "This command did not name the session it runs in, so the line is required and reads as the role's: cast escalate <session> \"<line>\""
-      : "Say what the person will decide, and why: cast escalate <session> \"<line>\"");
-  }
-  if (line.length > ESCALATION_LINE_MAX) throw new Error(`The line is ${line.length} characters; the cap is ${ESCALATION_LINE_MAX}. Say it shorter, or put the detail in the session and point at it.`);
-  // A person's gesture on the web writes the row in a store draft first, and
-  // the draft's field lock retires only on an echo equal to it by value, so the
-  // web passes the stamp it drafted (the dismissBrowserPaneOffer pattern). A
-  // role's own escalation is always stamped here. Only a stamp from the future
-  // is refused: a gesture replayed from the offline outbox is honestly old.
-  const at = actor.kind === "user" && !unnamedTerminal && typeof args.at === "number" && args.at <= Date.now() + 60_000 ? args.at : Date.now();
-  // Where it reaches the person (R1, revised). A person's own gesture is
-  // always direct: they put the session in their own inbox. A role reaches
-  // them through its own card unless it asks for direct, which exists for the
-  // case where the person must act inside the session. A role escalating its
-  // own standing session, or one with no standing session on the list, has
-  // no other card to reach them through.
-  const isStanding = String(conversation._id) === String(standing?._id);
-  const direct = (actor.kind === "user" && !unnamedTerminal) || !!args.direct || isStanding || !standing;
-  const escalated: EscalationStamp = { role_id: role._id, line, at, ...(direct ? { direct: true } : {}) };
-  const before = conversation.escalated_by_role as EscalationStamp | undefined;
-  const changed = before?.line !== line || !!before?.direct !== direct;
-  await ctx.db.patch(conversation._id, { escalated_by_role: escalated });
-  await unhide(ctx, conversation);
-  const reachedRow = direct ? conversation : standing;
-  if (!direct) await unhide(ctx, standing);
-  if (changed) {
-    await writeEscalationDividers(ctx, authUserId, { conversation, standing, caller, role, person, move: direct ? "direct" : "handed", by, line, at });
-  }
-  const title = (conversation.title ?? "").trim() || shortId;
-  const first = escalationFirstLine(line);
-  const reachedShort = reachedRow.short_id ?? reachedRow._id.toString().slice(0, 7);
-  return {
-    ...base,
-    changed,
-    escalated_by_role: escalated,
-    reached: { conversation_id: reachedRow._id, short_id: reachedShort, direct },
-    // The chime follows the card (R1, revised): the role's, or the child's
-    // when direct. A person's own gesture rings nobody.
-    notify: changed && by === "role"
-      ? { conversation_id: reachedRow._id, title: direct ? `@${role.handle} put a session in front of you` : `@${role.handle} needs you`, message: direct ? `@${role.handle}: ${title} — ${first}` : `@${role.handle}: ${first} (${title})` }
-      : null,
-  };
 }
 
 // A role that gains scope takes over the sessions in it (R1): every session
@@ -882,8 +692,14 @@ async function rehomeSessions(
     }, { batch: batch!, row: c });
     result.told.sessions += moved.told.sessions;
     result.told.deferred += moved.told.deferred ?? 0;
+    // A question to the person was open when the session moved: the role
+    // that now holds it hears so at once (S28), the way a blocked hand tells
+    // its role, and answers or passes it up.
     if (openAsk) {
-      await ctx.db.patch(c._id, { escalated_by_role: { role_id: role._id, line: "A question to you was open when this session moved", at: Date.now() } });
+      await tellRole(ctx, role._id, {
+        content: `hand ${c.short_id ?? String(c._id).slice(0, 7)} "${(c.title ?? "").slice(0, 60)}" had a question to a person open when it moved under you`,
+        client_id: `hand-moved-ask:${c._id}:${role._id}`,
+      });
     }
   }
   return result;
@@ -1050,33 +866,6 @@ export const addSessionOwner = mutation({
     });
     await notifySessionAssigned(ctx, result.conversation_id, result.added, authUserId, args.note?.trim());
     await notifySessionOwnershipChanged(ctx, result.conversation_id, result, authUserId);
-    return result;
-  },
-});
-
-// Put a role's session in front of the person, or take it back (`cast
-// escalate`, and the row's Put in my inbox / Hand back gestures).
-export const escalateSession = mutation({
-  args: {
-    session_id: SESSION_REF,
-    line: v.optional(v.string()),
-    clear: v.optional(v.boolean()),
-    at: v.optional(v.number()),
-    direct: v.optional(v.boolean()),
-    from_session: v.optional(v.string()),
-    api_token: v.optional(v.string()),
-  },
-  handler: async (ctx, args) => {
-    const authUserId = await requireAuth(ctx, args.api_token);
-    const result = await performEscalateSession(ctx, authUserId, args);
-    // The chime rings on the card the escalation reached (R1, revised): the
-    // role's standing session by default, the child when direct. It rides the
-    // idle rail, so it folds into the same digest and sits under the same
-    // mute switch as any session waiting on the person.
-    if (result.notify) {
-      const reached = await ctx.db.get(result.notify.conversation_id);
-      if (reached) await deliverSessionNotificationToParties(ctx, reached, "session_idle", result.notify.title, result.notify.message);
-    }
     return result;
   },
 });

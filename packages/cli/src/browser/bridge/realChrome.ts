@@ -25,13 +25,27 @@ import { spawn } from "../../proc.js";
 import { findChromeBinary, keychainArgs } from "../../workspace/chrome.js";
 import { realChromePid } from "../localChrome.js";
 import { browserHome } from "../profile.js";
+import { isWSL } from "../../windowsSupport.js";
 import { bridgePairingPage, bridgeWakeUrl } from "./protocol.js";
 
 export function realChromeRunning(): boolean {
   return realChromePid() !== null;
 }
 
-export function chromeLaunchCommand(bin: string, args: string[], platform = process.platform): { command: string; args: string[] } {
+/**
+ * How to start the human's Chrome with `args`, or null when there is none.
+ * Inside WSL that Chrome is the Windows one: `start` finds it wherever it is
+ * installed, the empty argument is start's window title, and a Windows
+ * working directory keeps cmd from refusing a WSL path.
+ */
+export function chromeLaunchCommand(
+  bin: string | null,
+  args: string[],
+  platform = process.platform,
+  wsl = isWSL(),
+): { command: string; args: string[]; cwd?: string } | null {
+  if (wsl) return { command: "cmd.exe", args: ["/c", "start", "", "chrome", ...args], cwd: "/mnt/c" };
+  if (!bin) return null;
   if (platform === "darwin" && bin.includes(".app/Contents/MacOS/")) {
     return { command: "/usr/bin/open", args: ["-n", "-g", "-a", bin.slice(0, bin.indexOf(".app/Contents/MacOS/") + 4), "--args", ...args] };
   }
@@ -40,11 +54,10 @@ export function chromeLaunchCommand(bin: string, args: string[], platform = proc
 
 /** Start Chrome detached with `args`; true when a process was spawned. */
 function spawnChrome(args: string[]): boolean {
-  const bin = findChromeBinary();
-  if (!bin) return false;
+  const launch = chromeLaunchCommand(isWSL() ? null : findChromeBinary(), [...keychainArgs(), ...args]);
+  if (!launch) return false;
   try {
-    const launch = chromeLaunchCommand(bin, [...keychainArgs(), ...args]);
-    const child = spawn(launch.command, launch.args, { stdio: "ignore", detached: true });
+    const child = spawn(launch.command, launch.args, { stdio: "ignore", detached: true, cwd: launch.cwd });
     child.on("error", () => {});
     child.unref();
     return !!child.pid;
@@ -168,7 +181,13 @@ export function openInRealChrome(url: string): boolean {
   } catch {
     return false;
   }
-  return spawnChrome([pathToFileURL(page).href]);
+  return spawnChrome([isWSL() ? windowsPathOf(page) : pathToFileURL(page).href]);
+}
+
+/** The path Windows programs use for a file inside WSL (\\wsl.localhost\<distro>\...). */
+function windowsPathOf(linuxPath: string): string {
+  const out = spawnSync("wslpath", ["-w", linuxPath], { encoding: "utf-8", timeout: 5_000 }).stdout?.trim();
+  return out || linuxPath;
 }
 
 /** Drop the forwarding page; Chrome has read it by the time the wait settled either way. */

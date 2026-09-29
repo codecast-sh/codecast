@@ -17,6 +17,9 @@ import { AlertTriangle, X } from "lucide-react";
 import { useDevices } from "./DeviceBadge";
 import { deviceSeesPath } from "../lib/machinePicker";
 import { classifyApiErrorBanner, SAFETY_BLOCK_HINT } from "@codecast/shared/contracts";
+import { useInboxStore } from "../store/inboxStore";
+
+const mib = (bytes: number) => `${Math.ceil(bytes / 1048576)} MiB`;
 
 /**
  * The transient resume-lifecycle banners (resuming, reconstituting, timed out,
@@ -69,16 +72,22 @@ export function SessionResumeBanner({
 
 export function SessionErrorBanner({
   error,
+  sessionId,
   projectPath,
   ownerDeviceId,
   onResume,
 }: {
   error: string;
+  sessionId?: string;
   projectPath?: string | null;
   ownerDeviceId?: string | null;
-  onResume?: () => void;
+  /** `leave_out` is the answer to a cloud placement over the context cap. */
+  onResume?: (extra?: { leave_out?: string[] }) => void;
 }) {
   const { devices } = useDevices();
+  // A cloud placement over the context cap is a question, not a dead end:
+  // the row names what would have to stay behind for the context to fit.
+  const tooLarge = useInboxStore((s) => (sessionId ? s.sessions[sessionId]?.cloud_context_too_large : null));
   // Keyed by the error text, not a bare boolean: dismissing "no local checkout"
   // must not also swallow whatever the session fails with next.
   const [dismissedError, setDismissedError] = useState<string | null>(null);
@@ -102,14 +111,36 @@ export function SessionErrorBanner({
       <AlertTriangle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
       <div className="min-w-0 flex-1">
         {safety && <div className="font-semibold">Safety review required</div>}
-        <span className="break-words">{error}</span>
+        {tooLarge?.files.length ? (
+          <>
+            <span className="break-words">
+              This project's agent context is {mib(tooLarge.total_bytes)}, over the {mib(tooLarge.cap_bytes)} a cloud host takes. Leaving out {tooLarge.files.length === 1 ? "this file" : `these ${tooLarge.files.length} files`} would fit:
+            </span>
+            <ul className="mt-1 mb-0.5 space-y-0.5 font-mono opacity-90">
+              {tooLarge.files.slice(0, 5).map((f) => (
+                <li key={f.path} className="flex gap-2 min-w-0">
+                  <span className="truncate" title={f.path}>~/{f.path}</span>
+                  <span className="flex-shrink-0 opacity-75">{mib(f.bytes)}</span>
+                </li>
+              ))}
+              {tooLarge.files.length > 5 && <li className="opacity-75">and {tooLarge.files.length - 5} more</li>}
+            </ul>
+            <span className="opacity-80">They stay on this machine; <code>cast config cloud_mirror_exclude</code> lists them.</span>
+          </>
+        ) : (
+          <span className="break-words">{error}</span>
+        )}
         {safety && <p className="mt-1 text-sol-text-dim">{SAFETY_BLOCK_HINT}</p>}
         {canMoveElsewhere && !safety && (
           <span className="opacity-80"> — or move this session to another machine from the header chip.</span>
         )}
       </div>
-      {onResume && !safety && (
-        <button onClick={onResume} className="ml-1 px-1.5 py-0.5 rounded bg-sol-bg/20 hover:bg-sol-bg/30 transition-colors flex-shrink-0">
+      {onResume && !safety && tooLarge?.files.length ? (
+        <button onClick={() => onResume({ leave_out: tooLarge.files.map((f) => f.path) })} className="ml-1 px-1.5 py-0.5 rounded bg-sol-bg/20 hover:bg-sol-bg/30 transition-colors flex-shrink-0">
+          Leave out and start
+        </button>
+      ) : onResume && !safety && (
+        <button onClick={() => onResume()} className="ml-1 px-1.5 py-0.5 rounded bg-sol-bg/20 hover:bg-sol-bg/30 transition-colors flex-shrink-0">
           Resume
         </button>
       )}

@@ -14,6 +14,12 @@ export function ladderRecommendation(d: Pick<SessionDecisionItem, "hops">): numb
   return undefined;
 }
 
+// The options a recorded answer names, in order: several for a multi or a
+// rank (answer_json), one for a single, none for a typed or form answer.
+export function chosenOptions(d: Pick<SessionDecisionItem, "answer_json" | "answer_index">): number[] {
+  return Array.isArray(d.answer_json) ? d.answer_json : d.answer_index !== undefined ? [d.answer_index] : [];
+}
+
 // The run chip on a gate decision (the-line.md L4, L10): the workflow's name
 // and the gate node's label from the workflowRuns store row. A row that has
 // not synced yet reads as "a workflow run"; the chip still links to the run.

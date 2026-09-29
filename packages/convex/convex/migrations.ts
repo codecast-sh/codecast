@@ -5,6 +5,7 @@ import { redactSecrets } from "./redact";
 import { normalizeRepository } from "./lib/gitRefs";
 import { commitRecordedBy } from "./githubWebhooks";
 import { repositoryOfCheckout } from "./users";
+import { standingReportsToFields } from "./lib/standingSeat";
 
 // One-time backfill: stamp conversations.model from each conversation's newest
 // assistant message carrying a real model id ("<synthetic>" = error banner, not
@@ -632,5 +633,49 @@ export const stampMappingRepositories = internalMutation({
       stamped.push({ path_prefix: row.path_prefix, repository });
     }
     return { dryRun, scanned: rows.length, stamped, skipped };
+  },
+});
+
+// One-time cleanup (org-staffing.md S28): `cast escalate` is gone, and with it
+// the `escalated_by_role` stamp it wrote on a role's session. Nothing reads
+// the field any more; this clears it from every row that still carries it, so
+// the schema can drop the field afterwards (Convex refuses a schema the rows
+// do not fit). Dry by default.
+//   npx convex run migrations:clearEscalationStamps '{"dryRun":false}'
+export const clearEscalationStamps = internalMutation({
+  args: { dryRun: v.optional(v.boolean()), cursor: v.optional(v.string()), numItems: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const dryRun = args.dryRun ?? true;
+    const page = await ctx.db.query("conversations").paginate({ cursor: args.cursor ?? null, numItems: args.numItems ?? 200 });
+    const stamped = page.page.filter((c: any) => c.escalated_by_role !== undefined);
+    if (!dryRun) for (const c of stamped) await ctx.db.patch(c._id, { escalated_by_role: undefined });
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.migrations.clearEscalationStamps, { dryRun, cursor: page.continueCursor, numItems: args.numItems });
+    }
+    return { dryRun, scanned: page.page.length, cleared: stamped.length, done: page.isDone };
+  },
+});
+
+// One-time backfill (org-staffing.md S28): a role's standing session carries
+// its parent role in `org_role_id` so it rides the parent lead's card. Roles
+// seated before the rule have it unset; roles that report to a person must
+// have it clear. Dry by default.
+//   npx convex run migrations:stampStandingSeats '{"dryRun":false}'
+export const stampStandingSeats = internalMutation({
+  args: { dryRun: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const dryRun = args.dryRun ?? true;
+    const roles = (await ctx.db.query("org_roles").collect()).filter((r: any) => r.status !== "retired");
+    const out: Array<{ role: string; standing: string; from: string | null; to: string | null }> = [];
+    for (const role of roles as any[]) {
+      const anchor: any = role.anchor_id ? await ctx.db.get(role.anchor_id) : null;
+      const standing: any = anchor?.conversation_id ? await ctx.db.get(anchor.conversation_id) : null;
+      if (!standing) continue;
+      const { org_role_id } = standingReportsToFields(role);
+      if (String(standing.org_role_id ?? "") === String(org_role_id ?? "")) continue;
+      out.push({ role: role.handle, standing: standing.short_id ?? String(standing._id), from: standing.org_role_id ? String(standing.org_role_id) : null, to: org_role_id ? String(org_role_id) : null });
+      if (!dryRun) await ctx.db.patch(standing._id, { org_role_id });
+    }
+    return { dryRun, roles: roles.length, stamped: out.length, changes: out };
   },
 });

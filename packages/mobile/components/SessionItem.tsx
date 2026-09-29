@@ -5,7 +5,6 @@ import { cleanUserMessage } from '@codecast/web/components/sessionMessage';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { useAckAssignment } from '@codecast/web/hooks/useAckAssignment';
 import { threadStateView } from '@codecast/web/lib/threadState';
-import { escalationFirstLine, isDirectEscalation, type RoleEscalation } from '@codecast/shared/contracts';
 import { gestureHandler } from '@/lib/gestureHandler';
 import * as Haptics from 'expo-haptics';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
@@ -56,9 +55,6 @@ export type SessionData = {
   // Unacknowledged handoff: a teammate assigned this session to the current
   // user (see listInboxSessions enrichment). "Got it" acks it in place.
   assigned_ping?: { by_name: string; note?: string | null; at: number } | null;
-  // A role put this session in front of the person directly (org-roles-run-
-  // work.md R1, revised): the role's line rides the row, with Hand back.
-  escalated_by_role?: { role_id: string; line: string; at: number; direct?: boolean } | null;
   role?: { handle: string; name: string } | null;
 };
 
@@ -182,7 +178,7 @@ function StatusDot({ session }: { session: SessionData }) {
   return <RNView style={[styles.statusDot, { backgroundColor: color }]} />;
 }
 
-export function SessionItem({ session, isUnread, onPress, onPin, onLongPress, escalations, roleSessions, onOpenRole }: { session: SessionData; isUnread?: boolean; onPress: () => void; onPin?: () => void; roleSessions?: number; onOpenRole?: () => void; onLongPress?: () => void; escalations?: RoleEscalation[] | null }) {
+export function SessionItem({ session, isUnread, onPress, onPin, onLongPress, roleSessions, onOpenRole }: { session: SessionData; isUnread?: boolean; onPress: () => void; onPin?: () => void; roleSessions?: number; onOpenRole?: () => void; onLongPress?: () => void }) {
   const Theme = useTheme();
   const project = projectName(session);
   const agent = agentLabel(session.agent_type ?? "");
@@ -210,13 +206,6 @@ export function SessionItem({ session, isUnread, onPress, onPin, onLongPress, es
   const thumbUrl = showImageThumb && !thumbBroken ? session.image_preview_url : null;
   const identityRow = useSessionIdentityRow(session._id, session as any);
   const ackAssignment = useAckAssignment();
-  // The role's lines start clamped to their first line; tapping one unfolds it.
-  const [openLines, setOpenLines] = useState<Set<string>>(() => new Set());
-  const escalationRows: Array<{ key: string; who: string | null; conversation_id: string; line: string }> = (escalations ?? []).length
-    ? (escalations ?? []).map((e) => ({ key: e.conversation_id, who: null, conversation_id: e.conversation_id, line: e.line }))
-    : isDirectEscalation(session.escalated_by_role)
-      ? [{ key: session._id, who: session.role ? `@${session.role.handle}` : null, conversation_id: session._id, line: session.escalated_by_role!.line }]
-      : [];
   // Handoff note starts clamped; tapping the pill body reveals the full reason.
   const [pingExpanded, setPingExpanded] = useState(false);
 
@@ -304,38 +293,6 @@ export function SessionItem({ session, isUnread, onPress, onPin, onLongPress, es
           <RNText maxFontSizeMultiplier={1.2} style={{ fontSize: 11, color: Theme.textSecondary }}>{roleSessions} {roleSessions === 1 ? 'session' : 'sessions'}</RNText>
         </Pressable>
       )}
-      {escalationRows.map((e) => {
-        // The role's card carries the sessions it put in front of the person
-        // (R1, revised): the session, the first line of the reason, the whole
-        // reason on tap, and Hand back per line. A child put there directly
-        // wears the role's line itself. Same anatomy as the handoff pill.
-        const unfolded = openLines.has(e.key);
-        return (
-          <RNView key={e.key} style={styles.assignedPingRow} testID={`escalation-${e.conversation_id}`}>
-            <FontAwesome name="arrow-up" size={10} color={Theme.violet} style={{ marginTop: 3 }} />
-            <Pressable style={{ flex: 1, minWidth: 0 }} onPress={() => setOpenLines((prev) => { const next = new Set(prev); if (next.has(e.key)) next.delete(e.key); else next.add(e.key); return next; })}>
-              <RNText style={styles.assignedPingTitle} numberOfLines={1}>
-                {e.who ?? e.conversation_id.slice(0, 7)}
-              </RNText>
-              <RNText style={styles.assignedPingNote} numberOfLines={unfolded ? undefined : 1}>
-                {unfolded ? e.line : escalationFirstLine(e.line)}
-              </RNText>
-            </Pressable>
-            <Pressable
-              onPress={() => {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                useInboxStore.getState().handSessionBackToRole(e.conversation_id);
-              }}
-              hitSlop={8}
-              style={styles.assignedPingAck}
-              testID="hand-back"
-            >
-              <RNText style={styles.assignedPingAckText}>Hand back</RNText>
-            </Pressable>
-          </RNView>
-        );
-      })}
-
       {stateView ? (
         // The agent's pinned "where this stands" line (cast state) replaces the
         // generated summary — same rule as the web card. The pin marks it as
@@ -409,14 +366,13 @@ export function SessionItem({ session, isUnread, onPress, onPin, onLongPress, es
   );
 }
 
-export function SwipeableSessionItem({ session, isUnread, onPress, onDismiss, onPin, onLongPress, roleSessions, onOpenRole, escalations }: {
+export function SwipeableSessionItem({ session, isUnread, onPress, onDismiss, onPin, onLongPress, roleSessions, onOpenRole }: {
   session: SessionData;
   isUnread?: boolean;
   onPress: () => void;
   onDismiss: () => void;
   onPin?: () => void;
   onLongPress?: () => void;
-  escalations?: RoleEscalation[] | null;
   roleSessions?: number;
   onOpenRole?: () => void;
 }) {
@@ -526,7 +482,7 @@ export function SwipeableSessionItem({ session, isUnread, onPress, onDismiss, on
       style={[styles.conversationItem, { transform: [{ translateX }] }]}
       {...(responder ? responder.panHandlers : {})}
     >
-      <SessionItem session={session} escalations={escalations} roleSessions={roleSessions} onOpenRole={onOpenRole} isUnread={isUnread} onPress={() => { if (!didSwipe.current) onPress(); }} onPin={onPin} onLongPress={onLongPress} />
+      <SessionItem session={session} roleSessions={roleSessions} onOpenRole={onOpenRole} isUnread={isUnread} onPress={() => { if (!didSwipe.current) onPress(); }} onPin={onPin} onLongPress={onLongPress} />
     </RNAnimated.View>
   );
 

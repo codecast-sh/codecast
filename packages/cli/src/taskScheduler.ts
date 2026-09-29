@@ -1,4 +1,5 @@
 import { exec } from "./proc.js";
+import { codecastPath } from "./codecastDir.js";
 import { promisify } from "util";
 import * as fs from "fs";
 import * as crypto from "crypto";
@@ -25,15 +26,40 @@ const MAX_CONCURRENCY = 2;
 // SAFE_MODE_MANDATE and SAFE_MODE_DENY_RULES live in agentLaunch.ts so a
 // read only agent definition and a --safe trigger share one fence.
 
-interface RunningTask {
+interface TrackedRun {
   taskId: string;
   tmuxSession: string;
   startedAt: number;
   maxRuntimeMs: number;
-  heartbeatTimer: ReturnType<typeof setInterval>;
   // Claude session UUID assigned to this run via `--session-id`, so completion
   // can link the run's conversation back to the task. Undefined for codex runs.
   runSessionUuid?: string;
+}
+
+interface RunningTask extends TrackedRun {
+  heartbeatTimer: ReturnType<typeof setInterval>;
+}
+
+// A run outlives the daemon that spawned it: its tmux pane survives a daemon
+// restart, but the lease, the run table and the birth stamp all lived in this
+// process. A restarted daemon that forgot them left the live run's conversation
+// unstamped (a loose Needs Input card), let the lease lapse, and re-claimed the
+// trigger into the same tmux name, killing the live run mid-command (tr-1162,
+// 2026-09-29). So the scheduler's lease identity and its live runs are kept on
+// disk, and a restarted daemon adopts them as its own.
+interface SavedRuns {
+  daemonId: string;
+  runs: TrackedRun[];
+}
+
+function readSavedRuns(file: string): SavedRuns | null {
+  try {
+    const saved = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (typeof saved?.daemonId !== "string" || !Array.isArray(saved.runs)) return null;
+    return saved;
+  } catch {
+    return null;
+  }
 }
 
 // Run session uuid -> trigger id for the runs this daemon has live, so the
@@ -49,6 +75,8 @@ interface TaskSchedulerConfig {
   syncService: SyncService;
   config: Config;
   log: (msg: string, level?: "debug" | "info" | "warn" | "error") => void;
+  /** Where the lease identity and live runs are kept across restarts. */
+  runsFile?: string;
 }
 
 /** The binary and flags a spawned run launches with. Pure — the safe-mode
@@ -169,9 +197,14 @@ export class TaskScheduler {
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private stopped = false;
   private skipLogged = new Set<string>();
+  private runsFile: string;
+  private adoptable: TrackedRun[];
 
-  constructor({ syncService, config, log }: TaskSchedulerConfig) {
-    this.daemonId = crypto.randomUUID();
+  constructor({ syncService, config, log, runsFile }: TaskSchedulerConfig) {
+    this.runsFile = runsFile ?? codecastPath("trigger-runs.json");
+    const saved = readSavedRuns(this.runsFile);
+    this.daemonId = saved?.daemonId ?? crypto.randomUUID();
+    this.adoptable = saved?.runs ?? [];
     this.syncService = syncService;
     this.config = config;
     this.log = (msg, level) => log(`[TaskSched] ${msg}`, level);
@@ -179,6 +212,14 @@ export class TaskScheduler {
 
   start(): void {
     this.log(`Started with daemon_id=${this.daemonId.slice(0, 8)}, polling every ${POLL_INTERVAL_MS / 1000}s`);
+    // The first heartbeat renews the lease and settles a run whose pane ended
+    // while no daemon was watching.
+    for (const run of this.adoptable) {
+      this.log(`Adopting run of task ${run.taskId} in ${run.tmuxSession}`);
+      this.track(run);
+    }
+    this.adoptable = [];
+    this.saveRuns();
     this.poll();
     this.pollTimer = setInterval(() => this.poll(), POLL_INTERVAL_MS);
   }
@@ -395,35 +436,51 @@ export class TaskScheduler {
     }
     this.log(`Spawned tmux session ${tmuxSession} for task "${task.title}"`);
 
-    const heartbeatTimer = setInterval(async () => {
-      const renewed = await this.syncService.renewTaskLease(task._id, this.daemonId);
-      if (!renewed) {
-        this.log(`Lease renewal failed for task ${task._id}, stopping monitor`);
-        this.cleanupTask(task._id);
-      }
-
-      await this.checkTaskCompletion(task._id);
-    }, HEARTBEAT_INTERVAL_MS);
-
-    const maxRuntimeMs = task.max_runtime_ms || 10 * 60 * 1000;
-
-    this.running.set(task._id, {
+    this.track({
       taskId: task._id,
       tmuxSession,
       startedAt: Date.now(),
-      maxRuntimeMs,
-      heartbeatTimer,
+      maxRuntimeMs: task.max_runtime_ms || 10 * 60 * 1000,
       runSessionUuid,
     });
+  }
+
+  private track(run: TrackedRun): void {
+    const heartbeatTimer = setInterval(async () => {
+      const renewed = await this.syncService.renewTaskLease(run.taskId, this.daemonId);
+      if (!renewed) {
+        this.log(`Lease renewal failed for task ${run.taskId}, stopping monitor`);
+        this.cleanupTask(run.taskId);
+      }
+
+      await this.checkTaskCompletion(run.taskId);
+    }, HEARTBEAT_INTERVAL_MS);
+
+    this.running.set(run.taskId, { ...run, heartbeatTimer });
+    this.saveRuns();
 
     // Link the run's conversation to the task as soon as it syncs (bounded
     // retries — the first JSONL write usually lands within seconds). This makes
     // the schedule strip/badge work DURING the run and folds the previous
     // completed run of a repeating schedule out of the inbox. completeTaskRun
     // backfills the link at run end if every attempt here loses the race.
-    if (runSessionUuid) {
-      liveRunTasks.set(runSessionUuid, task._id);
-      this.scheduleRunLink(task._id, runSessionUuid);
+    if (run.runSessionUuid) {
+      liveRunTasks.set(run.runSessionUuid, run.taskId);
+      this.scheduleRunLink(run.taskId, run.runSessionUuid);
+    }
+  }
+
+  private saveRuns(): void {
+    // A stopped scheduler leaves its runs on disk for the next daemon to adopt.
+    if (this.stopped) return;
+    const saved: SavedRuns = {
+      daemonId: this.daemonId,
+      runs: [...this.running.values()].map(({ heartbeatTimer: _timer, ...run }) => run),
+    };
+    try {
+      fs.writeFileSync(this.runsFile, JSON.stringify(saved));
+    } catch (err) {
+      this.log(`Could not save live runs to ${this.runsFile}: ${err instanceof Error ? err.message : String(err)}`, "warn");
     }
   }
 
@@ -526,6 +583,7 @@ export class TaskScheduler {
       clearInterval(entry.heartbeatTimer);
       if (entry.runSessionUuid) liveRunTasks.delete(entry.runSessionUuid);
       this.running.delete(taskId);
+      this.saveRuns();
     }
   }
 

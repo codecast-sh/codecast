@@ -13,6 +13,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
+import { isWSL } from "../windowsSupport.js";
 
 export interface ChromeDebugPort {
   port: number;
@@ -70,7 +71,10 @@ const BROWSER_BINARY = /(^|\/)(Google Chrome( for Testing| Canary| Beta| Dev)?|C
  * extension has selected a tab. Null when none is running (or the human runs
  * Chrome some other way); the raise is best effort either way.
  */
-export function realChromePid(processes: BrowserProcess[] = listBrowserProcesses()): number | null {
+export function realChromePid(processes?: BrowserProcess[]): number | null {
+  // Inside WSL the human's Chrome is a Windows process, invisible to `ps`.
+  if (!processes && isWSL()) return windowsChromePid();
+  processes ??= listBrowserProcesses();
   const real = processes.filter(
     (p) =>
       BROWSER_BINARY.test(executableOf(p.command)) &&
@@ -80,6 +84,17 @@ export function realChromePid(processes: BrowserProcess[] = listBrowserProcesses
   );
   // A test build (puppeteer's "Chrome for Testing") is never the human's.
   return (real.find((p) => !/for Testing/.test(p.command)) ?? real[0])?.pid ?? null;
+}
+
+/** A running Windows chrome.exe, seen from WSL through interop. */
+export function windowsChromePid(): number | null {
+  try {
+    const out = spawnSync("tasklist.exe", ["/FI", "IMAGENAME eq chrome.exe", "/FO", "CSV", "/NH"], { encoding: "utf-8", timeout: 10_000 }).stdout ?? "";
+    const m = out.match(/^"chrome\.exe","(\d+)"/im);
+    return m ? parseInt(m[1], 10) : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Live debug ports, one per Chrome user-data-dir. */

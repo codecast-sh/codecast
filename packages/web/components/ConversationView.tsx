@@ -1086,6 +1086,7 @@ const ConversationViewInner = (
       allCommits,
       allPullRequests,
       conversationExternalEvents,
+      { hasMoreAbove, hasMoreBelow },
     ) as TimelineItem[];
     // Guaranteed render: append any pending messages not already in the timeline.
     // This is the ONLY merge point — the store never mixes pending into messages[].
@@ -1136,7 +1137,7 @@ const ConversationViewInner = (
       }
     }
     return mergeTimelineMessages(base, toAdd) as TimelineItem[];
-  }, [messages, allCommits, allPullRequests, conversationExternalEvents, pendingMsgs, serverPending, pendingConvId, hasMoreBelow]);
+  }, [messages, allCommits, allPullRequests, conversationExternalEvents, pendingMsgs, serverPending, pendingConvId, hasMoreAbove, hasMoreBelow]);
   timelineRef.current = timeline;
   scrollCtxRef.current = { messageCount: conversation?.message_count || messages.length, messagesLen: messages.length, timelineLen: timeline.length, loadedStartIndex: conversation?.loaded_start_index ?? 0 };
 

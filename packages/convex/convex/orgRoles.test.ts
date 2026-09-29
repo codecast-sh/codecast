@@ -6,6 +6,7 @@ import {
   performReparentSession,
   performRetireRole,
   performUpdateRole,
+  resolveScopeRef,
 } from "./orgRoles";
 import { computeOrgTree, stateOf } from "./org";
 
@@ -54,6 +55,15 @@ describe("orgRoles.create", () => {
     expect(role.host_user_id).toBe(ME);
     expect(role.reports_to).toEqual({ kind: "user", user_id: ME });
     expect(role.scope).toEqual({ project_ids: [], plan_ids: [] });
+  });
+
+  test("a project named by its full title resolves even when another title contains it", async () => {
+    const row = (id: string, short: string, title: string) => ({ _id: id, user_id: ME, team_id: TEAM, workspace: `team:${TEAM}`, short_id: short, title, status: "active", created_at: 1, updated_at: 1 });
+    const db = fixtures({ projects: [row("projects_test", "pj-a", "test"), row("projects_sync", "pj-b", "issue-sync-test"), row("projects_x", "pj-c", "sync x")] });
+    const role = { team_id: TEAM, scope_type: "team" };
+    expect(await resolveScopeRef(ctxOf(db), role, "project:test")).toEqual({ kind: "project", id: "projects_test" });
+    // A partial name that fits several titles is still ambiguous.
+    await expect(resolveScopeRef(ctxOf(db), role, "project:sync")).rejects.toThrow('"sync" matches 2 projects');
   });
 
   test("tenure and avatar (S10, S13): standing/program resolve refs, and the face defaults from the handle", async () => {
@@ -170,6 +180,29 @@ describe("orgRoles.reparent", () => {
       .rejects.toThrow(/Cycle/);
     const moved = await performReparentRole(ctx, ME as any, { role_id: c.short_id, reports_to: { kind: "role", role_id: a._id } });
     expect(moved.reports_to).toEqual({ kind: "role", role_id: a._id });
+  });
+
+  // A role's standing session reports to what the role reports to
+  // (org-staffing.md S28): a move restamps it, a retire's re-homing restamps
+  // the children's, and a move under a person clears it.
+  test("a move or a retire restamps the standing session's parent role", async () => {
+    const db = fixtures();
+    const ctx = ctxOf(db);
+    const a = await performCreateRole(ctx, ME as any, { name: "A", handle: "aa", team_id: TEAM });
+    const b = await performCreateRole(ctx, ME as any, { name: "B", handle: "bb", team_id: TEAM, reports_to: { kind: "role", role_id: a._id } });
+    const c = await performCreateRole(ctx, ME as any, { name: "C", handle: "cc", team_id: TEAM, reports_to: { kind: "role", role_id: b._id } });
+    db._tables.anchors = [{ _id: "anchors_c", conversation_id: "conversations_c", status: "active", team_id: TEAM }];
+    db._tables.conversations = [{ _id: "conversations_c", user_id: ME, team_id: TEAM, status: "active", title: "C", standing_role_id: c._id, anchor_id: "anchors_c", org_role_id: b._id, message_count: 3, updated_at: NOW }];
+    await db.patch(c._id, { anchor_id: "anchors_c" });
+    await performReparentRole(ctx, ME as any, { role_id: c.short_id, reports_to: { kind: "role", role_id: a._id } });
+    expect((await db.get("conversations_c")).org_role_id).toBe(a._id);
+    db._tables.task_history = []; db._tables.entity_subscriptions = []; db._tables.tasks = [];
+    await performReparentRole(ctx, ME as any, { role_id: c.short_id, reports_to: { kind: "role", role_id: b._id } });
+    await performRetireRole(ctx, ME as any, { role_id: b._id });
+    expect((await db.get(c._id)).reports_to).toEqual({ kind: "role", role_id: a._id });
+    expect((await db.get("conversations_c")).org_role_id).toBe(a._id);
+    await performReparentRole(ctx, ME as any, { role_id: c.short_id, reports_to: { kind: "user", user_id: ME as any } });
+    expect((await db.get("conversations_c")).org_role_id).toBeUndefined();
   });
 
   test("a plain member cannot reshape a team role; the host can", async () => {
