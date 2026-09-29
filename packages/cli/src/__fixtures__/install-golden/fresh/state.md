@@ -1,20 +1,20 @@
 
 ## Thread state
 
-Keep a short pinned state on this session saying where the work stands. The human sees it above the composer and on the inbox card the moment they open the thread, so they learn the situation without reading back through it. That matters most in the threads that are hardest to re-enter: long ones, parked ones, and ones where several sessions are talking past each other.
+Pin a short state on this session saying where the work stands. The human sees it above the composer and on the inbox card, so they learn the situation without reading back: most valuable on long threads, parked ones, and ones shared across sessions.
 
-A state has three parts: the **first line** says what this session is working on, plain and unlabeled; `--status` declares who acts next (below); the lines after the first carry the detail — `Status:`, `Next:`, `Blocked:` render as labels when you use them.
+A state has three parts: the **first line**, plain and unlabeled, says what this session is working on; `--status` declares who acts next; later lines carry detail (`Status:`, `Next:`, `Blocked:` render as labels).
 
-**End every turn by declaring who acts next.** `--status` is that declaration, and it decides where the session files in the human's inbox when your turn ends — so it is not optional bookkeeping, it is how you keep from becoming noise:
+**End every turn by declaring who acts next.** `--status` decides where the session files in the human's inbox when your turn ends; it is how you keep from becoming noise.
 
-- `blocked` — a human must act before you can continue: answer a question, grant something, decide something. Files under **Needs Input**, and returns a stashed session to the inbox — it is your claim on the human's eyes, so declare it only when true.
-- `done` — you delivered the task and nothing is stalled; the human reads it at leisure. Files under **Done**.
-- `dormant` — a machine wakes you: a trigger you armed, a Monitor or background task you are watching, another session's reply you are waiting on. Files under **Dormant**, quiet until the wake lands. Only when you can **name the wake** in the text — if you cannot say what resumes you, you are `blocked`, not dormant.
-- `working` (the default) — still moving; you are about to keep going.
+- `blocked`: a human must act first (answer, grant, decide). Files under **Needs Input** and pulls a stashed session back into the inbox; it claims the human's eyes, so declare it only when true.
+- `done`: delivered, nothing stalled; read at leisure. Files under **Done**.
+- `dormant`: a machine wakes you (a trigger you armed, a Monitor or background task, another session's reply). Files under **Dormant**, quiet until the wake. Only when you can **name the wake** in the text; if you can't say what resumes you, you are `blocked`.
+- `working` (the default): still moving.
 
-`done` and `dormant` cover exactly the turn that declares them. When the wake arrives and you finish that turn, declare again — or the session returns to Needs Input, which is the honest default for a settle nobody classified. Never park an ask in prose and go dormant: if something warrants the human's input while you wait, queue it (`cast decide`, advisory when you can proceed) and then declare dormant — the question surfaces on its own, the session rests. Every settle you leave undeclared is a card the human has to open to learn it needed nothing.
+`done` and `dormant` cover only the turn that declares them: after the wake's turn, declare again, or the session returns to Needs Input. Never park an ask in prose and go dormant; queue it with `cast decide` (advisory when you can proceed), then declare dormant. Every settle you leave undeclared is a card the human must open to learn it needed nothing.
 
-Two demands pull on the first line. It names what the session is working on **now** — the latest work, not the thread's opening goal — so rewrite it when the work moves on. And it stands alone: a reader with none of the thread's context should understand it, so name the work in plain words, not task IDs, dates, or shorthand the thread invented along the way. When standing alone fights staying short, keep the line short by cutting references and detail, never the meaning.
+The first line names the work **now**, not the thread's opening goal, so rewrite it when the work moves on. It stands alone for a reader with no context: plain words, no task IDs, dates or shorthand the thread invented. To keep it short, cut references and detail, never meaning.
 
 ```bash
 cast state --status dormant "Waiting on CI run 8841 — tr-42 re-checks at 3pm"
@@ -29,17 +29,17 @@ cast state clear                     # remove it
 cast state show <session_id>         # read another session's state
 ```
 
-Write it for someone who has been away: what is happening now, what it is waiting on, what happens next, and whether anything is theirs to decide. Lead with the situation — the transcript already holds the history. Keep it to a few lines, and only the lines that carry information: a `Next:` with no real next step, or a `Blocked:` saying "nothing", is padding — the status already says it.
+Write for someone who has been away: what is happening, what it waits on, what comes next, and whether anything is theirs to decide. Keep only lines that carry information; a `Next:` with no real step or a `Blocked:` saying "nothing" is padding.
 
-Update it at the moments that change the answer: you finish a phase, you get blocked, you hand work to another session, you are about to go quiet. A message from the human takes the pin down on its own: your declaration of who acts next has been answered, so declare again when you end that turn (a send from another session or a trigger wake leaves it standing). Clear the state yourself only when it stops being true or useful. A state claiming you are waiting on something that already arrived is worse than none — the dashboard shows how far the thread has run since you wrote it, so a line you stopped maintaining reads as abandoned rather than current.
+Update it when the answer changes: a phase ends, you get blocked, you hand off, you go quiet. A message from the human takes the pin down (your declaration was answered), so declare again at the end of that turn; a send from another session or a trigger wake leaves it standing. Clear it only when it stops being true or useful: a state waiting on something that already arrived is worse than none, and one you stopped maintaining reads as abandoned.
 
-Pin one on any thread that will run long, park on something outside your control, or share work with other sessions. The status declaration alone is worth making even on a short thread: a one-line `--status done` at the end costs nothing and files the session where it belongs.
+Pin one on any thread that will run long, park on something outside your control, or share work with other sessions. Even on a short thread, a one-line `--status done` at the end files it where it belongs.
 <!-- cast @VERSION@ -->
 <!-- /codecast-state -->
 
 ## Referencing objects
 
-Every codecast object has a short ID. Write one into your prose and it renders as a live reference: the object's title, its current state, and a link that opens it. This works anywhere you write — messages, summaries, task comments, doc bodies, trigger prompts.
+Every codecast object has a short ID. Written anywhere (messages, summaries, task comments, doc bodies, trigger prompts), it renders as a live reference: title, current state, and a link.
 
 | Object  | Short ID  | Where to find it |
 |---------|-----------|------------------|
@@ -49,8 +49,6 @@ Every codecast object has a short ID. Write one into your prose and it renders a
 | Trigger | `tr-42`   | `cast trigger ls` |
 | Doc     | `doc:<id>` | `cast doc ls`, `cast doc search` |
 
-There are two forms. Write the bare ID by default — `Filed under ct-4102.` — it reads as a normal sentence and still renders the full reference. Write `@[Title id]` — `@[Fix the auth race ct-4102]` — when the reader needs the name in the sentence itself.
-
-Never paste an object's 32-character internal ID into prose. It renders as an unreadable blob, and every command that accepts an ID accepts the short one.
+Write the bare ID by default (`Filed under ct-4102.`); it reads as a normal sentence and still renders in full. Write `@[Title id]` (`@[Fix the auth race ct-4102]`) when the sentence needs the name. Never paste a 32-character internal ID: it renders as an unreadable blob, and every command accepts the short one.
 <!-- cast @VERSION@ -->
 <!-- /codecast-references -->

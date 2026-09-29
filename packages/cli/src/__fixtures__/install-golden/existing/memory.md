@@ -16,7 +16,7 @@ A user's own section sitting BETWEEN two codecast blocks. Nothing may move it.
 
 ## Referencing objects
 
-Every codecast object has a short ID. Write one into your prose and it renders as a live reference: the object's title, its current state, and a link that opens it. This works anywhere you write — messages, summaries, task comments, doc bodies, trigger prompts.
+Every codecast object has a short ID. Written anywhere (messages, summaries, task comments, doc bodies, trigger prompts), it renders as a live reference: title, current state, and a link.
 
 | Object  | Short ID  | Where to find it |
 |---------|-----------|------------------|
@@ -26,9 +26,7 @@ Every codecast object has a short ID. Write one into your prose and it renders a
 | Trigger | `tr-42`   | `cast trigger ls` |
 | Doc     | `doc:<id>` | `cast doc ls`, `cast doc search` |
 
-There are two forms. Write the bare ID by default — `Filed under ct-4102.` — it reads as a normal sentence and still renders the full reference. Write `@[Title id]` — `@[Fix the auth race ct-4102]` — when the reader needs the name in the sentence itself.
-
-Never paste an object's 32-character internal ID into prose. It renders as an unreadable blob, and every command that accepts an ID accepts the short one.
+Write the bare ID by default (`Filed under ct-4102.`); it reads as a normal sentence and still renders in full. Write `@[Title id]` (`@[Fix the auth race ct-4102]`) when the sentence needs the name. Never paste a 32-character internal ID: it renders as an unreadable blob, and every command accepts the short one.
 <!-- cast @VERSION@ -->
 <!-- /codecast-references -->
 
@@ -39,63 +37,41 @@ block by "everything to end of file" destroys this paragraph.
 
 ## Memory
 
-You are one session among many. Past conversations contain valuable context about decisions, patterns, and prior work. Search proactively and liberally - when starting tasks, debugging issues, or when the user references previous work. Parallelize searches when exploring multiple topics.
+You are one session among many, and past conversations hold the decisions, patterns and prior work you need. Search them liberally, in parallel for several topics: when starting a task, when debugging, and when the user refers to earlier work.
 
 ```bash
-# Search & Browse (default: team scope from current directory)
-cast search "auth"                # team-wide search
-cast search "auth" --mine         # only my sessions
-cast search "auth" -m samvit      # specific member
-cast search "auth" -g -s 7d       # all teams, last 7 days
-cast feed                         # team feed
-cast feed --mine                  # only my sessions
-cast feed -m samvit               # specific member
-cast feed --state needs-input     # filter feed by work state
-cast feed --label api             # sessions I filed under a label (search/sessions take --label too)
-cast read <id> 15:25              # read messages 15-25
-cast read <id> 15:25 --full       # full tool payloads — REQUIRED to see a StructuredOutput return
-                                  # (without it that deliverable collapses to a one-line summary)
-cast read '<share-url>#msg-<id>'  # read a window around a linked message (-c N for context size)
-cast link [id] [line]             # mint a deep link to any object (session+line→message, ct-/pl- task/plan, --type doc)
-cast link                         # …the link to THIS session, to hand a human something clickable
+# Search & browse (default scope: the team for this directory)
+cast search "auth"                # --mine | -m samvit | -g (all teams) | -s 7d
+cast feed                         # team feed: --mine, -m <name>, --state needs-input, --label api
+cast read <id> 15:25              # messages 15-25; --full shows tool payloads (REQUIRED to see a StructuredOutput return)
+cast read '<share-url>#msg-<id>'  # a window around a linked message (-c N for its size)
+cast link [id] [line]             # deep link to any object (session+line → message, ct-/pl-, --type doc); no args = this session
 
-# Explore sessions — 3 axes: QUERY (which) × CONTENT (state | --messages) × LIVENESS (snapshot | -w)
-cast sessions                     # state snapshot, grouped most-actionable-first
-cast sessions -w                  # live change stream: one line per work-state change, silent otherwise
-cast sessions -w --json           # …as NDJSON: {"event":"new"|"transition"|"gone","id","from","to",…}
-cast sessions <id> [<id>…] -w     # watch an explicit set of sessions (ids also narrow the snapshot)
-cast sessions --label fleet -w    # watch every session filed under a label
-cast sessions --state needs-input # narrow to one state (also --team, -m <name>; with -w, new/gone events fire on enter/leave)
-cast sessions --labels            # my labels + counts, current project (--by-label groups, --label <name> filters, -g all projects)
-cast sessions --messages -w       # follow MESSAGES across my live sessions (multi-session)
-cast sessions <id> --messages -w  # …focused on one session
+# Sessions: which (ids, --label, --state, --team, -m) × what (state | --messages) × live (-w)
+cast sessions                     # state snapshot, most actionable first
+cast sessions -w [--json]         # one line per work-state change; JSON: {"event":"new"|"transition"|"gone","id","from","to",…}
+cast sessions <id> [<id>…] -w     # watch a set (ids also narrow the snapshot); --label fleet -w watches a label
+cast sessions --state needs-input # one state; with -w, new/gone fire as sessions enter/leave it
+cast sessions --labels            # my labels + counts in this project (--by-label groups, -g all projects)
+cast sessions [<id>] --messages -w  # follow messages across my live sessions, or in one
 
-# Labels — personal filing. File a session under a name, then filter by it
-# (cast sessions/feed/search --label <name>). A session carries at most one label.
-cast label set api <id>           # file a session under "api" (creates the label if new)
-cast label set api                # …file the CURRENT session
-cast label ls                     # my labels with session counts
-cast label clear <id>             # unfile a session (drop its label)
-cast label rename api backend     # rename a label (its sessions follow)
-cast label rm api                 # remove a label (its sessions become unlabeled)
+# Labels: personal filing, at most one per session; filter with --label on sessions/feed/search
+cast label set api [<id>]         # file a session (default: this one); creates the label if new
+cast label ls | clear <id> | rename api backend | rm api   # rm leaves its sessions unlabeled
 
 # Analysis
-cast diff <id>                    # files changed, commits, tools used
-cast diff --today                 # aggregate today's work
+cast diff <id>                    # files changed, commits, tools used (--today aggregates today)
 cast summary <id>                 # goal, approach, outcome, files
 cast context "implement auth"     # find relevant prior sessions
 cast ask "how does X work"        # query across sessions
 
-# Handoff & Tracking
-cast handoff                      # generate context transfer doc
-cast handoff --to codex           # continue this session's work in a new session on another agent (or --model opus); links both, pins this one done
-cast bookmark <id> <msg> --name x # save shareable link
-cast decisions list               # view architectural decisions
-cast decisions add "title" --reason "why"
+# Handoff & tracking
+cast handoff                      # context transfer doc
+cast handoff --to codex           # continue in a new session on another agent (or --model opus); links both, pins this one done
+cast bookmark <id> <msg> --name x # shareable link
+cast decisions list | add "title" --reason "why"
 ```
 
-Session states: `needs-input` = human action; `working` = agent working; `dormant` = waiting for an automatic wake; `done` = delivered; `idle` = unused. Watch JSON uses `needs_input`.
-
-Common options: --mine (just me), -m <name> (member), --label <name> (my label), -g (all teams), -s/-e (time range), -p (page), -n (limit)
+States: `needs-input` (a human acts), `working`, `dormant` (waiting on an automatic wake), `done` (delivered), `idle` (unused); watch JSON spells it `needs_input`. Common options: --mine, -m <name>, --label <name>, -g (all teams), -s/-e (time range), -p (page), -n (limit).
 <!-- cast @VERSION@ -->
 <!-- /codecast-memory -->
