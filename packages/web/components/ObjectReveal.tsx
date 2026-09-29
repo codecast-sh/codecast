@@ -19,7 +19,7 @@
 import React, { useCallback, useContext, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
-import { ArrowUpRight, Columns2, PanelBottomClose, PanelBottomOpen } from "lucide-react";
+import { ArrowUpRight, Columns2, PanelBottomClose, PanelBottomOpen, X } from "lucide-react";
 import { RoutePane } from "./RoutePane";
 import { SessionPane } from "./stage/SessionPane";
 import { PaneControls } from "./stage/PaneControls";
@@ -113,17 +113,19 @@ export function RevealButton({
 }
 
 /** The big "open this page" hit. The label opens the object; the columns
- *  icon opens it beside, with a tooltip. `bar` sits above the framed page;
- *  `compact` is the card/pill. */
+ *  icon opens it beside, with a tooltip. `bar` sits above the framed page
+ *  and ends in the band's close; `compact` is the card/pill. */
 export function RevealOpenLink({
   href,
   label,
   onOpen,
+  onClose,
   variant = "bar",
 }: {
   href: string;
   label: string;
   onOpen?: (e: React.MouseEvent) => void;
+  onClose?: () => void;
   variant?: "bar" | "compact";
 }) {
   const beside = canOpenBeside();
@@ -156,6 +158,22 @@ export function RevealOpenLink({
           }}
         >
           <Columns2 className={variant === "bar" ? "h-4 w-4" : "h-3.5 w-3.5"} />
+        </button>
+      )}
+      {onClose && (
+        <button
+          type="button"
+          className="object-reveal__open-beside"
+          title="Close (Esc)"
+          aria-label="Close"
+          data-reveal-close
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onClose();
+          }}
+        >
+          <X className={variant === "bar" ? "h-4 w-4" : "h-3.5 w-3.5"} />
         </button>
       )}
     </div>
@@ -464,7 +482,7 @@ function RevealBand({ reveal }: { reveal: OpenReveal }) {
     >
       <div className="object-reveal__lane object-reveal__lane--left" title="Scroll the conversation" />
       <div className="object-reveal__lane object-reveal__lane--right" title="Scroll the conversation" />
-      <RevealOpenLink href={target.href} label={target.openLabel ?? "Open"} onOpen={target.onOpen} />
+      <RevealOpenLink href={target.href} label={target.openLabel ?? "Open"} onOpen={target.onOpen} onClose={requestClose} />
       <div className="object-reveal__frame">
       <div
         className="object-reveal__strip"

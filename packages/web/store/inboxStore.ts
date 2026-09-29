@@ -5542,6 +5542,9 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   /** Drop machines from the roster (Settings > Machines). The server refuses
    *  an online machine, whose next heartbeat would list it again. */
   removeMachines: (deviceIds: string[]) => void;
+  /** Open one of your machines to exactly these teams (empty = private).
+   *  Settings > Machines; the server home is device_shares. */
+  setDeviceShares: (deviceId: string, teamIds: string[]) => void;
 
   // -- Tier-2 store-fed surfaces (see clientSyncRegistry) --
   // Crosstalk graph snapshot (sessionThreads.listSessionThreads).
@@ -8193,6 +8196,10 @@ const inboxStoreConfig = (set: any, get: any) => ({
   removeMachines: action(function (this: Draft, deviceIds: string[]) {
     const gone = new Set(deviceIds);
     this.machineRoster = this.machineRoster.filter((d) => !gone.has(d.device_id));
+  }),
+  setDeviceShares: action(function (this: Draft, deviceId: string, teamIds: string[]) {
+    const row = this.machineRoster.find((d) => d.device_id === deviceId) as any;
+    if (row) row.shared_team_ids = [...teamIds].sort();
   }),
   sessionThreads: null,
   sessionMetricsAggregate: null,

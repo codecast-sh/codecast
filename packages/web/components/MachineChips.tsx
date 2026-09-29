@@ -22,7 +22,7 @@ export type MachineChipsProps = {
 };
 
 function chipLabel(d: SessionMachine) {
-  return <>{deviceDisplayName(d)}{d.bot_name !== undefined && ` · ${d.bot_name || "agent box"}`}</>;
+  return <>{deviceDisplayName(d)}{d.bot_name !== undefined && ` · ${d.runner_name || d.bot_name || "agent box"}`}</>;
 }
 
 export function MachineChips({ machines, selectedDeviceId, open, onOpen, onPick }: MachineChipsProps) {

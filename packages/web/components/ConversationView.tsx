@@ -3116,6 +3116,9 @@ const ConversationViewInner = (
   // session that hosted a band used to follow the reader to the next one.
   const hostingReveal = useHostsReveal(headerRef, "[data-cc-conversation]", effectiveConversationId);
   const compactChrome = inRevealBand || hostingReveal;
+  // The pinned prompt floats over the top of the transcript; while a band is
+  // open here it would cover the band's close strip, so it steps aside.
+  const showSticky = stickyMsgVisible && !!activeStickyMsg && !hostingReveal;
   const { browserRowMap, lastBrowserPage, browserSession, chatWakeMap } = useBrowserAndWakeRows({ conversation, globalToolResultMap, managedSession, userMsgKindMap });
   const { sessionGalleryImages } = useSessionImages({ deferredQueriesEnabled, conversation });
   const { taskSubjectMap, taskRecordMap } = useConversationTaskMaps({ conversation, deferredQueriesEnabled });
@@ -4298,7 +4301,7 @@ const ConversationViewInner = (
         )}
       </header>
 
-      {stickyMsgVisible && activeStickyMsg && (
+      {showSticky && activeStickyMsg && (
         <div
           ref={stickyElRef}
           className="absolute left-0 right-0 z-[15] px-2 sm:px-3 md:px-4 pt-1 cursor-pointer"
@@ -4400,7 +4403,7 @@ const ConversationViewInner = (
         <div
           className="absolute inset-x-0 z-20 flex justify-center pt-3 sm:pt-4 pointer-events-none"
           style={{
-            top: stickyMsgVisible && activeStickyMsg ? (stickyElRef.current?.offsetHeight ?? 0) + 4 : 0,
+            top: showSticky ? (stickyElRef.current?.offsetHeight ?? 0) + 4 : 0,
             animation: "fadeIn 150ms ease-out",
           }}
         >
@@ -4419,7 +4422,7 @@ const ConversationViewInner = (
           scrollRef={containerRef}
           messageIds={timelineMessageIds}
           virtualizer={virtualizer}
-          topInset={stickyMsgVisible && activeStickyMsg ? stickyElRef.current?.offsetHeight ?? 0 : 0}
+          topInset={showSticky ? stickyElRef.current?.offsetHeight ?? 0 : 0}
         />
       )}
       <div ref={containerRef} data-sv-feed data-cc-density={feedDensity} className="flex-1 min-h-0 overflow-y-auto" style={{ overflowAnchor: "none" }}>

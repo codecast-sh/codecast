@@ -36,6 +36,9 @@ export type Device = {
   last_seen: number;
   is_remote: boolean;
   local_project_roots: string[];
+  /** Teams this machine is open to (Settings > Machines); teammates there may
+   *  start sessions on it. Empty or absent = private. */
+  shared_team_ids?: string[];
   /** Installed agent-feature snippets (by slug) + stable mode, heartbeat-reported. */
   settings?: {
     snippets?: Record<string, boolean>;
