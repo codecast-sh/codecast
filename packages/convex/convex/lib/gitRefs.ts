@@ -11,6 +11,7 @@
 
 import { Id } from "../_generated/dataModel";
 import { bareEntityIdRegex, inferEntityTypeFromShortId } from "@codecast/shared/entities";
+import { extractSessionTrailer } from "@codecast/shared/blame";
 
 type Db = { db: any };
 
@@ -77,6 +78,36 @@ export async function resolveTaskLinks(ctx: Db, shortIds: string[]): Promise<Tas
 /** Read the task links straight out of git text. */
 export async function resolveTaskLinksFromText(ctx: Db, ...texts: (string | null | undefined)[]): Promise<TaskLinks> {
   return resolveTaskLinks(ctx, extractTaskShortIds(texts.filter(Boolean).join("\n")));
+}
+
+// ── The session a commit names ──
+
+export { extractSessionTrailer };
+
+/**
+ * The session a commit's `Codecast-Session` trailer names, when the claim
+ * holds up.
+ *
+ * The trailer is text anyone who can push may write, so it links a commit only
+ * to a session inside the commit's own scope: one the reporting user owns, or
+ * one routed to the team the commit belongs to. A trailer naming a session in
+ * another workspace, or one that does not exist, links nothing. Linking never
+ * grants reading: every reader of the session still passes its own access
+ * check (blame's accessibleConversation, the conversation page).
+ */
+export async function conversationFromSessionTrailer(
+  ctx: Db,
+  message: string | null | undefined,
+  scope: { userId?: Id<"users">; teamId?: Id<"teams"> },
+): Promise<Id<"conversations"> | undefined> {
+  const named = extractSessionTrailer(message);
+  if (!named) return undefined;
+  const id = ctx.db.normalizeId("conversations", named);
+  const conv = id ? await ctx.db.get(id) : null;
+  if (!conv) return undefined;
+  const owned = !!scope.userId && conv.user_id === scope.userId;
+  const sameTeam = !!scope.teamId && conv.team_id === scope.teamId;
+  return owned || sameTeam ? conv._id : undefined;
 }
 
 // ── Folding GitHub state ──

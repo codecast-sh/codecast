@@ -54,6 +54,13 @@ export const DAEMON_COMMANDS = [
   // cookie. Never parked on an offline laptop (cloud.requestBrowserSync
   // refuses instead). Old daemons: "Unknown command".
   "cloud_browser_sync",
+  // Mirror a cloud session's working tree into a worktree on THIS laptop, live
+  // (cloud/liveSyncJobs.ts), or stop. Targeted at the laptop that holds the
+  // repo (localMirror.ts mirrorLaptopFor). args: { conversation_id, enable,
+  // host_device_id, remote_cwd, local_root, overwrite? }. The laptop reports
+  // state to conversations.local_mirror (cloud.reportLocalMirror). Old
+  // daemons: "Unknown command".
+  "cloud_live_sync",
   // Fork fast path: resume a fork by copying the parent's local JSONL. A
   // SEPARATE command (not resume_session) so daemons that predate it report
   // "Unknown command" and do nothing — falling into their resume_session path

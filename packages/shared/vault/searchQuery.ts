@@ -12,6 +12,7 @@
 // index; nothing here touches React or the store.
 
 import { basenameOf, stripKnownExtension } from "./parseNote";
+import { tokenizeQuery as tokenize } from "../search/tokenize";
 
 export interface VaultQuery {
   /** Plain terms handed to minisearch (words inside phrases included). */
@@ -39,48 +40,6 @@ const EMPTY_QUERY: VaultQuery = {
   negations: [],
   isEmpty: true,
 };
-
-interface Token {
-  /** The token with its quotes removed. */
-  value: string;
-  /** The token as typed, quotes and all — what plain terms contribute. */
-  raw: string;
-  /** A `"` opened somewhere in this token. */
-  quoted: boolean;
-}
-
-/** Split on whitespace, except inside double quotes: `path:"my folder"` and
- *  `"exact phrase"` each stay one token. An unterminated quote runs to the end
- *  of the input — the user is mid-typing, and results should keep up. */
-function tokenize(input: string): Token[] {
-  const tokens: Token[] = [];
-  let value = "";
-  let raw = "";
-  let quoted = false;
-  let inQuotes = false;
-  const push = () => {
-    if (raw) tokens.push({ value, raw, quoted });
-    value = "";
-    raw = "";
-    quoted = false;
-  };
-  for (const ch of input) {
-    if (ch === '"') {
-      inQuotes = !inQuotes;
-      quoted = true;
-      raw += ch;
-      continue;
-    }
-    if (!inQuotes && /\s/.test(ch)) {
-      push();
-      continue;
-    }
-    value += ch;
-    raw += ch;
-  }
-  push();
-  return tokens;
-}
 
 const OPERATOR = /^(path|file|tag):(.*)$/i;
 

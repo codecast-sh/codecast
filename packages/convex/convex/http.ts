@@ -4611,6 +4611,14 @@ cliRoute("/cli/spawn", async (ctx, body) => ctx.runMutation((api as any).spawn.c
 // (handoff.start), the same one the web calls signed in.
 cliRoute("/cli/handoff", async (ctx, body) => ctx.runAction((api as any).handoff.start, body));
 
+// `cast read <id> --ask "<question>"`: answer from one session, with line
+// citations, on the server's model key. body: { api_token, conversation_id, question }.
+cliRoute("/cli/read/ask", async (ctx, body) => ctx.runAction(internal.sessionAsk.ask, {
+  api_token: body.api_token,
+  conversation_id: body.conversation_id,
+  question: body.question,
+}));
+
 // Session OWNERS (cast own / disown / owners, or scripts routing an agent-run
 // session into a human's inbox). A session has a SET of owners — it can sit in
 // several teammates' inboxes at once — so `own` ADDS and `disown` REMOVES one,

@@ -51,6 +51,21 @@ describe("gitActivity.recordLocal", () => {
     expect(ctx.db._tables.external_events[0].conversation_id).toBe("conv");
   });
 
+  test("a Codecast-Session trailer names the session over the daemon's claim, even on a row already linked", async () => {
+    const TRAILED = "t".repeat(32);
+    const trailedCommit = { ...commit, message: `feat: the thing\n\nCodecast-Session: https://codecast.sh/conversation/${TRAILED}` };
+    const ctx = context("owner", {
+      conversations: [
+        { _id: "conv", user_id: "owner", team_id: "team", git_branch: "feat/x" },
+        { _id: TRAILED, user_id: "owner", team_id: "team" },
+      ],
+      commits: [{ _id: "c", sha: SHA, repository: "acme/demo", team_id: "team", message: "x", author_name: "A", author_email: "a", timestamp: 1, files_changed: 0, insertions: 0, deletions: 0, conversation_id: "conv" }],
+    });
+    await record(ctx, [{ kind: "commit", old_sha: OLD, new_sha: SHA, at: 1, actor_name: "A", actor_email: "a@x", message: "feat: the thing", commit: trailedCommit, conversation_id: "conv" }]);
+    expect(ctx.db._tables.commits[0].conversation_id).toBe(TRAILED);
+    expect(ctx.db._tables.external_events[0].conversation_id).toBe(TRAILED);
+  });
+
   test("checkouts and pushes are events with readable titles and no commit row", async () => {
     const ctx = context();
     await record(ctx, [

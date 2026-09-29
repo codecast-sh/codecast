@@ -45,16 +45,20 @@ export type SessionRef = {
   author_image?: string;
 };
 
-// How a line reached its session. `commit`: the commits table names the
+// How a line reached its session. `trailer`: the commit's own
+// Codecast-Session trailer names it. `commit`: the commits table names the
 // session (daemon publish or webhook). `hash`: a file_changes commit row whose
 // stored short hash prefixes the sha. `subject`: a commit row matched by
 // subject line and time. `edit`: the line's text found in an edit the session
 // made, which is the authoring session even when a different one committed.
-export type BlameVia = "commit" | "hash" | "subject" | "edit";
+export type BlameVia = "trailer" | "commit" | "hash" | "subject" | "edit";
 
 export type ResolvedSession = SessionRef & { message_id?: Id<"messages">; via: BlameVia };
 
-export type CommitDescriptor = { sha: string; summary?: string; author_time?: number };
+// `session` is the conversation id the commit's Codecast-Session trailer
+// names, read from the message by whoever holds it (the CLI from git, the repo
+// site from its cached blame).
+export type CommitDescriptor = { sha: string; summary?: string; author_time?: number; session?: string };
 
 type ResolveCaches = {
   conversations: Map<string, Doc<"conversations"> | null>;
@@ -117,8 +121,10 @@ async function sessionRefFor(
 /**
  * The session behind each commit sha, for a caller who may see it.
  *
- * Three sources, cheapest and surest first. The commits table names a session
- * outright when the daemon that made the commit published it. Sessions also
+ * Four sources, surest first. A Codecast-Session trailer in the commit message
+ * is the session's own record that it made the commit, so it decides when the
+ * viewer may see that session. The commits table names a session outright
+ * when the daemon that made the commit published it. Sessions also
  * record every commit they run as a file_changes row whose stored hash is the
  * short prefix git printed, so a range scan over [sha7, sha] finds it. When
  * neither names the sha (compound commands print no hash; a rebase rewrites
@@ -139,16 +145,22 @@ export async function resolveCommitSessions(
     const desc = byKey.get(sha)!;
     let conv: Doc<"conversations"> | null = null;
     let messageId: Id<"messages"> | undefined;
-    let via: BlameVia = "commit";
+    let via: BlameVia = "trailer";
 
-    const named = await ctx.db
-      .query("commits")
-      .withIndex("by_sha", (q: any) => q.eq("sha", sha))
-      .collect();
-    for (const row of named) {
-      if (!row.conversation_id) continue;
-      conv = await accessibleConversation(ctx, viewer, caches.conversations, row.conversation_id);
-      if (conv) break;
+    const trailerId = desc.session ? ctx.db.normalizeId("conversations", desc.session) : null;
+    if (trailerId) conv = await accessibleConversation(ctx, viewer, caches.conversations, trailerId);
+
+    if (!conv) {
+      via = "commit";
+      const named = await ctx.db
+        .query("commits")
+        .withIndex("by_sha", (q: any) => q.eq("sha", sha))
+        .collect();
+      for (const row of named) {
+        if (!row.conversation_id) continue;
+        conv = await accessibleConversation(ctx, viewer, caches.conversations, row.conversation_id);
+        if (conv) break;
+      }
     }
 
     if (!conv) {
@@ -268,7 +280,7 @@ export async function matchFileLines(
  * full SHAs from `git blame --porcelain` (plus, optionally, the texts of
  * uncommitted lines); this maps each to the conversation that produced it.
  *
- * SHAs resolve through the shared resolver (commits table, stored commit
+ * SHAs resolve through the shared resolver (the commit's trailer, commits table, stored commit
  * hashes, subject + time), visible if the caller owns the conversation or is
  * on its team. Uncommitted lines resolve by content match against recent
  * edits to the file — uncommitted code is local to the caller's machine, so
@@ -279,7 +291,8 @@ export const resolveBlame = query({
     api_token: v.string(),
     // Bare SHAs resolve via stored commit hashes only; entries in `commits`
     // additionally carry the blame porcelain's summary + author-time (ms) for
-    // the subject/timestamp fallback.
+    // the subject/timestamp fallback, and the conversation id the commit's
+    // Codecast-Session trailer names.
     shas: v.optional(v.array(v.string())),
     commits: v.optional(
       v.array(
@@ -287,6 +300,7 @@ export const resolveBlame = query({
           sha: v.string(),
           summary: v.optional(v.string()),
           author_time: v.optional(v.number()),
+          session: v.optional(v.string()),
         }),
       ),
     ),

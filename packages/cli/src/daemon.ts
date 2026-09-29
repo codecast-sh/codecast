@@ -3449,6 +3449,21 @@ async function pushProviderKeysToRemoteHosts(reason: string, opts: { onlyIfChang
 // box awake); an exit-3 refusal (another user's logins on the box) is logged
 // once per host. Codex's own `last_refresh` field moves the hash on every
 // rotation, so a laptop re-login lands within a minute.
+let liveSyncJobsInstance: import("./cloud/liveSyncJobs.js").LiveSyncJobs | null = null;
+/** The one mirror job manager (cloud_live_sync), made on first use. */
+async function liveSyncJobs(): Promise<import("./cloud/liveSyncJobs.js").LiveSyncJobs> {
+  if (liveSyncJobsInstance) return liveSyncJobsInstance;
+  const { LiveSyncJobs } = await import("./cloud/liveSyncJobs.js");
+  liveSyncJobsInstance = new LiveSyncJobs({
+    report: async (conversationId, report) => { await syncServiceRef?.reportLocalMirror(conversationId, deviceId(), report); },
+    activity: async (ids) => (syncServiceRef ? syncServiceRef.localMirrorActivity(ids) : []),
+    hostFor: (hostDeviceId) => { const h = hostForDevice(hostDeviceId); return h?.address ? toRemoteHost(h) : null; },
+    log,
+    jobsFile: path.join(defaultConfigDir(), "live-syncs.json"),
+  });
+  return liveSyncJobsInstance;
+}
+
 let remoteAgentAuthPushInFlight = false;
 const lastPushedAgentAuthHashByHost = new Map<string, string>();
 const agentAuthRefusalLogged = new Set<string>();
@@ -7824,6 +7839,20 @@ async function executeRemoteCommand(
           // banner asks the human whether to leave it out.
           const tooLarge = res.stdout.split("\n").map((l) => { try { return JSON.parse(l)?.context_too_large; } catch { return undefined; } }).find(Boolean);
           syncServiceRef?.reportCloudPlacementFailure(conversationId, parsed.placement_token, error, tooLarge).catch(() => {});
+        }
+        break;
+      }
+      case "cloud_live_sync": {
+        // Mirror a cloud session's tree into a worktree here, live (the web's
+        // "Mirror edits to this laptop"), or stop. The jobs run in-process,
+        // poll the host only while the session works, and report to
+        // conversations.local_mirror (cloud/liveSyncJobs.ts).
+        if (isRemoteDevice()) { error = "a cloud host does not mirror sessions"; break; }
+        try {
+          result = await (await liveSyncJobs()).handleCommand(commandArgs as any);
+        } catch (err) {
+          error = err instanceof Error ? err.message : String(err);
+          if ((commandArgs as any)?.conversation_id) await syncServiceRef?.reportLocalMirror((commandArgs as any).conversation_id, deviceId(), { status: "error", error: error.slice(0, 300) });
         }
         break;
       }
@@ -27846,6 +27875,8 @@ async function main(): Promise<void> {
   // watch on each source directory filtered to the exact filenames (the
   // whole ~/.codex would fire on codex's SQLite WAL churn).
   setTimeout(() => { pushAgentAuthToRemoteHosts("daemon start").catch(() => {}); }, 64_000);
+  // Live mirrors the web started before this daemon last stopped.
+  if (!isRemoteDevice()) setTimeout(() => { liveSyncJobs().then((j) => j.resumeAll()).catch((err) => log(`[MIRROR] resume failed: ${err instanceof Error ? err.message : String(err)}`)); }, 20_000);
   setInterval(() => { pushAgentAuthToRemoteHosts("periodic").catch(() => {}); }, REMOTE_CRED_REFRESH_INTERVAL_MS);
   setInterval(() => { pushAgentAuthToRemoteHosts("login_changed", { onlyIfChanged: true }).catch(() => {}); }, REMOTE_CRED_CHANGE_TICK_MS);
   if (!isRemoteDevice()) {
