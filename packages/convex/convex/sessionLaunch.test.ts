@@ -2,10 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { dispatch } from "./dispatch";
 import { createSessionFromCli } from "./spawn";
-import { getDeviceLocalRoots, listAgentBoxes } from "./devices";
+import { getDeviceLocalRoots, listAgentBoxes, listDevices, performRemoveDevices, performSetDeviceShares, resolveReachableRunnerDevice } from "./devices";
 import { reconfigureSession } from "./conversations";
 import { canAccessConversation } from "./lib/access";
-import { listAgentBoxDevices, sessionLaunchRunner } from "./sessionLaunch";
+import { listTeamMachines, sessionLaunchRunner } from "./sessionLaunch";
 
 const ME = "users_creator";
 const BOT = "users_bot";
@@ -95,7 +95,7 @@ describe("agent box session launch", () => {
   test("removed membership revokes launch access", async () => {
     const db = fixture();
     db._tables.team_memberships = [];
-    expect(await listAgentBoxDevices({ db }, ME as any)).toEqual([]);
+    expect(await listTeamMachines({ db }, ME as any)).toEqual([]);
     await expect(sessionLaunchRunner({ db }, ME as any, DEVICE)).rejects.toThrow("Unknown device");
   });
 
@@ -104,6 +104,71 @@ describe("agent box session launch", () => {
     const id = await create(db, { target_device_id: undefined });
     expect(await db.get(id)).toMatchObject({ user_id: ME, owner_device_id: "laptop" });
     expect((await db.get(id)).owner_user_id).toBeUndefined();
+  });
+});
+
+describe("a teammate's shared machine", () => {
+  function sharedFixture() {
+    const db = fixture();
+    db._tables.team_memberships.push({ _id: "member_person", user_id: PERSON, team_id: TEAM, role: "member" });
+    (db._tables.users.find((u: any) => u._id === PERSON) as any).name = "Ana";
+    return db;
+  }
+  const share = (db: ReturnType<typeof makeFakeDb>, teams: string[] = [TEAM]) =>
+    performSetDeviceShares({ db }, PERSON as any, "person", teams);
+
+  test("stays private until its owner shares it, then launches under the owner's daemon", async () => {
+    const db = sharedFixture();
+    await expect(create(db, { target_device_id: "person" })).rejects.toThrow("Unknown device");
+    await share(db);
+    const boxes = await (listAgentBoxes as any)._handler(context(db), {});
+    expect(boxes.find((b: any) => b.device_id === "person")).toMatchObject({ bot_name: null, runner_name: "Ana", is_bot: false, can_edit: false });
+    const id = await create(db, { target_device_id: "person" });
+    const row = await db.get(id);
+    expect(row).toMatchObject({ user_id: PERSON, author_user_id: ME, owner_user_id: ME });
+    expect(db._tables.daemon_commands.at(-1)).toMatchObject({ user_id: PERSON, target_device_id: "person", command: "start_session" });
+    expect(await canAccessConversation(context(db), ME as any, row)).toBe(true);
+    const reach = await resolveReachableRunnerDevice({ db }, ME as any, { ...row, owner_device_id: "person" });
+    expect(reach).toMatchObject({ runnerUserId: PERSON, via_bot: true });
+  });
+
+  test("unsharing, or the owner leaving the team, closes it again", async () => {
+    const db = sharedFixture();
+    await share(db);
+    await share(db, []);
+    expect(db._tables.device_shares).toHaveLength(0);
+    await expect(sessionLaunchRunner({ db }, ME as any, "person")).rejects.toThrow("Unknown device");
+    await share(db);
+    db._tables.team_memberships = db._tables.team_memberships.filter((m: any) => m.user_id !== PERSON);
+    await expect(sessionLaunchRunner({ db }, ME as any, "person")).rejects.toThrow("Unknown device");
+  });
+
+  test("a session on a shared machine stays unreachable once the share ends", async () => {
+    const db = sharedFixture();
+    await share(db);
+    const id = await create(db, { target_device_id: "person" });
+    await share(db, []);
+    const row = { ...(await db.get(id)), owner_device_id: "person" };
+    expect(await resolveReachableRunnerDevice({ db }, ME as any, row)).toBeNull();
+  });
+
+  test("only the owner shares, only with a team they are on, and the write is idempotent", async () => {
+    const db = sharedFixture();
+    await expect(performSetDeviceShares({ db }, ME as any, "person", [TEAM])).rejects.toThrow("Unknown device");
+    await expect(share(db, ["teams_other"])).rejects.toThrow("team you are on");
+    await share(db);
+    await share(db);
+    expect(db._tables.device_shares).toHaveLength(1);
+    const roster = await (listDevices as any)._handler(context(db, PERSON), {});
+    expect(roster[0]).toMatchObject({ device_id: "person", shared_team_ids: [TEAM] });
+  });
+
+  test("removing the machine drops its shares", async () => {
+    const db = sharedFixture();
+    await share(db);
+    (db._tables.devices.find((d: any) => d.device_id === "person") as any).last_seen = 0;
+    await performRemoveDevices({ db, scheduler: { runAfter: async () => {} } }, PERSON as any, ["person"]);
+    expect(db._tables.device_shares).toHaveLength(0);
   });
 });
 

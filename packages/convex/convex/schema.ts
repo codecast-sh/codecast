@@ -2848,6 +2848,20 @@ export default defineSchema({
     bytes_after: v.number(),
   }).index("by_user_device_at", ["user_id", "device_id", "at"]),
 
+  // A person's machine opened to one of their teams (Settings → Devices). A
+  // teammate may start sessions there, which run under the owner's daemon and
+  // account exactly like a team agent box's run under the bot's. One row per
+  // device per team; its presence is the whole fact. A share only counts
+  // while the owner is still on the team (sessionLaunch.listTeamMachines).
+  device_shares: defineTable({
+    user_id: v.id("users"),
+    device_id: v.string(),
+    team_id: v.id("teams"),
+    shared_at: v.number(),
+  })
+    .index("by_team", ["team_id"])
+    .index("by_user_device", ["user_id", "device_id"]),
+
   managed_sessions: defineTable({
     session_id: v.string(),
     conversation_id: v.optional(v.id("conversations")),
@@ -3146,6 +3160,15 @@ export default defineSchema({
     .index("by_shepherd_conversation", ["shepherd_conversation_id"])
     .index("by_updated_at", ["updated_at"]),
 
+  // linked_session_ids as an index (lib/prSessions.ts): written only by
+  // syncPullRequestSessions, read to find the pull requests a session links.
+  pull_request_sessions: defineTable({
+    pull_request_id: v.id("pull_requests"),
+    conversation_id: v.id("conversations"),
+  })
+    .index("by_pull_request", ["pull_request_id"])
+    .index("by_conversation", ["conversation_id"]),
+
   reviews: defineTable({
     pull_request_id: v.id("pull_requests"),
     // Optional since reviews now also arrive by webhook from reviewers who
@@ -3160,15 +3183,6 @@ export default defineSchema({
       v.literal("approved"),
       v.literal("changes_requested"),
       v.literal("commented"),
-  // linked_session_ids as an index (lib/prSessions.ts): written only by
-  // syncPullRequestSessions, read to find the pull requests a session links.
-  pull_request_sessions: defineTable({
-    pull_request_id: v.id("pull_requests"),
-    conversation_id: v.id("conversations"),
-  })
-    .index("by_pull_request", ["pull_request_id"])
-    .index("by_conversation", ["conversation_id"]),
-
       // Withdrawn on GitHub: kept in the history, counted by nothing.
       v.literal("dismissed")
     ),

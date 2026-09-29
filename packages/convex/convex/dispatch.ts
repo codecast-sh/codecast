@@ -6,7 +6,7 @@ import type { ThreadKind } from "./threadReads";
 import { ConvexError, v } from "convex/values";
 import { resolveSpawnDefinition } from "./spawn";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { enqueueStartSession, performRemoveDevices } from "./devices";
+import { enqueueStartSession, performRemoveDevices, performSetDeviceShares } from "./devices";
 import { upsertBinding } from "./capabilityBindings";
 import { Id } from "./_generated/dataModel";
 import { checkRateLimit } from "./rateLimit";
@@ -1257,6 +1257,11 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // Settings > Machines. The web drops the rows from `machineRoster` on the
   // draft; that list is not a dispatch table, so this is the only server write.
   removeMachines: async (ctx, userId, [deviceIds]: [string[]]) => performRemoveDevices(ctx as any, userId, deviceIds),
+
+  // Settings > Machines' share control: the web writes the device's team set
+  // on the roster draft; device_shares is the server home of that fact.
+  setDeviceShares: async (ctx, userId, [deviceId, teamIds]: [string, string[]]) =>
+    performSetDeviceShares(ctx as any, userId, deviceId, teamIds),
 
   linkConversation: async (ctx, userId, [objectType, objectId, conversationId]: [string, string, string]) => {
     await linkConversationToObject(
