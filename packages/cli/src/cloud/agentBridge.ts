@@ -75,6 +75,15 @@ export function shouldRunBridge(cloud: CloudHost, reachable: boolean, laptopAgen
   return cloud.forwardAgent === true && reachable && !!laptopAgentSock && (cloud.watchdogVersion ?? 0) >= AGENT_BRIDGE_MIN_WATCHDOG;
 }
 
+/**
+ * Has the host moved out from under a live bridge? A bridge is current on the
+ * host's public address or on the address the laptop dials now (its tailnet
+ * IP); one on the public address after a tailnet fallback is not stale.
+ */
+export function bridgeAddressStale(cloud: CloudHost, bridgeAddress: string, dialAddress: string): boolean {
+  return !!cloud.address && bridgeAddress !== cloud.address && bridgeAddress !== dialAddress;
+}
+
 /** The laptop daemon's bridge maintenance cadence. */
 export const AGENT_BRIDGE_TICK_MS = 60 * 1000;
 /** The longest wait between attempts to reopen a bridge that keeps dying. */

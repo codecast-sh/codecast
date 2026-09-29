@@ -30,6 +30,8 @@ import { atomicWriteFile } from "./atomicWrite.js";
 import { renderProviderEnvFile, sourceFilePrefix } from "./providerKeyLaunch.js";
 import { defaultConfigDir } from "./config/configDir.js";
 import { ccKeychainWriteItem, type CcKeychainItem } from "./ccKeychain.js";
+import { requestCloudJson } from "./cloudAgents/http.js";
+import { nextUsageRetry, type UsageRetryState } from "./usageRetry.js";
 
 const PROFILE_KEYCHAIN_PREFIX = "codecast-cc-account-";
 
@@ -2314,104 +2316,28 @@ export function parseUsageResponse(data: any, now: number): CcUsageSnapshot {
   return snap;
 }
 
-/** A usage-endpoint refusal, carrying what the response said about coming back.
- *  `retryAfterMs` is set only when the server named a wait (429 Retry-After);
- *  otherwise the caller picks its own delay. */
-export class CcUsageHttpError extends CcAccountError {
-  constructor(
-    readonly status: number,
-    readonly retryAfterMs?: number,
-  ) {
-    super(`usage endpoint ${status}`);
-  }
-}
-
-// Why: a corrupt or hostile Retry-After would otherwise hold every automated
-// usage poll off for years, freezing the meters auto-switch reads (ct-49527).
-const MAX_RETRY_AFTER_MS = 24 * 60 * 60 * 1000;
-
-/** Retry-After (RFC 9110) in ms: either delta-seconds or an HTTP date. Capped
- *  at 24h. Undefined when the header is absent, unparseable, or already past —
- *  the caller then falls back to its own backoff. Exported for tests. */
-export function parseRetryAfter(header: string | null | undefined, now: number): number | undefined {
-  const raw = header?.trim();
-  if (!raw) return undefined;
-  const seconds = Number(raw);
-  if (Number.isFinite(seconds)) {
-    return seconds > 0 ? Math.min(seconds * 1000, MAX_RETRY_AFTER_MS) : undefined;
-  }
-  const at = Date.parse(raw);
-  if (!Number.isFinite(at)) return undefined;
-  const delta = at - now;
-  return delta > 0 ? Math.min(delta, MAX_RETRY_AFTER_MS) : undefined;
-}
-
 export async function fetchUsageSnapshot(
   accessToken: string,
   opts: { fetchImpl?: typeof fetch; now?: number } = {},
 ): Promise<CcUsageSnapshot> {
-  const fetchImpl = opts.fetchImpl ?? fetch;
   const now = opts.now ?? Date.now();
-  const resp = await fetchImpl(CC_USAGE_URL, {
+  // A refusal throws a CloudApiError carrying a 429's Retry-After, which the per-account backoff reads.
+  const body = await requestCloudJson(opts.fetchImpl ?? fetch, {
+    method: "GET",
+    url: CC_USAGE_URL,
     headers: {
       Authorization: `Bearer ${accessToken}`,
       "anthropic-beta": "oauth-2025-04-20",
       "User-Agent": "codecast-daemon",
-      Accept: "application/json",
     },
-    signal: AbortSignal.timeout(15_000),
+    label: "usage endpoint",
+    timeoutMs: 15_000,
+    now,
   });
-  if (!resp.ok) {
-    throw new CcUsageHttpError(
-      resp.status,
-      resp.status === 429 ? parseRetryAfter(resp.headers.get("retry-after"), now) : undefined,
-    );
-  }
-  return parseUsageResponse(await resp.json(), now);
+  return parseUsageResponse(body, now);
 }
 
-// ---------------------------------------------------------------------------
-// Per-account poll backoff
-// ---------------------------------------------------------------------------
-// The poll used to treat every refusal alike: throw, and try again on the next
-// five-minute tick. That reads a 429's Retry-After as noise and hammers a rate-
-// limited endpoint, and it makes a hard outage cost one request per account per
-// five minutes for as long as it lasts. So a failure now records when this
-// account may be asked again: what the server named on a 429, else 30s doubling
-// per consecutive failure. The stale snapshot always survives — a meter that
-// flapped to empty on a transient 500 would read as headroom.
-
-const USAGE_BACKOFF_BASE_MS = 30_000;
-const USAGE_BACKOFF_MAX_MS = 15 * 60 * 1000;
-
-export interface UsageRetryState {
-  retry_at: number; // no automated probe of this account before then
-  failures: number; // consecutive failures; drives the delay
-  reason: string; // the last failure, as `cast usage` prints it
-  failed_at: number;
-  status?: number; // HTTP status, when the endpoint answered at all
-  retry_after?: boolean; // the server named the wait; not our own guess
-}
-
-/** The backoff state after one failed probe. */
-function nextUsageRetry(
-  prev: UsageRetryState | undefined,
-  err: unknown,
-  now: number,
-): UsageRetryState {
-  const failures = (prev?.failures ?? 0) + 1;
-  const http = err instanceof CcUsageHttpError ? err : undefined;
-  const named = http?.retryAfterMs;
-  const backoff = Math.min(USAGE_BACKOFF_BASE_MS * 2 ** (failures - 1), USAGE_BACKOFF_MAX_MS);
-  return {
-    retry_at: now + (named ?? backoff),
-    failures,
-    reason: err instanceof Error ? err.message : String(err),
-    failed_at: now,
-    ...(http && { status: http.status }),
-    ...(named !== undefined && { retry_after: true }),
-  };
-}
+// Per-account poll backoff: usageRetry.ts (shared with the Codex usage poll).
 
 function usageCachePath(): string {
   return path.join(defaultConfigDir(), "cc-usage.json");

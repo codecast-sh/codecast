@@ -7,11 +7,12 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { readCompleteLines, cursorPassBoundary, readCodexSessionMetaHeadAsync } from '../transcriptWindow.js';
 import { readCodexModelBeforeOffset } from '../codexTranscriptModel.js';
-import { isCursorRoleHeaderLine, parseCursorTranscriptFile, parseTranscriptFor, parseCodexSessionFile, parseSessionFile, extractSlug, extractParentUuid, extractCwd, extractCodexCwd, extractSummaryTitle, extractTeamInfo, detectCliFlags, extractCodexSessionMetadata, extractCodexForkRoot, isCompletedStandaloneCodexReview, isCompletedNativeCodexReviewChild, extractPiCwd, extractGrokCwd, isGrokInternalSession, extractMuseCwd } from '../parser.js';
+import { isCursorRoleHeaderLine, parseCursorTranscriptFile, parseMirrorTranscriptFile, parseTranscriptFor, parseCodexSessionFile, parseSessionFile, extractSlug, extractParentUuid, extractCwd, extractCodexCwd, extractSummaryTitle, extractTeamInfo, detectCliFlags, extractCodexSessionMetadata, extractCodexForkRoot, isCompletedStandaloneCodexReview, isCompletedNativeCodexReviewChild, extractPiCwd, extractGrokCwd, isGrokInternalSession, extractMuseCwd } from '../parser.js';
 import { recoverImagesFromBackup, classifyOpencodeTranscriptTail, classifyPiTranscriptTail, classifyGrokTranscriptTail, classifyMuseTranscriptTail, classifyCursorTranscriptTail } from './ingestMetadata.js';
-import { INGEST_WINDOW_ROWS, INGEST_MAX_BYTES, isWindowedIngest, type IngestJob, type IngestIdentity, type IngestResult } from './ingestTypes.js';
+import { INGEST_WINDOW_ROWS, INGEST_MAX_BYTES, hasClockFreeReceipts, isWindowedIngest, type IngestJob, type IngestIdentity, type IngestResult } from './ingestTypes.js';
 import { validateIngestResult } from './ingestValidation.js';
 import { findCursorCliChat } from './cursorObservation.js';
+import { classifyMirrorTranscriptTail, mirrorMessageUuid, readMetaJson } from '../cloudAgents/transcript.js';
 import { MetadataWindowExhausted, readCompleteMetadataHead, readCompleteMetadataTail } from './ingestMetadataWindow.js';
 const METADATA_MAX_BYTES = 64 * 1024;
 export function ingestIdentity(s: fs.Stats): IngestIdentity {
@@ -181,6 +182,24 @@ export async function readIngestJob(job: IngestJob, checkpoint: () => void = () 
       meta.title = JSON.parse(content).info?.title;
       meta.turn = classifyOpencodeTranscriptTail(content);
     }
+  } else if (job.mirror) {
+    // A cloud agent's mirror (cloudAgents/): rewritten whole, read for the
+    // agent type its session runs under, placed by the meta.json beside it,
+    // settled by turn_ended (the format's own tail rule).
+    content = await whole(job.file);
+    content = content.slice(0,content.lastIndexOf('\n')+1);
+    const mirror = await optional(() => readMetaJson(path.dirname(job.file)),meta.warnings,'mirror meta');
+    // A branch reads under its parent's id: the history they share is the same messages.
+    const branchOf = mirror?.forkAt ? mirror.parentAgentId : undefined;
+    if (content) result.messages = parseMirrorTranscriptFile(job.client,content,branchOf ?? job.sessionId,job.identity.birthtimeMs);
+    meta.turn = classifyMirrorTranscriptTail(content);
+    if (mirror?.cwd) meta.cwd = mirror.cwd;
+    // The provider's own title for the agent (a Codex Cloud task's, a Cursor agent's name).
+    if (mirror?.title) meta.title = mirror.title;
+    if (mirror?.formerTitles?.length) meta.formerTitles = mirror.formerTitles;
+    // A branch forks its parent's session at a message; a worker a parent agent forked nests under it (the watcher writes either link).
+    if (branchOf && mirror?.forkAt) { meta.forkOf = branchOf; meta.forkAtUuid = mirrorMessageUuid(branchOf, mirror.forkAt); }
+    else if (mirror?.parentAgentId) { meta.parentSessionId = mirror.parentAgentId; meta.agentName = mirror.description ?? mirror.title; }
   } else {
     const cursorJsonl = job.client === 'cursor' && !isWindowedIngest(job);
     if (isWindowedIngest(job)) {
@@ -203,8 +222,6 @@ export async function readIngestJob(job: IngestJob, checkpoint: () => void = () 
       meta.turn = classifyCursorTranscriptTail(content);
       const chat = await optional(() => findCursorCliChat(process.env.HOME || '',job.sessionId),meta.warnings,'cursor chat');
       if (chat?.cwd) meta.cwd = chat.cwd;
-      // A Cursor Cloud worker a parent agent forked (cursorCloud.ts writes the link).
-      if (chat?.parentAgentId) { meta.parentSessionId = chat.parentAgentId; meta.agentName = chat.description ?? chat.title; }
     }
     if (job.client === 'claude') {
       if (job.recoverBackup && fs.existsSync(job.file+'.bak')) {
@@ -283,7 +300,7 @@ export async function readIngestJob(job: IngestJob, checkpoint: () => void = () 
   });
   result.messageTitles = result.messages.map(m => m.role === "user" ? generateTitleFromMessage(m.content) : null);
   result.signatures = result.messages.map(m => createHash('sha256').update(JSON.stringify(m)).digest('hex'));
-  if (job.client === 'cursor') result.receiptSignatures = result.messages.map(m => createHash('sha256').update(JSON.stringify({...m,timestamp:0})).digest('hex')); 
+  if (hasClockFreeReceipts(job)) result.receiptSignatures = result.messages.map(m => createHash('sha256').update(JSON.stringify({...m,timestamp:0})).digest('hex')); 
   if (job.client === 'claude' || job.client === 'gemini' || job.client === 'cursorDb') {
     result.receiptSignatures = [];
     result.receiptOccurrences = [];

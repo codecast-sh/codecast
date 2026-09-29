@@ -39,7 +39,7 @@ import {
 } from "./gitCapability.js";
 import { execFileAsync } from "./proc.js";
 import { locateWorktree } from "./worktreeEnv.js";
-import { CLOUD_SEED_EXCLUDES, snapshotTree } from "./wipSnapshot.js";
+import { runSide, type SnapshotResult } from "./cloud/syncSide.js";
 
 export type GcVerdict =
   | { action: "released"; name: string; path: string }
@@ -196,7 +196,8 @@ async function hostOnlyWorkSince(worktreePath: string, startPoint: string, seedB
   try {
     if ((await git(worktreePath, ["rev-parse", "HEAD"])) !== seedBase) return true;
     const seedTree = await git(worktreePath, ["rev-parse", `${startPoint}^{tree}`]);
-    return (await snapshotTree(worktreePath, CLOUD_SEED_EXCLUDES)) !== seedTree;
+    // Read the way the seed was taken (cloud/syncSide.ts), gitignored files included.
+    return (await runSide<SnapshotResult>({ op: "snapshot", cwd: worktreePath })).tree !== seedTree;
   } catch {
     return null;
   }

@@ -191,7 +191,9 @@ command = "bun run typecheck && bun test"
 
 A Chromium instance bound to the workspace, off by default. `allow` is the list
 of origins `cast browser` may navigate to from this project; omitting it means
-no policy, and an empty list refuses every site.
+no policy, and an empty list refuses every site. A browser that does not start
+within a minute leaves the workspace without one and prints why; the worktree
+itself is still created.
 
 ```toml
 [browser]
@@ -216,6 +218,18 @@ run = ["sudo -u postgres createuser -s ubuntu || true"]   # from the checkout, i
 ```
 
 A failed step is reported with its output and retried on the next wake; it never stops a session. `cast hosts setup [id] [--force]` applies it by hand.
+
+## `[sync]`
+
+What travels between the laptop and a cloud host when a session starts there and while its folder is kept in step (`cloud/syncSide.ts`). By default the whole working folder travels, gitignored files like `.env` included, since both machines are the person's own. What stays on its own machine, each for a reason `cast sync status` names: dependency and build folders the host rebuilds (`node_modules`, `.venv`, `target`, `dist`, `dist-*`, `.next`, …), untracked audio and video (renders, recordings), untracked compiled programs (they run only where they were built), an untracked file over 100 MB, the largest untracked files while the lot is over 1 GB, files a running process owns (sockets, database journals), nested repositories, and per-machine folders (codecast's worktrees and logs, other agent tools' worktrees, a local Convex backend). A tracked file always travels. This table adjusts that for the repo:
+
+```toml
+[sync]
+always = ["fixtures/big.bin", "node_modules/@local"]   # travel even where a default would leave them
+never = ["data/local.db", "*.sqlite"]                  # stay on their own machine
+```
+
+A pattern with no `/` matches a name at any depth; `**` crosses folders. A person's own patterns go in `cast config sync_always` and `cast config sync_never` (comma-separated) and add to the repo's. Anything that stayed behind can still be fetched on request: `cast sync pull <path>`.
 
 ## `backend`
 

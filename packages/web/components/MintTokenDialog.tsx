@@ -107,7 +107,7 @@ export function MintTokenButton({ device, profile, className }: { device: MintDe
         } ${className ?? ""}`}
       >
         {pending ? (
-          <span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-amber-500/30 border-t-amber-500" aria-hidden />
+          <SpinnerDot />
         ) : (
           <KeyRound className="h-3 w-3" aria-hidden />
         )}
@@ -115,6 +115,21 @@ export function MintTokenButton({ device, profile, className }: { device: MintDe
       </button>
       {open && <MintTokenDialog device={device} profile={profile} onClose={() => setOpen(false)} />}
     </>
+  );
+}
+
+/** The amber spinning dot the guided dialogs show while they wait on a machine. */
+export function SpinnerDot() {
+  return <span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-amber-500/30 border-t-amber-500" aria-hidden />;
+}
+
+/** SpinnerDot with what is being waited on. */
+export function Spinner({ label, className }: { label: React.ReactNode; className?: string }) {
+  return (
+    <span className={`flex items-center gap-1.5 text-[11px] text-amber-500 ${className ?? ""}`}>
+      <SpinnerDot />
+      {label}
+    </span>
   );
 }
 
@@ -290,10 +305,7 @@ export function MintTokenDialog({ device, profile: initialProfile, onClose }: { 
               Your browser opens the claude.ai sign in. Sign in as <span className="text-sol-text">{who}</span> and press Authorize.
               {pending && (
                 <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-amber-500">
-                  <span className="inline-flex items-center gap-1.5">
-                    <span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-amber-500/30 border-t-amber-500" aria-hidden />
-                    waiting for your approval in the browser
-                  </span>
+                  <Spinner label="waiting for your approval in the browser" />
                   {url ? (
                     <a href={url} target="_blank" rel="noreferrer" className="underline decoration-dotted underline-offset-2 hover:text-amber-400">
                       open the sign in page again

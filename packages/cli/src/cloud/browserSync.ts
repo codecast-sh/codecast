@@ -23,7 +23,7 @@
  * server-side wake is refreshed from AWS (describe only, never start).
  */
 
-import { AwsCliFailed, hostForDevice, hostState, patchHost, sshReachable, toRemoteHost, type CloudHost } from "../browser/cloudHost.js";
+import { AwsCliFailed, hostForDevice, hostState, patchHost, reachableRemoteHost, sshReachable, toRemoteHost, type CloudHost } from "../browser/cloudHost.js";
 import { OWN_LOGIN_REASON, provisionLocalLogins, type ProvisionResult } from "../browser/credentials.js";
 import { readState, type InstanceState } from "../browser/instance.js";
 import { checkUrl, loadMachinePolicy } from "../browser/policy.js";
@@ -128,8 +128,9 @@ export function noRegistryEntryReason(hostDeviceId: string): string {
 
 /**
  * The ssh target for a host device id, from this laptop's registry. Tries the
- * last-known address; when that is dead, asks AWS for the instance's state
- * and CURRENT address (describe only) — a server-side wake boots the box
+ * last-known address (after its tailnet IP, when this laptop sees the host's
+ * node online there: reachableRemoteHost); when that is dead, asks AWS for
+ * the instance's state and CURRENT address (describe only) — a server-side wake boots the box
  * without any laptop contact, and the new public IP only ever reached the
  * registry through a laptop-side wake. A running host at a new address is
  * recorded through patchHost and probed again. A stopped, pending or missing
@@ -142,8 +143,8 @@ export async function resolveCarryHost(hostDeviceId: string, deps: CarryHostDeps
     return { ok: false, reason: `cookie carries into host ${cloud.id} are disabled in ~/.codecast/browser/hosts.json (browserSync: false)` };
   }
   if (cloud.address) {
-    const remote = deps.toRemoteHost(cloud);
-    if (await deps.sshReachable(remote)) return { ok: true, host: remote, cloud };
+    const remote = await reachableRemoteHost(cloud, deps);
+    if (remote) return { ok: true, host: remote, cloud };
   }
   let st: { state: string; address?: string };
   try {
@@ -163,8 +164,8 @@ export async function resolveCarryHost(hostDeviceId: string, deps: CarryHostDeps
   if (st.address && st.address !== cloud.address) {
     const fresh: CloudHost = { ...cloud, address: st.address };
     deps.patchHost(cloud.id, { address: st.address });
-    const remote = deps.toRemoteHost(fresh);
-    if (await deps.sshReachable(remote)) return { ok: true, host: remote, cloud: fresh };
+    const remote = await reachableRemoteHost(fresh, deps);
+    if (remote) return { ok: true, host: remote, cloud: fresh };
     return { ok: false, reason: `host ${cloud.id} is running at ${st.address} but not reachable over ssh — nothing was carried` };
   }
   return { ok: false, reason: `host ${cloud.id} is running but not reachable at ${cloud.address ?? "its address"} — nothing was carried` };

@@ -303,7 +303,9 @@ export function parseUnwrappedSessionReport(
     const name = named(withTask[1]);
     if (name) return { from: "unknown", body: text, name };
   }
-  const followUp = first.match(/^([A-Z][\w][\w ./-]{0,40}?)\s+follow-up\s*:/i);
+  // A worker's name is capitalized ("Backend B follow-up:"); a lowercase
+  // opener ("codecast test follow-up: ...") is a person's own prompt.
+  const followUp = first.match(/^([A-Z][\w][\w ./-]{0,40}?)\s+[Ff]ollow-up\s*:/);
   if (followUp) {
     const name = named(followUp[1]);
     if (name) return { from: "unknown", body: text, name };

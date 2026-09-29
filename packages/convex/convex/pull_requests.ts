@@ -50,7 +50,8 @@ export async function recordPRMergedActivity(
   return true;
 }
 
-async function resolveActorUserIdForTeam(
+/** The codecast user behind a GitHub login, when they are a member of the team. */
+export async function resolveActorUserIdForTeam(
   ctx: any,
   teamId: any,
   githubUsername: string

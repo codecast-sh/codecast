@@ -33,13 +33,14 @@ import * as path from "path";
 import { createHash, randomUUID } from "crypto";
 import { atomicWriteFile } from "./atomicWrite.js";
 import { acquireFileLock } from "./lockFile.js";
-import { codexBackendAuthHeaders, CodexUsageHttpError } from "./codexBackendUsage.js";
+import { CODEX_BACKEND_BASE, codexBackendAuthHeaders, codexBackendRequest } from "./codexBackendUsage.js";
 import type { CodexUsageWindow } from "./codexUsage.js";
 import { defaultConfigDir } from "./config/configDir.js";
 
-export const CODEX_RESET_CREDITS_URL =
-  "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
-export const CODEX_RESET_CREDITS_CONSUME_URL = `${CODEX_RESET_CREDITS_URL}/consume`;
+const RESET_CREDITS_PATH = "/rate-limit-reset-credits";
+const CONSUME_PATH = `${RESET_CREDITS_PATH}/consume`;
+export const CODEX_RESET_CREDITS_URL = `${CODEX_BACKEND_BASE}${RESET_CREDITS_PATH}`;
+export const CODEX_RESET_CREDITS_CONSUME_URL = `${CODEX_BACKEND_BASE}${CONSUME_PATH}`;
 
 const FETCH_TIMEOUT_MS = 15_000;
 // The redeem mutates the account, so it gets a longer leash than a read: a
@@ -126,8 +127,9 @@ export function parseResetCreditsResponse(body: any): ResetCreditOffer | null {
  * `codexHomeDir` — the real ~/.codex for the active login, a profile's snapshot
  * dir for a dormant one, exactly like every other per-account probe.
  *
- * Null when that home holds no usable token. Throws CodexUsageHttpError when the
- * endpoint refused, so a caller can tell "no credits" from "couldn't ask".
+ * Null when that home holds no usable token. Throws a CloudApiError (with the
+ * provider's reason) when the endpoint refused, so a caller can tell "no
+ * credits" from "couldn't ask".
  */
 export async function fetchCodexResetCredits(
   codexHomeDir: string,
@@ -135,12 +137,9 @@ export async function fetchCodexResetCredits(
 ): Promise<ResetCreditOffer | null> {
   const headers = codexBackendAuthHeaders(codexHomeDir);
   if (!headers) return null;
-  const resp = await (opts.fetchImpl ?? fetch)(CODEX_RESET_CREDITS_URL, {
-    headers,
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  });
-  if (!resp.ok) throw new CodexUsageHttpError(resp.status);
-  return parseResetCreditsResponse(await resp.json());
+  return parseResetCreditsResponse(
+    await codexBackendRequest(headers, "GET", RESET_CREDITS_PATH, { fetchImpl: opts.fetchImpl, timeoutMs: FETCH_TIMEOUT_MS }),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -299,14 +298,12 @@ export async function consumeCodexResetCredit(
   if (!redeemRequestId.trim()) throw new Error("redeem_request_id is required");
   const headers = codexBackendAuthHeaders(codexHomeDir);
   if (!headers) throw new Error("Codex is not signed in on this home");
-  const resp = await (opts.fetchImpl ?? fetch)(CODEX_RESET_CREDITS_CONSUME_URL, {
-    method: "POST",
-    headers: { ...headers, "Content-Type": "application/json" },
-    body: JSON.stringify({ redeem_request_id: redeemRequestId }),
-    signal: AbortSignal.timeout(REDEEM_TIMEOUT_MS),
+  const body = await codexBackendRequest<{ code?: unknown } | undefined>(headers, "POST", CONSUME_PATH, {
+    body: { redeem_request_id: redeemRequestId },
+    fetchImpl: opts.fetchImpl,
+    timeoutMs: REDEEM_TIMEOUT_MS,
   });
-  if (!resp.ok) throw new CodexUsageHttpError(resp.status);
-  const code = (await resp.json())?.code;
+  const code = body?.code;
   if (typeof code !== "string" || !OUTCOMES.includes(code)) {
     throw new Error(`Unknown Codex reset outcome: ${code ?? "missing"}`);
   }
