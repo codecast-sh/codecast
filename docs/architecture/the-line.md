@@ -191,6 +191,11 @@ conversation, and a `daemon_commands` `run_workflow` row for the host's daemon.
 The sweep bumps `counters.hands`, comments once on the task, and skips paused
 roles. It is idempotent: a task with a run is never started twice.
 
+A person clearing a task's block (the board's `webUpdate`, the inbox's Needs
+Attention retry) is the retry: when the bound run has failed or completed,
+the task lets go of `workflow_run_id`, and the next sweep starts a fresh run.
+A live run stays bound.
+
 The sweep and `cast workflow run` create runs through one core
 (`workflow_runs.createRunCore`): the run row, the task patched to
 `in_progress` with its `workflow_run_id`, the primary conversation and its
