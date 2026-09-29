@@ -102,6 +102,29 @@ export const GROK_MODEL_OPTIONS: ModelOption[] = [
   { key: "grok-4.5", label: "Grok 4.5", hint: "Previous generation", cliAlias: "grok-4.5" },
 ];
 
+// cursor-agent's `--model` ids (`cursor-agent --list-models`, v2026.09.28) for a
+// local launch, and Cursor Cloud Agents for a remote one. Cloud keys are
+// `cloud` (the account's default model) or `cloud:<id>` with an id from the
+// Cloud Agents API's GET /v1/models; the two catalogs differ, so a cloud
+// option never reaches the local `--model` flag (see cursorCloudModel).
+export const CURSOR_MODEL_OPTIONS: ModelOption[] = [
+  { key: "default", label: "Auto", hint: "Cursor picks the model, on this machine" },
+  { key: "composer-2.5", label: "Composer 2.5", hint: "Cursor's own coding model", cliAlias: "composer-2.5" },
+  { key: "claude-opus-5-thinking-high", label: "Opus 5", hint: "Claude Opus 5, thinking", cliAlias: "claude-opus-5-thinking-high" },
+  { key: "gpt-5.6-sol-high", label: "GPT-5.6 Sol", hint: "GPT-5.6 Sol, high effort", cliAlias: "gpt-5.6-sol-high" },
+  { key: "cloud", label: "Cloud · Auto", hint: "Cursor Cloud Agent on this repo's GitHub branch", cliAlias: "cloud" },
+  { key: "cloud:composer-2.5", label: "Cloud · Composer 2.5", hint: "Cursor Cloud Agent", cliAlias: "cloud:composer-2.5" },
+  { key: "cloud:claude-opus-5-5", label: "Cloud · Opus 5.5", hint: "Cursor Cloud Agent", cliAlias: "cloud:claude-opus-5-5" },
+  { key: "cloud:gpt-5.6-sol", label: "Cloud · GPT-5.6 Sol", hint: "Cursor Cloud Agent", cliAlias: "cloud:gpt-5.6-sol" },
+];
+
+/** A cursor model choice that runs on Cursor Cloud: "" for the account
+ *  default, else the cloud model id; null for a local launch. */
+export function cursorCloudModel(model: string | undefined | null): string | null {
+  if (model === "cloud") return "";
+  return model?.startsWith("cloud:") ? model.slice("cloud:".length) : null;
+}
+
 // `--reasoning-effort` (alias `--effort`) accepts none|minimal|low|medium|high|
 // xhigh|max as a serde enum, but the per-model menus offer only the model's own
 // list: grok-4.6 low|medium|high|xhigh, grok-4.5 low|medium|high (default high

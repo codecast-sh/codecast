@@ -3,6 +3,9 @@ import * as path from "path";
 import * as fs from "fs";
 import { RecursiveWatcher } from "./recursiveWatcher.js";
 import { dirFilterByDepth, type WalkFile } from "./fsWalk.js";
+import { isCursorTranscriptPath } from "./workers/scanPolicy.js";
+
+export { isCursorTranscriptPath };
 
 export interface CursorTranscriptEvent {
   sessionId: string;
@@ -25,12 +28,6 @@ export declare interface CursorTranscriptWatcher {
     event: K,
     ...args: Parameters<CursorTranscriptWatcherEvents[K]>
   ): boolean;
-}
-
-/** A transcript is a .txt somewhere under an agent-transcripts dir. Relative
- *  to the projects root, so the dir is never the first segment. */
-export function isCursorTranscriptPath(rel: string): boolean {
-  return rel.endsWith(".txt") && (rel.includes(`agent-transcripts${path.sep}`) || rel.includes("agent-transcripts/"));
 }
 
 export class CursorTranscriptWatcher extends EventEmitter {
@@ -62,7 +59,7 @@ export class CursorTranscriptWatcher extends EventEmitter {
       // A project dir holds canvases, mcps and terminals next to
       // agent-transcripts; only the transcript subtree can hold a match.
       dirFilter: dirFilterByDepth(() => true, (seg) => seg === "agent-transcripts", () => true),
-      // <proj>/agent-transcripts/<id>/<id>.txt is depth 4; one spare level.
+      // <proj>/agent-transcripts/<id>/<id>.jsonl is depth 4; one spare level.
       maxDepth: 5,
       callback: (filePath, eventType) => { if (eventType !== "unlink") this.handleFileEvent(filePath, eventType); },
       onExisting: (files) => this.emitExistingFilesSorted(files),
@@ -100,11 +97,11 @@ export class CursorTranscriptWatcher extends EventEmitter {
   }
 
   private handleFileEvent(filePath: string, eventType: "add" | "change"): void {
-    const sessionId = this.extractSessionId(filePath);
-    this.emit("session", { sessionId, filePath, eventType });
+    this.emit("session", { sessionId: cursorTranscriptSessionId(filePath), filePath, eventType });
   }
+}
 
-  private extractSessionId(filePath: string): string {
-    return path.basename(filePath, ".txt");
-  }
+/** A transcript's chat id: its file name without the .txt / .jsonl extension. */
+export function cursorTranscriptSessionId(filePath: string): string {
+  return path.basename(filePath).replace(/\.(txt|jsonl)$/, "");
 }
