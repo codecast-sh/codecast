@@ -28,6 +28,7 @@ import {
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import { KeyCap } from "../KeyboardShortcutsHelp";
+import { formatAcceleratorParts } from "../../shortcuts";
 import { ConfirmButton } from "../integrations/parts";
 import { CodeMenuItem, CodeShareItems } from "../menus/CodeShareItems";
 import { copyText } from "../../lib/copyText";
@@ -170,7 +171,7 @@ export function ReviewMenu({
         align="end"
         side={placement === "bar" ? "top" : "bottom"}
         sideOffset={8}
-        className="w-[420px] p-0 overflow-hidden bg-sol-bg border-sol-border"
+        className="w-[480px] p-0 overflow-hidden bg-sol-bg border-sol-border"
       >
         {/* What is waiting: the notes, each a way back to its line. */}
         <div className="px-4 pt-3.5 pb-3 border-b border-sol-border/50">
@@ -217,9 +218,24 @@ export function ReviewMenu({
           )}
         </div>
 
-        {/* The verdict, one line each, and what to tell the author. */}
-        <div className="px-4 py-3 space-y-3">
-          <div className="space-y-0.5" role="radiogroup" aria-label="Verdict">
+        {/* What to tell the author comes first and gets the room; the
+            verdict is a small choice beside the send. */}
+        <div className="px-4 pt-3 pb-3 space-y-2.5">
+          <textarea
+            autoFocus
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && openPr && busy === null) {
+                e.preventDefault();
+                run("submit");
+              }
+            }}
+            rows={6}
+            placeholder={count ? "Anything else for the author?" : "Leave a review comment"}
+            className="w-full resize-y min-h-[8rem] rounded-lg border border-sol-border/70 bg-sol-bg-alt/40 px-3 py-2.5 text-[13px] leading-relaxed text-sol-text placeholder:text-sol-text-dim focus:border-sol-cyan focus:outline-none"
+          />
+          <div className="flex items-center gap-1" role="radiogroup" aria-label="Verdict">
             {VERDICTS.map(({ key, label, hint, icon: Icon, accent }) => {
               const disabled = key !== "COMMENT" && !!own;
               const active = verdict === key;
@@ -231,42 +247,21 @@ export function ReviewMenu({
                   role="radio"
                   aria-checked={active}
                   disabled={disabled}
-                  title={disabled ? "GitHub does not let you judge your own pull request" : undefined}
+                  title={disabled ? "It is your pull request: GitHub takes a comment from you, not a verdict" : hint}
                   onClick={() => setVerdict(key)}
-                  className={`w-full flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left whitespace-nowrap transition-colors disabled:opacity-40 ${
-                    active ? "" : "hover:bg-sol-bg-alt/60"
+                  className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors disabled:opacity-35 ${
+                    active ? "" : "border-sol-border/60 text-sol-text-muted hover:text-sol-text hover:border-sol-border"
                   }`}
-                  style={active ? { background: `color-mix(in srgb, ${color} 12%, transparent)` } : undefined}
+                  style={active ? { color, borderColor: color, background: `color-mix(in srgb, ${color} 12%, transparent)` } : undefined}
                 >
-                  <span
-                    className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border"
-                    style={{ borderColor: active ? color : "var(--sol-border)" }}
-                  >
-                    {active && <span className="h-1.5 w-1.5 rounded-full" style={{ background: color }} />}
-                  </span>
-                  <Icon className="w-3.5 h-3.5 shrink-0" style={{ color: active ? color : "var(--sol-text-dim)" }} />
-                  <span className={`text-[12px] font-medium ${active ? "" : "text-sol-text-muted"}`} style={active ? { color } : undefined}>
-                    {label}
-                  </span>
-                  <span className="ml-auto min-w-0 truncate text-[11px] text-sol-text-dim">{hint}</span>
+                  <Icon className="w-3 h-3" />
+                  {label}
                 </button>
               );
             })}
-            {own && (
-              <p className="px-2.5 pt-1 text-[11px] text-sol-text-dim">
-                It is your pull request, so GitHub takes a comment from you, not a verdict.
-              </p>
-            )}
           </div>
-          <textarea
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-            rows={2}
-            placeholder={verdict === "COMMENT" && count === 0 ? "What do you want to say?" : "Summary for the author (optional)"}
-            className="w-full resize-none rounded-md border border-sol-border/60 bg-sol-bg-alt/40 px-2.5 py-2 text-[13px] text-sol-text placeholder:text-sol-text-dim focus:border-sol-cyan focus:outline-none"
-          />
           {picking && !shepherd && (
-            <div className="flex flex-wrap gap-1.5">
+            <div className="flex flex-wrap items-center gap-1.5">
               <span className="text-[11px] text-sol-text-dim">Send the notes to</span>
               {sessionChoices.map((session) => (
                 <button
@@ -283,9 +278,8 @@ export function ReviewMenu({
           )}
         </div>
 
-        {/* The way out: the one primary action on the right, the rest quiet. */}
         <div className="px-4 py-2.5 border-t border-sol-border/50 bg-sol-bg-alt/30">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
             {count > 0 && (
               <ConfirmButton
                 label="Discard"
@@ -295,13 +289,12 @@ export function ReviewMenu({
                 }}
               />
             )}
-            <span className="ml-auto" />
             {count > 0 && (shepherd || sessionChoices.length > 0) && (
               <button
                 type="button"
                 disabled={busy !== null}
                 onClick={() => (shepherd ? run("hand") : setPicking((v) => !v))}
-                className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-1.5 text-[12px] text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/60 transition-colors"
+                className="inline-flex items-center gap-1.5 whitespace-nowrap text-[12px] text-sol-text-muted hover:text-sol-text transition-colors"
                 title={shepherd ? "The agent session watching this pull request gets the notes as one message; nothing goes to GitHub, and the notes stay here" : "Pick a linked session to send the notes to; nothing goes to GitHub"}
               >
                 <Radio className="w-3.5 h-3.5" />
@@ -312,25 +305,23 @@ export function ReviewMenu({
               type="button"
               disabled={!openPr || busy !== null}
               onClick={() => run("submit")}
-              className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1.5 text-[12px] font-medium text-sol-bg transition-opacity hover:opacity-90 disabled:opacity-40"
+              className="ml-auto inline-flex items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1.5 text-[12px] font-medium text-sol-bg transition-opacity hover:opacity-90 disabled:opacity-40"
               style={{ background: accentVar((VERDICTS.find((v) => v.key === verdict)?.accent ?? "blue") as any) }}
               title={
                 !openPr ? "Only an open pull request takes a review"
-                : shepherd ? "One GitHub review under your account; the owning session hears it as a message"
-                : "One GitHub review, under your account"
+                : "One review on GitHub, under your account, with your notes on their lines"
               }
             >
               <Send className="w-3.5 h-3.5" />
               {busy === "submit" ? "Sending" : SUBMIT_LABEL[verdict]}
+              {openPr && formatAcceleratorParts("meta+enter").map((part) => <KeyCap key={part} size="xs">{part}</KeyCap>)}
             </button>
           </div>
-          <p className="mt-1.5 text-[11px] text-sol-text-dim">
-            {!openPr
-              ? `This pull request is ${pr.state === "merged" ? "merged" : "closed"}, so it takes no more reviews.${count > 0 ? " You can still send the notes to a session, or discard them." : ""}`
-              : count > 0
-              ? `Only you can see ${count === 1 ? "this note" : "these notes"} until you submit. It posts to GitHub as you.`
-              : "It posts to GitHub as you."}
-          </p>
+          {!openPr && (
+            <p className="mt-1.5 text-[11px] text-sol-text-dim">
+              This pull request is {pr.state === "merged" ? "merged" : "closed"}, so GitHub takes no more reviews.
+            </p>
+          )}
         </div>
       </PopoverContent>
     </Popover>

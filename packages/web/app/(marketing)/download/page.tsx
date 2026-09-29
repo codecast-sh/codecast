@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { LogoMark } from "@/components/Logo";
 import { useMountEffect } from "@/hooks/useMountEffect";
+import { visitorPlatform, type VisitorPlatform } from "@/lib/visitorPlatform";
 import { InstallTabs } from "@/components/install-tabs";
 import { track } from "@/lib/analytics";
 import { useRouteMeta } from "../pageMeta";
@@ -18,11 +19,6 @@ import { Chrome, ExternalLink } from "lucide-react";
 const MAC_DOWNLOAD_URL = NATIVE_APP_LINKS.mac;
 const APP_STORE_URL = NATIVE_APP_LINKS.ios;
 
-function isMacPlatform(): boolean {
-  if (typeof navigator === "undefined") return false;
-  // iPadOS reports platform "MacIntel" but is touch-first — send it to the App Store instead.
-  return /Mac/.test(navigator.platform) && (navigator.maxTouchPoints ?? 0) <= 1;
-}
 
 /** Rounded-square app-icon tile used across the step illustrations. */
 function AppTile({ size = 56 }: { size?: number }) {
@@ -153,12 +149,14 @@ function StepCard({
 export default function DownloadPage() {
   useRouteMeta("/download");
 
-  const [isMac, setIsMac] = useState(false);
+  const [platform, setPlatform] = useState<VisitorPlatform>("other");
+  const isMac = platform === "mac";
   const [version, setVersion] = useState<string | null>(null);
 
   useMountEffect(() => {
-    const mac = isMacPlatform();
-    setIsMac(mac);
+    const detected = visitorPlatform();
+    setPlatform(detected);
+    const mac = detected === "mac";
 
     fetch("/api/desktop/latest")
       .then((r) => r.json())
@@ -188,7 +186,7 @@ export default function DownloadPage() {
           <AppTile size={72} />
         </div>
         <h1 className="mb-4 font-mono text-4xl font-bold tracking-tight text-[#002b36] md:text-5xl">
-          {isMac ? "Install and open the app" : "Codecast for Mac"}
+          {isMac ? "Install and open the app" : platform === "windows" ? "Codecast on Windows" : platform === "linux" ? "Codecast on Linux" : "Get Codecast"}
         </h1>
         {isMac ? (
           <p className="mx-auto max-w-xl text-lg leading-relaxed text-[#657b83]">
@@ -201,20 +199,31 @@ export default function DownloadPage() {
         ) : (
           <>
             <p className="mx-auto mb-6 max-w-xl text-lg leading-relaxed text-[#657b83]">
-              The desktop app runs on macOS with Apple Silicon. On iPhone or iPad, get the iOS app —
-              on anything else, Codecast works fully in the browser.
+              Codecast works fully in the browser. Install the CLI on each machine where your agents
+              work: it records their sessions and keeps them in sync.
+              {platform === "windows" ? " On Windows it runs inside WSL, and the installer sets that up." : ""}
+            </p>
+            <div className="mx-auto mb-6 max-w-xl text-left">
+              <InstallTabs location="download_page_hero" />
+            </div>
+            <p className="mb-3 text-sm text-[#657b83]">
+              <Link href="/signup" className="font-medium text-[#b58900] hover:text-[#cb4b16]">Open Codecast in your browser</Link>
+              {" "}· also on Mac and iPhone:
             </p>
             <div className="flex flex-wrap justify-center gap-3">
-              <AppBadge app="mac" direct location="download_page_button" />
+              <AppBadge app="mac" direct tone="light" location="download_page_button" />
               <AppBadge app="ios" tone="light" location="download_page" />
             </div>
           </>
         )}
-        <p className="mt-4 font-mono text-xs text-[#93a1a1]">
-          {version ? `v${version} · ` : ""}macOS · Apple Silicon · 98 MB
-        </p>
+        {isMac && (
+          <p className="mt-4 font-mono text-xs text-[#93a1a1]">
+            {version ? `v${version} · ` : ""}macOS · Apple Silicon · 98 MB
+          </p>
+        )}
       </section>
 
+      {isMac && (<>
       {/* Steps */}
       <section className="mx-auto max-w-6xl px-6 py-12">
         <div className="grid gap-6 md:grid-cols-3">
@@ -269,6 +278,8 @@ export default function DownloadPage() {
           <InstallTabs location="download_page" />
         </div>
       </section>
+
+      </>)}
 
       <section id="chrome-extension" className="mx-auto max-w-3xl px-6 pb-16">
         <div className="rounded-xl border border-[#eee8d5] bg-white/40 p-6 sm:p-8">

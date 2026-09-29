@@ -25,6 +25,7 @@ import {
   OPENCODE_MODEL_OPTIONS,
   PI_MODEL_OPTIONS,
   GROK_MODEL_OPTIONS,
+  CURSOR_MODEL_OPTIONS,
   MUSE_MODEL_OPTIONS,
   CLAUDE_EFFORT_LEVELS,
   CODEX_EFFORT_LEVELS,
@@ -543,6 +544,14 @@ const GROK_MODEL: AgentModelConfig = {
   // settings could extend it post-login — revisit only with evidence.
   dynamic: false,
 };
+const CURSOR_MODEL: AgentModelConfig = {
+  models: CURSOR_MODEL_OPTIONS,
+  // Effort rides the model id (…-thinking-high); there is no effort flag.
+  efforts: [],
+  // `--model` is a launch flag; a cloud choice decides where the session runs.
+  midSession: false,
+  dynamic: false,
+};
 const MUSE_MODEL: AgentModelConfig = {
   models: MUSE_MODEL_OPTIONS,
   efforts: MUSE_EFFORT_LEVELS,
@@ -677,15 +686,15 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     // TranscriptDirWatcher — so this home-relative root is not consumed today.
     transcriptRoots: ["~/.cursor/chats"],
     watcherKind: "sqlite",
-    // Provisional: cursor has NO dedicated readiness pattern in the daemon. At the
-    // fresh-launch site (daemon.ts:11989) it falls through the else branch and
-    // reuses claude's /❯|⏵/; the shared readiness path uses /[❯›]/. Recorded here
-    // as the fresh-launch else value — ct-39077 should confirm cursor's real glyph
-    // when it wires readiness.
-    promptReadyPattern: /❯|⏵/,
+    // cursor-agent's empty composer: an arrow over a placeholder, "Plan,
+    // search, build anything" before the first turn and "Add a follow-up"
+    // after (v2026.09.28). Classified whole-pane (GLYPHLESS_PROMPT_CLIENTS):
+    // its composer stays painted mid-turn, so the busy spinner is checked first.
+    promptReadyPattern: /→ (?:Plan, search, build anything|Add a follow-up)/,
     // cursor resume panes get their own `cu-` prefix (the ct-39074 fix) so they
     // never collide with claude's `cc-`. Consumed by resumeTmuxPrefix.
     tmuxPrefix: "cu",
+    modelConfig: CURSOR_MODEL,
     capabilities: { panePromptMonitoring: false },
     // Cursor's project prose target is the `.cursor/rules` DIRECTORY of `.mdc`
     // files (`description`/`globs`/`alwaysApply` frontmatter); user-level rules

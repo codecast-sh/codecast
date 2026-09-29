@@ -27,6 +27,7 @@ import {
 import { renderMarkdownDocument, restyleMarkdownDocument } from "./artifactMarkdown";
 import { presignUrl } from "./lib/awsSigV4";
 import { CAST_PLAYER_JS } from "./lib/castPlayer";
+import { pageUsesPlayer } from "@codecast/shared/contracts";
 import { sha256Hex, passwordHash, kTokenFor, eTokenFor } from "./lib/artifactGates";
 
 // ---------------------------------------------------------------------------
@@ -287,9 +288,9 @@ export const playerJs = httpAction(async () =>
   }),
 );
 
-/** Pages that use <cast-player> get its script, from the host that served them. */
+/** Pages with <cast-player> or a <video> get the player script, from the host that served them. */
 function injectPlayer(html: string, apiBase: string): string {
-  if (!/<cast-player[\s>]/i.test(html) || /\/cli\/player\.js/.test(html)) return html;
+  if (!pageUsesPlayer(html) || /\/cli\/player\.js/.test(html)) return html;
   const tag = `<script src="${apiBase}/cli/player.js" defer></script>`;
   const head = html.match(/<\/head>/i);
   return head ? html.replace(/<\/head>/i, `${tag}</head>`) : tag + html;

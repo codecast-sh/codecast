@@ -242,12 +242,25 @@ describe("the marks on the person sit on the circle's edge", () => {
   // of background the presence badge uses, filled with its colour.
   test("the mute badge is outside the clip, in the presence badge's corner, cut by the background", () => {
     const rule = css.split(".face-row .face-mute {")[1]?.split("}")[0] ?? "";
-    expect(rule).toContain("right: -1px;");
-    expect(rule).toContain("bottom: -1px;");
+    expect(rule).toContain("right: var(--mark-at);");
+    expect(rule).toContain("bottom: var(--mark-at);");
+    expect(rule).toContain("transform: translate(50%, 50%) scale(var(--mark-k, 1));");
     expect(rule).toContain("box-shadow: 0 0 0 2px var(--sol-bg);");
     expect(rule).toContain("background: var(--sol-red);");
     expect(rule).toContain("color: var(--sol-bg);");
     expect(cssVar('.face-row[data-density="bar"] .face-mute {', "width")).toBe("14px");
+  });
+  // A fixed offset from the seat's square corner sat on the edge at 32px and
+  // floated off the face at 128 (the float's unread count). Every mark is
+  // centred on the 45 degree point of the circle, a share of the diameter.
+  test("every mark centres on the circle's 45 degree edge point, at any size", () => {
+    expect(cssVar("\n.face-seat {", "--mark-at")).toBe("calc(var(--face) * 0.1464)");
+    for (const sel of [".face-unread {", ".face-ask {", ".face-seat .face-pres {", ".face-bot {"]) {
+      const rule = css.split(sel)[1]?.split("}")[0] ?? "";
+      expect(rule).toMatch(/(top|bottom): var\(--mark-at\);/);
+      expect(rule).toMatch(/(left|right): var\(--mark-at\);/);
+      expect(rule).toContain("scale(var(--mark-k, 1))");
+    }
   });
   test("the presence fact under the activity line speaks in its voice", () => {
     expect(cssVar(".face-card-presence {", "text-transform")).toBe("lowercase");

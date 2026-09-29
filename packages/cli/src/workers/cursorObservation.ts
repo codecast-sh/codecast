@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ScanRow } from './scanTypes.js';
+import { codecastPath } from '../codecastDir.js';
 
 export async function observeCursorDatabase(file: string): Promise<Extract<ScanRow,{type:'cursorDb'}>> {
   let maxRowId: number | null = null;
@@ -91,7 +92,31 @@ async function observeComposers(file: string, home: string): Promise<ComposerObs
   } finally { close?.(); }
 }
 
+/** A cursor-agent CLI chat: `~/.cursor/chats/<md5(cwd)>/<chatId>/` holds the
+ *  chat's store.db (held open by the live process) and a meta.json that names
+ *  its cwd and title. The chat id is the agent-transcripts id and the id
+ *  `cursor-agent --resume` takes. */
+export async function findCursorCliChat(home: string, chatId: string): Promise<{ dir: string; cwd?: string; title?: string } | null> {
+  // A Cursor Cloud agent's mirror (cursorCloud.ts) keeps the same meta.json.
+  const dirs = [codecastPath('cursor-cloud', path.basename(chatId))];
+  const root = path.join(home, '.cursor', 'chats');
+  try { for (const bucket of await fs.promises.readdir(root)) dirs.push(path.join(root, bucket, chatId)); }
+  catch (error) { if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error; }
+  for (const dir of dirs) {
+    let raw: string;
+    try { raw = await fs.promises.readFile(path.join(dir, 'meta.json'), 'utf8'); }
+    catch { continue; }
+    try {
+      const meta = JSON.parse(raw) as { cwd?: unknown; title?: unknown };
+      return { dir, cwd: typeof meta.cwd === 'string' && meta.cwd ? meta.cwd : undefined, title: typeof meta.title === 'string' && meta.title ? meta.title : undefined };
+    } catch { return { dir }; }
+  }
+  return null;
+}
+
 export async function findCursorWorkspace(job: { home: string; root: string; sessionId: string }): Promise<string | null> {
+  const cliChat = await findCursorCliChat(job.home, job.sessionId);
+  if (cliChat?.cwd) return cliChat.cwd;
   let entries: fs.Dirent[];
   try { entries = await fs.promises.readdir(job.root, {withFileTypes:true}); }
   catch (error) { if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return null; throw error; }

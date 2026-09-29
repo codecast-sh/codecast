@@ -25,9 +25,7 @@ import { ScopeBriefTab, ScopeCharterTab, ScopeDecisionsTab, ScopeDocsTab, ScopeP
 import { TemplateSections } from "../TemplateSections";
 import { useRoleScope } from "../../../hooks/useRoleScope";
 import { useOpenLinkedSession } from "../../../hooks/useOpenLinkedSession";
-import { RoleEscalationLines } from "../../RoleEscalationLines";
 import { EntityIdPill } from "../../EntityIdPill";
-import type { RoleEscalation } from "@codecast/shared/contracts";
 import { parseStandingSection, projectsWithLines, standingLineAgeDays, standingLineFor, standingLineStale } from "@codecast/shared/contracts/briefStanding";
 import { ScopeSettings } from "./ScopeSettings";
 import { ScopeLineTab } from "./ScopeLineTab";
@@ -51,9 +49,6 @@ export type ScopePanelProps = {
   onTab: (next: ScopeTabKey) => void;
   onClose: () => void;
   layout: ScopePanelLayout;
-  /** What the role put in front of the person (R1, revised): the first
-   *  screen's first block, from the same helper the inbox card reads. */
-  escalations: RoleEscalation[];
   scopeRef: ScopeRef | null;
   scopeIds: ScopeIds;
   summary: ScopeSummary | null | undefined;
@@ -135,7 +130,7 @@ export function ScopePanel(p: ScopePanelProps) {
       {tab !== "feed" && tab !== "tasks" && (
         <div data-scope-scroll className={cn("flex-1 min-h-0 overflow-y-auto", layout === "sheet" ? "px-2 py-3" : "px-3 py-3")}>
           {!p.summary && p.summaryProblem && <p className="px-2.5 pb-2 text-[11px]" style={{ color: "var(--sol-text-dim)" }}>{p.summaryProblem}</p>}
-          {tab === "scope" && role && <ScopeOverviewTab role={role} now={p.now} canEdit={p.canEdit} escalations={p.escalations} narrative={p.brief?.narrative} briefLoaded={p.brief !== undefined} />}
+          {tab === "scope" && role && <ScopeOverviewTab role={role} now={p.now} narrative={p.brief?.narrative} briefLoaded={p.brief !== undefined} />}
           {tab === "line" && <ScopeLineTab ids={p.scopeIds} teamId={teamId} />}
           {tab === "plans" && <ScopePlansTab ids={p.scopeIds} />}
           {tab === "docs" && <ScopeDocsTab ids={p.scopeIds} />}
@@ -188,7 +183,7 @@ const BLOCK_LABEL = "px-2.5 mb-1.5 text-[10.5px] font-semibold uppercase trackin
 /** The first screen (F5.1): three questions, in words, in this order. Every
  *  number on it is inside an escalation's own line or the activity line;
  *  the mount test holds it to that. */
-export function ScopeOverviewTab({ role, now, canEdit, escalations, narrative, briefLoaded }: { role: OrgRole; now: number; canEdit: boolean; escalations: RoleEscalation[]; narrative: string | null | undefined; briefLoaded: boolean }) {
+export function ScopeOverviewTab({ role, now, narrative, briefLoaded }: { role: OrgRole; now: number; narrative: string | null | undefined; briefLoaded: boolean }) {
   const { model } = useRoleScope(role.short_id);
   const openLinked = useOpenLinkedSession();
   const openId = (id: string) => {
@@ -205,13 +200,6 @@ export function ScopeOverviewTab({ role, now, canEdit, escalations, narrative, b
     ?? [...role.sessions].sort((a, b) => b.updated_at - a.updated_at)[0];
   return (
     <div className="space-y-6" data-scope-briefing>
-      {escalations.length > 0 && (
-        <section data-scope-section="needs-you">
-          <h3 className={BLOCK_LABEL} style={{ color: "var(--sol-text-dim)" }}>Needs you</h3>
-          <div className="px-1"><RoleEscalationLines escalations={escalations} coarseNow={now} canHandBack={canEdit} onOpen={openId} /></div>
-        </section>
-      )}
-
       {written.length > 0 && (
         <section data-scope-section="stands">
           <h3 className={BLOCK_LABEL} style={{ color: "var(--sol-text-dim)" }}>Where it stands</h3>

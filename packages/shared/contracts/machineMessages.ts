@@ -268,12 +268,15 @@ export function isMachineDeliveredMessage(rawContent: string | null | undefined)
 }
 
 // --- A session moving between a role and a person (org-roles-run-work.md R1, revised) ---
-// Every move of a session between the role that looks after it and the
-// person is written into BOTH threads as one machine message
-// (sessionOwnership.performEscalateSession, through the ordinary pending
-// message rail so it syncs like any message), and each thread renders it as
+// Every move of a session between the role that looked after it and the
+// person was written into BOTH threads as one machine message (through the
+// ordinary pending message rail, so it synced like any message), and each
+// thread renders it as
 // an inline divider, never a bubble: the role's face, what moved where, the
-// whole line as markdown, the time. One tag, three moves:
+// whole line as markdown, the time. LEGACY: the verb that wrote it (`cast
+// escalate`) is gone (org-staffing.md S28); threads written before that still
+// carry the tag, so only the reader and the caption remain. One tag, three
+// moves:
 //
 //   handed   the role put the session in front of the person through its own
 //            card (the default); the child stays nested under the role
@@ -307,25 +310,6 @@ export interface SessionEscalationMessage {
   line: string;
 }
 
-export function formatSessionEscalation(m: SessionEscalationMessage): string {
-  const attrs: Array<[string, string | undefined]> = [
-    ["move", m.move],
-    ["by", m.by],
-    ["left", m.left ? "1" : undefined],
-    ["role", m.role.short_id],
-    ["handle", m.role.handle],
-    ["name", m.role.name],
-    ["avatar", m.role.avatar],
-    ["session", m.session.short_id],
-    ["title", m.session.title],
-    ["to", m.to],
-    ["at", String(m.at)],
-  ];
-  const head = attrs.filter(([, v]) => v != null && v !== "").map(([k, v]) => `${k}="${escapeTagAttr(v!)}"`).join(" ");
-  const body = m.line.trim();
-  return `<session-escalation ${head}>\n${body}\n</session-escalation>`;
-}
-
 export function isSessionEscalationMessage(rawContent: string | null | undefined): boolean {
   return !!rawContent && /^<session-escalation\s/.test(stripInjectionNoise(rawContent));
 }
@@ -352,15 +336,6 @@ export function parseSessionEscalation(rawContent: string | null | undefined): S
     at: Number(attr("at")) || 0,
     line: (m[2] ?? "").trim(),
   };
-}
-
-// The line a role writes can run to paragraphs (the divider renders all of it
-// as markdown). Every strip, chip, chime and CLI row shows its FIRST line and
-// leaves the rest to the divider: one rule, so no surface cuts it differently.
-export const ESCALATION_LINE_MAX = 4000;
-
-export function escalationFirstLine(line: string): string {
-  return (line.split("\n").find((l) => l.trim()) ?? "").trim();
 }
 
 /** The caption a divider draws for a move, from the reader's side: the child's

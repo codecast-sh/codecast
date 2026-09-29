@@ -1682,14 +1682,17 @@ function answerBubbleShape(row: Doc<"session_decisions">) {
   };
 }
 
-// One decision by id, for the answer bubble in the transcript: the queue
-// subscription (listForUser) keeps resolved rows a day, so an older answer
-// reads its options and context here when the reader unfolds it.
+// One decision by `sd-N` or Convex id, for the answer bubble in the
+// transcript and for an `sd-N` reference pill: the queue subscription
+// (listForUser) keeps resolved rows a day, so an older decision reads its
+// options and context here.
 export const get = query({
-  args: { decision_id: v.id("session_decisions") },
+  args: { decision_id: v.string() },
   handler: async (ctx, args) => {
-    const row = await readableDecision(ctx, args.decision_id);
-    if (!row) return null;
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    const row = await findDecision(ctx, args.decision_id);
+    if (!row || !(await userMayRead(ctx, userId, row))) return null;
     return answerBubbleShape(row);
   },
 });

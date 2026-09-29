@@ -325,7 +325,7 @@ describe("org.health stalls and the bypassed seat", () => {
     expect(growth.load.open_stalls).toBe(2);
   });
 
-  test("a session of the role that waited on a person for more than a day with no escalation is a stall; an escalated or a young wait is not (R1)", async () => {
+  test("a session of the role that waited on a person for more than a day is a stall; a young wait is not (R1, S28)", async () => {
     const blocked = (id: string, at: number, over: Record<string, any> = {}) =>
       conv(id, { org_role_id: GROWTH, thread_state: "Which price?", thread_state_status: "blocked", thread_state_at: at, ...over });
     const db = fixtures({
@@ -334,13 +334,13 @@ describe("org.health stalls and the bypassed seat", () => {
         conv(S_GROWTH, { standing_role_id: GROWTH, anchor_id: "anchors_growth", persistent: true }),
         conv(S_BILLING, { standing_role_id: BILLING, anchor_id: "anchors_billing", persistent: true, project_path: "/repo/elsewhere" }),
         blocked("conversations_unseen", NOW - 2 * D),
-        blocked("conversations_shown", NOW - 2 * D, { escalated_by_role: { role_id: GROWTH, line: "the price needs your eye", at: NOW - D } }),
+        blocked("conversations_also", NOW - 2 * D),
         blocked("conversations_young", NOW - 3 * H),
       ],
       session_decisions: [], decision_inbox: [],
     });
     const growth = (await computeOrgHealth(ctxOf(db), ME as any, TEAM, NOW)).roles.find((x) => x.handle === "growth")!;
-    expect(growth.load.open_stalls).toBe(1);
+    expect(growth.load.open_stalls).toBe(2);
   });
 
   test("a scope that closes work with no hand under the seat and no decision routed to it raises bypassed", async () => {

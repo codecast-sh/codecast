@@ -90,7 +90,7 @@ Options:
 - `--for <session>`: bind runs to a specific session (defaults to the one you're in)
 - `--safe`: read-only spawned run — write tools removed, state-changing commands blocked. Default is permissive: the run can act. A run injecting into an existing session inherits that session's rules.
 - `--project <path>`: set working directory (defaults to current)
-- `--max-runtime <duration>`: override max runtime (default: 10m)
+- `--max-runtime <duration>`: the run is killed at this cap (default: 10m), so set it past any wait or retry window the prompt asks the run to sit through
 - `--precheck <command>`: a shell gate run in the project directory before each scheduled or recurring firing. Exit 0 runs the trigger; anything else records a skipped run and spends no session. Reach for it when the trigger should act only if something changed ("has main moved?", "is the queue non-empty?") — otherwise a whole run is burned finding out the answer is no. Event triggers ignore it.
 
 Every trigger has a short ID (`tr-42`) — printed when you create one and listed by `cast trigger ls`. Use it for every command, and write it when you mention a trigger in prose; see "Referencing objects". When a trigger fires, its run receives your prompt and its short ID, and should call `cast trigger complete tr-42 --summary "..."` when done. That completion is the run's declaration of who acts next: the summary is what the human reads on the trigger, so state the outcome. Add `--needs-attention` only when the human must read or act; it keeps the run in their inbox.

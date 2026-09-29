@@ -1060,11 +1060,9 @@ export type BriefHand = {
   state_status: string | null;
   state_at: number | null;
   updated_at: number;
-  // Since when the session has waited on a person (needs input), else null;
-  // and the line its role put it in front of the person with, if it did
-  // (org-roles-run-work.md R1). A wait with no escalation is the role's to act on.
+  // Since when the session has waited on a person (needs input), else null.
+  // A wait is the role's to answer or pass up (org-staffing.md S28).
   waiting_since: number | null;
-  escalated: { line: string; at: number } | null;
   // The task the hand is bound to, with its last handoff status and verdict.
   task: { short_id: string; title: string; status: string; execution_status?: string; review_verdict?: string; review_note?: string } | null;
 };
@@ -1135,7 +1133,6 @@ export async function computeBriefFacts(ctx: Ctx, viewerId: Id<"users">, role: a
       ...stateOf(c),
       updated_at: c.updated_at,
       waiting_since: waitingSinceOf(session.state, c),
-      escalated: c.escalated_by_role ? { line: c.escalated_by_role.line, at: c.escalated_by_role.at } : null,
       task: task ? {
         short_id: task.short_id,
         title: task.title,

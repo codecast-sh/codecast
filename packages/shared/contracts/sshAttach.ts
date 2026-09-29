@@ -23,6 +23,16 @@ export function localTmuxAttachCommand(tmuxSession: string): string {
   return `tmux attach -t '${tmuxSession}'`;
 }
 
+/**
+ * The same attach, typed into PowerShell or cmd on the Windows machine whose
+ * WSL distro runs the pane. Unquoted on purpose: cmd keeps single quotes
+ * literally. Pane names are [A-Za-z0-9_-] and the server stores only distro
+ * names matching [A-Za-z0-9._-], so neither argument can be broken.
+ */
+export function wslTmuxAttachCommand(distro: string, tmuxSession: string): string {
+  return `wsl.exe -d ${distro} -e tmux attach -t ${tmuxSession}`;
+}
+
 export function sshTmuxAttachCommand(sshHost: string, tmuxSession: string): string {
   return `ssh ${sshHost} -t "PATH=${REMOTE_TMUX_PATH} ${localTmuxAttachCommand(tmuxSession)}"`;
 }

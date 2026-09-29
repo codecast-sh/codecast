@@ -211,6 +211,8 @@ export async function enqueueCloudSpawn(
     workspace?: CloudWorkspaceMode;
     /** What the worktree starts from; rides the args JSON to `cast cloud start --from`. */
     startFrom?: CloudStartFrom;
+    /** Home-relative paths the laptop adds to cloud_mirror_exclude first; rides the args JSON to `cast cloud start --leave-out`. */
+    leaveOut?: string[];
   },
 ): Promise<{ commandId: Id<"daemon_commands">; preparerOnline: boolean; preparer: any }> {
   const now = Date.now();
@@ -238,6 +240,7 @@ export async function enqueueCloudSpawn(
       ...(opts.token ? { placement_token: opts.token } : {}),
       ...(opts.workspace ? { workspace: opts.workspace } : {}),
       ...(opts.startFrom ? { start_from: opts.startFrom } : {}),
+      ...(opts.leaveOut?.length ? { leave_out: opts.leaveOut } : {}),
     }),
     created_at: now,
     target_device_id: preparer.device_id,
@@ -272,7 +275,7 @@ export async function parkOnCloudHost(
   userId: Id<"users">,
   conv: any,
   cloudDeviceId: string,
-  opts: { projectPath?: string | null; gitRoot?: string | null; force?: boolean; workspace?: CloudWorkspaceMode; startFrom?: CloudStartFrom } = {},
+  opts: { projectPath?: string | null; gitRoot?: string | null; force?: boolean; workspace?: CloudWorkspaceMode; startFrom?: CloudStartFrom; leaveOut?: string[] } = {},
 ): Promise<Id<"daemon_commands"> | null> {
   const projectPath = opts.projectPath ?? conv.project_path ?? null;
   const gitRoot = opts.gitRoot ?? conv.git_root ?? null;
@@ -302,6 +305,7 @@ export async function parkOnCloudHost(
       cloud_placement: "pending" as const,
       cloud_placement_token: undefined,
       cloud_placement_failed_at: undefined,
+      cloud_context_too_large: undefined,
       ...(opts.startFrom ? { cloud_start_from: startFrom } : {}),
       session_error: undefined,
       updated_at: Date.now(),
@@ -328,6 +332,7 @@ export async function parkOnCloudHost(
     token,
     workspace,
     startFrom,
+    leaveOut: opts.leaveOut,
   });
   await ctx.db.patch(conv._id, {
     owner_device_id: cloudDeviceId,
@@ -335,6 +340,7 @@ export async function parkOnCloudHost(
     cloud_placement_token: token,
     // A fresh pick is the retry: whatever the last park failed at is history.
     cloud_placement_failed_at: undefined,
+    cloud_context_too_large: undefined,
     ...(workspace ? { cloud_workspace: workspace } : {}),
     cloud_start_from: startFrom,
     // An isolated park never holds the root: drop a claim a failed shared
