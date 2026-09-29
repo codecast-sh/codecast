@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { classifyFeedMessage, isNoiseUserMessage, isHiddenSystemNotice, isWarningSystemNotice, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, cleanTitle } from "./conversationProcessor";
+import { classifyFeedMessage, isNoiseUserMessage, isHiddenSystemNotice, isWarningSystemNotice, isLimitNoticeSuperseded, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, cleanTitle } from "./conversationProcessor";
 
 // Regression: the message feed was dumping raw <task-notification> XML and other
 // structured/machine messages as cards. classifyFeedMessage is the single shared
@@ -164,5 +164,28 @@ describe("isWarningSystemNotice — usage-limit notices are warnings", () => {
   test("the text alone is not enough — a user typing it is not a notice", () => {
     expect(isWarningSystemNotice("Usage limit reached", undefined)).toBe(false);
     expect(isWarningSystemNotice("Usage limit reached", "local_command")).toBe(false);
+  });
+});
+
+// The CLI's "continuing automatically at 6am" restates the limit with a retry
+// plan account recovery overrides; the park card, then the recovery's own
+// continue, own that moment.
+describe("isLimitNoticeSuperseded", () => {
+  const notice = "Usage limit reached · continuing automatically at 6am · esc to cancel";
+  const banner = { role: "assistant", content: "You've hit your session limit · resets 6am (America/Los_Angeles)" };
+  const prompt = { role: "user", content: "validate this end-to-end" };
+
+  test("hidden right under the limit banner", () => {
+    expect(isLimitNoticeSuperseded(notice, "informational", banner, false)).toBe(true);
+  });
+
+  test("hidden once recovery continued the session and the banner was retracted", () => {
+    expect(isLimitNoticeSuperseded(notice, "informational", prompt, true)).toBe(true);
+  });
+
+  test("kept anywhere else, where it is the only word on the pause", () => {
+    expect(isLimitNoticeSuperseded(notice, "informational", prompt, false)).toBe(false);
+    expect(isLimitNoticeSuperseded(notice, "informational", null, false)).toBe(false);
+    expect(isLimitNoticeSuperseded("Unknown command: /x", "informational", banner, true)).toBe(false);
   });
 });

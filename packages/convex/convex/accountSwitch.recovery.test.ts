@@ -499,6 +499,18 @@ describe("requestAccountSwitch scoped to conversation ids", () => {
     expect(other.pending_api_error).toBe(true);
     expect(worker.pending_api_error).toBe(true);
   });
+  test("records what the person did, so the park card can follow it", async () => {
+    const f = fixture();
+    f.device.cc_accounts.profiles.push({ name: "spare", email: "spare@example.com", token: { expires_at: f.now + 86_400_000 } } as any);
+    const target = f.conversation("conversations_target", "limit");
+    f.tables.conversations.push(target);
+    await (requestAccountSwitch as any)._handler({ db: f.db, auth }, { email: "spare@example.com", conversation_ids: [target._id] });
+    expect(f.device.cc_auto_switch_state).toMatchObject({
+      last_action: "manual",
+      last_decision: { kind: "switch", target_name: "spare", target_email: "spare@example.com", parked_count: 1 },
+    });
+    expect(f.device.cc_auto_switch_state.last_decision.at).toBe(f.device.cc_auto_switch_state.last_action_at);
+  });
   test("a named worker is acted on, an unblocked id is ignored", async () => {
     const f = fixture();
     const worker = f.conversation("conversations_worker", "limit", { is_subagent: true });

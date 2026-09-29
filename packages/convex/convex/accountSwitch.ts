@@ -144,6 +144,35 @@ function autoRecoveryEnabled(primary: Doc<"devices"> | undefined): boolean {
   return !!primary && recoveryModeOf(primary) !== "off";
 }
 
+type RecoveryDecisionKind = "switch" | "propose" | "continue" | "exhausted";
+type DecisionTarget = { name?: string; email?: string; usage?: CcUsage | null };
+
+// The record every recovery leaves on the primary's auto-switch state, so the
+// park card and the notification can say what happened and where the sessions
+// went: the loop's switches, continues, proposals and exhaustions, and the
+// recoveries a person started by hand.
+function recoveryDecision(
+  primary: Doc<"devices">,
+  kind: RecoveryDecisionKind,
+  parkedCount: number,
+  now: number,
+  target?: DecisionTarget,
+) {
+  const activeEmail = fleetAccount(primary.cc_accounts, now).email;
+  const activeUsage = primary.cc_accounts?.profiles?.find((p) => p.email && p.email === activeEmail)?.usage;
+  const pct = target ? usageStanding(target.usage, now).percent : null;
+  return {
+    kind,
+    at: now,
+    target_name: target?.name,
+    target_email: target?.email,
+    target_percent: pct ?? undefined,
+    from_email: activeEmail,
+    parked_count: parkedCount,
+    pegged_window: peggedWindowLabel(activeUsage, now),
+  };
+}
+
 // The label of the worst pegged limit window on an account — what the human
 // sees closed on the meter (e.g. "Fable (7d)"). Used only to explain a switch
 // or proposal; absent when nothing is pegged. Mirrors the meter's own labels.
@@ -367,7 +396,7 @@ export const requestAccountSwitch = mutation({
     }
 
     if (primary && (res.devices > 0 || res.messaged > 0)) {
-      await recordManualRecovery(ctx, primary, blocked, now);
+      await recordManualRecovery(ctx, primary, blocked, now, { profile: args.profile, email: args.email });
     }
 
     return {
@@ -390,22 +419,35 @@ export const requestAccountSwitch = mutation({
   },
 });
 
+// A recovery a person started: recorded as "manual" (so the loop's cooldown
+// and attempt memory see it) with the decision it amounts to, so the park card
+// can follow it the same way it follows the loop's own.
 async function recordManualRecovery(
   ctx: { db: any },
   device: Doc<"devices">,
   blocked: Doc<"conversations">[],
   now: number,
+  switchTo?: { profile?: string; email?: string },
 ): Promise<void> {
   const state = device.cc_auto_switch_state ?? {};
   const keys = new Set(blocked
     .filter((c) => c.pending_api_error_kind === "limit")
     .map((c) => c.agent_type === "codex" ? AUTO_SWITCH_CODEX_CONTINUE_KEY : AUTO_SWITCH_CONTINUE_KEY));
+  const profiles = device.cc_accounts?.profiles ?? [];
+  const switching = !!(switchTo?.profile || switchTo?.email);
+  const targetEmail = switching
+    ? targetAccountEmail(device.cc_accounts, switchTo!)
+    : fleetAccount(device.cc_accounts, now).email;
+  const target = profiles.find((p) =>
+    (targetEmail && p.email === targetEmail) || (switching && switchTo?.profile && p.name === switchTo.profile));
   await ctx.db.patch(device._id, {
     cc_auto_switch_state: {
       ...state,
       last_action_at: now,
       last_action: "manual",
-      last_decision: undefined,
+      last_decision: blocked.length > 0
+        ? recoveryDecision(device, switching ? "switch" : "continue", blocked.length, now, target ?? { email: targetEmail })
+        : undefined,
       exhausted_at: undefined,
       attempts: [...(state.attempts ?? []), ...[...keys].map((profile) => ({ profile, at: now }))]
         .slice(-MAX_ATTEMPT_HISTORY),
@@ -1639,23 +1681,9 @@ export const autoSwitchCheck = internalMutation({
     // The account the fleet runs on: the keychain login, or the launch profile
     // after a token switch (fleetAccount). Every "active" read below means this.
     const activeEmail = fleetAccount(primary.cc_accounts, now).email;
-    const activeUsage = activeProfiles.find((p) => p.email && p.email === activeEmail)?.usage;
-    const buildDecision = (
-      kind: "switch" | "propose" | "continue" | "exhausted",
-      target?: { name?: string; email?: string; usage?: CcUsage | null },
-    ) => {
-      const pct = target ? usageStanding(target.usage, now).percent : null;
-      return {
-        kind,
-        at: now,
-        target_name: target?.name,
-        target_email: target?.email,
-        target_percent: pct ?? undefined,
-        from_email: activeEmail,
-        parked_count: claudeLimit.length + authSwitch.length,
-        pegged_window: peggedWindowLabel(activeUsage, now),
-      };
-    };
+    const activeProfile = activeProfiles.find((p) => p.email && p.email === activeEmail);
+    const buildDecision = (kind: RecoveryDecisionKind, target?: DecisionTarget) =>
+      recoveryDecision(primary, kind, claudeLimit.length + authSwitch.length, now, target);
 
     const recordAction = async (
       action: string,
@@ -1871,7 +1899,7 @@ export const autoSwitchCheck = internalMutation({
           claudeLimit.map((conv) => [conv._id, `auto-switch-continue-${conv._id}-${bucket}`]),
         ),
       });
-      await recordAction("continue", [AUTO_SWITCH_CONTINUE_KEY], await bookCodexFollowUp(), buildDecision("continue"));
+      await recordAction("continue", [AUTO_SWITCH_CONTINUE_KEY], await bookCodexFollowUp(), buildDecision("continue", activeProfile));
       return {
         acted: "continue",
         conversations: claudeLimit.length,
