@@ -90,6 +90,10 @@ export const ccAccountsValidator = v.object({
   // of the active account counts as evidence only if fetched after this;
   // a limit park stamped before it belongs to the previous login.
   active_since: v.optional(v.number()),
+  // When the active login's access token runs out (Codex: its exp claim).
+  // Codecast only reads that login, so past this the machine cannot drive
+  // Codex Cloud until someone signs in again (signInExpired).
+  active_expires_at: v.optional(v.number()),
   // The saved profile this machine's sessions LAUNCH on when it differs from
   // the keychain login: set by a token switch (the target's saved login is
   // dead, its minted setup-token is live, so the daemon moves sessions onto
