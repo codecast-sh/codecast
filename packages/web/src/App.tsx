@@ -380,6 +380,9 @@ export function App() {
               <Route path="integrations/github-app" element={<E name="SettingsIntegrations"><SettingsIntegrations /></E>} />
               <Route path="desktop" element={<E name="SettingsDesktop"><SettingsDesktop /></E>} />
               <Route path="apps" element={<E name="SettingsApps"><SettingsApps /></E>} />
+              {/* Sections with no page of their own (provider-keys, daemon,
+                  sounds…): matching them lets SettingsLayout open the modal. */}
+              <Route path="*" element={null} />
             </Route>
 
             {/* Public profiles — anonymous, guest-viewable, at the ROOT (/<handle>).

@@ -36,7 +36,7 @@ import { BranchSelector } from "../../BranchSelector";
 import { FileText, ListChecks, Target, Maximize2, ChevronDown, ChevronRight, ChevronUp, Split, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Share2, Forward, X } from "lucide-react";
 import { useTeamFeature } from "../../../lib/teamFeatures";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "../../ui/context-menu";
-import { pendingBannerState, pendingRetryClientId, pendingCancelRef, pendingMessageCanRetry, pendingMessageReachedSession, isActiveAgentStatus, isBootingAgentStatus, isAliveIdleStatus, type LiveAgentStatus } from "../../../lib/pendingBanner";
+import { pendingBannerState, pendingRetryClientId, pendingCancelRef, pendingMessageCanRetry, pendingMessageReachedSession, pendingMessageHoldReason, isActiveAgentStatus, isBootingAgentStatus, isAliveIdleStatus, type LiveAgentStatus } from "../../../lib/pendingBanner";
 import { PendingDeliveryNote } from "../../PendingDeliveryNote";
 import { ghostRestartContextFor, deriveRestartStage, type RestartProgressRow } from "../../../hooks/useSessionRestart";
 import { CastCommandBlock } from "./castBlocks";
@@ -248,6 +248,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
     !!isPending,
   );
   const messageReachedSession = pendingMessageReachedSession(messageId, conversationPending);
+  const holdReason = pendingMessageHoldReason(messageId, conversationPending);
   const bannerState = pendingBannerState(agentStatus, {
     retryEligible: retryVisible && pendingMessageCanRetry(content),
     restartInFlight: retrying,
@@ -603,7 +604,16 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
           and flips to "working" once the pane is ready, so reassure rather than alarm.
           While the agent is actively processing we show nothing — the message is already
           sitting in its native input queue (see pendingBannerState). */}
-      {isPending && bannerState !== "none" && (
+      {/* The daemon said why it is holding the message: say that, not "stuck".
+          Restarting cannot fix it; the message goes out once the cause clears. */}
+      {isPending && holdReason && (
+        <div className="flex items-center flex-wrap gap-2 mt-2 pl-8 text-xs text-sol-text-muted" data-testid="pending-message-held">
+          <span className="w-1.5 h-1.5 rounded-full bg-amber-400/70 flex-shrink-0" />
+          <span>Held: {holdReason}</span>
+          <CancelPendingButton onClick={handleCancelPending} disabled={cancelState !== "idle"} />
+        </div>
+      )}
+      {isPending && !holdReason && bannerState !== "none" && (
       <PendingDeliveryNote state={bannerState} restartInFlight={retrying} conversationId={conversationId} onCancel={handleCancelPending} cancelling={cancelState !== "idle"}>
       {bannerState === "queued" && (
         <div className="flex items-center flex-wrap gap-2 mt-2 pl-8 text-xs text-sol-text-muted" data-testid="pending-message-queued">

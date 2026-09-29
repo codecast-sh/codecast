@@ -1,4 +1,5 @@
 import { HandoffLinkChip, HandoffSessionLink, SessionHandoffCard, SessionHandoffNotice } from "./conversation/SessionHandoff";
+import { CursorCloudLink } from "./ConnectCursorDialog";
 import { sessionRepository } from "../lib/repoNavigation";
 import { repoTreeHref, repoCommitsHref } from "../lib/repoView";
 import { madeInTranscript, transcriptGitOutcomes } from "../lib/gitToolOutcome";
@@ -3761,6 +3762,7 @@ const ConversationViewInner = (
                   onControlOpenChange={setSessionControlOpen}
                 />
                 <BranchCodeLink session={conversation} />
+                <CursorCloudLink conversationId={conversation._id} />
                 <SessionWorktreePills session={conversation} repository={codeRepository} className="text-[10px] max-w-[180px]" />
             {(conversation as any)?.active_task && (
               <span data-simple-hide className="contents">
