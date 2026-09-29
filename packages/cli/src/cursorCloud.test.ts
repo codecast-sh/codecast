@@ -130,6 +130,33 @@ describe("Cursor Cloud transcript", () => {
   });
 });
 
+describe("CursorCloudWatcher import setting", () => {
+  test("with account import off, only agents codecast started are mirrored", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "cursor-cloud-off-"));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    const agent = (id: string) => ({ id, name: id, status: "IDLE", createdAt: RUN.createdAt, updatedAt: RUN.updatedAt });
+    const json = (body: unknown) => () => new Response(JSON.stringify(body));
+    const watcher = new CursorCloudWatcher({
+      rootDir: root,
+      readKey: () => "crsr_test",
+      importAll: () => false,
+      isOwnAgent: (id) => id === "bc-mine",
+      now: () => Date.parse(RUN.updatedAt),
+      fetchImpl: fakeFetch({
+        "/v1/agents": json({ items: [agent("bc-mine"), agent("bc-theirs")] }),
+        "/v1/agents/bc-mine/runs": json({ items: [] }),
+        "/v1/agents/bc-theirs/runs": json({ items: [] }),
+        "/v0/agents/bc-mine/conversation": json({ messages: [{ id: "u", type: "user_message", text: "hi" }] }),
+        "/v0/agents/bc-theirs/conversation": json({ messages: [{ id: "u", type: "user_message", text: "hi" }] }),
+      }),
+    });
+    const seen: string[] = [];
+    watcher.on("session", (e) => seen.push(e.sessionId));
+    await watcher.poll();
+    expect(seen).toEqual(["bc-mine"]);
+  });
+});
+
 describe("CursorCloudWatcher", () => {
   test("mirrors an agent into a Cursor JSONL transcript with its meta, and emits a session event", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "cursor-cloud-"));
@@ -169,5 +196,22 @@ describe("CursorCloudWatcher", () => {
     restarted.start();
     restarted.stop();
     expect(primed.map((e) => e.sessionId)).toEqual([AGENT]);
+  });
+});
+
+describe("Cursor Cloud setup failures", () => {
+  test("API errors carry Cursor's own message, from either error shape", async () => {
+    const api = new CursorCloudApi("crsr_test", fakeFetch({
+      "/v1/agents": () => new Response(JSON.stringify({ error: { code: "validation_error", message: "Failed to verify existence of branch 'main' in repository codecast-sh/codecast. Please ensure the branch name is correct." } }), { status: 400 }),
+      "/v1/me": () => new Response(JSON.stringify({ code: "error", message: "Invalid User API Key" }), { status: 401 }),
+    }), "https://api.test");
+    await expect(api.createAgent({})).rejects.toMatchObject({ status: 400, code: "validation_error", message: expect.stringContaining("codecast-sh/codecast") });
+    await expect(api.request("GET", "/v1/me")).rejects.toMatchObject({ status: 401, message: "Invalid User API Key" });
+  });
+
+  test("the start notice opens the transcript under the first prompt", () => {
+    const msgs = parseCursorTranscriptFile(buildCursorCloudTranscript({ conversation: CONVERSATION, log: [], latestRun: RUN, createdAt: 0, notice: "Started from `main`: `feat` is not on GitHub yet." }), AGENT);
+    expect(msgs.map((m) => m.uuid)).toEqual([`${AGENT}:u1`, `${AGENT}:notice-start`, `${AGENT}:a1`]);
+    expect(msgs[1].content).toContain("is not on GitHub yet");
   });
 });

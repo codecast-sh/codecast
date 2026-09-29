@@ -1733,6 +1733,26 @@ export const claimConversationForStart = mutation({
       // A live LOCAL owner blocks the claim. A remote owner does not: a local
       // daemon that resolved a checkout is the rightful owner over a remote that
       // can't serve the session (mirrors registerManagedSession's reclaim rule).
+/**
+ * How a provider key command went, for the page that sent it: still waiting,
+ * or the daemon's verdict (a set carries the account the provider named, a
+ * refusal carries the provider's reason). Owner only.
+ */
+export const providerKeyCommandOutcome = query({
+  args: { command_id: v.id("daemon_commands") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    const row = await ctx.db.get(args.command_id);
+    if (!row || row.user_id !== userId || row.command !== "set_provider_key") return null;
+    if (!row.executed_at) return { state: "pending" as const };
+    if (row.error) return { state: "failed" as const, error: row.error };
+    let account: string | undefined;
+    try { account = JSON.parse(row.result ?? "{}").account; } catch {}
+    return { state: "done" as const, ...(account ? { account } : {}) };
+  },
+});
+
       const ownerOnline =
         ownerDevice && !ownerDevice.is_remote && Date.now() - ownerDevice.last_seen < DEVICE_ONLINE_MS;
       if (ownerOnline) return { won: false as const, owner }; // another live daemon owns it

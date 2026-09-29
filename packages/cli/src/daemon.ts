@@ -2,7 +2,7 @@
 import { VersionedObservationSet } from "./versionedObservationSet.js";
 import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission.js";
 import { pendingMessageFinished, prepareTmuxDelivery, receiptSettled, TmuxDeliveryUncertainError, type TmuxDeliveryIdentity, type TmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
-import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_GLOBAL, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, classifyApiErrorBanner, confineToOwningDevice, cursorCloudModel, findModelOption, fromConvexAgentType, modelOptionKey, isCodexSafetyError, isMachineDeliveredMessage, isUsageLimitDialog, isValidPaneTarget, snippetBySlug, verdictFromProbe, worktreeOfPath } from "@codecast/shared/contracts";
+import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_GLOBAL, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, CLIENT_ERROR_BANNER_PREFIX, CLOUD_SESSION_SOURCES, classifyApiErrorBanner, confineToOwningDevice, cursorCloudModel, findModelOption, fromConvexAgentType, modelOptionKey, isCodexSafetyError, isMachineDeliveredMessage, isUsageLimitDialog, isValidPaneTarget, snippetBySlug, verdictFromProbe, worktreeOfPath } from "@codecast/shared/contracts";
 import { holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, setPendingRedrive } from "./pendingPromptHold.js";
 import { typedPollAnswer } from "./typedPollAnswer.js";
 import { codexTurnErrorMessage } from "./codexTurnError.js";
@@ -348,11 +348,11 @@ import {
   grokStableRulesFragment,
 } from "./resumeCommand.js";
 import { ClaudeCloudWatcher, cloudEventUuid } from "./claudeCloud.js";
-import { CursorCloudWatcher } from "./cursorCloud.js";
-import { CursorCloudSessions } from "./cursorCloudSessions.js";
+import { CursorCloudWatcher, verifyCursorKey } from "./cursorCloud.js";
+import { CursorCloudSessions, CursorCloudSetupError } from "./cursorCloudSessions.js";
 import { conventionSeed, resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, isResumableCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
 import { blankCodexRecoveryParams, buildLaunchArgs, getConfiguredAgentArgs, getDefaultParamFlags, getPermissionFlags, codexPermissionsFromArgs, launchBinary } from "./launchCommand.js";
-import type { AgentClientId, AgentDefinitionSpec, AgentPaneReadiness, AgentStatus, DeviceSnippetSettings, LivenessVerdict, OpenTaskKind, OpenTaskReport, PaneTerminalModes, StableLaunchPrefs } from "@codecast/shared/contracts";
+import type { AgentClientId, AgentDefinitionSpec, CloudSessionSource, AgentPaneReadiness, AgentStatus, DeviceSnippetSettings, LivenessVerdict, OpenTaskKind, OpenTaskReport, PaneTerminalModes, StableLaunchPrefs } from "@codecast/shared/contracts";
 import { planGatedSnippets } from "./gatedSnippets";
 import { readThreadStateStamp } from "./threadStateStamp.js";
 import { type Config, getAgentArgs, isCloudMirrorEnabled, isOpencodeServerEnabled, opencodeServerPort } from "./config/types.js";
@@ -369,7 +369,7 @@ import {
 import { providerKeySourcePrefix } from "./providerKeyLaunch.js";
 import { providerKeyStorePath, readProviderKeyStore } from "./providerKeyStore.js";
 import { MintFlowControl, submitMintApprovalCode } from "./mintFlowControl.js";
-import { getProviderKeyPublicKey, applyProviderKeyCommand, decryptProviderKeyPayload } from "./providerKeyCrypto.js";
+import { getProviderKeyPublicKey, applyProviderKeyCommand, decryptProviderKeyPayload, type ProviderKeyVerifier } from "./providerKeyCrypto.js";
 import type { LoopFreezeSummary, LoopFreezeState } from "./loopFreezeState.js";
 import { defaultConfigDir } from "./config/configDir.js";
 import { findTmuxSessionsById } from "./tmuxSessionLookup.js";
@@ -1280,6 +1280,10 @@ let conversationCacheRef: ConversationCache | null = null;
 // Cursor Cloud Agents (cursorCloud.ts): the mirror watcher, started with the
 // Cursor transcript watcher, and the conversations that run on a cloud agent.
 let cursorCloudWatcher: CursorCloudWatcher | null = null;
+/** Providers that can check a key before it is stored (Settings → Provider keys). */
+const verifyProviderKey: ProviderKeyVerifier = async (provider, apiKey) => provider === "cursor" ? verifyCursorKey(apiKey) : { ok: true };
+/** When each Cursor Cloud setup card was last posted, so a held retry does not repost it. */
+const cursorSetupCardsPosted = new Map<string, number>();
 function cursorApiKey(): string | null {
   return readProviderKeyStore(CONFIG_DIR).cursor || process.env.CURSOR_API_KEY || null;
 }
@@ -2080,10 +2084,6 @@ function pendingOpenTasksChanged(sessionId: string): boolean {
   if (pending === undefined) return false;
   return JSON.stringify(pending) !== lastOpenTasksSentJson.get(sessionId);
 }
-const SETTLE_STATUSES_WITH_TASKS: ReadonlySet<string> = new Set(["idle", "waiting", "dormant", "done"]);
-// A parked "waiting" re-publishes its (re-verified) tasks this often so the
-// server's report stays fresh enough to vouch for the status past the
-// quiet-time decay (OPEN_TASKS_FRESH_MS is 10 min; the reconciles run ~90s).
 // Whether the session's last settle found background work still running
 // (verifiedOpenTasks checks the process table), whatever label it settled
 // under: a declared "dormant" or "done" outranks "waiting" in the status but
@@ -2093,6 +2093,10 @@ export function hasOpenBackgroundWork(sessionId: string): boolean {
   const reported = lastOpenTasksSentJson.get(sessionId);
   return reported !== undefined && reported !== "[]";
 }
+const SETTLE_STATUSES_WITH_TASKS: ReadonlySet<string> = new Set(["idle", "waiting", "dormant", "done"]);
+// A parked "waiting" re-publishes its (re-verified) tasks this often so the
+// server's report stays fresh enough to vouch for the status past the
+// quiet-time decay (OPEN_TASKS_FRESH_MS is 10 min; the reconciles run ~90s).
 const OPEN_TASKS_REFRESH_MS = 4 * 60_000;
 export function openTasksRefreshDue(status: AgentStatus | undefined, taskCount: number, lastSentAt: number | undefined, now: number): boolean {
   return (status === "waiting" || status === "dormant") && taskCount > 0 && now - (lastSentAt ?? 0) >= OPEN_TASKS_REFRESH_MS;
@@ -4738,11 +4742,13 @@ async function sendHeartbeat(): Promise<void> {
       }).catch((err) => log(`[capabilities] reconcile failed: ${String(err).slice(0, 160)}`));
     }
 
-    if (typeof data.claude_cloud_sync === "boolean" && data.claude_cloud_sync !== (activeConfig?.claude_cloud_sync ?? true)) {
-      log(`Claude cloud session sync ${data.claude_cloud_sync ? "on" : "off"} (account setting)`);
-      patchConfig({ claude_cloud_sync: data.claude_cloud_sync });
-      if (activeConfig) activeConfig.claude_cloud_sync = data.claude_cloud_sync;
-      applyClaudeCloudSync(data.claude_cloud_sync);
+    for (const [source, { field }] of Object.entries(CLOUD_SESSION_SOURCES) as [CloudSessionSource, (typeof CLOUD_SESSION_SOURCES)[CloudSessionSource]][]) {
+      const wanted = data[field];
+      if (typeof wanted !== "boolean" || wanted === ((activeConfig?.[field] ?? true) !== false)) continue;
+      log(`${CLOUD_SESSION_SOURCES[source].label} sync ${wanted ? "on" : "off"} (account setting)`);
+      patchConfig({ [field]: wanted });
+      if (activeConfig) activeConfig[field] = wanted;
+      if (source === "claude") applyClaudeCloudSync(wanted);
     }
 
     if (data.sync_mode !== undefined) {
@@ -7967,10 +7973,10 @@ async function executeRemoteCommand(
         // arrives SEALED to this device's ECDH public key — Convex never saw
         // plaintext. applyProviderKeyCommand decrypts + updates the 0600 store; we
         // then fan out to remotes and heartbeat so managed_provider_ids round-trips.
-        const applied = applyProviderKeyCommand(CONFIG_DIR, commandArgs);
-        if (!applied.ok) { error = `set_provider_key: ${applied.error}`; break; }
-        log(`[KEYS] ${applied.op} ${applied.provider} (web)`);
-        result = JSON.stringify({ op: applied.op, provider: applied.provider });
+        const applied = await applyProviderKeyCommand(CONFIG_DIR, commandArgs, verifyProviderKey);
+        if (!applied.ok) { error = applied.error; break; }
+        log(`[KEYS] ${applied.op} ${applied.provider} (web)${applied.account ? ` for ${applied.account}` : ""}`);
+        result = JSON.stringify({ op: applied.op, provider: applied.provider, ...(applied.account ? { account: applied.account } : {}) });
         pushProviderKeysToRemoteHosts("web set").catch(() => {});
         await sendHeartbeat().catch(() => {});
         break;
@@ -20658,14 +20664,14 @@ async function paneChildCount(pid: number): Promise<number | null> {
 export type StampedPaneReapFacts = {
   /** The daemon's last sent status: "waiting" = open background work, "dormant" = a machine wakes it. */
   agentStatus?: AgentStatus;
+  /** The last settle found background tasks still running (hasOpenBackgroundWork). */
+  openBackgroundWork: boolean;
   /** Undelivered messages are queued for the conversation. */
   pendingMessages: boolean;
   /** A resume or a delivery is landing in the pane right now. */
   deliveryActive: boolean;
   /** A subagent of this session is still writing its own transcript. */
   subagentsLive: boolean;
-  /** The last settle found background tasks still running (hasOpenBackgroundWork). */
-  openBackgroundWork: boolean;
   /** Hibernation or a send holds the tmux target. */
   targetLocked: boolean;
   /** Since the session was last resumed; a fresh resume has produced nothing to judge yet. */
@@ -20703,12 +20709,6 @@ export function reapPaneEligibility(
   return { eligible: true, reason: null };
 }
 
-/**
- * Rescues the ONE case where `transcript=active` blocks a reap forever.
- *
- * classifyTranscriptTail reads a trailing user turn as "active" — it is the
- * agent's move — with no staleness dimension. When an agent dies or wedges
- * mid-turn, the transcript is frozen with the user's unanswered prompt last, so
 function stampedPaneHideReason(lifecycle: ConversationLifecycle | null | undefined): string | null {
   // "Absent hide fields" is NOT "not hidden". The status-only fallback carries no
   // hide state at all, and reading its silence as "inbox-visible" would put a lie
@@ -20721,6 +20721,12 @@ function stampedPaneHideReason(lifecycle: ConversationLifecycle | null | undefin
   return hidden ? null : "inbox-visible";
 }
 
+/**
+ * Rescues the ONE case where `transcript=active` blocks a reap forever.
+ *
+ * classifyTranscriptTail reads a trailing user turn as "active" — it is the
+ * agent's move — with no staleness dimension. When an agent dies or wedges
+ * mid-turn, the transcript is frozen with the user's unanswered prompt last, so
  * the tail reads "active" for all eternity and the pane is permanently
  * un-reapable. That is the unbounded accumulator: 25 of this machine's 267 idle
  * Claude transcripts (~9%) are stuck exactly this way, some 682h old.
@@ -24813,7 +24819,23 @@ async function deliverMessage(
   // Backends that are not a pane: a codex app-server thread, a Cursor Cloud agent.
   const tryBackendDelivery = async (): Promise<boolean> => {
     if (await tryAppServerDelivery()) return true;
-    if (!await cursorCloudSessions.deliver(conversationId, content)) return false;
+    let delivered: boolean;
+    try {
+      delivered = await cursorCloudSessions.deliver(conversationId, content);
+    } catch (err) {
+      // A setup problem shows where the person is looking: as the turn-stopped
+      // card (an auth one carries the key form), once per kind.
+      const cardKey = err instanceof CursorCloudSetupError ? `cursor-cloud-setup:${conversationId}:${err.kind}` : "";
+      if (err instanceof CursorCloudSetupError && Date.now() - (cursorSetupCardsPosted.get(cardKey) ?? 0) > 60_000) {
+        cursorSetupCardsPosted.set(cardKey, Date.now());
+        await syncService.addMessages({
+          conversationId,
+          messages: [{ messageUuid: cardKey, role: "assistant" as const, content: `${CLIENT_ERROR_BANNER_PREFIX} ${err.message}`, timestamp: Date.now() }],
+        }).catch(logConvexFailure);
+      }
+      throw err;
+    }
+    if (!delivered) return false;
     await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
     logDelivery(`[cursor-cloud] delivered msg=${messageId.slice(0, 8)} to the cloud agent of conv=${conversationId.slice(0, 12)}`);
     return true;
@@ -29440,12 +29462,26 @@ async function main(): Promise<void> {
 
   // Cursor Cloud Agents: mirrored into Cursor JSONL transcripts and fed
   // through the same handler as local ones. Idle until a Cursor API key is set.
-  if (config.cursor_cloud_sync !== false) {
-    cursorCloudWatcher = new CursorCloudWatcher({ readKey: cursorApiKey, resolveRepoDir: resolveLocalRepoFor, log });
-    cursorCloudWatcher.on("session", (event) => cursorTranscriptWatcher.emit("session", event));
-    cursorCloudWatcher.on("error", (error: Error) => log(`Cursor cloud poll failed: ${error.message}`));
-    cursorCloudWatcher.start();
-  }
+  // The watcher always runs (sessions started from codecast need their
+  // mirror); the account's cursor_cloud_sync decides whether it also imports
+  // the account's other cloud agents, read on every poll.
+  cursorCloudWatcher = new CursorCloudWatcher({
+    readKey: cursorApiKey,
+    importAll: () => activeConfig?.cursor_cloud_sync !== false,
+    isOwnAgent: (agentId) => cursorCloudSessions.ownsAgent(agentId),
+    resolveRepoDir: resolveLocalRepoFor,
+    log,
+  });
+  cursorCloudWatcher.on("session", (event) => cursorTranscriptWatcher.emit("session", event));
+  cursorCloudWatcher.on("error", (error: Error) => log(`Cursor cloud poll failed: ${error.message}`));
+  // The branch the agent pushed is the session's branch: the header's branch
+  // link and codecast's pull request linking both read git_branch.
+  cursorCloudWatcher.on("git", (git) => {
+    const conversationId = conversationCache[git.agentId];
+    if (!conversationId || !git.branch) return;
+    void syncService.updateGitState({ conversation_id: conversationId, git_branch: git.branch, ...(git.repoUrl ? { git_remote_url: git.repoUrl } : {}) }).catch(() => {});
+  });
+  cursorCloudWatcher.start();
 
   codexAppServerInstance = new CodexAppServer({
     log,
@@ -30186,6 +30222,13 @@ async function main(): Promise<void> {
             logDelivery(`HELD: msg=${msg._id.slice(0, 8)} waiting for a human answer in conv=${msg.conversation_id.slice(0, 12)}; retrying when the prompt closes`);
             holdConversationForPrompt(msg.conversation_id);
             syncService.retryMessage(msg._id, { holdReason: err instanceof InputBlockedError ? err.holdReason : "waiting for a human answer in the terminal" }).catch(logConvexFailure);
+          } else if (err instanceof CursorCloudSetupError) {
+            // A missing or rejected key is held and rechecked every few
+            // seconds, so the message goes out as soon as a key lands; an
+            // unreachable repo backs off (each try is a Cursor API call).
+            const keyProblem = err.kind !== "repo";
+            logDelivery(`HELD: msg=${msg._id.slice(0, 8)} Cursor Cloud setup (${err.kind}): ${errMsg}`);
+            scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content, keyProblem ? "waiting for a Cursor API key on this machine" : undefined);
           } else if (err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(errMsg)) {
             logDelivery(`HELD: msg=${msg._id.slice(0, 8)} awaiting terminal input confirmation: ${errMsg}`);
             scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content, "waiting for terminal input confirmation");

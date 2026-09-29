@@ -22,7 +22,8 @@ import { useDevices, useDeviceMoveStatus } from "../DeviceBadge";
 import { useProviderKeyCommand, deviceManagedKeys } from "../../lib/useProviderKeyCommand";
 import type { RestartPhase, RestartStage } from "../../hooks/useSessionRestart";
 import { CopyCommand } from "./blocks/shared";
-import { authRemedy, detectProviderFromError } from "./classify";
+import { authRemedy, detectProviderFromError, isCursorCloudKeyError } from "./classify";
+import { ConnectCursorButton } from "../ConnectCursorDialog";
 import { formatDuration, formatFullTimestamp, formatRelativeTime } from "../../lib/conversationFormat";
 import { MessageMarkdown } from "./markdown";
 import type { ConversationDensity, ParsedApiError } from "./types";
@@ -275,6 +276,8 @@ export function ApiErrorCard({ error, agentType, conversationId, timestamp, comp
   let icon: ReactNode;
   let hint: ReactNode;
   const remedy = authRemedy(agentType);
+  // Actionable in every density, like the context card: its fix is one button.
+  const cursorKeyMissing = error.isAuth && isCursorCloudKeyError(agentType, error.message);
   if (error.isSafety) {
     heading = "Safety review required";
     icon = <span className="text-[10px] font-semibold">!</span>;
@@ -287,7 +290,12 @@ export function ApiErrorCard({ error, agentType, conversationId, timestamp, comp
         <path d="M10 13L20 3M17 6l2 2M14 9l2 2" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
     );
-    hint = (
+    hint = cursorKeyMissing ? (
+      <div className="mt-2 flex items-center gap-2 flex-wrap text-xs text-sol-text-dim">
+        <ConnectCursorButton conversationId={conversationId} />
+        <span>Your message is held and goes out as soon as the key is connected.</span>
+      </div>
+    ) : (
       <>
         <div className="mt-2 flex items-center gap-1.5 flex-wrap text-xs text-sol-text-dim">
           <span>Run</span>
@@ -395,7 +403,7 @@ export function ApiErrorCard({ error, agentType, conversationId, timestamp, comp
         <p className="mt-1.5 text-xs text-sol-text-dim">
           The session continued after this — nothing to do here.
         </p>
-      ) : (!compact || error.isContext) && hint}
+      ) : (!compact || error.isContext || cursorKeyMissing) && hint}
     </div>
   );
 }

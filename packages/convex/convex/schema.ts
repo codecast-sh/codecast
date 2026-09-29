@@ -234,6 +234,7 @@ export default defineSchema({
     // Claude Code cloud sessions (claude.ai/code) sync through the user's
     // daemons, read with their Claude login. Unset = on.
     claude_cloud_sync: v.optional(v.boolean()),
+    cursor_cloud_sync: v.optional(v.boolean()),
     team_share_paths: v.optional(v.array(v.string())),
     muted_members: v.optional(v.array(v.id("users"))),
     team_conversations_last_seen: v.optional(v.number()),
