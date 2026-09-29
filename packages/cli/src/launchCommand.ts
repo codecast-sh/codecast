@@ -15,7 +15,7 @@ import {
   GROK_EFFORT_LEVELS,
   MUSE_EFFORT_LEVELS,
   PI_EFFORT_LEVELS,
-  cursorCloudModel,
+  cloudAgentModel,
   findModelOption,
   type AgentClientId,
 } from "@codecast/shared/contracts";
@@ -310,24 +310,26 @@ export function appendModelEffortFlags(
   input: { agentType: AgentClientId; modelAlias?: string; requestedEffort?: string },
 ): void {
   const { agentType } = input;
+  // A cloud choice runs on the provider's machines (cloudAgents/), never as a local flag.
+  const modelAlias = input.modelAlias && cloudAgentModel(agentType, input.modelAlias) === null ? input.modelAlias : undefined;
   if (agentType === "claude") {
-    if (input.modelAlias) args.push("--model", input.modelAlias);
+    if (modelAlias) args.push("--model", modelAlias);
     if (input.requestedEffort && (CLAUDE_EFFORT_LEVELS as readonly string[]).includes(input.requestedEffort)) {
       args.push("--effort", input.requestedEffort);
     }
   } else if (agentType === "codex") {
-    if (input.modelAlias) args.push("-m", input.modelAlias);
+    if (modelAlias) args.push("-m", modelAlias);
     if (input.requestedEffort && (CODEX_EFFORT_LEVELS as readonly string[]).includes(input.requestedEffort)) {
       args.push("-c", `model_reasoning_effort=${input.requestedEffort}`);
     }
   } else if (agentType === "opencode") {
     // opencode selects a model with `-m provider/model` (the picker's cliAlias);
     // it has no reasoning-effort launch flag.
-    if (input.modelAlias) args.push("-m", input.modelAlias);
+    if (modelAlias) args.push("-m", modelAlias);
   } else if (agentType === "pi") {
     // pi selects a model with `--model provider/model`; its `--thinking` levels
     // ride the effort slot (launch-time only, like codex).
-    if (input.modelAlias) args.push("--model", input.modelAlias);
+    if (modelAlias) args.push("--model", modelAlias);
     if (input.requestedEffort && (PI_EFFORT_LEVELS as readonly string[]).includes(input.requestedEffort)) {
       args.push("--thinking", input.requestedEffort);
     }
@@ -335,20 +337,19 @@ export function appendModelEffortFlags(
     // grok selects a model with `-m <model-id>` (bare id, e.g. grok-4.6) and
     // takes reasoning effort as a launch flag (`--reasoning-effort`; the TUI's
     // effort menu is interactive-only, like codex's).
-    if (input.modelAlias) args.push("-m", input.modelAlias);
+    if (modelAlias) args.push("-m", modelAlias);
     if (input.requestedEffort && (GROK_EFFORT_LEVELS as readonly string[]).includes(input.requestedEffort)) {
       args.push("--reasoning-effort", input.requestedEffort);
     }
   } else if (agentType === "cursor") {
     // cursor-agent selects a model with `--model <id>` (e.g. gpt-5, sonnet-4);
-    // it has no reasoning-effort flag, effort rides the model id. A cloud
-    // choice runs on Cursor Cloud (cursorCloud.ts), never as a local flag.
-    if (input.modelAlias && cursorCloudModel(input.modelAlias) === null) args.push("--model", input.modelAlias);
+    // it has no reasoning-effort flag, effort rides the model id.
+    if (modelAlias) args.push("--model", modelAlias);
   } else if (agentType === "muse") {
     // muse selects a model with `--model <model-id>` (bare id, e.g.
     // muse-spark-1.3-contributor) and takes reasoning effort as
     // `--reasoning-effort` (none|minimal|low|medium|high|xhigh|max|ultra).
-    if (input.modelAlias) args.push("--model", input.modelAlias);
+    if (modelAlias) args.push("--model", modelAlias);
     if (input.requestedEffort && (MUSE_EFFORT_LEVELS as readonly string[]).includes(input.requestedEffort)) {
       args.push("--reasoning-effort", input.requestedEffort);
     }

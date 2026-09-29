@@ -348,6 +348,14 @@ export interface ProjectContextOptions {
   root: string;
   home?: string;
   includeTracked?: boolean;
+  /**
+   * Inside a git repo, carry only agent context (instruction files, agent
+   * config folders, .mcp.json) and what git ignores (CLAUDE.local.md). The
+   * repo's other files reach a cloud session through its seed and the folder
+   * sync, at that session's own commit; the laptop's copies on top would mix
+   * two trees and carry other sessions' unfinished work into every one.
+   */
+  onlyIgnored?: boolean;
   includeAncestors?: boolean;
   config?: Pick<Config, "cloud_mirror_include" | "cloud_mirror_exclude"> | null;
   maxBytes?: number;
@@ -392,6 +400,13 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
     const paths: string[] = yield { op: "tracked", path: root };
     for (const rel of paths) tracked.add(rel);
   }
+  // Ignored files and whole ignored folders ("dir/"), when only those travel.
+  // Outside a git repo nothing else carries the files, so all of them travel (null).
+  const ignoredList: string[] | null = opts.onlyIgnored ? yield { op: "ignored", path: root } : null;
+  const ignored = ignoredList ? new Set<string>(ignoredList) : null;
+  const isIgnored = (rel: string) => !!ignored && (ignored.has(rel) || rel.split("/").some((_, i, parts) => ignored.has(parts.slice(0, i + 1).join("/") + "/")));
+  const isAgentContext = (rel: string) => INSTRUCTION_FILE_RE.test(path.basename(rel)) || path.basename(rel) === ".mcp.json"
+    || /(?:^|\/)\.(?:claude|codex|gemini|grok|opencode|agents|cursor|pi)\//.test(rel);
   const denied = (abs: string, directory: boolean) => {
     const rel = homeRelative(abs, root);
     const homeRel = homeRelative(abs, home);
@@ -458,7 +473,7 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
     result.warnings.push(...hooks.warnings);
     const credential = !isActiveConfig(kind) && credentialContentReason(bytes);
     if (credential) { credentialPaths.add(logical); result.skipped.push({ path: logical, reason: credential }); return; }
-    const emit = scope !== "project" || opts.includeTracked !== false || !tracked.has(rel);
+    const emit = scope !== "project" || ((opts.includeTracked !== false || !tracked.has(rel)) && (!ignored || isIgnored(rel) || isAgentContext(rel)));
     if (emit) {
       files.set(`${scope}:${rel}`, { sourcePath: logical, relativePath: rel, scope, kind, mode: actual.mode & 0o100 ? "0700" : "0600", bytes });
       result.totalBytes += bytes.length;
@@ -523,7 +538,9 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
 }
 
 
-type ContextOperation = { op: "lstat" | "realpath" | "stat" | "readdir" | "prefix" | "bytes" | "tracked"; path: string };
+type ContextOperation = { op: "lstat" | "realpath" | "stat" | "readdir" | "prefix" | "bytes" | "tracked" | "ignored"; path: string };
+
+const IGNORED_ARGS = ["ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"];
 type ContextSteps<T> = Generator<ContextOperation, T, any>;
 
 
@@ -541,9 +558,10 @@ function executeContextSync(op: ContextOperation): unknown {
   if (op.op === "realpath") return fs.realpathSync(op.path);
   if (op.op === "stat") return fs.statSync(op.path);
   if (op.op === "readdir") return fs.readdirSync(op.path);
-  if (op.op === "tracked") {
-    const r = spawnSync("git", ["-C", op.path, "ls-files", "-z"], { encoding: "utf8", timeout: 30_000, maxBuffer: 64 * 1024 * 1024 });
+  if (op.op === "tracked" || op.op === "ignored") {
+    const r = spawnSync("git", ["-C", op.path, ...(op.op === "tracked" ? ["ls-files", "-z"] : IGNORED_ARGS)], { encoding: "utf8", timeout: 30_000, maxBuffer: 64 * 1024 * 1024 });
     if (r.error) throw r.error;
+    if (op.op === "ignored" && r.status !== 0 && r.stderr.includes("not a git repository")) return null;
     return trackedFiles(r.stdout, r.stderr, r.status);
   }
   const fd = fs.openSync(op.path, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
@@ -560,9 +578,10 @@ async function executeContextAsync(op: ContextOperation): Promise<unknown> {
   if (op.op === "realpath") return fs.promises.realpath(op.path);
   if (op.op === "stat") return fs.promises.stat(op.path);
   if (op.op === "readdir") return fs.promises.readdir(op.path);
-  if (op.op === "tracked") return new Promise((resolve, reject) => {
-    execFile("git", ["-C", op.path, "ls-files", "-z"], { encoding: "utf8", timeout: 30_000, maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => {
+  if (op.op === "tracked" || op.op === "ignored") return new Promise((resolve, reject) => {
+    execFile("git", ["-C", op.path, ...(op.op === "tracked" ? ["ls-files", "-z"] : IGNORED_ARGS)], { encoding: "utf8", timeout: 30_000, maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err && !stderr.includes("not a git repository")) { reject(new Error("project context git enumeration failed")); return; }
+      if (op.op === "ignored" && err) { resolve(null); return; }
       resolve(trackedFiles(stdout, stderr, err ? 1 : 0));
     });
   });
@@ -590,7 +609,7 @@ async function executeStepsAsync<T>(steps: ContextSteps<T>, ledger?: TouchLedger
   let next = steps.next();
   while (!next.done) {
     let value: unknown;
-    if (next.value.op !== "tracked") ledger?.note(next.value.path);
+    if (next.value.op !== "tracked" && next.value.op !== "ignored") ledger?.note(next.value.path);
     try { value = await executeContextAsync(next.value); } catch (err) { next = steps.throw(err); continue; }
     next = steps.next(value);
   }

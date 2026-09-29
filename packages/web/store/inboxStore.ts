@@ -131,7 +131,7 @@ export {
 } from "./inboxOverlays";
 export { monotonicNow } from "./syncActivity";
 import { pendingDecisionConvIds, sessionHasOpenQuestion, type QuestionResolutions } from "../lib/decisionQueue";
-import type { OpenTaskReport, SessionActivity } from "@codecast/shared/contracts";
+import type { LocalMirror, OpenTaskReport, SessionActivity } from "@codecast/shared/contracts";
 import type { BrowserPaneOffer } from "@codecast/shared/contracts/browserPaneOffer";
 import { isAgentSpawnedConversation, isAgentTeamWorker, isSubagentConversation, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 
@@ -717,6 +717,10 @@ export type InboxSession = {
   // cap: the files that would have to stay behind (home-relative, largest
   // first). The error banner asks whether to leave them out.
   cloud_context_too_large?: CloudContextTooLarge | null;
+  // A cloud session's tree mirrored live into a worktree on one of the
+  // owner's laptops: the laptop running it writes this (starting, live,
+  // paused, local_edit, error); the header chip and the machine menu read it.
+  local_mirror?: LocalMirror | null;
   // A bulk migration (Settings → Migration) is moving this session between
   // machines: the row is fenced (messages queue) until the destination owns
   // it. The batch id links the card to its progress row.
@@ -2902,6 +2906,7 @@ export function sessionStructuralSig(s: InboxSession): string {
     s.cloud_placement || "",
     s.cloud_workspace || "",
     s.cloud_seed?.base || "",
+    s.local_mirror ? `${s.local_mirror.device_id}:${s.local_mirror.status}:${s.local_mirror.last_landed_at ?? 0}:${s.local_mirror.files?.length ?? 0}` : "",
     s.migration_batch_id || "",
     rowLastTurnAllowsPark(s) ? 1 : 0,
     // Row thumbnail (inbox_image_thumbs pref). Changes only when a NEW image
@@ -5542,6 +5547,13 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   /** Drop machines from the roster (Settings > Machines). The server refuses
    *  an online machine, whose next heartbeat would list it again. */
   removeMachines: (deviceIds: string[]) => void;
+  /** Open one of your machines to exactly these teams (empty = private).
+   *  Settings > Machines; the server home is device_shares. */
+  setDeviceShares: (deviceId: string, teamIds: string[]) => void;
+  /** Start, stop or adjust keeping a cloud session's folder in step with a laptop copy (dispatch setLocalMirror → cloud_live_sync on that laptop): a mode, a conflict pick, or watch-only's overwrite. */
+  setLocalMirror: (conversationId: string, enable: boolean, deviceId?: string, opts?: { overwrite?: boolean; mode?: import("@codecast/shared/contracts").LocalMirrorMode; resolve?: import("@codecast/shared/contracts").MirrorResolve }) => void;
+  /** Wake, sleep, apply setup, save or delete an image on a cloud host (dispatch cloudHostAction → cloud_host_action on the laptop that manages it). */
+  cloudHostAction: (hostDeviceId: string, action: import("@codecast/shared/contracts").CloudHostAction, imageId?: string) => void;
 
   // -- Tier-2 store-fed surfaces (see clientSyncRegistry) --
   // Crosstalk graph snapshot (sessionThreads.listSessionThreads).
@@ -8193,6 +8205,32 @@ const inboxStoreConfig = (set: any, get: any) => ({
   removeMachines: action(function (this: Draft, deviceIds: string[]) {
     const gone = new Set(deviceIds);
     this.machineRoster = this.machineRoster.filter((d) => !gone.has(d.device_id));
+  }),
+  setLocalMirror: action(function (this: Draft, conversationId: string, enable: boolean, deviceId?: string, opts?: { overwrite?: boolean; mode?: import("@codecast/shared/contracts").LocalMirrorMode; resolve?: import("@codecast/shared/contracts").MirrorResolve }) {
+    const now = Date.now();
+    for (const row of [this.sessions[conversationId], this.conversations[conversationId]] as any[]) {
+      if (!row) continue;
+      const m = row.local_mirror;
+      // The same rule as the server's: a mode change or a pick on a running sync keeps its state.
+      if (enable && m && m.status !== "stopping" && !opts?.overwrite && (opts?.mode || opts?.resolve)) {
+        const conflicts = opts.resolve ? (opts.resolve.paths ? (m.conflicts ?? []).filter((p: string) => !opts.resolve!.paths!.includes(p)) : []) : m.conflicts;
+        row.local_mirror = { ...m, ...(opts.mode ? { mode: opts.mode } : {}), conflicts, ...(opts.resolve && !conflicts?.length && m.status === "conflict" ? { status: "live" } : {}), at: now };
+        continue;
+      }
+      row.local_mirror = enable
+        ? { ...(m?.device_id === (deviceId ?? m?.device_id) ? m : {}), device_id: deviceId ?? m?.device_id ?? "", status: "starting", ...(opts?.mode ? { mode: opts.mode } : {}), files: undefined, conflicts: undefined, error: undefined, at: now }
+        : m && m.status !== "stopping" ? { ...m, status: "stopping", at: now } : null;
+    }
+  }),
+  cloudHostAction: action(function (this: Draft, hostDeviceId: string, act: import("@codecast/shared/contracts").CloudHostAction, imageId?: string) {
+    const row = this.machineRoster.find((d) => d.device_id === hostDeviceId) as any;
+    if (!row?.cloud_host) return;
+    row.cloud_host.last_action = { action: act, status: "running", at: Date.now() };
+    if (act === "delete_image") row.cloud_host.images = row.cloud_host.images.filter((i: { id: string }) => i.id !== imageId);
+  }),
+  setDeviceShares: action(function (this: Draft, deviceId: string, teamIds: string[]) {
+    const row = this.machineRoster.find((d) => d.device_id === deviceId) as any;
+    if (row) row.shared_team_ids = [...teamIds].sort();
   }),
   sessionThreads: null,
   sessionMetricsAggregate: null,
