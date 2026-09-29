@@ -76,7 +76,7 @@ describe("coverage", () => {
     expect(c.projects[1].lead).toBeUndefined();
   });
 
-  test("a whole workspace role covers nothing, so a chief of staff never hides an uncovered project", () => {
+  test("a whole workspace role holds the remainder, which coverage still lists as without a lead", () => {
     const c = computeCoverage(base({ roles: [role("r_root", "chief-of-staff")] }));
     expect([c.with_lead, c.with_work]).toEqual([0, 3]);
   });

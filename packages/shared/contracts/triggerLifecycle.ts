@@ -1,4 +1,7 @@
-export function triggerLifecycleInstructions(task: { _id: string; short_id?: string }): string {
+// The defaults a trigger's run reads after its prompt. A role's routine gets
+// none: the role's opening message already says how it works.
+export function triggerLifecycleInstructions(task: { _id: string; short_id?: string; role_id?: string }): string | null {
+  if (task.role_id) return null;
   const handle = task.short_id || task._id;
   return [
     "Trigger lifecycle defaults (subordinate to this trigger's prompt, explicit user instructions, and the session's existing permissions):",

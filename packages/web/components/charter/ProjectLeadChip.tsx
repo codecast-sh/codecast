@@ -158,7 +158,7 @@ export function ProjectLeadMark({ projectId, roleId }: { projectId: string; role
     );
   }
   if (lead.role._id === roleId) {
-    return <span className="shrink-0 font-semibold" style={{ color: "var(--sol-violet)" }} title={lead.by === "owner" ? "The project names this role as its lead" : "The only role whose scope lists this project, so it leads it"} data-project-lead="self">· lead</span>;
+    return <span className="shrink-0 font-semibold" style={{ color: "var(--sol-violet)" }} title={lead.by === "owner" ? "The project names this role as its lead" : lead.by === "workspace" ? "This role looks after the whole workspace and no narrower role covers this project, so it leads it" : "The only role whose scope lists this project, so it leads it"} data-project-lead="self">· lead</span>;
   }
   return (
     <RoleHoverCard role={lead.role} side="top" triggerClassName="inline-flex shrink-0">

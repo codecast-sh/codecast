@@ -6,6 +6,10 @@ import { recordHandStart } from "./spawn";
 import { insertTaskComment } from "./tasks";
 import { createRunCore } from "./workflow_runs";
 import { lineSlugOf } from "./orgRoles";
+import { allRolesInBoundary } from "./lib/orgAccess";
+import { taskWork } from "./lib/orgOwnership";
+import { EMPTY_SCOPE, isWholeWorkspace } from "./lib/orgScope";
+import { ownsWork } from "@codecast/shared/contracts/orgLead";
 
 // The line (docs/architecture/the-line.md L2, L9). A scope owns one workflow,
 // named by `org_roles.line_workflow_slug`; the sweep below starts that
@@ -23,22 +27,35 @@ export const LINE_STARTED_PREFIX = "the line started: run ";
 
 const agentAssignee = (role: { handle: string }) => `agent:${role.handle}`;
 
-// L9: the tasks a role's line should start. In the role's scope (the same
-// resolver the scope feed uses), open, assigned to the role's agent, no run
-// yet, and no blocker that is still open.
+// L9: the tasks a role's line should start. Assigned to the role (its agent
+// or the role itself), open, no run yet, no blocker that is still open, and
+// work the role owns by the one ownership rule (org-staffing.md S26), so a
+// wider role never starts what a narrower one owns. A scoped role reads its
+// scope through the resolver the scope feed uses; a whole workspace role
+// reads what it was handed in its boundary, since the rule leaves it the
+// work no narrower role covers.
 export async function lineCandidates(ctx: Ctx, role: any): Promise<any[]> {
-  const resolved = await resolveScope(ctx, role.host_user_id, { role_id: String(role._id) });
-  if (!resolved) return [];
-  const assignee = agentAssignee(role);
+  const assignees = new Set([agentAssignee(role), String(role._id)]);
+  const pool = await linePool(ctx, role, assignees);
+  const roles = await allRolesInBoundary(ctx, role);
   const out: any[] = [];
-  for (const task of resolved.tasks) {
-    if (task.status !== "open" || task.assignee !== assignee || task.workflow_run_id) continue;
+  for (const task of pool) {
+    if (task.status !== "open" || !assignees.has(task.assignee) || task.workflow_run_id) continue;
+    if (!ownsWork(role, await taskWork(ctx, task), roles)) continue;
     if (await isBlocked(ctx, task)) continue;
     out.push(task);
   }
   // Oldest first: the backlog drains in the order it was filed.
   out.sort((a, b) => (a.created_at ?? a._creationTime ?? 0) - (b.created_at ?? b._creationTime ?? 0));
   return out;
+}
+
+async function linePool(ctx: Ctx, role: any, assignees: Set<string>): Promise<any[]> {
+  if (!isWholeWorkspace(role.scope ?? EMPTY_SCOPE)) return (await resolveScope(ctx, role.host_user_id, { role_id: String(role._id) }))?.tasks ?? [];
+  const key = role.team_id ? `team:${role.team_id}` : `user:${role.scope_user_id}`;
+  const rows: any[] = [];
+  for (const a of assignees) rows.push(...await ctx.db.query("tasks").withIndex("by_assignee_updated", (q: any) => q.eq("assignee", a)).collect());
+  return rows.filter((t) => t.workspace === key);
 }
 
 // blocked_by holds task short ids (tasks.ts ready): a blocker counts as open

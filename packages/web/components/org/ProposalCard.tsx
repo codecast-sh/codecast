@@ -12,7 +12,7 @@
 // with the seen stamp), so it paints at once and a refusal puts it back.
 import React, { useCallback, useMemo } from "react";
 import Link from "next/link";
-import { AlertTriangle, Check, MessageSquareText, Sparkles, X } from "lucide-react";
+import { AlertTriangle, Check, CheckSquare, FolderClosed, ListChecks, MessageSquareText, Sparkles, X } from "lucide-react";
 import { describeOrgChange, editedOrgChange, isOrgQuietChange, latestOrgRevisionAt, isOrgChangeDecidable, withAboutProposal, type OrgVerdictSeen } from "@codecast/shared/contracts/orgProposal";
 import { useInboxStore } from "../../store/inboxStore";
 import { useSyncOrgTree } from "../../hooks/useSyncOrgTree";
@@ -109,6 +109,14 @@ function Face({ face, size = 20, dim }: { face: ProposalTreeFace; size?: number;
       </span>
     );
   }
+  if (face.kind === "record") {
+    const Icon = face.record === "task" ? CheckSquare : face.record === "plan" ? ListChecks : FolderClosed;
+    return (
+      <span className="inline-flex shrink-0 items-center justify-center" style={{ width: size, height: size, color: "var(--sol-text-muted)", ...style }} data-face="record">
+        <Icon className="h-3.5 w-3.5" />
+      </span>
+    );
+  }
   return (
     <span className="inline-flex shrink-0 items-center justify-center rounded-full" style={{ width: size, height: size, border: CHIP_STATUS.failed.border, color: CHIP_STATUS.failed.color, ...style }} data-face="unknown">
       <AlertTriangle className="h-3 w-3" />
@@ -127,11 +135,11 @@ function NodeLine({ row }: { row: ProposalTreeRow }) {
   const retire = row.kind === "retire";
   const struck = retire || row.status === "skipped";
   const m = row.unresolved ? CHIP_STATUS.failed : CHIP_STATUS[row.status];
-  const name = row.node.kind === "role" ? row.node.name : row.node.name;
+  const name = row.node.name;
   return (
-    <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
+    <span className="flex min-w-0 items-center gap-1.5 [&>*:not(:first-child)]:shrink-0">
       <span
-        className="inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-md py-[2px] pl-[3px] pr-2"
+        className="inline-flex min-w-0 shrink items-center gap-1.5 rounded-md py-[2px] pl-[3px] pr-2"
         style={{ border: proposed && !retire ? m.border : "1.5px solid transparent", background: retire ? GHOST.hatch : proposed ? GHOST.fill : "transparent" }}
         title={row.line}
         data-tree-node={row.node.kind}
@@ -149,7 +157,7 @@ function NodeLine({ row }: { row: ProposalTreeRow }) {
           <Check className="h-3 w-3" /> {row.status}
         </span>
       )}
-      {row.chip && <span className="truncate text-[11px]" style={{ color: proposed ? GHOST.color : "var(--sol-text-muted)" }} data-tree-chip>{row.chip}</span>}
+      {row.chip && <span className="min-w-0 !shrink truncate text-[11px]" style={{ color: proposed ? GHOST.color : "var(--sol-text-muted)" }} data-tree-chip>{row.chip}</span>}
     </span>
   );
 }
@@ -189,6 +197,7 @@ export function ProposalTreeView({ rows, className }: { rows: ProposalTreeRow[];
                 {g.parent && <span aria-hidden className="mt-[3px] h-[13px] w-[9px] shrink-0 rounded-bl-[4px] border-b border-l border-dashed" style={{ borderColor: row.status === "proposed" || row.status === "failed" ? `color-mix(in srgb, ${GHOST.color} 70%, transparent)` : "color-mix(in srgb, var(--sol-border) 80%, transparent)" }} />}
                 <div className="min-w-0 flex-1">
                   <NodeLine row={row} />
+                  {row.detail && <span className="mt-0.5 block truncate pl-1 text-[10.5px] text-sol-text-dim" data-tree-detail>{row.detail}</span>}
                   {row.from && (
                     <span className="mt-0.5 flex items-center gap-1 pl-1 text-[10.5px]" style={{ color: "var(--sol-text-dim)", opacity: 0.8 }} data-tree-from={row.from.id}>
                       <span>was under</span>
