@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type ComponentType } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { KeyRound, ExternalLink, Trash2, Loader2, Check } from "lucide-react";
 import { PROVIDER_KEYS, type ProviderKeySpec } from "@codecast/shared/contracts";
@@ -10,7 +10,7 @@ import { SettingsPanel, SettingsSection } from "../../../components/settings/ui"
 import { DevicePanelHeader } from "../../../components/settings/DevicePanelHeader";
 import { useDevices, type Device } from "../../../components/DeviceBadge";
 import { useProviderKeyCommand, deviceManagedKeys } from "../../../lib/useProviderKeyCommand";
-import { ConnectCursorDialog } from "../../../components/ConnectCursorDialog";
+import { CloudAgentSignInRows, cloudAgentKeyDialog } from "../../../components/cloudAgents";
 
 /**
  * "Provider keys" — manage the optional LLM API keys codecast injects into
@@ -56,8 +56,9 @@ function ProviderKeyList({ device }: { device: Device }) {
           <>
             API keys your agents use on this machine. opencode and pi get a model provider&apos;s key
             as its env var at launch, on top of their own login. The Cursor key runs Cursor Cloud
-            agents and syncs your cloud agents into codecast. Keys stay on your devices, sealed in
-            transit and never stored as plaintext in the cloud.
+            agents and syncs your cloud agents into codecast; Codex Cloud uses the machine&apos;s Codex
+            sign-in instead. Keys stay on your devices, sealed in transit and never stored as plaintext
+            in the cloud.
           </>
         }
       >
@@ -76,15 +77,11 @@ function ProviderKeyList({ device }: { device: Device }) {
             isManaged={managed.has(spec.id)}
           />
         ))}
+        <CloudAgentSignInRows deviceId={device.device_id} />
       </SettingsSection>
     </>
   );
 }
-
-/** Providers whose key is set through a guided flow that checks it, not a bare field. */
-const GUIDED_SETUP: Partial<Record<string, ComponentType<{ onClose: () => void; deviceId?: string | null }>>> = {
-  cursor: ConnectCursorDialog,
-};
 
 /** One provider: status, a "get a key" link, and Set/Replace + Remove actions. */
 function ProviderKeyRow({
@@ -99,7 +96,8 @@ function ProviderKeyRow({
   isManaged: boolean;
 }) {
   const { setKey, removeKey } = useProviderKeyCommand();
-  const Guided = GUIDED_SETUP[spec.id];
+  // A cloud agent's key is set through its guided flow, which checks it, not a bare field.
+  const Guided = cloudAgentKeyDialog(spec.id);
   const [guidedOpen, setGuidedOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState("");

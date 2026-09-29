@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { CloudApiError } from "./cloudAgents/http.js";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -21,14 +22,8 @@ function fixture(name: string): any {
 
 /** A Response stand-in: bun's fetch types want the whole surface, and these
  *  tests only ever read ok/status/headers/json. */
-function response(opts: { status?: number; body?: any; headers?: Record<string, string> }): any {
-  const status = opts.status ?? 200;
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    headers: new Headers(opts.headers ?? {}),
-    json: async () => opts.body,
-  };
+function response(opts: { status?: number; body?: any; headers?: Record<string, string> }): Response {
+  return new Response(opts.body === undefined ? null : JSON.stringify(opts.body), { status: opts.status ?? 200, headers: opts.headers ?? {} });
 }
 
 describe("codexBackendAuthHeaders", () => {
@@ -201,7 +196,7 @@ describe("fetchCodexBackendUsage", () => {
       now: NOW,
       fetchImpl: (async () => response({ status: 429, headers: { "retry-after": "120" } })) as any,
     }).catch((e) => e);
-    expect(err).toBeInstanceOf(CodexUsageHttpError);
+    expect(err).toBeInstanceOf(CloudApiError);
     expect(err.status).toBe(429);
     expect(err.retryAfterMs).toBe(120_000);
   });

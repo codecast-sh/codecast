@@ -433,6 +433,8 @@ export const daemonHeartbeat = mutation({
     // + which providers have a key here (ids only, never the keys).
     provider_key_pubkey: v.optional(v.string()),
     managed_provider_ids: v.optional(v.array(v.string())),
+    // What keeps this machine from reading each cloud agent provider (schema devices.cloud_agent_blocks).
+    cloud_agent_blocks: v.optional(v.array(v.object({ provider: v.string(), kind: v.string(), reason: v.optional(v.string()) }))),
     // Installed agent-feature snippets (by slug) + stable mode on this device.
     settings: v.optional(deviceSettingsValidator),
     // A newer release the daemon could update to; "" once it checked and found
@@ -610,6 +612,7 @@ export const daemonHeartbeat = mutation({
         ...(args.codex_accounts !== undefined ? { codex_accounts: args.codex_accounts } : {}),
         ...(args.provider_key_pubkey !== undefined ? { provider_key_pubkey: args.provider_key_pubkey } : {}),
         ...(args.managed_provider_ids !== undefined ? { managed_provider_ids: args.managed_provider_ids } : {}),
+        ...(args.cloud_agent_blocks !== undefined ? { cloud_agent_blocks: args.cloud_agent_blocks.length ? args.cloud_agent_blocks : undefined } : {}),
         ...(args.settings !== undefined ? { settings: args.settings } : {}),
         cli_version: args.version,
         ...(args.update_available !== undefined ? { update_available: args.update_available || undefined } : {}),
@@ -2456,6 +2459,7 @@ export const updateSyncSettings = mutation({
     sync_excluded: v.optional(v.array(v.string())),
     claude_cloud_sync: v.optional(v.boolean()),
     cursor_cloud_sync: v.optional(v.boolean()),
+    codex_cloud_sync: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await getUserOrToken(ctx, args.api_token);

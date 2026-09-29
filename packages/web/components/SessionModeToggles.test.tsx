@@ -5,6 +5,7 @@ import React, { act } from "react";
 import { createRoot } from "react-dom/client";
 import { SessionModeToggles } from "./SessionModeToggles";
 import type { SessionMachine } from "../lib/sessionMachines";
+import { CLOUD_AGENT_PROVIDERS } from "@codecast/shared/contracts";
 
 import { closeDomWindow } from "../test-helpers/domGlobals";
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "https://app.test/" });
@@ -125,4 +126,30 @@ test("cloud mode shows the 'start from' pick: my checkout by default, origin/mai
   const off = mount(<SessionModeToggles cloudHost={cloud} cloudMode={false} cloudToggleEnabled onToggleCloud={() => {}} isolated={false} onToggleIsolated={() => {}} />);
   expect(buttons(off.host).some((b) => b.textContent?.includes("my checkout"))).toBe(false);
   off.unmount();
+});
+
+test("a cloud agent provider replaces the host controls: its own switch, and a connect control while it has no credentials", () => {
+  const spec = CLOUD_AGENT_PROVIDERS.cursor;
+  let toggles = 0;
+  const props = { cloudHost: cloud, cloudMode: false, cloudToggleEnabled: true, onToggleCloud: () => {}, isolated: false, onToggleIsolated: () => {} };
+  const off = mount(<SessionModeToggles {...props} cloudAgent={{ spec, on: false, onToggle: () => { toggles++; }, connected: false }} />);
+  expect(byText(off.host, "isolated worktree")).toBeDefined();
+  expect(byText(off.host, "run in the cloud")).toBeUndefined();
+  const sw = byText(off.host, "run in Cursor Cloud");
+  expect(sw.getAttribute("title")).toBe(spec.toggleTitle);
+  expect(sw.getAttribute("aria-pressed")).toBe("false");
+  expect(byText(off.host, "connect Cursor")).toBeUndefined();
+  click(sw);
+  expect(toggles).toBe(1);
+  off.unmount();
+
+  const on = mount(<SessionModeToggles {...props} cloudAgent={{ spec, on: true, onToggle: () => {}, connected: false }} />);
+  expect(byText(on.host, "isolated worktree")).toBeUndefined();
+  expect(byText(on.host, "run in Cursor Cloud").innerHTML).toContain("text-sol-violet");
+  expect(byText(on.host, "connect Cursor")).toBeDefined();
+  on.unmount();
+
+  const connected = mount(<SessionModeToggles {...props} cloudAgent={{ spec, on: true, onToggle: () => {}, connected: true }} />);
+  expect(byText(connected.host, "connect Cursor")).toBeUndefined();
+  connected.unmount();
 });

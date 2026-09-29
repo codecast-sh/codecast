@@ -2,7 +2,7 @@ import { AppLoader } from "../AppLoader";
 import { useState, useMemo, memo, Fragment, type ReactNode } from "react";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { withSafetyBlock, SAFETY_BLOCK_HINT, PROVIDER_KEYS, getProviderKeySpec, computeConversationTaskStats, isSessionActivityFresh } from "@codecast/shared/contracts";
+import { withSafetyBlock, SAFETY_BLOCK_HINT, PROVIDER_KEYS, getProviderKeySpec, cloudAgentCredentialError, cloudAgentSetupCard, computeConversationTaskStats, isSessionActivityFresh } from "@codecast/shared/contracts";
 import { LimitParkCard } from "../LimitParkCard";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { toast } from "sonner";
@@ -22,8 +22,8 @@ import { useDevices, useDeviceMoveStatus } from "../DeviceBadge";
 import { useProviderKeyCommand, deviceManagedKeys } from "../../lib/useProviderKeyCommand";
 import type { RestartPhase, RestartStage } from "../../hooks/useSessionRestart";
 import { CopyCommand } from "./blocks/shared";
-import { authRemedy, detectProviderFromError, isCursorCloudKeyError } from "./classify";
-import { ConnectCursorButton } from "../ConnectCursorDialog";
+import { authRemedy, detectProviderFromError } from "./classify";
+import { CloudAgentHeldNote, CloudAgentSetupText, ConnectCloudAgentButton } from "../cloudAgents";
 import { formatDuration, formatFullTimestamp, formatRelativeTime } from "../../lib/conversationFormat";
 import { MessageMarkdown } from "./markdown";
 import type { ConversationDensity, ParsedApiError } from "./types";
@@ -277,7 +277,11 @@ export function ApiErrorCard({ error, agentType, conversationId, timestamp, comp
   let hint: ReactNode;
   const remedy = authRemedy(agentType);
   // Actionable in every density, like the context card: its fix is one button.
-  const cursorKeyMissing = error.isAuth && isCursorCloudKeyError(agentType, error.message);
+  // A cloud agent turn stopped for want of usable credentials (the daemon's setup card).
+  const cloudCredential = error.isAuth ? cloudAgentCredentialError(agentType, error.message) : null;
+  // Any other setup problem the daemon holds a cloud agent's message for (a
+  // repository it cannot reach, an account the provider refuses).
+  const cloudSetup = !cloudCredential ? cloudAgentSetupCard(agentType, error.message) : null;
   if (error.isSafety) {
     heading = "Safety review required";
     icon = <span className="text-[10px] font-semibold">!</span>;
@@ -290,10 +294,10 @@ export function ApiErrorCard({ error, agentType, conversationId, timestamp, comp
         <path d="M10 13L20 3M17 6l2 2M14 9l2 2" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
     );
-    hint = cursorKeyMissing ? (
+    hint = cloudCredential ? (
       <div className="mt-2 flex items-center gap-2 flex-wrap text-xs text-sol-text-dim">
-        <ConnectCursorButton conversationId={conversationId} />
-        <span>Your message is held and goes out as soon as the key is connected.</span>
+        <ConnectCloudAgentButton spec={cloudCredential} conversationId={conversationId} />
+        <CloudAgentHeldNote spec={cloudCredential} conversationId={conversationId} />
       </div>
     ) : (
       <>
@@ -345,6 +349,10 @@ export function ApiErrorCard({ error, agentType, conversationId, timestamp, comp
         (or any message) and the session picks up where it left off.
       </p>
     );
+  } else if (cloudSetup) {
+    heading = `${cloudSetup.label} setup needed`;
+    icon = <span className="text-[10px] font-semibold">!</span>;
+    hint = <p className="mt-1.5 text-xs text-sol-text-dim">Your message is held and goes out on its own once this is fixed.</p>;
   } else {
     heading = "API Error";
     icon = <span className="text-[10px] font-semibold">!</span>;
@@ -393,7 +401,7 @@ export function ApiErrorCard({ error, agentType, conversationId, timestamp, comp
           </span>
         )}
       </div>
-      <p className={`mt-1 text-sm ${tone.fg}`}>{error.message}</p>
+      <p className={`mt-1 text-sm ${tone.fg}`}>{cloudSetup ? <CloudAgentSetupText spec={cloudSetup} message={error.message} /> : error.message}</p>
       {error.requestId && !error.isAuth && !error.isLimit && !error.isConnection && (
         <p className="mt-1 text-[11px] text-sol-text-muted font-mono">
           request_id: <span className="text-sol-text-secondary">{error.requestId}</span>
@@ -403,7 +411,7 @@ export function ApiErrorCard({ error, agentType, conversationId, timestamp, comp
         <p className="mt-1.5 text-xs text-sol-text-dim">
           The session continued after this — nothing to do here.
         </p>
-      ) : (!compact || error.isContext || cursorKeyMissing) && hint}
+      ) : (!compact || error.isContext || cloudCredential || cloudSetup) && hint}
     </div>
   );
 }

@@ -81,3 +81,22 @@ describe("a reboot does not make every transcript look replaced", () => {
     expect(daemon.match(/samePersistedFile\(/g)?.length).toBeGreaterThanOrEqual(4);
   });
 });
+
+// Every cloud agent mirror syncs through the whole-file delta pass. Its
+// ledger must keep the signature watermark, or a restart proves nothing and
+// re-sends every mirrored message (489 per Codex Cloud task, every restart,
+// 2026-09-30). And a restart's re-announced mirror has an empty delta, so the
+// pass keeps the session (hosted, titled) before it returns on one.
+describe("a cloud agent mirror across a restart", () => {
+  const daemon = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), "..", "daemon.ts"), "utf8");
+  test("a delta pass commits its ledger in signatures, whatever its client", () => {
+    expect(daemon).toMatch(/const unit = signatureState \? "signatures"/);
+  });
+  test("the pass keeps a known mirror's session before it returns on an empty delta", () => {
+    const pass = daemon.slice(daemon.indexOf("async function processTranscriptDeltaSessionPass("));
+    const keep = pass.indexOf("if (mirror && conversationCache[sessionId]) await keepCloudAgentSession(");
+    const emptyReturn = pass.indexOf("if (newMessages.length === 0 && orphanUuids.length === 0)");
+    expect(keep).toBeGreaterThan(0);
+    expect(keep).toBeLessThan(emptyReturn);
+  });
+});
