@@ -397,6 +397,7 @@ export const daemonHeartbeat = mutation({
     // Seeds the SSH-host placeholder in Settings → Devices; never becomes an
     // ssh target on its own (see devices.ssh_host).
     device_hostname: v.optional(v.string()),
+    wsl_distro: v.optional(v.string()),
     is_remote_device: v.optional(v.boolean()),
     // Time since the last keyboard/mouse event on that machine (macOS-only;
     // absent elsewhere and from pre-presence daemons). Anchored to the SERVER
@@ -595,6 +596,7 @@ export const daemonHeartbeat = mutation({
           ? { last_input_at: now - Math.min(args.input_idle_ms, 7 * 24 * 3600_000) }
           : {}),
         ...(args.device_hostname !== undefined ? { hostname: args.device_hostname } : {}),
+        ...(args.wsl_distro !== undefined && /^[A-Za-z0-9._-]{1,64}$/.test(args.wsl_distro) ? { wsl_distro: args.wsl_distro } : {}),
         ...(args.is_remote_device !== undefined ? { is_remote: args.is_remote_device } : {}),
         // The device is awake: whatever asked for it has been answered.
         ...((existingDevice as any)?.wake_requested_at !== undefined ? { wake_requested_at: undefined } : {}),
@@ -742,6 +744,7 @@ export const daemonHeartbeat = mutation({
       sync_mode: user?.sync_mode ?? "all",
       sync_projects: user?.sync_projects ?? [],
       sync_excluded: user?.sync_excluded ?? [],
+      claude_cloud_sync: user?.claude_cloud_sync ?? true,
       // Older daemons still gate token minting on this wire field. Always true
       // now that per-session account tokens are the default behavior.
       cc_session_tokens: true,
@@ -1072,6 +1075,8 @@ export const internalListUsers = internalMutation({
 export const resumeSession = mutation({
   args: {
     conversation_id: v.id("conversations"),
+    /** A failed cloud park over the context cap: the files to leave out on the retry. */
+    leave_out: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
@@ -1081,7 +1086,7 @@ export const resumeSession = mutation({
     // Runner or second-party owner, runner-addressed command — the same core
     // as the dispatch resume handler, so an owned (Mr-Bot-run) session resumes
     // from the owner's inbox exactly like their own.
-    return await resumeConversationSession(ctx, authUserId, args.conversation_id);
+    return await resumeConversationSession(ctx, authUserId, args.conversation_id, { leaveOut: args.leave_out });
   },
 });
 
@@ -2449,6 +2454,7 @@ export const updateSyncSettings = mutation({
     sync_mode: v.optional(v.union(v.literal("all"), v.literal("selected"))),
     sync_projects: v.optional(v.array(v.string())),
     sync_excluded: v.optional(v.array(v.string())),
+    claude_cloud_sync: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await getUserOrToken(ctx, args.api_token);
@@ -2464,6 +2470,9 @@ export const updateSyncSettings = mutation({
     }
     if (args.sync_excluded !== undefined) {
       updateData.sync_excluded = [...new Set(args.sync_excluded)];
+    }
+    if (args.claude_cloud_sync !== undefined) {
+      updateData.claude_cloud_sync = args.claude_cloud_sync;
     }
     await ctx.db.patch(userId, updateData);
     return userId;
@@ -2485,6 +2494,7 @@ export const getSyncSettings = query({
       sync_mode: user.sync_mode ?? "all",
       sync_projects: user.sync_projects ?? [],
       sync_excluded: user.sync_excluded ?? [],
+      claude_cloud_sync: user.claude_cloud_sync ?? true,
     };
   },
 });

@@ -205,14 +205,14 @@ export async function mirrorForPrepare(
     const mirror = opts.mirror ?? (await import("./mirror/push.js")).mirrorHomeToHost;
     const r = await mirror(host, { onProgress: log, force: opts.force, config, localGitRoot: opts.localGitRoot });
     let line: string;
-    if (r.result?.errors.length || r.result?.host_edited.length) throw new Error([
-      ...r.result.errors.map((e) => `${e.path}: ${e.error}`),
-      ...r.result.host_edited.map((p) => `${p}: remote edit conflict`),
-    ].join("; "));
+    // A file the host edited is newer there, not missing: the host keeps it and
+    // the session starts. Only a file that could not be written stops it.
+    if (r.result?.errors.length) throw new Error(r.result.errors.map((e) => `${e.path}: ${e.error}`).join("; "));
+    const hostEditsOnly = !r.pushed && !!r.result && !r.result.refused && !r.result.errors.length && r.result.host_edited.length > 0;
     if (r.skipped === "in step") line = `config mirror in step (${(r.hash ?? "").slice(0, 8)})`;
-    else if (r.pushed) {
+    else if (r.pushed || hostEditsOnly) {
       const extra = [
-        r.result?.host_edited.length ? `${r.result.host_edited.length} host-edited kept` : "",
+        r.result?.host_edited.length ? `${r.result.host_edited.length} host-edited kept (${r.result.host_edited.slice(0, 3).join(", ")}${r.result.host_edited.length > 3 ? ", …" : ""})` : "",
         r.result?.pruned.length ? `${r.result.pruned.length} pruned` : "",
         r.result?.errors.length ? `${r.result.errors.length} error(s)` : "",
       ].filter(Boolean).join(", ");
@@ -229,7 +229,7 @@ export async function mirrorForPrepare(
   } catch (err) {
     const line = `config mirror failed: ${err instanceof Error ? err.message : String(err)}`;
     log(line);
-    throw new Error(line);
+    throw new Error(line, { cause: err });
   }
 }
 

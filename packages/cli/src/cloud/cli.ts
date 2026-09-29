@@ -9,6 +9,8 @@
 
 import * as fs from "node:fs";
 import { writeStdout } from "../agentContext.js";
+import { addCloudMirrorExcludes } from "../config/readLocalConfig.js";
+import { findContextTooLarge } from "./mirror/discovery.js";
 import type { Command } from "commander";
 import { hostForDevice } from "../browser/cloudHost.js";
 import { convexClient } from "../remote/cli.js";
@@ -38,12 +40,13 @@ import { hostAccessPath, repoOrigin } from "./hostGit.js";
  * reads it from placementTarget); a workspace or start_from value that is
  * neither option is dropped (the child defaults to the row's stamp).
  */
-export function cloudStartArgs(args: { conversation_id: string; cloud_device_id?: string | null; workspace?: string | null; start_from?: string | null }): string[] {
+export function cloudStartArgs(args: { conversation_id: string; cloud_device_id?: string | null; workspace?: string | null; start_from?: string | null; leave_out?: string[] | null }): string[] {
   return [
     "cloud", "start", args.conversation_id,
     ...(args.cloud_device_id ? ["--device", args.cloud_device_id] : []),
     ...(args.workspace === "shared" || args.workspace === "isolated" ? ["--workspace", args.workspace] : []),
     ...(args.start_from === "checkout" ? ["--from", "checkout"] : args.start_from === "origin_main" ? ["--from", "origin-main"] : []),
+    ...(args.leave_out?.length ? ["--leave-out", args.leave_out.join(",")] : []),
   ];
 }
 
@@ -221,7 +224,9 @@ export function registerCloudCommand(program: Command): void {
     .option("--host <id>", "Registry host id (default: the one whose device id matches)")
     .option("--workspace <mode>", "isolated (own worktree on the host, default) or shared (the host's main checkout; claimed first, refused when in use or dirty)")
     .option("--from <source>", "What the worktree starts from: checkout (this machine's branch, HEAD and uncommitted changes; default) or origin-main")
-    .action(async (conversationId: string, opts: { device?: string; host?: string; workspace?: string; from?: string }) => {
+    .option("--leave-out <paths>", "Comma-separated home-relative paths to add to cloud_mirror_exclude first (the answer to a context over the cap)")
+    .action((conversationId: string, opts: { device?: string; host?: string; workspace?: string; from?: string; leaveOut?: string }) => reportContextTooLarge(async () => {
+      if (opts.leaveOut) addCloudMirrorExcludes(opts.leaveOut.split(","));
       const { client, token, api } = await convexClient();
       const target = await client.query(api.cloud.placementTarget, { api_token: token, conversation_id: conversationId });
       if (!target) {
@@ -372,5 +377,18 @@ export function registerCloudCommand(program: Command): void {
         // [CLOUD] placed line says whether pushes from there will work.
         git_access: gitAccess(prepared),
       }));
-    });
+    }));
+}
+
+/**
+ * A context over the cap is a question for the human, not a dead end: print
+ * the files that would have to stay behind as one JSON line (the daemon hands
+ * it to cloud.reportPlacementFailure, the session banner asks), then fail.
+ */
+async function reportContextTooLarge(run: () => Promise<void>): Promise<void> {
+  try { await run(); } catch (err) {
+    const tooLarge = findContextTooLarge(err);
+    if (tooLarge) await writeStdout(JSON.stringify({ context_too_large: { total_bytes: tooLarge.totalBytes, cap_bytes: tooLarge.capBytes, files: tooLarge.files } }) + "\n");
+    throw err;
+  }
 }
