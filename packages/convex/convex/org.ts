@@ -1,4 +1,5 @@
 import { query } from "./functions";
+import { isWholeWorkspaceRole } from "@codecast/shared/contracts/orgLead";
 import { v } from "convex/values";
 import { Doc, Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
@@ -1105,7 +1106,7 @@ async function wholeWorkspaceItems(ctx: Ctx, role: any): Promise<{ projects: any
 // session, so the frame carries what the host may see and nothing more).
 export async function computeBriefFacts(ctx: Ctx, viewerId: Id<"users">, role: any, now: number): Promise<BriefFacts> {
   let resolved = await resolveScope(ctx, viewerId, { role_id: String(role._id) });
-  const whole = isWholeWorkspace(role.scope ?? { project_ids: [], plan_ids: [] });
+  const whole = isWholeWorkspaceRole(role);
   if (!resolved) {
     resolved = { userId: viewerId, role, teamId: role.team_id ?? undefined, scope: role.scope, projects: [], plans: [], tasks: [] };
   }

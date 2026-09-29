@@ -276,7 +276,7 @@ describe("org.health", () => {
     expect(a.wakes_7d).toMatchObject({ total: 8, days_at_cap: 2, cap_hit_days: 2 });
     expect(a).toMatchObject({ idle: false, age_days: 30 });
     // A whole workspace role reads the clock it is handed; with no event anywhere its age decides.
-    const cos = { _id: "x", scope: { project_ids: [], plan_ids: [] }, created_at: NOW - 20 * D };
+    const cos = { _id: "x", handle: "chief-of-staff", scope: { project_ids: [], plan_ids: [] }, created_at: NOW - 20 * D };
     expect(await roleActivity(ctxOf(db), ME as any, cos, NOW, { wholeWorkspaceLatest: NOW - D })).toMatchObject({ idle_days: 1, idle: false });
     expect(await roleActivity(ctxOf(db), ME as any, cos, NOW, { wholeWorkspaceLatest: null })).toMatchObject({ idle_days: null, age_days: 20, idle: true });
     expect(HEALTH_CAPS.tasks).toBe(2000);

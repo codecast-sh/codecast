@@ -61,7 +61,8 @@ export async function userCanAdminRole(
 // The one seat per company that reviews the chart (org-staffing.md S6, S12).
 // A leaf constant so anchors.ts and mentionResolve.ts can name the seat
 // without importing orgRoles.ts, which imports both of them.
-export const CHIEF_OF_STAFF_HANDLE = "chief-of-staff";
+import { CHIEF_OF_STAFF_HANDLE } from "@codecast/shared/contracts/orgLead";
+export { CHIEF_OF_STAFF_HANDLE };
 
 // A role ref from the CLI is "or-N" or a raw id; the web passes ids.
 export async function resolveRoleRef(ctx: { db: any }, ref: string): Promise<any | null> {

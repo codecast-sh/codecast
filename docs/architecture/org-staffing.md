@@ -1013,13 +1013,15 @@ A change in the role's area wakes nothing. When its trigger fires, the role read
 
 ## S26. Work belongs to the most specific role that covers it
 
-A role that covers the whole workspace owns what no narrower role has claimed. When a lead takes an area, that area leaves the wider role; when the lead goes, the area falls back. Two roles never answer for the same work.
+The Chief of Staff owns what no narrower role has claimed. When a lead takes an area, that area leaves the chief; when the lead goes, the area falls back. Two roles never answer for the same work.
+
+Scope is opt in. A role that names no projects and no plans owns no work: it is a standing role that runs its routine and answers what it is asked (a release lead that walks the merge train, a person's permanent assistant). Only the Chief of Staff, while it names no scope, stands for the whole workspace.
 
 One entity for everything is a Chief of Staff and nothing else: it covers the workspace and owns all of it. Leads are added one area at a time, each taking its area from the chief, and the chief keeps the rest. Moving between the two is adding or removing a lead; nothing is reconfigured.
 
 Reporting and ownership are separate. Leads report to the person by default; the Chief of Staff is the person's right hand beside them. Its opening message says so: it keeps the person's goals in view, answers anything, routes a request to the owner, and brings decisions with a recommendation. Reviewing the structure is one of its jobs, run in its own thread: it starts no session for it, so a chief that does not start work on its own still reviews.
 
-The rule has one home, `ownerOf` in `packages/shared/contracts/orgLead.ts`: a role naming the work's plan beats one naming its project, which beats a whole workspace role; on a named area the role closest to the work wins, and among whole workspace roles the root does. `projectLeadOf`, the takeover and its preview (`convex/lib/orgOwnership.ts sessionsOwnedBy`), the line's pick, a retired role's tasks and sessions, and org health's remainder all read it. Reading is unchanged: a whole workspace role's scope feed still shows everything.
+The rule has one home, `ownerOf` in `packages/shared/contracts/orgLead.ts`: a role naming the work's plan beats one naming its project, which beats the Chief of Staff; on a named area the role closest to the work wins. `projectLeadOf`, the takeover and its preview (`convex/lib/orgOwnership.ts sessionsOwnedBy`), the line's pick, a retired role's tasks and sessions, and org health's remainder all read it. Reading is unchanged: the chief's scope feed still shows everything.
 
 ## S27. A reset clears the org
 

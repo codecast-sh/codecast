@@ -105,8 +105,10 @@ describe("buildRoleScope", () => {
     expect(child.whole).toBe(false);
   });
 
-  test("an empty scope is the whole workspace: every project the store holds", () => {
-    const chief: OrgRole = { ...growth, scope: { project_ids: [], plan_ids: [] }, scope_names: { projects: [], plans: [] } };
+  test("the Chief of Staff with no scope is the whole workspace; any other role with no scope looks after nothing", () => {
+    const loose: OrgRole = { ...growth, scope: { project_ids: [], plan_ids: [] }, scope_names: { projects: [], plans: [] } };
+    expect(buildRoleScope(sourceFromTree({ ...tree, roles: [loose] }, loose), { ...rows, roles: [loose] }, TODAY).projects).toEqual([]);
+    const chief: OrgRole = { ...loose, handle: "chief-of-staff" };
     const whole = buildRoleScope(sourceFromTree({ ...tree, roles: [chief] }, chief), { ...rows, roles: [chief] }, TODAY);
     expect(whole.whole).toBe(true);
     expect(whole.projects.map((p) => p.title)).toEqual(["Growth"]);
