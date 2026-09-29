@@ -1,12 +1,18 @@
 // The decision queue's model: what counts as a question, and what order the
 // human answers them in.
 //
-// Two sources feed ONE queue:
+// Three sources feed ONE queue:
 //   1. `cast decide` rows (session_decisions) — an agent wrote a real payload:
 //      question, options, context, sometimes a published HTML report.
 //   2. Claude Code's own AskUserQuestion / permission prompts — no authored
 //      payload, so the card renders what we have (the last assistant message
 //      and the session's pinned thread state) instead.
+//   3. A role's escalation (`cast escalate`, org-roles-run-work.md R1,
+//      revised): a lead put one of its sessions in front of the person with a
+//      line that says what they will decide and why. No options: the answer
+//      is a reply to the role, in words, and the session goes back under the
+//      role with it. Derived from the session rows (escalated_by_role), never
+//      stored twice.
 //
 // RANKING — the failure mode that kills this feature is mis-ordering, because
 // the queue's order silently becomes the founder's priorities. The rule:
@@ -37,11 +43,23 @@
 // text heuristic. Those all fail the same way — the moment the ranking is
 // wrong once, the founder stops trusting the order, and an untrusted queue is
 // worse than a list, because a list at least admits it is unsorted.
-import { BLOCKED_BANNER_KINDS } from "@codecast/shared/contracts";
+import { BLOCKED_BANNER_KINDS, escalationFirstLine, isDirectEscalation, roleLeadIdsOf, type RoleEscalationStamp } from "@codecast/shared/contracts";
 import { nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
-import type { DecisionKind, DecisionOption, InboxSession, SessionDecisionItem } from "../store/inboxStore";
+import type { DecisionKind, DecisionOption, InboxSession, SessionDecisionItem, SessionRoleSnapshot } from "../store/inboxStore";
 
-export type QueueItemSource = "decide" | "ask" | "permission";
+export type QueueItemSource = "decide" | "ask" | "permission" | "escalation";
+
+// A role's escalation as the queue reads it: which session the role put in
+// front of the person, who the role is, its line, and whether the child is
+// the card (direct) or the role's standing session carries it.
+export type QueueEscalation = {
+  childId: string;
+  roleId: string;
+  role: SessionRoleSnapshot | null;
+  line: string;
+  at: number;
+  direct: boolean;
+};
 
 export type QueueItem = {
   key: string;
@@ -80,7 +98,64 @@ export type QueueItem = {
   // two options to Enter/Escape rather than 1/2.
   toolUseId?: string;
   isConfirmation?: boolean;
+  // Source "escalation": the role's ask. `conversationId` is the card that
+  // carries it (the role's standing session, or the child when direct).
+  escalation?: QueueEscalation;
 };
+
+/**
+ * The escalations in `rows` as queue items, one per escalated session. An
+ * ordinary escalation rides the role's standing session (the person answers
+ * the role, which holds the context); a direct one, or one whose role has no
+ * standing session on the list, is the child's own. A direct child that is
+ * also parked on its own prompt is represented by that prompt (`skipChild`):
+ * the prompt is what the person answers there, and the role's line rides
+ * along on its card.
+ */
+export function escalationQueueItems(
+  rows: Record<string, InboxSession>,
+  skipChild: (row: InboxSession) => boolean = () => false,
+): QueueItem[] {
+  const rowOf = (id: string) => rows[id] as any;
+  const leads = roleLeadIdsOf(Object.keys(rows), rowOf);
+  const items: QueueItem[] = [];
+  for (const row of Object.values(rows)) {
+    const stamp = row.escalated_by_role as RoleEscalationStamp | null | undefined;
+    if (!stamp || row.inbox_killed_at) continue;
+    const direct = isDirectEscalation(stamp);
+    const lead = direct ? undefined : leads.get(String(stamp.role_id));
+    const card = lead ? rows[lead] : row;
+    if (card === row && skipChild(row)) continue;
+    // A filed card (stashed, dismissed) is the person's own placement: its
+    // asks wait with it.
+    if (card.inbox_stashed_at || card.inbox_dismissed_at || card.inbox_killed_at) continue;
+    const role = row.role && row.role._id === stamp.role_id ? row.role : null;
+    items.push({
+      key: `esc:${row._id}`,
+      source: "escalation",
+      conversationId: card._id,
+      session: card,
+      question: escalationFirstLine(stamp.line),
+      contextMd: stamp.line,
+      options: [],
+      blocking: true,
+      createdAt: stamp.at,
+      escalation: { childId: row._id, roleId: String(stamp.role_id), role, line: stamp.line, at: stamp.at, direct },
+    });
+  }
+  return items;
+}
+
+/** A wake signature of everything escalationQueueItems branches on. */
+export function escalationsWakeSig(rows: Record<string, InboxSession>): string {
+  let sig = "";
+  for (const row of Object.values(rows)) {
+    if (row.standing_role_id) sig += `L${row._id}:${row.standing_role_id}:${row.inbox_stashed_at ?? 0}:${row.inbox_dismissed_at ?? 0}:${row.inbox_killed_at ?? 0}|`;
+    const e = row.escalated_by_role;
+    if (e) sig += `E${row._id}:${e.role_id}:${e.at}:${e.direct ? 1 : 0}:${row.role?._id ?? ""}:${row.inbox_killed_at ?? 0}|`;
+  }
+  return sig;
+}
 
 // "Reachable" is deliberately NOT isAgentActive. An agent parked on a question
 // is by definition not producing tokens — its status is permission_blocked or

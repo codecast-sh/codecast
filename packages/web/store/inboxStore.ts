@@ -494,6 +494,8 @@ export type PrStatus = {
 /** The role a session row belongs to, as the server snapshots it on the row. */
 export type SessionRoleSnapshot = { _id: string; short_id: string; name: string; handle: string; avatar: string; status: string; tenure_kind: "standing" | "program" };
 
+export type CloudContextTooLarge = { total_bytes: number; cap_bytes: number; files: Array<{ path: string; bytes: number }> };
+
 export type InboxSession = {
   _id: string;
   session_id: string;
@@ -713,6 +715,10 @@ export type InboxSession = {
   // origin/main with the reason for an automatic downgrade. The chip shows
   // `@<base7>`, the header tooltip the "Started from …" line.
   cloud_seed?: { source: "checkout" | "origin_main"; base: string; branch?: string | null; dirty?: boolean | null; laptop_root?: string | null; device_id?: string | null; reason?: string | null; at: number } | null;
+  // The last cloud placement failed because the project context was over the
+  // cap: the files that would have to stay behind (home-relative, largest
+  // first). The error banner asks whether to leave them out.
+  cloud_context_too_large?: CloudContextTooLarge | null;
   // A bulk migration (Settings → Migration) is moving this session between
   // machines: the row is fenced (messages queue) until the destination owns
   // it. The batch id links the card to its progress row.

@@ -5,7 +5,7 @@ import { ShortId } from "../ShortId";
 import Link from "next/link";
 import { toast } from "sonner";
 import { decisionAnswerLabel } from "@codecast/shared/contracts";
-import { ChevronDown, ChevronRight, Layers, ShieldCheck, Undo2, Terminal, ListChecks } from "lucide-react";
+import { ChevronDown, ChevronRight, Layers, ShieldCheck, Undo2, Terminal, ListChecks, Megaphone } from "lucide-react";
 import { useInboxStore, useTrackedStore, getProjectName, type SessionDecisionItem, type HandledDecisionItem } from "../../store/inboxStore";
 import { useCollectionRows } from "../../hooks/useCollectionRows";
 import { useDecisionQueue } from "../../hooks/useDecisionQueue";
@@ -16,6 +16,7 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { formatTimeAgo } from "../../lib/messageNavigator";
 import { groupDecisions, stackDue, type DecisionGroup } from "../../lib/decisionGroups";
 import { DecisionCompactCard } from "./DecisionCompactCard";
+import { EscalationCard } from "./EscalationCard";
 import { decisionHref } from "../../lib/decisionLinks";
 import { StackChecklist } from "./StackChecklist";
 
@@ -46,7 +47,11 @@ export function DecisionQueueList() {
   // clock: a coarse tick re-sorts when a due passes.
   const now = useCoarseNow(60_000);
   const groups = useMemo(() => groupDecisions(pending, stacks, now), [pending, stacks, now]);
-  const terminal = useDecisionQueue().filter((i) => i.source !== "decide");
+  const queue = useDecisionQueue();
+  const terminal = queue.filter((i) => i.source === "ask" || i.source === "permission");
+  // A role's escalations (org-roles-run-work.md R1, revised): what a lead put
+  // in front of the person, oldest first like the rest of the queue.
+  const escalations = queue.filter((i) => i.source === "escalation");
 
   // Stack creation from selected cards: tick, name, group.
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -66,7 +71,7 @@ export function DecisionQueueList() {
     setSelected(new Set()); setSelecting(false); setTitle("");
   }, [title, selected, createStackWith, activeTeamId]);
 
-  const empty = groups.length === 0 && terminal.length === 0;
+  const empty = groups.length === 0 && terminal.length === 0 && escalations.length === 0;
   // "Waiting on you" counts what a person must answer. Rows a lead holds
   // under a grant stay pending in the inbox (a person may still answer first)
   // but they are the lead's to clear, so they count on their own group header.
@@ -80,12 +85,12 @@ export function DecisionQueueList() {
       <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6">
         <div className="flex items-center gap-3 flex-wrap mb-5">
           <h1 className="text-lg text-sol-text">Questions</h1>
-          <span className="text-[12px] text-sol-text-dim">{mine} waiting on you{withLead ? ` · ${withLead} with a lead` : ""}{terminal.length ? ` · ${terminal.length} in a terminal` : ""}</span>
+          <span className="text-[12px] text-sol-text-dim">{mine} waiting on you{escalations.length ? ` · ${escalations.length} from your leads` : ""}{withLead ? ` · ${withLead} with a lead` : ""}{terminal.length ? ` · ${terminal.length} in a terminal` : ""}</span>
           <div className="ml-auto flex items-center gap-2 text-[11px]">
             <Link href="/decisions/stacks" className="flex items-center gap-1.5 px-2 py-1 rounded border border-sol-border text-sol-text-muted hover:text-sol-text transition-colors" title="Every stack: open and done, progress, due">
               <Layers className="w-3.5 h-3.5" />stacks
             </Link>
-            {pending.length > 0 && (
+            {(pending.length > 0 || escalations.length > 0) && (
               <Link href="/questions?mode=step" className="flex items-center gap-1.5 px-2 py-1 rounded border border-sol-border text-sol-text-muted hover:text-sol-text transition-colors">
                 <ListChecks className="w-3.5 h-3.5" />one at a time
               </Link>
@@ -122,6 +127,14 @@ export function DecisionQueueList() {
         )}
 
         <div className="space-y-7">
+          {escalations.length > 0 && (
+            <section data-queue-escalations={escalations.length}>
+              <GroupHeader icon={<Megaphone className="w-3.5 h-3.5" />} title="From your leads" count={escalations.length} hint="a reply hands the session back" />
+              <div className="space-y-2">
+                {escalations.map((item) => <EscalationCard key={item.key} item={item} />)}
+              </div>
+            </section>
+          )}
           {groups.map((g) => (
             <QueueGroup key={g.key} group={g} selecting={selecting} selected={selected} onToggle={toggle} keys={g.key === firstStackKey} />
           ))}

@@ -8502,6 +8502,7 @@ async function enrichInboxSessionRow(
     cloud_placement: (conv as any).cloud_placement ?? null,
     cloud_workspace: (conv as any).cloud_workspace ?? null,
     cloud_seed: (conv as any).cloud_seed ?? null,
+    cloud_context_too_large: (conv as any).cloud_context_too_large ?? null,
     migration_batch_id: (conv as any).migration?.batch_id ?? null,
     workflow_run_id: conv.workflow_run_id || null,
     // Read by the web's isSub (inboxStore) via isAgentSpawnedConversation so
@@ -8660,6 +8661,7 @@ async function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: nu
     cloud_placement: child.cloud_placement ?? null,
     cloud_workspace: child.cloud_workspace ?? null,
     cloud_seed: child.cloud_seed ?? null,
+    cloud_context_too_large: child.cloud_context_too_large ?? null,
     migration_batch_id: child.migration?.batch_id ?? null,
     worktree_name: child.worktree_name,
     worktree_branch: child.worktree_branch,
@@ -13085,8 +13087,9 @@ export async function killConversation(ctx: any, userId: Id<"users">, args: { co
       patch.status = "completed";
     }
     await ctx.db.patch(args.conversation_id, patch);
-    // A retired row leaves the Lock Screen strip with the next push.
-    await scheduleLiveActivityRefresh(ctx, conv.user_id, { urgent: true });
+    // A retired row leaves the Lock Screen strip with the next push. The org
+    // cores that retire a seat run without a scheduler in their pure form.
+    if (ctx.scheduler) await scheduleLiveActivityRefresh(ctx, conv.user_id, { urgent: true });
     // Kill must stick: cancel any armed schedule that injects into this
     // conversation, or its next fire would resurrect the session the user
     // just killed (see cancelTasksBoundToConversation). Scan the RUNNER's

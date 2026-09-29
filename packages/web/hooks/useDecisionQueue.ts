@@ -3,6 +3,8 @@ import { useTrackedStore, sessionsWakeSig, filterInboxScope } from "../store/inb
 import { makeCollectionSig } from "../store/wakeSig";
 import {
   decisionQueueItems,
+  escalationQueueItems,
+  escalationsWakeSig,
   sessionHasOpenQuestion,
   sortQueue,
   type QueueItem,
@@ -104,6 +106,7 @@ export function useDecisionQueue(): QueueItem[] {
   const s = useTrackedStore([
     (st: any) => decisionsWakeSig(st.sessionDecisions),
     (st: any) => sessionsWakeSig(st.sessions),
+    (st: any) => escalationsWakeSig(st.sessions),
     (st: any) => st.questionResolutions,
     (st: any) => st.currentUser?._id,
   ]);
@@ -112,6 +115,10 @@ export function useDecisionQueue(): QueueItem[] {
     const meId = s.currentUser?._id;
     const mine = filterInboxScope(s.sessions, "mine", meId);
     const items = decisionQueueItems(s.sessionDecisions, s.sessions);
+    // A role's escalations (source "escalation"): the role's own card in the
+    // queue, or the child's when direct. A direct child parked on its own
+    // prompt is the prompt's card below, so its escalation adds no item.
+    items.push(...escalationQueueItems(mine, (row) => sessionHasOpenQuestion(row, s.questionResolutions)));
 
     // A session that has an authored decision open is already represented;
     // its AUQ row would be the same interruption counted twice.
@@ -167,8 +174,10 @@ export type DecisionStepper = {
 
 export const DecisionStepperContext = createContext<DecisionStepper | null>(null);
 
-// The oldest pending `cast decide` row for a conversation, as a queue item.
-// Signature-gated: rows change only on ask/answer.
+// The oldest pending `cast decide` row for a conversation, as a queue item,
+// else the oldest escalation the conversation carries (a role's standing
+// session with a session in front of the person, or a directly escalated
+// child). Signature-gated: rows change only on ask/answer/escalate.
 export function usePendingDecisionItem(conversationId: string | null | undefined): QueueItem | null {
   const s = useTrackedStore([
     (st: any) => {
@@ -183,6 +192,8 @@ export function usePendingDecisionItem(conversationId: string | null | undefined
       const row = conversationId ? st.sessions[conversationId] : undefined;
       return row ? `${row.title}|${row.project_path}|${row.is_idle}|${row.agent_status}|${row.is_unresponsive}|${row.inbox_killed_at}` : "";
     },
+    (st: any) => (conversationId ? escalationsWakeSig(st.sessions) : ""),
+    (st: any) => st.questionResolutions,
   ]);
   return useMemo(() => {
     if (!conversationId) return null;
@@ -195,6 +206,10 @@ export function usePendingDecisionItem(conversationId: string | null | undefined
     const items = decisionQueueItems(mine, s.sessions).sort(
       (a, b) => Number(b.blocking) - Number(a.blocking) || a.createdAt - b.createdAt
     );
-    return items[0] ?? null;
-  }, [conversationId, s.sessionDecisions, s.sessions]);
+    if (items[0]) return items[0];
+    const escalations = escalationQueueItems(s.sessions, (row) => sessionHasOpenQuestion(row, s.questionResolutions))
+      .filter((i) => i.conversationId === conversationId)
+      .sort((a, b) => a.createdAt - b.createdAt);
+    return escalations[0] ?? null;
+  }, [conversationId, s.sessionDecisions, s.sessions, s.questionResolutions]);
 }

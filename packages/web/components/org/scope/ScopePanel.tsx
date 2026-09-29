@@ -25,9 +25,9 @@ import { ScopeBriefTab, ScopeCharterTab, ScopeDecisionsTab, ScopeDocsTab, ScopeP
 import { TemplateSections } from "../TemplateSections";
 import { useRoleScope } from "../../../hooks/useRoleScope";
 import { useOpenLinkedSession } from "../../../hooks/useOpenLinkedSession";
-import { RoleEscalationLines } from "../../RoleEscalationLines";
+import { EscalationCard } from "../../decisions/EscalationCard";
+import type { QueueItem } from "../../../lib/decisionQueue";
 import { EntityIdPill } from "../../EntityIdPill";
-import type { RoleEscalation } from "@codecast/shared/contracts";
 import { parseStandingSection, projectsWithLines, standingLineAgeDays, standingLineFor, standingLineStale } from "@codecast/shared/contracts/briefStanding";
 import { ScopeSettings } from "./ScopeSettings";
 import { ScopeLineTab } from "./ScopeLineTab";
@@ -53,7 +53,7 @@ export type ScopePanelProps = {
   layout: ScopePanelLayout;
   /** What the role put in front of the person (R1, revised): the first
    *  screen's first block, from the same helper the inbox card reads. */
-  escalations: RoleEscalation[];
+  escalations: QueueItem[];
   scopeRef: ScopeRef | null;
   scopeIds: ScopeIds;
   summary: ScopeSummary | null | undefined;
@@ -188,7 +188,7 @@ const BLOCK_LABEL = "px-2.5 mb-1.5 text-[10.5px] font-semibold uppercase trackin
 /** The first screen (F5.1): three questions, in words, in this order. Every
  *  number on it is inside an escalation's own line or the activity line;
  *  the mount test holds it to that. */
-export function ScopeOverviewTab({ role, now, canEdit, escalations, narrative, briefLoaded }: { role: OrgRole; now: number; canEdit: boolean; escalations: RoleEscalation[]; narrative: string | null | undefined; briefLoaded: boolean }) {
+export function ScopeOverviewTab({ role, now, canEdit, escalations, narrative, briefLoaded }: { role: OrgRole; now: number; canEdit: boolean; escalations: QueueItem[]; narrative: string | null | undefined; briefLoaded: boolean }) {
   const { model } = useRoleScope(role.short_id);
   const openLinked = useOpenLinkedSession();
   const openId = (id: string) => {
@@ -208,7 +208,7 @@ export function ScopeOverviewTab({ role, now, canEdit, escalations, narrative, b
       {escalations.length > 0 && (
         <section data-scope-section="needs-you">
           <h3 className={BLOCK_LABEL} style={{ color: "var(--sol-text-dim)" }}>Needs you</h3>
-          <div className="px-1"><RoleEscalationLines escalations={escalations} coarseNow={now} canHandBack={canEdit} onOpen={openId} /></div>
+          <div className="px-1 space-y-2">{escalations.map((e) => <EscalationCard key={e.key} item={e} canHandBack={canEdit} />)}</div>
         </section>
       )}
 

@@ -73,6 +73,9 @@ const GOLDEN_HASH_BY_VERSION: Record<number, string> = {
   // moved.
   12: "cc7dfd659f0c1501",
   13: "9d3297f417ee3752",
+  // v14: an escalation is a question: the role's card (or the direct child)
+  // files in questions, where the decision queue answers it.
+  14: "21a5fd4a107d6f6a",
 };
 
 type Expected = {

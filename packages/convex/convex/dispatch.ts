@@ -343,6 +343,15 @@ function deepMergeField(existing: any, incoming: any): any {
 // visibility mutation. Re-exported here for the existing tests.
 export { classifyHideTransition } from "./cleanup";
 
+// The hide gestures carry whatever id the web row has, and a draft session
+// that never reached the server has a local stub id. The store already deleted
+// that row, so there is nothing to record here.
+async function hideForViewerByClientId(ctx: any, userId: Id<"users">, convId: string, kind: "stash" | "dismiss") {
+  const id = ctx.db.normalizeId("conversations", convId);
+  if (!id) return;
+  await hideConversationForViewer(ctx, userId, await ctx.db.get(id), kind);
+}
+
 // The web's explicit kill gestures (inboxStore killSession / killSessions). A
 // kill patch is indistinguishable at the FIELD level from a quiet re-assert of
 // the same flag — a stub-rekey flushResolvedSessionFields, an applyUndoPatches
@@ -1285,21 +1294,17 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // skips. hideConversationForViewer is a no-op for the runner and owners, so
   // one handler serves both cases without the client telling them apart.
   stashSession: async (ctx, userId, [convId]: [string, { hidden?: boolean } | undefined]) => {
-    const conv = await ctx.db.get(convId as Id<"conversations">);
-    await hideConversationForViewer(ctx, userId, conv, "stash");
+    await hideForViewerByClientId(ctx, userId, convId, "stash");
   },
   killSession: async (ctx, userId, [convId]: [string]) => {
-    const conv = await ctx.db.get(convId as Id<"conversations">);
-    await hideConversationForViewer(ctx, userId, conv, "dismiss");
+    await hideForViewerByClientId(ctx, userId, convId, "dismiss");
   },
   killSessions: async (ctx, userId, [convIds]: [string[]]) => {
-    for (const convId of convIds ?? []) {
-      const conv = await ctx.db.get(convId as Id<"conversations">);
-      await hideConversationForViewer(ctx, userId, conv, "dismiss");
-    }
+    for (const convId of convIds ?? []) await hideForViewerByClientId(ctx, userId, convId, "dismiss");
   },
   restoreSession: async (ctx, userId, [convId]: [string]) => {
-    await unhideConversationForViewer(ctx, userId, convId as Id<"conversations">);
+    const id = ctx.db.normalizeId("conversations", convId);
+    if (id) await unhideConversationForViewer(ctx, userId, id);
   },
 
   // Mirror of conversations.setPrivacy — these two fields are immutable in

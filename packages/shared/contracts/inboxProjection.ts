@@ -93,7 +93,14 @@ export type InboxTruncation = (typeof INBOX_TRUNCATION_KINDS)[number];
 // recent window's 200 seats went to stashed rows: every plain settled row
 // older than two days was cut from the set instead of folded, and the show
 // old toggle had nothing to show.
-export const INBOX_PROJECTION_VERSION = 13 as const;
+// v14: an escalation is a question (org-roles-run-work.md R1, revised again).
+// A role that put a session in front of the person is asking them something,
+// so the card that carries it files in QUESTIONS, the section the decision
+// queue reads, beside a `cast decide` and an open prompt: the role's standing
+// session for an ordinary escalation (the ride lifts it there), the child
+// itself for a direct one. The work_state stays needs_input, as for any
+// asking row.
+export const INBOX_PROJECTION_VERSION = 14 as const;
 
 export type InboxProjection = {
   v: typeof INBOX_PROJECTION_VERSION;
@@ -388,7 +395,8 @@ export function placeInboxRow(input: InboxPlacementInput): InboxPlacement {
   // ask notwithstanding — they saw the ask and triaged past it (the same
   // standing snooze has above). The next activity expires the verdict and
   // the ask surfaces again.
-  else if (input.asking && !input.killed && !input.userRest) bucket = "questions";
+  // An escalation is an ask (v14): a direct one is the child's own question.
+  else if ((input.asking || input.escalated) && !input.killed && !input.userRest) bucket = "questions";
   else if (input.pinned) bucket = "pinned";
   else if (input.messageCount === 0) bucket = "new";
   else bucket = work_state;
@@ -818,15 +826,16 @@ export function rideLeadPlacements<P extends { bucket: InboxBucket }>(
 ): void {
   // A role's escalation reaches the person through the role's card (R1,
   // revised): a session under the role with an open escalation lifts the
-  // role's standing session into needs input BEFORE anything rides it, so
-  // every session under the role files in that one section with it. The
-  // role's own placement wins only where the person put it themselves
+  // role's standing session into QUESTIONS (v14: the ask is the role's, and
+  // the decision queue answers it there) BEFORE anything rides it, so every
+  // session under the role files in that one section with it. The role's
+  // own placement wins only where the person put it themselves
   // (RIDE_KEEPS_OWN) or the role is retired (dismissed).
   const present = (id: string) => (placements.has(id) ? rowOf(id) : undefined);
   for (const leadId of roleEscalationsOf(placements.keys(), present).keys()) {
     const lead = placements.get(leadId)!;
     if (RIDE_KEEPS_OWN.has(lead.bucket) || lead.bucket === "dismissed") continue;
-    lead.bucket = "needs_input";
+    lead.bucket = "questions";
     (lead as { work_state?: WorkState }).work_state = "needs_input";
   }
   settleRiders(

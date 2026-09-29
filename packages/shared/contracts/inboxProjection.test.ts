@@ -660,7 +660,7 @@ describe("field ownership constants", () => {
 
   test("the caps are the single source and the version is 13", () => {
     expect(INBOX_WINDOW_CAPS).toEqual({ recent: 200, pinned: 100, dismissed: 200, stashed: 200, snoozed: 200, owned: 200 });
-    expect(INBOX_PROJECTION_VERSION).toBe(13);
+    expect(INBOX_PROJECTION_VERSION).toBe(14);
   });
 });
 
