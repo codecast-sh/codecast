@@ -351,6 +351,20 @@ const EMPTY: TriggerInboxPartition = {
   nextRunAt: undefined,
 };
 
+// Roster order, shared by every surface that lists several triggers (the
+// inbox rows, the conversation header): tiers of "what's happening now →
+// what's happening next → what's idle". Live runs first, then scheduled by
+// soonest fire, then paused / event / no-run_at (newest-created first).
+export function compareTriggerRoster(a: TaskRow, b: TaskRow): number {
+  const tier = (t: TaskRow) => (t.status === "running" ? 0 : t.status === "scheduled" ? 1 : 2);
+  const ta = tier(a), tb = tier(b);
+  if (ta !== tb) return ta - tb;
+  const ar = a.status === "scheduled" ? a.run_at ?? Infinity : Infinity;
+  const br = b.status === "scheduled" ? b.run_at ?? Infinity : Infinity;
+  if (ar !== br) return ar - br;
+  return b.created_at - a.created_at;
+}
+
 export function partitionTriggerInbox(
   tasks: TaskRow[] | undefined,
   sessions: Record<string, InboxSession>,
@@ -500,21 +514,7 @@ export function partitionTriggerInbox(
       absorbedIds.add(sess._id);
     }
   }
-  // Ordered in tiers of "what's happening now → what's happening next → what's
-  // idle": live runs at the very top, then scheduled by soonest fire, then
-  // paused / event / no-run_at at the bottom (newest-created first among those).
-  // (Running previously sank to the bottom because its status isn't
-  // "scheduled" — the opposite of what a roster wants to surface.)
-  const tier = (t: TriggerRow["task"]) =>
-    t.status === "running" ? 0 : t.status === "scheduled" ? 1 : 2;
-  rows.sort((a, b) => {
-    const ta = tier(a.task), tb = tier(b.task);
-    if (ta !== tb) return ta - tb;
-    const ar = a.task.status === "scheduled" ? a.task.run_at ?? Infinity : Infinity;
-    const br = b.task.status === "scheduled" ? b.task.run_at ?? Infinity : Infinity;
-    if (ar !== br) return ar - br;
-    return b.task.created_at - a.task.created_at;
-  });
+  rows.sort((a, b) => compareTriggerRoster(a.task, b.task));
 
   return { rows, absorbedIds, armedInjectByConv, unreadCount, nextRunAt };
 }
