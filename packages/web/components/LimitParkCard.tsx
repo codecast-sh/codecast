@@ -244,9 +244,12 @@ const STEP_DOT = {
   todo: "bg-sol-border",
 } as const;
 
-function RecoveryStep({ state, children }: { state: keyof typeof STEP_DOT; children: React.ReactNode }) {
+// One step of the track. Every step after the first carries its own leading
+// connector, so a wrapped track never leaves a dangling line at a row's end.
+function RecoveryStep({ state, first = false, children }: { state: keyof typeof STEP_DOT; first?: boolean; children: React.ReactNode }) {
   return (
     <span className={`inline-flex items-center gap-1.5 whitespace-nowrap ${state === "todo" ? "text-sol-text-dim" : state === "active" ? "text-sol-text" : "text-sol-text-muted"}`}>
+      {!first && <span className="mr-0.5 h-px w-4 bg-sol-border/70" />}
       {state === "done"
         ? <Check className="h-3 w-3 text-sol-green" strokeWidth={3} />
         : <span className={`h-1.5 w-1.5 rounded-full ${STEP_DOT[state]}`} />}
@@ -304,7 +307,6 @@ function LimitRecoveryCard({
     );
   }
 
-  const Connector = () => <span className="h-px w-4 bg-sol-border/70 shrink-0" />;
   return (
     <div
       className={`rounded-lg border border-sol-cyan/35 bg-sol-cyan/[0.06] ${compact ? "px-2.5 py-1.5" : "px-3 py-2"}`}
@@ -321,15 +323,13 @@ function LimitRecoveryCard({
         {ago}
       </div>
       <div className={`${compact ? "mt-1" : "mt-1.5"} flex items-center gap-2 flex-wrap text-xs`}>
-        <RecoveryStep state="done">{windowLabel} reached</RecoveryStep>
-        <Connector />
+        <RecoveryStep state="done" first>{windowLabel} reached</RecoveryStep>
         <RecoveryStep state={step === "moving" ? "active" : "done"}>
           {step === "moving"
             ? <>{target ? `Restarting on ${target}` : "Restarting the session"}<Loader2 className="ml-0.5 h-3 w-3 animate-spin text-sol-cyan" /></>
             : target ? `Running on ${target}` : "Restarted"}
         </RecoveryStep>
-        <Connector />
-        <RecoveryStep state={step === "resuming" ? "active" : "todo"}>Picking up where it left off</RecoveryStep>
+        <RecoveryStep state={step === "resuming" ? "active" : "todo"}>Picking up the turn</RecoveryStep>
       </div>
     </div>
   );
