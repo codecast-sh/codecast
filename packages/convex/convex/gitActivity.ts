@@ -132,7 +132,7 @@ export const recordLocal = mutation({
       // The transcript that printed this sha names the session, the way the
       // webhook resolves it; a commit whose line has not synced yet is
       // back-filled when it does (linkLocalCommitToConversation).
-      if (!conversationId && e.commit) conversationId = await conversationForCommit(ctx, e.new_sha, branch);
+      if (!conversationId && e.commit) conversationId = await conversationForCommit(ctx, e.new_sha, branch, { userId, teamId });
       if (conversationId && commitId) {
         const row = await ctx.db.get(commitId);
         if (row && !row.conversation_id) await ctx.db.patch(commitId, { conversation_id: conversationId });

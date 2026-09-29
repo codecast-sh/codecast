@@ -173,6 +173,7 @@ function DocDetailContent() {
   const pinDoc = useInboxStore((s) => s.pinDoc);
   const promoteToPlan = useInboxStore((s) => s.promoteDocToPlan);
   const generateShareLink = useMutation(api.docs.generateShareLink);
+  const unshareLink = useMutation(api.docs.unshare);
 
   const handlePin = useCallback(async () => {
     if (!data) return;
@@ -265,6 +266,7 @@ function DocDetailContent() {
                 shareUrl={(doc as any).share_token ? `${shareOrigin()}/share/doc/${(doc as any).share_token}` : null}
                 pageUrl={canonicalUrl()}
                 forwardLabel="doc"
+                onRevokeShareLink={() => unshareLink({ id: doc._id as any })}
                 onGenerateShareLink={async () => {
                   const result = await generateShareLink({ id: doc._id as any });
                   return `${shareOrigin()}/share/doc/${result.share_token}`;

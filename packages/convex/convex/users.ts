@@ -2456,6 +2456,7 @@ export const updateSyncSettings = mutation({
     sync_excluded: v.optional(v.array(v.string())),
     claude_cloud_sync: v.optional(v.boolean()),
     cursor_cloud_sync: v.optional(v.boolean()),
+    codex_cloud_sync: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await getUserOrToken(ctx, args.api_token);

@@ -13,6 +13,23 @@ export interface CodexAuthSummary {
   /** Real OAuth tokens present — an account worth snapshotting/probing.
    * API-key-only logins have no rotating grant and no per-account limits. */
   usable: boolean;
+  /** Epoch ms the access token stops working (its `exp` claim). Codex
+   * refreshes it on its own; a reader that never refreshes (the Codex Cloud
+   * mirror) treats a past value as a signed-out machine. */
+  access_expires_at?: number;
+}
+
+/** A JWT's claims, unverified: we only read our own machine's file for display metadata and expiry. */
+function jwtClaims(token: unknown): Record<string, any> | null {
+  const payload = typeof token === "string" ? token.split(".")[1] : undefined;
+  if (!payload) return null;
+  try {
+    const pad = payload + "=".repeat((4 - (payload.length % 4)) % 4);
+    const claims = JSON.parse(Buffer.from(pad, "base64url").toString("utf-8"));
+    return claims && typeof claims === "object" ? claims : null;
+  } catch {
+    return null; // malformed token: identity stays partial
+  }
 }
 
 /** Decode identity from an auth.json blob. The id_token is a JWT whose payload
@@ -35,20 +52,11 @@ export function decodeCodexAuth(raw: string | null): CodexAuthSummary {
   }
   const lastRefresh = Date.parse(parsed?.last_refresh ?? "");
   if (Number.isFinite(lastRefresh)) summary.last_refresh = lastRefresh;
-  const idToken = tokens?.id_token;
-  if (typeof idToken === "string") {
-    const payload = idToken.split(".")[1];
-    if (payload) {
-      try {
-        const pad = payload + "=".repeat((4 - (payload.length % 4)) % 4);
-        const claims = JSON.parse(Buffer.from(pad, "base64url").toString("utf-8"));
-        if (typeof claims?.email === "string" && claims.email) summary.email = claims.email;
-        const plan = claims?.["https://api.openai.com/auth"]?.chatgpt_plan_type;
-        if (typeof plan === "string" && plan) summary.plan = plan;
-      } catch {
-        /* malformed token — identity stays partial */
-      }
-    }
-  }
+  const claims = jwtClaims(tokens?.id_token);
+  if (typeof claims?.email === "string" && claims.email) summary.email = claims.email;
+  const plan = claims?.["https://api.openai.com/auth"]?.chatgpt_plan_type;
+  if (typeof plan === "string" && plan) summary.plan = plan;
+  const exp = jwtClaims(tokens?.access_token)?.exp;
+  if (typeof exp === "number" && Number.isFinite(exp)) summary.access_expires_at = exp * 1000;
   return summary;
 }
