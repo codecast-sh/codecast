@@ -659,7 +659,7 @@ export async function performRehomeSessions(ctx: { db: any }, authUserId: Id<"us
 }
 
 async function rehomeSessions(
-  ctx: { db: any },
+  ctx: { db: any; scheduler?: any },
   authUserId: Id<"users">,
   role: any,
   candidates: Array<{ raw: any }>,
@@ -700,6 +700,10 @@ async function rehomeSessions(
       const movedRow = await ctx.db.get(c._id);
       if (movedRow) await routeUpWaitingSession(ctx, movedRow, { why: "question", since: openAsk.created_at ?? openAsk._creationTime });
     }
+    // A moved session that already waits settled before it had a role to
+    // tell: its needs-input check runs again, as a role's resume does, so the
+    // role hears it, or the person does when the role cannot be told.
+    await ctx.scheduler?.runAfter(0, internal.notifications.checkNeedsInput, { conversation_id: c._id });
   }
   return result;
 }

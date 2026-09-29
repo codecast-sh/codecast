@@ -79,7 +79,7 @@ test("two tasks at different stations paint in their columns with node, hand sta
   expect(qa('[data-line-column="in_progress"] [data-line-card]').map((c) => c.getAttribute("data-line-card"))).toEqual(["ct-1"]);
   expect(qa('[data-line-column="in_review"] [data-line-card]').map((c) => c.getAttribute("data-line-card"))).toEqual(["ct-2"]);
   expect(qa('[data-line-column="open"] [data-line-card]')).toEqual([]);
-  expect(document.querySelector('[data-line-column="open"]')!.textContent).toMatch(/Nothing at this station/);
+  expect(document.querySelector('[data-line-column="open"]')!.textContent).toMatch(/Nothing here\./);
 
   // ct-1: its run's live node with the hand's state, the assignee, the evidence count.
   const a = document.querySelector('[data-line-card="ct-1"]')!;
@@ -103,7 +103,7 @@ test("two tasks at different stations paint in their columns with node, hand sta
 
 test("an empty scope says so instead of drawing columns", async () => {
   await act(async () => root.render(React.createElement(ScopeLineTab, { ids: { projectIds: ["none"], planIds: [], whole: false } })));
-  expect(document.body.textContent).toMatch(/No tasks on the line/);
+  expect(document.body.textContent).toMatch(/No tasks here yet/);
   expect(document.querySelector("[data-line-column]")).toBeNull();
   await act(async () => root.unmount());
 });

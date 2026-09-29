@@ -1,11 +1,11 @@
 "use client";
-// Seating the workspace's standing agent is an explained moment (org-staffing.md
-// S16). When the workspace already has a standing agent, hiring the Chief of
-// Staff must never feel like a takeover of the thread the person already talks
-// to, so this dialog names what will happen and offers two reversible choices.
-// The default seats the existing agent: no restart, its memory, chat handle and
-// Slack binding kept, the weekly review added to its job. The alternative starts
-// a fresh session and retires the old one, its thread kept and linked.
+// Hiring the Chief of Staff in a workspace that already has an agent is an
+// explained moment (org-staffing.md S16). It must never feel like a takeover
+// of the thread the person already talks to, so this dialog names what will
+// happen and offers two reversible choices. The default keeps the agent they
+// have: no restart, its memory, chat handle and Slack connection kept, the
+// weekly review added to its job. The alternative starts a fresh session and
+// retires the old one, its thread kept and linked.
 import { useState } from "react";
 import { Check } from "lucide-react";
 import { useAnchorSpace } from "../../hooks/useSyncAnchorSpace";
@@ -13,13 +13,12 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 
 export type ChiefSeatChoice = "existing" | "fresh";
 
-export function ChiefSeatDialog({ open, onClose, teamId, agentName, threadShortId, messageCount, onConfirm }: {
+export function ChiefSeatDialog({ open, onClose, teamId, agentName, messageCount, onConfirm }: {
   open: boolean;
   onClose: () => void;
   /** The team whose standing agent this is; absent = the personal workspace. */
   teamId?: string;
   agentName: string;
-  threadShortId?: string;
   messageCount?: number;
   onConfirm: (seat: ChiefSeatChoice) => void;
 }) {
@@ -33,16 +32,15 @@ export function ChiefSeatDialog({ open, onClose, teamId, agentName, threadShortI
   // in when the row lands.
   const { space } = useAnchorSpace(teamId ? "team" : "user", teamId);
   const count = typeof messageCount === "number" ? messageCount : (space?.anchor?.message_count as number | undefined);
-  const name = agentName || (space?.anchor?.bot_name as string | undefined) || "your standing agent";
-  const shortId = threadShortId ?? (space?.anchor?.conversation_short_id as string | undefined);
-  const thread = shortId ? `thread ${shortId}${typeof count === "number" ? `, ${count} message${count === 1 ? "" : "s"}` : ""}` : "its existing thread";
+  const name = agentName || (space?.anchor?.bot_name as string | undefined) || "your agent";
+  const thread = typeof count === "number" ? ` (${count} message${count === 1 ? "" : "s"} so far)` : "";
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-[480px] grid-cols-1" style={{ background: "var(--sol-card)", borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)" }}>
         <DialogHeader>
-          <DialogTitle className="text-[17px]" style={{ fontFamily: "var(--font-serif)" }}>Seat the Chief of Staff</DialogTitle>
+          <DialogTitle className="text-[17px]" style={{ fontFamily: "var(--font-serif)" }}>Hire the Chief of Staff</DialogTitle>
           <DialogDescription className="text-[12.5px] leading-relaxed" style={{ color: "var(--sol-text-muted)" }}>
-            This workspace already has a standing agent, <span style={{ color: "var(--sol-text)" }}>{name}</span> ({thread}). Seating it as Chief of Staff keeps its memory, its chat handle and its Slack binding, and adds the weekly company review to its job.
+            This workspace already has an agent, <span style={{ color: "var(--sol-text)" }}>{name}</span>{thread}. Making it your Chief of Staff keeps its memory, its chat handle and its Slack connection, and adds the weekly company review to its job.
           </DialogDescription>
         </DialogHeader>
 
@@ -50,14 +48,14 @@ export function ChiefSeatDialog({ open, onClose, teamId, agentName, threadShortI
           <SeatChoiceCard
             selected={choice === "existing"}
             onSelect={() => setChoice("existing")}
-            title="Seat the existing agent"
-            sub="No restart, no second session. It keeps everything and takes on the review."
+            title={`Make ${name} the Chief of Staff`}
+            sub="Nothing restarts. It keeps everything and takes on the review."
           />
           <SeatChoiceCard
             selected={choice === "fresh"}
             onSelect={() => setChoice("fresh")}
             title="Start a fresh session"
-            sub="The old agent is retired in the same act, its thread kept and linked from the new role's page, so the workspace never ends with two root agents."
+            sub={`${name} is retired at the same time, so the workspace never has two. Its thread is kept and linked from the new role's page.`}
           />
         </div>
 
@@ -69,7 +67,7 @@ export function ChiefSeatDialog({ open, onClose, teamId, agentName, threadShortI
             className="h-8 px-3.5 rounded-lg text-[12.5px] font-semibold"
             style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }}
           >
-            {choice === "existing" ? "Seat it" : "Start fresh"}
+            {choice === "existing" ? "Hire it" : "Start fresh"}
           </button>
         </div>
       </DialogContent>

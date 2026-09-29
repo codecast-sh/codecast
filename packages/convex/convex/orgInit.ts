@@ -9,7 +9,7 @@ import { getAuthenticatedUserId } from "./pendingMessages";
 import { scopedFetch } from "./data";
 import { workspaceForResource, workspaceKey } from "./lib/access";
 import { userCanAdminRole } from "./lib/orgAccess";
-import { isWholeWorkspace, scopeIds } from "./lib/orgScope";
+import { isScopeless, scopeIds } from "./lib/orgScope";
 import { collectOrgSessions, requireWorkspaceCaller, resolveScope, sessionsInScope } from "./org";
 import { sessionsOwnedBy, tasksOwnedBy } from "./lib/orgOwnership";
 import { performRehomeSessions, type RehomeResult } from "./sessionOwnership";
@@ -984,16 +984,21 @@ async function resolveProposalScope(ctx: Ctx, boundary: Boundary, scope: OrgRole
 // A role that looks after the whole workspace takes over nothing: it would
 // empty a person's inbox into one seat, which is not what gaining a scope
 // means.
+//
+// A session that is done or killed has nothing left for a role to look after:
+// it stays where the person left it.
 const TAKEOVER_NOTE = "It looks after the area you work in. It reads what you need first and decides what reaches a person.";
+
+const takeable = <T extends { session: { state: string }; raw: any }>(rows: T[]) => rows.filter(({ session, raw }) => session.state !== "done" && !raw.inbox_killed_at);
 
 export async function takeOverSessions(ctx: Ctx, userId: Id<"users">, roleId: Id<"org_roles">, opts: { leave?: boolean; dry?: boolean } = {}): Promise<RehomeResult | null> {
   if (opts.leave) return null;
   const role = await ctx.db.get(roleId);
-  if (!role || role.status === "retired" || isWholeWorkspace(role.scope)) return null;
+  if (!role || role.status === "retired" || isScopeless(role.scope)) return null;
   const resolved = await resolveScope(ctx, userId, { role_id: String(role._id) });
   if (!resolved) return null;
   const roles = await rolesInBoundary(ctx, role);
-  const candidates = await sessionsOwnedBy(ctx, role, roles, await sessionsInScope(ctx, resolved, Date.now()));
+  const candidates = await sessionsOwnedBy(ctx, role, roles, takeable(await sessionsInScope(ctx, resolved, Date.now())));
   const took = await performRehomeSessions(ctx, userId, role, candidates, { dry: opts.dry, note: TAKEOVER_NOTE, by_rule: true });
   // The open tasks in the area that the wider role held move with it, by the
   // same rule (tasksOwnedBy), each with a history row.
@@ -1019,13 +1024,13 @@ export async function previewTakeover(ctx: Ctx, userId: Id<"users">, boundary: B
     if (ref?.kind === "project") scope.project_ids.push(ref.id);
     else if (ref?.kind === "plan") scope.plan_ids.push(ref.id);
   }
-  if (isWholeWorkspace(scope)) return null;
+  if (isScopeless(scope)) return null;
   const resolved = await resolveScope(ctx, userId, { scope, team_id: boundary.team_id });
   if (!resolved) return null;
   // The session the role will be seated on (R2) is its standing session by
   // the time the takeover runs, so it is not one of the sessions that move.
   const seat = p.seat?.trim();
-  const inScope = (await sessionsInScope(ctx, resolved, Date.now(), shared.scan)).filter(({ raw }) => !seat || ![raw.short_id, String(raw._id), raw.session_id].includes(seat));
+  const inScope = takeable(await sessionsInScope(ctx, resolved, Date.now(), shared.scan)).filter(({ raw }) => !seat || ![raw.short_id, String(raw._id), raw.session_id].includes(seat));
   // The rule reads the boundary as the change would leave it: the live role
   // with its wider scope, or the proposed one beside the roles that stand.
   const subject = live ? { ...live, scope } : { _id: "proposed", status: "active", scope, host_user_id: userId, team_id: boundary.team_id };
@@ -1106,7 +1111,10 @@ export async function applyRole(ctx: Ctx, userId: Id<"users">, boundary: Boundar
     provisioned = true;
   }
   // After the seat exists, so the seated session is never a candidate (R1).
-  const tookOver = takeoverPhrase(role.handle, await takeOverSessions(ctx, userId, role._id, { leave: p.leave_sessions }), true);
+  // A role whose seat is an adopt later in this proposal has none yet: the
+  // session to adopt would be filed as its hand and the adopt would refuse
+  // it, so the takeover waits for applyAdopt, which runs it.
+  const tookOver = opts.awaiting_adopt ? "" : takeoverPhrase(role.handle, await takeOverSessions(ctx, userId, role._id, { leave: p.leave_sessions }), true);
   return {
     status: "applied",
     note: `created @${role.handle} (${role.short_id})${seated ? `; ${seated} is its standing session, with its history and its helper sessions as they were` : provisioned ? ", standing session provisioned" : opts.awaiting_adopt ? `; its standing session is the adopt of ${opts.awaiting_adopt} in this proposal (skip that and provision from the role's page)` : ""}${tookOver ? `; ${tookOver}` : ""}`,

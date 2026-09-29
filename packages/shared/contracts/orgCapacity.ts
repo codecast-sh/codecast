@@ -34,7 +34,7 @@ export const ROLE_CAPACITY = {
   items_per_day: { value: 30, unit: "distinct work items that reached the role's frames (rows of its wake outbox), per day over 7 days", reason: "each changed item is one line the role reads at its next wake and holds until the item settles; the frame carries about thirty lines of facts, so past thirty a day the role reads counts, not items, and stops following any one thread" },
   decisions_per_day: { value: 4, unit: "decisions routed to the role, per day over 7 days", reason: "every routed decision is an immediate wake with a 5 minute hop deadline; past four a day the seat spends its attention on recommendations rather than direction and each new ask queues behind the last" },
   live_hands: { value: DEFAULT_ROLE_CAPS.hands_per_day, unit: "live hands, against the role's own hands cap (this default when it has none)", reason: "equals the role's hands cap; every hand reports a state line into the frame and asks for direction when it settles, and a person who raised a seat's cap has already said it may hold more" },
-  open_stalls: { value: 3, unit: "stalls the role must unstick: tasks stuck in review, hands that reported blocked or needs context this week, sessions of the role that have waited on a person past the session wait window with no escalation, and goals of the people who report to it that have stalled", reason: "a stall is a thread the role chases at every wake until it moves; past three at once one of them waits a day, and a day is the review stall window" },
+  open_stalls: { value: 3, unit: "stalls the role must unstick: tasks stuck in review, hands that reported blocked or needs context this week, sessions of the role that have waited past the session wait window without the role answering or raising it, and goals of the people who report to it that have stalled", reason: "a stall is a thread the role chases at every wake until it moves; past three at once one of them waits a day, and a day is the review stall window" },
   cap_hit_days: { value: 1, unit: "days in the last 7 the role hit its wake or token cap", reason: "one day at the cap is a spike; more than one in a week means the flow into the seat exceeds what its wakes let it read, and immediate wakes start being held" },
   direct_reports: { value: 5, unit: "child roles", reason: "each report's brief line is read every wake; past this the role manages managers, and that is a layer" },
   wake_load: { value: 0.7, unit: "of the wake cap (today, or the 7 day average)", reason: "a role that wakes this close to its cap has no headroom for an immediate wake" },
@@ -62,7 +62,7 @@ export const ROLE_LEDGER = {
 
 /** How many roles one person can answer for. */
 export const PERSON_SPAN = {
-  direct_roles: { value: 7, unit: "roles reporting straight to one person", reason: "each role escalates staffing and people questions to its person; above this, propose a layer" },
+  direct_roles: { value: 7, unit: "roles reporting straight to one person", reason: "each role raises what it cannot settle to its person, as its own card; above this, propose a layer" },
 } as const satisfies Record<string, CapacityThreshold>;
 
 /** How often the chart may move. A chart that changes every review never
@@ -106,7 +106,7 @@ export type RoleLoad = {
   hands_cap?: number;
   direct_reports: number;
   /** Tasks stuck in review past the stall window, hands that reported blocked or needs context this week,
-   *  and the role's sessions that waited on a person past the session wait window with no escalation. */
+   *  and the role's sessions that waited past the session wait window without the role answering or raising it. */
   open_stalls: number;
   /** Days in the last seven the role hit its wake or token cap. */
   cap_hit_days: number;

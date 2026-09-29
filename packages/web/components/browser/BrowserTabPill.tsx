@@ -96,7 +96,7 @@ export function BrowserTabPill({ tab }: { tab: BrowserTabRef }) {
       ? `The agent's tab is gone. Reopen ${tab.url} in the cast browser, as this session, and raise it.`
       : state.kind === "note"
         ? state.text
-        : `focus tab ${actions.tabId ?? tab.tabId} in the agent's browser${tab.url ? `\n${tab.url}` : ""}`;
+        : `focus ${actions.tabId ? `tab ${actions.tabId}` : "the tab this agent is driving"} in the agent's browser${tab.url ? `\n${tab.url}` : ""}`;
   return (
     <span className="inline-flex items-center gap-0.5 flex-shrink-0">
       <a

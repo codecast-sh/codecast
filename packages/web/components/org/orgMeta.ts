@@ -74,22 +74,22 @@ export const CHANGE_KIND_META: Record<OrgChange["kind"], { label: string; descri
   project_status: { label: "Projects to pause or close", describe: "Marks a project paused, finished or active again." },
   projects: { label: "New or merged projects", describe: "Creates a lasting area of work, or folds one into another." },
   file: { label: "Plans filed under a project", describe: "Puts a plan under the project it belongs to, so the agent looking after that project sees it." },
-  role: { label: "New standing agents", describe: "Adds a standing agent with a name and an area of work to look after." },
-  move: { label: "Reporting line changes", describe: "Moves a standing agent under a different person or agent, and can change what it looks after." },
-  scope: { label: "Area of work changes", describe: "Adds or removes the projects and plans a standing agent looks after." },
-  budget: { label: "Daily limit changes", describe: "Raises or lowers how much an agent may do in one day." },
-  trust: { label: "Starting work on its own", describe: "Turns on or off whether an agent starts work in its area without asking." },
-  routine: { label: "Scheduled routines", describe: "Gives an agent a job it runs on a schedule." },
-  project_meta: { label: "Project charters", describe: "Writes down what a project is for, who owns it, and how urgent it is." },
-  adopt: { label: "Sessions adopted as standing agents", describe: "Makes an existing session the standing session of an agent." },
-  retire: { label: "Agents retired", describe: "Closes a seat; its area falls back to the role that covers it, else its sessions to their owners." },
-  authority: { label: "Authority outside codecast", describe: "Lets an agent spend, publish, write or connect outside codecast, inside limits you set." },
-  hire: { label: "Hires from a template", describe: "Hires an agent from a template: its answers, its release and the project it will lead." },
-  upgrade: { label: "Template updates", describe: "Moves a hired agent to a newer release of its template." },
+  role: { label: "New roles", describe: "Adds a role with a name and an area to look after." },
+  move: { label: "Reporting changes", describe: "Moves a role under a different person or role, and can change what it looks after." },
+  scope: { label: "Area changes", describe: "Adds or removes the projects and plans a role looks after." },
+  budget: { label: "Daily limit changes", describe: "Raises or lowers how much a role may do in one day." },
+  trust: { label: "Starting work on its own", describe: "Turns on or off whether a role starts work in its area without asking." },
+  routine: { label: "New triggers", describe: "Gives a role a trigger that wakes it on a schedule." },
+  project_meta: { label: "What a project is for", describe: "Writes down what a project is for, who owns it, and how urgent it is." },
+  adopt: { label: "Sessions that become a role", describe: "Makes an existing session the role's own thread, so the role keeps what it knows." },
+  retire: { label: "Roles retired", describe: "Retires a role; its area falls back to the role that covers it, else its sessions to their owners." },
+  authority: { label: "Permissions outside codecast", describe: "Lets a role spend, publish, write or connect outside codecast, inside limits you set." },
+  hire: { label: "Hires from a template", describe: "Hires a role from a template: its answers, its version and the project it will lead." },
+  upgrade: { label: "Template updates", describe: "Moves a hired role to a newer version of its template." },
   // The company's goals (initiatives-projects-role-page.md "I1, revised").
   initiative: { label: "Goals to set", describe: "Sets a goal the company has not written down: its name, what reaching it looks like, the projects that carry it and who drives it." },
   initiative_projects: { label: "Projects added to a goal", describe: "Adds projects whose work serves a goal that exists and does not list them." },
-  initiative_owner: { label: "Owners for a goal", describe: "Names who drives a goal that has no owner: a person or an agent." },
+  initiative_owner: { label: "Owners for a goal", describe: "Names who drives a goal that has no owner: a person or a role." },
 };
 
 /** The kind's label, total: a kind this build does not know still reads as a
@@ -101,7 +101,7 @@ export function kindLabel(kind: string | undefined): string {
 /** The kind's one sentence, total, with the unknown kind named so the reader
  *  can quote it. */
 export function kindDescription(kind: string | undefined): string {
-  return CHANGE_KIND_META[kind as OrgChange["kind"]]?.describe ?? `This version of codecast does not know this kind of change${kind ? ` ("${kind}")` : ""}. Update, or ask the agent what it does.`;
+  return CHANGE_KIND_META[kind as OrgChange["kind"]]?.describe ?? `This version of codecast does not know this kind of change${kind ? ` ("${kind}")` : ""}. Update codecast, or ask the chief of staff what it does.`;
 }
 
 /** The one line a change reads as to a person (org-staffing.md S17). The
@@ -155,17 +155,17 @@ export const CHANGE_KIND_WORD: Record<OrgChange["kind"], string> = {
   file: "filing",
   role: "role",
   move: "move",
-  scope: "scope",
+  scope: "area",
   budget: "limit",
   trust: "switch",
-  routine: "routine",
+  routine: "trigger",
   project_meta: "charter",
   adopt: "adopt",
   retire: "retire",
   plan_status: "plan",
   task_status: "task",
   project_status: "project",
-  authority: "authority",
+  authority: "permission",
   hire: "hire",
   upgrade: "update",
   initiative: "goal",

@@ -28,9 +28,9 @@ describe("proposalTreeRows", () => {
     expect(row.detail).toBe("shipped on main");
   });
 
-  test("a role that takes over a session names it; no scope reads as the whole workspace", () => {
+  test("a role that takes over a session names it; no scope reads as no area of its own", () => {
     const [row] = proposalTreeRows(ORG_FIXTURE, [change("c-seat", 1, { kind: "role", name: "Funnel lead", handle: "funnel", seat: { existing: "jx7b88a", title: "Market growth mandate" } })]);
-    expect(row.detail).toBe("the whole workspace · from Market growth mandate");
+    expect(row.detail).toBe("no area of its own · from Market growth mandate");
   });
 
   test("against the tree: faces, parents, the move's origin, the unknown handle; a limit draws no row", () => {

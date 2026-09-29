@@ -258,7 +258,6 @@ export function programEndedOf(role: any, now: number, planById: Map<string, any
 export type HealthDecisions = {
   decisionsOf: Record<string, number>;
   latency: Record<string, number[]>;
-  escalations: Record<string, number>;
   decisionsTruncated: boolean;
   peopleWaiting: Record<string, { n: number; oldest_min: number | null }>;
 };
@@ -282,7 +281,6 @@ export async function readHealthDecisions(ctx: Ctx, teamId: Id<"teams"> | undefi
   const roleSet = new Set(roleIds.map(String));
   const decisionsOf: Record<string, number> = {};
   const latency: Record<string, number[]> = {};
-  const escalations: Record<string, number> = {};
   let decisionsTruncated = false;
   const inc = (m: Record<string, number>, k: string) => { m[k] = (m[k] ?? 0) + 1; };
   // Member by member (the asker's account), never the deployment's newest
@@ -299,7 +297,7 @@ export async function readHealthDecisions(ctx: Ctx, teamId: Id<"teams"> | undefi
           const note = typeof hop.note === "string" ? hop.note : "";
           if (note.startsWith("skipped")) continue; // a paused or retired seat: never woken
           inc(decisionsOf, rid);
-          if (note.startsWith("escalated")) { inc(escalations, rid); continue; }
+          if (note.startsWith("escalated")) continue; // a hop from before S28 that passed the question up: no latency sample
           let sampleMin: number | null = null;
           if (hop.recommendation !== undefined) sampleMin = (hop.at - d.created_at) / 60_000;
           else if (d.status === "answered") sampleMin = ((d.resolved_at ?? now) - d.created_at) / 60_000;
@@ -319,7 +317,7 @@ export async function readHealthDecisions(ctx: Ctx, teamId: Id<"teams"> | undefi
     }
     peopleWaiting[String(uid)] = { n: inbox.length, oldest_min: oldest === null ? null : Math.floor((now - oldest) / 60_000) };
   }
-  return { decisionsOf, latency, escalations, decisionsTruncated, peopleWaiting };
+  return { decisionsOf, latency, decisionsTruncated, peopleWaiting };
 }
 
 export type OrgHealth = Awaited<ReturnType<typeof computeOrgHealth>>;
@@ -368,9 +366,9 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
   });
 
   // The projects a narrower role covers, once: its scope names them directly
-  // or through one of their plans. A whole workspace scope is the root's view
-  // (the chief of staff, a role created with no scope), so it leaves the
-  // unowned signal alone: the remainder it holds is what needs an owner.
+  // or through one of their plans. The Chief of Staff's remainder is not
+  // ownership, and a role with no scope owns nothing (S26), so neither
+  // quiets the unowned signal: the remainder is what needs an owner.
   const coveredProjects = new Set<string>();
   for (const r of roles) {
     const ids = scopeIds(r.scope ?? { project_ids: [], plan_ids: [] });
@@ -588,7 +586,6 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
       /** Sessions filed under the seat inside the scan window, in any state. */
       hands_window: hands.length,
       median_recommend_min: median(dec.latency[rid] ?? []),
-      escalations_7d: dec.escalations[rid] ?? 0,
       done_7d: done7,
       handoffs_7d: handoffs,
       review_stalls: stalls,

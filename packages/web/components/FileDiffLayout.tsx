@@ -401,6 +401,7 @@ function FileTreeItem({
     <button
       ref={isSelected && selectedFileRef ? selectedFileRef as React.RefObject<HTMLButtonElement> : undefined}
       onClick={() => onSelect(node.path)}
+      data-diff-file={node.file ? node.file.originalFilename ?? node.file.filename : undefined}
       className={cn(
         "w-full flex items-center gap-2 py-1.5 px-2 text-sm transition-colors",
         isSelected
@@ -635,7 +636,9 @@ function FileHeaderName({
           {label}
         </Link>
       ) : (
-        <span className={cn("font-mono text-xs truncate min-w-0", className)}>{label}</span>
+        // data-diff-file: a surface that knows where the file lives (the
+        // conversation diff panel) gives the plain name a file menu.
+        <span data-diff-file={path} className={cn("font-mono text-xs truncate min-w-0", className)}>{label}</span>
       )}
       <CopyButton text={path} />
     </>

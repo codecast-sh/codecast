@@ -9,6 +9,12 @@ describe("brief scope and plans", () => {
     ];
     expect(briefScopeLine({ projects: [{ id: "p1", title: "Infra" }], plans })).toBe("project Infra, plan pl-x0 Loose 0, plan pl-x1 Loose 1, plan pl-x2 Loose 2, plan pl-x3 Loose 3, plan pl-x4 Loose 4, and 2 more plans");
   });
+  // Scope is opt in (org-staffing.md S26).
+  test("a role with no scope looks after no area; only the Chief of Staff reads as the whole workspace", () => {
+    expect(briefScopeLine({ projects: [], plans: [] }, "infra")).toBe("no area of its own");
+    expect(briefScopeLine({ projects: [], plans: [] })).toBe("no area of its own");
+    expect(briefScopeLine({ projects: [], plans: [] }, "chief-of-staff")).toContain("the whole workspace");
+  });
   test("only active plans with tasks are listed, a few at most", () => {
     const plan = (i: number, over: any = {}) => ({ short_id: `pl-${i}`, title: `P${i}`, status: "active", updated_at: i, progress: { total: 3, done: 1, in_progress: 1 }, ...over });
     const lines = briefPlanLines([...Array.from({ length: 10 }, (_, i) => plan(i)), plan(99, { progress: { total: 0, done: 0, in_progress: 0 } }), plan(98, { status: "draft" })]);

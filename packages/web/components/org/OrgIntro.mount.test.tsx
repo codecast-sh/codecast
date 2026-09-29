@@ -107,7 +107,7 @@ test("the first visit: faces, S20's five lines, the two actions, seen once", asy
   // One name for one thing: the screen, the card and the lines say organization.
   expect(intro.ORG_INTRO_TITLE).toBe("Meet your organization");
   expect(all).not.toMatch(/\bcompany\b/);
-  for (const must of ["organization has roles", "chief of staff", "proposes the roles", "You decide", "nothing changes until you accept", "only what needs you", "/cast-org"]) expect(all).toContain(must);
+  for (const must of ["organization has roles", "chief of staff", "proposes the roles", "You decide", "nothing changes until you accept", "Only what needs you", "raises in its own thread", "/cast-org"]) expect(all).toContain(must);
   // One title in the serif, one set of actions, nothing else to read.
   expect(q("[data-org-intro-title]")!.textContent).toBe(intro.ORG_INTRO_TITLE);
   expect(qa("[data-org-intro-actions] button").length).toBe(2);

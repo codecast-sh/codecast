@@ -340,6 +340,15 @@ export interface HostReport {
   /** The host's last tools check (~/.codecast/host-tools.json), when it is awake and has one. */
   tools?: HostToolsReport | null;
   toolsNote?: string;
+  /** The declared setup the host last applied (~/.codecast/host-setup.json) against what this repo declares now. */
+  setup?: { applied: { hash: string; at: string } | null; want: string; declared: boolean };
+}
+
+/** One line for the host's declared setup: applied and current, pending, or nothing declared. */
+export function hostSetupStatusLine(setup: NonNullable<HostReport["setup"]>): string {
+  const what = setup.declared ? "[host] from workspace.toml and ~/.codecast/host.toml" : "nothing declared beyond the tools step";
+  if (setup.applied?.hash === setup.want) return `in step: ${what} (applied ${setup.applied.at})`;
+  return `${setup.applied ? "changed since it was applied" : "not applied yet"}: ${what}; the next wake applies it, or cast hosts setup`;
 }
 
 export interface HostGitReport {
@@ -635,6 +644,7 @@ async function collectHostReport(host: CloudHost, convex: Convex, convexError?: 
   let mirrorNote: string | undefined;
   let tools: HostToolsReport | null | undefined;
   let toolsNote: string | undefined;
+  let setup: HostReport["setup"];
   if (live && address) {
     // The mirror stamp comes back verified against the disk (mirror/push.ts).
     const { readRemoteMirrorStamp } = await import("../cloud/mirror/push.js");
@@ -643,10 +653,20 @@ async function collectHostReport(host: CloudHost, convex: Convex, convexError?: 
     else mirror = stamp.value ?? null;
     // A short cap: a hung sshd must not stall the whole listing. One ssh for
     // both stamps, split on a marker line.
-    const stamps = await guard(() => ssh(toRemoteHost(current), "cat ~/.codecast/host-tools.json 2>/dev/null; echo; echo __CAST_MCP__; cat ~/.codecast/host-mcp-overrides.json 2>/dev/null", 5_000));
+    const stamps = await guard(() => ssh(toRemoteHost(current), "cat ~/.codecast/host-tools.json 2>/dev/null; echo; echo __CAST_MCP__; cat ~/.codecast/host-mcp-overrides.json 2>/dev/null; echo; echo __CAST_SETUP__; cat ~/.codecast/host-setup.json 2>/dev/null", 5_000));
     if (stamps.error) toolsNote = stamps.error;
     else {
-      const [toolsOut, mcpOut] = (stamps.value ?? "").split("__CAST_MCP__\n");
+      const [toolsAndMcp, setupOut] = (stamps.value ?? "").split("__CAST_SETUP__\n");
+      const [toolsOut, mcpOut] = (toolsAndMcp ?? "").split("__CAST_MCP__\n");
+      setup = await guard(async () => {
+        const { hostSpecHash, resolveHostSpec } = await import("../cloud/hostSetup.js");
+        const { remoteRepoPath } = await import("../remote/session-move.js");
+        const root = cwdGitRoot();
+        const spec = resolveHostSpec({ repoRoot: root });
+        let applied: { hash: string; at: string } | null = null;
+        try { applied = JSON.parse((setupOut ?? "").trim() || "null"); } catch { /* none */ }
+        return { applied, want: hostSpecHash(spec, root ? remoteRepoPath(toRemoteHost(current), root) : undefined), declared: spec.packages.length + spec.services.length + spec.run.length > 0 };
+      }).then((r) => r.value);
       tools = parseHostToolsStamp(toolsOut ?? "");
       // The MCP manifest rides beside the tools stamp: the summary line names the pinned servers.
       if (tools && (mcpOut ?? "").trim()) tools.mcpOverrides = parseHostMcpOverrides(mcpOut!);
@@ -681,6 +701,7 @@ async function collectHostReport(host: CloudHost, convex: Convex, convexError?: 
     ...(mirrorNote ? { mirrorNote } : {}),
     ...(tools !== undefined ? { tools } : {}),
     ...(toolsNote ? { toolsNote } : {}),
+    ...(setup ? { setup } : {}),
     git: hostGitReport(host),
     cost: {
       ...cost,
@@ -778,6 +799,10 @@ function printHostReport(r: HostReport, opts: { verbose?: boolean } = {}): void 
   const toolsBad = !!r.tools && (r.tools.missing.length > 0 || r.tools.unsupported.length > 0);
   console.log(`  tools      ${!r.tools ? fmt.muted(toolsLine) : toolsBad ? fmt.warning(toolsLine) : toolsLine}`);
   if (opts.verbose && r.tools) for (const l of hostToolsDetailLines(r.tools)) console.log(`    ${fmt.muted(l)}`);
+  if (r.setup) {
+    const line = hostSetupStatusLine(r.setup);
+    console.log(`  setup      ${r.setup.applied?.hash === r.setup.want ? line : fmt.warning(line)}`);
+  }
   console.log(`  cost       ${r.cost.line}`);
 }
 
@@ -1084,17 +1109,42 @@ export function buildHostsCommand(parent: Command): Command {
       }
     });
 
+  // What the app's Machines page shows about each host that only this laptop
+  // knows (AWS state, cost, images, logins held back). The daemon runs this in
+  // a child every 15 minutes and after each web action (cloud/hostReports.ts):
+  // its AWS calls block, so they never run on the daemon's loop.
+  hosts
+    .command("report", { hidden: true })
+    .option("--json", "One JSON array of { host_device_id, report }")
+    .action(async () => {
+      const { buildCloudHostReport } = await import("../cloud/hostReports.js");
+      const out = [];
+      for (const h of readHosts()) {
+        if (!h.deviceId) continue;
+        try { out.push({ host_device_id: h.deviceId, report: buildCloudHostReport(h, deviceId()) }); }
+        catch (err) { out.push({ host_device_id: h.deviceId, error: (err as Error).message }); }
+      }
+      console.log(JSON.stringify(out));
+    });
+
   hosts
     .command("image [id]")
     .description("Capture a prepared host as a machine image; cast hosts create then starts new hosts from it")
     .option("--list", "List this account's codecast images instead")
-    .action(async (id: string | undefined, o: { list?: boolean }) => {
+    .option("--delete <ami>", "Delete a saved image and its snapshot")
+    .action(async (id: string | undefined, o: { list?: boolean; delete?: string }) => {
       const h = pick(id, "no host registered");
       if (h.provider !== "aws") die("images are for AWS hosts");
       const { aws, createImageArgs, imageName, listImages } = await import("./image.js");
       const platform = h.platform ?? "linux";
       const opts = { region: h.region ?? "us-west-2", profile: h.profile };
       try {
+        if (o.delete) {
+          const { deleteImage } = await import("./image.js");
+          deleteImage(opts, o.delete);
+          console.log(`${OK} deleted ${o.delete} and its snapshot`);
+          return;
+        }
         if (o.list) {
           const images = listImages(opts, platform);
           if (!images.length) console.log(fmt.muted("  no codecast images yet"));
@@ -1123,7 +1173,9 @@ export function buildHostsCommand(parent: Command): Command {
         const { remoteRepoPath } = await import("../remote/session-move.js");
         const up = await ensureUp(h, say);
         const host = toRemoteHost(up);
-        const root = cwdGitRoot();
+        // Outside a repo (the daemon runs this for the app), the host's registered laptop checkout names the repo.
+        const { readProjectRegistrations } = await import("../cloud/mirror/projectRefresh.js");
+        const root = cwdGitRoot() ?? readProjectRegistrations(host).filter((p) => !p.retired).sort((a, b) => a.targetRoot.length - b.targetRoot.length)[0]?.sourceRoot;
         const { report, spec } = runHostSetup(host, { repoRoot: root, repoPath: root ? remoteRepoPath(host, root) : undefined, force: o.force });
         if (o.json) { console.log(JSON.stringify({ host: up.id, spec, ...report }, null, 2)); return; }
         console.log(`${report.ok ? OK : fmt.warning(icons.cross)} ${up.id}  ${describeHostSetup(report, spec)}`);
@@ -1212,7 +1264,7 @@ export function buildHostsCommand(parent: Command): Command {
       const { isCloudMirrorEnabled } = await import("../config/types.js");
       const { listScalewayHosts, remoteHome } = await import("../remote/session-move.js");
       const { readProjectRegistrations } = await import("../cloud/mirror/projectRefresh.js");
-      const { listCloudRemoteHosts, sshReachable } = await import("../browser/cloudHost.js");
+      const { reachableRemoteHosts } = await import("../browser/cloudHost.js");
       const config = (await import("../config/readLocalConfig.js")).readLocalConfig();
       if (!isCloudMirrorEnabled(config) && !o.dryRun) {
         die("the home mirror is off", "`cast config cloud_mirror_enabled true` to turn it on");
@@ -1259,9 +1311,7 @@ export function buildHostsCommand(parent: Command): Command {
         const r = await mirrorHomeToHost(toRemoteHost(up), { onProgress: say, force: true, takeOver: o.takeOver, config }).catch((err) => ({ pushed: false, reason: (err as Error).message, changed: 0, skipped: undefined, result: undefined, hash: undefined }));
         results.push({ host: up.id, outcome: describeOutcome(r), ok: r.pushed || r.skipped === "in step" });
       } else {
-        const candidates = [...listScalewayHosts(), ...listCloudRemoteHosts()];
-        const probes = await Promise.all(candidates.map((h) => sshReachable(h)));
-        const reachable = candidates.filter((_, i) => probes[i]);
+        const reachable = await reachableRemoteHosts(listScalewayHosts());
         if (!reachable.length) {
           if (o.json) { console.log("[]"); return; }
           die("no host is reachable right now", "`cast hosts sync <id>` wakes one; a sleeping host gets the mirror on its next wake");

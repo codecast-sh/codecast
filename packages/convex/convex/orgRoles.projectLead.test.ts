@@ -61,13 +61,23 @@ describe("performSetProjectLead", () => {
     expect(await scopeOf(db, growth._id)).toEqual([P]);
   });
 
-  test("a whole workspace role is never narrowed to the one project", async () => {
+  test("the Chief of Staff with no scope is never narrowed to the one project", async () => {
+    const db = fixtures();
+    const chief = await role(db, "chief-of-staff", []);
+    const out = await performSetProjectLead(ctxOf(db), ME as any, { project_id: P as any, role_id: String(chief._id) });
+    expect(out.scope).toBe("whole_workspace");
+    expect(await scopeOf(db, chief._id)).toEqual([]);
+    expect(String((await db.get(P)).owner_role_id)).toBe(String(chief._id));
+  });
+
+  // Scope is opt in (S26): any other role with no scope owns no work, so
+  // naming it a project's lead gives it that project.
+  test("a role with no scope gains the project it is named the lead of", async () => {
     const db = fixtures();
     const ops = await role(db, "ops", []);
     const out = await performSetProjectLead(ctxOf(db), ME as any, { project_id: P as any, role_id: String(ops._id) });
-    expect(out.scope).toBe("whole_workspace");
-    expect(await scopeOf(db, ops._id)).toEqual([]);
-    expect(String((await db.get(P)).owner_role_id)).toBe(String(ops._id));
+    expect(out.scope).toBe("added");
+    expect(await scopeOf(db, ops._id)).toEqual([P]);
   });
 
   test("a role under a parent that does not look after the project leads it and keeps its scope", async () => {
@@ -174,9 +184,9 @@ describe("performCoverProjects", () => {
     expect(await scopeOf(db, billing._id)).toEqual([Q]);
   });
 
-  test("a whole workspace owner keeps its whole workspace", async () => {
+  test("the Chief of Staff with no scope keeps the whole workspace", async () => {
     const db = fixtures();
-    const ops = await role(db, "ops", []);
+    const ops = await role(db, "chief-of-staff", []);
     const out = await performCoverProjects(ctxOf(db), ME as any, ops._id, [P, Q] as any);
     expect(out.skipped.map((x) => x.reason)).toEqual(["whole_workspace", "whole_workspace"]);
     expect(await scopeOf(db, ops._id)).toEqual([]);

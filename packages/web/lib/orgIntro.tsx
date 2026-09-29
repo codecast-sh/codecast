@@ -7,11 +7,11 @@ export type OrgIntroLine = { face: AvatarKey; text: string };
 
 /** S20's five sentences, in its order, each with the face that stands for it. */
 export const ORG_INTRO_LINES: readonly OrgIntroLine[] = [
-  { face: "fox", text: "**Roles.** Your organization has roles: agents that each keep watching one area of work, with a face, a boss, sessions that report to them and tasks they own." },
-  { face: "owl", text: "**A chief of staff** reads your workspace, commits, sessions, plans and tasks, and proposes the roles it needs. You decide, and nothing changes until you **accept**." },
-  { face: "bear", text: "**Only what needs you.** A role triages its own sessions and puts in front of you only what needs you, with **one line saying why**." },
+  { face: "fox", text: "**Roles.** Your organization has roles. Each one is an agent with a name and a face that looks after one area of work: it reports to someone, sessions report to it, and it owns the tasks in its area." },
+  { face: "owl", text: "**A chief of staff** reads your workspace, its commits, sessions, plans and tasks, and proposes the roles it needs. You decide, and nothing changes until you **accept**." },
+  { face: "bear", text: "**Only what needs you.** A role answers its own sessions. What it cannot settle it raises **in its own thread**, as one card in your inbox or a decision to answer." },
   { face: "hare", text: "**Talk and hover.** You can talk to any role from its page, and hover any role anywhere to see what it looks after." },
-  { face: "crane", text: "**From any session.** All of this works from any session too: type /cast-org." },
+  { face: "crane", text: "**From any session.** You can talk to the chief of staff from any session too: type /cast-org." },
 ];
 
 /** The line as plain words, emphasis marks dropped. */

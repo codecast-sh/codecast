@@ -3,6 +3,7 @@ import { sessionIdentity } from "./sessionIdentity";
 import { Archive, ArrowRightLeft, ArrowUp, Bot, CheckCircle2, CircleDot, Clock, Copy, CornerDownRight, Cpu, ExternalLink, EyeOff, FileText, Folder, Forward, GitBranch, Link, Moon, Pencil, Pin, PinOff, Play, RefreshCw, Square, Star, Tag, Trash2, User, CalendarDays, Plus, Smile } from "lucide-react";
 import { getShortcutsForAction, inputGuardBypass, isEditableTarget, matchShortcut, type ShortcutAction } from "../shortcuts/registry";
 import { canControlModel } from "./modelSwitch";
+import { canSwitchSessionAgent } from "./sessionControl";
 import { isForeignSession } from "./liveEntities";
 
 export type PaletteTargetType = "session" | "task" | "doc" | "plan" | "project" | "trigger";
@@ -47,10 +48,10 @@ export function paletteActions(type: PaletteTargetType | null, targets: any[], u
     const many = (one: string, several: string) => (single ? one : several.replace("#", String(n)));
     return [
       ...(single ? [
-        row("agent_switch", "Switch agent…", Bot, "a"),
+        ...(canSwitchSessionAgent(target.agent_type, target.session_id) ? [row("agent_switch", "Switch agent…", Bot, "a")] : []),
         row("agent_fork", "Fork session as…", GitBranch, "f"),
         row("agent_handoff", "Hand off to…", ArrowRightLeft, "t"),
-        ...(canControlModel(target.agent_type, (target.message_count ?? 0) === 0) ? [row("model", "Change model & effort…", Cpu, "m")] : []),
+        ...(canControlModel(target.agent_type, target.session_id) ? [row("model", "Change model & effort…", Cpu, "m")] : []),
         row("rename", "Rename session…", Pencil, "r", "session.rename"),
       ] : []),
       // Personifying is opt in, so the verb names what it does for a row that
@@ -150,6 +151,11 @@ export function paletteActionForKey(event: KeyboardEvent, actions: PaletteAction
 
 const PALETTE_MATCH = 1;
 const PALETTE_COMPOSE = 0.1;
+// Session filter completions: a value for a typed operator (`file:` → paths)
+// leads, since the operator alone searches nothing; an operator name for a
+// word that may just be text (`au` → author:) trails the real matches.
+const PALETTE_FILTER_VALUE = 2;
+const PALETTE_FILTER_NAME = 0.5;
 
 /** cmdk filter score: 0 hides, higher ranks first. cmdk then sorts groups by
  *  their best item, so a row that creates from the typed query (`__compose__`)
@@ -158,6 +164,8 @@ const PALETTE_COMPOSE = 0.1;
  *  the hit. */
 export function paletteItemScore(value: string, search: string): number {
   if (value.startsWith("__compose__")) return PALETTE_COMPOSE;
+  if (value.startsWith("__filter__v")) return PALETTE_FILTER_VALUE;
+  if (value.startsWith("__filter__o")) return PALETTE_FILTER_NAME;
   if (
     value.startsWith("__search__") ||
     value.startsWith("__recent__") ||

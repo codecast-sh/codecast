@@ -786,17 +786,85 @@ describe("review wave 1 regressions", () => {
     expect(await agreementHistoryForCategory(ctx, "scope", Date.now())).toEqual(new Map());
   });
 
-  test("escalate hands the row to the next eligible holder, not blindly to the person", async () => {
-    const { ctx, tables } = seed();
-    const s = await createStackCore(ctx, HOST, { title: "S", session_id: "sess-ask" });
-    const a = await askCore(ctx, { userId: HOST }, { session_id: "sess-ask", question: "Q", options: twoOptions, context_md: "ctx", category: "scope", stack: s.short_id });
-    await delegateStack(ctx, HOST, tables.decision_stacks[0], "org_roles_head" as any, NOW);
-    expect(tables.session_decisions[0].holder).toEqual({ kind: "role", id: "org_roles_head" });
-    // The lead escalates: the head (the stack's delegate) still holds it.
-    const { escalateCore } = await import("./sessionDecisions");
-    const r = await escalateCore(ctx, { userId: HOST }, { decision_id: a.short_id, session_id: "sess-lead" });
+  test("passing a decision up is a role's own ask now: the old verb is gone and its route says what to do instead", async () => {
+    expect((await import("./sessionDecisions")) as any).not.toHaveProperty("escalateCore");
+    const http = fs.readFileSync(path.join(__dirname, "http.ts"), "utf-8");
+    const route = http.slice(http.indexOf('cliRoute("/cli/decide/escalate"'), http.indexOf('cliRoute("/cli/decide/show"'));
+    expect(route).toContain("error:");
+    expect(route).not.toContain("runMutation");
+  });
+});
+
+// A request goes up the reporting line (org-staffing.md S28, ct-55574): a
+// decision from a session under a role is the role's to read first, and the
+// person's queue holds only what the lead that reports to them asks.
+describe("a decision goes up the reporting line", () => {
+  // Both roles seated, so each can be told: the lead on conversations_standing,
+  // the head (which reports to BOSS) on conversations_head.
+  async function seated() {
+    const world = seed();
+    const { ctx } = world;
+    await ctx.db.insert("anchors", { _id: "anchors_lead", conversation_id: "conversations_standing", status: "active" });
+    await ctx.db.insert("anchors", { _id: "anchors_head", conversation_id: "conversations_head", status: "active" });
+    await ctx.db.patch("org_roles_lead", { anchor_id: "anchors_lead" });
+    await ctx.db.patch("org_roles_head", { anchor_id: "anchors_head" });
+    await ctx.db.patch("conversations_standing", { org_role_id: "org_roles_head", anchor_id: "anchors_lead" });
+    await ctx.db.insert("conversations", { _id: "conversations_head", session_id: "sess-head", user_id: HOST, team_id: TEAM, message_count: 2, standing_role_id: "org_roles_head", anchor_id: "anchors_head" });
+    return world;
+  }
+  const linesIn = (tables: Record<string, any[]>, conv: string) => tables.pending_messages.filter((m) => m.conversation_id === conv).map((m) => String(m.content));
+
+  test("a lead's decision reaches the person it reports to, and is no message in its own thread", async () => {
+    const { ctx, tables } = await seated();
+    const r = await askApproach(ctx, "sess-head");
     expect(r.error).toBeUndefined();
-    expect(tables.session_decisions[0].holder).toEqual({ kind: "role", id: "org_roles_head" });
+    const row = tables.session_decisions[0];
+    // The host runs the seat; BOSS is who the role reports to.
+    expect(new Set(row.asked_user_ids)).toEqual(new Set([HOST, BOSS]));
+    expect(new Set(tables.decision_inbox.map((i) => i.user_id))).toEqual(new Set([HOST, BOSS]));
+    expect((await listForUserCore(ctx, BOSS, NOW)).map((d) => d._id)).toEqual([row._id]);
+    // Its ladder starts at its parent, which is a person: no role is on it.
+    expect(row.hops).toEqual([]);
+    expect(tables.pending_messages).toEqual([]);
+  });
+
+  test("a sub-lead's decision goes to its parent role's thread and no person's queue", async () => {
+    const { ctx, tables } = await seated();
+    const r = await askApproach(ctx, "sess-standing");
+    expect(r.error).toBeUndefined();
+    const row = tables.session_decisions[0];
+    expect(tables.decision_inbox).toEqual([]);
+    expect(row.hops.map((h: any) => h.role_id)).toEqual(["org_roles_head"]);
+    expect(linesIn(tables, "conversations_standing")).toEqual([]);
+    expect(linesIn(tables, "conversations_head").length).toBe(1);
+    // Whoever owns the seat may still answer the card in its thread.
+    expect(personMayResolve(row, OWNER2)).toBe(true);
+  });
+
+  test("a hand's decision wakes its role only; the role raises what needs a person", async () => {
+    const { ctx, tables } = await seated();
+    const r = await askApproach(ctx);
+    expect(r.error).toBeUndefined();
+    const row = tables.session_decisions[0];
+    expect(tables.decision_inbox).toEqual([]);
+    expect((await listForUserCore(ctx, BOSS, NOW)).map((d) => d._id)).toEqual([]);
+    const [line, ...more] = linesIn(tables, "conversations_standing");
+    expect(more).toEqual([]);
+    expect(line).toContain("sd-1");
+    expect(line).toContain("Keep the engine vendored?");
+    expect(line).not.toMatch(/escalat|ladder/i);
+    expect(linesIn(tables, "conversations_head")).toEqual([]);
+    expect(r.ladder.map((h: any) => [h.role_id, h.woken])).toEqual([["org_roles_lead", true], ["org_roles_head", false]]);
+    // The people above it may still answer on the card itself.
+    expect(personMayResolve(row, BOSS)).toBe(true);
+  });
+
+  test("a role that cannot be told does not hold the decision: it lands in the people's queue", async () => {
+    const { ctx, tables } = await seated();
+    await ctx.db.patch("org_roles_lead", { anchor_id: undefined });
+    await askApproach(ctx);
+    expect(new Set(tables.decision_inbox.map((i) => i.user_id))).toEqual(new Set([HOST, OWNER2, BOSS]));
+    expect(tables.pending_messages).toEqual([]);
   });
 });
 

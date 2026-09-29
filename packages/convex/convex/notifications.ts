@@ -1,5 +1,5 @@
 import { mutation, query, internalAction, internalMutation } from "./functions";
-import { routeUpWaitingSession } from "./agentTasks";
+import { routeUpHears, routeUpWaitingSession } from "./agentTasks";
 import {
   openTasksVouchForWaiting,
   isAssignedAwayFromOwnerSet,
@@ -854,24 +854,33 @@ export async function performNeedsInputCheck(
   if (boundary) return { notified: false, reason: "session_boundary" };
 
   // The route up (org-staffing.md S28). A hand (a session that reports to a
-  // role) that is HARD blocked, or declared itself blocked, tells its role at
-  // once: the role, not the person, is the first reader of a stalled hand. A
-  // role's standing session that is blocked the same way tells the role it
-  // reports to; one that reports to a person is its own card in that
-  // person's inbox (the anchor rule in placeInboxRow), so it tells nobody.
-  // What it tells is the role's needs-input trigger, fired once per waiting
-  // episode (agentTasks.routeUpWaitingSession).
+  // role) that ends a turn needing input tells its role at once, however it
+  // asks: an open prompt, a dead process, a declared block, a question in
+  // prose. The role, not the person, is its first reader. A role's standing
+  // session tells the role it reports to the same way; one that reports to a
+  // person is its own card in that person's inbox (the anchor rule in
+  // placeInboxRow), so it tells nobody. What it tells is the role's
+  // needs-input trigger, fired once per ask (agentTasks.routeUpWaitingSession).
+  // A role that cannot be told (its trigger paused or cancelled, no standing
+  // session, the org off) is no reader at all: `unheard` sends the settle on
+  // to the person's own notify below, so the wait is never swallowed.
+  let unheard = false;
   if ((conv.org_role_id || conv.standing_role_id) && state === "needs_input") {
     const kind = needsInputKind({ awaitingInput, agentStatus, isUnresponsive: activity.isUnresponsive });
     const declared = conv.thread_state_status === "blocked";
     const stuck = awaitingInput || kind === "permission_blocked" || kind === "stopped" || kind === "unresponsive";
-    // The word the trigger's run carries: the machine's kind when the
-    // machine is stuck, else the session's own declaration.
+    // A stall or a declared block is certain now. A plain turn is not yet: a
+    // finished turn lands here too, so it waits for the settle classifier,
+    // which fires the route up on a needs-input verdict
+    // (idleSummary.setIdleSummary). Only whether anyone can hear is known now.
     if (stuck || declared) {
-      await routeUpWaitingSession(ctx, conv, {
-        why: stuck ? kind ?? "waiting" : "blocked",
+      unheard = (await routeUpWaitingSession(ctx, conv, {
+        why: stuck ? kind : "blocked",
         since: (stuck ? session?.agent_status_updated_at : conv.thread_state_at) ?? lastMsg?.timestamp ?? now,
-      });
+        stuck,
+      })) === "unreachable";
+    } else {
+      unheard = (await routeUpHears(ctx, conv)) === "unreachable";
     }
   }
 
@@ -901,7 +910,7 @@ export async function performNeedsInputCheck(
   // chimes like any session waiting on them.
   // A role's standing session that reports to a role rides that role's card
   // the same way (S28), so it rings nobody either.
-  if (conv.org_role_id) {
+  if (conv.org_role_id && !unheard) {
     return { notified: false, reason: "under_role" };
   }
   // ── Push etiquette (chime only) ────────────────────────────────────────────

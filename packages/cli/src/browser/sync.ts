@@ -14,6 +14,7 @@
  * answer carries counts.
  */
 
+import { awaitCommandOutcome } from "../cloud/askLaptop.js";
 import { OWN_LOGIN_REASON, provisionLocalLogins } from "./credentials.js";
 import { readState, type InstanceState } from "./instance.js";
 import { loadSitePolicy } from "./policy.js";
@@ -178,29 +179,26 @@ export async function runBrowserSync(url: string | undefined, o: SyncOptions, de
     return 0;
   }
 
-  const sleep = deps.sleep ?? ((ms) => new Promise<void>((r) => setTimeout(r, ms)));
   const now = deps.now ?? Date.now;
-  const deadline = now() + wait * 1000;
-  for (;;) {
-    const row = await client.query(api.cloud.commandOutcome, { api_token: token, command_id: asked.command_id });
-    if (row?.executed_at) {
-      if (row.error) {
-        const why = explainSyncFailure(row.error);
-        err(`${BAD} ${why.message}`);
-        if (why.hint) err(`  ${fmt.muted(why.hint)}`);
-        note();
-        return 1;
-      }
-      let r: { ok?: boolean } & CarryCounts = {};
-      try {
-        r = JSON.parse(row.result ?? "{}");
-      } catch { /* an older laptop's bare result */ }
-      out(carryResultLine(r, label, via));
+  const row = await awaitCommandOutcome(
+    (id) => client.query(api.cloud.commandOutcome, { api_token: token, command_id: id }),
+    asked.command_id, now() + wait * 1000, { sleep: deps.sleep, now, pollMs: POLL_MS },
+  );
+  if (row) {
+    if (row.error) {
+      const why = explainSyncFailure(row.error);
+      err(`${BAD} ${why.message}`);
+      if (why.hint) err(`  ${fmt.muted(why.hint)}`);
       note();
-      return 0;
+      return 1;
     }
-    if (now() >= deadline) break;
-    await sleep(POLL_MS);
+    let r: { ok?: boolean } & CarryCounts = {};
+    try {
+      r = JSON.parse(row.result ?? "{}");
+    } catch { /* an older laptop's bare result */ }
+    out(carryResultLine(r, label, via));
+    note();
+    return 0;
   }
   err(`${BAD} no answer from ${via} yet; the request stays valid for 5 minutes and a late carry is harmless (the same cookies are a no-op) — rerun to check`);
   note();

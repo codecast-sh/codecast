@@ -327,11 +327,16 @@ export class TaskScheduler {
         // since the last run); machine wakes only — an interactive turn means
         // the human is looking, and stale state is worse than none. Fails
         // open: unreadable filing → say nothing.
-        const filing = await this.syncService.getSessionFiling(task.originating_conversation_id.toString());
+        // The server builds the frame every trigger path delivers (the role's
+        // card, the trigger pill, the stashed note); the local wrap below
+        // stands in only when it cannot answer (an older server).
+        const serverFrame = await this.syncService.getInjectFrame?.(task._id.toString());
+        const filing = serverFrame ? null : await this.syncService.getSessionFiling(task.originating_conversation_id.toString());
         const filingNote = filing === "stashed"
           ? `\n\nThis session is STASHED: the user will not see this run or its output. End your turn with cast state --status done|dormant to stay quietly out of their inbox; declare --status blocked ONLY if a human must act — that returns the session to their inbox.`
           : "";
-        const wrappedPrompt = `<scheduled-task title="${safeTitle}" task-id="${task._id}">${[task.prompt, triggerLifecycleInstructions(task)].filter(Boolean).join("\n\n")}${filingNote}</scheduled-task>`;
+        const wrappedPrompt = serverFrame
+          ?? `<scheduled-task title="${safeTitle}" task-id="${task._id}">${[task.prompt, triggerLifecycleInstructions(task)].filter(Boolean).join("\n\n")}${filingNote}</scheduled-task>`;
         // The injected message becomes a user-row in the messages table once
         // the agent's JSONL is parsed. The UI detects the <scheduled-task>
         // wrapper and renders it as a ScheduledTaskBlock, so we must not

@@ -11,10 +11,10 @@ export function buildOrgTemplateCommand(draft: TemplateDraft, projects: Template
   const projectPath = draft.projectPath.trim();
   const folder = draft.folder.trim();
   const absolutePath = (path: string) => path.startsWith("/") && path !== "/" && !/[\x00-\x1f\x7f]/.test(path);
-  if (!absolutePath(projectPath)) return { error: "Enter an absolute project checkout path on the host, starting with /." };
-  if (!absolutePath(folder)) return { error: "Enter an absolute template folder path on the same host, starting with /." };
+  if (!absolutePath(projectPath)) return { error: "Enter the full path of the project's folder on the machine that will run it, starting with /." };
+  if (!absolutePath(folder)) return { error: "Enter the full path of the template's folder on the same machine, starting with /." };
   const instance = draft.instance.trim();
-  if (!/^[a-z][a-z0-9-]{0,47}$/.test(instance)) return { error: "Name the instance with a lowercase letter, then letters, numbers or hyphens (up to 48 characters)." };
+  if (!/^[a-z][a-z0-9-]{0,47}$/.test(instance)) return { error: "Start the name with a lowercase letter, then letters, numbers or hyphens (up to 48 characters)." };
   const quote = (value: string) => `'${value.replace(/'/g, `'"'"'`)}'`;
   const workspaceFlag = workspace.kind === "team" ? `--team ${quote(workspace.id)}` : "--personal";
   return { command: `cd -- ${quote(projectPath)} &&\ncast org template inspect ${quote(folder)} &&\ncast org template install ${quote(folder)} --project ${quote(project._id)} --instance ${quote(instance)} ${workspaceFlag}` };

@@ -25,7 +25,7 @@ import { cleanTitle } from "../lib/conversationProcessor";
 import { AvatarImg } from "../lib/avatarCache";
 import { canControlModel, modelOptionKey } from "../lib/modelSwitch";
 import { commitModelChange } from "../lib/modelSwitchWeb";
-import { AGENT_LAUNCH_OPTIONS, AGENT_MODEL_CONFIG, modelAgentKey, dynamicModelOption, canSessionBecomeAgent, type ConvexAgentType } from "@codecast/shared/contracts";
+import { AGENT_LAUNCH_OPTIONS, AGENT_MODEL_CONFIG, modelAgentKey, dynamicModelOption, canSessionBecomeAgent, listedModels, type ConvexAgentType } from "@codecast/shared/contracts";
 import { useDynamicModels } from "../hooks/useDynamicModels";
 import { useDevices, deviceDisplayName, deviceWakesOnUse } from "./DeviceBadge";
 import { useBulkMoveSessions } from "../hooks/useBulkMoveSessions";
@@ -53,6 +53,9 @@ import { compactDuration, teammateWhereabouts, type TeammateWhereabouts } from "
 import { MemberFace } from "./presence/MemberFace";
 import { useMissingSessionRow } from "../hooks/useMissingSessionRow";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
+import { useSessionQuerySuggestions } from "../hooks/useSessionQuerySuggestions";
+import { SessionQuerySuggestionRow } from "./SessionQuerySuggestList";
+import { applySessionQueryCompletion, parseSessionQuery, sessionQuerySearches } from "@codecast/shared/search";
 import { useCollectionRows } from "../hooks/useCollectionRows";
 import { triggerSig, useSyncTriggers } from "../hooks/useSyncTriggers";
 import { POP_OUT_PEOPLE_TITLE, isElectron, isPeopleWindow } from "../lib/desktop";
@@ -803,7 +806,7 @@ export function ActionSubmenu({
       // searches the device's full inventory below.
       const models = dynamicModels.dynamic
         ? [cfg.models[0], ...dynamicModels.featured]
-        : cfg.models;
+        : listedModels(cfg);
       for (const m of models) {
         rows.push({ key: `model:${m.key}`, label: m.label, sub: m.hint, active: m.key === curModelKey, icon: Cpu });
       }
@@ -1772,9 +1775,15 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // whole palette into its ErrorBoundary (ct-37627). The breaker unsubscribes a
   // never-resolving search so its silent retry loop stops flapping the shared
   // websocket (1011) for the rest of the app.
+  // A lone operator being typed (`pr:`) searches nothing; its completions
+  // answer instead.
+  const sessionSearchOn = useMemo(
+    () => debouncedQuery.length >= 2 && sessionQuerySearches(parseSessionQuery(debouncedQuery)),
+    [debouncedQuery],
+  );
   const { data: searchResults, error: searchError } = useQueryNoThrow(
     api.conversations.searchConversations,
-    open && debouncedQuery.length >= 2 ? { query: debouncedQuery, limit: 10 } : "skip",
+    open && sessionSearchOn ? { query: debouncedQuery, limit: 10 } : "skip",
     { breakAfterMs: 15_000 }
   );
   const searchData = searchResults && "results" in searchResults ? searchResults : null;
@@ -1783,7 +1792,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // content search resolves — so the user always gets something (ct-37627).
   const { data: titleResults } = useQueryNoThrow(
     api.conversations.searchConversationTitles,
-    open && debouncedQuery.length >= 2 ? { query: debouncedQuery, limit: 10 } : "skip"
+    open && sessionSearchOn ? { query: debouncedQuery, limit: 10 } : "skip"
   );
   const titleData = titleResults && "results" in titleResults ? titleResults : null;
   const searchRows = useMemo(
@@ -2007,6 +2016,14 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     const q = query.trim();
     navigate(q ? `/search?q=${encodeURIComponent(q)}` : "/search");
   }, [query, navigate]);
+
+  // Session filter autocomplete (file:, pr:, label: ...), the same rows the
+  // /search box offers. A value list outranks every match (a dangling
+  // operator searches nothing yet); operator names sit below real matches,
+  // since the word may just be text (paletteItemScore reads the kind).
+  const { completion: filterCompletion, suggestions: filterSuggestions } = useSessionQuerySuggestions(
+    !picking && !drilled ? query : "",
+  );
 
   const openVaultNote = useCallback((path: string) => {
     useVaultStore.getState().noteOpened(path);
@@ -2276,7 +2293,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       : action.key === "priority" ? PRIORITY_OPTIONS
       : action.key === "type" ? DOC_TYPE_OPTIONS
       : action.key === "plan_status" ? PLAN_STATUS_OPTIONS
-      : action.key === "model" ? AGENT_MODEL_CONFIG[modelAgentKey(target?.agent_type)]?.models ?? []
+      : action.key === "model" ? listedModels(AGENT_MODEL_CONFIG[modelAgentKey(target?.agent_type)] ?? { models: [] })
       : [];
     return options.filter(option => action.key !== "agent_switch" || option.key !== `agent:${target?.agent_type || "claude_code"}`).filter((option: any) => (action.key !== "agent_switch" && action.key !== "agent_fork") || canSessionBecomeAgent(option.agentType, target?.message_count)).filter(option => `${action.label} ${option.label}`.toLowerCase().includes(query.toLowerCase()) || query.toLowerCase().split(/\s+/).every(word => `${action.label} ${option.label}`.toLowerCase().includes(word))).map(option => ({ action, option }));
   }).slice(0, 8);
@@ -2300,6 +2317,22 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
 
   const groupClass = "px-1.5 [&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-widest [&_[cmdk-group-heading]]:text-sol-text-dim/70";
   const itemClass = "flex items-center gap-3 px-2.5 py-2 mx-1 rounded-lg text-sm text-sol-text-muted cursor-pointer transition-colors data-[selected=true]:bg-sol-cyan/10 data-[selected=true]:text-sol-text";
+  const filterGroup = filterCompletion && filterSuggestions.length > 0 && (
+    <CommandPrimitive.Group heading="Filter sessions" className={groupClass}>
+      {filterSuggestions.map((s) => (
+        <CommandPrimitive.Item
+          key={s.text}
+          value={`__filter__${filterCompletion.kind === "value" ? "v" : "o"} ${s.text}`}
+          data-palette-action="complete"
+          onSelect={() => setQuery(applySessionQueryCompletion(query, filterCompletion, s.text).value)}
+          className={itemClass}
+        >
+          <Search className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+          <SessionQuerySuggestionRow s={s} />
+        </CommandPrimitive.Item>
+      ))}
+    </CommandPrimitive.Group>
+  );
 
   // Action submenu mode. The workspace modes ("view", layout CRUD) are global,
   // so they need no target entity — and show no entity header. The `open` check
@@ -2551,6 +2584,8 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
             No results found.
           </CommandPrimitive.Empty>
         )}
+
+        {filterCompletion?.kind === "value" && filterGroup}
 
         {(["person", "role"] as const).map((kind) => {
           const rows = whoRows.filter((r) => r.kind === kind);
@@ -2889,7 +2924,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         )}
 
         {/* Async conversation search results */}
-        {debouncedQuery.length >= 2 && pickAllows("session") && (
+        {sessionSearchOn && pickAllows("session") && (
           <CommandPrimitive.Group
             heading={searchData || titleData ? `Search Results (${searchRows.length})` : searchError ? "Search Results" : "Searching..."}
             className={groupClass}
@@ -2969,7 +3004,10 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">
                   {result.titleMatch
                     ? "title"
-                    : `${result.matches?.length || 0} match${(result.matches?.length || 0) !== 1 ? "es" : ""}`}
+                    : result.matches?.length
+                    ? `${result.matches.length} match${result.matches.length !== 1 ? "es" : ""}`
+                    // An operator-only query (file:, pr:, ...) matches the session, not a message.
+                    : "filter"}
                 </span>
                 <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{timeAgo(result.updatedAt)}</span>
               </CommandPrimitive.Item>
@@ -3550,6 +3588,11 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
             )}
           </CommandPrimitive.Group>
         )}
+
+        {/* Operator names trail everything and, like compose, wait for the
+            search to answer: cmdk preselects the first row it registers,
+            and a word that may be plain text must not be completed by Enter. */}
+        {filterCompletion?.kind === "operator" && !searchAwaiting && filterGroup}
       </CommandPaletteList>
 
       <div className="px-3 py-2 border-t border-sol-border/60 flex items-center justify-between text-[10px] text-sol-text-dim bg-sol-bg-alt/40">

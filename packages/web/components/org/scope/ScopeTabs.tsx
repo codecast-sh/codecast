@@ -1,9 +1,8 @@
 "use client";
 // The scope page's store-fed tabs (docs/architecture/scopes-and-feed.md F3):
-// plans, pages, sessions and decisions in scope, painted from the local store
-// and the org tree, plus the brief and charter documents.
+// plans, pages, sessions and decisions in the role's area, painted from the
+// local store and the org tree, plus the role's notes and its charter.
 import { useCallback, useMemo, useState } from "react";
-import { ShortId } from "../../ShortId";
 import Link from "next/link";
 import { CheckSquare, ExternalLink, Layers, MessageCircleQuestionMark } from "lucide-react";
 import { useWorkspaceCollection } from "../../../hooks/useWorkspaceCollection";
@@ -56,7 +55,7 @@ export function ScopePlansTab({ ids }: { ids: ScopeIds }) {
   const plans = useWorkspaceCollection<PlanItem>("plans");
   const now = useCoarseNow(30_000);
   const rows = useMemo(() => plans.filter((p) => ids.whole || ids.planIds.includes(p._id)).sort((a, b) => ((b as any).updated_at ?? 0) - ((a as any).updated_at ?? 0)), [plans, ids]);
-  if (rows.length === 0) return <Empty title="No plans in this scope." hint="Add a plan or a project to the scope in Settings." />;
+  if (rows.length === 0) return <Empty title="No plans here yet." hint="Add a plan or a project to its area in Settings." />;
   return (
     <ul className="space-y-1">
       {rows.map((p) => {
@@ -70,7 +69,7 @@ export function ScopePlansTab({ ids }: { ids: ScopeIds }) {
               <Layers className="w-4 h-4 shrink-0" style={{ color: "var(--sol-magenta)" }} />
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[13px] font-medium" style={{ color: "var(--sol-text)" }}>{p.title}</span>
-                <span className="block truncate text-[10.5px] mt-[1px]" style={{ color: "var(--sol-text-dim)", fontFamily: "var(--font-mono)" }}>{p.short_id} · {p.status}{pr ? ` · ${pr.done}/${pr.total} done` : ""}</span>
+                <span className="block truncate text-[10.5px] mt-[1px]" style={{ color: "var(--sol-text-dim)", fontFamily: "var(--font-mono)" }}>{p.status}{pr ? ` · ${pr.done} of ${pr.total} done` : ""}</span>
               </span>
               {pr && pr.total > 0 && (
                 <span className="hidden sm:flex items-center gap-2 shrink-0">
@@ -95,7 +94,7 @@ export function ScopeDocsTab({ ids }: { ids: ScopeIds }) {
   const docs = useWorkspaceCollection<DocItem>("docs");
   const now = useCoarseNow(30_000);
   const rows = useMemo(() => docs.filter((d) => inScope(ids, d as any) && !(d as any).parent_id).sort((a, b) => b.updated_at - a.updated_at), [docs, ids]);
-  if (rows.length === 0) return <Empty title="No pages in this scope." hint="Pages filed under a project or plan in scope show here." />;
+  if (rows.length === 0) return <Empty title="No pages here yet." hint="Pages filed under one of its projects or plans show here." />;
   return <ul className="space-y-1">{rows.map((d) => <li key={d._id}><DocRow d={d} now={now} /></li>)}</ul>;
 }
 
@@ -108,7 +107,7 @@ function RoleSessionsPage({ roleId, teamId, cursor, onPage }: { roleId: string; 
   return null;
 }
 
-/** One hand (F4.3): its title, its one line state, its age, and its task's
+/** One session under the role (F4.3): its title, its one line state, its age, and its task's
  *  open and closed subtask counts when it is bound to a task that has them. */
 export function HandRow({ s, stateLine, task, progress, now, onOpen }: {
   s: OrgSession;
@@ -128,8 +127,8 @@ export function HandRow({ s, stateLine, task, progress, now, onOpen }: {
         <span className="block truncate text-[12.5px] font-medium" style={{ color: "var(--sol-text)" }}>{s.title || "Untitled"}</span>
         <span className="block truncate text-[11px] mt-[1px]" style={{ color: stateLine ? "var(--sol-text-muted)" : "var(--sol-text-dim)" }} data-hand-line>{stateLine ?? m.label}</span>
         {task && (
-          <span className="block truncate text-[10.5px] mt-[1px]" style={{ color: "var(--sol-text-dim)", fontFamily: "var(--font-mono)" }} data-hand-task={task.short_id}>
-            {task.short_id} · {task.title}
+          <span className="block truncate text-[10.5px] mt-[1px]" style={{ color: "var(--sol-text-dim)" }} data-hand-task={task.short_id}>
+            {task.title}
           </span>
         )}
       </span>
@@ -264,7 +263,7 @@ export function ScopeSessionsTab({ tree, role, scope, hands }: { tree: OrgTree; 
       )}
       {role && scope && (
         <section className="mt-6">
-          <h3 className="px-2.5 mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>In scope · bound to a task or plan here, or on a scope project's path</h3>
+          <h3 className="px-2.5 mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Also working in its area</h3>
           <ScopeFeed scope={scope} lockKinds={["session"]} />
         </section>
       )}
@@ -301,7 +300,7 @@ export function ScopeDecisionsTab({ ids, roleId }: { ids: ScopeIds; roleId?: str
     return { open, answered, stacks, ladder };
   }, [tasks, decisions, ids, stackRows, ladderRows]);
   const taskById = useMemo(() => new Map(tasks.map((t) => [t._id, t])), [tasks]);
-  if (open.length === 0 && answered.length === 0 && stacks.length === 0 && ladder.length === 0) return <Empty title="No decisions on tasks in this scope." hint="A cast decide raised from a session bound to a task in scope shows here, open first." />;
+  if (open.length === 0 && answered.length === 0 && stacks.length === 0 && ladder.length === 0) return <Empty title="No decisions here yet." hint="When a session working in its area asks for a decision, it shows here, open ones first." />;
   const Row = ({ d }: { d: SessionDecisionItem & { short_id?: string; task_id?: string } }) => {
     const tone = DECISION_TONE[d.status] ?? "var(--sol-text-dim)";
     const task = d.task_id ? taskById.get(d.task_id) : undefined;
@@ -314,10 +313,9 @@ export function ScopeDecisionsTab({ ids, roleId }: { ids: ScopeIds; roleId?: str
           <span className="min-w-0 flex-1">
             <span className="block text-[13px] font-medium leading-snug line-clamp-2" style={{ color: "var(--sol-text)" }}>{d.question}</span>
             <span className="mt-[3px] flex items-center gap-1.5 text-[10.5px] min-w-0" style={{ color: "var(--sol-text-dim)" }}>
-              <ShortId id={d.short_id} />
               <span className="px-1.5 h-[16px] inline-flex items-center rounded-md border" style={{ borderColor: `color-mix(in srgb, ${tone} 45%, transparent)`, color: tone }}>{d.status}</span>
               {d.blocking && d.status === "pending" && <span style={{ color: "var(--sol-yellow)" }}>blocking</span>}
-              {task && <span className="truncate inline-flex items-center gap-1"><CheckSquare className="w-3 h-3" />{task.short_id} {task.title}</span>}
+              {task && <span className="truncate inline-flex items-center gap-1"><CheckSquare className="w-3 h-3" />{task.title}</span>}
               {answer && <span className="truncate">→ {answer}</span>}
             </span>
           </span>
@@ -336,7 +334,7 @@ export function ScopeDecisionsTab({ ids, roleId }: { ids: ScopeIds; roleId?: str
       )}
       {ladder.length > 0 && (
         <section data-scope-ladder>
-          <h3 className="px-2.5 mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>On this role's ladder · {ladder.length}</h3>
+          <h3 className="px-2.5 mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Waiting on this role · {ladder.length}</h3>
           <div className="space-y-2">{ladder.map((d) => <DecisionCompactCard key={d._id} decision={d} />)}</div>
         </section>
       )}
@@ -416,7 +414,7 @@ export function BriefFactsBlock({ facts, roleHandle }: { facts: BriefFacts; role
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[12.5px] font-medium" style={{ color: "var(--sol-text)" }}>{h.title || "Untitled"}</span>
                     <span className="block truncate text-[11px]" style={{ color: "var(--sol-text-muted)" }}>{h.state_line ?? "no state pinned"}</span>
-                    {h.task && <span className="block truncate text-[10.5px] mt-[1px]" style={{ color: "var(--sol-text-dim)", fontFamily: "var(--font-mono)" }}>{h.task.short_id} · {h.task.status}{h.task.review_verdict ? ` · ${h.task.review_verdict}` : ""}</span>}
+                    {h.task && <span className="block truncate text-[10.5px] mt-[1px]" style={{ color: "var(--sol-text-dim)" }}>{h.task.title} · {h.task.status.replace(/_/g, " ")}{h.task.review_verdict ? ` · ${h.task.review_verdict}` : ""}</span>}
                   </span>
                   <span className="text-[10.5px] tabular-nums shrink-0" style={{ color: "var(--sol-text-dim)" }}>{compactAge(now - h.updated_at)}</span>
                 </button>
@@ -451,10 +449,8 @@ export function BriefFactsBlock({ facts, roleHandle }: { facts: BriefFacts; role
   );
 }
 
-/** The Brief tab: the viewer's goals when they report to the role (R6), a
- *  template role's sections (org-hire.md H11), the facts, then the narrative.
- *  The goals and the sections are brief content, so they read here, one tab
- *  from the briefing (F5). */
+/** The role's notes, under the Overview's fold: the facts it reads, then the
+ *  notes in its own words. */
 export function ScopeBriefTab({ role, facts, factsProblem, narrative, canEdit, backHref, goals, template }: { role: OrgRole; facts: BriefFacts | null; factsProblem: string | null; narrative: string; canEdit: boolean; backHref: string; goals?: React.ReactNode; template?: React.ReactNode }) {
   return (
     <div className="space-y-5">
@@ -466,16 +462,16 @@ export function ScopeBriefTab({ role, facts, factsProblem, narrative, canEdit, b
       )}
       {template}
       {facts ? <BriefFactsBlock facts={facts} roleHandle={role.handle} /> : (
-        <p className="px-1 text-[12px]" style={{ color: "var(--sol-text-dim)" }}>{factsProblem ?? "Facts load when the connection returns."}</p>
+        <p className="px-1 text-[12px]" style={{ color: "var(--sol-text-dim)" }}>{factsProblem ?? "Its numbers show here once they load."}</p>
       )}
       <section>
-        <h3 className="px-1 mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Narrative · the role's own words</h3>
+        <h3 className="px-1 mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>In its own words</h3>
         {role.brief_doc_id ? (
           <RoleDoc docId={role.brief_doc_id} editable={canEdit} backHref={backHref} />
         ) : narrative ? (
           <div className="rounded-xl border px-4 py-3" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 30%, transparent)", background: "var(--sol-card)" }}><MarkdownRenderer content={narrative} /></div>
         ) : (
-          <Empty title="No brief yet." hint="The role writes its brief with cast brief edit at the end of a turn that changed its understanding. Provision a standing session first." />
+          <Empty title="No notes yet." hint="The role writes its notes as it works; they show here after it has started." />
         )}
       </section>
     </div>
@@ -486,8 +482,7 @@ export function ScopeCharterTab({ role, charter, canEdit, backHref, onUpdateChar
   if (role.charter_doc_id) return <RoleDoc docId={role.charter_doc_id} editable={canEdit} backHref={backHref} />;
   return (
     <div className="rounded-xl border px-4 py-3" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 30%, transparent)", background: "var(--sol-card)" }}>
-      <p className="text-[11.5px] mb-2" style={{ color: "var(--sol-text-dim)" }}>The charter is the humans' statement of what this seat owns. It becomes a document when the role's standing session is provisioned.</p>
-      <InlineEdit canEdit={canEdit} multiline value={charter} placeholder="What this seat owns, in a sentence or two." onSave={onUpdateCharter} className={cn("text-[13px] leading-relaxed")} style={{ color: "var(--sol-text-secondary)" }} />
+            <InlineEdit canEdit={canEdit} multiline value={charter} placeholder="What this role is for, in a sentence or two." onSave={onUpdateCharter} className={cn("text-[13px] leading-relaxed")} style={{ color: "var(--sol-text-secondary)" }} />
     </div>
   );
 }

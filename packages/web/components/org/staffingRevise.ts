@@ -10,7 +10,7 @@ import type { OrgChangeRevision, OrgProposalChange, OrgProposalRow } from "./org
 export type ProposalThreadRef = {
   conversationId: string;
   shortId?: string;
-  /** Who answers there: the role's name, or "the agent that wrote this"
+  /** Who answers there: the role's name, or "the author of this proposal"
    *  when a session posted it (a session's title is not a name). */
   name: string;
   /** True when `name` is a proper name (a role), false for the agent phrase. */
@@ -30,7 +30,7 @@ export function proposalThread(p: Pick<OrgProposalRow, "author" | "thread">, tre
   if (p.thread === null) return null;
   const role = p.author.kind === "role" ? tree?.roles.find((r) => r._id === p.author.id) ?? null : null;
   const roleName = role?.name ?? (p.author.kind === "role" ? p.author.name : undefined);
-  const name = roleName ?? "the agent that wrote this";
+  const name = roleName ?? "the author of this proposal";
   const named = !!roleName;
   if (p.thread?.conversation_id) return { conversationId: p.thread.conversation_id, shortId: p.thread.short_id, name, named, role };
   if (p.author.kind === "session") return { conversationId: p.author.id, shortId: p.author.short_id, name, named, role };
