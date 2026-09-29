@@ -91,7 +91,9 @@ export function mergeManifests(
   const replaceArrayIfNonEmpty = <T>(o: T[], b: T[]): T[] =>
     o.length > 0 ? o : b;
 
+  const host = override.host ?? base.host;
   return {
+    ...(host ? { host } : {}),
     setup: {
       copy: replaceArrayIfNonEmpty(override.setup.copy, base.setup.copy),
       share: replaceArrayIfNonEmpty(override.setup.share, base.setup.share),

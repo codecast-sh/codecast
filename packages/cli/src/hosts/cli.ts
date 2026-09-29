@@ -1085,6 +1085,55 @@ export function buildHostsCommand(parent: Command): Command {
     });
 
   hosts
+    .command("image [id]")
+    .description("Capture a prepared host as a machine image; cast hosts create then starts new hosts from it")
+    .option("--list", "List this account's codecast images instead")
+    .action(async (id: string | undefined, o: { list?: boolean }) => {
+      const h = pick(id, "no host registered");
+      if (h.provider !== "aws") die("images are for AWS hosts");
+      const { aws, createImageArgs, imageName, listImages } = await import("./image.js");
+      const platform = h.platform ?? "linux";
+      const opts = { region: h.region ?? "us-west-2", profile: h.profile };
+      try {
+        if (o.list) {
+          const images = listImages(opts, platform);
+          if (!images.length) console.log(fmt.muted("  no codecast images yet"));
+          for (const i of images) console.log(`  ${i.id}  ${i.name}  ${fmt.muted(i.created)}${i.source ? fmt.muted(`  from ${i.source}`) : ""}`);
+          return;
+        }
+        const name = imageName(platform, h.id);
+        const out = aws(opts, createImageArgs(h.id, platform, name));
+        console.log(`${OK} ${out.ImageId}  ${name}`);
+        console.log(fmt.muted("  AWS finishes the snapshot in the background (minutes); cast hosts create uses the newest available image when --image is not given"));
+      } catch (err) {
+        die((err as Error).message);
+      }
+    });
+
+  hosts
+    .command("setup [id]")
+    .description("Apply the declared machine setup to a host: the repo's .codecast/workspace.toml [host] and your ~/.codecast/host.toml (packages, services, commands)")
+    .option("--force", "Apply again even when the host is in step")
+    .option("--json", "Machine-readable report")
+    .action(async (id: string | undefined, o: { force?: boolean; json?: boolean }) => {
+      const h = pick(id, "no host registered");
+      const say = (m: string) => { if (!o.json) console.log(fmt.muted(`  ${m}`)); };
+      try {
+        const { runHostSetup, describeHostSetup } = await import("../cloud/hostSetup.js");
+        const { remoteRepoPath } = await import("../remote/session-move.js");
+        const up = await ensureUp(h, say);
+        const host = toRemoteHost(up);
+        const root = cwdGitRoot();
+        const { report, spec } = runHostSetup(host, { repoRoot: root, repoPath: root ? remoteRepoPath(host, root) : undefined, force: o.force });
+        if (o.json) { console.log(JSON.stringify({ host: up.id, spec, ...report }, null, 2)); return; }
+        console.log(`${report.ok ? OK : fmt.warning(icons.cross)} ${up.id}  ${describeHostSetup(report, spec)}`);
+        if (!report.ok) process.exitCode = 1;
+      } catch (err) {
+        die((err as Error).message);
+      }
+    });
+
+  hosts
     .command("key [id]")
     .description("The host's git device key: print it, check what it can reach, or grant it on GitHub with gh")
     .option("--repo <origin>", "The origin to probe/grant (default: this directory's `git remote get-url origin`)")

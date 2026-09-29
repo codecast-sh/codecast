@@ -152,8 +152,10 @@ describe("agent logins step (readyHostHome step 1)", () => {
     const tools: HostToolsReport = { ok: [{ tool: "node", version: "v22.12.0" }], installed: [{ tool: "gh" }], missing: [{ tool: "uv", referenced_by: "skills" }], unsupported: [], install: true };
     const lines: string[] = [];
     const mirrorDeps = async () => ({ pushed: true, changed: 0, hash: "abcdef1234" });
+    const spec = { packages: ["redis-server"], services: ["redis-server"], run: [] };
     const report = await readyHostHome(host, {
       skipGit: true, onProgress: (m) => lines.push(m), localGitRoot: "/Users/a/src/codecast", mirrorDeps,
+      hostSetup: () => ({ report: { ok: true, applied: true }, spec }),
       loginsDeps: { pushClaude: () => ({ pushed: true }), push: () => ({ pushed: true, kept: [], files: 0, deleted: 0, env: [], trust: 1 }), sources },
       toolsDeps: { required: () => ({ node: { minMajor: 20, install: NODE_22_VERSION, source: "x" }, clients: {}, tools: [], unsupported: [] }), run: () => tools },
     });
@@ -162,18 +164,23 @@ describe("agent logins step (readyHostHome step 1)", () => {
     expect(report.mirror).toBe("mirrored 0 changed config file(s) (abcdef12)");
     expect(lines).toContain("host tools: 1 ok, 1 installed, 1 missing, 0 unsupported (installed gh)");
     expect(lines).toContain("host tools: missing uv (for skills)");
+    expect(lines).toContain("host setup applied (1 package(s), 1 service(s))");
     const failed = await readyHostHome(host, {
       skipGit: true, onProgress: (m) => lines.push(m), mirrorDeps,
+      hostSetup: () => ({ report: { ok: false, step: "install redis-server", error: "E: Unable to locate package\nE: dpkg was interrupted" }, spec }),
       loginsDeps: { pushClaude: () => ({ pushed: true }), push: () => ({ pushed: true, kept: [], files: 0, deleted: 0, env: [], trust: 0 }), sources },
       toolsDeps: { required: () => { throw new Error("no repo"); }, run: () => tools },
     });
     expect(failed.tools).toBeUndefined();
+    expect(failed.mirror).toBe("mirrored 0 changed config file(s) (abcdef12)");
+    expect(lines).toContain("host setup failed at install redis-server: E: Unable to locate package | E: dpkg was interrupted");
     expect(lines).toContain("host tools check skipped: no repo");
     expect(toolsForPrepare(host, () => {}, { deps: { required: () => ({ node: { minMajor: 20, install: NODE_22_VERSION, source: "x" }, clients: {}, tools: [], unsupported: [] }), run: () => { throw new Error("ssh: Connection refused"); } } })).toBeUndefined();
   });
 
   test("readyHostHome with skipLogins runs neither the push nor the tools check", async () => {
     const report = await readyHostHome(host, {
+      hostSetup: () => { throw new Error("must not run"); },
       skipGit: true, skipLogins: true, mirrorDeps: async () => ({ pushed: true, changed: 0, hash: "abcdef1234" }),
       loginsDeps: { push: () => { throw new Error("must not run"); }, pushClaude: () => { throw new Error("must not run"); }, sources },
       toolsDeps: { required: () => { throw new Error("must not run"); } },

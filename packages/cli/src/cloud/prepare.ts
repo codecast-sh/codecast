@@ -36,6 +36,7 @@ import {
   toRemoteHost,
   type CloudHost,
 } from "../browser/cloudHost.js";
+import { describeHostSetup, runHostSetup, type HostSetupReport, type ResolvedHostSpec } from "./hostSetup.js";
 import { readLocalConfig } from "../config/readLocalConfig.js";
 import { isCloudMirrorEnabled, type Config } from "../config/types.js";
 import {
@@ -412,6 +413,8 @@ export interface ReadyHostHomeOptions {
   skipLogins?: boolean;
   /** Tools: check only, install nothing. */
   toolsInstall?: boolean;
+  /** Injection for tests: the declared host setup step (default: runHostSetup over ssh). */
+  hostSetup?: (host: RemoteHost, opts: { repoRoot?: string; repoPath?: string; force?: boolean }) => { report: HostSetupReport; spec: ResolvedHostSpec };
   /** Injection for tests: the logins, tools and mirror steps. */
   loginsDeps?: PushAgentLoginsOptions["deps"];
   toolsDeps?: ToolsForPrepareOptions["deps"];
@@ -490,6 +493,16 @@ export async function readyHostHome(host: RemoteHost, opts: ReadyHostHomeOptions
   const cloudId = opts.cloudId ?? host.address;
   let logins: AgentLoginsReport | undefined;
   let tools: HostToolsReport | undefined;
+  // The declared machine setup first: packages and services the repo's own setup may need.
+  if (!opts.skipLogins) {
+    try {
+      const repoPath = opts.repoPath ?? (opts.localGitRoot ? remoteRepoPath(host, opts.localGitRoot) : undefined);
+      const { report, spec } = (opts.hostSetup ?? runHostSetup)(host, { repoRoot: opts.localGitRoot, repoPath, force: opts.force });
+      if (!report.skipped || !report.ok) log(describeHostSetup(report, spec));
+    } catch (err) {
+      log(`host setup step failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
   if (!opts.skipLogins) {
     try {
       logins = pushAgentLoginsNow(host, { localGitRoot: opts.localGitRoot, onProgress: log, deps: opts.loginsDeps });

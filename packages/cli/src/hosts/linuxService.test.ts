@@ -28,7 +28,8 @@ esac`);
     .replaceAll("/etc/systemd/system/codecast-daemon.service", path.join(home, "unit"))
     .replaceAll("/usr/local/bin/cast", path.join(bin, "cast"))
     .replace("/sys/fs/cgroup/system.slice/codecast-daemon.service/cgroup.procs", path.join(home, "procs"))
-    .replace("/proc/$p/comm", `${home}/proc/$p/comm`);
+    .replace("/proc/$p/comm", `${home}/proc/$p/comm`)
+    .replaceAll("/home/ubuntu", home);
   try {
     const child = Bun.spawn(["bash", "-s"], { env: { ...process.env, HOME: home, PATH: `${bin}:/usr/bin:/bin` }, stdin: new Blob([script]), stdout: "pipe", stderr: "pipe" });
     const [status, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);

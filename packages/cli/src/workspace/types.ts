@@ -98,7 +98,24 @@ export interface BrowserSpec {
  * prepare a worktree. Produced by detection, optionally overridden by a
  * .codecast/workspace.toml file, optionally overridden again by env vars.
  */
+/**
+ * Machine-level setup for a cloud host, declared beside the workspace setup:
+ * system packages, the services to keep running, and idempotent commands.
+ * A host applies it once per change, before any worktree is acquired there
+ * (cloud/hostSetup.ts).
+ */
+export interface HostSpec {
+  /** apt packages. */
+  packages: string[];
+  /** systemd units enabled and started. */
+  services: string[];
+  /** Shell commands run in order from the repo checkout; each must be safe to run again. */
+  run: string[];
+}
+
 export interface WorkspaceManifest {
+  /** [host]: what a cloud host needs installed and running for this repo. */
+  host?: HostSpec;
   setup: SetupSpec;
   /** Named ports keyed by short name (e.g., "web", "api", "db"). */
   ports: Record<string, PortSpec>;
