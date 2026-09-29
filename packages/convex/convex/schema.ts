@@ -2668,6 +2668,8 @@ export default defineSchema({
     // Only ever a SUGGESTION for ssh_host — never interpolated into a command
     // on its own, because a hostname is not necessarily a reachable ssh target.
     hostname: v.optional(v.string()),
+    // The WSL distro the daemon runs in, heartbeat-reported; absent off WSL.
+    wsl_distro: v.optional(v.string()),
     // How to reach this machine over SSH from elsewhere, e.g. "nose" or
     // "m1@1.2.3.4". User-set in Settings → Devices (never heartbeat-written):
     // an ssh alias resolves against the VIEWER's ~/.ssh/config, which no daemon

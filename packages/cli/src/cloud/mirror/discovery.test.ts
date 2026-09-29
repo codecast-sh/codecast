@@ -157,6 +157,19 @@ test("a doc naming a build directory does not ship it; a hook that requires a fi
   expect(collectProjectContext({ root, home }).files.map((f) => f.relativePath).sort()).toEqual([".claude/settings.json", "docs/guide.md", "packages/cli/dist/status.sh"]);
 });
 
+test("a list naming large renders skips them instead of failing the whole context; a required file over the cap still fails", () => {
+  const renders = Array.from({ length: 4 }, (_, i) => `${root}/videos/renders/c0${i}.mp4`);
+  write("src/repo/videos/renders/list.txt", renders.map((r) => `file '${r}'`).join("\n"));
+  for (const r of renders) { fs.writeFileSync(r, ""); fs.truncateSync(r, 9 * 1024 * 1024); }
+  write("src/repo/docs/still.png", Buffer.alloc(1024));
+  write("src/repo/docs/guide.md", `![still](${root}/docs/still.png)`);
+  const ctx = collectProjectContext({ root, home });
+  expect(ctx.files.map((f) => f.relativePath).sort()).toEqual(["docs/guide.md", "docs/still.png", "videos/renders/list.txt"]);
+  expect(ctx.skipped.filter((s) => s.path.endsWith(".mp4")).length).toBe(renders.length);
+  write("src/repo/.claude/settings.json", JSON.stringify({ statusLine: { command: `bash '${renders[0]}'` } }));
+  expect(() => collectProjectContext({ root, home, maxBytes: 2 * 1024 * 1024 })).toThrow(/context exceeds/);
+});
+
 test("marketplace clones, bundled skills, install staging and trashed skills stay home; installed plugins and live skills travel", async () => {
   const runtime = [".grok/marketplace-cache/11f3bbe6/demo.gif", ".grok/marketplace-cache/11f3bbe6/.claude-plugin/marketplace.json", ".grok/bundled/skills/a/SKILL.md",
     ".codex/plugins/.remote-plugin-install-staging/x/SKILL.md", ".claude/skills/.trash/1789952314586-77452/setup/SKILL.md", ".claude/plugins/plugin-catalog-cache.json", ".cursor/statsig-cache.json"];

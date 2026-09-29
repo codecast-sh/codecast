@@ -26,6 +26,12 @@ export const HOST_OWNED_LOCAL_BIN: readonly string[] = [
   ...[...INSTALLABLE_CLIENTS, "uv", "uvx", "bun", "bunx", "node", "npm", "npx"].map((name) => `${LOCAL_BIN_ROOT}/${name}`),
 ];
 export const CONTEXT_SIZE_CAP = 256 * 1024 * 1024;
+/**
+ * A file only named in prose (a render list, a doc linking a video) is a
+ * courtesy copy: past this size, or past the context cap, it is skipped rather
+ * than failing the whole context. Required references keep the hard cap.
+ */
+export const OPTIONAL_REFERENCE_CAP = 8 * 1024 * 1024;
 export const INSTRUCTION_FILE_RE = /^(?:AGENTS(?:\.override)?|CLAUDE(?:\.local)?|GEMINI|GROK|OPENCODE)\.md$/i;
 export const CLAUDE_RUNTIME_ROOTS: readonly string[] = [
   ".claude/plugins/marketplaces", ".claude/plugins/installed_plugins.json", ".claude/plugins/known_marketplaces.json",
@@ -381,7 +387,9 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
     if (!includeAll && !isContextFile(rel)) return;
     const prefix: Buffer = yield { op: "prefix", path: real };
     if (isNativeBinary(prefix)) { result.skipped.push({ path: logical, reason: "native binary" }); return; }
-    if (actual.size + result.totalBytes > (opts.maxBytes ?? CONTEXT_SIZE_CAP)) throw new Error(`project context exceeds ${(opts.maxBytes ?? CONTEXT_SIZE_CAP) / 1048576} MiB at ${logical}`);
+    const overCap = actual.size + result.totalBytes > (opts.maxBytes ?? CONTEXT_SIZE_CAP);
+    if (optionalReference && (overCap || actual.size > OPTIONAL_REFERENCE_CAP)) { result.skipped.push({ path: logical, reason: `optional reference too large (${Math.ceil(actual.size / 1048576)} MiB)` }); return; }
+    if (overCap) throw new Error(`project context exceeds ${(opts.maxBytes ?? CONTEXT_SIZE_CAP) / 1048576} MiB at ${logical}`);
     let bytes: Buffer = yield { op: "bytes", path: real };
     scanned.add(logical);
     const kind = kindForPath(rel);

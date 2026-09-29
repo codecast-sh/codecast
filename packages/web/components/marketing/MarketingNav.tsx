@@ -1,12 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowRight } from "lucide-react";
+import { useState } from "react";
+import { ArrowRight, Download } from "lucide-react";
 import { AppleIcon } from "@/components/marketing/AppBadges";
 import { Button } from "@/components/ui/button";
 import { Logo } from "@/components/Logo";
 import { useLocalAuth } from "@/lib/localAuth";
 import { RepoPulseChip } from "@/components/marketing/RepoPulseChip";
+import { useMountEffect } from "@/hooks/useMountEffect";
+import { visitorPlatform } from "@/lib/visitorPlatform";
 
 /**
  * The one nav bar for every marketing page (landing, pricing, docs, blog...).
@@ -45,6 +48,14 @@ export function MarketingNav({
   containerClassName?: string;
 }) {
   const signedIn = useLocalAuth();
+  // The Apple mark promises an app this visitor can run; elsewhere the apps
+  // page leads with the CLI and the browser, so a plain download mark fits.
+  // Decided after mount so the prerendered bar and the first client paint agree.
+  const [apple, setApple] = useState(true);
+  useMountEffect(() => {
+    const p = visitorPlatform();
+    setApple(p === "mac" || p === "ios");
+  });
   return (
     <nav
       className="backdrop-blur-sm sticky top-0 z-50"
@@ -80,7 +91,7 @@ export function MarketingNav({
             className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm font-medium transition-colors hover:bg-[#eee8d5]"
             style={{ borderColor: active === "/download" ? INK : "#93a1a1", color: INK }}
           >
-            <AppleIcon className="w-4 h-4" />
+            {apple ? <AppleIcon className="w-4 h-4" /> : <Download className="w-4 h-4" />}
             <span className="hidden sm:inline">Download</span>
             <span className="sm:hidden">Apps</span>
           </Link>

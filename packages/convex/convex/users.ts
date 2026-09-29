@@ -397,6 +397,7 @@ export const daemonHeartbeat = mutation({
     // Seeds the SSH-host placeholder in Settings → Devices; never becomes an
     // ssh target on its own (see devices.ssh_host).
     device_hostname: v.optional(v.string()),
+    wsl_distro: v.optional(v.string()),
     is_remote_device: v.optional(v.boolean()),
     // Time since the last keyboard/mouse event on that machine (macOS-only;
     // absent elsewhere and from pre-presence daemons). Anchored to the SERVER
@@ -595,6 +596,7 @@ export const daemonHeartbeat = mutation({
           ? { last_input_at: now - Math.min(args.input_idle_ms, 7 * 24 * 3600_000) }
           : {}),
         ...(args.device_hostname !== undefined ? { hostname: args.device_hostname } : {}),
+        ...(args.wsl_distro !== undefined && /^[A-Za-z0-9._-]{1,64}$/.test(args.wsl_distro) ? { wsl_distro: args.wsl_distro } : {}),
         ...(args.is_remote_device !== undefined ? { is_remote: args.is_remote_device } : {}),
         // The device is awake: whatever asked for it has been answered.
         ...((existingDevice as any)?.wake_requested_at !== undefined ? { wake_requested_at: undefined } : {}),

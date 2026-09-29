@@ -87,7 +87,7 @@ function createDb(seed: Record<string, Rec[]>) {
 
 // Shared world: Alice and Bob are on team T. Bob has a shared session (convBob) and a private one
 // (convBobPriv). Alice has her own session (convAlice) that she sends FROM. Carol is a stranger.
-function world(opts: { bobLive?: boolean; bobIdle?: boolean; now: number } = { now: 1_000_000_000_000 }) {
+function world(opts: { bobLive?: boolean; bobIdle?: boolean; bobDaemonOnline?: boolean; now: number } = { now: 1_000_000_000_000 }) {
   const now = opts.now;
   const heartbeat = opts.bobLive === false ? now - 10 * 60_000 : now - 5_000;
   return createDb({
@@ -107,7 +107,7 @@ function world(opts: { bobLive?: boolean; bobIdle?: boolean; now: number } = { n
     ],
     conversations: [
       { _id: "convAlice", user_id: "uAlice", short_id: "jxalice", session_id: "sess-alice", is_private: true, status: "active" },
-      { _id: "convBob", user_id: "uBob", team_id: "tA", short_id: "jxbob01", session_id: "sess-bob", is_private: false, status: "active" },
+      { _id: "convBob", user_id: "uBob", team_id: "tA", short_id: "jxbob01", session_id: "sess-bob", is_private: false, status: "active", owner_device_id: "devBob" },
       { _id: "convBobPriv", user_id: "uBob", team_id: "tA", short_id: "jxbobpv", session_id: "sess-bobpv", is_private: true, status: "active" },
       { _id: "convCarol", user_id: "uCarol", short_id: "jxcarol", session_id: "sess-carol", is_private: true, status: "active" },
       // Bot-run, no human starter — the only shape a teammate send may auto-claim.
@@ -122,6 +122,9 @@ function world(opts: { bobLive?: boolean; bobIdle?: boolean; now: number } = { n
         last_heartbeat: heartbeat,
         agent_status: opts.bobIdle === false ? "busy" : "idle",
       },
+    ],
+    devices: opts.bobDaemonOnline === undefined ? [] : [
+      { _id: "dBob", user_id: "uBob", device_id: "devBob", last_seen: opts.bobDaemonOnline ? now - 10_000 : now - 10 * 60_000 },
     ],
     pending_messages: [],
   });
@@ -257,6 +260,18 @@ describe("team send — authorization", () => {
     const res = await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "you there?" });
     expect(res.target_live).toBe(false); // CLI prints the "no live daemon" hint off this
     expect(tables.pending_messages[0].status).toBe("pending"); // never rejected — it's queued
+  });
+
+  test("an idle session whose owning daemon is online reports target_live=true (no false offline warning)", async () => {
+    const { ctx } = world({ bobLive: false, bobDaemonOnline: true, now: Date.now() });
+    const res = await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "still there?" });
+    expect(res.target_live).toBe(true);
+  });
+
+  test("a quiet session on an offline daemon still reports target_live=false", async () => {
+    const { ctx } = world({ bobLive: false, bobDaemonOnline: false, now: Date.now() });
+    const res = await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "still there?" });
+    expect(res.target_live).toBe(false);
   });
 
   test("a cross-user send into a human-run session does not claim it — the starter stays responsible", async () => {

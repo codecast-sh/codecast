@@ -18,6 +18,11 @@ export function daemonSupportedOnPlatform(): boolean {
   return process.platform !== "win32";
 }
 
+/** The WSL distro this process runs in, or undefined outside WSL. */
+export function wslDistroName(): string | undefined {
+  return isWSL() ? process.env.WSL_DISTRO_NAME || undefined : undefined;
+}
+
 /** True when this Linux process runs inside WSL. */
 export function isWSL(): boolean {
   if (process.platform !== "linux") return false;

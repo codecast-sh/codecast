@@ -1,5 +1,6 @@
-// <cast-player>: the video player published pages get when they use the tag
-// (served at /cli/player.js and injected by artifactsHttp.serve). Chapters are
+// <cast-player>: the video player every published page with a video gets
+// (served at /cli/player.js and injected by artifactsHttp.serve). A plain
+// <video controls> is upgraded into one; data-native keeps the browser's own. Chapters are
 // separate files that play back to back as one film: two <video> elements take
 // turns, the idle one loads the next chapter, and they swap on "ended".
 //
@@ -168,7 +169,9 @@ export const CAST_PLAYER_JS = String.raw`(function () {
     this.w = $(".vb");
     this.segs = Array.prototype.slice.call(root.querySelectorAll(".seg"));
     var poster = this.getAttribute("poster");
+    // Without a poster the first frame shows, as it does in a native player.
     if (poster) $(".poster").style.backgroundImage = "url(" + JSON.stringify(new URL(poster, document.baseURI).href) + ")";
+    else $(".poster").remove();
 
     [this.v, this.w].forEach(function (vid) {
       vid.addEventListener("timeupdate", function (e) { if (e.target === self.v) self._sync(); });
@@ -180,6 +183,10 @@ export const CAST_PLAYER_JS = String.raw`(function () {
       vid.addEventListener("pause", function (e) { if (e.target === self.v) self._state(); });
       vid.addEventListener("error", function (e) { if (e.target === self.v && self.v.getAttribute("src")) self.setAttribute("data-error", ""); });
     });
+    // An upgraded <video> takes the shape of its file, as the native element would.
+    if (this.hasAttribute("data-auto-aspect")) this.v.addEventListener("loadedmetadata", function () {
+      if (self.v.videoWidth && self.v.videoHeight) self.style.setProperty("--cast-aspect", self.v.videoWidth + "/" + self.v.videoHeight);
+    }, { once: true });
 
     $(".big").addEventListener("click", function () { self.toggle(); });
     $(".pp").addEventListener("click", function () { self.toggle(); });
@@ -529,5 +536,46 @@ export const CAST_PLAYER_JS = String.raw`(function () {
     C.prototype = Object.create(HTMLElement.prototype); C.prototype.constructor = C; Object.setPrototypeOf(C, HTMLElement);
     return C;
   })());
+
+  // A <video controls> in the page's markup asks for a player, so it gets this
+  // one: pages have the styled player without knowing the tag exists. Left
+  // alone: data-native, ambient clips (autoplay or loop), videos without
+  // controls (the page's own script drives them), and videos added later by
+  // script, which may hold a reference to the element.
+  function upgrade(v) {
+    if (!v.controls || v.hasAttribute("data-native") || v.autoplay || v.loop || v.closest("cast-player")) return;
+    var source = v.getAttribute("src");
+    if (!source) {
+      var list = v.querySelectorAll("source");
+      for (var k = 0; k < list.length && !source; k++) {
+        var type = list[k].getAttribute("type");
+        if (!type || v.canPlayType(type)) source = list[k].getAttribute("src");
+      }
+    }
+    if (!source) return;
+    var p = document.createElement("cast-player");
+    p.setAttribute("src", source);
+    ["id", "class", "style", "poster", "title"].forEach(function (a) { if (v.hasAttribute(a)) p.setAttribute(a, v.getAttribute(a)); });
+    // Page CSS aimed at video no longer matches, so carry over what it decided:
+    // the box limits, the margins, and any --cast-* skin set on the video.
+    var cs = getComputedStyle(v);
+    ["max-width", "max-height", "margin-top", "margin-right", "margin-bottom", "margin-left"].forEach(function (k) {
+      if (!p.style.getPropertyValue(k)) p.style.setProperty(k, cs.getPropertyValue(k));
+    });
+    ["--cast-accent", "--cast-fg", "--cast-bg", "--cast-panel", "--cast-track", "--cast-radius", "--cast-font", "--cast-aspect"].forEach(function (k) {
+      var val = cs.getPropertyValue(k).trim();
+      if (val && !p.style.getPropertyValue(k)) p.style.setProperty(k, val);
+    });
+    if (!cs.getPropertyValue("--cast-radius").trim() && parseFloat(cs.borderTopLeftRadius)) p.style.setProperty("--cast-radius", cs.borderTopLeftRadius);
+    var w = parseFloat(v.getAttribute("width")), h = parseFloat(v.getAttribute("height"));
+    // width="640" sizes a native video; keep that, and never wider than its column.
+    if (w) { p.style.width = w + "px"; if (p.style.maxWidth === "none") p.style.maxWidth = "100%"; }
+    if (w && h) { if (!p.style.getPropertyValue("--cast-aspect")) p.style.setProperty("--cast-aspect", w + "/" + h); }
+    else if (!p.style.getPropertyValue("--cast-aspect")) p.setAttribute("data-auto-aspect", "");
+    v.replaceWith(p);
+  }
+  function upgradeAll() { Array.prototype.forEach.call(document.querySelectorAll("video"), upgrade); }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", upgradeAll, { once: true });
+  else upgradeAll();
 })();
 `;

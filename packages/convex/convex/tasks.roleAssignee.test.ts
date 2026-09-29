@@ -4,7 +4,7 @@
 // wakes it, and `--chain` reads the reporting line at query time.
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { batchAssign, list, update, webUpdate } from "./tasks";
+import { batchAssign, create, list, update, webUpdate } from "./tasks";
 import { hashToken } from "./apiTokens";
 
 // Real Convex ids are 32 lowercase characters, and resolveAssigneeStr passes
@@ -289,6 +289,42 @@ describe("a session that takes a task assigns it to its role", () => {
     expect(tables.tasks[0]).toMatchObject({ status: "in_progress" });
     expect(tables.tasks[0].assignee).toBeUndefined();
     expect(result.assigned_role).toBeUndefined();
+  });
+});
+
+// Assignee is accountability: a task a session files for people to see is
+// owned by whoever that session answers to, the role it works for or else the
+// person running it. Its own bookkeeping stays unowned, off the person's board.
+describe("a session that files a task for people owns it", () => {
+  const file = (ctx: any, session: string, args: Record<string, any> = {}) =>
+    (create as any)._handler(ctx, { api_token: TOKEN, title: "Filed", conversation_id: session, workspace: "team", team_id: TEAM, ...args });
+
+  test("a plain session's --human task is the person's", async () => {
+    const { ctx, tables } = await makeCtx([]);
+    await file(ctx, "free", { source: "agent", promoted: true });
+    expect(tables.tasks[0]).toMatchObject({ assignee: OWNER, created_from_conversation: "conversations_free" });
+  });
+
+  test("a hand's and a standing session's tasks are the role's, and the role is not told about its own filing", async () => {
+    const { ctx, tables } = await makeCtx([]);
+    await file(ctx, "hand-growth", { source: "meeting" });
+    await file(ctx, "standing-ads", { source: "agent", promoted: true });
+    expect(tables.tasks.map((t: any) => t.assignee)).toEqual([GROWTH, ADS]);
+    expect(tables.pending_messages).toEqual([]);
+  });
+
+  test("a session's own bookkeeping and its subtasks stay unowned", async () => {
+    const { ctx, tables } = await makeCtx([task(1)]);
+    await file(ctx, "hand-growth", { source: "agent" });
+    await file(ctx, "free", { source: "agent", promoted: true, parent_id: "ct-1" });
+    expect(tables.tasks[1].assignee).toBeUndefined();
+    expect(tables.tasks[2].assignee).toBeUndefined();
+  });
+
+  test("a named assignee wins over the default", async () => {
+    const { ctx, tables } = await makeCtx([]);
+    await file(ctx, "hand-growth", { source: "agent", promoted: true, assignee: "jbenn" });
+    expect(tables.tasks[0].assignee).toBe(JASON);
   });
 });
 

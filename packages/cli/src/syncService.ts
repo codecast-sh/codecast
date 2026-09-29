@@ -1789,12 +1789,10 @@ export class SyncService {
     }>,
   ): Promise<{ updated: number } | undefined> {
     if (sessions.length === 0) return;
-    try {
-      return await this.mutate("managedSessions:heartbeatBatch" as any, {
-        api_token: this.apiToken,
-        sessions,
-      });
-    } catch {}
+    return await this.mutate("managedSessions:heartbeatBatch" as any, {
+      api_token: this.apiToken,
+      sessions,
+    });
   }
 
   async reportSessionMetrics(sessionId: string, cpu: number, memory: number, pidCount: number, agentPid?: number, awakeIdleMs?: number, agentStartedAt?: number): Promise<void> {
