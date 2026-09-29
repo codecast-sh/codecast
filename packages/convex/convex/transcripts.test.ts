@@ -24,6 +24,8 @@ import {
   setRecordingScope,
   setSummary,
   withDefaultRoutes,
+  linkExcerpt,
+  webCallsForConversation,
   webGetCall,
   webListCalls,
 } from "./transcripts";
@@ -991,6 +993,75 @@ describe("the room's thread sees transcription go on", () => {
     expect(c.db._tables.transcripts[0].status).toBe("ended");
     expect(c.db._tables.call_agent_feeds).toHaveLength(0);
     expect(c.db._tables.call_chat_messages).toHaveLength(1);
+  });
+});
+
+// A call and the sessions it reached point at each other for good: the call
+// page lists its agents and the session names its call, long after the feed
+// that carried the words has gone.
+describe("calls and the sessions they reach", () => {
+  const now = 1_800_000_000_000;
+  const tables = () => ({
+    call_members: [{ _id: "cm1", room_key: "session:conv1", user_id: "ua", team_id: "team1", last_seen: now, expires_at: now + 60_000 }],
+    call_rooms: [],
+    call_room_state: [],
+    call_invites: [],
+    users: [{ _id: "ua", name: "Ada", email: "ada@x.org" }],
+    team_members: [{ team_id: "team1", user_id: "ua" }],
+    team_memberships: [{ team_id: "team1", user_id: "ua" }],
+    teams: [{ _id: "team1", features: { calls: true } }],
+    conversations: [
+      { _id: "conv1", short_id: "conv1", title: "Fix the auth race", agent_type: "claude_code", user_id: "ua", team_id: "team1", is_private: true },
+      { _id: "conv2", short_id: "conv2", title: "Write the notes", agent_type: "claude_code", user_id: "ua", team_id: "team1", is_private: true },
+      { _id: "conv3", short_id: "conv3", title: "Someone else's", agent_type: "claude_code", user_id: "uz", team_id: "team1", is_private: true },
+    ],
+    messages: [],
+    call_agent_feeds: [],
+    call_session_links: [],
+    transcripts: [],
+    transcript_segments: [],
+    call_chat_messages: [],
+  });
+  const ctx = (t: Record<string, any[]>) => ({
+    db: makeFakeDb(t),
+    auth: { async getUserIdentity() { return { subject: "ua|session" }; } },
+    scheduler: { async runAfter() {} },
+  });
+  const call = (fn: any, c: any, args: any) => (fn as any)._handler(c, args);
+  let clock: any;
+  beforeEach(() => { clock = spyOn(Date, "now").mockReturnValue(now); });
+  afterEach(() => { clock.mockRestore(); });
+
+  test("a live feed links the session, and the link outlives the call", async () => {
+    const c = ctx(tables());
+    const res = await call(start, c, { room_key: "session:conv1", auto: true });
+    await call(stop, c, { transcript_id: res.transcript_id });
+    expect(c.db._tables.call_agent_feeds).toHaveLength(0);
+    expect(c.db._tables.call_session_links.map((l: any) => [l.conversation_id, l.live])).toEqual([["conv1", true]]);
+
+    const detail = await call(webGetCall, c, { transcript_id: res.transcript_id });
+    expect(detail.sessions.map((s: any) => [s.conversation_id, s.live])).toEqual([["conv1", true]]);
+    const back = await call(webCallsForConversation, c, { conversation_id: "conv1" });
+    expect(back.map((x: any) => String(x._id))).toEqual([String(res.transcript_id)]);
+  });
+
+  test("each excerpt sent to a session lands on one link with its turn range", async () => {
+    const c = ctx(tables());
+    const res = await call(start, c, { room_key: "session:conv1", auto: true });
+    await call(linkExcerpt, c, { transcript_id: res.transcript_id, conversation: "conv2", from_seq: 4, to_seq: 2 });
+    await call(linkExcerpt, c, { transcript_id: res.transcript_id, conversation: "conv2", from_seq: 7, to_seq: 9 });
+    const link = c.db._tables.call_session_links.find((l: any) => l.conversation_id === "conv2");
+    expect(link.live).toBeUndefined();
+    expect(link.excerpts.map((e: any) => [e.from_seq, e.to_seq])).toEqual([[2, 4], [7, 9]]);
+    expect(c.db._tables.call_session_links).toHaveLength(2);
+  });
+
+  test("a session the sender cannot open is refused", async () => {
+    const c = ctx(tables());
+    const res = await call(start, c, { room_key: "session:conv1", auto: true });
+    await expect(
+      call(linkExcerpt, c, { transcript_id: res.transcript_id, conversation: "conv3", from_seq: 1, to_seq: 1 }),
+    ).rejects.toThrow("Session not found");
   });
 });
 
