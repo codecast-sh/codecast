@@ -2084,6 +2084,15 @@ const SETTLE_STATUSES_WITH_TASKS: ReadonlySet<string> = new Set(["idle", "waitin
 // A parked "waiting" re-publishes its (re-verified) tasks this often so the
 // server's report stays fresh enough to vouch for the status past the
 // quiet-time decay (OPEN_TASKS_FRESH_MS is 10 min; the reconciles run ~90s).
+// Whether the session's last settle found background work still running
+// (verifiedOpenTasks checks the process table), whatever label it settled
+// under: a declared "dormant" or "done" outranks "waiting" in the status but
+// leaves the tasks alive inside the agent's tree, where any teardown kills them.
+export function hasOpenBackgroundWork(sessionId: string): boolean {
+  if (lastSentAgentStatus.get(sessionId) === "waiting") return true;
+  const reported = lastOpenTasksSentJson.get(sessionId);
+  return reported !== undefined && reported !== "[]";
+}
 const OPEN_TASKS_REFRESH_MS = 4 * 60_000;
 export function openTasksRefreshDue(status: AgentStatus | undefined, taskCount: number, lastSentAt: number | undefined, now: number): boolean {
   return (status === "waiting" || status === "dormant") && taskCount > 0 && now - (lastSentAt ?? 0) >= OPEN_TASKS_REFRESH_MS;
@@ -20450,7 +20459,8 @@ async function publishWorktreeMirrors(targets: Array<{ sessionId: string; conver
 //
 // Two candidate classes, differing ONLY in the extra hide-state gate:
 //   - cc-resume-* / cx-resume-*: a warm re-resume shell. Reaped on the idle
-//     signals alone — clicking the session cold-resumes it, so nothing is lost.
+//     signals once it waits on nothing (reapPaneEligibility) — clicking the
+//     session cold-resumes it, so nothing is lost.
 //   - any other codecast-stamped pane (@codecast_session_id /
 //     @codecast_conversation_id): the session's PRIMARY terminal. Reaped only
 //     when its conversation is already out of the inbox — stashed, dismissed or
@@ -20533,7 +20543,7 @@ export type ReapCandidate = {
   sessionId: string | null;
   /** From @codecast_conversation_id, when the pane carries it. */
   convId: string | null;
-  /** "resume" panes reap on idle alone; "stamped" panes also need a hide state. */
+  /** "stamped" panes also need a hide state; both kinds keep a session that is waiting on something. */
   kind: "resume" | "stamped";
   /** What tmux reports about the pane itself; null when a field did not parse. */
   pane?: ReapPaneFacts | null;
@@ -20638,12 +20648,13 @@ async function paneChildCount(pid: number): Promise<number | null> {
   }
 }
 
-// Whether a stamped (primary-terminal) pane's conversation is hidden enough to
-// reap. Killed, stashed and dismissed all mean the user has taken the card out
-// of their inbox; anything still visible there is off limits regardless of idle
-// time, and a PINNED card is visible even when killed (see shouldShowInInbox).
-// Unknown lifecycle fails CLOSED — the opposite of the resurrection gate,
-// because here the cautious move is to leave the agent running.
+// Whether an idle pane may be reaped. A stamped (primary-terminal) pane's
+// conversation must also be hidden: killed, stashed and dismissed all mean the
+// user has taken the card out of their inbox; anything still visible there is
+// off limits regardless of idle time, and a PINNED card is visible even when
+// killed (see shouldShowInInbox). Unknown lifecycle fails CLOSED — the opposite
+// of the resurrection gate, because here the cautious move is to leave the
+// agent running.
 export type StampedPaneReapFacts = {
   /** The daemon's last sent status: "waiting" = open background work, "dormant" = a machine wakes it. */
   agentStatus?: AgentStatus;
@@ -20653,35 +20664,36 @@ export type StampedPaneReapFacts = {
   deliveryActive: boolean;
   /** A subagent of this session is still writing its own transcript. */
   subagentsLive: boolean;
+  /** The last settle found background tasks still running (hasOpenBackgroundWork). */
+  openBackgroundWork: boolean;
   /** Hibernation or a send holds the tmux target. */
   targetLocked: boolean;
   /** Since the session was last resumed; a fresh resume has produced nothing to judge yet. */
   resumedAgoMs: number;
 };
 
-// Out of the inbox is necessary, not sufficient. A parked session that is
-// WAITING on something keeps its process, because the wait lives inside it:
+// Out of the inbox is necessary, not sufficient, and a resume pane has no inbox
+// gate at all. A session of either kind that is WAITING on something keeps its
+// process, because the wait lives inside it:
 // open background work (a Monitor or a background task dies with the agent),
 // a declared machine wake, queued messages nobody has delivered, a delivery
 // landing this instant, a live subagent, a tmux target another path holds, or
 // a resume still settling. The same facts hibernation refuses on, read from
 // the same sources, so the two teardowns cannot disagree about what "waiting"
-// means.
-export function stampedPaneReapEligibility(
+// means. A resumed session waiting 5h on a background build is idle to every
+// signal above this gate, so skipping it for resume panes killed the build
+// (2026-09-29, twice in one day).
+export function reapPaneEligibility(
+  kind: ReapCandidate["kind"],
   lifecycle: ConversationLifecycle | null | undefined,
   facts?: StampedPaneReapFacts,
 ): { eligible: boolean; reason: string | null } {
-  // "Absent hide fields" is NOT "not hidden". The status-only fallback carries no
-  // hide state at all, and reading its silence as "inbox-visible" would put a lie
-  // in the audit log (killed conversations reported as visible-and-skipped) while
-  // the stamped reaper silently no-ops against an undeployed backend. Demand that
-  // the state was actually fetched.
-  if (!lifecycle || !lifecycle.hideStateKnown) return { eligible: false, reason: "hide-state-unknown" };
-  if (lifecycle.inboxPinnedAt) return { eligible: false, reason: "pinned" };
-  const hidden = !!(lifecycle.inboxKilledAt || lifecycle.inboxStashedAt || lifecycle.inboxDismissedAt);
-  if (!hidden) return { eligible: false, reason: "inbox-visible" };
+  if (kind === "stamped") {
+    const hide = stampedPaneHideReason(lifecycle);
+    if (hide) return { eligible: false, reason: hide };
+  }
   if (!facts) return { eligible: true, reason: null };
-  if (facts.agentStatus === "waiting") return { eligible: false, reason: "open-background-work" };
+  if (facts.agentStatus === "waiting" || facts.openBackgroundWork) return { eligible: false, reason: "open-background-work" };
   if (facts.agentStatus === "dormant") return { eligible: false, reason: "dormant" };
   if (facts.pendingMessages) return { eligible: false, reason: "pending-messages" };
   if (facts.deliveryActive) return { eligible: false, reason: "delivery-active" };
@@ -20697,6 +20709,18 @@ export function stampedPaneReapEligibility(
  * classifyTranscriptTail reads a trailing user turn as "active" — it is the
  * agent's move — with no staleness dimension. When an agent dies or wedges
  * mid-turn, the transcript is frozen with the user's unanswered prompt last, so
+function stampedPaneHideReason(lifecycle: ConversationLifecycle | null | undefined): string | null {
+  // "Absent hide fields" is NOT "not hidden". The status-only fallback carries no
+  // hide state at all, and reading its silence as "inbox-visible" would put a lie
+  // in the audit log (killed conversations reported as visible-and-skipped) while
+  // the stamped reaper silently no-ops against an undeployed backend. Demand that
+  // the state was actually fetched.
+  if (!lifecycle || !lifecycle.hideStateKnown) return "hide-state-unknown";
+  if (lifecycle.inboxPinnedAt) return "pinned";
+  const hidden = !!(lifecycle.inboxKilledAt || lifecycle.inboxStashedAt || lifecycle.inboxDismissedAt);
+  return hidden ? null : "inbox-visible";
+}
+
  * the tail reads "active" for all eternity and the pane is permanently
  * un-reapable. That is the unbounded accumulator: 25 of this machine's 267 idle
  * Claude transcripts (~9%) are stuck exactly this way, some 682h old.
@@ -20889,7 +20913,7 @@ export function tmuxSessionIsSinglePane(listPanesStdout: string): boolean {
 // message is the honest clock; mtime is only the fallback when no message
 // carries a timestamp (a codex transcript, a tail of meta lines). This measures
 // idleness, never liveness: whether the agent is mid-turn is the pane's and the
-// tail's call, and the delivery gates in stampedPaneReapEligibility cover the
+// tail's call, and the delivery gates in reapPaneEligibility cover the
 // instant between an injected message and the agent's first line about it.
 export function transcriptIdleMs(input: { mtimeMs: number; lastRealTimestampMs: number | null; now: number }): number {
   if (input.lastRealTimestampMs === null) return input.now - input.mtimeMs;
@@ -21073,32 +21097,29 @@ async function reapIdleOrphanTerminals(): Promise<void> {
     if (verdict.reason !== null) { skips.push(verdict.reason); continue; }
     const convId = cand.convId ?? convCache[sessionId];
     // A stamped pane is the session's PRIMARY terminal — the one a human may be
-    // attached to. Two extra gates, cheapest first: the whole tmux session must
-    // be the single pane we actually inspected, and its conversation must already
-    // be out of the inbox. (cc-resume-* shells skip both: nobody attaches to them.)
+    // attached to — so the whole tmux session must also be the single pane we
+    // actually inspected. (cc-resume-* shells skip it: nobody attaches to them.)
     if (cand.kind === "stamped") {
       let panes: string;
       try { ({ stdout: panes } = await tmuxExec(["list-panes", "-s", "-t", cand.tmux, "-F", "#{window_index}.#{pane_index}"], { timeout: 4000 })); }
       catch { skips.push("pane-list-failed"); continue; }
       if (!tmuxSessionIsSinglePane(panes)) { skips.push("multi-pane"); continue; }
-      const lifecycle = convId && syncServiceRef
-        ? await syncServiceRef.getConversationLifecycle(convId, sessionId).catch(() => null)
-        : null;
-      const eligibility = stampedPaneReapEligibility(lifecycle, {
-        agentStatus: lastSentAgentStatus.get(sessionId),
-        pendingMessages: !!lifecycle?.hasPendingMessages,
-        deliveryActive: productionHibernationIo.deliveryActive(sessionId, convId),
-        subagentsLive: subagentActiveAgoMs(sessionId) !== Infinity,
-        targetLocked: tmuxTargetLocks.has(cand.tmux) || tmuxTargetLocks.has(`=${cand.tmux}`),
-        resumedAgoMs: now - (lastResumeAt.get(sessionId) ?? -Infinity),
-      });
-      if (!eligibility.eligible) { skips.push(eligibility.reason!); continue; }
-      const gcWorktree = !!(lifecycle?.inboxKilledAt || lifecycle?.inboxDismissedAt);
-      if (await reapOneTerminal(sessionId, cand.tmux, convId, verdict.idleHours, { gcWorktree })) reaped++;
-      else skips.push("busy-at-kill");
-      continue;
     }
-    if (await reapOneTerminal(sessionId, cand.tmux, convId, verdict.idleHours)) reaped++;
+    const lifecycle = convId && syncServiceRef
+      ? await syncServiceRef.getConversationLifecycle(convId, sessionId).catch(() => null)
+      : null;
+    const eligibility = reapPaneEligibility(cand.kind, lifecycle, {
+      agentStatus: lastSentAgentStatus.get(sessionId),
+      openBackgroundWork: hasOpenBackgroundWork(sessionId),
+      pendingMessages: !!lifecycle?.hasPendingMessages,
+      deliveryActive: productionHibernationIo.deliveryActive(sessionId, convId),
+      subagentsLive: subagentActiveAgoMs(sessionId) !== Infinity,
+      targetLocked: tmuxTargetLocks.has(cand.tmux) || tmuxTargetLocks.has(`=${cand.tmux}`),
+      resumedAgoMs: now - (lastResumeAt.get(sessionId) ?? -Infinity),
+    });
+    if (!eligibility.eligible) { skips.push(eligibility.reason!); continue; }
+    const gcWorktree = cand.kind === "stamped" && !!(lifecycle?.inboxKilledAt || lifecycle?.inboxDismissedAt);
+    if (await reapOneTerminal(sessionId, cand.tmux, convId, verdict.idleHours, { gcWorktree })) reaped++;
     else skips.push("busy-at-kill");
   }
   // Every pass leaves a line: without it the skip reasons were invisible and a
@@ -25071,14 +25092,21 @@ async function deliverMessage(
       }
       logDelivery(`tmux injection failed for ${injectTarget}: ${msg}`);
       if (noteUnresolvablePane(sessionId, msg)) {
-        // Deferring again would just reproduce this verdict. Tear the pane down
-        // and let the resume below build a fresh one.
-        logDelivery(`[REBUILD] ${resumeShortId(sessionId)}: ${tmuxSessionName} unresolvable ${PANE_REBUILD_THRESHOLD}x running — rebuilding the pane`);
-        await killTmuxSessionAndTree(tmuxSessionName);
-        resumeSessionCache.delete(sessionId);
-        sessionProcessCache.delete(sessionId);
-        clearUnresolvablePane(sessionId);
-        agentDetectedDead = true;
+        if (hasOpenBackgroundWork(sessionId) || subagentActiveAgoMs(sessionId) !== Infinity) {
+          // An unreadable pane is not a dead agent. Background work or a subagent
+          // running inside it dies with the tree, so the message waits instead.
+          logDelivery(`[REBUILD] ${resumeShortId(sessionId)}: ${tmuxSessionName} unresolvable ${PANE_REBUILD_THRESHOLD}x but holds open background work — not rebuilding`);
+          clearUnresolvablePane(sessionId);
+        } else {
+          // Deferring again would just reproduce this verdict. Tear the pane down
+          // and let the resume below build a fresh one.
+          logDelivery(`[REBUILD] ${resumeShortId(sessionId)}: ${tmuxSessionName} unresolvable ${PANE_REBUILD_THRESHOLD}x running — rebuilding the pane`);
+          await killTmuxSessionAndTree(tmuxSessionName);
+          resumeSessionCache.delete(sessionId);
+          sessionProcessCache.delete(sessionId);
+          clearUnresolvablePane(sessionId);
+          agentDetectedDead = true;
+        }
       }
     }
   }
