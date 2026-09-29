@@ -1,5 +1,6 @@
-// <cast-player>: the video player published pages get when they use the tag
-// (served at /cli/player.js and injected by artifactsHttp.serve). Chapters are
+// <cast-player>: the video player every published page with a video gets
+// (served at /cli/player.js and injected by artifactsHttp.serve). A plain
+// <video controls> is upgraded into one; data-native keeps the browser's own. Chapters are
 // separate files that play back to back as one film: two <video> elements take
 // turns, the idle one loads the next chapter, and they swap on "ended".
 //
@@ -21,7 +22,7 @@ export const CAST_PLAYER_JS = String.raw`(function () {
   var ICON = {
     play: '<path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.4-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z"/>',
     pause: '<rect x="6.5" y="5" width="4" height="14" rx="1.3"/><rect x="13.5" y="5" width="4" height="14" rx="1.3"/>',
-    replay: '<path d="M12 5a7 7 0 1 1-6.6 4.7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M4.2 4.6v5.2h5.2" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>',
+    replay: '<g transform="translate(1.8 1.8) scale(.85)" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></g>',
     prev: '<rect x="5" y="6" width="2.4" height="12" rx="1"/><path d="M19 6.9v10.2a.9.9 0 0 1-1.38.76L9.9 12.76a.9.9 0 0 1 0-1.52l7.72-5.1A.9.9 0 0 1 19 6.9z"/>',
     next: '<rect x="16.6" y="6" width="2.4" height="12" rx="1"/><path d="M5 6.9v10.2a.9.9 0 0 0 1.38.76l7.72-5.1a.9.9 0 0 0 0-1.52L6.38 6.14A.9.9 0 0 0 5 6.9z"/>',
     vol: '<path d="M4 9.5h3.2L11.6 6a.6.6 0 0 1 1 .47v11.06a.6.6 0 0 1-1 .47L7.2 14.5H4a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1z"/><path d="M15.5 9a4 4 0 0 1 0 6M17.8 6.6a7.4 7.4 0 0 1 0 10.8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
@@ -168,7 +169,9 @@ export const CAST_PLAYER_JS = String.raw`(function () {
     this.w = $(".vb");
     this.segs = Array.prototype.slice.call(root.querySelectorAll(".seg"));
     var poster = this.getAttribute("poster");
+    // Without a poster the first frame shows, as it does in a native player.
     if (poster) $(".poster").style.backgroundImage = "url(" + JSON.stringify(new URL(poster, document.baseURI).href) + ")";
+    else $(".poster").remove();
 
     [this.v, this.w].forEach(function (vid) {
       vid.addEventListener("timeupdate", function (e) { if (e.target === self.v) self._sync(); });
@@ -180,6 +183,10 @@ export const CAST_PLAYER_JS = String.raw`(function () {
       vid.addEventListener("pause", function (e) { if (e.target === self.v) self._state(); });
       vid.addEventListener("error", function (e) { if (e.target === self.v && self.v.getAttribute("src")) self.setAttribute("data-error", ""); });
     });
+    // An upgraded <video> takes the shape of its file, as the native element would.
+    if (this.hasAttribute("data-auto-aspect")) this.v.addEventListener("loadedmetadata", function () {
+      if (self.v.videoWidth && self.v.videoHeight) self.style.setProperty("--cast-aspect", self.v.videoWidth + "/" + self.v.videoHeight);
+    }, { once: true });
 
     $(".big").addEventListener("click", function () { self.toggle(); });
     $(".pp").addEventListener("click", function () { self.toggle(); });
@@ -529,5 +536,46 @@ export const CAST_PLAYER_JS = String.raw`(function () {
     C.prototype = Object.create(HTMLElement.prototype); C.prototype.constructor = C; Object.setPrototypeOf(C, HTMLElement);
     return C;
   })());
+
+  // A <video controls> in the page's markup asks for a player, so it gets this
+  // one: pages have the styled player without knowing the tag exists. Left
+  // alone: data-native, ambient clips (autoplay or loop), videos without
+  // controls (the page's own script drives them), and videos added later by
+  // script, which may hold a reference to the element.
+  function upgrade(v) {
+    if (!v.controls || v.hasAttribute("data-native") || v.autoplay || v.loop || v.closest("cast-player")) return;
+    var source = v.getAttribute("src");
+    if (!source) {
+      var list = v.querySelectorAll("source");
+      for (var k = 0; k < list.length && !source; k++) {
+        var type = list[k].getAttribute("type");
+        if (!type || v.canPlayType(type)) source = list[k].getAttribute("src");
+      }
+    }
+    if (!source) return;
+    var p = document.createElement("cast-player");
+    p.setAttribute("src", source);
+    ["id", "class", "style", "poster", "title"].forEach(function (a) { if (v.hasAttribute(a)) p.setAttribute(a, v.getAttribute(a)); });
+    // Page CSS aimed at video no longer matches, so carry over what it decided:
+    // the box limits, the margins, and any --cast-* skin set on the video.
+    var cs = getComputedStyle(v);
+    ["max-width", "max-height", "margin-top", "margin-right", "margin-bottom", "margin-left"].forEach(function (k) {
+      if (!p.style.getPropertyValue(k)) p.style.setProperty(k, cs.getPropertyValue(k));
+    });
+    ["--cast-accent", "--cast-fg", "--cast-bg", "--cast-panel", "--cast-track", "--cast-radius", "--cast-font", "--cast-aspect"].forEach(function (k) {
+      var val = cs.getPropertyValue(k).trim();
+      if (val && !p.style.getPropertyValue(k)) p.style.setProperty(k, val);
+    });
+    if (!cs.getPropertyValue("--cast-radius").trim() && parseFloat(cs.borderTopLeftRadius)) p.style.setProperty("--cast-radius", cs.borderTopLeftRadius);
+    var w = parseFloat(v.getAttribute("width")), h = parseFloat(v.getAttribute("height"));
+    // width="640" sizes a native video; keep that, and never wider than its column.
+    if (w) { p.style.width = w + "px"; if (p.style.maxWidth === "none") p.style.maxWidth = "100%"; }
+    if (w && h) { if (!p.style.getPropertyValue("--cast-aspect")) p.style.setProperty("--cast-aspect", w + "/" + h); }
+    else if (!p.style.getPropertyValue("--cast-aspect")) p.setAttribute("data-auto-aspect", "");
+    v.replaceWith(p);
+  }
+  function upgradeAll() { Array.prototype.forEach.call(document.querySelectorAll("video"), upgrade); }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", upgradeAll, { once: true });
+  else upgradeAll();
 })();
 `;
