@@ -393,6 +393,8 @@ function SwitchDivider({
 // R1, revised): the role's face, who moved what where, the whole line as
 // markdown, the time. The same divider in the child's thread and the role's;
 // `conversationShortId` says which side the reader is on.
+// The verb that wrote these machine messages (cast escalate) is gone; the
+// divider renders the old threads that still carry them.
 export function EscalationDivider({ escalation, conversationShortId, timestamp }: { escalation: SessionEscalationMessage; conversationShortId?: string; timestamp: number }) {
   const inChild = !!conversationShortId && conversationShortId === escalation.session.short_id;
   const caption = sessionEscalationCaption(escalation, { inChild });

@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { existsSync, appendFileSync, mkdirSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { wslCastArgs } from "./wsl";
 
 // Codecast session blame for VS Code / Cursor. A thin client over the `cast`
 // CLI: it shells out to `cast blame …` (which holds the auth token and does the
@@ -47,6 +48,11 @@ function inlineEnabled(): boolean {
 // to ~/.local/bin) isn't found. Resolve a real path: an explicit setting wins,
 // then common install dirs, then a login shell (whatever the user's rc sets up).
 // Cached for the session.
+function configuredCli(): string | undefined {
+  const configured = vscode.workspace.getConfiguration("codecast").get<string>("cliPath")?.trim();
+  return configured && configured !== "cast" ? configured : undefined;
+}
+
 function resolveCliSync(): string | undefined {
   const configured = vscode.workspace.getConfiguration("codecast").get<string>("cliPath")?.trim();
   if (configured && configured !== "cast") return existsSync(configured) ? configured : configured;
@@ -66,6 +72,8 @@ function resolveCliSync(): string | undefined {
 // shells out to (e.g. the dev `cast` is a bun wrapper; bun lives in ~/.bun/bin).
 let userPath: string | undefined;
 async function learnUserPath(): Promise<void> {
+  // Windows reaches cast through wsl.exe, whose login shell sets its own PATH.
+  if (process.platform === "win32") return;
   const shell = process.env.SHELL || "/bin/zsh";
   try {
     const out = await new Promise<string>((resolve, reject) =>
@@ -109,6 +117,18 @@ function runCast(args: string[], cwd: string): Promise<string> {
     return err;
   };
   return new Promise((resolve, reject) => {
+    // Windows editor, Linux CLI: codecast runs inside WSL, so reach it there.
+    // A configured cliPath still wins (someone pointing at their own wrapper).
+    if (process.platform === "win32" && !configuredCli()) {
+      const wslArgs = wslCastArgs(args, cwd);
+      log(`run: wsl.exe ${wslArgs.join(" ")}`);
+      execFile("wsl.exe", wslArgs, { cwd, windowsHide: true, maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => {
+        if (!err) return resolve(stdout);
+        log(`  ✗ exit=${(err as any).code} ${stderr ? "stderr=" + stderr.slice(0, 300) : err.message}`);
+        reject(tag(err, stderr));
+      });
+      return;
+    }
     if (bin) {
       log(`run: ${bin} ${args.join(" ")}  (cwd=${cwd})`);
       execFile(bin, args, { cwd, env, maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => {
@@ -185,7 +205,9 @@ function warnCastMissing(): void {
   warnedMissing = true;
   vscode.window
     .showWarningMessage(
-      "Codecast: couldn't run the `cast` CLI. Install it from codecast.sh, or set codecast.cliPath to the output of `which cast`.",
+      process.platform === "win32"
+        ? "Codecast: couldn't run `cast` inside WSL. Install it with `irm codecast.sh/install.ps1 | iex` in PowerShell, or open this folder in WSL."
+        : "Codecast: couldn't run the `cast` CLI. Install it from codecast.sh, or set codecast.cliPath to the output of `which cast`.",
       "Open Settings",
     )
     .then((choice) => {

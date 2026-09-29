@@ -107,19 +107,20 @@ async function requireAdmin(ctx: Ctx, userId: Id<"users">, proposal: ProposalRow
  * reads "Mark done: <title>" wherever the proposal is read, and a reader's
  * store may not hold that team's records, so the title travels with the
  * proposal. The analyzer writes it from its inputs; a spec that left it out
- * gets it here, from the record itself, when the record is in the
- * proposal's workspace. Access is one equality on `workspace`, never a read
- * of team_id. A ref that is not a short id, or a record elsewhere, leaves
- * the change as written.
+ * gets it here, from the record itself. Access is one equality on
+ * `workspace`, never a read of team_id. A short id that names a record in
+ * another workspace is refused here, where its author reads the error, rather
+ * than at accept, where it could only fail; a ref that is not a short id is
+ * left as written for the apply step to resolve.
  */
-async function withRecordTitle<T extends OrgChange>(ctx: Ctx, change: T, wsKey: string): Promise<T> {
+async function checkedRecordChange<T extends OrgChange>(ctx: Ctx, change: T, wsKey: string): Promise<T> {
   if (change.kind !== "plan_status" && change.kind !== "task_status" && change.kind !== "project_status" && change.kind !== "initiative_projects" && change.kind !== "initiative_owner") return change;
-  if (change.title?.trim()) return change;
   const table = change.kind === "plan_status" ? "plans" : change.kind === "task_status" ? "tasks" : change.kind === "project_status" ? "projects" : "initiatives";
   const ref = (change.kind === "plan_status" ? change.plan : change.kind === "task_status" ? change.task : change.kind === "project_status" ? change.project : change.initiative).trim();
   if (!/^(pl|ct|pr|in)-\d+$/.test(ref)) return change;
   const row = await ctx.db.query(table).withIndex("by_short_id", (q: any) => q.eq("short_id", ref)).first();
-  if (!row || row.workspace !== wsKey || typeof row.title !== "string" || !row.title.trim()) return change;
+  if (row && row.workspace !== wsKey) throw new Error(`${ref} belongs to another workspace; a proposal changes only this workspace's records`);
+  if (change.title?.trim() || !row || typeof row.title !== "string" || !row.title.trim()) return change;
   return { ...change, title: row.title.trim() };
 }
 
@@ -194,7 +195,7 @@ export async function performCreateProposal(
   const changes = [];
   const wsKey = workspaceKey(args.team_id ? { type: "team", teamId: args.team_id } : { type: "personal", userId });
   for (const [i, c] of spec.changes.entries()) {
-    const change = await withRecordTitle(ctx, c.change, wsKey);
+    const change = await checkedRecordChange(ctx, c.change, wsKey);
     const id = await ctx.db.insert("org_proposal_changes", {
       proposal_id: proposalId,
       seq: i + 1,
@@ -737,7 +738,7 @@ export async function performReviseProposal(ctx: Ctx, userId: Id<"users">, args:
       writes.push(() => ctx.db.patch(c._id, patch));
     } else {
       const added = normalizeOrgSpecChange(op.change);
-      added.change = await withRecordTitle(ctx, added.change, workspaceKey(proposal.team_id ? { type: "team", teamId: proposal.team_id } : { type: "personal", userId: proposal.scope_user_id ?? userId }));
+      added.change = await checkedRecordChange(ctx, added.change, workspaceKey(proposal.team_id ? { type: "team", teamId: proposal.team_id } : { type: "personal", userId: proposal.scope_user_id ?? userId }));
       const seq = nextSeq++;
       claim(added.change, seq, "add");
       const line = describeOrgChange(added.change);

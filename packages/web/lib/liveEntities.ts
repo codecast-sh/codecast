@@ -484,6 +484,9 @@ export function findEntityInStore(
     case "proposal":
       // The workspace's proposals (list rows, and any the org page opened).
       return lookup(state.orgProposals, rawId);
+    case "decision":
+      // The viewer's decision queue (open rows, and answered ones for a day).
+      return lookup(state.sessionDecisions, rawId);
     case "trigger":
       // The viewer's own triggers (agentTasks) resolve locally by Convex id or
       // short id; a foreign (bot-owned) trigger waits for webGet.

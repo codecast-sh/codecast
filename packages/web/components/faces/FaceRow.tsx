@@ -221,7 +221,11 @@ function FaceSeat({
       data-hold={key.holding ? "1" : undefined}
       data-ask={entry.ask > 0 ? entry.ask : undefined}
       data-stacked={stacked ? "1" : undefined}
-      style={stacked ? { zIndex: 10 - Math.min(stackDepth, 9) } : undefined}
+      style={
+        stackDepth >= 0
+          ? ({ "--stack-i": stackDepth, zIndex: stacked ? 10 - Math.min(stackDepth, 9) : undefined } as React.CSSProperties)
+          : undefined
+      }
       {...(stacked ? {} : key.warmProps)}
       onMouseEnter={() => onHover(stacked ? null : entry.id)}
       onMouseLeave={() => onHover(null)}
@@ -548,7 +552,12 @@ export function FaceRow({
       className={`face-row ${className}`.trim()}
       data-density={density}
       data-band={density === "float" ? bandSide : undefined}
-      style={faceSize ? ({ "--face": `${faceSize}px` } as React.CSSProperties) : undefined}
+      style={
+        {
+          ...(faceSize ? { "--face": `${faceSize}px`, "--mark-k": Math.sqrt(faceSize / FACE_ROW_METRICS.float.face).toFixed(3) } : {}),
+          ...(stackable ? { "--stack-i-last": outsiders - 1 } : {}),
+        } as React.CSSProperties
+      }
       data-holding={faces.sendingRoomKey ? "1" : undefined}
       data-stacked={stacked ? "1" : undefined}
       role="group"

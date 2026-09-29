@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { BROWSER_SYNC_PENDING_CAP, claimSharedCheckout, commandOutcome, pickOnlineLocalDevice, placeConversation, placementFence, reportPlacementFailure, requestBrowserSync, requestRemoteWake, wakeDevicesFor } from "./cloud";
 import { DEVICE_ONLINE_MS } from "./deviceRouting";
+import { resumeConversationSession } from "./daemonCommandUtils";
 
 const now = 1_000_000_000;
 const online = now - 10_000;
@@ -131,6 +132,22 @@ describe("placeConversation — fenced by the park's token", () => {
     const placed = fixture({ owner_device_id: "box" });
     expect(await report(placed, "tok")).toEqual({ recorded: false, reason: "not_pending" });
     expect((await placed.get("conv_1")).cloud_placement_failed_at).toBeUndefined();
+  });
+
+  test("a context over the cap is kept with the failure; Resume re-parks carrying the files to leave out", async () => {
+    const tooLarge = { total_bytes: 900 * 1048576, cap_bytes: 768 * 1048576, files: [{ path: "src/app/renders/c07.mp4", bytes: 200 * 1048576 }] };
+    const db = fixture({ owner_device_id: "box", cloud_placement: "pending", cloud_placement_token: "tok" });
+    await (reportPlacementFailure as any)._handler(ctx(db), { conversation_id: "conv_1", placement_token: "tok", error: "cloud host preparation failed (exit 1)", context_too_large: tooLarge });
+    expect((await db.get("conv_1")).cloud_context_too_large).toEqual(tooLarge);
+
+    await resumeConversationSession({ db } as any, user, "conv_1" as any, { leaveOut: tooLarge.files.map((f) => f.path) });
+    const row = await db.get("conv_1");
+    expect(row).toMatchObject({ cloud_placement: "pending", owner_device_id: "box" });
+    expect(row.cloud_placement_token).not.toBe("tok");
+    expect(row.cloud_placement_failed_at).toBeUndefined();
+    expect(row.cloud_context_too_large).toBeUndefined();
+    const spawn = db._tables.daemon_commands.find((c: any) => c.command === "cloud_spawn");
+    expect(JSON.parse(spawn.args)).toMatchObject({ conversation_id: "conv_1", cloud_device_id: "box", placement_token: row.cloud_placement_token, leave_out: ["src/app/renders/c07.mp4"] });
   });
 
   test("an owner change releases the previous owner; no expectation stays unfenced", async () => {

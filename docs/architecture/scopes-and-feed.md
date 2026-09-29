@@ -169,7 +169,7 @@ On 2026-09-23 the founder opened the Calling lead's page and met two projects wi
 
 The panel's first screen (the Scope tab) answers three questions, in that order, in sentences a person reads in ten seconds:
 
-1. **What needs you.** Only what the role put in front of the person (R1, revised): each escalation as one line with its session pill. When there is none, one calm line: "Nothing needs you." Never a count of sessions waiting on a person, never a list of hands in needs input: those wait on the role, and the role answers or escalates.
+1. **What needs you.** (Retired 2026-09-29 with escalation, org-staffing.md S28: what a role needs from the person is raised in its own thread and is that thread's card in the inbox, so the page repeats nothing.) Never a count of sessions waiting on a person, never a list of hands in needs input: those wait on the role, and the role answers or passes up.
 2. **Where it stands.** One sentence per project in the role's area, in the role's own words, from its brief (F5.2). No task counts, no progress bars, no plan fractions on the first screen. A project the role has not written about yet reads "no word from @calling yet" rather than numbers.
 3. **What it is doing.** One line: how many sessions are active under it and the one it is on now, as a pill. The rest is the Sessions tab.
 

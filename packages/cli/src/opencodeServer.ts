@@ -30,6 +30,7 @@
 // The DB path stays authoritative for transcript CONTENT in every case: this module
 // never syncs message bodies. SSE carries STATE (working / idle / permission) only.
 
+import { parseSseStream } from "./sse.js";
 import { EventEmitter } from "events";
 import { spawn, type ChildProcess } from "./proc.js";
 import * as readline from "readline";
@@ -112,35 +113,17 @@ export function parseListeningPort(line: string): number | null {
 }
 
 /**
- * Split a growing SSE buffer into complete events. Frames are separated by a blank
- * line; within a frame every `data:` line is concatenated per the SSE spec, and the
- * joined payload is JSON-parsed. Non-`data:` fields (`id:`, `:comment`, heartbeats)
- * are ignored. Returns the parsed events plus the unconsumed tail (a partial frame)
- * to carry into the next chunk. Unparseable payloads are dropped, not thrown.
+ * Split a growing SSE buffer into complete opencode events: each frame's data
+ * JSON-parsed, frames that are not `{type}` objects dropped (never thrown).
+ * Returns the unconsumed tail to carry into the next chunk.
  */
 export function parseSseFrames(buffer: string): { events: OpencodeRawEvent[]; rest: string } {
+  const { frames, rest } = parseSseStream(buffer);
   const events: OpencodeRawEvent[] = [];
-  // Normalize CRLF so the frame delimiter is a single "\n\n".
-  const normalized = buffer.replace(/\r\n/g, "\n");
-  const lastBreak = normalized.lastIndexOf("\n\n");
-  if (lastBreak === -1) return { events, rest: normalized };
-
-  const complete = normalized.slice(0, lastBreak);
-  const rest = normalized.slice(lastBreak + 2);
-
-  for (const frame of complete.split("\n\n")) {
-    const dataParts: string[] = [];
-    for (const rawLine of frame.split("\n")) {
-      if (rawLine.startsWith("data:")) {
-        // A single leading space after the colon is part of the field syntax.
-        dataParts.push(rawLine.slice(rawLine.startsWith("data: ") ? 6 : 5));
-      }
-    }
-    if (dataParts.length === 0) continue;
-    const payload = dataParts.join("\n");
-    if (!payload.trim()) continue;
+  for (const frame of frames) {
+    if (!frame.data.trim()) continue;
     try {
-      const obj = JSON.parse(payload) as OpencodeRawEvent;
+      const obj = JSON.parse(frame.data) as OpencodeRawEvent;
       if (obj && typeof obj.type === "string") events.push(obj);
     } catch {
       /* drop partial/garbage payloads */

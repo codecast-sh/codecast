@@ -11,7 +11,7 @@ import { useJumpToDecisionAsk } from "../hooks/useJumpToDecisionAsk";
 import { MarkdownRenderer } from "./tools/MarkdownRenderer";
 import { PublishedPageEmbed } from "./PublishedPageEmbed";
 import { DecisionRecordedAnswer } from "./decisions/DecisionAnswerControls";
-import { decisionHref } from "../lib/decisionLinks";
+import { chosenOptions, decisionHref } from "../lib/decisionLinks";
 
 // The strip under a decision answer bubble: which question this answered, a
 // way back to the `cast decide` call, and (unfolded) the options with the
@@ -50,13 +50,10 @@ export function DecisionAnswerFooter({ decision, conversationId, timestamp }: { 
   const loading = !row && ((open && isConvexId(decision.id) && fetchedById === undefined) || (legacyLookup && fetchedByAnswer === undefined));
   // Which options the answer names: one for a single, several for a multi or
   // a rank (answer_json, in order), none for a typed or form answer.
-  const chosenList: number[] = !row
-    ? []
-    : Array.isArray(row.answer_json)
-      ? row.answer_json
-      : row.answer_index !== undefined
-        ? [row.answer_index]
-        : [row.options.findIndex((o) => o.label === decision.answer)].filter((i) => i >= 0);
+  const recorded = row ? chosenOptions(row) : [];
+  const chosenList: number[] = !row || recorded.length
+    ? recorded
+    : [row.options.findIndex((o) => o.label === decision.answer)].filter((i) => i >= 0);
   const chosenSet = new Set(chosenList);
   const isRank = row?.kind === "rank";
   const isForm = row?.kind === "form";

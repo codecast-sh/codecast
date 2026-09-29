@@ -16,7 +16,7 @@ import { useOrgRoles } from "./useOrgRoles";
 import { useInitiatives } from "./useInitiatives";
 import { buildRoleScope, sourceFromCard, sourceFromTree, type RoleCardAnswer, type RoleScopeModel } from "../lib/roleScope";
 import { boundTaskOf } from "../lib/scopePage";
-import type { OrgRole, OrgSession, OrgTree } from "../components/org/orgTypes";
+import type { OrgRole, OrgTree } from "../components/org/orgTypes";
 
 const projectSig = (p: ProjectItem) => `${p.title}|${p.status}|${p.owner_role_id ?? ""}`;
 const planSig = (p: PlanItem) => `${p.title}|${p.status}|${(p as any).project_id ?? ""}`;
@@ -36,18 +36,13 @@ export function useScopeRows(): { projects: ProjectItem[]; plans: PlanItem[]; ta
 const findRole = (tree: OrgTree | null | undefined, ref: string): OrgRole | null =>
   tree?.roles.find((r) => r.short_id === ref || r._id === ref) ?? null;
 
-/** A session the role has put in front of the person (R1), with its line. */
-export type EscalatedSession = { session: OrgSession; line: string };
-
-const escalationOf = (row: any): string | null => (row?.escalated_by_role?.line ? String(row.escalated_by_role.line) : null);
-
-export function useRoleScope(roleRef: string, card?: RoleCardAnswer | null): { model: RoleScopeModel | null; role: OrgRole | null; escalated: EscalatedSession[] } {
+export function useRoleScope(roleRef: string, card?: RoleCardAnswer | null): { model: RoleScopeModel | null; role: OrgRole | null } {
   // The role's own facts as one string: the normalized source (names, scope,
-  // counts, limits, who it reports to) plus each top session's escalation.
+  // counts, limits, who it reports to) plus each top session's state and task.
   const sig = useInboxStore((s) => {
     const role = findRole(s.orgTree, roleRef);
     if (!role || !s.orgTree) return "";
-    return JSON.stringify(sourceFromTree(s.orgTree, role)) + "\n" + role.sessions.map((x) => `${x._id}|${x.state}|${x.title}|${(s.sessions[x._id] as any)?.active_task_id ?? ""}|${escalationOf(s.sessions[x._id]) ?? ""}`).join("\n");
+    return JSON.stringify(sourceFromTree(s.orgTree, role)) + "\n" + role.sessions.map((x) => `${x._id}|${x.state}|${x.title}|${(s.sessions[x._id] as any)?.active_task_id ?? ""}`).join("\n");
   });
   // The charter document's text, when the store holds the document.
   const charterDoc = useInboxStore((s) => {
@@ -62,13 +57,9 @@ export function useRoleScope(roleRef: string, card?: RoleCardAnswer | null): { m
     const st = useInboxStore.getState();
     const role = findRole(st.orgTree, roleRef);
     const source = role && st.orgTree ? sourceFromTree(st.orgTree, role) : card ? sourceFromCard(card) : null;
-    if (!source) return { model: null, role, escalated: [] };
+    if (!source) return { model: null, role };
     if (charterDoc) source.charter = charterDoc;
     else if (!source.charter && card?.charter) source.charter = card.charter;
-    const escalated = (role?.sessions ?? []).flatMap((session) => {
-      const line = escalationOf(st.sessions[session._id]);
-      return line ? [{ session, line }] : [];
-    });
     // The sessions the tree carries for the role (its most pressing ones
     // first), each with the task it is bound to: a project card says which of
     // them are at work inside it.
@@ -76,6 +67,6 @@ export function useRoleScope(roleRef: string, card?: RoleCardAnswer | null): { m
       state: x.state,
       task_id: boundTaskOf(x._id, (st.sessions[x._id] as any)?.active_task_id ?? null, tasks)?._id ?? null,
     }));
-    return { model: buildRoleScope(source, { projects, plans, tasks, roles, sessions, initiatives } as any, today), role, escalated };
+    return { model: buildRoleScope(source, { projects, plans, tasks, roles, sessions, initiatives } as any, today), role };
   }, [sig, charterDoc, card, roles, projects, plans, tasks, initiatives, today, roleRef]); // eslint-disable-line react-hooks/exhaustive-deps
 }

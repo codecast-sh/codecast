@@ -1,6 +1,6 @@
 import { validateIngestBounds } from './ingestTransport.js';
 import type { IngestJob, IngestResult } from './ingestTypes.js';
-import { INGEST_MAX_BYTES } from './ingestTypes.js';
+import { INGEST_MAX_BYTES, isWindowedIngest } from './ingestTypes.js';
 import { validatePreparationFile } from '../messagePreparationValidation.js';
 import type { ParsedMessage } from '../parser.js';
 
@@ -74,7 +74,7 @@ function* schema(value: unknown, job: IngestJob): Generator<void> {
   requireValue(Array.isArray(value.messages));
   for (const key of ['bytesConsumed','fileSize','totalCount','maxRowId']) requireValue(Number.isSafeInteger(value[key]) && value[key] >= 0);
   requireValue(value.fileSize === job.identity.size);
-  const windowed = ['claude','cursor','codex'].includes(job.client);
+  const windowed = isWindowedIngest(job);
   requireValue(windowed ? value.bytesConsumed <= Math.max(0,job.identity.size-job.offset) : value.bytesConsumed === 0);
   if (job.client === 'cursorDb') requireValue(value.messages.length === Math.max(0,value.totalCount-job.offset) && (value.maxRowId !== 0 || value.totalCount === 0));
   else requireValue(value.totalCount === value.messages.length && value.maxRowId === 0);

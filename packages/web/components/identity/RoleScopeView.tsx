@@ -23,8 +23,6 @@ import { INITIATIVE_HEALTH_LABEL } from "@codecast/shared/contracts/initiative";
 import type { RoleInitiative } from "../../lib/roleInitiatives";
 import { HEALTH_COLOR } from "../../lib/initiativeColors";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "../ui/dropdown-menu";
-import type { EscalatedSession } from "../../hooks/useRoleScope";
-import type { OrgSession } from "../org/orgTypes";
 import { RoleFace } from "../org/RoleFace";
 import { AssigneeFace } from "./AssigneeFace";
 import { RoleHoverCard } from "./RoleHoverCard";
@@ -39,8 +37,6 @@ const CARD_PLANS = 2;
 export type RoleScopeViewProps = {
   model: RoleScopeModel;
   density: RoleScopeDensity;
-  /** Sessions the role has put in front of the person (R1): first, always. */
-  escalated?: EscalatedSession[];
   /** Page only: a project's lead, drawn by the one chip that knows the rule. */
   renderLead?: (projectId: string) => ReactNode;
   /** Page only: the initiatives a project belongs to (I1), as their pills. */
@@ -63,11 +59,10 @@ export type RoleScopeViewProps = {
   /** Page only: a template role's sections (org-hire.md H11), under its project card. */
   template?: ReactNode;
   onTab?: (tab: RoleScopeTab) => void;
-  onOpenSession?: (s: OrgSession) => void;
   className?: string;
 };
 
-export function RoleScopeView({ model, density, escalated = [], renderLead, renderInitiative, onFilePlan, sessions, goals, history, template, waitingInArea = 0, onTab, onOpenSession, className }: RoleScopeViewProps) {
+export function RoleScopeView({ model, density, renderLead, renderInitiative, onFilePlan, sessions, goals, history, template, waitingInArea = 0, onTab, className }: RoleScopeViewProps) {
   const moreWaiting = !(density === "card") && waitingInArea > (model.sessions?.waiting ?? 0);
   const card = density === "card";
   const projects = card ? model.projects.slice(0, CARD_PROJECTS) : model.projects;
@@ -96,25 +91,8 @@ export function RoleScopeView({ model, density, escalated = [], renderLead, rend
       </Section>
       {!card && template}
 
-      {(model.sessions || escalated.length > 0) && (
+      {model.sessions && (
         <Section density={density} label="Sessions" name="sessions">
-          {escalated.length > 0 && (card ? (
-            <p className="text-sol-yellow" data-scope-escalated={escalated.length}>{escalated.length} in front of you: {escalated[0].line}</p>
-          ) : (
-            <ul className="space-y-0.5 pb-1" data-scope-escalated={escalated.length}>
-              {escalated.map(({ session, line }) => (
-                <li key={session._id}>
-                  <button type="button" onClick={() => onOpenSession?.(session)} className="w-full text-left flex items-start gap-2.5 px-2.5 py-2 rounded-lg transition-colors hover:bg-sol-bg-highlight/70">
-                    <span className="w-[3px] self-stretch rounded-full shrink-0 bg-sol-yellow" />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[12.5px] font-medium text-sol-text">{session.title || "Untitled"}</span>
-                      <span className="block text-[11.5px] text-sol-yellow">In front of you: {line}</span>
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          ))}
           {moreWaiting && <p className="px-2.5 pb-1 text-[12px] text-sol-yellow" data-scope-waiting-in-area={waitingInArea}>{waitingInArea} {waitingInArea === 1 ? "session is" : "sessions are"} waiting on a person in this area.</p>}
           {model.sessions && !(moreWaiting && model.sessions.total === 0) && <p className={card ? "text-sol-text-secondary" : "px-2.5 pb-1.5 text-[12px] text-sol-text-muted"} data-scope-sessions-line>{model.sessions.total === 0 ? "No session reports to this role yet." : card ? sessionsLine(model.sessions) : `Reporting to it: ${sessionsLine(model.sessions)}`}</p>}
           {!card && sessions}

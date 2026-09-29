@@ -84,3 +84,25 @@ export const GROK_TRUST_PANE = `
   No, quit                     n
 ${"\n".repeat(40)}  Grok Build  1.0.30 [stable]
 `.replace(/^\n/, "");
+
+// `tmux capture-pane -p -J -S -30` from a Claude Code 2.1.284 pane that
+// `cast spawn` launched with --dangerously-skip-permissions on a fresh WSL
+// machine, where nobody had accepted the bypass warning yet (ct-55193). Its
+// footer is the trust dialog's "Enter to confirm · Esc to cancel", and Escape
+// here is "No, exit": misread as the Rewind modal, the Escape we sent quit the
+// agent before its task ran.
+export const CLAUDE_BYPASS_WARNING_PANE = `dima@EC2AMAZ-145C0S1:~/wproj$ env -u CLAUDECODE claude --dangerously-skip-permissions
+────────────────────────────────────────────────────────────────────────────────
+  WARNING: Claude Code running in Bypass Permissions mode
+
+  In Bypass Permissions mode, Claude Code will not ask for your approval before running potentially dangerous commands.
+  This mode should only be used in a sandboxed container/VM that has restricted internet access and can easily be restored if damaged.
+
+  By proceeding, you accept all responsibility for actions taken while running in Bypass Permissions mode.
+
+  https://code.claude.com/docs/en/security
+
+  ❯ No, exit
+    Yes, I accept
+
+  Enter to confirm · Esc to cancel`;
