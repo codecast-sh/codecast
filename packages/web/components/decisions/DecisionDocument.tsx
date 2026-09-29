@@ -20,7 +20,7 @@ import { DecisionOptionList } from "./DecisionOptionList";
 import { AskingSession, CategoryNote, HolderLine, PersonChip } from "./DecisionParties";
 import { GateRunChip } from "./DecisionCompactCard";
 import { OptionPages } from "./OptionPages";
-import { ladderRecommendation } from "../../lib/decisionLinks";
+import { chosenOptions, ladderRecommendation } from "../../lib/decisionLinks";
 import "./decisions.css";
 import { DecisionProposalOrigin } from "../org/ProposalAuthorPill";
 import { proposalRefInContext } from "../org/staffingModel";
@@ -69,9 +69,7 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
   // Single, multi and rank answer on the option rows themselves; a form
   // answers on its fields in the footer.
   const answerInOptions = pending && answerable && (decision.kind ?? "single") !== "form";
-  const chosen = new Set<number>(
-    Array.isArray(decision.answer_json) ? decision.answer_json : decision.answer_index !== undefined ? [decision.answer_index] : [],
-  );
+  const chosen = new Set<number>(chosenOptions(decision));
 
   const onAnswer = useCallback((input: DecisionAnswerInput) => answerDecision(decision._id, input), [answerDecision, decision._id]);
   const onDismiss = useCallback(() => answerDecision(decision._id, { dismiss: true }), [answerDecision, decision._id]);

@@ -7,6 +7,7 @@ import { KeyCap } from "../KeyboardShortcutsHelp";
 import { DecisionOptionList, TypeAnswerButton } from "./DecisionOptionList";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { hasOpenModal } from "../../shortcuts";
+import { chosenOptions } from "../../lib/decisionLinks";
 
 // The answer footer, per kind (docs/architecture/decisions-as-documents.md
 // D1 / D4): single = one option (digits 1 to 9, or a typed answer); multi =
@@ -277,7 +278,7 @@ export function DecisionRecordedAnswer({ decision }: { decision: Pick<SessionDec
       </dl>
     );
   }
-  const list: number[] = Array.isArray(decision.answer_json) ? decision.answer_json : decision.answer_index !== undefined ? [decision.answer_index] : [];
+  const list = chosenOptions(decision);
   return (
     <ol className="space-y-1">
       {list.map((i, pos) => (

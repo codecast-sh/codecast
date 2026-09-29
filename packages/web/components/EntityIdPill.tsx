@@ -15,6 +15,8 @@ import {
   Folder,
   Flag,
   Network,
+  Signpost,
+  Check,
   Zap,
   GitPullRequest,
   GitCommitHorizontal,
@@ -73,6 +75,8 @@ import { REF_NTH_ATTR, REF_NAMED_ATTR, REF_SUFFIX_ATTR } from "../lib/remarkEnti
 import { REF_CERTAIN_ATTR } from "../lib/remarkEntityCards";
 import { useIsEstablishedRef } from "../hooks/entityMentionScope";
 import { describeTaskCadence, taskStateLabel } from "./triggerCadence";
+import { chosenOptions } from "../lib/decisionLinks";
+import type { SessionDecisionItem } from "../store/inboxStore";
 import { SessionHoverContent } from "./SessionHoverContent";
 import { DocDates } from "./DocDates";
 import { TimeAgo } from "./tasks/TaskCommentStream";
@@ -274,6 +278,59 @@ function PlanHoverContent({ plan }: { plan: any }) {
 
       <div className="flex items-center justify-between pt-1 border-t border-white/5">
         <ShortId id={plan.short_id} className="text-[10px] text-gray-500" />
+        <span className="text-[10px] text-gray-500 inline-flex items-center gap-0.5">
+          Click to open <ArrowUpRight className="w-2.5 h-2.5" />
+        </span>
+      </div>
+    </div>
+  );
+}
+
+const DECISION_STATE: Record<string, { label: string; color: string }> = {
+  pending: { label: "Open", color: "text-sol-yellow" },
+  answered: { label: "Answered", color: "text-sol-green" },
+  dismissed: { label: "Dismissed", color: "text-sol-text-dim" },
+  withdrawn: { label: "Withdrawn", color: "text-sol-text-dim" },
+};
+
+// What a decision reference has to answer at a glance: the question, whether
+// it is still open, and the option labels with the chosen ones marked. What
+// each option means lives on the decision page, one click away.
+function DecisionHoverContent({ decision }: { decision: SessionDecisionItem }) {
+  const state = DECISION_STATE[decision.status] ?? DECISION_STATE.pending;
+  const chosen = new Set(chosenOptions(decision));
+  const shown = decision.options.slice(0, 4);
+  return (
+    <div className="space-y-2">
+      <div className="flex items-start gap-2">
+        <Signpost className={`w-3.5 h-3.5 flex-shrink-0 mt-0.5 ${state.color}`} />
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-medium text-sol-text leading-snug line-clamp-3">{decision.question}</div>
+          <div className="flex items-center gap-2 mt-1 text-[10px]">
+            <span className={`font-medium ${state.color}`}>{state.label}</span>
+            {decision.status === "pending" && !decision.blocking && <span className="text-sol-blue">advisory</span>}
+            {decision.status === "answered" && decision.answer_text && !chosen.size && (
+              <span className="text-gray-400 truncate">{decision.answer_text}</span>
+            )}
+            <span className="text-gray-500">{relativeTime(decision.resolved_at ?? decision.created_at)}</span>
+          </div>
+        </div>
+      </div>
+      {shown.length > 0 && (
+        <div className="space-y-1 pl-[22px]">
+          {shown.map((option, i) => (
+            <div key={i} className={`flex items-start gap-1.5 text-[11px] leading-snug ${chosen.has(i) ? "text-sol-green" : "text-sol-text-muted"}`}>
+              {chosen.has(i) ? <Check className="w-3 h-3 mt-px flex-shrink-0" /> : <span className="w-3 flex-shrink-0 text-center font-mono text-[10px] text-sol-text-dim">{i + 1}</span>}
+              <span className="line-clamp-2">{option.label.replace(" (Recommended)", "")}</span>
+            </div>
+          ))}
+          {decision.options.length > shown.length && (
+            <div className="text-[10px] text-gray-500 pl-[18px]">+{decision.options.length - shown.length} more</div>
+          )}
+        </div>
+      )}
+      <div className="flex items-center justify-between pt-1 border-t border-white/5">
+        {decision.short_id ? <ShortId id={decision.short_id} className="text-[10px] text-gray-500" /> : <span />}
         <span className="text-[10px] text-gray-500 inline-flex items-center gap-0.5">
           Click to open <ArrowUpRight className="w-2.5 h-2.5" />
         </span>
@@ -1023,6 +1080,8 @@ export function EntityIdPill({
               ? Flag
             : type === "proposal"
               ? Network
+            : type === "decision"
+              ? Signpost
             : isPr
               ? GitPullRequest
               : isCommit
@@ -1045,6 +1104,9 @@ export function EntityIdPill({
             // A proposal is the org page's violet, the colour of the ghosts it draws.
             : type === "proposal"
               ? "bg-sol-violet/[0.08] text-sol-violet hover:bg-sol-violet/[0.16]"
+            // A decision wears the queue's yellow.
+            : type === "decision"
+              ? "bg-sol-yellow/[0.08] text-sol-yellow hover:bg-sol-yellow/[0.16]"
             : isPr
               ? "bg-sol-green/[0.08] text-sol-green hover:bg-sol-green/[0.16]"
               : isCommit
@@ -1179,6 +1241,7 @@ export function EntityIdPill({
             : isTrigger ? <TriggerHoverContent trigger={entity} />
             : type === "doc" ? <DocHoverContent doc={entity} />
             : type === "initiative" ? <InitiativeHoverContent initiative={entity} />
+            : type === "decision" ? <DecisionHoverContent decision={entity} />
             : isPr ? <PullRequestHoverContent pr={entity} />
             : isCommit ? <CommitHoverContent commit={entity} />
             : <GenericHoverContent entity={entity} type={type} />

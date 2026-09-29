@@ -10,6 +10,7 @@ import {
   GitPullRequest,
   MessageSquare,
   Network,
+  Signpost,
   Target,
   Zap,
 } from "lucide-react";
@@ -70,6 +71,7 @@ const TYPE_ICON: Record<EntityType, any> = {
   project: Folder,
   initiative: Flag,
   proposal: Network,
+  decision: Signpost,
   pr: GitPullRequest,
   commit: GitCommitHorizontal,
 };
