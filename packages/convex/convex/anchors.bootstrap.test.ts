@@ -32,7 +32,7 @@ describe("a role's opening message", () => {
     expect(m).toContain("keep Ashot's goals in view");
     // The review is one of its jobs, run by its routine, not its opening.
     expect(m).not.toContain("## Talk it through");
-    expect(m.endsWith("Read `cast brief` now, post a one-line hello, then stand by.")).toBe(true);
+    expect(m.endsWith("Read `cast brief` now.")).toBe(true);
     expect(m.split(/\s+/).length).toBeLessThan(260);
     expect(isBootstrapPrompt(m)).toBe(true);
   });
