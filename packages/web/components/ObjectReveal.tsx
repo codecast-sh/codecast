@@ -19,7 +19,7 @@
 import React, { useCallback, useContext, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
-import { ArrowUpRight, Columns2, PanelBottomClose, PanelBottomOpen, X } from "lucide-react";
+import { ArrowUpRight, Columns2, PanelBottomClose, PanelBottomOpen } from "lucide-react";
 import { RoutePane } from "./RoutePane";
 import { SessionPane } from "./stage/SessionPane";
 import { PaneControls } from "./stage/PaneControls";
@@ -139,7 +139,7 @@ export function RevealOpenLink({
         title={label}
       >
         <span className="object-reveal__open-label">
-          {label}
+          <span className="object-reveal__open-text">{label}</span>
           <ArrowUpRight className={variant === "bar" ? "h-4 w-4" : "h-3.5 w-3.5"} />
         </span>
       </Link>
@@ -189,13 +189,12 @@ function savedHeight(): number | null {
     return null;
   }
 }
-// A band may run to almost twice the scrolling surface: the strip and the
-// foot stay pinned while the read scrolls through it, so close is never out
-// of reach.
-const maxBandHeight = (bounds: HTMLElement) => Math.round(bounds.clientHeight * 1.9);
+// A band never outgrows the scrolling surface, so its top strip (the close)
+// and its page fit in one view.
+const maxBandHeight = (bounds: HTMLElement) => Math.max(MIN_HEIGHT, bounds.clientHeight - 24);
 function bandHeight(bounds: HTMLElement): number {
   const saved = savedHeight();
-  return Math.min(maxBandHeight(bounds), saved ?? Math.round(bounds.clientHeight * 0.82));
+  return Math.min(maxBandHeight(bounds), saved ?? Math.round(bounds.clientHeight * 0.6));
 }
 
 // Full bleed by measurement, not by CSS math: the band sits under an unknown
@@ -396,8 +395,8 @@ function RevealBand({ reveal }: { reveal: OpenReveal }) {
       .finished.then(done, done);
   }, [reveal.anchor]);
   const onGripDown = useResizeGrip(ref);
-  // The header and the foot are both the close: one click anywhere on either
-  // strip. Enter and Space do the same from the keyboard.
+  // The header strip is the close: one click anywhere on it. Enter and Space
+  // do the same from the keyboard.
   const closeKeys = useCallback((e: React.KeyboardEvent) => {
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
@@ -498,21 +497,6 @@ function RevealBand({ reveal }: { reveal: OpenReveal }) {
           )}
         </ErrorBoundary>
         </RevealInBandCtx.Provider>
-      </div>
-      {/* The foot is the other close: the whole strip, pinned to the bottom
-          of the view while the read scrolls through a tall band. */}
-      <div
-        className="object-reveal__foot"
-        onClick={requestClose}
-        onKeyDown={closeKeys}
-        role="button"
-        tabIndex={0}
-        aria-label="Close"
-        title="Close"
-      >
-        <X className="h-3.5 w-3.5" />
-        <span>Close</span>
-        <KeyCap size="xs">esc</KeyCap>
       </div>
       </div>
       {/* The grip is only a grip: the rounded bar under the frame, in the

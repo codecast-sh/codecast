@@ -1,5 +1,6 @@
 import { captureException } from "@sentry/react";
-import { useLayoutEffect, useRef, useState, useMemo, useCallback, memo, lazy, Suspense } from "react";
+import { useContext, useLayoutEffect, useRef, useState, useMemo, useCallback, memo, lazy, Suspense } from "react";
+import { RevealInBandCtx } from "../lib/revealHost";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { isMac, hasOpenModal, altChordDirection } from "../shortcuts";
@@ -1250,9 +1251,12 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   useLayoutEffect(resetTextareaHeight, [message]);
 
   const mountConvIdRef = useRef(conversationId);
+  // A conversation opened inline in a reveal band keeps its composer folded
+  // (globals.css folds it until focused), so it never takes focus by itself.
+  const inRevealBand = useContext(RevealInBandCtx);
   useWatchEffect(() => {
     // An open dialog owns focus — never yank it down to the composer behind it.
-    if (hasOpenModal()) return;
+    if (hasOpenModal() || inRevealBand) return;
     if (textareaRef.current) {
       const isIdTransition = mountConvIdRef.current !== conversationId;
       mountConvIdRef.current = conversationId;
