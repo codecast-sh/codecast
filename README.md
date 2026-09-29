@@ -486,3 +486,5 @@ The full registry — 70+ context-aware shortcuts — is available in-app via `?
 ## License
 
 [MIT](LICENSE)
+<!-- cloudseam uncommitted edit -->
+appended
