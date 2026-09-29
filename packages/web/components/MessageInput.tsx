@@ -9,6 +9,7 @@ import { compressImage } from "../lib/compressImage";
 import { uploadBlobToStorage } from "../lib/uploadBlob";
 import { textareaCaretRect } from "../lib/textareaCaret";
 import { classifyApiErrorBanner, ACTIVE_AGENT_STATUSES, type AgentStatus } from "@codecast/shared/contracts";
+import { useLimitRecovery } from "../hooks/useLimitRecovery";
 import { useNowWhen } from "../hooks/useCoarseNow";
 import { formatCountdown, HIBERNATED_COPY } from "@codecast/shared/contracts";
 import { parseLimitResetAt } from "../lib/limitReset";
@@ -255,6 +256,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     }
     return undefined;
   });
+  // A recovery acting on the park (the same phase the park card shows): the
+  // status line follows it instead of counting down a window nobody waits on.
+  const { phase: limitPhase } = useLimitRecovery(conversationId, limitParkedAt || undefined, limitParkedAt != null);
   // Re-render only when the countdown's printed minutes change.
   const limitNow = useNowWhen(
     (t) => (limitParkedAt == null ? "" : limitResetAt != null ? formatCountdown(limitResetAt - t) + (t >= limitResetAt ? "!" : "") : "parked"),
@@ -2167,6 +2171,13 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                   <span className="flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-sol-cyan/50 animate-pulse" />
                     Processing...
+                  </span>
+                ) : limitPhase.phase === "recovering" && !showStuckBanner ? (
+                  <span className="flex items-center gap-1.5 text-sol-cyan">
+                    <span className="w-2 h-2 rounded-full bg-sol-cyan animate-pulse" />
+                    {limitPhase.step === "resuming"
+                      ? "Recovering · picking up where it left off"
+                      : `Recovering · restarting on ${limitPhase.action.target ?? "an account with room"}`}
                   </span>
                 ) : limitParkedAt != null && !showStuckBanner && (!agentStatus || agentStatus === "idle" || agentStatus === "connected") ? (
                   <span className="flex items-center gap-1.5 text-amber-500">
