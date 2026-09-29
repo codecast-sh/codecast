@@ -17,13 +17,14 @@
 
 import React from "react";
 import { toast } from "sonner";
-import { ArrowRightLeft, Archive, Square, Tag } from "lucide-react";
+import { ArrowRightLeft, Archive, CheckCircle2, CircleDot, Moon, Square, Tag } from "lucide-react";
 import { DeviceDot, DeviceIcon, RUNNING_HERE_ROW, RunningHereTag, deviceDisplayName, deviceWakesOnUse, useDevices } from "./DeviceBadge";
 import { useBulkMoveSessions } from "../hooks/useBulkMoveSessions";
 import { CtxHeader, CtxItem, CtxSeparator, CtxSub, CtxSubContent, CtxSubTrigger } from "./ui/context-menu";
 import { useInboxStore, isConvexId, sortLabels, type InboxSession } from "../store/inboxStore";
 import { getLabelColor } from "../lib/labelColors";
 import { labelSessions } from "../lib/labelSessions";
+import { fileSessionsAsRest } from "../store/undoActions";
 
 /** The device rows of a "Move to…" submenu: laptops first, then cloud hosts. */
 export function MoveToDeviceItems({ sessions, onDone }: { sessions: any[]; onDone?: () => void }) {
@@ -129,6 +130,16 @@ export function BulkSessionMenuItems({
           <LabelItems sessions={sessions} />
         </CtxSubContent>
       </CtxSub>
+      <CtxSeparator />
+      <CtxItem icon={CheckCircle2} onSelect={() => { fileSessionsAsRest(sessions.map((s) => s._id), "done"); onClear?.(); }}>
+        Mark {n} done
+      </CtxItem>
+      <CtxItem icon={CircleDot} onSelect={() => { fileSessionsAsRest(sessions.map((s) => s._id), "needs_input"); onClear?.(); }}>
+        Mark {n} needs input
+      </CtxItem>
+      <CtxItem icon={Moon} onSelect={() => { fileSessionsAsRest(sessions.map((s) => s._id), "dormant"); onClear?.(); }}>
+        Mark {n} dormant
+      </CtxItem>
       <CtxSeparator />
       {onStash && (
         <CtxItem icon={Archive} onSelect={() => { for (const s of sessions) onStash(s._id); onClear?.(); }}>
