@@ -11,6 +11,8 @@
 
 import { Id } from "../_generated/dataModel";
 import { bareEntityIdRegex, inferEntityTypeFromShortId } from "@codecast/shared/entities";
+import { extractSessionTrailer } from "@codecast/shared/blame";
+import { isConversationOwner, isConversationTeamVisible } from "../privacy";
 
 type Db = { db: any };
 
@@ -77,6 +79,48 @@ export async function resolveTaskLinks(ctx: Db, shortIds: string[]): Promise<Tas
 /** Read the task links straight out of git text. */
 export async function resolveTaskLinksFromText(ctx: Db, ...texts: (string | null | undefined)[]): Promise<TaskLinks> {
   return resolveTaskLinks(ctx, extractTaskShortIds(texts.filter(Boolean).join("\n")));
+}
+
+// ── The session a commit names ──
+
+export { extractSessionTrailer };
+
+/**
+ * The session a commit's `Codecast-Session` trailer names, when the claim
+ * holds up.
+ *
+ * The trailer is text anyone who can push may write, and a linked commit
+ * feeds the pull request's sessions, the repo page and search, so the link is
+ * decided by access, never by routing. A trailer links a session the reporting
+ * user owns (the checkout path, which knows who reported), or a session its
+ * team may actually read: routed to the commit's team AND team-visible under
+ * the conversation visibility rule. A private session routed to the team is
+ * neither, so a push naming it links nothing.
+ *
+ * `current` is the session already on the commit row. The trailer replaces it
+ * only when that link is empty, gone, or belongs to the same person, so a
+ * trailer can correct a guess about someone's own work but can never take a
+ * commit away from another person's session.
+ */
+export async function conversationFromSessionTrailer(
+  ctx: Db,
+  message: string | null | undefined,
+  scope: { userId?: Id<"users">; teamId?: Id<"teams">; current?: Id<"conversations"> | null },
+): Promise<Id<"conversations"> | undefined> {
+  const named = extractSessionTrailer(message);
+  if (!named) return undefined;
+  const id = ctx.db.normalizeId("conversations", named);
+  const conv = id ? await ctx.db.get(id) : null;
+  if (!conv) return undefined;
+  const owned = !!scope.userId && (await isConversationOwner(ctx, scope.userId, conv));
+  const teamReadable = !owned && !!scope.teamId && String(conv.team_id) === String(scope.teamId)
+    && (await isConversationTeamVisible(ctx, conv));
+  if (!owned && !teamReadable) return undefined;
+  if (scope.current && String(scope.current) !== String(conv._id)) {
+    const current = await ctx.db.get(scope.current);
+    if (current && String(current.user_id) !== String(conv.user_id)) return undefined;
+  }
+  return conv._id;
 }
 
 // ── Folding GitHub state ──

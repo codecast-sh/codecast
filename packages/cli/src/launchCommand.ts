@@ -15,7 +15,7 @@ import {
   GROK_EFFORT_LEVELS,
   MUSE_EFFORT_LEVELS,
   PI_EFFORT_LEVELS,
-  cursorCloudModel,
+  cloudAgentModel,
   findModelOption,
   type AgentClientId,
 } from "@codecast/shared/contracts";
@@ -342,8 +342,8 @@ export function appendModelEffortFlags(
   } else if (agentType === "cursor") {
     // cursor-agent selects a model with `--model <id>` (e.g. gpt-5, sonnet-4);
     // it has no reasoning-effort flag, effort rides the model id. A cloud
-    // choice runs on Cursor Cloud (cursorCloud.ts), never as a local flag.
-    if (input.modelAlias && cursorCloudModel(input.modelAlias) === null) args.push("--model", input.modelAlias);
+    // choice runs on Cursor Cloud (cloudAgents/), never as a local flag.
+    if (input.modelAlias && cloudAgentModel(agentType, input.modelAlias) === null) args.push("--model", input.modelAlias);
   } else if (agentType === "muse") {
     // muse selects a model with `--model <model-id>` (bare id, e.g.
     // muse-spark-1.3-contributor) and takes reasoning effort as

@@ -24,9 +24,10 @@ import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { isSummarizableMessage } from "./idleSummary";
 import { addConversationToWorkItem } from "./conversationLinks";
 import { performSetThreadState } from "./conversations";
+import { callModel, CHEAP_MODEL } from "./lib/anthropic";
 import { composeHandoffPrompt, describeAgentRun, normalizeThreadState } from "@codecast/shared/contracts";
 
-export const HANDOFF_MODEL = "claude-haiku-4-5-20251001";
+export const HANDOFF_MODEL = CHEAP_MODEL;
 // Transcript budget for the brief: the opening (goal) and the tail (latest
 // work) of the SUMMARIZABLE turns, each capped, the final message kept longer
 // because that is where the current ask usually sits.
@@ -208,30 +209,8 @@ export const briefInput = internalQuery({
 });
 
 async function askForBrief(prompt: string): Promise<string | null> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) return null;
-  try {
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({
-        model: HANDOFF_MODEL,
-        max_tokens: 1200,
-        temperature: 0,
-        messages: [{ role: "user", content: prompt }],
-      }),
-    });
-    if (!response.ok) {
-      console.error("Handoff brief API error:", response.status);
-      return null;
-    }
-    const data = await response.json();
-    const text = (data.content?.[0]?.text ?? "").trim();
-    return text || null;
-  } catch (error) {
-    console.error("Handoff brief failed:", error);
-    return null;
-  }
+  const reply = await callModel({ prompt, max_tokens: 1200, model: HANDOFF_MODEL, label: "Handoff brief" });
+  return reply?.text ?? null;
 }
 
 const AGENT_TYPES = ["claude_code", "codex", "cursor", "gemini", "opencode", "pi", "grok", "muse"] as const;

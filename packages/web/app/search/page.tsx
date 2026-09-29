@@ -27,6 +27,7 @@ import { highlightMatch, getSnippet } from "../../lib/searchHighlight";
 import { useInstantSessionRows, mergeSearchRows } from "../../lib/instantSessionSearch";
 import { copyToClipboard, shareOrigin } from "../../lib/utils";
 import { SessionGlyph } from "../../components/identity";
+import { parseSessionQuery, SESSION_QUERY_OPERATORS } from "@codecast/shared/search";
 
 // Right-click payloads: a session header row or one message match inside it.
 type SearchCtxPayload =
@@ -181,7 +182,11 @@ export default function SearchPage() {
   const sinceBase = useMemo(() => Date.now(), [debouncedQuery, range]);
   const since = range === "all" ? undefined : sinceBase - RANGE_MS[range];
 
-  const searchActive = debouncedQuery.length >= 2;
+  // The same parser the server runs: its errors show under the input before a
+  // round trip, and its text (operators removed) is what gets highlighted.
+  const parsedQuery = useMemo(() => parseSessionQuery(debouncedQuery), [debouncedQuery]);
+  const liveQuery = useMemo(() => parseSessionQuery(query), [query]);
+  const searchActive = debouncedQuery.length >= 2 && parsedQuery.errors.length === 0;
   // Non-throwing: a broad term can exceed the backend's query budget and return
   // a terminal error — bare useQuery re-throws it in render (ct-37627). The
   // breaker unsubscribes a never-resolving search so its silent retry loop
@@ -231,17 +236,22 @@ export default function SearchPage() {
   );
   // Instant rows match what is typed NOW; server rows match the debounced term.
   // Highlight against the live term so a fresh keystroke marks its own hits.
-  const hlQuery = query.trim().length >= 2 ? query : debouncedQuery;
+  const hlQuery = (query.trim().length >= 2 ? liveQuery : parsedQuery).text;
   const totalMatches = searchData?.totalMatches || 0;
   const totalSessions = (searchData as any)?.totalSessions || 0;
   // Pagination is a content-search concept — title rows don't count against it.
   const hasMore = contentRows.length < totalSessions;
   const isLoading = searchActive && !searchError && (!freshData || query.trim() !== debouncedQuery.trim());
+  // A value the parser could not read, or one the server could not resolve
+  // (an author nobody matches, a label you do not have).
+  const queryErrors: string[] = parsedQuery.errors.length
+    ? parsedQuery.errors
+    : searchData && "error" in searchData && searchData.error ? [searchData.error] : [];
 
   const hrefFor = (result: any, messageId?: string) =>
-    `/conversation/${result.conversationId}?highlight=${encodeURIComponent(debouncedQuery)}${
-      messageId ? `#msg-${messageId}` : ""
-    }`;
+    `/conversation/${result.conversationId}${
+      parsedQuery.text ? `?highlight=${encodeURIComponent(parsedQuery.text)}` : ""
+    }${messageId ? `#msg-${messageId}` : ""}`;
 
   const openResult = (result: any, newTab = false) => {
     const href = hrefFor(result, result.matches?.[0]?.messageId);
@@ -311,7 +321,7 @@ export default function SearchPage() {
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={handleInputKeyDown}
-                placeholder='Search every session... use "quotes" for exact phrases'
+                placeholder='Search sessions... "phrases", file: pr: commit:'
                 className="w-full pl-12 pr-12 py-3.5 bg-sol-bg-alt border border-sol-border rounded-xl text-[15px] text-sol-text placeholder-sol-text-dim focus:outline-none focus:ring-2 focus:ring-amber-500/40 focus:border-amber-500/40 transition-all shadow-sm"
                 autoFocus
               />
@@ -330,6 +340,12 @@ export default function SearchPage() {
                 )}
               </div>
             </div>
+
+            {queryErrors.length > 0 && (
+              <div className="space-y-0.5 text-xs text-sol-red">
+                {queryErrors.map((e) => <p key={e}>{e}</p>)}
+              </div>
+            )}
 
             <div className="flex items-center gap-x-5 gap-y-2 flex-wrap">
               <SegmentedControl
@@ -376,7 +392,11 @@ export default function SearchPage() {
           {searchActive && searchData && (
             <div className="flex items-baseline justify-between text-sm">
               <span className="text-sol-text-secondary">
-                <span className="text-sol-text font-medium tabular-nums">{totalMatches}</span> match{totalMatches !== 1 ? "es" : ""} in{" "}
+                {parsedQuery.text && (
+                  <>
+                    <span className="text-sol-text font-medium tabular-nums">{totalMatches}</span> match{totalMatches !== 1 ? "es" : ""} in{" "}
+                  </>
+                )}
                 <span className="text-sol-text font-medium tabular-nums">{totalSessions}</span> session{totalSessions !== 1 ? "s" : ""}
                 {filterSummary.length > 0 && (
                   <span className="text-sol-text-dim"> · {filterSummary.join(" · ")}</span>
@@ -406,10 +426,21 @@ export default function SearchPage() {
           {/* The recent tier bounds content matches to a trailing window;
               titles cover all time. Only worth saying when the selected range
               exceeds the window. */}
-          {searchActive && searchData?.contentTier === "recent" &&
+          {searchActive && parsedQuery.text && searchData?.contentTier === "recent" &&
             (range === "all" || RANGE_MS[range] > (searchData.contentWindowDays ?? 30) * 86_400_000) && (
             <div className="text-xs text-sol-text-dim">
               Content matches cover the last {searchData.contentWindowDays ?? 30} days — older sessions match by title and summary.
+            </div>
+          )}
+
+          {/* An operator walk that stopped at its read budget: the rows are
+              the newest part of the answer, and each line says how to reach
+              the rest. */}
+          {searchActive && !!searchData?.truncated?.length && (
+            <div className="space-y-0.5 text-xs text-sol-text-dim">
+              {searchData.truncated.map((line) => (
+                <p key={line}><span className="text-sol-yellow">Partial:</span> {line}</p>
+              ))}
             </div>
           )}
 
@@ -554,7 +585,7 @@ export default function SearchPage() {
             </button>
           )}
 
-          {searchData && results.length === 0 && !isLoading && (
+          {searchData && results.length === 0 && !isLoading && queryErrors.length === 0 && (
             <div className="text-center py-16 space-y-2">
               <p className="text-sol-text-secondary">No results for &ldquo;{debouncedQuery}&rdquo;</p>
               <p className="text-sm text-sol-text-dim">
@@ -565,7 +596,7 @@ export default function SearchPage() {
             </div>
           )}
 
-          {!searchActive && (
+          {!searchActive && queryErrors.length === 0 && (
             <div className="text-center py-16 space-y-3">
               <Search className="w-8 h-8 text-sol-text-dim/40 mx-auto" />
               <p className="text-sol-text-dim text-sm">
@@ -576,6 +607,23 @@ export default function SearchPage() {
                 <span className="inline-flex items-center gap-0.5"><KeyCap size="xs">{isMac ? "⌘" : "Ctrl"}</KeyCap><KeyCap size="xs">K</KeyCap></span> then{" "}
                 <span className="inline-flex items-center gap-0.5"><KeyCap size="xs">{isMac ? "⌘" : "Ctrl"}</KeyCap><KeyCap size="xs">↵</KeyCap></span>
               </p>
+              {/* The operators `cast search` reads too; the URL keeps the
+                  whole query, so a narrowed view is a link. */}
+              <div className="flex flex-wrap justify-center gap-1.5 pt-2 max-w-lg mx-auto">
+                {SESSION_QUERY_OPERATORS.map((o) => (
+                  <button
+                    key={o.op}
+                    title={`${o.example}: ${o.hint}`}
+                    onClick={() => {
+                      setQuery((q) => `${q.trim() ? `${q.trim()} ` : ""}${o.op}`);
+                      inputRef.current?.focus();
+                    }}
+                    className="font-mono text-[11px] px-1.5 py-0.5 rounded border border-sol-border/60 bg-sol-bg-alt text-sol-text-secondary hover:text-sol-text hover:border-amber-500/40 transition-colors"
+                  >
+                    {o.op}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
         </div>
