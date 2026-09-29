@@ -18,6 +18,7 @@
     "./contracts/orgChange": "./contracts/orgChange.ts",
     "./contracts/orgLog": "./contracts/orgLog.ts",
     "./contracts/orgCapacity": "./contracts/orgCapacity.ts",
+    "./contracts/chiefOfStaffPrompt": "./contracts/chiefOfStaffPrompt.ts",
     "./contracts/roleAutonomy": "./contracts/roleAutonomy.ts",
     "./contracts/orgAvatars": "./contracts/orgAvatars.ts",
     "./contracts/orgTemplateReadiness": "./contracts/orgTemplateReadiness.ts",

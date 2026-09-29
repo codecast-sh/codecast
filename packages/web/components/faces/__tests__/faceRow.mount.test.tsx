@@ -410,7 +410,7 @@ describe("two densities, one row", () => {
     const row = rowOf([me(), entry(ANN, "Ann", { state: "live-with-me", tier: "linked" })], [link(ANN, "call")]);
     const h = await mount(<FloatingFaceRow row={row} viewerId={ME} bridge={bridge} />);
     expect(h.q(".face-row")!.getAttribute("data-density")).toBe("float");
-    expect(sizes[0]).toEqual(floatingRowSize(2, 1, { width: 0, height: 0 }));
+    expect(sizes[0]).toEqual(floatingRowSize(2, 1, 0));
     // Every circle is a hit region the window lifts click through for.
     expect(h.all("[data-face-hit]").length).toBe(2);
     await h.draw(bar(row));
@@ -435,14 +435,14 @@ describe("two densities, one row", () => {
     expect(h.q(".face-row-chrome")).toBeNull();
     expect(h.q(".face-row-below")).toBeNull();
     await act(async () => {
-      dom.window.document.dispatchEvent(new dom.window.MouseEvent("mousemove", { bubbles: true, clientX: 10, clientY: 10 }));
+      dom.window.document.dispatchEvent(new dom.window.MouseEvent("mousemove", { bubbles: true, clientX: 0, clientY: 0 }));
     });
     const bar = h.q(".face-row-chrome")!;
     expect(bar).not.toBeNull();
-    // The controls are the footer of the one card under the row, which
-    // leads with a legend until a face is pointed at.
+    // The controls are the footer of the one card beside the row, alone
+    // until a face is pointed at: no legend, which ran off the card's edge.
     expect(bar.closest(".face-row-below")).not.toBeNull();
-    expect(h.q(".face-row-below .face-row-legend")).not.toBeNull();
+    expect(h.q(".face-row-below")!.children.length).toBe(1);
     expect(bar.getAttribute("data-chrome-hit")).not.toBeNull();
     expect(h.all(".face-row-chrome .faces-btn-word").map((w) => w.textContent)).toEqual(["Move", "Open", "Hide"]);
     // The grip: held, the window follows the cursor.
@@ -462,6 +462,100 @@ describe("two densities, one row", () => {
     // No call: nothing to open, the grip and the way out stay.
     await h.draw(<FloatingFaceRow row={rowOf([entry(ANN, "Ann")])} viewerId={ME} bridge={bridge} chrome={{ ...chrome, inCall: false, closeWord: "Close" }} />);
     expect(h.all(".face-row-chrome .faces-btn-word").map((w) => w.textContent)).toEqual(["Move", "Close"]);
+  });
+
+  test("the float's faces come in the row's size and the call circles' two bigger ones, remembered per device", async () => {
+    const sizes: { width: number; height: number }[] = [];
+    const bridge = { setInteractive() {}, setContentSize: (s: { width: number; height: number }) => sizes.push(s), setDragging() {} };
+    const chrome = { inCall: false, onClose() {}, closeWord: "Dock", closeTitle: "Dock", docks: true };
+    const ui = () => (useInboxStore.getState() as any).clientState?.ui ?? {};
+    useInboxStore.getState().updateClientUI({ float_face_size: undefined } as any);
+    const row = rowOf([entry(ANN, "Ann"), entry(BO, "Bo")]);
+    const h = await mount(<FloatingFaceRow row={row} viewerId={ME} bridge={bridge} chrome={chrome} />);
+    await act(async () => {
+      dom.window.document.dispatchEvent(new dom.window.MouseEvent("mousemove", { bubbles: true, clientX: 0, clientY: 0 }));
+    });
+    const smaller = h.q('[data-chrome-btn="smaller"]') as HTMLButtonElement;
+    const larger = h.q('[data-chrome-btn="larger"]') as HTMLButtonElement;
+    // The row's own size to start: nothing smaller.
+    expect(smaller.disabled).toBe(true);
+    expect((h.q(".face-row") as HTMLElement).style.getPropertyValue("--face")).toBe("64px");
+    await h.click(larger);
+    expect(ui().float_face_size).toBe(96);
+    await h.click(larger);
+    expect(ui().float_face_size).toBe(128);
+    expect((h.q(".face-row") as HTMLElement).style.getPropertyValue("--face")).toBe("128px");
+    // The biggest: nothing larger; and the window was told the bigger row.
+    expect(larger.disabled).toBe(true);
+    expect(sizes.at(-1)!.height).toBeGreaterThanOrEqual(floatingRowSize(2, 0, 0, undefined, 128).height);
+    // The dock reads as docking: its own word and icon, not a bare X.
+    expect(h.q('[data-chrome-btn="close"] .faces-btn-word')!.textContent).toBe("Dock");
+    await h.click(smaller);
+    expect(ui().float_face_size).toBe(96);
+    useInboxStore.getState().updateClientUI({ float_face_size: undefined } as any);
+  });
+
+  test("the pointer alone opens a face's card, and the window never changes size for it", async () => {
+    // On see-through glass the seats' mouseenter did not always arrive, so a
+    // hover opened the card only some of the time and a click was the other
+    // way in. The float opens it from the same hit test that lifts
+    // click-through, and keeps the card's room at all times, so the window
+    // (and with it every face) holds still through the hover.
+    const sizes: { width: number; height: number; pinY?: number }[] = [];
+    const bridge = { setInteractive() {}, setContentSize: (sz: any) => sizes.push(sz), setDragging() {} };
+    const chrome = { inCall: false, onClose() {}, closeWord: "Dock", closeTitle: "Dock", docks: true };
+    const proto = dom.window.HTMLElement.prototype as any;
+    const realRect = proto.getBoundingClientRect;
+    // Ann's circle at x 8..72, Bo's at 82..146; the row's box around both.
+    proto.getBoundingClientRect = function (this: HTMLElement) {
+      const seat = this.closest?.("[data-face-id]") as HTMLElement | null;
+      if (this.hasAttribute?.("data-face-hit") && seat) {
+        const left = seat.dataset.faceId === ANN ? 8 : 82;
+        return { left, top: 8, right: left + 64, bottom: 72, width: 64, height: 64, x: left, y: 8 } as DOMRect;
+      }
+      if (this.classList?.contains("face-row")) return { left: 0, top: 0, right: 154, bottom: 80, width: 154, height: 80, x: 0, y: 0 } as DOMRect;
+      return realRect.call(this);
+    };
+    try {
+      const h = await mount(<FloatingFaceRow row={rowOf([entry(ANN, "Ann"), entry(BO, "Bo")])} viewerId={ME} bridge={bridge} chrome={chrome} />);
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 10));
+      });
+      const before = JSON.stringify(sizes.at(-1));
+      const move = (x: number, y: number) =>
+        act(async () => {
+          dom.window.document.dispatchEvent(new dom.window.MouseEvent("mousemove", { bubbles: true, clientX: x, clientY: y }));
+        });
+      // Glass beside the row: nothing comes up.
+      await move(300, 300);
+      expect(h.q(".face-row-chrome")).toBeNull();
+      // Onto Bo's face: the controls, then his card after the dwell. No mouseenter anywhere.
+      await move(114, 40);
+      expect(h.q(".face-row-chrome")).not.toBeNull();
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 200));
+      });
+      expect(h.q("[data-member-card]")?.textContent ?? "").toContain("Bo");
+      // Across to Ann: the card follows at once.
+      await move(40, 40);
+      expect(h.q("[data-member-card]")?.textContent ?? "").toContain("Ann");
+      // Through all of it the window was asked for one size.
+      for (const sz of sizes.slice(sizes.findIndex((x) => JSON.stringify(x) === before))) expect(JSON.stringify(sz)).toBe(before);
+    } finally {
+      proto.getBoundingClientRect = realRect;
+    }
+  });
+
+  test("the float's card hangs from the pointed face by a notch, and nothing hangs under a chin", async () => {
+    const bridge = { setInteractive() {}, setContentSize() {}, setDragging() {} };
+    const h = await mount(<FloatingFaceRow row={rowOf([entry(ANN, "Ann"), entry(BO, "Bo")])} viewerId={ME} bridge={bridge} />);
+    expect(h.q(".face-name")).toBeNull();
+    await h.click(h.circle(BO));
+    const band = h.q(".face-row-below") as HTMLElement;
+    expect(band.getAttribute("data-notch")).toBe("1");
+    expect(band.style.left).toMatch(/px$/);
+    expect(band.style.getPropertyValue("--notch-x")).toMatch(/px$/);
+    expect(band.querySelector("[data-member-card]")).not.toBeNull();
   });
 });
 

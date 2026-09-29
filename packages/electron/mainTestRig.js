@@ -152,6 +152,8 @@ class FakeWindow {
     this.record("setBounds", b);
     if (!this.resizable) throw new Error("setBounds on a non-resizable window");
     this.bounds = { ...this.bounds, ...b };
+    // A frameless window's content is its bounds.
+    if (b && b.width && b.height) this.contentSize = [b.width, b.height];
   }
   getBounds() {
     return { ...this.bounds };

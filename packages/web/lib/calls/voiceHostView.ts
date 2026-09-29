@@ -33,8 +33,8 @@ export function voiceHostView(input: {
   appFocused: boolean;
   wallWanted: boolean;
   /** The person hid the float this engagement (its Hide button); it comes
-   *  back for the next one. A popped out row is never dismissed, only put
-   *  back in the header. */
+   *  back for the next one. Or they just docked a popped out row, which
+   *  holds the float down only until an app window has focus. */
   dismissed?: boolean;
 }): VoiceWindowShape {
   const { engaged, inCall, expanded, floating, appFocused, wallWanted, dismissed = false } = input;

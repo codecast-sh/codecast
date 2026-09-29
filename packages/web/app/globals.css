@@ -2304,7 +2304,7 @@ pre[class*="language-"] {
   user-select: none;
 }
 .cc-diff-row:hover .cc-row-plus:not(:disabled),
-.cc-diff-selected .cc-row-plus:not(:disabled) {
+.cc-diff-selected-end .cc-row-plus:not(:disabled) {
   opacity: 1;
   transform: none;
 }
@@ -6128,4 +6128,10 @@ mark.search-hit[data-search-active] {
 }
 @media (prefers-reduced-motion: reduce) {
   .search-scan-bar { animation: none; opacity: 0.5; }
+}
+
+/* A diff row that is a link target lands below the page's sticky chrome
+   (the tab bar and the file's own header), not under it. */
+.cc-diff-target {
+  scroll-margin-top: calc(var(--cc-sticky-top, 0px) + 5.5rem);
 }

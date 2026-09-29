@@ -325,7 +325,7 @@ export async function listProposals(ctx: Ctx, userId: Id<"users">, args: { team_
     ? await ctx.db.query("org_proposals").withIndex("by_team", (q: any) => q.eq("team_id", args.team_id)).order("desc").take(PROPOSAL_LIST_CAP * 2)
     : await ctx.db.query("org_proposals").withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", userId)).order("desc").take(PROPOSAL_LIST_CAP * 2);
   const rank = (s: string) => (s === "open" ? 0 : s === "resolved" ? 1 : 2);
-  const kept = rows.filter((p) => !args.status || p.status === args.status).sort((a, b) => rank(a.status) - rank(b.status) || b.created_at - a.created_at).slice(0, PROPOSAL_LIST_CAP);
+  const kept = rows.filter((p) => !p.archived_at && (!args.status || p.status === args.status)).sort((a, b) => rank(a.status) - rank(b.status) || b.created_at - a.created_at).slice(0, PROPOSAL_LIST_CAP);
   const out = [];
   for (const p of kept) {
     const rows = await changesOf(ctx, p._id);
@@ -1014,5 +1014,28 @@ export const clearProposalQueueCards = internalMutation({
       cleared++;
     }
     return { cleared };
+  },
+});
+
+/** An org reset (org-staffing.md S27): every proposal of the workspace leaves
+ *  every list, and an open one is withdrawn first so no card stays behind. */
+export const archiveAll = internalMutation({
+  args: { team_id: v.optional(v.id("teams")), scope_user_id: v.optional(v.id("users")) },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const rows: any[] = args.team_id
+      ? await ctx.db.query("org_proposals").withIndex("by_team", (q: any) => q.eq("team_id", args.team_id)).collect()
+      : await ctx.db.query("org_proposals").withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", args.scope_user_id)).collect();
+    let archived = 0;
+    for (const p of rows) {
+      if (p.archived_at) continue;
+      if (p.status === "open") {
+        await ctx.db.patch(p._id, { status: "withdrawn", resolved_at: now, updated_at: now });
+        await clearDecision(ctx as any, p, now);
+      }
+      await ctx.db.patch(p._id, { archived_at: now });
+      archived++;
+    }
+    return { archived };
   },
 });

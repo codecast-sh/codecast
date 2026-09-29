@@ -22,23 +22,34 @@ function routeLabel(st: any, route: { kind: string; target: string }): string {
 export function FeedChip({
   route,
   label: given,
+  fallback,
   removable,
   onRemove,
+  onOpen,
+  title,
 }: {
   route: { kind: string; target: string; mode: string };
   label?: string;
+  /** The name to show while the store has no row for the session. */
+  fallback?: string;
   removable: boolean;
-  onRemove: () => void;
+  onRemove?: () => void;
+  /** Makes the name a button that opens the target. */
+  onOpen?: () => void;
+  title?: string;
 }) {
   const st = useTrackedStore([
     (s) => routeLabel(s, route),
     (s) => (route.kind === "session" ? identitySig(findSessionRow(s, route.target)) : ""),
   ]);
-  const label = (given ?? routeLabel(st, route)).slice(0, 26);
   const agent = route.kind === "session";
   const row = agent ? findSessionRow(st, route.target) : null;
+  const label = (given ?? (agent && !row && fallback ? fallback : routeLabel(st, route))).slice(0, 26);
   return (
-    <span className="flex items-center gap-1.5 rounded-full bg-sol-bg-highlight px-2 py-0.5 font-mono text-[10.5px] leading-4 text-sol-text-muted">
+    <span
+      className="flex items-center gap-1.5 rounded-full bg-sol-bg-highlight px-2 py-0.5 font-mono text-[10.5px] leading-4 text-sol-text-muted"
+      title={title}
+    >
       {agent ? (
         row ? (
           <SessionFace row={row} size={14} className="shrink-0" />
@@ -48,11 +59,17 @@ export function FeedChip({
       ) : (
         <span className={`h-1.5 w-1.5 rounded-full ${route.kind === "doc" ? "bg-sol-yellow" : "bg-sol-cyan"}`} />
       )}
-      <span className="max-w-[130px] truncate">{label}</span>
+      {onOpen ? (
+        <button type="button" onClick={onOpen} className="max-w-[130px] truncate hover:text-sol-text">
+          {label}
+        </button>
+      ) : (
+        <span className="max-w-[130px] truncate">{label}</span>
+      )}
       {removable && (
         <button
           type="button"
-          onClick={onRemove}
+          onClick={() => onRemove?.()}
           className="fc-remove text-sol-text-muted hover:text-sol-red"
           title={agent ? `Remove ${label} from the room` : "Stop this feed"}
         >

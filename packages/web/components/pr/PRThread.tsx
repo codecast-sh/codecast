@@ -1,13 +1,14 @@
 import { useState } from "react";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { CheckCircle2, ExternalLink, Pencil, RotateCcw, Trash2 } from "lucide-react";
+import { CheckCircle2, ExternalLink, Link2, Pencil, RotateCcw, Trash2 } from "lucide-react";
 import { CommentAvatar } from "../comments/CommentAvatar";
 import { CommentComposer } from "../comments/CommentComposer";
 import { CommentMarkdown } from "../comments/CommentMarkdown";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
 import { useRepositoryTeamId } from "../../hooks/useRepoBrowse";
 import { relTimeShort } from "../../lib/utils";
+import { copyText } from "../../lib/copyText";
 import { useTrackedStore } from "../../store/inboxStore";
 import { isOptimisticComment, threadResolved, type CodeCommentRow } from "../../lib/prView";
 import "../chat/chat.css";
@@ -79,7 +80,11 @@ export function PRComposer({
   );
 }
 
-export function PRCommentCard({ comment }: { comment: CodeCommentRow }) {
+export function PRCommentCard({ comment, linkUrl }: {
+  comment: CodeCommentRow;
+  /** This comment's own address, offered as a copy on hover. */
+  linkUrl?: string;
+}) {
   const author = useAuthor(comment);
   const { user } = useCurrentUser();
   const update = useMutation(api.codeComments.update);
@@ -90,17 +95,28 @@ export function PRCommentCard({ comment }: { comment: CodeCommentRow }) {
   const pending = !!comment.pending_review;
 
   return (
-    <div className={`flex gap-2 ${pending ? "pr-pending -ml-2.5 pl-2 border-l-2 rounded-r" : ""}`}>
+    <div className={`group/card flex gap-2 ${pending ? "pr-pending -ml-2.5 pl-2 border-l-2 rounded-r" : ""}`}>
       <CommentAvatar name={author.name} image={author.image} isAgent={author.isAgent} size={20} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 text-[11px]">
           <span className="font-medium text-sol-text">{author.name}</span>
           {pending ? (
-            <span className="rounded-full border border-dashed border-sol-yellow/60 px-1.5 text-[10px] text-sol-yellow" title="In your review, not sent yet">
-              pending
+            <span className="rounded-full border border-dashed border-sol-yellow/60 px-1.5 text-[10px] text-sol-yellow" title="Held in your review. Only you can see it until you finish the review.">
+              not sent
             </span>
           ) : (
             <span className="text-sol-text-dim">{relTimeShort(comment.created_at)}</span>
+          )}
+          {linkUrl && (
+            <button
+              type="button"
+              className="text-sol-text-dim opacity-0 group-hover/card:opacity-100 hover:text-sol-cyan transition-opacity"
+              title="Copy a link to this comment"
+              aria-label="Copy a link to this comment"
+              onClick={() => void copyText(linkUrl, "Link to the comment copied")}
+            >
+              <Link2 className="w-3 h-3" />
+            </button>
           )}
           {comment.html_url && (
             <a
@@ -171,9 +187,9 @@ export function NoteModePill({ mode, onChange, pendingCount }: { mode: NoteMode;
             aria-checked={active}
             onClick={() => onChange(key)}
             className={`rounded-full px-2 py-0.5 transition-colors ${active ? (key === "review" ? "bg-sol-yellow/15 text-sol-yellow" : "bg-sol-cyan/15 text-sol-cyan") : "text-sol-text-dim hover:text-sol-text"}`}
-            title={key === "review" ? "Held in your review until you submit it" : "Posted to GitHub at once"}
+            title={key === "review" ? "Held in your review, visible only to you, until you finish the review" : "Posted to GitHub at once, where everyone sees it"}
           >
-            {key === "review" ? `Add to review${pendingCount ? ` · ${pendingCount}` : ""}` : "Comment now"}
+            {key === "review" ? (pendingCount ? `Add to review · ${pendingCount}` : "Start a review") : "Post now"}
           </button>
         );
       })}
@@ -198,7 +214,13 @@ export function PRLineThread({
   onNoteMode,
   pendingCount = 0,
   landed,
+  onFinishReview,
+  linkHref,
+  onSelectLines,
 }: {
+  /** The address of the lines this thread is on, and selecting them. */
+  linkHref?: string;
+  onSelectLines?: () => void;
   repository: string;
   /** The thread's identity (codeThreadRootKey), for the composer's draft. */
   threadKey: string;
@@ -217,6 +239,8 @@ export function PRLineThread({
   pendingCount?: number;
   /** The reader just jumped here: light it for a moment. */
   landed?: boolean;
+  /** Open the review, from a thread that is still only in it. */
+  onFinishReview?: () => void;
 }) {
   const [replying, setReplying] = useState(comments.length === 0);
   const resolved = threadResolved(comments);
@@ -235,9 +259,22 @@ export function PRLineThread({
       } ${landed ? "pr-thread-landed" : ""}`}
     >
       <div className="flex items-center gap-2">
-        {span && (
+        {span && (linkHref ? (
+          <a
+            href={linkHref}
+            onClick={(e) => {
+              if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || !onSelectLines) return;
+              e.preventDefault();
+              onSelectLines();
+            }}
+            className="text-[10px] uppercase tracking-wider text-sol-text-dim hover:text-sol-cyan transition-colors"
+            title="Select these lines; the address then points at this thread"
+          >
+            {span}
+          </a>
+        ) : (
           <div className="text-[10px] uppercase tracking-wider text-sol-text-dim">{span}</div>
-        )}
+        ))}
         {noteMode && onNoteMode && (comments.length === 0 || replying) && (
           <span className="ml-auto"><NoteModePill mode={noteMode} onChange={onNoteMode} pendingCount={pendingCount} /></span>
         )}
@@ -267,13 +304,24 @@ export function PRLineThread({
           }}
         />
       ) : (
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           {authed && (
             <button type="button" className="cc-comment-btn" onClick={() => setReplying(true)}>
               Reply
             </button>
           )}
-          {authed && comments.length > 0 && (
+          {pending && (
+            <span className="ml-auto text-[11px] text-sol-text-dim">
+              Only you can see this. It goes out when you{" "}
+              {onFinishReview ? (
+                <button type="button" className="text-sol-yellow hover:underline underline-offset-2" onClick={onFinishReview}>
+                  finish your review
+                </button>
+              ) : "finish your review"}
+              .
+            </span>
+          )}
+          {authed && comments.length > 0 && !pending && (
             <button type="button" className="cc-comment-btn" onClick={() => onResolve(!resolved)}>
               {resolved ? (
                 <>

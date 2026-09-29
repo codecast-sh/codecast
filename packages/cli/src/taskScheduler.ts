@@ -290,7 +290,7 @@ export class TaskScheduler {
         const filingNote = filing === "stashed"
           ? `\n\nThis session is STASHED: the user will not see this run or its output. End your turn with cast state --status done|dormant to stay quietly out of their inbox; declare --status blocked ONLY if a human must act — that returns the session to their inbox.`
           : "";
-        const wrappedPrompt = `<scheduled-task title="${safeTitle}" task-id="${task._id}">${task.prompt}\n\n${triggerLifecycleInstructions(task)}${filingNote}</scheduled-task>`;
+        const wrappedPrompt = `<scheduled-task title="${safeTitle}" task-id="${task._id}">${[task.prompt, triggerLifecycleInstructions(task)].filter(Boolean).join("\n\n")}${filingNote}</scheduled-task>`;
         // The injected message becomes a user-row in the messages table once
         // the agent's JSONL is parsed. The UI detects the <scheduled-task>
         // wrapper and renders it as a ScheduledTaskBlock, so we must not
@@ -591,7 +591,8 @@ export class TaskScheduler {
       parts.push(`- Refer to this trigger as ${task.short_id} in anything you write — that renders as a rich trigger reference. Never paste its 32-char id into prose.`);
     }
     parts.push(`- The completion is this run's declaration of who acts next. A clean one says nobody: the run stays out of the user's inbox and the summary carries the outcome. If you found something the user must read or act on, add --needs-attention: that declares the run blocked on them and keeps it in their inbox.`);
-    parts.push(triggerLifecycleInstructions(task));
+    const lifecycle = triggerLifecycleInstructions(task);
+    if (lifecycle) parts.push(lifecycle);
     parts.push('- To set a follow-up trigger: cast trigger add "..." --in <time>');
     if (task.originating_conversation_id) {
       parts.push(`- Run \`cast read ${task.originating_conversation_id.toString().slice(0, 7)}\` for full original context`);

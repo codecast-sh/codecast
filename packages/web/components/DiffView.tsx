@@ -462,7 +462,21 @@ interface DiffViewProps {
   // this (the owner responds by raising contextLines). Only meaningful in
   // oldStr/newStr mode, where the full text is present to expand into.
   onExpandContext?: () => void;
+  // Wrap long lines instead of scrolling the block sideways. A page that is
+  // one scroller (the pull request page) wants this: a second, horizontal
+  // scroller per file is exactly the nesting it exists to avoid.
+  wrap?: boolean;
+  // The selected run of lines, owned by the surface when it keeps it in the
+  // URL. Omit both to keep the selection inside the diff.
+  selection?: DiffSelection | null;
+  onSelectionChange?: (selection: DiffSelection | null) => void;
+  // Line addresses. With `lineHref` the gutter numbers are real links (open in
+  // a new tab, copy the address) and `rowId` gives each row a scroll target.
+  lineHref?: (anchor: DiffLineAnchor) => string;
+  rowId?: (anchor: DiffLineAnchor) => string;
 }
+
+export type DiffSelection = { side: DiffSide; range: LineRange };
 
 export const DiffView = memo(function DiffView({
   oldStr,
@@ -478,6 +492,11 @@ export const DiffView = memo(function DiffView({
   renderLineThread,
   onLineComment,
   onExpandContext,
+  wrap = false,
+  selection: selectionProp,
+  onSelectionChange,
+  lineHref,
+  rowId,
 }: DiffViewProps) {
   const [fullyExpanded, setFullyExpanded] = useState(false);
   // Hover affordance and per-row wiring turn on for either comment model.
@@ -566,17 +585,20 @@ export const DiffView = memo(function DiffView({
   // The rows the reader has selected to comment on. A selection lives on ONE
   // side, because the two sides are different files and a run across them
   // names no code. Shift clicking the other side starts over there.
-  const [selection, setSelection] = useState<{ side: DiffSide; range: LineRange } | null>(null);
+  const [ownSelection, setOwnSelection] = useState<DiffSelection | null>(null);
+  const controlled = selectionProp !== undefined;
+  const selection = controlled ? selectionProp : ownSelection;
 
   const selectLine = useCallback((anchor: DiffLineAnchor, extend: boolean) => {
-    setSelection((current) => {
-      const sameSide = extend && current?.side === anchor.side;
-      return {
-        side: anchor.side,
-        range: extendLineRange(sameSide ? current!.range : null, anchor.lineNumber),
-      };
-    });
-  }, []);
+    const sameSide = extend && selection?.side === anchor.side;
+    const next = {
+      side: anchor.side,
+      range: extendLineRange(sameSide ? selection!.range : null, anchor.lineNumber),
+    };
+    if (!controlled) setOwnSelection(next);
+    onSelectionChange?.(next);
+  }, [selection, controlled, onSelectionChange]);
+  const selectable = interactive || !!onSelectionChange;
 
   // Durable code-anchored comments (real `comments` rows keyed file:line, shared
   // with the team) rendered under their diff line. Anchored to FILE line numbers,
@@ -726,8 +748,8 @@ export const DiffView = memo(function DiffView({
           </svg>
         </button>
       )}
-      <div className="cb-hscroll">
-        <div className="min-w-fit">
+      <div className={wrap ? undefined : "cb-hscroll"}>
+        <div className={wrap ? undefined : "min-w-fit"}>
         {displayItems.map((item, i) => {
           if (item.type === 'separator') {
             if (onExpandContext) {
@@ -744,7 +766,13 @@ export const DiffView = memo(function DiffView({
               );
             }
             return (
-              <div key={`sep-${i}`} className="text-center text-[11px] text-sol-text-dim/40 select-none">
+              <div
+                key={`sep-${i}`}
+                className={wrap
+                  ? "my-0.5 border-y border-sol-border/40 bg-sol-bg-alt/60 py-0.5 text-center text-[11px] text-sol-text-dim select-none"
+                  : "text-center text-[11px] text-sol-text-dim/40 select-none"}
+                title={wrap ? "Unchanged lines not shown" : undefined}
+              >
                 &#8943;
               </div>
             );
@@ -782,7 +810,8 @@ export const DiffView = memo(function DiffView({
           const row = (
             <div
               data-diff-row={interactive ? i : undefined}
-              className={`${rowBg} whitespace-pre ${selected ? "cc-diff-selected" : ""} ${rowPlus ? "cc-diff-row" : ""}`}
+              id={rowId && rowAnchor ? rowId(rowAnchor) : undefined}
+              className={`${rowBg} ${wrap ? "flex items-start" : "whitespace-pre"} ${rowId ? "cc-diff-target" : ""} ${selected ? "cc-diff-selected" : ""} ${selected && selection && rowAnchor!.lineNumber === selection.range.end ? "cc-diff-selected-end" : ""} ${rowPlus ? "cc-diff-row" : ""}`}
             >
               {rowPlus && (
                 <button
@@ -798,21 +827,33 @@ export const DiffView = memo(function DiffView({
                   +
                 </button>
               )}
-              {showLineNumbers && (
-                <span
-                  className={`select-none inline-block text-right font-medium text-sol-text-dim opacity-55 pl-1 pr-3 mr-3 border-r border-sol-border/30 ${
-                    interactive && rowAnchor ? "cursor-pointer hover:text-sol-cyan hover:opacity-100" : ""
-                  }`}
-                  style={{ minWidth: `calc(${gutterCh}ch + 1rem)` }}
-                  title={interactive && rowAnchor ? "Click to select this line, shift click to select a range" : undefined}
-                  onMouseDown={interactive && rowAnchor ? (e) => e.preventDefault() : undefined}
-                  onClick={interactive && rowAnchor ? (e) => selectLine(rowAnchor, e.shiftKey) : undefined}
-                >
-                  {line.newNum ?? line.oldNum ?? ''}
-                </span>
-              )}
-              <span className={`select-none ${prefixColor}`}>{prefix} </span>
-              <span dangerouslySetInnerHTML={{ __html: line.html || ' ' }} />
+              {showLineNumbers && (() => {
+                const canSelect = selectable && !!rowAnchor;
+                const gutterClass = `select-none inline-block shrink-0 text-right font-medium text-sol-text-dim opacity-55 pl-1 pr-3 mr-3 border-r border-sol-border/30 ${
+                  canSelect ? "cursor-pointer hover:text-sol-cyan hover:opacity-100" : ""
+                } ${selected ? "text-sol-cyan opacity-100" : ""}`;
+                const gutterProps = {
+                  className: gutterClass,
+                  style: { minWidth: `calc(${gutterCh}ch + 1rem)` },
+                  title: canSelect ? "Click to select this line, shift click to select a range" : undefined,
+                  onMouseDown: canSelect ? (e: React.MouseEvent) => { if (!e.metaKey && !e.ctrlKey && e.button === 0) e.preventDefault(); } : undefined,
+                  onClick: canSelect
+                    ? (e: React.MouseEvent) => {
+                        // A modified click on a link is the reader's own gesture
+                        // (a new tab, a new window): leave it to the browser.
+                        if (e.metaKey || e.ctrlKey || e.altKey) return;
+                        e.preventDefault();
+                        selectLine(rowAnchor!, e.shiftKey);
+                      }
+                    : undefined,
+                };
+                const number = line.newNum ?? line.oldNum ?? '';
+                return lineHref && rowAnchor
+                  ? <a href={lineHref(rowAnchor)} {...gutterProps}>{number}</a>
+                  : <span {...gutterProps}>{number}</span>;
+              })()}
+              <span className={`select-none shrink-0 whitespace-pre ${prefixColor}`}>{prefix} </span>
+              <span className={wrap ? "min-w-0 flex-1 whitespace-pre-wrap [overflow-wrap:anywhere]" : undefined} dangerouslySetInnerHTML={{ __html: line.html || ' ' }} />
             </div>
           );
 

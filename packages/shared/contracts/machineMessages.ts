@@ -243,13 +243,14 @@ export function isUnwrappedSessionReport(rawContent: string | null | undefined):
 
 // The prompt that seats a standing agent (convex anchors.ts bootstrapMessage):
 // "You are **<name>**, the standing agent for the **<role>** role (@handle) in
-// the <team> workspace" for a role, or "..., the **team** anchor for <team>" /
-// "the **personal** anchor". The host sends it as an ordinary user message, so
+// <team>" for a role, "You are the Chief of Staff for <workspace>." for the
+// chief of staff (chiefOfStaffPrompt.ts), or "..., the **team** anchor for
+// <team>" / "the **personal** anchor". The host sends it as an ordinary user message, so
 // its own first line is the mark. ONE recogniser: the scope page cuts the
 // thread after it (web lib/anchorWindow), and the inbox card's preview, the
 // sticky prompt header and the navigator skip it through
 // isMachineDeliveredMessage, so no surface can show it as the person's words.
-export const BOOTSTRAP_PROMPT_RE = /^\s*You are \*\*[^*]+\*\*, the (standing agent for|\*\*(team|personal)\*\* (anchor|workspace's standing agent))/;
+export const BOOTSTRAP_PROMPT_RE = /^\s*You are (\*\*[^*]+\*\*, the (standing agent for|\*\*(team|personal)\*\* (anchor|workspace's standing agent))|the Chief of Staff for )/;
 
 export function isBootstrapPrompt(rawContent: string | null | undefined): boolean {
   if (!rawContent) return false;

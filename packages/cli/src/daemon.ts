@@ -4,6 +4,7 @@ import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeli
 import { pendingMessageFinished, prepareTmuxDelivery, receiptSettled, TmuxDeliveryUncertainError, type TmuxDeliveryIdentity, type TmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
 import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_GLOBAL, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, classifyApiErrorBanner, confineToOwningDevice, findModelOption, fromConvexAgentType, modelOptionKey, isCodexSafetyError, isMachineDeliveredMessage, isUsageLimitDialog, isValidPaneTarget, snippetBySlug, verdictFromProbe, worktreeOfPath } from "@codecast/shared/contracts";
 import { holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, setPendingRedrive } from "./pendingPromptHold.js";
+import { typedPollAnswer } from "./typedPollAnswer.js";
 import { codexTurnErrorMessage } from "./codexTurnError.js";
 import { INGEST_WINDOW_ROWS } from "./workers/ingestTypes.js";
 import { TranscriptRetryOwner } from "./workers/ingestRetryOwner.js";
@@ -14250,13 +14251,17 @@ export function extractTmuxLiveRegion(paneContent: string): string {
     const top = sepIdx[sepIdx.length - 2];
     // Claude Code v2.1.270 stopped printing "esc to interrupt" in that footer.
     // The running turn's only marker is now its own status line, rendered
-    // directly above the box ("✶ Perambulating… (50s · ↓ 161 tokens)"). Carry
-    // that one line in when it is the nearest text above the box; it cannot be
-    // scrollback, because the finished form of the line reads differently and
-    // nothing else renders between the transcript and a live box.
-    let above = top - 1;
-    while (above >= 0 && !tail[above].trim()) above--;
-    const status = above >= 0 && CLAUDE_TURN_STATUS_LINE.test(tail[above]) ? [tail[above]] : [];
+    // above the box ("✶ Perambulating… (50s · ↓ 161 tokens)"). Carry that line
+    // in from anywhere below the newest transcript item (⏺): Claude Code renders
+    // queued messages, a "⎿ Tip:" line and notices like "✔ Update installed"
+    // between the two, and reading only the nearest line classified a busy pane
+    // idle, which licensed a second write of a message the agent had queued
+    // (2026-09-29, jx74ek4). It cannot be scrollback: the finished form reads
+    // differently, and everything above the newest ⏺ is left out.
+    let status: string[] = [];
+    for (let i = top - 1; i >= 0 && !/^⏺/.test(tail[i]); i--) {
+      if (CLAUDE_TURN_STATUS_LINE.test(tail[i])) { status = [tail[i]]; break; }
+    }
     return [...status, ...tail.slice(top + 1)].join("\n");
   }
   if (sepIdx.length === 1) {
@@ -24626,34 +24631,10 @@ async function deliverMessage(
     // If there's an active poll and the message is plain text (not already a poll response),
     // check if it matches one of the poll options and convert to a poll response
     if (pendingPrompt && !parsePollMessage(content)) {
-      const normalized = content.replace(/\s+/g, " ").trim().toLowerCase();
-      if (normalized && pendingPrompt.options.length > 0) {
-        if (pendingPrompt.isConfirmation) {
-          const isConfirm = /^(continue|enter|yes|ok|confirm|proceed|accept|y)$/i.test(normalized) ||
-            (pendingPrompt.options[0] && normalized.includes(pendingPrompt.options[0].label.toLowerCase().split(" (")[0]));
-          const isCancel = /^(cancel|escape|esc|no|quit|n)$/i.test(normalized) ||
-            (pendingPrompt.options[1] && normalized.includes(pendingPrompt.options[1].label.toLowerCase().split(" (")[0]));
-          if (isConfirm) {
-            content = JSON.stringify({ __cc_poll: true, keys: ["Enter"], display: "Continue" });
-            logDelivery(`Converted plain text to confirmation Enter for session=${(sessionId || conversationId).slice(0, 8)}`);
-          } else if (isCancel) {
-            content = JSON.stringify({ __cc_poll: true, keys: ["Escape"], display: "Cancel" });
-            logDelivery(`Converted plain text to confirmation Escape for session=${(sessionId || conversationId).slice(0, 8)}`);
-          }
-        } else {
-          const matchIdx = pendingPrompt.options.findIndex(opt => {
-            const optNorm = opt.label.replace(/\s+/g, " ").trim().toLowerCase();
-            return optNorm === normalized || normalized.includes(optNorm) || optNorm.includes(normalized);
-          });
-          if (matchIdx >= 0) {
-            const display = pendingPrompt.options[matchIdx].label;
-            const steps: Array<{ key: string }> = [];
-            for (let i = 0; i < matchIdx; i++) steps.push({ key: "Down" });
-            steps.push({ key: "Enter" });
-            content = JSON.stringify({ __cc_poll: true, steps, display });
-            logDelivery(`Converted plain text "${display}" to poll arrows=${matchIdx}+Enter for session=${(sessionId || conversationId).slice(0, 8)}`);
-          }
-        }
+      const answer = typedPollAnswer(pendingPrompt, content);
+      if (answer) {
+        content = answer;
+        logDelivery(`Converted plain text to poll ${answer} for session=${(sessionId || conversationId).slice(0, 8)}`);
       }
     }
 

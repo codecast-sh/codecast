@@ -110,6 +110,7 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/projects\/([^/]+)\/([^/]+)$/, paramNames: ["id", "taskId"], component: ProjectDetail },
   { pattern: /^\/projects\/([^/]+)$/, paramNames: ["id"], component: ProjectDetail },
   { pattern: /^\/pr\/([^/]+)\/([^/]+)\/([^/]+)$/, paramNames: ["owner", "repo", "number"], component: PrView },
+  { pattern: /^\/pr\/([^/]+)\/([^/]+)\/([^/]+)\/([^/]+)$/, paramNames: ["owner", "repo", "number", "view"], component: PrView },
   { pattern: /^\/commit\/([^/]+)\/([^/]+)\/([^/]+)$/, paramNames: ["owner", "repo", "sha"], component: CommitView },
   { pattern: /^\/repo\/([^/]+)\/([^/]+)\/tree\/([^/]+)$/, paramNames: ["owner", "name", "ref"], component: RepoTree },
   { pattern: /^\/repo\/([^/]+)\/([^/]+)\/blob\/([^/]+)$/, paramNames: ["owner", "name", "ref"], component: RepoBlob },

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { noWordYet, parseStandingSection, standingLineAgeDays, standingLineFor, standingLineStale } from "./briefStanding";
+import { projectsWithLines, parseStandingSection, standingLineAgeDays, standingLineFor, standingLineStale } from "./briefStanding";
 
 // Where it stands (scopes-and-feed.md F5.2): one section in the brief, one
 // line per project, the date the role wrote it at the end of the line.
@@ -52,8 +52,9 @@ describe("standingLineFor", () => {
   test("matches a project by short id", () => {
     expect(standingLineFor(lines, { title: "Something else", short_id: "pj-xyz" })?.text).toBe("stuck");
   });
-  test("the words for a project with no line", () => {
-    expect(noWordYet("calling")).toBe("no word from @calling yet");
+  test("only projects with a line are listed, in scope order", () => {
+    const listed = projectsWithLines(lines, [{ title: "Nothing here" }, { title: "Something else", short_id: "pj-xyz" }]);
+    expect(listed.map((x) => x.line.text)).toEqual(["stuck"]);
   });
 });
 

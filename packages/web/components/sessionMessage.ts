@@ -456,6 +456,27 @@ export function foldNudgeRuns(rows: NudgeRow[]): { runs: Map<string, NudgeRun>; 
   return { runs, folded, headOf };
 }
 
+// Claude Code writes a slash-invoked skill ("/commit") into the transcript as a
+// user turn holding the whole skill body, headed by this line.
+const SKILL_EXPANSION_PATTERN = /Base directory for this skill:\s*([^\n]+)/;
+
+export function isSkillExpansion(content: string): boolean {
+  return SKILL_EXPANSION_PATTERN.test(content.trim());
+}
+
+export function extractSkillInfo(content: string): { name: string; path: string; preview: string } | null {
+  const match = content.match(SKILL_EXPANSION_PATTERN);
+  if (!match) return null;
+  const fullPath = match[1].trim();
+  const segments = fullPath.replace(/\/+$/, "").split("/");
+  const name = segments[segments.length - 1] || "skill";
+  const shortPath = fullPath.replace(/^\/Users\/[^/]+\//, "~/");
+  const afterBase = content.slice((match.index || 0) + match[0].length).trim();
+  const lines = afterBase.split("\n").filter(l => l.trim());
+  const preview = lines.slice(0, 2).join(" ").slice(0, 120);
+  return { name, path: shortPath, preview };
+}
+
 export function cleanUserMessage(raw: string | null | undefined): string | null {
   if (!raw) return null;
   raw = stripPastedContent(raw);
@@ -470,6 +491,9 @@ export function cleanUserMessage(raw: string | null | undefined): string | null 
   // actual task text, not the wire-format header/boilerplate around it.
   const spawned = parseSpawnedTaskPrompt(raw);
   if (spawned) return spawned.prompt || spawned.title;
+  // A skill body stands for the command the human typed; preview that command.
+  const skill = extractSkillInfo(raw);
+  if (skill) return `/${skill.name}`;
   const cleaned = raw
     .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "")
     // The server truncates this preview slice, so a notification's closing tag

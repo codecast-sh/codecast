@@ -283,8 +283,8 @@ export const ChatMessageList = memo(function ChatMessageList({
 
   // Land on a permalinked message. Two steps, because the row may be virtualized
   // out of the DOM: scroll the virtualizer to its index first, then flash the
-  // element once it has actually mounted. A target already on the tail does not
-  // scroll — the bottom pin put it on screen, and centering it is the jump.
+  // element once it has actually mounted. A target on the tail is not centered
+  // (that was the mid-page-then-scroll jump); the list goes to the bottom.
   //
   // Layout, not after paint: a history jump must not flash the tail first.
   // The dependency list is deliberately narrow — the target id and whether it is
@@ -305,6 +305,10 @@ export const ChatMessageList = memo(function ChatMessageList({
     flashedRef.current = targetMessageId;
     if (holdTarget) {
       listRef.current.scrollToIndex(targetIndexRef.current, { align: "center" });
+    } else if (!listRef.current.atBottom) {
+      // The pin resets only on a channel change: a notification for the room
+      // already open, read from higher up, would otherwise flash off screen.
+      listRef.current.scrollToBottom();
     }
     const timer = setTimeout(() => {
       const el = document.getElementById(`chatmsg-${targetMessageId}`);

@@ -110,8 +110,11 @@ describe("buildRoleScope", () => {
     const whole = buildRoleScope(sourceFromTree({ ...tree, roles: [chief] }, chief), { ...rows, roles: [chief] }, TODAY);
     expect(whole.whole).toBe(true);
     expect(whole.projects.map((p) => p.title)).toEqual(["Growth"]);
-    // The whole workspace is a view of everything, never a claim on one project.
-    expect(whole.projects[0].leads).toBe(false);
+    // It leads what no narrower role covers (org-staffing.md S26), and nothing a lead does.
+    expect(whole.projects[0].leads).toBe(true);
+    const seat: OrgRole = { ...chief, _id: "chief" as never, handle: "chief-of-staff" };
+    const withLead = buildRoleScope(sourceFromTree({ ...tree, roles: [seat, growth] }, seat), { ...rows, roles: [seat, growth] }, TODAY);
+    expect(withLead.projects.find((p) => p.title === "Growth")?.leads ?? false).toBe(false);
   });
 });
 

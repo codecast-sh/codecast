@@ -185,7 +185,7 @@ async function verifyScopePage() {
   assert.equal(qa("[data-scope-tab]")[0].getAttribute("data-scope-tab"), "scope", "and Scope is the first tab");
   assert.ok(q("[data-scope-briefing]"), "the Scope tab is the briefing (F5.1)");
   assert.equal(q("[data-scope-feed]"), null, "the feed waits behind its tab");
-  assert.deepEqual(qa("[data-scope-briefing] [data-scope-section]").map((el) => el.getAttribute("data-scope-section")), ["needs-you", "stands", "doing"], "three questions, in that order");
+  assert.deepEqual(qa("[data-scope-briefing] [data-scope-section]").map((el) => el.getAttribute("data-scope-section")), ["needs-you", "doing"], "the sections with something to say, in order; this role has written no line yet");
   assert.equal(qa("[data-scope-briefing] [data-role-escalation]").length, 2, "what needs you: the two escalations, never the third hand that only waits");
   assert.equal(q('[data-role-scope="page"]'), null, "the project cards, the hand groups and the counts left the first screen");
   assert.equal(qa("[data-scope-tab]").length, 12, "every tab survives");
@@ -442,9 +442,10 @@ async function verifyFirstScreen() {
   // A role with no escalations and no brief lines.
   for (const id of ["calling-h5", "calling-h9"]) delete state.sessions[id].escalated_by_role;
   await render(null);
-  assert.equal(q("[data-scope-needs-nothing]")!.textContent, "Nothing needs you.");
-  assert.equal(qa("[data-scope-briefing] [data-role-escalation]").length, 0);
-  assert.deepEqual(qa("[data-scope-briefing] [data-scope-stands-line]").map((el) => el.textContent), ["no word from @calling yet", "no word from @calling yet"]);
+  // Nothing to say is said by saying nothing: no empty sections, no placeholder lines.
+  assert.equal(q('[data-scope-section="needs-you"]'), null);
+  assert.equal(q('[data-scope-section="stands"]'), null);
+  assert.equal(qa("[data-scope-briefing] [data-scope-stands-line]").length, 0);
 
   await act(async () => root.unmount());
   console.log("first screen: ok");

@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FileDiffLayout } from "../FileDiffLayout";
@@ -6,6 +6,7 @@ import { LoadingSkeleton } from "../LoadingSkeleton";
 import { useRepoCompare } from "../../hooks/useRepoBrowse";
 import { commitPageHref, repoCompareHref, type RepoRouteFamily } from "../../lib/repoView";
 import { serverErrorText } from "../../lib/errorCause";
+import { useDiffAddress } from "../../hooks/useDiffAddress";
 
 export function RepoCompareContent({ repository, base, head, family }: {
   repository: string; base: string; head: string; family: RepoRouteFamily;
@@ -14,7 +15,11 @@ export function RepoCompareContent({ repository, base, head, family }: {
   const comparison = useRepoCompare(repository, base, head);
   const data = comparison.data;
   const files = useMemo(() => (data?.files ?? []).map((file) => ({ ...file, changes: file.additions + file.deletions })), [data]);
-  return <div className="flex flex-col h-full min-h-0">
+  // The diff flows in the page, and every file and line in it has an address.
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const diffHref = useCallback((hash: string) => repoCompareHref(repository, base, head, family) + hash, [repository, base, head, family]);
+  const { flow } = useDiffAddress({ diffHref, here: true, ready: files.length > 0, rootRef, stickyTop: 0 });
+  return <div ref={rootRef} className="flex flex-col">
     <form key={`${base}:${head}`} className="flex flex-wrap gap-2 px-4 py-3 border-b border-sol-border/40 text-xs" onSubmit={(event) => {
       event.preventDefault(); const fields = new FormData(event.currentTarget);
       const nextBase = String(fields.get("base") || "").trim(); const nextHead = String(fields.get("head") || "").trim();
@@ -37,13 +42,13 @@ export function RepoCompareContent({ repository, base, head, family }: {
         <p className="px-4 py-2 text-xs text-sol-yellow">GitHub limits comparison results. {data.total_commits > data.commits.length ? `Showing ${data.commits.length} of ${data.total_commits} commits. ` : ""}{files.length >= 300 ? "File list may be truncated at 300 files. " : ""}{data.files.some((file) => file.patch_truncated) ? "Some patches are truncated." : ""}</p>}
       {data.commits.length > 0 && <details className="border-b border-sol-border/40">
         <summary className="px-4 py-2 cursor-pointer text-xs">Commits in this comparison ({data.commits.length})</summary>
-        <ol className="max-h-60 overflow-y-auto divide-y divide-sol-border/30">{data.commits.map((commit) => <li key={commit.sha} className="px-4 py-2 flex gap-3 text-xs">
+        <ol className="divide-y divide-sol-border/30">{data.commits.map((commit) => <li key={commit.sha} className="px-4 py-2 flex gap-3 text-xs">
           <Link href={commitPageHref(repository, commit.sha, family)} className="text-sol-blue shrink-0">{commit.sha.slice(0, 7)}</Link>
           <Link href={commitPageHref(repository, commit.sha, family)} className="truncate flex-1">{commit.message.split("\n")[0]}</Link>
           <span className="text-sol-text-dim">{commit.author_login || commit.author_name}</span>
         </li>)}</ol>
       </details>}
-      <div className="flex-1 min-h-0">{files.length ? <FileDiffLayout files={files} title="Changed files" /> : <p className="p-8 text-sm text-sol-text-muted">No file changes between these refs.</p>}</div>
+      {files.length ? <FileDiffLayout files={files} flow={flow} /> : <p className="p-8 text-sm text-sol-text-muted">No file changes between these refs.</p>}
     </>}
   </div>;
 }
