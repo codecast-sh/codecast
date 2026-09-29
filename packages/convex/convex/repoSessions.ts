@@ -19,6 +19,7 @@ import { requireUser } from "./lib/auth";
 import { canAccessConversation } from "./lib/access";
 import { normalizeRepository } from "./lib/gitRefs";
 import { repositoryFromRemote, SESSION_ACTIVITY_FRESH_MS } from "@codecast/shared/contracts";
+import { pathInRepository } from "@codecast/shared/search";
 import { profilePublicSessionVisible } from "./privacy";
 import { blameSessionsFor, cacheKeyFor, cacheRowByKey, canBrowseRepository, localSourcesFor } from "./repos";
 import { type BlameViewer, type ResolvedSession } from "./blame";
@@ -106,12 +107,7 @@ export function sessionInRepository(
   return !!conv.git_root && publishedRoots.has(conv.git_root.replace(/\/+$/, ""));
 }
 
-/** A session's absolute file path as the repository spells it, when it lies inside the checkout. */
-export function pathInRepository(filePath: string, root: string | undefined): string | null {
-  if (!root) return null;
-  const base = root.replace(/\/+$/, "") + "/";
-  return filePath.startsWith(base) ? filePath.slice(base.length) : null;
-}
+export { pathInRepository };
 
 export type RepoSessionRow = SessionRefForReader & {
   agent_type: string;

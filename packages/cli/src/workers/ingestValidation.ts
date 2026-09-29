@@ -1,6 +1,6 @@
 import { validateIngestBounds } from './ingestTransport.js';
 import type { IngestJob, IngestResult } from './ingestTypes.js';
-import { INGEST_MAX_BYTES, isWindowedIngest } from './ingestTypes.js';
+import { INGEST_MAX_BYTES, hasClockFreeReceipts, isWindowedIngest } from './ingestTypes.js';
 import { validatePreparationFile } from '../messagePreparationValidation.js';
 import type { ParsedMessage } from '../parser.js';
 
@@ -82,7 +82,7 @@ function* schema(value: unknown, job: IngestJob): Generator<void> {
   if (windowed) requireValue(value.bytesConsumed > 0 || value.messages.length === 0);
   requireValue(value.model === undefined || job.client === 'codex' && typeof value.model === 'string');
   for (const key of ['signatures','messageTitles','handoffParents']) requireValue(Array.isArray(value[key]) && value[key].length === value.messages.length);
-  requireValue(['cursor','claude','gemini','cursorDb'].includes(job.client) ? Array.isArray(value.receiptSignatures) && value.receiptSignatures.length === value.messages.length : value.receiptSignatures === undefined);
+  requireValue(hasClockFreeReceipts(job) || ['claude','gemini','cursorDb'].includes(job.client) ? Array.isArray(value.receiptSignatures) && value.receiptSignatures.length === value.messages.length : value.receiptSignatures === undefined);
   requireValue(['claude','gemini','cursorDb'].includes(job.client) ? Array.isArray(value.receiptOccurrences) && value.receiptOccurrences.length === value.messages.length : value.receiptOccurrences === undefined);
   for (let i=0;i<value.messages.length;i++) {
     if (value.receiptOccurrences) {

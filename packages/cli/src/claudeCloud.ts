@@ -26,14 +26,13 @@ import * as path from "path";
 import { createHash } from "crypto";
 import { readActiveCredentialAsync } from "./ccAccounts.js";
 import { codecastPath } from "./codecastDir.js";
+import { githubRepo } from "./cloud/gitOrigin.js";
+import { CLOUD_BACKFILL_MS, CLOUD_MAX_LIST_PAGES, cloudMirrorPlacement, PollCadence, repoOwnerName } from "./cloudAgents/poll.js";
 import { claudeProjectDirName } from "./projectPathResolver.js";
 import type { SessionEvent } from "./sessionWatcher.js";
 
 const API_BASE = "https://api.anthropic.com";
 const PAGE_LIMIT = 100;
-/** How far back the first sight of a cloud session reaches. */
-const BACKFILL_MS = 30 * 24 * 3600_000;
-const MAX_LIST_PAGES = 5;
 const MAX_EVENT_PAGES_PER_POLL = 50;
 /** How long the poll stays fast after a send from codecast. */
 const SEND_FAST_MS = 10 * 60_000;
@@ -80,9 +79,7 @@ type StateFile = { sessions: Record<string, CloudSessionState> };
 
 /** `owner/name` from a git source URL, or null. */
 export function repoFromSourceUrl(url: string | undefined): { owner: string; name: string } | null {
-  if (!url) return null;
-  const m = url.match(/github\.com[/:]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/);
-  return m ? { owner: m[1], name: m[2] } : null;
+  return repoOwnerName(githubRepo(url)) ?? null;
 }
 
 /** The Claude Code session uuid the sandbox runs, read off any payload that carries it. */
@@ -204,16 +201,10 @@ async function defaultReadToken(): Promise<string | null> {
 }
 
 export class ClaudeCloudWatcher extends EventEmitter {
-  private timer: NodeJS.Timeout | null = null;
-  private running = false;
-  /** Poll fast until then: a message was just sent, or a session just moved,
-   *  so more is likely on its way. */
-  private fastUntil = 0;
-  /** A cloud turn was running at the last list. */
-  private busy = false;
-  private readonly fastPollMs: number;
+  /** Fast while a cloud turn runs (busy), or a message was just sent or a
+   *  session just moved, so more is likely on its way; slow otherwise. */
+  private readonly cadence: PollCadence;
   private inFlight = false;
-  private readonly pollMs: number;
   readonly rootDir: string;
   private readonly statePath: string;
   private readonly fetchImpl: typeof fetch;
@@ -225,8 +216,6 @@ export class ClaudeCloudWatcher extends EventEmitter {
 
   constructor(opts: ClaudeCloudWatcherOptions = {}) {
     super();
-    this.pollMs = opts.pollMs ?? 30_000;
-    this.fastPollMs = opts.fastPollMs ?? 3_000;
     this.rootDir = opts.rootDir ?? codecastPath("claude-cloud");
     this.statePath = opts.statePath ?? path.join(this.rootDir, "state.json");
     this.fetchImpl = opts.fetchImpl ?? fetch;
@@ -234,34 +223,21 @@ export class ClaudeCloudWatcher extends EventEmitter {
     this.resolveRepoDir = opts.resolveRepoDir ?? (async () => null);
     this.now = opts.now ?? Date.now;
     this.log = opts.log ?? (() => {});
+    this.cadence = new PollCadence(() => this.poll(), { pollMs: opts.pollMs ?? 30_000, fastPollMs: opts.fastPollMs ?? 3_000, now: this.now });
   }
 
   start(): void {
-    if (this.running) return;
-    this.running = true;
+    if (this.cadence.running) return;
     try {
       const parsed = JSON.parse(fs.readFileSync(this.statePath, "utf-8"));
       if (parsed?.sessions) this.state = parsed;
     } catch {}
     this.emit("ready");
-    this.schedule(0);
+    this.cadence.start();
   }
 
   stop(): void {
-    this.running = false;
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = null;
-  }
-
-  /** Self-scheduling, so the interval can follow the sessions: fast while a
-   *  cloud turn runs or a reply to a send is due, slow otherwise. */
-  private schedule(delayMs: number): void {
-    if (!this.running) return;
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = setTimeout(async () => {
-      await this.poll();
-      this.schedule(this.busy || this.now() < this.fastUntil ? this.fastPollMs : this.pollMs);
-    }, delayMs);
+    this.cadence.stop();
   }
 
   /** The cloud session a mirrored transcript belongs to, or undefined for a local one. */
@@ -269,7 +245,7 @@ export class ClaudeCloudWatcher extends EventEmitter {
     // Off means off: with the account setting turned off, a cloud
     // conversation neither takes sends nor lends its repo, since no reply
     // would sync back.
-    if (!this.running) return undefined;
+    if (!this.cadence.running) return undefined;
     for (const [cloudId, st] of Object.entries(this.state.sessions)) {
       if (st.sessionId === sessionId) return { cloudId, remoteUrl: st.remoteUrl, gitBranch: st.gitBranch };
     }
@@ -296,12 +272,7 @@ export class ClaudeCloudWatcher extends EventEmitter {
       const detail = await resp.text().catch(() => "");
       throw new Error(`claude cloud send ${resp.status}: ${detail.slice(0, 300)}`);
     }
-    this.pollFastFor(SEND_FAST_MS);
-    this.schedule(this.fastPollMs);
-  }
-
-  private pollFastFor(ms: number): void {
-    this.fastUntil = Math.max(this.fastUntil, this.now() + ms);
+    this.cadence.hurry(SEND_FAST_MS);
   }
 
   /** One pass: list sessions, mirror the ones that moved. Never throws. */
@@ -312,7 +283,7 @@ export class ClaudeCloudWatcher extends EventEmitter {
       const token = await this.readToken();
       if (!token) return;
       const rows = await this.listSessions(token);
-      this.busy = rows.some((r) => r.worker_status === "running" || r.worker_status === "requires_action");
+      this.cadence.busy = rows.some((r) => r.worker_status === "running" || r.worker_status === "requires_action");
       for (const row of rows) {
         const known = this.state.sessions[row.id];
         if (known && known.lastEventAt === row.last_event_at) continue;
@@ -321,7 +292,7 @@ export class ClaudeCloudWatcher extends EventEmitter {
         // fast for a while. The recency test keeps a first-run backfill of
         // old sessions from counting as activity.
         const at = Date.parse(row.last_event_at ?? "");
-        if (Number.isFinite(at) && this.now() - at < RECENT_ACTIVITY_MS) this.pollFastFor(CHANGE_FAST_MS);
+        if (Number.isFinite(at) && this.now() - at < RECENT_ACTIVITY_MS) this.cadence.hurry(CHANGE_FAST_MS);
         await this.mirrorSession(token, row);
       }
     } catch (err) {
@@ -351,10 +322,10 @@ export class ClaudeCloudWatcher extends EventEmitter {
 
   /** Cloud sessions active inside the backfill window, most recent first. */
   private async listSessions(token: string): Promise<CloudSessionRow[]> {
-    const horizon = this.now() - BACKFILL_MS;
+    const horizon = this.now() - CLOUD_BACKFILL_MS;
     const out: CloudSessionRow[] = [];
     let cursor: string | undefined;
-    for (let page = 0; page < MAX_LIST_PAGES; page++) {
+    for (let page = 0; page < CLOUD_MAX_LIST_PAGES; page++) {
       const q = new URLSearchParams({ limit: String(PAGE_LIMIT), ...(cursor ? { cursor } : {}) });
       const data = await this.getJson(token, `${API_BASE}/v1/code/sessions?${q}`);
       const rows: CloudSessionRow[] = Array.isArray(data?.data) ? data.data : [];
@@ -378,11 +349,8 @@ export class ClaudeCloudWatcher extends EventEmitter {
     const branches = row.external_metadata?.current_branches ?? {};
     const gitBranch = repo ? branches[`${repo.owner}/${repo.name}`] ?? source?.revision : undefined;
     const remoteUrl = repo ? `https://github.com/${repo.owner}/${repo.name}` : undefined;
-    const local = repo ? await this.resolveRepoDir(repo) : null;
-    if (local) return { cwd: local, gitBranch, remoteUrl };
     // A session seeded from a local bundle names no repo at all; those share one project.
-    const placeholder = repo ? `/claude-cloud/${repo.owner}/${repo.name}` : "/claude-cloud";
-    return { cwd: placeholder, gitBranch, remoteUrl };
+    return { cwd: await cloudMirrorPlacement("claude-cloud", repo, this.resolveRepoDir), gitBranch, remoteUrl };
   }
 
   private async mirrorSession(token: string, row: CloudSessionRow): Promise<void> {

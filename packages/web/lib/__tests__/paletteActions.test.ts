@@ -171,6 +171,16 @@ describe("palette item ranking", () => {
     expect(compose).toBeLessThan(entity);
   });
 
+  test("filter values lead every match; filter names trail matches but beat compose", () => {
+    const value = paletteItemScore("__filter__v file:src/a.ts", "file:");
+    const name = paletteItemScore("__filter__o author:", "au");
+    const search = paletteItemScore("__search__ Auth rewrite|||c1", "au");
+    const compose = paletteItemScore("__compose__", "au");
+    expect(value).toBeGreaterThan(search);
+    expect(name).toBeLessThan(search);
+    expect(name).toBeGreaterThan(compose);
+  });
+
   test("keyword rows still hide when they do not match", () => {
     expect(paletteItemScore("Files vault new note create markdown", "emdash")).toBe(0);
     expect(paletteItemScore("Files vault new note create markdown", "note")).toBe(1);

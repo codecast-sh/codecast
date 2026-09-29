@@ -407,6 +407,16 @@ describe("session presence on search, context, and feed", () => {
     expect(out).toContain("jx7abcd | ○ idle killed | 5 hours ago | 40 msgs");
   });
 
+  test("a partial operator answer says where it stopped", () => {
+    const out = strip(formatSearchResults({
+      total_matches: 0,
+      conversations: [],
+      truncated: ["file:src/a.ts read the newest 4000 edits; add before: or after: to reach others"],
+    }));
+    expect(out).toContain("Partial: file:src/a.ts read the newest 4000 edits");
+    expect(out).toContain("No matches found.");
+  });
+
   test("context rows carry the badge in place of a bare date", () => {
     const out = strip(formatContextResults({
       query: "auth",
@@ -419,5 +429,55 @@ describe("session presence on search, context, and feed", () => {
   test("the feed card keeps its badge and age", () => {
     const out = strip(formatFeedResults({ conversations: [feedConv({ is_live: true })], scope: "g" } as any));
     expect(out).toContain("● working | just now");
+  });
+});
+
+describe("cast read --ask output", () => {
+  test("cited lines collapse to the ranges cast read takes", async () => {
+    const { lineRanges } = await import("./formatter");
+    expect(lineRanges([9, 3, 4, 5, 5, 12])).toEqual(["3:5", "9", "12"]);
+    expect(lineRanges([])).toEqual([]);
+  });
+
+  test("the answer leads, then the read commands, then the cost line", async () => {
+    const { formatAskResult } = await import("./formatter");
+    const out = strip(formatAskResult({
+      conversation: { id: "x", short_id: "jx77tbn", title: "Study", lines: 118 },
+      question: "is idea 4 a gap?",
+      answer: "Mostly not: collab_grants covers it (msg 493).",
+      cited_lines: [493, 494],
+      scanned_lines: 118,
+      scan_complete: true,
+      shown_lines: 118,
+      matched_lines: 20,
+      model: "claude-haiku-4-5-20251001",
+      usage: { input_tokens: 23_456, output_tokens: 312, cost_usd: 0.025 },
+      took_ms: 8400,
+    }));
+    const lines = out.split("\n");
+    expect(lines[3]).toBe("Mostly not: collab_grants covers it (msg 493).");
+    expect(out).toContain("read: cast read jx77tbn 493:494");
+    expect(out).toContain("claude-haiku-4-5 · read 118 lines, 20 matched, showed 118 · 23.5k in / 312 out, $0.025 · 8.4s");
+  });
+
+  test("an incomplete read says which stretch it skipped, and tail citations open with -n", async () => {
+    const { formatAskResult } = await import("./formatter");
+    const out = strip(formatAskResult({
+      conversation: { id: "x", short_id: "jx7csbd", title: "Whale", lines: 3000 },
+      question: "where did it end up?",
+      answer: "Reverted at the end (msg -4), after msg 12 first added it.",
+      cited_lines: [12, -4, -40],
+      scanned_lines: 3000,
+      scan_complete: false,
+      unread: { after: 1500, before: -1500 },
+      shown_lines: 400,
+      matched_lines: 30,
+      model: "claude-haiku-4-5-20251001",
+      usage: { input_tokens: 50_000, output_tokens: 300, cost_usd: 0.05 },
+      took_ms: 90_000,
+    }));
+    expect(out).toContain("3000+ lines");
+    expect(out).toContain("read: cast read jx7csbd 12  cast read jx7csbd -n 40");
+    expect(out).toContain("read 3000 lines (too long to read whole: msg 1500 to -1500 not read)");
   });
 });

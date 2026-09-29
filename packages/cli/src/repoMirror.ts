@@ -23,6 +23,7 @@ import { promisify } from "node:util";
 import { createHash } from "node:crypto";
 import * as path from "node:path";
 import { extractRepoFromRemoteUrl, repositoryKeyOfRemote } from "@codecast/shared/contracts";
+import { extractSessionTrailer } from "@codecast/shared/blame";
 
 const execFileAsync = promisify(execFile);
 
@@ -602,9 +603,35 @@ async function blameRanges(run: GitRunner, root: string, ref: string, filePath: 
     else if (raw.startsWith("author-time ")) info.committed_at = Number(raw.slice(12)) * 1000;
     else if (raw.startsWith("summary ")) info.message = raw.slice(8);
   }
+  const sessions = await sessionTrailers(run, root, [...meta.keys()]);
   return {
-    ranges: ranges.map((r) => ({ ...r, message: meta.get(r.sha)?.message ?? "", author_name: meta.get(r.sha)?.author_name, committed_at: meta.get(r.sha)?.committed_at ?? 0 })),
+    ranges: ranges.map((r) => ({
+      ...r,
+      message: meta.get(r.sha)?.message ?? "",
+      author_name: meta.get(r.sha)?.author_name,
+      committed_at: meta.get(r.sha)?.committed_at ?? 0,
+      ...(sessions.get(r.sha) ? { session: sessions.get(r.sha) } : {}),
+    })),
   };
+}
+
+/** Each commit's Codecast-Session trailer, read from its full message (blame
+ *  gives only the subject), in one git call. A failure costs only the trailers. */
+async function sessionTrailers(run: GitRunner, root: string, shas: string[]): Promise<Map<string, string>> {
+  const found = new Map<string, string>();
+  const real = shas.filter((sha) => !/^0+$/.test(sha));
+  if (real.length === 0) return found;
+  try {
+    const out = await run(root, ["log", "--no-walk=unsorted", "--format=%H%x00%B%x1e", ...real]);
+    for (const record of out.split("\x1e")) {
+      const [sha, body] = record.replace(/^\n+/, "").split("\0");
+      const session = extractSessionTrailer(body);
+      if (sha && session) found.set(sha, session);
+    }
+  } catch {
+    // Blame without trailers still resolves by the other signals.
+  }
+  return found;
 }
 
 export async function answerLocalRead(request: LocalReadRequest, run: GitRunner = runGit): Promise<LocalReadAnswer> {

@@ -51,7 +51,7 @@ export function cloudStartArgs(args: { conversation_id: string; cloud_device_id?
 }
 
 /** The `seed` argument of cloud.placeConversation / the `cloud_seed` body field, from a CloudSeed. */
-export function seedPlacementArg(seed: CloudSeed): { source: CloudStartFrom; base: string; branch?: string; dirty?: boolean; laptop_root?: string; device_id?: string; reason?: string } {
+export function seedPlacementArg(seed: CloudSeed): { source: CloudStartFrom; base: string; branch?: string; dirty?: boolean; laptop_root?: string; device_id?: string; reason?: string; tree?: string } {
   return {
     source: seed.source,
     base: seed.base,
@@ -60,6 +60,7 @@ export function seedPlacementArg(seed: CloudSeed): { source: CloudStartFrom; bas
     ...(seed.laptopRoot ? { laptop_root: seed.laptopRoot } : {}),
     ...(seed.deviceId ? { device_id: seed.deviceId } : {}),
     ...(seed.reason ? { reason: seed.reason } : {}),
+    ...(seed.tree ? { tree: seed.tree } : {}),
   };
 }
 

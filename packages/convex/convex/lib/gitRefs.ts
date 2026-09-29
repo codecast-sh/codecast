@@ -9,8 +9,10 @@
 // Everything a webhook processor or the PR shepherd needs to answer "what does
 // this git activity mean" is here, so the processors stay thin.
 
-import { Id } from "../_generated/dataModel";
+import { Doc, Id } from "../_generated/dataModel";
 import { bareEntityIdRegex, inferEntityTypeFromShortId } from "@codecast/shared/entities";
+import { extractSessionTrailer } from "@codecast/shared/blame";
+import { isConversationOwner, isConversationTeamVisible } from "../privacy";
 
 type Db = { db: any };
 
@@ -77,6 +79,76 @@ export async function resolveTaskLinks(ctx: Db, shortIds: string[]): Promise<Tas
 /** Read the task links straight out of git text. */
 export async function resolveTaskLinksFromText(ctx: Db, ...texts: (string | null | undefined)[]): Promise<TaskLinks> {
   return resolveTaskLinks(ctx, extractTaskShortIds(texts.filter(Boolean).join("\n")));
+}
+
+// ── Which sessions git activity may link ──
+
+/** Who is linking: the codecast user behind the git activity, and the team it routes to. */
+export type LinkScope = { userId?: Id<"users"> | null; teamId?: Id<"teams"> | null };
+
+/**
+ * Whether git activity may link a session. A linked session reaches the pull
+ * request, the repo page, search, and the comment codecast posts on GitHub,
+ * so the link is decided by access, never by routing or a branch name: the
+ * user behind the activity owns the session, or it is routed to the team AND
+ * team-visible under the conversation visibility rule.
+ */
+export async function isConversationLinkable(ctx: Db, conv: Doc<"conversations">, scope: LinkScope): Promise<boolean> {
+  if (scope.userId && (await isConversationOwner(ctx, scope.userId, conv))) return true;
+  return !!scope.teamId && String(conv.team_id) === String(scope.teamId) && (await isConversationTeamVisible(ctx, conv));
+}
+
+/**
+ * The sessions on a branch that `scope` may link. The branch index spans every
+ * user, and branch names repeat everywhere (`main`), so the name alone never
+ * links a session.
+ */
+export async function linkableSessionsOnBranch(ctx: Db, branch: string, scope: LinkScope, limit: number): Promise<Doc<"conversations">[]> {
+  const onBranch: Doc<"conversations">[] = await ctx.db
+    .query("conversations")
+    .withIndex("by_git_branch", (q: any) => q.eq("git_branch", branch))
+    .take(limit);
+  const linkable: Doc<"conversations">[] = [];
+  for (const conv of onBranch) {
+    if (await isConversationLinkable(ctx, conv, scope)) linkable.push(conv);
+  }
+  return linkable;
+}
+
+// ── The session a commit names ──
+
+export { extractSessionTrailer };
+
+/**
+ * The session a commit's `Codecast-Session` trailer names, when the claim
+ * holds up.
+ *
+ * The trailer is text anyone who can push may write, so it links only a
+ * session isConversationLinkable allows: one the reporting user owns (the
+ * checkout path, which knows who reported), or one its team may actually
+ * read. A private session routed to the team is neither, so a push naming it
+ * links nothing.
+ *
+ * `current` is the session already on the commit row. The trailer replaces it
+ * only when that link is empty, gone, or belongs to the same person, so a
+ * trailer can correct a guess about someone's own work but can never take a
+ * commit away from another person's session.
+ */
+export async function conversationFromSessionTrailer(
+  ctx: Db,
+  message: string | null | undefined,
+  scope: LinkScope & { current?: Id<"conversations"> | null },
+): Promise<Id<"conversations"> | undefined> {
+  const named = extractSessionTrailer(message);
+  if (!named) return undefined;
+  const id = ctx.db.normalizeId("conversations", named);
+  const conv = id ? await ctx.db.get(id) : null;
+  if (!conv || !(await isConversationLinkable(ctx, conv, scope))) return undefined;
+  if (scope.current && String(scope.current) !== String(conv._id)) {
+    const current = await ctx.db.get(scope.current);
+    if (current && String(current.user_id) !== String(conv.user_id)) return undefined;
+  }
+  return conv._id;
 }
 
 // ── Folding GitHub state ──
