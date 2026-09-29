@@ -146,13 +146,49 @@ export function portableText(bytes: Buffer): string | null {
   try { return new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { return null; }
 }
 
+/**
+ * A secret-named key that holds a name or a measure of a secret, never the
+ * secret: `secret_name: "API_KEY"`, `token_rate = 50`, `token_url`, and keys
+ * that say the value is public (NEXT_PUBLIC_*, a publishable key).
+ */
+const CREDENTIAL_LABEL_KEY_RE = /(?:name|names|rate|type|count|limit|ttl|url|uri|endpoint|expires?|expiry|expires_?at|length|size|mode|scopes?|format|prefix|headers?|field|label|kind|provider|binding|method|var|env)$|public|publishable/i;
+
+/**
+ * A value that shows the shape of a secret without being one: a command or
+ * interpolation (`$(awk …)`, `${X}`), an elision (`Bearer ...`), a number, an
+ * identifier (`API_KEY`, `postgres_url`), a plain word (`secret`), or a key a
+ * provider publishes by design (PostHog `phc_`, Stripe `pk_`). A real secret
+ * a person pasted is random: it has digits or mixed case beyond an identifier.
+ * Documentation and tests are full of the first kind; the rule refused 274 such
+ * files and no real secret on 2026-09-29, taking skill references and the
+ * scripts other scripts import off the host.
+ */
+export function isExampleSecretValue(value: string, password = false): boolean {
+  const scheme = /^(?:Bearer|Basic|Token)\s+(.+)$/i.exec(value);
+  if (scheme) return isExampleSecretValue(scheme[1]!.trim());
+  if (/\$[A-Za-z_({]|`|\.\.\.|…|\*{3}|x{4,}|^<[^>]*>$|^(?:true|false|null|none|undefined)$/i.test(value)) return true;
+  if (/^(?:phc_|pk_(?:live|test)_)/.test(value)) return true;
+  // An algorithm or scheme name: `Auth = ES256 JWT`, `HS256`, `SHA256`.
+  if (/^(?:[A-Z]{2,6}\d{2,4}|[A-Z]{2,6}-\d{2,4})$/.test(value)) return true;
+  // Code, not a literal: `secret = random_id.tunnel_secret.b64_std`.
+  if (/^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+$/.test(value)) return true;
+  // Documentation filler in a value too short or too regular to be random: `sk_live_abc123`, `Bearer at_test`.
+  const random = value.length >= 24 && /[a-z]/.test(value) && /[A-Z]/.test(value) && /[0-9]/.test(value);
+  if (!random && /abc123|123456|example|dummy|sample|your[-_]|[-_]here\b|fake|(?:^|[-_])(?:test|dev|demo)(?:$|[-_])/i.test(value)) return true;
+  // A password is the one secret a short plain word can be; only the stock placeholders pass.
+  if (password) return /^(?:secret|password|passwd|changeme|example|sample|dummy|placeholder)$/i.test(value);
+  return /^[0-9.]+$/.test(value) || /^[A-Za-z][A-Za-z_.-]{0,40}$/.test(value);
+}
+
 export function credentialContentReason(bytes: Buffer): string | null {
   const text = portableText(bytes);
   if (text === null) return null;
   if (/^\s*-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----/m.test(text)) return "private key material excluded";
   if (/\b(?:sk-ant-[A-Za-z0-9_-]{24,}|sk-(?:proj-|or-v1-)?[A-Za-z0-9_-]{24,}|(?:ghp|gho|ghu|ghs)_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,}|xox[baprs]-[A-Za-z0-9-]{20,}|AKIA[0-9A-Z]{16}|AIza[A-Za-z0-9_-]{35})\b/.test(text)) return "credential material excluded";
   const isCredential = (value: unknown, key: string): boolean => typeof value === "string" && value.trim().length > 0
-    && !(/(?:file|path|dir|directory)$/i.test(key) && /^[~/.]/.test(value.trim()))
+    && !(/(?:file|path|dir|directory|command|cmd|helper|program|script|bin)$/i.test(key) && /^[~/.]/.test(value.trim()))
+    && !CREDENTIAL_LABEL_KEY_RE.test(key)
+    && !isExampleSecretValue(value.trim(), /passw/i.test(key))
     && !/^(?:<[^>]+>|\$\{[^}]+\}|\$[A-Z_][A-Z_0-9]*|(?:process\.|ctx\.)?env\.[A-Z_][A-Z_0-9]*|os\.environ\[.+\]|(?:YOUR|REPLACE|EXAMPLE|DUMMY|TEST|INSERT|CHANGEME|REDACTED|PLACEHOLDER)(?:[_ -].*)?)$/i.test(value.trim());
   const hasCredential = (value: unknown): boolean => {
     if (Array.isArray(value)) return value.some(hasCredential);

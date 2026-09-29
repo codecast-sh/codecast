@@ -8,6 +8,7 @@ import { isCodecastHookCommand, isCodecastOwnedHomePath } from "../../codecastOw
 import { installAllStableHooks } from "../../stableContext.js";
 import { maskPins, readHostMcpOverrides, writeHostMcpOverrides, type HostMcpOverrides, type McpSourceServer } from "../hostMcpOverrides.js";
 import { assertMirrorFileContent, assertSafePath, sha256, type ParsedBundle, type ParsedFile } from "./bundle.js";
+import { SNIPPET_CATALOG } from "@codecast/shared/contracts";
 import { isAgentRuntimePath } from "./discovery.js";
 import {
   dropCodecastHooks, filterHookItem, findAllOwnedSections, joinTomlTables, splitTomlTables, stripOwnedSections, tableFirstSegment,
@@ -834,7 +835,8 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
       }
       if (before && current && VERBATIM_KINDS.includes(file.kind)) {
         const hostSha = sha256(current);
-        if (hostSha !== before.written && !current.equals(finalBytes(file, current, home, pinned, before, undefined, overrides))) {
+        const takenIn = bundle.header.reconciled?.some((r) => r.path === file.path && r.sha === hostSha);
+        if (!takenIn && hostSha !== before.written && !current.equals(finalBytes(file, current, home, pinned, before, undefined, overrides))) {
           result.host_edited.push(file.path);
           stampFiles[file.path] = { sha: before.sha, written: before.written, mode: before.mode, kind: file.kind, host_edited: true };
           continue;
@@ -990,6 +992,7 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
   }
 
   try {
+    adoptFeatureSwitches(home, bundle.header.features);
     (opts.refresh ?? runHostRefresh)(home);
   } catch (err) {
     result.errors.push({ path: ".codecast", error: `refresh failed: ${err instanceof Error ? err.message : String(err)}` });
@@ -1039,6 +1042,44 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
   };
   writeMirroredFile(home, MIRROR_STAMP_REL, Buffer.from(JSON.stringify(stamp, null, 2) + "\n"), "0600");
   return result;
+}
+
+/**
+ * The codecast features a machine has switched on: every snippet catalog
+ * switch, and the stable-context mode. The laptop's travel in the mirror
+ * header, so the host's refresh installs the same instruction sections,
+ * skills and hooks the laptop's agents have (2026-09-29: a host provisioned
+ * with three of nineteen had no task, memory, publish or skills guidance).
+ */
+export const FEATURE_KEYS: readonly string[] = [...new Set(SNIPPET_CATALOG.map((d) => d.enabledKey)), "stable_mode"];
+
+export function featureSwitches(config: Record<string, unknown> | null | undefined): Record<string, boolean | string> {
+  const out: Record<string, boolean | string> = {};
+  for (const key of FEATURE_KEYS) {
+    const value = config?.[key];
+    if (key === "stable_mode") { if (value === "solo" || value === "team" || value === "off") out[key] = value; }
+    else out[key] = value === true;
+  }
+  return out;
+}
+
+/** Take the laptop's feature switches into the host's config, keeping every other key; true when anything changed. */
+export function adoptFeatureSwitches(home: string, features: Record<string, unknown> | undefined): boolean {
+  if (!features) return false;
+  const file = path.join(home, ".codecast", "config.json");
+  let config: Record<string, unknown>;
+  try { config = JSON.parse(fs.readFileSync(file, "utf-8")); } catch { return false; }
+  let changed = false;
+  for (const [key, value] of Object.entries(featureSwitches(features))) {
+    if (!(key in features) || config[key] === value || (value === false && config[key] === undefined)) continue;
+    config[key] = value;
+    changed = true;
+  }
+  if (!changed) return false;
+  const tmp = `${file}.cast-features-${process.pid}`;
+  fs.writeFileSync(tmp, JSON.stringify(config, null, 2) + "\n", { mode: 0o600 });
+  fs.renameSync(tmp, file);
+  return true;
 }
 
 /**

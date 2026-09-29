@@ -49,6 +49,10 @@ export interface BundleHeader {
   excludes_applied: string[];
   project_roots?: string[];
   unmanaged_roots?: string[];
+  /** The laptop's codecast feature switches (see featureSwitches in apply.ts): the host installs the same sections, skills and hooks. */
+  features?: Record<string, boolean | string>;
+  /** Host-edited files the laptop has already taken in (memoryBack.ts), at the host version it saw: replaced, not kept as conflicts. */
+  reconciled?: Array<{ path: string; sha: string }>;
 }
 
 export interface BundleInput {
@@ -68,6 +72,8 @@ export interface BuildMeta {
   excludes_applied?: string[];
   project_roots?: string[];
   unmanaged_roots?: string[];
+  features?: Record<string, boolean | string>;
+  reconciled?: Array<{ path: string; sha: string }>;
 }
 
 export interface BuiltBundle {
@@ -106,6 +112,7 @@ export function bundleHash(header: BundleHeader, bodies: Map<string, Buffer>): s
     managed_roots: [...header.managed_roots].sort(),
     ...(header.project_roots?.length ? { project_roots: [...header.project_roots].sort() } : {}),
     ...(header.unmanaged_roots?.length ? { unmanaged_roots: [...header.unmanaged_roots].sort() } : {}),
+    ...(header.features && Object.keys(header.features).length ? { features: Object.entries(header.features).sort(([a], [b]) => (a < b ? -1 : 1)) } : {}),
   }));
   for (const f of header.version === 1 ? files : []) {
     h.update("\0");
@@ -146,6 +153,8 @@ export function buildMirrorBundle(entries: BundleInput[], meta: BuildMeta): Buil
     excludes_applied: meta.excludes_applied ?? [],
     ...(meta.project_roots?.length ? { project_roots: meta.project_roots } : {}),
     ...(meta.unmanaged_roots?.length ? { unmanaged_roots: meta.unmanaged_roots } : {}),
+    ...(meta.features && Object.keys(meta.features).length ? { features: meta.features } : {}),
+    ...(meta.reconciled?.length ? { reconciled: meta.reconciled } : {}),
   };
   const headerBytes = Buffer.from(JSON.stringify(header), "utf-8");
   if (headerBytes.length > MAX_HEADER_BYTES) throw new Error("mirror bundle header length out of range");

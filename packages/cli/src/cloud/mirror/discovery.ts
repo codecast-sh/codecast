@@ -14,6 +14,20 @@ export { isActiveConfig } from "./transform.js";
 export const AGENT_CONTEXT_ROOTS = [".claude", ".codex", ".gemini", ".grok", ".opencode", ".agents", ".config/opencode", ".cursor", ".pi"] as const;
 /** Single state files that installed skills read; their directories hold other state, so only these files travel. */
 export const SKILL_STATE_FILES: readonly string[] = [".hyperframes/config.json", ".media/preferences.json"];
+/**
+ * The shell's own startup files. They travel so a cloud agent's shell has the
+ * laptop's aliases, functions, PATH and exports, the way the laptop's agents
+ * do; the files they source come along as references (a brace list such as
+ * `~/.{aliases,exports}` included). Their exports are the person's own
+ * environment, keys too, carried to their own host like their logins, so the
+ * credential scan does not apply to them.
+ */
+export const SHELL_ENV_FILES: readonly string[] = [
+  ".bashrc", ".bash_profile", ".bash_login", ".bash_logout", ".profile", ".bash_aliases",
+  ".zshrc", ".zprofile", ".zshenv", ".zlogin", ".zlogout",
+  ".config/fish/config.fish", ".config/fish/conf.d", ".config/fish/functions",
+  ".inputrc", ".tmux.conf", ".cargo/env",
+];
 /** Personal commands on the laptop PATH. Only portable text scripts travel from here. */
 export const LOCAL_BIN_ROOT = ".local/bin";
 export const LOCAL_BIN_SCRIPT_CAP = 1024 * 1024;
@@ -61,7 +75,7 @@ export const CLAUDE_RUNTIME_ROOTS: readonly string[] = [
   ".claude/plugins/marketplaces", ".claude/plugins/installed_plugins.json", ".claude/plugins/known_marketplaces.json",
 ];
 export const AGENT_RUNTIME_ROOTS: readonly string[] = [
-  ...CLAUDE_RUNTIME_ROOTS, ".codex/skills/.system", ".claude/skills/synced",
+  ...CLAUDE_RUNTIME_ROOTS, ".codex/skills/.system", ".claude/skills/synced", ".claude/plugins/synced",
   ".claude/hooks/peon-ping/.last_update_check", ".claude/plugins/.last_inuse_sweep",
 ];
 export function isAgentRuntimePath(rel: string): boolean {
@@ -100,8 +114,7 @@ export const CONTEXT_DENYLIST: readonly string[] = [
   ".app-store-connect", ".cloudflared", ".convex", ".railway", ".fly", ".supabase", ".vercel", ".netlify", ".wrangler",
   ".config/railway", ".config/fly", ".config/supabase", ".config/vercel", ".config/netlify", ".config/.wrangler",
   ".azure", ".terraform.d", ".pulumi", ".config/doppler", ".config/op", ".password-store", ".local/share/keyrings",
-  ".bashrc", ".bash_profile", ".bash_login", ".profile", ".zshrc", ".zprofile", ".zshenv", ".zlogin", ".config/fish",
-  ".fig", ".cargo/env", ".inputrc", ".tmux.conf", ".vimrc", ".vim", ".config/nvim", ...HOST_OWNED_LOCAL_BIN,
+  ".fig", ".vimrc", ".vim", ".config/nvim", ".config/fish/fish_variables", ...HOST_OWNED_LOCAL_BIN,
   "Dropbox", "OneDrive", "Google Drive", "GoogleDrive", ".dropbox", ".dropbox-dist",
   "Library", "Applications", ".Trash", ".mozilla", ".config/google-chrome", ".config/chromium",
   ".netrc", ".npmrc", ".pgpass", ".codecast", ".config/opencode/plugins/codecast-stable.js",
@@ -216,7 +229,18 @@ export function contextReferences(text: string, sourcePath: string, home: string
   for (const m of text.matchAll(/\[[^\]\n]{0,500}\]\((?:<([^>\n]{1,4096})>|([^\s)]{1,4096}))/g)) add(m[1] ?? m[2]!);
   for (const m of text.matchAll(/["'`]((?:\.\.?\/)[^"'`\n]{1,4096})["'`]/g)) add(m[1]!);
   for (const m of text.matchAll(/(?:^|\s)@((?:\.?\.?\/)?[\w./-]+\.[\w-]+)/gm)) add(m[1]!);
+  // A shell brace list names several files at once: `for f in ~/.{path,exports,aliases}; do source "$f"; done`.
+  for (const m of text.matchAll(new RegExp(`${prefix}[^\\s"'\x60;|&<>()]*\\{[^}\\s]*,[^}\\s]*\\}[^\\s"'\x60;|&<>()]*`, "g"))) {
+    for (const name of expandBraces(m[0])) add(name);
+  }
   return [...found];
+}
+
+/** Shell brace expansion of comma lists: `a{b,c}d{e,f}` is `abde abdf acde acdf`. */
+export function expandBraces(text: string): string[] {
+  const m = /\{([^{}]*,[^{}]*)\}/.exec(text);
+  if (!m) return [text];
+  return m[1]!.split(",").flatMap((part) => expandBraces(text.slice(0, m.index) + part + text.slice(m.index + m[0].length)));
 }
 
 export function isReferencedDirectory(abs: string): boolean {

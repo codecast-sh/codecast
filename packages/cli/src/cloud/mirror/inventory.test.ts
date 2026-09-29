@@ -373,3 +373,24 @@ describe("collectMirrorFiles", () => {
     expect(inv.gitIdentity).toEqual({});
   });
 });
+
+describe("shell environment", () => {
+  test("rc files and everything they source travel, exports and all; editor plugin trees and other secrets stay", async () => {
+    const key = `sk-proj-${"Ab3dE5gH7jK9mN1pQ3sT5vW7".repeat(2)}`;
+    write(".bash_profile", `export OPENAI_API_KEY="${key}"\nfor file in ~/.{aliases,exports,missing}; do [ -r "$file" ] && source "$file"; done\n[ -f ~/.bashrc ] && source ~/.bashrc\n`);
+    write(".bashrc", `alias gs='git status'\nexport PATH="${home}/.amp/bin:$PATH"\n`);
+    write(".aliases", "alias ll='ls -la'\n");
+    write(".exports", `export FAL_KEY="${key}"\n`);
+    write(".zshenv", '. "$HOME/.cargo/env"\n');
+    write(".cargo/env", 'export PATH="$HOME/.cargo/bin:$PATH"\n');
+    write(".config/fish/config.fish", "set -gx EDITOR vim\n");
+    write(".config/fish/fish_variables", "SETUVAR __fish_initialized:3400\n");
+    write(".vim/plugged/huge/plugin.vim", "x");
+    write("notes/token.txt", `api_key: "${key}"\n`);
+    const inv = await collect();
+    const paths = inv.entries.map((e) => e.path);
+    for (const rel of [".bash_profile", ".bashrc", ".aliases", ".exports", ".zshenv", ".cargo/env", ".config/fish/config.fish"]) expect(paths).toContain(rel);
+    for (const rel of [".config/fish/fish_variables", ".vim/plugged/huge/plugin.vim", "notes/token.txt"]) expect(paths).not.toContain(rel);
+    expect(inv.entries.find((e) => e.path === ".exports")!.bytes.toString()).toContain(key);
+  });
+});

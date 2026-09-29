@@ -7,7 +7,7 @@ import { REFERENCES_SNIPPET, SNIPPET_CATALOG } from "@codecast/shared/contracts"
 import { findOwnedSections } from "@platform/snippets";
 import {
   GITCONFIG_BLOCK_END, GITCONFIG_BLOCK_START, MIRROR_LOCK_REL, MIRROR_STAMP_REL, applyMirrorBundle, applyStagingBundle,
-  composeInstructionFile, mergeClaudeSettings, mergeCodexHooks, mergeCodexToml, mergeGitconfig, readStamp, stripGitconfigBlock, verifyMirrorStamp, withMirrorLock,
+  adoptFeatureSwitches, composeInstructionFile, featureSwitches, mergeClaudeSettings, mergeCodexHooks, mergeCodexToml, mergeGitconfig, readStamp, stripGitconfigBlock, verifyMirrorStamp, withMirrorLock,
 } from "./apply";
 import { buildMirrorBundle, parseMirrorBundle, sha256, type BundleInput } from "./bundle";
 import { ownedSectionSpecs, stripOwnedSections } from "./transform";
@@ -62,10 +62,11 @@ function seedHost(): void {
 
 const source = (device_id = "laptop-1") => ({ device_id, user_id: "u1", home: "/Users/ashot", platform: "darwin", cast_version: "1" });
 
-async function bundleOf(entries: BundleInput[], opts: { device?: string; takeOver?: boolean; userId?: string; targetHome?: string } = {}) {
+async function bundleOf(entries: BundleInput[], opts: { device?: string; takeOver?: boolean; userId?: string; targetHome?: string; features?: Record<string, boolean | string> } = {}) {
   const built = buildMirrorBundle(entries, {
     source: { ...source(opts.device), user_id: opts.userId ?? "u1" },
     target_home: opts.targetHome ?? home, managed_roots: [".claude", ".codex", ".grok", ".gemini", ".agents", ".config/opencode"], take_over: opts.takeOver,
+    features: opts.features,
   });
   return parseMirrorBundle(built.bytes);
 }
@@ -967,4 +968,37 @@ test.each(["outside project", "outside home", "ancestor symlink", "chained symli
     expect(read(target)).toBe(scenario === "different bytes" ? "host edit" : "same");
     expect(modeOf(target)).toBe(scenario === "different mode" ? 0o700 : 0o600);
   } finally { fs.rmSync(outside, { recursive: true, force: true }); }
+});
+
+describe("the laptop's codecast features", () => {
+  test("the host takes them before its refresh, keeps its own keys, and ignores anything that is not a feature switch", async () => {
+    write(".codecast/config.json", JSON.stringify({ user_id: "u1", auth_token: "t", calls_enabled: true }));
+    const features = { ...featureSwitches({ task_enabled: true, skills_enabled: true, memory_enabled: true, stable_mode: "team" }), auth_token: "stolen", user_id: "someone" } as Record<string, boolean | string>;
+    let seen: Record<string, unknown> = {};
+    await apply(await bundleOf([], { features }), { refresh: () => { seen = JSON.parse(read(".codecast/config.json")); } });
+    expect(seen).toMatchObject({ user_id: "u1", auth_token: "t", task_enabled: true, skills_enabled: true, memory_enabled: true, stable_mode: "team", calls_enabled: false });
+    expect(adoptFeatureSwitches(home, features)).toBe(false);
+  });
+
+  test("a feature switch change moves the bundle hash, so the next tick pushes it", async () => {
+    const a = buildMirrorBundle([], { source: source(), target_home: home, managed_roots: [], features: featureSwitches({ task_enabled: true }) });
+    const b = buildMirrorBundle([], { source: source(), target_home: home, managed_roots: [], features: featureSwitches({ task_enabled: false }) });
+    expect(a.hash).not.toBe(b.hash);
+  });
+});
+
+test("a host edit the laptop has taken in is replaced; one made after the laptop looked is still kept", async () => {
+  const rel = ".claude/projects/-home-u-work-app/memory/MEMORY.md";
+  await apply(await bundleOf([{ path: rel, kind: "verbatim", mode: "0600", bytes: Buffer.from("- [A](a.md)\n") }]));
+  write(rel, "- [A](a.md)\n- [H](h.md)\n");
+  const merged = Buffer.from("- [A](a.md)\n- [L](l.md)\n- [H](h.md)\n");
+  const built = (reconciled: string) => parseMirrorBundle(buildMirrorBundle([{ path: rel, kind: "verbatim", mode: "0600", bytes: merged }], {
+    source: source(), target_home: home, managed_roots: [".claude"], reconciled: [{ path: rel, sha: reconciled }],
+  }).bytes);
+  const stale = await apply(await built(sha256("something older")));
+  expect(stale.host_edited).toEqual([rel]);
+  expect(read(rel)).toBe("- [A](a.md)\n- [H](h.md)\n");
+  const taken = await apply(await built(sha256("- [A](a.md)\n- [H](h.md)\n")));
+  expect(taken.host_edited).toEqual([]);
+  expect(read(rel)).toBe(merged.toString());
 });

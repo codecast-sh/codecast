@@ -13,7 +13,8 @@ import { isCloudMirrorEnabled, type Config } from "../../config/types.js";
 import { deviceId as localDeviceId } from "../../remote/device.js";
 import { claudeProjectDirName } from "../../projectPathResolver.js";
 import { remoteHome, sshBase, type RemoteHost } from "../../remote/session-move.js";
-import { withMirrorLock, type ApplyResult, type MirrorStamp } from "./apply.js";
+import { featureSwitches, withMirrorLock, type ApplyResult, type MirrorStamp } from "./apply.js";
+import { pullHostMemory, sshMemoryReader, type PulledMemory } from "./memoryBack.js";
 import { buildMirrorBundle, sha256, type BuiltBundle } from "./bundle.js";
 import { MIRROR_MANAGED_ROOTS, collectMirrorSources, renderInventoryForHost, type Inventory, type MirrorSources } from "./inventory.js";
 import { TouchLedger, ledgerUnchanged, signLedger, type MirrorLedger } from "./ledger.js";
@@ -105,6 +106,8 @@ export interface BuildHomeMirrorOptions {
   projects?: ProjectRegistration[];
   /** Shared across the hosts of one tick; a fresh one is used when absent. */
   sources?: MirrorSourceCache;
+  /** Host-edited memories this push has taken in (memoryBack.ts). */
+  reconciled?: Array<{ path: string; sha: string }>;
 }
 
 /** Collect + transform + bundle. Throws when the inventory refuses (size cap). */
@@ -202,6 +205,8 @@ export async function buildHomeMirror(opts: BuildHomeMirrorOptions): Promise<Hom
     unmanaged_roots: [...new Set([...AGENT_RUNTIME_ROOTS, ...CODECAST_OWNED_HOME_PATHS, ...retired.flatMap((p) => [path.posix.relative(opts.hostHome, p.targetRoot), `.claude/projects/${claudeProjectDirName(p.targetRoot)}/memory`])])],
     managed_roots: [...new Set([...MIRROR_MANAGED_ROOTS, ...entries.map((e) => e.path)])],
     take_over: opts.takeOver ?? false,
+    features: featureSwitches(opts.config as Record<string, unknown> | null | undefined),
+    reconciled: opts.reconciled,
     skipped,
     scrubbed,
     excludes_applied: inv.excludesApplied,
@@ -409,7 +414,11 @@ async function queued<T>(key: string, fn: () => Promise<T>): Promise<T> {
 
 function resolveDeps(partial: Partial<MirrorDeps> = {}, signal?: AbortSignal): MirrorDeps {
   const defaults = defaultDeps(signal);
-  return { ...defaults, ...partial, lock: partial.lock ?? (partial.readLocalStamps ? queued : defaults.lock), retireProjects: partial.retireProjects ?? (partial.readLocalStamps ? async () => {} : defaults.retireProjects) };
+  return {
+    ...defaults, ...partial, lock: partial.lock ?? (partial.readLocalStamps ? queued : defaults.lock),
+    retireProjects: partial.retireProjects ?? (partial.readLocalStamps ? async () => {} : defaults.retireProjects),
+    pullMemory: partial.pullMemory ?? (partial.readLocalStamps ? async () => ({ written: 0, reconciled: [] }) : defaults.pullMemory),
+  };
 }
 
 async function saveHostStamp(deps: MirrorDeps, key: string, stamp: LocalMirrorStamp): Promise<void> {
@@ -445,6 +454,18 @@ export function resetBuildCache(): void {
 export async function mirrorHomeToHost(host: RemoteHost, opts: MirrorHomeOptions = {}): Promise<MirrorHomeOutcome> {
   const deps = resolveDeps(opts.deps, opts.signal);
   return deps.lock(hostKey(host), async () => {
+    const first = await mirrorUnderLock(host, opts, deps);
+    // A cloud worktree removed on the host (a killed session's cleanup) is
+    // retired by the push that found it gone; the push again, now, applies
+    // without it, so the placement that found it does not fail on it.
+    if (!first.retiredTargets) return first;
+    const { retiredTargets: _, ...second } = await mirrorUnderLock(host, opts, deps);
+    return second;
+  });
+}
+
+async function mirrorUnderLock(host: RemoteHost, opts: MirrorHomeOptions, deps: MirrorDeps): Promise<MirrorHomeOutcome & { retiredTargets?: boolean }> {
+  {
     const config = opts.config === undefined ? deps.readConfig() : opts.config;
     if (!isCloudMirrorEnabled(config)) return { pushed: false, reason: "config mirror disabled", changed: 0 };
     if (!config?.user_id) return { pushed: false, reason: NOT_LOGGED_IN_REASON, changed: 0 };
@@ -499,18 +520,30 @@ export async function mirrorHomeToHost(host: RemoteHost, opts: MirrorHomeOptions
       }
     }
     try {
-      if (!opts.force) {
-        const remote = await deps.readStamp(host);
-        if (remote?.complete === true && remote.hash === hash) {
-          await saveHostStamp(deps, key, { hash, at });
-          return { pushed: false, hash, skipped: "in step", changed: 0 };
+      const remote = await deps.readStamp(host);
+      // Memories the host's sessions wrote come home first, so this push carries them back instead of reporting a conflict.
+      try {
+        const pulled = await deps.pullMemory(host, projects, remote);
+        if (pulled.written > 0 || pulled.reconciled.length) {
+          (buildOpts as BuildHomeMirrorOptions).reconciled = pulled.reconciled;
+          buildCache.delete(cacheKey); built = await build(); hash = built.hash;
         }
+      } catch (err) {
+        deps.log(`memory from ${key} not read: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}`);
+      }
+      if (!opts.force && remote?.complete === true && remote.hash === hash) {
+        await saveHostStamp(deps, key, { hash, at });
+        return { pushed: false, hash, skipped: "in step", changed: 0 };
       }
       opts.signal?.throwIfAborted();
       const wire = await bundle();
       opts.onProgress?.(`syncing ${wire.header.files.length} configuration files (${(wire.bytes.length / 1024 / 1024).toFixed(1)} MiB)…`);
       let r = await deps.push(host, wire.bytes);
-      if (r.result?.retired_projects?.length) await deps.retireProjects(host, r.result.retired_projects.map((root) => path.posix.join(remoteHome(host), root)));
+      let retiredTargets = false;
+      if (r.result?.retired_projects?.length) {
+        await deps.retireProjects(host, r.result.retired_projects.map((root) => path.posix.join(remoteHome(host), root)));
+        retiredTargets = r.result.errors.every((e) => r.result!.retired_projects!.includes(e.path));
+      }
       if (r.pushed && (!isApplyResult(r.result) || r.result.hash !== hash || r.hash !== hash || r.result.refused || r.result.errors.length || r.result.host_edited.length)) {
         r = { ...r, pushed: false, reason: isApplyResult(r.result) ? applyFailure(r.result) || "receiver returned a different bundle hash" : "receiver returned an incomplete apply result" };
       }
@@ -519,12 +552,12 @@ export async function mirrorHomeToHost(host: RemoteHost, opts: MirrorHomeOptions
         return { ...r, changed: (r.result?.applied.length ?? 0) + (r.result?.pruned.length ?? 0) };
       }
       await saveHostStamp(deps, key, { hash: "", at, last_failure: { reason: r.reason ?? "refused", at, hash } });
-      return { ...r, changed: 0 };
+      return { ...r, changed: 0, ...(retiredTargets ? { retiredTargets } : {}) };
     } catch (err) {
       await saveHostStamp(deps, key, { hash: "", at, last_failure: { reason: err instanceof Error ? err.message : String(err), at, hash } });
       throw err;
     }
-  });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -546,6 +579,8 @@ export interface MirrorDeps {
   lock: <T>(key: string, fn: () => Promise<T>) => Promise<T>;
   readProjects: (host: RemoteHost) => ProjectRegistration[];
   retireProjects: (host: RemoteHost, roots: string[]) => Promise<void>;
+  /** Bring the host's new and edited agent memories home before a push (memoryBack.ts). */
+  pullMemory: (host: RemoteHost, projects: ProjectRegistration[], stamp: MirrorStamp | null) => Promise<PulledMemory>;
 }
 
 export interface MirrorTickOptions {
@@ -563,6 +598,7 @@ export function defaultDeps(signal?: AbortSignal): MirrorDeps {
   return {
     listHosts: async () => [],
     readStamp: (host) => readRemoteMirrorStamp(host, 20_000, signal),
+    pullMemory: (host, projects, stamp) => pullHostMemory({ laptopHome: process.env.HOME || os.homedir(), hostHome: remoteHome(host), projects, stamp, read: sshMemoryReader(host) }),
     push: (host, bundle) => pushMirrorToHostAsync(host, bundle, { signal }),
     build: buildHomeMirror,
     readLocalStamps: () => readLocalStamps(),

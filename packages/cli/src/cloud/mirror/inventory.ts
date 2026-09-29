@@ -23,7 +23,7 @@ import {
 import type { TouchLedger } from "./ledger.js";
 
 import {
-  AGENT_CONTEXT_ROOTS, CONTEXT_SIZE_CAP, INSTRUCTION_FILE_RE, LOCAL_BIN_ROOT, LOCAL_BIN_SCRIPT_CAP, SKILL_STATE_FILES, commandCompatibilityWarnings, configPatterns,
+  AGENT_CONTEXT_ROOTS, CONTEXT_SIZE_CAP, INSTRUCTION_FILE_RE, LOCAL_BIN_ROOT, LOCAL_BIN_SCRIPT_CAP, SHELL_ENV_FILES, SKILL_STATE_FILES, commandCompatibilityWarnings, configPatterns,
   activeContextReferences, isPortableScript, contextReferences, isAccessError, isAccountDataPath, isActiveConfig, isDefaultExcluded, isDeniedPath, isNativeBinary, isReferencedDirectory, matchesContextPattern, portableHooks,
 } from "./discovery.js";
 
@@ -167,7 +167,9 @@ export async function collectMirrorSources(opts: Omit<CollectOptions, "hostHome"
     return { real, stat };
   };
 
-  const addFile = async (rel: string, kind: MirrorKind, real: string, stat: fs.Stats) => {
+  // Shell startup files and what they source: the person's environment, exports and all.
+  const shellEnv = new Set<string>();
+  const addFile = async (rel: string, kind: MirrorKind, real: string, stat: fs.Stats, shell = false) => {
     if (entries.has(rel) || excluded(rel)) return;
     if (!stat.isFile()) { skip(rel, "not a regular file"); return; }
     const script = rel.startsWith(`${LOCAL_BIN_ROOT}/`);
@@ -190,7 +192,7 @@ export async function collectMirrorSources(opts: Omit<CollectOptions, "hostHome"
       bytes = await fd.readFile();
     } finally { await fd.close(); }
     if (script && !isPortableScript(bytes, home)) { totalBytes -= stat.size; skip(rel, "not a portable text script"); return; }
-    const credential = !isActiveConfig(kind) && credentialContentReason(bytes);
+    const credential = !shell && !isActiveConfig(kind) && credentialContentReason(bytes);
     if (credential) { totalBytes -= stat.size; skip(rel, credential); return; }
     const hooks = await portableHooks(bytes, path.join(home, rel), home, kind);
     bytes = hooks.bytes;
@@ -200,10 +202,11 @@ export async function collectMirrorSources(opts: Omit<CollectOptions, "hostHome"
     totalBytes += bytes.length - stat.size;
     const entry = { path: rel, kind, mode: fileMode(stat), bytes, root: rootOf(rel) };
     entries.set(rel, entry);
+    if (shell) shellEnv.add(rel);
     referenceQueue.push(entry);
   };
 
-  const collect = async (initial: string, optionalReference = false) => {
+  const collect = async (initial: string, optionalReference = false, shell = false) => {
     const queue = [{ rel: initial, ancestors: new Set<string>() }];
     for (let start = 0; start < queue.length;) {
       const batch = queue.slice(start, start + 8);
@@ -219,7 +222,7 @@ export async function collectMirrorSources(opts: Omit<CollectOptions, "hostHome"
           ledger?.note(resolved.real);
           return (await fs.promises.readdir(resolved.real)).sort().map((name) => ({ rel: `${rel}/${name}`, ancestors: chain }));
         }
-        await addFile(rel, kindForPath(rel), resolved.real, resolved.stat);
+        await addFile(rel, kindForPath(rel), resolved.real, resolved.stat, shell);
         return [];
       }));
       queue.push(...children.flat());
@@ -227,6 +230,7 @@ export async function collectMirrorSources(opts: Omit<CollectOptions, "hostHome"
   };
 
   for (const rel of [...MIRROR_SOURCES.map((src) => src.path), ...SKILL_STATE_FILES, LOCAL_BIN_ROOT]) await collect(rel);
+  for (const rel of SHELL_ENV_FILES) await collect(rel, true, true);
   ledger?.note(home);
   for (const name of await fs.promises.readdir(home)) if (INSTRUCTION_FILE_RE.test(name) || name === ".mcp.json") await collect(name);
   for (const inc of includes) await collect(inc);
@@ -297,7 +301,7 @@ export async function collectMirrorSources(opts: Omit<CollectOptions, "hostHome"
           skip(rel, "referenced path absent or excluded"); continue;
         }
         if (resolved.stat.isDirectory() && !required.has(ref) && !isReferencedDirectory(ref)) continue;
-        await collect(rel, !required.has(ref));
+        await collect(rel, !required.has(ref), shellEnv.has(entry.path));
         if (required.has(ref) && /credential|private key/.test(skippedPaths.get(rel)?.reason ?? "")) throw new Error(`active context reference contains credential material: ${entry.path} -> ${rel}`);
       } catch (err) {
         if (required.has(ref) || !isAccessError(err)) throw err;
