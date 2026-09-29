@@ -3287,6 +3287,15 @@ pre[class*="language-"] {
 @container (max-width: 560px) {
   .scope-head-cq .scope-head-wide { display: none; }
 }
+/* Decision sheet header: in a narrow pane "decision 3 of 12" shortens to
+   "3/12" and the Read the thread pill keeps only its chevron, so who is
+   asking keeps its width. */
+.decision-sheet-head-cq { container-type: inline-size; }
+.decision-sheet-head-cq .decision-head-short { display: none; }
+@container (max-width: 480px) {
+  .decision-sheet-head-cq .decision-head-wide { display: none; }
+  .decision-sheet-head-cq .decision-head-short { display: inline; }
+}
 /* Right-panel tabs: drop labels to icons when the pane is narrow. */
 .vault-panel-cq { container-type: inline-size; }
 @container (max-width: 320px) {
@@ -3557,6 +3566,24 @@ pre[class*="language-"] {
   margin: 0.625rem 0;
   min-width: 0;
   max-width: none;
+}
+/* A card sizes its chrome by its own width, not the window's: a thread panel
+   or a split pane can hand it 300px on a wide screen. Below ~520px the Open
+   pill drops its words (the arrow and the tooltip still say it), which gives
+   the title back the ~120px the label held. */
+.entity-card {
+  container: entity-card / inline-size;
+}
+@container entity-card (max-width: 520px) {
+  .object-reveal-open-compact {
+    padding-left: 6px;
+  }
+  .object-reveal-open-compact .object-reveal__open-go {
+    padding-right: 4px;
+  }
+  .object-reveal-open-compact .object-reveal__open-text {
+    display: none;
+  }
 }
 .ch-msg-body:has(.entity-card-row) {
   max-width: none;

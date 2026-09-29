@@ -48,6 +48,8 @@ export interface MirrorStamp {
   complete?: boolean;
   desired_hash?: string;
   mcp_overrides_hash?: string;
+  /** The project roots the last bundle named: a root a later bundle leaves out is released, never pruned. */
+  project_roots?: string[];
 }
 
 export type RefusedReason = "other_user" | "unprovisioned" | "other_device" | "other_home";
@@ -879,9 +881,19 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
 
   if (prev) {
     const roots = [...new Set([...bundle.header.managed_roots, ...prev.managed_roots])];
+    const under = (rel: string, roots: readonly string[]) => roots.some((root) => rel === root || rel.startsWith(`${root}/`));
+    // A project checkout the laptop no longer names (its registration gone, or a
+    // host cloned from another's image, which carries the other host's stamp)
+    // is released: its files stay and the mirror stops owning them. Pruning them
+    // deleted 716 files, 290 of them tracked, from a clone's checkout on 2026-09-29.
+    // Stamps older than project_roots mark home files by a leading dot; a
+    // project file is anything deeper that is not.
+    const releasedProject = (rel: string) => !under(rel, projectRoots)
+      && (prev.project_roots ? under(rel, prev.project_roots) : !rel.startsWith(".") && rel.includes("/"));
     for (const [rel, info] of Object.entries(prev.files)) {
       if (manifest.has(rel) || isCodecastOwnedHomePath(rel) || isAgentRuntimePath(rel)) continue;
       if (bundle.header.unmanaged_roots?.some((root) => rel === root || rel.startsWith(`${root}/`))) continue;
+      if (releasedProject(rel)) continue;
       const kind = info.kind ?? "verbatim";
       let dest = rel;
       let abs = path.join(home, rel);
@@ -1039,6 +1051,7 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
     applied_at: now().toISOString(),
     files: stampFiles,
     managed_roots: [...new Set([...bundle.header.managed_roots, ...(prev?.managed_roots ?? [])])],
+    project_roots: projectRoots,
   };
   writeMirroredFile(home, MIRROR_STAMP_REL, Buffer.from(JSON.stringify(stamp, null, 2) + "\n"), "0600");
   return result;

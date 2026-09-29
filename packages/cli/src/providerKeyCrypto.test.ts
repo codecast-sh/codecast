@@ -51,23 +51,23 @@ describe("provider-key web→daemon crypto", () => {
     }
   });
 
-  it("applies a full web→daemon command: encrypt → command args → decrypt → store (set and remove)", () => {
+  it("applies a full web→daemon command: encrypt → command args → decrypt → store (set and remove)", async () => {
     const dir = tmpDir();
     try {
       const pub = getProviderKeyPublicKey(dir);
       // The exact args the convex mutation builds for op:"set".
       const setArgs = JSON.stringify({ op: "set", payload: encryptProviderKeyForTest(pub, "openrouter", "sk-or-live-key") });
-      const setRes = applyProviderKeyCommand(dir, setArgs);
+      const setRes = await applyProviderKeyCommand(dir, setArgs);
       expect(setRes.ok).toBe(true);
       expect(readProviderKeyStore(dir)).toEqual({ openrouter: "sk-or-live-key" });
       // op:"remove" (no encryption).
-      const rmRes = applyProviderKeyCommand(dir, JSON.stringify({ op: "remove", provider: "openrouter" }));
+      const rmRes = await applyProviderKeyCommand(dir, JSON.stringify({ op: "remove", provider: "openrouter" }));
       expect(rmRes.ok).toBe(true);
       expect(readProviderKeyStore(dir)).toEqual({});
       // A payload sealed to a different device fails to apply, store untouched.
       const otherDir = tmpDir();
       const forOther = JSON.stringify({ op: "set", payload: encryptProviderKeyForTest(getProviderKeyPublicKey(otherDir), "openai", "sk-x") });
-      expect(applyProviderKeyCommand(dir, forOther).ok).toBe(false);
+      expect((await applyProviderKeyCommand(dir, forOther)).ok).toBe(false);
       expect(readProviderKeyStore(dir)).toEqual({});
       fs.rmSync(otherDir, { recursive: true, force: true });
     } finally {
@@ -104,6 +104,22 @@ describe("provider-key web→daemon crypto", () => {
     } finally {
       fs.rmSync(a, { recursive: true, force: true });
       fs.rmSync(b, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("provider key verification", () => {
+  it("stores a key only when the provider's check passes, and reports the account", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pk-verify-"));
+    try {
+      const seal = async (key: string) => JSON.stringify({ op: "set", provider: "cursor", payload: encryptProviderKeyForTest(getProviderKeyPublicKey(dir), "cursor", key) });
+      const verify = async (_p: string, k: string) => (k === "crsr_good" ? { ok: true as const, account: "me@x.com" } : { ok: false as const, error: "Cursor rejected this key: Invalid User API Key" });
+      expect(await applyProviderKeyCommand(dir, await seal("crsr_bad"), verify)).toEqual({ ok: false, error: "Cursor rejected this key: Invalid User API Key" });
+      expect(readProviderKeyStore(dir).cursor).toBeUndefined();
+      expect(await applyProviderKeyCommand(dir, await seal("crsr_good"), verify)).toEqual({ ok: true, op: "set", provider: "cursor", account: "me@x.com" });
+      expect(readProviderKeyStore(dir).cursor).toBe("crsr_good");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 });

@@ -651,18 +651,21 @@ export function ObjectCardFrame({
 
       {/* Header strip: identity + state, always visible. */}
       {!flat && header && (
-        <div className={`flex items-start gap-2.5 border-b ${accent.stripBorder} ${expanded ? accent.stripOpen : accent.strip} px-4 py-3 transition-colors`}>
+        // Wraps: the title claims a readable basis first, and when the controls
+        // cannot fit beside it they drop to their own line instead of
+        // squeezing the title to one letter per line.
+        <div className={`flex flex-wrap items-start gap-x-2.5 gap-y-1.5 border-b ${accent.stripBorder} ${expanded ? accent.stripOpen : accent.strip} px-4 py-3 transition-colors`}>
           <span className="relative mt-[2px] flex-shrink-0">
             {header.icon}
             {header.live && <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full border border-sol-bg bg-sol-green" />}
           </span>
-          <div className="min-w-0 flex-1">
+          <div className="min-w-0 flex-1 basis-[9rem]">
             <div className="text-sm font-medium leading-snug text-sol-text [overflow-wrap:anywhere]">
               {typeof header.title === "function" ? header.title(expanded) : header.title}
             </div>
             {resolved && !compact && header.meta}
           </div>
-          <div className="mt-[1px] flex flex-shrink-0 items-center gap-1.5">
+          <div className="ml-auto mt-[1px] flex flex-shrink-0 items-center gap-1.5">
             {header.timeAgo && !compact && <span className="text-[10px] text-sol-text-dim">{header.timeAgo}</span>}
             {resolved && !expanded && <RevealButton target={reveal} className={revealChrome} />}
             {resolved && !expanded && <RevealOpenLink href={href} label={openLabel} onOpen={openObject} variant="compact" />}

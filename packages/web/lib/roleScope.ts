@@ -16,7 +16,7 @@
 // would show, under the project the task itself names. Pure: no React, no store.
 import type { WorkState } from "@codecast/shared/contracts";
 import { isOnProjectBoard } from "@codecast/shared/tasks";
-import { projectLeadOf, type LeadRole } from "@codecast/shared/contracts/orgLead";
+import { isWholeWorkspaceRole, projectLeadOf, type LeadRole } from "@codecast/shared/contracts/orgLead";
 import type { InitiativeRow } from "@codecast/shared/contracts/initiative";
 import { computePlanProgress } from "./liveEntities";
 import { roleInitiatives, type RoleInitiative } from "./roleInitiatives";
@@ -62,7 +62,7 @@ export function sourceFromTree(tree: OrgTree, role: OrgRole): RoleScopeSource {
   const parentUser = rt.kind === "user" ? tree.people.find((p) => p.user_id === rt.user_id) : undefined;
   return {
     role_id: role._id, short_id: role.short_id, name: role.name, handle: role.handle,
-    whole: role.scope.project_ids.length === 0 && role.scope.plan_ids.length === 0,
+    whole: isWholeWorkspaceRole(role),
     projects: role.scope_names.projects,
     plans: role.scope_names.plans,
     charter: role.charter ?? "",
@@ -85,7 +85,7 @@ export function sourceFromCard(card: RoleCardAnswer): RoleScopeSource {
   const p = card.reports_to;
   return {
     role_id: card._id, short_id: card.short_id, name: card.name, handle: card.handle,
-    whole: card.scope.projects.length === 0 && card.scope.plans.length === 0,
+    whole: isWholeWorkspaceRole({ _id: card._id, handle: card.handle, scope: { project_ids: card.scope.projects.map((x) => x.id), plan_ids: card.scope.plans.map((x) => x.id) } }),
     projects: card.scope.projects, plans: card.scope.plans,
     charter: card.charter ?? "",
     // The card names a parent role without its handle: the name stands in.
@@ -174,8 +174,8 @@ export function dailyLimitLine(caps: RoleLimits | null, counters: RoleUse | null
 export function buildRoleScope(source: RoleScopeSource, rows: RoleScopeRows, today: string): RoleScopeModel {
   const projectById = new Map(rows.projects.map((p) => [p._id, p]));
   const planById = new Map(rows.plans.map((p) => [p._id, p]));
-  // An empty scope is the whole workspace (scopes-and-feed.md F1): every
-  // project the store holds for it.
+  // The Chief of Staff with no scope looks after the whole workspace
+  // (org-staffing.md S26): every project the store holds for it.
   const projectRefs = source.whole ? rows.projects.map((p) => ({ id: p._id, title: p.title, short_id: p.short_id })) : source.projects;
   const inScope = new Set(projectRefs.map((p) => p.id));
 

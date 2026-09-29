@@ -56,8 +56,8 @@ export function NestedStepList({ steps, outcomes, labelClass }: {
           <div key={`${step.label}-${index}`} className={`px-2 py-1.5 text-xs font-mono ${skipped ? "opacity-50" : ""}`}>
             <div className="flex items-start gap-2">
               <span className="shrink-0 w-4 text-right tabular-nums text-sol-text-dim">{index + 1}</span>
-              <span className={`shrink-0 ${failed ? "text-sol-red" : labelClass ?? "text-sol-cyan/80"}`}>{step.label}</span>
-              {step.summary && <span className="min-w-0 break-words text-sol-text-muted">{step.summary}</span>}
+              <span className={`max-w-[45%] shrink-0 break-words ${failed ? "text-sol-red" : labelClass ?? "text-sol-cyan/80"}`}>{step.label}</span>
+              {step.summary && <span className="min-w-0 flex-1 break-words text-sol-text-muted">{step.summary}</span>}
             </div>
             {outcome?.output && (
               <pre className={`mt-0.5 pl-6 whitespace-pre-wrap break-words ${failed ? "text-sol-red" : "text-sol-text-secondary/80"}`}>

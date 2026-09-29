@@ -11,6 +11,7 @@
 
 import { deviceDisplayName } from "@codecast/shared/contracts";
 import type { SessionMachine } from "../lib/sessionMachines";
+import { ConnectCursorButton } from "./ConnectCursorDialog";
 
 export type SessionModeTogglesProps = {
   /** The cloud host on the roster (offline included), or null without one. */
@@ -36,6 +37,13 @@ export type SessionModeTogglesProps = {
    */
   startFrom?: "checkout" | "origin_main";
   onSetStartFrom?: (v: "checkout" | "origin_main") => void;
+  /**
+   * Set when the agent is Cursor: "run in the cloud" means a Cursor Cloud
+   * Agent (Cursor's VM, on the repo's GitHub branch) instead of a codecast
+   * cloud host, and the host-only controls step aside. `connected` is whether
+   * the machine that drives it holds a Cursor key.
+   */
+  cursorCloud?: { on: boolean; onToggle: () => void; connected: boolean };
 };
 
 const START_FROM_OPTIONS: Array<{ value: "checkout" | "origin_main"; label: string; title: string }> = [
@@ -43,8 +51,39 @@ const START_FROM_OPTIONS: Array<{ value: "checkout" | "origin_main"; label: stri
   { value: "origin_main", label: "origin/main", title: "origin/main — a clean checkout of the default branch" },
 ];
 
-export function SessionModeToggles({ cloudHost, cloudMode, cloudToggleEnabled, onToggleCloud, isolated, onToggleIsolated, shared = false, onToggleShared, startFrom = "checkout", onSetStartFrom }: SessionModeTogglesProps) {
+export function SessionModeToggles({ cloudHost, cloudMode, cloudToggleEnabled, onToggleCloud, isolated, onToggleIsolated, shared = false, onToggleShared, startFrom = "checkout", onSetStartFrom, cursorCloud }: SessionModeTogglesProps) {
   const effectiveStartFrom = shared ? "origin_main" : startFrom;
+  if (cursorCloud) {
+    const { on, onToggle, connected } = cursorCloud;
+    return (
+      <>
+        {!on && (
+          <button
+            onClick={onToggleIsolated}
+            className="flex items-center gap-2 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors"
+            title="Create session in an isolated git worktree"
+          >
+            <span className={`w-7 h-4 rounded-full transition-colors relative flex-shrink-0 ${isolated ? "bg-sol-cyan/30" : "bg-sol-bg-alt"}`}>
+              <span className={`absolute top-0.5 w-3 h-3 rounded-full transition-all ${isolated ? "left-3.5 bg-sol-cyan" : "left-0.5 bg-sol-text-dim"}`} />
+            </span>
+            <span className={isolated ? "text-sol-cyan" : ""}>isolated worktree</span>
+          </button>
+        )}
+        <button
+          onClick={onToggle}
+          aria-pressed={on}
+          className="flex items-center gap-2 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors"
+          title="Run this session as a Cursor Cloud Agent: on Cursor's machines, on this repository's branch as it is on GitHub. Messages you send become its follow-ups."
+        >
+          <span className={`w-7 h-4 rounded-full transition-colors relative flex-shrink-0 ${on ? "bg-sol-violet/30" : "bg-sol-bg-alt"}`}>
+            <span className={`absolute top-0.5 w-3 h-3 rounded-full transition-all ${on ? "left-3.5 bg-sol-violet" : "left-0.5 bg-sol-text-dim"}`} />
+          </span>
+          <span className={on ? "text-sol-violet" : ""}>run in Cursor Cloud</span>
+        </button>
+        {on && !connected && <ConnectCursorButton label="connect Cursor" />}
+      </>
+    );
+  }
   return (
     <>
       <button

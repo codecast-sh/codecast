@@ -136,16 +136,19 @@ describe("ProjectLeadChip", () => {
     await seed({ setProjectLead: real });
   });
 
-  it("a whole workspace role picked as lead is not narrowed to the project", async () => {
-    const chief: OrgRole = { ...billing, _id: "fixture-role-ops", short_id: "or-3", name: "Operations", handle: "ops", scope: { project_ids: [], plan_ids: [] } };
-    await seed({ orgTree: { ...tree, roles: [growth, billing, chief] }, projects: { ...useInboxStore.getState().projects, [SITE]: row({ _id: SITE, title: "Site", short_id: "pr-5" }) } });
+  const pickLead = async (lead: OrgRole) => {
+    await seed({ orgTree: { ...tree, roles: [growth, billing, lead] }, projects: { ...useInboxStore.getState().projects, [SITE]: row({ _id: SITE, title: "Site", short_id: "pr-5" }) } });
     await mount(<ProjectLeadChip projectId={SITE} editable />);
     await act(async () => chip()!.click());
-    const item = [...document.querySelectorAll<HTMLElement>("[role=menuitem]")].find((b) => /Operations/.test(b.textContent ?? ""));
+    const item = [...document.querySelectorAll<HTMLElement>("[role=menuitem]")].find((b) => b.textContent?.includes(lead.name));
     await act(async () => item!.click());
     const s = useInboxStore.getState();
-    assert.equal((s.projects as any)[SITE].owner_role_id, chief._id);
-    assert.deepEqual(s.orgTree!.roles.find((r) => r._id === chief._id)!.scope.project_ids, []);
+    return { owner: (s.projects as any)[SITE].owner_role_id, scope: s.orgTree!.roles.find((r) => r._id === lead._id)!.scope.project_ids };
+  };
+
+  it("a role with no scope picked as lead takes the project into its scope", async () => {
+    const ops: OrgRole = { ...billing, _id: "fixture-role-ops", short_id: "or-4", name: "Operations", handle: "ops", scope: { project_ids: [], plan_ids: [] } };
+    assert.deepEqual(await pickLead(ops), { owner: ops._id, scope: [SITE] });
   });
 
   it("another workspace's tree offers nothing and says why", async () => {

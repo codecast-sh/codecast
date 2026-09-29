@@ -8,7 +8,10 @@ import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useRecentProjectsFeed } from "../../hooks/useRecentProjectsFeed";
 import { useShallow } from "zustand/react/shallow";
 import { createPortal } from "react-dom";
-import { AGENT_LAUNCH_OPTIONS, type ConvexAgentType } from "@codecast/shared/contracts";
+import { AGENT_LAUNCH_OPTIONS, cursorCloudModel, modelOptionKey, type ConvexAgentType } from "@codecast/shared/contracts";
+import { useLiveSessionMeta } from "../../hooks/useLiveSessionMeta";
+import { commitModelChange } from "../../lib/modelSwitchWeb";
+import { useCursorKeyStatus } from "../ConnectCursorDialog";
 import { StableContextPicker } from "../StableContextCards";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { KeyCap } from "../KeyboardShortcutsHelp";
@@ -129,6 +132,25 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
     return { _id: sess._id, project_path: sess.project_path, git_root: sess.git_root, owner_device_id: sess.owner_device_id, target_device_id: sess.target_device_id, cloud_placement: sess.cloud_placement };
   }));
   const isolatedToggle = useInboxStore((s) => s.isolatedWorktreeMode);
+  // Cursor: "run in the cloud" is a Cursor Cloud Agent, carried as the launch
+  // model key (cloud / cloud:<id>) the daemon already honours.
+  const liveMeta = useLiveSessionMeta(conversation._id);
+  const cursorKey = useCursorKeyStatus();
+  const cursorCloud = useMemo(() => {
+    if (liveMeta?.agentType !== "cursor") return undefined;
+    const on = cursorCloudModel(modelOptionKey(liveMeta.model, "cursor")) !== null;
+    return {
+      on,
+      connected: cursorKey.connected,
+      onToggle: () => void commitModelChange({
+        conversationId: conversation._id,
+        agentType: "cursor",
+        current: { model: liveMeta.model, effort: liveMeta.effort },
+        sel: { model: on ? "default" : "cloud" },
+        blank: true,
+      }),
+    };
+  }, [liveMeta?.agentType, liveMeta?.model, liveMeta?.effort, cursorKey.connected, conversation._id]);
   const convex = useConvex();
   const convCommand = useInboxStore((s) => s.convCommand);
 
@@ -791,6 +813,7 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
         <NewSessionBucketPill conversation={conversation} />
 
         <SessionModeToggles
+          cursorCloud={cursorCloud}
           cloudHost={cloudHost}
           cloudMode={cloudMode}
           cloudToggleEnabled={cloudToggleAvailable(machineChips, cloudMode)}

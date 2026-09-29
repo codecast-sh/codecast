@@ -1002,3 +1002,27 @@ test("a host edit the laptop has taken in is replaced; one made after the laptop
   expect(taken.host_edited).toEqual([]);
   expect(read(rel)).toBe(merged.toString());
 });
+
+test("a project the next bundle does not name is released, its files kept; a home file no longer sent is still pruned", async () => {
+  fs.mkdirSync(path.join(home, "work/app/docs"), { recursive: true });
+  const withProject = (entries: BundleInput[], roots: string[]) => parseMirrorBundle(buildMirrorBundle(entries, {
+    source: source(), target_home: home, managed_roots: [".claude"], project_roots: roots,
+  }).bytes);
+  await apply(await withProject([
+    { path: "work/app/docs/guide.md", kind: "verbatim", mode: "0600", bytes: Buffer.from("guide\n") },
+    { path: ".claude/skills/old/SKILL.md", kind: "verbatim", mode: "0600", bytes: Buffer.from("old\n") },
+  ], ["work/app"]));
+  expect(readStamp(home)?.project_roots).toEqual(["work/app"]);
+  const released = await apply(await withProject([], []));
+  expect(read("work/app/docs/guide.md")).toBe("guide\n");
+  expect(released.pruned).toEqual([".claude/skills/old/SKILL.md"]);
+  expect(readStamp(home)?.files["work/app/docs/guide.md"]).toBeUndefined();
+
+  // A stamp from before project_roots (a host image made by an older cast) releases by shape.
+  await apply(await withProject([{ path: "work/app/docs/guide.md", kind: "verbatim", mode: "0600", bytes: Buffer.from("guide\n") }], ["work/app"]));
+  const stamp = readStamp(home)!;
+  delete stamp.project_roots;
+  write(MIRROR_STAMP_REL, JSON.stringify(stamp));
+  await apply(await withProject([], []));
+  expect(read("work/app/docs/guide.md")).toBe("guide\n");
+});

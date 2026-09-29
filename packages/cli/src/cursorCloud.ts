@@ -108,8 +108,10 @@ export class CursorCloudApi {
     let json: any = undefined;
     try { json = text ? JSON.parse(text) : undefined; } catch {}
     if (!resp.ok) {
-      const code = typeof json?.code === "string" ? json.code : undefined;
-      throw new CursorCloudApiError(resp.status, code, `cursor cloud ${method} ${p.split("?")[0]} ${resp.status}${json?.message ? `: ${json.message}` : ""}`);
+      // Errors come as {error: {code, message}} (validation) or {code, message} (auth).
+      const body = json?.error && typeof json.error === "object" ? json.error : json;
+      const code = typeof body?.code === "string" ? body.code : undefined;
+      throw new CursorCloudApiError(resp.status, code, typeof body?.message === "string" && body.message ? body.message : `cursor cloud ${method} ${p.split("?")[0]} ${resp.status}`);
     }
     return json as T;
   }
@@ -193,6 +195,21 @@ export class CursorCloudApi {
       }
     }
     return sawResult;
+  }
+}
+
+/**
+ * Check a Cursor API key before it is stored: the account it belongs to, or
+ * Cursor's reason for refusing it. A network failure is reported as such,
+ * never as a bad key.
+ */
+export async function verifyCursorKey(key: string, fetchImpl: typeof fetch = fetch): Promise<{ ok: true; account?: string } | { ok: false; error: string }> {
+  try {
+    const me = await new CursorCloudApi(key, fetchImpl).request<{ userEmail?: string; apiKeyName?: string }>("GET", "/v1/me");
+    return { ok: true, account: me?.userEmail };
+  } catch (err) {
+    if (err instanceof CursorCloudApiError && (err.status === 401 || err.status === 403)) return { ok: false, error: `Cursor rejected this key: ${err.message}` };
+    return { ok: false, error: `Couldn't reach Cursor to check the key: ${err instanceof Error ? err.message : String(err)}` };
   }
 }
 
@@ -290,6 +307,8 @@ export interface CursorCloudTranscriptInput {
   latestRun?: CursorCloudRun;
   /** Clock for turns the log does not date. */
   createdAt: number;
+  /** A line codecast adds under the first prompt (what the agent started from). */
+  notice?: string;
 }
 
 /**
@@ -334,6 +353,7 @@ export function buildCursorCloudTranscript(input: CursorCloudTranscriptInput): s
     // its identity when a turn switches from the conversation's text to the
     // log's, or an earlier turn gains detail; ids never move between roles.
     if (turn?.prompt !== undefined) push({ role: "user", id: turn.promptId, timestamp: clock, message: { content: [text(turn.prompt)] } });
+    if (i === 0 && input.notice) push({ role: "assistant", id: "notice-start", timestamp: clock, message: { content: [text(`ℹ ${input.notice}`)] } });
 
     if (logged && logged.events.some((e) => e.event === "assistant" || e.event === "tool_call")) {
       let pending = "";
@@ -409,6 +429,12 @@ export interface CursorCloudWatcherOptions {
   pollMs?: number;
   rootDir?: string;
   readKey: () => string | null;
+  /** Import every cloud agent on the account (the account's cursor_cloud_sync
+   *  setting). Off, only the agents codecast started (and their forked
+   *  workers) are mirrored. */
+  importAll?: () => boolean;
+  /** Whether codecast started this agent. */
+  isOwnAgent?: (agentId: string) => boolean;
   resolveRepoDir?: (repo: { owner: string; name: string }) => Promise<string | null>;
   fetchImpl?: typeof fetch;
   now?: () => number;
@@ -426,8 +452,21 @@ interface AgentState {
 /** What a mirror keeps per agent on disk: its merged stream log and the runs already read to the end. */
 interface AgentLog { events: CursorRunEvent[]; readRuns: string[] }
 
+/** The branch (and pull request) the agent last pushed, from its runs. */
+export interface CursorCloudGit { agentId: string; repoUrl?: string; branch?: string; prUrl?: string }
+
+/** The agent's newest pushed branch: its runs' `git` (per agent, not per run) or a `result` event's. */
+export function latestCursorGit(agentId: string, runs: Array<CursorCloudRun & { git?: { branches?: Array<{ repoUrl?: string; branch?: string; prUrl?: string }> } }>, log: CursorRunEvent[]): CursorCloudGit | null {
+  const fromLog = [...log].reverse().find((e) => e.event === "result" && e.data.git?.branches?.length)?.data.git.branches;
+  const fromRuns = [...runs].reverse().find((r) => r.git?.branches?.length)?.git?.branches;
+  const b = (fromLog ?? fromRuns)?.at(-1);
+  if (!b?.branch && !b?.prUrl) return null;
+  return { agentId, ...(b.repoUrl ? { repoUrl: b.repoUrl.startsWith("http") ? b.repoUrl : `https://${b.repoUrl}` } : {}), ...(b.branch ? { branch: b.branch } : {}), ...(b.prUrl ? { prUrl: b.prUrl } : {}) };
+}
+
 export declare interface CursorCloudWatcher {
   on(event: "session", listener: (e: CursorTranscriptEvent) => void): this;
+  on(event: "git", listener: (g: CursorCloudGit) => void): this;
   on(event: "error", listener: (err: Error) => void): this;
   on(event: "ready", listener: () => void): this;
 }
@@ -439,6 +478,8 @@ export class CursorCloudWatcher extends EventEmitter {
   readonly rootDir: string;
   private readonly statePath: string;
   private readonly readKey: () => string | null;
+  private readonly importAll: () => boolean;
+  private readonly isOwnAgent: (agentId: string) => boolean;
   private readonly resolveRepoDir: (repo: { owner: string; name: string }) => Promise<string | null>;
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => number;
@@ -449,6 +490,7 @@ export class CursorCloudWatcher extends EventEmitter {
   private readonly logs = new Map<string, AgentLog>();
   private readonly renderTimers = new Map<string, NodeJS.Timeout>();
   private readonly mirroring = new Map<string, Promise<void>>();
+  private readonly lastGit = new Map<string, string>();
 
   constructor(opts: CursorCloudWatcherOptions) {
     super();
@@ -456,6 +498,8 @@ export class CursorCloudWatcher extends EventEmitter {
     this.rootDir = opts.rootDir ?? codecastPath("cursor-cloud");
     this.statePath = path.join(this.rootDir, "state.json");
     this.readKey = opts.readKey;
+    this.importAll = opts.importAll ?? (() => true);
+    this.isOwnAgent = opts.isOwnAgent ?? (() => false);
     this.resolveRepoDir = opts.resolveRepoDir ?? (async () => null);
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.now = opts.now ?? Date.now;
@@ -519,6 +563,7 @@ export class CursorCloudWatcher extends EventEmitter {
         let reachedHorizon = false;
         for (const agent of data.items ?? []) {
           if (Date.parse(agent.updatedAt) < horizon) { reachedHorizon = true; continue; }
+          if (!this.importAll() && !this.isOwnAgent(agent.id)) continue;
           if (this.state.agents[agent.id]?.updatedAt === agent.updatedAt && agent.status !== "ACTIVE") continue;
           await this.mirror(agent.id, agent);
         }
@@ -569,6 +614,11 @@ export class CursorCloudWatcher extends EventEmitter {
     this.saveLog(agentId);
 
     await this.render(agent, runs[runs.length - 1], api);
+    const git = latestCursorGit(agentId, runs, log.events);
+    if (git && JSON.stringify(git) !== this.lastGit.get(agentId)) {
+      this.lastGit.set(agentId, JSON.stringify(git));
+      this.emit("git", git);
+    }
     for (const worker of forkedWorkers(log.events)) {
       if (this.state.agents[worker.agentId]?.parent) continue;
       this.state.agents[worker.agentId] = { parent: agentId, description: worker.description };
@@ -628,7 +678,8 @@ export class CursorCloudWatcher extends EventEmitter {
 
   private async render(agent: CursorCloudAgent, latestRun: CursorCloudRun | undefined, api: CursorCloudApi): Promise<void> {
     const conversation = await api.conversation(agent.id).catch(() => [] as CursorConversationMessage[]);
-    const content = buildCursorCloudTranscript({ conversation, log: this.agentLog(agent.id).events, latestRun, createdAt: Date.parse(agent.createdAt) || 0 });
+    const notice = await fs.promises.readFile(this.noticePath(agent.id), "utf8").catch(() => undefined);
+    const content = buildCursorCloudTranscript({ conversation, log: this.agentLog(agent.id).events, latestRun, createdAt: Date.parse(agent.createdAt) || 0, notice });
     if (!content) return;
     const file = this.transcriptPath(agent.id);
     await fs.promises.mkdir(path.dirname(file), { recursive: true });
@@ -649,6 +700,17 @@ export class CursorCloudWatcher extends EventEmitter {
     const local = repo ? await this.resolveRepoDir(repo).catch(() => null) : null;
     if (local) return local;
     return repo ? `/cursor-cloud/${repo.owner}/${repo.name}` : "/cursor-cloud";
+  }
+
+  private noticePath(agentId: string): string {
+    return path.join(this.rootDir, agentId, "notice.txt");
+  }
+  /** Record the line the agent's transcript opens with (see CursorCloudTranscriptInput.notice). */
+  setNotice(agentId: string, notice: string): void {
+    try {
+      fs.mkdirSync(path.dirname(this.noticePath(agentId)), { recursive: true });
+      fs.writeFileSync(this.noticePath(agentId), notice);
+    } catch {}
   }
 
   private logPath(agentId: string): string {

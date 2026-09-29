@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ComponentType } from "react";
 import { toast } from "sonner";
 import { KeyRound, ExternalLink, Trash2, Loader2, Check } from "lucide-react";
 import { PROVIDER_KEYS, type ProviderKeySpec } from "@codecast/shared/contracts";
@@ -10,6 +10,7 @@ import { SettingsPanel, SettingsSection } from "../../../components/settings/ui"
 import { DevicePanelHeader } from "../../../components/settings/DevicePanelHeader";
 import { useDevices, type Device } from "../../../components/DeviceBadge";
 import { useProviderKeyCommand, deviceManagedKeys } from "../../../lib/useProviderKeyCommand";
+import { ConnectCursorDialog } from "../../../components/ConnectCursorDialog";
 
 /**
  * "Provider keys" — manage the optional LLM API keys codecast injects into
@@ -53,9 +54,10 @@ function ProviderKeyList({ device }: { device: Device }) {
         icon={KeyRound}
         description={
           <>
-            Optional API keys for opencode and pi. They&apos;re injected as each provider&apos;s
-            env var when a client launches — additive on top of the system default auth. Keys stay
-            on your devices, encrypted in transit and never stored as plaintext in the cloud.
+            API keys your agents use on this machine. opencode and pi get a model provider&apos;s key
+            as its env var at launch, on top of their own login. The Cursor key runs Cursor Cloud
+            agents and syncs your cloud agents into codecast. Keys stay on your devices, sealed in
+            transit and never stored as plaintext in the cloud.
           </>
         }
       >
@@ -79,6 +81,11 @@ function ProviderKeyList({ device }: { device: Device }) {
   );
 }
 
+/** Providers whose key is set through a guided flow that checks it, not a bare field. */
+const GUIDED_SETUP: Partial<Record<string, ComponentType<{ onClose: () => void }>>> = {
+  cursor: ConnectCursorDialog,
+};
+
 /** One provider: status, a "get a key" link, and Set/Replace + Remove actions. */
 function ProviderKeyRow({
   spec,
@@ -92,6 +99,8 @@ function ProviderKeyRow({
   isManaged: boolean;
 }) {
   const { setKey, removeKey } = useProviderKeyCommand();
+  const Guided = GUIDED_SETUP[spec.id];
+  const [guidedOpen, setGuidedOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
@@ -158,7 +167,7 @@ function ProviderKeyRow({
             <Button
               variant="outline"
               size="sm"
-              onClick={() => canSet && setEditing(true)}
+              onClick={() => canSet && (Guided ? setGuidedOpen(true) : setEditing(true))}
               disabled={!canSet || busy}
               title={pubkey ? undefined : "update your daemon to manage keys here"}
             >
@@ -181,6 +190,7 @@ function ProviderKeyRow({
         )}
       </div>
 
+      {Guided && guidedOpen && <Guided onClose={() => setGuidedOpen(false)} />}
       {editing && (
         <div className="mt-3 flex items-center gap-2">
           <Input

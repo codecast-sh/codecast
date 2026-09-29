@@ -36,6 +36,7 @@ export * from "./cloudWorkspace";
 export * from "./worktrees";
 export * from "./deviceName";
 export * from "./providerKeys";
+export * from "./cloudSessionSync";
 export * from "./providerKeyCrypto";
 export * from "./snippets";
 export * from "./castPlayer";

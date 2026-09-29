@@ -182,7 +182,7 @@ export type TriggerStripRequest = { convId: string; taskId: string | null; expan
 // `isConvexId` from the store keep working.
 import { isConvexId } from "../lib/entityLinks";
 import { pathOnMyMachines, wakesOnUse, type MachineCandidate } from "../lib/machinePicker";
-import { cloudPlacementFor } from "@codecast/shared/contracts";
+import { cloudPlacementFor, CLOUD_SESSION_SOURCES, type CloudSessionSource } from "@codecast/shared/contracts";
 import { conversationTabPath, urlSessionId } from "../lib/pathLabel";
 import { directConversationId } from "../lib/desktopHandoff";
 import { healTabPaths, isNonTabRoute, shellTabPath } from "../lib/tabRoutes";
@@ -5221,7 +5221,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   toggleBookmark: (conversationId: string, messageId: string) => void;
   setMyStatus: (status: "available" | "busy" | "away") => void;
   setWalkiePref: (pref: "team" | "off") => void;
-  setClaudeCloudSync: (enabled: boolean) => void;
+  setCloudSessionSync: (source: CloudSessionSource, enabled: boolean) => void;
   snoozeWalkie: (until: number) => number;
   markNotificationRead: (id: string) => void;
   markAllNotificationsRead: () => void;
@@ -9336,11 +9336,11 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (this.currentUser) (this.currentUser as any).walkie_pref = pref;
   }),
 
-  // Claude Code cloud session sync. Local-first like the walkie door: the sync
-  // page's switch reads it straight off currentUser, and the setClaudeCloudSync
+  // Cloud session sync (Claude Code, Cursor Cloud). Local-first like the walkie door: the sync
+  // page's switch reads it straight off currentUser, and the setCloudSessionSync
   // dispatch side effect runs the authoritative users.updateSyncSettings.
-  setClaudeCloudSync: action(function (this: Draft, enabled: boolean) {
-    if (this.currentUser) (this.currentUser as any).claude_cloud_sync = enabled;
+  setCloudSessionSync: action(function (this: Draft, source: CloudSessionSource, enabled: boolean) {
+    if (this.currentUser) (this.currentUser as any)[CLOUD_SESSION_SOURCES[source].field] = enabled;
   }),
 
   // Snooze: the shutter under that door. Same local-first reason again, and
