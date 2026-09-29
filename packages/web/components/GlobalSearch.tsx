@@ -14,6 +14,8 @@ import { SessionMenuItems } from "./menus/ObjectContextMenus";
 import { highlightMatch, getSnippet, parseSearchTerms } from "../lib/searchHighlight";
 import { useInstantSessionRows, mergeSearchRows } from "../lib/instantSessionSearch";
 import { SessionGlyph } from "./identity";
+import { SessionQuerySuggestList } from "./SessionQuerySuggestList";
+import { useSessionQueryAutocomplete } from "../hooks/useSessionQuerySuggestions";
 
 export { parseSearchTerms, highlightMatch, getSnippet };
 
@@ -183,15 +185,18 @@ export function GlobalSearch() {
   }, [query]);
 
   const goToFullSearch = useCallback(() => {
-    router.push(`/search?q=${encodeURIComponent(query)}${userOnly ? "&user=1" : ""}`);
+    router.push(`/search?q=${encodeURIComponent(query.trim())}${userOnly ? "&user=1" : ""}`);
     setIsOpen(false);
     setIconOpen(false);
     setQuery("");
     inputRef.current?.blur();
   }, [router, query, userOnly]);
 
+  const autocomplete = useSessionQueryAutocomplete(query, setQuery, inputRef);
+
   const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (autocomplete.onKeyDown(e)) return;
       const results = groupedResults;
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
@@ -218,7 +223,7 @@ export function GlobalSearch() {
         }
       }
     },
-    [groupedResults, selectedIndex, router, query, goToFullSearch]
+    [autocomplete, groupedResults, selectedIndex, router, query, goToFullSearch]
   );
 
   const handleResultClick = (conversationId: string) => {
@@ -309,13 +314,15 @@ export function GlobalSearch() {
           value={query}
           onChange={(e) => {
             setQuery(e.target.value);
+            autocomplete.trackCaret(e.target);
             // Clear the slow-search hint the instant the term changes, so it can
             // never linger from a prior broad query onto a fresh, fast one.
             setSearchIsSlow(false);
             if (!isOpen) setIsOpen(true);
           }}
-          onFocus={() => { setIsFocused(true); setIsOpen(true); }}
-          onBlur={() => { setIsFocused(false); setIconOpen(false); }}
+          onSelect={autocomplete.inputHandlers.onSelect}
+          onFocus={() => { setIsFocused(true); setIsOpen(true); autocomplete.inputHandlers.onFocus(); }}
+          onBlur={() => { setIsFocused(false); setIconOpen(false); autocomplete.inputHandlers.onBlur(); }}
           onKeyDown={handleKeyDown}
           placeholder="Search sessions"
           className={`w-full pl-9 py-1.5 bg-sol-bg-alt border rounded-full text-sm text-sol-text placeholder:text-sol-text-dim truncate cursor-pointer focus:cursor-text focus:outline-none transition-[border-color,box-shadow,padding] duration-200 ${
@@ -331,6 +338,7 @@ export function GlobalSearch() {
         >
           <MenuKeyCaps action="search.open" />
         </div>
+        {autocomplete.open && <SessionQuerySuggestList {...autocomplete.listProps} className="z-[250]" />}
       </div>
 
       {isOpen && query.length >= 2 && (

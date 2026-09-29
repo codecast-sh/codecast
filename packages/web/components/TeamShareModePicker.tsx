@@ -10,31 +10,31 @@ import { useInboxStore } from "../store/inboxStore";
 import { TEAM_VISIBILITY_RANK, currentMembershipVisibility, teamVisibilityFor } from "../lib/teamVisibility";
 import type { TeamShareMode } from "../lib/teamFeedRows";
 
-const MODES: { value: TeamShareMode; label: string; selected: string; icon: string }[] = [
+const MODES: SegmentedOption<TeamShareMode>[] = [
   {
     value: "private",
     label: "Hidden",
-    selected: "bg-sol-base02/50 text-sol-text",
+    selected: "bg-sol-bg text-sol-text",
     icon: "M3.98 8.223A10.477 10.477 0 001.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.45 10.45 0 0112 4.5c4.756 0 8.773 3.162 10.065 7.498a10.523 10.523 0 01-4.293 5.774M6.228 6.228L3 3m3.228 3.228l3.65 3.65m7.894 7.894L21 21m-3.228-3.228l-3.65-3.65m0 0a3 3 0 10-4.243-4.243m4.242 4.242L9.88 9.88",
   },
   {
     value: "summary",
     label: "Summary",
-    selected: "bg-teal-500/15 text-teal-600 dark:text-teal-400",
+    selected: "bg-teal-500/20 text-teal-600 dark:text-teal-300",
     icon: "M8.25 6.75h12M8.25 12h12m-12 5.25h12M3.75 6.75h.007v.008H3.75V6.75zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zM3.75 12h.007v.008H3.75V12zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm-.375 5.25h.007v.008H3.75v-.008zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z",
   },
   {
     value: "full",
     label: "Full",
-    selected: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
+    selected: "bg-emerald-500/20 text-emerald-600 dark:text-emerald-300",
     icon: "M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z M15 12a3 3 0 11-6 0 3 3 0 016 0z",
   },
 ];
 
 const MODE_HINT: Record<TeamShareMode, string> = {
-  private: "Hidden from team members",
-  summary: "Team sees title and activity summary",
-  full: "Team can view the full conversation",
+  private: "Only you can see this. It stays out of the team feed.",
+  summary: "The team feed shows the title and a summary of the work.",
+  full: "The team can read the whole conversation.",
 };
 
 export function TeamShareModePicker({
@@ -84,29 +84,16 @@ export function TeamShareModePicker({
 
   return (
     <div className="space-y-2">
-      <span className="text-xs font-medium text-sol-text-dim uppercase tracking-wide">Team</span>
-      <div className="flex rounded-lg border border-sol-border overflow-hidden">
-        {MODES.map((m, i) => (
-          <button
-            key={m.value}
-            type="button"
-            onClick={() => pick(m.value)}
-            disabled={isUpdating}
-            aria-pressed={mode === m.value}
-            className={`flex-1 px-3 py-2 text-xs font-medium transition-colors flex items-center justify-center gap-1.5 ${i === 1 ? "border-l border-r border-sol-border " : ""}${
-              mode === m.value ? m.selected : "bg-sol-bg text-sol-text-muted hover:bg-sol-bg-alt"
-            }`}
-          >
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d={m.icon} />
-            </svg>
-            {m.label}
-          </button>
-        ))}
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-xs font-medium text-sol-text-muted">
+          {team?.name ? <>Team <span className="text-sol-text">{team.name}</span></> : "Team"}
+        </span>
+        {isUpdating && <span className="text-[11px] text-sol-text-dim">Saving…</span>}
       </div>
-      <p className="text-[11px] text-sol-text-dim">{MODE_HINT[mode]}</p>
+      <SegmentedChoice label="What the team sees" options={MODES} value={mode} onPick={pick} disabled={isUpdating} />
+      <p className="text-xs leading-snug text-sol-text-muted">{MODE_HINT[mode]}</p>
       {gated && (
-        <p className="text-[11px] text-sol-text-dim">
+        <p className="text-[11px] leading-snug text-sol-text-dim">
           Your level for this team keeps all your sessions out of its feed.{" "}
           <Link href="/settings/sync" className="text-sol-cyan hover:underline" onClick={onNavigate}>
             Change team visibility
@@ -114,12 +101,12 @@ export function TeamShareModePicker({
         </p>
       )}
       {mode !== "private" && sharedVia && (
-        <p className="text-[11px] text-sol-text-dim">
-          Shared because the repo{" "}
+        <p className="text-[11px] leading-snug text-sol-text-dim">
+          Shared automatically: the repo{" "}
           <span className="font-mono text-sol-text-muted">{sharedVia.split("/").pop() || sharedVia}</span>{" "}
-          is shared with the team.{" "}
-          <Link href="/settings/sync" className="text-sol-cyan hover:underline" onClick={onNavigate}>
-            Manage repo sharing
+          is shared with this team.{" "}
+          <Link href="/settings/sync" className="text-sol-cyan hover:underline whitespace-nowrap" onClick={onNavigate}>
+            Repo settings
           </Link>
         </p>
       )}
@@ -130,11 +117,49 @@ export function TeamShareModePicker({
             setTeamMembershipVisibility(String(team._id), "full", "going_forward");
             toast.success(`${team.name} sees the whole conversation for new sessions`);
           }}
-          className="text-[11px] text-sol-cyan hover:underline"
+          className="text-[11px] text-sol-cyan hover:underline text-left"
         >
           Share all new sessions with {team.name} in full
         </button>
       )}
+    </div>
+  );
+}
+
+export type SegmentedOption<T extends string> = { value: T; label: string; selected: string; icon: string };
+
+/** A row of mutually exclusive share choices, one icon and label each. The
+ *  team level and the link access in the share popover both pick with it. */
+export function SegmentedChoice<T extends string>({ label, options, value, onPick, disabled }: {
+  label: string;
+  options: SegmentedOption<T>[];
+  value: T;
+  onPick: (value: T) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div role="radiogroup" aria-label={label} className="flex gap-0.5 rounded-lg bg-sol-bg-alt p-0.5">
+      {options.map((m) => {
+        const on = value === m.value;
+        return (
+          <button
+            key={m.value}
+            type="button"
+            role="radio"
+            aria-checked={on}
+            onClick={() => onPick(m.value)}
+            disabled={disabled}
+            className={`flex-1 rounded-md px-2 py-1.5 text-xs font-medium transition-colors flex items-center justify-center gap-1.5 outline-none focus-visible:ring-1 focus-visible:ring-sol-cyan disabled:cursor-wait ${
+              on ? `${m.selected} shadow-sm shadow-black/20` : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg/60"
+            }`}
+          >
+            <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d={m.icon} />
+            </svg>
+            {m.label}
+          </button>
+        );
+      })}
     </div>
   );
 }

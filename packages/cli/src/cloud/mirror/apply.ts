@@ -63,6 +63,28 @@ export interface ApplyResult {
   errors: Array<{ path: string; error: string }>;
   refused?: RefusedReason;
   retired_projects?: string[];
+  /** Files in a project checkout the mirror stopped carrying and left in place, because git tracks them there. */
+  released?: string[];
+  /**
+   * What this receiver does that an older one did not. `keeps-tracked`: a
+   * project file the bundle stops carrying is released, never deleted, when
+   * git tracks it; the laptop narrows what it carries only for a host that
+   * says so (push.ts).
+   */
+  capabilities?: string[];
+}
+
+/** See ApplyResult.capabilities. */
+export const MIRROR_RECEIVER_CAPABILITIES = ["keeps-tracked"] as const;
+
+/** Every path git tracks in a checkout (its index): null outside a repo. */
+async function trackedPaths(root: string): Promise<Set<string> | null> {
+  try {
+    const { stdout } = await execFileAsync("git", ["-C", root, "ls-files", "-z"], { encoding: "utf8", timeout: 20_000, maxBuffer: 64 * 1024 * 1024 });
+    return new Set(stdout.split("\0").filter(Boolean));
+  } catch {
+    return null;
+  }
 }
 
 export const MIRROR_STAMP_REL = ".codecast/mirror.json";
@@ -780,7 +802,7 @@ export function finalBytes(file: ParsedFile, current: Buffer | null, home: strin
 export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions): Promise<ApplyResult> {
   const { home } = opts;
   const now = opts.now ?? (() => new Date());
-  const result: ApplyResult = { hash: bundle.hash, applied: [], unchanged: 0, host_edited: [], pruned: [], errors: [] };
+  const result: ApplyResult = { hash: bundle.hash, applied: [], unchanged: 0, host_edited: [], pruned: [], errors: [], capabilities: [...MIRROR_RECEIVER_CAPABILITIES] };
   const src = bundle.header.source;
 
   if (!opts.configUserId) return { ...result, refused: "unprovisioned" };
@@ -893,6 +915,7 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
   }
 
   if (prev) {
+    const trackedByProject = new Map<string, Set<string> | null>();
     const roots = [...new Set([...bundle.header.managed_roots, ...prev.managed_roots])];
     const under = (rel: string, roots: readonly string[]) => roots.some((root) => rel === root || rel.startsWith(`${root}/`));
     // A project checkout the laptop no longer names (its registration gone, or a
@@ -1003,6 +1026,20 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
       }
       const root = roots.find((r) => rel === r || rel.startsWith(`${r}/`));
       if (!root) continue;
+      // A file git tracks in a project checkout is part of that session's
+      // tree whatever the mirror or the host did to it: it is released as it
+      // is, never deleted, so a host edit is no conflict either. Dropping it
+      // from the bundle (a narrower rule, a media exclusion) deleted hundreds
+      // of tracked files from every cloud worktree three times on 2026-09-29.
+      const project = [...projectRoots, ...(prev.project_roots ?? [])].find((r) => rel.startsWith(`${r}/`));
+      if (project) {
+        if (!trackedByProject.has(project)) trackedByProject.set(project, await trackedPaths(path.join(home, project)));
+        if (trackedByProject.get(project)?.has(path.posix.relative(project, rel))) {
+          stampFiles[rel] = { ...info, removed: true };
+          (result.released ??= []).push(rel);
+          continue;
+        }
+      }
       if (sha256(current) !== info.written) { stampFiles[rel] = info; result.host_edited.push(rel); continue; }
       try {
         fs.unlinkSync(abs);

@@ -64,18 +64,20 @@ describe("harnessChanges", () => {
 });
 
 describe("setDeviceSnippet machine settings", () => {
-  test("hooks and auto_update queue apply_snippet and mirror onto the setting, not the snippet list", async () => {
+  test("hooks, auto_update and session_trailer queue apply_snippet and mirror onto the setting, not the snippet list", async () => {
     const t = await seed();
     await t.mutation(api.devices.setDeviceSnippet, { api_token: token, device_id: "mac", snippet: "hooks", enabled: false });
     await t.mutation(api.devices.setDeviceSnippet, { api_token: token, device_id: "mac", snippet: "auto_update", enabled: false });
+    await t.mutation(api.devices.setDeviceSnippet, { api_token: token, device_id: "mac", snippet: "session_trailer", enabled: false });
     const { device, commands } = await t.run(async (ctx) => ({
       device: await ctx.db.query("devices").first(),
       commands: await ctx.db.query("daemon_commands").collect(),
     }));
-    expect((device as any).settings).toEqual({ hooks_enabled: false, auto_update: false });
+    expect((device as any).settings).toEqual({ hooks_enabled: false, auto_update: false, session_trailer: false });
     expect(commands.map((c: any) => [c.command, JSON.parse(c.args)])).toEqual([
       ["apply_snippet", { snippet: "hooks", enabled: false }],
       ["apply_snippet", { snippet: "auto_update", enabled: false }],
+      ["apply_snippet", { snippet: "session_trailer", enabled: false }],
     ]);
   });
 });

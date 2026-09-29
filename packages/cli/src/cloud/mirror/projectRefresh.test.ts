@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { applyMirrorBundle, cleanTrackedFiles, matchesGitBlob, readStamp, verifyMirrorStamp, withMirrorLock } from "./apply";
+import { applyMirrorBundle, readStamp, verifyMirrorStamp, withMirrorLock } from "./apply";
 import { buildMirrorBundle, parseMirrorBundle } from "./bundle";
 import { AGENT_RUNTIME_ROOTS } from "./discovery";
 import { buildHomeMirror, mirrorHomeToHost, runMirrorTick, type LocalMirrorStamps, type MirrorDeps } from "./push";
@@ -195,7 +195,7 @@ test("temp HOME end-to-end refresh covers edits, deletions, drift, conflicts, pi
   expect(pushes).toBe(6);
 });
 
-test("first ownership updates clean tracked context and preserves dirty tracked and untracked context", async () => {
+test("in a repo, instruction files and gitignored files travel; other docs are the seed's and the sync's, and host edits stay", async () => {
   const local = temp();
   const remote = temp();
   const sourceRoot = path.join(local, "src", "app");
@@ -203,29 +203,59 @@ test("first ownership updates clean tracked context and preserves dirty tracked 
   for (const root of [sourceRoot, targetRoot]) {
     write(root, "AGENTS.md", "older instructions\n");
     write(root, "docs/clean.md", "older clean\n");
-    write(root, "docs/dirty.md", "older dirty\n");
+    write(root, ".gitignore", "*.local.md\n");
     execFileSync("git", ["init", "-q", root]);
     execFileSync("git", ["-C", root, "add", "."]);
     execFileSync("git", ["-C", root, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "initial"]);
   }
   write(sourceRoot, "AGENTS.md", "new instructions\n");
   write(sourceRoot, "docs/clean.md", "new clean\n");
-  write(sourceRoot, "docs/dirty.md", "new local dirty\n");
-  write(targetRoot, "docs/dirty.md", "uncommitted cloud edit\n");
-  write(sourceRoot, "docs/untracked.md", "local untracked\n");
-  write(targetRoot, "docs/untracked.md", "cloud untracked\n");
-  const tracked = await cleanTrackedFiles(targetRoot);
-  expect([...tracked.keys()]).toContain("AGENTS.md");
-  expect(matchesGitBlob(fs.readFileSync(path.join(targetRoot, "AGENTS.md")), fs.statSync(path.join(targetRoot, "AGENTS.md")).mode, tracked.get("AGENTS.md"))).toBe(true);
-  const built = await buildHomeMirror({ config: { user_id: "u" }, home: local, hostHome: remote, deviceId: "d", projects: [{ host: "u@h", sourceRoot, targetRoot }] });
+  write(sourceRoot, "docs/plan-in-progress.md", "another session's unfinished plan\n");
+  write(sourceRoot, "docs/private.local.md", "gitignored notes\n");
+  write(targetRoot, "docs/clean.md", "the cloud session's edit\n");
+  const built = await buildHomeMirror({ config: { user_id: "u" }, home: local, hostHome: remote, deviceId: "d", projects: [{ host: "u@h", sourceRoot, targetRoot }], narrowProjects: true });
   const parsed = await parseMirrorBundle(built.bytes);
   const result = await applyMirrorBundle(parsed, { home: remote, configUserId: "u", previousStamp: null, refresh: () => {} });
   expect(result.errors).toEqual([]);
   expect(read(targetRoot, "AGENTS.md")).toBe("new instructions\n");
-  expect(read(targetRoot, "docs/clean.md")).toBe("new clean\n");
-  expect(read(targetRoot, "docs/dirty.md")).toBe("uncommitted cloud edit\n");
-  expect(read(targetRoot, "docs/untracked.md")).toBe("cloud untracked\n");
-  expect(result.host_edited).toEqual(["work/app/docs/dirty.md", "work/app/docs/untracked.md"]);
+  expect(read(targetRoot, "docs/private.local.md")).toBe("gitignored notes\n");
+  expect(read(targetRoot, "docs/clean.md")).toBe("the cloud session's edit\n");
+  expect(fs.existsSync(path.join(targetRoot, "docs/plan-in-progress.md"))).toBe(false);
+  expect(result.host_edited).toEqual([]);
+});
+
+test("a project file the bundle stops carrying is released when git tracks it, and pruned only when the mirror made it", async () => {
+  const local = temp();
+  const remote = temp();
+  const sourceRoot = path.join(local, "src", "app");
+  const targetRoot = path.join(remote, "work", "app");
+  for (const root of [sourceRoot, targetRoot]) {
+    write(root, "README.md", "readme\n");
+    execFileSync("git", ["init", "-q", root]);
+    execFileSync("git", ["-C", root, "add", "."]);
+    execFileSync("git", ["-C", root, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "initial"]);
+  }
+  write(sourceRoot, "README.md", "laptop readme edit\n");
+  write(sourceRoot, "docs/plan.md", "a laptop-only plan\n");
+  const projects = [{ host: "u@h", sourceRoot, targetRoot }];
+  const apply = async (narrowProjects: boolean) => {
+    const built = await buildHomeMirror({ config: { user_id: "u" }, home: local, hostHome: remote, deviceId: "d", projects, narrowProjects });
+    return applyMirrorBundle(await parseMirrorBundle(built.bytes), { home: remote, configUserId: "u", previousStamp: readStamp(remote), refresh: () => {} });
+  };
+  const wide = await apply(false);
+  expect(wide.capabilities).toContain("keeps-tracked");
+  expect(read(targetRoot, "README.md")).toBe("laptop readme edit\n");
+  expect(read(targetRoot, "docs/plan.md")).toBe("a laptop-only plan\n");
+  // The host edits the tracked file after the mirror wrote it: still released, no conflict.
+  write(targetRoot, "README.md", "the cloud session's own edit\n");
+  const narrow = await apply(true);
+  expect(narrow.errors).toEqual([]);
+  // Tracked: released as it is. Mirror-made and untracked: pruned.
+  expect(read(targetRoot, "README.md")).toBe("the cloud session's own edit\n");
+  expect(narrow.host_edited).toEqual([]);
+  expect(narrow.released).toEqual(["work/app/README.md"]);
+  expect(fs.existsSync(path.join(targetRoot, "docs/plan.md"))).toBe(false);
+  expect(narrow.pruned).toEqual(["work/app/docs/plan.md"]);
 });
 
 test("registrations follow stable host identity and retirement never recreates a deleted target", async () => {

@@ -973,7 +973,7 @@ await program.parseAsync(process.argv);
     return { head };
   }
 
-  test("seeds the worktree from the laptop checkout: branch, HEAD, uncommitted and untracked files, secrets kept out", async () => {
+  test("seeds the worktree from the laptop checkout: branch, HEAD, uncommitted, untracked and gitignored files, machine state kept out", async () => {
     const { head } = dirtyFeatureLaptop();
     const mainHead = refreshRemoteCheckout(host, laptop, remote).head;
     const before = laptopState();
@@ -993,10 +993,12 @@ await program.parseAsync(process.argv);
     expect(status).toContain("?? new-untracked.txt");
     expect(fs.readFileSync(path.join(ws.path, "tracked.txt"), "utf8")).toBe("tracked v2 (uncommitted)\n");
     expect(fs.readFileSync(path.join(ws.path, "feature.txt"), "utf8")).toBe("unpushed feature commit\n");
-    // The secret arrives through the manifest copy, never through git.
+    // Gitignored files travel with the seed (the person's own host, over ssh),
+    // and arrive as they are on the laptop: present, still untracked.
     expect(fs.readFileSync(path.join(ws.path, ".env"), "utf8")).toBe("SECRET_VALUE\n");
     expect(git(ws.path, "ls-files").split("\n")).not.toContain(".env");
-    expect(git(remote, "ls-tree", "-r", "--name-only", "refs/codecast/cloud/cloud-ab12cd").split("\n")).not.toContain(".env");
+    expect(git(ws.path, "status", "--porcelain")).not.toContain(".env");
+    expect(git(remote, "ls-tree", "-r", "--name-only", "refs/codecast/cloud/cloud-ab12cd").split("\n")).toContain(".env");
     // The Chrome profile is excluded by the seed, not by any ignore file.
     expect(fs.existsSync(path.join(ws.path, ".codecast/workspaces/w1"))).toBe(false);
     expect(git(remote, "ls-tree", "-r", "--name-only", "refs/codecast/cloud/cloud-ab12cd")).not.toContain("Cookies");
