@@ -1,5 +1,6 @@
 import { mutation, query, internalMutation } from "./functions";
 import { v } from "convex/values";
+import { pullRequestsLinkedToConversation } from "./lib/prSessions";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { type Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
@@ -567,12 +568,8 @@ async function executeCreateComment(
 
   let pullRequest = validated.pullRequest;
   if (!pullRequest) {
-    const candidates = await ctx.db.query("pull_requests").collect();
-    for (const candidate of candidates) {
-      if (
-        candidate.linked_session_ids.some((id) => String(id) === String(args.conversation_id))
-        && (await canAccessPullRequest(ctx, userId, candidate))
-      ) {
+    for (const candidate of await pullRequestsLinkedToConversation(ctx, args.conversation_id)) {
+      if (await canAccessPullRequest(ctx, userId, candidate)) {
         pullRequest = candidate;
         break;
       }
