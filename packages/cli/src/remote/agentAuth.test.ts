@@ -43,7 +43,7 @@ afterEach(() => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-function write(rel: string, content: string): void {
+function write(rel: string, content: string | Buffer): void {
   const p = path.join(home, rel);
   fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, content);
@@ -175,6 +175,37 @@ describe("readClaudeSettingsEnvForMirror — the provider-key allow-list", () =>
   });
 });
 
+describe("tool logins", () => {
+  test("the CLIs a session drives travel: file logins as they are, laptop paths rewritten, a lapsed OAuth login held back, gcloud as base64", () => {
+    write(".convex/config.json", JSON.stringify({ accessToken: "prod:abc" }));
+    write(".aws/credentials", "[default]\naws_access_key_id = AKIAEXAMPLE\n");
+    write(".railway/config.json", JSON.stringify({ projects: { [`${home}/src/app`]: { projectPath: `${home}/src/app` } } }));
+    write(".wrangler/config/default.toml", 'oauth_token = "t"\nexpiration_time = "2020-01-01T00:00:00.000Z"\n');
+    write(".config/gcloud/credentials.db", Buffer.from([0, 1, 2, 255]));
+    write(".config/gcloud/logs/2026.09.29/x.log", "noise");
+    const cf = process.platform === "darwin" ? "Library/Preferences/cloudflare/config/default.json" : ".config/cloudflare/config/default.json";
+    write(cf, JSON.stringify({ oauth_token: "t", expiration_time: new Date(NOW + 3_600_000).toISOString() }));
+    const { bundle, skipped } = collectAgentAuthBundle({ home, env: {}, now: NOW, userId: "u1", deviceId: "d1", hostHome: "/home/ubuntu" });
+    const byPath = new Map(bundle.files.map((f) => [f.path, f]));
+    expect(byPath.get("~/.convex/config.json")?.content).toContain("prod:abc");
+    expect(byPath.get("~/.aws/credentials")?.mode).toBe(0o600);
+    expect(byPath.get("~/.railway/config.json")?.content).toContain("/home/ubuntu/src/app");
+    expect(byPath.get("~/.railway/config.json")?.content).not.toContain(home);
+    expect(byPath.get("~/.config/cloudflare/config/default.json")).toBeDefined();
+    expect(skipped).toContainEqual({ id: "wrangler", reason: "access token expired" });
+    expect(byPath.get("~/.config/gcloud/credentials.db")).toEqual({ path: "~/.config/gcloud/credentials.db", content: Buffer.from([0, 1, 2, 255]).toString("base64"), mode: 0o600, encoding: "base64" });
+    expect([...byPath.keys()].some((p) => p.includes("/logs/"))).toBe(false);
+    expect(bundle.absent).toContain("~/.fly/config.yml");
+    expect(describeBundle(bundle)).toContain("gcloud");
+  });
+  test("a login naming laptop paths waits for the host home rather than shipping them", () => {
+    write(".railway/config.json", JSON.stringify({ projects: { [`${home}/src/app`]: {} } }));
+    const { bundle, skipped } = collectAgentAuthBundle({ home, env: {}, now: NOW, userId: "u1", deviceId: "d1" });
+    expect(bundle.files.some((f) => f.path === "~/.railway/config.json")).toBe(false);
+    expect(skipped).toContainEqual({ id: "railway", reason: "names laptop paths and no host home was given" });
+  });
+});
+
 describe("collectAgentAuthBundle — a fake HOME", () => {
   const live = () => codexBlob(NOW / 1000 + 86400);
   test("missing sources land in absent; present-and-live in files with mode 0o600 and ~/-relative paths; gated ones are skipped", () => {
@@ -183,7 +214,7 @@ describe("collectAgentAuthBundle — a fake HOME", () => {
     write(".gemini/oauth_creds.json", JSON.stringify({ access_token: "a" })); // no refresh token → skipped
     write(".gemini/google_accounts.json", JSON.stringify({ active: "a@b.c" }));
     write(".claude/settings.json", JSON.stringify({ env: { OPENROUTER_API_KEY: "sk-or", ANTHROPIC_API_KEY: "no" } }));
-    const { bundle, skipped, envSkipped } = collectAgentAuthBundle({ home, env: {}, now: NOW, userId: "u1", deviceId: "d1", codexTrustPaths: ["/home/ubuntu/work/r"] });
+    const { bundle, skipped, envSkipped } = collectAgentAuthBundle({ home, env: {}, now: NOW, userId: "u1", deviceId: "d1", codexTrustPaths: ["/home/ubuntu/work/r"], withToolLogins: false });
     expect(bundle.files.map((f) => f.path).sort()).toEqual(["~/.codex/auth.json", "~/.grok/auth.json"]);
     expect(bundle.files.every((f) => f.mode === 0o600)).toBe(true);
     expect(bundle.files.find((f) => f.path === "~/.codex/auth.json")?.last_refresh).toBe(Date.parse("2026-09-05T01:20:00.123456Z"));

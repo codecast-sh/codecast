@@ -65,6 +65,15 @@ d("agent auth receiver (python3) against a temp HOME", () => {
     expect(fs.existsSync(path.join(home, ".codecast", "mirror.lock"))).toBe(false);
   });
 
+  test("a base64 file lands byte for byte (a login store that is a database)", () => {
+    config("U");
+    const bytes = Buffer.from([0, 1, 2, 250, 255, 10, 13]);
+    const r = run({ files: [{ path: "~/.config/gcloud/credentials.db", content: bytes.toString("base64"), mode: 0o600, encoding: "base64" }] });
+    expect(r.status).toBe(0);
+    expect(fs.readFileSync(path.join(home, ".config/gcloud/credentials.db")).equals(bytes)).toBe(true);
+    expect(mode(".config/gcloud/credentials.db")).toBe(0o600);
+  });
+
   test("a symlinked destination is refused (reported, the rest applied); an unsafe path too", () => {
     config("U");
     fs.mkdirSync(path.join(home, ".grok"));
