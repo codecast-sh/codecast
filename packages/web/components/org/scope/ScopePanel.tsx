@@ -1,19 +1,19 @@
 "use client";
 // The scope page's panel (docs/architecture/scopes-and-feed.md F4.1): the
-// eleven tabs of F3 as one panel beside the role's conversation. The panel
-// keeps its tabs; it stops being the page. Where it sits is the page's call:
+// tabs a person needs as one panel beside the role's conversation (six for a
+// role, four for the workspace; lib/scopeTabs.ts). Where it sits is the page's call:
 // its own column on a wide window, an overlay over the conversation on a
 // narrow one, and a bottom sheet on the phone that the conversation hands to
 // and takes back. The tab is in the URL (?tab=) so a tab stays linkable.
 //
-// A role's panel opens on Scope (scopes-and-feed.md F5): a briefing, not a
-// board. Three blocks a person reads in ten seconds: what needs them, where
-// each project stands in the role's own words, and what the role is doing.
-// Counts and lists live one tab away, and the tab strip carries no numbers.
-// The workspace root has no role to describe, so it still opens on the feed.
+// A role's panel opens on Overview (scopes-and-feed.md F5): a briefing, not a
+// board. What the role is for, where each project stands in the role's own
+// words and what it is doing, then its notes and what happened lately. Lists
+// live one tab away, under Work, and the tab strip carries no numbers. The
+// workspace root has no role to describe, so it opens on its activity.
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ChevronDown, X } from "lucide-react";
+import { ChevronDown, Pencil, X } from "lucide-react";
 import { cn } from "../../../lib/utils";
 import { TaskListContent } from "../../../app/tasks/page";
 import type { ScopeRef } from "../../../hooks/useScopeQueries";
@@ -34,8 +34,8 @@ import type { BriefPerson, RoleBrief, RoleCounters, ScopeSummary } from "./scope
 import { PersonGoals } from "./PersonGoals";
 import { OrgHistory } from "../history/OrgHistory";
 import type { PanelLayout } from "../../../hooks/usePanelLayout";
-import type { ScopeTabKey } from "../../../lib/scopeTabs";
-import { SCOPE_TABS } from "../../../lib/scopeTabs";
+import { SCOPE_WORK_VIEWS, scopeTabsFor, type ScopeTabKey, type ScopeWorkView } from "../../../lib/scopeTabs";
+import { MarkdownRenderer } from "../../tools/MarkdownRenderer";
 
 export type ScopePanelLayout = PanelLayout;
 
@@ -47,6 +47,8 @@ export type ScopePanelProps = {
   role: OrgRole | null;
   tab: ScopeTabKey;
   onTab: (next: ScopeTabKey) => void;
+  /** The Work view a link written for an older tab opens on. */
+  initialWorkView?: ScopeWorkView;
   onClose: () => void;
   layout: ScopePanelLayout;
   scopeRef: ScopeRef | null;
@@ -62,21 +64,20 @@ export type ScopePanelProps = {
   /** The standing session; Settings says where it runs. */
   standingId: string | null;
   counters: RoleCounters | null;
-  armRetire: boolean;
   now: number;
   backHref: string;
   onUpdate: (fields: OrgUpdateRoleInput, opts?: { leave_sessions?: boolean }) => void;
   onReparent: (target: OrgParentRef) => void;
-  onRetire: (standingSession?: "keep" | "retire") => void;
 };
 
 export function ScopePanel(p: ScopePanelProps) {
   const { tree, role, tab, layout } = p;
-  const visibleTabs = SCOPE_TABS.filter((t) => !t.roleOnly || role);
+  const visibleTabs = scopeTabsFor(!!role);
+  const [workView, setWorkView] = useState<ScopeWorkView>(p.initialWorkView ?? "tasks");
   const teamId = tree.workspace.kind === "team" ? tree.workspace.id : undefined;
   const stripRef = useRef<HTMLElement | null>(null);
-  // Eleven tabs do not fit the panel's width: the active one scrolls into view
-  // so a link straight to a tab lands on a tab the person can see.
+  // A narrow panel scrolls its strip: the active tab scrolls into view so a
+  // link straight to a tab lands on a tab the person can see.
   // eslint-disable-next-line no-restricted-syntax -- scrolls the active tab into the strip when it changes
   useEffect(() => {
     const el = stripRef.current?.querySelector<HTMLElement>(`[data-scope-tab="${tab}"]`);
@@ -84,9 +85,10 @@ export function ScopePanel(p: ScopePanelProps) {
   }, [tab]);
 
   return (
-    <div className="h-full flex flex-col min-h-0" data-scope-panel={layout} data-scope-tab-active={tab}>
+    <div className="scope-panel-cq h-full flex flex-col min-h-0" data-scope-panel={layout} data-scope-tab-active={tab}>
+      <style>{`.scope-panel-cq { container-type: inline-size; } @container (max-width: 560px) { .scope-tab-label { display: none; } }`}</style>
       <div className="shrink-0 flex items-center gap-1 border-b pl-1 pr-1.5" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 22%, transparent)" }}>
-        <nav ref={stripRef as any} className="flex-1 min-w-0 flex items-center gap-0.5 overflow-x-auto cq-no-scrollbar -mb-px" aria-label="Scope sections">
+        <nav ref={stripRef as any} className="flex-1 min-w-0 flex items-center gap-0.5 overflow-x-auto cq-no-scrollbar -mb-px" aria-label="Sections">
           {visibleTabs.map((t) => {
             const Icon = t.icon;
             const active = tab === t.key;
@@ -96,14 +98,15 @@ export function ScopePanel(p: ScopePanelProps) {
                 type="button"
                 onClick={() => p.onTab(t.key)}
                 data-scope-tab={t.key}
-                className={cn("relative shrink-0 inline-flex items-center gap-1.5 h-8 text-[12px] transition-colors rounded-t-md", active ? "px-2 font-semibold" : "px-1.5 hover:bg-sol-bg-highlight/60")}
+                className={cn("relative shrink-0 inline-flex items-center gap-1.5 h-8 text-[12px] transition-colors rounded-t-md", active ? "px-2 font-semibold" : "px-2 hover:bg-sol-bg-highlight/60")}
                 style={{ color: active ? "var(--sol-text)" : "var(--sol-text-muted)" }}
                 aria-current={active ? "page" : undefined}
                 title={t.label}
                 aria-label={t.label}
               >
                 <Icon className="w-3.5 h-3.5" style={{ color: active ? "var(--sol-violet)" : undefined }} />
-                {active && t.label}
+                {/* Every label shows where the panel is wide enough; a narrow one keeps the active tab's. */}
+                <span className={cn(!active && "scope-tab-label")}>{t.label}</span>
                 {active && <span className="absolute left-1.5 right-1.5 -bottom-px h-[2px] rounded-full" style={{ background: "var(--sol-violet)" }} />}
               </button>
             );
@@ -123,36 +126,31 @@ export function ScopePanel(p: ScopePanelProps) {
       </div>
 
       {tab === "feed" && p.scopeRef && <ScopeFeed key={JSON.stringify(p.scopeRef)} scope={p.scopeRef} fill />}
-      {tab === "tasks" && (
+      {tab === "work" && (
+        <div className="shrink-0 flex items-center gap-1 px-3 pt-2.5 pb-1.5" role="tablist" aria-label="Work" data-work-views>
+          {SCOPE_WORK_VIEWS.map((v) => (
+            <button key={v.key} type="button" role="tab" aria-selected={workView === v.key} onClick={() => setWorkView(v.key)} data-work-view={v.key} className={cn("h-6 px-2.5 rounded-full text-[11.5px] transition-colors", workView === v.key ? "font-semibold" : "hover:bg-sol-bg-highlight/60")} style={workView === v.key ? { background: "color-mix(in srgb, var(--sol-violet) 16%, transparent)", color: "var(--sol-text)" } : { color: "var(--sol-text-muted)" }}>
+              {v.label}
+            </button>
+          ))}
+        </div>
+      )}
+      {tab === "work" && workView === "tasks" && (
         <div className="flex-1 min-h-0">
           <TaskListContent scope={p.scopeIds.whole ? undefined : { projectIds: p.scopeIds.projectIds, planIds: p.scopeIds.planIds }} />
         </div>
       )}
-      {tab !== "feed" && tab !== "tasks" && (
+      {tab !== "feed" && !(tab === "work" && workView === "tasks") && (
         <div data-scope-scroll className={cn("flex-1 min-h-0 overflow-y-auto", layout === "sheet" ? "px-2 py-3" : "px-3 py-3")}>
-          {!p.summary && p.summaryProblem && <p className="px-2.5 pb-2 text-[11px]" style={{ color: "var(--sol-text-dim)" }}>{p.summaryProblem}</p>}
-          {tab === "scope" && role && <ScopeOverviewTab role={role} now={p.now} narrative={p.brief?.narrative} briefLoaded={p.brief !== undefined} />}
-          {tab === "line" && <ScopeLineTab ids={p.scopeIds} teamId={teamId} />}
-          {tab === "plans" && <ScopePlansTab ids={p.scopeIds} />}
-          {tab === "docs" && <ScopeDocsTab ids={p.scopeIds} />}
+          {tab === "scope" && role && <RoleOverview {...p} role={role} />}
+          {tab === "work" && workView === "status" && <ScopeLineTab ids={p.scopeIds} teamId={teamId} />}
+          {tab === "work" && workView === "plans" && <ScopePlansTab ids={p.scopeIds} />}
+          {tab === "work" && workView === "pages" && <ScopeDocsTab ids={p.scopeIds} />}
           {tab === "sessions" && <ScopeSessionsTab tree={tree} role={role} scope={p.scopeRef} hands={p.brief?.facts?.hands ?? null} />}
           {tab === "decisions" && <ScopeDecisionsTab ids={p.scopeIds} roleId={role?._id ?? null} />}
-          {tab === "brief" && role && (
-            <ScopeBriefTab
-              role={role}
-              facts={p.brief?.facts ?? null}
-              factsProblem={p.briefProblem}
-              narrative={p.brief?.narrative ?? ""}
-              canEdit={p.canEditBrief}
-              backHref={p.backHref}
-              goals={(() => { const me = viewerGoals(tree, role, p.brief?.facts?.people); return me ? <PersonGoals person={me} roleHandle={role.handle} now={p.now} own /> : null; })()}
-              template={<TemplateSections roleId={role._id} canEdit={p.canEdit} />}
-            />
-          )}
           {tab === "triggers" && role && <ScopeTriggersTab standingConversationId={p.brief?.role.standing_conversation_id ?? null} />}
-          {tab === "charter" && role && <ScopeCharterTab role={role} charter={p.brief?.charter ?? role.charter ?? ""} canEdit={p.canEdit} backHref={p.backHref} onUpdateCharter={(v) => p.onUpdate({ charter: v })} />}
           {tab === "settings" && role && (
-            <ScopeSettings tree={tree} role={role} canEdit={p.canEdit} overlaps={p.summary?.overlaps ?? []} hostName={p.hostName} model={p.model} standingId={p.standingId} counters={p.counters} armRetire={p.armRetire} onUpdate={p.onUpdate} onReparent={p.onReparent} onRetire={p.onRetire} history={<RoleHistory roleId={role._id} />} />
+            <ScopeSettings tree={tree} role={role} canEdit={p.canEdit} overlaps={p.summary?.overlaps ?? []} hostName={p.hostName} model={p.model} standingId={p.standingId} counters={p.counters} onUpdate={p.onUpdate} onReparent={p.onReparent} history={<RoleHistory roleId={role._id} />} />
           )}
         </div>
       )}
@@ -179,11 +177,72 @@ function viewerGoals(tree: OrgTree, role: OrgRole, people: BriefPerson[] | undef
     ?? { user_id: me.user_id, name: me.name, has_section: false, goals: [], sessions_changed: [], sessions_total: 0, stalled_high: 0 };
 }
 
+/** A role's Overview: what it is for (the charter, edited in place), the
+ *  briefing, the viewer's goals, the role's own notes behind a fold, and what
+ *  happened in its area lately. */
+function RoleOverview(p: ScopePanelProps & { role: OrgRole }) {
+  const { tree, role } = p;
+  const [editingCharter, setEditingCharter] = useState(false);
+  // The role's own short statement reads here; the charter document (its
+  // longer form, when the role has one) opens under Edit.
+  const charter = (role.charter ?? "").trim() || (p.brief?.charter ?? "").trim();
+  const me = viewerGoals(tree, role, p.brief?.facts?.people);
+  return (
+    <div className="space-y-6" data-role-overview>
+      <section data-scope-section="charter">
+        <h3 className={cn(BLOCK_LABEL, "flex items-center gap-2")} style={{ color: "var(--sol-text-dim)" }}>
+          What it is for
+          {p.canEdit && (
+            <button type="button" onClick={() => setEditingCharter((v) => !v)} className="inline-flex items-center gap-1 font-normal normal-case tracking-normal text-[11px] hover:underline" style={{ color: "var(--sol-violet)" }} data-charter-edit>
+              {editingCharter ? "Done" : <><Pencil className="w-3 h-3" /> Edit</>}
+            </button>
+          )}
+        </h3>
+        {editingCharter ? (
+          <ScopeCharterTab role={role} charter={charter} canEdit={p.canEdit} backHref={p.backHref} onUpdateCharter={(v) => p.onUpdate({ charter: v })} />
+        ) : charter ? (
+          role.charter?.trim()
+            ? <p className="px-2.5 text-[13px] leading-relaxed whitespace-pre-wrap" style={{ color: "var(--sol-text-secondary)" }} data-role-charter>{charter}</p>
+            : <div className="px-2.5 text-[13px] leading-relaxed" style={{ color: "var(--sol-text-secondary)" }} data-role-charter><MarkdownRenderer content={charter} /></div>
+        ) : (
+          <p className="px-2.5 text-[13px]" style={{ color: "var(--sol-text-dim)" }}>Nobody has written what this role is for yet.</p>
+        )}
+      </section>
+
+      <ScopeOverviewTab role={role} now={p.now} narrative={p.brief?.narrative} briefLoaded={p.brief !== undefined} />
+
+      {me && (
+        <section data-scope-section="goals">
+          <h3 className={BLOCK_LABEL} style={{ color: "var(--sol-text-dim)" }}>Your goals</h3>
+          <PersonGoals person={me} roleHandle={role.handle} now={p.now} own />
+        </section>
+      )}
+      <TemplateSections roleId={role._id} canEdit={p.canEdit} />
+
+      <details className="group" data-scope-section="notes">
+        <summary className={cn(BLOCK_LABEL, "cursor-pointer select-none list-none flex items-center gap-1.5 mb-0")} style={{ color: "var(--sol-text-dim)" }}>
+          <ChevronDown className="w-3 h-3 -rotate-90 transition-transform group-open:rotate-0" /> Its notes
+        </summary>
+        <div className="mt-2.5">
+          <ScopeBriefTab role={role} facts={p.brief?.facts ?? null} factsProblem={p.briefProblem} narrative={p.brief?.narrative ?? ""} canEdit={p.canEditBrief} backHref={p.backHref} />
+        </div>
+      </details>
+
+      {p.scopeRef && (
+        <section data-scope-section="lately">
+          <h3 className={BLOCK_LABEL} style={{ color: "var(--sol-text-dim)" }}>Lately</h3>
+          <ScopeFeed key={JSON.stringify(p.scopeRef)} scope={p.scopeRef} plain />
+        </section>
+      )}
+    </div>
+  );
+}
+
 const BLOCK_LABEL = "px-2.5 mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em]";
 
-/** The first screen (F5.1): three questions, in words, in this order. Every
- *  number on it is inside an escalation's own line or the activity line;
- *  the mount test holds it to that. */
+/** The briefing (F5.1): where each project stands and what the role is
+ *  doing, in words. The only number on it is inside the activity line; the
+ *  mount test holds it to that. */
 export function ScopeOverviewTab({ role, now, narrative, briefLoaded }: { role: OrgRole; now: number; narrative: string | null | undefined; briefLoaded: boolean }) {
   const { model } = useRoleScope(role.short_id);
   const openLinked = useOpenLinkedSession();

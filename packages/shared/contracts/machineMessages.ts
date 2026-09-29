@@ -206,6 +206,20 @@ export interface WaitingSession {
   state: string;
 }
 
+// Who a role is, as its trigger run reminds it (org-staffing.md S25): read
+// fresh at firing, so a run never works from a stale idea of its area.
+export interface RoleCard {
+  handle: string;
+  name: string;
+  /** A person's name, or "@handle" of the role it reports to. */
+  reports_to: string;
+  /** What it looks after, by title; empty when the role names no scope. */
+  scope: string[];
+  charter?: string;
+  /** The goals written on the projects it looks after. */
+  goals: string[];
+}
+
 export interface ScheduledTaskFrame {
   title: string;
   task_id?: string;
@@ -214,6 +228,7 @@ export interface ScheduledTaskFrame {
   /** The event that fired it; absent on a scheduled or manual run. */
   event?: string;
   waiting?: WaitingSession | null;
+  role?: RoleCard | null;
   /** The trigger's prompt, and whatever the writer appended for the agent. */
   body: string;
 }
@@ -232,7 +247,14 @@ export function formatScheduledTask(f: ScheduledTaskFrame): string {
   const waiting = w
     ? `\n<waiting-session ${tagAttrs([["id", w.short_id], ["title", w.title], ["why", w.why], ["since", String(w.since)], ["role", w.role]])}>${w.state.trim()}</waiting-session>\n\n`
     : "";
-  return `<scheduled-task ${head}>${waiting}${f.body}</scheduled-task>`;
+  const r = f.role;
+  const roleLines = r ? [
+    r.scope.length ? `Looks after: ${r.scope.join(", ")}` : "Looks after no area of its own: it runs its routine and answers what it is asked.",
+    r.charter ? `Charter: ${r.charter}` : "",
+    r.goals.length ? `Goals: ${r.goals.join("; ")}` : "",
+  ].filter(Boolean).join("\n") : "";
+  const role = r ? `\n<role-card ${tagAttrs([["handle", r.handle], ["name", r.name], ["reports-to", r.reports_to]])}>${roleLines}</role-card>\n` : "";
+  return `<scheduled-task ${head}>${role}${waiting}${f.body}</scheduled-task>`;
 }
 
 /** The one reader. Tolerates a missing closing tag: a preview slice can cut the body. */
@@ -241,6 +263,21 @@ export function parseScheduledTask(rawContent: string | null | undefined): Sched
   const m = stripInjectionNoise(rawContent).match(/^<scheduled-task((?:\s+[a-z-]+="[^"]*")*)\s*>([\s\S]*?)(?:<\/scheduled-task>|$)/);
   if (!m) return null;
   let body = m[2];
+  let role: RoleCard | null = null;
+  const rc = body.match(/^\s*<role-card((?:\s+[a-z-]+="[^"]*")*)\s*>([\s\S]*?)<\/role-card>\s*/);
+  if (rc) {
+    body = body.slice(rc[0].length);
+    const line = (label: string) => rc[2].split("\n").find((l) => l.startsWith(`${label}: `))?.slice(label.length + 2) ?? "";
+    const scope = line("Looks after");
+    role = {
+      handle: tagAttr(rc[1], "handle"),
+      name: tagAttr(rc[1], "name"),
+      reports_to: tagAttr(rc[1], "reports-to"),
+      scope: scope ? scope.split(", ") : [],
+      ...(line("Charter") ? { charter: line("Charter") } : {}),
+      goals: line("Goals") ? line("Goals").split("; ") : [],
+    };
+  }
   let waiting: WaitingSession | null = null;
   const w = body.match(/^\s*<waiting-session((?:\s+[a-z-]+="[^"]*")*)\s*>([\s\S]*?)<\/waiting-session>\s*/);
   if (w) {
@@ -260,6 +297,7 @@ export function parseScheduledTask(rawContent: string | null | undefined): Sched
     ...(tagAttr(m[1], "trigger") ? { trigger: tagAttr(m[1], "trigger") } : {}),
     ...(tagAttr(m[1], "event") ? { event: tagAttr(m[1], "event") } : {}),
     waiting,
+    role,
     body: body.trim(),
   };
 }
@@ -303,7 +341,9 @@ export function parseUnwrappedSessionReport(
     const name = named(withTask[1]);
     if (name) return { from: "unknown", body: text, name };
   }
-  const followUp = first.match(/^([A-Z][\w][\w ./-]{0,40}?)\s+follow-up\s*:/i);
+  // A worker's name is capitalized ("Backend B follow-up:"); a lowercase
+  // opener ("codecast test follow-up: ...") is a person's own prompt.
+  const followUp = first.match(/^([A-Z][\w][\w ./-]{0,40}?)\s+[Ff]ollow-up\s*:/);
   if (followUp) {
     const name = named(followUp[1]);
     if (name) return { from: "unknown", body: text, name };

@@ -3,8 +3,11 @@ import { execFileSync } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { CursorCloudApi, CursorCloudApiError } from "./cursorCloud.js";
-import { CursorCloudSessions, CursorCloudSetupError, githubRepoAt } from "./cursorCloudSessions.js";
+import { CursorCloudAdapter, CursorCloudApi } from "./cursor.js";
+import { CloudApiError } from "./http.js";
+import { CloudAgentSessions, githubRepoAt } from "./sessions.js";
+import { CloudAgentSetupError } from "./types.js";
+import { deviceLabel } from "../remote/device.js";
 
 const cleanups: (() => void)[] = [];
 afterEach(() => { for (const fn of cleanups.splice(0)) try { fn(); } catch {} });
@@ -14,37 +17,57 @@ function tmp(): string {
   return d;
 }
 
-function sessions(api: CursorCloudApi | null) {
+/** The Cursor adapter with no key on the machine, or with `api` as its client. */
+function adapterWith(api: CursorCloudApi | null): CursorCloudAdapter {
+  const adapter = new CursorCloudAdapter({ readKey: () => null });
+  if (api) adapter.client = () => api;
+  return adapter;
+}
+
+function sessions(api: CursorCloudApi | null, file = path.join(tmp(), "sessions.json")) {
   const statuses: string[] = [];
-  const watcher = api ? { api: () => api, follow: async () => {}, setNotice: () => {} } : null;
-  const s = new CursorCloudSessions({
-    watcher: () => watcher as any,
+  const s = new CloudAgentSessions(adapterWith(api), {
+    watcher: () => ({ follow: async () => {}, setNotice: () => {}, isRunning: () => false }),
     bindSession: () => {},
     agentForConversation: () => undefined,
     setStatus: (_c, st) => statuses.push(st),
     log: () => {},
-  }, path.join(tmp(), "sessions.json"));
+  }, file);
   return { s, statuses };
 }
 
-describe("CursorCloudSessions failures", () => {
-  test("no key on the machine is a setup error, not a retry", async () => {
+describe("Cursor Cloud sessions: failures", () => {
+  test("no key on the machine is a setup error, held with the key reason", async () => {
     const { s } = sessions(null);
     await s.start("conv1", undefined, "cloud");
-    await expect(s.deliver("conv1", "hi")).rejects.toMatchObject({ kind: "key_missing" });
+    const err = await s.deliver("conv1", "hi").catch((e) => e);
+    expect(err).toMatchObject({ kind: "key_missing", holdReason: `waiting for a Cursor API key on ${deviceLabel()}` });
+    // The card id is the one the daemon has always posted, so a live card is not duplicated.
+    expect(err.cardKey("conv1")).toBe("cursor-cloud-setup:conv1:key_missing");
   });
 
   test("a rejected key and an unreachable repo name the fix", async () => {
-    const reject = (status: number, code: string, message: string) => ({ createAgent: async () => { throw new CursorCloudApiError(status, code, message); } }) as unknown as CursorCloudApi;
+    const reject = (status: number, code: string, message: string) => ({ createAgent: async () => { throw new CloudApiError(status, code, message); } }) as unknown as CursorCloudApi;
     const a = sessions(reject(401, "error", "Invalid User API Key"));
     await a.s.start("c", undefined, "cloud");
     await expect(a.s.deliver("c", "hi")).rejects.toMatchObject({ kind: "key_invalid" });
     const b = sessions(reject(400, "validation_error", "Failed to verify existence of branch 'main' in repository codecast-sh/codecast."));
     await b.s.start("c", undefined, "cloud");
     const err = await b.s.deliver("c", "hi").catch((e) => e);
-    expect(err).toBeInstanceOf(CursorCloudSetupError);
+    expect(err).toBeInstanceOf(CloudAgentSetupError);
     expect(err.kind).toBe("repo");
-    expect(err.message).toContain("GitHub app");
+    // Held with its reason (never spending retries), and asked again less often than a missing key is looked for.
+    expect(err.holdReason).toBe("waiting until Cursor Cloud can reach this repository");
+    expect(err.recheckMs).toBeGreaterThan(5_000);
+    expect(err.message).toBe("Cursor Cloud can't reach this repository (Failed to verify existence of branch 'main' in repository codecast-sh/codecast). Give Cursor's GitHub app access to it at https://cursor.com/dashboard/integrations; the message retries on its own.");
+  });
+
+  test("a follow-up while a run is going is busy, which the delivery layer retries", async () => {
+    const api = { createRun: async () => { throw new CloudApiError(409, "conflict", "run in progress"); } } as unknown as CursorCloudApi;
+    const file = path.join(tmp(), "sessions.json");
+    fs.writeFileSync(file, JSON.stringify({ c: { agentId: "bc-1", model: "" } }));
+    const { s: fresh } = sessions(api, file);
+    await expect(fresh.deliver("c", "more")).rejects.toThrow(/^AGENT_STDIN_NOT_READY: the Cursor Cloud agent is still running/);
   });
 });
 

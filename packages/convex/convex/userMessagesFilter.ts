@@ -45,6 +45,8 @@ export function isImportNotice(content: string | null | undefined): boolean {
   return !!content && content.trimStart().startsWith(IMPORT_NOTICE_PREFIX);
 }
 
+const COMPACTION_SUMMARY_PREFIX = "This session is being continued";
+
 const USER_NOISE_PREFIXES = [
   "<local-command-stdout>",
   "<local-command-stderr>",
@@ -55,7 +57,7 @@ const USER_NOISE_PREFIXES = [
   AGENT_SWITCH_NOTICE_PREFIX,
   MACHINE_SWITCH_NOTICE_PREFIX,
   MACHINE_MOVE_NOTICE_PREFIX,
-  "This session is being continued",
+  COMPACTION_SUMMARY_PREFIX,
   "Your task is to create a detailed summary",
   "Please continue the conversation",
   "Read the output file to retrieve the result:",
@@ -64,6 +66,14 @@ const USER_NOISE_PREFIXES = [
 
 const SUMMARY_MARKER =
   "Your task is to create a detailed summary of the conversation so far";
+
+/** A compaction row: the boundary marker, the summary the agent resumed from,
+ *  or the prompt that asked for it. The session's own recap, not a turn. */
+export function isCompactionMessage(m: { subtype?: string; content?: string | null }): boolean {
+  if (m.subtype === "compact_boundary") return true;
+  const t = (m.content ?? "").trimStart();
+  return t.startsWith(COMPACTION_SUMMARY_PREFIX) || t.includes(SUMMARY_MARKER);
+}
 
 // Navigator rows carry a snippet, not the body: the list only ever shows two
 // lines per row, and a 2000-row subscription must stay small. A row whose

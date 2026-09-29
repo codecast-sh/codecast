@@ -106,6 +106,9 @@ export interface FilePathContextValue {
    *  a bare `#3263` or `PR 3263` in its prose refers to. Absent, those stay
    *  the text they were written as. */
   repository?: string | null;
+  /** The session's checkout root, which turns an absolute path into the
+   *  repo-relative one a `file:` search is written with. */
+  gitRoot?: string | null;
 }
 
 /** Provided once per conversation (ConversationView) with the session's

@@ -1,5 +1,6 @@
 import {
   AGENT_MODEL_CONFIG,
+  cloudAgentProviderOfConversation,
   findModelOption,
   modelAgentKey,
   modelFitsAgent,
@@ -24,10 +25,14 @@ export function effortGlyph(effort: string | undefined | null): string {
   }
 }
 
-/** True when this agent/session-state combination has a working rail. */
-export function canControlModel(agentType: string | undefined, _blank: boolean): boolean {
-  const cfg = AGENT_MODEL_CONFIG[modelAgentKey(agentType)];
-  return !!cfg;
+/**
+ * True when codecast can change this session's model: its agent has a model
+ * rail, and it is not a cloud agent (the provider picks the model, and a
+ * `/model` message would reach it as a prompt). Every surface that offers the
+ * model picker asks this.
+ */
+export function canControlModel(agentType: string | undefined, sessionId: string | null | undefined, model: string | null | undefined): boolean {
+  return !!AGENT_MODEL_CONFIG[modelAgentKey(agentType)] && !cloudAgentProviderOfConversation(agentType, sessionId, model);
 }
 
 /**

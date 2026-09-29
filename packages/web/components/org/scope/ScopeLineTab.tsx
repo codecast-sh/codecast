@@ -57,8 +57,8 @@ export function ScopeLineTab({ ids, teamId }: { ids: ScopeIds; teamId?: string }
   if (inScopeTasks.length === 0) {
     return (
       <div className="py-14 text-center">
-        <p className="text-[13px]" style={{ color: "var(--sol-text-muted)" }}>No tasks on the line.</p>
-        <p className="mt-1 text-[11.5px]" style={{ color: "var(--sol-text-dim)" }}>Tasks in this scope show here by station; a run moves them along.</p>
+        <p className="text-[13px]" style={{ color: "var(--sol-text-muted)" }}>No tasks here yet.</p>
+        <p className="mt-1 text-[11.5px]" style={{ color: "var(--sol-text-dim)" }}>Tasks in its area show here by status.</p>
       </div>
     );
   }
@@ -82,7 +82,7 @@ export function ScopeLineTab({ ids, teamId }: { ids: ScopeIds; teamId?: string }
             </header>
             <div className="flex-1 min-h-[96px] p-1.5 space-y-1.5">
               {colTasks.length === 0 ? (
-                <p className="px-1.5 py-3 text-[11px] italic" style={{ color: "var(--sol-text-dim)" }}>Nothing at this station.</p>
+                <p className="px-1.5 py-3 text-[11px] italic" style={{ color: "var(--sol-text-dim)" }}>Nothing here.</p>
               ) : colTasks.map((t) => (
                 <LineCard
                   key={t._id}

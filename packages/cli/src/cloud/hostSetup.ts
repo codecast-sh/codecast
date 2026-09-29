@@ -79,7 +79,12 @@ export function hostSetupScript(spec: ResolvedHostSpec, opts: { hash: string; re
   const runs = spec.run.map((cmd, i) => `step "run[${i}]: ${cmd.replace(/[^A-Za-z0-9 ._/:=-]/g, "").slice(0, 60)}" bash -lc "$(printf '%s' ${b64(cmd)} | base64 -d)"`).join("\n");
   return `set -u
 exec </dev/null
-report() { python3 -c 'import json, sys; print(json.dumps(dict(ok=sys.argv[1] == "1", **({"skipped": sys.argv[2]} if sys.argv[2] else {}), **({"step": sys.argv[3], "error": sys.argv[4][-600:]} if sys.argv[3] else {}), applied=sys.argv[5] == "1")))' "$@"; }
+# One JSON line to stdout, and the same outcome (with what was declared) kept for the app (host readiness).
+report() { mkdir -p "$HOME/.codecast"; python3 -c 'import json, sys, time
+r = dict(ok=sys.argv[1] == "1", **({"skipped": sys.argv[2]} if sys.argv[2] else {}), **({"step": sys.argv[3], "error": sys.argv[4][-600:]} if sys.argv[3] else {}), applied=sys.argv[5] == "1")
+print(json.dumps(r))
+if not r.get("skipped"):
+    json.dump(dict(r, at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), **json.loads(sys.argv[6])), open(sys.argv[7], "w"))' "$@" '${JSON.stringify({ packages: spec.packages, services: spec.services, commands: spec.run.length }).replace(/'/g, "")}' "$HOME/.codecast/host-setup-last.json"; }
 # The login-shell base: always current, whatever the spec.
 want_profile=$(printf '%s' ${b64(hostProfileScript())} | base64 -d)
 if [ "$(cat /etc/profile.d/codecast-cloud.sh 2>/dev/null)" != "$want_profile" ]; then

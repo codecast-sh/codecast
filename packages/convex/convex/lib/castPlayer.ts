@@ -1,3 +1,4 @@
+// @ts-nocheck (plain browser code, typed by its callers)
 // <cast-player>: the video player every published page with a video gets
 // (served at /cli/player.js and injected by artifactsHttp.serve). A plain
 // <video controls> is upgraded into one; data-native keeps the browser's own. Chapters are
@@ -15,9 +16,11 @@
 // "timeupdate"; properties currentTime, duration, chapters, chapterIndex;
 // methods play(), pause(), seek(seconds), goTo(index).
 //
-// Plain ES5-style string building on purpose: this source sits inside a
-// String.raw template, so it must never contain a backtick or a dollar brace.
-export const CAST_PLAYER_JS = String.raw`(function () {
+// One function, two ways in: the web app imports and calls it (the landing
+// page film), and published pages get its source as /cli/player.js. It runs in
+// a page by itself from that source, so it stays plain ES5 with no imports and
+// no reference to anything outside its own body.
+export function defineCastPlayer(opts?: { upgradeVideos?: boolean }): void {
   if (window.customElements.get("cast-player")) return;
   var ICON = {
     play: '<path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.4-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z"/>',
@@ -575,7 +578,10 @@ export const CAST_PLAYER_JS = String.raw`(function () {
     v.replaceWith(p);
   }
   function upgradeAll() { Array.prototype.forEach.call(document.querySelectorAll("video"), upgrade); }
+  if (!opts || !opts.upgradeVideos) return;
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", upgradeAll, { once: true });
   else upgradeAll();
-})();
-`;
+}
+
+/** The player as a script for published pages, which also upgrade their plain videos. */
+export const CAST_PLAYER_JS = "(" + defineCastPlayer.toString() + ")({ upgradeVideos: true });\n";

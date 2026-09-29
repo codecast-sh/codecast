@@ -85,7 +85,7 @@ describe("TakeoverGate", () => {
 describe("GatedScopeEditor", () => {
   const role = { ...ORG_FIXTURE.roles[0], handle: "growth", scope: { project_ids: ["p-growth"], plan_ids: [] }, scope_names: { projects: [{ id: "p-growth", title: "Growth" }], plans: [] } } as any;
   const pick = async (value: string) => act(async () => {
-    const select = q<HTMLSelectElement>('select[aria-label="Add to scope"]')!;
+    const select = q<HTMLSelectElement>('select[aria-label="Add to its area"]')!;
     select.value = value;
     select.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
   });

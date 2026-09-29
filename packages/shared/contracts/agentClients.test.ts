@@ -162,6 +162,8 @@ describe("new-session launch options", () => {
     expect(codex.models.map((model) => model.key)).toEqual([
       "default", "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
       "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark",
+      // Codex Cloud's plain launch; its ask mode and attempts are hidden keys the composer's own switches set.
+      "cloud",
     ]);
     expect(codex.efforts).toEqual(["default", "low", "medium", "high", "xhigh", "max", "ultra"]);
   });

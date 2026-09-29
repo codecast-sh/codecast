@@ -67,11 +67,11 @@ export function OrgTemplateHire({ projects, workspace, roles = [], initialProjec
       <div className="flex flex-col gap-3" data-template-posted={posted.short_id}>
         <div className="rounded-lg border border-sol-border/50 bg-sol-bg-alt px-3 py-2.5 text-[12.5px] leading-relaxed">
           <p className="font-semibold text-sol-text">Proposed. Nothing has changed yet.</p>
-          <p className="mt-1 text-sol-text-muted">Decide it on the org page: accept the role, its authority and the hire in one ask. After you accept, run <code style={{ fontFamily: "var(--font-mono)" }}>cast org template bind {effInstance}</code> in the project&apos;s checkout to pin the release and create the routines, paused.</p>
+          <p className="mt-1 text-sol-text-muted">Decide it on the org page: the role, what it may do and the hire are one proposal. After you accept, one step remains on the machine that will run it: run <code style={{ fontFamily: "var(--font-mono)" }}>cast org template bind {effInstance}</code> in the project&apos;s folder. That fixes the template&apos;s version and creates its triggers, paused.</p>
         </div>
         <div className="flex items-center justify-end gap-2">
           <button type="button" onClick={onClose} className="h-8 rounded-lg px-3 text-[12.5px] text-sol-text-muted hover:bg-sol-bg-highlight">Close</button>
-          <a href={`/org?proposal=${posted.short_id}`} className="inline-flex h-8 items-center rounded-lg bg-sol-violet px-3.5 text-[12.5px] font-semibold text-sol-bg">Open {posted.short_id}</a>
+          <a href={`/org?proposal=${posted.short_id}`} className="inline-flex h-8 items-center rounded-lg bg-sol-violet px-3.5 text-[12.5px] font-semibold text-sol-bg">Open the proposal</a>
         </div>
       </div>
     );
@@ -88,7 +88,7 @@ export function OrgTemplateHire({ projects, workspace, roles = [], initialProjec
         {template && (
           <div className="flex items-start gap-2 pt-1 text-[12px] leading-relaxed text-sol-text-muted">
             <RoleAvatar avatar={avatarOf({ avatar: template.avatar, handle: template.template_id })} size={28} />
-            <p>{template.description} <span className="text-sol-text-dim">Asks {template.asks.inputs - template.asks.secrets} answer{template.asks.inputs - template.asks.secrets === 1 ? "" : "s"}, {template.asks.secrets} secret{template.asks.secrets === 1 ? "" : "s"} bound on the host, {template.asks.authority} grant{template.asks.authority === 1 ? "" : "s"} of authority, {template.asks.setup} setup step{template.asks.setup === 1 ? "" : "s"}; runs {template.asks.routines} routine{template.asks.routines === 1 ? "" : "s"}.</span></p>
+            <p>{template.description} <span className="text-sol-text-dim">Asks {template.asks.inputs - template.asks.secrets} answer{template.asks.inputs - template.asks.secrets === 1 ? "" : "s"}, {template.asks.secrets} secret{template.asks.secrets === 1 ? "" : "s"} kept on the machine that runs it, {template.asks.authority} permission{template.asks.authority === 1 ? "" : "s"}, {template.asks.setup} setup step{template.asks.setup === 1 ? "" : "s"}; runs {template.asks.routines} trigger{template.asks.routines === 1 ? "" : "s"}.</span></p>
           </div>
         )}
       </label>
@@ -104,7 +104,7 @@ export function OrgTemplateHire({ projects, workspace, roles = [], initialProjec
         <div className="rounded-lg border border-sol-border/50 bg-sol-bg-alt px-3 py-2.5 text-[12px] leading-relaxed" role="group" aria-label="Project lead" data-template-lead={lead.handle}>
           <p className="text-sol-text"><span className="font-semibold">@{lead.handle}</span> already leads {project?.title}. A second role beside a lead is refused, so choose:</p>
           <div className="mt-1.5 flex flex-col gap-1">
-            {([["under", `Hire under @${lead.handle}: the new role reports to it and it stays the lead`], ["lead", `Name @${lead.handle} as the seat: no new role; it takes the template's routines and record`]] as const).map(([value, label]) => (
+            {([["under", `Hire under @${lead.handle}: the new role reports to it and it stays the lead`], ["lead", `Give it to @${lead.handle}: no new role; it takes on the template's triggers and record`]] as const).map(([value, label]) => (
               <label key={value} className="flex items-start gap-2 text-sol-text-muted"><input type="radio" name="template-seat" checked={seat === value} onChange={() => setSeat(value)} className="mt-0.5" />{label}</label>
             ))}
           </div>

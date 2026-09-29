@@ -7,7 +7,7 @@
 import { useMemo, useState } from "react";
 import { ShortId } from "../ShortId";
 import Link from "next/link";
-import { X, ExternalLink, Trash2, ArrowRightLeft, CheckSquare, FileText, Users, Pencil, Check, Crown, Shield } from "lucide-react";
+import { X, ExternalLink, ArrowRightLeft, CheckSquare, FileText, Users, Pencil, Check, Crown, Shield } from "lucide-react";
 import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
 import type { TaskItem, DocItem, PlanItem, ProjectItem } from "../../store/inboxStore";
 import { compactAge, agoOf } from "../../lib/threadState";
@@ -19,13 +19,11 @@ import { cn } from "../../lib/utils";
 import { GhostChips, StateBar, StateTally, StandingLine } from "./OrgNodeCards";
 import { ORG_STATE_META, parentName, staffingPaneWord } from "./orgMeta";
 import { OrgButton } from "./OrgButton";
-import { RetireRoleConfirm } from "./RetireRoleConfirm";
-import { type UnseatChoice } from "../../lib/retireRole";
 import type { OrgGhostChip, OrgLayoutNode } from "./orgLayout";
 import { ghostChipOf, parentNodeId, refMatches } from "./orgLayout";
 import type { OrgParentRef, OrgRole, OrgScope, OrgSession, OrgTree } from "./orgTypes";
 import { TakeoverGate } from "./TakeoverEdit";
-import type { OrgProposalChange } from "./orgStaffingTypes";
+import { CHIEF_OF_STAFF_HANDLE, type OrgProposalChange } from "./orgStaffingTypes";
 import type { OrgUpdateRoleInput } from "../../store/orgSlice";
 import { PriorityPill } from "../charter/CharterChips";
 import { ProjectLeadChip } from "../charter/ProjectLeadChip";
@@ -57,7 +55,6 @@ export type OrgScopePanelProps = {
   onMove: (subject: { kind: "session" | "role"; id: string; title: string }) => void;
   /** `opts.leave_sessions` is the person's one edit on a scope that gains refs (R1). */
   onUpdateRole: (roleId: string, fields: OrgUpdateRoleInput, opts?: { leave_sessions?: boolean }) => void;
-  onRetireRole: (roleId: string, standingSession?: UnseatChoice) => void;
   onSelectNode: (id: string) => void;
   mode: OrgPanelMode;
   onMode: (mode: OrgPanelMode) => void;
@@ -152,7 +149,7 @@ export function DocRow({ d, now }: { d: DocItem; now: number }) {
 
 function Feed({ rows, now, onOpenSession, more }: { rows: FeedRow[]; now: number; onOpenSession: (id: string) => void; more?: React.ReactNode }) {
   if (rows.length === 0 && !more) {
-    return <p className="text-[12px] px-2.5 py-3" style={{ color: "var(--sol-text-dim)" }}>Nothing under this scope yet.</p>;
+    return <p className="text-[12px] px-2.5 py-3" style={{ color: "var(--sol-text-dim)" }}>Nothing here yet.</p>;
   }
   return (
     <div className="flex flex-col -mx-1">
@@ -216,8 +213,8 @@ export function GatedScopeEditor({ workspace, role, onChange, ...editor }: Omit<
           className="mt-2"
           workspace={workspace}
           ask={{ handle: role.handle, add: gained }}
-          what={`@${role.handle} gains ${gained.length === 1 ? "this" : "these"}, and with ${gained.length === 1 ? "it" : "them"} the sessions inside that report to its host and to no role.`}
-          confirmLabel="Change the scope"
+          what={`@${role.handle} gains ${gained.length === 1 ? "this" : "these"}, and with ${gained.length === 1 ? "it" : "them"} the sessions inside that report to the person who runs it and to no role.`}
+          confirmLabel="Change its area"
           onConfirm={(opts) => { onChange(pending, opts.leave_sessions ? opts : undefined); setPending(null); }}
           onCancel={() => setPending(null)}
         />
@@ -267,7 +264,7 @@ export function ScopeEditor({ role, canEdit, onChange, changes, focusChangeId, o
       <div className="flex flex-wrap gap-1.5">
         {empty && (
           <span className="inline-flex items-center h-[22px] px-2 rounded-md border text-[11px]" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 45%, transparent)", color: "var(--sol-text-muted)" }}>
-            whole workspace
+            {role.handle === CHIEF_OF_STAFF_HANDLE ? "whole workspace" : "no area of its own"}
           </span>
         )}
         {role.scope.project_ids.map((id) => (
@@ -281,14 +278,14 @@ export function ScopeEditor({ role, canEdit, onChange, changes, focusChangeId, o
         ))}
         {role.scope.plan_ids.map((id) => (
           <span key={`l:${id}`} className="inline-flex items-center gap-1" data-scope-plan={id}>
-            <Chip tone="magenta" mono href={`/plans/${id}`} onRemove={canEdit ? () => remove("plan", id) : undefined}>{shortOfPlan(id) ?? nameOfPlan(id)}</Chip>
+            <Chip tone="magenta" href={`/plans/${id}`} onRemove={canEdit ? () => remove("plan", id) : undefined}>{nameOfPlan(id)}</Chip>
             <GhostChips chips={chipsOnPlan(id)} focusChangeId={focusChangeId} onFocusChange={onSelectChange} />
           </span>
         ))}
       </div>
       {canEdit && (openProjects.length > 0 || openPlans.length > 0) && (
         <div className="mt-2">
-          <SelectBox value="" onChange={(e) => add(e.target.value)} className="text-[12px]" aria-label="Add to scope">
+          <SelectBox value="" onChange={(e) => add(e.target.value)} className="text-[12px]" aria-label="Add to its area">
             <option value="">Add a project or plan…</option>
             {openProjects.length > 0 && (
               <optgroup label="Projects">
@@ -297,7 +294,7 @@ export function ScopeEditor({ role, canEdit, onChange, changes, focusChangeId, o
             )}
             {openPlans.length > 0 && (
               <optgroup label="Plans">
-                {openPlans.map((p) => <option key={p._id} value={`plan:${p._id}`}>{p.short_id} · {p.title}</option>)}
+                {openPlans.map((p) => <option key={p._id} value={`plan:${p._id}`}>{p.title}{p.short_id ? ` (${p.short_id})` : ""}</option>)}
               </optgroup>
             )}
           </SelectBox>
@@ -378,18 +375,18 @@ export function InlineEdit({ value, onSave, className, style, placeholder, multi
 
 // ---------------------------------------------------------------- panel bodies
 
-function RolePanel({ tree, role, sessions, canEdit, onOpenSession, onMove, onUpdateRole, onRetireRole, onSelectNode, now, changes, focusChangeId, onSelectChange }: {
+function RolePanel({ tree, role, sessions, canEdit, onOpenSession, onMove, onUpdateRole, onSelectNode, now, changes, focusChangeId, onSelectChange }: {
   tree: OrgTree; role: OrgRole; sessions: OrgSessionsSource; canEdit: boolean; now: number;
-  onOpenSession: (id: string) => void; onMove: OrgScopePanelProps["onMove"]; onUpdateRole: OrgScopePanelProps["onUpdateRole"]; onRetireRole: OrgScopePanelProps["onRetireRole"]; onSelectNode: (id: string) => void;
+  onOpenSession: (id: string) => void; onMove: OrgScopePanelProps["onMove"]; onUpdateRole: OrgScopePanelProps["onUpdateRole"]; onSelectNode: (id: string) => void;
   changes?: OrgProposalChange[]; focusChangeId?: string | null; onSelectChange?: (changeId: string) => void;
 }) {
   const parentId = parentNodeId({ kind: "role", role_id: role._id });
   const tasks = useWorkspaceCollection<TaskItem>("tasks");
   const docs = useWorkspaceCollection<DocItem>("docs");
-  const [confirmRetire, setConfirmRetire] = useState(false);
   const inScope = (row: { project_id?: string | null; plan_id?: string | null }) => {
     const empty = role.scope.project_ids.length === 0 && role.scope.plan_ids.length === 0;
-    if (empty) return true;
+    // With no area named, only the Chief of Staff covers everything (S26).
+    if (empty) return role.handle === CHIEF_OF_STAFF_HANDLE;
     return (!!row.project_id && role.scope.project_ids.includes(row.project_id)) || (!!row.plan_id && role.scope.plan_ids.includes(row.plan_id));
   };
   const rows = useMemo<FeedRow[]>(() => {
@@ -407,9 +404,8 @@ function RolePanel({ tree, role, sessions, canEdit, onOpenSession, onMove, onUpd
     <>
       <div className="flex items-center gap-2">
         <span className="inline-flex items-center h-[20px] px-1.5 rounded-md text-[10.5px] font-medium" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)", fontFamily: "var(--font-mono)" }}>@{role.handle}</span>
-        <Link href={`/org/${role.short_id}`} className="text-[10.5px] hover:underline" style={{ color: "var(--sol-text-dim)" }} title="Open the scope page"><ShortId id={role.short_id} /></Link>
         <Link href={`/org/${role.short_id}`} className="ml-auto inline-flex items-center gap-1 text-[11px] px-1.5 h-[20px] rounded-md hover:bg-sol-bg-highlight" style={{ color: "var(--sol-violet)" }}>
-          Open page <ExternalLink className="w-3 h-3" />
+          Open its page <ExternalLink className="w-3 h-3" />
         </Link>
         {role.status === "paused" && <span className="text-[10px] px-1.5 h-[18px] inline-flex items-center rounded-md" style={{ background: "color-mix(in srgb, var(--sol-yellow) 14%, transparent)", color: "var(--sol-yellow)" }}>paused</span>}
       </div>
@@ -427,42 +423,23 @@ function RolePanel({ tree, role, sessions, canEdit, onOpenSession, onMove, onUpd
         )}
       </div>
 
-      <SectionLabel>Charter</SectionLabel>
-      <InlineEdit canEdit={canEdit} multiline value={role.charter ?? ""} placeholder="What this seat owns, in a sentence or two." onSave={(v) => onUpdateRole(role._id, { charter: v })} className="text-[12.5px] leading-relaxed" style={{ color: "var(--sol-text-secondary)" }} />
+      {/* What it is for is written on its page; here it is read. */}
+      {role.charter?.trim() && (
+        <>
+          <SectionLabel>What it is for</SectionLabel>
+          <p className="text-[12.5px] leading-relaxed whitespace-pre-wrap" style={{ color: "var(--sol-text-secondary)" }} data-role-charter>{role.charter.trim()}</p>
+        </>
+      )}
 
-      <SectionLabel>Scope</SectionLabel>
+      <SectionLabel>Area</SectionLabel>
       <GatedScopeEditor workspace={tree.workspace} role={role} canEdit={canEdit} onChange={(scope, opts) => onUpdateRole(role._id, { scope }, opts)} changes={changes} focusChangeId={focusChangeId} onSelectChange={onSelectChange} />
 
       <SectionLabel right={<StateTally counts={role.counts} />}>Sessions</SectionLabel>
       <StateBar counts={role.counts} />
 
-      <SectionLabel right={<span className="text-[10.5px] tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{counts.sessions} sessions · {counts.tasks} tasks · {counts.docs} pages</span>}>Under this scope</SectionLabel>
+      <SectionLabel right={<span className="text-[10.5px] tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{counts.sessions} sessions · {counts.tasks} tasks · {counts.docs} pages</span>}>In its area</SectionLabel>
       <Feed rows={rows} now={now} onOpenSession={onOpenSession} more={<LoadMore parentId={parentId} sessions={sessions} />} />
 
-      {canEdit && (
-        <div className="mt-8 pt-4 border-t" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 30%, transparent)" }}>
-          {!confirmRetire ? (
-            <div className="flex items-center gap-2">
-              <button type="button" onClick={() => onUpdateRole(role._id, { status: role.status === "paused" ? "active" : "paused" })} className="h-8 px-3 rounded-lg border text-[12px] font-medium hover:bg-sol-bg-highlight/60" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 45%, transparent)", color: "var(--sol-text-muted)" }}>
-                {role.status === "paused" ? "Resume role" : "Pause role"}
-              </button>
-              <button type="button" onClick={() => setConfirmRetire(true)} className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg text-[12px] font-medium hover:bg-sol-red/10" style={{ color: "var(--sol-red)" }}>
-                <Trash2 className="w-3.5 h-3.5" /> Retire role
-              </button>
-            </div>
-          ) : (
-            <div className="rounded-lg p-3 border" style={{ borderColor: "color-mix(in srgb, var(--sol-red) 40%, transparent)", background: "color-mix(in srgb, var(--sol-red) 6%, transparent)" }}>
-              {/* The one retire confirm (S16): the chief of staff's asks keep or retire. */}
-              <RetireRoleConfirm
-                role={role}
-                lead={<>Retire <b>{role.name}</b>? Its {role.total} session{role.total === 1 ? "" : "s"} go back to their owners. Roles under it report to {parentName(tree, reportsTo)}.</>}
-                onRetire={(choice) => onRetireRole(role._id, choice)}
-                onCancel={() => setConfirmRetire(false)}
-              />
-            </div>
-          )}
-        </div>
-      )}
     </>
   );
 }
@@ -612,7 +589,7 @@ export function OrgScopePanel(props: OrgScopePanelProps) {
       <div className={cn("min-w-0 min-h-0", mode === "staffing" && props.staffingLead ? "shrink-0" : "flex-1", mode === "staffing" && props.staffingFill ? "flex flex-col overflow-hidden" : "overflow-y-auto px-4 pt-4 pb-8")} style={mode === "staffing" && props.staffingLead ? { width: STAFFING_ASKS_W } : undefined} data-main-scroll data-panel-mode={mode}>
         {mode === "staffing" ? props.staffing : mode === "history" ? props.history : node && (
           <>
-            {node.kind === "role" && <RolePanel tree={props.tree} role={node.role} sessions={props.sessions} canEdit={props.canEdit} onOpenSession={props.onOpenSession} onMove={props.onMove} onUpdateRole={props.onUpdateRole} onRetireRole={props.onRetireRole} onSelectNode={props.onSelectNode} now={now} changes={props.changes} focusChangeId={props.focusChangeId} onSelectChange={props.onSelectChange} />}
+            {node.kind === "role" && <RolePanel tree={props.tree} role={node.role} sessions={props.sessions} canEdit={props.canEdit} onOpenSession={props.onOpenSession} onMove={props.onMove} onUpdateRole={props.onUpdateRole} onSelectNode={props.onSelectNode} now={now} changes={props.changes} focusChangeId={props.focusChangeId} onSelectChange={props.onSelectChange} />}
             {node.kind === "person" && <PersonPanel tree={props.tree} person={node.person} sessions={props.sessions} onOpenSession={props.onOpenSession} now={now} />}
             {node.kind === "session" && <SessionPanel tree={props.tree} session={node.session} parent={node.parent} canEdit={props.canEdit} onOpenSession={props.onOpenSession} onMove={props.onMove} onSelectNode={props.onSelectNode} now={now} />}
             {node.kind === "cluster" && <p className="text-[12px]" style={{ color: "var(--sol-text-dim)" }}>Click the card to load more sessions.</p>}

@@ -2,7 +2,7 @@
 // The one place the product's words are defined (docs/architecture/
 // org-staffing.md S17): a dialog with two pages. "How this works" is the
 // short page the staffing pane's intro links to; "The words" is the glossary,
-// eight terms with one sentence each and an example from this workspace.
+// each term with one sentence and an example from this workspace.
 // The pane and the chart both open it; nothing else restates a definition.
 import { useEffect, useState } from "react";
 import { BookOpen, X } from "lucide-react";
@@ -35,7 +35,7 @@ export function OrgGlossary({ open, onClose, tree, health, proposal }: {
             {cur === "how" ? "How this works" : "The words"}
           </DialogTitle>
           <DialogDescription className="sr-only">
-            {cur === "how" ? "What the org page and a proposal are for, in four short paragraphs." : "The eight words the org page uses, each defined in one sentence with an example from this workspace."}
+            {cur === "how" ? "What the org page and a proposal are for, in four short paragraphs." : "The words the org page uses, each defined in one sentence with an example from this workspace."}
           </DialogDescription>
           <div className="ml-auto flex items-center rounded-lg border p-0.5" role="tablist" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 35%, transparent)" }}>
             {(["how", "words"] as const).map((p) => (
@@ -58,7 +58,7 @@ export function OrgGlossary({ open, onClose, tree, health, proposal }: {
                 </section>
               ))}
               <button type="button" onClick={() => setCur("words")} className="self-start text-[12px] underline-offset-2 hover:underline" style={{ color: "var(--sol-violet)" }}>
-                The eight words, defined
+                The words, defined
               </button>
             </div>
           ) : (

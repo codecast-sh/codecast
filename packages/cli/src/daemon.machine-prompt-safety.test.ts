@@ -12,6 +12,7 @@ import { clientAcceptsBracketedPaste, deliverTextIntoPane, pasteAndSubmitText, p
 import { blockAt, functionBlock } from "./test-helpers/sourceRegion";
 import { TmuxDeliveryUncertainError } from "./tmuxDeliveryJournal";
 import { typedPollAnswer } from "./typedPollAnswer";
+import { CloudAgentBusyError, CloudAgentSetupError } from "./cloudAgents/types";
 
 const source = fs.readFileSync(new URL("./daemon.ts", import.meta.url), "utf8");
 const scratch: string[] = [];
@@ -139,6 +140,8 @@ function fixture(transport = "tmux", cached = true) {
     holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, typedPollAnswer,
     clientAcceptsBracketedPaste, deliverTextIntoPane, pasteAndSubmitText, prepareInjectedContent, PASTE_START, PASTE_END,
     tmuxExec, execAsync,
+    // The delivery catch also holds a cloud agent's message; a hold re-drives the scan.
+    CloudAgentBusyError, CloudAgentSetupError, pollPendingNow: () => {},
     _execFileAsync: async (binary: string, args: string[]) => {
       expect(binary).toBe("osascript");
       expect(args[0]).toBe("-e");

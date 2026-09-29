@@ -188,7 +188,7 @@ The sentences under "Where it stands" are the role's. Its brief gains a section 
 
 ### F5.4 Proof
 
-A mount test renders the Calling lead's fixture (two projects, six plans, 83 tasks, 33 waiting sessions, two escalations) and asserts the first screen holds exactly: two escalation lines, two project sentences, one activity line, and no digit outside those. A second test renders a role with no escalations and no brief lines and asserts "Nothing needs you" and "no word from @handle yet". The role prompt change is proved with the harness on a saved frame: three samples, each ending its turn with the section current.
+A mount test renders the Calling lead's fixture (two projects, six plans, 83 tasks, 33 waiting sessions) and asserts the first screen holds exactly: two project sentences, one activity line, and no digit outside those. A second test renders a role with no brief lines and asserts the empty sections are hidden. The role prompt change is proved with the harness on a saved frame: three samples, each ending its turn with the section current.
 
 **As built (2026-09-23).** The section has one parser,
 `@codecast/shared/contracts/briefStanding`: `## Where it stands`, one list
@@ -208,14 +208,13 @@ standing in for a row the store lacks) drawn by the inbox's
 project of the scope model, with the age past a week; what it is doing from
 the tree's `counts.working` and the newest working row as an `EntityIdPill`.
 The tab strip carries no number, the header's dot and the opening line count
-escalations (never sessions waiting on a person; `handsWaiting` is gone), the
+nothing waiting on a person (a lead raises that in its own thread, S28), the
 viewer's goals and a template role's sections moved to the Brief tab and the
 role's history to Settings, so nothing the first screen dropped is lost. The
 phone's board head (`app/org/[id]/board.tsx`, `Briefing`) shows the same
 three blocks from the same hook and parser in place of the count cells; the
 feed stays under it, because on the phone the feed is the page (F3). Proof:
-`ScopePage.mount.test.tsx` (the Calling lead fixture: two escalation lines
-newest first with their pills, two sentences, one activity line, no digit
+`ScopePage.mount.test.tsx` (the Calling lead fixture: two sentences, one activity line, no digit
 outside them; then "Nothing needs you." and "no word from @calling yet"),
 `briefStanding.test.ts`, and
 three dry runs on a saved restart frame (`~/.cache/f5-standing`, profile

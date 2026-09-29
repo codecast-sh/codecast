@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { applyRole, applyScope, previewTakeover, previewTakeovers, takeOverSessions, takeoverPhrase } from "./orgInit";
+import { applyAdopt, applyRole, applyScope, previewTakeover, previewTakeovers, takeOverSessions, takeoverPhrase } from "./orgInit";
 import { performCreateRole, performHireRole, performRetireRole, performUpdateRole } from "./orgRoles";
 import { lineCandidates } from "./orgLine";
 import { projectLeadOf } from "@codecast/shared/contracts/orgLead";
@@ -132,6 +132,48 @@ describe("a scope change takes over the sessions in it", () => {
     const res = await applyRole(ctx, ME as any, BOUNDARY, { kind: "role", name: "Growth", handle: "growth", scope: { projects: ["pr-1"] } } as any, undefined, OPTS);
     expect((res as any).note).toContain("2 sessions now report to @growth");
     expect(roleOf(db, 1)).toBeDefined();
+  });
+});
+
+// Nothing waiting on the person is lost in a takeover (ct-55574).
+describe("a takeover and the sessions that wait", () => {
+  test("a role whose seat is an adopt in the same proposal takes over nothing until the adopt seats it", async () => {
+    const db = fixtures();
+    const ctx = ctxOf(db);
+    const res = await applyRole(ctx, ME as any, BOUNDARY, { kind: "role", name: "Growth", handle: "growth", scope: { projects: ["pr-1"] } } as any, undefined, { ...OPTS, provision: true, awaiting_adopt: "jx70001" });
+    expect((res as any).note).not.toContain("now report");
+    // The session to adopt is still nobody's hand, so the adopt can seat it.
+    expect(roleOf(db, 1)).toBeUndefined();
+    const adopted = await applyAdopt(ctx, ME as any, BOUNDARY, { kind: "adopt", handle: "@growth", conversation: "jx70001" } as any, OPTS as any);
+    expect([adopted.status, (adopted as any).error]).toEqual(["applied", undefined]);
+    expect((adopted as any).note).toContain("1 session now reports to @growth");
+    const seat = db._tables.conversations.find((c: any) => c._id === "conversations_s1");
+    expect(String(seat.standing_role_id)).toBe((res as any).role.id);
+    expect(roleOf(db, 2)).toBe((res as any).role.id);
+  });
+
+  test("done and killed sessions stay where they are; every session that moves has its needs-input check run again", async () => {
+    const db = fixtures();
+    db._tables.conversations.push(
+      conv(5, { thread_state: "Shipped", thread_state_status: "done", thread_state_at: Date.now(), updated_at: Date.now() - 60_000 }),
+      conv(6, { inbox_killed_at: NOW }),
+    );
+    const scheduled: any[] = [];
+    const ctx = { db, scheduler: { runAfter: async (...a: any[]) => { scheduled.push(a); } } } as any;
+    const role = await performCreateRole(ctx, ME as any, { name: "Growth", handle: "growth", team_id: TEAM, scope: { project_ids: [P as any], plan_ids: [] } });
+    const dry = await takeOverSessions(ctx, ME as any, role._id, { dry: true });
+    expect([...(dry?.sessions ?? [])].sort()).toEqual(["jx70001", "jx70002"]);
+    expect(scheduled).toEqual([]);
+    const took = await takeOverSessions(ctx, ME as any, role._id);
+    expect([...(took?.sessions ?? [])].sort()).toEqual(["jx70001", "jx70002"]);
+    expect(roleOf(db, 5)).toBeUndefined();
+    expect(roleOf(db, 6)).toBeUndefined();
+    // A moved session that waits is heard by its role: the same check a
+    // settle runs, which tells the role or, when it cannot be told, the person.
+    expect(scheduled.map((a) => [a[0], a[2]]).sort((x, y) => String(x[1].conversation_id).localeCompare(String(y[1].conversation_id)))).toEqual([
+      [0, { conversation_id: "conversations_s1" }],
+      [0, { conversation_id: "conversations_s2" }],
+    ]);
   });
 });
 

@@ -823,12 +823,13 @@ export function buildBrowserRowMap(rows: BrowserRowInput[]): Record<string, Brow
 
 /** The driven browser tab behind a tool call, for the "open tab" affordance. */
 export type BrowserTabRef =
-  | { kind: "cast"; tabId: string; url: string | null }
+  | { kind: "cast"; tabId: string | null; url: string | null }
   | { kind: "extension"; tabId: string };
 
 /**
  * A `cast browser` row names an 8-char tab in its output, or inherits one from
- * an earlier row through the carry-forward map (buildBrowserRowMap); a
+ * an earlier row through the carry-forward map (buildBrowserRowMap), or names
+ * none (tabId null: the session's current tab); a
  * Claude-in-Chrome call names a numeric tabId in its input or its result. Null
  * for every other tool, so callers can ask without checking the tool first.
  * `cast` is the row's parsed command (null when it is not a cast command).
@@ -848,8 +849,9 @@ export function browserTabOf(
   }
   if (!cast || normalizeCastCategory(cast.category) !== "browser") return null;
   const output = resultContent ?? "";
+  // A row whose output lost the tab footer (piped through grep or tail) still
+  // drove the session's tab: tabId null asks the daemon for that one.
   const tabId = extractBrowserTabId(output) ?? carried[tool.id]?.tabId ?? null;
-  if (!tabId) return null;
   const url = extractBrowserPageUrl(cast.subcommand, cast.args, output) ?? carried[tool.id]?.url ?? null;
   return { kind: "cast", tabId, url };
 }

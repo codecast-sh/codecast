@@ -1,4 +1,5 @@
 import { internalMutation, internalAction, internalQuery } from "./functions";
+import { routeUpWaitingSession } from "./agentTasks";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { isLowSignalPrompt } from "./titleGeneration";
@@ -159,7 +160,11 @@ export const setIdleSummary = internalMutation({
     idle_summary: v.optional(v.string()),
     settle_verdict: v.optional(v.union(...SETTLE_VERDICTS.map((s) => v.literal(s)))),
   },
-  handler: async (ctx, args) => {
+  handler: (ctx, args) => performSetIdleSummary(ctx, args),
+});
+
+export async function performSetIdleSummary(ctx: any, args: { conversation_id: any; idle_summary?: string; settle_verdict?: SettleVerdict }): Promise<void> {
+  {
     const patch: Record<string, unknown> = {};
     if (args.idle_summary !== undefined) patch.idle_summary = args.idle_summary;
     // Stamped now, after the settle it describes, so isSettleVerdictCurrent
@@ -169,8 +174,17 @@ export const setIdleSummary = internalMutation({
       patch.settle_verdict_at = Date.now();
     }
     if (Object.keys(patch).length) await ctx.db.patch(args.conversation_id, patch);
-  },
-});
+    // A session under a role that ended a turn asking something in prose tells
+    // its role now that the verdict says so (org-staffing.md S28); stalls and
+    // declared blocks were routed at settle time (notifications).
+    if (args.settle_verdict === "needs_input") {
+      const conv = await ctx.db.get(args.conversation_id);
+      if (conv && (conv.org_role_id || conv.standing_role_id) && conv.thread_state_status !== "blocked") {
+        await routeUpWaitingSession(ctx, conv, { why: "waiting", since: conv.updated_at ?? Date.now() });
+      }
+    }
+  }
+}
 
 // The tail the classifier reads: a handful of earlier turns for context, and
 // the FINAL assistant message nearly whole. The verdict lives at the END of

@@ -1,9 +1,10 @@
-// One hand of a role's brief, as `cast brief` and `cast role show` print it.
+// One session under a role, in its brief, as `cast brief` and `cast role show` print it.
 // Kept out of index.ts so a test can pin the field names against the
 // server's BriefHand shape (org.ts): `state` is the work state, and the task
 // carries its handoff status and review verdict.
 import { c } from "./colors.js";
 import { goalStateLine, type GoalProgress } from "@codecast/shared/contracts/roleGoals";
+import { isWholeWorkspaceRole } from "@codecast/shared/contracts/orgLead";
 
 export type BriefHandRow = {
   short_id: string;
@@ -53,10 +54,16 @@ export function briefCharterLines(charter: string): string[] {
 const SCOPE_PLANS_NAMED = 5;
 const PLANS_LISTED = 8;
 
+/** What a role that names no projects and no plans looks after (org-staffing.md
+ *  S26): nothing of its own, unless it is the Chief of Staff. */
+export function noScopeWords(handle?: string): string {
+  return isWholeWorkspaceRole({ _id: "", handle }) ? "the whole workspace, apart from what a lead looks after" : "no area of its own";
+}
+
 /** A role's scope in one line: its projects by name, the few plans that sit
  *  outside them, and a count for the rest. A plan inside a listed project is
  *  named by its project. */
-export function briefScopeLine(scope: { projects: Array<{ id: string; title: string }>; plans: Array<{ short_id: string; title: string; project_id?: string }> }): string {
+export function briefScopeLine(scope: { projects: Array<{ id: string; title: string }>; plans: Array<{ short_id: string; title: string; project_id?: string }> }, handle?: string): string {
   const projectIds = new Set(scope.projects.map((p) => String(p.id)));
   const loose = scope.plans.filter((p) => !p.project_id || !projectIds.has(String(p.project_id)));
   const names = [
@@ -64,7 +71,7 @@ export function briefScopeLine(scope: { projects: Array<{ id: string; title: str
     ...loose.slice(0, SCOPE_PLANS_NAMED).map((p) => `plan ${p.short_id} ${p.title}`),
     ...(loose.length > SCOPE_PLANS_NAMED ? [`and ${loose.length - SCOPE_PLANS_NAMED} more plans`] : []),
   ];
-  return names.length ? names.join(", ") : "whole workspace";
+  return names.length ? names.join(", ") : noScopeWords(handle);
 }
 
 /** The plans worth a line: active ones that hold tasks, newest first, a few

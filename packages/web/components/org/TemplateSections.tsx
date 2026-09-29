@@ -30,8 +30,8 @@ export function TemplateSections({ roleId, canEdit }: { roleId: string; canEdit:
   return (
     <div data-scope-template={instance.instance}>
       {instance.phase === "awaiting_host" && (
-        <Section density="page" label="Host step" name="template-host">
-          <p className="px-2.5 pb-1.5 text-[12px] leading-relaxed text-sol-yellow" data-template-host-step>Run <code style={{ fontFamily: "var(--font-mono)" }}>cast org template bind {instance.instance}</code> in the project&apos;s checkout to pin the release and create the routines, paused.</p>
+        <Section density="page" label="One step left" name="template-host">
+          <p className="px-2.5 pb-1.5 text-[12px] leading-relaxed text-sol-yellow" data-template-host-step>On the machine that runs this role, run <code style={{ fontFamily: "var(--font-mono)" }}>cast org template bind {instance.instance}</code> in the project&apos;s folder. That fixes the template&apos;s version and creates its triggers, paused.</p>
         </Section>
       )}
       {setup.length > 0 && (
@@ -52,11 +52,11 @@ export function TemplateSections({ roleId, canEdit }: { roleId: string; canEdit:
       <Section density="page" label="What it may do" name="template-authority">
         <ul className="space-y-0.5 px-2.5 pb-1.5 text-[12px] text-sol-text-muted">
           <li>Starts work on its own: <span className="text-sol-text">{autonomyOn(instance.trust) ? "on" : "off"}</span>{autonomyOn(instance.trust) ? "" : "; it reads and recommends inside codecast"}</li>
-          <li data-template-authority={authority.length}>Authority outside codecast: {authority.length ? authority.map((g) => `${g.kind} (${g.label}${g.limit?.usd_per_month !== undefined ? `, up to $${g.limit.usd_per_month} a month` : g.limit?.usd_per_day !== undefined ? `, up to $${g.limit.usd_per_day} a day` : g.limit?.per_day !== undefined ? `, up to ${g.limit.per_day} a day` : ""}${g.expires_at ? `, until ${new Date(g.expires_at).toISOString().slice(0, 10)}` : ""})`).join("; ") : "none granted"}</li>
+          <li data-template-authority={authority.length}>Allowed outside codecast: {authority.length ? authority.map((g) => `${g.kind} (${g.label}${g.limit?.usd_per_month !== undefined ? `, up to $${g.limit.usd_per_month} a month` : g.limit?.usd_per_day !== undefined ? `, up to $${g.limit.usd_per_day} a day` : g.limit?.per_day !== undefined ? `, up to ${g.limit.per_day} a day` : ""}${g.expires_at ? `, until ${new Date(g.expires_at).toISOString().slice(0, 10)}` : ""})`).join("; ") : "none granted"}</li>
         </ul>
       </Section>
       {routines.length > 0 && (
-        <Section density="page" label="Routines" name="template-routines">
+        <Section density="page" label="Triggers" name="template-routines">
           <ul className="space-y-1 px-2.5 pb-1.5 text-[12px]">
             {routines.map((r) => {
               const rd = readiness[r.id] ?? { ready: false, mode: "propose", missing: [] };
@@ -85,8 +85,8 @@ export function TemplateSections({ roleId, canEdit }: { roleId: string; canEdit:
       <Section density="page" label="Template" name="template-release">
         <ul className="space-y-0.5 px-2.5 pb-1.5 text-[12px] text-sol-text-muted">
           <li>{instance.template?.name ?? instance.template_id} {instance.version} <span className="text-sol-text-dim">sha256 {String(instance.digest).slice(0, 12)}</span>{instance.host ? <span className="text-sol-text-dim"> · on {instance.host.machine}</span> : null}</li>
-          {instance.update_available && <li className="text-sol-text" data-template-update={instance.update_available}>Update available: {instance.update_available}{instance.pending_upgrade ? ` (accepted; run cast org template bind ${instance.instance} --to ${instance.pending_upgrade.to})` : ""}</li>}
-          {((instance.secrets ?? []) as any[]).map((s) => <li key={s.key} data-template-secret={s.key} data-bound={s.bound}>{s.label}: {s.bound ? <span className="text-sol-green">bound</span> : <span className="text-sol-yellow">missing · cast org template bind {instance.instance} --secret {s.key}=&lt;path&gt;</span>}</li>)}
+          {instance.update_available && <li className="text-sol-text" data-template-update={instance.update_available}>Update available: {instance.update_available}{instance.pending_upgrade ? ` (accepted; on its machine, run cast org template bind ${instance.instance} --to ${instance.pending_upgrade.to})` : ""}</li>}
+          {((instance.secrets ?? []) as any[]).map((s) => <li key={s.key} data-template-secret={s.key} data-bound={s.bound}>{s.label}: {s.bound ? <span className="text-sol-green">set</span> : <span className="text-sol-yellow">missing · on its machine, run cast org template bind {instance.instance} --secret {s.key}=&lt;path&gt;</span>}</li>)}
         </ul>
       </Section>
       {error && <p role="alert" className="px-2.5 text-[12px] text-sol-red">{error}</p>}

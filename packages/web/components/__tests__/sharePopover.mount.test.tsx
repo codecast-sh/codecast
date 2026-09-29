@@ -67,20 +67,35 @@ async function mountOpen(props: Partial<React.ComponentProps<typeof SharePopover
   return document.body.textContent ?? "";
 }
 
-test("the owner sees the page link to copy beside the team and public link controls", async () => {
+test("the owner gets one link and one control for who can open it", async () => {
   const text = await mountOpen({});
-  expect(text).toContain("Page link");
-  expect(document.body.querySelector('input[value="https://codecast.sh/conversation/c1"]')).not.toBeNull();
-  expect(text).toContain("Public link");
-  expect(text).toContain("Create & copy link");
+  expect(text).toContain("Copy link");
+  expect(text).toContain("Link access");
+  expect(text).toContain("Restricted");
+  expect(text).toContain("Anyone");
+  expect(text).toContain("Only people who can already see it");
+  expect(text).not.toContain("Public link");
   expect(text).toContain("Hidden");
+  const copy = Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.includes("Copy link"));
+  expect(copy?.getAttribute("title")).toBe("https://codecast.sh/conversation/c1");
+});
+
+test("open to anyone, the one link carries its token and Restricted revokes it", async () => {
+  let revoked = 0;
+  const text = await mountOpen({ hasShareToken: true, shareUrl: "https://codecast.sh/conversation/c1?share=tok", onRevokeShareLink: async () => { revoked++; } });
+  expect(text).toContain("Anyone with the link can view it");
+  const copy = Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.includes("Copy link"));
+  expect(copy?.getAttribute("title")).toBe("https://codecast.sh/conversation/c1?share=tok");
+  const restricted = Array.from(document.querySelectorAll('[role="radio"]')).find((b) => b.textContent === "Restricted")!;
+  await act(async () => { restricted.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })); });
+  expect(revoked).toBe(1);
 });
 
 test("a viewer who cannot manage sharing gets the page link and nothing that would fail", async () => {
-  const text = await mountOpen({ canManage: false });
-  expect(text).toContain("Page link");
-  expect(document.body.querySelector('input[value="https://codecast.sh/conversation/c1"]')).not.toBeNull();
-  expect(text).not.toContain("Public link");
-  expect(text).not.toContain("Create & copy link");
+  const text = await mountOpen({ canManage: false, hasShareToken: true, shareUrl: "https://codecast.sh/conversation/c1?share=tok" });
+  expect(text).toContain("Copy link");
+  expect(text).not.toContain("Link access");
   expect(text).not.toContain("Hidden");
+  const copy = Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.includes("Copy link"));
+  expect(copy?.getAttribute("title")).toBe("https://codecast.sh/conversation/c1");
 });
