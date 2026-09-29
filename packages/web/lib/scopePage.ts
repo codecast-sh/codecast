@@ -34,17 +34,29 @@ export function canEditRole(tree: OrgTree | null, role: OrgRole | null | undefin
   return isAdmin || role.host_user_id === (me?.user_id ?? meId);
 }
 
-/** A standing agent is never "done": between wakes it stands by. The chip
- *  and the stripe say so in role words; the colour is the one work state
- *  table every org surface paints from, so the header stripe matches the
- *  role's node on the org page. */
-export type RoleStanding = { label: string; color: string; pulse: boolean };
+/** A standing agent is never "done": between wakes it rests. The header
+ *  names only the two states worth a glance (awake, needs you); a resting
+ *  seat carries no chip, since the conversation's own bar already says it.
+ *  The colour is the one work state table every org surface paints from, so
+ *  the header stripe matches the role's node on the org page. */
+export type RoleStanding = { label: string | null; color: string; pulse: boolean };
 export function roleStanding(state: WorkState | undefined | null): RoleStanding | null {
   if (!state) return null;
   const color = (ORG_STATE_META[state] ?? ORG_STATE_META.idle).color;
   if (state === "working") return { label: "awake", color, pulse: true };
   if (state === "needs_input") return { label: "needs you", color, pulse: false };
-  return { label: "standing by", color, pulse: false };
+  return { label: null, color, pulse: false };
+}
+
+/** A seat's pinned line often opens by naming the seat ("Agent Quality lead
+ *  standing by; desk steering is done"). Beside the name that reads twice, so
+ *  the header drops a leading clause that only restates the name. */
+export function stateLineBesideName(line: string, name: string): string {
+  if (!name || !line.toLowerCase().startsWith(name.toLowerCase())) return line;
+  const rest = line.slice(name.length);
+  const cut = rest.search(/[;:.]\s|\s[-–]\s/);
+  const tail = (cut >= 0 && cut <= 40 ? rest.slice(cut + 1) : rest).replace(/^[\s;:,.–-]+/, "");
+  return tail ? tail.charAt(0).toUpperCase() + tail.slice(1) : line;
 }
 
 /** Tokens are counted from Claude transcripts only (org-roles-standing.md

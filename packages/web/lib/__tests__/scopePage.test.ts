@@ -2,16 +2,24 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { WorkState } from "@codecast/shared/contracts";
-import { HAND_GROUPS, boundTaskOf, feedLinkIsServerOwned, feedStateTone, groupHands, queryProblem, roleStanding, scopeQueryRef, subtaskCounts, tokensUncounted } from "../scopePage";
+import { HAND_GROUPS, boundTaskOf, feedLinkIsServerOwned, feedStateTone, groupHands, queryProblem, roleStanding, scopeQueryRef, stateLineBesideName, subtaskCounts, tokensUncounted } from "../scopePage";
 import { ORG_STATE_META } from "../../components/org/orgMeta";
 
 describe("scope page rules", () => {
-  test("a standing agent is awake, needs you, or standing by; never done", () => {
+  test("a standing agent is awake, needs you, or unlabelled at rest; never done", () => {
     expect(roleStanding("working")?.label).toBe("awake");
     expect(roleStanding("needs_input")?.label).toBe("needs you");
-    expect(roleStanding("done")?.label).toBe("standing by");
-    expect(roleStanding("dormant")?.label).toBe("standing by");
+    expect(roleStanding("done")?.label).toBeNull();
+    expect(roleStanding("dormant")?.label).toBeNull();
     expect(roleStanding(undefined)).toBeNull();
+  });
+
+  test("the header's state line drops a leading clause that only restates the seat's name", () => {
+    const name = "Agent Quality lead";
+    expect(stateLineBesideName("Agent Quality lead standing by; desk steering is done and owes the full eval", name)).toBe("Desk steering is done and owes the full eval");
+    expect(stateLineBesideName("Agent Quality lead: two evals running", name)).toBe("Two evals running");
+    expect(stateLineBesideName("Desk steering is done", name)).toBe("Desk steering is done");
+    expect(stateLineBesideName("Agent Quality lead", name)).toBe("Agent Quality lead");
   });
 
   test("the role's stripe colour is the org node's colour for the same state", () => {
