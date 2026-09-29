@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { Split } from "lucide-react";
 import { useInboxStore, type ForkChild } from "../store/inboxStore";
 import { branchSizeOf, originSizeSinceFork } from "../lib/branchCounts";
+import { isCloudAgentBranch } from "@codecast/shared/contracts";
 
 // Sentinel loadingBranchId for the origin-line chip, which has no fork id.
 const MAIN_BRANCH = "main";
@@ -96,11 +97,15 @@ export function BranchSelector({
   // is active, and each is labeled by the prompt that sent it its own way. The
   // origin line falls back to "main" when it has no distinguishing prompt after
   // the fork point (common on orchestration lines that just keep running tools).
+  // A cloud agent's other attempts at this prompt (a Codex Cloud best-of-N
+  // task): this line is attempt 1, and each branch is named by its attempt
+  // (its title) rather than by what was said on it later.
+  const attempts = forkChildren.length > 0 && forkChildren.every((f) => isCloudAgentBranch(f.agent_type, f.session_id));
   const branches = [
     {
       key: MAIN_BRANCH,
       id: null as string | null,
-      label: mainDivergentPreview || "main",
+      label: attempts ? "Attempt 1" : mainDivergentPreview || "main",
       size: mainSize,
       unread: 0,
       isActive: !activeBranchId,
@@ -111,7 +116,7 @@ export function BranchSelector({
       return {
         key: fork._id,
         id: fork._id as string | null,
-        label: fork.first_divergent_preview || fork.title || fork.short_id || "fork",
+        label: (attempts ? fork.title : fork.first_divergent_preview || fork.title) || fork.short_id || "fork",
         size: branchSizeOf(fork),
         unread: unreadOf(fork, seenMessageCount[fork._id], isActive),
         isActive,
@@ -125,7 +130,7 @@ export function BranchSelector({
       <div className="flex items-center gap-1.5 mb-1.5">
         <BranchIcon className="w-3.5 h-3.5 text-sol-cyan" />
         <span className="text-[10px] text-sol-text-dim uppercase tracking-wider font-medium">
-          {forkChildren.length} branch{forkChildren.length !== 1 ? "es" : ""}
+          {attempts ? `${forkChildren.length + 1} attempts` : `${forkChildren.length} branch${forkChildren.length !== 1 ? "es" : ""}`}
         </span>
       </div>
       <div className="flex flex-wrap gap-1.5">

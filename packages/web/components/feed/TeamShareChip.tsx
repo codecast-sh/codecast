@@ -54,7 +54,13 @@ export function TeamShareChip({ conv, teamId }: { conv: Conversation; teamId: st
       </PopoverTrigger>
       {/* A React portal still bubbles clicks to the card, which would open the
           session; stop them here. */}
-      <PopoverContent align="start" className="w-72 bg-sol-bg border-sol-border p-3" onClick={(e) => e.stopPropagation()}>
+      <PopoverContent
+        align="start"
+        className="w-80 bg-sol-bg border-sol-border p-3"
+        onClick={(e) => e.stopPropagation()}
+        onOpenAutoFocus={(e) => { e.preventDefault(); (e.currentTarget as HTMLElement | null)?.focus?.(); }}
+        tabIndex={-1}
+      >
         <TeamShareModePicker
           mode={mode}
           gated={gated}

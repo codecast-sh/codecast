@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ScanRow } from './scanTypes.js';
-import { codecastPath } from '../codecastDir.js';
+import { readMetaJson, type MirrorMeta } from '../cloudAgents/transcript.js';
 
 export async function observeCursorDatabase(file: string): Promise<Extract<ScanRow,{type:'cursorDb'}>> {
   let maxRowId: number | null = null;
@@ -96,21 +96,14 @@ async function observeComposers(file: string, home: string): Promise<ComposerObs
  *  chat's store.db (held open by the live process) and a meta.json that names
  *  its cwd and title. The chat id is the agent-transcripts id and the id
  *  `cursor-agent --resume` takes. */
-export async function findCursorCliChat(home: string, chatId: string): Promise<{ dir: string; cwd?: string; title?: string; parentAgentId?: string; description?: string } | null> {
-  // A Cursor Cloud agent's mirror (cursorCloud.ts) keeps the same meta.json.
-  const dirs = [codecastPath('cursor-cloud', path.basename(chatId))];
+export async function findCursorCliChat(home: string, chatId: string): Promise<MirrorMeta | null> {
   const root = path.join(home, '.cursor', 'chats');
-  try { for (const bucket of await fs.promises.readdir(root)) dirs.push(path.join(root, bucket, chatId)); }
+  let buckets: string[] = [];
+  try { buckets = await fs.promises.readdir(root); }
   catch (error) { if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error; }
-  for (const dir of dirs) {
-    let raw: string;
-    try { raw = await fs.promises.readFile(path.join(dir, 'meta.json'), 'utf8'); }
-    catch { continue; }
-    try {
-      const meta = JSON.parse(raw) as Record<string, unknown>;
-      const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
-      return { dir, cwd: str(meta.cwd), title: str(meta.title), parentAgentId: str(meta.parentAgentId), description: str(meta.description) };
-    } catch { return { dir }; }
+  for (const bucket of buckets) {
+    const meta = await readMetaJson(path.join(root, bucket, chatId));
+    if (meta) return meta;
   }
   return null;
 }

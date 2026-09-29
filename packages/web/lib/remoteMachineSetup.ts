@@ -13,16 +13,18 @@ export type RemoteMachineSetup = {
   dedicatedHost: string;
   serviceUser?: string;
   instanceType?: string;
+  /** The newest saved codecast image, when there is one: a new machine starts from it unless an image is named. */
+  savedImage?: string;
 };
 
 const quote = (value: string) => `'${value.trim().replace(/'/g, `'"'"'`)}'`;
 
 export function remoteMachineSetupCommand(form: RemoteMachineSetup): string | null {
   const required = form.mode === "existing" ? [form.instance, form.region, form.key]
-    : [form.name, form.image, form.keyName, form.subnet, form.securityGroup, form.region, form.key, ...(form.platform === "mac" ? [form.dedicatedHost] : [])];
+    : [form.name, ...(form.savedImage ? [] : [form.image]), form.keyName, form.subnet, form.securityGroup, form.region, form.key, ...(form.platform === "mac" ? [form.dedicatedHost] : [])];
   if (required.some((value) => !value.trim()) || Object.values(form).some((value) => /[\r\n\0]/.test(value ?? ""))) return null;
   const args = form.mode === "existing" ? ["cast hosts add", quote(form.instance), "--provision"]
-    : ["cast hosts create", form.platform, "--name", quote(form.name), "--image", quote(form.image),
+    : ["cast hosts create", form.platform, "--name", quote(form.name), ...(form.image.trim() ? ["--image", quote(form.image)] : []),
       "--key-name", quote(form.keyName), "--subnet", quote(form.subnet), "--security-group", quote(form.securityGroup),
       ...(form.platform === "mac" ? ["--dedicated-host", quote(form.dedicatedHost)] : [])];
   args.push("--region", quote(form.region), "--key", quote(form.key));

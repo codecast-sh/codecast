@@ -20,15 +20,15 @@ import { EntityIdPill, TextWithMentions } from "../../EntityIdPill";
 import { EstablishedRefsProvider } from "../../../hooks/entityMentionScope";
 import { FormattedSummary } from "../../FormattedSummary";
 import { entityRemarkPlugins } from "../../../lib/remarkEntityIds";
-import { MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS } from "../../messageMarkdown";
+import { ASSISTANT_MD_REMARK, MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS } from "../../messageMarkdown";
 import { useJumpToSendingMessage } from "../../../hooks/useJumpToSendingMessage";
 import { isTeammateFramingOnly, parseSpawnedTaskPrompt, chatWakeAction, type ChatWakeEntry, type ChatWakePrompt, type HuddleSummaryTag } from "../../sessionMessage";
-import { parseScheduledTask, sessionEscalationCaption, type SessionEscalationMessage, type WaitingSession } from "@codecast/shared/contracts";
+import { CLOUD_AGENT_ACTION_SUBTYPE, parseScheduledTask, sessionEscalationCaption, type SessionEscalationMessage, type WaitingSession } from "@codecast/shared/contracts";
 import { RoleFace } from "../../org/RoleFace";
 import { CallTranscriptDisclosure } from "../../calls/TranscriptTurns";
 import { useInboxStore, useTrackedStore } from "../../../store/inboxStore";
 import { DecisionCompactCard } from "../../decisions/DecisionCompactCard";
-import { MessageSquare, Users, Hash, AtSign, ChevronDown, ChevronRight, Clock, CornerDownRight, Workflow, Zap, Radar, Bot, PhoneCall, ArrowUpRight, RefreshCw } from "lucide-react";
+import { MessageSquare, Users, Hash, AtSign, ChevronDown, ChevronRight, Clock, CornerDownRight, Workflow, Zap, Radar, Bot, PhoneCall, ArrowUpRight, RefreshCw, Cloud } from "lucide-react";
 import { sessionMessageQueueLabel } from "../../../lib/pendingBanner";
 import { PlanBlock } from "./planBlock";
 import { UserIcon } from "./shared";
@@ -646,7 +646,7 @@ export function ScheduledTaskBlock({ content: rawContent, timestamp }: { content
   const prevFailed = !!spawned?.previousRun && /^Failed/i.test(spawned.previousRun.summary);
 
   return (
-    <div className="mb-2 mx-1 rounded border-l-2 border-sol-violet/60 bg-sol-violet/5">
+    <div className="mb-3 rounded border-l-2 border-sol-violet/60 bg-sol-violet/5">
       <div className="flex items-center gap-2 px-3 pt-2 pb-1">
         <Zap className="w-3.5 h-3.5 text-sol-violet/70 shrink-0" />
         <span className="text-[11px] font-medium tracking-wide uppercase text-sol-violet/70 shrink-0">{spawned ? "Trigger run" : "Trigger"}</span>
@@ -1127,6 +1127,19 @@ function SystemBlockImpl({ content, subtype, timestamp, messageUuid, messageId, 
           <span className="text-xs text-amber-500 font-medium">Context compacted</span>
         </div>
         <div className="flex-1 h-px bg-gradient-to-r from-transparent via-amber-500/40 to-transparent" />
+      </div>
+    );
+  }
+
+  // A cloud agent action's result (Create PR, Apply, Archive): codecast says it, not the agent.
+  if (subtype === CLOUD_AGENT_ACTION_SUBTYPE && content) {
+    return (
+      <div className="mb-3 flex items-start gap-2 px-3 py-2 bg-sol-violet/5 border-l-2 border-sol-violet/40 text-xs text-sol-text-muted">
+        <Cloud className="w-3.5 h-3.5 mt-px text-sol-violet/70 shrink-0" />
+        <div className="min-w-0 flex-1 break-words [&_p]:m-0">
+          <ReactMarkdown remarkPlugins={ASSISTANT_MD_REMARK} rehypePlugins={MESSAGE_MD_REHYPE} components={MESSAGE_MD_COMPONENTS}>{content}</ReactMarkdown>
+        </div>
+        {timestamp && <span className="text-[10px] text-sol-text-dim shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>}
       </div>
     );
   }

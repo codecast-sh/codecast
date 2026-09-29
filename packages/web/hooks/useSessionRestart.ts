@@ -121,6 +121,7 @@ export function deriveRestartStage(
     if (resume.error) return { label: `Restart failed: ${resume.error}`, tone: "error" };
     try {
       const r = resume.result ? JSON.parse(resume.result) : null;
+      if (r?.cloud_agent) return { label: "Runs in the cloud: nothing to restart here, and a held message goes out on its own", tone: "active" };
       if (sessionReady && (r?.resumed || r?.reconstituted || r?.started_fresh)) {
         return { label: "Session is ready — waiting for message delivery…", tone: "active" };
       }

@@ -31,6 +31,34 @@ export interface HarnessHook {
   purpose: string;
   /** What stops working without it. */
   withoutIt: string;
+  /** A machine setting (MACHINE_SETTINGS) that turns what the hook does on or
+   *  off while it stays installed; the Harness page shows it as a switch. */
+  setting?: MachineSetting;
+}
+
+/**
+ * Machine settings the web changes through the device's apply_snippet
+ * command, by the name the command carries -> the key in the device's
+ * config.json and in its heartbeat-reported settings. All on unless turned off.
+ */
+export const MACHINE_SETTINGS = {
+  hooks: "hooks_enabled",
+  auto_update: "auto_update",
+  session_trailer: "session_trailer",
+} as const;
+export type MachineSetting = keyof typeof MACHINE_SETTINGS;
+/** Each machine setting's value as a device reports it (true unless off). */
+export type MachineSettingValues = { [K in (typeof MACHINE_SETTINGS)[MachineSetting]]?: boolean };
+
+/** The values a device reports, read from its config.json. */
+export function machineSettingValues(config: Record<string, unknown> | null | undefined): Required<MachineSettingValues> {
+  const out = {} as Required<MachineSettingValues>;
+  for (const key of Object.values(MACHINE_SETTINGS)) out[key] = config?.[key] !== false;
+  return out;
+}
+
+export function isMachineSetting(name: unknown): name is MachineSetting {
+  return typeof name === "string" && Object.prototype.hasOwnProperty.call(MACHINE_SETTINGS, name);
 }
 
 export const HARNESS_HOOKS: readonly HarnessHook[] = [
@@ -88,6 +116,15 @@ export const HARNESS_HOOKS: readonly HarnessHook[] = [
     name: "Stable context feed",
     purpose: "Adds a feed of your recent sessions to the start of every new session.",
     withoutIt: "New sessions start without the recent history of your other sessions.",
+  },
+  {
+    file: "codecast-session-trailer.sh",
+    events: ["PreToolUse"],
+    kind: "hook",
+    name: "Session trailer on commits",
+    purpose: "Adds a Codecast-Session line to each commit an agent makes in a session your team can see, so git log and cast blame lead back to the conversation. Private sessions commit without it. Per repository: git config codecast.sessionTrailer false or always.",
+    setting: "session_trailer",
+    withoutIt: "Commits are matched to sessions by guessing from the agent's output, which misses rebased and squashed commits.",
   },
   {
     file: "codecast-statusline.sh",

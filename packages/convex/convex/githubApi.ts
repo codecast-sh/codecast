@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { action, internalAction } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import { belongsToSearchRepository, scopedRepoSearch } from "./lib/repoSearch";
+import { extractSessionTrailer } from "@codecast/shared/blame";
 
 const GITHUB_API_BASE = "https://api.github.com";
 
@@ -1092,6 +1093,8 @@ export const getBlame = internalAction({
         end_line: range.endingLine as number,
         sha: range.commit?.oid as string,
         message: ((range.commit?.message ?? "") as string).split("\n")[0],
+        // The Codecast-Session trailer rides the full message, which the range drops.
+        session: extractSessionTrailer(range.commit?.message) ?? undefined,
         author_name: range.commit?.author?.name as string | undefined,
         author_login: range.commit?.author?.user?.login as string | undefined,
         author_avatar_url: range.commit?.author?.user?.avatarUrl as string | undefined,

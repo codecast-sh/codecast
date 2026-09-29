@@ -17,7 +17,7 @@ import {
   type ResetCreditOffer,
   type ResetCreditOutcome,
 } from "./codexResetCredit.js";
-import { CodexUsageHttpError } from "./codexBackendUsage.js";
+import { CloudApiError } from "./cloudAgents/http.js";
 
 // Nothing in this file may reach the network. Every fetch is a fake that
 // records what it was asked and answers from a fixture — a real POST here would
@@ -184,10 +184,10 @@ describe("fetchCodexResetCredits", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("throws CodexUsageHttpError when the endpoint refuses", async () => {
+  it("throws a CloudApiError when the endpoint refuses", async () => {
     const fetchImpl = (async () => jsonResponse({}, 401)) as unknown as typeof fetch;
     await expect(fetchCodexResetCredits(codexHome, { fetchImpl })).rejects.toBeInstanceOf(
-      CodexUsageHttpError,
+      CloudApiError,
     );
   });
 });
@@ -386,7 +386,7 @@ describe("redeemCodexResetCredit", () => {
         fetchImpl: crashed.fetchImpl,
         newKey: () => "key-1",
       }),
-    ).rejects.toBeInstanceOf(CodexUsageHttpError);
+    ).rejects.toBeInstanceOf(CloudApiError);
     expect(readResetCreditLedger().attempts[0]).toMatchObject({ key: "key-1", state: "pending" });
 
     // The retry re-sends the SAME redeem_request_id, so the provider dedupes and
@@ -412,7 +412,7 @@ describe("redeemCodexResetCredit", () => {
         fetchImpl: crashed.fetchImpl,
         newKey: () => "key-1",
       }),
-    ).rejects.toBeInstanceOf(CodexUsageHttpError);
+    ).rejects.toBeInstanceOf(CloudApiError);
 
     const retry = fakeBackend({ code: "already_redeemed", offer: { available_count: 0, credits: [] } });
     const result = await redeemCodexResetCredit({
