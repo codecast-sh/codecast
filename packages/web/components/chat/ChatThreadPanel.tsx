@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { memo, useCallback, useRef, useState } from "react";
-import { X } from "lucide-react";
+import { ChevronLeft, X } from "lucide-react";
 import type { ChatAttachment } from "../../store/chatSlice";
 import { ChatMessage } from "./ChatMessage";
 import { ChatMessageList } from "./ChatMessageList";
@@ -35,6 +35,11 @@ import "./chat.css";
 // bound is the transcript beside it, which keeps a readable column
 // (MIN_TRANSCRIPT_W) however far the panel is dragged, measured against the
 // shell at drag time rather than a saved number that may not fit this window.
+//
+// On a narrow surface the panel is the whole surface instead (chat.css, the
+// ch-shell 860px query): a side panel there left neither column readable. The
+// header then offers a back button to the channel in place of the close X.
+// The width rides a CSS variable so that query can override it.
 
 const MIN_W = 300;
 const MIN_TRANSCRIPT_W = 360;
@@ -130,18 +135,21 @@ export const ChatThreadPanel = memo(function ChatThreadPanel({
     <aside
       className="ch-thread"
       aria-label="Thread"
-      style={{ width, flex: `0 0 ${width}px` }}
+      style={{ "--ch-thread-w": `${width}px` } as React.CSSProperties}
     >
       <div className="ch-thread-resize" onMouseDown={onResizeDown} title="Drag to resize" />
       <div className="ch-thread-head">
-        <div>
+        <button type="button" className="ch-thread-back" title={`Back to #${channelName}`} onClick={onClose}>
+          <ChevronLeft className="w-4 h-4" />
+        </button>
+        <div className="ch-thread-heading">
           <div className="ch-thread-title">Thread</div>
           {/* The count lives on the divider under the root, where it separates
               subject from answers. Saying it twice, 150px apart, told the reader
               the same number in one glance. */}
           <div className="ch-thread-sub">#{channelName}</div>
         </div>
-        <button type="button" className="ch-tool" title="Close thread" onClick={onClose}>
+        <button type="button" className="ch-tool ch-thread-close" title="Close thread" onClick={onClose}>
           <X className="w-3.5 h-3.5" />
         </button>
       </div>
