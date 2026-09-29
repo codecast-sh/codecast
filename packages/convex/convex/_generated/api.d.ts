@@ -156,6 +156,7 @@ import type * as lib_orgCoverage from "../lib/orgCoverage.js";
 import type * as lib_orgOwnership from "../lib/orgOwnership.js";
 import type * as lib_orgRoutine from "../lib/orgRoutine.js";
 import type * as lib_orgScope from "../lib/orgScope.js";
+import type * as lib_prSessions from "../lib/prSessions.js";
 import type * as lib_projectWork from "../lib/projectWork.js";
 import type * as lib_repoSearch from "../lib/repoSearch.js";
 import type * as lib_sanitize from "../lib/sanitize.js";
@@ -433,6 +434,7 @@ declare const fullApi: ApiFromModules<{
   "lib/orgOwnership": typeof lib_orgOwnership;
   "lib/orgRoutine": typeof lib_orgRoutine;
   "lib/orgScope": typeof lib_orgScope;
+  "lib/prSessions": typeof lib_prSessions;
   "lib/projectWork": typeof lib_projectWork;
   "lib/repoSearch": typeof lib_repoSearch;
   "lib/sanitize": typeof lib_sanitize;

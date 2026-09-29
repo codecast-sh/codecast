@@ -3160,6 +3160,15 @@ export default defineSchema({
       v.literal("approved"),
       v.literal("changes_requested"),
       v.literal("commented"),
+  // linked_session_ids as an index (lib/prSessions.ts): written only by
+  // syncPullRequestSessions, read to find the pull requests a session links.
+  pull_request_sessions: defineTable({
+    pull_request_id: v.id("pull_requests"),
+    conversation_id: v.id("conversations"),
+  })
+    .index("by_pull_request", ["pull_request_id"])
+    .index("by_conversation", ["conversation_id"]),
+
       // Withdrawn on GitHub: kept in the history, counted by nothing.
       v.literal("dismissed")
     ),
