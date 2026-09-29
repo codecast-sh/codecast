@@ -669,3 +669,11 @@ trust_level = "trusted"
     expect(writes).toEqual([]);
   });
 });
+
+test("a case label, a redirection or a zsh completion builtin is not a command the host needs", () => {
+  expect(commandWords('    Darwin) echo "mac" ;;')).toEqual(["echo"]);
+  expect(commandWords("        blue)   rgb_r=30  rgb_g=80 ;;")).toEqual([]);
+  expect(commandWords("  mac|wsl) osascript -e x ;;")).toEqual(["osascript"]);
+  expect(commandWords("command -v jq >/dev/null 2>&1 && jq .")).not.toContain("null");
+  expect(commandWords("autoload -U bashcompinit && bashcompinit")).toEqual([]);
+});

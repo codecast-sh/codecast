@@ -84,6 +84,8 @@ export interface RequiredHostTools {
   unsupported: UnsupportedItem[];
   /** The laptop's MCP servers (codex config.toml, ~/.claude.json), each with its host-side command and static verdict. */
   mcp?: McpCheck[];
+  /** The tool CLIs the laptop's shell has (TOOL_CLIS), each at the laptop's version when it could be read. */
+  cli?: Record<string, string | undefined>;
 }
 
 // ---------------------------------------------------------------------------
@@ -163,17 +165,19 @@ const SHELL_WORDS: ReadonlySet<string> = new Set([
   "exit", "return", "set", "unset", "export", "local", "declare", "typeset", "readonly", "shift", "source", ".", "trap", "eval", "exec", "read",
   "cd", "pushd", "popd", "let", "wait", "break", "continue", "alias", "unalias", "getopts", "hash", "ulimit", "umask", "builtin", "exec", "[", "[[", "]]",
   "{", "}", "(", ")", "!", "then", "do", "done", "fi", "esac",
+  "autoload", "bashcompinit", "compinit", "compdef", "zmodload", "setopt", "unsetopt", "bindkey", "zstyle",
 ]);
 const WORD = /^[A-Za-z][A-Za-z0-9._+-]*$/;
 
 /** The program words a shell command line invokes (env assignments, pipes, `&&`, `;` and subshells handled). */
 export function commandWords(line: string): string[] {
   const out: string[] = [];
-  const stripped = line.replace(/#.*$/, "").replace(/"[^"]*"|'[^']*'/g, " ");
+  // A case label (`Darwin)`, `mac|wsl)`) names a value, not a command: drop it before the words are read.
+  const stripped = line.replace(/#.*$/, "").replace(/"[^"]*"|'[^']*'/g, " ").replace(/^\s*\(?[^\s()|;&]+(?:\s*\|\s*[^\s()|;&]+)*\)(?=\s|$)/, " ");
   for (const seg of stripped.split(/\|\||&&|\||;|\(|\)|\$\(|`/)) {
     const tokens = seg.trim().split(/\s+/).filter(Boolean);
     let i = 0;
-    while (i < tokens.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i]) || tokens[i] === "env" || tokens[i] === "exec" || tokens[i] === "nohup" || tokens[i] === "sudo" || tokens[i] === "time" || tokens[i] === "timeout" || /^-/.test(tokens[i]) || (tokens[i] === "then" || tokens[i] === "do" || tokens[i] === "else"))) {
+    while (i < tokens.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i]) || /^\d*[<>]/.test(tokens[i]) || tokens[i] === "env" || tokens[i] === "exec" || tokens[i] === "nohup" || tokens[i] === "sudo" || tokens[i] === "time" || tokens[i] === "timeout" || /^-/.test(tokens[i]) || (tokens[i] === "then" || tokens[i] === "do" || tokens[i] === "else"))) {
       if (tokens[i] === "timeout") { i++; while (i < tokens.length && /^(-|\d)/.test(tokens[i])) i++; continue; }
       i++;
     }
@@ -301,7 +305,71 @@ export interface RequiredHostToolsOptions {
   projects?: readonly ProjectRegistration[];
   env?: NodeJS.ProcessEnv;
   /** Injection for tests: the laptop's installed versions. */
-  versions?: { node?: string; bun?: string; gh?: string; clients?: Partial<Record<InstallableClient, string>> };
+  versions?: { node?: string; bun?: string; gh?: string; clients?: Partial<Record<InstallableClient, string>>; cli?: Record<string, string | undefined> };
+}
+
+// ---------------------------------------------------------------------------
+// Tool CLIs: the other commands a session drives, whose logins travel
+// ---------------------------------------------------------------------------
+
+/** The host's CPU as release archives spell it: `$ga` amd64/arm64, `$ua` x86_64/aarch64, `$sa` x86_64/arm64. */
+// The `(pattern)` form of case: these lines run inside `$( )`, where a bare `pattern)` closes the substitution.
+const ARCH_SH = `arch=$(uname -m); case "$arch" in (x86_64) ga=amd64; ua=x86_64; sa=x86_64;; (aarch64|arm64) ga=arm64; ua=aarch64; sa=arm64;; (*) ga=""; ua=""; sa="";; esac`;
+/** Extract a release archive into a temp dir, then install the named binary into ~/.local/bin. */
+const releaseBinary = (url: string, member: string, bin: string) =>
+  `${ARCH_SH}; tmp=$(mktemp -d); curl ${CURL_LIMITS} "${url}" | tar -xz -C "$tmp" && mkdir -p "$HOME/.local/bin" && install -m 755 "$tmp/${member}" "$HOME/.local/bin/${bin}"; rc=$?; rm -rf "$tmp"; [ $rc = 0 ]`;
+const npmGlobal = (pkg: string, ver: string | undefined) =>
+  `npm install -g --prefix "$HOME/.local" --no-fund --no-audit ${pkg}${ver ? `@${ver}` : ""} >/dev/null 2>&1`;
+
+/**
+ * The CLIs besides the agents that a session drives: when the laptop's shell
+ * has one, the host gets it too, at the laptop's version, user-locally,
+ * because its login travels in the login bundle (remote/agentAuth.ts
+ * TOOL_AUTH_SOURCES) and a login is no use without the command. npm packages
+ * go through npm, not bun, so their postinstall downloads run (the Railway
+ * CLI fetches its binary there).
+ */
+export const TOOL_CLIS: ReadonlyArray<{ bin: string; install: (version: string | undefined) => string }> = [
+  { bin: "vercel", install: (v) => npmGlobal("vercel", v) },
+  { bin: "railway", install: (v) => npmGlobal("@railway/cli", v) },
+  { bin: "cf", install: (v) => npmGlobal("cf", v) },
+  { bin: "wrangler", install: (v) => npmGlobal("wrangler", v) },
+  { bin: "netlify", install: (v) => npmGlobal("netlify-cli", v) },
+  { bin: "supabase", install: (v) => v
+    ? releaseBinary(`https://github.com/supabase/cli/releases/download/v${v}/supabase_linux_$ga.tar.gz`, "supabase", "supabase")
+    : "false" },
+  { bin: "stripe", install: (v) => v
+    ? releaseBinary(`https://github.com/stripe/stripe-cli/releases/download/v${v}/stripe_${v}_linux_$sa.tar.gz`, "stripe", "stripe")
+    : "false" },
+  { bin: "fly", install: (v) => `(curl ${CURL_LIMITS} https://fly.io/install.sh | FLYCTL_INSTALL="$HOME/.fly" sh -s${v ? ` ${v}` : ""}) >/dev/null 2>&1 && mkdir -p "$HOME/.local/bin" && ln -sf "$HOME/.fly/bin/flyctl" "$HOME/.local/bin/fly" && ln -sf "$HOME/.fly/bin/flyctl" "$HOME/.local/bin/flyctl"` },
+  { bin: "aws", install: (v) => `${ARCH_SH}; tmp=$(mktemp -d); curl ${CURL_LIMITS} -o "$tmp/aws.zip" "https://awscli.amazonaws.com/awscli-exe-linux-$ua${v ? `-${v}` : ""}.zip" && python3 -c 'import sys, zipfile, os
+z = zipfile.ZipFile(sys.argv[1])
+for i in z.infolist():
+    p = z.extract(i, sys.argv[2]); m = i.external_attr >> 16
+    if m: os.chmod(p, m)' "$tmp/aws.zip" "$tmp" && "$tmp/aws/install" -i "$HOME/.local/aws-cli" -b "$HOME/.local/bin" --update >/dev/null 2>&1; rc=$?; rm -rf "$tmp"; [ $rc = 0 ]` },
+  { bin: "gcloud", install: (v) => `${ARCH_SH}; [ "$ua" = aarch64 ] && gc=arm || gc=x86_64; tmp=$(mktemp -d); curl ${CURL_LIMITS} "https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-${v ? `${v}-` : ""}linux-$gc.tar.gz" | tar -xz -C "$tmp" && rm -rf "$HOME/.local/google-cloud-sdk" && mv "$tmp/google-cloud-sdk" "$HOME/.local/google-cloud-sdk" && mkdir -p "$HOME/.local/bin" && for b in gcloud gsutil bq; do ln -sf "$HOME/.local/google-cloud-sdk/bin/$b" "$HOME/.local/bin/$b"; done; rc=$?; rm -rf "$tmp"; [ $rc = 0 ]` },
+  { bin: "kubectl", install: (v) => `${ARCH_SH}; ver=${v ? `v${v}` : "$(curl -fsSL --max-time 30 https://dl.k8s.io/release/stable.txt)"}; mkdir -p "$HOME/.local/bin" && curl ${CURL_LIMITS} -o "$HOME/.local/bin/kubectl" "https://dl.k8s.io/release/$ver/bin/linux/$ga/kubectl" && chmod 755 "$HOME/.local/bin/kubectl"` },
+];
+
+const CLI_VERSION_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?$/;
+
+/**
+ * Which TOOL_CLIS the laptop's shell has, and at what version: read through a
+ * login shell, because the daemon's own PATH lacks what the person's rc adds
+ * (gcloud lives in ~/src/google-cloud-sdk/bin here). One shell for all of them.
+ */
+export function readLaptopCliVersions(shell = process.env.SHELL || "/bin/bash"): Record<string, string | undefined> {
+  const bins = TOOL_CLIS.map((c) => c.bin);
+  const probe = bins.map((b) => `if p=$(command -v ${b} 2>/dev/null); then v=$(${b === "kubectl" ? "kubectl version --client 2>/dev/null" : `${b} --version 2>/dev/null`} </dev/null | head -3 | tr '\n' ' '); printf '%s\t%s\n' ${b} "$v"; fi`).join("\n");
+  const r = spawnSync(shell, ["-lc", probe], { encoding: "utf-8", timeout: 60_000, env: process.env, stdio: ["ignore", "pipe", "ignore"] });
+  const out: Record<string, string | undefined> = {};
+  for (const line of (r.stdout ?? "").split("\n")) {
+    const [bin, text = ""] = line.split("\t");
+    if (!bin || !bins.includes(bin)) continue;
+    const v = /\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?/.exec(text)?.[0];
+    out[bin] = v && CLI_VERSION_RE.test(v) ? v : undefined;
+  }
+  return out;
 }
 
 function localVersion(bin: string, args = ["--version"]): string | undefined {
@@ -328,6 +396,7 @@ export function requiredHostTools(opts: RequiredHostToolsOptions): RequiredHostT
     tools,
     unsupported: scan.unsupported,
     mcp: mcpChecks(readMcpSources(opts.laptopHome, opts.env ?? process.env, opts.projects), opts.laptopHome, opts.hostHome),
+    cli: v.cli ?? (opts.versions ? {} : readLaptopCliVersions()),
   };
 }
 
@@ -873,6 +942,13 @@ ${inst(`  if err=$( (curl ${CURL_LIMITS} https://astral.sh/uv/install.sh | sh) 2
     lines.push(`if command -v ${client} >/dev/null 2>&1; then add ok ${client}
 ${inst(`  ${clientInstallSnippet(client, ver)}
   if command -v ${client} >/dev/null 2>&1; then add installed ${client}; else miss ${client} "the laptop's ${client}${safeVersion(ver) ? ` ${safeVersion(ver)}` : ""}" "install failed"; fi`)}else miss ${client} "the laptop's ${client}" "not installed"; fi`);
+  }
+  for (const [bin, version] of Object.entries(required.cli ?? {})) {
+    const cli = TOOL_CLIS.find((c) => c.bin === bin);
+    if (!cli) continue;
+    const ver = version && CLI_VERSION_RE.test(version) ? version : undefined;
+    lines.push(`if command -v ${bin} >/dev/null 2>&1; then add ok ${bin}
+${inst(`  if err=$( { ${cli.install(ver)}; } 2>&1 ) && command -v ${bin} >/dev/null 2>&1; then add installed ${bin}; else miss ${bin} "the laptop's ${bin}${ver ? ` ${ver}` : ""}" "$(printf '%s' "$err" | tail -c 160)"; fi`)}else miss ${bin} "the laptop's ${bin}" "not installed"; fi`);
   }
   for (const h of helpers) {
     const ref = (h.referenced_by ?? "").replace(/["\\\n\r]/g, "");
