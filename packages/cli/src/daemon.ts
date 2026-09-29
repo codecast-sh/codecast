@@ -2,7 +2,7 @@
 import { VersionedObservationSet } from "./versionedObservationSet.js";
 import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission.js";
 import { pendingMessageFinished, prepareTmuxDelivery, receiptSettled, TmuxDeliveryUncertainError, type TmuxDeliveryIdentity, type TmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
-import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_GLOBAL, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, CLIENT_ERROR_BANNER_PREFIX, CLOUD_SESSION_SOURCES, classifyApiErrorBanner, confineToOwningDevice, cursorCloudModel, findModelOption, fromConvexAgentType, modelOptionKey, isCodexSafetyError, isMachineDeliveredMessage, isUsageLimitDialog, isValidPaneTarget, snippetBySlug, verdictFromProbe, worktreeOfPath } from "@codecast/shared/contracts";
+import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_GLOBAL, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, CLIENT_ERROR_BANNER_PREFIX, CLOUD_SESSION_SOURCES, classifyApiErrorBanner, confineToOwningDevice, findModelOption, fromConvexAgentType, modelOptionKey, isCodexSafetyError, isMachineDeliveredMessage, isUsageLimitDialog, isValidPaneTarget, snippetBySlug, verdictFromProbe, worktreeOfPath } from "@codecast/shared/contracts";
 import { holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, setPendingRedrive } from "./pendingPromptHold.js";
 import { typedPollAnswer } from "./typedPollAnswer.js";
 import { codexTurnErrorMessage } from "./codexTurnError.js";
@@ -348,8 +348,7 @@ import {
   grokStableRulesFragment,
 } from "./resumeCommand.js";
 import { ClaudeCloudWatcher, cloudEventUuid } from "./claudeCloud.js";
-import { CursorCloudWatcher, verifyCursorKey } from "./cursorCloud.js";
-import { CursorCloudSessions, CursorCloudSetupError } from "./cursorCloudSessions.js";
+import { CloudAgentRegistry, CloudAgentSetupError, cloudAgentAdapters } from "./cloudAgents/index.js";
 import { conventionSeed, resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, isResumableCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
 import { blankCodexRecoveryParams, buildLaunchArgs, getConfiguredAgentArgs, getDefaultParamFlags, getPermissionFlags, codexPermissionsFromArgs, launchBinary } from "./launchCommand.js";
 import type { AgentClientId, AgentDefinitionSpec, CloudSessionSource, AgentPaneReadiness, AgentStatus, DeviceSnippetSettings, LivenessVerdict, OpenTaskKind, OpenTaskReport, PaneTerminalModes, StableLaunchPrefs } from "@codecast/shared/contracts";
@@ -1277,18 +1276,9 @@ function applyClaudeCloudSync(enabled: boolean): void {
 }
 let conversationCacheRef: ConversationCache | null = null;
 
-// Cursor Cloud Agents (cursorCloud.ts): the mirror watcher, started with the
-// Cursor transcript watcher, and the conversations that run on a cloud agent.
-let cursorCloudWatcher: CursorCloudWatcher | null = null;
-/** Providers that can check a key before it is stored (Settings → Provider keys). */
-const verifyProviderKey: ProviderKeyVerifier = async (provider, apiKey) => provider === "cursor" ? verifyCursorKey(apiKey) : { ok: true };
-/** When each Cursor Cloud setup card was last posted, so a held retry does not repost it. */
-const cursorSetupCardsPosted = new Map<string, number>();
-function cursorApiKey(): string | null {
-  return readProviderKeyStore(CONFIG_DIR).cursor || process.env.CURSOR_API_KEY || null;
-}
-const cursorCloudSessions = new CursorCloudSessions({
-  watcher: () => cursorCloudWatcher,
+// Cloud agent providers (cloudAgents/): each one's mirror watcher, started
+// with the transcript watchers, and the conversations that run on its agents.
+const cloudAgents = new CloudAgentRegistry(cloudAgentAdapters(CONFIG_DIR), {
   bindSession: (conversationId, agentId, projectPath, repoUrl) => {
     if (conversationCacheRef) {
       conversationCacheRef[agentId] = conversationId;
@@ -1300,6 +1290,8 @@ const cursorCloudSessions = new CursorCloudSessions({
   setStatus: (conversationId, status) => { syncServiceRef?.updateSessionAgentStatus(conversationId, status).catch(logConvexFailure); },
   log: (msg) => log(msg),
 });
+/** Providers that can check a key before it is stored (Settings → Provider keys). */
+const verifyProviderKey: ProviderKeyVerifier = (provider, apiKey) => cloudAgents.verifyKey(provider, apiKey);
 let daemonVersion: string | undefined;
 let activeConfig: Config | null = null;
 const platform = process.platform;
@@ -3449,6 +3441,46 @@ async function pushProviderKeysToRemoteHosts(reason: string, opts: { onlyIfChang
 // box awake); an exit-3 refusal (another user's logins on the box) is logged
 // once per host. Codex's own `last_refresh` field moves the hash on every
 // rotation, so a laptop re-login lands within a minute.
+let liveSyncJobsInstance: import("./cloud/liveSyncJobs.js").LiveSyncJobs | null = null;
+/** The one mirror job manager (cloud_live_sync), made on first use. */
+async function liveSyncJobs(): Promise<import("./cloud/liveSyncJobs.js").LiveSyncJobs> {
+  if (liveSyncJobsInstance) return liveSyncJobsInstance;
+  const { LiveSyncJobs } = await import("./cloud/liveSyncJobs.js");
+  liveSyncJobsInstance = new LiveSyncJobs({
+    report: async (conversationId, report) => { await syncServiceRef?.reportLocalMirror(conversationId, deviceId(), report); },
+    activity: async (ids) => (syncServiceRef ? syncServiceRef.localMirrorActivity(ids) : []),
+    hostFor: (hostDeviceId) => { const h = hostForDevice(hostDeviceId); return h?.address ? toRemoteHost(h) : null; },
+    log,
+    jobsFile: path.join(defaultConfigDir(), "live-syncs.json"),
+  });
+  return liveSyncJobsInstance;
+}
+
+let hostReportsInstance: import("./cloud/hostReports.js").HostReports | null = null;
+/** The laptop's reports on the cloud hosts it manages, and the web's actions on them (cloud_host_action). */
+async function hostReports(): Promise<import("./cloud/hostReports.js").HostReports> {
+  if (hostReportsInstance) return hostReportsInstance;
+  const { HostReports } = await import("./cloud/hostReports.js");
+  hostReportsInstance = new HostReports({
+    runCast: runCastCommand,
+    report: async (hostDeviceId, report) => { await syncServiceRef?.reportCloudHost(hostDeviceId, report); },
+    hostIdForDevice: (hostDeviceId) => hostForDevice(hostDeviceId)?.id ?? null,
+    log,
+  });
+  return hostReportsInstance;
+}
+const HOST_REPORT_INTERVAL_MS = 15 * 60_000;
+let hostReadinessReporter: import("./cloud/hostReadiness.js").HostReadinessReporter | null = null;
+async function hostReadinessNext(): Promise<import("@codecast/shared/contracts").HostReadiness | undefined> {
+  try {
+    if (!hostReadinessReporter) hostReadinessReporter = new (await import("./cloud/hostReadiness.js")).HostReadinessReporter(CONFIG_DIR, getVersion());
+    return hostReadinessReporter.next();
+  } catch (err) {
+    log(`[HOSTS] readiness read failed: ${err instanceof Error ? err.message : String(err)}`);
+    return undefined;
+  }
+}
+
 let remoteAgentAuthPushInFlight = false;
 const lastPushedAgentAuthHashByHost = new Map<string, string>();
 const agentAuthRefusalLogged = new Set<string>();
@@ -4642,6 +4674,9 @@ async function sendHeartbeat(): Promise<void> {
         // an attach command that works from PowerShell (wsl.exe -d <distro>).
         wsl_distro: wslDistroName(),
         is_remote_device: isRemoteDevice(),
+        // A cloud host's own readiness (mirror, tools, [host] setup, logins on
+        // disk) for the Machines page, sent only when it changes (cloud/hostReadiness.ts).
+        host_readiness: isRemoteDevice() ? await hostReadinessNext() : undefined,
         // Time since the last keyboard/mouse event anywhere on this machine
         // (macOS only; omitted elsewhere). Sent as a DURATION so the server can
         // anchor it to its own clock — daemon clock skew can't fake presence.
@@ -5760,13 +5795,10 @@ async function executeRemoteCommand(
           }
         }
 
-        // A Cursor Cloud choice runs on Cursor's VM, not in a pane here: record
-        // it, and the first delivered message creates the agent.
-        if (agentType === "cursor" && conversationId && requestedModelKey && cursorCloudModel(requestedModelKey) !== null) {
-          await cursorCloudSessions.start(conversationId, parsed.project_path, requestedModelKey);
-          if (typeof parsed.prompt === "string" && parsed.prompt.trim()) {
-            await cursorCloudSessions.deliver(conversationId, parsed.prompt).catch((err) => log(`cursor cloud: first prompt failed: ${err instanceof Error ? err.message : String(err)}`));
-          }
+        // A cloud agent choice (a provider's cloud model key) runs on the
+        // provider's machines, not in a pane here: record it, and the first
+        // delivered message creates the agent.
+        if (conversationId && await cloudAgents.start(agentType, conversationId, parsed.project_path, requestedModelKey, parsed.prompt)) {
           break;
         }
 
@@ -6201,12 +6233,13 @@ async function executeRemoteCommand(
           log(`[REMOTE] Escape skipped for ${conversationId.slice(0, 12)} (${where}): ${verdict.reason}${pressedAt ? ` pressed ${Date.now() - pressedAt}ms ago` : ""}${lastInjectedAt ? `, last injection ${Date.now() - lastInjectedAt}ms ago` : ""}`);
         };
 
-        // A Cursor Cloud agent: Escape cancels its active run.
-        if (cursorCloudSessions.get(conversationId)) {
+        // A cloud agent: Escape cancels its running turn.
+        const escapeCloudAgent = cloudAgents.forConversation(conversationId);
+        if (escapeCloudAgent) {
           try {
-            result = await cursorCloudSessions.interrupt(conversationId) ? "escape_sent" : "escape_no_active_turn";
+            result = await escapeCloudAgent.sessions.interrupt(conversationId) ? "escape_sent" : "escape_no_active_turn";
           } catch (err) {
-            error = `cursor cloud cancel failed: ${err instanceof Error ? err.message : String(err)}`;
+            error = `${escapeCloudAgent.adapter.spec.label} cancel failed: ${err instanceof Error ? err.message : String(err)}`;
           }
           break;
         }
@@ -7824,6 +7857,35 @@ async function executeRemoteCommand(
           // banner asks the human whether to leave it out.
           const tooLarge = res.stdout.split("\n").map((l) => { try { return JSON.parse(l)?.context_too_large; } catch { return undefined; } }).find(Boolean);
           syncServiceRef?.reportCloudPlacementFailure(conversationId, parsed.placement_token, error, tooLarge).catch(() => {});
+        }
+        break;
+      }
+      case "cloud_live_sync": {
+        // Mirror a cloud session's tree into a worktree here, live (the web's
+        // "Mirror edits to this laptop"), or stop. The jobs run in-process,
+        // poll the host only while the session works, and report to
+        // conversations.local_mirror (cloud/liveSyncJobs.ts).
+        if (isRemoteDevice()) { error = "a cloud host does not mirror sessions"; break; }
+        let mirrorArgs: any = null;
+        try {
+          mirrorArgs = typeof commandArgs === "string" ? JSON.parse(commandArgs) : commandArgs;
+          result = await (await liveSyncJobs()).handleCommand(mirrorArgs);
+        } catch (err) {
+          error = err instanceof Error ? err.message : String(err);
+          if (mirrorArgs?.conversation_id) await syncServiceRef?.reportLocalMirror(mirrorArgs.conversation_id, deviceId(), { status: "error", error: error.slice(0, 300) });
+        }
+        break;
+      }
+      case "cloud_host_action": {
+        // Wake, sleep, apply setup, save or delete an image, from the app's
+        // Machines page. Each runs as a child `cast hosts ...` (AWS calls
+        // block) and its outcome rides the host's next report (cloud/hostReports.ts).
+        if (isRemoteDevice()) { error = "a cloud host does not manage hosts"; break; }
+        try {
+          const a = typeof commandArgs === "string" ? JSON.parse(commandArgs) : commandArgs;
+          result = await (await hostReports()).act(a);
+        } catch (err) {
+          error = err instanceof Error ? err.message : String(err);
         }
         break;
       }
@@ -18847,10 +18909,8 @@ function teardownConversationBackendsLive(
   conversationId: string,
   opts: { interruptActiveTurn?: boolean } = {},
 ): Promise<{ killedAppServer: boolean; killedTmux: boolean; appServerThreadId?: string }> {
-  // A Cursor Cloud agent has no pane to kill; stopping it cancels its run.
-  if (opts.interruptActiveTurn && cursorCloudSessions.get(conversationId)) {
-    void cursorCloudSessions.interrupt(conversationId).catch((err) => log(`cursor cloud: cancel on teardown failed: ${err instanceof Error ? err.message : String(err)}`));
-  }
+  // A cloud agent has no pane to kill; stopping it cancels its running turn.
+  if (opts.interruptActiveTurn) cloudAgents.interruptInBackground(conversationId);
   const persisted = persistedAppServerThreads.get(conversationId);
   return teardownConversationBackends(conversationId, {
     appServerConversations,
@@ -24816,28 +24876,27 @@ async function deliverMessage(
     return false;
   };
 
-  // Backends that are not a pane: a codex app-server thread, a Cursor Cloud agent.
+  // Backends that are not a pane: a codex app-server thread, a cloud agent.
   const tryBackendDelivery = async (): Promise<boolean> => {
     if (await tryAppServerDelivery()) return true;
-    let delivered: boolean;
+    let delivered: Awaited<ReturnType<typeof cloudAgents.deliver>>;
     try {
-      delivered = await cursorCloudSessions.deliver(conversationId, content);
+      delivered = await cloudAgents.deliver(conversationId, content);
     } catch (err) {
       // A setup problem shows where the person is looking: as the turn-stopped
-      // card (an auth one carries the key form), once per kind.
-      const cardKey = err instanceof CursorCloudSetupError ? `cursor-cloud-setup:${conversationId}:${err.kind}` : "";
-      if (err instanceof CursorCloudSetupError && Date.now() - (cursorSetupCardsPosted.get(cardKey) ?? 0) > 60_000) {
-        cursorSetupCardsPosted.set(cardKey, Date.now());
+      // card (a credential one carries the connect control), once per kind.
+      const card = err instanceof CloudAgentSetupError ? cloudAgents.setupCard(err, conversationId) : null;
+      if (card) {
         await syncService.addMessages({
           conversationId,
-          messages: [{ messageUuid: cardKey, role: "assistant" as const, content: `${CLIENT_ERROR_BANNER_PREFIX} ${err.message}`, timestamp: Date.now() }],
+          messages: [{ messageUuid: card.key, role: "assistant" as const, content: `${CLIENT_ERROR_BANNER_PREFIX} ${card.message}`, timestamp: Date.now() }],
         }).catch(logConvexFailure);
       }
       throw err;
     }
     if (!delivered) return false;
     await syncService.updateMessageStatus({ messageId, status: "delivered", deliveredAt: Date.now() });
-    logDelivery(`[cursor-cloud] delivered msg=${messageId.slice(0, 8)} to the cloud agent of conv=${conversationId.slice(0, 12)}`);
+    logDelivery(`[${delivered.adapter.dir}] delivered msg=${messageId.slice(0, 8)} to the cloud agent of conv=${conversationId.slice(0, 12)}`);
     return true;
   };
 
@@ -27846,6 +27905,14 @@ async function main(): Promise<void> {
   // watch on each source directory filtered to the exact filenames (the
   // whole ~/.codex would fire on codex's SQLite WAL churn).
   setTimeout(() => { pushAgentAuthToRemoteHosts("daemon start").catch(() => {}); }, 64_000);
+  // What the Machines page shows about each cloud host this laptop manages.
+  if (!isRemoteDevice()) {
+    const refreshHosts = () => { if (readHosts().some((h) => h.deviceId)) hostReports().then((r) => r.refresh()).catch((err) => log(`[HOSTS] report failed: ${err instanceof Error ? err.message : String(err)}`)); };
+    setTimeout(refreshHosts, 45_000);
+    setInterval(refreshHosts, HOST_REPORT_INTERVAL_MS);
+  }
+  // Live mirrors the web started before this daemon last stopped.
+  if (!isRemoteDevice()) setTimeout(() => { liveSyncJobs().then((j) => j.resumeAll()).catch((err) => log(`[MIRROR] resume failed: ${err instanceof Error ? err.message : String(err)}`)); }, 20_000);
   setInterval(() => { pushAgentAuthToRemoteHosts("periodic").catch(() => {}); }, REMOTE_CRED_REFRESH_INTERVAL_MS);
   setInterval(() => { pushAgentAuthToRemoteHosts("login_changed", { onlyIfChanged: true }).catch(() => {}); }, REMOTE_CRED_CHANGE_TICK_MS);
   if (!isRemoteDevice()) {
@@ -29460,28 +29527,27 @@ async function main(): Promise<void> {
     cursorTranscriptWatcher.start();
   }
 
-  // Cursor Cloud Agents: mirrored into Cursor JSONL transcripts and fed
-  // through the same handler as local ones. Idle until a Cursor API key is set.
-  // The watcher always runs (sessions started from codecast need their
-  // mirror); the account's cursor_cloud_sync decides whether it also imports
-  // the account's other cloud agents, read on every poll.
-  cursorCloudWatcher = new CursorCloudWatcher({
-    readKey: cursorApiKey,
-    importAll: () => activeConfig?.cursor_cloud_sync !== false,
-    isOwnAgent: (agentId) => cursorCloudSessions.ownsAgent(agentId),
+  // Cloud agents (cloudAgents/): each provider's agents are mirrored into
+  // transcripts fed through the same handler as its local ones. Idle until
+  // the provider has credentials on this machine. A mirror always runs
+  // (sessions started from codecast need it); the account's sync setting for
+  // the provider, read on every poll, decides whether it also imports the
+  // account's other agents.
+  cloudAgents.startWatchers({
+    syncSetting: (field) => (activeConfig as Record<string, unknown> | null)?.[field] !== false,
     resolveRepoDir: resolveLocalRepoFor,
     log,
+    onSession: (agentType, event) => {
+      if (agentType === "cursor") cursorTranscriptWatcher.emit("session", event);
+    },
+    // The branch the agent pushed is the session's branch: the header's branch
+    // link and codecast's pull request linking both read git_branch.
+    onGit: (git) => {
+      const conversationId = conversationCache[git.agentId];
+      if (!conversationId || !git.branch) return;
+      void syncService.updateGitState({ conversation_id: conversationId, git_branch: git.branch, ...(git.repoUrl ? { git_remote_url: git.repoUrl } : {}) }).catch(() => {});
+    },
   });
-  cursorCloudWatcher.on("session", (event) => cursorTranscriptWatcher.emit("session", event));
-  cursorCloudWatcher.on("error", (error: Error) => log(`Cursor cloud poll failed: ${error.message}`));
-  // The branch the agent pushed is the session's branch: the header's branch
-  // link and codecast's pull request linking both read git_branch.
-  cursorCloudWatcher.on("git", (git) => {
-    const conversationId = conversationCache[git.agentId];
-    if (!conversationId || !git.branch) return;
-    void syncService.updateGitState({ conversation_id: conversationId, git_branch: git.branch, ...(git.repoUrl ? { git_remote_url: git.repoUrl } : {}) }).catch(() => {});
-  });
-  cursorCloudWatcher.start();
 
   codexAppServerInstance = new CodexAppServer({
     log,
@@ -30222,13 +30288,12 @@ async function main(): Promise<void> {
             logDelivery(`HELD: msg=${msg._id.slice(0, 8)} waiting for a human answer in conv=${msg.conversation_id.slice(0, 12)}; retrying when the prompt closes`);
             holdConversationForPrompt(msg.conversation_id);
             syncService.retryMessage(msg._id, { holdReason: err instanceof InputBlockedError ? err.holdReason : "waiting for a human answer in the terminal" }).catch(logConvexFailure);
-          } else if (err instanceof CursorCloudSetupError) {
-            // A missing or rejected key is held and rechecked every few
-            // seconds, so the message goes out as soon as a key lands; an
-            // unreachable repo backs off (each try is a Cursor API call).
-            const keyProblem = err.kind !== "repo";
-            logDelivery(`HELD: msg=${msg._id.slice(0, 8)} Cursor Cloud setup (${err.kind}): ${errMsg}`);
-            scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content, keyProblem ? "waiting for a Cursor API key on this machine" : undefined);
+          } else if (err instanceof CloudAgentSetupError) {
+            // Missing or rejected credentials are held and rechecked every few
+            // seconds, so the message goes out as soon as they land; an
+            // unreachable repo backs off (each try is a provider API call).
+            logDelivery(`HELD: msg=${msg._id.slice(0, 8)} ${err.adapter.spec.label} setup (${err.kind}): ${errMsg}`);
+            scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content, err.holdReason);
           } else if (err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(errMsg)) {
             logDelivery(`HELD: msg=${msg._id.slice(0, 8)} awaiting terminal input confirmation: ${errMsg}`);
             scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content, "waiting for terminal input confirmation");
