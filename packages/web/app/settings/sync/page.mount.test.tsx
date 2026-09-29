@@ -35,6 +35,8 @@ async function verify() {
   const state: any = {
     get teams() { return fx.teams; },
     currentUser: fx.user,
+    // The cloud agent rows read the machine roster (no machines: no connect notes).
+    machineRoster: [],
     setPrivacy: () => {},
     setTeamMembershipVisibility: () => {},
   };

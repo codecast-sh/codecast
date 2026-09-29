@@ -2400,7 +2400,7 @@ export const listAccountProfiles = query({
     const legacyCodexAccounts = (
       cu: any,
     ):
-      | { active_email?: string; profiles: Array<{ name: string; email?: string; subscription?: string; usage?: any }> }
+      | { active_email?: string; active_expires_at?: number; profiles: Array<{ name: string; email?: string; subscription?: string; usage?: any }> }
       | undefined => {
       if (!cu || typeof cu !== "object") return undefined;
       const { plan_type, ...usage } = cu;

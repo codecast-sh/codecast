@@ -36,11 +36,12 @@ mock.module("../../SessionErrorBanner", () => ({ SessionErrorBanner: () => null,
 
 const { act } = await import("react");
 const { createRoot } = await import("react-dom/client");
+const { MemoryRouter } = await import("react-router");
 const { useInboxStore } = await import("../../../store/inboxStore");
 const { QueuePageClient } = await import("../../../app/inbox/QueuePageClient");
 const root = createRoot(document.getElementById("root")!);
 const q = (selector: string) => document.querySelector(selector);
-const render = async () => { await act(async () => root.render(<QueuePageClient />)); };
+const render = async () => { await act(async () => root.render(<MemoryRouter><QueuePageClient /></MemoryRouter>)); };
 useInboxStore.setState({ sessions: {}, conversations: {}, pending: {}, clientStateInitialized: true, currentSessionId: null, showMySessions: true, currentUser: { _id: "viewer", cli_version: "test" }, clientState: { ui: { inbox_home: "feed" } } } as any);
 await render();
 assert.ok(q(`[data-placeholder="${id}"]`), "a cold deep link shows its loading target instead of the inbox home");

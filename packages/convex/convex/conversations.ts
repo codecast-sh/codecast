@@ -100,6 +100,8 @@ import {
   type ParsedTerms,
 } from "./searchCore";
 import { MIRROR_WINDOW_MS } from "./searchMirror";
+import { parseSessionQuery, type SessionQuery } from "@codecast/shared/search";
+import { narrowByOperators, type OperatorCandidate, type OperatorScope } from "./sessionQuerySearch";
 import { requireUser } from "./lib/auth";
 import { liveConversationIdSet } from "./lib/liveSessions";
 import { readLocalViewRevision, runLocalCommand } from "./localFirstCommands";
@@ -146,6 +148,73 @@ type SearchPoolMessage = {
   tool_results_count?: number;
 };
 
+type SearchPoolFilter = {
+  conversation_id?: Id<"conversations">;
+  user_id?: Id<"users">;
+  team_id?: Id<"teams">;
+};
+
+// The message index content search reads right now, as one function: the
+// recent mirror while its walker is caught up, else the deep messages index,
+// which can only be narrowed to one conversation (its sole filter field).
+async function messageSearchTier(ctx: QueryCtx): Promise<{
+  tier: "recent" | "deep";
+  search: (text: string, filter?: SearchPoolFilter, take?: number) => Promise<SearchPoolMessage[]>;
+}> {
+  // search_mirror_live changes only on liveness transitions, so this read
+  // keeps open search subscriptions stable (the walker's per-tick cursor row
+  // must never be read here — it would re-run every open search each tick).
+  const mirror = await ctx.db.query("search_mirror_live").first();
+  if (mirror?.live) {
+    return {
+      tier: "recent",
+      search: async (text, filter = {}, take = 512) => {
+        const rows = await ctx.db
+          .query("message_search_recent")
+          .withSearchIndex("search_content_r2", (q) => {
+            let base: any = q.search("content", text);
+            if (filter.conversation_id) base = base.eq("conversation_id", filter.conversation_id);
+            if (filter.user_id) base = base.eq("user_id", filter.user_id);
+            if (filter.team_id) base = base.eq("team_id", filter.team_id);
+            return base;
+          })
+          .take(take);
+        return rows.map((r) => ({
+          _id: r.message_id,
+          conversation_id: r.conversation_id,
+          role: r.role,
+          content: r.content,
+          timestamp: r.timestamp,
+          tool_calls_count: r.tool_calls_count,
+          tool_results_count: r.tool_results_count,
+        }));
+      },
+    };
+  }
+  return {
+    tier: "deep",
+    search: async (text, filter = {}, take = 512) => {
+      if (filter.user_id || filter.team_id) return [];
+      const docs = await ctx.db
+        .query("messages")
+        .withSearchIndex("search_content_v2", (q) => {
+          const base = q.search("content", text);
+          return filter.conversation_id ? base.eq("conversation_id", filter.conversation_id) : base;
+        })
+        .take(take);
+      return docs.map((m) => ({
+        _id: m._id,
+        conversation_id: m.conversation_id,
+        role: m.role,
+        content: m.content ?? "",
+        timestamp: m.timestamp,
+        tool_calls_count: m.tool_calls?.length,
+        tool_results_count: m.tool_results?.length,
+      }));
+    },
+  };
+}
+
 async function fetchMessageSearchPool(
   ctx: QueryCtx,
   terms: ParsedTerms,
@@ -162,73 +231,125 @@ async function fetchMessageSearchPool(
 ): Promise<{ pool: SearchPoolMessage[]; tier: "recent" | "deep" }> {
   if (terms.all.length === 0) return { pool: [], tier: "deep" };
   const searchQuery = terms.all.join(" ");
-  // search_mirror_live changes only on liveness transitions, so this read
-  // keeps open search subscriptions stable (the walker's per-tick cursor row
-  // must never be read here — it would re-run every open search each tick).
-  const mirror = await ctx.db.query("search_mirror_live").first();
-  if (mirror?.live) {
-    const search = (refine?: (q: any) => any) =>
-      ctx.db
-        .query("message_search_recent")
-        .withSearchIndex("search_content_r2", (q) => {
-          const base = q.search("content", searchQuery);
-          return refine ? refine(base) : base;
-        })
-        .take(512);
-    // Scoped lookups FIRST: coverage ranking downstream is a stable sort, so
-    // within a coverage tier pool order decides who survives the candidate
-    // slice — the caller's own rows must precede the (possibly flooded)
-    // global batch.
-    const lookups = [];
-    if (scope) {
-      lookups.push(search((q) => q.eq("user_id", scope.userId)));
-      // Bounded: lookup count is what blows budgets, and the global lookup
-      // already covers whatever a capped-out team list would have added.
-      for (const teamId of scope.teamIds.slice(0, 4)) {
-        lookups.push(search((q) => q.eq("team_id", teamId)));
-      }
+  const { tier, search } = await messageSearchTier(ctx);
+  // Scoped lookups FIRST: coverage ranking downstream is a stable sort, so
+  // within a coverage tier pool order decides who survives the candidate
+  // slice — the caller's own rows must precede the (possibly flooded)
+  // global batch. The deep index has no user/team filter and answers those
+  // lookups with nothing.
+  const lookups = [];
+  if (scope && tier === "recent") {
+    lookups.push(search(searchQuery, { user_id: scope.userId }));
+    // Bounded: lookup count is what blows budgets, and the global lookup
+    // already covers whatever a capped-out team list would have added.
+    for (const teamId of scope.teamIds.slice(0, 4)) {
+      lookups.push(search(searchQuery, { team_id: teamId }));
     }
-    lookups.push(search());
-    const batches = await Promise.all(lookups);
-    const seen = new Set<string>();
-    const rows: Doc<"message_search_recent">[] = [];
-    for (const batch of batches) {
-      for (const r of batch) {
-        const key = r.message_id.toString();
-        if (seen.has(key)) continue;
-        seen.add(key);
-        rows.push(r);
-      }
-    }
-    return {
-      tier: "recent",
-      pool: rows.map((r) => ({
-        _id: r.message_id,
-        conversation_id: r.conversation_id,
-        role: r.role,
-        content: r.content,
-        timestamp: r.timestamp,
-        tool_calls_count: r.tool_calls_count,
-        tool_results_count: r.tool_results_count,
-      })),
-    };
   }
-  const docs = await ctx.db
-    .query("messages")
-    .withSearchIndex("search_content_v2", (q) => q.search("content", searchQuery))
-    .take(512);
-  return {
-    tier: "deep",
-    pool: docs.map((m) => ({
-      _id: m._id,
-      conversation_id: m.conversation_id,
-      role: m.role,
-      content: m.content ?? "",
-      timestamp: m.timestamp,
-      tool_calls_count: m.tool_calls?.length,
-      tool_results_count: m.tool_results?.length,
-    })),
+  lookups.push(search(searchQuery));
+  const batches = await Promise.all(lookups);
+  const seen = new Set<string>();
+  const pool: SearchPoolMessage[] = [];
+  for (const batch of batches) {
+    for (const r of batch) {
+      const key = r._id.toString();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      pool.push(r);
+    }
+  }
+  return { tier, pool };
+}
+
+// How many operator-narrowed sessions get a text lookup of their own. The
+// shared pool above can miss a narrowed session whose matches rank low
+// globally, so every narrowed session the pool and its title have not already
+// matched in full is searched on its own, newest first, with a small take
+// each, until this many lookups; a cut is reported as truncated.
+const OPERATOR_TEXT_LOOKUPS = 150;
+const OPERATOR_TEXT_BATCH = 25;
+const OPERATOR_TEXT_TAKE = 20;
+
+type OperatorHit = OperatorCandidate & { messages: SearchPoolMessage[]; coverage: number };
+
+// Session query operators (file:, commit:, pr:, ...) narrow the conversations
+// first (sessionQuerySearch.ts); the query's free text then runs over only
+// those. Shared by searchConversations and searchForCLI, so the web page and
+// `cast search` answer an operator query with the same sessions. With no text
+// every narrowed session is a hit, newest matching change first.
+async function searchByOperators(
+  ctx: QueryCtx,
+  q: SessionQuery,
+  scope: OperatorScope,
+  opts: { userOnly: boolean; skipPool?: boolean },
+): Promise<{ hits: OperatorHit[]; terms: ParsedTerms; tier: "recent" | "deep"; truncated: string[] } | { error: string }> {
+  const narrowed = await narrowByOperators(ctx, q, scope);
+  if ("error" in narrowed) return narrowed;
+  const truncated = narrowed.truncated;
+  const terms = parseSearchTerms(q.text);
+  const tier = await messageSearchTier(ctx);
+  if (terms.all.length === 0) {
+    return { terms, tier: tier.tier, truncated, hits: narrowed.candidates.map((c) => ({ ...c, messages: [], coverage: 1 })) };
+  }
+
+  const byId = new Map(narrowed.candidates.map((c) => [c.conv._id.toString(), c]));
+  const groups = new Map<string, SearchPoolMessage[]>();
+  const add = (msgs: SearchPoolMessage[]) => {
+    for (const m of msgs) {
+      const id = m.conversation_id.toString();
+      if (!byId.has(id)) continue;
+      if (opts.userOnly && m.role !== "user") continue;
+      if (!contentMatchesAnyTerm(m.content || "", terms)) continue;
+      const list = groups.get(id) ?? [];
+      if (!list.some((x) => x._id === m._id)) list.push(m);
+      groups.set(id, list);
+    }
   };
+  if (!opts.skipPool) {
+    add((await fetchMessageSearchPool(ctx, terms, { userId: scope.viewerId, teamIds: scope.teamIds })).pool);
+  }
+  // A session's title and summaries count as text too: a pseudo-message that
+  // takes part in coverage ranking and is dropped from the returned matches.
+  const TITLE_ROW = "title" as unknown as Id<"messages">;
+  if (!opts.userOnly) {
+    for (const c of narrowed.candidates) {
+      const fields = [c.conv.title, c.conv.subtitle, c.conv.idle_summary].filter(Boolean).join(" ");
+      if (!fields || !contentMatchesAnyTerm(fields, terms)) continue;
+      const id = c.conv._id.toString();
+      groups.set(id, [...(groups.get(id) ?? []), {
+        _id: TITLE_ROW, conversation_id: c.conv._id, role: "user", content: fields, timestamp: c.matchedAt,
+      }]);
+    }
+  }
+
+  const searchQuery = terms.all.join(" ");
+  const unmatched = narrowed.candidates.filter((c) => {
+    const found = groups.get(c.conv._id.toString());
+    return !found || !conversationMatchesAllTerms(found, terms);
+  });
+  const lookups = unmatched.slice(0, OPERATOR_TEXT_LOOKUPS);
+  for (let i = 0; i < lookups.length; i += OPERATOR_TEXT_BATCH) {
+    const batch = lookups.slice(i, i + OPERATOR_TEXT_BATCH);
+    (await Promise.all(batch.map((c) => tier.search(searchQuery, { conversation_id: c.conv._id }, OPERATOR_TEXT_TAKE)))).forEach(add);
+  }
+  if (unmatched.length > lookups.length) {
+    truncated.push(`searched the text in the newest ${lookups.length} of ${unmatched.length} narrowed sessions; narrow further to reach the rest`);
+  }
+
+  const hits: OperatorHit[] = rankConversationsByCoverage(groups, terms).map((r) => ({
+    ...byId.get(r.convId)!,
+    coverage: r.coverage,
+    messages: r.messages.filter((m) => m._id !== TITLE_ROW),
+  }));
+  hits.sort((a, b) => b.coverage - a.coverage || b.matchedAt - a.matchedAt);
+  return { hits, terms, tier: tier.tier, truncated };
+}
+
+/** A search scope's people as a list with the viewer first, the order the
+ *  operator walks (checkout roots, remotes) spend their budgets in. */
+function usersViewerFirst(userById: Map<string, Doc<"users">>, viewerId: Id<"users">): Doc<"users">[] {
+  const viewer = userById.get(viewerId.toString());
+  return [...(viewer ? [viewer] : []), ...[...userById.values()].filter((u) => u._id !== viewerId)];
 }
 
 // Days of message history the recent tier covers — returned to clients so UI
@@ -604,6 +725,8 @@ async function mapForkDetails(ctx: { db: any }, forks: any[]) {
         username: forkUser?.name || forkUser?.email?.split("@")[0] || "Unknown",
         parent_message_uuid: fork.parent_message_uuid,
         agent_type: fork.agent_type,
+        // A cloud agent's branch is named by it (another attempt of a Codex Cloud task).
+        session_id: fork.session_id,
         message_count: fork.message_count,
         first_divergent_preview,
         // Free fields straight off the conversation row — no extra reads. The
@@ -921,7 +1044,7 @@ type MessageLike = {
   tool_results?: unknown[] | null;
 };
 
-function isNonEmptyMessage(m: MessageLike): boolean {
+export function isNonEmptyMessage(m: MessageLike): boolean {
   const hasContent = m.content && m.content.trim();
   const hasToolCalls = m.tool_calls && m.tool_calls.length > 0;
   const hasToolResults = m.tool_results && m.tool_results.length > 0;
@@ -950,6 +1073,30 @@ export const resolveTeamFromDirectory = query({
   },
 });
 
+/**
+ * The fork fields of a conversation the daemon creates as a fork of another
+ * whose shared history its own transcript carries (a cloud agent's branch).
+ * A branch the person never opened is no card of its own: its origin's card
+ * stands for the task and its fork chips lead to it. It files where its origin
+ * is filed (a task already dismissed or snoozed does not come back), else it
+ * is born stashed; a message sent to it brings it back like any stash.
+ */
+export function daemonForkFields(
+  origin: Pick<Doc<"conversations">, "_id" | "inbox_dismissed_at" | "inbox_stashed_at" | "inbox_stash_hidden" | "inbox_snoozed_until">,
+  fork: { at_uuid: string; copied: number; cutoff?: number },
+  now: number,
+) {
+  const triage = (["inbox_dismissed_at", "inbox_stashed_at", "inbox_stash_hidden", "inbox_snoozed_until"] as const)
+    .filter((k) => origin[k] !== undefined && origin[k] !== null);
+  return {
+    forked_from: origin._id,
+    fork_copied: fork.copied,
+    ...(fork.cutoff !== undefined ? { fork_cutoff_timestamp: fork.cutoff } : {}),
+    ...(origin.inbox_stashed_at ? {} : { inbox_stashed_at: now }),
+    ...Object.fromEntries(triage.map((k) => [k, origin[k]])),
+  };
+}
+
 export const createConversation = mutation({
   args: {
     user_id: v.id("users"),
@@ -969,6 +1116,9 @@ export const createConversation = mutation({
     project_path: v.optional(v.string()),
     slug: v.optional(v.string()),
     title: v.optional(v.string()),
+    // The title is the agent's own name for the session (a cloud agent's task
+    // title), not a guess from its first message: the auto-titlers keep it.
+    title_is_custom: v.optional(v.boolean()),
     started_at: v.optional(v.number()),
     parent_message_uuid: v.optional(v.string()),
     parent_conversation_id: v.optional(v.string()),
@@ -1009,6 +1159,18 @@ export const createConversation = mutation({
     // delivery. Optional for older CLIs; claim-time stamping remains the
     // fallback for conversations created without it.
     owner_device_id: v.optional(v.string()),
+    // A fork whose shared history the daemon syncs itself, from the
+    // transcript it creates the row for (a cloud agent's branch: a Codex
+    // Cloud task's other attempt). `from` is the conversation it forks,
+    // `at_uuid` the message it forks at (the branch chips sit there),
+    // `copied` how many of its messages are that shared history and `cutoff`
+    // the fork point's time, so the chips count and label its own part.
+    fork: v.optional(v.object({
+      from: v.id("conversations"),
+      at_uuid: v.string(),
+      copied: v.number(),
+      cutoff: v.optional(v.number()),
+    })),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -1021,6 +1183,10 @@ export const createConversation = mutation({
     }
 
     await checkRateLimit(ctx, args.user_id, "createConversation");
+    const forkOrigin = args.fork ? await ctx.db.get(args.fork.from) : null;
+    if (args.fork && forkOrigin?.user_id !== args.user_id) {
+      throw new Error("Unauthorized: can only fork your own conversations");
+    }
 
     const existing = await ctx.db
       .query("conversations")
@@ -1098,6 +1264,7 @@ export const createConversation = mutation({
       session_id: args.session_id,
       slug: args.slug,
       title: args.title,
+      ...(args.title && args.title_is_custom ? { title_is_custom: true } : {}),
       project_hash: args.project_hash,
       project_path: args.project_path,
       owner_device_id: args.owner_device_id,
@@ -1107,8 +1274,9 @@ export const createConversation = mutation({
       is_private: isPrivate,
       auto_shared: autoShared || undefined,
       status: "active",
-      parent_message_uuid: args.parent_message_uuid,
+      parent_message_uuid: args.parent_message_uuid ?? args.fork?.at_uuid,
       parent_conversation_id: parentConversationId,
+      ...(args.fork && forkOrigin ? daemonForkFields(forkOrigin, args.fork, now) : {}),
       is_subagent: (args.is_subagent === true && !args.parent_message_uuid) ||
         (!!parentConversationId && !args.parent_message_uuid) || undefined,
       agent_team_name: args.agent_team_name,
@@ -1128,6 +1296,7 @@ export const createConversation = mutation({
     await ctx.db.patch(conversationId, {
       short_id: conversationId.toString().slice(0, 7),
     });
+    if (forkOrigin) await recordFork(ctx, args.user_id, forkOrigin, conversationId);
     // Funnel: the user's first synced session ever. Stamped on the users doc so
     // this stays an O(1) check instead of a conversations scan per create.
     const creator = await ctx.db.get(args.user_id);
@@ -1190,7 +1359,8 @@ export const createConversation = mutation({
     if (resolvedTeamId && !existing) {
       const bornSubagent =
         args.is_subagent === true || (!!parentConversationId && !args.parent_message_uuid);
-      if (!bornSubagent) {
+      // A fork is another line of a session already announced, never a new start.
+      if (!bornSubagent && !args.fork) {
         // Grace delay: subagent/spawned-by links are often stamped seconds
         // after registration (linkSessions/linkSpawnedBy). notifyTeamSessionStart
         // re-reads the conversation at fire time, so the delay lets a late
@@ -2118,6 +2288,16 @@ export const getConversationWithMeta = query({
     return sanitizeConvexObjectKeys({
       ...conversationLight,
       stable_context: (conversationLight as any).stable_context ?? sideStableContext ?? undefined,
+      // Explicit null, never an absent key: the client merges rows, so a link
+      // turned off on another device would otherwise stay "on" in an open tab.
+      share_token: (conversationLight as any).share_token ?? null,
+      // The same for the header's git line: a field can be unset (a cloud
+      // agent's branch its provider no longer names, a local stamp cleared).
+      git_branch: (conversationLight as any).git_branch ?? null,
+      git_commit_hash: (conversationLight as any).git_commit_hash ?? null,
+      git_ahead: (conversationLight as any).git_ahead ?? null,
+      git_behind: (conversationLight as any).git_behind ?? null,
+      git_dirty: (conversationLight as any).git_dirty ?? null,
       is_own: !!isOwner,
       title,
       effective_team_visibility,
@@ -2591,7 +2771,7 @@ export const listConversations = query({
             worktree_branch: c.worktree_branch || null,
             cloud_placement: c.cloud_placement || null,
             cloud_workspace: c.cloud_workspace || null,
-            cloud_seed: c.cloud_seed ?? null,
+            cloud_seed: c.cloud_seed ?? null, local_mirror: c.local_mirror ?? null,
             migration_batch_id: c.migration?.batch_id || null,
           };
         }
@@ -2624,7 +2804,7 @@ export const listConversations = query({
             worktree_branch: c.worktree_branch || null,
             cloud_placement: c.cloud_placement || null,
             cloud_workspace: c.cloud_workspace || null,
-            cloud_seed: c.cloud_seed ?? null,
+            cloud_seed: c.cloud_seed ?? null, local_mirror: c.local_mirror ?? null,
             migration_batch_id: c.migration?.batch_id || null,
           };
         }
@@ -2691,7 +2871,7 @@ export const listConversations = query({
             worktree_branch: c.worktree_branch || null,
             cloud_placement: c.cloud_placement || null,
             cloud_workspace: c.cloud_workspace || null,
-            cloud_seed: c.cloud_seed ?? null,
+            cloud_seed: c.cloud_seed ?? null, local_mirror: c.local_mirror ?? null,
             migration_batch_id: c.migration?.batch_id || null,
           };
         }
@@ -2854,7 +3034,7 @@ export const listConversations = query({
           worktree_branch: c.worktree_branch || null,
           cloud_placement: c.cloud_placement || null,
           cloud_workspace: c.cloud_workspace || null,
-          cloud_seed: c.cloud_seed ?? null,
+          cloud_seed: c.cloud_seed ?? null, local_mirror: c.local_mirror ?? null,
           migration_batch_id: c.migration?.batch_id || null,
         };
       })
@@ -2913,6 +3093,36 @@ export const generateShareLink = mutation({
     return shareToken;
   },
 });
+
+// "Anyone with the link" for one conversation, owner only: a token turns it on,
+// null turns it off. The web mints the token (a v4 UUID, as generateShareToken
+// does) so its draft and the stored value are the same string, and the store
+// write lands at once (dispatch setShareLink). Clearing the token kills every
+// copy of the link, guests and past signed-in redeemers alike (a redemption
+// counts only while its token matches), and turning it back on takes a new
+// token, so an old link never comes back to life. A profile pin is served by
+// that same token, so turning the link off also takes it off the profile.
+const SHARE_TOKEN_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+export async function writeShareLink(ctx: Pick<MutationCtx, "db">, userId: Id<"users">, conversationId: string, token: string | null) {
+  const id = ctx.db.normalizeId("conversations", conversationId);
+  const conversation = id ? await ctx.db.get(id) : null;
+  if (!conversation) throw new Error("Conversation not found");
+  if (conversation.user_id.toString() !== userId.toString())
+    throw new Error("Unauthorized: can only change sharing on your own conversations");
+  if (token === null) {
+    if (conversation.share_token || conversation.profile_pinned_at)
+      await ctx.db.patch(conversation._id, { share_token: undefined, profile_pinned_at: undefined });
+    return;
+  }
+  if (!SHARE_TOKEN_SHAPE.test(token)) throw new Error("Invalid share token");
+  if (conversation.share_token === token) return;
+  const taken = await ctx.db
+    .query("conversations")
+    .withIndex("by_share_token", (q) => q.eq("share_token", token))
+    .first();
+  if (taken) throw new Error("Invalid share token");
+  await ctx.db.patch(conversation._id, { share_token: token });
+}
 
 // Pin a session to the owner's PUBLIC profile. This is the consent act that
 // makes a session world-visible, so it also guarantees a share_token — the
@@ -3243,11 +3453,30 @@ export const searchConversations = query({
 
     const limit = args.limit ?? 20;
     const userOnly = args.userOnly ?? false;
-    const terms = parseSearchTerms(searchTerm);
-    const { pool: searchResults, tier: contentTier } = await fetchMessageSearchPool(ctx, terms, {
-      userId,
-      teamIds: scope.effectiveTeamIds,
-    });
+    const parsed = parseSessionQuery(searchTerm);
+    if (parsed.errors.length > 0) {
+      return { results: [], totalMatches: 0, totalSessions: 0, error: parsed.errors.join("\n") };
+    }
+    // Operators narrow first; the range picker is the same window as after:.
+    const operatorRun = parsed.hasFilters
+      ? await searchByOperators(
+          ctx,
+          { ...parsed, after: Math.max(parsed.after ?? 0, args.since ?? 0) || undefined },
+          { viewerId: userId, users: usersViewerFirst(scope.userById, userId), isVisible: scope.isVisible, teamIds: scope.effectiveTeamIds },
+          { userOnly },
+        )
+      : null;
+    if (operatorRun && "error" in operatorRun) {
+      return { results: [], totalMatches: 0, totalSessions: 0, error: operatorRun.error };
+    }
+    const terms = operatorRun ? operatorRun.terms : parseSearchTerms(searchTerm);
+    const { pool: searchResults, tier: contentTier } = operatorRun
+      ? { pool: [] as SearchPoolMessage[], tier: operatorRun.tier }
+      : await fetchMessageSearchPool(ctx, terms, {
+          userId,
+          teamIds: scope.effectiveTeamIds,
+        });
+    const matchedAt = new Map(operatorRun?.hits.map((h) => [h.conv._id.toString(), h.matchedAt]));
 
     // Group messages by conversation (keep messages matching ANY term for context)
     const conversationMessages = new Map<string, typeof searchResults>();
@@ -3274,7 +3503,7 @@ export const searchConversations = query({
     }
 
     const titleConvs = new Map<string, Doc<"conversations">>();
-    if (!userOnly) {
+    if (!userOnly && !operatorRun) {
       for (const [convId, conv] of await fetchTitleFieldHits(ctx, terms)) {
         if (conversationMatches.has(convId)) continue;
         titleConvs.set(convId, conv);
@@ -3319,6 +3548,9 @@ export const searchConversations = query({
     for (const conv of titleConvs.values()) {
       candidates.push({ conv, messages: [] });
     }
+    for (const hit of operatorRun?.hits ?? []) {
+      candidates.push({ conv: hit.conv, messages: hit.messages });
+    }
 
     // Visibility filter is synchronous (no DB) — drop non-visible candidates first.
     const visible = candidates.filter(({ conv }) => scope.isVisible(conv));
@@ -3340,7 +3572,9 @@ export const searchConversations = query({
         b.messages.length - a.messages.length ||
         b.conv.updated_at - a.conv.updated_at);
     } else {
-      scored.sort((a, b) => b.conv.updated_at - a.conv.updated_at);
+      // An operator match is as recent as the change that matched it.
+      const at = (c: (typeof scored)[number]) => matchedAt.get(c.conv._id.toString()) ?? c.conv.updated_at;
+      scored.sort((a, b) => at(b) - at(a));
     }
     const totalMatches = scored.reduce((sum, c) => sum + c.messages.length, 0);
     const totalSessions = scored.length;
@@ -3390,7 +3624,7 @@ export const searchConversations = query({
         isOwn,
         messageCount: conv.message_count || 0,
         proximityScore,
-        titleMatch: messages.length === 0,
+        titleMatch: messages.length === 0 && terms.all.length > 0,
         projectPath: conv.project_path || null,
         agentType: conv.agent_type || null,
         identity: await identityFieldsOf(conv, (id: any) => ctx.db.get(id)),
@@ -3406,6 +3640,9 @@ export const searchConversations = query({
       // beyond the window stays truthful (see searchMirror.ts).
       contentTier,
       contentWindowDays: CONTENT_WINDOW_DAYS,
+      // Operator walks that stopped at a budget: the rows are the newest part
+      // of the answer, and each line says how to reach the rest.
+      truncated: operatorRun?.truncated ?? [],
     };
   },
 });
@@ -3436,6 +3673,9 @@ export const searchConversationTitles = query({
 
     const searchTerm = args.query.trim();
     if (!searchTerm || searchTerm.length < 2) return empty;
+    // Title hits cannot honor file:/pr:/... operators; searchConversations
+    // answers an operator query on its own.
+    if (parseSessionQuery(searchTerm).hasFilters) return empty;
 
     const terms = parseSearchTerms(searchTerm);
     if (terms.all.length === 0) return empty;
@@ -3979,6 +4219,10 @@ export const getSessionLinks = mutation({
       title: conversation.title,
       slug: conversation.slug,
       started_at: conversation.started_at,
+      // Can the session's team read it? The session trailer hook adds a
+      // Codecast-Session link to commits only when it can (sessionTrailer.ts),
+      // by the same rule commit ingest uses to trust that link.
+      team_visible: await isConversationTeamVisible(ctx, conversation),
     };
   },
 });
@@ -4090,11 +4334,15 @@ export const searchForCLI = query({
     const contextAfter = args.context_after ?? 0;
     const projectPath = args.project_path;
     const userOnly = args.user_only ?? false;
-    const terms = parseSearchTerms(searchTerm);
+    const parsed = parseSessionQuery(searchTerm);
+    if (parsed.errors.length > 0) {
+      return { error: parsed.errors.join("\n") };
+    }
+    let terms = parseSearchTerms(searchTerm);
 
-    // Shared by the message-match path and the titles_only path: every filter
-    // that decides whether a conversation is in scope for this caller.
-    const isEligibleConv = (conv: any): boolean => {
+    // Who this caller may search at all: their own sessions, and teammates'
+    // sessions the team feed shows them.
+    const isVisibleConv = (conv: any): boolean => {
       const isOwn = conv.user_id.toString() === authUserId.toString();
       if (!isOwn) {
         if (!conv.team_id || !effectiveTeamIdSet.has(conv.team_id.toString())) return false;
@@ -4106,6 +4354,13 @@ export const searchForCLI = query({
         const convTeamId = (conv.team_id ?? conv.active_team_id)?.toString();
         if (!convTeamId || !effectiveTeamIdSet.has(convTeamId)) return false;
       }
+      return true;
+    };
+
+    // Shared by the message-match path and the titles_only path: every filter
+    // that decides whether a conversation is in scope for this caller.
+    const isEligibleConv = (conv: any): boolean => {
+      if (!isVisibleConv(conv)) return false;
 
       // Filter by specific member (or self via --mine)
       if (filterUserId && conv.user_id.toString() !== filterUserId) return false;
@@ -4136,7 +4391,43 @@ export const searchForCLI = query({
     // index, which blows the read budget on common tokens (see the
     // fetchMessageSearchPool NOTE). The CLI retries with this after a content
     // search dies, so agents get title/summary hits instead of a hard error.
-    if (args.titles_only) {
+    // Operators in the query (file:, commit:, pr:, ...) take the operator
+    // path, and the flags become the operators they are sugar for: --label is
+    // label:, -s/-e are after:/before:, --mine and -m are author:.
+    let operatorHits: OperatorHit[] | null = null;
+    let operatorTruncated: string[] = [];
+    if (parsed.hasFilters) {
+      const operatorQuery: SessionQuery = {
+        ...parsed,
+        labels: [...parsed.labels, ...(args.label ? [args.label] : [])],
+        authors: [...parsed.authors, ...(args.mine_only ? ["me"] : args.member_name ? [args.member_name] : [])],
+        after: args.start_time !== undefined ? Math.max(parsed.after ?? 0, args.start_time) : parsed.after,
+        before: args.end_time !== undefined ? Math.min(parsed.before ?? Infinity, args.end_time) : parsed.before,
+      };
+      const operatorRun = await searchByOperators(
+        ctx,
+        operatorQuery,
+        {
+          viewerId: authUserId,
+          users: [user, ...teamUsers.filter((u) => u._id !== authUserId)],
+          // Labels stay bounded to this project, as they are for --label.
+          isVisible: (conv) =>
+            isVisibleConv(conv) &&
+            (operatorQuery.labels.length === 0 || !projectPath ||
+              projectOverlaps(projectPath, conv.project_path) || projectOverlaps(projectPath, conv.git_root)),
+          teamIds: effectiveTeamIds,
+        },
+        // A titles_only retry means the shared message pool blew the budget;
+        // the per-session lookups still run.
+        { userOnly, skipPool: args.titles_only },
+      );
+      if ("error" in operatorRun) return { error: operatorRun.error };
+      terms = operatorRun.terms;
+      operatorHits = operatorRun.hits;
+      operatorTruncated = operatorRun.truncated;
+    }
+
+    if (args.titles_only && !operatorHits) {
       const hits = await fetchTitleFieldHits(ctx, terms);
       const visibleConvs = [...hits.values()]
         .filter(isEligibleConv)
@@ -4179,10 +4470,12 @@ export const searchForCLI = query({
       };
     }
 
-    const { pool: searchResults } = await fetchMessageSearchPool(ctx, terms, {
-      userId: authUserId,
-      teamIds: effectiveTeamIds,
-    });
+    const { pool: searchResults } = operatorHits
+      ? { pool: [] as SearchPoolMessage[] }
+      : await fetchMessageSearchPool(ctx, terms, {
+          userId: authUserId,
+          teamIds: effectiveTeamIds,
+        });
 
     // Group messages by conversation (keep messages matching ANY term for context)
     const conversationMessages = new Map<string, typeof searchResults>();
@@ -4263,6 +4556,8 @@ export const searchForCLI = query({
     });
     // Stable: coverage order from rankConversationsByCoverage, then recency rank.
     eligible.sort((a, b) => b.coverage - a.coverage || convRank(a.conv) - convRank(b.conv));
+    // Operator hits arrive ranked: coverage, then the newest matching change.
+    if (operatorHits) eligible.push(...operatorHits);
 
     const page = eligible.slice(offset, offset + limit);
 
@@ -4391,7 +4686,7 @@ export const searchForCLI = query({
     // Sort by term coverage (full matches first), then recency rank (live and
     // recent above long-quiet above killed), then proximity (lower = better),
     // then recency.
-    results.sort((a, b) => {
+    if (!operatorHits) results.sort((a, b) => {
       if (a.coverage !== b.coverage) {
         return b.coverage - a.coverage;
       }
@@ -4409,7 +4704,7 @@ export const searchForCLI = query({
     // the conversations table and reach all time. Title hits rank below every
     // content hit and only fill seats the content page left open.
     let windowTitleRows: typeof results = [];
-    const hasTimeWindow = args.start_time !== undefined || args.end_time !== undefined;
+    const hasTimeWindow = !operatorHits && (args.start_time !== undefined || args.end_time !== undefined);
     if (hasTimeWindow) {
       const titleHits = await fetchTitleFieldHits(ctx, terms);
       const contentIds = new Set(eligible.map(({ conv }) => conv._id.toString()));
@@ -4462,6 +4757,7 @@ export const searchForCLI = query({
       // Tells the CLI to explain that content matches can't reach the
       // requested window, so title hits are the reliable signal there.
       ...(windowPredatesContent ? { content_window_days: CONTENT_WINDOW_DAYS } : {}),
+      ...(operatorTruncated.length ? { truncated: operatorTruncated } : {}),
     };
   },
 });
@@ -4562,7 +4858,7 @@ type ReadRangeArgs = {
   tail?: number;
 };
 
-type ScanCursor = { creation_time: number; skip: number };
+export type ScanCursor = { creation_time: number; skip: number };
 
 type ReadSteps = {
   scan: (args: {
@@ -4696,7 +4992,7 @@ async function foldChangesPayload(ctx: QueryCtx, conversationId: Id<"conversatio
 }
 
 /** The conversation an API token names and may read, or the reason it may not. */
-async function readableConversation(ctx: QueryCtx, apiToken: string, ref: string) {
+export async function readableConversation(ctx: QueryCtx, apiToken: string, ref: string) {
   const authUserId = await getAuthenticatedUserIdReadOnly(ctx, apiToken);
   if (!authUserId) return { error: "Unauthorized" as const };
   const user = await ctx.db.get(authUserId);
@@ -4714,7 +5010,7 @@ async function readableConversation(ctx: QueryCtx, apiToken: string, ref: string
  * `visit` returns true. Returns where the next step resumes, or undefined once
  * the last row is read.
  */
-async function streamMessageRows(
+export async function streamMessageRows(
   ctx: QueryCtx,
   conversationId: Id<"conversations">,
   after: ScanCursor | undefined,
@@ -4923,11 +5219,37 @@ export const exportConversationMessagesPage = query({
   },
 });
 
+/** The daemon's word on whether a cloud agent session's agent is archived on the provider's site. */
+export const setCloudAgentArchived = mutation({
+  args: {
+    conversation_id: v.id("conversations"),
+    archived: v.boolean(),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) throw new Error("Conversation not found");
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) throw new Error("Authentication failed: invalid token or session");
+    if (!(await canOwnerOrTeamAccess(ctx, authUserId, conversation))) {
+      throw new Error("Unauthorized: can only update your own conversations");
+    }
+    if ((conversation.cloud_agent_archived ?? false) === args.archived) return;
+    await ctx.db.patch(args.conversation_id, { cloud_agent_archived: args.archived || undefined });
+  },
+});
+
 export const updateTitle = mutation({
   args: {
     conversation_id: v.id("conversations"),
     title: v.string(),
     api_token: v.optional(v.string()),
+    // A provider's own name for the session (a cloud agent's task title):
+    // stored as custom so the auto-titlers leave it, and allowed to replace a
+    // custom title only while that title is one of the provider's earlier
+    // names (`replaces`), never one a person gave it.
+    title_is_custom: v.optional(v.boolean()),
+    replaces: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
     const conversation = await ctx.db.get(args.conversation_id);
@@ -4946,13 +5268,19 @@ export const updateTitle = mutation({
       throw new Error("Unauthorized: can only update your own conversations");
     }
 
-    if (!conversation.title_is_custom) {
+    const replaceable = !conversation.title_is_custom || (!!conversation.title && !!args.replaces?.includes(conversation.title));
+    const changed = replaceable && (conversation.title !== args.title || (!!args.title_is_custom && !conversation.title_is_custom));
+    if (changed) {
       await ctx.db.patch(args.conversation_id, {
         title: args.title,
+        ...(args.title_is_custom ? { title_is_custom: true } : {}),
       });
     }
 
-    if (args.api_token) {
+    // A daemon re-announces every cloud agent's title after a restart, all at
+    // once: a no-op among them must not write the account row, or they
+    // contend on it and fail (OCC on users, 2026-09-30).
+    if (args.api_token && (changed || args.replaces === undefined)) {
       await ctx.db.patch(conversation.user_id, {
         daemon_last_seen: Date.now(),
       });
@@ -5384,6 +5712,23 @@ async function inheritLabelAssignment(
   await assignConversationToBucketForUser(ctx, userId, newConvId, sourceAssignment.bucket_id);
 }
 
+/**
+ * What every fork does to its origin, whichever path made it (a shared link,
+ * a message, the daemon's branch of a cloud agent): counts it, unless it is a
+ * continuation rather than a fork (an agent switch), and files it under the
+ * forker's label on the origin.
+ */
+async function recordFork(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  origin: Pick<Doc<"conversations">, "_id" | "fork_count">,
+  forkId: Id<"conversations">,
+  opts: { counted?: boolean } = {},
+) {
+  if (opts.counted !== false) await ctx.db.patch(origin._id, { fork_count: (origin.fork_count ?? 0) + 1 });
+  await inheritLabelAssignment(ctx, userId, origin._id, forkId);
+}
+
 export const forkConversation = mutation({
   args: {
     share_token: v.string(),
@@ -5454,12 +5799,7 @@ export const forkConversation = mutation({
       short_id: newConversationId.toString().slice(0, 7),
     });
 
-    const currentForkCount = original.fork_count ?? 0;
-    await ctx.db.patch(original._id, {
-      fork_count: currentForkCount + 1,
-    });
-
-    await inheritLabelAssignment(ctx, authUserId, original._id, newConversationId);
+    await recordFork(ctx, authUserId, original, newConversationId);
 
     // Copy the first batch synchronously so small forks finish in one RTT.
     // If more remains, advanceForkCopy schedules _continueFork to chain
@@ -5844,10 +6184,10 @@ export const forkFromMessage = mutation({
       });
     }
 
-    // Agent-switch continuations inherit too — they're the same thread of
-    // work under a different agent, exactly like the visibility inheritance
-    // above.
-    await inheritLabelAssignment(ctx, userId, original._id, newConversationId);
+    // Agent-switch continuations inherit the label too (they're the same
+    // thread of work under a different agent, exactly like the visibility
+    // inheritance above) but are not counted as forks.
+    await recordFork(ctx, userId, original, newConversationId, { counted: !isAgentSwitch });
 
     // Carry the original's git side row (diff + status) over to the fork's.
     const originalGitDiff = await getConvGitDiff(ctx, original._id);
@@ -5858,13 +6198,6 @@ export const forkFromMessage = mutation({
       originalGitDiff.git_diff_staged ?? undefined,
       originalGitDiff.git_status ?? original.git_status ?? undefined,
     );
-
-    if (!isAgentSwitch) {
-      const currentForkCount = original.fork_count ?? 0;
-      await ctx.db.patch(original._id, {
-        fork_count: currentForkCount + 1,
-      });
-    }
 
     // Copy first batch synchronously so small forks finish in one round-trip;
     // larger ones chain via _continueFork.
@@ -8500,7 +8833,7 @@ async function enrichInboxSessionRow(
     worktree_branch: conv.worktree_branch,
     cloud_placement: (conv as any).cloud_placement ?? null,
     cloud_workspace: (conv as any).cloud_workspace ?? null,
-    cloud_seed: (conv as any).cloud_seed ?? null,
+    cloud_seed: (conv as any).cloud_seed ?? null, local_mirror: (conv as any).local_mirror ?? null,
     cloud_context_too_large: (conv as any).cloud_context_too_large ?? null,
     migration_batch_id: (conv as any).migration?.batch_id ?? null,
     workflow_run_id: conv.workflow_run_id || null,
@@ -8663,7 +8996,7 @@ async function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: nu
     owner_device_id: child.owner_device_id ?? null,
     cloud_placement: child.cloud_placement ?? null,
     cloud_workspace: child.cloud_workspace ?? null,
-    cloud_seed: child.cloud_seed ?? null,
+    cloud_seed: child.cloud_seed ?? null, local_mirror: child.local_mirror ?? null,
     cloud_context_too_large: child.cloud_context_too_large ?? null,
     migration_batch_id: child.migration?.batch_id ?? null,
     worktree_name: child.worktree_name,
@@ -10769,6 +11102,15 @@ export const updateGitState = mutation({
     git_ahead: v.optional(v.number()),
     git_behind: v.optional(v.number()),
     git_dirty: v.optional(v.boolean()),
+    // Fields to unset: a cloud agent's session drops the branch its provider
+    // no longer names and anything a local checkout stamped on it.
+    clear: v.optional(v.array(v.union(
+      v.literal("git_commit_hash"),
+      v.literal("git_branch"),
+      v.literal("git_ahead"),
+      v.literal("git_behind"),
+      v.literal("git_dirty"),
+    ))),
   },
   handler: async (ctx, args): Promise<{ updated: boolean }> => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -10781,6 +11123,9 @@ export const updateGitState = mutation({
     for (const key of ["git_commit_hash", "git_branch", "git_remote_url", "git_ahead", "git_behind", "git_dirty"] as const) {
       const value = args[key];
       if (value !== undefined && (conv as any)[key] !== value) next[key] = value;
+    }
+    for (const key of args.clear ?? []) {
+      if (args[key] === undefined && (conv as any)[key] !== undefined) next[key] = undefined;
     }
     if (Object.keys(next).length === 0) return { updated: false };
     await ctx.db.patch(convId, { ...next, git_state_at: Date.now() });

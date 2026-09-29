@@ -28,7 +28,7 @@ import { spawnSync } from "../proc.js";
 import { PROVIDER_KEYS, type AgentClientId } from "@codecast/shared/contracts";
 import { MIRROR_EXCLUDED_ENV_VARS } from "../agentEnv.js";
 import { agentSpawnPath } from "../agentSpawnPath.js";
-import { decodeCodexAuth } from "../codexAuthDecode.js";
+import { codexAccessExpired, decodeCodexAuth } from "../codexAuthDecode.js";
 import { remapHome } from "../cloud/mirror/transform.js";
 import type { RemoteHost } from "./session-move.js";
 
@@ -82,20 +82,6 @@ function isObject(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
 
-/** The payload of a JWT, or undefined when it is not one (base64url padding as decodeCodexAuth does for id_token). */
-export function jwtPayload(token: unknown): Record<string, unknown> | undefined {
-  if (typeof token !== "string") return undefined;
-  const payload = token.split(".")[1];
-  if (!payload) return undefined;
-  try {
-    const pad = payload + "=".repeat((4 - (payload.length % 4)) % 4);
-    const claims = JSON.parse(Buffer.from(pad, "base64url").toString("utf-8"));
-    return isObject(claims) ? claims : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 /**
  * codex ~/.codex/auth.json: ship iff the access token is a JWT whose `exp`
  * is in the future (codex's refresh rotates the refresh token, so an expired
@@ -113,13 +99,11 @@ export function codexAuthHealth(raw: string | null, now = Date.now()): AuthGate 
   const lastRefresh = summary.last_refresh;
   const tokens = isObject(parsed.tokens) ? parsed.tokens : undefined;
   if (summary.usable && tokens) {
-    const claims = jwtPayload(tokens.access_token);
-    const exp = typeof claims?.exp === "number" ? claims.exp * 1000 : undefined;
-    if (exp === undefined) return { ship: null, reason: "malformed", ...(lastRefresh !== undefined ? { lastRefresh } : {}) };
-    if (exp <= now) return { ship: null, reason: "access token expired", ...(lastRefresh !== undefined ? { lastRefresh } : {}) };
+    if (summary.access_expires_at === undefined) return { ship: null, reason: "malformed", ...(lastRefresh !== undefined ? { lastRefresh } : {}) };
+    if (codexAccessExpired(summary, now)) return { ship: null, reason: "access token expired", ...(lastRefresh !== undefined ? { lastRefresh } : {}) };
     return { ship: raw, ...(lastRefresh !== undefined ? { lastRefresh } : {}) };
   }
-  if (typeof parsed.OPENAI_API_KEY === "string" && parsed.OPENAI_API_KEY) return { ship: raw, ...(lastRefresh !== undefined ? { lastRefresh } : {}) };
+  if (summary.api_key) return { ship: raw, ...(lastRefresh !== undefined ? { lastRefresh } : {}) };
   return { ship: null, reason: "logged-out stub" };
 }
 

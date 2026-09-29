@@ -29,3 +29,6 @@ export function countMatches(content: string, terms: string[]): number {
   }
   return count;
 }
+
+export { tokenizeQuery, type QueryToken } from "./tokenize";
+export * from "./sessionQuery";

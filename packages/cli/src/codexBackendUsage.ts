@@ -16,6 +16,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { requestCloudJson } from "./cloudAgents/http.js";
 import {
   foldCodexLimits,
   isCodexWindowFilled,
@@ -24,80 +25,26 @@ import {
   type CodexUsageSnapshot,
 } from "./codexUsage.js";
 
-export const CODEX_BACKEND_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
+/** The ChatGPT backend's Codex API (usage here, Codex Cloud's tasks in cloudAgents/codex.ts). */
+export const CODEX_BACKEND_BASE = "https://chatgpt.com/backend-api/wham";
+export const CODEX_BACKEND_USAGE_URL = `${CODEX_BACKEND_BASE}/usage`;
 
-/** A refusal from the ChatGPT backend, carrying what the response said about
- *  coming back. `retryAfterMs` is set only when the server named a wait (429
- *  Retry-After); otherwise the caller picks its own delay.
- *
- *  Same contract as the Claude usage poll's CcUsageHttpError (ct-49527) — the
- *  two should collapse into one helper once both land on main. */
-export class CodexUsageHttpError extends Error {
-  constructor(
-    readonly status: number,
-    readonly retryAfterMs?: number,
-  ) {
-    super(`codex usage endpoint ${status}`);
-  }
-}
-
-// Why: a corrupt or hostile Retry-After would otherwise hold every automated
-// usage poll off for years, freezing the meters the account cards read
-// (ct-49528).
-const MAX_RETRY_AFTER_MS = 24 * 60 * 60 * 1000;
-
-/** Retry-After (RFC 9110) in ms: either delta-seconds or an HTTP date. Capped
- *  at 24h. Undefined when the header is absent, unparseable, or already past —
- *  the caller then falls back to its own backoff. */
-export function parseRetryAfter(header: string | null | undefined, now: number): number | undefined {
-  const raw = header?.trim();
-  if (!raw) return undefined;
-  const seconds = Number(raw);
-  if (Number.isFinite(seconds)) {
-    return seconds > 0 ? Math.min(seconds * 1000, MAX_RETRY_AFTER_MS) : undefined;
-  }
-  const at = Date.parse(raw);
-  if (!Number.isFinite(at)) return undefined;
-  const delta = at - now;
-  return delta > 0 ? Math.min(delta, MAX_RETRY_AFTER_MS) : undefined;
-}
-
-// The poll used to treat every refusal alike: throw, and try again on the next
-// tick. That reads a 429's Retry-After as noise and hammers a rate-limited
-// endpoint. So a failure records when this account may be asked again: what the
-// server named on a 429, else 30s doubling per consecutive failure, capped at
-// 15 minutes. The RPC snapshot is unaffected — the backend is a supplement, and
-// a supplement that is backing off simply adds nothing.
-const BACKOFF_BASE_MS = 30_000;
-const BACKOFF_MAX_MS = 15 * 60 * 1000;
-
-export interface UsageRetryState {
-  retry_at: number; // no automated backend probe of this account before then
-  failures: number; // consecutive failures; drives the delay
-  reason: string;
-  failed_at: number;
-  status?: number; // HTTP status, when the endpoint answered at all
-  retry_after?: boolean; // the server named the wait; not our own guess
-}
-
-/** The backoff state after one failed probe. */
-export function nextUsageRetry(
-  prev: UsageRetryState | undefined,
-  err: unknown,
-  now: number,
-): UsageRetryState {
-  const failures = (prev?.failures ?? 0) + 1;
-  const http = err instanceof CodexUsageHttpError ? err : undefined;
-  const named = http?.retryAfterMs;
-  const backoff = Math.min(BACKOFF_BASE_MS * 2 ** (failures - 1), BACKOFF_MAX_MS);
-  return {
-    retry_at: now + (named ?? backoff),
-    failures,
-    reason: err instanceof Error ? err.message : String(err),
-    failed_at: now,
-    ...(http && { status: http.status }),
-    ...(named !== undefined && { retry_after: true }),
-  };
+/** One request to the ChatGPT backend's Codex API (usage, Codex Cloud's tasks); a refusal throws a CloudApiError with its reason. */
+export function codexBackendRequest<T>(
+  headers: Record<string, string>,
+  method: string,
+  apiPath: string,
+  opts: { body?: unknown; fetchImpl?: typeof fetch; timeoutMs?: number; now?: number } = {},
+): Promise<T> {
+  return requestCloudJson<T>(opts.fetchImpl ?? fetch, {
+    method,
+    url: `${CODEX_BACKEND_BASE}${apiPath}`,
+    headers,
+    body: opts.body,
+    label: `codex ${method} ${apiPath.split("?")[0]}`,
+    timeoutMs: opts.timeoutMs,
+    now: opts.now,
+  });
 }
 
 /**
@@ -109,9 +56,20 @@ export function nextUsageRetry(
  * no access token (logged out, or an API-key-only login).
  */
 export function codexBackendAuthHeaders(codexHomeDir: string): Record<string, string> | null {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(path.join(codexHomeDir, "auth.json"), "utf-8");
+  } catch {
+    return null;
+  }
+  return codexBackendHeadersFromAuth(raw);
+}
+
+/** The same headers from an auth.json blob already read (null without an access token). */
+export function codexBackendHeadersFromAuth(raw: string): Record<string, string> | null {
   let tokens: any;
   try {
-    tokens = JSON.parse(fs.readFileSync(path.join(codexHomeDir, "auth.json"), "utf-8"))?.tokens;
+    tokens = JSON.parse(raw)?.tokens;
   } catch {
     return null;
   }
@@ -167,10 +125,15 @@ export function parseBackendUsageResponse(
   return snap;
 }
 
+/** GET /usage for a login's headers (the same request Codex Cloud's sign-in check makes). */
+export function requestCodexBackendUsage(headers: Record<string, string>, fetchImpl?: typeof fetch, now?: number): Promise<any> {
+  return codexBackendRequest(headers, "GET", "/usage", { fetchImpl, timeoutMs: 15_000, now });
+}
+
 /**
  * One GET against the ChatGPT backend for the account whose auth.json lives in
  * `codexHomeDir`. Null when that home has no usable token or the body is not a
- * usage reading; throws CodexUsageHttpError when the endpoint refused, so the
+ * usage reading; throws a CloudApiError when the endpoint refused, so the
  * caller can back off on what the response said.
  */
 export async function fetchCodexBackendUsage(
@@ -180,17 +143,7 @@ export async function fetchCodexBackendUsage(
   const headers = codexBackendAuthHeaders(codexHomeDir);
   if (!headers) return null;
   const now = opts.now ?? Date.now();
-  const resp = await (opts.fetchImpl ?? fetch)(CODEX_BACKEND_USAGE_URL, {
-    headers,
-    signal: AbortSignal.timeout(15_000),
-  });
-  if (!resp.ok) {
-    throw new CodexUsageHttpError(
-      resp.status,
-      resp.status === 429 ? parseRetryAfter(resp.headers.get("retry-after"), now) : undefined,
-    );
-  }
-  return parseBackendUsageResponse(await resp.json(), now);
+  return parseBackendUsageResponse(await requestCodexBackendUsage(headers, opts.fetchImpl, now), now);
 }
 
 /**

@@ -522,3 +522,10 @@ describe("sessionLine — what the worktree started from (ct-49433)", () => {
     expect(parseDanglingSeeds("")).toEqual([]);
   });
 });
+
+test("the setup line says whether the host has what this repo declares now", async () => {
+  const { hostSetupStatusLine } = await import("./cli");
+  expect(hostSetupStatusLine({ applied: { hash: "a", at: "2026-09-29T10:00:00Z" }, want: "a", declared: true })).toBe("in step: [host] from workspace.toml and ~/.codecast/host.toml (applied 2026-09-29T10:00:00Z)");
+  expect(hostSetupStatusLine({ applied: { hash: "a", at: "t" }, want: "b", declared: true })).toStartWith("changed since it was applied");
+  expect(hostSetupStatusLine({ applied: null, want: "b", declared: false })).toBe("not applied yet: nothing declared beyond the tools step; the next wake applies it, or cast hosts setup");
+});

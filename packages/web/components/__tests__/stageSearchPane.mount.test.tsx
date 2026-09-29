@@ -47,7 +47,7 @@ const settle = async (container: HTMLElement, sel: string) => {
   return false;
 };
 
-const SEARCH_INPUT = 'input[placeholder^="Search every session"]';
+const SEARCH_INPUT = 'input[placeholder^="Search sessions"]';
 
 function mountStage() {
   const container = document.createElement("div");
