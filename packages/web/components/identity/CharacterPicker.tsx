@@ -23,6 +23,7 @@ import { useInboxStore } from "../../store/inboxStore";
 import { characterFor, type IdentityRow } from "../../lib/sessionIdentity";
 import { moveRadioIndex } from "../team/radioNav";
 import { spreadCharacters } from "../../lib/spreadCharacters";
+import { Button } from "../ui/button";
 
 const COLUMNS = 6;
 
@@ -88,6 +89,12 @@ export function CharacterPicker({ rows, onDone }: { rows: Array<IdentityRow & Re
     apply({ name: cleaned });
   }, [apply, name]);
 
+  // Faces are already on the card; Done lands a name still being typed.
+  const done = useCallback(() => {
+    if (!many) commitName();
+    onDone?.();
+  }, [commitName, many, onDone]);
+
   const onFaceKey = useCallback((e: React.KeyboardEvent, index: number) => {
     const next = moveRadioIndex(e.key, index, AVATAR_KEYS.length, COLUMNS);
     if (next == null) return;
@@ -150,7 +157,7 @@ export function CharacterPicker({ rows, onDone }: { rows: Array<IdentityRow & Re
             onChange={(e) => setName(e.target.value)}
             onBlur={commitName}
             onKeyDown={(e) => {
-              if (e.key === "Enter") { e.preventDefault(); commitName(); onDone?.(); }
+              if (e.key === "Enter") { e.preventDefault(); done(); }
               if (e.key === "Escape") { e.preventDefault(); onDone?.(); }
             }}
             placeholder="Name"
@@ -181,6 +188,13 @@ export function CharacterPicker({ rows, onDone }: { rows: Array<IdentityRow & Re
           </label>
         </div>
       )}
+
+      <div className="mt-3 flex items-center justify-between gap-2">
+        <span className="text-[10px] text-sol-text-dim">Changes apply as you pick</span>
+        <Button type="button" size="sm" variant="cyan" onClick={done} className="h-7 px-3 text-[11px]">
+          Done
+        </Button>
+      </div>
     </div>
   );
 }
