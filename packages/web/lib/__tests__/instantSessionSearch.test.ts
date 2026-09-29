@@ -26,6 +26,12 @@ describe("sessionMatchesQuery", () => {
     expect(sessionMatchesQuery(s, "codecast")).toBe(true);
     expect(sessionMatchesQuery(s, "unrelated")).toBe(false);
   });
+
+  test("a session is findable by the character name it wears", () => {
+    const s = session({ _id: "a", title: "Agent org hierarchy", character_avatar: "hedgehog", character_name: "Nettle" });
+    expect(sessionMatchesQuery(s, "nettle")).toBe(true);
+    expect(sessionMatchesQuery(session({ _id: "b", title: "Agent org hierarchy" }), "nettle")).toBe(false);
+  });
 });
 
 describe("instantSessionRows", () => {
