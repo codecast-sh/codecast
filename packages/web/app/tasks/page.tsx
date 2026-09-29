@@ -23,7 +23,8 @@ import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { GenericListView, ListGroup, ItemRowState } from "../../components/GenericListView";
 import { TaskMenuItems } from "../../components/menus/ObjectContextMenus";
 import { SegmentedToggle } from "../../components/SegmentedToggle";
-import { LivePulseHalo, ActiveSessionBadge } from "../../components/LivenessDot";
+import { LivePulseHalo } from "../../components/LivenessDot";
+import { TaskSessionBadge } from "../../components/tasks/TaskSessionBadge";
 import { taskLivenessState } from "../../lib/liveness";
 
 // The personal space has no roster; a stable empty list keeps the memos quiet.
@@ -280,19 +281,10 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
         )
       )}
       {activeSession ? (
-        <ActiveSessionBadge session={activeSession} className="cq-hide-compact" />
+        <TaskSessionBadge task={task} className="cq-hide-compact" />
       ) : task.origin_session ? (
         <span className="flex items-center gap-1 flex-shrink-0 cq-hide-compact">
-          <ActiveSessionBadge
-            session={{
-              _id: task.origin_session.conversation_id,
-              session_id: task.origin_session.session_id,
-              title: task.origin_session.title,
-              started_by: task.origin_session.started_by,
-              last_message_at: task.origin_session.last_message_at,
-            }}
-            dormant
-          />
+          <TaskSessionBadge task={task} />
           {task.session_count && task.session_count > 1 ? (
             <span className="text-[10px] text-sol-text-dim font-mono" title={`${task.session_count} sessions`}>
               <Link2 className="w-3 h-3 inline mr-0.5" />{task.session_count}
@@ -505,7 +497,6 @@ function KanbanCard({
   /** The board flattens trees; a subtask card names its parent instead. */
   parentChip?: { short_id: string; title: string } | null;
 }) {
-  const activeSession = useInboxStore((s) => s.taskActiveSessions[task._id]) ?? null;
   const priority = PRIORITY_CONFIG[task.priority as TaskPriority] || PRIORITY_CONFIG.none;
   const PriorityIcon = priority.icon;
   const assignee = task.assignee_info;
@@ -534,21 +525,7 @@ function KanbanCard({
           )}
         </span>
         <div className="flex items-center gap-1.5 flex-shrink-0">
-          {activeSession ? (
-            <ActiveSessionBadge session={activeSession} compact />
-          ) : task.origin_session ? (
-            <ActiveSessionBadge
-              session={{
-                _id: task.origin_session.conversation_id,
-                session_id: task.origin_session.session_id,
-                title: task.origin_session.title,
-                started_by: task.origin_session.started_by,
-                last_message_at: task.origin_session.last_message_at,
-              }}
-              dormant
-              compact
-            />
-          ) : null}
+          <TaskSessionBadge task={task} compact />
           {assignee ? (() => {
             const av = <AssigneeFace info={assignee} size={16} />;
             return (
