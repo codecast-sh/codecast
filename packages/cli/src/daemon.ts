@@ -335,6 +335,7 @@ import {
   isForkArtifactSessionId,
   isWorkflowAgentTranscriptPath,
   isManagedTmuxName,
+  isCodecastCreatedTmuxName,
   isValidResumeSessionId,
   removeForkArtifactJsonl,
   resolveResumeAgentType,
@@ -883,8 +884,18 @@ const reapPidTree = (rootPid: number): Promise<number> => reapPidTrees([rootPid]
 // claude/MCP/caffeinate survives), THEN kill the session. Order matters — once
 // the session is gone we can't enumerate its pane pids. All panes go into one
 // reap so the whole session costs one `ps` and one grace window.
+//
+// Only a session codecast created is destroyed. An agent the user started by
+// hand inside their own tmux resolves to that session too (findTmuxPaneForTty),
+// and an auth restart once took the user's whole terminal down with it
+// (2026-09-28). Callers that hold the agent's pid reap its tree separately, so
+// the agent still stops and the user's shell and other windows survive.
 export async function killTmuxSessionAndTree(tmuxSession: string): Promise<void> {
   if (!validateTmuxTarget(tmuxSession)) return;
+  if (!isCodecastCreatedTmuxName(tmuxSession)) {
+    log(`[REAP] Left tmux ${tmuxSession} standing: codecast did not create it`);
+    return;
+  }
   try {
     const { stdout } = await tmuxExec(
       ["list-panes", "-t", tmuxSession, "-F", "#{pane_pid}"],
