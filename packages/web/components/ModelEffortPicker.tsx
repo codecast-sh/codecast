@@ -5,7 +5,8 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import {
   AGENT_MODEL_CONFIG,
   modelAgentKey,
-  cursorCloudModel,
+  cloudAgentModel,
+  cloudAgentProvidersFor,
   findModelOption,
   isDynamicModelKey,
   dynamicModelOption,
@@ -104,11 +105,12 @@ export function ModelEffortRows({
   // Dynamic clients: Default + the curated featured head; typing searches the
   // device's full inventory. Everything else: the shared curated rail.
   const rail = midSession ? { models: cfg.models, efforts: [...cfg.efforts] } : launchRailOptions(cfg);
-  // Cursor lists its local and its Cursor Cloud models side by side; the
-  // composer's "run in Cursor Cloud" switch picks the half, so show that half.
-  const cloudHalf = agentType === "cursor" ? cursorCloudModel(modelKey) !== null : null;
+  // A client with a cloud agent provider (Cursor) lists its local and its
+  // cloud models side by side; the composer's "run in the cloud" switch
+  // picks the half, so show that half.
+  const cloudHalf = cloudAgentProvidersFor(agentType).length ? cloudAgentModel(agentType, modelKey) !== null : null;
   const models = (dynamic ? [cfg.models[0], ...featured] : rail.models)
-    .filter((m) => cloudHalf === null || (cursorCloudModel(m.key) !== null) === cloudHalf);
+    .filter((m) => cloudHalf === null || (cloudAgentModel(agentType, m.key) !== null) === cloudHalf);
   const q = search.trim().toLowerCase();
   const matches = dynamic && q
     ? all.filter((id) => id.toLowerCase().includes(q) && !models.some((m) => m.key === id)).slice(0, 24)

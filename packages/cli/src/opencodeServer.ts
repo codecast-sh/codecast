@@ -30,7 +30,7 @@
 // The DB path stays authoritative for transcript CONTENT in every case: this module
 // never syncs message bodies. SSE carries STATE (working / idle / permission) only.
 
-import { parseSseStream } from "./sse.js";
+import { parseSseStream, readSse, type SseFrame } from "./sse.js";
 import { EventEmitter } from "events";
 import { spawn, type ChildProcess } from "./proc.js";
 import * as readline from "readline";
@@ -119,17 +119,18 @@ export function parseListeningPort(line: string): number | null {
  */
 export function parseSseFrames(buffer: string): { events: OpencodeRawEvent[]; rest: string } {
   const { frames, rest } = parseSseStream(buffer);
-  const events: OpencodeRawEvent[] = [];
-  for (const frame of frames) {
-    if (!frame.data.trim()) continue;
-    try {
-      const obj = JSON.parse(frame.data) as OpencodeRawEvent;
-      if (obj && typeof obj.type === "string") events.push(obj);
-    } catch {
-      /* drop partial/garbage payloads */
-    }
+  return { events: frames.map(opencodeEvent).filter((e): e is OpencodeRawEvent => e !== null), rest };
+}
+
+/** One frame's opencode event: its data JSON-parsed, or null for anything that is not a `{type}` object. */
+function opencodeEvent(frame: SseFrame): OpencodeRawEvent | null {
+  if (!frame.data.trim()) return null;
+  try {
+    const obj = JSON.parse(frame.data) as OpencodeRawEvent;
+    return obj && typeof obj.type === "string" ? obj : null;
+  } catch {
+    return null; // partial/garbage payload
   }
-  return { events, rest };
 }
 
 function propSessionId(raw: OpencodeRawEvent): string | undefined {
@@ -430,16 +431,9 @@ export class OpencodeServer extends EventEmitter {
         this.log(`[opencode-server] /event returned ${resp.status}`);
         return;
       }
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const { events, rest } = parseSseFrames(buffer);
-        buffer = rest;
-        for (const raw of events) this.dispatchEvent(raw);
+      for await (const frame of readSse(resp.body)) {
+        const raw = opencodeEvent(frame);
+        if (raw) this.dispatchEvent(raw);
       }
     } catch (err: any) {
       if (controller.signal.aborted) return; // deliberate stop

@@ -8,6 +8,7 @@ import { SessionPrewarm } from "../../components/SessionPrewarm";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTabActive } from "../../hooks/usePagePresence";
 import { urlSessionId } from "../../lib/pathLabel";
+import { ConversationUnavailable } from "../../components/ConversationUnavailable";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { DashboardLayout } from "../../components/DashboardLayout";
@@ -407,8 +408,10 @@ export function QueuePageClient() {
   const [scrollTarget, setScrollTarget] = useState<{ sessionId: string; messageId: string; timestamp?: number; nonce: number } | null>(null);
   const [activeHighlight, setActiveHighlight] = useState<string | undefined>(undefined);
 
-  // The row for a target the queue does not hold, fetched for injection.
-  const missingRow = useMissingSessionRow(pendingInjectId);
+  // The row for a target the queue does not hold, fetched for injection. An
+  // unavailable target stays subscribed: a session that syncs late, or is
+  // shared with the viewer afterwards, opens on its own.
+  const missingRow = useMissingSessionRow(pendingInjectId ?? unavailableId);
 
   // Select session from URL param -- only when the param actually changes
   const paramSessionId = searchParams.get("s") || null;
@@ -482,6 +485,12 @@ export function QueuePageClient() {
 
   // Once we have the conversation data, inject it into the queue
   useWatchEffect(() => {
+    if (unavailableId && !pendingInjectId) {
+      if (!missingRow) return;
+      setUnavailableId(null);
+      injectSession(missingRow);
+      return;
+    }
     if (!pendingInjectId) return;
     if (sessions[pendingInjectId]) {
       navigateToSession(pendingInjectId);
@@ -510,7 +519,13 @@ export function QueuePageClient() {
     injectSession(missingRow);
     setPendingInjectId(null);
     paramProcessedRef.current = true;
-  }, [pendingInjectId, missingRow, sessions, navigateToSession, injectSession]);
+  }, [pendingInjectId, unavailableId, missingRow, sessions, navigateToSession, injectSession]);
+
+  // The note answers the link, not the inbox: once the viewer opens any other
+  // session it steps aside.
+  useWatchEffect(() => {
+    setUnavailableId(null);
+  }, [currentSessionId, viewingDismissedId]);
 
   // Handle store-based navigation (from CommandPalette, bookmarks, etc.)
   const pendingNavigateId = useInboxStore((s) => s.pendingNavigateId);
@@ -599,7 +614,11 @@ export function QueuePageClient() {
   const setCurrentConversation = useInboxStore((s) => s.setCurrentConversation);
 
   const rawCurrentSession = currentSessionId ? sessions[currentSessionId] : undefined;
-  const currentSession = pendingInjectId && rawCurrentSession && rawCurrentSession._id !== pendingInjectId
+  // A linked target still loading, or one the server refused, holds the view:
+  // the session that was current before must not paint in its place (that was
+  // the silent redirect to another session).
+  const heldTargetId = pendingInjectId ?? unavailableId;
+  const currentSession = heldTargetId && rawCurrentSession && rawCurrentSession._id !== heldTargetId
     ? undefined
     : rawCurrentSession;
 
@@ -653,6 +672,8 @@ export function QueuePageClient() {
   useWatchEffect(() => {
     if (!isActiveTab) return;
     if (!paramProcessedRef.current) return;
+    // The address bar keeps the link the viewer asked for while its note shows.
+    if (unavailableId) return;
     if (isPopstateRef.current) {
       isPopstateRef.current = false;
       return;
@@ -680,7 +701,7 @@ export function QueuePageClient() {
       const switchingSessions = !!shownId && shownId !== targetId;
       window.history[switchingSessions ? "pushState" : "replaceState"](withInboxView({ inboxId: targetId }), "", targetPath);
     }
-  }, [currentSession?._id, viewingDismissedId, isActiveTab]);
+  }, [currentSession?._id, viewingDismissedId, isActiveTab, unavailableId]);
 
   // Handle browser back/forward
   useEventListener("popstate", (e: PopStateEvent) => {
@@ -785,20 +806,10 @@ export function QueuePageClient() {
       ) : pendingInjectId ? (
         <ConversationPlaceholder id={pendingInjectId} />
       ) : unavailableId ? (
-        <div className="h-full flex items-center justify-center">
-          <div className="text-center max-w-sm px-4">
-            <div className="text-sm text-sol-text">This conversation isn't available</div>
-            <p className="mt-1 text-xs text-sol-text-dim">
-              It was deleted, or it belongs to someone who hasn't shared it.
-            </p>
-            <button
-              onClick={() => { setUnavailableId(null); handleBack(); }}
-              className="mt-4 px-3 py-1 rounded border border-sol-border text-xs text-sol-text-secondary hover:bg-sol-bg-alt transition-colors"
-            >
-              Back to inbox
-            </button>
-          </div>
-        </div>
+        <ConversationUnavailable
+          actionLabel="Back to inbox"
+          onAction={() => { setUnavailableId(null); handleBack(); }}
+        />
       ) : sortedSessions.length > 0 ? (
         <div className="h-full" />
       ) : (

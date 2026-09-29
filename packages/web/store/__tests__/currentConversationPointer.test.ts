@@ -177,6 +177,26 @@ describe("sessions-sync restore fallback", () => {
     expect(useInboxStore.getState().currentSessionId).toBe("convA");
   });
 
+  it("a URL naming a conversation the cache lacks adopts NOTHING (no silent redirect)", () => {
+    // /conversation/<id> for a session this viewer cannot read (another
+    // person's private one): boot used to land on the client's last position,
+    // and the inbox then painted it in place of the unavailable note.
+    (globalThis as any).window = { location: { pathname: `/conversation/${"d".repeat(32)}`, search: "" } };
+    useInboxStore.setState({ lastFocusedConversationId: "convB" });
+    syncSessions();
+    expect(useInboxStore.getState().currentSessionId).toBeNull();
+    (globalThis as any).window = { location: { pathname: "/conversation/jx7dwyv", search: "" } };
+    syncSessions();
+    expect(useInboxStore.getState().currentSessionId).toBeNull();
+  });
+
+  it("a URL naming a cached conversation lands on it, over the client's own position", () => {
+    (globalThis as any).window = { location: { pathname: "/inbox", search: "?s=convA" } };
+    useInboxStore.setState({ lastFocusedConversationId: "convB" });
+    syncSessions();
+    expect(useInboxStore.getState().currentSessionId).toBe("convA");
+  });
+
   it("never overrides an existing selection", () => {
     declareViewNav("gesture"); // raw non-null writes need a declared source
     useInboxStore.setState({

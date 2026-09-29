@@ -67,20 +67,18 @@ async function mountOpen(props: Partial<React.ComponentProps<typeof SharePopover
   return document.body.textContent ?? "";
 }
 
-test("the owner sees the page link to copy beside the team and public link controls", async () => {
+test("the owner can copy the page link beside the team and public link controls", async () => {
   const text = await mountOpen({});
-  expect(text).toContain("Page link");
-  expect(document.body.querySelector('input[value="https://codecast.sh/conversation/c1"]')).not.toBeNull();
+  expect(text).toContain("Copy link");
   expect(text).toContain("Public link");
-  expect(text).toContain("Create & copy link");
+  expect(text).toContain("Create link");
   expect(text).toContain("Hidden");
 });
 
 test("a viewer who cannot manage sharing gets the page link and nothing that would fail", async () => {
   const text = await mountOpen({ canManage: false });
-  expect(text).toContain("Page link");
-  expect(document.body.querySelector('input[value="https://codecast.sh/conversation/c1"]')).not.toBeNull();
+  expect(text).toContain("Copy link");
   expect(text).not.toContain("Public link");
-  expect(text).not.toContain("Create & copy link");
+  expect(text).not.toContain("Create link");
   expect(text).not.toContain("Hidden");
 });
