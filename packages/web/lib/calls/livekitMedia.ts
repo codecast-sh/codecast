@@ -24,7 +24,7 @@ export const SCREEN_SHARE_CAPTURE: ScreenShareCaptureOptions = {
   contentHint: "detail",
 };
 
-export function huddleRoomOptions(prefs: Pick<JoinPrefs, "micDeviceId" | "cameraDeviceId">): RoomOptions {
+export function huddleRoomOptions(prefs: Pick<JoinPrefs, "micDeviceId" | "cameraDeviceId" | "speakerDeviceId">): RoomOptions {
   return {
     adaptiveStream: { pixelDensity: "screen" },
     dynacast: true,
@@ -32,6 +32,7 @@ export function huddleRoomOptions(prefs: Pick<JoinPrefs, "micDeviceId" | "camera
     videoCaptureDefaults: prefs.cameraDeviceId
       ? { deviceId: { ideal: prefs.cameraDeviceId } }
       : {},
+    ...(prefs.speakerDeviceId ? { audioOutput: { deviceId: prefs.speakerDeviceId } } : {}),
     publishDefaults: {
       screenShareEncoding: SCREEN_SHARE_ENCODING,
       degradationPreference: "maintain-resolution",

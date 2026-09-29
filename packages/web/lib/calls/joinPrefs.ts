@@ -29,6 +29,8 @@ export type JoinPrefs = {
   /** The microphone to open. Undefined means "whatever the browser picks". */
   micDeviceId?: string;
   cameraDeviceId?: string;
+  /** The speaker a join plays through. Undefined means the system output. */
+  speakerDeviceId?: string;
   /** Whether a deliberate join turns the camera on. On until turned off once. */
   cameraOn: boolean;
   /** Whether a deliberate join opens the microphone. On until muted once. */
@@ -49,6 +51,7 @@ export function readJoinPrefs(): JoinPrefs {
   return {
     micDeviceId: u.call_mic_device_id || undefined,
     cameraDeviceId: u.call_camera_device_id || undefined,
+    speakerDeviceId: u.call_speaker_device_id || undefined,
     cameraOn: u.call_camera_on !== false,
     micOn: u.call_mic_on !== false,
     micAutoOpen: u.call_mic_auto_open !== false,
@@ -57,9 +60,15 @@ export function readJoinPrefs(): JoinPrefs {
 
 /** The person picked a device in a picker. Remember it for the next join —
  *  that is the whole of "devices remembered". */
-export function rememberDevice(kind: "audioinput" | "videoinput", deviceId: string): void {
+export const DEVICE_PREF_KEY = {
+  audioinput: "call_mic_device_id",
+  audiooutput: "call_speaker_device_id",
+  videoinput: "call_camera_device_id",
+} as const;
+
+export function rememberDevice(kind: keyof typeof DEVICE_PREF_KEY, deviceId: string): void {
   if (!deviceId) return;
-  const key = kind === "audioinput" ? "call_mic_device_id" : "call_camera_device_id";
+  const key = DEVICE_PREF_KEY[kind];
   if (ui()[key] === deviceId) return;
   useInboxStore.getState().updateClientUI({ [key]: deviceId } as any);
 }

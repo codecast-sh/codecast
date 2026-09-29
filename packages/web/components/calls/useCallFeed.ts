@@ -12,8 +12,9 @@ import {
 } from "@codecast/shared/contracts";
 import { AVATAR_KEYS } from "@codecast/shared/contracts/orgAvatars";
 import { characterNameFor, defaultCharacterFor, type Character } from "@codecast/shared/contracts/sessionCharacter";
-import { SessionCreatePendingError, useInboxStore, useTrackedStore } from "../../store/inboxStore";
+import { SessionCreatePendingError, defaultNewSessionPath, useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { getRoom, ringInto, startTranscribing } from "../../lib/calls/callManager";
+import { useRecentProjectsFeed } from "../../hooks/useRecentProjectsFeed";
 import { describeRoomLive } from "../../lib/calls/roomLabels";
 import { agentRoomName, findSessionRow } from "../../lib/calls/findSessionRow";
 import { characterFor, identitySig } from "../../lib/sessionIdentity";
@@ -98,26 +99,15 @@ export function openFeedTargetPicker(opts: {
 }
 
 export type TranscriptExcerpt = {
-  segments: Array<{ speaker_name: string; text: string }>;
+  segments: Array<{ speaker_name: string; text: string; seq?: number }>;
+  /** The call it came from: a send to a session records the link
+   *  (call_session_links), so each side can reach the other. */
+  transcriptId?: string;
   title?: string | null;
   startedAt: number;
   live: boolean;
   partial: boolean;
 };
-
-// The most recent project the viewer worked in — a fresh call-spawned session
-// should land where their work lives, not in $HOME.
-function latestProjectPath(): { projectPath?: string; gitRoot?: string } {
-  const st = useInboxStore.getState() as any;
-  const rows = Object.values(st.sessions ?? {}) as any[];
-  const recent = rows
-    .filter((r) => r && (r.project_path || r.git_root))
-    .sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0))[0];
-  return {
-    projectPath: recent?.project_path ?? recent?.git_root,
-    gitRoot: recent?.git_root ?? recent?.project_path,
-  };
-}
 
 // Local-first "new session seeded with a message": stub + optimistic bubble +
 // side panel now, durable create + send resolve behind it. Same lifecycle as
@@ -154,9 +144,11 @@ async function awaitSpawn(stubId: string): Promise<string> {
 function spawnSessionWithMessage(
   body: string | ((stubId: string) => string),
   onReady?: (convexId: string) => void,
+  teamId?: string | null,
 ): Promise<string> {
   const store = useInboxStore.getState() as any;
-  const { projectPath, gitRoot } = latestProjectPath();
+  const projectPath = defaultNewSessionPath(store, teamId);
+  const gitRoot = projectPath;
   const { stubId } = store.beginOptimisticSession({
     agentType: "claude_code",
     projectPath,
@@ -228,16 +220,32 @@ const DEFAULT_ASK =
 // One-shot: hand an excerpt to a target. Returns the conversation id for
 // session targets (so callers can follow up), null otherwise.
 export function useSendExcerpt() {
+  const convex = useConvex();
   return useCallback(async (target: FeedTarget, excerpt: TranscriptExcerpt, note?: string) => {
     const store = useInboxStore.getState() as any;
+    const link = (conversation: string) => {
+      const seqs = excerpt.segments.map((s) => s.seq).filter((n): n is number => typeof n === "number");
+      if (!excerpt.transcriptId || seqs.length === 0) return;
+      void convex
+        .mutation(api.transcripts.linkExcerpt, {
+          transcript_id: excerpt.transcriptId as any,
+          conversation,
+          from_seq: Math.min(...seqs),
+          to_seq: Math.max(...seqs),
+        })
+        .catch(() => {});
+    };
     if (target.kind === "session") {
       store.sendMessage(target.id, excerptBody(excerpt, note));
       store.openSidePanel(target.id);
+      link(target.id);
       return target.id;
     }
     if (target.kind === "new-session") {
       const body = excerptBody(excerpt, note) + ((note ?? "").trim() ? "" : `\n\n${DEFAULT_ASK}`);
-      return await spawnSessionWithMessage(body);
+      const convexId = await spawnSessionWithMessage(body);
+      link(convexId);
+      return convexId;
     }
     if (target.kind === "new-doc") {
       const when = new Date(excerpt.startedAt).toLocaleDateString([], {
@@ -251,7 +259,7 @@ export function useSendExcerpt() {
       return null;
     }
     return null;
-  }, []);
+  }, [convex]);
 }
 
 // Live feed: point the flowing words at a target. If nobody is scribing yet,
@@ -262,10 +270,14 @@ export function useAddLiveFeed(opts: {
   /** The live transcript's routes, so a session spawned for the room takes a
    *  character no agent already in it wears. */
   routes?: Array<{ kind: string; target: string }>;
+  /** The room's team, so a session spawned for it starts in that team's most
+   *  used repo. Before anyone transcribes it is unknown, and the viewer's
+   *  active team stands in. */
+  teamId?: string | null;
   getRoom: () => any;
 }) {
   const convex = useConvex();
-  const { roomKey, liveTranscriptId, routes, getRoom } = opts;
+  const { roomKey, liveTranscriptId, routes, teamId, getRoom } = opts;
 
   return useCallback(
     async (target: FeedTarget) => {
@@ -295,6 +307,7 @@ export function useAddLiveFeed(opts: {
             (id) => {
               if (character) st.setSessionCharacter(id, { avatar: character.avatar, name: character.name });
             },
+            teamId ?? (st.clientState?.ui?.active_team_id as string | undefined),
           );
         } catch (err) {
           // Given up on the wait, but the session may have landed by now
@@ -356,7 +369,7 @@ export function useAddLiveFeed(opts: {
         throw err;
       }
     },
-    [convex, roomKey, liveTranscriptId, getRoom],
+    [convex, roomKey, liveTranscriptId, teamId, getRoom],
   );
 }
 
@@ -434,9 +447,12 @@ export function useAddToCall(opts: {
   roomKey: string;
   liveTranscriptId: string | null;
   routes: Array<{ kind: string; target: string }>;
+  teamId?: string | null;
 }) {
-  const { roomKey, liveTranscriptId, routes } = opts;
-  const addFeed = useAddLiveFeed({ roomKey, liveTranscriptId, routes, getRoom });
+  const { roomKey, liveTranscriptId, routes, teamId } = opts;
+  // A new agent starts in the room team's most used repo, read off this list.
+  useRecentProjectsFeed();
+  const addFeed = useAddLiveFeed({ roomKey, liveTranscriptId, routes, teamId, getRoom });
   // From the pick to the route landing there is a wait (a new session's
   // create can park for minutes on a slow link): the caller shows the agent
   // on its way and rests its button, so a second click cannot spawn a

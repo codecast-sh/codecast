@@ -57,6 +57,7 @@ import { extractFileChanges } from "../lib/fileChangeExtractor";
 import { CommitCard } from "./CommitCard";
 import { PRCard } from "./PRCard";
 import { AnchorHeaderPill } from "./anchor/AnchorHeaderPill";
+import { SessionCallPill } from "./calls/SessionCallPill";
 import { useSqueezeToFit } from "../hooks/useSqueezeToFit";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent } from "./ui/dropdown-menu";
 import { TooltipProvider } from "./ui/tooltip";
@@ -3664,6 +3665,7 @@ const ConversationViewInner = (
               </h1>
             )}
             {conversation && <AnchorHeaderPill conversationId={conversation._id.toString()} />}
+            {conversation && <SessionCallPill conversationId={conversation._id.toString()} />}
             {conversation && <BrowserPaneOfferChip conversationId={conversation._id.toString()} />}
 
             {/* A hibernated session says so above the composer (MessageInput
