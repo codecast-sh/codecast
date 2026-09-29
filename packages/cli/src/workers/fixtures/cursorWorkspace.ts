@@ -5,6 +5,7 @@ import {EventEmitter} from 'node:events';
 import {Database as FixtureDatabase} from 'bun:sqlite';
 import {functionBlock,blockAt} from '../../test-helpers/sourceRegion.js';
 import {configureDaemonWorkers,closeDaemonWorkers,scanWorkerHost} from '../bridge.js';
+import {cursorTranscriptSessionId} from '../../cursorTranscriptWatcher.js';
 const FixtureSqlite=FixtureDatabase;
 const enabled=process.argv[2]==='true', home=process.env.HOME!;
 let opens=0;
@@ -81,7 +82,7 @@ try {
  const transpiler=new Bun.Transpiler({loader:'ts',target:'bun'});
  const config:any={sync_mode:'selected',sync_projects:[moved],excluded_paths:b.workspace,user_id:'fixture'};
  const processed:string[]=[];
- const common:any={path,config,findWorkspacePathForCursorConversation:d.findWorkspacePathForCursorConversation,isPathExcluded,isProjectAllowedToSync,log:()=>{},processCursorTranscriptFile:async(_file:string,id:string)=>{processed.push(id);},syncService:{},conversationCache:{},retryQueue:{},pendingMessages:{},updateState:()=>{}};
+ const common:any={path,config,cursorTranscriptSessionId,findWorkspacePathForCursorConversation:d.findWorkspacePathForCursorConversation,isPathExcluded,isProjectAllowedToSync,log:()=>{},processCursorTranscriptFile:async(_file:string,id:string)=>{processed.push(id);},syncService:{},conversationCache:{},retryQueue:{},pendingMessages:{},updateState:()=>{}};
  const eventCode=transpiler.transformSync(`let lastWatcherEventTime=0;${eventSource}\nreturn handleCursorTranscriptEvent;`);
  const event=new Function(...Object.keys(common),'readDaemonState','isSyncPaused','cursorTranscriptSyncs','transcriptRetryOwners','MESSAGE_SYNC_DEBOUNCE',eventCode)(...Object.values(common),()=>({}),()=>false,new Map(),{create:(_map:unknown,_key:unknown,_descriptor:unknown,run:()=>Promise<void>)=>({invalidate(){pending.push(run());}})},0);
  const pending:Promise<void>[]=[];
