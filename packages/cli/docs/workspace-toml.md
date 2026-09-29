@@ -204,6 +204,19 @@ base = 9222
 range = 100
 ```
 
+## `[host]`
+
+Machine-level setup for a cloud host: what the repo needs installed and running there beyond the tools codecast installs itself. Every wake and placement applies it once per change (the host stamps a hash of it in `~/.codecast/host-setup.json`), before any worktree is acquired, so a new host and a changed spec both converge. A person's own needs go in the same table in `~/.codecast/host.toml` and merge with the repo's.
+
+```toml
+[host]
+packages = ["postgresql", "redis-server"]    # apt packages
+services = ["redis-server", "postgresql"]    # systemd units, enabled and started
+run = ["sudo -u postgres createuser -s ubuntu || true"]   # from the checkout, in order; each must be safe to run again
+```
+
+A failed step is reported with its output and retried on the next wake; it never stops a session. `cast hosts setup [id] [--force]` applies it by hand.
+
 ## `backend`
 
 Which substrate the workspace runs on: `local` (a git worktree here), `e2b` or

@@ -513,6 +513,21 @@ function renderManifestToml(m: WorkspaceManifest): string {
     lines.push(``);
   }
 
+  if (m.host) {
+    lines.push(`[host]`);
+    for (const k of ["packages", "services", "run"] as const) if (m.host[k].length) lines.push(`${k} = ${JSON.stringify(m.host[k])}`);
+    lines.push(``);
+  } else {
+    lines.push(
+      `# What a cloud host needs for this repo beyond its tools, applied once per change on every wake:`,
+      `# [host]`,
+      `# packages = ["postgresql", "redis-server"]   # apt`,
+      `# services = ["redis-server"]                 # systemd units, enabled and started`,
+      `# run = ["./scripts/seed-db.sh"]              # from the checkout; each must be safe to run again`,
+      ``,
+    );
+  }
+
   return lines.join("\n");
 }
 

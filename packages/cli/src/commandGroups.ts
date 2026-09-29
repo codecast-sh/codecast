@@ -85,7 +85,7 @@ export const COMMAND_GROUPS: readonly CommandGroup[] = [
   },
   {
     token: "remote",
-    description: `Move a Claude Code session to/from a remote Mac`,
+    description: `Move sessions to and from cloud hosts, and mirror a cloud session's edits here`,
     load: () => import("./remote/cli.js").then((m) => m.registerRemoteCommand),
   },
   {
