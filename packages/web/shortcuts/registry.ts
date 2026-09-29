@@ -61,9 +61,6 @@ export type ShortcutAction =
   | 'chat.pushToTalk'
   | 'people.wall'
   | 'palette.toggle'
-  | 'zoom.in'
-  | 'zoom.out'
-  | 'zoom.reset'
   | 'find.toggle'
   | 'conv.toggleDiff'
   | 'conv.toggleTree'
@@ -109,6 +106,10 @@ export type ShortcutAction =
   | 'pr.nextThread'
   | 'pr.prevThread'
   | 'pr.review'
+  | 'pr.nextFile'
+  | 'pr.prevFile'
+  | 'pr.copyLink'
+  | 'pr.clearLines'
   | 'list.down'
   | 'list.up'
   | 'list.open'
@@ -271,10 +272,6 @@ export const SHORTCUTS: ShortcutDef[] = [
   // one line above (meta+k, no ctrl variant).
   { key: 'meta+shift+p', action: 'people.wall', skipInputCheck: true, description: 'The team' },
 
-  { key: 'meta+=', action: 'zoom.in', when: 'desktop', skipInputCheck: true, worksInModal: true, description: 'Zoom in' },
-  { key: 'meta++', action: 'zoom.in', when: 'desktop', skipInputCheck: true, worksInModal: true, description: 'Zoom in' },
-  { key: 'meta+-', action: 'zoom.out', when: 'desktop', skipInputCheck: true, worksInModal: true, description: 'Zoom out' },
-  { key: 'meta+0', action: 'zoom.reset', when: 'desktop', skipInputCheck: true, worksInModal: true, description: 'Reset zoom' },
   // Find inside the open vault note. Listed BEFORE the desktop page-find so a
   // visible note claims the chord first; the vault handler declines (falls
   // through to find.toggle, or to the browser) whenever no note is on screen
@@ -366,13 +363,17 @@ export const SHORTCUTS: ShortcutDef[] = [
 
   { key: '[', action: 'diff.prevChange', when: 'diff', description: 'Previous change' },
   { key: ']', action: 'diff.nextChange', when: 'diff', description: 'Next change' },
-  { key: 'f', action: 'diff.toggleFileTree', when: 'diff', description: 'Toggle file tree' },
+  { key: 'b', action: 'diff.toggleFileTree', when: 'diff', description: 'Toggle file tree' },
   // The pull request page's own keys. Handled on the page, listed here so the
   // help panel names them.
   { key: 'm', action: 'diff.markViewed', when: 'diff', description: 'Mark the file viewed and move on' },
   { key: 'n', action: 'pr.nextThread', when: 'diff', description: 'Next open thread' },
   { key: 'p', action: 'pr.prevThread', when: 'diff', description: 'Previous open thread' },
   { key: 'r', action: 'pr.review', when: 'diff', description: 'Open your review' },
+  { key: 'j', action: 'pr.nextFile', when: 'diff', description: 'Next file' },
+  { key: 'k', action: 'pr.prevFile', when: 'diff', description: 'Previous file' },
+  { key: 'y', action: 'pr.copyLink', when: 'diff', description: 'Copy a link to this view and the selected lines' },
+  { key: 'escape', action: 'pr.clearLines', when: 'diff', description: 'Let go of the selected lines' },
 
   { key: 'j', action: 'list.down', when: 'list', description: 'Move down' },
   { key: 'k', action: 'list.up', when: 'list', description: 'Move up' },

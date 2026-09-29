@@ -94,14 +94,14 @@ describe("inputGuardBypass", () => {
 
 // While a modal dialog is open it owns the keyboard: the dispatcher suppresses
 // every shortcut except those flagged worksInModal. The flag is reserved for
-// app-chrome actions that cannot touch the surface behind the dialog — zoom,
-// and the settings toggle (which closes the modal itself). Anything acting on
+// app-chrome actions that cannot touch the surface behind the dialog, like
+// the settings toggle (which closes the modal itself). Anything acting on
 // the session/conversation behind the dialog (switch, kill, compose.focus,
 // y/n permission answers) must never carry it: typing in a dialog input once
 // stole Ctrl+M into the background composer and let bare letters approve
 // permissions on the conversation underneath.
 describe("worksInModal is restricted to app-chrome shortcuts", () => {
-  const ALLOWED: ShortcutAction[] = ["ui.openSettings", "palette.toggle", "session.composeDock", "zoom.in", "zoom.out", "zoom.reset"];
+  const ALLOWED: ShortcutAction[] = ["ui.openSettings", "palette.toggle", "session.composeDock"];
 
   test("only the allowlisted actions fire while a modal is open", () => {
     const flagged = SHORTCUTS.filter((s) => s.worksInModal).map((s) => s.action);

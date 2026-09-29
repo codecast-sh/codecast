@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect, useContext, useMemo } from "react";
+import { repoObjectDeepHref } from "../lib/repoView";
 import { ShortId } from "./ShortId";
 import Link from "next/link";
 import { RoleFace } from "./org/RoleFace";
@@ -774,6 +775,7 @@ export function EntityAwareLink({ href, children, ...allProps }: any) {
         mention={mention}
         certain={repoObject}
         label={repoObject && text && text !== href ? text : undefined}
+        to={repoObject ? repoObjectDeepHref(href) ?? undefined : undefined}
       />
     );
   }
@@ -931,6 +933,7 @@ export function EntityIdPill({
   compact: compactProp,
   certain = false,
   label: labelProp,
+  to,
 }: {
   shortId?: string;
   type?: EntityType;
@@ -948,12 +951,17 @@ export function EntityIdPill({
   /** What the reference reads as until the row resolves (the text as written);
    *  the object's title still wins once it is in hand. */
   label?: string;
+  /** Where the pill opens, when the reference named a place inside the
+   *  object (a pull request's file view, a line in it) rather than the
+   *  object itself. */
+  to?: string;
 }) {
   // All resolution — type sniffing/server resolve, webGet queries, the
   // local-first store seed, label and route — is the shared hook.
   const rawRef = (idProp ?? shortId ?? "").trim();
   const resolution = useEntityResolution(rawRef, typeProp);
-  const { rawId, type, entity, status, href, served } = resolution;
+  const { rawId, type, entity, status, served } = resolution;
+  const href = to ?? resolution.href;
   const fullLabel = !entity && labelProp ? labelProp : resolution.label;
   const shortLabel = !entity && labelProp ? labelProp : resolution.shortLabel;
   // A reader needs the title once. A repeat mention in the same message — or

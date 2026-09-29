@@ -145,7 +145,7 @@ export function TreeContent({
   });
 
   return (
-    <div ref={rootRef} className={embedded ? "flex flex-col" : "flex-1 min-h-0 flex flex-col"}>
+    <div ref={rootRef} className="flex flex-col">
       <div className="flex items-center gap-2 px-4 py-2 border-b border-sol-border/30 shrink-0">
         <Search className="w-3.5 h-3.5 text-sol-text-dim" />
         <input
@@ -160,7 +160,7 @@ export function TreeContent({
         </span>
       </div>
 
-      <div className={embedded ? "" : "flex-1 min-h-0 overflow-y-auto"}>
+      <div>
         {tree.error && (
           <p className="px-4 py-3 text-[12px] text-sol-red">
             This tree could not be read: {serverErrorText(tree.error)}

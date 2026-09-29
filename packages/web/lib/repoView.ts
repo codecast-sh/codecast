@@ -562,8 +562,8 @@ export function toStandaloneHref(appHref: string): string {
   const [path, rest] = splitHref(appHref);
   const commit = path.match(/^\/commit\/([^/]+)\/([^/]+)\/([^/]+)$/);
   if (commit) return `/r/${commit[1]}/${commit[2]}/commit/${commit[3]}${rest}`;
-  const pr = path.match(/^\/pr\/([^/]+)\/([^/]+)\/([^/]+)$/);
-  if (pr) return `/r/${pr[1]}/${pr[2]}/pull/${pr[3]}${rest}`;
+  const pr = path.match(/^\/pr\/([^/]+)\/([^/]+)\/([^/]+)(\/[a-z]+)?$/);
+  if (pr) return `/r/${pr[1]}/${pr[2]}/pull/${pr[3]}${pr[4] ?? ""}${rest}`;
   const repo = path.match(/^\/repo\/([^/]+)\/([^/]+)(\/.*)?$/);
   if (repo) return `/r/${repo[1]}/${repo[2]}${repo[3] ?? ""}${rest}`;
   return appHref;
@@ -573,9 +573,30 @@ export function toAppHref(standaloneHref: string): string {
   const [path, rest] = splitHref(standaloneHref);
   const commit = path.match(/^\/r\/([^/]+)\/([^/]+)\/commit\/([^/]+)$/);
   if (commit) return `/commit/${commit[1]}/${commit[2]}/${commit[3]}${rest}`;
-  const pr = path.match(/^\/r\/([^/]+)\/([^/]+)\/pull\/([^/]+)$/);
-  if (pr) return `/pr/${pr[1]}/${pr[2]}/${pr[3]}${rest}`;
+  const pr = path.match(/^\/r\/([^/]+)\/([^/]+)\/pull\/([^/]+)(\/[a-z]+)?$/);
+  if (pr) return `/pr/${pr[1]}/${pr[2]}/${pr[3]}${pr[4] ?? ""}${rest}`;
   const repo = path.match(/^\/r\/([^/]+)\/([^/]+)(\/.*)?$/);
   if (repo) return `/repo/${repo[1]}/${repo[2]}${repo[3] ?? ""}${rest}`;
   return standaloneHref;
+}
+
+/**
+ * The in-app page a codecast pull request or commit link points INTO: its
+ * view and fragment (`/r/o/r/pull/7/files#diff-a.ts:R3`), as the app route.
+ * Null when the link names only the object, or is not a codecast link: the
+ * object's own route is then the destination.
+ */
+export function repoObjectDeepHref(href: string | null | undefined): string | null {
+  if (!href) return null;
+  let path = href;
+  if (/^https?:\/\//i.test(href)) {
+    let u: URL;
+    try { u = new URL(href); } catch { return null; }
+    if (!/(^|\.)codecast\.sh$/i.test(u.hostname) && !(typeof window !== "undefined" && u.origin === window.location.origin)) return null;
+    path = u.pathname + u.search + u.hash;
+  }
+  const [bare, rest] = splitHref(path);
+  const deep = bare.match(/^\/(?:r\/[^/]+\/[^/]+\/(?:pull|commit)|pr\/[^/]+\/[^/]+|commit\/[^/]+\/[^/]+)\/[^/]+(\/[a-z]+)?$/);
+  if (!deep || (!deep[1] && !rest.includes("#"))) return null;
+  return toAppHref(path);
 }

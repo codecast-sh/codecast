@@ -449,20 +449,22 @@ export function groupExternalEvents(rows: ExternalEventRecord[]): ExternalEventG
   return groups.sort((a, b) => b.at - a.at);
 }
 
-/** The shepherd states a pull request moves through, and how they read. */
-export const SHEPHERD_STATE_STYLE: Record<string, { label: string; accent: ExternalEventAccent }> = {
-  review_pending: { label: "review", accent: "yellow" },
-  changes_requested: { label: "changes", accent: "orange" },
-  ci_pending: { label: "ci", accent: "yellow" },
-  ci_red: { label: "ci red", accent: "red" },
-  behind: { label: "behind", accent: "orange" },
-  conflicts: { label: "conflicts", accent: "red" },
-  approved: { label: "approved", accent: "green" },
-  ready: { label: "ready", accent: "green" },
-  merged: { label: "merged", accent: "violet" },
-  closed: { label: "closed", accent: "muted" },
+/** The shepherd states a pull request moves through, and how they read: a
+ *  terse chip label, and the sentence a page with room says instead. */
+export const SHEPHERD_STATE_STYLE: Record<string, { label: string; phrase: string; accent: ExternalEventAccent }> = {
+  review_pending: { label: "review", phrase: "waiting for a review", accent: "yellow" },
+  changes_requested: { label: "changes", phrase: "has changes to make", accent: "orange" },
+  ci_pending: { label: "ci", phrase: "waiting on checks", accent: "yellow" },
+  ci_red: { label: "ci red", phrase: "fixing failed checks", accent: "red" },
+  behind: { label: "behind", phrase: "branch is behind its base", accent: "orange" },
+  conflicts: { label: "conflicts", phrase: "has merge conflicts to resolve", accent: "red" },
+  approved: { label: "approved", phrase: "approved", accent: "green" },
+  ready: { label: "ready", phrase: "ready to merge", accent: "green" },
+  merged: { label: "merged", phrase: "merged", accent: "violet" },
+  closed: { label: "closed", phrase: "closed", accent: "muted" },
 };
 
-export function shepherdStyle(state: string | undefined): { label: string; accent: ExternalEventAccent } {
-  return SHEPHERD_STATE_STYLE[state ?? ""] ?? { label: state ?? "open", accent: "muted" };
+export function shepherdStyle(state: string | undefined): { label: string; phrase: string; accent: ExternalEventAccent } {
+  const label = state ?? "open";
+  return SHEPHERD_STATE_STYLE[state ?? ""] ?? { label, phrase: label.replace(/_/g, " "), accent: "muted" };
 }
