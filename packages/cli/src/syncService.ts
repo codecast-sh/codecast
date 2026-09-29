@@ -625,12 +625,15 @@ export class SyncService {
   // same pending_messages path the web composer uses). The daemon calls this
   // after switch_account recycles a blocked session: the pending message is
   // what triggers the auto-resume that adopts the freshly swapped credential.
-  async enqueueUserMessage(conversationId: string, content: string, clientId?: string): Promise<void> {
+  // `human`: a person wrote it (a cloud agent's launch prompt), so it counts
+  // like the composer's messages.
+  async enqueueUserMessage(conversationId: string, content: string, clientId?: string, opts: { human?: boolean } = {}): Promise<void> {
     await this.throttle();
     await this.mutate("pendingMessages:sendMessageToSession" as any, {
       conversation_id: conversationId,
       content,
       client_id: clientId,
+      ...(opts.human ? { human: true } : {}),
       api_token: this.apiToken,
     });
   }
@@ -2000,6 +2003,28 @@ export class SyncService {
    * on the card, and stamped on the row so the heartbeat re-issue leaves it
    * alone until a human picks the host again (convex cloud.reportPlacementFailure).
    */
+  /** A live mirror's state (cloud/liveSyncJobs.ts) onto conversations.local_mirror. */
+  async reportLocalMirror(conversationId: string, deviceId: string, report: object): Promise<void> {
+    if (!this.apiToken) return;
+    try {
+      await this.mutate("cloud:reportLocalMirror" as any, { ...report, conversation_id: conversationId, device_id: deviceId, api_token: this.apiToken });
+    } catch {}
+  }
+
+  /** The laptop's report on a cloud host it manages (cloud/hostReports.ts) onto that host's device row. */
+  async reportCloudHost(hostDeviceId: string, report: object): Promise<void> {
+    if (!this.apiToken) return;
+    try {
+      await this.mutate("cloud:reportCloudHost" as any, { host_device_id: hostDeviceId, report, api_token: this.apiToken });
+    } catch {}
+  }
+
+  /** Whether mirrored sessions are working, read from Convex so the host is never touched to find out. */
+  async localMirrorActivity(conversationIds: string[]): Promise<Array<{ conversation_id: string; message_count: number; status: string; owner_device_id: string | null; host_online?: boolean }>> {
+    if (!conversationIds.length) return [];
+    return await this.client.query("cloud:localMirrorActivity" as any, { conversation_ids: conversationIds, api_token: this.apiToken });
+  }
+
   async reportCloudPlacementFailure(conversationId: string, placementToken: string | undefined, error: string, contextTooLarge?: { total_bytes: number; cap_bytes: number; files: Array<{ path: string; bytes: number }> }): Promise<void> {
     if (!this.apiToken) return;
     try {

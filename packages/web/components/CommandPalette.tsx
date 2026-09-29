@@ -53,6 +53,9 @@ import { compactDuration, teammateWhereabouts, type TeammateWhereabouts } from "
 import { MemberFace } from "./presence/MemberFace";
 import { useMissingSessionRow } from "../hooks/useMissingSessionRow";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
+import { useSessionQuerySuggestions } from "../hooks/useSessionQuerySuggestions";
+import { SessionQuerySuggestionRow } from "./SessionQuerySuggestList";
+import { applySessionQueryCompletion, parseSessionQuery, sessionQuerySearches } from "@codecast/shared/search";
 import { useCollectionRows } from "../hooks/useCollectionRows";
 import { triggerSig, useSyncTriggers } from "../hooks/useSyncTriggers";
 import { POP_OUT_PEOPLE_TITLE, isElectron, isPeopleWindow } from "../lib/desktop";
@@ -1772,9 +1775,15 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // whole palette into its ErrorBoundary (ct-37627). The breaker unsubscribes a
   // never-resolving search so its silent retry loop stops flapping the shared
   // websocket (1011) for the rest of the app.
+  // A lone operator being typed (`pr:`) searches nothing; its completions
+  // answer instead.
+  const sessionSearchOn = useMemo(
+    () => debouncedQuery.length >= 2 && sessionQuerySearches(parseSessionQuery(debouncedQuery)),
+    [debouncedQuery],
+  );
   const { data: searchResults, error: searchError } = useQueryNoThrow(
     api.conversations.searchConversations,
-    open && debouncedQuery.length >= 2 ? { query: debouncedQuery, limit: 10 } : "skip",
+    open && sessionSearchOn ? { query: debouncedQuery, limit: 10 } : "skip",
     { breakAfterMs: 15_000 }
   );
   const searchData = searchResults && "results" in searchResults ? searchResults : null;
@@ -1783,7 +1792,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // content search resolves — so the user always gets something (ct-37627).
   const { data: titleResults } = useQueryNoThrow(
     api.conversations.searchConversationTitles,
-    open && debouncedQuery.length >= 2 ? { query: debouncedQuery, limit: 10 } : "skip"
+    open && sessionSearchOn ? { query: debouncedQuery, limit: 10 } : "skip"
   );
   const titleData = titleResults && "results" in titleResults ? titleResults : null;
   const searchRows = useMemo(
@@ -2007,6 +2016,14 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     const q = query.trim();
     navigate(q ? `/search?q=${encodeURIComponent(q)}` : "/search");
   }, [query, navigate]);
+
+  // Session filter autocomplete (file:, pr:, label: ...), the same rows the
+  // /search box offers. A value list outranks every match (a dangling
+  // operator searches nothing yet); operator names sit below real matches,
+  // since the word may just be text (paletteItemScore reads the kind).
+  const { completion: filterCompletion, suggestions: filterSuggestions } = useSessionQuerySuggestions(
+    !picking && !drilled ? query : "",
+  );
 
   const openVaultNote = useCallback((path: string) => {
     useVaultStore.getState().noteOpened(path);
@@ -2552,6 +2569,23 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           </CommandPrimitive.Empty>
         )}
 
+        {filterCompletion && filterSuggestions.length > 0 && (
+          <CommandPrimitive.Group heading="Filter sessions" className={groupClass}>
+            {filterSuggestions.map((s) => (
+              <CommandPrimitive.Item
+                key={s.text}
+                value={`__filter__${filterCompletion.kind === "value" ? "v" : "o"} ${s.text}`}
+                data-palette-action="complete"
+                onSelect={() => setQuery(applySessionQueryCompletion(query, filterCompletion, s.text).value)}
+                className={itemClass}
+              >
+                <Search className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+                <SessionQuerySuggestionRow s={s} />
+              </CommandPrimitive.Item>
+            ))}
+          </CommandPrimitive.Group>
+        )}
+
         {(["person", "role"] as const).map((kind) => {
           const rows = whoRows.filter((r) => r.kind === kind);
           return rows.length > 0 && (
@@ -2889,7 +2923,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         )}
 
         {/* Async conversation search results */}
-        {debouncedQuery.length >= 2 && pickAllows("session") && (
+        {sessionSearchOn && pickAllows("session") && (
           <CommandPrimitive.Group
             heading={searchData || titleData ? `Search Results (${searchRows.length})` : searchError ? "Search Results" : "Searching..."}
             className={groupClass}
@@ -2969,7 +3003,10 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">
                   {result.titleMatch
                     ? "title"
-                    : `${result.matches?.length || 0} match${(result.matches?.length || 0) !== 1 ? "es" : ""}`}
+                    : result.matches?.length
+                    ? `${result.matches.length} match${result.matches.length !== 1 ? "es" : ""}`
+                    // An operator-only query (file:, pr:, ...) matches the session, not a message.
+                    : "filter"}
                 </span>
                 <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{timeAgo(result.updatedAt)}</span>
               </CommandPrimitive.Item>

@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { extendLineRange, isLineSelected } from "../patchParser";
 import {
   SESSION_BLAME_HUES,
+  blameViaLabel,
   foldSessionBlame,
   nextBlameMode,
   sessionBlameColors,
@@ -407,6 +408,21 @@ describe("session blame", () => {
       line_matches: [{ ...s2, line: "const one = 1;" }, { ...s2, line: "const two = 2;" }],
     });
     expect(ranges[0]).toMatchObject({ start_line: 1, end_line: 3, session: { conversation_id: "c2" } });
+  });
+
+  it("a commit's trailer outranks the nearby inference, but not a line's own edit", () => {
+    const trailed = { ...s1, via: "trailer" as const };
+    const ranges = foldSessionBlame(git, lines, {
+      by_sha: { aaaa111: trailed },
+      line_matches: [{ ...s2, line: "const one = 1;" }, { ...s2, line: "const two = 2;" }],
+    });
+    expect(ranges.map((r) => [r.start_line, r.end_line, r.session?.conversation_id, r.session?.via])).toEqual([
+      [1, 2, "c2", "edit"],
+      [3, 3, "c1", "trailer"],
+      [4, 6, undefined, undefined],
+      [7, 8, undefined, undefined],
+    ]);
+    expect(blameViaLabel("trailer")).toContain("Codecast-Session trailer");
   });
 
   it("does not infer when no single session wrote half of a commit's matched lines", () => {

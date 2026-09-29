@@ -33,10 +33,13 @@ export * from "./cloudPlacement";
 // Cloud workspace mode (isolated worktree vs the host's shared checkout) and
 // the ONE occupancy rule Convex, the CLI and `cast hosts ls` apply to it.
 export * from "./cloudWorkspace";
+export * from "./localMirror";
+export * from "./cloudHostReport";
 export * from "./worktrees";
 export * from "./deviceName";
 export * from "./providerKeys";
 export * from "./cloudSessionSync";
+export * from "./cloudAgents";
 export * from "./providerKeyCrypto";
 export * from "./snippets";
 export * from "./castPlayer";
