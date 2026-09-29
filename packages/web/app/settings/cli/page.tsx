@@ -11,14 +11,7 @@ import { Button } from "../../../components/ui/button";
 import { SegmentedToggle } from "../../../components/SegmentedToggle";
 import { SettingsPanel, SettingsSection } from "../../../components/settings/ui";
 import { BrowserExtensionSetup } from "../../../components/settings/BrowserExtensionSetup";
-
-type InstallOs = "unix" | "windows";
-
-function detectOs(): InstallOs {
-  if (typeof navigator === "undefined") return "unix";
-  const ua = `${navigator.platform || ""} ${navigator.userAgent || ""}`;
-  return /win/i.test(ua) ? "windows" : "unix";
-}
+import { detectInstallOs, type InstallOs } from "../../../components/install-tabs";
 
 // The two install commands diverge by shell: curl|sh can't run on Windows, and
 // irm|iex can't run on a POSIX shell. The Windows form passes the token via env
@@ -41,7 +34,7 @@ export default function CliSettingsPage() {
   const [setupToken, setSetupToken] = useState<string | null>(null);
   const [tokenExpiry, setTokenExpiry] = useState<number | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [os, setOs] = useState<InstallOs>(detectOs);
+  const [os, setOs] = useState<InstallOs>(detectInstallOs);
 
   const createSetupToken = useMutation(api.apiTokens.createSetupToken);
 

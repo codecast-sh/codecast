@@ -13085,8 +13085,9 @@ export async function killConversation(ctx: any, userId: Id<"users">, args: { co
       patch.status = "completed";
     }
     await ctx.db.patch(args.conversation_id, patch);
-    // A retired row leaves the Lock Screen strip with the next push.
-    await scheduleLiveActivityRefresh(ctx, conv.user_id, { urgent: true });
+    // A retired row leaves the Lock Screen strip with the next push. The org
+    // cores that retire a seat run without a scheduler in their pure form.
+    if (ctx.scheduler) await scheduleLiveActivityRefresh(ctx, conv.user_id, { urgent: true });
     // Kill must stick: cancel any armed schedule that injects into this
     // conversation, or its next fire would resurrect the session the user
     // just killed (see cancelTasksBoundToConversation). Scan the RUNNER's

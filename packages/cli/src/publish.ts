@@ -38,6 +38,7 @@ import {
   type ArtifactLsRow,
 } from "./publishCommand.js";
 import { apiPost, missingRouteError, type PublishDeps } from "./castApi.js";
+import { CAST_PLAYER_GUIDE, pageUsesPlayer } from "@codecast/shared/contracts";
 import { commandGroup } from "./commandGroups.js";
 
 const WATCH_DEBOUNCE_MS = 400;
@@ -199,6 +200,7 @@ function printPublishResult(
   result: { url: string; version: number; updated?: boolean; unchanged?: boolean; manage_url?: string; edit_url?: string | null; evidence?: { task?: string | null; plan?: string | null; station?: string | null } },
   title: string,
   access?: Record<string, unknown>,
+  showsVideo?: boolean,
 ): void {
   console.log(`${fmt.success(icons.check)} ${fmt.highlight(title)}  ${versionLine(result)}`);
   console.log(`  ${fmt.accent(result.url)}`);
@@ -212,6 +214,9 @@ function printPublishResult(
   }
   if (access) {
     console.log(`  ${fmt.label("gates:")} ${describeAccess(access)}`);
+  }
+  if (showsVideo) {
+    console.log(`  ${fmt.label("video:")} plays in the cast player; \`cast publish video\` covers chapters and styling it to the page`);
   }
 }
 
@@ -586,7 +591,7 @@ async function publishOnce(
   absPath: string,
   options: PublishOptions,
   extra: { access?: Record<string, unknown>; sessionRef?: string; withThumb: boolean; forceNew: boolean; exitOnError: boolean },
-): Promise<{ result: any; title: string }> {
+): Promise<{ result: any; title: string; showsVideo: boolean }> {
   const payload = buildPublishPayload(absPath, options.title);
   await uploadMedia(deps, payload);
   let thumbB64: string | undefined;
@@ -599,7 +604,8 @@ async function publishOnce(
     publishRequestBody(payload, { access: extra.access, sessionRef: extra.sessionRef, forceNew: extra.forceNew, thumbB64, task: options.task, plan: options.plan }),
     { exitOnError: extra.exitOnError },
   );
-  return { result, title: payload.title };
+  const page = payload.content ?? (payload.entryHtmlPath ? fs.readFileSync(payload.entryHtmlPath, "utf-8") : "");
+  return { result, title: payload.title, showsVideo: pageUsesPlayer(page) };
 }
 
 async function runPublish(deps: PublishDeps, target: string, options: PublishOptions): Promise<void> {
@@ -613,8 +619,9 @@ async function runPublish(deps: PublishDeps, target: string, options: PublishOpt
 
   let result: any;
   let title: string;
+  let showsVideo = false;
   try {
-    ({ result, title } = await publishOnce(deps, absPath, options, {
+    ({ result, title, showsVideo } = await publishOnce(deps, absPath, options, {
       access,
       sessionRef,
       withThumb: true,
@@ -629,7 +636,7 @@ async function runPublish(deps: PublishDeps, target: string, options: PublishOpt
   if (options.json) {
     console.log(JSON.stringify(result, null, 2));
   } else {
-    printPublishResult(result, title, access);
+    printPublishResult(result, title, access, showsVideo);
   }
   if (options.open && result?.url) await open(result.url).catch(() => {});
   if (!options.watch) return;
@@ -698,7 +705,7 @@ export function registerPublishCommand(program: Command, deps: PublishDeps): voi
   program
     .command("publish")
     .description(commandGroup("publish").description)
-    .argument("[target]", "file.html, file.md, or a directory — or a subcommand: ls | rm | rollback | open | versions | comments | viewers | links | set")
+    .argument("[target]", "file.html, file.md, or a directory — or a subcommand: ls | rm | rollback | open | versions | comments | viewers | links | set | video")
     .argument("[args...]", "subcommand arguments")
     .option("--title <title>", stdinText("Override the page title (default: <title> tag / first heading / filename)"))
     .option("--new", "Publish under a fresh URL even if this path was published before")
@@ -728,6 +735,7 @@ export function registerPublishCommand(program: Command, deps: PublishDeps): voi
         process.exit(1);
       }
       if (target === "ls") return runLs(deps, json);
+      if (target === "video" && !fs.existsSync(target)) return void console.log(CAST_PLAYER_GUIDE);
       if (target === "rm") {
         if (!args[0]) {
           console.error(fmt.error("Usage: cast publish rm <slug|path>"));

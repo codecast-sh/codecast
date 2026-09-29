@@ -14,9 +14,17 @@ export function callLinkHow(link: CallLinkHow): string {
     .join(", ");
 }
 
+/** The call page link for one excerpt (those turns open selected), or the
+ *  whole call when there is none. */
+export function callExcerptHref(
+  transcriptId: string,
+  excerpt?: { from_seq: number; to_seq: number } | null,
+): string {
+  return excerpt ? `/calls/${transcriptId}?turns=${excerpt.from_seq}-${excerpt.to_seq}` : `/calls/${transcriptId}`;
+}
+
 /** The call page link for a session's side of the link: the latest excerpt
- *  sent opens with those turns selected; a live feed opens the whole call. */
+ *  sent, or the whole call for a live feed. */
 export function callLinkHref(transcriptId: string, link: CallLinkHow): string {
-  const last = link.excerpts[link.excerpts.length - 1];
-  return last ? `/calls/${transcriptId}?turns=${last.from_seq}-${last.to_seq}` : `/calls/${transcriptId}`;
+  return callExcerptHref(transcriptId, link.excerpts[link.excerpts.length - 1]);
 }

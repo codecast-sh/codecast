@@ -10,7 +10,7 @@ import { INGEST_WINDOW_ROWS } from "./workers/ingestTypes.js";
 import { TranscriptRetryOwner } from "./workers/ingestRetryOwner.js";
 import { ingestRetainedWeight } from "./workers/ingestTransport.js";
 import { computeIngestSyncDelta, provenSyncedPrefix, samePersistedFile, transcriptSignatureWatermark, ingestIdentity, ingestMessageTitle, ingestRecord, ingestSource, readTranscriptIngest, sameIngestFile, sameIngestSnapshot, serializeTranscript, validateTranscriptIngest } from "./workers/ingestClient.js";
-import { checkTranscriptDeadline } from "./workers/ingestDeadline.js";
+import { checkTranscriptDeadline, outsideTranscriptDeadline } from "./workers/ingestDeadline.js";
 import { selfExecInfo } from "./selfExec.js";
 import { cursorPassBoundary, readCodexSessionMetaHeadAsync, readCompleteLines, readCompleteLinesSync, readIngestWindow, sessionMetaHeadCut } from "./transcriptWindow.js";
 export { sessionMetaHeadCut, readCodexSessionMetaHeadAsync } from "./transcriptWindow.js";
@@ -19562,9 +19562,13 @@ function ensureManagedSessionHeartbeat(sessionId: string): void {
   ensureHeartbeatFlushLoop();
 }
 
+// Armed lazily by whichever call site registers the first session, often from
+// inside a transcript ingest. A timer keeps the async context it was created
+// in, so it is armed outside any transcript deadline: the fleet's liveness
+// send and reconciles must never fail on one transcript's budget.
 function ensureHeartbeatFlushLoop(): void {
   if (heartbeatFlushTimer || !syncServiceRef) return;
-  heartbeatFlushTimer = setInterval(() => { void flushManagedHeartbeats(); }, HEARTBEAT_FLUSH_INTERVAL_MS);
+  heartbeatFlushTimer = outsideTranscriptDeadline(() => setInterval(() => { void flushManagedHeartbeats(); }, HEARTBEAT_FLUSH_INTERVAL_MS));
 }
 
 // Run an async op over items with bounded concurrency (a small worker pool), so
@@ -19659,7 +19663,11 @@ export async function runHeartbeatFlush(): Promise<void> {
     });
     try {
       await sync.heartbeatManagedSessionsBatch(payload);
-    } catch {}
+    } catch (err) {
+      // A failed send leaves every session in the batch reading as stopped on
+      // the server within the liveness window, so it must be visible here.
+      log(`[HEARTBEAT-FLUSH] batch of ${payload.length} failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
   // One line/tick to confirm the fleet flushes in a handful of transactions
   // (each = one inbox invalidation) rather than ~N. Pre-batch this was N/30s.
