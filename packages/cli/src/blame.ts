@@ -1,7 +1,8 @@
 // Line-level `cast blame`: a drop-in `git blame` whose author column shows the
 // codecast session that wrote each line. git does the hard part locally
 // (line-history tracking via `git blame --porcelain`); the server resolves the
-// unique SHAs to sessions via file_changes commit rows, and uncommitted lines
+// unique SHAs to sessions, first by each commit's Codecast-Session trailer
+// (read here from git), then via file_changes commit rows, and uncommitted lines
 // by content match against the caller's recent edits. Output mirrors git
 // blame's default and porcelain formats byte-for-byte so editor integrations
 // keep parsing it; porcelain mode carries the attribution as extra
@@ -12,7 +13,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import open from "open";
 import { cliFetchRead } from "./cliHttp.js";
-import { contentLinesToMatch as selectContentLines, MAX_CONTENT_LINES, type ContentLine } from "@codecast/shared/blame";
+import { contentLinesToMatch as selectContentLines, extractSessionTrailer, MAX_CONTENT_LINES, type ContentLine } from "@codecast/shared/blame";
 import { defaultConfigDir } from "./config/configDir.js";
 
 const WEB_BASE = process.env.CODE_CHAT_SYNC_WEB_URL || "https://codecast.sh";
@@ -273,6 +274,29 @@ export interface CommitDescriptor {
   // parseable hash (compound commands, -q, custom helpers).
   summary?: string;
   author_time?: number;
+  // The conversation id the commit's Codecast-Session trailer names: the
+  // session's own record of the commit, which the server checks first.
+  session?: string;
+}
+
+// sha → the conversation its Codecast-Session trailer names, read from the
+// commit messages in one git call. A repository git cannot read (a shallow
+// clone missing the commit) just yields no trailers.
+export async function readSessionTrailers(shas: string[], cwd: string): Promise<Map<string, string>> {
+  const found = new Map<string, string>();
+  if (shas.length === 0) return found;
+  try {
+    const { stdout } = await execGit(["log", "--no-walk=unsorted", "--format=%x1e%H%x1f%B", ...shas, "--"], cwd);
+    for (const record of stdout.split("\x1e")) {
+      const sep = record.indexOf("\x1f");
+      if (sep < 0) continue;
+      const session = extractSessionTrailer(record.slice(sep + 1));
+      if (session) found.set(record.slice(0, sep), session);
+    }
+  } catch {
+    // Attribution falls back to the server's other evidence.
+  }
+  return found;
 }
 
 async function resolveSessions(
@@ -314,7 +338,8 @@ async function resolveSessions(
 }
 
 // Turn parsed blame porcelain into a session resolution. Builds the commit
-// descriptors (sha + summary + author-time, for the 3-tier server match) and
+// descriptors (sha + trailer session + summary + author-time, for the tiered
+// server match) and
 // the content-line list (for authoring-session attribution), then calls the
 // resolve endpoint. Degrades to no attribution on any failure — a blame must
 // stay a faithful git blame even when the network blinks.
@@ -324,16 +349,17 @@ async function resolveFromParsed(
   config: { auth_token?: string; convex_url?: string },
 ): Promise<BlameResolution> {
   if (!config.auth_token || !config.convex_url) return EMPTY_RESOLUTION;
-  const commits: CommitDescriptor[] = [...new Set(parsed.lines.map((l) => l.sha))]
-    .filter((s) => s !== ZERO_SHA)
-    .map((sha) => {
-      const meta = parsed.commits.get(sha);
-      return {
-        sha,
-        summary: meta?.summary || undefined,
-        author_time: meta?.authorTime ? meta.authorTime * 1000 : undefined,
-      };
-    });
+  const shas = [...new Set(parsed.lines.map((l) => l.sha))].filter((s) => s !== ZERO_SHA);
+  const trailers = await readSessionTrailers(shas, path.dirname(absFilePath));
+  const commits: CommitDescriptor[] = shas.map((sha) => {
+    const meta = parsed.commits.get(sha);
+    return {
+      sha,
+      summary: meta?.summary || undefined,
+      author_time: meta?.authorTime ? meta.authorTime * 1000 : undefined,
+      session: trailers.get(sha),
+    };
+  });
   const contentLines = contentLinesToMatch(parsed, Date.now());
   const siteUrl = config.convex_url.replace(".cloud", ".site");
   try {

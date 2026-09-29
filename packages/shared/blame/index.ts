@@ -1,3 +1,5 @@
+import { buildEntityUrl, CODECAST_BASE_URL, isConvexId, parseEntityUrl } from "../entities";
+
 // The pure half of session blame, shared by the CLI (`cast blame`), the
 // server resolver (convex/blame.ts) and the web viewer.
 //
@@ -61,4 +63,47 @@ export function contentLinesToMatch(lines: Iterable<BlamedLine>, nowMs: number):
     if (byText.size >= MAX_CONTENT_LINES) break;
   }
   return [...byText.values()];
+}
+
+// ── The Codecast-Session trailer ──
+//
+// A commit an agent makes carries the session that made it as a git trailer:
+//
+//   Codecast-Session: https://codecast.sh/conversation/<conversation id>
+//
+// The link travels in the message, so it survives rebases, squash merges and
+// any git host, and `git log` alone leads back to the conversation. It names
+// the FULL conversation id: short ids are prefixes that collide, and the
+// trailer is only worth having if it resolves to exactly one session.
+
+export const SESSION_TRAILER_KEY = "Codecast-Session";
+
+/** The trailer value for a conversation: its canonical session link. */
+export function sessionTrailerValue(conversationId: string, base: string = CODECAST_BASE_URL): string {
+  return buildEntityUrl("session", conversationId, base)!;
+}
+
+const TRAILER_LINE = new RegExp(`^${SESSION_TRAILER_KEY}\\s*:\\s*(\\S+)\\s*$`, "i");
+
+/**
+ * The conversation id a commit message's Codecast-Session trailer names, or
+ * null. Only the message's last paragraph is read, which is where git keeps
+ * trailers, so a body that quotes a trailer line (a commit about this very
+ * feature) names nothing. When several trailers are present (an amend by a
+ * second session) the last one wins: it is the session that wrote the commit
+ * as it now stands. Anything but a full conversation id is refused.
+ */
+export function extractSessionTrailer(message: string | null | undefined): string | null {
+  if (!message) return null;
+  const paragraphs = message.replace(/\r\n/g, "\n").trimEnd().split(/\n[ \t]*\n/);
+  const last = paragraphs[paragraphs.length - 1] ?? "";
+  let found: string | null = null;
+  for (const line of last.split("\n")) {
+    const value = TRAILER_LINE.exec(line.trim())?.[1];
+    if (!value) continue;
+    const fromUrl = parseEntityUrl(value);
+    const id = fromUrl ? (fromUrl.type === "session" ? fromUrl.id : null) : value;
+    if (id && isConvexId(id)) found = id;
+  }
+  return found;
 }

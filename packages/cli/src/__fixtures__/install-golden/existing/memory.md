@@ -42,9 +42,11 @@ You are one session among many, and past conversations hold the decisions, patte
 ```bash
 # Search & browse (default scope: the team for this directory)
 cast search "auth"                # --mine | -m samvit | -g (all teams) | -s 7d
+cast search "file:src/auth.ts"    # also commit:<sha> pr:<n> label: author: repo: after:7d; text searches within
 cast feed                         # team feed: --mine, -m <name>, --state needs-input, --label api
 cast read <id> 15:25              # messages 15-25; --full shows tool payloads (REQUIRED to see a StructuredOutput return)
 cast read '<share-url>#msg-<id>'  # a window around a linked message (-c N for its size)
+cast read <id> --ask "<question>"  # answer from one session, citing lines and checking later ones for reversals; no id = this session
 cast link [id] [line]             # deep link to any object (session+line → message, ct-/pl-, --type doc); no args = this session
 
 # Sessions: which (ids, --label, --state, --team, -m) × what (state | --messages) × live (-w)

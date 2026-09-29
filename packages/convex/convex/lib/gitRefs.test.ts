@@ -9,6 +9,7 @@ import {
   prUrl,
   commitUrl,
   shortSha,
+  conversationFromSessionTrailer,
 } from "./gitRefs";
 
 describe("extractTaskShortIds", () => {
@@ -58,6 +59,40 @@ describe("resolveTaskLinks", () => {
   test("reads several pieces of git text at once", async () => {
     const links = await resolveTaskLinksFromText({ db: db() }, "closes ct-1", null, "ct-2-branch");
     expect(links.task_ids).toEqual(["task_a", "task_b"] as any);
+  });
+});
+
+describe("conversationFromSessionTrailer", () => {
+  // Full-length ids: the trailer refuses anything but a full conversation id.
+  const MINE = "a".repeat(32);
+  const TEAMMATE = "b".repeat(32);
+  const STRANGER = "c".repeat(32);
+  const db = () =>
+    makeFakeDb({
+      conversations: [
+        { _id: MINE, user_id: "user_me", team_id: "team_a" },
+        { _id: TEAMMATE, user_id: "user_mate", team_id: "team_a" },
+        { _id: STRANGER, user_id: "user_x", team_id: "team_b" },
+      ],
+    });
+  const msg = (id: string) => `fix: a thing\n\nCodecast-Session: https://codecast.sh/conversation/${id}`;
+
+  test("links a session the reporting user owns", async () => {
+    expect(await conversationFromSessionTrailer({ db: db() }, msg(MINE), { userId: "user_me" as any })).toBe(MINE as any);
+  });
+
+  test("links a teammate's session for a commit in the same team", async () => {
+    expect(await conversationFromSessionTrailer({ db: db() }, msg(TEAMMATE), { teamId: "team_a" as any })).toBe(TEAMMATE as any);
+  });
+
+  test("a trailer naming another workspace's session links nothing", async () => {
+    expect(await conversationFromSessionTrailer({ db: db() }, msg(STRANGER), { userId: "user_me" as any, teamId: "team_a" as any })).toBeUndefined();
+  });
+
+  test("a missing session, a missing trailer and a quoted trailer link nothing", async () => {
+    expect(await conversationFromSessionTrailer({ db: db() }, msg("d".repeat(32)), { teamId: "team_a" as any })).toBeUndefined();
+    expect(await conversationFromSessionTrailer({ db: db() }, "fix: plain", { teamId: "team_a" as any })).toBeUndefined();
+    expect(await conversationFromSessionTrailer({ db: db() }, `${msg(MINE)}\n\nprose after`, { userId: "user_me" as any })).toBeUndefined();
   });
 });
 

@@ -5,6 +5,7 @@ import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
 import { wakeDevicesFor } from "./cloud";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
+import { hostReadinessValidator } from "./lib/cloudHostValidators";
 import { teamFeatureEnabled } from "@codecast/shared/contracts";
 import { paginationOptsValidator } from "convex/server";
 import type { PaginationOptions, PaginationResult, RegisteredQuery } from "convex/server";
@@ -421,6 +422,7 @@ export const daemonHeartbeat = mutation({
     }))),
     // The device's PUBLIC git key — see schema devices.git_pubkey.
     git_pubkey: v.optional(v.string()),
+    host_readiness: v.optional(hostReadinessValidator),
     // CC account inventory (names/emails/tiers, never tokens) for the switcher.
     cc_accounts: v.optional(ccAccountsValidator),
     // DEPRECATED: old daemons still send the machine-wide Codex snapshot;
@@ -605,6 +607,7 @@ export const daemonHeartbeat = mutation({
           : {}),
         ...(args.git_plane !== undefined ? { git_plane: args.git_plane } : {}),
         ...(args.git_pubkey !== undefined ? { git_pubkey: args.git_pubkey } : {}),
+        ...(args.host_readiness !== undefined ? { host_readiness: args.host_readiness } : {}),
         ...(args.cc_accounts !== undefined ? { cc_accounts: args.cc_accounts } : {}),
         ...(args.codex_usage !== undefined ? { codex_usage: args.codex_usage } : {}),
         ...(args.codex_accounts !== undefined ? { codex_accounts: args.codex_accounts } : {}),
