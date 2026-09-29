@@ -94,6 +94,8 @@ export default function SyncPage() {
   const { data: projects } = useSettingsData("syncProjects");
   const { data: directoryMappings } = useSettingsData("directoryMappings");
   const updateSyncSettings = useMutation(api.users.updateSyncSettings);
+  const claudeCloudSync = (user as { claude_cloud_sync?: boolean } | null | undefined)?.claude_cloud_sync ?? true;
+  const setClaudeCloudSync = useInboxStore((s) => s.setClaudeCloudSync);
   const updateDirectoryMapping = useMutation(api.users.updateDirectoryTeamMapping);
   const removeDirectoryMapping = useMutation(api.users.removeDirectoryTeamMapping);
   const deleteConversationsForPath = useMutation(api.users.deleteConversationsForPath);
@@ -604,6 +606,16 @@ export default function SyncPage() {
           }
         >
           <Switch checked={syncAll} onCheckedChange={handleToggleSyncAll} aria-label="Sync all folders" />
+        </SettingsRow>
+        <SettingsRow
+          label="Sync Claude Code cloud sessions"
+          description={
+            claudeCloudSync
+              ? "Sessions you run on claude.ai/code sync here like local ones, and you can message them from codecast. Your daemon reads them with the Claude login on your machine."
+              : "Sessions you run on claude.ai/code stay on claude.ai only."
+          }
+        >
+          <Switch checked={claudeCloudSync} onCheckedChange={setClaudeCloudSync} aria-label="Sync Claude Code cloud sessions" />
         </SettingsRow>
       </SettingsSection>
 

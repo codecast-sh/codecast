@@ -1,0 +1,630 @@
+event: status
+data: {"runId":"run-e3dd96f7-9663-4b1d-bc74-5d445a7bb666","status":"FINISHED"}
+
+id: 1790662675238-0
+event: interaction_update
+data: {"type":"step-started","stepId":0}
+
+id: 1790662675748-0
+event: interaction_update
+data: {"type":"user-message-appended","userMessage":{"type":"user_message","session_id":"run-e3dd96f7-9663-4b1d-bc74-5d445a7bb666","text":"Start multitasking"}}
+
+id: 1790662679306-0
+event: assistant
+data: {"text":"I'll"}
+
+id: 1790662679312-0
+event: assistant
+data: {"text":" fork"}
+
+id: 1790662679319-0
+event: assistant
+data: {"text":" one"}
+
+id: 1790662679326-0
+event: assistant
+data: {"text":" background"}
+
+id: 1790662679333-0
+event: assistant
+data: {"text":" worker"}
+
+id: 1790662679340-0
+event: assistant
+data: {"text":" and"}
+
+id: 1790662679346-0
+event: assistant
+data: {"text":" stop"}
+
+id: 1790662679355-0
+event: assistant
+data: {"text":" in"}
+
+id: 1790662679362-0
+event: assistant
+data: {"text":" the"}
+
+id: 1790662679368-0
+event: assistant
+data: {"text":" foreground"}
+
+id: 1790662679375-0
+event: assistant
+data: {"text":" so"}
+
+id: 1790662679382-0
+event: assistant
+data: {"text":" it"}
+
+id: 1790662679388-0
+event: assistant
+data: {"text":" can"}
+
+id: 1790662679395-0
+event: assistant
+data: {"text":" continue"}
+
+id: 1790662679402-0
+event: assistant
+data: {"text":" the"}
+
+id: 1790662679409-0
+event: assistant
+data: {"text":" task"}
+
+id: 1790662679415-0
+event: assistant
+data: {"text":"."}
+
+id: 1790662682957-0
+event: tool_call
+data: {"callId": "call-5235e0a1-999e-4c27-ad48-ab8bd1e408a8-0\nfc_99168e68-6a19-9e93-8969-7ac4c1707a40_0", "name": "get_mcp_tools", "status": "running", "args": {"toolCallId": "unknown-tool-call-id"}, "result": {"error": {"error": "Invalid arguments"}}}
+
+id: 1790662684044-0
+event: tool_call
+data: {"callId": "call-5235e0a1-999e-4c27-ad48-ab8bd1e408a8-0\nfc_99168e68-6a19-9e93-8969-7ac4c1707a40_0", "name": "get_mcp_tools", "status": "running", "args": {"server": "cursor", "toolName": "Task", "toolCallId": "call-5235e0a1-999e-4c27-ad48-ab8bd1e408a8-0\nfc_99168e68-6a19-9e93-8969-7ac4c1707a40_0"}}
+
+id: 1790662684121-0
+event: tool_call
+data: {"callId": "call-5235e0a1-999e-4c27-ad48-ab8bd1e408a8-0\nfc_99168e68-6a19-9e93-8969-7ac4c1707a40_0", "name": "get_mcp_tools", "status": "completed", "args": {"server": "cursor", "toolName": "Task", "toolCallId": "call-5235e0a1-999e-4c27-ad48-ab8bd1e408a8-0\nfc_99168e68-6a19-9e93-8969-7ac4c1707a40_0"}, "result": {"success": {"stdout": "(trimmed for the fixture)"}}}
+
+id: 1790662684881-0
+event: interaction_update
+data: {"type":"step-started","stepId":66}
+
+id: 1790662689856-0
+event: interaction_update
+data: {"type":"step-started","stepId":91}
+
+id: 1790662694839-0
+event: tool_call
+data: {"callId": "call-04c8b5cb-f6bd-4f05-8f45-92a24a123aea-2\nfc_3cdda5f1-ee6a-9f5e-a774-717da0992e49_0", "name": "task", "status": "running", "args": {"description": "Forked multitask worker", "prompt": "You are the forked subagent; continue executing your task.", "subagentType": {"unspecified": {}}, "model": "cursor-grok-4.6-medium", "agentId": "bc-7574adff-bfe8-505b-86e2-671066bb0716", "machine": {"sameMachine": {}}}}
+
+id: 1790662695606-0
+event: interaction_update
+data: {"type":"step-started","stepId":117}
+
+id: 1790662698022-0
+event: assistant
+data: {"text":"Fork"}
+
+id: 1790662698033-0
+event: assistant
+data: {"text":"ed"}
+
+id: 1790662698041-0
+event: assistant
+data: {"text":" a"}
+
+id: 1790662698044-0
+event: assistant
+data: {"text":" background"}
+
+id: 1790662698051-0
+event: assistant
+data: {"text":" worker"}
+
+id: 1790662698058-0
+event: assistant
+data: {"text":" to"}
+
+id: 1790662698061-0
+event: assistant
+data: {"text":" continue"}
+
+id: 1790662698067-0
+event: assistant
+data: {"text":" the"}
+
+id: 1790662698086-0
+event: assistant
+data: {"text":" task"}
+
+id: 1790662698095-0
+event: assistant
+data: {"text":"."}
+
+id: 1790662698099-0
+event: assistant
+data: {"text":" I'll"}
+
+id: 1790662698107-0
+event: assistant
+data: {"text":" pick"}
+
+id: 1790662698114-0
+event: assistant
+data: {"text":" up"}
+
+id: 1790662698118-0
+event: assistant
+data: {"text":" when"}
+
+id: 1790662698124-0
+event: assistant
+data: {"text":" it"}
+
+id: 1790662698127-0
+event: assistant
+data: {"text":" reports"}
+
+id: 1790662698133-0
+event: assistant
+data: {"text":" back"}
+
+id: 1790662698140-0
+event: assistant
+data: {"text":"."}
+
+id: 1790662698315-0
+event: interaction_update
+data: {"type":"turn-ended"}
+
+id: 1790662698984-0
+event: status
+data: {"runId":"run-e3dd96f7-9663-4b1d-bc74-5d445a7bb666","status":"RUNNING"}
+
+id: 1790662700241-0
+event: interaction_update
+data: {"type":"step-started","stepId":162}
+
+id: 1790662700273-0
+event: interaction_update
+data: {"type":"user-message-appended","userMessage":{"type":"user_message","session_id":"run-e3dd96f7-9663-4b1d-bc74-5d445a7bb666","text":"cool"}}
+
+id: 1790662702478-0
+event: assistant
+data: {"text":"Sounds"}
+
+id: 1790662702485-0
+event: assistant
+data: {"text":" good"}
+
+id: 1790662702493-0
+event: assistant
+data: {"text":"."}
+
+id: 1790662702500-0
+event: assistant
+data: {"text":" Whenever"}
+
+id: 1790662702507-0
+event: assistant
+data: {"text":" you"}
+
+id: 1790662702514-0
+event: assistant
+data: {"text":" have"}
+
+id: 1790662702521-0
+event: assistant
+data: {"text":" a"}
+
+id: 1790662702527-0
+event: assistant
+data: {"text":" real"}
+
+id: 1790662702534-0
+event: assistant
+data: {"text":" task"}
+
+id: 1790662702552-0
+event: assistant
+data: {"text":","}
+
+id: 1790662702559-0
+event: assistant
+data: {"text":" send"}
+
+id: 1790662702569-0
+event: assistant
+data: {"text":" it"}
+
+id: 1790662702573-0
+event: assistant
+data: {"text":" over"}
+
+id: 1790662702580-0
+event: assistant
+data: {"text":" and"}
+
+id: 1790662702589-0
+event: assistant
+data: {"text":" I’ll"}
+
+id: 1790662702597-0
+event: assistant
+data: {"text":" get"}
+
+id: 1790662702605-0
+event: assistant
+data: {"text":" to"}
+
+id: 1790662702613-0
+event: assistant
+data: {"text":" work"}
+
+id: 1790662702633-0
+event: assistant
+data: {"text":"."}
+
+id: 1790662702931-0
+event: interaction_update
+data: {"type":"turn-ended"}
+
+id: 1790662703691-0
+event: status
+data: {"runId":"run-e3dd96f7-9663-4b1d-bc74-5d445a7bb666","status":"RUNNING"}
+
+id: 1790662704659-0
+event: interaction_update
+data: {"type":"step-started","stepId":214}
+
+id: 1790662704680-0
+event: interaction_update
+data: {"type":"user-message-appended","userMessage":{"type":"user_message","session_id":"run-e3dd96f7-9663-4b1d-bc74-5d445a7bb666","text":"oyu there?"}}
+
+id: 1790662708497-0
+event: assistant
+data: {"text":"Yes"}
+
+id: 1790662708503-0
+event: assistant
+data: {"text":","}
+
+id: 1790662708507-0
+event: assistant
+data: {"text":" I’m"}
+
+id: 1790662708513-0
+event: assistant
+data: {"text":" here"}
+
+id: 1790662708520-0
+event: assistant
+data: {"text":"."}
+
+id: 1790662708523-0
+event: assistant
+data: {"text":" What"}
+
+id: 1790662708530-0
+event: assistant
+data: {"text":" do"}
+
+id: 1790662708536-0
+event: assistant
+data: {"text":" you"}
+
+id: 1790662708543-0
+event: assistant
+data: {"text":" want"}
+
+id: 1790662708551-0
+event: assistant
+data: {"text":" to"}
+
+id: 1790662708558-0
+event: assistant
+data: {"text":" work"}
+
+id: 1790662708564-0
+event: assistant
+data: {"text":" on"}
+
+id: 1790662708570-0
+event: assistant
+data: {"text":"?"}
+
+id: 1790662708685-0
+event: interaction_update
+data: {"type":"turn-ended"}
+
+id: 1790662710342-0
+event: status
+data: {"runId":"run-e3dd96f7-9663-4b1d-bc74-5d445a7bb666","status":"WAITING_FOR_BACKGROUND_WORK"}
+
+id: 1790662737677-0
+event: tool_call
+data: {"callId": "call-04c8b5cb-f6bd-4f05-8f45-92a24a123aea-2\nfc_3cdda5f1-ee6a-9f5e-a774-717da0992e49_0", "name": "task", "status": "completed", "args": {"description": "Forked multitask worker", "prompt": "You are the forked subagent; continue executing your task.", "subagentType": {"unspecified": {}}, "model": "cursor-grok-4.6-medium", "agentId": "bc-7574adff-bfe8-505b-86e2-671066bb0716", "machine": {"sameMachine": {}}}, "truncated": {"result": true}}
+
+id: 1790662739091-0
+event: status
+data: {"runId":"run-e3dd96f7-9663-4b1d-bc74-5d445a7bb666","status":"RUNNING"}
+
+id: 1790662740151-0
+event: interaction_update
+data: {"type":"step-started","stepId":246}
+
+id: 1790662740290-0
+event: interaction_update
+data: {"type":"user-message-appended","userMessage":{"type":"user_message","session_id":"run-e3dd96f7-9663-4b1d-bc74-5d445a7bb666","text":"<timestamp>Tuesday, Sep 29, 2026, 6:19 AM (UTC)</timestamp>\n<system_notification>\nThe following task has finished. If you were already aware, ignore this notification and do not restate prior responses.\n\n<task>\nkind: subagent\nstatus: success\ntask_id: bc-7574adff-bfe8-505b-86e2-671066bb0716\ntitle: Forked multitask worker\ntool_call_id: call-04c8b5cb-f6bd-4f05-8f45-92a24a123aea-2\nfc_3cdda5f1-ee6a-9f5e-a774-717da0992e49_0\nagent_id: bc-7574adff-bfe8-505b-86e2-671066bb0716\ndetail: This is the last output of the subagent:\n\nThere is no coding task to continue.\n\nThe parent conversation is a connectivity check: “this is a test”, a casual remark, then “Start multitasking”. That last message forked this worker with the prompt to keep going, but nothing in the repo or that thread names a bug, feature, or file to change.\n\nI did not create a branch, commit, or PR. When there is a real request, send it and I can pick it up.\n\nAgent ID: bc-7574adff-bfe8-505b-86e2-671066bb0716 (can be used with the `resume` parameter to send a follow-up)\n</task>\n</system_notification>\n<user_query>Perform any necessary follow-up actions in response to the subagent completion above. If no follow-up work is needed, no further action is required. If you mention an agent or subagent in your response, link it with the `[Name](id)` Don't use generic label such as `[agent]`, `[worker]`, or `[subagent]`. Don't repeat the same confirmation every time.</user_query>"}}
+
+id: 1790662742745-0
+event: assistant
+data: {"text":"["}
+
+id: 1790662742753-0
+event: assistant
+data: {"text":"Fork"}
+
+id: 1790662742760-0
+event: assistant
+data: {"text":"ed"}
+
+id: 1790662742764-0
+event: assistant
+data: {"text":" multit"}
+
+id: 1790662742771-0
+event: assistant
+data: {"text":"ask"}
+
+id: 1790662742778-0
+event: assistant
+data: {"text":" worker"}
+
+id: 1790662742785-0
+event: assistant
+data: {"text":"]"}
+
+id: 1790662742792-0
+event: assistant
+data: {"text":"("}
+
+id: 1790662742796-0
+event: assistant
+data: {"text":"bc"}
+
+id: 1790662742800-0
+event: assistant
+data: {"text":"-"}
+
+id: 1790662742806-0
+event: assistant
+data: {"text":"757"}
+
+id: 1790662742810-0
+event: assistant
+data: {"text":"4"}
+
+id: 1790662742818-0
+event: assistant
+data: {"text":"ad"}
+
+id: 1790662742821-0
+event: assistant
+data: {"text":"ff"}
+
+id: 1790662742828-0
+event: assistant
+data: {"text":"-"}
+
+id: 1790662742832-0
+event: assistant
+data: {"text":"b"}
+
+id: 1790662742836-0
+event: assistant
+data: {"text":"fe"}
+
+id: 1790662742843-0
+event: assistant
+data: {"text":"8"}
+
+id: 1790662742846-0
+event: assistant
+data: {"text":"-"}
+
+id: 1790662742850-0
+event: assistant
+data: {"text":"505"}
+
+id: 1790662742857-0
+event: assistant
+data: {"text":"b"}
+
+id: 1790662742860-0
+event: assistant
+data: {"text":"-"}
+
+id: 1790662742863-0
+event: assistant
+data: {"text":"86"}
+
+id: 1790662742869-0
+event: assistant
+data: {"text":"e"}
+
+id: 1790662742873-0
+event: assistant
+data: {"text":"2"}
+
+id: 1790662742877-0
+event: assistant
+data: {"text":"-"}
+
+id: 1790662742884-0
+event: assistant
+data: {"text":"671"}
+
+id: 1790662742887-0
+event: assistant
+data: {"text":"066"}
+
+id: 1790662742894-0
+event: assistant
+data: {"text":"bb"}
+
+id: 1790662742902-0
+event: assistant
+data: {"text":"071"}
+
+id: 1790662742906-0
+event: assistant
+data: {"text":"6"}
+
+id: 1790662742913-0
+event: assistant
+data: {"text":")"}
+
+id: 1790662742917-0
+event: assistant
+data: {"text":" finished"}
+
+id: 1790662742924-0
+event: assistant
+data: {"text":":"}
+
+id: 1790662742928-0
+event: assistant
+data: {"text":" there"}
+
+id: 1790662742934-0
+event: assistant
+data: {"text":" was"}
+
+id: 1790662742940-0
+event: assistant
+data: {"text":" no"}
+
+id: 1790662742946-0
+event: assistant
+data: {"text":" coding"}
+
+id: 1790662742952-0
+event: assistant
+data: {"text":" work"}
+
+id: 1790662742958-0
+event: assistant
+data: {"text":" to"}
+
+id: 1790662742962-0
+event: assistant
+data: {"text":" do"}
+
+id: 1790662742968-0
+event: assistant
+data: {"text":","}
+
+id: 1790662742972-0
+event: assistant
+data: {"text":" so"}
+
+id: 1790662742980-0
+event: assistant
+data: {"text":" nothing"}
+
+id: 1790662742988-0
+event: assistant
+data: {"text":" to"}
+
+id: 1790662742997-0
+event: assistant
+data: {"text":" branch"}
+
+id: 1790662743005-0
+event: assistant
+data: {"text":","}
+
+id: 1790662743008-0
+event: assistant
+data: {"text":" commit"}
+
+id: 1790662743018-0
+event: assistant
+data: {"text":","}
+
+id: 1790662743023-0
+event: assistant
+data: {"text":" or"}
+
+id: 1790662743030-0
+event: assistant
+data: {"text":" open"}
+
+id: 1790662743036-0
+event: assistant
+data: {"text":" a"}
+
+id: 1790662743040-0
+event: assistant
+data: {"text":" PR"}
+
+id: 1790662743046-0
+event: assistant
+data: {"text":" for"}
+
+id: 1790662743053-0
+event: assistant
+data: {"text":"."}
+
+id: 1790662743057-0
+event: assistant
+data: {"text":" Ready"}
+
+id: 1790662743063-0
+event: assistant
+data: {"text":" when"}
+
+id: 1790662743070-0
+event: assistant
+data: {"text":" you"}
+
+id: 1790662743076-0
+event: assistant
+data: {"text":" have"}
+
+id: 1790662743083-0
+event: assistant
+data: {"text":" a"}
+
+id: 1790662743090-0
+event: assistant
+data: {"text":" real"}
+
+id: 1790662743096-0
+event: assistant
+data: {"text":" task"}
+
+id: 1790662743103-0
+event: assistant
+data: {"text":"."}
+
+id: 1790662743408-0
+event: interaction_update
+data: {"type":"turn-ended"}
+
+event: status
+data: {"runId":"run-e3dd96f7-9663-4b1d-bc74-5d445a7bb666","status":"FINISHED"}
+
+id: 1790662745139-0
+event: result
+data: {"runId":"run-e3dd96f7-9663-4b1d-bc74-5d445a7bb666","status":"FINISHED","durationMs":29722,"git":{"branches":[{"repoUrl":"https://github.com/union-ai/union-mobile"}]}}
+
+id: 1790662745139-0
+event: done
+data: {}
+
