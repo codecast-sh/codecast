@@ -74,10 +74,28 @@ function changeStyle(row: HistoryRow) {
   return { icon: Pencil, color: "text-sol-text-dim" };
 }
 
-function ChangeBody({ row, provider }: { row: HistoryRow; provider?: "linear" | "github" }) {
+/** A linked session named inline, opening it on click. */
+export function TaskSessionLink({ session, onOpen }: { session: TaskLinkedSession; onOpen: (s: TaskLinkedSession) => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(session)}
+      className="inline-flex items-center gap-1.5 min-w-0 text-sol-text font-medium hover:text-sol-cyan transition-colors"
+    >
+      <AgentTypeIcon agentType={session.agent_type || "claude_code"} className="w-3.5 h-3.5 flex-shrink-0" />
+      <span className="truncate">{session.title || "Untitled session"}</span>
+    </button>
+  );
+}
+
+function ChangeBody({ row, provider, origin, openLinkedSession }: { row: HistoryRow; provider?: "linear" | "github"; origin?: TaskLinkedSession; openLinkedSession: (info: any) => void }) {
   const dim = "text-sol-text-muted";
   if (row.action === "created") {
-    return <><Who person={row.actor} /><span className={dim}>created this task</span></>;
+    // A task a session filed says so: the session is the author, and its
+    // person is who it ran for.
+    return origin
+      ? <><TaskSessionLink session={origin} onOpen={openLinkedSession} /><span className={dim}>created this task for</span><Who person={row.actor} /></>
+      : <><Who person={row.actor} /><span className={dim}>created this task</span></>;
   }
   if (SYNC_ACTIONS.has(row.action)) {
     const name = provider ? ISSUE_PROVIDER_NAME[provider] : "the issue tracker";
@@ -132,12 +150,13 @@ export function TaskTimeline({
   externalEvents,
   openLinkedSession,
 }: {
-  task: { _id: string; created_at: number; creator?: Person | null; history?: HistoryRow[]; comments?: TaskCommentRow[]; external?: { provider: "linear" | "github" } };
+  task: { _id: string; created_at: number; creator?: Person | null; created_from_conversation?: string | null; history?: HistoryRow[]; comments?: TaskCommentRow[]; external?: { provider: "linear" | "github" } };
   sessions: TaskLinkedSession[];
   externalEvents: ExternalEventRecord[];
   openLinkedSession: (info: any) => void;
 }) {
   const [filter, setFilter] = useState("all");
+  const origin = task.created_from_conversation ? sessions.find((s) => s._id === task.created_from_conversation) : undefined;
 
   const items = useMemo(() => {
     const history = task.history ?? [];
@@ -150,12 +169,13 @@ export function TaskTimeline({
     const all: Item[] = [
       ...[...created, ...history].map((row) => ({ kind: "change" as const, ts: row.created_at, key: row._id, row })),
       ...(task.comments ?? []).map((row) => ({ kind: "comment" as const, ts: row.created_at, key: row._id, row })),
-      // A blank session that never got a message did no work on the task.
-      ...sessions.filter((s) => s.started_at && (s.title || s.message_count)).map((row) => ({ kind: "session" as const, ts: row.started_at!, key: `s-${row._id}`, row })),
+      // A blank session that never got a message did no work on the task, and
+      // the session that filed it is named on the created row instead.
+      ...sessions.filter((s) => s.started_at && (s.title || s.message_count) && s._id !== task.created_from_conversation).map((row) => ({ kind: "session" as const, ts: row.started_at!, key: `s-${row._id}`, row })),
       ...externalEvents.map((row) => ({ kind: "git" as const, ts: row.created_at ?? 0, key: row._id, row })),
     ];
     return all.sort((a, b) => a.ts - b.ts);
-  }, [task._id, task.created_at, task.creator, task.history, task.comments, sessions, externalEvents]);
+  }, [task._id, task.created_at, task.creator, task.created_from_conversation, task.history, task.comments, sessions, externalEvents]);
 
   const count = (kind: Item["kind"]) => items.filter((i) => i.kind === kind).length;
   const filters = [
@@ -209,14 +229,7 @@ export function TaskTimeline({
               return (
                 <RailRow key={item.key} icon={Terminal} color="text-sol-violet" ts={item.ts} clock>
                   <Line>
-                    <button
-                      type="button"
-                      onClick={() => openLinkedSession(s)}
-                      className="inline-flex items-center gap-1.5 min-w-0 text-sol-text font-medium hover:text-sol-cyan transition-colors"
-                    >
-                      <AgentTypeIcon agentType={s.agent_type || "claude_code"} className="w-3.5 h-3.5 flex-shrink-0" />
-                      <span className="truncate">{s.title || "Untitled session"}</span>
-                    </button>
+                    <TaskSessionLink session={s} onOpen={openLinkedSession} />
                     <span className="text-sol-text-muted flex-shrink-0">started working on it</span>
                   </Line>
                 </RailRow>
@@ -225,7 +238,7 @@ export function TaskTimeline({
             const style = changeStyle(item.row);
             return (
               <RailRow key={item.key} icon={style.icon} color={style.color} ts={item.ts} clock>
-                <Line><ChangeBody row={item.row} provider={task.external?.provider} /></Line>
+                <Line><ChangeBody row={item.row} provider={task.external?.provider} origin={origin} openLinkedSession={openLinkedSession} /></Line>
               </RailRow>
             );
           })}
