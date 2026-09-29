@@ -254,8 +254,19 @@ export function facesToShow(people: FacePerson[], mode: FacesMode = "everyone"):
  * is the hover chrome, which is a row of buttons rather than a disc.
  */
 export type HitRegion =
-  | { kind: "circle"; cx: number; cy: number; r: number }
+  | { kind: "circle"; cx: number; cy: number; r: number; /** The face's person, when it has one. */ id?: string }
   | { kind: "rect"; x: number; y: number; width: number; height: number };
+
+/** The face under the pointer: the person whose circle it is in, or null. */
+export function faceAt(regions: HitRegion[], x: number, y: number): string | null {
+  for (const r of regions) {
+    if (r.kind !== "circle" || !r.id) continue;
+    const dx = x - r.cx;
+    const dy = y - r.cy;
+    if (dx * dx + dy * dy <= r.r * r.r) return r.id;
+  }
+  return null;
+}
 
 /**
  * Is the pointer over something in this window that should respond?

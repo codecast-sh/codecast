@@ -1,14 +1,28 @@
 // THE ROW'S TWO WIDTHS, AND THE STYLESHEET THAT DRAWS THEM (pl-756 F2).
 //
-// The bar is 32px faces with compact links; the float is 64px faces with the
-// call circles' margin. The numbers live once in FACE_ROW_METRICS and once in
+// The bar is 32px faces with compact links; the float is 64px faces (or the
+// bigger size the person picked) with the call circles' margin. The numbers live once in FACE_ROW_METRICS and once in
 // faceRow.css, and this file holds the two together: a window sized from the
 // constants must be the window the stylesheet fills.
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { FACES_PADDING, NAME_HEIGHT, ROW_GAP } from "../../../lib/calls/faceCrop";
-import { FACE_ROW_METRICS, LINK_PULL, faceRowSize, faceRowWidth, floatingRowSize, FACE_CARD_WIDTH } from "../../../lib/faces/layout";
+import { FACES_PADDING } from "../../../lib/calls/faceCrop";
+import {
+  FACE_CARD_WIDTH,
+  FACE_ROW_METRICS,
+  FLOAT_BAND_GAP,
+  FLOAT_BAND_RESERVE,
+  FLOAT_FACE_SIZES,
+  LINK_PULL,
+  faceRowSize,
+  faceRowWidth,
+  floatBandPlacement,
+  floatBandSideFor,
+  floatFaceSizeOf,
+  floatingRowSize,
+  stepFloatFaceSize,
+} from "../../../lib/faces/layout";
 
 const css = readFileSync(join(import.meta.dir, "..", "faceRow.css"), "utf8");
 /** The value of a custom property inside one rule of the stylesheet. */
@@ -32,45 +46,76 @@ describe("the bar", () => {
 });
 
 describe("the float", () => {
-  test("64px faces inside the call circles' margin, and the name row on hover", () => {
+  test("64px faces inside the call circles' margin, and nothing reserved under them", () => {
     expect(FACE_ROW_METRICS.float).toEqual({ face: 64, gap: 10, link: 26, pad: FACES_PADDING });
     expect(faceRowSize("float", 2, 1)).toEqual({
       width: 2 * FACES_PADDING + 2 * 64 + 10 + (10 + 26 - 2 * LINK_PULL * 10),
-      height: 2 * FACES_PADDING + 64 + ROW_GAP + NAME_HEIGHT,
+      height: 2 * FACES_PADDING + 64,
     });
-    // The name band is reserved whether or not the pointer is in: hover never resizes the window.
-    expect(faceRowSize("float", 2, 1).height).toBe(2 * FACES_PADDING + 64 + ROW_GAP + NAME_HEIGHT);
     // The empty window is its margin and nothing else.
-    expect(faceRowSize("float", 0, 0)).toEqual({ width: 2 * FACES_PADDING, height: 2 * FACES_PADDING + 64 + ROW_GAP + NAME_HEIGHT });
+    expect(faceRowSize("float", 0, 0)).toEqual({ width: 2 * FACES_PADDING, height: 2 * FACES_PADDING + 64 });
   });
-  test("a card holds one spot: the name band is reserved under the faces whether or not the pointer is in", () => {
-    // The band dropped 28px while the pointer was in the window and rose
-    // again 1.5s after it left, so the card under a call moved every time
-    // the hand came near it. With a card up the window is one height, and
-    // the band's own rule puts the card under the name band, not the faces.
-    const card = { width: 320, height: 200 };
-    const still = floatingRowSize(2, 1, card);
-    expect(still.height).toBe(2 * FACES_PADDING + 64 + ROW_GAP + NAME_HEIGHT + card.height);
-    expect(still.width).toBe(FACE_CARD_WIDTH + 2 * FACES_PADDING);
-    // Without a card the pointer still decides: the window is its faces.
-    // ONE WIDTH whether or not a card is up: the window is anchored at a
-    // corner, so a window that widened when the card opened slid every face
-    // sideways under the pointer. Only the height follows the card.
-    const bare = floatingRowSize(2, 1, { width: 0, height: 0 });
-    expect(bare.width).toBe(still.width);
-    expect(bare.height).toBe(faceRowSize("float", 2, 1).height);
-    // A row wider than the card sets the width, card or no card.
-    const wide = floatingRowSize(6, 0, { width: 0, height: 0 });
-    expect(wide.width).toBe(faceRowSize("float", 6, 0).width);
-    expect(floatingRowSize(6, 0, card).width).toBe(wide.width);
-    // The row as drawn wins over the arithmetic: a strip beside the faces
-    // widens the window to the measured row, and its height carries the
-    // name band under it. The sum alone clipped End and Join off the edge.
-    const drawn = floatingRowSize(6, 1, { width: 0, height: 0 }, { width: 900, height: 80 });
+  test("the sizes: the row's own and the old call circles' tiers, remembered and stepped", () => {
+    expect(FLOAT_FACE_SIZES).toEqual([64, 96, 128]);
+    expect(floatFaceSizeOf(undefined)).toBe(64);
+    expect(floatFaceSizeOf(128)).toBe(128);
+    expect(floatFaceSizeOf(100)).toBe(64);
+    expect(stepFloatFaceSize(64, 1)).toBe(96);
+    expect(stepFloatFaceSize(128, 1)).toBe(128);
+    expect(stepFloatFaceSize(64, -1)).toBe(64);
+    // A bigger face is a bigger row, before and after the first measure.
+    expect(faceRowSize("float", 3, 0, 128)).toEqual({ width: 2 * FACES_PADDING + 3 * 128 + 2 * 10, height: 2 * FACES_PADDING + 128 });
+    expect(floatingRowSize(3, 0, 0, undefined, 128).height).toBe(
+      2 * FACES_PADDING + 128 + FLOAT_BAND_GAP + FLOAT_BAND_RESERVE + FACES_PADDING,
+    );
+  });
+  test("ONE SIZE whatever the pointer does: the card's room is kept, so a hover never moves a face", () => {
+    // The window grew when the controls or a card came and shrank when they
+    // went; hung from a bottom corner it grew UP and carried the faces with
+    // it (founder, 2026-09-28: "the faces MUST be stable when we hover").
+    const rowH = 2 * FACES_PADDING + 64;
+    const room = FLOAT_BAND_GAP + FLOAT_BAND_RESERVE + FACES_PADDING;
+    const rest = floatingRowSize(2, 1, 0);
+    expect(rest).toEqual({ width: FACE_CARD_WIDTH + 2 * FACES_PADDING, height: rowH + room, pinY: 0 });
+    // A card up to the reserve changes nothing.
+    expect(floatingRowSize(2, 1, 300)).toEqual(rest);
+    // A taller card raises the room to fit it.
+    expect(floatingRowSize(2, 1, FLOAT_BAND_RESERVE + 40).height).toBe(rest.height + 40);
+    // The card above the faces: the same window, the faces pinned below its room.
+    expect(floatingRowSize(2, 1, 0, undefined, 64, "above")).toEqual({ ...rest, pinY: room });
+    // A row wider than the card sets the width.
+    expect(floatingRowSize(6, 0, 0).width).toBe(faceRowSize("float", 6, 0).width);
+    // The row as drawn wins over the arithmetic: the sum alone clipped End
+    // and Join off the edge.
+    const drawn = floatingRowSize(6, 1, 0, { width: 900, height: 80 });
     expect(drawn.width).toBe(900);
-    expect(drawn.height).toBe(80 + ROW_GAP + NAME_HEIGHT);
-    expect(cssVar('.face-row[data-density="float"] .face-row-below {', "top")).toBe(`calc(100% + ${ROW_GAP + NAME_HEIGHT - FACES_PADDING}px)`);
+    expect(drawn.height).toBe(80 + room);
+    expect(cssVar('.face-row[data-density="float"] .face-row-below {', "top")).toBe(`calc(100% + ${FLOAT_BAND_GAP}px)`);
+    expect(cssVar('.face-row[data-density="float"][data-band="above"] .face-row-below {', "bottom")).toBe(`calc(100% + ${FLOAT_BAND_GAP}px)`);
     expect(css).not.toContain(".face-row--hover");
+  });
+  test("the card opens toward the middle of the screen", () => {
+    const area = { top: 25, height: 1000 };
+    expect(floatBandSideFor(100, area)).toBe("below");
+    expect(floatBandSideFor(900, area)).toBe("above");
+  });
+  test("the band slides under the pointed face and its notch points at it", () => {
+    const pad = FACES_PADDING;
+    // No face: the row's left margin, no notch.
+    expect(floatBandPlacement(null, 900)).toEqual({ left: pad, notch: null });
+    // A face in the middle of a wide row: centred under it.
+    expect(floatBandPlacement(500, 900)).toEqual({ left: 500 - FACE_CARD_WIDTH / 2, notch: FACE_CARD_WIDTH / 2 });
+    // The last face of a wide row (the one the card used to open far from):
+    // the band stops at the right margin and the notch travels to the face.
+    const end = floatBandPlacement(860, 900);
+    expect(end.left).toBe(900 - pad - FACE_CARD_WIDTH);
+    expect(end.left + end.notch!).toBe(860);
+    // The first face: the band stops at the left margin.
+    const start = floatBandPlacement(40, 900);
+    expect(start.left).toBe(pad);
+    expect(start.left + start.notch!).toBe(40);
+    // A row narrower than the card: the band sits at the margin.
+    expect(floatBandPlacement(60, 200).left).toBe(pad);
   });
 });
 
@@ -87,15 +132,13 @@ describe("the stylesheet agrees", () => {
     expect(cssVar(rule, "--link-w")).toBe(`${FACE_ROW_METRICS.float.link}px`);
     expect(cssVar(rule, "padding")).toBe(`${FACE_ROW_METRICS.float.pad}px`);
   });
-  test("the member card centres on the face in the bar, and floors at the window's edge in the float", () => {
+  test("the member card centres on the face in the bar", () => {
     // The bar's row sits inside the header with room on both sides, so the
     // card may run left of the row and only a measured viewport edge
     // (--shift, FaceCard) pushes it in: a floor at the row's own edge left
-    // the first four faces with a card hanging off to the right. The float's
-    // window is the viewport and is sized to hold the card from the band's
-    // edge (floatingRowSize), so there the floor is the viewport clamp.
+    // the first four faces with a card hanging off to the right. The float
+    // places its band instead (floatBandPlacement).
     expect(cssVar(".face-card {", "--lead")).toBe("calc(var(--anchor) - var(--card-w) / 2 + var(--shift, 0px))");
-    expect(cssVar('.face-card[data-density="float"] {', "--lead")).toBe("max(0px, calc(var(--anchor) - 8px - var(--card-w) / 2))");
   });
   test("the pull", () => {
     expect(cssVar(".face-link {", "margin")).toBe(`0 calc(var(--face-gap) * -${LINK_PULL})`);

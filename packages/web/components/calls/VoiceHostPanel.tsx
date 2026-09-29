@@ -15,7 +15,7 @@ import { PeoplePanel } from "../people/PeoplePanel";
 import { voiceHostView } from "../../lib/calls/voiceHostView";
 import { soundCallRing } from "../../lib/sounds";
 import { CALL_RING_PERIOD_MS } from "@codecast/shared/contracts";
-import { acceptInvite, takeOverCall } from "../../lib/calls/callManager";
+import { acceptInvite, getCallTiles, subscribeCallTiles, takeOverCall } from "../../lib/calls/callManager";
 import { publishVoiceMirror, runVoiceCommand, walkieHoldsRoom } from "../../lib/calls/walkie";
 import { callWindowReport } from "../../lib/calls/callHandoff";
 import { getScribeStatus, subscribeScribe } from "../../lib/calls/transcription";
@@ -105,9 +105,25 @@ export function VoiceHostPanel({ urlRoom, params }: { urlRoom: string | null; pa
   const hideCall = useCallback(() => setExpanded(false), []);
   const expand = useCallback(() => setExpanded(true), []);
   // The float's Hide: away for this engagement, back for the next. A row
-  // the person popped out is put back in the header instead.
+  // the person popped out is docked back in the header instead.
   const [dismissed, setDismissed] = useState(false);
   const floating = useFacesFloating();
+  // DOCKED, UNTIL THE APP HAS THEM. The click that docks the row (the
+  // float's Dock) focuses this window, not the app, so a call in progress
+  // read as "something is happening while the app is behind" and the float
+  // stayed up under the pointer that had just put it away. Docking holds the
+  // float down until an app window has focus, from either window it came;
+  // after that the ordinary rule is back, and leaving the app mid-call
+  // brings the faces up over the work again.
+  const [docking, setDocking] = useState(false);
+  const wasFloating = useRef(floating.floating);
+  if (wasFloating.current !== floating.floating) {
+    if (wasFloating.current && !floating.floating && !role.appFocused) setDocking(true);
+    wasFloating.current = floating.floating;
+  }
+  useWatchEffect(() => {
+    if (role.appFocused && docking) setDocking(false);
+  }, [role.appFocused, docking]);
   const closeFloat = useCallback(() => {
     if (floating.floating) floating.setFloating(false);
     else setDismissed(true);
@@ -143,7 +159,7 @@ export function VoiceHostPanel({ urlRoom, params }: { urlRoom: string | null; pa
     floating: role.facesOverlay,
     appFocused: role.appFocused,
     wallWanted: role.peopleWall,
-    dismissed,
+    dismissed: dismissed || docking,
   });
   const engaged = row.me !== null;
   useWatchEffect(() => {
@@ -267,10 +283,12 @@ export function VoiceHostPanel({ urlRoom, params }: { urlRoom: string | null; pa
 
   // And the mirror: the walkie's engine publishes on its own moves, but a
   // mute, a camera or the speaker list moves the call slice without the
-  // walkie noticing, and a remote's face row draws all three.
+  // walkie noticing, and a remote's face row draws all three. The tiles are
+  // who has a camera up, which the header draws as video.
+  const tiles = useSyncExternalStore(subscribeCallTiles, getCallTiles, getCallTiles);
   useWatchEffect(() => {
     publishVoiceMirror();
-  }, [call.phase, call.roomKey, call.muted, call.camera, call.micDenied, call.speaking]);
+  }, [call.phase, call.roomKey, call.muted, call.camera, call.micDenied, call.speaking, tiles]);
 
   if (view === "panel") {
     return (
@@ -307,8 +325,9 @@ export function VoiceHostPanel({ urlRoom, params }: { urlRoom: string | null; pa
             inCall,
             onExpand: expand,
             onClose: closeFloat,
-            closeWord: floating.floating ? "Close" : "Hide",
-            closeTitle: floating.floating ? "Put the faces back in the header" : "Hide the faces until the next call or voice",
+            closeWord: floating.floating ? "Dock" : "Hide",
+            closeTitle: floating.floating ? "Dock the faces back in the header" : "Hide the faces until the next call or voice",
+            docks: floating.floating,
           }}
         >
           {row.card.kind !== "none" && <EngagementCard card={row.card} density="float" />}

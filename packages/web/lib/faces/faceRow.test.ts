@@ -7,6 +7,7 @@ import { JOIN_TITLE_MS } from "../calls/joinAnnounce";
 import { useInboxStore } from "../../store/inboxStore";
 import {
   deriveFaceRow,
+  dmUnreadOf,
   engagementOf,
   faceRowInputSig,
   isInCall,
@@ -40,8 +41,7 @@ function input(over: Partial<FaceRowInput> = {}): FaceRowInput {
     occupancy: {},
     liveRooms: [],
     walkie: { liveRoom: null, sending: null, incoming: null, canReply: false },
-    call: { phase: "idle", roomKey: null, muted: true, micDenied: false, camera: false, speaking: [] },
-    tiles: [],
+    call: { phase: "idle", roomKey: null, muted: true, micDenied: false, camera: false, speaking: [], cameras: [] },
     followLeaderId: null,
     rings: { incoming: [], outgoing: [] },
     announcement: null,
@@ -69,6 +69,7 @@ const call = (roomKey: string, over: Partial<FaceRowInput["call"]> = {}) => ({
   micDenied: false,
   camera: false,
   speaking: [],
+  cameras: [],
   ...over,
 });
 
@@ -301,16 +302,11 @@ describe("every link kind", () => {
     expect(row.links.map((l) => l.to)).toEqual([ANN]);
   });
 
-  test("video: my camera makes my face self video; a remote camera track makes theirs remote", () => {
+  test("video: my camera makes my face self video; a remote camera makes theirs remote", () => {
     const row = deriveFaceRow(
       input({
-        call: call(DM_ANN, { camera: true }),
+        call: call(DM_ANN, { camera: true, cameras: [ME, ANN] }),
         occupancy: { [DM_ANN]: [seat(ME), seat(ANN)] },
-        tiles: [
-          { identity: ME, isLocal: true, kind: "camera" },
-          { identity: ANN, isLocal: false, kind: "camera" },
-          { identity: ANN, isLocal: false, kind: "screen" },
-        ],
       }),
       null,
     );
@@ -701,5 +697,27 @@ describe("the shared reader", () => {
     expect(faceRowInputSig(st, { ...idle, liveRoom: burstRoom(DM_ANN) }, null, [], NOW)).not.toBe(a);
     expect(faceRowInputSig(st, idle, { roomKey: DM_ANN, text: "Ann joined", at: NOW }, [], NOW)).not.toBe(a);
     expect(faceRowInputSig(st, idle, null, [{ identity: ANN, isLocal: false, kind: "camera" }], NOW)).not.toBe(a);
+  });
+});
+
+describe("dmUnreadOf", () => {
+  const st = (last: any, unread = 2) => ({
+    currentUser: { _id: "me" },
+    chatChannels: { c1: { kind: "dm" } },
+    chatRail: [{ channel_id: "c1", member_ids: ["me", "cam"], unread, last_message: last }],
+  });
+
+  test("their newest line rides with the count", () => {
+    const d = dmUnreadOf(st({ user_id: "cam", preview: "can you look at this", created_at: 5 }), "cam");
+    expect(d).toEqual({ channelId: "c1", unread: 2, preview: "can you look at this", at: 5 });
+  });
+
+  test("my own last line is not shown as theirs", () => {
+    expect(dmUnreadOf(st({ user_id: "me", preview: "mine", created_at: 5 }), "cam")?.preview).toBe(null);
+  });
+
+  test("nothing unread, nothing to say", () => {
+    expect(dmUnreadOf(st({ user_id: "cam", preview: "x", created_at: 5 }, 0), "cam")).toBe(null);
+    expect(dmUnreadOf(st(null), "someone-else")).toBe(null);
   });
 });

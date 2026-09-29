@@ -37,6 +37,7 @@ export function TranscriptTurnList({
         return (
         <div
           key={t.index}
+          data-turn={t.index}
           {...(selectable
             ? {
                 role: "button",

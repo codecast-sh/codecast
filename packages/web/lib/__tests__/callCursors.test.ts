@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   CURSOR_IDLE_MS,
   applyCursorMessage,
+  cursorsOnShare,
   decodeCursorMessage,
   encodeCursorMessage,
   expireCursors,
@@ -66,5 +67,15 @@ describe("call cursor state", () => {
   test("sends are paced at about thirty a second", () => {
     expect(shouldSendCursor(1000, 990)).toBe(false);
     expect(shouldSendCursor(1033, 1000)).toBe(true);
+  });
+});
+
+describe("cursors on my own share", () => {
+  test("only the cursors over my share go to the shell, and none without a share", () => {
+    let s: CursorState = new Map();
+    s = applyCursorMessage(s, "u1", "Cam Musgrave", { t: "cursor", sid: "TR_mine", nx: 0.25, ny: 0.5, at: 1 }, 1);
+    s = applyCursorMessage(s, "u2", "Jules", { t: "cursor", sid: "TR_theirs", nx: 0.1, ny: 0.1, at: 1 }, 1);
+    expect(cursorsOnShare(s, "TR_mine")).toEqual([{ id: "u1", name: "Cam Musgrave", nx: 0.25, ny: 0.5 }]);
+    expect(cursorsOnShare(s, undefined)).toEqual([]);
   });
 });

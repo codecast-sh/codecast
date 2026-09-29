@@ -14,10 +14,16 @@
 // cursor uses (browserWatch mapFromFrame). A cursor that stops moving fades
 // on the same idle window as the agent's ghost. A pointer that leaves the
 // tile sends one "gone" so the others do not wait for the fade.
+//
+// On the desktop the presenter's own copy goes further: the cursors pointing
+// at MY share are forwarded to the shell, which draws them on my real screen
+// over whatever the capture covers (electron shareCursors.js). The presenter
+// is looking at their screen, not at their own tile.
 
 import type { Room, RemoteParticipant } from "livekit-client";
-import { RoomEvent } from "livekit-client";
+import { RoomEvent, Track } from "livekit-client";
 import { GHOST_IDLE_MS } from "../browserGhost";
+import { sendShareCursors, type ShareCursor } from "../desktop";
 
 export const CURSOR_TOPIC = "cursor";
 /** Sends are paced like the browser control surface: about thirty a second. */
@@ -130,6 +136,7 @@ function setState(next: CursorState) {
   state = next;
   emit();
   armExpiry();
+  forwardShareCursors();
 }
 
 function armExpiry() {
@@ -158,16 +165,44 @@ export function resetCallCursors() {
   setState(new Map());
 }
 
+/** The cursors over the share `sid`, as the shell draws them. Pure, for tests. */
+export function cursorsOnShare(state: CursorState, sid: string | null | undefined): ShareCursor[] {
+  if (!sid) return [];
+  const out: ShareCursor[] = [];
+  for (const c of state.values()) if (c.sid === sid) out.push({ id: c.identity, name: c.name, nx: c.nx, ny: c.ny });
+  return out;
+}
+
+let boundRoom: Room | null = null;
+let forwardedAny = false;
+
+// Tell the shell which cursors point at my own share. An empty list goes out
+// once, when the last one leaves or the share stops, and then stays quiet.
+function forwardShareCursors() {
+  const sid = boundRoom?.localParticipant?.getTrackPublication(Track.Source.ScreenShare)?.trackSid;
+  const list = cursorsOnShare(state, sid);
+  if (!list.length && !forwardedAny) return;
+  forwardedAny = list.length > 0;
+  sendShareCursors(list);
+}
+
 /** Receive the room's cursor messages. Called once per Room, where the other
  *  room handlers are attached; the handlers die with the room. */
 export function bindCallCursors(room: Room): void {
+  boundRoom = room;
   room.on(RoomEvent.DataReceived, (payload: Uint8Array, participant?: RemoteParticipant, _kind?: unknown, topic?: string) => {
     if (topic !== CURSOR_TOPIC || !participant) return;
     const msg = decodeCursorMessage(payload);
     if (!msg) return;
     setState(applyCursorMessage(state, participant.identity, participant.name || participant.identity, msg, Date.now()));
   });
-  room.on(RoomEvent.Disconnected, () => resetCallCursors());
+  // My share starting or stopping changes which cursors are mine to show.
+  room.on(RoomEvent.LocalTrackPublished, forwardShareCursors);
+  room.on(RoomEvent.LocalTrackUnpublished, forwardShareCursors);
+  room.on(RoomEvent.Disconnected, () => {
+    resetCallCursors();
+    if (boundRoom === room) boundRoom = null;
+  });
 }
 
 let lastSentAt = 0;

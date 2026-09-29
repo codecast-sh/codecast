@@ -149,6 +149,34 @@ test("the float sizes the window to itself; the stage does not", () => {
   assert.equal(win.isResizable(), false);
 });
 
+test("a renderer's pin holds its faces still: the window moves around it in one setBounds", () => {
+  // The float keeps its card's room above the faces in the bottom half of
+  // the screen and below them in the top half. Where a drag lands the card
+  // switches sides, the faces move from the window's top to its bottom, and
+  // the window has to move up by as much so they stay where the hand left
+  // them (founder, 2026-09-28: "the faces jump around in position").
+  const rig = loadShell();
+  const { win, sender } = openCallWindow(rig);
+  rig.handlers.get("set-call-window-size")(sender, "float");
+  rig.handlers.get("set-call-window-content-size")(sender, { width: 336, height: 480, pinY: 0 });
+  win.setPosition(900, 560);
+  const setPositions = win.did("setPosition").length;
+  const at = win.getBounds();
+  const facesY = at.y + 0;
+  // Same size, the faces now 400px down the window: it moves up 400.
+  rig.handlers.get("set-call-window-content-size")(sender, { width: 336, height: 480, pinY: 400 });
+  const moved = win.getBounds();
+  assert.equal(moved.y + 400, facesY);
+  assert.equal(moved.height, 480);
+  // A taller room above the faces: the window grows up, the faces stay.
+  rig.handlers.get("set-call-window-content-size")(sender, { width: 336, height: 520, pinY: 440 });
+  assert.equal(win.getBounds().y + 440, facesY);
+  assert.deepEqual(win.getContentSize(), [336, 520]);
+  // One move, never a resize then a move.
+  assert.equal(win.did("setPosition").length, setPositions);
+  assert.equal(win.isResizable(), false);
+});
+
 test("a nonsense content size is ignored rather than applied", () => {
   const rig = loadShell();
   const { win, sender } = openCallWindow(rig);

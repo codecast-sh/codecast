@@ -166,29 +166,36 @@ describe("the engine as a remote", () => {
     // This window's own call slice is idle — the host holds the room — and a
     // key reading it would call the burst "dropped".
     expect(useInboxStore.getState().call.phase).toBe("idle");
-    expect(walkieCallState()).toEqual({ roomKey: "dm:a:b", phase: "connected", muted: false, micDenied: false, camera: false, speaking: [] });
+    expect(walkieCallState()).toEqual({ roomKey: "dm:a:b", phase: "connected", muted: false, micDenied: false, camera: false, speaking: [], cameras: [] });
   });
 
-  it("draws the host's camera and speakers on its face row, and re-derives when they move", () => {
+  it("draws the host's cameras and speakers on its face row, and re-derives when they move", () => {
     // The main window's header row is a remote whenever a host exists. Its
-    // own call slice has no camera and nobody speaking, ever: the host holds
-    // the room. The row must read both from the mirror, in the input and in
-    // the signature that decides whether the row is derived again.
+    // own call slice has no camera and nobody speaking, ever, and it holds
+    // no tracks: the host holds the room. The row must read all of it from
+    // the mirror, in the input and in the signature that decides whether the
+    // row is derived again. Without the cameras, the header drew every
+    // teammate on the call as a photo while the float drew them as video.
     const s = shell();
     s.role({ ...ROLE, voiceWindow: true });
     const walkie = { ...getWalkieStatus(), sending: null, incoming: null, liveRoom: null };
-    const mirror = (camera: boolean, speaking: string[]) =>
-      applyVoiceMirror({ walkie, call: { roomKey: "dm:a:b", phase: "connected", muted: false, micDenied: false, camera, speaking } });
-    mirror(false, []);
-    const before = faceRowInputSig(useInboxStore.getState(), getWalkieStatus(), null, [], 0);
-    mirror(true, ["ann"]);
+    const mirror = (camera: boolean, speaking: string[], cameras: string[]) =>
+      applyVoiceMirror({ walkie, call: { roomKey: "dm:a:b", phase: "connected", muted: false, micDenied: false, camera, speaking, cameras } });
+    mirror(false, [], []);
+    const before = faceRowInputSig(useInboxStore.getState(), getWalkieStatus(), null, 0);
+    mirror(true, ["ann"], ["me", "ann"]);
     expect(useInboxStore.getState().call.camera).toBe(false);
     expect(useInboxStore.getState().call.speaking).toEqual([]);
     // MUTATION CHECK: read camera and speaking from the store's own call
     // slice in faceRowInputFrom and this reads false and [].
-    const input = faceRowInputFrom(useInboxStore.getState(), getWalkieStatus(), null, [], 0);
-    expect(input.call).toMatchObject({ phase: "connected", roomKey: "dm:a:b", camera: true, speaking: ["ann"] });
-    expect(faceRowInputSig(useInboxStore.getState(), getWalkieStatus(), null, [], 0)).not.toBe(before);
+    const input = faceRowInputFrom(useInboxStore.getState(), getWalkieStatus(), null, 0);
+    expect(input.call).toMatchObject({ phase: "connected", roomKey: "dm:a:b", camera: true, speaking: ["ann"], cameras: ["me", "ann"] });
+    expect(faceRowInputSig(useInboxStore.getState(), getWalkieStatus(), null, 0)).not.toBe(before);
+    // A camera alone moving (Ann turns hers off) re-derives the row too.
+    const withAnn = faceRowInputSig(useInboxStore.getState(), getWalkieStatus(), null, 0);
+    mirror(true, ["ann"], ["me"]);
+    expect(faceRowInputSig(useInboxStore.getState(), getWalkieStatus(), null, 0)).not.toBe(withAnn);
+    mirror(true, ["ann"], ["me", "ann"]);
     // And the model, fed that input: my camera is my face, and Ann's ring is
     // the speaking one.
     const row = deriveFaceRow({
@@ -199,6 +206,9 @@ describe("the engine as a remote", () => {
     });
     expect(row.me?.video).toBe("self");
     expect(row.entries.find((e) => e.id === "ann")?.state).toBe("speaking");
+    // MUTATION CHECK: read cameras from this window's (empty) tiles and Ann
+    // is a photo here while the float shows her video.
+    expect(row.entries.find((e) => e.id === "ann")?.video).toBe("remote");
   });
 
   it("sends a press to the host with a client id, and paints the bubble here first", async () => {
