@@ -110,7 +110,9 @@ export function remoteExec(host: RemoteHost, command: string, timeoutMs = 30_000
     const e = err as { stderr?: string | Buffer; status?: number; signal?: string; message?: string };
     const stderr = (e.stderr ? String(e.stderr) : "").trim();
     const why = e.signal === "SIGTERM" ? `timed out after ${timeoutMs}ms` : `exit ${e.status ?? "?"}`;
-    throw new Error(`ssh ${host.user}@${host.address}: ${why}${stderr ? ` — ${stderr.split("\n")[0]}` : ""}`);
+    // The last lines name what failed; the first is often a warning printed before it.
+    const tail = stderr.split("\n").map((l) => l.trim()).filter(Boolean).slice(-3).join(" | ");
+    throw new Error(`ssh ${host.user}@${host.address}: ${why}${tail ? ` — ${tail}` : ""}`);
   }
 }
 

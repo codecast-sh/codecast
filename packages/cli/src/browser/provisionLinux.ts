@@ -287,6 +287,7 @@ Wants=network-online.target
 [Service]
 User=ubuntu
 Environment=CODECAST_REMOTE_DEVICE=1
+Environment=CODECAST_CLOUD=1
 Environment=HOME=/home/ubuntu
 Environment=PATH=/usr/local/bin:/usr/bin:/bin:/home/ubuntu/.local/bin
 WorkingDirectory=/home/ubuntu
@@ -387,7 +388,8 @@ export function uploadLinuxCast(host: RemoteHost, distDir: string): void {
   const stage = fs.mkdtempSync(path.join(os.tmpdir(), "cast-linux-upload-"));
   try {
     const archive = path.join(stage, "dist.tar.gz");
-    execFileSync("tar", ["-czf", archive, "-C", distDir, "."], { timeout: 60_000 });
+    // No extended attributes: macOS tags every file, and GNU tar on the host warns on each one.
+    execFileSync("tar", ["--no-xattrs", "-czf", archive, "-C", distDir, "."], { timeout: 60_000, env: { ...process.env, COPYFILE_DISABLE: "1" } });
     const remoteStage = remoteExec(host, "mktemp -d /tmp/cast-linux-upload.XXXXXXXXXX");
     try {
       scpTo(host, archive, `${remoteStage}/dist.tar.gz`);
@@ -399,8 +401,9 @@ export function uploadLinuxCast(host: RemoteHost, distDir: string): void {
           `chmod -R a+rX ${stagedDist} && sudo mkdir -p /usr/local/lib/codecast && ` +
           `sudo cp -R ${stagedDist}/. /usr/local/lib/codecast/ && ` +
           "sudo install -m 644 /usr/local/lib/codecast/main.js /usr/local/lib/codecast/index.js && " +
-          `printf '#!/usr/bin/env bash\\nexec /home/${host.user}/.bun/bin/bun /usr/local/lib/codecast/index.js "$@"\\n' | sudo tee /usr/local/bin/cast >/dev/null && ` +
-          "sudo chmod 755 /usr/local/bin/cast",
+          // A new file renamed over the wrapper: the daemon runs it, and writing into a running script fails "Text file busy".
+          `printf '#!/usr/bin/env bash\\nexec /home/${host.user}/.bun/bin/bun /usr/local/lib/codecast/index.js "$@"\\n' > ${shq(`${remoteStage}/cast`)} && ` +
+          `sudo install -m 755 ${shq(`${remoteStage}/cast`)} /usr/local/bin/cast.new && sudo mv -f /usr/local/bin/cast.new /usr/local/bin/cast`,
         60_000,
       );
     } finally {

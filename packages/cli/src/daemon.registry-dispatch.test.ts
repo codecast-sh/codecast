@@ -34,7 +34,7 @@ describe("promptReadyPattern reproduces the fresh-launch ternary", () => {
   const oldTernary = (agentType: AgentClientId): RegExp =>
     agentType === "gemini" ? />\s*$|gemini/i : /❯|⏵/;
 
-  for (const id of ["claude", "cursor", "gemini"] as AgentClientId[]) {
+  for (const id of ["claude", "gemini"] as AgentClientId[]) {
     test(`${id}: registry pattern === old ternary source+flags`, () => {
       const reg = AGENT_CLIENTS[id].promptReadyPattern;
       const old = oldTernary(id);
@@ -52,11 +52,18 @@ describe("promptReadyPattern reproduces the fresh-launch ternary", () => {
     expect(AGENT_CLIENTS.gemini.promptReadyPattern.test("ready\n> ")).toBe(true);
     expect(AGENT_CLIENTS.gemini.promptReadyPattern.test("Gemini CLI")).toBe(true);
   });
-  test("claude and cursor match the ❯/⏵ glyphs", () => {
-    for (const id of ["claude", "cursor"] as AgentClientId[]) {
-      expect(AGENT_CLIENTS[id].promptReadyPattern.test("❯ ")).toBe(true);
-      expect(AGENT_CLIENTS[id].promptReadyPattern.test("⏵ ")).toBe(true);
-    }
+  test("claude matches the ❯/⏵ glyphs", () => {
+    expect(AGENT_CLIENTS.claude.promptReadyPattern.test("❯ ")).toBe(true);
+    expect(AGENT_CLIENTS.claude.promptReadyPattern.test("⏵ ")).toBe(true);
+  });
+
+  // cursor-agent left the ternary: it never rendered ❯/⏵, so a fresh cursor
+  // pane read as booting for the whole discovery budget. Its composer is an
+  // arrow over a placeholder (v2026.09.28 panes).
+  test("cursor matches its empty composer, before and after the first turn", () => {
+    expect(AGENT_CLIENTS.cursor.promptReadyPattern.test("  → Plan, search, build anything")).toBe(true);
+    expect(AGENT_CLIENTS.cursor.promptReadyPattern.test("  → Add a follow-up")).toBe(true);
+    expect(AGENT_CLIENTS.cursor.promptReadyPattern.test("  → write a poem")).toBe(false);
   });
 
   // grok renders a real ❯ composer, but the glyph stays visible for the WHOLE
@@ -96,11 +103,11 @@ describe("promptReadyPattern reproduces the fresh-launch ternary", () => {
 // classifyTranscriptTailFor must resolve claude/codex to a classifier and
 // cursor/gemini to undefined (the "defer" signal) — byte-for-byte the same gate.
 describe("classifyTranscriptTailFor reproduces the reconcile gate", () => {
-  test("claude, codex and opencode resolve to a classifier; cursor and gemini do not", () => {
+  test("claude, codex, opencode and cursor resolve to a classifier; gemini does not", () => {
     expect(typeof classifyTranscriptTailFor("claude")).toBe("function");
     expect(typeof classifyTranscriptTailFor("codex")).toBe("function");
     expect(typeof classifyTranscriptTailFor("opencode")).toBe("function");
-    expect(classifyTranscriptTailFor("cursor")).toBeUndefined();
+    expect(typeof classifyTranscriptTailFor("cursor")).toBe("function");
     expect(classifyTranscriptTailFor("gemini")).toBeUndefined();
   });
 

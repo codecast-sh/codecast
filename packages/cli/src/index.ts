@@ -3094,56 +3094,6 @@ program
   });
 
 program
-  .command("escalate")
-  .description(
-    "Put one of a role's sessions in front of the person, or take it back\n\n" +
-    "A session that reports to a role stays out of its owner's needs input: the\n" +
-    "role reads it first. Escalating puts YOUR card in the person's needs input,\n" +
-    "with your face, your one line and the session as a pill; the session stays\n" +
-    "under you and the person answers you. The line is written into both\n" +
-    "threads as a divider, whole, so write the reason as long as it needs to be.\n" +
-    "--direct puts the session itself in front of the person instead. Use it\n" +
-    "only when they must act inside that session: an open permission prompt, an\n" +
-    "interactive question, a review of its own transcript; say why in the line.\n" +
-    "--clear takes it back under you. A role uses this on its own sessions; a\n" +
-    "person can use it on a session they own. A session cannot escalate itself:\n" +
-    "it tells its role why, and the role decides.\n\n" +
-    "Examples:\n" +
-    "  cast escalate jx7c6zk \"the pricing copy is ready and needs your eye\"\n" +
-    "  cast escalate --direct jx7c6zk \"a permission prompt is open in here\"\n" +
-    "  cast escalate --clear jx7c6zk   # it no longer needs the person"
-  )
-  .argument("<session>", "Session short ID (e.g. jx7c6zk), UUID, or full ID")
-  .argument("[line]", "What the person will decide, and why (required from a role)")
-  .option("--clear", "Take the session back under its role")
-  .option("--direct", "Put the session itself in the person's inbox: they must act inside it")
-  .action(async (session: string, line: string | undefined, opts: { clear?: boolean; direct?: boolean }) => {
-    const result = await cliPost("/cli/sessions/escalate", {
-      session_id: session,
-      ...(opts.clear ? { clear: true } : { line, ...(opts.direct ? { direct: true } : {}) }),
-      from_session: callingSession(),
-    });
-    const role = result.role ? `${c.cyan}@${result.role.handle}${c.reset}` : "";
-    if (opts.clear) {
-      console.log(!result.role
-        ? `${c.green}ok${c.reset} ${c.cyan}${result.short_id}${c.reset} ${c.dim}— the role it was under is gone; the escalation is cleared${c.reset}`
-        : result.changed
-        ? `${c.green}ok${c.reset} ${c.cyan}${result.short_id}${c.reset} is back under ${role} ${c.dim}— out of the person's needs input${c.reset}`
-        : `${c.dim}${result.short_id} was not escalated; it is already under ${role}${c.reset}`);
-      return;
-    }
-    if (!result.changed) {
-      console.log(`${c.dim}${result.short_id} already carries this line; nothing moved${c.reset}`);
-      return;
-    }
-    const where = result.reached?.direct
-      ? `${c.dim}— the session itself is in the person's needs input, from${c.reset} ${role}`
-      : `${c.dim}— in the person's needs input on your card (${result.reached?.short_id ?? "your session"}); the session stays under${c.reset} ${role}`;
-    const first = String(result.escalated_by_role.line).split("\n").find((l: string) => l.trim())?.trim() ?? "";
-    console.log(`${c.green}ok${c.reset} escalated ${c.cyan}${result.short_id}${c.reset} ${where}${c.dim}: ${first} (cast escalate --clear ${result.short_id} to take it back)${c.reset}`);
-  });
-
-program
   .command("kill")
   .description(
     "Kill a session's agent and retire it from the inbox\n\n" +
@@ -4800,6 +4750,9 @@ program
   .action(async (options: any) => {
     const startedAt = Date.now();
     startDaemon();
+    // startDaemon only explains the refusal; a script asking for the daemon
+    // on native Windows must see it did not start.
+    if (!daemonSupportedOnPlatform()) process.exit(1);
     // Ensure autostart is configured so daemon restarts on reboot/crash
     ensureAutostart();
     if (options.wait) {
@@ -20727,7 +20680,9 @@ if (runFastPath(process.argv)) {
   // A verb with no group (`cast send`), `cast --help` and a typo resolve to
   // nothing here and pay for no group at all. ct-49546.
   activateGroup(program, groupTokenInArgv(process.argv), groupDeps())
-    .then(() => program.parse())
+    // parseAsync, so an action's own refusal (a thrown Error) lands in the
+    // catch below as one line instead of an unhandled rejection's source dump.
+    .then(() => program.parseAsync())
     .catch((err) => {
       console.error(err instanceof Error ? err.message : String(err));
       process.exit(1);

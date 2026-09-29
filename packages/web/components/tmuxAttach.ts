@@ -8,7 +8,8 @@
  * nothing.
  */
 
-import { deviceDisplayName, localTmuxAttachCommand, sshTmuxAttachCommand } from "@codecast/shared/contracts";
+import { deviceDisplayName, localTmuxAttachCommand, sshTmuxAttachCommand, wslTmuxAttachCommand } from "@codecast/shared/contracts";
+import { visitorPlatform } from "../lib/visitorPlatform";
 
 export type SessionMachine = {
   device_id: string;
@@ -23,6 +24,8 @@ export type SessionMachine = {
   via_bot?: boolean;
   /** User-set ssh target; server returns null for machines that aren't yours. */
   ssh_host: string | null;
+  /** The WSL distro the pane's daemon runs in; null off WSL or not yours. */
+  wsl_distro?: string | null;
 };
 
 /**
@@ -44,12 +47,15 @@ export type SessionMachine = {
 export function attachCommand(
   tmuxSession: string,
   machine: SessionMachine | null | undefined,
+  viewerOnWindows = visitorPlatform() === "windows",
 ): string | null {
   const local = localTmuxAttachCommand(tmuxSession);
   // Unknown machine (no owner_device_id, or the device row is gone): keep the
   // pre-existing local form rather than silently withholding the pane name.
   if (!machine) return local;
   if (!machine.is_mine) return null;
+  // A Windows viewer pastes into PowerShell, where tmux only exists inside WSL.
+  if (!machine.ssh_host && machine.wsl_distro && viewerOnWindows) return wslTmuxAttachCommand(machine.wsl_distro, tmuxSession);
   if (!machine.ssh_host) return local;
   return sshTmuxAttachCommand(machine.ssh_host, tmuxSession);
 }
@@ -80,5 +86,6 @@ export function attachCopy(
     };
   }
   if (machine.ssh_host) return { command, message: "ssh + tmux attach copied" };
+  if (command?.startsWith("wsl.exe")) return { command, message: `tmux attach copied: run it in PowerShell on ${name}` };
   return { command, message: `tmux attach copied — run it in a shell on ${name}` };
 }
