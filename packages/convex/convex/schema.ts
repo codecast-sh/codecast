@@ -5779,6 +5779,28 @@ export default defineSchema({
     .index("by_conversation", ["conversation_id"])
     .index("by_transcript", ["transcript_id"]),
 
+  // Every session a call's words reached, kept for good: the way from a call
+  // to its agents and from an agent back to its call. call_agent_feeds dies
+  // with the feed; this row outlives it. One row per (call, session), written
+  // by transcripts.linkCallSession: a live feed sets `live`, each one-shot
+  // send of the transcript or a range of it appends to `excerpts`.
+  call_session_links: defineTable({
+    transcript_id: v.id("transcripts"),
+    conversation_id: v.id("conversations"),
+    added_by: v.id("users"),
+    created_at: v.number(),
+    updated_at: v.number(),
+    live: v.optional(v.boolean()),
+    // Segment seq ranges sent, inclusive, newest last (capped).
+    excerpts: v.optional(v.array(v.object({
+      from_seq: v.number(),
+      to_seq: v.number(),
+      at: v.number(),
+    }))),
+  })
+    .index("by_transcript", ["transcript_id"])
+    .index("by_conversation", ["conversation_id"]),
+
   workflows: defineTable({
     user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),
