@@ -21,6 +21,20 @@ test("credential tripwire distinguishes runtime references from literal credenti
   expect(credentialContentReason(Buffer.from('AIza' + 'A1b2C'.repeat(7)))).toBe("credential material excluded");
 });
 
+test("documentation and scripts that only show the shape of a secret travel; a pasted one does not", () => {
+  for (const source of [
+    'secret_name: "API_KEY",', 'token_rate = 50', '{"binding": "API_KEY", "store_id": "abc123", "secret_name": "api_key"}',
+    'export FLY_ACCESS_TOKEN="$(awk \'/^access_token:/{print $2}\' ~/.fly/config.yml)"', 'transport: { headers: { Authorization: "Bearer ..." } }',
+    'const POSTHOG_API_KEY = "phc_zjExampleExampleExample0123";', '{"password":"secret"}', 'NEXT_PUBLIC_CONVEX_URL = "https://x.convex.cloud"',
+    'headers: { Authorization: "Bearer token" }', "headers: { Authorization: 'Bearer <API_TOKEN>' }", 'Authorization: "Bearer at_test",',
+    '-d \'{"token": "\'$API_TOKEN\'"}\'', 'secret     = random_id.tunnel_secret.b64_std', "const token = 'ghp_abc123';",
+    '{ "vars": { "API_KEY": "sk_live_abc123" } }', 'credential_default="$HOME/.config/muse/auth.json"', 'auth_provider_command = "/usr/local/bin/my-auth-provider"', 'Auth = ES256 JWT signed with the key', 'alg: "HS256"',
+  ]) expect(credentialContentReason(Buffer.from(source))).toBeNull();
+  for (const source of ['export PROVIDER_API_KEY=\'opaque-random-credential-12345\'', '{"password":"hunter2"}', 'api_key: "Zq8vX2mLp4Rt"', 'STRIPE_SECRET_KEY="sk_' + 'test_4eC39HqLyjWDarjtT1zdp7dc"', 'Authorization: "Bearer Zq8vX2mLp4Rt9"']) {
+    expect(credentialContentReason(Buffer.from(source))).not.toBeNull();
+  }
+});
+
 test("Claude MCP projection remaps project keys and refuses raw auth or history state", () => {
   const input = { mcpServers: { local: { command: "/Users/ashot/scripts/run" } }, projects: { "/Users/ashot/src/repo": { mcpServers: { project: { command: "/Users/ashot/src/repo/mcp" } } } } };
   const result = JSON.parse(transformByKind("claude-mcp", Buffer.from(JSON.stringify(input)), { ...ctx, pathMappings: [{ from: "/Users/ashot/src/repo", to: "/home/ubuntu/work/repo" }] }).bytes.toString());

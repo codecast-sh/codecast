@@ -137,6 +137,24 @@ describe("mirrorHomeToHost", () => {
     };
   }
 
+  test("a worktree target removed on the host is retired and the push goes again at once, so the placement does not fail on it", async () => {
+    const pushes: string[] = [];
+    const retired: string[][] = [];
+    let registered = [{ host: "ubuntu@cloud-test.invalid", sourceRoot: "/Users/a/src/app", targetRoot: "/home/ubuntu/work/app/.codecast/worktrees/gone", hostId: "i-1" }];
+    const missing = { hash: "", applied: [], unchanged: 0, host_edited: [], pruned: [], errors: [{ path: "work/app/.codecast/worktrees/gone", error: "registered project target is missing or unsafe; retire or repair its registration" }], retired_projects: ["work/app/.codecast/worktrees/gone"] };
+    const ok = { hash: "H1", applied: ["x"], unchanged: 0, host_edited: [], pruned: [], errors: [] };
+    const r = await mirrorHomeToHost(host, { deps: {
+      ...deps({}, pushes),
+      readProjects: () => registered,
+      retireProjects: async (_h, roots) => { retired.push(roots); registered = []; },
+      push: async (h) => { pushes.push(hostKey(h)); return pushes.length === 1 ? { pushed: false, hash: "H1", result: missing } : { pushed: true, hash: "H1", result: ok }; },
+    } });
+    expect(retired).toEqual([["/home/ubuntu/work/app/.codecast/worktrees/gone"]]);
+    expect(pushes).toHaveLength(2);
+    expect(r).toMatchObject({ pushed: true, changed: 1 });
+    expect("retiredTargets" in r).toBe(false);
+  });
+
   test("skips ssh when the local stamp holds the hash; pushes otherwise; force overrides; failures are recorded", async () => {
     const stamps: LocalMirrorStamps = { "ubuntu@cloud-test.invalid": { hash: "H1", at: "earlier" } };
     const pushes: string[] = [];

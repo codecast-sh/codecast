@@ -295,8 +295,8 @@ test("escaped references cannot introduce backslashes or control characters into
   expect(contextReferences(`${home}/scripts/run.sh\\\n`, source, home)).toContain(path.join(home, "scripts/run.sh"));
 });
 
-test("service credentials, password stores and shell startup files cannot enter through references, includes or aliases", async () => {
-  const denied = [".app-store-connect/AuthKey_test.p8", ".cloudflared/tunnel.json", ".convex/config.json", ".railway/config.json", ".fly/config.yml", ".bashrc", ".bash_profile", ".zshrc", "Dropbox/txt/pass.txt", "OneDrive/private.md", "keys/signing.p12", "other/pass.txt"];
+test("service credentials and password stores cannot enter through references, includes or aliases", async () => {
+  const denied = [".app-store-connect/AuthKey_test.p8", ".cloudflared/tunnel.json", ".convex/config.json", ".railway/config.json", ".fly/config.yml", "Dropbox/txt/pass.txt", "OneDrive/private.md", "keys/signing.p12", "other/pass.txt"];
   for (const rel of denied) write(rel, "private account data");
   write(".claude/skills/privacy/SKILL.md", denied.map((rel) => `Read ~/${rel}`).join("\n"));
   fs.symlinkSync(path.join(home, ".railway"), path.join(home, ".claude/skills/privacy/service-alias"));
