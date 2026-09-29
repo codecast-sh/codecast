@@ -96,7 +96,7 @@ const GROUPS: { label: string; sections: SectionDef[] }[] = [
       { id: "agents", label: "Agents", icon: Bot, desc: "Permission modes and default parameters", keywords: "permissions yolo model parameters defaults" },
       { id: "agent-library", label: "Agent Library", icon: Bot, desc: "Named agent definitions and chains: client, model, effort, tools, prompt", keywords: "definitions roles reviewer scout chain pipeline subagent model effort prompt as" },
       { id: "claude-accounts", label: "Claude Accounts", icon: UserCog, desc: "Saved Claude sign-ins and auto-switching", keywords: "usage limits switch profiles anthropic" },
-      { id: "devices", label: "Devices", icon: Laptop, desc: "Every machine running the daemon", keywords: "machines daemon ssh checkouts online" },
+      { id: "devices", label: "Devices", icon: Laptop, desc: "Every machine running the daemon", keywords: "machines daemon ssh checkouts online share team shared" },
       { id: "daemon", label: "Daemon", icon: Cpu, desc: "Version, health and updates of each machine's daemon", keywords: "version update automatic auto update status running health restart upgrade" },
       { id: "migrate", label: "Migration", icon: ArrowRightLeft, desc: "Move many sessions to a cloud host or back, in one go", keywords: "migrate move bulk cloud host laptop transfer sessions batch" },
       { id: "desktop", label: "Desktop", icon: Monitor, desc: "The desktop app: shortcuts and meeting detection", keywords: "shortcuts hotkeys meetings version updates", desktopOnly: true },

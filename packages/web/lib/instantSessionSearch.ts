@@ -8,6 +8,7 @@
 // return, so a surface renders one list and never branches on where a row came
 // from — except to say, honestly, that content search is still running.
 import { useMemo } from "react";
+import { parseSessionQuery } from "@codecast/shared/search";
 import {
   useInboxStore,
   filterInboxScopeFromState,
@@ -156,7 +157,10 @@ export function instantSessionRows(
  * re-render happens while the search is closed.
  */
 export function useInstantSessionRows(query: string, cap = 12, opts: InstantSearchOpts = {}): SessionSearchRow[] {
-  const active = query.trim().length >= 2;
+  // A cached row cannot say which files, commits or pull requests its session
+  // touched, so an operator query (file:, pr:, ...) has no instant answer; the
+  // server tier answers it alone.
+  const active = query.trim().length >= 2 && !parseSessionQuery(query).hasFilters;
   const mineOnly = !!opts.mineOnly;
   const sig = useInboxStore((s) => (active ? searchableSessionsSig(s.sessions) : ""));
   const scope = useInboxStore((s) => s.clientState.ui?.inbox_scope ?? "mine");

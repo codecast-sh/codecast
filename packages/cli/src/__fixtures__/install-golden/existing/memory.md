@@ -37,14 +37,16 @@ block by "everything to end of file" destroys this paragraph.
 
 ## Memory
 
-You are one session among many, and past conversations hold the decisions, patterns and prior work you need. Search them liberally, in parallel for several topics: when starting a task, when debugging, and when the user refers to earlier work.
+You are one session among many, and past conversations hold the decisions, patterns and prior work you need. Search them liberally, in parallel for several topics: when starting a task, when debugging, and when the user refers to earlier work. Filters narrow a search to the sessions behind a piece of work, so "which sessions touched this file" and "which session made this commit or PR" are one query. To learn what one session concluded, including this one, ask it instead of paging through it: the answer cites its lines and flags anything reversed later. Agent commits carry a `Codecast-Session` trailer, so `git log` and `cast blame` lead from code back to the conversation that wrote it.
 
 ```bash
 # Search & browse (default scope: the team for this directory)
 cast search "auth"                # --mine | -m samvit | -g (all teams) | -s 7d
+cast search "file:src/auth.ts"    # filters: file: commit:<sha> pr:<n|owner/repo#n> label: author: repo: after:7d before:; other words search within
 cast feed                         # team feed: --mine, -m <name>, --state needs-input, --label api
 cast read <id> 15:25              # messages 15-25; --full shows tool payloads (REQUIRED to see a StructuredOutput return)
 cast read '<share-url>#msg-<id>'  # a window around a linked message (-c N for its size)
+cast read <id> --ask "<question>"  # an answer from one session with line citations and later reversals; no id = this session
 cast link [id] [line]             # deep link to any object (session+line → message, ct-/pl-, --type doc); no args = this session
 
 # Sessions: which (ids, --label, --state, --team, -m) × what (state | --messages) × live (-w)
@@ -62,6 +64,7 @@ cast label ls | clear <id> | rename api backend | rm api   # rm leaves its sessi
 # Analysis
 cast diff <id>                    # files changed, commits, tools used (--today aggregates today)
 cast summary <id>                 # goal, approach, outcome, files
+cast blame <file>                 # git blame whose author column is the session that wrote each line
 cast context "implement auth"     # find relevant prior sessions
 cast ask "how does X work"        # query across sessions
 

@@ -102,6 +102,16 @@ export function runFastPath(argv: string[]): boolean {
       .catch(fail);
     return true;
   }
+  if (argv[2] === "_session-trailer") {
+    // Claude Code PreToolUse hook (sessionTrailerHook.ts). Stdout is read as
+    // the hook's JSON answer, so nothing else may print: no Commander, no
+    // preAction logging or daemon startup, no update check. Any failure is
+    // silence, which leaves the agent's command as it was.
+    import("./sessionTrailer.js")
+      .then(({ runSessionTrailerHook }) => runSessionTrailerHook())
+      .catch(() => process.exit(0));
+    return true;
+  }
   if (isCredentialHelperFastPath(argv)) {
     // Stdout must be exactly the credential lines (or empty): no commander, no
     // preAction logging or daemon startup, no update check. The module answers

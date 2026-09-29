@@ -24,11 +24,12 @@ export const CODECAST_HOOK_SCRIPTS = [
   "thread-state.sh",
   "task-pulse.sh",
   "stable-feed.sh",
+  "codecast-session-trailer.sh",
 ] as const;
 
 /**
  * The statusline hook, written by `cast install` on every machine rather
- * than by installHookScript (statuslineHook.ts). Owned like the seven: a copy
+ * than by installHookScript (statuslineHook.ts). Owned like the others: a copy
  * mirrored to a host is overwritten there and reads as a remote edit.
  */
 export const STATUSLINE_HOOK_SCRIPT = "codecast-statusline.sh";
@@ -87,7 +88,7 @@ export const CODECAST_OWNED_HOME_PATHS: readonly string[] = [
 ];
 
 /**
- * Is this hook command one codecast installed? True for the seven hook
+ * Is this hook command one codecast installed? True for the hook
  * scripts (by basename, any home), for anything under a `.codecast/hooks/`
  * directory (the codex/cursor/opencode stable-feed wrappers) and for the
  * orchestration scripts (`/.codecast/orchestration/`). A user's own hook that
