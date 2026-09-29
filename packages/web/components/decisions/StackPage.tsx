@@ -15,6 +15,7 @@ import { formatTimeAgo } from "../../lib/messageNavigator";
 import { stackDue, sortStacksByDue } from "../../lib/decisionGroups";
 import { AppLoader } from "../AppLoader";
 import { StackChecklist } from "./StackChecklist";
+import { CopyLinkButton } from "../CopyLinkButton";
 import "./decisions.css";
 
 const api = _api as any;
@@ -127,6 +128,7 @@ function StackBody({ stack }: { stack: DecisionStackItem }) {
             <span className={`px-1.5 py-0.5 rounded border ${stack.status === "open" ? "border-sol-cyan/40 text-sol-cyan" : "border-sol-green/40 text-sol-green"}`}>{stack.status === "open" ? "open" : "done"}</span>
             <span>{stack.team_id ? "team stack" : "personal stack"}</span>
             {due && <span data-stack-due={due.overdue ? "overdue" : "due"} className={`px-1.5 py-0.5 rounded border ${due.overdue ? "border-sol-red/40 text-sol-red" : "border-sol-border text-sol-text-dim"}`}>{due.text}</span>}
+            <CopyLinkButton path={`/decisions/stacks/${stack.short_id ?? stack._id}`} className="ml-auto" />
           </div>
           <h1 className="mt-3 decision-question text-sol-text flex items-center gap-3"><Layers className="w-6 h-6 text-sol-cyan shrink-0" />{stack.title}</h1>
         </header>
