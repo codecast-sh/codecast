@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { remoteMachineSetupCommand, type RemoteMachineSetup } from "./remoteMachineSetup";
 
 const form: RemoteMachineSetup = { platform: "linux", mode: "existing", instance: "i-1234", region: "us-west-2", profile: "", key: "~/.ssh/my key.pem", name: "dev", image: "ami-1234", keyName: "dev", subnet: "subnet-1234", securityGroup: "sg-1234", dedicatedHost: "" };
@@ -17,4 +17,14 @@ test("new Mac requires a dedicated host and includes the selected account", () =
   expect(command).toContain("cast hosts create mac");
   expect(command).toContain("--dedicated-host 'h-1234'");
   expect(command).toContain("--profile 'team'");
+});
+
+describe("a saved image", () => {
+  const base = { platform: "linux" as const, mode: "new" as const, instance: "", region: "us-west-2", profile: "", key: "~/.ssh/k.pem", name: "dev", image: "", keyName: "k", subnet: "subnet-1", securityGroup: "sg-1", dedicatedHost: "" };
+  test("makes the image optional and leaves --image off so create starts from the newest", () => {
+    expect(remoteMachineSetupCommand(base)).toBeNull();
+    const cmd = remoteMachineSetupCommand({ ...base, savedImage: "ami-0abc" })!;
+    expect(cmd).not.toContain("--image");
+    expect(remoteMachineSetupCommand({ ...base, savedImage: "ami-0abc", image: "ami-0def" })).toContain("--image 'ami-0def'");
+  });
 });

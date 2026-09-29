@@ -106,6 +106,8 @@ export interface BuildHomeMirrorOptions {
   projects?: ProjectRegistration[];
   /** Shared across the hosts of one tick; a fresh one is used when absent. */
   sources?: MirrorSourceCache;
+  /** Inside a repo, carry only agent context (for a host whose receiver keeps tracked files); the folder sync carries the rest. */
+  narrowProjects?: boolean;
   /** Host-edited memories this push has taken in (memoryBack.ts). */
   reconciled?: Array<{ path: string; sha: string }>;
 }
@@ -120,14 +122,15 @@ export async function buildHomeMirror(opts: BuildHomeMirrorOptions): Promise<Hom
   const canonicalProjects = [...projects].sort((a, b) => a.targetRoot.length - b.targetRoot.length || a.targetRoot.localeCompare(b.targetRoot));
   const discoveries = new Map<string, ProjectContext>();
   for (const project of projects) if (!discoveries.has(project.sourceRoot)) {
-    let discovery = sources.discoveries.get(project.sourceRoot);
+    const discoveryKey = `${project.sourceRoot}\0${opts.narrowProjects ? "narrow" : "wide"}`;
+    let discovery = sources.discoveries.get(discoveryKey);
     if (!discovery) {
       discovery = (async () => {
         sources.ledger.note(project.sourceRoot);
         if (!(await fs.promises.stat(project.sourceRoot)).isDirectory()) throw new Error(`project context root is not a directory: ${project.sourceRoot}`);
-        return collectProjectContextAsync({ root: project.sourceRoot, home, includeTracked: true, includeAncestors: true, config: opts.config, ledger: sources.ledger });
+        return collectProjectContextAsync({ root: project.sourceRoot, home, includeTracked: true, agentContextOnly: opts.narrowProjects, includeAncestors: true, config: opts.config, ledger: sources.ledger });
       })();
-      sources.discoveries.set(project.sourceRoot, discovery);
+      sources.discoveries.set(discoveryKey, discovery);
     }
     discoveries.set(project.sourceRoot, await discovery);
   }
@@ -356,6 +359,8 @@ export interface LocalMirrorStamp {
   hash: string;
   at: string;
   last_failure?: { reason: string; at: string; hash: string };
+  /** The host's receiver releases, never deletes, a tracked project file the bundle stops carrying (apply.ts). */
+  keeps_tracked?: boolean;
 }
 
 export type LocalMirrorStamps = Record<string, LocalMirrorStamp>;
@@ -424,7 +429,8 @@ function resolveDeps(partial: Partial<MirrorDeps> = {}, signal?: AbortSignal): M
 async function saveHostStamp(deps: MirrorDeps, key: string, stamp: LocalMirrorStamp): Promise<void> {
   await deps.lock("stamps", async () => {
     const latest = deps.readLocalStamps();
-    deps.writeLocalStamps({ ...latest, [key]: stamp });
+    // What a host's receiver can do outlives any one push's stamp.
+    deps.writeLocalStamps({ ...latest, [key]: { ...(latest[key]?.keeps_tracked ? { keeps_tracked: true } : {}), ...stamp } });
   });
 }
 
@@ -472,8 +478,12 @@ async function mirrorUnderLock(host: RemoteHost, opts: MirrorHomeOptions, deps: 
     opts.signal?.throwIfAborted();
     const key = hostKey(host);
     const projects = deps.readProjects(host);
-    const buildOpts = { config, hostHome: remoteHome(host), takeOver: opts.takeOver, localGitRoot: opts.localGitRoot, projects, sources: opts.sources };
-    const cacheKey = JSON.stringify([key, buildOpts.hostHome, opts.takeOver ?? false, opts.localGitRoot ?? "", projects, config.cloud_mirror_include ?? "", config.cloud_mirror_exclude ?? ""]);
+    // Inside a repo, carry only agent context, once the
+    // host's receiver has said it releases tracked files instead of deleting
+    // them; an older receiver keeps getting the wider bundle.
+    const narrowProjects = !!deps.readLocalStamps()[key]?.keeps_tracked;
+    const buildOpts = { config, hostHome: remoteHome(host), takeOver: opts.takeOver, localGitRoot: opts.localGitRoot, projects, sources: opts.sources, narrowProjects };
+    const cacheKey = JSON.stringify([key, buildOpts.hostHome, opts.takeOver ?? false, opts.localGitRoot ?? "", projects, config.cloud_mirror_include ?? "", config.cloud_mirror_exclude ?? "", narrowProjects]);
     const build = async (): Promise<BuiltBundle> => {
       let built: BuiltBundle;
       try {
@@ -494,9 +504,10 @@ async function mirrorUnderLock(host: RemoteHost, opts: MirrorHomeOptions, deps: 
       }
       if (ledger) buildCache.set(cacheKey, { hash: built.hash, ledger, files }); else buildCache.delete(cacheKey);
       // Compatibility warnings describe the bundle, so they are worth a line when the bundle is new, not on every rebuild of the same one.
-      if (opts.onProgress || previous?.hash !== built.hash) for (const warning of summary?.warnings ?? []) {
-        (opts.onProgress ?? deps.log)(`context compatibility: ${warning}`);
-      }
+      // A wake shows one line for them (dozens of docs name a macOS path); the log and the dry run keep each.
+      const warnings = summary?.warnings ?? [];
+      if (opts.onProgress && warnings.length) opts.onProgress(`context compatibility: ${warnings.length} file(s) name macOS-only commands or paths; cast hosts sync --dry-run lists them`);
+      else if (previous?.hash !== built.hash) for (const warning of warnings) deps.log(`context compatibility: ${warning}`);
       return built;
     };
     const cached = opts.force ? undefined : buildCache.get(cacheKey);
@@ -539,6 +550,7 @@ async function mirrorUnderLock(host: RemoteHost, opts: MirrorHomeOptions, deps: 
       const wire = await bundle();
       opts.onProgress?.(`syncing ${wire.header.files.length} configuration files (${(wire.bytes.length / 1024 / 1024).toFixed(1)} MiB)…`);
       let r = await deps.push(host, wire.bytes);
+      const keeps = r.result?.capabilities?.includes("keeps-tracked") ? { keeps_tracked: true } : {};
       let retiredTargets = false;
       if (r.result?.retired_projects?.length) {
         await deps.retireProjects(host, r.result.retired_projects.map((root) => path.posix.join(remoteHome(host), root)));
@@ -548,10 +560,10 @@ async function mirrorUnderLock(host: RemoteHost, opts: MirrorHomeOptions, deps: 
         r = { ...r, pushed: false, reason: isApplyResult(r.result) ? applyFailure(r.result) || "receiver returned a different bundle hash" : "receiver returned an incomplete apply result" };
       }
       if (r.pushed) {
-        await saveHostStamp(deps, key, { hash, at });
+        await saveHostStamp(deps, key, { hash, at, ...keeps });
         return { ...r, changed: (r.result?.applied.length ?? 0) + (r.result?.pruned.length ?? 0) };
       }
-      await saveHostStamp(deps, key, { hash: "", at, last_failure: { reason: r.reason ?? "refused", at, hash } });
+      await saveHostStamp(deps, key, { hash: "", at, last_failure: { reason: r.reason ?? "refused", at, hash }, ...keeps });
       return { ...r, changed: 0, ...(retiredTargets ? { retiredTargets } : {}) };
     } catch (err) {
       await saveHostStamp(deps, key, { hash: "", at, last_failure: { reason: err instanceof Error ? err.message : String(err), at, hash } });

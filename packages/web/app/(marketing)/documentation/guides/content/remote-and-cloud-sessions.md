@@ -8,9 +8,12 @@ cast spawn --cloud --shared "run the migration"                 # the host's mai
 cast spawn --cloud --from origin-main "audit the build"         # clean start, not this checkout
 cast spawn --subagent --device nose "run the nightly backfill"  # another machine of yours
 cast remote move <session>      # move a live session to the host; cast remote back <session> returns it
+cast sync start <session>       # keep a cloud session's folder in step with a copy here, both ways
 cast pull <session>             # run any session you can access on this machine
 cast hosts ls                   # hosts, sessions, worktrees, git access, cost
 cast hosts wake [id]            # boot a sleeping host; cast hosts sleep [id] stops it
+cast hosts setup [id]           # apply the repo's [host] packages, services and commands
+cast hosts image [id]           # save a prepared host; new hosts start from it
 cast hibernate <session>        # park an idle session's pane
 cast wake <session>             # resume a parked session
 cast resume <session> --tmux    # attach to the pane the web session uses
@@ -40,7 +43,7 @@ cast hosts create linux --name dev-linux --image ami-0123456789abcdef0 \
   --key-name dev-key --key ~/.ssh/dev.pem --region us-west-2
 ```
 
-Use an Ubuntu 24.04 x86_64 AMI and a public subnet whose security group permits SSH. For Mac, use `create mac`, a compatible macOS AMI, and `--dedicated-host h-0123456789abcdef0`; the default instance type is `mac2.metal`, overridable with `--type`. The dedicated host and subnet must be in the same availability zone. Allocate the dedicated host in AWS first. AWS imposes a 24-hour minimum allocation; stopping the instance does not release the dedicated host or end its charges. Mac auto-stop is disabled.
+Use an Ubuntu 24.04 x86_64 AMI and a public subnet whose security group permits SSH. Once a host is prepared, `cast hosts image <id>` saves it, and `cast hosts create` without `--image` starts the next host from the newest saved image: its packages, tools, checkout and mirrored home are already there. The clone makes itself its own machine on first boot, before its daemon starts: a new machine id and device, the source host's codecast login removed, the source's session worktrees cleared. Provisioning then signs it in as itself. A first boot from an image is slower (the disk streams in from the snapshot); the CLI waits up to 6 minutes for SSH. For Mac, use `create mac`, a compatible macOS AMI, and `--dedicated-host h-0123456789abcdef0`; the default instance type is `mac2.metal`, overridable with `--type`. The dedicated host and subnet must be in the same availability zone. Allocate the dedicated host in AWS first. AWS imposes a 24-hour minimum allocation; stopping the instance does not release the dedicated host or end its charges. Mac auto-stop is disabled.
 
 `--dry-run` prints the launch plan without changing AWS. Rerunning the same name and launch settings reuses the tagged instance. If provisioning fails, run `cast hosts provision <instance-id>` to continue. The Mac service starts at boot without an interactive login; Linux uses its system service and idle watchdog. The machine is ready only after configuration syncing succeeds.
 
@@ -54,7 +57,7 @@ Use an Ubuntu 24.04 x86_64 AMI and a public subnet whose security group permits 
 4. The host runs its own `cast ws acquire` for each task. Dependency install runs on the host, and ports are probed on the machine that binds them. The session sees `PORT_WEB` and the worktree identity in its environment.
 5. The conversation row is created already pointed at the worktree and routed to the host's device.
 
-A worktree starts from your checkout by default: its branch, its HEAD including commits you have not pushed, and its uncommitted and untracked files. The laptop takes a snapshot commit with a temporary index, so your own index and branches do not change. It pushes that commit to a hidden ref, `refs/codecast/cloud/<worktree-name>`, which `git ls-remote --heads` does not list. The host creates the branch under the laptop's branch name, or `<branch>-<hex>` when that name exists, and resets to the laptop HEAD so the changes are uncommitted again. `--from origin-main` starts clean instead. If you asked for your checkout and the snapshot, push or reset fails, the spawn fails with the tool's error. It does not fall back to origin/main silently.
+A worktree starts from your checkout by default: its branch, its HEAD including commits you have not pushed, and its uncommitted, untracked and gitignored files (a `.env`, a local config). Dependency and build folders are rebuilt on the host instead, and very large files wait until asked for; the `[sync]` section below has the rules. The laptop takes a snapshot commit with a temporary index, so your own index and branches do not change. It pushes that commit to a hidden ref, `refs/codecast/cloud/<worktree-name>`, which `git ls-remote --heads` does not list. The host creates the branch under the laptop's branch name, or `<branch>-<hex>` when that name exists, and resets to the laptop HEAD so the changes are uncommitted again. `--from origin-main` starts clean instead. If you asked for your checkout and the snapshot, push or reset fails, the spawn fails with the tool's error. It does not fall back to origin/main silently.
 
 `--shared` runs one task in the host's main checkout. One checkout holds one session: the row claims the path in Convex before anything moves, a second claimant is refused with the winner's session named, and a dirty checkout is refused with the files listed. A shared session always starts from origin/main on a new branch `codecast/cloud-<hex>`.
 
@@ -64,14 +67,61 @@ The web composer reaches the same path. Picking Cloud Linux in the machine dropd
 
 | What | How it travels | Limits |
 |------|----------------|--------|
-| Instruction files and agent config (`.claude`, `.codex`, `.gemini`, `.grok`, `.opencode`, `.agents`, project docs, a block of git preferences) | The home mirror, one way from laptop to host. Files are written atomically with mode `0600`, or `0700` when executable. The next scan starts one minute after the last pass ends. Remote bytes are verified every 30 minutes. | Credentials, transcripts, databases, caches and native executables are excluded. The bundle cap is 256 MiB and exceeding it is an error. The mirror never wakes a sleeping host. Host edits stay and are reported as conflicts. |
+| Instruction files and agent config (`.claude`, `.codex`, `.gemini`, `.grok`, `.opencode`, `.agents`, a repo's instruction files and gitignored agent files, a block of git preferences) and your codecast feature switches | The home mirror, laptop to host. Files are written atomically with mode `0600`, or `0700` when executable. The next scan starts one minute after the last pass ends. Remote bytes are verified every 30 minutes. | Credentials, transcripts, databases, caches, audio and video, and native executables are excluded. The bundle cap is 256 MiB and exceeding it is an error. The mirror never wakes a sleeping host. Host edits stay and are reported as conflicts. |
+| Shell environment (`.bashrc`, `.bash_profile`, `.profile`, zsh and fish startup files, `.inputrc`, `.tmux.conf`, and every file they source) | The home mirror, with laptop paths rewritten to the host's. | Exports travel as they are, keys included. A login shell on the host also gets its own tool directories and `CODECAST_CLOUD=1`. |
+| Agent memory | Both ways. Before each push the laptop brings home memories a cloud session wrote or edited, then sends the merged set. | In `MEMORY.md` only index lines for memories the laptop does not have yet are added. |
+| Tool logins (gh, Cloudflare `cf` and wrangler, Convex, AWS, gcloud, Vercel, Railway, Fly, Netlify, Supabase, Stripe, Expo, kubeconfig, npm, `.netrc`) | The login bundle over SSH stdin, macOS config paths mapped to Linux ones. | An OAuth login whose refresh may rotate ships only while its access token is live. |
 | Agent logins (Claude, Codex, Grok, Gemini, opencode, pi, provider keys) | One bundle over SSH stdin, never through Convex. Each file ships only when its token is live. | A bundle whose `user_id` differs from the host's is refused and nothing is written. `ANTHROPIC_API_KEY` never travels. |
-| Agent CLIs | Provisioning installs claude, codex, gemini, grok, opencode and pi at the laptop's versions when missing. | Installs are local to the user. No system package and no sudo for a package. |
+| Agent and tool CLIs | Every wake installs what is missing: claude, codex, gemini, grok, opencode and pi, and each tool CLI your laptop's shell has (vercel, railway, cf, supabase, stripe, fly, aws, gcloud, kubectl), at the laptop's versions. | Installs are local to the user. No system package and no sudo for a package; system packages go in `[host]` below. |
 | Browser logins | On the host, `cast browser sync <site>` asks your online laptop to inject that site's cookies through an SSH port forward into the host's Chrome. | Google is never carried. The request expires after 5 minutes if no laptop picks it up. The laptop never wakes a host for cookies. |
 
 `cast hosts sync --dry-run` reports what the mirror would send. `cast config cloud_mirror_enabled false` turns it off. An agent that is already running keeps the instructions it read at startup. Start a new session when a changed instruction must load.
 
 An optional hook whose local script has disappeared is omitted from the host's copy and reported as a warning. Broken unused links in `~/.local/bin` are also omitted. The laptop's configuration stays unchanged. Missing required instruction files, MCP dependencies, and status line commands still stop setup with the path that needs fixing.
+
+## What a repo needs on the host
+
+Anything beyond the tools step, such as a database, a service, or a seed script, goes in the `[host]` table of `.codecast/workspace.toml`. Your personal needs go in `~/.codecast/host.toml`:
+
+```toml
+[host]
+packages = ["postgresql", "redis-server"]    # apt packages
+services = ["redis-server", "postgresql"]    # systemd units, enabled and started
+run = ["sudo -u postgres createuser -s ubuntu || true"]   # from the checkout; each must be safe to run again
+```
+
+Every wake applies it once per change, before any worktree is created, so a new host and a changed spec both converge. A failed step is reported with its output and retried on the next wake; it never stops a session. `cast hosts ls` shows whether a host is in step, and `cast hosts setup` applies it by hand. Hooks and scripts can tell they run on a cloud host by `$CODECAST_CLOUD`, which is `1` there.
+
+## Keeping a cloud session's folder in step with your laptop
+
+Pick "Sync with <laptop>" in a cloud session's machine menu, or run `cast sync start <session>`, and the session's folder is kept in step with a copy on your laptop (`.codecast/worktrees/sync-<session>`), both ways. The agent's edits land there within a few seconds, so you can read, run and test them locally; your edits there reach the agent the same way.
+
+- **Everything travels**, gitignored files included, except what is wrong to copy: dependency and build folders (each machine builds its own), audio and video, compiled programs, files over 100 MB, files a running process owns, and nested repositories. The session chip lists what stayed on each machine and why, and `cast sync pull <path>` fetches any of it.
+- **When both sides change the same lines**, only those files hold, each side keeping its own version, and the chip offers "Keep the laptop's" or "Keep the cloud's" for each. Everything else keeps flowing.
+- **Nothing is overwritten mid-edit.** A change lands only if the folder it lands in has not changed since it was read; otherwise the sync tries again a moment later.
+- **The host still sleeps.** The sync talks to the host only while the session works. An edit you make while it idles goes over once the host is awake anyway, and never wakes it.
+- **Cloud to laptop only** (in the chip, or `--watch-only`) makes the laptop copy read-only in spirit: an edit there stops the sync until you send it or overwrite it.
+
+Adjust what travels for a repo in `.codecast/workspace.toml`:
+
+```toml
+[sync]
+always = ["fixtures/big.bin"]    # travel even where a default would leave them
+never = ["data/local.db"]        # stay on their own machine
+```
+
+### When something is missing on the host
+
+Agents on the host have the same verbs, carried out by your laptop:
+
+```bash
+cast sync status                  # what differs, and what stayed on each machine and why
+cast sync pull                    # the laptop's changes, now
+cast sync pull .env.local ~/data/export.csv   # exactly these, even ones that stayed behind or live outside the repo
+cast sync pull --ref feature-x    # a branch only the laptop has, as laptop/feature-x
+cast sync push                    # this folder's changes to the laptop copy
+cast sync diff src/app.ts         # the laptop's version against the host's
+```
 
 ## Pushing from the host
 
@@ -93,7 +143,7 @@ A host on the server's allowlist (`CAST_CLOUD_WAKE_HOSTS`, set by the operator o
 
 ## Moving sessions between machines
 
-`cast remote move` pushes the worktree by git over SSH with uncommitted changes as a snapshot commit, copies the gitignored files and the transcript, flips ownership, and resumes the session on the host. `cast remote back` reverses it. The pull is a fast forward that never overwrites local work and reports conflicts. `cast pull` reparents any session you can access onto the current machine. In the web app, a session's machine menu offers a stopped cloud host as a destination and marks it as asleep, because the source daemon wakes the host before it transfers.
+`cast remote move` pushes the worktree by git over SSH with uncommitted changes as a snapshot commit, copies the gitignored files and the transcript (its laptop paths rewritten to the host's, so the resumed agent's history names files that exist there), flips ownership, and resumes the session on the host. `cast remote back` reverses it. The pull is a fast forward that never overwrites local work and reports conflicts. `cast pull` reparents any session you can access onto the current machine. In the web app, a session's machine menu offers a stopped cloud host as a destination and marks it as asleep, because the source daemon wakes the host before it transfers.
 
 To move many sessions, use Settings, Migration in the web app, or select several inbox cards and choose the move action. Each session goes through five stages:
 

@@ -646,7 +646,7 @@ export function ScheduledTaskBlock({ content: rawContent, timestamp }: { content
   const prevFailed = !!spawned?.previousRun && /^Failed/i.test(spawned.previousRun.summary);
 
   return (
-    <div className="mb-2 mx-1 rounded border-l-2 border-sol-violet/60 bg-sol-violet/5">
+    <div className="mb-3 rounded border-l-2 border-sol-violet/60 bg-sol-violet/5">
       <div className="flex items-center gap-2 px-3 pt-2 pb-1">
         <Zap className="w-3.5 h-3.5 text-sol-violet/70 shrink-0" />
         <span className="text-[11px] font-medium tracking-wide uppercase text-sol-violet/70 shrink-0">{spawned ? "Trigger run" : "Trigger"}</span>

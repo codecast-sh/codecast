@@ -180,6 +180,18 @@ describe("answerLocalRead", () => {
     const blame = payload(await ask(repo, "blame", "main", "src/index.ts"));
     expect(blame.ranges).toHaveLength(1);
     expect(blame.ranges[0]).toMatchObject({ start_line: 1, end_line: 2, message: "second commit", author_name: "Tess Ter" });
+    expect(blame.ranges[0].session).toBeUndefined();
+  });
+
+  test("a blame range carries its commit's Codecast-Session trailer", async () => {
+    const repo = makeRepo();
+    const id = "jx7bq5kz13a2eypp4a6vdqznas7zvrw2";
+    git(repo, "checkout", "-q", "main");
+    fs.writeFileSync(path.join(repo, "t.txt"), "trailed\n");
+    git(repo, "add", "t.txt");
+    git(repo, "commit", "-q", "-m", "trailed", "--trailer", `Codecast-Session: https://codecast.sh/conversation/${id}`);
+    const blame = payload(await ask(repo, "blame", "main", "t.txt"));
+    expect(blame.ranges[0]).toMatchObject({ message: "trailed", session: id });
   });
 
   test("branches, tags and meta answer on demand with the rows the eager push publishes", async () => {

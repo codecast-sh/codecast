@@ -359,6 +359,8 @@ export interface CreateConversationParams {
   projectPath?: string;
   slug?: string;
   title?: string;
+  /** The title is the agent's own name for the session: codecast's auto-titler keeps it. */
+  titleIsCustom?: boolean;
   startedAt?: number;
   parentMessageUuid?: string;
   parentConversationId?: string;
@@ -499,6 +501,8 @@ export class SyncService {
     git_ahead?: number;
     git_behind?: number;
     git_dirty?: boolean;
+    /** Fields to unset (a cloud agent's session: what its provider does not name). */
+    clear?: Array<"git_commit_hash" | "git_branch" | "git_ahead" | "git_behind" | "git_dirty">;
   }): Promise<{ updated: boolean } | undefined> {
     try {
       return await this.mutate("conversations:updateGitState", { api_token: this.apiToken, ...args });
@@ -625,12 +629,15 @@ export class SyncService {
   // same pending_messages path the web composer uses). The daemon calls this
   // after switch_account recycles a blocked session: the pending message is
   // what triggers the auto-resume that adopts the freshly swapped credential.
-  async enqueueUserMessage(conversationId: string, content: string, clientId?: string): Promise<void> {
+  // `human`: a person wrote it (a cloud agent's launch prompt), so it counts
+  // like the composer's messages.
+  async enqueueUserMessage(conversationId: string, content: string, clientId?: string, opts: { human?: boolean } = {}): Promise<void> {
     await this.throttle();
     await this.mutate("pendingMessages:sendMessageToSession" as any, {
       conversation_id: conversationId,
       content,
       client_id: clientId,
+      ...(opts.human ? { human: true } : {}),
       api_token: this.apiToken,
     });
   }
@@ -1022,6 +1029,7 @@ export class SyncService {
           project_path: params.projectPath,
           slug: params.slug,
           title: params.title,
+          ...(params.titleIsCustom ? { title_is_custom: true } : {}),
           started_at: params.startedAt,
           parent_message_uuid: params.parentMessageUuid,
           parent_conversation_id: params.parentConversationId,
@@ -1534,12 +1542,14 @@ export class SyncService {
     });
   }
 
-  async updateTitle(conversationId: string, title: string): Promise<void> {
+  /** `provider`: the title is the provider's own name for the session (conversations.updateTitle's title_is_custom and replaces). */
+  async updateTitle(conversationId: string, title: string, provider?: { replaces: string[] }): Promise<void> {
     return this.guarded(async () => {
       await this.mutate("conversations:updateTitle" as any, {
         conversation_id: conversationId,
         title,
         api_token: this.apiToken,
+        ...(provider ? { title_is_custom: true, replaces: provider.replaces } : {}),
       });
     });
   }
@@ -1739,7 +1749,8 @@ export class SyncService {
     }
   }
 
-  async registerManagedSession(sessionId: string, pid: number, tmuxSession?: string, conversationId?: string): Promise<{ notOwner?: boolean; owner?: string } | void> {
+  /** Resolves undefined when the server could not be asked (the caller may retry), else whether another live device owns the session. */
+  async registerManagedSession(sessionId: string, pid: number, tmuxSession?: string, conversationId?: string): Promise<{ notOwner?: boolean; owner?: string } | undefined> {
     try {
       const res = await this.mutate("managedSessions:registerManagedSession" as any, {
         session_id: sessionId,
@@ -1753,7 +1764,10 @@ export class SyncService {
       if (res && typeof res === "object" && (res as any).notOwner) {
         return { notOwner: true, owner: (res as any).owner };
       }
-    } catch {}
+      return {};
+    } catch {
+      return undefined;
+    }
   }
 
   async unregisterManagedSession(sessionId: string): Promise<{ found: boolean } | undefined> {
@@ -2000,6 +2014,28 @@ export class SyncService {
    * on the card, and stamped on the row so the heartbeat re-issue leaves it
    * alone until a human picks the host again (convex cloud.reportPlacementFailure).
    */
+  /** A live mirror's state (cloud/liveSyncJobs.ts) onto conversations.local_mirror. */
+  async reportLocalMirror(conversationId: string, deviceId: string, report: object): Promise<void> {
+    if (!this.apiToken) return;
+    try {
+      await this.mutate("cloud:reportLocalMirror" as any, { ...report, conversation_id: conversationId, device_id: deviceId, api_token: this.apiToken });
+    } catch {}
+  }
+
+  /** The laptop's report on a cloud host it manages (cloud/hostReports.ts) onto that host's device row. */
+  async reportCloudHost(hostDeviceId: string, report: object): Promise<void> {
+    if (!this.apiToken) return;
+    try {
+      await this.mutate("cloud:reportCloudHost" as any, { host_device_id: hostDeviceId, report, api_token: this.apiToken });
+    } catch {}
+  }
+
+  /** Whether mirrored sessions are working, read from Convex so the host is never touched to find out. */
+  async localMirrorActivity(conversationIds: string[]): Promise<Array<{ conversation_id: string; message_count: number; status: string; owner_device_id: string | null; host_online?: boolean }>> {
+    if (!conversationIds.length) return [];
+    return await this.client.query("cloud:localMirrorActivity" as any, { conversation_ids: conversationIds, api_token: this.apiToken });
+  }
+
   async reportCloudPlacementFailure(conversationId: string, placementToken: string | undefined, error: string, contextTooLarge?: { total_bytes: number; cap_bytes: number; files: Array<{ path: string; bytes: number }> }): Promise<void> {
     if (!this.apiToken) return;
     try {

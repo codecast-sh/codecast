@@ -1,6 +1,6 @@
 import { validateIngestBounds } from './ingestTransport.js';
 import type { IngestJob, IngestResult } from './ingestTypes.js';
-import { INGEST_MAX_BYTES, isWindowedIngest } from './ingestTypes.js';
+import { INGEST_MAX_BYTES, hasClockFreeReceipts, isWindowedIngest } from './ingestTypes.js';
 import { validatePreparationFile } from '../messagePreparationValidation.js';
 import type { ParsedMessage } from '../parser.js';
 
@@ -82,7 +82,7 @@ function* schema(value: unknown, job: IngestJob): Generator<void> {
   if (windowed) requireValue(value.bytesConsumed > 0 || value.messages.length === 0);
   requireValue(value.model === undefined || job.client === 'codex' && typeof value.model === 'string');
   for (const key of ['signatures','messageTitles','handoffParents']) requireValue(Array.isArray(value[key]) && value[key].length === value.messages.length);
-  requireValue(['cursor','claude','gemini','cursorDb'].includes(job.client) ? Array.isArray(value.receiptSignatures) && value.receiptSignatures.length === value.messages.length : value.receiptSignatures === undefined);
+  requireValue(hasClockFreeReceipts(job) || ['claude','gemini','cursorDb'].includes(job.client) ? Array.isArray(value.receiptSignatures) && value.receiptSignatures.length === value.messages.length : value.receiptSignatures === undefined);
   requireValue(['claude','gemini','cursorDb'].includes(job.client) ? Array.isArray(value.receiptOccurrences) && value.receiptOccurrences.length === value.messages.length : value.receiptOccurrences === undefined);
   for (let i=0;i<value.messages.length;i++) {
     if (value.receiptOccurrences) {
@@ -97,12 +97,13 @@ function* schema(value: unknown, job: IngestJob): Generator<void> {
     requireValue(value.handoffParents[i] === null || typeof value.handoffParents[i] === 'string' && (value.handoffParents[i] === '' || /^[0-9a-f-]{36}$/.test(value.handoffParents[i])));
   }
   const meta = value.metadata;
-  fields(meta,['slug','parentUuid','cwd','cliFlags','summaryTitle','headMessages','teamInfo','planTools','subagent','appServerHead','codex','forkRoot','completedReview','backupAttempted','title','parentSessionId','agentName','internal','sessionExists','turn','permissionPrompt','warnings']);
+  fields(meta,['slug','parentUuid','cwd','cliFlags','summaryTitle','headMessages','teamInfo','planTools','subagent','appServerHead','codex','forkRoot','completedReview','backupAttempted','title','formerTitles','parentSessionId','agentName','internal','sessionExists','turn','permissionPrompt','warnings']);
   strings(meta,['slug','parentUuid','cwd','summaryTitle','appServerHead','forkRoot','title','parentSessionId','agentName']);
   requireValue(meta.cliFlags === undefined || meta.cliFlags === null || typeof meta.cliFlags === 'string');
   for (const key of ['completedReview','backupAttempted','internal']) requireValue(meta[key] === undefined || typeof meta[key] === 'boolean');
   requireValue(meta.sessionExists === undefined || job.client === 'opencode' && typeof meta.sessionExists === 'boolean');
   requireValue(meta.turn === undefined || ['active','idle','unknown'].includes(meta.turn));
+  requireValue(meta.formerTitles === undefined || Array.isArray(meta.formerTitles) && meta.formerTitles.length <= 8 && meta.formerTitles.every((t: unknown) => typeof t === 'string'));
   requireValue(Array.isArray(meta.warnings));
   for (const warning of meta.warnings) { requireValue(typeof warning === 'string'); yield; }
   requireValue(meta.headMessages === undefined || Array.isArray(meta.headMessages) && meta.headMessages.length <= 3);
