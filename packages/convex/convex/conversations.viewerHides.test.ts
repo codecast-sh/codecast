@@ -73,6 +73,21 @@ describe("a viewer's hide of a teammate's session", () => {
     expect(db._tables.inbox_hides).toHaveLength(0);
   });
 
+  test("stashing or killing a draft that never reached the server is a no-op, not an error", async () => {
+    const db = fixtures();
+    // Convex throws "Unable to decode ID" when db.get sees a local stub id.
+    const get = db.get.bind(db);
+    db.get = async (id: any) => {
+      if (!String(id).startsWith("conversations_")) throw new Error("Invalid argument `id` for `db.get`: Unable to decode ID: Invalid ID length 22");
+      return get(id);
+    };
+    const stub = "k7x2m9p4q8r1s5t3v6w0yz";
+    for (const [action, args] of [["stashSession", [stub, undefined]], ["killSession", [stub]], ["killSessions", [[stub]]], ["restoreSession", [stub]]] as const) {
+      await (dispatch as any)._handler({ auth: auth(ME), db }, { action, args });
+    }
+    expect(db._tables.inbox_hides).toHaveLength(0);
+  });
+
   test("cast stash / cast restore fall back to a viewer hide for a session I can see but do not own", async () => {
     const db = fixtures();
     const ctx = { auth: auth(ME), db };
