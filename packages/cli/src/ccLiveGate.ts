@@ -27,6 +27,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { defaultConfigDir } from "./config/configDir.js";
+import { isClaudeCommand, type ProcRow } from "./processTable.js";
 
 /** One live claude pane: the tmux session name, and the saved profile it was
  *  launched under (absent = the machine's keychain login). */
@@ -154,6 +155,40 @@ export function reconcileLiveClaudeSessions(alive: readonly LiveClaudeSession[])
   for (const id of [...live.keys()]) if (!seen.has(id)) live.delete(id);
   void persist();
   notifyIfDrained(hadHolders);
+}
+
+/**
+ * The claude processes no stamped pane accounts for: a `claude` the user
+ * started by hand in their own terminal. It runs on the keychain login and
+ * self-refreshes it like any other, but carries no tmux stamp, so a gate built
+ * from stamps alone read the machine as idle and rotated the refresh token out
+ * from under it (2026-09-28: a hand-started session parked on "run /login" ten
+ * minutes in, one maintenance tick after launch).
+ *
+ * `stampedPanePids` are the pane pids of the stamped claude panes, which the
+ * gate already counts with their account. A process below one of them, or
+ * below another claude, is already represented. Each remaining process is one
+ * keychain holder, keyed `pid:<n>` so the next reconcile drops it once it exits.
+ */
+export function unstampedClaudeHolders(
+  procs: readonly ProcRow[],
+  stampedPanePids: ReadonlySet<number>,
+  uid: number | undefined = process.getuid?.(),
+): LiveClaudeSession[] {
+  const byPid = new Map(procs.map((p) => [p.pid, p]));
+  const out: LiveClaudeSession[] = [];
+  for (const proc of procs) {
+    if (uid !== undefined && proc.uid !== uid) continue;
+    if (!isClaudeCommand(proc.command) || stampedPanePids.has(proc.pid)) continue;
+    let covered = false;
+    const seen = new Set<number>();
+    for (let parent = byPid.get(proc.ppid); parent && !seen.has(parent.pid); parent = byPid.get(parent.ppid)) {
+      seen.add(parent.pid);
+      if (stampedPanePids.has(parent.pid) || isClaudeCommand(parent.command)) { covered = true; break; }
+    }
+    if (!covered) out.push({ id: `pid:${proc.pid}` });
+  }
+  return out;
 }
 
 /** Restore the gate from disk at daemon start. Every restored id is unconfirmed

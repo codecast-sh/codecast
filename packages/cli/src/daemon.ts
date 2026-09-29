@@ -85,6 +85,7 @@ import {
   reconcileLiveClaudeSessions,
   seedLiveClaudeSessions,
   setActiveProfileResolver,
+  unstampedClaudeHolders,
   type LiveClaudeSession,
 } from "./ccLiveGate.js";
 import {
@@ -4145,16 +4146,34 @@ export function parseLiveClaudeSessions(stdout: string): LiveClaudeSession[] {
  *  A tmux that could not be reached is not evidence of an empty machine, so the
  *  gate is left as it stands — except when tmux says it has no server at all,
  *  which IS that evidence and is what opens the gate after a reboot. */
+//
+//  A claude started by hand holds the keychain login without any stamp, so the
+//  process table is read too (unstampedClaudeHolders). A `ps` that failed is
+//  not evidence either: the hand-started holders already in the gate stay.
 async function reconcileLiveClaudeGate(): Promise<void> {
   let stdout: string;
   try {
-    ({ stdout } = await tmuxExec(["list-sessions", "-F", ccGateListFormat()], { timeout: 5000 }));
+    ({ stdout } = await tmuxExec(["list-panes", "-a", "-F", `#{pane_pid}${REAP_FIELD_SEP}${ccGateListFormat()}`], { timeout: 5000 }));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (!/no server running|no such file or directory/i.test(msg)) return;
     stdout = "";
   }
-  reconcileLiveClaudeSessions(parseLiveClaudeSessions(stdout));
+  const alive: LiveClaudeSession[] = [];
+  const stampedPanePids = new Set<number>();
+  for (const row of stdout.split("\n")) {
+    const [pid, ...rest] = row.split(REAP_FIELD_SEP);
+    const stamped = parseLiveClaudeSessions(rest.join(REAP_FIELD_SEP));
+    if (stamped.length === 0) continue;
+    stampedPanePids.add(Number(pid));
+    alive.push(...stamped);
+  }
+  try {
+    alive.push(...unstampedClaudeHolders(await snapshotProcessTableAsync({ timeout: 5000 }), stampedPanePids));
+  } catch {
+    alive.push(...liveClaudeSessions().filter((s) => s.id.startsWith("pid:")));
+  }
+  reconcileLiveClaudeSessions(alive);
 }
 
 // Per-account usage snapshots: probe the OAuth usage API for the active login
@@ -4298,9 +4317,11 @@ async function maintainCcUsageSnapshotsInner(reason: string, opts: { force?: boo
           `${readOauthAccount()?.emailAddress ?? "unknown"}; using the verified identity`,
       );
     }
+    await reconcileLiveClaudeGate();
     const res = await refreshUsageSnapshots({
       ...(opts.force ? { minIntervalMs: 0 } : {}),
       heldProfiles: liveClaudeProfiles(),
+      activeHeld: hasLiveClaudeOnActiveCredential(),
     });
     if (res.probed.length > 0 || res.failed.length > 0 || res.expired.length > 0) {
       const failNote = res.failed.length
