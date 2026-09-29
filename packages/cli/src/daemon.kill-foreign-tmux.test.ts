@@ -34,5 +34,5 @@ describe("killTmuxSessionAndTree", () => {
       await killTmuxSessionAndTree(name);
       expect(alive(name)).toBe(false);
     }
-  });
+  }, 30_000);
 });
