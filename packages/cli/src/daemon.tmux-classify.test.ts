@@ -261,6 +261,49 @@ describe("classifyTmuxLiveState", () => {
     expect(classifyTmuxLiveState(extractTmuxLiveRegion(finished))).toBe("idle");
   });
 
+  // Claude Code 2.1.284 renders queued messages, a "⎿ Tip:" line and notices
+  // between the status line and the box. Read as idle, a busy agent's queued
+  // message was judged lost and written a second time (2026-09-29, jx74ek4).
+  test("busy when queued messages, a tip or a notice sit between the status line and the box", () => {
+    const box = `────────────────────────────────────────
+❯ Press up to edit queued messages
+────────────────────────────────────────
+  claude7 · session 74%, resets in 22m · week 68%, resets in 2d 17h
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
+`;
+    const queued = `⏺ Running Python sleep for 120 seconds · 20s
+  ⎿  $ python3 -c "import time; time.sleep(120)" (18s)
+     (ctrl+b ctrl+b (twice) to run in background)
+
+❯ https://codecast.sh/conversation/jx79nxy make sure you get all of this out
+
+  ctrl+enter to send now
+
+· Gitifying… (3m 23s · ↓ 282 tokens)
+  ⎿  Tip: Start with small features or bug fixes, tell Claude to propose a plan
+
+${box}`;
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(queued))).toBe("busy");
+    const notice = `⏺ Typechecking the committed tree in a scratch worktree · 1m 46s
+  ⎿  $ git worktree add -q /tmp/ccv HEAD (1m 42s)
+
+· Imagining… (8m 27s · ↓ 9.2k tokens)
+                                                          ✔ Update installed · Restart to update
+${box}`;
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(notice))).toBe("busy");
+    const finished = queued.replace("· Gitifying… (3m 23s · ↓ 282 tokens)", "✻ Cooked for 3s · done 9:09 PM");
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(finished))).toBe("idle");
+    // A status-shaped line above the newest transcript item is scrollback.
+    const quoted = `⏺ Bash(cat old-capture.txt)
+  ⎿  captured:
+✶ Perambulating… (50s · ↓ 161 tokens)
+⏺ Done.
+
+✻ Churned for 2s · done 9:12 PM
+${box}`;
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(quoted))).toBe("idle");
+  });
+
   test("busy even when the input box is visible (the storm bug)", () => {
     // A generating agent renders ❯ for type-ahead; without the footer this used
     // to classify "idle" and the daemon pasted into the busy agent.
