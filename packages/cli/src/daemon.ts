@@ -3449,6 +3449,46 @@ async function pushProviderKeysToRemoteHosts(reason: string, opts: { onlyIfChang
 // box awake); an exit-3 refusal (another user's logins on the box) is logged
 // once per host. Codex's own `last_refresh` field moves the hash on every
 // rotation, so a laptop re-login lands within a minute.
+let liveSyncJobsInstance: import("./cloud/liveSyncJobs.js").LiveSyncJobs | null = null;
+/** The one mirror job manager (cloud_live_sync), made on first use. */
+async function liveSyncJobs(): Promise<import("./cloud/liveSyncJobs.js").LiveSyncJobs> {
+  if (liveSyncJobsInstance) return liveSyncJobsInstance;
+  const { LiveSyncJobs } = await import("./cloud/liveSyncJobs.js");
+  liveSyncJobsInstance = new LiveSyncJobs({
+    report: async (conversationId, report) => { await syncServiceRef?.reportLocalMirror(conversationId, deviceId(), report); },
+    activity: async (ids) => (syncServiceRef ? syncServiceRef.localMirrorActivity(ids) : []),
+    hostFor: (hostDeviceId) => { const h = hostForDevice(hostDeviceId); return h?.address ? toRemoteHost(h) : null; },
+    log,
+    jobsFile: path.join(defaultConfigDir(), "live-syncs.json"),
+  });
+  return liveSyncJobsInstance;
+}
+
+let hostReportsInstance: import("./cloud/hostReports.js").HostReports | null = null;
+/** The laptop's reports on the cloud hosts it manages, and the web's actions on them (cloud_host_action). */
+async function hostReports(): Promise<import("./cloud/hostReports.js").HostReports> {
+  if (hostReportsInstance) return hostReportsInstance;
+  const { HostReports } = await import("./cloud/hostReports.js");
+  hostReportsInstance = new HostReports({
+    runCast: runCastCommand,
+    report: async (hostDeviceId, report) => { await syncServiceRef?.reportCloudHost(hostDeviceId, report); },
+    hostIdForDevice: (hostDeviceId) => hostForDevice(hostDeviceId)?.id ?? null,
+    log,
+  });
+  return hostReportsInstance;
+}
+const HOST_REPORT_INTERVAL_MS = 15 * 60_000;
+let hostReadinessReporter: import("./cloud/hostReadiness.js").HostReadinessReporter | null = null;
+async function hostReadinessNext(): Promise<import("@codecast/shared/contracts").HostReadiness | undefined> {
+  try {
+    if (!hostReadinessReporter) hostReadinessReporter = new (await import("./cloud/hostReadiness.js")).HostReadinessReporter(CONFIG_DIR, getVersion());
+    return hostReadinessReporter.next();
+  } catch (err) {
+    log(`[HOSTS] readiness read failed: ${err instanceof Error ? err.message : String(err)}`);
+    return undefined;
+  }
+}
+
 let remoteAgentAuthPushInFlight = false;
 const lastPushedAgentAuthHashByHost = new Map<string, string>();
 const agentAuthRefusalLogged = new Set<string>();
@@ -4642,6 +4682,9 @@ async function sendHeartbeat(): Promise<void> {
         // an attach command that works from PowerShell (wsl.exe -d <distro>).
         wsl_distro: wslDistroName(),
         is_remote_device: isRemoteDevice(),
+        // A cloud host's own readiness (mirror, tools, [host] setup, logins on
+        // disk) for the Machines page, sent only when it changes (cloud/hostReadiness.ts).
+        host_readiness: isRemoteDevice() ? await hostReadinessNext() : undefined,
         // Time since the last keyboard/mouse event anywhere on this machine
         // (macOS only; omitted elsewhere). Sent as a DURATION so the server can
         // anchor it to its own clock — daemon clock skew can't fake presence.
@@ -7824,6 +7867,35 @@ async function executeRemoteCommand(
           // banner asks the human whether to leave it out.
           const tooLarge = res.stdout.split("\n").map((l) => { try { return JSON.parse(l)?.context_too_large; } catch { return undefined; } }).find(Boolean);
           syncServiceRef?.reportCloudPlacementFailure(conversationId, parsed.placement_token, error, tooLarge).catch(() => {});
+        }
+        break;
+      }
+      case "cloud_live_sync": {
+        // Mirror a cloud session's tree into a worktree here, live (the web's
+        // "Mirror edits to this laptop"), or stop. The jobs run in-process,
+        // poll the host only while the session works, and report to
+        // conversations.local_mirror (cloud/liveSyncJobs.ts).
+        if (isRemoteDevice()) { error = "a cloud host does not mirror sessions"; break; }
+        let mirrorArgs: any = null;
+        try {
+          mirrorArgs = typeof commandArgs === "string" ? JSON.parse(commandArgs) : commandArgs;
+          result = await (await liveSyncJobs()).handleCommand(mirrorArgs);
+        } catch (err) {
+          error = err instanceof Error ? err.message : String(err);
+          if (mirrorArgs?.conversation_id) await syncServiceRef?.reportLocalMirror(mirrorArgs.conversation_id, deviceId(), { status: "error", error: error.slice(0, 300) });
+        }
+        break;
+      }
+      case "cloud_host_action": {
+        // Wake, sleep, apply setup, save or delete an image, from the app's
+        // Machines page. Each runs as a child `cast hosts ...` (AWS calls
+        // block) and its outcome rides the host's next report (cloud/hostReports.ts).
+        if (isRemoteDevice()) { error = "a cloud host does not manage hosts"; break; }
+        try {
+          const a = typeof commandArgs === "string" ? JSON.parse(commandArgs) : commandArgs;
+          result = await (await hostReports()).act(a);
+        } catch (err) {
+          error = err instanceof Error ? err.message : String(err);
         }
         break;
       }
@@ -27846,6 +27918,14 @@ async function main(): Promise<void> {
   // watch on each source directory filtered to the exact filenames (the
   // whole ~/.codex would fire on codex's SQLite WAL churn).
   setTimeout(() => { pushAgentAuthToRemoteHosts("daemon start").catch(() => {}); }, 64_000);
+  // What the Machines page shows about each cloud host this laptop manages.
+  if (!isRemoteDevice()) {
+    const refreshHosts = () => { if (readHosts().some((h) => h.deviceId)) hostReports().then((r) => r.refresh()).catch((err) => log(`[HOSTS] report failed: ${err instanceof Error ? err.message : String(err)}`)); };
+    setTimeout(refreshHosts, 45_000);
+    setInterval(refreshHosts, HOST_REPORT_INTERVAL_MS);
+  }
+  // Live mirrors the web started before this daemon last stopped.
+  if (!isRemoteDevice()) setTimeout(() => { liveSyncJobs().then((j) => j.resumeAll()).catch((err) => log(`[MIRROR] resume failed: ${err instanceof Error ? err.message : String(err)}`)); }, 20_000);
   setInterval(() => { pushAgentAuthToRemoteHosts("periodic").catch(() => {}); }, REMOTE_CRED_REFRESH_INTERVAL_MS);
   setInterval(() => { pushAgentAuthToRemoteHosts("login_changed", { onlyIfChanged: true }).catch(() => {}); }, REMOTE_CRED_CHANGE_TICK_MS);
   if (!isRemoteDevice()) {

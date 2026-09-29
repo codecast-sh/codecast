@@ -28,6 +28,7 @@ import { ChevronDown, Github, TriangleAlert, Users } from "lucide-react";
 import {
   SettingsField, SettingsPanel, SettingsSection, SettingsRow,
 } from "../../../components/settings/ui";
+import { TeamMachines } from "../../../components/settings/TeamMachines";
 
 export default function TeamPage() {
   const router = useRouter();
@@ -457,6 +458,8 @@ export default function TeamPage() {
           );
         })}
       </SettingsSection>
+
+      {effectiveTeamId && <TeamMachines teamId={String(effectiveTeamId)} />}
 
       {effectiveTeamId && (
         <TeamFeaturesEditor teamId={effectiveTeamId} isAdmin={isAdmin} />

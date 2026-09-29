@@ -191,7 +191,9 @@ command = "bun run typecheck && bun test"
 
 A Chromium instance bound to the workspace, off by default. `allow` is the list
 of origins `cast browser` may navigate to from this project; omitting it means
-no policy, and an empty list refuses every site.
+no policy, and an empty list refuses every site. A browser that does not start
+within a minute leaves the workspace without one and prints why; the worktree
+itself is still created.
 
 ```toml
 [browser]
