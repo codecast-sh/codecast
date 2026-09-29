@@ -168,3 +168,4 @@ today.
 - **The web dashboard.** Full conversations with syntax-highlighted code, collapsible tool calls, images, and diffs; global search; shareable links.
 - **Foundations.** Email/password accounts, private-by-default conversations with team sharing, project grouping, and a virtualized message list for huge conversations.
 - **Built to extend.** A tool registry that renders any agent tool, nested subagent conversations, token-usage tracking, and the warm light theme that sets the look of the app.
+staged edit
