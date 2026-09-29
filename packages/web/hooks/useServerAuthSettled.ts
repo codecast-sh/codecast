@@ -22,6 +22,16 @@
 // collection into the store (and into IndexedDB) when it came back. A
 // definitive sign-out unmounts the tree through AuthGuard instead, so nothing
 // here has to un-latch it.
+//
+// The latch keeps SUBSCRIPTIONS alive across a drop; it does not make what
+// arrives during one true. When a token refresh fails, Convex clears the
+// socket's identity, reports it (isAuthenticated false) and does not retry,
+// while the local token keeps the tree mounted. Every live query then re-runs
+// as an anonymous caller, and a handler that answers a stranger with `[]`
+// (teams.getUserTeams) is read as "you have no teams": calls, chat and the
+// org switch off in that window, and the teams repair moves it to the
+// personal workspace. So a confirmed identity that is gone again is its own
+// state, `identityLost`, and nothing a feeder receives in it is applied.
 import { useRef } from "react";
 import { useConvexAuth } from "convex/react";
 
@@ -30,7 +40,10 @@ export function authSettledLatch(settled: boolean, isAuthenticated: boolean): bo
   return settled || isAuthenticated;
 }
 
-export function useServerAuthSettled(): boolean {
+/** Both halves of the server auth signal a feeder acts on. `settled`: the
+ *  server has confirmed this caller at least once (latched). `identityLost`:
+ *  it did, and the socket is anonymous now, so any answer is a stranger's. */
+export function useServerAuthState(): { settled: boolean; identityLost: boolean } {
   // useConvexAuth THROWS when no auth provider is an ancestor — it does not
   // report "not authenticated". A tree that mounts a feeder under a plain
   // ConvexProvider (the hibernation harness, _chatpage, any embed) would then
@@ -53,5 +66,14 @@ export function useServerAuthSettled(): boolean {
   // useConvexAuth re-renders us when it flips, so reading the latch in the
   // same pass it is written is enough — no effect, no extra commit.
   settled.current = authSettledLatch(settled.current, isAuthenticated);
-  return settled.current;
+  return { settled: settled.current, identityLost: settled.current && !isAuthenticated };
+}
+
+export function useServerAuthSettled(): boolean {
+  return useServerAuthState().settled;
+}
+
+/** The server confirmed this caller and has since lost them: see the header. */
+export function useServerIdentityLost(): boolean {
+  return useServerAuthState().identityLost;
 }

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { useServerIdentityLost } from "./useServerAuthSettled";
 
 /**
  * Apply a Convex live-query result to local state whenever it changes.
@@ -16,6 +17,11 @@ import { useEffect, useRef } from "react";
  * Trailing-batch semantics: the first push schedules a flush `coalesceMs` later;
  * further pushes within that window update the pending value but don't reschedule,
  * so the window collapses into one apply with the newest data.
+ *
+ * Nothing is applied while the server has lost an identity it had confirmed
+ * (useServerIdentityLost): the push was computed for an anonymous caller, so
+ * an empty answer means "not yours to see", not "you have none". The store
+ * keeps what it last knew, and the re-authenticated answer applies as usual.
  */
 export function useConvexSync<T>(
   data: T | undefined,
@@ -28,10 +34,19 @@ export function useConvexSync<T>(
   syncRef.current = sync;
   const latestRef = useRef<T | undefined>(undefined);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // An answer that arrived while the identity was lost stays refused after
+  // the flip back: it is still in hand for a render or more before the real
+  // one lands, and any dep change in that gap would otherwise apply it. Both
+  // are refs, read at apply time, because a coalesced flush fires later.
+  const lostRef = useRef(false);
+  lostRef.current = useServerIdentityLost();
+  const refusedRef = useRef<T | undefined>(undefined);
+  if (lostRef.current && data !== undefined) refusedRef.current = data;
+  const refused = (d: T) => lostRef.current || d === refusedRef.current;
 
   // eslint-disable-next-line no-restricted-syntax
   useEffect(() => {
-    if (data === undefined) return;
+    if (data === undefined || refused(data)) return;
     // Default path: identical to the original (apply on every data/sync change).
     if (coalesceMs <= 0) {
       sync(data);
@@ -43,7 +58,7 @@ export function useConvexSync<T>(
     timerRef.current = setTimeout(() => {
       timerRef.current = null;
       const latest = latestRef.current;
-      if (latest !== undefined) syncRef.current(latest);
+      if (latest !== undefined && !refused(latest)) syncRef.current(latest);
     }, coalesceMs);
   }, [data, sync, coalesceMs]); // eslint-disable-line react-hooks/exhaustive-deps
 
