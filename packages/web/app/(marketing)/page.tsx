@@ -15,6 +15,7 @@ import { useRouteMeta } from "./pageMeta";
 import { InboxHeroMock, TasksMock, DocsMock, AgentChatMock } from "./productMocks";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
 import { AppBadges, AppleIcon } from "@/components/marketing/AppBadges";
+import { TourSection, WatchChapter } from "./TourFilm";
 
 function Highlight({ children, color }: { children: React.ReactNode; color: "amber" | "green" | "blue" | "rose" | "violet" | "cyan" }) {
   const colors: Record<string, string> = {
@@ -212,9 +213,10 @@ export default function LandingPage() {
                 Download for Mac
               </Button>
             </Link>
-            <Link href="#how-it-works">
-              <Button variant="outline" className="bg-transparent text-sm px-5 h-10 font-medium border-[#93a1a1] text-[#586e75] hover:bg-[#cb4b16] hover:border-[#cb4b16] hover:text-[#fdf6e3] transition-colors">
-                See how it works
+            <Link href="#tour">
+              <Button variant="outline" className="bg-transparent text-sm px-5 h-10 font-medium gap-2 border-[#93a1a1] text-[#586e75] hover:bg-[#cb4b16] hover:border-[#cb4b16] hover:text-[#fdf6e3] transition-colors">
+                <svg className="w-3 h-3" viewBox="0 0 10 10" fill="currentColor" aria-hidden><path d="M2 1.2v7.6a.6.6 0 0 0 .9.5l6.1-3.8a.6.6 0 0 0 0-1L2.9.7a.6.6 0 0 0-.9.5z" /></svg>
+                Watch the tour
               </Button>
             </Link>
           </div>
@@ -230,6 +232,8 @@ export default function LandingPage() {
           </div>
         </div>
       </section>
+
+      <TourSection />
 
       {/* ── Pillar 1: Remembers ─────────────────────────────────────────── */}
       <section id="remember" className="max-w-6xl mx-auto px-6 py-20">
@@ -247,6 +251,7 @@ export default function LandingPage() {
               and trace any line of code back to the conversation that wrote it —
               months after the session ended.
             </p>
+            <div className="-mt-1 mb-6"><WatchChapter title="Memory" /></div>
             <div className="space-y-3 mb-6">
               <div className="flex items-center gap-3 text-[#657b83]">
                 <svg className="w-5 h-5 text-[#6c71c4] shrink-0" fill="currentColor" viewBox="0 0 20 20">
@@ -383,6 +388,7 @@ export default function LandingPage() {
               <h2 className="text-3xl font-bold mb-6 font-mono" style={{ color: '#fdf6e3' }}>
                 The daemon watches the sessions you already run
               </h2>
+              <div className="-mt-2 mb-6"><WatchChapter title="Your team" tone="dark" /></div>
               <div className="space-y-6">
                 <div className="flex gap-4 bg-[#859900]/10 -mx-4 px-4 py-4 rounded-xl border border-[#859900]/20">
                   <div className="w-10 h-10 rounded-lg bg-[#859900]/30 flex items-center justify-center shrink-0">
@@ -497,6 +503,7 @@ export default function LandingPage() {
               and steer it from web, desktop, or phone. Answer a permission prompt from the
               couch; unblock an agent from your phone.
             </p>
+            <div className="-mt-1 mb-6"><WatchChapter title="The inbox" /></div>
             <ul className="space-y-3 text-[#657b83] mb-8">
               <li className="flex items-center gap-3">
                 <svg className="w-5 h-5 text-[#859900] shrink-0" fill="currentColor" viewBox="0 0 20 20">
@@ -639,6 +646,7 @@ export default function LandingPage() {
             of all of it: they pick up tasks, update plans, write docs, message each other,
             and collaborate with you in the same place.
           </p>
+          <div className="mt-5"><WatchChapter title="Tasks, plans and docs" /></div>
         </div>
 
         <div className="grid gap-6 md:grid-cols-3 mb-10">
