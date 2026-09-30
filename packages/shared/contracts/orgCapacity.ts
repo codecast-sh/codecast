@@ -203,9 +203,9 @@ export function overloadDetails(load: RoleLoad): Array<[number, RoleCapacityKey,
   const over = (key: RoleCapacityKey, n: number, phrase: string) => { if (n > capacity(key)) out.push([n, key, phrase]); };
   over("items_per_day", load.items_per_day, `${perDay(load.items_per_day)} items changing a day`);
   over("decisions_per_day", load.decisions_per_day, `${perDay(load.decisions_per_day)} decisions a day`);
-  if (load.live_hands > handsLine(load)) out.push([load.live_hands, "live_hands", plural(load.live_hands, "live hand")]);
-  over("open_stalls", load.open_stalls, plural(load.open_stalls, "open stall"));
-  over("cap_hit_days", load.cap_hit_days, `${plural(load.cap_hit_days, "cap hit day")} this week`);
+  if (load.live_hands > handsLine(load)) out.push([load.live_hands, "live_hands", `${plural(load.live_hands, "session")} at once`]);
+  over("open_stalls", load.open_stalls, `${plural(load.open_stalls, "thread")} stuck`);
+  over("cap_hit_days", load.cap_hit_days, `${plural(load.cap_hit_days, "day")} at its daily limit this week`);
   return out;
 }
 export function isOverloaded(load: RoleLoad): boolean { return overloadDetails(load).length > 0; }
@@ -237,78 +237,73 @@ export function ledgerDetails(ledger: RoleLedger): Array<[number, RoleLedgerKey,
   return out;
 }
 
-function ledgerText(l: RoleLedger): string {
-  return `${l.open_tasks} open, ${l.in_flight} in flight, ${plural(l.active_plans, "active plan")}`;
-}
-
 function roleFlags(r: RoleSignals): HealthFlag[] {
   const flags: HealthFlag[] = [];
   const who = `@${r.handle}`;
 
   // Overloaded: any load axis past its line. One breach is a warning; two or
-  // more means the flow does not fit in one head, and that blocks. The ledger
-  // rides along as context so the reader sees both at once.
-  const breaches = overloadDetails(r.load).map(([, key, phrase]) => `${phrase} (model: ${loadLine(key, r.load)})`);
+  // more means the flow does not fit in one head, and that blocks. The
+  // sentence says what reaches the role in the reader's words (S29): no
+  // threshold, no streak arithmetic, no ledger trailer.
+  const breaches = overloadDetails(r.load).map(([, , phrase]) => phrase);
   if (breaches.length) {
     // The streak is what the stability rule reads: this breach plus the
     // consecutive earlier reviews that flagged the role is the count the
     // split rule compares to split_after_breaches.
     const earlier = r.breaches ?? 0;
     const streak = earlier + 1;
-    const ratio = overloadRatio(r.load);
     // A flow twice the model on a volume axis is structural: it splits now,
     // whatever the streak says. Below that line the streak decides.
     const history = splitsOnFirstBreach(r.load)
-      ? `; split now: ${Math.round(ratio * 10) / 10} times the model`
-      : earlier ? `; flagged at ${plural(earlier, "earlier review")} in a row, so this is breach ${streak}` : "; first breach on record";
+      ? "; twice what one role can hold, so the split need not wait for another review"
+      : earlier ? `; the same at ${plural(earlier, "earlier review")} in a row` : "";
     const blocks = splitsOnFirstBreach(r.load) || breaches.length >= 2 || streak >= STABILITY.split_after_breaches.value;
-    flags.push({ code: "overloaded", severity: blocks ? "blocker" : "warn", detail: `${who} carries ${breaches.join(", ")}${history}; ledger ${ledgerText(r.ledger)}` });
+    flags.push({ code: "overloaded", severity: blocks ? "blocker" : "warn", detail: `${who} has more reaching it than one role can answer: ${breaches.join(", ")}${history}` });
   }
 
   // Bypassed: the scope ships and the seat sees none of it pass through. Not
   // idle (work happens) and not loaded (nothing asks for it): worked around.
   const handsWindow = r.flow.hands_window ?? r.load.live_hands;
   if (!r.reviews_only && r.flow.done_7d >= capacity("bypass_done_7d") && handsWindow === 0 && r.flow.decisions_7d === 0) {
-    flags.push({ code: "bypassed", severity: "warn", detail: `${who}'s scope closed ${plural(r.flow.done_7d, "task")} this week (line: ${capacity("bypass_done_7d")}) and holds ${r.ledger.in_flight} in flight, none of it through the seat: no hand is filed under it and no decision was routed to it. Route the work through the seat (file its sessions under ${who}) or treat the seat as a reader and size its budget as one` });
+    flags.push({ code: "bypassed", severity: "warn", detail: `${who}'s area closed ${plural(r.flow.done_7d, "task")} this week and holds ${r.ledger.in_flight} in progress, none of it through the role: no session is filed under it and no decision was routed to it. Route the work through it (file its sessions under ${who}) or treat it as a reader` });
   }
 
   // Wide ledger: the scope lists more than the frame shows one by one.
   // Information: a records or filing question first, a seat question only
   // when the load says so too.
-  const wide = ledgerDetails(r.ledger).map(([, key, phrase]) => `${phrase} (frame lists: ${ledgerLine(key)})`);
+  const wide = ledgerDetails(r.ledger).map(([, , phrase]) => phrase);
   if (wide.length) {
     const quiet = !breaches.length;
-    flags.push({ code: "wide_ledger", severity: "info", detail: `${who}'s scope holds ${wide.join(", ")}; ${quiet ? "its load is inside the model, so this is size, not overload: bring records in line or file by seam before reading it as a seat" : "read the load above for whether the seat fits"}` });
+    flags.push({ code: "wide_ledger", severity: "info", detail: `${who}'s area holds ${wide.join(", ")}, more than one role follows one by one; ${quiet ? "nothing reaches the role faster than it answers, so this is size, not overload: bring the records in line or split the area by seam before reading it as a seat" : "read what reaches it above for whether one role fits"}` });
   }
 
   if (r.load.direct_reports > capacity("direct_reports")) {
-    flags.push({ code: "wide_span", severity: "warn", detail: `${who} has ${plural(r.load.direct_reports, "direct report")} (model: ${capacity("direct_reports")}); propose a layer` });
+    flags.push({ code: "wide_span", severity: "warn", detail: `${who} has ${plural(r.load.direct_reports, "role")} reporting to it, more than one role can follow; propose a layer` });
   }
 
-  // Spend: a cap hit on a recent day is a warning; a day running at or past
-  // the load line with no hit yet is information.
+  // The daily limit (S23.2): a day spent at it is a warning; a day running
+  // close to it with no wait yet is information. The limit itself is never named.
   if (r.spend.cap_hits_7d > 0) {
-    flags.push({ code: "cap_hit", severity: "warn", detail: `${who} hit its wake or token cap on ${plural(r.spend.cap_hits_7d, "day")} this week` });
+    flags.push({ code: "cap_hit", severity: "warn", detail: `${who} reached its daily limit and waited on ${plural(r.spend.cap_hits_7d, "day")} this week` });
   } else {
     const wake = Math.max(pct(r.spend.wakes_today, r.spend.wakes_cap), pct(r.spend.wakes_7d_avg, r.spend.wakes_cap));
     const tokens = Math.max(pct(r.spend.tokens_today, r.spend.tokens_cap), pct(r.spend.tokens_7d_avg ?? 0, r.spend.tokens_cap));
-    if (wake >= capacity("wake_load")) flags.push({ code: "cap_hit", severity: "info", detail: `${who} is at ${pctText(Math.max(r.spend.wakes_today, r.spend.wakes_7d_avg), r.spend.wakes_cap)} of its wake cap` });
-    if (tokens >= capacity("token_load")) flags.push({ code: "cap_hit", severity: "info", detail: `${who} is at ${pctText(Math.max(r.spend.tokens_today, r.spend.tokens_7d_avg ?? 0), r.spend.tokens_cap)} of its token cap` });
+    if (wake >= capacity("wake_load")) flags.push({ code: "cap_hit", severity: "info", detail: `${who} is close to its daily limit of turns (${pctText(Math.max(r.spend.wakes_today, r.spend.wakes_7d_avg), r.spend.wakes_cap)} used)` });
+    if (tokens >= capacity("token_load")) flags.push({ code: "cap_hit", severity: "info", detail: `${who} is close to its daily limit of tokens (${pctText(Math.max(r.spend.tokens_today, r.spend.tokens_7d_avg ?? 0), r.spend.tokens_cap)} used)` });
   }
 
   if (r.flow.median_recommend_min !== null && r.flow.decisions_7d > 0 && r.flow.median_recommend_min > capacity("decision_latency_min")) {
-    flags.push({ code: "slow_to_recommend", severity: "warn", detail: `${who} takes ${Math.round(r.flow.median_recommend_min)} min (median) from ask to recommendation over ${plural(r.flow.decisions_7d, "decision")}; the hop deadline is ${capacity("decision_latency_min")}` });
+    flags.push({ code: "slow_to_recommend", severity: "warn", detail: `${who} takes ${Math.round(r.flow.median_recommend_min)} minutes (median) from ask to recommendation over ${plural(r.flow.decisions_7d, "decision")}; an ask should be answered within ${capacity("decision_latency_min")}` });
   }
   if (r.flow.review_stalls > 0) {
-    flags.push({ code: "review_stall", severity: "warn", detail: `${plural(r.flow.review_stalls, "task")} in ${who}'s scope in review for more than ${capacity("review_stall_hours")}h` });
+    flags.push({ code: "review_stall", severity: "warn", detail: `${plural(r.flow.review_stalls, "task")} in ${who}'s area ${r.flow.review_stalls === 1 ? "has" : "have"} sat in review for more than a day` });
   }
 
   // Idle: no scope event for the window. A seat younger than the window with
   // no event yet is new, not idle.
   const quiet = r.idle_days ?? r.age_days;
   if (quiet >= capacity("idle_days")) {
-    const line = ` (model: ${capacity("idle_days")} days)`;
-    flags.push({ code: "idle", severity: "info", detail: r.scope_empty ? `${who}'s scope names no project or plan that still exists, so nothing can reach it${line}` : r.idle_days === null ? `${who}'s scope has had no event since the role was created ${plural(r.age_days, "day")} ago${line}` : `${who}'s scope has had no event for ${plural(r.idle_days, "day")}${line}` });
+    flags.push({ code: "idle", severity: "info", detail: r.scope_empty ? `${who}'s area names no project or plan that still exists, so nothing can reach it` : r.idle_days === null ? `nothing has moved in ${who}'s area since the role was created ${plural(r.age_days, "day")} ago` : `nothing has moved in ${who}'s area for ${plural(r.idle_days, "day")}` });
   }
 
   // A program's end condition met: the seat outlived its reason to exist.
@@ -321,7 +316,7 @@ function roleFlags(r: RoleSignals): HealthFlag[] {
   for (const s of [...r.flow.sends_7d.to, ...r.flow.sends_7d.from]) peers.set(s.handle, (peers.get(s.handle) ?? 0) + s.n);
   const [peer, n] = Array.from(peers.entries()).sort((a, b) => b[1] - a[1])[0] ?? [null, 0];
   if (peer && n >= capacity("peer_sends") && n > r.flow.done_7d) {
-    flags.push({ code: "chatter", severity: "info", detail: `${who} and @${peer} exchanged ${plural(n, "send")} this week (model: ${capacity("peer_sends")}) against ${plural(r.flow.done_7d, "task")} done` });
+    flags.push({ code: "chatter", severity: "info", detail: `${who} and @${peer} exchanged ${plural(n, "message")} this week against ${plural(r.flow.done_7d, "task")} done` });
   }
 
   if (!r.has_charter) flags.push({ code: "no_charter", severity: "info", detail: `${who} has no charter` });
@@ -330,7 +325,7 @@ function roleFlags(r: RoleSignals): HealthFlag[] {
 
 function personFlags(p: PersonSignals): HealthFlag[] {
   if (p.direct_roles > PERSON_SPAN.direct_roles.value) {
-    return [{ code: "wide_span", severity: "warn", detail: `${p.name} answers for ${plural(p.direct_roles, "role")} directly (model: ${PERSON_SPAN.direct_roles.value}); propose a layer` }];
+    return [{ code: "wide_span", severity: "warn", detail: `${p.name} answers for ${plural(p.direct_roles, "role")} directly, more than one person can follow; propose a layer` }];
   }
   return [];
 }

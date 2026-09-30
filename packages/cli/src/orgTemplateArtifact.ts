@@ -20,6 +20,50 @@ export function canonicalDirectory(dir: string): string {
   if (!fs.statSync(canonical).isDirectory()) throw new Error("Expected an existing directory");
   return canonical;
 }
+/** Validate a release's files and compute its digest: the one step behind a folder on disk and a snapshot from the record. */
+function assembleArtifact(root: string, files: Map<string, Buffer>, executable: Set<string>): TemplateArtifact {
+  const raw = files.get("org-template.json");
+  if (!raw) throw new Error("Release is missing org-template.json");
+  const manifest = validateTemplate(JSON.parse(raw.toString("utf8")));
+  const inputs = inputTokens(manifest);
+  for (const file of manifestFiles(manifest)) {
+    if (!files.has(file)) throw new Error(`Missing template instruction file: ${file}`);
+    validateTokens(files.get(file)!.toString("utf8"), inputs);
+  }
+  const digest = createHash("sha256");
+  for (const [name, bytes] of [...files].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) digest.update(JSON.stringify([name, bytes.length, executable.has(name)]) + "\n").update(bytes);
+  return { root, manifest, files, executable, hash: digest.digest("hex") };
+}
+/**
+ * The release as one blob publish uploads and the host step downloads
+ * (org-hire.md H1): every file with its mode, base64 in JSON. Reading it
+ * back runs the same validation and digest as a folder, so a snapshot that
+ * does not hash to its release's digest is refused before anything is frozen.
+ */
+export function snapshotArtifact(artifact: TemplateArtifact): Buffer {
+  const files = [...artifact.files].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([name, bytes]) => ({ name, executable: artifact.executable.has(name), bytes: bytes.toString("base64") }));
+  return Buffer.from(JSON.stringify({ schemaVersion: 1, id: artifact.manifest.id, version: artifact.manifest.version, hash: artifact.hash, files }));
+}
+export function artifactFromSnapshot(bytes: Uint8Array | Buffer | string, expectedHash?: string): TemplateArtifact {
+  const parsed = JSON.parse(typeof bytes === "string" ? bytes : Buffer.from(bytes).toString("utf8"));
+  if (parsed?.schemaVersion !== 1 || !Array.isArray(parsed.files)) throw new Error("Release snapshot is not in a known format");
+  const files = new Map<string, Buffer>();
+  const executable = new Set<string>();
+  let total = 0;
+  for (const entry of parsed.files) {
+    if (typeof entry?.name !== "string" || typeof entry.bytes !== "string") throw new Error("Release snapshot entry is malformed");
+    templatePath(entry.name);
+    if (files.has(entry.name)) throw new Error(`Release snapshot repeats ${entry.name}`);
+    const content = Buffer.from(entry.bytes, "base64");
+    total += content.length;
+    if (content.length > 16 * 1024 * 1024 || files.size >= 10000 || total > 64 * 1024 * 1024) throw new Error("Artifact exceeds file limits");
+    files.set(entry.name, content);
+    if (entry.executable === true) executable.add(entry.name);
+  }
+  const artifact = assembleArtifact("", files, executable);
+  if (expectedHash && artifact.hash !== expectedHash) throw new Error("Release snapshot does not match the published digest");
+  return artifact;
+}
 export function readArtifact(root: string): TemplateArtifact {
   root = canonicalDirectory(root);
   const files = new Map<string, Buffer>();
@@ -46,17 +90,7 @@ export function readArtifact(root: string): TemplateArtifact {
     }
   };
   walk(root);
-  const raw = files.get("org-template.json");
-  if (!raw) throw new Error("Release is missing org-template.json");
-  const manifest = validateTemplate(JSON.parse(raw.toString("utf8")));
-  const inputs = inputTokens(manifest);
-  for (const file of manifestFiles(manifest)) {
-    if (!files.has(file)) throw new Error(`Missing template instruction file: ${file}`);
-    validateTokens(files.get(file)!.toString("utf8"), inputs);
-  }
-  const digest = createHash("sha256");
-  for (const [name, bytes] of [...files].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) digest.update(JSON.stringify([name, bytes.length, executable.has(name)]) + "\n").update(bytes);
-  return { root, manifest, files, executable, hash: digest.digest("hex") };
+  return assembleArtifact(root, files, executable);
 }
 export function releaseRoot(dir: string, artifact: { id: string; version: string; hash: string }): string {
   if (!templateSlug(artifact.id) || !/^\d+\.\d+\.\d+$/.test(artifact.version) || !/^[a-f0-9]{64}$/.test(artifact.hash)) throw new Error("Invalid release identity");

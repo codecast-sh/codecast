@@ -6,6 +6,7 @@ import { normalizeRepository } from "./lib/gitRefs";
 import { commitRecordedBy } from "./githubWebhooks";
 import { repositoryOfCheckout } from "./users";
 import { standingReportsToFields } from "./lib/standingSeat";
+import { listSessionOwnerIds, stampSeatOwners } from "./sessionOwners";
 
 // One-time backfill: stamp conversations.model from each conversation's newest
 // assistant message carrying a real model id ("<synthetic>" = error banner, not
@@ -672,9 +673,16 @@ export const stampStandingSeats = internalMutation({
       const standing: any = anchor?.conversation_id ? await ctx.db.get(anchor.conversation_id) : null;
       if (!standing) continue;
       const { org_role_id } = standingReportsToFields(role);
-      if (String(standing.org_role_id ?? "") === String(org_role_id ?? "")) continue;
-      out.push({ role: role.handle, standing: standing.short_id ?? String(standing._id), from: standing.org_role_id ? String(standing.org_role_id) : null, to: org_role_id ? String(org_role_id) : null });
-      if (!dryRun) await ctx.db.patch(standing._id, { org_role_id });
+      // The seat's owner is the person the role reports to (sessionOwners.stampSeatOwners).
+      const boss = role.reports_to?.kind === "user" ? String(role.reports_to.user_id) : null;
+      const owners = (await listSessionOwnerIds(ctx, standing._id)).map(String);
+      const ownersRight = boss ? owners.length === 1 && owners[0] === boss : owners.length === 0;
+      if (String(standing.org_role_id ?? "") === String(org_role_id ?? "") && ownersRight) continue;
+      out.push({ role: role.handle, standing: standing.short_id ?? String(standing._id), from: `${standing.org_role_id ? String(standing.org_role_id) : "person"} owners=${owners.join(",") || "none"}`, to: `${org_role_id ? String(org_role_id) : "person"} owner=${boss ?? "none"}` });
+      if (!dryRun) {
+        await ctx.db.patch(standing._id, { org_role_id });
+        await stampSeatOwners(ctx, standing._id, role.reports_to, role.host_user_id);
+      }
     }
     return { dryRun, roles: roles.length, stamped: out.length, changes: out };
   },

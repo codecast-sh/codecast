@@ -6,7 +6,7 @@ import { applyProposalChanges, extractOrgProposal, orgProposalBlock, ORG_PROPOSA
 import type { OrgInitDeps } from "./orgInit.js";
 import { acquireFileLock } from "./lockFile.js";
 import { sessionIdFromEnv } from "./sessionIdentity.js";
-import { atomicJson, canonicalDirectory, checkReleaseVersion, freezeArtifact, inputToken, inputTokens, intervalMs, noSymlink, readArtifact, releaseRoot, substitute, templateSlug, type OrgTemplate, type TemplateArtifact } from "./orgTemplateArtifact.js";
+import { artifactFromSnapshot, atomicJson, canonicalDirectory, checkReleaseVersion, freezeArtifact, inputToken, inputTokens, intervalMs, noSymlink, readArtifact, releaseRoot, snapshotArtifact, substitute, templateSlug, type OrgTemplate, type TemplateArtifact } from "./orgTemplateArtifact.js";
 import { writeInstanceFile } from "./orgTemplateInstance.js";
 import { markSetup, nextHumanAsk, readiness, readinessHeader, recordEvidence, recordScores, setupRows, type InstanceState } from "./orgTemplateState.js";
 
@@ -349,9 +349,12 @@ export const ledgerMarker = (receipt: TemplateReceipt, ledger: string) => `org-t
 export async function bindTemplate(deps: OrgInitDeps, instance: string, options: TemplateOptions): Promise<TemplateReceipt> {
   const dir = canonicalDirectory(options.dir);
   return locked(dir, instance, async () => {
-    const receipt = readReceipt(dir, instance);
+    const receipt = fs.existsSync(receiptPath(dir, instance)) ? readReceipt(dir, instance) : await adoptHiredInstance(deps, instance, dir, options);
     const artifact = verifiedArtifact(receipt);
-    await checkContext(deps, receipt, options);
+    const tree = await checkContext(deps, receipt, options);
+    // A role applied but not yet seated and armed (a web hire, or a reconcile
+    // that stopped after the apply) is finished here; a proposal still open is not.
+    if (receipt.phase === "provisioning") await provisionAndArm(deps, receipt, tree);
     if (receipt.phase !== "ready") throw new Error(`Instance is ${receipt.phase}; bind runs once the role and its routines exist (reconcile first)`);
     const manifest = artifact.manifest;
     const secrets = new Map((manifest.inputs ?? []).filter((i) => i.kind === "secret").map((i) => [i.key, i]));
@@ -452,14 +455,50 @@ export async function lessonTemplate(deps: OrgInitDeps, instance: string, body: 
   return request(deps, "/cli/org/template/lesson", { instance_key: receipt.key, body, evidence });
 }
 
-/** Publish a release folder as a template (H1): the validated manifest and the folder's digest, under the caller's workspace or as Codecast. */
-export async function publishTemplate(deps: OrgInitDeps, source: string, options: { team?: string; personal?: boolean; codecast?: boolean; status?: string; changelog?: string; reviewProject?: string }): Promise<unknown> {
+export type PublishOptions = { team?: string; personal?: boolean; codecast?: boolean; status?: string; changelog?: string; reviewProject?: string };
+/** The release snapshot, uploaded so a host can install from the record (H1); the storage id the publish row keeps. */
+async function uploadSnapshot(deps: OrgInitDeps, artifact: TemplateArtifact): Promise<string> {
+  const uploadUrl = await request(deps, "/cli/images/upload-url", {});
+  if (typeof uploadUrl !== "string") throw new Error("upload-url response malformed");
+  const response = await (deps.fetchUrl ?? fetch)(uploadUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: new Uint8Array(snapshotArtifact(artifact)) });
+  if (!response.ok) throw new Error(`Release snapshot upload failed: HTTP ${response.status}`);
+  const { storageId } = (await response.json()) as { storageId?: string };
+  if (!storageId) throw new Error("Release snapshot upload returned no storage id");
+  return storageId;
+}
+/**
+ * Publish a release folder as a template (H1): the validated manifest, the
+ * folder's digest and its snapshot, under the caller's workspace or as
+ * Codecast. The changelog is the option, else the folder's CHANGELOG.md.
+ */
+export async function publishTemplate(deps: OrgInitDeps, source: string, options: PublishOptions): Promise<unknown> {
   const artifact = readArtifact(source);
   const workspace = options.codecast ? undefined : (await currentWorkspace(deps, options)).workspace;
+  const changelogFile = path.join(artifact.root, "CHANGELOG.md");
+  const changelog = options.changelog ?? (fs.existsSync(changelogFile) ? fs.readFileSync(changelogFile, "utf8").trim() : undefined);
+  const storage_id = await uploadSnapshot(deps, artifact);
   return request(deps, "/cli/org/template/publish", {
-    manifest: artifact.manifest, digest: artifact.hash, status: options.status, changelog: options.changelog, review_project_id: options.reviewProject,
+    manifest: artifact.manifest, digest: artifact.hash, status: options.status, changelog: changelog || undefined, review_project_id: options.reviewProject, storage_id,
     ...(options.codecast ? { as_codecast: true } : workspace?.kind === "team" ? { team_id: workspace.id } : {}),
   });
+}
+/**
+ * Publish several release folders in one run (the default gallery is every
+ * release folder under one directory). Each folder is published on its own;
+ * a folder that fails is reported beside the ones that landed, so one bad
+ * manifest never hides the rest.
+ */
+export async function publishTemplates(deps: OrgInitDeps, sources: string[], options: PublishOptions): Promise<Array<{ folder: string; template_id?: string; version?: string; action?: string; error?: string }>> {
+  const out: Array<{ folder: string; template_id?: string; version?: string; action?: string; error?: string }> = [];
+  for (const folder of sources) {
+    try {
+      const row = (await publishTemplate(deps, folder, options)) as any;
+      out.push({ folder, template_id: row.template_id, version: row.latest?.version ?? row.version, action: row.action });
+    } catch (error) {
+      out.push({ folder, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  return out;
 }
 export async function catalogTemplates(deps: OrgInitDeps, options: { team?: string; personal?: boolean }): Promise<unknown> {
   const { workspace } = await currentWorkspace(deps, options);
@@ -501,19 +540,68 @@ export async function reconcileTemplate(deps: OrgInitDeps, instance: string, opt
       receipt.phase = "provisioning";
       save(receipt);
     }
-    const role = verifyRole(tree, receipt);
-    if (!role.anchor_id) {
-      await request(deps, "/cli/role/provision", { role_id: role._id, project_path: receipt.project.dir });
-      tree = await request(deps, "/cli/org/tree", boundary(receipt));
-      sameWorkspace(tree.workspace, receipt.workspace);
-    }
-    receipt.role.sessionId = await verifyStanding(deps, tree, receipt);
-    save(receipt);
-    await ensureRoutines(deps, receipt);
-    receipt.phase = "ready";
-    save(receipt);
+    await provisionAndArm(deps, receipt, tree);
     return receipt;
   });
+}
+/**
+ * From an applied role to a ready instance: seat its standing session when
+ * none exists, verify it runs in the pinned directory, create the routines
+ * paused. Reconcile reaches here after a terminal decision; the host step
+ * reaches here for a hire accepted on the web (adoptHiredInstance).
+ */
+async function provisionAndArm(deps: OrgInitDeps, receipt: TemplateReceipt, tree: any): Promise<void> {
+  const role = verifyRole(tree, receipt);
+  if (!role.anchor_id) {
+    await request(deps, "/cli/role/provision", { role_id: role._id, project_path: receipt.project.dir });
+    tree = await request(deps, "/cli/org/tree", boundary(receipt));
+    sameWorkspace(tree.workspace, receipt.workspace);
+  }
+  receipt.role!.sessionId = await verifyStanding(deps, tree, receipt);
+  save(receipt);
+  await ensureRoutines(deps, receipt);
+  receipt.phase = "ready";
+  save(receipt);
+}
+/**
+ * A hire accepted on the web (org-hire.md H3) has a server row awaiting its
+ * host and no receipt on any machine. The host step builds the receipt from
+ * that row and the release published with it (H1, install from the record):
+ * the snapshot is downloaded, verified against the release's digest and
+ * frozen exactly as a folder install freezes it. The receipt then carries the
+ * role the hire's proposal created and the answers the person gave.
+ */
+async function adoptHiredInstance(deps: OrgInitDeps, instance: string, dir: string, options: TemplateOptions): Promise<TemplateReceipt> {
+  const tree = await currentWorkspace(deps, options);
+  const args = tree.workspace.kind === "team" ? { team_id: tree.workspace.id } : {};
+  const rows: any[] = await request(deps, "/cli/org/template/instances", args);
+  const candidates = rows.filter((r) => r.instance === instance && r.phase !== "retired");
+  if (candidates.length === 0) throw new Error(`No instance ${instance} here or on the server: nothing was hired under that name in this workspace, and no receipt exists in ${dir}`);
+  const row = options.project ? candidates.find((r) => String(r.project_id) === options.project) : candidates.length === 1 ? candidates[0] : undefined;
+  if (!row) throw new Error(candidates.length > 1 && !options.project ? `Several projects have an instance named ${instance}; pass --project` : `Instance ${instance} is not on project ${options.project}`);
+  if (!row.role_id) throw new Error(`The hire ${instance} has no role yet: accept its role change first`);
+  const project = await verifiedProject(deps, tree, dir, String(row.project_id));
+  const role = (tree.roles ?? []).find((r: any) => r._id === row.role_id);
+  if (!role) throw new Error("The hire's role is not in this workspace");
+  const release = await request(deps, "/cli/org/template/release", { template_id: row.template_id, version: row.version, digest: row.digest, ...args });
+  if (!release.storage_url) throw new Error(`Release ${row.template_id}@${row.version} was published without its snapshot; publish it again (cast org template publish <folder>) or install from the folder`);
+  const response = await (deps.fetchUrl ?? fetch)(release.storage_url);
+  if (!response.ok) throw new Error(`Release download failed: HTTP ${response.status}`);
+  const artifact = artifactFromSnapshot(new Uint8Array(await response.arrayBuffer()), row.digest);
+  if (artifact.manifest.id !== row.template_id || artifact.manifest.version !== row.version) throw new Error("Release snapshot names another template or version");
+  const key = randomUUID();
+  const receipt: TemplateReceipt = {
+    schemaVersion: 1, instance, key, project, workspace: tree.workspace, warnings: projectWarnings(project), sourceSession: "web", phase: "provisioning",
+    template: { id: artifact.manifest.id, version: artifact.manifest.version, hash: artifact.hash, root: releaseRoot(dir, { ...artifact.manifest, hash: artifact.hash }) },
+    stack: { title: `Org template ${instance} for ${project.ref} [${key}]` },
+    proposal: { kind: "role", name: role.name, handle: role.handle, scope: { projects: [project.ref], plans: [] }, reports_to: "me", trust: "understand" },
+    config: row.config ?? {}, role: { id: role._id, handle: role.handle }, instanceId: String(row._id),
+    routines: Object.fromEntries(artifact.manifest.routines.map((r) => [r.id, { every: r.every, ...(row.routines?.[r.id]?.external ? { triggerId: row.routines[r.id].triggerId, external: true } : {}) }])),
+  };
+  checkReleaseVersion(dir, artifact);
+  freezeArtifact(dir, artifact);
+  save(receipt);
+  return receipt;
 }
 export async function templateStatus(deps: OrgInitDeps, instance: string, options: TemplateOptions): Promise<any> {
   const receipt = readReceipt(options.dir, instance);

@@ -142,7 +142,35 @@ describe("org.health", () => {
     const r = await computeOrgHealth(ctxOf(db), ME as any, TEAM, NOW);
     const growth = r.roles.find((x) => x.handle === "growth")!;
     expect(growth.breaches).toBe(1);
-    expect(growth.flags.find((f) => f.code === "overloaded")!.detail).toContain("flagged at 1 earlier review in a row, so this is breach 2");
+    expect(growth.flags.find((f) => f.code === "overloaded")!.detail).toContain("the same at 1 earlier review in a row");
+  });
+
+  test("the area carries the role's own latest line, the sessions waiting under it and its check (S29)", async () => {
+    const db = fixtures({
+      docs: [{ _id: "docs_brief", user_id: ME, content: "# Brief\n\n## Where it stands\n- Growth: the copy waits on Ada. (2026-09-01)\n- Launch: two pages shipped this week. (2026-09-20)\n\n## Notes\n- Growth: not a standing line" }],
+      agent_tasks: [{ _id: "agent_tasks_check", user_id: ME, short_id: "tr-7", title: "Check Growth lead's area", prompt: "Check.", originating_conversation_id: S_GROWTH, schedule_type: "recurring", interval_ms: D, run_at: NOW + 3 * H, last_run_at: NOW - 21 * H, last_run_summary: "Nothing needed doing.", status: "paused", role_id: GROWTH, run_count: 3, retry_count: 0, created_at: 1 }],
+    });
+    await db.patch(GROWTH as any, { brief_doc_id: "docs_brief", checked_at: NOW - 2 * H });
+    // One hand declared blocked two days ago and was never answered.
+    await db.patch("conversations_hand0" as any, { thread_state: "Which price band?", thread_state_status: "blocked", thread_state_at: NOW - 2 * D });
+    const growth = (await computeOrgHealth(ctxOf(db), ME as any, TEAM, NOW)).roles.find((x) => x.handle === "growth")!;
+    expect(growth.area.status).toBe("stuck");
+    expect(growth.area.status_line).toBe("Stuck: 1 session under it waiting unanswered, 3 tasks stuck in review, 1 task blocked.");
+    expect(growth.area.signals[0]).toEqual({ code: "waiting_sessions", severity: "warn", text: "1 session under it has waited more than a day with no answer from it." });
+    // Oldest wait first: the blocked hand, then the five young ones.
+    expect(growth.area.waiting).toHaveLength(6);
+    expect(growth.area.waiting[0]).toEqual({ id: "conversations_hand0", short_id: "s_hand0", title: "conversations_hand0", why: "blocked", since: NOW - 2 * D, state: "Which price band?" });
+    // Newest dated line first; the Notes section is not a standing line.
+    expect(growth.area.standing).toEqual({ project: "Launch", text: "two pages shipped this week.", written_on: "2026-09-20", written_at: Date.parse("2026-09-20T00:00:00Z") });
+    expect(growth.area.standing_lines.map((l) => l.project)).toEqual(["Launch", "Growth"]);
+    expect(growth.area.checked_at).toBe(NOW - 2 * H);
+    expect(growth.area.check).toEqual({ trigger_id: "agent_tasks_check", short_id: "tr-7", title: "Check Growth lead's area", status: "paused", run_at: NOW + 3 * H, last_run_at: NOW - 21 * H, last_run_summary: "Nothing needed doing.", interval_ms: D });
+    // The standing session raising something for the person outranks the rest.
+    await db.patch(S_GROWTH as any, { thread_state: "Needs your call on the price band", thread_state_status: "blocked", thread_state_at: NOW - H });
+    const raised = (await computeOrgHealth(ctxOf(db), ME as any, TEAM, NOW)).roles.find((x) => x.handle === "growth")!;
+    expect(raised.area.status).toBe("waiting_on_you");
+    expect(raised.area.status_line).toBe("Waiting on you: Needs your call on the price band");
+    expect(raised.area.signals[0].code).toBe("raised");
   });
 
   test("an overloaded role and an idle one, each with its signals and flags", async () => {
@@ -177,14 +205,25 @@ describe("org.health", () => {
     expect(growth.idle_days).toBe(0);
     expect(codes(growth.flags)).toEqual(["cap_hit", "chatter", "no_charter", "overloaded", "review_stall", "slow_to_recommend", "wide_ledger"]);
     expect(growth.flags.find((f) => f.code === "overloaded")).toMatchObject({ severity: "blocker" });
-    expect(growth.flags.find((f) => f.code === "overloaded")!.detail).toContain("4 open stalls (model: 3), 2 cap hit days this week (model: 1)");
-    expect(growth.flags.find((f) => f.code === "wide_ledger")!.detail).toContain("27 open tasks (frame lists: 25), 9 tasks in flight (frame lists: 8)");
+    expect(growth.flags.find((f) => f.code === "overloaded")!.detail).toContain("4 threads stuck, 2 days at its daily limit this week");
+    expect(growth.flags.find((f) => f.code === "wide_ledger")!.detail).toContain("27 open tasks, 9 tasks in flight");
     // The stability clock: no review has flagged this role yet, so the flag
     // says so and the row carries breaches 0 with overloaded_now for the
     // review that will record it.
     expect(growth.breaches).toBe(0);
     expect(growth.overloaded_now).toBe(true);
-    expect(growth.flags.find((f) => f.code === "overloaded")!.detail).toContain("first breach on record");
+    expect(growth.flags.find((f) => f.code === "overloaded")!.detail).not.toContain("earlier review");
+    // The area as a person reads it (S29): stuck, because three reviews and
+    // one blocked task wait on nobody; its one project with the goal and the
+    // counts; no line, no check and no read of its brief yet.
+    expect(growth.area).toMatchObject({ status: "stuck", standing: null, standing_lines: [], checked_at: null, check: null, standing_conversation_id: S_GROWTH, standing_short_id: S_GROWTH.slice(-7) });
+    expect(growth.area.status_line).toBe("Stuck: 3 tasks stuck in review, 1 task blocked.");
+    // Six hands wait an hour old (young, so not a stall, but listed); the
+    // three signals a row shows are the first three that matter.
+    expect(growth.area.waiting).toHaveLength(6);
+    expect(growth.area.waiting[0]).toMatchObject({ short_id: "s_hand0", why: "waiting", since: NOW - H, state: "Working the landing page" });
+    expect(growth.area.signals.map((x) => `${x.severity}:${x.code}`)).toEqual(["info:waiting_sessions", "warn:review_stall", "warn:blocked_sessions"]);
+    expect(growth.area.goals).toEqual([{ project: { id: P, title: "Growth", short_id: "pr-1" }, goal: "Bring users in", open: 27, in_progress: 9, done_7d: 2 }]);
     // The company's budget today: the caps of every active role, summed once.
     // Growth carries its own caps (6, 4, 400k); billing has none and takes the
     // defaults (6, 40, 400k). Both are active.
@@ -201,6 +240,7 @@ describe("org.health", () => {
     expect(billing.last_move_at).toBeNull();
     expect(codes(billing.flags)).toEqual(["chatter", "idle"]);
     expect(billing.flags.find((f) => f.code === "idle")?.detail).toContain("since the role was created 40 days ago");
+    expect(billing.area).toMatchObject({ status: "quiet", status_line: "Quiet: nothing has moved since it started 40 days ago.", signals: [{ code: "idle", severity: "info", text: "Nothing has moved in its area since it started 40 days ago." }] });
 
     const me = r.people.find((p) => p.name === "Me")!;
     expect(me).toMatchObject({ direct_roles: 2, decisions_waiting: { n: 2, oldest_min: 24 * 60 }, flags: [] });

@@ -3,7 +3,8 @@
 // proposal is decided, the one line a change reads as, the company's flags
 // with the node each one points at, span of control per person, and the roles
 // that are bottlenecks. The pane renders these; it computes nothing itself.
-import { PERSON_SPAN } from "@codecast/shared/contracts/orgCapacity";
+import { AREA_STATUS_WORDS, type AreaStatus, type RoleArea } from "@codecast/shared/contracts/orgAreas";
+import type { QueueItem } from "../../lib/decisionQueue";
 import { ORG_SYNC_KINDS, PLAN_STATUS_CHANGES, PROJECT_STATUS_CHANGES, TASK_STATUS_CHANGES, describeTenure, editedOrgChange, isOrgChangeDecidable, isOrgQuietChange, orderOrgChanges, type OrgTenureSpec } from "@codecast/shared/contracts/orgProposal";
 import { avatarOf } from "@codecast/shared/contracts/orgAvatars";
 import type { OrgParentRef, OrgRole, OrgTree } from "./orgTypes";
@@ -362,33 +363,155 @@ export function relatedFlags(flags: HealthFlagRow[], changes: OrgProposalChange[
   return flags.filter((r) => r.subject.kind === "role" && handles.has(r.subject.handle));
 }
 
-export type SpanRow = { user_id: string; name: string; nodeId: string; direct_roles: number; limit: number; wide: boolean };
+// ---------------------------------------------------------------- the loop (S29)
 
-/** Span of control per person: direct roles against the model's limit. Reads
- *  the tree when health has no row for a person, so the summary is complete. */
-export function spanOfControl(health: OrgHealth | null, tree: OrgTree | null): SpanRow[] {
+/** The status word's colour: what needs a person is warm, what needs the
+ *  chief is yellow, a quiet or paused area is dim, on track is green. */
+export const AREA_STATUS_COLOR: Record<AreaStatus, string> = {
+  waiting_on_you: "var(--sol-orange)",
+  stuck: "var(--sol-yellow)",
+  overloaded: "var(--sol-magenta)",
+  quiet: "var(--sol-text-dim)",
+  on_track: "var(--sol-green)",
+  paused: "var(--sol-text-dim)",
+  not_started: "var(--sol-text-dim)",
+};
+
+/** Roles as the chart draws them: the Chief of Staff first, then each
+ *  person's other roles, each followed by the roles under it, depth first.
+ *  Retired roles are left out. */
+export function rolesInTreeOrder(tree: OrgTree | null): OrgRole[] {
   if (!tree) return [];
-  const limit = PERSON_SPAN.direct_roles.value;
-  return tree.people.map((p) => {
-    const fromHealth = health?.people.find((h) => h.user_id === p.user_id)?.direct_roles;
-    const direct = fromHealth ?? tree.roles.filter((r) => r.status !== "retired" && r.reports_to.kind === "user" && r.reports_to.user_id === p.user_id).length;
-    return { user_id: p.user_id, name: p.name, nodeId: parentNodeId({ kind: "user", user_id: p.user_id }), direct_roles: direct, limit, wide: direct > limit };
-  }).sort((a, b) => b.direct_roles - a.direct_roles);
+  const live = tree.roles.filter((r) => r.status !== "retired");
+  const byParent = new Map<string, OrgRole[]>();
+  for (const r of live) {
+    const key = r.reports_to.kind === "role" ? `role:${r.reports_to.role_id}` : "person";
+    byParent.set(key, [...(byParent.get(key) ?? []), r]);
+  }
+  const rank = (r: OrgRole) => (r.handle === CHIEF_OF_STAFF_HANDLE ? 0 : 1);
+  const sorted = (rows: OrgRole[]) => [...rows].sort((a, b) => rank(a) - rank(b) || a.created_at - b.created_at);
+  const out: OrgRole[] = [];
+  const seen = new Set<string>();
+  const walk = (rows: OrgRole[]) => {
+    for (const r of sorted(rows)) {
+      if (seen.has(r._id)) continue;
+      seen.add(r._id);
+      out.push(r);
+      walk(byParent.get(`role:${r._id}`) ?? []);
+    }
+  };
+  walk(byParent.get("person") ?? []);
+  // A role whose parent is retired or unknown still belongs on the list.
+  walk(live);
+  return out;
 }
 
-export type BottleneckRow = { role_id: string; handle: string; nodeId: string; worst: HealthFlag["severity"]; flags: HealthFlag[] };
+export type AreaRow = { role: OrgRole; area: RoleArea | null; nodeId: string; status: AreaStatus; statusWord: string; color: string };
 
-/** Roles carrying a warn or blocker flag, worst first. */
-export function bottleneckRoles(health: OrgHealth | null): BottleneckRow[] {
-  if (!health) return [];
-  const out: BottleneckRow[] = [];
-  for (const r of health.roles) {
-    const flags = r.flags.filter((f) => f.severity !== "info");
-    if (flags.length === 0) continue;
-    const worst = flags.some((f) => f.severity === "blocker") ? "blocker" : "warn";
-    out.push({ role_id: r.role_id, handle: r.handle, nodeId: parentNodeId({ kind: "role", role_id: r.role_id }), worst, flags });
+/** One row per role in tree order, each with its area as health read it.
+ *  With no health yet (or a server older than S29) the row still stands: its
+ *  status is read from the role row alone (paused, not started, or on
+ *  track), so the list never paints empty over a populated chart. */
+export function areaRows(tree: OrgTree | null, health: OrgHealth | null): AreaRow[] {
+  return rolesInTreeOrder(tree).map((role) => {
+    const area = health?.roles.find((r) => r.role_id === role._id)?.area ?? null;
+    const status: AreaStatus = area?.status ?? (role.status === "paused" ? "paused" : !role.standing?.conversation_id ? "not_started" : role.standing.state_status === "blocked" ? "waiting_on_you" : "on_track");
+    return { role, area, nodeId: parentNodeId({ kind: "role", role_id: role._id }), status, statusWord: AREA_STATUS_WORDS[status], color: AREA_STATUS_COLOR[status] };
+  });
+}
+
+export type NeedsYouItem =
+  | { kind: "decision"; key: string; role: OrgRole | null; item: QueueItem; canAnswerInPlace: boolean }
+  | { kind: "blocked"; key: string; role: OrgRole; conversationId: string; line: string }
+  | { kind: "proposal"; key: string; proposal: OrgProposalRow; remaining: number };
+
+/** Every conversation the org owns: each role's standing session and the
+ *  sessions filed under it. */
+function orgConversationIds(tree: OrgTree | null): Map<string, OrgRole> {
+  const out = new Map<string, OrgRole>();
+  for (const r of tree?.roles ?? []) {
+    if (r.status === "retired") continue;
+    if (r.standing?.conversation_id) out.set(r.standing.conversation_id, r);
+    for (const s of r.sessions) out.set(s._id, r);
   }
-  return out.sort((a, b) => SEVERITY_RANK[a.worst] - SEVERITY_RANK[b.worst] || b.flags.length - a.flags.length);
+  return out;
+}
+
+/**
+ * What a person must act on now (S29): decisions the org routed to them (a
+ * lead's `cast decide` in its own thread, or one from a session under a role
+ * that no role could answer), roles that declared themselves waiting on a
+ * person, and proposals still open. A decision and a blocked pin from the
+ * same thread are one ask. Oldest first inside each kind; decisions lead.
+ */
+export function needsYou(tree: OrgTree | null, health: OrgHealth | null, queue: QueueItem[], proposals: OrgProposalRow[], shown: OrgProposalRow | null): NeedsYouItem[] {
+  const owners = orgConversationIds(tree);
+  const out: NeedsYouItem[] = [];
+  const asked = new Set<string>();
+  for (const item of [...queue].sort((a, b) => a.createdAt - b.createdAt)) {
+    if (item.heldByRole) continue;
+    const role = owners.get(item.conversationId);
+    if (!role) continue;
+    asked.add(item.conversationId);
+    const single = !item.kind || item.kind === "single";
+    out.push({ kind: "decision", key: item.key, role, item, canAnswerInPlace: item.source === "decide" && single && !!item.decisionId && item.options.length > 0 && item.options.length <= 4 });
+  }
+  for (const row of areaRows(tree, health)) {
+    const conv = row.role.standing?.conversation_id;
+    if (!conv || asked.has(conv)) continue;
+    const blocked = row.status === "waiting_on_you" || row.role.standing?.state_status === "blocked";
+    if (!blocked) continue;
+    const line = row.area?.status === "waiting_on_you" ? row.area.status_line.replace(/^Waiting on you:?\s*/, "") : row.role.standing?.state_line ?? "";
+    out.push({ kind: "blocked", key: `blocked:${row.role._id}`, role: row.role, conversationId: conv, line: line || "It raised something for you in its thread." });
+  }
+  for (const p of openProposals(proposals)) {
+    if (shown && p._id === shown._id) continue;
+    out.push({ kind: "proposal", key: `proposal:${p._id}`, proposal: p, remaining: proposalProgress(p).remaining });
+  }
+  return out;
+}
+
+export type ChiefRead = {
+  chief: OrgRole;
+  area: RoleArea | null;
+  /** The chief's read of the company: its "Company" line first, else its newest line. */
+  narrative: RoleArea["standing_lines"];
+  /** Its newest proposal, of any status, with how far it is decided. */
+  proposed: { proposal: OrgProposalRow; progress: ProposalProgress } | null;
+};
+
+/** The Chief of Staff's latest review as the panel shows it (S29). */
+export function chiefRead(tree: OrgTree | null, health: OrgHealth | null, proposals: OrgProposalRow[]): ChiefRead | null {
+  const chief = findChiefOfStaff(tree);
+  if (!chief) return null;
+  const area = health?.roles.find((r) => r.role_id === chief._id)?.area ?? null;
+  const lines = area?.standing_lines ?? [];
+  const company = lines.filter((l) => /^company$/i.test(l.project.trim()));
+  const narrative = company.length ? [...company, ...lines.filter((l) => !company.includes(l))] : lines;
+  const mine = proposals.filter((p) => p.author.kind === "role" && (p.author.id === chief._id || p.author.handle === chief.handle)).sort((a, b) => b.created_at - a.created_at);
+  const latest = mine[0] ?? null;
+  return { chief, area, narrative, proposed: latest ? { proposal: latest, progress: proposalProgress(latest) } : null };
+}
+
+/** The cadences a check or a review can be set to in place. */
+export const CHECK_CADENCES: ReadonlyArray<{ ms: number; label: string }> = [
+  { ms: 6 * 3_600_000, label: "every 6 hours" },
+  { ms: 12 * 3_600_000, label: "twice a day" },
+  { ms: 86_400_000, label: "every day" },
+  { ms: 2 * 86_400_000, label: "every 2 days" },
+  { ms: 7 * 86_400_000, label: "every week" },
+  { ms: 14 * 86_400_000, label: "every 2 weeks" },
+];
+
+/** The cadence's label, or the nearest whole unit for one set elsewhere. */
+export function cadenceLabel(ms: number | null | undefined): string {
+  if (!ms) return "no schedule";
+  const known = CHECK_CADENCES.find((c) => c.ms === ms);
+  if (known) return known.label;
+  const days = ms / 86_400_000;
+  if (days >= 1 && Number.isInteger(days)) return `every ${days} days`;
+  const hours = Math.round(ms / 3_600_000);
+  return `every ${hours} hour${hours === 1 ? "" : "s"}`;
 }
 
 /** A short label for a flag code, for badges. */

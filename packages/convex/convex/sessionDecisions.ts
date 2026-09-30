@@ -13,6 +13,7 @@
 // is routed through the org as a race (people in decision_inbox, roles on a
 // ladder that may recommend, a holder that may answer under a grant), it is
 // bound to a task and station, and it may sit in a stack (decisionStacks.ts).
+import { fireRoleNeedsInput } from "./agentTasks";
 import { mutation, query, internalMutation } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
@@ -426,21 +427,28 @@ export async function refreshHolder(
   await ctx.db.patch(row._id, { holder: resolved.holder, holder_key: resolved.holder_key });
 }
 
-// Tell the role that hears a decision (routeFor), once, as a plain line into
-// its standing session (org-staffing.md S25). Only that role: the ones above
-// it hear when it raises the question itself, up its own reporting line.
+// Tell the role that hears a decision (routeFor), once, through its
+// needs-input trigger (org-staffing.md S25, S28): a session under it waits on
+// a decision, and the run names the session and the question. Only that role:
+// the ones above it hear when it raises the question itself, up its own line.
+// Empty when the role cannot be told (its trigger paused or cancelled, no
+// session), so the caller puts the decision in front of the people instead.
 async function tellHearingRole(
   ctx: Ctx,
   role: Doc<"org_roles"> | null,
   row: { _id: Id<"session_decisions">; short_id?: string; question: string; conversation_id?: Id<"conversations"> },
+  now: number,
 ) {
   if (!role) return [];
-  const sd = row.short_id ?? row._id;
-  const id = await tellRole(ctx as any, role._id, {
-    content: `decision ${sd} from a session under you: ${row.question.slice(0, 300)}\nRead it with \`cast decide show ${sd}\`. It is yours to read first and sits in no person's queue: answer it if you hold the grant, or recommend an option with \`cast decide recommend ${sd} <n>\`. What it needs from someone above you, raise yourself, the way you raise anything.`,
-    client_id: `decision:${row._id}:${role._id}`,
-    from_conversation_id: row.conversation_id ?? undefined,
-  });
+  const conv = row.conversation_id ? await ctx.db.get(row.conversation_id) : null;
+  const id = await fireRoleNeedsInput(ctx as any, role._id, {
+    short_id: conv?.short_id ?? String(row.conversation_id ?? "").slice(0, 7),
+    title: (conv?.title ?? "").slice(0, 80),
+    why: "decision",
+    since: now,
+    decision: row.short_id ?? String(row._id),
+    state: row.question.split("\n")[0].slice(0, 200),
+  }, `decision:${row._id}:${role._id}`);
   return id ? [role._id] : [];
 }
 
@@ -904,9 +912,10 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
     session_title: conversation.title,
     project_path: conversation.project_path,
   });
-  await syncDecisionInbox(ctx, id, people, now, !hears);
+  // The role hears first; when it cannot, the decision is the people's.
+  const woken = await tellHearingRole(ctx, hears, { _id: id, short_id, question: args.question, conversation_id: conversation._id }, now);
+  await syncDecisionInbox(ctx, id, people, now, woken.length === 0);
   if (stack) await joinStack(ctx, stack, { _id: id, stack_id: stack._id, scope_keys: scopeKeys }, now);
-  const woken = await tellHearingRole(ctx, hears, { _id: id, short_id, question: args.question, conversation_id: conversation._id });
 
   return {
     id,
