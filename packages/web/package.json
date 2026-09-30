@@ -31,6 +31,7 @@
     "@dnd-kit/utilities": "^3.2.2",
     "@hono/node-server": "^1.19.11",
     "@lezer/highlight": "^1.2.3",
+    "@novnc/novnc": "1.7.0",
     "@observablehq/plot": "^0.6.17",
     "@platform/analytics": "file:../../platform/packages/analytics",
     "@platform/auth": "file:../../platform/packages/auth",

@@ -65,7 +65,7 @@ describe("focusBrowserTab", () => {
         calls.push(`raise:${pid}`);
       },
     });
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, pid: 1234 });
     expect(calls).toEqual([`builtin:activate:${T1}@9333`, "raise:1234"]);
   });
 
@@ -125,7 +125,7 @@ describe("focusBrowserTab", () => {
         calls.push(`raise:${pid}`);
       },
     });
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, pid: 57386 });
     expect(calls).toEqual([`local-chrome:activate:${T2}@51078`, "raise:57386"]);
   });
 
@@ -146,7 +146,7 @@ describe("focusBrowserTab", () => {
       engines: [slow("builtin", 20, []), slow("local-chrome", 400, [tab(T1, { port: 1111 })]), slow("bridge", 60, [tab(T1, { port: 2222 })])],
       raiseApp: () => {},
     });
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, pid: 1234 });
     // The bridge answered at 60ms with the tab; the 400ms process scan did
     // not hold the click.
     expect(calls).toEqual([`bridge:activate:${T1}@2222`]);
@@ -161,7 +161,7 @@ describe("focusBrowserTab", () => {
       engines: [slow("builtin", 10, [tab(T2)]), slow("local-chrome", 20, new Error("gone")), slow("bridge", 120, [tab(T1)])],
       raiseApp: () => {},
     });
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, pid: 1234 });
     expect(calls).toEqual([`bridge:activate:${T1}@9333`]);
   });
 
@@ -221,7 +221,7 @@ describe("bridge focus engine", () => {
         calls.push(`raise:${pid}`);
       },
     });
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, pid: 90468 });
     expect(calls).toEqual(['bridge:activate:1E21CD78@{"port":41729,"token":"t0k","raise":true}', "raise:90468"]);
   });
 });
@@ -234,7 +234,7 @@ describe("focusRequestedTab", () => {
       raiseApp: () => {},
       resolveSessionTab: () => { throw new Error("not asked"); },
     });
-    expect(out).toEqual({ tab: "2be86883", result: { ok: true } });
+    expect(out).toEqual({ tab: "2be86883", result: { ok: true, pid: 1234 } });
     expect(calls).toEqual([`builtin:activate:${T1}@9333`]);
   });
 
@@ -247,7 +247,7 @@ describe("focusRequestedTab", () => {
       resolveSessionTab: (keys) => (asked.push(keys), T1),
     });
     expect(asked).toEqual([["session:s-1", "env:s-1"]]);
-    expect(out).toEqual({ tab: T1, result: { ok: true } });
+    expect(out).toEqual({ tab: T1, result: { ok: true, pid: 1234 } });
     expect(calls).toEqual([`builtin:activate:${T1}@9333`]);
   });
 

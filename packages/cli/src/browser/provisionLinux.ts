@@ -72,7 +72,12 @@ NEED=""
 # The Noto fonts: a stock image ships only Liberation, so any page outside
 # Latin script (Arabic, Hebrew, CJK, emoji) renders as missing-glyph boxes in
 # the agent's screenshots, the browser view and VNC alike.
-for p in xvfb ffmpeg tmux git rsync curl jq fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji; do dpkg -s "$p" >/dev/null 2>&1 || NEED="$NEED $p"; done
+# The rest after the fonts are cast computer's: AT-SPI and its GObject bindings
+# read an app's tree, libatk-adaptor bridges GTK3 apps onto the accessibility
+# bus, python3-xlib finds windows and takes screenshots, and xdotool and xclip
+# carry keyboard input and paste.
+for p in xvfb ffmpeg tmux git rsync curl jq fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji \
+  at-spi2-core libatk-adaptor python3-gi gir1.2-atspi-2.0 python3-xlib xdotool xclip; do dpkg -s "$p" >/dev/null 2>&1 || NEED="$NEED $p"; done
 if [ -n "$NEED" ]; then sudo apt-get update -qq && sudo apt-get install -y -qq $NEED; fi
 if ! command -v google-chrome >/dev/null 2>&1; then
   wget -qO /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
@@ -173,6 +178,13 @@ RestartSec=2
 [Install]
 WantedBy=multi-user.target
 UNIT
+
+echo "[4c/6] computer use (a user bus that outlives logins)"
+# The accessibility bus lives on the user's D-Bus session, which exists only
+# while a login does. The daemon is a system service with no login of its own,
+# so without lingering cast computer loses every app the moment the last SSH
+# session closes.
+sudo loginctl enable-linger ubuntu
 
 echo "[5/6] idle watchdog (${idleStopMinutes}m)"
 echo "${idleStopMinutes}" | sudo tee /etc/cast-idle-minutes >/dev/null
