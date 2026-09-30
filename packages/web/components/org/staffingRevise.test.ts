@@ -20,7 +20,7 @@ describe("proposalThread", () => {
   });
   test("a session author's conversation is the thread until the pointer lands", () => {
     const t = proposalThread(ORG_STAFFING_FIXTURE_SESSION_PROPOSAL, chiefTree);
-    expect(t).toMatchObject({ conversationId: "fixture-conv-review", shortId: "jx7rev1", name: "the agent that wrote this", named: false, role: null });
+    expect(t).toMatchObject({ conversationId: "fixture-conv-review", shortId: "jx7rev1", name: "the author of this proposal", named: false, role: null });
   });
   test("a role author without a pointer answers from its standing session", () => {
     const { thread: _t, ...noPointer } = ORG_STAFFING_FIXTURE_PROPOSAL;
@@ -59,7 +59,7 @@ describe("what a revise did", () => {
     expect(revisedLine(all, "Chief of Staff")).toBe("Chief of Staff removed 1 and added 1 since you last looked.");
     expect(revisedLine(all.slice(0, 1), "Chief of Staff")).toBe("Chief of Staff added 1 since you last looked.");
     expect(revisedLine([], "x")).toBe("");
-    expect(revisedLine(all.slice(0, 1), "the agent that wrote this")).toBe("The agent that wrote this added 1 since you last looked.");
+    expect(revisedLine(all.slice(0, 1), "the author of this proposal")).toBe("The author of this proposal added 1 since you last looked.");
   });
 });
 

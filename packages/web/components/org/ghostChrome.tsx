@@ -5,7 +5,7 @@
 // React Flow into the message bundle: everything here is plain React.
 import React, { useMemo } from "react";
 import { cn } from "../../lib/utils";
-import { GHOST } from "./orgMeta";
+import { CHIP_STATUS, GHOST } from "./orgMeta";
 import type { OrgChangeStatus } from "./orgStaffingTypes";
 import type { OrgGhostStub } from "./orgLayout";
 import { CHANGE_STATUS_META } from "./staffingModel";
@@ -13,14 +13,6 @@ import { proposalQuietLines } from "./proposalTree";
 import type { OrgProposalChange } from "./orgStaffingTypes";
 import type { OrgTree } from "./orgTypes";
 
-export const CHIP_STATUS: Record<OrgChangeStatus, { border: string; color: string }> = {
-  proposed: { border: GHOST.border, color: GHOST.color },
-  accepted: { border: "1.5px solid color-mix(in srgb, var(--sol-cyan) 60%, transparent)", color: "var(--sol-cyan)" },
-  applied: { border: "1.5px solid color-mix(in srgb, var(--sol-green) 60%, transparent)", color: "var(--sol-green)" },
-  skipped: { border: "1.5px dashed color-mix(in srgb, var(--sol-border) 60%, transparent)", color: "var(--sol-text-dim)" },
-  failed: { border: "1.5px dashed color-mix(in srgb, var(--sol-red) 70%, transparent)", color: "var(--sol-red)" },
-  removed: { border: "1.5px dashed color-mix(in srgb, var(--sol-border) 60%, transparent)", color: "var(--sol-text-dim)" },
-};
 
 /** A small dashed tag: "proposed", "retire", "this session", "accepted". */
 export function GhostTag({ label, status = "proposed", tone, className }: { label: string; status?: OrgChangeStatus; /** A colour of its own (a retire reads red, not the proposal violet). */ tone?: string; className?: string }) {
@@ -32,12 +24,6 @@ export function GhostTag({ label, status = "proposed", tone, className }: { labe
   );
 }
 
-/** The frame styling of a ghost stub: dashed violet, no plate, 55% content. */
-export function ghostFrameStyle(stub: OrgGhostStub): React.CSSProperties {
-  return stub.solid
-    ? { borderTopWidth: 3, borderTopColor: "var(--sol-cyan)", background: "var(--sol-card)" }
-    : { border: GHOST.border, borderTopWidth: 1.5, background: GHOST.fill };
-}
 
 
 /** A change's status as a filled pill ("applied", "skipped", "failed"). */

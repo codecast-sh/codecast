@@ -143,7 +143,7 @@ describe("orgRoles.staff", () => {
     const turns = tables.pending_messages.filter((p) => p.conversation_id === "anchor-conv");
     expect(turns).toHaveLength(2);
     expect(turns[0].content).toBe(`<session-message from="unknown" name="Me">\n${seatingNote(role, "Acme")}\n</session-message>`);
-    expect(turns[0].content).toContain("I have seated you as the Chief of Staff of Acme (@chief-of-staff, or-1): https://codecast.sh/org/or-1.");
+    expect(turns[0].content).toContain("You are now the Chief of Staff of Acme (@chief-of-staff): https://codecast.sh/org/or-1.");
     expect(turns[0].content).toContain("Nothing else changed: your memory, your handle, your chat and Slack bindings and this thread are as they were.");
     expect(turns[0].status).not.toBe("held");
     expect(turns[1].content).toBe(`${chiefOfStaffOpening({ workspace: "Acme", person: "Me" })}\n\nRead \`cast brief\` now.`);
@@ -244,7 +244,7 @@ describe("orgRoles.staff", () => {
     await expect(performStaff(ctx, MATE as any, { team_id: TEAM, seat: "fresh" })).rejects.toThrow(/host or a team admin/);
     expect(tables.anchors[0].status).toBe("active");
     await performStaff(ctx, ME as any, { team_id: TEAM });
-    await expect(performStaff(ctx, ME as any, { team_id: TEAM, seat: "fresh" })).rejects.toThrow(/already stands/);
+    await expect(performStaff(ctx, ME as any, { team_id: TEAM, seat: "fresh" })).rejects.toThrow(/already has a session/);
   });
 
   test("unseating the chief keeps the standing agent by default: the old title returns, the pointers clear, the anchor answers again", async () => {
@@ -308,7 +308,7 @@ describe("orgRoles.staff", () => {
     expect(conv.seat_previous).toEqual({ title: "Anchor", title_is_custom: true });
     expect(tables.pending_messages).toHaveLength(1);
     expect(tables.pending_messages[0].from_user_id).toBe(ME);
-    expect(tables.pending_messages[0].content).toContain("I have seated you as the Chief of Staff of Acme (@chief-of-staff, or-4)");
+    expect(tables.pending_messages[0].content).toContain("You are now the Chief of Staff of Acme (@chief-of-staff): ");
     // A second run finds nothing to do.
     expect(await performBackfillSeatedChiefs(ctx, false)).toEqual({ dry_run: false, updated: [], skipped: 1 });
     expect(tables.pending_messages).toHaveLength(1);
@@ -405,7 +405,7 @@ describe("orgRoles.staff", () => {
     tables.conversations.push({ _id: "anchor-conv", user_id: ME, acting_user_id: BOT, anchor_id: "anchor-t", session_id: "s-anchor", short_id: "jxanchr", title: "Anchor", title_is_custom: true, status: "active", agent_type: "claude_code", updated_at: NOW, message_count: 9, team_id: TEAM, is_private: false, persistent: true, project_path: "/repo" });
     const out = await performStaff(ctx, ME as any, { team_id: TEAM });
     // Naming another session while the chief stands is refused, not ignored.
-    await expect(performStaff(ctx, ME as any, { team_id: TEAM, adopt_conversation_id: "jxmine1" })).rejects.toThrow(/already stands in another session/);
+    await expect(performStaff(ctx, ME as any, { team_id: TEAM, adopt_conversation_id: "jxmine1" })).rejects.toThrow(/already runs in another session/);
     // Naming the chief's own session is the idempotent repeat.
     expect((await performStaff(ctx, ME as any, { team_id: TEAM, adopt_conversation_id: "jxanchr" })).already_existed).toBe(true);
     // `cast anchor rm` on the row directly leaves a role pointing at a dead anchor: the seat is empty.
@@ -446,7 +446,7 @@ describe("orgRoles.staff", () => {
     const { ctx } = world({
       org_roles: [{ _id: "role-other", short_id: "or-2", scope_type: "team", team_id: TEAM, host_user_id: ME, name: "Other", handle: "other", scope: { project_ids: [], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, status: "active", anchor_id: "anchor-other", created_by: ME, created_at: 1, updated_at: 1 }],
     });
-    await expect(performStaff(ctx, ME as any, { team_id: TEAM, adopt_conversation_id: "hand1" })).rejects.toThrow(/hand/);
+    await expect(performStaff(ctx, ME as any, { team_id: TEAM, adopt_conversation_id: "hand1" })).rejects.toThrow(/already reports to a role/);
     await expect(performStaff(ctx, ME as any, { team_id: TEAM, adopt_conversation_id: "standing-other" })).rejects.toThrow(/another role's standing session/);
   });
 

@@ -97,7 +97,7 @@ function fixtures(extra: Record<string, any[]> = {}) {
       // Seven hands under growth, pinned dormant, one of them settled done.
       ...Array.from({ length: 7 }, (_, i) => conv(`conversations_hand${i}`, { org_role_id: GROWTH, thread_state: "Working the landing page", thread_state_status: i === 6 ? "done" : "dormant", thread_state_at: NOW - H })),
     ],
-    // Three decisions on growth's ladder: recommended at 4, 12 and 20 minutes (median 12); one escalated.
+    // Three decisions on growth's ladder: recommended at 4, 12 and 20 minutes (median 12); one carries a pass-up note from before S28.
     session_decisions: [
       { _id: "sd1", conversation_id: "conversations_hand0", session_id: "s", user_id: ME, short_id: "sd-1", question: "A?", options: [{ label: "x" }, { label: "y" }], blocking: true, status: "answered", created_at: NOW - 2 * D, hops: [{ role_id: GROWTH, recommendation: 0, at: NOW - 2 * D + 4 * 60_000 }] },
       { _id: "sd2", conversation_id: "conversations_hand0", session_id: "s", user_id: ME, short_id: "sd-2", question: "B?", options: [{ label: "x" }, { label: "y" }], blocking: true, status: "pending", created_at: NOW - D, hops: [{ role_id: GROWTH, recommendation: 1, at: NOW - D + 12 * 60_000 }] },
@@ -169,7 +169,7 @@ describe("org.health", () => {
     expect(growth.spend.wakes_7d_avg).toBeCloseTo(8 / 7);
     // Samples: 4, 12, 20 (recommended), 30 (silent past the deadline), 40 (never answered before the person did); the 2 minute one is too young.
     expect(growth.flow).toMatchObject({
-      decisions_7d: 6, items_reached_7d: 8, items_changed_7d: 31, hands_window: 7, median_recommend_min: 20, escalations_7d: 0, done_7d: 2,
+      decisions_7d: 6, items_reached_7d: 8, items_changed_7d: 31, hands_window: 7, median_recommend_min: 20, done_7d: 2,
       handoffs_7d: { done: 2, blocked: 1, needs_context: 0 }, review_stalls: 3, mentions_7d: 2,
     });
     expect(growth.flow.sends_7d).toEqual({ to: [], from: [{ role_id: BILLING, handle: "billing", n: 6 }] });
@@ -193,7 +193,9 @@ describe("org.health", () => {
     const billing = r.roles.find((x) => x.handle === "billing")!;
     expect(billing.ledger).toEqual({ open_tasks: 0, in_flight: 0, active_plans: 0 });
     expect(billing.load).toEqual({ items_per_day: 0, decisions_per_day: 1 / 7, live_hands: 0, hands_cap: 6, direct_reports: 0, open_stalls: 0, cap_hit_days: 0 });
-    expect(billing.flow).toMatchObject({ decisions_7d: 1, median_recommend_min: null, escalations_7d: 1, done_7d: 0 });
+    expect(billing.flow).toMatchObject({ decisions_7d: 1, median_recommend_min: null, done_7d: 0 });
+    // Health counts what S28 has: nothing named an escalation is left on a role's flow.
+    expect(Object.keys(billing.flow).filter((k) => /escalat/i.test(k))).toEqual([]);
     expect(billing.flow.sends_7d).toEqual({ to: [{ role_id: GROWTH, handle: "growth", n: 6 }], from: [] });
     expect(billing.idle_days).toBeNull();
     expect(billing.last_move_at).toBeNull();

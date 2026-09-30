@@ -39,12 +39,12 @@ describe("lineOptions", () => {
   test("shipped templates first, own workflows after, an own row with a shipped slug wins", () => {
     const rows = lineOptions([{ slug: "feature", name: "Feature (ours)" }, { slug: "release", name: "Release train" }, { slug: "release" }], "line");
     expect(rows.map((r) => r.slug)).toEqual(["line", "feature", "plan-autopilot", "release"]);
-    expect(rows[0]).toEqual({ slug: "line", label: "line (shipped)", shipped: true });
+    expect(rows[0]).toEqual({ slug: "line", label: "Standard", shipped: true });
     expect(rows[1]).toEqual({ slug: "feature", label: "Feature (ours) (yours)", shipped: false });
     expect(rows[3].label).toBe("Release train (release)");
   });
   test("a current slug nothing lists stays selectable", () => {
     const rows = lineOptions([], "custom-line");
-    expect(rows.at(-1)).toEqual({ slug: "custom-line", label: "custom-line (not pushed)", shipped: false });
+    expect(rows.at(-1)).toEqual({ slug: "custom-line", label: "custom-line (not found)", shipped: false });
   });
 });

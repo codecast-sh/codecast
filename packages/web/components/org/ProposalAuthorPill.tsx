@@ -61,7 +61,7 @@ export function ProposalAuthorPill({ author, onOpenSession, className, size = "s
       </>
     );
     const style = { borderColor: "color-mix(in srgb, var(--sol-violet) 35%, transparent)", background: "color-mix(in srgb, var(--sol-violet) 8%, transparent)", color: "var(--sol-text)" };
-    const title = `Written by the role ${view.name}${view.handle ? ` (@${view.handle})` : ""}.${view.href ? " Opens its scope page." : ""}`;
+    const title = `Written by the role ${view.name}${view.handle ? ` (@${view.handle})` : ""}.${view.href ? " Opens its page." : ""}`;
     // A role that exists has a page, and what it looks after is one hover
     // away (org-roles-run-work.md R3); the card replaces the title tooltip.
     const roleShortId = view.href ? /\/(or-\d+)$/.exec(view.href)?.[1] : undefined;

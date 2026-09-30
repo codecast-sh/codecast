@@ -22,7 +22,7 @@ export const COMPANY_REVIEW_PROMPT = "Company review. Run `cast org review` and 
 export const ROLE_CHECK_EVERY_MS = 24 * 60 * 60 * 1000;
 export const ROLE_CHECK_PROMPT = [
   `Check your area. Run \`cast brief\`: it shows what changed since you last looked, which of your sessions wait on a person, and how the people who report to you are doing against their goals.`,
-  `Act on what your switch and your grants let you act on. Put in front of the person what needs them, with your recommendation. When nothing needs doing, say so in one line and end the turn.`,
+  `Act on what is yours to act on. Put in front of the person what needs them, with your recommendation. When nothing needs doing, say so in one line and end the turn.`,
 ].join("\n");
 
 export function roleRoutineFor(role: { handle: string; name: string }): { title: string; prompt: string; every_ms: number } {
@@ -42,27 +42,39 @@ export const ROLE_NEEDS_INPUT_PROMPT = [
 ].join("\n");
 
 const isNeedsInputTrigger = (t: any) => t.schedule_type === "event" && t.event_filter?.event_type === SESSION_NEEDS_INPUT_EVENT;
+export const isLiveTrigger = (t: any) => t.status === "scheduled" || t.status === "running" || t.status === "paused";
 
-/** The role's needs-input trigger in whatever status it stands, a live one
- *  first, or null when the seat never had one. Found by its event, never its
- *  title, so a person may rename it; one they cancelled is still found, which
- *  is what keeps a cancel from being undone by the next arming. */
-export async function findRoleNeedsInputTrigger(ctx: { db: any }, standing: { _id: any } | null): Promise<any | null> {
-  if (!standing) return null;
-  const rows: any[] = (await ctx.db
+/** Every trigger ever armed on a standing session, in whatever status. */
+async function triggersOf(ctx: { db: any }, standing: { _id: any }): Promise<any[]> {
+  return await ctx.db
     .query("agent_tasks")
     .withIndex("by_originating_conversation", (q: any) => q.eq("originating_conversation_id", standing._id))
-    .collect()).filter(isNeedsInputTrigger);
-  return rows.find((t) => t.status === "scheduled" || t.status === "running") ?? rows.find((t) => t.status === "paused") ?? rows[0] ?? null;
+    .collect();
+}
+
+// A live one first, so a lookup in any status never picks a dead row over the
+// one that runs.
+const liveFirst = (rows: any[]): any | null =>
+  rows.find((t) => t.status === "scheduled" || t.status === "running") ?? rows.find((t) => t.status === "paused") ?? rows[0] ?? null;
+
+// A dead row counts only when it carries this role's id, so the trigger of an
+// earlier role that stood in the same session never stops a new role from
+// getting its own, while one the person cancelled for THIS role is still
+// found and the next arming leaves it cancelled (S25).
+const ofRole = (role: { _id: any }) => (t: any) => isLiveTrigger(t) || String(t.role_id ?? "") === String(role._id);
+
+/** The role's needs-input trigger in whatever status it stands, a live one
+ *  first, or null when the role never had one on this session. Found by its
+ *  event, never its title, so a person may rename it. Without `role`, any
+ *  needs-input trigger ever armed on the session. */
+export async function findRoleNeedsInputTrigger(ctx: { db: any }, standing: { _id: any } | null, role?: { _id: any }): Promise<any | null> {
+  if (!standing) return null;
+  return liveFirst((await triggersOf(ctx, standing)).filter((t) => isNeedsInputTrigger(t) && (!role || ofRole(role)(t))));
 }
 
 /** Every live trigger armed on a role's standing session. */
 export async function liveRoutinesOf(ctx: { db: any }, standing: { _id: any }): Promise<any[]> {
-  const rows: any[] = await ctx.db
-    .query("agent_tasks")
-    .withIndex("by_originating_conversation", (q: any) => q.eq("originating_conversation_id", standing._id))
-    .collect();
-  return rows.filter((t) => t.status === "scheduled" || t.status === "running" || t.status === "paused");
+  return (await triggersOf(ctx, standing)).filter(isLiveTrigger);
 }
 
 /** The role's own routine as it stands (read only), or null before provision. */
@@ -70,4 +82,11 @@ export async function findRoleRoutine(ctx: { db: any }, role: { handle: string; 
   if (!standing) return null;
   const title = roleRoutineFor(role).title;
   return (await liveRoutinesOf(ctx, standing)).find((t) => t.title === title) ?? null;
+}
+
+/** The role's routine in whatever status it stands, a live one first, by the
+ *  same rule as its needs-input trigger (ofRole). */
+export async function findRoleRoutineInAnyStatus(ctx: { db: any }, role: { _id: any; handle: string; name: string }, standing: { _id: any }): Promise<any | null> {
+  const title = roleRoutineFor(role).title;
+  return liveFirst((await triggersOf(ctx, standing)).filter((t) => t.title === title && ofRole(role)(t)));
 }

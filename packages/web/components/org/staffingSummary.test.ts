@@ -5,7 +5,7 @@
 import { describe, expect, test } from "bun:test";
 import { ORG_FIXTURE } from "./orgFixture";
 import { ORG_STAFFING_FIXTURE_HEALTH, ORG_STAFFING_FIXTURE_PROPOSAL } from "./orgStaffingFixture";
-import { capsLine, hasAcceptedBefore, splitAsk } from "./staffingModel";
+import { hasAcceptedBefore, splitAsk } from "./staffingModel";
 import { CHANGE_KIND_META, changeLine, kindDescription, kindLabel } from "./orgMeta";
 import { GLOSSARY_ORDER, HOW_THIS_WORKS, glossaryEntries } from "./orgGlossaryWords";
 import { ORG_CHANGE_KINDS } from "@codecast/shared/contracts/orgProposal";
@@ -24,14 +24,6 @@ describe("the ask", () => {
     expect(splitAsk(undefined)).toEqual({ ask: "", tail: "", evidenceHref: null });
   });
 
-});
-
-describe("the limits line", () => {
-  test("capsLine reads the three limits in one line, for the glossary alone", () => {
-    expect(capsLine({ hands_per_day: 3, wakes_per_day: 12, tokens_per_day: 500_000 })).toBe("3 hands, 12 wakes, 500,000 tokens");
-    expect(capsLine({ wakes_per_day: 1 })).toBe("1 wake");
-    expect(capsLine(null)).toBe("no limit set");
-  });
 });
 
 describe("the intro rule", () => {
@@ -55,15 +47,15 @@ describe("the kind words", () => {
     }
     expect(kindLabel("task_status")).toBe("Tasks to close or reopen");
     expect(kindLabel("rename")).toBe("Changes this version cannot show yet");
-    expect(kindDescription("rename")).toBe('This version of codecast does not know this kind of change ("rename"). Update, or ask the agent what it does.');
-    expect(kindDescription(undefined)).toMatch(/does not know this kind of change\. Update/);
+    expect(kindDescription("rename")).toBe('This version of codecast does not know this kind of change ("rename"). Update codecast, or ask the chief of staff what it does.');
+    expect(kindDescription(undefined)).toMatch(/does not know this kind of change\. Update codecast/);
     expect(changeLine({ kind: "task_status", task: "ct-1", status: "done", reason: "x" })).toBe("Mark task ct-1 done");
     expect(changeLine({ kind: "rename" } as any)).not.toMatch(/not supported in this build/);
   });
 });
 
 describe("the glossary", () => {
-  test("eight words, one sentence each, with examples from this workspace where it has one", () => {
+  test("one sentence each, no short id in an example, with examples from this workspace where it has one", () => {
     const entries = glossaryEntries(ORG_FIXTURE, ORG_STAFFING_FIXTURE_HEALTH, P);
     expect(entries.map((e) => e.word)).toEqual(GLOSSARY_ORDER);
     expect(entries).toHaveLength(8);
@@ -75,8 +67,9 @@ describe("the glossary", () => {
     expect(by.role.own).toBe(true);
     expect(by.role.example).toMatch(/^@growth, /);
     expect(by.proposal.own).toBe(true);
-    expect(by.proposal.example).toMatch(/^op-7, the one open now: 8 changes, 2 decided\./);
-    expect(by.budget.example).toMatch(/tokens a day\.$/);
+    expect(by.proposal.example).toBe("The one open now: 8 changes, 2 decided.");
+    for (const e of entries) expect(e.example).not.toMatch(/\b(op|ct|pl|or|tr)-\d+\b/);
+    expect(by.session.example).toMatch(/sessions? working right now\.$/);
   });
 
   test("with an empty workspace every example is a general one, and the short page has four parts", () => {

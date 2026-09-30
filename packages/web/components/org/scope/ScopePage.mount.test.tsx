@@ -2,14 +2,14 @@
 // F4), mounted in jsdom against the org fixture. Proves: the page opens as
 // the role's standing conversation with the board beside it, in its three
 // widths (a column, an overlay, a phone sheet); the header's control closes
-// and reopens the panel and carries the dot when the role put something in
-// front of the person (F5); the Scope tab is the three block briefing of F5.1
-// and holds no number outside its own lines (F5.4);
-// Talk and Wake are gone from the header; a link straight to a tab opens the
-// panel on it; a seat with no standing agent says what it is and offers the
-// one gesture; the root without an anchor offers to create one; and the
-// Sessions tab groups hands by who acts next with the inbox's order, a state
-// line, an age and live subtask counts.
+// and reopens the panel; a role has six tabs and opens on Overview, whose
+// briefing (F5.1) holds no number outside its own lines (F5.4); a link
+// written for a tab that moved still lands on what it named; Talk and Wake
+// are gone from the header; a role that has not started says what it is and
+// offers the one gesture; the root without an anchor offers to create one;
+// pause and retire are the header's menu, retire behind one confirm; and the
+// Sessions tab groups sessions by who acts next with the inbox's order, a
+// state line, an age and live subtask counts.
 // Run: bun components/org/scope/ScopePage.mount.test.tsx
 import { test } from "bun:test";
 import { realInboxStore, restoreInboxStoreAfterAll } from "../../__tests__/mockInboxStore";
@@ -27,7 +27,7 @@ function world() {
   worldOnce ??= (async () => {
     const { JSDOM } = await import("jsdom");
     const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", { url: "https://local.codecast.sh", pretendToBeVisual: true });
-    for (const key of ["window", "document", "navigator", "HTMLElement", "HTMLButtonElement", "HTMLInputElement", "HTMLTextAreaElement", "Element", "Node", "MutationObserver", "CustomEvent", "Event", "KeyboardEvent", "getComputedStyle", "requestAnimationFrame", "cancelAnimationFrame"]) {
+    for (const key of ["window", "document", "navigator", "HTMLElement", "HTMLButtonElement", "HTMLInputElement", "HTMLTextAreaElement", "Element", "Node", "MutationObserver", "CustomEvent", "Event", "KeyboardEvent", "getComputedStyle", "requestAnimationFrame", "cancelAnimationFrame", "NodeFilter", "DocumentFragment"]) {
       Object.defineProperty(globalThis, key, { value: (dom.window as any)[key], configurable: true, writable: true });
     }
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -51,7 +51,7 @@ function world() {
       // The page reads whether the diff is open (it closes the board for it).
       clientState: { ui: {}, layouts: {} },
       updateOrgRole: (id: string, fields: any) => calls.push(`update:${id}:${JSON.stringify(fields)}`),
-      reparentOrgRole: () => {}, retireOrgRole: () => {},
+      reparentOrgRole: () => {}, retireOrgRole: (id: string, choice?: string) => calls.push(`retire:${id}:${choice ?? ""}`),
     };
     const collections: Record<string, any[]> = { projects: [], plans: [], tasks: [], docs: [] };
     const useInboxStore = Object.assign((sel: any) => sel(state), { getState: () => state, setState: () => {} });
@@ -100,7 +100,7 @@ function world() {
     }));
     mock.module("./ScopeFeed", () => ({ ScopeFeed: (props: any) => React.createElement("div", { "data-scope-feed": JSON.stringify(props.scope) }, "feed") }));
     mock.module("../../../app/tasks/page", () => ({ TaskListContent: () => React.createElement("div", { "data-task-list": true }, "tasks") }));
-    mock.module("./ScopeSettings", () => ({ ScopeSettings: (props: any) => React.createElement("div", { "data-scope-settings": props.armRetire ? "armed" : "idle" }, "settings") }));
+    mock.module("./ScopeSettings", () => ({ ScopeSettings: (props: any) => React.createElement("div", { "data-scope-settings": "1" }, "settings") }));
     mock.module("./ScopeLineTab", () => ({ ScopeLineTab: () => React.createElement("div", { "data-scope-line": true }) }));
     mock.module("./ScopeTriggersTab", () => ({ ScopeTriggersTab: () => React.createElement("div", { "data-scope-triggers": true }) }));
     mock.module("../../KeyboardShortcutsHelp", () => ({ ShortcutTooltip: ({ children }: any) => children, KeyCap: ({ children }: any) => React.createElement("kbd", null, children) }));
@@ -113,7 +113,8 @@ function world() {
     mock.module("../../initiatives/ProjectInitiatives", () => ({ ProjectInitiatives: ({ projectId }: any) => React.createElement("span", { "data-project-initiatives": projectId }) }));
     mock.module("../../charter/ProjectLeadChip", () => ({ ProjectLeadChip: ({ projectId }: any) => React.createElement("span", { "data-project-lead-chip": projectId }), ProjectLeadMark: () => null, HireLeadDialog: () => null }));
     mock.module("../../../hooks/useProjectLead", () => ({ useProjectLead: () => ({ project: undefined, roles: null, lead: { kind: "none" }, otherWorkspace: false }) }));
-    mock.module("../../../lib/retireRole", () => ({ retireToastText: () => "retired" }));
+    const realRetire = { ...(await import("../../../lib/retireRole")) };
+    mock.module("../../../lib/retireRole", () => ({ ...realRetire, retireToastText: () => "retired" }));
     mock.module("../OrgScopePanel", () => ({ DocRow: () => null, InlineEdit: () => null }));
     mock.module("../../ConversationList", () => ({ AgentIcon: ({ agentType }: any) => React.createElement("i", { "data-agent": agentType }) }));
     mock.module("../../DocumentDetailLayout", () => ({ DocumentDetailLayout: () => null }));
@@ -178,15 +179,17 @@ async function verifyScopePage() {
   assert.ok(q("[data-scope-reports-to]"), "the header keeps the reports to line");
   assert.equal(q("[data-scope-state]")!.getAttribute("data-scope-state"), "awake");
   assert.equal(q("[data-scope-aside]")!.getAttribute("data-scope-aside"), "side", "the panel is open by default");
-  // A role's page opens on Scope (org-roles-run-work.md R3): what it looks
-  // after, at full size, before any feed.
-  assert.equal(q("[data-scope-tab-active]")!.getAttribute("data-scope-tab-active"), "scope", "a role's page opens on Scope");
-  assert.equal(qa("[data-scope-tab]")[0].getAttribute("data-scope-tab"), "scope", "and Scope is the first tab");
-  assert.ok(q("[data-scope-briefing]"), "the Scope tab is the briefing (F5.1)");
-  assert.equal(q("[data-scope-feed]"), null, "the feed waits behind its tab");
-  assert.deepEqual(qa("[data-scope-briefing] [data-scope-section]").map((el) => el.getAttribute("data-scope-section")), ["doing"], "the sections with something to say, in order; this role has written no line yet, and hands waiting on the role are not a section");
-  assert.equal(q('[data-role-scope="page"]'), null, "the project cards, the hand groups and the counts left the first screen");
-  assert.equal(qa("[data-scope-tab]").length, 12, "every tab survives");
+  // A role's page opens on Overview (org-roles-run-work.md R3): what it is
+  // for, the briefing, its notes behind a fold, then what happened lately.
+  assert.equal(q("[data-scope-tab-active]")!.getAttribute("data-scope-tab-active"), "scope", "a role's page opens on Overview");
+  assert.deepEqual(qa("[data-scope-tab]").map((el) => el.textContent), ["Overview", "Work", "Sessions", "Decisions", "Triggers", "Settings"], "a role has six tabs, in this order");
+  assert.ok(q("[data-scope-briefing]"), "the Overview carries the briefing (F5.1)");
+  assert.deepEqual(qa("[data-scope-briefing] [data-scope-section]").map((el) => el.getAttribute("data-scope-section")), ["doing"], "the sections with something to say, in order; this role has written no line yet, and sessions waiting on the role are not a section");
+  assert.deepEqual(qa("[data-role-overview] > [data-scope-section]").map((el) => el.getAttribute("data-scope-section")), ["charter", "notes", "lately"], "what it is for above the briefing; its notes and the activity under it");
+  assert.match(q("[data-role-charter]")!.textContent!, /Owns organic search, paid search and the weekly growth review\./, "the charter reads on the first screen");
+  assert.equal(q('[data-scope-section="notes"]')!.hasAttribute("open"), false, "its notes stay folded until asked for");
+  assert.ok(q('[data-scope-section="lately"] [data-scope-feed]'), "the activity is the Overview's last block, not a tab");
+  assert.equal(q('[data-role-scope="page"]'), null, "the project cards, the session groups and the counts left the first screen");
   assert.equal(qa("[data-scope-tab-count]").length, 0, "and the tab strip carries no number");
   assert.equal(q("[data-scope-panel-dot]"), null, "the toggle carries no dot: what the role needs from the person is in its own thread");
   // Close and reopen from the header.
@@ -203,8 +206,8 @@ async function verifyScopePage() {
   await click(q("[data-scope-panel-toggle]"));
   await click(q('[data-scope-tab="sessions"]'));
   assert.equal(calls.pop(), "replace:/org/or-1?tab=sessions");
-  await click(q('[data-scope-tab="feed"]'));
-  assert.equal(calls.pop(), "replace:/org/or-1?tab=feed");
+  await click(q('[data-scope-tab="work"]'));
+  assert.equal(calls.pop(), "replace:/org/or-1?tab=work");
   // The tab the page opens on is its bare URL.
   await click(q('[data-scope-tab="scope"]'));
   assert.equal(calls.pop(), "replace:/org/or-1");
@@ -236,12 +239,24 @@ async function verifyScopePage() {
   await mount("or-1");
   assert.equal(q("[data-scope-aside]")!.getAttribute("data-scope-aside"), "sheet");
   assert.equal(q("[data-scope-tab-active]")!.getAttribute("data-scope-tab-active"), "sessions");
-  // A role only tab is refused for the root and falls back to the feed.
-  env.qs = "tab=brief";
+  // A link written for a tab that moved lands on what it named: the tasks by
+  // status are a view of Work, the role's notes and charter are on Overview.
   env.phone = false; env.wide = true;
+  env.qs = "tab=line";
+  await mount("or-1");
+  assert.equal(q("[data-scope-tab-active]")!.getAttribute("data-scope-tab-active"), "work");
+  assert.ok(q("[data-scope-line]"), "the old Line tab is Work, by status");
+  assert.deepEqual(qa("[data-work-view]").map((el) => el.textContent), ["Tasks", "By status", "Plans", "Pages"]);
+  await click(q('[data-work-view="tasks"]'));
+  assert.ok(q("[data-task-list]"), "Work opens its task list");
+  env.qs = "tab=charter";
+  await mount("or-1");
+  assert.equal(q("[data-scope-tab-active]")!.getAttribute("data-scope-tab-active"), "scope");
+  // A role only tab is refused for the root and falls back to its activity.
+  env.qs = "tab=brief";
   await mount("workspace");
   assert.equal(q("[data-scope-tab-active]")!.getAttribute("data-scope-tab-active"), "feed");
-  assert.equal(qa("[data-scope-tab]").length, 7, "the root has no role only tabs");
+  assert.deepEqual(qa("[data-scope-tab]").map((el) => el.textContent), ["Activity", "Work", "Sessions", "Decisions"], "the workspace has four tabs");
   env.qs = "";
 
   // ── the root: its agent's conversation; without one, the gesture is to hire the root role ──
@@ -261,52 +276,55 @@ async function verifyScopePage() {
   state.currentUser = { _id: "fixture-user-me" };
   env.tree = withStanding;
 
-  // ── a seat never provisioned: say what it is, offer to bring it online ──
+  // ── a role that has not started: say what it is, offer to start it ──
   const unseated: OrgTree = { ...withStanding, roles: [{ ...growth, standing: null, anchor_id: undefined, counts: { ...growth.counts, needs_input: 0 } }] };
   env.tree = unseated;
   await mount("or-1");
   assert.equal(q("[data-thread]"), null, "no composer that goes nowhere");
   assert.equal(q("[data-composer]"), null);
   assert.ok(q("[data-scope-unseated]"));
-  assert.match(text(), /Head of Growth is not online yet/);
+  assert.match(text(), /Head of Growth has not started yet/);
   assert.match(text(), /Owns organic search, paid search and the weekly growth review\./, "the charter says what the area is");
-  assert.match(text(), /It covers Growth, SEO and AI citations\./);
+  assert.match(text(), /It looks after Growth, SEO and AI citations\./);
   assert.match(text(), /reports to Ashot Petrosian/);
-  assert.equal(q("[data-scope-state]"), null, "no state chip without a standing agent");
-  assert.match(q("[data-scope-stripe]")!.textContent!, /Not online yet/);
+  assert.equal(q("[data-scope-state]"), null, "no state chip before it starts");
+  assert.match(q("[data-scope-stripe]")!.textContent!, /Not started yet/);
   await click(q("[data-scope-provision]"));
-  assert.ok(calls.some((c) => c === `mutation:{"role_id":"${growth._id}"}`), "the one gesture provisions the role");
-  assert.ok(q("[data-scope-aside]"), "the board is still beside it");
+  assert.ok(calls.some((c) => c === `mutation:{"role_id":"${growth._id}"}`), "the one gesture starts the role");
+  assert.ok(q("[data-scope-aside]"), "the panel is still beside it");
   // A person who cannot reshape the role is told who can.
   env.tree = { ...unseated, people: unseated.people.map((p) => ({ ...p, is_me: false, role: "member" as const })) };
   state.currentUser = { _id: "fixture-user-sam" };
   await mount("or-1");
   assert.equal(q("[data-scope-provision]"), null);
-  assert.match(q("[data-scope-ask-host]")!.textContent!, /Ask Ashot Petrosian to bring it online/);
+  assert.match(q("[data-scope-ask-host]")!.textContent!, /Ask Ashot Petrosian to start it/);
   state.currentUser = { _id: "fixture-user-me" };
   env.tree = withStanding;
 
   // ── paused: the note above the composer, resume in one click ──
   env.tree = { ...withStanding, roles: [{ ...withStanding.roles[0], status: "paused" }] };
   await mount("or-1");
-  assert.match(q("[data-chief-paused]")!.textContent!, /Head of Growth is paused: its scheduled checks hold until you resume it/);
+  assert.match(q("[data-chief-paused]")!.textContent!, /Head of Growth is paused: its triggers hold until you resume it\. Messages still reach it\./);
   await click(qa("[data-chief-paused] button")[0]);
   assert.equal(calls.pop(), `update:${growth._id}:{"status":"active"}`);
   env.tree = withStanding;
 
-  // ── Retire from the header lands on Settings, armed, with the panel open ──
+  // ── pause and retire are the header's menu; retire asks first, in one dialog ──
   await mount("or-1");
-  await click(q("[data-scope-panel-close]"));
-  // Retire is a rare control: it sits behind the header's seat menu.
-  await act(async () => { q("[data-scope-actions]")!.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+  const openMenu = () => act(async () => { q("[data-scope-actions]")!.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+  await openMenu();
+  assert.deepEqual(qa("[data-scope-action]").map((el) => el.textContent), ["Pause role", "Retire role…"], "the same words wherever a role is paused or retired");
+  await click(q('[data-scope-action="pause"]'));
+  assert.equal(calls.pop(), `update:${growth._id}:{"status":"paused"}`);
+  await openMenu();
   await click(q('[data-scope-action="retire"]'));
-  assert.equal(calls.pop(), "replace:/org/or-1?tab=settings");
-  env.qs = "tab=settings";
-  await rerender("or-1");
-  assert.equal(q("[data-scope-settings]")!.getAttribute("data-scope-settings"), "armed");
-  env.qs = "";
+  assert.match(q("[data-retire-dialog]")!.textContent!, /Retire Head of Growth\?/);
+  assert.match(q("[data-retire-dialog]")!.textContent!, /Roles under it report to Ashot Petrosian\. Its triggers are cancelled and its thread is kept\./, "what retiring does is said once, where it is confirmed");
+  assert.ok(!calls.some((c) => c.startsWith("retire:")), "nothing is retired before the confirm");
+  await click(q("[data-retire-submit]"));
+  assert.deepEqual(calls.slice(-3), [`retire:${growth._id}:`, "toast:retired", "push:/org"]);
 
-  // ── F4.3: the Sessions tab groups hands by who acts next ──
+  // ── F4.3: the Sessions tab groups sessions by who acts next ──
   const hand = (i: number, state: OrgSession["state"], age: number, title: string): OrgSession => ({
     _id: `h${i}`, short_id: `jx7h${i}`, title, agent_type: "claude", state, updated_at: T0 - age, subagent_count: 0, is_anchor: false,
   });

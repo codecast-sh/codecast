@@ -83,7 +83,7 @@ export function proposalAsks(p: Pick<OrgProposalRow, "asks" | "changes">, names?
 export function asksBarWords(toDecide: number, total: number): { count: string; action: string } {
   return toDecide === 0
     ? { count: `All ${total} decided`, action: "See them" }
-    : { count: `${toDecide} to decide`, action: "Open the asks" };
+    : { count: `${toDecide} to decide`, action: "Open them" };
 }
 
 /** The header's count: an ask is decided once nothing in it waits. */
@@ -159,7 +159,7 @@ export function letterParts(summaryMd: string | null | undefined): { lead: strin
  *  person who has never accepted a change (S19). One line: who is speaking,
  *  what it does, and that the person decides. */
 export function letterIntro(authorName: string, named: boolean): string {
-  const who = named ? `I am your ${authorName}, an agent that looks at how the work here is organized and suggests changes.` : "I am an agent that looked at how the work here is organized, and these are the changes I suggest.";
+  const who = named ? `I am your ${authorName}. I look at how the work here is organized and suggest changes.` : "I looked at how the work here is organized, and these are the changes I suggest.";
   return `${who} You decide each one, and nothing changes until you accept it.`;
 }
 

@@ -406,7 +406,7 @@ export const FLAG_LABEL: Record<HealthFlag["code"], string> = {
   no_charter: "no charter written",
   chatter: "talks more than it delivers",
   unfiled_plan: "plan not under a project",
-  program_ended: "its program ended",
+  program_ended: "the work it was hired for ended",
   wide_ledger: "too much open at once",
   stale_plan: "plan record behind",
   stale_task: "task record behind",
@@ -716,18 +716,6 @@ export function splitAsk(summaryMd: string | null | undefined): { ask: string; t
   });
   const paragraphs = kept.join("\n").split(/\n[ \t]*\n+/).map((p) => p.trim()).filter(Boolean);
   return { ask: paragraphs[0] ?? "", tail: paragraphs.slice(1).join("\n\n"), evidenceHref };
-}
-
-export type BudgetCaps = { hands_per_day: number; wakes_per_day: number; tokens_per_day: number };
-/** "6 hands, 40 wakes, 400,000 tokens": the three limits in one line, in the
- *  order they always read. */
-export function capsLine(caps: Partial<BudgetCaps> | null | undefined): string {
-  if (!caps) return "no limit set";
-  const parts: string[] = [];
-  if (caps.hands_per_day !== undefined) parts.push(`${caps.hands_per_day} ${caps.hands_per_day === 1 ? "hand" : "hands"}`);
-  if (caps.wakes_per_day !== undefined) parts.push(`${caps.wakes_per_day} ${caps.wakes_per_day === 1 ? "wake" : "wakes"}`);
-  if (caps.tokens_per_day !== undefined) parts.push(`${caps.tokens_per_day.toLocaleString("en-US")} tokens`);
-  return parts.join(", ") || "no limit set";
 }
 
 /** Whether this person has accepted a change on any proposal in view: the

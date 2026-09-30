@@ -15,7 +15,7 @@ import { workspaceHasFeature } from "./lib/teamFeatureGuard";
 import { avatarOf } from "@codecast/shared/contracts/orgAvatars";
 import { overlapsAmong, planProjectsOf, resolveRoleRef, rolesInBoundary, type ScopeOverlap } from "./orgRoles";
 import { pendingOnLadder } from "./sessionDecisions";
-import { isWholeWorkspace, type Scope } from "./lib/orgScope";
+import { isScopeless, type Scope } from "./lib/orgScope";
 import { capsFor, countersFor } from "./lib/orgCaps";
 import { findRoleRoutine } from "./lib/orgRoutine";
 import { extractPlanTitleForWeb } from "./docs";
@@ -564,7 +564,7 @@ export async function resolveScope(
 // scope project's path, or filed under the role.
 export type OrgScan = Awaited<ReturnType<typeof collectOrgSessions>>;
 export async function sessionsInScope(ctx: Ctx, resolved: ResolvedScope, now: number, scanIn?: OrgScan): Promise<Array<{ session: OrgSession; raw: any }>> {
-  if (isWholeWorkspace(resolved.scope) && !resolved.role) return [];
+  if (isScopeless(resolved.scope) && !resolved.role) return [];
   const scan = scanIn ?? await collectOrgSessions(ctx, resolved.userId, resolved.teamId, now);
   const taskIds = new Set(resolved.tasks.map((t) => t._id.toString()));
   const planIds = new Set(resolved.plans.map((p) => p._id.toString()));
@@ -1089,9 +1089,9 @@ export type BriefFacts = {
 const BRIEF_CHANGES_MAX = 40;
 const WHOLE_WORKSPACE_TASK_CAP = 2000;
 
-// A role whose scope is the whole workspace owns every project, plan and task
-// in its boundary; resolveScope answers nothing for that case, so read them
-// here. Projects ride along so a company-wide role (the chief of staff) reads
+// The Chief of Staff with no scope looks after every project, plan and task in
+// its boundary (org-staffing.md S26); resolveScope answers nothing for that
+// case, so read them here. Projects ride along so the chief reads
 // every charter in its frame.
 async function wholeWorkspaceItems(ctx: Ctx, role: any): Promise<{ projects: any[]; tasks: any[]; plans: any[] }> {
   const key = role.team_id ? `team:${role.team_id}` : `user:${role.scope_user_id}`;

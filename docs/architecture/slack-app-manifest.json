@@ -42,7 +42,8 @@
         "im:history",
         "mpim:read",
         "mpim:history",
-        "chat:write"
+        "chat:write",
+        "files:read"
       ]
     }
   },

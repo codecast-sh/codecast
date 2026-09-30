@@ -55,7 +55,7 @@ describe("hire spec", () => {
     expect((spec.changes[1] as any).authority[0].label).toBe("Paid search for Acme Growth");
     expect(spec.changes[2]).toMatchObject({ kind: "hire", handle: "acme-growth-growth-cmo", template: "growth", version: "2.0.0", instance: "acme-growth-growth", project: "pr-7", config: { "product.domain": "acme.io", "budget.monthly_envelope_usd": "300", "accounts.customer_id": "695", voice: "plain" }, update_policy: "stable" });
     expect((spec.changes[2] as any).config["accounts.ads"]).toBeUndefined();
-    expect(spec.summary_md).toContain("created paused for you to activate");
+    expect(spec.summary_md).toContain("created paused for you to turn on");
     expect(spec.summary_md).toContain("1 setup step only you can do");
     expect(spec.summary_md).toContain("cast org template bind acme-growth-growth");
   });
@@ -65,7 +65,7 @@ describe("hire spec", () => {
     const seat = buildHireSpec(draft({ seatHandle: "growth" }));
     expect(seat.changes.map((c) => c.kind)).toEqual(["authority", "hire"]);
     expect(seat.changes.every((c: any) => c.handle === "growth")).toBe(true);
-    expect(seat.summary_md).toContain("@growth is the seat: no new role.");
+    expect(seat.summary_md).toContain("@growth takes it on: no new role.");
     for (const c of seat.changes) expect(orgChangeError(c), c.kind).toBeNull();
   });
 });

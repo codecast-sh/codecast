@@ -58,7 +58,7 @@ export function SeatHeadControls({ open, onToggle, onSessionView }: { open: bool
 export function RolePageControl({ onRolePage }: { onRolePage: () => void }) {
   return (
     <div className="flex items-center pr-1">
-      <ShortcutTooltip label="Back to the role page: the conversation with the scope beside it" side="bottom">
+      <ShortcutTooltip label="Back to the role's page: the conversation with its work beside it" side="bottom">
         <button type="button" onClick={onRolePage} className={TEXT_BUTTON} data-seat-role-page>
           <PanelRight className="w-3 h-3" /> Role page
         </button>
