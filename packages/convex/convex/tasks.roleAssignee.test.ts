@@ -397,15 +397,24 @@ describe("batch assign", () => {
 });
 
 describe("a person assigning a task to a role tells it", () => {
-  test("one plain line into the role's standing session, for a task outside the role's scope", async () => {
+  test("one line into the role's standing session, for a task outside the role's scope", async () => {
     const { ctx, tables } = await makeCtx([task(7, { title: "Fix the pricing copy" })]);
     await cliUpdate(ctx, { short_id: "ct-7", assignee: "@ads" });
     expect(tables.pending_messages).toHaveLength(1);
+    // codecast's envelope, never bare: bare, the role's thread painted it as
+    // its host's own typed words.
     expect(tables.pending_messages[0]).toMatchObject({
       conversation_id: "conversations_standing_ads",
-      content: 'Ashot assigned you ct-7 "Fix the pricing copy"',
+      content: '<session-message from="unknown" name="codecast">\nAshot assigned you ct-7 "Fix the pricing copy"\n</session-message>',
       status: "pending",
     });
+  });
+
+  test("a session that assigns it is the sender", async () => {
+    const { ctx, tables } = await makeCtx([task(7, { title: "Fix the pricing copy" })]);
+    await cliUpdate(ctx, { short_id: "ct-7", assignee: "@ads", conversation_id: "free" });
+    const rows = tables.pending_messages.filter((r: any) => r.conversation_id === "conversations_standing_ads");
+    expect(rows.map((r: any) => r.content)).toEqual(['<session-message from="convers">\nAshot assigned you ct-7 "Fix the pricing copy"\n</session-message>']);
   });
 
   test("the board's assign tells it the same way", async () => {
@@ -419,7 +428,7 @@ describe("a person assigning a task to a role tells it", () => {
     await cliUpdate(ctx, { short_id: "ct-7", assignee: "@growth" });
     const rows = tables.pending_messages.filter((r: any) => r.conversation_id === "conversations_standing");
     expect(rows).toHaveLength(1);
-    expect(rows[0].content).toBe('Ashot assigned you ct-7 "Fix the pricing copy"');
+    expect(rows[0].content).toBe('<session-message from="unknown" name="codecast">\nAshot assigned you ct-7 "Fix the pricing copy"\n</session-message>');
   });
 
   test("assigning to a person tells no role", async () => {

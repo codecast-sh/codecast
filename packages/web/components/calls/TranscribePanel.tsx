@@ -77,7 +77,10 @@ export function TranscribeSwitch({ live, className = "" }: { live: boolean; clas
       }
     >
       {on ? <LivePulseDot className="h-1.5 w-1.5" /> : <span className="h-1.5 w-1.5 rounded-full bg-sol-text-dim" />}
-      transcribing · {on ? "on" : "off"}
+      <span>
+        <span className="ts-switch-word">transcribing · </span>
+        {on ? "on" : "off"}
+      </span>
     </button>
   );
 }

@@ -18,7 +18,9 @@ import { canAccessProject, requireTeamAdmin, requireTeamMembership, resolveWorks
 import { validateTemplate, type OrgTemplate } from "@codecast/shared/contracts/orgTemplateManifest";
 import { markSetup, nextHumanAsk, readiness, recordEvidence, recordScores, setupRows, type InstanceState } from "@codecast/shared/contracts/orgTemplateState";
 import { applyActivate, getManageableTask } from "./agentTasks";
-import { refuseUnlessHuman } from "./orgRoles";
+import { refuseUnlessHuman, standingConversationOf } from "./orgRoles";
+import { DEVICE_ONLINE_MS, pickOwnerDevice } from "./deviceRouting";
+import type { OrgTemplateBindArgs, OrgTemplateBindResult, OrgTemplateBindSecret } from "@codecast/shared/contracts/orgTemplateBind";
 
 /** The one value beside a workspace key that grants visibility: a template every workspace may hire. */
 export const CODECAST_TEMPLATE_ACCESS = "codecast";
@@ -116,9 +118,13 @@ export async function performCatalog(ctx: Ctx, userId: Id<"users">, args: { team
 }
 export function catalogEntry(row: any) {
   const m = row.manifest as OrgTemplate;
+  // A release can be installed from the record only when publish uploaded its
+  // snapshot (H1); a manifest alone lets a person read the template, not hire it.
+  const latest = row.releases.find((r: any) => r.version === row.latest.version && r.digest === row.latest.digest);
   return {
     template_id: row.template_id, workspace: row.workspace, name: row.name, description: row.description, avatar: row.avatar,
-    latest: row.latest, releases: row.releases.map((r: any) => ({ version: r.version, status: r.status, published_at: r.published_at })),
+    latest: row.latest, installable: !!latest?.storage_id, latest_status: latest?.status ?? null, changelog: latest?.changelog ?? null,
+    releases: row.releases.map((r: any) => ({ version: r.version, status: r.status, published_at: r.published_at, installable: !!r.storage_id })),
     asks: { inputs: (m.inputs ?? []).length, secrets: (m.inputs ?? []).filter((i) => i.kind === "secret").length, authority: (m.authority ?? []).length, setup: (m.setup ?? []).length, routines: m.routines.length },
     manifest: m,
   };
@@ -127,6 +133,15 @@ export async function performGetTemplate(ctx: Ctx, userId: Id<"users">, args: { 
   const row = await visibleTemplate(ctx, args.template_id, await callerWorkspace(ctx, userId, args.team_id));
   if (!row) throw new Error("Template not found");
   return catalogEntry(row);
+}
+/** One published release for the host step (H1, install from the record): its manifest and the snapshot's download URL, or null when publish uploaded none. */
+export async function performRelease(ctx: Ctx, userId: Id<"users">, args: { template_id: string; version: string; digest: string; team_id?: Id<"teams"> }) {
+  const row = await visibleTemplate(ctx, args.template_id, await callerWorkspace(ctx, userId, args.team_id));
+  if (!row) throw new Error("Template not found");
+  const release = row.releases.find((r: any) => r.version === args.version && r.digest === args.digest);
+  if (!release) throw new Error(`Release ${args.template_id}@${args.version} with this digest is not published`);
+  const storage_url = release.storage_id && ctx.storage ? await ctx.storage.getUrl(release.storage_id) : null;
+  return { template_id: row.template_id, version: release.version, digest: release.digest, status: release.status, manifest: release.manifest, storage_url: storage_url ?? null };
 }
 
 // ── The instance row (H1, H3) ───────────────────────────────────────────────
@@ -252,7 +267,101 @@ export async function performInstanceForRole(ctx: Ctx, userId: Id<"users">, args
   }
   const secrets = (pinned?.inputs ?? []).filter((i) => i.kind === "secret").map((i) => ({ key: i.key, label: i.label, bound: !!row.bindings?.[i.key] }));
   const scoreboard = (pinned?.scoreboard ?? []).map((k) => ({ ...k, ...(row.scoreboard?.[k.key] ?? {}) }));
-  return { ...status, routines, secrets, scoreboard, template: template ? { name: template.name, avatar: template.avatar, latest_stable: latest, changelog: template.releases.find((r: any) => r.version === latest)?.changelog } : null, update_available: latest && row.update_policy === "stable" && compareVersions(latest, row.version) > 0 ? latest : null };
+  // The host step from the web (H3): the machine it would run on and how the
+  // last request went, so the page shows one button and its progress.
+  const bind_host = await bindHostOf(ctx, userId, row);
+  const host_step = await hostStepOf(ctx, row);
+  return { ...status, routines, secrets, scoreboard, bind_host: { device: bind_host.device, dir: bind_host.dir, reason: bind_host.reason }, host_step, template: template ? { name: template.name, avatar: template.avatar, latest_stable: latest, changelog: template.releases.find((r: any) => r.version === latest)?.changelog } : null, update_available: latest && row.update_policy === "stable" && compareVersions(latest, row.version) > 0 ? latest : null };
+}
+
+// ── The host step from the web (H3): a daemon runs bind ─────────────────────
+
+export type BindHost = {
+  host_user_id: Id<"users">;
+  device: { device_id: string; label: string; online: boolean; is_remote: boolean; can_receive_secrets: boolean; pubkey: string | null } | null;
+  /** The project checkout on that device: the standing session's directory, else the project's registered path. */
+  dir: string | null;
+  standing: boolean;
+  /** Why no machine can run the step, in the words the role page shows. */
+  reason: string | null;
+};
+
+/**
+ * The machine the host step runs on: the one that runs the role's standing
+ * session (it holds the checkout by construction), else the machine of the
+ * session's host that holds the project's path (deviceRouting's ladder). The
+ * daemon belongs to the session's host user; the person pressing the button
+ * may be another member of the workspace.
+ */
+export async function bindHostOf(ctx: Ctx, userId: Id<"users">, row: any): Promise<BindHost> {
+  const role = row.role_id ? await ctx.db.get(row.role_id) : null;
+  const standing = role ? await standingConversationOf(ctx, role) : null;
+  const project = await ctx.db.get(row.project_id);
+  // The daemon that polls the command belongs to the human who runs the role
+  // (org_roles.host_user_id); a standing session renders as its bot identity.
+  const hostUser: Id<"users"> = role?.host_user_id ?? standing?.owner_user_id ?? userId;
+  const dir: string | null = standing?.project_path ?? project?.project_path ?? null;
+  const devices: any[] = await ctx.db.query("devices").withIndex("by_user_id", (q: any) => q.eq("user_id", hostUser)).collect();
+  const now = Date.now();
+  const picked = pickOwnerDevice(devices, { projectPath: dir, ownerDeviceId: standing?.owner_device_id ?? null }, now);
+  const device = picked ? devices.find((d) => d.device_id === picked) : null;
+  const base = { host_user_id: hostUser, dir, standing: !!standing };
+  if (!device) return { ...base, device: null, reason: "No machine has run codecast for this workspace's host recently. Start the codecast app on the machine with the project's checkout, then try again." };
+  if (!dir) return { ...base, device: null, reason: "The project has no checkout path on record. Start a session in the project's folder once, so codecast learns where it lives." };
+  return { ...base, reason: null, device: { device_id: device.device_id, label: device.label ?? device.hostname ?? device.device_id.slice(0, 8), online: now - device.last_seen < DEVICE_ONLINE_MS, is_remote: !!device.is_remote, can_receive_secrets: !!device.provider_key_pubkey, pubkey: device.provider_key_pubkey ?? null } };
+}
+
+/** How the requested host step went, read from its command row: the role page's progress line. */
+export async function hostStepOf(ctx: Ctx, row: any): Promise<{ state: "idle" | "pending" | "failed" | "done"; device_label?: string; requested_at?: number; error?: string; result?: OrgTemplateBindResult } > {
+  const req = row.bind_request;
+  if (!req) return { state: "idle" };
+  const cmd = await ctx.db.get(req.command_id);
+  const base = { device_label: req.device_label, requested_at: req.requested_at };
+  if (!cmd) return { state: "idle" };
+  if (!cmd.executed_at) return { state: "pending", ...base };
+  if (cmd.error) return { state: "failed", ...base, error: cmd.error };
+  let result: OrgTemplateBindResult | undefined;
+  try { result = JSON.parse(cmd.result ?? "null") ?? undefined; } catch {}
+  return { state: "done", ...base, result };
+}
+
+/**
+ * Enqueue the host step (H3) for the machine bindHostOf names: one
+ * `org_template_bind` command carrying the instance, its checkout, its
+ * workspace and the secrets a person typed, each sealed in the browser to that
+ * device's public key (H4: the value never enters the server in plain text;
+ * the command row holds ciphertext only the device can open). Human only,
+ * like activation. One request at a time: a pending one is returned, not
+ * doubled.
+ */
+export async function performRequestBind(ctx: Ctx, userId: Id<"users">, args: { instance_key: string; secrets?: OrgTemplateBindSecret[]; device_id?: string }) {
+  const { row, manifest } = await instanceFor(ctx, userId, args.instance_key);
+  if (row.phase === "retired") throw new Error("This instance is retired");
+  const secretKeys = new Set((manifest.inputs ?? []).filter((i) => i.kind === "secret").map((i) => i.key));
+  const secrets = args.secrets ?? [];
+  for (const s of secrets) {
+    if (!secretKeys.has(s.key)) throw new Error(`Not a secret input of this template: ${s.key}`);
+    if (!s.payload || s.payload.provider !== s.key || !s.payload.epk || !s.payload.iv || !s.payload.ct) throw new Error(`Secret ${s.key} must arrive sealed to the machine's key`);
+  }
+  const current = await hostStepOf(ctx, row);
+  if (current.state === "pending" && row.bind_request) return { command_id: row.bind_request.command_id, device: { device_id: row.bind_request.device_id, label: row.bind_request.device_label }, already_pending: true };
+  const host = await bindHostOf(ctx, userId, row);
+  let device = host.device;
+  if (args.device_id && device?.device_id !== args.device_id) {
+    const rows: any[] = await ctx.db.query("devices").withIndex("by_user_id", (q: any) => q.eq("user_id", host.host_user_id)).collect();
+    const chosen = rows.find((d) => d.device_id === args.device_id);
+    if (!chosen) throw new Error("That machine is not one of the host's");
+    device = { device_id: chosen.device_id, label: chosen.label ?? chosen.device_id.slice(0, 8), online: Date.now() - chosen.last_seen < DEVICE_ONLINE_MS, is_remote: !!chosen.is_remote, can_receive_secrets: !!chosen.provider_key_pubkey, pubkey: chosen.provider_key_pubkey ?? null };
+  }
+  if (!device || !host.dir) throw new Error(host.reason ?? "No machine can run the host step");
+  if (secrets.length && !device.can_receive_secrets) throw new Error(`${device.label} runs a codecast too old to receive a secret from the web. Update codecast there, or bind the secret from its terminal.`);
+  const [kind, id] = row.workspace.split(":", 2);
+  if ((kind !== "team" && kind !== "user") || !id) throw new Error("Instance workspace is unresolved");
+  const command: OrgTemplateBindArgs = { instance_key: row.instance_key, instance: row.instance, dir: host.dir, workspace: { kind, id }, secrets };
+  const now = Date.now();
+  const commandId = await ctx.db.insert("daemon_commands", { user_id: host.host_user_id, command: "org_template_bind" as const, args: JSON.stringify(command), created_at: now, target_device_id: device.device_id });
+  await ctx.db.patch(row._id, { bind_request: { command_id: commandId, device_id: device.device_id, device_label: device.label, requested_at: now, requested_by: userId }, updated_at: now });
+  return { command_id: commandId, device: { device_id: device.device_id, label: device.label }, already_pending: false };
 }
 
 // ── Lessons (H9) ────────────────────────────────────────────────────────────
@@ -341,6 +450,18 @@ export const catalog = query({
 export const get = query({
   args: { api_token: v.optional(v.string()), team_id: v.optional(v.id("teams")), template_id: v.string() },
   handler: async (ctx, { api_token, ...args }) => performGetTemplate(ctx, await requireCaller(ctx, api_token), args),
+});
+export const release = query({
+  args: { api_token: v.optional(v.string()), team_id: v.optional(v.id("teams")), template_id: v.string(), version: v.string(), digest: v.string() },
+  handler: async (ctx, { api_token, ...args }) => performRelease(ctx, await requireCaller(ctx, api_token), args),
+});
+const sealedSecret = v.object({ key: v.string(), payload: v.object({ provider: v.string(), epk: v.string(), iv: v.string(), ct: v.string() }) });
+export const requestBind = mutation({
+  args: { api_token: v.optional(v.string()), from_session: v.optional(v.string()), instance_key: v.string(), secrets: v.optional(v.array(sealedSecret)), device_id: v.optional(v.string()) },
+  handler: async (ctx, { api_token, from_session, ...args }) => {
+    await refuseUnlessHuman(ctx, { api_token, from_session }, "Host step");
+    return performRequestBind(ctx, await requireCaller(ctx, api_token), args);
+  },
 });
 export const upsertInstance = mutation({
   args: {

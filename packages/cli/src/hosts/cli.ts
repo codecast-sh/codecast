@@ -1354,20 +1354,40 @@ export function buildHostsCommand(parent: Command): Command {
 
   hosts
     .command("vnc [id]")
-    .description("Interactive view of the host's whole screen (noVNC in your browser) — for anything outside the agent's tab")
-    .option("--no-open", "Print the URL without opening it")
-    .action(async (id: string | undefined, o: { open: boolean }) => {
+    .description("The host's whole screen, with mouse and keyboard, in codecast: anything outside the agent's tab")
+    .option("--no-open", "Print the link without opening it")
+    .option("--novnc", "Open noVNC's own page over an SSH tunnel instead (for a host with no codecast daemon yet)")
+    .option("--stop", "Close the noVNC tunnel now instead of when it goes idle")
+    .action(async (id: string | undefined, o: { open: boolean; novnc?: boolean; stop?: boolean }) => {
       const h = pick(id, "no linux host registered");
+      const { ensureVncTunnel, closeHostTunnel, TUNNEL_IDLE_SECONDS } = await import("../browser/liveView.js");
+      if (o.stop) {
+        if (!h.address) die(`${h.id} has no address; it is asleep, so no tunnel is open`);
+        console.log(closeHostTunnel(toRemoteHost(h), "vnc") ? `${OK} VNC tunnel closed` : fmt.muted("no VNC tunnel was open"));
+        return;
+      }
       const up = await ensureUp(h, (m) => console.log(fmt.muted(`  ${m}`)));
-      const { ensureVncTunnel } = await import("../browser/liveView.js");
+      const openLink = (url: string) => {
+        console.log(`  ${fmt.highlight(url)}`);
+        if (o.open) {
+          try { execFileSync("open", [url], { stdio: "ignore", timeout: 10_000 }); } catch { /* headless shell */ }
+        }
+      };
+      // The codecast pane: this laptop's daemon forwards the host's screen
+      // (cloud/hostForward.ts), so it needs the host's device id, which the
+      // host learns the first time a session is placed there.
+      if (up.deviceId && !o.novnc) {
+        const { webBaseUrl } = await import("../config/readLocalConfig.js");
+        console.log(`${OK} ${up.id}'s screen opens in codecast`);
+        openLink(`${webBaseUrl()}/browser?screen=${encodeURIComponent(up.deviceId)}`);
+        console.log(fmt.muted("  for a page's own sign-in, Take the wheel in the session's browser view is closer"));
+        return;
+      }
       try {
         const v = await ensureVncTunnel(toRemoteHost(up));
         console.log(`${OK} VNC is up${v.tunnelPid ? ` (tunnel pid ${v.tunnelPid})` : " (reusing the existing tunnel)"}`);
-        console.log(`  ${fmt.highlight(v.url)}`);
-        console.log(fmt.muted("  the whole display, with mouse and keyboard — for a page's own sign-in, prefer the CONTROL button in the session's browser view"));
-        if (o.open) {
-          try { execFileSync("open", [v.url], { stdio: "ignore", timeout: 10_000 }); } catch { /* headless shell */ }
-        }
+        openLink(v.url);
+        console.log(fmt.muted(`  the tunnel closes ${TUNNEL_IDLE_SECONDS / 60} minutes after the last viewer leaves, so the host can still sleep (--stop closes it now)`));
       } catch (err) {
         die((err as Error).message);
       }

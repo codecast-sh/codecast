@@ -440,7 +440,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
         const hi = peekBlock != null ? peekBlock : isReviewTarget ? activeBlock : -1;
         if (hi < 0 || !rects[hi]) return null;
         // The keyboard-lit chunk names its verb: an unquoted block shows the
-        // quote key at its top-right (a quoted one already shows N / ⌫ on its
+        // quote key at its top-left (a quoted one already shows N / ⌫ on its
         // chip). A sibling of the overlay, not a child — the overlay sits behind
         // the text, and this must sit above it.
         const hint = peekBlock == null && isReviewTarget && !editingId && !myComments.some((c) => c.blockIndex === hi);

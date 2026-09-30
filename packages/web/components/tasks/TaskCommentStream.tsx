@@ -15,6 +15,7 @@ import { Badge } from "../ui/badge";
 import { APP_LOOK, ISSUE_PROVIDER_NAME } from "../../lib/integrations";
 
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { EarlierButton, useReaderFold } from "../threads/readerFold";
 const api = _api as any;
 
 // A task's comment stream: the comment rows and the composer that posts to
@@ -364,10 +365,6 @@ export function TaskCommentComposer({
 
 // ── The stream ──────────────────────────────────────────────────────────────
 
-/** With nothing new to show, a reader's stream shows this many newest
- *  comments; with news, the new ones and one earlier for context. */
-const READER_TAIL = 3;
-
 /** Comments oldest first, then the composer — the Threads row's open body. */
 export function TaskCommentStream({
   shortId,
@@ -381,36 +378,27 @@ export function TaskCommentStream({
   comments: TaskCommentRow[];
   composerAutoOpen?: boolean;
   composerAutoFocus?: boolean;
-  /** The reader's frozen unread boundary: comments after it are NEW and show
-   *  under a divider with one earlier comment for context; the rest sit
-   *  behind a "show earlier" reveal. Unset renders the whole stream. */
+  /** The reader's frozen unread boundary (threads/readerFold): comments after
+   *  it are NEW and show under a divider with one earlier comment for context;
+   *  the rest sit behind a "show earlier" reveal. Unset renders the whole
+   *  stream. */
   newSince?: number;
   /** Fold long bodies (the Threads reader). */
   clampComments?: boolean;
 }) {
   const openLinkedSession = useOpenLinkedSession();
-  const [showAll, setShowAll] = useState(false);
   // A cached row poisoned by a stale pending lock once carried a lone comment
   // OBJECT here and crashed the whole Threads page. Hydration heals such rows
   // now; this guard keeps one bad row from ever taking the page down again.
   const sorted = (Array.isArray(comments) ? [...comments] : []).sort((a, b) => a.created_at - b.created_at);
-  const firstNew = newSince !== undefined ? sorted.findIndex((c) => c.created_at > newSince) : -1;
-  let hidden = 0;
-  if (newSince !== undefined && !showAll) {
-    hidden = firstNew >= 0 ? Math.max(0, firstNew - 1) : Math.max(0, sorted.length - READER_TAIL);
-  }
-  const visible = hidden > 0 ? sorted.slice(hidden) : sorted;
+  const { visible, hidden, firstNew, showAll } = useReaderFold(sorted, (c) => c.created_at, newSince);
   return (
     <div className="th-task-stream">
       {sorted.length === 0 ? (
         <div className="th-card-note">No comments yet.</div>
       ) : (
         <div className="space-y-0">
-          {hidden > 0 && (
-            <button type="button" className="th-task-earlier" onClick={() => setShowAll(true)}>
-              Show {hidden} earlier {hidden === 1 ? "comment" : "comments"}
-            </button>
-          )}
+          <EarlierButton count={hidden} noun="comment" onClick={showAll} />
           {visible.map((c, i) => (
             <div key={c._id}>
               {/* The divider marks where the news starts, once there is

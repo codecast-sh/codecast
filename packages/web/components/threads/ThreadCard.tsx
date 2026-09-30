@@ -1,6 +1,6 @@
-import { memo, useCallback, useRef } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Bot, Check, ExternalLink } from "lucide-react";
+import { Check, ExternalLink } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
 import { relTimeShort } from "../../lib/utils";
 import type { ThreadInboxRow } from "../../store/threadTypes";
@@ -9,71 +9,63 @@ import type { ThreadCardModel } from "../../lib/threadCards";
 import { openCardIn } from "../../lib/threadRows";
 import { useThreadsPage } from "./threadsContext";
 
-import { useWatchEffect } from "../../hooks/useWatchEffect";
-// One row of the Threads reader, whatever the kind. Collapsed, it is two
-// lines: the kind tile and the object's name with the unread count and age,
-// then who spoke last and what they said. That is the whole scan — a page of
-// rows reads like an inbox, not a wall of threads. The one open row shows the
-// kind's Meta line and its Expanded body (the thread in place, composer
-// included) under a head that stays put while the body scrolls.
+// One thread on the Threads page, whatever the kind, always open: a head
+// naming the object (room, task, session, page) and under it the body with
+// enough of the conversation to read and answer without leaving the page.
+// Nothing scrolls inside a thread; a body folds its older items behind a
+// button instead (threads/readerFold).
 //
-// The head is two sibling controls, never one inside the other: the hit area
-// selects and opens, the tools act (Done, Open). The page owns the cursor
-// (threadsContext.select / toggle) so the keyboard and the mouse move the
-// same thing.
+// Every body mounts with the page, so the list has its full height from the
+// start and nothing changes size as the reader scrolls. A thread is read when
+// it is on screen while the reader is here: the kind's own read-mark effect
+// follows `seen`.
 
-/** Who spoke last: a person by name, an agent by its session. */
-function PreviewWho({ who, kind }: { who?: string; kind?: "user" | "agent" }) {
-  if (!who) return null;
-  return (
-    <span className={`th-row-who ${kind === "agent" ? "th-row-who-agent" : ""}`}>
-      {kind === "agent" && <Bot className="w-3 h-3" aria-label="Agent" />}
-      {who}
-    </span>
-  );
+/** Whether any part of the card is in the viewport. */
+function useOnScreen(ref: React.RefObject<HTMLElement | null>): boolean {
+  const [onScreen, setOnScreen] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof IntersectionObserver === "undefined") {
+      setOnScreen(true);
+      return;
+    }
+    const io = new IntersectionObserver(([e]) => setOnScreen(e.isIntersecting));
+    io.observe(el);
+    return () => io.disconnect();
+  }, [ref]);
+  return onScreen;
 }
 
 export const ThreadCard = memo(function ThreadCard({
   card,
   index,
   selected,
-  open,
   frozenReadAt,
   focusComposer,
 }: {
   card: ThreadCardModel;
-  /** Position in the list, for the page's keyboard walk (scrollIntoView). */
+  /** Position in the list: the keyboard walk scrolls to it. */
   index: number;
-  /** The cursor is on this row. */
+  /** The keyboard cursor is on this thread. */
   selected: boolean;
-  /** The row is the page's one open row. */
-  open: boolean;
-  /** The unread boundary as it stood when the row was opened. */
+  /** The unread boundary as the visit first saw it. */
   frozenReadAt: number;
   /** The reader asked for the composer (the `r` key): grab focus once. */
   focusComposer: boolean;
 }) {
   const router = useRouter();
-  const { now, present, toggle } = useThreadsPage();
+  const { now, present, select } = useThreadsPage();
   const spec = THREAD_KIND_SPECS[card.kind];
   const unread = card.unread > 0;
-  const preview = spec.usePreview(card);
 
   const dismiss = useCallback(() => {
     const row = card.source as ThreadInboxRow;
     useInboxStore.getState().dismissThread(row.kind, row.root_key);
   }, [card]);
-
   const openIn = useCallback(() => openCardIn(card, router), [router, card]);
 
-  // An opening row lands with its head at the top of the list, so the body
-  // reads from its first line; a cursor moving over collapsed rows only
-  // keeps itself in view.
   const ref = useRef<HTMLElement | null>(null);
-  useWatchEffect(() => {
-    if (!selected) return;
-    ref.current?.scrollIntoView({ block: open ? "start" : "nearest" });
-  }, [selected, open]);
+  const onScreen = useOnScreen(ref);
 
   const Glyph = spec.Glyph;
   const Label = spec.Label;
@@ -84,49 +76,27 @@ export const ThreadCard = memo(function ThreadCard({
     <section
       ref={ref}
       data-thread-index={index}
-      className={`th-row th-kind-${card.kind} ${unread ? "th-row-unread" : ""} ${selected ? "th-row-selected" : ""} ${open ? "th-row-open" : ""}`}
+      className={`th-row th-kind-${card.kind} ${unread ? "th-row-unread" : ""} ${selected ? "th-row-selected" : ""}`}
+      onMouseDown={selected ? undefined : () => select(card)}
     >
       <div className="th-row-head">
-        <button
-          type="button"
-          className="th-row-hit"
-          onClick={() => toggle(card)}
-          aria-expanded={open}
-        >
-          <span className={`th-row-kind th-tone-${spec.tone}`} aria-label={spec.label} title={spec.label}>
-            {Glyph ? <Glyph card={card} /> : <spec.icon className="w-3 h-3" />}
+        <span className={`th-row-kind th-tone-${spec.tone}`} aria-label={spec.label} title={spec.label}>
+          {Glyph ? <Glyph card={card} /> : <spec.icon className="w-3 h-3" />}
+        </span>
+        <span className="th-row-title">
+          <Label card={card} />
+        </span>
+        {unread && (
+          <span className="th-row-badge" aria-label={`${card.unread} new`}>
+            {card.unread}{card.unreadCapped ? "+" : ""} new
           </span>
-          <span className="th-row-main">
-            <span className="th-row-top">
-              <span className="th-row-title">
-                <Label card={card} />
-              </span>
-              {unread && (
-                <span className="th-row-badge" aria-label={`${card.unread} new`}>
-                  {card.unread}{card.unreadCapped ? "+" : ""} new
-                </span>
-              )}
-              <span className="th-row-age" title={new Date(card.activityAt).toLocaleString()}>
-                {relTimeShort(card.activityAt, now)}
-              </span>
-            </span>
-            {preview && (preview.who || preview.text) && (
-              <span className="th-row-preview">
-                <PreviewWho who={preview.who} kind={preview.whoKind} />
-                {preview.text && <span className="th-row-text">{preview.text}</span>}
-              </span>
-            )}
-          </span>
-        </button>
+        )}
+        <span className="th-row-age" title={new Date(card.activityAt).toLocaleString()}>
+          {relTimeShort(card.activityAt, now)}
+        </span>
         <span className="th-row-tools">
           {isDismissible(card) && (
-            <button
-              type="button"
-              className="ch-tool th-row-tool"
-              aria-label="Done"
-              title="Done — remove from inbox (comes back on new activity)"
-              onClick={dismiss}
-            >
+            <button type="button" className="ch-tool th-row-tool" aria-label="Done" title="Done: archive (comes back on new activity)" onClick={dismiss}>
               <Check className="w-3 h-3" />
             </button>
           )}
@@ -136,20 +106,16 @@ export const ThreadCard = memo(function ThreadCard({
         </span>
       </div>
 
-      {open && (
-        <div className="th-card-body">
-          {Meta && <Meta card={card} />}
-          <Expanded
-            card={card}
-            present={present}
-            // The row is open and the reader is here: that is the reading.
-            // Each kind still waits for its own content before it marks.
-            seen={present}
-            frozenReadAt={frozenReadAt}
-            focusComposer={focusComposer}
-          />
-        </div>
-      )}
+      <div className="th-card-body" data-debug-seen={String(present && onScreen)} data-debug-present={String(present)}>
+        {Meta && <Meta card={card} />}
+        <Expanded
+          card={card}
+          present={present}
+          seen={present && onScreen}
+          frozenReadAt={frozenReadAt}
+          focusComposer={focusComposer}
+        />
+      </div>
     </section>
   );
 });

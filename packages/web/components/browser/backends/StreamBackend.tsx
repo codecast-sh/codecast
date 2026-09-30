@@ -17,7 +17,6 @@
 import { useCallback, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { ArrowUpRight, Monitor, RotateCw } from "lucide-react";
-import { useConvex } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
 import { useInboxStore } from "../../../store/inboxStore";
@@ -81,14 +80,8 @@ export function StreamBackend({
   });
   const [control, setControl] = useState(false);
   const [retry, setRetry] = useState(0);
-  const convex = useConvex();
   const screenDevice = hasHostScreen(machine) ? machine!.device_id : null;
-  const [screenNote, setScreenNote] = useState<string | null>(null);
-  const openScreen = useCallback(() => {
-    if (!screenDevice) return;
-    setScreenNote(null);
-    void openHostScreen(convex, screenDevice).then(setScreenNote);
-  }, [convex, screenDevice]);
+  const openScreen = useCallback(() => { if (screenDevice) openHostScreen(screenDevice); }, [screenDevice]);
   const redial = useCallback(() => setRetry((n) => n + 1), []);
 
   // The page the transcript last put the browser on. A stream that finds no
@@ -123,7 +116,7 @@ export function StreamBackend({
       failed.tabGone && !failed.capped
         ? missingTabMessage(session.title, pageUrl)
         : failed.message;
-    return { kind: "error", message, ...(tabNote && { detail: tabNote }) } as const;
+    return { kind: "error", message, ...(tabNote ? { detail: tabNote } : {}) } as const;
   }, [failed, status.kind, session.title, pageUrl, tabNote]);
 
   useWatchEffect(() => onState(paneState), [paneState, onState]);
@@ -220,11 +213,6 @@ export function StreamBackend({
             </span>
           )}
         </div>
-      )}
-      {screenNote && (
-        <span className="absolute bottom-2 left-2 px-1.5 py-0.5 rounded bg-sol-bg/85 border border-sol-red/30 text-[10px] font-mono text-sol-red/80">
-          {screenNote}
-        </span>
       )}
       {tabNote && !failed && (
         <span className="absolute bottom-2 left-2 px-1.5 py-0.5 rounded bg-sol-bg/85 border border-sol-red/30 text-[10px] font-mono text-sol-red/80">

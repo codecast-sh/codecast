@@ -811,6 +811,21 @@ html, body {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+
+  /* What survives reduced motion: loading indicators, because a frozen
+     spinner reads as stuck, and the opacity-only fallbacks components opt
+     into below. Class selectors outrank the universal clamp above. */
+  .animate-spin {
+    animation-duration: 1s !important;
+    animation-iteration-count: infinite !important;
+  }
+  .app-loader-bar::after {
+    animation-duration: 1.5s !important;
+    animation-iteration-count: infinite !important;
+  }
+  .sched-click-flash {
+    animation-duration: 200ms !important;
+  }
 }
 
 #nprogress {
@@ -921,7 +936,7 @@ html[data-idle] *::after {
 }
 @media (prefers-reduced-motion: reduce) {
   .animate-sched-roster-in {
-    animation: schedRosterFade 140ms ease-out;
+    animation: schedRosterFade 140ms ease-out !important;
   }
   @keyframes schedRosterFade { from { opacity: 0; } to { opacity: 1; } }
 }
@@ -991,7 +1006,7 @@ html[data-idle] *::after {
 @media (prefers-reduced-motion: reduce) {
   .cc-session-beacon,
   .cc-session-beacon[data-dir="up"] {
-    animation: schedRosterFade 140ms ease-out 250ms backwards;
+    animation: schedRosterFade 140ms ease-out 250ms backwards !important;
   }
   .cc-session-beacon__dot {
     animation: none;
@@ -1982,6 +1997,10 @@ pre[class*="language-"] {
 .inbox-compact [data-sv-rail] [data-session-id]:has(> [data-sv-pin]) > [data-sv-check] {
   right: 26px;
 }
+/* The tick steps left of a pinned card's pin, in every layout. */
+[data-sv-rail] [data-session-id]:has(> [data-sv-pin]) > [data-sv-check] {
+  right: 26px;
+}
 
 /* ---- Left sidebar: smaller sections, counts pushed right, more air ---- */
 .simple-view [data-sv-nav] {
@@ -2205,14 +2224,15 @@ pre[class*="language-"] {
   z-index: 0;
   transition: top 120ms ease, height 120ms ease;
 }
-.cc-rail-inline .cc-active-overlay {
+.cc-rail-inline .cc-active-overlay,
+.cc-rail-inline .cc-active-hint {
   left: calc(var(--cc-rail-w) + var(--cc-rail-gap) - 0.5rem);
 }
-/* The verb for the keyboard-lit chunk: a chip just above the overlay's top-right
-   corner, in the paragraph gap, so it never covers the end of a long first line. */
+/* The verb for the keyboard-lit chunk: a chip just above the overlay's top-left
+   corner, in the paragraph gap, so it never covers the start of the first line. */
 .cc-active-hint {
   position: absolute;
-  right: -0.5rem;
+  left: -0.5rem;
   transform: translateY(calc(-100% - 2px));
   display: inline-flex;
   align-items: center;
@@ -2227,7 +2247,6 @@ pre[class*="language-"] {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
   pointer-events: none;
   z-index: 6;
-  animation: ccPop 120ms ease-out;
   transition: top 120ms ease;
 }
 
@@ -3020,16 +3039,19 @@ pre[class*="language-"] {
   pointer-events: none;
   box-shadow: none;
 }
-.cc-railx-resize {
+.cc-railx { --edge-resize-accent: var(--cc-accent); }
+/* The left-edge drag handle of a right-docked panel (hooks/useEdgeResize):
+   invisible at rest, a hairline on hover and drag. */
+.edge-resize {
   position: absolute; left: -3px; top: 0; bottom: 0; width: 7px; z-index: 2;
-  cursor: col-resize;
+  cursor: col-resize; touch-action: none;
 }
-.cc-railx-resize::after {
+.edge-resize::after {
   content: ""; position: absolute; left: 3px; top: 0; bottom: 0; width: 1px;
   background: transparent; transition: background 120ms ease;
 }
-.cc-railx-resize:hover::after,
-.cc-railx-resize:active::after { background: var(--cc-accent); }
+.edge-resize:hover::after,
+.edge-resize:active::after { background: var(--edge-resize-accent, var(--sol-cyan)); }
 .cc-railx-head {
   display: flex; align-items: center; gap: 6px; flex-shrink: 0;
   height: var(--cc-panel-head-h); min-height: var(--cc-panel-head-h);
@@ -3639,10 +3661,10 @@ pre[class*="language-"] {
   overflow: hidden;
   background: var(--sol-bg);
   transition:
-    left var(--cc-panel-motion) cubic-bezier(.2,.8,.25,1),
-    top var(--cc-panel-motion) cubic-bezier(.2,.8,.25,1),
-    width var(--cc-panel-motion) cubic-bezier(.2,.8,.25,1),
-    height var(--cc-panel-motion) cubic-bezier(.2,.8,.25,1);
+    left var(--cc-panel-motion),
+    top var(--cc-panel-motion),
+    width var(--cc-panel-motion),
+    height var(--cc-panel-motion);
 }
 .stage-cell--focused::after {
   content: "";
@@ -3659,10 +3681,10 @@ pre[class*="language-"] {
   z-index: 20;
   touch-action: none;
   transition:
-    left var(--cc-panel-motion) cubic-bezier(.2,.8,.25,1),
-    top var(--cc-panel-motion) cubic-bezier(.2,.8,.25,1),
-    width var(--cc-panel-motion) cubic-bezier(.2,.8,.25,1),
-    height var(--cc-panel-motion) cubic-bezier(.2,.8,.25,1);
+    left var(--cc-panel-motion),
+    top var(--cc-panel-motion),
+    width var(--cc-panel-motion),
+    height var(--cc-panel-motion);
 }
 .stage-handle__line {
   position: absolute;
@@ -4863,13 +4885,13 @@ pre[class*="language-"] {
    at equal weight. */
 :root :is(.inbox-compact, .minimal-style) [data-sv-rail] [data-session-id][data-selected="true"],
 :root :is(.inbox-compact, .minimal-style) [data-sv-rail] [data-session-id][data-selected="true"]:hover {
-  --sv-card-bg: color-mix(in srgb, var(--sol-cyan) 18%, var(--sol-bg-alt));
+  --sv-card-bg: color-mix(in srgb, var(--sol-blue) 24%, var(--sol-bg-alt));
   background: var(--sv-card-bg) !important;
 }
-/* The open row inside a selection stays findable: a deeper wash and a bar on
-   its leading edge. */
+/* Ticked rows are blue and the open row is cyan, so the open row inside a
+   selection keeps its own wash and bar; the selection's frame sits on top. */
 :root :is(.inbox-compact, .minimal-style) [data-sv-rail] [data-session-id][data-selected="true"][data-active="true"] {
-  --sv-card-bg: color-mix(in srgb, var(--sol-cyan) 32%, var(--sol-bg-alt));
+  --sv-card-bg: var(--sv-card-active-bg);
   box-shadow: inset 3px 0 0 var(--sol-cyan) !important;
 }
 /* Rows carry no frame, so a hairline between neighbours keeps a long group

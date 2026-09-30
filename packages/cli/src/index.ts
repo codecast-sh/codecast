@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { DEFAULT_WEB_URL } from "./config/readLocalConfig.js";
 import { registerSessionParkingCommands } from "./sessionParkingCommand.js";
 import { registerSyncVerbs } from "./cloud/syncCli.js";
 import { chiefForward, isChiefAnchor } from "./anchorAlias.js";
@@ -531,7 +532,7 @@ const DAEMON_LAUNCHER_SCRIPT_PATH = path.join(CONFIG_DIR, DAEMON_LAUNCHER_FILENA
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const WEB_URL = process.env.CODE_CHAT_SYNC_WEB_URL || "https://codecast.sh";
+const WEB_URL = DEFAULT_WEB_URL;
 const CONVEX_URL = process.env.CONVEX_URL || "https://convex.codecast.sh";
 
 // `Config` (the ~/.codecast/config.json shape) is unified in ./config/types.ts —

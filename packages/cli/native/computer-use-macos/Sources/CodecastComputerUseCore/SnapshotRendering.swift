@@ -115,8 +115,13 @@ public enum SnapshotRenderHeuristics {
             "AXConfirm",
             "AXRaise",
         ]
+        // An element can advertise the same custom action twice (Preview's
+        // signature cells do); one name per action is what the agent can act on.
+        var seen = Set<String>()
         return rawActions.filter { action in
+            guard seen.insert(prettyAction(action).lowercased()).inserted else { return false }
             if noisy.contains(action) { return false }
+            if let custom = customActionName(action), noisyCustomActions.contains(custom.lowercased()) { return false }
             if role == "AXMenu" || role == "AXMenuItem" {
                 return action != "AXCancel" && action != "AXPick"
             }
@@ -148,7 +153,9 @@ public enum SnapshotRenderHeuristics {
     }
 
     public static func shouldSuppressChildren(_ node: SnapshotRenderNode) -> Bool {
-        if node.role == "AXMenuBarItem" {
+        // A scroll bar's value is its position; its arrows and page regions are
+        // six lines of chrome with nothing to act on that scroll does not cover.
+        if node.role == "AXMenuBarItem" || node.role == "AXScrollBar" {
             return true
         }
         let name = displayName(node)
@@ -234,7 +241,25 @@ public enum SnapshotRenderHeuristics {
         return node.role
     }
 
+    /// Toolbar items advertise reordering as custom actions. They move the
+    /// human's toolbar around and never do what an agent is looking for.
+    static let noisyCustomActions: Set<String> = ["move next", "move previous", "remove from toolbar"]
+
+    /// macOS reports an app's own actions (NSAccessibilityCustomAction) as a
+    /// description blob, `Name:insert signature\ntarget:0x0\nselector:(null)`.
+    /// Only the name means anything; the rest printed two junk lines per action.
+    public static func customActionName(_ action: String) -> String? {
+        guard action.lowercased().hasPrefix("name:") else { return nil }
+        let rest = action.dropFirst(5)
+        let name = rest.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? ""
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     public static func prettyAction(_ action: String) -> String {
+        if let custom = customActionName(action) {
+            return sanitize(custom)
+        }
         if action == "AXZoomWindow" {
             return "zoom the window"
         }

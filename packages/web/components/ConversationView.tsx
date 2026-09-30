@@ -20,6 +20,7 @@ import { useTeamRosterIdentity } from "../hooks/useTeamRoster";
 import { useShortcutContext, useShortcutAction, isMac, hasOpenModal } from "../shortcuts";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useShallow } from "zustand/react/shallow";
+import { composerAgentStatus, useManagedSessionFields, useSessionEscape } from "../hooks/useSessionComposerControls";
 import { useStorageImageUrls } from "../hooks/useStorageImageUrl";
 import { extractSessionImages, mergeSessionImages, type SessionImageEntry } from "../lib/sessionImages";
 import { isRemoteImageSrc } from "../lib/trustedImageOrigins";
@@ -134,7 +135,8 @@ import { CastBrowserRowContext, ChatWakeContext } from "../lib/conversationBlock
 import { UserIcon } from "./conversation/blocks/shared";
 import { agentColorMap } from "../lib/conversationBlockStyles";
 import { AgentSwitchDivider, BashCommandBlock, ChatWakeBlock, CommandMessageBlock, CompactionSummaryBlock, EscalationDivider, HuddleSummaryBlock, InterruptStatusLine, MachineMoveDivider, NudgeLine, ScheduledTaskBlock, SessionMessageBlock, SkillExpansionBlock, SystemBlock, TaskNotificationLine, TeammateEventsBlock, WorkflowEventBlock } from "./conversation/blocks/systemBlocks";
-import { AssistantBlock, CompactCollapsedTurn, CompactTurnCard, ForkSeedMark, GitDiffPanel, StoryTimelineView, ThreadSummaryView, UserPrompt } from "./conversation/blocks/turnBlocks";
+import { CompactTurnCard } from "./conversation/blocks/compactTurnCard";
+import { AssistantBlock, CompactCollapsedTurn, ForkSeedMark, GitDiffPanel, StoryTimelineView, ThreadSummaryView, UserPrompt } from "./conversation/blocks/turnBlocks";
 import { COMPACT_TAIL_HEIGHT, EMPTY_CHILD_CONVERSATIONS, EMPTY_RECEIPT_ENTRIES } from "../lib/conversationTurnDefaults";
 import { FOLD_KEPT_USER_KINDS, canAnchorForkChips, classifyUserMessage, cleanStickyContent, extractCompactionSummaryContent, isAlwaysVisibleToolCall, isHiddenStubMessage, isStickyWorthy, isToolReceiptRow, normalizePendingContent, parseCastCommand, parseWorkflowEventContent, sameStringArray, stripSystemTags } from "./conversation/classify";
 import { formatMessagePartsForCopy, formatRelativeTime } from "../lib/conversationFormat";
@@ -726,18 +728,7 @@ const ConversationViewInner = (
   // is_idle overlay). Subscribing to the whole row re-rendered the entire
   // ConversationView (~120ms) on every heartbeat for a LIVE session. useShallow
   // re-renders only when one of these six fields actually changes.
-  const managedSession = useInboxStore(useShallow((s) => {
-    const sess = effectiveConversationId ? s.sessions[effectiveConversationId] : null;
-    if (!sess) return null;
-    return {
-      agent_status: sess.agent_status,
-      permission_mode: sess.permission_mode,
-      session_id: sess.session_id,
-      is_connected: sess.is_connected,
-      tmux_session: sess.tmux_session,
-      team_id: sess.team_id,
-    };
-  }));
+  const managedSession = useManagedSessionFields(effectiveConversationId);
   // Who this session is (docs/architecture/session-characters.md S3): the
   // header wears the same face as its inbox card, at 22 px, and clicking it
   // opens the character picker. Narrow like managedSession above — the
@@ -1156,8 +1147,18 @@ const ConversationViewInner = (
   // (`enteredAt`). The "New" divider renders above this row; -1 = nothing new
   // (first-ever visit, or everything unseen actually arrived live this visit).
   const firstUnseenIndex = useMemo(
-    () => computeNewDividerIndex(timeline, unreadAnchorAt, enteredAt),
-    [timeline, unreadAnchorAt, enteredAt],
+    () => computeNewDividerIndex(timeline, unreadAnchorAt, enteredAt, (item) => {
+      if (item.type !== 'message') return false;
+      const m = item.data as Message;
+      if (m.role !== 'user') return false;
+      const me = (currentUser as any)?._id;
+      if (!me) return false;
+      // Same attribution as resolveMsgSender: optimistic rows are the viewer's,
+      // rows without from_user_id belong to the conversation owner.
+      const senderId = m.from_user_id ?? ((m._isOptimistic || m._isQueued) ? me : conversation?.user_id);
+      return !!senderId && String(senderId) === String(me);
+    }),
+    [timeline, unreadAnchorAt, enteredAt, currentUser, conversation?.user_id],
   );
   // Handoff markers, drawn the same way: each transfer sits above the first
   // row at or after the moment it happened, with the assigner's note under
@@ -1202,18 +1203,12 @@ const ConversationViewInner = (
   // daemon holds the facts and decides (cli/src/escapeInterrupt.ts); the press
   // time rides along so an Escape aimed at the previous turn cannot cancel the
   // one a queued message started after the press (the 2026-08-28 race).
+  const sendEscape = useSessionEscape(convexConvId, { active: conversation?.status === "active", isOwner: effectiveIsOwner });
   const handleSendEscape = useCallback(() => {
-    if (!conversation || !effectiveIsOwner || conversation.status !== "active" || !convexConvId) return;
+    if (!sendEscape()) return;
     setUserScrolled(false);
-    void convCommand(convexConvId, "sendEscapeToSession", { pressed_at: Date.now() }).catch((err) => {
-        if (isParkedDispatchError(err)) {
-          toast.info("Escape queued — it will send when the connection recovers");
-          return;
-        }
-        toast.error(err instanceof Error ? err.message : "Failed to send Escape");
-    });
     requestAnimationFrame(() => scrollToBottomFnRef.current());
-  }, [conversation, effectiveIsOwner, convCommand, convexConvId, setUserScrolled]);
+  }, [sendEscape, setUserScrolled]);
 
   const handleMessageSent = useCallback(() => {
     setUserScrolled(false);
@@ -3460,16 +3455,7 @@ const ConversationViewInner = (
       if (foldTurns && turnKey && !turnExpanded) {
         const lastText = turnAggregates.lastTextOf.get(turnKey);
         const stats = turnAggregates.statsOf.get(turnKey);
-        const cardAs = (variant: "card" | "steps") => (
-          <CompactTurnCard
-            key={foldWorkingTurns ? `${msg._id}:folded` : msg._id}
-            preview={stats?.preview || ""}
-            messageCount={stats?.messages || 0}
-            toolCount={stats?.tools || 0}
-            onExpand={() => toggleGroup(turnKey)}
-            variant={variant}
-          />
-        );
+        const cardAs = (variant: "card" | "steps") => <CompactTurnCard key={foldWorkingTurns ? `${msg._id}:folded` : msg._id} preview={stats?.preview || ""} messageCount={stats?.messages || 0} toolCount={stats?.tools || 0} onExpand={() => toggleGroup(turnKey)} variant={variant} />;
         const card = cardAs("card");
         if (!foldWorkingTurns) {
           if (lastText) {
@@ -4742,7 +4728,7 @@ const ConversationViewInner = (
                   ))}
                 </div>
               ) : null}
-              <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss ?? sendAndStashFallback} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} workingSinceTs={workingSinceForClock(latestMessageTimestamp, now)} workingPhrase={workingPhrase} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={managedSession?.agent_status === "hibernated" ? "hibernated" : isSessionDisconnected || conversation.status !== "active" ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={forkHandler} onForkSend={forkSendHandler} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} permissionModePending={modeSwitching} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={onSendOverride ?? (workflowRun?.status === "paused" ? handleGateRespond : undefined)} composerNode={composerNode} composerPlaceholder={composerPlaceholder} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} onSubmitWithIntent={onSubmitWithIntent} threadStateNode={onSendOverride ? undefined : threadStatePanel} branchMapNode={treePopoverOpen ? (
+              <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss ?? sendAndStashFallback} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} workingSinceTs={workingSinceForClock(latestMessageTimestamp, now)} workingPhrase={workingPhrase} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={composerAgentStatus(managedSession?.agent_status, { active: conversation.status === "active", disconnected: isSessionDisconnected })} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={forkHandler} onForkSend={forkSendHandler} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} permissionModePending={modeSwitching} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={onSendOverride ?? (workflowRun?.status === "paused" ? handleGateRespond : undefined)} composerNode={composerNode} composerPlaceholder={composerPlaceholder} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} onSubmitWithIntent={onSubmitWithIntent} threadStateNode={onSendOverride ? undefined : threadStatePanel} branchMapNode={treePopoverOpen ? (
                 <ForkMapBox
                   tray
                   open

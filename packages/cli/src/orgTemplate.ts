@@ -72,14 +72,17 @@ export function registerOrgTemplateCommands(program: Command, deps: OrgInitDeps)
       const text = body === "-" ? readStdinBody() : body;
       console.log(JSON.stringify(await lessonTemplate(deps, instance, text, options), null, 2));
     });
-  template.command("publish <folder>").description("Publish a release folder as a template under a workspace, or as Codecast for every workspace")
+  template.command("publish <folder...>").description("Publish release folders as templates under a workspace, or as Codecast for every workspace; several folders publish in one run (a gallery: packs/*)")
     .option("--team <name|id>", "Publishing team workspace").option("--personal", "Publish under your personal workspace").option("--codecast", "Publish as Codecast (its admins only)")
-    .option("--status <draft|canary|stable>", "Release status", "draft").option("--changelog <text>", "What changed in this version; '-' reads stdin")
+    .option("--status <draft|canary|stable>", "Release status", "draft").option("--changelog <text>", "What changed in this version; '-' reads stdin; default: the folder's CHANGELOG.md")
     .option("--review-project <id>", "Where this template's lessons are reviewed").option("--json", "Machine-readable output")
-    .action(async (folder: string, options: any) => {
-      const { publishTemplate } = await import("./orgTemplateRun.js");
+    .action(async (folders: string[], options: any) => {
+      const { publishTemplate, publishTemplates } = await import("./orgTemplateRun.js");
       const changelog = options.changelog === "-" ? readStdinBody() : options.changelog;
-      console.log(JSON.stringify(await publishTemplate(deps, folder, { ...options, changelog }), null, 2));
+      if (folders.length === 1) { console.log(JSON.stringify(await publishTemplate(deps, folders[0]!, { ...options, changelog }), null, 2)); return; }
+      const rows = await publishTemplates(deps, folders, { ...options, changelog });
+      console.log(JSON.stringify(rows, null, 2));
+      if (rows.some((r) => r.error)) process.exitCode = 1;
     });
   template.command("catalog").description("The templates this workspace may hire: its own and Codecast's")
     .option("--team <name|id>", "Team workspace").option("--personal", "Personal workspace").option("--json", "Machine-readable output")

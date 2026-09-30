@@ -5280,7 +5280,10 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // but does NOT fire `create` until the returned `materialize()` runs — the
   // new-session popup uses it so merely opening doesn't strand a conversation on
   // Escape. `materialize()` is idempotent and returns the same `ready` promise.
-  beginOptimisticSession: (opts: { agentType: string; projectPath?: string; gitRoot?: string; reuse?: boolean; deferCreate?: boolean; create: (stubId: string) => Promise<string> }) => { stubId: string; ready: Promise<string>; materialize: () => Promise<string> };
+  // `resumeStubId` picks an existing never-created stub (a kept compose draft)
+  // back up instead of seeding a new one; its row already carries the project,
+  // agent and draft.
+  beginOptimisticSession: (opts: { agentType: string; projectPath?: string; gitRoot?: string; reuse?: boolean; deferCreate?: boolean; resumeStubId?: string; create: (stubId: string) => Promise<string> }) => { stubId: string; ready: Promise<string>; materialize: () => Promise<string> };
   // Ghost removal: hard-drop cached session rows nothing will re-deliver
   // (orphaned optimistic stubs). Plants the exclude pending entries that
   // authorize the IDB row delete and block re-adds.
@@ -5582,6 +5585,10 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
     verb: "pause" | "resume" | "runNow" | "cancel" | "reactivate",
   ) => void;
   deleteTrigger: (taskId: string) => void;
+  // A recurring trigger's cadence, changed in place (the org page's area rows
+  // and the Chief of Staff's review, org-staffing.md S29): the row's interval
+  // flips on the draft, the named side effect runs agentTasks.webUpdate.
+  setTriggerInterval: (taskId: string, intervalMs: number) => void;
   // Remove rows from a NON-localFirst collection without planting tombstones —
   // for transient per-scope collections whose server answer of "nothing" is
   // itself the deletion (pendingMessageStatus). A localFirst collection must
@@ -6225,15 +6232,25 @@ function snapshotInboxViewFromDraft(draft: any): InboxViewSnapshot {
 //     while you were here watching — your own sends, live agent replies — and
 //     must NOT get a "New" line. Without this bound the first live message after
 //     a caught-up entry wrongly anchored the divider.
-// timeline is ascending by timestamp, so the first row past `seenUpToAt` is the
+// A message you sent yourself (from the terminal, another device, or a send
+// delivered after you left) is never news, and proves you had read everything
+// before it, so the lower bound moves up to your latest own message.
+// timeline is ascending by timestamp, so the first row past that bound is the
 // earliest unseen; we only honor it when it predates `enteredAt`.
-export function computeNewDividerIndex(
-  timeline: readonly { timestamp: number }[],
+export function computeNewDividerIndex<T extends { timestamp: number }>(
+  timeline: readonly T[],
   seenUpToAt: number,
   enteredAt: number,
+  isOwn?: (item: T) => boolean,
 ): number {
   if (!seenUpToAt) return -1;
-  const idx = timeline.findIndex((it) => it.timestamp > seenUpToAt);
+  let anchor = seenUpToAt;
+  if (isOwn) {
+    for (let i = timeline.length - 1; i >= 0 && timeline[i].timestamp > anchor; i--) {
+      if (isOwn(timeline[i])) { anchor = timeline[i].timestamp; break; }
+    }
+  }
+  const idx = timeline.findIndex((it) => it.timestamp > anchor);
   if (idx === -1) return -1;
   if (enteredAt && timeline[idx].timestamp > enteredAt) return -1;
   return idx;
@@ -8085,7 +8102,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // open the global dock — anchored threads live inline at their message.
   openCommentThread: (messageId: string | null = null) =>
     set((s: any) => ({ commentRailAnchor: messageId, commentRailNonce: s.commentRailNonce + 1 })),
-  threadsCursor: { id: null, open: false, frozenReadAt: 0 },
+  threadsCursor: { id: null },
   setThreadsCursor: (cursor: ThreadsCursor) => set({ threadsCursor: cursor }),
   closeCommentRail: () => get().setCommentRailOpen(false),
   setCommentRailWidth: (conversationId: string, w: number) =>
@@ -8289,6 +8306,15 @@ const inboxStoreConfig = (set: any, get: any) => ({
   deleteTrigger: action(function (this: Draft, taskId: string) {
     delete (this.agentTasks as any)[taskId];
     delete (this.foreignTriggers as any)[taskId];
+  }),
+  setTriggerInterval: action(function (this: Draft, taskId: string, intervalMs: number) {
+    const t = (this.agentTasks as any)[taskId] ?? (this.foreignTriggers as any)[taskId];
+    if (!t || t.schedule_type !== "recurring") return;
+    // The next run keeps its place in the old cadence's clock: what the
+    // server's applyTaskUpdate does when the interval changes.
+    const last = typeof t.last_run_at === "number" ? t.last_run_at : Date.now();
+    t.interval_ms = intervalMs;
+    if (t.status === "scheduled") t.run_at = Math.max(Date.now(), last + intervalMs);
   }),
   dropRows: sync(function (this: Draft, key: string, ids: string[]) {
     const coll = (this as any)[key];
@@ -9704,7 +9730,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // for normal sessions, the createQuickSession mutation when isolated/worktree
   // options are needed). The stub uses the same Math.random id scheme as
   // createSession — never 32 chars, so isConvexId() correctly treats it as local.
-  beginOptimisticSession: (opts: { agentType: string; projectPath?: string; gitRoot?: string; reuse?: boolean; deferCreate?: boolean; create: (stubId: string) => Promise<string> }) => {
+  beginOptimisticSession: (opts: { agentType: string; projectPath?: string; gitRoot?: string; reuse?: boolean; deferCreate?: boolean; resumeStubId?: string; create: (stubId: string) => Promise<string> }) => {
     const store = get();
     // Only an INCLUDE label chip files new sessions — excluding a label means
     // "hide it", never "file new work there".
@@ -9745,28 +9771,33 @@ const inboxStoreConfig = (set: any, get: any) => ({
         return { stubId: existing, ready, materialize: () => ready };
       }
     }
-    const stubId = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+    const resume = opts.resumeStubId && store.sessions[opts.resumeStubId] && !store.pendingSessionCreates[opts.resumeStubId]
+      ? opts.resumeStubId
+      : null;
+    const stubId = resume ?? Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
     const now = Date.now();
-    store.syncRecord("conversations", stubId, {
-      _id: stubId, _creationTime: now, user_id: "", agent_type: opts.agentType,
-      session_id: stubId, project_path: opts.projectPath, git_root: opts.gitRoot,
-      started_at: now, updated_at: now, message_count: 0, status: "active",
-      title: "New session", messages: [],
-      ...(bucketAtCreate ? { _postCreateBucketId: bucketAtCreate } : {}),
-    });
-    // Also seed the inbox session row. The conversation page resolves a stub from
-    // sessions[id] (local-first, before the server resolver loads), so without this
-    // a navigate-to-stub would flash a loading skeleton then "Not Found". This mirrors
-    // what store.createSession seeds — callers using the createQuickSession mutation
-    // (which doesn't touch the store) rely on it. session_id === stubId so the server
-    // resolver (by_session_id) also maps the stub once the create lands.
-    store.syncRecord("sessions", stubId, {
-      _id: stubId, session_id: stubId, title: "New session",
-      updated_at: now, started_at: now, project_path: opts.projectPath,
-      git_root: opts.gitRoot, agent_type: opts.agentType, message_count: 0,
-      is_idle: true, has_pending: false, last_user_message: null,
-      ...(bucketAtCreate ? { _postCreateBucketId: bucketAtCreate } : {}),
-    });
+    if (!resume) {
+      store.syncRecord("conversations", stubId, {
+        _id: stubId, _creationTime: now, user_id: "", agent_type: opts.agentType,
+        session_id: stubId, project_path: opts.projectPath, git_root: opts.gitRoot,
+        started_at: now, updated_at: now, message_count: 0, status: "active",
+        title: "New session", messages: [],
+        ...(bucketAtCreate ? { _postCreateBucketId: bucketAtCreate } : {}),
+      });
+      // Also seed the inbox session row. The conversation page resolves a stub from
+      // sessions[id] (local-first, before the server resolver loads), so without this
+      // a navigate-to-stub would flash a loading skeleton then "Not Found". This mirrors
+      // what store.createSession seeds — callers using the createQuickSession mutation
+      // (which doesn't touch the store) rely on it. session_id === stubId so the server
+      // resolver (by_session_id) also maps the stub once the create lands.
+      store.syncRecord("sessions", stubId, {
+        _id: stubId, session_id: stubId, title: "New session",
+        updated_at: now, started_at: now, project_path: opts.projectPath,
+        git_root: opts.gitRoot, agent_type: opts.agentType, message_count: 0,
+        is_idle: true, has_pending: false, last_user_message: null,
+        ...(bucketAtCreate ? { _postCreateBucketId: bucketAtCreate } : {}),
+      });
+    }
     // Capture the focused bucket NOW: a session created while a bucket chip is
     // active belongs to that bucket. Assignment waits for the real id (the
     // server side effect can't act on stubs).
@@ -10880,7 +10911,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
   setSessionHasDraft: sync(function (this: Draft, id: string, has: boolean) {
     const row = this.sessions[id];
     if (!row) return;
-    if (has) row._hasDraft = true;
+    // Keeping stamps the row, so the newest kept draft is the last one
+    // dismissed (findKeptComposeDraft reopens onto it).
+    if (has) { row._hasDraft = true; row.updated_at = Date.now(); }
     else delete row._hasDraft;
   }),
 

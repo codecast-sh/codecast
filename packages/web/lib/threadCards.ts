@@ -63,11 +63,7 @@ export type ThreadCardModel = {
    *  viewer's own sends never move it. session: updated_at. Drives the All
    *  view's rank, the shown age, and the open map's expiry. */
   activityAt: number;
-  /** Nothing awaits the viewer: the newest message is their own (or, for a
-   *  DM, the counterpart has never spoken). A browse-only card is absent from
-   *  every view. */
-  browseOnly?: boolean;
-  /** Server: row.unread. dm: the rail count (0 when muted). session: 0 or 1. */
+  /** Server: row.unread. dm: the rail count (0 when muted). session: 1. */
   unread: number;
   unreadCapped?: boolean;
   /** Open-in-place link. */
@@ -186,20 +182,6 @@ export function summaryCount(n: number, noun: string, plural = `${noun}s`): stri
 
 // ── Row sources ─────────────────────────────────────────────────────────────
 
-/** A thread the viewer answered: its newest reply is the viewer's own, typed
- *  by a person (an agent row carries the asker's id on some kinds, and an
- *  agent's answer is still news). Nothing awaits them, so the card retires
- *  until someone else replies. */
-export function answeredByViewer(row: ThreadInboxRow, viewerId: string | undefined): boolean {
-  const last = row.last_reply;
-  if (!last || !viewerId) return false;
-  return last.author_kind !== "agent" && String(last.user_id ?? "") === String(viewerId);
-}
-
-/** Server rows (chat, comment, task, page) as cards. `channelKindOf` answers a
- *  chat row's room kind so a thread in a DM files under DMs; `taskShortIdOf`
- *  gives the canonical /tasks/<short_id> link when the task row is cached;
- *  `viewerId` retires the threads the viewer answered (answeredByViewer). */
 /** The page a code thread is read on: the pull request when the row names
  *  one and the store knows its number, else the commit, with the thread's
  *  file so the page lands on it. */
@@ -213,6 +195,20 @@ export function codeThreadHref(row: ThreadInboxRow, prNumber?: number): string {
   return `/commit/${repository}/${ref}${query}`;
 }
 
+/** A thread the viewer answered: its newest reply is the viewer's own, typed
+ *  by a person (an agent row carries the asker's id on some kinds, and an
+ *  agent's answer is still news). Nothing awaits them, so whatever unread
+ *  count the row still carries is stale and the card shows none. */
+export function answeredByViewer(row: ThreadInboxRow, viewerId: string | undefined): boolean {
+  const last = row.last_reply;
+  if (!last || !viewerId) return false;
+  return last.author_kind !== "agent" && String(last.user_id ?? "") === String(viewerId);
+}
+
+/** Server rows (chat, comment, task, page, code) as cards. `channelKindOf`
+ *  answers a chat row's room kind so a thread in a DM files under DMs;
+ *  `taskShortIdOf` gives the canonical /tasks/<short_id> link when the task
+ *  row is cached; `viewerId` zeroes the unread of threads the viewer answered. */
 export function serverCards(
   rows: ThreadInboxRow[],
   channelKindOf: (channelId: string) => string | undefined,
@@ -248,8 +244,7 @@ export function serverCards(
       kind: row.kind,
       chip,
       activityAt: row.last_activity_at,
-      browseOnly: answeredByViewer(row, viewerId),
-      unread: row.unread ?? 0,
+      unread: answeredByViewer(row, viewerId) ? 0 : row.unread ?? 0,
       unreadCapped: !!row.unread_capped,
       href,
       source: row,
@@ -260,26 +255,21 @@ export function serverCards(
 }
 
 /** DM rooms from the synced rail. Multi-person DMs are `dm` too. A muted room
- *  shows no unread, the same rule the rail applies. Presence and rank key to
- *  the counterpart's last message: a room they have never spoken in is
- *  browse-only, and so is a room the viewer has ANSWERED — their own reply is
- *  the newest message, so nothing awaits them. Replying retires the card from
- *  every view; the next inbound brings it back, ranked by that message. */
+ *  shows no unread, the same rule the rail applies. Rank keys to the
+ *  counterpart's last message, so the viewer's own reply never moves a room.
+ *  A room with nothing inbound since the viewer last spoke has nothing
+ *  awaiting them: any count it still carries is stale. */
 export function dmCards(rail: ChatRailChannel[]): ThreadCardModel[] {
   const out: ThreadCardModel[] = [];
   for (const c of rail) {
     if (c.kind !== "dm") continue;
-    const inboundAt = c.lastInboundAt;
-    // sortAt is the room's newest message, either direction; newer than the
-    // last inbound means the viewer spoke last.
-    const answered = inboundAt !== undefined && c.sortAt > inboundAt;
+    const awaiting = c.lastInboundAt !== undefined && c.sortAt <= c.lastInboundAt;
     out.push({
       id: `dm:${c.id}`,
       kind: "dm",
       chip: "dm",
-      activityAt: inboundAt ?? c.sortAt,
-      browseOnly: inboundAt === undefined || answered,
-      unread: c.muted ? 0 : (c.unreadCount ?? 0),
+      activityAt: c.lastInboundAt ?? c.sortAt,
+      unread: c.muted || !awaiting ? 0 : (c.unreadCount ?? 0),
       unreadCapped: !!c.unreadCapped,
       href: `/chat/${c.id}`,
       source: c,
@@ -289,27 +279,17 @@ export function dmCards(rail: ChatRailChannel[]): ThreadCardModel[] {
   return out;
 }
 
-/** A session is unread when it has been opened before and has grown since.
- *  A never-opened session shows no badge: its number is the Inbox's. */
-export function sessionUnread(
-  session: Pick<InboxSession, "message_count">,
-  seenCount: number | undefined,
-): number {
-  return seenCount !== undefined && (session.message_count ?? 0) > seenCount ? 1 : 0;
-}
-
-/** Inbox sessions as cards. The caller hands in the Inbox's own membership
- *  (placeInboxRows forced to "mine"), never the raw cache. */
-export function sessionCards(
-  sessions: InboxSession[],
-  seenCounts: Record<string, number>,
-): ThreadCardModel[] {
+/** Sessions waiting on the viewer as cards. The caller hands in the Inbox's
+ *  own needs-input bucket (placeInboxRows forced to "mine"), never the raw
+ *  cache. Each one is waiting on the viewer, so each is new: it sits above the
+ *  marker, and answering it leaves it there for the visit. */
+export function sessionCards(sessions: InboxSession[]): ThreadCardModel[] {
   return sessions.map((s) => ({
     id: `session:${s._id}`,
     kind: "session" as const,
     chip: "session" as const,
     activityAt: s.updated_at,
-    unread: sessionUnread(s, seenCounts[s._id]),
+    unread: 1,
     href: `/conversation/${s._id}`,
     source: s,
     teamId: (s as { team_id?: string | null }).team_id ?? undefined,
@@ -339,30 +319,101 @@ export function questionCards(decisions: SessionDecisionItem[]): ThreadCardModel
 
 // ── Views ───────────────────────────────────────────────────────────────────
 
-/** Whether any view lists a card: every view drops a card nothing awaits on. */
-function listedUnder(c: ThreadCardModel): boolean {
-  return !c.browseOnly;
-}
-
 /** The cards one chip shows. Sessions appear only under All, and only when
- *  the toggle is on; every other chip is exact. */
+ *  the toggle is on; every other chip is exact. A thread whose newest word is
+ *  the viewer's own is listed too: it is part of the reader's history, and it
+ *  sits among the seen threads. */
 export function cardsForChip(cards: ThreadCardModel[], chip: ChipKey, includeSessions: boolean): ThreadCardModel[] {
-  if (chip === "all") return cards.filter((c) => listedUnder(c) && (includeSessions || c.chip !== "session"));
-  return cards.filter((c) => c.chip === chip && listedUnder(c));
+  if (chip === "all") return cards.filter((c) => includeSessions || c.chip !== "session");
+  return cards.filter((c) => c.chip === chip);
 }
 
-/** Every view is an inbox: a card earns its place by carrying unread.
- *  `held` is the visit's memory — a card admitted once stays until the page
- *  is left, so a card marking itself read under the reader never vanishes
- *  mid-read. Sessions are exempt: the Sessions switch asks for them by name,
- *  and their unread has its own meaning (grown since last open). */
-export function unreadOnlyCards(cards: ThreadCardModel[], held: Set<string>): ThreadCardModel[] {
-  const out: ThreadCardModel[] = [];
-  for (const c of cards) {
-    if (c.unread > 0) held.add(c.id);
-    if (c.unread > 0 || held.has(c.id) || c.chip === "session") out.push(c);
+// ── The visit ───────────────────────────────────────────────────────────────
+//
+// The page is one stable list for as long as the reader stays: threads with
+// something new on top, then a marker, then the threads already seen. Where
+// a thread stands is decided the first time the visit sees it, and nothing
+// the reader does moves it: reading it, answering it, or marking it done
+// leaves it exactly where it was. Only news moves a thread: an unread thread
+// the visit had not seen yet lands at the top of the new section, and a seen
+// thread that gets new activity from someone else moves up to join it.
+
+export type ThreadsVisit = {
+  /** Rank of each thread in the visit; lower sorts first. */
+  rank: Map<string, number>;
+  /** Threads in the new section. */
+  fresh: Set<string>;
+  /** Each thread's unread boundary as the visit first saw it, so the "new"
+   *  divider inside a body survives the thread being marked read. */
+  readAt: Map<string, number>;
+  /** The newest model of every thread the visit has shown: a thread that
+   *  leaves the source mid visit (done, answered, retired) keeps its place. */
+  last: Map<string, ThreadCardModel>;
+  /** The next rank at the bottom, and the next above everything. */
+  bottom: number;
+  top: number;
+};
+
+export function newVisit(): ThreadsVisit {
+  return { rank: new Map(), fresh: new Set(), readAt: new Map(), last: new Map(), bottom: 0, top: 0 };
+}
+
+/** The unread boundary of a card as it stands now. */
+export function frozenReadAtOf(card: ThreadCardModel): number {
+  if (card.kind === "dm") return (card.source as ChatRailChannel).lastReadAt ?? 0;
+  if (card.kind === "session" || card.kind === "question") return 0;
+  return (card.source as ThreadInboxRow).last_read_at ?? 0;
+}
+
+/** Fold the current cards (newest activity first) into the visit and return
+ *  its two sections in visit order. Mutates `visit`. */
+export function arrangeVisit(
+  visit: ThreadsVisit,
+  cards: ThreadCardModel[],
+): { fresh: ThreadCardModel[]; seen: ThreadCardModel[] } {
+  const firstPass = visit.rank.size === 0;
+  const arrivals: ThreadCardModel[] = [];
+  for (const card of cards) {
+    const known = visit.rank.has(card.id);
+    visit.last.set(card.id, card);
+    if (!known) {
+      // After the first pass, an unread arrival is news and lands on top; a
+      // read one (an older page loading in) joins the bottom.
+      if (!firstPass && card.unread > 0) arrivals.push(card);
+      else visit.rank.set(card.id, visit.bottom++);
+      if (card.unread > 0) visit.fresh.add(card.id);
+      visit.readAt.set(card.id, frozenReadAtOf(card));
+    } else if (card.unread > 0 && !visit.fresh.has(card.id)) {
+      // A seen thread with news from someone else: up into the new section.
+      visit.fresh.add(card.id);
+      visit.readAt.set(card.id, frozenReadAtOf(card));
+      visit.rank.set(card.id, --visit.top);
+    }
   }
-  return out;
+  // Arrivals keep their newest-first order among themselves, above the rest.
+  for (let i = arrivals.length - 1; i >= 0; i--) visit.rank.set(arrivals[i].id, --visit.top);
+  const all = [...visit.last.values()].sort((a, b) => visit.rank.get(a.id)! - visit.rank.get(b.id)!);
+  return {
+    fresh: all.filter((c) => visit.fresh.has(c.id)),
+    seen: all.filter((c) => !visit.fresh.has(c.id)),
+  };
+}
+
+// ── What a body shows ───────────────────────────────────────────────────────
+
+/** With nothing new, a body shows this many of its newest items; with news,
+ *  the new ones and one earlier for context. The rest sit behind a "show
+ *  earlier" button above, so no body ever scrolls inside the page. */
+export const READER_TAIL = 3;
+
+/** How many of a body's items (oldest first, `times` their timestamps) fold
+ *  away behind "show earlier", and where the news starts (-1 for none).
+ *  `newSince` undefined means the body is not a reader: show everything. */
+export function readerFold(times: number[], newSince: number | undefined): { hidden: number; firstNew: number } {
+  const firstNew = newSince === undefined || newSince <= 0 ? -1 : times.findIndex((t) => t > newSince);
+  if (newSince === undefined) return { hidden: 0, firstNew };
+  const hidden = firstNew >= 0 ? Math.max(0, firstNew - 1) : Math.max(0, times.length - READER_TAIL);
+  return { hidden, firstNew };
 }
 
 /** Newest activity first. One merge sort across every source. */
@@ -381,19 +432,10 @@ export function unreadByChip(cards: ThreadCardModel[]): Record<ChipKey, number> 
     // badge-counting kinds roll up into the default view's number (which is
     // what the sidebar shows).
     if (c.unread <= 0) continue;
-    if (!listedUnder(c)) continue;
     if (c.chip !== "session") out[c.chip]++;
     if (meta.countsTowardBadge) out.all++;
   }
   return out;
-}
-
-/** The unread boundary as it stands when a card is opened. Frozen by the
- *  page's cursor so marking read cannot erase the "new" divider mid-read. */
-export function frozenReadAtOf(card: ThreadCardModel): number {
-  if (card.kind === "dm") return (card.source as ChatRailChannel).lastReadAt ?? 0;
-  if (card.kind === "session" || card.kind === "question") return 0;
-  return (card.source as ThreadInboxRow).last_read_at ?? 0;
 }
 
 /** "Done" archives the follow: only the thread_reads-backed kinds have a row
@@ -403,46 +445,12 @@ export function isDismissible(card: ThreadCardModel): boolean {
   return card.kind === "chat" || card.kind === "comment" || card.kind === "code" || card.kind === "task" || card.kind === "page";
 }
 
-// ── The row's second line ───────────────────────────────────────────────────
+// ── The cursor ──────────────────────────────────────────────────────────────
 
-/** Who spoke last and what they said, as the collapsed row shows it. */
-export type CardPreview = {
-  /** The speaker: a person's name, or an agent's session title. */
-  who?: string;
-  whoKind?: "user" | "agent";
-  text: string;
-};
-
-/** A server row's newest reply as a preview line. An agent's reply is named
- *  by its session, never by the token owner whose name it was signed with:
- *  "Ashot: shipped it" would read as the reader's own words. */
-export function replyPreview(
-  last: ThreadLastReply | null | undefined,
-  nameOf?: (userId: string) => string | undefined,
-): CardPreview | null {
-  if (!last) return null;
-  if (last.author_kind === "agent") {
-    return { who: last.session_title ?? "Agent", whoKind: "agent", text: last.preview };
-  }
-  const who = last.author_name ?? (last.user_id ? nameOf?.(String(last.user_id)) : undefined);
-  return { who, whoKind: "user", text: last.preview };
-}
-
-// ── The cursor's moves ──────────────────────────────────────────────────────
-
-/** Where a walk of `delta` rows lands. From a cursor that is on the list, the
- *  neighbour, clamped to the ends. From a cursor whose row has left the list
- *  (dismissed elsewhere, answered, retired), the row now standing where it
- *  stood — walking down from a gone row must not skip the one that took its
- *  place. -1 when there is nothing to land on. */
-export function walkIndex(length: number, cursorIndex: number, lastIndex: number, delta: number): number {
+/** Where a walk of `delta` threads lands from the cursor at `index` (-1: not
+ *  on the list, so the first step lands on the first thread). */
+export function walkIndex(length: number, index: number, delta: number): number {
   if (length === 0) return -1;
-  const from = cursorIndex >= 0 ? cursorIndex : lastIndex - (delta > 0 ? 1 : 0);
-  return Math.min(length - 1, Math.max(0, from + delta));
-}
-
-/** The row the cursor steps to after the one at `index` is done with: the
- *  next, else the previous, else none. */
-export function afterDone<T>(cards: T[], index: number): T | undefined {
-  return cards[index + 1] ?? cards[index - 1];
+  if (index < 0) return delta > 0 ? 0 : length - 1;
+  return Math.min(length - 1, Math.max(0, index + delta));
 }

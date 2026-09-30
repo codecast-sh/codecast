@@ -60,8 +60,8 @@ export function prefetchBrowserFocusEndpoint(convex: ConvexReactClient): void {
  */
 export type BrowserTabFailure = "no-daemon" | "tab-gone" | "browser-stopped" | "unreachable" | "open-failed";
 
-export type FocusOutcome = { ok: true } | { ok: false; reason: BrowserTabFailure; detail?: string };
-export type ReopenOutcome = { ok: true; tabId: string } | { ok: false; reason: BrowserTabFailure; detail?: string };
+export type FocusOutcome = { ok: true; pid?: number } | { ok: false; reason: BrowserTabFailure; detail?: string };
+export type ReopenOutcome = { ok: true; tabId: string; pid?: number } | { ok: false; reason: BrowserTabFailure; detail?: string };
 
 /** Injectable for tests; the defaults are the real thing. */
 export interface FocusTabDeps {
@@ -138,7 +138,10 @@ export async function focusBrowserTab(convex: ConvexReactClient, target: string 
       : { ...(target.sessionUuid ? { session_uuid: target.sessionUuid } : {}), ...(target.tmuxSession ? { tmux_session: target.tmuxSession } : {}) },
   );
   const sent = await sendToDaemon(d, `/browser/focus?${query}`, { method: "POST" }, FOCUS_REQUEST_TIMEOUT_MS);
-  if (sent !== "no-daemon" && !("transport" in sent) && sent.res.ok) return { ok: true };
+  if (sent !== "no-daemon" && !("transport" in sent) && sent.res.ok) {
+    const pid = sent.body?.pid;
+    return { ok: true, ...(Number.isInteger(pid) ? { pid } : {}) };
+  }
   return { ok: false, ...failureOf(sent) };
 }
 
@@ -171,7 +174,8 @@ export async function reopenBrowserTab(
     REOPEN_REQUEST_TIMEOUT_MS,
   );
   if (sent !== "no-daemon" && !("transport" in sent) && sent.res.ok && typeof sent.body?.tabId === "string") {
-    return { ok: true, tabId: sent.body.tabId };
+    const pid = sent.body.pid;
+    return { ok: true, tabId: sent.body.tabId, ...(Number.isInteger(pid) ? { pid } : {}) };
   }
   return { ok: false, ...failureOf(sent) };
 }

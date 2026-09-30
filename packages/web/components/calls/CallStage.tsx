@@ -70,6 +70,7 @@ import { LivePulseDot } from "../SessionActivityLine";
 import { prefersReducedMotion } from "../../hooks/useBottomAnchoredList";
 import { useAgentsInRoom } from "./useCallFeed";
 import { useRoomThreadUnread } from "../../hooks/useRoomThreadUnread";
+import { EdgeResizeHandle, useEdgeResize } from "../../hooks/useEdgeResize";
 import { UnreadCount } from "./UnreadCount";
 import { takeCallThreadRequest } from "../../lib/calls/callStage";
 
@@ -1066,9 +1067,13 @@ function AudioOnlyStage({
 // The thread beside the stage: what was said (folded into passages), what
 // was typed, what an agent answered, who came and went. RoomThread renders
 // it; this wrapper owns the reads it needs (the transcript's call record) and
-// the rail's box. In the panel the window is about 690px wide, so the rail
-// takes a share of the stage rather than a fixed 340px that would be half
-// the window.
+// the rail's box. The reader drags its left edge to widen it; the stage
+// always keeps STAGE_MIN_W, so a width saved on a wide window shrinks to fit
+// the panel (about 690px) rather than burying the faces.
+const RAIL_MIN_W = 280;
+const STAGE_MIN_W = 200;
+const railMaxWidth = (handle: HTMLElement) =>
+  (handle.parentElement?.parentElement?.clientWidth ?? Infinity) - STAGE_MIN_W;
 function ThreadRail({
   roomKey,
   live,
@@ -1092,9 +1097,16 @@ function ThreadRail({
     api.transcripts.webGetCall,
     live ? { transcript_id: live.transcript_id as any } : "skip",
   ).data as RoomThreadCall | null | undefined;
+  const { width, onResizeDown } = useEdgeResize({
+    storageKey: "call-thread-rail-width",
+    min: RAIL_MIN_W,
+    fallback: 340,
+    max: railMaxWidth,
+  });
   return (
     <aside
-      className={`flex w-[min(340px,55%)] shrink-0 flex-col overflow-hidden rounded-xl bg-white/[0.04] motion-reduce:animate-none ${
+      style={{ width: `min(${width}px, calc(100% - ${STAGE_MIN_W}px))` }}
+      className={`relative flex shrink-0 flex-col overflow-hidden rounded-xl bg-white/[0.04] motion-reduce:animate-none ${
         closing
           ? "animate-out fade-out slide-out-to-right-2 fill-mode-forwards duration-150"
           : "animate-in fade-in slide-in-from-right-2 duration-200"
@@ -1104,6 +1116,7 @@ function ThreadRail({
         if (e.target === e.currentTarget) onClosed();
       }}
     >
+      <EdgeResizeHandle onResizeDown={onResizeDown} />
       <RoomThread
         roomKey={roomKey}
         call={live ? call : null}

@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { PanelRight, Wrench } from "lucide-react";
 import { useInboxStore, type InboxSession } from "../../../store/inboxStore";
 import { summaryCount, type ThreadCardModel } from "../../../lib/threadCards";
@@ -10,9 +10,13 @@ import { parseAgentAuthoredMessage } from "../../sessionMessage";
 import { openConversationBeside } from "../../../hooks/useOpenLinkedSession";
 import { AgentIcon } from "../../ConversationList";
 import { MessageInput } from "../../MessageInput";
+import { composerAgentStatus, useManagedSessionFields, useSessionEscape } from "../../../hooks/useSessionComposerControls";
+import { usePermissionModeSwitch } from "../../../hooks/usePermissionModeSwitch";
+import { animatedHideSession } from "../../../store/undoActions";
 import { MarkdownRenderer } from "../../tools/MarkdownRenderer";
 import { EntityIdPill } from "../../EntityIdPill";
-import { useTailPin } from "../cardWindow";
+import { EarlierButton, useReaderFold } from "../readerFold";
+import { Clamp } from "../../tasks/TaskCommentStream";
 import { useThreadsPage } from "../threadsContext";
 import "../../chat/chat.css";
 
@@ -24,7 +28,7 @@ import { useWatchEffect } from "../../../hooks/useWatchEffect";
 // the DM kind's shape: the newest messages of the session inline and the
 // app's own composer sending into it; the side panel is a secondary button.
 
-/** How many of the session's newest visible messages an open row shows. */
+/** How many of the session's newest visible messages a row holds; the fold shows the last few. */
 const SESSION_WINDOW = 20;
 
 function sessionOf(card: ThreadCardModel): InboxSession {
@@ -86,14 +90,13 @@ function toRows(messages: Message[]): SessionRow[] {
 }
 
 function SessionRows({ rows, agentType }: { rows: SessionRow[]; agentType?: string }) {
-  // The rows live in the card's capped scroll region (.th-card-replies),
-  // pinned to the tail (cardWindow.useTailPin — every kind's scroller pins
-  // the same way): the newest message is the one the card is about.
-  const newestKey = rows.length ? rows[rows.length - 1].key : "";
-  const ref = useTailPin(`${newestKey}|${rows.length}`);
+  // The newest few messages, the rest behind one button above: a session has
+  // no read boundary here, so the fold keeps the tail the card is about.
+  const fold = useReaderFold(rows, () => 0, 0);
   return (
-    <div ref={ref} className="th-card-replies th-session-rows">
-      {rows.map((row) => (
+    <div className="th-card-replies th-session-rows">
+      <EarlierButton count={fold.hidden} noun="message" onClick={fold.showAll} />
+      {fold.visible.map((row) => (
         <div key={row.key} className={`th-session-row th-session-row-${row.role}`}>
           <div className="th-session-row-head">
             {row.role === "assistant" ? (
@@ -111,9 +114,9 @@ function SessionRows({ rows, agentType }: { rows: SessionRow[]; agentType?: stri
             )}
           </div>
           {row.text ? (
-            <div className="th-session-row-body">
+            <Clamp className="th-session-row-body">
               <MarkdownRenderer content={row.text} className="text-[12.5px] !prose-sm [&>*:first-child]:mt-0 [&>*:last-child]:mb-0" />
-            </div>
+            </Clamp>
           ) : null}
           {row.role === "assistant" && row.tools > 0 && (
             <div className="th-session-row-tools">
@@ -129,7 +132,7 @@ function SessionRows({ rows, agentType }: { rows: SessionRow[]; agentType?: stri
 export function SessionExpanded({ card, seen, focusComposer }: { card: ThreadCardModel; present: boolean; seen: boolean; frozenReadAt: number; focusComposer: boolean }) {
   const session = sessionOf(card);
   const sessionId = session._id;
-  const { now } = useThreadsPage();
+  const { now, viewerId } = useThreadsPage();
   // The conversation view's own feeder: store-first, live tail query, the
   // same rows the side panel and the main view paint.
   const { conversation } = useConversationMessages(sessionId);
@@ -148,6 +151,19 @@ export function SessionExpanded({ card, seen, focusComposer }: { card: ThreadCar
     useInboxStore.getState().markSessionSeen(sessionId);
   }, [seen, sessionId, newestId, session.message_count]);
 
+  // The conversation view's own composer controls (hooks/useSessionComposerControls,
+  // usePermissionModeSwitch): status line, interrupt, permission mode, send
+  // and stash, handoff, attachments.
+  const managed = useManagedSessionFields(sessionId);
+  const active = (conversation?.status ?? session.status) === "active";
+  const isOwner = String(session.user_id) === String(viewerId);
+  const mode = managed?.permission_mode || "default";
+  const convCommand = useInboxStore((s) => s.convCommand);
+  const { handleCycleMode, modeSwitching } = usePermissionModeSwitch({ effectiveMode: mode, conversation: conversation as any, effectiveIsOwner: isOwner, convexConvId: sessionId as any, convCommand });
+  const sendEscape = useSessionEscape(sessionId, { active, isOwner });
+  const onEscape = useCallback(() => { sendEscape(); }, [sendEscape]);
+  const stash = useMemo(() => (isOwner ? () => animatedHideSession(sessionId, "stash") : undefined), [isOwner, sessionId]);
+
   const state = threadStateView(session as any, session.message_count ?? 0, now);
   return (
     <div className="th-card-open th-card-open-session">
@@ -156,15 +172,23 @@ export function SessionExpanded({ card, seen, focusComposer }: { card: ThreadCar
       ) : (
         <SessionRows rows={rows} agentType={session.agent_type} />
       )}
-      <div className="ch-composer th-session-composer">
+      <div className="th-session-composer">
         <MessageInput
           key={sessionId}
           conversationId={sessionId}
           sessionId={session.session_id}
           agentType={session.agent_type}
           status={conversation?.status ?? "active"}
-          bareComposer
+          inline
           embedded
+          initialDraft={(conversation as any)?.draft_message}
+          agentStatus={composerAgentStatus(managed?.agent_status, { active, disconnected: managed?.is_connected === false })}
+          deliveryStatus={managed?.agent_status}
+          permissionMode={mode}
+          permissionModePending={modeSwitching}
+          onCycleMode={isOwner ? handleCycleMode : undefined}
+          onSendEscape={onEscape}
+          onSendAndDismiss={stash}
           composerPlaceholder="Reply to this session"
           autoFocusInput={focusComposer}
         />

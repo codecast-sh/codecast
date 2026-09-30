@@ -319,7 +319,9 @@ describe("the header draws the model's row", () => {
     const h = await mount();
     expect(h.q("[data-overflow]")?.className.split(" ")).toContain("ml-0.5");
     const controls = h.all(".people-bar > button:not([data-overflow])");
-    expect(controls.length).toBeGreaterThanOrEqual(3);
+    expect(controls.length).toBeGreaterThanOrEqual(2);
+    // The door to the stage is not a header control: it rides the call's card.
+    expect(h.q(".engagement-card [data-open-call]")).not.toBeNull();
     for (const el of controls) expect(el.className.split(" ")).toContain("ml-1");
   });
 

@@ -1386,6 +1386,20 @@ export default defineSchema({
     // When the role last read its brief from its own session (orgRoles
     // .markBriefRead): `cast brief` shows what changed since (org-staffing.md S25).
     checked_at: v.optional(v.number()),
+    // The area watch (org-staffing.md S29, orgWatch.ts): the area's status as
+    // the last pass read it, since when it has read so, how many passes in a
+    // row, and the status the Chief of Staff was last told about, so a change
+    // that lasts reaches the chief once per episode.
+    area_watch: v.optional(v.object({
+      status: v.string(),
+      since: v.number(),
+      passes: v.number(),
+      told: v.optional(v.string()),
+      told_at: v.optional(v.number()),
+    })),
+    // On the Chief of Staff's row: the projects with work and no owner it was
+    // told about, by project id, so each is told once until it gains an owner.
+    unowned_told: v.optional(v.array(v.object({ id: v.string(), since: v.number() }))),
     // The standing agent retired when this seat was filled with a fresh
     // session (org-staffing.md S16): its thread is kept and linked from the
     // role page, so a workspace never ends with two root agents.
@@ -1660,6 +1674,9 @@ export default defineSchema({
     update_policy: v.union(v.literal("manual"), v.literal("canary"), v.literal("stable")),
     // An accepted upgrade change (H9) waits here for the host step (bind --to).
     pending_upgrade: v.optional(v.object({ to: v.string(), digest: v.string(), accepted_at: v.number(), accepted_by: v.id("users") })),
+    // The host step asked for from the web (H3): the daemon command that runs
+    // bind on the machine holding the checkout. The role page reads its outcome.
+    bind_request: v.optional(v.object({ command_id: v.id("daemon_commands"), device_id: v.string(), device_label: v.string(), requested_at: v.number(), requested_by: v.id("users") })),
     config: v.optional(v.record(v.string(), v.string())), // hire answers; never a secret
     // Secret inputs bound on a host: which machine, and the hash of the path.
     bindings: v.optional(v.record(v.string(), v.object({ host: v.string(), path_hash: v.string(), bound_at: v.number() }))),

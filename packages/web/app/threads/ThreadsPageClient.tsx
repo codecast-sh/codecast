@@ -1,6 +1,6 @@
 "use client";
 
-import { usePagePresence } from "../../hooks/usePagePresence";
+import { usePagePresence, usePageReading } from "../../hooks/usePagePresence";
 import { ThreadsView } from "../../components/threads/ThreadsView";
 
 // The Threads inbox: every conversation the viewer is in — chat threads, DMs,
@@ -9,10 +9,12 @@ import { ThreadsView } from "../../components/threads/ThreadsView";
 // lib/pageLayout FULL_WIDTH_PATTERNS). Never gated on a team feature: comment
 // and task threads exist whether or not the team has chat on.
 //
-// READS FOLLOW PRESENCE: a thread is marked read only while the reader is
-// actually here (this tab active, the window focused); arrival, hydration and
-// background sync never mark anything.
+// READS FOLLOW THE READER: a thread is marked read only while the page is on
+// screen (the active pane or a split sibling) in a focused window; arrival,
+// hydration and background sync never mark anything. The keyboard belongs to
+// the page only while it is the active pane (`present`).
 export function ThreadsPageClient() {
   const present = usePagePresence();
-  return <ThreadsView present={present} />;
+  const reading = usePageReading();
+  return <ThreadsView present={present} reading={reading} />;
 }
