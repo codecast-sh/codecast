@@ -24,8 +24,22 @@ import { isCdpAlive } from "./cdp.js";
 import { freePort } from "./instance.js";
 import type { RemoteHost } from "../remote/session-move.js";
 
-/** The profile the remote browser uses. Never a copy of ours. */
-const REMOTE_PROFILE = "~/.codecast/browser-profile";
+/** The profile the remote browser uses. Never a copy of ours. `$HOME`, not
+ *  `~`: a tilde after `--user-data-dir=` is not expanded, so Chrome took it
+ *  literally and kept every carried cookie in `$HOME/~/.codecast/...`, where
+ *  no wipe (all expanding `~`) ever reached. */
+const REMOTE_PROFILE = `"$HOME/.codecast/browser-profile"`;
+
+/**
+ * Stop whatever Chrome holds the remote profile, and delete it, the literal
+ * `~` copy older launches left included. `pkill -f` matches whole command
+ * lines, this shell's own among them, so the profile's name appears here only
+ * as `[b]rowser-profile`: that matches Chrome's command line and the
+ * directories on disk (as a glob) but not the text of this command.
+ */
+export function remoteProfileWipeCommand(): string {
+  return `pkill -f ".codecast/[b]rowser-profile" 2>/dev/null; sleep 1; rm -rf "$HOME"/.codecast/[b]rowser-profile "$HOME"/~/.codecast/[b]rowser-profile; true`;
+}
 
 /**
  * Where Chrome lives, and what it needs, on each kind of remote.
@@ -209,17 +223,7 @@ export async function startRemoteBrowser(
   // Clear any Chrome left holding the profile: a second launch against a locked
   // user-data-dir forwards its arguments to the running instance and exits, so
   // the new debugging port is silently dropped.
-  //
-  // Two traps in one line. `pkill -f` matches whole command lines, INCLUDING the
-  // shell running this very command — so a literal pattern makes the remote kill
-  // its own session and the call comes back as a bare ssh exit 255. The bracket
-  // around the first letter is the usual guard: `[b]rowser-profile` matches
-  // Chrome's command line but not the pattern's own text. And the path must be
-  // expanded here, because a tilde inside quotes never expands remotely, so the
-  // old pattern could not have matched Chrome even when it ran.
-  const profileGlob = REMOTE_PROFILE.replace("~/", "").replace("browser-profile", "[b]rowser-profile");
-  remoteExec(host, `pkill -f "${profileGlob}" 2>/dev/null; true`);
-  await sleep(1000);
+  remoteExec(host, remoteProfileWipeCommand());
 
   const size = opts.windowSize ?? { width: 1440, height: 900 };
   const t = REMOTE_TARGETS[os];
@@ -416,7 +420,7 @@ export async function stopRemoteBrowser(host: RemoteHost, sshPid?: number): Prom
   try {
     // Wipe the profile as well: it holds cookies this machine sent, and a
     // rented host should not keep them once the work is over.
-    remoteExec(host, `pkill -f 'user-data-dir=${REMOTE_PROFILE}' 2>/dev/null; rm -rf ${REMOTE_PROFILE}; true`, 20_000);
+    remoteExec(host, remoteProfileWipeCommand(), 20_000);
   } catch {
     /* the host may already be unreachable; nothing else to do */
   }

@@ -69,6 +69,14 @@ describe("focusBrowserTab — what the pill learns", () => {
     expect(asked).toEqual([{ trustCache: true }]);
   });
 
+  test("carries the browser's pid so the desktop app can raise it", async () => {
+    const out = await focusBrowserTab(convex, "4A2CDC7E", {
+      getEndpoint: async () => endpoint,
+      fetchImpl: daemon(() => response(200, { ok: true, pid: 97279 })),
+    });
+    expect(out).toEqual({ ok: true, pid: 97279 });
+  });
+
   test("no local endpoint (other machine / daemon down) → no-daemon", async () => {
     const out = await focusBrowserTab(convex, "4A2CDC7E", {
       getEndpoint: async () => null,
