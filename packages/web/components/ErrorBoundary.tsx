@@ -15,6 +15,9 @@ interface ErrorBoundaryProps {
   /** A node, or a render prop when the fallback needs the boundary's retry
    *  (e.g. a floating surface offering both "retry" and a destructive exit). */
   fallback?: ReactNode | ((ctx: { error: Error; retry: () => void }) => ReactNode);
+  /** Report the error but show no toast: for a surface a visitor sees and
+   *  cannot act on (the homepage hero). */
+  silent?: boolean;
 }
 
 interface ErrorBoundaryState {
@@ -43,7 +46,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     captureError(rootError(error), { component: this.props.name, componentStack: info.componentStack ?? undefined });
 
     const dedupKey = `${label}:${summary}`;
-    if (!_recentErrors.has(dedupKey)) {
+    if (!this.props.silent && !_recentErrors.has(dedupKey)) {
       _recentErrors.add(dedupKey);
       setTimeout(() => _recentErrors.delete(dedupKey), 30_000);
 

@@ -945,7 +945,7 @@ function ChiefReadSection({ read, now, onPickProposal, onTrigger, onSetEvery }: 
             <ChevronRight className="w-3.5 h-3.5 shrink-0" style={{ color: "var(--sol-text-dim)" }} />
           </button>
         )}
-        <CheckLine check={read.area?.check ?? null} checkedAt={read.area?.check?.last_run_at ?? null} now={now} word="review" onTrigger={onTrigger} onSetEvery={onSetEvery} />
+        {read.area && <CheckLine check={read.area.check} checkedAt={read.area.check?.last_run_at ?? null} now={now} word="review" onTrigger={onTrigger} onSetEvery={onSetEvery} />}
       </div>
     </>
   );

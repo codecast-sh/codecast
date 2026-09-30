@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { createContext, useContext, useMemo } from "react";
 import { useQuery } from "convex/react";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useRepoObject } from "../hooks/useRepoObject";
@@ -161,6 +161,17 @@ export type EntityResolution = {
 };
 
 
+/** A fixed answer for a reference: what the resolver returns in place of a query. */
+export type EntityFixture = { type: EntityType; entity: any };
+
+/**
+ * Fixture answers for every reference below, keyed by the id as written. When
+ * set, the resolver issues no query and reads nothing from the store: a
+ * listed id resolves to its fixture and any other id to "no access". The
+ * homepage hero sets it so its pills never show a signed-in visitor's rows.
+ */
+export const EntityFixtureContext = createContext<Record<string, EntityFixture> | null>(null);
+
 /**
  * One id in, one live entity out — the resolution every reference surface
  * shares. Local-first: seeds synchronously from the store (non-reactive read;
@@ -174,7 +185,11 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
   // A `doc:<convexId>` reference carries its type in the string itself.
   const isDocRef = !typeProp && /^doc:/i.test(trimmed);
   const rawId = isDocRef ? trimmed.slice(4) : trimmed;
-  const looksConvex = isConvexId(rawId);
+  const fixtures = useContext(EntityFixtureContext);
+  const fixture = fixtures ? fixtures[trimmed] ?? fixtures[rawId] ?? null : undefined;
+  // Under fixtures every query below is skipped by clearing `live`.
+  const live = !fixtures;
+  const looksConvex = live && isConvexId(rawId);
   // A full Convex id carries no type prefix (and can even start with "jx", so
   // prefix sniffing misclassifies it) — resolve its table server-side instead.
   // Prefix detection is for short ids only.
@@ -183,14 +198,14 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
   // the function yet (client/deploy skew).
   const { data: resolvedType } = useQueryNoThrow(api.entities.resolveIdType, !typeProp && !isDocRef && looksConvex ? { id: rawId } : "skip");
   const type: EntityType | null =
-    typeProp ?? (isDocRef ? "doc" : looksConvex ? resolvedType ?? null : entityTypeFromId(rawId));
+    fixture?.type ?? typeProp ?? (isDocRef ? "doc" : looksConvex ? resolvedType ?? null : entityTypeFromId(rawId));
   const isTask = type === "task";
   const isPlan = type === "plan";
   const isSession = type === "session";
   const isTrigger = type === "trigger";
   const isRepoObject = type === "pr" || type === "commit";
 
-  const queryArgs = type ? entityQueryArgs(type, rawId) : null;
+  const queryArgs = live && type ? entityQueryArgs(type, rawId) : null;
   const task = useQuery(api.tasks.webGet, isTask && queryArgs ? queryArgs : "skip");
   const plan = useQuery(api.plans.webGet, isPlan && queryArgs ? queryArgs : "skip");
   const session = useQuery(api.conversations.webGet, isSession && queryArgs ? queryArgs : "skip");
@@ -204,23 +219,23 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
   // An initiative is named by `in-N` or a Convex id; the store's snapshot
   // usually seeds it below, and this keeps the label live. No-throw for the
   // same client and deploy skew reason as triggers.
-  const { data: initiative } = useQueryNoThrow(api.initiatives.webGet, type === "initiative" ? { ref: rawId } : "skip");
+  const { data: initiative } = useQueryNoThrow(api.initiatives.webGet, live && type === "initiative" ? { ref: rawId } : "skip");
   // A staffing proposal (`op-N`) is store-fed: the feeder syncs
   // orgProposals.get into the orgProposals and orgProposalChanges collections
   // and the row is read back from the store, so the card's verdicts (store
   // actions) paint on the same row the reference resolves to.
-  const proposalFeed = useSyncOrgProposal(type === "proposal" ? rawId : null);
-  const proposalRow = useInboxStore((s) => (type === "proposal" ? findEntityInStore(s, "proposal", rawId) : undefined));
+  const proposalFeed = useSyncOrgProposal(live && type === "proposal" ? rawId : null);
+  const proposalRow = useInboxStore((s) => (live && type === "proposal" ? findEntityInStore(s, "proposal", rawId) : undefined));
   const proposal = type === "proposal" ? (proposalFeed.ready ? proposalRow ?? null : undefined) : undefined;
   // A decision (`sd-N` or Convex id) seeds from the viewer's queue in the
   // store; the query keeps it live and covers rows the queue has dropped.
-  const { data: decision } = useQueryNoThrow(api.sessionDecisions.get, type === "decision" ? { decision_id: rawId } : "skip");
+  const { data: decision } = useQueryNoThrow(api.sessionDecisions.get, live && type === "decision" ? { decision_id: rawId } : "skip");
   // A pull request or commit reference resolves by repository and number/sha,
   // or by Convex id. No-throw for the same client/deploy-skew reason as
   // triggers: a `owner/repo#482` in prose must read as text, not crash.
   const repoObjectArgs = isRepoObject && queryArgs && (queryArgs.id || queryArgs.repository) ? queryArgs : null;
-  const repoObject = useRepoObject(isRepoObject ? type : null, rawId, repoObjectArgs);
-  const served = isTask ? task : isPlan ? plan : isSession ? session : isTrigger ? trigger : type === "doc" ? doc : type === "project" ? project : type === "initiative" ? initiative : type === "proposal" ? proposal : type === "decision" ? decision : undefined;
+  const repoObject = useRepoObject(live && isRepoObject ? type : null, rawId, repoObjectArgs);
+  const served = fixtures ? fixture?.entity ?? null : isTask ? task : isPlan ? plan : isSession ? session : isTrigger ? trigger : type === "doc" ? doc : type === "project" ? project : type === "initiative" ? initiative : type === "proposal" ? proposal : type === "decision" ? decision : undefined;
 
   // Local-first: the client usually already holds this row, so paint the title
   // on the FIRST frame instead of flashing the raw id until the query answers.
@@ -228,10 +243,10 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
   // must not re-render on the churn of a collection with thousands of rows; the
   // live query above is what keeps the label fresh.
   const seed = useMemo(
-    () => (type ? findEntityInStore(useInboxStore.getState(), type, rawId) : undefined),
-    [type, rawId],
+    () => (live && type ? findEntityInStore(useInboxStore.getState(), type, rawId) : undefined),
+    [live, type, rawId],
   );
-  const entity: any = isRepoObject ? repoObject.entity ?? seed : served ?? seed;
+  const entity: any = fixtures ? served : isRepoObject ? repoObject.entity ?? seed : served ?? seed;
 
   // One label rule for every type, shared with mobile: the reference reads as
   // the object's NAME, and the id moves to the detail surfaces. A trigger
@@ -262,5 +277,5 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
   const routeId = isRepoObject && type ? repoObjectRefOf(type, entity, 40) ?? rawId : ((type === "initiative" || type === "proposal" || type === "decision") && entity?.short_id) || (entity?._id ?? rawId);
   const href = entityRoute(type ?? "session", routeId) ?? "#";
 
-  return { rawId, type, entity, served: isRepoObject ? repoObject.ready : served !== undefined, status: entity?.status, label, shortLabel, href };
+  return { rawId, type, entity, served: fixtures ? true : isRepoObject ? repoObject.ready : served !== undefined, status: entity?.status, label, shortLabel, href };
 }

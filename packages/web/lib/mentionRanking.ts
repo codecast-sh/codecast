@@ -1,6 +1,7 @@
 import type { MentionItem } from "./mentionItem";
 import type { RecentVisit } from "../store/inboxStore";
 import { identityLine } from "./sessionIdentity";
+import { mentionContextPosition, type MentionContext } from "./mentionContext";
 
 // How the @-mention dropdown decides what to show first.
 //
@@ -111,21 +112,62 @@ export function compareMentionRecency(a: MentionItem, b: MentionItem): number {
   return (b.viewedAt ?? 0) - (a.viewedAt ?? 0) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
 }
 
-export function mergeMentionSuggestions(local: MentionItem[], remote: MentionItem[], times: Map<string, number>, perTypeLimit = Infinity, query = "", personifyAll = false): MentionItem[] {
+// Something this conversation already names outranks a stranger that matches
+// the typed words equally well, and even one rung better: a session the thread
+// cites whose title starts with the query leads a teammate whose name does.
+// It never climbs past a stronger rung than that, so a summary-only hit on a
+// cited session still sits below a name hit on anything.
+const CONTEXT_LIFT = 1.5;
+
+export function mergeMentionSuggestions(local: MentionItem[], remote: MentionItem[], times: Map<string, number>, perTypeLimit = Infinity, query = "", personifyAll = false, context?: MentionContext): MentionItem[] {
   const byId = new Map<string, MentionItem>();
   for (const item of [...local, ...remote]) {
     const key = `${item.type}:${item.id}`;
-    if (!byId.has(key)) byId.set(key, withMentionViewTime(item, times));
+    if (byId.has(key)) continue;
+    const timed = withMentionViewTime(item, times);
+    const contextAt = mentionContextPosition(item, context);
+    byId.set(key, contextAt ? { ...timed, contextAt } : timed);
   }
   const ranked = [...byId.values()];
   const ranks = new Map<MentionItem, number>();
-  for (const item of ranked) ranks.set(item, mentionMatchRank(item, query, personifyAll));
+  for (const item of ranked) ranks.set(item, mentionMatchRank(item, query, personifyAll) - (item.contextAt ? CONTEXT_LIFT : 0));
   const counts = new Map<string, number>();
   return ranked
-    .sort((a, b) => ranks.get(a)! - ranks.get(b)! || compareMentionRecency(a, b))
+    .sort((a, b) => ranks.get(a)! - ranks.get(b)! || (b.contextAt ?? 0) - (a.contextAt ?? 0) || compareMentionRecency(a, b))
     .filter((item) => {
       const count = counts.get(item.type) ?? 0;
       counts.set(item.type, count + 1);
       return count < perTypeLimit;
     });
+}
+
+// The popup reads as sections: what this conversation already names, then one
+// section per kind. Sections come in the order their best item ranked, and
+// each keeps the ranked order inside it, so the top hit is still the first
+// row and the keyboard walks the list exactly as it is drawn. Callers hand
+// the popup the flattened order (orderMentionItems) so an index means the same
+// row to both.
+const GROUP_TITLES: Record<string, string> = {
+  person: "People", role: "Roles", session: "Sessions", task: "Tasks", doc: "Docs",
+  plan: "Plans", label: "Labels", file: "Files", skill: "Commands", channel: "Channels", date: "Dates",
+};
+
+export type MentionGroup<T> = { key: string; title: string; items: T[] };
+
+export function groupMentionItems<T extends { type: string; contextAt?: number }>(items: T[], contextTitle = "Mentioned here"): MentionGroup<T>[] {
+  const groups = new Map<string, MentionGroup<T>>();
+  for (const item of items) {
+    const key = item.contextAt ? "context" : item.type;
+    let group = groups.get(key);
+    if (!group) {
+      group = { key, title: key === "context" ? contextTitle : GROUP_TITLES[item.type] ?? item.type, items: [] };
+      groups.set(key, group);
+    }
+    group.items.push(item);
+  }
+  return [...groups.values()];
+}
+
+export function orderMentionItems<T extends { type: string; contextAt?: number }>(items: T[]): T[] {
+  return groupMentionItems(items).flatMap((g) => g.items);
 }

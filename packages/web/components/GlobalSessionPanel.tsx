@@ -1921,10 +1921,6 @@ function selectionTargets(session: InboxSession): InboxSession[] {
     .filter((row): row is InboxSession => !!row);
 }
 
-// A ticked card reads in blue, never cyan: cyan is the open session's color,
-// and the two must not be confused when both are on screen.
-const SELECTED_CARD_CLASS = "bg-sol-blue/[0.22] hover:bg-sol-blue/[0.26]";
-
 /** The card's tick while a selection is live: every card shows its box, so
  *  the mode is visible, and the box itself toggles the card. A ticked card
  *  also gets its frame here, as an overlay, so the pin's fade cannot cover it. */
@@ -2356,7 +2352,7 @@ export const SessionCard = memo(function SessionCard({
         onDragLeave={handleFileDragLeave}
         onDrop={handleFileDrop}
         onContextMenu={onCardContextMenu ? (e) => onCardContextMenu(e, session, isForeignSession) : undefined}
-        className={`relative group transition-opacity duration-150 overflow-hidden ${isDraggingCard ? "opacity-35 scale-[0.99]" : ""} ${isDragOver ? "ring-1 ring-inset ring-violet-400/40 bg-violet-500/10" : ""} ${isSelected && !isActive ? SELECTED_CARD_CLASS : ""} ${
+        className={`relative group transition-opacity duration-150 overflow-hidden ${isDraggingCard ? "opacity-35 scale-[0.99]" : ""} ${isDragOver ? "ring-1 ring-inset ring-violet-400/40 bg-violet-500/10" : ""} ${
           isActive
             ? "bg-violet-500/[0.08] border-l-2 border-l-violet-400/60"
             : isParentActive
@@ -2503,7 +2499,8 @@ export const SessionCard = memo(function SessionCard({
   // tinted card does not show a pale patch there. Null = the resting card.
   const fadeGround = isActive
     ? "color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt))"
-    : isSelected ? "color-mix(in srgb, var(--sol-blue) 22%, var(--sol-bg-alt))" : null;
+    // A ticked card's ground lives in globals.css ([data-selected]); inherit it.
+    : isSelected ? "var(--sv-card-bg)" : null;
   return (
     <div
       data-session-id={session._id}
@@ -2518,7 +2515,7 @@ export const SessionCard = memo(function SessionCard({
       onDragLeave={handleFileDragLeave}
       onDrop={handleFileDrop}
       onContextMenu={onCardContextMenu ? (e) => onCardContextMenu(e, session, isForeignSession) : undefined}
-      className={`relative group transition-opacity duration-150 overflow-hidden ${isDraggingCard ? "opacity-35 scale-[0.99]" : ""} ${isDragOver ? "ring-1 ring-inset ring-sol-cyan bg-sol-cyan/10" : ""} ${isSelected && !isActive ? SELECTED_CARD_CLASS : ""} ${
+      className={`relative group transition-opacity duration-150 overflow-hidden ${isDraggingCard ? "opacity-35 scale-[0.99]" : ""} ${isDragOver ? "ring-1 ring-inset ring-sol-cyan bg-sol-cyan/10" : ""} ${
         // Violet, not cyan: cyan ring+tint is the ACTIVE row's treatment, and an
         // unacked handoff must never read as "this is the session you have open".
         session.assigned_ping ? "ring-1 ring-inset ring-sol-violet/50 bg-sol-violet/[0.06]" : ""
