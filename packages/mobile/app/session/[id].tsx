@@ -4869,6 +4869,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
                 )}
                 <ModelSwitcherChip
                   conversationId={conversation._id}
+                  sessionId={conversation.session_id}
                   agentType={conversation.agent_type}
                   model={conversation.model}
                   effort={conversation.effort}

@@ -17,6 +17,7 @@ import { useOwners, useOwnerCandidates, pickRoster, type OwnersApi, type Handoff
 import { useStoreOwnersEnv, useSessionRoleFacts } from "../hooks/useOwnersStoreEnv";
 import { useSyncOrgTreeFeeder } from "../hooks/useSyncOrgTree";
 import { RoleFace } from "./org/RoleFace";
+import type { OrgReportsTo } from "./org/orgTypes";
 import { RoleHoverCard } from "./identity/RoleHoverCard";
 import { sessionFitsARole } from "../lib/makeRole";
 import { AvatarImg } from "../lib/avatarCache";
@@ -93,7 +94,8 @@ export function OwnerMenuItems({
   // role names it and "Move to a role" can list the workspace's roles even off
   // the org page (org-staffing.md S11). Bounded to the menu's lifetime.
   useSyncOrgTreeFeeder();
-  const { liveRoles, orgRoleId, currentRole, isStandingThread } = useSessionRoleFacts(conversationId);
+  const { liveRoles, orgRoleId, currentRole, isStandingThread, seatRoleId } = useSessionRoleFacts(conversationId);
+  const reparentOrgRole = useInboxStore((s) => (s as any).reparentOrgRole) as ((roleId: string, to: OrgReportsTo) => unknown) | undefined;
   // A session older than a week may already be a role nobody has named
   // (org-roles-run-work.md R2); the analyzer proposes those it finds, and this
   // is the way to name one it left out. Read once: the menu is short lived.
@@ -113,7 +115,7 @@ export function OwnerMenuItems({
       {/* The reporting line to a role (S11): the same act as a chart drag. When
           the session already reports to a role, name it; either way, offer to
           file it under a role, which clears the person-owner line. */}
-      {currentRole && (
+      {currentRole && !seatRoleId && (
         <>
           <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">
             Reports to a role
@@ -164,6 +166,16 @@ export function OwnerMenuItems({
           <DropdownMenuSeparator />
         </>
       )}
+      {seatRoleId && reparentOrgRole ? (
+        <SeatReportsToItems
+          people={selectable}
+          currentUserId={currentUser?._id}
+          ownerId={ownerList[0]}
+          roles={liveRoles.filter((r) => r._id !== seatRoleId)}
+          parentRoleId={orgRoleId}
+          onPick={(to) => reparentOrgRole(seatRoleId, to)}
+        />
+      ) : (<>
       <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">
         Owners · whose inbox
       </DropdownMenuLabel>
@@ -220,6 +232,54 @@ export function OwnerMenuItems({
             <X className="w-3 h-3" /> Clear all owners
           </DropdownMenuItem>
         </>
+      )}
+      </>)}
+    </>
+  );
+}
+
+/** A role's own session: one line, who the role reports to, which is whose
+ *  inbox it is in. Picking a person or a role moves the role (the chart's
+ *  drag), so the chart and the inbox can never disagree. */
+function SeatReportsToItems({ people, currentUserId, ownerId, roles, parentRoleId, onPick }: {
+  people: any[];
+  currentUserId?: string;
+  ownerId?: string;
+  roles: Array<{ _id: string; name: string; handle: string }>;
+  parentRoleId?: string;
+  onPick: (to: OrgReportsTo) => void;
+}) {
+  return (
+    <>
+      <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">
+        Reports to · whose inbox
+      </DropdownMenuLabel>
+      {people.map((m: any) => (
+        <DropdownMenuCheckboxItem
+          key={m._id}
+          checked={!parentRoleId && ownerId === m._id}
+          onSelect={() => { if (parentRoleId || ownerId !== m._id) onPick({ kind: "user", user_id: m._id }); }}
+          className="text-xs gap-2"
+        >
+          <OwnerAvatar name={m.name || m.email || "?"} image={m.image || m.github_avatar_url} />
+          <span className="flex-1 truncate">{m.name || m.email?.split("@")[0]}{m._id === currentUserId ? " (you)" : ""}</span>
+        </DropdownMenuCheckboxItem>
+      ))}
+      {roles.length > 0 && (
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger className="text-xs gap-2">
+            <Network className="w-3.5 h-3.5 shrink-0" /> Under a role
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent className="max-h-[280px] overflow-y-auto">
+            {roles.map((r) => (
+              <DropdownMenuCheckboxItem key={r._id} checked={parentRoleId === r._id} onSelect={() => { if (parentRoleId !== r._id) onPick({ kind: "role", role_id: r._id }); }} className="text-xs gap-2">
+                <RoleFace role={r as any} size={18} />
+                <span className="flex-1 truncate">{r.name}</span>
+                <span className="text-sol-text-dim font-mono text-[10px]">@{r.handle}</span>
+              </DropdownMenuCheckboxItem>
+            ))}
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
       )}
     </>
   );

@@ -96,5 +96,8 @@ export function useSessionRoleFacts(conversationId: string) {
     const row = sessionRowOf(s, conversationId);
     return !!(row?.is_anchor || row?.anchor_id || row?.standing_role_id);
   });
-  return { liveRoles, orgRoleId, currentRole, isStandingThread };
+  // A role's own session belongs to whom the role reports to (S28): its owner
+  // changes by moving the role, never by a separate owner list.
+  const seatRoleId = useInboxStore((s) => sessionRowOf(s, conversationId)?.standing_role_id as string | undefined);
+  return { liveRoles, orgRoleId, currentRole, isStandingThread, seatRoleId };
 }
