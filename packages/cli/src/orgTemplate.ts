@@ -99,6 +99,6 @@ export function registerOrgTemplateCommands(program: Command, deps: OrgInitDeps)
   context(template.command("upgrade <instance> <folder>").description("Preview a release change; --apply advances this instance only"))
     .option("--apply", "Apply the reviewed release change, preserving role and external trigger state")
     .action(async (instance: string, folder: string, options: any) => output(await (await import("./orgTemplateRun.js")).upgradeTemplate(deps, instance, folder, options)));
-  context(template.command("instructions <instance> <routine>").description("Return verified runtime instructions (routine may be charter)"))
+  context(template.command("instructions <instance> <routine>").description("Return verified runtime instructions (routine may be charter, or setup:<id> for a setup step's guide filled in for this instance)"))
     .action(async (instance: string, routine: string, options: any) => console.log(await (await import("./orgTemplateRun.js")).templateInstructions(deps, instance, routine, options)));
 }

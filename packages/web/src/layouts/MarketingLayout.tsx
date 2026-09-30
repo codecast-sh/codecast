@@ -1,6 +1,6 @@
 import { useRef } from "react";
 import { Outlet, useLocation } from "react-router";
-import { ForceLightMode } from "@/components/force-light-mode";
+import { useThemeLock } from "@/components/ThemeProvider";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { MarketingFooter } from "@/components/marketing/MarketingFooter";
 
@@ -12,13 +12,14 @@ export function MarketingLayout() {
   // same-page hash navigation keeps the pathname and is unaffected.
   const scrollRef = useRef<HTMLDivElement>(null);
   const { pathname } = useLocation();
+  // Marketing pages are light Classic for every visitor, signed in or not.
+  useThemeLock("light");
   useWatchEffect(() => {
     scrollRef.current?.scrollTo(0, 0);
   }, [pathname]);
 
   return (
     <>
-      <ForceLightMode />
       <div ref={scrollRef} className="light min-h-screen w-full fixed inset-0 overflow-auto" style={{ backgroundColor: '#fdf6e3' }}>
         <ErrorBoundary name="MarketingPage">
           <Outlet />

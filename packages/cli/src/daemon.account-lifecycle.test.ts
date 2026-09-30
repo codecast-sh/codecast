@@ -62,7 +62,7 @@ function harness() {
     autoResumeSessionInner: () => { throw new Error("unexpected real launch"); },
     clearHibernationPark: (id: string) => { events.push(`clear:${id}`); },
     injectViaTmux: async (_target: string, content: string) => { events.push(`inject:${content}`); },
-    switchProfile: (profile: string) => {
+    switchFleetTo: async (profile: string) => {
       hooks.swap(profile);
       state.account = profile;
       events.push(`swap:${profile}`);

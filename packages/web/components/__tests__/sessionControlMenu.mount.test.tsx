@@ -224,7 +224,8 @@ test("a blank session and an agent with no model rail read their state on the id
   openVerb("switch");
   expect(agentRow("cursor").getAttribute("data-disabled")).toBeNull();
 
-  mount({ agentType: "cursor", model: undefined, effort: undefined });
+  // Gemini has no modelConfig in the agent registry, so it has no model rail.
+  mount({ agentType: "gemini", model: undefined, effort: undefined });
   expect(q("[data-session-state]")!.textContent).toContain("keeps the model it launched with");
   expect(q("[data-session-control-panel]")!.textContent).not.toContain("Effort");
 });

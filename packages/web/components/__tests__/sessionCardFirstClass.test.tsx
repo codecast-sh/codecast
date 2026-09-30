@@ -22,7 +22,7 @@ const readState = mockInboxStore(() => ({
   useTrackedStore: () => readState(),
 });
 
-const { SessionCard } = await import("../GlobalSessionPanel");
+const { SessionCard } = await import("../inbox/SessionCard");
 
 // Never connects: SessionCard only registers mutation callbacks, and static
 // rendering fires no effects and opens no sockets.

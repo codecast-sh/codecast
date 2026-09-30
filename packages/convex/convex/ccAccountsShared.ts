@@ -6,6 +6,7 @@ import type { Doc } from "./_generated/dataModel";
 import {
   blockedKindsForAgent,
   fallbackProfiles,
+  headroomScore,
   isUsageExhausted,
   isWindowRolled,
   livePercent,
@@ -101,6 +102,11 @@ export const ccAccountsValidator = v.object({
   // or a fresh sign-in. Every "which account do sessions run on" read goes
   // through fleetAccount() so the pin, auto-continue and auto-switch agree.
   launch_profile: v.optional(v.string()),
+  // Sessions on that machine run on the fleet store, which carries
+  // launch_profile. A switch rewrites the store and every running session
+  // follows it without a restart (cli/ccAccounts.ts "Fleet store"), so no
+  // session is pinned and a switch restarts nothing that follows the store.
+  fleet_store: v.optional(v.boolean()),
   profiles: v.array(
     v.object({
       name: v.string(),
@@ -181,6 +187,7 @@ export function tokenBackedProfile(
 type FleetAccounts = {
   active_email?: string;
   launch_profile?: string;
+  fleet_store?: boolean;
   profiles: Array<{ name: string; email?: string; token?: { expires_at: number }; setup_token?: { expires_at: number }; usage?: CcUsage | null }>;
 };
 
@@ -190,12 +197,18 @@ type FleetAccounts = {
  * keychain still names the old account while the fleet runs elsewhere. A
  * launch profile counts only while the inventory still shows it with a live
  * setup-token (the daemon drops the record when the token goes, but a stale
- * heartbeat must not pin sessions to a token nobody can source). */
+ * heartbeat must not pin sessions to a token nobody can source). On the fleet
+ * store the launch profile is simply the account the store carries, and
+ * nothing about it needs a restart (viaToken false). */
 export function fleetAccount(
   accounts: FleetAccounts | undefined | null,
   now: number,
 ): { email?: string; profile?: string; viaToken: boolean } {
   if (!accounts) return { viaToken: false };
+  if (accounts.fleet_store && accounts.launch_profile) {
+    const fleet = accounts.profiles.find((p) => p.name === accounts.launch_profile);
+    if (fleet) return { email: fleet.email, profile: fleet.name, viaToken: false };
+  }
   if (accounts.launch_profile) {
     const launch = accounts.profiles.find((p) => p.name === accounts.launch_profile);
     if (profileHasSetupToken(launch, now)) return { email: launch!.email, profile: launch!.name, viaToken: true };
@@ -206,6 +219,8 @@ export function fleetAccount(
 /** The pin for a NEW session: the profile covering the account the fleet
  * runs on (fleetAccount), if it has a launch credential. */
 export function activeTokenProfile(accounts: FleetAccounts | undefined | null, now: number): string | undefined {
+  // On the fleet store no session is pinned: the store is the account.
+  if (accounts?.fleet_store) return undefined;
   const fleet = fleetAccount(accounts, now);
   if (fleet.profile) return fleet.profile;
   return fleet.email ? tokenBackedProfile(accounts, { email: fleet.email }, now) : undefined;
@@ -845,6 +860,62 @@ export function decideAutoSwitch(input: {
   const earliestReset = earliestUsageResetAt(allowSwitch ? profiles : active ? [active] : [], now);
   const retryAt = (earliestReset ?? now + 60 * 60 * 1000) + 2 * 60 * 1000;
   return { action: "exhausted", retry_at: retryAt };
+}
+
+// Switch-ahead thresholds: the fleet moves off an account while its windows
+// still have room, before Claude Code's grace window (at 100%) and its
+// near-limit note (99.75% of the 5 hour window on Max 20x) ever reach a
+// session. The margin covers the burn between two heartbeats of a busy fleet.
+export const SWITCH_AHEAD_SESSION_PERCENT = 95;
+export const SWITCH_AHEAD_WEEKLY_PERCENT = 97;
+// A target must have this much more room than the account it replaces, so two
+// nearly spent accounts never trade the fleet back and forth.
+export const SWITCH_AHEAD_MIN_GAIN = 10;
+export const SWITCH_AHEAD_COOLDOWN_MS = 3 * 60 * 1000;
+
+/** The account is close enough to a limit that the fleet should leave it now:
+ *  a live window at or past its threshold, or already spent. */
+export function isNearUsageLimit(usage: CcUsage | undefined | null, now: number): boolean {
+  if (!usage) return false;
+  if (isUsageExhausted(usage, now)) return true;
+  const at = (w: { percent: number; resets_at?: number } | undefined, limit: number) => !!w && livePercent(w, now) >= limit;
+  return at(usage.session, SWITCH_AHEAD_SESSION_PERCENT) ||
+    at(usage.weekly, SWITCH_AHEAD_WEEKLY_PERCENT) ||
+    at(usage.weekly_scoped, SWITCH_AHEAD_WEEKLY_PERCENT);
+}
+
+/**
+ * Where the fleet should move BEFORE its account runs out, or null to stay.
+ * Only for a machine on the fleet store, where a switch costs the running
+ * sessions nothing. Reads the fleet account's meter (live statusLine readings
+ * keep it within seconds) and ignores a reading taken before the fleet last
+ * moved, which describes the previous account's burn. The target is the
+ * account with the most room that is not itself near a limit, not tried in
+ * this window without fresh evidence (the same blackout decideAutoSwitch
+ * uses), and clearly better than staying.
+ */
+export function decideSwitchAhead(input: {
+  now: number;
+  fleetEmail?: string;
+  fleetSince?: number;
+  profiles: AutoSwitchProfile[];
+  attempts: Array<{ profile: string; at: number }>;
+  lastActionAt?: number;
+}): { profile: string } | null {
+  const { now, fleetEmail, profiles } = input;
+  const fleet = profiles.find((p) => p.email && p.email === fleetEmail);
+  const usage = fleet?.usage;
+  if (!usage || (input.fleetSince !== undefined && usage.fetched_at < input.fleetSince)) return null;
+  if (!isNearUsageLimit(usage, now)) return null;
+  if (input.lastActionAt && now - input.lastActionAt < SWITCH_AHEAD_COOLDOWN_MS) return null;
+  const fleetPercent = headroomScore(usage, now);
+  const target = fallbackProfiles(profiles, fleetEmail, now).find((p) => {
+    if (isNearUsageLimit(p.usage, now)) return false;
+    const tried = input.attempts.reduce((max, a) => (a.profile === p.name && a.at > max ? a.at : max), 0);
+    if (tried && now - tried < AUTO_SWITCH_SESSION_WINDOW_MS && (p.usage?.fetched_at ?? 0) < tried + AUTO_SWITCH_ATTEMPT_EVIDENCE_MS) return false;
+    return headroomScore(p.usage, now) <= fleetPercent - SWITCH_AHEAD_MIN_GAIN;
+  });
+  return target ? { profile: target.name } : null;
 }
 
 // Profile names live in keychain service names and shell commands — keep them

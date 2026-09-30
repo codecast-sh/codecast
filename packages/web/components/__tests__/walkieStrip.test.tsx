@@ -96,7 +96,7 @@ describe("the card is the size of what it is saying", () => {
     const actions = rule(".engagement-card .walkie-strip-actions,\n.engagement-card .ring-card-actions", rowCss);
     expect(actions["flex-direction"]).toBe("row");
     expect(actions.margin).toBe("0");
-    const pill = rule(".engagement-card :is(.walkie-strip-end, .walkie-strip-mute, .walkie-strip-join, .walkie-strip-snooze, .ring-card-join, .ring-card-decline)", rowCss);
+    const pill = rule(".engagement-card :is(.walkie-strip-end, .walkie-strip-mute, .walkie-strip-join, .walkie-strip-snooze, .ring-card-join, .ring-card-decline, .engagement-card-chat)", rowCss);
     expect(pill.width).toBe("auto");
     expect(pill.height).toBe("26px");
     expect(pill["border-radius"]).toBe("999px");

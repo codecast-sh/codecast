@@ -92,6 +92,19 @@ describe("org history round trips", () => {
     const f = fixture();
     await roundTrip(f, "conversations_c", () => performReparentSession(f.ctx(), ME as any, { session_id: "jx70001", target: { kind: "user", user_id: MATE as any } }), ["owner_user_id"]);
   });
+  test("undoing an adopt gives the session back the owners the seat replaced", async () => {
+    const f = fixture(); await f.role();
+    const owners = async () => ({ rows: f.db._tables.session_owners.filter((r: any) => r.conversation_id === "conversations_c").map((r: any) => r.user_id).sort(), primary: (await f.db.get("conversations_c")).owner_user_id ?? null });
+    await f.db.insert("session_owners", { conversation_id: "conversations_c", user_id: MATE, added_by: ME, added_at: 1 });
+    await f.db.patch("conversations_c", { owner_user_id: MATE });
+    await f.apply({ kind: "adopt", handle: "growth", conversation: "jx70001" }); const adopt = f.last();
+    // The seat reports to the role's person (S28), so the seat replaced the owner.
+    expect(await owners()).toEqual({ rows: [ME], primary: ME });
+    await f.undo(adopt);
+    expect(await owners()).toEqual({ rows: [MATE], primary: MATE });
+    await f.redo(adopt);
+    expect(await owners()).toEqual({ rows: [ME], primary: ME });
+  });
   test("retirement restores children and untouched task assignments", async () => {
     const f = fixture(); const role = await f.role();
     await f.db.patch("tasks_t", { assignee: role._id });
@@ -287,9 +300,11 @@ const ORG_STATE: Record<string, string[]> = {
   org_template_instances: ["phase", "role_id", "version", "pending_upgrade"],
 };
 const TOMBSTONE: Record<string, string> = { org_roles: "retired", projects: "done", agent_tasks: "cancelled", anchors: "decommissioned", initiatives: "cancelled" };
+// An owner row is the membership it records, so a redo that adds the owner back matches by conversation and person, not row id.
+const stateKey = (table: string, row: any) => table === "session_owners" ? `session_owners:${row.conversation_id}:${row.user_id}` : String(row._id);
 function orgState(db: any): Map<string, { table: string; fields: Record<string, unknown> }> {
   const out = new Map();
-  for (const [table, fields] of Object.entries(ORG_STATE)) for (const row of db._tables[table] ?? []) out.set(String(row._id), { table, fields: Object.fromEntries(fields.map((k) => [k, row[k] ?? null])) });
+  for (const [table, fields] of Object.entries(ORG_STATE)) for (const row of db._tables[table] ?? []) out.set(stateKey(table, row), { table, fields: Object.fromEntries(fields.map((k) => [k, row[k] ?? null])) });
   return out;
 }
 const writeCount = (db: any) => db._patched.length + db._inserted.length + db._deleted.length;
@@ -357,6 +372,8 @@ describe("S21: every change kind round trips through apply, undo and redo", () =
     await f.undo(batch);
     const restored = orgState(f.db);
     for (const [id, was] of before) expect({ id, ...restored.get(id) }).toEqual({ id, ...was });
+    // An owner row has no tombstone to stand as: the undo takes back every owner the change added.
+    expect([...restored].filter(([id, now]) => now.table === "session_owners" && !before.has(id)).map(([id]) => id)).toEqual([]);
     for (const [id, now] of restored) {
       if (before.has(id)) continue;
       const kept = c.kept?.[now.table];

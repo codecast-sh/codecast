@@ -18,6 +18,7 @@
 // injected context block is skipped. Delivered-with-less-context beats
 // never-delivered, every time.
 
+import { wrapMentionContext } from "@codecast/shared/contracts";
 import { entityMentionRegex, entityTypeFromId } from "./entityLinks";
 
 export interface ParsedMention {
@@ -107,7 +108,7 @@ export async function expandEntityMentions(
     const exp = expanded.find(
       (e) => (m.shortId && e.shortId === m.shortId) || (m.id && e.id === m.id),
     );
-    if (exp?.markdown) result = result.replace(m.fullMatch, m.fullMatch + exp.markdown);
+    if (exp?.markdown) result = result.replace(m.fullMatch, m.fullMatch + wrapMentionContext(exp.markdown));
   }
   return result;
 }

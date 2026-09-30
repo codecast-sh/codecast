@@ -166,12 +166,34 @@ export async function stampSeatOwners(
   addedBy: Id<"users">,
 ): Promise<boolean> {
   const boss = reportsTo?.kind === "user" ? reportsTo.user_id : null;
+  return setSessionOwnerRows(ctx, conversationId, boss ? [String(boss)] : [], addedBy);
+}
+
+// A session's owner set as one comparable value: the primary (the
+// owner_user_id cache) first, the rest sorted. The org change log records it
+// before and after a change so an undo can put the exact set back.
+export async function ownerSetOf(ctx: { db: any }, conversationId: Id<"conversations">): Promise<string[]> {
+  const owners = (await listSessionOwnerIds(ctx, conversationId)).map(String);
+  const primary = String((await ctx.db.get(conversationId))?.owner_user_id ?? "");
+  return [...owners.filter((id) => id === primary), ...owners.filter((id) => id !== primary).sort()];
+}
+
+// Make the owner rows exactly `owners`, the first listed as primary. Returns
+// true iff a row or the primary changed. Writes nothing for a set already in place.
+export async function setSessionOwnerRows(
+  ctx: { db: any },
+  conversationId: Id<"conversations">,
+  owners: string[],
+  addedBy: Id<"users">,
+): Promise<boolean> {
+  const keep = new Set(owners);
   let changed = false;
   for (const id of await listSessionOwnerIds(ctx, conversationId)) {
-    if (boss && id.toString() === boss.toString()) continue;
-    if (await removeSessionOwnerRow(ctx, conversationId, id)) changed = true;
+    if (!keep.has(String(id)) && await removeSessionOwnerRow(ctx, conversationId, id)) changed = true;
   }
-  if (boss && await addSessionOwnerRow(ctx, conversationId, boss, addedBy)) changed = true;
-  if (changed) await syncPrimaryOwnerCache(ctx, conversationId, boss ?? undefined);
+  for (const id of owners) if (await addSessionOwnerRow(ctx, conversationId, id as Id<"users">, addedBy)) changed = true;
+  const primary = owners[0] as Id<"users"> | undefined;
+  if (!changed && primary && String((await ctx.db.get(conversationId))?.owner_user_id ?? "") !== primary) changed = true;
+  if (changed) await syncPrimaryOwnerCache(ctx, conversationId, primary);
   return changed;
 }

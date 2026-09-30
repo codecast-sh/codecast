@@ -2,7 +2,10 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-const source = readFileSync(join(import.meta.dir, "..", "..", "components", "MessageInput.tsx"), "utf8");
+// MessageInput fills ComposerShell's slots; the field and textarea markup live in the shell.
+const source = ["MessageInput.tsx", "ComposerShell.tsx"]
+  .map((file) => readFileSync(join(import.meta.dir, "..", "..", "components", file), "utf8"))
+  .join("\n");
 
 test("the autosizing composer textarea does not create an inline baseline", () => {
   const textareaClass = source.match(/style=\{FIELD_SIZING_STYLE\}\s+className=\{`([^`]+)`\}/)?.[1];

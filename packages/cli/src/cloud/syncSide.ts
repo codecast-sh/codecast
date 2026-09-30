@@ -30,19 +30,22 @@
  * default rule.
  *
  * The program is a JS string run the same way on both machines (an async
- * function of `require` and the request): in process here, through `bun -e`
- * on the host. A host runs whatever cast version it has, so shipping the
- * program with each request keeps the two sides in step without an update.
+ * function of `require`, the child process module and the request): in
+ * process here, through `bun -e` on the host. In process its spawns go through
+ * proc.ts like every other spawn in this process; the host has no proc.ts, so
+ * its boot hands over the builtin. A host runs whatever cast version it has,
+ * so shipping the program with each request keeps the two sides in step
+ * without an update.
  */
 
 import { createRequire } from "node:module";
-import { execFile } from "../proc.js";
+import * as proc from "../proc.js";
 import { promisify } from "node:util";
 import { shq, sshBase, type RemoteHost } from "../remote/session-move.js";
 import { describeSyncSkipped, type SyncSkipReason } from "@codecast/shared/contracts";
 import { AGENT_CONTEXT_ROOTS, INSTRUCTION_FILE_RE, MEDIA_FILE_RE, NATIVE_BINARY_MAGICS } from "./mirror/discovery.js";
 
-const execFileAsync = promisify(execFile);
+const execFileAsync = promisify(proc.execFile);
 
 /** Folders the host rebuilds itself: never copied unless an `always` pattern names them. */
 export const SYNC_REBUILT_DIRS: readonly string[] = [
@@ -99,7 +102,7 @@ export interface LsEntry { path: string; kind: "file" | "dir" | "link" | "missin
  * the event loop, and a synchronous walk of a big tree would stall it.
  */
 export const SYNC_SIDE_PROGRAM = String.raw`
-const fs = require("node:fs"), fsp = require("node:fs/promises"), path = require("node:path"), os = require("node:os"), cp = require("node:child_process");
+const fs = require("node:fs"), fsp = require("node:fs/promises"), path = require("node:path"), os = require("node:os");
 const REBUILT = new Set(req.rebuilt);
 const MACHINE = req.machine;
 const LIVE_RE = /(?:\.sock|\.pid|-journal|\.db-wal|\.db-shm|\.sqlite-wal|\.sqlite-shm)$/;
@@ -350,13 +353,16 @@ let compiled: ((...a: unknown[]) => Promise<unknown>) | null = null;
 
 /** Run one side's operation on this machine. */
 export async function runSide<T = unknown>(req: SideRequest): Promise<T> {
-  compiled ??= new AsyncFunction("require", "req", SYNC_SIDE_PROGRAM);
-  return (await compiled(localRequire, withConstants(req))) as T;
+  compiled ??= new AsyncFunction("require", "cp", "req", SYNC_SIDE_PROGRAM);
+  return (await compiled(localRequire, proc, withConstants(req))) as T;
 }
+
+/** What the host's boot passes as `cp`: the builtin itself, since proc.ts never reaches the host. */
+const HOST_CHILD_PROCESS = "node:child_process";
 
 /** The shell command that runs the same operation on a host (bun ships with every host). */
 export function remoteSideCommand(req: SideRequest): string {
-  const boot = `const F=Object.getPrototypeOf(async()=>{}).constructor;new F("require","req",${JSON.stringify(SYNC_SIDE_PROGRAM)})(require,JSON.parse(process.argv[1])).then((r)=>process.stdout.write(JSON.stringify(r)),(e)=>{process.stderr.write(String(e&&e.message||e));process.exit(1)})`;
+  const boot = `const F=Object.getPrototypeOf(async()=>{}).constructor;new F("require","cp","req",${JSON.stringify(SYNC_SIDE_PROGRAM)})(require,require(${JSON.stringify(HOST_CHILD_PROCESS)}),JSON.parse(process.argv[1])).then((r)=>process.stdout.write(JSON.stringify(r)),(e)=>{process.stderr.write(String(e&&e.message||e));process.exit(1)})`;
   return `export PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; bun -e ${shq(boot)} -- ${shq(JSON.stringify(withConstants(req)))}`;
 }
 

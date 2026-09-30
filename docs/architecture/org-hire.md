@@ -621,9 +621,36 @@ files the project under one.
   unchanged. A machine whose daemon predates the transport is refused a secret
   with the reason on the page; a person may still bind it from that terminal.
   A missing secret on a ready instance is bound the same way from the page.
+- **A setup step shows its guide, and can be skipped.** The host holds the
+  release and the paths, so it renders each setup item's title, price and
+  `how` file with the instance's values at bind (`orgTemplateText.ts`, the one
+  renderer: `fill` over the manifest's `substitute`) and the instance row
+  carries them as `setup_text`; `setupRows` lays them over the manifest's own
+  words. The role page shows the guide under the step, open for the one ask
+  and folded for the rest, with Done, Skip and Reopen on a person's step. Skip
+  is the same mark as `cast org template setup <instance> <id> --skip`, and the
+  ask (`nextHumanAsk`) moves to the next open step. An instance bound before
+  this carries no text until its machine binds again; the page then says where
+  the guide is. `cast org template instructions <instance> setup:<id>` returns
+  the same filled guide, so the role can hand it to the person. A mark made on
+  the page lands on the server row only, so `setup` and `status` read the
+  row's marks back into the receipt first (`pullSetupMarks`): a step skipped
+  on the page stops being asked for from the terminal.
+- **A bind tells the role.** Both doors end in `orgTemplates.upsertInstance`
+  (the daemon runs the CLI's bind), so that is where the role's standing
+  session is told, as a plain message from codecast (`tellRole`): the host
+  step finished, which secret is now bound and what needed it, what is still
+  missing, and each routine with its trigger id and state (`bindNote`). Once
+  per bind that changed something: a rerun that binds nothing new says
+  nothing, and the role's own standing session running bind is not told what
+  it just did.
+- **Routines name their trigger.** The Triggers section shows each routine's
+  `tr-N`, linked to the trigger's page, with the title the trigger carries
+  (filled for the instance).
 - **Tests**: `orgTemplates.test.ts` (release, catalog installability, the bind
-  request and its progress), `orgTemplate.test.ts` (snapshot round trip, bind
-  from the server row, refusals), `orgTemplateBindCommand.test.ts` (sealed
-  secrets to private files, the CLI invocation, failures without the value),
-  `TemplateGallery.test.ts`, and the gallery and host step in the two mount
-  tests.
+  request and its progress, the bind note, setup text and the moving ask),
+  `orgTemplate.test.ts` (snapshot round trip, bind from the server row,
+  refusals, filled guides, `instructions setup:<id>`, page marks reaching the
+  receipt), `orgTemplateBindCommand.test.ts` (sealed secrets to private files,
+  the CLI invocation, failures without the value), `TemplateGallery.test.ts`,
+  and the gallery, host step, guides and Skip in the two mount tests.

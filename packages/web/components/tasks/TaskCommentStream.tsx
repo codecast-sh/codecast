@@ -15,7 +15,8 @@ import { Badge } from "../ui/badge";
 import { APP_LOOK, ISSUE_PROVIDER_NAME } from "../../lib/integrations";
 
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { EarlierButton, useReaderFold } from "../threads/readerFold";
+import { EarlierButton } from "../threads/readerFold";
+import { useReaderFold } from "../../hooks/useReaderFold";
 const api = _api as any;
 
 // A task's comment stream: the comment rows and the composer that posts to

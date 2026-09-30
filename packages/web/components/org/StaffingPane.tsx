@@ -835,7 +835,7 @@ function AreaDetail({ row, now, onOpenSession, onSelectNode, onTrigger, onSetEve
           {a.waiting.map((w) => (
             <button key={w.id} type="button" onClick={() => onOpenSession(w.id)} className="mt-0.5 w-full text-left rounded-md px-1 -mx-1 py-0.5 hover:bg-sol-bg-highlight/70" data-area-waiting-session={w.short_id}>
               <span className="block text-[12px] leading-snug truncate" style={{ color: "var(--sol-text)" }}>{w.title || w.short_id}</span>
-              <span className="block text-[11px] truncate" style={{ color: "var(--sol-text-dim)" }}>{w.why === "blocked" ? "blocked" : "waiting"} {ago(now, w.since)}{w.state ? ` · ${w.state}` : ""}</span>
+              <span className="block text-[11px] truncate" style={{ color: "var(--sol-text-dim)" }}>{w.why === "blocked" ? "blocked" : "waiting"} for {agoOf(now - w.since).replace(/ ago$/, "")}{w.state ? ` · ${w.state}` : ""}</span>
             </button>
           ))}
         </div>
@@ -945,7 +945,7 @@ function ChiefReadSection({ read, now, onPickProposal, onTrigger, onSetEvery }: 
             <ChevronRight className="w-3.5 h-3.5 shrink-0" style={{ color: "var(--sol-text-dim)" }} />
           </button>
         )}
-        <CheckLine check={read.area?.check ?? null} checkedAt={read.area?.check?.last_run_at ?? null} now={now} word="review" onTrigger={onTrigger} onSetEvery={onSetEvery} />
+        {read.area && <CheckLine check={read.area.check} checkedAt={read.area.check?.last_run_at ?? null} now={now} word="review" onTrigger={onTrigger} onSetEvery={onSetEvery} />}
       </div>
     </>
   );

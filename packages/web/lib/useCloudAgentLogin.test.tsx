@@ -3,38 +3,42 @@
 // again, or the Sign in step never comes back; and opening the dialog asks
 // the machine once.
 // Run: cd packages/web && bun test lib/useCloudAgentLogin.test.tsx
-import { test } from "bun:test";
+import { mock, test } from "bun:test";
 import assert from "node:assert/strict";
 
+// Setup loads jsdom, react and the hook's module graph. It runs here, at module
+// level, so that one-time load is not charged to the test's timeout. The
+// imports stay dynamic because react-dom and the mocked convex/react must load
+// after the DOM globals and the mock below.
+const { JSDOM } = await import("jsdom");
+const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", { url: "https://local.codecast.sh/", pretendToBeVisual: true });
+for (const key of ["window", "document", "navigator", "HTMLElement", "Element", "Node"]) {
+  Object.defineProperty(globalThis, key, { value: (dom.window as any)[key], configurable: true, writable: true });
+}
+(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+const React = await import("react");
+const { act } = React;
+
+// Each enqueued command gets an id; its outcome is whatever the test sets for it.
+const sent: string[] = [];
+const outcomes = new Map<string, unknown>();
+const convexReact = await import("convex/react");
+mock.module("convex/react", () => ({
+  ...convexReact,
+  useMutation: () => async (args: { op: string }) => { sent.push(args.op); return { command_id: `cmd${sent.length}` }; },
+  useQuery: (_ref: unknown, args: { command_id?: string } | "skip") => (args === "skip" ? undefined : outcomes.get(args.command_id!) ?? { state: "pending" }),
+}));
+
+const { useCloudAgentLogin, useCloudAgentAction } = await import("./useProviderKeyCommand");
+const { createRoot } = await import("react-dom/client");
+
 test("check again after a failed sign-in start shows the machine's login, and the dialog checks once on open", async () => {
-  const { JSDOM } = await import("jsdom");
-  const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", { url: "https://local.codecast.sh/", pretendToBeVisual: true });
-  for (const key of ["window", "document", "navigator", "HTMLElement", "Element", "Node"]) {
-    Object.defineProperty(globalThis, key, { value: (dom.window as any)[key], configurable: true, writable: true });
-  }
-  (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-  const { mock } = await import("bun:test");
-  const React = await import("react");
-  const { act } = React;
-
-  // Each enqueued command gets an id; its outcome is whatever the test sets for it.
-  const sent: string[] = [];
-  const outcomes = new Map<string, unknown>();
-  const convexReact = await import("convex/react");
-  mock.module("convex/react", () => ({
-    ...convexReact,
-    useMutation: () => async (args: { op: string }) => { sent.push(args.op); return { command_id: `cmd${sent.length}` }; },
-    useQuery: (_ref: unknown, args: { command_id?: string } | "skip") => (args === "skip" ? undefined : outcomes.get(args.command_id!) ?? { state: "pending" }),
-  }));
-
-  const { useCloudAgentLogin } = await import("./useProviderKeyCommand");
   const device = { device_id: "dev1", label: "MacBook", online: true } as any;
   let hook!: ReturnType<typeof useCloudAgentLogin>;
   function Probe() {
     hook = useCloudAgentLogin("codex", device);
     return null;
   }
-  const { createRoot } = await import("react-dom/client");
   const root = createRoot(document.getElementById("root")!);
   const render = async () => { await act(async () => { root.render(React.createElement(React.StrictMode, null, React.createElement(Probe))); }); };
 
@@ -61,7 +65,6 @@ test("check again after a failed sign-in start shows the machine's login, and th
   await act(async () => { root.unmount(); });
 
   // A header action runs on the same watched command: its result (and the pull request it opened) is heard once, then it lets go.
-  const { useCloudAgentAction } = await import("./useProviderKeyCommand");
   const heard: unknown[] = [];
   let action!: ReturnType<typeof useCloudAgentAction>;
   function ActionProbe() {

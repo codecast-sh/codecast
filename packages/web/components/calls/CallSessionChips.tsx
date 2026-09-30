@@ -12,7 +12,7 @@ import { useInboxStore } from "../../store/inboxStore";
 import { SessionFace } from "../identity";
 import { fmtClock } from "../triggerCadence";
 import { FeedChip } from "./FeedChip";
-import { excerptLabel } from "./SessionCallPill";
+import { excerptLabel } from "../../lib/calls/excerptLabel";
 import {
   DropdownMenu,
   DropdownMenuContent,

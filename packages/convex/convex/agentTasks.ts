@@ -54,6 +54,18 @@ export async function patchTask(ctx: TaskCtx, task: Doc<"agent_tasks">, patch: R
   if (task.originating_conversation_id) await refreshArmedTriggerKind(ctx, task.originating_conversation_id);
 }
 
+// A recurring trigger keeps a cadence: slots one interval apart. run_at is when
+// the daemon may next claim the row, and it leaves the cadence for a manual
+// run, a retry or a limit park. Those writes go through here, which keeps the
+// slot the trigger was armed for, so the arming after the run
+// (nextArmingAfterRun) returns to the cadence instead of restarting it from
+// wherever the detour ended.
+function offCadence(task: Doc<"agent_tasks">, runAt: number): { run_at: number; cadence_slot_at?: number } {
+  return task.schedule_type === "recurring"
+    ? { run_at: runAt, cadence_slot_at: task.cadence_slot_at ?? task.run_at }
+    : { run_at: runAt };
+}
+
 async function getOwnedTask(
   ctx: TaskCtx,
   taskId: Id<"agent_tasks">,
@@ -109,13 +121,14 @@ export async function applyActivate(ctx: TaskCtx, task: Doc<"agent_tasks">) {
   await patchTask(ctx, task, {
     status: "scheduled",
     run_at: Date.now() + (task.schedule_type === "recurring" && interval ? interval : 0),
+    cadence_slot_at: undefined,
     ...(task.precheck === "exit 1" ? { precheck: undefined } : {}),
   });
   return true;
 }
 
 export async function applyRunNow(ctx: TaskCtx, task: Doc<"agent_tasks">) {
-  await patchTask(ctx, task, { status: "scheduled", run_at: Date.now(), requested_run_source: "manual" });
+  await patchTask(ctx, task, { status: "scheduled", ...offCadence(task, Date.now()), requested_run_source: "manual" });
   return true;
 }
 
@@ -143,6 +156,7 @@ async function applyReactivate(ctx: TaskCtx, task: Doc<"agent_tasks">) {
     status: "scheduled",
     canceled_on_kill_at: undefined,
     requested_run_source: undefined,
+    cadence_slot_at: undefined,
     run_at:
       task.schedule_type === "event"
         ? undefined
@@ -313,7 +327,7 @@ async function parkRunAtLimit(
   const when = new Date(runAt).toISOString();
   await patchTask(ctx, task, {
     status: "scheduled",
-    run_at: runAt,
+    ...offCadence(task, runAt),
     lease_holder: undefined,
     lease_expires_at: undefined,
     last_run_summary: `Parked at a usage limit; resumes ${when}`,
@@ -1165,9 +1179,18 @@ function completedTaskRunFields(
 // When a trigger fires next, once this firing is over. Shared by the completion
 // path and the precheck skip path so a skipped firing re-arms a recurring
 // trigger on its normal cadence instead of leaving it due and re-firing at once.
-function nextArmingAfterRun(task: Doc<"agent_tasks">, now: number): Record<string, any> {
+//
+// A recurring trigger re-arms on its cadence: the first slot after now, counted
+// from the slot this firing was armed for, never from when the run finished.
+// Counting from the finish slid a daily check later by its own runtime every
+// day, until it landed just past the 24 hour window its evidence had to fall
+// in. A run that outlasts its interval skips the slots it missed, and a manual
+// run ahead of the next slot leaves that slot standing.
+export function nextArmingAfterRun(task: Pick<Doc<"agent_tasks">, "schedule_type" | "interval_ms" | "run_at" | "cadence_slot_at">, now: number): Record<string, any> {
   if (task.schedule_type === "recurring" && task.interval_ms) {
-    return { status: "scheduled", run_at: now + task.interval_ms };
+    const slot = task.cadence_slot_at ?? task.run_at ?? now;
+    const elapsed = slot > now ? 0 : Math.floor((now - slot) / task.interval_ms) + 1;
+    return { status: "scheduled", run_at: slot + elapsed * task.interval_ms, cadence_slot_at: undefined };
   }
   // Disarmed until the next webhook, which sets run_at again.
   if (task.schedule_type === "event") return { status: "scheduled", run_at: undefined };
@@ -1414,7 +1437,7 @@ export const failTaskRun = mutation({
       await patchTask(ctx, task, {
         status: "scheduled",
         retry_count: newRetryCount,
-        run_at: Date.now() + 60_000 * newRetryCount, // backoff
+        ...offCadence(task, Date.now() + 60_000 * newRetryCount), // backoff
         requested_run_source: task.last_run_source === "manual" ? "manual" : undefined,
         lease_holder: undefined,
         lease_expires_at: undefined,
@@ -2225,6 +2248,9 @@ export async function applyTaskUpdate(
     if (args.interval_ms !== undefined) patch.interval_ms = args.interval_ms;
     if (args.run_at !== undefined) patch.run_at = args.run_at;
   }
+  // A new schedule is a new cadence: a slot kept from a detour under the old
+  // one (offCadence) must not pull the next arming back onto it.
+  if ("run_at" in patch) patch.cadence_slot_at = undefined;
 
   // Which editable fields actually differ. The display_* resets ride along
   // with a prompt change but aren't edits themselves, so they never appear in
@@ -2485,7 +2511,7 @@ export const reclaimStaleTasks = internalMutation({
         if (task.retry_count < maxRetries) {
           await patchTask(ctx, task, {
             status: "scheduled",
-            run_at: now,
+            ...offCadence(task, now),
             retry_count: task.retry_count + 1,
             requested_run_source: task.last_run_source === "manual" ? "manual" : undefined,
             lease_holder: undefined,
