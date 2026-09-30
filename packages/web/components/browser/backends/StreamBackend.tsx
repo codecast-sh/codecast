@@ -123,7 +123,7 @@ export function StreamBackend({
       failed.tabGone && !failed.capped
         ? missingTabMessage(session.title, pageUrl)
         : failed.message;
-    return { kind: "error", message, ...(tabNote && { detail: tabNote }) } as const;
+    return { kind: "error", message, ...(tabNote ? { detail: tabNote } : {}) } as const;
   }, [failed, status.kind, session.title, pageUrl, tabNote]);
 
   useWatchEffect(() => onState(paneState), [paneState, onState]);

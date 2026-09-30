@@ -122,8 +122,8 @@ describe("proposal progress and grouping", () => {
   test("every kind reads as one line", () => {
     // The words are the shared describer's (the CLI walk and the ghost chips
     // read the same line); the pane only sentence cases them.
-    expect(changeLine(P.changes[0].change)).toBe("Add a standing agent, Head of Platform (@platform), reporting to you, looking after Platform");
-    expect(changeLine(P.changes[1].change)).toBe("Add a standing agent, Content Lead (@content), reporting to @growth, looking after pl-88");
+    expect(changeLine(P.changes[0].change)).toBe("Add a role, Head of Platform (@platform), reporting to you, looking after Platform");
+    expect(changeLine(P.changes[1].change)).toBe("Add a role, Content Lead (@content), reporting to @growth, looking after pl-88");
     expect(changeLine(P.changes[6].change)).toBe("Mark done: Onboarding emails (pl-61)");
     expect(changeLine(P.changes[7].change)).toBe("Mark done: Fix the auth race on sign-in (ct-4102)");
     expect(changeLine(P.changes[2].change)).toBe("Create the project Platform");

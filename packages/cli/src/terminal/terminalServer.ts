@@ -301,7 +301,15 @@ export function handleTerminalHttp(
     const device = q.get("device") ?? "";
     const port = Number(q.get("port"));
     dispatch(async () => {
-      const { forwardToHost, HostForwardError } = await import("../cloud/hostForward.js");
+      const { forwardToHost, managesHost, HostForwardError } = await import("../cloud/hostForward.js");
+      // No port: only "is this a host of mine?", answered from the registry
+      // before the web spends a discovery round asking the host for its port.
+      if (!q.has("port")) {
+        const managed = managesHost(device);
+        res.writeHead(managed ? 200 : 404, headers);
+        res.end(JSON.stringify({ managed }));
+        return;
+      }
       try {
         const f = await forwardToHost(device, port);
         res.writeHead(200, headers);

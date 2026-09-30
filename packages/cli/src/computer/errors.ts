@@ -39,9 +39,9 @@ const RECOVERY: Record<ComputerErrorCode, string[]> = {
     "cast computer does not launch closed apps.",
   ],
   window_not_focused: [
-    "Retry once with `--restore-window`.",
-    "If the message says restore was already requested, stop retrying restore and prefer `set-value` or `perform-secondary-action`, which do not need focus.",
+    "Focus moved to another window in the middle of the action, so it stopped.",
     "If the message says presses may already have been delivered, run `get-app-state` and check before retrying.",
+    "Otherwise retry: a target that is not frontmost takes the input in its own event queue.",
   ],
   window_stale: [
     "Run `cast computer list-windows --app <app>` and choose a current selector.",

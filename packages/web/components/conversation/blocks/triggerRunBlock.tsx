@@ -31,9 +31,20 @@ function FoldToggle({ label, open, onToggle }: { label: string; open: boolean; o
   );
 }
 
+/** Why a session waits, in the reader's words, by the kind the run names. */
+const WAITING_WORDS: Record<string, string> = {
+  blocked: "is blocked",
+  decision: "asks for a decision",
+  waiting: "is waiting on an answer",
+  awaiting_input: "asked a question",
+  permission_blocked: "waits on a permission",
+  stopped: "has stopped",
+  unresponsive: "is not responding",
+};
+
 /** Why a session waits and for how long, in words: "is blocked for 9m". */
 function waitingWords(w: WaitingSession, firedAt: number): string {
-  const why = w.why === "blocked" ? "is blocked" : `waits on ${w.why.replace(/_/g, " ")}`;
+  const why = WAITING_WORDS[w.why] ?? `is waiting (${w.why.replace(/_/g, " ")})`;
   return w.since > 0 && firedAt > w.since ? `${why} for ${fmtDuration(firedAt - w.since)}` : why;
 }
 

@@ -20,54 +20,14 @@
 import type { PageSession } from "./instance.js";
 import { settle } from "./instance.js";
 import { isMutatingStep } from "./autoShot.js";
+import { runSteps, type StepResult } from "../stepBatch.js";
 import { snapshotPage, matchRefs, nearMatches, type Snapshot } from "./snapshot.js";
 import {
   clearViewport, click, clickAt, DEVICES, evaluate, focus, hover, locate, pressKey,
   scroll, selectOption, setViewport, type, type DeviceProfile,
 } from "./actions.js";
 
-export interface StepResult {
-  step: string;
-  ok: boolean;
-  /** One line describing what happened, in the same voice as the CLI. */
-  output: string;
-  /** Set when the step failed. */
-  error?: string;
-}
-
-/**
- * Split a step into arguments, honouring quotes so a typed string may contain
- * spaces: `type #e7 "hello world" --submit`.
- */
-export function tokenize(line: string): string[] {
-  const out: string[] = [];
-  let cur = "";
-  let quote: '"' | "'" | null = null;
-  let has = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (quote) {
-      if (ch === quote) quote = null;
-      else if (ch === "\\" && line[i + 1] === quote) cur += line[++i];
-      else cur += ch;
-      continue;
-    }
-    if (ch === '"' || ch === "'") {
-      quote = ch;
-      has = true;
-      continue;
-    }
-    if (/\s/.test(ch)) {
-      if (cur || has) out.push(cur);
-      cur = "";
-      has = false;
-      continue;
-    }
-    cur += ch;
-  }
-  if (cur || has) out.push(cur);
-  return out;
-}
+export { tokenize, type StepResult } from "../stepBatch.js";
 
 const refOf = (raw: string): number => {
   const n = parseInt(String(raw).replace(/^#?e/i, ""), 10);
@@ -273,30 +233,20 @@ export async function runBatch(
   steps: string[],
   opts: { keepGoing?: boolean } = {},
 ): Promise<StepResult[]> {
-  const results: StepResult[] = [];
-  for (const step of steps) {
-    const args = tokenize(step);
-    if (!args.length || args[0].startsWith("#")) continue; // blank line or comment
-    try {
-      const output = await runStep(ctx, args, step);
-      results.push({ step, ok: true, output });
-      // Settling is a courtesy to the NEXT step, not part of this one. Letting
-      // it throw here would record the same step twice — once as the success it
-      // was, then again as a failure — and abort a batch whose step worked.
+  return runSteps(steps, (args, raw) => runStep(ctx, args, raw), {
+    keepGoing: opts.keepGoing,
+    afterStep: async (args) => {
+      let note: string | null = null;
       if (SETTLES.has(args[0])) {
         await settle(ctx.page, { timeoutMs: 8000 }).catch(() => {});
-        const note = await ctx.afterSettle?.().catch(() => null);
-        if (note) results[results.length - 1].output += `\n! ${note}`;
+        note = await ctx.afterSettle?.().catch(() => null) ?? null;
       }
       // After the settle, so the auto shot sees the page the step produced,
       // not the loading state in between.
       if (ctx.autoShot && isMutatingStep(args[0], args)) {
         await ctx.autoShot();
       }
-    } catch (err) {
-      results.push({ step, ok: false, output: "", error: (err as Error).message });
-      if (!opts.keepGoing) break;
-    }
-  }
-  return results;
+      return note;
+    },
+  });
 }

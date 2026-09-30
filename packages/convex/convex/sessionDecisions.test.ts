@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { parseScheduledTask } from "@codecast/shared/contracts";
 import { makeFakeDb } from "./testDb";
 import {
   askCore,
@@ -25,6 +26,7 @@ import {
   reroutePendingDecisionsForConversation,
 } from "./sessionDecisions";
 import { hashToken } from "./apiTokens";
+import { isMachineDeliveredMessage } from "@codecast/shared/contracts";
 import * as fs from "fs";
 import * as path from "path";
 import { assignCategory, pinnedCategory } from "./lib/decisionCategory";
@@ -853,6 +855,12 @@ describe("a decision goes up the reporting line", () => {
     expect(line).toContain("sd-1");
     expect(line).toContain("Keep the engine vendored?");
     expect(line).not.toMatch(/escalat|ladder/i);
+    // It arrives as the role's needs-input trigger run (S25, S28), never as
+    // anyone's typed words: the frame names the session and the decision.
+    const frame = parseScheduledTask(line)!;
+    expect(frame.event).toBe("session_needs_input");
+    expect(frame.waiting).toMatchObject({ why: "decision", decision: "sd-1", state: "Keep the engine vendored?" });
+    expect(isMachineDeliveredMessage(line)).toBe(true);
     expect(linesIn(tables, "conversations_head")).toEqual([]);
     expect(r.ladder.map((h: any) => [h.role_id, h.woken])).toEqual([["org_roles_lead", true], ["org_roles_head", false]]);
     // The people above it may still answer on the card itself.

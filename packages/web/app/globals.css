@@ -3020,16 +3020,19 @@ pre[class*="language-"] {
   pointer-events: none;
   box-shadow: none;
 }
-.cc-railx-resize {
+.cc-railx { --edge-resize-accent: var(--cc-accent); }
+/* The left-edge drag handle of a right-docked panel (hooks/useEdgeResize):
+   invisible at rest, a hairline on hover and drag. */
+.edge-resize {
   position: absolute; left: -3px; top: 0; bottom: 0; width: 7px; z-index: 2;
-  cursor: col-resize;
+  cursor: col-resize; touch-action: none;
 }
-.cc-railx-resize::after {
+.edge-resize::after {
   content: ""; position: absolute; left: 3px; top: 0; bottom: 0; width: 1px;
   background: transparent; transition: background 120ms ease;
 }
-.cc-railx-resize:hover::after,
-.cc-railx-resize:active::after { background: var(--cc-accent); }
+.edge-resize:hover::after,
+.edge-resize:active::after { background: var(--edge-resize-accent, var(--sol-cyan)); }
 .cc-railx-head {
   display: flex; align-items: center; gap: 6px; flex-shrink: 0;
   height: var(--cc-panel-head-h); min-height: var(--cc-panel-head-h);

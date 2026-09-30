@@ -22,8 +22,11 @@
  * plumbing the CI lane and a human setting the feature up need:
  *
  *   build      compile + sign the helper and write its tar (and an unpacked
- *              .app, for CODECAST_COMPUTER_HELPER_APP)
+ *              .app, for CODECAST_COMPUTER_HELPER_APP); --fast builds debug
+ *              for this machine's arch only
  *   install    put a built tar at the fixed path
+ *   dev        build --fast, install, and stop the running helper: the local
+ *              edit loop (needs CODECAST_SIGN_IDENTITY to keep the grant)
  *   status     read the helper's own grants without opening any window
  *   cli        run the from-source CLI with a built payload staged in
  *
@@ -91,7 +94,8 @@ function build(args: string[]): { tar: string; app: string } {
   const stage = flag(args, "stage") ?? fs.mkdtempSync(path.join(os.tmpdir(), "cast-computer-build-"));
   const tar = flag(args, "out") ?? path.join(stage, "helper.tar");
   fs.mkdirSync(path.dirname(tar), { recursive: true });
-  const size = buildComputerHelper({ stage, output: tar, version: flag(args, "version") });
+  // --fast: this machine's arch only, debug, for a local edit and test loop.
+  const size = buildComputerHelper({ stage, output: tar, version: flag(args, "version"), universal: !args.includes("--fast") });
   if (size === 0) fail("swift is not on PATH, so there is nothing to verify");
 
   // Unpack a copy beside the tar: the e2e suites take a bundle path in
@@ -316,6 +320,16 @@ switch (verb) {
   case "build":
     build(rest);
     break;
+  case "dev": {
+    // The local edit loop: this arch, debug, signed, installed at the fixed
+    // path (the grant survives, same identity), and the running helper stopped
+    // so the next command launches the new build.
+    const built = build(["--fast", ...rest]);
+    await install(built.tar, { version: flag(rest, "version") });
+    spawnSync("/usr/bin/pkill", ["-f", `${HELPER_APP_BASENAME}/Contents/MacOS/codecast-computer`]);
+    console.log("helper restarted on the next cast computer command");
+    break;
+  }
   case "install":
     await install(rest[0] ?? fail("usage: install <helper.tar>"), { version: flag(rest, "version") });
     break;

@@ -6,7 +6,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
-import { cdpTunnelArgs, withCdpTunnel } from "./remote.js";
+import { cdpTunnelArgs, remoteProfileWipeCommand, withCdpTunnel } from "./remote.js";
 
 const host = { address: "1.2.3.4", user: "ubuntu", keyPath: "/k/id", remoteBaseDir: "/home/ubuntu/work", homeDir: "/home/ubuntu" };
 
@@ -96,5 +96,16 @@ describe("withCdpTunnel", () => {
     await expect(p).rejects.toThrow("the login carry did not finish within 0s; the tunnel was closed");
     expect(fnDone).toBe(false);
     expect(ssh.children[0].killed).toEqual(["SIGTERM"]);
+  });
+});
+
+describe("remoteProfileWipeCommand", () => {
+  test("never names the profile literally, so pkill -f cannot match the shell running it", () => {
+    expect(remoteProfileWipeCommand()).not.toContain("browser-profile");
+  });
+  test("expands the home directory and reaches the literal-tilde copy older launches left", () => {
+    const cmd = remoteProfileWipeCommand();
+    expect(cmd).toContain(`"$HOME"/.codecast/[b]rowser-profile`);
+    expect(cmd).toContain(`"$HOME"/~/.codecast/[b]rowser-profile`);
   });
 });

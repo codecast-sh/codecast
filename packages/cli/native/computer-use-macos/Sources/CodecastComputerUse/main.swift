@@ -193,6 +193,9 @@ private struct CachedSnapshotEntry {
 final class Provider {
     private var snapshots: [String: Snapshot] = [:]
     private var snapshotEntries: [CachedSnapshotEntry] = []
+    /// The tree an action saw just before it acted, so the result can say what
+    /// the action changed rather than hand back a whole tree to compare by eye.
+    private var preActionTree: String?
 
     func handle(method: String, params: [String: JSONValue]) throws -> Any {
         switch method {
@@ -203,7 +206,11 @@ final class Provider {
         case "listWindows":
             return try listWindows(params: params)
         case "getAppState":
-            return renderSnapshot(try observe(params: params))
+            // Read before observing, which replaces the cached entry.
+            let previous = params["diff"]?.bool == true ? try cachedSnapshot(params: params)?.treeText : nil
+            var result = renderSnapshot(try observe(params: params))
+            if let previous { result["baselineTreeText"] = previous }
+            return result
         case "click":
             return try actionResult(params: params) { try click(params: params) }
         case "performSecondaryAction":
@@ -220,6 +227,8 @@ final class Provider {
             return try actionResult(params: params) { try pasteText(params: params) }
         case "scroll":
             return try actionResult(params: params) { try scroll(params: params) }
+        case "drag":
+            return try actionResult(params: params) { try drag(params: params) }
         default:
             throw ProviderError(.invalidArgument, "unknown method '\(method)'")
         }
@@ -228,7 +237,11 @@ final class Provider {
     /// Every action returns a fresh snapshot, so the agent never has to ask for
     /// state between two actions.
     private func actionResult(params: [String: JSONValue], action runAction: () throws -> [String: Any]) throws -> [String: Any] {
+        preActionTree = nil
         var action = try runAction()
+        // An app updates its tree on its own run loop after the event lands; a
+        // read in the same instant reports the old state as "no change".
+        usleep(ActionSettle.microseconds(path: action["path"] as? String))
         do {
             return renderActionResult(action: action, snapshot: try observe(params: params))
         } catch let error as ProviderError
@@ -305,6 +318,7 @@ final class Provider {
         }
         let snapshot = try observe(params: params.merging(["noScreenshot": .bool(true)]) { _, replacement in replacement })
         try validateRequestedElements(cached: cached, current: snapshot, params: params)
+        preActionTree = snapshot.treeText
         return snapshot
     }
 
@@ -570,6 +584,7 @@ final class Provider {
                 "treeText": snapshot.treeText,
                 "elementCount": snapshot.elements.count,
                 "focusedElementId": jsonNullable(snapshot.focusedElementId),
+                "elements": renderElementFrames(snapshot),
                 "truncation": [
                     "truncated": snapshot.truncated,
                     "maxNodes": SnapshotLimits.maxNodes,
@@ -582,11 +597,28 @@ final class Provider {
         ]
     }
 
+    /// Window-local frames by index, for a click at a point the tree names. A
+    /// control that advertises a press and ignores it can only be reached this
+    /// way, and a frame read off a screenshot is a guess.
+    private func renderElementFrames(_ snapshot: Snapshot) -> [[String: Any]] {
+        snapshot.elements.keys.sorted().compactMap { index in
+            guard let frame = snapshot.elements[index]?.localFrame else { return nil }
+            return [
+                "index": index,
+                "x": Int(frame.minX.rounded()),
+                "y": Int(frame.minY.rounded()),
+                "width": Int(frame.width.rounded()),
+                "height": Int(frame.height.rounded()),
+            ]
+        }
+    }
+
     private func renderActionResult(action: [String: Any], snapshot: Snapshot) -> [String: Any] {
         var result = renderSnapshot(snapshot)
         var metadata = action
         metadata["targetWindowId"] = Int(snapshot.windowId)
         result["action"] = metadata
+        if let preActionTree { result["baselineTreeText"] = preActionTree }
         return result
     }
 
@@ -601,9 +633,11 @@ final class Provider {
             throw ProviderError(.invalidArgument, "clickCount must be at most \(SyntheticMouseClickDelivery.maxClickCount)")
         }
         let modifiers = try parseModifiers(params["modifiers"]?.string)
+        let forceMouse = params["mouse"]?.bool == true
         if let elementIndex = try optionalInteger(params, "elementIndex") {
             let record = try element(snapshot, elementIndex)
-            if modifiers.isEmpty,
+            if !forceMouse,
+               modifiers.isEmpty,
                count <= 1,
                button.hasAccessibilityAction,
                let actionName = performClickAction(record: record, mouseButton: button) {
@@ -612,18 +646,35 @@ final class Provider {
             guard let point = center(record.localFrame, in: snapshot.windowBounds) else {
                 throw ProviderError(.elementNotClickable, "element \(record.index) has no clickable frame")
             }
-            try requireTargetWindowFocused(snapshot, restoreWindowRequested: params["restoreWindow"]?.bool == true)
-            try Input.click(at: point, button: button, count: count, modifiers: modifiers, targetWindow: snapshot)
+            let route = try syntheticClick(at: point, button: button, count: count, modifiers: modifiers, snapshot: snapshot)
             return actionMetadata(
                 path: "synthetic",
-                fallbackReason: "actionUnsupported",
-                verification: unverifiedAction(reason: "synthetic_input")
+                fallbackReason: forceMouse ? "mouseRequested" : "actionUnsupported",
+                verification: syntheticVerification(route)
             )
         }
         let point = try coordinatePoint(params: params, xKey: "x", yKey: "y", snapshot: snapshot)
-        try requireTargetWindowFocused(snapshot, restoreWindowRequested: params["restoreWindow"]?.bool == true)
-        try Input.click(at: point, button: button, count: count, modifiers: modifiers, targetWindow: snapshot)
-        return actionMetadata(path: "synthetic", verification: unverifiedAction(reason: "synthetic_input"))
+        let route = try syntheticClick(at: point, button: button, count: count, modifiers: modifiers, snapshot: snapshot)
+        return actionMetadata(path: "synthetic", verification: syntheticVerification(route))
+    }
+
+    /// A focused target takes the fenced HID click; a background one takes the
+    /// click in its own event queue, which cannot reach the human's front app.
+    private func syntheticClick(
+        at point: CGPoint,
+        button: MouseButtonSelection,
+        count: Int,
+        modifiers: [KeyModifierName],
+        snapshot: Snapshot
+    ) throws -> InputRoute {
+        let route = inputRoute(snapshot, keyboard: false)
+        switch route {
+        case .hid:
+            try Input.click(at: point, button: button, count: count, modifiers: modifiers, targetWindow: snapshot)
+        case .process:
+            try Input.processClick(at: point, button: button, count: count, modifiers: modifiers, route: route)
+        }
+        return route
     }
 
     private func performClickAction(record: ElementRecord, mouseButton: MouseButtonSelection) -> String? {
@@ -651,9 +702,9 @@ final class Provider {
             )
         }
         guard performAction(record.element, action) else {
-            throw ProviderError(.accessibilityError, "AXUIElementPerformAction(\(action)) failed")
+            throw ProviderError(.accessibilityError, "AXUIElementPerformAction(\(SnapshotRenderHeuristics.prettyAction(action))) failed")
         }
-        return actionMetadata(path: "accessibility", actionName: action)
+        return actionMetadata(path: "accessibility", actionName: SnapshotRenderHeuristics.prettyAction(action))
     }
 
     /// Verified by read back, matched against the value the write actually
@@ -701,23 +752,23 @@ final class Provider {
         if let focused = focusedRecord(snapshot), let verification = TextInput.replaceSelection(focused.element, with: text) {
             return actionMetadata(path: "accessibility", actionName: "AXReplaceSelection", verification: verification)
         }
-        try requireTargetWindowFocused(snapshot, restoreWindowRequested: params["restoreWindow"]?.bool == true)
-        try Input.typeText(text)
+        let route = inputRoute(snapshot, keyboard: true)
+        try Input.typeText(text, route: route)
         return actionMetadata(
             path: "synthetic",
             actionName: "typeText",
-            verification: unverifiedAction(reason: "synthetic_input")
+            verification: syntheticVerification(route)
         )
     }
 
     private func pressKey(params: [String: JSONValue]) throws -> [String: Any] {
         let snapshot = try currentKeyboardSnapshot(params: params)
-        try requireTargetWindowFocused(snapshot, restoreWindowRequested: params["restoreWindow"]?.bool == true)
-        try Input.pressChord(try requiredString(params, "key"))
+        let route = inputRoute(snapshot, keyboard: true)
+        try Input.pressChord(try requiredString(params, "key"), route: route)
         return actionMetadata(
             path: "synthetic",
             actionName: "pressKey",
-            verification: unverifiedAction(reason: "synthetic_input")
+            verification: syntheticVerification(route)
         )
     }
 
@@ -731,12 +782,12 @@ final class Provider {
                 verification: TextInput.selectionVerification(focused.element)
             )
         }
-        try requireTargetWindowFocused(snapshot, restoreWindowRequested: params["restoreWindow"]?.bool == true)
-        try Input.pressChord(key)
+        let route = inputRoute(snapshot, keyboard: true)
+        try Input.pressChord(key, route: route)
         return actionMetadata(
             path: "synthetic",
             actionName: "hotkey",
-            verification: unverifiedAction(reason: "synthetic_input")
+            verification: syntheticVerification(route)
         )
     }
 
@@ -749,8 +800,8 @@ final class Provider {
         if let focused = focusedRecord(snapshot), let verification = TextInput.replaceSelection(focused.element, with: text) {
             return actionMetadata(path: "accessibility", actionName: "AXReplaceSelection", verification: verification)
         }
-        try requireTargetWindowFocused(snapshot, restoreWindowRequested: params["restoreWindow"]?.bool == true)
-        try Input.pasteText(text)
+        let route = inputRoute(snapshot, keyboard: true)
+        try Input.pasteText(text, route: route)
         return actionMetadata(
             path: "clipboard",
             actionName: "paste",
@@ -782,6 +833,34 @@ final class Provider {
         let point = try coordinatePoint(params: params, xKey: "x", yKey: "y", snapshot: snapshot)
         try Input.scroll(pid: snapshot.app.pid, at: point, direction: direction, pages: pages)
         return actionMetadata(path: "synthetic")
+    }
+
+    /// Press at one point, move to another, release: moving a signature onto
+    /// its line, a slider thumb, a file between lists. Either end is an element
+    /// center or a window-local point.
+    private func drag(params: [String: JSONValue]) throws -> [String: Any] {
+        let snapshot = try currentSnapshot(params: params)
+        let from: CGPoint
+        if let index = try optionalInteger(params, "elementIndex") {
+            guard let point = center(try element(snapshot, index).localFrame, in: snapshot.windowBounds) else {
+                throw ProviderError(.elementNotClickable, "element \(index) has no frame to drag from")
+            }
+            from = point
+        } else {
+            from = try coordinatePoint(params: params, xKey: "x", yKey: "y", snapshot: snapshot)
+        }
+        let to: CGPoint
+        if let index = try optionalInteger(params, "toElementIndex") {
+            guard let point = center(try element(snapshot, index).localFrame, in: snapshot.windowBounds) else {
+                throw ProviderError(.elementNotClickable, "element \(index) has no frame to drag to")
+            }
+            to = point
+        } else {
+            to = try coordinatePoint(params: params, xKey: "toX", yKey: "toY", snapshot: snapshot)
+        }
+        let route = inputRoute(snapshot, keyboard: false)
+        try Input.drag(from: from, to: to, route: route)
+        return actionMetadata(path: "synthetic", actionName: "drag", verification: syntheticVerification(route))
     }
 
     /// Accessibility text replacement and select all post no global input, so
@@ -1129,27 +1208,30 @@ private func containingWindow(_ element: AXUIElement) -> AXUIElement? {
     return nil
 }
 
-/// Synthetic input requires the target window to be focused already. The
-/// accessibility paths need nothing, which is exactly why they are preferred.
-private func requireTargetWindowFocused(_ snapshot: Snapshot, restoreWindowRequested: Bool) throws {
-    guard let failure = KeyboardInputSafety.syntheticInputFocusFailure(
-        targetWindowFocused: isTargetWindowFocused(snapshot),
-        restoreWindowRequested: restoreWindowRequested
-    ) else {
+/// The HID stream when the target already has the front, the app's own event
+/// queue otherwise. Keys land in the app's key window, so a background target
+/// becomes the app's main window first; that reorders the app's own windows and
+/// never activates it, so the human's front app keeps the keyboard.
+private func inputRoute(_ snapshot: Snapshot, keyboard: Bool) -> InputRoute {
+    if isTargetWindowFocused(snapshot) { return .hid }
+    if keyboard { makeMainWithinApp(snapshot) }
+    return .process(pid: snapshot.app.pid, windowId: snapshot.windowId)
+}
+
+private func makeMainWithinApp(_ snapshot: Snapshot) {
+    let appElement = AXUIElementCreateApplication(snapshot.app.pid)
+    if let current = copyElement(appElement, kAXFocusedWindowAttribute as String), windowNumber(current) == snapshot.windowId {
         return
     }
-    switch failure {
-    case .targetNotFocused:
-        throw ProviderError(
-            .windowNotFocused,
-            "synthetic input requires the target \(snapshot.app.name) window to be focused; retry with --restore-window, or prefer set-value or perform-secondary-action, which need no focus"
-        )
-    case .targetNotFocusedAfterRestore:
-        throw ProviderError(
-            .windowNotFocused,
-            "synthetic input requires the target \(snapshot.app.name) window to be focused; --restore-window was already requested and the target is still not focused, so stop retrying restore and prefer set-value or perform-secondary-action"
-        )
-    }
+    guard let window = (copyArray(appElement, kAXWindowsAttribute as String) ?? []).first(where: {
+        windowNumber($0) == snapshot.windowId || absoluteFrame($0).map { windowFramesMatch($0, snapshot.windowBounds) } == true
+    }) else { return }
+    _ = AXUIElementSetAttributeValue(window, kAXMainAttribute as CFString, kCFBooleanTrue)
+    usleep(60_000)
+}
+
+private func syntheticVerification(_ route: InputRoute) -> [String: Any] {
+    unverifiedAction(reason: route.isBackground ? "background_input" : "synthetic_input")
 }
 
 private func matchingWindow(
@@ -1162,11 +1244,23 @@ private func matchingWindow(
     if let byNumber = windows.first(where: { windowNumber($0) == capture.windowId }) {
         return byNumber
     }
-    if let byBounds = windows.first(where: { window in
-        guard usableWindow(window), let frame = absoluteFrame(window) else { return false }
+    // Without an id, an exact frame beats a title beats the largest overlap:
+    // cascaded windows of one size overlap each other by most of their area.
+    let usable = windows.filter(usableWindow)
+    if let exact = usable.first(where: { absoluteFrame($0).map { windowFramesMatch($0, capture.bounds) } == true }) {
+        return exact
+    }
+    if let title = capture.title, !title.isEmpty,
+       let byTitle = usable.first(where: { stringAttribute($0, kAXTitleAttribute as String) == title }) {
+        return byTitle
+    }
+    let overlaps = usable.compactMap { window -> (AXUIElement, CGFloat)? in
+        guard let frame = absoluteFrame(window) else { return nil }
         let intersection = frame.intersection(capture.bounds)
-        return !intersection.isNull && intersection.area >= min(frame.area, capture.bounds.area) * 0.75
-    }) {
+        guard !intersection.isNull, intersection.area >= min(frame.area, capture.bounds.area) * 0.75 else { return nil }
+        return (window, intersection.area)
+    }
+    if let byBounds = overlaps.max(by: { $0.1 < $1.1 })?.0 {
         return byBounds
     }
     if explicitTarget { return nil }
@@ -1316,7 +1410,16 @@ private func numberAttribute(_ element: AXUIElement, _ attribute: String) -> NSN
     return value as? NSNumber
 }
 
+/// The window server id behind an accessibility window. Most apps (Preview
+/// among them) publish no `AXWindowNumber`, and matching by frame instead
+/// picked the wrong one of two cascaded documents, so the private call every
+/// macOS automation tool relies on comes first.
+@_silgen_name("_AXUIElementGetWindow")
+private func _AXUIElementGetWindow(_ element: AXUIElement, _ windowId: UnsafeMutablePointer<CGWindowID>) -> AXError
+
 private func windowNumber(_ element: AXUIElement) -> CGWindowID? {
+    var id: CGWindowID = 0
+    if _AXUIElementGetWindow(element, &id) == .success, id != 0 { return id }
     guard let number = numberAttribute(element, "AXWindowNumber") else { return nil }
     return CGWindowID(number.uint32Value)
 }
@@ -1961,6 +2064,8 @@ private let valueSettableRoles: Set<String> = [
 
 struct WindowCandidate {
     let windowId: CGWindowID
+    /// Position in the window server's front-to-back list; lower is in front.
+    let order: Int
     let layer: Int
     let bounds: CGRect
     let title: String?
@@ -1993,12 +2098,12 @@ struct WindowCapture {
     ) -> WindowCapture? {
         if let windowId {
             guard let candidate = candidates.first(where: { $0.windowId == windowId }) else { return nil }
-            return WindowCapture(candidate: candidate, captureImage: captureImage)
+            return WindowCapture(candidate: candidate, siblings: candidates, captureImage: captureImage)
         }
         if let windowIndex {
             let visibleWindows = candidates.filter { $0.layer == 0 }
             guard visibleWindows.indices.contains(windowIndex) else { return nil }
-            return WindowCapture(candidate: visibleWindows[windowIndex], captureImage: captureImage)
+            return WindowCapture(candidate: visibleWindows[windowIndex], siblings: candidates, captureImage: captureImage)
         }
         guard let best = candidates.sorted(by: { lhs, rhs in
             if let titleHint, lhs.title == titleHint, rhs.title != titleHint { return true }
@@ -2007,25 +2112,41 @@ struct WindowCapture {
         }).first else {
             return nil
         }
-        return WindowCapture(candidate: best, captureImage: captureImage)
+        return WindowCapture(candidate: best, siblings: candidates, captureImage: captureImage)
     }
 
     /// Probing the image APIs before the TCC preflight can raise a Screen
     /// Recording prompt, even for a `--no-screenshot` call.
-    private init(candidate: WindowCandidate, captureImage: Bool) {
+    private init(candidate: WindowCandidate, siblings: [WindowCandidate], captureImage: Bool) {
         windowId = candidate.windowId
         layer = candidate.layer
         bounds = candidate.bounds
         title = candidate.title
-        image = captureImage ? WindowCapture.captureWindowImage(candidate.windowId) : nil
+        image = captureImage ? WindowCapture.captureWindowImage(candidate, siblings: siblings) : nil
     }
 
     /// ScreenCaptureKit is the replacement macOS advertises, but it is async and
     /// needs a running app loop per capture, which costs seconds on a helper
     /// that answers one request at a time. The deliberate deprecation warning
     /// below is the whole record of that choice, and it lives at one site.
-    private static func captureWindowImage(_ windowId: CGWindowID) -> CGImage? {
-        CGWindowListCreateImage(.null, [.optionIncludingWindow], windowId, [.boundsIgnoreFraming, .bestResolution])
+    ///
+    /// Popovers, sheets and menus are windows of their own, in front of the one
+    /// they belong to. A capture of the target alone showed a menu the tree said
+    /// was open as missing, so the app's windows in front of the target that
+    /// overlap it are composited in, clipped to the target's bounds so pixel to
+    /// point math is unchanged.
+    private static func captureWindowImage(_ candidate: WindowCandidate, siblings: [WindowCandidate]) -> CGImage? {
+        let overlays = siblings.filter {
+            $0.windowId != candidate.windowId && $0.order < candidate.order && $0.bounds.intersects(candidate.bounds)
+        }
+        guard !overlays.isEmpty else {
+            return CGWindowListCreateImage(.null, [.optionIncludingWindow], candidate.windowId, [.boundsIgnoreFraming, .bestResolution])
+        }
+        var pointers: [UnsafeRawPointer?] = (overlays + [candidate])
+            .sorted { $0.order < $1.order }
+            .map { UnsafeRawPointer(bitPattern: UInt($0.windowId)) }
+        guard let array = CFArrayCreate(kCFAllocatorDefault, &pointers, pointers.count, nil) else { return nil }
+        return CGImage(windowListFromArrayScreenBounds: candidate.bounds, windowArray: array, imageOption: [.bestResolution])
     }
 
     static func candidates(pid: pid_t) -> [WindowCandidate] {
@@ -2035,7 +2156,7 @@ struct WindowCapture {
         // The raw preflight, not the settling one: this decides how to read a
         // field, and a stale answer for one call costs nothing.
         let screenRecordingGranted = CGPreflightScreenCaptureAccess()
-        return infos.compactMap { info in
+        return infos.enumerated().compactMap { order, info in
             guard let ownerPid = info[kCGWindowOwnerPID as String] as? pid_t, ownerPid == pid,
                   let number = info[kCGWindowNumber as String] as? NSNumber,
                   let layer = info[kCGWindowLayer as String] as? Int,
@@ -2056,6 +2177,7 @@ struct WindowCapture {
             }
             return WindowCandidate(
                 windowId: CGWindowID(number.uint32Value),
+                order: order,
                 layer: layer,
                 bounds: bounds,
                 title: info[kCGWindowName as String] as? String,
@@ -2120,10 +2242,104 @@ private func resizePng(_ image: CGImage, scale: CGFloat) -> BoundedPNG? {
     return BoundedPNG(data: data, width: width, height: height)
 }
 
+/// Where synthetic input goes.
+///
+/// `hid` is the real input stream: it reaches whatever sits frontmost under the
+/// point, so it needs the target focused, and the click fence below guards it.
+/// `process` posts to the target app alone, so it works while the human uses
+/// another app and can never land in theirs. A mouse event posted to a pid
+/// carries no window association on its own, and AppKit drops it; the two
+/// window-under-pointer fields name the target window so it routes as a press.
+enum InputRoute {
+    case hid
+    case process(pid: pid_t, windowId: CGWindowID)
+
+    var isBackground: Bool {
+        if case .process = self { return true }
+        return false
+    }
+
+    func post(_ event: CGEvent) {
+        switch self {
+        case .hid:
+            event.post(tap: .cghidEventTap)
+        case let .process(pid, windowId):
+            if event.type == .leftMouseDown || event.type == .leftMouseUp ||
+                event.type == .rightMouseDown || event.type == .rightMouseUp ||
+                event.type == .otherMouseDown || event.type == .otherMouseUp {
+                event.setIntegerValueField(.mouseEventWindowUnderMousePointer, value: Int64(windowId))
+                event.setIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent, value: Int64(windowId))
+            }
+            event.postToPid(pid)
+        }
+    }
+}
+
 private enum Input {
-    /// Clicks post to the HID event tap, not to a pid: a pid targeted mouse
-    /// event reaches the app with no window association, so AppKit never routes
-    /// it as a real press.
+    /// A background click: down and up posted to the target app with the window
+    /// named on each event. No move event, because moving is what the human's
+    /// real cursor is for.
+    static func processClick(
+        at point: CGPoint,
+        button: MouseButtonSelection,
+        count: Int,
+        modifiers: [KeyModifierName],
+        route: InputRoute
+    ) throws {
+        guard let source = CGEventSource(stateID: .privateState) else {
+            throw ProviderError(.accessibilityError, "failed to create event source")
+        }
+        let flags = modifiers.reduce(into: CGEventFlags()) { result, modifier in result.insert(modifier.flag) }
+        for press in 1...max(1, count) {
+            for type in [button.downEvent, button.upEvent] {
+                guard let event = CGEvent(
+                    mouseEventSource: source,
+                    mouseType: type,
+                    mouseCursorPosition: point,
+                    mouseButton: button.cgButton
+                ) else {
+                    throw ProviderError(.accessibilityError, "failed to create mouse event")
+                }
+                event.flags = flags
+                event.setIntegerValueField(.mouseEventClickState, value: Int64(press))
+                route.post(event)
+                usleep(12_000)
+            }
+        }
+    }
+
+    /// Down, a dozen dragged moves, up. Apps start a drag only after the pointer
+    /// has moved a few points with the button held, and track it by the moves,
+    /// so a down at one point and an up at another moves nothing.
+    static func drag(from: CGPoint, to: CGPoint, route: InputRoute) throws {
+        guard let source = CGEventSource(stateID: route.isBackground ? .privateState : .combinedSessionState) else {
+            throw ProviderError(.accessibilityError, "failed to create event source")
+        }
+        func post(_ type: CGEventType, _ point: CGPoint) throws {
+            guard let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: .left) else {
+                throw ProviderError(.accessibilityError, "failed to create mouse event")
+            }
+            if type != .leftMouseDragged { event.setIntegerValueField(.mouseEventClickState, value: 1) }
+            if case let .process(_, windowId) = route {
+                event.setIntegerValueField(.mouseEventWindowUnderMousePointer, value: Int64(windowId))
+                event.setIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent, value: Int64(windowId))
+            }
+            route.post(event)
+        }
+        if !route.isBackground { try post(.mouseMoved, from) }
+        try post(.leftMouseDown, from)
+        usleep(60_000)
+        let steps = 12
+        for step in 1...steps {
+            let t = CGFloat(step) / CGFloat(steps)
+            try post(.leftMouseDragged, CGPoint(x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t))
+            usleep(16_000)
+        }
+        try post(.leftMouseUp, to)
+    }
+
+    /// Clicks on the focused window post to the HID event tap, fenced so a
+    /// press never lands in a window that took the front mid click.
     static func click(
         at point: CGPoint,
         button: MouseButtonSelection,
@@ -2204,7 +2420,7 @@ private enum Input {
         event.postToPid(pid)
     }
 
-    static func typeText(_ text: String) throws {
+    static func typeText(_ text: String, route: InputRoute) throws {
         for unit in text.utf16 {
             var character = unit
             guard let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
@@ -2214,15 +2430,16 @@ private enum Input {
             }
             down.keyboardSetUnicodeString(stringLength: 1, unicodeString: &character)
             up.keyboardSetUnicodeString(stringLength: 1, unicodeString: &character)
-            down.post(tap: .cghidEventTap)
-            up.post(tap: .cghidEventTap)
+            route.post(down)
+            route.post(up)
+            if route.isBackground { usleep(2_000) }
         }
     }
 
     /// One chord, pressed and released together. A modifier is never left held
     /// across two commands, because an interrupted agent would leave it down
     /// for the human.
-    static func pressChord(_ key: String) throws {
+    static func pressChord(_ key: String, route: InputRoute) throws {
         let parsed: ParsedKeyChord
         switch KeyChord.parse(key) {
         case let .success(value): parsed = value
@@ -2233,20 +2450,20 @@ private enum Input {
         defer {
             for modifier in pressedModifiers.reversed() {
                 flags.remove(modifier.flag)
-                try? keyEvent(modifier.keyCode, down: false, flags: flags)
+                try? keyEvent(modifier.keyCode, down: false, flags: flags, route: route)
             }
         }
         for modifier in parsed.modifiers {
             flags.insert(modifier.flag)
-            try keyEvent(modifier.keyCode, down: true, flags: flags)
+            try keyEvent(modifier.keyCode, down: true, flags: flags, route: route)
             pressedModifiers.append(modifier)
         }
-        try keyEvent(CGKeyCode(parsed.keyCode), down: true, flags: flags)
-        try keyEvent(CGKeyCode(parsed.keyCode), down: false, flags: flags)
+        try keyEvent(CGKeyCode(parsed.keyCode), down: true, flags: flags, route: route)
+        try keyEvent(CGKeyCode(parsed.keyCode), down: false, flags: flags, route: route)
     }
 
     /// The human's clipboard is not ours to keep.
-    static func pasteText(_ text: String) throws {
+    static func pasteText(_ text: String, route: InputRoute) throws {
         let pasteboard = NSPasteboard.general
         let previousItems: [NSPasteboardItem] = pasteboard.pasteboardItems?.map { item in
             let copy = NSPasteboardItem()
@@ -2265,15 +2482,19 @@ private enum Input {
                 pasteboard.writeObjects(previousItems)
             }
         }
-        try pressChord("cmd+v")
+        try pressChord("cmd+v", route: route)
+        // The app reads the pasteboard while it handles the event; restoring
+        // before a background app has run its loop would paste the old text.
+        if route.isBackground { usleep(150_000) }
     }
 
-    private static func keyEvent(_ keyCode: CGKeyCode, down: Bool, flags: CGEventFlags) throws {
+    private static func keyEvent(_ keyCode: CGKeyCode, down: Bool, flags: CGEventFlags, route: InputRoute) throws {
         guard let event = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: down) else {
             throw ProviderError(.accessibilityError, "failed to create key event")
         }
         event.flags = flags
-        event.post(tap: .cghidEventTap)
+        route.post(event)
+        if route.isBackground { usleep(8_000) }
     }
 }
 
