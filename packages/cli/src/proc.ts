@@ -121,9 +121,9 @@ export async function keychainReadAsync(args: string[], timeoutMs = KEYCHAIN_REA
   }
 }
 
-/** Absolute path `name` resolves to on PATH, or null when it is not installed. */
-export function whichBin(name: string): string | null {
-  const r = spawnSync("which", [name], { encoding: "utf-8" });
+/** Absolute path `name` resolves to on PATH (or on `pathEnv`), or null when it is not installed. */
+export function whichBin(name: string, pathEnv?: string): string | null {
+  const r = spawnSync("which", [name], { encoding: "utf-8", ...(pathEnv ? { env: { ...process.env, PATH: pathEnv } } : {}) });
   const found = r.status === 0 ? r.stdout.trim() : "";
   return found || null;
 }

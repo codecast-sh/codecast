@@ -185,10 +185,10 @@ interface UserMessageItem { type: "userMessage"; id: string; content: UserInput[
 interface AgentMessageItem { type: "agentMessage"; id: string; text: string; phase?: "commentary" | "final_answer" | null }
 interface PlanItem { type: "plan"; id: string; text: string }
 interface ReasoningItem { type: "reasoning"; id: string; content: string[]; summary: string[] }
-interface CommandExecutionItem { type: "commandExecution"; id: string; command: string; cwd: string; status: string; aggregatedOutput?: string | null; exitCode?: number | null; durationMs?: number | null }
+interface CommandExecutionItem { type: "commandExecution"; id: string; command: string; cwd?: string; status: string; aggregatedOutput?: string | null; exitCode?: number | null; durationMs?: number | null }
 interface FileChangeItem { type: "fileChange"; id: string; changes: FileUpdateChange[]; status: string }
 interface McpToolCallItem { type: "mcpToolCall"; id: string; tool: string; server: string; arguments: unknown; status: string; result?: { content?: unknown[] } | null; error?: { message: string } | null; durationMs?: number | null }
-interface DynamicToolCallItem { type: "dynamicToolCall"; id: string; tool: string; arguments: unknown; status: string; durationMs?: number | null; success?: boolean | null }
+interface DynamicToolCallItem { type: "dynamicToolCall"; id: string; tool: string; arguments: unknown; status: string; durationMs?: number | null; success?: boolean | null; contentItems?: Array<{ type: string; text?: string | null }> | null }
 interface CollabAgentToolCallItem { type: "collabAgentToolCall"; id: string; tool: string; status: string; senderThreadId: string; receiverThreadIds: string[]; prompt?: string | null }
 interface WebSearchItem { type: "webSearch"; id: string; query: string }
 interface ImageViewItem { type: "imageView"; id: string; path: string }
@@ -1187,6 +1187,14 @@ export function threadItemToMessage(item: ThreadItem, timestamp = Date.now()): P
         name: item.tool,
         input: args,
       }];
+      // What the tool answered, once it has (the text parts of its output).
+      const toolResults: ToolResult[] | undefined = item.contentItems
+        ? [{
+          toolUseId: item.id,
+          content: item.contentItems.map((c) => c.text ?? "").filter(Boolean).join("\n"),
+          isError: item.status === "failed" || item.success === false,
+        }]
+        : undefined;
 
       return {
         uuid: item.id,
@@ -1194,6 +1202,7 @@ export function threadItemToMessage(item: ThreadItem, timestamp = Date.now()): P
         content: "",
         timestamp,
         toolCalls,
+        ...(toolResults ? { toolResults } : {}),
       };
     }
 
