@@ -32,12 +32,13 @@ export const DESKTOP_APPS = /** @type {const} */ ({
     // header reading "Chat · Chat" names nothing.
     sections: [
       { path: "/chat", label: "Messages" },
-      { path: "/threads", label: "Threads" },
       { path: "/calls", label: "Calls" },
     ],
     // The public rooms belong here without a tab of their own: they are the
-    // chat page in another scope.
-    routes: ["/chat", "/community", "/threads", "/calls"],
+    // chat page in another scope. Threads is not chat's: it gathers every
+    // conversation you are in (sessions, tasks, docs), so it stays in the
+    // main window.
+    routes: ["/chat", "/community", "/calls"],
   },
   work: {
     title: "Work",

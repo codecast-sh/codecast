@@ -6,7 +6,7 @@ test("appForRoute names the app by route prefix and ignores the query", () => {
   assert.equal(appForRoute("/chat"), "chat");
   assert.equal(appForRoute("/chat/ch1?m=msg9"), "chat");
   assert.equal(appForRoute("/community/room"), "chat");
-  assert.equal(appForRoute("/threads"), "chat");
+  assert.equal(appForRoute("/threads"), null);
   assert.equal(appForRoute("/calls/c1"), "chat");
   assert.equal(appForRoute("/tasks/ct-1"), "work");
   assert.equal(appForRoute("/docs"), "work");
