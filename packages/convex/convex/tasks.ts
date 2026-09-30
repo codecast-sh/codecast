@@ -543,7 +543,7 @@ async function handoffTaskThread(
 // hands work to a role wants to hear how it went.
 async function announceAssignment(
   ctx: any,
-  o: { task: { _id: Id<"tasks">; short_id: string; title: string; team_id?: Id<"teams"> }; assignee: string | undefined; actorUserId: Id<"users">; actorName?: string; via: SubscriptionVia },
+  o: { task: { _id: Id<"tasks">; short_id: string; title: string; team_id?: Id<"teams"> }; assignee: string | undefined; actorUserId: Id<"users">; actorName?: string; via: SubscriptionVia; fromConversationId?: Id<"conversations"> },
 ): Promise<void> {
   if (!o.assignee) return;
   const role = await roleAssigneeOf(ctx, o.assignee);
@@ -553,6 +553,7 @@ async function announceAssignment(
       content: `${by} assigned you ${o.task.short_id} "${(o.task.title ?? "").slice(0, 80)}"`,
       client_id: `assigned:${o.task._id}:${role._id}`,
       from_user_id: o.actorUserId,
+      from_conversation_id: o.fromConversationId,
     });
     return;
   }
@@ -1334,7 +1335,7 @@ export const create = mutation({
     // A defaulted owner filed the task itself: nobody assigned it to them.
     if (resolvedAssignee && args.assignee) {
       const createdTask = await ctx.db.get(id) as any;
-      await announceAssignment(ctx, { task: createdTask, assignee: resolvedAssignee, actorUserId: auth.userId, via: cliVia(args) });
+      await announceAssignment(ctx, { task: createdTask, assignee: resolvedAssignee, actorUserId: auth.userId, via: cliVia(args), fromConversationId: created_from_conversation });
     }
 
     await schedulePushNewTask(ctx, project_id, id);
@@ -2207,7 +2208,7 @@ export const update = mutation({
       await notifyTaskStatus(ctx, auth.userId, task as any, nextStatus, linkedConvId);
     }
     if (args.assignee !== undefined && updates.assignee !== task.assignee) {
-      await announceAssignment(ctx, { task, assignee: updates.assignee, actorUserId: auth.userId, actorName: actor.name, via: cliVia(args) });
+      await announceAssignment(ctx, { task, assignee: updates.assignee, actorUserId: auth.userId, actorName: actor.name, via: cliVia(args), fromConversationId: conv?._id });
     }
 
     let planShortId: string | undefined;

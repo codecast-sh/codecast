@@ -811,6 +811,21 @@ html, body {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+
+  /* What survives reduced motion: loading indicators, because a frozen
+     spinner reads as stuck, and the opacity-only fallbacks components opt
+     into below. Class selectors outrank the universal clamp above. */
+  .animate-spin {
+    animation-duration: 1s !important;
+    animation-iteration-count: infinite !important;
+  }
+  .app-loader-bar::after {
+    animation-duration: 1.5s !important;
+    animation-iteration-count: infinite !important;
+  }
+  .sched-click-flash {
+    animation-duration: 200ms !important;
+  }
 }
 
 #nprogress {
@@ -921,7 +936,7 @@ html[data-idle] *::after {
 }
 @media (prefers-reduced-motion: reduce) {
   .animate-sched-roster-in {
-    animation: schedRosterFade 140ms ease-out;
+    animation: schedRosterFade 140ms ease-out !important;
   }
   @keyframes schedRosterFade { from { opacity: 0; } to { opacity: 1; } }
 }
@@ -991,7 +1006,7 @@ html[data-idle] *::after {
 @media (prefers-reduced-motion: reduce) {
   .cc-session-beacon,
   .cc-session-beacon[data-dir="up"] {
-    animation: schedRosterFade 140ms ease-out 250ms backwards;
+    animation: schedRosterFade 140ms ease-out 250ms backwards !important;
   }
   .cc-session-beacon__dot {
     animation: none;
@@ -1982,6 +1997,10 @@ pre[class*="language-"] {
 .inbox-compact [data-sv-rail] [data-session-id]:has(> [data-sv-pin]) > [data-sv-check] {
   right: 26px;
 }
+/* The tick steps left of a pinned card's pin, in every layout. */
+[data-sv-rail] [data-session-id]:has(> [data-sv-pin]) > [data-sv-check] {
+  right: 26px;
+}
 
 /* ---- Left sidebar: smaller sections, counts pushed right, more air ---- */
 .simple-view [data-sv-nav] {
@@ -2205,14 +2224,15 @@ pre[class*="language-"] {
   z-index: 0;
   transition: top 120ms ease, height 120ms ease;
 }
-.cc-rail-inline .cc-active-overlay {
+.cc-rail-inline .cc-active-overlay,
+.cc-rail-inline .cc-active-hint {
   left: calc(var(--cc-rail-w) + var(--cc-rail-gap) - 0.5rem);
 }
-/* The verb for the keyboard-lit chunk: a chip just above the overlay's top-right
-   corner, in the paragraph gap, so it never covers the end of a long first line. */
+/* The verb for the keyboard-lit chunk: a chip just above the overlay's top-left
+   corner, in the paragraph gap, so it never covers the start of the first line. */
 .cc-active-hint {
   position: absolute;
-  right: -0.5rem;
+  left: -0.5rem;
   transform: translateY(calc(-100% - 2px));
   display: inline-flex;
   align-items: center;
@@ -2227,7 +2247,6 @@ pre[class*="language-"] {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
   pointer-events: none;
   z-index: 6;
-  animation: ccPop 120ms ease-out;
   transition: top 120ms ease;
 }
 
@@ -3020,16 +3039,19 @@ pre[class*="language-"] {
   pointer-events: none;
   box-shadow: none;
 }
-.cc-railx-resize {
+.cc-railx { --edge-resize-accent: var(--cc-accent); }
+/* The left-edge drag handle of a right-docked panel (hooks/useEdgeResize):
+   invisible at rest, a hairline on hover and drag. */
+.edge-resize {
   position: absolute; left: -3px; top: 0; bottom: 0; width: 7px; z-index: 2;
-  cursor: col-resize;
+  cursor: col-resize; touch-action: none;
 }
-.cc-railx-resize::after {
+.edge-resize::after {
   content: ""; position: absolute; left: 3px; top: 0; bottom: 0; width: 1px;
   background: transparent; transition: background 120ms ease;
 }
-.cc-railx-resize:hover::after,
-.cc-railx-resize:active::after { background: var(--cc-accent); }
+.edge-resize:hover::after,
+.edge-resize:active::after { background: var(--edge-resize-accent, var(--sol-cyan)); }
 .cc-railx-head {
   display: flex; align-items: center; gap: 6px; flex-shrink: 0;
   height: var(--cc-panel-head-h); min-height: var(--cc-panel-head-h);
@@ -3639,10 +3661,10 @@ pre[class*="language-"] {
   overflow: hidden;
   background: var(--sol-bg);
   transition:
-    left var(--cc-panel-motion) cubic-bezier(.2,.8,.25,1),
-    top var(--cc-panel-motion) cubic-bezier(.2,.8,.25,1),
-    width var(--cc-panel-motion) cubic-bezier(.2,.8,.25,1),
-    height var(--cc-panel-motion) cubic-bezier(.2,.8,.25,1);
+    left var(--cc-panel-motion),
+    top var(--cc-panel-motion),
+    width var(--cc-panel-motion),
+    height var(--cc-panel-motion);
 }
 .stage-cell--focused::after {
   content: "";
@@ -3659,10 +3681,10 @@ pre[class*="language-"] {
   z-index: 20;
   touch-action: none;
   transition:
-    left var(--cc-panel-motion) cubic-bezier(.2,.8,.25,1),
-    top var(--cc-panel-motion) cubic-bezier(.2,.8,.25,1),
-    width var(--cc-panel-motion) cubic-bezier(.2,.8,.25,1),
-    height var(--cc-panel-motion) cubic-bezier(.2,.8,.25,1);
+    left var(--cc-panel-motion),
+    top var(--cc-panel-motion),
+    width var(--cc-panel-motion),
+    height var(--cc-panel-motion);
 }
 .stage-handle__line {
   position: absolute;
@@ -4863,13 +4885,13 @@ pre[class*="language-"] {
    at equal weight. */
 :root :is(.inbox-compact, .minimal-style) [data-sv-rail] [data-session-id][data-selected="true"],
 :root :is(.inbox-compact, .minimal-style) [data-sv-rail] [data-session-id][data-selected="true"]:hover {
-  --sv-card-bg: color-mix(in srgb, var(--sol-cyan) 18%, var(--sol-bg-alt));
+  --sv-card-bg: color-mix(in srgb, var(--sol-blue) 24%, var(--sol-bg-alt));
   background: var(--sv-card-bg) !important;
 }
-/* The open row inside a selection stays findable: a deeper wash and a bar on
-   its leading edge. */
+/* Ticked rows are blue and the open row is cyan, so the open row inside a
+   selection keeps its own wash and bar; the selection's frame sits on top. */
 :root :is(.inbox-compact, .minimal-style) [data-sv-rail] [data-session-id][data-selected="true"][data-active="true"] {
-  --sv-card-bg: color-mix(in srgb, var(--sol-cyan) 32%, var(--sol-bg-alt));
+  --sv-card-bg: var(--sv-card-active-bg);
   box-shadow: inset 3px 0 0 var(--sol-cyan) !important;
 }
 /* Rows carry no frame, so a hairline between neighbours keeps a long group
@@ -5299,8 +5321,14 @@ pre[class*="language-"] {
   text-decoration-color: color-mix(in srgb, var(--sol-text) 25%, transparent);
   text-underline-offset: 2px;
 }
+.minimal-style :is([data-cc-conversation], [data-sv-rail], [data-cc-thread-state]) .entity-ref__expand {
+  background: transparent;
+  color: var(--sol-text-muted);
+}
 .minimal-style :is([data-cc-conversation], [data-sv-rail], [data-cc-thread-state]) .entity-ref:hover,
-.minimal-style :is([data-cc-conversation], [data-sv-rail], [data-cc-thread-state]) .entity-ref[aria-pressed="true"] {
+.minimal-style :is([data-cc-conversation], [data-sv-rail], [data-cc-thread-state]) .entity-ref[data-reveal-open],
+.minimal-style :is([data-cc-conversation], [data-sv-rail], [data-cc-thread-state]) .entity-ref__expand:hover,
+.minimal-style :is([data-cc-conversation], [data-sv-rail], [data-cc-thread-state]) .entity-ref__expand[aria-expanded="true"] {
   background: var(--sol-bg-highlight);
   box-shadow: none;
   text-decoration-color: currentColor;
@@ -5815,7 +5843,7 @@ pre[class*="language-"] {
    conversation, not the object. A bar appears on hover so the lane reads. */
 .object-reveal__lane {
   position: absolute;
-  top: 30px;
+  top: 34px;
   bottom: 12px;
   width: var(--reveal-gutter);
   z-index: 2;
@@ -5843,15 +5871,16 @@ pre[class*="language-"] {
   height: 40px;
   background: var(--reveal-accent);
 }
-/* One juicy Open hit above the framed page. The label opens the object;
-   the columns icon opens it beside. */
+/* One big Open hit above the framed page: the whole bar is the button,
+   tinted in the object's colour and lit on hover, so it reads as the way
+   out to the full page rather than a label. The columns icon opens it
+   beside; the X closes the band. */
 .object-reveal__open {
   display: flex;
   align-items: stretch;
-  gap: 2px;
-  height: 30px;
-  padding: 0 4px 0 var(--reveal-gutter);
-  background: color-mix(in srgb, var(--reveal-accent) 6%, transparent);
+  gap: 4px;
+  height: 34px;
+  padding: 3px var(--reveal-gutter);
 }
 .object-reveal__open-go {
   display: flex;
@@ -5859,16 +5888,31 @@ pre[class*="language-"] {
   flex: 1;
   min-width: 0;
   height: 100%;
-  padding: 0 8px 0 0;
+  padding: 0 12px;
+  border: 1px solid color-mix(in srgb, var(--reveal-accent) 35%, var(--sol-border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--reveal-accent) 16%, var(--sol-bg));
   color: var(--sol-text);
   text-decoration: none;
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.01em;
+  transition: background 120ms, border-color 120ms, box-shadow 120ms;
 }
 .object-reveal__open-go:hover,
 .object-reveal__open-go:focus-visible {
   color: var(--sol-text);
+  background: color-mix(in srgb, var(--reveal-accent) 24%, var(--sol-bg));
+  border-color: var(--reveal-accent);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--reveal-accent) 30%, transparent);
+  outline: none;
+}
+.object-reveal__open-go svg {
+  color: var(--reveal-accent);
+  transition: transform 140ms;
+}
+.object-reveal__open-go:hover svg {
+  transform: translate(2px, -2px);
 }
 .object-reveal__open-label {
   display: inline-flex;
@@ -5908,6 +5952,10 @@ pre[class*="language-"] {
   align-items: center;
   height: 100%;
   padding: 0 6px 0 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
   color: var(--sol-text);
   text-decoration: none;
   font-size: 12px;
@@ -5997,6 +6045,32 @@ pre[class*="language-"] {
   box-shadow: 0 8px 18px -12px color-mix(in srgb, var(--sol-text) 45%, transparent);
 }
 .object-reveal__hint--on { opacity: 1; }
+/* The foot is the other close: the whole strip along the bottom of the
+   frame, so a reader who scrolled the page to its end closes it there. */
+.object-reveal__foot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 26px;
+  flex-shrink: 0;
+  border-top: 1px solid color-mix(in srgb, var(--reveal-accent) 18%, var(--sol-border));
+  background: color-mix(in srgb, var(--reveal-accent) 7%, var(--sol-bg));
+  color: var(--sol-text-muted);
+  font-size: 11px;
+  user-select: none;
+  cursor: pointer;
+  outline: none;
+  transition: background 120ms, color 120ms;
+}
+.object-reveal__foot:hover,
+.object-reveal__foot:focus-visible {
+  background: color-mix(in srgb, var(--reveal-accent) 14%, var(--sol-bg));
+  color: var(--sol-text);
+}
+.object-reveal__foot:focus-visible {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--reveal-accent) 60%, transparent);
+}
 .object-reveal__body {
   position: relative;
   flex: 1;
@@ -6105,24 +6179,57 @@ pre[class*="language-"] {
   padding-block: 2px !important;
   font-size: 11px;
 }
-/* The pill's reveal caret: hidden until hover, always shown while its band
-   is open, and rotated to point up so the same glyph reads open and close.
-   The space is reserved either way so a hover never reflows the sentence. */
+/* A pill that can reveal is split in two: the label is the link, and the
+   caret after it is its own button that opens the full page in a band under
+   the line. The two halves share one fill; a hairline and the caret's own
+   hover say where one ends. The caret points up while its band is open. */
+.entity-ref--split:has(+ .entity-ref__expand:is(:hover, :focus-visible, [aria-expanded="true"])) {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+/* At rest the caret half carries no fill or divider, only the caret; both
+   appear while it is hovered or open. The zero-width text gives it the same
+   baseline as the label, so the two halves sit on one line. */
+.entity-ref__expand {
+  display: inline-flex;
+  align-items: center;
+  height: 1em;
+  padding: 0 0.12em;
+  margin: 0;
+  border: 0;
+  border-left: 1px solid transparent;
+  border-radius: 0 0.2em 0.2em 0;
+  font-size: 1em;
+  line-height: 1;
+  cursor: pointer;
+}
+.entity-ref__expand::before {
+  content: "\200b";
+  width: 0;
+}
+.entity-ref__expand:is(:hover, :focus-visible, [aria-expanded="true"]) {
+  background: color-mix(in srgb, currentColor 14%, transparent);
+  border-left-color: color-mix(in srgb, currentColor 22%, transparent);
+  outline: none;
+}
 .entity-ref__caret {
-  opacity: 0;
+  width: 0.9em;
+  height: 0.9em;
+  opacity: 0.55;
   transition: opacity 120ms, transform 160ms;
 }
-.entity-ref:hover .entity-ref__caret,
-.entity-ref:focus-visible .entity-ref__caret {
-  opacity: 0.75;
+.entity-ref__expand:hover .entity-ref__caret,
+.entity-ref__expand:focus-visible .entity-ref__caret {
+  opacity: 1;
 }
-.entity-ref[aria-pressed="true"] .entity-ref__caret {
+.entity-ref__expand[aria-expanded="true"] .entity-ref__caret {
   opacity: 1;
   transform: rotate(180deg);
 }
-/* The pressed pill is the band's handle: filled in its colour and underlined
-   in it, the one reference on the page that says "open below". */
-.entity-ref[aria-pressed="true"] {
+/* The open pill is the band's handle: outlined in its colour, the one
+   reference on the page that says "open below". */
+.entity-ref[data-reveal-open],
+.entity-ref__expand[aria-expanded="true"] {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 35%, transparent);
 }
 

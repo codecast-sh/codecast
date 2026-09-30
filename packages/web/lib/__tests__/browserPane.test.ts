@@ -479,3 +479,16 @@ describe("appDocumentTitle", () => {
     expect(appDocumentTitle("Tasks", null, true)).toBe("Tasks");
   });
 });
+
+describe("the host screen pane", () => {
+  it("round-trips through its path and draws with its own backend", () => {
+    const path = browserRoutePath({ kind: "screen", deviceId: "28d80e225ed21f45" });
+    expect(path).toBe("/browser?screen=28d80e225ed21f45");
+    expect(parseBrowserRoute(path)).toEqual({ kind: "screen", deviceId: "28d80e225ed21f45" });
+    expect(browserPathLabel(path)).toBe("Host screen");
+    expect(selectBackend({ kind: "screen", deviceId: "x" }, { desktop: true, nativeAvailable: true, refused: false, preferNative: true })).toBe("screen");
+  });
+  it("refuses a device id that is not one", () => {
+    expect(parseBrowserRoute("/browser?screen=../../etc")).toBeNull();
+  });
+});

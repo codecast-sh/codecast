@@ -13,12 +13,15 @@
  *    helper actually read the change back; everything else is `attempted`.
  *    An action that reports success it did not verify is the failure this
  *    wording exists to prevent — most macOS input paths cannot be asserted, so
- *    "it ran" and "it worked" are genuinely different claims. The sentence
- *    then hands over the exact `get-app-state` command that would settle it,
- *    with the right window selector already filled in.
+ *    "it ran" and "it worked" are genuinely different claims. Under it goes
+ *    what the action changed in the window's tree, which is the evidence an
+ *    unverified action is otherwise missing: "No change" says a press was
+ *    ignored in the same breath as the attempt, where an agent used to spend a
+ *    second full snapshot to find that out.
  */
 
 import { formatBytes } from "../browser/profile.js";
+import { diffTrees, filterTree, formatDiff, type TreeFilter } from "./tree.js";
 import type {
   ComputerActionResult,
   ComputerActionVerification,
@@ -45,6 +48,7 @@ const VERIFICATION_WORDS: Record<string, string> = {
   selection: "selection",
   value: "value",
   synthetic_input: "synthetic input",
+  background_input: "sent to the app in the background",
   clipboard_paste: "clipboard paste",
   accessibility_action_unasserted: "accessibility action unasserted",
   provider_unavailable: "provider unavailable",
@@ -100,7 +104,8 @@ function screenshotLine(result: ComputerSnapshotResult): string {
   ].filter(Boolean);
   // The conversion is spelled out because getting it wrong on a retina display
   // clicks at twice the intended offset and reads as a broken tool.
-  return `  Screenshot captured (${parts.join(", ")}; coordinate x/y = screenshot pixels / ${scale}${engine ? `, ${engine}` : ""})`;
+  const mapping = shot.scale === 1 ? "pixels are window points" : `coordinate x/y = screenshot pixels / ${scale}`;
+  return `  Screenshot captured (${parts.join(", ")}; ${mapping}${engine ? `, ${engine}` : ""})`;
 }
 
 function truncationLine(result: ComputerSnapshotResult): string {
@@ -129,9 +134,27 @@ function formatSnapshotHeader(result: ComputerSnapshotResult): string[] {
   ];
 }
 
-/** Header, blank line, then the helper's tree (which carries its own envelope). */
-export function formatSnapshot(result: ComputerSnapshotResult): string {
-  return `${formatSnapshotHeader(result).join("\n")}\n\n${result.snapshot.treeText}`;
+/**
+ * Header, blank line, then the tree: whole, cut down to what `filter` asks
+ * for, or (for `--diff`) only what changed since this window's last snapshot.
+ */
+export function formatSnapshot(result: ComputerSnapshotResult, filter: TreeFilter = {}, diff = false): string {
+  const header = formatSnapshotHeader(result).join("\n");
+  return `${header}\n\n${treeBody(result, filter, diff)}`;
+}
+
+function treeBody(result: ComputerSnapshotResult, filter: TreeFilter, diff: boolean): string {
+  const tree = result.snapshot.treeText;
+  if (diff) {
+    if (result.baselineTreeText === undefined) return `No earlier snapshot of this window to compare with; the whole tree:\n${tree}`;
+    return formatDiff(diffTrees(result.baselineTreeText, tree)) ?? `The window changed substantially; the whole tree:\n${tree}`;
+  }
+  if (filter.find === undefined && filter.under === undefined) return tree;
+  const cut = filterTree(tree, filter);
+  if (cut !== null) return cut;
+  return filter.under !== undefined && filter.find === undefined
+    ? `No element ${filter.under} in this tree; indexes go stale, so read it again.`
+    : `Nothing matches '${filter.find}'${filter.under !== undefined ? ` under ${filter.under}` : ""}.`;
 }
 
 function verificationPhrase(verification: ComputerActionVerification | undefined): string {
@@ -142,31 +165,54 @@ function verificationPhrase(verification: ComputerActionVerification | undefined
 }
 
 /**
- * One sentence for an action: what was attempted, by which path, whether it was
- * verified, and the command that would prove it.
+ * An action: one sentence saying what was attempted, by which path and whether
+ * it was verified, then what it changed.
  *
- * `window_changed` drops the window selector on purpose. The window the action
- * targeted is gone, so printing its id would hand the agent a selector that
- * resolves to nothing and reads as a second, unrelated failure.
+ * `window_changed` means the window the action targeted is gone (a dialog
+ * closed, a document window replaced itself), so a diff against it would be
+ * noise: the sentence names the window the helper fell back to and prints its
+ * whole tree, and the follow-up command drops the stale window selector.
  */
-export function formatAction(method: string, appSelector: string, result: ComputerActionResult): string {
+export function formatAction(method: string, appSelector: string, result: ComputerActionResult, filter: TreeFilter = {}): string {
   const action = result.action;
   const verification = action?.verification;
   const verified = verification?.state === "verified";
   const label = ACTION_LABEL[method] ?? method;
-  const via = action?.path ? ` via ${action.path}` : "";
+  const via = action?.path ? ` via ${action.path}${action.actionName && action.path === "accessibility" ? ` (${action.actionName})` : ""}` : "";
   const windowChanged = verification?.state === "unverified" && verification.reason === "window_changed";
-  const follow = followUpCommand({
-    app: appSelector,
-    windowId: windowChanged ? null : (action?.targetWindowId ?? result.snapshot.window.id),
-    windowIndex: windowChanged ? null : action?.targetWindowIndex,
-  });
-  const sentences = [
-    `${label} ${verified ? "completed" : "attempted"}${via}, ${verificationPhrase(verification)}; ${result.snapshot.elementCount} visible elements in current window.`,
-    `Use \`${follow}\` to inspect.`,
-  ];
-  if (!verified) sentences.push("Inspect with the command above or use the --json result before assuming it worked.");
-  return sentences.join(" ");
+  const sentence = `${label} ${verified ? "completed" : "attempted"}${via}, ${verificationPhrase(verification)}.`;
+  const win = result.snapshot.window;
+  if (windowChanged) {
+    const follow = followUpCommand({ app: appSelector, windowId: null, windowIndex: null });
+    return [
+      sentence,
+      `The target window is gone; this is now id:${win.id ?? "?"} "${win.title}". Next: \`${follow}\`.`,
+      treeBody(result, filter, false),
+    ].join("\n");
+  }
+  if (result.baselineTreeText === undefined) {
+    // A helper from before the diff: say how to look instead.
+    const follow = followUpCommand({ app: appSelector, windowId: action?.targetWindowId ?? win.id, windowIndex: action?.targetWindowIndex });
+    return `${sentence} ${result.snapshot.elementCount} visible elements in current window. Use \`${follow}\` to inspect.`;
+  }
+  const body = filter.find !== undefined || filter.under !== undefined
+    ? treeBody(result, filter, false)
+    : (formatDiff(diffTrees(result.baselineTreeText, result.snapshot.treeText), { synthetic: action?.path === "synthetic" }) ??
+      `The window changed substantially; the whole tree:\n${result.snapshot.treeText}`);
+  return `${sentence}\n${body}`;
+}
+
+/** What `--json` says changed, in place of the raw baseline tree. */
+export function jsonChanges(result: ComputerSnapshotResult): Record<string, unknown> | undefined {
+  if (result.baselineTreeText === undefined) return undefined;
+  const diff = diffTrees(result.baselineTreeText, result.snapshot.treeText);
+  const line = (l: { index: number | null; body: string }) => (l.index === null ? l.body : `${l.index} ${l.body}`);
+  return {
+    added: diff.added.map(line),
+    removed: diff.removed.map(line),
+    focus: diff.focusAfter,
+    focusChanged: diff.focusBefore !== diff.focusAfter,
+  };
 }
 
 export function formatApps(result: ComputerListAppsResult): string {

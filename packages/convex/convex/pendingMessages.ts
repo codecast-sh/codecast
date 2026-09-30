@@ -493,7 +493,9 @@ export async function reachableRole(ctx: any, roleId: Id<"org_roles">): Promise<
 // A line into a role's standing session (docs/architecture/org-staffing.md
 // S25): a role hears about its world the way any session does, as a plain
 // message. Null when the role cannot be reached (reachableRole). The sender
-// defaults to the session's host.
+// defaults to the session's host. A bare line always goes out in the envelope
+// `cast send` uses, from the session that caused it or else from codecast:
+// bare, the thread would paint it as the host's own typed words.
 export async function tellRole(
   ctx: any,
   roleId: Id<"org_roles">,
@@ -502,6 +504,12 @@ export async function tellRole(
   const conversation = (await reachableRole(ctx, roleId))?.standing;
   if (!conversation) return null;
   const { from_user_id, ...rest } = fields;
+  if (!fields.content.startsWith("<")) {
+    const from = fields.from_conversation_id ? await ctx.db.get(fields.from_conversation_id) : null;
+    rest.content = from
+      ? formatSessionMessage(from.short_id ?? String(from._id).slice(0, 7), fields.content)
+      : formatSessionMessage("unknown", fields.content, "codecast");
+  }
   return await enqueuePendingMessage(ctx, conversation, from_user_id ?? conversation.user_id, rest);
 }
 
@@ -772,7 +780,10 @@ export async function performSessionSend(
   // session_owners backfill has a cached owner but no join row, and must never
   // be auto-claimed out from under them. Claiming writes through both.
   let autoOwned = false;
-  if (isCrossUser && !senderUser?.is_bot) {
+  // A role's own session is owned by whom the role reports to, and has no
+  // owner when it reports to a role (sessionOwners.stampSeatOwners): writing to
+  // it never claims it.
+  if (isCrossUser && !senderUser?.is_bot && !target.standing_role_id) {
     const existingOwners = await listSessionOwnerIds(ctx, target._id);
     if (
       existingOwners.length === 0 &&

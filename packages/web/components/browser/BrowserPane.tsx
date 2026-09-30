@@ -33,6 +33,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
   browserRoutePath,
+  browserPathLabel,
   displayHost,
   isLoopbackUrl,
   normalizeUrl,
@@ -62,6 +63,7 @@ import { FrameBackend } from "./backends/FrameBackend";
 import { NativeBackend } from "./backends/NativeBackend";
 import { useNativeBrowserPane } from "../../hooks/useNativeBrowserPane";
 import { StreamBackend } from "./backends/StreamBackend";
+import { ScreenBackend } from "./backends/ScreenBackend";
 import { PaneCard, PaneCardButton } from "./backends/PaneCard";
 import type { BrowserPaneState, PaneStripAction } from "./backends/types";
 
@@ -243,6 +245,8 @@ export function BrowserPane() {
   const Backend =
     source?.kind === "watch"
       ? StreamBackend
+      : source?.kind === "screen"
+        ? ScreenBackend
       : wantsNative || backendKind === "native"
         ? NativeBackend
         : FrameBackend;
@@ -274,13 +278,13 @@ export function BrowserPane() {
             {secure ? <Lock className="w-3 h-3" /> : <Globe className="w-3 h-3" />}
           </span>
         </ShortcutTooltip>
-        {source?.kind === "watch" ? (
+        {source && source.kind !== "url" ? (
           // What the agent is looking at, in the words the daemon uses for it:
           // its title, then its address. The session uuid is a handle, not a
           // name, so it only stands in while nothing has been streamed yet.
           <span className="flex-1 min-w-0 flex items-baseline gap-1.5 overflow-hidden text-[11px] font-mono">
             <span className="flex-shrink-0 truncate text-sol-text-muted">
-              {liveTitle || "Agent tab"}
+              {liveTitle || browserPathLabel(path)}
             </span>
             {shownUrl && (
               <span className="min-w-0 truncate text-sol-text-dim/70" title={shownUrl}>

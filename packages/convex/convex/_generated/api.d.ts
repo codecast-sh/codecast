@@ -202,6 +202,7 @@ import type * as orgProposals from "../orgProposals.js";
 import type * as orgRoles from "../orgRoles.js";
 import type * as orgRootSeat from "../orgRootSeat.js";
 import type * as orgTemplates from "../orgTemplates.js";
+import type * as orgWatch from "../orgWatch.js";
 import type * as pathStats from "../pathStats.js";
 import type * as patterns from "../patterns.js";
 import type * as pendingMessageWrites from "../pendingMessageWrites.js";
@@ -284,6 +285,7 @@ import type * as vaultMirror from "../vaultMirror.js";
 import type * as verification from "../verification.js";
 import type * as wakeCost from "../wakeCost.js";
 import type * as webDocsPagination from "../webDocsPagination.js";
+import type * as workerSettle from "../workerSettle.js";
 import type * as workflow_runs from "../workflow_runs.js";
 import type * as workflows from "../workflows.js";
 
@@ -488,6 +490,7 @@ declare const fullApi: ApiFromModules<{
   orgRoles: typeof orgRoles;
   orgRootSeat: typeof orgRootSeat;
   orgTemplates: typeof orgTemplates;
+  orgWatch: typeof orgWatch;
   pathStats: typeof pathStats;
   patterns: typeof patterns;
   pendingMessageWrites: typeof pendingMessageWrites;
@@ -570,6 +573,7 @@ declare const fullApi: ApiFromModules<{
   verification: typeof verification;
   wakeCost: typeof wakeCost;
   webDocsPagination: typeof webDocsPagination;
+  workerSettle: typeof workerSettle;
   workflow_runs: typeof workflow_runs;
   workflows: typeof workflows;
 }>;

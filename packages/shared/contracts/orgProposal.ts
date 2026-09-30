@@ -1164,7 +1164,7 @@ export function recordChangeParts(c: OrgChange): { act: string; ref: string; tit
 
 /**
  * The one line a change reads as to a person (org-staffing.md S17): a sentence
- * addressed to the reader, in the product's own words (standing agent, area
+ * addressed to the reader, in the product's own words (role, area
  * of work, daily limit), never the CLI walk's command syntax
  * (describeOrgChange keeps that for the terminal). The proposal pane, the
  * chart's chips, the org log and the undo preview all say a change this way
@@ -1185,7 +1185,7 @@ function changeSentence(c: OrgChange): string {
     case "role": {
       const scope = [...(c.scope?.projects ?? []), ...(c.scope?.plans ?? [])];
       // A role that names a session adds nothing: the session is already there (R2).
-      return `${c.seat ? `name the session ${c.seat.title?.trim() || c.seat.existing} as a role` : "add a standing agent"}, ${c.name} (${at(c.handle)}), reporting to ${whoReads(c.reports_to)}${scope.length ? `, looking after ${andList(scope)}` : ""}`;
+      return `${c.seat ? `name the session ${c.seat.title?.trim() || c.seat.existing} as a role` : "add a role"}, ${c.name} (${at(c.handle)}), reporting to ${whoReads(c.reports_to)}${scope.length ? `, looking after ${andList(scope)}` : ""}`;
     }
     case "projects": return c.changes.map((x) => x.op === "create" ? `create the project ${x.title}${x.horizon ? ` (${x.horizon})` : ""}` : `fold the project ${x.from} into ${x.into}`).join("; ");
     case "move": return `move ${at(c.handle)}${c.reports_to ? ` under ${whoReads(c.reports_to)}` : ""}${c.scope_add?.length ? `; now also looks after ${andList(c.scope_add)}` : ""}${c.scope_remove?.length ? `; no longer looks after ${andList(c.scope_remove)}` : ""}`;

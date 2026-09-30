@@ -153,7 +153,7 @@ export interface WorkStateInput {
   settleVerdict?: string | null;
   /** conversations.thread_state_status — the agent's declaration ON THE ROW, for rows with no daemon status at all (see the fallback in classifyWorkState). */
   declaredStatus?: string | null;
-  /** A declared `dormant` that names no wake the system can verify (no armed trigger or loop into the session, no daemon-checked open task) and has been quiet past DORMANT_CLAIM_TTL_MS. The claim outlived its trust: the row files needs_input and the inbox shows it as an unverified claim. Computed in placeProjectableRow. */
+  /** A declared `dormant` that names no wake the system can verify (no armed trigger or loop into the session, no daemon-checked open task, no child still producing) and has been quiet past DORMANT_CLAIM_TTL_MS. The claim outlived its trust: the row files needs_input and the inbox shows it as an unverified claim. Computed in placeProjectableRow. */
   dormantClaimExpired?: boolean;
   /** The settled status is a SESSION BOUNDARY — a resume, a clear, or a manual /compact landing at an idle prompt (statusHook's SessionStart / PostCompact, carried as managed_sessions.agent_status_boundary). No turn ended, so the status is evidence that the agent is quiet and never a verdict about work: the row keeps its own declaration instead of the boundary consuming it, and every completion-reactive consumer (the needs-input push, unread) ignores it. */
   sessionBoundary?: boolean;
@@ -1358,8 +1358,11 @@ export function placeProjectableRow(
   // raw here (not gated on `park`): a human who spoke last starts a turn that
   // re-derives the status anyway, and the question is only whether SOMETHING
   // will wake the session.
+  // A child still producing (a --subagent worker the session waits on) is a
+  // wake too: its result is the next turn.
   const verifiedWake =
     (row.armed_trigger_kind ?? "none") !== "none" ||
+    (row.producing_until != null && epoch < row.producing_until) ||
     (!!loop && loop.status === "armed" && isLoopFresh(loop, epoch)) ||
     openTasksVouchForWaiting(row.open_tasks_at, row.open_tasks?.length ?? 0, epoch);
   return placeInboxRow({

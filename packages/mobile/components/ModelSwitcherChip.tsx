@@ -6,8 +6,8 @@ import { Pressable,
 } from 'react-native';
 import { Text } from '@/components/Themed';
 import { Feather } from '@expo/vector-icons';
-import { AGENT_MODEL_CONFIG, launchRailOptions, modelAgentKey } from '@codecast/shared/contracts';
-import { commitModelChange, modelOptionKey, modelFitsAgent, effortGlyph } from '@codecast/web/lib/modelSwitch';
+import { AGENT_MODEL_CONFIG, cloudAgentLaunch, cloudAgentLaunchWords, launchRailOptions, liveRailOptions, modelAgentKey } from '@codecast/shared/contracts';
+import { canControlModel, commitModelChange, modelOptionKey, modelFitsAgent, effortGlyph } from '@codecast/web/lib/modelSwitch';
 import { ModelEffortSheet } from '@/components/ModelEffortSheet';
 import { Theme, chipShell, chipText, chipTint, CHROME_FONT_CAP } from '../constants/Theme';
 import { themedStyles, useTheme } from '@/constants/Theme';
@@ -16,10 +16,12 @@ import { themedStyles, useTheme } from '@/constants/Theme';
 // counterpart of the web's HeaderModelControl / LaunchModelPill. Same two
 // rails via the shared commitModelChange (blank session → reconfigureSession
 // relaunch flags; live claude session → `/model` / `/effort` sent as ordinary
-// messages). Read-only contexts (teammates' sessions, agents without a rail)
-// render a static chip.
+// messages). Read-only contexts (teammates' sessions, agents without a rail,
+// a cloud agent's session, whose provider picks the model: canControlModel,
+// the web's rule) render a static chip.
 export function ModelSwitcherChip({
   conversationId,
+  sessionId,
   agentType,
   model,
   effort,
@@ -28,6 +30,7 @@ export function ModelSwitcherChip({
   showToast,
 }: {
   conversationId: string;
+  sessionId: string | undefined;
   agentType: string | undefined;
   model: string | undefined;
   effort: string | undefined | null;
@@ -40,7 +43,10 @@ export function ModelSwitcherChip({
 
   const blank = (messageCount ?? 0) === 0;
   const cfg = AGENT_MODEL_CONFIG[modelAgentKey(agentType)];
-  const interactive = !!cfg && canEdit && (blank || cfg.midSession);
+  const controllable = canControlModel(agentType, sessionId, model);
+  const interactive = !!cfg && controllable && canEdit && (blank || cfg.midSession);
+  // A cloud launch is named by what it asked of the provider ("ask · 2 attempts"), as on the web.
+  const launch = cloudAgentLaunch(agentType, model);
 
   const fits = modelFitsAgent(model, agentType);
   const modelKey = modelOptionKey(fits ? model : undefined, agentType);
@@ -48,12 +54,14 @@ export function ModelSwitcherChip({
   // Known models get their picker label ("Opus"); custom/unknown ids fall
   // back to the raw id minus the claude- prefix. A leftover from another
   // agent (after an in-place switch) is not the current model.
-  const label = fits && model
-    ? (opt && opt.key !== 'default' ? opt.label : model.replace(/^claude-/, ''))
-    : 'Model';
-  const glyph = effortGlyph(effort);
+  const label = launch
+    ? cloudAgentLaunchWords(launch).join(' · ')
+    : fits && model
+      ? (opt && opt.key !== 'default' ? opt.label : model.replace(/^claude-/, ''))
+      : 'Model';
+  const glyph = controllable ? effortGlyph(effort) : '';
 
-  if (!model && !interactive) return null;
+  if (!label || (!model && !interactive)) return null;
 
   const chip = (
     <View style={styles.chip}>
@@ -80,7 +88,7 @@ export function ModelSwitcherChip({
   // Blank session: the launch rail (effort gains the "default" stop) — one
   // definition shared with the new-session sheet. A live session: all models,
   // no default stop.
-  const rail = blank ? launchRailOptions(cfg) : { models: cfg.models, efforts: [...cfg.efforts] };
+  const rail = blank ? launchRailOptions(cfg) : liveRailOptions(cfg);
 
   return (
     <>

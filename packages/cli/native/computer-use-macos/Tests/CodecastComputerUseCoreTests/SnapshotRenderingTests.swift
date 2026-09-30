@@ -37,6 +37,24 @@ final class SnapshotRenderingTests: XCTestCase {
         )
     }
 
+    func testCustomActionsRenderByNameAndToolbarReorderingIsDropped() {
+        let node = SnapshotRenderNode(
+            role: "AXCell",
+            rawActions: [
+                "Name:insert signature\ntarget:0x0\nselector:(null)",
+                "Name:remove signature\ntarget:0x0\nselector:(null)",
+                "Name:move next\ntarget:0x0\nselector:(null)",
+            ]
+        )
+
+        XCTAssertEqual(
+            SnapshotRenderHeuristics.line(index: 71, node: node),
+            "71 cell, Secondary Actions: insert signature, remove signature"
+        )
+        XCTAssertEqual(SnapshotRenderHeuristics.prettyAction("Name:insert signature\ntarget:0x0\nselector:(null)"), "insert signature")
+        XCTAssertNil(SnapshotRenderHeuristics.customActionName("AXPress"))
+    }
+
     func testDropsMenuOnlyNoiseActions() {
         let node = SnapshotRenderNode(role: "AXMenuItem", rawActions: ["AXCancel", "AXPick", "AXIncrement"])
 

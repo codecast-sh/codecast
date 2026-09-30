@@ -465,8 +465,8 @@ function RevealBand({ reveal }: { reveal: OpenReveal }) {
       .finished.then(done, done);
   }, [reveal.anchor]);
   const onGripDown = useResizeGrip(ref);
-  // The header strip is the close: one click anywhere on it. Enter and Space
-  // do the same from the keyboard.
+  // The header strip and the foot are both the close: one click anywhere on
+  // either. Enter and Space do the same from the keyboard.
   const closeKeys = useCallback((e: React.KeyboardEvent) => {
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
@@ -593,6 +593,19 @@ function RevealBand({ reveal }: { reveal: OpenReveal }) {
           )}
         </ErrorBoundary>
         </RevealInBandCtx.Provider>
+      </div>
+      <div
+        className="object-reveal__foot"
+        onClick={requestClose}
+        onKeyDown={closeKeys}
+        role="button"
+        tabIndex={0}
+        aria-label="Close"
+        title="Close (Esc)"
+      >
+        <X className="h-3.5 w-3.5" />
+        <span>Close</span>
+        <KeyCap size="xs">esc</KeyCap>
       </div>
       </div>
       {/* The grip is only a grip: the rounded bar under the frame, in the

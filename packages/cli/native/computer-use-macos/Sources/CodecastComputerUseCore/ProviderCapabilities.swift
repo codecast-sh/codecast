@@ -33,9 +33,9 @@ public struct ProviderCapabilities: Codable, Equatable, Sendable {
         public var hotkey = true
         public var pasteText = true
         public var scroll = true
-        /// Drag cannot be verified and its only delivery route does nothing in
-        /// many apps, so the verb does not exist in v1.
-        public var drag = false
+        /// Press, move and release; unverified like every synthetic input, so
+        /// the change it prints (or a screenshot) is the evidence.
+        public var drag = true
         public var setValue = true
         public var performAction = true
     }

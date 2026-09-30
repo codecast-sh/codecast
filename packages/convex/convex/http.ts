@@ -4201,6 +4201,7 @@ cliRoute("/cli/org/proposal/revise", async (ctx, body) => ctx.runMutation((api a
 cliRoute("/cli/org/template/publish", async (ctx, body) => ctx.runMutation((api as any).orgTemplates.publish, body));
 cliRoute("/cli/org/template/catalog", async (ctx, body) => ctx.runQuery((api as any).orgTemplates.catalog, body));
 cliRoute("/cli/org/template/get", async (ctx, body) => ctx.runQuery((api as any).orgTemplates.get, body));
+cliRoute("/cli/org/template/release", async (ctx, body) => ctx.runQuery((api as any).orgTemplates.release, body));
 cliRoute("/cli/org/template/instance", async (ctx, body) => ctx.runMutation((api as any).orgTemplates.upsertInstance, body));
 cliRoute("/cli/org/template/instance-status", async (ctx, body) => ctx.runQuery((api as any).orgTemplates.instanceStatus, body));
 cliRoute("/cli/org/template/instances", async (ctx, body) => ctx.runQuery((api as any).orgTemplates.listInstances, body));

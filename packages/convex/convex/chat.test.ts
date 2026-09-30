@@ -55,6 +55,7 @@ import {
 } from "./chatText";
 import schema from "./schema";
 import { dmKeyFor } from "@codecast/shared/chat";
+import { isMachineDeliveredMessage } from "@codecast/shared/contracts";
 import { listMine, markAllRead, markRead as markThreadReadMine, unreadCount } from "./threads";
 import { backfillThreadReads } from "./threadReads";
 import { ENTITY_TYPE, NOTIFICATION_TYPE, PREFERENCE_MAP } from "./notificationRouter";
@@ -3273,6 +3274,8 @@ describe("agent channels: roles and sessions in chat", () => {
     const body = pending(ctx)[0].content;
     expect(body.startsWith(`<chat-mention channel="#general" thread="${root.message_id}" from="Alice">\n`)).toBe(true);
     expect(body.endsWith("\n</chat-mention>")).toBe(true);
+    // Delivered, never typed: no thread may paint it as the receiver's host.
+    expect(isMachineDeliveredMessage(body)).toBe(true);
     expect(body).toContain("can you check the deploy?");
     expect(body).toContain(`cast chat send --channel ${CHANNEL} --thread ${root.message_id}`);
   });

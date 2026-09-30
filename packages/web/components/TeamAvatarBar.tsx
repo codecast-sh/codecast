@@ -3,7 +3,7 @@ import { useCallsAvailable } from "../lib/teamFeatures";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMemo } from "react";
 import { toast } from "sonner";
-import { UserRound, Filter, Link2, Headphones, Maximize2, PanelTop, PictureInPicture2 } from "lucide-react";
+import { UserRound, Filter, Link2, Headphones, PanelTop, PictureInPicture2, SquareArrowOutUpRight } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { useSyncCollection } from "../hooks/useSyncCollection";
@@ -178,7 +178,13 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
         callsEnabled={callsEnabled}
         onOpenProfile={(m) => router.push(`/team/${m.github_username || m._id}`)}
       >
-        <EngagementCard card={row.card} density="bar" />
+        {/* THE DOOR TO THE STAGE rides the call's own card, beside the mic
+            and End: it acts on the call, so it sits in the call. After the
+            roster it read as one more header control, three faces away. The
+            full stage (video, screen share, transcript) opens only when
+            asked; on the desktop the call already has a window, so this
+            raises it, or gives it one. */}
+        <EngagementCard card={row.card} density="bar" accessory={inCall && <OpenCallButton onClick={openTheCall} />} />
       </FaceRow>
       {/* The faces that did not fit, counted right after the ones that did:
           the count belongs to the roster, not to the controls after it. On a
@@ -196,13 +202,6 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
             +{hidden}
           </button>
         </ShortcutTooltip>
-      )}
-      {/* THE DOOR TO THE STAGE. The card under the row carries the two
-          controls a call needs mid-work; the full stage (video, screen share,
-          transcript) opens only when asked. On the desktop the call already
-          has a window, so this raises it, or gives it one. */}
-      {inCall && (
-        <OpenCallButton onClick={openTheCall} />
       )}
       {/* Group huddle: the row is where the people are, so the "ring several
           of them" gesture starts here (the new-huddle field, which also
@@ -281,21 +280,25 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
 function OpenCallButton({ onClick }: { onClick: () => void }) {
   const roomKey = useInboxStore((s) => s.call.roomKey ?? null);
   const { unread } = useRoomThreadUnread(roomKey);
+  const label = canPopOutCall() ? "Pop out the call" : "Open the call";
   return (
-    <ShortcutTooltip label="Open the call">
-      <button
-        type="button"
-        onClick={() => {
-          if (unread > 0) requestCallThread();
-          onClick();
-        }}
-        data-open-call
-        className="relative ml-1 flex h-8 w-8 items-center justify-center rounded-full text-sol-text-muted transition-colors hover:bg-sol-bg-highlight hover:text-sol-text"
-        aria-label={unread > 0 ? `Open the call, ${unread} new in its chat` : "Open the call"}
-      >
-        <Maximize2 className="h-3.5 w-3.5" />
-        <UnreadCount count={unread} className="absolute -right-1 -top-0.5" />
-      </button>
+    <ShortcutTooltip label={label}>
+      <span className="engagement-card-toggles">
+        <button
+          type="button"
+          onClick={() => {
+            if (unread > 0) requestCallThread();
+            onClick();
+          }}
+          data-open-call
+          data-card-action="open"
+          className="engagement-card-toggle relative"
+          aria-label={unread > 0 ? `${label}, ${unread} new in its chat` : label}
+        >
+          <SquareArrowOutUpRight className="h-3.5 w-3.5" />
+          <UnreadCount count={unread} className="absolute -right-1.5 -top-1.5" />
+        </button>
+      </span>
     </ShortcutTooltip>
   );
 }

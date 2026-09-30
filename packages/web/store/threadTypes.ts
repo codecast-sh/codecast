@@ -91,13 +91,9 @@ export function threadRowId(kind: ThreadKind, rootKey: string): string {
   return `${kind}:${rootKey}`;
 }
 
-/** The Threads page's one cursor (ephemeral UI in the store, so it survives
- *  leaving and re-entering the page): the row the reader is on, and whether
- *  it is open. One row is open at a time — the page is a reader, not a wall
- *  of threads. `frozenReadAt` is the row's unread boundary as it stood when
- *  it was opened, so marking read cannot erase the "new" divider mid-read. */
+/** The Threads page's cursor (ephemeral UI in the store, so it survives
+ *  leaving and re-entering the page): the thread the keyboard is on. Every
+ *  thread renders open; the cursor only says where j/k, r and e act. */
 export type ThreadsCursor = {
   id: string | null;
-  open: boolean;
-  frozenReadAt: number;
 };

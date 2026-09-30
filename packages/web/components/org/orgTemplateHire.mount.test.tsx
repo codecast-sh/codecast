@@ -19,10 +19,17 @@ async function verifyHireFlow() {
   // The template reads and writes (org-hire.md H3): one catalog entry, and a post that records the spec.
   const proposed: any[] = [];
   const manifest = { schemaVersion: 2, id: "growth", version: "2.0.0", name: "CMO", description: "One project CMO", role: { name: "CMO", handle: "{{instance}}-cmo", charter: "c.md", caps: { hands_per_day: 4, wakes_per_day: 12, tokens_per_day: 200000 } }, inputs: [{ key: "product.domain", label: "Apex domain", kind: "string", required: true }, { key: "accounts.ads", label: "Ads credentials", kind: "secret" }], authority: [{ id: "site-write", kind: "write", label: "Ship pages" }], setup: [{ id: "sc", title: "Verify the domain", who: "human" }], routines: [{ id: "weekly", title: "Weekly", every: "7d", prompt: "w.md" }] };
+  const catalog = [
+    { template_id: "eng-lead", workspace: "codecast", name: "Engineering Lead", description: "Leads one project", latest: { version: "1.0.0", digest: "e".repeat(64) }, latest_status: "stable", installable: true, asks: { inputs: 0, secrets: 0, authority: 0, setup: 0, routines: 1 }, manifest: { ...manifest, id: "eng-lead", name: "Engineering Lead", inputs: [], authority: [], setup: [], role: { ...manifest.role, handle: "{{instance}}-eng" } } },
+    { template_id: "growth", workspace: "codecast", name: "CMO", description: "One project CMO", latest: { version: "2.0.0", digest: "a".repeat(64) }, latest_status: "stable", installable: true, asks: { inputs: 2, secrets: 1, authority: 1, setup: 1, routines: 1 }, manifest },
+    // Published without its snapshot: readable, not hireable; the card says so and offers nothing.
+    { template_id: "draft", workspace: "team:fixture-team", name: "Draft role", description: "A release with no files", latest: { version: "0.1.0", digest: "b".repeat(64) }, latest_status: "draft", installable: false, asks: { inputs: 0, secrets: 0, authority: 0, setup: 0, routines: 1 }, manifest: { ...manifest, id: "draft", inputs: [], authority: [], setup: [] } },
+  ];
   mock.module("../../hooks/useTemplateHire", () => ({
-    useTemplateCatalog: () => ({ templates: [{ template_id: "growth", workspace: "codecast", name: "CMO", description: "One project CMO", latest: { version: "2.0.0", digest: "a".repeat(64) }, asks: { inputs: 2, secrets: 1, authority: 1, setup: 1, routines: 1 }, manifest }], ready: true }),
+    useTemplateCatalog: () => ({ templates: catalog, ready: true }),
     useTemplateInstance: () => ({ instance: null, ready: true }),
-    useTemplateActions: () => ({ propose: async (spec: any) => { proposed.push(spec); return { short_id: "op-9", link: "/org?proposal=op-9" }; }, markSetup: async () => {}, activate: async () => {} }),
+    useTemplateActions: () => ({ propose: async (spec: any) => { proposed.push(spec); return { short_id: "op-9", link: "/org?proposal=op-9" }; }, markSetup: async () => {}, activate: async () => {}, requestBind: async () => ({}) }),
+    sealSecret: async () => ({}),
   }));
   const React = await import("react");
   const { act } = React;
@@ -60,21 +67,44 @@ async function verifyHireFlow() {
   assert.equal(copied.length, 1);
   assert.match(copied[0], /--project 'project-1'.*--team 'fixture-team'/);
   assert.equal(created.length, 0);
-  // The catalog form: choose the template, answer its input, and the preview names the one proposal.
-  const select = async (selector: string, value: string) => {
-    const el = document.querySelector<HTMLSelectElement>(selector)!;
-    assert.ok(el, selector);
-    await act(async () => { el.value = value; el.dispatchEvent(new Event("change", { bubbles: true })); });
-  };
-  const selects = () => [...document.querySelectorAll<HTMLSelectElement>("[data-template-form] select")];
+  // The gallery (H3): one card per template, the hire offered only where the workspace can take it.
+  assert.equal(document.querySelector("[data-hire-stage]")!.getAttribute("data-hire-stage"), "gallery");
+  const cards = [...document.querySelectorAll<HTMLElement>("[data-template-card]")].map((el) => [el.dataset.templateCard, el.dataset.hireable]);
+  assert.deepEqual(cards, [["eng-lead", "true"], ["growth", "true"], ["draft", "false"]]);
+  assert.ok(document.querySelector('[data-template-card="eng-lead"] [data-template-card-leads]'), "the default lead is badged");
+  assert.equal(document.querySelector('[data-template-card="growth"] [data-template-card-leads]'), null);
+  assert.match(document.querySelector<HTMLElement>('[data-template-card="growth"]')!.textContent!, /under the lead/);
+  const growth = document.querySelector<HTMLElement>('[data-template-card="growth"]')!;
+  assert.match(growth.textContent!, /1 answer/);
+  assert.match(growth.textContent!, /1 secret kept on your machine/);
+  assert.match(growth.textContent!, /1 permission outside codecast/);
+  assert.match(growth.textContent!, /1 setup step only you can do/);
+  assert.match(growth.textContent!, /Weekly\s*weekly/);
+  assert.match(growth.textContent!, /by Codecast/);
+  const draft = document.querySelector<HTMLElement>('[data-template-card="draft"]')!;
+  assert.match(draft.querySelector("[data-template-card-reason]")!.textContent!, /Not ready to hire/);
+  assert.equal(draft.querySelector("[data-template-card-hire]"), null);
+  assert.equal(document.querySelector("[data-template-form]"), null, "no form before a card is picked");
+  await act(async () => growth.querySelector<HTMLButtonElement>("[data-template-card-hire]")!.click());
+  assert.equal(document.querySelector("[data-hire-stage]")!.getAttribute("data-hire-stage"), "form");
+  assert.ok(document.querySelector('[data-template-chosen="growth"]'));
   assert.equal(button("Propose the hire").disabled, true);
-  await select(`[data-template-form] select:nth-of-type(1)`, "growth");
-  await act(async () => { const s = selects()[0]; s.value = "growth"; s.dispatchEvent(new Event("change", { bubbles: true })); });
-  assert.match(document.body.textContent!, /Bound on the host, never typed here/);
+  // Back to the gallery and forward again keeps nothing half typed.
+  await act(async () => document.querySelector<HTMLButtonElement>("[data-template-back]")!.click());
+  assert.ok(document.querySelector("[data-template-gallery]"));
+  await act(async () => document.querySelector<HTMLButtonElement>('[data-template-card="growth"] [data-template-card-hire]')!.click());
+  assert.match(document.body.textContent!, /Secrets come last, and stay on its machine/);
   assert.match(document.body.textContent!, /Ads credentials/);
+  // No lead on the project yet: the form says this role would lead it and offers the Engineering Lead first.
+  assert.match(document.body.textContent!, /Product has no lead yet, so this role would lead it/);
+  await act(async () => document.querySelector<HTMLButtonElement>("[data-template-hire-lead-first]")!.click());
+  assert.ok(document.querySelector('[data-template-chosen="eng-lead"]'));
+  assert.equal(document.querySelector("[data-template-no-lead]"), null, "the lead template gets no nudge");
+  await act(async () => document.querySelector<HTMLButtonElement>("[data-template-back]")!.click());
+  await act(async () => document.querySelector<HTMLButtonElement>('[data-template-card="growth"] [data-template-card-hire]')!.click());
   await change('input[name="input:product.domain"]', "product.example");
   assert.equal(document.querySelector<HTMLInputElement>('input[name="template-instance"]')!.value, "product-growth");
-  assert.match(document.body.textContent!, /A new role CMO @product-growth-cmo, reporting to me, that starts work on its own/);
+  assert.match(document.body.textContent!, /A new role CMO @product-growth-cmo, reporting to me, leading Product, that starts work on its own/);
   assert.match(document.body.textContent!, /Authority outside codecast: write \(Ship pages\)/);
   assert.equal(button("Propose the hire").disabled, false);
   await act(async () => document.querySelector("[data-template-form]")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
@@ -83,7 +113,8 @@ async function verifyHireFlow() {
   assert.deepEqual(proposed[0].changes.map((c: any) => c.kind), ["role", "authority", "hire"]);
   assert.equal(proposed[0].team_id, "fixture-team");
   assert.match(document.body.textContent!, /Proposed\. Nothing has changed yet\./);
-  assert.match(document.body.textContent!, /cast org template bind product-growth/);
+  assert.match(document.body.textContent!, /the role's page has one button left, Set up/);
+  assert.doesNotMatch(document.body.textContent!, /cast org template bind/);
   assert.ok(document.querySelector("[data-template-posted='op-9']"));
   await act(async () => button("Write a role").click());
   assert.equal(document.querySelector("textarea")!.value, "Keep my custom charter exactly.");

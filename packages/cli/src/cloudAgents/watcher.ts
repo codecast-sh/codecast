@@ -373,7 +373,14 @@ export class CloudAgentWatcher<Adapter extends AnyCloudAgentAdapter = AnyCloudAg
     const client = this.client();
     if (!client) return;
     const result = await this.adapter.mirror(client, this.handle(agentId), known);
-    if (!result) return;
+    if (!result) {
+      // A child its parent no longer has: forgotten, or every pass would read it again.
+      if (this.state.agents[agentId]?.parent) {
+        delete this.state.agents[agentId];
+        await this.saveState();
+      }
+      return;
+    }
     if (result.transcript) await this.write(agentId, result);
     const priorGit = this.state.agents[agentId]?.git;
     if (result.git !== undefined && JSON.stringify(result.git) !== JSON.stringify(priorGit)) this.emit("git", result.git ?? { agentId });

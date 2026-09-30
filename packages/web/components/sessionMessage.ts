@@ -28,6 +28,7 @@ import {
   stripTeammateFraming,
   isScheduledTaskMessage,
   isChatWakePrompt,
+  chatWakeText,
   isMachineDeliveredMessage,
   isPollResponsePayload,
   parseUnwrappedSessionReport,
@@ -201,11 +202,11 @@ const CHAT_WAKE_SELF = "You (earlier)";
 
 export function parseChatWakePrompt(rawContent: string | null | undefined): ChatWakePrompt | null {
   if (!rawContent) return null;
-  const text = stripInjectionNoise(rawContent);
+  const text = chatWakeText(rawContent);
   const header = text.match(CHAT_WAKE_HEADER);
   if (!header) return null;
   const rest = text.slice(header[0].length);
-  const asker = rest.match(/^(.*?) (mentioned you in a thread|messaged you directly|replied in a thread you (?:are part of|follow))\./);
+  const asker = rest.match(/^(.*?) (mentioned you in a thread|mentioned @[\w-]+ in (?:#\S+|a direct message)|messaged you directly|replied in a thread you (?:are part of|follow))\./);
 
   const begin = rest.match(/^--- begin thread ([0-9a-f]{12}) ---$/m);
   const thread: ChatWakeEntry[] = [];

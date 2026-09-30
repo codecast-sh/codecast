@@ -42,16 +42,16 @@ describe("the load reading", () => {
     expect(codes(capacityFlags(bigLedger))).toEqual(["wide_ledger"]);
     const flag = capacityFlags(bigLedger)[0];
     expect(flag.severity).toBe("info");
-    expect(flag.detail).toBe("@growth's scope holds 90 open tasks (frame lists: 25), 50 tasks in flight (frame lists: 8), 12 active plans (frame lists: 4); its load is inside the model, so this is size, not overload: bring records in line or file by seam before reading it as a seat");
+    expect(flag.detail).toBe("@growth's area holds 90 open tasks, 50 tasks in flight, 12 active plans, more than one role follows one by one; nothing reaches the role faster than it answers, so this is size, not overload: bring the records in line or split the area by seam before reading it as a seat");
     expect(ledgerDetails({ open_tasks: 25, in_flight: 8, active_plans: 4 })).toEqual([]);
   });
 
   test("one load breach warns; two block; the detail names the load and the ledger", () => {
     const one = capacityFlags(quietRole({ load: { ...quietLoad, items_per_day: 36.25 } }));
-    expect(one).toEqual([{ code: "overloaded", severity: "warn", detail: "@growth carries 36.3 items changing a day (model: 30); first breach on record; ledger 3 open, 1 in flight, 1 active plan" }]);
+    expect(one).toEqual([{ code: "overloaded", severity: "warn", detail: "@growth has more reaching it than one role can answer: 36.3 items changing a day" }]);
     const two = capacityFlags(quietRole({ load: { ...quietLoad, items_per_day: 36, open_stalls: 4 } }));
     expect(two[0]).toMatchObject({ code: "overloaded", severity: "blocker" });
-    expect(two[0].detail).toContain("4 open stalls (model: 3)");
+    expect(two[0].detail).toContain("4 threads stuck");
   });
 
   test("the ratio reads the volume axes only: stalls and cap hits breach but never split on their own", () => {
@@ -61,8 +61,7 @@ describe("the load reading", () => {
     expect(splitsOnFirstBreach(symptoms)).toBe(false);
     const flagged = capacityFlags(quietRole({ load: symptoms }))[0];
     expect(flagged).toMatchObject({ code: "overloaded", severity: "blocker" });
-    expect(flagged.detail).toContain("7 cap hit days this week (model: 1)");
-    expect(flagged.detail).toContain("first breach on record");
+    expect(flagged.detail).toContain("7 days at its daily limit this week");
   });
 
   test("a flow twice the model on a volume axis splits on the first breach; below that line the streak decides", () => {
@@ -70,13 +69,13 @@ describe("the load reading", () => {
     expect(overloadRatio(flood)).toBeCloseTo(9 / 4);
     expect(splitsOnFirstBreach(flood)).toBe(true);
     const first = capacityFlags(quietRole({ load: flood, breaches: 0 }));
-    expect(first).toEqual([{ code: "overloaded", severity: "blocker", detail: "@growth carries 61 items changing a day (model: 30), 9 decisions a day (model: 4), 13 live hands (model: 6); split now: 2.3 times the model; ledger 3 open, 1 in flight, 1 active plan" }]);
+    expect(first).toEqual([{ code: "overloaded", severity: "blocker", detail: "@growth has more reaching it than one role can answer: 61 items changing a day, 9 decisions a day, 13 sessions at once; twice what one role can hold, so the split need not wait for another review" }]);
     // 1.2 times the model on one axis: a warning on the first breach, a blocker on the second.
     const mild: RoleLoad = { ...quietLoad, items_per_day: 36 };
     expect(overloadRatio(mild)).toBeCloseTo(1.2);
     expect(splitsOnFirstBreach(mild)).toBe(false);
-    expect(capacityFlags(quietRole({ load: mild, breaches: 0 }))[0]).toMatchObject({ severity: "warn", detail: expect.stringContaining("first breach on record") });
-    expect(capacityFlags(quietRole({ load: mild, breaches: 1 }))[0]).toMatchObject({ severity: "blocker", detail: expect.stringContaining("this is breach 2") });
+    expect(capacityFlags(quietRole({ load: mild, breaches: 0 }))[0]).toMatchObject({ severity: "warn", detail: expect.not.stringContaining("earlier review") });
+    expect(capacityFlags(quietRole({ load: mild, breaches: 1 }))[0]).toMatchObject({ severity: "blocker", detail: expect.stringContaining("the same at 1 earlier review in a row") });
     // Exactly at the line counts as structural.
     expect(splitsOnFirstBreach({ ...quietLoad, decisions_per_day: 8 })).toBe(true);
     expect(STABILITY.split_on_first_breach_ratio.value).toBe(2);
@@ -85,7 +84,7 @@ describe("the load reading", () => {
   test("a wide ledger under an overloaded flow points at the load rather than at filing", () => {
     const flags = capacityFlags(quietRole({ load: { ...quietLoad, live_hands: 7 }, ledger: { open_tasks: 40, in_flight: 2, active_plans: 1 } }));
     expect(codes(flags)).toEqual(["overloaded", "wide_ledger"]);
-    expect(flags.find((f) => f.code === "wide_ledger")!.detail).toContain("read the load above for whether the seat fits");
+    expect(flags.find((f) => f.code === "wide_ledger")!.detail).toContain("read what reaches it above for whether one role fits");
   });
 });
 
@@ -95,7 +94,7 @@ describe("a seat the work passes by", () => {
     const flags = capacityFlags(quietRole({ load: { ...quietLoad, live_hands: 0 }, ledger: { open_tasks: 20, in_flight: 8, active_plans: 1 }, flow: shipping }));
     expect(codes(flags)).toEqual(["bypassed"]);
     expect(flags[0]).toMatchObject({ severity: "warn" });
-    expect(flags[0].detail).toContain("closed 121 tasks this week (line: 10) and holds 8 in flight, none of it through the seat");
+    expect(flags[0].detail).toContain("closed 121 tasks this week and holds 8 in progress, none of it through the role");
   });
   test("one hand under the seat, one routed decision, a quiet scope or a reviewing seat clears it", () => {
     expect(capacityFlags(quietRole({ flow: { ...shipping, hands_window: 1 } }))).toEqual([]);
@@ -107,11 +106,11 @@ describe("a seat the work passes by", () => {
 
 describe("live hands read against the role's own cap", () => {
   test("a seat whose person raised its hands cap to 12 is not overloaded at 7, and 12 is its line, not a split", () => {
-    expect(capacityFlags(quietRole({ load: { ...quietLoad, live_hands: 7 } }))[0]).toMatchObject({ code: "overloaded", detail: expect.stringContaining("7 live hands (model: 6)") });
+    expect(capacityFlags(quietRole({ load: { ...quietLoad, live_hands: 7 } }))[0]).toMatchObject({ code: "overloaded", detail: expect.stringContaining("7 sessions at once") });
     expect(capacityFlags(quietRole({ load: { ...quietLoad, live_hands: 7, hands_cap: 12 } }))).toEqual([]);
     expect(overloadRatio({ ...quietLoad, live_hands: 12, hands_cap: 12 })).toBeCloseTo(1);
     expect(splitsOnFirstBreach({ ...quietLoad, live_hands: 12, hands_cap: 12 })).toBe(false);
-    expect(capacityFlags(quietRole({ load: { ...quietLoad, live_hands: 13, hands_cap: 12 } }))[0].detail).toContain("13 live hands (model: 12)");
+    expect(capacityFlags(quietRole({ load: { ...quietLoad, live_hands: 13, hands_cap: 12 } }))[0].detail).toContain("13 sessions at once");
   });
 });
 
@@ -129,22 +128,22 @@ describe("capacityFlags", () => {
       has_charter: false,
     }));
     expect(codes(flags)).toEqual(["cap_hit", "chatter", "idle", "no_charter", "review_stall", "slow_to_recommend", "wide_span"]);
-    expect(flags.find((f) => f.code === "chatter")?.detail).toBe("@growth and @billing exchanged 7 sends this week (model: 5) against 1 task done");
-    expect(flags.find((f) => f.code === "slow_to_recommend")?.detail).toContain("12 min (median)");
+    expect(flags.find((f) => f.code === "chatter")?.detail).toBe("@growth and @billing exchanged 7 messages this week against 1 task done");
+    expect(flags.find((f) => f.code === "slow_to_recommend")?.detail).toContain("12 minutes (median)");
     expect(flags.find((f) => f.code === "cap_hit")).toMatchObject({ severity: "warn" });
   });
 
   test("approaching a cap is information, not a hit", () => {
     const flags = capacityFlags(quietRole({ spend: { wakes_today: 30, wakes_7d_avg: 3, wakes_cap: 40, tokens_today: 0, tokens_7d_avg: 340_000, tokens_cap: 400_000, cap_hits_7d: 0 } }));
     expect(flags).toEqual([
-      { code: "cap_hit", severity: "info", detail: "@growth is at 75% of its wake cap" },
-      { code: "cap_hit", severity: "info", detail: "@growth is at 85% of its token cap" },
+      { code: "cap_hit", severity: "info", detail: "@growth is close to its daily limit of turns (75% used)" },
+      { code: "cap_hit", severity: "info", detail: "@growth is close to its daily limit of tokens (85% used)" },
     ]);
   });
 
   test("a new seat with no event yet is not idle; an old one is", () => {
     expect(capacityFlags(quietRole({ idle_days: null, age_days: 3 }))).toEqual([]);
-    expect(capacityFlags(quietRole({ idle_days: null, age_days: 20 }))[0]).toMatchObject({ code: "idle", detail: expect.stringContaining("since the role was created 20 days ago (model: 14 days)") });
+    expect(capacityFlags(quietRole({ idle_days: null, age_days: 20 }))[0]).toMatchObject({ code: "idle", detail: expect.stringContaining("since the role was created 20 days ago") });
     expect(capacityFlags(quietRole({ idle_days: null, age_days: 20, scope_empty: true }))[0].detail).toContain("names no project or plan that still exists");
   });
 
@@ -156,7 +155,7 @@ describe("capacityFlags", () => {
 
   test("a person past the span raises wide_span; the company flags unowned and uncharted work", () => {
     expect(capacityFlags({ kind: "person", name: "Ada", direct_roles: 7 })).toEqual([]);
-    expect(capacityFlags({ kind: "person", name: "Ada", direct_roles: 8 })).toEqual([{ code: "wide_span", severity: "warn", detail: "Ada answers for 8 roles directly (model: 7); propose a layer" }]);
+    expect(capacityFlags({ kind: "person", name: "Ada", direct_roles: 8 })).toEqual([{ code: "wide_span", severity: "warn", detail: "Ada answers for 8 roles directly, more than one person can follow; propose a layer" }]);
     const company = capacityFlags({
       kind: "company",
       unowned_projects: [{ id: "p1", title: "Billing" }],
