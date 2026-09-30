@@ -39,29 +39,30 @@ async function verifyFirstOpen() {
   // A proposal is already waiting: the story of "start one" would walk past
   // it, so the last step points at it, whether or not roles exist yet.
   for (const hasRoles of [false, true]) {
-    const waiting = orgGuideSteps({ meNodeId: "person:me", roleNodeId: hasRoles ? "role:r1" : null, openProposal: { short_id: "op-6", remaining: 129 } });
+    const waiting = orgGuideSteps({ meNodeId: "person:me", roleNodeId: hasRoles ? "role:r1" : null, openProposal: { remaining: 129 } });
     const step = proposals(waiting);
     assert.equal(step.target, '[data-org-guide="staffing"]');
-    assert.match(step.sentence, /op-6.*129 changes/);
-    assert.deepEqual(step.action, { id: "open_proposal", label: "Open op-6" });
+    assert.match(step.sentence, /the one waiting for you, as a conversation with 129 changes/);
+    assert.doesNotMatch(step.sentence, /\bop-\d+/, "a sentence never carries a short id");
+    assert.deepEqual(step.action, { id: "open_proposal", label: "Open the proposal" });
   }
-  assert.match(proposals(orgGuideSteps({ meNodeId: null, roleNodeId: null, openProposal: { short_id: "op-2", remaining: 1 } })).sentence, /one change/);
+  assert.match(proposals(orgGuideSteps({ meNodeId: null, roleNodeId: null, openProposal: { remaining: 1 } })).sentence, /one change/);
   // A step stays short. The rewritten copy pairs a statement with the gesture
   // it enables ("… every session. Drag a card to move it."), so the bound is
   // two sentences; the rule is still there to keep a paragraph out of a step.
-  for (const s of [...empty, ...orgGuideSteps({ meNodeId: "p", roleNodeId: "role:r1", openProposal: { short_id: "op-6", remaining: 3 } })]) {
+  for (const s of [...empty, ...orgGuideSteps({ meNodeId: "p", roleNodeId: "role:r1", openProposal: { remaining: 3 } })]) {
     const sentences = (s.sentence.match(/\.(\s|$)/g) ?? []).length;
     assert.ok(sentences >= 1 && sentences <= 2, `${sentences} sentences: ${s.sentence}`);
   }
 
   // ── the guide's last step opens the proposal and closes ──
   const calls: string[] = [];
-  const steps = orgGuideSteps({ meNodeId: "person:me", roleNodeId: null, openProposal: { short_id: "op-6", remaining: 129 } });
+  const steps = orgGuideSteps({ meNodeId: "person:me", roleNodeId: null, openProposal: { remaining: 129 } });
   const proposalsIndex = steps.findIndex((s) => s.id === "proposals");
   await render(React.createElement(OrgGuide, { steps, step: proposalsIndex, onStep: (i: number) => calls.push(`step:${i}`), onDone: () => calls.push("done"), onAction: (id: string) => calls.push(`action:${id}`) }));
   assert.equal(q("[data-org-guide-open]")!.getAttribute("data-org-guide-open"), "proposals");
   const open = q<HTMLButtonElement>('[data-org-guide-action="open_proposal"]')!;
-  assert.equal(open.textContent, "Open op-6");
+  assert.equal(open.textContent, "Open the proposal");
   await act(async () => open.click());
   assert.deepEqual(calls.splice(0), ["done", "action:open_proposal"]);
   // With nothing waiting the last step's button is Done.
@@ -77,7 +78,7 @@ async function verifyFirstOpen() {
   await act(async () => qa("[data-reviewing] button")[0].click());
   assert.deepEqual(calls.splice(0), ["open-review"]);
   await render(React.createElement(OrgEmptyCanvas, { me: null, reviewing: false, reviewEnded: true, onOpenReview: () => calls.push("open-review"), onHireChief: () => calls.push("hire"), onProposeNow: () => calls.push("propose") }));
-  assert.match(q("[data-review-ended]")!.textContent!, /stopped without posting a proposal/);
+  assert.match(q("[data-review-ended]")!.textContent!, /stopped without making a proposal/);
   assert.equal(qa('[data-org-guide="start"] button').length, 2, "the buttons are back");
 
   // ── the retire confirm ──

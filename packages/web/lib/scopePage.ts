@@ -2,6 +2,7 @@
 // F3): a standing agent's state in role words, the colour a feed row's state
 // earns, which feed links the SPA does not own, and which scope a role's
 // queries read. Kept out of the components so they test without React.
+import { isWholeWorkspaceRole } from "@codecast/shared/contracts/orgLead";
 import type { WorkState } from "@codecast/shared/contracts";
 import { isNonTabRoute } from "./tabRoutes";
 import { ORG_STATE_META } from "../components/org/orgMeta";
@@ -101,16 +102,16 @@ export function feedLinkIsServerOwned(href: string): boolean {
   return isNonTabRoute(href);
 }
 
-/** F1: an empty scope is the whole workspace. The server resolves a role's
- *  empty scope to nothing, so the page names every project for it, the way
- *  it does for the root anchor. */
+/** The page for the workspace, or for the Chief of Staff with no scope, names
+ *  every project (org-staffing.md S26). Any other role reads its own scope,
+ *  and one with none looks after no work: the server resolves it to nothing. */
 export type ScopeQueryRef = { role_id: string } | { scope: { project_ids: string[]; plan_ids: string[] }; team_id?: string };
 export function scopeQueryRef(
-  role: { _id: string; scope: { project_ids: string[]; plan_ids: string[] } } | null,
+  role: { _id: string; handle: string; scope: { project_ids: string[]; plan_ids: string[] } } | null,
   projectIds: string[],
   teamId: string | undefined,
 ): ScopeQueryRef {
-  const whole = !role || (role.scope.project_ids.length === 0 && role.scope.plan_ids.length === 0);
+  const whole = !role || isWholeWorkspaceRole(role);
   if (!whole) return { role_id: role!._id };
   return { scope: { project_ids: projectIds, plan_ids: [] }, ...(teamId ? { team_id: teamId } : {}) };
 }

@@ -23,10 +23,12 @@ import { charterPatch } from "./lib/orgCharter";
 // Used inside handlers only: orgInit imports this module, and a cycle is safe
 // for hoisted functions called at run time, never for values read at load.
 import { takeOverSessions, takeoverPhrase } from "./orgInit";
+import { performArchiveAll } from "./orgProposals";
+import { reroutePendingDecisionsForConversation } from "./sessionDecisions";
 import { handOpenTasksUpChain } from "./tasks";
-import { EMPTY_SCOPE, isWholeWorkspace, normalizeScope, sameScope, scopeIds, scopeOutside, scopeOverlap, type PlanProjectOf, type Scope } from "./lib/orgScope";
-import { announceSeating, decommissionAnchorRow, provisionStandingAgent, seatTitlePatch, userCanAdminAnchor, workspaceAnchorFor, type RoleBootstrap } from "./anchors";
-import { enqueuePendingMessage, tellRole } from "./pendingMessages";
+import { EMPTY_SCOPE, isScopeless, normalizeScope, sameScope, scopeIds, scopeOutside, scopeOverlap, type PlanProjectOf, type Scope } from "./lib/orgScope";
+import { announceSeating, decommissionAnchorRow, provisionStandingAgent, roleBootstrapOf, seatTitlePatch, userCanAdminAnchor, workspaceAnchorFor } from "./anchors";
+import { enqueuePendingMessage, formatSessionMessage, tellRole } from "./pendingMessages";
 import { standingReportsToFields } from "./lib/standingSeat";
 import { enqueueKillAndResume, performSetThreadState } from "./conversations";
 import { ACTIVE_AGENT_STATUSES, normalizeThreadState, parseThreadStateStatus } from "@codecast/shared/contracts";
@@ -34,7 +36,7 @@ import { siteUrl } from "./lib/siteUrl";
 import { movedFields, type OrgLogFields } from "@codecast/shared/contracts/orgChange";
 import { labelsOf, noteOrgChange, noteRoleChange, recordSubject, roleSubject, whereOfRecord, whereOfRole, withOrgChange } from "./lib/orgChangeLog";
 import { DEFAULT_CAPS, capsFor, countersFor, roleStartsOnItsOwn, trustOf } from "./lib/orgCaps";
-import { COMPANY_REVIEW_EVERY_MS, COMPANY_REVIEW_PROMPT, COMPANY_REVIEW_TITLE, ROLE_CHECK_EVERY_MS, ROLE_CHECK_PROMPT, findRoleNeedsInputTrigger, liveRoutinesOf, roleRoutineFor } from "./lib/orgRoutine";
+import { COMPANY_REVIEW_EVERY_MS, COMPANY_REVIEW_PROMPT, COMPANY_REVIEW_TITLE, ROLE_CHECK_EVERY_MS, ROLE_CHECK_PROMPT, findRoleNeedsInputTrigger, findRoleRoutineInAnyStatus, isLiveTrigger, liveRoutinesOf, roleRoutineFor } from "./lib/orgRoutine";
 import { autonomyChangeWords, switchFromStageWord, trustForSwitch } from "@codecast/shared/contracts/roleAutonomy";
 
 // Org roles: named seats in the reporting structure (docs/architecture/
@@ -164,7 +166,8 @@ async function refuseOutside(ctx: Ctx, outside: { project_ids: string[]; plan_id
 
 // Validate a scope for `role`: every id resolves inside the role's boundary,
 // the result sits inside the parent's scope (unless the parent is the root: a
-// person, or a role with the whole workspace), and every child role still fits.
+// person, or a role that names no area, which sets no limit), and every child
+// role still fits.
 // Returns the normalized scope and the sibling overlaps to warn about.
 export async function checkScope(
   ctx: Ctx,
@@ -199,7 +202,7 @@ export async function checkScope(
     }
   }
   const outside_children: Array<{ role_id: Id<"org_roles">; short_id: string; handle: string }> = [];
-  if (!isWholeWorkspace(nextIds)) {
+  if (!isScopeless(nextIds)) {
     for (const child of children) {
       const outside = scopeOutside(nextIds, scopeIds(child.scope), planProjectOf);
       if (outside.project_ids.length || outside.plan_ids.length) outside_children.push({ role_id: child._id, short_id: child.short_id, handle: child.handle });
@@ -331,7 +334,7 @@ async function performCreateRoleCore(
   const now = Date.now();
   // A role born with a scope ("Add a lead" on a project page) obeys the same
   // containment rule as an edit; overlaps are the caller's to show.
-  const scope = args.scope && !isWholeWorkspace(args.scope)
+  const scope = args.scope && !isScopeless(args.scope)
     ? (await checkScope(ctx, userId, { _id: "new", ...boundary, reports_to, scope: EMPTY_SCOPE }, args.scope)).scope
     : EMPTY_SCOPE;
   // The host is whoever runs the role's session. A role named on a session a
@@ -411,7 +414,7 @@ async function updateRole(
     // The switch ceiling and the one seat per company rule both key on the
     // handle (org-staffing.md S6), so the seat keeps it: retire or hire.
     if (handle !== role.handle && (role.handle === CHIEF_OF_STAFF_HANDLE || handle === CHIEF_OF_STAFF_HANDLE)) {
-      throw new Error("The chief of staff seat keeps its handle: retire it with cast role retire, or hire one with cast org staff");
+      throw new Error("The Chief of Staff keeps its handle: retire it with cast role retire, or hire one with cast org staff");
     }
     if (handle !== role.handle && (await handleTaken(ctx, role, handle, role._id))) {
       throw new Error(`Handle @${handle} is already taken in this workspace`);
@@ -527,13 +530,17 @@ export type UnseatChoice = "keep" | "retire";
 
 const RETIRE_FALLBACK_NOTE = "The role that looked after this area was retired. This role looks after it now.";
 
-export async function performRetireRole(ctx: any, userId: Id<"users">, args: { role_id: string; standing_session?: UnseatChoice }): Promise<any> {
+// `fall_back: false` is the reset's (S27): the area goes to no other role, so
+// every session returns to its owner.
+type RetireArgs = { role_id: string; standing_session?: UnseatChoice; fall_back?: boolean };
+
+export async function performRetireRole(ctx: any, userId: Id<"users">, args: RetireArgs): Promise<any> {
   return withOrgChange(ctx, userId, { kind: "retire" }, () => performRetireRoleCore(ctx, userId, args));
 }
 
-async function performRetireRoleCore(ctx: any, userId: Id<"users">, args: { role_id: string; standing_session?: UnseatChoice }): Promise<any> {
+async function performRetireRoleCore(ctx: any, userId: Id<"users">, args: RetireArgs): Promise<any> {
   const role = await requireRole(ctx, userId, args.role_id, "admin");
-  if (role.status === "retired") return { ...role, cleared: 0, rehomed: 0, interrupted: 0, cancelled_triggers: 0, standing_session: "kept" };
+  if (role.status === "retired") return { ...role, cleared: 0, sessions_released: 0, rehomed: 0, interrupted: 0, cancelled_triggers: 0, standing_session: "kept" };
   const now = Date.now();
   // Unseating the chief of staff (org-staffing.md S16) keeps the workspace's
   // standing agent by default: the person is never left without the
@@ -593,7 +600,12 @@ async function performRetireRoleCore(ctx: any, userId: Id<"users">, args: { role
     .query("conversations")
     .withIndex("by_org_role", (q: any) => q.eq("org_role_id", role._id))
     .collect();
-  for (const conv of filed) await ctx.db.patch(conv._id, { org_role_id: undefined });
+  // An open decision follows its session (S28): the retired role leaves the
+  // route, and the card goes to the people who now answer for the session.
+  for (const conv of filed) {
+    await ctx.db.patch(conv._id, { org_role_id: undefined });
+    await reroutePendingDecisionsForConversation(ctx, conv._id, now);
+  }
   // Child roles re-home to the retired role's own parent, the way its sessions
   // fall back to their owners: the tree hides retired roles, so a child left
   // pointing here would draw with no parent. No cycle is possible: the parent
@@ -614,7 +626,7 @@ async function performRetireRoleCore(ctx: any, userId: Id<"users">, args: { role
   // another live role now owns by the one rule goes to it, the chief of staff
   // for what no narrower role covers, the way a lead's gain took it; the rest
   // stay with their owners.
-  const remaining = await rolesInBoundary(ctx, role);
+  const remaining = args.fall_back === false ? [] : await rolesInBoundary(ctx, role);
   let pool: Array<{ raw: any }> = (await Promise.all(filed.map((c: any) => ctx.db.get(c._id)))).filter(Boolean).map((raw: any) => ({ raw }));
   for (const heir of remaining) {
     if (!pool.length) break;
@@ -637,7 +649,37 @@ async function performRetireRoleCore(ctx: any, userId: Id<"users">, args: { role
       ...(filed.length ? { sessions_released: filed.map((c: any) => ({ conversation_id: String(c._id), short_id: c.short_id ?? String(c._id).slice(0, 7), before: { owner_user_ids: [String(c.owner_user_id ?? c.user_id)], org_role_id: String(role._id) } })) } : {}),
     },
   });
-  return { ...retired, cleared: filed.length, rehomed: children.length, tasks_handed: tasksHanded, interrupted, cancelled_triggers: cancelledTriggers, standing_session: standing ? (keepStanding ? "kept" : "retired") : "none" };
+  return { ...retired, cleared: filed.length, sessions_released: filed.filter((c: any) => !c.standing_role_id).length, rehomed: children.length, tasks_handed: tasksHanded, interrupted, cancelled_triggers: cancelledTriggers, standing_session: standing ? (keepStanding ? "kept" : "retired") : "none" };
+}
+
+// A reset clears the org (org-staffing.md S27): every role is retired with
+// its standing session and its triggers, the sessions under it return to
+// their owners, and every proposal is withdrawn and archived. One act for the
+// CLI and the web, gated on whoever may reshape the workspace: a team admin,
+// or the owner of a personal workspace.
+export type ResetOrgResult = { roles: Array<{ short_id: string; handle: string; name: string }>; sessions_returned: number; triggers_cancelled: number; proposals_archived: number };
+
+export async function performResetOrg(ctx: any, userId: Id<"users">, args: { team_id?: Id<"teams"> }): Promise<ResetOrgResult> {
+  const boundary = args.team_id ? { team_id: args.team_id } : { scope_user_id: userId };
+  if (!(await userCanAdminRole(ctx, userId, boundary))) throw new Error("Only a team admin can reset the team's org");
+  const out: ResetOrgResult = { roles: [], sessions_returned: 0, triggers_cancelled: 0, proposals_archived: 0 };
+  for (const role of await rolesInBoundary(ctx, boundary)) {
+    const retired = await performRetireRole(ctx, userId, { role_id: String(role._id), standing_session: "retire", fall_back: false });
+    out.roles.push({ short_id: role.short_id, handle: role.handle, name: role.name });
+    out.sessions_returned += retired.sessions_released;
+    out.triggers_cancelled += retired.cancelled_triggers;
+  }
+  out.proposals_archived = (await performArchiveAll(ctx, boundary)).archived;
+  return out;
+}
+
+/** What a reset would remove, for the confirmation a person reads first. */
+export async function resetOrgPreview(ctx: any, userId: Id<"users">, args: { team_id?: Id<"teams"> }): Promise<{ roles: Array<{ short_id: string; handle: string; name: string; sessions: number }>; proposals: number }> {
+  const boundary = args.team_id ? { team_id: args.team_id } : { scope_user_id: userId };
+  if (!(await userCanAdminRole(ctx, userId, boundary))) throw new Error("Only a team admin can reset the team's org");
+  const roles = [];
+  for (const role of await rolesInBoundary(ctx, boundary)) roles.push({ short_id: role.short_id, handle: role.handle, name: role.name, sessions: (await handsOf(ctx, role)).length });
+  return { roles, proposals: (await performArchiveAll(ctx, boundary, { dry: true })).archived };
 }
 
 // Moving a session in the tree is the ownership gesture (org-staffing.md
@@ -948,6 +990,18 @@ export const retire = mutation({
   },
 });
 
+// `cast org reset` and the org page's reset (S27). A person's act: an agent
+// session is refused. `dry_run` answers what it would remove and changes
+// nothing, which is what the confirmation shows.
+export const reset = mutation({
+  args: { api_token: v.optional(v.string()), from_session: v.optional(v.string()), team_id: v.optional(v.id("teams")), dry_run: v.optional(v.boolean()) },
+  handler: async (ctx, { api_token, from_session, team_id, dry_run }) => {
+    if (from_session) throw new Error("Resetting the org is a person's act: an agent session may not do it");
+    const userId = await requireCaller(ctx, api_token);
+    return dry_run ? { dry_run: true as const, ...(await resetOrgPreview(ctx, userId, { team_id })) } : { dry_run: false as const, ...(await performResetOrg(ctx, userId, { team_id })) };
+  },
+});
+
 export const reparentSession = mutation({
   args: {
     api_token: v.optional(v.string()),
@@ -1008,37 +1062,28 @@ export async function refuseUnlessHuman(ctx: any, args: { api_token?: string; fr
   if (!identity) throw new Error(`${what} changes are human only: make them from the role page in the browser`);
 }
 
-async function scopeNamesOf(ctx: Ctx, role: any): Promise<string[]> {
-  const names: string[] = [];
-  for (const id of role.scope?.project_ids ?? []) { const p = await ctx.db.get(id); if (p) names.push(`project ${p.title}`); }
-  for (const id of role.scope?.plan_ids ?? []) { const p = await ctx.db.get(id); if (p) names.push(`plan ${p.short_id} ${p.title}`); }
-  return names;
-}
-
-async function parentNameOf(ctx: Ctx, role: any): Promise<string> {
-  if (role.reports_to?.kind === "role") {
-    const parent = await ctx.db.get(role.reports_to.role_id);
-    return parent ? `${parent.name} (@${parent.handle})` : "a role";
-  }
-  const user = role.reports_to?.user_id ? await ctx.db.get(role.reports_to.user_id) : null;
-  return user?.name || user?.email?.split("@")[0] || "a person";
-}
-
+// Scope is opt in (org-staffing.md S26): a role that names no projects and no
+// plans looks after no area, and only the Chief of Staff then stands for the
+// whole workspace.
 export function charterTemplate(role: { name: string; handle: string; charter?: string | null }, scopeNames: string[], parentName: string): string {
+  const job = scopeNames.length
+    ? `${role.name} looks after the work in its area on behalf of ${parentName}: it keeps the area's plans and tasks moving, reports what changed and why, and raises what needs a person with a recommendation.`
+    : `${role.name} works on behalf of ${parentName}: it runs its routine, answers what it is asked, and raises what needs a person with a recommendation.`;
+  const none = role.handle === CHIEF_OF_STAFF_HANDLE ? `- the whole workspace, apart from what a lead looks after` : `- no area of its own`;
   return [
     `# Charter: ${role.name} (@${role.handle})`,
     ``,
-    role.charter?.trim() || `${role.name} owns the work in its scope on behalf of ${parentName}: it keeps the scope's plans and tasks moving, reports what changed and why, and raises what needs a person with a recommendation.`,
+    role.charter?.trim() || job,
     ``,
-    `## Scope`,
-    scopeNames.length ? scopeNames.map((n) => `- ${n}`).join("\n") : `- the whole workspace`,
+    `## Area`,
+    scopeNames.length ? scopeNames.map((n) => `- ${n}`).join("\n") : none,
   ].join("\n");
 }
 
 function briefTemplate(role: { name: string }): string {
   return [
-    `${role.name}: newly provisioned, no wake yet`,
-    `Status: waiting for the first frame`,
+    `${role.name}: new, has not run yet`,
+    `Status: waiting for its first turn`,
     `Next: read the charter, then post a one line hello`,
   ].join("\n");
 }
@@ -1074,7 +1119,7 @@ async function requireAdoptable(ctx: Ctx, userId: Id<"users">, role: any, ref: s
     return !!anchor && anchor.status !== "decommissioned" && (await userCanAdminAnchor(ctx, userId, anchor));
   });
   if (!conv) throw new Error("Session not found, or you are not one of its owners");
-  if (conv.org_role_id) throw new Error("That session is a hand of a role; a hand cannot become a standing session");
+  if (conv.org_role_id) throw new Error("That session already reports to a role, so it cannot become a role's standing session");
   // A pointer at a live role refuses; one left by a seat retired before
   // retire learned to clear it is stale and the row is free.
   if (conv.standing_role_id && String(conv.standing_role_id) !== String(role._id)) {
@@ -1106,14 +1151,13 @@ async function performProvisionRoleCore(
   const role = await requireRole(ctx, userId, args.role_id, "admin");
   if (role.status === "retired") throw new Error("That role is retired");
   const adopt = args.adopt_conversation_id ? await requireAdoptable(ctx, userId, role, args.adopt_conversation_id) : undefined;
-  const scopeNames = await scopeNamesOf(ctx, role);
-  const parentName = await parentNameOf(ctx, role);
+  const bootstrap = await roleBootstrapOf(ctx, role);
+  const { scopeNames, parentName } = bootstrap;
   const patch: Record<string, any> = { updated_at: Date.now() };
   if (!role.charter_doc_id) patch.charter_doc_id = await insertRoleDoc(ctx, userId, role, "charter", `Charter: ${role.name}`, charterTemplate(role, scopeNames, parentName));
   if (!role.brief_doc_id) patch.brief_doc_id = await insertRoleDoc(ctx, userId, role, "brief", `Brief: ${role.name}`, briefTemplate(role));
   if (!role.trust) patch.trust = "understand";
   if (!role.caps) patch.caps = { ...DEFAULT_CAPS };
-  const bootstrap: RoleBootstrap = { handle: role.handle, scopeNames, parentName, startsOnItsOwn: roleStartsOnItsOwn(role) };
   const agentType = args.agent_type ? (normalizeBackend(args.agent_type) === "claude" ? "claude_code" : normalizeBackend(args.agent_type)) : undefined;
   const provisioned = await provisionStandingAgent(ctx, userId, {
     scope_type: role.scope_type,
@@ -1175,7 +1219,7 @@ export function chiefOfStaffCharter(person: string): string {
 // the person already talks to never reads as taken over.
 export function seatingNote(role: { short_id: string; handle: string; name: string }, workspaceName: string): string {
   return [
-    `I have seated you as the ${role.name} of ${workspaceName} (@${role.handle}, ${role.short_id}): ${siteUrl()}/org/${role.short_id}.`,
+    `You are now the ${role.name} of ${workspaceName} (@${role.handle}): ${siteUrl()}/org/${role.short_id}.`,
     `Your job now is to read how work flows across the company and propose the organization that lets it flow better; the weekly company review is part of it.`,
     `Nothing else changed: your memory, your handle, your chat and Slack bindings and this thread are as they were.`,
     `The next message is your briefing. Once you have read it, restate your job in your own words.`,
@@ -1185,10 +1229,13 @@ export function seatingNote(role: { short_id: string; handle: string; name: stri
 // The role's routine, brought up to the current prompt: the routine holds
 // its own copy of the text, so a prompt change reaches a seat already hired
 // only through here. Keyed on its title, so a repeat staff call or a
-// re-provision never arms a second one. Null when the seat has none yet.
+// re-provision never arms a second one. Null when the role has none live.
 export async function roleRoutineOf(ctx: Ctx, role: any, standing: any): Promise<any | null> {
+  return refreshRoutine(ctx, role, standing, (await liveRoutinesOf(ctx, standing)).find((t) => t.title === roleRoutineFor(role).title) ?? null);
+}
+
+async function refreshRoutine(ctx: Ctx, role: any, standing: any, live: any | null): Promise<any | null> {
   const spec = roleRoutineFor(role);
-  const live = (await liveRoutinesOf(ctx, standing)).find((t) => t.title === spec.title) ?? null;
   if (live && live.prompt !== spec.prompt) await applyTaskUpdate(ctx, live, { prompt: spec.prompt }, { userId: standing.user_id, source: "cli" });
   if (live && String(live.role_id ?? "") !== String(role._id)) await ctx.db.patch(live._id, { role_id: role._id });
   return live;
@@ -1197,9 +1244,16 @@ export async function roleRoutineOf(ctx: Ctx, role: any, standing: any): Promise
 export async function ensureRoleRoutine(ctx: Ctx, role: any, standing: any, everyMs?: number): Promise<{ id: Id<"agent_tasks">; short_id?: string; created: boolean }> {
   const spec = roleRoutineFor(role);
   const interval = Math.max(60_000, Math.round(everyMs || spec.every_ms));
-  const live = await roleRoutineOf(ctx, role, standing);
+  // Found in any status (S25): a routine the person cancelled stays
+  // cancelled, whatever door arms the role again.
+  const found = await findRoleRoutineInAnyStatus(ctx, role, standing);
+  const live = found && isLiveTrigger(found) ? await refreshRoutine(ctx, role, standing, found) : null;
   // The route up is armed with the routine (S28), so every door that arms
   // one arms both.
+  if (found && !live) {
+    await ensureRoleNeedsInputTrigger(ctx, role, standing);
+    return { id: found._id, short_id: found.short_id, created: false };
+  }
   if (live) {
     // A cadence the caller named reaches a routine already armed.
     if (everyMs && live.interval_ms !== interval) await applyTaskUpdate(ctx, live, { interval_ms: interval }, { userId: standing.user_id, source: "cli" });
@@ -1262,7 +1316,7 @@ export async function performStaff(
   if (already_existed && args.adopt_conversation_id) {
     const named = await findConversationByAnyRefWhere(ctx, args.adopt_conversation_id, async () => true);
     if (!named || String(named._id) !== String(seatAnchor.conversation_id)) {
-      throw new Error("The chief of staff already stands in another session; retire it first to seat this one");
+      throw new Error("The Chief of Staff already runs in another session; retire it first to use this one");
     }
   }
   // The chief of staff IS the workspace's standing agent (S12, S16). With a
@@ -1274,7 +1328,7 @@ export async function performStaff(
   const anchor = already_existed ? null : await workspaceAnchorFor(ctx, boundary);
   const seat: SeatChoice = args.seat ?? (args.adopt_conversation_id || anchor ? "existing" : "fresh");
   if (already_existed && args.seat && args.seat !== "existing") {
-    throw new Error("The chief of staff already stands; retire it first to seat a fresh session");
+    throw new Error("The Chief of Staff already has a session; retire it first to start a fresh one");
   }
   let previousStanding: { conversation_id: Id<"conversations">; short_id?: string } | null = null;
   let adoptId = args.adopt_conversation_id;
@@ -1284,7 +1338,7 @@ export async function performStaff(
     if (seat === "fresh") {
       adoptId = undefined;
       if (anchor && anchor.status !== "decommissioned") {
-        if (!(await userCanAdminAnchor(ctx, userId, anchor))) throw new Error("Only the standing agent's host or a team admin can retire it for a fresh seat");
+        if (!(await userCanAdminAnchor(ctx, userId, anchor))) throw new Error("Only the standing agent's host or a team admin can retire it to start a fresh session");
         const old = anchor.conversation_id ? await ctx.db.get(anchor.conversation_id) : null;
         await decommissionAnchorRow(ctx, anchor);
         if (old) {
@@ -1474,10 +1528,13 @@ async function performPauseRoleCore(ctx: any, userId: Id<"users">, args: { role_
   if (role.status === "paused") return { ...role, interrupted: 0 };
   await ctx.db.patch(role._id, { status: "paused", updated_at: Date.now() });
   await noteRoleChange(ctx, userId, "role_edit", role, await ctx.db.get(role._id));
-  // Pausing a role pauses its triggers (org-staffing.md S25); resume brings
-  // every paused trigger on the seat back.
+  // Pausing a role pauses its triggers (org-staffing.md S25) and stamps each
+  // one it paused, so resume brings back those and no other: a trigger the
+  // person paused by hand was not running, is not stamped, and stays paused.
   const standing = await standingConversationOf(ctx, role);
-  for (const t of standing ? await liveRoutinesOf(ctx, standing) : []) await applyPause(ctx, t);
+  for (const t of standing ? await liveRoutinesOf(ctx, standing) : []) {
+    if (await applyPause(ctx, t)) await ctx.db.patch(t._id, { paused_by_role_id: role._id });
+  }
   const interrupted = await interruptHands(ctx, role, userId, "role-paused",
     `Your role ${role.name} (@${role.handle}) was paused. Stop at a safe point: finish the step in flight, pin your state with cast state, and end your turn.`);
   return { ...(await ctx.db.get(role._id)), interrupted };
@@ -1486,13 +1543,16 @@ async function performPauseRoleCore(ctx: any, userId: Id<"users">, args: { role_
 // Tell every LIVE hand of a role to stop at a safe point. Only a hand whose
 // agent is producing is told; a dormant hand would be woken for one turn
 // just to be told to rest. Shared by pause and retire.
+// The note is a session message from the person who acted, the frame every
+// thread already draws, so nobody reads a raw tag or a role id.
 export async function interruptHands(ctx: any, role: any, userId: Id<"users">, tag: string, text: string): Promise<number> {
   let interrupted = 0;
+  const content = formatSessionMessage("unknown", text, personName(await ctx.db.get(userId)));
   for (const hand of await handsOf(ctx, role)) {
     const managed = await ctx.db.query("managed_sessions").withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", hand._id)).first();
     if (!managed || !ACTIVE_AGENT_STATUSES.has(managed.agent_status ?? "")) continue;
     await enqueuePendingMessage(ctx, hand, userId, {
-      content: `<${tag} ${role.short_id}>${text}</${tag}>`,
+      content,
       client_id: `${tag}:${role._id}:${hand._id}`,
     });
     interrupted++;
@@ -1509,7 +1569,13 @@ async function performResumeRoleCore(ctx: any, userId: Id<"users">, args: { role
   if (role.status !== "paused") return await ctx.db.get(role._id);
   await ctx.db.patch(role._id, { status: "active", updated_at: Date.now() });
   const standing = await standingConversationOf(ctx, role);
-  for (const t of standing ? await liveRoutinesOf(ctx, standing) : []) await applyResume(ctx, t);
+  // Only the triggers the role's pause paused (S25). A pause by hand clears
+  // the stamp (agentTasks.applyPause), so one the person paused since stays.
+  for (const t of standing ? await liveRoutinesOf(ctx, standing) : []) {
+    if (String(t.paused_by_role_id ?? "") !== String(role._id)) continue;
+    await applyResume(ctx, t);
+    await ctx.db.patch(t._id, { paused_by_role_id: undefined });
+  }
   // A session that began waiting while the role was paused fired nothing:
   // its check runs again now that the trigger is armed.
   for (const under of await sessionsUnder(ctx, role)) await ctx.scheduler?.runAfter(0, internal.notifications.checkNeedsInput, { conversation_id: under._id });
@@ -1857,10 +1923,10 @@ export const armRoleRoutines = internalMutation({
       if (role.status !== "active") continue;
       const standing = await standingConversationOf(ctx as any, role);
       if (!standing) continue;
-      const before = await findRoleNeedsInputTrigger(ctx, standing);
+      const before = await findRoleNeedsInputTrigger(ctx, standing, role);
       const r = await ensureRoleRoutine(ctx as any, role, standing);
       if (r.created) armed.push(`${role.short_id} ${r.short_id ?? ""}`.trim());
-      const routeUp = before ? null : await findRoleNeedsInputTrigger(ctx, standing);
+      const routeUp = before ? null : await findRoleNeedsInputTrigger(ctx, standing, role);
       if (routeUp) armed.push(`${role.short_id} ${routeUp.short_id ?? ""}`.trim());
     }
     return { armed };

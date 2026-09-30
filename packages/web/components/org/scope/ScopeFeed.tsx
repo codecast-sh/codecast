@@ -34,11 +34,13 @@ export type ScopeFeedProps = {
   className?: string;
   /** Phone: the feed is the page, so it owns the scroll; desktop: the tab body scrolls. */
   fill?: boolean;
-  /** Rows of these kinds only, with the chips hidden (the Sessions tab's "in scope" list). */
+  /** Rows of these kinds only, with the chips hidden (the Sessions tab's list of other sessions in the area). */
   lockKinds?: FeedKind[];
+  /** Every kind, with the chips hidden: the stream under a role's Overview. */
+  plain?: boolean;
 };
 
-export function ScopeFeed({ scope, className, fill, lockKinds }: ScopeFeedProps) {
+export function ScopeFeed({ scope, className, fill, lockKinds, plain }: ScopeFeedProps) {
   const { kinds, toggleKind, clearKinds, rows, loaded, pending, hasMore, problem, loadMore, loaders } = useScopeFeedStream(scope, lockKinds);
   const now = useCoarseNow(30_000);
   const openLinked = useOpenLinkedSession();
@@ -58,7 +60,7 @@ export function ScopeFeed({ scope, className, fill, lockKinds }: ScopeFeedProps)
   const body = (
     <>
       {loaders}
-      {!lockKinds && <div className="flex items-center gap-1.5 flex-wrap px-1 pb-3">
+      {!lockKinds && !plain && <div className="flex items-center gap-1.5 flex-wrap px-1 pb-3">
         <button
           type="button"
           onClick={clearKinds}
@@ -94,7 +96,7 @@ export function ScopeFeed({ scope, className, fill, lockKinds }: ScopeFeedProps)
       )}
       {rows.length === 0 && loaded && (
         <div className="py-14 text-center">
-          <p className="text-[13px]" style={{ color: "var(--sol-text-muted)" }}>Nothing in this scope yet{kinds.length ? " for those kinds" : ""}.</p>
+          <p className="text-[13px]" style={{ color: "var(--sol-text-muted)" }}>Nothing here yet{kinds.length ? " for those kinds" : ""}.</p>
           <p className="mt-1 text-[11.5px]" style={{ color: "var(--sol-text-dim)" }}>Sessions, tasks, plans, pages, artifacts, decisions, updates and commits appear here as they move.</p>
         </div>
       )}
@@ -109,7 +111,7 @@ export function ScopeFeed({ scope, className, fill, lockKinds }: ScopeFeedProps)
         {rows.map((r, i) => <FeedRowView key={`${r.kind}:${r.id}`} row={r} now={now} index={i} onOpenSession={(row) => openLinked({ _id: row.id, short_id: row.short_id, title: row.title })} />)}
       </ol>
       <div ref={sentinel} className="h-8 flex items-center justify-center text-[11px]" style={{ color: "var(--sol-text-dim)" }}>
-        {problem && rows.length > 0 ? problem : hasMore ? (pending ? "Loading…" : <button type="button" onClick={loadMore} className="hover:underline">Load more</button>) : rows.length > 0 ? "That is everything in scope." : null}
+        {problem && rows.length > 0 ? problem : hasMore ? (pending ? "Loading…" : <button type="button" onClick={loadMore} className="hover:underline">Load more</button>) : rows.length > 0 ? "That is everything." : null}
       </div>
     </>
   );
@@ -151,7 +153,7 @@ function FeedRowView({ row, now, index, onOpenSession }: { row: FeedRow; now: nu
           {row.actor && (
             <>
               <span aria-hidden>·</span>
-              <span className="inline-flex items-center gap-1 min-w-0"><Avatar name={row.actor.name} image={row.actor.image} size="sm" /><span className="truncate">{row.actor.name}{row.actor.is_bot ? " (agent)" : ""}</span></span>
+              <span className="inline-flex items-center gap-1 min-w-0"><Avatar name={row.actor.name} image={row.actor.image} size="sm" /><span className="truncate">{row.actor.name}{row.actor.is_bot ? " (role)" : ""}</span></span>
             </>
           )}
           {row.preview && (

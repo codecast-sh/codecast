@@ -83,8 +83,8 @@ describe("the letter", () => {
     expect(letterParts("A".repeat(1000)).lead).toBe("A".repeat(1000));
   });
   test("the introduction names a role, or an agent with no name", () => {
-    expect(letterIntro("Chief of Staff", true)).toBe("I am your Chief of Staff, an agent that looks at how the work here is organized and suggests changes. You decide each one, and nothing changes until you accept it.");
-    expect(letterIntro("the agent that wrote this", false)).toMatch(/^I am an agent that looked at how the work here is organized/);
+    expect(letterIntro("Chief of Staff", true)).toBe("I am your Chief of Staff. I look at how the work here is organized and suggest changes. You decide each one, and nothing changes until you accept it.");
+    expect(letterIntro("the author of this proposal", false)).toMatch(/^I looked at how the work here is organized/);
   });
 });
 

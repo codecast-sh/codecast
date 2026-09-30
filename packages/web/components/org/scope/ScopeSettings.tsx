@@ -1,14 +1,14 @@
 "use client";
-// The scope page's Settings tab (docs/architecture/scopes-and-feed.md F3;
-// org-roles-standing.md T4, T6): the scope editor with overlap warnings, who
+// The role page's Settings tab (docs/architecture/scopes-and-feed.md F3;
+// org-roles-standing.md T4, T6): the area editor with overlap warnings, who
 // the role reports to, the switch (Starts work on its own) with the limits
-// behind a disclosure (org-staffing.md S23), host and model, the channels it
-// follows, and retire. Every edit is a store action that paints in the same
+// behind a disclosure (org-staffing.md S23), where it runs, and the channels
+// it follows. Pause and retire are the page header's menu. Every edit is a store action that paints in the same
 // tick and rides dispatch to the orgRoles mutation.
 import { useMemo, useState } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import Link from "next/link";
-import { TriangleAlert, Hash, MessageSquare, Trash2, X } from "lucide-react";
+import { TriangleAlert, Hash, MessageSquare, X } from "lucide-react";
 import { describeLimitRecovery, fallbackProfiles, nextPressuredReset, switchUsagePercent } from "@codecast/shared/contracts";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import { Avatar } from "../../tasks/TaskCommentStream";
@@ -21,7 +21,6 @@ import { lineIntentEchoed, orgRoleReparentMakesCycle, type OrgIntent, type OrgUp
 import { SelectBox } from "../../ui/select-box";
 import { GatedScopeEditor, InlineEdit } from "../OrgScopePanel";
 import { parentName } from "../orgMeta";
-import { RetireRoleConfirm } from "../RetireRoleConfirm";
 import { sameParent, type OrgParentRef, type OrgRole, type OrgTree } from "../orgTypes";
 import { DEFAULT_CAPS, type RoleCaps, type RoleCounters, type ScopeOverlap } from "./scopeTypes";
 import { AUTONOMY_LABEL, autonomyOn, autonomySentence, trustForSwitch } from "@codecast/shared/contracts/roleAutonomy";
@@ -51,7 +50,7 @@ export function OverlapWarning({ overlaps, projectName, planName }: { overlaps: 
         {overlaps.map((o) => (
           <p key={o.role_id} className="truncate">
             <Link href={`/org/${o.short_id}`} className="font-medium hover:underline" style={{ color: "var(--sol-text)" }}>{o.name}</Link>
-            <span style={{ color: "var(--sol-text-dim)" }}> @{o.handle}</span> also watches {[...o.project_ids.map(projectName), ...o.plan_ids.map(planName)].join(", ")}.
+            <span style={{ color: "var(--sol-text-dim)" }}> @{o.handle}</span> also looks after {[...o.project_ids.map(projectName), ...o.plan_ids.map(planName)].join(", ")}.
           </p>
         ))}
       </div>
@@ -76,10 +75,10 @@ function SeatLimitNote({ standingId, deviceId, machineLabel }: { standingId: str
         fallbacks: fallbackProfiles(device.profiles, device.active_email, now).map((p: any) => ({ name: p.name, worst: switchUsagePercent(p.usage, now) })),
         recovery: { auto_switch: device.auto_switch, auto_continue: device.auto_continue, mode: device.ask_first ? "ask" : undefined },
       })
-    : "On a limit: codecast switches the machine to a saved account with headroom when it may, or continues the session when the window resets.";
+    : "Codecast switches the machine to a saved account with room when it may, or continues the session when the limit resets.";
   return (
     <p className="mt-3 rounded-lg border px-3 py-2 text-[12px] leading-relaxed" style={{ borderColor: "color-mix(in srgb, var(--sol-yellow) 40%, transparent)", background: "color-mix(in srgb, var(--sol-yellow) 7%, transparent)", color: "var(--sol-text-secondary)" }} data-seat-limit>
-      The account this seat runs on has reached a usage limit, so the role does not wake until it continues. {what} You can also <Link href={`/conversation/${standingId}`} className="underline" style={{ color: "var(--sol-text)" }}>open the session</Link> and move it to another machine from the chip in its header, or add an account on {machineLabel} with <code style={{ fontFamily: "var(--font-mono)" }}>cast accounts save &lt;name&gt;</code>.
+      The account this role runs on has reached a usage limit, so the role waits until it continues. {what} You can also <Link href={`/conversation/${standingId}`} className="underline" style={{ color: "var(--sol-text)" }}>open its session</Link> and move it to another machine from the chip in its header, or add another account on {machineLabel}.
     </p>
   );
 }
@@ -95,21 +94,21 @@ function ReportingPeople({ tree, role, canEdit, onUpdate }: { tree: OrgTree; rol
   const addable = canEdit ? tree.people.filter((p) => !ids.includes(p.user_id)) : [];
   const set = (next: string[]) => onUpdate({ reports_user_ids: next });
   return (
-    <Section title="People who report to it" hint="The role keeps each person's three to five goals in its brief, reads their sessions against those goals at every wake, and tells them when a high priority goal stalls. It gives the role no say over their work.">
-      {people.length === 0 && <p className="text-[12px]" style={{ color: "var(--sol-text-dim)" }}>Nobody reports to it yet.</p>}
+    <Section title="People whose goals it keeps" hint="The role keeps each person's goals in its notes, reads their sessions against those goals every time it runs, and tells them when an important goal stalls. It has no say over their work.">
+      {people.length === 0 && <p className="text-[12px]" style={{ color: "var(--sol-text-dim)" }}>It keeps nobody's goals yet.</p>}
       <ul className="flex flex-wrap gap-1.5" data-reporting-people={people.length}>
         {people.map((p) => (
           <li key={p.user_id} className="inline-flex items-center gap-1.5 h-7 pl-1 pr-1.5 rounded-full border text-[12px]" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)", color: "var(--sol-text)" }}>
             <Avatar name={p.name} image={p.image} size="sm" />{p.name}
             {(canEdit || p.is_me) && (
-              <button type="button" onClick={() => set(ids.filter((id) => id !== p.user_id))} aria-label={`${p.name} no longer reports to it`} className="inline-flex items-center justify-center w-4 h-4 rounded-full hover:bg-sol-bg-highlight" style={{ color: "var(--sol-text-dim)" }}><X className="w-3 h-3" /></button>
+              <button type="button" onClick={() => set(ids.filter((id) => id !== p.user_id))} aria-label={`Stop keeping ${p.name}'s goals`} className="inline-flex items-center justify-center w-4 h-4 rounded-full hover:bg-sol-bg-highlight" style={{ color: "var(--sol-text-dim)" }}><X className="w-3 h-3" /></button>
             )}
           </li>
         ))}
       </ul>
       <div className="mt-2.5 flex items-center gap-2 flex-wrap">
         {me && !ids.includes(me.user_id) && (
-          <button type="button" onClick={() => set([...ids, me.user_id])} className="h-7 px-3 rounded-md text-[12px] font-semibold" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }} data-report-self>Report to @{role.handle}</button>
+          <button type="button" onClick={() => set([...ids, me.user_id])} className="h-7 px-3 rounded-md text-[12px] font-semibold" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }} data-report-self>Add my goals</button>
         )}
         {addable.filter((p) => !p.is_me).length > 0 && (
           <SelectBox value="" onChange={(e) => { if (e.target.value) set([...ids, e.target.value]); }} className="text-[12px]" aria-label="Add a person">
@@ -117,7 +116,6 @@ function ReportingPeople({ tree, role, canEdit, onUpdate }: { tree: OrgTree; rol
             {addable.filter((p) => !p.is_me).map((p) => <option key={p.user_id} value={p.user_id}>{p.name}</option>)}
           </SelectBox>
         )}
-        <span className="text-[11px]" style={{ color: "var(--sol-text-dim)" }}>cast role reports @{role.handle} --add me</span>
       </div>
     </Section>
   );
@@ -134,26 +132,18 @@ export type ScopeSettingsProps = {
   standingId: string | null;
   /** Today's counters, already checked against the UTC day by the header. */
   counters: RoleCounters | null;
-  /** The header's Retire lands here with the confirmation open. */
-  armRetire?: boolean;
   /** The record of what changed this role (org-staffing.md S21): it reads
    *  where the role is changed. */
   history?: React.ReactNode;
   /** `opts.leave_sessions` is the person's one edit on a scope that gains refs (R1). */
   onUpdate: (fields: OrgUpdateRoleInput, opts?: { leave_sessions?: boolean }) => void;
   onReparent: (target: OrgParentRef) => void;
-  /** S16: for the chief of staff the confirm also says what becomes of its
-   *  standing agent; any other seat passes nothing and the server decides. */
-  onRetire: (standingSession?: "keep" | "retire") => void;
 };
 
-export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, standingId, counters, armRetire, history, onUpdate, onReparent, onRetire }: ScopeSettingsProps) {
-  const [confirmRetire, setConfirmRetire] = useState(!!armRetire);
-  // Keeping the standing agent is the default (S16).
-  useWatchEffect(() => { if (armRetire) setConfirmRetire(true); }, [armRetire]);
+export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, standingId, counters, history, onUpdate, onReparent }: ScopeSettingsProps) {
   const caps: RoleCaps = role.caps ?? DEFAULT_CAPS;
   const [capsDraft, setCapsDraft] = useState<RoleCaps>(caps);
-  // The server value moves under the tab (a `cast role limits`, another window,
+  // The server value moves under the tab (the CLI, another window,
   // the echo after Save): the draft follows it, so Save never offers to write
   // stale numbers back over the change that just landed.
   useWatchEffect(() => { setCapsDraft(caps); }, [caps.hands_per_day, caps.wakes_per_day, caps.tokens_per_day]);
@@ -162,7 +152,12 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
   const startsOnItsOwn = autonomyOn(role.trust);
   const isRoot = role.handle === CHIEF_OF_STAFF_HANDLE;
   const channels = useInboxStore((s) => (s as any).chatChannels as Record<string, any> | undefined);
-  const followed = useMemo(() => (role.follow_channel_ids ?? []).map((id) => ({ id, name: channels?.[id]?.name ?? id.slice(0, 8) })), [role.follow_channel_ids, channels]);
+  const followed = useMemo(() => (role.follow_channel_ids ?? []).map((id) => ({ id, name: channels?.[id]?.name ?? "a channel" })), [role.follow_channel_ids, channels]);
+  // The channels it could follow: this workspace's rooms, never a direct message.
+  const followable = useMemo(() => Object.values(channels ?? {})
+    .filter((c: any) => c.kind !== "dm" && !(role.follow_channel_ids ?? []).includes(c._id) && (tree.workspace.kind === "team" ? c.team_id === tree.workspace.id : !c.team_id))
+    .sort((a: any, b: any) => String(a.name).localeCompare(String(b.name))), [channels, role.follow_channel_ids, tree.workspace]);
+  const follow = (channelId: string, on: boolean) => (useInboxStore.getState() as any).followOrgChannel(role.short_id, channelId, on);
 
   // The line (the-line.md L2). The org tree does not carry the slug, so the
   // tab reads it once per view from orgRoles.line; the store's line intent
@@ -189,7 +184,7 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
   });
 
   const projectName = (id: string) => role.scope_names.projects.find((p) => p.id === id)?.title ?? "a project";
-  const planName = (id: string) => role.scope_names.plans.find((p) => p.id === id)?.short_id ?? "a plan";
+  const planName = (id: string) => role.scope_names.plans.find((p) => p.id === id)?.title ?? "a plan";
 
   const targets = useMemo(() => {
     const people = tree.people.map((p) => ({ key: `user:${p.user_id}`, label: p.name, ref: { kind: "user", user_id: p.user_id } as OrgParentRef }));
@@ -202,7 +197,7 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
 
   return (
     <div className="space-y-3 max-w-[760px]">
-      <Section title="Seat" hint="The name people see and the handle sessions address.">
+      <Section title="Name" hint="The name people see, and the handle to mention it by.">
         <div className="grid sm:grid-cols-[1fr_220px] gap-3">
           <div>
             <div className="text-[10.5px] mb-1" style={{ color: "var(--sol-text-dim)" }}>Name</div>
@@ -215,12 +210,12 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
         </div>
       </Section>
 
-      <Section title="Scope" hint="What this seat owns: projects and plans. Empty means the whole workspace. Human only; a change wakes the role.">
+      <Section title="Area" hint={isRoot ? "The projects and plans it looks after. With none picked, the Chief of Staff covers the whole workspace." : "The projects and plans it looks after. Optional: with none picked it has no area of its own, runs its check and answers what it is asked."}>
         <GatedScopeEditor workspace={tree.workspace} role={role} canEdit={canEdit} onChange={(scope, opts) => onUpdate({ scope }, opts)} />
         <OverlapWarning overlaps={overlaps} projectName={projectName} planName={planName} />
       </Section>
 
-      <Section title="The line" hint="The workflow this scope's tasks run on. A shipped template, or a workflow you pushed with cast workflow push. Human only; a change wakes the role.">
+      <Section title="Workflow" hint="The steps a task in its area goes through, from started to done.">
         <div className="flex items-center gap-2 flex-wrap">
           {!canEdit && <span className="text-[13px] font-medium" style={{ color: "var(--sol-text)", fontFamily: "var(--font-mono)" }}>{lineSlug}</span>}
           {canEdit && (
@@ -228,17 +223,16 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
               value={lineSlug}
               onChange={(e) => { const next = e.target.value; if (next && next !== lineSlug) setRoleLine(role._id, next); }}
               className="text-[12px]"
-              aria-label="The line"
+              aria-label="Workflow"
               data-line-picker
             >
               {lineChoices.map((o) => <option key={o.slug} value={o.slug}>{o.label}</option>)}
             </SelectBox>
           )}
-          <span className="text-[11px]" style={{ color: "var(--sol-text-dim)" }}>cast role line @{role.handle} --set {lineSlug}</span>
         </div>
       </Section>
 
-      <Section title="Reports to" hint="Where the role's decisions escalate and whose brief reads its state line.">
+      <Section title="Reports to" hint="Who it answers to. What it cannot settle itself goes to them, with its recommendation.">
         <div className="flex items-center gap-2 flex-wrap">
           {!canEdit && <span className="text-[13px] font-medium" style={{ color: "var(--sol-text)" }}>{parentName(tree, role.reports_to)}</span>}
           {canEdit && (
@@ -256,7 +250,7 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
 
       <ReportingPeople tree={tree} role={role} canEdit={canEdit} onUpdate={onUpdate} />
 
-      <Section title={AUTONOMY_LABEL} hint={isRoot ? "The workspace's root role proposes and you apply, so it never starts work on its own." : autonomySentence(startsOnItsOwn)}>
+      <Section title={AUTONOMY_LABEL} hint={isRoot ? "The Chief of Staff proposes and you decide, so it never starts work on its own." : autonomySentence(startsOnItsOwn)}>
         <button
           type="button"
           role="switch"
@@ -275,11 +269,11 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
         </button>
       </Section>
 
-      <Section title="Limits" hint="A safety net with the defaults filled in: the most it may do in one day. When it reaches one it waits for tomorrow and says so in its brief; nothing reaches you.">
+      <Section title="Limits" hint="A safety net with the defaults filled in: the most it may do in one day. When it reaches one it waits for tomorrow and says so in its notes; nothing reaches you.">
         <details data-role-limits>
         <summary className="cursor-pointer text-[12px] select-none" style={{ color: "var(--sol-text-muted)" }}>Show the limits</summary>
         <div className="mt-2.5 grid grid-cols-3 gap-2">
-          {([["hands_per_day", "hands"], ["wakes_per_day", "wakes"], ["tokens_per_day", "tokens"]] as const).map(([k, label]) => (
+          {([["hands_per_day", "hands", "sessions started"], ["wakes_per_day", "wakes", "turns"], ["tokens_per_day", "tokens", "tokens"]] as const).map(([k, counter, label]) => (
             <label key={k} className="block">
               <span className="block text-[10.5px] mb-1" style={{ color: "var(--sol-text-dim)" }}>{label}</span>
               <input
@@ -291,34 +285,33 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
                 className="w-full h-8 rounded-md px-2 border text-[13px] tabular-nums outline-none bg-sol-bg-alt disabled:opacity-60"
                 style={{ borderColor: "color-mix(in srgb, var(--sol-border) 45%, transparent)", color: "var(--sol-text)" }}
               />
-              <span className="block text-[10px] mt-1 tabular-nums" style={{ color: "var(--sol-text-dim)" }}>today {counters?.[label] ?? 0}</span>
+              <span className="block text-[10px] mt-1 tabular-nums" style={{ color: "var(--sol-text-dim)" }}>today {counters?.[counter] ?? 0}</span>
             </label>
           ))}
         </div>
         {canEdit && capsDirty && (
           <div className="mt-2.5 flex items-center gap-2">
             <button type="button" onClick={() => onUpdate({ caps: capsDraft })} className="h-7 px-3 rounded-md text-[12px] font-semibold" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }}>Save limits</button>
-            <button type="button" onClick={() => setCapsDraft(caps)} className="h-7 px-3 rounded-md text-[12px]" style={{ color: "var(--sol-text-muted)" }}>Reset</button>
+            <button type="button" onClick={() => setCapsDraft(caps)} className="h-7 px-3 rounded-md text-[12px]" style={{ color: "var(--sol-text-muted)" }}>Undo</button>
           </div>
         )}
         </details>
       </Section>
 
-      <Section title="Where it runs" hint="The person whose machine runs the standing session, the machine, and the model. Change the model from the session's own model picker.">
+      <Section title="Where it runs" hint="Whose machine runs its session, which machine, and which model. Change the model from the model picker in its session.">
         <dl className="grid grid-cols-[110px_1fr] gap-y-1.5 text-[12.5px]">
-          <dt style={{ color: "var(--sol-text-dim)" }}>host</dt><dd style={{ color: "var(--sol-text)" }}>{hostName}</dd>
-          <dt style={{ color: "var(--sol-text-dim)" }}>machine</dt><dd style={{ color: "var(--sol-text)" }} data-seat-machine>{machine ? `${machine.label || "an unnamed machine"}${machine.is_remote ? " (remote)" : ""}` : standingId ? "not reported yet" : "no standing session"}</dd>
-          <dt style={{ color: "var(--sol-text-dim)" }}>model</dt><dd style={{ color: "var(--sol-text)", fontFamily: "var(--font-mono)" }}>{model ?? (role.anchor_id ? "not reported yet" : "no standing session")}</dd>
+          <dt style={{ color: "var(--sol-text-dim)" }}>person</dt><dd style={{ color: "var(--sol-text)" }}>{hostName}</dd>
+          <dt style={{ color: "var(--sol-text-dim)" }}>machine</dt><dd style={{ color: "var(--sol-text)" }} data-seat-machine>{machine ? `${machine.label || "an unnamed machine"}${machine.is_remote ? " (remote)" : ""}` : standingId ? "not reported yet" : "not started yet"}</dd>
+          <dt style={{ color: "var(--sol-text-dim)" }}>model</dt><dd style={{ color: "var(--sol-text)", fontFamily: "var(--font-mono)" }}>{model ?? (role.anchor_id ? "not reported yet" : "not started yet")}</dd>
           <dt style={{ color: "var(--sol-text-dim)" }}>reviews on</dt><dd style={{ color: "var(--sol-text)", fontFamily: "var(--font-mono)" }}>{role.review_backend ?? "default"}</dd>
         </dl>
         {limitParked && standingId && <SeatLimitNote standingId={standingId} deviceId={machine?.device_id ?? null} machineLabel={machine?.label || "its machine"} />}
       </Section>
 
-      {/* S16: seating this role fresh retired the workspace's previous standing
-          agent, and the seat dialog promises its thread is kept and linked from
-          here. This is that link — without it the promise is empty. */}
+      {/* S16: starting this role fresh retired the workspace's previous agent,
+          and the hire dialog promises its thread is kept and linked from here. */}
       {role.previous_standing_conversation_id && (
-        <Section title="Previous standing agent" hint="The agent this seat replaced. Its thread is kept and readable; it no longer wakes.">
+        <Section title="The agent before it" hint="The agent this role replaced. Its thread is kept and readable; it no longer runs.">
           <Link
             href={`/conversation/${role.previous_standing_conversation_id}`}
             className="inline-flex items-center gap-1.5 text-[12.5px] hover:underline"
@@ -329,20 +322,28 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
         </Section>
       )}
 
-      {/* The root role is the workspace's agent (S22): its Slack lives here. */}
+      {/* The Chief of Staff is the workspace's agent (S22): its Slack lives here. */}
       {role.handle === CHIEF_OF_STAFF_HANDLE && canEdit && (
-        <Section title="Slack" hint="Connect a Slack workspace so @mentions there wake it, and it can post as itself.">
+        <Section title="Slack" hint="Connect a Slack workspace so a mention there reaches it, and it can post as itself.">
           <SlackConnect scope={tree.workspace.kind} teamId={tree.workspace.kind === "team" ? tree.workspace.id : null} agentName={role.name} />
         </Section>
       )}
 
-      <Section title="Channels" hint="Chat channels whose lines ride the role's wake frame. Edit with cast role follow / unfollow.">
-        {followed.length === 0 ? (
-          <p className="text-[12px]" style={{ color: "var(--sol-text-dim)" }}>Follows no channel.</p>
-        ) : (
-          <ul className="flex flex-wrap gap-1.5">
-            {followed.map((c) => <li key={c.id} className="inline-flex items-center gap-1 h-[22px] px-2 rounded-md text-[11px]" style={{ background: "color-mix(in srgb, var(--sol-cyan) 12%, transparent)", color: "var(--sol-cyan)" }}><Hash className="w-3 h-3" />{c.name}</li>)}
-          </ul>
+      <Section title="Channels" hint="Chat channels it reads. What is said there reaches it the next time it runs.">
+        {followed.length === 0 && <p className="text-[12px]" style={{ color: "var(--sol-text-dim)" }}>It follows no channel.</p>}
+        <ul className="flex flex-wrap gap-1.5" data-followed-channels={followed.length}>
+          {followed.map((c) => (
+            <li key={c.id} className="inline-flex items-center gap-1 h-[22px] pl-2 pr-1 rounded-md text-[11px]" style={{ background: "color-mix(in srgb, var(--sol-cyan) 12%, transparent)", color: "var(--sol-cyan)" }}>
+              <Hash className="w-3 h-3" />{c.name}
+              {canEdit && <button type="button" onClick={() => follow(c.id, false)} aria-label={`Stop following ${c.name}`} className="inline-flex items-center justify-center w-4 h-4 rounded-full hover:bg-sol-bg-highlight"><X className="w-3 h-3" /></button>}
+            </li>
+          ))}
+        </ul>
+        {canEdit && followable.length > 0 && (
+          <SelectBox value="" onChange={(e) => { if (e.target.value) follow(e.target.value, true); }} className="mt-2.5 text-[12px]" aria-label="Follow a channel" data-follow-channel>
+            <option value="">Follow a channel</option>
+            {followable.map((c: any) => <option key={c._id} value={c._id}>#{c.name}</option>)}
+          </SelectBox>
         )}
       </Section>
 
@@ -352,21 +353,6 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
         </Section>
       )}
 
-      {canEdit && (
-        <section className="rounded-xl border px-4 py-3.5" style={{ borderColor: "color-mix(in srgb, var(--sol-red) 30%, transparent)" }}>
-          <h3 className="text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-red)" }}>Retire</h3>
-          {!confirmRetire ? (
-            <div className="mt-2 flex items-center justify-between gap-3 flex-wrap">
-              <p className="text-[12px]" style={{ color: "var(--sol-text-muted)" }}>Its {role.total} session{role.total === 1 ? "" : "s"} go back to their owners; roles under it report to {parentName(tree, role.reports_to)}. The standing session is kept but stops waking.</p>
-              <button type="button" onClick={() => setConfirmRetire(true)} className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg text-[12px] font-medium hover:bg-sol-red/10" style={{ color: "var(--sol-red)" }}><Trash2 className="w-3.5 h-3.5" /> Retire role</button>
-            </div>
-          ) : (
-            <div className="mt-2">
-              <RetireRoleConfirm role={role} onRetire={onRetire} onCancel={() => setConfirmRetire(false)} />
-            </div>
-          )}
-        </section>
-      )}
     </div>
   );
 }

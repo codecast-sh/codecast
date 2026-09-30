@@ -71,7 +71,7 @@ function roleDetail(tree: OrgTree | null, ch: { scope?: { projects?: string[]; p
   }
   const scope = [...(ch.scope?.projects ?? []), ...(ch.scope?.plans ?? [])].map((ref) => known.get(ref) ?? ref);
   const seat = ch.seat ? `from ${ch.seat.title ?? "an existing session"}` : "new session";
-  return [scope.length ? scope.join(", ") : "the whole workspace", seat].join(" · ");
+  return [scope.length ? scope.join(", ") : "no area of its own", seat].join(" · ");
 }
 
 /** The rows of a proposal, in seq order. Removed changes are history and

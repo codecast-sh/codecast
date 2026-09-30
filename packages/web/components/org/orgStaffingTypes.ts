@@ -23,7 +23,6 @@ export type OrgRoleHealth = {
   flow: {
     decisions_7d: number;
     median_recommend_min: number | null;
-    escalations_7d: number;
     done_7d: number;
     handoffs_7d: { done: number; blocked: number; needs_context: number };
     review_stalls: number;

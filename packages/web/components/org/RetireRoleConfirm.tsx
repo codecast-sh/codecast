@@ -23,7 +23,7 @@ export function RetireRoleConfirm({ role, lead, onRetire, onCancel }: {
     <div className="flex flex-col gap-2" data-retire-confirm={chief ? "chief" : "role"}>
       {lead && <p className="text-[12px]" style={{ color: "var(--sol-text-secondary)" }}>{lead}</p>}
       {chief && (
-        <div className="flex flex-col gap-1.5" role="radiogroup" aria-label="What happens to its standing agent">
+        <div className="flex flex-col gap-1.5" role="radiogroup" aria-label="What happens to its thread">
           {UNSEAT_CHOICES.map(([value, label, sub]) => (
             <button
               key={value}

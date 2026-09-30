@@ -283,7 +283,7 @@ async function verifyStaffingPane() {
   // ── a paused chief of staff is said, with Resume ──
   const pausedTree = { ...chiefTree, roles: chiefTree.roles.map((r) => r.handle === "chief-of-staff" ? { ...r, status: "paused" as const } : r) };
   await render({ proposal: null, selectedChangeId: null, tree: pausedTree, chief: findChiefOfStaff(pausedTree), onResumeChief: (id: string) => calls.push(`resume:${id}`) });
-  assert.match(q("[data-chief-paused]")!.textContent!, /Paused: what you send waits until you resume/);
+  assert.match(q("[data-chief-paused]")!.textContent!, /is paused: its triggers hold until you resume it\. Messages still reach it\./);
   await act(async () => button("Resume").click());
   assert.equal(calls.pop(), "resume:fixture-role-chief");
   assert.ok(q("[data-thread]"), "the thread still renders under the notice");
@@ -308,7 +308,7 @@ async function verifyStaffingPane() {
 
   // Health missing on this backend says so instead of "no flags".
   await render({ proposal: null, selectedChangeId: null, health: null, healthMissing: true });
-  assert.match(text(), /Health is not deployed on this backend yet/);
+  assert.match(text(), /Nothing to show yet\./);
 
   // A read that failed with nothing cached says so with a retry, never "no
   // flags"; with a cached copy the flags stay and one line says the read failed.
@@ -332,7 +332,7 @@ async function verifyStaffingPane() {
   assert.ok(q("[data-reviewing]"));
   assert.equal(qa("button").find((b) => b.textContent?.trim() === "Hire a Chief of Staff"), undefined);
   await render({ proposal: null, selectedChangeId: null, tree: ORG_FIXTURE, chief: null, reviewing: false, reviewEnded: true, reviewSessionId: "conv-ended" });
-  assert.match(q("[data-review-ended]")!.textContent!, /The review session stopped without posting a proposal/);
+  assert.match(q("[data-review-ended]")!.textContent!, /The review stopped without making a proposal/);
   assert.ok(qa("button").find((b) => b.textContent?.trim() === "Propose an org now"), "the buttons are back");
   await act(async () => q<HTMLButtonElement>("[data-review-ended] button")!.click());
   assert.equal(calls.pop(), "open:conv-ended");

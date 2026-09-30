@@ -18,10 +18,12 @@ import type { OrgPerson, OrgRole, OrgSession, StateCounts, OrgParentRef } from "
 import { ORG_STATE_ORDER } from "./orgTypes";
 import { CHANGE_KIND_WORD, GHOST, ORG_STATE_META, SEVERITY_META, standingLineOf } from "./orgMeta";
 import { RoleFace } from "./RoleFace";
-import { CHIP_STATUS, GhostTag, ghostFrameStyle } from "./ghostChrome";
+import { GhostTag } from "./ghostChrome";
+import { CHIP_STATUS, ghostFrameStyle } from "./orgMeta";
 import { RoleHoverCard, SessionGlyph } from "../identity";
 import type { OrgStandingState } from "./orgTypes";
 import type { HealthFlag, OrgChangeStatus } from "./orgStaffingTypes";
+import { CHIEF_OF_STAFF_HANDLE } from "./orgStaffingTypes";
 import type { OrgGhostChip, OrgGhostMeta, OrgGhostMove, OrgGhostStub } from "./orgLayout";
 import { ORG_SIZES, seatRowHeight } from "./orgLayout";
 import { seatSentence } from "@codecast/shared/contracts/orgProposal";
@@ -417,9 +419,9 @@ export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<Role
   const { role: r, collapsed, hidden, overflow } = data;
   const chips = [
     ...r.scope_names.projects.map((p) => ({ key: `p:${p.id}`, id: p.id, label: p.title, kind: "project" as const })),
-    ...r.scope_names.plans.map((p) => ({ key: `l:${p.id}`, id: p.id, label: p.short_id || p.title, kind: "plan" as const })),
+    ...r.scope_names.plans.map((p) => ({ key: `l:${p.id}`, id: p.id, label: p.title || p.short_id, kind: "plan" as const })),
   ];
-  const wholeWorkspace = r.scope.project_ids.length === 0 && r.scope.plan_ids.length === 0;
+  const noArea = r.scope.project_ids.length === 0 && r.scope.plan_ids.length === 0;
   const paused = r.status === "paused";
   // The seat's colour is its standing agent's own declared status when it has
   // one; the hand tally below stays a proportion, never the seat's colour.
@@ -472,7 +474,7 @@ export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<Role
           onClick={(e) => e.stopPropagation()}
           className="nodrag absolute -top-[11px] left-3 flex items-center gap-1 h-[18px] px-1.5 rounded-md text-[10px] font-medium hover:brightness-110"
           style={{ background: "var(--sol-violet)", color: "var(--sol-bg)", fontFamily: "var(--font-mono)" }}
-          title="Open the scope page"
+          title="Open its page"
         >
           @{r.handle}
         </Link>
@@ -501,7 +503,7 @@ export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<Role
             {!ghost && (
               <>
                 <span aria-hidden>·</span>
-                <span data-role-seat={r.standing ? "online" : "none"}>{r.standing ? "online" : "no agent"}</span>
+                <span data-role-seat={r.standing ? "online" : "none"}>{r.standing ? "started" : "not started"}</span>
                 {r.total > 0 && (
                   <>
                     <span aria-hidden>·</span>
@@ -533,9 +535,9 @@ export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<Role
       )}
       <div style={{ opacity: dim ? GHOST.opacity : 1 }}><StandingLine standing={r.standing} className="mt-1.5" /></div>
       <div className="mt-2 flex items-center gap-1 min-w-0 overflow-hidden">
-        {wholeWorkspace ? (
+        {noArea ? (
           <span className="text-[10px] px-1.5 h-[18px] inline-flex items-center rounded-md border" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)", color: "var(--sol-text-dim)" }}>
-            whole workspace
+            {r.handle === CHIEF_OF_STAFF_HANDLE ? "whole workspace" : "no area of its own"}
           </span>
         ) : (
           <>

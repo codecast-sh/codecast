@@ -1,5 +1,7 @@
 # Roles that run their part of the company (W7)
 
+> Current rules for how a role wakes, what it owns and how a request reaches a person are org-staffing.md S25 to S28. Where this record describes escalation (`cast escalate`, escalation lines, handing a session back) or a scopeless role owning the whole workspace, it is history: escalation was removed and scope made opt in on 2026-09-29.
+
 Written 2026-09-18 from the founder's five asks after the S19 page landed:
 roles triage the sessions in their scope and decide what reaches a person;
 the analyzer names the long running sessions that already are roles; a role's

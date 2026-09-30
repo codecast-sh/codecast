@@ -97,7 +97,7 @@ export function buildHireSpec(d: HireDraft): HireSpec {
       kind: "role", name: sub(m.role.name), handle, scope: { projects: [ref], plans: [] }, reports_to: d.reportsTo,
       ...(m.role.avatar ? { avatar: m.role.avatar } : {}),
       ...(m.role.tenure ? { tenure: m.role.tenure.kind === "standing" ? { kind: "standing" as const } : { kind: "program" as const, ends: { project: ref }, then: m.role.tenure.then } } : {}),
-      charter: `Hired from the template ${m.id} ${m.version}. Its charter, routines and skills load from the pinned release on the host: cast org template instructions ${d.instance} charter.`,
+      charter: `Hired from the template ${m.id} ${m.version}. Its charter, triggers and skills come from that version of the template.`,
       evidence: [`Template ${m.id}@${m.version} sha256:${d.template.latest.digest.slice(0, 12)}`, `Project ${d.project.title}`],
     } as OrgChange);
   }
@@ -109,14 +109,14 @@ export function buildHireSpec(d: HireDraft): HireSpec {
   const summary = [
     `${d.template.name} on ${d.project.title}, from the template ${m.id} ${m.version}.`, "",
     m.description, "",
-    d.seatHandle ? `@${d.seatHandle} is the seat: no new role.` : `A new role @${handle}, reporting to ${d.reportsTo}, leads ${d.project.title}${d.reportsTo !== "me" ? ` under ${d.reportsTo}` : ""}.`,
-    routines.length ? `Routines, created paused for you to activate one by one: ${routines.join("; ")}.` : "",
-    authority.length ? `Authority asked for now: ${authority.map((g) => `${g.kind} (${g.label})`).join("; ")}.` : "No authority outside codecast is asked for.",
-    setup.length ? `${setup.length} setup step${setup.length === 1 ? "" : "s"} only you can do; the role puts one in front of you at a time.` : "",
-    `After you accept, run cast org template bind ${d.instance} in the project's checkout.`,
+    d.seatHandle ? `@${d.seatHandle} takes it on: no new role.` : `A new role @${handle}, reporting to ${d.reportsTo}, leads ${d.project.title}${d.reportsTo !== "me" ? ` under ${d.reportsTo}` : ""}.`,
+    routines.length ? `Triggers, created paused for you to turn on one by one: ${routines.join("; ")}.` : "",
+    authority.length ? `Permissions asked for now: ${authority.map((g) => `${g.kind} (${g.label})`).join("; ")}.` : "It asks for no permission outside codecast.",
+    setup.length ? `${setup.length} setup step${setup.length === 1 ? "" : "s"} only you can do; the role asks you for one at a time.` : "",
+    `After you accept, one step remains on the machine that runs it: run cast org template bind ${d.instance} in the project's folder.`,
   ].filter((l) => l !== "").join("\n");
   return {
     title: `Hire ${d.template.name} on ${d.project.title}`, summary_md: summary, mode: "request", changes,
-    asks: [{ title: `Hire ${d.template.name} on ${d.project.title}`, why: m.description, effect: d.seatHandle ? `@${d.seatHandle} takes the template's routines and record on ${d.project.title}` : `@${handle} leads ${d.project.title} and works within what you grant`, seqs: changes.map((_, i) => i + 1) }],
+    asks: [{ title: `Hire ${d.template.name} on ${d.project.title}`, why: m.description, effect: d.seatHandle ? `@${d.seatHandle} takes on the template's triggers and record on ${d.project.title}` : `@${handle} leads ${d.project.title} and works within what you grant`, seqs: changes.map((_, i) => i + 1) }],
   };
 }

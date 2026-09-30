@@ -75,7 +75,7 @@ async function verifyProposalThread() {
   assert.equal(q("[data-proposal-letter] [data-avatar]")!.getAttribute("data-avatar"), "owl");
   assert.match(letter.textContent!, /\d+[smhd] ago/);
   // The first time: one line of introduction, in the author's voice.
-  assert.match(q("[data-letter-intro]")!.textContent!, /^I am your Chief of Staff, an agent that looks at how the work here is organized/);
+  assert.match(q("[data-letter-intro]")!.textContent!, /^I am your Chief of Staff\. I look at how the work here is organized/);
   assert.match(q("[data-letter-lead]")!.textContent!, /The platform project has no owner/);
   assert.equal(q("[data-letter-toggle]"), null, "a short letter has no fold");
   // No header line of the thread's own: the bubble says who and when; the
@@ -132,9 +132,9 @@ async function verifyProposalThread() {
 
   // ── a session author is not a name ──
   await renderThread({ thread: { ...thread, name: "the agent that wrote this", named: false, role: null } });
-  assert.equal(q("[data-letter-author]")!.textContent, "The agent that wrote this");
+  assert.equal(q("[data-letter-author]")!.textContent, "The author of this proposal");
   assert.equal(q("[data-proposal-letter] [data-avatar]"), null);
-  assert.match(q("[data-letter-intro]")!.textContent!, /^I am an agent that looked at how the work here is organized/);
+  assert.match(q("[data-letter-intro]")!.textContent!, /^I looked at how the work here is organized/);
 
   // ── a paused author is said above the thread, with Resume ──
   await renderThread({ thread: { ...thread, role: { ...thread.role!, status: "paused" } }, onResume: (id: string) => calls.push(`resume:${id}`) });
@@ -147,9 +147,9 @@ async function verifyProposalThread() {
   assert.equal(q("[data-proposal-thread]")!.getAttribute("data-thread-layout"), "phone");
   // The bar counts, then says what pressing it does: the verb sits on its
   // own chip, so a cold reader takes the bar for a control.
-  assert.match(q("[data-asks-bar]")!.textContent!, /^3 to decide2 updatedOpen the asks$/);
-  assert.equal(q("[data-asks-bar-action]")!.textContent, "Open the asks");
-  assert.equal(q("[data-asks-bar]")!.getAttribute("aria-label"), "3 to decide. Open the asks");
+  assert.match(q("[data-asks-bar]")!.textContent!, /^3 to decide2 updatedOpen them$/);
+  assert.equal(q("[data-asks-bar-action]")!.textContent, "Open them");
+  assert.equal(q("[data-asks-bar]")!.getAttribute("aria-label"), "3 to decide. Open them");
   await click(q("[data-asks-bar]"));
   assert.equal(calls.pop(), "asks");
   await renderThread({ layout: "phone", asksBar: { toDecide: 0, total: 3, updated: 0, onOpen: () => {} } });

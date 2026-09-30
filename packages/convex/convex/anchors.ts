@@ -1,4 +1,4 @@
-import { mutation, query } from "./functions";
+import { internalMutation, mutation, query } from "./functions";
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import { buildShareUpdate, resolveCreationPrivacy } from "./privacy";
@@ -9,6 +9,7 @@ import { killConversation } from "./conversations";
 import { enqueuePendingMessage, formatSessionMessage, getAuthenticatedUserId } from "./pendingMessages";
 import { CHIEF_OF_STAFF_HANDLE, roleGrants } from "./lib/orgAccess";
 import { standingReportsToFields } from "./lib/standingSeat";
+import { roleStartsOnItsOwn } from "./lib/orgCaps";
 import { chiefOfStaffOpening } from "@codecast/shared/contracts/chiefOfStaffPrompt";
 
 // An Anchor is codecast's standing agent member: one per team (shared) and one
@@ -93,7 +94,7 @@ export async function visibleAnchorsForUser(
 }
 
 // The first turn a role's standing session reads (org-roles-standing.md T1):
-// who it is and whom it reports to, what it owns, how it wakes, that its
+// who it is and whom it reports to, what it looks after, how it wakes, that its
 // sessions stay out of the person's inbox, and that its brief is its memory.
 // The Chief of Staff's is the right hand's (shared/contracts/chiefOfStaffPrompt.ts
 // CHIEF_OF_STAFF_OPENING), in the same shape.
@@ -101,35 +102,62 @@ export type RoleBootstrap = {
   handle: string;
   scopeNames: string[];
   parentName: string;
+  /** The parent role's handle, when the role reports to a role. */
+  parentHandle?: string;
   /** The switch (org-staffing.md S23.1): the role starts work in its scope on its own. */
   startsOnItsOwn: boolean;
+  /** A re-send of the current opening to a role already at work: no greeting. */
+  rebrief?: boolean;
 };
 
+const andList = (xs: string[]) => (xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
+
 function roleOpeningMessage(name: string, workspace: string, role: RoleBootstrap): string {
-  const hello = `Read \`cast brief\` now, post a one-line hello, then stand by.`;
+  const close = role.rebrief
+    ? "These are your current instructions. Read `cast brief` now and carry on; there is nothing to announce."
+    : "Read `cast brief` now, post a one-line hello, then stand by.";
   // The chief's first review follows at once and is its first message, so it
   // posts no hello of its own.
   if (role.handle === CHIEF_OF_STAFF_HANDLE) return `${chiefOfStaffOpening({ workspace, person: role.parentName })}\n\nRead \`cast brief\` now.`;
-  const scope = role.scopeNames.length ? role.scopeNames.join(", ") : "the whole workspace";
+  const starts = role.startsOnItsOwn
+    ? "You start work on your own: new work goes to a session you start with `cast spawn`, and you say which one."
+    : "You do not start work on your own: you read, answer and recommend, and a person starts the work.";
+  // Scope is opt in (org-staffing.md S26): a role that names no area looks
+  // after none, and is never told the workspace is its own.
+  const area = role.scopeNames.length
+    ? `You look after ${andList(role.scopeNames)}: keep that work moving and its people informed. ${starts} What falls outside it goes to ${role.parentName}.`
+    : `You look after no area of your own: you run your routine and answer what you are asked. ${starts}`;
   return [
-    `You are **${name}**, the standing agent for the **${name}** role (@${role.handle}) in ${workspace}. You report to ${role.parentName}.`,
+    `You are the **${name}** (@${role.handle}) in ${workspace}. You report to ${role.parentName}.`,
     ``,
-    `You own ${scope}: keep its work moving and its people informed. ${role.startsOnItsOwn
-      ? "You start work there on your own: new work goes to a session you start with `cast spawn`, and you say which one."
-      : "You do not start work on your own: you read, answer and recommend, and a person starts the work."} What falls outside it goes to ${role.parentName}.`,
+    area,
     ``,
-    `You wake on your routine, a trigger a person can see and change on your page, and whenever someone writes to you. Start every turn with \`cast brief\`: what changed in your area, your sessions, and how the people who report to you are doing against their goals.`,
+    `You wake on your check, when a session under you is waiting, and whenever someone writes to you; your check and your waiting sessions are triggers a person can see and change on your page. Start every turn with \`cast brief\`: what changed, your sessions, and how the people who report to you are doing against their goals.`,
     ``,
-    `The sessions that report to you stay out of the person's inbox; what they need reaches you as messages, and you answer what you can. What you cannot answer goes up to ${role.parentName}. ${role.parentName.startsWith("@")
-      ? `Write to them with \`cast role wake ${role.parentName} "<what they will decide and why>"\`.`
+    `The sessions that report to you stay out of the person's inbox; what they need reaches you as messages, and you answer what you can. What you cannot answer goes up to ${role.parentName}. ${role.parentHandle
+      ? `Write to them with \`cast role wake @${role.parentHandle} "<what they will decide and why>"\`.`
       : `Raise it in this thread: say what they will decide and why in your pinned state (\`cast state --status blocked\`), and post a real choice between options as a \`cast decide\` card here, with your recommendation.`}`,
     ``,
     `Answer people here, in plain words, and say where each piece of work went.`,
     ``,
     `Your brief is your memory between turns (\`cast brief edit -\`). Keep in it what you learned about your area, what people asked you to remember, and one dated line per project under \`## Where it stands\`, which is what people read on your page.`,
     ``,
-    hello,
+    close,
   ].join("\n");
+}
+
+// What a role's opening says about it, read from the role as it stands now:
+// one reading for the first turn (orgRoles.provision) and for a rebrief.
+export async function roleBootstrapOf(ctx: { db: any }, role: any): Promise<RoleBootstrap> {
+  const scopeNames: string[] = [];
+  for (const id of role.scope?.project_ids ?? []) { const p = await ctx.db.get(id); if (p) scopeNames.push(p.title); }
+  for (const id of role.scope?.plan_ids ?? []) { const p = await ctx.db.get(id); if (p) scopeNames.push(p.title); }
+  if (role.reports_to?.kind === "role") {
+    const parent = await ctx.db.get(role.reports_to.role_id);
+    return { handle: role.handle, scopeNames, parentName: parent ? `${parent.name} (@${parent.handle})` : "a role", parentHandle: parent?.handle, startsOnItsOwn: roleStartsOnItsOwn(role) };
+  }
+  const user = role.reports_to?.user_id ? await ctx.db.get(role.reports_to.user_id) : null;
+  return { handle: role.handle, scopeNames, parentName: user?.name || user?.email?.split("@")[0] || "a person", startsOnItsOwn: roleStartsOnItsOwn(role) };
 }
 
 // The first turn that brings the workspace's own standing agent "online" when
@@ -570,11 +598,16 @@ export const wakeAnchor = mutation({
 // The briefing for an EXISTING anchor, rebuilt from its row. Used by
 // rebriefAnchor so a running anchor can be handed the current frame (its scope,
 // its routines, how it reaches people) without being retired and re-created.
-async function briefingFor(ctx: { db: any }, anchor: any): Promise<string> {
+// A role's standing session gets its role's opening, never the workspace
+// agent's.
+export async function briefingFor(ctx: { db: any }, anchor: any): Promise<string> {
   const team = anchor.team_id ? await ctx.db.get(anchor.team_id) : null;
   const owner = anchor.scope_user_id ? await ctx.db.get(anchor.scope_user_id) : null;
+  const role = anchor.org_role_id ? await ctx.db.get(anchor.org_role_id) : null;
+  const live = role && role.status !== "retired" ? role : null;
   return bootstrapMessage({
-    name: anchor.name,
+    role: live ? { ...(await roleBootstrapOf(ctx, live)), rebrief: true } : undefined,
+    name: live?.name ?? anchor.name,
     scopeType: anchor.scope_type,
     scopeLabel: anchor.scope_type === "team"
       ? `the ${team?.name ?? "team"} workspace`
@@ -601,6 +634,28 @@ export const rebriefAnchor = mutation({
     const briefing = await briefingFor(ctx, anchor);
     return await deliverToAnchor(ctx, args.anchor_id, briefing, `anchor-brief:${Date.now()}`);
   },
+});
+
+// One sweep: send every live role its current opening, so a role started
+// under earlier instructions works from the ones that ship now. Once per role
+// and per `key`: a repeat with the same key sends nothing new while the first
+// is still waiting. `npx convex run anchors:rebriefRoles '{"dry_run":true}'`.
+export async function performRebriefRoles(ctx: any, args: { dry_run?: boolean; key?: string }): Promise<{ dry_run: boolean; sent: Array<{ role: string; handle: string; conversation: string | null }>; skipped: number }> {
+  const sent: Array<{ role: string; handle: string; conversation: string | null }> = [];
+  let skipped = 0;
+  for (const role of await ctx.db.query("org_roles").collect()) {
+    const anchor = role.status !== "retired" && role.anchor_id ? await ctx.db.get(role.anchor_id) : null;
+    const conversation = anchor && anchor.status !== "decommissioned" && anchor.conversation_id ? await ctx.db.get(anchor.conversation_id) : null;
+    if (!conversation) { skipped++; continue; }
+    if (!args.dry_run) await deliverToAnchor(ctx, anchor._id, await briefingFor(ctx, anchor), `role-rebrief:${args.key ?? "1"}:${anchor._id}`);
+    sent.push({ role: role.short_id, handle: role.handle, conversation: conversation.short_id ?? null });
+  }
+  return { dry_run: !!args.dry_run, sent, skipped };
+}
+
+export const rebriefRoles = internalMutation({
+  args: { dry_run: v.optional(v.boolean()), key: v.optional(v.string()) },
+  handler: async (ctx, args) => performRebriefRoles(ctx, args),
 });
 
 // resolveAnchorForScope — the lookup wake routing uses to find which anchor

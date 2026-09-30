@@ -9,7 +9,7 @@ import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useEventListener } from "../../hooks/useEventListener";
 import { create as mutate } from "mutative";
-import { Network, Plus, Map as MapIcon, Users, Briefcase, Search, ArrowLeft, ArrowRightLeft, ChevronDown, ChevronRight, ExternalLink, Trash2, Pencil, History } from "lucide-react";
+import { Network, Plus, Map as MapIcon, Users, Briefcase, Search, ArrowLeft, ArrowRightLeft, ChevronDown, ChevronRight, ExternalLink, Pencil, History } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { createOrgSlice, orgRoleReparentMakesCycle, reparentToastLine, type OrgUpdateRoleInput } from "../../store/orgSlice";
 import { useSyncOrgTree } from "../../hooks/useSyncOrgTree";
@@ -48,9 +48,12 @@ import { orgGuideSteps } from "../../lib/orgGuideSteps";
 import { OrgIntro } from "./OrgIntro";
 import { markOrgIntroSeen, markOrgUpsellSeen } from "../../lib/orgIntro";
 import { OrgGlossary, type GlossaryPage } from "./OrgGlossary";
+import { OrgReset } from "./OrgReset";
+import type { OrgResetPreview } from "./orgMeta";
+import { useMutation } from "convex/react";
+import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { staffingPaneWord } from "./orgMeta";
 import { orgTreeReadState } from "./orgReadState";
-import { retireToastText, type UnseatChoice } from "../../lib/retireRole";
 import { reviewRunState, type OrgReviewRun } from "./staffingModel";
 import { changeNodeId, composeParam, findChiefOfStaff, hasAcceptedBefore, isDecidable, orgPreviewEnabled, pickProposal, proposalParam, resolveProposalLink, roleChangeEdits, roleChangeInitial } from "./staffingModel";
 import { ORG_STAFFING_FIXTURE_HEALTH, ORG_STAFFING_FIXTURE_PROPOSAL, ORG_STAFFING_FIXTURE_REVISED_PROPOSAL } from "./orgStaffingFixture";
@@ -131,7 +134,6 @@ export function OrgPageInner() {
     (st) => st.orgIntentNotice?.at,
     (st) => st.currentSessionId,
     (st) => st.teams,
-    (st) => st.clientState.ui?.org_nux_seen,
     (st) => st.clientState.ui?.org_intro_seen,
     (st) => st.clientStateInitialized,
     (st) => st.clientState.ui?.org_review_run?.since,
@@ -191,7 +193,7 @@ export function OrgPageInner() {
   const [addRoleOpen, setAddRoleOpen] = useState(false);
   // S16: the seat-the-existing-agent moment, opened by hireChief when a
   // standing agent already exists.
-  const [seatDialog, setSeatDialog] = useState<{ name: string; shortId?: string; convId: string; messageCount?: number } | null>(null);
+  const [seatDialog, setSeatDialog] = useState<{ name: string; convId: string; messageCount?: number } | null>(null);
   const [resetKey, setResetKey] = useState(0);
   const menu = useContextMenu<OrgLayoutNode>();
   const phone = useIsPhone();
@@ -219,20 +221,18 @@ export function OrgPageInner() {
   const [graphFocus, setGraphFocus] = useState<OrgFocusTarget | null>(null);
   const focusSeq = useRef(0);
   const askFocus = useCallback((kind: OrgFocusTarget["kind"], id: string) => setGraphFocus({ kind, id, seq: ++focusSeq.current }), []);
-  // First open (org-staffing.md S14): the three step guide over the canvas.
-  // Opens on its own once, when the tree lands with no roles and the pref is
-  // unset; "How this page works" reopens it; Done or dismiss writes the pref.
+  // The tour of the page's parts (org-staffing.md S14): opened by hand from
+  // "How this page works", never on its own.
   const [guide, setGuide] = useState<{ step: number } | null>(null);
-  // The first visit (S20): the one screen built from the faces, over the
-  // body. Opens on its own once the tree and the prefs have landed and
-  // org_intro_seen is unset; "How this page works" reopens it by hand.
-  // Either action writes the pref, so it is seen once per person.
-  const [intro, setIntro] = useState<"auto" | "hand" | null>(null);
+  // The first visit (S20), the one first-open flow: the one screen built
+  // from the faces, over the body. Opens on its own once the tree and the
+  // prefs have landed and org_intro_seen is unset. Either action writes the
+  // pref, so it is seen once per person.
+  const [intro, setIntro] = useState<"auto" | null>(null);
   const introOffered = useRef(false);
   // The glossary and the short "how this works" page (S17): one dialog, opened
   // from the pane and from this header.
   const [glossary, setGlossary] = useState<GlossaryPage | null>(null);
-  const guideOffered = useRef(false);
   const proposals = useMemo<OrgProposalRow[]>(() => preview ? previewProposals : joinProposals(s.orgProposals, s.orgProposalChanges), [preview, previewProposals, s.orgProposals, s.orgProposalChanges]);
   const workspaceProposals = useMemo(() => {
     const wanted = tree?.workspace;
@@ -324,6 +324,15 @@ export function OrgPageInner() {
   // -------- permissions
   const me = tree?.people.find((p) => p.is_me) ?? (meId ? tree?.people.find((p) => p.user_id === meId) : undefined);
   const isAdmin = me?.role === "admin" || me?.role === "owner" || tree?.workspace.kind === "user";
+  // Reset (S27) asks the server what it would change, then does it. The
+  // preview's fixture answers from its own tree and changes nothing.
+  const resetMutation = useMutation((_api as any).orgRoles.reset);
+  const resetArgs = tree?.workspace.kind === "team" ? { team_id: tree.workspace.id } : {};
+  const resetPreview = useCallback(async (): Promise<OrgResetPreview> => preview
+    ? { roles: (tree?.roles ?? []).filter((r) => r.status !== "retired").map((r) => ({ short_id: r.short_id, handle: r.handle, name: r.name, sessions: r.total })), proposals: previewProposals.length }
+    : resetMutation({ ...resetArgs, dry_run: true }), [preview, tree, previewProposals, resetMutation]); // eslint-disable-line react-hooks/exhaustive-deps
+  const resetOrg = useCallback(async () => { if (!preview) await resetMutation(resetArgs); }, [preview, resetMutation, tree]); // eslint-disable-line react-hooks/exhaustive-deps
+  const resetNode = isAdmin ? <OrgReset preview={resetPreview} reset={resetOrg} onDone={() => { setSelectedId(null); retryTree(); }} /> : null;
   const canEditRole = useCallback((roleId: string) => {
     const r = tree?.roles.find((x) => x._id === roleId);
     return !!r && (isAdmin || r.host_user_id === (me?.user_id ?? meId));
@@ -333,29 +342,18 @@ export function OrgPageInner() {
   // -------- first open (S14)
   const liveRoles = tree ? tree.roles.filter((r) => r.status !== "retired").length : 0;
   const meNodeId = me ? parentNodeId({ kind: "user", user_id: me.user_id }) : null;
-  const nuxSeen = s.clientState.ui?.org_nux_seen === true;
-  // The intro is the first open now (S20): the guide's own auto open waits
-  // for a later visit, so a new person never meets two onboardings in a row.
-  useWatchEffect(() => {
-    if (guideOffered.current || introOffered.current || intro || !tree || preview || liveRoles > 0 || nuxSeen) return;
-    guideOffered.current = true;
-    setGuide({ step: 0 });
-  }, [tree, preview, liveRoles, nuxSeen, intro]);
   // The first step is the person's own node: bring it into view.
   useWatchEffect(() => {
     if (guide?.step === 0 && meNodeId) askFocus("node", meNodeId);
   }, [guide?.step, meNodeId, askFocus]);
-  const closeGuide = useCallback(() => {
-    setGuide(null);
-    if (!preview && !nuxSeen) useInboxStore.getState().updateClientUI({ org_nux_seen: true });
-  }, [preview, nuxSeen]);
+  const closeGuide = useCallback(() => setGuide(null), []);
   // With a proposal open, the last step points at it (the remaining count is
   // read where staffingCount is, below; the steps only need the two facts).
-  const guideProposal = proposal?.status === "open" ? { short_id: proposal.short_id, remaining: asksProgress(proposalAsks(proposal)).remaining } : null;
+  const guideProposal = proposal?.status === "open" ? { remaining: asksProgress(proposalAsks(proposal)).remaining } : null;
   // The role step points at a real card, so it needs a live role's node id
   // rather than the old "are there any roles" boolean.
   const guideRoleNodeId = tree ? (tree.roles.find((r) => r.status !== "retired")?._id ?? null) : null;
-  const guideSteps = useMemo(() => orgGuideSteps({ meNodeId, roleNodeId: guideRoleNodeId ? roleNodeId(guideRoleNodeId) : null, openProposal: guideProposal }), [meNodeId, guideRoleNodeId, guideProposal?.short_id, guideProposal?.remaining]); // eslint-disable-line react-hooks/exhaustive-deps
+  const guideSteps = useMemo(() => orgGuideSteps({ meNodeId, roleNodeId: guideRoleNodeId ? roleNodeId(guideRoleNodeId) : null, openProposal: guideProposal }), [meNodeId, guideRoleNodeId, guideProposal?.remaining]); // eslint-disable-line react-hooks/exhaustive-deps
   /** Which cards may be picked up at all: no drag that would only snap back. */
   const canDrag = useCallback((n: OrgLayoutNode) => n.kind === "session" ? canMoveSession(n.session) : n.kind === "role" ? canEditRole(n.role._id) : false, [canMoveSession, canEditRole]);
 
@@ -505,15 +503,6 @@ export function OrgPageInner() {
   }, [currentParentOf, tree, commitMove]);
 
   const updateRole = useCallback((roleId: string, fields: OrgUpdateRoleInput, opts?: { leave_sessions?: boolean }) => run("updateOrgRole", roleId, fields, opts), [run]);
-  /** The panel's retire (its confirm asks keep or retire for the chief of
-   *  staff, S16); the choice rides the store action to orgRoles.retire. */
-  const retireRole = useCallback((roleId: string, standingSession?: UnseatChoice) => {
-    const name = tree?.roles.find((r) => r._id === roleId)?.name ?? "the role";
-    run("retireOrgRole", roleId, standingSession);
-    toast.success(retireToastText(name, standingSession));
-    setSelectedId(null);
-  }, [run, tree]);
-
   // -------- staffing actions
   /** The preview decides on its local copy; live, the store action flips the
    *  row and rides dispatch to orgProposals.decide. */
@@ -626,7 +615,7 @@ export function OrgPageInner() {
     if (wsAnchor?.conversation_id) {
       const convId = String(wsAnchor.conversation_id);
       const count = (useInboxStore.getState().sessions as Record<string, { message_count?: number } | undefined>)?.[convId]?.message_count;
-      setSeatDialog({ name: wsAnchor.name, shortId: wsAnchor.short_id, convId, messageCount: count });
+      setSeatDialog({ name: wsAnchor.name, convId, messageCount: count });
     } else {
       doStaffChief();
     }
@@ -833,12 +822,11 @@ export function OrgPageInner() {
     onOpenSession: openSession,
     onMove: setMovePicker,
     onUpdateRole: updateRole,
-    onRetireRole: retireRole,
     onSelectNode: setSelectedId,
     mode: panelMode,
     onMode: setPanelMode,
     staffing: phoneProposal ?? staffingPane,
-    history: preview ? <OrgHistoryPreview /> : <OrgHistory />,
+    history: <>{preview ? <OrgHistoryPreview /> : <OrgHistory />}{resetNode}</>,
     staffingLead: threadLeads && !phone ? threadNode : undefined,
     staffingLeadWidth: leadW,
     staffingFill: !!phoneProposal,
@@ -876,7 +864,7 @@ export function OrgPageInner() {
             </span>
           )}
           {tree && (
-            <button type="button" onClick={() => setGlossary("words")} className="ml-auto shrink-0 underline-offset-2 hover:underline" style={{ color: "var(--sol-text-muted)" }} title="The eight words this page uses, each in one sentence" data-org-glossary-open>Words</button>
+            <button type="button" onClick={() => setGlossary("words")} className="ml-auto shrink-0 underline-offset-2 hover:underline" style={{ color: "var(--sol-text-muted)" }} title="The words this page uses, each in one sentence" data-org-glossary-open>Words</button>
           )}
         </div>
       ) : (
@@ -891,10 +879,10 @@ export function OrgPageInner() {
             <span className="hidden sm:inline truncate">Who reports to whom: people, the roles they hired, every session. Drag a card to move it.</span>
             <span className="sm:hidden truncate">Who reports to whom. Drag a card to move it.</span>
             {tree && (
-              <button type="button" onClick={() => setIntro("hand")} className="shrink-0 underline-offset-2 hover:underline" style={{ color: "var(--sol-violet)" }} data-org-guide="reopen">How this page works</button>
+              <button type="button" onClick={() => setGuide({ step: 0 })} className="shrink-0 underline-offset-2 hover:underline" style={{ color: "var(--sol-violet)" }} data-org-guide="reopen">How this page works</button>
             )}
             {tree && (
-              <button type="button" onClick={() => setGlossary("words")} className="shrink-0 underline-offset-2 hover:underline" style={{ color: "var(--sol-violet)" }} title="The eight words this page uses, each in one sentence" data-org-glossary-open>Words</button>
+              <button type="button" onClick={() => setGlossary("words")} className="shrink-0 underline-offset-2 hover:underline" style={{ color: "var(--sol-violet)" }} title="The words this page uses, each in one sentence" data-org-glossary-open>Words</button>
             )}
           </p>
         </div>
@@ -949,7 +937,7 @@ export function OrgPageInner() {
             <MapIcon className="w-4 h-4" />
           </button>
           {tree && isAdmin !== false && (
-            <button type="button" onClick={() => setAddRoleOpen(true)} title="A seat that sessions and other roles report to, with a scope of projects and plans" className="h-[34px] inline-flex items-center gap-1.5 pl-3 pr-3.5 rounded-lg text-[12.5px] font-semibold transition-colors hover:brightness-110" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }} data-org-guide="hire">
+            <button type="button" onClick={() => setAddRoleOpen(true)} title="A role that sessions and other roles report to, with an area of projects and plans to look after" className="h-[34px] inline-flex items-center gap-1.5 pl-3 pr-3.5 rounded-lg text-[12.5px] font-semibold transition-colors hover:brightness-110" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }} data-org-guide="hire">
               <Plus className="w-3.5 h-3.5" /> Add a role
             </button>
           )}
@@ -1007,8 +995,8 @@ export function OrgPageInner() {
               {readState.kind === "missing" ? (
                 <div className="text-center max-w-xs px-6">
                   <Network className="w-8 h-8 mx-auto mb-3" style={{ color: "var(--sol-text-dim)" }} />
-                  <div className="text-sm font-medium">The org backend is not deployed yet</div>
-                  <p className="mt-1 text-[12.5px]" style={{ color: "var(--sol-text-muted)" }}>This page will fill in on its own once it is.</p>
+                  <div className="text-sm font-medium">Nothing to show yet</div>
+                  <p className="mt-1 text-[12.5px]" style={{ color: "var(--sol-text-muted)" }}>The chart appears here on its own when it is ready.</p>
                 </div>
               ) : readState.kind === "error" ? (
                 // A read that failed is said as one, with the server's own
@@ -1097,7 +1085,6 @@ export function OrgPageInner() {
           onClose={() => setSeatDialog(null)}
           teamId={tree?.workspace.kind === "team" ? tree.workspace.id : undefined}
           agentName={seatDialog.name}
-          threadShortId={seatDialog.shortId}
           messageCount={seatDialog.messageCount}
           onConfirm={(seat: ChiefSeatChoice) => doStaffChief(seat)}
         />
@@ -1144,7 +1131,7 @@ export function OrgPageInner() {
 
       {/* context menu */}
       <ContextMenu state={menu}>
-        {(n) => <OrgNodeMenu node={n} tree={tree!} onToggleCollapse={toggleCollapse} onOpenSession={openSession} onMove={(s) => setMovePicker(s)} onSelect={setSelectedId} onRetire={retireRole} canEditRole={canEditRole} canMoveSession={canMoveSession} targets={moveTargets} onPick={pickTarget} currentParentOf={currentParentOf} />}
+        {(n) => <OrgNodeMenu node={n} tree={tree!} onToggleCollapse={toggleCollapse} onOpenSession={openSession} onMove={(s) => setMovePicker(s)} onSelect={setSelectedId} onOpenRole={(shortId) => router.push(`/org/${shortId}`)} canEditRole={canEditRole} canMoveSession={canMoveSession} targets={moveTargets} onPick={pickTarget} currentParentOf={currentParentOf} />}
       </ContextMenu>
     </div>
   );
@@ -1240,9 +1227,9 @@ function MovePicker({ subject, current, targets, onPick, onClose }: { subject: M
 
 // ---------------------------------------------------------------- context menu
 
-function OrgNodeMenu({ node, tree, onToggleCollapse, onOpenSession, onMove, onSelect, onRetire, canEditRole, canMoveSession, targets, onPick, currentParentOf }: {
+function OrgNodeMenu({ node, tree, onToggleCollapse, onOpenSession, onMove, onSelect, onOpenRole, canEditRole, canMoveSession, targets, onPick, currentParentOf }: {
   node: OrgLayoutNode; tree: OrgTree;
-  onToggleCollapse: (id: string) => void; onOpenSession: (id: string) => void; onMove: (s: MoveSubject) => void; onSelect: (id: string) => void; onRetire: (id: string) => void;
+  onToggleCollapse: (id: string) => void; onOpenSession: (id: string) => void; onMove: (s: MoveSubject) => void; onSelect: (id: string) => void; /** A role's page, where it is paused and retired. */ onOpenRole: (shortId: string) => void;
   canEditRole: (id: string) => boolean; canMoveSession: (s: OrgSession) => boolean;
   targets: MoveTarget[]; onPick: (s: MoveSubject, t: OrgParentRef, title: string) => void; currentParentOf: (s: MoveSubject) => OrgParentRef | null;
 }) {
@@ -1297,14 +1284,13 @@ function OrgNodeMenu({ node, tree, onToggleCollapse, onOpenSession, onMove, onSe
     return (
       <>
         <CtxHeader title={node.role.name} id={`@${node.role.handle}`} />
-        <CtxItem icon={Pencil} onSelect={() => onSelect(node.id)}>Edit scope</CtxItem>
+        <CtxItem icon={ExternalLink} onSelect={() => onOpenRole(node.role.short_id)}>Open its page</CtxItem>
+        {can && <CtxItem icon={Pencil} onSelect={() => onSelect(node.id)}>Change its area</CtxItem>}
         <CtxItem icon={node.collapsed ? ChevronRight : ChevronDown} onSelect={() => onToggleCollapse(node.id)}>{node.collapsed ? "Expand" : "Collapse"}</CtxItem>
         {can && (
           <>
             <CtxSeparator />
             {moveSub(subject)}
-            <CtxSeparator />
-            <CtxItem icon={Trash2} danger onSelect={() => onSelect(node.id)}>Retire…</CtxItem>
           </>
         )}
       </>
