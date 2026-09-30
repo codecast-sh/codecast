@@ -598,7 +598,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
   // composer says an ask is waiting (and where it sits in the queue); the
   // question itself is the pill's tooltip and one click away. The thread is
   // the main event, so the fold spends one thin row and nothing more.
-  const foldTitle = [question || "Waiting on you", defaultLabel ? `proceeding with ${defaultLabel}` : null].filter(Boolean).join(" — ");
+  const foldTitle = [askingRole ? [`@${askingRole.handle} asks`, question].filter(Boolean).join(": ") : question || "Waiting on you", defaultLabel ? `proceeding with ${defaultLabel}` : null].filter(Boolean).join(" — ");
   return (
     <div
       ref={rootRef}

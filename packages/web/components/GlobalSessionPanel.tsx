@@ -32,7 +32,6 @@ import { sessionStartupState } from "../lib/sessionLifecycle";
 import { compressImage } from "../lib/compressImage";
 import { useConversationMessages } from "../hooks/useConversationMessages";
 import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, placeInboxRows, placementDecisionsSig, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, freshReviveRequestIds, isSessionHidden, resolveSessionAuthor, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipProjectFilters, passesFilterTerms, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, resolveFavorite, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
-import { useTeamShareActions } from "../hooks/useTeamShareActions";
 import { sessionsWakeSig, resolveShowOld, showsBlockedBadge, sectionHeaderCount, classifySession, inboxNestParentOf } from "../store/inboxStore";
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
 import { makeCollectionSig } from "../store/wakeSig";
@@ -76,10 +75,9 @@ import { isUnderRole } from "@codecast/shared/contracts";
 import type { SessionRoleSnapshot } from "../store/inboxStore";
 import { AuthErrorBadge } from "./AuthErrorBadge";
 import { anchorIdentitySig, anchorIdentityFromSig } from "../hooks/useSyncAnchors";
-import { SharePopover } from "./SharePopover";
+import { ConversationSharePopover } from "./ConversationSharePopover";
 import { PrStatusChip } from "./PrStatusChip";
 import { BrowserPaneOfferGlyph } from "./browser/BrowserPaneOfferChip";
-import { shareOrigin } from "../lib/utils";
 import { PlanContextPanel } from "./PlanContextPanel";
 import { WorkflowContextPanel } from "./WorkflowContextPanel";
 import { toast } from "sonner";
@@ -144,8 +142,6 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
   } = useConversationMessages(sessionId, targetMessageId);
 
   const convCommand = useInboxStore((s) => s.convCommand);
-  const { setPrivate, shareWithTeam } = useTeamShareActions(sessionId);
-  const generateShareLink = useMutation(api.conversations.generateShareLink);
   const [resumeState, setResumeState] = useState<"idle" | "resuming" | "sent" | "reconstituting" | "failed">("idle");
   const forceRestartAttemptedRef = useRef(false);
   const reconstitutionAttemptedRef = useRef(false);
@@ -223,32 +219,10 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
   }
 
   const convId = conversation._id as Id<"conversations">;
-  // The public link must PRESENT the token (?share=) — a bare conversation id
-  // grants nothing to anonymous viewers or link unfurlers (issue #27).
-  const shareUrl = conversation.share_token
-    ? `${shareOrigin()}/conversation/${convId}?share=${encodeURIComponent(conversation.share_token)}`
-    : null;
   // Owner-only: a team viewer's payload carries share_token, and rendering the
   // popover for them would hand out a working world-readable link one click
   // from a session they don't own (mirrors QueuePageClient's gate).
-  const isOwnSession = (conversation as any).is_own !== false;
-  const shareControls = (
-    <SharePopover
-      canManage={isOwnSession}
-      isPrivate={conversation.is_private !== false}
-      teamVisibility={(conversation as any).team_visibility || (conversation as any).effective_team_visibility}
-      hasShareToken={!!conversation.share_token}
-      hasTeam={!!(conversation as any).team_id}
-      teamId={(conversation as any).team_id ?? null}
-      onSetPrivate={setPrivate}
-      onSetTeamVisibility={shareWithTeam}
-      onGenerateShareLink={async () => { const token = await generateShareLink({ conversation_id: convId }); return `${shareOrigin()}/conversation/${convId}?share=${encodeURIComponent(token)}`; }}
-      shareUrl={shareUrl}
-      pageUrl={`${shareOrigin()}/conversation/${convId}`}
-      forwardLabel="session"
-      sharedVia={(conversation as any).auto_shared ? conversation.git_root || conversation.project_path : null}
-    />
-  );
+  const shareControls = <ConversationSharePopover conversation={conversation} canManage={(conversation as any).is_own !== false} />;
 
   const activePlanId = (conversation as any)?.active_plan_id;
   const workflowRunId = (conversation as any)?.workflow_run_id;
@@ -2345,6 +2319,7 @@ export const SessionCard = memo(function SessionCard({
       <div
         data-session-id={session._id}
         data-active={isActive ? "true" : undefined}
+        data-selected={isSelected ? "true" : undefined}
         draggable
         onDragStart={handleCardDragStart}
         onDragEnd={handleCardDragEnd}
@@ -2368,7 +2343,7 @@ export const SessionCard = memo(function SessionCard({
         }`}
       >
         {forkColorKey && <ForkCorner colorKey={forkColorKey} />}
-      {isSelected && <span className="pointer-events-none absolute right-1.5 top-1.5 z-10 text-sol-cyan"><CheckSquare className="h-3 w-3" /></span>}
+      {isSelected && <span data-sv-check className="pointer-events-none absolute right-1.5 top-1.5 z-10 text-sol-cyan"><CheckSquare className="h-3 w-3" /></span>}
         <div
           role="button"
           tabIndex={0}
@@ -2500,6 +2475,7 @@ export const SessionCard = memo(function SessionCard({
     <div
       data-session-id={session._id}
       data-active={isActive ? "true" : undefined}
+      data-selected={isSelected ? "true" : undefined}
       data-sv-viewed={viewers.length > 0 ? viewers.length : undefined}
       draggable
       onDragStart={handleCardDragStart}
@@ -2537,7 +2513,7 @@ export const SessionCard = memo(function SessionCard({
       }`}
     >
       {forkColorKey && <ForkCorner colorKey={forkColorKey} />}
-      {isSelected && <span className="pointer-events-none absolute right-1.5 top-1.5 z-10 text-sol-cyan"><CheckSquare className="h-3 w-3" /></span>}
+      {isSelected && <span data-sv-check className="pointer-events-none absolute right-1.5 top-1.5 z-10 text-sol-cyan"><CheckSquare className="h-3 w-3" /></span>}
       <div
         role="button"
         tabIndex={0}

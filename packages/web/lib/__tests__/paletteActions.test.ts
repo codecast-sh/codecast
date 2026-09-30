@@ -16,6 +16,16 @@ describe("command menu action coverage", () => {
     expect(keys("session", { ...session, user_id: undefined, authorName: "Teammate" }, "me")).toEqual(["open", "newtab", "copy", "copylink", "forward"]);
     expect(keys("session", { ...session, user_id: undefined, is_own: false }, "me")).toEqual(["open", "newtab", "copy", "copylink", "forward"]);
   });
+  test("a cloud agent session keeps its agent and its provider's model: no switch, no model picker, fork and hand off stay", () => {
+    for (const cloud of [{ agent_type: "codex", session_id: "task_e_6abc48f2" }, { agent_type: "cursor", session_id: "bc-123" }]) {
+      const actions = keys("session", { ...session, ...cloud });
+      expect(actions).not.toContain("agent_switch");
+      expect(actions).not.toContain("model");
+      expect(actions).toEqual(expect.arrayContaining(["agent_fork", "agent_handoff"]));
+    }
+    // A local Codex session still has both.
+    expect(keys("session", { ...session, agent_type: "codex", session_id: "019a-local" })).toEqual(expect.arrayContaining(["agent_switch", "model"]));
+  });
   test("assigned and routed sessions retain their owner controls", () => {
     expect(keys("session", { ...session, user_id: "other", owned_by_me: true })).toContain("agent_switch");
     expect(keys("session", { ...session, user_id: "other", owner_user_id: "me" })).toContain("agent_fork");
@@ -169,6 +179,16 @@ describe("palette item ranking", () => {
     expect(compose).toBeGreaterThan(0);
     expect(compose).toBeLessThan(search);
     expect(compose).toBeLessThan(entity);
+  });
+
+  test("filter values lead every match; filter names trail matches but beat compose", () => {
+    const value = paletteItemScore("__filter__v file:src/a.ts", "file:");
+    const name = paletteItemScore("__filter__o author:", "au");
+    const search = paletteItemScore("__search__ Auth rewrite|||c1", "au");
+    const compose = paletteItemScore("__compose__", "au");
+    expect(value).toBeGreaterThan(search);
+    expect(name).toBeLessThan(search);
+    expect(name).toBeGreaterThan(compose);
   });
 
   test("keyword rows still hide when they do not match", () => {

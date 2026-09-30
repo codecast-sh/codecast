@@ -13,6 +13,7 @@ import {
   useForkTree,
   branchDisplayCount,
   branchDisplayLabel,
+  attemptsHeading,
   branchUnread,
   type FlatForkNode,
   type BranchLive,
@@ -449,7 +450,7 @@ function ForkTreeContent({
   }, [mode, visibleBranches, branchIdx, visibleMsgs, selectedBranch, selectedMsg, drillId, exitFilter, switchToBranch, forkFromMsg]);
 
   const headerLabel = mode === "branches"
-    ? `${flat.length} branch${flat.length === 1 ? "" : "es"}`
+    ? attemptsHeading(flat.slice(1)) ?? `${flat.length} branch${flat.length === 1 ? "" : "es"}`
     : (drillBranch ? branchDisplayLabel(drillBranch) : "messages");
 
   return (

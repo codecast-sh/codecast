@@ -1584,7 +1584,9 @@ pre[class*="language-"] {
    the bg-sol-blue/10 tint alone. */
 .simple-view [data-sv-feed] [id^="msg-"][class*="bg-sol-blue/10"],
 .simple-view [data-sv-sticky] {
-  background: color-mix(in srgb, var(--sol-blue) 12%, var(--sol-bg)) !important;
+  /* Colour only: the shorthand would reset background-image and wipe the
+     pending hatch (.pending-stripes). */
+  background-color: color-mix(in srgb, var(--sol-blue) 12%, var(--sol-bg)) !important;
   border: 1px solid color-mix(in srgb, var(--sol-text) 14%, transparent) !important;
   border-radius: 9px;
   box-shadow: none;
@@ -1922,16 +1924,6 @@ pre[class*="language-"] {
     display: none;
   }
 }
-/* A name longer than the whole title column ellipsizes rather than paint over
-   the next one. It never shrinks (any shrink, even a subpixel, shows the
-   ellipsis), so the title text gives way first; the cap leaves the colon room. */
-.inbox-compact [data-sv-rail] [data-sv-title] > .flex-shrink-0:first-child,
-.inbox-compact [data-sv-rail] [data-sv-title] span.font-medium {
-  max-width: calc(100% - 1.5rem);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 /* The branch chip is the one wide thing in the status cluster. */
 .inbox-compact [data-sv-rail] [data-sv-status] > .font-mono {
   display: none;
@@ -1974,6 +1966,21 @@ pre[class*="language-"] {
 .inbox-compact [data-sv-rail] [data-session-id] [data-sv-state]:not([data-sv-body] > *),
 .inbox-compact [data-sv-rail] [data-session-id] [data-sv-prompt]:not([data-sv-body] > *) {
   display: none;
+}
+/* A ticked row's tick centers on the line and the line makes room for it,
+   as it does for the pin. */
+.inbox-compact [data-sv-rail] [data-session-id]:has(> [data-sv-check]) [data-sv-body] {
+  padding-right: 18px;
+}
+.inbox-compact [data-sv-rail] [data-session-id] > [data-sv-check] {
+  top: 50%;
+  transform: translateY(-50%);
+}
+.inbox-compact [data-sv-rail] [data-session-id]:has(> [data-sv-pin]):has(> [data-sv-check]) [data-sv-body] {
+  padding-right: 40px;
+}
+.inbox-compact [data-sv-rail] [data-session-id]:has(> [data-sv-pin]) > [data-sv-check] {
+  right: 26px;
 }
 
 /* ---- Left sidebar: smaller sections, counts pushed right, more air ---- */
@@ -4849,6 +4856,22 @@ pre[class*="language-"] {
   box-shadow: none;
   --tw-ring-color: transparent;
 }
+/* A row in a multi-selection. The compact list and Minimal both force every
+   row's background (and Minimal clears it on status-bordered rows), which
+   would leave only the tick, so each ticked row sets the ground itself, over
+   hover, status and the open row alike. It sits after those rules so it wins
+   at equal weight. */
+:root :is(.inbox-compact, .minimal-style) [data-sv-rail] [data-session-id][data-selected="true"],
+:root :is(.inbox-compact, .minimal-style) [data-sv-rail] [data-session-id][data-selected="true"]:hover {
+  --sv-card-bg: color-mix(in srgb, var(--sol-cyan) 18%, var(--sol-bg-alt));
+  background: var(--sv-card-bg) !important;
+}
+/* The open row inside a selection stays findable: a deeper wash and a bar on
+   its leading edge. */
+:root :is(.inbox-compact, .minimal-style) [data-sv-rail] [data-session-id][data-selected="true"][data-active="true"] {
+  --sv-card-bg: color-mix(in srgb, var(--sol-cyan) 32%, var(--sol-bg-alt));
+  box-shadow: inset 3px 0 0 var(--sol-cyan) !important;
+}
 /* Rows carry no frame, so a hairline between neighbours keeps a long group
    scannable. It sits on the wrapper (below the row and any schedule rows
    attached to it), inset to the row's text edge, and the last row of a group
@@ -4888,7 +4911,7 @@ pre[class*="language-"] {
   line-height: 20px;
   letter-spacing: -0.004em;
 }
-.minimal-style [data-sv-rail] [data-sv-title] > span.flex-shrink-0.font-medium {
+.minimal-style [data-sv-rail] [data-sv-title] [data-sv-name] {
   font-weight: 500;
   color: var(--sol-text);
 }
@@ -5954,6 +5977,26 @@ pre[class*="language-"] {
 }
 .object-reveal__strip:hover .object-reveal__hint,
 .object-reveal__strip:focus-visible .object-reveal__hint { opacity: 1; }
+/* The same strip, pinned to the top of the scrolling surface while the
+   band's own top is scrolled out of view, so close is always at the top.
+   Portalled beside the scroller (components/ObjectReveal usePinnedClose). */
+.object-reveal__pin {
+  --reveal-accent: var(--sol-cyan);
+  position: absolute;
+  z-index: 25;
+  box-sizing: border-box;
+  padding: 0 12px;
+  pointer-events: none;
+}
+.object-reveal__pin .object-reveal__strip {
+  pointer-events: auto;
+  border: 1px solid color-mix(in srgb, var(--reveal-accent) 28%, var(--sol-border));
+  border-top: 0;
+  border-left: 3px solid var(--reveal-accent);
+  border-radius: 0 0 10px 10px;
+  box-shadow: 0 8px 18px -12px color-mix(in srgb, var(--sol-text) 45%, transparent);
+}
+.object-reveal__hint--on { opacity: 1; }
 .object-reveal__body {
   position: relative;
   flex: 1;

@@ -65,11 +65,11 @@ describe("routeElsewhere", () => {
     expect(desktopAppWindow()).toBe("chat");
     expect(hasAppWindow("chat")).toBe(true);
     expect(routeElsewhere("/chat/ch2")).toBe(false);
-    expect(routeElsewhere("/threads")).toBe(false);
+    expect(routeElsewhere("/threads")).toBe(true);
     expect(routeElsewhere("/conversation/c1")).toBe(true);
     expect(routeElsewhere("/inbox?s=c1")).toBe(true);
     expect(routeElsewhere("/tasks/ct-1")).toBe(true);
-    expect(sent).toEqual(["/conversation/c1", "/inbox?s=c1", "/tasks/ct-1"]);
+    expect(sent).toEqual(["/threads", "/conversation/c1", "/inbox?s=c1", "/tasks/ct-1"]);
   });
 
   it("never hands off a route outside the tab shell: settings opens as a modal where you are", () => {

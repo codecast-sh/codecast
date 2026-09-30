@@ -78,7 +78,8 @@ export function useToolResultMaps({ conversation, codeRepository }: {
   // Where relative file mentions in this conversation resolve (FilePathLink):
   // the session's working directory, and the home it implies for `~/…`.
   const filePathBase = conversation?.project_path || conversation?.git_root || undefined;
-  const filePathCtx = useMemo(() => ({ base: filePathBase, home: inferHomeDir([filePathBase]), repository: codeRepository }), [filePathBase, codeRepository]);
+  const gitRoot = conversation?.git_root || null;
+  const filePathCtx = useMemo(() => ({ base: filePathBase, home: inferHomeDir([filePathBase]), repository: codeRepository, gitRoot }), [filePathBase, codeRepository, gitRoot]);
 
   return { globalToolResultMap, globalImageMap, globalFileMap, filePathBase, filePathCtx };
 }
