@@ -9,6 +9,7 @@ import { storeHmrPlugin } from "./plugins/storeHmr";
 import { hookRefreshPlugin } from "./plugins/hookRefresh";
 import { handoffBootPlugin } from "./plugins/handoffBoot";
 import { depsCacheGuardPlugin } from "./plugins/depsCacheGuard";
+import { castPlayerScriptPlugin } from "./plugins/castPlayerScript";
 import { APP_SHELL_GLOB_IGNORES, APP_SHELL_GLOB_PATTERNS } from "./vite.pwa";
 
 /**
@@ -43,6 +44,8 @@ export default defineConfig(({ mode }) => ({
     // (vendor-platform.sh, manual cache purges); without this every dep not
     // yet served answers 504 until someone restarts by hand.
     depsCacheGuardPlugin(),
+    // /cast-player.js: the published-page video player, same-origin for the landing page film.
+    castPlayerScriptPlugin(),
     // Inlines the browser → desktop hand-off gate into <head> so a page bound
     // for the desktop app never boots, and re-injects the boot chunk's
     // modulepreload hints on a normal load.
