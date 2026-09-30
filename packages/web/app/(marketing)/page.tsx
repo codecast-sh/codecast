@@ -12,7 +12,8 @@ import { track } from "@/lib/analytics";
 import { useLocalAuth } from "@/lib/localAuth";
 import { useWatchEffect } from "@/hooks/useWatchEffect";
 import { useRouteMeta } from "./pageMeta";
-import { InboxHeroMock, TasksMock, DocsMock, AgentChatMock } from "./productMocks";
+import { TasksMock, DocsMock, AgentChatMock, PhoneFrame } from "./productMocks";
+import { HeroFlythrough } from "./HeroFlythrough";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
 import { AppBadges, AppleIcon } from "@/components/marketing/AppBadges";
 import { TourSection, WatchChapter } from "./TourFilm";
@@ -228,7 +229,7 @@ export default function LandingPage() {
         <div className="relative">
           <div className="absolute -inset-4 bg-gradient-to-r from-[#b58900]/20 via-[#cb4b16]/20 to-[#dc322f]/20 rounded-2xl blur-xl opacity-50"></div>
           <div className="relative">
-            <InboxHeroMock />
+            <HeroFlythrough />
           </div>
         </div>
       </section>
@@ -537,11 +538,7 @@ export default function LandingPage() {
           </div>
           <div className="relative">
             <div className="absolute -inset-4 bg-gradient-to-r from-[#b58900]/10 via-[#cb4b16]/10 to-[#dc322f]/10 rounded-3xl blur-2xl"></div>
-            <div className="relative bg-[#002b36] rounded-[2.5rem] p-3 shadow-2xl max-w-[280px] mx-auto">
-              <div className="bg-[#002b36] rounded-[2rem] overflow-hidden">
-                <div className="h-6 bg-[#002b36] flex items-center justify-center">
-                  <div className="w-20 h-4 bg-[#073642] rounded-full"></div>
-                </div>
+            <PhoneFrame className="max-w-[280px] mx-auto">
                 <div className="p-4 space-y-3 font-mono text-xs">
                   <div className="flex items-center gap-2 text-[#586e75]">
                     <span className="text-[#b58900]">●</span>
@@ -565,8 +562,7 @@ export default function LandingPage() {
                     Send a message...
                   </div>
                 </div>
-              </div>
-            </div>
+            </PhoneFrame>
           </div>
         </div>
       </section>
