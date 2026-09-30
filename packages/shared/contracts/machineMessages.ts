@@ -15,12 +15,32 @@ export function stripPastedContent(text: string): string {
     .replace(/(?:\r?\n)?<\/pasted_content(?=[\s>]|$)[^>]*(?:>|$)/g, "");
 }
 
+// An `@[Title id]` mention in a sent message carries the entity's context
+// (a task's description, a plan's body, a doc's content) for the agent. The
+// composer appends it after the mention inside this tag, so every display
+// surface can show the message as typed while the agent still reads it.
+export function wrapMentionContext(markdown: string): string {
+  return `\n\n<mention-context>\n${markdown.trim().replace(/^---\n|\n---$/g, "").trim()}\n</mention-context>\n`;
+}
+
+// Messages sent before the tag existed carry the same block bare: a `---`
+// rule, a `### Doc:`-style heading (or a fenced task/plan block), and a
+// closing `> \`cast …\`` pointer followed by another rule.
+const LEGACY_MENTION_CONTEXT_RE =
+  /\n\n---\n(?=### (?:Task|Plan|Doc|Session|Trigger|Label): |[\s\S]{0,800}?<untrusted-[0-9a-f]+ source=)[\s\S]*?\n> `cast (?:task context|plan show|read|trigger log|doc read|sessions)[^\n]*\n---(?=\n|$)\n?/g;
+
+export function stripMentionContext(text: string): string {
+  return text
+    .replace(/\n*<mention-context>[\s\S]*?(?:<\/mention-context>\n?|$)/g, "")
+    .replace(LEGACY_MENTION_CONTEXT_RE, "");
+}
+
 // Normalize the wrappers/control chars the daemon may prepend before a wire
 // tag. A session message is injected via tmux, so the input-clearing
 // keystrokes (Ctrl-A/Ctrl-K) occasionally leak in as leading control chars,
 // and system/task reminders can be appended by the harness.
 export function stripInjectionNoise(text: string): string {
-  return stripPastedContent(text)
+  return stripMentionContext(stripPastedContent(text))
     .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")
     .replace(/<task-reminder>[\s\S]*?<\/task-reminder>/g, "")
     .replace(/^[\x00-\x1f\s]+/, "")

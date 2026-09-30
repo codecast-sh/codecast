@@ -1,6 +1,6 @@
 # 005 — Replace transition-all on the message list and the composer
 
-- **Status**: TODO
+- **Status**: DONE
 - **Commit**: 3efe31bb3
 - **Severity**: MEDIUM
 - **Category**: Performance

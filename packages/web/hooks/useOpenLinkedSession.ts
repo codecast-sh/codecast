@@ -1,10 +1,11 @@
-import { useCallback } from "react";
+import { useCallback, useContext } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useLocation } from "react-router";
 import { useInboxStore, sessionRowFromSummary } from "../store/inboxStore";
 import { isInboxSessionView, resolveSessionSelectKind, type SessionSelectKind } from "../lib/inboxRouting";
 import { divertSessionOpen } from "../lib/openIntent";
 import { openBeside, sessionPanePath } from "../lib/stage";
+import { EntityFixtureContext } from "../lib/entityDisplay";
 
 // Mirrors DashboardLayout's `isMobile` threshold (window.innerWidth < 768).
 // Below it the desktop stage/rail layout is gone; route to the full page.
@@ -58,7 +59,11 @@ export function useOpenLinkedSession() {
   // on Settings, so the settings check must come from the router (see
   // resolveSessionSelectKind's doc).
   const routerLocation = useLocation();
+  // Under fixture entities (the homepage hero) a linked session is not a real
+  // row: opening it would seed the store with a fixture and navigate away.
+  const fixtures = useContext(EntityFixtureContext);
   return useCallback((conv: any) => {
+    if (fixtures) return;
     const sid = conv._id;
     const store = useInboxStore.getState();
     if (!store.sessions[sid]) {
@@ -82,5 +87,5 @@ export function useOpenLinkedSession() {
     } else {
       store.navigateToSession(sid);
     }
-  }, [router, pathname, routerLocation.pathname]);
+  }, [router, pathname, routerLocation.pathname, fixtures]);
 }

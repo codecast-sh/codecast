@@ -47,6 +47,8 @@ type DeviceAccounts = {
   // The profile sessions launch on after a token switch (its saved login is
   // dead, its minted token carries the fleet); absent = the keychain login.
   launch_profile?: string;
+  // Sessions run on the fleet store, which carries launch_profile.
+  fleet_store?: boolean;
   label: string;
   is_remote: boolean;
   /** Absent on servers that predate the field — those only return online devices. */
@@ -326,8 +328,9 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
           // The lit row is the account sessions run on: the launch profile
           // after a token switch, else the keychain login.
           const isActive = profileIsFleetAccount(p, fleet);
-          const viaToken = isActive && !!device.launch_profile;
+          const viaToken = isActive && !!device.launch_profile && !device.fleet_store;
           const keychainLoginAside = !!device.launch_profile && !isActive && profileIsCurrentLogin(p, device.active_email);
+          const onFleetStore = isActive && !!device.fleet_store;
           const plan = planLabel(p);
           return (
             <div
@@ -351,10 +354,18 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
                     sessions run here · token
                   </span>
                 )}
+                {onFleetStore && (
+                  <span
+                    className="shrink-0 rounded bg-sol-green/10 px-1.5 py-0.5 text-[10px] text-sol-green"
+                    title="Every session codecast runs reads this account from one shared store. A switch moves running sessions within about 30 seconds, without restarting them."
+                  >
+                    sessions run here
+                  </span>
+                )}
                 {keychainLoginAside && (
                   <span
                     className="shrink-0 rounded bg-sol-bg-alt px-1.5 py-0.5 text-[10px] text-sol-text-dim"
-                    title="This is the machine's keychain login: what a `claude` typed in a terminal runs on. Codecast sessions run on the token account above."
+                    title="This is the machine's keychain login: what a `claude` typed in a terminal runs on. Codecast sessions run on the account marked above."
                   >
                     machine login
                   </span>

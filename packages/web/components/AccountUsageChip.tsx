@@ -329,12 +329,12 @@ export function AccountUsageChip() {
                 <span
                   className="shrink-0 text-[10px] font-medium text-sol-green"
                   title={
-                    e.provider === "claude" && device.launch_profile === e.p.name
+                    e.provider === "claude" && device.launch_profile === e.p.name && !device.fleet_store
                       ? "Sessions run on this account's minted token; the machine's own login is another account"
                       : undefined
                   }
                 >
-                  {e.provider === "claude" && device.launch_profile === e.p.name ? "active · token" : "active"}
+                  {e.provider === "claude" && device.launch_profile === e.p.name && !device.fleet_store ? "active · token" : "active"}
                 </span>
               ) : e.provider === "claude" ? (
                 // Codex rows are display-only for now — switching the

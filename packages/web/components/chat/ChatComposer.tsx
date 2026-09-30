@@ -14,6 +14,7 @@ import { useTrackedStore } from "../../store/inboxStore";
 import { useChannelSlackLink } from "../../hooks/useChannelSlackLink";
 import { SlackConnectPrompt } from "./SlackConnectPrompt";
 import type { ChatAttachment } from "../../store/chatSlice";
+import { chatDraftKey } from "../../lib/chatDraftKey";
 import "./chat.css";
 
 // The chat composer.
@@ -32,19 +33,13 @@ import "./chat.css";
 // their promises (module-level, so a remount can't lose them) and dispatches
 // the moment they settle — the box itself already cleared.
 //
-// The draft key is the composer's identity: `chat:<channel>` for the channel and
-// `chat:<channel>:<root>` for a thread, so a half-written reply and a
-// half-written channel message never overwrite each other.
+// The draft key is the composer's identity (lib/chatDraftKey).
 //
 // Typing presence starts and ends here too. The reporter listens to the input
 // events that BUBBLE out of MessageInput's textarea — no prop threaded through
 // the shared component — and the matching indicator sits in the foot row, so
 // both halves of the feature live at the one point that knows the scope
 // (channel vs thread).
-
-export function chatDraftKey(channelId: string, threadRootId?: string): string {
-  return threadRootId ? `chat:${channelId}:${threadRootId}` : `chat:${channelId}`;
-}
 
 export const ChatComposer = memo(function ChatComposer({
   channelId,

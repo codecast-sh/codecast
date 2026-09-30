@@ -1,6 +1,6 @@
 # 002 — Stop the chunk hint jumping when it appears
 
-- **Status**: TODO
+- **Status**: DONE
 - **Commit**: 3efe31bb3
 - **Severity**: HIGH
 - **Category**: Physicality & origin (a transform conflict bug)

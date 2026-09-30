@@ -18,6 +18,7 @@ export type AccountChipDevice = {
   online?: boolean;
   active_email?: string;
   launch_profile?: string;
+  fleet_store?: boolean;
   profiles: AccountChipProfile[];
   codex_accounts?: {
     active_email?: string;
