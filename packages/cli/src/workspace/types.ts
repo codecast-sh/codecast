@@ -113,9 +113,23 @@ export interface HostSpec {
   run: string[];
 }
 
+/**
+ * [sync]: adjustments to what travels between a laptop and a cloud host
+ * (cloud/syncSide.ts). Everything travels by default, gitignored files too,
+ * except dependency and build folders, oversized files and process files.
+ */
+export interface SyncSpec {
+  /** Paths or globs that travel even where a default rule would leave them. */
+  always: string[];
+  /** Paths or globs that stay on their own machine. */
+  never: string[];
+}
+
 export interface WorkspaceManifest {
   /** [host]: what a cloud host needs installed and running for this repo. */
   host?: HostSpec;
+  /** [sync]: what travels between a laptop and a cloud host beyond the defaults. */
+  sync?: SyncSpec;
   setup: SetupSpec;
   /** Named ports keyed by short name (e.g., "web", "api", "db"). */
   ports: Record<string, PortSpec>;

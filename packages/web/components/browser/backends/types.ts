@@ -22,7 +22,7 @@ export type BrowserPaneState =
    *  told the site refuses to be embedded. */
   | { kind: "blocked"; reason: "insecure" | "refused" | "local-network" }
   /** The backend itself failed — a dead daemon, a missing bridge. */
-  | { kind: "error"; message: string };
+  | { kind: "error"; message: string; detail?: string };
 
 /** A verb a backend puts in the pane's address strip. The pane draws it as one
  *  of its own `.cc-panel__btn` icons, so a backend's actions are indistinguish-
@@ -34,6 +34,9 @@ export type PaneStripAction = {
   label: string;
   /** Lit: this verb is currently in effect (the stream's drive mode). */
   active?: boolean;
+  /** The verb also fixes the pane's error: the error card offers it first,
+   *  under this short label. */
+  card?: string;
   onClick: () => void;
 };
 

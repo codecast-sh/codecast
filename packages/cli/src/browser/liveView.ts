@@ -19,9 +19,10 @@ import * as path from "node:path";
 import { spawn } from "../proc.js";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { RemoteHost } from "../remote/session-move.js";
-import { HLS_PORT, NOVNC_PORT, RTSP_PORT, VNC_PORT } from "./provisionLinux.js";
+import { HLS_PORT, NOVNC_PORT, RTSP_PORT, SCREEN_DISPLAY } from "./hostScreen.js";
 import { SHOT_TEMP_KIND } from "./shotFile.js";
 import { agentTempPath } from "../tempFiles.js";
+import { hostScreenUrl } from "@codecast/shared/contracts";
 
 /**
  * Bring the machine-level VNC to local loopback and return the noVNC URL.
@@ -32,7 +33,7 @@ import { agentTempPath } from "../tempFiles.js";
  * idempotent, reuses a tunnel that already answers.
  */
 export async function ensureVncTunnel(host: RemoteHost): Promise<{ url: string; tunnelPid?: number }> {
-  const url = `http://127.0.0.1:${NOVNC_PORT}/vnc.html?autoconnect=1&resize=scale&path=`;
+  const url = hostScreenUrl(NOVNC_PORT);
   if (await portAnswers(NOVNC_PORT)) return { url };
   const tunnel = spawn(
     "ssh",
@@ -114,7 +115,7 @@ export async function ensureViewTunnel(host: RemoteHost): Promise<ViewUrls> {
  * ffmpeg (already there from provisioning) and copied back — no stream, no
  * tunnel, just a still of whatever the screen shows right now.
  */
-export function machineShot(host: RemoteHost, display = ":99"): string {
+export function machineShot(host: RemoteHost, display = SCREEN_DISPLAY): string {
   execFileSync(
     "ssh",
     ["-i", host.keyPath, "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=accept-new",

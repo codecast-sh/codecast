@@ -2,8 +2,40 @@ import { useRef, useMemo } from "react";
 import type { ChatWakePrompt } from "../components/sessionMessage";
 import { normalizeCastCategory, buildBrowserRowMap, sameBrowserRowMap, type BrowserRowInput, type BrowserRowState } from "../components/castCommand";
 import { parseCastCommand } from "../components/conversation/classify";
-import type { ToolResult, UserMessageKind } from "../components/conversation/types";
+import type { Message, ToolResult, UserMessageKind } from "../components/conversation/types";
 import type { ConversationData } from "../components/conversation/types";
+
+/**
+ * Every `cast browser` row in a transcript, carried forward (buildBrowserRowMap).
+ * A result can sit on a later message than its call; `results` indexes those,
+ * and without it the messages are indexed here.
+ */
+export function browserRowMapOf(messages: readonly Pick<Message, "tool_calls" | "tool_results">[], results?: Record<string, ToolResult>): Record<string, BrowserRowState> {
+  let byId = results;
+  if (!byId) {
+    byId = {};
+    for (const msg of messages) for (const tr of msg.tool_results ?? []) byId[tr.tool_use_id] = tr;
+  }
+  const rows: BrowserRowInput[] = [];
+  for (const msg of messages) {
+    for (const tc of msg.tool_calls ?? []) {
+      const cast = parseCastCommand(tc);
+      if (!cast || normalizeCastCategory(cast.category) !== "browser") continue;
+      const result = msg.tool_results?.find((tr) => tr.tool_use_id === tc.id) || byId[tc.id];
+      rows.push({ toolCallId: tc.id, subcommand: cast.subcommand, args: cast.args, output: result?.content || "" });
+    }
+  }
+  return buildBrowserRowMap(rows);
+}
+
+/** The page the browser was last on: what a watch pane offers to reopen when
+ *  the session's tab is gone. Rows are in transcript order, so the last entry
+ *  with a URL is the latest page. */
+export function lastBrowserPageOf(map: Record<string, BrowserRowState>): BrowserRowState | null {
+  let last: BrowserRowState | null = null;
+  for (const row of Object.values(map)) if (row.url) last = row;
+  return last;
+}
 
 export function useBrowserAndWakeRows({ conversation, globalToolResultMap, managedSession, userMsgKindMap }: {
   conversation: ConversationData | null | undefined;
@@ -13,27 +45,11 @@ export function useBrowserAndWakeRows({ conversation, globalToolResultMap, manag
 }) {
   const browserRowMapRef = useRef<Record<string, BrowserRowState>>({});
   const browserRowMap = useMemo(() => {
-    const rows: BrowserRowInput[] = [];
-    for (const msg of conversation?.messages ?? []) {
-      for (const tc of msg.tool_calls ?? []) {
-        const cast = parseCastCommand(tc);
-        if (!cast || normalizeCastCategory(cast.category) !== "browser") continue;
-        const result = msg.tool_results?.find((tr) => tr.tool_use_id === tc.id) || globalToolResultMap[tc.id];
-        rows.push({ toolCallId: tc.id, subcommand: cast.subcommand, args: cast.args, output: result?.content || "" });
-      }
-    }
-    const next = buildBrowserRowMap(rows);
+    const next = browserRowMapOf(conversation?.messages ?? [], globalToolResultMap);
     if (!sameBrowserRowMap(browserRowMapRef.current, next)) browserRowMapRef.current = next;
     return browserRowMapRef.current;
   }, [conversation?.messages, globalToolResultMap]);
-  // The page the browser was last on: what the watch pane offers to reopen
-  // when the session's tab is gone. Rows are in transcript order, so the
-  // last entry with a URL is the latest page.
-  const lastBrowserPage = useMemo(() => {
-    let last: BrowserRowState | null = null;
-    for (const row of Object.values(browserRowMap)) if (row.url) last = row;
-    return last;
-  }, [browserRowMap]);
+  const lastBrowserPage = useMemo(() => lastBrowserPageOf(browserRowMap), [browserRowMap]);
   // Which session the driven browser belongs to, for the reopen (the same
   // identity the watch stream's hello carries).
   const browserSession = useMemo(

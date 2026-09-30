@@ -22,6 +22,7 @@ import { enablePageDomains, isReachable, TabUnresponsive, type EnablePatience } 
 import { browserHome, clonePath, chromeUserDataRoot, type ChromeChannel } from "./profile.js";
 import { findChromeBinary, chromeBinaryProbes, isPidAlive, keychainArgs, ChromeNotFoundError } from "../workspace/chrome.js";
 import { acquireFileLock } from "../lockFile.js";
+import { linuxDisplayPlan } from "./hostScreen.js";
 import type { LivenessVerdict } from "@codecast/shared/contracts";
 
 export interface InstanceState {
@@ -246,27 +247,52 @@ export function chromeLaunchArgs(opts: LaunchOptions): string[] {
   ];
 }
 
+/** On macOS, spawning an app bundle's binary makes the OS activate it, so a
+ *  headed launch goes through `open -g` instead. */
+function useOpenFor(bin: string, opts: LaunchOptions): boolean {
+  return process.platform === "darwin" && !opts.headless && bin.includes(".app/");
+}
+
+/** The last lines Chrome wrote before dying, minus the dbus and font noise every Linux launch prints. */
+export function chromeLogTail(file: string, lines = 6): string {
+  let text = "";
+  try { text = fs.readFileSync(file, "utf-8"); } catch { return ""; }
+  return text.split("\n")
+    .filter((l) => l.trim() && !/dbus|fontconfig|DevTools listening/i.test(l))
+    .slice(-lines)
+    .map((l) => `  ${l.slice(0, 300)}`)
+    .join("\n");
+}
+
 export async function launchManagedChrome(opts: LaunchOptions): Promise<number> {
   const channel = opts.channel ?? "chrome";
   const prepared = prepareBrowserApp(chromeBinaryFor(channel), !!opts.headless);
   const bin = prepared.binary;
   fs.mkdirSync(opts.userDataDir, { recursive: true, mode: 0o700 });
-  const args = chromeLaunchArgs(opts);
+  const linux = process.platform === "linux" ? linuxDisplayPlan(process.env, !!opts.headless) : null;
+  const args = chromeLaunchArgs({ ...opts, headless: linux ? linux.headless : opts.headless });
   if (prepared.branded) args.push("--disable-updater-scheduler");
+  // /dev/shm is 64MB on a stock cloud image and Chrome dies silently when it fills.
+  if (linux) args.splice(args.length - 1, 0, "--disable-dev-shm-usage");
+  const env = linux?.display ? { ...process.env, DISPLAY: linux.display } : process.env;
+  // Chrome's own account of a launch that dies; the error below quotes its tail.
+  const logPath = path.join(opts.userDataDir, "..", `${path.basename(opts.userDataDir)}.chrome.log`);
+  const logFd = useOpenFor(bin, opts) ? "ignore" : fs.openSync(logPath, "w");
 
   // On macOS, spawning an app bundle's binary makes the OS activate it, so a
   // launch yanks the screen away from whatever the human is doing. `open -g`
   // starts it without activating; `-n` allows our own instance alongside any
   // Chrome they already have open, and `--args` passes the flags through.
   // Everywhere else, spawning the binary directly is already unobtrusive.
-  const useOpen = process.platform === "darwin" && !opts.headless && bin.includes(".app/");
+  const useOpen = useOpenFor(bin, opts);
   const appPath = useOpen ? bin.slice(0, bin.indexOf(".app/") + 4) : "";
   const child = useOpen
     ? spawn("open", ["-g", "-n", "-a", appPath, "--args", ...args], {
         stdio: ["ignore", "ignore", "ignore"],
         detached: true,
       })
-    : spawn(bin, args, { stdio: ["ignore", "ignore", "ignore"], detached: true });
+    : spawn(bin, args, { stdio: ["ignore", logFd, logFd], detached: true, env });
+  if (typeof logFd === "number") fs.closeSync(logFd);
   let spawnError: Error | null = null;
   child.on("error", (err) => {
     spawnError = err;
@@ -321,9 +347,12 @@ export async function launchManagedChrome(opts: LaunchOptions): Promise<number> 
             `a leftover one can be cleared with \`cast browser stop\`.`,
         );
       }
+      const said = chromeLogTail(logPath);
       throw new Error(
-        `Chrome exited before CDP came up. If this profile directory is Chrome's own default, that is expected — ` +
-          `since Chrome 136 the default profile cannot be driven over CDP; clone it instead.`,
+        said
+          ? `Chrome exited before CDP came up. It said:\n${said}`
+          : `Chrome exited before CDP came up. If this profile directory is Chrome's own default, that is expected — ` +
+            `since Chrome 136 the default profile cannot be driven over CDP; clone it instead.`,
       );
     }
     if (await isCdpAlive(opts.port)) {

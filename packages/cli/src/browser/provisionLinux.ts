@@ -43,16 +43,8 @@ import { mintTokenForDevice } from "../remote/convexClient.js";
 import { readHostDeviceId } from "../cloud/prepare.js";
 import { defaultConfigDir } from "../config/configDir.js";
 import { cloudIdleProbeScript } from "../cloud/idleProbe.js";
-
-/** The Xvfb display everything on the box shares. */
-export const SCREEN_DISPLAY = ":99";
-export const SCREEN_SIZE = { width: 1440, height: 900 };
-/** Loopback ports on the box; reached from here through an SSH tunnel. */
-export const RTSP_PORT = 8554;
-export const HLS_PORT = 8888;
-/** Machine-level VNC (x11vnc) and its browser client (noVNC via websockify). */
-export const VNC_PORT = 5900;
-export const NOVNC_PORT = 6080;
+import { SCREEN_DISPLAY, SCREEN_SIZE, RTSP_PORT, HLS_PORT, VNC_PORT, NOVNC_PORT } from "./hostScreen.js";
+export { SCREEN_DISPLAY, SCREEN_SIZE, RTSP_PORT, HLS_PORT, VNC_PORT, NOVNC_PORT };
 
 const MEDIAMTX_VERSION = "v1.20.1";
 
@@ -77,7 +69,10 @@ export DEBIAN_FRONTEND=noninteractive
 
 echo "[1/6] packages"
 NEED=""
-for p in xvfb ffmpeg tmux git rsync curl jq; do dpkg -s "$p" >/dev/null 2>&1 || NEED="$NEED $p"; done
+# The Noto fonts: a stock image ships only Liberation, so any page outside
+# Latin script (Arabic, Hebrew, CJK, emoji) renders as missing-glyph boxes in
+# the agent's screenshots, the browser view and VNC alike.
+for p in xvfb ffmpeg tmux git rsync curl jq fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji; do dpkg -s "$p" >/dev/null 2>&1 || NEED="$NEED $p"; done
 if [ -n "$NEED" ]; then sudo apt-get update -qq && sudo apt-get install -y -qq $NEED; fi
 if ! command -v google-chrome >/dev/null 2>&1; then
   wget -qO /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb

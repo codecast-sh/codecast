@@ -295,6 +295,26 @@ export function handleTerminalHttp(
     return true;
   }
 
+  // A cloud host's own server, reached through this laptop (cloud/hostForward.ts).
+  if (req.method === "POST" && url.startsWith("/term/forward")) {
+    const q = new URL(url, "http://localhost").searchParams;
+    const device = q.get("device") ?? "";
+    const port = Number(q.get("port"));
+    dispatch(async () => {
+      const { forwardToHost, HostForwardError } = await import("../cloud/hostForward.js");
+      try {
+        const f = await forwardToHost(device, port);
+        res.writeHead(200, headers);
+        res.end(JSON.stringify(f));
+      } catch (err) {
+        if (!(err instanceof HostForwardError)) throw err;
+        res.writeHead(err.status, headers);
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return true;
+  }
+
   res.writeHead(404, headers);
   res.end(JSON.stringify({ error: "not found" }));
   return true;

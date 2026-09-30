@@ -63,6 +63,41 @@ export interface ApplyResult {
   errors: Array<{ path: string; error: string }>;
   refused?: RefusedReason;
   retired_projects?: string[];
+  /** Files in a project checkout the mirror stopped carrying and left in place, because git tracks them there. */
+  released?: string[];
+  /**
+   * What this receiver does that an older one did not. `keeps-tracked`: a
+   * project file the bundle stops carrying is released, never deleted, when
+   * git tracks it; the laptop narrows what it carries only for a host that
+   * says so (push.ts).
+   */
+  capabilities?: string[];
+}
+
+/** See ApplyResult.capabilities. */
+export const MIRROR_RECEIVER_CAPABILITIES = ["keeps-tracked"] as const;
+
+/** Whether a folder between the project root and `rel` is a symlink. */
+function throughSymlink(home: string, project: string, rel: string): boolean {
+  const parts = path.posix.relative(project, rel).split("/").slice(0, -1);
+  let at = path.join(home, project);
+  for (const part of parts) {
+    at = path.join(at, part);
+    const st = fs.lstatSync(at, { throwIfNoEntry: false });
+    if (!st) return false;
+    if (st.isSymbolicLink()) return true;
+  }
+  return false;
+}
+
+/** Every path git tracks in a checkout (its index): null outside a repo. */
+async function trackedPaths(root: string): Promise<Set<string> | null> {
+  try {
+    const { stdout } = await execFileAsync("git", ["-C", root, "ls-files", "-z"], { encoding: "utf8", timeout: 20_000, maxBuffer: 64 * 1024 * 1024 });
+    return new Set(stdout.split("\0").filter(Boolean));
+  } catch {
+    return null;
+  }
 }
 
 export const MIRROR_STAMP_REL = ".codecast/mirror.json";
@@ -780,7 +815,7 @@ export function finalBytes(file: ParsedFile, current: Buffer | null, home: strin
 export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions): Promise<ApplyResult> {
   const { home } = opts;
   const now = opts.now ?? (() => new Date());
-  const result: ApplyResult = { hash: bundle.hash, applied: [], unchanged: 0, host_edited: [], pruned: [], errors: [] };
+  const result: ApplyResult = { hash: bundle.hash, applied: [], unchanged: 0, host_edited: [], pruned: [], errors: [], capabilities: [...MIRROR_RECEIVER_CAPABILITIES] };
   const src = bundle.header.source;
 
   if (!opts.configUserId) return { ...result, refused: "unprovisioned" };
@@ -818,6 +853,11 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
       assertMirrorFileContent(file);
       let before = prev?.files[file.path]?.removed ? undefined : prev?.files[file.path];
       const project = projectRoots.find((root) => file.path.startsWith(`${root}/`));
+      // In a project checkout, a merge kind held as a conflict (the host's
+      // codecast wrote the worktree's settings before a first copy arrived)
+      // is merged again as a first copy: the host keeps its own keys, the
+      // laptop's agent config its own.
+      if (project && before?.host_edited && !VERBATIM_KINDS.includes(file.kind)) before = undefined;
       if (file.kind === "verbatim" && project && (before?.satisfied_alias || behindProjectLink(home, file.path))) {
         const target = projectAliasDestination(home, file.path, project, before?.satisfied_alias?.target);
         if (manifest.has(target) && !stampFiles[target] && !deferred.has(file.path)) {
@@ -843,7 +883,11 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
         if (!gitTrees.has(project)) gitTrees.set(project, await cleanTrackedFiles(path.join(home, project)));
         cleanTracked = matchesGitBlob(current, fs.statSync(abs).mode, gitTrees.get(project)!.get(path.posix.relative(project, dest)));
       }
-      if (project && !before && current && !cleanTracked && !current.equals(finalBytes(file, current, home, pinned, undefined, undefined, overrides))) {
+      // A merge kind (settings JSON, hooks) merges its fields into what the
+      // host has: a host file found on the first copy (the host's codecast
+      // writes a worktree's .claude/settings.json when the session starts)
+      // is merged into, not a conflict. Only whole-file kinds can collide.
+      if (project && !before && current && !cleanTracked && VERBATIM_KINDS.includes(file.kind) && !current.equals(finalBytes(file, current, home, pinned, undefined, undefined, overrides))) {
         result.host_edited.push(file.path);
         stampFiles[file.path] = { sha: file.sha256, written: sha256(finalBytes(file, current, home, pinned, undefined, undefined, overrides)), kind: file.kind, mode: file.mode, host_edited: true, ...(!VERBATIM_KINDS.includes(file.kind) ? { source: file.bytes.toString("utf8") } : {}) };
         continue;
@@ -893,6 +937,7 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
   }
 
   if (prev) {
+    const trackedByProject = new Map<string, Set<string> | null>();
     const roots = [...new Set([...bundle.header.managed_roots, ...prev.managed_roots])];
     const under = (rel: string, roots: readonly string[]) => roots.some((root) => rel === root || rel.startsWith(`${root}/`));
     // A project checkout the laptop no longer names (its registration gone, or a
@@ -907,6 +952,33 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
       if (manifest.has(rel) || isCodecastOwnedHomePath(rel) || isAgentRuntimePath(rel)) continue;
       if (bundle.header.unmanaged_roots?.some((root) => rel === root || rel.startsWith(`${root}/`))) continue;
       if (releasedProject(rel)) continue;
+      // A file git tracks in a project checkout is part of that session's
+      // tree whatever the mirror or the host did to it, so an entry the
+      // bundle no longer carries is forgotten and the file left as it is:
+      // never deleted, never a conflict, whatever this stamp said about it
+      // (including "removed", after a person restored it). Dropping tracked
+      // files from the bundle deleted hundreds of them from every cloud
+      // worktree three times on 2026-09-29.
+      const project = [...projectRoots, ...(prev.project_roots ?? [])].find((r) => rel.startsWith(`${r}/`));
+      if (project) {
+        if (!trackedByProject.has(project)) trackedByProject.set(project, await trackedPaths(path.join(home, project)));
+        if (trackedByProject.get(project)?.has(path.posix.relative(project, rel))) {
+          if (!info.removed) (result.released ??= []).push(rel);
+          continue;
+        }
+        // An entry reached through a symlinked folder (a repo's `convex ->
+        // packages/convex/convex`) names a file the receiver never writes
+        // through; it is forgotten rather than failing every later push.
+        if (throughSymlink(home, project, rel)) continue;
+        // Not carried any more and not the mirror's bytes (an edit, or the
+        // session's own copy): nothing to decide, so forget it rather than
+        // report a conflict nobody can settle. The mirror's own unchanged
+        // bytes still go below.
+        if (!info.removed && !info.alias && !info.satisfied_alias && (info.kind ?? "verbatim") !== "gitconfig" && VERBATIM_KINDS.includes(info.kind ?? "verbatim")) {
+          const now = readIfRegular(path.join(home, rel));
+          if (now === null || sha256(now) !== info.written) continue;
+        }
+      }
       const kind = info.kind ?? "verbatim";
       let dest = rel;
       let abs = path.join(home, rel);
