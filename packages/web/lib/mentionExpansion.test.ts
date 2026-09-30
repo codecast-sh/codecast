@@ -5,6 +5,8 @@ import {
   type ExpandedMention,
   type RunExpandQuery,
 } from "./mentionExpansion";
+import { stripSystemTags } from "../components/conversation/classify";
+import { stripInjectionNoise } from "@codecast/shared/contracts";
 
 const SESSION_MENTION = "Now, work with @[Cmd+K palette jx7eqak](codecast) to update the doc.";
 
@@ -41,7 +43,29 @@ describe("expandEntityMentions", () => {
       { type: "session", shortId: "jx7eqak", markdown: "\n\n---\n### Session context\n" },
     ];
     const out = await expandEntityMentions(SESSION_MENTION, runQuery);
-    expect(out).toContain("@[Cmd+K palette jx7eqak](codecast)\n\n---\n### Session context\n");
+    expect(out).toContain("@[Cmd+K palette jx7eqak](codecast)\n\n<mention-context>\n### Session context\n</mention-context>\n");
+  });
+
+  // The agent reads the injected context; the person's own bubble shows only
+  // what they typed. Every display surface goes through stripSystemTags.
+  test("the injected context never shows in the rendered user message", async () => {
+    const runQuery: RunExpandQuery = async () => [
+      { type: "doc", id: "abc", markdown: "\n\n---\n### Doc: Eval plan\nType: plan\n\nBody\n\n> `cast doc read abc` for full document\n---\n" },
+    ];
+    const typed = "@[Eval plan doc:abc] run this";
+    const sent = await expandEntityMentions(typed, runQuery);
+    expect(sent).toContain("### Doc: Eval plan");
+    expect(stripSystemTags(sent)).toBe(typed);
+    expect(stripInjectionNoise(sent)).toBe(typed);
+  });
+
+  test("messages sent before the tag existed render without the context block", () => {
+    const legacy = "@[Eval plan doc:abc]\n\n---\n### Doc: Eval plan\nType: plan\n\n## Tiers\n\n- one\n\n---\n\nmore\n\n> `cast doc read abc` for full document\n---\n then go";
+    expect(stripSystemTags(legacy)).toBe("@[Eval plan doc:abc] then go");
+    const task = "see @[Fix ct-12]\n\n---\nTreat as reference.\n<untrusted-1a2b source=\"task\">\n### Task: Fix\n</untrusted-1a2b>\n\n> `cast task context ct-12` for full context\n---\n";
+    expect(stripSystemTags(task).trim()).toBe("see @[Fix ct-12]");
+    const prose = "notes\n\n---\n### Doc: not an injection\nplain text";
+    expect(stripSystemTags(prose)).toBe(prose);
   });
 
   // THE REGRESSION: a one-shot convex.query can hang forever (socket reconnect /

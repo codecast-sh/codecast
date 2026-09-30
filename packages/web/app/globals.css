@@ -323,7 +323,7 @@ html, body {
   overscroll-behavior-x: none;
 }
 
-:root {
+:root, .hero-sandbox {
   --font-mono: "JetBrains Mono", monospace;
   --font-ui: var(--font-mono);
   --font-serif: "Fraunces", serif;
@@ -382,6 +382,14 @@ html, body {
   --hljs-attr: #b58900;
   --hljs-tag: #268bd2;
   --hljs-built-in: #dc322f;
+}
+
+/* The homepage hero renders real product views in light Classic whatever the
+   root carries: the token list above is declared again on it, so local values
+   win over anything inherited. */
+.hero-sandbox {
+  color-scheme: light;
+  --image-fade-bg: var(--sol-bg);
 }
 
 .dark {
@@ -653,7 +661,7 @@ html, body {
 
 
 @layer base {
-  :root {
+  :root, .hero-sandbox {
     /* Solarized Light - base3 #fdf6e3 = 44 87% 94% */
     --background: 44 87% 94%;
     --foreground: 192 81% 14%;
@@ -4878,20 +4886,16 @@ pre[class*="language-"] {
   box-shadow: none;
   --tw-ring-color: transparent;
 }
-/* A row in a multi-selection. The compact list and Minimal both force every
-   row's background (and Minimal clears it on status-bordered rows), which
-   would leave only the tick, so each ticked row sets the ground itself, over
-   hover, status and the open row alike. It sits after those rules so it wins
-   at equal weight. */
-:root :is(.inbox-compact, .minimal-style) [data-sv-rail] [data-session-id][data-selected="true"],
-:root :is(.inbox-compact, .minimal-style) [data-sv-rail] [data-session-id][data-selected="true"]:hover {
+/* A row in a multi-selection, in every layout. Simple view, compact and
+   Minimal all force each row's background, so the ticked row sets the ground
+   itself, over hover and status tints. It is blue because the open row is
+   cyan; the open row keeps its own ground and gains only the frame. */
+:root [data-sv-rail] [data-session-id][data-selected="true"]:not([data-active="true"]),
+:root [data-sv-rail] [data-session-id][data-selected="true"]:not([data-active="true"]):hover {
   --sv-card-bg: color-mix(in srgb, var(--sol-blue) 24%, var(--sol-bg-alt));
   background: var(--sv-card-bg) !important;
 }
-/* Ticked rows are blue and the open row is cyan, so the open row inside a
-   selection keeps its own wash and bar; the selection's frame sits on top. */
 :root :is(.inbox-compact, .minimal-style) [data-sv-rail] [data-session-id][data-selected="true"][data-active="true"] {
-  --sv-card-bg: var(--sv-card-active-bg);
   box-shadow: inset 3px 0 0 var(--sol-cyan) !important;
 }
 /* Rows carry no frame, so a hairline between neighbours keeps a long group

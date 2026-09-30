@@ -349,7 +349,7 @@ const Tag = ({ children }: { children: ReactNode }) => (
 
 // -- One trigger: the strip is that trigger --
 
-function SingleHeader({
+export function SingleHeader({
   task,
   isLoop,
   expanded,
@@ -421,7 +421,7 @@ function SingleHeader({
 // trigger in roster order (soonest fire first). A pill focuses its trigger; the
 // focused pill toggles the detail. The focused trigger always keeps its pill,
 // even past the fold.
-function SetHeader({
+export function SetHeader({
   live,
   focused,
   expanded,
@@ -499,7 +499,7 @@ function SetHeader({
   );
 }
 
-function TriggerPill({ task, now, active, onClick }: { task: TaskRow; now: number; active: boolean; onClick: () => void }) {
+export function TriggerPill({ task, now, active, onClick }: { task: TaskRow; now: number; active: boolean; onClick: () => void }) {
   const accent = schedAccent(task);
   const alert = task.status === "failed" || isTaskOverdue(task, now);
   const title = taskDisplayTitle(task);
