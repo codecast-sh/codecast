@@ -412,6 +412,13 @@ async function reparentSessionCore(
   if (args.target.kind === "role" && (conversation.standing_role_id || conversation.anchor_id)) {
     throw new Error("That session is a standing agent's own thread; it cannot be filed under a role");
   }
+  // A role's own session is owned by whom the role reports to (S28,
+  // sessionOwners.stampSeatOwners), so its owner changes only by moving the
+  // role. One writer keeps the chart line and the inbox from disagreeing.
+  if (args.target.kind === "user" && conversation.standing_role_id) {
+    const seatRole = await ctx.db.get(conversation.standing_role_id);
+    throw new Error(`That is @${seatRole?.handle ?? "the role"}'s own session: it belongs to whoever the role reports to. Change who the role reports to instead (cast org reparent @${seatRole?.handle ?? "<role>"} --to <person or @role>, or the role page).`);
+  }
   // A session of another team keeps the older refusal below; this one is for a
   // session routed to the role's team that the team cannot see.
   if (targetRole?.team_id && String(conversation.team_id ?? "") === String(targetRole.team_id) && !(await roleMayHoldSession(ctx, targetRole, conversation))) {

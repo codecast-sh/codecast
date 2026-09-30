@@ -9,11 +9,12 @@ import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useEventListener } from "../../hooks/useEventListener";
 import { create as mutate } from "mutative";
-import { Network, Plus, Map as MapIcon, Users, Briefcase, Search, ArrowLeft, ArrowRightLeft, ChevronDown, ChevronRight, ExternalLink, Pencil, History } from "lucide-react";
+import { Network, Plus, Map as MapIcon, Users, Briefcase, Search, ArrowLeft, ArrowRightLeft, ChevronDown, ChevronRight, ExternalLink, Pencil, History, Store } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { createOrgSlice, orgRoleReparentMakesCycle, reparentToastLine, type OrgUpdateRoleInput } from "../../store/orgSlice";
 import { useSyncOrgTree } from "../../hooks/useSyncOrgTree";
 import { useSyncOrgHealth } from "../../hooks/useSyncOrgHealth";
+import { useDecisionQueue } from "../../hooks/useDecisionQueue";
 import { useSyncOrgProposals, useSyncOrgProposal } from "../../hooks/useSyncOrgProposals";
 import { useSwitchWorkspace } from "../../hooks/useSwitchWorkspace";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
@@ -190,7 +191,8 @@ export function OrgPageInner() {
   const [showMiniMap, setShowMiniMap] = useState(false);
   const [pendingMove, setPendingMove] = useState<OrgReparentRequest | null>(null);
   const [movePicker, setMovePicker] = useState<MoveSubject | null>(null);
-  const [addRoleOpen, setAddRoleOpen] = useState(false);
+  // "Add a role" writes one; "Hire" opens the gallery of templates (org-hire.md H3).
+  const [addRoleOpen, setAddRoleOpen] = useState<false | "manual" | "template">(false);
   // S16: the seat-the-existing-agent moment, opened by hireChief when a
   // standing agent already exists.
   const [seatDialog, setSeatDialog] = useState<{ name: string; convId: string; messageCount?: number } | null>(null);
@@ -264,6 +266,15 @@ export function OrgPageInner() {
   }, [linkState, s.teams, meId, switchWorkspace]);
   const health: OrgHealth | null = preview ? ORG_STAFFING_FIXTURE_HEALTH : storeHealth;
   const chief = useMemo(() => findChiefOfStaff(tree), [tree]);
+  // The loop (org-staffing.md S29): the person's open decisions feed "Needs
+  // you" (the pane keeps the ones the org routed), and the in-place verbs
+  // are the store's own actions. The preview sends nothing.
+  const queue = useDecisionQueue();
+  const previewOnly = useCallback(() => toast.success("Preview: nothing is sent"), []);
+  const answerDecision = useCallback((decisionId: string, index: number) => { if (preview) return previewOnly(); useInboxStore.getState().answerDecision(decisionId, { index }); }, [preview, previewOnly]);
+  const triggerVerb = useCallback((taskId: string, verb: "pause" | "resume" | "runNow") => { if (preview) return previewOnly(); useInboxStore.getState().triggerAction(taskId, verb); }, [preview, previewOnly]);
+  const setTriggerEvery = useCallback((taskId: string, ms: number) => { if (preview) return previewOnly(); useInboxStore.getState().setTriggerInterval(taskId, ms); }, [preview, previewOnly]);
+  const sendToRole = useCallback((conversationId: string, text: string) => { if (preview) return previewOnly(); useInboxStore.getState().sendMessage(conversationId, text); }, [preview, previewOnly]);
   // Reviewing until a proposal newer than the click lands, or the TTL passes
   // (`now` is the coarse clock, so the state falls back on its own).
   const reviewRun: OrgReviewRun | null = preview ? previewRun : s.clientState.ui?.org_review_run ?? null;
@@ -804,6 +815,11 @@ export function OrgPageInner() {
       onAskAboutAsk={threadRef ? askAboutAsk : undefined}
       revised={threadRef ? { rows: revisedRows, who: threadRef.name, onSeen: seenRevisions } : undefined}
       link={link}
+      queue={queue}
+      onAnswerDecision={answerDecision}
+      onTrigger={triggerVerb}
+      onSetTriggerEvery={setTriggerEvery}
+      onSendToRole={sendToRole}
     />
   ) : null;
   // Phone (S19): the conversation is the sheet; the asks open over it.
@@ -937,9 +953,14 @@ export function OrgPageInner() {
             <MapIcon className="w-4 h-4" />
           </button>
           {tree && isAdmin !== false && (
-            <button type="button" onClick={() => setAddRoleOpen(true)} title="A role that sessions and other roles report to, with an area of projects and plans to look after" className="h-[34px] inline-flex items-center gap-1.5 pl-3 pr-3.5 rounded-lg text-[12.5px] font-semibold transition-colors hover:brightness-110" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }} data-org-guide="hire">
-              <Plus className="w-3.5 h-3.5" /> Add a role
-            </button>
+            <>
+              <button type="button" onClick={() => setAddRoleOpen("template")} title="Hire a ready-made role for one project from the gallery of templates" className="h-[34px] inline-flex items-center gap-1.5 pl-3 pr-3.5 rounded-lg border text-[12.5px] font-semibold transition-colors hover:bg-sol-bg-highlight/60" style={{ borderColor: "color-mix(in srgb, var(--sol-violet) 45%, transparent)", color: "var(--sol-violet)" }} data-org-hire-gallery>
+                <Store className="w-3.5 h-3.5" /> Hire
+              </button>
+              <button type="button" onClick={() => setAddRoleOpen("manual")} title="A role that sessions and other roles report to, with an area of projects and plans to look after" className="h-[34px] inline-flex items-center gap-1.5 pl-3 pr-3.5 rounded-lg text-[12.5px] font-semibold transition-colors hover:brightness-110" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }} data-org-guide="hire">
+                <Plus className="w-3.5 h-3.5" /> Add a role
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -1093,8 +1114,10 @@ export function OrgPageInner() {
       {/* add role */}
       {tree && addRoleOpen && (
         <HireRoleDialog
-          key={me?.user_id ?? meId ?? ""}
-          open={addRoleOpen}
+          key={`${me?.user_id ?? meId ?? ""}:${addRoleOpen}`}
+          open={!!addRoleOpen}
+          initialMode={addRoleOpen}
+          title={addRoleOpen === "template" ? "Hire a role" : "Add a role"}
           onClose={() => setAddRoleOpen(false)}
           tree={tree}
           meId={me?.user_id ?? meId ?? ""}

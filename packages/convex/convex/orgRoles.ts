@@ -1,7 +1,7 @@
 import { internalMutation, mutation, query } from "./functions";
 import { internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { applyPause, applyResume, applyRunNow, applyTaskUpdate, cancelTasksOriginatingFrom, ensureRoleNeedsInputTrigger, insertTask } from "./agentTasks";
+import { applyPause, applyResume, applyRunNow, applyTaskUpdate, cancelTasksOriginatingFrom, ensureRoleEventTriggers, insertTask } from "./agentTasks";
 import { CHIEF_OF_STAFF_JOB } from "@codecast/shared/contracts/chiefOfStaffPrompt";
 import { defaultAvatarFor, isAvatarKey } from "@codecast/shared/contracts/orgAvatars";
 import { ORG_AUTHORITY_KINDS, authorityWords, orgTenureError, type OrgAuthorityGrant } from "@codecast/shared/contracts/orgProposal";
@@ -30,6 +30,7 @@ import { EMPTY_SCOPE, isScopeless, normalizeScope, sameScope, scopeIds, scopeOut
 import { announceSeating, decommissionAnchorRow, provisionStandingAgent, roleBootstrapOf, seatTitlePatch, userCanAdminAnchor, workspaceAnchorFor } from "./anchors";
 import { enqueuePendingMessage, formatSessionMessage, tellRole } from "./pendingMessages";
 import { standingReportsToFields } from "./lib/standingSeat";
+import { stampSeatOwners } from "./sessionOwners";
 import { enqueueKillAndResume, performSetThreadState } from "./conversations";
 import { ACTIVE_AGENT_STATUSES, normalizeThreadState, parseThreadStateStatus } from "@codecast/shared/contracts";
 import { siteUrl } from "./lib/siteUrl";
@@ -521,7 +522,7 @@ async function performReparentRoleCore(
     });
   }
   const moved = await ctx.db.get(role._id);
-  await stampStandingReportsTo(ctx, moved);
+  await stampStandingReportsTo(ctx, moved, userId);
   await noteRoleChange(ctx, userId, "move", role, moved, { door: args.from_session ? "cli" : "chart", gesture: args.from_session ? "command" : "drag" });
   return moved;
 }
@@ -615,7 +616,7 @@ async function performRetireRoleCore(ctx: any, userId: Id<"users">, args: Retire
   );
   for (const child of children) {
     await ctx.db.patch(child._id, { reports_to: role.reports_to, updated_at: now });
-    await stampStandingReportsTo(ctx, { ...child, reports_to: role.reports_to });
+    await stampStandingReportsTo(ctx, { ...child, reports_to: role.reports_to }, userId);
   }
   // Its open tasks go the same way, up to whoever it reported to
   // (org-roles-run-work.md R5): the work is the company's, not the seat's.
@@ -1248,16 +1249,16 @@ export async function ensureRoleRoutine(ctx: Ctx, role: any, standing: any, ever
   // cancelled, whatever door arms the role again.
   const found = await findRoleRoutineInAnyStatus(ctx, role, standing);
   const live = found && isLiveTrigger(found) ? await refreshRoutine(ctx, role, standing, found) : null;
-  // The route up is armed with the routine (S28), so every door that arms
-  // one arms both.
+  // The route up is armed with the routine (S28), and the Chief of Staff's
+  // area change trigger with it (S29), so every door that arms one arms all.
   if (found && !live) {
-    await ensureRoleNeedsInputTrigger(ctx, role, standing);
+    await ensureRoleEventTriggers(ctx, role, standing);
     return { id: found._id, short_id: found.short_id, created: false };
   }
   if (live) {
     // A cadence the caller named reaches a routine already armed.
     if (everyMs && live.interval_ms !== interval) await applyTaskUpdate(ctx, live, { interval_ms: interval }, { userId: standing.user_id, source: "cli" });
-    await ensureRoleNeedsInputTrigger(ctx, role, standing);
+    await ensureRoleEventTriggers(ctx, role, standing);
     return { id: live._id, short_id: live.short_id, created: false };
   }
   const created = await insertTask(ctx, standing.user_id, {
@@ -1271,7 +1272,7 @@ export async function ensureRoleRoutine(ctx: Ctx, role: any, standing: any, ever
     mode: "apply",
     role_id: role._id,
   });
-  await ensureRoleNeedsInputTrigger(ctx, role, standing);
+  await ensureRoleEventTriggers(ctx, role, standing);
   return { ...created, created: true };
 }
 
@@ -1506,13 +1507,14 @@ async function sessionsUnder(ctx: Ctx, role: any): Promise<any[]> {
 // The standing session follows the role's parent (S28, lib/standingSeat):
 // stamped when the role moves, when a retire re-homes its children, and by
 // the backfill for roles seated before the rule.
-export async function stampStandingReportsTo(ctx: Ctx, role: any): Promise<boolean> {
+export async function stampStandingReportsTo(ctx: Ctx, role: any, actor?: Id<"users">): Promise<boolean> {
   const standing = await standingConversationOf(ctx, role);
   if (!standing) return false;
   const { org_role_id } = standingReportsToFields(role);
-  if (String(standing.org_role_id ?? "") === String(org_role_id ?? "")) return false;
-  await ctx.db.patch(standing._id, { org_role_id });
-  return true;
+  const moved = String(standing.org_role_id ?? "") !== String(org_role_id ?? "");
+  if (moved) await ctx.db.patch(standing._id, { org_role_id });
+  const owners = await stampSeatOwners(ctx, standing._id, role.reports_to, actor ?? role.host_user_id);
+  return moved || owners;
 }
 
 // pause — flush holds; hands get one interrupt; the spawn path refuses new

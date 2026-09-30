@@ -2,13 +2,17 @@ import { describe, expect, test } from "bun:test";
 import { ORG_FIXTURE } from "./orgFixture";
 import { ORG_STAFFING_FIXTURE_BIG_PROPOSAL, ORG_STAFFING_FIXTURE_HEALTH, ORG_STAFFING_FIXTURE_PROPOSAL } from "./orgStaffingFixture";
 import {
-  bottleneckRoles,
   changeEdits,
   changeFields,
   changeLine,
   changeNodeId,
   changeTenure,
   collectHealthFlags,
+  areaRows,
+  cadenceLabel,
+  chiefRead,
+  needsYou,
+  rolesInTreeOrder,
   findChiefOfStaff,
   groupChanges,
   isSyncChange,
@@ -21,7 +25,6 @@ import {
   resolveProposalAuthor,
   roleChangeEdits,
   roleChangeInitial,
-  spanOfControl,
   staffingMode,
   syncEvidence,
   syncGroupSummary,
@@ -122,8 +125,8 @@ describe("proposal progress and grouping", () => {
   test("every kind reads as one line", () => {
     // The words are the shared describer's (the CLI walk and the ghost chips
     // read the same line); the pane only sentence cases them.
-    expect(changeLine(P.changes[0].change)).toBe("Add a standing agent, Head of Platform (@platform), reporting to you, looking after Platform");
-    expect(changeLine(P.changes[1].change)).toBe("Add a standing agent, Content Lead (@content), reporting to @growth, looking after pl-88");
+    expect(changeLine(P.changes[0].change)).toBe("Add a role, Head of Platform (@platform), reporting to you, looking after Platform");
+    expect(changeLine(P.changes[1].change)).toBe("Add a role, Content Lead (@content), reporting to @growth, looking after pl-88");
     expect(changeLine(P.changes[6].change)).toBe("Mark done: Onboarding emails (pl-61)");
     expect(changeLine(P.changes[7].change)).toBe("Mark done: Fix the auth race on sign-in (ct-4102)");
     expect(changeLine(P.changes[2].change)).toBe("Create the project Platform");
@@ -182,25 +185,59 @@ describe("health summary", () => {
     expect(growth?.subject).toMatchObject({ kind: "role", handle: "growth", nodeId: "role:fixture-role-growth" });
   });
 
-  test("span of control reads every person against the model's limit", () => {
-    const span = spanOfControl(H, ORG_FIXTURE);
-    expect(span.map((s) => [s.name, s.direct_roles, s.wide])).toEqual([["Ashot Petrosian", 1, false], ["Samvit Jain", 0, false]]);
-    expect(span[0].limit).toBe(7);
-    const wide = spanOfControl({ ...H, people: [{ ...H.people[0], direct_roles: 9 }, H.people[1]] }, ORG_FIXTURE);
-    expect(wide[0].wide).toBe(true);
+  const CHIEF = { ...ORG_FIXTURE.roles[0], _id: "fixture-role-chief", short_id: "or-9", handle: "chief-of-staff", name: "Chief of Staff", created_at: ORG_FIXTURE.roles[0].created_at - 1, standing: { conversation_id: "fixture-chief-conv", short_id: "jx7ch1f", state_status: "blocked", state_line: "Which market goes first?" } };
+  const SUB = { ...ORG_FIXTURE.roles[0], _id: "fixture-role-content", short_id: "or-3", handle: "content", name: "Content lead", reports_to: { kind: "role" as const, role_id: "fixture-role-growth" }, standing: null };
+  const RETIRED = { ...SUB, _id: "fixture-role-old", handle: "old", status: "retired" as const };
+  const tree: OrgTree = { ...ORG_FIXTURE, roles: [SUB, ORG_FIXTURE.roles[0], RETIRED, CHIEF] };
+
+  test("areas come in tree order: the chief first, a role's reports right under it, retired roles left out (S29)", () => {
+    expect(rolesInTreeOrder(tree).map((r) => r.handle)).toEqual(["chief-of-staff", "growth", "content"]);
+    const rows = areaRows(tree, H);
+    expect(rows.map((r) => [r.role.handle, r.status, r.statusWord])).toEqual([["chief-of-staff", "on_track", "on track"], ["growth", "stuck", "stuck"], ["content", "not_started", "not started"]]);
+    expect(rows[1].area?.standing?.text).toMatch(/^Two landing pages shipped/);
+    expect(rows[1].nodeId).toBe("role:fixture-role-growth");
+    // No health yet: the rows still stand, read from the role row alone.
+    expect(areaRows(tree, null).map((r) => r.status)).toEqual(["waiting_on_you", "on_track", "not_started"]);
+    expect(areaRows(null, H)).toEqual([]);
   });
 
-  test("span falls back to the tree when health has no row for a person", () => {
-    const span = spanOfControl(null, ORG_FIXTURE);
-    expect(span[0]).toMatchObject({ name: "Ashot Petrosian", direct_roles: 1 });
+  test("needs you: the org's decisions first, then a role waiting on the person, then an open proposal; a decision and its pin are one ask", () => {
+    const queue: any[] = [
+      { key: "decide:1", source: "decide", conversationId: "fixture-chief-conv", question: "Which market goes first?", options: [{ label: "Texas" }, { label: "Ohio" }], blocking: true, createdAt: 10, decisionId: "sd1" },
+      { key: "decide:2", source: "decide", conversationId: "fixture-growth-conv", question: "Keep the ads?", options: [{ label: "Yes" }, { label: "No" }], kind: "multi", blocking: false, createdAt: 5, decisionId: "sd2" },
+      { key: "decide:3", source: "decide", conversationId: "somebody-elses-session", question: "Not ours", options: [], blocking: true, createdAt: 1, decisionId: "sd3" },
+      { key: "decide:4", source: "decide", conversationId: "fixture-growth-conv", question: "Held by the lead", options: [{ label: "a" }], blocking: true, createdAt: 2, decisionId: "sd4", heldByRole: true },
+    ];
+    const items = needsYou(tree, H, queue, [P], null);
+    expect(items.map((i) => i.kind)).toEqual(["decision", "decision", "proposal"]);
+    // Oldest first; a multi-choice card opens rather than answers in place.
+    expect(items[0]).toMatchObject({ kind: "decision", canAnswerInPlace: false, role: { handle: "growth" } });
+    expect(items[1]).toMatchObject({ kind: "decision", canAnswerInPlace: true, role: { handle: "chief-of-staff" } });
+    // The chief's blocked pin is the same ask as its decision, so no second row for it.
+    expect(items.some((i) => i.kind === "blocked")).toBe(false);
+    expect(items[2]).toMatchObject({ kind: "proposal", remaining: 6 });
+    // Without the decision, the chief's pin is a row of its own; the shown proposal is not repeated.
+    const pin = needsYou(tree, H, [], [P], P);
+    expect(pin).toEqual([expect.objectContaining({ kind: "blocked", conversationId: "fixture-chief-conv", line: "Which market goes first?" })]);
+    expect(needsYou(ORG_FIXTURE, H, [], [], null)).toEqual([]);
   });
 
-  test("bottleneck roles carry only their warn and blocker flags", () => {
-    const rows = bottleneckRoles(H);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ handle: "growth", worst: "warn" });
-    expect(rows[0].flags.map((f) => f.code)).toEqual(["overloaded", "cap_hit"]);
-    expect(bottleneckRoles(null)).toEqual([]);
+  test("the chief's read: its Company line first, its newest proposal with how far it is decided, its review", () => {
+    const read = chiefRead(tree, H, [{ ...P, author: { kind: "role", id: "fixture-role-chief" }, created_at: 5 }, { ...P, _id: "older", short_id: "op-2", author: { kind: "role", id: "fixture-role-chief" }, created_at: 1, status: "resolved" }, { ...P, _id: "someone", author: { kind: "session", id: "s" }, created_at: 9 }])!;
+    expect(read.chief.handle).toBe("chief-of-staff");
+    expect(read.narrative[0].project).toBe("Company");
+    expect(read.narrative[0].text).toMatch(/^Growth is carrying the quarter/);
+    expect(read.proposed).toMatchObject({ proposal: { short_id: "op-7" }, progress: { total: 8, decided: 2, remaining: 6 } });
+    expect(read.area?.check).toMatchObject({ short_id: "tr-12", interval_ms: 7 * 86_400_000 });
+    expect(chiefRead(ORG_FIXTURE, H, [])).toBeNull();
+  });
+
+  test("a cadence reads as words", () => {
+    expect(cadenceLabel(86_400_000)).toBe("every day");
+    expect(cadenceLabel(7 * 86_400_000)).toBe("every week");
+    expect(cadenceLabel(3 * 86_400_000)).toBe("every 3 days");
+    expect(cadenceLabel(3 * 3_600_000)).toBe("every 3 hours");
+    expect(cadenceLabel(null)).toBe("no schedule");
   });
 });
 

@@ -1,12 +1,14 @@
 import { useMemo, useState } from "react";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { captureException } from "@sentry/react";
-import { Copy } from "lucide-react";
+import { ArrowLeft, Copy } from "lucide-react";
+import { TemplateGallery, cannotHireReason, type CatalogTemplate } from "./TemplateGallery";
 import { copyToClipboard } from "../../lib/utils";
 import { inWorkspace } from "../../lib/workspaceScope";
 import { SelectBox } from "../ui/select-box";
 import type { OrgRole, OrgTree } from "./orgTypes";
 import { buildOrgTemplateCommand, type TemplateDraft, type TemplateProject } from "./orgTemplateCommand";
-import { askedInputs, buildHireSpec, grantsToAsk, hireErrors, humanSetupCount, resolvedConfig, secretInputs, slugOf, type HireDraft } from "./orgTemplateSpec";
+import { DEFAULT_LEAD_TEMPLATE_ID, askedInputs, buildHireSpec, grantsToAsk, hireErrors, humanSetupCount, isDefaultLeadTemplate, resolvedConfig, secretInputs, slugOf, type HireDraft } from "./orgTemplateSpec";
 import { useTemplateActions, useTemplateCatalog } from "../../hooks/useTemplateHire";
 import { RoleAvatar } from "./avatars";
 import { avatarOf } from "@codecast/shared/contracts/orgAvatars";
@@ -17,16 +19,18 @@ import { avatarOf } from "@codecast/shared/contracts/orgAvatars";
 // never typed here; they bind on the host after approval. The folder path for
 // template authors stays behind a fold: it copies a command and runs nothing.
 
-export function OrgTemplateHire({ projects, workspace, roles = [], initialProjectId = "", projectPath = "", onClose }: {
+export function OrgTemplateHire({ projects, workspace, roles = [], initialProjectId = "", projectPath = "", onClose, onStage }: {
   projects: TemplateProject[];
   workspace: OrgTree["workspace"];
   roles?: OrgRole[];
   initialProjectId?: string;
   projectPath?: string;
   onClose: () => void;
+  /** The gallery, or the answers form for one template: the dialog sizes itself by it. */
+  onStage?: (stage: "gallery" | "form") => void;
 }) {
   const teamId = workspace.kind === "team" ? workspace.id : undefined;
-  const { templates, ready } = useTemplateCatalog(teamId);
+  const { templates, ready, error: catalogError } = useTemplateCatalog(teamId) as { templates: CatalogTemplate[]; ready: boolean; error?: unknown };
   const { propose } = useTemplateActions();
   const available = projects.filter((p) => p.workspace && inWorkspace(p, `${workspace.kind}:${workspace.id}`));
   const [templateId, setTemplateId] = useState("");
@@ -34,18 +38,22 @@ export function OrgTemplateHire({ projects, workspace, roles = [], initialProjec
   const [instance, setInstance] = useState("");
   const [instanceTouched, setInstanceTouched] = useState(false);
   const [config, setConfig] = useState<Record<string, string>>({});
-  const [seat, setSeat] = useState<"new" | "under" | "lead">("new");
+  // With a lead in place the hire reports to it (the lead rule, H3); "lead"
+  // names the lead as the seat instead. "new" only stands while no lead exists.
+  const [seat, setSeat] = useState<"under" | "lead">("under");
   const [policy, setPolicy] = useState<HireDraft["updatePolicy"]>("stable");
   const [posting, setPosting] = useState(false);
   const [posted, setPosted] = useState<{ short_id: string; link?: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const template = templates.find((t) => t.template_id === templateId) ?? null;
+  useWatchEffect(() => { onStage?.(template || posted ? "form" : "gallery"); }, [template, posted, onStage]);
   const project = available.find((p) => p._id === projectId) ?? null;
   // The project's lead (R4, W9 I2): a live role whose scope names the project.
   const lead = useMemo(() => project ? roles.find((r) => r.status !== "retired" && ((r.scope as any)?.project_ids ?? []).some((id: string) => id === project._id)) ?? null : null, [roles, project]);
   const effInstance = instanceTouched ? instance : project && template ? `${slugOf(project.title)}-${template.template_id}` : "";
   const draft: HireDraft = { template, project, instance: effInstance, config, reportsTo: lead && seat === "under" ? `@${lead.handle}` : "me", seatHandle: lead && seat === "lead" ? lead.handle : null, updatePolicy: policy };
+  const engLead = templates.find((t) => t.template_id === DEFAULT_LEAD_TEMPLATE_ID) ?? null;
   const errors = hireErrors(draft);
   const spec = errors.length ? null : buildHireSpec(draft);
   const manifest = template?.manifest;
@@ -67,7 +75,7 @@ export function OrgTemplateHire({ projects, workspace, roles = [], initialProjec
       <div className="flex flex-col gap-3" data-template-posted={posted.short_id}>
         <div className="rounded-lg border border-sol-border/50 bg-sol-bg-alt px-3 py-2.5 text-[12.5px] leading-relaxed">
           <p className="font-semibold text-sol-text">Proposed. Nothing has changed yet.</p>
-          <p className="mt-1 text-sol-text-muted">Decide it on the org page: the role, what it may do and the hire are one proposal. After you accept, one step remains on the machine that will run it: run <code style={{ fontFamily: "var(--font-mono)" }}>cast org template bind {effInstance}</code> in the project&apos;s folder. That fixes the template&apos;s version and creates its triggers, paused.</p>
+          <p className="mt-1 text-sol-text-muted">Decide it on the org page: the role, what it may do and the hire are one proposal. After you accept, the role&apos;s page has one button left, <span className="text-sol-text">Set up</span>: it installs the template on the machine that runs the role and creates its triggers, paused.</p>
         </div>
         <div className="flex items-center justify-end gap-2">
           <button type="button" onClick={onClose} className="h-8 rounded-lg px-3 text-[12.5px] text-sol-text-muted hover:bg-sol-bg-highlight">Close</button>
@@ -77,21 +85,26 @@ export function OrgTemplateHire({ projects, workspace, roles = [], initialProjec
     );
   }
 
+  // The gallery (H3): every template this workspace may hire, one card each;
+  // a card offers the hire only when the workspace can take it.
+  if (!template) {
+    return (
+      <div className="flex flex-col gap-3" data-template-gallery-stage>
+        <TemplateGallery templates={templates} ready={ready} projectCount={available.length} error={catalogError} onPick={(id) => { const t = templates.find((x) => x.template_id === id); if (t && !cannotHireReason(t, available.length)) { setTemplateId(id); setConfig({}); } }} />
+        <FolderPath projects={available} workspace={workspace} initialProjectId={projectId} projectPath={projectPath} />
+      </div>
+    );
+  }
   return (
     <form className="flex flex-col gap-3" onSubmit={(e) => { e.preventDefault(); void submit(); }} data-template-form>
-      <label className={LABEL}>
-        <span className={CAPTION}>Template</span>
-        <SelectBox value={templateId} onChange={(e) => { setTemplateId(e.target.value); setConfig({}); }} className="text-[13px]">
-          <option value="">{ready ? (templates.length ? "Choose a template" : "No templates yet") : "Loading…"}</option>
-          {templates.map((t) => <option key={`${t.workspace}:${t.template_id}`} value={t.template_id}>{t.name} · {t.template_id} {t.latest.version}{t.workspace === "codecast" ? " · by Codecast" : ""}</option>)}
-        </SelectBox>
-        {template && (
-          <div className="flex items-start gap-2 pt-1 text-[12px] leading-relaxed text-sol-text-muted">
-            <RoleAvatar avatar={avatarOf({ avatar: template.avatar, handle: template.template_id })} size={28} />
-            <p>{template.description} <span className="text-sol-text-dim">Asks {template.asks.inputs - template.asks.secrets} answer{template.asks.inputs - template.asks.secrets === 1 ? "" : "s"}, {template.asks.secrets} secret{template.asks.secrets === 1 ? "" : "s"} kept on the machine that runs it, {template.asks.authority} permission{template.asks.authority === 1 ? "" : "s"}, {template.asks.setup} setup step{template.asks.setup === 1 ? "" : "s"}; runs {template.asks.routines} trigger{template.asks.routines === 1 ? "" : "s"}.</span></p>
-          </div>
-        )}
-      </label>
+      <div className="flex items-center gap-3 rounded-lg border border-sol-border/50 px-3 py-2.5" style={{ background: "linear-gradient(160deg, color-mix(in srgb, var(--sol-violet) 7%, var(--sol-card)) 0%, var(--sol-card) 60%)" }} data-template-chosen={template.template_id}>
+        <RoleAvatar avatar={avatarOf({ avatar: template.avatar, handle: template.template_id })} size={36} className="shrink-0 rounded-full" />
+        <div className="min-w-0 flex-1">
+          <p className="text-[13.5px] font-semibold text-sol-text" style={{ fontFamily: "var(--font-serif)" }}>{template.name} <span className="text-[10.5px] font-normal text-sol-text-dim" style={{ fontFamily: "var(--font-mono)" }}>{template.latest.version}</span></p>
+          <p className="truncate text-[11.5px] text-sol-text-muted">{template.description}</p>
+        </div>
+        <button type="button" onClick={() => { setTemplateId(""); setConfig({}); }} className="inline-flex shrink-0 items-center gap-1 text-[11.5px] text-sol-text-muted underline-offset-2 hover:underline" data-template-back><ArrowLeft className="h-3 w-3" /> All templates</button>
+      </div>
       <label className={LABEL}>
         <span className={CAPTION}>Project</span>
         <SelectBox value={projectId} onChange={(e) => setProjectId(e.target.value)} className="text-[13px]">
@@ -102,12 +115,18 @@ export function OrgTemplateHire({ projects, workspace, roles = [], initialProjec
       </label>
       {lead && (
         <div className="rounded-lg border border-sol-border/50 bg-sol-bg-alt px-3 py-2.5 text-[12px] leading-relaxed" role="group" aria-label="Project lead" data-template-lead={lead.handle}>
-          <p className="text-sol-text"><span className="font-semibold">@{lead.handle}</span> already leads {project?.title}. A second role beside a lead is refused, so choose:</p>
+          <p className="text-sol-text"><span className="font-semibold">@{lead.handle}</span> leads {project?.title}. This role is hired under it and reports to it.</p>
           <div className="mt-1.5 flex flex-col gap-1">
-            {([["under", `Hire under @${lead.handle}: the new role reports to it and it stays the lead`], ["lead", `Give it to @${lead.handle}: no new role; it takes on the template's triggers and record`]] as const).map(([value, label]) => (
+            {([["under", `Hire under @${lead.handle}: a new role that reports to it; it stays the lead`], ["lead", `Give it to @${lead.handle} instead: no new role; it takes on the template's triggers and record`]] as const).map(([value, label]) => (
               <label key={value} className="flex items-start gap-2 text-sol-text-muted"><input type="radio" name="template-seat" checked={seat === value} onChange={() => setSeat(value)} className="mt-0.5" />{label}</label>
             ))}
           </div>
+        </div>
+      )}
+      {project && !lead && !isDefaultLeadTemplate(template.template_id) && (
+        <div className="rounded-lg border border-sol-border/50 px-3 py-2.5 text-[12px] leading-relaxed" style={{ background: "color-mix(in srgb, var(--sol-yellow) 8%, transparent)" }} role="note" data-template-no-lead>
+          <p className="text-sol-text">{project.title} has no lead yet, so this role would lead it. Projects usually start with an Engineering Lead and hire the rest under it.</p>
+          {engLead && <button type="button" onClick={() => { setTemplateId(engLead.template_id); setConfig({}); }} className="mt-1 text-[12px] font-semibold text-sol-violet underline-offset-2 hover:underline" data-template-hire-lead-first>Hire the {engLead.name} first</button>}
         </div>
       )}
       {manifest && askedInputs(manifest).length > 0 && (
@@ -132,7 +151,8 @@ export function OrgTemplateHire({ projects, workspace, roles = [], initialProjec
       )}
       {manifest && secretInputs(manifest).length > 0 && (
         <div className="rounded-lg border border-sol-border/50 bg-sol-bg-alt px-3 py-2.5 text-[12px] leading-relaxed" data-template-secrets>
-          <p className="font-semibold text-sol-text">Bound on the host, never typed here</p>
+          <p className="font-semibold text-sol-text">Secrets come last, and stay on its machine</p>
+          <p className="text-sol-text-muted">After you accept, the role page asks for each one once and seals it to the machine that runs the role; nothing here stores it.</p>
           <ul className="mt-1 list-disc pl-4 text-sol-text-muted">{secretInputs(manifest).map((s) => <li key={s.key}>{s.label}{s.help ? <span className="text-sol-text-dim">: {s.help}</span> : null}</li>)}</ul>
         </div>
       )}
@@ -156,7 +176,7 @@ export function OrgTemplateHire({ projects, workspace, roles = [], initialProjec
         <div className="rounded-lg border border-sol-border/50 px-3 py-2.5 text-[12px] leading-relaxed" data-template-preview>
           <p className="font-semibold text-sol-text">What you will decide</p>
           <ul className="mt-1 list-disc pl-4 text-sol-text-muted">
-            {spec.changes.map((c, i) => <li key={i}>{c.kind === "role" ? `A new role ${c.name} @${c.handle}, reporting to ${c.reports_to}, that starts work on its own` : c.kind === "authority" ? `Authority outside codecast: ${c.authority.map((g) => `${g.kind} (${g.label})`).join("; ")}` : c.kind === "hire" ? `The hire: ${c.template} ${c.version} as ${c.instance} on ${project?.title}` : ""}</li>)}
+            {spec.changes.map((c, i) => <li key={i}>{c.kind === "role" ? `A new role ${c.name} @${c.handle}, reporting to ${c.reports_to}${!lead ? `, leading ${project?.title}` : ""}, that starts work on its own` : c.kind === "authority" ? `Authority outside codecast: ${c.authority.map((g) => `${g.kind} (${g.label})`).join("; ")}` : c.kind === "hire" ? `The hire: ${c.template} ${c.version} as ${c.instance} on ${project?.title}` : ""}</li>)}
             <li>{manifest.routines.length} routine{manifest.routines.length === 1 ? "" : "s"}, created paused; you activate each from the role page once it is ready.</li>
             {humanSetupCount(manifest) > 0 && <li>{humanSetupCount(manifest)} setup step{humanSetupCount(manifest) === 1 ? "" : "s"} only you can do; the role puts one in front of you at a time.</li>}
           </ul>
@@ -169,7 +189,6 @@ export function OrgTemplateHire({ projects, workspace, roles = [], initialProjec
         <button type="button" onClick={onClose} className="h-8 shrink-0 rounded-lg px-3 text-[12.5px] text-sol-text-muted hover:bg-sol-bg-highlight">Close</button>
         <button type="submit" disabled={!spec || posting} className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-sol-violet px-3.5 text-[12.5px] font-semibold text-sol-bg disabled:opacity-50">{posting ? "Proposing…" : "Propose the hire"}</button>
       </div>
-      <FolderPath projects={available} workspace={workspace} initialProjectId={projectId} projectPath={projectPath} />
     </form>
   );
 }

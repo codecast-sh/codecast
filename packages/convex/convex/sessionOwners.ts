@@ -153,3 +153,25 @@ export async function syncPrimaryOwnerCache(
   await ctx.db.patch(conversationId, { owner_user_id: primary ?? undefined });
   return primary;
 }
+
+// A role's standing session is owned by whom the role reports to (org-staffing.md
+// S28): reporting to a person IS being in their inbox, so a seat under a person
+// has exactly that person as owner, and a seat under a role has none (it rides
+// the parent lead's card through org_role_id). One writer, called wherever a
+// role's parent is set: provisioning, a move, a retire's re-home and the backfill.
+export async function stampSeatOwners(
+  ctx: { db: any },
+  conversationId: Id<"conversations">,
+  reportsTo: { kind: "user"; user_id: Id<"users"> } | { kind: "role"; role_id: any } | null | undefined,
+  addedBy: Id<"users">,
+): Promise<boolean> {
+  const boss = reportsTo?.kind === "user" ? reportsTo.user_id : null;
+  let changed = false;
+  for (const id of await listSessionOwnerIds(ctx, conversationId)) {
+    if (boss && id.toString() === boss.toString()) continue;
+    if (await removeSessionOwnerRow(ctx, conversationId, id)) changed = true;
+  }
+  if (boss && await addSessionOwnerRow(ctx, conversationId, boss, addedBy)) changed = true;
+  if (changed) await syncPrimaryOwnerCache(ctx, conversationId, boss ?? undefined);
+  return changed;
+}

@@ -420,16 +420,21 @@ export async function health(deps: OrgInitDeps, options: any): Promise<void> {
   const flags = (xs: any[] | undefined) => xs ?? [];
   const total = roles.reduce((n, r) => n + flags(r.flags).length, 0) + people.reduce((n, p) => n + flags(p.flags).length, 0) + flags(company.flags).length;
   console.log(`${fmt.highlight(h.workspace?.name ?? deps.workspaceLabel(ws))} ${fmt.muted(`· ${roles.length} roles · ${people.length} people · ${total} flag${total === 1 ? "" : "s"}${h.generated_at ? ` · ${formatRelative(h.generated_at, now)}` : ""}`)}`);
+  // Each role as its area reads (org-staffing.md S29): the status word, when
+  // it last checked and checks next, its own latest line, the sessions
+  // waiting under it and the signals that matter. The counts behind the
+  // status are in --json; the words here are the ones a person reads.
   for (const r of roles) {
-    const l = r.load ?? {}; const s = r.spend ?? {}; const f = r.flow ?? {};
-    console.log(`  ${fmt.accent(`@${r.handle}`)}${r.short_id ? ` ${fmt.muted(r.short_id)}` : ""}${r.idle_days != null ? ` ${fmt.muted(`· ${r.idle_days}d since a scope event`)}` : ""}`);
-    const g = r.ledger ?? {};
-    const d1 = (n: any) => (typeof n === "number" ? String(Math.round(n * 10) / 10) : "0");
-    console.log(`    ${fmt.muted("load")}  ${d1(l.items_per_day)} items/day · ${d1(l.decisions_per_day)} decisions/day · ${l.live_hands ?? 0} hands · ${l.open_stalls ?? 0} stalls · ${l.cap_hit_days ?? 0} cap hit days · ${l.direct_reports ?? 0} reports${r.overload_ratio != null ? ` · ${d1(r.overload_ratio)}× the model` : ""}`);
-    console.log(`    ${fmt.muted("ledger")} ${g.open_tasks ?? 0} open · ${g.in_flight ?? 0} in flight · ${g.active_plans ?? 0} active plans${r.counted?.note ? fmt.muted(` · counted ${r.counted.note}`) : ""}`);
-    console.log(`    ${fmt.muted("spend")} ${s.wakes_today ?? 0}/${s.wakes_cap ?? "?"} wakes today (${d1(s.wakes_7d_avg)}/d over 7d) · ${k(s.tokens_today)}/${k(s.tokens_cap)} tokens${s.cap_hits_7d ? ` · ${s.cap_hits_7d} cap hits/7d` : ""}`);
-    console.log(`    ${fmt.muted("flow")}  ${f.decisions_7d ?? 0} decisions/7d${f.median_recommend_min != null ? ` · ${d1(f.median_recommend_min)}m to recommend` : ""} · ${f.done_7d ?? 0} done/7d · ${f.review_stalls ?? 0} review stalls${f.sends_7d ? ` · sends ${(f.sends_7d.to ?? []).reduce((n: number, x: any) => n + (x.n ?? 0), 0)} out / ${(f.sends_7d.from ?? []).reduce((n: number, x: any) => n + (x.n ?? 0), 0)} in` : ""}`);
-    for (const fl of flags(r.flags)) console.log(flagLine(fl, "    "));
+    const a = r.area ?? {};
+    const check = a.check ?? {};
+    const checked = a.checked_at ? `checked ${formatRelative(a.checked_at, now)}` : "never checked";
+    const nextCheck = check.status === "paused" ? "check paused" : check.run_at ? `next check ${formatRelative(check.run_at, now)}` : check.status ? `check ${check.status}` : "no check";
+    console.log(`  ${fmt.accent(`@${r.handle}`)}${r.short_id ? ` ${fmt.muted(r.short_id)}` : ""} ${fmt.highlight(String(a.status ?? "").replace(/_/g, " "))} ${fmt.muted(`· ${checked} · ${nextCheck}`)}`);
+    if (a.status_line && a.status !== "on_track") console.log(`    ${a.status_line}`);
+    if (a.standing) console.log(`    ${fmt.muted("says")}  ${a.standing.project}: ${a.standing.text}${a.standing.written_on ? fmt.muted(` (${a.standing.written_on})`) : ""}`);
+    for (const w of a.waiting ?? []) console.log(`    ${fmt.muted("waits")} ${w.short_id} ${w.title}${w.state ? fmt.muted(` · ${w.state}`) : ""} ${fmt.muted(`· ${w.why} ${formatRelative(w.since, now)}`)}`);
+    for (const sg of a.signals ?? []) console.log(`    ${(SEVERITY_TAG[sg.severity] ?? fmt.muted)(String(sg.severity).padEnd(7))} ${sg.text}`);
+    for (const fl of flags(r.flags).filter((f: any) => f.severity !== "info")) console.log(flagLine(fl, "    "));
   }
   for (const p of people) {
     const dw = p.decisions_waiting ?? {};

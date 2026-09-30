@@ -68,6 +68,13 @@ export const TRIGGER_EVENT_SHORTHANDS: Record<string, TriggerEventFilter> = {
  */
 export const SESSION_NEEDS_INPUT_EVENT = "session_needs_input";
 
+/**
+ * Fired by the area watch for the Chief of Staff, never armed by hand
+ * (docs/architecture/org-staffing.md S29): an area read stuck or overloaded
+ * at two checks in a row, or a project with work has no role looking after it.
+ */
+export const ORG_AREA_CHANGE_EVENT = "org_area_change";
+
 export type TriggerEventName = keyof typeof TRIGGER_EVENT_SHORTHANDS;
 
 /** Every name, in the order above, for help text and pickers. */
@@ -99,6 +106,7 @@ export const TRIGGER_EVENT_LABELS: Record<string, string> = {
   issue_closed: "issue closed",
   issue_commented: "issue comment",
   [SESSION_NEEDS_INPUT_EVENT]: "a session under the role needs input",
+  [ORG_AREA_CHANGE_EVENT]: "an area of the company changed and it lasted",
 };
 
 /**

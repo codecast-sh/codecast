@@ -54,7 +54,7 @@ export type HireRoleInitial = { name?: string; handle?: string; charter?: string
 export type HireRoleTouched = { scope: boolean; reports_to: boolean };
 export type HireRoleOutput = OrgCreateRoleInput & { touched: HireRoleTouched };
 
-export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialProjects = [], projectPath, title = "Add a role", initial, submitLabel = "Create and start", seat }: {
+export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialProjects = [], projectPath, title = "Add a role", initial, submitLabel = "Create and start", seat, initialMode = "manual" }: {
   open: boolean;
   onClose: () => void;
   tree: OrgTree;
@@ -73,8 +73,13 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
    *  this session, so nothing new starts. The form says what naming changes,
    *  offers no template, and the create seats the session. */
   seat?: OrgRoleSeat;
+  /** "Hire" on the org page opens straight onto the gallery of templates. */
+  initialMode?: "manual" | "template";
 }) {
-  const [mode, setMode] = useState<"manual" | "template">("manual");
+  const [mode, setMode] = useState<"manual" | "template">(seat ? "manual" : initialMode);
+  // The gallery wants room for its cards; the answers form and the manual form do not.
+  const [templateStage, setTemplateStage] = useState<"gallery" | "form">("gallery");
+  const wide = mode === "template" && templateStage === "gallery";
   const [name, setName] = useState(initial?.name ?? "");
   const [handle, setHandle] = useState(initial?.handle ?? "");
   const [handleTouched, setHandleTouched] = useState(!!initial?.handle);
@@ -180,10 +185,10 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-[520px] grid-cols-1 max-h-[92vh] overflow-y-auto" style={{ background: "var(--sol-card)", borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)" }}>
+      <DialogContent className={`${wide ? "max-w-[800px]" : "max-w-[520px]"} grid-cols-1 max-h-[92vh] overflow-y-auto transition-[max-width] duration-200`} style={{ background: "var(--sol-card)", borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)" }} data-hire-stage={mode === "template" ? templateStage : "manual"}>
         <DialogHeader>
           <DialogTitle className="text-[17px]" style={{ fontFamily: "var(--font-serif)" }}>{title}</DialogTitle>
-          <DialogDescription className="text-[12px]" style={{ color: "var(--sol-text-muted)" }}>{seat ? seatSentence(seat) : mode === "manual" ? "A role has an area it looks after, someone it reports to, and a charter that says what it is for. It starts as soon as you create it." : "Hire a ready-made role for one project. Nothing is set up until you approve it."}</DialogDescription>
+          <DialogDescription className="text-[12px]" style={{ color: "var(--sol-text-muted)" }}>{seat ? seatSentence(seat) : mode === "manual" ? "A role has an area it looks after, someone it reports to, and a charter that says what it is for. It starts as soon as you create it." : templateStage === "gallery" ? "A ready-made role for one project: pick one to see what it asks for. Nothing is set up until you approve it." : "Answer what the template asks; the hire is one proposal you decide on the org page."}</DialogDescription>
         </DialogHeader>
         <div className={seat ? "hidden" : "grid grid-cols-2 gap-1 rounded-lg bg-sol-bg-alt p-1"} role="group" aria-label="Role setup">
           {([["manual", "Write a role"], ["template", "From a template"]] as const).map(([value, label]) => (
@@ -191,7 +196,7 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
           ))}
         </div>
         <div hidden={mode !== "template"}>
-          <OrgTemplateHire projects={projects} workspace={tree.workspace} roles={tree.roles} initialProjectId={initialProjects.length === 1 ? initialProjects[0]._id : undefined} projectPath={initialProjects.length === 1 ? projectPath : undefined} onClose={onClose} />
+          <OrgTemplateHire projects={projects} workspace={tree.workspace} roles={tree.roles} initialProjectId={initialProjects.length === 1 ? initialProjects[0]._id : undefined} projectPath={initialProjects.length === 1 ? projectPath : undefined} onClose={onClose} onStage={setTemplateStage} />
         </div>
         <form className={mode === "manual" ? "flex flex-col gap-3" : "hidden"} onSubmit={(e) => { e.preventDefault(); submit(); }}>
           <div className="grid grid-cols-[1fr_auto] gap-3">
