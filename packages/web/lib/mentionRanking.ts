@@ -1,6 +1,7 @@
 import type { MentionItem } from "./mentionItem";
 import type { RecentVisit } from "../store/inboxStore";
 import { identityLine } from "./sessionIdentity";
+import { mentionContextPosition, type MentionContext } from "./mentionContext";
 
 // How the @-mention dropdown decides what to show first.
 //
@@ -111,18 +112,28 @@ export function compareMentionRecency(a: MentionItem, b: MentionItem): number {
   return (b.viewedAt ?? 0) - (a.viewedAt ?? 0) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
 }
 
-export function mergeMentionSuggestions(local: MentionItem[], remote: MentionItem[], times: Map<string, number>, perTypeLimit = Infinity, query = "", personifyAll = false): MentionItem[] {
+// Something this conversation already names outranks a stranger that matches
+// the typed words equally well, and even one rung better: a session the thread
+// cites whose title starts with the query leads a teammate whose name does.
+// It never climbs past a stronger rung than that, so a summary-only hit on a
+// cited session still sits below a name hit on anything.
+const CONTEXT_LIFT = 1.5;
+
+export function mergeMentionSuggestions(local: MentionItem[], remote: MentionItem[], times: Map<string, number>, perTypeLimit = Infinity, query = "", personifyAll = false, context?: MentionContext): MentionItem[] {
   const byId = new Map<string, MentionItem>();
   for (const item of [...local, ...remote]) {
     const key = `${item.type}:${item.id}`;
-    if (!byId.has(key)) byId.set(key, withMentionViewTime(item, times));
+    if (byId.has(key)) continue;
+    const timed = withMentionViewTime(item, times);
+    const contextAt = mentionContextPosition(item, context);
+    byId.set(key, contextAt ? { ...timed, contextAt } : timed);
   }
   const ranked = [...byId.values()];
   const ranks = new Map<MentionItem, number>();
-  for (const item of ranked) ranks.set(item, mentionMatchRank(item, query, personifyAll));
+  for (const item of ranked) ranks.set(item, mentionMatchRank(item, query, personifyAll) - (item.contextAt ? CONTEXT_LIFT : 0));
   const counts = new Map<string, number>();
   return ranked
-    .sort((a, b) => ranks.get(a)! - ranks.get(b)! || compareMentionRecency(a, b))
+    .sort((a, b) => ranks.get(a)! - ranks.get(b)! || (b.contextAt ?? 0) - (a.contextAt ?? 0) || compareMentionRecency(a, b))
     .filter((item) => {
       const count = counts.get(item.type) ?? 0;
       counts.set(item.type, count + 1);
