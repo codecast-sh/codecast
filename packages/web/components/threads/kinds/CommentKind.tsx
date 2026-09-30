@@ -12,7 +12,7 @@ import { useCommentThreadRows } from "../../../hooks/useThreadPreviews";
 import { AgentIcon } from "../../ConversationList";
 import { CommentThread } from "../../comments/CommentThread";
 import { FileLineThread } from "../../comments/FileLineThread";
-import { useTailPin } from "../cardWindow";
+import { EarlierButton, useReaderFold } from "../readerFold";
 import { useThreadsPage } from "../threadsContext";
 
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
@@ -99,7 +99,7 @@ export function CommentMeta({ card }: { card: ThreadCardModel }) {
   );
 }
 
-export function CommentExpanded({ card, seen, focusComposer }: { card: ThreadCardModel; present: boolean; seen: boolean; frozenReadAt: number; focusComposer: boolean }) {
+export function CommentExpanded({ card, seen, frozenReadAt, focusComposer }: { card: ThreadCardModel; present: boolean; seen: boolean; frozenReadAt: number; focusComposer: boolean }) {
   const row = rowOf(card);
   const anchor = anchorOf(row);
   const { conversationId, webKey, messageId, filePath, lineNumber } = anchor;
@@ -122,33 +122,39 @@ export function CommentExpanded({ card, seen, focusComposer }: { card: ThreadCar
     useInboxStore.getState().markThreadRead("comment", row.root_key);
   }, [seen, row.root_key, row.last_activity_at, row.last_read_at, row.unread, comments.length]);
 
+  // The thread's first comment is what it hangs on and always shows; its
+  // replies fold to what is new (threads/readerFold).
+  const replies = useMemo(() => comments.slice(1), [comments]);
+  const fold = useReaderFold(replies, (c) => c.created_at, frozenReadAt);
+  const shown = useMemo(() => (comments.length ? [comments[0], ...fold.visible] : comments), [comments, fold.visible]);
+
   const thread: CommentThreadModel = useMemo(
     () => ({
       key: webKey,
       messageId,
       filePath,
       lineNumber,
-      comments,
+      comments: shown,
       lastActivity: comments.length ? comments[comments.length - 1].created_at : 0,
       resolved: isThreadResolved(comments),
     }),
-    [webKey, messageId, filePath, lineNumber, comments],
+    [webKey, messageId, filePath, lineNumber, comments, shown],
   );
   const agentBusy = comments.some((c) => isAgentComment(c) && (c.agent_status === "thinking" || c.agent_status === "streaming"));
 
-  // The wrapper IS the capped scroller; pinned to the tail so the newest
-  // reply is what shows first.
-  const pinRef = useTailPin(comments.length ? `${comments[comments.length - 1]._id}|${comments.length}` : "");
+  const earlier = <EarlierButton count={fold.hidden} noun="reply" onClick={fold.showAll} />;
 
   if (filePath) {
     return (
-      <div ref={pinRef} className="th-card-open th-card-open-comments">
-        <FileLineThread conversationId={conversationId} filePath={filePath} lineNumber={lineNumber} comments={comments} composerClassName="ch-composer" />
+      <div className="th-card-open th-card-open-comments">
+        {earlier}
+        <FileLineThread conversationId={conversationId} filePath={filePath} lineNumber={lineNumber} comments={shown} composerClassName="ch-composer" />
       </div>
     );
   }
   return (
-    <div ref={pinRef} className="th-card-open th-card-open-comments">
+    <div className="th-card-open th-card-open-comments">
+      {earlier}
       <CommentThread
         thread={thread}
         conversationId={conversationId}

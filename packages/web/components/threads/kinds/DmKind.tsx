@@ -10,6 +10,7 @@ import { CommentAvatar } from "../../comments/CommentAvatar";
 import { ChatComposer } from "../../chat/ChatComposer";
 import { ChatTimelineRows, ThreadUnavailableNote } from "./ChatThreadKind";
 import { useThreadsPage } from "../threadsContext";
+import { EarlierButton, useReaderFold } from "../readerFold";
 
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 // The DM kind: a direct message room from the chat rail (a multi-person DM is
@@ -18,7 +19,7 @@ import { useWatchEffect } from "../../../hooks/useWatchEffect";
 // law applied: the room is marked read while the reader is present with the
 // row open, and re-marked as new ones land.
 
-/** How many of the room's newest messages an open row shows. */
+/** How many of the room's newest messages a row holds; the fold shows what is new. */
 const DM_WINDOW = 20;
 
 function channelOf(card: ThreadCardModel): ChatRailChannel {
@@ -60,6 +61,7 @@ export function DmExpanded({
   const all = useChannelMessages(channelId);
   const messages = useMemo(() => (all.length > DM_WINDOW ? all.slice(-DM_WINDOW) : all), [all]);
   const newestId = messages.length ? messages[messages.length - 1].id : undefined;
+  const fold = useReaderFold(messages, (m) => m.createdAt, frozenReadAt);
 
   // The channel page's own rule: present with the room open = read. The
   // marker is the newest message in the ROOM, replies included, so a badge a
@@ -92,7 +94,10 @@ export function DmExpanded({
       {messages.length === 0 && !feed.loading ? (
         <div className="th-card-note">Nothing here yet. Say hello.</div>
       ) : (
-        <ChatTimelineRows messages={messages} channelId={channelId} frozenReadAt={frozenReadAt} />
+        <>
+          <EarlierButton count={fold.hidden} noun="message" onClick={fold.showAll} />
+          <ChatTimelineRows messages={fold.visible} channelId={channelId} frozenReadAt={frozenReadAt} />
+        </>
       )}
       <ChatComposer
         channelId={channelId}

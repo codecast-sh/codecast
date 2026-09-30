@@ -10,7 +10,6 @@ import { Badge } from "../../ui/badge";
 import { Avatar, TaskCommentStream, TimeAgo } from "../../tasks/TaskCommentStream";
 import { IssueLink } from "../../tasks/IssueLink";
 import { MarkdownRenderer } from "../../tools/MarkdownRenderer";
-import { useTailPin } from "../cardWindow";
 
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 // The task kind: the task's comment stream. The row is the short id, the
@@ -87,15 +86,12 @@ export function TaskExpanded({ card, seen, frozenReadAt, focusComposer }: { card
     useInboxStore.getState().markThreadRead("task", row.root_key);
   }, [seen, row.root_key, row.last_activity_at, row.last_read_at, row.unread, commentCount]);
 
-  // The wrapper IS the capped scroller; pinned to the tail so the newest
-  // comment — the one that brought the reader here — is what shows first.
   const comments = task?.comments ?? EMPTY_COMMENTS;
-  const pinRef = useTailPin(comments.length ? `${comments[comments.length - 1]._id}|${comments.length}` : "");
 
   const desc = (task?.description ?? "").trim();
 
   return (
-    <div ref={pinRef} className="th-card-open th-card-open-task">
+    <div className="th-card-open th-card-open-task">
       {desc && (
         <details className="th-task-desc">
           <summary>Description</summary>
