@@ -37,11 +37,13 @@ import { isParkedDispatchError } from "../store/mutativeMiddleware";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { soundSend } from "../lib/sounds";
 import type { MentionItem } from "./editor/MentionList";
-import { MentionSuggestion } from "./editor/MentionSuggestion";
-import { mergeMentionSuggestions, mentionViewTimes } from "../lib/mentionRanking";
+import { MentionMenu } from "./editor/MentionMenu";
+import { mergeMentionSuggestions, mentionViewTimes, orderMentionItems } from "../lib/mentionRanking";
 import { Maximize2, Minimize2, Split, Archive, ArrowRightLeft } from "lucide-react";
 import type { ComposeEditorHandle } from "./editor/ComposeEditor";
-import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, matchScore, mentionItemMatches } from "../hooks/useMentionQuery";
+import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, matchScore, mentionItemMatches, channelMentionItems } from "../hooks/useMentionQuery";
+import { mentionContextFor } from "../lib/mentionContext";
+import { parseChatDraftKey } from "../lib/chatDraftKey";
 import { inFlightPending, isAliveIdleStatus, pendingRowHoldReason, type LiveAgentStatus } from "../lib/pendingBanner";
 import { expandEntityMentions } from "../lib/mentionExpansion";
 import { identityLine } from "../lib/sessionIdentity";
@@ -75,9 +77,9 @@ const ComposeEditor = lazy(() => import("./editor/ComposeEditor").then((m) => ({
 // that frame can spare, so a long draft never pushes the host's other rows
 // out of its clip. The element that carries the cap (the textarea, or the
 // expanded editor's box) wears data-composer-field so a host can measure it.
-// Chat's caret-anchored @ popup. Wide enough that a session row's title, its
-// message count and its age fit on one line — 340px truncated most of them.
-const CHAT_AC_WIDTH = 480;
+// Chat's caret-anchored @ and # popup. Wide enough that a session row's name,
+// its meta run, its id and its age share one line.
+const CHAT_AC_WIDTH = 560;
 
 const FIELD_SIZING_SUPPORTED =
   typeof CSS !== "undefined" && CSS.supports?.("field-sizing", "content");
@@ -91,6 +93,11 @@ const MENTION_QUERY_RE = /^[\w./\\-]*(?: [\w./\\-]+){0,4} ?/;
 // can be named mid-sentence; a "/" inside a word (a path, "and/or") is prose.
 const SLASH_TRIGGER_RE = /(?:^|\s)\/([\w:.-]*)$/;
 const SLASH_QUERY_RE = /^[\w:.-]*/;
+// A channel reference opens after whitespace or "(" and takes the slug
+// alphabet channel names are normalized to (convex chatText
+// normalizeChannelName), so "##" headings and "a#b" stay prose.
+const CHANNEL_TRIGGER_RE = /(?:^|[\s(])#([a-z0-9_-]*)$/i;
+const CHANNEL_QUERY_RE = /^[a-z0-9_-]*/i;
 
 
 // deriveRestartStage (the live label for a kill+restart in flight) lives in
@@ -339,7 +346,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const markAsQueued = useInboxStore((s) => s.markOptimisticAsQueued);
   const sentContentRef = useRef<string | null>(null);
 
-  type AutocompleteTrigger = { type: "/" | "@"; startPos: number } | null;
+  type AutocompleteTrigger = { type: "/" | "@" | "#"; startPos: number } | null;
   type AcItem = Omit<MentionItem, "id"> & { id?: string; description?: string };
   const [acTrigger, setAcTrigger] = useState<AutocompleteTrigger>(null);
   const [acIndex, setAcIndex] = useState(0);
@@ -350,7 +357,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const acAnchorRef = useRef<HTMLDivElement>(null);
   const [acCaretLeft, setAcCaretLeft] = useState(0);
   useLayoutEffect(() => {
-    if (!chatMentionMode || !acTrigger || acTrigger.type !== "@") return;
+    if (!chatMentionMode || !acTrigger || acTrigger.type === "/") return;
     const ta = textareaRef.current;
     const host = acAnchorRef.current;
     if (!ta || !host) return;
@@ -381,7 +388,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const acQuery = useMemo(() => {
     if (!acTrigger) return "";
     const rawQuery = message.slice(acTrigger.startPos + 1);
-    const queryRe = acTrigger.type === "@" ? MENTION_QUERY_RE : SLASH_QUERY_RE;
+    const queryRe = acTrigger.type === "@" ? MENTION_QUERY_RE : acTrigger.type === "#" ? CHANNEL_QUERY_RE : SLASH_QUERY_RE;
     return (rawQuery.match(queryRe)?.[0] ?? "").trim().toLowerCase();
   }, [acTrigger, message]);
 
@@ -396,8 +403,23 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     { teamId: mentionScope.kind === "team" ? mentionScope.teamId : undefined, types: SERVER_MENTION_TYPES },
   );
 
+  // What this session or chat thread already names leads the @ and # lists
+  // (lib/mentionContext). Read once per opened trigger, not per keystroke:
+  // the transcript does not change while a mention is being typed.
+  const acTriggerKey = acTrigger && acTrigger.type !== "/" ? `${acTrigger.type}${acTrigger.startPos}` : null;
+  const acContext = useMemo(() => {
+    if (!acTriggerKey) return undefined;
+    const st = useInboxStore.getState();
+    return mentionContextFor(st, conversationId, st.currentUser?._id ? String(st.currentUser._id) : undefined);
+  }, [acTriggerKey, conversationId]);
+
   const acItems: AcItem[] = useMemo(() => {
     if (!acTrigger) return [];
+    if (acTrigger.type === "#") {
+      const channels = channelMentionItems(useInboxStore.getState(), mentionScope)
+        .filter((c) => matchScore(c.label, acQuery) !== Infinity || (!!c.sublabel && matchScore(c.sublabel, acQuery) !== Infinity));
+      return orderMentionItems(mergeMentionSuggestions(channels, [], new Map(), 12, acQuery, false, acContext));
+    }
     if (acTrigger.type === "/") {
       return (skills || [])
         .filter(s => s.name.toLowerCase().includes(acQuery))
@@ -428,14 +450,15 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         : null;
       const candidates = mergeMentionSuggestions(
         [...roleItems, ...(effectiveMentionItemsRef.current ?? [])], acServerItems,
-        mentionViewTimes(useInboxStore.getState()),
+        mentionViewTimes(useInboxStore.getState()), Infinity, "", false, acContext,
       ).filter((m) => {
         if (chatMentionMode && (m.type === "label" || (m.type === "person" && !m.handle))) return false;
-        if (chatMentionMode && m.type === "session" && !(acQuery.startsWith("jx") && recentSessionIds!.has(m.id))) return false;
+        // A session the thread already cites is offered outright; any other
+        // waits for its short id.
+        if (chatMentionMode && m.type === "session" && !m.contextAt && !(acQuery.startsWith("jx") && recentSessionIds!.has(m.id))) return false;
         return mentionItemMatches(m, acQuery);
       });
-      const items: AcItem[] = mergeMentionSuggestions(candidates, [], new Map(), acQuery ? 8 : 6, acQuery, personifyAllNow())
-        .map((m) => ({ ...m, description: m.sublabel }));
+      const items: AcItem[] = mergeMentionSuggestions(candidates, [], new Map(), acQuery ? 10 : 6, acQuery, personifyAllNow());
 
       const fileMatches = (filePathsRef.current || [])
         .filter(p => {
@@ -446,11 +469,11 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         .map(p => ({ label: p, description: undefined, type: "file" as string }));
       items.push(...fileMatches);
 
-      return items;
+      return orderMentionItems(items);
     }
     return [];
     // localMentionTick re-runs this when the fallback query resolves into the ref.
-  }, [acTrigger, acQuery, skills, acServerItems, localMentionTick, chatMentionMode]);
+  }, [acTrigger, acQuery, skills, acServerItems, localMentionTick, chatMentionMode, acContext, mentionScope]);
 
   const clampedAcIndex = acItems.length > 0 ? Math.min(acIndex, acItems.length - 1) : 0;
 
@@ -481,6 +504,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     let inserted: string;
     if (acTrigger.type === "/") {
       inserted = `/${item.label} `;
+    } else if (acTrigger.type === "#") {
+      inserted = `#${item.label} `;
     } else if (chatMentionMode && (item.type === "person" || item.type === "role") && item.handle) {
       // The handle the server resolves, at the @ the user typed. The ref form
       // (`@[Name id]`) is the session vocabulary; for people in chat it only
@@ -1038,8 +1063,12 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     const cursorPos = textareaRef.current?.selectionStart ?? val.length;
     const textBefore = val.slice(0, cursorPos);
     const slashMatch = (skills?.length ?? 0) > 0 ? textBefore.match(SLASH_TRIGGER_RE) : null;
+    const hashMatch = slashMatch ? null : textBefore.match(CHANNEL_TRIGGER_RE);
     if (slashMatch) {
       setAcTrigger({ type: "/", startPos: cursorPos - slashMatch[1].length - 1 });
+      setAcIndex(0);
+    } else if (hashMatch) {
+      setAcTrigger({ type: "#", startPos: cursorPos - hashMatch[1].length - 1 });
       setAcIndex(0);
     } else {
       const atMatch = textBefore.match(MENTION_TRIGGER_RE);
@@ -1794,7 +1823,6 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     if (!open) requestAnimationFrame(() => textareaRef.current?.focus());
   };
 
-  const acScrollRef = useRef(false);
   // The image strip and the queue take keys while the caret stays in the
   // textarea, so any sign the user is back on the text (a click in it, an
   // edit) ends that selection before a key meant for words reaches it. The
@@ -1812,13 +1840,11 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     if (acTrigger && acItems.length > 0) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
-        acScrollRef.current = true;
         setAcIndex(i => Math.min(i + 1, acItems.length - 1));
         return;
       }
       if (e.key === "ArrowUp") {
         e.preventDefault();
-        acScrollRef.current = true;
         setAcIndex(i => Math.max(i - 1, 0));
         return;
       }
@@ -2400,46 +2426,25 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
           {threadStateNode}
           {composerNode}
           {acTrigger && (acItems.length > 0 || (acTrigger.type === "@" && acServerLoading && !acQuery.includes(" "))) && (() => {
+            const chatKey = parseChatDraftKey(conversationId);
             const dropdown = (
               <div
                 ref={acRef}
                 className={chatMentionMode
-                  ? "absolute bottom-0 mb-1 z-30"
-                  : `mx-auto mb-1 ${colClass}`}
-                style={chatMentionMode ? { left: acCaretLeft, width: CHAT_AC_WIDTH } : undefined}
+                  ? "absolute bottom-0 mb-1.5 z-30"
+                  : `mx-auto mb-1.5 ${colClass}`}
+                style={chatMentionMode ? { left: acCaretLeft, width: CHAT_AC_WIDTH, maxWidth: "calc(100vw - 24px)" } : undefined}
               >
-                <div role="listbox" aria-label="Suggestions" className="bg-sol-bg border border-sol-border/50 rounded-lg shadow-xl py-1.5 max-h-[320px] overflow-y-auto overflow-x-hidden">
-                  <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-sol-text-dim">
-                    {acTrigger.type === "@" ? "Recently viewed · then updated" : "Commands"}
-                  </div>
-                  {acItems.map((item, index) => {
-                    const isSelected = index === clampedAcIndex;
-                    return (
-                      <button
-                        key={`${item.type}:${item.id || item.label}`}
-                        type="button"
-                        data-mention-id={item.id}
-                        role="option"
-                        aria-selected={isSelected}
-                        ref={isSelected ? (el) => { if (el && acScrollRef.current) { el.scrollIntoView({ block: "nearest" }); acScrollRef.current = false; } } : undefined}
-                        onMouseEnter={() => setAcIndex(index)}
-                        onMouseDown={(e) => { e.preventDefault(); applyAutocomplete(item); }}
-                        className={`w-full text-left px-3 py-2 flex items-center gap-2.5 ${isSelected ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"}`}
-                      >
-                        <MentionSuggestion item={item} />
-                      </button>
-                    );
-                  })}
-                  {acTrigger.type === "@" && acServerLoading && (
-                    <div className="px-3 py-2 flex items-center gap-2 text-[11px] text-sol-text-dim border-t border-sol-border/30">
-                      <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v3a5 5 0 00-5 5H4z" />
-                      </svg>
-                      <span>Searching everything&hellip;</span>
-                    </div>
-                  )}
-                </div>
+                <MentionMenu
+                  items={acItems}
+                  selectedIndex={clampedAcIndex}
+                  onHover={setAcIndex}
+                  onPick={(index) => applyAutocomplete(acItems[index])}
+                  query={acQuery}
+                  loading={acTrigger.type === "@" && acServerLoading}
+                  heading={acTrigger.type === "/" ? "Commands" : undefined}
+                  contextTitle={chatKey ? (chatKey.threadRootId ? "In this thread" : "In this channel") : "In this conversation"}
+                />
               </div>
             );
             if (!chatMentionMode) return dropdown;

@@ -1,0 +1,116 @@
+# Hero chapters: the contract
+
+The homepage hero is one film in 13 chapters (`../world.ts` SCENES, 84s). Each chapter renders the real product's views with fixture data, inside the sandbox (`../sandbox.tsx`). This file is what a chapter builder needs; `../ARCHITECTURE.md` has the reasoning and `../../heroFlythrough.spec.md` the film beat by beat.
+
+## What you own, what you read
+
+A chapter is three files, and its builder owns all three outright:
+
+| file | holds |
+|---|---|
+| `chapters/<id>.tsx` | `export const chapter: HeroChapter`: the chapter's views as **parts** placed into surface **regions**, plus its flyer renderers |
+| `chapters/<id>.motion.ts` | `export const motion: ChapterMotion`: beats, typed text, flyers and arcs, as pure data |
+| `fixtures/<id>.ts` | the fixture data its views receive, and `entities` for any id it renders as a pill or card |
+
+Read-only for builders (ask the orchestrator for a change, do not edit): `world.ts` (surfaces, regions, camera, scenes), `fixtures/story.ts` (the cast and the cross-chapter cues), `film.tsx`, `surfaces.tsx`, `sandbox.tsx`, `timeline.ts`, `motion.ts`, `chapters/index.ts`, `chapters/contract.ts`, `fixtures/index.ts`, `placeholder.tsx`, `HeroFlythrough.tsx`.
+
+App files you split into container and view (ARCHITECTURE.md section 3) are shared with other live sessions: re-read a file right before each edit, edit surgically, never revert or reformat what you did not write, never use git checkout/restore/stash/reset, and do not commit.
+
+## Chapters, surfaces and regions
+
+Region rectangles are in `world.ts` (px from the surface's top-left; on the phone, from the screen's top-left under the notch). A region stacks its parts by `order`, from the top, or from the bottom for `anchor: "bottom"` (a transcript whose newest entry sits on the composer). Parts from several chapters can share a region; the orders below are reserved so they interleave correctly.
+
+| # | id | name | film (s) | camera holds | parts (region, order) | cues it owns (story.ts) |
+|---|---|---|---|---|---|---|
+| 1 | `inbox` | Inbox | 0 to 9 | 2.4 to 8.2 desk | `desk.sidebar` 0, `desk.list` 10 (section header, lead row), `desk.list` 30 (other rows) | leadLands, leadSelected |
+| 2 | `conversation` | Steer | 9 to 15 | 9.0 to 14.4 desk, in on the conversation | `desk.header` 0, `desk.transcript` 10, `desk.composer` 0 | prompt, testsPass |
+| 3 | `fanout` | Fan out | 15 to 21 | 15.0 to 17.6 desk; 18.6 to 20.6 pair | `desk.transcript` 20, `desk.list` 20 (worker rows), `pairA.header` 0, `pairB.header` 0, `pairA.transcript` 10, `pairB.transcript` 10 | spawnA, spawnB, workerRowA, workerRowB |
+| 4 | `phone` | Approve | 21 to 28 | 21.4 to 23.2 desk; 24.2 to 26.6 phone; 27.0 to 27.8 both | `desk.transcript` 30 (permission stack), `phone.main` 0 | permissionAsk, permissionApproved |
+| 5 | `talk` | Agents talk | 28 to 34 | 28.8 to 33.6 pair | `pairA.transcript` 20, `pairB.transcript` 20 | messageSent, replySent, forked |
+| 6 | `decide` | Decide | 34 to 40 | 35.0 to 39.6 desk, on the side card | `desk.side` 0 | decisionAsked, decisionAnswered |
+| 7 | `work` | Track | 40 to 47 | 41.0 to 46.4 board | `desk.transcript` 40 (files the task), `board.main` 0 | taskFiled, taskLands, taskClaimed |
+| 8 | `automation` | Automate | 47 to 53 | 47.8 to 52.6 auto | `auto.main` 0 | triggerFires |
+| 9 | `team` | Team | 53 to 61 | 53.8 to 60.4 team | `team.main` 0 | |
+| 10 | `integrations` | GitHub | 61 to 68 | 61.8 to 67.4 pr | `pr.main` 0 | prOpened, checksGreen, merged |
+| 11 | `publish` | Publish | 68 to 74 | 69.0 to 73.4 page | `page.main` 0 | published |
+| 12 | `memory` | Memory | 74 to 80 | 74.8 to 77.0 palette; 77.6 to 79.6 blame | `palette.main` 0, `blame.main` 0 | threeWeeks |
+| 13 | `remote` | Anywhere | 80 to 84 | 80.4 to 81.4 desk inset | `desk.inset` 0 | |
+
+A chapter's parts stay mounted for the whole film. Surfaces are reused across chapters (the desk carries chapters 1 to 4, 6, 7 and 13), so a part shows its state for the current time: before its cue it renders nothing (or takes no height) and it enters with a beat; after its chapter it stays in its finished state. Other chapters' changes to what you render arrive as cues in `story.ts` (the API worker's row turns amber at `CUES.permissionAsk` and green at `CUES.permissionApproved`, which the fan-out chapter's row reads).
+
+## The part contract
+
+```ts
+// chapters/<id>.tsx
+export const chapter: HeroChapter = {
+  id: "fanout",
+  parts: [{ key: "workerRows", region: "desk.list", order: 20, Component: WorkerRows }],
+  flyers: { "fanout.spawnA": SpawnGhost },
+};
+```
+
+- A part is `ComponentType<PartProps>`, `PartProps = { now: number }`. `now` is the wall clock taken once at mount; every fixture timestamp is `now - offset`, so relative labels read the same on every visit.
+- **Film time is not a prop.** Read it with `useFilmTime(select)` from `../film`. On a surface, `t` is that surface's content time: film time until the surface turns face-down at the seam, then 0, so state resets unseen. `select` must return a primitive or a stable reference; it runs every frame and your component re-renders only when the result changes. Derive discrete state (`t >= CUES.permissionAsk ? "needs_input" : "working"`, a typed prefix length, a checks count), never a per-frame float.
+- **Continuous motion goes to the driver, not React.** Put `{...fly("<surface>/<id>")}` on an element and give it beats in your motion file; the driver writes its transform and opacity every frame without a render. Text typed character by character: a `TextBeat` plus `<FlyText id="<surface>/<id>" />` for plain text, or `useFilmTime((t) => typed(text, t, cue, rate).length)` when a real input or view must render the value.
+- Parts render **real app views only**, fed through props or the sandbox seams. No hand-built copies of product UI and no copying a component's JSX: split the component into container and view (ARCHITECTURE.md section 3) and render the view.
+
+## The motion contract
+
+```ts
+// chapters/<id>.motion.ts
+export const motion: ChapterMotion = {
+  beats: { desk: [{ id: "fanout.row:api", cue: CUES.workerRowA, preset: "drop", z: 120, rx: -12, y: -16 }] },
+  texts: { pairA: [{ id: "talk.cmd", kind: "chars", text: 'cast send jx7hrui "..."', cue: 29.0, rate: 40 }] },
+  flyers: [{ id: "fanout.spawnA", cue: 16.0, dur: 0.6, from: regionPt("desk.transcript", 320, 440), to: regionPt("desk.list", 170, 120), ... }],
+  arcs: [{ id: "phone.approved", ... }],
+};
+```
+
+- Pure data: import only `../world`, `../fixtures/story` and your own fixtures. No React, no app modules; the timeline, its tests and the prerender load these files.
+- Every id starts with your chapter id and a dot. The element for a beat on the desk is `fly("desk/fanout.row:api")`.
+- Presets and easings are in `world.ts` (Preset) and `timeline.ts` (glide, settle, DROP, SETTLE, SNAP); the house entrance is `drop`.
+- Flyers carry a cause on one surface to its effect on another. Anchor them with `regionPt(region, x, y, z)` or `localToWorld(surface, x, y, z)`, and render each in `chapter.flyers[id]` (a small real view, centred with `-translate-x-1/2 -translate-y-1/2`).
+
+## Fixtures
+
+- Ids are `hero-*`, short ids use the `hero` stem (`jx7hero`, `ct-hero1`). Never a Convex-shaped id.
+- The shared cast (people, the four sessions, the task, plan, PR, page, hosts) and the prompt live in `story.ts`; use them rather than restating titles.
+- Any id your views render as an entity pill or card needs an entry in your `entities` (`{ type, entity }` shaped like that type's `webGet` row). Under the sandbox, an unlisted id resolves to "no access" and renders as plain text; nothing queries.
+- Avatars: null or same-origin images only.
+
+## Interaction
+
+- Local state only (`useState` in your part). Put `data-hero-live` on the element whose handler should run; every other click, press and key inside the hero is stopped before it reaches the real handler, and link navigation is cancelled everywhere.
+- No `window` or `document` listeners, no key listeners, no autofocus. An input listens only while it has focus.
+- Portalled UI (Radix tooltips and popovers, hover cards) renders flat at `document.body`, outside the 3D plane: open it only during a face-on hold and close it when the camera leaves.
+- Keep `pointer-events: none` on OrgGraph, WorkflowGraphView and FaceRow seats.
+
+## The sandbox and the mount policy
+
+Inside the hero, Convex is a stub (queries load forever, writes resolve null), entity pills answer from fixtures, personify is off, the theme is light Classic, reveal bands never mount, and a part that throws leaves its region empty. Still, **never mount a container**: anything that runs a feeder, calls a store action, or adds listeners that act. Specifically never: PermissionStack, ForkMapBox, BrowserPane, DecisionAnswerControls with keys on, GenericListView, GlobalSearch, CommandPalette, NotificationBell, DocumentDetailLayout in edit mode, MessageInput, ChatComposer, RoomThread, TriggerRowItem without `actions`. Never write the real inboxStore, IndexedDB, localStorage or the outbox, and never call real Convex. `../sandbox.guard.test.tsx` mounts every chapter across the whole film and fails on any of these.
+
+## Theme and CSS
+
+- The hero is light Classic for every visitor. `.hero-sandbox` re-declares the light tokens; use `--sol-*` tokens and the `sol-*` Tailwind classes.
+- The phone's screen carries `.dark`, so its tokens switch locally.
+- Import page-scoped CSS (pr.css, repo.css, chat.css, decisions.css, faces.css, CommandPalette.css, editor.css) from your chapter file, so it loads with your chunk.
+- `inbox` and `conversation` are in the first paint and the prerender (`chapters/index.ts`); keep their module graphs light. Every other chapter is its own chunk, loaded when the page is idle.
+
+## Suggested split for four builders
+
+Grouped so no two builders split the same app file:
+
+1. **Desk**: `inbox`, `conversation`, `fanout`, `remote`. Splits: SessionCardView and SectionHeader (GlobalSessionPanel), sidebar primitives and InboxNavRow (Sidebar), ConversationHeaderBar and AgentStatusPill (ConversationView), ComposerShell (MessageInput).
+2. **Agents**: `phone`, `talk`, `decide`. Splits: PermissionStackView (PermissionCard), the shared phone permission style spec (mobile PermissionCard), DecisionCompactCardView.
+3. **Work**: `work`, `automation`, `integrations`. Splits: TaskRow, KanbanCard and ListRowShell, TriggerRowItem `actions`, WorkflowGraphView `chrome`, and the PR page exports.
+4. **People and memory**: `team`, `publish`, `memory`. Splits: RoomThread and NotificationBell exports, PageCard, palette styles and rows, SearchField and SearchResultRow (GlobalSearch; builder 1 uses SearchField once it lands).
+
+Every split is a pure move: the app's markup must stay byte-identical (prove it with `renderToStaticMarkup` before and after, or the component's existing tests).
+
+## Checking your chapter
+
+- Seek in the browser: `window.__heroFly.seek(t)`, or load `/?hero-t=<seconds>` to freeze a frame. Background tabs stall requestAnimationFrame, so always verify by seeking, never by watching. `window.__heroFly.scenes` lists each chapter's start, end and hold.
+- `bun test app/(marketing)/heroFly/chapters/contract.test.ts` (files, registry, regions, id prefixes, flyer renderers)
+- `bun test app/(marketing)/heroFly/sandbox.guard.test.tsx` (isolation, across the whole film, with every `data-hero-live` element fired)
+- `bun test app/(marketing)/heroFly/timeline.test.ts` (seam, purity, framing)
+- `cast check web`

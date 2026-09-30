@@ -40,7 +40,7 @@ export interface WFEdge {
   condition?: string;
 }
 
-type NodeStatus = "pending" | "running" | "completed" | "failed";
+export type NodeStatus = "pending" | "running" | "completed" | "failed";
 
 interface WorkflowGraphViewProps {
   nodes: WFNode[];
@@ -49,6 +49,10 @@ interface WorkflowGraphViewProps {
   selectedNodeId?: string | null;
   nodeStatuses?: Record<string, NodeStatus>;
   currentNodeId?: string;
+  // False draws the graph as a still picture: no zoom controls or minimap, and
+  // no pan, zoom or wheel capture (the marketing hero shows it inside a page
+  // that must keep scrolling). Default true.
+  chrome?: boolean;
 }
 
 // Solarized palette
@@ -327,7 +331,18 @@ function buildGraph(wfNodes: WFNode[], wfEdges: WFEdge[], p: SolPalette, nodeSta
   return { nodes, edges };
 }
 
-export function WorkflowGraphView({ nodes: wfNodes, edges: wfEdges, onNodeSelect, selectedNodeId, nodeStatuses, currentNodeId }: WorkflowGraphViewProps) {
+const STILL_FLOW = {
+  panOnDrag: false,
+  zoomOnScroll: false,
+  zoomOnPinch: false,
+  zoomOnDoubleClick: false,
+  preventScrolling: false,
+  nodesDraggable: false,
+  nodesConnectable: false,
+  elementsSelectable: false,
+} as const;
+
+export function WorkflowGraphView({ nodes: wfNodes, edges: wfEdges, onNodeSelect, selectedNodeId, nodeStatuses, currentNodeId, chrome = true }: WorkflowGraphViewProps) {
   const { theme } = useTheme();
   const p = SOL[theme];
 
@@ -363,6 +378,7 @@ export function WorkflowGraphView({ nodes: wfNodes, edges: wfEdges, onNodeSelect
         colorMode={theme}
         proOptions={{ hideAttribution: true }}
         style={{ background: p.bg }}
+        {...(chrome ? {} : STILL_FLOW)}
       >
         <Background
           variant={BackgroundVariant.Dots}
@@ -371,22 +387,22 @@ export function WorkflowGraphView({ nodes: wfNodes, edges: wfEdges, onNodeSelect
           color={p.bgHighlight}
           style={{ background: p.bg }}
         />
-        <Controls
+        {chrome && <Controls
           showInteractive={false}
           style={{
             background: p.bgAlt,
             border: `1px solid ${p.border}40`,
             borderRadius: 6,
           }}
-        />
-        <MiniMap
+        />}
+        {chrome && <MiniMap
           nodeColor={(n) => {
             const wf = wfNodes.find(w => w.id === n.id);
             return getNodeColors(wf?.type || "agent", p).border;
           }}
           maskColor={`${p.bg}99`}
           style={{ background: p.bgAlt, border: `1px solid ${p.border}40` }}
-        />
+        />}
       </ReactFlow>
     </div>
   );

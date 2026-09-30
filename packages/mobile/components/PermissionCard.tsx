@@ -5,6 +5,7 @@ import { api } from '@codecast/convex/convex/_generated/api';
 import { Id } from '@codecast/convex/convex/_generated/dataModel';
 import * as Haptics from 'expo-haptics';
 import { useState } from 'react';
+import { PERMISSION_CARD_COPY, PERMISSION_CARD_STYLE } from '@codecast/shared/render/permissionCardStyle';
 
 type Permission = {
   _id: Id<"pending_permissions">;
@@ -71,14 +72,14 @@ export function PermissionCard({ permission }: PermissionCardProps) {
       <View style={styles.content}>
         <View style={styles.header}>
           <View style={styles.indicator} />
-          <Text style={styles.title}>Permission Required</Text>
+          <Text style={styles.title}>{PERMISSION_CARD_COPY.title}</Text>
         </View>
 
         <Text style={styles.toolName}>{permission.tool_name}</Text>
 
         {permission.arguments_preview && (
           <View style={styles.argsContainer}>
-            <Text style={styles.argsText} numberOfLines={3}>
+            <Text style={styles.argsText} numberOfLines={PERMISSION_CARD_COPY.argsMaxLines}>
               {permission.arguments_preview}
             </Text>
           </View>
@@ -92,7 +93,7 @@ export function PermissionCard({ permission }: PermissionCardProps) {
           disabled={isProcessing}
         >
           <Text style={styles.approveButtonText}>
-            {isProcessing ? '...' : 'Approve'}
+            {isProcessing ? PERMISSION_CARD_COPY.processing : PERMISSION_CARD_COPY.approve}
           </Text>
         </TouchableOpacity>
 
@@ -102,7 +103,7 @@ export function PermissionCard({ permission }: PermissionCardProps) {
           disabled={isProcessing}
         >
           <Text style={styles.denyButtonText}>
-            {isProcessing ? '...' : 'Deny'}
+            {isProcessing ? PERMISSION_CARD_COPY.processing : PERMISSION_CARD_COPY.deny}
           </Text>
         </TouchableOpacity>
       </View>
@@ -110,81 +111,4 @@ export function PermissionCard({ permission }: PermissionCardProps) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    borderWidth: 2,
-    borderColor: 'rgba(251, 191, 36, 0.5)',
-    borderRadius: 8,
-    padding: 12,
-    backgroundColor: 'rgba(251, 191, 36, 0.1)',
-    marginBottom: 12,
-  },
-  content: {
-    marginBottom: 12,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 8,
-  },
-  indicator: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#fbbf24',
-  },
-  title: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#e0e0e0',
-  },
-  toolName: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#fbbf24',
-    fontFamily: 'JetBrainsMono',
-    marginBottom: 4,
-  },
-  argsContainer: {
-    backgroundColor: 'rgba(0, 0, 0, 0.3)',
-    borderRadius: 4,
-    padding: 8,
-    marginTop: 8,
-  },
-  argsText: {
-    fontSize: 11,
-    color: '#999',
-    fontFamily: 'JetBrainsMono',
-  },
-  buttonContainer: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  button: {
-    flex: 1,
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderRadius: 6,
-    alignItems: 'center',
-  },
-  approveButton: {
-    backgroundColor: '#4ade80',
-  },
-  approveButtonText: {
-    color: '#0d1117',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  denyButton: {
-    backgroundColor: '#ff6b6b',
-  },
-  denyButtonText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  buttonDisabled: {
-    opacity: 0.5,
-  },
-});
+const styles = StyleSheet.create(PERMISSION_CARD_STYLE);

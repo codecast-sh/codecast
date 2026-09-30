@@ -681,7 +681,8 @@ export const stampStandingSeats = internalMutation({
       out.push({ role: role.handle, standing: standing.short_id ?? String(standing._id), from: `${standing.org_role_id ? String(standing.org_role_id) : "person"} owners=${owners.join(",") || "none"}`, to: `${org_role_id ? String(org_role_id) : "person"} owner=${boss ?? "none"}` });
       if (!dryRun) {
         await ctx.db.patch(standing._id, { org_role_id });
-        await stampSeatOwners(ctx, standing._id, role.reports_to, role.host_user_id);
+        // Written as the boss's own row, so the backfill hands nobody a ping.
+        await stampSeatOwners(ctx, standing._id, role.reports_to, role.reports_to?.kind === "user" ? role.reports_to.user_id : role.host_user_id);
       }
     }
     return { dryRun, roles: roles.length, stamped: out.length, changes: out };

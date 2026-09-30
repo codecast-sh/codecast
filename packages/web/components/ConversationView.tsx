@@ -64,6 +64,7 @@ import { SessionCallPill } from "./calls/SessionCallPill";
 import { useSqueezeToFit } from "../hooks/useSqueezeToFit";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent } from "./ui/dropdown-menu";
 import { TooltipProvider } from "./ui/tooltip";
+import { AgentStatusPill, ConversationHeaderBar, ConversationHeaderTitle } from "./conversation/ConversationHeaderBar";
 import { useMutation, useQuery, useConvex } from "convex/react";
 import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -3629,10 +3630,12 @@ const ConversationViewInner = (
           </div>
         </div>
       )}
-      <header ref={bindHeader} data-sv-convhead className={`cq-container shrink-0 relative ${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${!embedded ? deskClass : ""} ${isImageLightboxActive ? "invisible" : ""} ${hideHeader ? "hidden" : ""}`}>
-        <div>
-          <div ref={titlebarHeadRef} className="cc-panel__head gap-2 min-w-0">
-            <div ref={squeezeRowRef} className="cq-squeeze-row flex items-center gap-2 min-w-0 overflow-hidden flex-1">
+      <ConversationHeaderBar
+        headerRef={bindHeader}
+        headRef={titlebarHeadRef}
+        squeezeRowRef={squeezeRowRef}
+        className={`${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${!embedded ? deskClass : ""} ${isImageLightboxActive ? "invisible" : ""} ${hideHeader ? "hidden" : ""}`}
+        lead={<>
             {isZenMode && (
               <ShortcutTooltip label="Exit zen mode" action="ui.zenToggle" side="bottom">
                 <button
@@ -3654,7 +3657,8 @@ const ConversationViewInner = (
                 align="start"
               />
             )}
-            {isRenaming ? (
+        </>}
+        title={isRenaming ? (
               <input
                 ref={renameInputRef}
                 value={renameDraft}
@@ -3673,80 +3677,28 @@ const ConversationViewInner = (
                 className="text-xs sm:text-sm font-medium text-sol-text-secondary flex-1 min-w-0 bg-transparent border-b border-sol-cyan focus:outline-none"
               />
             ) : (
-              <h1
-                className="cc-panel__title truncate flex-1 min-w-0 cursor-default"
-                title={conversation?.messages?.[0]?.content ? cleanContent(conversation.messages[0].content)?.slice(0, 200) ?? undefined : undefined}
+              <ConversationHeaderTitle
+                text={truncatedTitle}
+                tooltip={conversation?.messages?.[0]?.content ? cleanContent(conversation.messages[0].content)?.slice(0, 200) ?? undefined : undefined}
                 onDoubleClick={() => { if (isOwner) useInboxStore.setState({ renamingSessionId: conversation!._id }); }}
-              >
-                {truncatedTitle}
-              </h1>
+              />
             )}
-            {conversation && <AnchorHeaderPill conversationId={conversation._id.toString()} />}
-            {conversation && <SessionCallPill conversationId={conversation._id.toString()} />}
-            {conversation && <BrowserPaneOfferChip conversationId={conversation._id.toString()} />}
+        titlePills={conversation && <>
+            <AnchorHeaderPill conversationId={conversation._id.toString()} />
+            <SessionCallPill conversationId={conversation._id.toString()} />
+            <BrowserPaneOfferChip conversationId={conversation._id.toString()} />
+        </>}
 
-            {/* A hibernated session says so above the composer (MessageInput
-                status line), not here: the header stays quiet rather than
-                showing a "Disconnected" pill for a park the daemon lifts on send. */}
-            {managedSession?.agent_status === "hibernated" ? null : isSessionDisconnected && (managedSession?.agent_status === "starting" || managedSession?.agent_status === "resuming" || managedSession?.agent_status === "connected") ? (
-              <span data-cc-conv-status className="inline-flex items-center gap-1 px-1 text-[10px] flex-shrink-0 text-sol-cyan">
-                <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan animate-pulse" />
-                <span className="hidden sm:inline cq-sq3">{managedSession?.agent_status === "starting" ? "Starting" : managedSession?.agent_status === "resuming" ? "Resuming" : "Delivering"}</span>
-                <span className="sm:hidden cq-sq3">{managedSession?.agent_status === "starting" ? "Start" : managedSession?.agent_status === "resuming" ? "Rsum" : "Dlvr"}</span>
-              </span>
-            ) : isSessionDisconnected ? (
-              <span data-cc-conv-status className="inline-flex items-center gap-1 px-1 text-[10px] flex-shrink-0 text-sol-text-dim/60">
-                <span className="w-1.5 h-1.5 rounded-full bg-sol-text-dim/30" />
-                <span className="hidden sm:inline cq-sq3">Disconnected</span>
-                <span className="sm:hidden cq-sq3">Disc</span>
-              </span>
-            ) : null}
+        status={<AgentStatusPill agentStatus={managedSession?.agent_status} disconnected={isSessionDisconnected} live={isConversationLive} />}
 
-            {!isSessionDisconnected && (managedSession?.agent_status === "working" || managedSession?.agent_status === "thinking" || managedSession?.agent_status === "compacting" || managedSession?.agent_status === "waiting" || managedSession?.agent_status === "dormant" || managedSession?.agent_status === "permission_blocked" || managedSession?.agent_status === "connected" || managedSession?.agent_status === "starting" || managedSession?.agent_status === "resuming" || (!managedSession?.agent_status && isConversationLive)) && (
-              <span data-cc-conv-status className={`inline-flex items-center gap-1 px-1 text-[10px] flex-shrink-0 ${
-                managedSession?.agent_status === "thinking" ? "text-sol-violet" :
-                managedSession?.agent_status === "compacting" ? "text-amber-400" :
-                managedSession?.agent_status === "waiting" || managedSession?.agent_status === "dormant" ? "text-sol-blue" :
-                managedSession?.agent_status === "permission_blocked" ? "text-sol-orange" :
-                managedSession?.agent_status === "connected" || managedSession?.agent_status === "starting" || managedSession?.agent_status === "resuming" ? "text-sol-cyan" :
-                "text-emerald-400"
-              }`}>
-                <span className={`w-1.5 h-1.5 rounded-full animate-pulse ${
-                  managedSession?.agent_status === "thinking" ? "bg-sol-violet" :
-                  managedSession?.agent_status === "compacting" ? "bg-amber-400" :
-                  managedSession?.agent_status === "waiting" || managedSession?.agent_status === "dormant" ? "bg-sol-blue" :
-                  managedSession?.agent_status === "permission_blocked" ? "bg-sol-orange" :
-                  managedSession?.agent_status === "connected" || managedSession?.agent_status === "starting" || managedSession?.agent_status === "resuming" ? "bg-sol-cyan" :
-                  "bg-emerald-400"
-                }`} />
-                <span className="hidden sm:inline cq-sq3">{managedSession?.agent_status === "thinking" ? "Thinking" :
-                 managedSession?.agent_status === "compacting" ? "Compacting" :
-                 managedSession?.agent_status === "waiting" || managedSession?.agent_status === "dormant" ? "Dormant" :
-                 managedSession?.agent_status === "permission_blocked" ? "Needs Input" :
-                 managedSession?.agent_status === "starting" ? "Starting" :
-                 managedSession?.agent_status === "resuming" ? "Resuming" :
-                 managedSession?.agent_status === "connected" ? "Connected" :
-                 "Working"}</span>
-                <span className="sm:hidden cq-sq3">{managedSession?.agent_status === "thinking" ? "Think" :
-                 managedSession?.agent_status === "compacting" ? "Compact" :
-                 managedSession?.agent_status === "waiting" || managedSession?.agent_status === "dormant" ? "Dormant" :
-                 managedSession?.agent_status === "permission_blocked" ? "Input" :
-                 managedSession?.agent_status === "starting" ? "Start" :
-                 managedSession?.agent_status === "resuming" ? "Rsum" :
-                 managedSession?.agent_status === "connected" ? "Conn" :
-                 "Work"}</span>
-              </span>
-            )}
-
-            {conversation && (
-              // The facts strip: what this session is (agent and model), where
-              // its code sits, and what it is for (task, plan, workflow run),
-              // as one run of dim text with dots between. The pills' own
-              // colours are stripped by [data-cc-facts] in globals.css; only
-              // things that are alive keep a tint on this row. Simple view
-              // keeps the strip (it owns the model picker) but dims it; the
-              // plan, task and workflow drop away there.
-              <span data-cc-facts data-cc-conv-meta data-simple-dim className="cq-sq6 flex items-center min-w-0">
+        // The facts strip: what this session is (agent and model), where
+        // its code sits, and what it is for (task, plan, workflow run),
+        // as one run of dim text with dots between. The pills' own
+        // colours are stripped by [data-cc-facts] in globals.css; only
+        // things that are alive keep a tint on this row. Simple view
+        // keeps the strip (it owns the model picker) but dims it; the
+        // plan, task and workflow drop away there.
+        facts={conversation && (<>
                 <ConversationMetadata
                   agentType={conversation.agent_type}
                   model={conversation.model}
@@ -3792,12 +3744,8 @@ const ConversationViewInner = (
               </span>
             )}
                 <ConversationAgeFacts startedAt={conversation.started_at} messageCount={conversation.message_count} conversationId={conversation._id} />
-              </span>
-            )}
-
-            {conversation && (
-              <TooltipProvider delayDuration={300}>
-              <div data-cc-conv-actions className="flex items-center gap-1 flex-shrink-0 overflow-hidden ml-auto">
+        </>)}
+        actions={conversation && (<>
 
                 {parentLinkId && (
                   <Link
@@ -4269,12 +4217,9 @@ const ConversationViewInner = (
                       </>
                     )}
                   </DropdownMenuContent>                </DropdownMenu>
-              </div>
-              </TooltipProvider>
-            )}
-            </div>
-            {headerEnd && <div className="flex-shrink-0">{headerEnd}</div>}
-          </div>
+        </>)}
+        end={headerEnd}
+        strips={<>
           {conversation?._id && <ConversationTaskProgress conversationId={conversation._id} />}
           <RestartStatusStrip
             phase={restartPhase}
@@ -4284,7 +4229,8 @@ const ConversationViewInner = (
             onRetry={handleRestartSession}
           />
           {conversation?._id && <DeviceMoveStatusStrip conversationId={conversation._id} />}
-        </div>
+        </>}
+      >
         {conversation && (
           <div className="absolute top-full right-3 mt-24 z-30">
             <MessageNavButton
@@ -4318,7 +4264,7 @@ const ConversationViewInner = (
             ResizeObserver counts it and the sticky-message overlay (anchored at
             top: headerHeight) lands below instead of covering it. */}
         {conversation && <AssignedToYouBanner conversationId={conversation._id.toString()} />}
-      </header>
+      </ConversationHeaderBar>
 
       {askOpen && !guest && conversation?._id && (
         <AskSessionPanel

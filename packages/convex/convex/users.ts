@@ -655,6 +655,15 @@ export const daemonHeartbeat = mutation({
       // (cloudPlacement.reissueStrandedCloudSpawns). Only the transition beat
       // pays for the scan, and a catch-up failure never fails the beat.
       const localDevice = !(args.is_remote_device ?? existingDevice?.is_remote ?? false);
+      // New meters from a machine on the fleet store: see whether the fleet
+      // should leave its account before it runs out (switchAheadCheck).
+      if (
+        localDevice &&
+        args.cc_accounts?.fleet_store &&
+        JSON.stringify(args.cc_accounts) !== JSON.stringify(existingDevice?.cc_accounts)
+      ) {
+        await ctx.scheduler.runAfter(0, internal.accountSwitch.switchAheadCheck, { user_id: auth.userId });
+      }
       if (cameOnline && localDevice) {
         try {
           await reissueStrandedCloudSpawns(ctx, auth.userId, args.device_id);
