@@ -28,7 +28,8 @@ import { resolveCreationPrivacy } from "./privacy";
 import { recordExternalEvent } from "./externalEvents";
 import { resolveTaskLinksFromText, normalizeRepository } from "./lib/gitRefs";
 import { conversationForCommit } from "./githubWebhooks";
-import { localCommitFiles, upsertLocalCommit } from "./repos";
+import { upsertLocalCommit } from "./repos";
+import { localCommitFiles } from "./lib/localCommitFiles";
 
 const KINDS = ["commit", "amend", "checkout", "merge", "pull", "rebase", "reset", "cherry_pick", "revert", "push"] as const;
 type Kind = (typeof KINDS)[number];

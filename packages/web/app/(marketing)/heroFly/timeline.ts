@@ -1,23 +1,22 @@
 /**
  * The film as a pure function of time. `frame(t)` returns the camera, every
  * animated element's transform and opacity, and every typed string, computed
- * from the declarative config in `world.ts`. No clocks, no accumulated state:
+ * from the declarative config in `world.ts` and the chapters' motion gathered
+ * by `motion.ts`. No clocks, no accumulated state:
  * seeking to t always renders the same picture, which is what makes the loop
  * seamless and the film verifiable by capture.
  */
 
+import { ARCS, BEATS, FLYERS, TEXTS } from "./motion";
 import {
-  ARC,
-  BEATS,
   CAMERA,
   CAMERA_MOBILE,
   DURATION,
-  FLYERS,
   LABEL_3W,
   LIVE,
   SURFACES,
-  TEXTS,
   type Beat,
+  type Flyer,
   type Hold,
   type Pose,
   type SurfaceId,
@@ -143,8 +142,10 @@ export function cameraTransform(p: Pose): string {
 /* ── Surfaces: the deal at the start, the reverse deal at the seam ───── */
 
 const FLIP_UP = 0.15;
-const FLIP_DOWN = 34.4;
 const FLIP_STEP = 0.12;
+/** The seam: surfaces turn face-down over the overview hold, faster than the deal so the last lands by the loop. */
+const FLIP_DOWN = DURATION - 1.6;
+const FLIP_DOWN_STEP = 0.08;
 const FLIP_LIFT_UP = 160;
 const FLIP_LIFT_DOWN = 140;
 
@@ -156,7 +157,7 @@ const SETTLE_HALF = (() => {
 })();
 
 const upCue = (i: number) => FLIP_UP + i * FLIP_STEP;
-const downCue = (i: number) => FLIP_DOWN + (SURFACES.length - 1 - i) * FLIP_STEP;
+const downCue = (i: number) => FLIP_DOWN + (SURFACES.length - 1 - i) * FLIP_DOWN_STEP;
 
 /** Content time for a surface: its finished state until it turns edge-on at the seam, then its t=0 state for the deal. */
 export function contentT(i: number, t: number): number {
@@ -249,7 +250,7 @@ function bezier3(a: V3, c: V3, b: V3, u: number): V3 {
   return [0, 1, 2].map((k) => v * v * a[k] + 2 * v * u * c[k] + u * u * b[k]) as V3;
 }
 
-function flyerState(f: (typeof FLYERS)[number], t: number): El {
+function flyerState(f: Flyer, t: number): El {
   const u0 = (t - f.cue) / f.dur;
   if (u0 <= 0 || u0 >= 1) return { opacity: 0, transform: "translate3d(0px, 0px, -2000px)" };
   const u = f.ease === "glide" ? glide(u0) : f.ease === "settle" ? settle(u0) : fall(u0);
@@ -287,7 +288,7 @@ export const ELEMENT_IDS: string[] = [
   ...SURFACES.flatMap((s) => [`card:${s.id}`, `shadow:${s.id}`, `mount:${s.id}`]),
   ...Object.entries(BEATS).flatMap(([sid, beats]) => [...new Set(beats.map((b) => `${sid}/${b.id}`))]),
   ...FLYERS.map((f) => f.id),
-  ARC.id,
+  ...ARCS.map((a) => a.id),
   "label3w",
 ];
 
@@ -333,9 +334,11 @@ export function frame(tIn: number, mobile = false): Frame {
 
   for (const f of FLYERS) els[f.id] = flyerState(f, t);
 
-  const arcIn = progress(t, ARC.cue, ARC.dur);
-  const arcOut = progress(t, ARC.cue + ARC.dur + ARC.hold, 0.4);
-  els[ARC.id] = { dash: r3(1 - arcIn), opacity: r3(arcIn > 0 ? 1 - arcOut : 0) };
+  for (const a of ARCS) {
+    const arcIn = progress(t, a.cue, a.dur);
+    const arcOut = progress(t, a.cue + a.dur + a.hold, 0.4);
+    els[a.id] = { dash: r3(1 - arcIn), opacity: r3(arcIn > 0 ? 1 - arcOut : 0) };
+  }
 
   const lIn = progress(t, LABEL_3W.cue, 0.3);
   const lOut = progress(t, LABEL_3W.end - 0.3, 0.3);

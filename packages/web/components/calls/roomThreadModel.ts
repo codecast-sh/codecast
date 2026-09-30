@@ -33,6 +33,9 @@ export type TranscriptSegment = TurnSegment & { at: number };
 
 export type Speaker = { id: string; name: string };
 
+/** What an agent in the room does, as the thread words it. */
+export const HEARS = "hears the room and answers here";
+
 export type Passage = {
   kind: "passage";
   index: number;

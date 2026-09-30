@@ -19,6 +19,8 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
+import * as path from "node:path";
+import { execFileSync, keychainReadAsync } from "./proc.js";
 
 /** The machine-wide item, and the prefix every scoped item extends. */
 export const LEGACY_CC_KEYCHAIN_SERVICE = "Claude Code-credentials";
@@ -95,4 +97,41 @@ export function ccKeychainWriteItem(configDir = claudeConfigDir()): CcKeychainIt
 /** `security` argv that reads one candidate's password. */
 export function ccKeychainReadArgs(item: CcKeychainItem): string[] {
   return ["find-generic-password", "-s", item.service, "-w"];
+}
+
+// The file form (Linux / older CC). $HOME over os.homedir(): bun caches the
+// latter at startup, breaking $HOME-sandboxed tests; real environments always
+// have HOME set.
+function credentialFile(): string {
+  return path.join(process.env.HOME || os.homedir(), ".claude", ".credentials.json");
+}
+
+/**
+ * Read the current CC credential. On macOS it lives in the Keychain, under the
+ * items above; falls back to the file form (Linux / older CC).
+ */
+export function readLocalCredential(): string | null {
+  for (const item of ccKeychainReadItems()) {
+    try {
+      return execFileSync("security", ccKeychainReadArgs(item), { encoding: "utf-8" }).trim();
+    } catch {}
+  }
+  const f = credentialFile();
+  if (!fs.existsSync(f)) return null;
+  return fs.readFileSync(f, "utf-8");
+}
+
+/**
+ * The same read for the daemon's timers: the keychain call runs off the loop
+ * with a timeout. A `security` call takes tens of milliseconds on an idle
+ * machine and seconds on a loaded one, and the credential tick asks every
+ * minute.
+ */
+export async function readLocalCredentialAsync(): Promise<string | null> {
+  for (const item of ccKeychainReadItems()) {
+    try {
+      return await keychainReadAsync(ccKeychainReadArgs(item));
+    } catch {}
+  }
+  return fs.promises.readFile(credentialFile(), "utf-8").catch(() => null);
 }

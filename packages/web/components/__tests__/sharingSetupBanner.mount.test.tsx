@@ -16,7 +16,8 @@ const restoreGlobals = replaceGlobals({
 // The launcher is the seam: the strip decides when to offer the agent and
 // what a click records; starting a session is sharingAgent.ts's job.
 const launched: number[] = [];
-mock.module("../settings/SharingAgentCard", () => ({ launchSharingAgent: () => { launched.push(Date.now()); } }));
+const realSharingAgent = await import("../../lib/sharingAgent");
+mock.module("../../lib/sharingAgent", () => ({ ...realSharingAgent, launchSharingAgent: () => { launched.push(Date.now()); } }));
 mock.module("next/link", () => ({ default: ({ href, onClick, children, ...rest }: any) => <a href={href} onClick={(e) => { e.preventDefault(); onClick?.(e); }} {...rest}>{children}</a> }));
 
 const { createRoot } = await import("react-dom/client");

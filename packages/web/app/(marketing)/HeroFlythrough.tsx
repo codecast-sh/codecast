@@ -1,10 +1,12 @@
 "use client";
 
 /**
- * The homepage hero: a looping 3D fly-through of the product. One world, one
- * camera, one timeline (heroFly/). React renders the world once; a single
- * requestAnimationFrame driver writes `frame(t)` straight to the DOM, and
- * re-renders React only when the chapter changes.
+ * The homepage hero: a looping 3D fly-through of the product, rendering the
+ * real app's views with fixture data inside a sandbox (heroFly/sandbox.tsx).
+ * One world, one camera, one timeline (heroFly/). React renders the world
+ * when its chapters load; a single requestAnimationFrame driver writes
+ * `frame(t)` straight to the DOM and ticks the film clock, so a view
+ * re-renders only when a value it derives from film time changes.
  *
  * Verification hook: `window.__heroFly` seeks, pauses and plays, and
  * `?hero-t=<seconds>` freezes the film at that time. `?hero-reduced=1`
@@ -13,14 +15,15 @@
 
 import { useRef, useState } from "react";
 import { useWatchEffect } from "@/hooks/useWatchEffect";
-import { DOTS } from "./TourFilm";
+import { DOTS } from "./chapterDots";
+import { useHeroChapters } from "./heroFly/chapters";
+import { createFilmClock, FilmClockContext } from "./heroFly/film";
+import { HeroSandbox } from "./heroFly/sandbox";
 import { frame, wrapT } from "./heroFly/timeline";
 import { World } from "./heroFly/surfaces";
-import { DURATION, POSTER_T, SCENES } from "./heroFly/world";
+import { DURATION, POSTER_T, SCENES, STILLS } from "./heroFly/world";
 
 const STAGE = { desktop: { w: 1280, h: 760 }, mobile: { w: 640, h: 800 } };
-/** Reduced motion: each chapter's settled frame, shown face-on. */
-const STILLS = [5.4, 9.95, 13.45, 19.55, 24.1, 30.3, 33.3];
 const REDUCED_STEP_MS = 5000;
 
 const sceneAt = (t: number) => {
@@ -30,7 +33,7 @@ const sceneAt = (t: number) => {
 };
 
 const DESCRIPTION =
-  "A looping tour of codecast: a live inbox of Claude Code, Codex, Cursor, OpenCode and pi sessions; a lead session spawning two workers; a permission prompt approved from an iPhone; two agents messaging each other; a task filed from the conversation and claimed by an agent; a teammate finding the session weeks later and tracing a line of code to it with cast blame; and a report published as a page.";
+  "A looping tour of codecast: a live inbox of Claude Code, Codex, Cursor, Gemini and pi sessions; steering a session from its conversation; a lead session spawning two workers; a permission prompt approved from an iPhone; two agents messaging each other and forking; a decision queued for a person; a task filed from the conversation and claimed by an agent; a trigger and a workflow running on their own; the team's channel, huddle and org chart; a pull request going green and merging; a report published as a page; a teammate finding the session weeks later and tracing a line of code to it with cast blame; and sessions running on a laptop, a cloud host and in a browser.";
 
 type HeroFlyApi = {
   seek(seconds: number): void;
@@ -68,6 +71,9 @@ export function HeroFlythrough() {
   const [scene, setScene] = useState(sceneAt(POSTER_T));
   const [playing, setPlaying] = useState(true);
   const [mobile, setMobile] = useState(false);
+  const chapters = useHeroChapters();
+  const [clock] = useState(() => createFilmClock());
+  const [now] = useState(() => Date.now());
 
   useWatchEffect(() => {
     const wrap = wrapRef.current;
@@ -81,11 +87,27 @@ export function HeroFlythrough() {
     const mq = window.matchMedia("(max-width: 639px)");
     const forceMobile = params.get("hero-mobile") === "1";
 
+    // Chapters load after first paint and views mount elements as the film
+    // moves, so the element maps are rebuilt whenever the world's DOM changes.
     const nodes = new Map<string, HTMLElement | SVGElement>();
-    world.querySelectorAll<HTMLElement | SVGElement>("[data-fly]").forEach((n) => nodes.set(n.getAttribute("data-fly")!, n));
     const textNodes = new Map<string, HTMLElement>();
-    world.querySelectorAll<HTMLElement>("[data-fly-text]").forEach((n) => textNodes.set(n.getAttribute("data-fly-text")!, n));
     const written = new Map<string, string>();
+    let stale = true;
+    const scan = () => {
+      stale = false;
+      nodes.clear();
+      textNodes.clear();
+      written.clear();
+      world.querySelectorAll<HTMLElement | SVGElement>("[data-fly]").forEach((n) => nodes.set(n.getAttribute("data-fly")!, n));
+      world.querySelectorAll<HTMLElement>("[data-fly-text]").forEach((n) => textNodes.set(n.getAttribute("data-fly-text")!, n));
+    };
+    const mo = new MutationObserver((records) => {
+      // The driver's own typed text replaces text nodes; that changes nothing it drives.
+      if (records.every((r) => r.target instanceof Element && r.target.hasAttribute("data-fly-text"))) return;
+      stale = true;
+      if (!st.playing || reduced) render(st.t);
+    });
+    mo.observe(world, { childList: true, subtree: true });
     const put = (key: string, apply: (v: string) => void, v: string) => {
       if (written.get(key) === v) return;
       written.set(key, v);
@@ -105,7 +127,9 @@ export function HeroFlythrough() {
     };
 
     const render = (t: number) => {
+      if (stale) scan();
       st.t = wrapT(t);
+      clock.set(st.t);
       const f = frame(st.t, st.mobile);
       put("camera", (v) => (world.style.transform = v), f.camera);
       put("will", (v) => (world.style.willChange = v), f.moving && !reduced ? "transform" : "auto");
@@ -244,6 +268,7 @@ export function HeroFlythrough() {
       window.clearInterval(stillTimer);
       window.clearTimeout(fadeTimer);
       mq.removeEventListener("change", onMq);
+      mo.disconnect();
       ro.disconnect();
       io.disconnect();
       document.removeEventListener("visibilitychange", onVis);
@@ -258,11 +283,12 @@ export function HeroFlythrough() {
     <figure role="group" aria-label="Codecast product tour" className="m-0">
       <style>{FALLBACK_SCALE_CSS}</style>
       <p className="sr-only">{DESCRIPTION}</p>
+      <HeroSandbox fallback={<div className="w-full rounded-2xl aspect-[1280/760] max-sm:aspect-[4/5]" style={{ backgroundColor: "#fdf6e3", border: "1px solid #eee8d5" }} />}>
       <div
         ref={wrapRef}
         aria-hidden
-        className="relative w-full overflow-hidden rounded-2xl aspect-[1280/760] max-sm:aspect-[4/5]"
-        style={{ backgroundColor: "#fdf6e3", border: "1px solid #eee8d5", boxShadow: "0 40px 80px -40px rgba(0,43,54,0.35)" }}
+        className="relative w-full overflow-hidden rounded-2xl bg-sol-bg aspect-[1280/760] max-sm:aspect-[4/5]"
+        style={{ border: "1px solid var(--sol-bg-alt)", boxShadow: "0 40px 80px -40px rgba(0,43,54,0.35)" }}
       >
         <div
           ref={stageRef}
@@ -270,14 +296,17 @@ export function HeroFlythrough() {
           style={{ width: size.w, height: size.h, transform: "scale(var(--hf-s))", perspective: "1800px", perspectiveOrigin: "50% 50%" }}
         >
           <div ref={worldRef} className="absolute left-1/2 top-1/2 h-0 w-0" style={{ transformStyle: "preserve-3d", transform: frame(POSTER_T).camera }}>
-            <World />
+            <FilmClockContext.Provider value={clock}>
+              <World chapters={chapters} now={now} />
+            </FilmClockContext.Provider>
           </div>
         </div>
         <div
           className="pointer-events-none absolute inset-0"
-          style={{ background: "radial-gradient(ellipse 75% 70% at 50% 48%, rgba(253,246,227,0) 60%, rgba(253,246,227,0.85) 100%)" }}
+          style={{ background: "radial-gradient(ellipse 75% 70% at 50% 48%, transparent 60%, color-mix(in srgb, var(--sol-bg) 85%, transparent) 100%)" }}
         />
       </div>
+      </HeroSandbox>
 
       <div className="mt-4 flex items-center gap-3 font-mono">
         <button

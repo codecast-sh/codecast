@@ -6,13 +6,14 @@ import { randomUUID } from "node:crypto";
 import { isMachineDeliveredMessage } from "../../shared/contracts/machineMessages";
 import { AGENT_CLIENTS } from "../../shared/contracts/agentClients";
 import { authorizesTeardown } from "../../shared/contracts/liveness";
+import { isClaudeAutoContinueLine, isRecoveryContinueClientId } from "../../shared/contracts/apiErrorBanner";
 import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission";
 import { clearPromptHolds, holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, setPendingRedrive } from "./pendingPromptHold";
 import { clientAcceptsBracketedPaste, deliverTextIntoPane, pasteAndSubmitText, prepareInjectedContent, PASTE_START, PASTE_END } from "./tmuxPaste";
 import { blockAt, functionBlock } from "./test-helpers/sourceRegion";
 import { TmuxDeliveryUncertainError } from "./tmuxDeliveryJournal";
 import { typedPollAnswer } from "./typedPollAnswer";
-import { CloudAgentBusyError, CloudAgentSetupError } from "./cloudAgents/types";
+import { CloudAgentHoldError } from "./cloudAgents/types";
 
 const source = fs.readFileSync(new URL("./daemon.ts", import.meta.url), "utf8");
 const scratch: string[] = [];
@@ -141,7 +142,14 @@ function fixture(transport = "tmux", cached = true) {
     clientAcceptsBracketedPaste, deliverTextIntoPane, pasteAndSubmitText, prepareInjectedContent, PASTE_START, PASTE_END,
     tmuxExec, execAsync,
     // The delivery catch also holds a cloud agent's message; a hold re-drives the scan.
-    CloudAgentBusyError, CloudAgentSetupError, pollPendingNow: () => {},
+    // No cloud agent owns this fixture's conversation, so every one goes to the pane.
+    CloudAgentHoldError, pollPendingNow: () => {},
+    cloudAgents: { deliver: async () => null, forConversation: () => undefined, interrupt: async () => null },
+    // A recovery continue restarts a pane that holds its own credential first;
+    // this fixture's machine has no fleet store, so no pane is restarted.
+    isRecoveryContinueClientId, fleetStoreReady: () => false,
+    // Nor is any of its sessions a claude.ai cloud session: the watcher is off.
+    claudeCloudRef: null, isClaudeAutoContinueLine,
     _execFileAsync: async (binary: string, args: string[]) => {
       expect(binary).toBe("osascript");
       expect(args[0]).toBe("-e");
@@ -204,7 +212,7 @@ function fixture(transport = "tmux", cached = true) {
   };
   if (!fixtureFactory) {
     const names = [
-      "parsePollMessage", "pollDeclineText", "pollMenuSteps", "extractTmuxLiveRegion", "newestPaintedFrame", "isCodexTrustDialog", "isCodexUpdateDialog",
+      "parsePollMessage", "pollDeclineText", "pollMenuSteps", "extractTmuxLiveRegion", "newestPaintedFrame", "isCodexTrustDialog", "isCodexUpdateDialog", "isClaudeBypassWarning",
       "classifyTmuxLiveState", "livenessFromTmuxState", "isResumeCwdPicker", "turnStartedAtFor", "paneTextAfterLastMatch",
       "assertPromptAbsent", "inputGuard", "captureTmuxLiveState", "ensureTmuxReady", "withTmuxLock", "drainTmuxComposer", "tmuxComposerText", "tmuxComposerDraft",
       "tmuxWatchablePrefix", "tmuxComposerPayloadMatcher", "tmuxComposerHoldsPayload", "composerShowsOnlyPayloadTail", "matchAtFullWindowSize", "awaitTmuxComposerPayload", "normalizePromptText",

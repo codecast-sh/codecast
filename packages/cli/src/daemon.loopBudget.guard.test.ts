@@ -65,7 +65,11 @@ const ROWS: Row[] = [
   { file: D, name: "classifySharedPidSessions", kind: "function", minLines: 15, mustContain: "observeCodexOwnership" },
   { file: D, name: "sessionBorrowsProcess", kind: "function", minLines: 5, mustContain: "staleOk" },
   { file: D, name: "findWorkspacePathForCursorConversation", kind: "function", minLines: 15, mustContain: "cursorWorkspace" },
-  { file: D, name: "handleCursorTranscriptEvent", kind: "function", from: MAIN, minLines: 40, mustContain: "await findWorkspacePathForCursorConversation" },
+  // Every transcript file event (Cursor's and each cloud agent mirror's) runs
+  // through one handler, handed the place lookup its caller owns: Cursor's
+  // above, and the mirror's meta.json read below.
+  { file: D, name: "handleTranscriptFileEvent", kind: "function", from: MAIN, minLines: 40, mustContain: "await findWorkspacePath()" },
+  { file: "cloudAgents/transcript.ts", name: "readMetaJson", kind: "function", minLines: 8, mustContain: "fs.promises.readFile" },
   { file: D, name: "startWatchdog", kind: "function", minLines: 40, mustContain: "findStaleSessionFiles" },
   { file: D, name: "logHealthSummary", kind: "function", minLines: 10, mustContain: "getSystemMetrics" },
   { file: D, name: "ensureWatchdogSupervised", kind: "function", minLines: 10, mustContain: "watchdogSupervisionAction" },

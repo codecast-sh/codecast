@@ -8,7 +8,7 @@ import { acquireFileLock } from "./lockFile.js";
 import { sessionIdFromEnv } from "./sessionIdentity.js";
 import { artifactFromSnapshot, atomicJson, canonicalDirectory, checkReleaseVersion, freezeArtifact, inputToken, inputTokens, intervalMs, noSymlink, readArtifact, releaseRoot, snapshotArtifact, substitute, templateSlug, type OrgTemplate, type TemplateArtifact } from "./orgTemplateArtifact.js";
 import { writeInstanceFile } from "./orgTemplateInstance.js";
-import { markSetup, nextHumanAsk, readiness, readinessHeader, recordEvidence, recordScores, setupRows, type InstanceState } from "./orgTemplateState.js";
+import { markSetup, nextHumanAsk, readiness, readinessHeader, recordEvidence, recordScores, setupRows, type InstanceState, type SetupText } from "./orgTemplateState.js";
 
 export type TemplateOptions = { dir: string; project?: string; team?: string; personal?: boolean; session?: string; adopt?: string[]; input?: string[]; secret?: string[]; reportsTo?: string; apply?: boolean; dryRun?: boolean; status?: string; source?: string; detail?: string[]; evidence?: string; observedAt?: string; done?: boolean; skip?: boolean; open?: boolean };
 export type TemplateReceipt = InstanceState & {
@@ -69,6 +69,27 @@ function values(receipt: TemplateReceipt, manifest?: Pick<OrgTemplate, "inputs">
   // unanswered optional one (a required one never reaches here unanswered).
   for (const input of manifest?.inputs ?? []) base[inputToken(input.key)] = receipt.config?.[input.key] ?? "";
   return base;
+}
+/** Fill a release's text with this instance's values: the one renderer behind the charter, a routine's prompt, a setup guide and every title. */
+const fill = (text: string, receipt: TemplateReceipt, manifest: OrgTemplate) => substitute(text, values(receipt, manifest), inputTokens(manifest));
+/** Guides the instance row carries for the role page stay well under a document's size; one past the budget is read with `instructions setup:<id>`. */
+const SETUP_GUIDE_BUDGET = 256 * 1024;
+type SetupItem = NonNullable<OrgTemplate["setup"]>[number];
+/** One setup item's words for this instance (H5): its title and price, and its how-to guide from the pinned release. */
+function setupWords(artifact: TemplateArtifact, receipt: TemplateReceipt, item: SetupItem, withGuide: boolean): SetupText[string] {
+  return {
+    title: fill(item.title, receipt, artifact.manifest),
+    ...(item.price ? { price: fill(item.price, receipt, artifact.manifest) } : {}),
+    ...(withGuide && item.how ? { guide: fill(artifact.files.get(item.how)!.toString("utf8"), receipt, artifact.manifest) } : {}),
+  };
+}
+/** Every setup item's words: what the instance row carries for the role page (with guides) and what the terminal lists (without). */
+function setupText(artifact: TemplateArtifact, receipt: TemplateReceipt, withGuides: boolean): SetupText {
+  let budget = SETUP_GUIDE_BUDGET;
+  return Object.fromEntries((artifact.manifest.setup ?? []).map((item) => {
+    const { guide, ...words } = setupWords(artifact, receipt, item, withGuides);
+    return [item.id, guide !== undefined && (budget -= guide.length) >= 0 ? { ...words, guide } : words];
+  }));
 }
 /**
  * Parse `--input key=value` answers against the manifest (org-hire.md H2):
@@ -186,7 +207,7 @@ async function recoverStack(deps: OrgInitDeps, receipt: TemplateReceipt): Promis
     receipt.stack.decisionAttempted = true;
     save(receipt);
     const artifact = verifiedArtifact(receipt);
-    const context = `${marker}\n\n${orgProposalBlock(receipt.proposal)}\n\n${artifact.manifest.description}\n\nProject: ${receipt.project.ref} (${receipt.project.dir}). ${(receipt.warnings ?? []).join(" ")} One standing role; channel routines are not extra managers. Starts at understand. Routines are created gated and paused only after your answer.\n\nProposed shared charter:\n${substitute(artifact.files.get(artifact.manifest.role.charter)!.toString("utf8"), values(receipt, artifact.manifest), inputTokens(artifact.manifest))}`;
+    const context = `${marker}\n\n${orgProposalBlock(receipt.proposal)}\n\n${artifact.manifest.description}\n\nProject: ${receipt.project.ref} (${receipt.project.dir}). ${(receipt.warnings ?? []).join(" ")} One standing role; channel routines are not extra managers. Starts at understand. Routines are created gated and paused only after your answer.\n\nProposed shared charter:\n${fill(artifact.files.get(artifact.manifest.role.charter)!.toString("utf8"), receipt, artifact.manifest)}`;
     const created = await request(deps, "/cli/decide", { session_id: receipt.sourceSession, stack: receipt.stack.id, question: `Create ${receipt.proposal.name} for ${receipt.project.name}? (${receipt.instance})`, kind: "single", category: "access", blocking: true, options: ORG_PROPOSAL_OPTIONS.role.map((label) => ({ label })), context_md: context });
     receipt.stack.decisionId = created.short_id || created.id;
     if (!receipt.stack.decisionId) throw new Error("Decision creation returned no id");
@@ -235,7 +256,7 @@ async function prepareInstall(deps: OrgInitDeps, artifact: TemplateArtifact, ins
   const root = releaseRoot(dir, { ...artifact.manifest, hash: artifact.hash });
   const key = randomUUID();
   const receipt: TemplateReceipt = { schemaVersion: 1, instance, key, project, workspace: tree.workspace, warnings: projectWarnings(project), sourceSession: sourceSession || "not-set", phase: "proposal", template: { id: artifact.manifest.id, version: artifact.manifest.version, hash: artifact.hash, root }, stack: { title: `Org template ${instance} for ${project.ref} [${key}]` }, proposal: { kind: "role", name: "", handle: "" }, config: parseInputs(artifact.manifest, options.input), routines: Object.fromEntries(artifact.manifest.routines.map((r) => [r.id, { every: r.every }])) };
-  const handle = substitute(artifact.manifest.role.handle, values(receipt, artifact.manifest), inputTokens(artifact.manifest));
+  const handle = fill(artifact.manifest.role.handle, receipt, artifact.manifest);
   if (!/^[a-z0-9-]{2,32}$/.test(handle)) throw new Error("Expanded role handle is invalid");
   if ((tree.roles ?? []).some((r: any) => r.handle === handle)) throw new Error(`Role @${handle} already exists; refusing to create or silently adopt another seat`);
   // Every project has one lead (R4, W9 I2). A hire never adds a second role
@@ -248,7 +269,7 @@ async function prepareInstall(deps: OrgInitDeps, artifact: TemplateArtifact, ins
     if (!(tree.roles ?? []).some((r: any) => r.status !== "retired" && `@${r.handle}` === reportsTo)) throw new Error(`No active role ${reportsTo} in this workspace`);
   }
   if (leads.length && !leads.some((r: any) => `@${r.handle}` === reportsTo)) throw new Error(`Project ${project.ref} already has a lead, @${leads[0].handle}. Hire under it with --reports-to @${leads[0].handle}, or name that role as the seat; a second role beside a project's lead is refused.`);
-  receipt.proposal = { kind: "role", name: substitute(artifact.manifest.role.name, values(receipt, artifact.manifest), inputTokens(artifact.manifest)), handle, scope: { projects: [project.ref], plans: [] }, reports_to: reportsTo, ...(artifact.manifest.role.avatar ? { avatar: artifact.manifest.role.avatar } : {}), ...(artifact.manifest.role.tenure ? { tenure: artifact.manifest.role.tenure.kind === "standing" ? { kind: "standing" as const } : { kind: "program" as const, ends: { project: project.ref }, then: artifact.manifest.role.tenure.then } } : {}), trust: "understand", caps: artifact.manifest.role.caps, charter: loaderPrompt(receipt, "charter"), evidence: [`Explicit install into existing project ${project.ref}`, `Pinned ${receipt.template.id}@${receipt.template.version} sha256:${receipt.template.hash}`] };
+  receipt.proposal = { kind: "role", name: fill(artifact.manifest.role.name, receipt, artifact.manifest), handle, scope: { projects: [project.ref], plans: [] }, reports_to: reportsTo, ...(artifact.manifest.role.avatar ? { avatar: artifact.manifest.role.avatar } : {}), ...(artifact.manifest.role.tenure ? { tenure: artifact.manifest.role.tenure.kind === "standing" ? { kind: "standing" as const } : { kind: "program" as const, ends: { project: project.ref }, then: artifact.manifest.role.tenure.then } } : {}), trust: "understand", caps: artifact.manifest.role.caps, charter: loaderPrompt(receipt, "charter"), evidence: [`Explicit install into existing project ${project.ref}`, `Pinned ${receipt.template.id}@${receipt.template.version} sha256:${receipt.template.hash}`] };
   checkReleaseVersion(dir, artifact);
   return receipt;
 }
@@ -310,7 +331,7 @@ async function ensureRoutines(deps: OrgInitDeps, receipt: TemplateReceipt): Prom
       if (state.attempted) throw new Error(`Routine ${routine.id} creation outcome unknown; refusing a duplicate request`);
       state.attempted = true;
       save(receipt);
-      const created = await request(deps, "/cli/tasks/create", { title: substitute(routine.title, values(receipt, artifact.manifest), inputTokens(artifact.manifest)), prompt: loaderPrompt(receipt, routine.id), context_summary: marker(receipt, routine.id), originating_conversation_id: receipt.role!.sessionId, project_path: receipt.project.dir, schedule_type: "recurring", interval_ms: intervalMs(routine.every), status: "paused", mode: "propose" });
+      const created = await request(deps, "/cli/tasks/create", { title: fill(routine.title, receipt, artifact.manifest), prompt: loaderPrompt(receipt, routine.id), context_summary: marker(receipt, routine.id), originating_conversation_id: receipt.role!.sessionId, project_path: receipt.project.dir, schedule_type: "recurring", interval_ms: intervalMs(routine.every), status: "paused", mode: "propose" });
       state.triggerId = created.task_id;
       if (!state.triggerId) throw new Error("Trigger creation returned no id");
       save(receipt);
@@ -352,6 +373,13 @@ export async function bindTemplate(deps: OrgInitDeps, instance: string, options:
     const receipt = fs.existsSync(receiptPath(dir, instance)) ? readReceipt(dir, instance) : await adoptHiredInstance(deps, instance, dir, options);
     const artifact = verifiedArtifact(receipt);
     const tree = await checkContext(deps, receipt, options);
+    // The role's charter is the loader that reads the pinned release's charter
+    // on this host, as a terminal install proposes it. A web hire cannot write
+    // it (only the host knows the project folder), so it is set here, before
+    // the standing session is seated and briefed.
+    const loader = loaderPrompt(receipt, "charter");
+    const roleRow = receipt.role ? (tree.roles ?? []).find((r: any) => r._id === receipt.role!.id) : undefined;
+    if (roleRow && roleRow.charter !== loader) await request(deps, "/cli/role/update", { role_id: receipt.role!.id, charter: loader });
     // A role applied but not yet seated and armed (a web hire, or a reconcile
     // that stopped after the apply) is finished here; a proposal still open is not.
     if (receipt.phase === "provisioning") await provisionAndArm(deps, receipt, tree);
@@ -381,7 +409,7 @@ export async function bindTemplate(deps: OrgInitDeps, instance: string, options:
       const rows: any[] = Array.isArray(found) ? found : found?.tasks ?? [];
       let row = rows.find((t) => (t.labels ?? []).includes(marker));
       if (!row) {
-        row = await request(deps, "/cli/work/create", { title: substitute(ledger.title, values(receipt, manifest), inputTokens(manifest)), client_key: marker, task_type: "chore", labels: ["ledger", marker], project_id: receipt.project.id, project_path: receipt.project.dir, ...boundary(receipt) });
+        row = await request(deps, "/cli/work/create", { title: fill(ledger.title, receipt, manifest), client_key: marker, task_type: "chore", labels: ["ledger", marker], project_id: receipt.project.id, project_path: receipt.project.dir, ...boundary(receipt) });
       }
       receipt.ledgers[ledger.id] = { taskId: row._id ?? row.id, shortId: row.short_id };
     }
@@ -395,7 +423,7 @@ export async function bindTemplate(deps: OrgInitDeps, instance: string, options:
     const row = await request(deps, "/cli/org/template/instance", {
       instance_key: receipt.key, instance, template_id: receipt.template.id, version: receipt.template.version, digest: receipt.template.hash,
       project_id: receipt.project.id, role_id: receipt.role!.id, host: { machine: os.hostname(), dir: receipt.project.dir }, phase: "ready",
-      config: receipt.config ?? {}, bindings: receipt.bindings, ledgers: receipt.ledgers, ...boundary(receipt),
+      config: receipt.config ?? {}, bindings: receipt.bindings, ledgers: receipt.ledgers, setup_text: setupText(artifact, receipt, true), from_session: options.session || sessionIdFromEnv() || undefined, ...boundary(receipt),
       routines: Object.fromEntries(Object.entries(receipt.routines).map(([id, r]) => [id, { triggerId: r.triggerId, external: r.external, retired: r.retired }])),
     });
     receipt.instanceId = String(row._id ?? row.id);
@@ -411,12 +439,14 @@ export async function bindTemplate(deps: OrgInitDeps, instance: string, options:
  * registered the row, the receipt alone holds it, so a run can record while
  * the hire is still being bound; the bind step then registers everything.
  */
-async function withState<T>(deps: OrgInitDeps, options: TemplateOptions, instance: string, local: (manifest: OrgTemplate, receipt: TemplateReceipt) => T, remote: (receipt: TemplateReceipt) => Promise<unknown> | undefined): Promise<T> {
+async function withState<T>(deps: OrgInitDeps, options: TemplateOptions, instance: string, local: (manifest: OrgTemplate, receipt: TemplateReceipt, artifact: TemplateArtifact) => T, remote: (receipt: TemplateReceipt) => Promise<unknown> | undefined, before?: (deps: OrgInitDeps, receipt: TemplateReceipt) => Promise<void>): Promise<T> {
   const dir = canonicalDirectory(options.dir);
   return locked(dir, instance, async () => {
     const receipt = readReceipt(dir, instance);
     if (!receipt.role) throw new Error("Template role has not been approved and applied");
-    const result = local(verifiedArtifact(receipt).manifest, receipt);
+    const artifact = verifiedArtifact(receipt);
+    await before?.(deps, receipt);
+    const result = local(artifact.manifest, receipt, artifact);
     if (receipt.instanceId) await remote(receipt);
     save(receipt);
     return result;
@@ -430,16 +460,28 @@ export const reportTemplate = (deps: OrgInitDeps, instance: string, entries: str
   withState(deps, options, instance,
     (manifest, receipt) => recordScores(manifest, receipt, entries, { source: options.source, observedAt: options.observedAt ? Date.parse(options.observedAt) : undefined }),
     (receipt) => request(deps, "/cli/org/template/report", { instance_key: receipt.key, entries, source: options.source, observed_at: options.observedAt ? Date.parse(options.observedAt) : undefined }));
+/**
+ * A person's marks from the role page (Done, Skip, Reopen) land on the server
+ * row, the record once the host step registered it. They are read into the
+ * receipt before the role reads its setup list, so a step skipped on the page
+ * stops being asked for from the terminal. A mark the receipt alone holds stays.
+ */
+async function pullSetupMarks(deps: OrgInitDeps, receipt: TemplateReceipt): Promise<void> {
+  if (!receipt.instanceId) return;
+  const status = await request(deps, "/cli/org/template/instance-status", { instance_key: receipt.key });
+  receipt.setup = { ...receipt.setup, ...(status.setup_marks ?? {}) };
+}
 export const setupTemplate = (deps: OrgInitDeps, instance: string, id: string | undefined, options: TemplateOptions) => {
   const chosen = [options.done && "done", options.skip && "skipped", options.open && "open"].filter(Boolean) as string[];
   const fromAgent = !!(options.session || sessionIdFromEnv());
   return withState(deps, options, instance,
-    (manifest, receipt) => {
-      if (!id) return setupRows(manifest, receipt);
+    (manifest, receipt, artifact) => {
+      if (!id) return setupRows(manifest, receipt, setupText(artifact, receipt, false));
       if (chosen.length !== 1) throw new Error("Give exactly one of --done, --skip or --open");
       return markSetup(manifest, receipt, id, { status: chosen[0]!, evidence: options.evidence, fromAgent });
     },
-    (receipt) => (id ? request(deps, "/cli/org/template/setup", { instance_key: receipt.key, id, status: chosen[0], evidence: options.evidence, from_agent: fromAgent }) : undefined));
+    (receipt) => (id ? request(deps, "/cli/org/template/setup", { instance_key: receipt.key, id, status: chosen[0], evidence: options.evidence, from_agent: fromAgent }) : undefined),
+    pullSetupMarks);
 };
 
 /** A lesson to the template's publisher (H9): a row on the template, never a task in their workspace. */
@@ -612,7 +654,9 @@ export async function templateStatus(deps: OrgInitDeps, instance: string, option
   const roleRow = receipt.role ? verifyRole(tree, receipt) : undefined;
   const trust = roleRow?.trust ?? "understand";
   const held = { ...receipt, authority: (roleRow?.authority ?? []).map((g: any) => ({ id: g.id, expires_at: g.expires_at })) };
-  return { ...receipt, setup: setupRows(artifact.manifest, receipt), ask: nextHumanAsk(artifact.manifest, receipt), readiness: readiness(artifact.manifest, held, trust), warnings: tree.templateWarnings, routines: Object.fromEntries(Object.entries(receipt.routines).map(([id, r]) => {
+  await pullSetupMarks(deps, receipt);
+  const words = setupText(artifact, receipt, false);
+  return { ...receipt, setup: setupRows(artifact.manifest, receipt, words), ask: nextHumanAsk(artifact.manifest, receipt, words), readiness: readiness(artifact.manifest, held, trust), warnings: tree.templateWarnings, routines: Object.fromEntries(Object.entries(receipt.routines).map(([id, r]) => {
     const row = r.triggerId ? triggerFor(rows, r.triggerId) : null;
     if (row && !r.external) managedTrigger(row, receipt, id);
     if (row && r.external && row.project_path !== receipt.project.dir) throw new Error(`External routine ${id} changed project`);
@@ -625,6 +669,16 @@ export async function templateInstructions(deps: OrgInitDeps, instance: string, 
   const tree = await checkContext(deps, receipt, options);
   if (!receipt.role) throw new Error("Template role has not been approved and applied");
   verifyRole(tree, receipt);
+  const pinned = `Template ${receipt.template.id}@${receipt.template.version}\nSHA-256 ${receipt.template.hash}\nInstance ${instance}; project ${receipt.project.ref}`;
+  // A setup step's guide, filled for this instance, so the role can hand it to
+  // the person: the same words the role page shows under the step.
+  if (routine.startsWith("setup:")) {
+    const item = (artifact.manifest.setup ?? []).find((s) => s.id === routine.slice("setup:".length));
+    if (!item) throw new Error(`Not a setup item of this template: ${routine.slice("setup:".length)}`);
+    const words = setupWords(artifact, receipt, item, true);
+    const whose = item.who === "human" ? `A person's step: they mark it done or skipped on the role page, or with cast org template setup ${quoteTemplateArg(instance)} ${quoteTemplateArg(item.id)} --done from their own terminal.` : "The role's own step.";
+    return `${pinned}\nSetup step ${item.id}: ${words.title}${words.price ? ` (${words.price})` : ""}\n${whose}\n\n${words.guide ?? "This step has no written guide in the release."}`;
+  }
   let file = artifact.manifest.role.charter;
   let header = "";
   if (routine !== "charter") {
@@ -640,7 +694,7 @@ export async function templateInstructions(deps: OrgInitDeps, instance: string, 
     const roleRow = verifyRole(tree, receipt);
     header = readinessHeader(routine, readiness(artifact.manifest, { ...receipt, authority: (roleRow.authority ?? []).map((g: any) => ({ id: g.id, expires_at: g.expires_at })) }, roleRow.trust ?? "understand")[routine]);
   }
-  return `Template ${receipt.template.id}@${receipt.template.version}\nSHA-256 ${receipt.template.hash}\nInstance ${instance}; project ${receipt.project.ref}\nHuman charter, trust and grants remain authoritative.${header ? `\n${header}` : ""}\n\n${substitute(artifact.files.get(file)!.toString("utf8"), values(receipt, artifact.manifest), inputTokens(artifact.manifest))}`;
+  return `${pinned}\nHuman charter, trust and grants remain authoritative.${header ? `\n${header}` : ""}\n\n${fill(artifact.files.get(file)!.toString("utf8"), receipt, artifact.manifest)}`;
 }
 export function activationInstructions(receipt: TemplateReceipt, row: { short_id?: string; _id: string; interval_ms: number; precheck?: string }): { note: string; commands: string[] } {
   if (row.precheck && row.precheck !== "exit 1") return { note: "This routine has a custom precheck. Keep it paused and review that gate explicitly; the template activation procedure must not remove a human override.", commands: [] };

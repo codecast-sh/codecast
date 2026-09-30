@@ -12,7 +12,8 @@ import { useCommentThreadRows } from "../../../hooks/useThreadPreviews";
 import { AgentIcon } from "../../ConversationList";
 import { CommentThread } from "../../comments/CommentThread";
 import { FileLineThread } from "../../comments/FileLineThread";
-import { EarlierButton, useReaderFold } from "../readerFold";
+import { EarlierButton } from "../readerFold";
+import { useReaderFold } from "../../../hooks/useReaderFold";
 import { useThreadsPage } from "../threadsContext";
 
 import { useWatchEffect } from "../../../hooks/useWatchEffect";

@@ -13,10 +13,11 @@
 import { v } from "convex/values";
 import { mutation, query } from "./functions";
 import { Id } from "./_generated/dataModel";
-import { getAuthenticatedUserId } from "./pendingMessages";
+import { getAuthenticatedUserId, reachableRole, tellRole } from "./pendingMessages";
 import { canAccessProject, requireTeamAdmin, requireTeamMembership, resolveWorkspaceKey, workspaceGrantsAccess, workspaceKey, type WorkspaceKey } from "./lib/access";
 import { validateTemplate, type OrgTemplate } from "@codecast/shared/contracts/orgTemplateManifest";
-import { markSetup, nextHumanAsk, readiness, recordEvidence, recordScores, setupRows, type InstanceState } from "@codecast/shared/contracts/orgTemplateState";
+import { markSetup, nextHumanAsk, readiness, recordEvidence, recordScores, setupRows, type InstanceState, type SetupText } from "@codecast/shared/contracts/orgTemplateState";
+import { routineState, type RoutineReadiness } from "@codecast/shared/contracts/orgTemplateReadiness";
 import { applyActivate, getManageableTask } from "./agentTasks";
 import { refuseUnlessHuman, standingConversationOf } from "./orgRoles";
 import { DEVICE_ONLINE_MS, pickOwnerDevice } from "./deviceRouting";
@@ -151,6 +152,10 @@ export type UpsertInstanceArgs = {
   role_id?: Id<"org_roles">; host?: { machine: string; dir: string }; phase?: "awaiting_host" | "ready" | "upgrading" | "retired"; update_policy?: "manual" | "canary" | "stable";
   config?: Record<string, string>; bindings?: Record<string, { host: string; path_hash: string; bound_at: number }>; ledgers?: Record<string, { taskId: string; shortId: string }>;
   routines?: Record<string, { triggerId?: string; external?: boolean; retired?: boolean }>;
+  /** Each setup item's title, price and how-to guide with the instance's values filled in, rendered by the host at bind. */
+  setup_text?: SetupText;
+  /** The session that ran bind, when an agent did: the role's own standing session is not told what it just did. */
+  from_session?: string;
 };
 
 /**
@@ -189,15 +194,88 @@ export async function performUpsertInstance(ctx: Ctx, userId: Id<"users">, args:
     instance: args.instance, template_id: args.template_id, version: args.version, digest: args.digest, project_id: args.project_id,
     ...(args.role_id ? { role_id: args.role_id } : {}), ...(args.host ? { host: args.host } : {}),
     ...(args.config ? { config: args.config } : {}), ...(args.bindings ? { bindings: args.bindings } : {}), ...(args.ledgers ? { ledgers: args.ledgers } : {}), ...(args.routines ? { routines: args.routines } : {}),
+    ...(args.setup_text ? { setup_text: args.setup_text } : {}),
     updated_at: now,
   };
+  let id = existing?._id;
   if (existing) {
     if (existing.workspace !== access || String(existing.project_id) !== String(args.project_id)) throw new Error("Instance belongs to another project or workspace");
     await ctx.db.patch(existing._id, { ...fields, instance_key: args.instance_key, phase: args.phase ?? existing.phase, update_policy: args.update_policy ?? existing.update_policy });
-    return await ctx.db.get(existing._id);
+  } else {
+    id = await ctx.db.insert("org_template_instances", { instance_key: args.instance_key, workspace: access, phase: args.phase ?? "ready", update_policy: args.update_policy ?? "manual", ...fields, created_by: userId, created_at: now });
   }
-  const id = await ctx.db.insert("org_template_instances", { instance_key: args.instance_key, workspace: access, phase: args.phase ?? "ready", update_policy: args.update_policy ?? "manual", ...fields, created_by: userId, created_at: now });
-  return await ctx.db.get(id);
+  const row = await ctx.db.get(id);
+  await tellRoleOfBind(ctx, userId, existing, row, release.manifest as OrgTemplate, args.from_session);
+  return row;
+}
+
+type RoutineRow = { id: string; title: string; every: string; mode: "propose" | "apply"; external: boolean; retired: boolean; trigger: { id: string; short_id?: string; status: string; run_at?: number; precheck?: string; interval_ms?: number } | null };
+/** The pinned release's routines with the trigger each is bound to: the role page's Triggers rows, and the list a role hears after a bind. */
+async function routineRows(ctx: Ctx, row: any, manifest: OrgTemplate | undefined): Promise<RoutineRow[]> {
+  const rows: RoutineRow[] = [];
+  for (const r of manifest?.routines ?? []) {
+    const bound = row.routines?.[r.id];
+    const trigger = bound?.triggerId ? await ctx.db.get(bound.triggerId as Id<"agent_tasks">) : null;
+    // The trigger carries the title with the instance's values filled in; the manifest's may still hold tokens.
+    rows.push({ id: r.id, title: trigger?.title ?? r.title, every: r.every, mode: r.mode ?? "propose", external: !!bound?.external, retired: !!bound?.retired, trigger: trigger ? { id: String(trigger._id), short_id: trigger.short_id, status: trigger.status, run_at: trigger.run_at, precheck: trigger.precheck, interval_ms: trigger.interval_ms } : null });
+  }
+  return rows;
+}
+
+const listed = (words: string[]) => words.length <= 1 ? words.join("") : `${words.slice(0, -1).join(", ")} and ${words.at(-1)}`;
+/**
+ * What a role hears, once, when its host step finishes or a secret is bound:
+ * what is bound now, what is still missing, and where each routine stands.
+ * Plain words, because it arrives in the standing session as a message.
+ */
+export function bindNote(o: { instance: string; machine?: string; becameReady: boolean; newlyBound: string[]; secrets: { key: string; label: string; bound: boolean; unlocks?: string[] }[]; routines: RoutineRow[]; readiness: Record<string, RoutineReadiness> }): string {
+  const on = o.machine ? ` on ${o.machine}` : "";
+  const fresh = o.secrets.filter((s) => o.newlyBound.includes(s.key));
+  const missing = o.secrets.filter((s) => !s.bound);
+  const lines: string[] = [];
+  if (o.becameReady) lines.push(`The host step for ${o.instance} finished${on}: the template is installed, the instance file is written and your routines exist, paused until a person activates each from the role page.`);
+  if (fresh.length) {
+    const unlocks = [...new Set(fresh.flatMap((s) => s.unlocks ?? []))];
+    lines.push(`${listed(fresh.map((s) => s.label))} ${fresh.length === 1 ? "is" : "are"} now bound for ${o.instance}${on}: the value is in a file there and its path is in the instance file.${unlocks.length ? ` ${listed(unlocks)} needed it.` : ""}`);
+  }
+  if (o.secrets.length) lines.push(missing.length ? `Still missing: ${listed(missing.map((s) => s.label))}.` : "Every secret this template asks for is bound.");
+  const live = o.routines.filter((r) => !r.retired);
+  if (live.length) {
+    lines.push("Routines:");
+    for (const r of live) {
+      const needs = o.readiness[r.id]?.missing ?? [];
+      lines.push(`- ${r.title}${r.trigger?.short_id ? ` (${r.trigger.short_id})` : ""}: ${routineState(r, o.readiness[r.id])}${needs.length ? `; ${needs.join("; ")}` : ""}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Bind ends here from both doors: a person's `cast org template bind` and the
+ * daemon's run of the same command for the role page's host step. Saving a
+ * secret or finishing the host step used to change the record and wake nobody,
+ * so the role kept asking for what it already had. It is told once per bind
+ * that changed something: a rerun that binds nothing new says nothing.
+ */
+async function tellRoleOfBind(ctx: Ctx, userId: Id<"users">, before: any, row: any, manifest: OrgTemplate, fromSession?: string): Promise<void> {
+  if (!row.role_id || row.phase !== "ready") return;
+  const becameReady = before?.phase !== "ready";
+  const newlyBound = Object.keys(row.bindings ?? {}).filter((key) => row.bindings[key].bound_at !== before?.bindings?.[key]?.bound_at);
+  if (!becameReady && !newlyBound.length) return;
+  const reached = await reachableRole(ctx, row.role_id);
+  if (!reached || (fromSession && reached.standing.session_id === fromSession)) return;
+  const state = stateOf(row, reached.role);
+  const stamp = newlyBound.length ? Math.max(...newlyBound.map((key) => row.bindings[key].bound_at)) : "ready";
+  await tellRole(ctx, row.role_id, {
+    content: bindNote({
+      instance: row.instance, machine: row.host?.machine, becameReady, newlyBound,
+      secrets: (manifest.inputs ?? []).filter((i) => i.kind === "secret").map((i) => ({ key: i.key, label: i.label, bound: !!row.bindings?.[i.key], unlocks: i.unlocks })),
+      routines: await routineRows(ctx, row, manifest),
+      readiness: readiness(manifest, state, reached.role.trust ?? "understand"),
+    }),
+    client_id: `template-bind:${row._id}:${stamp}`,
+    from_user_id: userId,
+  });
 }
 
 async function instanceFor(ctx: Ctx, userId: Id<"users">, instanceKey: string): Promise<{ row: any; manifest: OrgTemplate }> {
@@ -243,12 +321,16 @@ export async function performInstanceStatus(ctx: Ctx, userId: Id<"users">, args:
   const { row, manifest } = await instanceFor(ctx, userId, args.instance_key);
   const role = row.role_id ? await ctx.db.get(row.role_id) : null;
   const state = stateOf(row, role);
-  return { ...row, trust: role?.trust ?? "understand", authority: role?.authority ?? [], handle: role?.handle, setup: setupRows(manifest, state), ask: nextHumanAsk(manifest, state), readiness: readiness(manifest, state, role?.trust ?? "understand") };
+  // The rendered setup text rides inside the setup rows; `setup_marks` is the
+  // raw record of who marked what, which the host reads back into its receipt.
+  const { setup_text, ...rest } = row;
+  return { ...rest, trust: role?.trust ?? "understand", authority: role?.authority ?? [], handle: role?.handle, setup: setupRows(manifest, state, setup_text), setup_marks: row.setup ?? {}, ask: nextHumanAsk(manifest, state, setup_text), readiness: readiness(manifest, state, role?.trust ?? "understand") };
 }
 export async function performListInstances(ctx: Ctx, userId: Id<"users">, args: { team_id?: Id<"teams">; template_id?: string }) {
   const access = await callerWorkspace(ctx, userId, args.team_id);
   const rows: any[] = await ctx.db.query("org_template_instances").withIndex("by_workspace", (q: any) => q.eq("workspace", access)).collect();
-  return rows.filter((r) => !args.template_id || r.template_id === args.template_id);
+  // The rendered guides are the role page's (instanceStatus); a list of every instance leaves them out.
+  return rows.filter((r) => !args.template_id || r.template_id === args.template_id).map(({ setup_text, ...r }) => r);
 }
 /** The role page's read (H11): the instance a role was hired as, with its status, or null for an ordinary role. */
 export async function performInstanceForRole(ctx: Ctx, userId: Id<"users">, args: { role_id: Id<"org_roles"> }) {
@@ -259,12 +341,7 @@ export async function performInstanceForRole(ctx: Ctx, userId: Id<"users">, args
   const template = await visibleTemplate(ctx, row.template_id, row.workspace);
   const latest = template?.releases.filter((r: any) => r.status === "stable").map((r: any) => r.version).sort(compareVersions).at(-1);
   const pinned = template?.releases.find((r: any) => r.version === row.version && r.digest === row.digest)?.manifest as OrgTemplate | undefined;
-  const routines = [] as any[];
-  for (const r of pinned?.routines ?? []) {
-    const bound = row.routines?.[r.id];
-    const trigger = bound?.triggerId ? await ctx.db.get(bound.triggerId as Id<"agent_tasks">) : null;
-    routines.push({ id: r.id, title: r.title, every: r.every, mode: r.mode ?? "propose", external: !!bound?.external, retired: !!bound?.retired, trigger: trigger ? { id: String(trigger._id), short_id: trigger.short_id, status: trigger.status, run_at: trigger.run_at, precheck: trigger.precheck, interval_ms: trigger.interval_ms } : null });
-  }
+  const routines = await routineRows(ctx, row, pinned);
   const secrets = (pinned?.inputs ?? []).filter((i) => i.kind === "secret").map((i) => ({ key: i.key, label: i.label, bound: !!row.bindings?.[i.key] }));
   const scoreboard = (pinned?.scoreboard ?? []).map((k) => ({ ...k, ...(row.scoreboard?.[k.key] ?? {}) }));
   // The host step from the web (H3): the machine it would run on and how the
@@ -473,6 +550,8 @@ export const upsertInstance = mutation({
     bindings: v.optional(v.record(v.string(), v.object({ host: v.string(), path_hash: v.string(), bound_at: v.number() }))),
     ledgers: v.optional(v.record(v.string(), v.object({ taskId: v.string(), shortId: v.string() }))),
     routines: v.optional(v.record(v.string(), v.object({ triggerId: v.optional(v.string()), external: v.optional(v.boolean()), retired: v.optional(v.boolean()) }))),
+    setup_text: v.optional(v.record(v.string(), v.object({ title: v.string(), price: v.optional(v.string()), guide: v.optional(v.string()) }))),
+    from_session: v.optional(v.string()),
   },
   handler: async (ctx, { api_token, ...args }) => performUpsertInstance(ctx, await requireCaller(ctx, api_token), args),
 });

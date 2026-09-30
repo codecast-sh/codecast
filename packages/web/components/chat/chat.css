@@ -628,6 +628,19 @@
   text-decoration: none;
 }
 
+/* `#name` pointing at one of the team's rooms (remarkChatMentions). */
+.ch-msg-body a.ch-channel-ref,
+.ch-msg-body a.ch-channel-ref:hover {
+  color: var(--sol-cyan);
+  background: color-mix(in srgb, var(--sol-cyan) 13%, transparent);
+  border-radius: 4px;
+  padding: 0 3px;
+  text-decoration: none;
+}
+.ch-msg-body a.ch-channel-ref:hover {
+  background: color-mix(in srgb, var(--sol-cyan) 22%, transparent);
+}
+
 /* A person named who exists only in the team's Slack workspace: the person
  * chip wearing the Slack mark. Nothing here to open — they are paged in the
  * line's Slack copy — so it is a span, not a link. */

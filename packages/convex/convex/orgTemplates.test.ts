@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { performCatalog, performFileLesson, performInstanceForRole, performInstanceStatus, performListLessons, performMarkSetup, performPublish, performRecordEvidence, performRecordScores, performRelease, performRequestBind, performSetLessonStatus, performUpsertInstance } from "./orgTemplates";
+import { performCatalog, performFileLesson, performInstanceForRole, performInstanceStatus, performListInstances, performListLessons, performMarkSetup, performPublish, performRecordEvidence, performRecordScores, performRelease, performRequestBind, performSetLessonStatus, performUpsertInstance } from "./orgTemplates";
 import { applyOrgChange } from "./orgInit";
 
 // Roles hired from a template (org-hire.md W8): the server side of publish,
@@ -14,7 +14,7 @@ const ACME = "teams_acme" as any, OTHER = "teams_other" as any, CODECAST = "team
 const WS = `team:${ACME}`;
 const P = "projects_p";
 
-function fixtures() {
+function fixtures(over: Record<string, any[]> = {}) {
   return makeFakeDb({
     users: [{ _id: ME, name: "Me" }, { _id: MATE, name: "Mate" }, { _id: OUT, name: "Out" }],
     team_memberships: [
@@ -28,6 +28,7 @@ function fixtures() {
     org_roles: [{ _id: "role-1", short_id: "or-1", handle: "acme-growth-cmo", name: "CMO", status: "active", trust: "understand", scope_type: "team", team_id: ACME, host_user_id: ME, reports_to: { kind: "user", user_id: ME }, scope: { project_ids: [P], plan_ids: [] }, created_at: 1, updated_at: 1 }],
     org_templates: [], org_template_instances: [], org_template_lessons: [],
     counters: [], org_changes: [], org_role_history: [], anchors: [], conversations: [], session_owners: [], managed_sessions: [], tasks: [], plans: [], docs: [],
+    ...over,
   });
 }
 const manifest = (version = "2.0.0"): any => ({
@@ -240,5 +241,121 @@ describe("the host step from the web (org-hire.md H3, H4)", () => {
     // Outside the workspace: nothing.
     expect(await performInstanceForRole(ctx(db), OUT, { role_id: "role-1" as any })).toBeNull();
     await expect(performRequestBind(ctx(db), OUT, { instance_key: row.instance_key })).rejects.toThrow(/Instance not found/);
+  });
+});
+
+describe("setup guides on the record, and the role hearing about a bind (org-hire.md H3, H5; org-staffing.md S25)", () => {
+  beforeEach(() => { process.env.CODECAST_TEMPLATES_TEAM_ID = CODECAST; });
+  afterEach(() => { delete process.env.CODECAST_TEMPLATES_TEAM_ID; });
+  const STANDING = "conversations_standing";
+  // A role with a live standing session in a workspace that has the org feature, and its two routines' triggers.
+  function seated() {
+    const pending: any[] = [];
+    const db = fixtures({
+      teams: [{ _id: ACME, name: "Acme", features: { org: true } }, { _id: OTHER, name: "Other" }, { _id: CODECAST, name: "Codecast" }],
+      org_roles: [{ _id: "role-1", short_id: "or-1", handle: "acme-growth-cmo", name: "CMO", status: "active", trust: "understand", scope_type: "team", team_id: ACME, host_user_id: ME, anchor_id: "anchors_cmo", reports_to: { kind: "user", user_id: ME }, scope: { project_ids: [P], plan_ids: [] }, created_at: 1, updated_at: 1 }],
+      anchors: [{ _id: "anchors_cmo", org_role_id: "role-1", team_id: ACME, status: "active", conversation_id: STANDING }],
+      conversations: [{ _id: STANDING, session_id: "standing-uuid", user_id: ME, team_id: ACME, status: "active", standing_role_id: "role-1" }],
+      agent_tasks: [
+        { _id: "agent_tasks_seo", user_id: ME, short_id: "tr-7", title: "SEO weekly for acme.io", prompt: "p", schedule_type: "recurring", interval_ms: 7 * 86_400_000, status: "paused", run_count: 0, retry_count: 0 },
+        { _id: "agent_tasks_ads", user_id: ME, short_id: "tr-8", title: "Ads", prompt: "p", schedule_type: "recurring", interval_ms: 86_400_000, status: "scheduled", run_at: 9, run_count: 0, retry_count: 0 },
+      ],
+      pending_messages: pending,
+    });
+    return { db, pending };
+  }
+  const hired = (): any => ({
+    ...manifest(),
+    inputs: [{ key: "product.domain", label: "Domain", kind: "string", required: true }, { key: "accounts.ads", label: "Ads credentials", kind: "secret", unlocks: ["ads"] }, { key: "accounts.publora", label: "Publora key", kind: "secret" }],
+    setup: [{ id: "search-console", title: "Verify {{input.product.domain}}", who: "human", unlocks: ["seo"], how: "org/setup/search-console.md" }, { id: "publora", title: "Connect Publora", who: "human" }, { id: "measurement", title: "See one event", who: "role" }],
+  });
+  const hire = { instance_key: "key-1", instance: "acme-growth", template_id: "growth", version: "2.0.0", digest: D1, project_id: P as any };
+  const bound = (bindings: Record<string, number>, extra: Record<string, unknown> = {}) => ({
+    ...hire, role_id: "role-1" as any, host: { machine: "mbp", dir: "/src/acme" }, phase: "ready" as const,
+    routines: { seo: { triggerId: "agent_tasks_seo" }, ads: { triggerId: "agent_tasks_ads" } },
+    bindings: Object.fromEntries(Object.entries(bindings).map(([key, at]) => [key, { host: "mbp", path_hash: D3, bound_at: at }])),
+    setup_text: { "search-console": { title: "Verify acme.io", guide: "Add the TXT record, then run /src/acme/verify.sh." }, publora: { title: "Connect Publora" }, measurement: { title: "See one event" } },
+    ...extra,
+  });
+  const said = (row: any) => row.content.replace(/^<session-message from="unknown" name="codecast">\n|\n<\/session-message>$/g, "").split("\n");
+  const ROUTINES = ["Routines:", "- SEO weekly for acme.io (tr-7): paused, not ready; evidence technical has no pass", "- Ads (tr-8): active; authority ads-spend not granted; runs as propose: trust is understand"];
+
+  test("the standing session is told once what a bind changed: the host step, each new secret, what is missing and where each routine stands", async () => {
+    const { db, pending } = seated();
+    await performPublish(ctx(db), ME, { as_codecast: true, manifest: hired(), digest: D1, status: "stable" });
+    // The hire accepted on the web: nothing is bound, nobody is told.
+    await performUpsertInstance(ctx(db), MATE, { ...hire, role_id: "role-1" as any, phase: "awaiting_host", config: { "product.domain": "acme.io" } });
+    expect(pending).toEqual([]);
+    // The host step, with one secret typed on the page.
+    await performUpsertInstance(ctx(db), ME, bound({ "accounts.ads": 5 }));
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({ conversation_id: STANDING, from_user_id: ME });
+    expect(pending[0].content.startsWith('<session-message from="unknown" name="codecast">\n')).toBe(true);
+    expect(said(pending[0])).toEqual([
+      "The host step for acme-growth finished on mbp: the template is installed, the instance file is written and your routines exist, paused until a person activates each from the role page.",
+      "Ads credentials is now bound for acme-growth on mbp: the value is in a file there and its path is in the instance file. ads needed it.",
+      "Still missing: Publora key.",
+      ...ROUTINES,
+    ]);
+    // A rerun that binds nothing new says nothing.
+    await performUpsertInstance(ctx(db), ME, bound({ "accounts.ads": 5 }));
+    expect(pending).toHaveLength(1);
+    // The missing secret, saved later from the role page: one line about it, no second host step.
+    await performUpsertInstance(ctx(db), ME, bound({ "accounts.ads": 5, "accounts.publora": 9 }));
+    expect(pending).toHaveLength(2);
+    expect(said(pending[1])).toEqual([
+      "Publora key is now bound for acme-growth on mbp: the value is in a file there and its path is in the instance file.",
+      "Every secret this template asks for is bound.",
+      ...ROUTINES,
+    ]);
+    // The role binding from its own standing session is not told what it just did; a hand of the role is.
+    await performUpsertInstance(ctx(db), ME, bound({ "accounts.ads": 12, "accounts.publora": 9 }, { from_session: "standing-uuid" }));
+    expect(pending).toHaveLength(2);
+    await performUpsertInstance(ctx(db), ME, bound({ "accounts.ads": 14, "accounts.publora": 9 }, { from_session: "a-hand" }));
+    expect(pending).toHaveLength(3);
+    expect(said(pending[2])[0]).toMatch(/^Ads credentials is now bound/);
+    // Neither the session nor the note is stored on the row.
+    const row = (await db.query("org_template_instances").collect())[0];
+    expect(row.from_session).toBeUndefined();
+  });
+
+  test("a role nobody can reach is not told, and the bind still lands", async () => {
+    const db = fixtures({ pending_messages: [] });
+    await performPublish(ctx(db), ME, { as_codecast: true, manifest: hired(), digest: D1, status: "stable" });
+    const row = await performUpsertInstance(ctx(db), ME, { ...bound({ "accounts.ads": 5 }), routines: {} });
+    expect(row).toMatchObject({ phase: "ready", bindings: { "accounts.ads": { bound_at: 5 } } });
+    expect(await db.query("pending_messages").collect()).toEqual([]);
+  });
+
+  test("the role page reads each setup step's filled words and guide, each routine's trigger, and an ask that moves past a skipped step", async () => {
+    const { db } = seated();
+    await performPublish(ctx(db), ME, { as_codecast: true, manifest: hired(), digest: D1, status: "stable" });
+    // Before the host step the row has no rendered text: the manifest's own words stand in.
+    await performUpsertInstance(ctx(db), MATE, { ...hire, role_id: "role-1" as any, phase: "awaiting_host" });
+    let page = await performInstanceForRole(ctx(db), MATE, { role_id: "role-1" as any });
+    expect(page.setup[0]).toMatchObject({ id: "search-console", title: "Verify {{input.product.domain}}", how: "org/setup/search-console.md" });
+    expect(page.setup[0].guide).toBeUndefined();
+    await performUpsertInstance(ctx(db), ME, bound({ "accounts.ads": 5 }));
+    page = await performInstanceForRole(ctx(db), MATE, { role_id: "role-1" as any });
+    expect(page.setup.map((r: any) => [r.id, r.title, r.guide])).toEqual([["search-console", "Verify acme.io", "Add the TXT record, then run /src/acme/verify.sh."], ["publora", "Connect Publora", undefined], ["measurement", "See one event", undefined]]);
+    expect(page.setup_text).toBeUndefined();
+    expect(page.ask).toMatchObject({ id: "search-console", title: "Verify acme.io" });
+    // Each routine carries its trigger's short id and the title filled for this instance.
+    expect(page.routines.map((r: any) => [r.id, r.title, r.trigger.short_id])).toEqual([["seo", "SEO weekly for acme.io", "tr-7"], ["ads", "Ads", "tr-8"]]);
+    // Skip is a person's mark, as with `cast org template setup <instance> <id> --skip`: the ask moves to the next open step.
+    const key = { instance_key: "key-1" };
+    await expect(performMarkSetup(ctx(db), MATE, { ...key, id: "search-console", status: "skipped", from_agent: true })).rejects.toThrow(/person's step/);
+    await performMarkSetup(ctx(db), MATE, { ...key, id: "search-console", status: "skipped", from_agent: false });
+    page = await performInstanceForRole(ctx(db), MATE, { role_id: "role-1" as any });
+    expect(page.ask).toMatchObject({ id: "publora" });
+    expect(page.setup[0]).toMatchObject({ id: "search-console", status: "skipped" });
+    // The host reads the raw marks back into its receipt.
+    expect((await performInstanceStatus(ctx(db), MATE, key)).setup_marks).toEqual({ "search-console": { status: "skipped" } });
+    await performMarkSetup(ctx(db), MATE, { ...key, id: "publora", status: "skipped", from_agent: false });
+    expect((await performInstanceForRole(ctx(db), MATE, { role_id: "role-1" as any })).ask).toBeUndefined();
+    await performMarkSetup(ctx(db), MATE, { ...key, id: "search-console", status: "open", from_agent: false });
+    expect((await performInstanceForRole(ctx(db), MATE, { role_id: "role-1" as any })).ask).toMatchObject({ id: "search-console" });
+    // A list of every instance leaves the guides out.
+    expect((await performListInstances(ctx(db), MATE, { team_id: ACME }))[0].setup_text).toBeUndefined();
   });
 });

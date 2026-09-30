@@ -114,6 +114,7 @@ describe("orgRootSeat", () => {
     expect(tables.pending_messages.filter((p) => p.conversation_id === "conv-t").length).toBeGreaterThanOrEqual(2);
     expect(tables.agent_tasks.some((t) => t.originating_conversation_id === "conv-t")).toBe(true);
     expect(tables.agent_tasks.some((t) => t.originating_conversation_id === "conv-p")).toBe(true);
+    const armed = tables.agent_tasks.length;
 
     // Idempotent: the same run again seats nothing and mints nothing.
     const again = await performSeatRootRoles(ctx, false);
@@ -121,8 +122,11 @@ describe("orgRootSeat", () => {
     expect(again.rows.filter((r) => r.action === "seat")).toEqual([]);
     expect(again.rows.map((r) => r.action)).toEqual(["seated", "seated", "no_session"]);
     expect(tables.org_roles).toHaveLength(2);
-    // Each seat carries its routine and its needs-input trigger (S25, S28), once.
-    expect(tables.agent_tasks).toHaveLength(4);
+    // Each Chief of Staff seat carries its routine, its needs-input trigger and
+    // its area watch (S25, S28, S29), once: three per seat, and the second run mints none.
+    for (const conv of ["conv-t", "conv-p"]) expect(tables.agent_tasks.filter((t) => t.originating_conversation_id === conv)).toHaveLength(3);
+    expect(tables.agent_tasks).toHaveLength(6);
+    expect(tables.agent_tasks).toHaveLength(armed);
   });
 
   test("a workspace whose root role already stands in another session is left for a person", async () => {

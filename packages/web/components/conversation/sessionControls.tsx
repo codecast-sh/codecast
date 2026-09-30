@@ -11,7 +11,7 @@ import { createPortal } from "react-dom";
 import { AGENT_LAUNCH_OPTIONS, cloudAgentLaunch, cloudAgentLaunchKey, cloudAgentProvidersFor, modelOptionKey, type CloudAgentLaunch, type ConvexAgentType } from "@codecast/shared/contracts";
 import { useLiveSessionMeta } from "../../hooks/useLiveSessionMeta";
 import { commitModelChange } from "../../lib/modelSwitchWeb";
-import { useCloudAgentStatus } from "../cloudAgents";
+import { useCloudAgentStatus } from "../cloudAgents/machine";
 import { StableContextPicker } from "../StableContextCards";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { KeyCap } from "../KeyboardShortcutsHelp";

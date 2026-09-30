@@ -15,7 +15,8 @@ import { usePermissionModeSwitch } from "../../../hooks/usePermissionModeSwitch"
 import { animatedHideSession } from "../../../store/undoActions";
 import { MarkdownRenderer } from "../../tools/MarkdownRenderer";
 import { EntityIdPill } from "../../EntityIdPill";
-import { EarlierButton, useReaderFold } from "../readerFold";
+import { EarlierButton } from "../readerFold";
+import { useReaderFold } from "../../../hooks/useReaderFold";
 import { Clamp } from "../../tasks/TaskCommentStream";
 import { useThreadsPage } from "../threadsContext";
 import "../../chat/chat.css";

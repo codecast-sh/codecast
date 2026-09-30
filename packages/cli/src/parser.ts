@@ -4,7 +4,7 @@ import { parseMirrorTranscript, type MirrorReadOptions, type MirrorTextRewrite }
 import { extractSentFiles, type SyncFile } from "./userFiles.js";
 import { codexTurnErrorMessage } from "./codexTurnError.js";
 import type { CodexTurnError } from "@codecast/shared/contracts";
-import { CLIENT_ERROR_BANNER_PREFIX, isAgentContextMessage, isModelSwitchLimitBanner, isTransientRateLimit429, throttleBannerContent } from "@codecast/shared/contracts";
+import { CLIENT_ERROR_BANNER_PREFIX, claudeAutoContinueBanner, isAgentContextMessage, isModelSwitchLimitBanner, isTransientRateLimit429, throttleBannerContent } from "@codecast/shared/contracts";
 
 type ContentBlock =
   | { type: "text"; text: string }
@@ -218,13 +218,12 @@ export function extractMessages(entries: ClaudeSessionEntry[], onEmit?: ClaudeEm
 
     if (entry.type === "system") {
       if (entry.content && entry.subtype) {
-        messages.push({
-          uuid: entry.uuid,
-          role: "system",
-          content: entry.content,
-          timestamp,
-          subtype: entry.subtype,
-        });
+        // Claude Code's auto-continue wait is the only record of that limit
+        // park, so it syncs as the canonical limit banner every reader parks on.
+        const limitBanner = claudeAutoContinueBanner(entry.content);
+        messages.push(limitBanner
+          ? { uuid: entry.uuid, role: "assistant", content: limitBanner, timestamp }
+          : { uuid: entry.uuid, role: "system", content: entry.content, timestamp, subtype: entry.subtype });
         onEmit?.(messages[messages.length - 1], entry, receiptTimestamp);
       }
       continue;

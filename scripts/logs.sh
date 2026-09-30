@@ -102,7 +102,11 @@ if $RAILWAY; then
 fi
 
 if $CONVEX; then
-  (cd "$CONVEX_DIR" && npx convex logs 2>&1) | prefix_lines "convex" "$CYAN" &
+  # The repo-root .env.local sets CONVEX_DEPLOYMENT for the local dev backend,
+  # and the convex CLI reads it even from packages/convex, then refuses to run
+  # beside the self-hosted vars. --env-file makes packages/convex/.env.local
+  # (the prod self-hosted URL and admin key) win.
+  (cd "$CONVEX_DIR" && npx convex logs --env-file .env.local 2>&1) | prefix_lines "convex" "$CYAN" &
   PIDS+=($!)
 fi
 
