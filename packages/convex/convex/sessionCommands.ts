@@ -2,7 +2,7 @@ import { mutation, query } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
-import { enqueueHibernateSession, requireSessionCommandTarget, extractDaemonCommandConversationId, findSessionCommandByRequest, validateSessionCommandRequestId } from "./daemonCommandUtils";
+import { canReadSessionCommand, enqueueHibernateSession, requireSessionCommandTarget, extractDaemonCommandConversationId, findSessionCommandByRequest, validateSessionCommandRequestId } from "./daemonCommandUtils";
 
 export const hibernate = mutation({
   args: { conversation_id: v.id("conversations"), session_id: v.string(), owner_device_id: v.string(), request_id: v.string() },
@@ -28,12 +28,8 @@ export const results = query({
     const rows = [];
     for (const command of [...byRequest, ...byId]) {
       if (!command || (command.command !== "hibernate_session" && command.command !== "resume_session")) continue;
+      if (!(await canReadSessionCommand(ctx, user, command))) continue;
       const conversationId = extractDaemonCommandConversationId(command.args);
-      if (command.user_id !== user) {
-        const id = conversationId && ctx.db.normalizeId("conversations", conversationId);
-        const conv = id ? await ctx.db.get(id) : null;
-        if (!conv || conv.owner_user_id !== user) continue;
-      }
       if (command.request_id !== undefined && byId.includes(command)) {
         await findSessionCommandByRequest(ctx, command.user_id, command.request_id);
       }

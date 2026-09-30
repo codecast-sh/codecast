@@ -7,7 +7,7 @@ import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { canAccessConversation } from "./lib/access";
-import { extractDaemonCommandConversationId, requireSessionCommandTarget } from "./daemonCommandUtils";
+import { canReadSessionCommand, requireSessionCommandTarget } from "./daemonCommandUtils";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import {
   DEVICE_ONLINE_MS,
@@ -1823,18 +1823,6 @@ export const enqueueCloudAgentActionCommand = mutation({
   },
 });
 
-/**
- * Whether a person may read a command's verdict: theirs, or a session
- * command on the runner's queue for a session they co-own (the same people
- * requireSessionCommandTarget lets send it).
- */
-async function watchesCommand(ctx: { db: any }, userId: Id<"users">, row: { user_id: Id<"users">; args?: string }): Promise<boolean> {
-  if (row.user_id === userId) return true;
-  const convId = ctx.db.normalizeId("conversations", extractDaemonCommandConversationId(row.args) ?? "");
-  const conv = convId ? await ctx.db.get(convId) : null;
-  return !!conv && (conv.user_id === userId || conv.owner_user_id === userId);
-}
-
 /** Commands whose page watches the daemon's verdict: a provider key set, a cloud agent sign-in, a cloud agent action. */
 const WATCHED_COMMANDS: ReadonlySet<string> = new Set(["set_provider_key", "cloud_agent_login", "cloud_agent_action"]);
 
@@ -1851,7 +1839,7 @@ export const watchedCommandOutcome = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) return null;
     const row = await ctx.db.get(args.command_id);
-    if (!row || !WATCHED_COMMANDS.has(row.command) || !(await watchesCommand(ctx, userId, row))) return null;
+    if (!row || !WATCHED_COMMANDS.has(row.command) || !(await canReadSessionCommand(ctx, userId, row))) return null;
     if (!row.executed_at) return { state: "pending" as const };
     if (row.error) return { state: "failed" as const, error: row.error };
     let result: Record<string, unknown> = {};

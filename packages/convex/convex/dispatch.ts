@@ -1714,6 +1714,9 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   deleteTrigger: async (ctx, userId, [taskId]: [string]) => {
     await (ctx as any).runMutation(api.agentTasks.webDelete, { task_id: taskId });
   },
+  setTriggerInterval: async (ctx, userId, [taskId, intervalMs]: [string, number]) => {
+    return await (ctx as any).runMutation(api.agentTasks.webUpdate, { task_id: taskId, interval_ms: intervalMs });
+  },
 
   markNotificationRead: async (ctx, userId, [id]: [string]) => {
     return await (ctx as any).runMutation(api.notifications.markAsRead, { notificationId: id });
