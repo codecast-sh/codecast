@@ -24,7 +24,7 @@ import { canAccessTask, canAccessDoc, patchConversationVisibility } from "./lib/
 import { canReleaseCommandClaim, commandVisibleToClaimer, decideCommandClaim } from "./lib/daemonCommandClaim";
 import { stripMessageTags, isUserMessageNoise, fetchUserSendDays, type SendDayRow } from "./lib/userSend";
 import { ccAccountsValidator } from "./ccAccountsShared";
-import { deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
+import { cloudAgentBlocksValidator, deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
 import { normalizeProjectPath, pathWithinLocalRoots } from "./projectPaths";
 import { bucketTs } from "./presenceState";
 import { backlogFieldsPatch } from "./heartbeatBacklog";
@@ -433,6 +433,8 @@ export const daemonHeartbeat = mutation({
     // + which providers have a key here (ids only, never the keys).
     provider_key_pubkey: v.optional(v.string()),
     managed_provider_ids: v.optional(v.array(v.string())),
+    // What keeps this machine from reading each cloud agent provider (schema devices.cloud_agent_blocks).
+    cloud_agent_blocks: v.optional(cloudAgentBlocksValidator),
     // Installed agent-feature snippets (by slug) + stable mode on this device.
     settings: v.optional(deviceSettingsValidator),
     // A newer release the daemon could update to; "" once it checked and found
@@ -610,6 +612,7 @@ export const daemonHeartbeat = mutation({
         ...(args.codex_accounts !== undefined ? { codex_accounts: args.codex_accounts } : {}),
         ...(args.provider_key_pubkey !== undefined ? { provider_key_pubkey: args.provider_key_pubkey } : {}),
         ...(args.managed_provider_ids !== undefined ? { managed_provider_ids: args.managed_provider_ids } : {}),
+        ...(args.cloud_agent_blocks !== undefined ? { cloud_agent_blocks: args.cloud_agent_blocks.length ? args.cloud_agent_blocks : undefined } : {}),
         ...(args.settings !== undefined ? { settings: args.settings } : {}),
         cli_version: args.version,
         ...(args.update_available !== undefined ? { update_available: args.update_available || undefined } : {}),
@@ -1216,6 +1219,7 @@ export const updateNotificationPreferences = mutation({
       session_idle_digest: v.optional(v.boolean()),
       live_activity: v.optional(v.boolean()),
       task_agent_comments: v.optional(agentCommentLevelValidator),
+      task_status_changes: v.optional(v.boolean()),
     })),
     muted_members: v.optional(v.array(v.id("users"))),
     machine_wide_presence: v.optional(v.boolean()),
@@ -2456,6 +2460,7 @@ export const updateSyncSettings = mutation({
     sync_excluded: v.optional(v.array(v.string())),
     claude_cloud_sync: v.optional(v.boolean()),
     cursor_cloud_sync: v.optional(v.boolean()),
+    codex_cloud_sync: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await getUserOrToken(ctx, args.api_token);

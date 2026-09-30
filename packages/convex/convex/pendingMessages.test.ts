@@ -807,6 +807,27 @@ describe("getConversationPendingMessage", () => {
     expect(await (getConversationPendingMessage as any)._handler(empty, { conversation_id: "conv_1" })).toBeNull();
   });
 
+  test("lists every undelivered row, so each queued send renders while the session is down", async () => {
+    const { getConversationPendingMessage } = await import("./pendingMessages");
+    const auth = { async getUserIdentity() { return { subject: "u_owner|session" }; } };
+    const ctx = {
+      auth,
+      db: makeFakeDb({
+        conversations: [{ _id: "conv_1", user_id: "u_owner" }],
+        pending_messages: [
+          { _id: "pm_photo", conversation_id: "conv_1", from_user_id: "u_owner", status: "pending", created_at: 2, retry_count: 140, content: "use this photo", client_id: "c_photo" },
+          { _id: "pm_task", conversation_id: "conv_1", from_user_id: "u_owner", status: "failed", created_at: 1, retry_count: 535, content: "<scheduled-task>" },
+          { _id: "pm_buy", conversation_id: "conv_1", from_user_id: "u_owner", status: "injected", created_at: 3, retry_count: 31, content: "buy it", client_id: "c_buy" },
+          { _id: "pm_done", conversation_id: "conv_1", from_user_id: "u_owner", status: "delivered", created_at: 0, retry_count: 0, content: "done" },
+        ],
+      }),
+    } as any;
+    const result = await (getConversationPendingMessage as any)._handler(ctx, { conversation_id: "conv_1" });
+    expect(result?.message_id).toBe("pm_task");
+    expect(result?.inflight.map((r: any) => r.message_id)).toEqual(["pm_task", "pm_photo", "pm_buy"]);
+    expect(result?.inflight[1]).toMatchObject({ client_id: "c_photo", content: "use this photo", status: "pending", created_at: 2 });
+  });
+
   test("keeps showing the oldest queued message while delivery attempts flip its status", async () => {
     const { getConversationPendingMessage } = await import("./pendingMessages");
     const auth = { async getUserIdentity() { return { subject: "u_owner|session" }; } };

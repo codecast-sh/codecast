@@ -26,6 +26,7 @@ import {
   buildInboundResolver,
   getSlackUser,
   teammateHandles,
+  mirrorFiles,
 } from "./slackSync";
 import { markdownToSlack, slackToMarkdown } from "./lib/slackText";
 import { listChannels, sendMessage, toggleReaction, updateChannel } from "./chat";
@@ -524,7 +525,7 @@ describe("Slack-only people as mention targets", () => {
 
 describe("direct messages", () => {
   const TOKEN = "slack_user_tokens_1" as any;
-  const DM_SCOPES = "channels:read,groups:read,groups:write,users:read,im:read,im:history,mpim:read,mpim:history,chat:write";
+  const DM_SCOPES = "channels:read,groups:read,groups:write,users:read,im:read,im:history,mpim:read,mpim:history,chat:write,files:read";
   const withToken = (scopes = DM_SCOPES, dm_sync?: any) => ({
     slack_user_tokens: [{ _id: TOKEN, installation_id: INSTALL, workspace_id: WS, user_id: ALICE, slack_user_id: "UALICE", token: "xoxp-test", scopes, dm_sync, created_at: 1, updated_at: 1 }],
   });
@@ -550,6 +551,9 @@ describe("direct messages", () => {
     await expect(call(setDmSync, bare, { team_id: TEAM, enabled: true })).rejects.toThrow(/Connect your Slack account/);
     const old = context(ALICE, withToken("channels:read,groups:read"));
     await expect(call(setDmSync, old, { team_id: TEAM, enabled: true })).rejects.toThrow(/reconnect/);
+    // A grant from before DM images came over has no files:read.
+    const noFiles = context(ALICE, withToken(DM_SCOPES.replace(",files:read", "")));
+    await expect(call(setDmSync, noFiles, { team_id: TEAM, enabled: true })).rejects.toThrow(/reconnect/);
     const ctx = context(ALICE, withToken());
     const r = await call(setDmSync, ctx, { team_id: TEAM, enabled: true, window: "7d" });
     expect(r).toMatchObject({ enabled: true, window: "7d" });
@@ -635,6 +639,29 @@ describe("direct messages", () => {
       globalThis.fetch = realFetch;
     }
     expect(auths).toEqual(["Bearer xoxb-test"]);
+  });
+  test("a shared image comes over as an attachment; a sign-in page in its place stays a link", async () => {
+    const stored: Blob[] = [];
+    const ctx: any = { storage: { store: async (b: Blob) => { stored.push(b); return `storage_${stored.length}`; } } };
+    const install: any = { bot_token: "xoxp-owner" };
+    const file = (id: string) => ({ id, name: `${id}.png`, title: `${id}.png`, mimetype: "image/png", size: 10, url_private: `https://files.slack.com/${id}`, permalink: `https://union.slack.com/files/${id}` });
+    const auths: string[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: any, init: any) => {
+      auths.push(init.headers.Authorization);
+      return String(url).endsWith("F1")
+        ? new Response(new Uint8Array([137, 80, 78, 71]), { headers: { "content-type": "image/png" } })
+        : new Response("<html>sign in</html>", { headers: { "content-type": "text/html" } });
+    }) as any;
+    try {
+      const r = await mirrorFiles(ctx, install, [file("F1"), file("F2")]);
+      expect(r.attachments).toEqual([expect.objectContaining({ storage_id: "storage_1", mime: "image/png", name: "F1.png" })]);
+      expect(r.extra).toEqual(["📎 [F2.png](https://union.slack.com/files/F2)"]);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    expect(stored).toHaveLength(1);
+    expect(auths).toEqual(["Bearer xoxp-owner", "Bearer xoxp-owner"]);
   });
   test("a line codecast posted into a DM as the person is not imported twice when Slack hands it back", async () => {
     const ctx = context(ALICE);

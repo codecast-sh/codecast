@@ -512,6 +512,7 @@ http.route({
         title: result.title,
         slug: result.slug,
         started_at: result.started_at,
+        team_visible: result.team_visible,
       }), {
         status: 200,
         headers: { "Content-Type": "application/json", ...corsHeaders },
@@ -1586,7 +1587,7 @@ http.route({
 });
 
 // The race verbs (docs/architecture/decisions-as-documents.md D2, D6): a role
-// on the ladder recommends or escalates from its session; a person in the
+// on the ladder recommends from its session; a person in the
 // decision's people set, or the holder role under a grant, answers. Each
 // body carries api_token and decision_id (an `sd-N` or a raw id) plus the
 // verb's fields; the mutations answer { error } for a refusal.
@@ -1611,14 +1612,11 @@ cliRoute("/cli/decide/answer", (ctx, body) =>
     answer_text: body.answer_text,
   }),
 );
-cliRoute("/cli/decide/escalate", (ctx, body) =>
-  ctx.runMutation(api.sessionDecisions.escalate, {
-    api_token: body.api_token,
-    decision_id: body.decision_id,
-    session_id: body.session_id,
-    note: body.note,
-  }),
-);
+// The verb is gone (org-staffing.md S28). The route stays so a CLI that still
+// sends `cast decide escalate` reads why, instead of a 404.
+cliRoute("/cli/decide/escalate", async () => ({
+  error: "cast decide escalate is gone: a role no longer passes a decision up the ladder. Recommend an option (cast decide recommend), or raise what you cannot settle in your own thread: pin it (cast state --status blocked) or post your own cast decide.",
+}));
 cliRoute("/cli/decide/show", (ctx, body) =>
   ctx.runMutation(api.sessionDecisions.showForCli, { api_token: body.api_token, decision_id: body.decision_id }),
 );
@@ -2773,7 +2771,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, version, platform, pid, autostart_enabled, has_tmux, boot_id, local_project_roots, git_plane, git_pubkey, pending_sync_count, oldest_pending_ms, pending_sync_messages, pending_sync_conversations, sync_no_progress_ms, daemon_started_at, loop_freeze_ms, loop_freeze_1h_ms, loop_freeze_max_ms, loop_freeze_top, device_id, device_label, device_hostname, wsl_distro, is_remote_device, input_idle_ms, cc_accounts, codex_usage, codex_accounts, provider_key_pubkey, managed_provider_ids, settings, model_inventory, update_available } = body;
+      const { api_token, version, platform, pid, autostart_enabled, has_tmux, boot_id, local_project_roots, git_plane, git_pubkey, pending_sync_count, oldest_pending_ms, pending_sync_messages, pending_sync_conversations, sync_no_progress_ms, daemon_started_at, loop_freeze_ms, loop_freeze_1h_ms, loop_freeze_max_ms, loop_freeze_top, device_id, device_label, device_hostname, wsl_distro, is_remote_device, input_idle_ms, cc_accounts, codex_usage, codex_accounts, provider_key_pubkey, managed_provider_ids, cloud_agent_blocks, settings, model_inventory, update_available } = body;
 
       if (!api_token || !version || !platform) {
         return new Response(JSON.stringify({ error: "Missing required fields" }), {
@@ -2814,6 +2812,7 @@ http.route({
         codex_accounts,
         provider_key_pubkey,
         managed_provider_ids,
+        cloud_agent_blocks: Array.isArray(cloud_agent_blocks) ? cloud_agent_blocks : undefined,
         settings,
         model_inventory,
         update_available: typeof update_available === "string" ? update_available : undefined,
@@ -2824,6 +2823,16 @@ http.route({
           status: result.error === "Unauthorized" ? 401 : 400,
           headers: { "Content-Type": "application/json", ...corsHeaders },
         });
+      }
+
+      // A cloud host's readiness (Settings > Machines), in its own call so a
+      // shape this server does not know never fails the heartbeat.
+      if (body.host_readiness && typeof body.host_readiness === "object" && typeof device_id === "string") {
+        try {
+          await ctx.runMutation(api.cloud.reportHostReadiness, { api_token, device_id, readiness: body.host_readiness });
+        } catch (err) {
+          console.warn(`[heartbeat] host readiness from ${device_id.slice(0, 8)} refused: ${err instanceof Error ? err.message.slice(0, 200) : String(err)}`);
+        }
       }
 
       // Capability inventory, when the daemon attached one. Deviation from
@@ -4098,6 +4107,7 @@ cliRoute("/cli/chains/resolve", async (ctx, body) => ctx.runQuery((api as any).a
 cliRoute("/cli/chains/upsert", async (ctx, body) => ctx.runMutation((api as any).agentDefinitions.upsertChain, body));
 cliRoute("/cli/chains/remove", async (ctx, body) => ctx.runMutation((api as any).agentDefinitions.removeChain, body));
 
+cliRoute("/cli/org/reset", async (ctx, body) => ctx.runMutation(api.orgRoles.reset, body));
 cliRoute("/cli/org/tree", async (ctx, body) => {
   return await ctx.runQuery(api.org.tree, body);
 });
@@ -4610,6 +4620,14 @@ cliRoute("/cli/spawn", async (ctx, body) => ctx.runMutation((api as any).spawn.c
 // `cast handoff --to <agent>`: brief + compose + spawn + link, one action
 // (handoff.start), the same one the web calls signed in.
 cliRoute("/cli/handoff", async (ctx, body) => ctx.runAction((api as any).handoff.start, body));
+
+// `cast read <id> --ask "<question>"`: answer from one session, with line
+// citations, on the server's model key. body: { api_token, conversation_id, question }.
+cliRoute("/cli/read/ask", async (ctx, body) => ctx.runAction(internal.sessionAsk.ask, {
+  api_token: body.api_token,
+  conversation_id: body.conversation_id,
+  question: body.question,
+}));
 
 // Session OWNERS (cast own / disown / owners, or scripts routing an agent-run
 // session into a human's inbox). A session has a SET of owners — it can sit in
